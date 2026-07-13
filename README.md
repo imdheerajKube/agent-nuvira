@@ -1,12 +1,14 @@
-# Buff CLI
+# Buff CLI — `agent-baba-d`
 
-**Flexible AI inference tool** — run large language models locally or route to cloud APIs through a unified CLI.
+**Flexible AI inference tool** — run large language models locally (Ollama) or route to cloud APIs (NVIDIA NIM, Google Gemini, OpenRouter) through a unified CLI. Discover available models, chat interactively, edit files with AI, and plan codebase changes — all from the terminal.
 
-```
-buff chat "explain recursion in Rust"
-buff edit main.go --instruction "add input validation"
-buff plan . --task "implement user authentication"
-buff config list
+```bash
+# Quick examples
+agent-baba-d chat "explain recursion in Rust"
+agent-baba-d models --provider nim
+agent-baba-d edit main.go --instruction "add input validation"
+agent-baba-d plan . --task "implement user authentication"
+agent-baba-d config list
 ```
 
 ---
@@ -14,6 +16,7 @@ buff config list
 ## Features
 
 - **Unified interface** across 4 providers: local (Ollama, HuggingFace, GGML), NVIDIA NIM, Google Gemini, and OpenRouter
+- **Model discovery** — `agent-baba-d models` lists available models from any configured provider, with search/filter support
 - **Interactive chat** with conversation history, file context, and session commands
 - **AI-assisted file editing** with dry-run mode for safe previews
 - **Codebase planning** that analyzes directory structure and generates implementation plans
@@ -34,32 +37,27 @@ buff config list
 ### Install
 
 ```bash
-# Clone the repo
+# Install globally
+npm install -g agent-baba-d
+
+# Or clone and build from source
 git clone <your-repo-url> buff
 cd buff
-
-# Install dependencies
 npm install
-
-# Build
 npm run build
-
-# Link globally (optional)
 npm link
 ```
 
 ### Verify
 
 ```bash
-node dist/index.js --help
-# or if linked:
-buff --help
+agent-baba-d --help
 ```
 
 You should see:
 
 ```
-Usage: buff [options] [command]
+Usage: agent-baba-d [options] [command]
 
 Flexible AI inference CLI tool — local models & cloud APIs
 
@@ -71,6 +69,7 @@ Options:
 Commands:
   chat [options] [prompt]  Start an interactive chat session with AI
   edit [options] <file>    Edit a file using AI assistance
+  models [options]         List available models from inference providers
   plan [options] [target]  Generate an implementation plan for a codebase task
   config                   Manage Buff configuration
   cache                    Manage inference cache
@@ -88,16 +87,16 @@ You can inspect and modify it through the CLI:
 
 ```bash
 # Show full configuration
-buff config
+agent-baba-d config
 
 # Set the default provider
-buff config set defaultProvider gemini
+agent-baba-d config set defaultProvider gemini
 
 # Set a provider's model
-buff config set providers.nim.model "meta/llama-3.1-70b-instruct"
+agent-baba-d config set providers.nim.model "meta/llama-3.1-8b-instruct"
 
 # List all providers with their status
-buff config list
+agent-baba-d config list
 ```
 
 ### Default Configuration
@@ -107,7 +106,7 @@ buff config list
   "defaultProvider": "local",
   "providers": {
     "nim": {
-      "model": "meta/llama-3.1-70b-instruct",
+      "model": "meta/llama-3.1-8b-instruct",
       "temperature": 0.7,
       "maxTokens": 4096
     },
@@ -154,25 +153,77 @@ OPENROUTER_API_KEY=sk-or-v1-xxxxxxxxxxxxxxxxxxxxxxxxxxxx
 
 ## CLI Commands
 
-### `buff chat` — Interactive Chat
+### `agent-baba-d models` — Model Discovery (New in v1.1.0)
+
+List available models from any configured provider. Query each provider's model catalog without leaving the terminal.
+
+```bash
+# List models from the default provider
+agent-baba-d models
+
+# List models from a specific provider
+agent-baba-d models --provider nim
+agent-baba-d models --provider openrouter
+
+# Search for models by keyword
+agent-baba-d models --search deepseek
+agent-baba-d models --search llama
+
+# Show all providers (even unconfigured ones)
+agent-baba-d models --all
+```
+
+**Examples:**
+
+```bash
+# See all 121 models on NVIDIA NIM
+agent-baba-d models --provider nim
+
+# Find DeepSeek models across all configured providers
+agent-baba-d models --search deepseek
+
+# Output:
+# ════════════════════════════════════════════
+# 📋 Available Models (3)
+# ════════════════════════════════════════════
+#
+# NVIDIA NIM:
+# ----------------------------------------
+#   deepseek-ai/deepseek-v4-pro [deepseek]
+#   deepseek-ai/deepseek-v4-flash [deepseek]
+#   deepseek-ai/deepseek-coder-6.7b-instruct [deepseek]
+#
+# ════════════════════════════════════════════
+```
+
+Use a discovered model immediately:
+
+```bash
+agent-baba-d chat --provider nim --model deepseek-ai/deepseek-v4-flash
+agent-baba-d edit src/server.ts --provider openrouter --model openai/gpt-4o
+```
+
+---
+
+### `agent-baba-d chat` — Interactive Chat
 
 Start a terminal-based chat session with any provider.
 
 ```bash
 # Interactive mode (default provider)
-buff chat
+agent-baba-d chat
 
 # One-shot prompt
-buff chat "what is the difference between TCP and UDP?"
+agent-baba-d chat "what is the difference between TCP and UDP?"
 
 # Specify provider and model
-buff chat --provider gemini --model gemini-2.0-flash-exp
+agent-baba-d chat --provider gemini --model gemini-2.0-flash-exp
 
 # Include a file as context
-buff chat --file ./src/main.ts "explain this code"
+agent-baba-d chat --file ./src/main.ts "explain this code"
 
 # Disable caching
-buff chat --no-cache
+agent-baba-d chat --no-cache
 ```
 
 **Interactive commands** within a chat session:
@@ -184,40 +235,44 @@ buff chat --no-cache
 | `/info` | Show current provider details |
 | `/help` | Show available commands |
 
-### `buff edit` — AI-Assisted File Editing
+---
+
+### `agent-baba-d edit` — AI-Assisted File Editing
 
 Edit a file using natural language instructions. The AI reads the file, applies your instruction, and writes the result back.
 
 ```bash
 # Edit with default instruction ("Review and improve this code")
-buff edit src/server.ts
+agent-baba-d edit src/server.ts
 
 # Provide a specific instruction
-buff edit src/server.ts --instruction "add rate limiting middleware"
+agent-baba-d edit src/server.ts --instruction "add rate limiting middleware"
 
 # Use a specific provider
-buff edit src/server.ts --provider openrouter --model openai/gpt-4o
+agent-baba-d edit src/server.ts --provider openrouter --model openai/gpt-4o
 
 # Preview changes without modifying the file
-buff edit src/server.ts --instruction "add error handling" --dry-run
+agent-baba-d edit src/server.ts --instruction "add error handling" --dry-run
 ```
 
-### `buff plan` — Implementation Plans
+---
+
+### `agent-baba-d plan` — Implementation Plans
 
 Analyze a directory or file and generate a structured implementation plan.
 
 ```bash
 # Plan for the current directory
-buff plan
+agent-baba-d plan
 
 # Plan for a specific target with a task description
-buff plan ./src --task "add user authentication with JWT"
+agent-baba-d plan ./src --task "add user authentication with JWT"
 
 # Use a cloud provider for complex planning
-buff plan . --task "refactor to microservices" --provider gemini
+agent-baba-d plan . --task "refactor to microservices" --provider gemini
 
 # Verbose mode shows the full context sent to the model
-buff plan -v
+agent-baba-d plan -v
 ```
 
 The plan includes:
@@ -228,35 +283,39 @@ The plan includes:
 5. **Potential Risks** — edge cases and breaking changes
 6. **Testing Strategy** — verification approach
 
-### `buff config` — Configuration Management
+---
+
+### `agent-baba-d config` — Configuration Management
 
 ```bash
 # Show full config
-buff config
+agent-baba-d config
 
 # Set a value
-buff config set defaultProvider openrouter
+agent-baba-d config set defaultProvider openrouter
 
 # Get a specific value
-buff config get providers.nim.model
+agent-baba-d config get providers.nim.model
 
 # List all providers with their status
-buff config list
+agent-baba-d config list
 
 # Initialize (show defaults)
-buff config init
+agent-baba-d config init
 ```
 
-### `buff cache` — Cache Management
+---
+
+### `agent-baba-d cache` — Cache Management
 
 Inference responses are cached in a local SQLite database (`~/.buff/cache.db`) with a default TTL of 1 hour.
 
 ```bash
 # Show cache statistics
-buff cache stats
+agent-baba-d cache stats
 
 # Clear all cached responses
-buff cache clear
+agent-baba-d cache clear
 ```
 
 ---
@@ -274,8 +333,8 @@ ollama serve
 # Pull a model
 ollama pull llama2
 
-# Use with Buff
-buff chat --provider local --model llama2
+# Use with the CLI
+agent-baba-d chat --provider local --model llama2
 ```
 
 **Runners:**
@@ -289,26 +348,30 @@ buff chat --provider local --model llama2
 Configure the runner:
 
 ```bash
-buff config set providers.local.runner huggingface
-buff config set providers.local.model "microsoft/phi-2"
+agent-baba-d config set providers.local.runner huggingface
+agent-baba-d config set providers.local.model "microsoft/phi-2"
 ```
 
 ### NVIDIA NIM
 
-Connects to the **NVIDIA NIM** OpenAI-compatible API.
+Connects to the **NVIDIA NIM** OpenAI-compatible API at `https://integrate.api.nvidia.com/v1`.
 
 ```bash
 # Set your API key
 export NVIDIA_NIM_API_KEY="nvapi-..."
 
-# Use it
-buff chat --provider nim
+# List available models (121 models)
+agent-baba-d models --provider nim
+
+# Chat with any model
+agent-baba-d chat --provider nim --model meta/llama-3.1-8b-instruct
+agent-baba-d chat --provider nim --model deepseek-ai/deepseek-v4-flash
 ```
 
 The NIM adapter uses `https://integrate.api.nvidia.com/v1` by default. You can override the base URL for self-hosted NIM deployments:
 
 ```bash
-buff config set providers.nim.baseUrl "http://your-nim-host:8000/v1"
+agent-baba-d config set providers.nim.baseUrl "http://your-nim-host:8000/v1"
 ```
 
 ### Google Gemini
@@ -320,7 +383,7 @@ Connects to the **Google Gemini API** free tier.
 export GEMINI_API_KEY="AIzaSy..."
 
 # Use it (supports 8K+ token context)
-buff chat --provider gemini --model gemini-2.0-flash-exp
+agent-baba-d chat --provider gemini --model gemini-2.0-flash-exp
 ```
 
 ### OpenRouter
@@ -331,11 +394,12 @@ Routes through **OpenRouter** for access to 200+ models from multiple providers.
 # Set your API key
 export OPENROUTER_API_KEY="sk-or-v1-..."
 
-# Use a specific model
-buff chat --provider openrouter --model openai/gpt-4o
+# List available models
+agent-baba-d models --provider openrouter
 
-# Different model
-buff chat --provider openrouter --model anthropic/claude-3-haiku
+# Use a specific model
+agent-baba-d chat --provider openrouter --model openai/gpt-4o
+agent-baba-d chat --provider openrouter --model anthropic/claude-3-haiku
 ```
 
 ---
@@ -343,7 +407,7 @@ buff chat --provider openrouter --model anthropic/claude-3-haiku
 ## Architecture
 
 ```
-CLI Commands (chat, edit, plan, config, cache)
+CLI Commands (chat, edit, plan, models, config, cache)
          │
          ▼
    Inference Layer (InferenceProvider interface)
@@ -379,9 +443,10 @@ NVIDIA Google        OpenRouter   Ollama / HF /
 |---|---|---|
 | **CLI Router** | `src/cli/router.ts` | Registers commands and resolves providers |
 | **Config Manager** | `src/config/manager.ts` | Loads/saves config, merges env vars |
-| **Inference Interface** | `src/inference/interface.ts` | `InferenceProvider` contract |
+| **Inference Interface** | `src/inference/interface.ts` | `InferenceProvider` contract (`generate`, `isAvailable`, `getInfo`, `listModels`) |
 | **Provider Factory** | `src/inference/factory.ts` | Instantiates the right adapter |
 | **Adapters** | `src/inference/*-adapter.ts` | One per provider (NIM, Gemini, OpenRouter, Local) |
+| **Model Discovery** | `src/cli/models.ts` | Lists and searches models from all providers |
 | **Context Cache** | `src/context/cache.ts` | SQLite-backed response caching |
 | **Context Parser** | `src/context/parser.ts` | Multi-file reading, chunking, prioritization |
 | **Plugin Registry** | `src/plugins/registry.ts` | Pluggable third-party provider system |
@@ -389,17 +454,49 @@ NVIDIA Google        OpenRouter   Ollama / HF /
 
 ---
 
+## Workflow Examples
+
+### Discover and Chat with a Model
+
+```bash
+# Step 1: See what's available on NIM
+agent-baba-d models --provider nim
+
+# Step 2: Narrow down by keyword
+agent-baba-d models --search deepseek
+
+# Step 3: Chat with a found model
+agent-baba-d chat --provider nim --model deepseek-ai/deepseek-v4-flash
+```
+
+### Hybrid Provider Usage
+
+Use different providers for different tasks:
+
+```bash
+# Use local models for quick, small edits
+agent-baba-d edit README.md --instruction "fix typos" --provider local
+
+# Use cloud models for complex planning
+agent-baba-d plan . --task "design the database schema" --provider gemini
+
+# Use OpenRouter for diverse model selection
+agent-baba-d chat --provider openrouter --model openai/gpt-4o
+```
+
+---
+
 ## Plugin System: Adding a New Provider
 
-The plugin system allows you to add custom inference providers without modifying Buff's core code.
+The plugin system allows you to add custom inference providers without modifying the CLI's core code.
 
 ### Step 1: Implement `InferenceProvider`
 
 Create a class that implements the `InferenceProvider` interface:
 
 ```typescript
-import { InferenceProvider } from 'buff';
-import { InferenceOptions, ProviderConfig } from 'buff';
+import { InferenceProvider } from 'agent-baba-d';
+import { InferenceOptions, ProviderConfig } from 'agent-baba-d';
 
 export class AnthropicAdapter implements InferenceProvider {
   readonly name = 'Anthropic';
@@ -440,13 +537,19 @@ export class AnthropicAdapter implements InferenceProvider {
   getInfo(): string {
     return `Provider: Anthropic Claude\nModel: ${this.config.model || 'default'}\nStatus: ${this.config.apiKey ? '✅' : '❌'}`;
   }
+
+  async listModels(): Promise<Array<{ id: string; name: string; provider: string; owner?: string; description?: string }>> {
+    if (!this.config.apiKey) return [];
+    // Fetch models from Anthropic API
+    return [{ id: 'claude-3-haiku-20240307', name: 'claude-3-haiku-20240307', provider: 'Anthropic' }];
+  }
 }
 ```
 
 ### Step 2: Create a Plugin Wrapper
 
 ```typescript
-import { ProviderPlugin, ProviderConfig, PluginMetadata } from 'buff';
+import { ProviderPlugin, ProviderConfig, PluginMetadata } from 'agent-baba-d';
 import { AnthropicAdapter } from './anthropic-adapter';
 
 export const AnthropicPlugin: ProviderPlugin = {
@@ -472,7 +575,7 @@ export const AnthropicPlugin: ProviderPlugin = {
 At your application's entry point:
 
 ```typescript
-import { getPluginRegistry } from 'buff';
+import { getPluginRegistry } from 'agent-baba-d';
 import { AnthropicPlugin } from './anthropic-plugin';
 
 const registry = getPluginRegistry();
@@ -500,7 +603,7 @@ Add the provider to your `buffconfig.json`:
 Then use it:
 
 ```bash
-buff chat --provider anthropic
+agent-baba-d chat --provider anthropic
 ```
 
 > **Note:** The plugin system is a *programmatic* API. To make plugins load automatically from a directory (discovery), you would add a plugin loader script that scans a `~/.buff/plugins/` directory and registers any plugins found.
@@ -534,6 +637,7 @@ src/
 │   ├── commands.ts       # Base command class
 │   ├── chat.ts           # Interactive chat
 │   ├── edit.ts           # File editing
+│   ├── models.ts         # Model discovery (list/search models)
 │   ├── plan.ts           # Implementation plans
 │   ├── config.ts         # Configuration management
 │   └── cache.ts          # Cache management
@@ -560,42 +664,29 @@ src/
 ### Testing
 
 ```bash
+# Run all tests (115+ tests)
+npm test
+
+# Watch mode
+npm run test:watch
+
+# With coverage
+npm run test:coverage
+
 # Type-check without emitting files
 npx tsc --noEmit
-
-# Build
-npm run build
-
-# Run the CLI
-node dist/index.js --help
 ```
 
 ---
 
-## Hybrid Mode
-
-You can use different providers for different tasks by specifying `--provider` on each command:
-
-```bash
-# Use local models for quick, small edits
-buff edit README.md --instruction "fix typos" --provider local
-
-# Use cloud models for complex planning
-buff plan . --task "design the database schema" --provider gemini
-
-# Use OpenRouter for diverse model selection
-buff chat --provider openrouter --model openai/gpt-4o
-```
-
----
-
-## Future Roadmap
+## Roadmap
 
 - [ ] **Auto-discovery plugin loader** — scan `~/.buff/plugins/` for `.js` plugin files
 - [ ] **Streaming support** — real-time token-by-token output in chat mode
 - [ ] **Hybrid routing** — automatically route small prompts to local models and complex ones to cloud
 - [ ] **Local telemetry** — usage logs stored locally (no server upload)
-- [ ] **Provider health checks** — `buff doctor` to verify all configured providers
+- [ ] **Provider health checks** — `agent-baba-d doctor` to verify all configured providers
+- [ ] **Interactive model picker** — fuzzy-select a model from search results during chat
 
 ---
 
