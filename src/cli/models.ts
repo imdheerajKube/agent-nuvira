@@ -16,17 +16,42 @@ export class ModelsCommand extends BaseCommand {
       .option('-p, --provider <provider>', 'Only show models from this provider (nim, gemini, openrouter, groq, local)')
       .option('-s, --search <keyword>', 'Search/filter models by keyword')
       .option('--all', 'Show all models (including unconfigured providers)', false)
-      .action(async (options?: { provider?: string; search?: string; all?: boolean }) => {
+      .option('--verify', 'Verify API keys and show configuration status for all providers', false)
+      .action(async (options?: { provider?: string; search?: string; all?: boolean; verify?: boolean }) => {
         await this.execute(options || {});
       });
 
     return command;
   }
 
-  private async execute(options?: { provider?: string; search?: string; all?: boolean }): Promise<void> {
+  private async execute(options?: { provider?: string; search?: string; all?: boolean; verify?: boolean }): Promise<void> {
     const providersToCheck: ProviderType[] = options?.provider
       ? [options.provider as ProviderType]
-      : ['nim', 'gemini', 'openrouter', 'local'];
+      : ['nim', 'gemini', 'openrouter', 'groq', 'local'];
+
+    // If --verify, show API key/configuration status and then list models
+    if (options?.verify) {
+      console.log();
+      logger.highlight('🔑 Provider Configuration Status\n');
+      for (const providerType of providersToCheck) {
+        const { provider } = resolveProvider(this.configManager, providerType);
+        const available = await provider.isAvailable();
+        const config = this.configManager.getProviderConfig(providerType).config;
+        const hasKey = !!config.apiKey;
+        const keyPreview = hasKey
+          ? `${config.apiKey!.slice(0, 8)}...${config.apiKey!.slice(-4)}`
+          : 'Not set';
+
+        if (available) {
+          logger.success(`  ✅ ${provider.name}`);
+        } else {
+          logger.info(`  ⛔ ${provider.name}`);
+        }
+        console.log(`       API Key: ${keyPreview}`);
+        console.log(`       Model: ${config.model || 'default'}`);
+        console.log();
+      }
+    }
 
     const allResults: Array<{ provider: string; name: string; id: string; owner?: string; description?: string }> = [];
 
