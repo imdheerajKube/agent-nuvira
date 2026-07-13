@@ -132,8 +132,13 @@ export class ChatCommand extends BaseCommand {
   }
 
   /**
-   * Show an interactive model picker that discovers available providers
+   * Show a cross-platform numbered menu that discovers available providers
    * and lets the user choose a model before starting the chat.
+   *
+   * Uses a numbered prompt (not inquirer list) for:
+   * - Cross-platform compatibility (Windows, macOS, Linux)
+   * - Better accessibility (numbered selection, no arrow keys)
+   * - Non-TTY environments (piped input, CI)
    */
   private async showModelPicker(): Promise<{ provider: string; model: string } | null> {
     const availableProviders: Array<{ type: ProviderType; provider: InferenceProvider; name: string }> = [];
@@ -181,11 +186,13 @@ export class ChatCommand extends BaseCommand {
     // Step 2: Fetch models from available providers
     logger.highlight('\n📡 Fetching available models...\n');
 
-    const choices: Array<{
-      name: string;
-      value: { provider: string; model: string };
-      short?: string;
-    }> = [];
+    interface ModelChoice {
+      label: string;
+      provider: string;
+      model: string;
+    }
+
+    const modelChoices: ModelChoice[] = [];
 
     for (const { type, provider: prov, name } of availableProviders) {
       const spinner = ora(`  Loading ${name} models...`).start();
@@ -201,26 +208,19 @@ export class ChatCommand extends BaseCommand {
 
         logger.success(`  ✅ ${name}: ${models.length} model${models.length !== 1 ? 's' : ''} available`);
 
-        // Show up to 10 models per provider to keep the picker manageable
-        const MAX_MODELS_PER_PROVIDER = 10;
+        // Show up to 15 models per provider
+        const MAX_MODELS_PER_PROVIDER = 15;
         const modelsToShow = models.slice(0, MAX_MODELS_PER_PROVIDER);
 
         for (const model of modelsToShow) {
           const icon = providerIcons[type] || '🔹';
           const owner = model.owner ? ` [${model.owner}]` : '';
-          const displayName = `${icon}  ${model.name}${owner}`;
-          choices.push({
-            name: displayName,
-            value: { provider: type, model: model.id },
-            short: `${model.id} (${name})`,
-          });
+          const label = `${icon}  ${model.name}${owner}`;
+          modelChoices.push({ label, provider: type, model: model.id });
         }
 
         if (models.length > MAX_MODELS_PER_PROVIDER) {
-          choices.push({
-            name: `     📋 ... and ${models.length - MAX_MODELS_PER_PROVIDER} more (use: agent-baba-d models --provider ${type})`,
-            value: { provider: '', model: '' },
-          });
+          logger.info(`    📋 ... and ${models.length - MAX_MODELS_PER_PROVIDER} more (use: agent-baba-d models --provider ${type})`);
         }
       } catch (err) {
         spinner.stop();
@@ -228,53 +228,59 @@ export class ChatCommand extends BaseCommand {
       }
     }
 
-    if (choices.length === 0) {
+    if (modelChoices.length === 0) {
       logger.error('\n⚠️  No models found from any available provider.');
       return null;
     }
 
-    // Add cancel option with a sentinel value
-    const CANCEL = { provider: '__cancel__', model: '' };
-    choices.push({
-      name: '  ❌  Cancel',
-      value: CANCEL,
-    });
+    // Step 3: Display numbered menu and ask user to pick
+    console.log();
+    logger.highlight('🎯  Available Models\n');
 
-    console.log(); // spacing
+    for (let i = 0; i < modelChoices.length; i++) {
+      const num = (i + 1).toString().padStart(2, ' ');
+      console.log(`  ${num}. ${modelChoices[i].label}`);
+    }
+    console.log(`   0. ❌  Cancel`);
+    console.log();
 
-    // Filter out non-selectable info-only entries (those with empty provider)
-    const selectableChoices = choices.filter(c => c.value.provider !== '');
+    const selectableTotal = modelChoices.length;
 
-    const answer = await inquirer.prompt<{ selected: { provider: string; model: string } }>([
+    const answer = await inquirer.prompt<{ selected: string }>([
       {
-        type: 'list',
+        type: 'input',
         name: 'selected',
-        message: '🎯  Select a model to chat with:',
-        choices: selectableChoices.map(c => ({
-          name: c.name,
-          value: c.value,
-          short: c.short,
-        })),
-        pageSize: Math.min(selectableChoices.length + 2, 20),
-        loop: false,
+        message: `Enter a number (0-${selectableTotal}):`,
+        prefix: '🔢',
+        validate: (input: string) => {
+          const trimmed = input.trim();
+          if (trimmed === '') return 'Please enter a number';
+          const num = Number(trimmed);
+          if (isNaN(num) || !Number.isInteger(num)) return 'Please enter a valid whole number';
+          if (num < 0 || num > selectableTotal) return `Please enter a number between 0 and ${selectableTotal}`;
+          return true;
+        },
       },
     ]);
 
-    const selected = answer.selected;
+    const selectedIndex = parseInt(answer.selected.trim(), 10);
 
-    // Handle cancel
-    if (selected.provider === '__cancel__') {
+    // Handle cancel (0)
+    if (selectedIndex === 0) {
       logger.info('\nModel selection cancelled.');
       return null;
     }
 
+    const selected = modelChoices[selectedIndex - 1];
+
     // Separate picker output from chat for a clean start
     console.log('\n'.repeat(2));
 
+    const providerName = availableProviders.find(p => p.type === selected.provider)?.name || selected.provider;
     logger.success(`🎯  Selected: ${selected.model}`);
-    logger.info(`   Provider: ${availableProviders.find(p => p.type === selected.provider)?.name || selected.provider}\n`);
+    logger.info(`   Provider: ${providerName}\n`);
 
-    return selected;
+    return { provider: selected.provider, model: selected.model };
   }
 
   /**
