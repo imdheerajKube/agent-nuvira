@@ -1,51 +1,56 @@
+import { readFileSync, writeFileSync, mkdirSync, existsSync } from 'node:fs';
 import { join } from 'node:path';
 import { homedir } from 'node:os';
-import { mkdirSync, existsSync } from 'node:fs';
 import { createHash } from 'node:crypto';
 
-const DB_PATH = join(homedir(), '.buff', 'cache.db');
+const CACHE_DIR = join(homedir(), '.buff');
+const CACHE_PATH = join(CACHE_DIR, 'cache.json');
 
-// Use dynamic import for better-sqlite3 (ESM compatible)
-let db: any = null;
-let dbInitPromise: Promise<any> | null = null;
-
-async function getDb(): Promise<any> {
-  if (db) return db;
-  if (dbInitPromise) return dbInitPromise;
-
-  dbInitPromise = initializeDb();
-  return dbInitPromise;
+interface CacheEntry {
+  response: string;
+  model: string;
+  provider: string;
+  createdAt: number;
+  ttl: number;
 }
 
-async function initializeDb(): Promise<any> {
-  const dir = join(homedir(), '.buff');
-  if (!existsSync(dir)) {
-    mkdirSync(dir, { recursive: true });
+interface CacheData {
+  entries: Record<string, CacheEntry>;
+}
+
+function ensureDir(): void {
+  if (!existsSync(CACHE_DIR)) {
+    mkdirSync(CACHE_DIR, { recursive: true });
   }
+}
 
+function readCache(): CacheData {
   try {
-    const Database = (await import('better-sqlite3')).default;
-    db = new Database(DB_PATH);
-    db.exec(`
-      CREATE TABLE IF NOT EXISTS inference_cache (
-        key TEXT PRIMARY KEY,
-        response TEXT NOT NULL,
-        model TEXT NOT NULL,
-        provider TEXT NOT NULL,
-        created_at INTEGER NOT NULL,
-        ttl INTEGER NOT NULL DEFAULT 3600
-      );
-      CREATE INDEX IF NOT EXISTS idx_cache_created ON inference_cache(created_at);
-      CREATE INDEX IF NOT EXISTS idx_cache_provider ON inference_cache(provider);
-    `);
+    ensureDir();
+    if (!existsSync(CACHE_PATH)) {
+      return { entries: {} };
+    }
+    const raw = readFileSync(CACHE_PATH, 'utf-8');
+    return JSON.parse(raw) as CacheData;
+  } catch {
+    return { entries: {} };
+  }
+}
 
-    // Clean up expired entries
-    db.exec(`DELETE FROM inference_cache WHERE (created_at + ttl) < ${Math.floor(Date.now() / 1000)}`);
+function writeCache(data: CacheData): void {
+  ensureDir();
+  writeFileSync(CACHE_PATH, JSON.stringify(data, null, 2), 'utf-8');
+}
 
-    return db;
-  } catch (err) {
-    // SQLite not available, cache disabled
-    return null;
+/**
+ * Remove expired entries from the cache data in-place
+ */
+function pruneExpired(data: CacheData): void {
+  const now = Math.floor(Date.now() / 1000);
+  for (const [key, entry] of Object.entries(data.entries)) {
+    if (entry.createdAt + entry.ttl < now) {
+      delete data.entries[key];
+    }
   }
 }
 
@@ -60,35 +65,29 @@ function generateKey(prompt: string, model: string, provider: string): string {
 }
 
 /**
- * Context cache for inference results
+ * Context cache for inference results.
+ * Uses a simple JSON file — no native dependencies, works everywhere.
  */
 export class InferenceCache {
-  private enabled: boolean = true;
-
-  constructor() {
-    // Initialization is lazy in get()/set() — no need to await in constructor
-  }
-
   /**
    * Get cached response if available and not expired
    */
   async get(prompt: string, model: string, provider: string): Promise<string | null> {
-    if (!this.enabled) return null;
+    const data = readCache();
+    const key = generateKey(prompt, model, provider);
+    const entry = data.entries[key];
 
-    const database = await getDb();
-    if (!database) {
-      this.enabled = false;
+    if (!entry) return null;
+
+    const now = Math.floor(Date.now() / 1000);
+    if (entry.createdAt + entry.ttl < now) {
+      // Expired — remove it
+      delete data.entries[key];
+      writeCache(data);
       return null;
     }
 
-    const key = generateKey(prompt, model, provider);
-    const now = Math.floor(Date.now() / 1000);
-
-    const row = database.prepare(
-      `SELECT response FROM inference_cache WHERE key = ? AND (created_at + ttl) > ?`
-    ).get(key, now);
-
-    return row ? row.response : null;
+    return entry.response;
   }
 
   /**
@@ -101,57 +100,40 @@ export class InferenceCache {
     provider: string,
     ttl: number = 3600
   ): Promise<void> {
-    if (!this.enabled) return;
-
-    const database = await getDb();
-    if (!database) {
-      this.enabled = false;
-      return;
-    }
-
+    const data = readCache();
+    pruneExpired(data); // Clean up expired entries before writing
     const key = generateKey(prompt, model, provider);
-    const now = Math.floor(Date.now() / 1000);
 
-    database.prepare(
-      `INSERT OR REPLACE INTO inference_cache (key, response, model, provider, created_at, ttl)
-       VALUES (?, ?, ?, ?, ?, ?)`
-    ).run(key, response, model, provider, now, ttl);
+    data.entries[key] = {
+      response,
+      model,
+      provider,
+      createdAt: Math.floor(Date.now() / 1000),
+      ttl,
+    };
+
+    writeCache(data);
   }
 
   /**
    * Clear all cache entries
    */
   async clear(): Promise<void> {
-    if (!this.enabled) return;
-
-    const database = await getDb();
-    if (!database) return;
-
-    database.prepare('DELETE FROM inference_cache').run();
+    writeCache({ entries: {} });
   }
 
   /**
    * Get cache statistics
    */
   async stats(): Promise<{ total: number; providers: Record<string, number> }> {
-    if (!this.enabled) {
-      return { total: 0, providers: {} };
-    }
+    const data = readCache();
+    pruneExpired(data);
 
-    const database = await getDb();
-    if (!database) {
-      return { total: 0, providers: {} };
-    }
-
-    const total = database.prepare('SELECT COUNT(*) as count FROM inference_cache').get().count;
-
-    const providerRows = database.prepare(
-      'SELECT provider, COUNT(*) as count FROM inference_cache GROUP BY provider'
-    ).all();
-
+    const total = Object.keys(data.entries).length;
     const providers: Record<string, number> = {};
-    for (const row of providerRows) {
-      providers[row.provider] = row.count;
+
+    for (const entry of Object.values(data.entries)) {
+      providers[entry.provider] = (providers[entry.provider] || 0) + 1;
     }
 
     return { total, providers };
