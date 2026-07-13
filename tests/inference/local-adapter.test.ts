@@ -161,6 +161,78 @@ describe('LocalAdapter', () => {
     });
   });
 
+  describe('listModels', () => {
+    it('should return models from Ollama API', async () => {
+      const sampleTags = {
+        models: [
+          { name: 'llama2:latest' },
+          { name: 'mistral:latest' },
+          { name: 'codellama:latest' },
+        ],
+      };
+
+      mockFetch.mockResolvedValueOnce({
+        ok: true,
+        json: async () => sampleTags,
+      });
+
+      const adapter = new LocalAdapter({ runner: 'ollama' as const });
+      const models = await adapter.listModels();
+
+      expect(models).toHaveLength(3);
+      expect(models[0]).toEqual({ id: 'llama2:latest', name: 'llama2:latest', provider: 'local' });
+      expect(models[1]).toEqual({ id: 'mistral:latest', name: 'mistral:latest', provider: 'local' });
+      expect(models[2]).toEqual({ id: 'codellama:latest', name: 'codellama:latest', provider: 'local' });
+
+      expect(mockFetch).toHaveBeenCalledWith('http://localhost:11434/api/tags');
+    });
+
+    it('should return empty array for non-ollama runners', async () => {
+      const adapter = new LocalAdapter({ runner: 'huggingface' as const });
+      const models = await adapter.listModels();
+      expect(models).toEqual([]);
+      expect(mockFetch).not.toHaveBeenCalled();
+    });
+
+    it('should return empty array on API error', async () => {
+      mockFetch.mockResolvedValueOnce({ ok: false, status: 500 });
+
+      const adapter = new LocalAdapter({ runner: 'ollama' as const });
+      const models = await adapter.listModels();
+      expect(models).toEqual([]);
+    });
+
+    it('should return empty array when Ollama is not running', async () => {
+      mockFetch.mockRejectedValueOnce(new Error('Connection refused'));
+
+      const adapter = new LocalAdapter({ runner: 'ollama' as const });
+      const models = await adapter.listModels();
+      expect(models).toEqual([]);
+    });
+
+    it('should handle empty models list', async () => {
+      mockFetch.mockResolvedValueOnce({
+        ok: true,
+        json: async () => ({ models: [] }),
+      });
+
+      const adapter = new LocalAdapter({ runner: 'ollama' as const });
+      const models = await adapter.listModels();
+      expect(models).toEqual([]);
+    });
+
+    it('should handle missing models field', async () => {
+      mockFetch.mockResolvedValueOnce({
+        ok: true,
+        json: async () => ({}),
+      });
+
+      const adapter = new LocalAdapter({ runner: 'ollama' as const });
+      const models = await adapter.listModels();
+      expect(models).toEqual([]);
+    });
+  });
+
   describe('getInfo', () => {
     it('should show ollama runner by default', () => {
       const adapter = new LocalAdapter(baseConfig);

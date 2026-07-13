@@ -27,7 +27,7 @@ describe('ConfigManager', () => {
       const config = manager.getAll();
 
       expect(config.defaultProvider).toBe('local');
-      expect(config.providers.nim.model).toBe('meta/llama-3.1-70b-instruct');
+      expect(config.providers.nim.model).toBe('meta/llama-3.1-8b-instruct');
       expect(config.providers.gemini.model).toBe('gemini-2.0-flash-exp');
       expect(config.providers.openrouter.model).toBe('mistralai/mistral-7b-instruct');
       expect(config.providers.local.runner).toBe('ollama');

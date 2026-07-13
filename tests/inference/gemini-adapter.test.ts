@@ -128,6 +128,102 @@ describe('GeminiAdapter', () => {
     });
   });
 
+  describe('listModels', () => {
+    it('should return models from the API', async () => {
+      const sampleModels = {
+        models: [
+          { name: 'models/gemini-2.0-flash-exp', displayName: 'Gemini 2.0 Flash', description: 'Fast multimodal' },
+          { name: 'models/gemini-pro', displayName: 'Gemini Pro', description: 'General purpose' },
+          { name: 'models/gemma-2-2b-it', displayName: 'Gemma 2', description: 'Lightweight' },
+        ],
+      };
+
+      mockFetch.mockResolvedValueOnce({
+        ok: true,
+        json: async () => sampleModels,
+      });
+
+      const adapter = new GeminiAdapter({ apiKey: 'test-key' });
+      const models = await adapter.listModels();
+
+      expect(models).toHaveLength(3);
+      expect(models[0]).toEqual({
+        id: 'gemini-2.0-flash-exp',
+        name: 'Gemini 2.0 Flash',
+        provider: 'gemini',
+        description: 'Fast multimodal',
+      });
+      expect(models[1]).toEqual({
+        id: 'gemini-pro',
+        name: 'Gemini Pro',
+        provider: 'gemini',
+        description: 'General purpose',
+      });
+      expect(models[2]).toEqual({
+        id: 'gemma-2-2b-it',
+        name: 'Gemma 2',
+        provider: 'gemini',
+        description: 'Lightweight',
+      });
+
+      // Verify the URL includes the API key
+      const callUrl = mockFetch.mock.calls[0][0];
+      expect(callUrl).toContain('generativelanguage.googleapis.com/v1beta/models');
+      expect(callUrl).toContain('key=test-key');
+    });
+
+    it('should use displayName when available, fall back to cleaned name', async () => {
+      mockFetch.mockResolvedValueOnce({
+        ok: true,
+        json: async () => ({
+          models: [
+            { name: 'models/no-display', description: '' },
+          ],
+        }),
+      });
+
+      const adapter = new GeminiAdapter({ apiKey: 'test-key' });
+      const models = await adapter.listModels();
+
+      expect(models[0].id).toBe('no-display');
+      expect(models[0].name).toBe('no-display');
+    });
+
+    it('should return empty array when API key is missing', async () => {
+      const adapter = new GeminiAdapter({});
+      const models = await adapter.listModels();
+      expect(models).toEqual([]);
+      expect(mockFetch).not.toHaveBeenCalled();
+    });
+
+    it('should return empty array on API error', async () => {
+      mockFetch.mockResolvedValueOnce({ ok: false, status: 403 });
+
+      const adapter = new GeminiAdapter({ apiKey: 'test-key' });
+      const models = await adapter.listModels();
+      expect(models).toEqual([]);
+    });
+
+    it('should return empty array on network failure', async () => {
+      mockFetch.mockRejectedValueOnce(new Error('Network error'));
+
+      const adapter = new GeminiAdapter({ apiKey: 'test-key' });
+      const models = await adapter.listModels();
+      expect(models).toEqual([]);
+    });
+
+    it('should handle missing models field', async () => {
+      mockFetch.mockResolvedValueOnce({
+        ok: true,
+        json: async () => ({}),
+      });
+
+      const adapter = new GeminiAdapter({ apiKey: 'test-key' });
+      const models = await adapter.listModels();
+      expect(models).toEqual([]);
+    });
+  });
+
   describe('getInfo', () => {
     it('should show configured status', () => {
       const adapter = new GeminiAdapter(baseConfig);

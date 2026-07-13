@@ -1,4 +1,4 @@
-import { InferenceProvider } from './interface.js';
+import { InferenceProvider, ModelDescriptor } from './interface.js';
 import { InferenceOptions, ProviderConfig } from '../config/types.js';
 import { logger } from '../utils/logger.js';
 
@@ -28,7 +28,7 @@ export class NIMAdapter implements InferenceProvider {
       throw new Error('NVIDIA NIM API key is not configured. Set NVIDIA_NIM_API_KEY env var.');
     }
 
-    const model = options?.model || this.config.model || 'meta/llama-3.1-70b-instruct';
+    const model = options?.model || this.config.model || 'meta/llama-3.1-8b-instruct';
     const temperature = options?.temperature ?? this.config.temperature ?? 0.7;
     const maxTokens = options?.maxTokens ?? this.config.maxTokens ?? 4096;
 
@@ -67,5 +67,27 @@ export class NIMAdapter implements InferenceProvider {
 
   getInfo(): string {
     return `Provider: NVIDIA NIM\nModel: ${this.config.model || 'default'}\nStatus: ${this.config.apiKey ? '✅ Configured' : '❌ Missing API key'}`;
+  }
+
+  async listModels(): Promise<ModelDescriptor[]> {
+    const apiKey = this.config.apiKey;
+    if (!apiKey) return [];
+
+    const baseUrl = this.config.baseUrl || DEFAULT_NIM_BASE_URL;
+    try {
+      const response = await fetch(`${baseUrl}/models`, {
+        headers: { 'Authorization': `Bearer ${apiKey}` },
+      });
+      if (!response.ok) return [];
+      const data = (await response.json()) as { data: Array<{ id: string; owned_by?: string }> };
+      return (data.data || []).map((m: { id: string; owned_by?: string }) => ({
+        id: m.id,
+        name: m.id.split('/').pop() || m.id,
+        provider: 'nim',
+        owner: m.owned_by || 'nvidia',
+      }));
+    } catch {
+      return [];
+    }
   }
 }

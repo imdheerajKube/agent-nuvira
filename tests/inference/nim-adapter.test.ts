@@ -124,6 +124,80 @@ describe('NIMAdapter', () => {
     });
   });
 
+  describe('listModels', () => {
+    it('should return models from the API', async () => {
+      const sampleModels = {
+        data: [
+          { id: 'meta/llama-3.1-8b-instruct', owned_by: 'meta' },
+          { id: 'google/gemma-2-2b-it', owned_by: 'google' },
+          { id: 'mistralai/mistral-nemo', owned_by: 'mistral' },
+        ],
+      };
+
+      mockFetch.mockResolvedValueOnce({
+        ok: true,
+        json: async () => sampleModels,
+      });
+
+      const adapter = new NIMAdapter({ apiKey: 'test-key', baseUrl: 'https://example.com/v1' });
+      const models = await adapter.listModels();
+
+      expect(models).toHaveLength(3);
+      expect(models[0]).toEqual({ id: 'meta/llama-3.1-8b-instruct', name: 'llama-3.1-8b-instruct', provider: 'nim', owner: 'meta' });
+      expect(models[1]).toEqual({ id: 'google/gemma-2-2b-it', name: 'gemma-2-2b-it', provider: 'nim', owner: 'google' });
+      expect(models[2]).toEqual({ id: 'mistralai/mistral-nemo', name: 'mistral-nemo', provider: 'nim', owner: 'mistral' });
+
+      expect(mockFetch).toHaveBeenCalledWith('https://example.com/v1/models', {
+        headers: { 'Authorization': 'Bearer test-key' },
+      });
+    });
+
+    it('should return empty array when API key is missing', async () => {
+      const adapter = new NIMAdapter({});
+      const models = await adapter.listModels();
+      expect(models).toEqual([]);
+      expect(mockFetch).not.toHaveBeenCalled();
+    });
+
+    it('should return empty array on API error', async () => {
+      mockFetch.mockResolvedValueOnce({ ok: false, status: 500 });
+
+      const adapter = new NIMAdapter({ apiKey: 'test-key' });
+      const models = await adapter.listModels();
+      expect(models).toEqual([]);
+    });
+
+    it('should return empty array on network failure', async () => {
+      mockFetch.mockRejectedValueOnce(new Error('Network error'));
+
+      const adapter = new NIMAdapter({ apiKey: 'test-key' });
+      const models = await adapter.listModels();
+      expect(models).toEqual([]);
+    });
+
+    it('should handle empty data response', async () => {
+      mockFetch.mockResolvedValueOnce({
+        ok: true,
+        json: async () => ({ data: [] }),
+      });
+
+      const adapter = new NIMAdapter({ apiKey: 'test-key' });
+      const models = await adapter.listModels();
+      expect(models).toEqual([]);
+    });
+
+    it('should handle missing data field', async () => {
+      mockFetch.mockResolvedValueOnce({
+        ok: true,
+        json: async () => ({}),
+      });
+
+      const adapter = new NIMAdapter({ apiKey: 'test-key' });
+      const models = await adapter.listModels();
+      expect(models).toEqual([]);
+    });
+  });
+
   describe('getInfo', () => {
     it('should show configured status when key is present', () => {
       const adapter = new NIMAdapter(baseConfig);

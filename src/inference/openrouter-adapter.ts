@@ -1,4 +1,4 @@
-import { InferenceProvider } from './interface.js';
+import { InferenceProvider, ModelDescriptor } from './interface.js';
 import { InferenceOptions, ProviderConfig } from '../config/types.js';
 import { logger } from '../utils/logger.js';
 
@@ -65,5 +65,26 @@ export class OpenRouterAdapter implements InferenceProvider {
 
   getInfo(): string {
     return `Provider: OpenRouter\nModel: ${this.config.model || 'default'}\nStatus: ${this.config.apiKey ? '✅ Configured' : '❌ Missing API key'}`;
+  }
+
+  async listModels(): Promise<ModelDescriptor[]> {
+    const apiKey = this.config.apiKey;
+    if (!apiKey) return [];
+
+    try {
+      const response = await fetch(`${OPENROUTER_BASE_URL}/models`, {
+        headers: { 'Authorization': `Bearer ${apiKey}` },
+      });
+      if (!response.ok) return [];
+      const data = (await response.json()) as { data: Array<{ id: string; name?: string; description?: string }> };
+      return (data.data || []).map((m: { id: string; name?: string; description?: string }) => ({
+        id: m.id,
+        name: m.name || m.id,
+        provider: 'openrouter',
+        description: m.description,
+      }));
+    } catch {
+      return [];
+    }
   }
 }

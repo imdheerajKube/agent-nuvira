@@ -1,3 +1,14 @@
+/**
+ * A model descriptor returned by listModels()
+ */
+export interface ModelDescriptor {
+  id: string;
+  name: string;
+  provider: string;
+  owner?: string;
+  description?: string;
+}
+
 import { InferenceOptions } from '../config/types.js';
 
 /**
@@ -23,4 +34,9 @@ export interface InferenceProvider {
    * Get a description of the current provider configuration
    */
   getInfo(): string;
+
+  /**
+   * List available models from this provider
+   */
+  listModels(): Promise<ModelDescriptor[]>;
 }

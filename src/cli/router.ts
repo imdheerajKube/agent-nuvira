@@ -8,6 +8,7 @@ import { EditCommand } from './edit.js';
 import { PlanCommand } from './plan.js';
 import { ConfigCommand } from './config.js';
 import { CacheCommand } from './cache.js';
+import { ModelsCommand } from './models.js';
 import { logger } from '../utils/logger.js';
 
 /**
@@ -31,12 +32,14 @@ export function createCLI(): Command {
   const planCmd = new PlanCommand();
   const configCmd = new ConfigCommand();
   const cacheCmd = new CacheCommand();
+  const modelsCmd = new ModelsCommand();
 
   program.addCommand(chatCmd.create());
   program.addCommand(editCmd.create());
   program.addCommand(planCmd.create());
   program.addCommand(configCmd.create());
   program.addCommand(cacheCmd.create());
+  program.addCommand(modelsCmd.create());
 
   // Default action: show help
   program.action(() => {

@@ -1,4 +1,4 @@
-import { InferenceProvider } from './interface.js';
+import { InferenceProvider, ModelDescriptor } from './interface.js';
 import { InferenceOptions, ProviderConfig } from '../config/types.js';
 import { logger } from '../utils/logger.js';
 import { spawn } from 'node:child_process';
@@ -235,5 +235,26 @@ except Exception as e:
   getInfo(): string {
     const runner = this.config.runner || 'ollama';
     return `Provider: Local (${runner})\nModel: ${this.config.model || 'default'}\nStatus: ✅ Always available`;
+  }
+
+  async listModels(): Promise<ModelDescriptor[]> {
+    const runner = this.config.runner || 'ollama';
+
+    if (runner === 'ollama') {
+      try {
+        const response = await fetch(`${OLLAMA_API_BASE}/api/tags`);
+        if (!response.ok) return [];
+        const data = (await response.json()) as { models?: Array<{ name: string }> };
+        return (data.models || []).map((m: { name: string }) => ({
+          id: m.name,
+          name: m.name,
+          provider: 'local',
+        }));
+      } catch {
+        return [];
+      }
+    }
+
+    return [];
   }
 }

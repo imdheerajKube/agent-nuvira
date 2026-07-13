@@ -110,6 +110,83 @@ describe('OpenRouterAdapter', () => {
     });
   });
 
+  describe('listModels', () => {
+    it('should return models from the API', async () => {
+      const sampleModels = {
+        data: [
+          { id: 'openai/gpt-4o', name: 'GPT-4o', description: 'OpenAI flagship model' },
+          { id: 'anthropic/claude-3-haiku', name: 'Claude 3 Haiku', description: 'Fast & affordable' },
+          { id: 'mistralai/mistral-7b-instruct', description: 'Mistral 7B' },
+        ],
+      };
+
+      mockFetch.mockResolvedValueOnce({
+        ok: true,
+        json: async () => sampleModels,
+      });
+
+      const adapter = new OpenRouterAdapter({ apiKey: 'sk-or-test' });
+      const models = await adapter.listModels();
+
+      expect(models).toHaveLength(3);
+      expect(models[0]).toEqual({ id: 'openai/gpt-4o', name: 'GPT-4o', provider: 'openrouter', description: 'OpenAI flagship model' });
+      expect(models[1]).toEqual({ id: 'anthropic/claude-3-haiku', name: 'Claude 3 Haiku', provider: 'openrouter', description: 'Fast & affordable' });
+      expect(models[2]).toEqual({ id: 'mistralai/mistral-7b-instruct', name: 'mistralai/mistral-7b-instruct', provider: 'openrouter', description: 'Mistral 7B' });
+
+      expect(mockFetch).toHaveBeenCalledWith('https://openrouter.ai/api/v1/models', {
+        headers: { 'Authorization': 'Bearer sk-or-test' },
+      });
+    });
+
+    it('should fall back to id when name is not provided', async () => {
+      mockFetch.mockResolvedValueOnce({
+        ok: true,
+        json: async () => ({
+          data: [{ id: 'model-without-name' }],
+        }),
+      });
+
+      const adapter = new OpenRouterAdapter({ apiKey: 'test-key' });
+      const models = await adapter.listModels();
+
+      expect(models[0].name).toBe('model-without-name');
+    });
+
+    it('should return empty array when API key is missing', async () => {
+      const adapter = new OpenRouterAdapter({});
+      const models = await adapter.listModels();
+      expect(models).toEqual([]);
+      expect(mockFetch).not.toHaveBeenCalled();
+    });
+
+    it('should return empty array on API error', async () => {
+      mockFetch.mockResolvedValueOnce({ ok: false, status: 401 });
+
+      const adapter = new OpenRouterAdapter({ apiKey: 'test-key' });
+      const models = await adapter.listModels();
+      expect(models).toEqual([]);
+    });
+
+    it('should return empty array on network failure', async () => {
+      mockFetch.mockRejectedValueOnce(new Error('Network error'));
+
+      const adapter = new OpenRouterAdapter({ apiKey: 'test-key' });
+      const models = await adapter.listModels();
+      expect(models).toEqual([]);
+    });
+
+    it('should handle empty data field', async () => {
+      mockFetch.mockResolvedValueOnce({
+        ok: true,
+        json: async () => ({}),
+      });
+
+      const adapter = new OpenRouterAdapter({ apiKey: 'test-key' });
+      const models = await adapter.listModels();
+      expect(models).toEqual([]);
+    });
+  });
+
   describe('getInfo', () => {
     it('should show configured status', () => {
       const adapter = new OpenRouterAdapter(baseConfig);

@@ -1,4 +1,4 @@
-import { InferenceProvider } from './interface.js';
+import { InferenceProvider, ModelDescriptor } from './interface.js';
 import { InferenceOptions, ProviderConfig } from '../config/types.js';
 import { logger } from '../utils/logger.js';
 
@@ -65,5 +65,24 @@ export class GeminiAdapter implements InferenceProvider {
 
   getInfo(): string {
     return `Provider: Google Gemini\nModel: ${this.config.model || 'default'}\nStatus: ${this.config.apiKey ? '✅ Configured' : '❌ Missing API key'}`;
+  }
+
+  async listModels(): Promise<ModelDescriptor[]> {
+    const apiKey = this.config.apiKey;
+    if (!apiKey) return [];
+
+    try {
+      const response = await fetch(`${GEMINI_BASE_URL}?key=${apiKey}`);
+      if (!response.ok) return [];
+      const data = (await response.json()) as { models?: Array<{ name: string; displayName?: string; description?: string }> };
+      return (data.models || []).map((m: { name: string; displayName?: string; description?: string }) => ({
+        id: m.name.replace('models/', ''),
+        name: m.displayName || m.name.replace('models/', ''),
+        provider: 'gemini',
+        description: m.description,
+      }));
+    } catch {
+      return [];
+    }
   }
 }
