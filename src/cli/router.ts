@@ -1,0 +1,75 @@
+import { Command } from 'commander';
+import { ConfigManager } from '../config/manager.js';
+import { ProviderFactory } from '../inference/factory.js';
+import { InferenceProvider } from '../inference/interface.js';
+import { ProviderType } from '../config/types.js';
+import { ChatCommand } from './chat.js';
+import { EditCommand } from './edit.js';
+import { PlanCommand } from './plan.js';
+import { ConfigCommand } from './config.js';
+import { CacheCommand } from './cache.js';
+import { logger } from '../utils/logger.js';
+
+/**
+ * Create and configure the CLI program
+ */
+export function createCLI(): Command {
+  const program = new Command();
+
+  program
+    .name('buff')
+    .description('Flexible AI inference CLI tool — local models & cloud APIs')
+    .version('1.0.0');
+
+  // Global options
+  program
+    .option('-d, --debug', 'Enable debug logging');
+
+  // Register commands
+  const chatCmd = new ChatCommand();
+  const editCmd = new EditCommand();
+  const planCmd = new PlanCommand();
+  const configCmd = new ConfigCommand();
+  const cacheCmd = new CacheCommand();
+
+  program.addCommand(chatCmd.create());
+  program.addCommand(editCmd.create());
+  program.addCommand(planCmd.create());
+  program.addCommand(configCmd.create());
+  program.addCommand(cacheCmd.create());
+
+  // Default action: show help
+  program.action(() => {
+    program.help();
+  });
+
+  return program;
+}
+
+/**
+ * Resolve the inference provider from CLI options
+ */
+export function resolveProvider(
+  configManager: ConfigManager,
+  providerOption?: string,
+): { type: ProviderType; provider: InferenceProvider } {
+  const rawType = providerOption || configManager.getAll().defaultProvider;
+
+  // Validate that the provider type is a known built-in type
+  const validTypes: ProviderType[] = ['local', 'nim', 'gemini', 'openrouter'];
+
+  if (!validTypes.includes(rawType as ProviderType)) {
+    logger.warn(`Unknown provider '${rawType}'. Falling back to '${configManager.getAll().defaultProvider}'`);
+  }
+
+  const providerType = validTypes.includes(rawType as ProviderType)
+    ? (rawType as ProviderType)
+    : configManager.getAll().defaultProvider;
+
+  const { config } = configManager.getProviderConfig(providerType);
+  const provider = ProviderFactory.createProvider(providerType, config);
+
+  logger.debug(`Resolved provider: ${providerType} (${provider.name})`);
+
+  return { type: providerType, provider };
+}
