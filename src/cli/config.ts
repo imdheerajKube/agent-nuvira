@@ -152,6 +152,7 @@ export class ConfigCommand extends BaseCommand {
       { name: 'NVIDIA NIM', type: 'nim', status: this.configManager.hasRequiredCredentials('nim') ? '✅' : '❌ No API key' },
       { name: 'Google Gemini', type: 'gemini', status: this.configManager.hasRequiredCredentials('gemini') ? '✅' : '❌ No API key' },
       { name: 'OpenRouter', type: 'openrouter', status: this.configManager.hasRequiredCredentials('openrouter') ? '✅' : '❌ No API key' },
+      { name: 'Groq', type: 'groq', status: this.configManager.hasRequiredCredentials('groq') ? '✅' : '❌ No API key' },
       { name: 'Local', type: 'local', status: '✅ Always available' },
     ];
 

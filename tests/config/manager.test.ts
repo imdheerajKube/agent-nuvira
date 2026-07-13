@@ -13,6 +13,7 @@ describe('ConfigManager', () => {
     delete process.env.NVIDIA_NIM_API_KEY;
     delete process.env.GEMINI_API_KEY;
     delete process.env.OPENROUTER_API_KEY;
+    delete process.env.GROQ_API_KEY;
   });
 
   afterEach(() => {
@@ -30,6 +31,7 @@ describe('ConfigManager', () => {
       expect(config.providers.nim.model).toBe('meta/llama-3.1-8b-instruct');
       expect(config.providers.gemini.model).toBe('gemini-2.0-flash-exp');
       expect(config.providers.openrouter.model).toBe('mistralai/mistral-7b-instruct');
+      expect(config.providers.groq.model).toBe('llama-3.3-70b-versatile');
       expect(config.providers.local.runner).toBe('ollama');
       expect(config.providers.local.model).toBe('llama2');
     });
@@ -175,6 +177,7 @@ describe('ConfigManager', () => {
       expect(manager.hasRequiredCredentials('nim')).toBe(false);
       expect(manager.hasRequiredCredentials('gemini')).toBe(false);
       expect(manager.hasRequiredCredentials('openrouter')).toBe(false);
+      expect(manager.hasRequiredCredentials('groq')).toBe(false);
     });
 
     it('should return true for configured cloud providers', () => {

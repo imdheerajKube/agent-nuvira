@@ -1,7 +1,7 @@
 /**
  * Supported inference provider identifiers
  */
-export type ProviderType = 'nim' | 'gemini' | 'openrouter' | 'local';
+export type ProviderType = 'nim' | 'gemini' | 'openrouter' | 'groq' | 'local';
 
 /**
  * Local model runner options

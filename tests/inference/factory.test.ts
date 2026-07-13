@@ -3,6 +3,7 @@ import { ProviderFactory } from '../../src/inference/factory.js';
 import { NIMAdapter } from '../../src/inference/nim-adapter.js';
 import { GeminiAdapter } from '../../src/inference/gemini-adapter.js';
 import { OpenRouterAdapter } from '../../src/inference/openrouter-adapter.js';
+import { GroqAdapter } from '../../src/inference/groq-adapter.js';
 import { LocalAdapter } from '../../src/inference/local-adapter.js';
 
 describe('ProviderFactory', () => {
@@ -31,6 +32,12 @@ describe('ProviderFactory', () => {
       const provider = ProviderFactory.createProvider('local', emptyConfig);
       expect(provider).toBeInstanceOf(LocalAdapter);
       expect(provider.name).toBe('Local');
+    });
+
+    it('should create GroqAdapter for groq type', () => {
+      const provider = ProviderFactory.createProvider('groq', emptyConfig);
+      expect(provider).toBeInstanceOf(GroqAdapter);
+      expect(provider.name).toBe('Groq');
     });
 
     it('should throw for unknown provider type', () => {

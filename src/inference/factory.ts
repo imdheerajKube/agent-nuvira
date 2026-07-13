@@ -2,6 +2,7 @@ import { InferenceProvider } from './interface.js';
 import { NIMAdapter } from './nim-adapter.js';
 import { GeminiAdapter } from './gemini-adapter.js';
 import { OpenRouterAdapter } from './openrouter-adapter.js';
+import { GroqAdapter } from './groq-adapter.js';
 import { LocalAdapter } from './local-adapter.js';
 import { ProviderType, ProviderConfig } from '../config/types.js';
 
@@ -21,6 +22,8 @@ export class ProviderFactory {
         return new GeminiAdapter(config);
       case 'openrouter':
         return new OpenRouterAdapter(config);
+      case 'groq':
+        return new GroqAdapter(config);
       case 'local':
         return new LocalAdapter(config);
       default:

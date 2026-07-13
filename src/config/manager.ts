@@ -10,6 +10,7 @@ const DEFAULT_CONFIG: BuffConfig = {
     nim: { model: 'meta/llama-3.1-8b-instruct', temperature: 0.7, maxTokens: 4096 },
     gemini: { model: 'gemini-2.0-flash-exp', temperature: 0.7, maxTokens: 8192 },
     openrouter: { model: 'mistralai/mistral-7b-instruct', temperature: 0.7, maxTokens: 4096 },
+    groq: { model: 'llama-3.3-70b-versatile', temperature: 0.7, maxTokens: 4096 },
     local: { runner: 'ollama', model: 'llama2', temperature: 0.7, maxTokens: 4096 },
   },
 };
@@ -86,6 +87,9 @@ export class ConfigManager {
     }
     if (this.env.OPENROUTER_API_KEY) {
       config.providers.openrouter.apiKey = this.env.OPENROUTER_API_KEY;
+    }
+    if (this.env.GROQ_API_KEY) {
+      config.providers.groq.apiKey = this.env.GROQ_API_KEY;
     }
   }
 

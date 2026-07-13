@@ -59,7 +59,7 @@ export function resolveProvider(
   const rawType = providerOption || configManager.getAll().defaultProvider;
 
   // Validate that the provider type is a known built-in type
-  const validTypes: ProviderType[] = ['local', 'nim', 'gemini', 'openrouter'];
+  const validTypes: ProviderType[] = ['local', 'nim', 'gemini', 'openrouter', 'groq'];
 
   if (!validTypes.includes(rawType as ProviderType)) {
     logger.warn(`Unknown provider '${rawType}'. Falling back to '${configManager.getAll().defaultProvider}'`);

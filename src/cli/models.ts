@@ -13,7 +13,7 @@ export class ModelsCommand extends BaseCommand {
   create(): Command {
     const command = new Command('models')
       .description('List available models from inference providers')
-      .option('-p, --provider <provider>', 'Only show models from this provider (nim, gemini, openrouter, local)')
+      .option('-p, --provider <provider>', 'Only show models from this provider (nim, gemini, openrouter, groq, local)')
       .option('-s, --search <keyword>', 'Search/filter models by keyword')
       .option('--all', 'Show all models (including unconfigured providers)', false)
       .action(async (options?: { provider?: string; search?: string; all?: boolean }) => {

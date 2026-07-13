@@ -141,9 +141,7 @@ export class ChatCommand extends BaseCommand {
    * - Non-TTY environments (piped input, CI)
    */
   private async showModelPicker(): Promise<{ provider: string; model: string } | null> {
-    const availableProviders: Array<{ type: ProviderType; provider: InferenceProvider; name: string }> = [];
-
-    // Step 1: Check which providers are available
+    // Step 1: Check ALL providers in parallel
     logger.highlight('\n🔍 Checking available providers...\n');
 
     const providerIcons: Record<string, string> = {
@@ -151,6 +149,7 @@ export class ChatCommand extends BaseCommand {
       nim: '🔶',
       gemini: '🔷',
       openrouter: '🟣',
+      groq: '🟢',
     };
 
     const providerEligibility: Record<string, string> = {
@@ -158,11 +157,24 @@ export class ChatCommand extends BaseCommand {
       nim: 'NVIDIA NIM API cloud service',
       gemini: 'Google Gemini API cloud service',
       openrouter: 'OpenRouter unified API service',
+      groq: 'Groq LPU cloud inference service',
     };
 
-    for (const pt of ['local', 'nim', 'gemini', 'openrouter'] as ProviderType[]) {
-      const resolved = resolveProvider(this.configManager, pt);
-      const available = await resolved.provider.isAvailable();
+    const providerTypes: ProviderType[] = ['local', 'nim', 'gemini', 'openrouter', 'groq'];
+
+    // Check all provider availability concurrently
+    const checkResults = await Promise.all(
+      providerTypes.map(async (pt) => {
+        const resolved = resolveProvider(this.configManager, pt);
+        const available = await resolved.provider.isAvailable();
+        return { pt, resolved, available };
+      })
+    );
+
+    // Collect available providers
+    const availableProviders: Array<{ type: ProviderType; provider: InferenceProvider; name: string }> = [];
+
+    for (const { pt, resolved, available } of checkResults) {
       const icon = providerIcons[pt] || '🔹';
       const eligibility = providerEligibility[pt] || '';
 
@@ -183,8 +195,10 @@ export class ChatCommand extends BaseCommand {
       return null;
     }
 
-    // Step 2: Fetch models from available providers
+    // Step 2: Fetch models from ALL available providers in parallel
     logger.highlight('\n📡 Fetching available models...\n');
+
+    const loadingSpinner = ora('  Loading models...').start();
 
     interface ModelChoice {
       label: string;
@@ -194,37 +208,46 @@ export class ChatCommand extends BaseCommand {
 
     const modelChoices: ModelChoice[] = [];
 
-    for (const { type, provider: prov, name } of availableProviders) {
-      const spinner = ora(`  Loading ${name} models...`).start();
-
-      try {
-        const models = await prov.listModels();
-        spinner.stop();
-
-        if (models.length === 0) {
-          logger.warn(`    ⚠️  No models found for ${name}`);
-          continue;
+    // Fetch all models in parallel
+    const modelResults = await Promise.all(
+      availableProviders.map(async ({ type, provider: prov, name }) => {
+        try {
+          const models = await prov.listModels();
+          return { type, name, models, error: null as Error | null };
+        } catch (err) {
+          return { type, name, models: null as null, error: err as Error };
         }
+      })
+    );
 
-        logger.success(`  ✅ ${name}: ${models.length} model${models.length !== 1 ? 's' : ''} available`);
+    loadingSpinner.stop();
 
-        // Show up to 15 models per provider
-        const MAX_MODELS_PER_PROVIDER = 15;
-        const modelsToShow = models.slice(0, MAX_MODELS_PER_PROVIDER);
-
-        for (const model of modelsToShow) {
-          const icon = providerIcons[type] || '🔹';
-          const owner = model.owner ? ` [${model.owner}]` : '';
-          const label = `${icon}  ${model.name}${owner}`;
-          modelChoices.push({ label, provider: type, model: model.id });
-        }
-
-        if (models.length > MAX_MODELS_PER_PROVIDER) {
-          logger.info(`    📋 ... and ${models.length - MAX_MODELS_PER_PROVIDER} more (use: agent-baba-d models --provider ${type})`);
-        }
-      } catch (err) {
-        spinner.stop();
+    for (const { type, name, models, error } of modelResults) {
+      if (error) {
         logger.warn(`    ⚠️  Failed to load models from ${name}`);
+        continue;
+      }
+
+      if (!models || models.length === 0) {
+        logger.warn(`    ⚠️  No models found for ${name}`);
+        continue;
+      }
+
+      logger.success(`  ✅ ${name}: ${models.length} model${models.length !== 1 ? 's' : ''} available`);
+
+      // Show up to 15 models per provider
+      const MAX_MODELS_PER_PROVIDER = 15;
+      const modelsToShow = models.slice(0, MAX_MODELS_PER_PROVIDER);
+
+      for (const model of modelsToShow) {
+        const icon = providerIcons[type] || '🔹';
+        const owner = model.owner ? ` [${model.owner}]` : '';
+        const label = `${icon}  ${model.name}${owner}`;
+        modelChoices.push({ label, provider: type, model: model.id });
+      }
+
+      if (models.length > MAX_MODELS_PER_PROVIDER) {
+        logger.info(`    📋 ... and ${models.length - MAX_MODELS_PER_PROVIDER} more (use: agent-baba-d models --provider ${type})`);
       }
     }
 
