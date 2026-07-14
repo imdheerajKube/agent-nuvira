@@ -1,5 +1,10 @@
+import { readFileSync } from 'node:fs';
+import { fileURLToPath } from 'node:url';
 import { Command } from 'commander';
 import { ConfigManager } from '../config/manager.js';
+
+/** Read version from package.json at build time */
+const pkg = JSON.parse(readFileSync(fileURLToPath(new URL('../../package.json', import.meta.url)), 'utf-8'));
 import { ProviderFactory } from '../inference/factory.js';
 import { InferenceProvider } from '../inference/interface.js';
 import { ProviderType } from '../config/types.js';
@@ -24,7 +29,7 @@ export function createCLI(): Command {
   program
     .name('buff')
     .description('Flexible AI inference CLI tool — local models & cloud APIs')
-    .version('1.0.0');
+    .version(pkg.version);
 
   // Global options
   program
