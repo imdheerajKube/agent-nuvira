@@ -1,0 +1,69 @@
+# Linux + macOS CI — runs the test suite on Ubuntu and macOS runners alongside the Windows CI.
+# Triggered on push/PR to main, and can be run manually.
+#
+# Covers all major desktop platforms: Ubuntu (primary dev environment), macOS (important for
+# Homebrew users and devs), and Windows (separate test-windows.yml).
+#
+# Note: Vitest 4.x dependencies (rolldown) require Node >= 21.7 for `node:util.styleText`.
+# Only Node 22+ is tested here. For older Node versions, use vitest 3.x or older.
+
+name: test-unix
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+    inputs:
+      node_version:
+        description: 'Node.js version to test'
+        required: false
+        default: '22'
+        type: choice
+        options:
+          - '22'
+          - '23'
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  test:
+    name: ${{ matrix.os }} (Node ${{ matrix.node-version }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os:
+          - ubuntu-latest
+          - macos-latest
+        node-version:
+          - 22
+          - 23
+    # macOS runners are 2-3x slower than Linux; Ubuntu tests finish quickly
+    timeout-minutes: ${{ matrix.os == 'macos-latest' && 15 || 10 }}
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js ${{ matrix.node-version }}
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ matrix.node-version }}
+          cache: npm
+          cache-dependency-path: package-lock.json
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Build project
+        run: npm run build
+
+      - name: Run tests
+        run: npx vitest run --reporter=verbose
+        env:
+          CI: true
+          NODE_OPTIONS: --no-warnings
