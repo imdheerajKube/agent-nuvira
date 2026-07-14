@@ -126,7 +126,7 @@ export class ContextParser {
           );
 
           chunks.push({
-            filePath: relativePath,
+            filePath: relativePath.replace(/\\/g, '/'),
             content,
             priority: isPriority ? 2 : 1,
             tokenCount: estimateTokens(content),

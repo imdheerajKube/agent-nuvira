@@ -465,7 +465,7 @@ export class GitHubReleaseAgent extends Agent {
     } catch (err) {
       const error = err as { stdout?: string; stderr?: string; message?: string };
       const msg = error.stderr || error.message || '';
-      if (msg.includes('Command failed') || msg.includes('not found') || msg.includes('not a git repository')) {
+      if (msg.includes('Command failed') || msg.includes('not found') || msg.includes('not a git repository') || msg.includes('not recognized') || msg.includes('cannot find') || msg.includes('failed to start')) {
         throw new Error(msg.slice(0, 200));
       }
       return error.stdout || msg;
