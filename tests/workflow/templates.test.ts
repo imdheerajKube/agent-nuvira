@@ -500,6 +500,8 @@ describe('WorkflowCommand CLI structure', () => {
     });
 
     it('should reject missing required arguments', () => {
+      // Use exitOverride to ensure commander throws instead of exiting
+      command.exitOverride();
       expect(() => {
         runCmd.parse(['quick-fix'], { from: 'user' });
       }).toThrow();
