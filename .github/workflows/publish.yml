@@ -3,7 +3,7 @@
 # Triggered when a tag matching "v*" is pushed (e.g., v1.13.0).
 # Publishes the package to:
 #   1. npm (public registry)
-#   2. GitHub Packages (scoped under @imdheerajKube)
+#   2. GitHub Packages (under @imdheerajKube scope)
 #
 # Also creates a GitHub Release with auto-generated release notes.
 #
@@ -94,6 +94,9 @@ jobs:
     name: Publish to GitHub Packages
     needs: test
     runs-on: ubuntu-latest
+    permissions:
+      packages: write
+      contents: read
     timeout-minutes: 10
 
     steps:
@@ -105,7 +108,6 @@ jobs:
         with:
           node-version: 22
           registry-url: https://npm.pkg.github.com
-          scope: '@imdheerajKube'
           cache: npm
           cache-dependency-path: package-lock.json
 
@@ -117,9 +119,13 @@ jobs:
 
       - name: Publish to GitHub Packages
         run: |
-          # Use the same package name but scoped for GitHub Packages
-          # The publish will use the GITHUB_TOKEN for authentication
-          npm publish --registry=https://npm.pkg.github.com
+          # Temporarily scope the package name for GitHub Packages
+          node -e "
+            const pkg = require('./package.json');
+            pkg.name = '@imdheerajKube/' + pkg.name;
+            require('fs').writeFileSync('package.json', JSON.stringify(pkg, null, 2));
+          "
+          npm publish
         env:
           NODE_AUTH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
