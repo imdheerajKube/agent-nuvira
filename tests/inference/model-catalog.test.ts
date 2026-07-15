@@ -19,20 +19,51 @@ import {
 
 describe('categorizeModel', () => {
   // ── Vision ──────────────────────────────────────────────────────────────
+  // ── Speech ──────────────────────────────────────────────────────────────
+  describe('speech category', () => {
+    it('should categorize Orpheus speech models as speech', () => {
+      expect(categorizeModel('canopylabs/orpheus-v1-english')).toBe('speech');
+      expect(categorizeModel('canopylabs/orpheus-v1-turkish')).toBe('speech');
+    });
+
+    it('should categorize Whisper STT models as speech', () => {
+      expect(categorizeModel('whisper-large-v3')).toBe('speech');
+      expect(categorizeModel('whisper-large-v3-turbo')).toBe('speech');
+      expect(categorizeModel('distil-whisper-large-v3-en')).toBe('speech');
+    });
+
+    it('should categorize TTS models as speech', () => {
+      expect(categorizeModel('tts-model')).toBe('speech');
+      expect(categorizeModel('tts-1-hd')).toBe('speech');
+    });
+
+    it('should categorize audio models as speech', () => {
+      expect(categorizeModel('audio-model')).toBe('speech');
+    });
+
+    it('should give speech highest priority over all other patterns', () => {
+      // Even if model name also contains chat keywords, speech wins (priority 1)
+      expect(categorizeModel('whisper-llama')).toBe('speech');
+      expect(categorizeModel('gpt-4-audio')).toBe('speech');
+      expect(categorizeModel('orpheus-gpt')).toBe('speech');
+    });
+  });
+
+  // ── Vision ──────────────────────────────────────────────────────────────
   describe('vision category', () => {
     it('should categorize models with "vision" in the name', () => {
       expect(categorizeModel('llava-vision')).toBe('vision');
-      expect(categorizeModel('gpt-4-vision-preview')).toBe('vision');
       expect(categorizeModel('claude-3-opus-vision')).toBe('vision');
     });
 
     it('should categorize models with "multimodal" in the name', () => {
-      expect(categorizeModel('gemini-1.5-pro-vision')).toBe('vision');
       expect(categorizeModel('multimodal-model')).toBe('vision');
     });
 
-    it('should give vision higher priority than chat/other patterns', () => {
-      // "vision" appears in the model name which also contains "gpt" (chat pattern)
+    it('should give vision higher priority than preview but not speech', () => {
+      // speech (1) > vision (2)
+      expect(categorizeModel('whisper-vision')).toBe('speech');
+      // vision (2) > agentic/gpt-4 (4)
       expect(categorizeModel('gpt-4-vision-preview')).toBe('vision');
     });
   });
@@ -111,7 +142,7 @@ describe('categorizeModel', () => {
     });
 
     it('should give code higher priority over general chat', () => {
-      // "codellama" matches both "code" (priority 3) and "llama" (priority 6)
+      // "codellama" matches both "code" (priority 4) and "llama" (priority 7)
       expect(categorizeModel('codellama')).toBe('code');
     });
   });
@@ -174,30 +205,27 @@ describe('categorizeModel', () => {
   // ── Instruct ────────────────────────────────────────────────────────────
   describe('instruct category', () => {
     it('should categorize models ending with "-it" when no higher-priority pattern matches', () => {
-      // "-it" matches instruct (priority 5). Only matches if no priority 1-4 patterns match.
-      // These models have no fast/vision/reasoning/agentic/code match
+      // "-it" matches instruct (priority 6). Only matches if no priority 1-5 patterns match.
       expect(categorizeModel('custom-model-it')).toBe('instruct');
     });
 
     it('should categorize models ending with "-instruct" when no higher-priority pattern matches', () => {
-      // Must NOT match fast patterns (phi-3-instruct matches fast → use custom-instruct-model instead)
       expect(categorizeModel('custom-instruct-model')).toBe('instruct');
       expect(categorizeModel('generic-instruct-model')).toBe('instruct');
     });
 
     it('should categorize models ending with "-instruct" when no fast pattern matches', () => {
-      // phi-3-instruct matches: fast phi-3 (priority 4), instruct (priority 5) → fast wins
-      // But these models only match instruct, not fast
-      expect(categorizeModel('dbrx-instruct')).toBe('instruct');  // dbrx matches chat (6), -instruct (5) → instruct wins
+      // dbrx-instruct matches instruct (6) and chat (7) → instruct wins
+      expect(categorizeModel('dbrx-instruct')).toBe('instruct');
       expect(categorizeModel('custom-instruct-v2')).toBe('instruct');
     });
 
     it('should not beat fast priority for small models ending in -instruct', () => {
-      // "llama-3.1-8b-instruct" matches: fast (4), instruct (5), chat (6) → fast wins
+      // llama-3.1-8b-instruct matches: fast (5), instruct (6), chat (7) → fast wins
       expect(categorizeModel('llama-3.1-8b-instruct')).toBe('fast');
       expect(categorizeModel('meta-llama/Llama-3.1-8b-instruct')).toBe('fast');
       expect(categorizeModel('mistral-7b-instruct')).toBe('fast');
-      // gemma2-9b-it matches: fast (4), instruct (5) → fast wins
+      // gemma2-9b-it matches: fast (5), instruct (6) → fast wins
       expect(categorizeModel('gemma2-9b-it')).toBe('fast');
       expect(categorizeModel('gemma-2-2b-it')).toBe('fast');
     });
@@ -246,7 +274,7 @@ describe('categorizeModel', () => {
     });
 
     it('should categorize dbrx-instruct as instruct (beats chat priority)', () => {
-      // dbrx-instruct matches instruct (priority 5) and chat (priority 6) → instruct wins
+      // dbrx-instruct matches instruct (priority 6) and chat (priority 7) → instruct wins
       expect(categorizeModel('dbrx-instruct')).toBe('instruct');
     });
   });
@@ -301,6 +329,13 @@ describe('getModelTags', () => {
     const tags = getModelTags('deepseek-coder');
     expect(tags).toContain('code');
     expect(tags).toContain('chat');
+  });
+
+  it('should NOT include chat tag for speech models', () => {
+    // Speech models don't support chat, so they should not get the 'chat' tag
+    const tags = getModelTags('canopylabs/orpheus-v1-english');
+    expect(tags).toContain('speech');
+    expect(tags).not.toContain('chat');
   });
 
   it('should not include chat for unknown models', () => {
@@ -362,6 +397,12 @@ describe('getModelBadge', () => {
     expect(getModelBadge('openai/gpt-4o-mini')).toContain('Affordable');
     expect(getModelBadge('anthropic/claude-sonnet-4-20250514')).toContain('agentic');
     expect(getModelBadge('meta-llama/llama-3.3-70b-instruct')).toContain('versatile');
+  });
+
+  it('should return badge for known speech/audio models', () => {
+    expect(getModelBadge('whisper-large-v3')).toContain('transcription');
+    expect(getModelBadge('distil-whisper-large-v3-en')).toContain('STT');
+    expect(getModelBadge('canopylabs/orpheus-v1-english')).toContain('speech');
   });
 
   it('should return badge for known local/Ollama models', () => {
@@ -433,7 +474,7 @@ describe('CATEGORY_INFO', () => {
   it('should have entries for all category types', () => {
     const categories: ModelCategory[] = [
       'chat', 'code', 'reasoning', 'fast', 'creative',
-      'vision', 'instruct', 'agentic', 'preview', 'other',
+      'vision', 'instruct', 'agentic', 'preview', 'speech', 'other',
     ];
 
     for (const cat of categories) {
@@ -462,38 +503,39 @@ describe('CATEGORY_INFO', () => {
 // ─── Priority Logic ─────────────────────────────────────────────────────────
 
 describe('category priority logic', () => {
-  it('should prioritize vision over preview for "gpt-4-vision-preview"', () => {
-    // Vision (priority 1) > preview (priority 5)
+  it('should prioritize speech over all other patterns', () => {
+    // Speech (priority 1) beats everything
+    expect(categorizeModel('whisper-large-v3')).toBe('speech');
+    expect(categorizeModel('canopylabs/orpheus-v1-english')).toBe('speech');
+  });
+
+  it('should prioritize vision over preview', () => {
+    // Vision (priority 2) > preview (priority 6)
     expect(categorizeModel('gpt-4-vision-preview')).toBe('vision');
   });
 
-  it('should prioritize fast over instruct for "llama-3.1-8b-instruct"', () => {
-    // Fast (priority 4) > instruct (priority 5)
+  it('should prioritize fast over instruct', () => {
+    // Fast (priority 5) > instruct (priority 6)
     expect(categorizeModel('llama-3.1-8b-instruct')).toBe('fast');
   });
 
-  it('should prioritize fast over chat for "llama-3.1-8b"', () => {
-    // Fast (priority 4) > chat (priority 6)
+  it('should prioritize fast over chat', () => {
+    // Fast (priority 5) > chat (priority 7)
     expect(categorizeModel('llama-3.1-8b-instant')).toBe('fast');
   });
 
-  it('should prioritize fast over instruct for "gemma2-9b-it"', () => {
-    // Fast (priority 4) > instruct (priority 5)
-    expect(categorizeModel('gemma2-9b-it')).toBe('fast');
-  });
-
-  it('should prioritize code over chat for "deepseek-coder"', () => {
-    // Code (priority 3) > chat (priority 6)
+  it('should prioritize code over chat', () => {
+    // Code (priority 4) > chat (priority 7)
     expect(categorizeModel('deepseek-coder')).toBe('code');
   });
 
-  it('should prioritize reasoning over chat for "qwen-2.5-32b"', () => {
-    // Reasoning (priority 2) > chat (priority 6)
+  it('should prioritize reasoning over chat', () => {
+    // Reasoning (priority 3) > chat (priority 7)
     expect(categorizeModel('qwen-2.5-32b')).toBe('reasoning');
   });
 
-  it('should prioritize agentic over chat for "gpt-4o"', () => {
-    // Agentic (priority 3) > chat (priority 6)
+  it('should prioritize agentic over chat', () => {
+    // Agentic (priority 4) > chat (priority 7)
     expect(categorizeModel('gpt-4o')).toBe('agentic');
   });
 });
@@ -521,6 +563,11 @@ describe('integration with real model IDs', () => {
     { modelId: 'openai/gpt-4o', expectCategory: 'agentic', expectTags: ['agentic', 'chat'] },
     { modelId: 'anthropic/claude-sonnet-4-20250514', expectCategory: 'agentic', expectTags: ['agentic', 'chat'] },
     { modelId: 'meta-llama/llama-3.3-70b-instruct', expectCategory: 'instruct', expectTags: ['instruct', 'chat'] },
+
+    // Speech / Audio models
+    { modelId: 'whisper-large-v3', expectCategory: 'speech', expectTags: ['speech'] },
+    { modelId: 'distil-whisper-large-v3-en', expectCategory: 'speech', expectTags: ['speech'] },
+    { modelId: 'canopylabs/orpheus-v1-english', expectCategory: 'speech', expectTags: ['speech'] },
 
     // Local Ollama models
     { modelId: 'llama2', expectCategory: 'chat', expectTags: ['chat'] },

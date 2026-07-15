@@ -104,16 +104,7 @@ export class GroqAdapter implements InferenceProvider {
 
       // Filter out non-chat models (speech/audio/whisper) that can't be used
       // with the chat completions endpoint
-      const NON_CHAT_PATTERNS = [
-        /orpheus/i,
-        /whisper/i,
-        /distil-whisper/i,
-        /tts/i,
-        /audio/i,
-      ];
-
       return (data.data || [])
-        .filter((m) => !NON_CHAT_PATTERNS.some((p) => p.test(m.id)))
         .map((m: { id: string; owned_by?: string }) => ({
           id: m.id,
           name: m.id,

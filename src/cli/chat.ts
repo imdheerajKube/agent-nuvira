@@ -109,6 +109,7 @@ const CATEGORY_ORDER: Record<ModelCategory, number> = {
   agentic: 7,
   preview: 8,
   other: 9,
+  speech: 10,
 };
 
 // ─── Provider Metadata ──────────────────────────────────────────────────────

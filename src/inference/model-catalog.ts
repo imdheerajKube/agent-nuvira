@@ -20,6 +20,7 @@ export type ModelCategory =
   | 'instruct'    // Instruction-following fine-tunes
   | 'agentic'     // Tool-use / function-calling
   | 'preview'     // Latest preview / experimental
+  | 'speech'      // Speech/audio — TTS, STT (not chat-compatible)
   | 'other';      // Fallback
 
 /** Display metadata for each category */
@@ -82,11 +83,17 @@ export const CATEGORY_INFO: Record<ModelCategory, CategoryInfo> = {
     label: 'Preview',
     description: 'Experimental / preview — may not be production-ready',
   },
+  speech: {
+    icon: '🎤',
+    label: 'Speech',
+    description: 'Speech/audio models — TTS, STT, voice (not chat-compatible)',
+  },
   other: {
     icon: '🔹',
     label: 'Other',
     description: 'Uncategorized models',
   },
+
 };
 
 // ─── Pattern Scanner ────────────────────────────────────────────────────────
@@ -109,8 +116,10 @@ const CATEGORY_PATTERNS: Array<{
   category: ModelCategory;
   priority: number;
 }> = [
-  // ── Vision / Multimodal (most specific first) ──────────────────────────
-  { patterns: [/vision/i, /multimodal/i], category: 'vision', priority: 1 },
+  // ── Speech / Audio (most specific — not chat-compatible) ───────────────
+  { patterns: [/orpheus/i, /whisper/i, /distil-whisper/i, /tts/i, /audio/i], category: 'speech', priority: 1 },
+  // ── Vision / Multimodal ────────────────────────────────────────────────
+  { patterns: [/vision/i, /multimodal/i], category: 'vision', priority: 2 },
   // ── Reasoning / Thinking ───────────────────────────────────────────────
   {
     patterns: [
@@ -121,7 +130,7 @@ const CATEGORY_PATTERNS: Array<{
       /think/i,
     ],
     category: 'reasoning',
-    priority: 2,
+    priority: 3,
   },
   // ── Agentic / Tool-use ─────────────────────────────────────────────────
   {
@@ -133,7 +142,7 @@ const CATEGORY_PATTERNS: Array<{
       /gpt-4/i,
     ],
     category: 'agentic',
-    priority: 3,
+    priority: 4,
   },
   // ── Code ───────────────────────────────────────────────────────────────
   {
@@ -150,7 +159,7 @@ const CATEGORY_PATTERNS: Array<{
       /codeqwen/i,
     ],
     category: 'code',
-    priority: 3,
+    priority: 4,
   },
   // ── Fast / Lightweight ─────────────────────────────────────────────────
   {
@@ -166,7 +175,7 @@ const CATEGORY_PATTERNS: Array<{
       /phi-?3?-?mini/i,
     ],
     category: 'fast',
-    priority: 4,
+    priority: 5,
   },
   // ── Preview / Experimental ─────────────────────────────────────────────
   {
@@ -177,7 +186,7 @@ const CATEGORY_PATTERNS: Array<{
       /flash-exp/i,
     ],
     category: 'preview',
-    priority: 5,
+    priority: 6,
   },
   // ── Instruct / Structured ──────────────────────────────────────────────
   {
@@ -187,7 +196,7 @@ const CATEGORY_PATTERNS: Array<{
       /instruct$/i,
     ],
     category: 'instruct',
-    priority: 5,
+    priority: 6,
   },
   // ── Chat / General (most broad — catch-all for known chat models) ──────
   {
@@ -211,7 +220,7 @@ const CATEGORY_PATTERNS: Array<{
       /wizard/i,
     ],
     category: 'chat',
-    priority: 6,
+    priority: 7,
   },
 ];
 
@@ -267,9 +276,10 @@ export function getModelTags(modelId: string, _owner?: string): string[] {
   }
 
   // Always include 'chat' for any model that has recognizable patterns
-  // (even code models can do chat)
+  // (even code models can do chat), but NOT for speech models
   const hasKnownPattern = tags.length > 0;
-  if (hasKnownPattern && !tags.includes('chat')) {
+  const isSpeech = tags.includes('speech');
+  if (hasKnownPattern && !tags.includes('chat') && !isSpeech) {
     tags.push('chat');
   }
 
@@ -335,6 +345,11 @@ export function getModelBadge(modelId: string): string | undefined {
     'anthropic/claude-sonnet-4-20250514': 'Excellent for agentic tasks and long context',
     'anthropic/claude-3.5-sonnet': 'Balanced quality and speed',
     'meta-llama/llama-3.3-70b-instruct': 'Strong open-weight model — versatile and capable',
+
+    // Speech / Audio
+    'whisper-large-v3': 'Speech-to-text transcription model',
+    'distil-whisper-large-v3-en': 'Fast STT — English optimized',
+    'canopylabs/orpheus-v1-english': 'Text-to-speech voice generation (not chat)',
 
     // Local / Ollama
     'llama2': 'Original Llama — works offline',
