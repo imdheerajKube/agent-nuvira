@@ -24,6 +24,7 @@ import inquirer from 'inquirer';
 import { ProviderFactory } from '../inference/factory.js';
 import { ConfigManager } from '../config/manager.js';
 import type { ProviderType, InferenceOptions } from '../config/types.js';
+import { showModelPicker } from '../cli/model-picker.js';
 import { logger } from '../utils/logger.js';
 
 import { ContextVault } from './context-vault.js';
@@ -65,6 +66,15 @@ export interface OrchestratorOptions {
   autoRouteModels?: boolean;
   /** Pre-built task plan to use instead of calling the PlannerAgent (for workflow templates) */
   prefillPlan?: TaskStep[];
+  /**
+   * Optional spinner reference from the CLI caller.
+   * When set, the orchestrator stops the spinner before showing interactive
+   * rate-limit prompts and restarts it after the user responds.
+   */
+  spinner?: {
+    stop(): void;
+    start(text?: string): void;
+  };
 }
 
 /** The final result of an orchestration session */
@@ -449,6 +459,10 @@ export class Orchestrator {
     }
 
     return async (info) => {
+      // ── Stop the CLI spinner before showing interactive prompts ──────
+      const spl = options.spinner;
+      if (spl) spl.stop();
+
       const waitSeconds = (info.retryAfterMs / 1000).toFixed(1);
       const modelStr = info.modelName
         ? `Model: ${info.modelName}`
@@ -479,49 +493,56 @@ export class Orchestrator {
 
       console.log('');
 
+      // Helper to restart the spinner before returning
+      const restartSpinner = () => {
+        if (spl) spl.start();
+      };
+
       if (action === 'retry') {
         logger.info(`Waiting ${waitSeconds}s as requested...`);
+        restartSpinner();
         return { action: 'retry' };
       }
 
       if (action === 'skip') {
         logger.info('Skipping this step.');
+        restartSpinner();
         return { action: 'skip' };
       }
 
       if (action === 'abort') {
         logger.error('Pipeline aborted by user.');
+        // Don't restart spinner — pipeline is ending
         return { action: 'abort' };
       }
 
       if (action === 'switch-model') {
-        // Prompt for the new model name
-        const { model } = await inquirer.prompt<{ model: string }>([
-          {
-            type: 'input',
-            name: 'model',
-            message: 'Enter the new model name (e.g., llama-3.1-8b-instant, gemini-2.0-flash):',
-            prefix: '\u{1F3AF}',
-            validate: (input: string) => {
-              if (!input.trim()) return 'Please enter a model name';
-              return true;
-            },
-          },
-        ]);
+        // Show the categorized model picker so the user can choose visually
+        const picked = await showModelPicker(this.configManager);
+
+        if (!picked) {
+          logger.info('Model selection cancelled — retrying with current model.');
+          restartSpinner();
+          return { action: 'retry' };
+        }
 
         console.log('');
-        logger.info(`Switching to model: ${model.trim()}`);
+        logger.info(`Switching to model: ${picked.model} (provider: ${picked.provider})`);
 
         // Create a new LLM provider with the switched model
-        const newCallLLM = this.createLLMProvider({
+        const newOptions = {
           ...options,
-          model: model.trim(),
-        });
+          provider: picked.provider,
+          model: picked.model,
+        };
+        const newCallLLM = this.createLLMProvider(newOptions);
 
+        restartSpinner();
         return { action: 'switch-model', callLLM: newCallLLM };
       }
 
       // Fallback: retry
+      restartSpinner();
       return { action: 'retry' };
     };
   }

@@ -24,7 +24,15 @@ import inquirer from 'inquirer';
 import { Orchestrator } from '../../src/agents/orchestrator.js';
 import type { OrchestratorOptions } from '../../src/agents/orchestrator.js';
 import type { OnRateLimit, RateLimitInfo } from '../../src/agents/agent.js';
+import type { PickerResult } from '../../src/cli/model-picker.js';
 import { logger } from '../../src/utils/logger.js';
+
+// Mock the model picker so tests don't trigger the full inquirer-based picker
+// vi.hoisted ensures the fn is initialized before vi.mock's hoisted factory runs
+const mockShowModelPicker = vi.hoisted(() => vi.fn<() => Promise<PickerResult | null>>());
+vi.mock('../../src/cli/model-picker.js', () => ({
+  showModelPicker: mockShowModelPicker,
+}));
 
 // ─── Helpers ────────────────────────────────────────────────────────────────
 
@@ -170,10 +178,14 @@ describe('Orchestrator — createRateLimitHandler', () => {
       configurable: true,
     });
 
-    // Mock inquirer to return 'switch-model' first, then 'new-model-name'
-    vi.spyOn(inquirer, 'prompt')
-      .mockResolvedValueOnce({ action: 'switch-model' })
-      .mockResolvedValueOnce({ model: 'llama-3.1-8b-instant' });
+    // Mock inquirer to return 'switch-model' action from the rate-limit prompt
+    vi.spyOn(inquirer, 'prompt').mockResolvedValue({ action: 'switch-model' });
+
+    // Mock showModelPicker to return a selected model
+    mockShowModelPicker.mockResolvedValue({
+      provider: 'groq',
+      model: 'llama-3.1-8b-instant',
+    } as PickerResult);
 
     // Mock createLLMProvider to return a dummy callLLM
     const mockCallLLM = vi.fn().mockResolvedValue('mock response');
@@ -184,7 +196,7 @@ describe('Orchestrator — createRateLimitHandler', () => {
 
     expect(result.action).toBe('switch-model');
     expect(typeof (result as any).callLLM).toBe('function');
-    // Verify createLLMProvider was called with the new model
+    // Verify createLLMProvider was called with the new model from the picker
     expect((orchestrator as any).createLLMProvider).toHaveBeenCalledWith(
       expect.objectContaining({ model: 'llama-3.1-8b-instant', provider: 'groq' }),
     );
@@ -196,9 +208,12 @@ describe('Orchestrator — createRateLimitHandler', () => {
       configurable: true,
     });
 
-    vi.spyOn(inquirer, 'prompt')
-      .mockResolvedValueOnce({ action: 'switch-model' })
-      .mockResolvedValueOnce({ model: 'gemini-2.0-flash' });
+    vi.spyOn(inquirer, 'prompt').mockResolvedValue({ action: 'switch-model' });
+
+    mockShowModelPicker.mockResolvedValue({
+      provider: 'gemini',
+      model: 'gemini-2.0-flash',
+    } as PickerResult);
 
     const mockCallLLM = vi.fn().mockResolvedValue('response');
     vi.spyOn(orchestrator as any, 'createLLMProvider').mockReturnValue(mockCallLLM);
@@ -206,7 +221,7 @@ describe('Orchestrator — createRateLimitHandler', () => {
     const handler = getHandler({ provider: 'gemini', verbose: true })!;
     await handler(makeRateLimitInfo({ modelName: 'old-model' }));
 
-    // Should preserve provider and verbose from original options
+    // Should preserve provider and verbose from original options, with model from picker
     expect((orchestrator as any).createLLMProvider).toHaveBeenCalledWith(
       expect.objectContaining({
         provider: 'gemini',
