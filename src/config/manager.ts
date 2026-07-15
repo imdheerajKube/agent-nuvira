@@ -3,6 +3,7 @@ import { join } from 'node:path';
 import { homedir } from 'node:os';
 import { BuffConfig, ProviderType, ProviderConfig } from './types.js';
 import { loadEnv } from '../utils/env.js';
+import { logger } from '../utils/logger.js';
 
 const DEFAULT_CONFIG: BuffConfig = {
   defaultProvider: 'local',
@@ -77,19 +78,33 @@ export class ConfigManager {
 
   /**
    * Override API keys from environment variables
+   * Environment variables take priority over the config file.
    */
   private overrideFromEnv(config: BuffConfig): void {
+    // Debug logging to help troubleshoot env var detection
+    const envVarsChecked: string[] = [];
+
     if (this.env.NVIDIA_NIM_API_KEY) {
       config.providers.nim.apiKey = this.env.NVIDIA_NIM_API_KEY;
+      envVarsChecked.push('NVIDIA_NIM_API_KEY');
     }
     if (this.env.GEMINI_API_KEY) {
       config.providers.gemini.apiKey = this.env.GEMINI_API_KEY;
+      envVarsChecked.push('GEMINI_API_KEY');
     }
     if (this.env.OPENROUTER_API_KEY) {
       config.providers.openrouter.apiKey = this.env.OPENROUTER_API_KEY;
+      envVarsChecked.push('OPENROUTER_API_KEY');
     }
     if (this.env.GROQ_API_KEY) {
       config.providers.groq.apiKey = this.env.GROQ_API_KEY;
+      envVarsChecked.push('GROQ_API_KEY');
+    }
+
+    if (envVarsChecked.length > 0) {
+      logger.debug(`Config: Loaded API keys from env vars: ${envVarsChecked.join(', ')}`);
+    } else {
+      logger.debug('Config: No API keys found in environment variables. Use --debug to see more.');
     }
   }
 

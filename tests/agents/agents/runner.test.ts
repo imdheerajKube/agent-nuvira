@@ -550,13 +550,11 @@ describe('RunnerAgent', () => {
       // Test that shell variable expansion works (works in both /bin/sh and cmd.exe via echo)
       const tmpDir = mkdtempSync(join(tmpdir(), 'buff-runner-shell-'));
       try {
-        // Create a simple script file to verify shell execution
-        writeFileSync(join(tmpDir, 'test_var.sh'), 'echo hello_from_shell', 'utf-8');
 
         const ctx = makeContext({
           workingDirectory: tmpDir,
           taskPlan: [
-            { id: 'step-1', description: 'Run: sh test_var.sh', agentType: 'runner', dependsOn: [], status: 'running' },
+            { id: 'step-1', description: 'Run: echo hello_from_shell', agentType: 'runner', dependsOn: [], status: 'running' },
           ],
         });
         const result = await runner.execute(ctx, async () => '');
@@ -608,14 +606,16 @@ describe('RunnerAgent', () => {
     });
 
     it('should handle very short commands', async () => {
+      // Use 'echo' which works on both Unix (/bin/sh) and Windows (cmd.exe)
       const ctx = makeContext({
         workingDirectory: tmpDir,
         taskPlan: [
-          { id: 'step-1', description: 'Run: date', agentType: 'runner', dependsOn: [], status: 'running' },
+          { id: 'step-1', description: 'Run: echo ok', agentType: 'runner', dependsOn: [], status: 'running' },
         ],
       });
       const result = await runner.execute(ctx, async () => '');
       expect(result.success).toBe(true);
+      expect(result.details).toContain('ok');
     });
   });
 });

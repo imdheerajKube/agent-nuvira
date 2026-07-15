@@ -50,10 +50,10 @@ const PROVIDER_ICONS: Record<string, string> = {
 
 const PROVIDER_ELIGIBILITY: Record<string, string> = {
   local: 'Works offline — no API key needed',
-  nim: 'NVIDIA NIM API cloud service',
-  gemini: 'Google Gemini API cloud service',
-  openrouter: 'OpenRouter unified API service',
-  groq: 'Groq LPU cloud inference service',
+  nim: 'NVIDIA NIM cloud service — set NVIDIA_NIM_API_KEY',
+  gemini: 'Google Gemini cloud service — set GEMINI_API_KEY',
+  openrouter: 'OpenRouter unified API service — set OPENROUTER_API_KEY',
+  groq: 'Groq LPU cloud inference — set GROQ_API_KEY',
 };
 
 // ─── Picker Result ──────────────────────────────────────────────────────────
@@ -100,8 +100,10 @@ export async function showModelPicker(configManager: ConfigManager): Promise<Pic
     logger.error('\n⚠️  No providers available.');
     logger.info('\nOptions to get started:');
     logger.info('  1. Install Ollama:  brew install ollama && ollama pull deepseek-coder');
-    logger.info('  2. Set NIM key:     export NVIDIA_NIM_API_KEY="your-key"');
-    logger.info('  3. Set Gemini key:  export GEMINI_API_KEY="your-key"');
+    logger.info('  2. Set Groq key:    set GROQ_API_KEY=gsk_...   https://console.groq.com');
+    logger.info('  3. Set NIM key:     set NVIDIA_NIM_API_KEY=...  https://build.nvidia.com');
+    logger.info('  4. Set Gemini key:  set GEMINI_API_KEY=...      https://aistudio.google.com/apikey');
+    logger.info('  5. Set OpenRouter:  set OPENROUTER_API_KEY=...  https://openrouter.ai/keys');
     return null;
   }
 
