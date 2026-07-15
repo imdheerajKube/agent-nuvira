@@ -11,7 +11,7 @@
  */
 
 import { existsSync, readFileSync } from 'node:fs';
-import { isAbsolute } from 'node:path';
+import { isAbsolute, join } from 'node:path';
 
 import { Agent, type AgentContext, type AgentResult, type FileChange, type LLMCallFn } from '../agent.js';
 import { logger } from '../../utils/logger.js';
@@ -433,7 +433,7 @@ export class WriterAgent extends Agent {
     content: string,
     workingDir: string,
   ): void {
-    const absolutePath = isAbsolute(filePath) ? filePath : `${workingDir}/${filePath}`;
+    const absolutePath = isAbsolute(filePath) ? filePath : join(workingDir, filePath);
 
     if (existsSync(absolutePath)) {
       const originalContent = readFileSync(absolutePath, 'utf-8');

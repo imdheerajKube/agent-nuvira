@@ -63,7 +63,7 @@ async function runDeveloperMode(
   options?: { provider?: string; model?: string },
 ): Promise<void> {
   const spinner = ora({
-    text: 'Planning...',
+    text: '📋 Planning...',
     spinner: 'dots',
   }).start();
 

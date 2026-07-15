@@ -1,0 +1,164 @@
+# Publish — automated release workflow
+#
+# Triggered when a tag matching "v*" is pushed (e.g., v1.13.0).
+# Publishes the package to:
+#   1. npm (public registry)
+#   2. GitHub Packages (scoped under @imdheerajKube)
+#
+# Also creates a GitHub Release with auto-generated release notes.
+#
+# Prerequisites:
+#   - NPM_TOKEN secret set in GitHub repository settings
+#   - GITHUB_TOKEN is automatically provided by GitHub Actions
+
+name: publish
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  test:
+    name: Test (Node ${{ matrix.node-version }}, ${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os:
+          - ubuntu-latest
+          - windows-latest
+        node-version:
+          - 22
+          - 23
+    timeout-minutes: 10
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js ${{ matrix.node-version }}
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ matrix.node-version }}
+          cache: npm
+          cache-dependency-path: package-lock.json
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Build project
+        run: npm run build
+
+      - name: Run tests
+        run: npx vitest run --reporter=verbose
+        env:
+          CI: true
+          NODE_OPTIONS: --no-warnings
+
+  publish-npm:
+    name: Publish to npm
+    needs: test
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js 22
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: package-lock.json
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Build project
+        run: npm run build
+
+      - name: Publish to npm
+        run: |
+          echo "//registry.npmjs.org/:_authToken=${{ secrets.NPM_TOKEN }}" > .npmrc
+          npm publish
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+
+  publish-github:
+    name: Publish to GitHub Packages
+    needs: test
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js 22
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          registry-url: https://npm.pkg.github.com
+          scope: '@imdheerajKube'
+          cache: npm
+          cache-dependency-path: package-lock.json
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Build project
+        run: npm run build
+
+      - name: Publish to GitHub Packages
+        run: |
+          # Use the same package name but scoped for GitHub Packages
+          # The publish will use the GITHUB_TOKEN for authentication
+          npm publish --registry=https://npm.pkg.github.com
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+  release:
+    name: Create GitHub Release
+    needs: [publish-npm, publish-github]
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: write
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          generate_release_notes: true
+          name: Agent-Baba-D ${{ github.ref_name }}
+          body: |
+            ## What's Changed
+
+            See the full changelog below for all changes in this release.
+
+            ## Installation
+
+            ```bash
+            npm install -g agent-baba-d
+            # or update
+            npm update -g agent-baba-d
+            ```
+
+            ## Quick Links
+
+            - [GitHub Repository](https://github.com/imdheerajKube/agent-baba-d)
+            - [npm Package](https://www.npmjs.com/package/agent-baba-d)
+            - [Documentation](https://github.com/imdheerajKube/agent-baba-d#readme)
+          draft: false
+          prerelease: false
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

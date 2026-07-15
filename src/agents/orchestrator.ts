@@ -18,7 +18,7 @@
  */
 
 import { existsSync, writeFileSync, mkdirSync } from 'node:fs';
-import { dirname } from 'node:path';
+import { dirname, isAbsolute, join } from 'node:path';
 import inquirer from 'inquirer';
 
 import { ProviderFactory } from '../inference/factory.js';
@@ -101,6 +101,23 @@ export interface OrchestrationResult {
 }
 
 // ─── Agent Registry ─────────────────────────────────────────────────────────
+
+// ─── Spinner Icons ─────────────────────────────────────────────────────────
+
+/** Icons for each agent type, shown in the spinner during execution */
+const AGENT_ICONS: Record<string, string> = {
+  'context-gatherer': '📂',
+  'planner': '📋',
+  'writer': '✏️',
+  'reviewer': '👁️',
+  'tester': '🧪',
+  'debugger': '🐛',
+  'runner': '▶️',
+  'git': '🔀',
+  'package': '📦',
+  'github-release': '🏷️',
+  'security': '🔒',
+};
 
 function createAgent(agentType: string, _options: OrchestratorOptions): Agent | null {
   switch (agentType) {
@@ -248,6 +265,12 @@ export class Orchestrator {
 
     // ── 5. Execute tasks ─────────────────────────────────────────────────
     if (options.verbose) logger.highlight('\n⚡ Executing tasks...');
+
+    // Update spinner to show we've moved past planning into execution
+    if (options.spinner && vault.context.taskPlan.length > 0) {
+      const total = vault.context.taskPlan.length;
+      options.spinner.start(`⚡ Executing ${total} task${total !== 1 ? 's' : ''}...`);
+    }
 
     for (let iteration = 0; iteration < 50; iteration++) {
       if (vault.isComplete) break;
@@ -557,6 +580,13 @@ export class Orchestrator {
   ): Promise<void> {
     vault.updateTaskStatus(task.id, 'running');
 
+    // Update spinner text to show which task is currently executing
+    if (options.spinner) {
+      const agentIcon = AGENT_ICONS[task.agentType] || '⚙️';
+      const shortDesc = task.description.slice(0, 60);
+      options.spinner.start(`${agentIcon} ${shortDesc}${task.description.length > 60 ? '...' : ''}`);
+    }
+
     if (options.verbose) {
       logger.info(`\n   ▶️  ${task.agentType}: ${task.description.slice(0, 80)}${task.description.length > 80 ? '...' : ''}`);
     }
@@ -668,9 +698,9 @@ export class Orchestrator {
       if (change.status === 'deleted') continue;
       if (!change.newContent) continue;
 
-      const absolutePath = change.path.startsWith('/')
+      const absolutePath = isAbsolute(change.path)
         ? change.path
-        : `${process.cwd()}/${change.path}`;
+        : join(process.cwd(), change.path);
 
       const dir = dirname(absolutePath);
       if (!existsSync(dir)) {

@@ -1,11 +1,11 @@
 # Buff CLI — `agent-baba-d`
 
-**Flexible AI inference tool** — run large language models locally (Ollama) or route to cloud APIs (NVIDIA NIM, Google Gemini, OpenRouter) through a unified CLI. Discover available models, chat interactively, edit files with AI, and plan codebase changes — all from the terminal.
+**Flexible AI inference tool** — run large language models locally (Ollama) or route to cloud APIs (Groq, NVIDIA NIM, Google Gemini, OpenRouter) through a unified CLI. Discover available models, chat interactively, edit files with AI, and plan codebase changes — all from the terminal.
 
 ```bash
 # Quick examples
 agent-baba-d chat "explain recursion in Rust"
-agent-baba-d models --provider nim
+agent-baba-d models --provider groq
 agent-baba-d edit main.go --instruction "add input validation"
 agent-baba-d plan . --task "implement user authentication"
 agent-baba-d config list
@@ -15,11 +15,12 @@ agent-baba-d config list
 
 ## Features
 
-- **Unified interface** across 4 providers: local (Ollama, HuggingFace, GGML), NVIDIA NIM, Google Gemini, and OpenRouter
+- **Unified interface** across 5 providers: local (Ollama, HuggingFace, GGML), Groq, NVIDIA NIM, Google Gemini, and OpenRouter
 - **Model discovery** — `agent-baba-d models` lists available models from any configured provider, with search/filter support
 - **Interactive chat** with conversation history, file context, and session commands
 - **AI-assisted file editing** with dry-run mode for safe previews
 - **Codebase planning** that analyzes directory structure and generates implementation plans
+- **Multi-agent orchestration** — `agent-baba-d execute "goal"` runs a pipeline of planner, gatherer, writer, reviewer, tester, and more
 - **Response caching** via SQLite to reduce costs and latency
 - **Plugin system** for adding custom inference providers
 - **Configuration** via JSON config file + environment variables
@@ -41,7 +42,7 @@ agent-baba-d config list
 npm install -g agent-baba-d
 
 # Or clone and build from source
-git clone <your-repo-url> buff
+git clone https://github.com/imdheerajKube/agent-baba-d.git buff
 cd buff
 npm install
 npm run build
@@ -71,8 +72,63 @@ Commands:
   edit [options] <file>    Edit a file using AI assistance
   models [options]         List available models from inference providers
   plan [options] [target]  Generate an implementation plan for a codebase task
+  execute [options] <goal> Execute a multi-agent pipeline for a goal
   config                   Manage Buff configuration
   cache                    Manage inference cache
+```
+
+---
+
+## Getting API Keys
+
+Each cloud provider requires an API key. Sign up and get your key from the links below.
+
+### 🔷 Groq (Fast — LPU Cloud Inference)
+
+Groq runs open-source models at blazing speeds on their custom LPU hardware.
+
+1. Sign up at **[console.groq.com](https://console.groq.com)** (free tier available)
+2. Go to **API Keys** → **Create API Key**
+3. Copy your key (starts with `gsk_`)
+
+```bash
+export GROQ_API_KEY="gsk_xxxxxxxxxxxxxxxx"
+```
+
+### 🔶 NVIDIA NIM
+
+NVIDIA NIM provides hosted API access to a wide catalog of models (121+ models).
+
+1. Sign up at **[build.nvidia.com](https://build.nvidia.com)** (free tier with rate limits)
+2. Generate an API key from the **Get API Key** button
+3. Copy your key (starts with `nvapi-`)
+
+```bash
+export NVIDIA_NIM_API_KEY="nvapi-xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"
+```
+
+### 🔷 Google Gemini
+
+Google's Gemini API has a generous free tier with competitive models.
+
+1. Visit **[aistudio.google.com/apikey](https://aistudio.google.com/apikey)** and click **Create API Key**
+2. Select your Google Cloud project or create one
+3. Copy your key (starts with `AIzaSy`)
+
+```bash
+export GEMINI_API_KEY="AIzaSyxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"
+```
+
+### 🟣 OpenRouter
+
+OpenRouter gives you access to 200+ models from OpenAI, Anthropic, Google, Meta, and more — all through one API.
+
+1. Sign up at **[openrouter.ai/keys](https://openrouter.ai/keys)** (free credits on sign-up)
+2. Click **Create Key**
+3. Copy your key (starts with `sk-or-v1-`)
+
+```bash
+export OPENROUTER_API_KEY="sk-or-v1-xxxxxxxxxxxxxxxxxxxxxxxxxxxx"
 ```
 
 ---
@@ -120,6 +176,11 @@ agent-baba-d config list
       "temperature": 0.7,
       "maxTokens": 4096
     },
+    "groq": {
+      "model": "llama-3.3-70b-versatile",
+      "temperature": 0.7,
+      "maxTokens": 4096
+    },
     "local": {
       "runner": "ollama",
       "model": "llama2",
@@ -134,16 +195,18 @@ agent-baba-d config list
 
 API keys can be set via environment variables instead of the config file. They take **priority** over the config file.
 
-| Variable | Provider | Required? |
-|---|---|---|
-| `NVIDIA_NIM_API_KEY` | NVIDIA NIM | Yes, unless using local |
-| `GEMINI_API_KEY` | Google Gemini | Yes, unless using local |
-| `OPENROUTER_API_KEY` | OpenRouter | Yes, unless using local |
+| Variable | Provider | Required? | Get Your Key |
+|---|---|---|---|
+| `GROQ_API_KEY` | Groq | Yes, unless using local | [console.groq.com](https://console.groq.com) |
+| `NVIDIA_NIM_API_KEY` | NVIDIA NIM | Yes, unless using local | [build.nvidia.com](https://build.nvidia.com) |
+| `GEMINI_API_KEY` | Google Gemini | Yes, unless using local | [aistudio.google.com/apikey](https://aistudio.google.com/apikey) |
+| `OPENROUTER_API_KEY` | OpenRouter | Yes, unless using local | [openrouter.ai/keys](https://openrouter.ai/keys) |
 
 You can place a `.env` file in the project root or at `~/.buff/.env`:
 
 ```env
 # ~/.buff/.env
+GROQ_API_KEY=gsk_xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx
 NVIDIA_NIM_API_KEY=nvapi-xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx
 GEMINI_API_KEY=AIzaSyxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx
 OPENROUTER_API_KEY=sk-or-v1-xxxxxxxxxxxxxxxxxxxxxxxxxxxx
@@ -163,6 +226,7 @@ agent-baba-d models
 
 # List models from a specific provider
 agent-baba-d models --provider nim
+agent-baba-d models --provider groq
 agent-baba-d models --provider openrouter
 
 # Search for models by keyword
@@ -176,8 +240,8 @@ agent-baba-d models --all
 **Examples:**
 
 ```bash
-# See all 121 models on NVIDIA NIM
-agent-baba-d models --provider nim
+# See all models on Groq
+agent-baba-d models --provider groq
 
 # Find DeepSeek models across all configured providers
 agent-baba-d models --search deepseek
@@ -187,7 +251,7 @@ agent-baba-d models --search deepseek
 # 📋 Available Models (3)
 # ════════════════════════════════════════════
 #
-# NVIDIA NIM:
+# Groq:
 # ----------------------------------------
 #   deepseek-ai/deepseek-v4-pro [deepseek]
 #   deepseek-ai/deepseek-v4-flash [deepseek]
@@ -199,7 +263,7 @@ agent-baba-d models --search deepseek
 Use a discovered model immediately:
 
 ```bash
-agent-baba-d chat --provider nim --model deepseek-ai/deepseek-v4-flash
+agent-baba-d chat --provider groq --model deepseek-ai/deepseek-v4-flash
 agent-baba-d edit src/server.ts --provider openrouter --model openai/gpt-4o
 ```
 
@@ -352,6 +416,29 @@ agent-baba-d config set providers.local.runner huggingface
 agent-baba-d config set providers.local.model "microsoft/phi-2"
 ```
 
+### Groq
+
+Connects to **Groq** — the fastest inference API for open-source models, running on custom LPU hardware.
+
+```bash
+# Set your API key
+export GROQ_API_KEY="gsk_..."
+
+# List available models (Llama, Mixtral, Gemma, DeepSeek, and more)
+agent-baba-d models --provider groq
+
+# Chat with any model
+agent-baba-d chat --provider groq --model llama-3.3-70b-versatile
+agent-baba-d chat --provider groq --model deepseek-ai/deepseek-v4-flash
+
+# Edit with Groq's fast inference
+agent-baba-d edit src/server.ts --provider groq --model llama-3.3-70b-versatile
+```
+
+The Groq adapter uses `https://api.groq.com/openai/v1` by default.
+
+**Get a free API key:** [console.groq.com](https://console.groq.com)
+
 ### NVIDIA NIM
 
 Connects to the **NVIDIA NIM** OpenAI-compatible API at `https://integrate.api.nvidia.com/v1`.
@@ -404,36 +491,95 @@ agent-baba-d chat --provider openrouter --model anthropic/claude-3-haiku
 
 ---
 
+## Multi-Agent Orchestration (`agent-baba-d execute`)
+
+The `execute` command runs an autonomous multi-agent pipeline that can plan, gather context, write code, review changes, run tests, and publish — all from a single goal.
+
+```bash
+# Execute a multi-agent pipeline
+agent-baba-d execute "add JWT authentication to the Express app"
+
+# With verbose logging to see each agent's work
+agent-baba-d execute "add a health check endpoint" --verbose
+
+# Use a specific provider for all agents
+agent-baba-d execute "refactor the database layer" --provider groq
+
+# Dry-run mode (shows what would change without writing)
+agent-baba-d execute "add rate limiting" --dry-run
+
+# Configure models per agent type
+agent-baba-d execute "add tests" --agent-model planner=gemini --agent-model writer=groq
+
+# Use persistent memory across sessions
+agent-baba-d execute "fix the login bug" --memory
+```
+
+The pipeline runs these agents in sequence (with parallelization where possible):
+1. **Planner** — Analyzes the goal, creates a task plan
+2. **Context Gatherer** — Scans the codebase for relevant files
+3. **Writer** — Implements the code changes
+4. **Reviewer** — Validates the changes for bugs and style (optional)
+5. **Tester** — Runs tests in a sandbox (optional)
+6. **Runner** — Executes the program to verify it works (optional)
+7. **Debugger** — Iterates on test failures (optional)
+8. **Git Agent** — Commits changes to a branch (optional)
+9. **Package Agent** — Bumps versions and generates changelogs (optional)
+10. **GitHub Release Agent** — Creates tags and releases (optional)
+
+---
+
 ## Architecture
 
 ```
-CLI Commands (chat, edit, plan, models, config, cache)
+CLI Commands (chat, edit, plan, models, config, cache, execute)
          │
          ▼
    Inference Layer (InferenceProvider interface)
          │
-  ┌──────┼──────────────┬──────────────┐
-  │      │              │              │
-  ▼      ▼              ▼              ▼
- NIM   Gemini      OpenRouter       Local
-Adapter Adapter     Adapter        Adapter
-  │      │              │              │
-  ▼      ▼              ▼              ▼
-NVIDIA Google        OpenRouter   Ollama / HF /
- NIM   Gemini (free)   APIs        GGML Models
+  ┌──────┼──────┬──────────┬─────────────┐
+  │      │      │          │             │
+  ▼      ▼      ▼          ▼             ▼
+ Groq   NIM   Gemini    OpenRouter     Local
+Adapter Adapter Adapter   Adapter      Adapter
+  │      │      │          │             │
+  ▼      ▼      ▼          ▼             ▼
+ Groq  NVIDIA Google      OpenRouter  Ollama / HF /
+ LPU   NIM   Gemini (free) APIs       GGML Models
 
          ┌──────────────────────────┐
-         │     Context Management   │
+         │   Multi-Agent System     │
+         │  ┌────────────────────┐  │
+         │  │  Orchestrator      │  │
+         │  │  ├─ Planner       │  │
+         │  │  ├─ ContextGather │  │
+         │  │  ├─ Writer        │  │
+         │  │  ├─ Reviewer      │  │
+         │  │  ├─ Tester        │  │
+         │  │  ├─ Runner        │  │
+         │  │  ├─ Debugger      │  │
+         │  │  └─ GitAgent      │  │
+         │  └────────────────────┘  │
+         │                          │
+         │  ┌────────────────────┐  │
+         │  │  Memory System     │  │
+         │  │  ├─ Vector Store   │  │
+         │  │  ├─ Trajectory     │  │
+         │  │  └─ Embedder      │  │
+         │  └────────────────────┘  │
+         │                          │
+         │  ┌────────────────────┐  │
+         │  │  Self-Learning     │  │
+         │  │  ├─ Model Router   │  │
+         │  │  ├─ Pattern Extr.  │  │
+         │  │  └─ Scorer        │  │
+         │  └────────────────────┘  │
+         │                          │
          │  ┌────────────────────┐  │
          │  │ SQLite Cache       │  │
          │  │ Multi-file Parser  │  │
          │  │ Token Chunking     │  │
          │  └────────────────────┘  │
-         └──────────────────────────┘
-
-         ┌──────────────────────────┐
-         │    Plugin Registry       │
-         │  (custom providers)      │
          └──────────────────────────┘
 ```
 
@@ -445,8 +591,9 @@ NVIDIA Google        OpenRouter   Ollama / HF /
 | **Config Manager** | `src/config/manager.ts` | Loads/saves config, merges env vars |
 | **Inference Interface** | `src/inference/interface.ts` | `InferenceProvider` contract (`generate`, `isAvailable`, `getInfo`, `listModels`) |
 | **Provider Factory** | `src/inference/factory.ts` | Instantiates the right adapter |
-| **Adapters** | `src/inference/*-adapter.ts` | One per provider (NIM, Gemini, OpenRouter, Local) |
+| **Adapters** | `src/inference/*-adapter.ts` | One per provider (Groq, NIM, Gemini, OpenRouter, Local) |
 | **Model Discovery** | `src/cli/models.ts` | Lists and searches models from all providers |
+| **Orchestrator** | `src/agents/orchestrator.ts` | Multi-agent pipeline coordinator |
 | **Context Cache** | `src/context/cache.ts` | SQLite-backed response caching |
 | **Context Parser** | `src/context/parser.ts` | Multi-file reading, chunking, prioritization |
 | **Plugin Registry** | `src/plugins/registry.ts` | Pluggable third-party provider system |
@@ -459,14 +606,14 @@ NVIDIA Google        OpenRouter   Ollama / HF /
 ### Discover and Chat with a Model
 
 ```bash
-# Step 1: See what's available on NIM
-agent-baba-d models --provider nim
+# Step 1: See what's available on Groq
+agent-baba-d models --provider groq
 
 # Step 2: Narrow down by keyword
 agent-baba-d models --search deepseek
 
 # Step 3: Chat with a found model
-agent-baba-d chat --provider nim --model deepseek-ai/deepseek-v4-flash
+agent-baba-d chat --provider groq --model deepseek-ai/deepseek-v4-flash
 ```
 
 ### Hybrid Provider Usage
@@ -477,11 +624,27 @@ Use different providers for different tasks:
 # Use local models for quick, small edits
 agent-baba-d edit README.md --instruction "fix typos" --provider local
 
+# Use Groq for fast code generation
+agent-baba-d edit src/routes.ts --instruction "add validation" --provider groq
+
 # Use cloud models for complex planning
 agent-baba-d plan . --task "design the database schema" --provider gemini
 
 # Use OpenRouter for diverse model selection
 agent-baba-d chat --provider openrouter --model openai/gpt-4o
+```
+
+### Multi-Agent Pipeline
+
+```bash
+# Let the multi-agent system handle everything
+agent-baba-d execute "add input validation for all API routes"
+
+# With verbose logging to see each step
+agent-baba-d execute "create a health check endpoint" --verbose
+
+# Use Groq for fast agent execution
+agent-baba-d execute "refactor login logic" --provider groq
 ```
 
 ---
@@ -615,7 +778,7 @@ agent-baba-d chat --provider anthropic
 ### Setup
 
 ```bash
-git clone <repo-url>
+git clone https://github.com/imdheerajKube/agent-baba-d.git
 cd buff
 npm install
 ```
@@ -640,13 +803,31 @@ src/
 │   ├── models.ts         # Model discovery (list/search models)
 │   ├── plan.ts           # Implementation plans
 │   ├── config.ts         # Configuration management
+│   ├── execute.ts        # Multi-agent orchestration
 │   └── cache.ts          # Cache management
+├── agents/
+│   ├── agent.ts          # Abstract Agent + types
+│   ├── orchestrator.ts   # Multi-agent pipeline coordinator
+│   ├── context-vault.ts  # Shared context bus
+│   └── agents/
+│       ├── planner.ts    # PlannerAgent
+│       ├── context-gatherer.ts
+│       ├── writer.ts     # WriterAgent
+│       ├── reviewer.ts   # ReviewerAgent
+│       ├── runner.ts     # RunnerAgent
+│       ├── tester.ts     # TesterAgent
+│       ├── debugger.ts   # DebuggerAgent
+│       ├── git-agent.ts
+│       ├── package-agent.ts
+│       ├── github-release-agent.ts
+│       └── security-agent.ts
 ├── config/
 │   ├── types.ts          # TypeScript types
 │   └── manager.ts        # Config load/save/env merging
 ├── inference/
 │   ├── interface.ts      # InferenceProvider contract
 │   ├── factory.ts        # Provider instantiation
+│   ├── groq-adapter.ts   # Groq LPU
 │   ├── nim-adapter.ts    # NVIDIA NIM
 │   ├── gemini-adapter.ts # Google Gemini
 │   ├── openrouter-adapter.ts # OpenRouter
@@ -656,6 +837,19 @@ src/
 │   └── parser.ts         # Multi-file context parsing
 ├── plugins/
 │   └── registry.ts       # Plugin registration system
+├── learning/
+│   ├── model-router.ts   # Adaptive model routing
+│   ├── scorer.ts         # Trajectory scoring
+│   ├── pattern-extractor.ts
+│   ├── agent-stats.ts
+│   └── self-improver.ts
+├── memory/
+│   ├── embedder.ts       # LLM-based embeddings
+│   ├── vector-store.ts   # Cosine similarity search
+│   ├── trajectory-store.ts
+│   └── memory-integration.ts
+├── security/
+│   └── scanner.ts        # Prompt injection / secret scanner
 └── utils/
     ├── env.ts            # Environment variable loader
     └── logger.ts         # Colored logging
@@ -681,12 +875,14 @@ npx tsc --noEmit
 
 ## Roadmap
 
-- [ ] **Auto-discovery plugin loader** — scan `~/.buff/plugins/` for `.js` plugin files
+- [x] **Groq integration** — fast LPU inference for open-source models
+- [x] **Multi-agent orchestration** — plan, write, review, test, and publish
+- [x] **Model discovery** — search and filter across all providers
 - [ ] **Streaming support** — real-time token-by-token output in chat mode
+- [ ] **Auto-discovery plugin loader** — scan `~/.buff/plugins/` for `.js` plugin files
 - [ ] **Hybrid routing** — automatically route small prompts to local models and complex ones to cloud
 - [ ] **Local telemetry** — usage logs stored locally (no server upload)
 - [ ] **Provider health checks** — `agent-baba-d doctor` to verify all configured providers
-- [ ] **Interactive model picker** — fuzzy-select a model from search results during chat
 
 ---
 
