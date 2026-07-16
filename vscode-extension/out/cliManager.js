@@ -1,6 +1,6 @@
 "use strict";
 /**
- * CLI Manager — Spawns the agent-baba-d CLI as a child process and
+ * CLI Manager — Spawns the agent-nuvira CLI as a child process and
  * handles bidirectional communication for agent tasks.
  *
  * Features:
@@ -248,8 +248,8 @@ class CLIManager {
             // Handle errors
             this.process.on('error', (err) => {
                 if (err.code === 'ENOENT') {
-                    reject(new Error(`CLI '${cliCmd}' not found. Install agent-baba-d or configure 'agent-baba-d.cliPath'.\n` +
-                        `  Run: npm install -g agent-baba-d\n` +
+                    reject(new Error(`CLI '${cliCmd}' not found. Install agent-nuvira or configure 'agent-nuvira.cliPath'.\n` +
+                        `  Run: npm install -g agent-nuvira\n` +
                         `  Or set path in VS Code settings.`));
                 }
                 else if (err.name === 'AbortError') {

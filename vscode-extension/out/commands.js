@@ -1,17 +1,17 @@
 "use strict";
 /**
- * Commands — Registers all VS Code commands for the Agent-Baba-D extension.
+ * Commands — Registers all VS Code commands for the Agent-Nuvira extension.
  *
  * Commands:
- * - agent-baba-d.executeGoal    — Run a multi-agent pipeline
- * - agent-baba-d.quickFix       — Quick fix for the current file
- * - agent-baba-d.reviewFile     — Review the current file
- * - agent-baba-d.explainCode    — Explain selected code
- * - agent-baba-d.generateTest   — Generate tests
- * - agent-baba-d.showPanel      — Show the agent panel
- * - agent-baba-d.runWorkflow    — Run a workflow template
- * - agent-baba-d.acceptChanges  — Accept all proposed changes
- * - agent-baba-d.rejectChanges  — Reject all proposed changes
+ * - agent-nuvira.executeGoal    — Run a multi-agent pipeline
+ * - agent-nuvira.quickFix       — Quick fix for the current file
+ * - agent-nuvira.reviewFile     — Review the current file
+ * - agent-nuvira.explainCode    — Explain selected code
+ * - agent-nuvira.generateTest   — Generate tests
+ * - agent-nuvira.showPanel      — Show the agent panel
+ * - agent-nuvira.runWorkflow    — Run a workflow template
+ * - agent-nuvira.acceptChanges  — Accept all proposed changes
+ * - agent-nuvira.rejectChanges  — Reject all proposed changes
  */
 var __createBinding = (this && this.__createBinding) || (Object.create ? (function(o, m, k, k2) {
     if (k2 === undefined) k2 = k;
@@ -49,6 +49,7 @@ var __importStar = (this && this.__importStar) || (function () {
 Object.defineProperty(exports, "__esModule", { value: true });
 exports.CommandRegistrar = void 0;
 const vscode = __importStar(require("vscode"));
+const outputParser_js_1 = require("./outputParser.js");
 // ─── CommandRegistrar ───────────────────────────────────────────────────────
 class CommandRegistrar {
     cliManager;
@@ -69,15 +70,15 @@ class CommandRegistrar {
      */
     registerAll() {
         this.disposables = [
-            vscode.commands.registerCommand('agent-baba-d.executeGoal', () => this.executeGoal()),
-            vscode.commands.registerCommand('agent-baba-d.quickFix', (uri) => this.quickFix(uri)),
-            vscode.commands.registerCommand('agent-baba-d.reviewFile', (uri) => this.reviewFile(uri)),
-            vscode.commands.registerCommand('agent-baba-d.explainCode', () => this.explainCode()),
-            vscode.commands.registerCommand('agent-baba-d.generateTest', (uri) => this.generateTest(uri)),
-            vscode.commands.registerCommand('agent-baba-d.showPanel', () => this.showPanel()),
-            vscode.commands.registerCommand('agent-baba-d.runWorkflow', () => this.runWorkflow()),
-            vscode.commands.registerCommand('agent-baba-d.acceptChanges', () => this.acceptChanges()),
-            vscode.commands.registerCommand('agent-baba-d.rejectChanges', () => this.rejectChanges()),
+            vscode.commands.registerCommand('agent-nuvira.executeGoal', () => this.executeGoal()),
+            vscode.commands.registerCommand('agent-nuvira.quickFix', (uri) => this.quickFix(uri)),
+            vscode.commands.registerCommand('agent-nuvira.reviewFile', (uri) => this.reviewFile(uri)),
+            vscode.commands.registerCommand('agent-nuvira.explainCode', () => this.explainCode()),
+            vscode.commands.registerCommand('agent-nuvira.generateTest', (uri) => this.generateTest(uri)),
+            vscode.commands.registerCommand('agent-nuvira.showPanel', () => this.showPanel()),
+            vscode.commands.registerCommand('agent-nuvira.runWorkflow', () => this.runWorkflow()),
+            vscode.commands.registerCommand('agent-nuvira.acceptChanges', () => this.acceptChanges()),
+            vscode.commands.registerCommand('agent-nuvira.rejectChanges', () => this.rejectChanges()),
         ];
         return this.disposables;
     }
@@ -234,7 +235,7 @@ class CommandRegistrar {
         const applied = await this.diffViewer.applyChanges(this.currentChanges);
         this.currentChanges = [];
         // Clear the hasChanges context so accept/reject keybindings deactivate
-        vscode.commands.executeCommand('setContext', 'agent-baba-d.hasChanges', false);
+        vscode.commands.executeCommand('setContext', 'agent-nuvira.hasChanges', false);
         if (applied > 0) {
             this.agentPanel.updateStatus('✅ Changes applied');
         }
@@ -252,7 +253,7 @@ class CommandRegistrar {
         this.agentPanel.clear();
         this.agentPanel.updateStatus('Changes rejected');
         // Clear the hasChanges context so keybindings deactivate
-        vscode.commands.executeCommand('setContext', 'agent-baba-d.hasChanges', false);
+        vscode.commands.executeCommand('setContext', 'agent-nuvira.hasChanges', false);
     }
     // ── Task Runner ───────────────────────────────────────────────────────────
     /**
@@ -314,12 +315,12 @@ class CommandRegistrar {
             const result = await task();
             if (result.success) {
                 // Parse the result to extract file changes
-                const parsedResult = this.parseCLIOutput(result.stdout);
+                const parsedResult = (0, outputParser_js_1.parseCLIOutput)(result.stdout);
                 // Show diff previews unless auto-apply is on
                 if (parsedResult.changes.length > 0 && !this.config.autoApplyChanges) {
                     this.currentChanges = parsedResult.changes;
                     // Set context so accept/reject keybindings activate
-                    vscode.commands.executeCommand('setContext', 'agent-baba-d.hasChanges', true);
+                    vscode.commands.executeCommand('setContext', 'agent-nuvira.hasChanges', true);
                     await this.diffViewer.showChanges(parsedResult.changes);
                     this.agentPanel.showDiffs(parsedResult.changes);
                 }
@@ -345,7 +346,7 @@ class CommandRegistrar {
                 this.agentPanel.showError(result.stderr || 'Task completed with warnings.');
                 // Still try to show any partial output
                 if (result.stdout) {
-                    const parsedResult = this.parseCLIOutput(result.stdout);
+                    const parsedResult = (0, outputParser_js_1.parseCLIOutput)(result.stdout);
                     if (parsedResult.changes.length > 0) {
                         this.currentChanges = parsedResult.changes;
                         this.agentPanel.showDiffs(parsedResult.changes);
@@ -357,85 +358,6 @@ class CommandRegistrar {
             const errorMsg = err instanceof Error ? err.message : String(err);
             this.agentPanel.showError(errorMsg);
         }
-    }
-    // ── Output Parser ─────────────────────────────────────────────────────────
-    /**
-     * Parse CLI stdout into a structured AgentResult.
-     * Extracts file changes from diff-like output.
-     */
-    parseCLIOutput(stdout) {
-        const changes = [];
-        const lines = stdout.split('\n');
-        // Look for file change indicators in CLI output
-        const changePatterns = [
-            // Pattern: 📄 path/to/file (created)
-            /^📄\s+(.+?)\s+\((created|new)\)/,
-            // Pattern: ✏️ path/to/file (modified)
-            /^✏️\s+(.+?)\s+\((modified|updated|changed)\)/,
-            // Pattern: 🗑️ path/to/file (deleted)
-            /^🗑️\s+(.+?)\s+\((deleted|removed)\)/,
-            // Pattern: Created: path/to/file
-            /^(?:Created|New):\s+(.+)/i,
-            // Pattern: Modified: path/to/file
-            /^(?:Modified|Updated|Changed):\s+(.+)/i,
-            // Pattern: Deleted: path/to/file
-            /^(?:Deleted|Removed):\s+(.+)/i,
-            // Pattern: +++ or --- style diff headers
-            /^\+\+\+\s+(?:b\/)?(.+)/,
-        ];
-        for (const line of lines) {
-            for (const pattern of changePatterns) {
-                const match = line.match(pattern);
-                if (match) {
-                    const path = match[1].trim();
-                    const typeLine = line;
-                    let type = 'modified';
-                    if (typeLine.includes('📄') || typeLine.match(/created|new/i)) {
-                        type = 'created';
-                    }
-                    else if (typeLine.includes('🗑️') || typeLine.match(/deleted|removed/i)) {
-                        type = 'deleted';
-                    }
-                    else if (typeLine.match(/^\+\+\+/)) {
-                        // It's a diff header, check if it was created
-                        type = 'modified';
-                    }
-                    // Avoid duplicates
-                    if (!changes.some((c) => c.path === path)) {
-                        changes.push({ path, type, applied: false });
-                    }
-                    break;
-                }
-            }
-        }
-        return {
-            success: true,
-            summary: this.generateSummary(changes, stdout),
-            changes,
-            durationMs: 0,
-            output: stdout,
-        };
-    }
-    /**
-     * Generate a summary of what was done.
-     */
-    generateSummary(changes, output) {
-        if (changes.length > 0) {
-            const created = changes.filter((c) => c.type === 'created').length;
-            const modified = changes.filter((c) => c.type === 'modified').length;
-            const deleted = changes.filter((c) => c.type === 'deleted').length;
-            const parts = [];
-            if (created > 0)
-                parts.push(`${created} created`);
-            if (modified > 0)
-                parts.push(`${modified} modified`);
-            if (deleted > 0)
-                parts.push(`${deleted} deleted`);
-            return `Changes: ${parts.join(', ')}`;
-        }
-        // Fall back to extracting first meaningful line
-        const firstLine = output.split('\n').find((l) => l.length > 20 && !l.startsWith('[') && !l.startsWith('ℹ') && !l.startsWith('✔'));
-        return firstLine?.trim().slice(0, 150) || 'Task completed.';
     }
     /**
      * Clean up on deactivation.

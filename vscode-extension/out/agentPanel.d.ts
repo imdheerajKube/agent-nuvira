@@ -12,7 +12,7 @@
 import * as vscode from 'vscode';
 import type { AgentProgress, AgentResult, FileChange } from './types.js';
 export declare class AgentPanel {
-    static readonly viewType = "agent-baba-d.agentProgress";
+    static readonly viewType = "agent-nuvira.agentProgress";
     private panel;
     private disposables;
     private currentResult;

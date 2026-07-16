@@ -1,8 +1,8 @@
 "use strict";
 /**
- * Agent-Baba-D VS Code Extension — Main Entry Point
+ * Agent-Nuvira VS Code Extension — Main Entry Point
  *
- * This extension brings Agent-Baba-D's multi-agent AI capabilities
+ * This extension brings Agent-Nuvira's multi-agent AI capabilities
  * directly into the VS Code editor, allowing users to:
  * - Execute multi-agent goals (plan, write, review, test)
  * - Quick fix files with AI
@@ -12,7 +12,7 @@
  * - Preview and apply proposed changes via diff viewer
  *
  * Architecture:
- * - CLI Backend: The existing agent-baba-d CLI is spawned as a child process
+ * - CLI Backend: The existing agent-nuvira CLI is spawned as a child process
  * - Webview Panel: Real-time agent progress and results
  * - Command Palette: All agent operations accessible via commands
  * - Context Menus: Right-click on files/editors for quick actions
@@ -91,7 +91,7 @@ function activate(context) {
     context.subscriptions.push(vscode.languages.registerInlineCompletionItemProvider({ pattern: '**/*.{ts,js,tsx,jsx,py,go,rs,java,rb,php,c,cpp,h,hpp,cs,swift,kt,scala,vue,svelte,mjs,cjs}' }, inlineSuggestProvider));
     // Register configuration change handler
     context.subscriptions.push(vscode.workspace.onDidChangeConfiguration((e) => {
-        if (e.affectsConfiguration('agent-baba-d')) {
+        if (e.affectsConfiguration('agent-nuvira')) {
             const newConfig = loadConfig();
             cliManager?.dispose();
             cliManager = new cliManager_js_1.CLIManager(newConfig);
@@ -106,10 +106,10 @@ function activate(context) {
     // Update status bar
     updateStatusBar('$(robot) Agent-Baba-D Ready');
     // Output activation info
-    console.log('[agent-baba-d] Extension activated');
-    console.log(`[agent-baba-d] CLI path: ${config.cliPath}`);
-    console.log(`[agent-baba-d] Default provider: ${config.defaultProvider || '(from config)'}`);
-    console.log(`[agent-baba-d] Auto-apply: ${config.autoApplyChanges}`);
+    console.log('[agent-nuvira] Extension activated');
+    console.log(`[agent-nuvira] CLI path: ${config.cliPath}`);
+    console.log(`[agent-nuvira] Default provider: ${config.defaultProvider || '(from config)'}`);
+    console.log(`[agent-nuvira] Auto-apply: ${config.autoApplyChanges}`);
 }
 // ─── Deactivate ─────────────────────────────────────────────────────────────
 /**
@@ -117,7 +117,7 @@ function activate(context) {
  * Clean up all resources.
  */
 function deactivate() {
-    console.log('[agent-baba-d] Extension deactivating...');
+    console.log('[agent-nuvira] Extension deactivating...');
     // Clean up CLI manager
     if (cliManager) {
         cliManager.dispose();
@@ -139,14 +139,14 @@ function deactivate() {
         statusBarItem = null;
     }
     agentPanel = null;
-    console.log('[agent-baba-d] Extension deactivated');
+    console.log('[agent-nuvira] Extension deactivated');
 }
 // ─── Helpers ────────────────────────────────────────────────────────────────
 /**
  * Load extension configuration from VS Code settings.
  */
 function loadConfig() {
-    const vsConfig = vscode.workspace.getConfiguration('agent-baba-d');
+    const vsConfig = vscode.workspace.getConfiguration('agent-nuvira');
     return {
         cliPath: vsConfig.get('cliPath', 'buff'),
         defaultProvider: vsConfig.get('defaultProvider', ''),
@@ -162,8 +162,8 @@ function loadConfig() {
 function createStatusBarItem() {
     const item = vscode.window.createStatusBarItem(vscode.StatusBarAlignment.Right, 100);
     item.text = '$(robot) Agent';
-    item.tooltip = 'Agent-Baba-D — Multi-agent AI coding assistant';
-    item.command = 'agent-baba-d.showPanel';
+    item.tooltip = 'Agent-Nuvira — Multi-agent AI coding assistant';
+    item.command = 'agent-nuvira.showPanel';
     item.backgroundColor = new vscode.ThemeColor('statusBarItem.prominentBackground');
     // Only show when there's an active workspace
     if (vscode.workspace.workspaceFolders && vscode.workspace.workspaceFolders.length > 0) {

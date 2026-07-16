@@ -1,16 +1,16 @@
 /**
- * Commands — Registers all VS Code commands for the Agent-Baba-D extension.
+ * Commands — Registers all VS Code commands for the Agent-Nuvira extension.
  *
  * Commands:
- * - agent-baba-d.executeGoal    — Run a multi-agent pipeline
- * - agent-baba-d.quickFix       — Quick fix for the current file
- * - agent-baba-d.reviewFile     — Review the current file
- * - agent-baba-d.explainCode    — Explain selected code
- * - agent-baba-d.generateTest   — Generate tests
- * - agent-baba-d.showPanel      — Show the agent panel
- * - agent-baba-d.runWorkflow    — Run a workflow template
- * - agent-baba-d.acceptChanges  — Accept all proposed changes
- * - agent-baba-d.rejectChanges  — Reject all proposed changes
+ * - agent-nuvira.executeGoal    — Run a multi-agent pipeline
+ * - agent-nuvira.quickFix       — Quick fix for the current file
+ * - agent-nuvira.reviewFile     — Review the current file
+ * - agent-nuvira.explainCode    — Explain selected code
+ * - agent-nuvira.generateTest   — Generate tests
+ * - agent-nuvira.showPanel      — Show the agent panel
+ * - agent-nuvira.runWorkflow    — Run a workflow template
+ * - agent-nuvira.acceptChanges  — Accept all proposed changes
+ * - agent-nuvira.rejectChanges  — Reject all proposed changes
  */
 import * as vscode from 'vscode';
 import { CLIManager } from './cliManager.js';
@@ -76,15 +76,6 @@ export declare class CommandRegistrar {
      * Run an agent task with progress tracking and result handling.
      */
     private runAgentTask;
-    /**
-     * Parse CLI stdout into a structured AgentResult.
-     * Extracts file changes from diff-like output.
-     */
-    private parseCLIOutput;
-    /**
-     * Generate a summary of what was done.
-     */
-    private generateSummary;
     /**
      * Clean up on deactivation.
      */

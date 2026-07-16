@@ -1,7 +1,7 @@
 /**
- * Agent-Baba-D VS Code Extension — Main Entry Point
+ * Agent-Nuvira VS Code Extension — Main Entry Point
  *
- * This extension brings Agent-Baba-D's multi-agent AI capabilities
+ * This extension brings Agent-Nuvira's multi-agent AI capabilities
  * directly into the VS Code editor, allowing users to:
  * - Execute multi-agent goals (plan, write, review, test)
  * - Quick fix files with AI
@@ -11,7 +11,7 @@
  * - Preview and apply proposed changes via diff viewer
  *
  * Architecture:
- * - CLI Backend: The existing agent-baba-d CLI is spawned as a child process
+ * - CLI Backend: The existing agent-nuvira CLI is spawned as a child process
  * - Webview Panel: Real-time agent progress and results
  * - Command Palette: All agent operations accessible via commands
  * - Context Menus: Right-click on files/editors for quick actions

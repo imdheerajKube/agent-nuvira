@@ -1,5 +1,5 @@
 /**
- * CLI Manager — Spawns the agent-baba-d CLI as a child process and
+ * CLI Manager — Spawns the agent-nuvira CLI as a child process and
  * handles bidirectional communication for agent tasks.
  *
  * Features:

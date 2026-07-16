@@ -48,7 +48,7 @@ exports.AgentPanel = void 0;
 const vscode = __importStar(require("vscode"));
 // ─── AgentPanel ─────────────────────────────────────────────────────────────
 class AgentPanel {
-    static viewType = 'agent-baba-d.agentProgress';
+    static viewType = 'agent-nuvira.agentProgress';
     panel = null;
     disposables = [];
     currentResult = null;
@@ -67,7 +67,7 @@ class AgentPanel {
             return;
         }
         // Create a new panel
-        this.panel = vscode.window.createWebviewPanel(AgentPanel.viewType, 'Agent-Baba-D Progress', column || vscode.ViewColumn.Beside, {
+        this.panel = vscode.window.createWebviewPanel(AgentPanel.viewType, 'Agent-Nuvira Progress', column || vscode.ViewColumn.Beside, {
             enableScripts: true,
             retainContextWhenHidden: true,
             localResourceRoots: [vscode.Uri.joinPath(extensionUri, 'media')],
@@ -200,7 +200,7 @@ class AgentPanel {
                 // Send config info back
                 this.panel?.webview.postMessage({
                     type: 'config',
-                    payload: vscode.workspace.getConfiguration('agent-baba-d'),
+                    payload: vscode.workspace.getConfiguration('agent-nuvira'),
                 });
                 break;
             default:
@@ -223,7 +223,7 @@ class AgentPanel {
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'unsafe-inline'; script-src 'unsafe-inline';">
-  <title>Agent-Baba-D Progress</title>
+  <title>Agent-Nuvira Progress</title>
   <style>
     :root {
       --bg-primary: #1e1e1e;

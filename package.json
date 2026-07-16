@@ -1,7 +1,7 @@
 {
   "name": "agent-nuvira",
   "version": "1.14.0",
-  "description": "Agent-Baba-D: Multi-agent AI coding CLI — plan, write, review, test, and publish code with local models (Ollama) or cloud APIs (Groq, NVIDIA NIM, Google Gemini, OpenRouter)",
+  "description": "Agent-Nuvira: Multi-agent AI coding CLI — plan, write, review, test, and publish code with local models (Ollama) or cloud APIs (Groq, NVIDIA NIM, Google Gemini, OpenRouter)",
   "type": "module",
   "main": "dist/index.js",
   "types": "dist/index.d.ts",
