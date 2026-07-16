@@ -34,6 +34,7 @@ export class ExecuteCommand extends BaseCommand {
       .option('--memory', 'Enable persistent memory (learn from past sessions)', false)
       .option('--memory-stats', 'Show memory statistics and exit', false)
       .option('--memory-clear', 'Clear all stored memory trajectories', false)
+      .option('--review', 'Create a review bundle capturing proposed changes (view with `buff team review show <id>`)', false)
       .action(async (goal: string, options?: {
         provider?: string;
         model?: string;
@@ -46,6 +47,7 @@ export class ExecuteCommand extends BaseCommand {
         memory?: boolean;
         memoryStats?: boolean;
         memoryClear?: boolean;
+        review?: boolean;
       }) => {
         await this.execute(goal, options || {});
       });
@@ -67,6 +69,7 @@ export class ExecuteCommand extends BaseCommand {
       memory?: boolean;
       memoryStats?: boolean;
       memoryClear?: boolean;
+      review?: boolean;
     },
   ): Promise<void> {
     // ── Handle memory management commands ─────────────────────────────────
@@ -81,9 +84,10 @@ export class ExecuteCommand extends BaseCommand {
     }
 
     // ── Setup ──────────────────────────────────────────────────────────────
-    if (options.verbose || options.dryRun) {
+    if (options.verbose || options.dryRun || options.review) {
       logger.info(`Goal: ${goal}`);
       if (options.dryRun) logger.info('Mode: Dry run (files will not be modified)');
+      if (options.review) logger.info('Mode: Review (changes captured as review bundle)');
       if (options.provider) logger.info(`Provider: ${options.provider}`);
       if (options.model) logger.info(`Model: ${options.model}`);
       if (options.memory) logger.info('Memory: Enabled');
@@ -112,6 +116,7 @@ export class ExecuteCommand extends BaseCommand {
         dryRun: options.dryRun,
         verbose: options.verbose,
         useMemory: options.memory,
+        reviewMode: options.review,
       });
 
       spinner.stop();

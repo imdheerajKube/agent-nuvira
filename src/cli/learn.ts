@@ -2,17 +2,30 @@
  * LearnCommand — CLI interface for the self-improvement system.
  *
  * Subcommands:
- *   buff learn stats        — Show agent performance stats
- *   buff learn patterns     — Show/extract coding patterns
- *   buff learn optimize     — Generate optimized model routing
- *   buff learn status       — Show overall self-improvement status
- *   buff learn clear        — Reset learning data
+ *   buff learn stats         — Show agent performance stats
+ *   buff learn patterns      — Show/extract coding patterns
+ *   buff learn optimize      — Generate optimized model routing
+ *   buff learn status        — Show overall self-improvement status
+ *   buff learn clear         — Reset learning data
+ *   buff learn compare       — A/B model comparison via benchmarks
+ *   buff learn feedback      — Rate a trajectory or view feedback stats
+ *   buff learn quality       — Show pattern quality and decay metrics
+ *   buff learn gc            — Garbage-collect low-quality patterns
  */
 
 import { Command } from 'commander';
 import { getAgentStats } from '../learning/agent-stats.js';
 import { getSelfImprover } from '../learning/self-improver.js';
 import { getPatternStore } from '../learning/pattern-extractor.js';
+import { getFeedbackStore } from '../learning/feedback.js';
+import type { Rating } from '../learning/feedback.js';
+import {
+  compareModelRuns,
+  findBestModelForAgent,
+  formatComparisonResult,
+  formatBenchmarkRecommendations,
+} from '../learning/model-compare.js';
+import { getBenchmarkRuns } from '../learning/benchmark.js';
 import { ConfigManager } from '../config/manager.js';
 import { ProviderFactory } from '../inference/factory.js';
 import type { ProviderType } from '../config/types.js';
@@ -57,6 +70,36 @@ export class LearnCommand {
       .description('Reset all learning data (stats, patterns, memory)')
       .option('-f, --force', 'Skip confirmation prompt')
       .action((opts) => this.clearData(opts));
+
+    // ── Phase 2.5: New subcommands ─────────────────────────────────────
+
+    cmd
+      .command('compare')
+      .description('Compare benchmark results between two models')
+      .option('--last', 'Compare the last two benchmark runs', false)
+      .option('--all', 'Show all benchmark-driven model recommendations', false)
+      .action(async (opts) => this.compareModels(opts));
+
+    cmd
+      .command('feedback')
+      .description('Rate a trajectory or view feedback statistics')
+      .option('--trajectory <id>', 'Trajectory ID to rate')
+      .option('--rating <positive|negative|neutral|skip>', 'Your rating')
+      .option('--comment <text>', 'Optional comment on your rating')
+      .option('--stats', 'Show feedback statistics', false)
+      .action(async (opts) => this.handleFeedback(opts));
+
+    cmd
+      .command('quality')
+      .description('Show pattern quality and decay metrics')
+      .option('--details', 'Show detailed per-pattern metrics', false)
+      .action((opts) => this.showQuality(opts));
+
+    cmd
+      .command('gc')
+      .description('Garbage-collect low-quality patterns')
+      .option('-n, --dry-run', 'Show what would be removed without removing', false)
+      .action(async (opts) => this.garbageCollect(opts));
 
     return cmd;
   }
@@ -118,6 +161,7 @@ export class LearnCommand {
       console.log(`   Domains: ${p.applicableDomains.join(', ')}`);
       console.log(`   Source trajectories: ${p.sourceCount}`);
       console.log(`   Avg source score: ${(p.avgSourceScore * 100).toFixed(0)}%`);
+      console.log(`   Usage: ${p.usageCount} time(s)`);
       console.log('');
       console.log(`   ${p.description}`);
       console.log('');
@@ -151,19 +195,203 @@ export class LearnCommand {
   private showStatus(): void {
     const improver = getSelfImprover();
     console.log(improver.getStatus());
+
+    // Also show feedback stats if available
+    const feedbackStore = getFeedbackStore();
+    const feedbackStats = feedbackStore.getStats();
+    if (feedbackStats.totalRatings > 0) {
+      console.log('');
+      console.log('── User Feedback ──');
+      console.log(`   Total ratings: ${feedbackStats.totalRatings}`);
+      console.log(`   Positive: ${(feedbackStats.positiveRatio * 100).toFixed(0)}%`);
+      console.log(`   Negative: ${(feedbackStats.negativeRatio * 100).toFixed(0)}%`);
+      console.log(`   Trend: ${feedbackStats.recentTrend}`);
+    }
+
+    // Show pattern quality stats
+    const patternStore = getPatternStore();
+    const allPatterns = patternStore.getAll();
+    if (allPatterns.length > 0) {
+      const qualityReport = patternStore.getQualityReport();
+      const lowQuality = qualityReport.filter((q) => q.decayScore < 0.5);
+      if (lowQuality.length > 0) {
+        console.log('');
+        console.log('── Pattern Quality ──');
+        console.log(`   ${lowQuality.length}/${allPatterns.length} patterns below 0.5 decay score`);
+        console.log('   Run `buff learn gc` to clean up low-quality patterns.');
+      }
+    }
   }
 
   private clearData(opts: { force?: boolean }): void {
     if (!opts.force) {
       logger.warn('Use `--force` to confirm clearing all learning data.');
-      logger.warn('This will reset agent stats, patterns, and trajectory memory.');
+      logger.warn('This will reset agent stats, patterns, feedback, and trajectory memory.');
       return;
     }
 
     getAgentStats().clear();
     getPatternStore().clear();
+    getFeedbackStore().clear();
     getSelfImprover().resetExtractionCounter();
 
     logger.success('All learning data cleared.');
+  }
+
+  // ── Phase 2.5: New handlers ──────────────────────────────────────────
+
+  private async compareModels(opts: { last?: boolean; all?: boolean }): Promise<void> {
+    const runs = getBenchmarkRuns();
+
+    if (runs.length < 2) {
+      console.log('⚔️ Need at least 2 benchmark runs to compare models.');
+      console.log('   Run `buff benchmark` against different models first.');
+      return;
+    }
+
+    if (opts.last) {
+      // Compare the last two runs
+      const result = compareModelRuns(runs[0], runs[1]);
+      console.log(formatComparisonResult(result));
+      return;
+    }
+
+    if (opts.all) {
+      // Show all benchmark-driven routing recommendations
+      const agentTypes = ['planner', 'writer', 'reviewer', 'tester', 'debugger', 'context-gatherer'];
+      const recommendations = agentTypes.map((type) => findBestModelForAgent(type));
+      console.log(formatBenchmarkRecommendations(recommendations));
+      return;
+    }
+
+    // Default: compare last two and show routing recommendations
+    console.log('⚔️ Comparing last two benchmark runs...\n');
+    const result = compareModelRuns(runs[0], runs[1]);
+    console.log(formatComparisonResult(result));
+
+    console.log('\n📊 Benchmark-driven routing recommendations:\n');
+    const agentTypes = ['planner', 'writer', 'reviewer', 'tester', 'debugger', 'context-gatherer'];
+    const recommendations = agentTypes.map((type) => findBestModelForAgent(type));
+    console.log(formatBenchmarkRecommendations(recommendations));
+  }
+
+  private async handleFeedback(opts: {
+    trajectory?: string;
+    rating?: string;
+    comment?: string;
+    stats?: boolean;
+  }): Promise<void> {
+    const feedbackStore = getFeedbackStore();
+
+    if (opts.stats) {
+      const stats = feedbackStore.getStats();
+      console.log('📊 User Feedback Statistics\n');
+      console.log(`   Total ratings: ${stats.totalRatings}`);
+      console.log(`   Positive:      ${(stats.positiveRatio * 100).toFixed(1)}%`);
+      console.log(`   Negative:      ${(stats.negativeRatio * 100).toFixed(1)}%`);
+      console.log(`   Neutral:       ${(stats.neutralRatio * 100).toFixed(1)}%`);
+      console.log(`   Recent trend:  ${stats.recentTrend}`);
+
+      if (stats.totalRatings > 0) {
+        const recent = feedbackStore.getAll().slice(-5).reverse();
+        console.log('\n   Recent ratings:');
+        for (const entry of recent) {
+          const icon = entry.rating === 'positive' ? '👍' : entry.rating === 'negative' ? '👎' : '➖';
+          console.log(`     ${icon} ${entry.goal.slice(0, 50)} — ${entry.model}`);
+        }
+      }
+      return;
+    }
+
+    // Rate a specific trajectory
+    if (opts.trajectory && opts.rating) {
+      const validRatings = ['positive', 'negative', 'neutral', 'skip'];
+      if (!validRatings.includes(opts.rating)) {
+        logger.error(`Invalid rating: ${opts.rating}. Use: positive, negative, neutral, or skip.`);
+        return;
+      }
+
+      feedbackStore.record(
+        opts.trajectory,
+        opts.rating as Rating,
+        {
+          goal: opts.trajectory,
+          provider: 'unknown',
+          model: 'unknown',
+          comment: opts.comment,
+        },
+      );
+      logger.success(`Rating recorded: ${opts.rating} for trajectory ${opts.trajectory.slice(0, 12)}...`);
+      return;
+    }
+
+    // Show help
+    console.log('📝 Feedback commands:\n');
+    console.log('  buff learn feedback --stats              Show feedback statistics');
+    console.log('  buff learn feedback --trajectory <id>    Rate a specific trajectory');
+    console.log('             --rating positive             Set rating (positive/negative/neutral/skip)');
+    console.log('             --comment "your notes"        Add optional comment');
+    console.log('');
+  }
+
+  private async showQuality(opts: { details?: boolean }): Promise<void> {
+    const patternStore = getPatternStore();
+    const patterns = patternStore.getAll();
+
+    if (patterns.length === 0) {
+      console.log('📝 No patterns to evaluate.');
+      return;
+    }
+
+    const qualityReport = patternStore.getQualityReport();
+    const avgDecay = qualityReport.reduce((sum, q) => sum + q.decayScore, 0) / qualityReport.length;
+
+    console.log('📊 Pattern Quality Report\n');
+    console.log(`   Total patterns: ${patterns.length}`);
+    console.log(`   Average decay score: ${(avgDecay * 100).toFixed(1)}%`);
+    console.log(`   Healthy (≥ 0.5): ${qualityReport.filter((q) => q.decayScore >= 0.5).length}`);
+    console.log(`   Needs attention (< 0.5): ${qualityReport.filter((q) => q.decayScore < 0.5).length}`);
+    console.log(`   Candidates for removal (< ${0.2}): ${qualityReport.filter((q) => q.decayScore < 0.2).length}`);
+    console.log('');
+
+    if (opts.details) {
+      console.log('   Per-pattern details:\n');
+      for (const q of qualityReport.sort((a, b) => a.decayScore - b.decayScore)) {
+        const bar = '█'.repeat(Math.round(q.decayScore * 20));
+        const remaining = '░'.repeat(20 - Math.round(q.decayScore * 20));
+        console.log(`   ${(q.decayScore * 100).toFixed(0).padStart(3)}% ${bar}${remaining}  ${q.title.slice(0, 40).padEnd(40)} used ${q.usageCount}x, ${q.ageDays}d old`);
+      }
+    }
+
+    console.log('');
+    console.log('   Run `buff learn gc` to remove low-quality patterns.');
+  }
+
+  private async garbageCollect(opts: { dryRun?: boolean }): Promise<void> {
+    const patternStore = getPatternStore();
+
+    if (opts.dryRun) {
+      const qualityReport = patternStore.getQualityReport();
+      const candidates = qualityReport.filter((q) => q.decayScore < 0.2);
+
+      if (candidates.length === 0) {
+        console.log('✅ No patterns need garbage collection.');
+        return;
+      }
+
+      console.log('🔍 Dry run: would remove these patterns:\n');
+      for (const q of candidates) {
+        console.log(`   ❌ ${q.title} (score: ${(q.decayScore * 100).toFixed(0)}%)`);
+      }
+      console.log(`\n   Total: ${candidates.length} pattern(s) would be removed.`);
+      return;
+    }
+
+    const removed = patternStore.garbageCollect();
+    if (removed === 0) {
+      console.log('✅ All patterns have acceptable quality scores. No garbage collection needed.');
+    } else {
+      logger.success(`Garbage collection removed ${removed} low-quality pattern(s).`);
+    }
   }
 }

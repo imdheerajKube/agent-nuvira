@@ -1,0 +1,207 @@
+# Publish VS Code Extension — builds, packages, and publishes the extension to:
+#   1. Visual Studio Code Marketplace (vsce publish)
+#   2. Open VSX Registry (ovsx publish)
+#
+# Renamed from agent-baba-d-vscode to agent-nuvira-vscode
+#
+# Triggered when:
+#   - A tag matching "vscode-v*" is pushed (e.g., vscode-v0.2.0)
+#   - Manually via workflow_dispatch
+#
+# Prerequisites:
+#   - VSCE_PAT secret set in GitHub repository settings (for Marketplace)
+#   - OPEN_VSX_TOKEN secret set (for Open VSX)
+#   - Publisher "dheerajsharma" registered on VS Code Marketplace
+#
+# Note: As of December 2026, Microsoft has deprecated PATs for vsce in favor
+# of Microsoft Entra ID (Azure AD) with Workload Identity Federation.
+# If you're using the new identity-based auth, replace the VSCE_PAT step
+# with azure/login and vsce publish --azure-credential.
+
+name: publish-vscode
+
+on:
+  push:
+    tags:
+      - 'vscode-v*'
+  workflow_dispatch:
+    inputs:
+      dry_run:
+        description: 'Dry run (package only, no publish)'
+        required: false
+        default: false
+        type: boolean
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  VSCODE_EXTENSION_DIR: vscode-extension
+
+jobs:
+  test:
+    name: Type-check and lint
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js 22
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: vscode-extension/package-lock.json
+
+      - name: Install dependencies
+        working-directory: ${{ env.VSCODE_EXTENSION_DIR }}
+        run: npm ci
+
+      - name: Type-check extension
+        working-directory: ${{ env.VSCODE_EXTENSION_DIR }}
+        run: npx tsc --noEmit -p tsconfig.json
+
+  package:
+    name: Package extension (.vsix)
+    needs: test
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js 22
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: vscode-extension/package-lock.json
+
+      - name: Install dependencies
+        working-directory: ${{ env.VSCODE_EXTENSION_DIR }}
+        run: npm ci
+
+      - name: Compile TypeScript
+        working-directory: ${{ env.VSCODE_EXTENSION_DIR }}
+        run: npm run compile
+
+      - name: Package extension (.vsix)
+        working-directory: ${{ env.VSCODE_EXTENSION_DIR }}
+        run: npx @vscode/vsce package --out agent-nuvira-vscode.vsix
+
+      - name: Upload VSIX artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: agent-nuvira-vscode
+          path: vscode-extension/agent-nuvira-vscode.vsix
+          retention-days: 90
+
+  publish-marketplace:
+    name: Publish to VS Code Marketplace
+    needs: package
+    runs-on: ubuntu-latest
+    if: github.event_name != 'workflow_dispatch' || !inputs.dry_run
+    timeout-minutes: 10
+
+    steps:
+      - name: Download VSIX artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: agent-nuvira-vscode
+          path: .
+
+      - name: Setup Node.js 22
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - name: Publish to VS Code Marketplace
+        run: |
+          npx @vscode/vsce publish --packagePath agent-nuvira-vscode.vsix
+        env:
+          VSCE_PAT: ${{ secrets.VSCE_PAT }}
+
+  publish-openvsx:
+    name: Publish to Open VSX Registry
+    needs: package
+    runs-on: ubuntu-latest
+    if: github.event_name != 'workflow_dispatch' || !inputs.dry_run
+    timeout-minutes: 10
+
+    steps:
+      - name: Download VSIX artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: agent-nuvira-vscode
+          path: .
+
+      - name: Setup Node.js 22
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - name: Install Open VSX CLI
+        run: npm install -g @vscode/ovsx
+
+      - name: Publish to Open VSX Registry
+        run: |
+          npx ovsx publish agent-nuvira-vscode.vsix -p ${{ secrets.OPEN_VSX_TOKEN }}
+
+  release:
+    name: Create GitHub Release
+    needs: [publish-marketplace, publish-openvsx]
+    runs-on: ubuntu-latest
+    if: always() && (needs.publish-marketplace.result == 'success' || needs.publish-openvsx.result == 'success')
+    timeout-minutes: 5
+    permissions:
+      contents: write
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Download VSIX artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: agent-nuvira-vscode
+          path: .
+
+      - name: Extract version
+        id: version
+        run: |
+          echo "version=$(node -p "require('./vscode-extension/package.json').version")" >> $GITHUB_OUTPUT
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ github.ref_name }}
+          name: Agent-Nuvira VS Code Extension v${{ steps.version.outputs.version }}
+          body: |
+            ## VS Code Extension ${{ github.ref_name }}
+
+            See the [CHANGELOG](https://github.com/imdheerajKube/agent-nuvira/blob/main/vscode-extension/CHANGELOG.md) for details.
+
+            ## Installation
+
+            ### From VS Code
+            Search for "Agent-Nuvira" in the Extensions view (`Ctrl+Shift+X`).
+
+            ### From VSIX
+            Download `agent-nuvira-vscode.vsix` below and install:
+            ```bash
+            code --install-extension agent-nuvira-vscode.vsix
+            ```
+
+            ### Marketplace Links
+            - [VS Code Marketplace](https://marketplace.visualstudio.com/items?itemName=dheerajsharma.agent-nuvira-vscode)
+            - [Open VSX Registry](https://open-vsx.org/extension/dheerajsharma/agent-nuvira-vscode)
+          files: |
+            agent-nuvira-vscode.vsix
+          draft: false
+          prerelease: false
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

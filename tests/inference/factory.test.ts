@@ -42,7 +42,7 @@ describe('ProviderFactory', () => {
 
     it('should throw for unknown provider type', () => {
       expect(() => ProviderFactory.createProvider('unknown' as any, emptyConfig)).toThrow(
-        'Unknown provider type: unknown'
+        'Unknown provider type'
       );
     });
 

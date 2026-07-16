@@ -4,6 +4,7 @@ import { logger } from '../utils/logger.js';
 import { spawn } from 'node:child_process';
 import { existsSync } from 'node:fs';
 import { getModelTags } from './model-catalog.js';
+import { getCostTracker } from '../learning/cost-tracker.js';
 
 const OLLAMA_API_BASE = 'http://localhost:11434';
 
@@ -37,11 +38,9 @@ export class LocalAdapter implements InferenceProvider {
       default:
         throw new Error(`Unknown local runner: ${runner}. Supported: ollama, huggingface, ggml`);
     }
-  }
-
-  /**
-   * Generate using Ollama HTTP API
-   */
+  }/**
+ * Generate using Ollama HTTP API
+ */
   private async generateOllama(prompt: string, options?: InferenceOptions): Promise<string> {
     const model = options?.model || this.config.model || 'llama2';
     const temperature = options?.temperature ?? this.config.temperature ?? 0.7;
@@ -70,7 +69,97 @@ export class LocalAdapter implements InferenceProvider {
     }
 
     const data = (await response.json()) as OllamaGenerateResponse;
-    return data.response || '';
+    const content = data.response || '';
+
+    // Track cost (local models are free, but we still track usage)
+    try {
+      getCostTracker().recordCallEstimated('local', model, prompt, content);
+    } catch { /* Non-critical */ }
+
+    return content;
+  }
+
+  /**
+   * Stream tokens from Ollama's HTTP API using newline-delimited JSON.
+   * Ollama's streaming format returns one JSON object per line with a `response` field.
+   */
+  private async generateOllamaStream(
+    prompt: string,
+    model: string,
+    temperature: number,
+    onToken: (token: string) => void,
+  ): Promise<string> {
+    const response = await fetch(`${OLLAMA_API_BASE}/api/generate`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        model,
+        prompt,
+        stream: true,
+        options: { temperature },
+      }),
+    });
+
+    if (!response.ok) {
+      const errorBody = await response.text();
+      throw new Error(
+        `Ollama streaming API error (${response.status}): ${errorBody}\n` +
+        `Ensure Ollama is running: ollama serve`
+      );
+    }
+
+    const reader = response.body?.getReader();
+    if (!reader) {
+      throw new Error('Ollama response body is not readable');
+    }
+
+    const decoder = new TextDecoder();
+    const fullContent: string[] = [];
+    let buffer = '';
+
+    try {
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+
+        buffer += decoder.decode(value, { stream: true });
+
+        // Ollama sends newline-delimited JSON: one object per line
+        const lines = buffer.split('\n');
+        buffer = lines.pop() || ''; // Keep incomplete line in buffer
+
+        for (const line of lines) {
+          const trimmed = line.trim();
+          if (!trimmed) continue;
+
+          try {
+            const parsed = JSON.parse(trimmed);
+            // Each chunk has a `response` field with the token text
+            if (parsed.response) {
+              fullContent.push(parsed.response);
+              onToken(parsed.response);
+            }
+            // `done: true` signals the end of the stream
+            if (parsed.done) {
+              break;
+            }
+          } catch {
+            // Skip malformed JSON lines
+          }
+        }
+      }
+    } finally {
+      reader.releaseLock();
+    }
+
+    const content = fullContent.join('');
+
+    // Track cost for streaming (local models are free, tracks usage)
+    try {
+      getCostTracker().recordCallEstimated('local', model, prompt, content);
+    } catch { /* Non-critical */ }
+
+    return content;
   }
 
   /**
@@ -215,6 +304,27 @@ except Exception as e:
         }
       });
     });
+  }
+
+  async generateStream(
+    prompt: string,
+    options: InferenceOptions | undefined,
+    onToken: (token: string) => void,
+  ): Promise<string> {
+    const runner = this.config.runner || 'ollama';
+
+    if (runner !== 'ollama') {
+      // Only Ollama supports streaming for now; HuggingFace and GGML fall back to non-streaming
+      logger.debug(`Local: Streaming not supported for runner '${runner}', falling back to non-streaming`);
+      return this.generate(prompt, options);
+    }
+
+    const model = options?.model || this.config.model || 'llama2';
+    const temperature = options?.temperature ?? this.config.temperature ?? 0.7;
+
+    logger.debug(`Ollama: Streaming with model=${model}, temperature=${temperature}`);
+
+    return this.generateOllamaStream(prompt, model, temperature, onToken);
   }
 
   async isAvailable(): Promise<boolean> {

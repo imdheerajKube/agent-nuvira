@@ -1,6 +1,6 @@
-# Agent-Baba-D: Multi-Agent Orchestrator — Project Scope Document
+# Agent-Nuvira: Multi-Agent Orchestrator — Project Scope Document
 
-> **Vision:** Transform agent-baba-d from a single-agent chatbot into an autonomous multi-agent coding system that plans, writes, debugs, tests, compiles, and publishes projects — all running locally with your own API keys and models.
+> **Vision:** Transform agent-nuvira from a single-agent chatbot into an autonomous multi-agent coding system that plans, writes, debugs, tests, compiles, and publishes projects — all running locally with your own API keys and models.
 
 ---
 
@@ -35,12 +35,12 @@
 | **ContextGathererAgent** | `src/agents/agents/context-gatherer.ts` | Scans codebase, finds relevant files |
 | **WriterAgent** | `src/agents/agents/writer.ts` | Implements code changes from plan |
 | **ReviewerAgent** | `src/agents/agents/reviewer.ts` | Validates code for bugs, style, correctness |
-| **Execute CLI** | `src/cli/execute.ts` | `agent-baba-d execute "goal"` command |
+| **Execute CLI** | `src/cli/execute.ts` | `agent-nuvira execute "goal"` command |
 
 ### Architecture
 
 ```
-User: agent-baba-d execute "add JWT auth to Express app"
+User: agent-nuvira execute "add JWT auth to Express app"
                               │
                               ▼
                         Orchestrator
@@ -253,7 +253,7 @@ options:
 ```
 ┌─────────────────────────────────────────────────────────┐
 │                      User CLI                            │
-│  agent-baba-d chat | edit | plan | execute | publish     │
+│  agent-nuvira chat | edit | plan | execute | publish     │
 └────────────────────────┬────────────────────────────────┘
                          │
 ┌────────────────────────▼────────────────────────────────┐
@@ -295,7 +295,7 @@ options:
 
 | Phase | Criteria |
 |---|---|
-| **Phase 1** | `agent-baba-d execute "goal"` runs a multi-agent pipeline end-to-end |
+| **Phase 1** | `agent-nuvira execute "goal"` runs a multi-agent pipeline end-to-end |
 | **Phase 2** | Second run of similar goal retrieves past trajectory and improves quality |
 | **Phase 3** | Agents run in parallel; tests execute in sandbox; git commits created |
 | **Phase 4** | System automatically routes models; quality improves over time |

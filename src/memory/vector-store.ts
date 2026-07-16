@@ -35,7 +35,13 @@ interface VectorIndexData {
 
 const MEMORY_DIR = join(homedir(), '.buff', 'memory');
 const INDEX_PATH = join(MEMORY_DIR, 'vectors.json');
-const CURRENT_VERSION = 1;
+
+/**
+ * Schema version for the vector index.
+ * Version 2: Increased embedding dimensionality from 64 to 384 (all-MiniLM-L6-v2).
+ * Old version 1 entries (64-dim) are incompatible and will be cleared.
+ */
+const CURRENT_VERSION = 2;
 
 // ─── Helpers ────────────────────────────────────────────────────────────────
 
@@ -52,7 +58,16 @@ function readIndex(): VectorIndexData {
       return { entries: {}, version: CURRENT_VERSION };
     }
     const raw = readFileSync(INDEX_PATH, 'utf-8');
-    return JSON.parse(raw) as VectorIndexData;
+    const data = JSON.parse(raw) as VectorIndexData;
+
+    // Version migration: if the on-disk version doesn't match the current
+    // schema version, clear old entries to prevent incompatible vectors
+    // (e.g., 64-dim → 384-dim migration) from returning similarity=0 silently.
+    if (data.version !== CURRENT_VERSION) {
+      return { entries: {}, version: CURRENT_VERSION };
+    }
+
+    return data;
   } catch {
     return { entries: {}, version: CURRENT_VERSION };
   }
@@ -189,6 +204,19 @@ export class VectorStore {
   async getAll(): Promise<VectorEntry[]> {
     const data = readIndex();
     return Object.values(data.entries);
+  }
+
+  /**
+   * Get vector store statistics.
+   */
+  stats(): { totalEntries: number; dimensions: number } {
+    const data = readIndex();
+    const entries = Object.values(data.entries);
+    const dimensions = entries.length > 0 ? entries[0].vector.length : 0;
+    return {
+      totalEntries: entries.length,
+      dimensions,
+    };
   }
 }
 

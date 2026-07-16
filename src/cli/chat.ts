@@ -8,9 +8,11 @@ import { resolveProvider } from './router.js';
 import { showModelPicker } from './model-picker.js';
 import { ContextParser } from '../context/parser.js';
 import { getCache } from '../context/cache.js';
+import { getChatHistory } from '../context/history.js';
 import { logger } from '../utils/logger.js';
 import { Orchestrator } from '../agents/orchestrator.js';
 import { printOrchestrationResult } from './execute.js';
+import type { ProviderType } from '../config/types.js';
 
 /**
  * Patterns that indicate a user wants to CREATE or MODIFY files on disk
@@ -161,6 +163,7 @@ export class ChatCommand extends BaseCommand {
     logger.info(`💡 Tip: Ask me to "create" something and I'll offer to switch to developer mode!\n`);
 
     const history: Array<{ role: string; content: string }> = [];
+    const effectiveModelForHistory = model || this.configManager.getProviderConfig(type as ProviderType).config.model || 'default';
     this.devModeAuto = false;
 
     while (true) {
@@ -196,7 +199,7 @@ export class ChatCommand extends BaseCommand {
 
       const contextStr = history.map((h) => `${h.role}: ${h.content}`).join('\n');
       const cache = getCache();
-      const effectiveModel = model || this.configManager.getProviderConfig(type).config.model || 'default';
+      const effectiveModel = effectiveModelForHistory;
 
       if (cacheEnabled) {
         const cachedResult = await cache.get(message, effectiveModel, type);
@@ -247,6 +250,23 @@ export class ChatCommand extends BaseCommand {
           spinner.fail('Failed to generate response');
           logger.error(String(err));
         }
+      }
+    }
+
+    // Store chat session in history when exiting
+    if (history.length > 0) {
+      try {
+        const historyMessages = history.map((h) => ({
+          role: h.role as 'user' | 'assistant',
+          content: h.content,
+          timestamp: Date.now(),
+        }));
+        const chatHistory = getChatHistory();
+        const sessionId = chatHistory.storeSession(historyMessages, type, effectiveModelForHistory);
+        logger.debug(`Chat session stored: ${sessionId}`);
+      } catch (err) {
+        // Non-critical — history storage failure shouldn't affect user experience
+        logger.debug(`Failed to store chat session: ${err}`);
       }
     }
   }
@@ -336,11 +356,12 @@ export class ChatCommand extends BaseCommand {
       case '/help':
         console.log(`
 Commands:
-  /exit, /quit  Exit the chat
-  /clear        Clear conversation history
-  /info         Show provider & model info
-  /help         Show this help
-  /dev          Switch to developer mode for your next prompt
+  /exit, /quit          Exit the chat
+  /clear                Clear conversation history
+  /info                 Show provider & model info
+  /help                 Show this help
+  /dev                  Toggle developer mode (auto-create files)
+  /search <query>       Search past conversations by keyword
         `.trim());
         break;
       case '/clear':
@@ -357,6 +378,27 @@ Commands:
           logger.info('ℹ️  Developer mode DEACTIVATED — creation requests will ask for confirmation.');
         }
         break;
+      case '/search': {
+        const searchQuery = cmd.slice(8).trim();
+        if (!searchQuery) {
+          console.log('Usage: /search <query>  — e.g., /search authentication');
+          break;
+        }
+        const history = getChatHistory();
+        const results = history.search(searchQuery, 5);
+        if (results.length === 0) {
+          logger.info(`No past conversations found matching "${searchQuery}".`);
+        } else {
+          logger.highlight(`🔍 Past conversations matching "${searchQuery}":`);
+          console.log('');
+          for (const session of results) {
+            console.log(history.formatSessionSummary(session));
+          }
+          console.log('');
+          logger.info('Use `buff history show <session-id>` to view a full conversation.');
+        }
+        break;
+      }
       default:
         console.log(`Unknown command: ${cmd}. Type /help`);
     }

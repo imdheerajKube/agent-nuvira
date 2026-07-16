@@ -14,7 +14,7 @@
  * 10. Optionally store the trajectory in memory
  * 11. Synthesize and return the final result
  *
- * Called by the `agent-baba-d execute` CLI command.
+ * Called by the `agent-nuvira execute` CLI command.
  */
 
 import { existsSync, writeFileSync, mkdirSync } from 'node:fs';
@@ -45,6 +45,49 @@ import { GitHubReleaseAgent } from './agents/github-release-agent.js';
 import { SecurityAgent } from './agents/security-agent.js';
 import { scanForInjections, formatScanReport } from '../security/scanner.js';
 import { buildAgentModelMap } from '../learning/model-router.js';
+import { createReviewFromResult } from '../team/review.js';
+
+// ─── DAG Integration (optional — dashboard may not be built) ─────────────────
+
+/**
+ * Push a DAG update to the live dashboard, if the server is running.
+ * Uses dynamic import so the orchestrator doesn't crash if the dashboard
+ * module hasn't been built or isn't available.
+ */
+let dagModule: {
+  pushDAGUpdate: (update: { pipelineId?: string; pipelineDescription?: string; nodes: Array<{ id: string; agentType: string; status: string; description: string }>; edges: Array<{ from: string; to: string }> }) => void;
+  updateDAGNode: (nodeId: string, update: { status: string; summary?: string }) => void;
+  resetDAG: () => void;
+} | undefined | null = undefined;
+
+async function ensureDAGModule(): Promise<void> {
+  if (dagModule !== undefined) return; // already attempted (null = failed, object = loaded)
+  try {
+    dagModule = await import('../web-dashboard/server.js') as any;
+  } catch {
+    dagModule = null; // dashboard module not available — mark as failed
+  }
+}
+
+async function tryPushDAG(update: {
+  pipelineId?: string;
+  pipelineDescription?: string;
+  nodes: Array<{ id: string; agentType: string; status: string; description: string }>;
+  edges: Array<{ from: string; to: string }>;
+}): Promise<void> {
+  await ensureDAGModule();
+  if (dagModule) dagModule.pushDAGUpdate(update as any);
+}
+
+async function tryUpdateDAGNode(nodeId: string, update: { status: string; summary?: string }): Promise<void> {
+  await ensureDAGModule();
+  if (dagModule) dagModule.updateDAGNode(nodeId, update as any);
+}
+
+async function tryResetDAG(): Promise<void> {
+  await ensureDAGModule();
+  if (dagModule) dagModule.resetDAG();
+}
 
 // ─── Types ──────────────────────────────────────────────────────────────────
 
@@ -62,6 +105,8 @@ export interface OrchestratorOptions {
   agentModels?: Partial<Record<string, string>>;
   /** Enable persistent memory (trajectory storage and retrieval) */
   useMemory?: boolean;
+  /** Auto-create a review bundle instead of applying changes directly */
+  reviewMode?: boolean;
   /** Auto-route each agent to its recommended model from the ModelRouter */
   autoRouteModels?: boolean;
   /** Pre-built task plan to use instead of calling the PlannerAgent (for workflow templates) */
@@ -98,6 +143,8 @@ export interface OrchestrationResult {
   error?: string;
   /** Memory trajectory ID if stored */
   trajectoryId?: string;
+  /** Review bundle ID if review mode was enabled */
+  reviewId?: string;
 }
 
 // ─── Agent Registry ─────────────────────────────────────────────────────────
@@ -263,6 +310,29 @@ export class Orchestrator {
       }
     }
 
+    // ── 4b. Push initial DAG state to dashboard ─────────────────────────
+    if (vault.context.taskPlan.length > 0) {
+      await tryResetDAG();
+      const nodes = vault.context.taskPlan.map((step) => ({
+        id: step.id,
+        agentType: step.agentType,
+        status: 'pending' as const,
+        description: step.description,
+      }));
+      const edges: Array<{ from: string; to: string }> = [];
+      for (const step of vault.context.taskPlan) {
+        for (const dep of step.dependsOn) {
+          edges.push({ from: dep, to: step.id });
+        }
+      }
+      await tryPushDAG({
+        pipelineId: goal,
+        pipelineDescription: goal.slice(0, 80),
+        nodes,
+        edges,
+      });
+    }
+
     // ── 5. Execute tasks ─────────────────────────────────────────────────
     if (options.verbose) logger.highlight('\n⚡ Executing tasks...');
 
@@ -325,15 +395,48 @@ export class Orchestrator {
       }
     }
 
-    // ── 6b. Apply file changes ────────────────────────────────────────────
-    if (!options.dryRun) {
+    // ── 6b. Review mode — create a review bundle instead of applying changes
+    let reviewId: string | undefined;
+    if (options.reviewMode && vault.context.fileChanges.filter(c => c.newContent || c.status === 'deleted').length > 0) {
+      const fileChanges = vault.context.fileChanges.map((c) => ({
+        path: c.path,
+        originalContent: c.originalContent,
+        newContent: c.newContent,
+        status: c.status,
+      }));
+
+      // Build a summary from agent results
+      const summaryLines = agentResults.map((r) => `${r.success ? '✅' : '❌'} ${r.agent}: ${r.summary.slice(0, 120)}`);
+      summaryLines.push('');
+      summaryLines.push(vault.getDiffSummary());
+      const fullSummary = summaryLines.join('\n');
+
+      const review = createReviewFromResult(goal, fileChanges, fullSummary, {
+        provider: options.provider,
+        model: options.model,
+        author: process.env.USER || 'agent-nuvira',
+      });
+
+      reviewId = review.id;
+
+      if (options.verbose) {
+        logger.highlight(`\n📋 Created review bundle: ${review.id}`);
+        logger.info(`   Run \`buff team review show ${review.id}\` to view`);
+        logger.info(`   Run \`buff team review approve ${review.id}\` then \`buff team review merge ${review.id}\` to apply`);
+      }
+    }
+
+    // ── 6c. Apply file changes ────────────────────────────────────────────
+    if (!options.reviewMode && !options.dryRun) {
       const applied = this.applyFileChanges(vault);
       if (applied > 0 && options.verbose) {
         logger.success(`\n   💾 Applied ${applied} file change${applied !== 1 ? 's' : ''} to disk`);
       }
+    } else if (options.verbose && options.reviewMode) {
+      logger.info('   📋 Review mode — changes saved as review bundle instead of written to disk');
     }
 
-    // ── 6c. Collect runner output for display ────────────────────────────
+    // ── 6d. Collect runner output for display ────────────────────────────
     let runOutput: string | undefined;
     const runResult = vault.getMeta<RunResult>('runResult');
     if (runResult) {
@@ -419,6 +522,7 @@ export class Orchestrator {
       tasksCompleted: completed,
       tasksTotal: total,
       trajectoryId,
+      reviewId,
       runOutput,
     });
   }
@@ -579,6 +683,7 @@ export class Orchestrator {
     defaultCallLLM: LLMCallFn,
   ): Promise<void> {
     vault.updateTaskStatus(task.id, 'running');
+    await tryUpdateDAGNode(task.id, { status: 'running' });
 
     // Update spinner text to show which task is currently executing
     if (options.spinner) {
@@ -626,6 +731,10 @@ export class Orchestrator {
       vault.context.onRateLimit = this.createRateLimitHandler(options, agentModel || options.model);
       const result = await agent.execute(vault.context, agentCallLLM);
       vault.updateTaskStatus(task.id, result.success ? 'completed' : 'failed', result.summary);
+      await tryUpdateDAGNode(task.id, {
+        status: result.success ? 'completed' : 'failed',
+        summary: result.summary,
+      });
       agentResults.push({ agent: task.agentType, success: result.success, summary: result.summary });
 
       // Track sandbox path for cleanup
@@ -707,6 +816,7 @@ export class Orchestrator {
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
       vault.updateTaskStatus(task.id, 'failed', msg);
+      await tryUpdateDAGNode(task.id, { status: 'failed', summary: msg });
       agentResults.push({ agent: task.agentType, success: false, summary: `Error: ${msg}` });
     }
   }
@@ -752,6 +862,7 @@ export class Orchestrator {
       runOutput: overrides.runOutput,
       error: overrides.error,
       trajectoryId: overrides.trajectoryId,
+      reviewId: overrides.reviewId,
     };
   }
 }

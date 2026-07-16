@@ -1,0 +1,25 @@
+# Always ignore
+.vscode/**
+.vscode-test/**
+.gitignore
+.git/**
+.github/**
+.vscodeignore
+
+# Source files (compiled output is in out/)
+src/**
+tsconfig.json
+*.map
+
+# Dependencies
+node_modules/**
+
+# Dev artifacts
+package-lock.json
+
+# Keep only these for the VSIX
+!out/**
+!LICENSE
+!README.md
+!CHANGELOG.md
+!icon.png

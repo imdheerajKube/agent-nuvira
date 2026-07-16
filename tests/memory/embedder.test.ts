@@ -2,8 +2,8 @@ import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import { embed, clearEmbeddingCache, embeddingCacheSize, EMBEDDING_DIM } from '../../src/memory/embedder.js';
 
 describe('EMBEDDING_DIM', () => {
-  it('should be 64 dimensions', () => {
-    expect(EMBEDDING_DIM).toBe(64);
+  it('should be 384 dimensions (all-MiniLM-L6-v2)', () => {
+    expect(EMBEDDING_DIM).toBe(384);
   });
 });
 
@@ -24,7 +24,7 @@ describe('embed', () => {
       return JSON.stringify(vec);
     };
 
-    const result = await embed('test text', mockLLM as any);
+    const result = await embed('test text', mockLLM as any, true);
     expect(result).toHaveLength(EMBEDDING_DIM);
     expect(result.every((v) => typeof v === 'number')).toBe(true);
   });
@@ -37,7 +37,7 @@ describe('embed', () => {
       return `Here is the embedding:\n\`\`\`json\n${JSON.stringify(vec)}\n\`\`\`\n`;
     };
 
-    const result = await embed('test', mockLLM as any);
+    const result = await embed('test', mockLLM as any, true);
     expect(result).toHaveLength(EMBEDDING_DIM);
     expect(result.every((v) => v === 0.5)).toBe(true);
   });
@@ -48,7 +48,7 @@ describe('embed', () => {
       return `\`\`\`\n${JSON.stringify(vec)}\n\`\`\``;
     };
 
-    const result = await embed('test', mockLLM as any);
+    const result = await embed('test', mockLLM as any, true);
     expect(result).toHaveLength(EMBEDDING_DIM);
     expect(result.every((v) => v === 0.25)).toBe(true);
   });
@@ -61,7 +61,7 @@ describe('embed', () => {
       return `The embedding vector is ${JSON.stringify(vec)} which represents the semantic meaning.`;
     };
 
-    const result = await embed('test', mockLLM as any);
+    const result = await embed('test', mockLLM as any, true);
     expect(result).toHaveLength(EMBEDDING_DIM);
     expect(result.every((v) => v === 0.75)).toBe(true);
   });
@@ -71,8 +71,8 @@ describe('embed', () => {
   it('should reject array with wrong dimension and fall back', async () => {
     const mockLLM = async () => JSON.stringify([0.1, 0.2, 0.3]); // Only 3 dimensions
 
-    const result = await embed('test', mockLLM as any);
-    // Should fall back to zero vector since 3 != 64
+    const result = await embed('test', mockLLM as any, true);
+    // Should fall back to zero vector since 3 != 384
     expect(result).toHaveLength(EMBEDDING_DIM);
     expect(result.every((v) => v === 0)).toBe(true);
   });
@@ -80,7 +80,7 @@ describe('embed', () => {
   it('should reject non-array response and fall back to zero vector', async () => {
     const mockLLM = async () => 'This is not JSON at all.';
 
-    const result = await embed('test', mockLLM as any);
+    const result = await embed('test', mockLLM as any, true);
     expect(result).toHaveLength(EMBEDDING_DIM);
     expect(result.every((v) => v === 0)).toBe(true);
   });
@@ -91,7 +91,7 @@ describe('embed', () => {
       return JSON.stringify(vec);
     };
 
-    const result = await embed('test', mockLLM as any);
+    const result = await embed('test', mockLLM as any, true);
     expect(result).toHaveLength(EMBEDDING_DIM);
     expect(result.every((v) => v === 0)).toBe(true);
   });
@@ -101,7 +101,7 @@ describe('embed', () => {
   it('should return zero vector when LLM throws', async () => {
     const mockLLM = async () => { throw new Error('API error'); };
 
-    const result = await embed('test text', mockLLM as any);
+    const result = await embed('test text', mockLLM as any, true);
     expect(result).toHaveLength(EMBEDDING_DIM);
     expect(result.every((v) => v === 0)).toBe(true);
   });
@@ -116,8 +116,8 @@ describe('embed', () => {
       return JSON.stringify(vec);
     };
 
-    const result1 = await embed('Hello World', mockLLM as any);
-    const result2 = await embed('hello world', mockLLM as any); // Same text, different case
+    const result1 = await embed('Hello World', mockLLM as any, true);
+    const result2 = await embed('hello world', mockLLM as any, true); // Same text, different case
 
     expect(result1).toEqual(result2);
     expect(callCount).toBe(1); // Should only call LLM once
@@ -130,8 +130,8 @@ describe('embed', () => {
       return JSON.stringify(Array.from({ length: EMBEDDING_DIM }, () => 0.5));
     };
 
-    await embed('first text', mockLLM as any);
-    await embed('second text', mockLLM as any);
+    await embed('first text', mockLLM as any, true);
+    await embed('second text', mockLLM as any, true);
 
     expect(callCount).toBe(2);
   });
@@ -143,9 +143,9 @@ describe('embed', () => {
       return JSON.stringify(Array.from({ length: EMBEDDING_DIM }, () => 0.5));
     };
 
-    await embed('cache me', mockLLM as any);
-    await embed('cache me', mockLLM as any); // Should hit cache
-    await embed('cache me', mockLLM as any); // Should hit cache
+    await embed('cache me', mockLLM as any, true);
+    await embed('cache me', mockLLM as any, true); // Should hit cache
+    await embed('cache me', mockLLM as any, true); // Should hit cache
 
     expect(callCount).toBe(1);
   });
@@ -159,9 +159,9 @@ describe('embed', () => {
       return JSON.stringify(Array.from({ length: EMBEDDING_DIM }, () => 0.5));
     };
 
-    await embed('clearable', mockLLM as any);
+    await embed('clearable', mockLLM as any, true);
     clearEmbeddingCache();
-    await embed('clearable', mockLLM as any);
+    await embed('clearable', mockLLM as any, true);
 
     expect(callCount).toBe(2);
   });
@@ -178,10 +178,10 @@ describe('embed', () => {
     const mockLLM = async () =>
       JSON.stringify(Array.from({ length: EMBEDDING_DIM }, () => 0.5));
 
-    await embed('text-a', mockLLM as any);
+    await embed('text-a', mockLLM as any, true);
     expect(embeddingCacheSize()).toBe(1);
 
-    await embed('text-b', mockLLM as any);
+    await embed('text-b', mockLLM as any, true);
     expect(embeddingCacheSize()).toBe(2);
 
     clearEmbeddingCache();
@@ -197,7 +197,7 @@ describe('embed', () => {
       return `\`\`\`json\n${JSON.stringify(vec)}\n\`\`\``;
     };
 
-    const result = await embed('test', mockLLM as any);
+    const result = await embed('test', mockLLM as any, true);
     expect(result).toHaveLength(EMBEDDING_DIM);
     expect(result[0]).toBeCloseTo(0.33, 2);
   });

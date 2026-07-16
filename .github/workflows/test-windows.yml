@@ -1,7 +1,7 @@
 # Windows CI — runs the test suite on Windows runners to catch cross-platform regressions.
 # Triggered on push/PR to main, and can be run manually.
 #
-# This workflow verifies that agent-baba-d works correctly on Windows,
+# This workflow verifies that agent-nuvira works correctly on Windows,
 # which is critical since the tool uses child_process (execSync), temp directories,
 # path manipulation, and other platform-sensitive operations.
 #

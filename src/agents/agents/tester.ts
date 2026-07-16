@@ -15,6 +15,9 @@ import { execSync } from 'node:child_process';
 
 import { Agent, type AgentContext, type AgentResult } from '../agent.js';
 import type { LLMCallFn } from '../agent.js';
+import { SandboxManager } from '../../sandbox/manager.js';
+import { detectProjectImage } from '../../sandbox/images.js';
+import { getSandboxConfig } from '../../sandbox/types.js';
 
 /** Common directories to exclude when copying to the sandbox */
 const EXCLUDE_DIRS = ['node_modules', '.git', 'dist', '.next', 'coverage', '.cache'];
@@ -100,6 +103,18 @@ export class TesterAgent extends Agent {
    */
   async execute(context: AgentContext, _callLLM: LLMCallFn): Promise<AgentResult> {
     ensureCleanupRegistered();
+
+    // Check if Docker sandbox should be used
+    // Skip if we already tried Docker and it was unavailable
+    const triedDocker = context.metadata._dockerTried === true;
+    const useDocker = !triedDocker && (
+      context.metadata.useDockerSandbox === true ||
+      getSandboxConfig().enabled === true
+    );
+    if (useDocker) {
+      return this.executeWithDocker(context, _callLLM);
+    }
+
     let sandboxPath = '';
 
     try {
@@ -159,6 +174,121 @@ export class TesterAgent extends Agent {
       return {
         success: false,
         summary: 'Test execution failed',
+        error: msg,
+      };
+    }
+  }
+
+  /**
+   * Execute tests inside a Docker sandbox container.
+   * Falls back to filesystem sandbox if Docker is not available.
+   */
+  private async executeWithDocker(context: AgentContext, callLLM: LLMCallFn): Promise<AgentResult> {
+    const sandboxManager = new SandboxManager();
+    let containerId = '';
+
+    try {
+      // Check Docker availability
+      const dockerAvailable = await sandboxManager.isDockerAvailable();
+      if (!dockerAvailable) {
+        // Fall back to filesystem sandbox — prevent infinite loop
+        // by temporarily disabling the Docker sandbox flag
+        if (context.metadata.verboseLogging) {
+          // Docker not available — falling back to filesystem sandbox
+        }
+        // Mark that we tried Docker to prevent infinite loop via config
+        context.metadata._dockerTried = true;
+        return this.execute(context, callLLM);
+      }
+
+      // Detect the right image for the project
+      const image = detectProjectImage(context.workingDirectory);
+
+      if (context.metadata.verboseLogging) {
+        // verbose logging enabled
+      }
+
+      // Create a Docker container for the sandbox
+      containerId = await sandboxManager.createContainer(
+        image.image,
+        {
+          memoryLimit: '1g',
+          cpuLimit: 1,
+          timeoutMs: 300_000,
+          networkAccess: false,
+        },
+      );
+
+      // Copy project files to the container
+      await sandboxManager.copyProjectToContainer(containerId, context.workingDirectory);
+
+      // Apply file changes from context to the container via heredoc
+      for (const change of context.fileChanges) {
+        if (change.status === 'deleted' || !change.newContent) continue;
+        // Use a heredoc to write files with proper newline handling
+        const dir = `$(dirname "${change.path}")`;
+        await sandboxManager.runCommand(
+          containerId,
+          `mkdir -p ${dir} && cat > "${change.path}" << 'BUFFEOF'
+${change.newContent}
+BUFFEOF`,
+          30_000,
+        );
+      }
+
+      // Install dependencies inside the container
+      await sandboxManager.runCommand(
+        containerId,
+        image.installCommand || 'npm install',
+        120_000,
+      );
+
+      // Run tests inside the container
+      const testCommand = this.detectTestCommand(context.workingDirectory);
+      const testResult = await sandboxManager.runCommand(
+        containerId,
+        testCommand,
+        180_000,
+      );
+
+      // Parse test results
+      const parsed = this.parseTestOutput(testResult.stdout);
+
+      // Store test result in context metadata
+      const output = testResult.stdout + (testResult.stderr ? '\n' + testResult.stderr : '');
+      context.metadata['testResult'] = {
+        success: testResult.success,
+        output,
+        exitCode: testResult.exitCode,
+        sandboxPath: `docker:${containerId.slice(0, 12)}`,
+        ...parsed,
+      } as TestResult;
+
+      // Build summary
+      const summaryLines: string[] = [];
+      if (parsed.total !== undefined) {
+        summaryLines.push(`${parsed.passed}/${parsed.total} tests passed`);
+      }
+      summaryLines.push(testResult.success ? '✅ All tests passed (Docker)' : `❌ Tests failed (exit code ${testResult.exitCode})`);
+
+      // Clean up the container
+      await sandboxManager.destroyContainer(containerId).catch(() => {});
+
+      return {
+        success: testResult.success,
+        summary: summaryLines.join(' — '),
+        details: testResult.success ? undefined : `Test output:\n${this.truncateOutput(output, 2000)}`,
+      };
+    } catch (err) {
+      // Clean up on error
+      if (containerId) {
+        await sandboxManager.destroyContainer(containerId).catch(() => {});
+      }
+
+      const msg = err instanceof Error ? err.message : String(err);
+      return {
+        success: false,
+        summary: 'Docker sandbox test execution failed',
         error: msg,
       };
     }

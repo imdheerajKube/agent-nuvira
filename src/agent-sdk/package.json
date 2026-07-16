@@ -1,0 +1,56 @@
+{
+  "name": "@agent-nuvira/sdk",
+  "version": "1.0.1",
+  "description": "Agent-Nuvira SDK — Build custom agents for the Agent-Nuvira multi-agent orchestration system",
+  "type": "module",
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    },
+    "./testing": {
+      "types": "./dist/testing.d.ts",
+      "import": "./dist/testing.js"
+    },
+    "./agent": {
+      "types": "./dist/agent.d.ts",
+      "import": "./dist/agent.js"
+    },
+    "./types": {
+      "types": "./dist/types.d.ts",
+      "import": "./dist/types.js"
+    }
+  },
+  "files": [
+    "dist/",
+    "README.md"
+  ],
+  "scripts": {
+    "build": "tsc",
+    "dev": "tsc --watch",
+    "prepublishOnly": "npm run build"
+  },
+  "keywords": [
+    "agent-nuvira",
+    "sdk",
+    "agents",
+    "multi-agent",
+    "ai",
+    "code-generation"
+  ],
+  "license": "MIT",
+  "author": "Dheeraj Sharma",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/imdheerajKube/agent-nuvira.git"
+  },
+  "engines": {
+    "node": ">=21.7.0"
+  },
+  "dependencies": {},
+  "peerDependencies": {
+    "typescript": ">=5.0.0"
+  }
+}

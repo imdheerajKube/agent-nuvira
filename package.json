@@ -1,12 +1,12 @@
 {
-  "name": "agent-baba-d",
+  "name": "agent-nuvira",
   "version": "1.14.0",
   "description": "Agent-Baba-D: Multi-agent AI coding CLI — plan, write, review, test, and publish code with local models (Ollama) or cloud APIs (Groq, NVIDIA NIM, Google Gemini, OpenRouter)",
   "type": "module",
   "main": "dist/index.js",
   "types": "dist/index.d.ts",
   "bin": {
-    "agent-baba-d": "dist/index.js"
+    "agent-nuvira": "dist/index.js"
   },
   "publishConfig": {
     "access": "public"
@@ -18,6 +18,8 @@
     "test": "vitest run",
     "test:watch": "vitest",
     "test:coverage": "vitest run --coverage",
+    "build:dashboard": "cd src/web-dashboard && npm install --silent 2>/dev/null && npm run build",
+    "build:sdk": "cd src/agent-sdk && npx tsc",
     "prepack": "npm run build"
   },
   "keywords": [
@@ -43,21 +45,23 @@
   "author": "Dheeraj Sharma",
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/imdheerajKube/agent-baba-d.git"
+    "url": "git+https://github.com/imdheerajKube/agent-nuvira.git"
   },
   "bugs": {
-    "url": "https://github.com/imdheerajKube/agent-baba-d/issues"
+    "url": "https://github.com/imdheerajKube/agent-nuvira/issues"
   },
-  "homepage": "https://github.com/imdheerajKube/agent-baba-d#readme",
+  "homepage": "https://github.com/imdheerajKube/agent-nuvira#readme",
   "engines": {
     "node": ">=21.7.0"
   },
   "files": [
     "dist/",
+    "src/web-dashboard/public/",
     "README.md",
     "LICENSE"
   ],
   "dependencies": {
+    "@huggingface/transformers": "^4.2.0",
     "chalk": "^5.3.0",
     "commander": "^12.0.0",
     "freebuff": "^0.0.124",

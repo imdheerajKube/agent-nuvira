@@ -1,6 +1,6 @@
 # Publish — automated release workflow
 #
-# Triggered when a tag matching "v*" is pushed (e.g., v1.13.0).
+# Triggered when a tag matching "v*" is pushed (e.g., v1.14.0).
 # Publishes the package to:
 #   1. npm (public registry)
 #   2. GitHub Packages (under @imdheerajKube scope)
@@ -145,7 +145,7 @@ jobs:
         uses: softprops/action-gh-release@v2
         with:
           generate_release_notes: true
-          name: Agent-Baba-D ${{ github.ref_name }}
+          name: Agent-Nuvira ${{ github.ref_name }}
           body: |
             ## What's Changed
 
@@ -154,16 +154,16 @@ jobs:
             ## Installation
 
             ```bash
-            npm install -g agent-baba-d
+            npm install -g agent-nuvira
             # or update
-            npm update -g agent-baba-d
+            npm update -g agent-nuvira
             ```
 
             ## Quick Links
 
-            - [GitHub Repository](https://github.com/imdheerajKube/agent-baba-d)
-            - [npm Package](https://www.npmjs.com/package/agent-baba-d)
-            - [Documentation](https://github.com/imdheerajKube/agent-baba-d#readme)
+            - [GitHub Repository](https://github.com/imdheerajKube/agent-nuvira)
+            - [npm Package](https://www.npmjs.com/package/agent-nuvira)
+            - [Documentation](https://github.com/imdheerajKube/agent-nuvira#readme)
           draft: false
           prerelease: false
         env:

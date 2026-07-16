@@ -3,6 +3,7 @@ import { InferenceOptions, ProviderConfig } from '../config/types.js';
 import { logger } from '../utils/logger.js';
 import { streamCompletion } from './sse.js';
 import { getModelTags } from './model-catalog.js';
+import { getCostTracker } from '../learning/cost-tracker.js';
 
 const GROQ_BASE_URL = 'https://api.groq.com/openai/v1';
 
@@ -56,7 +57,15 @@ export class GroqAdapter implements InferenceProvider {
     }
 
     const data = (await response.json()) as GroqResponse;
-    return data.choices[0]?.message?.content || '';
+    const content = data.choices[0]?.message?.content || '';
+
+    // Track cost
+    try {
+      const costTracker = getCostTracker();
+      costTracker.recordCallEstimated('groq', model, prompt, content);
+    } catch { /* Non-critical */ }
+
+    return content;
   }
 
   async generateStream(
@@ -75,12 +84,20 @@ export class GroqAdapter implements InferenceProvider {
 
     logger.debug(`Groq: Streaming with model=${model}, temperature=${temperature}, maxTokens=${maxTokens}`);
 
-    return streamCompletion(
+    const fullContent = await streamCompletion(
       `${GROQ_BASE_URL}/chat/completions`,
       { 'Authorization': `Bearer ${apiKey}` },
       { model, messages: [{ role: 'user', content: prompt }], temperature, max_tokens: maxTokens },
       onToken,
     );
+
+    // Track cost for streaming response
+    try {
+      const costTracker = getCostTracker();
+      costTracker.recordCallEstimated('groq', model, prompt, fullContent);
+    } catch { /* Non-critical */ }
+
+    return fullContent;
   }
 
   async isAvailable(): Promise<boolean> {

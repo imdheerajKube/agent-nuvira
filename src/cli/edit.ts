@@ -18,14 +18,15 @@ export class EditCommand extends BaseCommand {
       .option('-p, --provider <provider>', 'Inference provider')
       .option('-m, --model <model>', 'Model to use')
       .option('--dry-run', 'Show proposed changes without modifying the file')
-      .action(async (file: string, options?: { instruction?: string; provider?: string; model?: string; dryRun?: boolean }) => {
+      .option('--review', 'Create a review bundle capturing proposed changes instead of writing directly')
+      .action(async (file: string, options?: { instruction?: string; provider?: string; model?: string; dryRun?: boolean; review?: boolean }) => {
         await this.execute(file, options || {});
       });
 
     return command;
   }
 
-  private async execute(file: string, options?: { instruction?: string; provider?: string; model?: string; dryRun?: boolean }): Promise<void> {
+  private async execute(file: string, options?: { instruction?: string; provider?: string; model?: string; dryRun?: boolean; review?: boolean }): Promise<void> {
     if (!existsSync(file)) {
       logger.error(`File not found: ${file}`);
       return;
@@ -66,6 +67,32 @@ export class EditCommand extends BaseCommand {
       const codeBlockMatch = result.match(/```[\w]*\n([\s\S]*?)```/);
       if (codeBlockMatch) {
         codeResult = codeBlockMatch[1];
+      }
+
+      if (options?.review) {
+        spinner.stop();
+
+        const { createReviewFromResult } = await import('../team/review.js');
+        const review = createReviewFromResult(
+          options.instruction || `Edit ${file}`,
+          [{
+            path: file,
+            originalContent: content,
+            newContent: codeResult,
+            status: 'modified',
+          }],
+          `Edit: ${options.instruction || 'Code improvement'}\n\nModified: ${file}`,
+          {
+            provider: type,
+            model: options.model,
+            author: process.env.USER || 'agent-baba-d',
+          },
+        );
+
+        logger.highlight(`\n📋 Created review bundle: ${review.id}`);
+        logger.info(`   Run \`buff team review show ${review.id}\` to view`);
+        logger.info(`   Run \`buff team review approve ${review.id}\` then \`buff team review merge ${review.id}\` to apply`);
+        return;
       }
 
       writeFileSync(file, codeResult, 'utf-8');

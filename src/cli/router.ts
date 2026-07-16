@@ -8,6 +8,7 @@ const pkg = JSON.parse(readFileSync(fileURLToPath(new URL('../../package.json', 
 import { ProviderFactory } from '../inference/factory.js';
 import { InferenceProvider } from '../inference/interface.js';
 import { ProviderType } from '../config/types.js';
+import { getPluginRegistry } from '../plugins/registry.js';
 import { ChatCommand } from './chat.js';
 import { EditCommand } from './edit.js';
 import { PlanCommand } from './plan.js';
@@ -19,6 +20,18 @@ import { RunCommand } from './run.js';
 import { WorkflowCommand } from './workflow.js';
 import { PluginsCommand } from './plugins.js';
 import { LearnCommand } from './learn.js';
+import { InitCommand } from './init.js';
+import { StatsCommand } from './stats.js';
+import { HistoryCommand } from './history.js';
+import { BenchmarkCommand } from './benchmark.js';
+import { SandboxCommand } from './sandbox.js';
+import { DoctorCommand } from './doctor.js';
+import { MemoryCommand } from './memory.js';
+import { DashboardCommand } from './dashboard.js';
+import { AgentCommand } from './agent.js';
+import { FederationCommand } from './federation.js';
+import { TeamCommand } from './team.js';
+import { SDKCommand } from './sdk.js';
 import { logger } from '../utils/logger.js';
 
 /**
@@ -65,6 +78,47 @@ export function createCLI(): Command {
   const learnCmd = new LearnCommand();
   program.addCommand(learnCmd.create());
 
+  // Register new Phase 1 commands
+  const initCmd = new InitCommand();
+  program.addCommand(initCmd.create());
+
+  const statsCmd = new StatsCommand();
+  program.addCommand(statsCmd.create());
+
+  const historyCmd = new HistoryCommand();
+  program.addCommand(historyCmd.create());
+
+  // Register Phase 2 commands
+  const benchmarkCmd = new BenchmarkCommand();
+  program.addCommand(benchmarkCmd.create());
+
+  const sandboxCmd = new SandboxCommand();
+  program.addCommand(sandboxCmd.create());
+
+  // Register Phase 2.5 new commands
+  const doctorCmd = new DoctorCommand();
+  program.addCommand(doctorCmd.create());
+
+  const memoryCmd = new MemoryCommand();
+  program.addCommand(memoryCmd.create());
+
+  // Register Phase 3.3 new commands
+  const dashboardCmd = new DashboardCommand();
+  program.addCommand(dashboardCmd.create());
+
+  const agentCmd = new AgentCommand();
+  program.addCommand(agentCmd.create());
+
+  const federationCmd = new FederationCommand();
+  program.addCommand(federationCmd.create());
+
+  const teamCmd = new TeamCommand();
+  program.addCommand(teamCmd.create());
+
+  // Register Phase 3.6 commands
+  const sdkCmd = new SDKCommand();
+  program.addCommand(sdkCmd.create());
+
   // Default action: show help
   program.action(() => {
     program.help();
@@ -74,29 +128,49 @@ export function createCLI(): Command {
 }
 
 /**
- * Resolve the inference provider from CLI options
+ * Check if a provider type is one of the built-in types.
+ */
+function isBuiltInProvider(type: string): boolean {
+  return ['local', 'nim', 'gemini', 'openrouter', 'groq'].includes(type);
+}
+
+/**
+ * Resolve the inference provider from CLI options.
+ *
+ * Supports both built-in providers (local, nim, gemini, openrouter, groq)
+ * and auto-discovered plugin providers from ~/.buff/plugins/.
+ *
+ * For plugin providers, the type string returned is the plugin's provider type.
  */
 export function resolveProvider(
   configManager: ConfigManager,
   providerOption?: string,
-): { type: ProviderType; provider: InferenceProvider } {
+): { type: string; provider: InferenceProvider } {
   const rawType = providerOption || configManager.getAll().defaultProvider;
 
-  // Validate that the provider type is a known built-in type
-  const validTypes: ProviderType[] = ['local', 'nim', 'gemini', 'openrouter', 'groq'];
-
-  if (!validTypes.includes(rawType as ProviderType)) {
-    logger.warn(`Unknown provider '${rawType}'. Falling back to '${configManager.getAll().defaultProvider}'`);
+  // Check if it's a built-in provider
+  if (isBuiltInProvider(rawType)) {
+    const { config } = configManager.getProviderConfig(rawType as ProviderType);
+    const provider = ProviderFactory.createProvider(rawType, config);
+    logger.debug(`Resolved provider: ${rawType} (${provider.name})`);
+    return { type: rawType, provider };
   }
 
-  const providerType = validTypes.includes(rawType as ProviderType)
-    ? (rawType as ProviderType)
-    : configManager.getAll().defaultProvider;
+  // Check plugin registry for auto-discovered providers
+  const registry = getPluginRegistry();
+  if (registry.hasPlugin(rawType)) {
+    const plugin = registry.getPlugin(rawType)!;
+    const config = configManager.getAll().providers[rawType as ProviderType] || {};
+    const provider = plugin.createProvider(config);
+    logger.debug(`Resolved plugin provider: ${rawType} (${plugin.metadata.name})`);
+    return { type: rawType, provider };
+  }
 
-  const { config } = configManager.getProviderConfig(providerType);
-  const provider = ProviderFactory.createProvider(providerType, config);
-
-  logger.debug(`Resolved provider: ${providerType} (${provider.name})`);
-
-  return { type: providerType, provider };
+  // Unknown provider — warn and fall back to default
+  logger.warn(`Unknown provider '${rawType}'. Falling back to '${configManager.getAll().defaultProvider}'`);
+  const fallbackType = configManager.getAll().defaultProvider;
+  const { config } = configManager.getProviderConfig(fallbackType);
+  const provider = ProviderFactory.createProvider(fallbackType, config);
+  logger.debug(`Resolved provider (fallback): ${fallbackType} (${provider.name})`);
+  return { type: fallbackType, provider };
 }

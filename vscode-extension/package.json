@@ -1,0 +1,260 @@
+{
+  "name": "agent-nuvira-vscode",
+  "displayName": "Agent-Nuvira",
+  "description": "Multi-agent AI coding assistant — plan, write, review, test, and publish code with local or cloud AI models",
+  "version": "0.2.0",
+  "publisher": "dheerajsharma",
+  "license": "MIT",
+  "icon": "icon.png",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/imdheerajKube/agent-nuvira.git"
+  },
+  "bugs": {
+    "url": "https://github.com/imdheerajKube/agent-nuvira/issues"
+  },
+  "homepage": "https://github.com/imdheerajKube/agent-nuvira/blob/main/vscode-extension/README.md",
+  "engines": {
+    "vscode": "^1.85.0"
+  },
+  "categories": [
+    "Programming Languages",
+    "Machine Learning",
+    "Other"
+  ],
+  "keywords": [
+    "ai",
+    "code-generation",
+    "multi-agent",
+    "llm",
+    "ollama",
+    "groq",
+    "gemini",
+    "code-review",
+    "agent",
+    "openrouter",
+    "nvidia-nim"
+  ],
+  "activationEvents": [
+    "onCommand:agent-nuvira.executeGoal",
+    "onCommand:agent-nuvira.quickFix",
+    "onCommand:agent-nuvira.reviewFile",
+    "onCommand:agent-nuvira.explainCode",
+    "onCommand:agent-nuvira.generateTest",
+    "onCommand:agent-nuvira.showPanel",
+    "onCommand:agent-nuvira.runWorkflow",
+    "onView:agent-nuvira.agentProgress"
+  ],
+  "main": "./out/extension.js",
+  "scripts": {
+    "vscode:prepublish": "npm run compile",
+    "compile": "tsc -p ./tsconfig.json",
+    "watch": "tsc -watch -p ./tsconfig.json",
+    "lint": "tsc --noEmit -p ./tsconfig.json",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "package": "npx @vscode/vsce package --out agent-nuvira-vscode.vsix",
+    "publish": "npx @vscode/vsce publish",
+    "publish:openvsx": "npx ovsx publish agent-nuvira-vscode.vsix"
+  },
+  "contributes": {
+    "commands": [
+      {
+        "command": "agent-nuvira.executeGoal",
+        "title": "Agent-Nuvira: Execute Goal...",
+        "shortTitle": "Execute Goal",
+        "description": "Run a multi-agent pipeline to accomplish a task"
+      },
+      {
+        "command": "agent-nuvira.quickFix",
+        "title": "Agent-Nuvira: Quick Fix",
+        "shortTitle": "Quick Fix",
+        "description": "Apply a quick agent fix to the current file"
+      },
+      {
+        "command": "agent-nuvira.reviewFile",
+        "title": "Agent-Nuvira: Review File",
+        "shortTitle": "Review File",
+        "description": "Review the current file for bugs and improvements"
+      },
+      {
+        "command": "agent-nuvira.explainCode",
+        "title": "Agent-Nuvira: Explain Code",
+        "shortTitle": "Explain Code",
+        "description": "Explain the selected code in detail"
+      },
+      {
+        "command": "agent-nuvira.generateTest",
+        "title": "Agent-Nuvira: Generate Test",
+        "shortTitle": "Generate Test",
+        "description": "Generate unit tests for the current file or selection"
+      },
+      {
+        "command": "agent-nuvira.showPanel",
+        "title": "Agent-Nuvira: Show Agent Panel",
+        "shortTitle": "Agent Panel",
+        "description": "Open the agent progress panel"
+      },
+      {
+        "command": "agent-nuvira.runWorkflow",
+        "title": "Agent-Nuvira: Run Workflow...",
+        "shortTitle": "Run Workflow",
+        "description": "Run a workflow template"
+      },
+      {
+        "command": "agent-nuvira.acceptChanges",
+        "title": "Agent-Nuvira: Accept All Changes",
+        "shortTitle": "Accept Changes",
+        "description": "Accept all proposed agent changes"
+      },
+      {
+        "command": "agent-nuvira.rejectChanges",
+        "title": "Agent-Nuvira: Reject All Changes",
+        "shortTitle": "Reject Changes",
+        "description": "Reject all proposed agent changes"
+      }
+    ],
+    "keybindings": [
+      {
+        "command": "agent-nuvira.quickFix",
+        "key": "ctrl+shift+a q",
+        "mac": "cmd+shift+a q",
+        "when": "editorTextFocus"
+      },
+      {
+        "command": "agent-nuvira.executeGoal",
+        "key": "ctrl+shift+a e",
+        "mac": "cmd+shift+a e",
+        "when": "editorTextFocus"
+      },
+      {
+        "command": "agent-nuvira.reviewFile",
+        "key": "ctrl+shift+a r",
+        "mac": "cmd+shift+a r",
+        "when": "editorTextFocus"
+      },
+      {
+        "command": "agent-nuvira.showPanel",
+        "key": "ctrl+shift+a p",
+        "mac": "cmd+shift+a p",
+        "when": "editorTextFocus"
+      },
+      {
+        "command": "agent-nuvira.acceptChanges",
+        "key": "ctrl+shift+a a",
+        "mac": "cmd+shift+a a",
+        "when": "agent-nuvira.hasChanges"
+      },
+      {
+        "command": "agent-nuvira.rejectChanges",
+        "key": "ctrl+shift+a r",
+        "mac": "cmd+shift+a r",
+        "when": "agent-nuvira.hasChanges"
+      }
+    ],
+    "menus": {
+      "explorer/context": [
+        {
+          "command": "agent-nuvira.reviewFile",
+          "when": "resourceExtname =~ /\\.(ts|js|tsx|jsx|py|go|rs|java|rb|php|vue|svelte)$/",
+          "group": "agent-nuvira@1"
+        },
+        {
+          "command": "agent-nuvira.quickFix",
+          "when": "resourceExtname =~ /\\.(ts|js|tsx|jsx|py|go|rs|java|rb|php|vue|svelte)$/",
+          "group": "agent-nuvira@2"
+        },
+        {
+          "command": "agent-nuvira.generateTest",
+          "when": "resourceExtname =~ /\\.(ts|js|tsx|jsx|py|go|rs|java|rb|php)$/",
+          "group": "agent-nuvira@3"
+        }
+      ],
+      "editor/context": [
+        {
+          "command": "agent-nuvira.explainCode",
+          "when": "editorHasSelection",
+          "group": "agent-nuvira@1"
+        },
+        {
+          "command": "agent-nuvira.quickFix",
+          "when": "editorTextFocus",
+          "group": "agent-nuvira@2"
+        },
+        {
+          "command": "agent-nuvira.generateTest",
+          "when": "editorTextFocus",
+          "group": "agent-nuvira@3"
+        }
+      ],
+      "editor/title/context": [
+        {
+          "command": "agent-nuvira.reviewFile",
+          "when": "resourceExtname =~ /\\.(ts|js|tsx|jsx|py|go|rs|java|rb|php)$/",
+          "group": "agent-nuvira@1"
+        }
+      ]
+    },
+    "viewsContainers": {
+      "activitybar": [
+        {
+          "id": "agent-nuvira",
+          "title": "Agent-Nuvira",
+          "icon": "$(robot)"
+        }
+      ]
+    },
+    "views": {
+      "agent-nuvira": [
+        {
+          "type": "webview",
+          "id": "agent-nuvira.agentProgress",
+          "name": "Agent Progress"
+        }
+      ]
+    },
+    "configuration": {
+      "title": "Agent-Nuvira",
+      "properties": {
+        "agent-nuvira.cliPath": {
+          "type": "string",
+          "default": "agent-nuvira",
+          "description": "Path to the 'agent-nuvira' CLI executable. Use 'npx agent-nuvira' or a full path if not globally installed."
+        },
+        "agent-nuvira.defaultProvider": {
+          "type": "string",
+          "default": "",
+          "description": "Default AI provider to use (overrides config file). Leave empty to use the configured default."
+        },
+        "agent-nuvira.defaultModel": {
+          "type": "string",
+          "default": "",
+          "description": "Default model to use (overrides config file). Leave empty to use the configured default."
+        },
+        "agent-nuvira.autoApplyChanges": {
+          "type": "boolean",
+          "default": false,
+          "description": "Automatically apply changes suggested by agents without previewing diffs."
+        },
+        "agent-nuvira.maxTokens": {
+          "type": "integer",
+          "default": 4096,
+          "description": "Maximum tokens for agent responses."
+        },
+        "agent-nuvira.showProgressPanel": {
+          "type": "boolean",
+          "default": true,
+          "description": "Automatically show the agent progress panel when an agent task starts."
+        }
+      }
+    }
+  },
+  "devDependencies": {
+    "@types/node": "^20.11.0",
+    "@types/vscode": "^1.85.0",
+    "@vscode/vsce": "^3.9.2",
+    "ovsx": "^1.0.2",
+    "typescript": "^7.0.2",
+    "vitest": "^3.2.7"
+  }
+}

@@ -24,9 +24,9 @@ function createTestConfigManager(): ConfigManager {
 // ─── Template Definitions ───────────────────────────────────────────────────
 
 describe('getWorkflowTemplates', () => {
-  it('should return all 4 built-in templates', () => {
+  it('should return all 10 built-in templates', () => {
     const templates = getWorkflowTemplates();
-    expect(templates).toHaveLength(4);
+    expect(templates).toHaveLength(10);
   });
 
   it('should return a new array each time (shallow copy)', () => {
@@ -38,9 +38,20 @@ describe('getWorkflowTemplates', () => {
     expect(first[0]).toBe(second[0]);
   });
 
-  it('should contain quick-fix, create-and-run, feature-implement, and publish-release', () => {
+  it('should contain all 10 template IDs', () => {
     const ids = getWorkflowTemplates().map((t) => t.id).sort();
-    expect(ids).toEqual(['create-and-run', 'feature-implement', 'publish-release', 'quick-fix']);
+    expect(ids).toEqual([
+      'api-scaffold',
+      'bug-hunt',
+      'code-review',
+      'create-and-run',
+      'feature-implement',
+      'publish-release',
+      'quick-fix',
+      'refactor-module',
+      'security-audit',
+      'test-generation',
+    ]);
   });
 });
 

@@ -1,14 +1,14 @@
-# Buff CLI — `agent-baba-d`
+# Buff CLI — `agent-nuvira`
 
 **Flexible AI inference tool** — run large language models locally (Ollama) or route to cloud APIs (Groq, NVIDIA NIM, Google Gemini, OpenRouter) through a unified CLI. Discover available models, chat interactively, edit files with AI, and plan codebase changes — all from the terminal.
 
 ```bash
 # Quick examples
-agent-baba-d chat "explain recursion in Rust"
-agent-baba-d models --provider groq
-agent-baba-d edit main.go --instruction "add input validation"
-agent-baba-d plan . --task "implement user authentication"
-agent-baba-d config list
+agent-nuvira chat "explain recursion in Rust"
+agent-nuvira models --provider groq
+agent-nuvira edit main.go --instruction "add input validation"
+agent-nuvira plan . --task "implement user authentication"
+agent-nuvira config list
 ```
 
 ---
@@ -16,11 +16,11 @@ agent-baba-d config list
 ## Features
 
 - **Unified interface** across 5 providers: local (Ollama, HuggingFace, GGML), Groq, NVIDIA NIM, Google Gemini, and OpenRouter
-- **Model discovery** — `agent-baba-d models` lists available models from any configured provider, with search/filter support
+- **Model discovery** — `agent-nuvira models` lists available models from any configured provider, with search/filter support
 - **Interactive chat** with conversation history, file context, and session commands
 - **AI-assisted file editing** with dry-run mode for safe previews
 - **Codebase planning** that analyzes directory structure and generates implementation plans
-- **Multi-agent orchestration** — `agent-baba-d execute "goal"` runs a pipeline of planner, gatherer, writer, reviewer, tester, and more
+- **Multi-agent orchestration** — `agent-nuvira execute "goal"` runs a pipeline of planner, gatherer, writer, reviewer, tester, and more
 - **Response caching** via SQLite to reduce costs and latency
 - **Plugin system** for adding custom inference providers
 - **Configuration** via JSON config file + environment variables
@@ -39,10 +39,10 @@ agent-baba-d config list
 
 ```bash
 # Install globally
-npm install -g agent-baba-d
+npm install -g agent-nuvira
 
 # Or clone and build from source
-git clone https://github.com/imdheerajKube/agent-baba-d.git buff
+git clone https://github.com/imdheerajKube/agent-nuvira.git buff
 cd buff
 npm install
 npm run build
@@ -52,13 +52,13 @@ npm link
 ### Verify
 
 ```bash
-agent-baba-d --help
+agent-nuvira --help
 ```
 
 You should see:
 
 ```
-Usage: agent-baba-d [options] [command]
+Usage: agent-nuvira [options] [command]
 
 Flexible AI inference CLI tool — local models & cloud APIs
 
@@ -143,16 +143,16 @@ You can inspect and modify it through the CLI:
 
 ```bash
 # Show full configuration
-agent-baba-d config
+agent-nuvira config
 
 # Set the default provider
-agent-baba-d config set defaultProvider gemini
+agent-nuvira config set defaultProvider gemini
 
 # Set a provider's model
-agent-baba-d config set providers.nim.model "meta/llama-3.1-8b-instruct"
+agent-nuvira config set providers.nim.model "meta/llama-3.1-8b-instruct"
 
 # List all providers with their status
-agent-baba-d config list
+agent-nuvira config list
 ```
 
 ### Default Configuration
@@ -216,35 +216,35 @@ OPENROUTER_API_KEY=sk-or-v1-xxxxxxxxxxxxxxxxxxxxxxxxxxxx
 
 ## CLI Commands
 
-### `agent-baba-d models` — Model Discovery (New in v1.1.0)
+### `agent-nuvira models` — Model Discovery (New in v1.1.0)
 
 List available models from any configured provider. Query each provider's model catalog without leaving the terminal.
 
 ```bash
 # List models from the default provider
-agent-baba-d models
+agent-nuvira models
 
 # List models from a specific provider
-agent-baba-d models --provider nim
-agent-baba-d models --provider groq
-agent-baba-d models --provider openrouter
+agent-nuvira models --provider nim
+agent-nuvira models --provider groq
+agent-nuvira models --provider openrouter
 
 # Search for models by keyword
-agent-baba-d models --search deepseek
-agent-baba-d models --search llama
+agent-nuvira models --search deepseek
+agent-nuvira models --search llama
 
 # Show all providers (even unconfigured ones)
-agent-baba-d models --all
+agent-nuvira models --all
 ```
 
 **Examples:**
 
 ```bash
 # See all models on Groq
-agent-baba-d models --provider groq
+agent-nuvira models --provider groq
 
 # Find DeepSeek models across all configured providers
-agent-baba-d models --search deepseek
+agent-nuvira models --search deepseek
 
 # Output:
 # ════════════════════════════════════════════
@@ -263,31 +263,31 @@ agent-baba-d models --search deepseek
 Use a discovered model immediately:
 
 ```bash
-agent-baba-d chat --provider groq --model deepseek-ai/deepseek-v4-flash
-agent-baba-d edit src/server.ts --provider openrouter --model openai/gpt-4o
+agent-nuvira chat --provider groq --model deepseek-ai/deepseek-v4-flash
+agent-nuvira edit src/server.ts --provider openrouter --model openai/gpt-4o
 ```
 
 ---
 
-### `agent-baba-d chat` — Interactive Chat
+### `agent-nuvira chat` — Interactive Chat
 
 Start a terminal-based chat session with any provider.
 
 ```bash
 # Interactive mode (default provider)
-agent-baba-d chat
+agent-nuvira chat
 
 # One-shot prompt
-agent-baba-d chat "what is the difference between TCP and UDP?"
+agent-nuvira chat "what is the difference between TCP and UDP?"
 
 # Specify provider and model
-agent-baba-d chat --provider gemini --model gemini-2.0-flash-exp
+agent-nuvira chat --provider gemini --model gemini-2.0-flash-exp
 
 # Include a file as context
-agent-baba-d chat --file ./src/main.ts "explain this code"
+agent-nuvira chat --file ./src/main.ts "explain this code"
 
 # Disable caching
-agent-baba-d chat --no-cache
+agent-nuvira chat --no-cache
 ```
 
 **Interactive commands** within a chat session:
@@ -301,42 +301,42 @@ agent-baba-d chat --no-cache
 
 ---
 
-### `agent-baba-d edit` — AI-Assisted File Editing
+### `agent-nuvira edit` — AI-Assisted File Editing
 
 Edit a file using natural language instructions. The AI reads the file, applies your instruction, and writes the result back.
 
 ```bash
 # Edit with default instruction ("Review and improve this code")
-agent-baba-d edit src/server.ts
+agent-nuvira edit src/server.ts
 
 # Provide a specific instruction
-agent-baba-d edit src/server.ts --instruction "add rate limiting middleware"
+agent-nuvira edit src/server.ts --instruction "add rate limiting middleware"
 
 # Use a specific provider
-agent-baba-d edit src/server.ts --provider openrouter --model openai/gpt-4o
+agent-nuvira edit src/server.ts --provider openrouter --model openai/gpt-4o
 
 # Preview changes without modifying the file
-agent-baba-d edit src/server.ts --instruction "add error handling" --dry-run
+agent-nuvira edit src/server.ts --instruction "add error handling" --dry-run
 ```
 
 ---
 
-### `agent-baba-d plan` — Implementation Plans
+### `agent-nuvira plan` — Implementation Plans
 
 Analyze a directory or file and generate a structured implementation plan.
 
 ```bash
 # Plan for the current directory
-agent-baba-d plan
+agent-nuvira plan
 
 # Plan for a specific target with a task description
-agent-baba-d plan ./src --task "add user authentication with JWT"
+agent-nuvira plan ./src --task "add user authentication with JWT"
 
 # Use a cloud provider for complex planning
-agent-baba-d plan . --task "refactor to microservices" --provider gemini
+agent-nuvira plan . --task "refactor to microservices" --provider gemini
 
 # Verbose mode shows the full context sent to the model
-agent-baba-d plan -v
+agent-nuvira plan -v
 ```
 
 The plan includes:
@@ -349,37 +349,37 @@ The plan includes:
 
 ---
 
-### `agent-baba-d config` — Configuration Management
+### `agent-nuvira config` — Configuration Management
 
 ```bash
 # Show full config
-agent-baba-d config
+agent-nuvira config
 
 # Set a value
-agent-baba-d config set defaultProvider openrouter
+agent-nuvira config set defaultProvider openrouter
 
 # Get a specific value
-agent-baba-d config get providers.nim.model
+agent-nuvira config get providers.nim.model
 
 # List all providers with their status
-agent-baba-d config list
+agent-nuvira config list
 
 # Initialize (show defaults)
-agent-baba-d config init
+agent-nuvira config init
 ```
 
 ---
 
-### `agent-baba-d cache` — Cache Management
+### `agent-nuvira cache` — Cache Management
 
 Inference responses are cached in a local SQLite database (`~/.buff/cache.db`) with a default TTL of 1 hour.
 
 ```bash
 # Show cache statistics
-agent-baba-d cache stats
+agent-nuvira cache stats
 
 # Clear all cached responses
-agent-baba-d cache clear
+agent-nuvira cache clear
 ```
 
 ---
@@ -398,7 +398,7 @@ ollama serve
 ollama pull llama2
 
 # Use with the CLI
-agent-baba-d chat --provider local --model llama2
+agent-nuvira chat --provider local --model llama2
 ```
 
 **Runners:**
@@ -412,8 +412,8 @@ agent-baba-d chat --provider local --model llama2
 Configure the runner:
 
 ```bash
-agent-baba-d config set providers.local.runner huggingface
-agent-baba-d config set providers.local.model "microsoft/phi-2"
+agent-nuvira config set providers.local.runner huggingface
+agent-nuvira config set providers.local.model "microsoft/phi-2"
 ```
 
 ### Groq
@@ -425,14 +425,14 @@ Connects to **Groq** — the fastest inference API for open-source models, runni
 export GROQ_API_KEY="gsk_..."
 
 # List available models (Llama, Mixtral, Gemma, DeepSeek, and more)
-agent-baba-d models --provider groq
+agent-nuvira models --provider groq
 
 # Chat with any model
-agent-baba-d chat --provider groq --model llama-3.3-70b-versatile
-agent-baba-d chat --provider groq --model deepseek-ai/deepseek-v4-flash
+agent-nuvira chat --provider groq --model llama-3.3-70b-versatile
+agent-nuvira chat --provider groq --model deepseek-ai/deepseek-v4-flash
 
 # Edit with Groq's fast inference
-agent-baba-d edit src/server.ts --provider groq --model llama-3.3-70b-versatile
+agent-nuvira edit src/server.ts --provider groq --model llama-3.3-70b-versatile
 ```
 
 The Groq adapter uses `https://api.groq.com/openai/v1` by default.
@@ -448,17 +448,17 @@ Connects to the **NVIDIA NIM** OpenAI-compatible API at `https://integrate.api.n
 export NVIDIA_NIM_API_KEY="nvapi-..."
 
 # List available models (121 models)
-agent-baba-d models --provider nim
+agent-nuvira models --provider nim
 
 # Chat with any model
-agent-baba-d chat --provider nim --model meta/llama-3.1-8b-instruct
-agent-baba-d chat --provider nim --model deepseek-ai/deepseek-v4-flash
+agent-nuvira chat --provider nim --model meta/llama-3.1-8b-instruct
+agent-nuvira chat --provider nim --model deepseek-ai/deepseek-v4-flash
 ```
 
 The NIM adapter uses `https://integrate.api.nvidia.com/v1` by default. You can override the base URL for self-hosted NIM deployments:
 
 ```bash
-agent-baba-d config set providers.nim.baseUrl "http://your-nim-host:8000/v1"
+agent-nuvira config set providers.nim.baseUrl "http://your-nim-host:8000/v1"
 ```
 
 ### Google Gemini
@@ -470,7 +470,7 @@ Connects to the **Google Gemini API** free tier.
 export GEMINI_API_KEY="AIzaSy..."
 
 # Use it (supports 8K+ token context)
-agent-baba-d chat --provider gemini --model gemini-2.0-flash-exp
+agent-nuvira chat --provider gemini --model gemini-2.0-flash-exp
 ```
 
 ### OpenRouter
@@ -482,37 +482,37 @@ Routes through **OpenRouter** for access to 200+ models from multiple providers.
 export OPENROUTER_API_KEY="sk-or-v1-..."
 
 # List available models
-agent-baba-d models --provider openrouter
+agent-nuvira models --provider openrouter
 
 # Use a specific model
-agent-baba-d chat --provider openrouter --model openai/gpt-4o
-agent-baba-d chat --provider openrouter --model anthropic/claude-3-haiku
+agent-nuvira chat --provider openrouter --model openai/gpt-4o
+agent-nuvira chat --provider openrouter --model anthropic/claude-3-haiku
 ```
 
 ---
 
-## Multi-Agent Orchestration (`agent-baba-d execute`)
+## Multi-Agent Orchestration (`agent-nuvira execute`)
 
 The `execute` command runs an autonomous multi-agent pipeline that can plan, gather context, write code, review changes, run tests, and publish — all from a single goal.
 
 ```bash
 # Execute a multi-agent pipeline
-agent-baba-d execute "add JWT authentication to the Express app"
+agent-nuvira execute "add JWT authentication to the Express app"
 
 # With verbose logging to see each agent's work
-agent-baba-d execute "add a health check endpoint" --verbose
+agent-nuvira execute "add a health check endpoint" --verbose
 
 # Use a specific provider for all agents
-agent-baba-d execute "refactor the database layer" --provider groq
+agent-nuvira execute "refactor the database layer" --provider groq
 
 # Dry-run mode (shows what would change without writing)
-agent-baba-d execute "add rate limiting" --dry-run
+agent-nuvira execute "add rate limiting" --dry-run
 
 # Configure models per agent type
-agent-baba-d execute "add tests" --agent-model planner=gemini --agent-model writer=groq
+agent-nuvira execute "add tests" --agent-model planner=gemini --agent-model writer=groq
 
 # Use persistent memory across sessions
-agent-baba-d execute "fix the login bug" --memory
+agent-nuvira execute "fix the login bug" --memory
 ```
 
 The pipeline runs these agents in sequence (with parallelization where possible):
@@ -607,13 +607,13 @@ Adapter Adapter Adapter   Adapter      Adapter
 
 ```bash
 # Step 1: See what's available on Groq
-agent-baba-d models --provider groq
+agent-nuvira models --provider groq
 
 # Step 2: Narrow down by keyword
-agent-baba-d models --search deepseek
+agent-nuvira models --search deepseek
 
 # Step 3: Chat with a found model
-agent-baba-d chat --provider groq --model deepseek-ai/deepseek-v4-flash
+agent-nuvira chat --provider groq --model deepseek-ai/deepseek-v4-flash
 ```
 
 ### Hybrid Provider Usage
@@ -622,29 +622,29 @@ Use different providers for different tasks:
 
 ```bash
 # Use local models for quick, small edits
-agent-baba-d edit README.md --instruction "fix typos" --provider local
+agent-nuvira edit README.md --instruction "fix typos" --provider local
 
 # Use Groq for fast code generation
-agent-baba-d edit src/routes.ts --instruction "add validation" --provider groq
+agent-nuvira edit src/routes.ts --instruction "add validation" --provider groq
 
 # Use cloud models for complex planning
-agent-baba-d plan . --task "design the database schema" --provider gemini
+agent-nuvira plan . --task "design the database schema" --provider gemini
 
 # Use OpenRouter for diverse model selection
-agent-baba-d chat --provider openrouter --model openai/gpt-4o
+agent-nuvira chat --provider openrouter --model openai/gpt-4o
 ```
 
 ### Multi-Agent Pipeline
 
 ```bash
 # Let the multi-agent system handle everything
-agent-baba-d execute "add input validation for all API routes"
+agent-nuvira execute "add input validation for all API routes"
 
 # With verbose logging to see each step
-agent-baba-d execute "create a health check endpoint" --verbose
+agent-nuvira execute "create a health check endpoint" --verbose
 
 # Use Groq for fast agent execution
-agent-baba-d execute "refactor login logic" --provider groq
+agent-nuvira execute "refactor login logic" --provider groq
 ```
 
 ---
@@ -658,8 +658,8 @@ The plugin system allows you to add custom inference providers without modifying
 Create a class that implements the `InferenceProvider` interface:
 
 ```typescript
-import { InferenceProvider } from 'agent-baba-d';
-import { InferenceOptions, ProviderConfig } from 'agent-baba-d';
+import { InferenceProvider } from 'agent-nuvira';
+import { InferenceOptions, ProviderConfig } from 'agent-nuvira';
 
 export class AnthropicAdapter implements InferenceProvider {
   readonly name = 'Anthropic';
@@ -712,7 +712,7 @@ export class AnthropicAdapter implements InferenceProvider {
 ### Step 2: Create a Plugin Wrapper
 
 ```typescript
-import { ProviderPlugin, ProviderConfig, PluginMetadata } from 'agent-baba-d';
+import { ProviderPlugin, ProviderConfig, PluginMetadata } from 'agent-nuvira';
 import { AnthropicAdapter } from './anthropic-adapter';
 
 export const AnthropicPlugin: ProviderPlugin = {
@@ -738,7 +738,7 @@ export const AnthropicPlugin: ProviderPlugin = {
 At your application's entry point:
 
 ```typescript
-import { getPluginRegistry } from 'agent-baba-d';
+import { getPluginRegistry } from 'agent-nuvira';
 import { AnthropicPlugin } from './anthropic-plugin';
 
 const registry = getPluginRegistry();
@@ -766,7 +766,7 @@ Add the provider to your `buffconfig.json`:
 Then use it:
 
 ```bash
-agent-baba-d chat --provider anthropic
+agent-nuvira chat --provider anthropic
 ```
 
 > **Note:** The plugin system is a *programmatic* API. To make plugins load automatically from a directory (discovery), you would add a plugin loader script that scans a `~/.buff/plugins/` directory and registers any plugins found.
@@ -778,7 +778,7 @@ agent-baba-d chat --provider anthropic
 ### Setup
 
 ```bash
-git clone https://github.com/imdheerajKube/agent-baba-d.git
+git clone https://github.com/imdheerajKube/agent-nuvira.git
 cd buff
 npm install
 ```
@@ -882,7 +882,7 @@ npx tsc --noEmit
 - [ ] **Auto-discovery plugin loader** — scan `~/.buff/plugins/` for `.js` plugin files
 - [ ] **Hybrid routing** — automatically route small prompts to local models and complex ones to cloud
 - [ ] **Local telemetry** — usage logs stored locally (no server upload)
-- [ ] **Provider health checks** — `agent-baba-d doctor` to verify all configured providers
+- [ ] **Provider health checks** — `agent-nuvira doctor` to verify all configured providers
 
 ---
 

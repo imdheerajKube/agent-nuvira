@@ -105,8 +105,19 @@ export async function getMemoryStats(): Promise<{
 
 /**
  * Clear all stored memory (trajectories and vector index).
+ * Also resets the embedding tier cache so native embeddings (Xenova/Python)
+ * can be re-detected on the next embedding call.
  */
 export async function clearMemory(): Promise<void> {
   const store = getTrajectoryStore();
   await store.clear();
+
+  // Reset embedding tier cache — allows re-detection of newly installed
+  // @huggingface/transformers or sentence-transformers packages
+  try {
+    const { resetEmbeddingTierCache } = await import('./embedder.js');
+    resetEmbeddingTierCache();
+  } catch {
+    // Non-critical
+  }
 }

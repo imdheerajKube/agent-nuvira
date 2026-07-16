@@ -9,14 +9,15 @@
 import { Command } from 'commander';
 
 import { BaseCommand } from './commands.js';
-import { getPluginStats, discoverAgentPlugins, discoverWorkflowPlugins } from '../plugins/agent-plugin.js';
+import { getPluginStats, discoverProviderPlugins, discoverAgentPlugins, discoverWorkflowPlugins, runAutoDiscovery } from '../plugins/agent-plugin.js';
+import { getPluginRegistry } from '../plugins/registry.js';
 import { logger } from '../utils/logger.js';
 import { getWorkflowTemplates } from '../workflow/templates.js';
 
 export class PluginsCommand extends BaseCommand {
   create(): Command {
     const command = new Command('plugins')
-      .description('Manage agent plugins and workflow templates');
+      .description('Manage provider plugins, agent plugins, and workflow templates');
 
     // ── list ──────────────────────────────────────────────────────────────
     command
@@ -27,7 +28,7 @@ export class PluginsCommand extends BaseCommand {
     // ── scan ──────────────────────────────────────────────────────────────
     command
       .command('scan')
-      .description('Force re-scan plugin directories')
+      .description('Force re-scan all plugin directories')
       .action(() => this.scanPlugins());
 
     return command;
@@ -35,10 +36,26 @@ export class PluginsCommand extends BaseCommand {
 
   private async listPlugins(): Promise<void> {
     const stats = getPluginStats();
+    const registry = getPluginRegistry();
 
     logger.highlight(`${'═'.repeat(60)}`);
     logger.highlight('  🔌  Plugin System');
     logger.highlight(`${'═'.repeat(60)}`);
+
+    // ── Provider plugins (from ~/.buff/plugins/) ─────────────────────────
+    const registeredPlugins = registry.getAllPlugins();
+    console.log(`\n  🔗 Provider Plugins: ${stats.providerPlugins} discovered, ${registeredPlugins.length} registered`);
+    if (registeredPlugins.length > 0) {
+      for (const p of registeredPlugins) {
+        console.log(`    🔌 ${p.getProviderType()}: ${p.metadata.name} v${p.metadata.version}`);
+        if (p.metadata.description) {
+          console.log(`       ${p.metadata.description}`);
+        }
+      }
+    } else {
+      console.log('    (no provider plugins found in ~/.buff/plugins/)');
+      console.log('    Tip: Drop a .js file exporting a ProviderPlugin into ~/.buff/plugins/');
+    }
 
     // ── Built-in workflow templates ──────────────────────────────────────
     const builtinWorkflows = getWorkflowTemplates();
@@ -79,6 +96,7 @@ export class PluginsCommand extends BaseCommand {
 
     // ── Plugin directories ──────────────────────────────────────────────
     console.log(`\n  📁 Plugin Directories:`);
+    console.log(`    Provider plugins: ~/.buff/plugins/`);
     console.log(`    Agent plugins: ~/.buff/agents/`);
     console.log(`    Workflow templates: ~/.buff/workflows/`);
     console.log('');
@@ -87,24 +105,32 @@ export class PluginsCommand extends BaseCommand {
   private async scanPlugins(): Promise<void> {
     logger.info('Scanning for plugins...');
 
-    const agentPlugins = await discoverAgentPlugins();
-    const workflowPlugins = discoverWorkflowPlugins();
+    const result = await runAutoDiscovery();
+
+    const registry = getPluginRegistry();
+    const registeredPlugins = registry.getAllPlugins();
 
     console.log(`\n  ✅ Scan complete`);
-    console.log(`  Agent plugins: ${agentPlugins.size} found`);
-    console.log(`  Workflow plugins: ${workflowPlugins.length} found`);
+    console.log(`  Provider plugins: ${result.providerPlugins} discovered (${registeredPlugins.length} registered)`);
+    console.log(`  Agent plugins: ${result.agentPlugins} discovered`);
+    console.log(`  Workflow plugins: ${result.workflowPlugins} discovered`);
     console.log('');
 
     // Show what was discovered
+    for (const p of registeredPlugins) {
+      logger.success(`  Provider: ${p.getProviderType()} ← ${p.metadata.name} v${p.metadata.version}`);
+    }
+    const agentPlugins = await discoverAgentPlugins();
     for (const [type, plugin] of agentPlugins) {
       logger.success(`  Agent: ${type} ← ${plugin.metadata.name} v${plugin.metadata.version}`);
     }
+    const workflowPlugins = discoverWorkflowPlugins();
     for (const w of workflowPlugins) {
       logger.success(`  Workflow: ${w.id} ← ${w.name}`);
     }
 
-    if (agentPlugins.size === 0 && workflowPlugins.length === 0) {
-      console.log('  Tip: Place .js agent files in ~/.buff/agents/ or .json workflow files in ~/.buff/workflows/');
+    if (registeredPlugins.length === 0 && agentPlugins.size === 0 && workflowPlugins.length === 0) {
+      console.log('  Tip: Place .js provider files in ~/.buff/plugins/, .js agent files in ~/.buff/agents/,\n        or .json workflow files in ~/.buff/workflows/');
     }
   }
 }

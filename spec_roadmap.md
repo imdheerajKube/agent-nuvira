@@ -1,5 +1,5 @@
 Agent-baba-d: Current State, Comparison & Future Roadmap
-📊 Current State of agent-baba-d
+📊 Current State of agent-nuvira
 Agent-baba-d is a solid single-agent CLI with 5 providers (local/Ollama, Nim, Gemini, OpenRouter, Groq). It has:
 ┌───────────────────────────────┬────────────────┐
 │ Capability                    │ Status         │
@@ -16,9 +16,9 @@ Agent-baba-d is a solid single-agent CLI with 5 providers (local/Ollama, Nim, Ge
 └───────────────────────────────┴────────────────┘
 But it operates as a single-agent — each command makes one LLM call and returns the result. There's no orchestration, no agent delegation, no persistent memory across sessions, no test/compile/publish pipeline.
 ────────────────────────────────────────────────────────────────────────────────
-🔍 Comparison: Freebuff vs Ruflo vs agent-baba-d
+🔍 Comparison: Freebuff vs Ruflo vs agent-nuvira
 ┌────────────────────────┬─────────────────────────────────────────────────────────┬───────────────────────────────────────────────────────────┬─────────────────────────────────────────┐
-│ Feature                │ Freebuff                                                │ Ruflo                                                     │ agent-baba-d                            │
+│ Feature                │ Freebuff                                                │ Ruflo                                                     │ agent-nuvira                            │
 ├────────────────────────┼─────────────────────────────────────────────────────────┼───────────────────────────────────────────────────────────┼─────────────────────────────────────────┤
 │ Architecture           │ Multi-agent (file-picker → planner → editor → reviewer) │ Multi-agent swarm (100+ agents, consensus/hierarchical)   │ Single agent                            │
 │ Orchestration          │ Sequential sub-agent pipeline                           │ Swarm topologies + GOAP planner                           │ None (direct LLM call)                  │
@@ -137,7 +137,7 @@ Phase 5: Plugin Ecosystem & Marketplace
 ────────────────────────────────────────────────────────────────────────────────
 🛠️ Technical Implementation Prompt
 Here is the prompt you would use to start implementing Phase 1:
-Implement a multi-agent orchestration layer for the agent-baba-d CLI tool.
+Implement a multi-agent orchestration layer for the agent-nuvira CLI tool.
  
 Current architecture: Single-agent CLI with chat, edit, plan, models, config, cache commands.
 Each command calls one InferenceProvider.generate() and returns the result.
@@ -169,7 +169,7 @@ Requirements:
  
 2. Each agent uses the existing InferenceProvider interface (can choose different providers/models).
  
-3. The Orchestrator needs a new CLI command: `agent-baba-d execute "your goal"` that:
+3. The Orchestrator needs a new CLI command: `agent-nuvira execute "your goal"` that:
    - Takes a natural language goal
    - Runs the full multi-agent pipeline
    - Shows progress as each agent works

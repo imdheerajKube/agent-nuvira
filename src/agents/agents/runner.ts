@@ -1,7 +1,7 @@
 /**
  * RunnerAgent — Executes shell commands in the project directory and captures output.
  *
- * This is the agent that makes agent-baba-d capable of *running* the programs
+ * This is the agent that makes agent-nuvira capable of *running* the programs
  * it creates. Without this, the system can write files but can never execute
  * them or show the user what happened.
  *
@@ -27,6 +27,9 @@ import { platform } from 'node:os';
 import { Agent, type AgentContext, type AgentResult } from '../agent.js';
 import type { LLMCallFn } from '../agent.js';
 import { logger } from '../../utils/logger.js';
+import { SandboxManager } from '../../sandbox/manager.js';
+import { detectProjectImage } from '../../sandbox/images.js';
+import { getSandboxConfig } from '../../sandbox/types.js';
 
 /** Maximum stdout/stderr length to store in context metadata */
 const MAX_OUTPUT_LENGTH = 10_000;
@@ -73,91 +76,17 @@ export class RunnerAgent extends Agent {
         };
       }
 
-      // 2. Execute the command
-      if (context.metadata.verboseLogging) {
-        logger.info(`     Running: ${command}`);
+      // Check if we should run inside a Docker sandbox
+      const useDocker = context.metadata.useDockerSandbox === true ||
+        getSandboxConfig().enabled === true;
+
+      if (useDocker) {
+        return await this.executeWithDocker(context, command);
       }
 
-      // Allow timeout override via context.metadata.runnerTimeout
-      const timeoutMs = (typeof context.metadata.runnerTimeout === 'number')
-        ? context.metadata.runnerTimeout
-        : DEFAULT_TIMEOUT_MS;
+      // 2. Execute the command on the host via shared method
+      return await this.executeOnHost(context, command);
 
-      const startTime = Date.now();
-      let exitCode = 0;
-      let stdout = '';
-      let stderr = '';
-      let execError: string | undefined;
-
-      try {
-        const output = execSync(command, {
-          cwd: context.workingDirectory,
-          timeout: timeoutMs,
-          stdio: 'pipe',
-          encoding: 'utf-8',
-          // Use shell so we can run python, node, bash scripts etc.
-          shell: platform() === 'win32' ? (process.env.COMSPEC || 'cmd.exe') : '/bin/sh',
-          // Max buffer size: 1 MB
-          maxBuffer: 1024 * 1024,
-        });
-        stdout = output.trim();
-      } catch (err) {
-        const error = err as {
-          status?: number;
-          stdout?: string | Buffer;
-          stderr?: string | Buffer;
-          message?: string;
-        };
-        exitCode = error.status ?? 1;
-        stdout = (typeof error.stdout === 'string' ? error.stdout : String(error.stdout || '')).trim();
-        stderr = (typeof error.stderr === 'string' ? error.stderr : String(error.stderr || '')).trim();
-        execError = error.message;
-      }
-
-      const duration = Date.now() - startTime;
-
-      // 3. Build the run result
-      const runResult: RunResult = {
-        success: exitCode === 0,
-        command,
-        exitCode,
-        stdout: stdout.slice(0, MAX_OUTPUT_LENGTH),
-        stderr: stderr.slice(0, MAX_OUTPUT_LENGTH),
-        duration,
-        error: execError,
-      };
-
-      // 4. Store in context metadata for downstream agents or display
-      context.metadata['runResult'] = runResult;
-
-      // 5. Build summary
-      const lines: string[] = [];
-      lines.push(`Command: ${command}`);
-      lines.push(`Exit code: ${exitCode}`);
-      lines.push(`Duration: ${duration}ms`);
-
-      if (stdout) {
-        const truncated = stdout.length > 500;
-        lines.push(`stdout:${truncated ? ' (first 500 chars)' : ''}`);
-        lines.push(stdout.slice(0, 500));
-        if (truncated) lines.push(`... (${stdout.length - 500} more chars)`);
-      }
-
-      if (stderr && exitCode !== 0) {
-        const truncated = stderr.length > 500;
-        lines.push(`stderr:${truncated ? ' (first 500 chars)' : ''}`);
-        lines.push(stderr.slice(0, 500));
-        if (truncated) lines.push(`... (${stderr.length - 500} more chars)`);
-      }
-
-      return {
-        success: exitCode === 0,
-        summary: exitCode === 0
-          ? `✅ Command succeeded: ${command}`
-          : `❌ Command failed (exit ${exitCode}): ${command}`,
-        details: lines.join('\n'),
-        error: execError && exitCode !== 0 ? execError : undefined,
-      };
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
       return {
@@ -198,6 +127,193 @@ export class RunnerAgent extends Agent {
 
     // Strategy 3: Ask the LLM what command to run
     return await this.askLLMForCommand(context, callLLM);
+  }
+
+  /**
+   * Execute a command inside a Docker sandbox container.
+   * Falls back to host execution if Docker is not available.
+   */
+  private async executeWithDocker(context: AgentContext, command: string): Promise<AgentResult> {
+    const sandboxManager = new SandboxManager();
+    let containerId = '';
+
+    try {
+      // Check Docker availability
+      const dockerAvailable = await sandboxManager.isDockerAvailable();
+      if (!dockerAvailable) {
+        // Fall back to host execution
+        return this.executeOnHost(context, command);
+      }
+
+      // Detect the right image for the project
+      const image = detectProjectImage(context.workingDirectory);
+
+      // Allow timeout override via context.metadata.runnerTimeout
+      const timeoutMs = (typeof context.metadata.runnerTimeout === 'number')
+        ? context.metadata.runnerTimeout
+        : DEFAULT_TIMEOUT_MS;
+
+      // Create a Docker container (use default /workspace as workdir)
+      containerId = await sandboxManager.createContainer(
+        image.image,
+        {
+          memoryLimit: '512m',
+          cpuLimit: 0.5,
+          timeoutMs,
+          networkAccess: false,
+        },
+      );
+
+      // Copy project files to the container's workspace
+      await sandboxManager.copyProjectToContainer(containerId, context.workingDirectory);
+
+      // Run the command inside the container
+      if (context.metadata.verboseLogging) {
+        logger.info(`     Running (Docker): ${command}`);
+      }
+
+      const result = await sandboxManager.runCommand(containerId, command, timeoutMs);
+
+      // Build run result from sandbox result
+      const runResult: RunResult = {
+        success: result.success,
+        command,
+        exitCode: result.exitCode,
+        stdout: result.stdout.slice(0, MAX_OUTPUT_LENGTH),
+        stderr: result.stderr.slice(0, MAX_OUTPUT_LENGTH),
+        duration: result.durationMs,
+        error: result.error,
+      };
+
+      context.metadata['runResult'] = runResult;
+
+      // Build summary
+      const lines: string[] = [];
+      lines.push(`Command: ${command} (Docker)`);
+      lines.push(`Exit code: ${result.exitCode}`);
+      lines.push(`Duration: ${result.durationMs}ms`);
+
+      if (result.stdout) {
+        const truncated = result.stdout.length > 500;
+        lines.push(`stdout:${truncated ? ' (first 500 chars)' : ''}`);
+        lines.push(result.stdout.slice(0, 500));
+        if (truncated) lines.push(`... (${result.stdout.length - 500} more chars)`);
+      }
+
+      if (result.stderr && result.exitCode !== 0) {
+        const truncated = result.stderr.length > 500;
+        lines.push(`stderr:${truncated ? ' (first 500 chars)' : ''}`);
+        lines.push(result.stderr.slice(0, 500));
+        if (truncated) lines.push(`... (${result.stderr.length - 500} more chars)`);
+      }
+
+      // Clean up
+      await sandboxManager.destroyContainer(containerId).catch(() => {});
+
+      return {
+        success: result.exitCode === 0,
+        summary: result.exitCode === 0
+          ? `✅ Command succeeded (Docker): ${command}`
+          : `❌ Command failed (exit ${result.exitCode}): ${command}`,
+        details: lines.join('\n'),
+        error: result.error || undefined,
+      };
+    } catch (err) {
+      if (containerId) {
+        await sandboxManager.destroyContainer(containerId).catch(() => {});
+      }
+
+      const msg = err instanceof Error ? err.message : String(err);
+      return {
+        success: false,
+        summary: 'Docker sandbox execution failed',
+        error: msg,
+      };
+    }
+  }
+
+  /**
+   * Execute a command directly on the host machine.
+   */
+  private async executeOnHost(context: AgentContext, command: string): Promise<AgentResult> {
+    if (context.metadata.verboseLogging) {
+      logger.info(`     Running: ${command}`);
+    }
+
+    const timeoutMs = (typeof context.metadata.runnerTimeout === 'number')
+      ? context.metadata.runnerTimeout
+      : DEFAULT_TIMEOUT_MS;
+
+    const startTime = Date.now();
+    let exitCode = 0;
+    let stdout = '';
+    let stderr = '';
+    let execError: string | undefined;
+
+    try {
+      const output = execSync(command, {
+        cwd: context.workingDirectory,
+        timeout: timeoutMs,
+        stdio: 'pipe',
+        encoding: 'utf-8',
+        shell: platform() === 'win32' ? (process.env.COMSPEC || 'cmd.exe') : '/bin/sh',
+        maxBuffer: 1024 * 1024,
+      });
+      stdout = output.trim();
+    } catch (err) {
+      const error = err as {
+        status?: number;
+        stdout?: string | Buffer;
+        stderr?: string | Buffer;
+        message?: string;
+      };
+      exitCode = error.status ?? 1;
+      stdout = (typeof error.stdout === 'string' ? error.stdout : String(error.stdout || '')).trim();
+      stderr = (typeof error.stderr === 'string' ? error.stderr : String(error.stderr || '')).trim();
+      execError = error.message;
+    }
+
+    const duration = Date.now() - startTime;
+
+    const runResult: RunResult = {
+      success: exitCode === 0,
+      command,
+      exitCode,
+      stdout: stdout.slice(0, MAX_OUTPUT_LENGTH),
+      stderr: stderr.slice(0, MAX_OUTPUT_LENGTH),
+      duration,
+      error: execError,
+    };
+
+    context.metadata['runResult'] = runResult;
+
+    const lines: string[] = [];
+    lines.push(`Command: ${command}`);
+    lines.push(`Exit code: ${exitCode}`);
+    lines.push(`Duration: ${duration}ms`);
+
+    if (stdout) {
+      const truncated = stdout.length > 500;
+      lines.push(`stdout:${truncated ? ' (first 500 chars)' : ''}`);
+      lines.push(stdout.slice(0, 500));
+      if (truncated) lines.push(`... (${stdout.length - 500} more chars)`);
+    }
+
+    if (stderr && exitCode !== 0) {
+      const truncated = stderr.length > 500;
+      lines.push(`stderr:${truncated ? ' (first 500 chars)' : ''}`);
+      lines.push(stderr.slice(0, 500));
+      if (truncated) lines.push(`... (${stderr.length - 500} more chars)`);
+    }
+
+    return {
+      success: exitCode === 0,
+      summary: exitCode === 0
+        ? `✅ Command succeeded: ${command}`
+        : `❌ Command failed (exit ${exitCode}): ${command}`,
+      details: lines.join('\n'),
+      error: execError && exitCode !== 0 ? execError : undefined,
+    };
   }
 
   /**

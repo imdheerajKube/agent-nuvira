@@ -42,6 +42,10 @@ export interface CodingPattern {
   avgSourceScore: number;
   /** When this pattern was created */
   createdAt: number;
+  /** When this pattern was last used (for decay scoring) */
+  lastUsedAt: number;
+  /** How many times this pattern has been used */
+  usageCount: number;
 }
 
 /** On-disk format */
@@ -54,10 +58,15 @@ interface PatternData {
 
 const MEMORY_DIR = join(homedir(), '.buff', 'memory');
 const PATTERNS_PATH = join(MEMORY_DIR, 'patterns.json');
-const CURRENT_VERSION = 1;
-const MAX_PATTERNS = 20;
+const CURRENT_VERSION = 2;
+const MAX_PATTERNS = 30;
 const MIN_SCORE_FOR_EXTRACTION = 0.7; // Only extract from high-quality trajectories
 const MAX_TRAJECTORIES_FOR_EXTRACTION = 5;
+
+// Pattern decay: patterns lose relevance over time
+const PATTERN_TTL_DAYS = 90;            // Expire after 90 days without use
+const DECAY_DAYS_FOR_HALF_SCORE = 30;   // Score halves after 30 days of no use
+const MIN_PATTERN_SCORE = 0.2;          // Prune patterns below this score
 
 const EXTRACTION_PROMPT = `You are a senior software architect analyzing successful task executions. Given a set of execution trajectories, identify reusable patterns that would help complete similar tasks in the future.
 
@@ -102,10 +111,14 @@ export class PatternStore {
   // ── Public API ──────────────────────────────────────────────────────────
 
   /**
-   * Get all stored patterns.
+   * Get all stored patterns, optionally filtered by minimum quality score.
    */
-  getAll(): CodingPattern[] {
-    return [...this.patterns];
+  getAll(minQualityScore?: number): CodingPattern[] {
+    const patterns = [...this.patterns];
+    if (minQualityScore !== undefined) {
+      return patterns.filter((p) => this.computeDecayScore(p) >= minQualityScore);
+    }
+    return patterns;
   }
 
   /**
@@ -183,6 +196,8 @@ export class PatternStore {
       pattern.avgSourceScore =
         highScoring.reduce((sum, t) => sum + t.score, 0) / highScoring.length;
       pattern.createdAt = Date.now();
+      pattern.lastUsedAt = Date.now();
+      pattern.usageCount = 0;
 
       const existing = this.patterns.findIndex(
         (p) => p.title.toLowerCase() === pattern.title.toLowerCase(),
@@ -205,6 +220,87 @@ export class PatternStore {
   }
 
   /**
+   * Mark a pattern as used (for decay tracking).
+   */
+  markUsed(patternId: string): void {
+    const pattern = this.patterns.find((p) => p.id === patternId);
+    if (pattern) {
+      pattern.lastUsedAt = Date.now();
+      pattern.usageCount++;
+      this.save();
+    }
+  }
+
+  /**
+   * Compute a decay score for a pattern based on age and usage.
+   * Returns a score from 0 (expired) to 1 (fresh).
+   */
+  computeDecayScore(pattern: CodingPattern): number {
+    const now = Date.now();
+    const ageMs = now - pattern.createdAt;
+    const ageDays = ageMs / (1000 * 60 * 60 * 24);
+
+    // Hard expiry: pattern too old
+    if (ageDays > PATTERN_TTL_DAYS) return 0;
+
+    // Time-based decay: score halves after DECAY_DAYS_FOR_HALF_SCORE
+    const timeScore = Math.pow(0.5, ageDays / DECAY_DAYS_FOR_HALF_SCORE);
+
+    // Usage bonus: patterns used more often are worth keeping
+    const usageBonus = Math.min(pattern.usageCount * 0.05, 0.3);
+
+    // Last-used bonus: recently used patterns get a boost
+    const daysSinceLastUse = (now - pattern.lastUsedAt) / (1000 * 60 * 60 * 24);
+    const recencyBonus = Math.max(0, 0.2 - daysSinceLastUse * 0.01);
+
+    return Math.min(1, timeScore + usageBonus + recencyBonus);
+  }
+
+  /**
+   * Garbage collect low-quality patterns.
+   * Returns the number of patterns removed.
+   */
+  garbageCollect(verbose: boolean = false): number {
+    const before = this.patterns.length;
+
+    // Remove patterns below minimum score
+    this.patterns = this.patterns.filter((p) => {
+      const score = this.computeDecayScore(p);
+      if (score < MIN_PATTERN_SCORE) {
+        if (verbose) {
+          logger.debug(`Pruning pattern '${p.title}' (decay score: ${(score * 100).toFixed(0)}%)`);
+        }
+        return false;
+      }
+      return true;
+    });
+
+    // Also enforce max patterns
+    if (this.patterns.length > MAX_PATTERNS) {
+      this.patterns.sort((a, b) => this.computeDecayScore(b) - this.computeDecayScore(a));
+      this.patterns = this.patterns.slice(0, MAX_PATTERNS);
+    }
+
+    const removed = before - this.patterns.length;
+    if (removed > 0) this.save();
+    return removed;
+  }
+
+  /**
+   * Get decay quality statistics for all patterns.
+   */
+  getQualityReport(): Array<{ id: string; title: string; decayScore: number; usageCount: number; ageDays: number }> {
+    const now = Date.now();
+    return this.patterns.map((p) => ({
+      id: p.id,
+      title: p.title,
+      decayScore: this.computeDecayScore(p),
+      usageCount: p.usageCount,
+      ageDays: Math.floor((now - p.createdAt) / (1000 * 60 * 60 * 24)),
+    })).sort((a, b) => a.decayScore - b.decayScore); // Worst first
+  }
+
+  /**
    * Clear all patterns.
    */
   clear(): void {
@@ -220,7 +316,15 @@ export class PatternStore {
       if (!existsSync(PATTERNS_PATH)) return [];
       const raw = readFileSync(PATTERNS_PATH, 'utf-8');
       const data = JSON.parse(raw) as PatternData;
-      return data.patterns || [];
+
+      // Migrate old-format patterns (version 1 → 2) that may lack lastUsedAt/usageCount
+      const patterns = (data.patterns || []).map((p) => ({
+        ...p,
+        lastUsedAt: p.lastUsedAt ?? p.createdAt ?? Date.now(),
+        usageCount: p.usageCount ?? 0,
+      }));
+
+      return patterns;
     } catch {
       return [];
     }

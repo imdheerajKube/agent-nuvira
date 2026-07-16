@@ -15,6 +15,7 @@ import { getVectorStore, cosineSimilarity } from '../../src/memory/vector-store.
 import { getTrajectoryStore } from '../../src/memory/trajectory-store.js';
 import { embed, clearEmbeddingCache, EMBEDDING_DIM } from '../../src/memory/embedder.js';
 import { storeExecutionTrajectory, retrieveMemoryContext, clearMemory, getMemoryStats } from '../../src/memory/memory-integration.js';
+import { setForceLLM } from '../../src/memory/embedder.js';
 import type { OrchestrationResult } from '../../src/agents/orchestrator.js';
 import type { TaskStep } from '../../src/agents/agent.js';
 
@@ -66,11 +67,15 @@ describe('Memory Integration — Full Cycle', () => {
   beforeEach(async () => {
     await clearMemory();
     clearEmbeddingCache();
+    // Force LLM mode for tests — skip native embedding tiers (Xenova/Python)
+    // to ensure mock LLM is used consistently for deterministic test results
+    setForceLLM(true);
   });
 
   afterEach(async () => {
     await clearMemory();
     clearEmbeddingCache();
+    setForceLLM(false);
   });
 
   // ── Full Cycle: store → search → retrieve → format ────────────────────
@@ -216,28 +221,28 @@ describe('Memory Integration — Full Cycle', () => {
 
   it('should fall back to zero vector when LLM returns non-JSON', async () => {
     const badLLM = async () => 'This is not a valid JSON embedding response at all';
-    const result = await embed('some text', badLLM as any);
+    const result = await embed('some text', badLLM as any, true); // forceLLM=true for test
     expect(result).toHaveLength(EMBEDDING_DIM);
     expect(result.every((v) => v === 0)).toBe(true);
   });
 
   it('should fall back to zero vector when LLM returns wrong dimension', async () => {
     const badDimLLM = async () => JSON.stringify([0.1, 0.2, 0.3]); // Only 3 dims
-    const result = await embed('some text', badDimLLM as any);
+    const result = await embed('some text', badDimLLM as any, true); // forceLLM=true for test
     expect(result).toHaveLength(EMBEDDING_DIM);
     expect(result.every((v) => v === 0)).toBe(true);
   });
 
   it('should fall back to zero vector when LLM throws', async () => {
     const throwingLLM = async () => { throw new Error('API error'); };
-    const result = await embed('some text', throwingLLM as any);
+    const result = await embed('some text', throwingLLM as any, true); // forceLLM=true for test
     expect(result).toHaveLength(EMBEDDING_DIM);
     expect(result.every((v) => v === 0)).toBe(true);
   });
 
   it('should fall back to zero vector when LLM returns NaN values', async () => {
     const nanLLM = async () => JSON.stringify(Array.from({ length: EMBEDDING_DIM }, () => NaN));
-    const result = await embed('some text', nanLLM as any);
+    const result = await embed('some text', nanLLM as any, true); // forceLLM=true for test
     expect(result).toHaveLength(EMBEDDING_DIM);
     expect(result.every((v) => v === 0)).toBe(true);
   });
@@ -247,7 +252,7 @@ describe('Memory Integration — Full Cycle', () => {
   it('should parse direct JSON array from LLM response', async () => {
     const vec = Array.from({ length: EMBEDDING_DIM }, (_, i) => Math.sin(i) / 2);
     const directJSON = async () => JSON.stringify(vec);
-    const result = await embed('direct json test', directJSON as any);
+    const result = await embed('direct json test', directJSON as any, true); // forceLLM=true for test
     expect(result).toHaveLength(EMBEDDING_DIM);
     expect(result[0]).toBeCloseTo(vec[0], 5);
   });
@@ -255,7 +260,7 @@ describe('Memory Integration — Full Cycle', () => {
   it('should parse embedding from ```json code block', async () => {
     const vec = Array.from({ length: EMBEDDING_DIM }, () => 0.42);
     const codeBlock = async () => `Here is the vector:\n\`\`\`json\n${JSON.stringify(vec)}\n\`\`\``;
-    const result = await embed('code block test', codeBlock as any);
+    const result = await embed('code block test', codeBlock as any, true); // forceLLM=true for test
     expect(result).toHaveLength(EMBEDDING_DIM);
     expect(result.every((v) => v === 0.42)).toBe(true);
   });
@@ -263,7 +268,7 @@ describe('Memory Integration — Full Cycle', () => {
   it('should parse embedding from bare ``` code block', async () => {
     const vec = Array.from({ length: EMBEDDING_DIM }, () => 0.33);
     const bareBlock = async () => `\`\`\`\n${JSON.stringify(vec)}\n\`\`\``;
-    const result = await embed('bare block test', bareBlock as any);
+    const result = await embed('bare block test', bareBlock as any, true); // forceLLM=true for test
     expect(result).toHaveLength(EMBEDDING_DIM);
     expect(result[0]).toBeCloseTo(0.33, 2);
   });
@@ -271,7 +276,7 @@ describe('Memory Integration — Full Cycle', () => {
   it('should find JSON array embedded in natural language text', async () => {
     const vec = Array.from({ length: EMBEDDING_DIM }, () => 0.77);
     const naturalText = async () => `The embedding vector is ${JSON.stringify(vec)} which represents the meaning.`;
-    const result = await embed('array in text test', naturalText as any);
+    const result = await embed('array in text test', naturalText as any, true); // forceLLM=true for test
     expect(result).toHaveLength(EMBEDDING_DIM);
     expect(result[0]).toBeCloseTo(0.77, 2);
   });
@@ -279,7 +284,7 @@ describe('Memory Integration — Full Cycle', () => {
   it('should try strategies in order: direct → code block → array pattern → fallback', async () => {
     // A response that fails all strategies
     const allBad = async () => 'This is completely unparseable as JSON or array 12345';
-    const result = await embed('all strategies fail', allBad as any);
+    const result = await embed('all strategies fail', allBad as any, true); // forceLLM=true for test
     expect(result).toHaveLength(EMBEDDING_DIM);
     expect(result.every((v) => v === 0)).toBe(true);
   });
