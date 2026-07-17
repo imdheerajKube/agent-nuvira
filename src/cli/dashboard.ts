@@ -1,12 +1,12 @@
 /**
- * Dashboard command — Launch the Agent-Baba-D Web UI Dashboard.
+ * Dashboard command — Launch the Agent-Nuvira Web UI Dashboard.
  *
  * Usage:
- *   buff dashboard                  — Start dashboard on default port (3030)
- *   buff dashboard --port 8080      — Start on a specific port
- *   buff dashboard --host 0.0.0.0   — Listen on all interfaces
- *   buff dashboard --build           — Build the dashboard (npm run build:dashboard) before starting
- *   buff dashboard --no-open        — Don't auto-open browser
+ *   agent-nuvira dashboard          — Start dashboard on default port (3030)
+ *   agent-nuvira dashboard --port 8080 — Start on a specific port
+ *   agent-nuvira dashboard --host 0.0.0.0 — Listen on all interfaces
+ *   agent-nuvira dashboard --build  — Build the dashboard before starting
+ *   agent-nuvira dashboard --no-open — Don't auto-open browser
  *
  * The dashboard provides:
  * - Real-time system overview with stats
@@ -85,7 +85,7 @@ export class DashboardCommand extends BaseCommand {
     process.env.BUFF_DASHBOARD_HOST = host;
 
     logger.highlight('═'.repeat(60));
-    logger.highlight('  🌐  Starting Agent-Baba-D Dashboard');
+    logger.highlight('  🌐  Starting Agent-Nuvira Dashboard');
     logger.highlight('═'.repeat(60));
     console.log('');
 
@@ -131,12 +131,17 @@ export class DashboardCommand extends BaseCommand {
    */
   private openBrowser(url: string): void {
     const platform = process.platform;
-    const cmd = platform === 'win32' ? 'start' : platform === 'darwin' ? 'open' : 'xdg-open';
+    const isWindows = platform === 'win32';
+    const cmd = isWindows ? 'start' : platform === 'darwin' ? 'open' : 'xdg-open';
 
     try {
-      const child = spawn(cmd, [url], {
+      // Windows 'start' is a shell built-in, not an executable — needs shell: true
+      // Syntax on Windows: start "" "http://..." (first arg is window title)
+      const args = isWindows ? ['', url] : [url];
+      const child = spawn(cmd, args, {
         stdio: 'ignore',
         detached: true,
+        shell: isWindows,
       });
       child.unref();
     } catch {

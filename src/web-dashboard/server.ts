@@ -1,12 +1,12 @@
 /**
- * Web Dashboard Server — Serves the Agent-Baba-D dashboard UI and data APIs.
+ * Web Dashboard Server — Serves the Agent-Nuvira dashboard UI and data APIs.
  *
  * Uses only Node.js built-in modules (no Express, no WebSocket libraries):
  * - Static files: HTML, CSS, JS from public/
  * - REST API: cost, history, benchmark, memory, health data
  * - SSE (Server-Sent Events): real-time updates
  *
- * Start with: buff dashboard
+ * Start with: agent-nuvira dashboard
  * Opens at: http://localhost:3030
  */
 
@@ -490,7 +490,7 @@ export function createDashboardServer(): { server: ReturnType<typeof createServe
   const server = createServer(handleRequest);
 
   server.listen(PORT, HOST, () => {
-    console.log(`\n  🌐 Agent-Baba-D Dashboard`);
+    console.log(`\n  🌐 Agent-Nuvira Dashboard`);
     console.log(`  ─────────────────────────`);
     console.log(`  Local:   http://${HOST}:${PORT}`);
     console.log(`  Network: http://localhost:${PORT}`);
