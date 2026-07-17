@@ -262,20 +262,15 @@ export class ChatCommand extends BaseCommand {
     }
 
     // ── Setup SIGINT (Ctrl+C) handler for graceful exit ──────────────
-    // First press: shows warning. Second press within 2s: force exits.
-    let sigintCount = 0;
-    let sigintTimer: ReturnType<typeof setTimeout> | null = null;
+    // When readline is active (user is typing), Ctrl+C byte is consumed by readline's
+    // raw mode — the process-level SIGINT never fires. So we put the double-press
+    // logic inside readline's SIGINT handler instead (see readMultiLineInput).
+    //
+    // This process-level handler fires when the user is NOT in readline (e.g., during
+    // API calls). A single Ctrl+C during an API call aborts it immediately.
     const sigintHandler = () => {
-      sigintCount++;
-      if (sigintCount >= 2) {
-        console.log('\n');
-        process.exit(0);
-      }
-      console.log('\n\n⚠️  Press Ctrl+C again to exit, or type /exit to quit.\n');
-      if (sigintTimer) clearTimeout(sigintTimer);
-      sigintTimer = setTimeout(() => {
-        sigintCount = 0;
-      }, 2000);
+      console.log('\n');
+      process.exit(0);
     };
     process.on('SIGINT', sigintHandler);
 
@@ -446,12 +441,14 @@ export class ChatCommand extends BaseCommand {
         generationComplete = true;
       }
 
-      if (recovery?.action === 'exit') break;
+      if (recovery?.action === 'exit') {
+        console.log('Goodbye!');
+        break;
+      }
     }
 
     // Cleanup SIGINT handler
     process.off('SIGINT', sigintHandler);
-    if (sigintTimer) clearTimeout(sigintTimer);
 
     // Store chat session in history when exiting
     if (history.length > 0) {
@@ -469,6 +466,9 @@ export class ChatCommand extends BaseCommand {
         logger.debug(`Failed to store chat session: ${err}`);
       }
     }
+
+    // Actually exit the process — Commander keeps the event loop alive otherwise
+    process.exit(0);
   }
 
   /**
@@ -513,21 +513,38 @@ export class ChatCommand extends BaseCommand {
       const lines: string[] = [];
       let isFirstLine = true;
 
-      // Handle SIGINT on readline: 
+      // Handle SIGINT on readline:
       // - If user was typing: cancel input and re-prompt
-      // - If no input: resolve with '/exit' to trigger clean exit
+      // - If on empty line: first press shows warning, second press within 2s exits
+      let rlSigintCount = 0;
+      let rlSigintTimer: ReturnType<typeof setTimeout> | null = null;
       rl.on('SIGINT', () => {
         if (lines.length > 0 || !isFirstLine) {
           // User was typing something — cancel input and re-prompt
           lines.length = 0;
           isFirstLine = true;
+          if (rlSigintTimer) clearTimeout(rlSigintTimer);
+          rlSigintCount = 0;
           rl.setPrompt(prompt + ' ');
           rl.prompt();
           return;
         }
-        // No input yet — exit the chat cleanly (like typing /exit)
-        lines.push('/exit');
-        rl.close();
+        // No input yet — handle double-press
+        rlSigintCount++;
+        if (rlSigintCount >= 2) {
+          // Second press — exit cleanly
+          console.log('');
+          lines.push('/exit');
+          rl.close();
+          return;
+        }
+        // First press — show warning
+        console.log('\n\n⚠️  Press Ctrl+C again to exit, or type /exit to quit.\n');
+        rl.prompt(true);
+        if (rlSigintTimer) clearTimeout(rlSigintTimer);
+        rlSigintTimer = setTimeout(() => {
+          rlSigintCount = 0;
+        }, 2000);
       });
 
       rl.on('line', (line) => {
