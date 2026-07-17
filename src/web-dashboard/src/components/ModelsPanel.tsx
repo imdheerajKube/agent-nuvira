@@ -160,12 +160,12 @@ function ProviderCard({ provider }: { provider: ProviderHealth }) {
           </div>
 
           {/* Model table */}
-          <div style={{ overflowX: 'auto', borderTop: '1px solid #21262d' }}>
-            <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 13 }}>
+          <div style={{ overflowX: 'auto', borderTop: '1px solid #21262d' }}>              <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 13 }}>
               <thead>
                 <tr style={{ borderBottom: '1px solid #21262d', color: '#8b949e' }}>
                   <th style={{ padding: '8px 18px', textAlign: 'left', fontWeight: 500 }}>Model</th>
                   <th style={{ padding: '8px 12px', textAlign: 'left', fontWeight: 500 }}>Status</th>
+                  <th style={{ padding: '8px 12px', textAlign: 'left', fontWeight: 500 }}>Quota</th>
                   <th style={{ padding: '8px 18px', textAlign: 'left', fontWeight: 500 }}>Details</th>
                 </tr>
               </thead>
@@ -191,6 +191,13 @@ function ProviderCard({ provider }: { provider: ProviderHealth }) {
                         status={model.status}
                         label={model.status === 'available' ? 'Ready' : model.status === 'limited' ? 'Limited' : 'Down'}
                       />
+                    </td>
+                    <td style={{ padding: '8px 12px', color: '#8b949e', fontSize: 12, fontFamily: "'SFMono-Regular', Consolas, monospace" }}>
+                      {model.rateLimitRemaining !== undefined
+                        ? model.rateLimitTotal
+                          ? `${model.rateLimitRemaining}/${model.rateLimitTotal}`
+                          : `${model.rateLimitRemaining} left`
+                        : '—'}
                     </td>
                     <td style={{ padding: '8px 18px', color: '#8b949e', fontSize: 12 }}>
                       {model.statusReason}

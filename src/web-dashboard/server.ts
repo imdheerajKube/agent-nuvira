@@ -188,36 +188,134 @@ interface ModelCheckResult {
   apiAccessible: boolean;
   canGenerate: boolean;
   overallStatus: 'available' | 'limited' | 'unavailable';
-  models: Array<{ id: string; name: string; status: 'available' | 'limited' | 'unavailable'; statusReason: string }>;
+  models: Array<{
+    id: string;
+    name: string;
+    status: 'available' | 'limited' | 'unavailable';
+    statusReason: string;
+    rateLimitRemaining?: number;
+    rateLimitTotal?: number;
+  }>;
   notes: string;
   freeTierInfo?: string;
+  rateLimitRemaining?: number;
+  rateLimitTotal?: number;
 }
 
 /**
- * Fetch with timeout. Returns status, ok flag, and parsed JSON body if successful.
- * Single request per provider — no double HTTP calls.
+ * Fetch with timeout. Returns status, ok flag, headers, and parsed JSON body.
+ * Headers are extracted for rate-limit parsing.
  */
 async function fetchWithTimeout<T = unknown>(
   url: string,
   init?: RequestInit,
-): Promise<{ ok: boolean; status: number; statusText: string; data?: T }> {
+): Promise<{ ok: boolean; status: number; statusText: string; data?: T; headers: Record<string, string> }> {
   try {
     const controller = new AbortController();
     const timeout = setTimeout(() => controller.abort(), 5000);
     const res = await fetch(url, { ...init, signal: controller.signal });
     clearTimeout(timeout);
+
+    // Extract headers for rate-limit parsing
+    const headers: Record<string, string> = {};
+    res.headers.forEach((value, key) => {
+      headers[key.toLowerCase()] = value;
+    });
+
     if (res.ok) {
       try {
         const data = await res.json() as T;
-        return { ok: true, status: res.status, statusText: res.statusText, data };
+        return { ok: true, status: res.status, statusText: res.statusText, data, headers };
       } catch {
-        return { ok: true, status: res.status, statusText: res.statusText };
+        return { ok: true, status: res.status, statusText: res.statusText, headers };
       }
     }
-    return { ok: false, status: res.status, statusText: res.statusText };
+    return { ok: false, status: res.status, statusText: res.statusText, headers };
   } catch {
-    return { ok: false, status: 0, statusText: 'Connection failed' };
+    return { ok: false, status: 0, statusText: 'Connection failed', headers: {} };
   }
+}
+
+/**
+ * Parse common rate-limit headers and return remaining/total if found.
+ * Supports multiple header naming conventions across providers.
+ */
+function parseRateLimitHeaders(headers: Record<string, string>): { remaining?: number; total?: number } {
+  const result: { remaining?: number; total?: number } = {};
+
+  // Try various rate-limit header names
+  const remainingHeaders = [
+    'x-ratelimit-remaining-requests',  // Groq
+    'x-ratelimit-remaining',            // NIM, OpenRouter, generic
+    'x-ratelimit-remaining-quota',      // Gemini
+    'x-ratelimit-remaining-tokens',     // Groq token limit
+    'ratelimit-remaining',              // Generic
+  ];
+
+  const totalHeaders = [
+    'x-ratelimit-limit',          // NIM
+    'x-ratelimit-request-limit',  // Groq
+    'x-ratelimit-limit-quota',    // Gemini
+    'ratelimit-limit',            // Generic
+  ];
+
+  for (const h of remainingHeaders) {
+    const val = headers[h];
+    if (val !== undefined) {
+      const num = parseInt(val, 10);
+      if (!isNaN(num)) {
+        result.remaining = num;
+        break;
+      }
+    }
+  }
+
+  for (const h of totalHeaders) {
+    const val = headers[h];
+    if (val !== undefined) {
+      const num = parseInt(val, 10);
+      if (!isNaN(num)) {
+        result.total = num;
+        break;
+      }
+    }
+  }
+
+  return result;
+}
+
+/**
+ * Determine status based on rate limit remaining vs total.
+ * Green: plenty of quota (>20% remaining or no headers available)
+ * Amber: low quota (<=20% remaining or < 10 requests)
+ */
+function rateLimitStatus(remaining?: number, total?: number): { status: 'available' | 'limited'; reason: string } {
+  if (remaining === undefined) {
+    // No rate-limit info — assume available
+    return { status: 'available', reason: 'API connected' };
+  }
+
+  if (remaining <= 0) {
+    return { status: 'limited', reason: 'Rate limit exhausted — wait or upgrade' };
+  }
+
+  if (total !== undefined && total > 0) {
+    const pct = (remaining / total) * 100;
+    if (pct <= 20) {
+      return { status: 'limited', reason: `${remaining}/${total} quota remaining (${Math.round(pct)}%)` };
+    }
+    if (remaining < 10) {
+      return { status: 'limited', reason: `Only ${remaining} requests remaining` };
+    }
+    return { status: 'available', reason: `${remaining}/${total} quota remaining` };
+  }
+
+  // Total unknown, but remaining known
+  if (remaining < 10) {
+    return { status: 'limited', reason: `Only ${remaining} requests remaining` };
+  }
+
+  return { status: 'available', reason: `${remaining} requests remaining` };
 }
 
 /**
@@ -248,7 +346,7 @@ async function readModelsHealth(): Promise<{
   return { providers, lastChecked: Date.now(), totalModels, available, limited, unavailable };
 }
 
-/** Check local Ollama provider — single fetch call */
+/** Check local Ollama provider — no rate limits to parse */
 async function checkLocalProvider(): Promise<ModelCheckResult | null> {
   const result: ModelCheckResult = {
     provider: 'local', providerLabel: 'Ollama (Local)', icon: '💻',
@@ -286,7 +384,7 @@ async function checkLocalProvider(): Promise<ModelCheckResult | null> {
   return result;
 }
 
-/** Check Groq provider — single fetch call */
+/** Check Groq provider — parses x-ratelimit-remaining-requests headers */
 async function checkGroqProvider(): Promise<ModelCheckResult | null> {
   const apiKey = process.env.GROQ_API_KEY;
   const result: ModelCheckResult = {
@@ -309,12 +407,26 @@ async function checkGroqProvider(): Promise<ModelCheckResult | null> {
   if (check.ok && check.data?.data) {
     result.apiAccessible = true;
     result.canGenerate = true;
+
+    // Parse Groq's rate-limit headers (x-ratelimit-remaining-requests)
+    const rl = parseRateLimitHeaders(check.headers);
+    result.rateLimitRemaining = rl.remaining;
+    result.rateLimitTotal = rl.total;
+    const statusInfo = rateLimitStatus(rl.remaining, rl.total);
+
     result.models = check.data.data.map((m) => ({
       id: m.id, name: m.id,
-      status: 'available' as const,
-      statusReason: 'API connected — free tier active',
+      status: statusInfo.status,
+      statusReason: statusInfo.reason,
+      rateLimitRemaining: rl.remaining,
+      rateLimitTotal: rl.total,
     }));
-    result.overallStatus = 'available';
+
+    // If rate limit is low, set overall to limited
+    result.overallStatus = statusInfo.status;
+    if (statusInfo.status === 'limited') {
+      result.notes = `Rate limit: ${statusInfo.reason}`;
+    }
   } else if (check.status === 401 || check.status === 403) {
     result.models = [{ id: '(auth error)', name: 'Invalid API key', status: 'unavailable' as const, statusReason: 'Check GROQ_API_KEY at console.groq.com' }];
   } else if (check.status === 429) {
@@ -327,7 +439,7 @@ async function checkGroqProvider(): Promise<ModelCheckResult | null> {
   return result;
 }
 
-/** Check NVIDIA NIM provider — single fetch call */
+/** Check NVIDIA NIM provider — parses x-ratelimit-remaining headers */
 async function checkNIMProvider(): Promise<ModelCheckResult | null> {
   const apiKey = process.env.NVIDIA_NIM_API_KEY;
   const baseUrl = process.env.NVIDIA_NIM_BASE_URL || 'https://integrate.api.nvidia.com/v1';
@@ -351,12 +463,24 @@ async function checkNIMProvider(): Promise<ModelCheckResult | null> {
   if (check.ok && check.data?.data) {
     result.apiAccessible = true;
     result.canGenerate = true;
+
+    // Parse NIM's rate-limit headers (x-ratelimit-remaining, x-ratelimit-limit)
+    const rl = parseRateLimitHeaders(check.headers);
+    result.rateLimitRemaining = rl.remaining;
+    result.rateLimitTotal = rl.total;
+    const statusInfo = rateLimitStatus(rl.remaining, rl.total);
+
     result.models = check.data.data.map((m) => ({
       id: m.id, name: m.id.split('/').pop() || m.id,
-      status: 'available' as const,
-      statusReason: 'API connected',
+      status: statusInfo.status,
+      statusReason: statusInfo.reason,
+      rateLimitRemaining: rl.remaining,
+      rateLimitTotal: rl.total,
     }));
-    result.overallStatus = 'available';
+    result.overallStatus = statusInfo.status;
+    if (statusInfo.status === 'limited') {
+      result.notes = `Rate limit: ${statusInfo.reason}`;
+    }
   } else if (check.status === 401 || check.status === 403) {
     result.models = [{ id: '(auth error)', name: 'Invalid API key', status: 'unavailable' as const, statusReason: 'Check NVIDIA_NIM_API_KEY at build.nvidia.com' }];
   } else if (check.status === 429) {
@@ -369,7 +493,7 @@ async function checkNIMProvider(): Promise<ModelCheckResult | null> {
   return result;
 }
 
-/** Check Google Gemini provider — single fetch call */
+/** Check Google Gemini provider — parses rate-limit headers */
 async function checkGeminiProvider(): Promise<ModelCheckResult | null> {
   const apiKey = process.env.GEMINI_API_KEY;
   const result: ModelCheckResult = {
@@ -391,11 +515,27 @@ async function checkGeminiProvider(): Promise<ModelCheckResult | null> {
   if (check.ok && check.data?.models) {
     result.apiAccessible = true;
     result.canGenerate = true;
+
+    // Parse Gemini's rate-limit headers
+    const rl = parseRateLimitHeaders(check.headers);
+    result.rateLimitRemaining = rl.remaining;
+    result.rateLimitTotal = rl.total;
+    const statusInfo = rateLimitStatus(rl.remaining, rl.total);
+
     result.models = check.data.models.map((m) => {
       const id = m.name.replace('models/', '');
-      return { id, name: m.displayName || id, status: 'available' as const, statusReason: 'Free tier active' };
+      return {
+        id, name: m.displayName || id,
+        status: statusInfo.status,
+        statusReason: statusInfo.reason,
+        rateLimitRemaining: rl.remaining,
+        rateLimitTotal: rl.total,
+      };
     });
-    result.overallStatus = 'available';
+    result.overallStatus = statusInfo.status;
+    if (statusInfo.status === 'limited') {
+      result.notes = `Rate limit: ${statusInfo.reason}`;
+    }
   } else if (check.status === 403) {
     result.models = [{ id: '(auth error)', name: 'Invalid or expired API key', status: 'unavailable' as const, statusReason: 'Check GEMINI_API_KEY at aistudio.google.com' }];
   } else if (check.status === 429) {
@@ -408,7 +548,7 @@ async function checkGeminiProvider(): Promise<ModelCheckResult | null> {
   return result;
 }
 
-/** Check OpenRouter provider — single fetch call (includes 429 handling) */
+/** Check OpenRouter provider — parses x-ratelimit-remaining headers */
 async function checkOpenRouterProvider(): Promise<ModelCheckResult | null> {
   const apiKey = process.env.OPENROUTER_API_KEY;
   const result: ModelCheckResult = {
@@ -431,12 +571,24 @@ async function checkOpenRouterProvider(): Promise<ModelCheckResult | null> {
   if (check.ok && check.data?.data) {
     result.apiAccessible = true;
     result.canGenerate = true;
+
+    // Parse OpenRouter's rate-limit headers (x-ratelimit-remaining for credits)
+    const rl = parseRateLimitHeaders(check.headers);
+    result.rateLimitRemaining = rl.remaining;
+    result.rateLimitTotal = rl.total;
+    const statusInfo = rateLimitStatus(rl.remaining, rl.total);
+
     result.models = check.data.data.map((m) => ({
       id: m.id, name: m.name || m.id,
-      status: 'available' as const,
-      statusReason: 'API connected — requires credits',
+      status: statusInfo.status,
+      statusReason: statusInfo.reason,
+      rateLimitRemaining: rl.remaining,
+      rateLimitTotal: rl.total,
     }));
-    result.overallStatus = 'available';
+    result.overallStatus = statusInfo.status;
+    if (statusInfo.status === 'limited') {
+      result.notes = `Credits: ${statusInfo.reason}`;
+    }
   } else if (check.status === 401 || check.status === 403) {
     result.models = [{ id: '(auth error)', name: 'Invalid API key', status: 'unavailable' as const, statusReason: 'Check OPENROUTER_API_KEY at openrouter.ai/keys' }];
   } else if (check.status === 429) {

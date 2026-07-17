@@ -7,6 +7,8 @@ export interface TestedModel {
   name: string;
   status: ModelStatus;
   statusReason: string;
+  rateLimitRemaining?: number;
+  rateLimitTotal?: number;
 }
 
 export interface ProviderHealth {
@@ -20,6 +22,8 @@ export interface ProviderHealth {
   models: TestedModel[];
   notes: string;
   freeTierInfo?: string;
+  rateLimitRemaining?: number;
+  rateLimitTotal?: number;
 }
 
 export interface ModelsHealthData {
