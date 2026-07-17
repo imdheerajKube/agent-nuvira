@@ -10,6 +10,7 @@ interface LayoutProps {
 const NAV_ITEMS = [
   { path: '/', label: 'Overview', icon: '📊' },
   { path: '/dag', label: 'Execution', icon: '🔀' },
+  { path: '/models', label: 'Models', icon: '🧠' },
   { path: '/costs', label: 'Costs', icon: '💰' },
   { path: '/history', label: 'History', icon: '📝' },
   { path: '/benchmarks', label: 'Benchmarks', icon: '📈' },
@@ -26,7 +27,7 @@ export default function Layout({ children, connected, lastUpdated }: LayoutProps
       <nav className="nav">
         <div className="nav-header">
           <span className="nav-logo">🤖</span>
-          <span className="nav-title">Agent-Baba-D</span>
+          <span className="nav-title">Agent-Nuvira</span>
         </div>
         <div className="nav-links">
           {NAV_ITEMS.map((item) => (

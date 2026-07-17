@@ -10,6 +10,7 @@ import CostDashboard from './components/CostDashboard';
 import BenchmarkCharts from './components/BenchmarkCharts';
 import MemoryPanel from './components/MemoryPanel';
 import HealthPanel from './components/HealthPanel';
+import ModelsPanel from './components/ModelsPanel';
 
 export default function App() {
   const [data, setData] = useState<DashboardData | null>(null);
@@ -52,6 +53,7 @@ export default function App() {
         <Route path="/costs" element={<CostDashboard data={data} />} />
         <Route path="/benchmarks" element={<BenchmarkCharts data={data} />} />
         <Route path="/memory" element={<MemoryPanel data={data} />} />
+        <Route path="/models" element={<ModelsPanel />} />
         <Route path="/system" element={<HealthPanel data={data} />} />
         <Route path="*" element={<Navigate to="/" replace />} />
       </Routes>

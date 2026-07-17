@@ -178,6 +178,277 @@ export function readDAGData(): Record<string, unknown> {
   return { pipeline: null, nodes: [], edges: [], timestamp: Date.now(), active: false };
 }
 
+// ─── Model Health Check ────────────────────────────────────────────────────
+
+interface ModelCheckResult {
+  provider: string;
+  providerLabel: string;
+  icon: string;
+  apiConfigured: boolean;
+  apiAccessible: boolean;
+  canGenerate: boolean;
+  overallStatus: 'available' | 'limited' | 'unavailable';
+  models: Array<{ id: string; name: string; status: 'available' | 'limited' | 'unavailable'; statusReason: string }>;
+  notes: string;
+  freeTierInfo?: string;
+}
+
+/**
+ * Fetch with timeout. Returns status, ok flag, and parsed JSON body if successful.
+ * Single request per provider — no double HTTP calls.
+ */
+async function fetchWithTimeout<T = unknown>(
+  url: string,
+  init?: RequestInit,
+): Promise<{ ok: boolean; status: number; statusText: string; data?: T }> {
+  try {
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), 5000);
+    const res = await fetch(url, { ...init, signal: controller.signal });
+    clearTimeout(timeout);
+    if (res.ok) {
+      try {
+        const data = await res.json() as T;
+        return { ok: true, status: res.status, statusText: res.statusText, data };
+      } catch {
+        return { ok: true, status: res.status, statusText: res.statusText };
+      }
+    }
+    return { ok: false, status: res.status, statusText: res.statusText };
+  } catch {
+    return { ok: false, status: 0, statusText: 'Connection failed' };
+  }
+}
+
+/**
+ * Check all configured providers and return their health status.
+ */
+async function readModelsHealth(): Promise<{
+  providers: ModelCheckResult[];
+  lastChecked: number;
+  totalModels: number;
+  available: number;
+  limited: number;
+  unavailable: number;
+}> {
+  const results = await Promise.all([
+    checkLocalProvider(),
+    checkGroqProvider(),
+    checkNIMProvider(),
+    checkGeminiProvider(),
+    checkOpenRouterProvider(),
+  ]);
+
+  const providers = results.filter(Boolean) as ModelCheckResult[];
+  const totalModels = providers.reduce((sum, p) => sum + p.models.length, 0);
+  const available = providers.reduce((sum, p) => sum + p.models.filter((m) => m.status === 'available').length, 0);
+  const limited = providers.reduce((sum, p) => sum + p.models.filter((m) => m.status === 'limited').length, 0);
+  const unavailable = providers.reduce((sum, p) => sum + p.models.filter((m) => m.status === 'unavailable').length, 0);
+
+  return { providers, lastChecked: Date.now(), totalModels, available, limited, unavailable };
+}
+
+/** Check local Ollama provider — single fetch call */
+async function checkLocalProvider(): Promise<ModelCheckResult | null> {
+  const result: ModelCheckResult = {
+    provider: 'local', providerLabel: 'Ollama (Local)', icon: '💻',
+    apiConfigured: true, apiAccessible: false, canGenerate: false,
+    overallStatus: 'unavailable', models: [],
+    notes: 'Local models via Ollama at http://localhost:11434',
+    freeTierInfo: 'Fully free — runs on your machine',
+  };
+
+  const check = await fetchWithTimeout<{ models?: Array<{ name: string }> }>('http://localhost:11434/api/tags');
+  if (check.ok && check.data?.models) {
+    result.apiAccessible = true;
+    result.canGenerate = true;
+    const models = check.data.models;
+    if (models.length > 0) {
+      result.models = models.map((m) => ({
+        id: m.name, name: m.name,
+        status: 'available' as const,
+        statusReason: 'Running locally — no rate limits',
+      }));
+      result.overallStatus = 'available';
+    } else {
+      result.models = [{ id: '(no models)', name: 'No models pulled', status: 'limited' as const, statusReason: 'Run: ollama pull <model>' }];
+      result.overallStatus = 'limited';
+      result.notes = 'Ollama running but no models pulled yet';
+    }
+  } else if (check.ok) {
+    result.apiAccessible = true;
+    result.models = [{ id: '(empty)', name: 'No model data', status: 'limited' as const, statusReason: 'Could not parse model list' }];
+    result.overallStatus = 'limited';
+  } else {
+    result.models = [{ id: '(offline)', name: 'Ollama not running', status: 'unavailable' as const, statusReason: 'Install Ollama: brew install ollama' }];
+    result.overallStatus = 'unavailable';
+  }
+  return result;
+}
+
+/** Check Groq provider — single fetch call */
+async function checkGroqProvider(): Promise<ModelCheckResult | null> {
+  const apiKey = process.env.GROQ_API_KEY;
+  const result: ModelCheckResult = {
+    provider: 'groq', providerLabel: 'Groq', icon: '🟢',
+    apiConfigured: !!apiKey, apiAccessible: false, canGenerate: false,
+    overallStatus: 'unavailable', models: [],
+    notes: 'LPU cloud inference — fastest response times',
+    freeTierInfo: 'Free tier: ~30 req/min, 14400 req/day. Set GROQ_API_KEY',
+  };
+  if (!apiKey) {
+    result.models = [{ id: '(no key)', name: 'GROQ_API_KEY not set', status: 'unavailable' as const, statusReason: 'Get key at console.groq.com' }];
+    return result;
+  }
+
+  const check = await fetchWithTimeout<{ data: Array<{ id: string }> }>(
+    'https://api.groq.com/openai/v1/models',
+    { headers: { Authorization: `Bearer ${apiKey}` } },
+  );
+
+  if (check.ok && check.data?.data) {
+    result.apiAccessible = true;
+    result.canGenerate = true;
+    result.models = check.data.data.map((m) => ({
+      id: m.id, name: m.id,
+      status: 'available' as const,
+      statusReason: 'API connected — free tier active',
+    }));
+    result.overallStatus = 'available';
+  } else if (check.status === 401 || check.status === 403) {
+    result.models = [{ id: '(auth error)', name: 'Invalid API key', status: 'unavailable' as const, statusReason: 'Check GROQ_API_KEY at console.groq.com' }];
+  } else if (check.status === 429) {
+    result.apiAccessible = true;
+    result.models = [{ id: '(rate limited)', name: 'Rate limited', status: 'limited' as const, statusReason: 'Free tier rate limit hit — wait or upgrade' }];
+    result.overallStatus = 'limited';
+  } else {
+    result.models = [{ id: '(unreachable)', name: 'API unreachable', status: 'unavailable' as const, statusReason: `HTTP ${check.status}: ${check.statusText}` }];
+  }
+  return result;
+}
+
+/** Check NVIDIA NIM provider — single fetch call */
+async function checkNIMProvider(): Promise<ModelCheckResult | null> {
+  const apiKey = process.env.NVIDIA_NIM_API_KEY;
+  const baseUrl = process.env.NVIDIA_NIM_BASE_URL || 'https://integrate.api.nvidia.com/v1';
+  const result: ModelCheckResult = {
+    provider: 'nim', providerLabel: 'NVIDIA NIM', icon: '🔶',
+    apiConfigured: !!apiKey, apiAccessible: false, canGenerate: false,
+    overallStatus: 'unavailable', models: [],
+    notes: 'NVIDIA NIM cloud or self-hosted inference',
+    freeTierInfo: 'Free tier: 1000 req/day. Set NVIDIA_NIM_API_KEY',
+  };
+  if (!apiKey) {
+    result.models = [{ id: '(no key)', name: 'NVIDIA_NIM_API_KEY not set', status: 'unavailable' as const, statusReason: 'Get key at build.nvidia.com' }];
+    return result;
+  }
+
+  const check = await fetchWithTimeout<{ data: Array<{ id: string }> }>(
+    `${baseUrl}/models`,
+    { headers: { Authorization: `Bearer ${apiKey}` } },
+  );
+
+  if (check.ok && check.data?.data) {
+    result.apiAccessible = true;
+    result.canGenerate = true;
+    result.models = check.data.data.map((m) => ({
+      id: m.id, name: m.id.split('/').pop() || m.id,
+      status: 'available' as const,
+      statusReason: 'API connected',
+    }));
+    result.overallStatus = 'available';
+  } else if (check.status === 401 || check.status === 403) {
+    result.models = [{ id: '(auth error)', name: 'Invalid API key', status: 'unavailable' as const, statusReason: 'Check NVIDIA_NIM_API_KEY at build.nvidia.com' }];
+  } else if (check.status === 429) {
+    result.apiAccessible = true;
+    result.models = [{ id: '(rate limited)', name: 'Rate limited', status: 'limited' as const, statusReason: 'Free tier limit hit — wait or upgrade' }];
+    result.overallStatus = 'limited';
+  } else {
+    result.models = [{ id: '(unreachable)', name: 'API unreachable', status: 'unavailable' as const, statusReason: `HTTP ${check.status}: ${check.statusText}` }];
+  }
+  return result;
+}
+
+/** Check Google Gemini provider — single fetch call */
+async function checkGeminiProvider(): Promise<ModelCheckResult | null> {
+  const apiKey = process.env.GEMINI_API_KEY;
+  const result: ModelCheckResult = {
+    provider: 'gemini', providerLabel: 'Google Gemini', icon: '🔷',
+    apiConfigured: !!apiKey, apiAccessible: false, canGenerate: false,
+    overallStatus: 'unavailable', models: [],
+    notes: 'Google Gemini API — strong reasoning, large context',
+    freeTierInfo: 'Free tier: 60 req/min, 1500 req/day. Set GEMINI_API_KEY',
+  };
+  if (!apiKey) {
+    result.models = [{ id: '(no key)', name: 'GEMINI_API_KEY not set', status: 'unavailable' as const, statusReason: 'Get key at aistudio.google.com/apikey' }];
+    return result;
+  }
+
+  const check = await fetchWithTimeout<{ models?: Array<{ name: string; displayName?: string }> }>(
+    `https://generativelanguage.googleapis.com/v1beta/models?key=${apiKey}`,
+  );
+
+  if (check.ok && check.data?.models) {
+    result.apiAccessible = true;
+    result.canGenerate = true;
+    result.models = check.data.models.map((m) => {
+      const id = m.name.replace('models/', '');
+      return { id, name: m.displayName || id, status: 'available' as const, statusReason: 'Free tier active' };
+    });
+    result.overallStatus = 'available';
+  } else if (check.status === 403) {
+    result.models = [{ id: '(auth error)', name: 'Invalid or expired API key', status: 'unavailable' as const, statusReason: 'Check GEMINI_API_KEY at aistudio.google.com' }];
+  } else if (check.status === 429) {
+    result.apiAccessible = true;
+    result.models = [{ id: '(rate limited)', name: 'Rate limited', status: 'limited' as const, statusReason: 'Free tier limit hit — wait or upgrade to paid' }];
+    result.overallStatus = 'limited';
+  } else {
+    result.models = [{ id: '(unreachable)', name: 'API unreachable', status: 'unavailable' as const, statusReason: `HTTP ${check.status}: ${check.statusText}` }];
+  }
+  return result;
+}
+
+/** Check OpenRouter provider — single fetch call (includes 429 handling) */
+async function checkOpenRouterProvider(): Promise<ModelCheckResult | null> {
+  const apiKey = process.env.OPENROUTER_API_KEY;
+  const result: ModelCheckResult = {
+    provider: 'openrouter', providerLabel: 'OpenRouter', icon: '🟣',
+    apiConfigured: !!apiKey, apiAccessible: false, canGenerate: false,
+    overallStatus: 'unavailable', models: [],
+    notes: 'Unified API — access 200+ models',
+    freeTierInfo: 'Free credits: $1 free trial. Set OPENROUTER_API_KEY',
+  };
+  if (!apiKey) {
+    result.models = [{ id: '(no key)', name: 'OPENROUTER_API_KEY not set', status: 'unavailable' as const, statusReason: 'Get key at openrouter.ai/keys' }];
+    return result;
+  }
+
+  const check = await fetchWithTimeout<{ data: Array<{ id: string; name?: string }> }>(
+    'https://openrouter.ai/api/v1/models',
+    { headers: { Authorization: `Bearer ${apiKey}` } },
+  );
+
+  if (check.ok && check.data?.data) {
+    result.apiAccessible = true;
+    result.canGenerate = true;
+    result.models = check.data.data.map((m) => ({
+      id: m.id, name: m.name || m.id,
+      status: 'available' as const,
+      statusReason: 'API connected — requires credits',
+    }));
+    result.overallStatus = 'available';
+  } else if (check.status === 401 || check.status === 403) {
+    result.models = [{ id: '(auth error)', name: 'Invalid API key', status: 'unavailable' as const, statusReason: 'Check OPENROUTER_API_KEY at openrouter.ai/keys' }];
+  } else if (check.status === 429) {
+    result.apiAccessible = true;
+    result.models = [{ id: '(rate limited)', name: 'Rate limited', status: 'limited' as const, statusReason: 'Rate limit hit — check credits at openrouter.ai' }];
+    result.overallStatus = 'limited';
+  } else {
+    result.models = [{ id: '(unreachable)', name: 'API unreachable', status: 'unavailable' as const, statusReason: `HTTP ${check.status}: ${check.statusText}` }];
+  }
+  return result;
+}
+
 // ─── Data Readers ───────────────────────────────────────────────────────────
 
 function readJSON<T>(filePath: string): T | null {
@@ -374,6 +645,17 @@ function handleRequest(req: IncomingMessage, res: ServerResponse): void {
   if (pathname === '/api/health') {
     res.writeHead(200, { 'Content-Type': 'application/json' });
     res.end(JSON.stringify(readHealthData()));
+    return;
+  }
+
+  if (pathname === '/api/models') {
+    readModelsHealth().then((data) => {
+      res.writeHead(200, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify(data));
+    }).catch(() => {
+      res.writeHead(500, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({ error: 'Failed to check model health' }));
+    });
     return;
   }
 

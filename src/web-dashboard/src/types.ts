@@ -1,3 +1,36 @@
+// ─── Model Health Types ─────────────────────────────────────────────────────
+
+export type ModelStatus = 'available' | 'limited' | 'unavailable';
+
+export interface TestedModel {
+  id: string;
+  name: string;
+  status: ModelStatus;
+  statusReason: string;
+}
+
+export interface ProviderHealth {
+  provider: string;
+  providerLabel: string;
+  icon: string;
+  apiConfigured: boolean;
+  apiAccessible: boolean;
+  canGenerate: boolean;
+  overallStatus: ModelStatus;
+  models: TestedModel[];
+  notes: string;
+  freeTierInfo?: string;
+}
+
+export interface ModelsHealthData {
+  providers: ProviderHealth[];
+  lastChecked: number;
+  totalModels: number;
+  available: number;
+  limited: number;
+  unavailable: number;
+}
+
 // ─── Dashboard Data Types ───────────────────────────────────────────────────
 
 export interface CostData {

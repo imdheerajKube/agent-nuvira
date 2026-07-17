@@ -12,7 +12,129 @@ import { getChatHistory } from '../context/history.js';
 import { logger } from '../utils/logger.js';
 import { Orchestrator } from '../agents/orchestrator.js';
 import { printOrchestrationResult } from './execute.js';
+import { ConfigManager } from '../config/manager.js';
+import { InferenceProvider } from '../inference/interface.js';
 import type { ProviderType } from '../config/types.js';
+
+// ─── Error Recovery Types ───────────────────────────────────────────────────
+
+type ErrorRecoveryAction = 'retry' | 'switch' | 'cancel' | 'exit';
+
+interface ErrorRecoveryResult {
+  action: ErrorRecoveryAction;
+  newType?: string;
+  newProvider?: InferenceProvider;
+  newModel?: string;
+}
+
+/**
+ * Detect error type and prompt the user for a recovery action.
+ * This is a standalone function (not a method) for clarity.
+ */
+async function handleInferenceError(
+  err: unknown,
+  providerName: string,
+  configManager: ConfigManager,
+): Promise<ErrorRecoveryResult> {
+  const errorMessage = err instanceof Error ? err.message : String(err);
+  const errorStr = errorMessage.toLowerCase();
+
+  // ── Detect error type ────────────────────────────────────────────────
+  const isRateLimit =
+    errorStr.includes('429') ||
+    errorStr.includes('rate limit') ||
+    errorStr.includes('too many requests') ||
+    errorStr.includes('quota exceeded') ||
+    errorStr.includes('rate_limit');
+
+  const isAuthError =
+    errorStr.includes('401') ||
+    errorStr.includes('403') ||
+    errorStr.includes('unauthorized') ||
+    errorStr.includes('forbidden') ||
+    errorStr.includes('api key');
+
+  const isServerError =
+    errorStr.includes('500') ||
+    errorStr.includes('502') ||
+    errorStr.includes('503') ||
+    errorStr.includes('server error') ||
+    errorStr.includes('internal server');
+
+  const isNetworkError =
+    errorStr.includes('fetch failed') ||
+    errorStr.includes('econnrefused') ||
+    errorStr.includes('enotfound') ||
+    errorStr.includes('econnreset') ||
+    errorStr.includes('network') && !errorStr.includes('network policy');
+
+  const errorType = isRateLimit
+    ? '🚦 Rate limit'
+    : isAuthError
+      ? '🔑 Authentication'
+      : isServerError
+        ? '🔴 Server'
+        : isNetworkError
+          ? '🌐 Network'
+          : '⚠️  API';
+
+  // ── Show error summary ───────────────────────────────────────────────
+  console.log('');
+  logger.error(`${errorType} error from ${providerName}:`);
+  const firstLine = errorMessage.split('\n')[0];
+  logger.info(`  ${firstLine.slice(0, 200)}`);
+  console.log('');
+
+  // ── Build recovery choices ───────────────────────────────────────────
+  const choices: Array<{ name: string; value: string }> = [];
+
+  if (isRateLimit) {
+    choices.push({ name: '⏳  Wait a moment and retry', value: 'retry' });
+  }
+
+  choices.push({ name: '🔄  Switch to a different provider/model', value: 'switch' });
+
+  if (!isAuthError) {
+    choices.push({ name: '🔁  Retry with same provider', value: 'retry' });
+  }
+
+  choices.push({ name: '❌  Cancel this message', value: 'cancel' });
+  choices.push({ name: '🚪  Exit chat', value: 'exit' });
+
+  const answer = await inquirer.prompt<{ action: string }>([
+    {
+      type: 'list',
+      name: 'action',
+      message: 'How would you like to proceed?',
+      prefix: '⚡',
+      choices,
+    },
+  ]);
+
+  console.log('');
+
+  if (answer.action === 'switch') {
+    const picked = await showModelPicker(configManager);
+    if (picked) {
+      const resolved = resolveProvider(configManager, picked.provider);
+      return {
+        action: 'switch',
+        newType: resolved.type,
+        newProvider: resolved.provider,
+        newModel: picked.model,
+      };
+    }
+    // Picker cancelled — fall through to cancel
+    return { action: 'cancel' };
+  }
+
+  if (answer.action === 'retry' && isRateLimit) {
+    logger.info('⏳  Waiting 3 seconds before retry...');
+    await new Promise((resolve) => setTimeout(resolve, 3000));
+  }
+
+  return { action: answer.action as ErrorRecoveryAction };
+}
 
 /**
  * Patterns that indicate a user wants to CREATE or MODIFY files on disk
@@ -139,6 +261,24 @@ export class ChatCommand extends BaseCommand {
       return;
     }
 
+    // ── Setup SIGINT (Ctrl+C) handler for graceful exit ──────────────
+    // First press: shows warning. Second press within 2s: force exits.
+    let sigintCount = 0;
+    let sigintTimer: ReturnType<typeof setTimeout> | null = null;
+    const sigintHandler = () => {
+      sigintCount++;
+      if (sigintCount >= 2) {
+        console.log('\n');
+        process.exit(0);
+      }
+      console.log('\n\n⚠️  Press Ctrl+C again to exit, or type /exit to quit.\n');
+      if (sigintTimer) clearTimeout(sigintTimer);
+      sigintTimer = setTimeout(() => {
+        sigintCount = 0;
+      }, 2000);
+    };
+    process.on('SIGINT', sigintHandler);
+
     const cacheEnabled = options?.cache !== false;
 
     if (prompt) {
@@ -164,6 +304,7 @@ export class ChatCommand extends BaseCommand {
 
     const history: Array<{ role: string; content: string }> = [];
     const effectiveModelForHistory = model || this.configManager.getProviderConfig(type as ProviderType).config.model || 'default';
+    let effectiveModel = effectiveModelForHistory;
     this.devModeAuto = false;
 
     while (true) {
@@ -199,7 +340,6 @@ export class ChatCommand extends BaseCommand {
 
       const contextStr = history.map((h) => `${h.role}: ${h.content}`).join('\n');
       const cache = getCache();
-      const effectiveModel = effectiveModelForHistory;
 
       if (cacheEnabled) {
         const cachedResult = await cache.get(message, effectiveModel, type);
@@ -213,45 +353,105 @@ export class ChatCommand extends BaseCommand {
       const context = new ContextParser().parseFromString(contextStr, 'chat');
       const fullPrompt = ContextParser.formatContext(context);
 
-      if (typeof provider.generateStream === 'function') {
-        console.log();
-        try {
-          const result = await provider.generateStream(
-            fullPrompt,
-            { ...options, model: effectiveModel },
-            (token: string) => {
-              process.stdout.write(token);
-            },
-          );
-          console.log('\n');
+      // ── Generation retry loop ────────────────────────────────────
+      // Wraps both streaming and non-streaming paths with error recovery.
+      // On error, the user can retry, switch provider, cancel, or exit.
+      // History is preserved so switching providers is seamless.
+      let generationComplete = false;
+      let recovery: ErrorRecoveryResult | null = null;
 
-          if (cacheEnabled) {
-            await cache.set(message, result, effectiveModel, type);
-          }
-
-          history.push({ role: 'assistant', content: result });
-        } catch (err) {
+      while (!generationComplete) {
+        if (typeof provider.generateStream === 'function') {
+          // ── Streaming path ───────────────────────────────────────
           console.log();
-          logger.error(String(err));
-        }
-      } else {
-        const spinner = ora('Thinking...').start();
-        try {
-          const result = await provider.generate(fullPrompt, { ...options, model: effectiveModel });
-          spinner.stop();
-          console.log(`\n${result}\n`);
+          try {
+            const result = await provider.generateStream(
+              fullPrompt,
+              { ...options, model: effectiveModel },
+              (token: string) => {
+                process.stdout.write(token);
+              },
+            );
+            console.log('\n');
 
-          if (cacheEnabled) {
-            await cache.set(message, result, effectiveModel, type);
+            if (cacheEnabled) {
+              await cache.set(message, result, effectiveModel, type);
+            }
+
+            history.push({ role: 'assistant', content: result });
+            generationComplete = true;
+          } catch (err) {
+            console.log();
+            recovery = await handleInferenceError(
+              err,
+              provider.name,
+              this.configManager,
+            );
           }
+        } else {
+          // ── Non-streaming path ───────────────────────────────────
+          const spinner = ora('Thinking...').start();
+          try {
+            const result = await provider.generate(fullPrompt, { ...options, model: effectiveModel });
+            spinner.stop();
+            console.log(`\n${result}\n`);
 
-          history.push({ role: 'assistant', content: result });
-        } catch (err) {
-          spinner.fail('Failed to generate response');
-          logger.error(String(err));
+            if (cacheEnabled) {
+              await cache.set(message, result, effectiveModel, type);
+            }
+
+            history.push({ role: 'assistant', content: result });
+            generationComplete = true;
+          } catch (err) {
+            spinner.stop();
+            recovery = await handleInferenceError(
+              err,
+              provider.name,
+              this.configManager,
+            );
+          }
         }
+
+        // ── Handle recovery action ────────────────────────────────
+        if (!recovery) {
+          // No recovery needed — generation succeeded or wasn't attempted
+          continue;
+        }
+
+        if (recovery.action === 'retry') {
+          continue; // retry with the same provider/model
+        }
+
+        if (recovery.action === 'switch' && recovery.newProvider) {
+          type = recovery.newType!;
+          provider = recovery.newProvider;
+          effectiveModel = recovery.newModel || effectiveModelForHistory;
+          model = effectiveModel; // keep model in sync for /info command
+          logger.success(`✅ Switched to ${provider.name} / ${effectiveModel}`);
+          console.log('');
+          continue; // retry with the new provider
+        }
+
+        if (recovery.action === 'exit') {
+          // Clean exit — outer return handles history storage
+          generationComplete = true;
+          break;
+        }
+
+        // Cancel: remove the unanswered user message from history
+        history.pop();
+        console.log('');
+        logger.info('Message cancelled. You can type a new one.');
+        console.log('');
+        generationComplete = true;
       }
+
+      if (recovery?.action === 'exit') break;
     }
+
+    // Cleanup SIGINT handler
+    process.off('SIGINT', sigintHandler);
+    if (sigintTimer) clearTimeout(sigintTimer);
 
     // Store chat session in history when exiting
     if (history.length > 0) {
@@ -306,10 +506,29 @@ export class ChatCommand extends BaseCommand {
         input: process.stdin,
         output: process.stdout,
         prompt: prompt + ' ',
+        // Don't let readline handle SIGINT — we handle it at process level
+        terminal: true,
       });
 
       const lines: string[] = [];
       let isFirstLine = true;
+
+      // Handle SIGINT on readline: 
+      // - If user was typing: cancel input and re-prompt
+      // - If no input: resolve with '/exit' to trigger clean exit
+      rl.on('SIGINT', () => {
+        if (lines.length > 0 || !isFirstLine) {
+          // User was typing something — cancel input and re-prompt
+          lines.length = 0;
+          isFirstLine = true;
+          rl.setPrompt(prompt + ' ');
+          rl.prompt();
+          return;
+        }
+        // No input yet — exit the chat cleanly (like typing /exit)
+        lines.push('/exit');
+        rl.close();
+      });
 
       rl.on('line', (line) => {
         if (isFirstLine) {
