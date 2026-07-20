@@ -1,0 +1,11 @@
+{
+  "name": "filesystem",
+  "transport": "stdio",
+  "command": "npx",
+  "args": [
+    "-y",
+    "@modelcontextprotocol/server-filesystem",
+    "/path/to/your/project"
+  ],
+  "enabled": true
+}

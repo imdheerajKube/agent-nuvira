@@ -35,6 +35,15 @@ export function loadEnv(): Record<string, string | undefined> {
     Object.assign(env, homeEnv);
   }
 
+  // Write .env values back to process.env so that consumers reading
+  // from process.env directly (e.g. dashboard server) pick them up.
+  // Do NOT override existing process.env values — system env vars take priority.
+  for (const [key, value] of Object.entries(env)) {
+    if (!(key in process.env) && value !== undefined) {
+      process.env[key] = value;
+    }
+  }
+
   return env;
 }
 

@@ -2,6 +2,7 @@ import { Command } from 'commander';
 import ora from 'ora';
 import { BaseCommand } from './commands.js';
 import { resolveProvider } from './router.js';
+import { getPluginRegistry } from '../plugins/registry.js';
 import { logger } from '../utils/logger.js';
 import { ProviderType } from '../config/types.js';
 
@@ -25,9 +26,14 @@ export class ModelsCommand extends BaseCommand {
   }
 
   private async execute(options?: { provider?: string; search?: string; all?: boolean; verify?: boolean }): Promise<void> {
-    const providersToCheck: ProviderType[] = options?.provider
-      ? [options.provider as ProviderType]
-      : ['nim', 'gemini', 'openrouter', 'groq', 'local'];
+    const providersToCheck: string[] = options?.provider
+      ? [options.provider]
+      : (() => {
+          const builtin: ProviderType[] = ['nim', 'gemini', 'openrouter', 'groq', 'local'];
+          const registry = getPluginRegistry();
+          const pluginTypes = registry.getAllPlugins().map((p) => p.getProviderType());
+          return Array.from(new Set([...builtin, ...pluginTypes]));
+        })();
 
     // If --verify, show API key/configuration status and then list models
     if (options?.verify) {

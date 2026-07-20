@@ -15,6 +15,9 @@ import { readFileSync, writeFileSync, existsSync, mkdirSync } from 'node:fs';
 import { join } from 'node:path';
 import { homedir } from 'node:os';
 
+import { embed } from '../memory/embedder.js';
+import { getVectorStore } from '../memory/vector-store.js';
+
 // ─── Types ──────────────────────────────────────────────────────────────────
 
 export interface HistoryMessage {
@@ -136,12 +139,43 @@ function extractTags(messages: HistoryMessage[]): string[] {
  */
 export class ChatHistory {
   /**
+   * Global config for ChatHistory behavior.
+   * Set at startup from buffconfig.json by CLI entry point.
+   */
+  private static _semanticSearchEnabled: boolean = true;
+
+  /**
+   * Enable or disable semantic search indexing globally.
+   * When disabled, `storeSession` skips auto-embedding and the VectorStore
+   * is not populated with chat history entries.
+   */
+  static setSemanticSearchEnabled(enabled: boolean): void {
+    ChatHistory._semanticSearchEnabled = enabled;
+  }
+
+  /**
+   * Check whether semantic search indexing is currently enabled.
+   */
+  static isSemanticSearchEnabled(): boolean {
+    return ChatHistory._semanticSearchEnabled;
+  }
+  /**
    * Store a completed chat session.
+   *
+   * @param messages        Chat messages
+   * @param provider        Provider name
+   * @param model           Model name
+   * @param indexSemantic   If true (default), also index the session in the VectorStore
+   *                        for fast semantic search. The embedding uses the fastest
+   *                        available tier (Xenova → Python → LLM), so it's typically
+   *                        fast and free.
+   * @returns               The session ID, or '' if messages is empty
    */
   storeSession(
     messages: HistoryMessage[],
     provider: string,
     model: string,
+    indexSemantic: boolean = true,
   ): string {
     if (messages.length === 0) return '';
 
@@ -166,6 +200,12 @@ export class ChatHistory {
     data.sessions[id] = session;
     writeHistory(data);
 
+    // Index in VectorStore for semantic search (fast, best-effort)
+    // Skipped entirely when semantic search is disabled via config
+    if (indexSemantic && ChatHistory._semanticSearchEnabled) {
+      this.indexSessionForSearch(session);
+    }
+
     return id;
   }
 
@@ -187,7 +227,8 @@ export class ChatHistory {
    */
   search(query: string, limit: number = 10): HistorySession[] {
     const data = readHistory();
-    const q = query.toLowerCase();
+    const q = query.trim().toLowerCase();
+    if (!q) return [];
 
     const scored = Object.values(data.sessions)
       .map((session) => {
@@ -285,6 +326,88 @@ export class ChatHistory {
   }
 
   /**
+   * Search sessions by semantic similarity to a query.
+   * Uses the local embedder (Xenova tier) for fast, free vector search —
+   * typically 10x faster than LLM-based embedding.
+   *
+   * Falls back to keyword search if the vector store is empty or
+   * embedding fails.
+   *
+   * @param query   Search query (natural language)
+   * @param limit   Maximum results to return
+   * @returns       Matching sessions sorted by relevance
+   */
+  async searchSemantic(
+    query: string,
+    limit: number = 10,
+  ): Promise<HistorySession[]> {
+    const q = query.trim();
+    if (!q) return [];
+
+    try {
+      // Embed the query using fastest available tier (Xenova → Python → LLM)
+      const queryVector = await embed(q);
+
+      // If all embedding tiers failed, fall back to keyword search
+      if (queryVector.every((v) => v === 0)) {
+        return this.search(query, limit);
+      }
+
+      // Search the vector store — only match entries from ChatHistory (session-* IDs)
+      const vs = getVectorStore();
+      const results = await vs.search(queryVector, limit, (entry) => {
+        return entry.id.startsWith('session-');
+      });
+
+      if (results.length === 0) {
+        return this.search(query, limit);
+      }
+
+      // Load full sessions from the history store
+      const data = readHistory();
+      const matched: HistorySession[] = [];
+      for (const { entry, similarity } of results) {
+        const session = data.sessions[entry.id];
+        if (session) {
+          matched.push(session);
+        }
+      }
+
+      return matched;
+    } catch {
+      // Graceful fallback to keyword search
+      return this.search(query, limit);
+    }
+  }
+
+  /**
+   * Rebuild the semantic search index by embedding all stored sessions.
+   * This replaces any existing chat-history entries in the VectorStore.
+   *
+   * Use this when:
+   * - Upgrading from an older version without semantic indexing
+   * - You want to refresh embeddings after a model update
+   *
+   * @returns  Number of sessions successfully indexed
+   */
+  async reindexSemantic(): Promise<number> {
+    const data = readHistory();
+    const sessions = Object.values(data.sessions);
+    let indexed = 0;
+
+    for (const session of sessions) {
+      try {
+        await this.indexSessionForSearch(session);
+        indexed++;
+      } catch {
+        // Best-effort — skip failed embeddings
+      }
+    }
+
+    return indexed;
+  }
+
+  /**
    * Format a search result for display.
    */
   formatSessionSummary(session: HistorySession): string {
@@ -302,6 +425,41 @@ export class ChatHistory {
   }
 
   // ── Private ────────────────────────────────────────────────────────────
+
+  /**
+   * Index a single session in the VectorStore for semantic search.
+   * Generates an embedding and inserts it with the session ID.
+   * Gracefully handles failures (best-effort).
+   */
+  private async indexSessionForSearch(session: HistorySession): Promise<void> {
+    try {
+      // Build a representative text for embedding (summary + key messages)
+      const embeddingText = [
+        `Summary: ${session.summary}`,
+        `Tags: ${session.tags.join(', ')}`,
+        `Provider: ${session.provider}`,
+        `Model: ${session.model}`,
+        ...session.messages.slice(0, 4).map((m) => `${m.role}: ${m.content.slice(0, 500)}`),
+      ].join('\n');
+
+      const vector = await embed(embeddingText);
+
+      // Only insert if embedding succeeded (non-zero vector)
+      if (vector.some((v) => v !== 0)) {
+        const vs = getVectorStore();
+        await vs.insert(session.id, vector, {
+          type: 'chat_history',
+          summary: session.summary,
+          tags: session.tags,
+          provider: session.provider,
+          model: session.model,
+          startedAt: session.startedAt,
+        });
+      }
+    } catch {
+      // Best-effort — embedding failure shouldn't break session storage
+    }
+  }
 
   private pruneIfNeeded(data: HistoryData): void {
     const entries = Object.keys(data.sessions);

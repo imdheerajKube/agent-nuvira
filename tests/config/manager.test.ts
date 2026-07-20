@@ -129,11 +129,12 @@ describe('ConfigManager', () => {
       expect(config.runner).toBe('ollama');
     });
 
-    it('should throw for unknown provider type', () => {
+    it('should return empty config for unknown provider types', () => {
       const manager = new ConfigManager(join(testDir, 'test-h'));
-      expect(() => manager.getProviderConfig('unknown' as any)).toThrow(
-        /No configuration found/
-      );
+      const { type, config } = manager.getProviderConfig('unknown');
+
+      expect(type).toBe('unknown');
+      expect(config).toEqual({});
     });
   });
 
@@ -195,6 +196,134 @@ describe('ConfigManager', () => {
       config.defaultProvider = 'nim';
 
       expect(manager.getAll().defaultProvider).toBe('local');
+    });
+  });
+
+  describe('history config', () => {
+    it('should have default retentionDays of 30', () => {
+      const manager = new ConfigManager(join(testDir, 'test-o'));
+      const config = manager.getAll();
+
+      expect(config.history).toBeDefined();
+      expect(config.history!.retentionDays).toBe(30);
+    });
+
+    it('should load history config from file', () => {
+      const configDir = join(testDir, 'test-p');
+      mkdirSync(configDir, { recursive: true });
+      writeFileSync(
+        join(configDir, 'buffconfig.json'),
+        JSON.stringify({ history: { retentionDays: 60 } }),
+        'utf-8',
+      );
+
+      const manager = new ConfigManager(configDir);
+      const config = manager.getAll();
+
+      expect(config.history).toBeDefined();
+      expect(config.history!.retentionDays).toBe(60);
+    });
+
+    it('should merge partial history config with defaults', () => {
+      // If only partial history config is provided, defaults should be preserved
+      const configDir = join(testDir, 'test-q');
+      mkdirSync(configDir, { recursive: true });
+      writeFileSync(
+        join(configDir, 'buffconfig.json'),
+        JSON.stringify({ history: { retentionDays: 14 } }),
+        'utf-8',
+      );
+
+      const manager = new ConfigManager(configDir);
+      const config = manager.getAll();
+
+      expect(config.history!.retentionDays).toBe(14);
+    });
+
+    it('should save history config to disk', () => {
+      const configDir = join(testDir, 'test-r');
+      const manager = new ConfigManager(configDir);
+
+      manager.save({ history: { retentionDays: 90 } } as any);
+
+      const savedContent = readFileSync(join(configDir, 'buffconfig.json'), 'utf-8');
+      const savedConfig = JSON.parse(savedContent);
+
+      expect(savedConfig.history).toBeDefined();
+      expect(savedConfig.history.retentionDays).toBe(90);
+    });
+
+    it('should retain history config across load-save cycle', () => {
+      const configDir = join(testDir, 'test-s');
+      mkdirSync(configDir, { recursive: true });
+      writeFileSync(
+        join(configDir, 'buffconfig.json'),
+        JSON.stringify({ history: { retentionDays: 45 } }),
+        'utf-8',
+      );
+
+      const manager = new ConfigManager(configDir);
+      manager.save({ defaultProvider: 'groq' });
+
+      const savedContent = readFileSync(join(configDir, 'buffconfig.json'), 'utf-8');
+      const savedConfig = JSON.parse(savedContent);
+
+      // history config should persist across saves
+      expect(savedConfig.history.retentionDays).toBe(45);
+      expect(savedConfig.defaultProvider).toBe('groq');
+    });
+  });
+
+  describe('semanticSearch config', () => {
+    it('should default to true', () => {
+      const manager = new ConfigManager(join(testDir, 'test-t'));
+      const config = manager.getAll();
+
+      expect(config.history).toBeDefined();
+      expect(config.history!.semanticSearch).toBe(true);
+    });
+
+    it('should load semanticSearch from config file', () => {
+      const configDir = join(testDir, 'test-u');
+      mkdirSync(configDir, { recursive: true });
+      writeFileSync(
+        join(configDir, 'buffconfig.json'),
+        JSON.stringify({ history: { semanticSearch: false } }),
+        'utf-8',
+      );
+
+      const manager = new ConfigManager(configDir);
+      const config = manager.getAll();
+
+      expect(config.history!.semanticSearch).toBe(false);
+    });
+
+    it('should save semanticSearch to disk', () => {
+      const configDir = join(testDir, 'test-v');
+      const manager = new ConfigManager(configDir);
+
+      manager.save({ history: { semanticSearch: false } } as any);
+
+      const savedContent = readFileSync(join(configDir, 'buffconfig.json'), 'utf-8');
+      const savedConfig = JSON.parse(savedContent);
+
+      expect(savedConfig.history.semanticSearch).toBe(false);
+    });
+
+    it('should coexist with retentionDays in the same history config', () => {
+      const configDir = join(testDir, 'test-w');
+      mkdirSync(configDir, { recursive: true });
+      writeFileSync(
+        join(configDir, 'buffconfig.json'),
+        JSON.stringify({ history: { retentionDays: 14, semanticSearch: false } }),
+        'utf-8',
+      );
+
+      const manager = new ConfigManager(configDir);
+      const config = manager.getAll();
+
+      expect(config.history!.retentionDays).toBe(14);
+      expect(config.history!.semanticSearch).toBe(false);
     });
   });
 });

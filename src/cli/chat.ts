@@ -12,9 +12,11 @@ import { getChatHistory } from '../context/history.js';
 import { logger } from '../utils/logger.js';
 import { Orchestrator } from '../agents/orchestrator.js';
 import { printOrchestrationResult } from './execute.js';
+import { applyActiveModel } from './model.js';
 import { ConfigManager } from '../config/manager.js';
 import { InferenceProvider } from '../inference/interface.js';
 import type { ProviderType } from '../config/types.js';
+import { getProviderFallback, classifyFallbackError, isRetryableError } from '../learning/provider-fallback.js';
 
 // ─── Error Recovery Types ───────────────────────────────────────────────────
 
@@ -238,8 +240,12 @@ export class ChatCommand extends BaseCommand {
   }
 
   private async execute(prompt?: string, options?: { file?: string; provider?: string; model?: string; cache?: boolean; dev?: boolean }): Promise<void> {
-    let { type, provider } = await this.getProvider(options || {});
-    let model = options?.model;
+    // Apply the active model state from `buff model switch` as defaults
+    const activeOpts = applyActiveModel({ provider: options?.provider, model: options?.model });
+    const mergedOpts = { ...options, provider: activeOpts.provider, model: activeOpts.model };
+
+    let { type, provider } = await this.getProvider(mergedOpts);
+    let model = mergedOpts.model;
 
     // In interactive mode (no prompt), show the model picker if no --model was specified
     if (!model && !prompt) {
@@ -298,7 +304,7 @@ export class ChatCommand extends BaseCommand {
     logger.info(`💡 Tip: Ask me to "create" something and I'll offer to switch to developer mode!\n`);
 
     const history: Array<{ role: string; content: string }> = [];
-    const effectiveModelForHistory = model || this.configManager.getProviderConfig(type as ProviderType).config.model || 'default';
+    let effectiveModelForHistory = model || this.configManager.getProviderConfig(type as ProviderType).config.model || 'default';
     let effectiveModel = effectiveModelForHistory;
     this.devModeAuto = false;
 
@@ -307,7 +313,17 @@ export class ChatCommand extends BaseCommand {
       if (!message) continue;
 
       if (message.startsWith('/')) {
-        if (this.handleCommand(message, provider, model)) break;
+        const result = await this.handleCommand(message, provider, model, type);
+        if (result.exit) break;
+        if (result.newProvider) {
+          type = result.newType!;
+          provider = result.newProvider;
+          model = result.newModel;
+          effectiveModel = result.newModel || effectiveModelForHistory;
+          effectiveModelForHistory = effectiveModel;
+          logger.success(`✅ Switched to ${provider.name} / ${model}`);
+          console.log('');
+        }
         continue;
       }
 
@@ -377,6 +393,52 @@ export class ChatCommand extends BaseCommand {
             generationComplete = true;
           } catch (err) {
             console.log();
+            // Try automatic fallback before prompting user
+            const errorType = classifyFallbackError(err);
+            if (isRetryableError(errorType)) {
+              try {
+                const fallback = getProviderFallback(this.configManager, this.configManager.getAll().fallback);
+                logger.warn(`🔄 Attempting automatic failover to next provider...`);
+                console.log('');
+                const fallbackResult = await fallback.callWithFallback(
+                  type,
+                  async (fbProvider, fbType) => {
+                    const fbOpts = { ...options, model: effectiveModel };
+                    let result = '';
+                    if (typeof fbProvider.generateStream === 'function') {
+                      const chunks: string[] = [];
+                      await fbProvider.generateStream(fullPrompt, fbOpts, (t: string) => { chunks.push(t); process.stdout.write(t); });
+                      result = chunks.join('');
+                    } else {
+                      result = await fbProvider.generate(fullPrompt, fbOpts);
+                    }
+                    return result;
+                  },
+                  { context: 'chat', label: 'Chat response' },
+                );
+
+                console.log('\n');
+                if (cacheEnabled) {
+                  await cache.set(message, fallbackResult.response, effectiveModel, fallbackResult.provider);
+                }
+                history.push({ role: 'assistant', content: fallbackResult.response });
+
+                // Update current provider/model to the successful fallback
+                const resolved = resolveProvider(this.configManager, fallbackResult.provider);
+                type = resolved.type;
+                provider = resolved.provider;
+                // Don't update effectiveModel since we want to keep the original model
+                if (fallbackResult.attempts > 1) {
+                  logger.success(`✅ Auto-fallback: switched to ${fallbackResult.provider} (attempt ${fallbackResult.attempts})`);
+                  console.log('');
+                }
+
+                generationComplete = true;
+                continue;
+              } catch {
+                // Auto-fallback exhausted — fall through to interactive recovery
+              }
+            }
             recovery = await handleInferenceError(
               err,
               provider.name,
@@ -399,6 +461,42 @@ export class ChatCommand extends BaseCommand {
             generationComplete = true;
           } catch (err) {
             spinner.stop();
+            // Try automatic fallback before prompting user
+            const errorType = classifyFallbackError(err);
+            if (isRetryableError(errorType)) {
+              try {
+                const fallback = getProviderFallback(this.configManager, this.configManager.getAll().fallback);
+                const fallbackResult = await fallback.callWithFallback(
+                  type,
+                  async (fbProvider, fbType) => {
+                    return await fbProvider.generate(fullPrompt, { ...options, model: effectiveModel });
+                  },
+                  { context: 'chat', label: 'Chat response' },
+                );
+
+                spinner.stop();
+                console.log(`\n${fallbackResult.response}\n`);
+
+                if (cacheEnabled) {
+                  await cache.set(message, fallbackResult.response, effectiveModel, fallbackResult.provider);
+                }
+                history.push({ role: 'assistant', content: fallbackResult.response });
+
+                const resolved = resolveProvider(this.configManager, fallbackResult.provider);
+                type = resolved.type;
+                provider = resolved.provider;
+                if (fallbackResult.attempts > 1) {
+                  logger.success(`✅ Auto-fallback: switched to ${fallbackResult.provider} (attempt ${fallbackResult.attempts})`);
+                  console.log('');
+                }
+
+                generationComplete = true;
+                continue;
+              } catch {
+                spinner.stop();
+                // Auto-fallback exhausted — fall through to interactive recovery
+              }
+            }
             recovery = await handleInferenceError(
               err,
               provider.name,
@@ -583,12 +681,17 @@ export class ChatCommand extends BaseCommand {
     });
   }
 
-  private handleCommand(cmd: string, provider: any, model?: string): boolean {
+  private async handleCommand(
+    cmd: string,
+    provider: any,
+    model: string | undefined,
+    currentType: string,
+  ): Promise<{ exit: boolean; newType?: string; newProvider?: any; newModel?: string }> {
     switch (cmd.toLowerCase()) {
       case '/exit':
       case '/quit':
         console.log('Goodbye!');
-        return true;
+        return { exit: true };
       case '/help':
         console.log(`
 Commands:
@@ -598,14 +701,15 @@ Commands:
   /help                 Show this help
   /dev                  Toggle developer mode (auto-create files)
   /search <query>       Search past conversations by keyword
+  /model                Switch providers/models mid-session
         `.trim());
-        break;
+        return { exit: false };
       case '/clear':
         console.log('Conversation history cleared.');
-        break;
+        return { exit: false };
       case '/info':
         console.log(`\n${provider.getInfo()}${model ? `\n  Model: ${model}` : ''}\n`);
-        break;
+        return { exit: false };
       case '/dev':
         this.devModeAuto = !this.devModeAuto;
         if (this.devModeAuto) {
@@ -613,32 +717,68 @@ Commands:
         } else {
           logger.info('ℹ️  Developer mode DEACTIVATED — creation requests will ask for confirmation.');
         }
-        break;
-      case '/search': {
-        const searchQuery = cmd.slice(8).trim();
-        if (!searchQuery) {
-          console.log('Usage: /search <query>  — e.g., /search authentication');
-          break;
+        return { exit: false };
+      case '/model': {
+        const picked = await showModelPicker(this.configManager);
+        if (!picked) {
+          logger.info('Model selection cancelled.');
+          return { exit: false };
         }
-        const history = getChatHistory();
-        const results = history.search(searchQuery, 5);
+        const resolved = resolveProvider(this.configManager, picked.provider);
+        if (resolved.type !== currentType || picked.model !== model) {
+          return {
+            exit: false,
+            newType: resolved.type,
+            newProvider: resolved.provider,
+            newModel: picked.model,
+          };
+        }
+        return { exit: false };
+      }
+      case '/search': {
+        let searchQuery = cmd.slice(8).trim();
+        let useSemantic = false;
+
+        if (searchQuery.startsWith('--semantic ')) {
+          useSemantic = true;
+          searchQuery = searchQuery.slice(11).trim();
+        }
+
+        if (!searchQuery) {
+          console.log('Usage:');
+          console.log('  /search <query>               Keyword search (default)');
+          console.log('  /search --semantic <query>    Semantic search (using local embeddings)');
+          console.log('');
+          console.log('Examples:');
+          console.log('  /search authentication');
+          console.log('  /search --semantic how to add JWT auth to Express');
+          return { exit: false };
+        }
+
+        const chatHistory = getChatHistory();
+        const results = useSemantic
+          ? await chatHistory.searchSemantic(searchQuery, 5)
+          : chatHistory.search(searchQuery, 5);
+
         if (results.length === 0) {
           logger.info(`No past conversations found matching "${searchQuery}".`);
         } else {
-          logger.highlight(`🔍 Past conversations matching "${searchQuery}":`);
+          const mode = useSemantic ? '🧠' : '🔍';
+          const modeLabel = useSemantic ? ' (semantic)' : '';
+          logger.highlight(`${mode} Past conversations matching "${searchQuery}"${modeLabel}:`);
           console.log('');
           for (const session of results) {
-            console.log(history.formatSessionSummary(session));
+            console.log(chatHistory.formatSessionSummary(session));
           }
           console.log('');
           logger.info('Use `buff history show <session-id>` to view a full conversation.');
         }
-        break;
+        return { exit: false };
       }
       default:
         console.log(`Unknown command: ${cmd}. Type /help`);
+        return { exit: false };
     }
-    return false;
   }
 
   private async generateWithContext(

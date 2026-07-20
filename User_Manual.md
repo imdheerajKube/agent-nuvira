@@ -1,6 +1,6 @@
 # Agent-Nuvira — User Manual
 
-**Version 1.14.5 | July 2026**
+**Version 1.14.6 | July 2026**
 
 > *Agent-Nuvira: Multi-agent AI coding CLI — plan, write, review, test, and publish code with local models (Ollama) or cloud APIs (Groq, NVIDIA NIM, Google Gemini, OpenRouter).*
 
@@ -32,7 +32,16 @@ Agent-Nuvira is a **multi-agent AI coding assistant** that runs entirely from yo
 - **Plan codebase changes** with structured implementation plans
 - **Execute multi-agent pipelines** that autonomously plan, write, review, test, and publish code
 - **Discover models** across all connected providers
+- **Switch providers mid-session** without losing conversation state
+- **Auto-compile skills** from successful execution trajectories
+- **Scaffold new projects** with interactive templates
 - **Monitor provider health** via a web dashboard
+- **Federate agents** across multiple machines for distributed task execution
+- **Benchmark models** with a 21-task evaluation suite to compare quality, speed, and cost
+- **Search conversation history** with keyword or semantic (embedding-based) search
+- **Security scan** code and prompts for PII leaks, injection attempts, and dangerous patterns
+- **Rate agent outcomes** with `buff feedback` to drive self-improvement
+- **Browse, search, and install** workflow templates and plugins via `buff marketplace`
 
 ### 1.2 Key Concepts
 
@@ -42,6 +51,9 @@ Agent-Nuvira is a **multi-agent AI coding assistant** that runs entirely from yo
 | **Agent** | A specialized AI worker role (Planner, Writer, Reviewer, Tester, etc.) |
 | **Orchestrator** | The engine that coordinates multiple agents to complete a goal |
 | **Workflow** | A predefined sequence of agent steps, configurable via YAML templates |
+| **Skill** | A reusable, parameterized script auto-extracted from successful agent trajectories |
+| **Context Pruner** | Automatic token-aware compression that prevents long chains from exceeding context windows |
+| **Model Switch** | Change inference providers mid-session without losing agent state or conversation history |
 
 ### 1.3 Supported Platforms
 
@@ -104,7 +116,7 @@ Verify the installation:
 
 ```bash
 agent-nuvira --version
-# Expected output: 1.14.5
+# Expected output: 1.14.6
 
 agent-nuvira --help
 # Shows all available commands
@@ -187,7 +199,31 @@ npm install -g agent-nuvira
 
 > **Note:** On Windows, if you encounter `ENOENT` errors with the `dashboard` command, ensure `start` is available in your PATH. The dashboard uses platform-specific browser launch commands.
 
-### 3.4 Verify Installation
+### 3.4 Docker Installation (Alternative — No Node.js Required)
+
+```bash
+# Clone the repository
+git clone https://github.com/imdheerajKube/agent-nuvira.git
+cd agent-nuvira
+
+# Create environment file
+cp .env.example .env
+# Edit .env with your API keys
+
+# Build and launch
+# Default: dashboard at http://localhost:3030
+docker compose up
+
+# For local inference with Ollama:
+docker compose --profile ollama up
+
+# Run one-shot commands:
+docker compose run --rm agent-nuvira chat "explain recursion in Rust"
+docker compose run --rm agent-nuvira execute "add health check"
+docker compose run --rm agent-nuvira models --provider groq
+```
+
+### 3.5 Verify Installation
 
 Run these commands to confirm everything is working:
 
@@ -211,6 +247,8 @@ agent-nuvira chat "Hello! What can you do?" --provider groq
 
 ### 4.1 First Run — 5-Minute Quickstart
 
+**Option A: npm install (standard)**
+
 ```bash
 # Step 1: Set your API key
 export GROQ_API_KEY="gsk_your_key_here"
@@ -226,6 +264,13 @@ agent-nuvira models --provider groq
 
 # Step 5: Edit a file with AI
 agent-nuvira edit README.md --instruction "add a badge section"
+```
+
+**Option B: Docker (no Node.js required)**
+
+```bash
+docker compose up        # Start dashboard at http://localhost:3030
+docker compose run --rm agent-nuvira chat "Hello!"
 ```
 
 ### 4.2 The Interactive Chat Experience
@@ -252,6 +297,7 @@ You: write a Python function to reverse a string
 | `/help` | Show available commands |
 | `/dev` | Toggle developer mode (auto-create files) |
 | `/search <query>` | Search past conversations |
+| `/model` | Switch providers mid-session (shortcut for `buff model switch`) |
 
 **Multi-line Input:** 
 - Type your message on the first line
@@ -331,7 +377,26 @@ agent-nuvira config list
 agent-nuvira config init
 ```
 
-### 5.3 Environment Variables
+### 5.3 Search & History Configuration
+
+```bash
+# Set how many days to keep chat history (auto-pruned on CLI startup)
+agent-nuvira config set history.retentionDays 30
+
+# Enable or disable automatic semantic embedding on every chat session
+agent-nuvira config set history.semanticSearch true
+
+# Disable semantic search (keyword-only, faster, no embedding costs)
+agent-nuvira config set history.semanticSearch false
+
+# View current history settings
+agent-nuvira config get history.retentionDays
+agent-nuvira config get history.semanticSearch
+```
+
+When `history.semanticSearch` is enabled, every chat session is automatically embedded using the native 3-tier embedder (Xenova → Python → LLM fallback). This enables semantic `/search --semantic` queries without manual reindexing. Run `agent-nuvira history reindex` to rebuild the semantic index from existing sessions.
+
+### 5.4 Environment Variables
 
 API keys can be set via environment variables. They take **priority** over the config file.
 
@@ -356,7 +421,7 @@ GROQ_API_KEY=gsk_xxxxxxxxxxxxxxxxxxxxxxxxxxxx
 NVIDIA_NIM_API_KEY=nvapi-xxxxxxxxxxxxxxxxxxxxxxxxxxxx
 ```
 
-### 5.4 Provider-Specific Configuration
+### 5.5 Provider-Specific Configuration
 
 #### Local (Ollama)
 
@@ -432,12 +497,18 @@ agent-nuvira chat --provider openrouter --model openai/gpt-4o
 | `sandbox` | Manage execution sandbox | `agent-nuvira sandbox [command]` |
 | `stats` | View usage statistics | `agent-nuvira stats [command]` |
 | `history` | View chat history | `agent-nuvira history [command]` |
+| `model` | Switch providers and manage models | `agent-nuvira model [command]` |
+| `skill` | List, compile, and run reusable skills | `agent-nuvira skill [command]` |
 | `init` | Scaffold new projects | `agent-nuvira init [project-name]` |
 | `learn` | Manage learning data | `agent-nuvira learn [command]` |
 | `doctor` | Run health checks | `agent-nuvira doctor` |
 | `team` | Team collaboration | `agent-nuvira team [command]` |
 | `sdk` | SDK tools | `agent-nuvira sdk [command]` |
 | `federation` | Federation management | `agent-nuvira federation [command]` |
+| `provider` | List providers and check health | `agent-nuvira provider [command]` |
+| `security` | Security scan for PII, injection, dangerous code | `agent-nuvira security scan [input] [options]` |
+| `feedback` | Record, list, and analyze user feedback ratings | `agent-nuvira feedback [command]` |
+| `marketplace` | Browse, search, install marketplace items | `agent-nuvira marketplace [command]` |
 
 ### 6.2 Global Options
 
@@ -513,12 +584,15 @@ Options:
   --agent-model <map>        Per-agent model config (e.g., planner=gemini,writer=groq)
   --memory                   Use persistent memory across sessions
   --review                   Create review bundle (don't apply changes)
+  --context-limit <tokens>   Max tokens before pruning activates (default: 128000)
+  --context-prune <mode>     Prune aggressiveness: soft | medium | aggressive (default: soft)
 
 Examples:
   agent-nuvira execute "add JWT authentication"
   agent-nuvira execute "refactor database layer" --verbose
   agent-nuvira execute "add tests" --memory
   agent-nuvira execute "fix login bug" --dry-run
+  agent-nuvira execute "build microservice" --context-limit 256000 --context-prune medium
 ```
 
 ### 6.7 Workflow Options
@@ -539,7 +613,73 @@ Examples:
   agent-nuvira workflow install code-review
 ```
 
-### 6.8 Dashboard
+### 6.8 Model Command — Context-Preserving Provider Switching
+
+```bash
+agent-nuvira model [command] [options]
+
+Commands:
+  (no subcommand)    Show current config + prompt to switch
+  list               Table of all providers with status
+  switch [provider]  Interactive or direct provider/model switch
+  info               Detailed active configuration
+  recommend          Model routing recommendations
+  health             Quick health check for active provider
+
+Examples:
+  agent-nuvira model                           # Show current + switch prompt
+  agent-nuvira model list                      # All providers with status
+  agent-nuvira model switch                    # Interactive categorized picker
+  agent-nuvira model switch groq               # Switch to Groq
+  agent-nuvira model switch groq/llama-3.3-70b # Switch to specific model
+```
+
+Switching preserves all conversation history and agent state — seamless mid-session migration.
+
+### 6.9 Skill Command — Reusable Skill Scripts
+
+```bash
+agent-nuvira skill [command] [options]
+
+Commands:
+  list                         List all compiled skills
+  show <name>                  Show a skill's definition and steps
+  run <name>                   Run a skill with the orchestrator
+  compile                      Manually trigger skill compilation
+  search <keyword>             Search skills by keyword
+  quality                      Show skill quality scores
+  gc                           Garbage-collect old/low-quality skills
+
+Examples:
+  agent-nuvira skill list
+  agent-nuvira skill show "Add CLI Command"
+  agent-nuvira skill run "Add CLI Command" --params commandName=deploy
+  agent-nuvira skill search "test"
+  agent-nuvira skill quality
+```
+
+Skills are auto-compiled from the top 5 highest-scoring trajectories every 8 successful orchestration runs.
+
+### 6.10 Init Command — Project Scaffolding
+
+```bash
+agent-nuvira init [project-name] [options]
+
+Options:
+  --template <name>         Template to use (node-cli, ts-library, node-api, python-cli, minimal)
+  --list                    List all available templates
+  --template-dir <path>     Custom template directory
+
+Examples:
+  agent-nuvira init                           # Interactive mode
+  agent-nuvira init my-app                    # Name + interactive
+  agent-nuvira init my-app --template node-api # Fully non-interactive
+  agent-nuvira init --list                     # Show available templates
+```
+
+Generates a complete starter project with `.buffconfig.json` configured with your chosen provider and model.
+
+### 6.11 Dashboard
 
 ```bash
 agent-nuvira dashboard [options]
@@ -558,6 +698,179 @@ Launches a web-based dashboard at http://localhost:3030 with:
 - Conversation history browser
 - Benchmark results
 ```
+
+### 6.12 Federation Command — Multi-Machine Collaboration
+
+```bash
+agent-nuvira federation [command]
+
+Commands:
+  start                    Start a federation server (default port)
+  connect <host>           Connect to a remote federation server
+  disconnect               Disconnect from the current federation
+  run <goal>               Delegate a task to a remote agent
+  health                   Check federation connection health
+  status                   Show federation connection status
+  config                   View or edit federation configuration
+
+Examples:
+  agent-nuvira federation start                        # Start server
+  agent-nuvira federation connect 192.168.1.50 --secret mykey
+  agent-nuvira federation run "Fix bug" --agent debugger
+  agent-nuvira federation health
+  agent-nuvira federation status
+  agent-nuvira federation disconnect
+```
+
+Federation enables multiple machines to collaborate on the same goal by delegating agent tasks to remote peers. The protocol uses SSE streaming for real-time progress updates with automatic polling fallback.
+
+### 6.13 Benchmark Command — Model Evaluation Suite
+
+```bash
+agent-nuvira benchmark [options]
+
+Options:
+  --provider <provider>  Run benchmarks against a specific provider
+  --model <model>        Run benchmarks against a specific model
+  --tasks <filter>       Filter tasks by speed (quick, medium, all)
+  --budget <amount>      Cost cap in USD (default: no limit)
+
+Commands:
+  (no subcommand)        Run the full benchmark suite interactively
+  list                   List all 21 benchmark tasks
+  results                Show last run results
+    --last               Show details from the most recent run
+    --compare            Compare two recent runs (A/B)
+    --format <format>    Output format: text, json, markdown
+  clear                  Clear all benchmark data
+
+Examples:
+  agent-nuvira benchmark                            # Run full suite
+  agent-nuvira benchmark --provider groq             # Specific provider
+  agent-nuvira benchmark --model llama-3.3-70b      # Specific model
+  agent-nuvira benchmark --tasks quick --budget 0.50 # Fast + cost-capped
+  agent-nuvira benchmark list                       # List all tasks
+  agent-nuvira benchmark results --last             # Most recent results
+  agent-nuvira benchmark results --compare          # A/B comparison
+  agent-nuvira benchmark results --format markdown   # Export as markdown
+```
+
+The benchmark suite includes 21 tasks across 10 categories: code generation, refactoring, debugging, testing, documentation, security, optimization, comprehension, translation, and shell scripting. Each task is scored heuristically (0–1) based on pattern matching, anti-pattern detection, and code quality.
+
+### 6.14 History Command — Conversation Search & Management
+
+```bash
+agent-nuvira history [command]
+
+Commands:
+  (no subcommand)        Show chronological conversation log
+  search <query>         Keyword search across past conversations
+    --semantic           Use semantic (embedding-based) search
+  prune                  Remove old conversations by retention policy
+  reindex                Rebuild semantic search index from scratch
+  list                   List recent sessions
+
+Examples:
+  agent-nuvira history                              # Show conversation log
+  agent-nuvira history search "JWT auth"            # Keyword search
+  agent-nuvira history search --semantic "authentication patterns"
+  agent-nuvira history prune                        # Prune by retention policy
+  agent-nuvira history reindex                      # Rebuild semantic index
+  agent-nuvira history list                         # List recent sessions
+```
+
+History is stored in `~/.buff/history/`. Retention is configurable via `buff config set history.retentionDays 30`. Semantic search uses native embeddings (Xenova → Python → LLM fallback) and requires the semantic index to exist — run `buff history reindex` to build it from existing sessions.
+
+### 6.15 Security Scan Command — PII, Injection & Code Safety
+
+```bash
+agent-nuvira security scan [input] [options]
+
+Options:
+  --file <path>       Scan a file instead of inline text
+  --stdin             Read input from stdin (pipe mode)
+  --prompt            Scan for prompt injection patterns only
+  --code              Scan for dangerous code patterns only
+  --pii               Scan for PII (emails, API keys, SSNs, credit cards) only
+  --json              Output machine-readable JSON
+  --strict            Fail on medium+ severity (default: high+)
+  --generated         Lower severity for eval/network patterns (for AI-generated code)
+
+Examples:
+  agent-nuvira security scan "Check this code for secrets"
+  agent-nuvira security scan --file ./script.js
+  cat payload.txt | agent-nuvira security scan --stdin
+  agent-nuvira security scan --prompt "ignore all previous instructions"
+  agent-nuvira security scan --code "eval(userInput)"
+  agent-nuvira security scan --pii "email@example.com"
+  agent-nuvira security scan --json --strict "sensitive data"
+```
+
+Scans detect:
+- **Prompt injection:** "Ignore all instructions", role-play attempts, jailbreak patterns
+- **Secrets & PII:** API keys (sk-, gsk_, nvapi-), emails, SSNs, credit card numbers, phone numbers
+- **Dangerous code:** `eval()`, `exec()`, `child_process`, `rm -rf`, unsafe `require()`
+
+Severity levels: 🔴 Critical → 🟠 High → 🟡 Medium → 🔵 Low
+
+### 6.16 Feedback Command — Rating & Self-Improvement
+
+```bash
+agent-nuvira feedback [command]
+
+Commands:
+  record [trajectory-id] [options]  Record a rating (interactive or via flags)
+    --positive                      Mark as positive
+    --negative                      Mark as negative
+    --neutral                       Mark as neutral
+    --comment <text>                Optional comment about the rating
+  list                              List recent feedback entries
+    --limit <n>                     Maximum entries to show (default: 10)
+    --trajectory <id>               Filter by trajectory ID
+  stats                             Show aggregated feedback statistics
+  clear                             Clear all feedback data (requires confirmation)
+
+Examples:
+  agent-nuvira feedback record traj-001 --positive
+  agent-nuvira feedback record traj-002 --negative --comment "Wrong approach"
+  agent-nuvira feedback record                    # Interactive rating prompt
+  agent-nuvira feedback list                       # Most recent 10 entries
+  agent-nuvira feedback list --limit 20 --trajectory traj-001
+  agent-nuvira feedback stats                      # Bar chart + trend
+  agent-nuvira feedback clear                      # With confirmation
+```
+
+Feedback scores influence the Hybrid Model Router — positive ratings improve a provider/model's routing score, negative ratings decrease it. The Feedback Store is capped at 1,000 entries with automatic trimming.
+
+### 6.17 Marketplace Command — Unified Plugin & Template Discovery
+
+```bash
+agent-nuvira marketplace [command]
+
+Commands:
+  browse [options]          Show all available items
+    --workflows             Show workflow templates only
+    --plugins               Show plugin providers only
+    --refresh               Force refresh of registry cache
+  search <query>            Cross-search built-in templates, registry, and plugins
+  install <name>            Install a template from the registry
+  info <name>               Show detailed information about an item
+
+Examples:
+  agent-nuvira marketplace browse                    # All items
+  agent-nuvira marketplace browse --workflows         # Workflows only
+  agent-nuvira marketplace browse --plugins           # Plugins only
+  agent-nuvira marketplace browse --refresh           # Fresh registry fetch
+  agent-nuvira marketplace search "deploy"            # Search everything
+  agent-nuvira marketplace install security-audit    # Install from registry
+  agent-nuvira marketplace info quick-fix             # Built-in template
+  agent-nuvira marketplace info "Custom AI"           # Plugin details
+```
+
+The marketplace is a unified entry point that combines:
+- **10 built-in workflow templates** (quick-fix, feature-implement, code-review, etc.)
+- **Installed registry templates** from the GitHub template registry
+- **Plugin providers** from `~/.buff/plugins/`
 
 ---
 
@@ -625,6 +938,61 @@ agent-nuvira models --search deepseek
 
 # Then use a discovered model
 agent-nuvira chat --provider groq --model deepseek-ai/deepseek-v4-flash
+```
+
+#### Workflow 7: Switch Provider Mid-Session
+
+```bash
+# Start chatting with one provider
+agent-nuvira chat --provider gemini
+
+# In the chat, switch to a different provider
+# /model
+
+# Or from the command line
+agent-nuvira model switch groq
+agent-nuvira model switch groq/llama-3.3-70b-versatile
+```
+
+All conversation history is preserved when switching — seamless migration.
+
+#### Workflow 8: Scaffold a New Project
+
+```bash
+# Create a new Node.js API project
+agent-nuvira init my-api --template node-api
+
+# List available templates first
+agent-nuvira init --list
+
+# Interactive: pick template and provider
+agent-nuvira init my-app
+```
+
+#### Workflow 9: Run a Compiled Skill
+
+```bash
+# List available skills (auto-compiled from past runs)
+agent-nuvira skill list
+
+# Run a skill with parameters
+agent-nuvira skill run "Add CLI Command" --params commandName=deploy
+
+# Search for relevant skills
+agent-nuvira skill search "test"
+```
+
+#### Workflow 10: Use Docker for Quick Setup
+
+```bash
+# Build and start the dashboard
+docker compose up
+
+# Run one-shot commands
+docker compose run --rm agent-nuvira execute "add authentication" --context-prune medium
+
+# With local inference
+docker compose --profile ollama up
 ```
 
 ### 7.2 Error Recovery
@@ -840,7 +1208,42 @@ export BUFF_DEBUG=true
 agent-nuvira chat
 ```
 
-### 8.4 Getting Help
+### 8.4 Docker-Specific Issues
+
+#### Docker build fails during npm ci
+
+**Cause:** Missing `package-lock.json` in build context.
+
+**Solution:** Ensure `.dockerignore` does NOT exclude `package-lock.json`. The file is required in Stage 1 of the multi-stage build.
+
+#### "Connection refused" when using Ollama from Docker
+
+**Cause:** Ollama runs on the host machine but Docker can't reach it.
+
+**Solution:**
+```bash
+# Linux: Use host network mode (or set OLLAMA_HOST explicitly)
+export OLLAMA_HOST=http://host.docker.internal:11434
+
+# Or use the Ollama profile:
+docker compose --profile ollama up
+```
+
+#### Dashboard not accessible
+
+**Solution:**
+```bash
+# Check container is running
+docker ps
+
+# View logs
+docker compose logs agent-nuvira
+
+# Restart
+docker compose down && docker compose up
+```
+
+### 8.5 Getting Help
 
 | Resource | Where |
 |---|---|
@@ -916,7 +1319,9 @@ rm -rf ~/.buff   # Remove all configuration and cached data
 | **Plugin** | A third-party extension that adds a new inference provider or agent type |
 | **Provider** | See **Inference Provider** |
 | **Sandbox** | An isolated environment (temporary directory or Docker container) for safely running code |
-| **SQLite** | A lightweight, file-based database used for caching and history storage |
+| **Skill** | A reusable, parameterized script auto-extracted from successful agent trajectories; can be invoked via `buff skill run` |
+| **Skill Compiler** | An LLM-powered engine that converts high-scoring execution trajectories into parameterized skill definitions |
+| **SQLite** | A lightweight, file-based database used for caching |
 | **SSE** | Server-Sent Events — a streaming protocol used for real-time token output |
 | **Trajectory** | A record of a completed agent execution, including the goal, steps taken, and outcomes |
 | **Workflow** | A predefined YAML template defining a sequence of agent steps for a common task |
@@ -924,6 +1329,6 @@ rm -rf ~/.buff   # Remove all configuration and cached data
 
 ---
 
-> **Agent-Nuvira v1.14.5 | MIT License | Built by Dheeraj Sharma**
+> **Agent-Nuvira v1.14.6 | MIT License | Built by Dheeraj Sharma**
 > 
 > *[github.com/imdheerajKube/agent-nuvira](https://github.com/imdheerajKube/agent-nuvira)*

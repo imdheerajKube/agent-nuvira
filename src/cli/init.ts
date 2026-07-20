@@ -226,7 +226,7 @@ export class InitCommand extends BaseCommand {
       .argument('[project-name]', 'Name of the project to create')
       .option('-t, --template <template>', 'Template to use (node-cli, ts-library, node-api, python-cli, minimal)')
       .option('--list', 'List available templates and exit', false)
-      .option('--template-dir <path>', 'Custom template directory', String(TEMPLATES_DIR))
+      .option('--template-dir <path>', 'Custom template directory', TEMPLATES_DIR)
       .option('-p, --provider <provider>', 'Default AI provider for the project')
       .option('-m, --model <model>', 'Default model for the project')
       .action(async (projectName?: string, options?: {

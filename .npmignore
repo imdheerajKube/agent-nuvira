@@ -1,8 +1,41 @@
+# Source files (compiled to dist/)
 src/
 tests/
 tsconfig.json
 vitest.config.ts
 *.ts
+
+# Development files
 !dist/**/*.d.ts
 !dist/**/*.js
-!dist/**/*.map
+!dist/**/*.js.map
+
+node_modules/
+.env*
+*.log
+*.db
+.buffconfig.json
+.npmrc
+
+# Documentation artifacts
+*.md
+!README.md
+!LICENSE
+
+# Docker
+docker-compose.yml
+Dockerfile
+docker-entrypoint.sh
+
+# VS Code extension (separate package)
+vscode-extension/
+
+# SDK package
+packages/
+
+# Website
+website/
+
+# Images
+*.png
+*.svg

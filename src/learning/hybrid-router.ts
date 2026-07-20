@@ -58,6 +58,15 @@ export interface RoutingDecision {
   explanation: string;
 }
 
+/**
+ * Preference modes for model routing.
+ * - `balanced`: Default — matches provider to complexity
+ * - `performance-first`: Prefers faster, higher-quality providers even for simpler tasks
+ * - `cost-first`: Prefers cheaper providers even for complex tasks
+ * - `privacy-first`: Prefers local/offline providers, avoids cloud APIs
+ */
+export type PreferenceMode = 'balanced' | 'performance-first' | 'cost-first' | 'privacy-first';
+
 /** Options for the hybrid router */
 export interface HybridRouterOptions {
   /** User's cost budget for this session (USD) */
@@ -69,6 +78,10 @@ export interface HybridRouterOptions {
   userModel?: string;
   /** Whether logging is enabled */
   verbose?: boolean;
+  /** Preference mode for routing decisions (default: 'balanced') */
+  preferenceMode?: PreferenceMode;
+  /** Whether to use runtime agent stats to adjust model selection (default: false) */
+  useRuntimeStats?: boolean;
 }
 
 // ─── Complexity Analysis ────────────────────────────────────────────────────
@@ -146,9 +159,50 @@ export function analyzeComplexity(text: string): ComplexityLevel {
 }
 
 /**
- * Get the recommended provider based on complexity.
+ * Get the recommended provider based on complexity and preference mode.
+ *
+ * @param complexity - Detected complexity level
+ * @param mode - Preference mode (default: 'balanced')
+ * @returns The recommended provider type
  */
-function providerForComplexity(complexity: ComplexityLevel): string {
+function providerForComplexity(
+  complexity: ComplexityLevel,
+  mode: PreferenceMode = 'balanced',
+): string {
+  // privacy-first: always prefer local, fall back to groq only for complex work
+  if (mode === 'privacy-first') {
+    switch (complexity) {
+      case 'trivial':
+      case 'simple':
+      case 'moderate': return 'local';
+      case 'complex':
+      case 'critical': return 'groq'; // minimal cloud exposure
+    }
+  }
+
+  // cost-first: always choose the cheapest adequate provider
+  if (mode === 'cost-first') {
+    switch (complexity) {
+      case 'trivial':
+      case 'simple':
+      case 'moderate': return 'local';
+      case 'complex': return 'groq';
+      case 'critical': return 'gemini';
+    }
+  }
+
+  // performance-first: push harder tasks to stronger providers earlier
+  if (mode === 'performance-first') {
+    switch (complexity) {
+      case 'trivial': return 'groq';
+      case 'simple': return 'groq';
+      case 'moderate': return 'gemini';
+      case 'complex': return 'openrouter';
+      case 'critical': return 'openrouter';
+    }
+  }
+
+  // Default balanced mode
   switch (complexity) {
     case 'trivial': return 'local';
     case 'simple': return 'groq';
@@ -181,18 +235,22 @@ function estimateCallCost(
 /**
  * Build a fallback chain for a given agent type and complexity.
  * The chain is ordered: primary → secondary → tertiary.
+ * Respects preference mode and optionally uses runtime stats.
  *
  * @param agentType - The agent type (e.g., 'writer', 'planner')
  * @param complexity - Detected complexity level
- * @param options - Router options (budget, overrides)
+ * @param options - Router options (budget, overrides, preferenceMode)
+ * @param runtimeModel - Optional model name from runtime stats (overrides recommendation.model)
  * @returns An ordered array of model candidates
  */
 export function buildFallbackChain(
   agentType: string,
   complexity: ComplexityLevel,
   options: HybridRouterOptions = {},
+  runtimeModel?: string,
 ): ModelCandidate[] {
   const chain: ModelCandidate[] = [];
+  const mode = options.preferenceMode || 'balanced';
 
   // If user explicitly set provider/model, that's the only option
   if (options.userProvider && options.userModel) {
@@ -209,21 +267,32 @@ export function buildFallbackChain(
   // Get the recommended model from the existing ModelRouter
   const recommendation = recommendModel(agentType);
 
-  // Build fallback chain based on complexity
-  const preferredProvider = options.userProvider || providerForComplexity(complexity);
+  // Build fallback chain based on complexity and preference mode
+  const preferredProvider = options.userProvider || providerForComplexity(complexity, mode);
+
+  // Use runtime-adjusted model if available (overrides recommendation.model)
+  const primaryModel = runtimeModel || recommendation.model || 'default';
+
+  // Quality score baseline adjusted by preference mode
+  const qualityBoost = mode === 'performance-first' ? 0.1
+    : mode === 'privacy-first' ? -0.05
+    : 0;
 
   // Primary: the complexity-matched or user-specified provider
-  const modelSuffix = recommendation.model ? `/${recommendation.model}` : '';
+  const primaryReason = runtimeModel
+    ? `Primary choice (stats-adjusted: ${runtimeModel})`
+    : `Primary choice for ${complexity} complexity`;
   chain.push({
     provider: preferredProvider,
-    model: recommendation.model || 'default',
-    estimatedCost: estimateCallCost(preferredProvider, recommendation.model || 'default'),
-    qualityScore: complexity === 'critical' ? 0.9 : complexity === 'complex' ? 0.8 : 0.7,
-    reason: `Primary choice for ${complexity} complexity`,
+    model: primaryModel,
+    estimatedCost: estimateCallCost(preferredProvider, primaryModel),
+    qualityScore: Math.min(1, (complexity === 'critical' ? 0.9 : complexity === 'complex' ? 0.8 : 0.7) + qualityBoost),
+    reason: primaryReason,
   });
 
-  // Secondary fallback: swap provider
-  const secondaryProvider = preferredProvider === 'local' ? 'groq'
+  // Secondary fallback: swap provider (adjusted for privacy-first mode)
+  const secondaryProvider = mode === 'privacy-first' ? 'groq'
+    : preferredProvider === 'local' ? 'groq'
     : preferredProvider === 'groq' ? 'nim'
     : preferredProvider === 'nim' ? 'gemini'
     : preferredProvider === 'gemini' ? 'openrouter'
@@ -233,17 +302,17 @@ export function buildFallbackChain(
     provider: secondaryProvider,
     model: 'default',
     estimatedCost: estimateCallCost(secondaryProvider, 'default'),
-    qualityScore: 0.6,
+    qualityScore: Math.min(1, 0.6 + qualityBoost),
     reason: `Fallback: switch to ${secondaryProvider}`,
   });
 
-  // Tertiary fallback: a different model on the same provider (if available)
+  // Tertiary fallback
   const tertiaryProvider = secondaryProvider === 'groq' ? 'gemini' : 'groq';
   chain.push({
     provider: tertiaryProvider,
     model: 'default',
     estimatedCost: estimateCallCost(tertiaryProvider, 'default'),
-    qualityScore: 0.5,
+    qualityScore: Math.min(1, 0.5 + qualityBoost),
     reason: `Final fallback: switch to ${tertiaryProvider}`,
   });
 
@@ -383,6 +452,12 @@ export class HybridModelRouter {
   /**
    * Resolve the optimal routing decision for a given agent type and task.
    *
+   * Supports:
+   * - Preference modes (performance-first, cost-first, privacy-first, balanced)
+   * - Runtime stats integration (useRuntimeStats: reads agent-stats for best model)
+   * - Budget awareness
+   * - Consensus for critical tasks
+   *
    * @param agentType — Agent type (e.g., 'writer', 'planner')
    * @param taskDescription — The task description or user goal
    * @param overrides — Optional per-call overrides
@@ -394,8 +469,32 @@ export class HybridModelRouter {
     overrides?: Partial<HybridRouterOptions>,
   ): Promise<RoutingDecision> {
     const opts = { ...this.options, ...overrides };
+    const mode = opts.preferenceMode || 'balanced';
     const complexity = analyzeComplexity(taskDescription);
-    const fallbackChain = buildFallbackChain(agentType, complexity, opts);
+
+    // Item 2: Runtime stats integration — adjust primary model based on historical performance
+    let runtimeAdjustedModel: string | undefined;
+    if (opts.useRuntimeStats) {
+      try {
+        const { getAgentStats } = await import('./agent-stats.js');
+        const stats = getAgentStats();
+        const bestModel = stats.getBestModel(agentType);
+        if (bestModel) {
+          runtimeAdjustedModel = bestModel;
+          if (opts.verbose) {
+            logger.info(`  📊 Runtime stats: best model for '${agentType}' is ${bestModel}`);
+          }
+        }
+      } catch {
+        // Non-critical — fall back to default routing
+      }
+    }
+
+    // Build fallback chain with optionally runtime-adjusted model
+    // Only apply runtime adjustment if user hasn't explicitly set --model
+    const runtimeModel = runtimeAdjustedModel && !opts.userModel ? runtimeAdjustedModel : undefined;
+
+    const fallbackChain = buildFallbackChain(agentType, complexity, opts, runtimeModel);
 
     // Select within budget
     const selected = selectWithinBudget(fallbackChain, opts);
@@ -406,7 +505,7 @@ export class HybridModelRouter {
       !opts.userProvider;
 
     // Build explanation
-    const explanation = this.buildExplanation(agentType, complexity, selected, fallbackChain, opts);
+    const explanation = this.buildExplanation(agentType, complexity, selected, fallbackChain, opts, runtimeAdjustedModel);
 
     if (opts.verbose) {
       logger.info(`  🔀 Routing: ${explanation}`);
@@ -511,8 +610,10 @@ export class HybridModelRouter {
     selected: ModelCandidate,
     chain: ModelCandidate[],
     opts: HybridRouterOptions,
+    runtimeModel?: string,
   ): string {
     const parts: string[] = [];
+    const mode = opts.preferenceMode || 'balanced';
 
     // Complexity
     const complexityLabels: Record<ComplexityLevel, string> = {
@@ -524,8 +625,21 @@ export class HybridModelRouter {
     };
     parts.push(`${agentType} (${complexityLabels[complexity]})`);
 
+    // Preference mode (if not balanced)
+    if (mode !== 'balanced') {
+      const modeIcon = mode === 'performance-first' ? '⚡'
+        : mode === 'cost-first' ? '💰'
+        : '🔒'; // privacy-first
+      parts.push(`${modeIcon} ${mode}`);
+    }
+
     // Selected model
     parts.push(`→ ${selected.provider}/${selected.model}`);
+
+    // Runtime stats indicator
+    if (runtimeModel) {
+      parts.push('📊 stats-adjusted');
+    }
 
     // Budget info
     if (opts.sessionBudget) {

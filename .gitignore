@@ -5,3 +5,6 @@ dist/
 *.db
 .buffconfig.json
 .npmrc
+*sopec*.md
+*scope*.md
+SCOPE.md

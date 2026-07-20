@@ -15,6 +15,9 @@ import { isAbsolute, join } from 'node:path';
 
 import { Agent, type AgentContext, type AgentResult, type FileChange, type LLMCallFn } from '../agent.js';
 import { logger } from '../../utils/logger.js';
+import { detectLanguage } from '../../editing/types.js';
+import { analyzeStructure, validateSyntax } from '../../editing/ast.js';
+import { buildStructuralContext } from '../../editing/edit.js';
 
 const WRITER_SYSTEM_PROMPT = `You are an expert software engineer implementing changes to a codebase.
 
@@ -305,6 +308,23 @@ export class WriterAgent extends Agent {
       }
     }
 
+    // ── AST Validation: check syntax for modified files ────────────────
+    for (const change of fileChanges) {
+      if (change.newContent) {
+        const lang = detectLanguage(change.path);
+        if (lang !== 'unknown') {
+          const isValid = validateSyntax(change.newContent, lang);
+          if (!isValid) {
+            logger.warn(`[Writer ${label}] Syntax warning: ${change.path} has unbalanced brackets`);
+            // Don't reject — the LLM output may be valid even if our simple
+            // bracket checker fails (e.g., regex patterns with brackets in strings)
+          } else {
+            logger.debug(`[Writer ${label}] Syntax OK: ${change.path}`);
+          }
+        }
+      }
+    }
+
     const count = fileChanges.length;
     if (count === 0) {
       const excerpt = response.slice(0, 300).replace(/\n/g, '\\n');
@@ -355,11 +375,28 @@ export class WriterAgent extends Agent {
           : '')
       : '(No files found in context — you may need to create new files)';
 
+    // Build structural context for AST-aware editing
+    const structuralContexts = context.artifacts
+      .filter((a) => a.content)
+      .slice(0, 5) // Limit to 5 files to avoid token bloat
+      .map((a) => buildStructuralContext(a.content, a.path))
+      .filter((s) => s.length > 0);
+
+    const structureSection = structuralContexts.length > 0
+      ? `\n## File Structure Overview\n\nHere is the structural layout of the files you need to modify. \nUse these line ranges to understand where each function/class lives.\n\n${structuralContexts.join('\n\n')}\n`
+      : '';
+
+    // ── MCP Tools Injection ───────────────────────────────────────────────
+    // If MCP servers are connected, inject tool descriptions so the LLM
+    // knows what external services are available.
+    const mcpToolsFormatted = context.metadata.mcpToolsFormatted as string | undefined;
+    const mcpSection = mcpToolsFormatted ? `\n${mcpToolsFormatted}\n` : '';
+
     const instructions = isRetry
       ? `\n## CRITICAL — Read This Carefully\nThe previous response could not be parsed because the files were not wrapped in correctly formatted code blocks.\n\nYou MUST follow this format EXACTLY for EACH file you modify:\n\n\`\`\`filepath:src/example.ts\n// THE COMPLETE UPDATED FILE CONTENT GOES HERE (every line, full file)\n\`\`\`\n\nIMPORTANT:\n- The filepath: prefix is REQUIRED after the opening backticks\n- Return the FULL file, not a diff or snippet\n- If you modify 2 files, return 2 separate code blocks in this format`
       : `\n## Instructions\nImplement the changes described in the task. Return the complete updated file content for each file you modify. Remember: each file must be wrapped in \`\`\`filepath:...\n\`\`\` format.`;
 
-    return `${WRITER_SYSTEM_PROMPT}\n\n## Task Description\n${taskDescription}\n\n## Current File Content\n${fileContext}\n${instructions}`;
+    return `${WRITER_SYSTEM_PROMPT}\n\n## Task Description\n${taskDescription}\n\n## Current File Content\n${fileContext}${structureSection}${mcpSection}\n${instructions}`;
   }
 
   /**

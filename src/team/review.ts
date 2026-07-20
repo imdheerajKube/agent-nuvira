@@ -17,7 +17,7 @@
  *   - Review comments (status, feedback)
  */
 
-import { readFileSync, writeFileSync, existsSync, mkdirSync, readdirSync } from 'node:fs';
+import { readFileSync, writeFileSync, existsSync, mkdirSync, readdirSync, unlinkSync } from 'node:fs';
 import { join, resolve, relative } from 'node:path';
 import { homedir } from 'node:os';
 
@@ -292,7 +292,6 @@ export function mergeReview(id: string, workingDir?: string): number {
       case 'deleted':
         if (existsSync(fullPath)) {
           try {
-            const { unlinkSync } = require('node:fs');
             unlinkSync(fullPath);
             count++;
           } catch {

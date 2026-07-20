@@ -11,6 +11,7 @@ import ora from 'ora';
 
 import { ConfigManager } from '../config/manager.js';
 import { resolveProvider } from './router.js';
+import { getPluginRegistry } from '../plugins/registry.js';
 import { ProviderType } from '../config/types.js';
 import { InferenceProvider, ModelDescriptor } from '../inference/interface.js';
 import {
@@ -72,7 +73,16 @@ export interface PickerResult {
 export async function showModelPicker(configManager: ConfigManager): Promise<PickerResult | null> {
   logger.highlight('\n🔍 Checking available providers...\n');
 
-  const providerTypes: ProviderType[] = ['local', 'nim', 'gemini', 'openrouter', 'groq'];
+  const registry = getPluginRegistry();
+  const pluginTypes = registry.getAllPlugins().map((plugin) => plugin.getProviderType());
+  const providerTypes: string[] = Array.from(new Set([
+    'local',
+    'nim',
+    'gemini',
+    'openrouter',
+    'groq',
+    ...pluginTypes,
+  ]));
 
   const checkResults = await Promise.all(
     providerTypes.map(async (pt) => {
@@ -82,7 +92,7 @@ export async function showModelPicker(configManager: ConfigManager): Promise<Pic
     })
   );
 
-  const availableProviders: Array<{ type: ProviderType; provider: InferenceProvider; name: string }> = [];
+  const availableProviders: Array<{ type: string; provider: InferenceProvider; name: string }> = [];
 
   for (const { pt, resolved, available } of checkResults) {
     const icon = PROVIDER_ICONS[pt] || '🔹';

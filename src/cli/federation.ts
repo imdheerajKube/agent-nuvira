@@ -13,6 +13,10 @@
  *   buff federation run <goal>            — Run a task on the remote server
  *   buff federation run <goal> --agent writer
  *   buff federation health                — Check remote server health
+ *   buff federation a2a start             — Start the A2A server
+ *   buff federation a2a discover <url>    — Discover an A2A agent
+ *   buff federation a2a status <url>      — Check A2A agent health
+ *   buff federation a2a run <url> <goal>  — Delegate task to A2A agent
  */
 
 import { Command } from 'commander';
@@ -30,10 +34,15 @@ import {
   DEFAULT_FEDERATION_CONFIG,
   DEFAULT_FEDERATION_PORT,
 } from '../federation/protocol.js';
+import { startA2AServer as startA2AServerFn } from '../federation/a2a-server.js';
+import { A2A_DEFAULT_PORT, A2A_DEFAULT_HOST } from '../federation/a2a-types.js';
+import { discoverAgent, delegateAndWait, checkA2AHealth } from '../federation/a2a-client.js';
 
 // ─── Constants ──────────────────────────────────────────────────────────────
 
 const FEDERATION_CONFIG_PATH = join(homedir(), '.buff', 'federation.json');
+
+// The A2A config is stored alongside federation config for simplicity.
 
 // ─── Helpers ────────────────────────────────────────────────────────────────
 
@@ -149,6 +158,51 @@ export class FederationCommand extends BaseCommand {
       .option('--set-port <port>', 'Set federation port', parseInt)
       .action(async (options?: { show?: boolean; setSecret?: string; setPort?: number }) => {
         await this.manageConfig(options || {});
+      });
+
+    // ═════════════════════════════════════════════════════════════════════
+    //  A2A (Agent-to-Agent) Protocol Subcommands
+    // ═════════════════════════════════════════════════════════════════════
+
+    const a2a = command
+      .command('a2a')
+      .description('A2A (Agent-to-Agent) protocol — discover and connect to external A2A-compliant agents');
+
+    a2a
+      .command('discover')
+      .description('Discover an A2A-compliant agent and fetch its AgentCard')
+      .argument('<url>', 'Base URL of the A2A agent (e.g., http://192.168.1.50:8375)')
+      .action(async (url: string) => {
+        await this.a2aDiscover(url);
+      });
+
+    a2a
+      .command('start')
+      .description('Start the A2A server (listens for incoming A2A connections)')
+      .option('-p, --port <port>', 'Port to listen on', parseInt, A2A_DEFAULT_PORT)
+      .option('--host <host>', 'Host to bind to', A2A_DEFAULT_HOST)
+      .action(async (options?: { port?: number; host?: string }) => {
+        await this.a2aStartServer(options || {});
+      });
+
+    a2a
+      .command('status')
+      .description('Check the health and status of a remote A2A agent')
+      .argument('<url>', 'Base URL of the A2A agent')
+      .action(async (url: string) => {
+        await this.a2aStatus(url);
+      });
+
+    a2a
+      .command('run')
+      .description('Delegate a task to a remote A2A-compliant agent')
+      .argument('<url>', 'Base URL of the A2A agent')
+      .argument('<goal>', 'The task goal to execute remotely')
+      .option('-s, --skill <skill>', 'Skill ID to invoke (e.g., quick-fix, review-code)')
+      .option('-a, --agent <agent>', 'Agent type to invoke (e.g., writer, planner)')
+      .option('--timeout <ms>', 'Task timeout in ms', parseInt)
+      .action(async (url: string, goal: string, options?: { skill?: string; agent?: string; timeout?: number }) => {
+        await this.a2aRun(url, goal, options || {});
       });
 
     return command;
@@ -483,6 +537,163 @@ export class FederationCommand extends BaseCommand {
       console.log('    buff federation config --set-secret <your-secret>');
       console.log('    buff federation config --set-port <port>');
       console.log('');
+    }
+  }
+
+  // ═════════════════════════════════════════════════════════════════════
+  //  A2A Action Handlers
+  // ═════════════════════════════════════════════════════════════════════
+
+  private async a2aDiscover(url: string): Promise<void> {
+    logger.info(`Discovering A2A agent at ${url}...`);
+    console.log('');
+
+    try {
+      const result = await discoverAgent(url);
+
+      if (result.success && result.card) {
+        const card = result.card;
+        logger.highlight('═'.repeat(60));
+        logger.highlight(`  🤖  A2A Agent: ${card.name}`);
+        logger.highlight('═'.repeat(60));
+
+        console.log(`\n  Name: ${card.name}`);
+        console.log(`  Description: ${card.description}`);
+        console.log(`  URL: ${card.url}`);
+        console.log(`  Version: ${card.version}`);
+        if (card.identity?.organization) {
+          console.log(`  Organization: ${card.identity.organization}`);
+        }
+        if (card.identity?.contactEmail) {
+          console.log(`  Contact: ${card.identity.contactEmail}`);
+        }
+
+        console.log(`\n  🎯 Capabilities (${card.capabilities.length}):`);
+        for (const cap of card.capabilities) {
+          console.log(`     • ${cap.name}: ${cap.description}`);
+        }
+
+        console.log(`\n  ⚡ Skills (${card.skills.length}):`);
+        for (const skill of card.skills) {
+          console.log(`     • ${skill.id}: ${skill.description}`);
+        }
+
+        console.log(`\n  Response time: ${result.responseTimeMs}ms`);
+        console.log('');
+      } else {
+        logger.error(`Discovery failed: ${result.error || 'Unknown error'}`);
+      }
+    } catch (err) {
+      logger.error(`Discovery failed: ${err instanceof Error ? err.message : String(err)}`);
+    }
+  }
+
+  private async a2aStartServer(options: { port?: number; host?: string }): Promise<void> {
+    const port = options.port || A2A_DEFAULT_PORT;
+    const host = options.host || A2A_DEFAULT_HOST;
+
+    logger.info(`Starting A2A server on ${host}:${port}...`);
+
+    try {
+      const server = await startA2AServerFn({
+        port,
+        host,
+        nodeName: hostname(),
+      });
+
+      logger.success(`A2A server running on ${host}:${port}`);
+      logger.info(`  AgentCard: http://${host}:${port}/.well-known/agent-card`);
+      logger.info('  Press Ctrl+C to stop the server.');
+      logger.info('');
+      logger.info('  Other A2A agents can discover this node and delegate tasks to it.');
+      logger.info('  Connect from another node:');
+      logger.info(`    buff federation a2a discover http://${host}:${port}`);
+      logger.info(`    buff federation a2a run http://${host}:${port} "fix login bug"`);
+
+      process.on('SIGINT', () => {
+        logger.info('\nShutting down A2A server...');
+        server.close(() => {
+          logger.success('A2A server stopped.');
+          process.exit(0);
+        });
+      });
+      process.on('SIGTERM', () => {
+        server.close(() => process.exit(0));
+      });
+
+      await new Promise<void>(() => {});
+    } catch (err) {
+      logger.error(`Failed to start A2A server: ${err instanceof Error ? err.message : String(err)}`);
+    }
+  }
+
+  private async a2aStatus(url: string): Promise<void> {
+    logger.info(`Checking A2A agent health at ${url}...`);
+
+    try {
+      const health = await checkA2AHealth(url);
+      const statusEmoji = health.status === 'ok' ? '✅' : health.status === 'degraded' ? '⚠️' : '❌';
+      const uptimeMinutes = Math.floor(health.uptime / 1000 / 60);
+
+      logger.highlight('═'.repeat(60));
+      logger.highlight(`  🤖  A2A Agent Health — ${statusEmoji} ${health.status}`);
+      logger.highlight('═'.repeat(60));
+
+      console.log(`\n  Status: ${health.status}`);
+      console.log(`  Version: ${health.version}`);
+      console.log(`  Uptime: ${uptimeMinutes} minutes`);
+      console.log(`  Active tasks: ${health.activeTasks}`);
+      console.log(`  Completed: ${health.completedTasks}`);
+      console.log(`  Failed: ${health.failedTasks}`);
+      console.log('');
+    } catch (err) {
+      logger.error(`Health check failed: ${err instanceof Error ? err.message : String(err)}`);
+    }
+  }
+
+  private async a2aRun(
+    url: string,
+    goal: string,
+    options: { skill?: string; agent?: string; timeout?: number },
+  ): Promise<void> {
+    logger.info(`Delegating task to A2A agent at ${url}...`);
+    console.log(`  Goal: ${goal.slice(0, 120)}`);
+    if (options.skill) console.log(`  Skill: ${options.skill}`);
+    if (options.agent) console.log(`  Agent: ${options.agent}`);
+    console.log('');
+
+    try {
+      const result = await delegateAndWait(url, {
+        goal,
+        skillId: options.skill,
+        agentType: options.agent,
+      }, {
+        timeoutMs: options.timeout,
+        onProgress: (progress: number, message: string) => {
+          if (progress > 0 && progress < 100) {
+            logger.info(`  Progress: ${progress}% — ${message}`);
+          }
+        },
+      });
+
+      console.log('');
+      if (result.success) {
+        logger.success('A2A task completed successfully.');
+      } else {
+        logger.error('A2A task failed.');
+      }
+
+      console.log(`  Summary: ${result.summary}`);
+      if (result.details) {
+        console.log(`  Details: ${result.details.slice(0, 500)}`);
+      }
+      if (result.error) {
+        console.log(`  Error: ${result.error}`);
+      }
+      console.log(`  Duration: ${(result.durationMs / 1000).toFixed(1)}s`);
+      console.log('');
+    } catch (err) {
+      logger.error(`A2A task failed: ${err instanceof Error ? err.message : String(err)}`);
     }
   }
 }

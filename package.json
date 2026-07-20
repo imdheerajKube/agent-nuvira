@@ -1,12 +1,17 @@
 {
   "name": "agent-nuvira",
-  "version": "1.14.6",
+  "version": "1.15.1",
   "description": "Agent-Nuvira: Multi-agent AI coding CLI — plan, write, review, test, and publish code with local models (Ollama) or cloud APIs (Groq, NVIDIA NIM, Google Gemini, OpenRouter)",
   "type": "module",
   "main": "dist/index.js",
   "types": "dist/index.d.ts",
+  "exports": {
+    ".": "./dist/index.js",
+    "./package.json": "./package.json"
+  },
   "bin": {
-    "agent-nuvira": "dist/index.js"
+    "agent-nuvira": "dist/index.js",
+    "buff": "dist/index.js"
   },
   "publishConfig": {
     "access": "public"
@@ -20,7 +25,9 @@
     "test:coverage": "vitest run --coverage",
     "build:dashboard": "cd src/web-dashboard && npm install --silent 2>/dev/null && npm run build",
     "build:sdk": "cd src/agent-sdk && npx tsc",
-    "prepack": "npm run build"
+    "prepack": "npm run build",
+    "prepublishOnly": "npm run build && npm test",
+    "postinstall": "node -e \"require('fs').existsSync('./dist/index.js') && console.log('✅ agent-nuvira installed. Run `npx agent-nuvira --help` to get started.')\""
   },
   "keywords": [
     "ai",
@@ -39,7 +46,9 @@
     "code-review",
     "automation",
     "developer-tools",
-    "typescript"
+    "typescript",
+    "mcp",
+    "model-context-protocol"
   ],
   "license": "MIT",
   "author": "Dheeraj Sharma",
@@ -52,7 +61,7 @@
   },
   "homepage": "https://github.com/imdheerajKube/agent-nuvira#readme",
   "engines": {
-    "node": ">=21.7.0"
+    "node": ">=18.18.0"
   },
   "files": [
     "dist/",
@@ -61,12 +70,19 @@
     "LICENSE"
   ],
   "dependencies": {
-    "@huggingface/transformers": "^4.2.0",
     "chalk": "^5.3.0",
     "commander": "^12.0.0",
-    "freebuff": "^0.0.124",
     "inquirer": "^9.3.0",
     "ora": "^8.0.0"
+  },
+  "optionalDependencies": {
+    "@huggingface/transformers": "^4.2.0",
+    "tree-sitter": "^0.25.0",
+    "tree-sitter-go": "^0.25.0",
+    "tree-sitter-javascript": "^0.25.0",
+    "tree-sitter-python": "^0.25.0",
+    "tree-sitter-rust": "^0.24.0",
+    "tree-sitter-typescript": "^0.23.2"
   },
   "devDependencies": {
     "@types/inquirer": "^9.0.10",

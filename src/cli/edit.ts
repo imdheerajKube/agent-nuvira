@@ -4,6 +4,7 @@ import ora from 'ora';
 import { BaseCommand } from './commands.js';
 import { ContextParser } from '../context/parser.js';
 import { logger } from '../utils/logger.js';
+import { getProviderFallback, classifyFallbackError, isRetryableError } from '../learning/provider-fallback.js';
 
 /**
  * Edit command — edit files using AI assistance
@@ -52,7 +53,32 @@ export class EditCommand extends BaseCommand {
     const spinner = ora(`Editing ${file} with ${provider.name}...`).start();
 
     try {
-      const result = await provider.generate(prompt, options);
+      let result: string;
+
+      try {
+        result = await provider.generate(prompt, options);
+      } catch (err) {
+        // Try automatic fallback before failing
+        const errorType = classifyFallbackError(err);
+        if (isRetryableError(errorType)) {
+          try {
+            const fallback = getProviderFallback(this.configManager, this.configManager.getAll().fallback);
+            const fallbackResult = await fallback.callWithFallback(
+              type,
+              async (fbProvider) => fbProvider.generate(prompt, options),
+              { context: 'edit', label: `Edit ${file}` },
+            );
+            result = fallbackResult.response;
+            if (fallbackResult.attempts > 1) {
+              logger.success(`✅ Auto-fallback: switched to ${fallbackResult.provider}`);
+            }
+          } catch (fallbackErr) {
+            throw err; // Throw the original error
+          }
+        } else {
+          throw err;
+        }
+      }
 
       if (options?.dryRun) {
         spinner.stop();

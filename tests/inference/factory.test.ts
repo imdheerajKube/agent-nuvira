@@ -1,10 +1,11 @@
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, vi } from 'vitest';
 import { ProviderFactory } from '../../src/inference/factory.js';
 import { NIMAdapter } from '../../src/inference/nim-adapter.js';
 import { GeminiAdapter } from '../../src/inference/gemini-adapter.js';
 import { OpenRouterAdapter } from '../../src/inference/openrouter-adapter.js';
 import { GroqAdapter } from '../../src/inference/groq-adapter.js';
 import { LocalAdapter } from '../../src/inference/local-adapter.js';
+import { getPluginRegistry } from '../../src/plugins/registry.js';
 
 describe('ProviderFactory', () => {
   const emptyConfig = {};
@@ -44,6 +45,22 @@ describe('ProviderFactory', () => {
       expect(() => ProviderFactory.createProvider('unknown' as any, emptyConfig)).toThrow(
         'Unknown provider type'
       );
+    });
+
+    it('should create provider from registered plugin', () => {
+      const registry = getPluginRegistry();
+      registry.unregister('custom');
+      const createProviderMock = vi.fn().mockReturnValue({ name: 'Custom Provider' });
+      const plugin = {
+        metadata: { name: 'Custom', version: '1.0.0', description: 'A custom provider' },
+        getProviderType: () => 'custom',
+        createProvider: createProviderMock,
+      };
+      registry.register(plugin as any);
+
+      const provider = ProviderFactory.createProvider('custom', { apiKey: 'key' });
+      expect(provider).toEqual({ name: 'Custom Provider' });
+      expect(createProviderMock).toHaveBeenCalledWith({ apiKey: 'key' });
     });
 
     it('should pass configuration to the created provider', () => {

@@ -14,6 +14,16 @@ const DEFAULT_CONFIG: BuffConfig = {
     groq: { model: 'llama-3.3-70b-versatile', temperature: 0.7, maxTokens: 4096 },
     local: { runner: 'ollama', model: 'llama2', temperature: 0.7, maxTokens: 4096 },
   },
+  history: {
+    retentionDays: 30,
+    semanticSearch: true,
+  },
+  fallback: {
+    enabled: true,
+    providers: ['groq', 'nim', 'gemini', 'openrouter', 'local'],
+    maxAttempts: 3,
+    retryDelayMs: 1000,
+  },
 };
 
 export class ConfigManager {
@@ -46,6 +56,12 @@ export class ConfigManager {
       config.providers[key] = { ...config.providers[key] };
     }
 
+    // Deep clone history defaults
+    config.history = { ...DEFAULT_CONFIG.history };
+
+    // Deep clone fallback defaults
+    config.fallback = { ...(DEFAULT_CONFIG.fallback || {}) };
+
     if (existsSync(this.configPath)) {
       try {
         const raw = readFileSync(this.configPath, 'utf-8');
@@ -64,6 +80,16 @@ export class ConfigManager {
               config.providers[provider] = value as ProviderConfig;
             }
           }
+        }
+
+        // Merge history config
+        if (userConfig.history) {
+          config.history = { ...config.history, ...userConfig.history };
+        }
+
+        // Merge fallback config
+        if (userConfig.fallback) {
+          config.fallback = { ...config.fallback, ...userConfig.fallback };
         }
       } catch {
         // If config is corrupted, fall back to defaults
@@ -111,13 +137,9 @@ export class ConfigManager {
   /**
    * Get configuration for a specific provider
    */
-  getProviderConfig(provider?: ProviderType): { type: ProviderType; config: ProviderConfig } {
+  getProviderConfig(provider?: string): { type: string; config: ProviderConfig } {
     const type = provider || this.config.defaultProvider;
-    const config = this.config.providers[type];
-
-    if (!config) {
-      throw new Error(`No configuration found for provider '${type}'`);
-    }
+    const config = this.config.providers[type] || {};
 
     return { type, config };
   }
@@ -144,12 +166,26 @@ export class ConfigManager {
 
     if (config.providers) {
       for (const [key, value] of Object.entries(config.providers)) {
-        const provider = key as ProviderType;
+        const provider = key;
         this.config.providers[provider] = {
           ...this.config.providers[provider],
           ...value,
         };
       }
+    }
+
+    if (config.history) {
+      this.config.history = {
+        ...this.config.history,
+        ...config.history,
+      };
+    }
+
+    if (config.fallback) {
+      this.config.fallback = {
+        ...this.config.fallback,
+        ...config.fallback,
+      };
     }
 
     writeFileSync(this.configPath, JSON.stringify(this.config, null, 2), 'utf-8');
@@ -158,7 +194,7 @@ export class ConfigManager {
   /**
    * Check if a provider has the required API key
    */
-  hasRequiredCredentials(provider: ProviderType): boolean {
+  hasRequiredCredentials(provider: string): boolean {
     if (provider === 'local') return true; // Local doesn't need API key
     return !!this.config.providers[provider]?.apiKey;
   }

@@ -43,6 +43,14 @@ import { GitAgent } from './agents/git-agent.js';
 import { PackageAgent } from './agents/package-agent.js';
 import { GitHubReleaseAgent } from './agents/github-release-agent.js';
 import { SecurityAgent } from './agents/security-agent.js';
+import { SkillRunnerAgent } from './agents/skill-runner.js';
+import { MCPAgent } from './agents/mcp-agent.js';
+import type { McpToolEntry } from './agents/mcp-agent.js';
+import { getMCPManager, resetMCPManager } from '../mcp/manager.js';
+import { formatMcpToolsForPrompt } from './agents/mcp-agent.js';
+import { ContextPruner } from '../learning/context-pruner.js';
+import { ErrorRepairEngine } from '../learning/error-repair.js';
+import type { RepairMode } from '../learning/error-repair.js';
 import { scanForInjections, formatScanReport } from '../security/scanner.js';
 import { buildAgentModelMap } from '../learning/model-router.js';
 import { createReviewFromResult } from '../team/review.js';
@@ -109,8 +117,49 @@ export interface OrchestratorOptions {
   reviewMode?: boolean;
   /** Auto-route each agent to its recommended model from the ModelRouter */
   autoRouteModels?: boolean;
+  /**
+   * Enable automatic MCP server discovery and tool injection.
+   * Set to false to skip MCP auto-connect for a specific pipeline.
+   * Default: true
+   */
+  enableMcp?: boolean;
   /** Pre-built task plan to use instead of calling the PlannerAgent (for workflow templates) */
   prefillPlan?: TaskStep[];
+  /**
+   * Maximum context tokens before the ContextPruner triggers pruning.
+   * Default: 128000 (suitable for Llama-3, Groq, OpenRouter).
+   * Set higher for Gemini (1000000) or lower for smaller models.
+   */
+  contextLimit?: number;
+  /**
+   * Context pruning aggressiveness.
+   * - 'soft' (default): keeps last 10 conversation messages
+   * - 'medium': keeps last 5
+   * - 'aggressive': keeps last 2
+   */
+  contextPruneMode?: 'soft' | 'medium' | 'aggressive';
+  /**
+   * Run runner commands and tests inside a Docker sandbox container.
+   * Requires Docker to be installed and running.
+   */
+  /**
+   * Maximum number of auto-repair attempts per task when an agent fails.
+   * Default: 3. Set to 0 to disable auto-repair.
+   */
+  maxRepairs?: number;
+  /**
+   * Auto error-repair mode.
+   * - 'auto' (default): automatically repair repairable errors without asking
+   * - 'prompt': ask for user approval before applying repair strategies
+   * - 'off': disable auto-repair entirely
+   */
+  repairMode?: 'auto' | 'prompt' | 'off';
+  /**
+   * Fallback models to try when switching during error-repair.
+   * Example: ['groq/llama-3.3-70b', 'gemini/gemini-2.0-flash']
+   */
+  repairFallbackModels?: string[];
+  useDockerSandbox?: boolean;
   /**
    * Optional spinner reference from the CLI caller.
    * When set, the orchestrator stops the spinner before showing interactive
@@ -164,6 +213,8 @@ const AGENT_ICONS: Record<string, string> = {
   'package': '📦',
   'github-release': '🏷️',
   'security': '🔒',
+  'skill-runner': '🧠',
+  'mcp': '🔌',
 };
 
 function createAgent(agentType: string, _options: OrchestratorOptions): Agent | null {
@@ -190,6 +241,10 @@ function createAgent(agentType: string, _options: OrchestratorOptions): Agent | 
       return new GitHubReleaseAgent();
     case 'security':
       return new SecurityAgent();
+    case 'skill-runner':
+      return new SkillRunnerAgent();
+    case 'mcp':
+      return new MCPAgent();
     default:
       return null;
   }
@@ -230,6 +285,52 @@ export class Orchestrator {
       vault.setMeta('projectFileTree', '');
     }
 
+    // ── 2c. Auto-connect MCP servers and inject tool descriptions ────────
+    const enableMcp = options.enableMcp !== false; // default true
+    if (enableMcp && options.verbose) logger.highlight('\n🔌 Discovering MCP servers...');
+    if (enableMcp) try {
+      const mcpManager = getMCPManager();
+      const configs = mcpManager.discoverConfigs();
+
+      if (configs.length > 0) {
+        if (options.verbose) {
+          logger.info(`   Found ${configs.length} MCP server config(s)`);
+        }
+
+        const connected = await mcpManager.connectAll();
+
+        if (connected.length > 0) {
+          const allTools = mcpManager.getAllTools();
+          const toolEntries: McpToolEntry[] = allTools.map((t) => ({
+            server: t.server,
+            tool: {
+              name: t.tool.name,
+              description: t.tool.description,
+              inputSchema: t.tool.inputSchema,
+            },
+          }));
+
+          // Store both the raw tool entries (for programmatic access)
+          vault.setMeta('mcpTools', toolEntries);
+          // And a formatted string (for LLM prompt injection)
+          const formattedTools = formatMcpToolsForPrompt(toolEntries);
+          vault.setMeta('mcpToolsFormatted', formattedTools);
+
+          if (options.verbose) {
+            logger.info(`   Connected to ${connected.length} MCP server(s) with ${allTools.length} tool(s)`);
+          }
+        } else if (options.verbose) {
+          logger.info('   No MCP servers could be connected');
+        }
+      } else if (options.verbose) {
+        logger.info('   No MCP server configs found (see ~/.buff/mcp/)');
+      }
+    } catch (err) {
+      logger.debug(`MCP auto-connect failed (non-critical): ${err}`);
+    } else if (options.verbose) {
+      logger.info('   MCP disabled (enableMcp: false)');
+    }
+
     // ── 3. Memory Retrieval ──────────────────────────────────────────────
     let memoryContext = '';
 
@@ -260,6 +361,12 @@ export class Orchestrator {
         vault.setMeta('patternContext', patternContext);
         memoryContext += `\n${patternContext}`;
       }
+    }
+
+    // ── 2d. Log MCP tools availability ───────────────────────────────────
+    const mcpToolCount = (vault.getMeta<McpToolEntry[]>('mcpTools') || []).length;
+    if (mcpToolCount > 0 && options.verbose) {
+      logger.info(`   ${mcpToolCount} MCP tool(s) available via ${(vault.getMeta<any>('mcpToolsFormatted') || '').includes('Server:') ? 'connected servers' : 'discovered configs'}`);
     }
 
     // ── 3b. Auto-route models ─────────────────────────────────────────────
@@ -308,6 +415,9 @@ export class Orchestrator {
           logger.info(`      [${step.agentType}] ${step.description}`);
         }
       }
+
+      // Prune context after the Planner produces the plan
+      this.pruneContext(vault, options);
     }
 
     // ── 4b. Push initial DAG state to dashboard ─────────────────────────
@@ -346,6 +456,14 @@ export class Orchestrator {
       if (vault.isComplete) break;
 
       const runnableTasks = vault.getRunnableTasks();
+
+      // Prune context before executing the next batch of tasks
+      this.pruneContext(vault, options);
+
+      // Set Docker sandbox flag so RunnerAgent and TesterAgent know to use containers
+      if (options.useDockerSandbox) {
+        vault.setMeta('useDockerSandbox', true);
+      }
       if (runnableTasks.length === 0 && !vault.isComplete) {
         const stuck = vault.context.taskPlan.filter((s) => s.status === 'pending');
         for (const s of stuck) {
@@ -393,6 +511,13 @@ export class Orchestrator {
       } catch {
         // Best-effort cleanup
       }
+    }
+
+    // Clean up MCP server connections
+    try {
+      resetMCPManager();
+    } catch {
+      // Best-effort cleanup
     }
 
     // ── 6b. Review mode — create a review bundle instead of applying changes
@@ -682,6 +807,14 @@ export class Orchestrator {
     contextFiles: string[],
     defaultCallLLM: LLMCallFn,
   ): Promise<void> {
+    const maxRepairs = options.maxRepairs ?? 3;
+    const repairMode = (options.repairMode ?? 'auto') as RepairMode;
+
+    // If repairs are enabled and this isn't a debugger/runner (which have their own retry logic),
+    // set up the error-repair engine
+    const useRepair = maxRepairs > 0 && repairMode !== 'off' &&
+      !['debugger', 'runner', 'tester'].includes(task.agentType);
+
     vault.updateTaskStatus(task.id, 'running');
     await tryUpdateDAGNode(task.id, { status: 'running' });
 
@@ -729,7 +862,48 @@ export class Orchestrator {
 
       // Wire up the rate-limit handler so agents can prompt the user
       vault.context.onRateLimit = this.createRateLimitHandler(options, agentModel || options.model);
-      const result = await agent.execute(vault.context, agentCallLLM);
+
+      // ── Execute agent with optional auto-repair loop ────────────────
+      let result: AgentResult;
+
+      if (useRepair) {
+        // Try the agent — if it fails, attempt auto-repair
+        const firstResult = await agent.execute(vault.context, agentCallLLM);
+
+        if (firstResult.success) {
+          result = firstResult;
+        } else {
+          if (options.verbose) {
+            const repairableTypes = ['llm-error', 'provider-error', 'context-limit', 'process-error', 'unknown'];
+            logger.info(`      🔧 Agent failed — attempting auto-repair (mode: ${repairMode}, max: ${maxRepairs})`);
+          }
+
+          const errorMessage = firstResult.error || firstResult.summary || 'Unknown error';
+          const repairEngine = new ErrorRepairEngine({
+            maxRepairs,
+            repairMode,
+            verbose: options.verbose,
+            fallbackModels: options.repairFallbackModels,
+          });
+
+          result = await repairEngine.repair(
+            task.id,
+            vault.context,
+            agentCallLLM,
+            errorMessage,
+            async (ctx, llm) => {
+              return agent.execute(ctx, llm);
+            },
+          );
+
+          if (options.verbose) {
+            logger.info(`      🔧 ${result.success ? '✅ Repair succeeded' : '❌ Repair failed'} after ${repairEngine.budget.getAttempts(task.id)} attempt(s)`);
+          }
+        }
+      } else {
+        result = await agent.execute(vault.context, agentCallLLM);
+      }
+
       vault.updateTaskStatus(task.id, result.success ? 'completed' : 'failed', result.summary);
       await tryUpdateDAGNode(task.id, {
         status: result.success ? 'completed' : 'failed',
@@ -802,6 +976,9 @@ export class Orchestrator {
         }
       }
 
+      // Prune context after each agent step to keep the context bus within limits
+      this.pruneContext(vault, options);
+
       if (options.verbose) {
         const icon = result.success ? '✅' : '⚠️';
         logger.info(`      ${icon} ${result.summary}`);
@@ -818,6 +995,32 @@ export class Orchestrator {
       vault.updateTaskStatus(task.id, 'failed', msg);
       await tryUpdateDAGNode(task.id, { status: 'failed', summary: msg });
       agentResults.push({ agent: task.agentType, success: false, summary: `Error: ${msg}` });
+    }
+  }
+
+  /**
+   * Run the ContextPruner on the vault context.
+   * Only prunes when the context exceeds the configured threshold.
+   * Logs details in verbose mode.
+   */
+  private pruneContext(vault: ContextVault, options: OrchestratorOptions): void {
+    const maxTokens = options.contextLimit || 128_000;
+    const pruner = new ContextPruner({
+      maxTokens,
+      conversationMode: options.contextPruneMode || 'soft',
+    });
+
+    const result = pruner.prune(vault.context);
+
+    if (result.pruned) {
+      vault.setMeta('lastPruneResult', result);
+
+      if (options.verbose) {
+        const formatted = pruner.formatPruneResult(result);
+        if (formatted) {
+          logger.info(`\n${formatted}`);
+        }
+      }
     }
   }
 

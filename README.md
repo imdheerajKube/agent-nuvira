@@ -22,7 +22,33 @@ agent-nuvira config list
 - **Codebase planning** that analyzes directory structure and generates implementation plans
 - **Multi-agent orchestration** — `agent-nuvira execute "goal"` runs a pipeline of planner, gatherer, writer, reviewer, tester, and more
 - **Response caching** via SQLite to reduce costs and latency
-- **Plugin system** for adding custom inference providers
+- **Plugin system** with auto-discovery — drop `.js` files into `~/.buff/plugins/` for automatic loading
+- **Project scaffolding** — `agent-nuvira init` generates starter projects with interactive template + provider selection
+- **Context-preserving model switching** — `agent-nuvira model switch` changes providers mid-session without losing agent state
+- **Skill compiler** — automatically extracts reusable patterns from successful agent runs into executable skills (`agent-nuvira skill run`)
+- **Context-window memory pruner** — prevents long multi-agent chains from exceeding model token limits
+- **Complete streaming support** — all 5 providers support real-time token-by-token output
+- **Cost tracking** — per-provider/session/monthly costs with `agent-nuvira stats cost`
+- **Prompt history search** — keyword and semantic search across past conversations (`/search`, `buff history`)
+- **Native embedding support** — 3-tier embedder with `@huggingface/transformers` for 10x faster semantic search
+- **Workflow template marketplace** — 10 built-in templates + GitHub registry with install/publish lifecycle
+- **Model benchmarking** — 21 standardized coding tasks with scoring and A/B comparison
+- **Docker sandbox isolation** — resource-limited, network-isolated container execution with 8 base images
+- **Provider health dashboard** — `agent-nuvira doctor` with color-coded status, watch mode, and auto-fix
+- **Memory compression & pruning** — automatic trajectory summarization with configurable retention policies
+- **VS Code extension** — 9 commands, inline code suggestions, diff viewer, agent progress panel
+- **Remote agent federation** — multi-machine collaboration with protocol, server, and client
+- **Web UI dashboard** — React dashboard with DAG visualization, model health, cost charts, and history browser
+- **Hybrid model routing** — intelligent model selection based on task complexity, cost, and availability
+- **Team collaboration** — Git-synced shared config, memory, and review pipelines
+- **Agent SDK** — `@agent-nuvira/sdk` npm package for building custom agents with scaffolding CLI
+- **Provider CLI** — `buff provider list` with color-coded status table, `buff provider health` with per-provider diagnostics
+- **Provider fallback routing** — automatic failover between providers with circuit breaker and configurable chain
+- **Security scan CLI** — `buff security scan` detects PII, prompt injections, and dangerous code patterns
+- **Feedback & rating system** — `buff feedback record/list/stats/clear` drives self-improvement scoring
+- **Marketplace unified CLI** — `buff marketplace browse/search/install/info` for workflow templates + plugins
+- **MCP (Model Context Protocol) integration** — connect to databases, APIs, and file systems via MCP servers
+- **AST-aware code editing** — structural analysis engine understands functions, classes, methods across JS/TS/Python/Go/Rust
 - **Configuration** via JSON config file + environment variables
 - **No server dependency** — no telemetry, no subscriptions, no outbound calls to a hosted backend
 
@@ -68,13 +94,32 @@ Options:
   -h, --help     display help for command
 
 Commands:
-  chat [options] [prompt]  Start an interactive chat session with AI
-  edit [options] <file>    Edit a file using AI assistance
-  models [options]         List available models from inference providers
-  plan [options] [target]  Generate an implementation plan for a codebase task
-  execute [options] <goal> Execute a multi-agent pipeline for a goal
-  config                   Manage Buff configuration
-  cache                    Manage inference cache
+  chat [options] [prompt]       Start an interactive chat session with AI
+  edit [options] <file>         Edit a file using AI assistance
+  models [options]              List available models from inference providers
+  plan [options] [target]       Generate an implementation plan for a codebase task
+  execute [options] <goal>      Execute a multi-agent pipeline for a goal
+  model                         Switch providers and manage active models
+  skill                         List, compile, and run reusable skill scripts
+  init [name]                   Scaffold a new project from a template
+  history                       Search and manage chat history
+  doctor                        Provider health dashboard
+  benchmark                     Run model benchmarks
+  workflow                      Workflow template marketplace
+  federation                    Remote agent federation
+  team                          Team collaboration
+  dashboard                     Launch web UI dashboard
+  memory                        Memory compression and stats
+  provider                      Provider list and health diagnostics
+  security                      Security scan for PII, injections, and dangerous code
+  feedback                      Feedback and rating system
+  marketplace                   Browse, search, and install plugins and workflows
+  mcp                           Model Context Protocol — connect to MCP servers
+  plugins                       Manage auto-discovered plugins
+  sandbox                       Docker sandbox management
+  sdk                           Agent SDK scaffolding
+  config                        Manage Buff configuration
+  cache                         Manage inference cache
 ```
 
 ---
@@ -384,6 +429,157 @@ agent-nuvira cache clear
 
 ---
 
+### `agent-nuvira model` — Context-Preserving Model Switching
+
+Switch inference providers and models on the fly without losing conversation history, agent state, or session continuity. The active model persists across CLI restarts.
+
+```bash
+# Show current active model + prompt to switch
+agent-nuvira model
+
+# List all providers with their status
+agent-nuvira model list
+
+# Interactive categorized model picker
+agent-nuvira model switch
+
+# Switch to a provider with its default model
+agent-nuvira model switch groq
+
+# Switch to a specific provider/model pair
+agent-nuvira model switch groq/llama-3.3-70b-versatile
+
+# Show detailed active configuration
+agent-nuvira model info
+
+# Get model routing recommendations
+agent-nuvira model recommend
+
+# Quick health check for the active provider
+agent-nuvira model health
+```
+
+**Priority chain:** CLI `--provider`/`--model` flags → `buff model switch` active state → default config file — the most specific wins.
+
+---
+
+### `agent-nuvira skill` — Skill Compiler System
+
+Automatically convert successful agent execution trajectories into reusable, parameterized skill scripts. Skills are extracted by an LLM from high-scoring runs, saved to `~/.buff/skills/`, and invoked directly via the orchestrator.
+
+```bash
+# List all compiled skills
+agent-nuvira skill list
+
+# Show a skill's definition and steps
+agent-nuvira skill show "Add CLI Command"
+
+# Run a skill with parameters (invokes the orchestrator)
+agent-nuvira skill run "Add CLI Command" --params commandName=deploy --params description="Deploy to production"
+
+# Manually trigger skill compilation from recent trajectories
+agent-nuvira skill compile
+
+# Search skills by keyword
+agent-nuvira skill search "cli"
+
+# Show skill quality scores
+agent-nuvira skill quality
+
+# Garbage-collect old/low-quality skills
+agent-nuvira skill gc
+```
+
+**How it works:** Every 8 successful orchestration runs, the Self-Improver automatically feeds the top-5 trajectories to the Skill Compiler. The LLM identifies reusable patterns and parameterizes them with `{{paramName}}` placeholders. Skills act as pre-built task plans that the orchestrator can execute on demand.
+
+---
+
+### `agent-nuvira init` — Project Scaffolding
+
+Scaffold new projects from built-in templates with interactive prompts and provider selection. Supports custom template directories.
+
+```bash
+# Interactive: name, template, and provider prompts
+agent-nuvira init
+
+# Name from CLI, interactive for template and provider
+agent-nuvira init my-app
+
+# Fully non-interactive
+agent-nuvira init my-app --template node-api
+
+# List all available templates
+agent-nuvira init --list
+
+# Use a custom template from a local directory
+agent-nuvira init my-app --template custom --template-dir ~/my-templates
+```
+
+**Built-in templates:**
+
+| Template | Description |
+|---|---|
+| `node-cli` | Node.js CLI app with Commander + TypeScript |
+| `ts-library` | TypeScript library with Vitest |
+| `node-api` | Express REST API with TypeScript |
+| `python-cli` | Python CLI app with Click + Poetry |
+| `minimal` | Minimal TypeScript project (1 file) |
+
+The command also generates a `.buffconfig.json` with your chosen provider and model, ready to use immediately.
+
+---
+
+## Docker Compose (5-Minute Onboarding)
+
+Get the full Agent-Nuvira dashboard and CLI running with a single command — no Node.js or TypeScript setup required.
+
+```bash
+# Clone and go
+cp .env.example .env       # Fill in your API keys
+docker compose up           # Build & launch at http://localhost:3030
+```
+
+### What you get
+
+- **Dashboard UI** at `http://localhost:3030` — provider health, cost tracking, model benchmarks, memory browser
+- **CLI** accessible via `docker compose run --rm agent-nuvira <command>`
+- **Persistent data** — config, memory, cache, and history stored in a named volume
+- **Health checks** — automatic dashboard status verification
+
+### Examples
+
+```bash
+# Quick one-shot commands via Docker
+docker compose run --rm agent-nuvira chat "explain recursion in Rust"
+docker compose run --rm agent-nuvira models --provider groq
+docker compose run --rm agent-nuvira execute "add a health check endpoint"
+
+# With local inference (requires Ollama on host)
+docker compose --profile ollama up
+```
+
+### Docker Compose Structure
+
+| Feature | Details |
+|---|---|
+| **Base image** | `node:22-alpine` — slim, secure |
+| **Stages** | 3-stage build: TypeScript compile → Vite dashboard → runtime |
+| **Layer caching** | Dependency manifests copied before source for cache reuse |
+| **Ollama profile** | `--profile ollama` adds an Ollama container; defaults to `host.docker.internal` |
+| **Volume** | `agent-nuvira-data` at `/root/.buff` preserves all data |
+| **Port** | `3030` mapped to dashboard server |
+| **Health** | Node `fetch()` verifies dashboard API every 30s |
+
+### Configuration via Docker
+
+Set API keys in `.env` (see `.env.example`) or pass them as environment variables:
+
+```bash
+docker compose run --rm -e GROQ_API_KEY=gsk_xxx agent-nuvira chat "hello"
+```
+
+---
+
 ## Provider Details
 
 ### Local (Ollama)
@@ -513,7 +709,24 @@ agent-nuvira execute "add tests" --agent-model planner=gemini --agent-model writ
 
 # Use persistent memory across sessions
 agent-nuvira execute "fix the login bug" --memory
+
+# Set a custom context window limit (default: 128,000 tokens)
+agent-nuvira execute "refactor large codebase" --context-limit 256000
+
+# Adjust pruning aggressiveness for long chains
+agent-nuvira execute "build entire microservice" --context-prune medium
+agent-nuvira execute "migrate database schema" --context-prune aggressive
 ```
+
+**Context pruning flags:**
+
+| Flag | Purpose | Default |
+|---|---|---|
+| `--context-limit <tokens>` | Max tokens before automatic pruning activates | 128000 |
+| `--context-prune <mode>` | Prune aggressiveness: `soft` \| `medium` \| `aggressive` | `soft` |
+
+The pruner automatically compresses the shared agent context between pipeline steps using 5 strategies: metadata stripping, file change collapsing, conversation truncation, artifact summarization, and aggressive fallback.
+
 
 The pipeline runs these agents in sequence (with parallelization where possible):
 1. **Planner** — Analyzes the goal, creates a task plan
@@ -547,40 +760,56 @@ Adapter Adapter Adapter   Adapter      Adapter
  Groq  NVIDIA Google      OpenRouter  Ollama / HF /
  LPU   NIM   Gemini (free) APIs       GGML Models
 
-         ┌──────────────────────────┐
-         │   Multi-Agent System     │
-         │  ┌────────────────────┐  │
-         │  │  Orchestrator      │  │
-         │  │  ├─ Planner       │  │
-         │  │  ├─ ContextGather │  │
-         │  │  ├─ Writer        │  │
-         │  │  ├─ Reviewer      │  │
-         │  │  ├─ Tester        │  │
-         │  │  ├─ Runner        │  │
-         │  │  ├─ Debugger      │  │
-         │  │  └─ GitAgent      │  │
-         │  └────────────────────┘  │
-         │                          │
-         │  ┌────────────────────┐  │
-         │  │  Memory System     │  │
-         │  │  ├─ Vector Store   │  │
-         │  │  ├─ Trajectory     │  │
-         │  │  └─ Embedder      │  │
-         │  └────────────────────┘  │
-         │                          │
-         │  ┌────────────────────┐  │
-         │  │  Self-Learning     │  │
-         │  │  ├─ Model Router   │  │
-         │  │  ├─ Pattern Extr.  │  │
-         │  │  └─ Scorer        │  │
-         │  └────────────────────┘  │
-         │                          │
-         │  ┌────────────────────┐  │
-         │  │ SQLite Cache       │  │
-         │  │ Multi-file Parser  │  │
-         │  │ Token Chunking     │  │
-         │  └────────────────────┘  │
-         └──────────────────────────┘
+         ┌──────────────────────────────┐
+         │       Core Pipeline          │
+         │  ┌────────────────────────┐  │
+         │  │   Orchestrator         │  │
+         │  │  ├─ Planner           │  │
+         │  │  ├─ ContextGather     │  │
+         │  │  ├─ Writer            │  │
+         │  │  ├─ Reviewer          │  │
+         │  │  ├─ Tester            │  │
+         │  │  ├─ Runner            │  │
+         │  │  ├─ Debugger          │  │
+         │  │  ├─ GitAgent          │  │
+         │  │  └─ SkillRunner       │  │
+         │  └────────────────────────┘  │
+         │                              │
+         │  ┌────────────────────────┐  │
+         │  │   Memory System        │  │
+         │  │  ├─ Vector Store       │  │
+         │  │  ├─ Trajectory/Store   │  │
+         │  │  └─ Embedder           │  │
+         │  └────────────────────────┘  │
+         │                              │
+         │  ┌────────────────────────┐  │
+         │  │   Self-Learning        │  │
+         │  │  ├─ Model Router       │  │
+         │  │  ├─ Pattern Extractor  │  │
+         │  │  ├─ Scorer             │  │
+         │  │  └─ Skill Compiler     │  │
+         │  └────────────────────────┘  │
+         │                              │
+         │  ┌────────────────────────┐  │
+         │  │   Context Mgmt         │  │
+         │  │  ├─ ContextPruner      │  │
+         │  │  ├─ SQLite Cache       │  │
+         │  │  ├─ Multi-file Parser  │  │
+         │  │  └─ Token Chunking     │  │
+         │  └────────────────────────┘  │
+         │                              │
+         │  ┌────────────────────────┐  │
+         │  │   CLI Layer            │  │
+         │  │  ├─ buff init          │  │
+         │  │  ├─ buff model         │  │
+         │  │  └─ buff skill         │  │
+         │  └────────────────────────┘  │
+         │                              │
+         │  ┌────────────────────────┐  │
+         │  │   Docker Deployment    │  │
+         │  │  └─ docker-compose.yml  │  │
+         │  └────────────────────────┘  │
+         └──────────────────────────────┘
 ```
 
 ### Key Modules
@@ -593,9 +822,16 @@ Adapter Adapter Adapter   Adapter      Adapter
 | **Provider Factory** | `src/inference/factory.ts` | Instantiates the right adapter |
 | **Adapters** | `src/inference/*-adapter.ts` | One per provider (Groq, NIM, Gemini, OpenRouter, Local) |
 | **Model Discovery** | `src/cli/models.ts` | Lists and searches models from all providers |
-| **Orchestrator** | `src/agents/orchestrator.ts` | Multi-agent pipeline coordinator |
+| **Model Switch** | `src/cli/model.ts` | Context-preserving provider/model switching |
+| **Project Scaffold** | `src/cli/init.ts` | Interactive project scaffolding with templates |
+| **Skill Commands** | `src/cli/skill.ts` | List, compile, search, and run skill scripts |
+| **Orchestrator** | `src/agents/orchestrator.ts` | Multi-agent pipeline coordinator (with context pruning) |
 | **Context Cache** | `src/context/cache.ts` | SQLite-backed response caching |
 | **Context Parser** | `src/context/parser.ts` | Multi-file reading, chunking, prioritization |
+| **Context Pruner** | `src/learning/context-pruner.ts` | Token-aware context compression for long agent chains |
+| **Skill Compiler** | `src/learning/skill-compiler.ts` | LLM-powered extraction of reusable patterns from trajectories |
+| **Skill Store** | `src/learning/skill-store.ts` | Persistent skill storage with decay scoring |
+| **Skill Runner Agent** | `src/agents/agents/skill-runner.ts` | Injects skill steps into the execution plan |
 | **Plugin Registry** | `src/plugins/registry.ts` | Pluggable third-party provider system |
 | **Logger** | `src/utils/logger.ts` | Colored, level-based logging |
 
@@ -769,7 +1005,7 @@ Then use it:
 agent-nuvira chat --provider anthropic
 ```
 
-> **Note:** The plugin system is a *programmatic* API. To make plugins load automatically from a directory (discovery), you would add a plugin loader script that scans a `~/.buff/plugins/` directory and registers any plugins found.
+> **Note:** Plugins placed in `~/.buff/plugins/` are **auto-discovered** at CLI startup — no manual registration required. Programmatic registration via the Plugin Registry API is also supported for advanced use cases.
 
 ---
 
@@ -794,29 +1030,33 @@ npm run dev            # Build and run with tsx (fast)
 
 ```
 src/
-├── index.ts              # Entry point
+├── index.ts              # Entry point & public exports
 ├── cli/
 │   ├── router.ts         # Command registration & provider resolution
 │   ├── commands.ts       # Base command class
 │   ├── chat.ts           # Interactive chat
 │   ├── edit.ts           # File editing
 │   ├── models.ts         # Model discovery (list/search models)
+│   ├── model.ts          # Context-preserving model switching
+│   ├── skill.ts          # Skill compilation & execution
+│   ├── init.ts           # Project scaffolding
 │   ├── plan.ts           # Implementation plans
 │   ├── config.ts         # Configuration management
-│   ├── execute.ts        # Multi-agent orchestration
+│   ├── execute.ts        # Multi-agent orchestration (with context pruning)
 │   └── cache.ts          # Cache management
 ├── agents/
 │   ├── agent.ts          # Abstract Agent + types
 │   ├── orchestrator.ts   # Multi-agent pipeline coordinator
 │   ├── context-vault.ts  # Shared context bus
 │   └── agents/
-│       ├── planner.ts    # PlannerAgent
+│       ├── planner.ts       # PlannerAgent
 │       ├── context-gatherer.ts
-│       ├── writer.ts     # WriterAgent
-│       ├── reviewer.ts   # ReviewerAgent
-│       ├── runner.ts     # RunnerAgent
-│       ├── tester.ts     # TesterAgent
-│       ├── debugger.ts   # DebuggerAgent
+│       ├── writer.ts        # WriterAgent
+│       ├── reviewer.ts      # ReviewerAgent
+│       ├── runner.ts        # RunnerAgent
+│       ├── tester.ts        # TesterAgent
+│       ├── debugger.ts      # DebuggerAgent
+│       ├── skill-runner.ts  # SkillRunnerAgent (injects skill steps)
 │       ├── git-agent.ts
 │       ├── package-agent.ts
 │       ├── github-release-agent.ts
@@ -827,6 +1067,7 @@ src/
 ├── inference/
 │   ├── interface.ts      # InferenceProvider contract
 │   ├── factory.ts        # Provider instantiation
+│   ├── sse.ts            # Server-sent events streaming
 │   ├── groq-adapter.ts   # Groq LPU
 │   ├── nim-adapter.ts    # NVIDIA NIM
 │   ├── gemini-adapter.ts # Google Gemini
@@ -834,10 +1075,15 @@ src/
 │   └── local-adapter.ts  # Ollama / HuggingFace / GGML
 ├── context/
 │   ├── cache.ts          # SQLite response cache
-│   └── parser.ts         # Multi-file context parsing
+│   ├── parser.ts         # Multi-file context parsing
+│   └── history.ts        # Chat history persistence
 ├── plugins/
 │   └── registry.ts       # Plugin registration system
 ├── learning/
+│   ├── skill-compiler.ts # LLM-powered skill extraction from trajectories
+│   ├── skill-store.ts    # Persistent skill storage with decay scoring
+│   ├── skill-types.ts    # Skill type definitions
+│   ├── context-pruner.ts # Token-aware context compression
 │   ├── model-router.ts   # Adaptive model routing
 │   ├── scorer.ts         # Trajectory scoring
 │   ├── pattern-extractor.ts
@@ -858,7 +1104,7 @@ src/
 ### Testing
 
 ```bash
-# Run all tests (115+ tests)
+# Run all tests (1150+ tests)
 npm test
 
 # Watch mode
@@ -875,14 +1121,41 @@ npx tsc --noEmit
 
 ## Roadmap
 
-- [x] **Groq integration** — fast LPU inference for open-source models
-- [x] **Multi-agent orchestration** — plan, write, review, test, and publish
-- [x] **Model discovery** — search and filter across all providers
-- [ ] **Streaming support** — real-time token-by-token output in chat mode
-- [ ] **Auto-discovery plugin loader** — scan `~/.buff/plugins/` for `.js` plugin files
-- [ ] **Hybrid routing** — automatically route small prompts to local models and complex ones to cloud
-- [ ] **Local telemetry** — usage logs stored locally (no server upload)
-- [ ] **Provider health checks** — `agent-nuvira doctor` to verify all configured providers
+**Phases 1–3 (25 phases) are complete.** Phase 4 (Industry Standards & Autonomous Polish) is in progress. See [UPGRADE_ROADMAP.md](./UPGRADE_ROADMAP.md) for the full implementation journey.
+
+| Phase | Feature | Status |
+|---|---|---|
+| **Phase 1: Quick Wins** | | |
+| 1.1 | Auto-discovery plugin loader — drop `.js` into `~/.buff/plugins/` | ✅ Complete |
+| 1.2 | Complete streaming support — all 5 providers | ✅ Complete |
+| 1.3 | Cost tracking — per-provider/session/monthly | ✅ Complete |
+| 1.4 | `buff init` — interactive project scaffolding | ✅ Complete |
+| 1.5 | Prompt history search — keyword + semantic | ✅ Complete |
+| 1.6 | Skill compiler — auto-extract reusable patterns from trajectories | ✅ Complete |
+| 1.7 | Context-window memory pruner — prevent OOM in long chains | ✅ Complete |
+| 1.8 | Context-preserving model switching — mid-session provider changes | ✅ Complete |
+| **Phase 2: Structural Changes** | | |
+| 2.1 | Native embedding support — 3-tier embedder (Xenova/Python/LLM) | ✅ Complete |
+| 2.2 | Workflow template marketplace — 10 templates + registry | ✅ Complete |
+| 2.3 | Model benchmarking — 21 tasks, scoring, A/B comparison | ✅ Complete |
+| 2.4 | Docker sandbox isolation — resource limits, network isolation, 8 images | ✅ Complete |
+| 2.5 | Provider health dashboard — `buff doctor` | ✅ Complete |
+| 2.6 | Memory compression & pruning — trajectory summarization | ✅ Complete |
+| **Phase 3: Major Upgrades** | | |
+| 3.1 | VS Code extension — 9 commands, inline suggestions, diff viewer | ✅ Complete |
+| 3.2 | Remote agent federation — multi-machine collaboration | ✅ Complete |
+| 3.3 | Web UI dashboard — React + Recharts + DAG visualization | ✅ Complete |
+| 3.4 | Hybrid model routing — complexity-based model selection | ✅ Complete |
+| 3.5 | Team collaboration — shared config, memory, and review pipelines | ✅ Complete |
+| 3.6 | Agent SDK — `@agent-nuvira/sdk` npm package + scaffolding | ✅ Complete |
+| 3.7 | Provider CLI (`buff provider list/health`) | ✅ Complete |
+| 3.8 | Provider fallback routing — auto-failover with circuit breaker | ✅ Complete |
+| 3.9 | Security scan CLI (`buff security scan`) | ✅ Complete |
+| 3.10 | Feedback & rating system (`buff feedback`) | ✅ Complete |
+| 3.11 | Marketplace unified CLI (`buff marketplace browse/search/install`) | ✅ Complete |
+| **Phase 4: Industry Standards** | *(in progress)* | |
+| 4.1 | MCP (Model Context Protocol) integration — MCP client/manager/CLI | ✅ Complete |
+| 4.2 | AST-aware code editing — structural analysis engine (JS/TS/Python/Go/Rust) | ✅ Complete |
 
 ---
 

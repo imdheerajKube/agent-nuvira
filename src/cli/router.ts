@@ -15,6 +15,7 @@ import { PlanCommand } from './plan.js';
 import { ConfigCommand } from './config.js';
 import { CacheCommand } from './cache.js';
 import { ModelsCommand } from './models.js';
+import { ModelCommand } from './model.js';
 import { ExecuteCommand } from './execute.js';
 import { RunCommand } from './run.js';
 import { WorkflowCommand } from './workflow.js';
@@ -23,6 +24,7 @@ import { LearnCommand } from './learn.js';
 import { InitCommand } from './init.js';
 import { StatsCommand } from './stats.js';
 import { HistoryCommand } from './history.js';
+import { SkillCommand } from './skill.js';
 import { BenchmarkCommand } from './benchmark.js';
 import { SandboxCommand } from './sandbox.js';
 import { DoctorCommand } from './doctor.js';
@@ -32,6 +34,12 @@ import { AgentCommand } from './agent.js';
 import { FederationCommand } from './federation.js';
 import { TeamCommand } from './team.js';
 import { SDKCommand } from './sdk.js';
+import { ProviderCommand } from './provider.js';
+import { SecurityCommand } from './security.js';
+import { FeedbackCommand } from './feedback.js';
+import { MarketplaceCommand } from './marketplace.js';
+import { MCPCommand } from './mcp.js';
+import { CICommand } from './ci.js';
 import { logger } from '../utils/logger.js';
 
 /**
@@ -88,6 +96,14 @@ export function createCLI(): Command {
   const historyCmd = new HistoryCommand();
   program.addCommand(historyCmd.create());
 
+  // Register Skill commands (Phase 1 enhancement)
+  const skillCmd = new SkillCommand();
+  program.addCommand(skillCmd.create());
+
+  // Register Model command (Phase 1.2: model switching)
+  const modelCmd = new ModelCommand();
+  program.addCommand(modelCmd.create());
+
   // Register Phase 2 commands
   const benchmarkCmd = new BenchmarkCommand();
   program.addCommand(benchmarkCmd.create());
@@ -118,6 +134,30 @@ export function createCLI(): Command {
   // Register Phase 3.6 commands
   const sdkCmd = new SDKCommand();
   program.addCommand(sdkCmd.create());
+
+  // Register Provider command (from nextlevel roadmap)
+  const providerCmd = new ProviderCommand();
+  program.addCommand(providerCmd.create());
+
+  // Register Security command (from nextlevel roadmap §4.1)
+  const securityCmd = new SecurityCommand();
+  program.addCommand(securityCmd.create());
+
+  // Register Feedback command (from nextlevel roadmap §4.3)
+  const feedbackCmd = new FeedbackCommand();
+  program.addCommand(feedbackCmd.create());
+
+  // Register Marketplace command (from nextlevel roadmap §5.3)
+  const marketplaceCmd = new MarketplaceCommand();
+  program.addCommand(marketplaceCmd.create());
+
+  // Register MCP command (Phase 4.1 — Model Context Protocol)
+  const mcpCmd = new MCPCommand();
+  program.addCommand(mcpCmd.create());
+
+  // Register CI command (Phase 4.5 — Headless CI/CD mode)
+  const ciCmd = new CICommand();
+  program.addCommand(ciCmd.create());
 
   // Default action: show help
   program.action(() => {

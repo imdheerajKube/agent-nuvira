@@ -1,0 +1,62 @@
+# ─── Dependencies (rebuilt in Docker) ────────────────────────────────────────
+node_modules/
+src/web-dashboard/node_modules/
+
+# ─── Build outputs (rebuilt in Docker) ──────────────────────────────────────
+dist/
+src/web-dashboard/public/
+
+# ─── Git ─────────────────────────────────────────────────────────────────────
+.git/
+.gitignore
+.gitattributes
+
+# ─── IDE & Editor ────────────────────────────────────────────────────────────
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# ─── OS files ────────────────────────────────────────────────────────────────
+.DS_Store
+Thumbs.db
+
+# ─── Environment ─────────────────────────────────────────────────────────────
+.env
+.env.local
+.env.*.local
+
+# ─── Logs & databases ────────────────────────────────────────────────────────
+*.log
+*.db
+
+# ─── Config (user-specific) ──────────────────────────────────────────────────
+.buffconfig.json
+
+# ─── VS Code extension (separate project) ────────────────────────────────────
+vscode-extension/
+
+# ─── Packages (sub-projects) ─────────────────────────────────────────────────
+packages/
+
+# ─── Tests (not needed in production image) ──────────────────────────────────
+tests/
+
+# ─── Documentation (not needed in production image) ──────────────────────────
+*.md
+User_Manual.md
+Product_Guide.md
+UPGRADE_ROADMAP.md
+spec.md
+spec_upgrade.md
+spec_roadmap.md
+
+# ─── Agent SDK (not needed in production image) ──────────────────────────────
+src/agent-sdk/
+
+# ─── Website (separate static site) ──────────────────────────────────────────
+website/
+
+# ─── npm ─────────────────────────────────────────────────────────────────────
+.npmrc

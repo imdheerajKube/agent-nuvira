@@ -1,0 +1,685 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Agent-Nuvira — Multi-Agent AI Coding Assistant</title>
+  <meta name="description" content="Agent-Nuvira is an open-source, multi-agent AI coding assistant that runs from your terminal. Plan, write, review, test, and publish code — from a single command." />
+  <meta name="keywords" content="AI coding assistant, multi-agent AI, terminal AI tool, open source, Groq, NVIDIA NIM, Google Gemini, OpenRouter, Ollama" />
+  <link rel="icon" type="image/png" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='8' fill='%236363f2'/%3E%3Ctext x='16' y='22' text-anchor='middle' fill='white' font-size='18' font-weight='bold' font-family='system-ui'%3EN%3C/text%3E%3C/svg%3E" />
+  <meta property="og:title" content="Agent-Nuvira — Multi-Agent AI Coding Assistant" />
+  <meta property="og:description" content="The open-source multi-agent AI coding assistant. Plan, write, review, test, and publish code from your terminal. 5 providers. 10+ agents. No subscriptions. No telemetry." />
+  <meta property="og:image" content="https://www.agent-nuvira.com/assets/hero.png" />
+  <meta property="og:url" content="https://www.agent-nuvira.com" />
+  <meta name="twitter:card" content="summary_large_image" />
+  <meta name="twitter:title" content="Agent-Nuvira — Multi-Agent AI Coding Assistant" />
+  <meta name="twitter:description" content="The open-source multi-agent AI coding assistant. 5 providers. 10+ agents. From your terminal." />
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800;900&family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet" />
+  <link rel="stylesheet" href="styles.css" />
+</head>
+<body>
+  <!-- Navigation -->
+  <nav class="navbar" id="navbar">
+    <div class="container nav-inner">
+      <a href="#" class="nav-logo">
+        <span class="logo-icon">◆</span>
+        <span class="logo-text">Agent-<strong>Nuvira</strong></span>
+      </a>
+      <div class="nav-links" id="navLinks">
+        <a href="#demo" class="nav-link">Live Demo</a>
+        <a href="#features" class="nav-link">Features</a>
+        <a href="#pipeline" class="nav-link">Pipeline</a>
+        <a href="#providers" class="nav-link">Providers</a>
+        <a href="#quickstart" class="nav-link">Quick Start</a>
+        <a href="#extensions" class="nav-link">Extensions</a>
+        <div class="nav-ctas">
+          <a href="https://github.com/imdheerajKube/agent-nuvira" target="_blank" rel="noopener" class="btn btn-ghost btn-sm">
+            <svg width="18" height="18" viewBox="0 0 24 24" fill="currentColor"><path d="M12 0C5.37 0 0 5.37 0 12c0 5.31 3.435 9.795 8.205 11.385.6.105.825-.255.825-.57 0-.285-.015-1.23-.015-2.235-3.015.555-3.795-.735-4.035-1.41-.135-.345-.72-1.41-1.23-1.695-.42-.225-1.02-.78-.015-.795.945-.015 1.62.87 1.845 1.23 1.08 1.815 2.805 1.305 3.495.99.105-.78.42-1.305.765-1.605-2.67-.3-5.46-1.335-5.46-5.925 0-1.305.465-2.385 1.23-3.225-.12-.3-.54-1.53.12-3.18 0 0 1.005-.315 3.3 1.23.96-.27 1.98-.405 3-.405s2.04.135 3 .405c2.295-1.56 3.3-1.23 3.3-1.23.66 1.65.24 2.88.12 3.18.765.84 1.23 1.905 1.23 3.225 0 4.605-2.805 5.625-5.475 5.925.435.375.81 1.095.81 2.22 0 1.605-.015 2.895-.015 3.3 0 .315.225.69.825.57A12.02 12.02 0 0024 12c0-6.63-5.37-12-12-12z"/></svg>
+            GitHub
+          </a>
+          <a href="#quickstart" class="btn btn-primary btn-sm">Install</a>
+        </div>
+      </div>
+      <button class="nav-toggle" id="navToggle" aria-label="Toggle navigation">
+        <span></span><span></span><span></span>
+      </button>
+    </div>
+  </nav>
+
+  <!-- Hero Section -->
+  <section class="hero">
+    <div class="hero-bg"></div>
+    <div class="hero-particles" id="particles"></div>
+    <div class="container hero-inner">
+      <div class="hero-content">
+        <div class="hero-badge">
+          <span class="badge-dot"></span>
+          Open Source · MIT License
+        </div>
+        <h1 class="hero-title">
+          Your Terminal.<br />
+          <span class="gradient-text">5 Providers. 10 Agents.</span><br />
+          Infinite Possibilities.
+        </h1>
+        <p class="hero-subtitle">
+          The open-source, multi-agent AI coding assistant that orchestrates specialized agents 
+          to plan, write, review, test, and publish code — all from a single terminal command.
+          <strong>No subscriptions. No telemetry. Your models, your way.</strong>
+        </p>
+        <div class="hero-ctas">
+          <a href="#quickstart" class="btn btn-primary btn-lg">
+            Get Started Free
+            <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12h14"/><path d="m12 5 7 7-7 7"/></svg>
+          </a>
+          <a href="https://github.com/imdheerajKube/agent-nuvira" target="_blank" rel="noopener" class="btn btn-outline btn-lg">
+            <svg width="20" height="20" viewBox="0 0 24 24" fill="currentColor"><path d="M12 0C5.37 0 0 5.37 0 12c0 5.31 3.435 9.795 8.205 11.385.6.105.825-.255.825-.57 0-.285-.015-1.23-.015-2.235-3.015.555-3.795-.735-4.035-1.41-.135-.345-.72-1.41-1.23-1.695-.42-.225-1.02-.78-.015-.795.945-.015 1.62.87 1.845 1.23 1.08 1.815 2.805 1.305 3.495.99.105-.78.42-1.305.765-1.605-2.67-.3-5.46-1.335-5.46-5.925 0-1.305.465-2.385 1.23-3.225-.12-.3-.54-1.53.12-3.18 0 0 1.005-.315 3.3 1.23.96-.27 1.98-.405 3-.405s2.04.135 3 .405c2.295-1.56 3.3-1.23 3.3-1.23.66 1.65.24 2.88.12 3.18.765.84 1.23 1.905 1.23 3.225 0 4.605-2.805 5.625-5.475 5.925.435.375.81 1.095.81 2.22 0 1.605-.015 2.895-.015 3.3 0 .315.225.69.825.57A12.02 12.02 0 0024 12c0-6.63-5.37-12-12-12z"/></svg>
+            View on GitHub
+          </a>
+        </div>
+        <div class="hero-metrics">
+          <div class="metric">
+            <span class="metric-value">10+</span>
+            <span class="metric-label">Agent Roles</span>
+          </div>
+          <div class="metric">
+            <span class="metric-value">5</span>
+            <span class="metric-label">AI Providers</span>
+          </div>
+          <div class="metric">
+            <span class="metric-value">200+</span>
+            <span class="metric-label">Models Supported</span>
+          </div>
+          <div class="metric">
+            <span class="metric-value">100%</span>
+            <span class="metric-label">Open Source</span>
+          </div>
+        </div>
+      </div>
+      <div class="hero-visual">
+        <div class="hero-image-wrapper">
+          <picture>
+            <source srcset="assets/hero-sm.webp" media="(max-width: 480px)" />
+            <source srcset="assets/hero.webp" type="image/webp" />
+            <img src="assets/hero.png" alt="Agent-Nuvira AI Coding Assistant" class="hero-image" loading="eager" />
+          </picture>
+          <div class="hero-image-glow"></div>
+        </div>
+        <div class="terminal-window">
+          <div class="terminal-header">
+            <span class="terminal-dot red"></span>
+            <span class="terminal-dot yellow"></span>
+            <span class="terminal-dot green"></span>
+            <span class="terminal-title">agent-nuvira execute</span>
+          </div>
+          <div class="terminal-body">
+            <span class="prompt">$</span> <span class="cmd">agent-nuvira execute "add JWT authentication" --verbose</span>
+            <div class="terminal-output">
+              <span class="log info">🔍 Planner analyzing goal...</span>
+              <span class="log info">📁 Context Gatherer scanning codebase...</span>
+              <span class="log success">✅ Writer implemented auth middleware</span>
+              <span class="log info">👀 Reviewer validating changes...</span>
+              <span class="log success">✅ All tests passed</span>
+              <span class="log success">🚀 Changes committed to feature/auth</span>
+            </div>
+            <span class="blinking-cursor">▊</span>
+          </div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- Live Demo Section -->
+  <section class="live-demo" id="demo">
+    <div class="container">
+      <div class="section-header">
+        <span class="section-tag">Live Demo</span>
+        <h2 class="section-title">See Agent-Nuvira <span class="gradient-text">in Action</span></h2>
+        <p class="section-desc">Watch how the multi-agent pipeline orchestrates specialized AI agents to complete complex coding tasks — all from a single terminal command.</p>
+      </div>
+      <div class="demo-wrapper">
+        <div class="demo-image-frame">
+          <div class="demo-image-glow"></div>
+          <div class="demo-image-borders">
+            <span></span><span></span><span></span><span></span>
+          </div>
+          <img src="assets/agent-nuvira-hero.png" alt="Agent-Nuvira AI Coding Assistant Live Demo" class="demo-image" loading="lazy" />
+          <div class="demo-image-overlay">
+            <div class="demo-badge">
+              <span class="demo-badge-dot"></span>
+              Live Preview
+            </div>
+          </div>
+        </div>
+        <div class="demo-features">
+          <div class="demo-feature">
+            <div class="demo-feature-icon">
+              <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="#6366f1" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"/></svg>
+            </div>
+            <div class="demo-feature-text">
+              <h4>Multi-Agent Orchestration</h4>
+              <p>Planner → Gatherer → Writer → Reviewer → Tester — all working together autonomously.</p>
+            </div>
+          </div>
+          <div class="demo-feature">
+            <div class="demo-feature-icon">
+              <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="#6366f1" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"/></svg>
+            </div>
+            <div class="demo-feature-text">
+              <h4>Provider Flexibility</h4>
+              <p>Switch between Groq, Gemini, OpenRouter, NVIDIA NIM, or local models mid-session.</p>
+            </div>
+          </div>
+          <div class="demo-feature">
+            <div class="demo-feature-icon">
+              <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="#6366f1" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"/></svg>
+            </div>
+            <div class="demo-feature-text">
+              <h4>Real-Time Progress</h4>
+              <p>Watch each agent execute in real-time with streaming output and live status updates.</p>
+            </div>
+          </div>
+          <div class="demo-feature">
+            <div class="demo-feature-icon">
+              <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="#6366f1" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"/></svg>
+            </div>
+            <div class="demo-feature-text">
+              <h4>Context-Aware Edits</h4>
+              <p>Agents understand your full codebase context before making any changes.</p>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- Features Section -->
+  <section class="features" id="features">
+    <div class="container">
+      <div class="section-header">
+        <span class="section-tag">Features</span>
+        <h2 class="section-title">More Than a Chat Bot.<br />A <span class="gradient-text">Full Development Team</span> in Your Terminal.</h2>
+        <p class="section-desc">Agent-Nuvira isn't just another AI assistant — it's an autonomous pipeline of specialized AI agents that work together to ship code.</p>
+      </div>
+      <div class="features-grid">
+        <div class="feature-card" data-delay="0">
+          <div class="feature-icon agents">
+            <svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M23 21v-2a4 4 0 0 0-3-3.87"/><path d="M16 3.13a4 4 0 0 1 0 7.75"/></svg>
+          </div>
+          <h3>Multi-Agent Pipeline</h3>
+          <p>10+ specialized agents — Planner, Writer, Reviewer, Tester, Debugger, and more — orchestrated to complete complex goals autonomously.</p>
+        </div>
+        <div class="feature-card" data-delay="100">
+          <div class="feature-icon providers">
+            <svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M12 2L2 7l10 5 10-5-10-5z"/><path d="M2 17l10 5 10-5"/><path d="M2 12l10 5 10-5"/></svg>
+          </div>
+          <h3>5 AI Providers</h3>
+          <p>Connect to Groq, NVIDIA NIM, Google Gemini, OpenRouter (200+ models), or run locally with Ollama — all through one unified CLI.</p>
+        </div>
+        <div class="feature-card" data-delay="200">
+          <div class="feature-icon offline">
+            <svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M18 8a6 6 0 0 0-12 0"/><path d="M12 12m-3 0a3 3 0 1 0 6 0"/><path d="M12 12v9"/></svg>
+          </div>
+          <h3>Fully Offline-Capable</h3>
+          <p>Run entirely offline with local models via Ollama, HuggingFace, or GGML. No internet connection required.</p>
+        </div>
+        <div class="feature-card" data-delay="0">
+          <div class="feature-icon privacy">
+            <svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="11" width="18" height="11" rx="2" ry="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/></svg>
+          </div>
+          <h3>Privacy-First</h3>
+          <p>Your code connects directly to your chosen AI provider. No intermediary server, no telemetry, no data leaving your machine without your control.</p>
+        </div>
+        <div class="feature-card" data-delay="100">
+          <div class="feature-icon plugin">
+            <svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="18" height="18" rx="2" ry="2"/><line x1="3" y1="9" x2="21" y2="9"/><line x1="9" y1="21" x2="9" y2="9"/></svg>
+          </div>
+          <h3>Plugin System</h3>
+          <p>Extend the CLI with custom AI providers and agent types. A programmatic SDK lets you build and register new capabilities.</p>
+        </div>
+        <div class="feature-card" data-delay="200">
+          <div class="feature-icon learning">
+            <svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="22 12 18 12 15 21 9 3 6 12 2 12"/></svg>
+          </div>
+          <h3>Self-Learning System</h3>
+          <p>Adaptive model routing, trajectory scoring, and pattern extraction that improve over time. The system learns which models perform best for which tasks.</p>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- Pipeline Section -->
+  <section class="pipeline" id="pipeline">
+    <div class="container">
+      <div class="section-header">
+        <span class="section-tag">How It Works</span>
+        <h2 class="section-title">The <span class="gradient-text">Multi-Agent Pipeline</span></h2>
+        <p class="section-desc">A goal goes in. Code comes out. Here's what happens in between.</p>
+      </div>
+      <div class="pipeline-flow">
+        <div class="pipeline-input">
+          <span class="pipeline-arrow">$ agent-nuvira execute &lt;goal&gt;</span>
+        </div>
+        <div class="pipeline-agents">
+          <div class="pipeline-agent" style="--order: 1">
+            <div class="agent-node planner">
+              <span class="agent-emoji">🧠</span>
+              <span class="agent-name">Planner</span>
+            </div>
+            <span class="agent-desc">Analyzes goal, creates task plan</span>
+            <div class="agent-connector"></div>
+          </div>
+          <div class="pipeline-agent" style="--order: 2">
+            <div class="agent-node gatherer">
+              <span class="agent-emoji">📁</span>
+              <span class="agent-name">Gatherer</span>
+            </div>
+            <span class="agent-desc">Scans codebase for context</span>
+            <div class="agent-connector"></div>
+          </div>
+          <div class="pipeline-agent" style="--order: 3">
+            <div class="agent-node writer">
+              <span class="agent-emoji">✍️</span>
+              <span class="agent-name">Writer</span>
+            </div>
+            <span class="agent-desc">Implements code changes</span>
+            <div class="agent-connector"></div>
+          </div>
+          <div class="pipeline-agent" style="--order: 4">
+            <div class="agent-node reviewer">
+              <span class="agent-emoji">👀</span>
+              <span class="agent-name">Reviewer</span>
+            </div>
+            <span class="agent-desc">Validates for bugs & style</span>
+            <div class="agent-connector"></div>
+          </div>
+          <div class="pipeline-agent" style="--order: 5">
+            <div class="agent-node tester">
+              <span class="agent-emoji">🧪</span>
+              <span class="agent-name">Tester</span>
+            </div>
+            <span class="agent-desc">Runs tests in sandbox</span>
+            <div class="agent-connector"></div>
+          </div>
+          <div class="pipeline-agent" style="--order: 6">
+            <div class="agent-node git">
+              <span class="agent-emoji">🚀</span>
+              <span class="agent-name">Ship</span>
+            </div>
+            <span class="agent-desc">Commits & publishes</span>
+          </div>
+        </div>
+      </div>
+      <div class="pipeline-features">
+        <div class="pipeline-feat">
+          <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="#63f" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M22 11.08V12a10 10 0 1 1-5.93-9.14"/><polyline points="22 4 12 14.01 9 11.01"/></svg>
+          <span>Parallel execution where possible</span>
+        </div>
+        <div class="pipeline-feat">
+          <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="#63f" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M22 11.08V12a10 10 0 1 1-5.93-9.14"/><polyline points="22 4 12 14.01 9 11.01"/></svg>
+          <span>Per-agent model configuration</span>
+        </div>
+        <div class="pipeline-feat">
+          <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="#63f" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M22 11.08V12a10 10 0 1 1-5.93-9.14"/><polyline points="22 4 12 14.01 9 11.01"/></svg>
+          <span>Automatic error recovery</span>
+        </div>
+        <div class="pipeline-feat">
+          <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="#63f" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M22 11.08V12a10 10 0 1 1-5.93-9.14"/><polyline points="22 4 12 14.01 9 11.01"/></svg>
+          <span>Dry-run preview mode</span>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- Providers Section -->
+  <section class="providers" id="providers">
+    <div class="container">
+      <div class="section-header">
+        <span class="section-tag">Providers</span>
+        <h2 class="section-title">Choose Your <span class="gradient-text">AI Engine</span></h2>
+        <p class="section-desc">Connect to any provider — or run locally. Switch between them per command or mid-session.</p>
+      </div>
+      <div class="providers-grid">
+        <div class="provider-card groq">
+          <div class="provider-header">
+            <span class="provider-color groq"></span>
+            <h3>Groq</h3>
+          </div>
+          <p class="provider-desc">Blazing-fast LPU inference for open-source models. Free tier available with generous rate limits.</p>
+          <div class="provider-models">
+            <span class="model-tag">Llama 3.3</span>
+            <span class="model-tag">Mixtral</span>
+            <span class="model-tag">Gemma 2</span>
+            <span class="model-tag">DeepSeek</span>
+          </div>
+          <a href="https://console.groq.com" target="_blank" rel="noopener" class="provider-link">Get API Key →</a>
+        </div>
+        <div class="provider-card nvidia">
+          <div class="provider-header">
+            <span class="provider-color nvidia"></span>
+            <h3>NVIDIA NIM</h3>
+          </div>
+          <p class="provider-desc">Hosted API access to 121+ models. Free tier with rate limits. Also supports self-hosted NIM deployments.</p>
+          <div class="provider-models">
+            <span class="model-tag">Llama 3.1</span>
+            <span class="model-tag">DeepSeek</span>
+            <span class="model-tag">Mistral</span>
+            <span class="model-tag">120+ more</span>
+          </div>
+          <a href="https://build.nvidia.com" target="_blank" rel="noopener" class="provider-link">Get API Key →</a>
+        </div>
+        <div class="provider-card gemini">
+          <div class="provider-header">
+            <span class="provider-color gemini"></span>
+            <h3>Google Gemini</h3>
+          </div>
+          <p class="provider-desc">Google's latest models with a generous free tier — 60 requests/minute at no cost.</p>
+          <div class="provider-models">
+            <span class="model-tag">Gemini 2.0 Flash</span>
+            <span class="model-tag">Gemini Pro</span>
+          </div>
+          <a href="https://aistudio.google.com/apikey" target="_blank" rel="noopener" class="provider-link">Get API Key →</a>
+        </div>
+        <div class="provider-card openrouter">
+          <div class="provider-header">
+            <span class="provider-color openrouter"></span>
+            <h3>OpenRouter</h3>
+          </div>
+          <p class="provider-desc">Access 200+ models from OpenAI, Anthropic, Google, Meta, and more — all through one API.</p>
+          <div class="provider-models">
+            <span class="model-tag">GPT-4o</span>
+            <span class="model-tag">Claude 3</span>
+            <span class="model-tag">Gemini</span>
+            <span class="model-tag">200+ total</span>
+          </div>
+          <a href="https://openrouter.ai/keys" target="_blank" rel="noopener" class="provider-link">Get API Key →</a>
+        </div>
+        <div class="provider-card local">
+          <div class="provider-header">
+            <span class="provider-color local"></span>
+            <h3>Local (Ollama)</h3>
+          </div>
+          <p class="provider-desc">Run models entirely on your machine. Ollama, HuggingFace Transformers, or GGML — completely free and offline.</p>
+          <div class="provider-models">
+            <span class="model-tag">Llama 2</span>
+            <span class="model-tag">Mistral</span>
+            <span class="model-tag">Phi-2</span>
+            <span class="model-tag">Any GGUF</span>
+          </div>
+          <a href="https://ollama.ai" target="_blank" rel="noopener" class="provider-link">Get Ollama →</a>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- Quick Start Section -->
+  <section class="quickstart" id="quickstart">
+    <div class="container">
+      <div class="section-header">
+        <span class="section-tag">Get Started</span>
+        <h2 class="section-title">Install & Go in <span class="gradient-text">Under a Minute</span></h2>
+        <p class="section-desc">One command to install. One API key to get started. Zero configuration required.</p>
+      </div>
+      <div class="quickstart-grid">
+        <div class="quickstart-step">
+          <div class="step-number">1</div>
+          <div class="step-content">
+            <h3>Install</h3>
+            <p>Install globally via npm — works on macOS, Linux, and Windows.</p>
+            <div class="code-block">
+              <button class="copy-btn" data-copy="npm install -g agent-nuvira" aria-label="Copy to clipboard">
+                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="9" width="13" height="13" rx="2" ry="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg>
+              </button>
+              <code><span class="prompt">$</span> npm install -g agent-nuvira</code>
+            </div>
+          </div>
+        </div>
+        <div class="quickstart-step">
+          <div class="step-number">2</div>
+          <div class="step-content">
+            <h3>Set Your API Key</h3>
+            <p>Pick a provider and set your key as an environment variable.</p>
+            <div class="code-block">
+              <button class="copy-btn" data-copy="export GROQ_API_KEY='gsk_your_key_here'" aria-label="Copy to clipboard">
+                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="9" width="13" height="13" rx="2" ry="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg>
+              </button>
+              <code><span class="prompt">$</span> <span class="hljs-built_in">export</span> GROQ_API_KEY=<span class="hljs-string">'gsk_your_key_here'</span></code>
+            </div>
+          </div>
+        </div>
+        <div class="quickstart-step">
+          <div class="step-number">3</div>
+          <div class="step-content">
+            <h3>Start Coding</h3>
+            <p>Chat, edit files, or run the full multi-agent pipeline.</p>
+            <div class="code-block">
+              <button class="copy-btn" data-copy="agent-nuvira execute 'add input validation to API routes' --verbose" aria-label="Copy to clipboard">
+                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="9" width="13" height="13" rx="2" ry="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg>
+              </button>
+              <code><span class="prompt">$</span> agent-nuvira execute <span class="hljs-string">'add input validation to API routes'</span> --verbose</code>
+            </div>
+          </div>
+        </div>
+        <div class="quickstart-step">
+          <div class="step-number">4</div>
+          <div class="step-content">
+            <h3>More Commands</h3>
+            <p>Explore everything Agent-Nuvira can do.</p>
+            <div class="code-block">
+              <button class="copy-btn" data-copy="agent-nuvira --help" aria-label="Copy to clipboard">
+                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="9" width="13" height="13" rx="2" ry="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg>
+              </button>
+              <code><span class="prompt">$</span> agent-nuvira --help</code>
+            </div>
+          </div>
+        </div>
+      </div>
+      <div class="quickstart-cta">
+        <p>Want to dig deeper? Read the full documentation.</p>
+        <a href="https://github.com/imdheerajKube/agent-nuvira#readme" target="_blank" rel="noopener" class="btn btn-primary">
+          Read the Docs
+          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12h14"/><path d="m12 5 7 7-7 7"/></svg>
+        </a>
+      </div>
+    </div>
+  </section>
+
+  <!-- Extensions Section -->
+  <section class="extensions" id="extensions">
+    <div class="container">
+      <div class="section-header">
+        <span class="section-tag">Extensions</span>
+        <h2 class="section-title">Your Editor, <span class="gradient-text">Amplified</span></h2>
+        <p class="section-desc">Agent-Nuvira's multi-agent pipeline is available wherever you code.</p>
+      </div>
+      <div class="extensions-grid">
+        <div class="extension-card">
+          <div class="extension-icon">
+            <svg width="40" height="40" viewBox="0 0 100 100" fill="none">
+              <rect width="100" height="100" rx="15" fill="#007ACC"/>
+              <path d="M80 20L45 55l15 15 20-20V20z" fill="white" opacity="0.9"/>
+              <path d="M20 80l35-35-15-15-20 20v30z" fill="white" opacity="0.9"/>
+              <path d="M55 70l10 10h15V65L55 70z" fill="white" opacity="0.6"/>
+            </svg>
+          </div>
+          <h3>VS Code Extension</h3>
+          <p>Inline code suggestions, agent chat panel, diff viewer, and full multi-agent capabilities — right in your editor.</p>
+          <a href="https://marketplace.visualstudio.com/items?itemName=agent-nuvira" target="_blank" rel="noopener" class="btn btn-ghost btn-sm">
+            Install from Marketplace →
+          </a>
+        </div>
+        <div class="extension-card">
+          <div class="extension-icon sdk">
+            <svg width="40" height="40" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="16 18 22 12 16 6"/><polyline points="8 6 2 12 8 18"/></svg>
+          </div>
+          <h3>Agent SDK</h3>
+          <p>Build custom agents with the <code>@agent-nuvira/sdk</code> package. Extend the pipeline with your own specialized agent roles.</p>
+          <div class="code-block code-block-sm">
+            <code><span class="prompt">$</span> npm install @agent-nuvira/sdk</code>
+          </div>
+        </div>
+        <div class="extension-card">
+          <div class="extension-icon dashboard">
+            <svg width="40" height="40" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="7" height="7"/><rect x="14" y="3" width="7" height="7"/><rect x="14" y="14" width="7" height="7"/><rect x="3" y="14" width="7" height="7"/></svg>
+          </div>
+          <h3>Web Dashboard</h3>
+          <p>Monitor provider health, visualize agent execution DAGs, browse conversation history, and track cost — all from a local web UI.</p>
+          <div class="code-block code-block-sm">
+            <code><span class="prompt">$</span> agent-nuvira dashboard</code>
+          </div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- Comparison Section -->
+  <section class="comparison" id="comparison">
+    <div class="container">
+      <div class="section-header">
+        <span class="section-tag">Why Agent-Nuvira?</span>
+        <h2 class="section-title">Built Different. <span class="gradient-text">Truly Open.</span></h2>
+        <p class="section-desc">See how we stack up against the competition.</p>
+      </div>
+      <div class="comparison-table-wrapper">
+        <table class="comparison-table">
+          <thead>
+            <tr>
+              <th>Feature</th>
+              <th class="highlight-col">Agent-Nuvira</th>
+              <th>GitHub Copilot</th>
+              <th>Cursor</th>
+              <th>Claude Code</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td class="feature-name">Multi-Agent Pipeline</td>
+              <td class="highlight-col"><span class="check">✓</span> 10+ agent roles</td>
+              <td><span class="cross">✗</span> Single agent</td>
+              <td><span class="cross">✗</span> Single agent</td>
+              <td><span class="cross">✗</span> Single agent</td>
+            </tr>
+            <tr>
+              <td class="feature-name">AI Provider Choice</td>
+              <td class="highlight-col"><span class="check">✓</span> 5 providers + plugins</td>
+              <td><span class="cross">✗</span> OpenAI only</td>
+              <td><span class="cross">✗</span> Vendor-locked</td>
+              <td><span class="cross">✗</span> Anthropic only</td>
+            </tr>
+            <tr>
+              <td class="feature-name">Offline Capable</td>
+              <td class="highlight-col"><span class="check">✓</span> Full offline</td>
+              <td><span class="cross">✗</span> Cloud-only</td>
+              <td><span class="cross">✗</span> Cloud-only</td>
+              <td><span class="cross">✗</span> Cloud-only</td>
+            </tr>
+            <tr>
+              <td class="feature-name">Privacy / No Telemetry</td>
+              <td class="highlight-col"><span class="check">✓</span> Direct-to-provider</td>
+              <td><span class="cross">✗</span> Routes via MS</td>
+              <td><span class="warning">~</span> Limited</td>
+              <td><span class="warning">~</span> Limited</td>
+            </tr>
+            <tr>
+              <td class="feature-name">Pricing</td>
+              <td class="highlight-col"><span class="check">✓</span> Free (MIT) + API keys</td>
+              <td><span class="cross">✗</span> $10-39/mo</td>
+              <td><span class="cross">✗</span> $20/mo</td>
+              <td><span class="cross">✗</span> $20/mo</td>
+            </tr>
+            <tr>
+              <td class="feature-name">Plugin System</td>
+              <td class="highlight-col"><span class="check">✓</span> Full SDK</td>
+              <td><span class="cross">✗</span> None</td>
+              <td><span class="cross">✗</span> Limited</td>
+              <td><span class="cross">✗</span> None</td>
+            </tr>
+            <tr>
+              <td class="feature-name">Self-Learning</td>
+              <td class="highlight-col"><span class="check">✓</span> Adaptive routing</td>
+              <td><span class="cross">✗</span> None</td>
+              <td><span class="cross">✗</span> None</td>
+              <td><span class="cross">✗</span> None</td>
+            </tr>
+            <tr>
+              <td class="feature-name">Terminal-Native</td>
+              <td class="highlight-col"><span class="check">✓</span> No IDE lock-in</td>
+              <td><span class="warning">~</span> VS Code only</td>
+              <td><span class="warning">~</span> Cursor only</td>
+              <td><span class="warning">~</span> Terminal-only</td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+    </div>
+  </section>
+
+  <!-- CTA Section -->
+  <section class="cta-section">
+    <div class="container">
+      <div class="cta-card">
+        <div class="cta-glow"></div>
+        <h2 class="cta-title">Ready to Supercharge Your Development?</h2>
+        <p class="cta-desc">Join developers who are already using Agent-Nuvira to ship code faster, with more control and zero vendor lock-in.</p>
+        <div class="cta-buttons">
+          <a href="#quickstart" class="btn btn-primary btn-lg">
+            Get Started Free
+            <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12h14"/><path d="m12 5 7 7-7 7"/></svg>
+          </a>
+          <a href="https://github.com/imdheerajKube/agent-nuvira" target="_blank" rel="noopener" class="btn btn-outline btn-lg">
+            <svg width="20" height="20" viewBox="0 0 24 24" fill="currentColor"><path d="M12 0C5.37 0 0 5.37 0 12c0 5.31 3.435 9.795 8.205 11.385.6.105.825-.255.825-.57 0-.285-.015-1.23-.015-2.235-3.015.555-3.795-.735-4.035-1.41-.135-.345-.72-1.41-1.23-1.695-.42-.225-1.02-.78-.015-.795.945-.015 1.62.87 1.845 1.23 1.08 1.815 2.805 1.305 3.495.99.105-.78.42-1.305.765-1.605-2.67-.3-5.46-1.335-5.46-5.925 0-1.305.465-2.385 1.23-3.225-.12-.3-.54-1.53.12-3.18 0 0 1.005-.315 3.3 1.23.96-.27 1.98-.405 3-.405s2.04.135 3 .405c2.295-1.56 3.3-1.23 3.3-1.23.66 1.65.24 2.88.12 3.18.765.84 1.23 1.905 1.23 3.225 0 4.605-2.805 5.625-5.475 5.925.435.375.81 1.095.81 2.22 0 1.605-.015 2.895-.015 3.3 0 .315.225.69.825.57A12.02 12.02 0 0024 12c0-6.63-5.37-12-12-12z"/></svg>
+            Star on GitHub
+          </a>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- Footer -->
+  <footer class="footer">
+    <div class="container footer-inner">
+      <div class="footer-brand">
+        <span class="logo-icon">◆</span>
+        <span class="logo-text">Agent-<strong>Nuvira</strong></span>
+        <p class="footer-desc">The open-source multi-agent AI coding assistant that puts you in control. No subscriptions. No telemetry. Your models, your way.</p>
+        <div class="footer-social">
+          <a href="https://github.com/imdheerajKube/agent-nuvira" target="_blank" rel="noopener" class="social-link" aria-label="GitHub">
+            <svg width="22" height="22" viewBox="0 0 24 24" fill="currentColor"><path d="M12 0C5.37 0 0 5.37 0 12c0 5.31 3.435 9.795 8.205 11.385.6.105.825-.255.825-.57 0-.285-.015-1.23-.015-2.235-3.015.555-3.795-.735-4.035-1.41-.135-.345-.72-1.41-1.23-1.695-.42-.225-1.02-.78-.015-.795.945-.015 1.62.87 1.845 1.23 1.08 1.815 2.805 1.305 3.495.99.105-.78.42-1.305.765-1.605-2.67-.3-5.46-1.335-5.46-5.925 0-1.305.465-2.385 1.23-3.225-.12-.3-.54-1.53.12-3.18 0 0 1.005-.315 3.3 1.23.96-.27 1.98-.405 3-.405s2.04.135 3 .405c2.295-1.56 3.3-1.23 3.3-1.23.66 1.65.24 2.88.12 3.18.765.84 1.23 1.905 1.23 3.225 0 4.605-2.805 5.625-5.475 5.925.435.375.81 1.095.81 2.22 0 1.605-.015 2.895-.015 3.3 0 .315.225.69.825.57A12.02 12.02 0 0024 12c0-6.63-5.37-12-12-12z"/></svg>
+          </a>
+          <a href="https://www.npmjs.com/package/agent-nuvira" target="_blank" rel="noopener" class="social-link" aria-label="npm">
+            <svg width="22" height="22" viewBox="0 0 24 24" fill="currentColor"><path d="M0 7.334v8h6.666v1.332H12v-1.332h12V7.334H0zm6.666 6.664H5.334v-4H3.999v4H1.335V8.667h5.331v5.331zm4 0v1.336H8.667V8.667h1.999v5.33zm6.666 0h-1.333v-4h-1.333v4h-1.333v-4h-1.333v4h-1.333V8.667h6.665v5.331z"/></svg>
+          </a>
+        </div>
+      </div>
+      <div class="footer-links">
+        <div class="footer-col">
+          <h4>Product</h4>
+          <a href="#features">Features</a>
+          <a href="#pipeline">Pipeline</a>
+          <a href="#providers">Providers</a>
+          <a href="#quickstart">Installation</a>
+        </div>
+        <div class="footer-col">
+          <h4>Resources</h4>
+          <a href="https://github.com/imdheerajKube/agent-nuvira#readme" target="_blank" rel="noopener">Documentation</a>
+          <a href="https://github.com/imdheerajKube/agent-nuvira/blob/main/User_Manual.md" target="_blank" rel="noopener">User Manual</a>
+          <a href="https://github.com/imdheerajKube/agent-nuvira/blob/main/Product_Guide.md" target="_blank" rel="noopener">Product Guide</a>
+          <a href="https://github.com/imdheerajKube/agent-nuvira/issues" target="_blank" rel="noopener">GitHub Issues</a>
+        </div>
+        <div class="footer-col">
+          <h4>Community</h4>
+          <a href="https://github.com/imdheerajKube/agent-nuvira/discussions" target="_blank" rel="noopener">Discussions</a>
+          <a href="https://github.com/imdheerajKube/agent-nuvira/blob/main/CONTRIBUTING.md" target="_blank" rel="noopener">Contributing</a>
+          <a href="https://github.com/imdheerajKube/agent-nuvira/blob/main/SECURITY.md" target="_blank" rel="noopener">Security</a>
+        </div>
+      </div>
+    </div>
+    <div class="footer-bottom">
+      <p>&copy; 2026 Agent-Nuvira. MIT License. Built by Dheeraj Sharma.</p>
+    </div>
+  </footer>
+
+  <script src="script.js"></script>
+</body>
+</html>

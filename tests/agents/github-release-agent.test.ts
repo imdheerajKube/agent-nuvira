@@ -106,10 +106,11 @@ describe('GitHubReleaseAgent detectVersion', () => {
 
   it('should read version from package.json when not in description', () => {
     const method = getPrivateMethod<string>(agent, 'detectVersion');
-    // Our project has a package.json with version "1.4.1"
     const ctx = createContext({ workingDirectory: process.cwd() });
 
-    expect(method('Create a release', ctx)).toBe('1.14.6');
+    // Read the expected version from the project's own package.json
+    const pkg = JSON.parse(readFileSync(join(process.cwd(), 'package.json'), 'utf-8'));
+    expect(method('Create a release', ctx)).toBe(pkg.version);
   });
 
   it('should fall back to git tags when package.json has no version', () => {

@@ -1,0 +1,98 @@
+# ═══════════════════════════════════════════════════════════════════════════════
+#  Docker Compose — Agent-Nuvira
+# ═══════════════════════════════════════════════════════════════════════════════
+#
+#  Quick start:
+#    1. cp .env.example .env        # Copy and fill in your API keys
+#    2. docker compose up           # Start the dashboard
+#
+#  With Ollama for local inference:
+#    docker compose --profile ollama up
+#
+#  Background mode:
+#    docker compose up -d
+#
+#  View logs:
+#    docker compose logs -f
+#
+#  Run a one-shot command:
+#    docker compose run --rm agent-nuvira chat "explain recursion in Rust"
+#    docker compose run --rm agent-nuvira models --provider groq
+# ═══════════════════════════════════════════════════════════════════════════════
+
+services:
+  # ─── Main Application ─────────────────────────────────────────────────────
+  agent-nuvira:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: agent-nuvira
+    ports:
+      - "3030:3030"
+    environment:
+      # Dashboard settings
+      - BUFF_DASHBOARD_HOST=0.0.0.0
+      - BUFF_DASHBOARD_PORT=3030
+
+      # API Keys (set these in .env or directly in your shell)
+      # ──────────────────────────────────────────────────────────────────────
+      - GROQ_API_KEY=${GROQ_API_KEY:-}
+      - NVIDIA_NIM_API_KEY=${NVIDIA_NIM_API_KEY:-}
+      - GEMINI_API_KEY=${GEMINI_API_KEY:-}
+      - OPENROUTER_API_KEY=${OPENROUTER_API_KEY:-}
+
+      # Local provider: point to the companion Ollama container if running.
+      # On Linux, add `--add-host host.docker.internal:host-gateway` to docker run
+      # or set OLLAMA_HOST=http://ollama:11434 when using --profile ollama.
+      - OLLAMA_HOST=${OLLAMA_HOST:-http://host.docker.internal:11434}
+
+    volumes:
+      # Persist config, memory, cache, history across restarts
+      - buff-data:/root/.buff
+
+    # Keep the container running; dashboard stays open until Ctrl+C
+    restart: unless-stopped
+
+    # Health check: the dashboard API responds on the /api/health endpoint
+    healthcheck:
+      test: ["CMD", "node", "-e", "fetch('http://localhost:3030/api/health').then(r => process.exit(r.ok ? 0 : 1)).catch(() => process.exit(1))"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 15s
+
+    # Extra capabilities (optional, e.g., Docker sandbox)
+    # cap_add:
+    #   - SYS_PTRACE   # For debugger agent
+    # volumes:
+    #   - /var/run/docker.sock:/var/run/docker.sock   # For Docker sandbox
+
+
+  # ─── Optional: Local Inference with Ollama ────────────────────────────────
+  # Start with: docker compose --profile ollama up
+  # Then use:   docker compose run --rm agent-nuvira chat --provider local
+  # ──────────────────────────────────────────────────────────────────────────
+  ollama:
+    profiles:
+      - ollama        # Only starts when --profile ollama is passed
+    image: ollama/ollama:latest
+    container_name: agent-nuvira-ollama
+    ports:
+      - "11434:11434"
+    volumes:
+      - ollama-data:/root/.ollama
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "ollama", "list"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 40s   # First model pull may take time
+
+
+# ─── Persistent Volumes ──────────────────────────────────────────────────────
+volumes:
+  buff-data:
+    name: agent-nuvira-data
+  ollama-data:
+    name: agent-nuvira-ollama-data

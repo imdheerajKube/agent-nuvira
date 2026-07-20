@@ -2,12 +2,13 @@
  * History command — Browse and search conversation history.
  *
  * Usage:
- *   buff history              — Show recent conversations
- *   buff history list         — Show all saved conversations
- *   buff history search <q>   — Search conversations by keyword
- *   buff history show <id>    — Show a specific conversation
- *   buff history clear        — Clear all history
- *   buff history prune        — Remove conversations older than 30 days
+ *   buff history                    — Show recent conversations
+ *   buff history list               — Show all saved conversations
+ *   buff history search <q>         — Search conversations by keyword
+ *   buff history show <id>          — Show a specific conversation
+ *   buff history clear              — Clear all history
+ *   buff history prune              — Remove conversations older than retention period
+ *   buff history reindex            — Rebuild semantic search index
  */
 
 import { Command } from 'commander';
@@ -33,11 +34,12 @@ export class HistoryCommand extends BaseCommand {
     // ── search ───────────────────────────────────────────────────────────
     command
       .command('search')
-      .description('Search conversations by keyword')
-      .argument('<query>', 'Search keyword or phrase')
+      .description('Search conversations by keyword or semantic similarity')
+      .argument('<query>', 'Search query (keyword or natural language)')
       .option('-l, --limit <number>', 'Maximum results', parseInt, 10)
-      .action((query: string, options?: { limit?: number }) => {
-        this.searchHistory(query, options?.limit || 10);
+      .option('-s, --semantic', 'Use semantic search with local embeddings (slower but smarter)', false)
+      .action((query: string, options?: { limit?: number; semantic?: boolean }) => {
+        this.searchHistory(query, options?.limit || 10, options?.semantic || false);
       });
 
     // ── show ─────────────────────────────────────────────────────────────
@@ -61,9 +63,19 @@ export class HistoryCommand extends BaseCommand {
     command
       .command('prune')
       .description('Remove conversations older than the retention period')
-      .option('-d, --days <number>', 'Retention period in days', parseInt, 30)
+      .option('-d, --days <number>', 'Retention period in days (default: from config history.retentionDays)', parseInt)
       .action((options?: { days?: number }) => {
-        this.pruneHistory(options?.days || 30);
+        // Use config value when --days is not provided
+        const configDays = this.configManager.getAll().history?.retentionDays ?? 30;
+        this.pruneHistory(options?.days ?? configDays);
+      });
+
+    // ── reindex ───────────────────────────────────────────────────────────
+    command
+      .command('reindex')
+      .description('Rebuild the semantic search index for all past conversations (embeds each session for vector search)')
+      .action(async () => {
+        await this.reindexHistory();
       });
 
     // Default: show recent conversations
@@ -95,17 +107,21 @@ export class HistoryCommand extends BaseCommand {
     console.log('');
   }
 
-  private searchHistory(query: string, limit: number): void {
+  private async searchHistory(query: string, limit: number, semantic: boolean = false): Promise<void> {
     const history = getChatHistory();
-    const results = history.search(query, limit);
+    const results = semantic
+      ? await history.searchSemantic(query, limit)
+      : history.search(query, limit);
 
     if (results.length === 0) {
       logger.info(`No conversations found matching "${query}".`);
       return;
     }
 
+    const mode = semantic ? '🧠' : '🔍';
+    const modeLabel = semantic ? ' (semantic)' : '';
     logger.highlight(`${'═'.repeat(60)}`);
-    logger.highlight(`  🔍  Search Results: "${query}" (${results.length} found)`);
+    logger.highlight(`  ${mode}  Search Results: "${query}"${modeLabel} (${results.length} found)`);
     logger.highlight(`${'═'.repeat(60)}`);
 
     console.log('');
@@ -164,5 +180,33 @@ export class HistoryCommand extends BaseCommand {
     const history = getChatHistory();
     const removed = history.prune(days);
     logger.success(`Removed ${removed} old conversation(s) older than ${days} days.`);
+  }
+
+  private async reindexHistory(): Promise<void> {
+    const history = getChatHistory();
+    const count = history.count();
+
+    if (count === 0) {
+      logger.info('No conversation history to reindex.');
+      return;
+    }
+
+    logger.info(`🔄 Rebuilding semantic search index for ${count} conversation(s)...`);
+    logger.info('   This may take a moment while each session is embedded.');
+    console.log('');
+
+    try {
+      const indexed = await history.reindexSemantic();
+
+      logger.success(`✅ Reindexed ${indexed} conversation(s) for semantic search.`);
+      if (indexed < count) {
+        logger.warn(`⚠️  ${count - indexed} session(s) could not be indexed (embedding may have failed).`);
+      }
+      logger.info('   Use `buff history search --semantic <query>` to search with the new index.');
+    } catch (err) {
+      logger.error(`Failed to reindex: ${err instanceof Error ? err.message : String(err)}`);
+    }
+
+    console.log('');
   }
 }
