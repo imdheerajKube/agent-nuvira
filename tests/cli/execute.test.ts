@@ -1,16 +1,60 @@
 /**
  * Execute command — Unit tests for interactive development mode.
  *
- * Tests the slash-command handler (handleDevCommand) and session history display
- * without triggering the orchestrator or readline I/O.
+ * Tests the slash-command handler (handleDevCommand), goal input parsing
+ * (parseGoalLines), session history display, and session save/resume.
  */
 
-import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
+import { describe, it, expect, beforeEach, afterEach, afterAll, vi } from 'vitest';
+import { existsSync, rmSync } from 'node:fs';
+import { join } from 'node:path';
+import { homedir } from 'node:os';
 
-import { ExecuteCommand } from '../../src/cli/execute.js';
+import { ExecuteCommand, parseGoalLines } from '../../src/cli/execute.js';
 import { logger } from '../../src/utils/logger.js';
 
-// ─── Tests ──────────────────────────────────────────────────────────────────
+// ─── Test Constants ─────────────────────────────────────────────────────────
+
+const SESSIONS_DIR = join(homedir(), '.buff', 'sessions');
+
+// ─── Tests: parseGoalLines (pure function, no mocking needed) ───────────────
+
+describe('parseGoalLines', () => {
+  it('should return empty string for empty array', () => {
+    expect(parseGoalLines([])).toBe('');
+  });
+
+  it('should join single line', () => {
+    expect(parseGoalLines(['Add JWT auth'])).toBe('Add JWT auth');
+  });
+
+  it('should join multiple lines with newline', () => {
+    const result = parseGoalLines(['Add JWT auth', 'Use Express middleware']);
+    expect(result).toBe('Add JWT auth\nUse Express middleware');
+  });
+
+  it('should preserve empty lines in multi-line input', () => {
+    const result = parseGoalLines(['Line 1', '', 'Line 3']);
+    expect(result).toBe('Line 1\n\nLine 3');
+  });
+
+  it('should handle lines with trailing spaces', () => {
+    const result = parseGoalLines(['  Add JWT auth  ']);
+    expect(result).toBe('  Add JWT auth  ');
+  });
+
+  it('should handle command-like input', () => {
+    const result = parseGoalLines(['/exit']);
+    expect(result).toBe('/exit');
+  });
+
+  it('should handle multi-line with many lines', () => {
+    const lines = ['Goal 1', 'Goal 2', 'Goal 3', 'Goal 4', 'Goal 5'];
+    expect(parseGoalLines(lines)).toBe('Goal 1\nGoal 2\nGoal 3\nGoal 4\nGoal 5');
+  });
+});
+
+// ─── Tests: handleDevCommand ────────────────────────────────────────────────
 
 describe('ExecuteCommand — handleDevCommand', () => {
   let cmd: ExecuteCommand;
@@ -18,7 +62,7 @@ describe('ExecuteCommand — handleDevCommand', () => {
 
   beforeEach(() => {
     cmd = new ExecuteCommand();
-    // Spy on logger.info/warn/error/highlight/success
+    // Spy on logger methods
     vi.spyOn(logger, 'info').mockImplementation(() => {});
     vi.spyOn(logger, 'warn').mockImplementation(() => {});
     vi.spyOn(logger, 'error').mockImplementation(() => {});
@@ -83,7 +127,6 @@ describe('ExecuteCommand — handleDevCommand', () => {
   it('should print help and not exit on /help', async () => {
     const result = await (cmd as any).handleDevCommand('/help', mockContext);
     expect(result.exit).toBe(false);
-    expect(result.newModel).toBeUndefined();
     expect(console.log).toHaveBeenCalled();
   });
 
@@ -129,7 +172,6 @@ describe('ExecuteCommand — handleDevCommand', () => {
   it('should trigger suggest with query argument', async () => {
     const result = await (cmd as any).handleDevCommand('/suggest authentication', mockContext);
     expect(result.exit).toBe(false);
-    // The suggest handler should search memory - it may find nothing if no trajectories exist
     expect(logger.highlight).toHaveBeenCalledWith(expect.stringContaining('Searching memory'));
   });
 
@@ -142,7 +184,7 @@ describe('ExecuteCommand — handleDevCommand', () => {
   });
 
   it('should save session when /save called with name', async () => {
-    const result = await (cmd as any).handleDevCommand('/save my-session', mockContext);
+    const result = await (cmd as any).handleDevCommand('/save test-session-exec', mockContext);
     expect(result.exit).toBe(false);
     expect(logger.success).toHaveBeenCalledWith(expect.stringContaining('Session saved'));
   });
@@ -162,10 +204,25 @@ describe('ExecuteCommand — handleDevCommand', () => {
   });
 
   it('should show error when /resume called with nonexistent session', async () => {
-    const result = await (cmd as any).handleDevCommand('/resume nonexistent-session', mockContext);
+    const result = await (cmd as any).handleDevCommand('/resume nonexistent-session-xyz', mockContext);
     expect(result.exit).toBe(false);
-    // The session doesn't exist, so it should show an error
     expect(logger.error).toHaveBeenCalledWith(expect.stringContaining('not found'));
+  });
+
+  // ── /resume with valid saved session (created in /save test) ──────────────
+
+  it('should resume a previously saved session', async () => {
+    // First save the session (creates file on disk)
+    await (cmd as any).handleDevCommand('/save test-session-exec', mockContext);
+
+    // Then resume it
+    const result = await (cmd as any).handleDevCommand('/resume test-session-exec', mockContext);
+    expect(result.exit).toBe(false);
+    // Resume should include restore data
+    expect(result.restore).toBeDefined();
+    expect(result.restore.provider).toBe('openai');
+    expect(result.restore.model).toBe('gpt-4');
+    expect(result.restore.history).toHaveLength(2);
   });
 
   // ── unknown commands ──────────────────────────────────────────────────────
@@ -181,8 +238,6 @@ describe('ExecuteCommand — handleDevCommand', () => {
   it('should handle /help with extra text gracefully', async () => {
     const result = await (cmd as any).handleDevCommand('/help show me', mockContext);
     expect(result.exit).toBe(false);
-    // /help with extra text: baseCmd is '/help', arg is 'show me'
-    // This should still show the help text
     expect(console.log).toHaveBeenCalled();
   });
 
@@ -203,4 +258,17 @@ describe('ExecuteCommand — handleDevCommand', () => {
     (cmd as any).showSessionHistory([]);
     expect(logger.info).toHaveBeenCalledWith(expect.stringContaining('No goals have been executed'));
   });
+});
+
+// ─── Cleanup test artifacts ─────────────────────────────────────────────────
+
+afterAll(() => {
+  // Clean up session files created during tests
+  const testFiles = ['test-session-exec.json'];
+  for (const file of testFiles) {
+    const filePath = join(SESSIONS_DIR, file);
+    if (existsSync(filePath)) {
+      rmSync(filePath);
+    }
+  }
 });

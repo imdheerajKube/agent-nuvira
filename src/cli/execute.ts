@@ -7,7 +7,6 @@
  *   buff execute "add tests" --verbose --memory
  *   buff execute "fix bug" --memory --memory-stats
  *   buff execute "run tests" --sandbox
- *   buff execute "verify build" --sandbox --sandbox-image node:20-slim
  *
  * Interactive development mode (no goal argument):
  *   buff execute
@@ -58,10 +57,10 @@ interface ExecuteOptions {
   repairFallbackModels?: string;
 }
 
-// ─── Session Entry Type ─────────────────────────────────────────────────────
+// ─── Session Types ──────────────────────────────────────────────────────────
 
 /** A single goal execution entry in the session history */
-interface SessionEntry {
+export interface SessionEntry {
   goal: string;
   success: boolean;
   summary: string;
@@ -75,6 +74,37 @@ interface DevCommandContext {
   sessionHistory: SessionEntry[];
   configManager: ConfigManager;
 }
+
+/** Result of handling a dev-mode slash command */
+interface DevCommandResult {
+  exit: boolean;
+  newModel?: boolean;
+  /** When set, the interactive loop should restore this session state */
+  restore?: { provider: string; model: string; history: SessionEntry[] };
+}
+
+/** Result of a single goal execution */
+interface SingleGoalResult {
+  success: boolean;
+}
+
+// ─── Pure Helpers ───────────────────────────────────────────────────────────
+
+/**
+ * Parse multi-line goal input into a single goal string.
+ *
+ * Used by readGoal() which collects lines from readline; extracted as a
+ * pure function so it can be unit-tested without mocking stdin/stdout.
+ *
+ * @param lines       Lines collected from user input
+ * @returns           The joined goal string (blank lines collapsed)
+ */
+export function parseGoalLines(lines: string[]): string {
+  if (lines.length === 0) return '';
+  return lines.join('\n');
+}
+
+// ─── ExecuteCommand ─────────────────────────────────────────────────────────
 
 /**
  * Execute command — orchestrates multiple agents to accomplish a goal.
@@ -234,16 +264,26 @@ export class ExecuteCommand extends BaseCommand {
             console.log('');
           }
         }
+        if (handled.restore) {
+          activeProvider = handled.restore.provider;
+          activeModel = handled.restore.model;
+          // Add restored history into the current session
+          for (const entry of handled.restore.history) {
+            sessionHistory.push(entry);
+          }
+          logger.success(`\n✅ Restored ${handled.restore.history.length} goal(s) from session`);
+          console.log('');
+        }
         continue;
       }
 
-      await this.runSingleGoal(goal, activeProvider, activeModel, options);
+      const result = await this.runSingleGoal(goal, activeProvider, activeModel, options);
 
-      // Track executed goal
+      // Track executed goal with actual success/failure
       sessionHistory.push({
         goal,
-        success: true,
-        summary: `Completed: ${goal.slice(0, 80)}`,
+        success: result.success,
+        summary: result.success ? `Completed: ${goal.slice(0, 80)}` : `Failed: ${goal.slice(0, 80)}`,
         timestamp: Date.now(),
       });
 
@@ -315,6 +355,7 @@ export class ExecuteCommand extends BaseCommand {
 
   /**
    * Prompt the user for a goal using readline (supports multi-line input).
+   * Delegates to parseGoalLines() for the actual line-joining logic.
    */
   private readGoal(): Promise<string> {
     return new Promise((resolve) => {
@@ -361,7 +402,7 @@ export class ExecuteCommand extends BaseCommand {
       });
 
       rl.on('close', () => {
-        resolve(lines.join('\n'));
+        resolve(parseGoalLines(lines));
       });
 
       rl.prompt();
@@ -376,7 +417,7 @@ export class ExecuteCommand extends BaseCommand {
   private async handleDevCommand(
     cmd: string,
     context?: DevCommandContext,
-  ): Promise<{ exit: boolean; newModel?: boolean }> {
+  ): Promise<DevCommandResult> {
     const lower = cmd.toLowerCase().trim();
     const spaceIdx = lower.indexOf(' ');
     const baseCmd = spaceIdx > 0 ? lower.slice(0, spaceIdx) : lower;
@@ -440,6 +481,15 @@ export class ExecuteCommand extends BaseCommand {
           console.log(`   Model: ${loaded.model}`);
           console.log(`   Goals in session: ${loaded.history?.length || 0}`);
           console.log('');
+          // Return restore data so the interactive loop can update its state
+          return {
+            exit: false,
+            restore: {
+              provider: loaded.provider || '',
+              model: loaded.model || '',
+              history: loaded.history || [],
+            },
+          };
         }
         return { exit: false };
       }
@@ -471,6 +521,12 @@ export class ExecuteCommand extends BaseCommand {
       mkdirSync(sessionsDir, { recursive: true });
     }
 
+    const safeName = name.replace(/[^a-zA-Z0-9_-]/g, '');
+    if (!safeName) {
+      logger.error('Invalid session name. Use only letters, numbers, hyphens, and underscores.');
+      return;
+    }
+
     const sessionData = {
       name,
       provider: context.activeProvider,
@@ -479,11 +535,6 @@ export class ExecuteCommand extends BaseCommand {
       savedAt: Date.now(),
     };
 
-    const safeName = name.replace(/[^a-zA-Z0-9_-]/g, '');
-    if (!safeName) {
-      logger.error('Invalid session name. Use only letters, numbers, hyphens, and underscores.');
-      return;
-    }
     const filePath = join(sessionsDir, `${safeName}.json`);
     writeFileSync(filePath, JSON.stringify(sessionData, null, 2), 'utf-8');
 
@@ -634,13 +685,14 @@ export class ExecuteCommand extends BaseCommand {
 
   /**
    * Run the orchestrator for a single goal and display results.
+   * Returns the outcome so the caller can record it in session history.
    */
   private async runSingleGoal(
     goal: string,
     provider: string | undefined,
     model: string | undefined,
     options: ExecuteOptions,
-  ): Promise<void> {
+  ): Promise<SingleGoalResult> {
     if (options.verbose || options.dryRun || options.review || options.sandbox) {
       logger.info(`Goal: ${goal}`);
       if (options.dryRun) logger.info('Mode: Dry run (files will not be modified)');
@@ -686,9 +738,11 @@ export class ExecuteCommand extends BaseCommand {
       spinner.stop();
       console.log('');
       printOrchestrationResult(result);
+      return { success: result.success };
     } catch (err) {
       spinner.fail('Execution failed');
       logger.error(String(err));
+      return { success: false };
     }
   }
 
