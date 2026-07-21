@@ -23,7 +23,7 @@ export const BUILTIN_SANDBOX_IMAGES: SandboxImage[] = [
     label: 'Node.js 20 (slim)',
     runtimes: ['node', 'npm', 'npx'],
     installCommand: 'npm install',
-    testCommand: 'npm test',
+    // testCommand omitted — TesterAgent detects from package.json at runtime
     shell: '/bin/bash',
   },
   {
@@ -31,7 +31,7 @@ export const BUILTIN_SANDBOX_IMAGES: SandboxImage[] = [
     label: 'Node.js 20 (full)',
     runtimes: ['node', 'npm', 'npx'],
     installCommand: 'npm install',
-    testCommand: 'npm test',
+    // testCommand omitted — TesterAgent detects from package.json at runtime
     shell: '/bin/bash',
   },
   {
@@ -39,7 +39,7 @@ export const BUILTIN_SANDBOX_IMAGES: SandboxImage[] = [
     label: 'Node.js 18 (slim)',
     runtimes: ['node', 'npm', 'npx'],
     installCommand: 'npm install',
-    testCommand: 'npm test',
+    // testCommand omitted — TesterAgent detects from package.json at runtime
     shell: '/bin/bash',
   },
 

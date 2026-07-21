@@ -161,6 +161,11 @@ export interface OrchestratorOptions {
   repairFallbackModels?: string[];
   useDockerSandbox?: boolean;
   /**
+   * When true, skip all tester and debugger tasks in the pipeline.
+   * Useful when you only want to generate code without running tests.
+   */
+  skipTests?: boolean;
+  /**
    * Optional spinner reference from the CLI caller.
    * When set, the orchestrator stops the spinner before showing interactive
    * rate-limit prompts and restarts it after the user responds.
@@ -834,6 +839,20 @@ export class Orchestrator {
       const agentCallLLM = agentModel
         ? this.createLLMProvider({ ...options, model: agentModel })
         : defaultCallLLM;
+
+      // Skip tester and debugger tasks in skip-tests mode
+      if (options.skipTests && (task.agentType === 'tester' || task.agentType === 'debugger')) {
+        vault.updateTaskStatus(task.id, 'completed', 'Skipped (--skip-tests)');
+        agentResults.push({
+          agent: task.agentType,
+          success: true,
+          summary: 'Skipped (--skip-tests)',
+        });
+        if (options.verbose) {
+          logger.info(`      ⏭️  Skipped ${task.agentType} (--skip-tests)`);
+        }
+        return;
+      }
 
       // Skip runner tasks in dry-run mode (no commands executed)
       if (task.agentType === 'runner' && options.dryRun) {

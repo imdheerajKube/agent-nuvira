@@ -52,6 +52,7 @@ interface ExecuteOptions {
   contextPrune?: string;
   review?: boolean;
   sandbox?: boolean;
+  skipTests?: boolean;
   maxRepairs?: number;
   repairMode?: string;
   repairFallbackModels?: string;
@@ -129,6 +130,7 @@ export class ExecuteCommand extends BaseCommand {
       .option('--context-prune <mode>', 'Pruning aggressiveness: soft | medium | aggressive (default: soft)')
       .option('--review', 'Create a review bundle capturing proposed changes (view with `buff team review show <id>`)', false)
       .option('--sandbox', 'Execute runner commands and tests inside a Docker sandbox', false)
+      .option('--skip-tests', 'Skip tester and debugger steps (code generation only)', false)
       .option('--max-repairs <number>', 'Max auto-repair attempts per failed task (default: 3, 0 = disabled)', parseInt)
       .option('--repair-mode <mode>', 'Repair mode: auto | prompt | off (default: auto)')
       .option('--repair-fallback-models <models>', 'Comma-separated fallback models for repair (e.g., groq/llama3,nim/mistral)')
@@ -147,6 +149,7 @@ export class ExecuteCommand extends BaseCommand {
         contextLimit?: number;contextPrune?: string;
       review?: boolean;
       sandbox?: boolean;
+      skipTests?: boolean;
       maxRepairs?: number;
       repairMode?: string;
       repairFallbackModels?: string;
@@ -181,6 +184,10 @@ export class ExecuteCommand extends BaseCommand {
     if (!goal) {
       await this.runInteractiveDevMode(mergedProvider, mergedModel, options);
       return;
+    }
+
+    if (options.skipTests) {
+      logger.info('   🧪 Tests skipped (--skip-tests flag set)');
     }
 
     // ── Single-shot execution (goal was provided on command line) ──────────
@@ -726,6 +733,7 @@ export class ExecuteCommand extends BaseCommand {
         dryRun: options.dryRun,
         verbose: options.verbose,
         useDockerSandbox: options.sandbox,
+        skipTests: options.skipTests,
         useMemory: options.memory,
         reviewMode: options.review,
         contextLimit: options.contextLimit,

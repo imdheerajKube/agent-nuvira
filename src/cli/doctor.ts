@@ -20,6 +20,7 @@
  */
 
 import { Command } from 'commander';
+import { execSync } from 'node:child_process';
 import { existsSync, mkdirSync } from 'node:fs';
 import { join } from 'node:path';
 import { homedir } from 'node:os';
@@ -254,7 +255,11 @@ export class DoctorCommand extends BaseCommand {
               `~/.buff/workflows/: ${existsSync(workflowDir) ? 'exists' : 'will create on first scan'}`,
     });
 
-    // 5. Online connectivity check
+    // 5. CLI tool availability checks
+    const cliChecks = this.checkCliTools();
+    checks.push(...cliChecks);
+
+    // 6. Online connectivity check
     try {
       const onlineCheck = await this.checkConnectivity();
       checks.push(onlineCheck);
@@ -268,6 +273,51 @@ export class DoctorCommand extends BaseCommand {
     }
 
     return checks;
+  }
+
+  /**
+   * Check availability of common CLI tools needed by the runner and sandbox.
+   */
+  private checkCliTools(): CheckResult[] {
+    const tools = ['node', 'npm', 'git', 'python3', 'python'];
+    const results: CheckResult[] = [];
+
+    for (const tool of tools) {
+      try {
+        const output = execSync(`${tool} --version 2>&1`, {
+          encoding: 'utf-8',
+          timeout: 5000,
+          stdio: 'pipe',
+        });
+        const version = output.trim().split('\n')[0] || 'unknown';
+        results.push({
+          name: `CLI: ${tool}`,
+          status: 'pass',
+          message: `${tool} ${version}`,
+          detail: `${tool} is available at PATH`,
+        });
+      } catch {
+        // For python, both python3 and python are tried; only warn if both missing
+        if (tool === 'python' && results.some((r) => r.name === 'CLI: python3' && r.status === 'pass')) {
+          continue; // python3 already found, skip warning for python
+        }
+        results.push({
+          name: `CLI: ${tool}`,
+          status: 'warn',
+          message: `${tool} not found in PATH`,
+          detail: `The ${tool} command is not available. Some runner steps may not work.`,
+          fix: tool === 'node'
+            ? 'Install Node.js from https://nodejs.org/'
+            : tool === 'npm'
+              ? 'npm is bundled with Node.js — install Node.js from https://nodejs.org/'
+              : tool === 'git'
+                ? 'Install Git from https://git-scm.com/downloads'
+                : `Install ${tool} using your system package manager`,
+        });
+      }
+    }
+
+    return results;
   }
 
   private async checkDocker(): Promise<CheckResult> {
