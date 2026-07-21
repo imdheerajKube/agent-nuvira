@@ -332,6 +332,10 @@ function rateLimitStatus(remaining?: number, total?: number): { status: 'availab
 
 /**
  * Check all configured providers and return their health status.
+ *
+ * Covers 16 providers: Local, OpenAI, Anthropic, Mistral, Cohere, Together,
+ * DeepInfra, Fireworks, Perplexity, Groq, NIM, Gemini, OpenRouter, Azure,
+ * LM Studio, and vLLM/TGI.
  */
 async function readModelsHealth(): Promise<{
   providers: ModelCheckResult[];
@@ -343,10 +347,22 @@ async function readModelsHealth(): Promise<{
 }> {
   const results = await Promise.all([
     checkLocalProvider(),
+    checkOpenAIProvider(),
+    checkAnthropicProvider(),
+    checkMistralProvider(),
+    checkCohereProvider(),
+    checkTogetherProvider(),
+    checkDeepInfraProvider(),
+    checkFireworksProvider(),
+    checkPerplexityProvider(),
     checkGroqProvider(),
     checkNIMProvider(),
     checkGeminiProvider(),
     checkOpenRouterProvider(),
+    checkAzureOpenAIProvider(),
+    checkLMStudioProvider(),
+    checkAnyscaleProvider(),
+    checkVLLMProvider(),
   ]);
 
   const providers = results.filter(Boolean) as ModelCheckResult[];
@@ -957,6 +973,16 @@ function loadApiKeysFromConfig(): void {
       nim: 'NVIDIA_NIM_API_KEY',
       gemini: 'GEMINI_API_KEY',
       openrouter: 'OPENROUTER_API_KEY',
+      openai: 'OPENAI_API_KEY',
+      anthropic: 'ANTHROPIC_API_KEY',
+      mistral: 'MISTRAL_API_KEY',
+      cohere: 'COHERE_API_KEY',
+      together: 'TOGETHER_API_KEY',
+      anyscale: 'ANYSCALE_API_KEY',
+      deepinfra: 'DEEPINFRA_TOKEN',
+      fireworks: 'FIREWORKS_API_KEY',
+      perplexity: 'PERPLEXITY_API_KEY',
+      azure: 'AZURE_OPENAI_API_KEY',
     };
 
     for (const [providerKey, envVar] of Object.entries(envVarMap)) {
@@ -981,10 +1007,23 @@ export function createDashboardServer(): { server: ReturnType<typeof createServe
 
   // Log env var status once at startup for debugging
   console.log('  Provider configuration:');
+  logEnvVarStatus('OpenAI', 'OPENAI_API_KEY', process.env.OPENAI_API_KEY);
+  logEnvVarStatus('Anthropic', 'ANTHROPIC_API_KEY', process.env.ANTHROPIC_API_KEY);
+  logEnvVarStatus('Mistral AI', 'MISTRAL_API_KEY', process.env.MISTRAL_API_KEY);
+  logEnvVarStatus('Cohere', 'COHERE_API_KEY', process.env.COHERE_API_KEY);
+  logEnvVarStatus('Together AI', 'TOGETHER_API_KEY', process.env.TOGETHER_API_KEY);
+  logEnvVarStatus('DeepInfra', 'DEEPINFRA_TOKEN', process.env.DEEPINFRA_TOKEN);
+  logEnvVarStatus('Fireworks AI', 'FIREWORKS_API_KEY', process.env.FIREWORKS_API_KEY);
+  logEnvVarStatus('Perplexity', 'PERPLEXITY_API_KEY', process.env.PERPLEXITY_API_KEY);
   logEnvVarStatus('Groq', 'GROQ_API_KEY', process.env.GROQ_API_KEY);
   logEnvVarStatus('NVIDIA NIM', 'NVIDIA_NIM_API_KEY', process.env.NVIDIA_NIM_API_KEY);
   logEnvVarStatus('Google Gemini', 'GEMINI_API_KEY', process.env.GEMINI_API_KEY);
   logEnvVarStatus('OpenRouter', 'OPENROUTER_API_KEY', process.env.OPENROUTER_API_KEY);
+  logEnvVarStatus('Azure OpenAI', 'AZURE_OPENAI_API_KEY', process.env.AZURE_OPENAI_API_KEY);
+  logEnvVarStatus('Anyscale', 'ANYSCALE_API_KEY', process.env.ANYSCALE_API_KEY);
+  logEnvVarStatus('LM Studio', 'LM_STUDIO_URL', process.env.LM_STUDIO_URL || 'http://localhost:1234');
+  logEnvVarStatus('vLLM / TGI', 'VLLM_URL', process.env.VLLM_URL || 'http://localhost:8000');
+  console.log('  (AWS Bedrock & Vertex AI use IAM auth — not checked via simple API call)\n');
   console.log('');
 
   const server = createServer(handleRequest);
@@ -998,6 +1037,376 @@ export function createDashboardServer(): { server: ReturnType<typeof createServe
   });
 
   return { server, port: PORT, host: HOST };
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+//  New Provider Health Checks
+// ═══════════════════════════════════════════════════════════════════════════
+
+/** Check OpenAI provider */
+async function checkOpenAIProvider(): Promise<ModelCheckResult | null> {
+  const apiKey = process.env.OPENAI_API_KEY;
+  const result: ModelCheckResult = {
+    provider: 'openai', providerLabel: 'OpenAI', icon: '🤖',
+    apiConfigured: !!apiKey, apiAccessible: false, canGenerate: false,
+    overallStatus: 'unavailable', models: [],
+    notes: 'GPT-4o, GPT-4, GPT-3.5 — industry-standard API',
+    freeTierInfo: 'Pay-as-you-go. Set OPENAI_API_KEY',
+  };
+  if (!apiKey) {
+    result.models = [{ id: '(no key)', name: 'OPENAI_API_KEY not set', status: 'unavailable' as const, statusReason: 'Get key at platform.openai.com/api-keys' }];
+    return result;
+  }
+  const check = await fetchWithTimeout<{ data: Array<{ id: string }> }>(
+    'https://api.openai.com/v1/models',
+    { headers: { Authorization: `Bearer ${apiKey}` } },
+  );
+  if (check.ok && check.data?.data) {
+    result.apiAccessible = true; result.canGenerate = true;
+    const rl = parseRateLimitHeaders(check.headers);
+    result.rateLimitRemaining = rl.remaining; result.rateLimitTotal = rl.total;
+    const si = rateLimitStatus(rl.remaining, rl.total);
+    result.models = check.data.data.map((m) => ({ id: m.id, name: m.id, status: si.status, statusReason: si.reason }));
+    result.overallStatus = si.status;
+  } else {
+    result.models = [{ id: '(unreachable)', name: 'API unreachable', status: 'unavailable' as const, statusReason: `HTTP ${check.status}` }];
+  }
+  return result;
+}
+
+/** Check Anthropic provider */
+async function checkAnthropicProvider(): Promise<ModelCheckResult | null> {
+  const apiKey = process.env.ANTHROPIC_API_KEY;
+  const result: ModelCheckResult = {
+    provider: 'anthropic', providerLabel: 'Anthropic', icon: '🔮',
+    apiConfigured: !!apiKey, apiAccessible: false, canGenerate: false,
+    overallStatus: 'unavailable', models: [],
+    notes: 'Claude 3.5 Sonnet, Claude 3 Opus — strong reasoning',
+    freeTierInfo: 'Free tier: limited trial credits. Set ANTHROPIC_API_KEY',
+  };
+  if (!apiKey) {
+    result.models = [{ id: '(no key)', name: 'ANTHROPIC_API_KEY not set', status: 'unavailable' as const, statusReason: 'Get key at console.anthropic.com' }];
+    return result;
+  }
+  const check = await fetchWithTimeout<{ data: Array<{ id: string }> }>(
+    'https://api.anthropic.com/v1/models',
+    { headers: { 'x-api-key': apiKey, 'anthropic-version': '2023-06-01' } },
+  );
+  if (check.ok && check.data?.data) {
+    result.apiAccessible = true; result.canGenerate = true;
+    const rl = parseRateLimitHeaders(check.headers);
+    result.rateLimitRemaining = rl.remaining; result.rateLimitTotal = rl.total;
+    const si = rateLimitStatus(rl.remaining, rl.total);
+    result.models = check.data.data.map((m) => ({ id: m.id, name: m.id, status: si.status, statusReason: si.reason }));
+    result.overallStatus = si.status;
+  } else {
+    result.models = [{ id: '(unreachable)', name: 'API unreachable', status: 'unavailable' as const, statusReason: `HTTP ${check.status}` }];
+  }
+  return result;
+}
+
+/** Check Mistral AI provider */
+async function checkMistralProvider(): Promise<ModelCheckResult | null> {
+  const apiKey = process.env.MISTRAL_API_KEY;
+  const result: ModelCheckResult = {
+    provider: 'mistral', providerLabel: 'Mistral AI', icon: '🌀',
+    apiConfigured: !!apiKey, apiAccessible: false, canGenerate: false,
+    overallStatus: 'unavailable', models: [],
+    notes: 'Mistral Large, Mistral Small, Codestral — efficient models',
+    freeTierInfo: 'Free tier: limited API credits. Set MISTRAL_API_KEY',
+  };
+  if (!apiKey) {
+    result.models = [{ id: '(no key)', name: 'MISTRAL_API_KEY not set', status: 'unavailable' as const, statusReason: 'Get key at console.mistral.ai' }];
+    return result;
+  }
+  const check = await fetchWithTimeout<{ data: Array<{ id: string }> }>(
+    'https://api.mistral.ai/v1/models',
+    { headers: { Authorization: `Bearer ${apiKey}` } },
+  );
+  if (check.ok && check.data?.data) {
+    result.apiAccessible = true; result.canGenerate = true;
+    const rl = parseRateLimitHeaders(check.headers);
+    result.rateLimitRemaining = rl.remaining; result.rateLimitTotal = rl.total;
+    const si = rateLimitStatus(rl.remaining, rl.total);
+    result.models = check.data.data.map((m) => ({ id: m.id, name: m.id, status: si.status, statusReason: si.reason }));
+    result.overallStatus = si.status;
+  } else {
+    result.models = [{ id: '(unreachable)', name: 'API unreachable', status: 'unavailable' as const, statusReason: `HTTP ${check.status}` }];
+  }
+  return result;
+}
+
+/** Check Cohere provider */
+async function checkCohereProvider(): Promise<ModelCheckResult | null> {
+  const apiKey = process.env.COHERE_API_KEY;
+  const result: ModelCheckResult = {
+    provider: 'cohere', providerLabel: 'Cohere', icon: '🧠',
+    apiConfigured: !!apiKey, apiAccessible: false, canGenerate: false,
+    overallStatus: 'unavailable', models: [],
+    notes: 'Command R+, Command R — enterprise-grade RAG & generation',
+    freeTierInfo: 'Free tier: limited API calls. Set COHERE_API_KEY',
+  };
+  if (!apiKey) {
+    result.models = [{ id: '(no key)', name: 'COHERE_API_KEY not set', status: 'unavailable' as const, statusReason: 'Get key at dashboard.cohere.com' }];
+    return result;
+  }
+  const check = await fetchWithTimeout<{ models?: Array<{ id: string; name?: string }> }>(
+    'https://api.cohere.com/v1/models',
+    { headers: { Authorization: `Bearer ${apiKey}` } },
+  );
+  if (check.ok && check.data?.models) {
+    result.apiAccessible = true; result.canGenerate = true;
+    const rl = parseRateLimitHeaders(check.headers);
+    result.rateLimitRemaining = rl.remaining; result.rateLimitTotal = rl.total;
+    const si = rateLimitStatus(rl.remaining, rl.total);
+    result.models = check.data.models.map((m) => ({ id: m.id, name: m.name || m.id, status: si.status, statusReason: si.reason }));
+    result.overallStatus = si.status;
+  } else {
+    result.models = [{ id: '(unreachable)', name: 'API unreachable', status: 'unavailable' as const, statusReason: `HTTP ${check.status}` }];
+  }
+  return result;
+}
+
+/** Check Together AI provider */
+async function checkTogetherProvider(): Promise<ModelCheckResult | null> {
+  const apiKey = process.env.TOGETHER_API_KEY;
+  const result: ModelCheckResult = {
+    provider: 'together', providerLabel: 'Together AI', icon: '🟢',
+    apiConfigured: !!apiKey, apiAccessible: false, canGenerate: false,
+    overallStatus: 'unavailable', models: [],
+    notes: 'Open-source model hosting — Llama, Mistral, Mixtral & more',
+    freeTierInfo: 'Free tier: $25 trial credits. Set TOGETHER_API_KEY',
+  };
+  if (!apiKey) {
+    result.models = [{ id: '(no key)', name: 'TOGETHER_API_KEY not set', status: 'unavailable' as const, statusReason: 'Get key at api.together.xyz' }];
+    return result;
+  }
+  const check = await fetchWithTimeout<{ data: Array<{ id: string }> }>(
+    'https://api.together.ai/v1/models',
+    { headers: { Authorization: `Bearer ${apiKey}` } },
+  );
+  if (check.ok && check.data?.data) {
+    result.apiAccessible = true; result.canGenerate = true;
+    const rl = parseRateLimitHeaders(check.headers);
+    result.rateLimitRemaining = rl.remaining; result.rateLimitTotal = rl.total;
+    const si = rateLimitStatus(rl.remaining, rl.total);
+    result.models = check.data.data.map((m) => ({ id: m.id, name: m.id, status: si.status, statusReason: si.reason }));
+    result.overallStatus = si.status;
+  } else {
+    result.models = [{ id: '(unreachable)', name: 'API unreachable', status: 'unavailable' as const, statusReason: `HTTP ${check.status}` }];
+  }
+  return result;
+}
+
+/** Check DeepInfra provider */
+async function checkDeepInfraProvider(): Promise<ModelCheckResult | null> {
+  const apiKey = process.env.DEEPINFRA_TOKEN;
+  const result: ModelCheckResult = {
+    provider: 'deepinfra', providerLabel: 'DeepInfra', icon: '🌐',
+    apiConfigured: !!apiKey, apiAccessible: false, canGenerate: false,
+    overallStatus: 'unavailable', models: [],
+    notes: 'Serverless GPU inference — Llama, Mixtral, SDXL & more',
+    freeTierInfo: 'Pay-as-you-go. Set DEEPINFRA_TOKEN',
+  };
+  if (!apiKey) {
+    result.models = [{ id: '(no key)', name: 'DEEPINFRA_TOKEN not set', status: 'unavailable' as const, statusReason: 'Get key at deepinfra.com' }];
+    return result;
+  }
+  const check = await fetchWithTimeout<{ data: Array<{ id: string }> }>(
+    'https://api.deepinfra.com/v1/openai/models',
+    { headers: { Authorization: `Bearer ${apiKey}` } },
+  );
+  if (check.ok && check.data?.data) {
+    result.apiAccessible = true; result.canGenerate = true;
+    const rl = parseRateLimitHeaders(check.headers);
+    result.rateLimitRemaining = rl.remaining; result.rateLimitTotal = rl.total;
+    const si = rateLimitStatus(rl.remaining, rl.total);
+    result.models = check.data.data.map((m) => ({ id: m.id, name: m.id, status: si.status, statusReason: si.reason }));
+    result.overallStatus = si.status;
+  } else {
+    result.models = [{ id: '(unreachable)', name: 'API unreachable', status: 'unavailable' as const, statusReason: `HTTP ${check.status}` }];
+  }
+  return result;
+}
+
+/** Check Fireworks AI provider */
+async function checkFireworksProvider(): Promise<ModelCheckResult | null> {
+  const apiKey = process.env.FIREWORKS_API_KEY;
+  const result: ModelCheckResult = {
+    provider: 'fireworks', providerLabel: 'Fireworks AI', icon: '🎆',
+    apiConfigured: !!apiKey, apiAccessible: false, canGenerate: false,
+    overallStatus: 'unavailable', models: [],
+    notes: 'Fast inference — Llama, Mixtral, DeepSeek & community models',
+    freeTierInfo: 'Free tier: limited API calls. Set FIREWORKS_API_KEY',
+  };
+  if (!apiKey) {
+    result.models = [{ id: '(no key)', name: 'FIREWORKS_API_KEY not set', status: 'unavailable' as const, statusReason: 'Get key at fireworks.ai' }];
+    return result;
+  }
+  const check = await fetchWithTimeout<{ data: Array<{ id: string }> }>(
+    'https://api.fireworks.ai/inference/v1/models',
+    { headers: { Authorization: `Bearer ${apiKey}` } },
+  );
+  if (check.ok && check.data?.data) {
+    result.apiAccessible = true; result.canGenerate = true;
+    const rl = parseRateLimitHeaders(check.headers);
+    result.rateLimitRemaining = rl.remaining; result.rateLimitTotal = rl.total;
+    const si = rateLimitStatus(rl.remaining, rl.total);
+    result.models = check.data.data.map((m) => ({ id: m.id, name: m.id, status: si.status, statusReason: si.reason }));
+    result.overallStatus = si.status;
+  } else {
+    result.models = [{ id: '(unreachable)', name: 'API unreachable', status: 'unavailable' as const, statusReason: `HTTP ${check.status}` }];
+  }
+  return result;
+}
+
+/** Check Perplexity provider */
+async function checkPerplexityProvider(): Promise<ModelCheckResult | null> {
+  const apiKey = process.env.PERPLEXITY_API_KEY;
+  const result: ModelCheckResult = {
+    provider: 'perplexity', providerLabel: 'Perplexity', icon: '❓',
+    apiConfigured: !!apiKey, apiAccessible: false, canGenerate: false,
+    overallStatus: 'unavailable', models: [],
+    notes: 'Sonar models — real-time web search & reasoning',
+    freeTierInfo: 'Free tier: $5 trial credits. Set PERPLEXITY_API_KEY',
+  };
+  if (!apiKey) {
+    result.models = [{ id: '(no key)', name: 'PERPLEXITY_API_KEY not set', status: 'unavailable' as const, statusReason: 'Get key at perplexity.ai/settings/api' }];
+    return result;
+  }
+  const check = await fetchWithTimeout<{ data: Array<{ id: string }> }>(
+    'https://api.perplexity.ai/models',
+    { headers: { Authorization: `Bearer ${apiKey}` } },
+  );
+  if (check.ok && check.data?.data) {
+    result.apiAccessible = true; result.canGenerate = true;
+    const rl = parseRateLimitHeaders(check.headers);
+    result.rateLimitRemaining = rl.remaining; result.rateLimitTotal = rl.total;
+    const si = rateLimitStatus(rl.remaining, rl.total);
+    result.models = check.data.data.map((m) => ({ id: m.id, name: m.id, status: si.status, statusReason: si.reason }));
+    result.overallStatus = si.status;
+  } else {
+    result.models = [{ id: '(unreachable)', name: 'API unreachable', status: 'unavailable' as const, statusReason: `HTTP ${check.status}` }];
+  }
+  return result;
+}
+
+/** Check Azure OpenAI provider */
+async function checkAzureOpenAIProvider(): Promise<ModelCheckResult | null> {
+  const apiKey = process.env.AZURE_OPENAI_API_KEY;
+  const endpoint = process.env.AZURE_OPENAI_ENDPOINT || 'https://your-resource.openai.azure.com';
+  const result: ModelCheckResult = {
+    provider: 'azure', providerLabel: 'Azure OpenAI', icon: '🔵',
+    apiConfigured: !!apiKey && process.env.AZURE_OPENAI_ENDPOINT !== undefined,
+    apiAccessible: false, canGenerate: false,
+    overallStatus: 'unavailable', models: [],
+    notes: 'GPT-4o, GPT-4 via Azure — enterprise deployment',
+    freeTierInfo: 'Azure subscription required. Set AZURE_OPENAI_API_KEY + AZURE_OPENAI_ENDPOINT',
+  };
+  if (!apiKey || !process.env.AZURE_OPENAI_ENDPOINT) {
+    result.models = [{ id: '(no config)', name: 'AZURE_OPENAI not configured', status: 'unavailable' as const, statusReason: 'Set AZURE_OPENAI_API_KEY + AZURE_OPENAI_ENDPOINT' }];
+    return result;
+  }
+  const check = await fetchWithTimeout<{ data: Array<{ id: string }> }>(
+    `${endpoint.replace(/\/+$/, '')}/openai/models?api-version=2024-10-21`,
+    { headers: { 'api-key': apiKey } },
+  );
+  if (check.ok && check.data?.data) {
+    result.apiAccessible = true; result.canGenerate = true;
+    const rl = parseRateLimitHeaders(check.headers);
+    result.rateLimitRemaining = rl.remaining; result.rateLimitTotal = rl.total;
+    const si = rateLimitStatus(rl.remaining, rl.total);
+    result.models = check.data.data.map((m) => ({ id: m.id, name: m.id, status: si.status, statusReason: si.reason }));
+    result.overallStatus = si.status;
+  } else {
+    result.models = [{ id: '(unreachable)', name: 'Endpoint unreachable', status: 'unavailable' as const, statusReason: `HTTP ${check.status}` }];
+  }
+  return result;
+}
+
+/** Check LM Studio (local) */
+async function checkLMStudioProvider(): Promise<ModelCheckResult | null> {
+  const baseUrl = process.env.LM_STUDIO_URL || 'http://localhost:1234';
+  const result: ModelCheckResult = {
+    provider: 'lmstudio', providerLabel: 'LM Studio', icon: '🎨',
+    apiConfigured: true, apiAccessible: false, canGenerate: false,
+    overallStatus: 'unavailable', models: [],
+    notes: 'Local model runner — GUI for GGUF models',
+    freeTierInfo: 'Fully free — runs on your machine',
+  };
+  const check = await fetchWithTimeout<{ data: Array<{ id: string }> }>(
+    `${baseUrl.replace(/\/+$/, '')}/api/v0/models`,
+  );
+  if (check.ok && check.data?.data) {
+    result.apiAccessible = true; result.canGenerate = true;
+    result.models = check.data.data.map((m) => ({
+      id: m.id, name: m.id,
+      status: 'available' as const,
+      statusReason: 'Running locally — no rate limits',
+    }));
+    result.overallStatus = 'available';
+  } else {
+    result.models = [{ id: '(offline)', name: 'LM Studio not running', status: 'unavailable' as const, statusReason: `Start LM Studio at ${baseUrl}` }];
+  }
+  return result;
+}
+
+/** Check Anyscale provider */
+async function checkAnyscaleProvider(): Promise<ModelCheckResult | null> {
+  const apiKey = process.env.ANYSCALE_API_KEY;
+  const result: ModelCheckResult = {
+    provider: 'anyscale', providerLabel: 'Anyscale', icon: '🔷',
+    apiConfigured: !!apiKey, apiAccessible: false, canGenerate: false,
+    overallStatus: 'unavailable', models: [],
+    notes: 'Serverless Ray-based inference — Llama, Mistral & more',
+    freeTierInfo: 'Pay-as-you-go. Set ANYSCALE_API_KEY',
+  };
+  if (!apiKey) {
+    result.models = [{ id: '(no key)', name: 'ANYSCALE_API_KEY not set', status: 'unavailable' as const, statusReason: 'Get key at console.anyscale.com' }];
+    return result;
+  }
+  const check = await fetchWithTimeout<{ data: Array<{ id: string }> }>(
+    'https://api.endpoints.anyscale.com/v1/models',
+    { headers: { Authorization: `Bearer ${apiKey}` } },
+  );
+  if (check.ok && check.data?.data) {
+    result.apiAccessible = true; result.canGenerate = true;
+    const rl = parseRateLimitHeaders(check.headers);
+    result.rateLimitRemaining = rl.remaining; result.rateLimitTotal = rl.total;
+    const si = rateLimitStatus(rl.remaining, rl.total);
+    result.models = check.data.data.map((m) => ({ id: m.id, name: m.id, status: si.status, statusReason: si.reason }));
+    result.overallStatus = si.status;
+  } else {
+    result.models = [{ id: '(unreachable)', name: 'API unreachable', status: 'unavailable' as const, statusReason: `HTTP ${check.status}` }];
+  }
+  return result;
+}
+
+/** Check vLLM / TGI (local) */
+async function checkVLLMProvider(): Promise<ModelCheckResult | null> {
+  const baseUrl = process.env.VLLM_URL || 'http://localhost:8000';
+  const result: ModelCheckResult = {
+    provider: 'vllm', providerLabel: 'vLLM / TGI', icon: '⚡',
+    apiConfigured: true, apiAccessible: false, canGenerate: false,
+    overallStatus: 'unavailable', models: [],
+    notes: 'Self-hosted inference server — vLLM or HuggingFace TGI',
+    freeTierInfo: 'Fully free — runs on your own hardware',
+  };
+  const check = await fetchWithTimeout<{ data: Array<{ id: string }> }>(
+    `${baseUrl.replace(/\/+$/, '')}/v1/models`,
+  );
+  if (check.ok && check.data?.data) {
+    result.apiAccessible = true; result.canGenerate = true;
+    result.models = check.data.data.map((m) => ({
+      id: m.id, name: m.id,
+      status: 'available' as const,
+      statusReason: 'Running locally — no rate limits',
+    }));
+    result.overallStatus = 'available';
+  } else {
+    result.models = [{ id: '(offline)', name: 'vLLM/TGI not running', status: 'unavailable' as const, statusReason: `Start server at ${baseUrl}` }];
+  }
+  return result;
 }
 
 export const DASHBOARD_DEFAULTS = { PORT, HOST };
