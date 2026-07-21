@@ -1,13 +1,49 @@
 import { useState, useEffect, useRef } from 'react';
-import type { ModelsHealthData, ProviderHealth, ModelStatus } from '../types';
+import type { ModelsHealthData, ProviderHealth, ModelStatus, TestedModel } from '../types';
+
+// ─── Constants ──────────────────────────────────────────────────────────────
+
+const LOCAL_PROVIDERS = new Set(['local', 'lmstudio', 'vllm']);
+
+const STATUS_STYLES: Record<ModelStatus, { bg: string; text: string; dot: string; cardBorder: string; cardBg: string }> = {
+  available: { bg: '#0a2e1a', text: '#3fb950', dot: '#3fb950', cardBorder: '#3fb950', cardBg: '#0d2818' },
+  limited: { bg: '#2d1f00', text: '#d29922', dot: '#d29922', cardBorder: '#d29922', cardBg: '#1f1700' },
+  unavailable: { bg: '#2d0f0f', text: '#f85149', dot: '#f85149', cardBorder: '#f85149', cardBg: '#1f0a0a' },
+};
+
+// ─── Helpers ────────────────────────────────────────────────────────────────
+
+function getStatusLabel(status: ModelStatus): string {
+  return status === 'available' ? 'Available' : status === 'limited' ? 'Limited' : 'Unavailable';
+}
+
+function getStatusBadgeLabel(status: ModelStatus): string {
+  return status === 'available' ? 'Ready' : status === 'limited' ? 'Limited' : 'Down';
+}
+
+function getProviderIcon(provider: string): string {
+  const iconMap: Record<string, string> = {
+    local: '💻', groq: '🟢', nim: '🔶', gemini: '🔷', openrouter: '🟣',
+    openai: '🤖', anthropic: '🔮', mistral: '🌀', cohere: '🧠',
+    together: '🟢', deepinfra: '🌐', fireworks: '🎆', perplexity: '❓',
+    azure: '🔵', anyscale: '🔷', lmstudio: '🎨', vllm: '⚡',
+  };
+  return iconMap[provider] || '🔌';
+}
+
+function getProviderLabel(provider: string): string {
+  const labelMap: Record<string, string> = {
+    local: 'Ollama', groq: 'Groq', nim: 'NVIDIA NIM', gemini: 'Gemini',
+    openrouter: 'OpenRouter', openai: 'OpenAI', anthropic: 'Anthropic',
+    mistral: 'Mistral', cohere: 'Cohere', together: 'Together AI',
+    deepinfra: 'DeepInfra', fireworks: 'Fireworks AI', perplexity: 'Perplexity',
+    azure: 'Azure OpenAI', anyscale: 'Anyscale', lmstudio: 'LM Studio',
+    vllm: 'vLLM / TGI',
+  };
+  return labelMap[provider] || provider;
+}
 
 // ─── Status Badge ───────────────────────────────────────────────────────────
-
-const STATUS_STYLES: Record<ModelStatus, { bg: string; text: string; dot: string }> = {
-  available: { bg: '#0a2e1a', text: '#3fb950', dot: '#3fb950' },
-  limited: { bg: '#2d1f00', text: '#d29922', dot: '#d29922' },
-  unavailable: { bg: '#2d0f0f', text: '#f85149', dot: '#f85149' },
-};
 
 function StatusBadge({ status, label }: { status: ModelStatus; label: string }) {
   const s = STATUS_STYLES[status];
@@ -81,7 +117,7 @@ function ProgressBar({ data }: { data: ModelsHealthData }) {
   );
 }
 
-// ─── Provider Card ──────────────────────────────────────────────────────────
+// ─── Provider Card (same as before) ────────────────────────────────────────
 
 function ProviderCard({ provider }: { provider: ProviderHealth }) {
   const [expanded, setExpanded] = useState(false);
@@ -100,7 +136,6 @@ function ProviderCard({ provider }: { provider: ProviderHealth }) {
       borderLeft: `4px solid ${borderColor}`,
       marginBottom: 12, overflow: 'hidden',
     }}>
-      {/* Header - clickable to expand */}
       <div
         onClick={() => setExpanded(!expanded)}
         style={{
@@ -117,10 +152,7 @@ function ProviderCard({ provider }: { provider: ProviderHealth }) {
             </span>
             <StatusBadge
               status={provider.overallStatus}
-              label={
-                provider.overallStatus === 'available' ? 'Available' :
-                provider.overallStatus === 'limited' ? 'Limited' : 'Unavailable'
-              }
+              label={getStatusLabel(provider.overallStatus)}
             />
           </div>
           <div style={{ fontSize: 13, color: '#8b949e' }}>
@@ -145,7 +177,6 @@ function ProviderCard({ provider }: { provider: ProviderHealth }) {
         }}>▶</span>
       </div>
 
-      {/* Expanded details */}
       {expanded && (
         <>
           <div style={{
@@ -158,9 +189,8 @@ function ProviderCard({ provider }: { provider: ProviderHealth }) {
               <span style={{ color: '#d29922' }}>🎁 {provider.freeTierInfo}</span>
             )}
           </div>
-
-          {/* Model table */}
-          <div style={{ overflowX: 'auto', borderTop: '1px solid #21262d' }}>              <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 13 }}>
+          <div style={{ overflowX: 'auto', borderTop: '1px solid #21262d' }}>
+            <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 13 }}>
               <thead>
                 <tr style={{ borderBottom: '1px solid #21262d', color: '#8b949e' }}>
                   <th style={{ padding: '8px 18px', textAlign: 'left', fontWeight: 500 }}>Model</th>
@@ -187,10 +217,7 @@ function ProviderCard({ provider }: { provider: ProviderHealth }) {
                       {model.name}
                     </td>
                     <td style={{ padding: '8px 12px' }}>
-                      <StatusBadge
-                        status={model.status}
-                        label={model.status === 'available' ? 'Ready' : model.status === 'limited' ? 'Limited' : 'Down'}
-                      />
+                      <StatusBadge status={model.status} label={getStatusBadgeLabel(model.status)} />
                     </td>
                     <td style={{ padding: '8px 12px', color: '#8b949e', fontSize: 12, fontFamily: "'SFMono-Regular', Consolas, monospace" }}>
                       {model.rateLimitRemaining !== undefined
@@ -213,6 +240,148 @@ function ProviderCard({ provider }: { provider: ProviderHealth }) {
   );
 }
 
+// ─── Section Header ─────────────────────────────────────────────────────────
+
+function SectionHeader({ icon, title, count }: { icon: string; title: string; count: number }) {
+  if (count === 0) return null;
+  return (
+    <h3 style={{
+      fontSize: 15, fontWeight: 600, color: '#e6edf3',
+      margin: '24px 0 12px 0', display: 'flex', alignItems: 'center', gap: 8,
+    }}>
+      <span>{icon}</span> {title}
+      <span style={{
+        fontSize: 12, color: '#8b949e', fontWeight: 400,
+        background: '#161b22', padding: '1px 8px', borderRadius: 8,
+      }}>
+        {count}
+      </span>
+    </h3>
+  );
+}
+
+// ─── Model Card Grid ────────────────────────────────────────────────────────
+
+function ModelCard({ model, provider }: { model: TestedModel; provider: string }) {
+  const s = STATUS_STYLES[model.status];
+  const quotaText = model.rateLimitRemaining !== undefined
+    ? model.rateLimitTotal
+      ? `${model.rateLimitRemaining} / ${model.rateLimitTotal}`
+      : `${model.rateLimitRemaining} left`
+    : 'Unlimited';
+
+  return (
+    <div style={{
+      background: s.cardBg,
+      border: `1px solid ${s.cardBorder}44`,
+      borderRadius: 12,
+      padding: 16,
+      display: 'flex',
+      flexDirection: 'column',
+      gap: 8,
+      transition: 'all 0.2s ease',
+      cursor: 'default',
+      position: 'relative',
+      overflow: 'hidden',
+    }}
+      onMouseEnter={(e) => { e.currentTarget.style.borderColor = s.cardBorder; e.currentTarget.style.transform = 'translateY(-2px)'; e.currentTarget.style.boxShadow = `0 4px 16px ${s.cardBorder}22`; }}
+      onMouseLeave={(e) => { e.currentTarget.style.borderColor = `${s.cardBorder}44`; e.currentTarget.style.transform = 'none'; e.currentTarget.style.boxShadow = 'none'; }}
+    >
+      {/* Top accent bar */}
+      <div style={{
+        position: 'absolute', top: 0, left: 0, right: 0, height: 3,
+        background: s.cardBorder,
+        opacity: 0.6,
+      }} />
+
+      {/* Model name */}
+      <div style={{
+        fontSize: 14, fontWeight: 600, color: '#e6edf3',
+        fontFamily: "'SFMono-Regular', Consolas, monospace",
+        whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis',
+        paddingTop: 4,
+      }}>
+        {model.name.length > 30 ? model.name.slice(0, 28) + '…' : model.name}
+      </div>
+
+      {/* Provider */}
+      <div style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 12, color: '#8b949e' }}>
+        <span>{getProviderIcon(provider)}</span>
+        <span>{getProviderLabel(provider)}</span>
+      </div>
+
+      {/* Health status - color box */}
+      <div style={{
+        display: 'inline-flex', alignItems: 'center', gap: 6,
+        background: s.bg, color: s.text,
+        padding: '4px 10px', borderRadius: 8,
+        fontSize: 12, fontWeight: 600,
+        alignSelf: 'flex-start',
+      }}>
+        <span style={{ width: 8, height: 8, borderRadius: '50%', background: s.dot }} />
+        {model.status === 'available' ? 'Available' : model.status === 'limited' ? 'Limited' : 'Unavailable'}
+      </div>
+
+      {/* Token / Quota */}
+      <div style={{ fontSize: 11, color: '#6e7681', marginTop: 'auto' }}>
+        <span style={{ color: '#8b949e' }}>Quota:</span>{' '}
+        <span style={{
+          color: model.rateLimitRemaining !== undefined && model.rateLimitRemaining <= 10
+            ? '#d29922' : '#8b949e',
+          fontFamily: "'SFMono-Regular', Consolas, monospace",
+        }}>
+          {quotaText}
+        </span>
+      </div>
+
+      {/* Reason tooltip on hover */}
+      {model.statusReason && model.status !== 'available' && (
+        <div style={{ fontSize: 10, color: '#6e7681', marginTop: 2 }}>
+          {model.statusReason.length > 40 ? model.statusReason.slice(0, 38) + '…' : model.statusReason}
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ─── Models Grid Section ────────────────────────────────────────────────────
+
+function ModelsGrid({ providers }: { providers: ProviderHealth[] }) {
+  // Flatten all models with their provider info
+  const allModels: Array<{ model: TestedModel; provider: string }> = [];
+  for (const p of providers) {
+    for (const m of p.models) {
+      allModels.push({ model: m, provider: p.provider });
+    }
+  }
+
+  if (allModels.length === 0) return null;
+
+  // Sort: available first, then limited, then unavailable
+  const statusOrder: Record<ModelStatus, number> = { available: 0, limited: 1, unavailable: 2 };
+  allModels.sort((a, b) => statusOrder[a.model.status] - statusOrder[b.model.status]);
+
+  return (
+    <>
+      <h2 className="section-title" style={{ marginTop: 36 }}>📋 Model Health Overview</h2>
+      <p className="section-description">
+        All models across all providers, color-coded by health status.
+        Green = ready, Amber = limited quota, Red = unavailable.
+      </p>
+
+      <div style={{
+        display: 'grid',
+        gridTemplateColumns: 'repeat(auto-fill, minmax(240px, 1fr))',
+        gap: 14,
+      }}>
+        {allModels.map(({ model, provider }) => (
+          <ModelCard key={`${provider}-${model.id}`} model={model} provider={provider} />
+        ))}
+      </div>
+    </>
+  );
+}
+
 // ─── Legend ─────────────────────────────────────────────────────────────────
 
 function Legend() {
@@ -231,13 +400,11 @@ function Legend() {
         </div>
       </div>
       <div>
-        <div style={{ fontWeight: 600, color: '#e6edf3', marginBottom: 6 }}>Provider Key Info</div>
+        <div style={{ fontWeight: 600, color: '#e6edf3', marginBottom: 6 }}>Provider Sections</div>
         <div style={{ display: 'flex', flexDirection: 'column', gap: 3, fontSize: 12 }}>
-          <span>🟢 <strong>Groq</strong> — Free: 30 req/min, 14400/day. <code style={{ color: '#58a6ff' }}>GROQ_API_KEY</code></span>
-          <span>🔶 <strong>NVIDIA NIM</strong> — Free: 1000 req/day. <code style={{ color: '#58a6ff' }}>NVIDIA_NIM_API_KEY</code></span>
-          <span>🔷 <strong>Gemini</strong> — Free: 60 req/min, 1500/day. <code style={{ color: '#58a6ff' }}>GEMINI_API_KEY</code></span>
-          <span>🟣 <strong>OpenRouter</strong> — Pay-per-use ($1 free trial). <code style={{ color: '#58a6ff' }}>OPENROUTER_API_KEY</code></span>
-          <span>💻 <strong>Ollama</strong> — Fully free, local. No API key needed.</span>
+          <span>✅ <strong>Cloud</strong> — Online providers with active API keys</span>
+          <span>🏠 <strong>Local</strong> — Locally running inference servers</span>
+          <span>⛔ <strong>Unavailable</strong> — Missing keys or unreachable endpoints</span>
         </div>
       </div>
     </div>
@@ -280,12 +447,39 @@ export default function ModelsPanel() {
     };
   }, []);
 
+  // Sort providers into sections
+  function sortProviders(data: ModelsHealthData) {
+    const available: ProviderHealth[] = [];
+    const local: ProviderHealth[] = [];
+    const unavailable: ProviderHealth[] = [];
+
+    // Sort order for non-local providers
+    const availabilityOrder: Record<ModelStatus, number> = { available: 0, limited: 1, unavailable: 2 };
+
+    for (const p of data.providers) {
+      if (LOCAL_PROVIDERS.has(p.provider)) {
+        local.push(p);
+      } else if (p.overallStatus === 'available') {
+        available.push(p);
+      } else {
+        unavailable.push(p);
+      }
+    }
+
+    // Sort each section by status
+    available.sort((a, b) => availabilityOrder[a.overallStatus] - availabilityOrder[b.overallStatus]);
+    local.sort((a, b) => availabilityOrder[a.overallStatus] - availabilityOrder[b.overallStatus]);
+    unavailable.sort((a, b) => availabilityOrder[a.overallStatus] - availabilityOrder[b.overallStatus]);
+
+    return { available, local, unavailable };
+  }
+
   return (
     <>
       <h2 className="section-title">🧠 Model Provider Status</h2>
       <p className="section-description">
         Real-time health check of all AI providers and their available models.
-        Tests each provider's API key and connectivity.
+        Providers are grouped into sections: Available cloud → Local → Unavailable.
       </p>
 
       <ActionBar onRefresh={fetchModels} loading={loading} />
@@ -294,7 +488,7 @@ export default function ModelsPanel() {
       {loading && !modelsData && (
         <div className="loading-state">
           <div className="loading-spinner" />
-          <p>Testing all provider connections...</p>
+          <p>Testing all 17 provider connections...</p>
         </div>
       )}
 
@@ -347,9 +541,35 @@ export default function ModelsPanel() {
 
           <ProgressBar data={modelsData} />
 
-          {modelsData.providers.map((provider) => (
-            <ProviderCard key={provider.provider} provider={provider} />
-          ))}
+          {/* ── Sectioned Provider Cards ── */}
+          {(() => {
+            const { available, local, unavailable } = sortProviders(modelsData);
+
+            return (
+              <>
+                {/* Section 1: Available Cloud Providers */}
+                <SectionHeader icon="✅" title="Available Cloud Providers" count={available.length} />
+                {available.map((provider) => (
+                  <ProviderCard key={provider.provider} provider={provider} />
+                ))}
+
+                {/* Section 2: Local Providers */}
+                <SectionHeader icon="🏠" title="Local Providers" count={local.length} />
+                {local.map((provider) => (
+                  <ProviderCard key={provider.provider} provider={provider} />
+                ))}
+
+                {/* Section 3: Unavailable Providers */}
+                <SectionHeader icon="⛔" title="Unavailable Providers" count={unavailable.length} />
+                {unavailable.map((provider) => (
+                  <ProviderCard key={provider.provider} provider={provider} />
+                ))}
+              </>
+            );
+          })()}
+
+          {/* ── Model Cards Grid ── */}
+          <ModelsGrid providers={modelsData.providers} />
 
           <div style={{ textAlign: 'center', fontSize: 12, color: '#484f58', marginTop: 16 }}>
             Last checked: {new Date(modelsData.lastChecked).toLocaleTimeString()}
