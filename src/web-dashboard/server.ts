@@ -932,12 +932,52 @@ function handleRequest(req: IncomingMessage, res: ServerResponse): void {
 
 // ─── Server ─────────────────────────────────────────────────────────────────
 
+/**
+ * Load API keys from ~/.buff/buffconfig.json into process.env.
+ * This covers the case where keys were saved to the config file
+ * (e.g., via `buff config set` or the model picker) rather than
+ * as environment variables or in a .env file.
+ *
+ * Does NOT override env vars that are already set.
+ */
+function loadApiKeysFromConfig(): void {
+  const configPath = join(homedir(), '.buff', 'buffconfig.json');
+  if (!existsSync(configPath)) return;
+
+  try {
+    const raw = readFileSync(configPath, 'utf-8');
+    const config = JSON.parse(raw) as {
+      providers?: Record<string, { apiKey?: string }>;
+    };
+    if (!config.providers) return;
+
+    // Map provider config keys to their expected env var names
+    const envVarMap: Record<string, string> = {
+      groq: 'GROQ_API_KEY',
+      nim: 'NVIDIA_NIM_API_KEY',
+      gemini: 'GEMINI_API_KEY',
+      openrouter: 'OPENROUTER_API_KEY',
+    };
+
+    for (const [providerKey, envVar] of Object.entries(envVarMap)) {
+      const apiKey = config.providers[providerKey]?.apiKey;
+      if (apiKey && !process.env[envVar]) {
+        process.env[envVar] = apiKey;
+      }
+    }
+  } catch {
+    // Best-effort — config file might be corrupted or unreadable
+  }
+}
+
 export function createDashboardServer(): { server: ReturnType<typeof createServer>; port: number; host: string } {
-  // Load .env file values into process.env so health checks that read
-  // process.env directly (GROQ_API_KEY, NVIDIA_NIM_API_KEY, etc.) work.
-  // This is redundant if ConfigManager was already created, but guarantees
-  // env vars are available even when the dashboard runs standalone.
+  // Step 1: Load .env file values into process.env
   loadEnv();
+
+  // Step 2: Load API keys from ~/.buff/buffconfig.json into process.env
+  // This is the primary source if the user configured providers via
+  // the CLI model picker or `buff config set` commands.
+  loadApiKeysFromConfig();
 
   // Log env var status once at startup for debugging
   console.log('  Provider configuration:');
