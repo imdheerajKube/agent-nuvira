@@ -260,91 +260,100 @@ function SectionHeader({ icon, title, count }: { icon: string; title: string; co
   );
 }
 
-// ─── Model Card Grid ────────────────────────────────────────────────────────
+// ─── Model Table ─────────────────────────────────────────────────────────────
 
-function ModelCard({ model, provider }: { model: TestedModel; provider: string }) {
+function ModelCell({ model, provider }: { model: TestedModel; provider: string }) {
   const s = STATUS_STYLES[model.status];
   const quotaText = model.rateLimitRemaining !== undefined
     ? model.rateLimitTotal
       ? `${model.rateLimitRemaining} / ${model.rateLimitTotal}`
       : `${model.rateLimitRemaining} left`
-    : 'Unlimited';
+    : '—';
 
   return (
-    <div style={{
-      background: s.cardBg,
-      border: `1px solid ${s.cardBorder}44`,
-      borderRadius: 12,
-      padding: 16,
-      display: 'flex',
-      flexDirection: 'column',
-      gap: 8,
-      transition: 'all 0.2s ease',
-      cursor: 'default',
-      position: 'relative',
-      overflow: 'hidden',
-    }}
-      onMouseEnter={(e) => { e.currentTarget.style.borderColor = s.cardBorder; e.currentTarget.style.transform = 'translateY(-2px)'; e.currentTarget.style.boxShadow = `0 4px 16px ${s.cardBorder}22`; }}
-      onMouseLeave={(e) => { e.currentTarget.style.borderColor = `${s.cardBorder}44`; e.currentTarget.style.transform = 'none'; e.currentTarget.style.boxShadow = 'none'; }}
-    >
-      {/* Top accent bar */}
+    <td style={{ padding: 10, verticalAlign: 'top' }}>
       <div style={{
-        position: 'absolute', top: 0, left: 0, right: 0, height: 3,
-        background: s.cardBorder,
-        opacity: 0.6,
-      }} />
+        background: s.cardBg,
+        border: `1px solid ${s.cardBorder}44`,
+        borderRadius: 10,
+        padding: 14,
+        display: 'flex',
+        flexDirection: 'column',
+        gap: 8,
+        height: '100%',
+        transition: 'all 0.2s ease',
+        position: 'relative',
+        overflow: 'hidden',
+        cursor: 'default',
+      }}
+        onMouseEnter={(e) => {
+          e.currentTarget.style.borderColor = s.cardBorder;
+          e.currentTarget.style.boxShadow = `0 2px 10px ${s.cardBorder}22`;
+        }}
+        onMouseLeave={(e) => {
+          e.currentTarget.style.borderColor = `${s.cardBorder}44`;
+          e.currentTarget.style.boxShadow = 'none';
+        }}
+      >
+        {/* Color accent bar on top */}
+        <div style={{
+          position: 'absolute', top: 0, left: 0, right: 0, height: 3,
+          background: s.cardBorder,
+          opacity: 0.6,
+        }} />
 
-      {/* Model name */}
-      <div style={{
-        fontSize: 14, fontWeight: 600, color: '#e6edf3',
-        fontFamily: "'SFMono-Regular', Consolas, monospace",
-        whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis',
-        paddingTop: 4,
-      }}>
-        {model.name.length > 30 ? model.name.slice(0, 28) + '…' : model.name}
-      </div>
-
-      {/* Provider */}
-      <div style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 12, color: '#8b949e' }}>
-        <span>{getProviderIcon(provider)}</span>
-        <span>{getProviderLabel(provider)}</span>
-      </div>
-
-      {/* Health status - color box */}
-      <div style={{
-        display: 'inline-flex', alignItems: 'center', gap: 6,
-        background: s.bg, color: s.text,
-        padding: '4px 10px', borderRadius: 8,
-        fontSize: 12, fontWeight: 600,
-        alignSelf: 'flex-start',
-      }}>
-        <span style={{ width: 8, height: 8, borderRadius: '50%', background: s.dot }} />
-        {model.status === 'available' ? 'Available' : model.status === 'limited' ? 'Limited' : 'Unavailable'}
-      </div>
-
-      {/* Token / Quota */}
-      <div style={{ fontSize: 11, color: '#6e7681', marginTop: 'auto' }}>
-        <span style={{ color: '#8b949e' }}>Quota:</span>{' '}
-        <span style={{
-          color: model.rateLimitRemaining !== undefined && model.rateLimitRemaining <= 10
-            ? '#d29922' : '#8b949e',
+        {/* Line 1: Model name */}
+        <div style={{
+          fontSize: 13, fontWeight: 600, color: '#e6edf3',
           fontFamily: "'SFMono-Regular', Consolas, monospace",
+          whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis',
+          paddingTop: 2,
         }}>
-          {quotaText}
-        </span>
-      </div>
-
-      {/* Reason tooltip on hover */}
-      {model.statusReason && model.status !== 'available' && (
-        <div style={{ fontSize: 10, color: '#6e7681', marginTop: 2 }}>
-          {model.statusReason.length > 40 ? model.statusReason.slice(0, 38) + '…' : model.statusReason}
+          {model.name.length > 28 ? model.name.slice(0, 25) + '…' : model.name}
         </div>
-      )}
-    </div>
+
+        {/* Line 2: Provider */}
+        <div style={{ fontSize: 12, color: '#8b949e' }}>
+          {getProviderIcon(provider)} {getProviderLabel(provider)}
+        </div>
+
+        {/* Line 3: Health status — color box */}
+        <div style={{
+          display: 'inline-flex', alignItems: 'center', gap: 5,
+          background: s.bg, color: s.text,
+          padding: '3px 8px', borderRadius: 6,
+          fontSize: 11, fontWeight: 600,
+          alignSelf: 'flex-start',
+        }}>
+          <span style={{ width: 7, height: 7, borderRadius: '50%', background: s.dot }} />
+          {model.status === 'available' ? 'Available' : model.status === 'limited' ? 'Limited' : 'Unavailable'}
+        </div>
+
+        {/* Line 4: Token remaining */}
+        <div style={{ fontSize: 11, color: '#6e7681' }}>
+          <span style={{ color: '#8b949e' }}>Tokens:</span>{' '}
+          <span style={{
+            color: model.rateLimitRemaining !== undefined && model.rateLimitRemaining <= 10
+              ? '#d29922' : '#8b949e',
+            fontFamily: "'SFMono-Regular', Consolas, monospace",
+            fontWeight: 500,
+          }}>
+            {quotaText}
+          </span>
+        </div>
+
+        {/* Extra: reason if limited/unavailable */}
+        {model.status !== 'available' && model.statusReason && (
+          <div style={{ fontSize: 10, color: '#6e7681', lineHeight: 1.3, marginTop: 2 }}>
+            {model.statusReason.length > 45 ? model.statusReason.slice(0, 42) + '…' : model.statusReason}
+          </div>
+        )}
+      </div>
+    </td>
   );
 }
 
-// ─── Models Grid Section ────────────────────────────────────────────────────
+// ─── Models Table Section ───────────────────────────────────────────────────
 
 function ModelsGrid({ providers }: { providers: ProviderHealth[] }) {
   // Flatten all models with their provider info
@@ -361,22 +370,42 @@ function ModelsGrid({ providers }: { providers: ProviderHealth[] }) {
   const statusOrder: Record<ModelStatus, number> = { available: 0, limited: 1, unavailable: 2 };
   allModels.sort((a, b) => statusOrder[a.model.status] - statusOrder[b.model.status]);
 
+  // Build table rows: each row has COLS_PER_ROW cells
+  const COLS_PER_ROW = 4;
+  const rows: Array<Array<{ model: TestedModel; provider: string }>> = [];
+  for (let i = 0; i < allModels.length; i += COLS_PER_ROW) {
+    rows.push(allModels.slice(i, i + COLS_PER_ROW));
+  }
+
   return (
     <>
       <h2 className="section-title" style={{ marginTop: 36 }}>📋 Model Health Overview</h2>
       <p className="section-description">
         All models across all providers, color-coded by health status.
-        Green = ready, Amber = limited quota, Red = unavailable.
+        Each cell shows: Model · Provider · Health · Token Remaining.
       </p>
 
-      <div style={{
-        display: 'grid',
-        gridTemplateColumns: 'repeat(auto-fill, minmax(240px, 1fr))',
-        gap: 14,
-      }}>
-        {allModels.map(({ model, provider }) => (
-          <ModelCard key={`${provider}-${model.id}`} model={model} provider={provider} />
-        ))}
+      <div style={{ overflowX: 'auto' }}>
+        <table style={{
+          width: '100%',
+          borderCollapse: 'separate',
+          borderSpacing: 10,
+          tableLayout: 'fixed',
+        }}>
+          <tbody>
+            {rows.map((row, ri) => (
+              <tr key={ri}>
+                {row.map(({ model, provider }) => (
+                  <ModelCell key={`${provider}-${model.id}`} model={model} provider={provider} />
+                ))}
+                {/* Fill empty cells in last row */}
+                {row.length < COLS_PER_ROW && Array.from({ length: COLS_PER_ROW - row.length }).map((_, ei) => (
+                  <td key={`empty-${ei}`} style={{ padding: 10 }} />
+                ))}
+              </tr>
+            ))}
+          </tbody>
+        </table>
       </div>
     </>
   );
