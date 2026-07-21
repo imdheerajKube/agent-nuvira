@@ -22,11 +22,11 @@
  */
 
 import { execSync } from 'node:child_process';
-import { platform } from 'node:os';
 
 import { Agent, type AgentContext, type AgentResult } from '../agent.js';
 import type { LLMCallFn } from '../agent.js';
 import { logger } from '../../utils/logger.js';
+import { getHostShell } from '../../utils/shell.js';
 import { SandboxManager } from '../../sandbox/manager.js';
 import { detectProjectImage } from '../../sandbox/images.js';
 import { getSandboxConfig } from '../../sandbox/types.js';
@@ -256,7 +256,7 @@ export class RunnerAgent extends Agent {
         timeout: timeoutMs,
         stdio: 'pipe',
         encoding: 'utf-8',
-        shell: platform() === 'win32' ? (process.env.COMSPEC || 'cmd.exe') : '/bin/sh',
+        shell: getHostShell(),
         maxBuffer: 1024 * 1024,
       });
       stdout = output.trim();

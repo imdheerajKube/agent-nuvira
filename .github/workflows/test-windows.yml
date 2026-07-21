@@ -5,6 +5,11 @@
 # which is critical since the tool uses child_process (execSync), temp directories,
 # path manipulation, and other platform-sensitive operations.
 #
+# Two jobs:
+#   1. runner-tests — fast feedback: runs only RunnerAgent + sandbox tests (the most
+#      Windows-sensitive tests). Completes in < 30s.
+#   2. full-suite — comprehensive: runs all tests across Node 22 and 23.
+#
 # Note: Vitest 4.x dependencies (rolldown) require Node >= 21.7 for `node:util.styleText`.
 # Only Node 22+ is tested here. For older Node versions, use vitest 3.x or older.
 
@@ -30,9 +35,49 @@ concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
 
+env:
+  CI: true
+  NODE_OPTIONS: --no-warnings
+
 jobs:
-  test:
-    name: Test on Windows (Node ${{ matrix.node-version }})
+  # ── Fast-feedback: runner & sandbox tests (most Windows-sensitive) ───────────
+  runner-tests:
+    name: Runner tests (Node ${{ matrix.node-version }})
+    runs-on: windows-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        node-version:
+          - 22
+          - 23
+    timeout-minutes: 5
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js ${{ matrix.node-version }}
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ matrix.node-version }}
+          cache: npm
+          cache-dependency-path: package-lock.json
+
+      - name: Install dependencies
+        run: npm ci
+        shell: bash
+
+      - name: Build project
+        run: npm run build
+        shell: bash
+
+      - name: Run runner + sandbox tests
+        run: npx vitest run tests/agents/agents/runner.test.ts tests/sandbox/manager.test.ts --reporter=verbose
+        shell: bash
+
+  # ── Full test suite (Node 22 & 23) ───────────────────────────────────────────
+  full-suite:
+    name: Full test suite (Node ${{ matrix.node-version }})
     runs-on: windows-latest
     strategy:
       fail-fast: false
@@ -61,9 +106,6 @@ jobs:
         run: npm run build
         shell: bash
 
-      - name: Run tests
+      - name: Run all tests
         run: npx vitest run --reporter=verbose
         shell: bash
-        env:
-          CI: true
-          NODE_OPTIONS: --no-warnings

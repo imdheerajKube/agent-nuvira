@@ -24,7 +24,7 @@ import type { RunResult } from '../../../src/agents/agents/runner.js';
 function makeContext(overrides: Partial<AgentContext> = {}): AgentContext {
   return {
     goal: 'test goal',
-    workingDirectory: '/tmp',
+    workingDirectory: tmpdir(),
     taskPlan: [],
     artifacts: [],
     conversations: [],
@@ -370,13 +370,13 @@ describe('RunnerAgent', () => {
     it('should capture stderr for failed commands', async () => {
       const ctx = context({
         taskPlan: [
-          { id: 'step-1', description: 'Run: sh -c "echo error >&2; exit 1"', agentType: 'runner', dependsOn: [], status: 'running' },
+          { id: 'step-1', description: 'Run: node -e "process.stderr.write(\'error output\');process.exit(1)"', agentType: 'runner', dependsOn: [], status: 'running' },
         ],
       });
       const result = await runner.execute(ctx, mockLLM());
 
       expect(result.success).toBe(false);
-      expect(result.details).toContain('exit 1');
+      expect(result.details).toContain('error output');
       expect(result.details).toContain('stderr:');
     });
 
@@ -397,13 +397,13 @@ describe('RunnerAgent', () => {
     // ── Output Truncation ─────────────────────────────────────────────
 
     it('should truncate long stdout in details but keep full in metadata', async () => {
-      // Write a file with 1000 chars of known content to cat
+      // Write a file with 1000 chars of known content
       const longContent = 'a'.repeat(1000);
       writeFileSync(join(tmpDir, 'long-output.txt'), longContent, 'utf-8');
 
       const ctx = context({
         taskPlan: [
-          { id: 'step-1', description: 'Run: cat long-output.txt', agentType: 'runner', dependsOn: [], status: 'running' },
+          { id: 'step-1', description: `Run: node -e "const fs=require('fs');console.log(fs.readFileSync('long-output.txt','utf-8'))"`, agentType: 'runner', dependsOn: [], status: 'running' },
         ],
       });
 
@@ -432,7 +432,7 @@ describe('RunnerAgent', () => {
 
       const ctx = context({
         taskPlan: [
-          { id: 'step-1', description: 'Run: cat test-output.txt', agentType: 'runner', dependsOn: [], status: 'running' },
+          { id: 'step-1', description: `Run: node -e "const fs=require('fs');console.log(fs.readFileSync('test-output.txt','utf-8'))"`, agentType: 'runner', dependsOn: [], status: 'running' },
         ],
       });
       const result = await runner.execute(ctx, mockLLM());
@@ -597,7 +597,7 @@ describe('RunnerAgent', () => {
       const ctx = makeContext({
         workingDirectory: tmpDir,
         taskPlan: [
-          { id: 'step-1', description: 'Run: sh -c "echo stdout; echo stderr >&2"', agentType: 'runner', dependsOn: [], status: 'running' },
+          { id: 'step-1', description: 'Run: node -e "console.log(\'stdout\');process.stderr.write(\'stderr\')"', agentType: 'runner', dependsOn: [], status: 'running' },
         ],
       });
       const result = await runner.execute(ctx, async () => '');

@@ -38,6 +38,7 @@ import { tmpdir } from 'node:os';
 import { mkdtempSync, readdirSync } from 'node:fs';
 
 import { logger } from '../utils/logger.js';
+import { getHostShell } from '../utils/shell.js';
 import type {
   ResourceLimits,
   SandboxConfig,
@@ -359,7 +360,7 @@ export class SandboxManager {
       const fullCommand = `docker exec -i "${container.containerId}" ${shell} -c "${escapedCommand}"`;
 
       const childProcess = spawn(fullCommand, [], {
-        shell: true,
+        shell: getHostShell(),
         stdio: ['pipe', 'pipe', 'pipe'],
         timeout: resolvedTimeout,
       });
@@ -512,7 +513,7 @@ export class SandboxManager {
           timeout: timeoutMs,
           stdio: 'pipe',
           encoding: 'utf-8',
-          shell: '/bin/sh',
+          shell: getHostShell(),
           maxBuffer: 10 * 1024 * 1024, // 10 MB
         });
 
@@ -546,9 +547,10 @@ export class SandboxManager {
     containerId: string,
     command: string,
   ): Promise<{ exitCode: number; stdout: string; stderr: string }> {
+    const shell = this.config.image.shell || '/bin/bash';
     const escaped = command.replace(/"/g, '\\"');
     return this.execHostCommand(
-      `docker exec "${containerId}" /bin/sh -c "${escaped}"`,
+      `docker exec "${containerId}" ${shell} -c "${escaped}"`,
       30_000,
     );
   }
