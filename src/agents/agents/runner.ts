@@ -22,6 +22,8 @@
  */
 
 import { execSync } from 'node:child_process';
+import { existsSync, readFileSync } from 'node:fs';
+import { join } from 'node:path';
 
 import { Agent, type AgentContext, type AgentResult } from '../agent.js';
 import type { LLMCallFn } from '../agent.js';
@@ -36,6 +38,9 @@ const MAX_OUTPUT_LENGTH = 10_000;
 
 /** Timeout per command in milliseconds (default: 2 minutes) */
 const DEFAULT_TIMEOUT_MS = 120_000;
+
+/** Maximum number of fallback attempts when command validation fails */
+const MAX_FALLBACK_ATTEMPTS = 2;
 
 /**
  * Result of running a command, stored in context.metadata.runResult.
@@ -64,7 +69,13 @@ export class RunnerAgent extends Agent {
   readonly name = 'Runner';
   readonly description = 'Executes shell commands and captures output';
 
+  /** Stored LLM call function for command suggestion fallback */
+  private _callLLM?: LLMCallFn;
+
   async execute(context: AgentContext, callLLM: LLMCallFn): Promise<AgentResult> {
+    // Store the LLM function for command validation fallback
+    this._callLLM = callLLM;
+
     try {
       // 1. Determine which command to run
       const command = await this.determineCommand(context, callLLM);
@@ -233,9 +244,77 @@ export class RunnerAgent extends Agent {
   }
 
   /**
-   * Execute a command directly on the host machine.
+   * Check whether a command is likely to succeed before executing it.
+   * Currently validates:
+   * - `npm test` / `npm run test`: checks that the project's package.json has a `test` script
    */
-  private async executeOnHost(context: AgentContext, command: string): Promise<AgentResult> {
+  private isCommandAvailable(command: string, workingDir: string): { available: boolean; reason?: string } {
+    // Check npm test commands
+    const npmTestPattern = /^npm\s+(run\s+)?test(\s|$)/;
+    if (npmTestPattern.test(command.trim())) {
+      const pkgPath = join(workingDir, 'package.json');
+      if (existsSync(pkgPath)) {
+        try {
+          const pkg = JSON.parse(readFileSync(pkgPath, 'utf-8')) as { scripts?: Record<string, string> };
+          if (!pkg.scripts?.test) {
+            return {
+              available: false,
+              reason: `Project at ${workingDir} has no "test" script in package.json. ` +
+                `The command "${command}" would fail with "Missing script: test".`,
+            };
+          }
+        } catch {
+          return {
+            available: false,
+            reason: `Could not parse package.json at ${pkgPath} to check for a test script.`,
+          };
+        }
+      } else {
+        return {
+          available: false,
+          reason: `No package.json found at ${workingDir}. The command "${command}" requires an npm project.`,
+        };
+      }
+    }
+
+    return { available: true };
+  }
+
+  /**
+   * Execute a command directly on the host machine.
+   * Validates the command first, and falls back to LLM suggestion if the command is not available.
+   */
+  private async executeOnHost(
+    context: AgentContext,
+    command: string,
+    fallbackAttempts = 0,
+  ): Promise<AgentResult> {
+    // Validate the command before executing
+    const validation = this.isCommandAvailable(command, context.workingDirectory);
+    if (!validation.available) {
+      if (context.metadata.verboseLogging) {
+        logger.info(`     ⚠️  Command validation: ${validation.reason}`);
+      }
+
+      // Try LLM fallback (up to MAX_FALLBACK_ATTEMPTS times)
+      if (fallbackAttempts < MAX_FALLBACK_ATTEMPTS && this._callLLM) {
+        const altCommand = await this.askLLMForCommand(context, this._callLLM);
+        if (altCommand && altCommand !== command) {
+          if (context.metadata.verboseLogging) {
+            logger.info(`     🔄 LLM suggested alternative command (attempt ${fallbackAttempts + 1}): ${altCommand}`);
+          }
+          return this.executeOnHost(context, altCommand, fallbackAttempts + 1);
+        }
+      }
+
+      // No alternative — return a clear error instead of running a broken command
+      return {
+        success: false,
+        summary: `Command not available: ${command}`,
+        error: validation.reason,
+      };
+    }
+
     if (context.metadata.verboseLogging) {
       logger.info(`     Running: ${command}`);
     }
@@ -318,6 +397,7 @@ export class RunnerAgent extends Agent {
 
   /**
    * Fallback: ask the LLM what command to run based on the project context.
+   * Includes project's package.json metadata so the LLM can make an informed choice.
    */
   private async askLLMForCommand(context: AgentContext, callLLM: LLMCallFn): Promise<string | null> {
     const fileList = context.fileChanges
@@ -329,9 +409,29 @@ export class RunnerAgent extends Agent {
       .map((a) => `  - ${a.path}`)
       .join('\n');
 
+    // Read available npm scripts if package.json exists
+    let scriptsInfo = '';
+    try {
+      const pkgPath = join(context.workingDirectory, 'package.json');
+      if (existsSync(pkgPath)) {
+        const pkg = JSON.parse(readFileSync(pkgPath, 'utf-8')) as { scripts?: Record<string, string> };
+        if (pkg.scripts && Object.keys(pkg.scripts).length > 0) {
+          scriptsInfo = 'Available npm scripts:\n' +
+            Object.entries(pkg.scripts)
+              .map(([name, cmd]) => `  - npm run ${name}: ${cmd}`)
+              .join('\n');
+        }
+      }
+    } catch {
+      // Ignore — scriptsInfo stays empty
+    }
+
     const prompt = [
       'You are a build-and-run expert. Given the context below, what single shell command should be executed',
-      'to verify the work that was done? Return ONLY the command, no explanation, no markdown.',
+      'to verify the work that was done?',
+      '',
+      'IMPORTANT: Check if "npm test" is available. Only suggest it if the project',
+      'actually has a test script defined in package.json.',
       '',
       `Goal: ${context.goal}`,
       '',
@@ -341,12 +441,15 @@ export class RunnerAgent extends Agent {
       'Relevant project files:',
       artifactList || '  (empty project)',
       '',
-      'Return ONLY the command to run. Example: "python hello.py" or "node index.js" or "npm test" or "go run main.go".',
+      scriptsInfo || 'No npm scripts available.',
+      '',
+      'Return ONLY the command to run. Examples: "python hello.py" or "node index.js" or "go run main.go".',
       'Rules:',
       '- Return a single line command only',
       '- No backticks, no explanation, no $ prefix',
       '- Use absolute or working-directory-relative paths',
       '- If unsure, suggest the most appropriate verification command',
+      '- NEVER suggest "npm test" if there is no test script in package.json!',
     ].join('\n');
 
     try {

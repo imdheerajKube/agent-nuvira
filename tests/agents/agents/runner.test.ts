@@ -551,7 +551,6 @@ describe('RunnerAgent', () => {
       // Test that shell variable expansion works (works in both /bin/sh and cmd.exe via echo)
       const tmpDir = mkdtempSync(join(tmpdir(), 'buff-runner-shell-'));
       try {
-
         const ctx = makeContext({
           workingDirectory: tmpDir,
           taskPlan: [
@@ -749,6 +748,118 @@ describe('RunnerAgent', () => {
       expect(result.success).toBe(true);
       expect(runResult.exitCode).toBe(0);
       expect(runResult.stdout).toContain('path with spaces works');
+    });
+  });
+
+  // ─── Command Validation (isCommandAvailable) ──────────────────────────
+  //
+  // Tests for the isCommandAvailable() method added to prevent hardcoded
+  // "npm test" failures when the project has no test script.
+
+  describe('command validation', () => {
+    /** Access private isCommandAvailable via prototype */
+    function isCommandAvailable(command: string, workingDir: string): { available: boolean; reason?: string } {
+      return (runner as any).isCommandAvailable.call(runner, command, workingDir);
+    }
+
+    it('should allow "npm test" when package.json has a test script', async () => {
+      const tmpDir = mkdtempSync(join(tmpdir(), 'buff-cmd-valid-'));
+      try {
+        writeFileSync(join(tmpDir, 'package.json'), JSON.stringify({ scripts: { test: 'vitest run' } }), 'utf-8');
+        const result = isCommandAvailable('npm test', tmpDir);
+        expect(result.available).toBe(true);
+      } finally {
+        rmSync(tmpDir, { recursive: true, force: true });
+      }
+    });
+
+    it('should allow "npm run test" when package.json has a test script', async () => {
+      const tmpDir = mkdtempSync(join(tmpdir(), 'buff-cmd-valid2-'));
+      try {
+        writeFileSync(join(tmpDir, 'package.json'), JSON.stringify({ scripts: { test: 'jest' } }), 'utf-8');
+        const result = isCommandAvailable('npm run test', tmpDir);
+        expect(result.available).toBe(true);
+      } finally {
+        rmSync(tmpDir, { recursive: true, force: true });
+      }
+    });
+
+    it('should block "npm test" when package.json has no test script', async () => {
+      const tmpDir = mkdtempSync(join(tmpdir(), 'buff-cmd-block-'));
+      try {
+        writeFileSync(join(tmpDir, 'package.json'), JSON.stringify({ scripts: { start: 'node index.js' } }), 'utf-8');
+        const result = isCommandAvailable('npm test', tmpDir);
+        expect(result.available).toBe(false);
+        expect(result.reason).toContain('no "test" script');
+      } finally {
+        rmSync(tmpDir, { recursive: true, force: true });
+      }
+    });
+
+    it('should block "npm test" when package.json has empty scripts', async () => {
+      const tmpDir = mkdtempSync(join(tmpdir(), 'buff-cmd-empty-'));
+      try {
+        writeFileSync(join(tmpDir, 'package.json'), JSON.stringify({ scripts: {} }), 'utf-8');
+        const result = isCommandAvailable('npm test', tmpDir);
+        expect(result.available).toBe(false);
+      } finally {
+        rmSync(tmpDir, { recursive: true, force: true });
+      }
+    });
+
+    it('should block "npm test" when no package.json exists', async () => {
+      const tmpDir = mkdtempSync(join(tmpdir(), 'buff-cmd-nopkg-'));
+      try {
+        const result = isCommandAvailable('npm test', tmpDir);
+        expect(result.available).toBe(false);
+        expect(result.reason).toContain('No package.json found');
+      } finally {
+        rmSync(tmpDir, { recursive: true, force: true });
+      }
+    });
+
+    it('should allow non-npm commands regardless of package.json', async () => {
+      const tmpDir = mkdtempSync(join(tmpdir(), 'buff-cmd-other-'));
+      try {
+        writeFileSync(join(tmpDir, 'package.json'), JSON.stringify({}), 'utf-8');
+        const result = isCommandAvailable('python hello.py', tmpDir);
+        expect(result.available).toBe(true);
+      } finally {
+        rmSync(tmpDir, { recursive: true, force: true });
+      }
+    });
+
+    it('should allow "npm run build" even without a test script', async () => {
+      const tmpDir = mkdtempSync(join(tmpdir(), 'buff-cmd-build-'));
+      try {
+        writeFileSync(join(tmpDir, 'package.json'), JSON.stringify({ scripts: { build: 'tsc' } }), 'utf-8');
+        const result = isCommandAvailable('npm run build', tmpDir);
+        expect(result.available).toBe(true);
+      } finally {
+        rmSync(tmpDir, { recursive: true, force: true });
+      }
+    });
+
+    it('should handle "npm test -- --coverage" (with flags)', async () => {
+      const tmpDir = mkdtempSync(join(tmpdir(), 'buff-cmd-flag-'));
+      try {
+        writeFileSync(join(tmpDir, 'package.json'), JSON.stringify({ scripts: { test: 'vitest' } }), 'utf-8');
+        const result = isCommandAvailable('npm test -- --coverage', tmpDir);
+        expect(result.available).toBe(true);
+      } finally {
+        rmSync(tmpDir, { recursive: true, force: true });
+      }
+    });
+
+    it('should handle malformed package.json gracefully', async () => {
+      const tmpDir = mkdtempSync(join(tmpdir(), 'buff-cmd-badjson-'));
+      try {
+        writeFileSync(join(tmpDir, 'package.json'), 'not valid json', 'utf-8');
+        const result = isCommandAvailable('npm test', tmpDir);
+        expect(result.available).toBe(false);
+      } finally {
+        rmSync(tmpDir, { recursive: true, force: true });
+      }
     });
   });
 });

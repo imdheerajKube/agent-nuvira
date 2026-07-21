@@ -98,6 +98,13 @@ export class DebuggerAgent extends Agent {
 
         // 5. Re-run tests
         const testCommand = this.detectTestCommand(sandboxPath);
+        if (!testCommand) {
+          return {
+            success: false,
+            summary: 'No test script found to re-run',
+            error: 'The project has no test script in package.json, so the debugger cannot re-run tests.',
+          };
+        }
         const reTestResult = this.runTest(sandboxPath, testCommand);
 
         // Track this attempt
@@ -269,8 +276,9 @@ export class DebuggerAgent extends Agent {
 
   /**
    * Detect the test command from package.json.
+   * Returns null if no test script is found, so the caller can handle gracefully.
    */
-  private detectTestCommand(sandboxPath: string): string {
+  private detectTestCommand(sandboxPath: string): string | null {
     try {
       const pkgPath = join(sandboxPath, 'package.json');
       if (existsSync(pkgPath)) {
@@ -282,7 +290,8 @@ export class DebuggerAgent extends Agent {
     } catch {
       // Fall through
     }
-    return 'npm test 2>&1';
+    // No test script found — return null
+    return null;
   }
 
   /**

@@ -15,15 +15,13 @@ import { execSync } from 'node:child_process';
 
 import { Agent, type AgentContext, type AgentResult } from '../agent.js';
 import type { LLMCallFn } from '../agent.js';
+import { logger } from '../../utils/logger.js';
 import { SandboxManager } from '../../sandbox/manager.js';
 import { detectProjectImage } from '../../sandbox/images.js';
 import { getSandboxConfig } from '../../sandbox/types.js';
 
 /** Common directories to exclude when copying to the sandbox */
 const EXCLUDE_DIRS = ['node_modules', '.git', 'dist', '.next', 'coverage', '.cache'];
-
-/** Default test command */
-const DEFAULT_TEST_COMMAND = 'npm test 2>&1';
 
 /** Maximum sandbox age before cleanup (30 minutes) */
 const SANDBOX_MAX_AGE_MS = 30 * 60 * 1000;
@@ -121,6 +119,17 @@ export class TesterAgent extends Agent {
       // 1. Detect test command from package.json
       const testCommand = this.detectTestCommand(context.workingDirectory);
 
+      // If no test script is defined, skip gracefully
+      if (!testCommand) {
+        if (context.metadata.verboseLogging) {
+          logger.info('     ⏭️  No test script found in package.json — skipping tests');
+        }
+        return {
+          success: true,
+          summary: '⏭️  No test script found — skipped',
+        };
+      }
+
       // 2. Create sandbox
       sandboxPath = mkdtempSync(join(tmpdir(), 'buff-sandbox-'));
       activeSandboxes.push(sandboxPath);
@@ -135,8 +144,13 @@ export class TesterAgent extends Agent {
       // 4. Apply file changes from context to the sandbox
       this.applyChangesToSandbox(sandboxPath, context.fileChanges);
 
-      // 5. Install dependencies
-      const installOutput = this.runInstall(sandboxPath);
+      // 5. Install dependencies (only if package.json exists)
+      const pkgExists = existsSync(join(sandboxPath, 'package.json'));
+      if (pkgExists) {
+        this.runInstall(sandboxPath);
+      } else if (context.metadata.verboseLogging) {
+        logger.info('     ⏭️  No package.json in sandbox — skipping npm install');
+      }
 
       // 6. Run tests
       const testResult = this.runTests(sandboxPath, testCommand);
@@ -245,6 +259,19 @@ BUFFEOF`,
 
       // Run tests inside the container
       const testCommand = this.detectTestCommand(context.workingDirectory);
+
+      // Skip if no test script found
+      if (!testCommand) {
+        await sandboxManager.destroyContainer(containerId).catch(() => {});
+        if (context.metadata.verboseLogging) {
+          logger.info('     ⏭️  No test script found in package.json — skipping tests');
+        }
+        return {
+          success: true,
+          summary: '⏭️  No test script found — skipped (Docker)',
+        };
+      }
+
       const testResult = await sandboxManager.runCommand(
         containerId,
         testCommand,
@@ -296,21 +323,23 @@ BUFFEOF`,
 
   /**
    * Detect the test command from package.json scripts.
-   * Falls back to the default if not found.
+   * Returns null if no test script is found, so the caller can skip tests gracefully
+   * instead of running a failing `npm test` command.
    */
-  private detectTestCommand(workingDir: string): string {
+  private detectTestCommand(workingDir: string): string | null {
     try {
       const pkgPath = join(workingDir, 'package.json');
       if (existsSync(pkgPath)) {
         const pkg = JSON.parse(readFileSync(pkgPath, 'utf-8')) as { scripts?: Record<string, string> };
         if (pkg.scripts?.test) {
-          return `npm run test 2>&1`;
+          return 'npm run test 2>&1';
         }
       }
     } catch {
       // Fall through
     }
-    return DEFAULT_TEST_COMMAND;
+    // No test script found — return null so caller can skip gracefully
+    return null;
   }
 
   /**
