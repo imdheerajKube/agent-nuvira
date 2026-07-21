@@ -16,6 +16,8 @@ import { join, extname, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { homedir } from 'node:os';
 
+import { loadEnv } from '../utils/env.js';
+
 // ─── Constants ──────────────────────────────────────────────────────────────
 
 const PORT = parseInt(process.env.BUFF_DASHBOARD_PORT || '3030', 10);
@@ -179,6 +181,16 @@ export function readDAGData(): Record<string, unknown> {
 }
 
 // ─── Model Health Check ────────────────────────────────────────────────────
+
+/** Log which env vars were (or weren't) found for debugging */
+function logEnvVarStatus(label: string, varName: string, value: string | undefined): void {
+  if (value) {
+    console.log(`  ✓ ${label}: ${varName} found (${value.slice(0, 8)}...)`);
+  } else {
+    console.log(`  ✗ ${label}: ${varName} not set`);
+  }
+}
+
 
 interface ModelCheckResult {
   provider: string;
@@ -921,6 +933,20 @@ function handleRequest(req: IncomingMessage, res: ServerResponse): void {
 // ─── Server ─────────────────────────────────────────────────────────────────
 
 export function createDashboardServer(): { server: ReturnType<typeof createServer>; port: number; host: string } {
+  // Load .env file values into process.env so health checks that read
+  // process.env directly (GROQ_API_KEY, NVIDIA_NIM_API_KEY, etc.) work.
+  // This is redundant if ConfigManager was already created, but guarantees
+  // env vars are available even when the dashboard runs standalone.
+  loadEnv();
+
+  // Log env var status once at startup for debugging
+  console.log('  Provider configuration:');
+  logEnvVarStatus('Groq', 'GROQ_API_KEY', process.env.GROQ_API_KEY);
+  logEnvVarStatus('NVIDIA NIM', 'NVIDIA_NIM_API_KEY', process.env.NVIDIA_NIM_API_KEY);
+  logEnvVarStatus('Google Gemini', 'GEMINI_API_KEY', process.env.GEMINI_API_KEY);
+  logEnvVarStatus('OpenRouter', 'OPENROUTER_API_KEY', process.env.OPENROUTER_API_KEY);
+  console.log('');
+
   const server = createServer(handleRequest);
 
   server.listen(PORT, HOST, () => {

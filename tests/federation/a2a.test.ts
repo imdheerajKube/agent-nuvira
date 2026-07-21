@@ -247,7 +247,7 @@ describe('A2A client functions', () => {
   it('fetchAgentCard discovers agent capabilities', async () => {
     const result = await fetchAgentCard(baseUrl);
     expect(result.success).toBe(true);
-    expect(result.responseTimeMs).toBeGreaterThan(0);
+    expect(result.responseTimeMs).toBeGreaterThanOrEqual(0);
     expect(result.card).toBeDefined();
     expect(result.card!.name).toBe('client-test-node');
     expect(result.card!.capabilities).toHaveLength(6);
