@@ -540,10 +540,16 @@ function SpeechProviderSection() {
       </div>
       <div style={{ fontSize: 12, color: '#6e7681' }}>
         Speech/TTS provider support coming soon.
-        {' '}<span style={{ color: '#58a6ff', cursor: 'pointer' }}
-          onClick={() => window.open('https://github.com/imdheerajKube/agent-nuvira/issues/new', '_blank')}>
+        {' '}<a
+          href="https://github.com/imdheerajKube/agent-nuvira/issues/new"
+          target="_blank"
+          rel="noopener noreferrer"
+          style={{ color: '#58a6ff', textDecoration: 'none', cursor: 'pointer' }}
+          onMouseEnter={(e) => { e.currentTarget.style.textDecoration = 'underline'; }}
+          onMouseLeave={(e) => { e.currentTarget.style.textDecoration = 'none'; }}
+        >
           Request a provider
-        </span>
+        </a>
       </div>
     </div>
   );
