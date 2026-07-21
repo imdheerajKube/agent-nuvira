@@ -4,12 +4,16 @@ import type { ModelsHealthData, ProviderHealth, ModelStatus, TestedModel } from 
 // ─── Constants ──────────────────────────────────────────────────────────────
 
 const LOCAL_PROVIDERS = new Set(['local', 'lmstudio', 'vllm']);
+/** Future speech/TTS providers — always appear last when implemented */
+const SPEECH_PROVIDERS = new Set<string>([]);
 
 const STATUS_STYLES: Record<ModelStatus, { bg: string; text: string; dot: string; cardBorder: string; cardBg: string }> = {
   available: { bg: '#0a2e1a', text: '#3fb950', dot: '#3fb950', cardBorder: '#3fb950', cardBg: '#0d2818' },
   limited: { bg: '#2d1f00', text: '#d29922', dot: '#d29922', cardBorder: '#d29922', cardBg: '#1f1700' },
   unavailable: { bg: '#2d0f0f', text: '#f85149', dot: '#f85149', cardBorder: '#f85149', cardBg: '#1f0a0a' },
 };
+
+const COL_OPTIONS = [3, 4, 5] as const;
 
 // ─── Helpers ────────────────────────────────────────────────────────────────
 
@@ -117,7 +121,7 @@ function ProgressBar({ data }: { data: ModelsHealthData }) {
   );
 }
 
-// ─── Provider Card (same as before) ────────────────────────────────────────
+// ─── Provider Card ──────────────────────────────────────────────────────────
 
 function ProviderCard({ provider }: { provider: ProviderHealth }) {
   const [expanded, setExpanded] = useState(false);
@@ -260,6 +264,87 @@ function SectionHeader({ icon, title, count }: { icon: string; title: string; co
   );
 }
 
+// ─── Search Bar ─────────────────────────────────────────────────────────────
+
+function SearchBar({ value, onChange, totalCount }: { value: string; onChange: (v: string) => void; totalCount: number }) {
+  return (
+    <div style={{
+      display: 'flex', alignItems: 'center', gap: 12,
+      marginBottom: 14,
+    }}>
+      <div style={{
+        flex: 1, position: 'relative',
+        display: 'flex', alignItems: 'center',
+        background: '#161b22', borderRadius: 8,
+        border: '1px solid #30363d',
+        transition: 'border-color 0.2s',
+      }}>
+        <span style={{
+          position: 'absolute', left: 12, fontSize: 14, color: '#6e7681',
+          pointerEvents: 'none',
+        }}>🔍</span>
+        <input
+          type="text"
+          value={value}
+          onChange={(e) => onChange(e.target.value)}
+          placeholder="Search models by name or provider..."
+          style={{
+            width: '100%', padding: '10px 12px 10px 36px',
+            background: 'transparent', border: 'none',
+            color: '#e6edf3', fontSize: 13,
+            outline: 'none',
+            fontFamily: 'inherit',
+          }}
+          onFocus={(e) => { e.currentTarget.parentElement!.style.borderColor = '#58a6ff'; }}
+          onBlur={(e) => { e.currentTarget.parentElement!.style.borderColor = '#30363d'; }}
+        />
+        {value && (
+          <button
+            onClick={() => onChange('')}
+            style={{
+              background: 'none', border: 'none', color: '#6e7681',
+              cursor: 'pointer', padding: '8px 12px', fontSize: 14,
+              lineHeight: 1,
+            }}
+          >✕</button>
+        )}
+      </div>
+      <div style={{ fontSize: 12, color: '#8b949e', whiteSpace: 'nowrap' }}>
+        {totalCount} model{totalCount !== 1 ? 's' : ''}
+      </div>
+    </div>
+  );
+}
+
+// ─── Column Count Toggle ────────────────────────────────────────────────────
+
+function ColToggle({ value, onChange }: { value: number; onChange: (v: number) => void }) {
+  return (
+    <div style={{
+      display: 'flex', alignItems: 'center', gap: 8,
+      fontSize: 12, color: '#8b949e', marginBottom: 14,
+    }}>
+      <span>Columns:</span>
+      {COL_OPTIONS.map((c) => (
+        <button
+          key={c}
+          onClick={() => onChange(c)}
+          style={{
+            padding: '4px 12px', borderRadius: 6,
+            background: value === c ? '#1f6feb' : '#21262d',
+            color: value === c ? '#fff' : '#8b949e',
+            border: `1px solid ${value === c ? '#1f6feb' : '#30363d'}`,
+            cursor: 'pointer', fontSize: 12, fontWeight: value === c ? 600 : 400,
+            transition: 'all 0.15s',
+          }}
+        >
+          {c}
+        </button>
+      ))}
+    </div>
+  );
+}
+
 // ─── Model Table ─────────────────────────────────────────────────────────────
 
 function ModelCell({ model, provider }: { model: TestedModel; provider: string }) {
@@ -355,7 +440,11 @@ function ModelCell({ model, provider }: { model: TestedModel; provider: string }
 
 // ─── Models Table Section ───────────────────────────────────────────────────
 
-function ModelsGrid({ providers }: { providers: ProviderHealth[] }) {
+function ModelsGrid({ providers, colsPerRow, searchQuery }: {
+  providers: ProviderHealth[];
+  colsPerRow: number;
+  searchQuery: string;
+}) {
   // Flatten all models with their provider info
   const allModels: Array<{ model: TestedModel; provider: string }> = [];
   for (const p of providers) {
@@ -366,15 +455,25 @@ function ModelsGrid({ providers }: { providers: ProviderHealth[] }) {
 
   if (allModels.length === 0) return null;
 
+  // Filter by search query
+  let filtered = allModels;
+  if (searchQuery.trim()) {
+    const q = searchQuery.toLowerCase().trim();
+    filtered = allModels.filter(({ model, provider }) =>
+      model.name.toLowerCase().includes(q) ||
+      getProviderLabel(provider).toLowerCase().includes(q) ||
+      provider.toLowerCase().includes(q)
+    );
+  }
+
   // Sort: available first, then limited, then unavailable
   const statusOrder: Record<ModelStatus, number> = { available: 0, limited: 1, unavailable: 2 };
-  allModels.sort((a, b) => statusOrder[a.model.status] - statusOrder[b.model.status]);
+  filtered.sort((a, b) => statusOrder[a.model.status] - statusOrder[b.model.status]);
 
-  // Build table rows: each row has COLS_PER_ROW cells
-  const COLS_PER_ROW = 4;
+  // Build table rows
   const rows: Array<Array<{ model: TestedModel; provider: string }>> = [];
-  for (let i = 0; i < allModels.length; i += COLS_PER_ROW) {
-    rows.push(allModels.slice(i, i + COLS_PER_ROW));
+  for (let i = 0; i < filtered.length; i += colsPerRow) {
+    rows.push(filtered.slice(i, i + colsPerRow));
   }
 
   return (
@@ -393,21 +492,60 @@ function ModelsGrid({ providers }: { providers: ProviderHealth[] }) {
           tableLayout: 'fixed',
         }}>
           <tbody>
-            {rows.map((row, ri) => (
-              <tr key={ri}>
-                {row.map(({ model, provider }) => (
-                  <ModelCell key={`${provider}-${model.id}`} model={model} provider={provider} />
-                ))}
-                {/* Fill empty cells in last row */}
-                {row.length < COLS_PER_ROW && Array.from({ length: COLS_PER_ROW - row.length }).map((_, ei) => (
-                  <td key={`empty-${ei}`} style={{ padding: 10 }} />
-                ))}
+            {rows.length > 0 ? (
+              rows.map((row, ri) => (
+                <tr key={ri}>
+                  {row.map(({ model, provider }) => (
+                    <ModelCell key={`${provider}-${model.id}`} model={model} provider={provider} />
+                  ))}
+                  {row.length < colsPerRow && Array.from({ length: colsPerRow - row.length }).map((_, ei) => (
+                    <td key={`empty-${ei}`} style={{ padding: 10 }} />
+                  ))}
+                </tr>
+              ))
+            ) : (
+              <tr>
+                <td colSpan={colsPerRow} style={{ textAlign: 'center', padding: 40, color: '#6e7681', fontSize: 13 }}>
+                  No models match your search "{searchQuery}"
+                </td>
               </tr>
-            ))}
+            )}
           </tbody>
         </table>
       </div>
+
+      {searchQuery.trim() && filtered.length > 0 && (
+        <div style={{ textAlign: 'right', fontSize: 11, color: '#6e7681', marginTop: 4 }}>
+          Showing {filtered.length} of {allModels.length} models
+        </div>
+      )}
     </>
+  );
+}
+
+// ─── Speech Provider Section ───────────────────────────────────────────────
+
+function SpeechProviderSection() {
+  return (
+    <div style={{
+      background: '#161b22', borderRadius: 12,
+      border: '1px dashed #30363d',
+      padding: '20px 24px',
+      marginTop: 24,
+      textAlign: 'center' as const,
+    }}>
+      <div style={{ fontSize: 24, marginBottom: 8 }}>🎙️</div>
+      <div style={{ fontSize: 14, fontWeight: 600, color: '#e6edf3', marginBottom: 4 }}>
+        Speech / TTS Provider
+      </div>
+      <div style={{ fontSize: 12, color: '#6e7681' }}>
+        Speech/TTS provider support coming soon.
+        {' '}<span style={{ color: '#58a6ff', cursor: 'pointer' }}
+          onClick={() => window.open('https://github.com/imdheerajKube/agent-nuvira/issues/new', '_blank')}>
+          Request a provider
+        </span>
+      </div>
+    </div>
   );
 }
 
@@ -434,6 +572,7 @@ function Legend() {
           <span>✅ <strong>Cloud</strong> — Online providers with active API keys</span>
           <span>🏠 <strong>Local</strong> — Locally running inference servers</span>
           <span>⛔ <strong>Unavailable</strong> — Missing keys or unreachable endpoints</span>
+          <span>🎙️ <strong>Speech</strong> — Text-to-speech / speech-to-text providers (coming)</span>
         </div>
       </div>
     </div>
@@ -446,6 +585,8 @@ export default function ModelsPanel() {
   const [modelsData, setModelsData] = useState<ModelsHealthData | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const [colsPerRow, setColsPerRow] = useState(4);
+  const [searchQuery, setSearchQuery] = useState('');
   const mountedRef = useRef(true);
 
   async function fetchModels() {
@@ -480,13 +621,15 @@ export default function ModelsPanel() {
   function sortProviders(data: ModelsHealthData) {
     const available: ProviderHealth[] = [];
     const local: ProviderHealth[] = [];
+    const speech: ProviderHealth[] = [];
     const unavailable: ProviderHealth[] = [];
 
-    // Sort order for non-local providers
     const availabilityOrder: Record<ModelStatus, number> = { available: 0, limited: 1, unavailable: 2 };
 
     for (const p of data.providers) {
-      if (LOCAL_PROVIDERS.has(p.provider)) {
+      if (SPEECH_PROVIDERS.has(p.provider)) {
+        speech.push(p);
+      } else if (LOCAL_PROVIDERS.has(p.provider)) {
         local.push(p);
       } else if (p.overallStatus === 'available') {
         available.push(p);
@@ -495,12 +638,12 @@ export default function ModelsPanel() {
       }
     }
 
-    // Sort each section by status
     available.sort((a, b) => availabilityOrder[a.overallStatus] - availabilityOrder[b.overallStatus]);
     local.sort((a, b) => availabilityOrder[a.overallStatus] - availabilityOrder[b.overallStatus]);
+    speech.sort((a, b) => availabilityOrder[a.overallStatus] - availabilityOrder[b.overallStatus]);
     unavailable.sort((a, b) => availabilityOrder[a.overallStatus] - availabilityOrder[b.overallStatus]);
 
-    return { available, local, unavailable };
+    return { available, local, speech, unavailable };
   }
 
   return (
@@ -572,33 +715,50 @@ export default function ModelsPanel() {
 
           {/* ── Sectioned Provider Cards ── */}
           {(() => {
-            const { available, local, unavailable } = sortProviders(modelsData);
+            const { available, local, speech, unavailable } = sortProviders(modelsData);
 
             return (
               <>
-                {/* Section 1: Available Cloud Providers */}
                 <SectionHeader icon="✅" title="Available Cloud Providers" count={available.length} />
                 {available.map((provider) => (
                   <ProviderCard key={provider.provider} provider={provider} />
                 ))}
 
-                {/* Section 2: Local Providers */}
                 <SectionHeader icon="🏠" title="Local Providers" count={local.length} />
                 {local.map((provider) => (
                   <ProviderCard key={provider.provider} provider={provider} />
                 ))}
 
-                {/* Section 3: Unavailable Providers */}
                 <SectionHeader icon="⛔" title="Unavailable Providers" count={unavailable.length} />
                 {unavailable.map((provider) => (
+                  <ProviderCard key={provider.provider} provider={provider} />
+                ))}
+
+                {/* Speech providers (always last) */}
+                <SectionHeader icon="🎙️" title="Speech / TTS Providers" count={speech.length} />
+                {speech.map((provider) => (
                   <ProviderCard key={provider.provider} provider={provider} />
                 ))}
               </>
             );
           })()}
 
-          {/* ── Model Cards Grid ── */}
-          <ModelsGrid providers={modelsData.providers} />
+          {/* ── Search + Model Grid ── */}
+          <SearchBar
+            value={searchQuery}
+            onChange={setSearchQuery}
+            totalCount={modelsData.providers.reduce((s, p) => s + p.models.length, 0)}
+          />
+          <ColToggle value={colsPerRow} onChange={setColsPerRow} />
+
+          <ModelsGrid
+            providers={modelsData.providers}
+            colsPerRow={colsPerRow}
+            searchQuery={searchQuery}
+          />
+
+          {/* Speech provider coming-soon placeholder */}
+          <SpeechProviderSection />
 
           <div style={{ textAlign: 'center', fontSize: 12, color: '#484f58', marginTop: 16 }}>
             Last checked: {new Date(modelsData.lastChecked).toLocaleTimeString()}
