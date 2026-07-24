@@ -26,7 +26,11 @@ import ora from 'ora';
 
 import { BaseCommand } from './commands.js';
 import type { ConfigManager } from '../config/manager.js';
+import type { ProviderType } from '../config/types.js';
+import type { InferenceProvider } from '../inference/interface.js';
+import { ProviderFactory } from '../inference/factory.js';
 import { Orchestrator } from '../agents/orchestrator.js';
+import type { OrchestrationResult } from '../agents/orchestrator.js';
 import { applyActiveModel } from './model.js';
 import { showModelPicker } from './model-picker.js';
 import { resolveProvider } from './router.js';
@@ -74,6 +78,7 @@ interface DevCommandContext {
   activeProvider: string | undefined;
   sessionHistory: SessionEntry[];
   configManager: ConfigManager;
+  lastFailedGoal?: RetryGoalData | null;
 }
 
 /** Result of handling a dev-mode slash command */
@@ -82,11 +87,35 @@ interface DevCommandResult {
   newModel?: boolean;
   /** When set, the interactive loop should restore this session state */
   restore?: { provider: string; model: string; history: SessionEntry[] };
+  /** When set, the interactive loop should retry this goal with failure context */
+  fixGoal?: RetryGoalData;
 }
 
 /** Result of a single goal execution */
 interface SingleGoalResult {
   success: boolean;
+  /** The full orchestration result, available when execution completes */
+  orchestrationResult?: OrchestrationResult;
+}
+
+/** A suggested follow-up action after goal execution */
+interface FollowUpSuggestion {
+  label: string;
+  description: string;
+  /** The goal text to pre-fill if the user selects this suggestion */
+  goal: string;
+}
+
+/** Tracks the last failed goal for retry/fix */
+interface RetryGoalData {
+  goal: string;
+  orchestrationResult: OrchestrationResult;
+}
+
+/** A parsed action result from the post-execution prompt */
+interface PostExecutionAction {
+  type: 'continue' | 'switch-model' | 'history' | 'exit' | 'retry-fix' | 'followup';
+  goal?: string;
 }
 
 // ─── Pure Helpers ───────────────────────────────────────────────────────────
@@ -245,6 +274,7 @@ export class ExecuteCommand extends BaseCommand {
 
     // ── Session tracking ──────────────────────────────────────────────────
     const sessionHistory: SessionEntry[] = [];
+    let lastFailedGoal: RetryGoalData | null = null;
 
     // ── Interactive loop ───────────────────────────────────────────────────
     while (true) {
@@ -257,6 +287,7 @@ export class ExecuteCommand extends BaseCommand {
           activeProvider,
           sessionHistory,
           configManager: this.configManager,
+          lastFailedGoal,
         });
         if (handled.exit) break;
         if (handled.newModel) {
@@ -281,38 +312,56 @@ export class ExecuteCommand extends BaseCommand {
           logger.success(`\n✅ Restored ${handled.restore.history.length} goal(s) from session`);
           console.log('');
         }
+        if (handled.fixGoal) {
+          // /fix: retry the last failed goal with failure context
+          logger.highlight('═'.repeat(60));
+          logger.highlight('  🔧  Retrying Last Failed Goal');
+          logger.highlight('═'.repeat(60));
+          console.log(`\n  Goal: ${handled.fixGoal.goal}`);
+          console.log(`  Applying failure context to guide the repair...`);
+          console.log('');
+
+          const fixResult = await this.runSingleGoal(
+            handled.fixGoal.goal,
+            activeProvider,
+            activeModel,
+            { ...options, verbose: true },
+          );
+          // Process the fix result through the shared post-execution handler
+          // (same as retry-fix does) so the user sees failure analysis / follow-ups
+          const fixPostExec = await this.handlePostExecution(
+            handled.fixGoal.goal,
+            fixResult,
+            sessionHistory,
+            lastFailedGoal,
+            activeProvider,
+            activeModel,
+            options,
+          );
+          lastFailedGoal = fixPostExec.updatedLastFailed;
+          continue;
+        }
         continue;
       }
 
       const result = await this.runSingleGoal(goal, activeProvider, activeModel, options);
 
-      // Track executed goal with actual success/failure
-      sessionHistory.push({
+      // ── Process the result through the shared post-execution handler ──
+      const { action: nextAction, updatedLastFailed } = await this.handlePostExecution(
         goal,
-        success: result.success,
-        summary: result.success ? `Completed: ${goal.slice(0, 80)}` : `Failed: ${goal.slice(0, 80)}`,
-        timestamp: Date.now(),
-      });
+        result,
+        sessionHistory,
+        lastFailedGoal,
+        activeProvider,
+        activeModel,
+        options,
+      );
+      lastFailedGoal = updatedLastFailed;
 
-      // Ask if they want to continue
-      console.log('');
-      const answer = await inquirer.prompt<{ action: string }>([
-        {
-          type: 'list',
-          name: 'action',
-          message: 'What next?',
-          prefix: '🚀',
-          choices: [
-            { name: '💡  Enter another goal', value: 'continue' },
-            { name: '🔄  Switch model', value: 'switch-model' },
-            { name: '📜  Show session history', value: 'history' },
-            { name: '🚪  Exit development mode', value: 'exit' },
-          ],
-        },
-      ]);
-      console.log('');
-
-      if (answer.action === 'switch-model') {
+      // ── Dispatch the chosen action ────────────────────────────────────
+      if (nextAction.type === 'exit') {
+        break;
+      } else if (nextAction.type === 'switch-model') {
         const picked = await showModelPicker(this.configManager);
         if (picked) {
           if (picked.provider !== activeProvider) {
@@ -322,10 +371,59 @@ export class ExecuteCommand extends BaseCommand {
           activeModel = picked.model;
           logger.success(`✅ Switched to ${activeModel}\n`);
         }
-      } else if (answer.action === 'history') {
+      } else if (nextAction.type === 'history') {
         this.showSessionHistory(sessionHistory);
-      } else if (answer.action === 'exit') {
-        break;
+      } else if (nextAction.type === 'retry-fix' && lastFailedGoal) {
+        // Auto-fix: retry the last failed goal with failure context
+        logger.highlight('═'.repeat(60));
+        logger.highlight('  🔧  Auto-fixing Last Failed Goal');
+        logger.highlight('═'.repeat(60));
+        console.log(`\n  Goal: ${lastFailedGoal.goal}`);
+        console.log(`  Applying failure context to guide the repair...`);
+        console.log('');
+
+        const fixResult = await this.runSingleGoal(
+          lastFailedGoal.goal,
+          activeProvider,
+          activeModel,
+          { ...options, verbose: true },
+        );
+        // Process the fix result through the post-execution handler too
+        const fixPostExec = await this.handlePostExecution(
+          lastFailedGoal.goal,
+          fixResult,
+          sessionHistory,
+          lastFailedGoal,
+          activeProvider,
+          activeModel,
+          options,
+        );
+        lastFailedGoal = fixPostExec.updatedLastFailed;
+      } else if (nextAction.type === 'followup') {
+        // Execute a follow-up suggestion immediately
+        logger.highlight('═'.repeat(60));
+        logger.highlight('  💡  Executing Follow-up Goal');
+        logger.highlight('═'.repeat(60));
+        console.log(`\n  ${nextAction.goal}\n`);
+
+        const followupGoal = nextAction.goal!;
+        const followupResult = await this.runSingleGoal(
+          followupGoal,
+          activeProvider,
+          activeModel,
+          options,
+        );
+        // Process the follow-up result through the post-execution handler too
+        const followupPostExec = await this.handlePostExecution(
+          followupGoal,
+          followupResult,
+          sessionHistory,
+          lastFailedGoal,
+          activeProvider,
+          activeModel,
+          options,
+        );
+        lastFailedGoal = followupPostExec.updatedLastFailed;
       }
     }
 
@@ -441,6 +539,7 @@ export class ExecuteCommand extends BaseCommand {
           'Commands:',
           '  /exit, /quit           Exit development mode',
           '  /model                 Switch to a different model',
+          '  /fix                   Retry the last failed goal with failure context',
           '  /suggest [query]       Show similar past goals from memory',
           '  /save <name>           Save current session for later resumption',
           '  /resume <name>         Resume a saved session',
@@ -468,6 +567,23 @@ export class ExecuteCommand extends BaseCommand {
           logger.info('No session history available.');
         }
         return { exit: false };
+      }
+
+      case '/fix': {
+        if (context?.lastFailedGoal) {
+          logger.highlight('═'.repeat(60));
+          logger.highlight('  🔧  Retrying Last Failed Goal');
+          logger.highlight('═'.repeat(60));
+          console.log(`\n  Goal: ${context.lastFailedGoal.goal}`);
+          console.log(`  Failure: ${context.lastFailedGoal.orchestrationResult.error || 'Unknown error'}`);
+          console.log('');
+          logger.info('  Retrying with failure context to guide the repair...');
+          console.log('');
+          return { exit: false, fixGoal: context.lastFailedGoal };
+        } else {
+          logger.info('No failed goal to fix. Run a goal that fails first.');
+          return { exit: false };
+        }
       }
 
       case '/suggest': {
@@ -688,6 +804,477 @@ export class ExecuteCommand extends BaseCommand {
     }
   }
 
+  // ─── Post-Execution Handler ───────────────────────────────────────────────
+
+  /**
+   * Shared handler for post-execution tasks:
+   * 1. Track the goal in session history
+   * 2. Update lastFailedGoal tracking (returns the updated value since params are passed by value)
+   * 3. Generate dynamic choices (analysis + follow-ups)
+   * 4. Prompt the user
+   * 5. Return the parsed action + updated lastFailedGoal
+   *
+   * Called after EVERY goal execution (main, follow-up, retry-fix)
+   * so that the interactive UX is consistent.
+   */
+  private async handlePostExecution(
+    goal: string,
+    result: SingleGoalResult,
+    sessionHistory: SessionEntry[],
+    currentLastFailed: RetryGoalData | null,
+    activeProvider: string | undefined,
+    activeModel: string | undefined,
+    options: ExecuteOptions,
+  ): Promise<{ action: PostExecutionAction; updatedLastFailed: RetryGoalData | null }> {
+    // ── Track in session history ───────────────────────────────────────
+    sessionHistory.push({
+      goal,
+      success: result.success,
+      summary: result.success ? `Completed: ${goal.slice(0, 80)}` : `Failed: ${goal.slice(0, 80)}`,
+      timestamp: Date.now(),
+    });
+
+    // ── Update lastFailedGoal tracking (returned to caller) ────────────
+    let updatedLastFailed = currentLastFailed;
+    if (!result.success && result.orchestrationResult) {
+      updatedLastFailed = {
+        goal,
+        orchestrationResult: result.orchestrationResult,
+      };
+    } else if (result.success) {
+      updatedLastFailed = null;
+    }
+
+    // ── Generate dynamic post-execution choices and prompt ─────────────
+    console.log('');
+    const actions = await this.generatePostExecutionActions(
+      result,
+      activeProvider,
+      activeModel,
+      options,
+    );
+
+    const answer = await inquirer.prompt<{ action: string }>([
+      {
+        type: 'list',
+        name: 'action',
+        message: 'What next?',
+        prefix: '🚀',
+        choices: actions,
+      },
+    ]);
+    console.log('');
+
+    // ── Parse the answer into a structured action ──────────────────────
+    let action: PostExecutionAction;
+
+    if (answer.action === 'exit') {
+      action = { type: 'exit' };
+    } else if (answer.action === 'switch-model') {
+      action = { type: 'switch-model' };
+    } else if (answer.action === 'history') {
+      action = { type: 'history' };
+    } else if (answer.action === 'retry-fix') {
+      action = { type: 'retry-fix' };
+    } else if (answer.action.startsWith('followup:')) {
+      action = {
+        type: 'followup',
+        goal: answer.action.slice('followup:'.length),
+      };
+    } else {
+      // Default: continue (enter another goal)
+      action = { type: 'continue' };
+    }
+
+    return { action, updatedLastFailed };
+  }
+
+  // ─── Dynamic Post-Execution Actions ───────────────────────────────────────
+
+  /**
+   * Generate context-aware choices for the post-execution prompt.
+   *
+   * After a SUCCESS: shows LLM-generated follow-up suggestions
+   * After a FAILURE: shows failure analysis and specific recovery options
+   * Always includes: enter another goal, switch model, history, exit
+   */
+  private async generatePostExecutionActions(
+    result: SingleGoalResult,
+    activeProvider: string | undefined,
+    activeModel: string | undefined,
+    _options: ExecuteOptions,
+  ): Promise<Array<{ name: string; value: string }>> {
+    const actions: Array<{ name: string; value: string }> = [];
+
+    if (result.success && result.orchestrationResult) {
+      // ── Success: Show follow-up suggestions ─────────────────────────
+      const followups = await this.generateFollowUpSuggestions(
+        result.orchestrationResult,
+        activeProvider,
+        activeModel,
+      );
+
+      if (followups.length > 0) {
+        // Show top 3 follow-up suggestions
+        const shown = followups.slice(0, 3);
+        for (const f of shown) {
+          const label = `💡  ${f.label}`;
+          actions.push({ name: label, value: `followup:${f.goal}` });
+        }
+        actions.push({ name: '───────────', value: 'separator' });
+      }
+
+      actions.push({ name: '💬  Enter another goal', value: 'continue' });
+    } else {
+      // ── Failure: Show analysis + recovery options ───────────────────
+      if (result.orchestrationResult) {
+        const analysis = this.analyzeFailure(result.orchestrationResult);
+        this.showFailureAnalysis(analysis);
+
+        // Add specific recovery actions based on failure analysis
+        for (const recovery of analysis.recoveryActions) {
+          actions.push({ name: recovery.label, value: recovery.action });
+        }
+
+        actions.push({ name: '───────────', value: 'separator' });
+      } else {
+        // Orchestration threw an exception — we have no agent-level detail
+        logger.highlight('═'.repeat(60));
+        logger.highlight('  ❌  Execution Failed');
+        logger.highlight('═'.repeat(60));
+        console.log('');
+        logger.error('  The pipeline threw an unexpected error before producing results.');
+        console.log('');
+        logger.info('  💡  Try:');
+        logger.info('     • Checking your provider/model configuration');
+        logger.info('     • Rephrasing the goal more simply');
+        logger.info('     • Running with --verbose to see more details');
+        console.log('');
+      }
+
+      actions.push({ name: '📝  Enter a new goal', value: 'continue' });
+    }
+
+    // ── Standard actions (always available) ─────────────────────────────
+    actions.push({ name: '🔄  Switch provider/model', value: 'switch-model' });
+    actions.push({ name: '📜  Show session history', value: 'history' });
+    actions.push({ name: '🚪  Exit development mode', value: 'exit' });
+
+    return actions;
+  }
+
+  /**
+   * LLM-powered follow-up suggestion generator.
+   *
+   * Uses the current provider to generate contextually relevant next steps
+   * based on what was just accomplished. Falls back to rule-based suggestions
+   * if the LLM call fails.
+   */
+  private async generateFollowUpSuggestions(
+    result: OrchestrationResult,
+    activeProvider: string | undefined,
+    activeModel: string | undefined,
+  ): Promise<FollowUpSuggestion[]> {
+    // ── Rule-based fallback suggestions ─────────────────────────────────
+    const fallbackSuggestions = (): FollowUpSuggestion[] => {
+      const goal = result.goal.toLowerCase();
+      const fileChanges = (result.fileChanges || '').toLowerCase();
+      const ranCommands = (result.runOutput || '').toLowerCase();
+      const suggestions: FollowUpSuggestion[] = [];
+
+      // Detect what was accomplished and suggest next steps
+      if (goal.includes('test') || goal.includes('testing')) {
+        suggestions.push({
+          label: '🧪  Run the tests',
+          description: 'Run the tests to verify everything passes',
+          goal: `Run the test suite to verify everything works`,
+        });
+      }
+
+      if (fileChanges.includes('.py') || fileChanges.includes('python')) {
+        suggestions.push({
+          label: '🐍  Add Python type hints',
+          description: 'Add type annotations to the Python code',
+          goal: `Add type hints to the Python files to improve code quality`,
+        });
+      }
+
+      if (fileChanges.includes('.ts') || fileChanges.includes('typescript') ||
+          fileChanges.includes('.js') || fileChanges.includes('javascript')) {
+        suggestions.push({
+          label: '📖  Add JSDoc/TSDoc comments',
+          description: 'Document the code with JSDoc or TSDoc comments',
+          goal: `Add documentation comments to the code`,
+        });
+        suggestions.push({
+          label: '🧪  Add unit tests',
+          description: 'Write unit tests for the new code',
+          goal: `Add comprehensive unit tests for the code that was just created`,
+        });
+      }
+
+      if (fileChanges.includes('route') || fileChanges.includes('api') ||
+          fileChanges.includes('endpoint') || fileChanges.includes('express')) {
+        suggestions.push({
+          label: '🔒  Add input validation',
+          description: 'Validate API inputs and add error handling',
+          goal: `Add input validation and proper error handling to the API endpoints`,
+        });
+      }
+
+      if (ranCommands.includes('error') || ranCommands.includes('fail')) {
+        suggestions.push({
+          label: '🔧  Fix the execution errors',
+          description: 'Debug and fix the errors from the last run',
+          goal: `Fix the errors encountered during execution: ${result.runOutput?.slice(0, 200) || ''}`,
+        });
+      }
+
+      // Generic suggestion based on project type
+      if (result.agentResults.some((a) => a.agent === 'runner' && a.success)) {
+        suggestions.push({
+          label: '🚀  Deploy the project',
+          description: 'Set up deployment configuration',
+          goal: `Add deployment configuration for this project`,
+        });
+      }
+
+      // Limit to 3 suggestions
+      return suggestions.slice(0, 3);
+    };
+
+    // ── Try LLM-powered suggestions ─────────────────────────────────────
+    try {
+      const config = this.configManager.getAll();
+      const type = (activeProvider ||
+        config.defaultProvider || 'groq') as ProviderType;
+      const { config: providerConfig } = this.configManager.getProviderConfig(type);
+
+      const provider: InferenceProvider = ProviderFactory.createProvider(type, providerConfig);
+
+      const model = activeModel || 'default';
+
+      const prompt = [
+        'Given the following goal execution result, suggest 2-3 short follow-up goals',
+        'that build on what was just accomplished. Be specific and actionable.',
+        '',
+        '## Goal',
+        result.goal,
+        '',
+        `## Status: ${result.success ? 'SUCCESS' : 'FAILURE'}`,
+        '',
+        '## Agent Results',
+        ...result.agentResults.map((a) => `  ${a.agent}: ${a.success ? '✅' : '❌'} ${a.summary.slice(0, 120)}`),
+        '',
+        result.fileChanges && result.fileChanges !== 'No files changed.'
+          ? `## File Changes\n${result.fileChanges}`
+          : '',
+        '',
+        'Respond with ONLY a JSON array of objects, each with keys:',
+        '  - "label": A short action label (max 40 chars)',
+        '  - "description": A brief description (max 80 chars)',
+        '  - "goal": The full follow-up goal text (max 200 chars)',
+        '',
+        'Example:',
+        '[{"label":"Add error handling","description":"Handle edge cases and errors","goal":"Add comprehensive error handling to the API routes"}]',
+        '',
+        'Return ONLY the JSON array, no other text.',
+      ].filter(Boolean).join('\n');
+
+      const response = await provider.generate(prompt, {
+        model,
+        temperature: 0.3,
+        maxTokens: 1024,
+      });
+
+      // Parse JSON response
+      const jsonMatch = response.match(/\[[\s\S]*\]/);
+      if (jsonMatch) {
+        const parsed = JSON.parse(jsonMatch[0]) as Array<{
+          label: string;
+          description: string;
+          goal: string;
+        }>;
+
+        if (Array.isArray(parsed) && parsed.length > 0) {
+          return parsed.slice(0, 3).map((s) => ({
+            label: s.label.replace(/^[\U0001F300-\U0001F9FF\s]*/, '').trim() || s.label,
+            description: s.description,
+            goal: s.goal,
+          }));
+        }
+      }
+    } catch {
+      // LLM failed — use fallback
+    }
+
+    return fallbackSuggestions();
+  }
+
+  /**
+   * Analyze a failed orchestration result to determine what went wrong
+   * and suggest recovery actions.
+   */
+  private analyzeFailure(result: OrchestrationResult): {
+    failedAgents: Array<{ agent: string; error: string }>;
+    failureType: 'planner' | 'writer' | 'runner' | 'tester' | 'debugger' | 'reviewer' | 'other';
+    recoveryActions: Array<{ label: string; action: string }>;
+    advice: string;
+  } {
+    const failedAgents = result.agentResults
+      .filter((a) => !a.success)
+      .map((a) => ({ agent: a.agent, error: a.summary.slice(0, 200) }));
+
+    const firstFailed = failedAgents[0];
+    let failureType: string = 'other';
+    let advice = '';
+    const recoveryActions: Array<{ label: string; action: string }> = [];
+
+    if (!firstFailed) {
+      // Pipeline error (not agent-level)
+      failureType = 'other';
+      advice = result.error || 'Unknown error occurred';
+      recoveryActions.push({
+        label: '📝  Retry with a clearer goal description',
+        action: 'continue',
+      });
+    } else {
+      const agentType = firstFailed.agent.toLowerCase();
+      const error = firstFailed.error.toLowerCase();
+
+      if (agentType === 'planner') {
+        failureType = 'planner';
+        advice = 'The Planner agent could not create a valid execution plan. ' +
+          'This often happens when the goal is too vague or the project context is unclear.';
+        recoveryActions.push({
+          label: '📝  Rephrase the goal more specifically',
+          action: 'continue',
+        });
+        recoveryActions.push({
+          label: '🔄  Switch to a more capable model',
+          action: 'switch-model',
+        });
+      } else if (agentType === 'writer') {
+        failureType = 'writer';
+        advice = 'The Writer agent failed to generate the code. ' +
+          'This could be due to context limits, model quality, or an overly complex request.';
+        recoveryActions.push({
+          label: '🔄  Switch to a more capable model and retry',
+          action: 'switch-model',
+        });
+        recoveryActions.push({
+          label: '📝  Simplify the goal and retry',
+          action: 'continue',
+        });
+      } else if (agentType === 'runner') {
+        failureType = 'runner';
+        advice = 'The Runner agent executed a command that failed. ' +
+          'This is usually a code or environment issue, not an AI issue.';
+        if (error.includes('command not found') || error.includes('not found') || error.includes('no such')) {
+          advice += '\n  → The command or tool was not found. Check if the required dependency is installed.';
+        } else if (error.includes('syntax') || error.includes('error')) {
+          advice += '\n  → The command produced an error. The generated code may have issues.';
+        }
+        recoveryActions.push({
+          label: '🔧  Fix the issue and rerun',
+          action: 'continue',
+        });
+        recoveryActions.push({
+          label: '🔄  Try with --skip-tests to bypass the runner',
+          action: 'continue',
+        });
+      } else if (agentType === 'tester') {
+        failureType = 'tester';
+        advice = 'The Tester agent ran tests that failed. ' +
+          'The generated code may have bugs or the test expectations may be wrong.';
+        recoveryActions.push({
+          label: '🐛  Debug the failing tests',
+          action: 'continue',
+        });
+        recoveryActions.push({
+          label: '🔄  Retry with --skip-tests',
+          action: 'continue',
+        });
+      } else if (agentType === 'debugger') {
+        failureType = 'debugger';
+        advice = 'The Debugger agent attempted to fix issues but failed. ' +
+          'Try providing more specific guidance about what needs to be fixed.';
+        recoveryActions.push({
+          label: '📝  Specify the exact error and retry',
+          action: 'continue',
+        });
+        recoveryActions.push({
+          label: '🔄  Switch model for better debugging',
+          action: 'switch-model',
+        });
+      } else if (agentType === 'reviewer' || agentType === 'context-gatherer') {
+        failureType = agentType as any;
+        advice = `The ${agentType} agent failed. This is unusual and may indicate` +
+          ' a provider or context issue.';
+        recoveryActions.push({
+          label: '🔄  Retry with a different model',
+          action: 'switch-model',
+        });
+      } else {
+        failureType = 'other';
+        advice = `The ${firstFailed.agent} agent failed: ${firstFailed.error.slice(0, 200)}`;
+        recoveryActions.push({
+          label: '📝  Retry with a clearer goal',
+          action: 'continue',
+        });
+      }
+
+      // Add retry with failure context option for most failure types
+      if (failureType !== 'planner' && failureType !== 'runner') {
+        recoveryActions.push({
+          label: `🔧  Auto-fix: Retry "${result.goal.slice(0, 40)}${result.goal.length > 40 ? '...' : ''}"`,
+          action: 'retry-fix',
+        });
+      }
+    }
+
+    return {
+      failedAgents,
+      failureType: failureType as any,
+      recoveryActions,
+      advice,
+    };
+  }
+
+  /**
+   * Display a concise failure analysis to the user.
+   */
+  private showFailureAnalysis(analysis: {
+    failedAgents: Array<{ agent: string; error: string }>;
+    failureType: string;
+    advice: string;
+    recoveryActions: Array<{ label: string; action: string }>;
+  }): void {
+    logger.highlight('═'.repeat(60));
+    logger.highlight('  ❌  Failure Analysis');
+    logger.highlight('═'.repeat(60));
+
+    console.log('');
+    for (const fa of analysis.failedAgents) {
+      const icon =
+        fa.agent.toLowerCase() === 'planner' ? '📋' :
+        fa.agent.toLowerCase() === 'writer' ? '✏️' :
+        fa.agent.toLowerCase() === 'runner' ? '▶️' :
+        fa.agent.toLowerCase() === 'tester' ? '🧪' :
+        fa.agent.toLowerCase() === 'debugger' ? '🐛' :
+        fa.agent.toLowerCase() === 'reviewer' ? '👁️' :
+        fa.agent.toLowerCase() === 'context-gatherer' ? '📂' : '⚠️';
+
+      console.log(`  ${icon}  ${fa.agent} failed:`);
+      const wrapped = fa.error.length > 120 ? fa.error.slice(0, 120) + '...' : fa.error;
+      console.log(`     ${wrapped}`);
+      console.log('');
+    }
+
+    logger.info(`💡  ${analysis.advice}`);
+    console.log('');
+  }
+
   // ─── Single Goal Execution ────────────────────────────────────────────────
 
   /**
@@ -746,7 +1333,7 @@ export class ExecuteCommand extends BaseCommand {
       spinner.stop();
       console.log('');
       printOrchestrationResult(result);
-      return { success: result.success };
+      return { success: result.success, orchestrationResult: result };
     } catch (err) {
       spinner.fail('Execution failed');
       logger.error(String(err));
