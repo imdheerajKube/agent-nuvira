@@ -275,13 +275,16 @@ export class MCPClient extends EventEmitter {
     // This is a simplified implementation that uses fetch + EventSource-like polling.
     // A full implementation would use an EventSource-compatible reader.
 
-    // Test the connection
+    // Test the connection — try GET first (standard SSE), fall back if server only accepts POST
     try {
-      const response = await fetch(this.config.url);
-      if (!response.ok) {
+      const headers = { ...this.config.headers };
+      const response = await fetch(this.config.url, { headers, method: 'GET' });
+      if (response.ok || response.status === 405) {
+        // 405 means the server accepts POST only, which is fine for our implementation
+        logger.debug(`MCP[${this.config.name}]: SSE endpoint reachable at ${this.config.url}`);
+      } else {
         throw new Error(`SSE endpoint returned status ${response.status}`);
       }
-      logger.debug(`MCP[${this.config.name}]: SSE endpoint reachable at ${this.config.url}`);
     } catch (err) {
       throw new Error(`Failed to connect to SSE endpoint: ${err instanceof Error ? err.message : String(err)}`);
     }
@@ -347,7 +350,8 @@ export class MCPClient extends EventEmitter {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
-        'Accept': 'text/event-stream',
+        'Accept': 'application/json, text/event-stream',
+        ...this.config.headers,
       },
       body: raw,
     });

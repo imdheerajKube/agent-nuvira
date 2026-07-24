@@ -176,6 +176,175 @@ OpenRouter gives you access to 200+ models from OpenAI, Anthropic, Google, Meta,
 export OPENROUTER_API_KEY="sk-or-v1-xxxxxxxxxxxxxxxxxxxxxxxxxxxx"
 ```
 
+## MCP (Model Context Protocol) Configuration
+
+MCP servers extend your agent's capabilities by connecting to external tools and data sources — databases, APIs, file systems, search engines, code repositories, and more. Agent-Nuvira supports the MCP standard for discovering and invoking tools from connected servers.
+
+### Configuration Files
+
+MCP server configs are JSON files placed in '~/.buff/mcp/'. Each file defines one server connection. Files are auto-discovered at startup.
+
+```bash
+mkdir -p ~/.buff/mcp
+```
+
+### Configuration Fields
+
+| Field | Type | Required | Description |
+|-------|------|----------|-------------|
+| `name` | string | Yes | Unique name for this server connection |
+| `transport` | `"stdio"` or `"sse"` | Yes | Transport protocol (stdio for local subprocess, sse for remote HTTP) |
+| `command` | string | For stdio | The command to run (e.g., `npx`, `node`, a binary path) |
+| `args` | string[] | For stdio | Command arguments |
+| `url` | string | For sse | The SSE endpoint URL (e.g., `https://example.com/mcp`) |
+| `headers` | object | Optional | Custom HTTP headers for SSE transport (e.g., `Authorization`) |
+| `env` | object | Optional | Environment variables for the stdio subprocess |
+| `enabled` | boolean | Yes | Set to `false` to temporarily disable the server |
+
+### Transport Types
+
+#### stdio (Local Subprocess)
+
+Spawns a local process (Node.js, Python, Go binary, etc.) and communicates via stdin/stdout using JSON-RPC 2.0.
+
+```json
+{
+  "name": "filesystem",
+  "transport": "stdio",
+  "command": "npx",
+  "args": ["-y", "@modelcontextprotocol/server-filesystem", "."],
+  "enabled": true
+}
+```
+
+#### sse (Remote HTTP)
+
+Connects to a remote HTTP endpoint using Server-Sent Events (SSE). Supports custom headers for authentication.
+
+```json
+{
+  "name": "exa",
+  "transport": "sse",
+  "url": "https://websetsmcp.exa.ai/mcp",
+  "headers": {
+    "Authorization": "Bearer YOUR_EXA_API_KEY"
+  },
+  "enabled": true
+}
+```
+
+### Examples
+
+#### 1. Filesystem Server
+
+Read/write files and directories on your local machine.
+
+```json
+{
+  "name": "filesystem",
+  "transport": "stdio",
+  "command": "npx",
+  "args": ["-y", "@modelcontextprotocol/server-filesystem", "/path/to/your/project"],
+  "enabled": true
+}
+```
+
+```bash
+buff mcp connect filesystem
+buff mcp call read_file --server filesystem --args '{"path":"/path/to/file.txt"}'
+```
+
+#### 2. GitHub Server
+
+Search repositories, issues, PRs, and code on GitHub. Requires a GitHub Personal Access Token.
+
+**Setup:**
+1. Build the binary: `git clone https://github.com/github/github-mcp-server.git && cd github-mcp-server && go build -o github-mcp-server ./cmd/github-mcp-server/`
+2. Move it to your PATH: `mv github-mcp-server /usr/local/bin/`
+3. Create a GitHub PAT at https://github.com/settings/tokens
+4. Add the config below to '~/.buff/mcp/github.json'
+
+```json
+{
+  "name": "github",
+  "transport": "stdio",
+  "command": "/usr/local/bin/github-mcp-server",
+  "args": ["stdio"],
+  "env": {
+    "GITHUB_PERSONAL_ACCESS_TOKEN": "github_pat_xxxxxxxxxxxx"
+  },
+  "enabled": true
+}
+```
+
+```bash
+buff mcp connect github
+buff mcp list
+# Tools include: search_repositories, search_issues, search_code, search_pull_requests, etc.
+buff mcp call search_repositories --server github --args '{"query":"react","limit":5}'
+```
+
+#### 3. Exa WebSets Server (SSE with Bearer Auth)
+
+Search and enrich web entities (companies, people, research papers) using Exa's AI-powered search API. Uses SSE transport with Bearer token authentication.
+
+**Setup:**
+1. Get your Exa API key at https://dashboard.exa.ai
+2. Add the config below to '~/.buff/mcp/exa.json'
+
+```json
+{
+  "name": "exa",
+  "transport": "sse",
+  "url": "https://websetsmcp.exa.ai/mcp",
+  "headers": {
+    "Authorization": "Bearer YOUR_EXA_API_KEY"
+  },
+  "enabled": true
+}
+```
+
+```bash
+buff mcp connect exa
+buff mcp list
+# Tools include: create_webset, create_search, create_enrichment, list_websets, etc.
+```
+
+### CLI Commands
+
+| Command | Description |
+|---------|-------------|
+| `buff mcp list` | List all discovered MCP servers and their tools |
+| `buff mcp connect <name>` | Connect to a specific MCP server |
+| `buff mcp connect --all` | Connect to all discovered MCP servers |
+| `buff mcp call <tool> --server <name> --args '{"key":"val"}'` | Call a tool on a connected server |
+| `buff mcp info <name>` | Show detailed information for an MCP server |
+| `buff mcp refresh` | Re-discover and reconnect to all MCP servers |
+
+### Auto-Discovery with the Orchestrator
+
+When you run `buff execute`, the orchestrator automatically:
+
+1. Scans '~/.buff/mcp/' for JSON config files
+2. Connects to all enabled MCP servers
+3. Injects tool descriptions into the agent's context
+4. The planner can schedule MCP tool calls as pipeline steps
+
+### Finding More MCP Servers
+
+Browse the official MCP server directory at **[modelcontextprotocol.io/servers](https://modelcontextprotocol.io/servers)**. Popular servers include:
+
+- **Filesystem** — Read/write local files
+- **GitHub** — Repository, issue, PR, and code search
+- **PostgreSQL** — Query databases
+- **SQLite** — Query SQLite databases
+- **Brave Search** — Web search
+- **Docker** — Container management
+- **Puppeteer** — Browser automation
+- **Slack** — Channel and message access
+
+
+
 ---
 
 ## Configuration

@@ -181,6 +181,8 @@ export interface MCPServerConfig {
   args?: string[];
   /** For SSE transport: the SSE endpoint URL */
   url?: string;
+  /** Custom HTTP headers for SSE transport (e.g., Authorization) */
+  headers?: Record<string, string>;
   /** Environment variables for the stdio subprocess */
   env?: Record<string, string>;
   /** Whether this server is enabled */
