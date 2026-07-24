@@ -1,0 +1,1 @@
+{"version":3,"file":"factory.d.ts","sourceRoot":"","sources":["../../src/inference/factory.ts"],"names":[],"mappings":"AAAA,OAAO,EAAE,iBAAiB,EAAE,MAAM,gBAAgB,CAAC;AAMnD,OAAO,EAAE,YAAY,EAAE,cAAc,EAAE,MAAM,oBAAoB,CAAC;AAGlE;;;;;;GAMG;AACH,qBAAa,eAAe;IAC1B;;;;;;OAMG;IACH,MAAM,CAAC,cAAc,CAAC,IAAI,EAAE,YAAY,GAAG,MAAM,EAAE,MAAM,EAAE,cAAc,GAAG,iBAAiB;CAyB9F"}
