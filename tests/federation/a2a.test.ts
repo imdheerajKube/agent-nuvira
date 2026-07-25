@@ -283,14 +283,16 @@ describe('A2A client functions', () => {
       agentType: 'writer',
     });
 
-    // Poll for its status
+    // Poll for its status — the A2A server creates a real Orchestrator
+    // to process the task, which takes 2-15s to fail without a configured
+    // LLM provider, so use a generous timeout.
     const result = await pollTaskStatus(baseUrl, resp.taskId, 500, 30_000);
     expect(result).toBeDefined();
     expect(typeof result.success).toBe('boolean');
     expect(typeof result.summary).toBe('string');
     expect(typeof result.durationMs).toBe('number');
     expect(result.taskId).toBe(resp.taskId);
-  });
+  }, 30_000);
 
   it('pollTaskStatus throws for nonexistent task', async () => {
     await expect(
@@ -316,7 +318,7 @@ describe('A2A client functions', () => {
     expect(typeof result.success).toBe('boolean');
     expect(typeof result.durationMs).toBe('number');
     expect(result.taskId).toBeDefined();
-  });
+  }, 30_000);
 });
 
 // ─── Helpers ────────────────────────────────────────────────────────────────
