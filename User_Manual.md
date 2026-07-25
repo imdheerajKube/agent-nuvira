@@ -1,6 +1,6 @@
 # Agent-Nuvira — User Manual
 
-**Version 1.14.6 | July 2026**
+**Version 1.16.1 | August 2026**
 
 > *Agent-Nuvira: Multi-agent AI coding CLI — plan, write, review, test, and publish code with local models (Ollama) or cloud APIs (Groq, NVIDIA NIM, Google Gemini, OpenRouter).*
 
@@ -48,12 +48,16 @@ Agent-Nuvira is a **multi-agent AI coding assistant** that runs entirely from yo
 | Concept | Description |
 |---|---|
 | **Provider** | An AI model service (Groq, NVIDIA NIM, Google Gemini, OpenRouter, or local/Ollama) |
-| **Agent** | A specialized AI worker role (Planner, Writer, Reviewer, Tester, etc.) |
+| **Agent** | A specialized AI worker role (Planner, Writer, Reviewer, Tester, Runner, Debugger, etc.) |
 | **Orchestrator** | The engine that coordinates multiple agents to complete a goal |
 | **Workflow** | A predefined sequence of agent steps, configurable via YAML templates |
 | **Skill** | A reusable, parameterized script auto-extracted from successful agent trajectories |
 | **Context Pruner** | Automatic token-aware compression that prevents long chains from exceeding context windows |
 | **Model Switch** | Change inference providers mid-session without losing agent state or conversation history |
+| **Interactive Dev Mode** | `buff execute` without a goal — guided loop with model picker, session tracking, /fix, and follow-up suggestions |
+| **Session Save/Resume** | Save and restore entire development sessions with `/save <name>` and `/resume <name>` |
+| **Failure Analysis** | Automatic per-agent-type diagnosis with specific recovery actions (rephrase, switch model, auto-fix) |
+| **Follow-up Suggestions** | LLM-powered contextual next-step recommendations after goal completion |
 
 ### 1.3 Supported Platforms
 
@@ -1326,9 +1330,106 @@ rm -rf ~/.buff   # Remove all configuration and cached data
 | **Trajectory** | A record of a completed agent execution, including the goal, steps taken, and outcomes |
 | **Workflow** | A predefined YAML template defining a sequence of agent steps for a common task |
 | **Vector Store** | A database that stores embedding vectors for semantic similarity search |
+| **Interactive Dev Mode** | Guided development loop with model picker, session history, /fix, /save, /resume, /suggest |
+| **Failure Analysis** | Per-agent-type diagnosis with recovery actions — rephrase goal, switch model, or auto-fix |
+| **Follow-up Suggestions** | LLM-generated contextual recommendations for what to do next after goal completion |
+| **MCP** | Model Context Protocol — connect to external tools and data sources via stdio or SSE transport |
+| **A2A** | Agent-to-Agent protocol — standard for inter-agent communication across machines |
 
 ---
 
-> **Agent-Nuvira v1.14.6 | MIT License | Built by Dheeraj Sharma**
+## 11. Phase-Wise Feature Summary
+
+### Phase 0: Foundation — Core CLI & Provider Layer
+| Feature | Description |
+|---------|-------------|
+| **5 Inference Providers** | Groq, NVIDIA NIM, Google Gemini, OpenRouter, Local (Ollama/HuggingFace/GGML) |
+| **Unified CLI** | 25+ commands via Commander.js with shared options |
+| **Config System** | JSON config file + env vars + CLI flags priority chain |
+| **Streaming** | Real-time token-by-token output for all 5 providers |
+| **Response Caching** | SQLite-backed cache with configurable TTL |
+| **Chat Interface** | Interactive chat with conversation history and `/` commands |
+| **File Editing** | AI-assisted file editing with dry-run mode |
+| **Implementation Plans** | Codebase-aware plan generation with architecture impact analysis |
+
+### Phase 1: Quick Wins — Developer Experience
+| Feature | Description |
+|---------|-------------|
+| **Plugin System** | Programmatic API + auto-discovery from `~/.buff/plugins/` |
+| **Project Scaffolding** | `buff init` with 5 built-in templates + interactive provider wizard |
+| **Model Discovery** | `buff models` with search/filter across all providers |
+| **Model Switching** | Context-preserving provider/model switch mid-session |
+| **Cost Tracking** | Per-provider, per-session, and monthly cost dashboards |
+| **History Search** | Keyword + semantic search across past conversations |
+| **Skill Compiler** | Auto-extracts reusable patterns from trajectories into runnable skills |
+| **Context Pruner** | 5-strategy token compression for long agent chains |
+
+### Phase 2: Structural Changes — Memory & Infrastructure
+| Feature | Description |
+|---------|-------------|
+| **Vector Store** | Cosine similarity search over embedded trajectories |
+| **Trajectory Store** | Few-shot example storage with quality scoring |
+| **3-Tier Embedder** | Xenova (fast) → Python (medium) → LLM (fallback) |
+| **Workflow Marketplace** | 10 built-in templates + GitHub registry with install/publish |
+| **Model Benchmarking** | 21 standardized coding tasks with scoring and A/B comparison |
+| **Docker Sandbox** | 8 base images, resource limits, network-isolated execution |
+| **Provider Health** | `buff doctor` with color-coded status, watch mode, auto-fix |
+| **Memory Compression** | Automatic trajectory summarization with configurable retention |
+
+### Phase 3: Major Upgrades — Advanced Agent Systems
+| Feature | Description |
+|---------|-------------|
+| **VS Code Extension** | 9 commands, inline suggestions, diff viewer, agent progress panel |
+| **Agent Federation** | Multi-machine collaboration via A2A protocol, server, and client |
+| **Web Dashboard** | React + Recharts + DAG visualization, model health, cost charts |
+| **Hybrid Model Routing** | Complexity-based model selection with cost optimization |
+| **Team Collaboration** | Git-synced shared config, memory, and review pipelines |
+| **Agent SDK** | `@agent-nuvira/sdk` npm package with scaffolding CLI |
+| **Provider CLI** | `buff provider list/health` with per-provider diagnostics |
+| **Provider Fallback** | Auto-failover with circuit breaker and configurable chain |
+| **Security Scanner** | Detects PII, prompt injections, and dangerous code patterns |
+| **Feedback System** | `buff feedback record/list/stats/clear` drives self-improvement |
+| **Marketplace CLI** | Unified `buff marketplace browse/search/install/info` |
+
+### Phase 4: Industry Standards — Protocol & Integration
+| Feature | Description |
+|---------|-------------|
+| **MCP Protocol** | Model Context Protocol client/manager with stdio + SSE transport |
+| **AST Editing Engine** | Structural code analysis for JS/TS/Python/Go/Rust |
+| **Auto Error-Repair** | Automatic diagnosis and repair with configurable retry budgets |
+| **A2A Protocol** | Agent-to-Agent communication standard for federation |
+| **CI/CD Headless** | `buff ci` for automated pipelines with GitHub Actions |
+| **npm Publishing** | `npx agent-nuvira` / `npx buff` for zero-setup onboarding |
+
+### Phase 5: Interactive UX — Developer Experience
+| Feature | Description |
+|---------|-------------|
+| **Interactive Dev Mode** | Guided loop with model picker, session management, and goal tracking |
+| **Session Save/Resume** | Save and restore development sessions with full history |
+| **Failure Analysis** | Per-agent-type diagnosis with specific recovery actions |
+| **Follow-up Suggestions** | LLM-powered contextual next-step recommendations |
+| **/fix Command** | Retry last failed goal with failure context |
+
+### Agent Catalog — 15 Agent Roles & Management
+| Agent/Component | Type | Description |
+|-----------------|------|-------------|
+| **PlannerAgent** | Core | Analyzes goals, creates dependency-aware task plans |
+| **ContextGathererAgent** | Core | Scans codebase, identifies relevant files and artifacts |
+| **WriterAgent** | Core | Implements code changes based on plan and gathered context |
+| **ReviewerAgent** | Core | Validates changes for bugs, security, and style |
+| **RunnerAgent** | Execution | Executes shell commands and captures output |
+| **TesterAgent** | Testing | Runs tests in sandboxed temp directory or Docker container |
+| **DebuggerAgent** | Testing | Iteratively diagnoses and fixes test failures via LLM |
+| **GitAgent** | Publishing | Creates branches, commits with LLM messages, generates PR descriptions |
+| **PackageAgent** | Publishing | Bumps version, builds, publishes to npm, generates changelogs |
+| **GitHubReleaseAgent** | Publishing | Creates tags, release notes, and GitHub releases via `gh` CLI or API |
+| **SecurityAgent** | Safety | Scans for PII, prompt injection, and dangerous code patterns |
+| **SkillRunnerAgent** | Learning | Executes compiled skill scripts as pre-built task plans |
+| **MCPAgent** | Integration | Invokes MCP tools from connected servers via stdio or SSE transport |
+| **Orchestrator** | Management | Coordinates all agents with dependency-aware scheduling, parallel execution, context pruning, and interactive recovery |
+
+---
+
+> **Agent-Nuvira v1.16.1 | MIT License | Built by Dheeraj Sharma**
 > 
 > *[github.com/imdheerajKube/agent-nuvira](https://github.com/imdheerajKube/agent-nuvira)*

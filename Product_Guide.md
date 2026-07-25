@@ -1,6 +1,6 @@
 # Agent-Nuvira — Technical Product Guide
 
-**Version 1.14.6 | July 2026**
+**Version 1.16.1 | August 2026**
 
 > *A comprehensive technical overview of Agent-Nuvira: architecture, features, version history, and market readiness for investors, stakeholders, and technical reviewers.*
 
@@ -31,7 +31,7 @@ Unlike cloud-dependent coding assistants, Agent-Nuvira is **fully offline-capabl
 
 | Factor | Agent-Nuvira | Typical Competitors |
 |---|---|---|
-| **Architecture** | Multi-agent orchestration (10+ agent roles) | Single-agent chat |
+| **Architecture** | Multi-agent orchestration (15 agent roles + management) | Single-agent chat |
 | **Provider Choice** | 5 providers + plugin system | Vendor-locked |
 | **Offline Capability** | ✅ Full offline with local models | ❌ Cloud-dependent |
 | **Data Privacy** | Direct-to-provider or local-only | Routes through intermediary server |
@@ -46,6 +46,10 @@ Unlike cloud-dependent coding assistants, Agent-Nuvira is **fully offline-capabl
 | **Model Switching** | ✅ Context-preserving mid-session switching | ❌ Restart required |
 | **Project Scaffolding** | ✅ 5 built-in templates with provider wizard | ❌ Manual setup |
 | **Docker Deployment** | ✅ 5-minute containerized onboarding | ❌ Manual environment setup |
+| **Interactive Dev Mode** | ✅ Guided loop with session save/resume, failure analysis, suggestions | ❌ Static goal-in-goal-out |
+| **Auto Error Repair** | ✅ Diagnosis & retry budgets for test failures | ❌ Manual debugging |
+| **A2A Protocol** | ✅ Agent-to-Agent communication for federation | ❌ No standard |
+| **MCP Integration** | ✅ Model Context Protocol with stdio + SSE transport | ❌ No protocol support |
 
 ### 1.3 Market Position
 
@@ -107,7 +111,7 @@ Agent-Nuvira occupies a unique position in the AI developer tools landscape:
 
 ### 2.2 Multi-Agent Orchestration Engine
 
-The orchestrator is the brain of the system. It coordinates 10+ specialized agents:
+The orchestrator is the brain of the system. It coordinates 15 specialized agents and management components:
 
 ```
 User: "add JWT authentication to the Express app"
@@ -179,6 +183,8 @@ User: "add JWT authentication to the Express app"
 - **Dependency-Aware:** The orchestrator builds a dependency graph and schedules accordingly
 - **Retry Logic:** Each agent has built-in retry with exponential backoff (3 attempts)
 - **Error Recovery:** Rate limits, auth failures, and server errors trigger interactive recovery
+- **Interactive Dev Mode:** `buff execute` without a goal launches a guided loop with model picker, session tracking, failure analysis, follow-up suggestions, and /fix command
+- **Session Save/Resume:** Save development sessions with `/save <name>` and restore with `/resume <name>` — full history and model state preserved
 
 ### 2.3 Memory System Architecture
 
@@ -428,6 +434,16 @@ src/web-dashboard/              # React web dashboard
 | 43 | **Marketplace Unified CLI** | ✅ Complete | NextLevel | `buff marketplace browse/search/install/info` — unified plugin + template discovery |
 | 44 | **CI/CD Headless Mode** | ✅ Complete | Phase 4 | `buff ci execute/check/review` — structured JSON output, GitHub Actions annotations, exit codes for CI pipelines |
 | 45 | **npm Publishing** | ✅ Published (v1.15.0) | Phase 4 | `npx buff` / `npx agent-nuvira` live on npm — 483 files, 1.3 MB, zero-setup onboarding |
+| 46 | **Interactive Dev Mode** | ✅ Complete | Phase 5 | `buff execute` without goal — guided loop, session save/resume, /suggest, /history |
+| 47 | **Session Persistence** | ✅ Complete | Phase 5 | `/save <name>` / `/resume <name>` — full history, model, and provider across restarts |
+| 48 | **Failure Analysis** | ✅ Complete | Phase 5 | Per-agent-type diagnosis with specific recovery actions (rephrase, switch model, auto-fix) |
+| 49 | **Follow-up Suggestions** | ✅ Complete | Phase 5 | LLM-powered contextual next-step recommendations after goal completion |
+| 50 | **/fix Command** | ✅ Complete | Phase 5 | Retry last failed goal with failure context — shows post-execution analysis |
+| 51 | **MCP SSE Transport** | ✅ Complete | Phase 4.1 | Server-Sent Events transport for remote MCP connections with Bearer auth |
+| 52 | **Firecrawl Integration** | ✅ Complete | Phase 4.1 | Web search and scraping via Firecrawl MCP server |
+| 53 | **Auto Error-Repair Engine** | ✅ Complete | Phase 4.3 | Automatic diagnosis and repair of test failures with configurable retry budgets |
+| 54 | **A2A Protocol** | ✅ Complete | Phase 4.4 | Agent-to-Agent communication standard for multi-machine collaboration |
+| 55 | **Enhanced Test Coverage** | ✅ Complete | Phase 5 | 1830+ tests across 55 test files — failure analysis, follow-ups, handlePostExecution |
 
 ### 3.2 Key Upgrades & Enhancements
 
@@ -772,8 +788,17 @@ options:
 | **v1.14.4** | | Rate-limit header parsing for accurate Amber/Green status |
 | **v1.14.5** | | /exit process termination fix |
 | **v1.14.6** | | Skill Compiler, Context Pruner, Model Switching, Docker, `buff init` |
+| **v1.15.0** | Aug 2026 | npm publishing — `npx agent-nuvira` / `npx buff` live on npm |
+| **v1.15.1** | Aug 2026 | Interactive dev mode — model picker, session tracking, /save / /resume, /suggest |
+| **v1.15.2** | Aug 2026 | Windows compatibility fixes for runner and sandbox |
+| **v1.15.3** | Aug 2026 | Accessibility fix — `window.open` to native `<a>` tags |
+| **v1.15.4** | Aug 2026 | Search/filter bar, column count toggle, speech provider section |
+| **v1.15.5** | Aug 2026 | SSE header support for MCP |
+| **v1.15.6** | Aug 2026 | Firecrawl integration for web search |
+| **v1.16.0** | Aug 2026 | Comprehensive MCP README docs, SSE header support, Firecrawl integration |
+| **v1.16.1** | Aug 2026 | Interactive dev mode enhancements — failure analysis, follow-up suggestions, /fix command, 35 new unit tests |
 
-### 5.2 Detailed Changelog (v1.14.x)
+### 5.2 Detailed Changelog (v1.14.x – v1.16.x)
 
 #### v1.14.6 — Skill Compiler, Context Pruner, Model Switching, Docker, `buff init`
 - **Feature:** Skill Compiler — auto-extracts reusable patterns from successful trajectories into parameterized skill scripts
@@ -826,8 +851,8 @@ options:
 
 | Metric | Value |
 |---|---|
-| **Total tests** | 1620 |
-| **Test files** | 47 |
+| **Total tests** | 1830+ |
+| **Test files** | 55 |
 | **Test framework** | Vitest 4.1 |
 | **TypeScript** | Strict mode |
 | **CI/CD** | GitHub Actions (Linux, Windows, macOS) |
@@ -869,7 +894,7 @@ options:
 | Gate | Requirement | Status |
 |---|---|---|
 | TypeScript strict compilation | `tsc --noEmit` passes | ✅ |
-| Full test suite | 1620 tests pass | ✅ |
+| Full test suite | 1830+ tests pass | ✅ |
 | Lint (planned) | ESLint / Prettier | 🟡 In progress |
 | CI (Linux) | GitHub Actions | ✅ |
 | CI (Windows) | GitHub Actions | ✅ |
@@ -880,7 +905,7 @@ options:
 
 ## 7. Completed Roadmap
 
-All 25 planned phases have been implemented as of **July 2026**. See [UPGRADE_ROADMAP.md](./UPGRADE_ROADMAP.md) for the full implementation journey.
+All 30 planned phases have been implemented as of **August 2026**. See [UPGRADE_ROADMAP.md](./UPGRADE_ROADMAP.md) for the full implementation journey.
 
 ### 7.1 Phase 1: Quick Wins (8 items, all ✅ Complete)
 
@@ -922,7 +947,28 @@ All 25 planned phases have been implemented as of **July 2026**. See [UPGRADE_RO
 | 3.10 | **Feedback & Rating System** | `buff feedback record/list/stats/clear` lifecycle |
 | 3.11 | **Marketplace Unified CLI** | `buff marketplace browse/search/install/info` — unified discovery |
 
-All 25 phases are complete. Future work will focus on polishing, community building, and enterprise features.
+### 7.4 Phase 4: Industry Standards (6 items, all ✅ Complete)
+
+| # | Feature | Description |
+|---|---|---|
+| 4.1 | **MCP Protocol Integration** | Model Context Protocol client/manager with stdio + SSE transport + Firecrawl |
+| 4.2 | **AST-Aware Code Editing** | Structural analysis engine for JS/TS/Python/Go/Rust |
+| 4.3 | **Auto Error-Repair Engine** | Automatic diagnosis and repair of test failures with retry budgets |
+| 4.4 | **A2A Protocol** | Agent-to-Agent communication standard for inter-agent coordination |
+| 4.5 | **CI/CD Headless Mode** | `buff ci` with structured JSON output and GitHub Actions integration |
+| 4.6 | **npm Publishing** | `npx agent-nuvira` / `npx buff` — zero-setup one-line onboarding |
+
+### 7.5 Phase 5: Interactive UX (5 items, all ✅ Complete)
+
+| # | Feature | Description |
+|---|---|---|
+| 5.1 | **Interactive Dev Mode** | `buff execute` without goal — model picker, guided loop, session tracking |
+| 5.2 | **Session Save/Resume** | `/save <name>` / `/resume <name>` — full history and model state across restarts |
+| 5.3 | **Failure Analysis** | Per-agent-type diagnosis with specific recovery actions (rephrase, switch model, auto-fix) |
+| 5.4 | **Follow-up Suggestions** | LLM-powered contextual next-step recommendations after goal execution |
+| 5.5 | **/fix Command** | Retry last failed goal with failure context — shows post-execution analysis |
+
+All 30 phases are complete. Future work will focus on polishing, community building, and enterprise features.
 
 ---
 
@@ -932,9 +978,9 @@ All 25 phases are complete. Future work will focus on polishing, community build
 
 Agent-Nuvira has evolved from a single-agent CLI to a comprehensive multi-agent AI coding platform with:
 
-- **10+ specialized AI agents** working in orchestrated pipelines
+- **15 specialized AI agents** working in orchestrated pipelines (Planner, Writer, Reviewer, Tester, Debugger, Runner, Git, Package, GitHubRelease, Security, SkillRunner, MCP, ContextGatherer, Agent, Orchestrator)
 - **5 inference providers** with a plugin system for unlimited expansion
-- **1620 automated tests** ensuring reliability across 47 test files
+- **1830+ automated tests** ensuring reliability across 55 test files
 - **Full cross-platform support** (Windows, macOS, Linux) with CI validation
 - **Self-learning engine** that improves system performance over time
 - **Web dashboard** with real-time visualization of all system components
@@ -946,7 +992,7 @@ Agent-Nuvira has evolved from a single-agent CLI to a comprehensive multi-agent 
 | Indicator | Current State |
 |---|---|
 | **Architecture** | Modular, clean separation of concerns (6 major subsystems) |
-| **Code Quality** | TypeScript strict mode, 47 test files, 1620 passing tests |
+| **Code Quality** | TypeScript strict mode, 55 test files, 1830+ passing tests |
 | **Scalability** | Plugin system supports unlimited providers; federation enables multi-machine |
 | **Security** | Built-in injection detection, secret scanning, sandboxed execution |
 | **Documentation** | README, User Manual, Product Guide, SDK docs, inline code comments |
@@ -988,7 +1034,7 @@ Agent-Nuvira has evolved from a single-agent CLI to a comprehensive multi-agent 
 
 ---
 
-> **Agent-Nuvira v1.14.6 | MIT License | Built by Dheeraj Sharma**
+> **Agent-Nuvira v1.16.1 | MIT License | Built by Dheeraj Sharma**
 > 
 > Repository: [github.com/imdheerajKube/agent-nuvira](https://github.com/imdheerajKube/agent-nuvira)
 > 

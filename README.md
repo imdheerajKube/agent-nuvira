@@ -47,8 +47,16 @@ agent-nuvira config list
 - **Security scan CLI** — `buff security scan` detects PII, prompt injections, and dangerous code patterns
 - **Feedback & rating system** — `buff feedback record/list/stats/clear` drives self-improvement scoring
 - **Marketplace unified CLI** — `buff marketplace browse/search/install/info` for workflow templates + plugins
-- **MCP (Model Context Protocol) integration** — connect to databases, APIs, and file systems via MCP servers
+- **MCP (Model Context Protocol) integration** — connect to databases, APIs, and file systems via MCP servers with SSE transport support
 - **AST-aware code editing** — structural analysis engine understands functions, classes, methods across JS/TS/Python/Go/Rust
+- **Auto error-repair engine** — automatic diagnosis and repair of test failures with configurable retry budgets
+- **A2A (Agent-to-Agent) Protocol** — inter-agent communication standard for multi-machine collaboration
+- **CI/CD headless mode** — `buff ci` for automated pipelines with GitHub Actions integration
+- **npm publishing & one-line install** — `npx agent-nuvira` and `npx buff` for zero-setup onboarding
+- **Interactive development mode** — `buff execute` without a goal launches a guided interactive loop with session save/resume, follow-up suggestions, and failure analysis
+- **Session persistence** — save and resume development sessions across CLI restarts with full history
+- **Failure analysis** — automatic diagnosis of agent failures with specific recovery options per agent type
+- **Follow-up suggestions** — LLM-powered contextual next-step recommendations after goal completion
 - **Configuration** via JSON config file + environment variables
 - **No server dependency** — no telemetry, no subscriptions, no outbound calls to a hosted backend
 
@@ -897,17 +905,35 @@ agent-nuvira execute "migrate database schema" --context-prune aggressive
 The pruner automatically compresses the shared agent context between pipeline steps using 5 strategies: metadata stripping, file change collapsing, conversation truncation, artifact summarization, and aggressive fallback.
 
 
-The pipeline runs these agents in sequence (with parallelization where possible):
-1. **Planner** — Analyzes the goal, creates a task plan
-2. **Context Gatherer** — Scans the codebase for relevant files
-3. **Writer** — Implements the code changes
-4. **Reviewer** — Validates the changes for bugs and style (optional)
-5. **Tester** — Runs tests in a sandbox (optional)
-6. **Runner** — Executes the program to verify it works (optional)
-7. **Debugger** — Iterates on test failures (optional)
-8. **Git Agent** — Commits changes to a branch (optional)
-9. **Package Agent** — Bumps versions and generates changelogs (optional)
-10. **GitHub Release Agent** — Creates tags and releases (optional)
+The pipeline runs these agents in dependency-aware order with parallelization:
+
+| # | Agent | Type | Description |
+|---|-------|------|-------------|
+| 1 | **Planner** | Core | Analyzes the goal, creates a dependency-aware task plan |
+| 2 | **Context Gatherer** | Core | Scans the codebase for relevant files and artifacts |
+| 3 | **Security Scanner** | Safety | Scans for PII, prompt injection, and dangerous patterns |
+| 4 | **Writer** | Core | Implements the code changes based on plan and context |
+| 5 | **Reviewer** | Quality | Validates changes for bugs, security, and code style |
+| 6 | **Tester** | Testing | Runs tests in a sandboxed temp directory or Docker container |
+| 7 | **Debugger** | Testing | Iteratively diagnoses and fixes test failures via LLM |
+| 8 | **Runner** | Execution | Executes shell commands to verify the program works |
+| 9 | **MCP Agent** | Integration | Invokes external tools from connected MCP servers |
+| 10 | **Skill Runner** | Learning | Executes compiled skill scripts as pre-built task plans |
+| 11 | **Git Agent** | Publishing | Creates branches, commits with LLM-generated messages |
+| 12 | **PR Description** | Publishing | Generates PR descriptions from git diff via LLM |
+| 13 | **Package Agent** | Publishing | Bumps versions, builds, publishes to npm |
+| 14 | **GitHub Release** | Publishing | Creates tags, release notes, and GitHub releases |
+
+**Parallel execution:** Independent agents (e.g., Reviewer + Tester) run concurrently via `Promise.all()`. Exclusive agents (Runner, Debugger) get dedicated access. Results are merged with conflict resolution.
+
+**Interactive development mode:** `buff execute` without a goal launches an interactive loop with:
+- **Model picker** — Choose your provider/model interactively
+- **Session tracking** — Full history of goals executed in the session
+- **Failure analysis** — Per-agent-type diagnosis with recovery actions
+- **Follow-up suggestions** — LLM-powered contextual next steps
+- **/fix** — Retry the last failed goal with failure context
+- **/save / /resume** — Save and restore sessions across restarts
+- **/suggest** — Search past trajectories for similar goals
 
 ---
 
@@ -933,15 +959,20 @@ Adapter Adapter Adapter   Adapter      Adapter
          │       Core Pipeline          │
          │  ┌────────────────────────┐  │
          │  │   Orchestrator         │  │
-         │  │  ├─ Planner           │  │
-         │  │  ├─ ContextGather     │  │
-         │  │  ├─ Writer            │  │
-         │  │  ├─ Reviewer          │  │
-         │  │  ├─ Tester            │  │
-         │  │  ├─ Runner            │  │
-         │  │  ├─ Debugger          │  │
-         │  │  ├─ GitAgent          │  │
-         │  │  └─ SkillRunner       │  │
+         │         │  │  ├─ Planner             │  │
+         │  │  ├─ ContextGatherer    │  │
+         │  │  ├─ Writer             │  │
+         │  │  ├─ Reviewer           │  │
+         │  │  ├─ Tester             │  │
+         │  │  ├─ Runner             │  │
+         │  │  ├─ Debugger           │  │
+         │  │  ├─ GitAgent           │  │
+         │  │  ├─ PackageAgent       │  │
+         │  │  ├─ GitHubReleaseAgent │  │
+         │  │  ├─ SecurityAgent      │  │
+         │  │  ├─ SkillRunner        │  │
+         │  │  ├─ MCPAgent           │  │
+         │  │  └─ PRDescriptionAgent │  │
          │  └────────────────────────┘  │
          │                              │
          │  ┌────────────────────────┐  │
@@ -1322,11 +1353,144 @@ npx tsc --noEmit
 | 3.9 | Security scan CLI (`buff security scan`) | ✅ Complete |
 | 3.10 | Feedback & rating system (`buff feedback`) | ✅ Complete |
 | 3.11 | Marketplace unified CLI (`buff marketplace browse/search/install`) | ✅ Complete |
-| **Phase 4: Industry Standards** | *(in progress)* | |
-| 4.1 | MCP (Model Context Protocol) integration — MCP client/manager/CLI | ✅ Complete |
+| **Phase 4: Industry Standards** | | |
+| 4.1 | MCP (Model Context Protocol) — client/manager/CLI with SSE transport + Firecrawl | ✅ Complete |
 | 4.2 | AST-aware code editing — structural analysis engine (JS/TS/Python/Go/Rust) | ✅ Complete |
+| 4.3 | Auto error-repair engine — diagnosis & retry budgets for test failures | ✅ Complete |
+| 4.4 | A2A (Agent-to-Agent) Protocol — inter-agent communication standard | ✅ Complete |
+| 4.5 | CI/CD headless mode — `buff ci` with GitHub Actions integration | ✅ Complete |
+| 4.6 | npm publishing & one-line install — `npx agent-nuvira` / `npx buff` | ✅ Complete |
+| **Phase 5: Interactive UX** | | |
+| 5.1 | Interactive dev mode — guided loop with model picker, session save/resume | ✅ Complete |
+| 5.2 | Failure analysis — per-agent-type diagnosis with recovery actions | ✅ Complete |
+| 5.3 | Follow-up suggestions — LLM-powered contextual next-step recommendations | ✅ Complete |
+| 5.4 | /fix command — retry last failed goal with failure context | ✅ Complete |
+| 5.5 | Test coverage — 1830+ tests across 55 test files | ✅ Complete |
 
 ---
+
+## Version History
+
+| Version | Date | Key Changes |
+|---------|------|-------------|
+| **v1.0.0** | Apr 2026 | Initial release — Core CLI with chat, 5 providers, config, models |
+| **v1.1.0** | Apr 2026 | Model discovery with search/filter |
+| **v1.2.0** | Apr 2026 | AI-assisted file editing (edit command) |
+| **v1.3.0** | May 2026 | Implementation plans (plan command) |
+| **v1.4.0** | May 2026 | Multi-agent pipeline (execute command) with Planner, Writer, ContextGatherer |
+| **v1.5.0** | May 2026 | Additional agents — Tester, Runner, Debugger |
+| **v1.6.0** | Jun 2026 | Agent retry logic, format validation, git integration |
+| **v1.7.0** | Jun 2026 | Phase 1 features — plugin system, cost tracking, logging |
+| **v1.8.0** | Jun 2026 | Native embeddings, vector store, trajectory memory |
+| **v1.9.0** | Jul 2026 | Workflow templates, model benchmarking |
+| **v1.10.0** | Jul 2026 | Docker sandbox, provider health dashboard |
+| **v1.11.0** | Jul 2026 | Skill compiler, context pruner, model switching |
+| **v1.12.0** | Jul 2026 | VS Code extension, web dashboard, agent federation |
+| **v1.13.0** | Jul 2026 | Hybrid model routing, team collaboration, Agent SDK |
+| **v1.14.0** | Jul 2026 | Provider fallback, security scan, feedback system, marketplace CLI |
+| **v1.14.6** | Jul 2026 | Skill compiler system, context-window pruner, Docker Compose onboarding |
+| **v1.15.0** | Aug 2026 | npm publishing — `npx buff` / `npx agent-nuvira` live on npm (1.3 MB) |
+| **v1.15.1** | Aug 2026 | Interactive dev mode — model picker, session tracking, /save / /resume, /suggest |
+| **v1.15.2** | Aug 2026 | Windows compatibility fixes |
+| **v1.15.3** | Aug 2026 | Accessibility fix — `window.open` → native `<a>` tags |
+| **v1.15.4** | Aug 2026 | Search/filter bar, column count toggle, speech provider section |
+| **v1.15.5** | Aug 2026 | SSE header support for MCP |
+| **v1.15.6** | Aug 2026 | Firecrawl integration for web search |
+| **v1.16.0** | Aug 2026 | Comprehensive MCP README docs, SSE header support |
+| **v1.16.1** | Aug 2026 | Interactive dev mode enhancements — failure analysis, follow-up suggestions, /fix command, 35 new unit tests |
+
+---
+
+## Phase-Wise Feature Summary
+
+### Phase 0: Foundation — Core CLI & Provider Layer
+| Feature | Description |
+|---------|-------------|
+| **5 Inference Providers** | Groq, NVIDIA NIM, Google Gemini, OpenRouter, Local (Ollama/HuggingFace/GGML) |
+| **Unified CLI** | 25+ commands via Commander.js with shared options |
+| **Config System** | JSON config file + env vars + CLI flags priority chain |
+| **Streaming** | Real-time token-by-token output for all 5 providers |
+| **Response Caching** | SQLite-backed cache with configurable TTL |
+| **Chat Interface** | Interactive chat with conversation history and `/` commands |
+| **File Editing** | AI-assisted file editing with dry-run mode |
+| **Implementation Plans** | Codebase-aware plan generation with architecture impact analysis |
+
+### Phase 1: Quick Wins — Developer Experience
+| Feature | Description |
+|---------|-------------|
+| **Plugin System** | Programmatic API + auto-discovery from `~/.buff/plugins/` |
+| **Project Scaffolding** | `buff init` with 5 built-in templates + interactive provider wizard |
+| **Model Discovery** | `buff models` with search/filter across all providers |
+| **Model Switching** | Context-preserving provider/model switch mid-session |
+| **Cost Tracking** | Per-provider, per-session, and monthly cost dashboards |
+| **History Search** | Keyword + semantic search across past conversations |
+| **Skill Compiler** | Auto-extracts reusable patterns from trajectories into runnable skills |
+| **Context Pruner** | 5-strategy token compression for long agent chains |
+
+### Phase 2: Structural Changes — Memory & Infrastructure
+| Feature | Description |
+|---------|-------------|
+| **Vector Store** | Cosine similarity search over embedded trajectories |
+| **Trajectory Store** | Few-shot example storage with quality scoring |
+| **3-Tier Embedder** | Xenova (fast) → Python (medium) → LLM (fallback) |
+| **Workflow Marketplace** | 10 built-in templates + GitHub registry with install/publish |
+| **Model Benchmarking** | 21 standardized coding tasks with scoring and A/B comparison |
+| **Docker Sandbox** | 8 base images, resource limits, network-isolated execution |
+| **Provider Health** | `buff doctor` with color-coded status, watch mode, auto-fix |
+| **Memory Compression** | Automatic trajectory summarization with configurable retention |
+
+### Phase 3: Major Upgrades — Advanced Agent Systems
+| Feature | Description |
+|---------|-------------|
+| **VS Code Extension** | 9 commands, inline code suggestions, diff viewer, agent progress panel |
+| **Agent Federation** | Multi-machine collaboration via A2A protocol, server, and client |
+| **Web Dashboard** | React + Recharts + DAG visualization, model health, cost charts |
+| **Hybrid Model Routing** | Complexity-based model selection with cost optimization |
+| **Team Collaboration** | Git-synced shared config, memory, and review pipelines |
+| **Agent SDK** | `@agent-nuvira/sdk` npm package with scaffolding CLI |
+| **Provider CLI** | `buff provider list/health` with per-provider diagnostics |
+| **Provider Fallback** | Auto-failover with circuit breaker and configurable chain |
+| **Security Scanner** | Detects PII, prompt injections, and dangerous code patterns |
+| **Feedback System** | `buff feedback record/list/stats/clear` drives self-improvement |
+| **Marketplace CLI** | Unified `buff marketplace browse/search/install/info` |
+
+### Phase 4: Industry Standards — Protocol & Integration
+| Feature | Description |
+|---------|-------------|
+| **MCP Protocol** | Model Context Protocol client/manager with stdio + SSE transport |
+| **AST Editing Engine** | Structural code analysis for JS/TS/Python/Go/Rust |
+| **Auto Error-Repair** | Automatic diagnosis and repair with configurable retry budgets |
+| **A2A Protocol** | Agent-to-Agent communication standard for federation |
+| **CI/CD Headless** | `buff ci` for automated pipelines with GitHub Actions |
+| **npm Publishing** | `npx agent-nuvira` / `npx buff` for zero-setup onboarding |
+
+### Phase 5: Interactive UX — Developer Experience
+| Feature | Description |
+|---------|-------------|
+| **Interactive Dev Mode** | Guided loop with model picker, session management, and goal tracking |
+| **Session Save/Resume** | Save and restore development sessions with full history |
+| **Failure Analysis** | Per-agent-type diagnosis with specific recovery actions |
+| **Follow-up Suggestions** | LLM-powered contextual next-step recommendations |
+| **/fix Command** | Retry last failed goal with failure context |
+| **Graceful Error Recovery** | Rate-limit handling, auth failures, and network error recovery |
+
+### Agent Catalog — 15 Agent Roles & Management
+| Agent/Component | Type | Description |
+|-----------------|------|-------------|
+| **PlannerAgent** | Core | Analyzes goals, creates dependency-aware task plans |
+| **ContextGathererAgent** | Core | Scans codebase, identifies relevant files and artifacts |
+| **WriterAgent** | Core | Implements code changes based on plan and gathered context |
+| **ReviewerAgent** | Core | Validates changes for bugs, security, and style |
+| **RunnerAgent** | Execution | Executes shell commands and captures output |
+| **TesterAgent** | Testing | Runs tests in sandboxed temp directory or Docker container |
+| **DebuggerAgent** | Testing | Iteratively diagnoses and fixes test failures via LLM |
+| **GitAgent** | Publishing | Creates branches, commits with LLM messages, generates PR descriptions |
+| **PackageAgent** | Publishing | Bumps version, builds, publishes to npm, generates changelogs |
+| **GitHubReleaseAgent** | Publishing | Creates tags, release notes, and GitHub releases via `gh` CLI or API |
+| **SecurityAgent** | Safety | Scans for PII, prompt injection, and dangerous code patterns |
+| **SkillRunnerAgent** | Learning | Executes compiled skill scripts as pre-built task plans |
+| **MCPAgent** | Integration | Invokes MCP tools from connected servers via stdio or SSE transport |
+| **Orchestrator** | Management | Coordinates all agents with dependency-aware scheduling, parallel execution, context pruning, and interactive recovery |
 
 ## License
 
