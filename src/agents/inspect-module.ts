@@ -1,7 +1,7 @@
 /**
  * InspectModule — Scans the codebase to discover relevant files, extract
- * structural context, and identify dependencies. Phase 5 of the architecture
- * migration: wrap ContextGathererAgent in the modular InspectModule interface.
+ * structural context, and identify dependencies. Phase 6 adds LLM-based
+ * file classification with keyword-scanning fallback.
  *
  * @see ARCHITECTURE.md §3.2 — Inspect Module specification
  */
@@ -12,6 +12,7 @@ import { existsSync, readFileSync, statSync, readdirSync } from 'node:fs';
 import { getEventBus, EventNames } from '../observability/event-bus.js';
 import type { EventBus } from '../observability/event-bus.js';
 import { buildProjectFileTree, truncateTree } from './utils/file-tree.js';
+import type { LLMCallFn } from './agent.js';
 
 // ─── Types ──────────────────────────────────────────────────────────────────
 
@@ -62,6 +63,13 @@ export interface InspectParams {
   taskDescriptions?: string[];
   /** Maximum number of files to inspect (default: 10) */
   maxFiles?: number;
+  /**
+   * Optional LLM call function for LLM-based file classification.
+   * When provided, the module first asks the LLM to identify relevant
+   * files. Falls back to keyword scanning if the LLM call fails.
+   * When omitted, only keyword scanning is used.
+   */
+  callLLM?: LLMCallFn;
 }
 
 /**
@@ -132,9 +140,10 @@ export class DefaultInspectModule implements InspectModule {
 
   /**
    * Scan the codebase for files relevant to the given goal.
+   * Phase 6: Uses LLM-based classification with keyword-scanning fallback.
    */
   async inspect(params: InspectParams): Promise<InspectionResult> {
-    const { goal, workingDirectory, taskDescriptions, maxFiles = 10 } = params;
+    const { goal, workingDirectory, taskDescriptions, maxFiles = 10, callLLM } = params;
 
     // ── Emit: scanning started ───────────────────────────────────────
     this.eventBus.emit(EventNames.INSPECT_SCANNING, {
@@ -146,10 +155,40 @@ export class DefaultInspectModule implements InspectModule {
     const fileTree = await buildProjectFileTree(workingDirectory);
     const totalFiles = fileTree.split('\n').filter((l) => l.includes('📄')).length;
 
-    // 2. Use keyword scanning to identify relevant paths
-    //    (Phase 5 uses keyword scanning as the base implementation.
-    //     TODO: Phase 6 — emit INSPECT_LLM_CLASSIFY when LLM-based classification is added.)
-    const relevantPaths = this.scanByKeywords(goal, workingDirectory);
+    // 2. Identify relevant paths — try LLM first, fall back to keywords
+    let usedLlm = false;
+    let relevantPaths: string[];
+
+    if (callLLM) {
+      try {
+        relevantPaths = await this.classifyFiles({
+          goal,
+          workingDirectory,
+          fileTree,
+          callLLM,
+          taskDescriptions,
+        });
+        usedLlm = true;
+
+        // ── Emit: LLM classification completed ───────────────────────
+        this.eventBus.emit(EventNames.INSPECT_LLM_CLASSIFY, {
+          fileCount: relevantPaths.length,
+          method: 'llm',
+        }, 'inspect-module');
+      } catch {
+        // LLM call failed — fall back to keyword scanning
+        relevantPaths = this.scanByKeywords(goal, workingDirectory);
+
+        // ── Emit: LLM classification failed, using fallback ──────────
+        this.eventBus.emit(EventNames.INSPECT_LLM_CLASSIFY, {
+          fileCount: relevantPaths.length,
+          method: 'keyword-fallback',
+        }, 'inspect-module');
+      }
+    } else {
+      // No callLLM provided — use keyword scanning directly
+      relevantPaths = this.scanByKeywords(goal, workingDirectory);
+    }
 
     // Limit to maxFiles
     const limitedPaths = relevantPaths.slice(0, maxFiles);
@@ -196,9 +235,10 @@ export class DefaultInspectModule implements InspectModule {
       totalFiles,
       inspectedFiles: artifacts.length,
       errors: errors.length,
-      // Phase 5 always uses keyword scanning; Phase 6+ will set this based
-      // on whether the LLM classifier fell back to keyword matching.
-      llmFallbackUsed: true,
+      // When callLLM was provided and succeeded, LLM was used (no fallback).
+      // When callLLM was provided but failed, or when no callLLM was given,
+      // keyword scanning was used (the fallback).
+      llmFallbackUsed: !usedLlm,
     };
 
     // ── Emit: completed event ────────────────────────────────────────
@@ -240,6 +280,85 @@ export class DefaultInspectModule implements InspectModule {
       .filter((s) => s.score > 0)
       .slice(0, 10)
       .map((s) => s.path);
+  }
+
+  // ─── LLM-Based Classification ─────────────────────────────────────────
+
+  /**
+   * Use the LLM to identify files relevant to the goal.
+   * Parses the LLM response as a JSON array of file paths.
+   * Throws if parsing fails or file list is empty.
+   */
+  private async classifyFiles(params: {
+    goal: string;
+    workingDirectory: string;
+    fileTree: string;
+    callLLM: LLMCallFn;
+    taskDescriptions?: string[];
+  }): Promise<string[]> {
+    const prompt = this.buildClassifyPrompt(params);
+    const response = await params.callLLM(prompt);
+    return this.parseClassifyResponse(response);
+  }
+
+  /** Build the prompt for LLM-based file classification */
+  private buildClassifyPrompt(params: {
+    goal: string;
+    workingDirectory: string;
+    fileTree: string;
+    taskDescriptions?: string[];
+  }): string {
+    let prompt = `You are a codebase inspector. Given a project goal and its file tree, identify which files are most relevant to accomplish the goal.
+
+Goal: ${params.goal}
+
+Project file tree:
+${params.fileTree.slice(0, 2000)}
+`;
+
+    if (params.taskDescriptions && params.taskDescriptions.length > 0) {
+      prompt += `\nAdditional context — task plan steps:
+${params.taskDescriptions.map((d, i) => `  ${i + 1}. ${d}`).join('\n')}
+`;
+    }
+
+    prompt += `
+Respond with ONLY a JSON array of file paths (relative to the project root) that are most relevant to this goal. Limit to 10 files. Use the exact paths as shown in the file tree.
+
+Example: ["src/auth/login.ts", "src/auth/middleware.ts"]
+
+JSON array:`;
+
+    return prompt;
+  }
+
+  /** Parse the LLM response into an array of file paths. Throws on failure. */
+  private parseClassifyResponse(response: string): string[] {
+    // Try to extract a JSON array from the response
+    const trimmed = response.trim();
+
+    // Find the first `[` and last `]` to extract the JSON array
+    const start = trimmed.indexOf('[');
+    const end = trimmed.lastIndexOf(']');
+
+    if (start === -1 || end === -1 || end <= start) {
+      throw new Error('LLM response did not contain a JSON array');
+    }
+
+    const jsonStr = trimmed.slice(start, end + 1);
+    const paths: unknown = JSON.parse(jsonStr);
+
+    if (!Array.isArray(paths) || paths.length === 0) {
+      throw new Error('LLM returned empty or invalid file list');
+    }
+
+    // Validate all entries are strings
+    const filePaths = paths.filter((p): p is string => typeof p === 'string');
+    if (filePaths.length === 0) {
+      throw new Error('LLM returned no valid file paths');
+    }
+
+    return filePaths;
   }
 
   // ─── Private Helpers ─────────────────────────────────────────────────

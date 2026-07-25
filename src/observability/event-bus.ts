@@ -363,6 +363,16 @@ export class LoggerConsumer implements EventBusConsumer {
               if (d.directory) logger.info(`   📂 Scanning ${d.directory}`);
             }
             break;
+          case 'inspect:llm-classify':
+            if (typeof data === 'object' && data !== null) {
+              const d = data as Record<string, unknown>;
+              if (d.method === 'llm') {
+                logger.info(`   🤖 LLM classified ${d.fileCount || 0} relevant files`);
+              } else {
+                logger.info(`   📂 Keyword fallback: ${d.fileCount || 0} files matched`);
+              }
+            }
+            break;
           case 'inspect:completed':
             if (typeof data === 'object' && data !== null) {
               const d = data as Record<string, unknown>;
