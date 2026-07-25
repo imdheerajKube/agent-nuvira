@@ -205,6 +205,26 @@ export type {
   ErrorRepairOptions,
 } from './learning/error-repair.js';
 
+// ─── Phase 1 — RecoverModule (ARCHITECTURE.md §3.5) ───────────────────────────
+export { ErrorRepairRecoverModule } from './learning/recover-module.js';
+export type {
+  RecoverModule,
+  AgentFailure,
+  RecoverRepairStrategy,
+  RecoverAttempt,
+  RecoverAttemptOutcome,
+  RecoverResult,
+  ErrorClassification,
+} from './learning/recover-module.js';
+
+// ─── Phase 2 — ModuleRegistry (ARCHITECTURE.md §4.1) ───────────────────────────
+export { ModuleRegistry, ModuleNotFoundError, getModuleRegistry, resetModuleRegistry, setModuleRegistry } from './agents/module-registry.js';
+export type { AgentFactory, ModuleMetadata } from './agents/module-registry.js';
+
+// ─── Phase 3 — EventBus (ARCHITECTURE.md §4.2) ────────────────────────────────
+export { EventBus, EventNames, LoggerConsumer, DAGConsumer, TelemetryConsumer, DebugConsumer, getEventBus, resetEventBus, getEventBusConsumers } from './observability/event-bus.js';
+export type { EventRecord, EventFilter, EventHandler, EventBusConsumer, TelemetrySnapshot } from './observability/event-bus.js';
+
 // ─── Phase 4.4 — A2A Protocol exports ────────────────────────────────────────
 export { createA2AServer, startA2AServer } from './federation/a2a-server.js';
 export type { A2AServerOptions } from './federation/a2a-server.js';

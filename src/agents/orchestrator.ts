@@ -31,23 +31,14 @@ import { ContextVault } from './context-vault.js';
 import { Agent } from './agent.js';
 import type { LLMCallFn, AgentResult, TaskStep, OnRateLimit } from './agent.js';
 import { buildProjectFileTree, truncateTree } from './utils/file-tree.js';
-import { PlannerAgent } from './agents/planner.js';
-import { ContextGathererAgent } from './agents/context-gatherer.js';
-import { WriterAgent } from './agents/writer.js';
-import { ReviewerAgent } from './agents/reviewer.js';
-import { RunnerAgent } from './agents/runner.js';
 import type { RunResult } from './agents/runner.js';
-import { TesterAgent, cleanupSandbox } from './agents/tester.js';
-import { DebuggerAgent } from './agents/debugger.js';
-import { GitAgent } from './agents/git-agent.js';
-import { PackageAgent } from './agents/package-agent.js';
-import { GitHubReleaseAgent } from './agents/github-release-agent.js';
-import { SecurityAgent } from './agents/security-agent.js';
-import { SkillRunnerAgent } from './agents/skill-runner.js';
-import { MCPAgent } from './agents/mcp-agent.js';
+import { cleanupSandbox } from './agents/tester.js';
 import type { McpToolEntry } from './agents/mcp-agent.js';
 import { getMCPManager, resetMCPManager } from '../mcp/manager.js';
 import { formatMcpToolsForPrompt } from './agents/mcp-agent.js';
+import { getModuleRegistry, type ModuleRegistry } from './module-registry.js';
+import { getEventBus, EventNames } from '../observability/event-bus.js';
+import type { EventBus } from '../observability/event-bus.js';
 import { ContextPruner } from '../learning/context-pruner.js';
 import { ErrorRepairEngine } from '../learning/error-repair.js';
 import type { RepairMode } from '../learning/error-repair.js';
@@ -201,57 +192,17 @@ export interface OrchestrationResult {
   reviewId?: string;
 }
 
-// ─── Agent Registry ─────────────────────────────────────────────────────────
+// ─── Agent Registry Bridge ───────────────────────────────────────────────────
 
-// ─── Spinner Icons ─────────────────────────────────────────────────────────
-
-/** Icons for each agent type, shown in the spinner during execution */
-const AGENT_ICONS: Record<string, string> = {
-  'context-gatherer': '📂',
-  'planner': '📋',
-  'writer': '✏️',
-  'reviewer': '👁️',
-  'tester': '🧪',
-  'debugger': '🐛',
-  'runner': '▶️',
-  'git': '🔀',
-  'package': '📦',
-  'github-release': '🏷️',
-  'security': '🔒',
-  'skill-runner': '🧠',
-  'mcp': '🔌',
-};
-
-function createAgent(agentType: string, _options: OrchestratorOptions): Agent | null {
-  switch (agentType) {
-    case 'context-gatherer':
-      return new ContextGathererAgent();
-    case 'planner':
-      return new PlannerAgent();
-    case 'writer':
-      return new WriterAgent();
-    case 'reviewer':
-      return new ReviewerAgent();
-    case 'runner':
-      return new RunnerAgent();
-    case 'tester':
-      return new TesterAgent();
-    case 'debugger':
-      return new DebuggerAgent();
-    case 'git':
-      return new GitAgent();
-    case 'package':
-      return new PackageAgent();
-    case 'github-release':
-      return new GitHubReleaseAgent();
-    case 'security':
-      return new SecurityAgent();
-    case 'skill-runner':
-      return new SkillRunnerAgent();
-    case 'mcp':
-      return new MCPAgent();
-    default:
-      return null;
+/**
+ * Create an agent instance by looking it up in the ModuleRegistry.
+ * Replaces the old hardcoded switch statement.
+ */
+function createAgent(agentType: string, registry: ModuleRegistry): Agent | null {
+  try {
+    return registry.getModule(agentType);
+  } catch {
+    return null;
   }
 }
 
@@ -259,9 +210,15 @@ function createAgent(agentType: string, _options: OrchestratorOptions): Agent | 
 
 export class Orchestrator {
   private configManager: ConfigManager;
+  /** The module registry used for agent lookups */
+  private moduleRegistry: ModuleRegistry;
+  /** The event bus for emitting observability events */
+  private eventBus: EventBus;
 
-  constructor(configManager?: ConfigManager) {
+  constructor(configManager?: ConfigManager, moduleRegistry?: ModuleRegistry, eventBus?: EventBus) {
     this.configManager = configManager ?? new ConfigManager();
+    this.moduleRegistry = moduleRegistry ?? getModuleRegistry();
+    this.eventBus = eventBus ?? getEventBus();
   }
 
   /**
@@ -273,6 +230,13 @@ export class Orchestrator {
     const defaultCallLLM = this.createLLMProvider(options);
     const agentResults: OrchestrationResult['agentResults'] = [];
     const contextFiles: string[] = [];
+
+    // ── Emit: pipeline started event ───────────────────────────────────
+    this.eventBus.emit(EventNames.ORCHESTRATOR_PIPELINE_STARTED, {
+      goal,
+      provider: options.provider,
+      model: options.model,
+    }, 'orchestrator');
 
     // ── 2b. Build project file tree and inject for Planner ────────────────
     if (options.verbose) logger.highlight('\n📂 Scanning project structure...');
@@ -399,7 +363,7 @@ export class Orchestrator {
     } else {
       if (options.verbose) logger.highlight('\n📋 Planning...');
 
-      const planResult = await this.runAgent(new PlannerAgent(), vault, defaultCallLLM, options);
+      const planResult = await this.runAgent(this.moduleRegistry.getModule('planner'), vault, defaultCallLLM, options);
       agentResults.push({ agent: 'Planner', success: planResult.success, summary: planResult.summary });
 
       if (!planResult.success) {
@@ -639,6 +603,15 @@ export class Orchestrator {
     const total = vault.context.taskPlan.length;
     const hasFailures = vault.hasFailedTasks;
 
+    // ── Emit: pipeline completed event ────────────────────────────────
+    this.eventBus.emit(EventNames.ORCHESTRATOR_PIPELINE_COMPLETED, {
+      goal,
+      success: !hasFailures,
+      tasksCompleted: completed,
+      tasksTotal: total,
+      durationMs: Date.now() - startTime,
+    }, 'orchestrator');
+
     const summaryLines: string[] = [];
     summaryLines.push(hasFailures
       ? `Completed ${completed}/${total} tasks with some failures in ${elapsed}s`
@@ -822,10 +795,15 @@ export class Orchestrator {
 
     vault.updateTaskStatus(task.id, 'running');
     await tryUpdateDAGNode(task.id, { status: 'running' });
+    this.eventBus.emit(EventNames.ORCHESTRATOR_TASK_STARTED, {
+      taskId: task.id,
+      agentType: task.agentType,
+      description: task.description,
+    }, 'orchestrator');
 
     // Update spinner text to show which task is currently executing
     if (options.spinner) {
-      const agentIcon = AGENT_ICONS[task.agentType] || '⚙️';
+      const agentIcon = this.moduleRegistry.getIcon(task.agentType);
       const shortDesc = task.description.slice(0, 60);
       options.spinner.start(`${agentIcon} ${shortDesc}${task.description.length > 60 ? '...' : ''}`);
     }
@@ -868,7 +846,7 @@ export class Orchestrator {
         return;
       }
 
-      const agent = createAgent(task.agentType, options);
+      const agent = createAgent(task.agentType, this.moduleRegistry);
       if (!agent) {
         vault.updateTaskStatus(task.id, 'failed', `Unknown agent type: ${task.agentType}`);
         agentResults.push({
@@ -928,6 +906,12 @@ export class Orchestrator {
         status: result.success ? 'completed' : 'failed',
         summary: result.summary,
       });
+      this.eventBus.emit(EventNames.ORCHESTRATOR_TASK_COMPLETED, {
+        taskId: task.id,
+        agentType: task.agentType,
+        success: result.success,
+        summary: result.summary,
+      }, 'orchestrator');
       agentResults.push({ agent: task.agentType, success: result.success, summary: result.summary });
 
       // Track sandbox path for cleanup
