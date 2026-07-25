@@ -1,0 +1,318 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1100 900" width="1100" height="900">
+  <defs>
+    <linearGradient id="bgGrad" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0%" stop-color="#0f1117"/>
+      <stop offset="100%" stop-color="#1a1d2e"/>
+    </linearGradient>
+    <linearGradient id="phase1" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0%" stop-color="#6366f1"/>
+      <stop offset="100%" stop-color="#818cf8"/>
+    </linearGradient>
+    <linearGradient id="phase2" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0%" stop-color="#8b5cf6"/>
+      <stop offset="100%" stop-color="#a78bfa"/>
+    </linearGradient>
+    <linearGradient id="phase3" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0%" stop-color="#06b6d4"/>
+      <stop offset="100%" stop-color="#22d3ee"/>
+    </linearGradient>
+    <linearGradient id="phase4" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0%" stop-color="#10b981"/>
+      <stop offset="100%" stop-color="#34d399"/>
+    </linearGradient>
+    <linearGradient id="phase5" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0%" stop-color="#f59e0b"/>
+      <stop offset="100%" stop-color="#fbbf24"/>
+    </linearGradient>
+    <linearGradient id="phase6" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0%" stop-color="#ef4444"/>
+      <stop offset="100%" stop-color="#f87171"/>
+    </linearGradient>
+    <linearGradient id="cardBg" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0%" stop-color="#1e2238"/>
+      <stop offset="100%" stop-color="#161b2e"/>
+    </linearGradient>
+    <linearGradient id="completedBadge" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0%" stop-color="#059669"/>
+      <stop offset="100%" stop-color="#10b981"/>
+    </linearGradient>
+    <linearGradient id="pendingBadge" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0%" stop-color="#6b7280"/>
+      <stop offset="100%" stop-color="#9ca3af"/>
+    </linearGradient>
+    <linearGradient id="inProgressBadge" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0%" stop-color="#d97706"/>
+      <stop offset="100%" stop-color="#f59e0b"/>
+    </linearGradient>
+    <filter id="glow">
+      <feGaussianBlur stdDeviation="3" result="blur"/>
+      <feMerge><feMergeNode in="blur"/><feMergeNode in="SourceGraphic"/></feMerge>
+    </filter>
+    <filter id="shadow">
+      <feDropShadow dx="0" dy="2" stdDeviation="4" flood-color="#000" flood-opacity="0.4"/>
+    </filter>
+    <marker id="arrow" markerWidth="10" markerHeight="7" refX="10" refY="3.5" orient="auto">
+      <polygon points="0 0, 10 3.5, 0 7" fill="#6b7280"/>
+    </marker>
+    <marker id="arrowDone" markerWidth="10" markerHeight="7" refX="10" refY="3.5" orient="auto">
+      <polygon points="0 0, 10 3.5, 0 7" fill="#10b981"/>
+    </marker>
+  </defs>
+
+  <!-- Background -->
+  <rect width="1100" height="900" fill="url(#bgGrad)" rx="16"/>
+
+  <!-- Header -->
+  <rect x="30" y="20" width="1040" height="70" rx="12" fill="url(#cardBg)" stroke="#2d3355" stroke-width="1" filter="url(#shadow)"/>
+  <text x="550" y="50" text-anchor="middle" fill="#e2e8f0" font-family="system-ui, sans-serif" font-size="18" font-weight="700">🏗️ Agent-Nuvira Architecture Migration Roadmap</text>
+  <text x="550" y="72" text-anchor="middle" fill="#94a3b8" font-family="system-ui, sans-serif" font-size="13">Phase 1 → 6: Monolithic Agents → Modular Plugin Architecture</text>
+
+  <!-- Timeline line -->
+  <line x1="80" y1="130" x2="1020" y2="130" stroke="#2d3355" stroke-width="3"/>
+  <line x1="80" y1="130" x2="1020" y2="130" stroke="url(#phase1)" stroke-width="3" stroke-dasharray="140, 1000" stroke-linecap="round"/>
+
+  <!-- Phase nodes on timeline -->
+  <!-- Phase 1 -->
+  <circle cx="150" cy="130" r="14" fill="url(#phase1)" filter="url(#glow)"/>
+  <text x="150" y="135" text-anchor="middle" fill="#fff" font-family="system-ui, sans-serif" font-size="12" font-weight="700">1</text>
+
+  <!-- Phase 2 -->
+  <circle cx="324" cy="130" r="14" fill="url(#phase2)" filter="url(#glow)"/>
+  <text x="324" y="135" text-anchor="middle" fill="#fff" font-family="system-ui, sans-serif" font-size="12" font-weight="700">2</text>
+
+  <!-- Phase 3 -->
+  <circle cx="498" cy="130" r="14" fill="url(#phase3)" filter="url(#glow)"/>
+  <text x="498" y="135" text-anchor="middle" fill="#fff" font-family="system-ui, sans-serif" font-size="12" font-weight="700">3</text>
+
+  <!-- Phase 4 -->
+  <circle cx="672" cy="130" r="14" fill="url(#phase4)" filter="url(#glow)"/>
+  <text x="672" y="135" text-anchor="middle" fill="#fff" font-family="system-ui, sans-serif" font-size="12" font-weight="700">4</text>
+
+  <!-- Phase 5 -->
+  <circle cx="846" cy="130" r="14" fill="url(#phase5)" filter="url(#glow)"/>
+  <text x="846" y="135" text-anchor="middle" fill="#fff" font-family="system-ui, sans-serif" font-size="12" font-weight="700">5</text>
+
+  <!-- Phase 6 -->
+  <circle cx="975" cy="130" r="14" fill="url(#phase6)" filter="url(#glow)"/>
+  <text x="975" y="135" text-anchor="middle" fill="#fff" font-family="system-ui, sans-serif" font-size="12" font-weight="700">6</text>
+
+  <!-- Connecting arrows between phases -->
+  <line x1="164" y1="130" x2="310" y2="130" stroke="#10b981" stroke-width="2" marker-end="url(#arrowDone)"/>
+  <line x1="338" y1="130" x2="484" y2="130" stroke="#10b981" stroke-width="2" marker-end="url(#arrowDone)"/>
+  <line x1="512" y1="130" x2="658" y2="130" stroke="#10b981" stroke-width="2" marker-end="url(#arrowDone)"/>
+  <line x1="686" y1="130" x2="832" y2="130" stroke="#10b981" stroke-width="2" marker-end="url(#arrowDone)"/>
+  <line x1="860" y1="130" x2="961" y2="130" stroke="#f59e0b" stroke-width="2" marker-end="url(#arrow)"/>
+
+  <!-- Phase labels below timeline -->
+  <rect x="105" y="152" width="90" height="22" rx="11" fill="#2d3355"/>
+  <text x="150" y="166" text-anchor="middle" fill="#818cf8" font-family="system-ui, sans-serif" font-size="11" font-weight="600">RecoverModule</text>
+
+  <rect x="275" y="152" width="98" height="22" rx="11" fill="#2d3355"/>
+  <text x="324" y="166" text-anchor="middle" fill="#a78bfa" font-family="system-ui, sans-serif" font-size="11" font-weight="600">ModuleRegistry</text>
+
+  <rect x="449" y="152" width="98" height="22" rx="11" fill="#2d3355"/>
+  <text x="498" y="166" text-anchor="middle" fill="#22d3ee" font-family="system-ui, sans-serif" font-size="11" font-weight="600">EventBus</text>
+
+  <rect x="623" y="152" width="98" height="22" rx="11" fill="#2d3355"/>
+  <text x="672" y="166" text-anchor="middle" fill="#34d399" font-family="system-ui, sans-serif" font-size="11" font-weight="600">ReportModule</text>
+
+  <rect x="798" y="152" width="96" height="22" rx="11" fill="#2d3355"/>
+  <text x="846" y="166" text-anchor="middle" fill="#fbbf24" font-family="system-ui, sans-serif" font-size="11" font-weight="600">InspectModule</text>
+
+  <rect x="930" y="152" width="90" height="22" rx="11" fill="#2d3355"/>
+  <text x="975" y="166" text-anchor="middle" fill="#f87171" font-family="system-ui, sans-serif" font-size="11" font-weight="600">VerifyModule</text>
+
+  <!-- Phase 1 Card -->
+  <g filter="url(#shadow)">
+    <rect x="30" y="195" width="156" height="170" rx="10" fill="url(#cardBg)" stroke="#6366f1" stroke-width="1.5"/>
+    <rect x="30" y="195" width="156" height="36" rx="10" fill="#6366f1" opacity="0.15"/>
+    <rect x="30" y="215" width="156" height="16" fill="#6366f1" opacity="0.15"/>
+    <text x="108" y="217" text-anchor="middle" fill="#818cf8" font-family="system-ui, sans-serif" font-size="13" font-weight="700">🔧 Phase 1</text>
+    <rect x="44" y="240" width="52" height="18" rx="9" fill="url(#completedBadge)"/>
+    <text x="70" y="253" text-anchor="middle" fill="#fff" font-family="system-ui, sans-serif" font-size="9" font-weight="600">DONE</text>
+    <text x="40" y="274" fill="#64748b" font-family="system-ui, sans-serif" font-size="9" font-weight="500">FROM:</text>
+    <text x="40" y="288" fill="#94a3b8" font-family="system-ui, sans-serif" font-size="9">ErrorRepairEngine</text>
+    <text x="40" y="303" fill="#64748b" font-family="system-ui, sans-serif" font-size="9" font-weight="500">TO:</text>
+    <text x="40" y="317" fill="#e2e8f0" font-family="system-ui, sans-serif" font-size="9" font-weight="600">RecoverModule</text>
+    <text x="40" y="334" fill="#6366f1" font-family="system-ui, sans-serif" font-size="8">+ discriminated union</text>
+    <text x="40" y="347" fill="#6366f1" font-family="system-ui, sans-serif" font-size="8">+ RepairBudget</text>
+  </g>
+
+  <!-- Phase 2 Card -->
+  <g filter="url(#shadow)">
+    <rect x="204" y="195" width="156" height="170" rx="10" fill="url(#cardBg)" stroke="#8b5cf6" stroke-width="1.5"/>
+    <rect x="204" y="195" width="156" height="36" rx="10" fill="#8b5cf6" opacity="0.15"/>
+    <rect x="204" y="215" width="156" height="16" fill="#8b5cf6" opacity="0.15"/>
+    <text x="282" y="217" text-anchor="middle" fill="#a78bfa" font-family="system-ui, sans-serif" font-size="13" font-weight="700">🏛️ Phase 2</text>
+    <rect x="218" y="240" width="52" height="18" rx="9" fill="url(#completedBadge)"/>
+    <text x="244" y="253" text-anchor="middle" fill="#fff" font-family="system-ui, sans-serif" font-size="9" font-weight="600">DONE</text>
+    <text x="214" y="274" fill="#64748b" font-family="system-ui, sans-serif" font-size="9" font-weight="500">FROM:</text>
+    <text x="214" y="288" fill="#94a3b8" font-family="system-ui, sans-serif" font-size="9">createAgent() switch</text>
+    <text x="214" y="303" fill="#64748b" font-family="system-ui, sans-serif" font-size="9" font-weight="500">TO:</text>
+    <text x="214" y="317" fill="#e2e8f0" font-family="system-ui, sans-serif" font-size="9" font-weight="600">ModuleRegistry</text>
+    <text x="214" y="334" fill="#8b5cf6" font-family="system-ui, sans-serif" font-size="8">+ plugin-based loading</text>
+    <text x="214" y="347" fill="#8b5cf6" font-family="system-ui, sans-serif" font-size="8">+ 14 built-in agents</text>
+  </g>
+
+  <!-- Phase 3 Card -->
+  <g filter="url(#shadow)">
+    <rect x="380" y="195" width="156" height="170" rx="10" fill="url(#cardBg)" stroke="#06b6d4" stroke-width="1.5"/>
+    <rect x="380" y="195" width="156" height="36" rx="10" fill="#06b6d4" opacity="0.15"/>
+    <rect x="380" y="215" width="156" height="16" fill="#06b6d4" opacity="0.15"/>
+    <text x="458" y="217" text-anchor="middle" fill="#22d3ee" font-family="system-ui, sans-serif" font-size="13" font-weight="700">📡 Phase 3</text>
+    <rect x="394" y="240" width="52" height="18" rx="9" fill="url(#completedBadge)"/>
+    <text x="420" y="253" text-anchor="middle" fill="#fff" font-family="system-ui, sans-serif" font-size="9" font-weight="600">DONE</text>
+    <text x="390" y="274" fill="#64748b" font-family="system-ui, sans-serif" font-size="9" font-weight="500">FROM:</text>
+    <text x="390" y="288" fill="#94a3b8" font-family="system-ui, sans-serif" font-size="9">No event system</text>
+    <text x="390" y="303" fill="#64748b" font-family="system-ui, sans-serif" font-size="9" font-weight="500">TO:</text>
+    <text x="390" y="317" fill="#e2e8f0" font-family="system-ui, sans-serif" font-size="9" font-weight="600">EventBus</text>
+    <text x="390" y="334" fill="#06b6d4" font-family="system-ui, sans-serif" font-size="8">+ 4 built-in consumers</text>
+    <text x="390" y="347" fill="#06b6d4" font-family="system-ui, sans-serif" font-size="8">+ typed event schema</text>
+  </g>
+
+  <!-- Phase 4 Card -->
+  <g filter="url(#shadow)">
+    <rect x="557" y="195" width="156" height="170" rx="10" fill="url(#cardBg)" stroke="#10b981" stroke-width="1.5"/>
+    <rect x="557" y="195" width="156" height="36" rx="10" fill="#10b981" opacity="0.15"/>
+    <rect x="557" y="215" width="156" height="16" fill="#10b981" opacity="0.15"/>
+    <text x="635" y="217" text-anchor="middle" fill="#34d399" font-family="system-ui, sans-serif" font-size="13" font-weight="700">📊 Phase 4</text>
+    <rect x="571" y="240" width="52" height="18" rx="9" fill="url(#completedBadge)"/>
+    <text x="597" y="253" text-anchor="middle" fill="#fff" font-family="system-ui, sans-serif" font-size="9" font-weight="600">DONE</text>
+    <text x="567" y="274" fill="#64748b" font-family="system-ui, sans-serif" font-size="9" font-weight="500">FROM:</text>
+    <text x="567" y="288" fill="#94a3b8" font-family="system-ui, sans-serif" font-size="9">buildResult() text</text>
+    <text x="567" y="303" fill="#64748b" font-family="system-ui, sans-serif" font-size="9" font-weight="500">TO:</text>
+    <text x="567" y="317" fill="#e2e8f0" font-family="system-ui, sans-serif" font-size="9" font-weight="600">ReportModule</text>
+    <text x="567" y="334" fill="#10b981" font-family="system-ui, sans-serif" font-size="8">+ 4 output formats</text>
+    <text x="567" y="347" fill="#10b981" font-family="system-ui, sans-serif" font-size="8">+ 72 unit tests</text>
+  </g>
+
+  <!-- Phase 5 Card -->
+  <g filter="url(#shadow)">
+    <rect x="734" y="195" width="156" height="170" rx="10" fill="url(#cardBg)" stroke="#f59e0b" stroke-width="1.5"/>
+    <rect x="734" y="195" width="156" height="36" rx="10" fill="#f59e0b" opacity="0.15"/>
+    <rect x="734" y="215" width="156" height="16" fill="#f59e0b" opacity="0.15"/>
+    <text x="812" y="217" text-anchor="middle" fill="#fbbf24" font-family="system-ui, sans-serif" font-size="13" font-weight="700">🔍 Phase 5</text>
+    <rect x="748" y="240" width="60" height="18" rx="9" fill="url(#inProgressBadge)"/>
+    <text x="778" y="253" text-anchor="middle" fill="#fff" font-family="system-ui, sans-serif" font-size="9" font-weight="600">IN PROG</text>
+    <text x="744" y="274" fill="#64748b" font-family="system-ui, sans-serif" font-size="9" font-weight="500">FROM:</text>
+    <text x="744" y="288" fill="#94a3b8" font-family="system-ui, sans-serif" font-size="9">ContextGatherer</text>
+    <text x="744" y="303" fill="#64748b" font-family="system-ui, sans-serif" font-size="9" font-weight="500">TO:</text>
+    <text x="744" y="317" fill="#e2e8f0" font-family="system-ui, sans-serif" font-size="9" font-weight="600">InspectModule</text>
+    <text x="744" y="334" fill="#f59e0b" font-family="system-ui, sans-serif" font-size="8">+ keyword scanning</text>
+    <text x="744" y="347" fill="#f59e0b" font-family="system-ui, sans-serif" font-size="8">+ EventBus integration</text>
+  </g>
+
+  <!-- Phase 6 Card -->
+  <g filter="url(#shadow)">
+    <rect x="912" y="195" width="156" height="170" rx="10" fill="url(#cardBg)" stroke="#6b7280" stroke-width="1.5" stroke-dasharray="4,3"/>
+    <rect x="912" y="195" width="156" height="36" rx="10" fill="#ef4444" opacity="0.08"/>
+    <rect x="912" y="215" width="156" height="16" fill="#ef4444" opacity="0.08"/>
+    <text x="990" y="217" text-anchor="middle" fill="#9ca3af" font-family="system-ui, sans-serif" font-size="13" font-weight="700">✅ Phase 6</text>
+    <rect x="926" y="240" width="52" height="18" rx="9" fill="url(#pendingBadge)"/>
+    <text x="952" y="253" text-anchor="middle" fill="#fff" font-family="system-ui, sans-serif" font-size="9" font-weight="600">NEXT</text>
+    <text x="922" y="274" fill="#64748b" font-family="system-ui, sans-serif" font-size="9" font-weight="500">FROM:</text>
+    <text x="922" y="288" fill="#94a3b8" font-family="system-ui, sans-serif" font-size="9">ReviewerAgent</text>
+    <text x="922" y="303" fill="#64748b" font-family="system-ui, sans-serif" font-size="9" font-weight="500">TO:</text>
+    <text x="922" y="317" fill="#e2e8f0" font-family="system-ui, sans-serif" font-size="9" font-weight="600">VerifyModule</text>
+    <text x="922" y="334" fill="#ef4444" font-family="system-ui, sans-serif" font-size="8">+ security scan checks</text>
+    <text x="922" y="347" fill="#ef4444" font-family="system-ui, sans-serif" font-size="8">+ verification pipeline</text>
+  </g>
+
+  <!-- Comparison Section: Before vs After Summary -->
+  <rect x="30" y="390" width="1040" height="58" rx="10" fill="url(#cardBg)" stroke="#2d3355" stroke-width="1" filter="url(#shadow)"/>
+  <text x="550" y="412" text-anchor="middle" fill="#e2e8f0" font-family="system-ui, sans-serif" font-size="14" font-weight="700">📋 Architecture Comparison: Before vs After Migration</text>
+  <text x="550" y="436" text-anchor="middle" fill="#94a3b8" font-family="system-ui, sans-serif" font-size="11">Hardcoded agent switches → Plugin-based ModuleRegistry  ·  Console.log debugging → Typed EventBus  ·  Text-only reports → 4 output formats</text>
+
+  <!-- Comparison Table -->
+  <g filter="url(#shadow)">
+    <!-- Table header -->
+    <rect x="30" y="465" width="1040" height="32" rx="8" fill="#2d3355"/>
+    <rect x="30" y="465" width="1040" height="32" fill="#6366f1" opacity="0.12" clip-path="url(#tableClip)"/>
+    <text x="60" y="485" fill="#e2e8f0" font-family="system-ui, sans-serif" font-size="11" font-weight="600">Aspect</text>
+    <text x="340" y="485" fill="#94a3b8" font-family="system-ui, sans-serif" font-size="11" font-weight="600">Before (v1.18.0)</text>
+    <text x="640" y="485" fill="#10b981" font-family="system-ui, sans-serif" font-size="11" font-weight="600">After (v1.19.0+)</text>
+    <text x="920" y="485" fill="#06b6d4" font-family="system-ui, sans-serif" font-size="11" font-weight="600">Impact</text>
+    <line x1="30" y1="497" x2="1070" y2="497" stroke="#2d3355" stroke-width="1"/>
+
+    <!-- Rows -->
+    <!-- Row 1: Error recovery -->
+    <rect x="30" y="497" width="1040" height="34" fill="#1e2238"/>
+    <text x="60" y="518" fill="#818cf8" font-family="system-ui, sans-serif" font-size="10" font-weight="600">Error Recovery</text>
+    <text x="340" y="518" fill="#64748b" font-family="system-ui, sans-serif" font-size="10">ErrorRepairEngine class</text>
+    <text x="640" y="518" fill="#e2e8f0" font-family="system-ui, sans-serif" font-size="10">RecoverModule with RepairBudget</text>
+    <text x="920" y="518" fill="#10b981" font-family="system-ui, sans-serif" font-size="10">⏱️ 3 attempt budget</text>
+    <line x1="30" y1="531" x2="1070" y2="531" stroke="#1a1d2e" stroke-width="1"/>
+
+    <!-- Row 2: Module loading -->
+    <rect x="30" y="531" width="1040" height="34" fill="#161b2e"/>
+    <text x="60" y="552" fill="#a78bfa" font-family="system-ui, sans-serif" font-size="10" font-weight="600">Module Loading</text>
+    <text x="340" y="552" fill="#64748b" font-family="system-ui, sans-serif" font-size="10">createAgent() switch</text>
+    <text x="640" y="552" fill="#e2e8f0" font-family="system-ui, sans-serif" font-size="10">ModuleRegistry + plugin API</text>
+    <text x="920" y="552" fill="#10b981" font-family="system-ui, sans-serif" font-size="10">🧩 14 built-ins</text>
+    <line x1="30" y1="565" x2="1070" y2="565" stroke="#1a1d2e" stroke-width="1"/>
+
+    <!-- Row 3: Observability -->
+    <rect x="30" y="565" width="1040" height="34" fill="#1e2238"/>
+    <text x="60" y="586" fill="#22d3ee" font-family="system-ui, sans-serif" font-size="10" font-weight="600">Observability</text>
+    <text x="340" y="586" fill="#64748b" font-family="system-ui, sans-serif" font-size="10">--verbose flag only</text>
+    <text x="640" y="586" fill="#e2e8f0" font-family="system-ui, sans-serif" font-size="10">EventBus + 4 consumers</text>
+    <text x="920" y="586" fill="#10b981" font-family="system-ui, sans-serif" font-size="10">📡 Real-time DAG</text>
+    <line x1="30" y1="599" x2="1070" y2="599" stroke="#1a1d2e" stroke-width="1"/>
+
+    <!-- Row 4: Reporting -->
+    <rect x="30" y="599" width="1040" height="34" fill="#161b2e"/>
+    <text x="60" y="620" fill="#34d399" font-family="system-ui, sans-serif" font-size="10" font-weight="600">Reporting</text>
+    <text x="340" y="620" fill="#64748b" font-family="system-ui, sans-serif" font-size="10">Text-only buildResult()</text>
+    <text x="640" y="620" fill="#e2e8f0" font-family="system-ui, sans-serif" font-size="10">ReportModule (4 formats)</text>
+    <text x="920" y="620" fill="#10b981" font-family="system-ui, sans-serif" font-size="10">📊 Text/JSON/MD/GHA</text>
+    <line x1="30" y1="633" x2="1070" y2="633" stroke="#1a1d2e" stroke-width="1"/>
+
+    <!-- Row 5: Code inspection -->
+    <rect x="30" y="633" width="1040" height="34" fill="#1e2238"/>
+    <text x="60" y="654" fill="#fbbf24" font-family="system-ui, sans-serif" font-size="10" font-weight="600">Code Inspection</text>
+    <text x="340" y="654" fill="#64748b" font-family="system-ui, sans-serif" font-size="10">ContextGathererAgent</text>
+    <text x="640" y="654" fill="#e2e8f0" font-family="system-ui, sans-serif" font-size="10">InspectModule + plugins</text>
+    <text x="920" y="654" fill="#f59e0b" font-family="system-ui, sans-serif" font-size="10">🔍 Keyword + LLM</text>
+    <line x1="30" y1="667" x2="1070" y2="667" stroke="#1a1d2e" stroke-width="1"/>
+
+    <!-- Row 6: Verification -->
+    <rect x="30" y="667" width="1040" height="34" fill="#161b2e"/>
+    <text x="60" y="688" fill="#f87171" font-family="system-ui, sans-serif" font-size="10" font-weight="600">Verification</text>
+    <text x="340" y="688" fill="#64748b" font-family="system-ui, sans-serif" font-size="10">ReviewerAgent implicit</text>
+    <text x="640" y="688" fill="#e2e8f0" font-family="system-ui, sans-serif" font-size="10">VerifyModule (planned)</text>
+    <text x="920" y="688" fill="#ef4444" font-family="system-ui, sans-serif" font-size="10">⏳ Phase 6</text>
+    <line x1="30" y1="701" x2="1070" y2="701" stroke="#1a1d2e" stroke-width="1"/>
+
+    <!-- Row 7: Safe execution -->
+    <rect x="30" y="701" width="1040" height="34" fill="#1e2238"/>
+    <text x="60" y="722" fill="#94a3b8" font-family="system-ui, sans-serif" font-size="10" font-weight="600">Safe Execution</text>
+    <text x="340" y="722" fill="#64748b" font-family="system-ui, sans-serif" font-size="10">Separate (Docker, AST, injection)</text>
+    <text x="640" y="722" fill="#e2e8f0" font-family="system-ui, sans-serif" font-size="10">Unified SafeExecutionLayer</text>
+    <text x="920" y="722" fill="#94a3b8" font-family="system-ui, sans-serif" font-size="10">📋 Planned</text>
+  </g>
+
+  <!-- Key Metrics Bar -->
+  <rect x="30" y="750" width="1040" height="44" rx="10" fill="url(#cardBg)" stroke="#2d3355" stroke-width="1" filter="url(#shadow)"/>
+  <text x="550" y="772" text-anchor="middle" fill="#e2e8f0" font-family="system-ui, sans-serif" font-size="12" font-weight="700">📈 Migration Progress</text>
+
+  <rect x="110" y="785" width="12" height="12" rx="3" fill="#10b981"/>
+  <text x="128" y="795" fill="#94a3b8" font-family="system-ui, sans-serif" font-size="10">5 of 6 phases complete</text>
+
+  <rect x="355" y="785" width="12" height="12" rx="3" fill="#06b6d4"/>
+  <text x="373" y="795" fill="#94a3b8" font-family="system-ui, sans-serif" font-size="10">14 built-in agent modules</text>
+
+  <rect x="575" y="785" width="12" height="12" rx="3" fill="#6366f1"/>
+  <text x="593" y="795" fill="#94a3b8" font-family="system-ui, sans-serif" font-size="10">72+ unit tests added</text>
+
+  <rect x="800" y="785" width="12" height="12" rx="3" fill="#f59e0b"/>
+  <text x="818" y="795" fill="#94a3b8" font-family="system-ui, sans-serif" font-size="10">4 report output formats</text>
+
+  <!-- Footer -->
+  <text x="550" y="860" text-anchor="middle" fill="#475569" font-family="system-ui, sans-serif" font-size="10">Agent-Nuvira Architecture Migration · Phase 1-6 · Built by Dheeraj Sharma · MIT License</text>
+  <text x="550" y="878" text-anchor="middle" fill="#334155" font-family="system-ui, sans-serif" font-size="9">Design doc: ARCHITECTURE.md · Visual diagrams: ARCHITECTURE_DIAGRAMS.md</text>
+
+  <!-- Separator lines for table header rounding -->
+  <line x1="250" y1="465" x2="250" y2="735" stroke="#2d3355" stroke-width="1"/>
+  <line x1="540" y1="465" x2="540" y2="735" stroke="#2d3355" stroke-width="1"/>
+  <line x1="850" y1="465" x2="850" y2="735" stroke="#2d3355" stroke-width="1"/>
+</svg>

@@ -18,7 +18,7 @@ import { readdir } from 'node:fs/promises';
 import { join } from 'node:path';
 
 /** File extensions considered as source code */
-const SOURCE_EXTENSIONS = new Set([
+export const SOURCE_EXTENSIONS = new Set([
   '.ts', '.js', '.tsx', '.jsx',
   '.go', '.py', '.rs', '.rb', '.java', '.kt',
   '.json', '.yaml', '.yml', '.md', '.toml', '.xml',
@@ -29,7 +29,7 @@ const SOURCE_EXTENSIONS = new Set([
 ]);
 
 /** Directories to skip during traversal */
-const IGNORE_DIRS = new Set([
+export const IGNORE_DIRS = new Set([
   'node_modules', '.git', 'dist', 'build', '.next',
   '.cache', 'coverage', '.nyc_output', '__pycache__',
   '.venv', 'venv', '.env', '.ruff_cache',
