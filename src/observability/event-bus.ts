@@ -430,6 +430,28 @@ export class LoggerConsumer implements EventBusConsumer {
             }
             break;
 
+          // Verify events
+          case 'verify:starting':
+            if (typeof data === 'object' && data !== null) {
+              const d = data as Record<string, unknown>;
+              logger.info(`   🔍 Verifying ${d.changeCount || 0} change(s) (${d.strictness || 'medium'} strictness)`);
+            }
+            break;
+          case 'verify:check':
+            if (typeof data === 'object' && data !== null) {
+              const d = data as Record<string, unknown>;
+              const icon = d.passed ? '✅' : d.severity === 'blocking' ? '❌' : '⚠️';
+              logger.info(`   ${icon} ${d.type}: ${(d.details as string)?.slice(0, 100)}`);
+            }
+            break;
+          case 'verify:completed':
+            if (typeof data === 'object' && data !== null) {
+              const d = data as Record<string, unknown>;
+              const icon = d.passed ? '✅' : '❌';
+              logger.info(`   ${icon} Verification ${d.passed ? 'passed' : 'failed'} (score: ${((d.score as number) * 100).toFixed(0)}%)`);
+            }
+            break;
+
           // Registry events
           case 'registry:module-registered':
             if (typeof data === 'object' && data !== null) {

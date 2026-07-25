@@ -231,6 +231,17 @@ export type { ReportModule, ExecutionReport, ReportParams, ReportFormat, AgentRe
 
 // ─── InspectModule (Phase 5) ───────────────────────────────────────────
 export { DefaultInspectModule } from './agents/inspect-module.js';
+
+// ─── VerifyModule (Phase 6) ────────────────────────────────────────────
+export { DefaultVerifyModule } from './agents/verify-module.js';
+export type {
+  VerifyModule,
+  VerificationResult,
+  VerificationCheck,
+  VerifyParams,
+  CheckType,
+  CheckSeverity,
+} from './agents/verify-module.js';
 export type {
   InspectModule,
   InspectionResult,

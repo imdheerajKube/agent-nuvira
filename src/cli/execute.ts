@@ -413,17 +413,31 @@ export class ExecuteCommand extends BaseCommand {
           activeModel,
           options,
         );
-        // Process the follow-up result through the post-execution handler too
-        const followupPostExec = await this.handlePostExecution(
-          followupGoal,
-          followupResult,
-          sessionHistory,
-          lastFailedGoal,
-          activeProvider,
-          activeModel,
-          options,
-        );
-        lastFailedGoal = followupPostExec.updatedLastFailed;
+
+        // Track in session history (skip the "What next?" prompt — the user
+        // already chose the followup, so auto-continue to the main goal loop)
+        sessionHistory.push({
+          goal: followupGoal,
+          success: followupResult.success,
+          summary: followupResult.success
+            ? `Follow-up completed: ${followupGoal.slice(0, 80)}`
+            : `Follow-up failed: ${followupGoal.slice(0, 80)}`,
+          timestamp: Date.now(),
+        });
+
+        // Update lastFailedGoal tracking
+        if (!followupResult.success && followupResult.orchestrationResult) {
+          lastFailedGoal = {
+            goal: followupGoal,
+            orchestrationResult: followupResult.orchestrationResult,
+          };
+        } else if (followupResult.success) {
+          lastFailedGoal = null;
+        }
+
+        // Auto-continue to the main goal prompt
+        // (runSingleGoal already prints the orchestration result)
+        logger.success('\n💡  Follow-up complete. Enter your next goal below.\n');
       }
     }
 
@@ -1098,7 +1112,7 @@ export class ExecuteCommand extends BaseCommand {
 
         if (Array.isArray(parsed) && parsed.length > 0) {
           return parsed.slice(0, 3).map((s) => ({
-            label: s.label.replace(/^[\U0001F300-\U0001F9FF\s]*/, '').trim() || s.label,
+            label: s.label.replace(/^[\u{1F300}-\u{1F9FF}\s]*/u, '').trim() || s.label,
             description: s.description,
             goal: s.goal,
           }));
