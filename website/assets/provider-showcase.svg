@@ -1,0 +1,420 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 900 660" fill="none">
+  <defs>
+    <linearGradient id="bgx" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0%" stop-color="#0b0b18"/>
+      <stop offset="100%" stop-color="#06060e"/>
+    </linearGradient>
+    <linearGradient id="glowx" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0%" stop-color="#6366f1" stop-opacity="0.12"/>
+      <stop offset="100%" stop-color="#06b6d4" stop-opacity="0"/>
+    </linearGradient>
+    <linearGradient id="gradPurple" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0%" stop-color="#6366f1"/><stop offset="100%" stop-color="#8b5cf6"/>
+    </linearGradient>
+    <linearGradient id="gradGreen" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0%" stop-color="#10b981"/><stop offset="100%" stop-color="#059669"/>
+    </linearGradient>
+    <linearGradient id="gradCyan" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0%" stop-color="#06b6d4"/><stop offset="100%" stop-color="#0891b2"/>
+    </linearGradient>
+    <linearGradient id="gradOrange" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0%" stop-color="#f59e0b"/><stop offset="100%" stop-color="#d97706"/>
+    </linearGradient>
+    <linearGradient id="gradBlue" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0%" stop-color="#3b82f6"/><stop offset="100%" stop-color="#2563eb"/>
+    </linearGradient>
+    <linearGradient id="gradRed" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0%" stop-color="#ef4444"/><stop offset="100%" stop-color="#dc2626"/>
+    </linearGradient>
+    <linearGradient id="gradPink" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0%" stop-color="#ec4899"/><stop offset="100%" stop-color="#db2777"/>
+    </linearGradient>
+    <linearGradient id="gradTeal" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0%" stop-color="#14b8a6"/><stop offset="100%" stop-color="#0d9488"/>
+    </linearGradient>
+    <linearGradient id="gradIndigo" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0%" stop-color="#4f46e5"/><stop offset="100%" stop-color="#4338ca"/>
+    </linearGradient>
+    <filter id="bgGlowx"><feGaussianBlur stdDeviation="50"/></filter>
+  </defs>
+
+  <!-- Background -->
+  <rect width="900" height="660" fill="url(#bgx)" rx="16"/>
+  <ellipse cx="450" cy="350" rx="400" ry="300" fill="url(#glowx)" filter="url(#bgGlowx)"/>
+
+  <!-- Subtle grid -->
+  <g stroke="rgba(99,102,241,0.04)" stroke-width="0.5">
+    <line x1="0" y1="140" x2="900" y2="140"/>
+    <line x1="0" y1="270" x2="900" y2="270"/>
+    <line x1="0" y1="400" x2="900" y2="400"/>
+    <line x1="0" y1="530" x2="900" y2="530"/>
+    <line x1="225" y1="0" x2="225" y2="660"/>
+    <line x1="450" y1="0" x2="450" y2="660"/>
+    <line x1="675" y1="0" x2="675" y2="660"/>
+  </g>
+
+  <!-- Title -->
+  <text x="450" y="32" text-anchor="middle" fill="#9090b0" font-family="Inter, system-ui, sans-serif" font-size="11" font-weight="500" letter-spacing="2">17+ AI PROVIDERS</text>
+  <text x="450" y="52" text-anchor="middle" fill="#606080" font-family="Inter, system-ui, sans-serif" font-size="10">5 built-in + 12+ plugin providers. Switch between any of them per command or mid-session.</text>
+
+  <!-- Section: Built-in Providers -->
+  <text x="30" y="80" fill="#9090b0" font-family="Inter, system-ui, sans-serif" font-size="9" font-weight="600" letter-spacing="1.5">BUILT-IN PROVIDERS</text>
+  <line x1="30" y1="86" x2="230" y2="86" stroke="rgba(99,102,241,0.2)" stroke-width="1"/>
+
+  <!-- Provider Card Helper: x, y, initial, name, color, accent, tag, desc1, desc2 -->
+  
+  <!-- 1. Groq -->
+  <g transform="translate(20, 95)">
+    <rect width="165" height="128" rx="12" fill="#111125" stroke="rgba(99,102,241,0.2)" stroke-width="1"/>
+    <rect width="165" height="3" rx="1.5" fill="url(#gradPurple)"/>
+    <circle cx="32" cy="32" r="16" fill="rgba(99,102,241,0.15)"/>
+    <text x="32" y="37" text-anchor="middle" fill="#6366f1" font-family="Inter, system-ui, sans-serif" font-size="14" font-weight="700">G</text>
+    <text x="56" y="37" fill="#f0f0f5" font-family="Inter, system-ui, sans-serif" font-size="12" font-weight="700">Groq</text>
+    <text x="16" y="60" fill="#9090b0" font-family="Inter, system-ui, sans-serif" font-size="9">⚡ Blazing-fast LPU</text>
+    <text x="16" y="75" fill="#9090b0" font-family="Inter, system-ui, sans-serif" font-size="9">🎁 Free tier available</text>
+    <rect x="110" y="16" width="44" height="18" rx="9" fill="rgba(16,185,129,0.15)"/>
+    <text x="132" y="29" text-anchor="middle" fill="#34d399" font-family="Inter, system-ui, sans-serif" font-size="7" font-weight="600">⚡ Fast</text>
+    <g transform="translate(16, 90)">
+      <rect width="40" height="18" rx="9" fill="rgba(99,102,241,0.1)"/>
+      <text x="20" y="12" text-anchor="middle" fill="#a78bfa" font-family="Inter, system-ui, sans-serif" font-size="7">Llama 3</text>
+      <rect x="46" width="40" height="18" rx="9" fill="rgba(99,102,241,0.1)"/>
+      <text x="66" y="12" text-anchor="middle" fill="#a78bfa" font-family="Inter, system-ui, sans-serif" font-size="7">Mixtral</text>
+      <rect x="92" width="40" height="18" rx="9" fill="rgba(99,102,241,0.1)"/>
+      <text x="112" y="12" text-anchor="middle" fill="#a78bfa" font-family="Inter, system-ui, sans-serif" font-size="7">Gemma</text>
+    </g>
+  </g>
+
+  <!-- 2. NVIDIA NIM -->
+  <g transform="translate(200, 95)">
+    <rect width="165" height="128" rx="12" fill="#111125" stroke="rgba(16,185,129,0.2)" stroke-width="1"/>
+    <rect width="165" height="3" rx="1.5" fill="url(#gradGreen)"/>
+    <circle cx="32" cy="32" r="16" fill="rgba(16,185,129,0.15)"/>
+    <text x="32" y="37" text-anchor="middle" fill="#10b981" font-family="Inter, system-ui, sans-serif" font-size="12" font-weight="700">N</text>
+    <text x="56" y="37" fill="#f0f0f5" font-family="Inter, system-ui, sans-serif" font-size="11" font-weight="700">NVIDIA NIM</text>
+    <text x="16" y="60" fill="#9090b0" font-family="Inter, system-ui, sans-serif" font-size="9">📊 121+ hosted models</text>
+    <text x="16" y="75" fill="#9090b0" font-family="Inter, system-ui, sans-serif" font-size="9">🖥 Self-hosted support</text>
+    <rect x="112" y="16" width="44" height="18" rx="9" fill="rgba(6,182,212,0.15)"/>
+    <text x="134" y="29" text-anchor="middle" fill="#22d3ee" font-family="Inter, system-ui, sans-serif" font-size="7" font-weight="600">📊 Big</text>
+    <g transform="translate(16, 90)">
+      <rect width="40" height="18" rx="9" fill="rgba(16,185,129,0.1)"/>
+      <text x="20" y="12" text-anchor="middle" fill="#34d399" font-family="Inter, system-ui, sans-serif" font-size="7">Llama 3</text>
+      <rect x="46" width="40" height="18" rx="9" fill="rgba(16,185,129,0.1)"/>
+      <text x="66" y="12" text-anchor="middle" fill="#34d399" font-family="Inter, system-ui, sans-serif" font-size="7">DeepSeek</text>
+      <rect x="92" width="40" height="18" rx="9" fill="rgba(16,185,129,0.1)"/>
+      <text x="112" y="12" text-anchor="middle" fill="#34d399" font-family="Inter, system-ui, sans-serif" font-size="7">Mistral</text>
+    </g>
+  </g>
+
+  <!-- 3. Gemini -->
+  <g transform="translate(380, 95)">
+    <rect width="165" height="128" rx="12" fill="#111125" stroke="rgba(6,182,212,0.2)" stroke-width="1"/>
+    <rect width="165" height="3" rx="1.5" fill="url(#gradCyan)"/>
+    <circle cx="32" cy="32" r="16" fill="rgba(6,182,212,0.15)"/>
+    <text x="32" y="37" text-anchor="middle" fill="#06b6d4" font-family="Inter, system-ui, sans-serif" font-size="13" font-weight="700">G</text>
+    <text x="56" y="37" fill="#f0f0f5" font-family="Inter, system-ui, sans-serif" font-size="12" font-weight="700">Gemini</text>
+    <text x="16" y="60" fill="#9090b0" font-family="Inter, system-ui, sans-serif" font-size="9">🔷 Google's latest</text>
+    <text x="16" y="75" fill="#9090b0" font-family="Inter, system-ui, sans-serif" font-size="9">🎁 60 req/min free</text>
+    <rect x="110" y="16" width="44" height="18" rx="9" fill="rgba(245,158,11,0.15)"/>
+    <text x="132" y="29" text-anchor="middle" fill="#fbbf24" font-family="Inter, system-ui, sans-serif" font-size="7" font-weight="600">🎁 Free</text>
+    <g transform="translate(16, 90)">
+      <rect width="44" height="18" rx="9" fill="rgba(6,182,212,0.1)"/>
+      <text x="22" y="12" text-anchor="middle" fill="#22d3ee" font-family="Inter, system-ui, sans-serif" font-size="7">2.0 Flash</text>
+      <rect x="50" width="44" height="18" rx="9" fill="rgba(6,182,212,0.1)"/>
+      <text x="72" y="12" text-anchor="middle" fill="#22d3ee" font-family="Inter, system-ui, sans-serif" font-size="7">Gemma 2</text>
+      <rect x="100" width="40" height="18" rx="9" fill="rgba(6,182,212,0.1)"/>
+      <text x="120" y="12" text-anchor="middle" fill="#22d3ee" font-family="Inter, system-ui, sans-serif" font-size="7">Pro</text>
+    </g>
+  </g>
+
+  <!-- 4. OpenRouter -->
+  <g transform="translate(560, 95)">
+    <rect width="165" height="128" rx="12" fill="#111125" stroke="rgba(245,158,11,0.2)" stroke-width="1"/>
+    <rect width="165" height="3" rx="1.5" fill="url(#gradOrange)"/>
+    <circle cx="32" cy="32" r="16" fill="rgba(245,158,11,0.15)"/>
+    <text x="32" y="37" text-anchor="middle" fill="#f59e0b" font-family="Inter, system-ui, sans-serif" font-size="12" font-weight="700">O</text>
+    <text x="56" y="37" fill="#f0f0f5" font-family="Inter, system-ui, sans-serif" font-size="11" font-weight="700">OpenRouter</text>
+    <text x="16" y="60" fill="#9090b0" font-family="Inter, system-ui, sans-serif" font-size="9">🔀 200+ models</text>
+    <text x="16" y="75" fill="#9090b0" font-family="Inter, system-ui, sans-serif" font-size="9">💳 Pay per token</text>
+    <rect x="110" y="16" width="44" height="18" rx="9" fill="rgba(139,92,246,0.15)"/>
+    <text x="132" y="29" text-anchor="middle" fill="#c4b5fd" font-family="Inter, system-ui, sans-serif" font-size="7" font-weight="600">🔀 Hub</text>
+    <g transform="translate(16, 90)">
+      <rect width="40" height="18" rx="9" fill="rgba(245,158,11,0.1)"/>
+      <text x="20" y="12" text-anchor="middle" fill="#fbbf24" font-family="Inter, system-ui, sans-serif" font-size="7">GPT-4o</text>
+      <rect x="46" width="40" height="18" rx="9" fill="rgba(245,158,11,0.1)"/>
+      <text x="66" y="12" text-anchor="middle" fill="#fbbf24" font-family="Inter, system-ui, sans-serif" font-size="7">Claude 3</text>
+      <rect x="92" width="44" height="18" rx="9" fill="rgba(245,158,11,0.1)"/>
+      <text x="114" y="12" text-anchor="middle" fill="#fbbf24" font-family="Inter, system-ui, sans-serif" font-size="7">200+</text>
+    </g>
+  </g>
+
+  <!-- 5. Local -->
+  <g transform="translate(740, 95)">
+    <rect width="140" height="128" rx="12" fill="#111125" stroke="rgba(59,130,246,0.2)" stroke-width="1"/>
+    <rect width="140" height="3" rx="1.5" fill="url(#gradBlue)"/>
+    <circle cx="28" cy="32" r="16" fill="rgba(59,130,246,0.15)"/>
+    <text x="28" y="37" text-anchor="middle" fill="#3b82f6" font-family="Inter, system-ui, sans-serif" font-size="13" font-weight="700">L</text>
+    <text x="50" y="37" fill="#f0f0f5" font-family="Inter, system-ui, sans-serif" font-size="12" font-weight="700">Local</text>
+    <text x="12" y="60" fill="#9090b0" font-family="Inter, system-ui, sans-serif" font-size="9">📴 100% offline</text>
+    <text x="12" y="75" fill="#9090b0" font-family="Inter, system-ui, sans-serif" font-size="9">🆓 Completely free</text>
+    <rect x="88" y="16" width="44" height="18" rx="9" fill="rgba(59,130,246,0.15)"/>
+    <text x="110" y="29" text-anchor="middle" fill="#60a5fa" font-family="Inter, system-ui, sans-serif" font-size="7" font-weight="600">📴 Off</text>
+    <g transform="translate(12, 90)">
+      <rect width="40" height="18" rx="9" fill="rgba(59,130,246,0.1)"/>
+      <text x="20" y="12" text-anchor="middle" fill="#60a5fa" font-family="Inter, system-ui, sans-serif" font-size="7">Ollama</text>
+      <rect x="46" width="40" height="18" rx="9" fill="rgba(59,130,246,0.1)"/>
+      <text x="66" y="12" text-anchor="middle" fill="#60a5fa" font-family="Inter, system-ui, sans-serif" font-size="7">GGUF</text>
+      <rect x="92" width="40" height="18" rx="9" fill="rgba(59,130,246,0.1)"/>
+      <text x="112" y="12" text-anchor="middle" fill="#60a5fa" font-family="Inter, system-ui, sans-serif" font-size="7">HF</text>
+    </g>
+  </g>
+
+  <!-- Section: Plugin / Env Providers -->
+  <text x="30" y="248" fill="#9090b0" font-family="Inter, system-ui, sans-serif" font-size="9" font-weight="600" letter-spacing="1.5">PLUGIN / ENV PROVIDERS</text>
+  <line x1="30" y1="254" x2="280" y2="254" stroke="rgba(99,102,241,0.2)" stroke-width="1"/>
+
+  <!-- 6. OpenAI -->
+  <g transform="translate(20, 262)">
+    <rect width="205" height="110" rx="10" fill="#111125" stroke="rgba(16,185,129,0.15)" stroke-width="1"/>
+    <rect width="205" height="3" rx="1.5" fill="url(#gradGreen)"/>
+    <text x="16" y="32" fill="#10b981" font-family="Inter, system-ui, sans-serif" font-size="14" font-weight="700">🤖</text>
+    <text x="38" y="32" fill="#f0f0f5" font-family="Inter, system-ui, sans-serif" font-size="12" font-weight="700">OpenAI</text>
+    <text x="16" y="54" fill="#9090b0" font-family="Inter, system-ui, sans-serif" font-size="9">GPT-4o · GPT-4 · GPT-3.5 · o1 · o3</text>
+    <text x="16" y="70" fill="#9090b0" font-family="Inter, system-ui, sans-serif" font-size="9">Env: OPENAI_API_KEY</text>
+    <rect x="148" y="18" width="46" height="18" rx="9" fill="rgba(16,185,129,0.15)"/>
+    <text x="171" y="31" text-anchor="middle" fill="#34d399" font-family="Inter, system-ui, sans-serif" font-size="7" font-weight="600">🎯 Leader</text>
+    <g transform="translate(16, 82)">
+      <rect width="44" height="18" rx="9" fill="rgba(16,185,129,0.1)"/>
+      <text x="22" y="12" text-anchor="middle" fill="#34d399" font-family="Inter, system-ui, sans-serif" font-size="7">GPT-4o</text>
+      <rect x="50" width="44" height="18" rx="9" fill="rgba(16,185,129,0.1)"/>
+      <text x="72" y="12" text-anchor="middle" fill="#34d399" font-family="Inter, system-ui, sans-serif" font-size="7">GPT-4</text>
+      <rect x="100" width="44" height="18" rx="9" fill="rgba(16,185,129,0.1)"/>
+      <text x="122" y="12" text-anchor="middle" fill="#34d399" font-family="Inter, system-ui, sans-serif" font-size="7">o1</text>
+      <rect x="150" width="40" height="18" rx="9" fill="rgba(16,185,129,0.1)"/>
+      <text x="170" y="12" text-anchor="middle" fill="#34d399" font-family="Inter, system-ui, sans-serif" font-size="7">o3</text>
+    </g>
+  </g>
+
+  <!-- 7. Anthropic -->
+  <g transform="translate(240, 262)">
+    <rect width="205" height="110" rx="10" fill="#111125" stroke="rgba(236,72,153,0.15)" stroke-width="1"/>
+    <rect width="205" height="3" rx="1.5" fill="url(#gradPink)"/>
+    <text x="16" y="32" fill="#ec4899" font-family="Inter, system-ui, sans-serif" font-size="14" font-weight="700">🔮</text>
+    <text x="38" y="32" fill="#f0f0f5" font-family="Inter, system-ui, sans-serif" font-size="12" font-weight="700">Anthropic</text>
+    <text x="16" y="54" fill="#9090b0" font-family="Inter, system-ui, sans-serif" font-size="9">Claude 3.5 Sonnet · Haiku · Opus</text>
+    <text x="16" y="70" fill="#9090b0" font-family="Inter, system-ui, sans-serif" font-size="9">Env: ANTHROPIC_API_KEY</text>
+    <rect x="148" y="18" width="46" height="18" rx="9" fill="rgba(236,72,153,0.15)"/>
+    <text x="171" y="31" text-anchor="middle" fill="#f472b6" font-family="Inter, system-ui, sans-serif" font-size="7" font-weight="600">🧠 Smart</text>
+    <g transform="translate(16, 82)">
+      <rect width="50" height="18" rx="9" fill="rgba(236,72,153,0.1)"/>
+      <text x="25" y="12" text-anchor="middle" fill="#f472b6" font-family="Inter, system-ui, sans-serif" font-size="7">Sonnet</text>
+      <rect x="56" width="40" height="18" rx="9" fill="rgba(236,72,153,0.1)"/>
+      <text x="76" y="12" text-anchor="middle" fill="#f472b6" font-family="Inter, system-ui, sans-serif" font-size="7">Haiku</text>
+      <rect x="102" width="40" height="18" rx="9" fill="rgba(236,72,153,0.1)"/>
+      <text x="122" y="12" text-anchor="middle" fill="#f472b6" font-family="Inter, system-ui, sans-serif" font-size="7">Opus</text>
+    </g>
+  </g>
+
+  <!-- 8. Mistral AI -->
+  <g transform="translate(460, 262)">
+    <rect width="205" height="110" rx="10" fill="#111125" stroke="rgba(6,182,212,0.15)" stroke-width="1"/>
+    <rect width="205" height="3" rx="1.5" fill="url(#gradCyan)"/>
+    <text x="16" y="32" fill="#06b6d4" font-family="Inter, system-ui, sans-serif" font-size="14" font-weight="700">🌀</text>
+    <text x="38" y="32" fill="#f0f0f5" font-family="Inter, system-ui, sans-serif" font-size="12" font-weight="700">Mistral AI</text>
+    <text x="16" y="54" fill="#9090b0" font-family="Inter, system-ui, sans-serif" font-size="9">Mistral Large · Small · Codestral</text>
+    <text x="16" y="70" fill="#9090b0" font-family="Inter, system-ui, sans-serif" font-size="9">Env: MISTRAL_API_KEY</text>
+    <rect x="148" y="18" width="46" height="18" rx="9" fill="rgba(6,182,212,0.15)"/>
+    <text x="171" y="31" text-anchor="middle" fill="#22d3ee" font-family="Inter, system-ui, sans-serif" font-size="7" font-weight="600">🇪🇺 EU</text>
+    <g transform="translate(16, 82)">
+      <rect width="50" height="18" rx="9" fill="rgba(6,182,212,0.1)"/>
+      <text x="25" y="12" text-anchor="middle" fill="#22d3ee" font-family="Inter, system-ui, sans-serif" font-size="7">Large</text>
+      <rect x="56" width="44" height="18" rx="9" fill="rgba(6,182,212,0.1)"/>
+      <text x="78" y="12" text-anchor="middle" fill="#22d3ee" font-family="Inter, system-ui, sans-serif" font-size="7">Small</text>
+      <rect x="106" width="48" height="18" rx="9" fill="rgba(6,182,212,0.1)"/>
+      <text x="130" y="12" text-anchor="middle" fill="#22d3ee" font-family="Inter, system-ui, sans-serif" font-size="7">Codestral</text>
+    </g>
+  </g>
+
+  <!-- 9. AWS Bedrock -->
+  <g transform="translate(680, 262)">
+    <rect width="200" height="110" rx="10" fill="#111125" stroke="rgba(245,158,11,0.15)" stroke-width="1"/>
+    <rect width="200" height="3" rx="1.5" fill="url(#gradOrange)"/>
+    <text x="16" y="32" fill="#f59e0b" font-family="Inter, system-ui, sans-serif" font-size="14" font-weight="700">☁️</text>
+    <text x="38" y="32" fill="#f0f0f5" font-family="Inter, system-ui, sans-serif" font-size="12" font-weight="700">AWS Bedrock</text>
+    <text x="16" y="54" fill="#9090b0" font-family="Inter, system-ui, sans-serif" font-size="9">Claude · Llama · Mistral · Titan</text>
+    <text x="16" y="70" fill="#9090b0" font-family="Inter, system-ui, sans-serif" font-size="9">Env: AWS creds + region</text>
+    <rect x="140" y="18" width="50" height="18" rx="9" fill="rgba(245,158,11,0.15)"/>
+    <text x="165" y="31" text-anchor="middle" fill="#fbbf24" font-family="Inter, system-ui, sans-serif" font-size="7" font-weight="600">☁️ AWS</text>
+    <g transform="translate(16, 82)">
+      <rect width="44" height="18" rx="9" fill="rgba(245,158,11,0.1)"/>
+      <text x="22" y="12" text-anchor="middle" fill="#fbbf24" font-family="Inter, system-ui, sans-serif" font-size="7">Claude</text>
+      <rect x="50" width="40" height="18" rx="9" fill="rgba(245,158,11,0.1)"/>
+      <text x="70" y="12" text-anchor="middle" fill="#fbbf24" font-family="Inter, system-ui, sans-serif" font-size="7">Llama</text>
+      <rect x="96" width="44" height="18" rx="9" fill="rgba(245,158,11,0.1)"/>
+      <text x="118" y="12" text-anchor="middle" fill="#fbbf24" font-family="Inter, system-ui, sans-serif" font-size="7">Titan</text>
+    </g>
+  </g>
+
+  <!-- Row 3: More Providers -->
+  <!-- 10. Azure -->
+  <g transform="translate(20, 388)">
+    <rect width="205" height="110" rx="10" fill="#111125" stroke="rgba(59,130,246,0.15)" stroke-width="1"/>
+    <rect width="205" height="3" rx="1.5" fill="url(#gradBlue)"/>
+    <text x="16" y="32" fill="#3b82f6" font-family="Inter, system-ui, sans-serif" font-size="14" font-weight="700">🔵</text>
+    <text x="38" y="32" fill="#f0f0f5" font-family="Inter, system-ui, sans-serif" font-size="12" font-weight="700">Azure OpenAI</text>
+    <text x="16" y="54" fill="#9090b0" font-family="Inter, system-ui, sans-serif" font-size="9">GPT-4 · GPT-3.5 · DALL-E</text>
+    <text x="16" y="70" fill="#9090b0" font-family="Inter, system-ui, sans-serif" font-size="9">Env: AZURE_OPENAI_API_KEY</text>
+    <rect x="148" y="18" width="46" height="18" rx="9" fill="rgba(59,130,246,0.15)"/>
+    <text x="171" y="31" text-anchor="middle" fill="#60a5fa" font-family="Inter, system-ui, sans-serif" font-size="7" font-weight="600">🏢 Enterprise</text>
+    <g transform="translate(16, 82)">
+      <rect width="44" height="18" rx="9" fill="rgba(59,130,246,0.1)"/>
+      <text x="22" y="12" text-anchor="middle" fill="#60a5fa" font-family="Inter, system-ui, sans-serif" font-size="7">GPT-4</text>
+      <rect x="50" width="44" height="18" rx="9" fill="rgba(59,130,246,0.1)"/>
+      <text x="72" y="12" text-anchor="middle" fill="#60a5fa" font-family="Inter, system-ui, sans-serif" font-size="7">GPT-3.5</text>
+      <rect x="100" width="44" height="18" rx="9" fill="rgba(59,130,246,0.1)"/>
+      <text x="122" y="12" text-anchor="middle" fill="#60a5fa" font-family="Inter, system-ui, sans-serif" font-size="7">DALL-E</text>
+    </g>
+  </g>
+
+  <!-- 11. Together AI -->
+  <g transform="translate(240, 388)">
+    <rect width="205" height="110" rx="10" fill="#111125" stroke="rgba(16,185,129,0.15)" stroke-width="1"/>
+    <rect width="205" height="3" rx="1.5" fill="url(#gradGreen)"/>
+    <text x="16" y="32" fill="#10b981" font-family="Inter, system-ui, sans-serif" font-size="14" font-weight="700">🟢</text>
+    <text x="38" y="32" fill="#f0f0f5" font-family="Inter, system-ui, sans-serif" font-size="12" font-weight="700">Together AI</text>
+    <text x="16" y="54" fill="#9090b0" font-family="Inter, system-ui, sans-serif" font-size="9">Llama · Mixtral · DeepSeek</text>
+    <text x="16" y="70" fill="#9090b0" font-family="Inter, system-ui, sans-serif" font-size="9">Env: TOGETHER_API_KEY</text>
+    <rect x="148" y="18" width="46" height="18" rx="9" fill="rgba(16,185,129,0.15)"/>
+    <text x="171" y="31" text-anchor="middle" fill="#34d399" font-family="Inter, system-ui, sans-serif" font-size="7" font-weight="600">🆕 Fast</text>
+    <g transform="translate(16, 82)">
+      <rect width="40" height="18" rx="9" fill="rgba(16,185,129,0.1)"/>
+      <text x="20" y="12" text-anchor="middle" fill="#34d399" font-family="Inter, system-ui, sans-serif" font-size="7">Llama</text>
+      <rect x="46" width="44" height="18" rx="9" fill="rgba(16,185,129,0.1)"/>
+      <text x="68" y="12" text-anchor="middle" fill="#34d399" font-family="Inter, system-ui, sans-serif" font-size="7">Mixtral</text>
+      <rect x="96" width="48" height="18" rx="9" fill="rgba(16,185,129,0.1)"/>
+      <text x="120" y="12" text-anchor="middle" fill="#34d399" font-family="Inter, system-ui, sans-serif" font-size="7">DeepSeek</text>
+    </g>
+  </g>
+
+  <!-- 12. Perplexity -->
+  <g transform="translate(460, 388)">
+    <rect width="205" height="110" rx="10" fill="#111125" stroke="rgba(236,72,153,0.15)" stroke-width="1"/>
+    <rect width="205" height="3" rx="1.5" fill="url(#gradPink)"/>
+    <text x="16" y="32" fill="#ec4899" font-family="Inter, system-ui, sans-serif" font-size="14" font-weight="700">❓</text>
+    <text x="38" y="32" fill="#f0f0f5" font-family="Inter, system-ui, sans-serif" font-size="12" font-weight="700">Perplexity</text>
+    <text x="16" y="54" fill="#9090b0" font-family="Inter, system-ui, sans-serif" font-size="9">Sonar · Llama 3 · Mixtral</text>
+    <text x="16" y="70" fill="#9090b0" font-family="Inter, system-ui, sans-serif" font-size="9">Env: PERPLEXITY_API_KEY</text>
+    <rect x="148" y="18" width="46" height="18" rx="9" fill="rgba(236,72,153,0.15)"/>
+    <text x="171" y="31" text-anchor="middle" fill="#f472b6" font-family="Inter, system-ui, sans-serif" font-size="7" font-weight="600">🔍 Search</text>
+    <g transform="translate(16, 82)">
+      <rect width="40" height="18" rx="9" fill="rgba(236,72,153,0.1)"/>
+      <text x="20" y="12" text-anchor="middle" fill="#f472b6" font-family="Inter, system-ui, sans-serif" font-size="7">Sonar</text>
+      <rect x="46" width="44" height="18" rx="9" fill="rgba(236,72,153,0.1)"/>
+      <text x="68" y="12" text-anchor="middle" fill="#f472b6" font-family="Inter, system-ui, sans-serif" font-size="7">Llama 3</text>
+      <rect x="96" width="44" height="18" rx="9" fill="rgba(236,72,153,0.1)"/>
+      <text x="118" y="12" text-anchor="middle" fill="#f472b6" font-family="Inter, system-ui, sans-serif" font-size="7">Mixtral</text>
+    </g>
+  </g>
+
+  <!-- 13. Fireworks AI -->
+  <g transform="translate(680, 388)">
+    <rect width="200" height="110" rx="10" fill="#111125" stroke="rgba(245,158,11,0.15)" stroke-width="1"/>
+    <rect width="200" height="3" rx="1.5" fill="url(#gradOrange)"/>
+    <text x="16" y="32" fill="#f59e0b" font-family="Inter, system-ui, sans-serif" font-size="14" font-weight="700">🎆</text>
+    <text x="38" y="32" fill="#f0f0f5" font-family="Inter, system-ui, sans-serif" font-size="12" font-weight="700">Fireworks AI</text>
+    <text x="16" y="54" fill="#9090b0" font-family="Inter, system-ui, sans-serif" font-size="9">Llama · Mixtral · DeepSeek</text>
+    <text x="16" y="70" fill="#9090b0" font-family="Inter, system-ui, sans-serif" font-size="9">Env: FIREWORKS_API_KEY</text>
+    <rect x="148" y="18" width="46" height="18" rx="9" fill="rgba(245,158,11,0.15)"/>
+    <text x="171" y="31" text-anchor="middle" fill="#fbbf24" font-family="Inter, system-ui, sans-serif" font-size="7" font-weight="600">🔥 Fast</text>
+    <g transform="translate(16, 82)">
+      <rect width="40" height="18" rx="9" fill="rgba(245,158,11,0.1)"/>
+      <text x="20" y="12" text-anchor="middle" fill="#fbbf24" font-family="Inter, system-ui, sans-serif" font-size="7">Llama</text>
+      <rect x="46" width="44" height="18" rx="9" fill="rgba(245,158,11,0.1)"/>
+      <text x="68" y="12" text-anchor="middle" fill="#fbbf24" font-family="Inter, system-ui, sans-serif" font-size="7">Mixtral</text>
+      <rect x="96" width="48" height="18" rx="9" fill="rgba(245,158,11,0.1)"/>
+      <text x="120" y="12" text-anchor="middle" fill="#fbbf24" font-family="Inter, system-ui, sans-serif" font-size="7">DeepSeek</text>
+    </g>
+  </g>
+
+  <!-- Row 4: More Providers -->
+  <!-- 14. Cohere -->
+  <g transform="translate(20, 514)">
+    <rect width="170" height="110" rx="10" fill="#111125" stroke="rgba(14,182,212,0.15)" stroke-width="1"/>
+    <rect width="170" height="3" rx="1.5" fill="url(#gradCyan)"/>
+    <text x="14" y="32" fill="#06b6d4" font-family="Inter, system-ui, sans-serif" font-size="14" font-weight="700">🧠</text>
+    <text x="36" y="32" fill="#f0f0f5" font-family="Inter, system-ui, sans-serif" font-size="12" font-weight="700">Cohere</text>
+    <text x="14" y="54" fill="#9090b0" font-family="Inter, system-ui, sans-serif" font-size="9">Command R · Embed</text>
+    <text x="14" y="70" fill="#9090b0" font-family="Inter, system-ui, sans-serif" font-size="9">Env: COHERE_API_KEY</text>
+    <g transform="translate(14, 82)">
+      <rect width="44" height="18" rx="9" fill="rgba(6,182,212,0.1)"/>
+      <text x="22" y="12" text-anchor="middle" fill="#22d3ee" font-family="Inter, system-ui, sans-serif" font-size="7">RAG</text>
+      <rect x="50" width="44" height="18" rx="9" fill="rgba(6,182,212,0.1)"/>
+      <text x="72" y="12" text-anchor="middle" fill="#22d3ee" font-family="Inter, system-ui, sans-serif" font-size="7">Embed</text>
+    </g>
+  </g>
+
+  <!-- 15. DeepInfra -->
+  <g transform="translate(205, 514)">
+    <rect width="170" height="110" rx="10" fill="#111125" stroke="rgba(139,92,246,0.15)" stroke-width="1"/>
+    <rect width="170" height="3" rx="1.5" fill="url(#gradPurple)"/>
+    <text x="14" y="32" fill="#a78bfa" font-family="Inter, system-ui, sans-serif" font-size="14" font-weight="700">🌐</text>
+    <text x="36" y="32" fill="#f0f0f5" font-family="Inter, system-ui, sans-serif" font-size="12" font-weight="700">DeepInfra</text>
+    <text x="14" y="54" fill="#9090b0" font-family="Inter, system-ui, sans-serif" font-size="9">Llama · Mistral · Mixtral</text>
+    <text x="14" y="70" fill="#9090b0" font-family="Inter, system-ui, sans-serif" font-size="9">Env: DEEPINFRA_TOKEN</text>
+    <g transform="translate(14, 82)">
+      <rect width="40" height="18" rx="9" fill="rgba(139,92,246,0.1)"/>
+      <text x="20" y="12" text-anchor="middle" fill="#c4b5fd" font-family="Inter, system-ui, sans-serif" font-size="7">Llama</text>
+      <rect x="46" width="44" height="18" rx="9" fill="rgba(139,92,246,0.1)"/>
+      <text x="68" y="12" text-anchor="middle" fill="#c4b5fd" font-family="Inter, system-ui, sans-serif" font-size="7">Mistral</text>
+    </g>
+  </g>
+
+  <!-- 16. Anyscale -->
+  <g transform="translate(390, 514)">
+    <rect width="170" height="110" rx="10" fill="#111125" stroke="rgba(245,158,11,0.15)" stroke-width="1"/>
+    <rect width="170" height="3" rx="1.5" fill="url(#gradOrange)"/>
+    <text x="14" y="32" fill="#f59e0b" font-family="Inter, system-ui, sans-serif" font-size="14" font-weight="700">⚡</text>
+    <text x="36" y="32" fill="#f0f0f5" font-family="Inter, system-ui, sans-serif" font-size="12" font-weight="700">Anyscale</text>
+    <text x="14" y="54" fill="#9090b0" font-family="Inter, system-ui, sans-serif" font-size="9">Llama · Mixtral · Code</text>
+    <text x="14" y="70" fill="#9090b0" font-family="Inter, system-ui, sans-serif" font-size="9">Env: ANYSCALE_API_KEY</text>
+    <g transform="translate(14, 82)">
+      <rect width="40" height="18" rx="9" fill="rgba(245,158,11,0.1)"/>
+      <text x="20" y="12" text-anchor="middle" fill="#fbbf24" font-family="Inter, system-ui, sans-serif" font-size="7">Llama</text>
+      <rect x="46" width="44" height="18" rx="9" fill="rgba(245,158,11,0.1)"/>
+      <text x="68" y="12" text-anchor="middle" fill="#fbbf24" font-family="Inter, system-ui, sans-serif" font-size="7">Mixtral</text>
+    </g>
+  </g>
+
+  <!-- 17. vLLM / TGI -->
+  <g transform="translate(575, 514)">
+    <rect width="170" height="110" rx="10" fill="#111125" stroke="rgba(59,130,246,0.15)" stroke-width="1"/>
+    <rect width="170" height="3" rx="1.5" fill="url(#gradBlue)"/>
+    <text x="14" y="32" fill="#60a5fa" font-family="Inter, system-ui, sans-serif" font-size="14" font-weight="700">🚀</text>
+    <text x="36" y="32" fill="#f0f0f5" font-family="Inter, system-ui, sans-serif" font-size="12" font-weight="700">vLLM / TGI</text>
+    <text x="14" y="54" fill="#9090b0" font-family="Inter, system-ui, sans-serif" font-size="9">Self-hosted OSS models</text>
+    <text x="14" y="70" fill="#9090b0" font-family="Inter, system-ui, sans-serif" font-size="9">Env: VLLM_URL</text>
+    <g transform="translate(14, 82)">
+      <rect width="52" height="18" rx="9" fill="rgba(59,130,246,0.1)"/>
+      <text x="26" y="12" text-anchor="middle" fill="#60a5fa" font-family="Inter, system-ui, sans-serif" font-size="7">Self-host</text>
+      <rect x="58" width="52" height="18" rx="9" fill="rgba(59,130,246,0.1)"/>
+      <text x="84" y="12" text-anchor="middle" fill="#60a5fa" font-family="Inter, system-ui, sans-serif" font-size="7">OSS</text>
+    </g>
+  </g>
+
+  <!-- 18. LM Studio -->
+  <g transform="translate(760, 514)">
+    <rect width="120" height="110" rx="10" fill="#111125" stroke="rgba(16,185,129,0.15)" stroke-width="1"/>
+    <rect width="120" height="3" rx="1.5" fill="url(#gradGreen)"/>
+    <text x="12" y="32" fill="#34d399" font-family="Inter, system-ui, sans-serif" font-size="14" font-weight="700">🎨</text>
+    <text x="34" y="32" fill="#f0f0f5" font-family="Inter, system-ui, sans-serif" font-size="12" font-weight="700">LM Studio</text>
+    <text x="12" y="54" fill="#9090b0" font-family="Inter, system-ui, sans-serif" font-size="9">Local GUI server</text>
+    <text x="12" y="70" fill="#9090b0" font-family="Inter, system-ui, sans-serif" font-size="9">Port 1234</text>
+    <g transform="translate(12, 82)">
+      <rect width="52" height="18" rx="9" fill="rgba(16,185,129,0.1)"/>
+      <text x="26" y="12" text-anchor="middle" fill="#34d399" font-family="Inter, system-ui, sans-serif" font-size="7">Local</text>
+    </g>
+  </g>
+
+  <!-- Bottom connector line -->
+  <line x1="30" y1="640" x2="870" y2="640" stroke="rgba(99,102,241,0.1)" stroke-width="0.5"/>
+  <text x="450" y="655" text-anchor="middle" fill="#606080" font-family="Inter, system-ui, sans-serif" font-size="9">One CLI to rule them all. Switch providers with a single flag. 17+ supported.</text>
+</svg>
