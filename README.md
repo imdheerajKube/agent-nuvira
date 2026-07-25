@@ -1339,7 +1339,7 @@ npx tsc --noEmit
 
 **Phases 1–3 (25 phases) are complete.** Phase 4 (Industry Standards & Autonomous Polish) is in progress. See [UPGRADE_ROADMAP.md](./UPGRADE_ROADMAP.md) for the full implementation journey.
 
-> 📊 **Product strategy and pitch materials:** [PRODUCT_STRATEGY.md](./PRODUCT_STRATEGY.md) — Competitive landscape, positioning map, OKR framework, and risk register. [PITCH_DECK.md](./PITCH_DECK.md) — 10-slide investor presentation outline with talking points and data.
+> 📊 **Architecture, strategy & contribution materials:** [ARCHITECTURE.md](./ARCHITECTURE.md) — Modular execution engine design with 7 module specifications, extensibility/observability systems, and phased migration plan. [ARCHITECTURE_DIAGRAMS.md](./ARCHITECTURE_DIAGRAMS.md) — Mermaid-rendered versions of all architecture diagrams (Module Architecture, Extensibility, Safe Execution, Data Flow, Observability Bus). [PRODUCT_STRATEGY.md](./PRODUCT_STRATEGY.md) — Competitive landscape, positioning map, OKR framework, and risk register. [PITCH_DECK.md](./PITCH_DECK.md) — 10-slide investor presentation outline with talking points and data. [CONTRIBUTING.md](./CONTRIBUTING.md) — Quick-reference contributor guide with docs map, dev setup, and contribution workflow.
 
 | Phase | Feature | Status |
 |---|---|---|

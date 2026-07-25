@@ -9,6 +9,7 @@
 | Category | Document | Purpose |
 |---|---|---|
 | **🎯 Strategy** | [PRODUCT_STRATEGY.md](./PRODUCT_STRATEGY.md) | Product thesis, competitive landscape, positioning map, OKR framework, risk register |
+| **🏗️ Architecture** | [ARCHITECTURE.md](./ARCHITECTURE.md), [ARCHITECTURE_DIAGRAMS.md](./ARCHITECTURE_DIAGRAMS.md) | Modular execution engine design — 7 module specs, extensibility system, observability bus, migration plan + Mermaid visual diagrams |
 | **📊 Pitch** | [PITCH_DECK.md](./PITCH_DECK.md) | 10-slide investor/stakeholder presentation outline with talking points |
 | **📘 Product Guide** | [Product_Guide.md](./Product_Guide.md) | Comprehensive technical overview — architecture, features, version history, market readiness |
 | **📖 User Manual** | [User_Manual.md](./User_Manual.md) | End-user documentation — installation, commands, workflows, troubleshooting |
