@@ -42,7 +42,8 @@ export class ProviderFactory {
         }
         throw new Error(
           `Unknown provider type: '${type}'. Available built-in: nim, gemini, openrouter, groq, local. ` +
-          `Check ~/.buff/plugins/ for auto-discovered plugins.`
+          `Check ~/.buff/plugins/ for auto-discovered plugins. ` +
+          `Supports 17+ total providers via env vars and plugin system (OpenAI, Anthropic, Mistral, Cohere, Together, DeepInfra, Fireworks, Perplexity, Azure, LM Studio, Anyscale, vLLM and more).`
         );
       }
     }

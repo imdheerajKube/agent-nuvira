@@ -15,7 +15,7 @@ agent-nuvira config list
 
 ## Features
 
-- **Unified interface** across 5 providers: local (Ollama, HuggingFace, GGML), Groq, NVIDIA NIM, Google Gemini, and OpenRouter
+- **Unified interface** across 17+ providers: 5 built-in (local/Ollama, Groq, NVIDIA NIM, Google Gemini, OpenRouter) + 12 configurable via environment variables (OpenAI, Anthropic, Mistral, Cohere, Together, DeepInfra, Fireworks, Perplexity, Azure, LM Studio, Anyscale, vLLM)
 - **Model discovery** — `agent-nuvira models` lists available models from any configured provider, with search/filter support
 - **Interactive chat** with conversation history, file context, and session commands
 - **AI-assisted file editing** with dry-run mode for safe previews
@@ -27,7 +27,7 @@ agent-nuvira config list
 - **Context-preserving model switching** — `agent-nuvira model switch` changes providers mid-session without losing agent state
 - **Skill compiler** — automatically extracts reusable patterns from successful agent runs into executable skills (`agent-nuvira skill run`)
 - **Context-window memory pruner** — prevents long multi-agent chains from exceeding model token limits
-- **Complete streaming support** — all 5 providers support real-time token-by-token output
+- **Complete streaming support** — all 17+ providers support real-time token-by-token output
 - **Cost tracking** — per-provider/session/monthly costs with `agent-nuvira stats cost`
 - **Prompt history search** — keyword and semantic search across past conversations (`/search`, `buff history`)
 - **Native embedding support** — 3-tier embedder with `@huggingface/transformers` for 10x faster semantic search
@@ -1339,11 +1339,13 @@ npx tsc --noEmit
 
 **Phases 1–3 (25 phases) are complete.** Phase 4 (Industry Standards & Autonomous Polish) is in progress. See [UPGRADE_ROADMAP.md](./UPGRADE_ROADMAP.md) for the full implementation journey.
 
+> 📊 **Product strategy and pitch materials:** [PRODUCT_STRATEGY.md](./PRODUCT_STRATEGY.md) — Competitive landscape, positioning map, OKR framework, and risk register. [PITCH_DECK.md](./PITCH_DECK.md) — 10-slide investor presentation outline with talking points and data.
+
 | Phase | Feature | Status |
 |---|---|---|
 | **Phase 1: Quick Wins** | | |
 | 1.1 | Auto-discovery plugin loader — drop `.js` into `~/.buff/plugins/` | ✅ Complete |
-| 1.2 | Complete streaming support — all 5 providers | ✅ Complete |
+| 1.2 | Complete streaming support — all 17+ providers | ✅ Complete |
 | 1.3 | Cost tracking — per-provider/session/monthly | ✅ Complete |
 | 1.4 | `buff init` — interactive project scaffolding | ✅ Complete |
 | 1.5 | Prompt history search — keyword + semantic | ✅ Complete |
@@ -1389,7 +1391,7 @@ npx tsc --noEmit
 
 | Version | Date | Key Changes |
 |---------|------|-------------|
-| **v1.0.0** | Apr 2026 | Initial release — Core CLI with chat, 5 providers, config, models |
+| **v1.0.0** | Apr 2026 | Initial release — Core CLI with chat, 5 built-in providers (expandable to 17+ via plugins), config, models |
 | **v1.1.0** | Apr 2026 | Model discovery with search/filter |
 | **v1.2.0** | Apr 2026 | AI-assisted file editing (edit command) |
 | **v1.3.0** | May 2026 | Implementation plans (plan command) |
@@ -1422,10 +1424,10 @@ npx tsc --noEmit
 ### Phase 0: Foundation — Core CLI & Provider Layer
 | Feature | Description |
 |---------|-------------|
-| **5 Inference Providers** | Groq, NVIDIA NIM, Google Gemini, OpenRouter, Local (Ollama/HuggingFace/GGML) |
+| **17+ Inference Providers** | 5 built-in (Groq, NVIDIA NIM, Google Gemini, OpenRouter, Local) + 12 configurable via env vars (OpenAI, Anthropic, Mistral, Cohere, Together, DeepInfra, Fireworks, Perplexity, Azure, LM Studio, Anyscale, vLLM) |
 | **Unified CLI** | 25+ commands via Commander.js with shared options |
 | **Config System** | JSON config file + env vars + CLI flags priority chain |
-| **Streaming** | Real-time token-by-token output for all 5 providers |
+| **Streaming** | Real-time token-by-token output for all 17+ providers |
 | **Response Caching** | SQLite-backed cache with configurable TTL |
 | **Chat Interface** | Interactive chat with conversation history and `/` commands |
 | **File Editing** | AI-assisted file editing with dry-run mode |

@@ -1360,10 +1360,10 @@ rm -rf ~/.buff   # Remove all configuration and cached data
 ### Phase 0: Foundation — Core CLI & Provider Layer
 | Feature | Description |
 |---------|-------------|
-| **5 Inference Providers** | Groq, NVIDIA NIM, Google Gemini, OpenRouter, Local (Ollama/HuggingFace/GGML) |
+| **17+ Inference Providers** | 5 built-in (Groq, NVIDIA NIM, Google Gemini, OpenRouter, Local) + 12 configurable via env vars (OpenAI, Anthropic, Mistral, Cohere, Together, DeepInfra, Fireworks, Perplexity, Azure, LM Studio, Anyscale, vLLM) |
 | **Unified CLI** | 25+ commands via Commander.js with shared options |
 | **Config System** | JSON config file + env vars + CLI flags priority chain |
-| **Streaming** | Real-time token-by-token output for all 5 providers |
+| **Streaming** | Real-time token-by-token output for all 17+ providers |
 | **Response Caching** | SQLite-backed cache with configurable TTL |
 | **Chat Interface** | Interactive chat with conversation history and `/` commands |
 | **File Editing** | AI-assisted file editing with dry-run mode |

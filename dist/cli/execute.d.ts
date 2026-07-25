@@ -69,6 +69,43 @@ export declare class ExecuteCommand extends BaseCommand {
      */
     private handleSuggest;
     /**
+     * Shared handler for post-execution tasks:
+     * 1. Track the goal in session history
+     * 2. Update lastFailedGoal tracking (returns the updated value since params are passed by value)
+     * 3. Generate dynamic choices (analysis + follow-ups)
+     * 4. Prompt the user
+     * 5. Return the parsed action + updated lastFailedGoal
+     *
+     * Called after EVERY goal execution (main, follow-up, retry-fix)
+     * so that the interactive UX is consistent.
+     */
+    private handlePostExecution;
+    /**
+     * Generate context-aware choices for the post-execution prompt.
+     *
+     * After a SUCCESS: shows LLM-generated follow-up suggestions
+     * After a FAILURE: shows failure analysis and specific recovery options
+     * Always includes: enter another goal, switch model, history, exit
+     */
+    private generatePostExecutionActions;
+    /**
+     * LLM-powered follow-up suggestion generator.
+     *
+     * Uses the current provider to generate contextually relevant next steps
+     * based on what was just accomplished. Falls back to rule-based suggestions
+     * if the LLM call fails.
+     */
+    private generateFollowUpSuggestions;
+    /**
+     * Analyze a failed orchestration result to determine what went wrong
+     * and suggest recovery actions.
+     */
+    private analyzeFailure;
+    /**
+     * Display a concise failure analysis to the user.
+     */
+    private showFailureAnalysis;
+    /**
      * Run the orchestrator for a single goal and display results.
      * Returns the outcome so the caller can record it in session history.
      */

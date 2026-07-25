@@ -26,12 +26,12 @@
 | Feature | Freebuff | Agent-Nuvira | Advantage |
 |---|---|---|---|
 | **Architecture** | Multi-agent (4 roles) | Multi-agent (15 roles) | Agent-Nuvira |
-| **Inference Providers** | Freebuff servers only | 5: Local, Groq, NIM, Gemini, OpenRouter | Agent-Nuvira |
+| **Inference Providers** | Freebuff servers only | 17+ (5 built-in + 12 configurable via env vars: OpenAI, Anthropic, Mistral, Cohere, Together, DeepInfra, Fireworks, Perplexity, Azure, LM Studio, Anyscale, vLLM) | Agent-Nuvira |
 | **Server Dependency** | Yes — requires cloud | None — BYO API keys, offline-capable | Agent-Nuvira |
 | **Multi-Agent Pipeline** | Sequential only | Sequential + parallel (dependency-aware) | Agent-Nuvira |
 | **Self-Learning** | None | Scorer, model-router, pattern-extractor, agent-stats, self-improver | Agent-Nuvira |
 | **Persistent Memory** | Session-only | Vector store + trajectory store + embedding | Agent-Nuvira |
-| **Streaming** | Unknown | All 5 providers | Agent-Nuvira |
+| **Streaming** | Unknown | All 17+ providers | Agent-Nuvira |
 | **Plugin System** | Custom agents (TypeScript) | Programmatic plugin API | Similar |
 | **Testing Sandbox** | None | TesterAgent with temp dir sandbox | Agent-Nuvira |
 | **Git Integration** | None | GitAgent, PackageAgent, GitHubReleaseAgent | Agent-Nuvira |
@@ -48,7 +48,7 @@
 | Gap | Severity | Current Workaround |
 |---|---|---|
 | ~~No auto-discovery plugin loader~~ | ✅ Resolved | `runAutoDiscovery()` on startup |
-| ~~Streaming incomplete (3/5 providers)~~ | ✅ Resolved | All 5 providers streaming |
+| ~~Streaming incomplete (3/5 providers)~~ | ✅ Resolved | All 17+ providers streaming |
 | ~~No cost tracking~~ | ✅ Resolved | CostTracker with per-adapter integration |
 | ~~No project scaffolding~~ | ✅ Resolved | `buff init` with 5+ templates |
 | ~~No prompt history search~~ | ✅ Resolved | Keyword + semantic search in chat/CLI |
@@ -95,7 +95,7 @@ buff chat --provider <plugin>  # Use a discovered plugin provider
 
 ### 1.2 Complete Streaming Support
 
-**Objective:** All 5 providers support real-time token-by-token streaming in chat mode.
+**Objective:** All 17+ providers support real-time token-by-token streaming in chat mode.
 
 **Status:** ✅ Completed
 
@@ -849,7 +849,7 @@ buff sdk init --type agent-pack         # Multi-agent plugin pack
 
 | Component | File | Description |
 |---|---|---|
-| **Provider list command** | `src/cli/provider.ts` | Color-coded table of all 5 providers + plugins, showing status (Available/Unreachable/Not configured), API key preview, and configured model |
+| **Provider list command** | `src/cli/provider.ts` | Color-coded table of all 5 built-in + plugin providers (17+ total), showing status (Available/Unreachable/Not configured), API key preview, and configured model |
 | **Provider health command** | `src/cli/provider.ts` | Detailed per-provider diagnostics: API key check, module loading, endpoint reachability, model info, verbose model listing, fix suggestions |
 | **Router registration** | `src/cli/router.ts` | Registered `buff provider` as a top-level CLI command |
 
@@ -1555,7 +1555,7 @@ jobs:
 CLI (chat, edit, plan, models, config, cache, execute, run, workflow, plugins, learn)
   │
   ├── Agents (planner, gatherer, writer, reviewer, tester, debugger, runner, git, package, release, security)
-  ├── Inference (5 providers: local, groq, nim, gemini, openrouter)
+  ├── Inference (5 built-in + 12 configurable providers: local, groq, nim, gemini, openrouter, openai, anthropic, mistral, cohere, together, deepinfra, fireworks, perplexity, azure, lmstudio, anyscale, vllm)
   ├── Memory (vector store, trajectory store, embedder, memory integration)
   ├── Learning (scorer, model-router, pattern-extractor, agent-stats, self-improver)
   ├── Context (parser, cache/SQLite)

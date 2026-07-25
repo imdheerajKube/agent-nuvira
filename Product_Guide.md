@@ -16,6 +16,7 @@
 6. [Testing & Quality Assurance](#6-testing--quality-assurance)
 7. [Completed Roadmap](#7-completed-roadmap)
 8. [Investor-Focused Highlights](#8-investor-focused-highlights)
+9. [Strategy & Pitch Deck](#9-strategy-pitch-deck)
 
 ---
 
@@ -32,7 +33,7 @@ Unlike cloud-dependent coding assistants, Agent-Nuvira is **fully offline-capabl
 | Factor | Agent-Nuvira | Typical Competitors |
 |---|---|---|
 | **Architecture** | Multi-agent orchestration (15 agent roles + management) | Single-agent chat |
-| **Provider Choice** | 5 providers + plugin system | Vendor-locked |
+| **Provider Choice** | 17+ providers (5 built-in + 12 configurable via env vars) + plugin system | Vendor-locked |
 | **Offline Capability** | ✅ Full offline with local models | ❌ Cloud-dependent |
 | **Data Privacy** | Direct-to-provider or local-only | Routes through intermediary server |
 | **Cost Model** | Free (MIT) + user's API keys | Subscription or per-seat pricing |
@@ -394,7 +395,7 @@ src/web-dashboard/              # React web dashboard
 | # | Feature | Status | Phase | Description |
 |---|---|---|---|---|
 | 1 | **Multi-Agent Orchestration** | ✅ Complete | Phase 1 | 10+ agent roles with dependency-aware scheduling |
-| 2 | **5 Inference Providers** | ✅ Complete | Core | Groq, NVIDIA NIM, Google Gemini, OpenRouter, Local (Ollama/HF/GGML) |
+| 2 | **17+ Inference Providers** | ✅ Complete | Core | 5 built-in (Groq, NVIDIA NIM, Google Gemini, OpenRouter, Local) + 12 configurable via env vars (OpenAI, Anthropic, Mistral, Cohere, Together, DeepInfra, Fireworks, Perplexity, Azure, LM Studio, Anyscale, vLLM) |
 | 3 | **Interactive Chat** | ✅ Complete | Core | Multi-line input, chat history, session commands |
 | 4 | **Model Discovery** | ✅ Complete | v1.1 | List/search/filter models from any provider |
 | 5 | **AI-Assisted Editing** | ✅ Complete | v1.2 | Dry-run mode, file context, streaming |
@@ -541,9 +542,10 @@ interface InferenceOptions {
 |---|---|---|---|---|---|
 | Groq | OpenAI-compatible REST | ✅ | 10+ | < 500ms | Free tier available |
 | NVIDIA NIM | OpenAI-compatible REST | ✅ | 121+ | < 1s | Free tier available |
-| Google Gemini | Gemini REST | ❌ | 5+ | < 2s | Free tier (60 req/min) |
+| Google Gemini | Gemini REST | ✅ | 5+ | < 2s | Free tier (60 req/min) |
 | OpenRouter | OpenAI-compatible REST | ✅ | 200+ | Varies | Free credits on signup |
-| Local (Ollama) | Ollama REST | ❌ | Any | Varies (HW-dependent) | Free |
+| Local (Ollama) | Ollama REST | ✅ | Any | Varies (HW-dependent) | Free |
+| **12 more via env vars** | OpenAI-compatible REST | ✅ | Varies | Varies | API-key-dependent |
 
 ### 4.2 Multi-Agent Pipeline Execution Flow
 
@@ -769,7 +771,7 @@ options:
 
 | Version | Date | Highlights |
 |---|---|---|
-| **v1.0.0** | Initial | Core CLI with chat, 5 providers, config, models |
+| **v1.0.0** | Initial | Core CLI with chat, 5 built-in providers (expandable to 17+ via plugins), config, models |
 | **v1.1.0** | | Model discovery with search/filter |
 | **v1.2.0** | | AI-assisted file editing (edit command) |
 | **v1.3.0** | | Implementation plans (plan command) |
@@ -917,7 +919,7 @@ All 30 planned phases have been implemented as of **August 2026**. See [UPGRADE_
 | # | Feature | Description |
 |---|---|---|
 | 1.1 | **Auto-Discovery Plugin Loader** | Drop-in `.js` files → auto-register at startup |
-| 1.2 | **Complete Streaming Support** | All 5 providers support real-time token-by-token output |
+| 1.2 | **Complete Streaming Support** | All 17+ providers support real-time token-by-token output |
 | 1.3 | **Cost Tracking** | Per-provider/session/monthly costs with `buff stats cost` |
 | 1.4 | **`buff init`** | Interactive project scaffolding with 5+ templates |
 | 1.5 | **Prompt History Search** | Keyword + semantic search across past conversations |
@@ -984,7 +986,7 @@ All 30 phases are complete. Future work will focus on polishing, community build
 Agent-Nuvira has evolved from a single-agent CLI to a comprehensive multi-agent AI coding platform with:
 
 - **15 specialized AI agents** working in orchestrated pipelines (Planner, Writer, Reviewer, Tester, Debugger, Runner, Git, Package, GitHubRelease, Security, SkillRunner, MCP, ContextGatherer, Agent, Orchestrator)
-- **5 inference providers** with a plugin system for unlimited expansion
+- **17+ inference providers** (5 built-in + 12 configurable via env vars) with a plugin system for unlimited expansion
 - **1830+ automated tests** ensuring reliability across 55 test files
 - **Full cross-platform support** (Windows, macOS, Linux) with CI validation
 - **Self-learning engine** that improves system performance over time
@@ -1038,6 +1040,21 @@ Agent-Nuvira has evolved from a single-agent CLI to a comprehensive multi-agent 
 | **Enterprise** | Secure, self-hosted AI coding | Local models + federation |
 
 ---
+
+## 9. Strategy & Pitch Deck
+
+Strategic planning documents for stakeholders, investors, and team leads. These complement the technical Product Guide with market analysis, competitive positioning, and execution planning.
+
+| Document | Purpose | Audience |
+|---|---|---|
+| **[PRODUCT_STRATEGY.md](./PRODUCT_STRATEGY.md)** | Product thesis, competitive landscape (pricing matrix, 22-dimension feature comparison, positioning map), target users, core differentiators, OKR framework (5 objectives, 19 key results), risk register | Investors, stakeholders, product leads |
+| **[PITCH_DECK.md](./PITCH_DECK.md)** | 10-slide investor presentation outline with talking points, data visualizations, architecture diagrams, traction timeline, business model, and ask | Investors, partners, board presentations |
+
+**Key highlights from the competitive analysis:**
+- Agent-Nuvira is the **only tool** in the top-left quadrant (high autonomy + multi-provider flexibility) of the positioning map
+- Leads on **16 of 22 feature dimensions** compared to Copilot, Cursor, Claude Code, Windsurf, Codex CLI, Freebuff, Ruflo, and Hermes
+- One of only **3 open-source tools** (with Ruflo, Hermes) offering the full product for $0 with BYO API keys
+- Only tool with **all six**: sandboxed testing, CI/CD mode, team workflows, self-learning, security scanning, and web dashboard
 
 > **Agent-Nuvira v1.16.1 | MIT License | Built by Dheeraj Sharma**
 > 
