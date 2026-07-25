@@ -39,6 +39,7 @@ import { formatMcpToolsForPrompt } from './agents/mcp-agent.js';
 import { getModuleRegistry, type ModuleRegistry } from './module-registry.js';
 import { getEventBus, EventNames } from '../observability/event-bus.js';
 import type { EventBus } from '../observability/event-bus.js';
+import { DefaultReportModule, type ReportModule, type ReportFormat } from './report-module.js';
 import { ContextPruner } from '../learning/context-pruner.js';
 import { ErrorRepairEngine } from '../learning/error-repair.js';
 import type { RepairMode } from '../learning/error-repair.js';
@@ -214,11 +215,14 @@ export class Orchestrator {
   private moduleRegistry: ModuleRegistry;
   /** The event bus for emitting observability events */
   private eventBus: EventBus;
+  /** The report module for generating structured execution reports */
+  private reportModule: ReportModule;
 
-  constructor(configManager?: ConfigManager, moduleRegistry?: ModuleRegistry, eventBus?: EventBus) {
+  constructor(configManager?: ConfigManager, moduleRegistry?: ModuleRegistry, eventBus?: EventBus, reportModule?: ReportModule) {
     this.configManager = configManager ?? new ConfigManager();
     this.moduleRegistry = moduleRegistry ?? getModuleRegistry();
     this.eventBus = eventBus ?? getEventBus();
+    this.reportModule = reportModule ?? new DefaultReportModule(this.eventBus);
   }
 
   /**
@@ -612,16 +616,27 @@ export class Orchestrator {
       durationMs: Date.now() - startTime,
     }, 'orchestrator');
 
-    const summaryLines: string[] = [];
-    summaryLines.push(hasFailures
-      ? `Completed ${completed}/${total} tasks with some failures in ${elapsed}s`
-      : `Completed all ${completed} tasks successfully in ${elapsed}s`);
-    summaryLines.push('');
-    summaryLines.push('Changes:');
-    summaryLines.push(vault.getDiffSummary());
+    // ── Generate structured report via ReportModule ──────────────────
+    const report = await this.reportModule.generate({
+      goal,
+      agentResults,
+      fileChanges: vault.context.fileChanges.map((c) => ({
+        path: c.path,
+        status: c.status,
+      })),
+      hasFailures,
+      durationMs: Date.now() - startTime,
+      runOutput,
+      error: undefined,
+      trajectoryId,
+      reviewId,
+    });
+
+    // Format as text for the result summary
+    const reportText = this.reportModule.format(report, 'text');
 
     return this.buildResult(!hasFailures, goal, agentResults, vault, {
-      summary: summaryLines.join('\n'),
+      summary: reportText,
       tasksCompleted: completed,
       tasksTotal: total,
       trajectoryId,

@@ -225,6 +225,10 @@ export type { AgentFactory, ModuleMetadata } from './agents/module-registry.js';
 export { EventBus, EventNames, LoggerConsumer, DAGConsumer, TelemetryConsumer, DebugConsumer, getEventBus, resetEventBus, getEventBusConsumers } from './observability/event-bus.js';
 export type { EventRecord, EventFilter, EventHandler, EventBusConsumer, TelemetrySnapshot } from './observability/event-bus.js';
 
+// ─── ReportModule (Phase 4) ───────────────────────────────────────────-
+export { DefaultReportModule } from './agents/report-module.js';
+export type { ReportModule, ExecutionReport, ReportParams, ReportFormat, AgentResultSummary, ReportFileChange } from './agents/report-module.js';
+
 // ─── Phase 4.4 — A2A Protocol exports ────────────────────────────────────────
 export { createA2AServer, startA2AServer } from './federation/a2a-server.js';
 export type { A2AServerOptions } from './federation/a2a-server.js';
