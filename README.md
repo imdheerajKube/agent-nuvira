@@ -53,6 +53,7 @@ agent-nuvira config list
 - **A2A (Agent-to-Agent) Protocol** — inter-agent communication standard for multi-machine collaboration
 - **CI/CD headless mode** — `buff ci` for automated pipelines with GitHub Actions integration
 - **npm publishing & one-line install** — `npx agent-nuvira` and `npx buff` for zero-setup onboarding
+- **Marketing website** — `website/` directory with a full landing page, SEO meta tags, and Netlify-ready deployment config
 - **Interactive development mode** — `buff execute` without a goal launches a guided interactive loop with session save/resume, follow-up suggestions, and failure analysis
 - **Session persistence** — save and resume development sessions across CLI restarts with full history
 - **Failure analysis** — automatic diagnosis of agent failures with specific recovery options per agent type
@@ -1011,6 +1012,21 @@ Adapter Adapter Adapter   Adapter      Adapter
          │  └────────────────────────┘  │
          └──────────────────────────────┘
 ```
+
+### Website (Marketing Site)
+
+The `website/` directory contains a complete static landing page for Agent-Nuvira (`agent-nuvira.com`):
+
+| File | Purpose |
+|---|---|
+| `index.html` | Full marketing landing page with hero, features, pipeline visualization, provider cards, quickstart guide, extensions, and comparison table |
+| `styles.css` | Complete styling with gradient text, animated particles, responsive grid, and dark theme |
+| `script.js` | Interactive elements: scroll animations, copy-to-clipboard, mobile nav toggle, particle system |
+| `_redirects` | Netlify/Cloudflare Page redirect rules |
+| `_headers` | Custom HTTP security and cache headers |
+| `assets/` | Hero images, screenshots, and OG meta assets |
+
+The site is pre-configured for Netlify deployment with zero-configuration.
 
 ### Key Modules
 

@@ -25,13 +25,13 @@
 
 | Feature | Freebuff | Agent-Nuvira | Advantage |
 |---|---|---|---|
-| **Architecture** | Multi-agent (4 roles) | Multi-agent (10+ roles) | Agent-Nuvira |
+| **Architecture** | Multi-agent (4 roles) | Multi-agent (15 roles) | Agent-Nuvira |
 | **Inference Providers** | Freebuff servers only | 5: Local, Groq, NIM, Gemini, OpenRouter | Agent-Nuvira |
 | **Server Dependency** | Yes — requires cloud | None — BYO API keys, offline-capable | Agent-Nuvira |
 | **Multi-Agent Pipeline** | Sequential only | Sequential + parallel (dependency-aware) | Agent-Nuvira |
 | **Self-Learning** | None | Scorer, model-router, pattern-extractor, agent-stats, self-improver | Agent-Nuvira |
 | **Persistent Memory** | Session-only | Vector store + trajectory store + embedding | Agent-Nuvira |
-| **Streaming** | Unknown | Partial (Groq, NIM) | Partial |
+| **Streaming** | Unknown | All 5 providers | Agent-Nuvira |
 | **Plugin System** | Custom agents (TypeScript) | Programmatic plugin API | Similar |
 | **Testing Sandbox** | None | TesterAgent with temp dir sandbox | Agent-Nuvira |
 | **Git Integration** | None | GitAgent, PackageAgent, GitHubReleaseAgent | Agent-Nuvira |

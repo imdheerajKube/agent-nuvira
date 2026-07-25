@@ -117,27 +117,28 @@ The orchestrator is the brain of the system. It coordinates 15 specialized agent
 User: "add JWT authentication to the Express app"
                   │
                   ▼
-          ┌───────────────┐
-          │  Orchestrator  │
-          │  (Goal Decomp) │
-          │  + Context     │
-          │    Pruner      │
-          └───────┬───────┘
+          ┌─────────────────┐
+          │   Orchestrator   │
+          │  (Goal Decomp)   │
+          │  + Context       │
+          │    Vault & Pruner │
+          │  + MCP Manager   │
+          └───────┬─────────┘
                   │
-     ┌────────────┼────────────┐
-     ▼            ▼            ▼
-┌──────────┐ ┌──────────┐ ┌──────────┐
-│ Planner   │ │ Context  │ │ Security │
-│ (creates  │ │ Vault    │ │ Scanner  │
-│ task plan)│ │ (shared  │ │ (injection│
-└────┬─────┘ │ context) │ │  + PII)  │
-     │       │ + Pruner │ └──────────┘
+     ┌────────────┼──────────────────┐
+     ▼            ▼                  ▼
+┌──────────┐ ┌──────────┐   ┌────────────┐
+│ Planner   │ │ Context  │   │Security    │
+│ (creates  │ │ Vault    │   │Agent       │
+│ task plan)│ │ (shared  │   │(pre-scan   │
+└────┬─────┘ │ context) │   │ goal + PII)│
+     │       │ + Pruner │   └────────────┘
      ▼       └──────────┘
-┌──────────────┐     ┌──────────────────┐
-│ Context      │────▶│  WriterAgent     │
-│ Gatherer     │     │  (implements     │
-│ (scans code) │     │   code changes)  │
-└──────────────┘     └────────┬─────────┘
+┌──────────────┐     ┌──────────────────┐     ┌──────────────────┐
+│ Context      │────▶│  WriterAgent     │◀───▶│    MCPAgent      │
+│ Gatherer     │     │  (implements     │     │ (invokes ext.    │
+│ (scans code) │     │   code changes)  │     │  tools via MCP)  │
+└──────────────┘     └────────┬─────────┘     └──────────────────┘
                               │
                     ┌─────────┼─────────┐
                     ▼         ▼         ▼
@@ -153,15 +154,18 @@ User: "add JWT authentication to the Express app"
              └────────┘ └───┬────┘
                             │
                             ▼
-                    ┌──────────────┐
-                    │Package Agent │
-                    │(version bump)│
-                    └──────┬───────┘
+                    ┌──────────────────┐
+                    │  PackageAgent    │
+                    │(version bump,    │
+                    │ npm build,       │
+                    │ changelog gen)   │
+                    └──────┬───────────┘
                            │
                            ▼
                     ┌──────────────────┐
                     │GitHub Release    │
-                    │Agent (tag+release)│
+                    │Agent (tag+release│
+                    │ notes + publish) │
                     └──────────────────┘
 
                      ┌──────────────────┐
@@ -444,6 +448,7 @@ src/web-dashboard/              # React web dashboard
 | 53 | **Auto Error-Repair Engine** | ✅ Complete | Phase 4.3 | Automatic diagnosis and repair of test failures with configurable retry budgets |
 | 54 | **A2A Protocol** | ✅ Complete | Phase 4.4 | Agent-to-Agent communication standard for multi-machine collaboration |
 | 55 | **Enhanced Test Coverage** | ✅ Complete | Phase 5 | 1830+ tests across 55 test files — failure analysis, follow-ups, handlePostExecution |
+| 56 | **Marketing Website** | ✅ Complete | Core | `website/` directory — full static landing page at agent-nuvira.com with hero, features, pipeline, providers, quickstart, comparison table, Netlify-ready deployment |
 
 ### 3.2 Key Upgrades & Enhancements
 

@@ -1055,6 +1055,23 @@ agent-nuvira team review
 agent-nuvira team share
 ```
 
+### 7.4 Marketing Website
+
+Agent-Nuvira ships with a complete static marketing website in the `website/` directory, deployed at **agent-nuvira.com**. This is a full landing page designed for Netlify or Cloudflare Pages deployment with zero configuration.
+
+**Website structure:**
+
+| File | Purpose |
+|---|---|
+| `website/index.html` | Full landing page with hero, features, pipeline visualization, provider cards, quickstart guide, extensions, and comparison table |
+| `website/styles.css` | Complete styling with gradient text, animated particles, responsive grid, and dark theme |
+| `website/script.js` | Interactive elements: scroll animations, copy-to-clipboard, mobile nav toggle, particle system |
+| `website/_redirects` | Netlify/Cloudflare Page redirect rules |
+| `website/_headers` | Custom HTTP security and cache headers |
+| `website/assets/` | Hero images, screenshots, and OG meta assets |
+
+Deploy with a single drag-and-drop or `npx netlify-cli deploy --dir=website`.
+
 ### 7.5 Creating Custom Agents (SDK)
 
 The `@agent-nuvira/sdk` package lets you build custom agents:
