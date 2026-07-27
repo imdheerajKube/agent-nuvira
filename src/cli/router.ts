@@ -40,6 +40,8 @@ import { FeedbackCommand } from './feedback.js';
 import { MarketplaceCommand } from './marketplace.js';
 import { MCPCommand } from './mcp.js';
 import { CICommand } from './ci.js';
+import { PublishCommand } from './publish.js';
+import { PhaseCommand } from './phase.js';
 import { logger } from '../utils/logger.js';
 
 /**
@@ -158,6 +160,14 @@ export function createCLI(): Command {
   // Register CI command (Phase 4.5 — Headless CI/CD mode)
   const ciCmd = new CICommand();
   program.addCommand(ciCmd.create());
+
+  // Register Publish command (Autonomous publish workflow)
+  const publishCmd = new PublishCommand();
+  program.addCommand(publishCmd.create());
+
+  // Register Phase command (Phase-wise scope execution)
+  const phaseCmd = new PhaseCommand();
+  program.addCommand(phaseCmd.create());
 
   // Default action: show help
   program.action(() => {

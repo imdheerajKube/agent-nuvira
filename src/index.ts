@@ -327,6 +327,26 @@ export {
 
 // ─── Phase 4.5 — CI/CD Headless Mode exports ──────────────────────────────────
 export { CICommand } from './cli/ci.js';
+
+// ─── Publish & Phase commands (Autonomous publish + phase-wise execution) ──────
+export { PublishCommand } from './cli/publish.js';
+export { PhaseCommand } from './cli/phase.js';
+export { PhaseExecutionEngine } from './agents/phase-engine.js';
+export type {
+  PhaseDefinition,
+  PhaseScopeState,
+  PhaseState,
+  PhaseStatus,
+  PhaseScopeDefinition,
+  PhaseScopeOptions,
+  PhaseResult,
+} from './agents/phase-engine.js';
+export { CredentialStore } from './agents/credential-store.js';
+export type {
+  GitCredentials,
+  NpmCredentials,
+  PublishCredentials,
+} from './agents/credential-store.js';
 export { parseReviewOutput } from './cli/ci.js';
 export type {
   CIExecuteResult,

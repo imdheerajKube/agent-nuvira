@@ -6,13 +6,21 @@
  * - Commit changes with auto-generated commit messages (via LLM)
  * - Generate PR descriptions from git diff
  * - Check git status
+ * - Push commits to remote (with credential management)
+ * - Create and push tags
+ * - Auto-push — commit + tag + push in one operation
  *
- * This agent does NOT require an LLM for basic operations (status, branch, commit),
+ * This agent does NOT require an LLM for basic operations (status, branch, commit, push),
  * but uses the LLM for generating commit messages and PR descriptions.
+ *
+ * Credential handling:
+ * - HTTPS: Uses GIT_ASKPASS env var (set by CredentialStore)
+ * - SSH: Uses SSH agent (keys added by CredentialStore)
+ * - Falls back to git's built-in credential helpers if available
  *
  * Usage in task plans:
  * ```json
- * { "id": "step-commit", "description": "Commit changes to git", "agentType": "git", "dependsOn": ["step-write"] }
+ * { "id": "step-commit", "description": "Commit and push changes to git", "agentType": "git", "dependsOn": ["step-write"] }
  * ```
  */
 
@@ -42,12 +50,18 @@ Rules:
 
 Return ONLY the commit message, nothing else.`;
 
+/** Maximum push attempts before giving up */
+const MAX_PUSH_ATTEMPTS = 2;
+
+/** Git operation types */
+type GitOperation = 'status' | 'branch' | 'commit' | 'push' | 'tag' | 'pr-description' | 'auto-push';
+
 /**
  * GitAgent — Handles git operations for the multi-agent pipeline.
  */
 export class GitAgent extends Agent {
   readonly name = 'Git';
-  readonly description = 'Manages git operations (branch, commit, PR)';
+  readonly description = 'Manages git operations (branch, commit, push, PR)';
 
   async execute(context: AgentContext, callLLM: LLMCallFn): Promise<AgentResult> {
     try {
@@ -55,7 +69,6 @@ export class GitAgent extends Agent {
         (s) => s.agentType === 'git' && s.status === 'running',
       )?.description || context.goal;
 
-      // Parse the task to determine the git operation
       const operation = this.detectOperation(taskDesc);
 
       switch (operation) {
@@ -63,12 +76,18 @@ export class GitAgent extends Agent {
           return this.gitStatus();
         case 'branch':
           return this.createBranch(context, taskDesc);
+        case 'push':
+          return this.pushToRemote();
+        case 'tag':
+          return this.createAndPushTag(context, taskDesc);
         case 'commit':
           return this.commit(context, callLLM);
+        case 'auto-push':
+          return this.autoPush(context, callLLM);
         case 'pr-description':
           return this.generatePRDescription(context, callLLM);
         default:
-          return this.commit(context, callLLM);
+          return this.autoPush(context, callLLM);
       }
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
@@ -76,26 +95,47 @@ export class GitAgent extends Agent {
     }
   }
 
-  private detectOperation(description: string): string {
+  private detectOperation(description: string): GitOperation {
     const lower = description.toLowerCase();
     if (lower.includes('status') || lower.includes('check')) return 'status';
     if (lower.includes('branch') || lower.includes('checkout') || lower.includes('switch')) return 'branch';
+    if (lower.includes('push') && !lower.includes('auto')) return 'push';
+    if (lower.includes('tag') || lower.includes('release tag')) return 'tag';
+    if (lower.includes('auto') || lower.includes('auto-push') || lower.includes('commit and push')) return 'auto-push';
     if (lower.includes('pr') || lower.includes('pull request') || lower.includes('description')) return 'pr-description';
     return 'commit';
   }
 
+  // ─── Status ───────────────────────────────────────────────────────────────
+
   private async gitStatus(): Promise<AgentResult> {
     const output = this.exec('git status --short');
     const lines = output.trim().split('\n').filter(Boolean);
+
+    let branch = '';
+    try { branch = this.exec('git rev-parse --abbrev-ref HEAD').trim(); } catch { /* ignore */ }
+
+    let remote = '';
+    try { remote = this.exec('git remote get-url origin').trim(); } catch { /* ignore */ }
+
+    const details = [
+      `Branch: ${branch || 'unknown'}`,
+      `Remote: ${remote || 'none'}`,
+      `Changes: ${lines.length} file(s)`,
+      '',
+      output,
+    ].join('\n');
+
     return {
       success: true,
-      summary: `${lines.length} file(s) changed`,
-      details: output,
+      summary: `${lines.length} file(s) changed on ${branch || 'current branch'}`,
+      details,
     };
   }
 
+  // ─── Branch ───────────────────────────────────────────────────────────────
+
   private async createBranch(context: AgentContext, description: string): Promise<AgentResult> {
-    // Generate branch name from goal
     const sanitized = context.goal
       .toLowerCase()
       .replace(/[^a-z0-9]+/g, '-')
@@ -103,7 +143,6 @@ export class GitAgent extends Agent {
       .slice(0, 40);
     const branchName = `feat/${sanitized}`;
 
-    // Check if branch already exists
     const existing = this.exec(`git branch --list "${branchName}"`);
     if (existing.trim()) {
       return { success: true, summary: `Branch '${branchName}' already exists`, details: branchName };
@@ -113,37 +152,32 @@ export class GitAgent extends Agent {
     return { success: true, summary: `Created branch '${branchName}'`, details: branchName };
   }
 
+  // ─── Commit ───────────────────────────────────────────────────────────────
+
   private async commit(context: AgentContext, callLLM: LLMCallFn): Promise<AgentResult> {
-    // Stage all changes
     this.exec('git add -A');
 
-    // Check if there's anything to commit
     const status = this.exec('git status --short');
     if (!status.trim()) {
       return { success: true, summary: 'No changes to commit' };
     }
 
-    // Get the diff for the LLM to summarize
     const diff = this.exec('git diff --cached --stat');
     const fullDiff = this.exec('git diff --cached');
 
-    // Generate commit message via LLM
     let commitMessage = '';
     try {
       const prompt = `${COMMIT_MESSAGE_PROMPT}\n\n## Diff Summary\n${diff}\n\n## Full Diff (truncated)\n${fullDiff.slice(0, 4000)}`;
       commitMessage = await callLLM(prompt, { temperature: 0.3, maxTokens: 500 });
       commitMessage = commitMessage.trim().replace(/^```[\s\S]*?\n|```$/g, '').trim();
     } catch {
-      // Fallback: generate a simple commit message from the goal
       commitMessage = `feat: ${context.goal.slice(0, 60)}`;
     }
 
-    // Ensure the commit message is valid
     if (!commitMessage || commitMessage.length < 5) {
       commitMessage = `feat: ${context.goal.slice(0, 60)}`;
     }
 
-    // Write commit message to temp file to avoid shell quoting issues (cross-platform)
     const msgDir = mkdtempSync(join(tmpdir(), 'git-msg-'));
     const msgFile = join(msgDir, 'commit-msg.txt');
     writeFileSync(msgFile, commitMessage, 'utf-8');
@@ -157,27 +191,201 @@ export class GitAgent extends Agent {
     };
   }
 
+  // ─── Push ─────────────────────────────────────────────────────────────────
+
+  /**
+   * Push the current branch to the remote.
+   * Uses GIT_ASKPASS for HTTPS auth (set by CredentialStore) or SSH agent.
+   */
+  private async pushToRemote(): Promise<AgentResult> {
+    let branch = 'main';
+    try { branch = this.exec('git rev-parse --abbrev-ref HEAD').trim(); } catch { /* use default */ }
+
+    let remote = 'origin';
+    try {
+      const remotes = this.exec('git remote').trim();
+      if (remotes) {
+        remote = remotes.split('\n')[0].trim();
+      } else {
+        return {
+          success: false,
+          summary: 'No git remote configured',
+          error: 'Add a remote first: git remote add origin <url>',
+        };
+      }
+    } catch {
+      return { success: false, summary: 'No git remote configured', error: 'Git remote not found' };
+    }
+
+    let lastError = '';
+
+    for (let attempt = 0; attempt < MAX_PUSH_ATTEMPTS; attempt++) {
+      try {
+        const output = execSync(`git push -u "${remote}" "${branch}" 2>&1`, {
+          cwd: process.cwd(),
+          timeout: 120_000,
+          encoding: 'utf-8',
+          stdio: 'pipe',
+        });
+
+        const lines = output.trim().split('\n').filter(Boolean);
+        return {
+          success: true,
+          summary: `Pushed ${branch} to ${remote}`,
+          details: lines.join('\n'),
+        };
+      } catch (err) {
+        const error = err as { stdout?: string; stderr?: string; message?: string };
+        const msg = error.stderr || error.message || '';
+
+        if (msg.includes('Authentication failed') || msg.includes('auth failed') ||
+            msg.includes('403') || msg.includes('401')) {
+          lastError = 'Authentication failed. Set GITHUB_TOKEN or GH_TOKEN env var, or run creds setup.';
+          break;
+        }
+
+        if (msg.includes('Could not read from remote') || msg.includes('Repository not found') ||
+            msg.includes('fatal:')) {
+          lastError = msg.slice(0, 200);
+          break;
+        }
+
+        lastError = msg.slice(0, 200);
+
+        if (attempt < MAX_PUSH_ATTEMPTS - 1) {
+          try { await new Promise(r => setTimeout(r, 2000)); } catch { /* ignore */ }
+          logger.debug(`Retrying git push (attempt ${attempt + 2}/${MAX_PUSH_ATTEMPTS})...`);
+        }
+      }
+    }
+
+    return {
+      success: false,
+      summary: `Failed to push ${branch} to ${remote}`,
+      error: lastError || 'Push failed after retries',
+    };
+  }
+
+  // ─── Tag ──────────────────────────────────────────────────────────────────
+
+  private async createAndPushTag(context: AgentContext, description: string): Promise<AgentResult> {
+    let version = '';
+
+    const versionMatch = description.match(/v?(\d+\.\d+\.\d+)/);
+    if (versionMatch) {
+      version = versionMatch[1];
+    } else {
+      try {
+        const { existsSync, readFileSync } = await import('node:fs');
+        const pkgPath = join(process.cwd(), 'package.json');
+        if (existsSync(pkgPath)) {
+          const pkg = JSON.parse(readFileSync(pkgPath, 'utf-8'));
+          version = pkg.version || '';
+        }
+      } catch { /* fall through */ }
+    }
+
+    if (!version) {
+      try {
+        const lastTag = this.exec('git describe --tags --abbrev=0 2>&1').trim();
+        const parts = lastTag.replace(/^v/, '').split('.').map(Number);
+        version = `${parts[0] || 0}.${parts[1] || 0}.${(parts[2] || 0) + 1}`;
+      } catch {
+        version = '0.1.0';
+      }
+    }
+
+    const tagName = `v${version}`;
+
+    try {
+      const existing = this.exec(`git tag -l "${tagName}"`);
+      if (existing.trim() === tagName) {
+        return this.pushTagToRemote(tagName);
+      }
+    } catch { /* continue */ }
+
+    try {
+      this.exec(`git tag -a "${tagName}" -m "Release ${tagName}"`);
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      return { success: false, summary: `Failed to create tag ${tagName}`, error: msg.slice(0, 200) };
+    }
+
+    return this.pushTagToRemote(tagName);
+  }
+
+  private async pushTagToRemote(tagName: string): Promise<AgentResult> {
+    let remote = 'origin';
+    try {
+      const remotes = this.exec('git remote').trim();
+      if (remotes) remote = remotes.split('\n')[0].trim();
+    } catch { /* use default */ }
+
+    try {
+      const output = execSync(`git push "${remote}" "${tagName}" 2>&1`, {
+        cwd: process.cwd(),
+        timeout: 60_000,
+        encoding: 'utf-8',
+        stdio: 'pipe',
+      });
+
+      return {
+        success: true,
+        summary: `Pushed tag ${tagName} to ${remote}`,
+        details: output.trim(),
+      };
+    } catch (err) {
+      const error = err as { stderr?: string; message?: string };
+      const msg = error.stderr || error.message || '';
+
+      if (msg.includes('403') || msg.includes('401') || msg.includes('auth')) {
+        return {
+          success: false,
+          summary: `Failed to push tag ${tagName}: authentication required`,
+          error: 'Set GITHUB_TOKEN or GH_TOKEN env var, or run credential setup',
+        };
+      }
+
+      return {
+        success: false,
+        summary: `Failed to push tag ${tagName}`,
+        error: msg.slice(0, 200),
+      };
+    }
+  }
+
+  // ─── Auto-Push ────────────────────────────────────────────────────────────
+
+  private async autoPush(context: AgentContext, callLLM: LLMCallFn): Promise<AgentResult> {
+    const commitResult = await this.commit(context, callLLM);
+    if (!commitResult.success) {
+      return commitResult;
+    }
+
+    const pushResult = await this.pushToRemote();
+    if (!pushResult.success) {
+      return {
+        success: false,
+        summary: `${commitResult.summary} but push failed: ${pushResult.error || pushResult.summary}`,
+        details: `Committed locally. Push failed. Ensure git credentials are configured.`,
+        error: pushResult.error,
+      };
+    }
+
+    return {
+      success: true,
+      summary: `${commitResult.summary} and pushed to remote`,
+      details: [commitResult.details || '', pushResult.details || ''].filter(Boolean).join('\n'),
+    };
+  }
+
+  // ─── PR Description ───────────────────────────────────────────────────────
+
   private async generatePRDescription(context: AgentContext, callLLM: LLMCallFn): Promise<AgentResult> {
     const diff = this.exec('git diff main...HEAD --stat');
     const fullDiff = this.exec('git diff main...HEAD');
 
-    const prompt = `Generate a GitHub pull request description from the following diff.
-
-## Diff (truncated)
-${fullDiff.slice(0, 4000)}
-
-## Format
-### Summary
-[1-2 sentences describing the change]
-
-### Changes
-- [list of files changed and why]
-
-### Testing
-- [how to test this change]
-
-### Related Issues
-- [if applicable]`;
+    const prompt = `Generate a GitHub pull request description from the following diff.\n\n## Diff (truncated)\n${fullDiff.slice(0, 4000)}\n\n## Format\n### Summary\n[1-2 sentences describing the change]\n\n### Changes\n- [list of files changed and why]\n\n### Testing\n- [how to test this change]\n\n### Related Issues\n- [if applicable]`;
 
     let description: string;
     try {
@@ -194,6 +402,8 @@ ${fullDiff.slice(0, 4000)}
     };
   }
 
+  // ─── Exec Helper (Cross-Platform) ─────────────────────────────────────────
+
   private exec(command: string, cwd?: string): string {
     try {
       return execSync(command, {
@@ -204,13 +414,11 @@ ${fullDiff.slice(0, 4000)}
       });
     } catch (err) {
       const error = err as { stdout?: string; stderr?: string; message?: string };
-      // Only swallow stderr for known non-fatal cases (e.g., no commits yet)
-      // Re-throw for genuine command failures
       const msg = error.stderr || error.message || '';
-      if (msg.includes('Command failed') || msg.includes('not found') || msg.includes('not a git repository')) {
+      if (msg.includes('Command failed') || msg.includes('not found') || msg.includes('not a git repository') ||
+          msg.includes('not recognized') || msg.includes('cannot find') || msg.includes('failed to start')) {
         throw new Error(msg.slice(0, 200));
       }
-      // Return available output (maybe partial git log worked)
       return error.stdout || msg;
     }
   }
