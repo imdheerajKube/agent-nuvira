@@ -1,6 +1,6 @@
 # Agent-Nuvira — Technical Product Guide
 
-**Version 1.16.1 | August 2026**
+**Version 1.24.0 | September 2026**
 
 > *A comprehensive technical overview of Agent-Nuvira: architecture, features, version history, and market readiness for investors, stakeholders, and technical reviewers.*
 
@@ -450,6 +450,14 @@ src/web-dashboard/              # React web dashboard
 | 54 | **A2A Protocol** | ✅ Complete | Phase 4.4 | Agent-to-Agent communication standard for multi-machine collaboration |
 | 55 | **Enhanced Test Coverage** | ✅ Complete | Phase 5 | 1830+ tests across 55 test files — failure analysis, follow-ups, handlePostExecution |
 | 56 | **Marketing Website** | ✅ Complete | Core | `website/` directory — full static landing page at agent-nuvira.com with hero, features, pipeline, providers, quickstart, comparison table, Netlify-ready deployment |
+| 57 | **RecoverModule (Phase 1)** | ✅ Complete (v1.18.0) | Phase 6 | Extracted from ErrorRepairEngine — discriminated union strategies + RepairBudget (3 attempts with exponential backoff) |
+| 58 | **ModuleRegistry (Phase 2)** | ✅ Complete (v1.18.0) | Phase 6 | Plugin-based agent loading — 14 built-in agent modules, `register()` / `load()` / `unload()` lifecycle |
+| 59 | **EventBus (Phase 3)** | ✅ Complete (v1.19.0) | Phase 6 | Structured observability — 37+ typed events, 4 built-in consumers (Logger, Metrics, Audit, MetricsBuffer) |
+| 60 | **ReportModule (Phase 4)** | ✅ Complete (v1.20.0) | Phase 6 | 4 output formats (markdown, JSON, summary, verbose) — extractable from buildResult() |
+| 61 | **InspectModule (Phase 5)** | ✅ Complete (v1.20.0) | Phase 6 | Keyword scanning + LLM-based file classification — ContextGatherer wrapper with depth-limited walk |
+| 62 | **VerifyModule (Phase 6)** | ✅ Complete (v1.21.0) | Phase 6 | 4 check types (security, goal-alignment, tests, code-quality) — configurable strictness, pass/fail scoring |
+| 63 | **PlanModule + EditModule (Phase 7)** | ✅ Complete (v1.22.0) | Phase 6 | Goal decomposition + file change generation — AST validation, token budget, model-switch support, 75 tests |
+| 64 | **ExecuteModule + TestModule (Phase 8)** | ✅ Complete (v1.23.0) | Phase 6 | Command execution + sandboxed testing — 5-strategy inference, multi-framework parsing, 51 tests |
 
 ### 3.2 Key Upgrades & Enhancements
 
@@ -975,7 +983,20 @@ All 30 planned phases have been implemented as of **August 2026**. See [UPGRADE_
 | 5.4 | **Follow-up Suggestions** | LLM-powered contextual next-step recommendations after goal execution |
 | 5.5 | **/fix Command** | Retry last failed goal with failure context — shows post-execution analysis |
 
-All 30 phases are complete. Future work will focus on polishing, community building, and enterprise features.
+### 7.6 Phase 6: Architecture Migration (8 modules, all ✅ Complete)
+
+| # | Module | Version | Description |
+|---|---|---|---|
+| 6.1 | **RecoverModule** | v1.18.0 | Extracted from ErrorRepairEngine — discriminated union strategies + RepairBudget (3 attempts with exponential backoff) |
+| 6.2 | **ModuleRegistry** | v1.18.0 | Plugin-based agent loading — 14 built-in agent modules, `register()` / `load()` / `unload()` lifecycle, EventBus integration |
+| 6.3 | **EventBus** | v1.19.0 | Structured observability — 37+ typed events, 4 built-in consumers (Logger, Metrics, Audit, MetricsBuffer), typed event schema |
+| 6.4 | **ReportModule** | v1.20.0 | 4 output formats (markdown, JSON, summary, verbose) — extractable from buildResult(), 72 unit tests |
+| 6.5 | **InspectModule** | v1.20.0 | Keyword scanning + LLM-based file classification — ContextGatherer wrapper with depth-limited walk, .buffignore support, 74 tests |
+| 6.6 | **VerifyModule** | v1.21.0 | 4 check types (security, goal-alignment, tests, code-quality) — configurable strictness (low/medium/high), pass/fail scoring (0.5/0.7/0.9), 28 tests |
+| 6.7 | **PlanModule + EditModule** | v1.22.0 | Goal decomposition (3 JSON parsing strategies) + file change generation (AST validation, token budget, model-switch support) — 75 tests |
+| 6.8 | **ExecuteModule + TestModule** | v1.23.0 | Command execution (5-strategy inference, npm validation) + sandboxed test execution (vitest/jest/generic parsing) — 51 tests, EventBus events |
+
+**Migration architecture:** 8 monolithic agents → 8 extracted modules with `interface` + `Default*` class pattern, optional EventBus injection, lifecycle event emissions, and comprehensive test coverage (126+ module tests).
 
 ---
 

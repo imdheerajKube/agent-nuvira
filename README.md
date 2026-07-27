@@ -1384,6 +1384,15 @@ npx tsc --noEmit
 | 5.3 | Follow-up suggestions — LLM-powered contextual next-step recommendations | ✅ Complete |
 | 5.4 | /fix command — retry last failed goal with failure context | ✅ Complete |
 | 5.5 | Test coverage — 1830+ tests across 55 test files | ✅ Complete |
+| **Phase 6: Architecture Migration** | | |
+| 6.1 | RecoverModule — extracted from ErrorRepairEngine with RepairBudget | ✅ Complete (v1.18.0) |
+| 6.2 | ModuleRegistry — plugin-based agent loading replacing createAgent() | ✅ Complete (v1.18.0) |
+| 6.3 | EventBus — structured observability with 37+ typed events | ✅ Complete (v1.19.0) |
+| 6.4 | ReportModule — 4 output formats (text/JSON/MD/GHA) | ✅ Complete (v1.20.0) |
+| 6.5 | InspectModule — keyword + LLM codebase scanning | ✅ Complete (v1.20.0) |
+| 6.6 | VerifyModule — security scan + explicit verification pipeline | ✅ Complete (v1.21.0) |
+| 6.7 | PlanModule + EditModule — goal decomposition + file change generation | ✅ Complete (v1.22.0) |
+| 6.8 | ExecuteModule + TestModule — command execution + sandboxed testing | ✅ Complete (v1.23.0) |
 
 ---
 
@@ -1491,6 +1500,20 @@ npx tsc --noEmit
 | **Follow-up Suggestions** | LLM-powered contextual next-step recommendations |
 | **/fix Command** | Retry last failed goal with failure context |
 | **Graceful Error Recovery** | Rate-limit handling, auth failures, and network error recovery |
+
+### Phase 6: Architecture Migration — Modular Plugin Architecture
+| Feature | Description |
+|---------|-------------|
+| **RecoverModule (Phase 1)** | Extracted from ErrorRepairEngine — discriminated union strategies + RepairBudget (3 attempts with exponential backoff) |
+| **ModuleRegistry (Phase 2)** | Plugin-based agent loading — 14 built-in agent modules, `register()` / `load()` / `unload()` lifecycle, EventBus integration |
+| **EventBus (Phase 3)** | Structured observability — 37+ typed events, 4 built-in consumers (Logger, Metrics, Audit, MetricsBuffer), typed event schema |
+| **ReportModule (Phase 4)** | 4 output formats (markdown, JSON, summary, verbose) — extractable from buildResult() |
+| **InspectModule (Phase 5)** | Keyword scanning + LLM-based file classification — ContextGatherer wrapper with depth-limited walk, .buffignore support |
+| **VerifyModule (Phase 6)** | 4 check types (security, goal-alignment, tests, code-quality) — configurable strictness (low/medium/high), pass/fail scoring |
+| **PlanModule (Phase 7)** | Goal decomposition — 3 JSON parsing strategies, step normalization, fallback plan, EventBus events |
+| **EditModule (Phase 7)** | File change generation — AST syntax validation, token-budget-aware file selection, 2-attempt retry loop, model-switch support |
+| **ExecuteModule (Phase 8)** | Command execution — 5-strategy command inference (backtick, Run prefix, npm patterns, file extension), npm test validation |
+| **TestModule (Phase 8)** | Sandboxed test execution — temp directory, multi-framework output parsing (vitest, jest, generic), EventBus events |
 
 ### Agent Catalog — 15 Agent Roles & Management
 | Agent/Component | Type | Description |
