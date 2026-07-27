@@ -31,6 +31,11 @@ export const EventNames = {
   EDIT_WRITTEN: 'edit:written',
   EDIT_SKIPPED: 'edit:skipped',
 
+  // Execute module events
+  EXECUTE_STARTING: 'execute:starting',
+  EXECUTE_COMPLETED: 'execute:completed',
+  EXECUTE_FAILED: 'execute:failed',
+
   // Test module events
   TEST_STARTED: 'test:started',
   TEST_FAILURE: 'test:failure',
@@ -391,6 +396,27 @@ export class LoggerConsumer implements EventBusConsumer {
             if (typeof data === 'object' && data !== null) {
               const d = data as Record<string, unknown>;
               logger.info(`   ✏️ Skipped: ${d.path} — ${d.reason || 'no changes'}`);
+            }
+            break;
+
+          // Execute events
+          case 'execute:starting':
+            if (typeof data === 'object' && data !== null) {
+              const d = data as Record<string, unknown>;
+              logger.info(`   ⚡ Running: ${(d.command as string)?.slice(0, 60)}`);
+            }
+            break;
+          case 'execute:completed':
+            if (typeof data === 'object' && data !== null) {
+              const d = data as Record<string, unknown>;
+              const icon = d.success ? '✅' : '❌';
+              logger.info(`   ${icon} Command ${d.success ? 'succeeded' : 'failed'} (exit ${d.exitCode || '?'})`);
+            }
+            break;
+          case 'execute:failed':
+            if (typeof data === 'object' && data !== null) {
+              const d = data as Record<string, unknown>;
+              logger.error(`   ❌ Execution failed: ${(d.error as string)?.slice(0, 200) || 'Unknown error'}`);
             }
             break;
 

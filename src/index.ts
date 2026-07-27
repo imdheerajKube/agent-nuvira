@@ -25,7 +25,6 @@ export { ContextGathererAgent } from './agents/agents/context-gatherer.js';
 export { WriterAgent } from './agents/agents/writer.js';
 export { ReviewerAgent } from './agents/agents/reviewer.js';
 export { TesterAgent, cleanupSandbox } from './agents/agents/tester.js';
-export type { TestResult } from './agents/agents/tester.js';
 export { DebuggerAgent } from './agents/agents/debugger.js';
 export { RunnerAgent } from './agents/agents/runner.js';
 export type { RunResult } from './agents/agents/runner.js';
@@ -254,6 +253,14 @@ export type { PlanModule, PlanParams, PlanOutput } from './agents/plan-module.js
 // ─── EditModule (Phase 7) ──────────────────────────────────────────────
 export { DefaultEditModule } from './agents/edit-module.js';
 export type { EditModule, EditParams, EditOutput } from './agents/edit-module.js';
+
+// ─── ExecuteModule (Phase 8) ───────────────────────────────────────────
+export { DefaultExecuteModule } from './agents/execute-module.js';
+export type { ExecuteModule, ExecuteParams, ExecuteResult } from './agents/execute-module.js';
+
+// ─── TestModule (Phase 8) ──────────────────────────────────────────────
+export { DefaultTestModule } from './agents/test-module.js';
+export type { TestModule, TestParams, TestResult } from './agents/test-module.js';
 
 // ─── VerifyModule (Phase 6) ────────────────────────────────────────────
 export { DefaultVerifyModule } from './agents/verify-module.js';

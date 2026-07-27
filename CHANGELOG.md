@@ -7,6 +7,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [1.23.0] - 2026-09-29
+
+### Added
+- **ExecuteModule (Phase 8)** — `DefaultExecuteModule` extracted from `RunnerAgent`: pluggable command
+  execution with 5-strategy command inference (backtick, `Run:` prefix, `run <file>`, npm patterns, file
+  extension), npm test validation against `package.json`, structured `ExecuteResult` output (stdout, stderr,
+  exit code, duration), EventBus integration with `EXECUTE_STARTING`/`EXECUTE_COMPLETED`/`EXECUTE_FAILED` events
+- **TestModule (Phase 8)** — `DefaultTestModule` extracted from `TesterAgent`: pluggable sandboxed test
+  execution with temp directory creation, project file copying (excluding `node_modules`/`.git`/etc.),
+  file change application, dependency installation (npm install), multi-framework test output parsing
+  (vitest, jest, generic), `TEST_STARTED`/`TEST_COMPLETED`/`TEST_FAILURE` events
+
+### Changed
+- `website/index.html` — Architecture section: `6/6` → `7/8` Phases Complete, `8 Modules Designed` →
+  `5/8 Modules Extracted`, test count `2,058` → `2,133`
+
+---
+
 ## [1.22.0] - 2026-09-28
 
 ### Added
