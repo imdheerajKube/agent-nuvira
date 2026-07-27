@@ -7,6 +7,29 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [1.24.0] - 2026-09-29
+
+### Added
+- **ExecuteModule tests** — 24 new unit tests for `DefaultExecuteModule`: execute() with callLLM (happy path,
+  npm test validation, command inference), execute() without callLLM (fallback), inferCommand (backtick,
+  `Run:` prefix, `run <file>`, npm patterns, file extension), EventBus emissions
+  (`EXECUTE_STARTING`/`EXECUTE_COMPLETED`/`EXECUTE_FAILED`)
+- **TestModule tests** — 27 new unit tests for `DefaultTestModule`: runTests() with callLLM (vitest,
+  jest, generic output formats), runTests() without callLLM (fallback), parseTestOutput (vitest,
+  jest, generic, malformed/no match), detectFramework, detectTestCommand, EventBus emissions
+  (`TEST_STARTED`/`TEST_COMPLETED`/`TEST_FAILURE`)
+- **Migration roadmap SVG** — Updated to Phase 1-8 with Phase 7 (Plan+EditModule) and Phase 8
+  (Execute+TestModule) timeline nodes and detail cards in second row; 10-row comparison table;
+  updated metrics (8/8 phases, 150+ tests, 8 modules extracted)
+
+### Changed
+- Phase 5 badge in migration-roadmap.svg corrected from "IN PROG" to "DONE"
+
+### Tests
+- Total module tests: PlanModule (41) + EditModule (34) + ExecuteModule (24) + TestModule (27) = **126 module tests**
+
+---
+
 ## [1.23.0] - 2026-09-29
 
 ### Added
