@@ -8,12 +8,12 @@
   <meta name="keywords" content="AI coding assistant, multi-agent AI, terminal AI tool, open source, Groq, NVIDIA NIM, Google Gemini, OpenRouter, Ollama" />
   <link rel="icon" type="image/png" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='8' fill='%236363f2'/%3E%3Ctext x='16' y='22' text-anchor='middle' fill='white' font-size='18' font-weight='bold' font-family='system-ui'%3EN%3C/text%3E%3C/svg%3E" />
   <meta property="og:title" content="Agent-Nuvira — Multi-Agent AI Coding Assistant" />
-  <meta property="og:description" content="The open-source multi-agent AI coding assistant. Plan, write, review, test, and publish code from your terminal. 5 providers. 10+ agents. No subscriptions. No telemetry." />
+  <meta property="og:description" content="The open-source multi-agent AI coding assistant. Plan, write, review, test, verify, and publish code from your terminal. 17+ providers. 14+ agents. 2,000+ tests. No subscriptions. No telemetry." />
   <meta property="og:image" content="https://www.agent-nuvira.com/assets/hero.png" />
   <meta property="og:url" content="https://www.agent-nuvira.com" />
   <meta name="twitter:card" content="summary_large_image" />
   <meta name="twitter:title" content="Agent-Nuvira — Multi-Agent AI Coding Assistant" />
-  <meta name="twitter:description" content="The open-source multi-agent AI coding assistant. 5 providers. 10+ agents. From your terminal." />
+  <meta name="twitter:description" content="The open-source multi-agent AI coding assistant. 17+ providers. 14+ agents. 2,000+ tests. From your terminal." />
   <link rel="preconnect" href="https://fonts.googleapis.com" />
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
   <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800;900&family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet" />
@@ -61,7 +61,7 @@
         </div>
         <h1 class="hero-title">
           Your Terminal.<br />
-          <span class="gradient-text">5 Providers. 10 Agents.</span><br />
+          <span class="gradient-text">17+ Providers. 14+ Agents.</span><br />
           Infinite Possibilities.
         </h1>
         <p class="hero-subtitle">
@@ -81,16 +81,16 @@
         </div>
         <div class="hero-metrics">
           <div class="metric">
-            <span class="metric-value">10+</span>
+            <span class="metric-value">14+</span>
             <span class="metric-label">Agent Roles</span>
           </div>
           <div class="metric">
-            <span class="metric-value">5</span>
+            <span class="metric-value">17+</span>
             <span class="metric-label">AI Providers</span>
           </div>
           <div class="metric">
-            <span class="metric-value">200+</span>
-            <span class="metric-label">Models Supported</span>
+            <span class="metric-value">2,058</span>
+            <span class="metric-label">Tests Passing</span>
           </div>
           <div class="metric">
             <span class="metric-value">100%</span>
@@ -121,7 +121,9 @@
               <span class="log info">📁 Context Gatherer scanning codebase...</span>
               <span class="log success">✅ Writer implemented auth middleware</span>
               <span class="log info">👀 Reviewer validating changes...</span>
-              <span class="log success">✅ All tests passed</span>
+              <span class="log success">✅ All 2,058 tests passed</span>
+              <span class="log info">🔒 VerifyModule running security scan...</span>
+              <span class="log success">✅ No security issues found</span>
               <span class="log success">🚀 Changes committed to feature/auth</span>
             </div>
             <span class="blinking-cursor">▊</span>
@@ -215,8 +217,8 @@
           <div class="feature-icon providers">
             <svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M12 2L2 7l10 5 10-5-10-5z"/><path d="M2 17l10 5 10-5"/><path d="M2 12l10 5 10-5"/></svg>
           </div>
-          <h3>5 AI Providers</h3>
-          <p>Connect to Groq, NVIDIA NIM, Google Gemini, OpenRouter (200+ models), or run locally with Ollama — all through one unified CLI.</p>
+          <h3>17+ AI Providers</h3>
+          <p>Connect to Groq, NVIDIA NIM, Google Gemini, OpenRouter (200+ models), AWS Bedrock, Azure OpenAI, DeepSeek, or run locally with Ollama — all through one unified CLI. 5 built-in, 12+ configurable.</p>
         </div>
         <div class="feature-card" data-delay="200">
           <div class="feature-icon offline">
@@ -256,7 +258,7 @@
       <div class="section-header">
         <span class="section-tag">How It Works</span>
         <h2 class="section-title">The <span class="gradient-text">Multi-Agent Pipeline</span></h2>
-        <p class="section-desc">A goal goes in. Code comes out. Here's what happens in between.</p>
+        <p class="section-desc">A goal goes in. Code comes out. Here's what happens in between — including the new Verify step from v1.21.0.</p>
       </div>
       <div class="pipeline-flow">
         <div class="pipeline-input">
@@ -304,6 +306,14 @@
             <div class="agent-connector"></div>
           </div>
           <div class="pipeline-agent" style="--order: 6">
+            <div class="agent-node verify-node">
+              <span class="agent-emoji">✅</span>
+              <span class="agent-name">Verify</span>
+            </div>
+            <span class="agent-desc">Security scan + quality checks</span>
+            <div class="agent-connector"></div>
+          </div>
+          <div class="pipeline-agent" style="--order: 7">
             <div class="agent-node git">
               <span class="agent-emoji">🚀</span>
               <span class="agent-name">Ship</span>
@@ -550,8 +560,8 @@
     <div class="container">
       <div class="section-header">
         <span class="section-tag">Architecture</span>
-        <h2 class="section-title">Phase 1 → 6 Migration <span class="gradient-text">Roadmap</span></h2>
-        <p class="section-desc">From monolithic agent switches to a modular plugin architecture — the evolution of Agent-Nuvira's execution engine.</p>
+        <h2 class="section-title">Phase 1 → 6 Migration <span class="gradient-text">Complete</span></h2>
+        <p class="section-desc">From monolithic agent switches to a modular plugin architecture — the evolution of Agent-Nuvira's execution engine. Phase 6 (VerifyModule) ships in v1.21.0.</p>
       </div>
       <div class="architecture-visual">
         <div class="architecture-image-frame">
@@ -561,13 +571,13 @@
       <div class="architecture-highlights">
         <div class="arch-highlight">
           <span class="arch-highlight-icon">🔧</span>
-          <span class="arch-highlight-count">5/6</span>
+          <span class="arch-highlight-count">6/6</span>
           <span class="arch-highlight-label">Phases Complete</span>
         </div>
         <div class="arch-highlight">
           <span class="arch-highlight-icon">🧩</span>
-          <span class="arch-highlight-count">14</span>
-          <span class="arch-highlight-label">Built-in Modules</span>
+          <span class="arch-highlight-count">8</span>
+          <span class="arch-highlight-label">Modules Designed</span>
         </div>
         <div class="arch-highlight">
           <span class="arch-highlight-icon">📡</span>
@@ -576,7 +586,7 @@
         </div>
         <div class="arch-highlight">
           <span class="arch-highlight-icon">🧪</span>
-          <span class="arch-highlight-count">150+</span>
+          <span class="arch-highlight-count">2,058</span>
           <span class="arch-highlight-label">Unit Tests</span>
         </div>
       </div>
@@ -605,14 +615,14 @@
           <tbody>
             <tr>
               <td class="feature-name">Multi-Agent Pipeline</td>
-              <td class="highlight-col"><span class="check">✓</span> 10+ agent roles</td>
+              <td class="highlight-col"><span class="check">✓</span> 14+ agent roles</td>
               <td><span class="cross">✗</span> Single agent</td>
               <td><span class="cross">✗</span> Single agent</td>
               <td><span class="cross">✗</span> Single agent</td>
             </tr>
             <tr>
               <td class="feature-name">AI Provider Choice</td>
-              <td class="highlight-col"><span class="check">✓</span> 5 providers + plugins</td>
+              <td class="highlight-col"><span class="check">✓</span> 17+ providers + plugins</td>
               <td><span class="cross">✗</span> OpenAI only</td>
               <td><span class="cross">✗</span> Vendor-locked</td>
               <td><span class="cross">✗</span> Anthropic only</td>
