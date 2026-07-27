@@ -8,3 +8,6 @@ dist/
 *sopec*.md
 *scope*.md
 SCOPE.md
+
+# macOS
+.DS_Store

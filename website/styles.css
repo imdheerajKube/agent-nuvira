@@ -1317,6 +1317,107 @@ code { font-family: var(--font-mono); }
   align-self: stretch;
 }
 
+/* --- Architecture Migration Section --- */
+.architecture {
+  padding: 120px 0;
+  position: relative;
+}
+
+.architecture::before {
+  content: '';
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  height: 1px;
+  background: linear-gradient(90deg, transparent, var(--border-color), transparent);
+}
+
+.architecture-visual {
+  margin-bottom: 48px;
+  border-radius: var(--radius-lg);
+  overflow: hidden;
+  border: 1px solid var(--border-color);
+  background: var(--bg-card);
+  box-shadow: 0 20px 60px rgba(0, 0, 0, 0.4);
+  transition: transform 0.4s ease, box-shadow 0.4s ease;
+}
+
+.architecture-visual:hover {
+  transform: translateY(-4px);
+  box-shadow: 0 30px 80px rgba(99, 102, 241, 0.15);
+}
+
+.architecture-image-frame {
+  width: 100%;
+  overflow-x: auto;
+  -webkit-overflow-scrolling: touch;
+}
+
+.architecture-image {
+  width: 100%;
+  height: auto;
+  display: block;
+  min-width: 700px;
+  transition: transform 0.6s ease;
+}
+
+.architecture-visual:hover .architecture-image {
+  transform: scale(1.01);
+}
+
+.architecture-highlights {
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
+  gap: 20px;
+}
+
+.arch-highlight {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  padding: 28px 20px;
+  border-radius: var(--radius-md);
+  background: var(--bg-card);
+  border: 1px solid var(--border-color);
+  transition: all 0.3s ease;
+  text-align: center;
+}
+
+.arch-highlight:hover {
+  border-color: var(--border-hover);
+  background: var(--bg-card-hover);
+  transform: translateY(-3px);
+}
+
+.arch-highlight-icon {
+  font-size: 28px;
+  margin-bottom: 8px;
+}
+
+.arch-highlight-count {
+  font-size: 28px;
+  font-weight: 800;
+  background: var(--gradient-1);
+  -webkit-background-clip: text;
+  -webkit-text-fill-color: transparent;
+  background-clip: text;
+  line-height: 1.2;
+}
+
+.arch-highlight-label {
+  font-size: 13px;
+  color: var(--text-muted);
+  font-weight: 500;
+  margin-top: 4px;
+}
+
+@media (max-width: 768px) {
+  .architecture-highlights {
+    grid-template-columns: repeat(2, 1fr);
+  }
+}
+
 /* --- Comparison Section --- */
 .comparison {
   padding: 120px 0;
