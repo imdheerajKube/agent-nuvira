@@ -458,6 +458,7 @@ src/web-dashboard/              # React web dashboard
 | 62 | **VerifyModule (Phase 6)** | ✅ Complete (v1.21.0) | Phase 6 | 4 check types (security, goal-alignment, tests, code-quality) — configurable strictness, pass/fail scoring |
 | 63 | **PlanModule + EditModule (Phase 7)** | ✅ Complete (v1.22.0) | Phase 6 | Goal decomposition + file change generation — AST validation, token budget, model-switch support, 75 tests |
 | 64 | **ExecuteModule + TestModule (Phase 8)** | ✅ Complete (v1.23.0) | Phase 6 | Command execution + sandboxed testing — 5-strategy inference, multi-framework parsing, 51 tests |
+| 65 | **SafeExecutionLayer (Phase 9)** | ✅ Complete (v1.26.0) | Phase 6 | 3-domain safety system — file validation (size, gitignore, syntax, security), Docker sandbox (resource limits, container lifecycle), safe LLM calls (injection guardrail, retry with backoff) |
 
 ### 3.2 Key Upgrades & Enhancements
 
@@ -996,7 +997,15 @@ All 30 planned phases have been implemented as of **August 2026**. See [UPGRADE_
 | 6.7 | **PlanModule + EditModule** | v1.22.0 | Goal decomposition (3 JSON parsing strategies) + file change generation (AST validation, token budget, model-switch support) — 75 tests |
 | 6.8 | **ExecuteModule + TestModule** | v1.23.0 | Command execution (5-strategy inference, npm validation) + sandboxed test execution (vitest/jest/generic parsing) — 51 tests, EventBus events |
 
-**Migration architecture:** 8 monolithic agents → 8 extracted modules with `interface` + `Default*` class pattern, optional EventBus injection, lifecycle event emissions, and comprehensive test coverage (126+ module tests).
+**Migration architecture:** 8 monolithic agents → 9 extracted modules with `interface` + `Default*` class pattern, optional EventBus injection, lifecycle event emissions, and comprehensive test coverage (126+ module tests).
+
+### 7.7 Phase 9: Safe Execution Layer (1 module, ✅ Complete)
+
+| # | Module | Version | Description |
+|---|---|---|---|
+| 9.1 | **SafeExecutionLayer** | v1.26.0 | 3-domain safety system wrapping all agent operations — file validation (size guard, gitignore check, AST syntax validation, security scan), Docker sandbox (SandboxManager integration with resource limits and container lifecycle), safe LLM calls (injection guardrail via `runAllScans`, prompt/response truncation, exponential backoff with circuit breaker for auth errors). 10 EventBus events (SAFE_EXEC_FILE_VALIDATED, SAFE_EXEC_SANDBOX_STARTING/CREATED/COMPLETED/FAILED, SAFE_EXEC_LLM_STARTING/BLOCKED/RETRY/COMPLETED/FAILED). 23 unit tests. |
+
+**Safe execution architecture:** All LLM calls, file operations, and command execution pass through SafeExecutionLayer for consistent safety enforcement. The layer integrates with existing SecurityScanner (injection detection), SandboxManager (Docker execution), and AST validation engine.
 
 ---
 

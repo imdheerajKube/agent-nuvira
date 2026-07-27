@@ -1393,6 +1393,9 @@ npx tsc --noEmit
 | 6.6 | VerifyModule — security scan + explicit verification pipeline | ✅ Complete (v1.21.0) |
 | 6.7 | PlanModule + EditModule — goal decomposition + file change generation | ✅ Complete (v1.22.0) |
 | 6.8 | ExecuteModule + TestModule — command execution + sandboxed testing | ✅ Complete (v1.23.0) |
+| **Phase 9: Safe Execution Layer** | | |
+| 9.1 | SafeExecutionLayer — file validation, Docker sandbox, safe LLM calls, EventBus integration | ✅ Complete (v1.26.0) |
+| 9.2 | VerifyModule EventBus tests — 9 emission tests for SAFE_EXEC_* events | ✅ Complete (v1.26.0) |
 
 ---
 
@@ -1425,6 +1428,8 @@ npx tsc --noEmit
 | **v1.15.6** | Aug 2026 | Firecrawl integration for web search |
 | **v1.16.0** | Aug 2026 | Comprehensive MCP README docs, SSE header support |
 | **v1.16.1** | Aug 2026 | Interactive dev mode enhancements — failure analysis, follow-up suggestions, /fix command, 35 new unit tests |
+| **v1.26.0** | Aug 2026 | Phase 9 — SafeExecutionLayer module (file validation, Docker sandbox, safe LLM calls) + 32 new tests (23 SafeExec + 9 Verify Bus) |
+| **v1.27.0** | Aug 2026 | Website + SVG — Phase 9 SafeExecutionLayer, phase progress 9/9, 2,207 tests |
 
 ---
 
@@ -1514,6 +1519,7 @@ npx tsc --noEmit
 | **EditModule (Phase 7)** | File change generation — AST syntax validation, token-budget-aware file selection, 2-attempt retry loop, model-switch support |
 | **ExecuteModule (Phase 8)** | Command execution — 5-strategy command inference (backtick, Run prefix, npm patterns, file extension), npm test validation |
 | **TestModule (Phase 8)** | Sandboxed test execution — temp directory, multi-framework output parsing (vitest, jest, generic), EventBus events |
+| **SafeExecutionLayer (Phase 9)** | 3-domain safety system — file validation (size, gitignore, syntax, security scan), Docker sandbox (resource limits, container lifecycle), safe LLM calls (injection guardrail, prompt/response truncation, exponential backoff with circuit breaker) |
 
 ### Agent Catalog — 15 Agent Roles & Management
 | Agent/Component | Type | Description |

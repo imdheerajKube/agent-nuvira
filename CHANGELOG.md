@@ -7,6 +7,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [1.28.0] - 2026-09-29
+
+### Added
+- **Phase 9 documentation** — README, Product_Guide, and User_Manual updated with SafeExecutionLayer entries
+- **README roadmap table** — Added Phase 9: Safe Execution Layer (9.1 SafeExecutionLayer, 9.2 VerifyModule EventBus tests)
+- **README version history** — v1.26.0 (Phase 9 SafeExecutionLayer + 32 tests) and v1.27.0 (website/SVG updates)
+- **README Phase-Wise Feature Summary** — SafeExecutionLayer (Phase 9) entry with 3-domain safety system description
+- **Product_Guide feature inventory** — Item 65 for SafeExecutionLayer, new section 7.7 with detailed module table
+- **User_Manual Phase 6 table** — SafeExecutionLayer (Phase 9) entry added with full description
+
+### Changed
+- Product_Guide.md migration summary updated from "8 modules" to "9 modules"
+- All 3 docs now consistently reference Phase 9 / SafeExecutionLayer across all section types
+
+---
+
 ## [1.27.0] - 2026-09-29
 
 ### Added

@@ -1440,6 +1440,7 @@ rm -rf ~/.buff   # Remove all configuration and cached data
 | **EditModule (Phase 7)** | File change generation — AST syntax validation, token-budget-aware file selection, 2-attempt retry loop, model-switch support |
 | **ExecuteModule (Phase 8)** | Command execution — 5-strategy command inference (backtick, Run prefix, npm patterns, file extension), npm test validation |
 | **TestModule (Phase 8)** | Sandboxed test execution — temp directory, multi-framework output parsing (vitest, jest, generic), EventBus events |
+| **SafeExecutionLayer (Phase 9)** | 3-domain safety system — file validation (size, gitignore, syntax, security scan), Docker sandbox (resource limits, container lifecycle), safe LLM calls (injection guardrail, prompt/response truncation, exponential backoff with circuit breaker) |
 
 ### Agent Catalog — 15 Agent Roles & Management
 | Agent/Component | Type | Description |
