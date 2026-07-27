@@ -7,6 +7,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [1.30.0] - 2026-09-30
+
+### Added
+- **Unit tests: CredentialStore** — 357-line test suite covering constructor auto-detection, canPush/canPublish getters, collectAll() flow, setupGitCredentials() (GIT_ASKPASS, SSH agent), setupNpmAuth() (.npmrc injection), cleanup(), and module-level helper functions
+- **Unit tests: PhaseExecutionEngine** — 560-line test suite covering createScope(), getNextPhase(), getProgress(), saveScope()/loadScope(), listSavedScopes()/deleteScope(), executePhase() (success/failure/exception/edge cases), executeScope() (sequential/resume/failure/credential collection)
+- **Phase 10 documentation** — README roadmap table (10.1-10.4), version history (v1.29.0), Phase-Wise Feature Summary (4 new entries)
+- **Product_Guide Phase 10** — Feature inventory items 66-69, section 7.8 with detailed phase table
+- **Website stats update** — Architecture highlights: 10/10 Phases Complete, 10/10 Modules Extracted
+
+### Changed
+- Updated README, Product_Guide, and website to reflect Phase 10 (Autonomous Publish & Phase-Wise Execution) progress
+
+### Tests
+- 80 new tests: 357 lines credential-store, 560 lines phase-engine — all passing ✅
+
+---
+
 ## [1.29.0] - 2026-09-30
 
 ### Added

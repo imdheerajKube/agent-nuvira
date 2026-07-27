@@ -1396,6 +1396,11 @@ npx tsc --noEmit
 | **Phase 9: Safe Execution Layer** | | |
 | 9.1 | SafeExecutionLayer — file validation, Docker sandbox, safe LLM calls, EventBus integration | ✅ Complete (v1.26.0) |
 | 9.2 | VerifyModule EventBus tests — 9 emission tests for SAFE_EXEC_* events | ✅ Complete (v1.26.0) |
+| **Phase 10: Autonomous Publish** | | |
+| 10.1 | CredentialStore — interactive Git/npm credential collection, GIT_ASKPASS, SSH agent, .npmrc injection | ✅ Complete (v1.29.0) |
+| 10.2 | PhaseExecutionEngine — multi-goal project scopes with save/resume across restarts | ✅ Complete (v1.29.0) |
+| 10.3 | `buff publish` — 5-phase pipeline: tests → version → git → npm → GitHub release | ✅ Complete (v1.29.0) |
+| 10.4 | `buff phase` — create/execute/resume/status/list scopes with credential management | ✅ Complete (v1.29.0) |
 
 ---
 
@@ -1430,6 +1435,7 @@ npx tsc --noEmit
 | **v1.16.1** | Aug 2026 | Interactive dev mode enhancements — failure analysis, follow-up suggestions, /fix command, 35 new unit tests |
 | **v1.26.0** | Aug 2026 | Phase 9 — SafeExecutionLayer module (file validation, Docker sandbox, safe LLM calls) + 32 new tests (23 SafeExec + 9 Verify Bus) |
 | **v1.27.0** | Aug 2026 | Website + SVG — Phase 9 SafeExecutionLayer, phase progress 9/9, 2,207 tests |
+| **v1.29.0** | Sep 2026 | Phase 10 — Autonomous publish + phase-wise execution (CredentialStore, PhaseEngine, `buff publish`, `buff phase`, git push, npm auth) + 86 new tests |
 
 ---
 
@@ -1520,6 +1526,10 @@ npx tsc --noEmit
 | **ExecuteModule (Phase 8)** | Command execution — 5-strategy command inference (backtick, Run prefix, npm patterns, file extension), npm test validation |
 | **TestModule (Phase 8)** | Sandboxed test execution — temp directory, multi-framework output parsing (vitest, jest, generic), EventBus events |
 | **SafeExecutionLayer (Phase 9)** | 3-domain safety system — file validation (size, gitignore, syntax, security scan), Docker sandbox (resource limits, container lifecycle), safe LLM calls (injection guardrail, prompt/response truncation, exponential backoff with circuit breaker) |
+| **CredentialStore (Phase 10)** | Interactive Git/npm credential collection — auto-detection from env vars (GITHUB_TOKEN, GH_TOKEN, NPM_TOKEN), GIT_ASKPASS setup for HTTPS auth, SSH agent integration with passphrase support, .npmrc token injection |
+| **PhaseExecutionEngine (Phase 10)** | Multi-goal project scope execution — sequential phase execution with save/resume across restarts, credential management, progress tracking |
+| **`buff publish` (Phase 10)** | Autonomous 5-phase publish pipeline — test verification → version bump → git commit/tag/push → npm build/publish → GitHub release |
+| **`buff phase` (Phase 10)** | Phase-wise project execution CLI — create/execute/resume/status/list/delete scopes with interactive pauses and credential collection |
 
 ### Agent Catalog — 15 Agent Roles & Management
 | Agent/Component | Type | Description |

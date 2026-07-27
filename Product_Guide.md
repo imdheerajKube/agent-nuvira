@@ -459,6 +459,10 @@ src/web-dashboard/              # React web dashboard
 | 63 | **PlanModule + EditModule (Phase 7)** | ✅ Complete (v1.22.0) | Phase 6 | Goal decomposition + file change generation — AST validation, token budget, model-switch support, 75 tests |
 | 64 | **ExecuteModule + TestModule (Phase 8)** | ✅ Complete (v1.23.0) | Phase 6 | Command execution + sandboxed testing — 5-strategy inference, multi-framework parsing, 51 tests |
 | 65 | **SafeExecutionLayer (Phase 9)** | ✅ Complete (v1.26.0) | Phase 6 | 3-domain safety system — file validation (size, gitignore, syntax, security), Docker sandbox (resource limits, container lifecycle), safe LLM calls (injection guardrail, retry with backoff) |
+| 66 | **CredentialStore (Phase 10)** | ✅ Complete (v1.29.0) | Phase 10 | Interactive Git/npm credential collection — GIT_ASKPASS setup, SSH agent, .npmrc token injection, auto-detection from env vars |
+| 67 | **PhaseExecutionEngine (Phase 10)** | ✅ Complete (v1.29.0) | Phase 10 | Multi-goal project scope execution — save/resume across restarts, progress tracking, credential management |
+| 68 | **`buff publish` (Phase 10)** | ✅ Complete (v1.29.0) | Phase 10 | 5-phase autonomous pipeline — test → version bump → git commit/tag/push → npm build/publish → GitHub release |
+| 69 | **`buff phase` (Phase 10)** | ✅ Complete (v1.29.0) | Phase 10 | Phase-wise project execution CLI — create/execute/resume/status/list/delete with interactive pauses |
 
 ### 3.2 Key Upgrades & Enhancements
 
@@ -1006,6 +1010,15 @@ All 30 planned phases have been implemented as of **August 2026**. See [UPGRADE_
 | 9.1 | **SafeExecutionLayer** | v1.26.0 | 3-domain safety system wrapping all agent operations — file validation (size guard, gitignore check, AST syntax validation, security scan), Docker sandbox (SandboxManager integration with resource limits and container lifecycle), safe LLM calls (injection guardrail via `runAllScans`, prompt/response truncation, exponential backoff with circuit breaker for auth errors). 10 EventBus events (SAFE_EXEC_FILE_VALIDATED, SAFE_EXEC_SANDBOX_STARTING/CREATED/COMPLETED/FAILED, SAFE_EXEC_LLM_STARTING/BLOCKED/RETRY/COMPLETED/FAILED). 23 unit tests. |
 
 **Safe execution architecture:** All LLM calls, file operations, and command execution pass through SafeExecutionLayer for consistent safety enforcement. The layer integrates with existing SecurityScanner (injection detection), SandboxManager (Docker execution), and AST validation engine.
+
+### 7.8 Phase 10: Autonomous Publish & Phase-Wise Execution (4 items, ✅ Complete)
+
+| # | Feature | Description |
+|---|---|---|
+| 10.1 | **CredentialStore** | Interactive secret-free credential collection — auto-detects `GITHUB_TOKEN`/`GH_TOKEN`/`NPM_TOKEN` from environment, sets up `GIT_ASKPASS` for HTTPS auth, integrates with SSH agent for password-protected keys, writes project-level `.npmrc` with auth tokens, cleans up credentials after publish. |
+| 10.2 | **PhaseExecutionEngine** | Manages multi-goal project scopes with sequential phase execution — each phase is a self-contained goal executed via the Orchestrator. State is persisted to `~/.buff/phases/` for pause/resume across restarts. Credentials collected once, reused across all phases. |
+| 10.3 | **`buff publish`** | Autonomous release pipeline — collects credentials once, then executes 5 phases: test verification → version bump (patch/minor/major) → git commit/tag/push → npm build/publish → GitHub release. Supports dry-run preview with `--dry-run`. |
+| 10.4 | **`buff phase`** | Phase-wise project execution CLI — `create` scopes with ordered goals, `execute` all phases, `resume` after pause, `status` to view progress, `list` saved scopes, `delete` completed scopes. Built-in credential management for publish phases. |
 
 ---
 
