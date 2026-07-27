@@ -1436,6 +1436,7 @@ npx tsc --noEmit
 | **v1.26.0** | Aug 2026 | Phase 9 — SafeExecutionLayer module (file validation, Docker sandbox, safe LLM calls) + 32 new tests (23 SafeExec + 9 Verify Bus) |
 | **v1.27.0** | Aug 2026 | Website + SVG — Phase 9 SafeExecutionLayer, phase progress 9/9, 2,207 tests |
 | **v1.29.0** | Sep 2026 | Phase 10 — Autonomous publish + phase-wise execution (CredentialStore, PhaseEngine, `buff publish`, `buff phase`, git push, npm auth) + 86 new tests |
+| **v1.30.0** | Sep 2026 | Phase 10 tests + docs — 80 unit tests (CredentialStore + PhaseExecutionEngine), README/Product_Guide/website updated with Phase 10 progress |
 
 ---
 
