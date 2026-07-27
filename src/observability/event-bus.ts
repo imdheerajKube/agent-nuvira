@@ -68,6 +68,18 @@ export const EventNames = {
   ORCHESTRATOR_TASK_STARTED: 'orchestrator:task-started',
   ORCHESTRATOR_TASK_COMPLETED: 'orchestrator:task-completed',
 
+  // Safe execution layer events
+  SAFE_EXEC_FILE_VALIDATED: 'safe-exec:file-validated',
+  SAFE_EXEC_SANDBOX_STARTING: 'safe-exec:sandbox-starting',
+  SAFE_EXEC_SANDBOX_CREATED: 'safe-exec:sandbox-created',
+  SAFE_EXEC_SANDBOX_COMPLETED: 'safe-exec:sandbox-completed',
+  SAFE_EXEC_SANDBOX_FAILED: 'safe-exec:sandbox-failed',
+  SAFE_EXEC_LLM_STARTING: 'safe-exec:llm-starting',
+  SAFE_EXEC_LLM_BLOCKED: 'safe-exec:llm-blocked',
+  SAFE_EXEC_LLM_RETRY: 'safe-exec:llm-retry',
+  SAFE_EXEC_LLM_COMPLETED: 'safe-exec:llm-completed',
+  SAFE_EXEC_LLM_FAILED: 'safe-exec:llm-failed',
+
   // System events
   SYSTEM_ERROR: 'system:error',
   SYSTEM_WARN: 'system:warn',
@@ -503,6 +515,70 @@ export class LoggerConsumer implements EventBusConsumer {
               const d = data as Record<string, unknown>;
               const icon = d.success ? '✅' : '❌';
               logger.info(`   ${icon} Pipeline ${d.success ? 'succeeded' : 'failed'} (${d.tasksCompleted}/${d.tasksTotal} tasks)`);
+            }
+            break;
+
+          // Safe execution events
+          case 'safe-exec:file-validated':
+            if (typeof data === 'object' && data !== null) {
+              const d = data as Record<string, unknown>;
+              const icon = d.passed ? '✅' : '❌';
+              logger.info(`   ${icon} File validated: ${d.path} (${d.checkCount || 0} checks)`);
+            }
+            break;
+          case 'safe-exec:sandbox-starting':
+            if (typeof data === 'object' && data !== null) {
+              const d = data as Record<string, unknown>;
+              logger.info(`   🐳 Sandbox: ${(d.command as string)?.slice(0, 60)}`);
+            }
+            break;
+          case 'safe-exec:sandbox-created':
+            if (typeof data === 'object' && data !== null) {
+              const d = data as Record<string, unknown>;
+              logger.info(`   🐳 Container created: ${d.containerId}`);
+            }
+            break;
+          case 'safe-exec:sandbox-completed':
+            if (typeof data === 'object' && data !== null) {
+              const d = data as Record<string, unknown>;
+              const icon = d.success ? '✅' : '❌';
+              logger.info(`   ${icon} Sandbox ${d.success ? 'succeeded' : 'failed'} (exit ${d.exitCode || '?'}, ${d.durationMs || 0}ms)`);
+            }
+            break;
+          case 'safe-exec:sandbox-failed':
+            if (typeof data === 'object' && data !== null) {
+              const d = data as Record<string, unknown>;
+              logger.error(`   ❌ Sandbox error: ${(d.error as string)?.slice(0, 200) || 'Unknown'}`);
+            }
+            break;
+          case 'safe-exec:llm-starting':
+            if (typeof data === 'object' && data !== null) {
+              const d = data as Record<string, unknown>;
+              logger.debug(`   🤖 LLM call (${d.promptLength || 0} chars, up to ${d.maxRetries || 3} retries)`);
+            }
+            break;
+          case 'safe-exec:llm-blocked':
+            if (typeof data === 'object' && data !== null) {
+              const d = data as Record<string, unknown>;
+              logger.error(`   🚫 LLM call blocked: ${d.reason || 'unknown'} — ${(d.finding as string)?.slice(0, 80)}`);
+            }
+            break;
+          case 'safe-exec:llm-retry':
+            if (typeof data === 'object' && data !== null) {
+              const d = data as Record<string, unknown>;
+              logger.warn(`   🔄 LLM retry ${d.attempt || '?'} (backoff: ${d.backoffMs || 0}ms)`);
+            }
+            break;
+          case 'safe-exec:llm-completed':
+            if (typeof data === 'object' && data !== null) {
+              const d = data as Record<string, unknown>;
+              logger.debug(`   ✅ LLM response (${d.responseLength || 0} chars${d.truncated ? ', truncated' : ''})`);
+            }
+            break;
+          case 'safe-exec:llm-failed':
+            if (typeof data === 'object' && data !== null) {
+              const d = data as Record<string, unknown>;
+              logger.error(`   ❌ LLM call failed: ${(d.error as string)?.slice(0, 200) || 'Unknown'}`);
             }
             break;
 

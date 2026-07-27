@@ -7,6 +7,34 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [1.26.0] - 2026-09-29
+
+### Added
+- **SafeExecutionLayer (Phase 9)** — `DefaultSafeExecutionLayer` unifying three safety domains:
+  - **File validation** — file size guard (default: 100KB), .gitignore compliance detection, AST syntax
+    validation (TS/JS/Python/Go/Rust), security scan of file content via `runAllScans()`
+  - **Sandboxed execution** — Docker container isolation via `SandboxManager`, resource limits
+    (CPU/memory), timeout enforcement, automatic container lifecycle (create/copy/exec/destroy)
+  - **Safe LLM calls** — prompt injection guardrail (blocks injection patterns before sending),
+    configurable prompt length cap (default: 128K chars), exponential backoff retry (up to 3),
+    circuit breaker for auth errors (401/403), response length cap
+- **EventBus events (10 new)** — `SAFE_EXEC_FILE_VALIDATED`, `SAFE_EXEC_SANDBOX_STARTING`/`CREATED`/
+  `COMPLETED`/`FAILED`, `SAFE_EXEC_LLM_STARTING`/`BLOCKED`/`RETRY`/`COMPLETED`/`FAILED`
+- **VerifyModule EventBus tests** — 9 new tests verifying `VERIFY_STARTING`, `VERIFY_CHECK` (all 4
+  check types), and `VERIFY_COMPLETED` emissions
+
+### Changed
+- Response truncation in `DefaultSafeExecutionLayer.safeLLMCall()` now uses the `maxPromptLength`
+  parameter consistently for both prompt and response capping
+
+### Tests
+- SafeExecutionLayer: 23 tests — 11 validateFile (size, gitignore, syntax, security, edge cases,
+  events), 10 safeLLMCall (injection, retry, auth skip, truncation, events), 2 executeInSandbox
+  (Docker unavailable, events)
+- VerifyModule EventBus: 9 tests — event emissions for all verification check types
+
+---
+
 ## [1.25.0] - 2026-09-29
 
 ### Added

@@ -262,6 +262,19 @@ export type { ExecuteModule, ExecuteParams, ExecuteResult } from './agents/execu
 export { DefaultTestModule } from './agents/test-module.js';
 export type { TestModule, TestParams, TestResult } from './agents/test-module.js';
 
+// ─── SafeExecutionLayer (Phase 9) ───────────────────────────────────────
+export { DefaultSafeExecutionLayer } from './agents/safe-execution-layer.js';
+export type {
+  SafeExecutionLayer,
+  SafetyCheck,
+  SafetyResult,
+  FileSafetyParams,
+  SandboxExecutionParams,
+  SandboxExecutionResult,
+  LLMCallParams,
+  SafetySeverity,
+} from './agents/safe-execution-layer.js';
+
 // ─── VerifyModule (Phase 6) ────────────────────────────────────────────
 export { DefaultVerifyModule } from './agents/verify-module.js';
 export type {
