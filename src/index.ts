@@ -232,6 +232,29 @@ export type { ReportModule, ExecutionReport, ReportParams, ReportFormat, AgentRe
 // ─── InspectModule (Phase 5) ───────────────────────────────────────────
 export { DefaultInspectModule } from './agents/inspect-module.js';
 
+// ─── TaskExecutionPipeline (Phase 7) ───────────────────────────────────────
+export { TaskExecutionPipeline } from './agents/task-execution-pipeline.js';
+export { PipelineAudit } from './agents/pipeline-audit.js';
+export type {
+  PipelineConfig,
+  PipelineResult,
+  StepResult,
+  TestOutput,
+} from './agents/task-execution-pipeline.js';
+export type {
+  AuditTrail,
+  AuditEntry,
+  PipelineSnapshot,
+} from './agents/pipeline-audit.js';
+
+// ─── PlanModule (Phase 7) ──────────────────────────────────────────────
+export { DefaultPlanModule } from './agents/plan-module.js';
+export type { PlanModule, PlanParams, PlanOutput } from './agents/plan-module.js';
+
+// ─── EditModule (Phase 7) ──────────────────────────────────────────────
+export { DefaultEditModule } from './agents/edit-module.js';
+export type { EditModule, EditParams, EditOutput } from './agents/edit-module.js';
+
 // ─── VerifyModule (Phase 6) ────────────────────────────────────────────
 export { DefaultVerifyModule } from './agents/verify-module.js';
 export type {

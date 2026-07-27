@@ -7,23 +7,51 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [1.22.0] - 2026-09-28
+
+### Added
+- **PlanModule (Phase 7)** — `DefaultPlanModule` extracted from `PlannerAgent`: pluggable goal decomposition
+  with prompt building (goal + file tree + memory context), 3-LLM-response parsing strategies (direct JSON,
+  code block, array extraction), step normalization (numeric IDs, null dependsOn, missing fields),
+  fallback plan when no `callLLM` provided, and `PLAN_STARTED`/`PLAN_STEP_CREATED`/`PLAN_COMPLETED` events
+- **EditModule (Phase 7)** — `DefaultEditModule` extracted from `WriterAgent`: pluggable file change
+  generation with prompt building (artifacts + goal + MCP tools), `filepath:` code block parsing,
+  AST syntax validation, token-budget-aware file selection (prioritizes smaller files, max 10 files,
+  16K char budget), 2-attempt retry loop with rate-limit handling (skip/abort/switch-model/retry),
+  mutable `currentCallLLM` for model-switch support, and `EDIT_GENERATING`/`EDIT_WRITTEN`/`EDIT_SKIPPED` events
+
+### Tests
+- **PlanModule: 41 new tests** — plan() with/without callLLM, parsePlan (direct JSON/code block/array extraction/
+  malformed responses), normalizeSteps (numeric IDs, null dependsOn, missing fields, step filtering),
+  EventBus emissions (3 event types, source verification)
+- **EditModule: 34 new tests** — edit() happy path (multi-file, new file, unchanged file),
+  empty results, LLM errors, rate-limit handling (skip/abort/switch-model), parseFileChanges
+  (filepath prefix, spaces, empty blocks), addFileChange (modified/created/identical content),
+  validateChanges (valid syntax, syntax warnings, non-source files), token budget, EventBus emissions
+
+---
+
 ## [1.21.0] - 2026-09-27
 
 ### Added
-- **LLM-based file classification** — `DefaultInspectModule.classifyWithLLM()` dispatches files to specialized agents
-  (debugger, reviewer, tester, mcp-agent, security-agent) based on file content analysis
-- **Module Architecture (Phase 6)** — Complete 8-module architecture: InspectModule (codebase scanning),
-  ReportModule (pluggable formatters), VerifyModule (4 check types with strictness-aware scoring),
-  PlanModule, EditModule, ExecuteModule, TestModule, RecoverModule
-- **VerifyModule** — Explicit verification pipeline with `security`, `goal-alignment`, `tests`,
-  and `code-quality` check types; low/medium/high strictness levels; pass/fail scoring
+- **VerifyModule (Phase 6)** — Explicit verification pipeline with `security`, `goal-alignment`, `tests`,
+  and `code-quality` check types; low/medium/high strictness levels; pass/fail scoring with configurable
+  pass thresholds (0.5/0.7/0.9)
+- **LLM-based file classification** — `DefaultInspectModule.classifyWithLLM()` dispatches files to
+  specialized agents (debugger, reviewer, tester, mcp-agent, security-agent) based on file content analysis
 - **EventBus LoggerConsumer** — Handlers for `VERIFY_STARTING`, `VERIFY_CHECK`, `VERIFY_COMPLETED` events
+- **Pipeline PR summary SVG** — 14-agent pipeline flow diagram for the website
+- `ROADMAP_TODO.md`, `spec.md`, `spec_roadmap.md`, `spec_upgrade.md` — roadmap and spec documentation
 
 ### Changed
 - `DefaultInspectModule.scanByKeywords()` — improved walkAndScore with additive keyword scoring,
   depth-5 limit, directory-name matching, symlink skipping
 - `DefaultInspectModule.parseClassifyResponse()` — robust JSON extraction with markdown-wrapped,
   malformed, and empty response fallbacks
+- **Architecture migration (Phase 6)** — 8-module architecture designed (InspectModule, ReportModule,
+  VerifyModule, PlanModule, EditModule, ExecuteModule, TestModule, RecoverModule) with 3 extracted;
+  remaining 5 modules scheduled for future phases
+- `.gitignore` — added `.DS_Store` to prevent macOS metadata clutter
 
 ### Fixed
 - **Followup first-letter truncation** — broken regex `\U` (treated as literal `U`, creating range `0-U`
@@ -42,24 +70,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [1.20.0] - 2026-09-20
 
 ### Added
-- **Architecture migration (Phase 5)** — InspectModule wrapper around ContextGathererAgent with
-  codebase scanning, keyword scoring, and LLM-based file classification
-- **LLM-based file classification** — Optional LLM dispatch to classify files by relevance
-  (essential/supporting/irrelevant) using the configured inference provider
-- **EventBus VERIFY events** — `VERIFY_STARTING`, `VERIFY_CHECK`, `VERIFY_COMPLETED` with structured payloads
+- **InspectModule (Phase 5)** — codebase scanning wrapper around ContextGathererAgent with keyword
+  scoring (+3 name match, +1 path match), depth limiting (5), `.buffignore` pattern support,
+  binary/symlink skipping, and LLM-based file classification
+- **ReportModule (Phase 4)** — Pluggable report formatters (markdown, JSON, summary, verbose) with
+  EventBus integration and 4 structured event types
 - **Architecture roadmap SVG** — Visual migration timeline (Phase 1→6) for the website
-- **Pipeline PR summary SVG** — 14-agent pipeline flow diagram for the website
-- `ROADMAP_TODO.md`, `spec.md`, `spec_roadmap.md`, `spec_upgrade.md` — roadmap and spec documentation
+- **Website provider showcase SVG** — Visual logo grid of 17+ supported AI providers
 
 ### Changed
 - `DefaultInspectModule` — scanByKeywords now respects `.buffignore` patterns, depth limit (5),
   and skips binary/symlink files
 - `website/index.html` — added Architecture Migration section with roadmap SVG and metric highlights
 - `website/styles.css` — architecture-visual section with glow hover effects, responsive grid
-- `.gitignore` — added `.DS_Store` to prevent macOS metadata clutter
 
 ### Tests
-- InspectModule: 41 comprehensive tests covering inspect(), scanByKeywords(), walkAndScore(),
+- InspectModule: 41 tests covering inspect(), scanByKeywords(), walkAndScore(),
   parseClassifyResponse(), and keyword-based file discovery
 
 ---
@@ -73,14 +99,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   plug-and-play agent lifecycle, and event-driven observability
 - **Mermaid architecture diagrams** — `ARCHITECTURE_DIAGRAMS.md` with 5 visual diagrams:
   Module Architecture, Extensibility, Execution Flow, Event Bus Data Flow, Migration Timeline
-- **ReportModule (Phase 4)** — Pluggable report formatters (markdown, JSON, summary, verbose) with
-  EventBus integration and 4 structured event types
-- **Website provider showcase** — Updated to highlight 17+ providers (including AWS Bedrock, Anthropic,
-  Cohere, AI21, Mistral, Together, Replicate, Perplexity, DeepSeek)
 
 ### Changed
-- `DefaultOrchestrator` — wired to EventBus; emits 14 pipeline lifecycle events (starting, agent-selected,
-  agent-completed, pipeline-completed)
+- `DefaultOrchestrator` — wired to EventBus; emits 14 pipeline lifecycle events
 - A2A tests — increased timeout to accommodate real Orchestrator initialization
 - Documentation expanded with cross-references between ARCHITECTURE.md and all strategic docs
 
