@@ -409,7 +409,8 @@ export function validateTSSyntax(code: string, filePath: string): boolean {
     if (!sourceFile) return false;
     // Check for actual parse errors (TypeScript's parser is lenient and
     // produces SourceFile even for garbage input via error recovery)
-    return sourceFile.parseDiagnostics.length === 0;
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    return (sourceFile as any).parseDiagnostics?.length === 0;
   } catch {
     return false;
   }
