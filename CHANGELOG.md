@@ -7,6 +7,36 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [1.31.0] - 2026-09-30
+
+### Added
+- **TS Compiler API Wrapper (Phase 11)** — `src/editing/ts-adapter.ts` — Proper TypeScript Compiler API
+  integration with `parseSourceFile()`, `findStructuralNodes()`, `findNodeByName()`, `findNodeAtPosition()`,
+  `nodeToRange()`, `getBodyRange()`, `validateTSSyntax()` (uses `parseDiagnostics`), `replaceNodeText()`, and
+  `insertAt()` — provides parser-level accuracy for all TS/JS editing operations
+- **Structural Transformations (Phase 11)** — `src/editing/transform.ts` — Real code transformations:
+  `renameSymbol()` (regex word-boundary replacement), `extractFunction()`, `inlineFunction()`,
+  `addParameter()`, `changeSignature()`, and `detectTransformType()` NLP heuristic mapper
+- **Two-Tier Editing Engine (Phase 11)** — `src/editing/edit.ts` rewritten with `tryFindNodeTS()` helper:
+  all 7 operations (replaceFunctionBody, addMethodToClass, insertBefore, insertAfter, deleteNode,
+  performEdit, buildStructuralContext) try the TS Compiler API first, fall back to regex — giving
+  TS/JS files parser-level accuracy while supporting Python/Go/Rust via regex
+- **Phase 11 Unit Tests** — 66 new tests across two suites:
+  - `tests/editing/ts-adapter.test.ts` (40 tests) — parsing, node finding, body ranges, validation, text manipulation
+  - `tests/editing/transform.test.ts` (26 tests) — all 5 transformation operations + NLP detection
+
+### Changed
+- `src/editing/edit.ts` — Replaced all `await import()` dynamic imports with clean static imports;
+  replaced fragile regex-based structural analysis with TS Compiler API tier (for TS/JS) + regex fallback
+  (for Python/Go/Rust)
+- Marked unused imports cleanup (nodeToRange, replaceNodeText, insertAt) in transform.ts
+
+### Tests
+- 66 new Phase 11 tests — all passing ✅
+- Total module tests: ts-adapter (40) + transform (26) = **66 Phase 11 tests**
+
+---
+
 ## [1.30.0] - 2026-09-30
 
 ### Added

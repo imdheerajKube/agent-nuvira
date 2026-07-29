@@ -7,7 +7,10 @@
  * - Add import statement
  * - Intelligent code formatting with structural awareness
  *
- * Falls back to original text-based editing for unsupported languages.
+ * Uses TS Compiler API for TypeScript/JavaScript files (primary tier)
+ * with regex-based fallback for other languages.
+ *
+ * @see ARCHITECTURE.md §4.2 — Phase 11: TS Compiler API integration
  */
 
 import {
@@ -19,92 +22,148 @@ import {
 } from './types.js';
 import {
   analyzeStructure,
-  findNodeByName,
+  findNodeByName as findNodeByNameRegex,
   validateSyntax,
 } from './ast.js';
 import { applyEdits, formatEditSummary } from './diff.js';
+import {
+  findStructuralNodes as findNodesTS,
+  findNodeByName as findNodeByNameTS,
+  validateTSSyntax,
+  nodeToRange,
+  getBodyRange,
+} from './ts-adapter.js';
+import { renameSymbol, extractFunction, inlineFunction, addParameter, changeSignature } from './transform.js';
 
 // ─── High-Level Operations ──────────────────────────────────────────────────
 
 /**
+ * Try to find a structural node using the TS Compiler API.
+ * Returns a StructuralNode if found, null otherwise.
+ */
+function tryFindNodeTS(
+  code: string,
+  filePath: string,
+  name: string,
+  type: 'function' | 'class' | 'interface' | 'enum' | 'type-alias' | 'variable' = 'function',
+  language: SupportedLanguage,
+): StructuralNode | null {
+  if (language !== 'typescript' && language !== 'javascript') return null;
+  if (!filePath) return null;
+
+  const tsResult = findNodeByNameTS(code, filePath, name);
+  if (!tsResult) return null;
+
+  const { node, sourceFile } = tsResult;
+  const range = nodeToRange(node, sourceFile);
+  const bodyRange = getBodyRange(node, sourceFile);
+
+  return {
+    type,
+    name,
+    range,
+    bodyRange,
+    depth: 0,
+    children: [],
+    language,
+  };
+}
+
+/**
  * Replace the body of a function/method while preserving its signature.
- * Detects the function using structural analysis.
+ * Uses TS Compiler API for TypeScript/JavaScript files, falls back to regex.
  */
 export function replaceFunctionBody(
   code: string,
   functionName: string,
   newBody: string,
   language?: SupportedLanguage,
+  filePath?: string,
 ): EditResult {
-  const lang = language || detectLanguage('');
+  const lang = language || detectLanguage(filePath || '');
+  const resolvedPath = filePath || `file.${lang === 'typescript' ? 'ts' : lang === 'javascript' ? 'js' : 'ts'}`;
+
+  // Try TS Compiler API first for TS/JS files
+  const tsTarget = tryFindNodeTS(code, resolvedPath, functionName, 'function', lang);
+  if (tsTarget) {
+    if (!tsTarget.bodyRange) {
+      // Abstract declaration — replace entire node
+      return applyEdits(code, [{
+        type: 'replace-node', filePath: '', targetNode: tsTarget, language: lang,
+        newCode: newBody, description: `Replace function ${functionName}`, priority: 1,
+      }]);
+    }
+    return applyEdits(code, [{
+      type: 'replace-body', filePath: '', targetNode: tsTarget, language: lang,
+      newCode: newBody, description: `Replace body of ${functionName}`, priority: 1,
+    }]);
+  }
+
+  // Fallback to regex-based analysis
   const nodes = analyzeStructure(code, lang);
-  const target = findNodeByName(nodes, functionName);
+  const target = findNodeByNameRegex(nodes, functionName);
 
   if (!target) {
     return {
-      success: false,
-      conflicts: [],
-      appliedCount: 0,
-      totalEdits: 1,
+      success: false, conflicts: [], appliedCount: 0, totalEdits: 1,
       error: `Function "${functionName}" not found in the code`,
     };
   }
 
-  if (!target?.bodyRange) {
-    // Function has no body (abstract declaration, interface) — replace entire node
+  if (!target.bodyRange) {
     return applyEdits(code, [{
-      type: 'replace-node',
-      filePath: '',
-      targetNode: target,
-      language: lang,
-      newCode: newBody,
-      description: `Replace function ${functionName}`,
-      priority: 1,
+      type: 'replace-node', filePath: '', targetNode: target, language: lang,
+      newCode: newBody, description: `Replace function ${functionName}`, priority: 1,
     }]);
   }
 
   return applyEdits(code, [{
-    type: 'replace-body',
-    filePath: '',
-    targetNode: target,
-    language: lang,
-    newCode: newBody,
-    description: `Replace body of ${functionName}`,
-    priority: 1,
+    type: 'replace-body', filePath: '', targetNode: target, language: lang,
+    newCode: newBody, description: `Replace body of ${functionName}`, priority: 1,
   }]);
 }
 
 /**
  * Add a method to a class.
+ * Uses TS Compiler API for TypeScript/JavaScript files, falls back to regex.
  */
 export function addMethodToClass(
   code: string,
   className: string,
   methodCode: string,
   language?: SupportedLanguage,
+  filePath?: string,
 ): EditResult {
-  const lang = language || detectLanguage('');
-  const nodes = analyzeStructure(code, lang);
-  const target = findNodeByName(nodes, className, 'class');
+  const lang = language || detectLanguage(filePath || '');
+  const resolvedPath = filePath || `file.${lang === 'typescript' ? 'ts' : lang === 'javascript' ? 'js' : 'ts'}`;
+
+  // Try TS Compiler API first
+  const tsTarget = tryFindNodeTS(code, resolvedPath, className, 'class', lang);
+  if (tsTarget) {
+    if (!tsTarget.bodyRange) {
+      return { success: false, conflicts: [], appliedCount: 0, totalEdits: 1, error: `Class "${className}" has no body` };
+    }
+    return applyEdits(code, [{
+      type: 'insert-child', filePath: '', targetNode: tsTarget, language: lang,
+      newCode: methodCode, description: `Add method to ${className}`, priority: 1,
+    }]);
+  }
+
+  // Fallback to regex-based analysis
+  const lang2 = language || detectLanguage('');
+  const nodes = analyzeStructure(code, lang2);
+  const target = findNodeByNameRegex(nodes, className, 'class');
 
   if (!target) {
     return {
-      success: false,
-      conflicts: [],
-      appliedCount: 0,
-      totalEdits: 1,
+      success: false, conflicts: [], appliedCount: 0, totalEdits: 1,
       error: `Class "${className}" not found`,
     };
   }
 
   return applyEdits(code, [{
-    type: 'insert-child',
-    filePath: '',
-    targetNode: target,
-    language: lang,
-    newCode: methodCode,
-    description: `Add method to ${className}`,
-    priority: 1,
+    type: 'insert-child', filePath: '', targetNode: target, language: lang2,
+    newCode: methodCode, description: `Add method to ${className}`, priority: 1,
   }]);
 }
 
@@ -123,121 +182,120 @@ export function addImport(
   const normalized = importStatement.trim();
   if (code.includes(normalized)) {
     return {
-      success: true,
-      code,
-      conflicts: [],
-      appliedCount: 0,
-      totalEdits: 1,
+      success: true, code, conflicts: [], appliedCount: 0, totalEdits: 1,
     };
   }
 
   return applyEdits(code, [{
-    type: 'add-import',
-    filePath: '',
-    language: lang,
-    newCode: normalized,
-    description: `Add import: ${normalized.slice(0, 60)}`,
-    priority: 2,
+    type: 'add-import', filePath: '', language: lang, newCode: normalized,
+    description: `Add import: ${normalized.slice(0, 60)}`, priority: 2,
   }]);
 }
 
 /**
  * Insert code before a specific structural element.
+ * Uses TS Compiler API for TS/JS files, falls back to regex.
  */
 export function insertBefore(
   code: string,
   targetName: string,
   newCode: string,
   language?: SupportedLanguage,
+  filePath?: string,
 ): EditResult {
-  const lang = language || detectLanguage('');
-  const nodes = analyzeStructure(code, lang);
-  const target = findNodeByName(nodes, targetName);
+  const lang = language || detectLanguage(filePath || '');
+  const resolvedPath = filePath || `file.${lang === 'typescript' ? 'ts' : lang === 'javascript' ? 'js' : 'ts'}`;
 
-  if (!target) {
-    return {
-      success: false,
-      conflicts: [],
-      appliedCount: 0,
-      totalEdits: 1,
-      error: `Target "${targetName}" not found`,
-    };
+  // Try TS Compiler API first
+  const tsTarget = tryFindNodeTS(code, resolvedPath, targetName, 'function', lang);
+  if (tsTarget) {
+    return applyEdits(code, [{
+      type: 'insert-before', filePath: '', targetNode: tsTarget, language: lang,
+      newCode, description: `Insert before ${targetName}`, priority: 1,
+    }]);
   }
 
+  // Fallback to regex
+  const lang2 = language || detectLanguage('');
+  const nodes = analyzeStructure(code, lang2);
+  const target = findNodeByNameRegex(nodes, targetName);
+  if (!target) {
+    return { success: false, conflicts: [], appliedCount: 0, totalEdits: 1, error: `Target "${targetName}" not found` };
+  }
   return applyEdits(code, [{
-    type: 'insert-before',
-    filePath: '',
-    targetNode: target,
-    language: lang,
-    newCode,
-    description: `Insert before ${targetName}`,
-    priority: 1,
+    type: 'insert-before', filePath: '', targetNode: target, language: lang2,
+    newCode, description: `Insert before ${targetName}`, priority: 1,
   }]);
 }
 
 /**
  * Insert code after a specific structural element.
+ * Uses TS Compiler API for TS/JS files, falls back to regex.
  */
 export function insertAfter(
   code: string,
   targetName: string,
   newCode: string,
   language?: SupportedLanguage,
+  filePath?: string,
 ): EditResult {
-  const lang = language || detectLanguage('');
-  const nodes = analyzeStructure(code, lang);
-  const target = findNodeByName(nodes, targetName);
+  const lang = language || detectLanguage(filePath || '');
+  const resolvedPath = filePath || `file.${lang === 'typescript' ? 'ts' : lang === 'javascript' ? 'js' : 'ts'}`;
 
-  if (!target) {
-    return {
-      success: false,
-      conflicts: [],
-      appliedCount: 0,
-      totalEdits: 1,
-      error: `Target "${targetName}" not found`,
-    };
+  // Try TS Compiler API first
+  const tsTarget = tryFindNodeTS(code, resolvedPath, targetName, 'function', lang);
+  if (tsTarget) {
+    return applyEdits(code, [{
+      type: 'insert-after', filePath: '', targetNode: tsTarget, language: lang,
+      newCode, description: `Insert after ${targetName}`, priority: 1,
+    }]);
   }
 
+  // Fallback to regex
+  const lang2 = language || detectLanguage('');
+  const nodes = analyzeStructure(code, lang2);
+  const target = findNodeByNameRegex(nodes, targetName);
+  if (!target) {
+    return { success: false, conflicts: [], appliedCount: 0, totalEdits: 1, error: `Target "${targetName}" not found` };
+  }
   return applyEdits(code, [{
-    type: 'insert-after',
-    filePath: '',
-    targetNode: target,
-    language: lang,
-    newCode,
-    description: `Insert after ${targetName}`,
-    priority: 1,
+    type: 'insert-after', filePath: '', targetNode: target, language: lang2,
+    newCode, description: `Insert after ${targetName}`, priority: 1,
   }]);
 }
 
 /**
  * Delete a structural node from the code.
+ * Uses TS Compiler API for TS/JS files, falls back to regex.
  */
 export function deleteNode(
   code: string,
   targetName: string,
   language?: SupportedLanguage,
+  filePath?: string,
 ): EditResult {
-  const lang = language || detectLanguage('');
-  const nodes = analyzeStructure(code, lang);
-  const target = findNodeByName(nodes, targetName);
+  const lang = language || detectLanguage(filePath || '');
+  const resolvedPath = filePath || `file.${lang === 'typescript' ? 'ts' : lang === 'javascript' ? 'js' : 'ts'}`;
 
-  if (!target) {
-    return {
-      success: false,
-      conflicts: [],
-      appliedCount: 0,
-      totalEdits: 1,
-      error: `Target "${targetName}" not found`,
-    };
+  // Try TS Compiler API first
+  const tsTarget = tryFindNodeTS(code, resolvedPath, targetName, 'function', lang);
+  if (tsTarget) {
+    return applyEdits(code, [{
+      type: 'delete-node', filePath: '', targetNode: tsTarget, language: lang,
+      description: `Delete ${targetName}`, priority: 1,
+    }]);
   }
 
+  // Fallback to regex
+  const lang2 = language || detectLanguage('');
+  const nodes = analyzeStructure(code, lang2);
+  const target = findNodeByNameRegex(nodes, targetName);
+  if (!target) {
+    return { success: false, conflicts: [], appliedCount: 0, totalEdits: 1, error: `Target "${targetName}" not found` };
+  }
   return applyEdits(code, [{
-    type: 'delete-node',
-    filePath: '',
-    targetNode: target,
-    language: lang,
-    description: `Delete ${targetName}`,
-    priority: 1,
+    type: 'delete-node', filePath: '', targetNode: target, language: lang2,
+    description: `Delete ${targetName}`, priority: 1,
   }]);
 }
 
@@ -246,6 +304,7 @@ export function deleteNode(
 /**
  * Perform an intelligent edit based on the edit type.
  * Automatically detects language and finds structural targets.
+ * Uses TS Compiler API for TS/JS files, falls back to regex.
  *
  * This is the primary entry point for the WriterAgent integration.
  */
@@ -269,10 +328,21 @@ export function performEdit(
 
   // Find the target node if specified by name but not resolved
   if (edit.targetNode?.name && !edit.targetNode.range) {
-    const nodes = analyzeStructure(code, lang);
-    const found = findNodeByName(nodes, edit.targetNode.name);
-    if (found) {
-      edit.targetNode = found;
+    // Try TS Compiler API first for TS/JS files
+    if ((lang === 'typescript' || lang === 'javascript') && edit.filePath) {
+      const tsTarget = tryFindNodeTS(code, edit.filePath, edit.targetNode.name, 'function', lang);
+      if (tsTarget) {
+        edit.targetNode = tsTarget;
+      }
+    }
+
+    // Fallback to regex
+    if (!edit.targetNode.range) {
+      const nodes = analyzeStructure(code, lang);
+      const found = findNodeByNameRegex(nodes, edit.targetNode.name);
+      if (found) {
+        edit.targetNode = found;
+      }
     }
   }
 
@@ -283,8 +353,8 @@ export function performEdit(
 
 /**
  * Build a structural context description for the LLM.
- * This tells the LLM about the structure of the file so it can make more
- * precise edits.
+ * Uses TS Compiler API for TypeScript/JavaScript files for richer, more precise
+ * structural context. Falls back to regex-based analysis for other languages.
  */
 export function buildStructuralContext(
   code: string,
@@ -293,7 +363,20 @@ export function buildStructuralContext(
   const lang = detectLanguage(filePath);
   if (lang === 'unknown') return '';
 
-  const nodes = analyzeStructure(code, lang);
+  let nodes: StructuralNode[];
+
+  // Try TS Compiler API first for better precision
+  if (lang === 'typescript' || lang === 'javascript') {
+    try {
+      const tsNodes = findNodesTS(code, filePath);
+      nodes = tsNodes.length > 0 ? tsNodes : analyzeStructure(code, lang);
+    } catch {
+      nodes = analyzeStructure(code, lang);
+    }
+  } else {
+    nodes = analyzeStructure(code, lang);
+  }
+
   if (nodes.length === 0) return '';
 
   const lines: string[] = [];
@@ -306,7 +389,7 @@ export function buildStructuralContext(
     if (node.children.length > 0) {
       for (const child of node.children) {
         const childRange = `L${child.range.start.line}-L${child.range.end.line}`;
-        lines.push(`    method: "${child.name}" [${childRange}]`);
+        lines.push(`    ${child.type}: "${child.name}" [${childRange}]`);
       }
     }
   }
@@ -314,6 +397,27 @@ export function buildStructuralContext(
   return lines.join('\n');
 }
 
+/**
+ * Validate syntax with TS Compiler API for TS/JS, regex fallback for others.
+ */
+export function validateCodeSyntax(code: string, filePath: string): boolean {
+  const lang = detectLanguage(filePath);
+  if (lang === 'typescript' || lang === 'javascript') {
+    return validateTSSyntax(code, filePath);
+  }
+  return validateSyntax(code, lang);
+}
+
 // ─── Export for convenience ─────────────────────────────────────────────────
 
-export { analyzeStructure, findNodeByName, validateSyntax, formatEditSummary };
+export {
+  analyzeStructure,
+  findNodeByNameRegex as findNodeByName,
+  validateSyntax,
+  formatEditSummary,
+  renameSymbol,
+  extractFunction,
+  inlineFunction,
+  addParameter,
+  changeSignature,
+};

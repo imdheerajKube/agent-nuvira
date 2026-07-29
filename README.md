@@ -1337,7 +1337,7 @@ npx tsc --noEmit
 
 ## Roadmap
 
-**Phases 1–3 (25 phases) are complete.** Phase 4 (Industry Standards & Autonomous Polish) is in progress. See [UPGRADE_ROADMAP.md](./UPGRADE_ROADMAP.md) for the full implementation journey.
+**Phases 1–11 are complete** — from Foundation (Phase 0) through TS Compiler API-Aware Structural Editing (Phase 11). See [UPGRADE_ROADMAP.md](./UPGRADE_ROADMAP.md) for the full implementation journey.
 
 > 📊 **Architecture, strategy & contribution materials:** [ARCHITECTURE.md](./ARCHITECTURE.md) — Modular execution engine design with 7 module specifications, extensibility/observability systems, and phased migration plan. [ARCHITECTURE_DIAGRAMS.md](./ARCHITECTURE_DIAGRAMS.md) — Mermaid-rendered versions of all architecture diagrams (Module Architecture, Extensibility, Safe Execution, Data Flow, Observability Bus). [PRODUCT_STRATEGY.md](./PRODUCT_STRATEGY.md) — Competitive landscape, positioning map, OKR framework, and risk register. [PITCH_DECK.md](./PITCH_DECK.md) — 10-slide investor presentation outline with talking points and data. [CONTRIBUTING.md](./CONTRIBUTING.md) — Quick-reference contributor guide with docs map, dev setup, and contribution workflow.
 
@@ -1401,6 +1401,11 @@ npx tsc --noEmit
 | 10.2 | PhaseExecutionEngine — multi-goal project scopes with save/resume across restarts | ✅ Complete (v1.29.0) |
 | 10.3 | `buff publish` — 5-phase pipeline: tests → version → git → npm → GitHub release | ✅ Complete (v1.29.0) |
 | 10.4 | `buff phase` — create/execute/resume/status/list scopes with credential management | ✅ Complete (v1.29.0) |
+| **Phase 11: TS Compiler API-Aware Structural Editing** | | |
+| 11.1 | TS Compiler API Wrapper (`ts-adapter.ts`) — parse, find nodes, validate syntax via real TS parser | ✅ Complete (v1.31.0) |
+| 11.2 | Structural Transformations (`transform.ts`) — rename, extract, inline, add param, change signature | ✅ Complete (v1.31.0) |
+| 11.3 | Two-Tier Editing Engine (`edit.ts` rewrite) — TS API-first, regex fallback for all 7 operations | ✅ Complete (v1.31.0) |
+| 11.4 | Phase 11 Tests — 66 tests (40 ts-adapter + 26 transform), all passing | ✅ Complete (v1.31.0) |
 
 ---
 
@@ -1437,6 +1442,7 @@ npx tsc --noEmit
 | **v1.27.0** | Aug 2026 | Website + SVG — Phase 9 SafeExecutionLayer, phase progress 9/9, 2,207 tests |
 | **v1.29.0** | Sep 2026 | Phase 10 — Autonomous publish + phase-wise execution (CredentialStore, PhaseEngine, `buff publish`, `buff phase`, git push, npm auth) + 86 new tests |
 | **v1.30.0** | Sep 2026 | Phase 10 tests + docs — 80 unit tests (CredentialStore + PhaseExecutionEngine), README/Product_Guide/website updated with Phase 10 progress |
+| **v1.31.0** | Sep 2026 | Phase 11 — TS Compiler API-Aware Structural Editing (ts-adapter.ts, transform.ts, edit.ts rewrite, 66 new tests), proper parser-level accuracy for TS/JS edits |
 
 ---
 
@@ -1531,6 +1537,9 @@ npx tsc --noEmit
 | **PhaseExecutionEngine (Phase 10)** | Multi-goal project scope execution — sequential phase execution with save/resume across restarts, credential management, progress tracking |
 | **`buff publish` (Phase 10)** | Autonomous 5-phase publish pipeline — test verification → version bump → git commit/tag/push → npm build/publish → GitHub release |
 | **`buff phase` (Phase 10)** | Phase-wise project execution CLI — create/execute/resume/status/list/delete scopes with interactive pauses and credential collection |
+| **TS Compiler API Wrapper (Phase 11)** | Proper TypeScript Compiler API integration — parser-level accuracy with parseSourceFile, findStructuralNodes, validateTSSyntax, replaceNodeText, and insertAt |
+| **Structural Transformations (Phase 11)** | Real code transformations — renameSymbol, extractFunction, inlineFunction, addParameter, changeSignature with NLP-based detection |
+| **Two-Tier Editing Engine (Phase 11)** | All 7 edit operations try TS Compiler API first (for TS/JS), fall back to regex (for Python/Go/Rust) — AST-aware `tryFindNodeTS()` helper |
 
 ### Agent Catalog — 15 Agent Roles & Management
 | Agent/Component | Type | Description |
