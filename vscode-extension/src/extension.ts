@@ -24,6 +24,7 @@ import { CLIManager } from './cliManager.js';
 import { AgentPanel } from './agentPanel.js';
 import { ChatPanel } from './chatPanel.js';
 import { ChatHistoryProvider } from './chatProvider.js';
+import { CodeLensProvider } from './codeLensProvider.js';
 import { DiagnosticFixProvider } from './diagnosticFixer.js';
 import { DiffViewer } from './diffViewer.js';
 import { CommandRegistrar } from './commands.js';
@@ -36,6 +37,7 @@ let cliManager: CLIManager | null = null;
 let agentPanel: AgentPanel | null = null;
 let chatPanel: ChatPanel | null = null;
 let chatHistory: ChatHistoryProvider | null = null;
+let codeLensProvider: CodeLensProvider | null = null;
 let diagnosticFixer: DiagnosticFixProvider | null = null;
 let diffViewer: DiffViewer | null = null;
 let commandRegistrar: CommandRegistrar | null = null;
@@ -56,6 +58,7 @@ export function activate(context: vscode.ExtensionContext): void {
   chatPanel = new ChatPanel(context, chatHistory, config);
   diffViewer = new DiffViewer(context);
   diagnosticFixer = new DiagnosticFixProvider(cliManager, diffViewer);
+  codeLensProvider = new CodeLensProvider(cliManager);
   commandRegistrar = new CommandRegistrar(context, cliManager, agentPanel, diffViewer, config);
 
   // Create status bar item
@@ -85,11 +88,26 @@ export function activate(context: vscode.ExtensionContext): void {
     ),
   );
 
+  // Register the CodeLensProvider for code lenses
+  context.subscriptions.push(
+    vscode.languages.registerCodeLensProvider(
+      { pattern: '**/*.{ts,js,tsx,jsx,py,go,rs,java,rb,php,c,cpp,h,hpp,cs,swift,kt,scala,vue,svelte,mjs,cjs}' },
+      codeLensProvider!,
+    ),
+  );
+
+  // Register code lens command handler (single menu-based action)
+  context.subscriptions.push(
+    vscode.commands.registerCommand(CodeLensProvider.lensCommandId, (uri, name, lang, line, bodyRange) =>
+      codeLensProvider?.handleLensClick(uri, name, lang, line, bodyRange),
+    ),
+  );
+
   // Register the CodeActionProvider for diagnostics
   context.subscriptions.push(
     vscode.languages.registerCodeActionsProvider(
       { pattern: '**/*.{ts,js,tsx,jsx,py,go,rs,java,rb,php,c,cpp,h,hpp,cs,swift,kt,scala,vue,svelte,mjs,cjs}' },
-      diagnosticFixer,
+      diagnosticFixer!,
       { providedCodeActionKinds: DiagnosticFixProvider.providedCodeActionKinds },
     ),
   );
