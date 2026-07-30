@@ -87,7 +87,7 @@ document.addEventListener('DOMContentLoaded', () => {
   // --- Scroll Animation with Intersection Observer ---
   const animateElements = () => {
     const elements = document.querySelectorAll(
-      '.feature-card, .provider-card, .extension-card, .quickstart-step, .pipeline-agent, .metric'
+      '.feature-card, .provider-card, .extension-card, .quickstart-step, .pipeline-agent, .metric, .git-pr-card'
     );
 
     const observer = new IntersectionObserver((entries) => {

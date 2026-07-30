@@ -4,16 +4,13 @@
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>Agent-Nuvira — Multi-Agent AI Coding Assistant</title>
-  <meta name="description" content="Agent-Nuvira is an open-source, multi-agent AI coding assistant that runs from your terminal. Plan, write, review, test, and publish code — from a single command." />
-  <meta name="keywords" content="AI coding assistant, multi-agent AI, terminal AI tool, open source, Groq, NVIDIA NIM, Google Gemini, OpenRouter, Ollama" />
+  <meta name="description" content="Agent-Nuvira is an open-source, multi-agent AI coding assistant that runs from your terminal. Plan, write, review, test, and publish code — from a single command." />          <meta name="keywords" content="AI coding assistant, multi-agent AI, terminal AI tool, open source, Groq, NVIDIA NIM, Google Gemini, OpenRouter, Ollama, GitLab, PR review, GitHub" />
   <link rel="icon" type="image/png" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='8' fill='%236363f2'/%3E%3Ctext x='16' y='22' text-anchor='middle' fill='white' font-size='18' font-weight='bold' font-family='system-ui'%3EN%3C/text%3E%3C/svg%3E" />
-  <meta property="og:title" content="Agent-Nuvira — Multi-Agent AI Coding Assistant" />
-  <meta property="og:description" content="The open-source multi-agent AI coding assistant. Plan, write, review, test, verify, and publish code from your terminal. 17+ providers. 14+ agents. 2,362+ tests. No subscriptions. No telemetry." />
+  <meta property="og:title" content="Agent-Nuvira — Multi-Agent AI Coding Assistant" />          <meta property="og:description" content="The open-source multi-agent AI coding assistant. Plan, write, review, test, verify, and publish code from your terminal. 17+ providers. 16+ agents. 2,600+ tests. GitLab + GitHub PR review built-in. No subscriptions. No telemetry." />
   <meta property="og:image" content="https://www.agent-nuvira.com/assets/hero.png" />
   <meta property="og:url" content="https://www.agent-nuvira.com" />
   <meta name="twitter:card" content="summary_large_image" />
-  <meta name="twitter:title" content="Agent-Nuvira — Multi-Agent AI Coding Assistant" />
-  <meta name="twitter:description" content="The open-source multi-agent AI coding assistant. 17+ providers. 14+ agents. 2,362+ tests. From your terminal." />
+  <meta name="twitter:title" content="Agent-Nuvira — Multi-Agent AI Coding Assistant" />          <meta name="twitter:description" content="The open-source multi-agent AI coding assistant. 17+ providers. 16+ agents. 2,600+ tests. GitLab + GitHub PR review. From your terminal." />
   <link rel="preconnect" href="https://fonts.googleapis.com" />
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
   <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800;900&family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet" />
@@ -34,6 +31,7 @@
         <a href="#providers" class="nav-link">Providers</a>
         <a href="#quickstart" class="nav-link">Quick Start</a>
         <a href="#extensions" class="nav-link">Extensions</a>
+        <a href="#git-pr" class="nav-link">Git & PR</a>
         <a href="#architecture" class="nav-link">Roadmap</a>
         <div class="nav-ctas">
           <a href="https://github.com/imdheerajKube/agent-nuvira" target="_blank" rel="noopener" class="btn btn-ghost btn-sm">
@@ -61,7 +59,7 @@
         </div>
         <h1 class="hero-title">
           Your Terminal.<br />
-          <span class="gradient-text">17+ Providers. 14+ Agents.</span><br />
+          <span class="gradient-text">17+ Providers. 16+ Agents.</span><br />
           Infinite Possibilities.
         </h1>
         <p class="hero-subtitle">
@@ -81,7 +79,7 @@
         </div>
         <div class="hero-metrics">
           <div class="metric">
-            <span class="metric-value">14+</span>
+            <span class="metric-value">16+</span>
             <span class="metric-label">Agent Roles</span>
           </div>
           <div class="metric">
@@ -89,7 +87,7 @@
             <span class="metric-label">AI Providers</span>
           </div>
           <div class="metric">
-            <span class="metric-value">2,362</span>
+            <span class="metric-value">2,600+</span>
             <span class="metric-label">Tests Passing</span>
           </div>
           <div class="metric">
@@ -121,7 +119,7 @@
               <span class="log info">📁 Context Gatherer scanning codebase...</span>
               <span class="log success">✅ Writer implemented auth middleware</span>
               <span class="log info">👀 Reviewer validating changes...</span>
-              <span class="log success">✅ All 2,362 tests passed</span>
+              <span class="log success">✅ All 2,600+ tests passed</span>
               <span class="log info">🔒 VerifyModule running security scan...</span>
               <span class="log success">✅ No security issues found</span>
               <span class="log success">🚀 Changes committed to feature/auth</span>
@@ -211,7 +209,7 @@
             <svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M23 21v-2a4 4 0 0 0-3-3.87"/><path d="M16 3.13a4 4 0 0 1 0 7.75"/></svg>
           </div>
           <h3>Multi-Agent Pipeline</h3>
-          <p>10+ specialized agents — Planner, Writer, Reviewer, Tester, Debugger, and more — orchestrated to complete complex goals autonomously.</p>
+          <p>16+ specialized agents — Planner, Writer, Reviewer, Tester, Debugger, GitLab Agent, PR Review Agent, and more — orchestrated to complete complex goals autonomously.</p>
         </div>
         <div class="feature-card" data-delay="100">
           <div class="feature-icon providers">
@@ -247,6 +245,20 @@
           </div>
           <h3>Self-Learning System</h3>
           <p>Adaptive model routing, trajectory scoring, and pattern extraction that improve over time. The system learns which models perform best for which tasks.</p>
+        </div>
+        <div class="feature-card" data-delay="0">
+          <div class="feature-icon agents">
+            <svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M9 19c-5 1.5-5-2.5-7-3m14 6v-3.87a3.37 3.37 0 0 0-.94-2.61c3.14-.35 6.44-1.54 6.44-7A5.44 5.44 0 0 0 20 6.77 5.07 5.07 0 0 0 19.91 3S18.73.65 15 2.48a13.38 13.38 0 0 0-7 0C4.27.65 3.09 3 3.09 3A5.07 5.07 0 0 0 3 6.77a5.44 5.44 0 0 0-1.5 3.78c0 5.42 3.3 6.61 6.44 7A3.37 3.37 0 0 0 7 20.13V22"/></svg>
+          </div>
+          <h3>Git & PR Integration</h3>
+          <p>Built-in GitLab REST API client and GitHub PR Review Agent. Create MRs, review PRs, post inline comments, run security scans on changed files — all from the terminal.</p>
+        </div>
+        <div class="feature-card" data-delay="100">
+          <div class="feature-icon providers">
+            <svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M23 21v-2a4 4 0 0 0-3-3.87"/><path d="M16 3.13a4 4 0 0 1 0 7.75"/></svg>
+          </div>
+          <h3>Team Workflows</h3>
+          <p>Automate code review across your team. The PR Review Agent checks changed files for security issues, style violations, and code quality — then posts results directly on the PR.</p>
         </div>
       </div>
     </div>
@@ -555,6 +567,65 @@
     </div>
   </section>
 
+  <!-- Git & PR Section -->
+  <section class="git-pr" id="git-pr">
+    <div class="container">
+      <div class="section-header">
+        <span class="section-tag">Git & PR</span>
+        <h2 class="section-title">GitHub & GitLab <span class="gradient-text">PR Automation</span></h2>
+        <p class="section-desc">New in v1.32.0 — two dedicated agents for Git platform integration: PR review automation and GitLab project management, all from your terminal.</p>
+      </div>
+      <div class="git-pr-grid">
+        <div class="git-pr-card">
+          <div class="git-pr-header">
+            <div class="git-pr-icon gitlab">🦊</div>
+            <div>
+              <h3>GitLab Agent</h3>
+              <span class="git-pr-badge">New in v1.32.0</span>
+            </div>
+          </div>
+          <p class="git-pr-desc">Full GitLab REST API v4 integration for project management directly from the terminal.</p>
+          <ul class="git-pr-list">
+            <li>Create, list, comment on, and merge merge requests</li>
+            <li>Create and comment on issues</li>
+            <li>Check pipeline status</li>
+            <li>Discover and browse projects</li>
+            <li>Supports gitlab.com and self-hosted instances</li>
+          </ul>
+          <div class="code-block code-block-sm">
+            <code><span class="prompt">$</span> <span class="hljs-built_in">export</span> GITLAB_TOKEN=<span class="hljs-string">'glpat_your_token'</span></code>
+          </div>
+        </div>
+        <div class="git-pr-card">
+          <div class="git-pr-header">
+            <div class="git-pr-icon github">👁️</div>
+            <div>
+              <h3>PR Review Agent</h3>
+              <span class="git-pr-badge">New in v1.32.0</span>
+            </div>
+          </div>
+          <p class="git-pr-desc">Automated PR review with inline comments, security scanning, and quality checks via GitHub API.</p>
+          <ul class="git-pr-list">
+            <li>List open PRs across repositories</li>
+            <li>Review specific PR (#42) or all open PRs</li>
+            <li>Post inline review comments on changed lines</li>
+            <li>Run VerifyModule security + quality scans</li>
+            <li>Post summary comment with pass/fail/blockers</li>
+          </ul>
+          <div class="code-block code-block-sm">
+            <code><span class="prompt">$</span> <span class="hljs-built_in">export</span> GITHUB_TOKEN=<span class="hljs-string">'ghp_your_token'</span></code>
+          </div>
+        </div>
+      </div>
+      <div class="git-pr-cta">
+        <p>Use them in task plans or directly via the Planner:</p>
+        <div class="code-block">
+          <code><span class="prompt">$</span> agent-nuvira execute <span class="hljs-string">"review open PRs in my-org/my-repo"</span></code>
+        </div>
+      </div>
+    </div>
+  </section>
+
   <!-- Architecture Migration Section -->
   <section class="architecture" id="architecture">
     <div class="container">
@@ -586,7 +657,7 @@
         </div>
         <div class="arch-highlight">
           <span class="arch-highlight-icon">🧪</span>
-          <span class="arch-highlight-count">2,362</span>
+          <span class="arch-highlight-count">2,600+</span>
           <span class="arch-highlight-label">Unit Tests</span>
         </div>
       </div>
@@ -615,7 +686,7 @@
           <tbody>
             <tr>
               <td class="feature-name">Multi-Agent Pipeline</td>
-              <td class="highlight-col"><span class="check">✓</span> 14+ agent roles</td>
+              <td class="highlight-col"><span class="check">✓</span> 16+ agent roles</td>
               <td><span class="cross">✗</span> Single agent</td>
               <td><span class="cross">✗</span> Single agent</td>
               <td><span class="cross">✗</span> Single agent</td>

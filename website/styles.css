@@ -1322,6 +1322,164 @@ code { font-family: var(--font-mono); }
   align-self: stretch;
 }
 
+/* --- Git & PR Section --- */
+.git-pr {
+  padding: 120px 0;
+  position: relative;
+}
+
+.git-pr::before {
+  content: '';
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  height: 1px;
+  background: linear-gradient(90deg, transparent, var(--border-color), transparent);
+}
+
+.git-pr-grid {
+  display: grid;
+  grid-template-columns: repeat(2, 1fr);
+  gap: 24px;
+  margin-bottom: 48px;
+}
+
+.git-pr-card {
+  background: var(--bg-card);
+  border: 1px solid var(--border-color);
+  border-radius: var(--radius-lg);
+  padding: 36px;
+  transition: all 0.4s ease;
+  display: flex;
+  flex-direction: column;
+  position: relative;
+  overflow: hidden;
+}
+
+.git-pr-card::before {
+  content: '';
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  height: 3px;
+  background: var(--gradient-1);
+  opacity: 0;
+  transition: opacity 0.4s ease;
+}
+
+.git-pr-card:hover {
+  border-color: var(--border-hover);
+  transform: translateY(-4px);
+  box-shadow: 0 12px 48px rgba(0, 0, 0, 0.3);
+  background: var(--bg-card-hover);
+}
+
+.git-pr-card:hover::before {
+  opacity: 1;
+}
+
+.git-pr-header {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  margin-bottom: 16px;
+}
+
+.git-pr-icon {
+  width: 56px;
+  height: 56px;
+  border-radius: 14px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 28px;
+  flex-shrink: 0;
+}
+
+.git-pr-icon.gitlab {
+  background: linear-gradient(135deg, #fc6d26, #e24329);
+  box-shadow: 0 4px 16px rgba(252, 109, 38, 0.3);
+}
+
+.git-pr-icon.github {
+  background: linear-gradient(135deg, #6e40c9, #8b5cf6);
+  box-shadow: 0 4px 16px rgba(107, 70, 193, 0.3);
+}
+
+.git-pr-card h3 {
+  font-size: 20px;
+  font-weight: 700;
+  letter-spacing: -0.02em;
+}
+
+.git-pr-badge {
+  display: inline-block;
+  padding: 3px 10px;
+  border-radius: 100px;
+  font-size: 11px;
+  font-weight: 600;
+  background: rgba(16, 185, 129, 0.1);
+  color: var(--success);
+  border: 1px solid rgba(16, 185, 129, 0.25);
+  margin-top: 4px;
+}
+
+.git-pr-desc {
+  font-size: 14px;
+  color: var(--text-secondary);
+  line-height: 1.7;
+  margin-bottom: 20px;
+}
+
+.git-pr-list {
+  list-style: none;
+  margin-bottom: 24px;
+  flex: 1;
+}
+
+.git-pr-list li {
+  position: relative;
+  padding-left: 20px;
+  font-size: 14px;
+  color: var(--text-secondary);
+  line-height: 1.8;
+}
+
+.git-pr-list li::before {
+  content: '▸';
+  position: absolute;
+  left: 0;
+  color: var(--accent-1);
+  font-weight: 700;
+}
+
+.git-pr-cta {
+  text-align: center;
+  padding: 40px;
+  background: var(--bg-card);
+  border: 1px solid var(--border-color);
+  border-radius: var(--radius-lg);
+}
+
+.git-pr-cta p {
+  font-size: 15px;
+  color: var(--text-secondary);
+  margin-bottom: 16px;
+}
+
+.git-pr-cta .code-block {
+  max-width: 600px;
+  margin: 0 auto;
+}
+
+@media (max-width: 768px) {
+  .git-pr-grid {
+    grid-template-columns: 1fr;
+  }
+}
+
 /* --- Architecture Migration Section --- */
 .architecture {
   padding: 120px 0;
@@ -1421,6 +1579,16 @@ code { font-family: var(--font-mono); }
   .architecture-highlights {
     grid-template-columns: repeat(2, 1fr);
   }
+}
+
+.agent-node.gitlab-pr {
+  background: linear-gradient(135deg, #fc6d26, #e24329);
+  box-shadow: 0 4px 20px rgba(252, 109, 38, 0.3);
+}
+
+.agent-node.pr-review {
+  background: linear-gradient(135deg, #6e40c9, #8b5cf6);
+  box-shadow: 0 4px 20px rgba(107, 70, 193, 0.3);
 }
 
 /* --- Comparison Section --- */
