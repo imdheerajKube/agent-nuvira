@@ -24,6 +24,7 @@ import { ConfigManager } from '../config/manager.js';
 import { ProviderFactory } from '../inference/factory.js';
 import type { ProviderType } from '../config/types.js';
 import { logger } from '../utils/logger.js';
+import { getProviderFallback, classifyFallbackError, isRetryableError } from '../learning/provider-fallback.js';
 
 export class SkillCommand {
   private configManager: ConfigManager;
@@ -295,12 +296,39 @@ export class SkillCommand {
     const provider = ProviderFactory.createProvider(providerType, config);
 
     const callLLM = async (prompt: string) => {
-      const result = await provider.generate(prompt, {
-        model: opts.model || config.model,
-        temperature: 0.3,
-        maxTokens: 4096,
-      });
-      return result;
+      try {
+        return await provider.generate(prompt, {
+          model: opts.model || config.model,
+          temperature: 0.3,
+          maxTokens: 4096,
+        });
+      } catch (err) {
+        const errorType = classifyFallbackError(err);
+        if (isRetryableError(errorType)) {
+          try {
+            const fallback = getProviderFallback(this.configManager, this.configManager.getAll().fallback);
+            const fallbackResult = await fallback.callWithFallback(
+              providerType,
+              async (fbProvider, fbType) => {
+                return await fbProvider.generate(prompt, {
+                  model: opts.model || config.model,
+                  temperature: 0.3,
+                  maxTokens: 4096,
+                });
+              },
+              { context: 'skill-compile', label: 'Skill compilation' },
+            );
+            if (fallbackResult.attempts > 1) {
+              logger.success(`✅ Auto-fallback: switched to ${fallbackResult.provider}`);
+            }
+            return fallbackResult.response;
+          } catch {
+            // Fallback exhausted — rethrow original error
+            throw err;
+          }
+        }
+        throw err;
+      }
     };
 
     const improver = getSelfImprover();

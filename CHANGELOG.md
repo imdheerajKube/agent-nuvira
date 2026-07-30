@@ -7,6 +7,26 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [1.37.1] - 2026-10-05
+
+### Fixed
+- **Provider crash in `buff plan`** — Running `agent-nuvira plan` with an unconfigured default
+  provider (e.g., OpenRouter with no API key) crashed with a raw 401 JSON error. Now:
+  - Auto-fallback via `getProviderFallback.callWithFallback()` for retryable errors
+  - Interactive model picker when provider is unavailable or auth fails
+  - Helpful error messages with actionable steps (set API key, run `buff model switch`, use local)
+  - Correct env var names per provider (e.g., `nim` → `NVIDIA_NIM_API_KEY`)
+- **Provider crash in `buff skill compile`** — Added auto-fallback to `callLLM` in `compileSkills()`
+  so skill compilation doesn't crash with raw provider errors
+- **Provider crash in `buff learn patterns --extract`** — Added auto-fallback to `callLLM` in
+  `showPatterns()` so pattern extraction handles provider failures gracefully
+
+### Security
+- `plan.ts` now detects auth errors (401/403) and shows environment variable configuration hints
+  instead of exposing raw API error JSON to the user
+
+---
+
 ## [1.37.0] - 2026-10-05
 
 ### Added
