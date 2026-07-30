@@ -36,7 +36,9 @@ agent-nuvira config list
 - **Docker sandbox isolation** — resource-limited, network-isolated container execution with 8 base images
 - **Provider health dashboard** — `agent-nuvira doctor` with color-coded status, watch mode, and auto-fix
 - **Memory compression & pruning** — automatic trajectory summarization with configurable retention policies
-- **VS Code extension** — 9 commands, inline code suggestions, diff viewer, agent progress panel
+- **VS Code extension** — Chat Panel with streaming responses, slash commands, and session history;
+  Diagnostic → AI Fix from lightbulb menu; Code Lens actions (Test/Review/Explain/Fix) above functions
+  and classes; 9 commands, inline code suggestions, diff viewer, agent progress panel
 - **Remote agent federation** — multi-machine collaboration with protocol, server, and client
 - **Web UI dashboard** — React dashboard with DAG visualization, model health, cost charts, and history browser
 - **Hybrid model routing** — intelligent model selection based on task complexity, cost, and availability
@@ -1360,8 +1362,11 @@ npx tsc --noEmit
 | 2.5 | Provider health dashboard — `buff doctor` | ✅ Complete |
 | 2.6 | Memory compression & pruning — trajectory summarization | ✅ Complete |
 | **Phase 3: Major Upgrades** | | |
-| 3.1 | VS Code extension — 9 commands, inline suggestions, diff viewer | ✅ Complete |
-| 3.2 | Remote agent federation — multi-machine collaboration | ✅ Complete |
+| 3.1 | VS Code extension — 9 commands, inline suggestions, diff viewer, agent progress panel | ✅ Complete |
+| 3.2 | **B1: Chat Panel** — Multi-turn chat with streaming, 6 slash commands, session history, file context | ✅ Complete (v1.33.0) |
+| 3.3 | **B3: Diagnostic → AI Fix** — "Fix with Agent-Nuvira" in lightbulb menu on red squiggles | ✅ Complete (v1.33.0) |
+| 3.4 | **B5: Code Lens Actions** — Test/Review/Explain/Fix actions above functions and classes | ✅ Complete (v1.34.0) |
+| 3.5 | Remote agent federation — multi-machine collaboration | ✅ Complete |
 | 3.3 | Web UI dashboard — React + Recharts + DAG visualization | ✅ Complete |
 | 3.4 | Hybrid model routing — complexity-based model selection | ✅ Complete |
 | 3.5 | Team collaboration — shared config, memory, and review pipelines | ✅ Complete |
@@ -1443,6 +1448,9 @@ npx tsc --noEmit
 | **v1.29.0** | Sep 2026 | Phase 10 — Autonomous publish + phase-wise execution (CredentialStore, PhaseEngine, `buff publish`, `buff phase`, git push, npm auth) + 86 new tests |
 | **v1.30.0** | Sep 2026 | Phase 10 tests + docs — 80 unit tests (CredentialStore + PhaseExecutionEngine), README/Product_Guide/website updated with Phase 10 progress |
 | **v1.31.0** | Sep 2026 | Phase 11 — TS Compiler API-Aware Structural Editing (ts-adapter.ts, transform.ts, edit.ts rewrite, 66 new tests), proper parser-level accuracy for TS/JS edits |
+| **v1.32.0** | Oct 2026 | Pillar A — GitLab Agent (MRs, issues, pipelines) + PR Review Agent (inline review, security scans) + website Git & PR section |
+| **v1.33.0** | Oct 2026 | Pillar B1+B3 — VS Code Chat Panel with streaming, slash commands, session history + Diagnostic → AI Fix from lightbulb menu |
+| **v1.34.0** | Oct 2026 | Pillar B5 — VS Code Code Lens actions (Test/Review/Explain/Fix) via quick pick menu above functions and classes |
 
 ---
 
@@ -1487,7 +1495,7 @@ npx tsc --noEmit
 ### Phase 3: Major Upgrades — Advanced Agent Systems
 | Feature | Description |
 |---------|-------------|
-| **VS Code Extension** | 9 commands, inline code suggestions, diff viewer, agent progress panel |
+| **VS Code Extension** | Chat Panel (streaming, slash commands), Diagnostic→AI Fix, Code Lens actions, 9 commands, inline suggestions, diff viewer, agent progress panel |
 | **Agent Federation** | Multi-machine collaboration via A2A protocol, server, and client |
 | **Web Dashboard** | React + Recharts + DAG visualization, model health, cost charts |
 | **Hybrid Model Routing** | Complexity-based model selection with cost optimization |

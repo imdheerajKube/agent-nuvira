@@ -7,6 +7,69 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [1.34.0] - 2026-10-03
+
+### Added
+- **Code Lens Actions (Pillar B5)** — Clickable `$(sparkle) AI: <name>` lenses above functions and classes
+  in VS Code. Click opens a quick pick menu with 4 agent actions:
+  - **Test** — Generate unit tests for the function/class
+  - **Review** — Review for bugs, security, and style issues
+  - **Explain** — Explain the code in detail
+  - **Quick Fix** — Fix issues in the code
+- **Language support** — TypeScript, JavaScript, Python, Go, Rust, Java — with regex-based declaration
+  detection and brace-counting body range extraction
+- **Quick pick UX** — Single lens per declaration, menu-based action selection with descriptions
+- **Error handling** — Try/catch wrapper with user-facing notification on CLI failures
+
+### Changed
+- `vscode-extension/src/extension.ts` — Registered CodeLensProvider, single `lensCommandId` handler
+- `vscode-extension/package.json` — No menu additions (all interactions via CodeLens click)
+
+### Files
+| File | Change |
+|---|---|
+| `vscode-extension/src/codeLensProvider.ts` | **NEW** — CodeLensProvider with quick pick menu (1,243 lines)
+
+---
+
+## [1.33.0] - 2026-10-02
+
+### Added
+- **VS Code Chat Panel (Pillar B1)** — Multi-turn AI chat panel directly in VS Code:
+  - Streaming responses via `agent-nuvira chat --stream --no-color` CLI subprocess
+  - 6 slash commands: `/fix`, `/review`, `/test`, `/explain`, `/workflow`, `/help`
+  - File context: "Add File" button attaches active editor content as context
+  - Code block rendering with "Apply to File" button
+  - Conversation history sidebar with session management (new, switch, delete)
+  - Sessions persisted across restarts via `workspaceState`
+  - Slash command autocomplete with arrow key navigation
+  - Welcome screen with quick command buttons
+  - Keybinding: `Ctrl+Shift+A C` (mac: `Cmd+Shift+A C`)
+- **Diagnostic → AI Fix (Pillar B3)** — "Fix with Agent-Nuvira" in VS Code lightbulb menu:
+  - Detects diagnostics (red squiggles) and groups by line
+  - Captures error message, affected code range, and 3-line surrounding context
+  - Sends targeted fix prompt to CLI
+  - Shows diff preview with Apply/Reject workflow
+  - Falls back to showing raw output as new editor document
+  - Retry on failure with error notification
+
+### Changed
+- `vscode-extension/src/extension.ts` — Registered ChatPanel, DiagnosticFixProvider, CodeLensProvider
+- `vscode-extension/package.json` — Added `openChat` command, `Ctrl+Shift+A C` keybinding, chat activity bar view
+- Status bar now opens Chat Panel instead of old Agent Panel
+
+### Files
+| File | Change |
+|---|---|
+| `vscode-extension/src/chatPanel.ts` | **NEW** — Chat webview panel controller (280 lines)
+| `vscode-extension/src/chatPanel.html` | **NEW** — Chat webview HTML+CSS+JS template (520 lines)
+| `vscode-extension/src/chatProvider.ts` | **NEW** — Chat history provider with workspaceState persistence (260 lines)
+| `vscode-extension/src/diagnosticFixer.ts` | **NEW** — Diagnostic fix CodeActionProvider (280 lines)
+| `vscode-extension/src/extension.ts` | **MODIFIED** — Registered all B1+B3 components
+| `vscode-extension/package.json` | **MODIFIED** — Commands, keybindings, views
+
+---
+
 ## [1.31.0] - 2026-09-30
 
 ### Added
@@ -654,7 +717,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## Agent Catalog
 
-### Agent Roles (13)
+### Agent Roles (16)
 
 | Agent | Type | Description | Version |
 |-------|------|-------------|---------|
@@ -671,6 +734,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 | **GitHubReleaseAgent** | Publishing | Tag creation, release notes, GitHub releases | v1.6.0 |
 | **SkillRunnerAgent** | Learning | Execute compiled skill scripts as pre-built task plans | v1.11.0 |
 | **MCPAgent** | Integration | Invoke MCP tools from connected servers (stdio/SSE) | v1.16.0 |
+| **GitLabAgent** | Integration | GitLab MR management, issues, pipelines | v1.32.0 |
+| **PRReviewAgent** | Review | GitHub PR review with inline comments + security scans | v1.32.0 |
+| **IssueTriageAgent** | Management | Issue classification, prioritization, auto-labeling | v1.32.0 |
 
 ### Release Phases
 
