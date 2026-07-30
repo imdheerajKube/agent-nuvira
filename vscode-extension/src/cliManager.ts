@@ -36,6 +36,7 @@ export class CLIManager {
   private workspaceRoot: string;
   private onProgress?: (phase: string, detail?: string) => void;
   private onLog?: (line: string) => void;
+  private onStreamChunk?: (chunk: string, isCodeBlock: boolean) => void;
   private abortController: AbortController;
 
   constructor(config: ExtensionConfig) {
@@ -45,14 +46,16 @@ export class CLIManager {
   }
 
   /**
-   * Set progress and log callbacks for real-time updates.
+   * Set progress, log, and streaming callbacks for real-time updates.
    */
   setCallbacks(opts: {
     onProgress?: (phase: string, detail?: string) => void;
     onLog?: (line: string) => void;
+    onStreamChunk?: (chunk: string, isCodeBlock: boolean) => void;
   }): void {
     this.onProgress = opts.onProgress;
     this.onLog = opts.onLog;
+    this.onStreamChunk = opts.onStreamChunk;
   }
 
   /**
@@ -215,6 +218,10 @@ export class CLIManager {
       this.process.stdout?.on('data', (data: Buffer) => {
         const text = data.toString();
         stdout += text;
+
+        // Emit streaming chunks for real-time token display
+        const isCodeBlock = text.includes('```');
+        this.onStreamChunk?.(text, isCodeBlock);
 
         // Process lines for progress updates and logging
         const lines = text.split('\n').filter((l) => l.trim());

@@ -91,6 +91,40 @@ export class AgentPanel {
   }
 
   /**
+   * Send a streaming chunk to the panel for real-time token display.
+   */
+  updateStreaming(chunk: string, isCodeBlock: boolean): void {
+    if (!this.panel) return;
+
+    this.panel.webview.postMessage({
+      type: 'streamChunk',
+      payload: { chunk, isCodeBlock },
+    });
+  }
+
+  /**
+   * Signal that streaming is complete.
+   */
+  completeStreaming(): void {
+    if (!this.panel) return;
+
+    this.panel.webview.postMessage({
+      type: 'streamComplete',
+    });
+  }
+
+  /**
+   * Start streaming mode — show the streaming area.
+   */
+  startStreaming(): void {
+    if (!this.panel) return;
+
+    this.panel.webview.postMessage({
+      type: 'streamStart',
+    });
+  }
+
+  /**
    * Show the final result of an agent task.
    */
   showResult(result: AgentResult): void {
@@ -553,6 +587,122 @@ export class AgentPanel {
     @keyframes spin {
       to { transform: rotate(360deg); }
     }
+
+    /* Streaming token display */
+    .streaming-container {
+      display: none;
+      margin-bottom: 16px;
+      padding: 12px;
+      background: var(--bg-secondary);
+      border: 1px solid var(--border);
+      border-radius: 6px;
+      position: relative;
+    }
+
+    .streaming-container.active {
+      display: block;
+      animation: streamFadeIn 0.2s ease;
+    }
+
+    @keyframes streamFadeIn {
+      from { opacity: 0; transform: translateY(-4px); }
+      to { opacity: 1; transform: translateY(0); }
+    }
+
+    .streaming-header {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      margin-bottom: 8px;
+      font-size: 11px;
+      font-weight: 600;
+      color: var(--text-secondary);
+      text-transform: uppercase;
+      letter-spacing: 0.04em;
+    }
+
+    .streaming-dot {
+      display: inline-block;
+      width: 8px;
+      height: 8px;
+      border-radius: 50%;
+      background: var(--green);
+      animation: streamPulse 1s infinite;
+    }
+
+    @keyframes streamPulse {
+      0%, 100% { opacity: 1; }
+      50% { opacity: 0.4; }
+    }
+
+    .streaming-output {
+      font-family: 'Cascadia Code', 'Fira Code', 'Consolas', monospace;
+      font-size: 12px;
+      line-height: 1.6;
+      color: var(--text-primary);
+      white-space: pre-wrap;
+      word-break: break-word;
+      max-height: 300px;
+      overflow-y: auto;
+      padding: 8px;
+      background: var(--bg-primary);
+      border-radius: 4px;
+      border: 1px solid var(--bg-tertiary);
+    }
+
+    .streaming-output .cursor {
+      display: inline-block;
+      width: 2px;
+      height: 14px;
+      background: var(--blue);
+      animation: cursorBlink 0.8s step-end infinite;
+      vertical-align: text-bottom;
+      margin-left: 1px;
+    }
+
+    @keyframes cursorBlink {
+      0%, 100% { opacity: 1; }
+      50% { opacity: 0; }
+    }
+
+    .streaming-output .token-code {
+      color: var(--orange);
+    }
+
+    .streaming-output .token-keyword {
+      color: var(--blue);
+    }
+
+    .streaming-output .token-string {
+      color: var(--green);
+    }
+
+    .streaming-output .token-comment {
+      color: var(--text-secondary);
+      font-style: italic;
+    }
+
+    .streaming-output .token-error {
+      color: var(--red);
+    }
+
+    .streaming-output .token-emphasis {
+      color: var(--yellow);
+      font-weight: 600;
+    }
+
+    .streaming-output::-webkit-scrollbar {
+      width: 4px;
+    }
+
+    .streaming-output::-webkit-scrollbar-track {
+      background: transparent;
+    }
+
+    .streaming-output::-webkit-scrollbar-thumb {
+      background: var(--bg-hover);
+      border-radius: 2px;
+    }
   </style>
 </head>
 <body>
@@ -563,6 +713,15 @@ export class AgentPanel {
 
   <div id="progressBar" class="progress-bar" style="display:none;">
     <div id="progressFill" class="progress-bar-fill indeterminate"></div>
+  </div>
+
+  <div id="streamingContainer" class="streaming-container">
+    <div class="streaming-header">
+      <span class="streaming-dot"></span>
+      <span>Live Response</span>
+      <span style="margin-left:auto;font-weight:400;color:var(--text-muted);font-size:10px;">streaming</span>
+    </div>
+    <div id="streamingOutput" class="streaming-output"><span class="cursor"></span></div>
   </div>
 
   <div id="phases" class="phase-container">
@@ -628,6 +787,18 @@ export class AgentPanel {
 
           case 'diff':
             // Diff display handled in result section
+            break;
+
+          case 'streamStart':
+            handleStreamStart();
+            break;
+
+          case 'streamChunk':
+            handleStreamChunk(payload.chunk, payload.isCodeBlock);
+            break;
+
+          case 'streamComplete':
+            handleStreamComplete();
             break;
 
           case 'status':
@@ -761,12 +932,71 @@ export class AgentPanel {
         });
       }
 
+      // ── Streaming handlers ────────────────────────────────────────────
+
+      const streamingContainer = document.getElementById('streamingContainer');
+      const streamingOutput = document.getElementById('streamingOutput');
+
+      function handleStreamStart() {
+        streamingContainer.classList.add('active');
+        streamingOutput.textContent = '';
+        emptyState.style.display = 'none';
+        resultSection.style.display = 'none';
+        errorDisplay.style.display = 'none';
+        updateStatus('running');
+        addCursor();
+      }
+
+      function handleStreamChunk(chunk, isCodeBlock) {
+        // Remove cursor, append chunk, re-add cursor
+        removeCursor();
+
+        if (isCodeBlock) {
+          // Wrap code blocks with special styling
+          const escaped = escapeHtml(chunk);
+          streamingOutput.insertAdjacentHTML('beforeend',
+            '<span class="token-code">' + escaped + '</span>');
+        } else {
+          streamingOutput.insertAdjacentText('beforeend', chunk);
+        }
+
+        addCursor();
+        streamingOutput.scrollTop = streamingOutput.scrollHeight;
+      }
+
+      function handleStreamComplete() {
+        removeCursor();
+        // Keep the streaming content visible until next task starts
+        // Add a subtle "completed" indicator
+        var statusEl = streamingContainer.querySelector('.streaming-header span:last-child');
+        if (statusEl) {
+          statusEl.textContent = 'completed';
+          statusEl.style.color = 'var(--green)';
+        }
+      }
+
+      function addCursor() {
+        if (streamingOutput.querySelector('.cursor')) return;
+        var cursor = document.createElement('span');
+        cursor.className = 'cursor';
+        streamingOutput.appendChild(cursor);
+      }
+
+      function removeCursor() {
+        var cursors = streamingOutput.querySelectorAll('.cursor');
+        for (var i = 0; i < cursors.length; i++) {
+          cursors[i].remove();
+        }
+      }
+
       function clearAll() {
         phasesEl.innerHTML = '';
         resultSection.style.display = 'none';
         errorDisplay.style.display = 'none';
         emptyState.style.display = 'flex';
         progressBar.style.display = 'none';
+        streamingContainer.classList.remove('active');
+        streamingOutput.textContent = '';
         currentResult = null;
         updateStatus('idle');
       }

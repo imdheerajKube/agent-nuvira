@@ -7,6 +7,49 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [1.36.0] - 2026-10-04
+
+### Added
+- **Real-Time Token Streaming in AgentPanel (Pillar B2)** — Live streaming output with
+  typewriter effect in the agent progress panel:
+  - **Streaming display** — Streaming container with blinking cursor, animated live dot,
+    and monospace output area appears below phase indicators when tasks run
+  - **Real-time chunk emission** — `CLIManager` now emits `onStreamChunk` callbacks for
+    every stdout data event, enabling token-by-token display
+  - **Code block detection** — Chunks containing ``` markers are styled with specialized
+    token coloring (`.token-code`, `.token-keyword`, `.token-string`, `.token-comment`,
+    `.token-error`, `.token-emphasis`)
+  - **Auto-scroll** — Output area auto-scrolls to show latest tokens as they arrive
+  - **Completed indicator** — After streaming ends, the header label changes from
+    "streaming" to "completed" in green, and content stays visible until next task
+  - **Clean lifecycle** — `startStreaming()` before each task, `completeStreaming()`
+    after both success and error paths, `clearAll()` resets streaming state
+
+### Changed
+- `vscode-extension/src/cliManager.ts` — Added `onStreamChunk` callback, emits chunks
+  with code block detection on every stdout data event
+- `vscode-extension/src/agentPanel.ts` — Added streaming container HTML/CSS/JS,
+  `startStreaming()`, `updateStreaming()`, `completeStreaming()` methods
+- `vscode-extension/src/commands.ts` — Wired streaming lifecycle: CLI → panel → webview
+
+---
+
+## [1.35.1] - 2026-10-04
+
+### Fixed
+- **Missing runtime dependency** — Moved `typescript` from `devDependencies` to `dependencies`
+  in `package.json`. The `ts-adapter.ts` and `transform.ts` modules import the TypeScript
+  Compiler API at runtime (`import * as ts from 'typescript'`), but it was only listed as a
+  devDependency. When installed globally via `npm install -g`, devDependencies are skipped,
+  causing `ERR_MODULE_NOT_FOUND`. Now correctly installed as a regular dependency.
+
+### Dependency Audit
+- Cross-referenced all `src/` imports against `package.json` — only `typescript` was
+  misclassified; all other packages (commander, ora, inquirer, chalk, @huggingface/transformers)
+  were correctly categorized.
+
+---
+
 ## [1.35.0] - 2026-10-04
 
 ### Added

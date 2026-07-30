@@ -307,7 +307,10 @@ export class CommandRegistrar {
     this.agentPanel.clear();
     this.currentChanges = [];
 
-    // Set up callbacks
+    // Start streaming mode for real-time token display
+    this.agentPanel.startStreaming();
+
+    // Set up callbacks with streaming support
     this.cliManager.setCallbacks({
       onProgress: (phase: string, detail?: string) => {
         this.agentPanel.updateProgress({
@@ -326,6 +329,9 @@ export class CommandRegistrar {
           completed: false,
           log: [line],
         });
+      },
+      onStreamChunk: (chunk: string, isCodeBlock: boolean) => {
+        this.agentPanel.updateStreaming(chunk, isCodeBlock);
       },
     });
 
@@ -356,6 +362,9 @@ export class CommandRegistrar {
     // Run the task
     try {
       const result = await task();
+
+      // Signal streaming complete
+      this.agentPanel.completeStreaming();
 
       if (result.success) {
         // Parse the result to extract file changes
@@ -400,6 +409,7 @@ export class CommandRegistrar {
         }
       }
     } catch (err) {
+      this.agentPanel.completeStreaming();
       const errorMsg = err instanceof Error ? err.message : String(err);
       this.agentPanel.showError(errorMsg);
     }
