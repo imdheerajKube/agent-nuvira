@@ -7,6 +7,48 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [1.35.0] - 2026-10-04
+
+### Added
+- **Chat Panel v2 — DAG Pipeline Visualization (Pillar B6)** — Live multi-agent pipeline
+  visualization inline in chat messages for slash commands:
+  - **SVG DAG renderer** — Standalone `dagRenderer.ts` ported from React DAGView to vanilla JS;
+    renders colored agent nodes with icons, status badges, edge curves, step details table, and legend
+  - **16 agent types** — Planned, gatherers, writers, reviewers, testers, debuggers, security, git,
+    packages, releases, triage, PR review, GitLab, skills, MCP with distinct icons/colors
+  - **Real-time pipeline detection** — Parses CLI output for agent markers (📋 planner, ✏️ writer,
+    👁️ reviewer, 🧪 tester, ✅/❌ complete/fail) and builds DAG state incrementally
+  - **Live indicator** — Animated glow for running nodes, pulsing LIVE badge, status summary bar
+  - **Fade-in animations** — Smooth entry for pipeline container and node updates
+  - **Empty state** — Helpful placeholder when no pipeline is active, with command suggestions
+- **Issue Triage Engine (Pillar A3)** — Automated issue classification, prioritization, and labeling
+  across GitHub and GitLab:
+  - **LLM-based classification** — Classifies issues as bug, feature, question, docs, or chore using
+    a structured JSON prompt with configurable temperature (0.2) and explicit classification guidelines
+  - **Priority assignment** — Assigns critical, high, medium, or low priority with emoji indicators
+  - **Difficulty estimation** — Estimates issue complexity: easy, medium, or hard
+  - **Label management** — Suggests and auto-applies labels (creates missing labels on GitHub repos)
+  - **Triage comments** — Posts structured markdown table comments with classification, priority,
+    difficulty, reasoning, and suggested action
+  - **Git blame expertise heuristic** — Infers suggested assignee from git blame on files mentioned
+    in the issue body (extracts file paths from backtick references)
+  - **Multiple operations**: `triage-all` (all unlabeled), `triage-specific` (#N), `classify` (#N),
+    `list-unlabeled`
+  - **Auto-source detection** — Detects GitHub vs GitLab from keywords, tokens, or git remote;
+    auto mode tries both platforms with clear error messages
+  - **Robust LLM response parsing** — Supports valid JSON, markdown-wrapped code blocks, and
+    malformed responses with validation fallbacks for all classification fields
+- **Module registration** — `issue-triage` agent type registered in ModuleRegistry with metadata
+
+### Files
+| File | Change |
+|---|---|
+| `src/agents/agents/issue-triage-agent.ts` | **NEW** — IssueTriageAgent (550 lines)
+| `src/agents/module-registry.ts` | **MODIFIED** — Added agent registration
+| `tests/agents/issue-triage-agent.test.ts` | **NEW** — 46 unit tests
+
+---
+
 ## [1.34.0] - 2026-10-03
 
 ### Added

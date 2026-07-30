@@ -132,6 +132,10 @@
     .welcome-cmd-code { font-family: var(--font-mono); font-size: 12px; color: var(--blue); margin-bottom: 2px; }
     .welcome-cmd-desc { font-size: 11px; color: var(--text-muted); }
 
+    /* DAG Pipeline Visualization */
+    .dag-container { margin: 8px 0; animation: dagFadeIn 0.3s ease; }
+    @keyframes dagFadeIn { from { opacity: 0; transform: translateY(6px); } to { opacity: 1; transform: translateY(0); } }
+
     ::-webkit-scrollbar { width: 6px; height: 6px; }
     ::-webkit-scrollbar-track { background: transparent; }
     ::-webkit-scrollbar-thumb { background: var(--bg-hover); border-radius: 3px; }
@@ -391,7 +395,13 @@
     var avatar = isUser ? '\uD83D\uDC64' : '\uD83E\uDD16';
     var contentHtml = renderContent(message.content, message.streaming);
 
-    div.innerHTML = '<div class="message-avatar ' + (isUser ? 'user' : 'assistant') + '">' + avatar + '</div><div class="message-body"><div class="message-sender">' + (isUser ? 'You' : 'Agent-Nuvira') + '</div><div class="message-content">' + contentHtml + '</div></div>';
+    // Add DAG container for pipeline message (assistant, non-user)
+    var dagContainerHtml = '';
+    if (!isUser && message.pipelineMessageId !== undefined) {
+      dagContainerHtml = '<div class="dag-container" id="dag-' + message.id + '"></div>';
+    }
+
+    div.innerHTML = '<div class="message-avatar ' + (isUser ? 'user' : 'assistant') + '">' + avatar + '</div><div class="message-body"><div class="message-sender">' + (isUser ? 'You' : 'Agent-Nuvira') + '</div>' + dagContainerHtml + '<div class="message-content">' + contentHtml + '</div></div>';
     chatArea.appendChild(div);
     scrollToBottom();
 
@@ -483,6 +493,23 @@
         break;
       case 'addMessage':
         appendMessage(msg.message);
+        break;
+      case 'dagUpdate':
+        // Find the DAG container and update it
+        if (msg.pipelineMessageId) {
+          var dagEl = document.getElementById('dag-' + msg.pipelineMessageId);
+          if (dagEl) {
+            dagEl.innerHTML = msg.html;
+            scrollToBottom();
+          }
+        } else {
+          // Fallback: find the last assistant message's DAG container
+          var dagEls = chatArea.querySelectorAll('.dag-container');
+          if (dagEls.length > 0) {
+            dagEls[dagEls.length - 1].innerHTML = msg.html;
+            scrollToBottom();
+          }
+        }
         break;
       case 'streamComplete':
         var el = document.getElementById('msg-' + msg.messageId);

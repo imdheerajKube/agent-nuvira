@@ -1,7 +1,8 @@
 /**
  * Chat Panel — A VS Code WebView panel providing a multi-turn chat interface
  * with Agent-Nuvira, featuring streaming responses, slash commands, file context,
- * code blocks with "Apply to File" buttons, and conversation history.
+ * code blocks with "Apply to File" buttons, conversation history,
+ * and agent pipeline DAG visualization.
  *
  * Features:
  * - Multi-turn conversation with streaming LLM responses
@@ -10,7 +11,7 @@
  * - Syntax-highlighted code blocks with "Apply to File" button
  * - Conversation history sidebar
  * - Session management (new, switch, delete)
- * - Agent pipeline visualization for multi-step commands
+ * - Agent pipeline visualization for multi-step commands — B6
  */
 
 import * as vscode from 'vscode';
@@ -19,6 +20,36 @@ import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { ChatHistoryProvider, type ChatMessage, type ChatSession } from './chatProvider.js';
 import type { ExtensionConfig } from './types.js';
+import { renderDAG, renderEmptyDAG, buildPipelineState, type PipelineState, type PipelineNode } from './dagRenderer.js';
+
+// ─── Pipeline Agent Event Patterns ─────────────────────────────────────────
+
+/**
+ * Patterns to detect agent pipeline events from CLI output.
+ * Maps emoji prefixes to agent types for DAG visualization.
+ */
+const AGENT_PATTERNS: Array<{ pattern: RegExp; agentType: string; stage: 'start' | 'complete' | 'fail' }> = [
+  { pattern: /^📋\s*(?:Planning|Plan)/i, agentType: 'planner', stage: 'start' },
+  { pattern: /^📂\s*(?:Gathering|Context|Inspecting|Scanning)/i, agentType: 'context-gatherer', stage: 'start' },
+  { pattern: /^✏️\s*(?:Writing|Editing|Creating|Generating|Implementing)/i, agentType: 'writer', stage: 'start' },
+  { pattern: /^👁️\s*(?:Reviewing|Review)/i, agentType: 'reviewer', stage: 'start' },
+  { pattern: /^🔍\s*(?:Checking|Verifying|Validating)/i, agentType: 'reviewer', stage: 'start' },
+  { pattern: /^🧪\s*(?:Testing|Test)/i, agentType: 'tester', stage: 'start' },
+  { pattern: /^🐛\s*(?:Debugging|Debug)/i, agentType: 'debugger', stage: 'start' },
+  { pattern: /^▶️\s*(?:Running|Execute|Runner)/i, agentType: 'runner', stage: 'start' },
+  { pattern: /^🔀\s*(?:Branching|Git)/i, agentType: 'git', stage: 'start' },
+  { pattern: /^📦\s*(?:Packaging|Package)/i, agentType: 'package', stage: 'start' },
+  { pattern: /^🏷️\s*(?:Release|GitHub)/i, agentType: 'github-release', stage: 'start' },
+  { pattern: /^🔒\s*(?:Security)/i, agentType: 'security', stage: 'start' },
+  { pattern: /^🎯\s*(?:Orchestrating|Orchestrator)/i, agentType: 'orchestrator', stage: 'start' },
+  { pattern: /^(?:▶️\s*Running|🚀\s*Starting)/i, agentType: 'runner', stage: 'start' },
+  // Completion / failure markers
+  { pattern: /^✅\s*(?:Completed|Done|Finished|Succeeded)/i, agentType: '', stage: 'complete' },
+  { pattern: /^❌\s*(?:Failed|Error|Aborted)/i, agentType: '', stage: 'fail' },
+  // File change markers
+  { pattern: /^📄\s+.+\(created|new\)/, agentType: 'writer', stage: 'complete' },
+  { pattern: /^✏️\s+.+\(modified|updated\)/, agentType: 'writer', stage: 'complete' },
+];
 
 // ─── ChatPanel ──────────────────────────────────────────────────────────────
 
@@ -35,6 +66,13 @@ export class ChatPanel {
   private workspaceRoot: string;
   private extensionUri: vscode.Uri;
   private loadedHtml: string | null = null;
+
+  /** Track pipeline state for DAG visualization */
+  private pipelineNodes: PipelineNode[] = [];
+  private pipelineActive = false;
+  private pipelineName = '';
+  private pipelineMessageId: string | null = null;
+  private lastAgentType = '';
 
   constructor(
     context: vscode.ExtensionContext,
@@ -234,6 +272,9 @@ export class ChatPanel {
     // Update session list (title may have changed)
     this.refreshSessions();
 
+    // Reset pipeline state
+    this.resetPipelineState();
+
     // Start streaming response
     await this.streamResponse(text, fileContext);
   }
@@ -301,6 +342,7 @@ export class ChatPanel {
         if (userMsg) {
           this.postMessage({ type: 'addMessage', message: userMsg });
         }
+        this.resetPipelineState();
         await this.streamResponse(text, fileContext);
         return;
     }
@@ -313,6 +355,9 @@ export class ChatPanel {
     if (cmdMsg) {
       this.postMessage({ type: 'addMessage', message: cmdMsg });
     }
+
+    // Initialize pipeline state for DAG visualization
+    this.initPipelineState(phaseLabel);
 
     // Add file context if available
     let fullPrompt = prompt;
@@ -329,6 +374,145 @@ export class ChatPanel {
 
     await this.streamResponse(fullPrompt);
   }
+
+  // ── Pipeline DAG Visualization ────────────────────────────────────────────
+
+  /**
+   * Reset the pipeline state for a new non-slash-command message.
+   */
+  private resetPipelineState(): void {
+    this.pipelineNodes = [];
+    this.pipelineActive = false;
+    this.pipelineName = '';
+    this.pipelineMessageId = null;
+    this.lastAgentType = '';
+  }
+
+  /**
+   * Initialize the pipeline state for a slash command.
+   * Sends the empty DAG container to the webview so it renders immediately.
+   */
+  private initPipelineState(pipelineName: string): void {
+    this.resetPipelineState();
+    this.pipelineName = pipelineName.replace(/[🔧🔍🧪📖🔄]\s*/, '').trim() || 'Pipeline';
+    this.pipelineActive = true;
+
+    // Create the DAG message in the assistant bubble
+    // We'll send a dagUpdate immediately with the empty state
+    this.sendDAGUpdate();
+  }
+
+  /**
+   * Detect agent pipeline events from a line of CLI output.
+   * Returns whether a pipeline event was detected.
+   */
+  private detectPipelineEvent(line: string, currentMs: number): boolean {
+    // Strip ANSI and trim
+    const cleanLine = line.replace(/\u001b\[[0-9;]*m/g, '').trim();
+    if (!cleanLine) return false;
+
+    for (const p of AGENT_PATTERNS) {
+      const match = cleanLine.match(p.pattern);
+      if (!match) continue;
+
+      if (p.stage === 'start' && p.agentType) {
+        // Agent starting
+        this.lastAgentType = p.agentType;
+        const existing = this.pipelineNodes.find((n) => n.agentType === p.agentType && n.status === 'pending');
+        if (existing) {
+          existing.status = 'running';
+          existing.startedAt = currentMs;
+        } else {
+          this.pipelineNodes.push({
+            id: `agent-${this.pipelineNodes.length}`,
+            agentType: p.agentType,
+            status: 'running',
+            description: cleanLine.replace(/^[^\s]+\s*/, '').slice(0, 40) || p.agentType,
+            startedAt: currentMs,
+          });
+        }
+        this.pipelineActive = true;
+        this.sendDAGUpdate();
+        return true;
+      }
+
+      if (p.stage === 'complete' || p.stage === 'fail') {
+        // Mark the last running agent as complete/failed
+        const running = this.pipelineNodes.find((n) => n.status === 'running');
+        if (running) {
+          running.status = p.stage === 'complete' ? 'completed' : 'failed';
+          running.completedAt = currentMs;
+          running.summary = cleanLine.slice(0, 60);
+        }
+        this.sendDAGUpdate();
+        return true;
+      }
+
+      break;
+    }
+
+    // Also detect if the current running agent has a progress line
+    const runningNode = this.pipelineNodes.find((n) => n.status === 'running');
+    if (runningNode && cleanLine.includes(runningNode.agentType) && !cleanLine.match(/^```/)) {
+      runningNode.description = cleanLine.replace(/^[^\s]+\s*/, '').slice(0, 40) || runningNode.agentType;
+      return false; // Don't force re-render on every update
+    }
+
+    return false;
+  }
+
+  /**
+   * Build the current pipeline state and send it to the webview.
+   */
+  private sendDAGUpdate(): void {
+    const state: PipelineState = {
+      pipeline: this.pipelineName,
+      active: this.pipelineActive,
+      nodes: [...this.pipelineNodes],
+      edges: this.buildEdges(),
+    };
+
+    const dagHtml = state.nodes.length === 0
+      ? renderEmptyDAG()
+      : renderDAG(state);
+
+    this.postMessage({
+      type: 'dagUpdate',
+      pipelineMessageId: this.pipelineMessageId,
+      html: dagHtml,
+    });
+  }
+
+  /**
+   * Build edges between pipeline nodes (sequential by default).
+   */
+  private buildEdges(): Array<{ from: string; to: string }> {
+    const edges: Array<{ from: string; to: string }> = [];
+    for (let i = 0; i < this.pipelineNodes.length - 1; i++) {
+      edges.push({ from: this.pipelineNodes[i].id, to: this.pipelineNodes[i + 1].id });
+    }
+    return edges;
+  }
+
+  /**
+   * Finalize the pipeline state when streaming completes.
+   */
+  private finalizePipelineState(): void {
+    this.pipelineActive = false;
+    const now = Date.now();
+
+    // Mark any remaining running/pending nodes as completed
+    for (const node of this.pipelineNodes) {
+      if (node.status === 'running' || node.status === 'pending') {
+        node.status = 'completed';
+        node.completedAt = now;
+      }
+    }
+
+    this.sendDAGUpdate();
+  }
+
+  // ── Streaming ─────────────────────────────────────────────────────────────
 
   /**
    * Stream a response from the CLI to the chat panel.
@@ -347,9 +531,12 @@ export class ChatPanel {
     if (!assistantMsg) return;
 
     this.streamingMessageId = assistantMsg.id;
+    this.pipelineMessageId = assistantMsg.id;
+
+    // Send initial message with DAG container placeholder
     this.postMessage({
       type: 'addMessage',
-      message: { ...assistantMsg, content: '▊' },
+      message: { ...assistantMsg, content: '▊', pipelineMessageId: this.pipelineMessageId },
     });
 
     // Build CLI arguments
@@ -389,12 +576,15 @@ export class ChatPanel {
         buffer += text;
         fullContent += text;
 
-        // Process lines for streaming updates
+        // Process lines for streaming updates and DAG events
         const lines = buffer.split('\n');
         buffer = lines.pop() || ''; // Keep incomplete line in buffer
 
         for (const line of lines) {
           if (line.trim()) {
+            // Detect pipeline events for DAG visualization
+            this.detectPipelineEvent(line, Date.now());
+
             // Detect code blocks and phase markers
             const isCodeBlock = line.includes('```');
             const isPhase = line.match(/^[📋📂✏️🔍🧪📦🏗️📝🔄✅❌]\s+/);
@@ -457,6 +647,9 @@ export class ChatPanel {
         }, 300_000);
       });
 
+      // Finalize pipeline state
+      this.finalizePipelineState();
+
       // Finalize message
       this.historyProvider.updateMessage(assistantMsg.id, {
         content: fullContent,
@@ -467,6 +660,7 @@ export class ChatPanel {
         type: 'streamComplete',
         messageId: assistantMsg.id,
         content: fullContent,
+        pipelineMessageId: this.pipelineMessageId,
       });
 
       this.streamingMessageId = null;
@@ -762,7 +956,8 @@ export class ChatPanel {
 - **@file** — Mention files to include them as context: \`@file:src/app.ts\`
 - **Select code** in the editor, then type your question
 - **Code blocks** in responses have an "Apply" button
-- **Slash commands** can include additional context after the command
+- **Slash commands** trigger multi-agent pipelines with live DAG visualization
+- **Pipeline DAG** shows real-time agent progress (planning → context → writing → reviewing)
 
 ### Keybindings
 
