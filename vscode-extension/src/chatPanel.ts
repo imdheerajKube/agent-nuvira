@@ -1,0 +1,802 @@
+/**
+ * Chat Panel — A VS Code WebView panel providing a multi-turn chat interface
+ * with Agent-Nuvira, featuring streaming responses, slash commands, file context,
+ * code blocks with "Apply to File" buttons, and conversation history.
+ *
+ * Features:
+ * - Multi-turn conversation with streaming LLM responses
+ * - /fix, /review, /test, /explain, /workflow slash commands
+ * - @file mentions for multi-file context
+ * - Syntax-highlighted code blocks with "Apply to File" button
+ * - Conversation history sidebar
+ * - Session management (new, switch, delete)
+ * - Agent pipeline visualization for multi-step commands
+ */
+
+import * as vscode from 'vscode';
+import { spawn, ChildProcess } from 'node:child_process';
+import { readFileSync } from 'node:fs';
+import { join } from 'node:path';
+import { ChatHistoryProvider, type ChatMessage, type ChatSession } from './chatProvider.js';
+import type { ExtensionConfig } from './types.js';
+
+// ─── ChatPanel ──────────────────────────────────────────────────────────────
+
+export class ChatPanel {
+  public static readonly viewType = 'agent-nuvira.chatPanel';
+
+  private panel: vscode.WebviewPanel | null = null;
+  private disposables: vscode.Disposable[] = [];
+  private historyProvider: ChatHistoryProvider;
+  private config: ExtensionConfig;
+  private cliProcess: ChildProcess | null = null;
+  private abortController: AbortController | null = null;
+  private streamingMessageId: string | null = null;
+  private workspaceRoot: string;
+  private extensionUri: vscode.Uri;
+  private loadedHtml: string | null = null;
+
+  constructor(
+    context: vscode.ExtensionContext,
+    historyProvider: ChatHistoryProvider,
+    config: ExtensionConfig,
+  ) {
+    this.historyProvider = historyProvider;
+    this.config = config;
+    this.extensionUri = context.extensionUri;
+    this.workspaceRoot = vscode.workspace.workspaceFolders?.[0]?.uri?.fsPath || process.cwd();
+    this.loadHtml();
+  }
+
+  /**
+   * Pre-load the HTML template from the extension directory.
+   */
+  private loadHtml(): void {
+    try {
+      // Try loading from src/ (development) or extension root (VSIX)
+      const htmlUri = vscode.Uri.joinPath(this.extensionUri, 'src', 'chatPanel.html');
+      const bytes = readFileSync(htmlUri.fsPath, 'utf-8');
+      this.loadedHtml = bytes;
+    } catch {
+      try {
+        // Fallback: try alongside the compiled JS
+        const htmlPath = join(__dirname, 'chatPanel.html');
+        this.loadedHtml = readFileSync(htmlPath, 'utf-8');
+      } catch {
+        this.loadedHtml = null;
+      }
+    }
+  }
+
+  /**
+   * Create or reveal the chat panel.
+   */
+  createOrShow(extensionUri: vscode.Uri): void {
+    const column = vscode.window.activeTextEditor
+      ? vscode.window.activeTextEditor.viewColumn
+      : vscode.ViewColumn.Beside;
+
+    if (this.panel) {
+      this.panel.reveal(column);
+      this.refreshSessions();
+      return;
+    }
+
+    this.panel = vscode.window.createWebviewPanel(
+      ChatPanel.viewType,
+      'Agent-Nuvira Chat',
+      column || vscode.ViewColumn.Beside,
+      {
+        enableScripts: true,
+        retainContextWhenHidden: true,
+        localResourceRoots: [
+          vscode.Uri.joinPath(extensionUri, 'media'),
+          vscode.Uri.joinPath(extensionUri, 'out'),
+        ],
+      },
+    );
+
+    this.panel.webview.html = this.getWebviewContent();
+
+    // Handle messages from the webview
+    this.panel.webview.onDidReceiveMessage(
+      (message) => this.handleMessage(message),
+      null,
+      this.disposables,
+    );
+
+    // Update title when session changes
+    this.panel.onDidChangeViewState(() => {
+      if (this.panel?.visible) {
+        this.updateTitle();
+      }
+    });
+
+    this.panel.onDidDispose(() => this.dispose(), null, this.disposables);
+
+    // Send initial state
+    this.refreshSessions();
+    this.sendSessionMessages();
+  }
+
+  /**
+   * Check if the panel is visible.
+   */
+  get isVisible(): boolean {
+    return this.panel !== null && this.panel.visible;
+  }
+
+  /**
+   * Update the extension config.
+   */
+  updateConfig(config: ExtensionConfig): void {
+    this.config = config;
+  }
+
+  // ── Message Handlers ─────────────────────────────────────────────────────
+
+  private async handleMessage(message: any): Promise<void> {
+    switch (message.type) {
+      case 'sendMessage':
+        await this.handleUserMessage(message.text, message.fileContext);
+        break;
+
+      case 'cancelStreaming':
+        this.cancelStreaming();
+        break;
+
+      case 'applyCodeBlock':
+        await this.applyCodeBlock(message.code, message.language, message.filePath);
+        break;
+
+      case 'createSession':
+        this.historyProvider.createSession();
+        this.refreshSessions();
+        this.sendSessionMessages();
+        this.postMessage({ type: 'sessionCreated', sessionId: this.historyProvider.getActiveSessionId() });
+        break;
+
+      case 'switchSession':
+        this.historyProvider.switchSession(message.sessionId);
+        this.refreshSessions();
+        this.sendSessionMessages();
+        break;
+
+      case 'deleteSession':
+        this.historyProvider.deleteSession(message.sessionId);
+        this.refreshSessions();
+        this.sendSessionMessages();
+        break;
+
+      case 'getFileContext':
+        await this.handleGetFileContext();
+        break;
+
+      case 'getActiveFileInfo':
+        await this.handleGetActiveFileInfo();
+        break;
+
+      case 'deleteAllSessions':
+        this.historyProvider.clearAllSessions();
+        this.historyProvider.createSession();
+        this.refreshSessions();
+        this.sendSessionMessages();
+        break;
+
+      case 'requestInitialState':
+        this.refreshSessions();
+        this.sendSessionMessages();
+        break;
+
+      case 'openFile':
+        await this.openFile(message.path, message.line);
+        break;
+
+      default:
+        break;
+    }
+  }
+
+  /**
+   * Handle a user message: add to history, send to CLI, stream response.
+   */
+  private async handleUserMessage(
+    text: string,
+    fileContext?: { uri: string; language: string; content: string }[],
+  ): Promise<void> {
+    // Ensure there's an active session
+    if (!this.historyProvider.getActiveSessionId()) {
+      this.historyProvider.createSession();
+      this.refreshSessions();
+    }
+
+    // Handle slash commands
+    if (text.startsWith('/')) {
+      await this.handleSlashCommand(text, fileContext);
+      return;
+    }
+
+    // Add user message to history
+    const userMsg = this.historyProvider.addMessage({
+      role: 'user',
+      content: text,
+      fileContext,
+    });
+
+    if (!userMsg) return;
+
+    // Render user message
+    this.postMessage({
+      type: 'addMessage',
+      message: userMsg,
+    });
+
+    // Update session list (title may have changed)
+    this.refreshSessions();
+
+    // Start streaming response
+    await this.streamResponse(text, fileContext);
+  }
+
+  /**
+   * Handle slash commands.
+   */
+  private async handleSlashCommand(
+    text: string,
+    fileContext?: { uri: string; language: string; content: string }[],
+  ): Promise<void> {
+    const [command, ...args] = text.split(' ');
+    const goal = args.join(' ');
+    const activeFile = vscode.window.activeTextEditor?.document;
+
+    let prompt: string;
+    let phaseLabel: string;
+
+    switch (command.toLowerCase()) {
+      case '/fix':
+        prompt = goal
+          ? `Fix any issues in the following code. Describe what was wrong and how you fixed it.\n\nContext: ${goal}`
+          : `Review and fix any issues in the current file`;
+        phaseLabel = '🔧 Fixing';
+        break;
+
+      case '/review':
+        prompt = `Perform a thorough code review of the following. Check for bugs, security vulnerabilities, performance issues, and style problems. Provide a structured report.\n\n${goal ? `Context: ${goal}` : 'Review the current codebase context.'}`;
+        phaseLabel = '🔍 Reviewing';
+        break;
+
+      case '/test':
+        prompt = `Generate comprehensive unit tests with edge cases for the following:\n\n${goal || 'the current file'}`;
+        phaseLabel = '🧪 Testing';
+        break;
+
+      case '/explain':
+        prompt = `Explain the following code in detail, covering what it does, how it works, and any important patterns or gotchas:\n\n${goal || 'the current selection'}`;
+        phaseLabel = '📖 Explaining';
+        break;
+
+      case '/workflow':
+        prompt = `Run the following workflow. Describe the plan, execute the steps, and summarize the results:\n\n${goal || 'Run a standard development workflow'}`;
+        phaseLabel = '🔄 Workflow';
+        break;
+
+      case '/help':
+        const helpText = this.getHelpText();
+        const helpMsg = this.historyProvider.addMessage({
+          role: 'assistant',
+          content: helpText,
+        });
+        if (helpMsg) {
+          this.postMessage({ type: 'addMessage', message: helpMsg });
+        }
+        return;
+
+      default:
+        // Unknown command — treat as regular message
+        const userMsg = this.historyProvider.addMessage({
+          role: 'user',
+          content: text,
+          fileContext,
+        });
+        if (userMsg) {
+          this.postMessage({ type: 'addMessage', message: userMsg });
+        }
+        await this.streamResponse(text, fileContext);
+        return;
+    }
+
+    // Add user message showing the command
+    const cmdMsg = this.historyProvider.addMessage({
+      role: 'user',
+      content: `${phaseLabel}: ${goal || 'Current file'}`,
+    });
+    if (cmdMsg) {
+      this.postMessage({ type: 'addMessage', message: cmdMsg });
+    }
+
+    // Add file context if available
+    let fullPrompt = prompt;
+    if (fileContext && fileContext.length > 0) {
+      const contextStr = fileContext
+        .map((f) => `\`\`\`${f.language}:${f.uri}\n${f.content}\n\`\`\``)
+        .join('\n\n');
+      fullPrompt = `${prompt}\n\n**File Context:**\n${contextStr}`;
+    } else if (activeFile) {
+      const content = activeFile.getText();
+      const language = activeFile.languageId;
+      fullPrompt = `${prompt}\n\n**Active File:**\n\`\`\`${language}:${activeFile.fileName}\n${content.slice(0, 5000)}\n\`\`\``;
+    }
+
+    await this.streamResponse(fullPrompt);
+  }
+
+  /**
+   * Stream a response from the CLI to the chat panel.
+   */
+  private async streamResponse(
+    prompt: string,
+    fileContext?: { uri: string; language: string; content: string }[],
+  ): Promise<void> {
+    // Create a placeholder message for the response
+    const assistantMsg = this.historyProvider.addMessage({
+      role: 'assistant',
+      content: '',
+      streaming: true,
+    });
+
+    if (!assistantMsg) return;
+
+    this.streamingMessageId = assistantMsg.id;
+    this.postMessage({
+      type: 'addMessage',
+      message: { ...assistantMsg, content: '▊' },
+    });
+
+    // Build CLI arguments
+    const args = ['chat', prompt, '--stream', '--no-color'];
+
+    if (this.config.defaultProvider) {
+      args.push('--provider', this.config.defaultProvider);
+    }
+    if (this.config.defaultModel) {
+      args.push('--model', this.config.defaultModel);
+    }
+
+    // Add file context as extra arguments
+    if (fileContext?.length) {
+      for (const file of fileContext) {
+        args.push('--file', file.uri);
+      }
+    }
+
+    const cliCmd = this.config.cliPath || 'agent-nuvira';
+
+    try {
+      this.abortController = new AbortController();
+      this.cliProcess = spawn(cliCmd, args, {
+        cwd: this.workspaceRoot,
+        stdio: ['pipe', 'pipe', 'pipe'],
+        signal: this.abortController.signal,
+        env: { ...process.env, FORCE_COLOR: '0' },
+      });
+
+      let fullContent = '';
+      let buffer = '';
+
+      // Stream response
+      this.cliProcess.stdout?.on('data', (data: Buffer) => {
+        const text = data.toString();
+        buffer += text;
+        fullContent += text;
+
+        // Process lines for streaming updates
+        const lines = buffer.split('\n');
+        buffer = lines.pop() || ''; // Keep incomplete line in buffer
+
+        for (const line of lines) {
+          if (line.trim()) {
+            // Detect code blocks and phase markers
+            const isCodeBlock = line.includes('```');
+            const isPhase = line.match(/^[📋📂✏️🔍🧪📦🏗️📝🔄✅❌]\s+/);
+
+            this.postMessage({
+              type: 'streamChunk',
+              messageId: assistantMsg.id,
+              chunk: line + '\n',
+              isCodeBlock,
+              isPhase,
+            });
+          }
+        }
+
+        // Update stored message content periodically
+        this.historyProvider.updateMessage(assistantMsg.id, {
+          content: fullContent,
+        });
+      });
+
+      // Handle stderr
+      this.cliProcess.stderr?.on('data', (data: Buffer) => {
+        const text = data.toString();
+        if (text.includes('error') || text.includes('Error')) {
+          this.postMessage({
+            type: 'streamChunk',
+            messageId: assistantMsg.id,
+            chunk: `\n⚠️ ${text.trim()}\n`,
+          });
+        }
+      });
+
+      // Handle process exit
+      await new Promise<void>((resolve, reject) => {
+        this.cliProcess?.on('close', (exitCode) => {
+          if (exitCode !== 0 && exitCode !== null) {
+            // Non-zero exit — append error info
+            const errorSuffix = `\n\n⚠️ Process exited with code ${exitCode}`;
+            fullContent += errorSuffix;
+          }
+          resolve();
+        });
+
+        this.cliProcess?.on('error', (err) => {
+          if (err.name === 'AbortError') {
+            fullContent += '\n\n_✋ Generation cancelled._';
+          } else {
+            fullContent += `\n\n⚠️ Error: ${err.message}`;
+          }
+          resolve();
+        });
+
+        // Timeout after 5 minutes
+        setTimeout(() => {
+          if (this.cliProcess && !this.cliProcess.killed) {
+            this.cliProcess.kill('SIGTERM');
+            fullContent += '\n\n_⏱️ Response timed out._';
+            resolve();
+          }
+        }, 300_000);
+      });
+
+      // Finalize message
+      this.historyProvider.updateMessage(assistantMsg.id, {
+        content: fullContent,
+        streaming: false,
+      });
+
+      this.postMessage({
+        type: 'streamComplete',
+        messageId: assistantMsg.id,
+        content: fullContent,
+      });
+
+      this.streamingMessageId = null;
+      this.cliProcess = null;
+
+    } catch (err: any) {
+      if (err.name === 'AbortError') {
+        this.historyProvider.updateMessage(assistantMsg.id, {
+          content: '\n\n_✋ Generation cancelled._',
+          streaming: false,
+        });
+      } else {
+        this.historyProvider.updateMessage(assistantMsg.id, {
+          content: `\n\n⚠️ Error: ${err.message}`,
+          streaming: false,
+        });
+      }
+
+      this.postMessage({
+        type: 'streamComplete',
+        messageId: assistantMsg.id,
+        content: this.historyProvider.getSession(
+          this.historyProvider.getActiveSessionId() || '',
+        )?.messages.find((m) => m.id === assistantMsg.id)?.content || '',
+      });
+
+      this.streamingMessageId = null;
+      this.cliProcess = null;
+    }
+  }
+
+  /**
+   * Cancel the currently streaming response.
+   */
+  private cancelStreaming(): void {
+    if (this.cliProcess && !this.cliProcess.killed) {
+      this.cliProcess.kill('SIGTERM');
+      setTimeout(() => {
+        if (this.cliProcess && !this.cliProcess.killed) {
+          this.cliProcess.kill('SIGKILL');
+        }
+      }, 3000);
+    }
+    if (this.abortController) {
+      this.abortController.abort();
+    }
+  }
+
+  /**
+   * Apply a code block from the chat to a file.
+   */
+  private async applyCodeBlock(
+    code: string,
+    language: string,
+    filePath?: string,
+  ): Promise<void> {
+    const workspaceRoot = vscode.workspace.workspaceFolders?.[0]?.uri?.fsPath;
+
+    if (filePath && workspaceRoot) {
+      // User specified a file path — apply directly
+      const fullPath = filePath.startsWith('/')
+        ? filePath
+        : workspaceRoot + '/' + filePath;
+
+      try {
+        const uri = vscode.Uri.file(fullPath);
+        const edit = new vscode.WorkspaceEdit();
+
+        // Read existing file or create new
+        let existingContent = '';
+        try {
+          const doc = await vscode.workspace.openTextDocument(uri);
+          existingContent = doc.getText();
+        } catch {
+          // File doesn't exist — will create it
+        }
+
+        const fullRange = new vscode.Range(0, 0, existingContent.split('\n').length, 0);
+        edit.replace(uri, fullRange, code);
+
+        const applied = await vscode.workspace.applyEdit(edit);
+        if (applied) {
+          vscode.window.showInformationMessage(`✅ Applied code to ${filePath}`);
+          // Reveal the file
+          const doc = await vscode.workspace.openTextDocument(uri);
+          await vscode.window.showTextDocument(doc);
+        } else {
+          vscode.window.showErrorMessage('Failed to apply code to file.');
+        }
+      } catch (err: any) {
+        vscode.window.showErrorMessage(`Error applying code: ${err.message}`);
+      }
+      return;
+    }
+
+    // No file path — show prompt to create new or apply to active
+    const action = await vscode.window.showQuickPick(
+      [
+        { label: '📄 Apply to New File', description: 'Create a new file with this code' },
+        { label: '📝 Apply to Active Editor', description: 'Replace active editor content' },
+      ],
+      { placeHolder: 'How would you like to apply this code?' },
+    );
+
+    if (!action) return;
+
+    if (action.label.includes('New File')) {
+      // Create a new untitled file
+      const doc = await vscode.workspace.openTextDocument({
+        content: code,
+        language,
+      });
+      await vscode.window.showTextDocument(doc);
+      vscode.window.showInformationMessage('✅ New file created with code. Save it to persist.');
+    } else {
+      // Apply to active editor
+      const editor = vscode.window.activeTextEditor;
+      if (!editor) {
+        vscode.window.showWarningMessage('No active editor to apply code to.');
+        return;
+      }
+
+      const edit = new vscode.WorkspaceEdit();
+      const doc = editor.document;
+      const fullRange = new vscode.Range(0, 0, doc.lineCount, 0);
+      edit.replace(doc.uri, fullRange, code);
+      const applied = await vscode.workspace.applyEdit(edit);
+
+      if (applied) {
+        vscode.window.showInformationMessage('✅ Code applied to active editor.');
+      } else {
+        vscode.window.showErrorMessage('Failed to apply code to editor.');
+      }
+    }
+  }
+
+  /**
+   * Get file context from the active editor.
+   */
+  private async handleGetFileContext(): Promise<void> {
+    const editor = vscode.window.activeTextEditor;
+    if (!editor) {
+      this.postMessage({ type: 'fileContext', context: null });
+      return;
+    }
+
+    const doc = editor.document;
+    const selection = editor.selection;
+    let content: string;
+
+    if (selection.isEmpty) {
+      content = doc.getText();
+    } else {
+      content = doc.getText(selection);
+    }
+
+    // Truncate if too large
+    const maxLen = 8000;
+    if (content.length > maxLen) {
+      content = content.slice(0, maxLen) + '\n// ... (truncated)';
+    }
+
+    this.postMessage({
+      type: 'fileContext',
+      context: {
+        uri: doc.uri.fsPath,
+        language: doc.languageId,
+        content,
+        fileName: doc.fileName.split('/').pop() || 'unknown',
+      },
+    });
+  }
+
+  /**
+   * Get active file info for the webview.
+   */
+  private async handleGetActiveFileInfo(): Promise<void> {
+    const editor = vscode.window.activeTextEditor;
+    if (!editor) {
+      this.postMessage({ type: 'activeFileInfo', info: null });
+      return;
+    }
+
+    this.postMessage({
+      type: 'activeFileInfo',
+      info: {
+        fileName: editor.document.fileName.split('/').pop() || 'unknown',
+        language: editor.document.languageId,
+        path: editor.document.uri.fsPath,
+        hasSelection: !editor.selection.isEmpty,
+      },
+    });
+  }
+
+  /**
+   * Open a file at a specific line.
+   */
+  private async openFile(path: string, line?: number): Promise<void> {
+    try {
+      const uri = vscode.Uri.file(path);
+      const doc = await vscode.workspace.openTextDocument(uri);
+      const editor = await vscode.window.showTextDocument(doc);
+
+      if (line !== undefined) {
+        const position = new vscode.Position(Math.max(0, line - 1), 0);
+        editor.selection = new vscode.Selection(position, position);
+        editor.revealRange(
+          new vscode.Range(position, position),
+          vscode.TextEditorRevealType.AtTop,
+        );
+      }
+    } catch (err: any) {
+      vscode.window.showErrorMessage(`Cannot open file: ${err.message}`);
+    }
+  }
+
+  // ── Webview Communication ─────────────────────────────────────────────────
+
+  /**
+   * Post a message to the webview.
+   */
+  private postMessage(message: any): void {
+    this.panel?.webview.postMessage(message);
+  }
+
+  /**
+   * Send all sessions to the webview for the session list.
+   */
+  private refreshSessions(): void {
+    const sessions = this.historyProvider.getSessions().map((s) => ({
+      id: s.id,
+      title: s.title,
+      createdAt: s.createdAt,
+      updatedAt: s.updatedAt,
+      messageCount: s.messages.length,
+    }));
+
+    this.postMessage({
+      type: 'sessionList',
+      sessions,
+      activeId: this.historyProvider.getActiveSessionId(),
+    });
+
+    this.updateTitle();
+  }
+
+  /**
+   * Send all messages from the active session to the webview.
+   */
+  private sendSessionMessages(): void {
+    const session = this.historyProvider.getActiveSession();
+    if (!session) return;
+
+    this.postMessage({
+      type: 'sessionMessages',
+      messages: session.messages,
+    });
+
+    this.updateTitle();
+  }
+
+  /**
+   * Update the panel title based on the active session.
+   */
+  private updateTitle(): void {
+    const session = this.historyProvider.getActiveSession();
+    if (this.panel) {
+      this.panel.title = session
+        ? `💬 ${session.title.slice(0, 30)}${session.title.length > 30 ? '…' : ''}`
+        : '💬 Agent-Nuvira Chat';
+    }
+  }
+
+  /**
+   * Get the help text for /help command.
+   */
+  private getHelpText(): string {
+    return `## 🤖 Agent-Nuvira Chat — Help
+
+### Slash Commands
+
+| Command | Description |
+|---------|-------------|
+| \`/fix\` | Fix issues in code |
+| \`/review\` | Code review with structured report |
+| \`/test\` | Generate unit tests |
+| \`/explain\` | Explain code in detail |
+| \`/workflow\` | Run a multi-step agent workflow |
+| \`/help\` | Show this help message |
+
+### Usage Tips
+
+- **@file** — Mention files to include them as context: \`@file:src/app.ts\`
+- **Select code** in the editor, then type your question
+- **Code blocks** in responses have an "Apply" button
+- **Slash commands** can include additional context after the command
+
+### Keybindings
+
+- \`Ctrl+Shift+A C\` — Open this chat panel
+- \`Ctrl+Shift+A E\` — Execute a goal (quick input)
+- \`Ctrl+Shift+A Q\` — Quick fix current file
+- \`Ctrl+Shift+A R\` — Review current file
+
+### Examples
+
+\`\`\`
+/fix Add error handling to this function
+/review Check this module for security issues
+/test Generate tests for the user service
+/explain What does this reducer do?
+/workflow Set up CI/CD pipeline
+\`\`\`
+`;
+  }
+
+  // ── Lifecycle ─────────────────────────────────────────────────────────────
+
+  private dispose(): void {
+    this.cancelStreaming();
+    this.panel = null;
+    for (const disposable of this.disposables) {
+      disposable.dispose();
+    }
+    this.disposables = [];
+  }
+
+  // ── Webview HTML ──────────────────────────────────────────────────────────
+
+  private getWebviewContent(): string {
+    return this.loadedHtml || '<!DOCTYPE html><html lang="en"><head><meta charset="UTF-8"><style>body{background:#1e1e1e;color:#ccc;font-family:sans-serif;display:flex;align-items:center;justify-content:center;height:100vh;padding:40px;text-align:center;line-height:1.6}</style></head><body><p>Chat panel template not found.<br>Try rebuilding the extension with <code>npm run compile</code>.</p></body></html>';
+  }
+}

@@ -1,0 +1,521 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'unsafe-inline'; script-src 'unsafe-inline';">
+  <title>Agent-Nuvira Chat</title>
+  <style>
+    :root {
+      --bg-primary: #1e1e1e;
+      --bg-secondary: #252526;
+      --bg-tertiary: #2d2d2d;
+      --bg-hover: #333333;
+      --text-primary: #cccccc;
+      --text-secondary: #969696;
+      --text-muted: #6e6e6e;
+      --text-link: #3794ff;
+      --border: #3c3c3c;
+      --green: #4ec9b0;
+      --yellow: #dcdcaa;
+      --red: #f44747;
+      --blue: #569cd6;
+      --orange: #ce9178;
+      --purple: #c586c0;
+      --font-mono: 'Cascadia Code', 'Fira Code', 'Consolas', monospace;
+    }
+
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    html, body { height: 100%; overflow: hidden; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; background: var(--bg-primary); color: var(--text-primary); font-size: 13px; line-height: 1.5; }
+
+    .app { display: flex; height: 100vh; }
+    .sidebar { width: 220px; min-width: 220px; background: var(--bg-secondary); border-right: 1px solid var(--border); display: flex; flex-direction: column; overflow: hidden; }
+    .main-area { flex: 1; display: flex; flex-direction: column; overflow: hidden; }
+
+    .sidebar-header { padding: 12px; border-bottom: 1px solid var(--border); display: flex; align-items: center; justify-content: space-between; }
+    .sidebar-header h3 { font-size: 12px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.05em; color: var(--text-secondary); }
+    .sidebar-actions { display: flex; gap: 4px; }
+    .sidebar-btn { background: none; border: 1px solid var(--border); color: var(--text-secondary); width: 24px; height: 24px; border-radius: 4px; cursor: pointer; display: flex; align-items: center; justify-content: center; font-size: 14px; transition: all 0.2s; }
+    .sidebar-btn:hover { background: var(--bg-hover); color: var(--text-primary); border-color: var(--text-secondary); }
+
+    .session-list { flex: 1; overflow-y: auto; padding: 4px; }
+    .session-item { padding: 8px 10px; border-radius: 4px; cursor: pointer; margin-bottom: 2px; transition: background 0.15s; position: relative; }
+    .session-item:hover { background: var(--bg-hover); }
+    .session-item.active { background: var(--bg-tertiary); border-left: 3px solid var(--blue); }
+    .session-title { font-size: 12px; color: var(--text-primary); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; margin-bottom: 2px; }
+    .session-meta { font-size: 10px; color: var(--text-muted); }
+    .session-delete-btn { position: absolute; right: 6px; top: 50%; transform: translateY(-50%); background: none; border: none; color: var(--text-muted); cursor: pointer; font-size: 12px; opacity: 0; transition: opacity 0.15s; width: 20px; height: 20px; border-radius: 3px; display: flex; align-items: center; justify-content: center; }
+    .session-item:hover .session-delete-btn { opacity: 1; }
+    .session-delete-btn:hover { color: var(--red); background: rgba(244,71,71,0.1); }
+
+    .chat-area { flex: 1; overflow-y: auto; padding: 16px; scroll-behavior: smooth; }
+    .message { display: flex; gap: 12px; margin-bottom: 16px; animation: fadeIn 0.2s ease; }
+    @keyframes fadeIn { from { opacity: 0; transform: translateY(8px); } to { opacity: 1; transform: translateY(0); } }
+    .message-avatar { width: 32px; height: 32px; border-radius: 6px; display: flex; align-items: center; justify-content: center; font-size: 16px; flex-shrink: 0; }
+    .message-avatar.user { background: var(--blue); }
+    .message-avatar.assistant { background: var(--purple); }
+    .message-body { flex: 1; min-width: 0; }
+    .message-sender { font-size: 11px; font-weight: 600; color: var(--text-secondary); margin-bottom: 4px; text-transform: uppercase; letter-spacing: 0.04em; }
+    .message-content { font-size: 13px; line-height: 1.6; color: var(--text-primary); word-wrap: break-word; }
+    .message-content p { margin-bottom: 8px; }
+    .message-content p:last-child { margin-bottom: 0; }
+
+    .message-content pre { position: relative; background: var(--bg-primary); border: 1px solid var(--border); border-radius: 6px; padding: 12px; margin: 8px 0; overflow-x: auto; font-family: var(--font-mono); font-size: 12px; line-height: 1.5; }
+    .message-content pre .code-header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 8px; padding-bottom: 6px; border-bottom: 1px solid var(--border); font-size: 11px; color: var(--text-secondary); }
+    .message-content pre .code-lang { font-weight: 600; }
+    .message-content pre .apply-btn { background: var(--green); color: #1e1e1e; border: none; padding: 3px 10px; border-radius: 4px; font-size: 11px; font-weight: 600; cursor: pointer; transition: opacity 0.2s; }
+    .message-content pre .apply-btn:hover { opacity: 0.85; }
+    .message-content pre code { display: block; font-family: var(--font-mono); white-space: pre; }
+    .message-content :not(pre) > code { background: var(--bg-tertiary); padding: 1px 5px; border-radius: 3px; font-family: var(--font-mono); font-size: 12px; color: var(--orange); }
+
+    .message-content table { border-collapse: collapse; margin: 8px 0; width: 100%; font-size: 12px; }
+    .message-content th, .message-content td { padding: 6px 10px; border: 1px solid var(--border); text-align: left; }
+    .message-content th { background: var(--bg-tertiary); font-weight: 600; }
+    .message-content ul, .message-content ol { padding-left: 20px; margin: 6px 0; }
+    .message-content li { margin-bottom: 3px; }
+    .message-content blockquote { border-left: 3px solid var(--blue); padding: 6px 12px; margin: 8px 0; color: var(--text-secondary); background: var(--bg-tertiary); border-radius: 0 4px 4px 0; }
+    .message-content h1, .message-content h2, .message-content h3 { margin: 12px 0 6px; font-weight: 600; }
+    .message-content h1 { font-size: 16px; }
+    .message-content h2 { font-size: 15px; }
+    .message-content h3 { font-size: 14px; }
+    .message-content hr { border: none; border-top: 1px solid var(--border); margin: 12px 0; }
+    .message-content a { color: var(--text-link); text-decoration: none; }
+    .message-content a:hover { text-decoration: underline; }
+
+    .streaming-cursor { display: inline-block; animation: blink 0.8s step-end infinite; color: var(--text-primary); }
+    @keyframes blink { 0%, 100% { opacity: 1; } 50% { opacity: 0; } }
+
+    .file-context-bar { display: flex; flex-wrap: wrap; gap: 4px; margin: 4px 0 8px; }
+    .file-chip { display: inline-flex; align-items: center; gap: 4px; padding: 2px 8px; border-radius: 4px; font-size: 11px; background: var(--bg-tertiary); border: 1px solid var(--border); color: var(--text-secondary); }
+    .file-chip .remove-btn { background: none; border: none; color: var(--text-muted); cursor: pointer; font-size: 12px; padding: 0 2px; }
+    .file-chip .remove-btn:hover { color: var(--red); }
+
+    .input-area { padding: 12px 16px; border-top: 1px solid var(--border); background: var(--bg-secondary); }
+    .input-toolbar { display: flex; gap: 6px; margin-bottom: 8px; }
+    .toolbar-btn { display: inline-flex; align-items: center; gap: 4px; padding: 4px 8px; border: 1px solid var(--border); border-radius: 4px; background: var(--bg-tertiary); color: var(--text-secondary); font-size: 11px; cursor: pointer; transition: all 0.15s; }
+    .toolbar-btn:hover { background: var(--bg-hover); color: var(--text-primary); border-color: var(--text-secondary); }
+    .toolbar-btn.active { background: var(--blue); color: white; border-color: var(--blue); }
+    .toolbar-btn:disabled { opacity: 0.4; cursor: not-allowed; }
+
+    .input-row { display: flex; gap: 8px; align-items: flex-end; }
+    .input-wrapper { flex: 1; position: relative; }
+    .chat-input { width: 100%; min-height: 40px; max-height: 150px; padding: 10px 12px; border: 1px solid var(--border); border-radius: 8px; background: var(--bg-primary); color: var(--text-primary); font-family: inherit; font-size: 13px; line-height: 1.5; resize: none; outline: none; transition: border-color 0.2s; }
+    .chat-input:focus { border-color: var(--blue); }
+    .chat-input::placeholder { color: var(--text-muted); }
+
+    .send-btn { display: flex; align-items: center; justify-content: center; width: 40px; height: 40px; border: 1px solid var(--border); border-radius: 8px; background: var(--blue); color: white; cursor: pointer; transition: all 0.2s; flex-shrink: 0; }
+    .send-btn:hover { opacity: 0.9; transform: translateY(-1px); }
+    .send-btn:disabled { opacity: 0.3; cursor: not-allowed; transform: none; }
+    .send-btn.cancel { background: var(--red); border-color: var(--red); }
+
+    .slash-menu { display: none; position: absolute; bottom: 100%; left: 0; right: 0; background: var(--bg-secondary); border: 1px solid var(--border); border-radius: 6px; margin-bottom: 4px; box-shadow: 0 -4px 20px rgba(0,0,0,0.3); max-height: 200px; overflow-y: auto; }
+    .slash-menu.visible { display: block; }
+    .slash-item { padding: 8px 12px; cursor: pointer; display: flex; gap: 8px; align-items: baseline; transition: background 0.1s; }
+    .slash-item:hover, .slash-item.selected { background: var(--bg-hover); }
+    .slash-item .cmd { color: var(--blue); font-weight: 600; font-family: var(--font-mono); font-size: 12px; min-width: 70px; }
+    .slash-item .desc { color: var(--text-secondary); font-size: 11px; }
+
+    .status-bar { display: flex; align-items: center; gap: 8px; padding: 4px 16px; font-size: 11px; color: var(--text-muted); border-top: 1px solid var(--border); background: var(--bg-secondary); }
+    .status-dot { width: 6px; height: 6px; border-radius: 50%; }
+    .status-dot.idle { background: var(--text-muted); }
+    .status-dot.streaming { background: var(--green); animation: pulse 1s infinite; }
+    @keyframes pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.4; } }
+    .status-text { flex: 1; }
+
+    .welcome-message { display: flex; flex-direction: column; align-items: center; justify-content: center; height: 100%; text-align: center; padding: 40px 20px; }
+    .welcome-icon { font-size: 48px; margin-bottom: 16px; }
+    .welcome-title { font-size: 18px; font-weight: 700; margin-bottom: 8px; }
+    .welcome-desc { color: var(--text-secondary); font-size: 13px; max-width: 400px; line-height: 1.6; margin-bottom: 20px; }
+    .welcome-commands { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; max-width: 400px; width: 100%; }
+    .welcome-cmd { padding: 10px 14px; border: 1px solid var(--border); border-radius: 6px; background: var(--bg-tertiary); cursor: pointer; transition: all 0.2s; text-align: left; }
+    .welcome-cmd:hover { border-color: var(--blue); background: var(--bg-hover); }
+    .welcome-cmd-code { font-family: var(--font-mono); font-size: 12px; color: var(--blue); margin-bottom: 2px; }
+    .welcome-cmd-desc { font-size: 11px; color: var(--text-muted); }
+
+    ::-webkit-scrollbar { width: 6px; height: 6px; }
+    ::-webkit-scrollbar-track { background: transparent; }
+    ::-webkit-scrollbar-thumb { background: var(--bg-hover); border-radius: 3px; }
+    ::-webkit-scrollbar-thumb:hover { background: var(--text-muted); }
+  </style>
+</head>
+<body>
+  <div class="app">
+    <div class="sidebar">
+      <div class="sidebar-header">
+        <h3>Sessions</h3>
+        <div class="sidebar-actions">
+          <button class="sidebar-btn" id="newSessionBtn" title="New Session">+</button>
+          <button class="sidebar-btn" id="deleteAllBtn" title="Clear All">&#128465;</button>
+        </div>
+      </div>
+      <div class="session-list" id="sessionList"></div>
+    </div>
+    <div class="main-area">
+      <div class="chat-area" id="chatArea">
+        <div class="welcome-message" id="welcomeMessage">
+          <div class="welcome-icon">&#129302;</div>
+          <div class="welcome-title">Agent-Nuvira Chat</div>
+          <div class="welcome-desc">Multi-agent AI coding assistant. Ask questions, review code, fix bugs, or run multi-step agent workflows.</div>
+          <div class="welcome-commands">
+            <div class="welcome-cmd" onclick="sendSlashHTML('/review')">
+              <div class="welcome-cmd-code">/review</div>
+              <div class="welcome-cmd-desc">Review code for issues</div>
+            </div>
+            <div class="welcome-cmd" onclick="sendSlashHTML('/fix')">
+              <div class="welcome-cmd-code">/fix</div>
+              <div class="welcome-cmd-desc">Fix bugs in code</div>
+            </div>
+            <div class="welcome-cmd" onclick="sendSlashHTML('/explain')">
+              <div class="welcome-cmd-code">/explain</div>
+              <div class="welcome-cmd-desc">Explain selected code</div>
+            </div>
+            <div class="welcome-cmd" onclick="sendSlashHTML('/test')">
+              <div class="welcome-cmd-code">/test</div>
+              <div class="welcome-cmd-desc">Generate unit tests</div>
+            </div>
+            <div class="welcome-cmd" onclick="sendSlashHTML('/workflow')">
+              <div class="welcome-cmd-code">/workflow</div>
+              <div class="welcome-cmd-desc">Run agent workflow</div>
+            </div>
+            <div class="welcome-cmd" onclick="sendSlashHTML('/help')">
+              <div class="welcome-cmd-code">/help</div>
+              <div class="welcome-cmd-desc">Show all commands</div>
+            </div>
+          </div>
+        </div>
+      </div>
+      <div class="input-area">
+        <div class="input-toolbar">
+          <button class="toolbar-btn" id="addFileBtn">&#128196; Add File</button>
+          <button class="toolbar-btn" id="clearChatBtn">&#128465; Clear</button>
+        </div>
+        <div class="input-row">
+          <div class="input-wrapper">
+            <div class="slash-menu" id="slashMenu">
+              <div class="slash-item" data-cmd="/fix"><span class="cmd">/fix</span><span class="desc">Fix issues in code</span></div>
+              <div class="slash-item" data-cmd="/review"><span class="cmd">/review</span><span class="desc">Code review with structured report</span></div>
+              <div class="slash-item" data-cmd="/test"><span class="cmd">/test</span><span class="desc">Generate unit tests</span></div>
+              <div class="slash-item" data-cmd="/explain"><span class="cmd">/explain</span><span class="desc">Explain code in detail</span></div>
+              <div class="slash-item" data-cmd="/workflow"><span class="cmd">/workflow</span><span class="desc">Run a multi-step agent workflow</span></div>
+              <div class="slash-item" data-cmd="/help"><span class="cmd">/help</span><span class="desc">Show help and available commands</span></div>
+            </div>
+            <textarea class="chat-input" id="chatInput" placeholder="Ask anything or type / for commands..." rows="1"></textarea>
+          </div>
+          <button class="send-btn" id="sendBtn">&#8594;</button>
+        </div>
+      </div>
+      <div class="status-bar">
+        <span class="status-dot idle" id="statusDot"></span>
+        <span class="status-text" id="statusText">Ready</span>
+        <span id="modelLabel" style="color:var(--text-muted);font-size:10px"></span>
+      </div>
+    </div>
+  </div>
+
+  <script>
+(function(){
+  const vscode = acquireVsCodeApi();
+  const chatArea = document.getElementById('chatArea');
+  const chatInput = document.getElementById('chatInput');
+  const sendBtn = document.getElementById('sendBtn');
+  const slashMenu = document.getElementById('slashMenu');
+  const sessionList = document.getElementById('sessionList');
+  const newSessionBtn = document.getElementById('newSessionBtn');
+  const deleteAllBtn = document.getElementById('deleteAllBtn');
+  const addFileBtn = document.getElementById('addFileBtn');
+  const clearChatBtn = document.getElementById('clearChatBtn');
+  const statusDot = document.getElementById('statusDot');
+  const statusText = document.getElementById('statusText');
+  const welcomeMessage = document.getElementById('welcomeMessage');
+
+  let isStreaming = false;
+  let selectedSlashIndex = -1;
+  let fileContext = [];
+
+  window.sendSlashHTML = function(cmd) {
+    chatInput.value = cmd + ' ';
+    chatInput.focus();
+    slashMenu.classList.remove('visible');
+  };
+
+  chatInput.addEventListener('input', function() {
+    chatInput.style.height = 'auto';
+    chatInput.style.height = Math.min(chatInput.scrollHeight, 150) + 'px';
+    handleSlashAutocomplete();
+  });
+
+  chatInput.addEventListener('keydown', function(e) {
+    if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); sendMessage(); }
+    if (e.key === 'Tab' && slashMenu.classList.contains('visible')) { e.preventDefault(); selectSlashItem(); }
+    if (e.key === 'ArrowDown' && slashMenu.classList.contains('visible')) { e.preventDefault(); selectedSlashIndex = Math.min(selectedSlashIndex + 1, slashMenu.children.length - 1); updateSlashSelection(); }
+    if (e.key === 'ArrowUp' && slashMenu.classList.contains('visible')) { e.preventDefault(); selectedSlashIndex = Math.max(selectedSlashIndex - 1, 0); updateSlashSelection(); }
+    if (e.key === 'Escape') { slashMenu.classList.remove('visible'); }
+  });
+
+  function handleSlashAutocomplete() {
+    var text = chatInput.value;
+    if (text.startsWith('/') && text.indexOf(' ') === -1) {
+      var query = text.slice(1).toLowerCase();
+      var visible = false;
+      for (var i = 0; i < slashMenu.children.length; i++) {
+        var cmd = slashMenu.children[i].getAttribute('data-cmd').slice(1);
+        if (cmd.indexOf(query) === 0) { slashMenu.children[i].style.display = 'flex'; visible = true; }
+        else { slashMenu.children[i].style.display = 'none'; }
+      }
+      slashMenu.classList.toggle('visible', visible);
+      selectedSlashIndex = 0;
+      updateSlashSelection();
+    } else {
+      slashMenu.classList.remove('visible');
+    }
+  }
+
+  function selectSlashItem() {
+    var selected = slashMenu.querySelector('.selected');
+    if (selected) { chatInput.value = selected.getAttribute('data-cmd') + ' '; chatInput.focus(); slashMenu.classList.remove('visible'); }
+  }
+
+  function updateSlashSelection() {
+    for (var i = 0; i < slashMenu.children.length; i++) {
+      slashMenu.children[i].classList.toggle('selected', i === selectedSlashIndex);
+    }
+  }
+
+  for (var i = 0; i < slashMenu.children.length; i++) {
+    (function(item) {
+      item.addEventListener('click', function() {
+        chatInput.value = item.getAttribute('data-cmd') + ' ';
+        chatInput.focus();
+        slashMenu.classList.remove('visible');
+      });
+    })(slashMenu.children[i]);
+  }
+
+  function sendMessage() {
+    var text = chatInput.value.trim();
+    if (!text && fileContext.length === 0) return;
+    if (isStreaming) { vscode.postMessage({ type: 'cancelStreaming' }); return; }
+
+    chatInput.value = '';
+    chatInput.style.height = 'auto';
+    slashMenu.classList.remove('visible');
+    welcomeMessage.style.display = 'none';
+    setStreaming(true);
+
+    vscode.postMessage({
+      type: 'sendMessage',
+      text: text || '(Analyze current file context)',
+      fileContext: fileContext.length > 0 ? fileContext : undefined
+    });
+
+    fileContext = [];
+    updateFileChips();
+  }
+
+  sendBtn.addEventListener('click', sendMessage);
+
+  addFileBtn.addEventListener('click', function() { vscode.postMessage({ type: 'getFileContext' }); });
+
+  function updateFileChips() {
+    var existing = document.querySelector('.file-context-bar');
+    if (existing) existing.remove();
+    if (fileContext.length === 0) return;
+    var bar = document.createElement('div');
+    bar.className = 'file-context-bar';
+    for (var i = 0; i < fileContext.length; i++) {
+      var chip = document.createElement('span');
+      chip.className = 'file-chip';
+      var fileName = fileContext[i].fileName || fileContext[i].uri.split('/').pop() || 'file';
+      chip.textContent = fileName + ' \u00D7';
+      chip.addEventListener('click', (function(uri) { return function() {
+        fileContext = fileContext.filter(function(f) { return f.uri !== uri; });
+        updateFileChips();
+      }; })(fileContext[i].uri));
+      bar.appendChild(chip);
+    }
+    chatArea.parentNode.insertBefore(bar, chatArea.nextSibling);
+  }
+
+  newSessionBtn.addEventListener('click', function() { vscode.postMessage({ type: 'createSession' }); });
+
+  deleteAllBtn.addEventListener('click', function() {
+    if (confirm('Clear all sessions?')) { vscode.postMessage({ type: 'deleteAllSessions' }); }
+  });
+
+  clearChatBtn.addEventListener('click', function() { vscode.postMessage({ type: 'createSession' }); });
+
+  function renderSessionList(sessions, activeId) {
+    sessionList.innerHTML = '';
+    for (var i = 0; i < sessions.length; i++) {
+      var s = sessions[i];
+      var div = document.createElement('div');
+      div.className = 'session-item' + (s.id === activeId ? ' active' : '');
+      var titleDiv = document.createElement('div');
+      titleDiv.className = 'session-title';
+      titleDiv.textContent = s.title;
+      var metaDiv = document.createElement('div');
+      metaDiv.className = 'session-meta';
+      metaDiv.textContent = s.messageCount > 0 ? s.messageCount + ' messages' : 'Empty';
+      var delBtn = document.createElement('button');
+      delBtn.className = 'session-delete-btn';
+      delBtn.textContent = '\u00D7';
+      (function(sid) {
+        div.addEventListener('click', function(e) {
+          if (e.target.tagName !== 'BUTTON') { vscode.postMessage({ type: 'switchSession', sessionId: sid }); }
+        });
+        delBtn.addEventListener('click', function(e) { e.stopPropagation(); vscode.postMessage({ type: 'deleteSession', sessionId: sid }); });
+      })(s.id);
+      div.appendChild(titleDiv);
+      div.appendChild(metaDiv);
+      div.appendChild(delBtn);
+      sessionList.appendChild(div);
+    }
+  }
+
+  function renderMessages(messages) {
+    chatArea.innerHTML = '';
+    welcomeMessage.style.display = messages.length === 0 ? 'flex' : 'none';
+    for (var i = 0; i < messages.length; i++) { appendMessage(messages[i]); }
+    scrollToBottom();
+  }
+
+  function appendMessage(message) {
+    welcomeMessage.style.display = 'none';
+    var existingWelcome = chatArea.querySelector('.welcome-message');
+    if (existingWelcome) existingWelcome.remove();
+
+    var div = document.createElement('div');
+    div.className = 'message';
+    div.id = 'msg-' + message.id;
+    var isUser = message.role === 'user';
+    var avatar = isUser ? '\uD83D\uDC64' : '\uD83E\uDD16';
+    var contentHtml = renderContent(message.content, message.streaming);
+
+    div.innerHTML = '<div class="message-avatar ' + (isUser ? 'user' : 'assistant') + '">' + avatar + '</div><div class="message-body"><div class="message-sender">' + (isUser ? 'You' : 'Agent-Nuvira') + '</div><div class="message-content">' + contentHtml + '</div></div>';
+    chatArea.appendChild(div);
+    scrollToBottom();
+
+    var applyBtns = div.querySelectorAll('.apply-btn');
+    for (var i = 0; i < applyBtns.length; i++) {
+      (function(btn) {
+        btn.addEventListener('click', function() {
+          var codeEl = btn.closest('pre').querySelector('code');
+          var code = codeEl.textContent;
+          var lang = btn.getAttribute('data-lang') || '';
+          var filePath = btn.getAttribute('data-file') || '';
+          vscode.postMessage({ type: 'applyCodeBlock', code: code, language: lang, filePath: filePath });
+        });
+      })(applyBtns[i]);
+    }
+
+    var fileLinks = div.querySelectorAll('.file-link');
+    for (var i = 0; i < fileLinks.length; i++) {
+      (function(link) {
+        link.addEventListener('click', function() {
+          var path = link.getAttribute('data-path');
+          var line = parseInt(link.getAttribute('data-line') || '0', 10);
+          vscode.postMessage({ type: 'openFile', path: path, line: line });
+        });
+      })(fileLinks[i]);
+    }
+  }
+
+  function renderContent(content, streaming) {
+    if (!content) return streaming ? '<span class="streaming-cursor">&#9642;</span>' : '';
+
+    var html = escapeHtml(content);
+
+    // Code blocks: ```lang\n...```
+    html = html.replace(/```(\w+)?(?:\:(.+?))?\n([\s\S]*?)```/g, function(match, lang, filePath, code) {
+      var language = lang || '';
+      var file = filePath || '';
+      return '<pre><div class="code-header"><span class="code-lang">' + language + (language ? '' : 'code') + (file ? ': ' + file : '') + '</span><button class="apply-btn" data-lang="' + language + '" data-file="' + file + '">Apply to File</button></div><code>' + escapeHtml(code.trim()) + '</code></pre>';
+    });
+
+    // Inline code
+    html = html.replace(/`([^`]+)`/g, '<code>$1</code>');
+
+    // Bold and italic
+    html = html.replace(/\*\*([^*]+)\*\*/g, '<strong>$1</strong>');
+    html = html.replace(/(?<!<[^>]*)\*([^*]+)\*(?![^<]*>)/g, '<em>$1</em>');
+
+    // Line breaks
+    html = html.replace(/\n\n/g, '</p><p>');
+    html = html.replace(/\n/g, '<br>');
+
+    if (html.indexOf('<pre') !== 0 && html.indexOf('<p>') !== 0) {
+      html = '<p>' + html + '</p>';
+    }
+
+    if (streaming) {
+      html += '<span class="streaming-cursor">&#9642;</span>';
+    }
+    return html;
+  }
+
+  function scrollToBottom() {
+    requestAnimationFrame(function() { chatArea.scrollTop = chatArea.scrollHeight; });
+  }
+
+  function setStreaming(state) {
+    isStreaming = state;
+    sendBtn.textContent = state ? '\u25A0' : '\u2192';
+    sendBtn.className = 'send-btn' + (state ? ' cancel' : '');
+    chatInput.disabled = state;
+    statusDot.className = 'status-dot ' + (state ? 'streaming' : 'idle');
+    statusText.textContent = state ? 'Generating...' : 'Ready';
+  }
+
+  function escapeHtml(text) {
+    var div = document.createElement('div');
+    div.textContent = text;
+    return div.innerHTML;
+  }
+
+  window.addEventListener('message', function(event) {
+    var msg = event.data;
+    switch (msg.type) {
+      case 'sessionList':
+        renderSessionList(msg.sessions, msg.activeId);
+        break;
+      case 'sessionMessages':
+        renderMessages(msg.messages || []);
+        break;
+      case 'addMessage':
+        appendMessage(msg.message);
+        break;
+      case 'streamComplete':
+        var el = document.getElementById('msg-' + msg.messageId);
+        if (el) {
+          var contentEl = el.querySelector('.message-content');
+          if (contentEl) {
+            contentEl.innerHTML = renderContent(msg.content, false);
+            var applyBtns = contentEl.querySelectorAll('.apply-btn');
+            for (var i = 0; i < applyBtns.length; i++) {
+              (function(btn) {
+                btn.addEventListener('click', function() {
+                  var codeEl = btn.closest('pre').querySelector('code');
+                  vscode.postMessage({ type: 'applyCodeBlock', code: codeEl.textContent, language: btn.getAttribute('data-lang') || '', filePath: btn.getAttribute('data-file') || '' });
+                });
+              })(applyBtns[i]);
+            }
+          }
+        }
+        setStreaming(false);
+        break;
+      case 'fileContext':
+        if (msg.context) { fileContext.push(msg.context); updateFileChips(); }
+        break;
+      case 'activeFileInfo':
+        if (msg.info) { document.getElementById('modelLabel').textContent = msg.info.fileName + (msg.info.hasSelection ? ' (selected)' : ''); }
+        break;
+    }
+  });
+
+  vscode.postMessage({ type: 'requestInitialState' });
+  vscode.postMessage({ type: 'getActiveFileInfo' });
+  setInterval(function() { vscode.postMessage({ type: 'getActiveFileInfo' }); }, 5000);
+})();
+  </script>
+</body>
+</html>

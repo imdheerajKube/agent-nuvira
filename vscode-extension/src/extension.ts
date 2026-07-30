@@ -22,6 +22,9 @@
 import * as vscode from 'vscode';
 import { CLIManager } from './cliManager.js';
 import { AgentPanel } from './agentPanel.js';
+import { ChatPanel } from './chatPanel.js';
+import { ChatHistoryProvider } from './chatProvider.js';
+import { DiagnosticFixProvider } from './diagnosticFixer.js';
 import { DiffViewer } from './diffViewer.js';
 import { CommandRegistrar } from './commands.js';
 import { InlineSuggestProvider } from './inlineSuggest.js';
@@ -31,6 +34,9 @@ import type { ExtensionConfig } from './types.js';
 
 let cliManager: CLIManager | null = null;
 let agentPanel: AgentPanel | null = null;
+let chatPanel: ChatPanel | null = null;
+let chatHistory: ChatHistoryProvider | null = null;
+let diagnosticFixer: DiagnosticFixProvider | null = null;
 let diffViewer: DiffViewer | null = null;
 let commandRegistrar: CommandRegistrar | null = null;
 let statusBarItem: vscode.StatusBarItem | null = null;
@@ -46,18 +52,47 @@ export function activate(context: vscode.ExtensionContext): void {
   // Initialize core components
   cliManager = new CLIManager(config);
   agentPanel = new AgentPanel();
+  chatHistory = new ChatHistoryProvider(context);
+  chatPanel = new ChatPanel(context, chatHistory, config);
   diffViewer = new DiffViewer(context);
+  diagnosticFixer = new DiagnosticFixProvider(cliManager, diffViewer);
   commandRegistrar = new CommandRegistrar(context, cliManager, agentPanel, diffViewer, config);
 
   // Create status bar item
   statusBarItem = createStatusBarItem();
   context.subscriptions.push(statusBarItem);
 
+  // Remove the old panel open and replace with chat panel open
+  statusBarItem.command = 'agent-nuvira.openChat';
+
   // Register all commands
   const commandDisposables = commandRegistrar.registerAll();
   for (const disposable of commandDisposables) {
     context.subscriptions.push(disposable);
   }
+
+  // Register the chat panel command
+  context.subscriptions.push(
+    vscode.commands.registerCommand('agent-nuvira.openChat', () => {
+      chatPanel?.createOrShow(context.extensionUri);
+    }),
+  );
+
+  // Register the diagnostic fix command
+  context.subscriptions.push(
+    vscode.commands.registerCommand(DiagnosticFixProvider.fixCommandId, (uri, line, error, code, lang, range) =>
+      diagnosticFixer?.handleFix(uri, line, error, code, lang, range),
+    ),
+  );
+
+  // Register the CodeActionProvider for diagnostics
+  context.subscriptions.push(
+    vscode.languages.registerCodeActionsProvider(
+      { pattern: '**/*.{ts,js,tsx,jsx,py,go,rs,java,rb,php,c,cpp,h,hpp,cs,swift,kt,scala,vue,svelte,mjs,cjs}' },
+      diagnosticFixer,
+      { providedCodeActionKinds: DiagnosticFixProvider.providedCodeActionKinds },
+    ),
+  );
 
   // Register inline completion provider (Phase 3.1.2 — Copilot-style suggestions)
   const inlineSuggestProvider = new InlineSuggestProvider(config);
@@ -76,6 +111,7 @@ export function activate(context: vscode.ExtensionContext): void {
         cliManager?.dispose();
         cliManager = new CLIManager(newConfig);
         commandRegistrar?.updateConfig(newConfig);
+        chatPanel?.updateConfig(newConfig);
         updateStatusBar('$(refresh) Config Updated');
       }
     }),
@@ -96,6 +132,7 @@ export function activate(context: vscode.ExtensionContext): void {
   console.log(`[agent-nuvira] CLI path: ${config.cliPath}`);
   console.log(`[agent-nuvira] Default provider: ${config.defaultProvider || '(from config)'}`);
   console.log(`[agent-nuvira] Auto-apply: ${config.autoApplyChanges}`);
+  console.log('[agent-nuvira] Chat panel registered (Ctrl+Shift+A C)');
 }
 
 // ─── Deactivate ─────────────────────────────────────────────────────────────
@@ -124,6 +161,10 @@ export function deactivate(): void {
     commandRegistrar.dispose();
     commandRegistrar = null;
   }
+
+  // Dispose chat panel
+  chatPanel = null;
+  chatHistory = null;
 
   // Dispose status bar
   if (statusBarItem) {

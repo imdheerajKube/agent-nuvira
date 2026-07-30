@@ -42,8 +42,10 @@
     "onCommand:agent-nuvira.explainCode",
     "onCommand:agent-nuvira.generateTest",
     "onCommand:agent-nuvira.showPanel",
+    "onCommand:agent-nuvira.openChat",
     "onCommand:agent-nuvira.runWorkflow",
-    "onView:agent-nuvira.agentProgress"
+    "onView:agent-nuvira.agentProgress",
+    "onView:agent-nuvira.chatPanel"
   ],
   "main": "./out/extension.js",
   "scripts": {
@@ -90,6 +92,12 @@
         "description": "Generate unit tests for the current file or selection"
       },
       {
+        "command": "agent-nuvira.openChat",
+        "title": "Agent-Nuvira: Open Chat",
+        "shortTitle": "Chat",
+        "description": "Open the AI chat panel with multi-turn conversation"
+      },
+      {
         "command": "agent-nuvira.showPanel",
         "title": "Agent-Nuvira: Show Agent Panel",
         "shortTitle": "Agent Panel",
@@ -131,6 +139,12 @@
         "command": "agent-nuvira.reviewFile",
         "key": "ctrl+shift+a r",
         "mac": "cmd+shift+a r",
+        "when": "editorTextFocus"
+      },
+      {
+        "command": "agent-nuvira.openChat",
+        "key": "ctrl+shift+a c",
+        "mac": "cmd+shift+a c",
         "when": "editorTextFocus"
       },
       {
@@ -210,6 +224,11 @@
           "type": "webview",
           "id": "agent-nuvira.agentProgress",
           "name": "Agent Progress"
+        },
+        {
+          "type": "webview",
+          "id": "agent-nuvira.chatPanel",
+          "name": "Chat"
         }
       ]
     },
