@@ -18,11 +18,13 @@ import { RunnerAgent } from './agents/runner.js';
 import { TesterAgent } from './agents/tester.js';
 import { DebuggerAgent } from './agents/debugger.js';
 import { GitAgent } from './agents/git-agent.js';
+import { GitLabAgent } from './agents/gitlab-agent.js';
 import { PackageAgent } from './agents/package-agent.js';
 import { GitHubReleaseAgent } from './agents/github-release-agent.js';
 import { SecurityAgent } from './agents/security-agent.js';
 import { SkillRunnerAgent } from './agents/skill-runner.js';
 import { MCPAgent } from './agents/mcp-agent.js';
+import { PRReviewAgent } from './agents/pr-review-agent.js';
 import { getEventBus, EventNames } from '../observability/event-bus.js';
 import type { EventBus } from '../observability/event-bus.js';
 
@@ -277,6 +279,13 @@ export class ModuleRegistry {
       isBuiltin: true,
     });
 
+    registry.register('gitlab', () => new GitLabAgent(), {
+      name: 'GitLab',
+      description: 'Manages GitLab operations (MR, issues, comments, pipelines)',
+      icon: '🦊',
+      isBuiltin: true,
+    });
+
     registry.register('package', () => new PackageAgent(), {
       name: 'Package',
       description: 'Manages package version, build, and npm publish',
@@ -309,6 +318,13 @@ export class ModuleRegistry {
       name: 'MCP',
       description: 'Invokes MCP (Model Context Protocol) tools from connected servers',
       icon: '🔌',
+      isBuiltin: true,
+    });
+
+    registry.register('pr-review', () => new PRReviewAgent(), {
+      name: 'PR Review',
+      description: 'Reviews open GitHub PRs for security, quality, and correctness',
+      icon: '👁️',
       isBuiltin: true,
     });
 

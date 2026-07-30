@@ -17,7 +17,7 @@ const PLANNER_SYSTEM_PROMPT = [
   'For each step, specify:',
   '- id: A short unique identifier (e.g., "step-01-gather-context")',
   '- description: What needs to be done in clear language',
-  '- agentType: One of "context-gatherer", "writer", "reviewer", "tester", "debugger", "runner", "security", "mcp"',
+  '- agentType: One of "context-gatherer", "writer", "reviewer", "tester", "debugger", "runner", "security", "mcp", "git", "gitlab", "pr-review"',
   '- dependsOn: Array of step IDs that must complete before this one (empty array for first steps)',
   '',
   'Rules:',
