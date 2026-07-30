@@ -25,6 +25,8 @@ import { SecurityAgent } from './agents/security-agent.js';
 import { SkillRunnerAgent } from './agents/skill-runner.js';
 import { MCPAgent } from './agents/mcp-agent.js';
 import { PRReviewAgent } from './agents/pr-review-agent.js';
+import { IssueTriageAgent } from './agents/issue-triage-agent.js';
+import { BranchAutomationAgent } from './agents/branch-automation-agent.js';
 import { getEventBus, EventNames } from '../observability/event-bus.js';
 import type { EventBus } from '../observability/event-bus.js';
 
@@ -325,6 +327,20 @@ export class ModuleRegistry {
       name: 'PR Review',
       description: 'Reviews open GitHub PRs for security, quality, and correctness',
       icon: '👁️',
+      isBuiltin: true,
+    });
+
+    registry.register('issue-triage', () => new IssueTriageAgent(), {
+      name: 'Issue Triage',
+      description: 'Classifies, prioritizes, and labels open issues from GitHub and GitLab',
+      icon: '🏷️',
+      isBuiltin: true,
+    });
+
+    registry.register('branch-automation', () => new BranchAutomationAgent(), {
+      name: 'Branch Automation',
+      description: 'Automates branch workflows: issue-driven branches, PR updates, file-watch commits, CI fix detection',
+      icon: '🔀',
       isBuiltin: true,
     });
 

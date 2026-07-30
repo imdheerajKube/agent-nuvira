@@ -56,6 +56,20 @@ agent-nuvira config list
 - **CI/CD headless mode** — `buff ci` for automated pipelines with GitHub Actions integration
 - **npm publishing & one-line install** — `npx agent-nuvira` and `npx buff` for zero-setup onboarding
 - **Marketing website** — `website/` directory with a full landing page, SEO meta tags, and Netlify-ready deployment config
+- **Branch Automation Hooks (Pillar A4)** — `buff execute "install branch hooks" --auto-branch` installs
+  git post-checkout and pre-commit hooks for automated branch workflows; issue-driven branch creation
+  (`feat/PROJ-123-description`), PR label-triggered updates, file-watch auto-commit with conventional
+  commit messages, and CI failure detection with LLM diagnosis
+- **Issue Triage Engine (Pillar A3)** — Automated issue classification, prioritization, and labeling
+  across GitHub and GitLab via `buff execute "triage issues"` with LLM-powered analysis
+- **GitHub PR Review Agent (Pillar A2)** — Automatic inline code review on open PRs; reads diffs,
+  runs security/quality verification, and posts inline review comments via GitHub API
+- **GitLab API Integration (Pillar A1)** — Full GitLab agent for merge request management, issue
+  discovery, pipeline monitoring, and code review comments
+- **Chat Panel DAG Pipeline Visualization (Pillar B6)** — Live multi-agent pipeline visualization
+  inline in chat messages for slash commands, showing agent nodes with real-time status updates
+- **Real-Time Token Streaming in AgentPanel (Pillar B2)** — Live typewriter-effect token streaming
+  with blinking cursor and animated progress indicator in the agent progress panel
 - **Interactive development mode** — `buff execute` without a goal launches a guided interactive loop with session save/resume, follow-up suggestions, and failure analysis
 - **Session persistence** — save and resume development sessions across CLI restarts with full history
 - **Failure analysis** — automatic diagnosis of agent failures with specific recovery options per agent type
@@ -640,6 +654,58 @@ agent-nuvira model health
 ```
 
 **Priority chain:** CLI `--provider`/`--model` flags → `buff model switch` active state → default config file — the most specific wins.
+
+---
+
+### `agent-nuvira execute --auto-branch` — Branch Automation
+
+Automate your entire git workflow with trigger-based hooks. Install once, then let the agent handle branch creation, commits, and PR updates automatically.
+
+```bash
+# Step 1: Install branch automation hooks
+buff execute "install branch hooks" --auto-branch
+
+# Step 2: Check automation status
+buff execute "check branch status" --auto-branch
+
+# Step 3: Auto-create a branch from an issue
+buff execute "auto-create branch from issue PROJ-123" --auto-branch
+
+# Step 4: Auto-commit changes with a conventional message
+buff execute "auto-commit changes" --auto-branch
+
+# Step 5: Start file-watch mode (auto-commits on file changes)
+buff execute "start file watch" --auto-branch
+
+# Step 6: Diagnose CI failures
+buff execute "check CI for PR #42" --auto-branch
+```
+
+**Trigger Sources:**
+
+| Trigger | Action | Description |
+|---------|--------|-------------|
+| **Issue → Branch** | `feat/PROJ-123-description` | Auto-creates branches with conventional naming when issues are assigned |
+| **PR Label → Update** | `git push origin <branch>` | Commits and pushes changes when labels like `wip` or `needs-work` are detected |
+| **File Watch → Commit** | `git commit -m "feat(scope): ..."` | Background polling detects file changes and auto-commits with conventional messages |
+| **CI Status → Fix** | LLM diagnosis + fix plan | Analyzes CI failures from recent commits and suggests targeted fixes |
+
+**Conventional Commit Format:**
+
+```
+<type>(<scope>): <description>
+
+Types: feat, fix, refactor, docs, style, test, chore, perf
+Scope: module/area affected (auto-detected from changed files)
+```
+
+**Installed Hooks:**
+
+| Hook | Purpose |
+|------|---------|
+| `post-checkout` | Detects issue-based branches on checkout and loads context |
+| `pre-commit` | Enforces conventional commit format with auto-detection |
+| `file-watch.sh` | Background script that polls for changes and triggers auto-commits |
 
 ---
 

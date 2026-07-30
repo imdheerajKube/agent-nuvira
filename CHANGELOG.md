@@ -7,6 +7,36 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [1.37.0] - 2026-10-05
+
+### Added
+- **Branch Automation Hooks (Pillar A4)** — Automated branch workflow with 4 trigger sources:
+  - **Issue → Branch** — Auto-creates `feat/PROJ-123-description` branches from issue keys with
+    configurable branch type (feat/fix/chore) and sanitized naming
+  - **PR Label → Update** — Auto-commits changes and pushes to PR branch when labels like `wip`
+    or `needs-work` are detected
+  - **File Watch → Commit** — Background file-watch script with configurable polling interval
+    (default: 60s) that auto-commits with conventional commit messages on change detection
+  - **CI Status → Fix** — Analyzes CI failures from git context (recent commits, changed files)
+    with LLM-powered diagnosis and actionable fix suggestions
+- **Git hooks installer** — Installable post-checkout and pre-commit hooks that detect issue-based
+  branches and enforce conventional commit format; hooks are self-identifying (contain 'Agent-Nuvira'
+  marker) for clean removal
+- **Conventional commit generator** — Rule-based commit type detection from changed files
+  (test→test, docs→docs, fix→fix, feat→feat) with LLM fallback for contextual messages
+- **`--auto-branch` flag** — New CLI flag for `buff execute` enabling branch automation workflows
+- **Module registry** — `branch-automation` agent type registered in ModuleRegistry
+
+### Files
+| File | Change |
+|---|---|
+| `src/agents/agents/branch-automation-agent.ts` | **NEW** — BranchAutomationAgent (400+ lines)
+| `src/agents/agents/branch-automation-hooks.ts` | **NEW** — Git hooks manager (250 lines)
+| `src/agents/module-registry.ts` | **MODIFIED** — Added agent registration
+| `src/cli/execute.ts` | **MODIFIED** — Added `--auto-branch` flag + `ExecuteOptions.autoBranch`
+
+---
+
 ## [1.36.0] - 2026-10-04
 
 ### Added

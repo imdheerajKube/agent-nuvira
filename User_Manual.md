@@ -1,6 +1,6 @@
 # Agent-Nuvira — User Manual
 
-**Version 1.16.1 | August 2026**
+**Version 1.37.0 | October 2026**
 
 > *Agent-Nuvira: Multi-agent AI coding CLI — plan, write, review, test, and publish code with local models (Ollama) or cloud APIs (Groq, NVIDIA NIM, Google Gemini, OpenRouter).*
 
@@ -58,6 +58,10 @@ Agent-Nuvira is a **multi-agent AI coding assistant** that runs entirely from yo
 | **Session Save/Resume** | Save and restore entire development sessions with `/save <name>` and `/resume <name>` |
 | **Failure Analysis** | Automatic per-agent-type diagnosis with specific recovery actions (rephrase, switch model, auto-fix) |
 | **Follow-up Suggestions** | LLM-powered contextual next-step recommendations after goal completion |
+| **Branch Automation** | Automated git branch workflow with installable hooks — auto-create issue branches, auto-commit file changes, and auto-update PRs |
+| **Issue Triage** | Automated issue classification, prioritization, and labeling across GitHub and GitLab via LLM |
+| **DAG Pipeline Visualization** | Live multi-agent pipeline visualization inline in chat messages showing agent progress |
+| **Real-Time Streaming** | Typewriter-effect token streaming with blinking cursor in the agent progress panel |
 
 ### 1.3 Supported Platforms
 
@@ -590,6 +594,7 @@ Options:
   --review                   Create review bundle (don't apply changes)
   --context-limit <tokens>   Max tokens before pruning activates (default: 128000)
   --context-prune <mode>     Prune aggressiveness: soft | medium | aggressive (default: soft)
+  --auto-branch              Enable branch automation hooks and auto-workflows
 
 Examples:
   agent-nuvira execute "add JWT authentication"
@@ -1137,6 +1142,95 @@ agent-nuvira cache clear
 
 Responses are cached in `~/.buff/cache.db` (SQLite) with a default TTL of 1 hour.
 
+### 7.8 Branch Automation
+
+Agent-Nuvira's **Branch Automation** feature installs git hooks and provides automated branch workflows. It is designed to remove the overhead of manual git operations during development.
+
+#### Step 1: Install Hooks
+
+```bash
+buff execute "install branch hooks" --auto-branch
+```
+
+This installs three hooks in your repository's `.git/hooks/`:
+
+| Hook | Purpose |
+|------|---------|
+| **post-checkout** | Detects issue-based branches on checkout and loads context |
+| **pre-commit** | Enforces conventional commit format with auto-detection |
+| **file-watch.sh** | Background script that polls for file changes and triggers auto-commits |
+
+Each hook is self-identifying (contains an 'Agent-Nuvira' marker) for clean removal.
+
+#### Step 2: Check Automation Status
+
+```bash
+buff execute "check branch status" --auto-branch
+```
+
+Shows which hooks are currently installed and whether file-watch is active.
+
+#### Workflow 1: Issue → Branch
+
+Automatically create a branch with conventional naming from an issue key:
+
+```bash
+buff execute "auto-create branch from issue PROJ-123" --auto-branch
+# Creates: feat/PROJ-123-implement-user-authentication
+```
+
+Branch naming follows the convention: `<type>/<ISSUE-KEY>-<sanitized-title>` where type defaults to `feat`.
+
+#### Workflow 2: Auto-Commit File Changes
+
+```bash
+buff execute "auto-commit changes" --auto-branch
+```
+
+This stages all changed files (`git add -A`) and generates a conventional commit message:
+
+```
+<type>(<scope>): <description>
+
+Type detection: test → test, docs → docs, fix → fix, feat → feat, or defaults to 'chore'
+Scope: auto-detected from the changed file paths (e.g., `src/cli/` → `cli`)
+Description: LLM-generated based on the diff
+```
+
+#### Workflow 3: Start File-Watch Mode
+
+```bash
+buff execute "start file watch" --auto-branch
+```
+
+Starts a background script that polls for file changes (default interval: 60 seconds) and auto-commits them with conventional messages. Exits gracefully with `Ctrl+C`.
+
+#### Workflow 4: PR Label → Update
+
+When a PR has labels like `wip` or `needs-work`, the agent auto-commits and pushes changes to the PR branch:
+
+```bash
+buff execute "update PR branch" --auto-branch
+```
+
+#### Workflow 5: CI Status → Fix
+
+Analyzes CI failures from the latest commits and provides LLM-powered diagnosis:
+
+```bash
+buff execute "check CI for PR #42" --auto-branch
+```
+
+This inspects the commit history, identifies what changed, and provides a targeted fix suggestion.
+
+#### Remove Hooks
+
+```bash
+buff execute "remove branch hooks" --auto-branch
+```
+
+Removes only hooks containing the 'Agent-Nuvira' marker, leaving any pre-existing hooks intact.
+
 ---
 
 ## 8. Troubleshooting
@@ -1352,6 +1446,11 @@ rm -rf ~/.buff   # Remove all configuration and cached data
 | **Follow-up Suggestions** | LLM-generated contextual recommendations for what to do next after goal completion |
 | **MCP** | Model Context Protocol — connect to external tools and data sources via stdio or SSE transport |
 | **A2A** | Agent-to-Agent protocol — standard for inter-agent communication across machines |
+| **Branch Automation** | Automated git workflow with installable hooks — issue-to-branch creation, auto-commit with conventional messages, file-watch auto-commit, and CI failure diagnosis |
+| **Issue Triage** | Automated issue classification (bug/feature/question), priority assignment, auto-labeling, and assignee suggestions across GitHub and GitLab |
+| **DAG Pipeline Visualization** | Live multi-agent pipeline visualization inline in chat messages showing colored agent nodes with real-time status updates |
+| **Real-Time Streaming** | Typewriter-effect token streaming with blinking cursor and animated progress indicator in the VS Code agent panel |
+| **Conventional Commit** | Structured git commit format `<type>(<scope>): <description>` with auto-detection of type from changed files |
 
 ---
 
@@ -1427,7 +1526,15 @@ rm -rf ~/.buff   # Remove all configuration and cached data
 | **Follow-up Suggestions** | LLM-powered contextual next-step recommendations |
 | **/fix Command** | Retry last failed goal with failure context |
 
-### Phase 6: Architecture Migration — Modular Plugin Architecture
+### Phase 6: Platform Integration — GitLab, GitHub PR, Issue Triage & Branch Automation
+| Feature | Description |
+|---------|-------------|
+| **GitLab Integration** | Full GitLab agent for MR management, issue discovery, pipeline monitoring, and code review comments |
+| **GitHub PR Review Agent** | Automatic inline code review on open PRs with security/quality verification and inline review comments |
+| **Issue Triage Engine** | Automated issue classification (bug/feature/question/docs/chore), priority assignment, difficulty estimation, auto-labeling, and assignee suggestions |
+| **Branch Automation Hooks** | Installable git hooks for automated branch workflows — issue-driven branch creation, auto-commit with conventional messages, file-watch mode, PR updates, and CI failure diagnosis |
+
+### Phase 7: Architecture Migration — Modular Plugin Architecture
 | Feature | Description |
 |---------|-------------|
 | **RecoverModule (Phase 1)** | Extracted from ErrorRepairEngine — discriminated union strategies + RepairBudget (3 attempts with exponential backoff) |
@@ -1442,7 +1549,7 @@ rm -rf ~/.buff   # Remove all configuration and cached data
 | **TestModule (Phase 8)** | Sandboxed test execution — temp directory, multi-framework output parsing (vitest, jest, generic), EventBus events |
 | **SafeExecutionLayer (Phase 9)** | 3-domain safety system — file validation (size, gitignore, syntax, security scan), Docker sandbox (resource limits, container lifecycle), safe LLM calls (injection guardrail, prompt/response truncation, exponential backoff with circuit breaker) |
 
-### Agent Catalog — 15 Agent Roles & Management
+### Agent Catalog — 16+ Agent Roles & Management
 | Agent/Component | Type | Description |
 |-----------------|------|-------------|
 | **PlannerAgent** | Core | Analyzes goals, creates dependency-aware task plans |
@@ -1458,10 +1565,14 @@ rm -rf ~/.buff   # Remove all configuration and cached data
 | **SecurityAgent** | Safety | Scans for PII, prompt injection, and dangerous code patterns |
 | **SkillRunnerAgent** | Learning | Executes compiled skill scripts as pre-built task plans |
 | **MCPAgent** | Integration | Invokes MCP tools from connected servers via stdio or SSE transport |
+| **GitLabAgent** | Integration | GitLab MR management, issue discovery, pipeline monitoring |
+| **PRReviewAgent** | Review | GitHub PR review with inline comments + security scans |
+| **IssueTriageAgent** | Management | Issue classification, prioritization, auto-labeling |
+| **BranchAutomationAgent** | Publishing | Auto-create issue branches, file-watch commits, PR updates |
 | **Orchestrator** | Management | Coordinates all agents with dependency-aware scheduling, parallel execution, context pruning, and interactive recovery |
 
 ---
 
-> **Agent-Nuvira v1.16.1 | MIT License | Built by Dheeraj Sharma**
+> **Agent-Nuvira v1.37.0 | MIT License | Built by Dheeraj Sharma**
 > 
 > *[github.com/imdheerajKube/agent-nuvira](https://github.com/imdheerajKube/agent-nuvira)*

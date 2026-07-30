@@ -57,6 +57,7 @@ interface ExecuteOptions {
   review?: boolean;
   sandbox?: boolean;
   skipTests?: boolean;
+  autoBranch?: boolean;
   maxRepairs?: number;
   repairMode?: string;
   repairFallbackModels?: string;
@@ -160,6 +161,7 @@ export class ExecuteCommand extends BaseCommand {
       .option('--review', 'Create a review bundle capturing proposed changes (view with `buff team review show <id>`)', false)
       .option('--sandbox', 'Execute runner commands and tests inside a Docker sandbox', false)
       .option('--skip-tests', 'Skip tester and debugger steps (code generation only)', false)
+      .option('--auto-branch', 'Enable branch automation hooks (install, commit, PR update, file watch)', false)
       .option('--max-repairs <number>', 'Max auto-repair attempts per failed task (default: 3, 0 = disabled)', parseInt)
       .option('--repair-mode <mode>', 'Repair mode: auto | prompt | off (default: auto)')
       .option('--repair-fallback-models <models>', 'Comma-separated fallback models for repair (e.g., groq/llama3,nim/mistral)')
