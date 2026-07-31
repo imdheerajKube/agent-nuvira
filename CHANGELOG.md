@@ -7,6 +7,33 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [1.39.3] - 2026-07-31
+
+### Added
+- **`buff benchmark --routing`** — benchmarks the exact provider/model pairs the Auto router
+  picks for each benchmark task (via `getAutoRouter().resolve` with runtime stats), dedupes
+  distinct picks with task counts, runs the filtered suite against every pick (skipping
+  unavailable providers), then ranks them by measured quality with a 🏆 best-pick summary.
+  Closes the routing → quality loop: results feed the router's runtime stats. Warns when
+  `--provider`/`--model`/`--format` are ignored in routing mode
+- **`buff model explain --json`** — machine-readable explain output for scripting and CI.
+  Single task → one decision object; no task → all 5 sample complexities. Payload includes
+  task, agentType, complexity, taskType, weights, winner, ranked providers (score, reason,
+  dimensions, cooldown), fallback chain, and effective per-provider pricing with override flags
+- **Explain command now matches production routing** — `renderRoutingDecision` resolves with
+  `useRuntimeStats: true` (same as chat/orchestrator) so the displayed decision reflects
+  benchmark- and agent-stats-adjusted scores
+- **Tests (6)** — `tests/cli/model.test.ts`: detailed render, 5-complexity walk, single-task
+  JSON, sample-array JSON, `--agent` routing, ranked best-first ordering
+
+### Changed
+- `benchmark.ts` — `--routing` flag + `runRoutingBenchmark()`; `BenchmarkRun` type import
+- `model.ts` — `-j, --json` option + `buildExplainJSON()`
+- Docs — README (explain `--json` + `benchmark --routing` examples), User_Manual (Auto Model
+  Routing § + benchmark options), Product_Guide Key Upgrades rows
+
+---
+
 ## [1.39.2] - 2026-07-31
 
 ### Added

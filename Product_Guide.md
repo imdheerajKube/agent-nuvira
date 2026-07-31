@@ -495,6 +495,8 @@ src/web-dashboard/              # React web dashboard
 | **Configurable Routing Pricing** | v1.39.2 | Override any provider's per-1K-token pricing via `buff config set pricing.<provider>.inputPer1K|outputPer1K` — real rates feed the Auto router's cost dimension (free tiers default to $0) |
 | **Model Explain Command** | v1.39.2 | `buff model explain [task]` shows why Auto routing picked a provider/model — complexity, dimension weights, ranked providers, fallback chain; walks all 5 complexity levels without a task |
 | **Dashboard Routing Insights** | v1.39.2 | New `GET /api/routing` endpoint + 🤖 Routing dashboard panel — per-provider benchmark quality, best model per agent, and Auto-router preference across complexity levels |
+| **Routing Benchmark Mode** | v1.39.3 | `buff benchmark --routing` benchmarks the exact provider/model pairs the Auto router picks for each task, then ranks them by measured quality — closing the routing→quality loop (results feed runtime stats) |
+| **Model Explain JSON** | v1.39.3 | `buff model explain "<task>" --json` emits a machine-readable payload (weights, ranked providers, winner, fallback chain, effective per-provider pricing with override flags) for scripting and CI |
 
 ### 3.3 Feature Maturity Matrix
 

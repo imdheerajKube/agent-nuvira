@@ -665,6 +665,10 @@ buff config       # see the AUTO ROUTING PRICING section
 **Decisions are runtime-adjusted.** Benchmark quality from `buff benchmark` runs is blended into the reasoning dimension, and the proven best model for each agent type (from agent stats) gets a reliability boost.
 
 **Understand every decision** with `buff model explain "<task>"` — it shows the detected complexity, the dimension weights, the full ranked provider table with reasons, and the fallback chain. With no task it walks through all five complexity levels. The web dashboard's **Routing** panel (nav: 🤖 Routing) visualizes the same data.
+
+For scripting and CI, `buff model explain "<task>" --json` emits a machine-readable payload (task, complexity, weights, ranked providers, winner, fallback chain, effective per-provider pricing with override flags).
+
+**Close the routing → quality loop** with `buff benchmark --routing` — it asks the Auto router which provider/model it would pick for each benchmark task, then runs the suite against every distinct pick and ranks them by measured quality, feeding those results back into the router's runtime stats.
 - **Cloud models for high-complexity tasks** — critical production/security work favors reliability + reasoning
 
 Selection scores every configured provider across **5 dimensions** — reasoning, speed, cost, privacy, and reliability — weighted by the detected task complexity. Providers in circuit-breaker cooldown are deprioritized, and a fallback chain keeps the pipeline running if the primary provider fails.
@@ -772,6 +776,8 @@ Options:
   --model <model>        Run benchmarks against a specific model
   --tasks <filter>       Filter tasks by speed (quick, medium, all)
   --budget <amount>      Cost cap in USD (default: no limit)
+  --routing              Benchmark the exact provider/model pairs the Auto router picks
+                         (closes the routing→quality loop; provider/model flags ignored)
 
 Commands:
   (no subcommand)        Run the full benchmark suite interactively

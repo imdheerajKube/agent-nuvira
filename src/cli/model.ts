@@ -145,6 +145,19 @@ const PROVIDER_ELIGIBILITY: Record<string, string> = {
   groq: 'Set GROQ_API_KEY (get at console.groq.com)',
 };
 
+/**
+ * Sample tasks used by `buff model explain` (no-task mode) to walk every
+ * complexity level. Shared by the human rendering and the --json output so
+ * they never drift apart.
+ */
+const EXPLAIN_SAMPLES: Array<{ label: string; task: string }> = [
+  { label: '🟢 trivial', task: 'format this code' },
+  { label: '🔵 simple', task: 'add a simple utility function' },
+  { label: '🟡 moderate', task: 'implement JWT authentication with refresh tokens' },
+  { label: '🟠 complex', task: 'design a distributed event-driven microservices architecture' },
+  { label: '🔴 critical', task: 'deploy to production with zero downtime' },
+];
+
 // ─── ModelCommand ───────────────────────────────────────────────────────────
 
 export class ModelCommand extends BaseCommand {
@@ -183,7 +196,8 @@ export class ModelCommand extends BaseCommand {
       .command('explain [task]')
       .description('Explain Auto model routing — why a provider/model would be picked for a task')
       .option('-a, --agent <type>', 'Agent type to route for (default: chat)', 'chat')
-      .action((task: string | undefined, opts: { agent?: string }) => this.showExplain(task, opts));
+      .option('-j, --json', 'Output as JSON (for scripting and CI)', false)
+      .action((task: string | undefined, opts: { agent?: string; json?: boolean }) => this.showExplain(task, opts));
 
     cmd
       .command('health')
@@ -552,9 +566,14 @@ export class ModelCommand extends BaseCommand {
 
   // ── Subcommand: explain ───────────────────────────────────────────────
 
-  private showExplain(task: string | undefined, opts: { agent?: string }): void {
+  private showExplain(task: string | undefined, opts: { agent?: string; json?: boolean }): void {
     const router = getAutoRouter();
     const agentType = opts.agent || 'chat';
+
+    if (opts.json) {
+      console.log(JSON.stringify(this.buildExplainJSON(router, agentType, task), null, 2));
+      return;
+    }
 
     console.log('');
     logger.highlight('═══  Auto Model Routing — Explain  ═══');
@@ -568,15 +587,7 @@ export class ModelCommand extends BaseCommand {
     }
 
     // No task given — walk through sample tasks across all complexity levels
-    const samples: Array<{ label: string; task: string }> = [
-      { label: '🟢 trivial', task: 'format this code' },
-      { label: '🔵 simple', task: 'add a simple utility function' },
-      { label: '🟡 moderate', task: 'implement JWT authentication with refresh tokens' },
-      { label: '🟠 complex', task: 'design a distributed event-driven microservices architecture' },
-      { label: '🔴 critical', task: 'deploy to production with zero downtime' },
-    ];
-
-    for (const s of samples) {
+    for (const s of EXPLAIN_SAMPLES) {
       logger.highlight(`  ${s.label} — "${s.task}"`);
       this.renderRoutingDecision(router, agentType, s.task, true);
       console.log('');
@@ -585,13 +596,72 @@ export class ModelCommand extends BaseCommand {
     console.log('');
     logger.info('Pass a task for a single detailed decision: `buff model explain "your task"`');
     logger.info('Route for a specific agent: `buff model explain --agent writer "your task"`');
-    logger.info('Pin Auto routing: `buff model switch auto` · Per-task in execute: `buff execute "<goal>" -m auto`');
+    logger.info('JSON for scripting/CI: `buff model explain "your task" --json`');
     console.log('');
+  }
+
+  /**
+   * Build a machine-readable explanation payload.
+   * Single task → one decision object; no task → all 5 sample complexities.
+   * Includes effective per-provider pricing (with override flags).
+   */
+  private buildExplainJSON(
+    router: AutoModelRouter,
+    agentType: string,
+    task: string | undefined,
+  ): Record<string, unknown> {
+    const toJSON = (t: string, agent: string): Record<string, unknown> => {
+      const d = router.resolve(agent, t, { useRuntimeStats: true }, this.configManager);
+      const pricingOverrides = this.configManager.getAll().pricing || {};
+      const pricing: Record<string, { inputPer1K: number; outputPer1K: number; overridden: boolean }> = {};
+      for (const r of d.ranked) {
+        const p = router.getProviderPricing(r.provider, this.configManager);
+        pricing[r.provider] = {
+          inputPer1K: p.inputPer1K,
+          outputPer1K: p.outputPer1K,
+          overridden: !!pricingOverrides[r.provider],
+        };
+      }
+      return {
+        task: t,
+        agentType: agent,
+        complexity: d.complexity,
+        taskType: d.taskType,
+        weights: d.weights,
+        winner: {
+          provider: d.provider,
+          model: d.model,
+          score: Math.round(d.score * 1000) / 1000,
+        },
+        ranked: d.ranked.map((r) => ({
+          provider: r.provider,
+          score: Math.round(r.score * 1000) / 1000,
+          inCooldown: r.inCooldown,
+          reason: r.reason,
+          dimensions: r.dimensions,
+        })),
+        fallbackChain: d.fallbackChain.map((c) => ({
+          provider: c.provider,
+          model: c.model,
+          qualityScore: Math.round(c.qualityScore * 1000) / 1000,
+          reason: c.reason,
+        })),
+        pricing,
+        explanation: d.explanation,
+      };
+    };
+
+    if (task) return toJSON(task, agentType);
+
+    return {
+      agentType,
+      decisions: EXPLAIN_SAMPLES.map((s) => toJSON(s.task, agentType)),
+    };
   }
 
   /** Render a single routing decision (compact or detailed). */
   private renderRoutingDecision(router: AutoModelRouter, agentType: string, task: string, compact = false): void {
-    const decision = router.resolve(agentType, task, {}, this.configManager);
+    const decision = router.resolve(agentType, task, { useRuntimeStats: true }, this.configManager);
 
     if (compact) {
       console.log(`  → ${decision.provider}/${decision.model}  (score ${decision.score.toFixed(2)}, ${decision.complexity})`);
