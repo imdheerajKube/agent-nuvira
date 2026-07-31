@@ -11,6 +11,7 @@ import BenchmarkCharts from './components/BenchmarkCharts';
 import MemoryPanel from './components/MemoryPanel';
 import HealthPanel from './components/HealthPanel';
 import ModelsPanel from './components/ModelsPanel';
+import RoutingInsightsPanel from './components/RoutingInsightsPanel';
 
 export default function App() {
   const [data, setData] = useState<DashboardData | null>(null);
@@ -54,6 +55,7 @@ export default function App() {
         <Route path="/benchmarks" element={<BenchmarkCharts data={data} />} />
         <Route path="/memory" element={<MemoryPanel data={data} />} />
         <Route path="/models" element={<ModelsPanel />} />
+        <Route path="/routing" element={<RoutingInsightsPanel data={data} />} />
         <Route path="/system" element={<HealthPanel data={data} />} />
         <Route path="*" element={<Navigate to="/" replace />} />
       </Routes>

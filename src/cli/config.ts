@@ -103,6 +103,17 @@ export class ConfigCommand extends BaseCommand {
       }
       console.log('');
     }
+
+    // Show auto-routing pricing overrides
+    if (config.pricing && Object.keys(config.pricing).length > 0) {
+      logger.highlight('AUTO ROUTING PRICING (USD per 1K tokens):');
+      for (const [provider, pricing] of Object.entries(config.pricing)) {
+        const input = pricing?.inputPer1K !== undefined ? pricing.inputPer1K : 'built-in';
+        const output = pricing?.outputPer1K !== undefined ? pricing.outputPer1K : 'built-in';
+        console.log(`  ${provider}: in ${input} / out ${output}`);
+      }
+      console.log('');
+    }
   }
 
   private getValue(key: string): void {
@@ -137,7 +148,7 @@ export class ConfigCommand extends BaseCommand {
       if (key === 'defaultProvider') {
         this.configManager.save({ defaultProvider: value as ProviderType });
       } else {
-        logger.error(`Unknown config key: ${key}. Expected formats:\n  defaultProvider\n  providers.<name>.<field>\n  history.retentionDays\n  history.semanticSearch\n  fallback.enabled\n  fallback.providers`);
+        logger.error(`Unknown config key: ${key}. Expected formats:\n  defaultProvider\n  providers.<name>.<field>\n  pricing.<provider>.inputPer1K\n  pricing.<provider>.outputPer1K\n  history.retentionDays\n  history.semanticSearch\n  fallback.enabled\n  fallback.providers`);
         return;
       }
     } else if (parts.length === 2 && parts[0] === 'history') {
@@ -187,6 +198,29 @@ export class ConfigCommand extends BaseCommand {
           [providerName]: {
             ...providerConfig,
             [field]: typedValue,
+          },
+        },
+      } as Partial<typeof config>);
+    } else if (parts.length === 3 && parts[0] === 'pricing') {
+      // pricing.<provider>.inputPer1K | pricing.<provider>.outputPer1K
+      const providerName = parts[1];
+      const field = parts[2];
+
+      if (field !== 'inputPer1K' && field !== 'outputPer1K') {
+        logger.error(`Unknown pricing config key: ${field}. Valid keys: inputPer1K, outputPer1K`);
+        return;
+      }
+
+      const num = Number(value);
+      if (isNaN(num) || num < 0) {
+        logger.error(`Invalid number for ${key}: "${value}". Must be a non-negative number.`);
+        return;
+      }
+
+      this.configManager.save({
+        pricing: {
+          [providerName]: {
+            [field]: num,
           },
         },
       } as Partial<typeof config>);
@@ -242,7 +276,7 @@ export class ConfigCommand extends BaseCommand {
         return;
       }
     } else {
-      logger.error(`Invalid config key format: ${key}. Expected formats:\n  defaultProvider\n  providers.<name>.<field>\n  history.retentionDays\n  history.semanticSearch\n  fallback.enabled\n  fallback.providers`);
+      logger.error(`Invalid config key format: ${key}. Expected formats:\n  defaultProvider\n  providers.<name>.<field>\n  pricing.<provider>.inputPer1K\n  pricing.<provider>.outputPer1K\n  history.retentionDays\n  history.semanticSearch\n  fallback.enabled\n  fallback.providers`);
       return;
     }
 

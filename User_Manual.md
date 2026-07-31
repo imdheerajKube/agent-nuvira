@@ -640,8 +640,8 @@ Examples:
   agent-nuvira model list                      # All providers with status
   agent-nuvira model switch                    # Interactive categorized picker
   agent-nuvira model switch groq               # Switch to Groq
-  agent-nuvira model switch groq/llama-3.3-70b # Switch to specific model
-  agent-nuvira model switch auto               # Auto routing — agent picks the best model per task
+  agent-nuvira model switch groq/llama-3.3-70b # Switch to specific model   agent-nuvira model switch auto               # Auto routing — agent picks the best model per task
+   agent-nuvira model explain "your task"        # Why Auto picked a model (weights, ranking, fallback)
 ```
 
 Switching preserves all conversation history and agent state — seamless mid-session migration.
@@ -653,6 +653,18 @@ Selecting **Auto** (option 1 in the picker, or `agent-nuvira model switch auto`)
 - **Fast planning with small models** — trivial/simple tasks route to fast, cheap providers (e.g., Groq)
 - **Deep reasoning with larger models** — complex/critical tasks route to stronger providers (e.g., Gemini, OpenRouter)
 - **Local models for private tasks** — `privacy-first` mode routes to the local provider
+
+**Cost scoring uses real pricing.** Each provider is scored against its actual per-1K-token list price (free tiers count as $0). You can override any provider's pricing to match your negotiated or self-hosted rates:
+
+```bash
+buff config set pricing.gemini.inputPer1K 0.00125
+buff config set pricing.gemini.outputPer1K 0.005
+buff config       # see the AUTO ROUTING PRICING section
+```
+
+**Decisions are runtime-adjusted.** Benchmark quality from `buff benchmark` runs is blended into the reasoning dimension, and the proven best model for each agent type (from agent stats) gets a reliability boost.
+
+**Understand every decision** with `buff model explain "<task>"` — it shows the detected complexity, the dimension weights, the full ranked provider table with reasons, and the fallback chain. With no task it walks through all five complexity levels. The web dashboard's **Routing** panel (nav: 🤖 Routing) visualizes the same data.
 - **Cloud models for high-complexity tasks** — critical production/security work favors reliability + reasoning
 
 Selection scores every configured provider across **5 dimensions** — reasoning, speed, cost, privacy, and reliability — weighted by the detected task complexity. Providers in circuit-breaker cooldown are deprioritized, and a fallback chain keeps the pipeline running if the primary provider fails.

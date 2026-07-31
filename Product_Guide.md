@@ -492,6 +492,9 @@ src/web-dashboard/              # React web dashboard
 | **Cross-Platform Dependency Installer** | v1.38.0 | Runner bootstrap-installs missing package managers (brew/apt/winget/rustup) and installs project deps automatically |
 | **Tool-Install Unit Tests** | v1.38.0 | 20 tests covering npm/pip/bundler/cargo/go/dart/brew bootstrap paths, failure propagation, PATH diagnostics |
 | **Auto Model Routing** | v1.39.0 | `Auto` model selection — agent decides the best provider/model per task; 5-dimension scoring with complexity weights, real provider pricing, preference modes (balanced / performance-first / cost-first / privacy-first), circuit-breaker cooldown deprioritization, benchmark + agent-stats runtime adjustment |
+| **Configurable Routing Pricing** | v1.39.2 | Override any provider's per-1K-token pricing via `buff config set pricing.<provider>.inputPer1K|outputPer1K` — real rates feed the Auto router's cost dimension (free tiers default to $0) |
+| **Model Explain Command** | v1.39.2 | `buff model explain [task]` shows why Auto routing picked a provider/model — complexity, dimension weights, ranked providers, fallback chain; walks all 5 complexity levels without a task |
+| **Dashboard Routing Insights** | v1.39.2 | New `GET /api/routing` endpoint + 🤖 Routing dashboard panel — per-provider benchmark quality, best model per agent, and Auto-router preference across complexity levels |
 
 ### 3.3 Feature Maturity Matrix
 

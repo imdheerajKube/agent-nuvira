@@ -147,6 +147,32 @@ export interface HealthData {
   memoryDir: string;
 }
 
+// ─── Auto Routing Insights Types ────────────────────────────────────────────
+
+export interface RoutingInsights {
+  providers: Array<{
+    provider: string;
+    runs: number;
+    avgQuality: number;
+    passRate: number;
+    totalCostUsd: number;
+    bestModel?: string;
+  }>;
+  bestModels: Array<{
+    agentType: string;
+    model: string;
+    successRate: number;
+    runs: number;
+  }>;
+  preference: Array<{
+    complexity: string;
+    winner: string;
+    score: number;
+    providers: Array<{ provider: string; score: number; reason: string }>;
+  }>;
+  updatedAt: number;
+}
+
 export interface DashboardData {
   cost: CostData;
   history: HistoryData;
@@ -154,6 +180,7 @@ export interface DashboardData {
   evals?: EvalData;
   memory: MemoryData;
   health: HealthData;
+  routing?: RoutingInsights;
   dag?: DAGData;
   serverTime: number;
 }

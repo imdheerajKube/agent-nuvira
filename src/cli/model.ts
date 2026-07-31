@@ -31,7 +31,15 @@ import { getPluginRegistry } from '../plugins/registry.js';
 import type { ProviderType, ProviderConfig } from '../config/types.js';
 import { getModelBadge } from '../inference/model-catalog.js';
 import { getHybridRouter } from '../learning/hybrid-router.js';
-import { AUTO_MODEL, AUTO_PROVIDER, isAutoModel, isAutoProvider } from '../learning/auto-router.js';
+import {
+  AUTO_MODEL,
+  AUTO_PROVIDER,
+  getAutoRouter,
+  isAutoModel,
+  isAutoProvider,
+  type AutoModelRouter,
+  type RoutingDimension,
+} from '../learning/auto-router.js';
 import { logger } from '../utils/logger.js';
 
 // ─── Active Model State ─────────────────────────────────────────────────────
@@ -170,6 +178,12 @@ export class ModelCommand extends BaseCommand {
       .command('recommend')
       .description('Show model routing recommendations')
       .action(() => this.showRecommendations());
+
+    cmd
+      .command('explain [task]')
+      .description('Explain Auto model routing — why a provider/model would be picked for a task')
+      .option('-a, --agent <type>', 'Agent type to route for (default: chat)', 'chat')
+      .action((task: string | undefined, opts: { agent?: string }) => this.showExplain(task, opts));
 
     cmd
       .command('health')
@@ -533,6 +547,84 @@ export class ModelCommand extends BaseCommand {
     console.log('');
     logger.info('Run `buff model switch` to change providers.');
     logger.info('Run `buff model list` to see availability status.');
+    console.log('');
+  }
+
+  // ── Subcommand: explain ───────────────────────────────────────────────
+
+  private showExplain(task: string | undefined, opts: { agent?: string }): void {
+    const router = getAutoRouter();
+    const agentType = opts.agent || 'chat';
+
+    console.log('');
+    logger.highlight('═══  Auto Model Routing — Explain  ═══');
+    console.log('');
+
+    if (task) {
+      logger.info(`Task: "${task}"  ·  Agent: ${agentType}`);
+      console.log('');
+      this.renderRoutingDecision(router, agentType, task);
+      return;
+    }
+
+    // No task given — walk through sample tasks across all complexity levels
+    const samples: Array<{ label: string; task: string }> = [
+      { label: '🟢 trivial', task: 'format this code' },
+      { label: '🔵 simple', task: 'add a simple utility function' },
+      { label: '🟡 moderate', task: 'implement JWT authentication with refresh tokens' },
+      { label: '🟠 complex', task: 'design a distributed event-driven microservices architecture' },
+      { label: '🔴 critical', task: 'deploy to production with zero downtime' },
+    ];
+
+    for (const s of samples) {
+      logger.highlight(`  ${s.label} — "${s.task}"`);
+      this.renderRoutingDecision(router, agentType, s.task, true);
+      console.log('');
+    }
+
+    console.log('');
+    logger.info('Pass a task for a single detailed decision: `buff model explain "your task"`');
+    logger.info('Route for a specific agent: `buff model explain --agent writer "your task"`');
+    logger.info('Pin Auto routing: `buff model switch auto` · Per-task in execute: `buff execute "<goal>" -m auto`');
+    console.log('');
+  }
+
+  /** Render a single routing decision (compact or detailed). */
+  private renderRoutingDecision(router: AutoModelRouter, agentType: string, task: string, compact = false): void {
+    const decision = router.resolve(agentType, task, {}, this.configManager);
+
+    if (compact) {
+      console.log(`  → ${decision.provider}/${decision.model}  (score ${decision.score.toFixed(2)}, ${decision.complexity})`);
+      return;
+    }
+
+    console.log(`  Complexity: ${decision.complexity}  ·  Task type: ${decision.taskType}`);
+    console.log('');
+
+    logger.highlight('  ── Dimension weights ──');
+    for (const dim of Object.keys(decision.weights) as RoutingDimension[]) {
+      const pct = Math.round(decision.weights[dim] * 100);
+      const bar = '█'.repeat(Math.round(pct / 5)).padEnd(20, '░');
+      console.log(`   ${dim.padEnd(12)} ${bar} ${pct}%`);
+    }
+    console.log('');
+
+    logger.highlight('  ── Ranked providers ──');
+    decision.ranked.forEach((r, i) => {
+      const mark = r.provider === decision.provider ? '✅' : '  ';
+      const cd = r.inCooldown ? '  (circuit-breaker cooldown)' : '';
+      console.log(`   ${mark} ${i + 1}. ${r.provider.padEnd(12)} score ${r.score.toFixed(3)}  ${r.reason}${cd}`);
+    });
+    console.log('');
+
+    logger.success(`  Decision: ${decision.provider}/${decision.model}`);
+    console.log(`  ${decision.explanation}`);
+    console.log('');
+
+    logger.highlight('  ── Fallback chain ──');
+    for (const c of decision.fallbackChain) {
+      console.log(`   → ${c.provider}/${c.model}  (${c.reason})`);
+    }
     console.log('');
   }
 

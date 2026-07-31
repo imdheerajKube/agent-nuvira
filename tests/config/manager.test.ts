@@ -274,6 +274,79 @@ describe('ConfigManager', () => {
     });
   });
 
+  describe('pricing config', () => {
+    it('should default to empty pricing overrides', () => {
+      const manager = new ConfigManager(join(testDir, 'test-pricing-default'));
+      const config = manager.getAll();
+
+      expect(config.pricing).toBeDefined();
+      expect(Object.keys(config.pricing!)).toHaveLength(0);
+    });
+
+    it('should load pricing overrides from file', () => {
+      const configDir = join(testDir, 'test-pricing-load');
+      mkdirSync(configDir, { recursive: true });
+      writeFileSync(
+        join(configDir, 'buffconfig.json'),
+        JSON.stringify({ pricing: { gemini: { inputPer1K: 0.00125 } } }),
+        'utf-8',
+      );
+
+      const manager = new ConfigManager(configDir);
+      const config = manager.getAll();
+
+      expect(config.pricing!.gemini).toBeDefined();
+      expect(config.pricing!.gemini!.inputPer1K).toBe(0.00125);
+    });
+
+    it('should merge partial provider pricing with existing values', () => {
+      const configDir = join(testDir, 'test-pricing-merge');
+      mkdirSync(configDir, { recursive: true });
+      writeFileSync(
+        join(configDir, 'buffconfig.json'),
+        JSON.stringify({ pricing: { groq: { inputPer1K: 0.0005 } } }),
+        'utf-8',
+      );
+
+      const manager = new ConfigManager(configDir);
+      const config = manager.getAll();
+
+      expect(config.pricing!.groq!.inputPer1K).toBe(0.0005);
+      // outputPer1K remains unset (falls back to the built-in table at routing time)
+      expect(config.pricing!.groq!.outputPer1K).toBeUndefined();
+    });
+
+    it('should save pricing overrides to disk', () => {
+      const configDir = join(testDir, 'test-pricing-save');
+      const manager = new ConfigManager(configDir);
+
+      manager.save({ pricing: { groq: { inputPer1K: 0.0005, outputPer1K: 0.001 } } } as any);
+
+      const saved = JSON.parse(readFileSync(join(configDir, 'buffconfig.json'), 'utf-8'));
+      expect(saved.pricing.groq.inputPer1K).toBe(0.0005);
+      expect(saved.pricing.groq.outputPer1K).toBe(0.001);
+    });
+
+    it('should preserve per-field pricing overrides across sequential saves', () => {
+      // Mirrors `buff config set pricing.groq.inputPer1K X` then
+      // `buff config set pricing.groq.outputPer1K Y` — both fields must survive.
+      const configDir = join(testDir, 'test-pricing-sequential');
+      const manager = new ConfigManager(configDir);
+
+      manager.save({ pricing: { groq: { inputPer1K: 0.0005 } } } as any);
+      manager.save({ pricing: { groq: { outputPer1K: 0.001 } } } as any);
+
+      const saved = JSON.parse(readFileSync(join(configDir, 'buffconfig.json'), 'utf-8'));
+      expect(saved.pricing.groq.inputPer1K).toBe(0.0005);
+      expect(saved.pricing.groq.outputPer1K).toBe(0.001);
+
+      // Also survives a reload from disk
+      const reloaded = new ConfigManager(configDir);
+      expect(reloaded.getAll().pricing!.groq!.inputPer1K).toBe(0.0005);
+      expect(reloaded.getAll().pricing!.groq!.outputPer1K).toBe(0.001);
+    });
+  });
+
   describe('semanticSearch config', () => {
     it('should default to true', () => {
       const manager = new ConfigManager(join(testDir, 'test-t'));

@@ -42,6 +42,7 @@ import { getTaskType, type TaskType } from './model-router.js';
 import { getBenchmarkRuns } from './benchmark.js';
 import { getAgentStats } from './agent-stats.js';
 import type { ConfigManager } from '../config/manager.js';
+import type { ProviderPricing } from '../config/types.js';
 import { logger } from '../utils/logger.js';
 
 // ─── Constants ──────────────────────────────────────────────────────────────
@@ -122,9 +123,7 @@ export interface ScoredProvider {
   inCooldown: boolean;
   /** Why this provider ranked where it did */
   reason: string;
-}
-
-/** The final auto-routing decision for a single task. */
+}  /** The final auto-routing decision for a single task. */
 export interface AutoRouteResult {
   /** The agent type this decision is for */
   agentType: string;
@@ -138,6 +137,8 @@ export interface AutoRouteResult {
   model: string;
   /** Composite score of the selected provider (0–1) */
   score: number;
+  /** Effective dimension weights used for this decision */
+  weights: Record<RoutingDimension, number>;
   /** All scored providers, ranked best-first */
   ranked: ScoredProvider[];
   /** Full fallback chain (primary first) — ModelCandidate[] for HybridModelRouter compat */
@@ -194,9 +195,14 @@ const TYPICAL_OUTPUT_TOKENS = 500;
 
 /**
  * Estimate the USD cost of a typical call for a provider.
+ * An optional pricing override (e.g., from `buff config set pricing.*`)
+ * takes precedence over the built-in table.
  */
-export function estimateCallCostUsd(provider: string): number {
-  const p = PROVIDER_PRICING_PER_1K[provider] || { inputPer1K: 0.00010, outputPer1K: 0.00010 };
+export function estimateCallCostUsd(
+  provider: string,
+  pricing?: { inputPer1K: number; outputPer1K: number },
+): number {
+  const p = pricing || PROVIDER_PRICING_PER_1K[provider] || { inputPer1K: 0.00010, outputPer1K: 0.00010 };
   const inputCost = (TYPICAL_INPUT_TOKENS / 1000) * p.inputPer1K;
   const outputCost = (TYPICAL_OUTPUT_TOKENS / 1000) * p.outputPer1K;
   return Math.round((inputCost + outputCost) * 100000) / 100000;
@@ -206,8 +212,11 @@ export function estimateCallCostUsd(provider: string): number {
  * Derive the 0–1 cost score (higher = cheaper) from real provider pricing.
  * Free providers (local, Gemini free tier) score 1.0.
  */
-export function computeCostScore(provider: string): number {
-  const costUsd = estimateCallCostUsd(provider);
+export function computeCostScore(
+  provider: string,
+  pricing?: { inputPer1K: number; outputPer1K: number },
+): number {
+  const costUsd = estimateCallCostUsd(provider, pricing);
   const score = 1 - costUsd / COST_REFERENCE_USD;
   return Math.max(0, Math.min(1, score));
 }
@@ -363,7 +372,8 @@ export class AutoModelRouter {
       let caps = this.getCapabilities(provider);
       // Real pricing replaces the static cost capability
       if (options.useRealPricing !== false) {
-        caps = { ...caps, cost: computeCostScore(provider) };
+        const pricing = this.getProviderPricing(provider, configManager);
+        caps = { ...caps, cost: computeCostScore(provider, pricing) };
       }
       // Runtime data adjusts reasoning/reliability from real performance
       if (runtime) {
@@ -418,9 +428,27 @@ export class AutoModelRouter {
       provider,
       model,
       score: selected.score,
+      weights,
       ranked: scored,
       fallbackChain,
       explanation,
+    };
+  }
+
+  /**
+   * Resolve the effective per-1K-token pricing for a provider.
+   * Config overrides (`buff config set pricing.<provider>...`) win over the
+   * built-in pricing table; unknown providers fall back to a cheap default.
+   */
+  getProviderPricing(
+    provider: string,
+    configManager?: ConfigManager,
+  ): { inputPer1K: number; outputPer1K: number } {
+    const override: ProviderPricing | undefined = configManager?.getAll().pricing?.[provider];
+    const builtin = PROVIDER_PRICING_PER_1K[provider] || { inputPer1K: 0.00010, outputPer1K: 0.00010 };
+    return {
+      inputPer1K: override?.inputPer1K ?? builtin.inputPer1K,
+      outputPer1K: override?.outputPer1K ?? builtin.outputPer1K,
     };
   }
 

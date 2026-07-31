@@ -377,6 +377,69 @@ describe('real provider pricing', () => {
   });
 });
 
+// ─── Pricing overrides ──────────────────────────────────────────────────────
+
+describe('pricing overrides', () => {
+  it('estimateCallCostUsd accepts a pricing override', () => {
+    // Free override → $0 regardless of the built-in table
+    expect(estimateCallCostUsd('groq', { inputPer1K: 0, outputPer1K: 0 })).toBe(0);
+    // Expensive override
+    expect(estimateCallCostUsd('groq', { inputPer1K: 0.05, outputPer1K: 0.05 })).toBeGreaterThan(0);
+    // No override → built-in table
+    expect(estimateCallCostUsd('groq')).toBe(0.00158); // 2*0.00059 + 0.5*0.00079
+  });
+
+  it('computeCostScore accepts a pricing override', () => {
+    expect(computeCostScore('groq', { inputPer1K: 0, outputPer1K: 0 })).toBe(1.0);
+    // Cost above the reference clamps to 0
+    expect(computeCostScore('local', { inputPer1K: 0.05, outputPer1K: 0.05 })).toBe(0);
+    expect(computeCostScore('groq')).toBeCloseTo(0.842, 2);
+  });
+
+  it('getProviderPricing falls back to the built-in table without config', () => {
+    const router = new AutoModelRouter();
+    expect(router.getProviderPricing('groq')).toEqual({ inputPer1K: 0.00059, outputPer1K: 0.00079 });
+    expect(router.getProviderPricing('local')).toEqual({ inputPer1K: 0, outputPer1K: 0 });
+    expect(router.getProviderPricing('unknown-provider')).toEqual({ inputPer1K: 0.0001, outputPer1K: 0.0001 });
+  });
+
+  it('getProviderPricing applies config overrides per field', () => {
+    const router = new AutoModelRouter();
+    const configManager = {
+      getAll: vi.fn(() => ({ pricing: { groq: { inputPer1K: 0.001 } } })),
+    } as any;
+    const pricing = router.getProviderPricing('groq', configManager);
+    expect(pricing.inputPer1K).toBe(0.001);
+    // Unset field falls back to the built-in value
+    expect(pricing.outputPer1K).toBe(0.00079);
+  });
+
+  it('resolve honors pricing overrides from the config manager', () => {
+    const configManager = {
+      getAll: vi.fn(() => ({ pricing: { gemini: { inputPer1K: 0.05, outputPer1K: 0.05 } } })),
+    } as any;
+    const decision = new AutoModelRouter().resolve('writer', 'format this code', {
+      allowedProviders: ['groq', 'gemini', 'local'],
+    }, configManager);
+    // Gemini loses its free-tier cost advantage → groq wins the trivial task on speed+cost
+    expect(decision.provider).toBe('groq');
+  });
+});
+
+// ─── Result weights ─────────────────────────────────────────────────────────
+
+describe('AutoRouteResult.weights', () => {
+  it('includes the effective normalized weights used for the decision', () => {
+    const decision = new AutoModelRouter().resolve('writer', 'implement a feature');
+    expect(decision.weights).toBeDefined();
+    const total = Object.values(decision.weights).reduce((a, b) => a + b, 0);
+    expect(total).toBeCloseTo(1, 10);
+    // Critical tasks weight reasoning above cost
+    const critical = new AutoModelRouter().resolve('writer', 'deploy to production');
+    expect(critical.weights.reasoning).toBeGreaterThan(critical.weights.cost);
+  });
+});
+
 // ─── Runtime stats adjustment ───────────────────────────────────────────────
 
 describe('useRuntimeStats', () => {

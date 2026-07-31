@@ -57,6 +57,24 @@ export interface TeamConfig {
 }
 
 /**
+ * Per-provider pricing override for Auto model routing cost scoring.
+ * Values are USD per 1K tokens (input/output). When unset, the built-in
+ * pricing table (or the default) is used.
+ */
+export interface ProviderPricing {
+  /** Input price per 1K tokens (USD) */
+  inputPer1K?: number;
+  /** Output price per 1K tokens (USD) */
+  outputPer1K?: number;
+}
+
+/**
+ * Pricing override map keyed by provider type.
+ * Set via `buff config set pricing.<provider>.inputPer1K <usd>`.
+ */
+export type PricingConfigMap = Record<string, ProviderPricing>;
+
+/**
  * Chat history configuration
  */
 export interface HistoryConfig {
@@ -82,6 +100,8 @@ export interface BuffConfig {
   team?: TeamConfig;
   /** Chat history configuration */
   history?: HistoryConfig;
+  /** Per-provider pricing overrides for Auto model routing cost scoring */
+  pricing?: PricingConfigMap;
 }
 
 /**

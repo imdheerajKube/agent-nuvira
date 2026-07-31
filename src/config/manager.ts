@@ -62,6 +62,9 @@ export class ConfigManager {
     // Deep clone fallback defaults
     config.fallback = { ...(DEFAULT_CONFIG.fallback || {}) };
 
+    // Deep clone pricing defaults
+    config.pricing = { ...(DEFAULT_CONFIG.pricing || {}) };
+
     if (existsSync(this.configPath)) {
       try {
         const raw = readFileSync(this.configPath, 'utf-8');
@@ -90,6 +93,14 @@ export class ConfigManager {
         // Merge fallback config
         if (userConfig.fallback) {
           config.fallback = { ...config.fallback, ...userConfig.fallback };
+        }
+
+        // Merge pricing overrides (deep — per provider)
+        if (userConfig.pricing) {
+          config.pricing = { ...config.pricing };
+          for (const [provider, pricing] of Object.entries(userConfig.pricing)) {
+            config.pricing[provider] = { ...(config.pricing[provider] || {}), ...pricing };
+          }
         }
       } catch {
         // If config is corrupted, fall back to defaults
@@ -186,6 +197,15 @@ export class ConfigManager {
         ...this.config.fallback,
         ...config.fallback,
       };
+    }
+
+    if (config.pricing) {
+      // Deep merge per provider so setting inputPer1K then outputPer1K via
+      // `buff config set pricing.<provider>...` preserves both fields.
+      this.config.pricing = { ...(this.config.pricing || {}) };
+      for (const [provider, pricing] of Object.entries(config.pricing)) {
+        this.config.pricing[provider] = { ...(this.config.pricing[provider] || {}), ...pricing };
+      }
     }
 
     writeFileSync(this.configPath, JSON.stringify(this.config, null, 2), 'utf-8');

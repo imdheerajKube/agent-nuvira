@@ -25,7 +25,7 @@ agent-nuvira config list
 - **Plugin system** with auto-discovery — drop `.js` files into `~/.buff/plugins/` for automatic loading
 - **Project scaffolding** — `agent-nuvira init` generates starter projects with interactive template + provider selection
 - **Context-preserving model switching** — `agent-nuvira model switch` changes providers mid-session without losing agent state
-- **Auto model routing** — `agent-nuvira model switch auto` lets the agent pick the best provider/model for every task based on complexity, cost, latency, privacy, and reliability (with fallback chains + circuit-breaker awareness)
+- **Auto model routing** — `agent-nuvira model switch auto` lets the agent pick the best provider/model for every task based on complexity, cost, latency, privacy, and reliability (with fallback chains + circuit-breaker awareness). Cost scoring uses **real per-1K-token provider pricing** (overridable via `buff config set pricing.<provider>.inputPer1K`), adjusted at runtime by **benchmark quality + per-agent best-model stats**. See why a decision was made with `agent-nuvira model explain` and track preferences in the dashboard's **Routing** panel
 - **Skill compiler** — automatically extracts reusable patterns from successful agent runs into executable skills (`agent-nuvira skill run`)
 - **Context-window memory pruner** — prevents long multi-agent chains from exceeding model token limits
 - **Complete streaming support** — all 17+ providers support real-time token-by-token output
@@ -658,6 +658,11 @@ agent-nuvira model info
 
 # Get model routing recommendations
 agent-nuvira model recommend
+
+# Explain why Auto routing picks a model for a task (transparency/debugging)
+agent-nuvira model explain "implement JWT auth with refresh tokens"
+agent-nuvira model explain                  # walks 5 sample complexities
+agent-nuvira model explain --agent writer "your task"
 
 # Quick health check for the active provider
 agent-nuvira model health

@@ -276,6 +276,29 @@ describe('Dashboard Server', () => {
       expect(body).toHaveProperty('serverTime');
       expect(typeof body.serverTime).toBe('number');
     });
+
+    it('GET /api/routing returns preference without benchmark data', async () => {
+      const res = await httpGet(`${baseUrl}/api/routing`);
+      expect(res.statusCode).toBe(200);
+      const body = JSON.parse(res.body);
+      expect(body.providers).toEqual([]);
+      expect(body.bestModels).toEqual([]);
+      // Auto-router preference is always available (static profiles + real pricing)
+      expect(body.preference).toHaveLength(5);
+      expect(typeof body.updatedAt).toBe('number');
+      for (const p of body.preference) {
+        expect(p.winner).toBeTruthy();
+        expect(p.providers.length).toBeGreaterThan(0);
+      }
+    });
+
+    it('GET /api/all includes routing insights', async () => {
+      const res = await httpGet(`${baseUrl}/api/all`);
+      expect(res.statusCode).toBe(200);
+      const body = JSON.parse(res.body);
+      expect(body).toHaveProperty('routing');
+      expect(body.routing.preference).toHaveLength(5);
+    });
   });
 
   // ═══════════════════════════════════════════════════════════════════════
@@ -412,6 +435,39 @@ describe('Dashboard Server', () => {
       expect(body.memory.total).toBe(3);
       expect(body.health.patterns).toBe(2);
       expect(typeof body.serverTime).toBe('number');
+    });
+
+    it('GET /api/routing aggregates benchmark quality and preference', async () => {
+      const res = await httpGet(`${baseUrl}/api/routing`);
+      expect(res.statusCode).toBe(200);
+      const body = JSON.parse(res.body);
+
+      // Per-provider benchmark aggregation from the groq fixture run
+      expect(body.providers).toHaveLength(1);
+      expect(body.providers[0].provider).toBe('groq');
+      expect(body.providers[0].runs).toBe(1);
+      expect(body.providers[0].avgQuality).toBeCloseTo(0.85, 3);
+      expect(body.providers[0].passRate).toBeCloseTo(0.8, 3);
+      expect(body.providers[0].totalCostUsd).toBeCloseTo(0.012, 6);
+      expect(body.providers[0].bestModel).toBe('llama-3.3-70b');
+
+      // Fixture agent-stats has no modelPerformance → no best models
+      expect(body.bestModels).toEqual([]);
+
+      // Preference always has the 5 sample complexities
+      expect(body.preference).toHaveLength(5);
+      expect(body.preference[0].complexity).toBe('trivial');
+      expect(body.preference[4].complexity).toBe('critical');
+    });
+
+    it('GET /api/routing handles malformed benchmark JSON gracefully', async () => {
+      writeFileSync(join(memoryDir, 'benchmarks.json'), '{broken');
+      const res = await httpGet(`${baseUrl}/api/routing`);
+      expect(res.statusCode).toBe(200);
+      const body = JSON.parse(res.body);
+      expect(body.providers).toEqual([]);
+      expect(body.preference).toHaveLength(5);
+      removeFixture('benchmarks');
     });
   });
 

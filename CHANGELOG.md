@@ -7,6 +7,39 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [1.39.2] - 2026-07-31
+
+### Added
+- **Configurable routing pricing** — `buff config set pricing.<provider>.inputPer1K|outputPer1K`
+  overrides any provider's per-1K-token cost used by the Auto router's cost dimension
+  (deep-merged per provider so both fields survive sequential sets; free tiers default to $0)
+- **`buff model explain [task]`** — transparency command showing why Auto routing picks a
+  provider/model: detected complexity, task type, dimension weight bars, ranked provider table
+  with reasons, winner, and fallback chain. With no task it walks all 5 complexity levels;
+  `--agent <type>` routes for a specific agent. Powered by the new `weights` field on
+  `AutoRouteResult`
+- **Dashboard Routing Insights** — new `GET /api/routing` endpoint + 🤖 Routing dashboard panel
+  (nav item, `/routing` route): per-provider benchmark quality (avg quality, pass rate, cost),
+  best model per agent type from agent stats, and Auto-router preference across complexity
+  levels. Wired into `/api/all` and SSE init/refresh payloads
+
+### Changed
+- `auto-router.ts` — `getProviderPricing()` resolves config override ?? built-in table;
+  `estimateCallCostUsd` / `computeCostScore` accept optional pricing overrides
+- `config/manager.ts` — `pricing` config section loaded, deep-merged, and saved
+- `config.ts` — `buff config set pricing.*` + `buff config list` pricing section
+- `model.ts` — `explain` subcommand registered
+- `web-dashboard/server.ts` + React frontend — routing insights API, `RoutingInsightsPanel`,
+  rebuilt dashboard assets
+- Docs — README, User_Manual (Auto Model Routing §), Product_Guide Key Upgrades rows
+
+### Tests
+- config manager: pricing default/load/merge/save + sequential-save regression (5 tests)
+- auto-router: pricing overrides (5) + result weights (2)
+- dashboard server: `/api/routing` empty/fixture/malformed + `/api/all` routing field (4 tests)
+
+---
+
 ## [1.39.1] - 2026-07-31
 
 ### Added
