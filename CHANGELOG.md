@@ -7,6 +7,31 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [1.38.0] - 2026-07-31
+
+### Added
+- **Cross-platform dependency installer (Runner)** — `RunnerAgent` now auto-installs missing
+  project dependencies and bootstrap-installs missing package managers:
+  - **11 manifest types detected** — `package.json`/`pnpm-lock.yaml`/`yarn.lock` (lockfiles win),
+    `requirements.txt`, `pyproject.toml`, `setup.py`, `Gemfile`, `Cargo.toml`, `go.mod`,
+    `composer.json`, `pubspec.yaml`
+  - **Tool bootstrapping on all platforms** — npm via brew/apt/dnf/yum/NodeSource/winget/choco/MSI;
+    pip via `ensurepip` + Python install; Homebrew via official `NONINTERACTIVE=1` script;
+    bundler via gem + Ruby; cargo via rustup; go via brew/apt/winget; composer via getcomposer.org
+    into user-writable `$HOME/.local/bin` (no sudo, quoted, `USERPROFILE` fallback); dart via
+    Homebrew / Google apt repo / winget
+  - **Command-based tool detection** — when no manifest exists, missing interpreters referenced by
+    the failing command (`python3`, `node`, `go`, `cargo`, etc.) are installed automatically
+  - **Telemetry** — `dependencyInstallTool` / `dependencyInstallToolInstalled` on `RunResult`,
+    feeding the eval framework's dependency-install success metric
+- **Dashboard: Deps Installed stat** — Agent Evaluation section now shows dependency-install
+  success rate alongside tests / composite / recovery / rollbacks; stat grid switched to
+  `auto-fit` so both the 4-card benchmark and 5-card eval sections lay out evenly
+- **Runner tests** — composer install paths ($HOME/.local/bin, PHP bootstrap, PHP-failure
+  short-circuit), interpreter→tool mapping, and failed-command auto-install flow
+
+---
+
 ## [1.37.1] - 2026-10-05
 
 ### Fixed
