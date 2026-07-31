@@ -21,6 +21,9 @@ import {
   isAutoProvider,
   computeWeights,
   scoreProvider,
+  computeCostScore,
+  estimateCallCostUsd,
+  PROVIDER_PRICING_PER_1K,
   AUTO_MODEL,
   AUTO_PROVIDER,
   DEFAULT_AUTO_PROVIDERS,
@@ -28,6 +31,21 @@ import {
   type ScoredProvider,
   type RoutingDimension,
 } from '../../src/learning/auto-router.js';
+
+// ─── Mocks for runtime-stats tests ─────────────────────────────────────────
+
+const mockBenchmarkRuns = vi.hoisted(() => [] as any[]);
+const mockBestModelFor = vi.hoisted(() => new Map<string, string>());
+
+vi.mock('../../src/learning/benchmark.js', () => ({
+  getBenchmarkRuns: vi.fn(() => mockBenchmarkRuns),
+}));
+
+vi.mock('../../src/learning/agent-stats.js', () => ({
+  getAgentStats: vi.fn(() => ({
+    getBestModel: vi.fn((agentType: string) => mockBestModelFor.get(agentType)),
+  })),
+}));
 
 // ─── isAutoModel / isAutoProvider ───────────────────────────────────────────
 
@@ -191,12 +209,13 @@ describe('AutoModelRouter.resolve', () => {
     expect(decision.taskType).toBeTruthy();
   });
 
-  it('prefers a fast cheap model for trivial tasks (groq wins on speed+cost)', () => {
+  it('prefers a fast cheap model for trivial tasks (gemini free tier wins on cost + reasoning)', () => {
     const decision = router.resolve('writer', 'format this code', {
       allowedProviders: ['local', 'groq', 'gemini', 'openrouter'],
     });
-    // trivial complexity weights speed+cost highest; groq has max speed + high cost score
-    expect(decision.provider).toBe('groq');
+    // trivial complexity weights speed+cost highest; with REAL pricing gemini's
+    // free tier ($0) plus high reasoning/speed edges out groq
+    expect(decision.provider).toBe('gemini');
   });
 
   it('prefers a strong provider for critical tasks', () => {
@@ -307,6 +326,125 @@ describe('AutoModelRouter.resolve', () => {
       allowedProviders: ['local', 'groq'],
     });
     expect(decision.provider).toBe('local');
+  });
+});
+
+// ─── Real Pricing ──────────────────────────────────────────────────────────
+
+describe('real provider pricing', () => {
+  it('prices free providers at $0', () => {
+    expect(estimateCallCostUsd('local')).toBe(0);
+    expect(estimateCallCostUsd('gemini')).toBe(0);
+  });
+
+  it('prices cloud providers above zero', () => {
+    expect(estimateCallCostUsd('groq')).toBeGreaterThan(0);
+    expect(estimateCallCostUsd('openrouter')).toBeGreaterThan(0);
+  });
+
+  it('maps zero cost to a 1.0 cost score', () => {
+    expect(computeCostScore('local')).toBe(1.0);
+    expect(computeCostScore('gemini')).toBe(1.0);
+  });
+
+  it('maps expensive providers to a lower cost score', () => {
+    expect(computeCostScore('groq')).toBeLessThan(1.0);
+    expect(computeCostScore('openrouter')).toBeLessThan(computeCostScore('local'));
+  });
+
+  it('clamps cost score to [0, 1]', () => {
+    for (const p of ['local', 'groq', 'gemini', 'openrouter', 'nim']) {
+      const score = computeCostScore(p);
+      expect(score).toBeGreaterThanOrEqual(0);
+      expect(score).toBeLessThanOrEqual(1);
+    }
+  });
+
+  it('has pricing entries for all built-in providers', () => {
+    for (const p of DEFAULT_AUTO_PROVIDERS) {
+      expect(PROVIDER_PRICING_PER_1K[p]).toBeDefined();
+    }
+  });
+
+  it('keeps static cost profiles when useRealPricing is false', () => {
+    const r = new AutoModelRouter();
+    const decision = r.resolve('writer', 'format this code', {
+      allowedProviders: ['local', 'groq', 'gemini', 'openrouter'],
+      useRealPricing: false,
+    });
+    // static trivial weights → groq wins on speed+cost as originally designed
+    expect(decision.provider).toBe('groq');
+  });
+});
+
+// ─── Runtime stats adjustment ───────────────────────────────────────────────
+
+describe('useRuntimeStats', () => {
+  beforeEach(() => {
+    mockBenchmarkRuns.length = 0;
+    mockBestModelFor.clear();
+  });
+
+  it('blends benchmark quality into the reasoning dimension', () => {
+    mockBenchmarkRuns.push({
+      provider: 'groq',
+      model: 'llama-3.3-70b-versatile',
+      summary: { avgQualityScore: 0.95 },
+    });
+    // No benchmark data for gemini — with runtime stats, groq's reasoning gets
+    // boosted to 0.55*0.7 + 0.95*0.3 = 0.67 (measured data lifts its score)
+    const r = new AutoModelRouter();
+    const decision = r.resolve('writer', 'implement a feature', {
+      allowedProviders: ['groq', 'gemini'],
+      useRuntimeStats: true,
+    });
+    // groq is now competitive on reasoning from measured data
+    expect(decision.ranked.find((s) => s.provider === 'groq')!.dimensions.reasoning)
+      .toBeGreaterThan(0);
+    expect(decision.ranked.find((s) => s.provider === 'groq')!.reason)
+      .toContain('stats-adjusted');
+  });
+
+  it('boosts reliability for the proven best model of the agent type', () => {
+    mockBenchmarkRuns.push({
+      provider: 'nim',
+      model: 'meta/llama-3.1-8b-instruct',
+      summary: { avgQualityScore: 0.5 },
+    });
+    mockBestModelFor.set('writer', 'nim/meta-llama-3.1-8b-instruct');
+
+    const r = new AutoModelRouter();
+    const decision = r.resolve('writer', 'implement a feature', {
+      allowedProviders: ['groq', 'nim', 'gemini'],
+      useRuntimeStats: true,
+    });
+    const nim = decision.ranked.find((s) => s.provider === 'nim')!;
+    expect(nim.reason).toContain('stats-adjusted');
+    // nim's reliability was boosted above its static 0.82
+    expect(nim.dimensions.reliability).toBeGreaterThan(0.82 * 0.15);
+  });
+
+  it('does not adjust scores when useRuntimeStats is false', () => {
+    mockBenchmarkRuns.push({
+      provider: 'groq',
+      model: 'llama-3.3-70b-versatile',
+      summary: { avgQualityScore: 0.95 },
+    });
+    const r = new AutoModelRouter();
+    const decision = r.resolve('writer', 'implement a feature', {
+      allowedProviders: ['groq', 'gemini'],
+    });
+    expect(decision.ranked.find((s) => s.provider === 'groq')!.reason)
+      .not.toContain('stats-adjusted');
+  });
+
+  it('handles missing runtime data gracefully', () => {
+    const r = new AutoModelRouter();
+    const decision = r.resolve('writer', 'implement a feature', {
+      allowedProviders: ['groq', 'gemini'],
+      useRuntimeStats: true,
+    });
+    expect(decision.provider).toBeTruthy();
   });
 });
 

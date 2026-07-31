@@ -648,7 +648,7 @@ export class ChatCommand extends BaseCommand {
     const decision = getAutoRouter().resolve(
       'chat',
       message,
-      { verbose: process.env.BUFF_DEBUG === 'true' },
+      { verbose: process.env.BUFF_DEBUG === 'true', useRuntimeStats: true },
       this.configManager,
     );
     const resolved = resolveProvider(this.configManager, decision.provider);

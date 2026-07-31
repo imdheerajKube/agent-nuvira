@@ -39,6 +39,8 @@
 
 import { analyzeComplexity, type ComplexityLevel, type ModelCandidate, type PreferenceMode } from './hybrid-router.js';
 import { getTaskType, type TaskType } from './model-router.js';
+import { getBenchmarkRuns } from './benchmark.js';
+import { getAgentStats } from './agent-stats.js';
 import type { ConfigManager } from '../config/manager.js';
 import { logger } from '../utils/logger.js';
 
@@ -95,6 +97,16 @@ export interface AutoRouterOptions {
   verbose?: boolean;
   /** Session cost budget (USD) — cheapest adequate candidate wins if exceeded */
   sessionBudget?: number;
+  /**
+   * Blend real provider pricing into the cost dimension instead of static
+   * capability profiles (default: true).
+   */
+  useRealPricing?: boolean;
+  /**
+   * Adjust provider scores from runtime data — benchmark quality and
+   * per-agent best-model stats (default: false).
+   */
+  useRuntimeStats?: boolean;
 }
 
 /** Per-provider score breakdown. */
@@ -156,6 +168,49 @@ const DEFAULT_PROFILES: Record<string, ProviderCapabilities> = {
 
 /** Built-in provider ids considered by default. */
 export const DEFAULT_AUTO_PROVIDERS = Object.keys(DEFAULT_PROFILES);
+
+// ─── Real Provider Pricing ──────────────────────────────────────────────────
+//
+// Actual per-1K-token list pricing (USD, input/output) used to derive the cost
+// dimension score instead of static profiles. Sources: provider pricing pages
+// (approximate; free tiers count as $0). Costs are configurable by overriding
+// the pricing table below.
+
+/** Real per-1K-token pricing (USD) — input/output per 1K tokens. */
+export const PROVIDER_PRICING_PER_1K: Record<string, { inputPer1K: number; outputPer1K: number }> = {
+  groq: { inputPer1K: 0.00059, outputPer1K: 0.00079 },   // Llama-3.3-70B-class
+  nim: { inputPer1K: 0.00010, outputPer1K: 0.00050 },     // varies by model
+  gemini: { inputPer1K: 0, outputPer1K: 0 },              // free tier default
+  openrouter: { inputPer1K: 0.00250, outputPer1K: 0.01000 }, // GPT-4o-class pass-through
+  local: { inputPer1K: 0, outputPer1K: 0 },               // free (local compute)
+};
+
+/** Reference cost per call (USD) used to normalize the 0–1 cost score. */
+const COST_REFERENCE_USD = 0.01;
+
+/** Typical call size used for cost scoring (input/output tokens). */
+const TYPICAL_INPUT_TOKENS = 2000;
+const TYPICAL_OUTPUT_TOKENS = 500;
+
+/**
+ * Estimate the USD cost of a typical call for a provider.
+ */
+export function estimateCallCostUsd(provider: string): number {
+  const p = PROVIDER_PRICING_PER_1K[provider] || { inputPer1K: 0.00010, outputPer1K: 0.00010 };
+  const inputCost = (TYPICAL_INPUT_TOKENS / 1000) * p.inputPer1K;
+  const outputCost = (TYPICAL_OUTPUT_TOKENS / 1000) * p.outputPer1K;
+  return Math.round((inputCost + outputCost) * 100000) / 100000;
+}
+
+/**
+ * Derive the 0–1 cost score (higher = cheaper) from real provider pricing.
+ * Free providers (local, Gemini free tier) score 1.0.
+ */
+export function computeCostScore(provider: string): number {
+  const costUsd = estimateCallCostUsd(provider);
+  const score = 1 - costUsd / COST_REFERENCE_USD;
+  return Math.max(0, Math.min(1, score));
+}
 
 /**
  * Baseline dimension weights per complexity level (balanced mode).
@@ -297,12 +352,26 @@ export class AutoModelRouter {
       if (cb.cooldownRemaining > 0) cooldown.set(cb.provider, cb.cooldownRemaining);
     }
 
+    // Load runtime stats once (benchmark quality + best-model per agent type)
+    const runtime = options.useRuntimeStats ? this.loadRuntimeAdjustments(agentType) : null;
+    if (runtime && options.verbose) {
+      logger.info(`  📊 Runtime stats: ${runtime.summary}`);
+    }
+
     // Score every allowed provider
     const scored: ScoredProvider[] = allowed.map((provider) => {
-      const caps = this.getCapabilities(provider);
+      let caps = this.getCapabilities(provider);
+      // Real pricing replaces the static cost capability
+      if (options.useRealPricing !== false) {
+        caps = { ...caps, cost: computeCostScore(provider) };
+      }
+      // Runtime data adjusts reasoning/reliability from real performance
+      if (runtime) {
+        caps = this.adjustCapabilitiesForRuntime(caps, provider, runtime);
+      }
       const { score, dimensions, weightTotal } = scoreProvider(provider, caps, weights);
       const inCooldown = cooldown.has(provider);
-      const reason = this.buildReason(provider, caps, complexity, mode, inCooldown);
+      const reason = this.buildReason(provider, caps, complexity, mode, inCooldown, runtime?.adjusted.has(provider));
       return { provider, score, dimensions, weightTotal, inCooldown, reason };
     });
 
@@ -387,6 +456,82 @@ export class AutoModelRouter {
     return usable?.id || 'default';
   }
 
+  /**
+   * Load runtime performance data: per-provider benchmark quality and the
+   * best-performing model for the given agent type (from agent stats).
+   */
+  private loadRuntimeAdjustments(agentType: string): {
+    benchmarkQuality: Record<string, number>;
+    bestModelForAgent?: string;
+    adjusted: Set<string>;
+    summary: string;
+  } {
+    const benchmarkQuality: Record<string, number> = {};
+    const counts: Record<string, number> = {};
+    try {
+      for (const run of getBenchmarkRuns()) {
+        benchmarkQuality[run.provider] = (benchmarkQuality[run.provider] || 0) + run.summary.avgQualityScore;
+        counts[run.provider] = (counts[run.provider] || 0) + 1;
+      }
+      for (const provider of Object.keys(benchmarkQuality)) {
+        benchmarkQuality[provider] /= counts[provider] || 1;
+      }
+    } catch {
+      // Benchmark data unavailable — proceed without it
+    }
+
+    let bestModelForAgent: string | undefined;
+    try {
+      bestModelForAgent = getAgentStats().getBestModel(agentType);
+    } catch {
+      // Stats unavailable
+    }
+
+    const parts: string[] = [];
+    if (Object.keys(benchmarkQuality).length > 0) {
+      parts.push(`${Object.keys(benchmarkQuality).length} provider(s) benchmarked`);
+    }
+    if (bestModelForAgent) {
+      parts.push(`best model for '${agentType}' is ${bestModelForAgent}`);
+    }
+
+    return {
+      benchmarkQuality,
+      bestModelForAgent,
+      adjusted: new Set(),
+      summary: parts.join('; ') || 'no data yet',
+    };
+  }
+
+  /**
+   * Adjust a provider's capability scores from runtime data:
+   * - Benchmark quality blends into `reasoning` (30% measured / 70% static)
+   * - A proven best model for this agent type boosts reliability + reasoning
+   */
+  private adjustCapabilitiesForRuntime(
+    caps: ProviderCapabilities,
+    provider: string,
+    runtime: { benchmarkQuality: Record<string, number>; bestModelForAgent?: string; adjusted: Set<string> },
+  ): ProviderCapabilities {
+    const adjusted = { ...caps };
+    let touched = false;
+
+    const bq = runtime.benchmarkQuality[provider];
+    if (bq !== undefined) {
+      adjusted.reasoning = Math.min(1, caps.reasoning * 0.7 + bq * 0.3);
+      touched = true;
+    }
+
+    if (runtime.bestModelForAgent && runtime.bestModelForAgent.startsWith(provider + '/')) {
+      adjusted.reliability = Math.min(1, caps.reliability + 0.08);
+      adjusted.reasoning = Math.min(1, adjusted.reasoning + 0.05);
+      touched = true;
+    }
+
+    if (touched) runtime.adjusted.add(provider);
+    return adjusted;
+  }
+
   /** Build a short reason for a provider's rank. */
   private buildReason(
     provider: string,
@@ -394,6 +539,7 @@ export class AutoModelRouter {
     complexity: ComplexityLevel,
     mode: PreferenceMode,
     inCooldown: boolean,
+    runtimeAdjusted: boolean = false,
   ): string {
     if (inCooldown) return `${provider} (circuit-breaker cooldown active)`;
     const parts: string[] = [];
@@ -402,6 +548,7 @@ export class AutoModelRouter {
     if (caps.reasoning >= 0.9) parts.push('strongest reasoning');
     if (caps.cost >= 0.85) parts.push('cheapest');
     if (mode === 'privacy-first') parts.push('privacy-weighted');
+    if (runtimeAdjusted) parts.push('📊 stats-adjusted');
     return parts.length ? `${provider}: ${parts.join(', ')}` : `${provider}: adequate for ${complexity} complexity`;
   }
 

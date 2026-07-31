@@ -1145,7 +1145,7 @@ export class Orchestrator {
     const decision = getAutoRouter().resolve(
       task.agentType,
       task.description,
-      { verbose: options.verbose },
+      { verbose: options.verbose, useRuntimeStats: true },
       this.configManager,
     );
     if (options.verbose) {

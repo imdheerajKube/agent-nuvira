@@ -7,6 +7,33 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [1.39.1] - 2026-07-31
+
+### Added
+- **Real provider pricing in Auto routing** — `PROVIDER_PRICING_PER_1K` table with actual
+  per-1K-token list prices (input/output) per provider; the cost dimension score is now derived
+  from real pricing via `estimateCallCostUsd()` / `computeCostScore()` instead of static profiles.
+  Free tiers (local, Gemini) score 1.0; OpenRouter priced at GPT-4o-class pass-through. Opt out
+  per call with `useRealPricing: false`.
+- **Runtime-stats-driven routing** — `useRuntimeStats` option blends real benchmark quality
+  scores into the reasoning dimension (70% static / 30% measured) and boosts reliability + reasoning
+  for the proven best model of the agent type (from agent-stats). Now enabled by default in
+  `buff chat` (`routeMessageAuto`) and the orchestrator's per-task `createAutoRoutedLLM()`.
+
+### Changed
+- `auto-router.ts` — pricing table + runtime adjustment pipeline (`loadRuntimeAdjustments`,
+  `adjustCapabilitiesForRuntime`)
+- `chat.ts` / `orchestrator.ts` — `useRuntimeStats: true` wired into production routing calls
+- `Product_Guide.md` — feature inventory row 72 + Key Upgrades entry for Auto Model Routing
+- `website/index.html` — 3 new feature cards (Auto Model Routing, Real Provider Pricing,
+  Benchmark-Driven Learning); providers card mentions Auto
+
+### Tests
+- `tests/learning/auto-router.test.ts` — new pricing suite (7 tests) + runtime-stats suite
+  (4 tests), trivial-task expectation updated for real pricing (Gemini free tier wins)
+
+---
+
 ## [1.39.0] - 2026-07-31
 
 ### Added

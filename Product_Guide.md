@@ -465,6 +465,7 @@ src/web-dashboard/              # React web dashboard
 | 69 | **`buff phase` (Phase 10)** | ✅ Complete (v1.29.0) | Phase 10 | Phase-wise project execution CLI — create/execute/resume/status/list/delete with interactive pauses |
 | 70 | **Cross-Platform Dependency Installer** | ✅ Complete (v1.38.0) | v1.38.0 | Runner auto-installs missing project dependencies (11 manifest types, lockfile-first priority) and bootstrap-installs missing package managers (npm, pip, bundler, cargo, go, composer, dart, brew) via brew/apt/dnf/yum/winget/choco/rustup — with failed-command fallback and honest PATH diagnostics |
 | 71 | **Deps Installed Dashboard Metric** | ✅ Complete (v1.38.0) | v1.38.0 | Agent Evaluation section shows dependency-install success rate (`dependencyInstallRate`) alongside tests / composite / recovery / rollbacks |
+| 72 | **Auto Model Routing** | ✅ Complete (v1.39.0) | v1.39.0 | `Auto` model selection — the agent picks the best provider/model per task across 5 dimensions (reasoning, speed, cost, privacy, reliability) weighted by detected complexity. Real per-token provider pricing feeds the cost dimension; benchmark quality + per-agent best-model stats adjust scores at runtime. `buff model switch auto`, per-message routing in `buff chat`, and per-task routing in `buff execute -m auto` / `--auto-route` |
 
 ### 3.2 Key Upgrades & Enhancements
 
@@ -490,6 +491,7 @@ src/web-dashboard/              # React web dashboard
 | **Marketplace Unified CLI** | NextLevel | Unified plugin + workflow template browsing, search, install, and info from a single entry point |
 | **Cross-Platform Dependency Installer** | v1.38.0 | Runner bootstrap-installs missing package managers (brew/apt/winget/rustup) and installs project deps automatically |
 | **Tool-Install Unit Tests** | v1.38.0 | 20 tests covering npm/pip/bundler/cargo/go/dart/brew bootstrap paths, failure propagation, PATH diagnostics |
+| **Auto Model Routing** | v1.39.0 | `Auto` model selection — agent decides the best provider/model per task; 5-dimension scoring with complexity weights, real provider pricing, preference modes (balanced / performance-first / cost-first / privacy-first), circuit-breaker cooldown deprioritization, benchmark + agent-stats runtime adjustment |
 
 ### 3.3 Feature Maturity Matrix
 
