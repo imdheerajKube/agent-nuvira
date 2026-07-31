@@ -63,6 +63,7 @@ class CLIManager {
     workspaceRoot;
     onProgress;
     onLog;
+    onStreamChunk;
     abortController;
     constructor(config) {
         this.config = config;
@@ -70,11 +71,12 @@ class CLIManager {
         this.abortController = new AbortController();
     }
     /**
-     * Set progress and log callbacks for real-time updates.
+     * Set progress, log, and streaming callbacks for real-time updates.
      */
     setCallbacks(opts) {
         this.onProgress = opts.onProgress;
         this.onLog = opts.onLog;
+        this.onStreamChunk = opts.onStreamChunk;
     }
     /**
      * Cancel the currently running task.
@@ -213,6 +215,9 @@ class CLIManager {
             this.process.stdout?.on('data', (data) => {
                 const text = data.toString();
                 stdout += text;
+                // Emit streaming chunks for real-time token display
+                const isCodeBlock = text.includes('```');
+                this.onStreamChunk?.(text, isCodeBlock);
                 // Process lines for progress updates and logging
                 const lines = text.split('\n').filter((l) => l.trim());
                 for (const line of lines) {

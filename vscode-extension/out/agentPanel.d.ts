@@ -36,6 +36,18 @@ export declare class AgentPanel {
      */
     updateProgress(progress: AgentProgress): void;
     /**
+     * Send a streaming chunk to the panel for real-time token display.
+     */
+    updateStreaming(chunk: string, isCodeBlock: boolean): void;
+    /**
+     * Signal that streaming is complete.
+     */
+    completeStreaming(): void;
+    /**
+     * Start streaming mode — show the streaming area.
+     */
+    startStreaming(): void;
+    /**
      * Show the final result of an agent task.
      */
     showResult(result: AgentResult): void;

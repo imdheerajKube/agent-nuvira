@@ -20,14 +20,16 @@ export declare class CLIManager {
     private workspaceRoot;
     private onProgress?;
     private onLog?;
+    private onStreamChunk?;
     private abortController;
     constructor(config: ExtensionConfig);
     /**
-     * Set progress and log callbacks for real-time updates.
+     * Set progress, log, and streaming callbacks for real-time updates.
      */
     setCallbacks(opts: {
         onProgress?: (phase: string, detail?: string) => void;
         onLog?: (line: string) => void;
+        onStreamChunk?: (chunk: string, isCodeBlock: boolean) => void;
     }): void;
     /**
      * Cancel the currently running task.

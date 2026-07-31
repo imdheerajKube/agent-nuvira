@@ -7,7 +7,9 @@
 .vscodeignore
 
 # Source files (compiled output is in out/)
+# Keep chatPanel.html — the chat webview template is read from src/ at runtime
 src/**
+!src/chatPanel.html
 tsconfig.json
 *.map
 
