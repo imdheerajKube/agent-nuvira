@@ -145,7 +145,7 @@ jobs:
           node-version: 22
 
       - name: Install Open VSX CLI
-        run: npm install -g @vscode/ovsx
+        run: npm install -g ovsx
 
       - name: Publish to Open VSX Registry
         run: |
