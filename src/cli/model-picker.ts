@@ -22,6 +22,7 @@ import {
   formatModelName,
 } from '../inference/model-catalog.js';
 import { logger } from '../utils/logger.js';
+import { AUTO_MODEL, AUTO_PROVIDER } from '../learning/auto-router.js';
 
 // ─── Category Display Order ─────────────────────────────────────────────────
 
@@ -223,6 +224,11 @@ export async function showModelPicker(configManager: ConfigManager): Promise<Pic
   logger.highlight('🎯  Available Models');
   console.log('');
 
+  // ── Auto option — Agent decides ────────────────────────────────────────
+  console.log('   1. 🤖  Auto — Agent decides (smart routing)');
+  console.log('      Routes each task to the best provider/model by complexity, cost, latency, privacy, reliability');
+  console.log('');
+
   for (const cat of sortedCategories) {
     const models = grouped.get(cat)!;
     const info = CATEGORY_INFO[cat];
@@ -237,7 +243,8 @@ export async function showModelPicker(configManager: ConfigManager): Promise<Pic
         category: choice.category,
         badge: choice.badge,
       });
-      const num = String(displayList.length).padStart(2, ' ');
+      // +1 offset because Auto occupies index 1
+      const num = String(displayList.length + 1).padStart(2, ' ');
       const modelId = choice.model;
       const readableName = formatModelName(modelId);
 
@@ -265,7 +272,8 @@ export async function showModelPicker(configManager: ConfigManager): Promise<Pic
   console.log(`   0. ❌  Cancel`);
   console.log();
 
-  const selectableTotal = displayList.length;
+  // +1 for the Auto option at index 1
+  const selectableTotal = displayList.length + 1;
 
   const answer = await inquirer.prompt<{ selected: string }>([
     {
@@ -291,7 +299,17 @@ export async function showModelPicker(configManager: ConfigManager): Promise<Pic
     return null;
   }
 
-  const selected = displayList[selectedIndex - 1];
+  // ── Auto option selected ────────────────────────────────────────────────
+  if (selectedIndex === 1) {
+    console.log('\n'.repeat(2));
+    logger.success('🤖  Auto routing enabled');
+    logger.info('   Agent-Nuvira will pick the best provider/model for each task');
+    logger.info('   based on complexity, cost, latency, privacy, and reliability.');
+    console.log('');
+    return { provider: AUTO_PROVIDER, model: AUTO_MODEL };
+  }
+
+  const selected = displayList[selectedIndex - 2];
   console.log('\n'.repeat(2));
   const providerName = availableProviders.find(p => p.type === selected.provider)?.name || selected.provider;
   logger.success(`🎯  Selected: ${selected.model}`);

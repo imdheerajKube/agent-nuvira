@@ -160,6 +160,26 @@ export type {
 } from './learning/provider-fallback.js';
 
 export { HybridModelRouter, getHybridRouter, analyzeComplexity, buildFallbackChain, checkBudget, checkConsensus } from './learning/hybrid-router.js';
+export {
+  AutoModelRouter,
+  getAutoRouter,
+  resetAutoRouter,
+  isAutoModel,
+  isAutoProvider,
+  AUTO_MODEL,
+  AUTO_PROVIDER,
+  computeWeights,
+  scoreProvider,
+  DEFAULT_AUTO_PROVIDERS,
+  DIMENSION_LABELS,
+} from './learning/auto-router.js';
+export type {
+  AutoRouterOptions,
+  AutoRouteResult,
+  ProviderCapabilities,
+  ScoredProvider,
+  RoutingDimension,
+} from './learning/auto-router.js';
 
 // ─── Phase 3.2 new exports ──────────────────────────────────────────────────
 export { FederationCommand } from './cli/federation.js';

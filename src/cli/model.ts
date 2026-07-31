@@ -31,6 +31,7 @@ import { getPluginRegistry } from '../plugins/registry.js';
 import type { ProviderType, ProviderConfig } from '../config/types.js';
 import { getModelBadge } from '../inference/model-catalog.js';
 import { getHybridRouter } from '../learning/hybrid-router.js';
+import { AUTO_MODEL, AUTO_PROVIDER, isAutoModel, isAutoProvider } from '../learning/auto-router.js';
 import { logger } from '../utils/logger.js';
 
 // ─── Active Model State ─────────────────────────────────────────────────────
@@ -116,6 +117,7 @@ const PROVIDER_ICONS: Record<string, string> = {
   gemini: '🔷',
   openrouter: '🟣',
   groq: '🟢',
+  auto: '🤖',
 };
 
 const PROVIDER_LABELS: Record<string, string> = {
@@ -124,6 +126,7 @@ const PROVIDER_LABELS: Record<string, string> = {
   gemini: 'Google Gemini',
   openrouter: 'OpenRouter',
   groq: 'Groq',
+  auto: 'Auto (Agent decides)',
 };
 
 const PROVIDER_ELIGIBILITY: Record<string, string> = {
@@ -150,7 +153,7 @@ export class ModelCommand extends BaseCommand {
 
     cmd
       .command('switch [providerAndModel]')
-      .description('Switch active provider/model (interactive or via argument)')
+      .description('Switch active provider/model (interactive or via argument). Use `auto` for smart routing')
       .option('--provider <provider>', 'Provider to switch to')
       .option('--model <model>', 'Model to use with the provider')
       .action(async (providerAndModel, opts) => {
@@ -361,8 +364,27 @@ export class ModelCommand extends BaseCommand {
   /**
    * Perform the actual provider/model switch.
    * Saves the active model state and confirms to the user.
+   * Special-cases `auto` — the agent decides the best provider/model per task.
    */
   private async doSwitch(provider: string, model?: string): Promise<void> {
+    // ── Auto mode: agent decides per task ─────────────────────────────────
+    if (isAutoProvider(provider) || isAutoModel(model)) {
+      saveActiveModelState({
+        provider: AUTO_PROVIDER,
+        model: AUTO_MODEL,
+        explicit: true,
+        providerLabel: 'Auto (Agent decides)',
+      });
+      console.log('');
+      logger.success('🤖  Auto routing enabled');
+      console.log('   Agent-Nuvira will pick the best provider/model for each task');
+      console.log('   based on complexity, cost, latency, privacy, and reliability.');
+      console.log('');
+      logger.info('Run `buff model switch <provider>` to pin a specific provider instead.');
+      console.log('');
+      return;
+    }
+
     try {
       // Resolve the actual model to use
       let resolvedModel = model;

@@ -7,6 +7,39 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [1.39.0] - 2026-07-31
+
+### Added
+- **Auto Model Routing (`AutoModelRouter`)** — "Use the right model for the right task."
+  A first-class `auto` model selection option that routes every task to the optimal
+  provider/model based on **complexity, cost, latency, privacy, and reliability**:
+  - **5-dimension scoring engine** — per-provider capability profiles (reasoning, speed,
+    cost, privacy, reliability) weighted by detected task complexity (trivial → cost+speed
+    dominate; critical → reasoning+reliability dominate)
+  - **Preference modes** — balanced, `performance-first`, `cost-first`, `privacy-first`
+    (routes private tasks to the local provider)
+  - **Circuit-breaker awareness** — providers in cooldown are deprioritized (excluded unless
+    all are in cooldown); fallback chains keep the pipeline running
+  - **`buff model switch auto`** — selectable as option 1 in the model picker or via CLI;
+    `buff chat` routes every message, `buff execute "<goal>" -m auto` / `--auto-route` routes
+    each agent task independently, explicit `--model` always wins
+  - **Exports** — `AutoModelRouter`, `getAutoRouter`, `resetAutoRouter`, `isAutoModel`,
+    `isAutoProvider`, `computeWeights`, `scoreProvider` from the package index
+- **Tests (55)** — `tests/learning/auto-router.test.ts` (44 tests: weights, scoring,
+  complexity routing, circuit-breaker, fallback chains, model resolution, singleton) +
+  `tests/cli/model-picker.test.ts` updated for the Auto option index shift (12 tests)
+
+### Changed
+- `model-picker.ts` — "Auto — Agent decides" is now option 1; model choices shift to 2+
+- `chat.ts` — per-message auto routing; `/model` and error-recovery picker selections of Auto
+  re-enable auto mode (with inline re-resolution so the retried message uses the routed provider)
+- `orchestrator.ts` — per-task `createAutoRoutedLLM()`; `--auto-route` now uses the new engine
+  instead of the legacy static agent-model map
+- `execute.ts` — new `--auto-route` flag
+- `README.md` + `User_Manual.md` — Auto model routing feature bullets, examples, and usage guide
+
+---
+
 ## [1.38.1] - 2026-07-31
 
 ### Added

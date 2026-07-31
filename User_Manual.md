@@ -641,9 +641,26 @@ Examples:
   agent-nuvira model switch                    # Interactive categorized picker
   agent-nuvira model switch groq               # Switch to Groq
   agent-nuvira model switch groq/llama-3.3-70b # Switch to specific model
+  agent-nuvira model switch auto               # Auto routing — agent picks the best model per task
 ```
 
 Switching preserves all conversation history and agent state — seamless mid-session migration.
+
+### Auto Model Routing
+
+Selecting **Auto** (option 1 in the picker, or `agent-nuvira model switch auto`) tells Agent-Nuvira to **use the right model for the right task** instead of pinning one model for everything:
+
+- **Fast planning with small models** — trivial/simple tasks route to fast, cheap providers (e.g., Groq)
+- **Deep reasoning with larger models** — complex/critical tasks route to stronger providers (e.g., Gemini, OpenRouter)
+- **Local models for private tasks** — `privacy-first` mode routes to the local provider
+- **Cloud models for high-complexity tasks** — critical production/security work favors reliability + reasoning
+
+Selection scores every configured provider across **5 dimensions** — reasoning, speed, cost, privacy, and reliability — weighted by the detected task complexity. Providers in circuit-breaker cooldown are deprioritized, and a fallback chain keeps the pipeline running if the primary provider fails.
+
+**Where it applies:**
+- `buff chat` — routes every message (switch mid-session with `/model` → Auto)
+- `buff execute "<goal>" -m auto` or `--auto-route` — routes each agent task independently
+- `buff plan`, `buff run`, and any command reading the active model state
 
 ### 6.9 Skill Command — Reusable Skill Scripts
 

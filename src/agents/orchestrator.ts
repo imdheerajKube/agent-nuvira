@@ -45,7 +45,7 @@ import { ErrorRepairEngine } from '../learning/error-repair.js';
 import type { RepairMode } from '../learning/error-repair.js';
 import { estimateTokens } from '../learning/cost-tracker.js';
 import { scanForInjections, formatScanReport } from '../security/scanner.js';
-import { buildAgentModelMap } from '../learning/model-router.js';
+import { getAutoRouter, isAutoModel, isAutoProvider } from '../learning/auto-router.js';
 import { createReviewFromResult } from '../team/review.js';
 
 // ─── DAG Integration (optional — dashboard may not be built) ─────────────────
@@ -400,13 +400,8 @@ export class Orchestrator {
     }
 
     // ── 3b. Auto-route models ─────────────────────────────────────────────
-    if (options.autoRouteModels && !options.agentModels) {
-      const autoModels = buildAgentModelMap();
-      options.agentModels = autoModels;
-      if (options.verbose) {
-        logger.info('   Auto-routing models based on task type');
-      }
-    }
+    // `--auto-route` / autoRouteModels enables per-task AutoModelRouter
+    // routing in executeSingleTask (no static map needed).
 
     // ── 4. Planner (or pre-built plan from workflow template) ────────────
     if (options.prefillPlan && options.prefillPlan.length > 0) {
@@ -739,8 +734,10 @@ export class Orchestrator {
   // ─── Private Helpers ──────────────────────────────────────────────────
 
   private createLLMProvider(options: OrchestratorOptions): LLMCallFn {
-    const providerType = (options.provider ||
-      this.configManager.getAll().defaultProvider) as ProviderType;
+    // Guard: 'auto' is not a real provider — resolve to the configured default
+    const rawProvider = options.provider || this.configManager.getAll().defaultProvider;
+    const providerType = (isAutoProvider(rawProvider) ? undefined : rawProvider) ||
+      this.configManager.getAll().defaultProvider as ProviderType;
 
     const { config } = this.configManager.getProviderConfig(providerType);
     const provider = ProviderFactory.createProvider(providerType, config);
@@ -925,10 +922,20 @@ export class Orchestrator {
     }
 
     try {
+      // ── Auto routing: use the right model for the right task ───────────
+      // When the user selected Auto (`-m auto` / `buff model switch auto`) or
+      // passed `--auto-route` without an explicit --model, route each task
+      // independently via the AutoModelRouter so e.g. the planner gets a fast
+      // cheap model while complex tasks get a stronger one. An explicit
+      // `--model` always wins over auto routing.
+      const autoRouting = (options.autoRouteModels === true && !options.model) ||
+        isAutoModel(options.model) || isAutoProvider(options.provider);
       const agentModel = options.model || options.agentModels?.[task.agentType];
-      const agentCallLLM = agentModel
-        ? this.createLLMProvider({ ...options, model: agentModel })
-        : defaultCallLLM;
+      const agentCallLLM = autoRouting
+        ? this.createAutoRoutedLLM(task, options)
+        : agentModel
+          ? this.createLLMProvider({ ...options, model: agentModel })
+          : defaultCallLLM;
 
       // Skip tester and debugger tasks in skip-tests mode
       if (options.skipTests && (task.agentType === 'tester' || task.agentType === 'debugger')) {
@@ -1124,6 +1131,31 @@ export class Orchestrator {
       await tryUpdateDAGNode(task.id, { status: 'failed', summary: msg });
       agentResults.push({ agent: task.agentType, success: false, summary: `Error: ${msg}` });
     }
+  }
+
+  /**
+   * Create an LLM call function routed by the AutoModelRouter for a task.
+   * Uses the task description for complexity analysis and resolves the best
+   * provider/model per agent type.
+   */
+  private createAutoRoutedLLM(
+    task: { agentType: string; description: string },
+    options: OrchestratorOptions,
+  ): LLMCallFn {
+    const decision = getAutoRouter().resolve(
+      task.agentType,
+      task.description,
+      { verbose: options.verbose },
+      this.configManager,
+    );
+    if (options.verbose) {
+      logger.info(`      🤖 Auto: ${decision.explanation}`);
+    }
+    return this.createLLMProvider({
+      ...options,
+      provider: decision.provider,
+      model: decision.model,
+    });
   }
 
   /**

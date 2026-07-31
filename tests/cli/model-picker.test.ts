@@ -231,13 +231,36 @@ describe('showModelPicker', () => {
       }),
     });
 
-    vi.spyOn(inquirer, 'prompt').mockResolvedValue({ selected: '1' });
+    vi.spyOn(inquirer, 'prompt').mockResolvedValue({ selected: '2' }); // 1 = Auto option
 
     const result = await showModelPicker(mockConfigManager);
 
     expect(result).not.toBeNull();
     expect(result!.provider).toBe('groq');
     expect(result!.model).toBe('llama-3.3-70b-versatile');
+  });
+
+  // ── User selects the Auto option ────────────────────────────────────────
+
+  it('should return the auto provider/model when user selects option 1', async () => {
+    const chatModels = [makeModel('llama-3.3-70b-versatile', { provider: 'groq' })];
+
+    mockResolveResults.set('groq', {
+      type: 'groq',
+      provider: createMockProvider({
+        name: 'Groq',
+        isAvailable: vi.fn().mockResolvedValue(true),
+        listModels: vi.fn().mockResolvedValue(chatModels),
+      }),
+    });
+
+    vi.spyOn(inquirer, 'prompt').mockResolvedValue({ selected: '1' }); // Auto
+
+    const result = await showModelPicker(mockConfigManager);
+
+    expect(result).not.toBeNull();
+    expect(result!.provider).toBe('auto');
+    expect(result!.model).toBe('auto');
   });
 
   // ── User selects second model from a list ───────────────────────────────
@@ -265,7 +288,7 @@ describe('showModelPicker', () => {
       }),
     });
 
-    vi.spyOn(inquirer, 'prompt').mockResolvedValue({ selected: '2' });
+    vi.spyOn(inquirer, 'prompt').mockResolvedValue({ selected: '3' }); // 1 = Auto, 2 = first model
 
     const result = await showModelPicker(mockConfigManager);
 
@@ -291,7 +314,7 @@ describe('showModelPicker', () => {
       }),
     });
 
-    vi.spyOn(inquirer, 'prompt').mockResolvedValue({ selected: '1' });
+    vi.spyOn(inquirer, 'prompt').mockResolvedValue({ selected: '2' }); // 1 = Auto
 
     await showModelPicker(mockConfigManager);
 
@@ -314,7 +337,7 @@ describe('showModelPicker', () => {
       }),
     });
 
-    vi.spyOn(inquirer, 'prompt').mockResolvedValue({ selected: '1' });
+    vi.spyOn(inquirer, 'prompt').mockResolvedValue({ selected: '2' }); // 1 = Auto
 
     await showModelPicker(mockConfigManager);
 
@@ -343,7 +366,7 @@ describe('showModelPicker', () => {
       }),
     });
 
-    vi.spyOn(inquirer, 'prompt').mockResolvedValue({ selected: '1' });
+    vi.spyOn(inquirer, 'prompt').mockResolvedValue({ selected: '2' }); // 1 = Auto
 
     const result = await showModelPicker(mockConfigManager);
 

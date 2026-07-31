@@ -25,6 +25,7 @@ agent-nuvira config list
 - **Plugin system** with auto-discovery — drop `.js` files into `~/.buff/plugins/` for automatic loading
 - **Project scaffolding** — `agent-nuvira init` generates starter projects with interactive template + provider selection
 - **Context-preserving model switching** — `agent-nuvira model switch` changes providers mid-session without losing agent state
+- **Auto model routing** — `agent-nuvira model switch auto` lets the agent pick the best provider/model for every task based on complexity, cost, latency, privacy, and reliability (with fallback chains + circuit-breaker awareness)
 - **Skill compiler** — automatically extracts reusable patterns from successful agent runs into executable skills (`agent-nuvira skill run`)
 - **Context-window memory pruner** — prevents long multi-agent chains from exceeding model token limits
 - **Complete streaming support** — all 17+ providers support real-time token-by-token output
@@ -646,6 +647,11 @@ agent-nuvira model switch groq
 
 # Switch to a specific provider/model pair
 agent-nuvira model switch groq/llama-3.3-70b-versatile
+
+# Auto routing — agent decides the best provider/model per task
+# (fast cheap models for simple work, stronger models for complex tasks,
+#  local models for private tasks)
+agent-nuvira model switch auto
 
 # Show detailed active configuration
 agent-nuvira model info
