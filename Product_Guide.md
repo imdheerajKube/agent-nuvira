@@ -466,6 +466,9 @@ src/web-dashboard/              # React web dashboard
 | 70 | **Cross-Platform Dependency Installer** | ✅ Complete (v1.38.0) | v1.38.0 | Runner auto-installs missing project dependencies (11 manifest types, lockfile-first priority) and bootstrap-installs missing package managers (npm, pip, bundler, cargo, go, composer, dart, brew) via brew/apt/dnf/yum/winget/choco/rustup — with failed-command fallback and honest PATH diagnostics |
 | 71 | **Deps Installed Dashboard Metric** | ✅ Complete (v1.38.0) | v1.38.0 | Agent Evaluation section shows dependency-install success rate (`dependencyInstallRate`) alongside tests / composite / recovery / rollbacks |
 | 72 | **Auto Model Routing** | ✅ Complete (v1.39.0) | v1.39.0 | `Auto` model selection — the agent picks the best provider/model per task across 5 dimensions (reasoning, speed, cost, privacy, reliability) weighted by detected complexity. Real per-token provider pricing feeds the cost dimension; benchmark quality + per-agent best-model stats adjust scores at runtime. `buff model switch auto`, per-message routing in `buff chat`, and per-task routing in `buff execute -m auto` / `--auto-route` |
+| 73 | **Routing Eval Mode** | ✅ Complete (v1.40.0) | v1.40.0 | `buff eval --routing` evaluates the exact provider/model pairs the Auto router picks per eval task — each distinct pick runs the full Agent Evaluation framework (real pipeline + hidden tests) and is ranked by composite score, closing the routing→reliability loop |
+| 74 | **Routing History Store** | ✅ Complete (v1.40.0) | v1.40.0 | `~/.buff/memory/routing-history.json` records every Auto router decision (chat, orchestrator, explain, benchmark, eval) — capped at 500, best-effort writes, powers the dashboard's usage stats and audit trail |
+| 75 | **Routing Usage + Audit Trail Dashboard** | ✅ Complete (v1.40.0) | v1.40.0 | Routing panel gains two views: actual picks over time (totals, last-24h, per-provider/model/source counts) and a 30-entry audit timeline of explain snapshots + routing-mode picks |
 
 ### 3.2 Key Upgrades & Enhancements
 
@@ -497,6 +500,8 @@ src/web-dashboard/              # React web dashboard
 | **Dashboard Routing Insights** | v1.39.2 | New `GET /api/routing` endpoint + 🤖 Routing dashboard panel — per-provider benchmark quality, best model per agent, and Auto-router preference across complexity levels |
 | **Routing Benchmark Mode** | v1.39.3 | `buff benchmark --routing` benchmarks the exact provider/model pairs the Auto router picks for each task, then ranks them by measured quality — closing the routing→quality loop (results feed runtime stats) |
 | **Model Explain JSON** | v1.39.3 | `buff model explain "<task>" --json` emits a machine-readable payload (weights, ranked providers, winner, fallback chain, effective per-provider pricing with override flags) for scripting and CI |
+| **Routing Eval Mode** | v1.40.0 | `buff eval --routing` evaluates each Auto router pick through the full Agent Evaluation framework and ranks picks by composite score — reliability, not just response quality |
+| **Routing Usage + Audit Trail** | v1.40.0 | Dashboard Routing panel shows actual picks over time (usage stats) and a 30-entry audit timeline; every explain snapshot and routing-mode pick is persisted to `routing-history.json` |
 
 ### 3.3 Feature Maturity Matrix
 

@@ -25,7 +25,7 @@ agent-nuvira config list
 - **Plugin system** with auto-discovery — drop `.js` files into `~/.buff/plugins/` for automatic loading
 - **Project scaffolding** — `agent-nuvira init` generates starter projects with interactive template + provider selection
 - **Context-preserving model switching** — `agent-nuvira model switch` changes providers mid-session without losing agent state
-- **Auto model routing** — `agent-nuvira model switch auto` lets the agent pick the best provider/model for every task based on complexity, cost, latency, privacy, and reliability (with fallback chains + circuit-breaker awareness). Cost scoring uses **real per-1K-token provider pricing** (overridable via `buff config set pricing.<provider>.inputPer1K`), adjusted at runtime by **benchmark quality + per-agent best-model stats**. See why a decision was made with `agent-nuvira model explain` (or `--json` for CI), benchmark the router's exact picks with `agent-nuvira benchmark --routing`, and track preferences in the dashboard's **Routing** panel
+- **Auto model routing** — `agent-nuvira model switch auto` lets the agent pick the best provider/model for every task based on complexity, cost, latency, privacy, and reliability (with fallback chains + circuit-breaker awareness). Cost scoring uses **real per-1K-token provider pricing** (overridable via `buff config set pricing.<provider>.inputPer1K`), adjusted at runtime by **benchmark quality + per-agent best-model stats**. See why a decision was made with `agent-nuvira model explain` (or `--json` for CI), benchmark the router's exact picks with `agent-nuvira benchmark --routing`, validate them end-to-end with `agent-nuvira eval --routing`, and track actual picks + a full audit trail in the dashboard's **Routing** panel
 - **Skill compiler** — automatically extracts reusable patterns from successful agent runs into executable skills (`agent-nuvira skill run`)
 - **Context-window memory pruner** — prevents long multi-agent chains from exceeding model token limits
 - **Complete streaming support** — all 17+ providers support real-time token-by-token output
@@ -667,6 +667,12 @@ agent-nuvira model explain "your task" --json  # machine-readable (scripting/CI)
 
 # Benchmark the exact provider/model pairs the Auto router picks
 agent-nuvira benchmark --routing
+
+# Evaluate the Auto router's picks end-to-end (full multi-agent pipeline + hidden tests)
+agent-nuvira eval --routing
+
+# Every explain snapshot + routing-mode pick is recorded to the dashboard's audit trail
+# (Routing panel → 'Audit Trail — routing decision timeline')
 
 # Quick health check for the active provider
 agent-nuvira model health

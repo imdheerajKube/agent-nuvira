@@ -170,7 +170,33 @@ export interface RoutingInsights {
     score: number;
     providers: Array<{ provider: string; score: number; reason: string }>;
   }>;
+  /** Which providers/models were actually picked over time */
+  usage?: RoutingUsage;
+  /** Recent routing decisions (audit trail) — most recent first */
+  history?: RoutingHistoryEntry[];
   updatedAt: number;
+}
+
+export interface RoutingUsage {
+  total: number;
+  last24h: number;
+  byProvider: Record<string, number>;
+  byModel: Record<string, number>;
+  bySource: Record<string, number>;
+  byComplexity: Record<string, number>;
+  updatedAt: number;
+}
+
+export interface RoutingHistoryEntry {
+  id: string;
+  timestamp: number;
+  source: string;
+  agentType: string;
+  task: string;
+  complexity: string;
+  provider: string;
+  model: string;
+  score: number;
 }
 
 export interface DashboardData {

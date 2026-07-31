@@ -18,6 +18,7 @@ import { InferenceProvider } from '../inference/interface.js';
 import type { ProviderType } from '../config/types.js';
 import { getProviderFallback, classifyFallbackError, isRetryableError } from '../learning/provider-fallback.js';
 import { getAutoRouter, isAutoModel, isAutoProvider } from '../learning/auto-router.js';
+import { recordRoutingDecision } from '../learning/routing-history.js';
 
 // ─── Error Recovery Types ───────────────────────────────────────────────────
 
@@ -651,6 +652,16 @@ export class ChatCommand extends BaseCommand {
       { verbose: process.env.BUFF_DEBUG === 'true', useRuntimeStats: true },
       this.configManager,
     );
+    // Record for the dashboard usage stats + audit trail
+    recordRoutingDecision({
+      source: 'chat',
+      agentType: 'chat',
+      task: message,
+      complexity: decision.complexity,
+      provider: decision.provider,
+      model: decision.model,
+      score: decision.score,
+    });
     const resolved = resolveProvider(this.configManager, decision.provider);
     return { type: resolved.type, provider: resolved.provider, model: decision.model };
   }

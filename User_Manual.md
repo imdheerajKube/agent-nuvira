@@ -669,6 +669,12 @@ buff config       # see the AUTO ROUTING PRICING section
 For scripting and CI, `buff model explain "<task>" --json` emits a machine-readable payload (task, complexity, weights, ranked providers, winner, fallback chain, effective per-provider pricing with override flags).
 
 **Close the routing → quality loop** with `buff benchmark --routing` — it asks the Auto router which provider/model it would pick for each benchmark task, then runs the suite against every distinct pick and ranks them by measured quality, feeding those results back into the router's runtime stats.
+
+**Validate the router's picks end-to-end** with `buff eval --routing` — the same idea, but each pick runs the full Agent Evaluation framework (real multi-agent pipeline + hidden tests in an isolated workspace), then ranks the picks by composite score. This measures *reliability*, not just response quality.
+
+**Every routing decision is recorded.** Live chat auto-routing, orchestrator task routing, `model explain` snapshots (human and `--json`), `benchmark --routing`, and `eval --routing` all append to `~/.buff/memory/routing-history.json`. The dashboard's **Routing** panel (nav: 🤖 Routing) turns this into two new views:
+- **Routing Usage — actual picks over time** — totals, last-24h activity, per-provider pick counts, per-source breakdown (chat / orchestrator / explain / benchmark / eval), and most-picked models
+- **Audit Trail — routing decision timeline** — the 30 most recent decisions with source badge, winner provider/model, complexity, task, and relative time
 - **Cloud models for high-complexity tasks** — critical production/security work favors reliability + reasoning
 
 Selection scores every configured provider across **5 dimensions** — reasoning, speed, cost, privacy, and reliability — weighted by the detected task complexity. Providers in circuit-breaker cooldown are deprioritized, and a fallback chain keeps the pipeline running if the primary provider fails.

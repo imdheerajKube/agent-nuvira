@@ -20,6 +20,7 @@ import ora from 'ora';
 import { BaseCommand } from './commands.js';
 import { resolveProvider } from './router.js';
 import { getAutoRouter } from '../learning/auto-router.js';
+import { recordRoutingDecision } from '../learning/routing-history.js';
 import { logger } from '../utils/logger.js';
 import {
   runBenchmark,
@@ -252,6 +253,16 @@ export class BenchmarkCommand extends BaseCommand {
     const picks = new Map<string, { provider: string; model: string; tasks: number }>();
     for (const t of tasks) {
       const d = router.resolve('chat', t.prompt, { useRuntimeStats: true }, this.configManager);
+      // Record for the dashboard usage stats + audit trail
+      recordRoutingDecision({
+        source: 'benchmark',
+        agentType: 'chat',
+        task: t.prompt,
+        complexity: d.complexity,
+        provider: d.provider,
+        model: d.model,
+        score: d.score,
+      });
       const key = `${d.provider}/${d.model}`;
       const existing = picks.get(key);
       if (existing) {

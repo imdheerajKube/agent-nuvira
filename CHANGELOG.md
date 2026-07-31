@@ -7,6 +7,50 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [1.40.0] - 2026-07-31
+
+### Added
+- **`buff eval --routing`** — evaluates the exact provider/model pairs the Auto router
+  picks for each eval task (via `getAutoRouter().resolve` with runtime stats), dedupes
+  distinct picks with task counts, records each decision to the routing-history store,
+  runs the full Agent Evaluation framework against every pick (skipping unavailable
+  providers), then ranks the picks by composite score with a 🏆 best-pick summary —
+  closing the routing → **reliability** loop (not just response quality). Warns when
+  `--provider`/`--model`/`--format` are ignored in routing mode
+- **Routing History Store** — `src/learning/routing-history.ts`: records every Auto
+  router decision (`recordRoutingDecision`) to `~/.buff/memory/routing-history.json`
+  (capped at 500, best-effort writes, `BUFF_MEMORY_DIR` override for tests). Query with
+  `getRoutingHistory()` / `getRoutingUsageStats()` / `clearRoutingHistory()`. Sources:
+  chat (per message), orchestrator (per auto-routed task), explain (human + `--json`
+  snapshots), benchmark `--routing`, eval `--routing`
+- **Dashboard Routing Usage + Audit Trail** — the 🤖 Routing panel now shows:
+  - **Routing Usage — actual picks over time** — totals, last-24h, per-provider pick
+    counts, per-source breakdown (chat/orchestrator/explain/benchmark/eval), and most-
+    picked models
+  - **Audit Trail — routing decision timeline** — the 30 most recent decisions with
+    source badge, winner provider/model, complexity, task, and relative time
+  Backed by `readRoutingUsage()` + `readRoutingHistory()` in the `/api/routing` payload
+  (also wired into `/api/all` and SSE)
+
+### Changed
+- `eval.ts` — `--routing` flag + `runEvalRouting()` (mirrors `runRoutingBenchmark`)
+- `chat.ts` / `orchestrator.ts` / `benchmark.ts` / `model.ts` — record routing decisions
+  to the history store (sources: chat, orchestrator, benchmark, explain)
+- Dashboard frontend — `RoutingInsightsPanel` usage + audit sections; `types.ts` extended
+  with `RoutingUsage` / `RoutingHistoryEntry`
+- Docs — README (`eval --routing` example), User_Manual (Auto Model Routing §), Product_Guide
+  (feature inventory rows 73–75 + Key Upgrades rows)
+
+### Tests
+- `tests/learning/routing-history.test.ts` (10 tests) — record/get/usage aggregation,
+  clear, 500-entry cap, corruption resilience
+- `tests/cli/eval.test.ts` (5 tests) — routing mode dispatch, pick dedupe, per-pick suite
+  run, comparison table + best pick, unavailable-provider skip, history recording
+- `tests/web-dashboard/server.test.ts` — `/api/routing` usage aggregation + audit-timeline
+  ordering + missing-file grace (3 new tests)
+
+---
+
 ## [1.39.3] - 2026-07-31
 
 ### Added

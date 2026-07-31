@@ -11,8 +11,24 @@
  * 5. --agent routing
  */
 
-import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
+import { describe, it, expect, beforeEach, afterEach, beforeAll, afterAll, vi } from 'vitest';
+import { mkdtempSync, rmSync } from 'node:fs';
+import { join } from 'node:path';
 import { ModelCommand } from '../../src/cli/model.js';
+
+// ─── Isolate routing-history writes (explain records decisions) ────────────
+// The explain command now records routing decisions to the history store, which
+// writes to ~/.buff by default. Redirect it to a temp dir so tests stay hermetic.
+const TMP_BASE = process.env.TMPDIR || process.env.TMP || '/tmp';
+const tmpMemoryDir = mkdtempSync(join(TMP_BASE, 'buff-model-test-'));
+beforeAll(() => {
+  process.env.BUFF_MEMORY_DIR = join(tmpMemoryDir, '.buff', 'memory');
+});
+
+afterAll(() => {
+  delete process.env.BUFF_MEMORY_DIR;
+  rmSync(tmpMemoryDir, { recursive: true, force: true });
+});
 
 /** Run a command and capture everything written to stdout via console.log. */
 function runCommand(args: string[]): string {

@@ -46,6 +46,7 @@ import type { RepairMode } from '../learning/error-repair.js';
 import { estimateTokens } from '../learning/cost-tracker.js';
 import { scanForInjections, formatScanReport } from '../security/scanner.js';
 import { getAutoRouter, isAutoModel, isAutoProvider } from '../learning/auto-router.js';
+import { recordRoutingDecision } from '../learning/routing-history.js';
 import { createReviewFromResult } from '../team/review.js';
 
 // ─── DAG Integration (optional — dashboard may not be built) ─────────────────
@@ -1148,6 +1149,16 @@ export class Orchestrator {
       { verbose: options.verbose, useRuntimeStats: true },
       this.configManager,
     );
+    // Record for the dashboard usage stats + audit trail
+    recordRoutingDecision({
+      source: 'orchestrator',
+      agentType: task.agentType,
+      task: task.description,
+      complexity: decision.complexity,
+      provider: decision.provider,
+      model: decision.model,
+      score: decision.score,
+    });
     if (options.verbose) {
       logger.info(`      🤖 Auto: ${decision.explanation}`);
     }

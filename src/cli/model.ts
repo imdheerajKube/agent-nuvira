@@ -40,6 +40,7 @@ import {
   type AutoModelRouter,
   type RoutingDimension,
 } from '../learning/auto-router.js';
+import { recordRoutingDecision } from '../learning/routing-history.js';
 import { logger } from '../utils/logger.js';
 
 // ─── Active Model State ─────────────────────────────────────────────────────
@@ -612,6 +613,17 @@ export class ModelCommand extends BaseCommand {
   ): Record<string, unknown> {
     const toJSON = (t: string, agent: string): Record<string, unknown> => {
       const d = router.resolve(agent, t, { useRuntimeStats: true }, this.configManager);
+      // Record the explain snapshot for the dashboard audit trail + usage stats
+      // (JSON mode returns early in showExplain, so this is the only hook here)
+      recordRoutingDecision({
+        source: 'explain',
+        agentType: agent,
+        task: t,
+        complexity: d.complexity,
+        provider: d.provider,
+        model: d.model,
+        score: d.score,
+      });
       const pricingOverrides = this.configManager.getAll().pricing || {};
       const pricing: Record<string, { inputPer1K: number; outputPer1K: number; overridden: boolean }> = {};
       for (const r of d.ranked) {
@@ -662,6 +674,16 @@ export class ModelCommand extends BaseCommand {
   /** Render a single routing decision (compact or detailed). */
   private renderRoutingDecision(router: AutoModelRouter, agentType: string, task: string, compact = false): void {
     const decision = router.resolve(agentType, task, { useRuntimeStats: true }, this.configManager);
+    // Record the explain snapshot for the dashboard audit trail + usage stats
+    recordRoutingDecision({
+      source: 'explain',
+      agentType,
+      task,
+      complexity: decision.complexity,
+      provider: decision.provider,
+      model: decision.model,
+      score: decision.score,
+    });
 
     if (compact) {
       console.log(`  → ${decision.provider}/${decision.model}  (score ${decision.score.toFixed(2)}, ${decision.complexity})`);

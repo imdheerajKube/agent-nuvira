@@ -48,6 +48,7 @@ interface Fixtures {
   feedback: { entries: Array<unknown> };
   vectors: { entries: Record<string, unknown> };
   agentStats: { agents: Record<string, unknown>; totalRuns: number; overallSuccessRate: number };
+  routingHistory: { entries: Array<Record<string, unknown>> };
 }
 
 function writeFixture(name: string, data: unknown): void {
@@ -104,6 +105,14 @@ function writeDefaultFixtures(): Fixtures {
   const vectors = { entries: { 'vec-1': { text: 'hello' }, 'vec-2': { text: 'world' } } };
   const agentStats = { agents: { writer: { totalRuns: 10, successfulRuns: 9, failedRuns: 1, successRate: 0.9, lastRun: Date.now() } }, totalRuns: 10, overallSuccessRate: 0.9 };
 
+  const routingHistory = {
+    entries: [
+      { id: 'route-1', timestamp: Date.now() - 60000, source: 'chat', agentType: 'chat', task: 'Implement login page', complexity: 'moderate', provider: 'groq', model: 'llama-3.3-70b', score: 0.85 },
+      { id: 'route-2', timestamp: Date.now() - 120000, source: 'explain', agentType: 'chat', task: 'Design auth flow', complexity: 'critical', provider: 'gemini', model: 'gemini-2.0-flash', score: 0.92 },
+      { id: 'route-3', timestamp: Date.now() - 3 * 24 * 60 * 60 * 1000, source: 'benchmark', agentType: 'chat', task: 'Implement a Queue', complexity: 'simple', provider: 'groq', model: 'llama-3.3-70b', score: 0.78 },
+    ],
+  };
+
   writeFixture('cost-tracker', costTracker);
   writeFixture('history', history);
   writeFixture('benchmarks', benchmarks);
@@ -112,8 +121,9 @@ function writeDefaultFixtures(): Fixtures {
   writeFixture('feedback', feedback);
   writeFixture('vectors', vectors);
   writeFixture('agent-stats', agentStats);
+  writeFixture('routing-history', routingHistory);
 
-  return { costTracker, history, benchmarks, trajectories, patterns, feedback, vectors, agentStats };
+  return { costTracker, history, benchmarks, trajectories, patterns, feedback, vectors, agentStats, routingHistory };
 }
 
 // ─── HTTP helper ────────────────────────────────────────────────────────────
@@ -314,7 +324,7 @@ describe('Dashboard Server', () => {
 
     afterAll(() => {
       // Remove all fixture files
-      for (const name of ['cost-tracker', 'history', 'benchmarks', 'trajectories', 'patterns', 'feedback', 'vectors', 'agent-stats']) {
+      for (const name of ['cost-tracker', 'history', 'benchmarks', 'trajectories', 'patterns', 'feedback', 'vectors', 'agent-stats', 'routing-history']) {
         removeFixture(name);
       }
     });
@@ -460,6 +470,41 @@ describe('Dashboard Server', () => {
       expect(body.preference[4].complexity).toBe('critical');
     });
 
+    it('GET /api/routing aggregates routing usage over time', async () => {
+      const res = await httpGet(`${baseUrl}/api/routing`);
+      expect(res.statusCode).toBe(200);
+      const body = JSON.parse(res.body);
+
+      // Usage stats from the routing-history fixture (3 entries)
+      expect(body.usage.total).toBe(3);
+      // 2 entries within the last 24h (route-1, route-2)
+      expect(body.usage.last24h).toBe(2);
+      expect(body.usage.byProvider).toEqual({ groq: 2, gemini: 1 });
+      expect(body.usage.byModel).toEqual({ 'llama-3.3-70b': 2, 'gemini-2.0-flash': 1 });
+      expect(body.usage.bySource).toEqual({ chat: 1, explain: 1, benchmark: 1 });
+      expect(body.usage.byComplexity).toEqual({ moderate: 1, critical: 1, simple: 1 });
+    });
+
+    it('GET /api/routing returns the audit-trail timeline most-recent-first', async () => {
+      const res = await httpGet(`${baseUrl}/api/routing`);
+      expect(res.statusCode).toBe(200);
+      const body = JSON.parse(res.body);
+
+      expect(body.history).toHaveLength(3);
+      // Newest first
+      expect(body.history[0].id).toBe('route-1');
+      expect(body.history[1].id).toBe('route-2');
+      expect(body.history[2].id).toBe('route-3');
+      // Entry shape: task truncated, score rounded, source/provider/model present
+      const entry = body.history[0];
+      expect(entry.source).toBe('chat');
+      expect(entry.provider).toBe('groq');
+      expect(entry.model).toBe('llama-3.3-70b');
+      expect(entry.task).toBe('Implement login page');
+      expect(entry.complexity).toBe('moderate');
+      expect(entry.score).toBeCloseTo(0.85, 3);
+    });
+
     it('GET /api/routing handles malformed benchmark JSON gracefully', async () => {
       writeFileSync(join(memoryDir, 'benchmarks.json'), '{broken');
       const res = await httpGet(`${baseUrl}/api/routing`);
@@ -468,6 +513,18 @@ describe('Dashboard Server', () => {
       expect(body.providers).toEqual([]);
       expect(body.preference).toHaveLength(5);
       removeFixture('benchmarks');
+    });
+
+    it('GET /api/routing handles a missing routing-history file gracefully', async () => {
+      removeFixture('routing-history');
+      const res = await httpGet(`${baseUrl}/api/routing`);
+      expect(res.statusCode).toBe(200);
+      const body = JSON.parse(res.body);
+      expect(body.usage.total).toBe(0);
+      expect(body.usage.byProvider).toEqual({});
+      expect(body.history).toEqual([]);
+      // Restore the fixture for later tests
+      writeDefaultFixtures();
     });
   });
 

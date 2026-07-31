@@ -901,8 +901,82 @@ function readRoutingInsights(): Record<string, unknown> {
     providers: Object.entries(perProvider).map(([provider, v]) => ({ provider, ...v })),
     bestModels,
     preference,
+    usage: readRoutingUsage(),
+    history: readRoutingHistory(),
     updatedAt: Date.now(),
   };
+}
+
+// ─── Routing Usage Stats & Audit Trail ─────────────────────────────────────
+
+/**
+ * Aggregate routing usage over time from routing-history.json — which
+ * providers/models were actually picked, by source (chat/orchestrator/explain/
+ * benchmark/eval) and by complexity, plus the last-24h count.
+ */
+function readRoutingUsage(): Record<string, unknown> {
+  const data = readJSON<{ entries: Array<Record<string, unknown>> }>(
+    join(MEMORY_DIR, 'routing-history.json'),
+  );
+  if (!data?.entries || !Array.isArray(data.entries)) {
+    return { total: 0, last24h: 0, byProvider: {}, byModel: {}, bySource: {}, byComplexity: {}, updatedAt: Date.now() };
+  }
+
+  const entries = data.entries as Array<Record<string, unknown>>;
+  const byProvider: Record<string, number> = {};
+  const byModel: Record<string, number> = {};
+  const bySource: Record<string, number> = {};
+  const byComplexity: Record<string, number> = {};
+  const dayAgo = Date.now() - 24 * 60 * 60 * 1000;
+  let last24h = 0;
+
+  for (const e of entries) {
+    const provider = String(e.provider || 'unknown');
+    const model = String(e.model || 'unknown');
+    const source = String(e.source || 'unknown');
+    const complexity = String(e.complexity || 'unknown');
+    byProvider[provider] = (byProvider[provider] || 0) + 1;
+    byModel[model] = (byModel[model] || 0) + 1;
+    bySource[source] = (bySource[source] || 0) + 1;
+    byComplexity[complexity] = (byComplexity[complexity] || 0) + 1;
+    if (typeof e.timestamp === 'number' && e.timestamp >= dayAgo) last24h++;
+  }
+
+  return {
+    total: entries.length,
+    last24h,
+    byProvider,
+    byModel,
+    bySource,
+    byComplexity,
+    updatedAt: Date.now(),
+  };
+}
+
+/**
+ * Read the recent routing-decision timeline (audit trail) — most recent first.
+ */
+function readRoutingHistory(): Array<Record<string, unknown>> {
+  const data = readJSON<{ entries: Array<Record<string, unknown>> }>(
+    join(MEMORY_DIR, 'routing-history.json'),
+  );
+  if (!data?.entries || !Array.isArray(data.entries)) return [];
+
+  const entries = data.entries as Array<Record<string, unknown>>;
+  return [...entries]
+    .sort((a, b) => Number(b.timestamp || 0) - Number(a.timestamp || 0))
+    .slice(0, 30)
+    .map((e) => ({
+      id: e.id,
+      timestamp: e.timestamp,
+      source: e.source,
+      agentType: e.agentType,
+      task: typeof e.task === 'string' ? e.task.slice(0, 80) : '',
+      complexity: e.complexity,
+      provider: e.provider,
+      model: e.model,
+      score: typeof e.score === 'number' ? Math.round(e.score * 1000) / 1000 : 0,
+    }));
 }
 
 // ─── Request Handler ────────────────────────────────────────────────────────
