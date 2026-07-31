@@ -1,6 +1,6 @@
 # Agent-Nuvira — Technical Product Guide
 
-**Version 1.24.0 | September 2026**
+**Version 1.38.1 | July 2026**
 
 > *A comprehensive technical overview of Agent-Nuvira: architecture, features, version history, and market readiness for investors, stakeholders, and technical reviewers.*
 
@@ -463,6 +463,8 @@ src/web-dashboard/              # React web dashboard
 | 67 | **PhaseExecutionEngine (Phase 10)** | ✅ Complete (v1.29.0) | Phase 10 | Multi-goal project scope execution — save/resume across restarts, progress tracking, credential management |
 | 68 | **`buff publish` (Phase 10)** | ✅ Complete (v1.29.0) | Phase 10 | 5-phase autonomous pipeline — test → version bump → git commit/tag/push → npm build/publish → GitHub release |
 | 69 | **`buff phase` (Phase 10)** | ✅ Complete (v1.29.0) | Phase 10 | Phase-wise project execution CLI — create/execute/resume/status/list/delete with interactive pauses |
+| 70 | **Cross-Platform Dependency Installer** | ✅ Complete (v1.38.0) | v1.38.0 | Runner auto-installs missing project dependencies (11 manifest types, lockfile-first priority) and bootstrap-installs missing package managers (npm, pip, bundler, cargo, go, composer, dart, brew) via brew/apt/dnf/yum/winget/choco/rustup — with failed-command fallback and honest PATH diagnostics |
+| 71 | **Deps Installed Dashboard Metric** | ✅ Complete (v1.38.0) | v1.38.0 | Agent Evaluation section shows dependency-install success rate (`dependencyInstallRate`) alongside tests / composite / recovery / rollbacks |
 
 ### 3.2 Key Upgrades & Enhancements
 
@@ -486,6 +488,8 @@ src/web-dashboard/              # React web dashboard
 | **Security Scan CLI** | NextLevel | PII, injection, and dangerous code detection with severity thresholds and `--json` output |
 | **Feedback & Rating System** | NextLevel | User feedback collection with record/list/stats/clear lifecycle and score impact for routing |
 | **Marketplace Unified CLI** | NextLevel | Unified plugin + workflow template browsing, search, install, and info from a single entry point |
+| **Cross-Platform Dependency Installer** | v1.38.0 | Runner bootstrap-installs missing package managers (brew/apt/winget/rustup) and installs project deps automatically |
+| **Tool-Install Unit Tests** | v1.38.0 | 20 tests covering npm/pip/bundler/cargo/go/dart/brew bootstrap paths, failure propagation, PATH diagnostics |
 
 ### 3.3 Feature Maturity Matrix
 
@@ -1020,6 +1024,14 @@ All 30 planned phases have been implemented as of **August 2026**. See [UPGRADE_
 | 10.3 | **`buff publish`** | Autonomous release pipeline — collects credentials once, then executes 5 phases: test verification → version bump (patch/minor/major) → git commit/tag/push → npm build/publish → GitHub release. Supports dry-run preview with `--dry-run`. |
 | 10.4 | **`buff phase`** | Phase-wise project execution CLI — `create` scopes with ordered goals, `execute` all phases, `resume` after pause, `status` to view progress, `list` saved scopes, `delete` completed scopes. Built-in credential management for publish phases. |
 
+### 7.9 v1.38.0: Cross-Platform Execution & Dependency Automation (3 items, ✅ Complete)
+
+| # | Feature | Description |
+|---|---|---|
+| 11.1 | **Cross-Platform Dependency Installer** | Runner detects 11 manifest types (npm/pnpm/yarn lockfile-first, pip, bundler, cargo, go, composer, dart pub), installs missing deps on failed commands, and bootstrap-installs missing package managers — Homebrew (macOS), apt/dnf/yum/NodeSource (Linux), winget/choco/MSI (Windows), rustup (Rust), getcomposer.org → `$HOME/.local/bin` (PHP).
+| 11.2 | **Command-Based Tool Detection** | Manifest-less directories: parses the failed command's first word (`python3 script.py` → pip) and installs the missing interpreter/tool.
+| 11.3 | **Deps Installed Metric** | `dependencyInstallTool` / `dependencyInstallToolInstalled` telemetry on `RunResult` feeding the Agent Evaluation dashboard's `dependencyInstallRate` stat.
+
 ---
 
 ## 8. Investor-Focused Highlights
@@ -1099,7 +1111,7 @@ Strategic planning documents for stakeholders, investors, and team leads. These 
 - One of only **3 open-source tools** (with Ruflo, Hermes) offering the full product for $0 with BYO API keys
 - Only tool with **all six**: sandboxed testing, CI/CD mode, team workflows, self-learning, security scanning, and web dashboard
 
-> **Agent-Nuvira v1.16.1 | MIT License | Built by Dheeraj Sharma**
+> **Agent-Nuvira v1.38.1 | MIT License | Built by Dheeraj Sharma**
 > 
 > Repository: [github.com/imdheerajKube/agent-nuvira](https://github.com/imdheerajKube/agent-nuvira)
 > 

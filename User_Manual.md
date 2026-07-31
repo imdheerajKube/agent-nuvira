@@ -1,6 +1,6 @@
 # Agent-Nuvira — User Manual
 
-**Version 1.37.0 | October 2026**
+**Version 1.38.1 | July 2026**
 
 > *Agent-Nuvira: Multi-agent AI coding CLI — plan, write, review, test, and publish code with local models (Ollama) or cloud APIs (Groq, NVIDIA NIM, Google Gemini, OpenRouter).*
 
@@ -1608,6 +1608,6 @@ rm -rf ~/.buff   # Remove all configuration and cached data
 
 ---
 
-> **Agent-Nuvira v1.37.0 | MIT License | Built by Dheeraj Sharma**
+> **Agent-Nuvira v1.38.1 | MIT License | Built by Dheeraj Sharma**
 > 
 > *[github.com/imdheerajKube/agent-nuvira](https://github.com/imdheerajKube/agent-nuvira)*

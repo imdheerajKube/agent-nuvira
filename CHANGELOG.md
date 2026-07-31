@@ -7,6 +7,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [1.38.1] - 2026-07-31
+
+### Added
+- **Documentation: dependency installer** — README feature bullet and User_Manual §7.9
+  "Automatic Dependency Installation" (manifest detection, tool-bootstrap table, retry,
+  command-based fallback, `autoInstallTools:false` opt-out, telemetry)
+- **Runner tool-install tests (20)** — `installTool()` bootstrap paths for npm (no-reinstall,
+  Node bootstrap, failure propagation, not-on-PATH), yarn/pnpm, pip (ensurepip, Python-first,
+  failure), brew, bundler (gem/Ruby-first/failure), cargo (rustup), go (darwin/winget), dart
+  (brew/apt/winget), and unknown-tool error — with `process.platform` override/restore
+- **Product_Guide §3.1 rows 70–71 + §7.9 Phase 11** — Cross-Platform Execution & Dependency
+  Automation feature inventory and roadmap table
+- **Website feature card** — "Auto Dependency Install" added to the features grid (9 cards)
+
+---
+
 ## [1.38.0] - 2026-07-31
 
 ### Added
