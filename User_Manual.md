@@ -1231,6 +1231,41 @@ buff execute "remove branch hooks" --auto-branch
 
 Removes only hooks containing the 'Agent-Nuvira' marker, leaving any pre-existing hooks intact.
 
+### 7.9 Automatic Dependency Installation
+
+When a command fails because a module, package, or interpreter is missing, the **RunnerAgent** automatically installs the missing dependencies and retries — closing tasks that would otherwise fail with "cannot find module" or "command not found".
+
+**How it works:**
+
+1. **Manifest detection** — The runner scans the working directory for supported manifests:
+   `package.json` / `pnpm-lock.yaml` / `yarn.lock` (lockfiles win), `requirements.txt`,
+   `pyproject.toml`, `setup.py`, `Gemfile`, `Cargo.toml`, `go.mod`, `composer.json`, `pubspec.yaml`
+2. **Dependency install** — Runs the correct command (`npm install`, `pip install -r requirements.txt`,
+   `bundle install`, `cargo build`, `go mod download`, `composer install`, `dart pub get`, …)
+3. **Tool bootstrap** — If the package manager itself is missing, it is installed first:
+
+| Tool | Install strategy |
+|---|---|
+| npm / yarn / pnpm | Node.js via Homebrew (macOS), apt/dnf/yum or NodeSource (Linux), winget/choco/MSI (Windows) |
+| pip | `ensurepip` when Python exists; Python installed via brew/apt/winget otherwise |
+| bundler | `gem install bundler`; Ruby installed via brew/apt/winget otherwise |
+| cargo | rustup (`sh.rustup.rs -y`) |
+| go | Homebrew (macOS), apt/dnf (Linux), winget (Windows) |
+| composer | PHP via brew/apt/winget, then the getcomposer.org installer into `$HOME/.local/bin` |
+| dart | Homebrew / Google apt repo (Linux) / winget (Windows) |
+| brew | Official Homebrew install script (`NONINTERACTIVE=1`) |
+
+4. **Retry** — After a successful install, the original command is re-run automatically.
+
+**Command-based fallback:** When no manifest exists, the runner parses the failed command
+itself (`python3 script.py` → install Python) and installs the missing interpreter/tool.
+
+**Opt out:** Set `"autoInstallTools": false` in context metadata to only attempt the install
+command without installing missing tools.
+
+**Telemetry:** Each run records `dependencyInstallTool` / `dependencyInstallToolInstalled`,
+feeding the Agent Evaluation dashboard's *Deps Installed* success-rate metric.
+
 ---
 
 ## 8. Troubleshooting
@@ -1556,7 +1591,7 @@ rm -rf ~/.buff   # Remove all configuration and cached data
 | **ContextGathererAgent** | Core | Scans codebase, identifies relevant files and artifacts |
 | **WriterAgent** | Core | Implements code changes based on plan and gathered context |
 | **ReviewerAgent** | Core | Validates changes for bugs, security, and style |
-| **RunnerAgent** | Execution | Executes shell commands and captures output |
+| **RunnerAgent** | Execution | Executes shell commands and captures output; auto-installs missing project dependencies and bootstrap-installs missing package managers (npm, pip, bundler, cargo, go, composer, dart) cross-platform |
 | **TesterAgent** | Testing | Runs tests in sandboxed temp directory or Docker container |
 | **DebuggerAgent** | Testing | Iteratively diagnoses and fixes test failures via LLM |
 | **GitAgent** | Publishing | Creates branches, commits with LLM messages, generates PR descriptions |

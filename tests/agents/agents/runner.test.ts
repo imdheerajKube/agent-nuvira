@@ -1005,6 +1005,317 @@ describe('RunnerAgent', () => {
     });
   });
 
+  // ─── Tool Install Bootstrap Paths (installTool) ───────────────────────
+  //
+  // installTool() must bootstrap-install missing package managers without
+  // touching the real machine. Each test stubs commandExists / runInstallCommand
+  // / install*ViaPlatform so nothing runs against the host.
+
+  describe('tool install bootstrap paths', () => {
+    /** Access private installTool via prototype */
+    function installTool(tool: string) {
+      return (runner as any).installTool.call(runner, tool);
+    }
+
+    /** Stub commandExists to return `exists` for a specific set of tools, false otherwise */
+    function stubCommandExists(exists: string[]) {
+      return vi.spyOn(runner as any, 'commandExists').mockImplementation((t: string) => exists.includes(t));
+    }
+
+    /** Stub runInstallCommand to record commands and return success */
+    function stubRunInstall(success = true) {
+      const executed: string[] = [];
+      const spy = vi.spyOn(runner as any, 'runInstallCommand').mockImplementation((cmd: string) => {
+        executed.push(cmd);
+        return {
+          success,
+          command: cmd,
+          toolInstalled: true,
+          message: success ? 'Installed via: ' + cmd : 'install failed: ' + cmd,
+        };
+      });
+      return { executed, spy };
+    }
+
+    /** Stub a platform installer (e.g. installNodeViaPlatform) to return success */
+    function stubPlatformInstaller(name: string, success = true) {
+      return vi.spyOn(runner as any, name).mockReturnValue({
+        success,
+        command: `${name} stub`,
+        tool: name.replace('install', '').replace('ViaPlatform', '').toLowerCase() || name,
+        toolInstalled: true,
+        message: success ? `${name} ok` : `${name} failed`,
+      });
+    }
+
+    afterEach(() => {
+      vi.restoreAllMocks();
+    });
+
+    // ── npm ────────────────────────────────────────────────────────────
+
+    it('npm: returns success immediately when npm already exists (no reinstall)', () => {
+      stubCommandExists(['npm']);
+      const nodeSpy = stubPlatformInstaller('installNodeViaPlatform');
+      const { executed } = stubRunInstall();
+
+      const result = installTool('npm');
+
+      expect(result.success).toBe(true);
+      expect(result.message).toBe('npm is now available');
+      expect(nodeSpy).not.toHaveBeenCalled(); // no reinstall loop
+      expect(executed.length).toBe(0);
+    });
+
+    it('npm: bootstraps Node.js first when npm is missing', () => {
+      let npmExists = false;
+      vi.spyOn(runner as any, 'commandExists').mockImplementation((t: string) => {
+        if (t === 'npm') return npmExists;
+        return true;
+      });
+      // Installing Node makes npm available (as it does in the real flow)
+      const nodeSpy = vi.spyOn(runner as any, 'installNodeViaPlatform').mockImplementation(() => {
+        npmExists = true;
+        return { success: true, command: 'brew install node', tool: 'node', toolInstalled: true, message: 'node ok' };
+      });
+
+      const result = installTool('npm');
+
+      expect(nodeSpy).toHaveBeenCalled();
+      expect(result.success).toBe(true);
+      expect(result.message).toBe('npm is now available');
+    });
+
+    it('npm: propagates a Node.js install failure', () => {
+      stubCommandExists([]);
+      const nodeSpy = stubPlatformInstaller('installNodeViaPlatform', false);
+
+      const result = installTool('npm');
+
+      expect(result.success).toBe(false);
+      expect(nodeSpy).toHaveBeenCalled();
+    });
+
+    it('npm: reports when npm was installed but is not on PATH for this process', () => {
+      stubCommandExists([]);
+      stubPlatformInstaller('installNodeViaPlatform');
+      // Even after a successful Node install, npm is not visible on PATH for
+      // this process (open a new terminal) — must report failure honestly.
+      const result = installTool('npm');
+
+      expect(result.success).toBe(false);
+      expect(result.message).toContain('not on PATH');
+    });
+
+    it('yarn: installs via npm install -g yarn', () => {
+      stubCommandExists(['npm']);
+      const { executed } = stubRunInstall();
+
+      const result = installTool('yarn');
+
+      expect(result.success).toBe(true);
+      expect(executed[0]).toBe('npm install -g yarn');
+    });
+
+    it('pnpm: installs via npm install -g pnpm', () => {
+      stubCommandExists(['npm']);
+      const { executed } = stubRunInstall();
+
+      const result = installTool('pnpm');
+
+      expect(result.success).toBe(true);
+      expect(executed[0]).toBe('npm install -g pnpm');
+    });
+
+    // ── pip ────────────────────────────────────────────────────────────
+
+    it('pip: bootstraps pip via ensurepip when Python already exists', () => {
+      stubCommandExists(['python3']);
+      const { executed } = stubRunInstall();
+
+      const result = installTool('pip');
+
+      expect(result.success).toBe(true);
+      expect(executed[0]).toBe('python3 -m ensurepip --upgrade');
+    });
+
+    it('pip: installs Python first when neither python3 nor python exists', () => {
+      stubCommandExists([]);
+      const pySpy = stubPlatformInstaller('installPythonViaPlatform');
+      const { executed } = stubRunInstall();
+
+      const result = installTool('pip');
+
+      expect(pySpy).toHaveBeenCalled();
+      expect(result.success).toBe(true);
+      // ensurepip runs against the freshly installed python3
+      expect(executed.some((c) => c.includes('ensurepip'))).toBe(true);
+    });
+
+    it('pip: propagates a Python install failure without running ensurepip', () => {
+      stubCommandExists([]);
+      const pySpy = stubPlatformInstaller('installPythonViaPlatform', false);
+      const { executed } = stubRunInstall();
+
+      const result = installTool('pip');
+
+      expect(result.success).toBe(false);
+      expect(pySpy).toHaveBeenCalled();
+      expect(executed.length).toBe(0);
+    });
+
+    // ── brew ───────────────────────────────────────────────────────────
+
+    it('brew: runs the official Homebrew install script with NONINTERACTIVE=1', () => {
+      const { executed } = stubRunInstall();
+
+      const result = installTool('brew');
+
+      expect(result.success).toBe(true);
+      expect(executed[0]).toContain('Homebrew/install/HEAD/install.sh');
+      expect(executed[0]).toContain('NONINTERACTIVE=1');
+    });
+
+    // ── bundle ─────────────────────────────────────────────────────────
+
+    it('bundle: installs via gem install bundler when gem exists', () => {
+      stubCommandExists(['gem']);
+      const { executed } = stubRunInstall();
+
+      const result = installTool('bundle');
+
+      expect(result.success).toBe(true);
+      expect(executed[0]).toBe('gem install bundler');
+    });
+
+    it('bundle: installs Ruby first when gem is missing', () => {
+      stubCommandExists([]);
+      const rubySpy = stubPlatformInstaller('installRubyViaPlatform');
+      const { executed } = stubRunInstall();
+
+      const result = installTool('bundle');
+
+      expect(rubySpy).toHaveBeenCalled();
+      expect(result.success).toBe(true);
+      expect(executed[0]).toBe('gem install bundler');
+    });
+
+    it('bundle: propagates a Ruby install failure', () => {
+      stubCommandExists([]);
+      const rubySpy = stubPlatformInstaller('installRubyViaPlatform', false);
+
+      const result = installTool('bundle');
+
+      expect(result.success).toBe(false);
+      expect(rubySpy).toHaveBeenCalled();
+    });
+
+    // ── cargo ──────────────────────────────────────────────────────────
+
+    it('cargo: installs via rustup', () => {
+      const { executed } = stubRunInstall();
+
+      const result = installTool('cargo');
+
+      expect(result.success).toBe(true);
+      expect(executed[0]).toContain('sh.rustup.rs');
+      expect(executed[0]).toContain('-y');
+    });
+
+    // ── go ─────────────────────────────────────────────────────────────
+
+    it('go on darwin: installs via the platform installer (brew)', () => {
+      const originalPlatform = Object.getOwnPropertyDescriptor(process, 'platform');
+      Object.defineProperty(process, 'platform', { value: 'darwin', configurable: true });
+      try {
+        const goSpy = stubPlatformInstaller('installGoViaPlatform');
+
+        const result = installTool('go');
+
+        expect(result.success).toBe(true);
+        expect(goSpy).toHaveBeenCalledWith('darwin');
+      } finally {
+        Object.defineProperty(process, 'platform', originalPlatform as PropertyDescriptor);
+      }
+    });
+
+    it('go on win32: installs via winget', () => {
+      const originalPlatform = Object.getOwnPropertyDescriptor(process, 'platform');
+      Object.defineProperty(process, 'platform', { value: 'win32', configurable: true });
+      try {
+        const { executed } = stubRunInstall();
+
+        const result = installTool('go');
+
+        expect(result.success).toBe(true);
+        expect(executed[0]).toContain('winget install GoLang.Go');
+        expect(executed[0]).toContain('--silent');
+      } finally {
+        Object.defineProperty(process, 'platform', originalPlatform as PropertyDescriptor);
+      }
+    });
+
+    // ── dart ───────────────────────────────────────────────────────────
+
+    it('dart on darwin: installs via Homebrew when brew exists', () => {
+      const originalPlatform = Object.getOwnPropertyDescriptor(process, 'platform');
+      Object.defineProperty(process, 'platform', { value: 'darwin', configurable: true });
+      try {
+        stubCommandExists(['brew']);
+        const { executed } = stubRunInstall();
+
+        const result = installTool('dart');
+
+        expect(result.success).toBe(true);
+        expect(executed[0]).toBe('brew install dart-lang/dart/dart');
+      } finally {
+        Object.defineProperty(process, 'platform', originalPlatform as PropertyDescriptor);
+      }
+    });
+
+    it('dart on linux: adds Google apt repo then installs dart', () => {
+      const originalPlatform = Object.getOwnPropertyDescriptor(process, 'platform');
+      Object.defineProperty(process, 'platform', { value: 'linux', configurable: true });
+      try {
+        const { executed } = stubRunInstall();
+
+        const result = installTool('dart');
+
+        expect(result.success).toBe(true);
+        const cmd = executed[0];
+        expect(cmd).toContain('apt-get install -y dart');
+        expect(cmd).toContain('dl-ssl.google.com/linux/linux_signing_key.pub');
+        expect(cmd).toContain('sources.list.d/dart.list');
+      } finally {
+        Object.defineProperty(process, 'platform', originalPlatform as PropertyDescriptor);
+      }
+    });
+
+    it('dart on win32: installs via winget', () => {
+      const originalPlatform = Object.getOwnPropertyDescriptor(process, 'platform');
+      Object.defineProperty(process, 'platform', { value: 'win32', configurable: true });
+      try {
+        const { executed } = stubRunInstall();
+
+        const result = installTool('dart');
+
+        expect(result.success).toBe(true);
+        expect(executed[0]).toContain('winget install Dart.Dart');
+      } finally {
+        Object.defineProperty(process, 'platform', originalPlatform as PropertyDescriptor);
+      }
+    });
+
+    // ── unknown tool ───────────────────────────────────────────────────
+
+    it('returns a clear error for tools with no bootstrap strategy', () => {
+      const result = installTool('definitely-not-a-tool');
+
+      expect(result.success).toBe(false);
+      expect(result.message).toContain('No bootstrap strategy');
+    });
+  });
+
   // ─── Command Validation (isCommandAvailable) ──────────────────────────
   //
   // Tests for the isCommandAvailable() method added to prevent hardcoded

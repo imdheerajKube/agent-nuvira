@@ -52,6 +52,10 @@ agent-nuvira config list
 - **MCP (Model Context Protocol) integration** — connect to databases, APIs, and file systems via MCP servers with SSE transport support
 - **AST-aware code editing** — structural analysis engine understands functions, classes, methods across JS/TS/Python/Go/Rust
 - **Auto error-repair engine** — automatic diagnosis and repair of test failures with configurable retry budgets
+- **Cross-platform dependency installer (Runner)** — auto-detects 11 manifest types (npm/pnpm/yarn with
+  lockfile-first priority, pip, bundler, cargo, go, composer, dart pub), installs missing project dependencies
+  on failed commands, and bootstrap-installs missing package managers (npm, pip, bundler, cargo, go, composer,
+  dart, Homebrew) via brew/apt/dnf/yum/winget/choco/rustup — no manual setup required
 - **A2A (Agent-to-Agent) Protocol** — inter-agent communication standard for multi-machine collaboration
 - **CI/CD headless mode** — `buff ci` for automated pipelines with GitHub Actions integration
 - **npm publishing & one-line install** — `npx agent-nuvira` and `npx buff` for zero-setup onboarding
