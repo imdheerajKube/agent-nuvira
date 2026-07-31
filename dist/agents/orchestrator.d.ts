@@ -124,6 +124,34 @@ export interface OrchestrationResult {
     trajectoryId?: string;
     /** Review bundle ID if review mode was enabled */
     reviewId?: string;
+    /** Execution telemetry — attempts, repair activity, dependency installs */
+    stats?: ExecutionStats;
+}
+/**
+ * Telemetry about how the pipeline executed — used by the evaluation
+ * framework to measure reliability, recovery behavior, and token efficiency.
+ */
+export interface ExecutionStats {
+    /** Total LLM calls made across all agents */
+    llmCalls: number;
+    /** Estimated input tokens */
+    inputTokens: number;
+    /** Estimated output tokens */
+    outputTokens: number;
+    /** Total repair attempts triggered by the ErrorRepairEngine */
+    repairAttempts: number;
+    /** Count of 'alternative-approach' repair strategies executed */
+    alternativeApproaches: number;
+    /** Tasks that failed on first attempt but succeeded after repair */
+    recoveredFailures: number;
+    /** Total task failures (before repair) */
+    taskFailures: number;
+    /** Whether the runner auto-installed dependencies */
+    dependencyInstallAttempted: boolean;
+    /** Whether the dependency install succeeded */
+    dependencyInstallSucceeded: boolean;
+    /** Number of file changes that were rolled back (reverted to original) */
+    rollbackCount: number;
 }
 export declare class Orchestrator {
     private configManager;
@@ -133,6 +161,8 @@ export declare class Orchestrator {
     private eventBus;
     /** The report module for generating structured execution reports */
     private reportModule;
+    /** Execution telemetry accumulator for the current pipeline */
+    private stats;
     constructor(configManager?: ConfigManager, moduleRegistry?: ModuleRegistry, eventBus?: EventBus, reportModule?: ReportModule);
     /**
      * Execute a multi-agent pipeline for the given goal.
@@ -146,6 +176,12 @@ export declare class Orchestrator {
      */
     private createRateLimitHandler;
     private executeSingleTask;
+    /**
+     * Create an LLM call function routed by the AutoModelRouter for a task.
+     * Uses the task description for complexity analysis and resolves the best
+     * provider/model per agent type.
+     */
+    private createAutoRoutedLLM;
     /**
      * Run the ContextPruner on the vault context.
      * Only prunes when the context exceeds the configured threshold.

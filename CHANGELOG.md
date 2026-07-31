@@ -7,6 +7,28 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [1.41.0] - 2026-07-31
+
+### Added
+- **`buff model list --json`** — structured JSON output (`{ active, providers: [...] }`)
+  for provider/status/availability listing, powering reliable parsing in the VS Code
+  extension's model & provider switcher
+- **`buff models --json`** — machine-readable per-provider model listing
+  (`{ models: [{ provider, providerType, name, id, owner, description }] }`) with pure
+  JSON on stdout (no spinner/log decoration). `providerType` is included so consumers can
+  switch directly with `buff model switch <provider>/<model>`. Honors `-p` and `-s` filters
+
+### Changed
+- `src/cli/models.ts` — new `-j/--json` flag; human output (ora spinner, logger lines,
+  results table) is gated behind non-JSON mode so scripting stays parseable
+- `src/cli/model.ts` — `model list` gained `-j/--json` output
+
+### Tests
+- `tests/cli/models.test.ts` (7 tests) — JSON shape, `providerType` presence, `-p`/`-s`
+  filters, pure-JSON stdout, empty-list and fetch-error fallbacks
+
+---
+
 ## [1.40.0] - 2026-07-31
 
 ### Added

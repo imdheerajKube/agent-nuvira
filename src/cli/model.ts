@@ -171,6 +171,7 @@ export class ModelCommand extends BaseCommand {
       .alias('ls')
       .description('List all providers and their configuration status')
       .option('--all', 'Show all providers including unconfigured', false)
+      .option('-j, --json', 'Output as JSON (for scripting and IDE integration)', false)
       .action(async (opts) => this.listProviders(opts));
 
     cmd
@@ -221,7 +222,7 @@ export class ModelCommand extends BaseCommand {
 
   // ── Subcommand: list ───────────────────────────────────────────────────
 
-  private async listProviders(opts: { all?: boolean }): Promise<void> {
+  private async listProviders(opts: { all?: boolean; json?: boolean }): Promise<void> {
     const builtinTypes: ProviderType[] = ['local', 'groq', 'nim', 'gemini', 'openrouter'];
     const registry = getPluginRegistry();
     const pluginTypes = registry.getAllPlugins().map((p) => p.getProviderType());
@@ -319,6 +320,15 @@ export class ModelCommand extends BaseCommand {
         isActive: active?.provider === pt,
         isPlugin: true,
       });
+    }
+
+    // ── JSON output (for scripting / IDE integration) ───────────────
+    if (opts.json) {
+      console.log(JSON.stringify({
+        active,
+        providers: results,
+      }, null, 2));
+      return;
     }
 
     // ── Render ─────────────────────────────────────────────────────────

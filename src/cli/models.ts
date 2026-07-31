@@ -18,14 +18,15 @@ export class ModelsCommand extends BaseCommand {
       .option('-s, --search <keyword>', 'Search/filter models by keyword')
       .option('--all', 'Show all models (including unconfigured providers)', false)
       .option('--verify', 'Verify API keys and show configuration status for all providers', false)
-      .action(async (options?: { provider?: string; search?: string; all?: boolean; verify?: boolean }) => {
+      .option('-j, --json', 'Output as JSON (for scripting and IDE integration)', false)
+      .action(async (options?: { provider?: string; search?: string; all?: boolean; verify?: boolean; json?: boolean }) => {
         await this.execute(options || {});
       });
 
     return command;
   }
 
-  private async execute(options?: { provider?: string; search?: string; all?: boolean; verify?: boolean }): Promise<void> {
+  private async execute(options?: { provider?: string; search?: string; all?: boolean; verify?: boolean; json?: boolean }): Promise<void> {
     const providersToCheck: string[] = options?.provider
       ? [options.provider]
       : (() => {
@@ -36,7 +37,7 @@ export class ModelsCommand extends BaseCommand {
         })();
 
     // If --verify, show API key/configuration status and then list models
-    if (options?.verify) {
+    if (options?.verify && !options?.json) {
       console.log();
       logger.highlight('🔑 Provider Configuration Status\n');
       for (const providerType of providersToCheck) {
@@ -59,10 +60,19 @@ export class ModelsCommand extends BaseCommand {
       }
     }
 
-    const allResults: Array<{ provider: string; name: string; id: string; owner?: string; description?: string }> = [];
+    const allResults: Array<{
+      provider: string;
+      /** Provider type used for switching (e.g. 'groq', 'openrouter') */
+      providerType: string;
+      name: string;
+      id: string;
+      owner?: string;
+      description?: string;
+    }> = [];
 
     for (const providerType of providersToCheck) {
-      const { provider } = resolveProvider(this.configManager, providerType);
+      const resolved = resolveProvider(this.configManager, providerType);
+      const provider = resolved.provider;
       const available = await provider.isAvailable();
 
       if (!available && !options?.all) {
@@ -70,17 +80,19 @@ export class ModelsCommand extends BaseCommand {
         continue;
       }
 
-      const s = ora(`Fetching models from ${provider.name}...`).start();
+      const s = options?.json ? null : ora(`Fetching models from ${provider.name}...`).start();
 
       try {
         const models = await provider.listModels();
-        s.stop();
+        s?.stop();
 
         if (models.length === 0) {
-          if (available) {
-            logger.info(`${provider.name}: No models found or API not reachable`);
-          } else {
-            logger.info(`${provider.name}: Not configured`);
+          if (!options?.json) {
+            if (available) {
+              logger.info(`${provider.name}: No models found or API not reachable`);
+            } else {
+              logger.info(`${provider.name}: Not configured`);
+            }
           }
           continue;
         }
@@ -88,6 +100,7 @@ export class ModelsCommand extends BaseCommand {
         for (const model of models) {
           allResults.push({
             provider: provider.name,
+            providerType: resolved.type,
             name: model.name,
             id: model.id,
             owner: model.owner,
@@ -95,10 +108,14 @@ export class ModelsCommand extends BaseCommand {
           });
         }
 
-        logger.success(`${provider.name}: ${models.length} models found`);
+        if (!options?.json) {
+          logger.success(`${provider.name}: ${models.length} models found`);
+        }
       } catch (err) {
-        s.stop();
-        logger.error(`${provider.name}: Failed to fetch models — ${String(err)}`);
+        s?.stop();
+        if (!options?.json) {
+          logger.error(`${provider.name}: Failed to fetch models — ${String(err)}`);
+        }
       }
     }
 
@@ -110,6 +127,12 @@ export class ModelsCommand extends BaseCommand {
           (m.owner || '').toLowerCase().includes(options.search!.toLowerCase())
         )
       : allResults;
+
+    // ── JSON output (for scripting / IDE integration) ───────────────
+    if (options?.json) {
+      console.log(JSON.stringify({ models: filtered }, null, 2));
+      return;
+    }
 
     if (filtered.length === 0) {
       if (options?.search) {

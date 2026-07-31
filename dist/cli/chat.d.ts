@@ -22,6 +22,12 @@ export declare class ChatCommand extends BaseCommand {
      */
     private showModelPicker;
     /**
+     * Resolve the best provider/model for a message via the AutoModelRouter.
+     * Returns the routed type/provider/model; the caller applies them to the
+     * active session state.
+     */
+    private routeMessageAuto;
+    /**
      * Read multi-line input from stdin using readline.
      *
      * - First line prompt: "You: "

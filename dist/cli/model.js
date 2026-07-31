@@ -27,6 +27,8 @@ import { showModelPicker } from './model-picker.js';
 import { getPluginRegistry } from '../plugins/registry.js';
 import { getModelBadge } from '../inference/model-catalog.js';
 import { getHybridRouter } from '../learning/hybrid-router.js';
+import { AUTO_MODEL, AUTO_PROVIDER, getAutoRouter, isAutoModel, isAutoProvider, } from '../learning/auto-router.js';
+import { recordRoutingDecision } from '../learning/routing-history.js';
 import { logger } from '../utils/logger.js';
 const BUFF_DIR = join(homedir(), '.buff');
 const ACTIVE_MODEL_PATH = join(BUFF_DIR, 'active-model.json');
@@ -85,6 +87,7 @@ const PROVIDER_ICONS = {
     gemini: '🔷',
     openrouter: '🟣',
     groq: '🟢',
+    auto: '🤖',
 };
 const PROVIDER_LABELS = {
     local: 'Ollama (Local)',
@@ -92,6 +95,7 @@ const PROVIDER_LABELS = {
     gemini: 'Google Gemini',
     openrouter: 'OpenRouter',
     groq: 'Groq',
+    auto: 'Auto (Agent decides)',
 };
 const PROVIDER_ELIGIBILITY = {
     local: 'Works offline — install Ollama: brew install ollama',
@@ -100,6 +104,18 @@ const PROVIDER_ELIGIBILITY = {
     openrouter: 'Set OPENROUTER_API_KEY (get at openrouter.ai/keys)',
     groq: 'Set GROQ_API_KEY (get at console.groq.com)',
 };
+/**
+ * Sample tasks used by `buff model explain` (no-task mode) to walk every
+ * complexity level. Shared by the human rendering and the --json output so
+ * they never drift apart.
+ */
+const EXPLAIN_SAMPLES = [
+    { label: '🟢 trivial', task: 'format this code' },
+    { label: '🔵 simple', task: 'add a simple utility function' },
+    { label: '🟡 moderate', task: 'implement JWT authentication with refresh tokens' },
+    { label: '🟠 complex', task: 'design a distributed event-driven microservices architecture' },
+    { label: '🔴 critical', task: 'deploy to production with zero downtime' },
+];
 // ─── ModelCommand ───────────────────────────────────────────────────────────
 export class ModelCommand extends BaseCommand {
     create() {
@@ -110,10 +126,11 @@ export class ModelCommand extends BaseCommand {
             .alias('ls')
             .description('List all providers and their configuration status')
             .option('--all', 'Show all providers including unconfigured', false)
+            .option('-j, --json', 'Output as JSON (for scripting and IDE integration)', false)
             .action(async (opts) => this.listProviders(opts));
         cmd
             .command('switch [providerAndModel]')
-            .description('Switch active provider/model (interactive or via argument)')
+            .description('Switch active provider/model (interactive or via argument). Use `auto` for smart routing')
             .option('--provider <provider>', 'Provider to switch to')
             .option('--model <model>', 'Model to use with the provider')
             .action(async (providerAndModel, opts) => {
@@ -128,6 +145,12 @@ export class ModelCommand extends BaseCommand {
             .command('recommend')
             .description('Show model routing recommendations')
             .action(() => this.showRecommendations());
+        cmd
+            .command('explain [task]')
+            .description('Explain Auto model routing — why a provider/model would be picked for a task')
+            .option('-a, --agent <type>', 'Agent type to route for (default: chat)', 'chat')
+            .option('-j, --json', 'Output as JSON (for scripting and CI)', false)
+            .action((task, opts) => this.showExplain(task, opts));
         cmd
             .command('health')
             .description('Quick health check for the currently active provider')
@@ -228,6 +251,14 @@ export class ModelCommand extends BaseCommand {
                 isPlugin: true,
             });
         }
+        // ── JSON output (for scripting / IDE integration) ───────────────
+        if (opts.json) {
+            console.log(JSON.stringify({
+                active,
+                providers: results,
+            }, null, 2));
+            return;
+        }
         // ── Render ─────────────────────────────────────────────────────────
         console.log('  ┌──────────────────────────────────┬──────────┬──────────┬──────────────────┐');
         console.log('  │ Provider                         │ Status   │ Available│ Model            │');
@@ -286,8 +317,26 @@ export class ModelCommand extends BaseCommand {
     /**
      * Perform the actual provider/model switch.
      * Saves the active model state and confirms to the user.
+     * Special-cases `auto` — the agent decides the best provider/model per task.
      */
     async doSwitch(provider, model) {
+        // ── Auto mode: agent decides per task ─────────────────────────────────
+        if (isAutoProvider(provider) || isAutoModel(model)) {
+            saveActiveModelState({
+                provider: AUTO_PROVIDER,
+                model: AUTO_MODEL,
+                explicit: true,
+                providerLabel: 'Auto (Agent decides)',
+            });
+            console.log('');
+            logger.success('🤖  Auto routing enabled');
+            console.log('   Agent-Nuvira will pick the best provider/model for each task');
+            console.log('   based on complexity, cost, latency, privacy, and reliability.');
+            console.log('');
+            logger.info('Run `buff model switch <provider>` to pin a specific provider instead.');
+            console.log('');
+            return;
+        }
         try {
             // Resolve the actual model to use
             let resolvedModel = model;
@@ -422,6 +471,141 @@ export class ModelCommand extends BaseCommand {
         console.log('');
         logger.info('Run `buff model switch` to change providers.');
         logger.info('Run `buff model list` to see availability status.');
+        console.log('');
+    }
+    // ── Subcommand: explain ───────────────────────────────────────────────
+    showExplain(task, opts) {
+        const router = getAutoRouter();
+        const agentType = opts.agent || 'chat';
+        if (opts.json) {
+            console.log(JSON.stringify(this.buildExplainJSON(router, agentType, task), null, 2));
+            return;
+        }
+        console.log('');
+        logger.highlight('═══  Auto Model Routing — Explain  ═══');
+        console.log('');
+        if (task) {
+            logger.info(`Task: "${task}"  ·  Agent: ${agentType}`);
+            console.log('');
+            this.renderRoutingDecision(router, agentType, task);
+            return;
+        }
+        // No task given — walk through sample tasks across all complexity levels
+        for (const s of EXPLAIN_SAMPLES) {
+            logger.highlight(`  ${s.label} — "${s.task}"`);
+            this.renderRoutingDecision(router, agentType, s.task, true);
+            console.log('');
+        }
+        console.log('');
+        logger.info('Pass a task for a single detailed decision: `buff model explain "your task"`');
+        logger.info('Route for a specific agent: `buff model explain --agent writer "your task"`');
+        logger.info('JSON for scripting/CI: `buff model explain "your task" --json`');
+        console.log('');
+    }
+    /**
+     * Build a machine-readable explanation payload.
+     * Single task → one decision object; no task → all 5 sample complexities.
+     * Includes effective per-provider pricing (with override flags).
+     */
+    buildExplainJSON(router, agentType, task) {
+        const toJSON = (t, agent) => {
+            const d = router.resolve(agent, t, { useRuntimeStats: true }, this.configManager);
+            // Record the explain snapshot for the dashboard audit trail + usage stats
+            // (JSON mode returns early in showExplain, so this is the only hook here)
+            recordRoutingDecision({
+                source: 'explain',
+                agentType: agent,
+                task: t,
+                complexity: d.complexity,
+                provider: d.provider,
+                model: d.model,
+                score: d.score,
+            });
+            const pricingOverrides = this.configManager.getAll().pricing || {};
+            const pricing = {};
+            for (const r of d.ranked) {
+                const p = router.getProviderPricing(r.provider, this.configManager);
+                pricing[r.provider] = {
+                    inputPer1K: p.inputPer1K,
+                    outputPer1K: p.outputPer1K,
+                    overridden: !!pricingOverrides[r.provider],
+                };
+            }
+            return {
+                task: t,
+                agentType: agent,
+                complexity: d.complexity,
+                taskType: d.taskType,
+                weights: d.weights,
+                winner: {
+                    provider: d.provider,
+                    model: d.model,
+                    score: Math.round(d.score * 1000) / 1000,
+                },
+                ranked: d.ranked.map((r) => ({
+                    provider: r.provider,
+                    score: Math.round(r.score * 1000) / 1000,
+                    inCooldown: r.inCooldown,
+                    reason: r.reason,
+                    dimensions: r.dimensions,
+                })),
+                fallbackChain: d.fallbackChain.map((c) => ({
+                    provider: c.provider,
+                    model: c.model,
+                    qualityScore: Math.round(c.qualityScore * 1000) / 1000,
+                    reason: c.reason,
+                })),
+                pricing,
+                explanation: d.explanation,
+            };
+        };
+        if (task)
+            return toJSON(task, agentType);
+        return {
+            agentType,
+            decisions: EXPLAIN_SAMPLES.map((s) => toJSON(s.task, agentType)),
+        };
+    }
+    /** Render a single routing decision (compact or detailed). */
+    renderRoutingDecision(router, agentType, task, compact = false) {
+        const decision = router.resolve(agentType, task, { useRuntimeStats: true }, this.configManager);
+        // Record the explain snapshot for the dashboard audit trail + usage stats
+        recordRoutingDecision({
+            source: 'explain',
+            agentType,
+            task,
+            complexity: decision.complexity,
+            provider: decision.provider,
+            model: decision.model,
+            score: decision.score,
+        });
+        if (compact) {
+            console.log(`  → ${decision.provider}/${decision.model}  (score ${decision.score.toFixed(2)}, ${decision.complexity})`);
+            return;
+        }
+        console.log(`  Complexity: ${decision.complexity}  ·  Task type: ${decision.taskType}`);
+        console.log('');
+        logger.highlight('  ── Dimension weights ──');
+        for (const dim of Object.keys(decision.weights)) {
+            const pct = Math.round(decision.weights[dim] * 100);
+            const bar = '█'.repeat(Math.round(pct / 5)).padEnd(20, '░');
+            console.log(`   ${dim.padEnd(12)} ${bar} ${pct}%`);
+        }
+        console.log('');
+        logger.highlight('  ── Ranked providers ──');
+        decision.ranked.forEach((r, i) => {
+            const mark = r.provider === decision.provider ? '✅' : '  ';
+            const cd = r.inCooldown ? '  (circuit-breaker cooldown)' : '';
+            console.log(`   ${mark} ${i + 1}. ${r.provider.padEnd(12)} score ${r.score.toFixed(3)}  ${r.reason}${cd}`);
+        });
+        console.log('');
+        logger.success(`  Decision: ${decision.provider}/${decision.model}`);
+        console.log(`  ${decision.explanation}`);
+        console.log('');
+        logger.highlight('  ── Fallback chain ──');
+        for (const c of decision.fallbackChain) {
+            console.log(`   → ${c.provider}/${c.model}  (${c.reason})`);
+        }
         console.log('');
     }
     // ── Subcommand: recommend ──────────────────────────────────────────────

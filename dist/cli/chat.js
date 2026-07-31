@@ -13,6 +13,8 @@ import { Orchestrator } from '../agents/orchestrator.js';
 import { printOrchestrationResult } from './execute.js';
 import { applyActiveModel } from './model.js';
 import { getProviderFallback, classifyFallbackError, isRetryableError } from '../learning/provider-fallback.js';
+import { getAutoRouter, isAutoModel, isAutoProvider } from '../learning/auto-router.js';
+import { recordRoutingDecision } from '../learning/routing-history.js';
 /**
  * Detect error type and prompt the user for a recovery action.
  * This is a standalone function (not a method) for clarity.
@@ -80,6 +82,10 @@ async function handleInferenceError(err, providerName, configManager) {
     if (answer.action === 'switch') {
         const picked = await showModelPicker(configManager);
         if (picked) {
+            // ── Auto selected — re-enable auto routing instead of switching ──
+            if (picked.provider === 'auto' || isAutoModel(picked.model)) {
+                return { action: 'switch', auto: true };
+            }
             const resolved = resolveProvider(configManager, picked.provider);
             return {
                 action: 'switch',
@@ -185,7 +191,11 @@ export class ChatCommand extends BaseCommand {
         // Apply the active model state from `buff model switch` as defaults
         const activeOpts = applyActiveModel({ provider: options?.provider, model: options?.model });
         const mergedOpts = { ...options, provider: activeOpts.provider, model: activeOpts.model };
-        let { type, provider } = await this.getProvider(mergedOpts);
+        // ── Auto routing mode: agent decides the best provider/model per message ──
+        let autoMode = isAutoModel(mergedOpts.model) || isAutoProvider(mergedOpts.provider);
+        let { type, provider } = autoMode
+            ? await this.getProvider({})
+            : await this.getProvider(mergedOpts);
         let model = mergedOpts.model;
         // In interactive mode (no prompt), show the model picker if no --model was specified
         if (!model && !prompt) {
@@ -219,6 +229,13 @@ export class ChatCommand extends BaseCommand {
         process.on('SIGINT', sigintHandler);
         const cacheEnabled = options?.cache !== false;
         if (prompt) {
+            // ── Auto routing for single-shot prompts ────────────────────────────
+            if (autoMode) {
+                const routed = this.routeMessageAuto(prompt);
+                type = routed.type;
+                provider = routed.provider;
+                model = routed.model;
+            }
             if (options?.dev || hasCreationIntent(prompt)) {
                 const proceed = options?.dev || await promptDeveloperMode(prompt);
                 if (proceed) {
@@ -248,12 +265,18 @@ export class ChatCommand extends BaseCommand {
                 const result = await this.handleCommand(message, provider, model, type);
                 if (result.exit)
                     break;
-                if (result.newProvider) {
+                if (result.auto) {
+                    autoMode = true;
+                    logger.success('🤖 Auto routing enabled — agent picks the best model per message');
+                    console.log('');
+                }
+                else if (result.newProvider) {
                     type = result.newType;
                     provider = result.newProvider;
                     model = result.newModel;
                     effectiveModel = result.newModel || effectiveModelForHistory;
                     effectiveModelForHistory = effectiveModel;
+                    autoMode = false; // explicit picker choice overrides auto routing
                     logger.success(`✅ Switched to ${provider.name} / ${model}`);
                     console.log('');
                 }
@@ -279,6 +302,15 @@ export class ChatCommand extends BaseCommand {
                 }
             }
             history.push({ role: 'user', content: message });
+            // ── Auto routing: pick the best provider/model for this message ──────
+            if (autoMode) {
+                const routed = this.routeMessageAuto(message);
+                type = routed.type;
+                provider = routed.provider;
+                effectiveModel = routed.model;
+                effectiveModelForHistory = effectiveModel;
+                model = effectiveModel;
+            }
             const contextStr = history.map((h) => `${h.role}: ${h.content}`).join('\n');
             const cache = getCache();
             if (cacheEnabled) {
@@ -413,11 +445,26 @@ export class ChatCommand extends BaseCommand {
                 if (recovery.action === 'retry') {
                     continue; // retry with the same provider/model
                 }
+                if (recovery.action === 'switch' && recovery.auto) {
+                    // Auto routing re-enabled via the picker's Auto option.
+                    // Resolve the route inline (the per-message block already ran) so
+                    // this message retries with the routed provider, not the failed one.
+                    autoMode = true;
+                    const routed = this.routeMessageAuto(message);
+                    type = routed.type;
+                    provider = routed.provider;
+                    effectiveModel = routed.model;
+                    model = effectiveModel;
+                    logger.success('🤖 Auto routing enabled — agent picks the best model per message');
+                    console.log('');
+                    continue; // retry this message with auto routing
+                }
                 if (recovery.action === 'switch' && recovery.newProvider) {
                     type = recovery.newType;
                     provider = recovery.newProvider;
                     effectiveModel = recovery.newModel || effectiveModelForHistory;
                     model = effectiveModel; // keep model in sync for /info command
+                    autoMode = false; // explicit picker choice overrides auto routing
                     logger.success(`✅ Switched to ${provider.name} / ${effectiveModel}`);
                     console.log('');
                     continue; // retry with the new provider
@@ -479,6 +526,26 @@ export class ChatCommand extends BaseCommand {
      */
     async showModelPicker() {
         return showModelPicker(this.configManager);
+    }
+    /**
+     * Resolve the best provider/model for a message via the AutoModelRouter.
+     * Returns the routed type/provider/model; the caller applies them to the
+     * active session state.
+     */
+    routeMessageAuto(message) {
+        const decision = getAutoRouter().resolve('chat', message, { verbose: process.env.BUFF_DEBUG === 'true', useRuntimeStats: true }, this.configManager);
+        // Record for the dashboard usage stats + audit trail
+        recordRoutingDecision({
+            source: 'chat',
+            agentType: 'chat',
+            task: message,
+            complexity: decision.complexity,
+            provider: decision.provider,
+            model: decision.model,
+            score: decision.score,
+        });
+        const resolved = resolveProvider(this.configManager, decision.provider);
+        return { type: resolved.type, provider: resolved.provider, model: decision.model };
     }
     /**
      * Read multi-line input from stdin using readline.
@@ -608,6 +675,10 @@ Commands:
                 if (!picked) {
                     logger.info('Model selection cancelled.');
                     return { exit: false };
+                }
+                // ── Auto selected — enable auto routing ──────────────────────
+                if (picked.provider === 'auto' || isAutoModel(picked.model)) {
+                    return { exit: false, auto: true };
                 }
                 const resolved = resolveProvider(this.configManager, picked.provider);
                 if (resolved.type !== currentType || picked.model !== model) {

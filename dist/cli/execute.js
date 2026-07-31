@@ -73,7 +73,7 @@ export class ExecuteCommand extends BaseCommand {
             .option('--max-repairs <number>', 'Max auto-repair attempts per failed task (default: 3, 0 = disabled)', parseInt)
             .option('--repair-mode <mode>', 'Repair mode: auto | prompt | off (default: auto)')
             .option('--repair-fallback-models <models>', 'Comma-separated fallback models for repair (e.g., groq/llama3,nim/mistral)')
-            .action(async (goal, options) => {
+            .option('--auto-route', 'Route each agent to the best provider/model automatically (Auto model)', false).action(async (goal, options) => {
             await this.execute(goal, options || {});
         });
         return command;
@@ -1054,6 +1054,7 @@ export class ExecuteCommand extends BaseCommand {
                 maxRepairs: options.maxRepairs,
                 repairMode: options.repairMode,
                 repairFallbackModels: options.repairFallbackModels?.split(',').map((m) => m.trim()).filter(Boolean),
+                autoRouteModels: options.autoRoute || undefined,
             });
             spinner.stop();
             console.log('');

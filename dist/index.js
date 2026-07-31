@@ -18,6 +18,9 @@ export { RunnerAgent } from './agents/agents/runner.js';
 export { GitHubReleaseAgent } from './agents/agents/github-release-agent.js';
 export { SecurityAgent } from './agents/agents/security-agent.js';
 export { runAllScans, scanForPII, scanForInjections, scanForDangerousCode, formatScanReport } from './security/scanner.js';
+// ─── Evaluation Framework exports ───────────────────────────────────────────
+export { runEvalSuite, runEvalTask, scaffoldWorkspace, runHiddenTest, computeEditAccuracy, scoreEvalMetrics, computeEvalSummary, formatEvalReport, formatEvalJSON, formatEvalMarkdown, formatEvalScoreRules, getEvalTasks, getEvalTask, getEvalRuns, getLatestEvalRun, clearEvals, EVAL_SCORE_WEIGHTS, IDEAL_TIME_TO_FIX_MS, } from './learning/eval-framework.js';
+export { EvalCommand } from './cli/eval.js';
 // ─── Learning exports ───────────────────────────────────────────────────────
 export { SelfImprover, getSelfImprover } from './learning/self-improver.js';
 export { AgentStats, getAgentStats } from './learning/agent-stats.js';
@@ -57,6 +60,7 @@ export { AgentCommand } from './cli/agent.js';
 // ─── Phase 3.4 new exports ──────────────────────────────────────────────────
 export { ProviderFallback, getProviderFallback, resetProviderFallback, classifyFallbackError, isRetryableError, } from './learning/provider-fallback.js';
 export { HybridModelRouter, getHybridRouter, analyzeComplexity, buildFallbackChain, checkBudget, checkConsensus } from './learning/hybrid-router.js';
+export { AutoModelRouter, getAutoRouter, resetAutoRouter, isAutoModel, isAutoProvider, AUTO_MODEL, AUTO_PROVIDER, computeWeights, scoreProvider, DEFAULT_AUTO_PROVIDERS, DIMENSION_LABELS, } from './learning/auto-router.js';
 // ─── Phase 3.2 new exports ──────────────────────────────────────────────────
 export { FederationCommand } from './cli/federation.js';
 export { FederationClient } from './federation/client.js';

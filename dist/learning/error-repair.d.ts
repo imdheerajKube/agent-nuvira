@@ -19,6 +19,7 @@
  * | `switch-model` | Provider errors, persistent LLM failures | Retry with an alternative model/provider |
  * | `adjust-temperature` | Repetitive or hallucinated output | Lower temperature to 0.2 for more deterministic output |
  * | `retry-tool` | Tool call failed with retryable error | Retry the same call after a brief delay |
+ * | `alternative-approach` | Persistent failures across strategies | Ask the LLM for a fundamentally different strategy, then re-execute |
  * | `skip-step` | Budget exhausted or non-repairable | Gracefully skip the failing step |
  *
  * ## Error Classification
@@ -37,7 +38,7 @@ import type { AgentContext, AgentResult, LLMCallFn } from '../agents/agent.js';
 /** Categories of errors that the repair system can classify */
 export type ErrorCategory = 'llm-error' | 'provider-error' | 'process-error' | 'injection-blocked' | 'context-limit' | 'budget-exhausted' | 'unknown';
 /** Repair strategies that can be applied */
-export type RepairStrategy = 're-prompt' | 'switch-model' | 'adjust-temperature' | 'retry-tool' | 'skip-step';
+export type RepairStrategy = 're-prompt' | 'switch-model' | 'adjust-temperature' | 'retry-tool' | 'alternative-approach' | 'skip-step';
 /** Mode of operation for the repair loop */
 export type RepairMode = 'auto' | 'prompt' | 'off';
 /** Result of a single repair attempt */
@@ -130,6 +131,8 @@ export declare function needsApproval(strategy: RepairStrategy, mode: RepairMode
 export declare class ErrorRepairEngine {
     readonly options: ErrorRepairOptions;
     readonly budget: RepairBudget;
+    /** Number of 'alternative-approach' strategies executed (telemetry) */
+    alternativeApproaches: number;
     constructor(options?: Partial<ErrorRepairOptions>);
     /**
      * Attempt to repair a failed agent execution.

@@ -64,9 +64,19 @@ export declare class ModelCommand extends BaseCommand {
     /**
      * Perform the actual provider/model switch.
      * Saves the active model state and confirms to the user.
+     * Special-cases `auto` — the agent decides the best provider/model per task.
      */
     private doSwitch;
     private showInfo;
+    private showExplain;
+    /**
+     * Build a machine-readable explanation payload.
+     * Single task → one decision object; no task → all 5 sample complexities.
+     * Includes effective per-provider pricing (with override flags).
+     */
+    private buildExplainJSON;
+    /** Render a single routing decision (compact or detailed). */
+    private renderRoutingDecision;
     private showRecommendations;
     private checkHealth;
     private promptSwitchIfWanted;

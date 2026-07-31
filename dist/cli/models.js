@@ -16,6 +16,7 @@ export class ModelsCommand extends BaseCommand {
             .option('-s, --search <keyword>', 'Search/filter models by keyword')
             .option('--all', 'Show all models (including unconfigured providers)', false)
             .option('--verify', 'Verify API keys and show configuration status for all providers', false)
+            .option('-j, --json', 'Output as JSON (for scripting and IDE integration)', false)
             .action(async (options) => {
             await this.execute(options || {});
         });
@@ -31,7 +32,7 @@ export class ModelsCommand extends BaseCommand {
                 return Array.from(new Set([...builtin, ...pluginTypes]));
             })();
         // If --verify, show API key/configuration status and then list models
-        if (options?.verify) {
+        if (options?.verify && !options?.json) {
             console.log();
             logger.highlight('🔑 Provider Configuration Status\n');
             for (const providerType of providersToCheck) {
@@ -55,39 +56,47 @@ export class ModelsCommand extends BaseCommand {
         }
         const allResults = [];
         for (const providerType of providersToCheck) {
-            const { provider } = resolveProvider(this.configManager, providerType);
+            const resolved = resolveProvider(this.configManager, providerType);
+            const provider = resolved.provider;
             const available = await provider.isAvailable();
             if (!available && !options?.all) {
                 logger.debug(`${provider.name} not configured — skipping`);
                 continue;
             }
-            const s = ora(`Fetching models from ${provider.name}...`).start();
+            const s = options?.json ? null : ora(`Fetching models from ${provider.name}...`).start();
             try {
                 const models = await provider.listModels();
-                s.stop();
+                s?.stop();
                 if (models.length === 0) {
-                    if (available) {
-                        logger.info(`${provider.name}: No models found or API not reachable`);
-                    }
-                    else {
-                        logger.info(`${provider.name}: Not configured`);
+                    if (!options?.json) {
+                        if (available) {
+                            logger.info(`${provider.name}: No models found or API not reachable`);
+                        }
+                        else {
+                            logger.info(`${provider.name}: Not configured`);
+                        }
                     }
                     continue;
                 }
                 for (const model of models) {
                     allResults.push({
                         provider: provider.name,
+                        providerType: resolved.type,
                         name: model.name,
                         id: model.id,
                         owner: model.owner,
                         description: model.description,
                     });
                 }
-                logger.success(`${provider.name}: ${models.length} models found`);
+                if (!options?.json) {
+                    logger.success(`${provider.name}: ${models.length} models found`);
+                }
             }
             catch (err) {
-                s.stop();
-                logger.error(`${provider.name}: Failed to fetch models — ${String(err)}`);
+                s?.stop();
+                if (!options?.json) {
+                    logger.error(`${provider.name}: Failed to fetch models — ${String(err)}`);
+                }
             }
         }
         // Filter by search keyword if provided
@@ -96,6 +105,11 @@ export class ModelsCommand extends BaseCommand {
                 m.id.toLowerCase().includes(options.search.toLowerCase()) ||
                 (m.owner || '').toLowerCase().includes(options.search.toLowerCase()))
             : allResults;
+        // ── JSON output (for scripting / IDE integration) ───────────────
+        if (options?.json) {
+            console.log(JSON.stringify({ models: filtered }, null, 2));
+            return;
+        }
         if (filtered.length === 0) {
             if (options?.search) {
                 logger.info(`No models found matching "${options.search}"`);

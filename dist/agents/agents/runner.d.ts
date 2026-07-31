@@ -40,6 +40,36 @@ export interface RunResult {
     duration: number;
     /** Error message if execSync threw */
     error?: string;
+    /** Whether dependencies were auto-installed before a retry */
+    dependencyInstallAttempted?: boolean;
+    /** Whether the dependency install succeeded */
+    dependencyInstallSucceeded?: boolean;
+    /** Package manager / tool used for the install (e.g. 'npm', 'brew', 'winget') */
+    dependencyInstallTool?: string;
+    /** Whether the tool itself had to be installed first (e.g. Homebrew) */
+    dependencyInstallToolInstalled?: boolean;
+}
+/** A detected dependency-install plan for a project */
+export interface InstallPlan {
+    /** The package-manager tool to run (e.g. 'npm', 'pip', 'brew', 'cargo') */
+    tool: string;
+    /** The full install command to execute */
+    command: string;
+    /** The manifest file that triggered the plan */
+    manifest: string;
+}
+/** Result of a dependency-install attempt (including tool bootstrapping) */
+export interface DependencyInstallResult {
+    /** Whether the install succeeded */
+    success: boolean;
+    /** The install command that was attempted */
+    command: string;
+    /** The package-manager tool used */
+    tool?: string;
+    /** Whether the tool itself was installed first */
+    toolInstalled?: boolean;
+    /** Human-readable detail for logs */
+    message?: string;
 }
 /**
  * RunnerAgent — Executes shell commands and captures output.
@@ -73,6 +103,58 @@ export declare class RunnerAgent extends Agent {
      * Execute a command directly on the host machine.
      * Validates the command first, and falls back to LLM suggestion if the command is not available.
      */
+    /**
+     * Heuristic: does this failure look like a missing dependency?
+     * Matches common "Cannot find module", "command not found", and ENOENT errors.
+     */
+    private looksLikeMissingDependency;
+    /**
+     * Detect which package manager a project needs based on its manifest files.
+     * Supports npm/yarn/pnpm, pip (requirements/setup/pyproject), bundler,
+     * cargo, go, composer, and dart pub.
+     */
+    private detectInstallPlan;
+    /**
+     * Check whether a CLI tool is available on PATH (cross-platform).
+     */
+    private commandExists;
+    /**
+     * Bootstrap-install a missing package-manager tool so that the project's
+     * dependencies can be installed. Handles Homebrew, winget, choco, npm,
+     * pip, cargo, and more — installing the tool itself if it is missing.
+     */
+    private installTool;
+    /** Install Node.js (which bundles npm) via the platform package manager. */
+    private installNodeViaPlatform;
+    /** Install Python via the platform package manager (so pip can be bootstrapped). */
+    private installPythonViaPlatform;
+    /** Install Ruby via the platform package manager. */
+    private installRubyViaPlatform;
+    /** Install PHP via the platform package manager. */
+    private installPhpViaPlatform;
+    /** Install Go via the platform package manager. */
+    private installGoViaPlatform;
+    /**
+     * Run an install command and return its outcome.
+     */
+    private runInstallCommand;
+    /**
+     * When no manifest exists, detect a missing interpreter/tool from the failed
+     * command itself (e.g. "python3 script.py" → python3 → install Python).
+     * This lets the runner install bare tools even in manifest-less directories.
+     */
+    private detectToolFromCommand;
+    /**
+     * Install dependencies for the project using the appropriate package manager
+     * (npm, pip, brew, cargo, etc.). If the package manager itself is missing,
+     * it is bootstrap-installed first (e.g. Homebrew on macOS, winget on Windows).
+     * When no manifest is present, falls back to installing the missing
+     * interpreter/tool referenced by the failed command.
+     *
+     * Controlled by context.metadata.autoInstallTools !== false — set to false
+     * to only attempt the install command without installing missing tools.
+     */
+    private installDependencies;
     private executeOnHost;
     /**
      * Fallback: ask the LLM what command to run based on the project context.

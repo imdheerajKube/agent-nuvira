@@ -15,6 +15,7 @@ import { join, extname, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { homedir } from 'node:os';
 import { loadEnv } from '../utils/env.js';
+import { getAutoRouter } from '../learning/auto-router.js';
 // ─── Constants ──────────────────────────────────────────────────────────────
 const PORT = parseInt(process.env.BUFF_DASHBOARD_PORT || '3030', 10);
 const HOST = process.env.BUFF_DASHBOARD_HOST || '127.0.0.1';
@@ -581,6 +582,30 @@ function readHistoryData() {
     }));
     return { total: sessions.length, recent };
 }
+function readEvalData() {
+    const data = readJSON(join(MEMORY_DIR, 'evals.json'));
+    if (!data?.runs) {
+        return { totalRuns: 0, latest: null, runs: [] };
+    }
+    const runs = data.runs.slice(-10).reverse();
+    const latest = runs[0] || null;
+    return {
+        totalRuns: data.runs.length,
+        latest: latest ? {
+            provider: latest.provider,
+            model: latest.model,
+            summary: latest.summary,
+            startedAt: latest.startedAt,
+        } : null,
+        runs: runs.map((r) => ({
+            id: r.id,
+            provider: r.provider,
+            model: r.model,
+            startedAt: r.startedAt,
+            summary: r.summary,
+        })),
+    };
+}
 function readBenchmarkData() {
     const data = readJSON(join(MEMORY_DIR, 'benchmarks.json'));
     if (!data?.runs) {
@@ -642,6 +667,155 @@ function readHealthData() {
         memoryDir: MEMORY_DIR,
     };
 }
+// ─── Auto Routing Insights ──────────────────────────────────────────────────
+/**
+ * Aggregate routing insights for the dashboard:
+ * - Per-provider benchmark quality (avg quality, pass rate, cost, runs)
+ * - Best-performing model per agent type (from agent stats)
+ * - What the Auto router would pick for sample tasks across complexity levels
+ */
+function readRoutingInsights() {
+    // 1. Per-provider benchmark quality from benchmarks.json
+    const benchData = readJSON(join(MEMORY_DIR, 'benchmarks.json'));
+    const perProvider = {};
+    if (benchData?.runs) {
+        for (const run of benchData.runs) {
+            const provider = String(run.provider || 'unknown');
+            const summary = (run.summary || {});
+            const entry = perProvider[provider] || (perProvider[provider] = {
+                runs: 0, avgQuality: 0, passRate: 0, totalCostUsd: 0,
+            });
+            entry.runs++;
+            entry.avgQuality += Number(summary.avgQualityScore || 0);
+            const total = Number(summary.totalTasks || 0);
+            const passed = Number(summary.tasksPassed || 0);
+            entry.passRate += total > 0 ? passed / total : 0;
+            entry.totalCostUsd += Number(summary.totalCostUsd || 0);
+            if (run.model)
+                entry.bestModel = String(run.model);
+        }
+        for (const p of Object.values(perProvider)) {
+            p.avgQuality = Math.round((p.avgQuality / p.runs) * 1000) / 1000;
+            p.passRate = Math.round((p.passRate / p.runs) * 1000) / 1000;
+        }
+    }
+    // 2. Best model per agent type from agent-stats.json
+    const statsData = readJSON(join(MEMORY_DIR, 'agent-stats.json'));
+    const bestModels = [];
+    if (statsData?.agents) {
+        for (const [agentType, agentRaw] of Object.entries(statsData.agents)) {
+            const agent = agentRaw;
+            const mp = agent?.modelPerformance || {};
+            let best = null;
+            for (const [model, perf] of Object.entries(mp)) {
+                const rate = perf.runs > 0 ? perf.successes / perf.runs : 0;
+                if (!best || rate > best.rate || (rate === best.rate && perf.runs > best.runs)) {
+                    best = { model, rate, runs: perf.runs };
+                }
+            }
+            if (best) {
+                bestModels.push({
+                    agentType,
+                    model: best.model,
+                    successRate: Math.round(best.rate * 100) / 100,
+                    runs: best.runs,
+                });
+            }
+        }
+    }
+    // 3. Auto-router preference across complexity levels (static profiles + real pricing)
+    const samples = [
+        { label: 'trivial', task: 'format this code' },
+        { label: 'simple', task: 'add a simple utility function' },
+        { label: 'moderate', task: 'implement a feature' },
+        { label: 'complex', task: 'design a distributed microservices architecture' },
+        { label: 'critical', task: 'deploy to production with zero downtime' },
+    ];
+    const preference = samples.map((s) => {
+        const d = getAutoRouter().resolve('chat', s.task, {});
+        return {
+            complexity: s.label,
+            winner: `${d.provider}/${d.model}`,
+            score: Math.round(d.score * 1000) / 1000,
+            providers: d.ranked.map((r) => ({
+                provider: r.provider,
+                score: Math.round(r.score * 1000) / 1000,
+                reason: r.reason,
+            })),
+        };
+    });
+    return {
+        providers: Object.entries(perProvider).map(([provider, v]) => ({ provider, ...v })),
+        bestModels,
+        preference,
+        usage: readRoutingUsage(),
+        history: readRoutingHistory(),
+        updatedAt: Date.now(),
+    };
+}
+// ─── Routing Usage Stats & Audit Trail ─────────────────────────────────────
+/**
+ * Aggregate routing usage over time from routing-history.json — which
+ * providers/models were actually picked, by source (chat/orchestrator/explain/
+ * benchmark/eval) and by complexity, plus the last-24h count.
+ */
+function readRoutingUsage() {
+    const data = readJSON(join(MEMORY_DIR, 'routing-history.json'));
+    if (!data?.entries || !Array.isArray(data.entries)) {
+        return { total: 0, last24h: 0, byProvider: {}, byModel: {}, bySource: {}, byComplexity: {}, updatedAt: Date.now() };
+    }
+    const entries = data.entries;
+    const byProvider = {};
+    const byModel = {};
+    const bySource = {};
+    const byComplexity = {};
+    const dayAgo = Date.now() - 24 * 60 * 60 * 1000;
+    let last24h = 0;
+    for (const e of entries) {
+        const provider = String(e.provider || 'unknown');
+        const model = String(e.model || 'unknown');
+        const source = String(e.source || 'unknown');
+        const complexity = String(e.complexity || 'unknown');
+        byProvider[provider] = (byProvider[provider] || 0) + 1;
+        byModel[model] = (byModel[model] || 0) + 1;
+        bySource[source] = (bySource[source] || 0) + 1;
+        byComplexity[complexity] = (byComplexity[complexity] || 0) + 1;
+        if (typeof e.timestamp === 'number' && e.timestamp >= dayAgo)
+            last24h++;
+    }
+    return {
+        total: entries.length,
+        last24h,
+        byProvider,
+        byModel,
+        bySource,
+        byComplexity,
+        updatedAt: Date.now(),
+    };
+}
+/**
+ * Read the recent routing-decision timeline (audit trail) — most recent first.
+ */
+function readRoutingHistory() {
+    const data = readJSON(join(MEMORY_DIR, 'routing-history.json'));
+    if (!data?.entries || !Array.isArray(data.entries))
+        return [];
+    const entries = data.entries;
+    return [...entries]
+        .sort((a, b) => Number(b.timestamp || 0) - Number(a.timestamp || 0))
+        .slice(0, 30)
+        .map((e) => ({
+        id: e.id,
+        timestamp: e.timestamp,
+        source: e.source,
+        agentType: e.agentType,
+        task: typeof e.task === 'string' ? e.task.slice(0, 80) : '',
+        complexity: e.complexity,
+        provider: e.provider,
+        model: e.model,
+        score: typeof e.score === 'number' ? Math.round(e.score * 1000) / 1000 : 0,
+    }));
+}
 // ─── Request Handler ────────────────────────────────────────────────────────
 function handleRequest(req, res) {
     const url = new URL(req.url || '/', `http://${req.headers.host || HOST}`);
@@ -671,6 +845,11 @@ function handleRequest(req, res) {
         res.end(JSON.stringify(readBenchmarkData()));
         return;
     }
+    if (pathname === '/api/evals') {
+        res.writeHead(200, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify(readEvalData()));
+        return;
+    }
     if (pathname === '/api/memory') {
         res.writeHead(200, { 'Content-Type': 'application/json' });
         res.end(JSON.stringify(readMemoryData()));
@@ -696,14 +875,21 @@ function handleRequest(req, res) {
         res.end(JSON.stringify(readDAGData()));
         return;
     }
+    if (pathname === '/api/routing') {
+        res.writeHead(200, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify(readRoutingInsights()));
+        return;
+    }
     if (pathname === '/api/all') {
         res.writeHead(200, { 'Content-Type': 'application/json' });
         res.end(JSON.stringify({
             cost: readCostData(),
             history: readHistoryData(),
             benchmarks: readBenchmarkData(),
+            evals: readEvalData(),
             memory: readMemoryData(),
             health: readHealthData(),
+            routing: readRoutingInsights(),
             dag: readDAGData(),
             serverTime: Date.now(),
         }));
@@ -721,8 +907,10 @@ function handleRequest(req, res) {
             cost: readCostData(),
             history: readHistoryData(),
             benchmarks: readBenchmarkData(),
+            evals: readEvalData(),
             memory: readMemoryData(),
             health: readHealthData(),
+            routing: readRoutingInsights(),
             dag: readDAGData(),
             serverTime: Date.now(),
         };
@@ -744,8 +932,10 @@ function handleRequest(req, res) {
                     cost: readCostData(),
                     history: readHistoryData(),
                     benchmarks: readBenchmarkData(),
+                    evals: readEvalData(),
                     memory: readMemoryData(),
                     health: readHealthData(),
+                    routing: readRoutingInsights(),
                     dag: readDAGData(),
                     serverTime: Date.now(),
                 };

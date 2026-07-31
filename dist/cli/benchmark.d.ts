@@ -18,6 +18,13 @@ import { BaseCommand } from './commands.js';
 export declare class BenchmarkCommand extends BaseCommand {
     create(): Command;
     private runBenchmark;
+    /**
+     * Benchmark the exact provider/model pairs the Auto router would pick for the
+     * benchmark tasks — closing the loop between routing decisions and measured
+     * quality. Each distinct pick runs the (filtered) task suite; a final
+     * comparison ranks the picks by quality score.
+     */
+    private runRoutingBenchmark;
     private listTasks;
     private showResults;
 }

@@ -22,6 +22,7 @@ import { StatsCommand } from './stats.js';
 import { HistoryCommand } from './history.js';
 import { SkillCommand } from './skill.js';
 import { BenchmarkCommand } from './benchmark.js';
+import { EvalCommand } from './eval.js';
 import { SandboxCommand } from './sandbox.js';
 import { DoctorCommand } from './doctor.js';
 import { MemoryCommand } from './memory.js';
@@ -90,6 +91,9 @@ export function createCLI() {
     // Register Phase 2 commands
     const benchmarkCmd = new BenchmarkCommand();
     program.addCommand(benchmarkCmd.create());
+    // Register evaluation framework command
+    const evalCmd = new EvalCommand();
+    program.addCommand(evalCmd.create());
     const sandboxCmd = new SandboxCommand();
     program.addCommand(sandboxCmd.create());
     // Register Phase 2.5 new commands
