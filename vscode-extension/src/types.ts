@@ -102,4 +102,43 @@ export interface ExtensionConfig {
   maxTokens: number;
   /** Whether to show the progress panel automatically */
   showProgressPanel: boolean;
+  /** Use Auto model routing — let the agent pick the best provider/model per task */
+  useAutoRouting: boolean;
+}
+
+// ─── Model & Provider Management ───────────────────────────────────────────
+
+/** A single provider entry from `buff model list --json` */
+export interface ProviderInfo {
+  type: string;
+  label: string;
+  icon: string;
+  configured: boolean;
+  available: boolean;
+  defaultModel?: string;
+  isActive: boolean;
+  isPlugin: boolean;
+}
+
+/** A single model entry from `buff models --json` */
+export interface ProviderModelInfo {
+  /** Provider display name (e.g. 'Groq') */
+  provider: string;
+  /** Provider type used in `buff model switch` (e.g. 'groq') */
+  providerType: string;
+  /** Human-friendly model name */
+  name: string;
+  /** Model id used in `buff model switch <provider>/<id>` */
+  id: string;
+  owner?: string;
+  description?: string;
+}
+
+/** The active model state read from `~/.buff/active-model.json` */
+export interface ActiveModelInfo {
+  provider: string;
+  model: string;
+  updatedAt: number;
+  explicit: boolean;
+  providerLabel?: string;
 }

@@ -196,12 +196,17 @@ export class InlineSuggestProvider implements vscode.InlineCompletionItemProvide
       spawnArgs = args;
     }
 
-    // Add provider/model if configured
-    if (this.config.defaultProvider) {
-      spawnArgs.push('--provider', this.config.defaultProvider);
-    }
-    if (this.config.defaultModel) {
-      spawnArgs.push('--model', this.config.defaultModel);
+    // Auto model routing — the agent picks the best provider/model for the task
+    if (this.config.useAutoRouting) {
+      spawnArgs.push('--model', 'auto');
+    } else {
+      // Add provider/model if configured
+      if (this.config.defaultProvider) {
+        spawnArgs.push('--provider', this.config.defaultProvider);
+      }
+      if (this.config.defaultModel) {
+        spawnArgs.push('--model', this.config.defaultModel);
+      }
     }
 
     return new Promise<string | null>((resolve) => {

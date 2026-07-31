@@ -11,10 +11,12 @@
  */
 
 import { spawn, ChildProcess } from 'node:child_process';
-import { resolve } from 'node:path';
+import { existsSync, readFileSync } from 'node:fs';
+import { homedir } from 'node:os';
+import { join, resolve } from 'node:path';
 import * as vscode from 'vscode';
 
-import type { CLIResult, ExtensionConfig } from './types.js';
+import type { ActiveModelInfo, CLIResult, ExtensionConfig, ProviderInfo, ProviderModelInfo } from './types.js';
 
 // ─── Constants ──────────────────────────────────────────────────────────────
 
@@ -155,13 +157,119 @@ export class CLIManager {
     });
   }
 
+  // ── Model & Provider Management ─────────────────────────────────────────
+
+  /**
+   * List all providers with their availability status.
+   * Corresponds to: buff model list --all --json
+   */
+  async listModels(): Promise<ProviderInfo[]> {
+    const args = ['model', 'list', '--all', '--json'];
+    // Provider availability checks hit the network — allow ample time
+    const result = await this.runCommand(args, DEFAULT_TIMEOUT_MS, {
+      phaseLabels: ['Listing providers'],
+    });
+
+    if (!result.success || !result.stdout) return [];
+
+    try {
+      const parsed = JSON.parse(result.stdout);
+      return Array.isArray(parsed.providers) ? parsed.providers : [];
+    } catch {
+      return [];
+    }
+  }
+
+  /**
+   * List the actual models available from a specific provider.
+   * Corresponds to: buff models -p <provider> --json
+   */
+  async listProviderModels(provider: string): Promise<ProviderModelInfo[]> {
+    const args = ['models', '-p', provider, '--json'];
+    // Model listing hits the provider API — allow ample time
+    const result = await this.runCommand(args, DEFAULT_TIMEOUT_MS, {
+      phaseLabels: [`Listing ${provider} models`],
+    });
+
+    if (!result.success || !result.stdout) return [];
+
+    // Only pass provider types seen in `buff model list` — unknown types make
+    // the CLI warn to stdout, which would corrupt the JSON and fall back to [].
+
+    try {
+      const parsed = JSON.parse(result.stdout);
+      return Array.isArray(parsed.models) ? parsed.models : [];
+    } catch {
+      return [];
+    }
+  }
+
+  /**
+   * Switch the active provider/model.
+   * Pass 'auto' as provider to enable Auto model routing.
+   * Corresponds to: buff model switch <provider>[/<model>] or buff model switch auto
+   */
+  async switchModel(provider: string, model?: string): Promise<CLIResult> {
+    const spec = provider === 'auto' ? 'auto' : model ? `${provider}/${model}` : provider;
+    const args = ['model', 'switch', spec];
+    return this.runCommand(args, QUICK_TIMEOUT_MS, {
+      phaseLabels: ['Switching model'],
+    });
+  }
+
+  /**
+   * Read the active model state from ~/.buff/active-model.json.
+   * Returns null if no active model has been set yet.
+   */
+  async getActiveModel(): Promise<ActiveModelInfo | null> {
+    const overridePath = process.env.BUFF_ACTIVE_MODEL_PATH;
+    const statePath = overridePath || join(homedir(), '.buff', 'active-model.json');
+
+    try {
+      if (!existsSync(statePath)) return null;
+      return JSON.parse(readFileSync(statePath, 'utf-8')) as ActiveModelInfo;
+    } catch {
+      return null;
+    }
+  }
+
+  /**
+   * Run a health check for the active (or specified) provider.
+   * Corresponds to: buff model health [-p <provider>]
+   */
+  async checkModelHealth(provider?: string): Promise<CLIResult> {
+    const args = provider && provider !== 'auto'
+      ? ['model', 'health', '-p', provider]
+      : ['model', 'health'];
+    // Health checks probe the provider endpoint — allow ample time
+    return this.runCommand(args, DEFAULT_TIMEOUT_MS, {
+      phaseLabels: ['Checking provider health'],
+    });
+  }
+
   // ── Private ──────────────────────────────────────────────────────────────
 
   /**
    * Build CLI arguments with common options.
+   *
+   * When Auto model routing is enabled:
+   * - chat commands get `--model auto` (the CLI detects auto mode)
+   * - execute commands get `--auto-route` (per-task AutoModelRouter)
+   * Otherwise the configured provider/model are passed through.
    */
   private buildArgs(customArgs: string[]): string[] {
     const args: string[] = [...customArgs];
+    const command = customArgs[0] || '';
+
+    // Auto model routing: let the agent pick provider/model per task
+    if (this.config.useAutoRouting) {
+      if (command === 'chat') {
+        args.push('--model', 'auto');
+      } else if (command === 'execute') {
+        args.push('--auto-route');
+      }
+      return args;
+    }
 
     // Add provider/model if configured
     if (this.config.defaultProvider) {

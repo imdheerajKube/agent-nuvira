@@ -75,6 +75,14 @@ export class CodeLensProvider implements vscode.CodeLensProvider {
     this.cliManager = cliManager;
   }
 
+  /**
+   * Swap the CLI manager when extension config changes
+   * (so auto-routing / provider settings take effect immediately).
+   */
+  updateCliManager(cliManager: CLIManager): void {
+    this.cliManager = cliManager;
+  }
+
   provideCodeLenses(document: vscode.TextDocument, _token: vscode.CancellationToken): vscode.CodeLens[] {
     const config = this.getConfig(document.languageId);
     if (!config) return [];

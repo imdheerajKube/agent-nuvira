@@ -30,6 +30,14 @@ export class DiagnosticFixProvider implements vscode.CodeActionProvider {
   }
 
   /**
+   * Swap the CLI manager when extension config changes
+   * (so auto-routing / provider settings take effect immediately).
+   */
+  updateCliManager(cliManager: CLIManager): void {
+    this.cliManager = cliManager;
+  }
+
+  /**
    * Provide code actions for diagnostics on the current line.
    */
   provideCodeActions(

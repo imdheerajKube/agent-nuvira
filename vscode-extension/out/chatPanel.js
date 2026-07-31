@@ -484,11 +484,17 @@ class ChatPanel {
         });
         // Build CLI arguments
         const args = ['chat', prompt, '--stream', '--no-color'];
-        if (this.config.defaultProvider) {
-            args.push('--provider', this.config.defaultProvider);
+        if (this.config.useAutoRouting) {
+            // Auto model routing — the agent picks the best provider/model per task
+            args.push('--model', 'auto');
         }
-        if (this.config.defaultModel) {
-            args.push('--model', this.config.defaultModel);
+        else {
+            if (this.config.defaultProvider) {
+                args.push('--provider', this.config.defaultProvider);
+            }
+            if (this.config.defaultModel) {
+                args.push('--model', this.config.defaultModel);
+            }
         }
         // Add file context as extra arguments
         if (fileContext?.length) {

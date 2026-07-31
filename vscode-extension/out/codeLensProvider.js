@@ -96,6 +96,13 @@ class CodeLensProvider {
     constructor(cliManager) {
         this.cliManager = cliManager;
     }
+    /**
+     * Swap the CLI manager when extension config changes
+     * (so auto-routing / provider settings take effect immediately).
+     */
+    updateCliManager(cliManager) {
+        this.cliManager = cliManager;
+    }
     provideCodeLenses(document, _token) {
         const config = this.getConfig(document.languageId);
         if (!config)

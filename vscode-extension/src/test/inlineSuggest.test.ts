@@ -30,6 +30,7 @@ describe('InlineSuggestProvider', () => {
     autoApplyChanges: false,
     maxTokens: 4096,
     showProgressPanel: true,
+    useAutoRouting: false,
   };
 
   let provider: InlineSuggestProvider;

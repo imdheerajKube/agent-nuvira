@@ -57,6 +57,13 @@ class DiagnosticFixProvider {
         this.diffViewer = diffViewer;
     }
     /**
+     * Swap the CLI manager when extension config changes
+     * (so auto-routing / provider settings take effect immediately).
+     */
+    updateCliManager(cliManager) {
+        this.cliManager = cliManager;
+    }
+    /**
      * Provide code actions for diagnostics on the current line.
      */
     provideCodeActions(document, _range, context, _token) {

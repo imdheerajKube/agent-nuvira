@@ -48,6 +48,7 @@ describe('CLIManager', () => {
     autoApplyChanges: false,
     maxTokens: 4096,
     showProgressPanel: true,
+    useAutoRouting: false,
   };
 
   let manager: CLIManager;

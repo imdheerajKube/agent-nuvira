@@ -41,11 +41,18 @@ Supports 5 built-in providers plus custom plugins:
 - **NVIDIA NIM** — Enterprise-grade models
 - **Google Gemini** — Free tier available
 - **OpenRouter** — Access to 100+ models
+- **Auto routing** — Let the agent pick the best provider/model per task
+
+### 🎛️ Model & Provider Switcher
+- **Status-bar model indicator** — shows the active provider/model; click to switch
+- **Switch Model / Provider...** — pick from all available providers (with availability status) or enable **Auto routing**; picking a provider lists its **actual models** (`buff models`) so you can choose a specific one, or keep the provider default
+- **Check Model Health** — runs `agent-nuvira model health` for the active provider and shows the report
+- **Auto routing toggle** — when enabled, every AI flow routes each request to the best provider/model automatically: chat, execute, inline suggestions, code-lens actions, and diagnostic fixes. Note: inline completions are latency-sensitive — if suggestions feel slower with auto-routing enabled, pin a fast provider instead
 
 ### 📊 Visual Feedback
 - **Agent Progress Panel** — Real-time webview showing agent execution status, logs, and diffs
 - **Diff Viewer** — Preview proposed changes with VS Code's native diff editor before accepting
-- **Status Bar** — Quick access to agent commands
+- **Status Bar** — Quick access to agent commands and the active model indicator
 
 ---
 
@@ -104,7 +111,16 @@ Or configure directly in VS Code settings (`Ctrl+,` → search "agent-nuvira").
 3. Enter your goal (e.g., "Add authentication to the login route")
 4. Watch agents collaborate in the progress panel
 
-### 3. Use Keyboard Shortcuts
+### 3. Switch Providers / Models
+
+Click the model indicator in the status bar (e.g. `chip Groq/llama-3.3-70b`) or run **Agent-Nuvira: Switch Model / Provider...**:
+
+1. Choose **Auto routing** to let the agent decide per task, or
+2. Pick a specific provider (status icons show ✅ available / ⚠️ unreachable / ⏳ needs key)
+
+> If **Auto routing** is enabled in settings, the extension asks for confirmation before pinning a specific provider, since auto routing overrides pinned choices for chat/execute.
+
+### 4. Use Keyboard Shortcuts
 
 | Shortcut | Action |
 |----------|--------|
@@ -115,7 +131,7 @@ Or configure directly in VS Code settings (`Ctrl+,` → search "agent-nuvira").
 | `Ctrl+Shift+A A` | Accept all changes |
 | `Ctrl+Shift+A R` | Reject all changes |
 
-### 4. Right-Click in Explorer
+### 5. Right-Click in Explorer
 
 Right-click any source file to **Review File**, **Quick Fix**, or **Generate Tests**.
 
@@ -131,6 +147,7 @@ Right-click any source file to **Review File**, **Quick Fix**, or **Generate Tes
 | `agent-nuvira.autoApplyChanges` | `false` | Auto-apply agent changes without preview |
 | `agent-nuvira.maxTokens` | `4096` | Max tokens for agent responses |
 | `agent-nuvira.showProgressPanel` | `true` | Auto-show panel when tasks start |
+| `agent-nuvira.useAutoRouting` | `false` | Auto model routing — pick the best provider/model per task (applies to chat, execute, inline suggestions, code-lens actions & diagnostic fixes) |
 
 ---
 
@@ -147,6 +164,8 @@ Right-click any source file to **Review File**, **Quick Fix**, or **Generate Tes
 | `Agent-Nuvira: Run Workflow...` | Run workflow template |
 | `Agent-Nuvira: Accept All Changes` | Accept proposed changes |
 | `Agent-Nuvira: Reject All Changes` | Reject proposed changes |
+| `Agent-Nuvira: Switch Model / Provider...` | Switch the active provider/model or enable Auto routing |
+| `Agent-Nuvira: Check Model Health` | Run a health check on the active provider |
 
 ---
 

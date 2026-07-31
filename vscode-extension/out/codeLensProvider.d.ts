@@ -11,6 +11,11 @@ export declare class CodeLensProvider implements vscode.CodeLensProvider {
     static readonly lensCommandId = "agent-nuvira.codeLensAction";
     private cliManager;
     constructor(cliManager: CLIManager);
+    /**
+     * Swap the CLI manager when extension config changes
+     * (so auto-routing / provider settings take effect immediately).
+     */
+    updateCliManager(cliManager: CLIManager): void;
     provideCodeLenses(document: vscode.TextDocument, _token: vscode.CancellationToken): vscode.CodeLens[];
     /**
      * Handle code lens click — shows quick pick menu with 4 actions.

@@ -3,6 +3,8 @@
  * Provides minimal implementations of VS Code APIs needed by the extension.
  */
 
+import { vi } from 'vitest';
+
 // ─── Enums / Constants ──────────────────────────────────────────────────────
 
 export enum StatusBarAlignment {
@@ -21,6 +23,12 @@ export enum ViewColumn {
 export enum InlineCompletionTriggerKind {
   Automatic = 0,
   Explicit = 1,
+}
+
+export enum ProgressLocation {
+  SourceControl = 1,
+  Window = 10,
+  Notification = 15,
 }
 
 // ─── Classes ────────────────────────────────────────────────────────────────
@@ -96,6 +104,38 @@ export class InlineCompletionItem {
   }
 }
 
+export class CodeActionKind {
+  value: string;
+
+  static readonly Empty = new CodeActionKind('');
+  static readonly QuickFix = new CodeActionKind('quickfix');
+  static readonly Source = new CodeActionKind('source');
+
+  constructor(value: string) {
+    this.value = value;
+  }
+
+  append(part: string): CodeActionKind {
+    return new CodeActionKind(this.value + '.' + part);
+  }
+
+  contains(other: CodeActionKind): boolean {
+    return this.value === other.value || other.value.startsWith(this.value + '.');
+  }
+}
+
+export class CodeAction {
+  title: string;
+  kind?: CodeActionKind;
+  command?: { command: string; title: string; arguments?: unknown[] };
+  diagnostics?: unknown[];
+
+  constructor(title: string, kind?: CodeActionKind) {
+    this.title = title;
+    this.kind = kind;
+  }
+}
+
 // ─── Mock Objects ───────────────────────────────────────────────────────────
 
 export class MockTextDocument {
@@ -159,9 +199,9 @@ export class MockStatusBarItem {
   tooltip: string = '';
   command: string = '';
   backgroundColor?: ThemeColor;
-  show(): void { /* noop */ }
-  hide(): void { /* noop */ }
-  dispose(): void { /* noop */ }
+  show: () => void = vi.fn(() => { /* noop */ });
+  hide: () => void = vi.fn(() => { /* noop */ });
+  dispose: () => void = vi.fn(() => { /* noop */ });
 }
 
 // ─── Workspace Configuration ────────────────────────────────────────────────
@@ -173,6 +213,7 @@ const configValues: Record<string, unknown> = {
   'agent-nuvira.autoApplyChanges': false,
   'agent-nuvira.maxTokens': 4096,
   'agent-nuvira.showProgressPanel': true,
+  'agent-nuvira.useAutoRouting': false,
 };
 
 export class MockWorkspaceConfiguration {
@@ -199,15 +240,21 @@ export class MockWorkspaceConfiguration {
 // ─── Windows / Dialogs ──────────────────────────────────────────────────────
 
 let inputBoxResult: string | undefined;
-let showQuickPickResult: unknown;
+let showQuickPickQueue: unknown[] = [];
 let showWarningMessageResult: unknown;
 
 export function __setInputBoxResult(value: string | undefined): void {
   inputBoxResult = value;
 }
 
+/** Set the next showQuickPick result (single picker). */
 export function __setQuickPickResult(value: unknown): void {
-  showQuickPickResult = value;
+  showQuickPickQueue = [value];
+}
+
+/** Queue results for multiple sequential showQuickPick calls. */
+export function __setQuickPickResults(values: unknown[]): void {
+  showQuickPickQueue = [...values];
 }
 
 export function __setShowWarningMessageResult(value: unknown): void {
@@ -229,8 +276,7 @@ export const window = {
   },
 
   showQuickPick: <T>(items: T[], options?: { placeHolder?: string }): Promise<T | undefined> => {
-    const result = showQuickPickResult as T | undefined;
-    showQuickPickResult = undefined;
+    const result = showQuickPickQueue.length > 0 ? (showQuickPickQueue.shift() as T) : undefined;
     return Promise.resolve(result);
   },
 
@@ -240,7 +286,7 @@ export const window = {
     showWarningMessageResult = undefined;
     return Promise.resolve(result);
   },
-  showErrorMessage: (message: string): Thenable<string | undefined> => Promise.resolve(undefined),
+  showErrorMessage: vi.fn((message: string): Thenable<string | undefined> => Promise.resolve(undefined)),
 
   createWebviewPanel: (viewType: string, title: string, column: ViewColumn, options?: { enableScripts?: boolean }): MockWebviewPanel => {
     return new MockWebviewPanel();
@@ -253,6 +299,14 @@ export const window = {
   showTextDocument: (document: MockTextDocument, options?: { preview?: boolean; viewColumn?: ViewColumn }): Thenable<MockTextEditor> => {
     return Promise.resolve(new MockTextEditor(document));
   },
+
+  withProgress: async <T>(
+    options?: { location?: unknown; title?: string; cancellable?: boolean },
+    task?: (progress: { report: (value: unknown) => void }, token: unknown) => Promise<T>,
+  ): Promise<T | undefined> => {
+    if (!task) return undefined;
+    return task({ report: () => undefined }, { isCancellationRequested: false });
+  },
 };
 
 // ─── Commands ───────────────────────────────────────────────────────────────
@@ -260,8 +314,6 @@ export const window = {
 const registeredCommands: Map<string, (...args: unknown[]) => unknown> = new Map();
 
 // Wrap registerCommand as a mock function so tests can spy on it
-import { vi } from 'vitest';
-
 export const commands = {
   registerCommand: vi.fn((id: string, handler: (...args: unknown[]) => unknown): Disposable => {
     registeredCommands.set(id, handler);
@@ -285,10 +337,12 @@ export function __setWorkspaceFolders(folders: string[]): void {
     name: path.split('/').pop() || 'workspace',
     index: i,
   }));
+  workspace.workspaceFolders = workspaceFolders;
 }
 
 export function __resetWorkspaceFolders(): void {
   workspaceFolders = [];
+  workspace.workspaceFolders = null;
 }
 
 export const workspace = {
@@ -324,6 +378,12 @@ export const workspace = {
 
 export const languages = {
   registerInlineCompletionItemProvider: (selector: unknown, provider: unknown): Disposable => {
+    return new Disposable();
+  },
+  registerCodeLensProvider: (selector: unknown, provider: unknown): Disposable => {
+    return new Disposable();
+  },
+  registerCodeActionsProvider: (selector: unknown, provider: unknown, metadata?: unknown): Disposable => {
     return new Disposable();
   },
 };
@@ -374,7 +434,7 @@ export const InlineCompletionContext = {
 
 export function __resetAllMocks(): void {
   inputBoxResult = undefined;
-  showQuickPickResult = undefined;
+  showQuickPickQueue = [];
   showWarningMessageResult = undefined;
   registeredCommands.clear();
   workspaceFolders = [];
@@ -393,9 +453,12 @@ export default {
   Uri,
   ThemeColor,
   InlineCompletionItem,
+  CodeActionKind,
+  CodeAction,
   StatusBarAlignment,
   ViewColumn,
   InlineCompletionTriggerKind,
+  ProgressLocation,
   window,
   commands,
   workspace,
@@ -410,6 +473,7 @@ export default {
   MockExtensionContext,
   __setInputBoxResult: __setInputBoxResult,
   __setQuickPickResult: __setQuickPickResult,
+  __setQuickPickResults: __setQuickPickResults,
   __setShowWarningMessageResult: __setShowWarningMessageResult,
   __setWorkspaceFolders: __setWorkspaceFolders,
   __resetWorkspaceFolders: __resetWorkspaceFolders,

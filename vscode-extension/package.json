@@ -2,7 +2,7 @@
   "name": "agent-nuvira-vscode",
   "displayName": "Agent-Nuvira",
   "description": "Multi-agent AI coding assistant — plan, write, review, test, and publish code with local or cloud AI models",
-  "version": "0.3.0",
+  "version": "0.4.0",
   "publisher": "dheerajsharma",
   "license": "MIT",
   "icon": "icon.png",
@@ -44,6 +44,8 @@
     "onCommand:agent-nuvira.showPanel",
     "onCommand:agent-nuvira.openChat",
     "onCommand:agent-nuvira.runWorkflow",
+    "onCommand:agent-nuvira.switchModel",
+    "onCommand:agent-nuvira.modelHealth",
     "onView:agent-nuvira.agentProgress",
     "onView:agent-nuvira.chatPanel"
   ],
@@ -120,6 +122,18 @@
         "title": "Agent-Nuvira: Reject All Changes",
         "shortTitle": "Reject Changes",
         "description": "Reject all proposed agent changes"
+      },
+      {
+        "command": "agent-nuvira.switchModel",
+        "title": "Agent-Nuvira: Switch Model / Provider...",
+        "shortTitle": "Switch Model",
+        "description": "Switch the active provider/model or enable Auto routing"
+      },
+      {
+        "command": "agent-nuvira.modelHealth",
+        "title": "Agent-Nuvira: Check Model Health",
+        "shortTitle": "Model Health",
+        "description": "Run a health check on the active provider"
       }
     ],
     "keybindings": [
@@ -264,6 +278,11 @@
           "type": "boolean",
           "default": true,
           "description": "Automatically show the agent progress panel when an agent task starts."
+        },
+        "agent-nuvira.useAutoRouting": {
+          "type": "boolean",
+          "default": false,
+          "description": "Let the agent pick the best provider/model for each task (Auto model routing). Overrides defaultProvider/defaultModel for chat and execute."
         }
       }
     }

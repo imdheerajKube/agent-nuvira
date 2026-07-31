@@ -24,6 +24,8 @@ export declare class CommandRegistrar {
     private config;
     private currentChanges;
     private disposables;
+    /** Fired after a provider/model switch so the status bar can refresh */
+    private onModelChanged?;
     constructor(context: vscode.ExtensionContext, cliManager: CLIManager, agentPanel: AgentPanel, diffViewer: DiffViewer, config: ExtensionConfig);
     /**
      * Register all extension commands.
@@ -34,6 +36,10 @@ export declare class CommandRegistrar {
      * Update the config when settings change.
      */
     updateConfig(config: ExtensionConfig): void;
+    /**
+     * Register a callback fired after a provider/model switch.
+     */
+    setOnModelChanged(cb: () => void): void;
     /**
      * Execute a multi-agent pipeline goal.
      * Prompts the user for a goal, then runs it through the orchestrator.
@@ -72,6 +78,27 @@ export declare class CommandRegistrar {
      * Reject all proposed changes.
      */
     private rejectChanges;
+    /**
+     * Switch the active provider/model — or enable Auto model routing.
+     *
+     * Two-step flow:
+     * 1. Lists providers from `buff model list` and lets the user pick one
+     * 2. For a non-auto provider, lists its actual models via `buff models`
+     *    and lets the user pick a specific one (or keep the provider default)
+     */
+    private switchModel;
+    /**
+     * Fetch a provider's actual models (`buff models`) and let the user pick one.
+     * The first option keeps the provider's configured default model.
+     *
+     * Returns the chosen model id, or undefined to keep the provider default.
+     * Falls back to provider-only switching when the model list can't be loaded.
+     */
+    private pickProviderModel;
+    /**
+     * Run a health check for the active provider and show the report.
+     */
+    private modelHealth;
     /**
      * Run an agent task with progress tracking and result handling.
      */

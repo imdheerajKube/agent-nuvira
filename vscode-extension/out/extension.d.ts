@@ -28,4 +28,11 @@ export declare function activate(context: vscode.ExtensionContext): void;
  * Clean up all resources.
  */
 export declare function deactivate(): void;
+/**
+ * Refresh the model/provider status bar indicator from the CLI's
+ * active-model state (e.g. after a `buff model switch`).
+ *
+ * Exported for unit testing.
+ */
+export declare function refreshModelStatusBar(): Promise<void>;
 //# sourceMappingURL=extension.d.ts.map

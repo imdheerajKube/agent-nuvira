@@ -27,6 +27,11 @@ vi.mock('../cliManager.js', () => ({
     explainCode: vi.fn(),
     generateTests: vi.fn(),
     runWorkflow: vi.fn(),
+    listModels: vi.fn().mockResolvedValue([]),
+    listProviderModels: vi.fn().mockResolvedValue([]),
+    switchModel: vi.fn().mockResolvedValue({ success: true, stdout: '', stderr: '', exitCode: 0, durationMs: 0 }),
+    getActiveModel: vi.fn().mockResolvedValue(null),
+    checkModelHealth: vi.fn().mockResolvedValue({ success: true, stdout: 'health ok', stderr: '', exitCode: 0, durationMs: 0 }),
     cancel: vi.fn(),
     dispose: vi.fn(),
   })),
@@ -72,6 +77,7 @@ describe('CommandRegistrar', () => {
     autoApplyChanges: false,
     maxTokens: 4096,
     showProgressPanel: true,
+    useAutoRouting: false,
   };
 
   // Minimal context mock
@@ -86,6 +92,7 @@ describe('CommandRegistrar', () => {
 
   beforeEach(() => {
     vi.clearAllMocks();
+    (vscode as any).__resetAllMocks();
     mockCliManager = new CLIManager(defaultConfig);
     mockAgentPanel = new AgentPanel();
     mockDiffViewer = new DiffViewer(contextMock as any);
@@ -273,6 +280,218 @@ describe('CommandRegistrar', () => {
 
   // ── parseCLIOutput edge cases (from outputParser.ts) ───────────────────
 
+  // ── switchModel command ────────────────────────────────────────────────
+
+  describe('switchModel command', () => {
+    const providers = [
+      { type: 'groq', label: 'Groq', icon: '🟢', configured: true, available: true, defaultModel: 'llama-3.3-70b', isActive: false, isPlugin: false },
+      { type: 'gemini', label: 'Google Gemini', icon: '🔷', configured: true, available: false, defaultModel: 'gemini-2.0-flash', isActive: false, isPlugin: false },
+    ];
+
+    it('switches to Auto routing when selected', async () => {
+      registrar.registerAll();
+      (mockCliManager.listModels as unknown as ReturnType<typeof vi.fn>).mockResolvedValue(providers);
+      (vscode as any).__setQuickPickResult({ label: '$(sparkle) Auto routing', value: 'auto' });
+
+      await (vscode.commands as any).executeCommand('agent-nuvira.switchModel');
+
+      expect(mockCliManager.switchModel).toHaveBeenCalledWith('auto');
+    });
+
+    it('switches to a specific provider when auto-routing is off', async () => {
+      registrar.registerAll();
+      (mockCliManager.listModels as unknown as ReturnType<typeof vi.fn>).mockResolvedValue(providers);
+      (vscode as any).__setQuickPickResult({ label: '🟢 Groq', value: 'groq' });
+
+      await (vscode.commands as any).executeCommand('agent-nuvira.switchModel');
+
+      expect(mockCliManager.switchModel).toHaveBeenCalledWith('groq');
+    });
+
+    it('asks for confirmation when auto-routing is on and user picks a provider', async () => {
+      const registrarWithAuto = new CommandRegistrar(
+        contextMock as any,
+        mockCliManager,
+        mockAgentPanel,
+        mockDiffViewer,
+        { ...defaultConfig, useAutoRouting: true },
+      );
+      registrarWithAuto.registerAll();
+      (mockCliManager.listModels as unknown as ReturnType<typeof vi.fn>).mockResolvedValue(providers);
+      (vscode as any).__setQuickPickResult({ label: '🟢 Groq', value: 'groq' });
+      (vscode as any).__setShowWarningMessageResult('Cancel');
+
+      await (vscode.commands as any).executeCommand('agent-nuvira.switchModel');
+
+      // Cancelling the warning should abort the switch
+      expect(mockCliManager.switchModel).not.toHaveBeenCalled();
+    });
+
+    it('switches after confirming despite auto-routing being on', async () => {
+      const registrarWithAuto = new CommandRegistrar(
+        contextMock as any,
+        mockCliManager,
+        mockAgentPanel,
+        mockDiffViewer,
+        { ...defaultConfig, useAutoRouting: true },
+      );
+      registrarWithAuto.registerAll();
+      (mockCliManager.listModels as unknown as ReturnType<typeof vi.fn>).mockResolvedValue(providers);
+      (vscode as any).__setQuickPickResult({ label: '🟢 Groq', value: 'groq' });
+      (vscode as any).__setShowWarningMessageResult('Switch anyway');
+
+      await (vscode.commands as any).executeCommand('agent-nuvira.switchModel');
+
+      expect(mockCliManager.switchModel).toHaveBeenCalledWith('groq');
+    });
+
+    it('fires onModelChanged after a successful switch', async () => {
+      const onModelChanged = vi.fn();
+      registrar.registerAll();
+      registrar.setOnModelChanged(onModelChanged);
+      (mockCliManager.listModels as unknown as ReturnType<typeof vi.fn>).mockResolvedValue(providers);
+      (vscode as any).__setQuickPickResult({ label: '$(sparkle) Auto routing', value: 'auto' });
+
+      await (vscode.commands as any).executeCommand('agent-nuvira.switchModel');
+
+      expect(onModelChanged).toHaveBeenCalled();
+    });
+
+    it('shows an error when the switch fails', async () => {
+      registrar.registerAll();
+      (mockCliManager.listModels as unknown as ReturnType<typeof vi.fn>).mockResolvedValue(providers);
+      (vscode as any).__setQuickPickResult({ label: '🟢 Groq', value: 'groq' });
+      (mockCliManager.switchModel as unknown as ReturnType<typeof vi.fn>).mockResolvedValue({
+        success: false,
+        stdout: '',
+        stderr: 'Switch failed: provider not available',
+        exitCode: 1,
+        durationMs: 10,
+      });
+
+      await (vscode.commands as any).executeCommand('agent-nuvira.switchModel');
+
+      expect(mockCliManager.switchModel).toHaveBeenCalledWith('groq');
+      expect(vscode.window.showErrorMessage).toHaveBeenCalled();
+    });
+
+    it('does not throw when switchModel rejects (missing CLI)', async () => {
+      registrar.registerAll();
+      (mockCliManager.listModels as unknown as ReturnType<typeof vi.fn>).mockResolvedValue(providers);
+      (vscode as any).__setQuickPickResult({ label: '🟢 Groq', value: 'groq' });
+      (mockCliManager.switchModel as unknown as ReturnType<typeof vi.fn>).mockRejectedValue(new Error('CLI not found'));
+
+      await expect((vscode.commands as any).executeCommand('agent-nuvira.switchModel')).resolves.toBeUndefined();
+      expect(vscode.window.showErrorMessage).toHaveBeenCalled();
+    });
+
+    it('handles a missing CLI gracefully (no crash)', async () => {
+      registrar.registerAll();
+      (mockCliManager.listModels as unknown as ReturnType<typeof vi.fn>).mockRejectedValue(new Error('CLI not found'));
+      (vscode as any).__setQuickPickResult({ label: '$(sparkle) Auto routing', value: 'auto' });
+
+      // Should still show the picker with only Auto routing and allow switching
+      await (vscode.commands as any).executeCommand('agent-nuvira.switchModel');
+
+      expect(mockCliManager.switchModel).toHaveBeenCalledWith('auto');
+    });
+
+    // ── Per-provider model drill-down (buff models) ───────────────────────
+
+    it('drills into the provider models and switches to a specific model', async () => {
+      registrar.registerAll();
+      (mockCliManager.listModels as unknown as ReturnType<typeof vi.fn>).mockResolvedValue(providers);
+      (mockCliManager.listProviderModels as unknown as ReturnType<typeof vi.fn>).mockResolvedValue([
+        { provider: 'Groq', providerType: 'groq', name: 'Llama 3.3 70B', id: 'llama-3.3-70b-versatile' },
+        { provider: 'Groq', providerType: 'groq', name: 'Mixtral', id: 'mixtral-8x7b-32768', owner: 'Mistral AI' },
+      ]);
+      (vscode as any).__setQuickPickResults([
+        { label: '🟢 Groq', value: 'groq' },
+        { label: '🧠 Llama 3.3 70B', value: 'groq', model: 'llama-3.3-70b-versatile' },
+      ]);
+
+      await (vscode.commands as any).executeCommand('agent-nuvira.switchModel');
+
+      expect(mockCliManager.listProviderModels).toHaveBeenCalledWith('groq');
+      expect(mockCliManager.switchModel).toHaveBeenCalledWith('groq', 'llama-3.3-70b-versatile');
+    });
+
+    it('keeps the provider default when the default-model option is chosen', async () => {
+      registrar.registerAll();
+      (mockCliManager.listModels as unknown as ReturnType<typeof vi.fn>).mockResolvedValue(providers);
+      (mockCliManager.listProviderModels as unknown as ReturnType<typeof vi.fn>).mockResolvedValue([
+        { provider: 'Groq', providerType: 'groq', name: 'Llama 3.3 70B', id: 'llama-3.3-70b-versatile' },
+      ]);
+      (vscode as any).__setQuickPickResults([
+        { label: '🟢 Groq', value: 'groq' },
+        { label: '$(check) Use default model', value: 'groq' },
+      ]);
+
+      await (vscode.commands as any).executeCommand('agent-nuvira.switchModel');
+
+      expect(mockCliManager.switchModel).toHaveBeenCalledWith('groq');
+    });
+
+    it('keeps the provider default when the model picker is dismissed', async () => {
+      registrar.registerAll();
+      (mockCliManager.listModels as unknown as ReturnType<typeof vi.fn>).mockResolvedValue(providers);
+      (mockCliManager.listProviderModels as unknown as ReturnType<typeof vi.fn>).mockResolvedValue([
+        { provider: 'Groq', providerType: 'groq', name: 'Llama 3.3 70B', id: 'llama-3.3-70b-versatile' },
+      ]);
+      // Only one quick-pick result — the model picker gets undefined (dismissed)
+      (vscode as any).__setQuickPickResult({ label: '🟢 Groq', value: 'groq' });
+
+      await (vscode.commands as any).executeCommand('agent-nuvira.switchModel');
+
+      expect(mockCliManager.switchModel).toHaveBeenCalledWith('groq');
+    });
+
+    it('falls back to provider-only switching when models fail to load', async () => {
+      registrar.registerAll();
+      (mockCliManager.listModels as unknown as ReturnType<typeof vi.fn>).mockResolvedValue(providers);
+      (mockCliManager.listProviderModels as unknown as ReturnType<typeof vi.fn>).mockRejectedValue(new Error('CLI not found'));
+      (vscode as any).__setQuickPickResult({ label: '🟢 Groq', value: 'groq' });
+
+      await (vscode.commands as any).executeCommand('agent-nuvira.switchModel');
+
+      // No second picker shown; the switch still happens with the provider default
+      expect(mockCliManager.switchModel).toHaveBeenCalledWith('groq');
+    });
+
+    it('asks for confirmation after drilling into models when auto-routing is on', async () => {
+      const registrarWithAuto = new CommandRegistrar(
+        contextMock as any,
+        mockCliManager,
+        mockAgentPanel,
+        mockDiffViewer,
+        { ...defaultConfig, useAutoRouting: true },
+      );
+      registrarWithAuto.registerAll();
+      (mockCliManager.listModels as unknown as ReturnType<typeof vi.fn>).mockResolvedValue(providers);
+      (mockCliManager.listProviderModels as unknown as ReturnType<typeof vi.fn>).mockResolvedValue([
+        { provider: 'Groq', providerType: 'groq', name: 'Llama 3.3 70B', id: 'llama-3.3-70b-versatile' },
+      ]);
+      (vscode as any).__setQuickPickResults([
+        { label: '🟢 Groq', value: 'groq' },
+        { label: '🧠 Llama 3.3 70B', value: 'groq', model: 'llama-3.3-70b-versatile' },
+      ]);
+
+      // Cancel the warning → the specific-model switch must not happen
+      (vscode as any).__setShowWarningMessageResult('Cancel');
+      await (vscode.commands as any).executeCommand('agent-nuvira.switchModel');
+      expect(mockCliManager.switchModel).not.toHaveBeenCalled();
+
+      // Confirm → the specific-model switch happens
+      (vscode as any).__setShowWarningMessageResult('Switch anyway');
+      (vscode as any).__setQuickPickResults([
+        { label: '🟢 Groq', value: 'groq' },
+        { label: '🧠 Llama 3.3 70B', value: 'groq', model: 'llama-3.3-70b-versatile' },
+      ]);
+      await (vscode.commands as any).executeCommand('agent-nuvira.switchModel');
+      expect(mockCliManager.switchModel).toHaveBeenCalledWith('groq', 'llama-3.3-70b-versatile');
+    });
+  });
+
   // ── registerAll ────────────────────────────────────────────────────────
 
   describe('registerAll', () => {
@@ -284,10 +503,10 @@ describe('CommandRegistrar', () => {
 
     it('registers all expected commands', () => {
       const disposables = registrar.registerAll();
-      // All disposables should be registered (9 commands)
-      expect(disposables).toHaveLength(9);
-      // Verify registerCommand was called 9 times
-      expect(vscode.commands.registerCommand).toHaveBeenCalledTimes(9);
+      // All disposables should be registered (11 commands)
+      expect(disposables).toHaveLength(11);
+      // Verify registerCommand was called 11 times
+      expect(vscode.commands.registerCommand).toHaveBeenCalledTimes(11);
     });
   });
 

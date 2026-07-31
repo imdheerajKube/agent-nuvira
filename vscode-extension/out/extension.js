@@ -55,6 +55,7 @@ var __importStar = (this && this.__importStar) || (function () {
 Object.defineProperty(exports, "__esModule", { value: true });
 exports.activate = activate;
 exports.deactivate = deactivate;
+exports.refreshModelStatusBar = refreshModelStatusBar;
 const vscode = __importStar(require("vscode"));
 const cliManager_js_1 = require("./cliManager.js");
 const agentPanel_js_1 = require("./agentPanel.js");
@@ -74,7 +75,9 @@ let codeLensProvider = null;
 let diagnosticFixer = null;
 let diffViewer = null;
 let commandRegistrar = null;
+let inlineSuggestProvider = null;
 let statusBarItem = null;
+let modelStatusBarItem = null;
 // ─── Activate ───────────────────────────────────────────────────────────────
 /**
  * Called when the extension is activated (first command is run).
@@ -90,11 +93,19 @@ function activate(context) {
     diagnosticFixer = new diagnosticFixer_js_1.DiagnosticFixProvider(cliManager, diffViewer);
     codeLensProvider = new codeLensProvider_js_1.CodeLensProvider(cliManager);
     commandRegistrar = new commands_js_1.CommandRegistrar(context, cliManager, agentPanel, diffViewer, config);
-    // Create status bar item
+    // Create status bar items
     statusBarItem = createStatusBarItem();
     context.subscriptions.push(statusBarItem);
     // Remove the old panel open and replace with chat panel open
     statusBarItem.command = 'agent-nuvira.openChat';
+    // Model/provider indicator — click to switch provider/model
+    modelStatusBarItem = createModelStatusBarItem();
+    context.subscriptions.push(modelStatusBarItem);
+    // Refresh the model indicator when a switch happens
+    commandRegistrar.setOnModelChanged(() => {
+        void refreshModelStatusBar();
+    });
+    void refreshModelStatusBar();
     // Register all commands
     const commandDisposables = commandRegistrar.registerAll();
     for (const disposable of commandDisposables) {
@@ -113,7 +124,7 @@ function activate(context) {
     // Register the CodeActionProvider for diagnostics
     context.subscriptions.push(vscode.languages.registerCodeActionsProvider({ pattern: '**/*.{ts,js,tsx,jsx,py,go,rs,java,rb,php,c,cpp,h,hpp,cs,swift,kt,scala,vue,svelte,mjs,cjs}' }, diagnosticFixer, { providedCodeActionKinds: diagnosticFixer_js_1.DiagnosticFixProvider.providedCodeActionKinds }));
     // Register inline completion provider (Phase 3.1.2 — Copilot-style suggestions)
-    const inlineSuggestProvider = new inlineSuggest_js_1.InlineSuggestProvider(config);
+    inlineSuggestProvider = new inlineSuggest_js_1.InlineSuggestProvider(config);
     context.subscriptions.push(vscode.languages.registerInlineCompletionItemProvider({ pattern: '**/*.{ts,js,tsx,jsx,py,go,rs,java,rb,php,c,cpp,h,hpp,cs,swift,kt,scala,vue,svelte,mjs,cjs}' }, inlineSuggestProvider));
     // Register configuration change handler
     context.subscriptions.push(vscode.workspace.onDidChangeConfiguration((e) => {
@@ -123,7 +134,11 @@ function activate(context) {
             cliManager = new cliManager_js_1.CLIManager(newConfig);
             commandRegistrar?.updateConfig(newConfig);
             chatPanel?.updateConfig(newConfig);
+            inlineSuggestProvider?.updateConfig(newConfig);
+            codeLensProvider?.updateCliManager(cliManager);
+            diagnosticFixer?.updateCliManager(cliManager);
             updateStatusBar('$(refresh) Config Updated');
+            void refreshModelStatusBar();
         }
     }));
     // Update status bar on save to show readiness
@@ -164,11 +179,18 @@ function deactivate() {
     // Dispose chat panel
     chatPanel = null;
     chatHistory = null;
-    // Dispose status bar
+    // Dispose status bar items
     if (statusBarItem) {
         statusBarItem.dispose();
         statusBarItem = null;
     }
+    if (modelStatusBarItem) {
+        modelStatusBarItem.dispose();
+        modelStatusBarItem = null;
+    }
+    inlineSuggestProvider = null;
+    codeLensProvider = null;
+    diagnosticFixer = null;
     agentPanel = null;
     console.log('[agent-nuvira] Extension deactivated');
 }
@@ -185,6 +207,7 @@ function loadConfig() {
         autoApplyChanges: vsConfig.get('autoApplyChanges', false),
         maxTokens: vsConfig.get('maxTokens', 4096),
         showProgressPanel: vsConfig.get('showProgressPanel', true),
+        useAutoRouting: vsConfig.get('useAutoRouting', false),
     };
 }
 /**
@@ -212,6 +235,30 @@ function createStatusBarItem() {
     return item;
 }
 /**
+ * Create the model/provider status bar item.
+ * Shown only when there's an active workspace, mirroring the main item.
+ */
+function createModelStatusBarItem() {
+    const item = vscode.window.createStatusBarItem(vscode.StatusBarAlignment.Right, 99);
+    item.command = 'agent-nuvira.switchModel';
+    item.tooltip = 'Agent-Nuvira — click to switch provider/model';
+    item.text = '$(chip) model';
+    // Only show when there's an active workspace
+    if (vscode.workspace.workspaceFolders && vscode.workspace.workspaceFolders.length > 0) {
+        item.show();
+    }
+    // Show/hide based on workspace changes
+    vscode.workspace.onDidChangeWorkspaceFolders(() => {
+        if (vscode.workspace.workspaceFolders && vscode.workspace.workspaceFolders.length > 0) {
+            item.show();
+        }
+        else {
+            item.hide();
+        }
+    });
+    return item;
+}
+/**
  * Update the status bar text and show it.
  */
 function updateStatusBar(text) {
@@ -219,5 +266,37 @@ function updateStatusBar(text) {
         statusBarItem.text = text;
         statusBarItem.show();
     }
+}
+/**
+ * Refresh the model/provider status bar indicator from the CLI's
+ * active-model state (e.g. after a `buff model switch`).
+ *
+ * Exported for unit testing.
+ */
+async function refreshModelStatusBar() {
+    if (!modelStatusBarItem || !cliManager)
+        return;
+    let label = 'model';
+    let tooltip = 'Agent-Nuvira — click to switch provider/model';
+    try {
+        const active = await cliManager.getActiveModel();
+        if (active) {
+            if (active.provider === 'auto' || active.model === 'auto') {
+                label = 'auto';
+                tooltip = 'Auto routing — click to change provider/model';
+            }
+            else {
+                const provider = active.providerLabel || active.provider;
+                label = `${provider}/${active.model}`;
+                tooltip = `Active: ${provider}/${active.model} — click to switch`;
+            }
+        }
+    }
+    catch {
+        // Keep the default label if the state can't be read
+    }
+    modelStatusBarItem.text = `$(chip) ${label}`;
+    modelStatusBarItem.tooltip = tooltip;
+    modelStatusBarItem.show();
 }
 //# sourceMappingURL=extension.js.map

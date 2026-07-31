@@ -184,12 +184,18 @@ class InlineSuggestProvider {
             command = cliPath;
             spawnArgs = args;
         }
-        // Add provider/model if configured
-        if (this.config.defaultProvider) {
-            spawnArgs.push('--provider', this.config.defaultProvider);
+        // Auto model routing — the agent picks the best provider/model for the task
+        if (this.config.useAutoRouting) {
+            spawnArgs.push('--model', 'auto');
         }
-        if (this.config.defaultModel) {
-            spawnArgs.push('--model', this.config.defaultModel);
+        else {
+            // Add provider/model if configured
+            if (this.config.defaultProvider) {
+                spawnArgs.push('--provider', this.config.defaultProvider);
+            }
+            if (this.config.defaultModel) {
+                spawnArgs.push('--model', this.config.defaultModel);
+            }
         }
         return new Promise((resolve) => {
             const child = (0, node_child_process_1.spawn)(command, spawnArgs, {

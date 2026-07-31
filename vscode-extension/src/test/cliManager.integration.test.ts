@@ -97,6 +97,9 @@ vi.mock('vscode', () => {
 });
 
 import { spawn } from 'node:child_process';
+import { mkdirSync, rmSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { CLIManager } from '../cliManager.js';
 import type { CLIResult } from '../types.js';
 
@@ -108,6 +111,7 @@ describe('CLIManager Integration', () => {
     autoApplyChanges: false,
     maxTokens: 4096,
     showProgressPanel: true,
+    useAutoRouting: false,
   };
 
   let manager: CLIManager;
@@ -313,6 +317,218 @@ describe('CLIManager Integration', () => {
 
       expect(result.success).toBe(true);
       expect(result.stdout).toContain('5 tests generated');
+    });
+  });
+
+  // ── Model & Provider Management ─────────────────────────────────────────
+
+  describe('listModels', () => {
+    it('spawns with model list --json', async () => {
+      await runTask(() => manager.listModels(), {
+        stdout: JSON.stringify({ providers: [{ type: 'groq', label: 'Groq', icon: '🟢', configured: true, available: true, defaultModel: 'llama', isActive: false, isPlugin: false }] }),
+      });
+      expect(spawn).toHaveBeenCalledWith('buff', ['model', 'list', '--all', '--json'], expect.any(Object));
+    });
+
+    it('parses provider list from JSON stdout', async () => {
+      const result = await runTask(() => manager.listModels(), {
+        stdout: JSON.stringify({ providers: [
+          { type: 'groq', label: 'Groq', icon: '🟢', configured: true, available: true, defaultModel: 'llama', isActive: false, isPlugin: false },
+          { type: 'auto', label: 'Auto', icon: '🤖', configured: true, available: false, isActive: true, isPlugin: false },
+        ] }),
+      });
+
+      expect(result).toHaveLength(2);
+      expect(result[0].type).toBe('groq');
+      expect(result[0].available).toBe(true);
+      expect(result[1].isActive).toBe(true);
+    });
+
+    it('returns empty array on invalid JSON', async () => {
+      const result = await runTask(() => manager.listModels(), { stdout: 'not json' });
+      expect(result).toEqual([]);
+    });
+
+    it('returns empty array on non-zero exit', async () => {
+      const result = await runTask(() => manager.listModels(), { stderr: 'CLI error', exitCode: 1 });
+      expect(result).toEqual([]);
+    });
+  });
+
+  describe('listProviderModels', () => {
+    it('spawns with models -p <provider> --json', async () => {
+      await runTask(() => manager.listProviderModels('groq'), {
+        stdout: JSON.stringify({ models: [{ provider: 'Groq', providerType: 'groq', name: 'Llama', id: 'llama-3.3-70b' }] }),
+      });
+      expect(spawn).toHaveBeenCalledWith('buff', ['models', '-p', 'groq', '--json'], expect.any(Object));
+    });
+
+    it('parses the model list from JSON stdout', async () => {
+      const result = await runTask(() => manager.listProviderModels('groq'), {
+        stdout: JSON.stringify({ models: [
+          { provider: 'Groq', providerType: 'groq', name: 'Llama 3.3 70B', id: 'llama-3.3-70b-versatile' },
+          { provider: 'Groq', providerType: 'groq', name: 'Mixtral', id: 'mixtral-8x7b-32768', owner: 'Mistral AI' },
+        ] }),
+      });
+
+      expect(result).toHaveLength(2);
+      expect(result[0].id).toBe('llama-3.3-70b-versatile');
+      expect(result[0].providerType).toBe('groq');
+      expect(result[1].owner).toBe('Mistral AI');
+    });
+
+    it('returns empty array on invalid JSON', async () => {
+      const result = await runTask(() => manager.listProviderModels('groq'), { stdout: 'not json' });
+      expect(result).toEqual([]);
+    });
+
+    it('returns empty array on non-zero exit', async () => {
+      const result = await runTask(() => manager.listProviderModels('groq'), { stderr: 'CLI error', exitCode: 1 });
+      expect(result).toEqual([]);
+    });
+  });
+
+  describe('switchModel', () => {
+    it('spawns with model switch auto for auto routing', async () => {
+      await runTask(() => manager.switchModel('auto'));
+      expect(spawn).toHaveBeenCalledWith('buff', ['model', 'switch', 'auto'], expect.any(Object));
+    });
+
+    it('spawns with provider only when no model given', async () => {
+      await runTask(() => manager.switchModel('groq'));
+      expect(spawn).toHaveBeenCalledWith('buff', ['model', 'switch', 'groq'], expect.any(Object));
+    });
+
+    it('spawns with provider/model combined when model given', async () => {
+      await runTask(() => manager.switchModel('groq', 'llama-3.3-70b'));
+      expect(spawn).toHaveBeenCalledWith('buff', ['model', 'switch', 'groq/llama-3.3-70b'], expect.any(Object));
+    });
+
+    it('returns switch result', async () => {
+      const result = await runTask(() => manager.switchModel('groq'), { stdout: '✅ Switched active model to: Groq' });
+      expect(result.success).toBe(true);
+    });
+  });
+
+  describe('checkModelHealth', () => {
+    it('spawns with model health for active provider', async () => {
+      await runTask(() => manager.checkModelHealth(), { stdout: 'health ok' });
+      expect(spawn).toHaveBeenCalledWith('buff', ['model', 'health'], expect.any(Object));
+    });
+
+    it('spawns with -p flag when provider specified', async () => {
+      await runTask(() => manager.checkModelHealth('groq'), { stdout: 'health ok' });
+      expect(spawn).toHaveBeenCalledWith('buff', ['model', 'health', '-p', 'groq'], expect.any(Object));
+    });
+
+    it('omits provider flag for auto routing', async () => {
+      await runTask(() => manager.checkModelHealth('auto'), { stdout: 'health ok' });
+      expect(spawn).toHaveBeenCalledWith('buff', ['model', 'health'], expect.any(Object));
+    });
+  });
+
+  describe('getActiveModel', () => {
+    it('parses a valid active-model file', async () => {
+      const tmpDir = join(tmpdir(), `buff-test-${Date.now()}`);
+      mkdirSync(tmpDir, { recursive: true });
+      const statePath = join(tmpDir, 'active-model.json');
+      writeFileSync(statePath, JSON.stringify({
+        provider: 'groq',
+        model: 'llama-3.3-70b-versatile',
+        updatedAt: 123456,
+        explicit: true,
+        providerLabel: 'Groq',
+      }), 'utf-8');
+
+      const prev = process.env.BUFF_ACTIVE_MODEL_PATH;
+      process.env.BUFF_ACTIVE_MODEL_PATH = statePath;
+      try {
+        const active = await manager.getActiveModel();
+        expect(active).not.toBeNull();
+        expect(active?.provider).toBe('groq');
+        expect(active?.model).toBe('llama-3.3-70b-versatile');
+        expect(active?.explicit).toBe(true);
+      } finally {
+        if (prev === undefined) delete process.env.BUFF_ACTIVE_MODEL_PATH;
+        else process.env.BUFF_ACTIVE_MODEL_PATH = prev;
+        rmSync(tmpDir, { recursive: true, force: true });
+      }
+    });
+
+    it('returns null for a corrupt active-model file', async () => {
+      const tmpDir = join(tmpdir(), `buff-test-${Date.now()}`);
+      mkdirSync(tmpDir, { recursive: true });
+      const statePath = join(tmpDir, 'active-model.json');
+      writeFileSync(statePath, 'not json', 'utf-8');
+
+      const prev = process.env.BUFF_ACTIVE_MODEL_PATH;
+      process.env.BUFF_ACTIVE_MODEL_PATH = statePath;
+      try {
+        const active = await manager.getActiveModel();
+        expect(active).toBeNull();
+      } finally {
+        if (prev === undefined) delete process.env.BUFF_ACTIVE_MODEL_PATH;
+        else process.env.BUFF_ACTIVE_MODEL_PATH = prev;
+        rmSync(tmpDir, { recursive: true, force: true });
+      }
+    });
+
+    it('returns null when the file does not exist', async () => {
+      const tmpDir = join(tmpdir(), `buff-test-${Date.now()}`);
+      const statePath = join(tmpDir, 'missing.json');
+
+      const prev = process.env.BUFF_ACTIVE_MODEL_PATH;
+      process.env.BUFF_ACTIVE_MODEL_PATH = statePath;
+      try {
+        const active = await manager.getActiveModel();
+        expect(active).toBeNull();
+      } finally {
+        if (prev === undefined) delete process.env.BUFF_ACTIVE_MODEL_PATH;
+        else process.env.BUFF_ACTIVE_MODEL_PATH = prev;
+      }
+    });
+  });
+
+  describe('auto routing in buildArgs', () => {
+    it('appends --model auto to chat commands when useAutoRouting is on', async () => {
+      const m = new CLIManager({ ...defaultConfig, useAutoRouting: true });
+      const localMock = createControllableMockProcess();
+      vi.mocked(spawn).mockReturnValue(localMock.mockProcess as any);
+
+      const resultPromise = m.explainCode('explain this', 'ts');
+      localMock.emitClose(0);
+      await resultPromise;
+
+      const args = vi.mocked(spawn).mock.calls[0][1];
+      expect(args).toContain('--model');
+      expect(args).toContain('auto');
+      // Explicit provider/model should NOT be appended in auto mode
+      expect(args).not.toContain('--provider');
+    });
+
+    it('appends --auto-route to execute commands when useAutoRouting is on', async () => {
+      const m = new CLIManager({ ...defaultConfig, useAutoRouting: true });
+      const localMock = createControllableMockProcess();
+      vi.mocked(spawn).mockReturnValue(localMock.mockProcess as any);
+
+      const resultPromise = m.executeGoal('add tests');
+      localMock.emitClose(0);
+      await resultPromise;
+
+      const args = vi.mocked(spawn).mock.calls[0][1];
+      expect(args).toContain('--auto-route');
+    });
+
+    it('passes provider/model through when useAutoRouting is off', async () => {
+      const m = new CLIManager({ ...defaultConfig, defaultProvider: 'groq', defaultModel: 'llama' });
+      const localMock = createControllableMockProcess();
+      vi.mocked(spawn).mockReturnValue(localMock.mockProcess as any);
+
+      const resultPromise = m.executeGoal('test');
+      localMock.emitClose(0);
+      await resultPromise;
+
+      expect(spawn).toHaveBeenCalledWith('buff', ['execute', 'test', '--provider', 'groq', '--model', 'llama'], expect.any(Object));
     });
   });
 

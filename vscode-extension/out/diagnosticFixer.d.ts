@@ -19,6 +19,11 @@ export declare class DiagnosticFixProvider implements vscode.CodeActionProvider 
     private diffViewer;
     constructor(cliManager: CLIManager, diffViewer: DiffViewer);
     /**
+     * Swap the CLI manager when extension config changes
+     * (so auto-routing / provider settings take effect immediately).
+     */
+    updateCliManager(cliManager: CLIManager): void;
+    /**
      * Provide code actions for diagnostics on the current line.
      */
     provideCodeActions(document: vscode.TextDocument, _range: vscode.Range, context: vscode.CodeActionContext, _token: vscode.CancellationToken): vscode.CodeAction[];

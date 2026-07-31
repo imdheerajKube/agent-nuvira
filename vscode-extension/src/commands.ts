@@ -18,9 +18,17 @@ import { CLIManager } from './cliManager.js';
 import { AgentPanel } from './agentPanel.js';
 import { DiffViewer } from './diffViewer.js';
 import { parseCLIOutput } from './outputParser.js';
-import type { ExtensionConfig, FileChange } from './types.js';
+import type { ExtensionConfig, FileChange, ProviderInfo, ProviderModelInfo } from './types.js';
 
 // ─── CommandRegistrar ───────────────────────────────────────────────────────
+
+/** A quick-pick entry in the model/provider switcher */
+type ModelOption = vscode.QuickPickItem & {
+  /** Provider type (e.g. 'groq', 'auto') */
+  value: string;
+  /** Model id, present only for specific-model options */
+  model?: string;
+};
 
 export class CommandRegistrar {
   private cliManager: CLIManager;
@@ -29,6 +37,8 @@ export class CommandRegistrar {
   private config: ExtensionConfig;
   private currentChanges: FileChange[] = [];
   private disposables: vscode.Disposable[] = [];
+  /** Fired after a provider/model switch so the status bar can refresh */
+  private onModelChanged?: () => void;
 
   constructor(
     context: vscode.ExtensionContext,
@@ -58,6 +68,8 @@ export class CommandRegistrar {
       vscode.commands.registerCommand('agent-nuvira.runWorkflow', () => this.runWorkflow()),
       vscode.commands.registerCommand('agent-nuvira.acceptChanges', () => this.acceptChanges()),
       vscode.commands.registerCommand('agent-nuvira.rejectChanges', () => this.rejectChanges()),
+      vscode.commands.registerCommand('agent-nuvira.switchModel', () => this.switchModel()),
+      vscode.commands.registerCommand('agent-nuvira.modelHealth', () => this.modelHealth()),
     ];
 
     return this.disposables;
@@ -68,6 +80,13 @@ export class CommandRegistrar {
    */
   updateConfig(config: ExtensionConfig): void {
     this.config = config;
+  }
+
+  /**
+   * Register a callback fired after a provider/model switch.
+   */
+  setOnModelChanged(cb: () => void): void {
+    this.onModelChanged = cb;
   }
 
   // ── Command Handlers ─────────────────────────────────────────────────────
@@ -286,6 +305,179 @@ export class CommandRegistrar {
 
     // Clear the hasChanges context so keybindings deactivate
     vscode.commands.executeCommand('setContext', 'agent-nuvira.hasChanges', false);
+  }
+
+  /**
+   * Switch the active provider/model — or enable Auto model routing.
+   *
+   * Two-step flow:
+   * 1. Lists providers from `buff model list` and lets the user pick one
+   * 2. For a non-auto provider, lists its actual models via `buff models`
+   *    and lets the user pick a specific one (or keep the provider default)
+   */
+  private async switchModel(): Promise<void> {
+    // Fetch providers from the CLI (best effort — fall back to Auto only)
+    let providers: ProviderInfo[] = [];
+    try {
+      providers = await vscode.window.withProgress(
+        {
+          location: vscode.ProgressLocation.Notification,
+          title: 'Agent-Nuvira: checking providers...',
+          cancellable: false,
+        },
+        () => this.cliManager.listModels(),
+      );
+    } catch {
+      providers = [];
+    }
+
+    const options: ModelOption[] = [
+      {
+        label: '$(sparkle) Auto routing',
+        description: 'Agent picks the best provider/model for each task',
+        value: 'auto',
+      },
+    ];
+
+    for (const p of providers) {
+      const statusIcon = p.available ? '✅' : p.configured ? '⚠️' : '⏳';
+      const statusText = p.available ? 'Available' : p.configured ? 'Unreachable' : 'Needs key';
+      const model = p.defaultModel ? ` — ${p.defaultModel}` : '';
+      options.push({
+        label: `${p.icon || '🔹'} ${p.label}${p.isActive ? ' (active)' : ''}`,
+        description: `${statusIcon} ${statusText}${model}`,
+        value: p.type,
+      });
+    }
+
+    const selected = await vscode.window.showQuickPick(options, {
+      placeHolder: 'Select a provider:',
+    });
+    if (!selected) return;
+
+    // Drill into the provider's real models so users can pick a specific one
+    let modelId: string | undefined;
+    if (selected.value !== 'auto') {
+      const providerInfo = providers.find((p) => p.type === selected.value);
+      modelId = await this.pickProviderModel(selected.value, providerInfo);
+    }
+
+    // Warn when pinning a provider while auto-routing would override it
+    if (this.config.useAutoRouting && selected.value !== 'auto') {
+      const choice = await vscode.window.showWarningMessage(
+        'Auto routing is enabled and will override this choice for chat/execute. Switch anyway?',
+        'Switch anyway',
+        'Cancel',
+      );
+      if (choice !== 'Switch anyway') return;
+    }
+
+    const display = selected.value === 'auto'
+      ? 'Auto routing enabled'
+      : modelId ? `${selected.value}/${modelId}` : selected.value;
+
+    try {
+      const result = modelId
+        ? await this.cliManager.switchModel(selected.value, modelId)
+        : await this.cliManager.switchModel(selected.value);
+      if (result.success) {
+        this.agentPanel.updateStatus(selected.value === 'auto' ? '🤖 Auto routing enabled' : `✅ Switched to ${display}`);
+        this.onModelChanged?.();
+        vscode.window.showInformationMessage(
+          selected.value === 'auto' ? '🤖 Auto routing enabled' : `✅ Switched to ${display}`,
+        );
+      } else {
+        vscode.window.showErrorMessage(`Switch failed: ${result.stderr || 'Unknown error'}`);
+      }
+    } catch (err: any) {
+      vscode.window.showErrorMessage(`Switch failed: ${err.message || 'Unknown error'}`);
+    }
+  }
+
+  /**
+   * Fetch a provider's actual models (`buff models`) and let the user pick one.
+   * The first option keeps the provider's configured default model.
+   *
+   * Returns the chosen model id, or undefined to keep the provider default.
+   * Falls back to provider-only switching when the model list can't be loaded.
+   */
+  private async pickProviderModel(
+    providerType: string,
+    providerInfo?: ProviderInfo,
+  ): Promise<string | undefined> {
+    let models: ProviderModelInfo[] = [];
+    try {
+      models = await vscode.window.withProgress(
+        {
+          location: vscode.ProgressLocation.Notification,
+          title: `Agent-Nuvira: fetching ${providerInfo?.label || providerType} models...`,
+          cancellable: false,
+        },
+        () => this.cliManager.listProviderModels(providerType),
+      );
+    } catch {
+      models = [];
+    }
+
+    // If the CLI can't list models, just switch with the provider's default
+    if (models.length === 0) return undefined;
+
+    const providerLabel = providerInfo?.label || providerType;
+    const defaultDescription = providerInfo?.defaultModel
+      ? `Provider default — ${providerInfo.defaultModel}`
+      : "Use the provider's configured default model";
+
+    const options: ModelOption[] = [
+      {
+        label: '$(check) Use default model',
+        description: defaultDescription,
+        value: providerType,
+      },
+    ];
+
+    for (const m of models) {
+      const owner = m.owner ? ` [${m.owner}]` : '';
+      const desc = m.description ? ` — ${m.description.slice(0, 60)}` : '';
+      options.push({
+        label: `🧠 ${m.name}`,
+        description: `${m.id}${owner}${desc}`,
+        value: providerType,
+        model: m.id,
+      });
+    }
+
+    const picked = await vscode.window.showQuickPick(options, {
+      placeHolder: `Pick a model for ${providerLabel} (Esc keeps the default):`,
+    });
+
+    // Dismissing the picker (or picking the default option) keeps the default model
+    return picked?.model;
+  }
+
+  /**
+   * Run a health check for the active provider and show the report.
+   */
+  private async modelHealth(): Promise<void> {
+    let provider: string | undefined;
+    try {
+      const active = await this.cliManager.getActiveModel();
+      provider = active?.provider;
+    } catch {
+      provider = undefined;
+    }
+
+    try {
+      const result = await this.cliManager.checkModelHealth(provider);
+      const output = result.stdout || result.stderr || 'No health output.';
+
+      const doc = await vscode.workspace.openTextDocument({
+        content: output,
+        language: 'markdown',
+      });
+      await vscode.window.showTextDocument(doc, { preview: true, viewColumn: vscode.ViewColumn.Beside });
+    } catch (err: any) {
+      vscode.window.showErrorMessage(`Health check failed: ${err.message || 'Unknown error'}`);
+    }
   }
 
   // ── Task Runner ───────────────────────────────────────────────────────────

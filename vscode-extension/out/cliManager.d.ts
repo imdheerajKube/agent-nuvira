@@ -9,7 +9,7 @@
  * - Handle errors, timeouts, and cleanup
  * - Provide progress callbacks for the webview panel
  */
-import type { CLIResult, ExtensionConfig } from './types.js';
+import type { ActiveModelInfo, CLIResult, ExtensionConfig, ProviderInfo, ProviderModelInfo } from './types.js';
 /**
  * Manages the lifecycle of a CLI subprocess for agent tasks.
  * Each task gets its own subprocess instance.
@@ -70,7 +70,38 @@ export declare class CLIManager {
      */
     runWorkflow(template: string, goal: string): Promise<CLIResult>;
     /**
+     * List all providers with their availability status.
+     * Corresponds to: buff model list --all --json
+     */
+    listModels(): Promise<ProviderInfo[]>;
+    /**
+     * List the actual models available from a specific provider.
+     * Corresponds to: buff models -p <provider> --json
+     */
+    listProviderModels(provider: string): Promise<ProviderModelInfo[]>;
+    /**
+     * Switch the active provider/model.
+     * Pass 'auto' as provider to enable Auto model routing.
+     * Corresponds to: buff model switch <provider>[/<model>] or buff model switch auto
+     */
+    switchModel(provider: string, model?: string): Promise<CLIResult>;
+    /**
+     * Read the active model state from ~/.buff/active-model.json.
+     * Returns null if no active model has been set yet.
+     */
+    getActiveModel(): Promise<ActiveModelInfo | null>;
+    /**
+     * Run a health check for the active (or specified) provider.
+     * Corresponds to: buff model health [-p <provider>]
+     */
+    checkModelHealth(provider?: string): Promise<CLIResult>;
+    /**
      * Build CLI arguments with common options.
+     *
+     * When Auto model routing is enabled:
+     * - chat commands get `--model auto` (the CLI detects auto mode)
+     * - execute commands get `--auto-route` (per-task AutoModelRouter)
+     * Otherwise the configured provider/model are passed through.
      */
     private buildArgs;
     /**

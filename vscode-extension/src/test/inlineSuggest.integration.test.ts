@@ -126,6 +126,7 @@ const defaultConfig: ExtensionConfig = {
   autoApplyChanges: false,
   maxTokens: 4096,
   showProgressPanel: true,
+  useAutoRouting: false,
 };
 
 // ─── Tests ──────────────────────────────────────────────────────────────────
@@ -285,6 +286,70 @@ describe('InlineSuggestProvider — callCLIForSuggestion', () => {
       const args = vi.mocked(spawn).mock.calls[0][1] as string[];
       expect(args).not.toContain('--provider');
       expect(args).not.toContain('--model');
+    });
+
+    it('adds --model auto when auto routing is enabled (ignores configured provider/model)', async () => {
+      const autoProvider = new InlineSuggestProvider({
+        ...defaultConfig,
+        useAutoRouting: true,
+        defaultProvider: 'groq',
+        defaultModel: 'llama-3.3-70b',
+      });
+      const autoMock = createControllableMockProcess();
+      vi.mocked(spawn).mockReturnValue(autoMock.mockProcess as any);
+
+      const promise = (autoProvider as any).callCLIForSuggestion.call(autoProvider, 'prompt', token.token);
+      autoMock.emitClose(0);
+      await promise;
+
+      const args = vi.mocked(spawn).mock.calls[0][1] as string[];
+      const modelIdx = args.indexOf('--model');
+      expect(modelIdx).toBeGreaterThanOrEqual(0);
+      expect(args[modelIdx + 1]).toBe('auto');
+      // Explicit provider/model must NOT be appended in auto mode
+      expect(args).not.toContain('--provider');
+    });
+
+    it('adds --model auto when auto routing is enabled via updateConfig', async () => {
+      provider.updateConfig({
+        ...defaultConfig,
+        useAutoRouting: true,
+        defaultProvider: 'gemini',
+        defaultModel: 'gemini-2.0-flash',
+      });
+      const autoMock = createControllableMockProcess();
+      vi.mocked(spawn).mockReturnValue(autoMock.mockProcess as any);
+
+      const promise = (provider as any).callCLIForSuggestion.call(provider, 'prompt', token.token);
+      autoMock.emitClose(0);
+      await promise;
+
+      const args = vi.mocked(spawn).mock.calls[0][1] as string[];
+      const modelIdx = args.indexOf('--model');
+      expect(modelIdx).toBeGreaterThanOrEqual(0);
+      expect(args[modelIdx + 1]).toBe('auto');
+      expect(args).not.toContain('--provider');
+    });
+
+    it('handles npx prefix together with auto routing', async () => {
+      const npxAuto = new InlineSuggestProvider({
+        ...defaultConfig,
+        cliPath: 'npx agent-nuvira',
+        useAutoRouting: true,
+      });
+      const npxMock = createControllableMockProcess();
+      vi.mocked(spawn).mockReturnValue(npxMock.mockProcess as any);
+
+      const promise = (npxAuto as any).callCLIForSuggestion.call(npxAuto, 'prompt', token.token);
+      npxMock.emitClose(0);
+      await promise;
+
+      const call = vi.mocked(spawn).mock.calls[0];
+      expect(call[0]).toBe('npx');
+      const args = call[1] as string[];
+      expect(args).toContain('--model');
+      expect(args[args.indexOf('--model') + 1]).toBe('auto');
+      expect(args).not.toContain('--provider');
     });
   });
 
@@ -551,6 +616,30 @@ describe('InlineSuggestProvider — callCLIForSuggestion', () => {
       const modelIdx = args.indexOf('--model');
       expect(args[providerIdx + 1]).toBe('openrouter');
       expect(args[modelIdx + 1]).toBe('mixtral');
+    });
+
+    it('switches from explicit provider to auto routing after updateConfig', async () => {
+      provider.updateConfig({ ...defaultConfig, defaultProvider: 'groq', defaultModel: 'llama' });
+      const explicitMock = createControllableMockProcess();
+      vi.mocked(spawn).mockReturnValue(explicitMock.mockProcess as any);
+      const p1 = (provider as any).callCLIForSuggestion.call(provider, 'prompt', token.token);
+      explicitMock.emitClose(0);
+      await p1;
+      const explicitArgs = vi.mocked(spawn).mock.calls[0][1] as string[];
+      expect(explicitArgs).toContain('--provider');
+
+      // Now enable auto routing
+      provider.updateConfig({ ...defaultConfig, useAutoRouting: true, defaultProvider: 'groq', defaultModel: 'llama' });
+      const autoMock = createControllableMockProcess();
+      vi.mocked(spawn).mockReturnValue(autoMock.mockProcess as any);
+      const p2 = (provider as any).callCLIForSuggestion.call(provider, 'prompt', token.token);
+      autoMock.emitClose(0);
+      await p2;
+
+      const autoArgs = vi.mocked(spawn).mock.calls[1][1] as string[];
+      expect(autoArgs).toContain('--model');
+      expect(autoArgs[autoArgs.indexOf('--model') + 1]).toBe('auto');
+      expect(autoArgs).not.toContain('--provider');
     });
   });
 });
