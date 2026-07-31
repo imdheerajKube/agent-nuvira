@@ -9,7 +9,7 @@
  * 5. Cross-platform shell detection (via platform() calls)
  */
 
-import { describe, it, expect, beforeEach, afterEach } from 'vitest';
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { mkdtempSync, writeFileSync, rmSync, existsSync, mkdirSync } from 'node:fs';
 import { join, resolve, dirname } from 'node:path';
 import { tmpdir } from 'node:os';
@@ -748,6 +748,260 @@ describe('RunnerAgent', () => {
       expect(result.success).toBe(true);
       expect(runResult.exitCode).toBe(0);
       expect(runResult.stdout).toContain('path with spaces works');
+    });
+  });
+
+  // ─── Dependency Install (detectInstallPlan / commandExists) ───────────
+
+  describe('dependency install', () => {
+    let tmpDir: string;
+
+    beforeEach(() => {
+      tmpDir = mkdtempSync(join(tmpdir(), 'buff-dep-install-'));
+    });
+
+    afterEach(() => {
+      rmSync(tmpDir, { recursive: true, force: true });
+    });
+
+    /** Access private detectInstallPlan via prototype */
+    function detectInstallPlan(workingDir: string) {
+      return (runner as any).detectInstallPlan.call(runner, workingDir);
+    }
+
+    /** Access private commandExists via prototype */
+    function commandExists(tool: string): boolean {
+      return (runner as any).commandExists.call(runner, tool);
+    }
+
+    it('detects npm for package.json', () => {
+      writeFileSync(join(tmpDir, 'package.json'), '{"name":"test"}', 'utf-8');
+      const plan = detectInstallPlan(tmpDir);
+      expect(plan).not.toBeNull();
+      expect(plan.tool).toBe('npm');
+      expect(plan.command).toContain('npm install');
+    });
+
+    it('detects pip for requirements.txt', () => {
+      writeFileSync(join(tmpDir, 'requirements.txt'), 'requests', 'utf-8');
+      const plan = detectInstallPlan(tmpDir);
+      expect(plan.tool).toBe('pip');
+      expect(plan.command).toContain('pip install -r');
+    });
+
+    it('detects pip for pyproject.toml', () => {
+      writeFileSync(join(tmpDir, 'pyproject.toml'), '[project]', 'utf-8');
+      expect(detectInstallPlan(tmpDir).tool).toBe('pip');
+    });
+
+    it('detects pip for setup.py', () => {
+      writeFileSync(join(tmpDir, 'setup.py'), 'from setuptools import setup', 'utf-8');
+      expect(detectInstallPlan(tmpDir).tool).toBe('pip');
+    });
+
+    it('detects bundle for Gemfile', () => {
+      writeFileSync(join(tmpDir, 'Gemfile'), 'source "https://rubygems.org"', 'utf-8');
+      const plan = detectInstallPlan(tmpDir);
+      expect(plan.tool).toBe('bundle');
+      expect(plan.command).toBe('bundle install');
+    });
+
+    it('detects cargo for Cargo.toml', () => {
+      writeFileSync(join(tmpDir, 'Cargo.toml'), '[package]', 'utf-8');
+      expect(detectInstallPlan(tmpDir).tool).toBe('cargo');
+    });
+
+    it('detects go for go.mod', () => {
+      writeFileSync(join(tmpDir, 'go.mod'), 'module test', 'utf-8');
+      expect(detectInstallPlan(tmpDir).tool).toBe('go');
+    });
+
+    it('detects composer for composer.json', () => {
+      writeFileSync(join(tmpDir, 'composer.json'), '{"name":"test"}', 'utf-8');
+      expect(detectInstallPlan(tmpDir).tool).toBe('composer');
+    });
+
+    it('detects dart for pubspec.yaml', () => {
+      writeFileSync(join(tmpDir, 'pubspec.yaml'), 'name: test', 'utf-8');
+      expect(detectInstallPlan(tmpDir).tool).toBe('dart');
+    });
+
+    it('returns null when no manifest is present', () => {
+      expect(detectInstallPlan(tmpDir)).toBeNull();
+    });
+
+    it('commandExists detects a real tool and rejects a fake one', () => {
+      // node definitely exists (the tests run under node)
+      expect(commandExists('node')).toBe(true);
+      expect(commandExists('definitely-not-a-real-tool-xyz-12345')).toBe(false);
+    });
+
+    it('installDependencies returns a clear message when no manifest exists', async () => {
+      // Access private installDependencies via prototype
+      const result = (runner as any).installDependencies.call(runner, tmpDir, false);
+      expect(result.success).toBe(false);
+      expect(result.message).toContain('No supported dependency manifest');
+    });
+
+    it('installDependencies runs npm install for a package.json project when npm exists', async () => {
+      if (!commandExists('npm')) {
+        return; // Skip — npm not available
+      }
+      writeFileSync(join(tmpDir, 'package.json'), JSON.stringify({ name: 'dep-test', version: '1.0.0' }), 'utf-8');
+      const result = (runner as any).installDependencies.call(runner, tmpDir, false);
+      expect(result.success).toBe(true);
+      expect(result.tool).toBe('npm');
+      expect(result.command).toContain('npm install');
+      // A lockfile / node_modules may or may not be created, but install must succeed
+      expect(result.message).toBeUndefined(); // success with no error message
+    });
+
+    it('installDependencies auto-installs a missing tool from the failed command', () => {
+      // Stub commandExists/installTool so nothing runs against the real machine
+      const commandExistsSpy = vi.spyOn(runner as any, 'commandExists').mockReturnValue(false);
+      const installToolSpy = vi.spyOn(runner as any, 'installTool').mockReturnValue({
+        success: true,
+        command: 'python3 script.py',
+        tool: 'pip',
+        toolInstalled: true,
+        message: 'Auto-installed missing tool pip',
+      });
+      try {
+        const result = (runner as any).installDependencies.call(runner, tmpDir, true, 'python3 script.py');
+        expect(result.success).toBe(true);
+        expect(result.tool).toBe('pip');
+        expect(result.toolInstalled).toBe(true);
+        expect(installToolSpy).toHaveBeenCalledWith('pip');
+        expect(commandExistsSpy).toHaveBeenCalled();
+      } finally {
+        installToolSpy.mockRestore();
+        commandExistsSpy.mockRestore();
+      }
+    });
+
+    it('detectToolFromCommand maps known interpreters to bootstrap tools', () => {
+      const detect = (cmd: string) => (runner as any).detectToolFromCommand.call(runner, cmd);
+      // Stub commandExists so the mapping check returns "missing" for everything
+      const spy = vi.spyOn(runner as any, 'commandExists').mockReturnValue(false);
+      try {
+        expect(detect('python3 script.py')).toBe('pip');
+        expect(detect('node index.js')).toBe('npm');
+        expect(detect('cargo build')).toBe('cargo');
+        expect(detect('bundle install')).toBe('bundle');
+        expect(detect('composer install')).toBe('composer');
+        expect(detect('dart pub get')).toBe('dart');
+        expect(detect('flutter run')).toBe('dart');
+        expect(detect('yarn install')).toBe('yarn');
+        expect(detect('pnpm install')).toBe('pnpm');
+        expect(detect('/usr/bin/go run main.go')).toBe('go'); // paths handled
+        expect(detect('echo hello')).toBeNull(); // no mapping
+      } finally {
+        spy.mockRestore();
+      }
+    });
+  });
+
+  // ─── Composer Tool Install (installTool('composer')) ───────────────────
+  //
+  // installTool('composer') must:
+  // 1. Install to a user-writable dir ($HOME/.local/bin) — NOT /usr/local/bin,
+  //    which needs sudo and doesn't exist on Apple Silicon
+  // 2. Bootstrap PHP first via installPhpViaPlatform when php is missing
+  // 3. Propagate a PHP-install failure instead of attempting composer blindly
+
+  describe('composer tool install', () => {
+    /** Access private installTool via prototype */
+    function installTool(tool: string) {
+      return (runner as any).installTool.call(runner, tool);
+    }
+
+    /** Install tool with fully stubbed sub-commands (nothing touches the machine) */
+    function installToolWithStubs(opts: {
+      phpExists: boolean;
+      phpInstallSuccess: boolean;
+      composerInstallSuccess: boolean;
+    }) {
+      const executed: string[] = [];
+      const commandExistsSpy = vi.spyOn(runner as any, 'commandExists').mockImplementation((t: string) => {
+        // Everything "exists" except php when phpExists is false
+        return t === 'php' ? opts.phpExists : false;
+      });
+      const installPhpSpy = vi.spyOn(runner as any, 'installPhpViaPlatform').mockReturnValue({
+        success: opts.phpInstallSuccess,
+        command: 'brew install php',
+        tool: 'php',
+        toolInstalled: true,
+        message: opts.phpInstallSuccess ? 'php installed' : 'Could not install PHP on Linux',
+      });
+      const runInstallSpy = vi.spyOn(runner as any, 'runInstallCommand').mockImplementation((cmd: string) => {
+        executed.push(cmd);
+        return {
+          success: opts.composerInstallSuccess,
+          command: cmd,
+          toolInstalled: true,
+          message: opts.composerInstallSuccess ? 'Installed via: ' + cmd : 'composer install failed',
+        };
+      });
+      return { executed, commandExistsSpy, installPhpSpy, runInstallSpy };
+    }
+
+    afterEach(() => {
+      vi.restoreAllMocks();
+    });
+
+    it('installs composer to $HOME/.local/bin when PHP already exists', () => {
+      const { executed } = installToolWithStubs({
+        phpExists: true,
+        phpInstallSuccess: true,
+        composerInstallSuccess: true,
+      });
+
+      const result = installTool('composer');
+
+      expect(result.success).toBe(true);
+      expect(executed.length).toBe(1);
+      const cmd = executed[0];
+      // Must NOT use /usr/local/bin (sudo + missing on Apple Silicon)
+      expect(cmd).not.toContain('/usr/local/bin');
+      // Must target the user-writable local bin dir
+      const home = process.env.HOME || process.env.USERPROFILE || '';
+      expect(cmd).toContain(`${home}/.local/bin`);
+      // Uses the official getcomposer.org installer
+      expect(cmd).toContain('getcomposer.org/installer');
+      // Local bin path is quoted so spaces in HOME don't break it
+      expect(cmd).toContain(`"${home}/.local/bin"`);
+    });
+
+    it('bootstraps PHP first when php is missing, then installs composer', () => {
+      const { executed, installPhpSpy } = installToolWithStubs({
+        phpExists: false,
+        phpInstallSuccess: true,
+        composerInstallSuccess: true,
+      });
+
+      const result = installTool('composer');
+
+      expect(result.success).toBe(true);
+      // PHP was installed before the composer install ran
+      expect(installPhpSpy).toHaveBeenCalled();
+      expect(executed.length).toBe(1);
+      expect(executed[0]).toContain('getcomposer.org/installer');
+    });
+
+    it('does not run the composer installer when the PHP bootstrap fails', () => {
+      const { executed, runInstallSpy } = installToolWithStubs({
+        phpExists: false,
+        phpInstallSuccess: false,
+        composerInstallSuccess: true,
+      });
+
+      const result = installTool('composer');
+
+      expect(result.success).toBe(false);
+      expect(result.message).toContain('Could not install PHP');
+      // The composer installer must never run if PHP couldn't be installed
+      expect(executed.length).toBe(0);
+      expect(runInstallSpy).not.toHaveBeenCalled();
     });
   });
 

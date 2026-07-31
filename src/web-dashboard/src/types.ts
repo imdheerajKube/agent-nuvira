@@ -89,6 +89,35 @@ export interface BenchmarkData {
   runs: BenchmarkRun[];
 }
 
+// ─── Evaluation Framework Types ────────────────────────────────────────────
+
+export interface EvalRun {
+  id: string;
+  provider: string;
+  model: string;
+  startedAt: number;
+  summary: {
+    totalTasks: number;
+    tasksPassed: number;
+    completionRate: number;
+    testPassRate: number;
+    avgTimeToFixMs: number;
+    avgEditAccuracy: number;
+    avgTokenEfficiency: number;
+    totalRollbacks: number;
+    dependencyInstallRate: number;
+    recoveryRate: number;
+    avgCompositeScore: number;
+    totalCostUsd: number;
+  };
+}
+
+export interface EvalData {
+  totalRuns: number;
+  latest: EvalRun | null;
+  runs: EvalRun[];
+}
+
 export interface MemoryData {
   total: number;
   avgScore: number;
@@ -122,6 +151,7 @@ export interface DashboardData {
   cost: CostData;
   history: HistoryData;
   benchmarks: BenchmarkData;
+  evals?: EvalData;
   memory: MemoryData;
   health: HealthData;
   dag?: DAGData;

@@ -43,6 +43,7 @@ import { DefaultReportModule, type ReportModule, type ReportFormat } from './rep
 import { ContextPruner } from '../learning/context-pruner.js';
 import { ErrorRepairEngine } from '../learning/error-repair.js';
 import type { RepairMode } from '../learning/error-repair.js';
+import { estimateTokens } from '../learning/cost-tracker.js';
 import { scanForInjections, formatScanReport } from '../security/scanner.js';
 import { buildAgentModelMap } from '../learning/model-router.js';
 import { createReviewFromResult } from '../team/review.js';
@@ -191,6 +192,35 @@ export interface OrchestrationResult {
   trajectoryId?: string;
   /** Review bundle ID if review mode was enabled */
   reviewId?: string;
+  /** Execution telemetry — attempts, repair activity, dependency installs */
+  stats?: ExecutionStats;
+}
+
+/**
+ * Telemetry about how the pipeline executed — used by the evaluation
+ * framework to measure reliability, recovery behavior, and token efficiency.
+ */
+export interface ExecutionStats {
+  /** Total LLM calls made across all agents */
+  llmCalls: number;
+  /** Estimated input tokens */
+  inputTokens: number;
+  /** Estimated output tokens */
+  outputTokens: number;
+  /** Total repair attempts triggered by the ErrorRepairEngine */
+  repairAttempts: number;
+  /** Count of 'alternative-approach' repair strategies executed */
+  alternativeApproaches: number;
+  /** Tasks that failed on first attempt but succeeded after repair */
+  recoveredFailures: number;
+  /** Total task failures (before repair) */
+  taskFailures: number;
+  /** Whether the runner auto-installed dependencies */
+  dependencyInstallAttempted: boolean;
+  /** Whether the dependency install succeeded */
+  dependencyInstallSucceeded: boolean;
+  /** Number of file changes that were rolled back (reverted to original) */
+  rollbackCount: number;
 }
 
 // ─── Agent Registry Bridge ───────────────────────────────────────────────────
@@ -217,6 +247,19 @@ export class Orchestrator {
   private eventBus: EventBus;
   /** The report module for generating structured execution reports */
   private reportModule: ReportModule;
+  /** Execution telemetry accumulator for the current pipeline */
+  private stats: ExecutionStats = {
+    llmCalls: 0,
+    inputTokens: 0,
+    outputTokens: 0,
+    repairAttempts: 0,
+    alternativeApproaches: 0,
+    recoveredFailures: 0,
+    taskFailures: 0,
+    dependencyInstallAttempted: false,
+    dependencyInstallSucceeded: false,
+    rollbackCount: 0,
+  };
 
   constructor(configManager?: ConfigManager, moduleRegistry?: ModuleRegistry, eventBus?: EventBus, reportModule?: ReportModule) {
     this.configManager = configManager ?? new ConfigManager();
@@ -231,6 +274,20 @@ export class Orchestrator {
   async execute(goal: string, options: OrchestratorOptions = {}): Promise<OrchestrationResult> {
     const startTime = Date.now();
     const vault = new ContextVault(goal, process.cwd());
+    // Reset execution telemetry for this pipeline (shared accumulator used by
+    // createLLMProvider, executeSingleTask, and buildResult).
+    this.stats = {
+      llmCalls: 0,
+      inputTokens: 0,
+      outputTokens: 0,
+      repairAttempts: 0,
+      alternativeApproaches: 0,
+      recoveredFailures: 0,
+      taskFailures: 0,
+      dependencyInstallAttempted: false,
+      dependencyInstallSucceeded: false,
+      rollbackCount: 0,
+    };
     const defaultCallLLM = this.createLLMProvider(options);
     const agentResults: OrchestrationResult['agentResults'] = [];
     const contextFiles: string[] = [];
@@ -367,7 +424,31 @@ export class Orchestrator {
     } else {
       if (options.verbose) logger.highlight('\n📋 Planning...');
 
-      const planResult = await this.runAgent(this.moduleRegistry.getModule('planner'), vault, defaultCallLLM, options);
+      // Planner with auto-repair — if planning fails, try alternative approaches
+      // instead of immediately giving up with "Planning failed".
+      let planResult = await this.runAgent(this.moduleRegistry.getModule('planner'), vault, defaultCallLLM, options);
+      if (!planResult.success) {
+        const plannerRepair = new ErrorRepairEngine({
+          maxRepairs: 3,
+          repairMode: 'auto',
+          verbose: options.verbose,
+        });
+        if (options.verbose) {
+          logger.info('      🔧 Planner failed — attempting auto-repair with alternative approaches');
+        }
+        const planner = this.moduleRegistry.getModule('planner');
+        planResult = await plannerRepair.repair(
+          'planner',
+          vault.context,
+          defaultCallLLM,
+          planResult.error || planResult.summary || 'Planning failed',
+          async (ctx, llm) => planner.execute(ctx, llm),
+        );
+        this.stats.repairAttempts += plannerRepair.budget.getAttempts('planner');
+        this.stats.alternativeApproaches += plannerRepair.alternativeApproaches;
+        this.stats.taskFailures += 1;
+        if (planResult.success) this.stats.recoveredFailures += 1;
+      }
       agentResults.push({ agent: 'Planner', success: planResult.success, summary: planResult.summary });
 
       if (!planResult.success) {
@@ -554,6 +635,10 @@ export class Orchestrator {
         lines.push(runResult.stderr.slice(0, 1000));
       }
       runOutput = lines.join('\n');
+
+      // Capture dependency-install telemetry from the runner
+      this.stats.dependencyInstallAttempted = this.stats.dependencyInstallAttempted || runResult.dependencyInstallAttempted === true;
+      this.stats.dependencyInstallSucceeded = this.stats.dependencyInstallSucceeded || runResult.dependencyInstallSucceeded === true;
     }
 
     // ── 7. Store trajectory in memory + self-improvement loop ───────────
@@ -607,6 +692,11 @@ export class Orchestrator {
     const total = vault.context.taskPlan.length;
     const hasFailures = vault.hasFailedTasks;
 
+    // Count rollbacks: file changes that were reverted to their original content
+    this.stats.rollbackCount = vault.context.fileChanges.filter(
+      (c) => c.status === 'modified' && c.newContent !== undefined && c.newContent === c.originalContent,
+    ).length;
+
     // ── Emit: pipeline completed event ────────────────────────────────
     this.eventBus.emit(EventNames.ORCHESTRATOR_PIPELINE_COMPLETED, {
       goal,
@@ -642,6 +732,7 @@ export class Orchestrator {
       trajectoryId,
       reviewId,
       runOutput,
+      stats: this.stats,
     });
   }
 
@@ -672,7 +763,11 @@ export class Orchestrator {
         temperature: inferenceOptions?.temperature ?? config.temperature ?? 0.7,
         maxTokens: inferenceOptions?.maxTokens ?? config.maxTokens ?? 4096,
       };
-      return provider.generate(prompt, mergedOptions);
+      const output = await provider.generate(prompt, mergedOptions);
+      this.stats.llmCalls += 1;
+      this.stats.inputTokens += estimateTokens(prompt);
+      this.stats.outputTokens += estimateTokens(output);
+      return output;
     };
   }
 
@@ -799,14 +894,16 @@ export class Orchestrator {
     agentResults: OrchestrationResult['agentResults'],
     contextFiles: string[],
     defaultCallLLM: LLMCallFn,
+    stats: ExecutionStats = this.stats,
   ): Promise<void> {
     const maxRepairs = options.maxRepairs ?? 3;
     const repairMode = (options.repairMode ?? 'auto') as RepairMode;
 
-    // If repairs are enabled and this isn't a debugger/runner (which have their own retry logic),
-    // set up the error-repair engine
-    const useRepair = maxRepairs > 0 && repairMode !== 'off' &&
-      !['debugger', 'runner', 'tester'].includes(task.agentType);
+    // If repairs are enabled, set up the error-repair engine. Runner/tester/debugger
+    // have their own retry logic, but the repair engine adds the crucial
+    // 'alternative-approach' strategy — so a failing runner/tester tries a
+    // fundamentally different approach instead of immediately declaring failure.
+    const useRepair = maxRepairs > 0 && repairMode !== 'off';
 
     vault.updateTaskStatus(task.id, 'running');
     await tryUpdateDAGNode(task.id, { status: 'running' });
@@ -877,6 +974,7 @@ export class Orchestrator {
 
       // ── Execute agent with optional auto-repair loop ────────────────
       let result: AgentResult;
+      let firstFailed = false;
 
       if (useRepair) {
         // Try the agent — if it fails, attempt auto-repair
@@ -885,6 +983,7 @@ export class Orchestrator {
         if (firstResult.success) {
           result = firstResult;
         } else {
+          firstFailed = true;
           if (options.verbose) {
             const repairableTypes = ['llm-error', 'provider-error', 'context-limit', 'process-error', 'unknown'];
             logger.info(`      🔧 Agent failed — attempting auto-repair (mode: ${repairMode}, max: ${maxRepairs})`);
@@ -911,9 +1010,20 @@ export class Orchestrator {
           if (options.verbose) {
             logger.info(`      🔧 ${result.success ? '✅ Repair succeeded' : '❌ Repair failed'} after ${repairEngine.budget.getAttempts(task.id)} attempt(s)`);
           }
+
+          // Collect repair telemetry
+          stats.repairAttempts += repairEngine.budget.getAttempts(task.id);
+          stats.alternativeApproaches += repairEngine.alternativeApproaches;
         }
       } else {
         result = await agent.execute(vault.context, agentCallLLM);
+      }
+
+      // Track task failure/recovery telemetry
+      if (!result.success) {
+        stats.taskFailures += 1;
+      } else if (firstFailed) {
+        stats.recoveredFailures += 1;
       }
 
       vault.updateTaskStatus(task.id, result.success ? 'completed' : 'failed', result.summary);
@@ -1084,6 +1194,7 @@ export class Orchestrator {
       error: overrides.error,
       trajectoryId: overrides.trajectoryId,
       reviewId: overrides.reviewId,
+      stats: overrides.stats ?? this.stats,
     };
   }
 }

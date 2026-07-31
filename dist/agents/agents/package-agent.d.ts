@@ -6,6 +6,8 @@
  * - Build project
  * - Generate changelog from git log
  * - Publish to npm
+ * - Auto-setup npm auth from env vars or CredentialStore
+ * - Pre-publish checks (auth, build success, version consistency)
  *
  * Usage in task plans:
  * ```json
@@ -25,6 +27,16 @@ export declare class PackageAgent extends Agent {
     private detectBumpType;
     private bumpVersion;
     private build;
+    /**
+     * Check if npm auth is configured before publishing.
+     * Uses NPM_TOKEN env var, .npmrc, or sets up via CredentialStore.
+     */
+    private checkNpmAuth;
+    /**
+     * Full publish pipeline: version bump -> build -> publish.
+     * Optionally sets up npm auth via CredentialStore if available.
+     */
+    private fullPublish;
     private publish;
     private generateChangelog;
     private parseNpmError;

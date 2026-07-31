@@ -73,12 +73,42 @@ export { MCP_PROTOCOL_VERSION } from './mcp/types.js';
 // ─── Phase 4.3 — Auto Error-Repair exports ────────────────────────────────────
 export { ErrorRepairEngine, RepairBudget } from './learning/error-repair.js';
 export { classifyError, isRepairable, selectStrategy, needsApproval, formatRepairSummary } from './learning/error-repair.js';
+// ─── Phase 1 — RecoverModule (ARCHITECTURE.md §3.5) ───────────────────────────
+export { ErrorRepairRecoverModule } from './learning/recover-module.js';
+// ─── Phase 2 — ModuleRegistry (ARCHITECTURE.md §4.1) ───────────────────────────
+export { ModuleRegistry, ModuleNotFoundError, getModuleRegistry, resetModuleRegistry, setModuleRegistry } from './agents/module-registry.js';
+// ─── Phase 3 — EventBus (ARCHITECTURE.md §4.2) ────────────────────────────────
+export { EventBus, EventNames, LoggerConsumer, DAGConsumer, TelemetryConsumer, DebugConsumer, getEventBus, resetEventBus, getEventBusConsumers } from './observability/event-bus.js';
+// ─── ReportModule (Phase 4) ────────────────────────────────────────────
+export { DefaultReportModule } from './agents/report-module.js';
+// ─── InspectModule (Phase 5) ───────────────────────────────────────────
+export { DefaultInspectModule } from './agents/inspect-module.js';
+// ─── TaskExecutionPipeline (Phase 7) ───────────────────────────────────────
+export { TaskExecutionPipeline } from './agents/task-execution-pipeline.js';
+export { PipelineAudit } from './agents/pipeline-audit.js';
+// ─── PlanModule (Phase 7) ──────────────────────────────────────────────
+export { DefaultPlanModule } from './agents/plan-module.js';
+// ─── EditModule (Phase 7) ──────────────────────────────────────────────
+export { DefaultEditModule } from './agents/edit-module.js';
+// ─── ExecuteModule (Phase 8) ───────────────────────────────────────────
+export { DefaultExecuteModule } from './agents/execute-module.js';
+// ─── TestModule (Phase 8) ──────────────────────────────────────────────
+export { DefaultTestModule } from './agents/test-module.js';
+// ─── SafeExecutionLayer (Phase 9) ───────────────────────────────────────
+export { DefaultSafeExecutionLayer } from './agents/safe-execution-layer.js';
+// ─── VerifyModule (Phase 6) ────────────────────────────────────────────
+export { DefaultVerifyModule } from './agents/verify-module.js';
 // ─── Phase 4.4 — A2A Protocol exports ────────────────────────────────────────
 export { createA2AServer, startA2AServer } from './federation/a2a-server.js';
 export { createDefaultAgentCard, A2A_PROTOCOL_VERSION, A2A_DEFAULT_PORT, A2A_DEFAULT_HOST, } from './federation/a2a-types.js';
 export { fetchAgentCard, discoverAgent, delegateTask, pollTaskStatus, delegateAndWait, checkA2AHealth, } from './federation/a2a-client.js';
 // ─── Phase 4.5 — CI/CD Headless Mode exports ──────────────────────────────────
 export { CICommand } from './cli/ci.js';
+// ─── Publish & Phase commands (Autonomous publish + phase-wise execution) ──────
+export { PublishCommand } from './cli/publish.js';
+export { PhaseCommand } from './cli/phase.js';
+export { PhaseExecutionEngine } from './agents/phase-engine.js';
+export { CredentialStore } from './agents/credential-store.js';
 export { parseReviewOutput } from './cli/ci.js';
 // ─── Phase 4.2 — AST Editing Engine exports ──────────────────────────────────
 export { analyzeStructure, findNodeByName, findNodeAtPosition, validateSyntax, formatStructureSummary, getStructureIcon, } from './editing/ast.js';

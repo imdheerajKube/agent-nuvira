@@ -13,6 +13,10 @@
  *   //     📄 orchestrator.ts
  *   // 📄 package.json
  */
+/** File extensions considered as source code */
+export declare const SOURCE_EXTENSIONS: Set<string>;
+/** Directories to skip during traversal */
+export declare const IGNORE_DIRS: Set<string>;
 /**
  * Recursively build a text representation of the project file tree.
  *

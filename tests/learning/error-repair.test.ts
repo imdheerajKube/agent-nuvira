@@ -137,9 +137,25 @@ describe('ErrorRepair — selectStrategy()', () => {
   });
 
   it('selects skip-step when exhausted', () => {
-    expect(selectStrategy('llm-error', 3, { ...baseOpts, fallbackModels: ['m2'] })).toBe('skip-step');
+    expect(selectStrategy('llm-error', 4, { ...baseOpts, fallbackModels: ['m2'] })).toBe('skip-step');
+    expect(selectStrategy('provider-error', 4, baseOpts)).toBe('skip-step');
+    expect(selectStrategy('process-error', 4, baseOpts)).toBe('skip-step');
+    expect(selectStrategy('unknown', 3, baseOpts)).toBe('skip-step');
     expect(selectStrategy('injection-blocked', 1, baseOpts)).toBe('skip-step');
     expect(selectStrategy('budget-exhausted', 1, baseOpts)).toBe('skip-step');
+  });
+
+  it('selects alternative-approach before giving up for persistent failures', () => {
+    // LLM errors: attempt 3 = alternative approach
+    expect(selectStrategy('llm-error', 3, { ...baseOpts, fallbackModels: ['m2'] })).toBe('alternative-approach');
+    // Provider errors: attempt 3 = alternative approach
+    expect(selectStrategy('provider-error', 3, baseOpts)).toBe('alternative-approach');
+    // Process errors: attempt 3 = alternative approach
+    expect(selectStrategy('process-error', 3, baseOpts)).toBe('alternative-approach');
+    // Unknown errors: attempt 2 = alternative approach
+    expect(selectStrategy('unknown', 2, baseOpts)).toBe('alternative-approach');
+    // Context limit: attempt 2 = alternative approach
+    expect(selectStrategy('context-limit', 2, baseOpts)).toBe('alternative-approach');
   });
 });
 
@@ -161,6 +177,7 @@ describe('ErrorRepair — needsApproval()', () => {
     expect(needsApproval('re-prompt', 'prompt')).toBe(true);
     expect(needsApproval('switch-model', 'prompt')).toBe(true);
     expect(needsApproval('skip-step', 'prompt')).toBe(true);
+    expect(needsApproval('alternative-approach', 'prompt')).toBe(true);
   });
 
   it('returns false for trivial strategies in prompt mode', () => {
@@ -325,6 +342,65 @@ describe('ErrorRepair — ErrorRepairEngine', () => {
 
     expect(result.success).toBe(false);
     expect(mockExecute).not.toHaveBeenCalled();
+  });
+
+  it('tries a fundamentally different approach when standard repairs fail', async () => {
+    const engine = new ErrorRepairEngine({ maxRepairs: 3, repairMode: 'auto', verbose: false });
+    let callCount = 0;
+    const mockExecute = vi.fn().mockImplementation(async (ctx: AgentContext) => {
+      callCount++;
+      if (callCount <= 2) {
+        return { success: false, summary: 'Failed', error: 'JSON parse error: Unexpected token' };
+      }
+      // Third attempt (alternative-approach) should succeed — and the context
+      // should contain the new strategy injected into the goal.
+      expect(ctx.goal).toContain('ALTERNATIVE APPROACH');
+      return { success: true, summary: 'Succeeded with new approach' };
+    });
+    const mockLLM = vi.fn().mockResolvedValue('Use a completely different parsing library instead');
+
+    const result = await engine.repair(
+      'task-1',
+      createMockContext(),
+      mockLLM as unknown as LLMCallFn,
+      'JSON parse error: Unexpected token',
+      mockExecute,
+    );
+
+    expect(result.success).toBe(true);
+    expect(callCount).toBe(3);
+    expect(engine.alternativeApproaches).toBe(1);
+    // The LLM was asked for a new strategy
+    expect(mockLLM).toHaveBeenCalled();
+    const prompt = String(mockLLM.mock.calls[0][0]);
+    expect(prompt.toLowerCase()).toContain('different');
+  });
+
+  it('still attempts alternative-approach even when the LLM suggestion call fails', async () => {
+    const engine = new ErrorRepairEngine({ maxRepairs: 3, repairMode: 'auto', verbose: false });
+    let callCount = 0;
+    const mockExecute = vi.fn().mockImplementation(async (ctx: AgentContext) => {
+      callCount++;
+      if (callCount <= 2) {
+        return { success: false, summary: 'Failed', error: 'JSON parse error' };
+      }
+      // No suggestion came back, but the goal should still be rewritten
+      expect(ctx.goal).toContain('ALTERNATIVE APPROACH REQUIRED');
+      return { success: true, summary: 'Recovered' };
+    });
+    // LLM call throws
+    const mockLLM = vi.fn().mockRejectedValue(new Error('LLM down'));
+
+    const result = await engine.repair(
+      'task-1',
+      createMockContext(),
+      mockLLM as unknown as LLMCallFn,
+      'JSON parse error',
+      mockExecute,
+    );
+
+    expect(result.success).toBe(true);
+    expect(engine.alternativeApproaches).toBe(1);
   });
 
   it('uses fallback model on switch-model strategy', async () => {

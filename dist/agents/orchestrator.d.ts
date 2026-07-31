@@ -18,6 +18,9 @@
  */
 import { ConfigManager } from '../config/manager.js';
 import type { TaskStep } from './agent.js';
+import { type ModuleRegistry } from './module-registry.js';
+import type { EventBus } from '../observability/event-bus.js';
+import { type ReportModule } from './report-module.js';
 /** Configuration for an orchestration session */
 export interface OrchestratorOptions {
     /** Inference provider type (default: from configManager) */
@@ -124,7 +127,13 @@ export interface OrchestrationResult {
 }
 export declare class Orchestrator {
     private configManager;
-    constructor(configManager?: ConfigManager);
+    /** The module registry used for agent lookups */
+    private moduleRegistry;
+    /** The event bus for emitting observability events */
+    private eventBus;
+    /** The report module for generating structured execution reports */
+    private reportModule;
+    constructor(configManager?: ConfigManager, moduleRegistry?: ModuleRegistry, eventBus?: EventBus, reportModule?: ReportModule);
     /**
      * Execute a multi-agent pipeline for the given goal.
      */

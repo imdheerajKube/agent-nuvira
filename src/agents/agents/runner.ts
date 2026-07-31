@@ -42,6 +42,12 @@ const DEFAULT_TIMEOUT_MS = 120_000;
 /** Maximum number of fallback attempts when command validation fails */
 const MAX_FALLBACK_ATTEMPTS = 2;
 
+/** Maximum number of auto-dependency-install + retry cycles */
+const MAX_DEP_INSTALL_RETRIES = 1;
+
+/** Timeout for installing a missing package-manager tool itself (10 min) */
+const TOOL_INSTALL_TIMEOUT_MS = 600_000;
+
 /**
  * Result of running a command, stored in context.metadata.runResult.
  */
@@ -60,6 +66,38 @@ export interface RunResult {
   duration: number;
   /** Error message if execSync threw */
   error?: string;
+  /** Whether dependencies were auto-installed before a retry */
+  dependencyInstallAttempted?: boolean;
+  /** Whether the dependency install succeeded */
+  dependencyInstallSucceeded?: boolean;
+  /** Package manager / tool used for the install (e.g. 'npm', 'brew', 'winget') */
+  dependencyInstallTool?: string;
+  /** Whether the tool itself had to be installed first (e.g. Homebrew) */
+  dependencyInstallToolInstalled?: boolean;
+}
+
+/** A detected dependency-install plan for a project */
+export interface InstallPlan {
+  /** The package-manager tool to run (e.g. 'npm', 'pip', 'brew', 'cargo') */
+  tool: string;
+  /** The full install command to execute */
+  command: string;
+  /** The manifest file that triggered the plan */
+  manifest: string;
+}
+
+/** Result of a dependency-install attempt (including tool bootstrapping) */
+export interface DependencyInstallResult {
+  /** Whether the install succeeded */
+  success: boolean;
+  /** The install command that was attempted */
+  command: string;
+  /** The package-manager tool used */
+  tool?: string;
+  /** Whether the tool itself was installed first */
+  toolInstalled?: boolean;
+  /** Human-readable detail for logs */
+  message?: string;
 }
 
 /**
@@ -284,10 +322,534 @@ export class RunnerAgent extends Agent {
    * Execute a command directly on the host machine.
    * Validates the command first, and falls back to LLM suggestion if the command is not available.
    */
+  /**
+   * Heuristic: does this failure look like a missing dependency?
+   * Matches common "Cannot find module", "command not found", and ENOENT errors.
+   */
+  private looksLikeMissingDependency(command: string, stdout: string, stderr: string, execError?: string): boolean {
+    const haystack = `${command}\n${stdout}\n${stderr}\n${execError || ''}`.toLowerCase();
+    const signals = [
+      'cannot find module',
+      'module not found',
+      'command not found',
+      'is not recognized',
+      'not recognized as an internal',
+      'enoent',
+      'no such file',
+      'could not resolve',
+      'cannot find package',
+      'missing script: test',
+      'npm error',
+      'pip: command not found',
+      'moduleerror',
+      'unable to resolve',
+      'could not find',
+      'is not installed',
+      'not found in path',
+      'cannot be found',
+    ];
+    return signals.some((s) => haystack.includes(s));
+  }
+
+  /**
+   * Detect which package manager a project needs based on its manifest files.
+   * Supports npm/yarn/pnpm, pip (requirements/setup/pyproject), bundler,
+   * cargo, go, composer, and dart pub.
+   */
+  private detectInstallPlan(workingDir: string): InstallPlan | null {
+    // JavaScript / TypeScript — check lockfiles FIRST because a pnpm/yarn
+    // project also contains a package.json. Lockfile presence wins.
+    if (existsSync(join(workingDir, 'pnpm-lock.yaml'))) {
+      return { tool: 'pnpm', command: 'pnpm install', manifest: 'pnpm-lock.yaml' };
+    }
+    if (existsSync(join(workingDir, 'yarn.lock'))) {
+      return { tool: 'yarn', command: 'yarn install --frozen-lockfile', manifest: 'yarn.lock' };
+    }
+    if (existsSync(join(workingDir, 'package.json'))) {
+      return { tool: 'npm', command: 'npm install --no-audit --no-fund', manifest: 'package.json' };
+    }
+
+    // Python
+    if (existsSync(join(workingDir, 'requirements.txt'))) {
+      return { tool: 'pip', command: 'pip install -r requirements.txt', manifest: 'requirements.txt' };
+    }
+    if (existsSync(join(workingDir, 'pyproject.toml'))) {
+      return { tool: 'pip', command: 'pip install -e .', manifest: 'pyproject.toml' };
+    }
+    if (existsSync(join(workingDir, 'setup.py'))) {
+      return { tool: 'pip', command: 'pip install -e .', manifest: 'setup.py' };
+    }
+
+    // Ruby
+    if (existsSync(join(workingDir, 'Gemfile'))) {
+      return { tool: 'bundle', command: 'bundle install', manifest: 'Gemfile' };
+    }
+
+    // Rust
+    if (existsSync(join(workingDir, 'Cargo.toml'))) {
+      return { tool: 'cargo', command: 'cargo build', manifest: 'Cargo.toml' };
+    }
+
+    // Go
+    if (existsSync(join(workingDir, 'go.mod'))) {
+      return { tool: 'go', command: 'go mod download', manifest: 'go.mod' };
+    }
+
+    // PHP
+    if (existsSync(join(workingDir, 'composer.json'))) {
+      return { tool: 'composer', command: 'composer install', manifest: 'composer.json' };
+    }
+
+    // Dart / Flutter
+    if (existsSync(join(workingDir, 'pubspec.yaml'))) {
+      return { tool: 'dart', command: 'dart pub get', manifest: 'pubspec.yaml' };
+    }
+
+    return null;
+  }
+
+  /**
+   * Check whether a CLI tool is available on PATH (cross-platform).
+   */
+  private commandExists(tool: string): boolean {
+    try {
+      execSync(
+        process.platform === 'win32' ? `where ${tool}` : `which ${tool}`,
+        { stdio: 'ignore', timeout: 5000, shell: getHostShell() },
+      );
+      return true;
+    } catch {
+      return false;
+    }
+  }
+
+  /**
+   * Bootstrap-install a missing package-manager tool so that the project's
+   * dependencies can be installed. Handles Homebrew, winget, choco, npm,
+   * pip, cargo, and more — installing the tool itself if it is missing.
+   */
+  private installTool(tool: string): DependencyInstallResult {
+    const platform = process.platform;
+
+    // ── npm / yarn / pnpm ────────────────────────────────────────────────
+    if (tool === 'npm' || tool === 'yarn' || tool === 'pnpm') {
+      // npm ships with Node.js. Only bootstrap Node when npm is actually
+      // missing — never reinstall an existing toolchain.
+      if (!this.commandExists('npm')) {
+        const nodeInstall = this.installNodeViaPlatform(platform);
+        if (!nodeInstall.success) return nodeInstall;
+      }
+      if (tool === 'npm') {
+        // npm should now exist; verify in case the install didn't refresh PATH
+        return this.commandExists('npm')
+          ? { success: true, command: 'npm is now available', toolInstalled: true, message: 'npm is now available' }
+          : { success: false, command: 'npm was installed but is not on PATH', message: 'npm was installed but is not on PATH for this process — open a new terminal and retry.' };
+      }
+      // yarn / pnpm are installed via npm (which we just ensured exists)
+      return this.runInstallCommand(`npm install -g ${tool}`, process.cwd());
+    }
+
+    // ── pip ──────────────────────────────────────────────────────────────
+    if (tool === 'pip') {
+      if (this.commandExists('python3') || this.commandExists('python')) {
+        // Python exists but pip may not — bootstrap pip via ensurepip
+        const python = this.commandExists('python3') ? 'python3' : 'python';
+        return this.runInstallCommand(`${python} -m ensurepip --upgrade`, process.cwd());
+      }
+      // No Python at all — install it first
+      const pyInstall = this.installPythonViaPlatform(platform);
+      if (!pyInstall.success) return pyInstall;
+      const python = this.commandExists('python3') ? 'python3' : 'python';
+      return this.runInstallCommand(`${python} -m ensurepip --upgrade`, process.cwd());
+    }
+
+    // ── Homebrew (macOS) ────────────────────────────────────────────────
+    if (tool === 'brew') {
+      // Install Homebrew itself — the official install script.
+      // NONINTERACTIVE=1 prevents the script from blocking on sudo/confirm
+      // prompts when stdio is piped.
+      return this.runInstallCommand(
+        'NONINTERACTIVE=1 /bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)"',
+        process.cwd(),
+      );
+    }
+
+    // ── bundle (Ruby) ────────────────────────────────────────────────────
+    if (tool === 'bundle') {
+      if (this.commandExists('gem')) {
+        return this.runInstallCommand('gem install bundler', process.cwd());
+      }
+      const rb = this.installRubyViaPlatform(platform);
+      if (!rb.success) return rb;
+      return this.runInstallCommand('gem install bundler', process.cwd());
+    }
+
+    // ── cargo (Rust) ─────────────────────────────────────────────────────
+    if (tool === 'cargo') {
+      // Rustup is the standard bootstrap installer
+      return this.runInstallCommand(
+        'curl --proto \'=https\' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y',
+        process.cwd(),
+      );
+    }
+
+    // ── go ───────────────────────────────────────────────────────────────
+    if (tool === 'go') {
+      if (platform === 'darwin' || platform === 'linux') {
+        return this.installGoViaPlatform(platform);
+      }
+      if (platform === 'win32') {
+        // winget ships the official Go installer
+        return this.runInstallCommand(
+          'winget install GoLang.Go --silent --accept-package-agreements --accept-source-agreements',
+          process.cwd(),
+        );
+      }
+    }
+
+    // ── composer (PHP) ───────────────────────────────────────────────────
+    if (tool === 'composer') {
+      // Always install to a user-writable dir ($HOME/.local/bin, or
+      // USERPROFILE on Windows) instead of /usr/local/bin, which requires
+      // sudo and doesn't exist on Apple Silicon. HOME is unset on Windows.
+      const home = process.env.HOME || process.env.USERPROFILE;
+      const localBin = home ? `${home}/.local/bin` : '.';
+      if (!this.commandExists('php')) {
+        // PHP missing — install it first (via brew/apt/winget)
+        const phpInstall = this.installPhpViaPlatform(platform);
+        if (!phpInstall.success) return phpInstall;
+      }
+      return this.runInstallCommand(
+        `mkdir -p "${localBin}" && curl -sS https://getcomposer.org/installer | php -- --install-dir="${localBin}" --filename=composer`,
+        process.cwd(),
+      );
+    }
+
+    // ── dart ─────────────────────────────────────────────────────────────
+    if (tool === 'dart') {
+      if (platform === 'darwin') {
+        // Bootstrap Homebrew first if missing (consistent with other tools)
+        const brewCmd = this.commandExists('brew')
+          ? 'brew install dart-lang/dart/dart'
+          : 'NONINTERACTIVE=1 /bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)" && brew install dart-lang/dart/dart';
+        return this.runInstallCommand(brewCmd, process.cwd());
+      }
+      if (platform === 'linux') {
+        // Dart is NOT in stock Ubuntu/Debian repos — add Google's apt repo first
+        const dartCmd = [
+          'apt-get update && apt-get install -y apt-transport-https wget gnupg',
+          'wget -qO- https://dl-ssl.google.com/linux/linux_signing_key.pub | gpg --dearmor -o /usr/share/keyrings/dart.gpg',
+          'echo "deb [signed-by=/usr/share/keyrings/dart.gpg] https://storage.googleapis.com/download.dartlang.org/linux/debian stable main" > /etc/apt/sources.list.d/dart.list',
+          'apt-get update && apt-get install -y dart',
+        ].join(' && ');
+        return this.runInstallCommand(dartCmd, process.cwd());
+      }
+      if (platform === 'win32') {
+        return this.runInstallCommand(
+          'winget install Dart.Dart --silent --accept-package-agreements --accept-source-agreements',
+          process.cwd(),
+        );
+      }
+    }
+
+    return { success: false, command: '', message: `No bootstrap strategy for tool '${tool}' on ${platform}` };
+  }
+
+  /** Install Node.js (which bundles npm) via the platform package manager. */
+  private installNodeViaPlatform(platform: string): DependencyInstallResult {
+    if (platform === 'darwin') {
+      // macOS: prefer Homebrew; bootstrap Homebrew itself if missing
+      if (this.commandExists('brew')) {
+        return this.runInstallCommand('brew install node', process.cwd());
+      }
+      return this.runInstallCommand(
+        'NONINTERACTIVE=1 /bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)" && brew install node',
+        process.cwd(),
+      );
+    }
+    if (platform === 'linux') {
+      // Linux: use the distro package manager, with NodeSource as a fallback
+      const candidates = [
+        'apt-get update && apt-get install -y nodejs npm',
+        'dnf install -y nodejs npm',
+        'yum install -y nodejs npm',
+        'curl -fsSL https://deb.nodesource.com/setup_lts.x | bash - && apt-get install -y nodejs',
+      ];
+      for (const cmd of candidates) {
+        const res = this.runInstallCommand(cmd, process.cwd());
+        if (res.success) return res;
+      }
+      return { success: false, command: candidates.join(' | '), message: 'Could not install Node.js on Linux' };
+    }
+    if (platform === 'win32') {
+      // Windows: winget (preferred) → choco → MSI download
+      const candidates = [
+        'winget install OpenJS.NodeJS.LTS --silent --accept-package-agreements --accept-source-agreements',
+        'choco install nodejs -y',
+        'powershell -NoProfile -Command "Invoke-WebRequest -Uri https://nodejs.org/dist/latest/node-v22.14.0-x64.msi -OutFile $env:TEMP\\node.msi; Start-Process msiexec -ArgumentList \'/i $env:TEMP\\node.msi /quiet\' -Wait"',
+      ];
+      for (const cmd of candidates) {
+        const res = this.runInstallCommand(cmd, process.cwd());
+        if (res.success) return res;
+      }
+      return { success: false, command: candidates.join(' | '), message: 'Could not install Node.js on Windows' };
+    }
+    return { success: false, command: '', message: `Unsupported platform: ${platform}` };
+  }
+
+  /** Install Python via the platform package manager (so pip can be bootstrapped). */
+  private installPythonViaPlatform(platform: string): DependencyInstallResult {
+    if (platform === 'darwin') {
+      return this.commandExists('brew')
+        ? this.runInstallCommand('brew install python3', process.cwd())
+        : this.runInstallCommand('NONINTERACTIVE=1 /bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)" && brew install python3', process.cwd());
+    }
+    if (platform === 'linux') {
+      const candidates = [
+        'apt-get update && apt-get install -y python3 python3-pip',
+        'dnf install -y python3 python3-pip',
+      ];
+      for (const cmd of candidates) {
+        const res = this.runInstallCommand(cmd, process.cwd());
+        if (res.success) return res;
+      }
+      return { success: false, command: candidates.join(' | '), message: 'Could not install Python on Linux' };
+    }
+    if (platform === 'win32') {
+      const candidates = [
+        'winget install Python.Python.3.12 --silent --accept-package-agreements --accept-source-agreements',
+        'choco install python -y',
+      ];
+      for (const cmd of candidates) {
+        const res = this.runInstallCommand(cmd, process.cwd());
+        if (res.success) return res;
+      }
+      return { success: false, command: candidates.join(' | '), message: 'Could not install Python on Windows' };
+    }
+    return { success: false, command: '', message: `Unsupported platform: ${platform}` };
+  }
+
+  /** Install Ruby via the platform package manager. */
+  private installRubyViaPlatform(platform: string): DependencyInstallResult {
+    if (platform === 'darwin') {
+      return this.commandExists('brew')
+        ? this.runInstallCommand('brew install ruby', process.cwd())
+        : this.runInstallCommand('NONINTERACTIVE=1 /bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)" && brew install ruby', process.cwd());
+    }
+    if (platform === 'linux') {
+      const candidates = [
+        'apt-get update && apt-get install -y ruby-full',
+        'dnf install -y ruby',
+      ];
+      for (const cmd of candidates) {
+        const res = this.runInstallCommand(cmd, process.cwd());
+        if (res.success) return res;
+      }
+      return { success: false, command: candidates.join(' | '), message: 'Could not install Ruby on Linux' };
+    }
+    if (platform === 'win32') {
+      return this.runInstallCommand(
+        'winget install RubyInstallerTeam.Ruby.3.2 --silent --accept-package-agreements --accept-source-agreements',
+        process.cwd(),
+      );
+    }
+    return { success: false, command: '', message: `Unsupported platform: ${platform}` };
+  }
+
+  /** Install PHP via the platform package manager. */
+  private installPhpViaPlatform(platform: string): DependencyInstallResult {
+    if (platform === 'darwin') {
+      const brewCmd = this.commandExists('brew')
+        ? 'brew install php'
+        : 'NONINTERACTIVE=1 /bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)" && brew install php';
+      return this.runInstallCommand(brewCmd, process.cwd());
+    }
+    if (platform === 'linux') {
+      const candidates = [
+        'apt-get update && apt-get install -y php-cli',
+        'dnf install -y php-cli',
+      ];
+      for (const cmd of candidates) {
+        const res = this.runInstallCommand(cmd, process.cwd());
+        if (res.success) return res;
+      }
+      return { success: false, command: candidates.join(' | '), message: 'Could not install PHP on Linux' };
+    }
+    if (platform === 'win32') {
+      return this.runInstallCommand(
+        'winget install PHP.PHP.8.3 --silent --accept-package-agreements --accept-source-agreements',
+        process.cwd(),
+      );
+    }
+    return { success: false, command: '', message: `Unsupported platform: ${platform}` };
+  }
+
+  /** Install Go via the platform package manager. */
+  private installGoViaPlatform(platform: string): DependencyInstallResult {
+    if (platform === 'darwin') {
+      return this.commandExists('brew')
+        ? this.runInstallCommand('brew install go', process.cwd())
+        : this.runInstallCommand('NONINTERACTIVE=1 /bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)" && brew install go', process.cwd());
+    }
+    if (platform === 'linux') {
+      const candidates = [
+        'apt-get update && apt-get install -y golang-go',
+        'dnf install -y golang',
+      ];
+      for (const cmd of candidates) {
+        const res = this.runInstallCommand(cmd, process.cwd());
+        if (res.success) return res;
+      }
+      return { success: false, command: candidates.join(' | '), message: 'Could not install Go on Linux' };
+    }
+    return { success: false, command: '', message: `Unsupported platform: ${platform}` };
+  }
+
+  /**
+   * Run an install command and return its outcome.
+   */
+  private runInstallCommand(command: string, cwd: string): DependencyInstallResult {
+    try {
+      execSync(command, {
+        cwd,
+        timeout: TOOL_INSTALL_TIMEOUT_MS,
+        stdio: 'pipe',
+        encoding: 'utf-8',
+        shell: getHostShell(),
+        maxBuffer: 2 * 1024 * 1024,
+      });
+      return { success: true, command, toolInstalled: true, message: `Installed via: ${command}` };
+    } catch (err) {
+      return { success: false, command, message: err instanceof Error ? err.message : String(err) };
+    }
+  }
+
+  /**
+   * When no manifest exists, detect a missing interpreter/tool from the failed
+   * command itself (e.g. "python3 script.py" → python3 → install Python).
+   * This lets the runner install bare tools even in manifest-less directories.
+   */
+  private detectToolFromCommand(command: string): string | null {
+    if (!command) return null;
+    const firstWord = command.trim().split(/\s+/)[0]?.toLowerCase() || '';
+    const tool = firstWord.split(/[\\/]/).pop() || firstWord; // handle paths like /usr/bin/node
+    const toolMap: Record<string, string> = {
+      node: 'npm',
+      npm: 'npm',
+      npx: 'npm',
+      python: 'pip',
+      python3: 'pip',
+      pip: 'pip',
+      pip3: 'pip',
+      go: 'go',
+      cargo: 'cargo',
+      rustc: 'cargo',
+      bundle: 'bundle',
+      bundler: 'bundle',
+      ruby: 'bundle',
+      composer: 'composer',
+      php: 'composer',
+      dart: 'dart',
+      flutter: 'dart',
+      yarn: 'yarn',
+      pnpm: 'pnpm',
+      brew: 'brew',
+    };
+    const mapped = toolMap[tool];
+    // Only install if the tool is genuinely missing (avoids re-installs)
+    if (mapped && !this.commandExists(mapped)) {
+      return mapped;
+    }
+    return null;
+  }
+
+  /**
+   * Install dependencies for the project using the appropriate package manager
+   * (npm, pip, brew, cargo, etc.). If the package manager itself is missing,
+   * it is bootstrap-installed first (e.g. Homebrew on macOS, winget on Windows).
+   * When no manifest is present, falls back to installing the missing
+   * interpreter/tool referenced by the failed command.
+   *
+   * Controlled by context.metadata.autoInstallTools !== false — set to false
+   * to only attempt the install command without installing missing tools.
+   */
+  private installDependencies(
+    workingDir: string,
+    autoInstallTools = true,
+    failedCommand?: string,
+  ): DependencyInstallResult {
+    const plan = this.detectInstallPlan(workingDir);
+    if (!plan) {
+      // No manifest — try to bootstrap a missing interpreter/tool referenced
+      // by the failed command (e.g. "python3 script.py" when python3 is absent).
+      if (autoInstallTools && failedCommand) {
+        const missingTool = this.detectToolFromCommand(failedCommand);
+        if (missingTool) {
+          const installResult = this.installTool(missingTool);
+          return {
+            success: installResult.success,
+            command: failedCommand,
+            tool: missingTool,
+            toolInstalled: installResult.success,
+            message: installResult.success
+              ? `Auto-installed missing tool '${missingTool}' from command`
+              : `Missing tool '${missingTool}' could not be auto-installed: ${installResult.message}`,
+          };
+        }
+      }
+      return { success: false, command: '', message: 'No supported dependency manifest detected' };
+    }
+
+    // ── Ensure the package manager tool exists ─────────────────────────
+    if (!this.commandExists(plan.tool)) {
+      if (autoInstallTools) {
+        const installResult = this.installTool(plan.tool);
+        if (!installResult.success) {
+          return {
+            success: false,
+            command: plan.command,
+            tool: plan.tool,
+            toolInstalled: false,
+            message: `Package manager '${plan.tool}' is missing and could not be auto-installed: ${installResult.message}`,
+          };
+        }
+        // Tool was installed — retry the actual install command
+        const attempt = this.runInstallCommand(plan.command, workingDir);
+        return {
+          success: attempt.success,
+          command: plan.command,
+          tool: plan.tool,
+          toolInstalled: true,
+          message: attempt.success
+            ? `Installed missing tool '${plan.tool}', then ${plan.command}`
+            : `Tool installed but install failed: ${attempt.message}`,
+        };
+      }
+      return {
+        success: false,
+        command: plan.command,
+        tool: plan.tool,
+        toolInstalled: false,
+        message: `Package manager '${plan.tool}' is not installed (auto-install of tools is disabled)`,
+      };
+    }
+
+    // ── Tool exists — just run the install command ─────────────────────
+    const attempt = this.runInstallCommand(plan.command, workingDir);
+    return {
+      success: attempt.success,
+      command: plan.command,
+      tool: plan.tool,
+      toolInstalled: false,
+      message: attempt.success ? undefined : attempt.message,
+    };
+  }
+
   private async executeOnHost(
     context: AgentContext,
     command: string,
     fallbackAttempts = 0,
+    depRetries = 0,
   ): Promise<AgentResult> {
     // Validate the command before executing
     const validation = this.isCommandAvailable(command, context.workingDirectory);
@@ -354,6 +916,42 @@ export class RunnerAgent extends Agent {
 
     const duration = Date.now() - startTime;
 
+    // ── Auto-install missing dependencies and retry once ───────────────
+    // If the command failed because a module/command is missing, try to install
+    // dependencies (npm install / pip install / brew install / etc.) using the
+    // project's package manager — and bootstrap-install the package manager
+    // itself if it is missing. Then re-run the command. This lets the agent
+    // close tasks that need `npm install` (or any platform's toolchain) before
+    // they can run.
+    let depInstallAttempted = false;
+    let depInstallSucceeded = false;
+    let depInstallTool: string | undefined;
+    let depInstallToolInstalled = false;
+    if (exitCode !== 0 && depRetries < MAX_DEP_INSTALL_RETRIES && this.looksLikeMissingDependency(command, stdout, stderr, execError)) {
+      if (context.metadata.verboseLogging) {
+        logger.info('     📦 Command failed — missing dependency detected, installing...');
+      }
+      // autoInstallTools defaults to true; set metadata.autoInstallTools=false
+      // to only run the install command without bootstrapping missing tools.
+      const autoInstallTools = context.metadata.autoInstallTools !== false;
+      const installResult = this.installDependencies(context.workingDirectory, autoInstallTools, command);
+      depInstallAttempted = true;
+      depInstallSucceeded = installResult.success;
+      depInstallTool = installResult.tool;
+      depInstallToolInstalled = installResult.toolInstalled === true;
+      if (context.metadata.verboseLogging) {
+        if (installResult.toolInstalled) {
+          logger.info(`     🛠️  Auto-installed missing tool '${installResult.tool}'`);
+        }
+        logger.info(`     📦 Dependency install ${installResult.success ? 'succeeded' : 'failed'}: ${installResult.command || installResult.message}`);
+      }
+
+      if (installResult.success) {
+        // Retry the original command once after a successful install
+        return this.executeOnHost(context, command, fallbackAttempts, depRetries + 1);
+      }
+    }
+
     const runResult: RunResult = {
       success: exitCode === 0,
       command,
@@ -362,9 +960,17 @@ export class RunnerAgent extends Agent {
       stderr: stderr.slice(0, MAX_OUTPUT_LENGTH),
       duration,
       error: execError,
+      dependencyInstallAttempted: depInstallAttempted,
+      dependencyInstallSucceeded: depInstallSucceeded,
+      dependencyInstallTool: depInstallTool,
+      dependencyInstallToolInstalled: depInstallToolInstalled,
     };
 
     context.metadata['runResult'] = runResult;
+    context.metadata['dependencyInstallAttempted'] = depInstallAttempted;
+    context.metadata['dependencyInstallSucceeded'] = depInstallSucceeded;
+    context.metadata['dependencyInstallTool'] = depInstallTool;
+    context.metadata['dependencyInstallToolInstalled'] = depInstallToolInstalled;
 
     const lines: string[] = [];
     lines.push(`Command: ${command}`);

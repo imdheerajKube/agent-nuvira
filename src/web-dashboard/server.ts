@@ -704,6 +704,35 @@ function readHistoryData(): Record<string, unknown> {
   return { total: sessions.length, recent };
 }
 
+function readEvalData(): Record<string, unknown> {
+  const data = readJSON<{ runs: Array<Record<string, unknown>> }>(
+    join(MEMORY_DIR, 'evals.json'),
+  );
+  if (!data?.runs) {
+    return { totalRuns: 0, latest: null, runs: [] };
+  }
+
+  const runs = data.runs.slice(-10).reverse();
+  const latest = runs[0] || null;
+
+  return {
+    totalRuns: data.runs.length,
+    latest: latest ? {
+      provider: latest.provider,
+      model: latest.model,
+      summary: latest.summary,
+      startedAt: latest.startedAt,
+    } : null,
+    runs: runs.map((r: any) => ({
+      id: r.id,
+      provider: r.provider,
+      model: r.model,
+      startedAt: r.startedAt,
+      summary: r.summary,
+    })),
+  };
+}
+
 function readBenchmarkData(): Record<string, unknown> {
   const data = readJSON<{ runs: Array<Record<string, unknown>> }>(
     join(MEMORY_DIR, 'benchmarks.json'),
@@ -816,6 +845,12 @@ function handleRequest(req: IncomingMessage, res: ServerResponse): void {
     return;
   }
 
+  if (pathname === '/api/evals') {
+    res.writeHead(200, { 'Content-Type': 'application/json' });
+    res.end(JSON.stringify(readEvalData()));
+    return;
+  }
+
   if (pathname === '/api/memory') {
     res.writeHead(200, { 'Content-Type': 'application/json' });
     res.end(JSON.stringify(readMemoryData()));
@@ -851,6 +886,7 @@ function handleRequest(req: IncomingMessage, res: ServerResponse): void {
       cost: readCostData(),
       history: readHistoryData(),
       benchmarks: readBenchmarkData(),
+      evals: readEvalData(),
       memory: readMemoryData(),
       health: readHealthData(),
       dag: readDAGData(),
@@ -872,6 +908,7 @@ function handleRequest(req: IncomingMessage, res: ServerResponse): void {
       cost: readCostData(),
       history: readHistoryData(),
       benchmarks: readBenchmarkData(),
+      evals: readEvalData(),
       memory: readMemoryData(),
       health: readHealthData(),
       dag: readDAGData(),
@@ -893,6 +930,7 @@ function handleRequest(req: IncomingMessage, res: ServerResponse): void {
           cost: readCostData(),
           history: readHistoryData(),
           benchmarks: readBenchmarkData(),
+          evals: readEvalData(),
           memory: readMemoryData(),
           health: readHealthData(),
           dag: readDAGData(),

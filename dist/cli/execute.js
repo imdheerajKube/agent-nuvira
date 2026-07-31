@@ -69,6 +69,7 @@ export class ExecuteCommand extends BaseCommand {
             .option('--review', 'Create a review bundle capturing proposed changes (view with `buff team review show <id>`)', false)
             .option('--sandbox', 'Execute runner commands and tests inside a Docker sandbox', false)
             .option('--skip-tests', 'Skip tester and debugger steps (code generation only)', false)
+            .option('--auto-branch', 'Enable branch automation hooks (install, commit, PR update, file watch)', false)
             .option('--max-repairs <number>', 'Max auto-repair attempts per failed task (default: 3, 0 = disabled)', parseInt)
             .option('--repair-mode <mode>', 'Repair mode: auto | prompt | off (default: auto)')
             .option('--repair-fallback-models <models>', 'Comma-separated fallback models for repair (e.g., groq/llama3,nim/mistral)')
@@ -240,9 +241,29 @@ export class ExecuteCommand extends BaseCommand {
                 console.log(`\n  ${nextAction.goal}\n`);
                 const followupGoal = nextAction.goal;
                 const followupResult = await this.runSingleGoal(followupGoal, activeProvider, activeModel, options);
-                // Process the follow-up result through the post-execution handler too
-                const followupPostExec = await this.handlePostExecution(followupGoal, followupResult, sessionHistory, lastFailedGoal, activeProvider, activeModel, options);
-                lastFailedGoal = followupPostExec.updatedLastFailed;
+                // Track in session history (skip the "What next?" prompt — the user
+                // already chose the followup, so auto-continue to the main goal loop)
+                sessionHistory.push({
+                    goal: followupGoal,
+                    success: followupResult.success,
+                    summary: followupResult.success
+                        ? `Follow-up completed: ${followupGoal.slice(0, 80)}`
+                        : `Follow-up failed: ${followupGoal.slice(0, 80)}`,
+                    timestamp: Date.now(),
+                });
+                // Update lastFailedGoal tracking
+                if (!followupResult.success && followupResult.orchestrationResult) {
+                    lastFailedGoal = {
+                        goal: followupGoal,
+                        orchestrationResult: followupResult.orchestrationResult,
+                    };
+                }
+                else if (followupResult.success) {
+                    lastFailedGoal = null;
+                }
+                // Auto-continue to the main goal prompt
+                // (runSingleGoal already prints the orchestration result)
+                logger.success('\n💡  Follow-up complete. Enter your next goal below.\n');
             }
         }
         // Cleanup
@@ -814,7 +835,7 @@ export class ExecuteCommand extends BaseCommand {
                 const parsed = JSON.parse(jsonMatch[0]);
                 if (Array.isArray(parsed) && parsed.length > 0) {
                     return parsed.slice(0, 3).map((s) => ({
-                        label: s.label.replace(/^[\U0001F300-\U0001F9FF\s]*/, '').trim() || s.label,
+                        label: s.label.replace(/^[\u{1F300}-\u{1F9FF}\s]*/u, '').trim() || s.label,
                         description: s.description,
                         goal: s.goal,
                     }));

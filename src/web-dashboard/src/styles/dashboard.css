@@ -392,7 +392,8 @@ body {
 
 .benchmark-stats {
   display: grid;
-  grid-template-columns: repeat(4, 1fr);
+  /* auto-fit handles both the 4-card benchmark section and the 5-card eval section */
+  grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
   gap: 12px;
   margin-top: 12px;
 }
@@ -421,6 +422,7 @@ body {
 .benchmark-stat.fail .benchmark-stat-value { color: var(--accent-red); }
 .benchmark-stat.quality .benchmark-stat-value { color: var(--accent-purple); }
 .benchmark-stat.latency .benchmark-stat-value { color: var(--accent-yellow); }
+.benchmark-stat.deps .benchmark-stat-value { color: var(--accent-blue); }
 
 .benchmark-list {
   background: var(--bg-card);

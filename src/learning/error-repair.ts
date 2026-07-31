@@ -19,6 +19,7 @@
  * | `switch-model` | Provider errors, persistent LLM failures | Retry with an alternative model/provider |
  * | `adjust-temperature` | Repetitive or hallucinated output | Lower temperature to 0.2 for more deterministic output |
  * | `retry-tool` | Tool call failed with retryable error | Retry the same call after a brief delay |
+ * | `alternative-approach` | Persistent failures across strategies | Ask the LLM for a fundamentally different strategy, then re-execute |
  * | `skip-step` | Budget exhausted or non-repairable | Gracefully skip the failing step |
  *
  * ## Error Classification
@@ -55,6 +56,7 @@ export type RepairStrategy =
   | 'switch-model'
   | 'adjust-temperature'
   | 'retry-tool'
+  | 'alternative-approach'
   | 'skip-step';
 
 /** Mode of operation for the repair loop */
@@ -221,33 +223,41 @@ export function selectStrategy(
 ): RepairStrategy {
   switch (category) {
     case 'llm-error':
-      // First attempt: re-prompt. Subsequent: switch model or adjust temperature
+      // First attempt: re-prompt. Second: switch model or adjust temperature.
+      // Third: ask for a completely different approach. Fourth: skip.
       if (attemptNumber === 1) return 're-prompt';
       if (attemptNumber === 2) return options.fallbackModels && options.fallbackModels.length > 0
         ? 'switch-model'
         : 'adjust-temperature';
+      if (attemptNumber === 3) return 'alternative-approach';
       return 'skip-step';
 
     case 'provider-error':
-      // First attempt: switch model. Second: retry. Third: skip.
+      // First attempt: switch model. Second: retry. Third: alternative approach. Fourth: skip.
       if (attemptNumber === 1) return options.fallbackModels && options.fallbackModels.length > 0
         ? 'switch-model'
         : 'retry-tool';
       if (attemptNumber === 2) return 'retry-tool';
+      if (attemptNumber === 3) return 'alternative-approach';
       return 'skip-step';
 
     case 'context-limit':
-      // Context limit: re-prompt (the ContextPruner should have been called, but retry)
-      return 're-prompt';
+      // Context limit: re-prompt (the ContextPruner should have been called, but retry),
+      // then try an alternative approach before skipping.
+      if (attemptNumber === 1) return 're-prompt';
+      if (attemptNumber === 2) return 'alternative-approach';
+      return 'skip-step';
 
     case 'process-error':
-      // Process error: retry once, then skip
+      // Process error: retry twice, then try an alternative approach, then skip
       if (attemptNumber <= 2) return 'retry-tool';
+      if (attemptNumber === 3) return 'alternative-approach';
       return 'skip-step';
 
     case 'unknown':
-      // Unknown: re-prompt, then skip
+      // Unknown: re-prompt, then alternative approach, then skip
       if (attemptNumber === 1) return 're-prompt';
+      if (attemptNumber === 2) return 'alternative-approach';
       return 'skip-step';
 
     case 'injection-blocked':
@@ -345,6 +355,8 @@ export function needsApproval(strategy: RepairStrategy, mode: RepairMode): boole
 export class ErrorRepairEngine {
   public readonly options: ErrorRepairOptions;
   public readonly budget: RepairBudget;
+  /** Number of 'alternative-approach' strategies executed (telemetry) */
+  public alternativeApproaches = 0;
 
   constructor(options: Partial<ErrorRepairOptions> = {}) {
     this.options = { ...DEFAULT_OPTIONS, ...options };
@@ -471,6 +483,45 @@ export class ErrorRepairEngine {
               logger.info(`   🔄 Repair attempt ${attemptNumber}: retrying`);
             }
             result = await executeFn(context, callLLM);
+            break;
+          }
+
+          case 'alternative-approach': {
+            this.alternativeApproaches += 1;
+            if (this.options.verbose) {
+              logger.info(`   💡 Repair attempt ${attemptNumber}: asking the LLM for a fundamentally different approach`);
+            }
+            // Ask the LLM to propose a completely different strategy to accomplish
+            // the goal instead of repeating the same failing approach.
+            let suggestion = '';
+            try {
+              const prompt = [
+                'The current approach has failed repeatedly. Propose a COMPLETELY DIFFERENT',
+                'strategy to accomplish the goal below. Think about alternative libraries,',
+                'different algorithms, a different file structure, or a different sequence of',
+                'steps. Do NOT repeat the approach that already failed.',
+                '',
+                `GOAL: ${context.goal}`,
+                '',
+                `RECENT FAILURE: ${originalError.slice(0, 500)}`,
+                '',
+                'Return ONLY a concise, actionable new approach (2-4 bullet points).',
+              ].join('\n');
+              suggestion = (await callLLM(prompt, { temperature: 0.8, maxTokens: 400 })).trim();
+            } catch {
+              suggestion = '';
+            }
+
+            const altContext = suggestion
+              ? {
+                  ...context,
+                  goal: `${context.goal}\n\n[ALTERNATIVE APPROACH REQUIRED]\nThe previous attempts failed with: ${originalError.slice(0, 500)}\n\nTry this fundamentally different approach instead:\n${suggestion}`,
+                }
+              : {
+                  ...context,
+                  goal: `${context.goal}\n\n[ALTERNATIVE APPROACH REQUIRED]\nThe previous attempts failed with: ${originalError.slice(0, 500)}\n\nDo not repeat the previous approach. Think of a completely different way to accomplish the goal and execute it.`,
+                };
+            result = await executeFn(altContext, callLLM);
             break;
           }
 
