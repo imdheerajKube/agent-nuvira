@@ -41,6 +41,11 @@ import {
   type RoutingDimension,
 } from '../learning/auto-router.js';
 import { recordRoutingDecision } from '../learning/routing-history.js';
+import {
+  getRouterBandit,
+  COMPLEXITY_BUCKETS,
+  type RouterBanditState,
+} from '../learning/router-bandit.js';
 import { logger } from '../utils/logger.js';
 
 // ─── Active Model State ─────────────────────────────────────────────────────
@@ -209,6 +214,12 @@ export class ModelCommand extends BaseCommand {
       .action(async (opts) => {
         await this.checkHealth(opts);
       });
+
+    cmd
+      .command('bandit [action]')
+      .description('Show learning-router bandit state (Thompson-sampling priors per provider × complexity bucket). Action: reset')
+      .option('-j, --json', 'Output as JSON (for scripting and CI)', false)
+      .action((action: string | undefined, opts: { json?: boolean }) => this.showBandit(action, opts));
 
     // Default action (no subcommand): show info and offer to switch
     cmd
@@ -859,6 +870,133 @@ export class ModelCommand extends BaseCommand {
       logger.error(`Health check failed: ${err instanceof Error ? err.message : String(err)}`);
       console.log('');
     }
+  }
+
+  // ── Subcommand: bandit ────────────────────────────────────────────────
+
+  private showBandit(action: string | undefined, opts: { json?: boolean }): void {
+    if (action === 'reset') {
+      // Call .reset() on the INSTANCE (persists an empty state to disk), not the
+      // module-level resetRouterBandit() which only drops the in-memory singleton.
+      getRouterBandit().reset();
+      console.log('');
+      logger.success('✅ Bandit state reset — all Beta(α, β) priors back to Beta(1,1)');
+      console.log('');
+      return;
+    }
+
+    if (action && action !== 'reset') {
+      logger.error(`Unknown bandit action: ${action}. Use \`buff model bandit\` to view or \`buff model bandit reset\` to reset.`);
+      return;
+    }
+
+    const state = getRouterBandit().getState();
+
+    if (opts.json) {
+      console.log(JSON.stringify(this.buildBanditJSON(state), null, 2));
+      return;
+    }
+
+    console.log('');
+    logger.highlight('═══  Learning Router — Bandit State  ═══');
+    console.log('');
+
+    // Collect all providers that have any learning data
+    const providers = new Set<string>();
+    for (const bucket of COMPLEXITY_BUCKETS) {
+      for (const provider of Object.keys(state.priors[bucket] || {})) {
+        providers.add(provider);
+      }
+    }
+
+    if (providers.size === 0) {
+      logger.info('  No bandit learning data yet.');
+      console.log('');
+      logger.info('  Enable learning:  `buff config set routing.bandit true`');
+      logger.info('  Then run tasks under Auto routing (`buff model switch auto` / `-m auto`).');
+      logger.info('  Each auto-routed task updates the Beta prior for its complexity bucket.');
+      console.log('');
+      return;
+    }
+
+    const sortedProviders = [...providers].sort();
+
+    // Table: rows = providers, columns = complexity buckets
+    const colWidth = 14;
+    const header = `  ${'Provider'.padEnd(12)}${COMPLEXITY_BUCKETS.map((b) => b.padStart(colWidth)).join('')}`;
+    console.log(header);
+    console.log(`  ${'-'.repeat(header.length - 2)}`);
+
+    for (const provider of sortedProviders) {
+      const cells = COMPLEXITY_BUCKETS.map((bucket) => {
+        const prior = state.priors[bucket]?.[provider];
+        if (!prior) return ''.padStart(colWidth);
+        const mean = prior.alpha / (prior.alpha + prior.beta);
+        const cell = `${prior.alpha}/${prior.beta} (${(mean * 100).toFixed(0)}%)`;
+        return cell.padStart(colWidth).slice(0, colWidth);
+      }).join('');
+      console.log(`  ${provider.padEnd(12)}${cells}`);
+    }
+
+    console.log('');
+    console.log('  Cell format: α/β (expected win %)  ·  α/β = Beta prior for that complexity bucket');
+    console.log('  Higher α = more successful outcomes; higher β = more failures.');
+    console.log('');
+
+    // Learning history
+    const history = state.learningHistory;
+    if (history.length > 0) {
+      logger.highlight(`  ── Recent learning history (last ${Math.min(history.length, 15)} of ${history.length}) ──`);
+      console.log('');
+      for (const h of history.slice(-15)) {
+        const icon = h.outcome === 'success' ? '✅' : h.outcome === 'escalated' ? '🔄' : '❌';
+        const ts = new Date(h.timestamp).toLocaleTimeString();
+        console.log(`   ${icon} ${h.provider.padEnd(12)} ${h.complexity.padEnd(10)} reward ${h.reward.toFixed(2)}  ${ts}`);
+      }
+      console.log('');
+    }
+
+    logger.info('Reset: `buff model bandit reset` · JSON: `buff model bandit --json`');
+    console.log('');
+  }
+
+  /** Build a machine-readable bandit snapshot for scripting/CI. */
+  private buildBanditJSON(state: RouterBanditState): Record<string, unknown> {
+    const providers = new Set<string>();
+    for (const bucket of COMPLEXITY_BUCKETS) {
+      for (const provider of Object.keys(state.priors[bucket] || {})) {
+        providers.add(provider);
+      }
+    }
+
+    const priors: Record<string, Record<string, { alpha: number; beta: number; expectedWinRate: number }>> = {};
+    for (const provider of providers) {
+      priors[provider] = {};
+      for (const bucket of COMPLEXITY_BUCKETS) {
+        const prior = state.priors[bucket]?.[provider];
+        priors[provider][bucket] = prior
+          ? {
+              alpha: Math.round(prior.alpha * 1000) / 1000,
+              beta: Math.round(prior.beta * 1000) / 1000,
+              expectedWinRate: Math.round((prior.alpha / (prior.alpha + prior.beta)) * 1000) / 1000,
+            }
+          : { alpha: 0, beta: 0, expectedWinRate: 0 };
+      }
+    }
+
+    return {
+      version: state.version,
+      enabled: this.configManager.getAll().routing?.bandit === true,
+      priors,
+      learningHistory: state.learningHistory.slice(-50).map((h) => ({
+        provider: h.provider,
+        complexity: h.complexity,
+        outcome: h.outcome,
+        reward: h.reward,
+        timestamp: h.timestamp,
+      })),
+      updatedAt: Date.now(),
+    };
   }
 
   // ── Interactive prompt ─────────────────────────────────────────────────

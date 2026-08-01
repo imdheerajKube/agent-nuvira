@@ -269,11 +269,18 @@ export async function showModelPicker(configManager: ConfigManager): Promise<Pic
     console.log('');
   }
 
+  // ── Browse-by-provider drill-down option ───────────────────────────────
+  // Appended AFTER the model list so the numbered model indices above stay
+  // stable: 1 = Auto, 2..len+1 = models, len+2 = browse, 0 = Cancel.
+  const browseIndex = displayList.length + 2;
+  console.log(`  ${String(browseIndex).padStart(2, ' ')}. 🗂️  Browse by provider — pick a provider, then a specific model`);
+  console.log('');
+
   console.log(`   0. ❌  Cancel`);
   console.log();
 
-  // +1 for the Auto option at index 1
-  const selectableTotal = displayList.length + 1;
+  // +1 for the Auto option at index 1, +1 for the browse option
+  const selectableTotal = displayList.length + 2;
 
   const answer = await inquirer.prompt<{ selected: string }>([
     {
@@ -309,6 +316,11 @@ export async function showModelPicker(configManager: ConfigManager): Promise<Pic
     return { provider: AUTO_PROVIDER, model: AUTO_MODEL };
   }
 
+  // ── Browse by provider drill-down ──────────────────────────────────────
+  if (selectedIndex === browseIndex) {
+    return browseProviderModels(configManager, availableProviders);
+  }
+
   const selected = displayList[selectedIndex - 2];
   console.log('\n'.repeat(2));
   const providerName = availableProviders.find(p => p.type === selected.provider)?.name || selected.provider;
@@ -326,4 +338,141 @@ export async function showModelPicker(configManager: ConfigManager): Promise<Pic
   console.log('');
 
   return { provider: selected.provider, model: selected.model };
+}
+
+/**
+ * Per-provider model drill-down (mirrors the VS Code extension's flow):
+ * 1. Pick an available provider
+ * 2. Pick a specific model from that provider's FULL list (no 20-model cap —
+ *    so long lists like OpenRouter's 100+ models are fully browsable)
+ *
+ * Returns the selected provider/model, or null when cancelled.
+ */
+async function browseProviderModels(
+  configManager: ConfigManager,
+  availableProviders: Array<{ type: string; provider: InferenceProvider; name: string }>,
+): Promise<PickerResult | null> {
+  // Loop so "back" from the model list returns to the provider list
+  while (true) {
+    // ── Step 1: Pick a provider ──────────────────────────────────────────
+    console.log();
+    logger.highlight('🗂️  Pick a provider');
+    console.log('');
+
+    availableProviders.forEach((p, i) => {
+      const icon = PROVIDER_ICONS[p.type] || '🔹';
+      console.log(`  ${i + 1}. ${icon}  ${p.name}`);
+    });
+    console.log('   0. ❌  Cancel');
+    console.log();
+
+    const providerAnswer = await inquirer.prompt<{ selected: string }>([
+      {
+        type: 'input',
+        name: 'selected',
+        message: `Enter a provider number (1-${availableProviders.length}, 0 to cancel):`,
+        prefix: '🔢',
+        validate: (input: string) => {
+          const trimmed = input.trim();
+          if (trimmed === '') return 'Please enter a number';
+          const num = Number(trimmed);
+          if (isNaN(num) || !Number.isInteger(num)) return 'Please enter a valid whole number';
+          if (num < 0 || num > availableProviders.length) {
+            return `Please enter a number between 0 and ${availableProviders.length}`;
+          }
+          return true;
+        },
+      },
+    ]);
+
+    const providerIdx = parseInt(providerAnswer.selected.trim(), 10);
+    if (providerIdx === 0) {
+      logger.info('\nModel selection cancelled.');
+      return null;
+    }
+
+    const chosen = availableProviders[providerIdx - 1];
+    if (!chosen) return null;
+
+    // ── Step 2: Fetch the provider's FULL model list (no cap) ────────────
+    console.log('');
+    const spinner = ora(`Loading models from ${chosen.name}...`).start();
+    let models: ModelDescriptor[] = [];
+    try {
+      models = await chosen.provider.listModels();
+    } catch {
+      models = [];
+    }
+    spinner.stop();
+
+    if (models.length === 0) {
+      logger.warn(`⚠️  No models found for ${chosen.name}.`);
+      continue; // back to the provider list
+    }
+
+    // Resolve the provider's configured default model. Only shown as option 1
+    // when it actually exists — otherwise the model list starts at option 1.
+    const defaultModel = configManager.getProviderConfig?.(chosen.type)?.config?.model;
+
+    // ── Step 3: Pick a model ─────────────────────────────────────────────
+    console.log();
+    logger.highlight(`🎯  Models for ${chosen.name} (${models.length})`);
+    console.log('');
+
+    const icon = PROVIDER_ICONS[chosen.type] || '🔹';
+    const optionOffset = defaultModel ? 2 : 1;
+    if (defaultModel) {
+      console.log(`   1. ✅  Use default model (${defaultModel})`);
+    }
+    models.forEach((m, i) => {
+      const badge = getModelBadge(m.id);
+      const badgeStr = badge ? `  ⭐ ${badge}` : '';
+      console.log(`  ${i + optionOffset}. ${icon}  ${m.id}${badgeStr}`);
+    });
+    console.log('   0. ❌  Back to provider list');
+    console.log();
+
+    const selectableTotal = models.length + (defaultModel ? 1 : 0);
+    const modelAnswer = await inquirer.prompt<{ selected: string }>([
+      {
+        type: 'input',
+        name: 'selected',
+        message: `Enter a model number (0-${selectableTotal}):`,
+        prefix: '🔢',
+        validate: (input: string) => {
+          const trimmed = input.trim();
+          if (trimmed === '') return 'Please enter a number';
+          const num = Number(trimmed);
+          if (isNaN(num) || !Number.isInteger(num)) return 'Please enter a valid whole number';
+          if (num < 0 || num > selectableTotal) {
+            return `Please enter a number between 0 and ${selectableTotal}`;
+          }
+          return true;
+        },
+      },
+    ]);
+
+    const modelIdx = parseInt(modelAnswer.selected.trim(), 10);
+    if (modelIdx === 0) continue; // back to the provider list
+
+    // Option 1 is only "Use default model" when a configured default exists;
+    // otherwise models start at index 1, so guard this branch accordingly.
+    if (defaultModel && modelIdx === 1) {
+      console.log('\n'.repeat(2));
+      logger.success(`🎯  Selected: ${defaultModel}`);
+      logger.info(`   Provider: ${chosen.name}`);
+      console.log('');
+      return { provider: chosen.type, model: defaultModel };
+    }
+
+    // Models render at `optionOffset` (2 with a default, 1 without)
+    const model = models[modelIdx - optionOffset];
+    if (!model) continue;
+
+    console.log('\n'.repeat(2));
+    logger.success(`🎯  Selected: ${model.id}`);
+    logger.info(`   Provider: ${chosen.name}`);
+    console.log('');
+    return { provider: chosen.type, model: model.id };
+  }
 }

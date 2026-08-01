@@ -19,6 +19,7 @@ import ora from 'ora';
 
 import { BaseCommand } from './commands.js';
 import { resolveProvider } from './router.js';
+import { resolveWorkingModel } from '../inference/model-validator.js';
 import { getAutoRouter } from '../learning/auto-router.js';
 import { recordRoutingDecision } from '../learning/routing-history.js';
 import { logger } from '../utils/logger.js';
@@ -250,7 +251,7 @@ export class BenchmarkCommand extends BaseCommand {
     }
 
     // Ask the Auto router which provider/model it would pick for each task
-    const picks = new Map<string, { provider: string; model: string; tasks: number }>();
+    const picks = new Map<string, { provider: string; model: string; tasks: number; complexity: string; score: number }>();
     for (const t of tasks) {
       const d = router.resolve('chat', t.prompt, { useRuntimeStats: true }, this.configManager);
       // Record for the dashboard usage stats + audit trail
@@ -268,7 +269,7 @@ export class BenchmarkCommand extends BaseCommand {
       if (existing) {
         existing.tasks++;
       } else {
-        picks.set(key, { provider: d.provider, model: d.model, tasks: 1 });
+        picks.set(key, { provider: d.provider, model: d.model, tasks: 1, complexity: d.complexity, score: d.score });
       }
     }
 
@@ -313,15 +314,36 @@ export class BenchmarkCommand extends BaseCommand {
         continue;
       }
 
-      logger.highlight(`  ── Benchmarking router pick: ${key} ──`);
+      // Model health: the router resolves each provider's PINNED config model,
+      // which can be stale (deprecated gemini-2.0-flash-exp → 404) or a
+      // placeholder (nim 'new-nim-model'). Validate against the provider's live
+      // list and repair to a verified-working model so benchmark --routing
+      // never benchmarks a model that 404s.
+      const workingModel = await resolveWorkingModel(resolved.provider, pick.provider, pick.model);
+      if (workingModel !== pick.model) {
+        logger.warn(`  ♻️  Model '${pick.model}' unavailable on '${pick.provider}' — benchmarking verified '${workingModel}' instead.`);
+        // Keep the dashboard audit trail accurate: re-record with the model
+        // actually benchmarked, carrying the router's real complexity/score.
+        recordRoutingDecision({
+          source: 'benchmark',
+          agentType: 'chat',
+          task: 'benchmark (model repaired)',
+          complexity: pick.complexity,
+          provider: pick.provider,
+          model: workingModel,
+          score: pick.score,
+        });
+      }
+
+      logger.highlight(`  ── Benchmarking router pick: ${pick.provider}/${workingModel} ──`);
       console.log('');
 
-      const spinner = ora({ text: `Running ${tasks.length} tasks against ${key}...`, spinner: 'dots' }).start();
+      const spinner = ora({ text: `Running ${tasks.length} tasks against ${pick.provider}/${workingModel}...`, spinner: 'dots' }).start();
       try {
         const onProgress = (current: number, total: number, task: BenchmarkTask) => {
           spinner.text = `[${current}/${total}] ${task.title}`;
         };
-        const run = await runBenchmark(resolved.provider, resolved.type, pick.model, {
+        const run = await runBenchmark(resolved.provider, resolved.type, workingModel, {
           taskIds,
           timeEstimate,
           budget,

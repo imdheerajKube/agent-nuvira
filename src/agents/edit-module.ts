@@ -19,6 +19,7 @@ import type { LLMCallFn, FileChange, Artifact } from './agent.js';
 import { detectLanguage } from '../editing/types.js';
 import { validateSyntax } from '../editing/ast.js';
 import { buildStructuralContext } from '../editing/edit.js';
+import { tryTier0Route } from '../learning/tier0-router.js';
 
 // ─── Constants ──────────────────────────────────────────────────────────────
 
@@ -80,6 +81,12 @@ export interface EditParams {
   onRateLimit?: (info: { retryAfterMs: number; modelName?: string; agentName: string; errorMessage: string }) => Promise<{ action: 'retry' | 'skip' | 'abort' | 'switch-model'; callLLM?: LLMCallFn }>;
   /** Whether this is a retry attempt (stricter prompt) */
   isRetry?: boolean;
+  /**
+   * Enable deterministic tier-0 routing (mechanical edits short-circuit the
+   * LLM entirely — remove console.log, rename a symbol, dedupe imports).
+   * Default: true. Set to false to always use the LLM.
+   */
+  useTier0?: boolean;
 }
 
 /** Output of the edit phase */
@@ -151,6 +158,30 @@ export class DefaultEditModule implements EditModule {
       artifactCount: artifacts.length,
       isRetry: isRetry ?? false,
     }, 'edit-module');
+
+    // ── Tier-0 deterministic routing (no LLM) ─────────────────────────
+    // Mechanical edits (remove console.log, rename symbol, dedupe imports)
+    // are handled by the Tier0Router in <1ms for $0 — mirroring ruflo's
+    // enhanced-model-router Tier-1 codemods. Falls through to the LLM when
+    // the goal isn't mechanical or any transformed file fails validation.
+    if (params.useTier0 !== false) {
+      const tier0 = tryTier0Route(goal, artifacts);
+      if (tier0) {
+        for (const change of tier0.changes) {
+          this.eventBus.emit(EventNames.EDIT_WRITTEN, {
+            path: change.path,
+            status: change.status,
+            bytes: change.newContent?.length || 0,
+            via: 'tier0',
+          }, 'edit-module');
+        }
+        return {
+          changes: tier0.changes,
+          summary: tier0.summary,
+          changeCount: tier0.changeCount,
+        };
+      }
+    }
 
     // Try up to 2 API attempts
     let lastError: string | undefined;

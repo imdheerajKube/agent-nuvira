@@ -208,6 +208,13 @@ export class ConfigManager {
       }
     }
 
+    if (config.routing) {
+      this.config.routing = {
+        ...(this.config.routing || {}),
+        ...config.routing,
+      };
+    }
+
     writeFileSync(this.configPath, JSON.stringify(this.config, null, 2), 'utf-8');
   }
 

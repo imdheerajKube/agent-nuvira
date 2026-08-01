@@ -405,10 +405,8 @@ describe('CommandRegistrar', () => {
         { provider: 'Groq', providerType: 'groq', name: 'Llama 3.3 70B', id: 'llama-3.3-70b-versatile' },
         { provider: 'Groq', providerType: 'groq', name: 'Mixtral', id: 'mixtral-8x7b-32768', owner: 'Mistral AI' },
       ]);
-      (vscode as any).__setQuickPickResults([
-        { label: '🟢 Groq', value: 'groq' },
-        { label: '🧠 Llama 3.3 70B', value: 'groq', model: 'llama-3.3-70b-versatile' },
-      ]);
+      (vscode as any).__setQuickPickResult({ label: '🟢 Groq', value: 'groq' });
+      (vscode as any).__setQuickPickSelection({ label: '🧠 Llama 3.3 70B', value: 'groq', model: 'llama-3.3-70b-versatile' });
 
       await (vscode.commands as any).executeCommand('agent-nuvira.switchModel');
 
@@ -422,10 +420,8 @@ describe('CommandRegistrar', () => {
       (mockCliManager.listProviderModels as unknown as ReturnType<typeof vi.fn>).mockResolvedValue([
         { provider: 'Groq', providerType: 'groq', name: 'Llama 3.3 70B', id: 'llama-3.3-70b-versatile' },
       ]);
-      (vscode as any).__setQuickPickResults([
-        { label: '🟢 Groq', value: 'groq' },
-        { label: '$(check) Use default model', value: 'groq' },
-      ]);
+      (vscode as any).__setQuickPickResult({ label: '🟢 Groq', value: 'groq' });
+      (vscode as any).__setQuickPickSelection({ label: '$(check) Use default model', value: 'groq' });
 
       await (vscode.commands as any).executeCommand('agent-nuvira.switchModel');
 
@@ -438,12 +434,46 @@ describe('CommandRegistrar', () => {
       (mockCliManager.listProviderModels as unknown as ReturnType<typeof vi.fn>).mockResolvedValue([
         { provider: 'Groq', providerType: 'groq', name: 'Llama 3.3 70B', id: 'llama-3.3-70b-versatile' },
       ]);
-      // Only one quick-pick result — the model picker gets undefined (dismissed)
+      // Only the provider picker gets a result — the model picker is dismissed (undefined)
       (vscode as any).__setQuickPickResult({ label: '🟢 Groq', value: 'groq' });
+      (vscode as any).__setQuickPickSelection(undefined);
 
       await (vscode.commands as any).executeCommand('agent-nuvira.switchModel');
 
       expect(mockCliManager.switchModel).toHaveBeenCalledWith('groq');
+    });
+
+    it('configures the model picker as a searchable quick pick', async () => {
+      registrar.registerAll();
+      (mockCliManager.listModels as unknown as ReturnType<typeof vi.fn>).mockResolvedValue(providers);
+      (mockCliManager.listProviderModels as unknown as ReturnType<typeof vi.fn>).mockResolvedValue([
+        { provider: 'Groq', providerType: 'groq', name: 'Llama 3.3 70B', id: 'llama-3.3-70b-versatile' },
+        { provider: 'Groq', providerType: 'groq', name: 'Mixtral', id: 'mixtral-8x7b-32768', owner: 'Mistral AI' },
+      ]);
+      (vscode as any).__setQuickPickResult({ label: '🟢 Groq', value: 'groq' });
+      (vscode as any).__setQuickPickSelection({ label: '🧠 Llama 3.3 70B', value: 'groq', model: 'llama-3.3-70b-versatile' });
+
+      const createQuickPickSpy = vi.spyOn(vscode.window as any, 'createQuickPick');
+
+      await (vscode.commands as any).executeCommand('agent-nuvira.switchModel');
+
+      // The picker config is applied before show() (which resolves the queued
+      // selection), and the instance survives resolution — assert on it now
+      expect(createQuickPickSpy).toHaveBeenCalledTimes(1);
+      const picker = createQuickPickSpy.mock.results[0].value as {
+        placeholder: string;
+        matchOnDescription: boolean;
+        matchOnDetail: boolean;
+        items: unknown[];
+      };
+      expect(picker.placeholder).toBe('Search Groq models (Esc keeps the default):');
+      expect(picker.matchOnDescription).toBe(true);
+      expect(picker.matchOnDetail).toBe(true);
+      // Default-model option + one entry per fetched model
+      expect(picker.items).toHaveLength(3);
+      expect(picker.items[0]).toMatchObject({ label: '$(check) Use default model' });
+      expect(picker.items[1]).toMatchObject({ label: '🧠 Llama 3.3 70B', model: 'llama-3.3-70b-versatile' });
+      createQuickPickSpy.mockRestore();
     });
 
     it('falls back to provider-only switching when models fail to load', async () => {
@@ -471,22 +501,18 @@ describe('CommandRegistrar', () => {
       (mockCliManager.listProviderModels as unknown as ReturnType<typeof vi.fn>).mockResolvedValue([
         { provider: 'Groq', providerType: 'groq', name: 'Llama 3.3 70B', id: 'llama-3.3-70b-versatile' },
       ]);
-      (vscode as any).__setQuickPickResults([
-        { label: '🟢 Groq', value: 'groq' },
-        { label: '🧠 Llama 3.3 70B', value: 'groq', model: 'llama-3.3-70b-versatile' },
-      ]);
 
       // Cancel the warning → the specific-model switch must not happen
+      (vscode as any).__setQuickPickResult({ label: '🟢 Groq', value: 'groq' });
+      (vscode as any).__setQuickPickSelection({ label: '🧠 Llama 3.3 70B', value: 'groq', model: 'llama-3.3-70b-versatile' });
       (vscode as any).__setShowWarningMessageResult('Cancel');
       await (vscode.commands as any).executeCommand('agent-nuvira.switchModel');
       expect(mockCliManager.switchModel).not.toHaveBeenCalled();
 
       // Confirm → the specific-model switch happens
       (vscode as any).__setShowWarningMessageResult('Switch anyway');
-      (vscode as any).__setQuickPickResults([
-        { label: '🟢 Groq', value: 'groq' },
-        { label: '🧠 Llama 3.3 70B', value: 'groq', model: 'llama-3.3-70b-versatile' },
-      ]);
+      (vscode as any).__setQuickPickResult({ label: '🟢 Groq', value: 'groq' });
+      (vscode as any).__setQuickPickSelection({ label: '🧠 Llama 3.3 70B', value: 'groq', model: 'llama-3.3-70b-versatile' });
       await (vscode.commands as any).executeCommand('agent-nuvira.switchModel');
       expect(mockCliManager.switchModel).toHaveBeenCalledWith('groq', 'llama-3.3-70b-versatile');
     });

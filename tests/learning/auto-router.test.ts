@@ -13,6 +13,9 @@
  * - Singleton behavior
  */
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
+import { mkdtempSync, rmSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import {
   AutoModelRouter,
   getAutoRouter,
@@ -23,6 +26,7 @@ import {
   scoreProvider,
   computeCostScore,
   estimateCallCostUsd,
+  analyzeTaskProfile,
   PROVIDER_PRICING_PER_1K,
   AUTO_MODEL,
   AUTO_PROVIDER,
@@ -31,6 +35,25 @@ import {
   type ScoredProvider,
   type RoutingDimension,
 } from '../../src/learning/auto-router.js';
+import { resetRouterBandit, getRouterBandit } from '../../src/learning/router-bandit.js';
+
+// ─── Bandit test isolation ─────────────────────────────────────────────────
+
+let banditTempDir: string;
+
+function isolateBandit() {
+  banditTempDir = mkdtempSync(join(tmpdir(), 'buff-autorouter-bandit-'));
+  process.env.BUFF_MEMORY_DIR = banditTempDir;
+  resetRouterBandit();
+}
+
+function cleanupBandit() {
+  delete process.env.BUFF_MEMORY_DIR;
+  resetRouterBandit();
+  if (banditTempDir) {
+    rmSync(banditTempDir, { recursive: true, force: true });
+  }
+}
 
 // ─── Mocks for runtime-stats tests ─────────────────────────────────────────
 
@@ -181,6 +204,34 @@ describe('scoreProvider', () => {
   });
 });
 
+// ─── Task profile analysis ────────────────────────────────────────────────
+
+describe('analyzeTaskProfile', () => {
+  it('classifies verification-heavy tasks and recommends escalation', () => {
+    const profile = analyzeTaskProfile('deploy to production and verify the rollout');
+    expect(profile.intent).toBe('verification');
+    expect(profile.requiresVerification).toBe(true);
+    expect(profile.escalationTarget).toBe('openrouter');
+  });
+
+  it('classifies architecture and migration work as reasoning-heavy', () => {
+    const architecture = analyzeTaskProfile('design a new microservice architecture for the platform');
+    const migration = analyzeTaskProfile('migrate the auth service to the new deployment pipeline');
+    expect(architecture.intent).toBe('architecture');
+    expect(migration.intent).toBe('migration');
+    expect(architecture.requiresVerification).toBe(true);
+    expect(migration.requiresVerification).toBe(true);
+    expect(architecture.escalationTarget).toBe('gemini');
+  });
+
+  it('keeps planning tasks lightweight by default', () => {
+    const profile = analyzeTaskProfile('outline the authentication architecture');
+    expect(profile.intent).toBe('planning');
+    expect(profile.requiresVerification).toBe(false);
+    expect(profile.escalationTarget).toBeUndefined();
+  });
+});
+
 // ─── AutoModelRouter.resolve ────────────────────────────────────────────────
 
 describe('AutoModelRouter.resolve', () => {
@@ -232,6 +283,24 @@ describe('AutoModelRouter.resolve', () => {
       allowedProviders: ['local', 'groq', 'gemini'],
     });
     expect(decision.provider).toBe('local');
+  });
+
+  it('flags verification-heavy tasks and escalates to a stronger provider when available', () => {
+    const decision = router.resolve('writer', 'deploy to production and verify the rollout', {
+      allowedProviders: ['groq', 'gemini', 'openrouter'],
+    });
+    expect(decision.taskProfile.requiresVerification).toBe(true);
+    expect(['gemini', 'openrouter']).toContain(decision.provider);
+    expect(decision.explanation).toContain('verification');
+  });
+
+  it('marks verification escalation when the router selects the escalation target', () => {
+    const decision = router.resolve('writer', 'deploy to production and verify the rollout', {
+      allowedProviders: ['groq', 'gemini', 'openrouter'],
+      maxCostUsd: 0.02,
+    });
+    expect(decision.escalationApplied).toBe(true);
+    expect(decision.provider).toBe('openrouter');
   });
 
   it('restricts candidates to allowedProviders', () => {
@@ -508,6 +577,237 @@ describe('useRuntimeStats', () => {
       useRuntimeStats: true,
     });
     expect(decision.provider).toBeTruthy();
+  });
+});
+
+// ─── Bandit learning (useBandit) ───────────────────────────────────────────
+
+describe('AutoModelRouter.resolve with bandit learning', () => {
+  beforeEach(() => {
+    isolateBandit();
+  });
+
+  afterEach(() => {
+    cleanupBandit();
+  });
+
+  it('marks the decision as bandit-routed when useBandit is enabled', () => {
+    const decision = new AutoModelRouter().resolve('writer', 'implement a login form', {
+      allowedProviders: ['groq', 'gemini', 'openrouter'],
+      useBandit: true,
+    });
+    expect(decision.routedBy).toBe('bandit');
+    expect(decision.explanation).toContain('bandit-learned');
+  });
+
+  it('cold-start bandit still returns a valid provider', () => {
+    const decision = new AutoModelRouter().resolve('writer', 'implement a login form', {
+      allowedProviders: ['groq', 'gemini'],
+      useBandit: true,
+    });
+    expect(['groq', 'gemini']).toContain(decision.provider);
+  });
+
+  it('marks the decision as heuristic when bandit is off', () => {
+    const decision = new AutoModelRouter().resolve('writer', 'implement a login form');
+    expect(decision.routedBy).toBe('heuristic');
+  });
+
+  it('recordOutcome rewards the provider used for an agent type', () => {
+    const router = new AutoModelRouter();
+    // Route a task with the bandit on — the chosen provider is noted per agent type
+    router.resolve('writer', 'implement a login form', {
+      allowedProviders: ['groq', 'gemini'],
+      useBandit: true,
+    });
+    router.recordOutcome('writer', 'implement a login form', 'success');
+    // No crash, and the outcome lands in the bandit's learning history
+    const state = getRouterBandit().getState();
+    const history = state.learningHistory;
+    expect(history.length).toBe(1);
+    expect(history[0].outcome).toBe('success');
+  });
+
+  it('recordOutcome is a no-op when no decision was made for the agent type', () => {
+    const router = new AutoModelRouter();
+    expect(() => router.recordOutcome('planner', 'design architecture', 'failure')).not.toThrow();
+  });
+});
+
+// ─── Credential-aware candidate filtering ─────────────────────────────────
+// Regression: Auto routing must NEVER pick a provider with no API key
+// configured (e.g. OpenRouter with no OPENROUTER_API_KEY → 401 on first call).
+// When a ConfigManager is provided, unconfigured providers are excluded.
+
+describe('AutoModelRouter.resolve credential filtering', () => {
+  // NOTE: every mock configManager must include getAll() (returns { pricing: {} })
+  // because resolve() calls getProviderPricing(provider, configManager) during
+  // scoring, which reads configManager.getAll().pricing.
+  function makeConfig(creds: (p: string) => boolean) {
+    return {
+      getAll: vi.fn(() => ({ pricing: {} })),
+      hasRequiredCredentials: vi.fn((p: string) => creds(p)),
+    } as any;
+  }
+
+  it('excludes providers without credentials when a configManager is provided', () => {
+    const configManager = makeConfig((p) => p === 'groq' || p === 'local');
+    const decision = new AutoModelRouter().resolve('writer', 'implement a login form', {}, configManager);
+    // nim/gemini/openrouter have no credentials → never ranked or picked
+    expect(decision.ranked.every((s) => s.provider === 'groq' || s.provider === 'local')).toBe(true);
+    expect(decision.provider).not.toBe('openrouter');
+    expect(decision.provider).not.toBe('gemini');
+  });
+
+  it('falls back to all default providers when none have credentials (caller surfaces availability)', () => {
+    const configManager = makeConfig(() => false);
+    const decision = new AutoModelRouter().resolve('writer', 'implement a login form', {}, configManager);
+    expect(DEFAULT_AUTO_PROVIDERS).toContain(decision.provider);
+    expect(decision.provider).toBeTruthy();
+  });
+
+  it('explicit allowedProviders win over credential filtering', () => {
+    const configManager = makeConfig(() => false);
+    const decision = new AutoModelRouter().resolve('writer', 'implement a login form', {
+      allowedProviders: ['openrouter'],
+    }, configManager);
+    expect(decision.provider).toBe('openrouter');
+  });
+
+  it('keeps local available without any API key (local needs no credentials)', () => {
+    const configManager = makeConfig((p) => p === 'local');
+    const decision = new AutoModelRouter().resolve('writer', 'implement a login form', {}, configManager);
+    expect(decision.ranked.every((s) => s.provider === 'local')).toBe(true);
+    expect(decision.provider).toBe('local');
+  });
+
+  it('ignores credential filtering when configManager lacks hasRequiredCredentials', () => {
+    const configManager = { getAll: vi.fn(() => ({})) } as any;
+    const decision = new AutoModelRouter().resolve('writer', 'implement a login form', {}, configManager);
+    // No filter API → full default list is used
+    expect(decision.ranked.length).toBe(DEFAULT_AUTO_PROVIDERS.length);
+  });
+});
+
+// ─── Hard constraints ──────────────────────────────────────────────────────
+
+describe('AutoModelRouter.resolve hard constraints', () => {
+  it('maxCostUsd eliminates expensive providers', () => {
+    const decision = new AutoModelRouter().resolve('writer', 'deploy to production', {
+      allowedProviders: ['groq', 'gemini', 'openrouter'],
+      // openrouter's typical call (~$0.01+) exceeds this; groq/gemini pass
+      maxCostUsd: 0.005,
+    });
+    expect(decision.provider).not.toBe('openrouter');
+    expect(decision.ranked.every((s) => s.provider !== 'openrouter')).toBe(true);
+  });
+
+  it('minSpeed eliminates slow providers', () => {
+    const decision = new AutoModelRouter().resolve('writer', 'implement a feature', {
+      allowedProviders: ['groq', 'gemini', 'local'],
+      minSpeed: 0.6,
+    });
+    expect(decision.provider).not.toBe('local'); // local speed = 0.55 < 0.6
+  });
+
+  it('minReasoning eliminates weak-reasoning providers', () => {
+    const decision = new AutoModelRouter().resolve('writer', 'implement a feature', {
+      allowedProviders: ['groq', 'gemini', 'openrouter'],
+      minReasoning: 0.8,
+    });
+    expect(['gemini', 'openrouter']).toContain(decision.provider);
+  });
+
+  it('falls back to the full ranking when constraints eliminate everyone', () => {
+    const decision = new AutoModelRouter().resolve('writer', 'implement a feature', {
+      allowedProviders: ['groq', 'gemini'],
+      minReasoning: 0.99, // neither provider qualifies
+    });
+    expect(decision.provider).toBeTruthy();
+    expect(decision.ranked.length).toBeGreaterThanOrEqual(1);
+  });
+});
+
+// ─── Routing rules ─────────────────────────────────────────────────────────
+
+describe('AutoModelRouter.resolve routing rules', () => {
+  // The rule+bandit regression test writes bandit state, so isolate the whole
+  // describe to avoid polluting the developer's real ~/.buff/memory and to
+  // keep the singleton clean between tests.
+  beforeEach(() => {
+    isolateBandit();
+  });
+
+  afterEach(() => {
+    cleanupBandit();
+  });
+
+  it('a matching rule forces the provider and marks routedBy = rule', () => {
+    const decision = new AutoModelRouter().resolve('writer', 'generate a sales email for Acme Corp', {
+      rules: [{
+        name: 'marketing copy → groq',
+        pattern: 'email|sales|copy',
+        provider: 'groq',
+        model: 'llama-3.3-70b-versatile',
+      }],
+    });
+    expect(decision.provider).toBe('groq');
+    expect(decision.model).toBe('llama-3.3-70b-versatile');
+    expect(decision.routedBy).toBe('rule');
+  });
+
+  it('supports RegExp patterns', () => {
+    const decision = new AutoModelRouter().resolve('writer', 'refactor the auth module', {
+      rules: [{
+        name: 'refactor → local',
+        pattern: /refactor/i,
+        provider: 'local',
+      }],
+    });
+    expect(decision.provider).toBe('local');
+  });
+
+  it('first matching rule wins', () => {
+    const decision = new AutoModelRouter().resolve('writer', 'deploy to production NOW', {
+      rules: [
+        { name: 'deploy → gemini', pattern: 'deploy', provider: 'gemini' },
+        { name: 'urgent → openrouter', pattern: 'NOW', provider: 'openrouter' },
+      ],
+    });
+    expect(decision.provider).toBe('gemini');
+    expect(decision.explanation).toContain('deploy');
+  });
+
+  it('non-matching rules are ignored', () => {
+    const decision = new AutoModelRouter().resolve('writer', 'implement a login form', {
+      allowedProviders: ['groq', 'gemini'],
+      rules: [{ name: 'irrelevant', pattern: 'sales|marketing', provider: 'openrouter' }],
+    });
+    expect(['groq', 'gemini']).toContain(decision.provider);
+    expect(decision.routedBy).toBe('heuristic');
+  });
+
+  it('rule without model resolves the configured/default model', () => {
+    const decision = new AutoModelRouter().resolve('writer', 'write a changelog entry', {
+      rules: [{ name: 'changelog → gemini', pattern: 'changelog', provider: 'gemini' }],
+    });
+    expect(decision.provider).toBe('gemini');
+    expect(decision.model).toBeTruthy();
+  });
+
+  it('notes the rule-forced provider so outcomes are attributed correctly', () => {
+    const router = new AutoModelRouter();
+    // Rule forces gemini for this writer task
+    router.resolve('writer', 'write a sales email', {
+      useBandit: true,
+      rules: [{ name: 'sales → gemini', pattern: 'sales|email', provider: 'gemini' }],
+    });
+    router.recordOutcome('writer', 'write a sales email', 'failure');
+    const state = getRouterBandit().getState();
+    // The failure was recorded against the rule's provider, not a stale one
+    expect(state.learningHistory.length).toBe(1);
+    expect(state.learningHistory[0].provider).toBe('gemini');
+    expect(state.learningHistory[0].outcome).toBe('failure');
   });
 });
 

@@ -4,6 +4,7 @@ import inquirer from 'inquirer';
 import ora from 'ora';
 import { BaseCommand } from './commands.js';
 import { resolveProvider } from './router.js';
+import { resolveWorkingModel } from '../inference/model-validator.js';
 import { showModelPicker } from './model-picker.js';
 import { ContextParser } from '../context/parser.js';
 import { getCache } from '../context/cache.js';
@@ -154,7 +155,10 @@ export async function runDeveloperMode(goal, configManager, options) {
         const decision = getAutoRouter().resolve('chat', goal, { verbose: true, useRuntimeStats: true }, configManager);
         const resolved = resolveProvider(configManager, decision.provider);
         provider = resolved.type;
-        model = decision.model;
+        // Model health: the router resolves the provider's PINNED model, which can
+        // be stale (e.g. deprecated gemini-2.0-flash-exp → 404). Validate against
+        // the provider's live list and repair to a verified-working model first.
+        model = await resolveWorkingModel(resolved.provider, decision.provider, decision.model);
     }
     const spinner = ora({
         text: '📋 Planning...',
@@ -212,12 +216,30 @@ export class ChatCommand extends BaseCommand {
             const picked = await this.showModelPicker();
             if (!picked)
                 return;
-            if (picked.provider !== type) {
-                const resolved = resolveProvider(this.configManager, picked.provider);
-                type = resolved.type;
-                provider = resolved.provider;
+            // ── Auto picked — enable per-message routing ──────────────────────────
+            // NEVER hand 'auto' to resolveProvider(): it would hit the "Unknown
+            // provider 'auto'" fallback and silently pick the default provider
+            // (e.g. OpenRouter with no key → 401). Auto is a routing directive, so
+            // we set autoMode and resolve a concrete route below instead.
+            if (picked.provider === 'auto' || isAutoModel(picked.model)) {
+                autoMode = true;
             }
-            model = picked.model;
+            else {
+                if (picked.provider !== type) {
+                    const resolved = resolveProvider(this.configManager, picked.provider);
+                    type = resolved.type;
+                    provider = resolved.provider;
+                }
+                model = picked.model;
+            }
+        }
+        // ── Auto mode: resolve a concrete initial route for the header + gate ──
+        // (Each real message re-routes via routeMessageAuto before generating.)
+        if (autoMode) {
+            const routed = await this.routeMessageAuto('chat session');
+            type = routed.type;
+            provider = routed.provider;
+            model = routed.model;
         }
         const available = await provider.isAvailable();
         if (!available) {
@@ -241,7 +263,7 @@ export class ChatCommand extends BaseCommand {
         if (prompt) {
             // ── Auto routing for single-shot prompts ────────────────────────────
             if (autoMode) {
-                const routed = this.routeMessageAuto(prompt);
+                const routed = await this.routeMessageAuto(prompt);
                 type = routed.type;
                 provider = routed.provider;
                 model = routed.model;
@@ -253,12 +275,20 @@ export class ChatCommand extends BaseCommand {
                     return;
                 }
             }
-            const result = await this.generateWithContext(provider, prompt, type, { ...options, model }, cacheEnabled);
+            // Auto mode fails over across the ranked candidates so a broken provider
+            // (deprecated model, exhausted quota) never crashes the CLI — the next
+            // working candidate answers instead. Non-auto uses the pinned provider.
+            const result = autoMode
+                ? await this.generateAutoWithFailover(prompt, prompt, options, cacheEnabled)
+                : await this.generateWithContext(provider, prompt, type, { ...options, model }, cacheEnabled);
             console.log('\n' + result);
             return;
         }
-        logger.highlight(`\n🧠 Buff Chat — ${provider.name}`);
-        if (model) {
+        logger.highlight(`\n🧠 Buff Chat — ${autoMode ? '🤖 Auto routing' : provider.name}`);
+        if (autoMode) {
+            logger.info('Model: auto (best provider/model picked per message)');
+        }
+        else if (model) {
             logger.info(`Model: ${model}`);
         }
         logger.info(`Type your messages, or /help for commands, /exit to quit.`);
@@ -296,7 +326,7 @@ export class ChatCommand extends BaseCommand {
             // Runs BEFORE the dev-mode check so a creation request in auto mode uses
             // the routed provider/model — never a literal 'auto' or a stale default.
             if (autoMode) {
-                const routed = this.routeMessageAuto(message);
+                const routed = await this.routeMessageAuto(message);
                 type = routed.type;
                 provider = routed.provider;
                 effectiveModel = routed.model;
@@ -341,6 +371,10 @@ export class ChatCommand extends BaseCommand {
             // History is preserved so switching providers is seamless.
             let generationComplete = false;
             let recovery = null;
+            // Auto mode tracks providers that already failed for THIS message so
+            // failover walks forward through the ranked candidates, never repeating
+            // a provider that just errored.
+            const autoFailedProviders = new Set();
             while (!generationComplete) {
                 if (typeof provider.generateStream === 'function') {
                     // ── Streaming path ───────────────────────────────────────
@@ -358,6 +392,24 @@ export class ChatCommand extends BaseCommand {
                     }
                     catch (err) {
                         console.log();
+                        // ── Auto mode: transparently fail over to the next candidate ──
+                        if (autoMode) {
+                            const failedProviderName = provider.name;
+                            autoFailedProviders.add(type);
+                            const next = await this.routeMessageAuto(message, [...autoFailedProviders]);
+                            // Only switch to a provider that hasn't already failed this
+                            // message — otherwise we'd re-enter a known-broken provider
+                            // (e.g. the router's fallback returns the original winner).
+                            if (next.type !== type && !autoFailedProviders.has(next.type)) {
+                                type = next.type;
+                                provider = next.provider;
+                                effectiveModel = next.model;
+                                model = effectiveModel;
+                                logger.warn(`   ⚠️ ${failedProviderName} failed — automatically switching to ${provider.name} (${effectiveModel})`);
+                                console.log('');
+                                continue;
+                            }
+                        }
                         // Try automatic fallback before prompting user
                         const errorType = classifyFallbackError(err);
                         if (isRetryableError(errorType)) {
@@ -417,6 +469,24 @@ export class ChatCommand extends BaseCommand {
                     }
                     catch (err) {
                         spinner.stop();
+                        // ── Auto mode: transparently fail over to the next candidate ──
+                        if (autoMode) {
+                            const failedProviderName = provider.name;
+                            autoFailedProviders.add(type);
+                            const next = await this.routeMessageAuto(message, [...autoFailedProviders]);
+                            // Only switch to a provider that hasn't already failed this
+                            // message — otherwise we'd re-enter a known-broken provider
+                            // (e.g. the router's fallback returns the original winner).
+                            if (next.type !== type && !autoFailedProviders.has(next.type)) {
+                                type = next.type;
+                                provider = next.provider;
+                                effectiveModel = next.model;
+                                model = effectiveModel;
+                                logger.warn(`   ⚠️ ${failedProviderName} failed — automatically switching to ${provider.name} (${effectiveModel})`);
+                                console.log('');
+                                continue;
+                            }
+                        }
                         // Try automatic fallback before prompting user
                         const errorType = classifyFallbackError(err);
                         if (isRetryableError(errorType)) {
@@ -462,7 +532,7 @@ export class ChatCommand extends BaseCommand {
                     // Resolve the route inline (the per-message block already ran) so
                     // this message retries with the routed provider, not the failed one.
                     autoMode = true;
-                    const routed = this.routeMessageAuto(message);
+                    const routed = await this.routeMessageAuto(message);
                     type = routed.type;
                     provider = routed.provider;
                     effectiveModel = routed.model;
@@ -544,7 +614,15 @@ export class ChatCommand extends BaseCommand {
      * Returns the routed type/provider/model; the caller applies them to the
      * active session state.
      */
-    routeMessageAuto(message) {
+    /**
+     * Resolve the best provider/model for a message via the AutoModelRouter.
+     *
+     * ONLY AVAILABLE providers are returned: the router itself already excludes
+     * unconfigured providers (no API key), and this method additionally walks
+     * the ranked candidates and picks the first one whose isAvailable() passes —
+     * so Auto routing never sends a request to a provider that would 401.
+     */
+    async routeMessageAuto(message, excludeProviders = []) {
         const routing = this.configManager.getAll().routing || {};
         const decision = getAutoRouter().resolve('chat', message, {
             verbose: process.env.BUFF_DEBUG === 'true',
@@ -554,7 +632,53 @@ export class ChatCommand extends BaseCommand {
             minSpeed: routing.minSpeed,
             minReasoning: routing.minReasoning,
         }, this.configManager);
-        // Record for the dashboard usage stats + audit trail
+        // Walk the ranked candidates (winner first) and return the first available
+        // provider — never a provider that lacks a key or endpoint. Providers that
+        // already failed this message (excludeProviders) are skipped so runtime
+        // failover walks forward instead of repeating the failing provider.
+        const candidates = [
+            decision.provider,
+            ...decision.ranked
+                .filter((r) => r.provider !== decision.provider)
+                .map((r) => r.provider),
+        ].filter((p) => !excludeProviders.includes(p));
+        for (const candidate of candidates) {
+            try {
+                const resolved = resolveProvider(this.configManager, candidate);
+                if (await resolved.provider.isAvailable()) {
+                    const desired = candidate === decision.provider
+                        ? decision.model
+                        : getAutoRouter().resolveModel(candidate, 'chat', this.configManager);
+                    // Model health: only use models that actually exist on the provider.
+                    // A provider's pinned config.model can be deprecated or a placeholder
+                    // (e.g. gemini-2.0-flash-exp → 404) — repair to a live model.
+                    const model = await resolveWorkingModel(resolved.provider, candidate, desired);
+                    // Record the actually-used route for the dashboard audit trail
+                    recordRoutingDecision({
+                        source: 'chat',
+                        agentType: 'chat',
+                        task: message,
+                        complexity: decision.complexity,
+                        provider: candidate,
+                        model,
+                        score: decision.score,
+                    });
+                    return {
+                        type: resolved.type,
+                        provider: resolved.provider,
+                        model,
+                        ranked: candidates,
+                        complexity: decision.complexity,
+                        score: decision.score,
+                    };
+                }
+            }
+            catch {
+                // Unresolvable candidate — try the next one
+            }
+        }
+        // Nothing available — surface the router's pick so the caller's
+        // isAvailable() gate shows a clear, actionable error.
         recordRoutingDecision({
             source: 'chat',
             agentType: 'chat',
@@ -565,7 +689,69 @@ export class ChatCommand extends BaseCommand {
             score: decision.score,
         });
         const resolved = resolveProvider(this.configManager, decision.provider);
-        return { type: resolved.type, provider: resolved.provider, model: decision.model };
+        const model = await resolveWorkingModel(resolved.provider, decision.provider, decision.model);
+        return {
+            type: resolved.type,
+            provider: resolved.provider,
+            model,
+            ranked: candidates,
+            complexity: decision.complexity,
+            score: decision.score,
+        };
+    }
+    /**
+     * Generate a single-shot response in auto mode with runtime failover.
+     *
+     * The auto router picks the best provider, but a provider's key/model can
+     * still fail at generation time (quota exhausted → 429, deprecated model →
+     * 404 — Gemini's listModels() lists models the key can't actually use).
+     * This walks the ranked candidates and returns the first successful response,
+     * so Auto routing NEVER crashes the CLI — it always answers from a working
+     * provider.
+     */
+    async generateAutoWithFailover(message, prompt, options, cacheEnabled = true) {
+        const first = await this.routeMessageAuto(message);
+        const attempted = new Set();
+        let lastError = new Error(`No auto-routed provider succeeded for: ${message.slice(0, 80)}`);
+        for (const candidateType of [first.type, ...first.ranked]) {
+            if (attempted.has(candidateType))
+                continue;
+            attempted.add(candidateType);
+            try {
+                const resolved = resolveProvider(this.configManager, candidateType);
+                if (!(await resolved.provider.isAvailable())) {
+                    logger.warn(`   ⚠️ ${candidateType} is not available — trying the next auto candidate...`);
+                    continue;
+                }
+                const desired = candidateType === first.type
+                    ? first.model
+                    : getAutoRouter().resolveModel(candidateType, 'chat', this.configManager);
+                const model = await resolveWorkingModel(resolved.provider, candidateType, desired);
+                const result = await this.generateWithContext(resolved.provider, prompt, resolved.type, { ...options, model }, cacheEnabled);
+                if (candidateType !== first.type) {
+                    logger.success(`✅ Auto failover: answered from ${resolved.provider.name} (${model}) after ${first.type} failed`);
+                    // Keep the dashboard audit trail accurate: the winner's route was
+                    // recorded by the initial routeMessageAuto, but the actual answer
+                    // came from this candidate.
+                    recordRoutingDecision({
+                        source: 'chat',
+                        agentType: 'chat',
+                        task: message,
+                        complexity: first.complexity,
+                        provider: candidateType,
+                        model,
+                        score: first.score,
+                    });
+                }
+                return result;
+            }
+            catch (err) {
+                lastError = err;
+                const msg = err instanceof Error ? err.message : String(err);
+                logger.warn(`   ⚠️ ${candidateType} failed (${msg.slice(0, 160)}) — trying the next auto candidate...`);
+            }
+        }
+        throw lastError;
     }
     /**
      * Read multi-line input from stdin using readline.

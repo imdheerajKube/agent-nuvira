@@ -101,6 +101,16 @@ export class PlannerAgent extends Agent {
       const fileTree = context.metadata.projectFileTree as string | undefined;
       const memoryContext = context.metadata.memoryContext as string | undefined;
 
+      const routingContext = context.metadata.routingContext as {
+        taskProfile?: {
+          intent?: string;
+          requiresVerification?: boolean;
+          notes?: string[];
+        };
+        explanation?: string;
+        escalationApplied?: boolean;
+      } | undefined;
+
       const promptParts: string[] = [
         PLANNER_SYSTEM_PROMPT,
         '',
@@ -110,6 +120,27 @@ export class PlannerAgent extends Agent {
         '## Working Directory',
         context.workingDirectory,
       ];
+
+      if (routingContext?.taskProfile) {
+        const routingNotes = routingContext.taskProfile.notes?.filter(Boolean) ?? [];
+        const guidanceLines = [
+          '',
+          '## Routing Guidance',
+        ];
+        if (routingContext.taskProfile.intent) {
+          guidanceLines.push(`Task intent: ${routingContext.taskProfile.intent}`);
+        }
+        if (routingContext.taskProfile.requiresVerification) {
+          guidanceLines.push('This is verification-heavy work. Include an explicit validation step and end with a reviewer step.');
+        }
+        if (routingNotes.length > 0) {
+          guidanceLines.push(`Notes: ${routingNotes.join(' ')}`);
+        }
+        if (routingContext.explanation) {
+          guidanceLines.push(`Rationale: ${routingContext.explanation}`);
+        }
+        promptParts.push(...guidanceLines);
+      }
 
       // Inject the project file tree so the planner knows what exists
       if (fileTree) {

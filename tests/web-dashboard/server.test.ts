@@ -526,6 +526,41 @@ describe('Dashboard Server', () => {
       // Restore the fixture for later tests
       writeDefaultFixtures();
     });
+
+    it('GET /api/routing returns bandit state when a router-bandit fixture exists', async () => {
+      writeFixture('router-bandit', {
+        version: 1,
+        priors: {
+          moderate: { groq: { alpha: 2.5, beta: 1.5 } },
+        },
+        learningHistory: [
+          { provider: 'groq', complexity: 'moderate', outcome: 'success', reward: 0.9, timestamp: new Date().toISOString() },
+        ],
+      });
+      const res = await httpGet(`${baseUrl}/api/routing`);
+      expect(res.statusCode).toBe(200);
+      const body = JSON.parse(res.body);
+      expect(body.bandit).toBeDefined();
+      expect(body.bandit.enabled).toBe(true);
+      expect(body.bandit.version).toBe(1);
+      // Collapsed per-provider shape: priors.groq.moderate.{alpha,beta,expectedWinRate}
+      expect(body.bandit.priors.groq.moderate.alpha).toBe(2.5);
+      expect(body.bandit.priors.groq.moderate.beta).toBe(1.5);
+      expect(body.bandit.priors.groq.moderate.expectedWinRate).toBeCloseTo(2.5 / 4, 3);
+      expect(body.bandit.learningHistory).toHaveLength(1);
+      expect(body.bandit.learningHistory[0].provider).toBe('groq');
+      removeFixture('router-bandit');
+    });
+
+    it('GET /api/routing returns disabled bandit when no router-bandit fixture exists', async () => {
+      removeFixture('router-bandit');
+      const res = await httpGet(`${baseUrl}/api/routing`);
+      expect(res.statusCode).toBe(200);
+      const body = JSON.parse(res.body);
+      expect(body.bandit).toBeDefined();
+      expect(body.bandit.enabled).toBe(false);
+      expect(body.bandit.priors).toEqual({});
+    });
   });
 
   // ═══════════════════════════════════════════════════════════════════════

@@ -36,6 +36,7 @@ import { ErrorRepairEngine } from '../learning/error-repair.js';
 import { estimateTokens } from '../learning/cost-tracker.js';
 import { scanForInjections, formatScanReport } from '../security/scanner.js';
 import { getAutoRouter, isAutoModel, isAutoProvider } from '../learning/auto-router.js';
+import { resolveWorkingModel } from '../inference/model-validator.js';
 import { recordRoutingDecision } from '../learning/routing-history.js';
 import { createReviewFromResult } from '../team/review.js';
 // ─── DAG Integration (optional — dashboard may not be built) ─────────────────
@@ -1029,11 +1030,52 @@ export class Orchestrator {
         if (options.verbose) {
             logger.info(`      🤖 Auto: ${decision.explanation}`);
         }
-        return this.createLLMProvider({
+        // Model health: the router resolves each provider's PINNED config model,
+        // which can be stale (deprecated gemini-2.0-flash-exp → 404) or a
+        // placeholder (nim 'new-nim-model'). Don't bake the unvalidated model into
+        // the provider options — validate against the provider's live model list on
+        // the first call and repair to a verified-working model. 'auto' is never
+        // sent to a real API: the base LLM's model guard resolves the fallback.
+        const base = this.createLLMProvider({
             ...options,
             provider: decision.provider,
-            model: decision.model,
+            model: undefined,
         });
+        let workingModel;
+        let validated = false;
+        return async (prompt, inferenceOptions) => {
+            if (!validated) {
+                validated = true;
+                try {
+                    const { config } = this.configManager.getProviderConfig(decision.provider);
+                    const adapter = ProviderFactory.createProvider(decision.provider, config);
+                    workingModel = await resolveWorkingModel(adapter, decision.provider, decision.model);
+                }
+                catch {
+                    workingModel = decision.model;
+                }
+                // Keep the dashboard audit trail accurate: resolveAutoRoutingDecision()
+                // recorded the original (possibly broken) model, but the actual call
+                // uses the repaired working model. Re-record with the verified model.
+                if (workingModel !== decision.model) {
+                    try {
+                        recordRoutingDecision({
+                            source: 'orchestrator',
+                            agentType: task.agentType,
+                            task: task.description,
+                            complexity: decision.complexity,
+                            provider: decision.provider,
+                            model: workingModel ?? decision.model,
+                            score: decision.score,
+                        });
+                    }
+                    catch {
+                        // Audit is best-effort — never break the LLM call over telemetry
+                    }
+                }
+            }
+            return base(prompt, { ...inferenceOptions, model: workingModel ?? decision.model });
+        };
     }
     applyRoutingPlanAdjustments(vault, routingContext) {
         if (!routingContext?.taskProfile?.requiresVerification) {

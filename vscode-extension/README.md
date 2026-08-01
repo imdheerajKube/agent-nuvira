@@ -45,7 +45,8 @@ Supports 5 built-in providers plus custom plugins:
 
 ### 🎛️ Model & Provider Switcher
 - **Status-bar model indicator** — shows the active provider/model; click to switch
-- **Switch Model / Provider...** — pick from all available providers (with availability status) or enable **Auto routing**; picking a provider lists its **actual models** (`buff models`) so you can choose a specific one, or keep the provider default
+- **Switch Model / Provider...** — pick from all available providers (with availability status) or enable **Auto routing**; picking a provider lists its **actual models** (`buff models`) in a **searchable quick-pick** (native type-to-filter matches model names *and* ids — handy for providers with 100+ models like OpenRouter), so you can choose a specific one, or keep the provider default
+- **Chat Panel dropdown** — a provider/model dropdown in the chat sidebar header switches the active provider (or enables Auto routing) without leaving the chat, and refreshes the status-bar indicator
 - **Check Model Health** — runs `agent-nuvira model health` for the active provider and shows the report
 - **Auto routing toggle** — when enabled, every AI flow routes each request to the best provider/model automatically: chat, execute, inline suggestions, code-lens actions, and diagnostic fixes. Note: inline completions are latency-sensitive — if suggestions feel slower with auto-routing enabled, pin a fast provider instead
 

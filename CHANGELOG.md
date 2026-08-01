@@ -7,6 +7,68 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [1.41.2] - 2026-08-01
+
+### Fixed
+- **Auto routing only uses working models — no more 401/404 surprises**
+  - Picking **Auto** in the model picker now enables per-message routing instead of handing a literal `'auto'` to `resolveProvider()` (which silently fell back to an unconfigured default like OpenRouter with no key → 401)
+  - Auto routing **only scores providers that have credentials** configured (`getDefaultAllowedProviders()` filters by `hasRequiredCredentials`), so it never picks a provider that would 401
+  - `resolveProvider('auto')` now falls back to the **first provider with credentials** (groq → nim → gemini → openrouter → local) instead of the unconfigured default
+- **Model health validation** — Auto routing validates the resolved model against the provider's **live model list** and repairs stale/deprecated/placeholder pins (e.g. Gemini's retired `gemini-2.0-flash-exp` → 404, NIM's `new-nim-model`) to a curated known-working default before sending a request
+- **Runtime failover** — if a routed provider still fails at generate time (quota exhausted 429, deprecated model 404 — Gemini's model list can list models a key can't actually use), chat **automatically walks the ranked candidates and answers from the first working provider** instead of crashing; the orchestrator and `benchmark --routing` apply the same model-health validation
+
+### Added
+- `src/inference/model-validator.ts` — live-list model validation + curated per-provider working defaults (`resolveWorkingModel`)
+- Regression tests: `tests/inference/model-validator.test.ts` (12 tests), `tests/cli/router.test.ts` (4 tests), deterministic auto-routing tests in `tests/cli/chat.test.ts`, credential-filtering tests in `tests/learning/auto-router.test.ts`
+
+> **Note:** this release bundles the previously-unreleased routing work from the
+> [Unreleased] section below (learning bandit, tier-0 deterministic routing,
+> routing rules/hard constraints, dashboard routing panels, per-provider model
+> drill-down, VS Code extension updates) — everything that shipped in this
+> published tarball.
+
+---
+
+## [Unreleased]
+
+### Added
+- **Routing roadmap handoff artifacts** — added a repo-local implementation roadmap and activity log for the next developer agent: [ACTIVITY_LOG_ROUTING_ROADMAP.md](ACTIVITY_LOG_ROUTING_ROADMAP.md)
+- **Follow-up implementation plan** — added a milestone-based execution plan with acceptance criteria for the next routing iteration: [FOLLOW_UP_IMPLEMENTATION_PLAN.md](FOLLOW_UP_IMPLEMENTATION_PLAN.md)
+- **Intent-aware routing scaffold** — the auto router now derives a lightweight task profile from the request text, classifies verification-heavy work, and shifts reasoning/reliability weights accordingly before selecting a provider
+- **Learning Router (ruflo-inspired Thompson-sampling bandit)** — Auto model routing
+  now learns from real task outcomes. Each provider keeps a Beta(α, β) prior **per
+  complexity bucket**; final score = deterministic score × Thompson draw θ ~ Beta(α, β),
+  so cold-start behaves like the heuristic router until outcomes accumulate. The
+  orchestrator records every auto-routed task's success/failure, and success rewards
+  are **cost-adjusted** (cheap provider success is worth the most). State persists to
+  `~/.buff/memory/router-bandit.json`. Enable with `buff config set routing.bandit true`
+- **Hard routing constraints** — `routing.maxCostUsd` / `routing.minSpeed` /
+  `routing.minReasoning` per-call filters that **eliminate** violating providers
+  (mirroring ruflo's `maxCost`/`maxLatency`/`minQuality`), with a safe fallback when
+  constraints would eliminate everything
+- **Routing rules** — regex/string task-pattern overrides that force a specific
+  provider/model before scoring (first match wins), plus a `routedBy`
+  (`heuristic | rule | bandit`) audit field on every decision
+- **`buff model bandit` CLI** — inspect the learning router's Thompson-sampling
+  state: α/β priors per provider × complexity bucket with expected win %, recent
+  learning history, `--json` output for scripting/CI, and `reset` to clear state
+- **Dashboard Bandit panel** — the 🤖 Routing panel now renders a live α/β
+  heatmap (provider × complexity bucket) plus a learning-history timeline from
+  `/api/routing` (bandit field) / SSE, backed by `router-bandit.json`
+- **Deterministic Tier-0 routing** — mechanical edits short-circuit the LLM for
+  **$0 in <1ms** (ruflo `enhanced-model-router` Tier-1 codemod idea): strips
+  standalone `console.*` lines, renames symbols across references, dedupes
+  imports — each transform AST-validated before apply, with graceful fallthrough
+  to the LLM when a goal isn't mechanical. Wired into the EditModule
+  (`useTier0` param, default on) with `edit:written` events tagged `via: tier0`
+- **Per-provider model drill-down in `buff model switch`** — the interactive picker
+  gained a "Browse by provider" option that first lists available providers, then
+  shows the chosen provider's **full** model list (no 20-model cap, so long lists
+  like OpenRouter's 100+ models are fully browsable) and lets you pick a specific
+  model or keep the provider default. Mirrors the VS Code extension's two-step flow
+
+---
+
 ## [1.41.0] - 2026-07-31
 
 ### Added

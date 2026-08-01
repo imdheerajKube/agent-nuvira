@@ -640,6 +640,8 @@ agent-nuvira model
 agent-nuvira model list
 
 # Interactive categorized model picker
+# (choose "Browse by provider" to drill into ONE provider's full model list,
+#  e.g. OpenRouter's 100+ models, and pick a specific one)
 agent-nuvira model switch
 
 # Switch to a provider with its default model
@@ -679,6 +681,78 @@ agent-nuvira model health
 ```
 
 **Priority chain:** CLI `--provider`/`--model` flags → `buff model switch` active state → default config file — the most specific wins.
+
+#### Learning Router — Thompson-sampling bandit + hard constraints
+
+Auto routing can **learn from real outcomes** (ruflo-inspired `model-router` math, generalized to all providers):
+
+```bash
+# Enable bandit learning — each provider's score is multiplied by a Beta draw
+# learned per complexity bucket from actual task successes/failures
+agent-nuvira config set routing.bandit true
+
+# Hard per-call budget (USD) — providers whose typical call exceeds this are
+# eliminated, not just scored lower
+agent-nuvira config set routing.maxCostUsd 0.005
+
+# Minimum capability floors for auto-routed tasks (0–1)
+agent-nuvira config set routing.minSpeed 0.5
+agent-nuvira config set routing.minReasoning 0.6
+```
+
+How it works:
+- Each provider keeps a **Beta(α, β) prior per complexity bucket** (trivial/simple/moderate/complex/critical) so learning is task-type-local.
+- Final score = `deterministicScore × θ` where `θ ~ Beta(α, β)`. Cold start `Beta(1,1)` behaves like the plain heuristic router until outcomes accumulate.
+- The orchestrator **records every auto-routed task's outcome** (success/failure) into the bandit. Success rewards are **cost-adjusted** — a cheap provider's success is worth the most.
+- State persists to `~/.buff/memory/router-bandit.json` (honors `BUFF_MEMORY_DIR`) and is shared across CLI, chat, and the VS Code extension.
+
+Inspect and manage the bandit from the CLI — the full α/β heatmap per provider × complexity bucket, recent learning history, JSON output for scripting, and a one-command reset:
+
+```bash
+# Show the bandit state (α/β priors + expected win % per provider × complexity bucket)
+agent-nuvira model bandit
+
+# Machine-readable snapshot (priors, expected win rates, learning history)
+agent-nuvira model bandit --json
+
+# Reset all Beta priors back to Beta(1,1)
+agent-nuvira model bandit reset
+```
+
+The dashboard's 🤖 **Routing** panel shows the same bandit live — an α/β heatmap plus a learning-history timeline (enable `routing.bandit` and run auto-routed tasks to populate it).
+
+**Routing rules** — force a specific provider/model for task patterns (regex/string, evaluated before scoring):
+
+```jsonc
+// ~/.buff/buffconfig.json
+{
+  "routing": {
+    "bandit": true,
+    "maxCostUsd": 0.005,
+    "rules": [
+      { "name": "marketing → groq", "pattern": "email|sales|copy", "provider": "groq" },
+      { "name": "refactor → local", "pattern": "refactor", "provider": "local" }
+    ]
+  }
+}
+```
+
+Every decision records a `routedBy` source (`heuristic` | `rule` | `bandit`) in the dashboard's routing audit trail so you can see exactly how each pick was produced.
+
+#### Deterministic Tier-0 routing — mechanical edits without an LLM
+
+Simple mechanical edits never touch an LLM (ruflo's `enhanced-model-router` Tier-1 codemod idea, built on agent-nuvira's editing engine):
+
+| Goal pattern | Deterministic transform | Cost |
+|---|---|---|
+| `remove all console.log statements` / `clean up debug logging` | Strips standalone `console.*` lines | **$0 · <1ms** |
+| `rename foo to bar` (symbol present in context) | Word-boundary rename across all references | **$0 · <1ms** |
+| `remove duplicate imports` | Deduplicates same-module import lines | **$0 · <1ms** |
+
+- Runs **before** the LLM in the edit pipeline; every transformed file is **AST-validated** first, so tier-0 never emits broken code.
+- If the goal isn't mechanical (or validation fails), the pipeline **falls through to the LLM** unchanged.
+- Tier-0 results flow through the same safe-apply pipeline (dry-run, sandbox, review bundles) and emit `edit:written` events tagged `via: tier0`.
+- Disable per call with `useTier0: false` in the EditModule API.
 
 ---
 

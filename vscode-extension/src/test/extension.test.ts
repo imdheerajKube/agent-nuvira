@@ -53,6 +53,8 @@ vi.mock('../agentPanel.js', () => ({
 vi.mock('../chatPanel.js', () => ({
   ChatPanel: vi.fn().mockImplementation(() => ({
     updateConfig: vi.fn(),
+    updateCliManager: vi.fn(),
+    setOnModelChanged: vi.fn(),
     createOrShow: vi.fn(),
   })),
 }));

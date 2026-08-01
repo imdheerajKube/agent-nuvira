@@ -221,6 +221,30 @@ export function resolveProvider(
     return { type: rawType, provider };
   }
 
+  // ── 'auto' is a routing directive, not a concrete provider ─────────────
+  // Auto must be resolved per-task through the AutoModelRouter. If it leaks
+  // into resolveProvider (e.g. a stale active-model state), NEVER fall back to
+  // an unconfigured default provider (that caused confusing 401s when the
+  // default had no API key). Prefer the first provider with credentials.
+  if (rawType === 'auto') {
+    const configuredFallback =
+      ['groq', 'nim', 'gemini', 'openrouter', 'local'].find((p) => {
+        try {
+          return configManager.hasRequiredCredentials(p);
+        } catch {
+          return false;
+        }
+      }) || configManager.getAll().defaultProvider;
+    logger.warn(
+      `Provider 'auto' must be routed via Auto model routing — falling back to configured provider '${configuredFallback}'. ` +
+      `Run \`buff model switch auto\` for per-task routing.`
+    );
+    const { config } = configManager.getProviderConfig(configuredFallback);
+    const provider = ProviderFactory.createProvider(configuredFallback, config);
+    logger.debug(`Resolved provider (auto fallback): ${configuredFallback} (${provider.name})`);
+    return { type: configuredFallback, provider };
+  }
+
   // Unknown provider — warn and fall back to default
   logger.warn(`Unknown provider '${rawType}'. Falling back to '${configManager.getAll().defaultProvider}'`);
   const fallbackType = configManager.getAll().defaultProvider;

@@ -32,9 +32,14 @@
     .sidebar { width: 220px; min-width: 220px; background: var(--bg-secondary); border-right: 1px solid var(--border); display: flex; flex-direction: column; overflow: hidden; }
     .main-area { flex: 1; display: flex; flex-direction: column; overflow: hidden; }
 
-    .sidebar-header { padding: 12px; border-bottom: 1px solid var(--border); display: flex; align-items: center; justify-content: space-between; }
+    .sidebar-header { padding: 12px 12px 8px; border-bottom: none; display: flex; align-items: center; justify-content: space-between; }
     .sidebar-header h3 { font-size: 12px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.05em; color: var(--text-secondary); }
     .sidebar-actions { display: flex; gap: 4px; }
+    .sidebar-model { padding: 0 12px 10px; border-bottom: 1px solid var(--border); }
+    .model-select { width: 100%; padding: 5px 8px; background: var(--bg-tertiary); color: var(--text-primary); border: 1px solid var(--border); border-radius: 4px; font-size: 11px; cursor: pointer; outline: none; transition: border-color 0.15s; }
+    .model-select:hover { border-color: var(--text-secondary); }
+    .model-select:focus { border-color: var(--blue); }
+    .model-select:disabled { opacity: 0.5; cursor: wait; }
     .sidebar-btn { background: none; border: 1px solid var(--border); color: var(--text-secondary); width: 24px; height: 24px; border-radius: 4px; cursor: pointer; display: flex; align-items: center; justify-content: center; font-size: 14px; transition: all 0.2s; }
     .sidebar-btn:hover { background: var(--bg-hover); color: var(--text-primary); border-color: var(--text-secondary); }
 
@@ -152,6 +157,11 @@
           <button class="sidebar-btn" id="deleteAllBtn" title="Clear All">&#128465;</button>
         </div>
       </div>
+      <div class="sidebar-model">
+        <select id="modelSelect" class="model-select" title="Switch provider/model">
+          <option value="auto">&#129302; Auto routing</option>
+        </select>
+      </div>
       <div class="session-list" id="sessionList"></div>
     </div>
     <div class="main-area">
@@ -231,10 +241,12 @@
   const statusDot = document.getElementById('statusDot');
   const statusText = document.getElementById('statusText');
   const welcomeMessage = document.getElementById('welcomeMessage');
+  const modelSelect = document.getElementById('modelSelect');
 
   let isStreaming = false;
   let selectedSlashIndex = -1;
   let fileContext = [];
+  let switchingModel = false;
 
   window.sendSlashHTML = function(cmd) {
     chatInput.value = cmd + ' ';
@@ -347,6 +359,46 @@
   });
 
   clearChatBtn.addEventListener('click', function() { vscode.postMessage({ type: 'createSession' }); });
+
+  function renderModelState(providers, active) {
+    modelSelect.innerHTML = '';
+    var autoOpt = document.createElement('option');
+    autoOpt.value = 'auto';
+    autoOpt.textContent = '\uD83E\uDD16 Auto routing';
+    modelSelect.appendChild(autoOpt);
+
+    for (var i = 0; i < providers.length; i++) {
+      var p = providers[i];
+      var opt = document.createElement('option');
+      opt.value = p.type;
+      var model = p.defaultModel ? ' \u2014 ' + p.defaultModel : '';
+      opt.textContent = (p.icon || '\uD83D\uDD39') + ' ' + p.label + model;
+      modelSelect.appendChild(opt);
+    }
+
+    // Reflect the active provider/model (auto when routing is enabled)
+    var activeValue = null;
+    if (active) {
+      activeValue = (active.provider === 'auto' || active.model === 'auto') ? 'auto' : active.provider;
+    }
+    if (activeValue) {
+      var found = false;
+      for (var j = 0; j < modelSelect.options.length; j++) {
+        if (modelSelect.options[j].value === activeValue) { found = true; break; }
+      }
+      if (found) modelSelect.value = activeValue;
+    }
+
+    switchingModel = false;
+    modelSelect.disabled = false;
+  }
+
+  modelSelect.addEventListener('change', function() {
+    if (switchingModel) return;
+    switchingModel = true;
+    modelSelect.disabled = true;
+    vscode.postMessage({ type: 'switchModel', value: modelSelect.value });
+  });
 
   function renderSessionList(sessions, activeId) {
     sessionList.innerHTML = '';
@@ -535,6 +587,9 @@
         break;
       case 'activeFileInfo':
         if (msg.info) { document.getElementById('modelLabel').textContent = msg.info.fileName + (msg.info.hasSelection ? ' (selected)' : ''); }
+        break;
+      case 'modelState':
+        renderModelState(msg.providers || [], msg.active);
         break;
     }
   });

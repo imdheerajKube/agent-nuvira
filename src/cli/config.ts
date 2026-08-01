@@ -114,6 +114,19 @@ export class ConfigCommand extends BaseCommand {
       }
       console.log('');
     }
+
+    // Show learning-router config
+    if (config.routing) {
+      logger.highlight('LEARNING ROUTER:');
+      for (const [key, value] of Object.entries(config.routing)) {
+        if (key === 'bandit') {
+          console.log(`  bandit: ${value ? 'enabled (Thompson sampling)' : 'disabled'}`);
+        } else {
+          console.log(`  ${key}: ${value}`);
+        }
+      }
+      console.log('');
+    }
   }
 
   private getValue(key: string): void {
@@ -275,8 +288,35 @@ export class ConfigCommand extends BaseCommand {
         logger.error(`Unknown fallback config key: ${field}. Valid keys: enabled, providers, maxAttempts, retryDelayMs`);
         return;
       }
+    } else if (parts.length === 2 && parts[0] === 'routing') {
+      // routing.bandit | routing.maxCostUsd | routing.minSpeed | routing.minReasoning
+      const field = parts[1];
+
+      if (field === 'bandit') {
+        const lower = value.trim().toLowerCase();
+        let typedValue: boolean;
+        if (lower === 'true' || lower === '1' || lower === 'yes') {
+          typedValue = true;
+        } else if (lower === 'false' || lower === '0' || lower === 'no') {
+          typedValue = false;
+        } else {
+          logger.error(`Invalid boolean value for ${key}: "${value}". Use true or false.`);
+          return;
+        }
+        this.configManager.save({ routing: { bandit: typedValue } } as Partial<BuffConfig>);
+      } else if (field === 'maxCostUsd' || field === 'minSpeed' || field === 'minReasoning') {
+        const num = Number(value);
+        if (isNaN(num) || num < 0) {
+          logger.error(`Invalid number for ${key}: "${value}". Must be a non-negative number.`);
+          return;
+        }
+        this.configManager.save({ routing: { [field]: num } } as Partial<BuffConfig>);
+      } else {
+        logger.error(`Unknown routing config key: ${field}. Valid keys: bandit, maxCostUsd, minSpeed, minReasoning`);
+        return;
+      }
     } else {
-      logger.error(`Invalid config key format: ${key}. Expected formats:\n  defaultProvider\n  providers.<name>.<field>\n  pricing.<provider>.inputPer1K\n  pricing.<provider>.outputPer1K\n  history.retentionDays\n  history.semanticSearch\n  fallback.enabled\n  fallback.providers`);
+      logger.error(`Invalid config key format: ${key}. Expected formats:\n  defaultProvider\n  providers.<name>.<field>\n  pricing.<provider>.inputPer1K\n  pricing.<provider>.outputPer1K\n  history.retentionDays\n  history.semanticSearch\n  fallback.enabled\n  fallback.providers\n  routing.bandit\n  routing.maxCostUsd`);
       return;
     }
 

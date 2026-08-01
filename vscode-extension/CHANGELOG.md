@@ -5,6 +5,21 @@ All notable changes to the Agent-Baba-D VS Code extension will be documented in 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Added
+- **Searchable model picker** — the per-provider model quick-pick now uses
+  `createQuickPick` with native type-to-filter matching against both the model
+  name and its id, so long lists (e.g. OpenRouter's 100+ models) can be filtered
+  by typing; Esc still keeps the provider default
+- **Chat Panel model switcher** — a provider/model dropdown in the chat sidebar
+  header lets you switch the active provider (or enable Auto routing) without
+  leaving the chat. Selecting an option runs `buff model switch`, re-syncs the
+  dropdown, and refreshes the status-bar indicator via the shared onModelChanged
+  callback
+
+---
+
 ## [0.4.0] — 2026-07-31
 
 ### Added

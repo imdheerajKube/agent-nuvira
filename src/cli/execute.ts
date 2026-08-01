@@ -34,6 +34,7 @@ import type { OrchestrationResult } from '../agents/orchestrator.js';
 import { applyActiveModel } from './model.js';
 import { showModelPicker } from './model-picker.js';
 import { resolveProvider } from './router.js';
+import { isAutoModel } from '../learning/auto-router.js';
 import { getTrajectoryStore } from '../memory/trajectory-store.js';
 import { logger } from '../utils/logger.js';
 
@@ -251,11 +252,18 @@ export class ExecuteCommand extends BaseCommand {
         return;
       }
 
-      if (picked.provider !== activeProvider) {
-        const resolved = resolveProvider(this.configManager, picked.provider);
-        activeProvider = resolved.type;
+      if (picked.provider === 'auto' || isAutoModel(picked.model)) {
+        // Auto picked — keep the auto provider so the orchestrator routes
+        // per task instead of resolveProvider('auto') falling back silently.
+        activeProvider = 'auto';
+        activeModel = 'auto';
+      } else {
+        if (picked.provider !== activeProvider) {
+          const resolved = resolveProvider(this.configManager, picked.provider);
+          activeProvider = resolved.type;
+        }
+        activeModel = picked.model;
       }
-      activeModel = picked.model;
     }
 
     // ── SIGINT handler for graceful exit ───────────────────────────────────
@@ -297,11 +305,16 @@ export class ExecuteCommand extends BaseCommand {
         if (handled.newModel) {
           const picked = await showModelPicker(this.configManager);
           if (picked) {
-            if (picked.provider !== activeProvider) {
-              const resolved = resolveProvider(this.configManager, picked.provider);
-              activeProvider = resolved.type;
+            if (picked.provider === 'auto' || isAutoModel(picked.model)) {
+              activeProvider = 'auto';
+              activeModel = 'auto';
+            } else {
+              if (picked.provider !== activeProvider) {
+                const resolved = resolveProvider(this.configManager, picked.provider);
+                activeProvider = resolved.type;
+              }
+              activeModel = picked.model;
             }
-            activeModel = picked.model;
             logger.success(`\n✅ Switched to ${activeModel}`);
             console.log('');
           }
@@ -368,11 +381,16 @@ export class ExecuteCommand extends BaseCommand {
       } else if (nextAction.type === 'switch-model') {
         const picked = await showModelPicker(this.configManager);
         if (picked) {
-          if (picked.provider !== activeProvider) {
-            const resolved = resolveProvider(this.configManager, picked.provider);
-            activeProvider = resolved.type;
+          if (picked.provider === 'auto' || isAutoModel(picked.model)) {
+            activeProvider = 'auto';
+            activeModel = 'auto';
+          } else {
+            if (picked.provider !== activeProvider) {
+              const resolved = resolveProvider(this.configManager, picked.provider);
+              activeProvider = resolved.type;
+            }
+            activeModel = picked.model;
           }
-          activeModel = picked.model;
           logger.success(`✅ Switched to ${activeModel}\n`);
         }
       } else if (nextAction.type === 'history') {

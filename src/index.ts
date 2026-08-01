@@ -66,6 +66,20 @@ export type {
 export { EvalCommand } from './cli/eval.js';
 
 // ─── Learning exports ───────────────────────────────────────────────────────
+export {
+  RouterBandit,
+  getRouterBandit,
+  resetRouterBandit,
+  sampleBeta,
+  sampleGamma,
+  costAdjustedSuccessReward,
+  COMPLEXITY_BUCKETS,
+} from './learning/router-bandit.js';
+export type {
+  BanditOutcome,
+  BetaPrior,
+  RouterBanditState,
+} from './learning/router-bandit.js';
 export { SelfImprover, getSelfImprover } from './learning/self-improver.js';
 export { AgentStats, getAgentStats } from './learning/agent-stats.js';
 export type { AgentPerformance, AgentStatsData } from './learning/agent-stats.js';

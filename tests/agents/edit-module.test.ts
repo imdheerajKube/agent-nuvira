@@ -574,6 +574,96 @@ describe('DefaultEditModule', () => {
     });
   });
 
+  // ── Tier-0 deterministic routing ───────────────────────────────────
+
+  describe('edit() — tier-0 deterministic routing', () => {
+    it('short-circuits mechanical edits without calling the LLM', async () => {
+      const callLLM = vi.fn().mockResolvedValue('should never be called');
+      const params: EditParams = {
+        goal: 'remove all console.log statements',
+        workingDirectory: testDir,
+        artifacts: [makeArtifact('index.ts', 'export const greet = (name: string) => {\n  console.log("hi");\n  return `Hello ${name}`;\n};')],
+        callLLM,
+      };
+
+      const result = await module.edit(params);
+
+      expect(result.changeCount).toBe(1);
+      expect(result.changes[0].newContent).not.toContain('console.log');
+      expect(result.summary).toContain('Tier-0');
+      expect(callLLM).not.toHaveBeenCalled();
+    });
+
+    it('renames a symbol deterministically across files', async () => {
+      const callLLM = vi.fn().mockResolvedValue('should never be called');
+      const params: EditParams = {
+        goal: 'rename greet to sayHello',
+        workingDirectory: testDir,
+        artifacts: [makeArtifact('index.ts', 'export const greet = (name: string) => `Hello ${name}`;')],
+        callLLM,
+      };
+
+      const result = await module.edit(params);
+
+      expect(result.changeCount).toBe(1);
+      expect(result.changes[0].newContent).toContain('sayHello');
+      expect(result.changes[0].newContent).not.toContain('greet');
+      expect(callLLM).not.toHaveBeenCalled();
+    });
+
+    it('falls through to the LLM for non-mechanical goals', async () => {
+      const callLLM = mockLLMSuccess('```filepath:auth.ts\nexport function login() { return "new-token"; }\n```');
+      const params: EditParams = {
+        goal: 'Add JWT auth with refresh tokens',
+        workingDirectory: testDir,
+        artifacts: [makeArtifact('auth.ts', 'export function login() { return "token"; }')],
+        callLLM,
+      };
+
+      const result = await module.edit(params);
+
+      expect(result.changeCount).toBe(1);
+      expect(callLLM).toHaveBeenCalled();
+      expect(result.summary).toContain('Proposed changes');
+    });
+
+    it('uses the LLM when useTier0 is explicitly disabled', async () => {
+      const callLLM = mockLLMSuccess('```filepath:index.ts\nexport const greet = (name: string) => `Hello ${name}`;\n```');
+      const params: EditParams = {
+        goal: 'remove all console.log statements',
+        workingDirectory: testDir,
+        artifacts: [makeArtifact('index.ts', 'export const greet = (name: string) => `Hello ${name}`;')],
+        callLLM,
+        useTier0: false,
+      };
+
+      const result = await module.edit(params);
+
+      expect(callLLM).toHaveBeenCalled();
+      expect(result).toBeDefined();
+    });
+
+    it('emits EDIT_WRITTEN events for tier-0 changes with via: tier0', async () => {
+      const bus = new EventBus();
+      const emitSpy = vi.spyOn(bus, 'emit');
+      const mod = new DefaultEditModule(bus);
+
+      const params: EditParams = {
+        goal: 'remove all console.log statements',
+        workingDirectory: testDir,
+        artifacts: [makeArtifact('auth.ts', 'export function login() {\n  console.log("logging in");\n  return "token";\n}')],
+        callLLM: vi.fn().mockResolvedValue('unused'),
+      };
+
+      await mod.edit(params);
+
+      const written = emitSpy.mock.calls.filter((c) => c[0] === 'edit:written');
+      expect(written.length).toBe(1);
+      const payload = written[0][1] as Record<string, unknown>;
+      expect(payload.via).toBe('tier0');
+    });
+  });
+
   // ── Constructor ─────────────────────────────────────────────────────
 
   describe('constructor', () => {

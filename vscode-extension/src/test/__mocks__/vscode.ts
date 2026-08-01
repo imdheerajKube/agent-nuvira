@@ -186,9 +186,15 @@ export class MockWebviewPanel {
   visible: boolean = true;
   webview = {
     html: '',
-    postMessage: () => true,
-    onDidReceiveMessage: () => new Disposable(),
+    postMessage: vi.fn((_msg: unknown) => true),
+    onDidReceiveMessage: vi.fn((handler: (msg: unknown) => void) => {
+      this.__messageHandlers.push(handler);
+      return new Disposable();
+    }),
   };
+  /** Captured webview message handlers (tests invoke them to simulate UI) */
+  __messageHandlers: Array<(msg: unknown) => void> = [];
+  onDidChangeViewState: () => Disposable = () => new Disposable();
   onDidDispose: () => Disposable = () => new Disposable();
   reveal(): void { /* noop */ }
   dispose(): void { /* noop */ }
@@ -241,6 +247,7 @@ export class MockWorkspaceConfiguration {
 
 let inputBoxResult: string | undefined;
 let showQuickPickQueue: unknown[] = [];
+let quickPickSelectionQueue: unknown[] = [];
 let showWarningMessageResult: unknown;
 
 export function __setInputBoxResult(value: string | undefined): void {
@@ -255,6 +262,14 @@ export function __setQuickPickResult(value: unknown): void {
 /** Queue results for multiple sequential showQuickPick calls. */
 export function __setQuickPickResults(values: unknown[]): void {
   showQuickPickQueue = [...values];
+}
+
+/**
+ * Set the item the next createQuickPick will resolve with when the user
+ * "selects" it (undefined simulates dismissing the picker with Esc).
+ */
+export function __setQuickPickSelection(value: unknown): void {
+  quickPickSelectionQueue = [value];
 }
 
 export function __setShowWarningMessageResult(value: unknown): void {
@@ -278,6 +293,21 @@ export const window = {
   showQuickPick: <T>(items: T[], options?: { placeHolder?: string }): Promise<T | undefined> => {
     const result = showQuickPickQueue.length > 0 ? (showQuickPickQueue.shift() as T) : undefined;
     return Promise.resolve(result);
+  },
+
+  createQuickPick: <T>(): MockQuickPick => {
+    const pick = new MockQuickPick();
+    pick.__applyQueuedSelection = () => {
+      if (quickPickSelectionQueue.length === 0) return;
+      const selection = quickPickSelectionQueue.shift();
+      if (selection === undefined) {
+        pick.__fireHide();
+      } else {
+        pick.selectedItems = [selection as T];
+        pick.__fireSelection(pick.selectedItems);
+      }
+    };
+    return pick;
   },
 
   showInformationMessage: (message: string): Thenable<string | undefined> => Promise.resolve(undefined),
@@ -308,6 +338,45 @@ export const window = {
     return task({ report: () => undefined }, { isCancellationRequested: false });
   },
 };
+
+// ─── Mock Quick Pick (searchable) ──────────────────────────────────────────
+
+export class MockQuickPick {
+  items: unknown[] = [];
+  selectedItems: unknown[] = [];
+  placeholder: string = '';
+  matchOnDescription: boolean = false;
+  matchOnDetail: boolean = false;
+  canSelectMany: boolean = false;
+
+  /** Applied when the picker is shown (simulates the user's selection). */
+  __applyQueuedSelection: () => void = () => { /* noop */ };
+  private _onDidChangeSelection: Array<(items: unknown[]) => void> = [];
+  private _onDidHide: Array<() => void> = [];
+
+  show: () => void = vi.fn(() => {
+    this.__applyQueuedSelection();
+  });
+  hide: () => void = vi.fn(() => { /* noop */ });
+  dispose: () => void = vi.fn(() => { /* noop */ });
+
+  onDidChangeSelection: (listener: (items: unknown[]) => void) => Disposable = vi.fn((listener) => {
+    this._onDidChangeSelection.push(listener);
+    return new Disposable();
+  });
+  onDidHide: (listener: () => void) => Disposable = vi.fn((listener) => {
+    this._onDidHide.push(listener);
+    return new Disposable();
+  });
+
+  __fireSelection(items: unknown[]): void {
+    for (const listener of this._onDidChangeSelection) listener(items);
+  }
+
+  __fireHide(): void {
+    for (const listener of this._onDidHide) listener();
+  }
+}
 
 // ─── Commands ───────────────────────────────────────────────────────────────
 
@@ -435,6 +504,7 @@ export const InlineCompletionContext = {
 export function __resetAllMocks(): void {
   inputBoxResult = undefined;
   showQuickPickQueue = [];
+  quickPickSelectionQueue = [];
   showWarningMessageResult = undefined;
   registeredCommands.clear();
   workspaceFolders = [];
@@ -474,6 +544,7 @@ export default {
   __setInputBoxResult: __setInputBoxResult,
   __setQuickPickResult: __setQuickPickResult,
   __setQuickPickResults: __setQuickPickResults,
+  __setQuickPickSelection: __setQuickPickSelection,
   __setShowWarningMessageResult: __setShowWarningMessageResult,
   __setWorkspaceFolders: __setWorkspaceFolders,
   __resetWorkspaceFolders: __resetWorkspaceFolders,

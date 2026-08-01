@@ -89,6 +89,26 @@ export interface HistoryConfig {
 }
 
 /**
+ * Learning-router configuration (Thompson-sampling bandit + hard constraints).
+ * Set via `buff config set routing.<key> <value>` or directly in .buffconfig.json.
+ */
+export interface RoutingConfig {
+  /**
+   * Enable Thompson-sampling bandit learning for Auto model routing.
+   * Providers are scored by deterministic heuristics × a Beta draw learned
+   * from real task outcomes (recorded automatically by the orchestrator).
+   * Default: false.
+   */
+  bandit?: boolean;
+  /** Hard max cost per call (USD) — providers whose typical call exceeds this are excluded */
+  maxCostUsd?: number;
+  /** Minimum speed score (0–1) for a candidate provider to be considered */
+  minSpeed?: number;
+  /** Minimum reasoning score (0–1) for a candidate provider to be considered */
+  minReasoning?: number;
+}
+
+/**
  * Full configuration schema for .buffconfig.json
  */
 export interface BuffConfig {
@@ -102,6 +122,8 @@ export interface BuffConfig {
   history?: HistoryConfig;
   /** Per-provider pricing overrides for Auto model routing cost scoring */
   pricing?: PricingConfigMap;
+  /** Learning-router config (bandit sampling + hard constraints) */
+  routing?: RoutingConfig;
 }
 
 /**

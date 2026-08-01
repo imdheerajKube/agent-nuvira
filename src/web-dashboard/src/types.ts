@@ -174,6 +174,29 @@ export interface RoutingInsights {
   usage?: RoutingUsage;
   /** Recent routing decisions (audit trail) — most recent first */
   history?: RoutingHistoryEntry[];
+  /** Learning-router bandit state (Thompson-sampling priors + history) */
+  bandit?: BanditInsights;
+  updatedAt: number;
+}
+
+export interface BanditPrior {
+  alpha: number;
+  beta: number;
+  expectedWinRate: number;
+}
+
+export interface BanditInsights {
+  enabled: boolean;
+  version: number;
+  /** provider → complexity bucket → { alpha, beta, expectedWinRate } */
+  priors: Record<string, Record<string, BanditPrior>>;
+  learningHistory: Array<{
+    provider: string;
+    complexity: string;
+    outcome: string;
+    reward: number;
+    timestamp: string;
+  }>;
   updatedAt: number;
 }
 

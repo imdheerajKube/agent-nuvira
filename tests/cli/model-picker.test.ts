@@ -396,4 +396,149 @@ describe('showModelPicker', () => {
 
     expect(successSpy).toHaveBeenCalledWith(expect.stringContaining('Groq'));
   });
+
+  // ── Browse-by-provider drill-down ───────────────────────────────────────
+
+  it('drills into a provider and returns a specific model from its full list', async () => {
+    const models = [
+      makeModel('llama-3.3-70b-versatile', { provider: 'groq' }),
+      makeModel('mixtral-8x7b-32768', { provider: 'groq' }),
+    ];
+
+    mockResolveResults.set('groq', {
+      type: 'groq',
+      provider: createMockProvider({
+        name: 'Groq',
+        isAvailable: vi.fn().mockResolvedValue(true),
+        listModels: vi.fn().mockResolvedValue(models),
+      }),
+    });
+
+    // Main menu (1 = Auto, 2-3 = models, 4 = browse) → provider 1 → model 2.
+    // mockConfigManager has no getProviderConfig, so no "Use default model"
+    // option is shown — models start at index 1 (1 = llama, 2 = mixtral).
+    vi.spyOn(inquirer, 'prompt')
+      .mockResolvedValueOnce({ selected: '4' })
+      .mockResolvedValueOnce({ selected: '1' })
+      .mockResolvedValueOnce({ selected: '2' });
+
+    const result = await showModelPicker(mockConfigManager);
+
+    expect(result).not.toBeNull();
+    expect(result!.provider).toBe('groq');
+    expect(result!.model).toBe('mixtral-8x7b-32768');
+  });
+
+  it('keeps the provider default when option 1 is chosen in the drill-down', async () => {
+    const models = [
+      makeModel('llama-3.3-70b-versatile', { provider: 'groq' }),
+      makeModel('mixtral-8x7b-32768', { provider: 'groq' }),
+    ];
+
+    mockResolveResults.set('groq', {
+      type: 'groq',
+      provider: createMockProvider({
+        name: 'Groq',
+        isAvailable: vi.fn().mockResolvedValue(true),
+        listModels: vi.fn().mockResolvedValue(models),
+      }),
+    });
+
+    // Config manager with a configured default model
+    const configManagerWithDefault = {
+      getProviderConfig: () => ({ type: 'groq', config: { model: 'llama-3.3-70b-versatile' } }),
+    } as unknown as ConfigManager;
+
+    vi.spyOn(inquirer, 'prompt')
+      .mockResolvedValueOnce({ selected: '4' }) // browse
+      .mockResolvedValueOnce({ selected: '1' }) // groq
+      .mockResolvedValueOnce({ selected: '1' }); // use default
+
+    const result = await showModelPicker(configManagerWithDefault);
+
+    expect(result).not.toBeNull();
+    expect(result!.provider).toBe('groq');
+    expect(result!.model).toBe('llama-3.3-70b-versatile');
+  });
+
+  it('cancels the drill-down when 0 is entered at the provider list', async () => {
+    const models = [makeModel('llama-3.3-70b-versatile', { provider: 'groq' })];
+
+    mockResolveResults.set('groq', {
+      type: 'groq',
+      provider: createMockProvider({
+        name: 'Groq',
+        isAvailable: vi.fn().mockResolvedValue(true),
+        listModels: vi.fn().mockResolvedValue(models),
+      }),
+    });
+
+    // Main menu (1 = Auto, 2 = model, 3 = browse) → cancel at provider list
+    vi.spyOn(inquirer, 'prompt')
+      .mockResolvedValueOnce({ selected: '3' })
+      .mockResolvedValueOnce({ selected: '0' });
+
+    const result = await showModelPicker(mockConfigManager);
+
+    expect(result).toBeNull();
+  });
+
+  it('returns to the provider list when 0 is entered at the model list', async () => {
+    const models = [makeModel('llama-3.3-70b-versatile', { provider: 'groq' })];
+
+    mockResolveResults.set('groq', {
+      type: 'groq',
+      provider: createMockProvider({
+        name: 'Groq',
+        isAvailable: vi.fn().mockResolvedValue(true),
+        listModels: vi.fn().mockResolvedValue(models),
+      }),
+    });
+
+    // browse → groq → back at model list → back at provider list → cancel
+    vi.spyOn(inquirer, 'prompt')
+      .mockResolvedValueOnce({ selected: '3' }) // browse
+      .mockResolvedValueOnce({ selected: '1' }) // groq
+      .mockResolvedValueOnce({ selected: '0' }) // back to providers
+      .mockResolvedValueOnce({ selected: '0' }); // cancel
+
+    const result = await showModelPicker(mockConfigManager);
+
+    expect(result).toBeNull();
+  });
+
+  it('warns and loops back when the browsed provider has no models', async () => {
+    const warnSpy = vi.spyOn(logger, 'warn');
+
+    // OpenRouter has models so the main list is non-empty; Groq has none
+    mockResolveResults.set('openrouter', {
+      type: 'openrouter',
+      provider: createMockProvider({
+        name: 'OpenRouter',
+        isAvailable: vi.fn().mockResolvedValue(true),
+        listModels: vi.fn().mockResolvedValue([
+          makeModel('meta-llama/llama-3.1-8b-instruct', { provider: 'openrouter' }),
+        ]),
+      }),
+    });
+    mockResolveResults.set('groq', {
+      type: 'groq',
+      provider: createMockProvider({
+        name: 'Groq',
+        isAvailable: vi.fn().mockResolvedValue(true),
+        listModels: vi.fn().mockResolvedValue([]),
+      }),
+    });
+
+    // Main menu (1 = Auto, 2 = OpenRouter model, 3 = browse) → provider 2 (Groq) → cancel
+    vi.spyOn(inquirer, 'prompt')
+      .mockResolvedValueOnce({ selected: '3' }) // browse
+      .mockResolvedValueOnce({ selected: '2' }) // Groq
+      .mockResolvedValueOnce({ selected: '0' }); // cancel at provider list
+
+    const result = await showModelPicker(mockConfigManager);
+
+    expect(result).toBeNull();
+    expect(warnSpy).toHaveBeenCalledWith(expect.stringContaining('No models found for Groq'));
+  });
 });

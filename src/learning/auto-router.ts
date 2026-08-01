@@ -41,6 +41,7 @@ import { analyzeComplexity, type ComplexityLevel, type ModelCandidate, type Pref
 import { getTaskType, type TaskType } from './model-router.js';
 import { getBenchmarkRuns } from './benchmark.js';
 import { getAgentStats } from './agent-stats.js';
+import { getRouterBandit, type BanditOutcome } from './router-bandit.js';
 import type { ConfigManager } from '../config/manager.js';
 import type { ProviderPricing } from '../config/types.js';
 import { logger } from '../utils/logger.js';
@@ -55,6 +56,17 @@ export const AUTO_PROVIDER = 'auto';
 
 /** The five routing dimensions. */
 export type RoutingDimension = 'reasoning' | 'speed' | 'cost' | 'privacy' | 'reliability';
+
+/** High-level task intents the router can use to bias provider choice. */
+export type TaskIntent = 'planning' | 'coding' | 'verification' | 'security' | 'debugging' | 'architecture' | 'migration' | 'unknown';
+
+/** A lightweight task profile used to shape routing behavior. */
+export interface TaskProfile {
+  intent: TaskIntent;
+  requiresVerification: boolean;
+  escalationTarget?: string;
+  notes: string[];
+}
 
 /** Human labels for each dimension (used in explanations). */
 export const DIMENSION_LABELS: Record<RoutingDimension, string> = {
@@ -108,7 +120,55 @@ export interface AutoRouterOptions {
    * per-agent best-model stats (default: false).
    */
   useRuntimeStats?: boolean;
+  /**
+   * Enable Thompson-sampling bandit learning. Each provider's score is
+   * multiplied by a Beta draw from its complexity-bucketed prior, learned
+   * from `recordOutcome()`. Cold start = Beta(1,1) = deterministic behavior
+   * until outcomes accumulate (default: false).
+   */
+  useBandit?: boolean;
+  /**
+   * Hard constraint: max estimated USD cost per call. Providers whose
+   * typical-call cost exceeds this are ELIMINATED (not just scored lower).
+   */
+  maxCostUsd?: number;
+  /**
+   * Hard constraint: max latency score floor. Providers with speed below
+   * this value (0–1) are ELIMINATED. (Higher speed = faster.)
+   */
+  minSpeed?: number;
+  /**
+   * Hard constraint: min reasoning score. Providers with reasoning below
+   * this value (0–1) are ELIMINATED.
+   */
+  minReasoning?: number;
+  /**
+   * Rule overrides evaluated before scoring. First match wins.
+   */
+  rules?: RoutingRule[];
 }
+
+/**
+ * A routing rule that overrides scoring when its task pattern matches.
+ * Mirrors ruflo's `multi-model-router` rule-based mode, but evaluated against
+ * the task text before scoring so an explicit intent always wins.
+ */
+export interface RoutingRule {
+  /** Rule name (shown in explanations). */
+  name: string;
+  /** Regex (or string) matched against the task description (case-insensitive). */
+  pattern: string | RegExp;
+  /** Provider to force when the pattern matches. */
+  provider: string;
+  /** Optional model to force within that provider. */
+  model?: string;
+}
+
+/**
+ * How a decision was produced — the router's auditability field.
+ * Mirrors ruflo's `routedBy` (heuristic | hybrid | bandit-fallback).
+ */
+export type RoutedBy = 'heuristic' | 'rule' | 'bandit';
 
 /** Per-provider score breakdown. */
 export interface ScoredProvider {
@@ -123,12 +183,18 @@ export interface ScoredProvider {
   inCooldown: boolean;
   /** Why this provider ranked where it did */
   reason: string;
-}  /** The final auto-routing decision for a single task. */
+}
+
+/** The final auto-routing decision for a single task. */
 export interface AutoRouteResult {
   /** The agent type this decision is for */
   agentType: string;
   /** Detected task complexity */
   complexity: ComplexityLevel;
+  /** Task intent profile used to shape this decision */
+  taskProfile: TaskProfile;
+  /** Whether verification-aware escalation was applied for this route */
+  escalationApplied: boolean;
   /** Mapped task type (from ModelRouter) */
   taskType: TaskType;
   /** Selected provider */
@@ -145,6 +211,8 @@ export interface AutoRouteResult {
   fallbackChain: ModelCandidate[];
   /** Human-readable explanation */
   explanation: string;
+  /** How this decision was produced: heuristic | rule | bandit */
+  routedBy: RoutedBy;
 }
 
 // ─── Provider Capability Profiles ───────────────────────────────────────────
@@ -292,6 +360,68 @@ export function computeWeights(
 /**
  * Score a single provider against the effective weights.
  */
+export function analyzeTaskProfile(taskDescription: string): TaskProfile {
+  const text = (taskDescription || '').toLowerCase();
+
+  if (/migrat(e|ion)|upgrade|refactor|pipeline|deployment/.test(text)) {
+    return {
+      intent: 'migration',
+      requiresVerification: true,
+      escalationTarget: 'gemini',
+      notes: ['migration-related task detected'],
+    };
+  }
+
+  if (/architect|architecture|design|system|microservice|platform/.test(text) && !/outline|plan|roadmap|strategy/.test(text)) {
+    return {
+      intent: 'architecture',
+      requiresVerification: true,
+      escalationTarget: 'gemini',
+      notes: ['architecture-focused task detected'],
+    };
+  }
+
+  if (/verify|verification|validate|rollout|deploy|production|launch|release/.test(text)) {
+    return {
+      intent: 'verification',
+      requiresVerification: true,
+      escalationTarget: 'openrouter',
+      notes: ['verification-related task detected'],
+    };
+  }
+
+  if (/security|audit|vulnerab|threat|exploit/.test(text)) {
+    return {
+      intent: 'security',
+      requiresVerification: true,
+      escalationTarget: 'openrouter',
+      notes: ['security-sensitive task detected'],
+    };
+  }
+
+  if (/debug|bug|error|fix|trace/.test(text)) {
+    return {
+      intent: 'debugging',
+      requiresVerification: false,
+      notes: ['debugging task detected'],
+    };
+  }
+
+  if (/plan|outline|roadmap|strategy/.test(text)) {
+    return {
+      intent: 'planning',
+      requiresVerification: false,
+      notes: ['planning task detected'],
+    };
+  }
+
+  return {
+    intent: 'coding',
+    requiresVerification: false,
+    notes: ['general coding task detected'],
+  };
+}
+
 export function scoreProvider(
   provider: string,
   capabilities: ProviderCapabilities,
@@ -333,6 +463,31 @@ export class AutoModelRouter {
   }
 
   /**
+   * Default candidate providers — restricted to providers that have required
+   * credentials configured when a ConfigManager is available, so Auto routing
+   * NEVER picks a cloud provider with no API key (which would fail with a 401
+   * and undermine trust in auto model selection).
+   *
+   * Falls back to the full built-in list when nothing has credentials (or when
+   * no config manager is provided), so the router still produces a decision
+   * and the caller surfaces availability. Explicit `allowedProviders` always
+   * win over this filtering.
+   */
+  private getDefaultAllowedProviders(configManager?: ConfigManager): string[] {
+    if (!configManager || typeof configManager.hasRequiredCredentials !== 'function') {
+      return DEFAULT_AUTO_PROVIDERS;
+    }
+    const usable = DEFAULT_AUTO_PROVIDERS.filter((p) => {
+      try {
+        return configManager.hasRequiredCredentials(p);
+      } catch {
+        return false;
+      }
+    });
+    return usable.length > 0 ? usable : DEFAULT_AUTO_PROVIDERS;
+  }
+
+  /**
    * Resolve the optimal provider/model for a task.
    *
    * @param agentType — Agent type (e.g., 'writer', 'planner', 'chat')
@@ -349,12 +504,85 @@ export class AutoModelRouter {
   ): AutoRouteResult {
     const complexity = analyzeComplexity(taskDescription);
     const taskType = getTaskType(agentType);
+    const taskProfile = analyzeTaskProfile(taskDescription);
     const mode = options.preferenceMode || 'balanced';
-    const weights = computeWeights(complexity, mode, options.weights);
+    let weights = computeWeights(complexity, mode, options.weights);
+
+    if (taskProfile.requiresVerification) {
+      const boosted = {
+        ...weights,
+        reasoning: Math.min(1, weights.reasoning + 0.12),
+        reliability: Math.min(1, weights.reliability + 0.10),
+        cost: Math.max(0, weights.cost - 0.08),
+        speed: Math.max(0, weights.speed - 0.04),
+      };
+      const total = Object.values(boosted).reduce((a, b) => a + b, 0) || 1;
+      weights = {
+        reasoning: boosted.reasoning / total,
+        speed: boosted.speed / total,
+        cost: boosted.cost / total,
+        privacy: boosted.privacy / total,
+        reliability: boosted.reliability / total,
+      };
+    }
+
+    // ── Rule overrides: an explicit intent always wins over scoring ─────────
+    // Mirrors ruflo's `multi-model-router` rule mode — a regex/string pattern
+    // that matches the task forces a specific provider (and optionally model),
+    // short-circuiting scoring entirely.
+    if (options.rules?.length) {
+      for (const rule of options.rules) {
+        const re = typeof rule.pattern === 'string' ? new RegExp(rule.pattern, 'i') : rule.pattern;
+        if (re.test(taskDescription)) {
+          const provider = rule.provider;
+          const model = rule.model || this.resolveModel(provider, agentType, configManager);
+          // Note the forced decision so bandit outcome recording attributes
+          // successes/failures to the rule's provider — not a stale one from a
+          // previous task of the same agent type. Harmless when bandit is off
+          // (the orchestrator gates recording on routing.bandit === true).
+          getRouterBandit().noteDecision(agentType, provider);
+          if (options.verbose) {
+            logger.info(`  🛑 Routing rule '${rule.name}' matched → ${provider}/${model}`);
+          }
+          return {
+            agentType,
+            complexity,
+            taskProfile,
+            escalationApplied: false,
+            taskType,
+            provider,
+            model,
+            score: 1,
+            weights,
+            ranked: [{
+              provider,
+              score: 1,
+              dimensions: { reasoning: 1, speed: 1, cost: 1, privacy: 1, reliability: 1 },
+              weightTotal: 1,
+              inCooldown: false,
+              reason: `forced by routing rule '${rule.name}'`,
+            }],
+            fallbackChain: [],
+            explanation: `Routing rule '${rule.name}' matched task → ${provider}/${model}`,
+            routedBy: 'rule',
+          };
+        }
+      }
+    }
 
     const allowed = options.allowedProviders?.length
       ? options.allowedProviders
-      : DEFAULT_AUTO_PROVIDERS;
+      : this.getDefaultAllowedProviders(configManager);
+
+    let escalationApplied = false;
+    let allowedProviders = allowed;
+    if (taskProfile.requiresVerification && taskProfile.escalationTarget) {
+      const escalationTarget = taskProfile.escalationTarget;
+      if (allowedProviders.includes(escalationTarget)) {
+        allowedProviders = [escalationTarget, ...allowedProviders.filter((p) => p !== escalationTarget)];
+        escalationApplied = true;
+      }
+    }
 
     const cooldown = new Map<string, number>();
     for (const cb of options.circuitBreakerStatus || []) {
@@ -368,7 +596,7 @@ export class AutoModelRouter {
     }
 
     // Score every allowed provider
-    const scored: ScoredProvider[] = allowed.map((provider) => {
+    let scored: ScoredProvider[] = allowedProviders.map((provider) => {
       let caps = this.getCapabilities(provider);
       // Real pricing replaces the static cost capability
       if (options.useRealPricing !== false) {
@@ -385,16 +613,68 @@ export class AutoModelRouter {
       return { provider, score, dimensions, weightTotal, inCooldown, reason };
     });
 
+    // ── Hard constraints: ELIMINATE candidates that can't meet the ask ──────
+    // Mirrors ruflo's per-request maxCost/maxLatency/minQuality hard filters —
+    // violating providers are dropped (not just scored lower). If constraints
+    // eliminate everything, fall back to the full list rather than erroring.
+    if (
+      options.maxCostUsd !== undefined ||
+      options.minSpeed !== undefined ||
+      options.minReasoning !== undefined
+    ) {
+      const constrained = scored.filter((s) => {
+        if (options.maxCostUsd !== undefined) {
+          const costUsd = estimateCallCostUsd(s.provider, this.getProviderPricing(s.provider, configManager));
+          if (costUsd > options.maxCostUsd) return false;
+        }
+        if (options.minSpeed !== undefined) {
+          if (this.getCapabilities(s.provider).speed < options.minSpeed) return false;
+        }
+        if (options.minReasoning !== undefined) {
+          if (this.getCapabilities(s.provider).reasoning < options.minReasoning) return false;
+        }
+        return true;
+      });
+      if (constrained.length > 0) {
+        scored = constrained;
+      } else if (options.verbose) {
+        logger.warn('  ⚠️ Hard constraints eliminated every provider — falling back to full ranking');
+      }
+    }
+
     // Rank: in-cooldown providers sink below non-cooldown ones; ties broken by score
     scored.sort((a, b) => {
       if (a.inCooldown !== b.inCooldown) return a.inCooldown ? 1 : -1;
       return b.score - a.score;
     });
 
+    // ── Thompson-sampling bandit: multiply each score by a Beta draw ────────
+    // Mirrors ruflo's model-router: final score = deterministicScore × θ where
+    // θ ~ Beta(α, β) per complexity bucket. Cold start Beta(1,1) ≈ deterministic.
+    let routedBy: RoutedBy = 'heuristic';
+    if (options.useBandit) {
+      const bandit = getRouterBandit();
+      scored = scored.map((s) => ({
+        ...s,
+        score: bandit.sampleScore(s.provider, complexity, s.score),
+      }));
+      scored.sort((a, b) => {
+        if (a.inCooldown !== b.inCooldown) return a.inCooldown ? 1 : -1;
+        return b.score - a.score;
+      });
+      routedBy = 'bandit';
+    }
+
     // Pick the best candidate that is not in cooldown (unless ALL are in cooldown)
     const selected = scored.find((s) => !s.inCooldown) || scored[0];
     const provider = selected.provider;
     const model = this.resolveModel(provider, agentType, configManager);
+
+    // Note the decision so outcome recording (recordOutcome) can reward the
+    // provider that actually served the task.
+    if (options.useBandit) {
+      getRouterBandit().noteDecision(agentType, provider);
+    }
 
     // Build fallback chain (skip in-cooldown providers when alternatives exist)
     const fallbackChain: ModelCandidate[] = scored
@@ -415,7 +695,8 @@ export class AutoModelRouter {
       mode,
       model,
       weights,
-    );
+      taskProfile,
+    ) + (routedBy === 'bandit' ? ' | bandit-learned' : '');
 
     if (options.verbose) {
       logger.info(`  🤖 Auto routing: ${explanation}`);
@@ -424,6 +705,8 @@ export class AutoModelRouter {
     return {
       agentType,
       complexity,
+      taskProfile,
+      escalationApplied,
       taskType,
       provider,
       model,
@@ -432,7 +715,34 @@ export class AutoModelRouter {
       ranked: scored,
       fallbackChain,
       explanation,
+      routedBy,
     };
+  }
+
+  /**
+   * Record a real task outcome so the bandit can learn from actual results.
+   * Only meaningful when `useBandit` is enabled during resolve(); the reward
+   * is cost-adjusted — the provider's real pricing drives the α bump so a
+   * cheap provider's success is worth the most (mirrors ruflo's cost-adjusted
+   * reward table).
+   *
+   * @param agentType  The agent type the routed task belonged to
+   * @param taskDescription The task text (complexity bucket is re-derived)
+   * @param outcome    success | failure | escalated
+   * @param configManager Optional — used to resolve per-provider pricing
+   *                       overrides when computing the cost-adjusted reward
+   */
+  recordOutcome(
+    agentType: string,
+    taskDescription: string,
+    outcome: BanditOutcome,
+    configManager?: ConfigManager,
+  ): void {
+    const bandit = getRouterBandit();
+    const provider = bandit.getLastProvider(agentType);
+    if (!provider) return;
+    const costScore = computeCostScore(provider, this.getProviderPricing(provider, configManager));
+    bandit.recordOutcome(provider, taskDescription, outcome, costScore);
   }
 
   /**
@@ -589,6 +899,7 @@ export class AutoModelRouter {
     mode: PreferenceMode,
     model: string,
     weights: Record<RoutingDimension, number>,
+    taskProfile: TaskProfile,
   ): string {
     const complexityLabels: Record<ComplexityLevel, string> = {
       trivial: '🟢 trivial',
@@ -602,8 +913,9 @@ export class AutoModelRouter {
       .reduce((a, b) => (weights[b] > weights[a] ? b : a), 'reasoning' as RoutingDimension);
 
     const modeStr = mode !== 'balanced' ? ` | ${mode}` : '';
+    const profileSuffix = taskProfile.requiresVerification ? ' | verification' : '';
     return `${agentType} (${complexityLabels[complexity]}, ${taskType}) → ${selected.provider}/${model} ` +
-      `score ${selected.score.toFixed(2)} | dominant: ${DIMENSION_LABELS[dominant]}${modeStr}`;
+      `score ${selected.score.toFixed(2)} | dominant: ${DIMENSION_LABELS[dominant]}${modeStr}${profileSuffix}`;
   }
 }
 

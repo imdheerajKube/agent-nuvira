@@ -15,6 +15,7 @@ import { describe, it, expect, beforeEach, afterEach, beforeAll, afterAll, vi } 
 import { mkdtempSync, rmSync } from 'node:fs';
 import { join } from 'node:path';
 import { ModelCommand } from '../../src/cli/model.js';
+import { getRouterBandit, resetRouterBandit } from '../../src/learning/router-bandit.js';
 
 // ─── Isolate routing-history writes (explain records decisions) ────────────
 // The explain command now records routing decisions to the history store, which
@@ -121,5 +122,62 @@ describe('ModelCommand explain', () => {
     for (let i = 1; i < scores.length; i++) {
       expect(scores[i - 1]).toBeGreaterThanOrEqual(scores[i]);
     }
+  });
+});
+
+// ─── ModelCommand bandit ────────────────────────────────────────────────────
+
+describe('ModelCommand bandit', () => {
+  beforeEach(() => {
+    vi.spyOn(console, 'log').mockImplementation(() => {});
+    // Fresh singleton per test so state never leaks between assertions
+    resetRouterBandit();
+  });
+
+  afterEach(() => {
+    vi.restoreAllMocks();
+    resetRouterBandit();
+  });
+
+  it('JSON mode reports empty state when no learning data exists', () => {
+    const output = runCommand(['bandit', '--json']);
+    const parsed = JSON.parse(output) as Record<string, any>;
+    expect(parsed.version).toBe(1);
+    // `enabled` reflects the user's routing.bandit config — just verify the field exists
+    expect(typeof parsed.enabled).toBe('boolean');
+    expect(parsed.priors).toEqual({});
+    expect(Array.isArray(parsed.learningHistory)).toBe(true);
+  });
+
+  it('reset clears the persisted bandit state', () => {
+    getRouterBandit().recordOutcome('groq', 'implement a login form', 'success', 1.0);
+    getRouterBandit().recordOutcome('gemini', 'implement a login form', 'failure');
+
+    runCommand(['bandit', 'reset']);
+    // The runCommand helper accumulates ALL console.log calls since the test started,
+    // so clear the reset command's success message before capturing the JSON output.
+    vi.mocked(console.log).mockClear();
+
+    const output = runCommand(['bandit', '--json']);
+    const parsed = JSON.parse(output) as Record<string, any>;
+    expect(parsed.priors).toEqual({});
+    expect(parsed.learningHistory).toEqual([]);
+  });
+
+  it('renders the human table with provider rows', () => {
+    getRouterBandit().recordOutcome('groq', 'implement a login form', 'success', 1.0);
+
+    const output = runCommand(['bandit']);
+    expect(output).toContain('groq');
+    expect(output).toContain('Bandit');
+  });
+
+  it('rejects unknown actions with a helpful error', () => {
+    // logger.error writes to console.error, not console.log — capture both
+    const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
+    runCommand(['bandit', 'nonsense']);
+    const errOut = errorSpy.mock.calls.map((c) => c.map((v) => String(v)).join(' ')).join('\n');
+    expect(errOut).toContain('Unknown bandit action');
+    errorSpy.mockRestore();
   });
 });

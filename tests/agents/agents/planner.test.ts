@@ -238,6 +238,42 @@ describe('PlannerAgent', () => {
       expect(capturedPrompt).toContain('Similar Past Task');
       expect(capturedPrompt).toContain('senior software architect');
     });
+
+    it('should inject routing guidance into the prompt when verification intent is detected', async () => {
+      const context = {
+        goal: 'verify a bug fix',
+        workingDirectory: '/test',
+        taskPlan: [],
+        artifacts: [],
+        conversations: [],
+        fileChanges: [],
+        metadata: {
+          routingContext: {
+            taskProfile: {
+              intent: 'verification',
+              requiresVerification: true,
+              notes: ['Validate the result carefully'],
+            },
+            explanation: 'Verification-heavy task should include an explicit validation step.',
+            escalationApplied: true,
+          },
+        },
+      } as any;
+
+      let capturedPrompt = '';
+      const mockLLM = async (prompt: string) => {
+        capturedPrompt = prompt;
+        return JSON.stringify([
+          { id: 's1', description: 'Implement the fix', agentType: 'writer', dependsOn: [] },
+        ]);
+      };
+
+      await planner.execute(context, mockLLM as any);
+
+      expect(capturedPrompt).toContain('verification');
+      expect(capturedPrompt).toContain('validation step');
+      expect(capturedPrompt).toContain('reviewer');
+    });
   });
 
   describe('metadata', () => {

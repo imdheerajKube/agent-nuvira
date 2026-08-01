@@ -57,7 +57,11 @@ export function activate(context: vscode.ExtensionContext): void {
   cliManager = new CLIManager(config);
   agentPanel = new AgentPanel();
   chatHistory = new ChatHistoryProvider(context);
-  chatPanel = new ChatPanel(context, chatHistory, config);
+  chatPanel = new ChatPanel(context, chatHistory, config, cliManager);
+  // Refresh the status bar indicator when the model is switched from the chat panel
+  chatPanel.setOnModelChanged(() => {
+    void refreshModelStatusBar();
+  });
   diffViewer = new DiffViewer(context);
   diagnosticFixer = new DiagnosticFixProvider(cliManager, diffViewer);
   codeLensProvider = new CodeLensProvider(cliManager);
@@ -142,6 +146,7 @@ export function activate(context: vscode.ExtensionContext): void {
         cliManager = new CLIManager(newConfig);
         commandRegistrar?.updateConfig(newConfig);
         chatPanel?.updateConfig(newConfig);
+        chatPanel?.updateCliManager(cliManager);
         inlineSuggestProvider?.updateConfig(newConfig);
         codeLensProvider?.updateCliManager(cliManager);
         diagnosticFixer?.updateCliManager(cliManager);

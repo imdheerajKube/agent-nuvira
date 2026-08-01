@@ -1,5 +1,5 @@
 import type { ReactNode } from 'react';
-import type { DashboardData, RoutingHistoryEntry, RoutingInsights, RoutingUsage } from '../types';
+import type { BanditInsights, DashboardData, RoutingHistoryEntry, RoutingInsights, RoutingUsage } from '../types';
 
 // ─── Helpers ────────────────────────────────────────────────────────────────
 
@@ -345,6 +345,101 @@ function ProviderQualitySection({ routing }: { routing: RoutingInsights }) {
   );
 }
 
+// ─── Bandit Learning (Thompson-sampling priors) ────────────────────────────
+
+const BANDIT_BUCKETS = ['trivial', 'simple', 'moderate', 'complex', 'critical'];
+
+function banditWinColor(rate: number): string {
+  if (rate >= 0.7) return '#3fb950';
+  if (rate >= 0.45) return '#d29922';
+  return '#f85149';
+}
+
+function BanditSection({ bandit }: { bandit: BanditInsights }) {
+  const providers = Object.keys(bandit.priors).sort();
+  if (!bandit.enabled || providers.length === 0) return null;
+
+  const recentHistory = bandit.learningHistory.slice(-15).reverse();
+
+  return (
+    <SectionCard
+      icon="🎰"
+      title="Bandit Learning — Thompson-sampling priors"
+      subtitle="Beta(α, β) per provider × complexity bucket, learned from real task outcomes (routing.bandit = true). Higher expected win rate = more successful history."
+    >
+      <div style={{ overflowX: 'auto' }}>
+        <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 12 }}>
+          <thead>
+            <tr style={{ borderBottom: '1px solid #21262d', color: '#8b949e' }}>
+              <th style={{ padding: '8px 10px', textAlign: 'left', fontWeight: 500 }}>Provider</th>
+              {BANDIT_BUCKETS.map((b) => (
+                <th key={b} style={{ padding: '8px 10px', textAlign: 'center', fontWeight: 500 }}>
+                  {COMPLEXITY_ICONS[b] || '•'} {b}
+                </th>
+              ))}
+            </tr>
+          </thead>
+          <tbody>
+            {providers.map((provider) => (
+              <tr key={provider} style={{ borderBottom: '1px solid #21262d' }}>
+                <td style={{ padding: '8px 10px', color: '#e6edf3', whiteSpace: 'nowrap' }}>
+                  {providerIcon(provider)} {providerLabel(provider).split(' ')[0]}
+                </td>
+                {BANDIT_BUCKETS.map((bucket) => {
+                  const prior = bandit.priors[provider]?.[bucket];
+                  if (!prior || (prior.alpha === 0 && prior.beta === 0)) {
+                    return <td key={bucket} style={{ padding: '8px 10px', textAlign: 'center', color: '#6e7681' }}>·</td>;
+                  }
+                  return (
+                    <td key={bucket} style={{ padding: '8px 10px', textAlign: 'center' }}>
+                      <div style={{ fontSize: 13, fontWeight: 600, color: banditWinColor(prior.expectedWinRate), fontFamily: "'SFMono-Regular', Consolas, monospace" }}>
+                        {(prior.expectedWinRate * 100).toFixed(0)}%
+                      </div>
+                      <div style={{ fontSize: 10, color: '#8b949e', fontFamily: "'SFMono-Regular', Consolas, monospace" }}>
+                        α{prior.alpha} β{prior.beta}
+                      </div>
+                    </td>
+                  );
+                })}
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+
+      {recentHistory.length > 0 && (
+        <div style={{ marginTop: 16 }}>
+          <div style={{ fontSize: 12, color: '#8b949e', marginBottom: 8 }}>Recent learning history</div>
+          <div style={{ maxHeight: 180, overflowY: 'auto', paddingRight: 4 }}>
+            {recentHistory.map((h, i) => {
+              const icon = h.outcome === 'success' ? '✅' : h.outcome === 'escalated' ? '🔄' : '❌';
+              const ts = new Date(h.timestamp).toLocaleTimeString();
+              return (
+                <div key={i} style={{ display: 'flex', gap: 8, alignItems: 'center', padding: '5px 4px', borderBottom: '1px solid #21262d' }}>
+                  <span>{icon}</span>
+                  <span style={{ color: '#e6edf3', fontSize: 12, width: 110, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }} title={h.provider}>
+                    {h.provider}
+                  </span>
+                  <span style={{ fontSize: 11, color: '#6e7681', width: 80 }}>{h.complexity}</span>
+                  <span style={{ fontSize: 11, color: '#8b949e', fontFamily: "'SFMono-Regular', Consolas, monospace" }}>
+                    reward {h.reward.toFixed(2)}
+                  </span>
+                  <span style={{ fontSize: 11, color: '#6e7681', marginLeft: 'auto' }}>{ts}</span>
+                </div>
+              );
+            })}
+          </div>
+        </div>
+      )}
+
+      <div style={{ fontSize: 11, color: '#6e7681', marginTop: 12 }}>
+        Cold-start Beta(1,1) behaves like the heuristic router until outcomes accumulate.
+        Enable learning with <code style={{ color: '#58a6ff' }}>buff config set routing.bandit true</code>.
+      </div>
+    </SectionCard>
+  );
+}
+
 // ─── Best Model per Agent ───────────────────────────────────────────────────
 
 function BestModelsSection({ routing }: { routing: RoutingInsights }) {
@@ -406,22 +501,24 @@ export default function RoutingInsightsPanel({ data }: { data: DashboardData | n
     (routing.preference.length > 0 || routing.providers.length > 0 || routing.bestModels.length > 0);
   const hasUsage = !!routing?.usage?.total;
   const hasHistory = !!routing?.history?.length;
+  const hasBandit = !!routing?.bandit?.enabled;
 
   return (
     <>
       <h2 className="section-title">🤖 Auto Routing Insights</h2>
       <p className="section-description">
         Which providers and models the Auto router prefers — from real pricing, benchmark
-        quality, and per-agent success stats. Run <code>buff benchmark</code> and use
-        Auto routing to build this up over time.
+        quality, per-agent success stats, and the Thompson-sampling bandit. Run{' '}
+        <code>buff benchmark</code> and use Auto routing to build this up over time.
       </p>
 
-      {!hasAny && !hasUsage && !hasHistory ? (
+      {!hasAny && !hasUsage && !hasHistory && !hasBandit ? (
         <EmptyNote />
       ) : (
         <>
           {hasUsage && <UsageSection usage={routing!.usage!} />}
           {hasHistory && <AuditTimelineSection history={routing!.history!} />}
+          {hasBandit && <BanditSection bandit={routing!.bandit!} />}
           <PreferenceSection routing={routing!} />
           <ProviderQualitySection routing={routing!} />
           <BestModelsSection routing={routing!} />
