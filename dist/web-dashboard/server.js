@@ -750,6 +750,46 @@ function readRoutingInsights() {
         preference,
         usage: readRoutingUsage(),
         history: readRoutingHistory(),
+        bandit: readBanditData(),
+        updatedAt: Date.now(),
+    };
+}
+/**
+ * Read the learning-router bandit state — Beta(α, β) priors per provider ×
+ * complexity bucket plus recent learning history (from router-bandit.json).
+ * The dashboard renders this as a Thompson-sampling heatmap + history timeline.
+ */
+function readBanditData() {
+    const data = readJSON(join(MEMORY_DIR, 'router-bandit.json'));
+    if (!data || typeof data !== 'object') {
+        return { enabled: false, version: 1, priors: {}, learningHistory: [], updatedAt: Date.now() };
+    }
+    // Collapse priors into a provider → bucket → {alpha,beta,expectedWinRate} shape
+    const providers = new Set();
+    for (const bucket of Object.keys(data.priors || {})) {
+        for (const provider of Object.keys(data.priors?.[bucket] || {})) {
+            providers.add(provider);
+        }
+    }
+    const priors = {};
+    for (const provider of providers) {
+        priors[provider] = {};
+        for (const bucket of ['trivial', 'simple', 'moderate', 'complex', 'critical']) {
+            const prior = data.priors?.[bucket]?.[provider];
+            priors[provider][bucket] = prior
+                ? {
+                    alpha: Math.round(prior.alpha * 1000) / 1000,
+                    beta: Math.round(prior.beta * 1000) / 1000,
+                    expectedWinRate: Math.round((prior.alpha / (prior.alpha + prior.beta)) * 1000) / 1000,
+                }
+                : { alpha: 0, beta: 0, expectedWinRate: 0 };
+        }
+    }
+    return {
+        enabled: Object.keys(priors).length > 0 || (data.learningHistory?.length || 0) > 0,
+        version: data.version ?? 1,
+        priors,
+        learningHistory: (data.learningHistory || []).slice(-50),
         updatedAt: Date.now(),
     };
 }

@@ -20,6 +20,8 @@ export type { SecurityFinding, ScanResult } from './security/scanner.js';
 export { runEvalSuite, runEvalTask, scaffoldWorkspace, runHiddenTest, computeEditAccuracy, scoreEvalMetrics, computeEvalSummary, formatEvalReport, formatEvalJSON, formatEvalMarkdown, formatEvalScoreRules, getEvalTasks, getEvalTask, getEvalRuns, getLatestEvalRun, clearEvals, EVAL_SCORE_WEIGHTS, IDEAL_TIME_TO_FIX_MS, } from './learning/eval-framework.js';
 export type { EvalTask, EvalMetrics, EvalResult, EvalRun, EvalSummary, EvalCategory, RunEvalOptions, } from './learning/eval-framework.js';
 export { EvalCommand } from './cli/eval.js';
+export { RouterBandit, getRouterBandit, resetRouterBandit, sampleBeta, sampleGamma, costAdjustedSuccessReward, COMPLEXITY_BUCKETS, } from './learning/router-bandit.js';
+export type { BanditOutcome, BetaPrior, RouterBanditState, } from './learning/router-bandit.js';
 export { SelfImprover, getSelfImprover } from './learning/self-improver.js';
 export { AgentStats, getAgentStats } from './learning/agent-stats.js';
 export type { AgentPerformance, AgentStatsData } from './learning/agent-stats.js';

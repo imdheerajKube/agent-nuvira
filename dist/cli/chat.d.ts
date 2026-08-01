@@ -1,5 +1,12 @@
 import { Command } from 'commander';
 import { BaseCommand } from './commands.js';
+/**
+ * Execute the multi-agent pipeline for a user's goal.
+ */
+export declare function runDeveloperMode(goal: string, configManager: any, options?: {
+    provider?: string;
+    model?: string;
+}): Promise<void>;
 export declare class ChatCommand extends BaseCommand {
     private devModeAuto;
     create(): Command;

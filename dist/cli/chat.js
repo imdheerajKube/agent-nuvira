@@ -145,7 +145,17 @@ async function promptDeveloperMode(message) {
 /**
  * Execute the multi-agent pipeline for a user's goal.
  */
-async function runDeveloperMode(goal, configManager, options) {
+export async function runDeveloperMode(goal, configManager, options) {
+    // Guard: never hand a literal 'auto' provider/model to the orchestrator.
+    // Resolve via the AutoModelRouter so developer mode uses a real model.
+    let provider = options?.provider;
+    let model = options?.model;
+    if (isAutoProvider(provider) || isAutoModel(model)) {
+        const decision = getAutoRouter().resolve('chat', goal, { verbose: true, useRuntimeStats: true }, configManager);
+        const resolved = resolveProvider(configManager, decision.provider);
+        provider = resolved.type;
+        model = decision.model;
+    }
     const spinner = ora({
         text: '📋 Planning...',
         spinner: 'dots',
@@ -153,8 +163,8 @@ async function runDeveloperMode(goal, configManager, options) {
     try {
         const orchestrator = new Orchestrator(configManager);
         const result = await orchestrator.execute(goal, {
-            provider: options?.provider,
-            model: options?.model,
+            provider,
+            model,
             verbose: true,
             spinner: {
                 stop: () => spinner.stop(),
@@ -282,6 +292,17 @@ export class ChatCommand extends BaseCommand {
                 }
                 continue;
             }
+            // ── Auto routing: pick the best provider/model for this message ──────
+            // Runs BEFORE the dev-mode check so a creation request in auto mode uses
+            // the routed provider/model — never a literal 'auto' or a stale default.
+            if (autoMode) {
+                const routed = this.routeMessageAuto(message);
+                type = routed.type;
+                provider = routed.provider;
+                effectiveModel = routed.model;
+                effectiveModelForHistory = effectiveModel;
+                model = effectiveModel;
+            }
             if (hasCreationIntent(message) || this.devModeAuto) {
                 const proceed = this.devModeAuto || await promptDeveloperMode(message);
                 if (proceed) {
@@ -302,15 +323,6 @@ export class ChatCommand extends BaseCommand {
                 }
             }
             history.push({ role: 'user', content: message });
-            // ── Auto routing: pick the best provider/model for this message ──────
-            if (autoMode) {
-                const routed = this.routeMessageAuto(message);
-                type = routed.type;
-                provider = routed.provider;
-                effectiveModel = routed.model;
-                effectiveModelForHistory = effectiveModel;
-                model = effectiveModel;
-            }
             const contextStr = history.map((h) => `${h.role}: ${h.content}`).join('\n');
             const cache = getCache();
             if (cacheEnabled) {
@@ -533,7 +545,15 @@ export class ChatCommand extends BaseCommand {
      * active session state.
      */
     routeMessageAuto(message) {
-        const decision = getAutoRouter().resolve('chat', message, { verbose: process.env.BUFF_DEBUG === 'true', useRuntimeStats: true }, this.configManager);
+        const routing = this.configManager.getAll().routing || {};
+        const decision = getAutoRouter().resolve('chat', message, {
+            verbose: process.env.BUFF_DEBUG === 'true',
+            useRuntimeStats: true,
+            useBandit: routing.bandit === true,
+            maxCostUsd: routing.maxCostUsd,
+            minSpeed: routing.minSpeed,
+            minReasoning: routing.minReasoning,
+        }, this.configManager);
         // Record for the dashboard usage stats + audit trail
         recordRoutingDecision({
             source: 'chat',

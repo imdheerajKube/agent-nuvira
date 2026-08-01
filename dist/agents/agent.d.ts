@@ -16,6 +16,14 @@ export interface TaskStep {
     dependsOn: string[];
     status: TaskStatus;
     result?: string;
+    routingHints?: {
+        effectiveAgentType?: string;
+        followUpAgentType?: string;
+        runSerially?: boolean;
+        useRepair?: boolean;
+        maxRepairs?: number;
+        verificationPass?: boolean;
+    };
 }
 /** A file artifact discovered or produced during agent execution */
 export interface Artifact {

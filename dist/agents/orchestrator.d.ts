@@ -161,6 +161,8 @@ export declare class Orchestrator {
     private eventBus;
     /** The report module for generating structured execution reports */
     private reportModule;
+    /** Optional routing decision overrides keyed by agent type */
+    private routingDecisionOverrides;
     /** Execution telemetry accumulator for the current pipeline */
     private stats;
     constructor(configManager?: ConfigManager, moduleRegistry?: ModuleRegistry, eventBus?: EventBus, reportModule?: ReportModule);
@@ -176,12 +178,16 @@ export declare class Orchestrator {
      */
     private createRateLimitHandler;
     private executeSingleTask;
+    private getExecutionStrategy;
     /**
      * Create an LLM call function routed by the AutoModelRouter for a task.
      * Uses the task description for complexity analysis and resolves the best
      * provider/model per agent type.
      */
+    private resolveAutoRoutingDecision;
     private createAutoRoutedLLM;
+    private createAutoRoutedLLMFromDecision;
+    private applyRoutingPlanAdjustments;
     /**
      * Run the ContextPruner on the vault context.
      * Only prunes when the context exceeds the configured threshold.

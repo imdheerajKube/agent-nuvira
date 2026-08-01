@@ -24,8 +24,11 @@ import inquirer from 'inquirer';
 import { Orchestrator } from '../../src/agents/orchestrator.js';
 import type { OrchestratorOptions } from '../../src/agents/orchestrator.js';
 import type { OnRateLimit, RateLimitInfo } from '../../src/agents/agent.js';
+import { ContextVault } from '../../src/agents/context-vault.js';
 import type { PickerResult } from '../../src/cli/model-picker.js';
 import { logger } from '../../src/utils/logger.js';
+import { ProviderFactory } from '../../src/inference/factory.js';
+import { ConfigManager } from '../../src/config/manager.js';
 
 // ─── Module-level mocks ─────────────────────────────────────────────────────
 
@@ -65,6 +68,16 @@ vi.mock('../../src/agents/agents/writer.js', () => ({
   },
 }));
 
+// Mock ReviewerAgent to avoid real review execution in routing-hints tests
+const mockReviewerExecute = vi.hoisted(() => vi.fn());
+vi.mock('../../src/agents/agents/reviewer.js', () => ({
+  ReviewerAgent: class {
+    name = 'Reviewer';
+    description = 'Reviews code';
+    execute = mockReviewerExecute;
+  },
+}));
+
 // Mock PlannerAgent to return success (avoid real planning)
 const mockPlannerExecute = vi.hoisted(() => vi.fn());
 vi.mock('../../src/agents/agents/planner.js', () => ({
@@ -95,6 +108,154 @@ function makeRateLimitInfo(overrides: Partial<RateLimitInfo> = {}): RateLimitInf
 }
 
 // ─── Tests ──────────────────────────────────────────────────────────────────
+
+describe('Orchestrator — routing-aware planning', () => {
+  it('insert a verification step when routing indicates verification-heavy work', () => {
+    const orchestrator = new Orchestrator();
+    const vault = new ContextVault('Verify a bug fix', '/tmp');
+    vault.setTaskPlan([
+      { id: 'step-1', description: 'Implement the fix', agentType: 'writer', dependsOn: [], status: 'pending' },
+    ]);
+
+    (orchestrator as any).applyRoutingPlanAdjustments(vault, {
+      taskProfile: {
+        intent: 'verification',
+        requiresVerification: true,
+        notes: ['Validate the result carefully'],
+      },
+      explanation: 'Verification-heavy task should include an explicit validation step.',
+      escalationApplied: true,
+    });
+
+    expect(vault.context.taskPlan).toHaveLength(2);
+    expect(vault.context.taskPlan[1].agentType).toBe('reviewer');
+    expect(vault.context.taskPlan[1].dependsOn).toEqual(['step-1']);
+  });
+});
+
+describe('Orchestrator — execution strategy', () => {
+  it('should shift writer tasks to reviewer and run serially for verification-heavy routing', () => {
+    const orchestrator = new Orchestrator();
+    const strategy = (orchestrator as any).getExecutionStrategy(
+      { agentType: 'writer', description: 'implement a bug fix' },
+      {
+        taskProfile: {
+          intent: 'verification',
+          requiresVerification: true,
+        },
+      },
+    );
+
+    expect(strategy.effectiveAgentType).toBe('reviewer');
+    expect(strategy.runSerially).toBe(true);
+    expect(strategy.useRepair).toBe(true);
+    expect(strategy.followUpAgentType).toBe('reviewer');
+  });
+});
+
+describe('Orchestrator — routing hints on task plan', () => {
+  let orchestrator: Orchestrator;
+
+  beforeEach(() => {
+    orchestrator = new Orchestrator();
+    mockWriterExecute.mockClear();
+    mockReviewerExecute.mockClear();
+    // Prevent applyFileChanges from writing to disk during writer/debugger steps
+    vi.spyOn(orchestrator as any, 'applyFileChanges').mockReturnValue(0);
+    // Suppress logger output during tests
+    vi.spyOn(logger, 'info').mockImplementation(() => {});
+    vi.spyOn(logger, 'success').mockImplementation(() => {});
+    vi.spyOn(logger, 'warn').mockImplementation(() => {});
+    vi.spyOn(logger, 'highlight').mockImplementation(() => {});
+    vi.spyOn(logger, 'error').mockImplementation(() => {});
+    vi.spyOn(logger, 'debug').mockImplementation(() => {});
+  });
+
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  it('should set routingHints on the executed task plan step', async () => {
+    const vault = new ContextVault('Write code', '/tmp');
+    vault.setTaskPlan([
+      { id: 'step-1', agentType: 'writer', description: 'Write code', dependsOn: [], status: 'pending' as const },
+    ]);
+
+    mockWriterExecute.mockImplementation(async (context: any) => {
+      context.fileChanges.push({
+        path: 'src/test.ts',
+        originalContent: 'const x = 1;\n',
+        newContent: 'const x = 2;\n',
+        status: 'modified',
+      });
+      return { success: true, summary: 'Wrote code' };
+    });
+
+    const mockLLM = vi.fn().mockResolvedValue('mock response');
+    const agentResults: any[] = [];
+
+    await (orchestrator as any).executeSingleTask(
+      vault.context.taskPlan[0],
+      vault,
+      {},
+      agentResults,
+      [],
+      mockLLM,
+    );
+
+    // The task step in the plan must carry the routing hints the orchestrator computed
+    const step = vault.context.taskPlan[0];
+    expect(step.routingHints).toBeDefined();
+    expect(step.routingHints).toEqual({
+      effectiveAgentType: 'writer',
+      runSerially: false,
+      useRepair: false,
+      maxRepairs: 3,
+      verificationPass: false,
+    });
+    expect(agentResults).toHaveLength(1);
+    expect(agentResults[0].agent).toBe('writer');
+  });
+
+  it('should reflect verification-heavy routing in routingHints (writer → reviewer remap)', async () => {
+    const vault = new ContextVault('Verify a fix', '/tmp');
+    vault.setTaskPlan([
+      { id: 'step-1', agentType: 'writer', description: 'Apply fix', dependsOn: [], status: 'pending' as const },
+    ]);
+    vault.setMeta('routingContext', {
+      taskProfile: { intent: 'verification', requiresVerification: true },
+    });
+
+    mockReviewerExecute.mockImplementation(async () => ({ success: true, summary: 'Reviewed' }));
+    mockWriterExecute.mockImplementation(async () => ({ success: true, summary: 'unexpected' }));
+
+    const mockLLM = vi.fn().mockResolvedValue('mock response');
+    const agentResults: any[] = [];
+
+    await (orchestrator as any).executeSingleTask(
+      vault.context.taskPlan[0],
+      vault,
+      {},
+      agentResults,
+      [],
+      mockLLM,
+    );
+
+    const step = vault.context.taskPlan[0];
+    expect(step.routingHints).toEqual({
+      effectiveAgentType: 'reviewer',
+      followUpAgentType: 'reviewer',
+      runSerially: true,
+      useRepair: true,
+      maxRepairs: 4,
+      verificationPass: true,
+    });
+    // The reviewer (not the writer) actually executed
+    expect(agentResults[0].agent).toBe('reviewer');
+    expect(mockReviewerExecute).toHaveBeenCalledTimes(1);
+    expect(mockWriterExecute).not.toHaveBeenCalled();
+  });
+});
 
 describe('Orchestrator — createRateLimitHandler', () => {
   let orchestrator: Orchestrator;
@@ -635,6 +796,150 @@ describe('Orchestrator — review mode integration', () => {
 
     expect(infoSpy).not.toHaveBeenCalledWith(
       expect.stringContaining('review-mock-1234'),
+    );
+  });
+});
+
+// ─── Auto model resolution ──────────────────────────────────────────────────
+// Regression tests for the "no auto model" error: when the user selects Auto
+// (`-m auto` / `buff model switch auto` / `--auto-route`), a literal 'auto'
+// must NEVER reach a real provider API. The orchestrator resolves it via the
+// AutoModelRouter (per-task) or the provider's configured model (fallback).
+
+describe('Orchestrator — auto model resolution', () => {
+  let orchestrator: Orchestrator;
+
+  beforeEach(() => {
+    orchestrator = new Orchestrator();
+  });
+
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  /** Local copy of the rate-limit handler helper (scoped to its own describe). */
+  function getHandler(
+    options: OrchestratorOptions = {},
+    model?: string,
+  ): OnRateLimit | undefined {
+    return (orchestrator as any).createRateLimitHandler.call(orchestrator, options, model);
+  }
+
+  const autoSingleWriterPlan = [{
+    id: 'step-auto',
+    agentType: 'writer',
+    description: 'Write test file',
+    dependsOn: [],
+    status: 'pending' as const,
+  }];
+
+  it('should never pass model "auto" to the provider API from createLLMProvider', async () => {
+    const cm = new ConfigManager();
+    const orch = new Orchestrator(cm);
+
+    // Replace the real provider with a fake that records generate() options
+    const generate = vi.fn().mockResolvedValue('mock response');
+    const fakeProvider = {
+      name: 'Fake',
+      generate,
+      isAvailable: vi.fn().mockResolvedValue(true),
+      listModels: vi.fn().mockResolvedValue([]),
+      generateStream: vi.fn(),
+      getInfo: vi.fn().mockReturnValue('fake'),
+    };
+    vi.spyOn(ProviderFactory, 'createProvider').mockReturnValue(fakeProvider as any);
+
+    const callLLM = (orch as any).createLLMProvider({ provider: 'local', model: 'auto' });
+    await callLLM('Write a function to sort an array');
+
+    expect(generate).toHaveBeenCalledTimes(1);
+    const options = generate.mock.calls[0][1];
+    expect(options.model).not.toBe('auto');
+    // Falls back to the provider's configured model (local default is 'llama2')
+    expect(options.model).toBe('llama2');
+  });
+
+  it('should never pass provider "auto" to ProviderFactory when createLLMProvider is called', async () => {
+    const cm = new ConfigManager();
+    const orch = new Orchestrator(cm);
+
+    const createSpy = vi.spyOn(ProviderFactory, 'createProvider');
+    // createLLMProvider resolves provider 'auto' to the configured default
+    (orch as any).createLLMProvider({ provider: 'auto', model: 'llama3' });
+
+    expect(createSpy).toHaveBeenCalledTimes(1);
+    expect(createSpy.mock.calls[0][0]).not.toBe('auto');
+    // Should resolve to the actual configured default provider
+    expect(createSpy.mock.calls[0][0]).toBe(cm.getAll().defaultProvider);
+  });
+
+  it('should auto-route the planner/default LLM when model is auto', async () => {
+    const cm = new ConfigManager();
+    const orch = new Orchestrator(cm);
+
+    // Route through the AutoModelRouter (never hand 'auto' to a real API)
+    const autoRouteSpy = vi
+      .spyOn(orch as any, 'createAutoRoutedLLM')
+      .mockReturnValue(async () => 'routed');
+    // Prevent writes to disk from the writer mock
+    vi.spyOn(orch as any, 'applyFileChanges').mockReturnValue(0);
+    vi.spyOn(logger, 'info').mockImplementation(() => {});
+    vi.spyOn(logger, 'success').mockImplementation(() => {});
+    vi.spyOn(logger, 'warn').mockImplementation(() => {});
+    vi.spyOn(logger, 'highlight').mockImplementation(() => {});
+    vi.spyOn(logger, 'error').mockImplementation(() => {});
+    vi.spyOn(logger, 'debug').mockImplementation(() => {});
+
+    mockWriterExecute.mockImplementation(async (context: any) => {
+      context.fileChanges.push({
+        path: 'src/test.ts',
+        originalContent: 'const x = 1;\n',
+        newContent: 'const x = 2;\n',
+        status: 'modified',
+      });
+      return { success: true, summary: 'Modified test.ts' };
+    });
+
+    const result = await orch.execute('test goal', {
+      provider: 'auto',
+      model: 'auto',
+      prefillPlan: autoSingleWriterPlan,
+    });
+
+    expect(result.success).toBe(true);
+    // The planner/default LLM must be routed via the AutoModelRouter
+    expect(autoRouteSpy).toHaveBeenCalledWith(
+      expect.objectContaining({ agentType: 'planner' }),
+      expect.objectContaining({ provider: 'auto', model: 'auto' }),
+    );
+  });
+
+  it('should route via createAutoRoutedLLM when auto is picked in rate-limit switch', async () => {
+    Object.defineProperty(process.stdout, 'isTTY', {
+      value: true,
+      configurable: true,
+    });
+
+    vi.spyOn(inquirer, 'prompt').mockResolvedValue({ action: 'switch-model' });
+    mockShowModelPicker.mockResolvedValue({
+      provider: 'auto',
+      model: 'auto',
+    } as PickerResult);
+
+    const autoRouteSpy = vi
+      .spyOn(orchestrator as any, 'createAutoRoutedLLM')
+      .mockReturnValue(async () => 'routed');
+    const createSpy = vi.spyOn(orchestrator as any, 'createLLMProvider');
+
+    const handler = getHandler({ provider: 'groq' })!;
+    const result = await handler(makeRateLimitInfo());
+
+    expect(result.action).toBe('switch-model');
+    expect(typeof (result as any).callLLM).toBe('function');
+    // Auto pick → routed via router, NOT handed as literal 'auto' to createLLMProvider
+    expect(autoRouteSpy).toHaveBeenCalled();
+    expect(createSpy).not.toHaveBeenCalledWith(
+      expect.objectContaining({ provider: 'auto', model: 'auto' }),
     );
   });
 });

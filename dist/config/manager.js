@@ -181,6 +181,12 @@ export class ConfigManager {
                 this.config.pricing[provider] = { ...(this.config.pricing[provider] || {}), ...pricing };
             }
         }
+        if (config.routing) {
+            this.config.routing = {
+                ...(this.config.routing || {}),
+                ...config.routing,
+            };
+        }
         writeFileSync(this.configPath, JSON.stringify(this.config, null, 2), 'utf-8');
     }
     /**

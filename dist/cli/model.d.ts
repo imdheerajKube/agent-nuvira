@@ -79,6 +79,9 @@ export declare class ModelCommand extends BaseCommand {
     private renderRoutingDecision;
     private showRecommendations;
     private checkHealth;
+    private showBandit;
+    /** Build a machine-readable bandit snapshot for scripting/CI. */
+    private buildBanditJSON;
     private promptSwitchIfWanted;
 }
 //# sourceMappingURL=model.d.ts.map

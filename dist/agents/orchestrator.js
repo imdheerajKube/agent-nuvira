@@ -83,7 +83,6 @@ function createAgent(agentType, registry) {
         return null;
     }
 }
-// ─── Orchestrator ───────────────────────────────────────────────────────────
 export class Orchestrator {
     configManager;
     /** The module registry used for agent lookups */
@@ -92,6 +91,8 @@ export class Orchestrator {
     eventBus;
     /** The report module for generating structured execution reports */
     reportModule;
+    /** Optional routing decision overrides keyed by agent type */
+    routingDecisionOverrides = new Map();
     /** Execution telemetry accumulator for the current pipeline */
     stats = {
         llmCalls: 0,
@@ -131,7 +132,29 @@ export class Orchestrator {
             dependencyInstallSucceeded: false,
             rollbackCount: 0,
         };
-        const defaultCallLLM = this.createLLMProvider(options);
+        // Auto routing: when the user selected auto (`-m auto` / `buff model switch auto`
+        // / `--auto-route`), the planner/memory LLM must ALSO be routed through the
+        // AutoModelRouter so no call ever sends a literal 'auto' model to a real API.
+        // Matches executeSingleTask's rule: an explicit --model always wins.
+        const autoRoutingActive = (options.autoRouteModels === true && !options.model) ||
+            isAutoModel(options.model) || isAutoProvider(options.provider);
+        const plannerRoutingDecision = autoRoutingActive
+            ? this.resolveAutoRoutingDecision({ agentType: 'planner', description: goal }, options)
+            : undefined;
+        if (plannerRoutingDecision) {
+            this.routingDecisionOverrides.set('planner', plannerRoutingDecision);
+            vault.setMeta('routingContext', {
+                taskProfile: plannerRoutingDecision.taskProfile,
+                explanation: plannerRoutingDecision.explanation,
+                escalationApplied: plannerRoutingDecision.escalationApplied,
+                complexity: plannerRoutingDecision.complexity,
+                provider: plannerRoutingDecision.provider,
+                model: plannerRoutingDecision.model,
+            });
+        }
+        const defaultCallLLM = autoRoutingActive
+            ? this.createAutoRoutedLLM({ agentType: 'planner', description: goal }, options)
+            : this.createLLMProvider(options);
         const agentResults = [];
         const contextFiles = [];
         // ── Emit: pipeline started event ───────────────────────────────────
@@ -292,6 +315,8 @@ export class Orchestrator {
                     error: 'Planner did not produce a valid task plan',
                 });
             }
+            const routingContext = vault.getMeta('routingContext');
+            this.applyRoutingPlanAdjustments(vault, routingContext);
             if (options.verbose) {
                 logger.info(`   Created ${vault.context.taskPlan.length} task steps`);
                 for (const step of vault.context.taskPlan) {
@@ -335,6 +360,11 @@ export class Orchestrator {
             if (vault.isComplete)
                 break;
             const runnableTasks = vault.getRunnableTasks();
+            const routingContext = vault.getMeta('routingContext');
+            const taskStrategies = runnableTasks.map((task) => ({
+                task,
+                strategy: this.getExecutionStrategy(task, routingContext),
+            }));
             // Prune context before executing the next batch of tasks
             this.pruneContext(vault, options);
             // Set Docker sandbox flag so RunnerAgent and TesterAgent know to use containers
@@ -355,7 +385,7 @@ export class Orchestrator {
             // Runner and sandbox agents need exclusive access (no parallel)
             const exclusiveAgentTypes = ['tester', 'debugger', 'runner'];
             const canParallel = runnableTasks.length > 1 &&
-                !runnableTasks.some((t) => exclusiveAgentTypes.includes(t.agentType));
+                !taskStrategies.some(({ task, strategy }) => strategy.runSerially || exclusiveAgentTypes.includes(task.agentType));
             if (canParallel) {
                 for (const task of runnableTasks) {
                     vault.updateTaskStatus(task.id, 'running');
@@ -363,12 +393,12 @@ export class Orchestrator {
                 if (options.verbose) {
                     logger.info(`\n   ⚡ Running ${runnableTasks.length} tasks in parallel...`);
                 }
-                const taskPromises = runnableTasks.map((task) => this.executeSingleTask(task, vault, options, agentResults, contextFiles, defaultCallLLM));
+                const taskPromises = taskStrategies.map(({ task, strategy }) => this.executeSingleTask(task, vault, options, agentResults, contextFiles, defaultCallLLM, strategy));
                 await Promise.all(taskPromises);
             }
             else {
-                for (const task of runnableTasks) {
-                    await this.executeSingleTask(task, vault, options, agentResults, contextFiles, defaultCallLLM);
+                for (const { task, strategy } of taskStrategies) {
+                    await this.executeSingleTask(task, vault, options, agentResults, contextFiles, defaultCallLLM, strategy);
                 }
             }
         }
@@ -542,9 +572,13 @@ export class Orchestrator {
                 });
                 throw new Error(`Injection guardrail blocked LLM call:\n${report}`);
             }
+            // Guard: 'auto' is not a real model — never send it to a provider API.
+            // Resolve it to the provider's configured model (or 'default') so
+            // planner/memory/rate-limit-switch calls never crash with "no auto model".
+            const requestedModel = options.model || inferenceOptions?.model || config.model;
             const mergedOptions = {
                 ...inferenceOptions,
-                model: options.model || inferenceOptions?.model || config.model,
+                model: isAutoModel(requestedModel) ? (config.model || 'default') : requestedModel,
                 temperature: inferenceOptions?.temperature ?? config.temperature ?? 0.7,
                 maxTokens: inferenceOptions?.maxTokens ?? config.maxTokens ?? 4096,
             };
@@ -634,13 +668,21 @@ export class Orchestrator {
                 }
                 console.log('');
                 logger.info(`Switching to model: ${picked.model} (provider: ${picked.provider})`);
-                // Create a new LLM provider with the switched model
-                const newOptions = {
-                    ...options,
-                    provider: picked.provider,
-                    model: picked.model,
-                };
-                const newCallLLM = this.createLLMProvider(newOptions);
+                let newCallLLM;
+                if (picked.provider === 'auto' || isAutoModel(picked.model)) {
+                    // Auto picked — route through the AutoModelRouter for this agent
+                    // instead of handing the literal 'auto' provider/model to a real API.
+                    newCallLLM = this.createAutoRoutedLLM({ agentType: info.agentName || 'chat', description: 'Rate-limit retry' }, options);
+                }
+                else {
+                    // Create a new LLM provider with the switched model
+                    const newOptions = {
+                        ...options,
+                        provider: picked.provider,
+                        model: picked.model,
+                    };
+                    newCallLLM = this.createLLMProvider(newOptions);
+                }
                 restartSpinner();
                 return { action: 'switch-model', callLLM: newCallLLM };
             }
@@ -649,14 +691,24 @@ export class Orchestrator {
             return { action: 'retry' };
         };
     }
-    async executeSingleTask(task, vault, options, agentResults, contextFiles, defaultCallLLM, stats = this.stats) {
-        const maxRepairs = options.maxRepairs ?? 3;
+    async executeSingleTask(task, vault, options, agentResults, contextFiles, defaultCallLLM, executionStrategy, stats = this.stats) {
+        const routingContext = vault.getMeta('routingContext');
+        const strategy = executionStrategy ?? this.getExecutionStrategy(task, routingContext);
+        task.routingHints = {
+            effectiveAgentType: strategy.effectiveAgentType,
+            followUpAgentType: strategy.followUpAgentType,
+            runSerially: strategy.runSerially,
+            useRepair: strategy.useRepair,
+            maxRepairs: strategy.maxRepairs,
+            verificationPass: strategy.verificationPass,
+        };
+        const maxRepairs = strategy.maxRepairs || options.maxRepairs || 3;
         const repairMode = (options.repairMode ?? 'auto');
         // If repairs are enabled, set up the error-repair engine. Runner/tester/debugger
         // have their own retry logic, but the repair engine adds the crucial
         // 'alternative-approach' strategy — so a failing runner/tester tries a
         // fundamentally different approach instead of immediately declaring failure.
-        const useRepair = maxRepairs > 0 && repairMode !== 'off';
+        const useRepair = strategy.useRepair || (maxRepairs > 0 && repairMode !== 'off');
         vault.updateTaskStatus(task.id, 'running');
         await tryUpdateDAGNode(task.id, { status: 'running' });
         this.eventBus.emit(EventNames.ORCHESTRATOR_TASK_STARTED, {
@@ -682,9 +734,10 @@ export class Orchestrator {
             // `--model` always wins over auto routing.
             const autoRouting = (options.autoRouteModels === true && !options.model) ||
                 isAutoModel(options.model) || isAutoProvider(options.provider);
-            const agentModel = options.model || options.agentModels?.[task.agentType];
+            const effectiveAgentType = strategy.effectiveAgentType || task.agentType;
+            const agentModel = options.model || options.agentModels?.[effectiveAgentType] || options.agentModels?.[task.agentType];
             const agentCallLLM = autoRouting
-                ? this.createAutoRoutedLLM(task, options)
+                ? this.createAutoRoutedLLM({ agentType: effectiveAgentType, description: task.description }, options)
                 : agentModel
                     ? this.createLLMProvider({ ...options, model: agentModel })
                     : defaultCallLLM;
@@ -714,13 +767,13 @@ export class Orchestrator {
                 }
                 return;
             }
-            const agent = createAgent(task.agentType, this.moduleRegistry);
+            const agent = createAgent(effectiveAgentType, this.moduleRegistry);
             if (!agent) {
-                vault.updateTaskStatus(task.id, 'failed', `Unknown agent type: ${task.agentType}`);
+                vault.updateTaskStatus(task.id, 'failed', `Unknown agent type: ${effectiveAgentType}`);
                 agentResults.push({
-                    agent: task.agentType,
+                    agent: effectiveAgentType,
                     success: false,
-                    summary: `Unknown agent type: ${task.agentType}`,
+                    summary: `Unknown agent type: ${effectiveAgentType}`,
                 });
                 return;
             }
@@ -776,13 +829,39 @@ export class Orchestrator {
             });
             this.eventBus.emit(EventNames.ORCHESTRATOR_TASK_COMPLETED, {
                 taskId: task.id,
-                agentType: task.agentType,
+                agentType: effectiveAgentType,
                 success: result.success,
                 summary: result.summary,
             }, 'orchestrator');
-            agentResults.push({ agent: task.agentType, success: result.success, summary: result.summary });
+            agentResults.push({ agent: effectiveAgentType, success: result.success, summary: result.summary });
+            // Feed the real-world outcome back into the learning bandit so the router
+            // improves from actual results. Only when bandit learning is ENABLED —
+            // otherwise the getLastProvider() lookup could reward/penalize a stale
+            // provider noted by an earlier bandit-enabled run in this process.
+            if (autoRouting && this.configManager.getAll().routing?.bandit === true) {
+                try {
+                    getAutoRouter().recordOutcome(task.agentType, task.description, result.success ? 'success' : 'failure', this.configManager);
+                }
+                catch {
+                    // Learning is best-effort — never break the pipeline on a bandit error
+                }
+            }
+            if (result.success && strategy.followUpAgentType && strategy.followUpAgentType !== effectiveAgentType) {
+                const followUpAgent = createAgent(strategy.followUpAgentType, this.moduleRegistry);
+                if (followUpAgent) {
+                    const followUpResult = await followUpAgent.execute(vault.context, agentCallLLM);
+                    agentResults.push({
+                        agent: strategy.followUpAgentType,
+                        success: followUpResult.success,
+                        summary: followUpResult.summary,
+                    });
+                    if (options.verbose) {
+                        logger.info(`      🔎 Follow-up ${strategy.followUpAgentType}: ${followUpResult.summary}`);
+                    }
+                }
+            }
             // Track sandbox path for cleanup
-            if (result.success && task.agentType === 'tester') {
+            if (result.success && effectiveAgentType === 'tester') {
                 const testResult = vault.getMeta('testResult');
                 if (testResult?.sandboxPath) {
                     vault.setMeta('sandboxPath', testResult.sandboxPath);
@@ -792,7 +871,7 @@ export class Orchestrator {
             // The DebuggerAgent's syncChangesToContext() updates context.fileChanges
             // with LLM-generated fixes. If a runner step follows the debugger, those
             // fixes must be on disk before the runner executes.
-            if (task.agentType === 'debugger' && result.success && !options.dryRun) {
+            if (effectiveAgentType === 'debugger' && result.success && !options.dryRun) {
                 const applied = this.applyFileChanges(vault);
                 if (applied > 0 && options.verbose) {
                     logger.info(`      💾 Applied ${applied} debug fix(es) to disk`);
@@ -800,7 +879,7 @@ export class Orchestrator {
             }
             // After writer step: write files to disk immediately and sync into artifacts
             // IMPORTANT: files MUST be on disk before the RunnerAgent tries to execute them
-            if (task.agentType === 'writer' && result.success) {
+            if (effectiveAgentType === 'writer' && result.success) {
                 if (!options.dryRun) {
                     const applied = this.applyFileChanges(vault);
                     if (applied > 0 && options.verbose) {
@@ -826,14 +905,14 @@ export class Orchestrator {
                 }
             }
             // After runner step: refresh artifacts with any files created during execution
-            if (task.agentType === 'runner' && result.success) {
+            if (effectiveAgentType === 'runner' && result.success) {
                 const runResult = vault.getMeta('runResult');
                 if (runResult?.stdout) {
                     vault.setMeta('runOutput', runResult.stdout);
                 }
             }
             // Track context file paths for memory storage
-            if (task.agentType === 'context-gatherer' && result.success) {
+            if (effectiveAgentType === 'context-gatherer' && result.success) {
                 for (const artifact of vault.context.artifacts) {
                     if (!contextFiles.includes(artifact.path)) {
                         contextFiles.push(artifact.path);
@@ -846,7 +925,7 @@ export class Orchestrator {
                 const icon = result.success ? '✅' : '⚠️';
                 logger.info(`      ${icon} ${result.summary}`);
                 // If it's a runner, show the output inline
-                if (task.agentType === 'runner' && result.success && result.details) {
+                if (effectiveAgentType === 'runner' && result.success && result.details) {
                     const outputLines = result.details.split('\n').filter((l) => l.startsWith('stdout:') || l.startsWith('Command:'));
                     for (const line of outputLines) {
                         logger.info(`      ${line}`);
@@ -861,13 +940,74 @@ export class Orchestrator {
             agentResults.push({ agent: task.agentType, success: false, summary: `Error: ${msg}` });
         }
     }
+    getExecutionStrategy(task, routingContext) {
+        const intent = routingContext?.taskProfile?.intent;
+        const requiresVerification = routingContext?.taskProfile?.requiresVerification === true;
+        const writerLike = ['writer', 'tester', 'runner'].includes(task.agentType);
+        let effectiveAgentType = task.agentType;
+        let followUpAgentType;
+        let runSerially = false;
+        let useRepair = false;
+        let maxRepairs = 3;
+        let verificationPass = false;
+        switch (intent) {
+            case 'security':
+                if (writerLike)
+                    effectiveAgentType = 'security';
+                runSerially = true;
+                useRepair = true;
+                maxRepairs = 4;
+                break;
+            case 'debugging':
+                if (writerLike || task.agentType === 'runner')
+                    effectiveAgentType = 'debugger';
+                runSerially = true;
+                useRepair = true;
+                maxRepairs = 5;
+                break;
+            case 'verification':
+                if (writerLike)
+                    effectiveAgentType = 'reviewer';
+                runSerially = true;
+                useRepair = true;
+                maxRepairs = 4;
+                verificationPass = true;
+                followUpAgentType = 'reviewer';
+                break;
+            case 'architecture':
+                runSerially = true;
+                break;
+            default:
+                break;
+        }
+        if (requiresVerification && !followUpAgentType && task.agentType !== 'reviewer') {
+            followUpAgentType = 'reviewer';
+            verificationPass = true;
+        }
+        return {
+            effectiveAgentType,
+            followUpAgentType,
+            runSerially,
+            useRepair,
+            maxRepairs,
+            verificationPass,
+        };
+    }
     /**
      * Create an LLM call function routed by the AutoModelRouter for a task.
      * Uses the task description for complexity analysis and resolves the best
      * provider/model per agent type.
      */
-    createAutoRoutedLLM(task, options) {
-        const decision = getAutoRouter().resolve(task.agentType, task.description, { verbose: options.verbose, useRuntimeStats: true }, this.configManager);
+    resolveAutoRoutingDecision(task, options) {
+        const routing = this.configManager.getAll().routing || {};
+        const decision = getAutoRouter().resolve(task.agentType, task.description, {
+            verbose: options.verbose,
+            useRuntimeStats: true,
+            useBandit: routing.bandit === true,
+            maxCostUsd: routing.maxCostUsd,
+            minSpeed: routing.minSpeed,
+            minReasoning: routing.minReasoning,
+        }, this.configManager);
         // Record for the dashboard usage stats + audit trail
         recordRoutingDecision({
             source: 'orchestrator',
@@ -878,6 +1018,14 @@ export class Orchestrator {
             model: decision.model,
             score: decision.score,
         });
+        return decision;
+    }
+    createAutoRoutedLLM(task, options) {
+        const decisionOverride = this.routingDecisionOverrides.get(task.agentType);
+        const decision = decisionOverride ?? this.resolveAutoRoutingDecision(task, options);
+        return this.createAutoRoutedLLMFromDecision(task, options, decision);
+    }
+    createAutoRoutedLLMFromDecision(task, options, decision) {
         if (options.verbose) {
             logger.info(`      🤖 Auto: ${decision.explanation}`);
         }
@@ -886,6 +1034,25 @@ export class Orchestrator {
             provider: decision.provider,
             model: decision.model,
         });
+    }
+    applyRoutingPlanAdjustments(vault, routingContext) {
+        if (!routingContext?.taskProfile?.requiresVerification) {
+            return;
+        }
+        const existingReviewer = vault.context.taskPlan.some((step) => step.agentType === 'reviewer');
+        if (existingReviewer) {
+            return;
+        }
+        const reviewerStep = {
+            id: `step-${vault.context.taskPlan.length + 1}-review`,
+            description: routingContext.taskProfile.notes?.[0]
+                ? `Review and validate the work: ${routingContext.taskProfile.notes[0]}`
+                : 'Review the changes and validate the result',
+            agentType: 'reviewer',
+            dependsOn: vault.context.taskPlan.map((step) => step.id),
+            status: 'pending',
+        };
+        vault.context.taskPlan.push(reviewerStep);
     }
     /**
      * Run the ContextPruner on the vault context.

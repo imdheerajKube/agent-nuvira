@@ -95,6 +95,7 @@ export class PlannerAgent extends Agent {
             // Check for file tree (injected by Orchestrator) and memory context
             const fileTree = context.metadata.projectFileTree;
             const memoryContext = context.metadata.memoryContext;
+            const routingContext = context.metadata.routingContext;
             const promptParts = [
                 PLANNER_SYSTEM_PROMPT,
                 '',
@@ -104,6 +105,26 @@ export class PlannerAgent extends Agent {
                 '## Working Directory',
                 context.workingDirectory,
             ];
+            if (routingContext?.taskProfile) {
+                const routingNotes = routingContext.taskProfile.notes?.filter(Boolean) ?? [];
+                const guidanceLines = [
+                    '',
+                    '## Routing Guidance',
+                ];
+                if (routingContext.taskProfile.intent) {
+                    guidanceLines.push(`Task intent: ${routingContext.taskProfile.intent}`);
+                }
+                if (routingContext.taskProfile.requiresVerification) {
+                    guidanceLines.push('This is verification-heavy work. Include an explicit validation step and end with a reviewer step.');
+                }
+                if (routingNotes.length > 0) {
+                    guidanceLines.push(`Notes: ${routingNotes.join(' ')}`);
+                }
+                if (routingContext.explanation) {
+                    guidanceLines.push(`Rationale: ${routingContext.explanation}`);
+                }
+                promptParts.push(...guidanceLines);
+            }
             // Inject the project file tree so the planner knows what exists
             if (fileTree) {
                 const treeLines = fileTree.split('\n').length;

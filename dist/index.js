@@ -22,6 +22,7 @@ export { runAllScans, scanForPII, scanForInjections, scanForDangerousCode, forma
 export { runEvalSuite, runEvalTask, scaffoldWorkspace, runHiddenTest, computeEditAccuracy, scoreEvalMetrics, computeEvalSummary, formatEvalReport, formatEvalJSON, formatEvalMarkdown, formatEvalScoreRules, getEvalTasks, getEvalTask, getEvalRuns, getLatestEvalRun, clearEvals, EVAL_SCORE_WEIGHTS, IDEAL_TIME_TO_FIX_MS, } from './learning/eval-framework.js';
 export { EvalCommand } from './cli/eval.js';
 // ─── Learning exports ───────────────────────────────────────────────────────
+export { RouterBandit, getRouterBandit, resetRouterBandit, sampleBeta, sampleGamma, costAdjustedSuccessReward, COMPLEXITY_BUCKETS, } from './learning/router-bandit.js';
 export { SelfImprover, getSelfImprover } from './learning/self-improver.js';
 export { AgentStats, getAgentStats } from './learning/agent-stats.js';
 export { scoreTrajectory, scoreOrchestrationResult } from './learning/scorer.js';
