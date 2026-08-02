@@ -471,6 +471,21 @@ src/web-dashboard/              # React web dashboard
 | 75 | **Routing Usage + Audit Trail Dashboard** | ✅ Complete (v1.40.0) | v1.40.0 | Routing panel gains two views: actual picks over time (totals, last-24h, per-provider/model/source counts) and a 30-entry audit timeline of explain snapshots + routing-mode picks |
 | 76 | **Promotion Gate Dashboard** | ✅ Complete (v1.42.1) | v1.42.1 | The 🤖 Routing panel renders a live 🎖️ Promotion Gate card — bandit-vs-heuristic A/B verdict (quality >+2%, cost <+1%, latency <+5% criteria, promoted/collecting-data states) over `router-promotion.jsonl` trajectories; unmeasured latency shows a neutral chip |
 | 77 | **Routing Component Tests + CI Guard** | ✅ Complete (v1.42.1) | v1.42.1 | First dashboard frontend unit tests (vitest 3 + jsdom + Testing Library) covering PromotionGateSection states; `test-linux.yml` gains a dedicated routing regression-guard step (bandit/promotion-gate/auto-router/tier-0) running before the full suite |
+| 78 | **Learning-Router Escalation + Per-Model Priors** | ✅ Complete (v1.42.0) | v1.42.0 | ruflo ADR-149 mirror — the bandit learns per concrete **model** (`modelPriors[complexity][modelId]`), not just per provider; when the winner is unlearned (α+β < 8) Auto routing escalates to the next-ranked provider that HAS learned data, guarded by a 0.55 win-rate floor |
+| 79 | **Promotion Gate / A/B Validation** | ✅ Complete (v1.42.0) | v1.42.0 | ruflo ADR-150 mirror — records BOTH the deterministic pick and the bandit pick per task, finalizes with the real outcome, and evaluates ruflo's three promotion criteria (quality ↑ >2%, cost regression <1%, latency <5%) over diverged decisions — answers "is the bandit actually better?" |
+| 80 | **Startup Progress Feedback** | ✅ Complete (v1.43.0) | v1.43.0 | First launch never looks like a silent hang — a live spinner reports each startup phase (plugins → history & search → semantic index); Ora auto-suppresses when stdout isn't a TTY |
+| 81 | **Auto-Mode Session Failover** | ✅ Complete (v1.43.0) | v1.43.0 | Providers whose key expires or rate-limits mid-session are remembered and routed around — auth failures excluded for the session, rate-limit failures for a 120s cooldown, 5xx/network through the circuit breaker; crash-proof re-route |
+| 82 | **Central Quota Ledger** | ✅ Complete (v1.44.0) | v1.44.0 | Tokens/requests per provider × model with calendar-aware reset windows; exhausted providers **parked** until the window rolls (auto re-enable); write-through from CostTracker; persists to `quota-ledger.json` |
+| 83 | **Predictive Quota-Aware Routing + Free/Local-First Gate** | ✅ Complete (v1.44.0) | v1.44.0 | Auto routing sinks parked providers below healthy candidates BEFORE a call; `routing.allowPaid: false` excludes paid providers for non-complex tasks |
+| 84 | **Per-Subtask Complexity Labels** | ✅ Complete (v1.44.0) | v1.44.0 | The Planner emits a `complexity` label per TaskStep (trivial → critical); the orchestrator labels any unlabeled step and threads it into routing as `complexityHint` so each subtask routes by its OWN complexity |
+| 85 | **Quota CLI + Cost Transparency** | ✅ Complete (v1.44.0–v1.45.2) | v1.45.x | `buff model quota` (status table, resets in, parked state, `--json`, `reset`) + cost summary (free/local vs paid tokens + estimated $ saved); dashboard Quota card shows free-tier share |
+| 86 | **Checkpoint / Resume** | ✅ Complete (v1.45.0) | v1.45.0 | `buff execute --checkpoint` saves a resume-able snapshot after every task batch; `--resume [id]` rehydrates the vault and continues from the first pending step — crash/quota-kill/token-expiry continuity |
+| 87 | **Quota Failover Timeline** | ✅ Complete (v1.45.3–v1.45.4) | v1.45.x | Persistent event log (`quota-events.jsonl`, capped 200) records park/re-enable/release/failover events; dashboard Failover Timeline card + `buff model quota` last-20; real-time `quota` SSE events |
+| 88 | **Opt-in Failover Confirmation** | ✅ Complete (v1.45.5) | v1.45.5 | `routing.promptOnFailover: true` makes Auto mode ASK before a mid-session provider swap (switch recommended / pick manually) — interactive chat loop AND one-shot Auto prompts |
+| 89 | **Always-On Dashboard Quota Watcher** | ✅ Complete (v1.46.0) | v1.46.0 | `routing.alwaysWatchQuota` arms the quota file watcher at server start, never disarmed by client count — Failover Timeline is current the moment a dashboard connects |
+| 90 | **Vector Retrieval (Token-Efficient Context)** | ✅ Complete (v1.47.0) | v1.47.0 | Chunking (~512 tokens, paragraph-aware, 64 overlap) + local embeddings (`bge-small-en-v1.5`, 384-dim) + top-k reduction before the LLM call; small contexts pass through untouched; any failure fails over to full context. `buff retrieval index/query/stats/clear` + dashboard 🧠 Retrieval card |
+| 91 | **VectorStore Namespaces** | ✅ Complete (v1.47.0) | v1.47.0 | Each namespace gets its own index file (`vectors-<ns>.json`) so repo retrieval chunks never pollute memory/history vectors; entry format unchanged so existing vectors survive upgrades |
+| 92 | **VS Code Quota Ledger View** | ✅ Complete (v0.5.0–v0.6.1) | v0.6.x | VS Code extension renders the quota ledger (free/paid usage, parked providers, failover timeline) with live auto-refresh on ledger/timeline change + poll-fallback |
 
 ### 3.2 Key Upgrades & Enhancements
 
@@ -506,6 +521,18 @@ src/web-dashboard/              # React web dashboard
 | **Routing Usage + Audit Trail** | v1.40.0 | Dashboard Routing panel shows actual picks over time (usage stats) and a 30-entry audit timeline; every explain snapshot and routing-mode pick is persisted to `routing-history.json` |
 | **Promotion Gate Dashboard** | v1.42.1 | Routing panel shows whether the learning bandit is actually better than the heuristic — quality/cost/latency A/B verdict over real trajectories |
 | **Routing Component Tests + CI Guard** | v1.42.1 | Dashboard frontend unit tests (vitest 3 + jsdom + Testing Library) wired into CI; dedicated routing regression-guard step runs the learning-router tests before the full suite |
+| **Learning-Router Escalation + Per-Model Priors** | v1.42.0 | Bandit learns per concrete model; unlearned winners escalate to the next-ranked learned provider (ruflo ADR-149 mirror) |
+| **Promotion Gate / A/B Validation** | v1.42.0 | "Is the bandit actually better than the heuristic?" answered on real trajectories with quality/cost/latency criteria (ruflo ADR-150 mirror) |
+| **Startup Progress Feedback** | v1.43.0 | Live per-phase startup spinner + model-picker loading progress with per-provider timeouts |
+| **Auto-Mode Session Failover** | v1.43.0 | Expired keys / rate-limits mid-session are routed around automatically — no more stuck sessions |
+| **Central Quota Ledger** | v1.44.0 | Calendar-aware reset windows, exhaustion parking, predictive quota-aware routing, free/local-first gate, `buff model quota` CLI |
+| **Per-Subtask Complexity Labels** | v1.44.0 | Each TaskStep routes by its OWN complexity (trivial → critical) instead of the whole goal's |
+| **Checkpoint / Resume** | v1.45.0 | Crash / quota-kill / token-expiry continuity — resume from the first pending step |
+| **Quota Failover Timeline + SSE** | v1.45.3–v1.45.4 | Persistent failover event log + live dashboard timeline via real-time SSE pushes |
+| **Opt-in Failover Confirmation** | v1.45.5 | Ask before mid-session provider swaps (interactive + one-shot) |
+| **Always-On Dashboard Quota Watcher** | v1.46.0 | Quota state current the moment a dashboard connects |
+| **Vector Retrieval** | v1.47.0 | Local embeddings + top-k chunk reduction save tokens, stretch free quotas; `buff retrieval` CLI + dashboard card |
+| **VS Code Quota Ledger View** | v0.5.0–v0.6.1 | Live free/paid usage + failover timeline inside the editor |
 
 ### 3.3 Feature Maturity Matrix
 
@@ -837,6 +864,20 @@ options:
 | **v1.15.6** | Aug 2026 | Firecrawl integration for web search |
 | **v1.16.0** | Aug 2026 | Comprehensive MCP README docs, SSE header support, Firecrawl integration |
 | **v1.16.1** | Aug 2026 | Interactive dev mode enhancements — failure analysis, follow-up suggestions, /fix command, 35 new unit tests |
+| **v1.17.0–v1.41.2** | Aug–Oct 2026 | Modular architecture Phases 6–11 (ModuleRegistry, EventBus, ReportModule, VerifyModule, SafeExecutionLayer, TS structural editing), provider fallback, Auto routing v1.39, routing eval + history v1.40, per-provider model drill-down v1.41 |
+| **v1.42.0** | Aug 2026 | Learning-router escalation + per-model bandit priors + promotion gate (ruflo ADR-149/150 mirrors) |
+| **v1.42.1** | Aug 2026 | Promotion-gate dashboard card + CI routing regression guard + first dashboard component tests |
+| **v1.43.0** | Aug 2026 | Startup progress feedback, model-picker loading progress, 60s model-list cache, auto-mode failover on token expiry |
+| **v1.44.0** | Aug 2026 | Central quota ledger (parking + window resets), predictive quota-aware routing, free/local-first gate, per-subtask complexity labels, `buff model quota` CLI |
+| **v1.45.0** | Aug 2026 | Checkpoint / resume pipelines + dashboard quota cost-transparency card |
+| **v1.45.1** | Aug 2026 | Fix: `--checkpoint` no longer silently resumes a stale completed checkpoint |
+| **v1.45.2** | Aug 2026 | Quota cost-summary CLI (`getCostSummary`), checkpoint CLI smoke tests, sandbox skips npm install for zero-dep projects |
+| **v1.45.3** | Aug 2026 | Quota failover timeline — persistent event log + dashboard Failover Timeline card + CLI timeline |
+| **v1.45.4** | Aug 2026 | Real-time quota events over SSE — instant Failover Timeline updates |
+| **v1.45.5** | Aug 2026 | Opt-in failover confirmation (`routing.promptOnFailover`) — control over every auto-mode swap |
+| **v1.46.0** | Aug 2026 | Always-on dashboard quota watcher + single-shot Auto failover confirmation |
+| **v1.47.0** | Aug 2026 | Vector retrieval — token-efficient context via local embeddings + pure-JS vector store; `buff retrieval` CLI + dashboard Retrieval card |
+| **v0.5.0–v0.6.1** (VS Code ext) | Aug 2026 | VS Code quota ledger view — free/paid usage, parked providers, failover timeline, live auto-refresh + poll-fallback |
 
 ### 5.2 Detailed Changelog (v1.14.x – v1.16.x)
 

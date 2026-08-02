@@ -517,6 +517,7 @@ agent-nuvira chat --provider openrouter --model openai/gpt-4o
 | `security` | Security scan for PII, injection, dangerous code | `agent-nuvira security scan [input] [options]` |
 | `feedback` | Record, list, and analyze user feedback ratings | `agent-nuvira feedback [command]` |
 | `marketplace` | Browse, search, install marketplace items | `agent-nuvira marketplace [command]` |
+| `retrieval` | Index, query, and manage local vector retrieval | `agent-nuvira retrieval [command]` |
 
 ### 6.2 Global Options
 
@@ -595,6 +596,9 @@ Options:
   --context-limit <tokens>   Max tokens before pruning activates (default: 128000)
   --context-prune <mode>     Prune aggressiveness: soft | medium | aggressive (default: soft)
   --auto-branch              Enable branch automation hooks and auto-workflows
+  --checkpoint               Save a resume-able snapshot after every task batch
+  --resume [id]              Resume from a saved checkpoint (id optional — auto-finds for goal + cwd)
+  --checkpoint-list          List saved checkpoints with progress
 
 Examples:
   agent-nuvira execute "add JWT authentication"
@@ -602,6 +606,8 @@ Examples:
   agent-nuvira execute "add tests" --memory
   agent-nuvira execute "fix login bug" --dry-run
   agent-nuvira execute "build microservice" --context-limit 256000 --context-prune medium
+  agent-nuvira execute "add JWT authentication" --checkpoint   # save after every batch
+  agent-nuvira execute "add JWT authentication" --resume       # continue after a crash/quota kill
 ```
 
 ### 6.7 Workflow Options
@@ -634,14 +640,19 @@ Commands:
   info               Detailed active configuration
   recommend          Model routing recommendations
   health             Quick health check for active provider
+  quota              Inspect the central quota ledger (tokens/requests, parked providers, cost summary)
+  bandit             Inspect learning-router Thompson-sampling state (α/β priors + promotion gate)
 
 Examples:
   agent-nuvira model                           # Show current + switch prompt
   agent-nuvira model list                      # All providers with status
   agent-nuvira model switch                    # Interactive categorized picker
   agent-nuvira model switch groq               # Switch to Groq
-  agent-nuvira model switch groq/llama-3.3-70b # Switch to specific model   agent-nuvira model switch auto               # Auto routing — agent picks the best model per task
-   agent-nuvira model explain "your task"        # Why Auto picked a model (weights, ranking, fallback)
+  agent-nuvira model switch groq/llama-3.3-70b # Switch to specific model
+  agent-nuvira model switch auto                # Auto routing — agent picks the best model per task
+  agent-nuvira model explain "your task"        # Why Auto picked a model (weights, ranking, fallback)
+  agent-nuvira model quota                     # Free vs paid tokens + estimated $ saved
+  agent-nuvira model bandit                    # α/β priors per provider × complexity bucket
 ```
 
 Switching preserves all conversation history and agent state — seamless mid-session migration.
@@ -708,6 +719,66 @@ Each finalized decision is appended to `~/.buff/memory/router-promotion.jsonl` (
 | **Criteria detail** | Each pass/fail (`quality` / `cost` / `latency`) is listed with its measured delta, so you can see exactly which criterion blocked promotion |
 
 Latency is treated as **neutral** until real latency measurements exist — missing telemetry never blocks a quality/cost win, but it doesn't count as a win either. The gate is a *go/no-go signal*: it reports whether the bandit is better but does **not** disable the bandit at runtime.
+
+### Central Quota Ledger — free/local-first routing with reset windows
+
+Every Auto-routed call is write-through recorded into a **central quota ledger** (`~/.buff/memory/quota-ledger.json`): tokens/requests per provider × model with calendar-aware reset windows (daily/hourly free-tier limits). The ledger powers four things:
+
+1. **Exhaustion parking** — a provider that hits its configured window limit is **parked** (excluded from Auto routing) until the window rolls — automatic re-enable at the exact reset boundary, no timers. Auth failures stay permanent (never re-enabled).
+2. **Predictive routing** — Auto routing sinks quota-parked providers below healthy candidates **before** a call is made (previously only reactive failover).
+3. **Free/local-first gate** — `routing.allowPaid: false` excludes PAID providers for non-complex tasks (trivial/simple/moderate) so free/local models win unless complexity demands otherwise; complex/critical tasks may still use paid high-capacity models.
+4. **Cost transparency** — `buff model quota` shows free vs paid tokens and an **estimated $ saved** figure (what the free-tier usage would have cost at a typical paid rate).
+
+```bash
+# Set per-provider quota limits (requests per reset window)
+agent-nuvira config set routing.quota.gemini.requestsPerWindow 1500
+agent-nuvira config set routing.quota.groq.requestsPerWindow 14400
+agent-nuvira config set routing.quota.groq.tokensPerWindow 1000000
+agent-nuvira config set routing.quota.groq.windowMs 86400000   # 24h reset window
+
+# Inspect the ledger
+agent-nuvira model quota        # tokens/requests per provider × model, resets in, parked state, cost summary
+agent-nuvira model quota --json # machine-readable for scripting/CI
+agent-nuvira model quota reset  # clear the ledger
+```
+
+**Failover timeline (transparency: when failover occurred).** Every park, window-reset re-enable, manual release, and mid-session failover is appended to `~/.buff/memory/quota-events.jsonl` (capped at 200). The dashboard's Quota card renders it as a **Failover Timeline**, and `buff model quota` prints the last 20 events. The timeline is **live**: the dashboard watches the files on disk and pushes a `quota` SSE event the moment a failover is written.
+
+### Checkpoint / Resume — continuity across crashes and quota kills
+
+`buff execute "<goal>" --checkpoint` saves a resume-able snapshot after every task batch (task plan with per-step statuses, artifacts, file changes, metadata) to `~/.buff/memory/checkpoints/` (honors `BUFF_MEMORY_DIR`). A crash / quota kill / token expiry mid-pipeline no longer restarts the whole plan:
+
+```bash
+agent-nuvira execute "add JWT authentication" --checkpoint   # save after every batch
+agent-nuvira execute "add JWT authentication" --resume       # continue from first pending step
+agent-nuvira execute "<goal>" --resume <id>                  # resume a specific saved run
+agent-nuvira execute "<goal>" --checkpoint-list              # list saved checkpoints with progress
+```
+
+A resumed run rehydrates the vault and continues from the first pending step, skipping completed steps and the planner entirely. Bare `--resume` auto-finds the id for the current goal + cwd.
+
+### Vector Retrieval — token-efficient context (saves tokens, complements the quota ledger)
+
+Large gathered contexts are chunked (~512 tokens, paragraph-aware, 64-token overlap), embedded locally with `bge-small-en-v1.5` (via @huggingface/transformers — zero new deps, 384-dim so the vector schema is unchanged) and reduced to the top-k semantically-relevant chunks before the LLM call. It complements the quota ledger: **retrieval saves tokens, the ledger manages quotas**.
+
+| Policy | Behavior |
+|---|---|
+| **Router policy** | Context ≤ threshold (12k tokens) → **direct call, zero overhead**; larger → embed + retrieve; any failure → **failover to full context** (never breaks the LLM call) |
+| **Wiring** | `chat --file` (chunk reduction) + `buff execute` (post-gather semantic file ranking for the writer + token-savings stats) |
+| **Transparency** | `🧠 Retrieved 5 chunks — reduced context 20k → 3k tokens` + `buff retrieval stats` + dashboard Retrieval card |
+
+```bash
+agent-nuvira retrieval index .                # index the current repo into the local store
+agent-nuvira retrieval query "how does login with JWT work?"   # top-k relevant chunks
+agent-nuvira retrieval stats                  # tokens saved, avg reduction, repo chunks, latest hits
+agent-nuvira retrieval clear                  # wipe the repo index
+```
+
+**Config** (`routing.retrieval`): `enabled` (default true), `topK` (default 5), `chunkTokens` (default 512), `overlapTokens` (default 64), `thresholdTokens` (default 12,000 — contexts above this trigger retrieval), and `model` (default `bge-small-en-v1.5`).
+
+### Auto-mode failover confirmation — control over every swap
+
+`routing.promptOnFailover: true` makes Auto mode **ask** before a mid-session provider swap: when a provider dies (expired key, exhausted quota, deprecated model), the CLI shows the next-ranked candidate and offers **switch (recommended)** or **pick a provider myself** instead of silently auto-switching. Default stays silent auto-failover (never get stuck). Applies to both the interactive chat loop and one-shot Auto prompts (`buff chat "..." -m auto`).
 
 ### 6.9 Skill Command — Reusable Skill Scripts
 

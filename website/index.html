@@ -4,13 +4,13 @@
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>Agent-Nuvira — Multi-Agent AI Coding Assistant</title>
-  <meta name="description" content="Agent-Nuvira is an open-source, multi-agent AI coding assistant that runs from your terminal. 16+ agents, 2,600+ tests, GitLab + GitHub PR review built-in. Plan, write, review, test, and publish code — from a single command." />          <meta name="keywords" content="AI coding assistant, multi-agent AI, terminal AI tool, open source, Groq, NVIDIA NIM, Google Gemini, OpenRouter, Ollama, GitLab, PR review, GitHub" />
+  <meta name="description" content="Agent-Nuvira is an open-source, multi-agent AI coding assistant that runs from your terminal. 16+ agents, 2,800+ tests, GitLab + GitHub PR review built-in. Plan, write, review, test, and publish code — from a single command." />          <meta name="keywords" content="AI coding assistant, multi-agent AI, terminal AI tool, open source, Groq, NVIDIA NIM, Google Gemini, OpenRouter, Ollama, GitLab, PR review, GitHub" />
   <link rel="icon" type="image/png" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='8' fill='%236363f2'/%3E%3Ctext x='16' y='22' text-anchor='middle' fill='white' font-size='18' font-weight='bold' font-family='system-ui'%3EN%3C/text%3E%3C/svg%3E" />
-  <meta property="og:title" content="Agent-Nuvira — Multi-Agent AI Coding Assistant" />          <meta property="og:description" content="The open-source multi-agent AI coding assistant. Plan, write, review, test, verify, and publish code from your terminal. 17+ providers. 16+ agents. 2,600+ tests. GitLab + GitHub PR review built-in. No subscriptions. No telemetry." />
+  <meta property="og:title" content="Agent-Nuvira — Multi-Agent AI Coding Assistant" />          <meta property="og:description" content="The open-source multi-agent AI coding assistant. Plan, write, review, test, verify, and publish code from your terminal. 17+ providers. 16+ agents. 2,800+ tests. GitLab + GitHub PR review built-in. No subscriptions. No telemetry." />
   <meta property="og:image" content="https://www.agent-nuvira.com/assets/hero.png" />
   <meta property="og:url" content="https://www.agent-nuvira.com" />
   <meta name="twitter:card" content="summary_large_image" />
-  <meta name="twitter:title" content="Agent-Nuvira — Multi-Agent AI Coding Assistant" />          <meta name="twitter:description" content="The open-source multi-agent AI coding assistant. 17+ providers. 16+ agents. 2,600+ tests. GitLab + GitHub PR review. From your terminal." />
+  <meta name="twitter:title" content="Agent-Nuvira — Multi-Agent AI Coding Assistant" />          <meta name="twitter:description" content="The open-source multi-agent AI coding assistant. 17+ providers. 16+ agents. 2,800+ tests. GitLab + GitHub PR review. From your terminal." />
   <link rel="preconnect" href="https://fonts.googleapis.com" />
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
   <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800;900&family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet" />
@@ -87,7 +87,7 @@
             <span class="metric-label">AI Providers</span>
           </div>
           <div class="metric">
-            <span class="metric-value">2,600+</span>
+            <span class="metric-value">2,800+</span>
             <span class="metric-label">Tests Passing</span>
           </div>
           <div class="metric">
@@ -119,7 +119,7 @@
               <span class="log info">📁 Context Gatherer scanning codebase...</span>
               <span class="log success">✅ Writer implemented auth middleware</span>
               <span class="log info">👀 Reviewer validating changes...</span>
-              <span class="log success">✅ All 2,600+ tests passed</span>
+              <span class="log success">✅ All 2,800+ tests passed</span>
               <span class="log info">🔒 VerifyModule running security scan...</span>
               <span class="log success">✅ No security issues found</span>
               <span class="log success">🚀 Changes committed to feature/auth</span>
@@ -287,6 +287,34 @@
           </div>
           <h3>Benchmark-Driven Learning</h3>
           <p>Decisions get sharper with use — real benchmark quality scores and per-agent best-model stats from your own runs are blended into every routing decision.</p>
+        </div>
+        <div class="feature-card" data-delay="1000">
+          <div class="feature-icon learning">
+            <svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><rect x="2" y="5" width="20" height="14" rx="2"/><line x1="2" y1="10" x2="22" y2="10"/><line x1="6" y1="15" x2="10" y2="15"/></svg>
+          </div>
+          <h3>Central Quota Ledger</h3>
+          <p>Tracks tokens/requests per provider × model with calendar-aware reset windows. Exhausted providers are <strong>parked</strong> until their free tier resets (auto re-enable, no timers), and Auto routing avoids them before a call is made. A free/local-first gate keeps paid models for complex work only — with a cost summary showing exactly how much you saved.</p>
+        </div>
+        <div class="feature-card" data-delay="1100">
+          <div class="feature-icon offline">
+            <svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3v3m0 12v3M3 12h3m12 0h3M5.6 5.6l2.1 2.1m8.6 8.6l2.1 2.1M18.4 5.6l-2.1 2.1M7.7 16.3l-2.1 2.1"/></svg>
+          </div>
+          <h3>Checkpoint & Resume</h3>
+          <p>Crash, quota kill, or token expiry mid-pipeline no longer restarts the whole plan. <code>--checkpoint</code> saves a resume-able snapshot after every task batch; <code>--resume</code> continues from the first pending step — skipping completed steps and the planner entirely.</p>
+        </div>
+        <div class="feature-card" data-delay="1200">
+          <div class="feature-icon learning">
+            <svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M4 19.5A2.5 2.5 0 0 1 6.5 17H20"/><path d="M6.5 2H20v20H6.5A2.5 2.5 0 0 1 4 19.5v-15A2.5 2.5 0 0 1 6.5 2z"/></svg>
+          </div>
+          <h3>Vector Retrieval</h3>
+          <p>Large contexts are chunked, embedded locally (bge-small-en-v1.5, zero new deps) and reduced to the top-k semantically-relevant chunks before the LLM call — saving tokens so free quotas stretch further. Small contexts pass through untouched; any failure fails over to full context.</p>
+        </div>
+        <div class="feature-card" data-delay="1300">
+          <div class="feature-icon privacy">
+            <svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M23 12a11 11 0 1 1-22 0 11 11 0 0 1 22 0z"/><path d="M12 8v4l2 2"/></svg>
+          </div>
+          <h3>Self-Healing Failover</h3>
+          <p>When a provider dies mid-session (expired key, exhausted quota, deprecated model), Auto mode automatically hops to the next-best provider — and an optional confirmation prompt keeps you in control of every swap. Every failover is recorded in a live timeline.</p>
         </div>
       </div>
     </div>
@@ -685,7 +713,7 @@
         </div>
         <div class="arch-highlight">
           <span class="arch-highlight-icon">🧪</span>
-          <span class="arch-highlight-count">2,600+</span>
+          <span class="arch-highlight-count">2,800+</span>
           <span class="arch-highlight-label">Unit Tests</span>
         </div>
       </div>
