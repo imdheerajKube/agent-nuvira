@@ -1,6 +1,27 @@
-import { describe, it, expect, beforeEach } from 'vitest';
-import { VectorStore, cosineSimilarity } from '../../src/memory/vector-store.js';
+import { describe, it, expect, beforeAll, afterAll, beforeEach } from 'vitest';
+import { mkdtempSync, rmSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import { VectorStore, cosineSimilarity, resetVectorBackendSelection } from '../../src/memory/vector-store.js';
 import type { VectorEntry } from '../../src/memory/vector-store.js';
+
+// ─── Hermetic memory dir ────────────────────────────────────────────────────
+// The vector store reads BUFF_MEMORY_DIR per operation, so a fresh temp dir
+// per file keeps these tests from touching the developer's real ~/.buff/memory.
+
+let memDir: string;
+const ORIGINAL_MEMORY_DIR = process.env.BUFF_MEMORY_DIR;
+
+beforeAll(() => {
+  memDir = mkdtempSync(join(tmpdir(), 'vector-store-test-'));
+  process.env.BUFF_MEMORY_DIR = memDir;
+});
+
+afterAll(() => {
+  if (ORIGINAL_MEMORY_DIR === undefined) delete process.env.BUFF_MEMORY_DIR;
+  else process.env.BUFF_MEMORY_DIR = ORIGINAL_MEMORY_DIR;
+  rmSync(memDir, { recursive: true, force: true });
+});
 
 describe('cosineSimilarity', () => {
   it('should return 1 for identical vectors', () => {
@@ -44,6 +65,7 @@ describe('VectorStore', () => {
   let store: VectorStore;
 
   beforeEach(async () => {
+    resetVectorBackendSelection();
     store = new VectorStore();
     await store.clear(); // Start fresh
   });

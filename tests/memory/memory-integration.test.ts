@@ -10,14 +10,33 @@
  *    that only check Array.isArray on potentially empty results)
  */
 
-import { describe, it, expect, beforeEach, afterEach } from 'vitest';
-import { getVectorStore, cosineSimilarity } from '../../src/memory/vector-store.js';
+import { describe, it, expect, beforeAll, afterAll, beforeEach, afterEach } from 'vitest';
+import { mkdtempSync, rmSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import { getVectorStore, cosineSimilarity, resetVectorBackendSelection, setVectorBackendOverride } from '../../src/memory/vector-store.js';
 import { getTrajectoryStore } from '../../src/memory/trajectory-store.js';
 import { embed, clearEmbeddingCache, EMBEDDING_DIM } from '../../src/memory/embedder.js';
 import { storeExecutionTrajectory, retrieveMemoryContext, clearMemory, getMemoryStats } from '../../src/memory/memory-integration.js';
 import { setForceLLM } from '../../src/memory/embedder.js';
 import type { OrchestrationResult } from '../../src/agents/orchestrator.js';
 import type { TaskStep } from '../../src/agents/agent.js';
+
+// ─── Hermetic memory dir ────────────────────────────────────────────────────
+
+let memDir: string;
+const ORIGINAL_MEMORY_DIR = process.env.BUFF_MEMORY_DIR;
+
+beforeAll(() => {
+  memDir = mkdtempSync(join(tmpdir(), 'memory-integration-test-'));
+  process.env.BUFF_MEMORY_DIR = memDir;
+});
+
+afterAll(() => {
+  if (ORIGINAL_MEMORY_DIR === undefined) delete process.env.BUFF_MEMORY_DIR;
+  else process.env.BUFF_MEMORY_DIR = ORIGINAL_MEMORY_DIR;
+  rmSync(memDir, { recursive: true, force: true });
+});
 
 // ─── Deterministic Mock LLM ──────────────────────────────────────────────
 //
@@ -65,6 +84,7 @@ function makeTaskPlan(): TaskStep[] {
 
 describe('Memory Integration — Full Cycle', () => {
   beforeEach(async () => {
+    resetVectorBackendSelection();
     await clearMemory();
     clearEmbeddingCache();
     // Force LLM mode for tests — skip native embedding tiers (Xenova/Python)
@@ -79,6 +99,43 @@ describe('Memory Integration — Full Cycle', () => {
   });
 
   // ── Full Cycle: store → search → retrieve → format ────────────────────
+
+  it('serves cross-session memory through the FAISS-style vector backend under auto', async () => {
+    // The default backend ('auto') resolves to the FAISS-style backend
+    // (faiss-ivf / faiss-native) — cross-session trajectory memory must flow
+    // through it, not the legacy JSON backend, unless explicitly overridden.
+    // Explicitly request 'auto' so a developer's real ~/.buff/buffconfig.json
+    // (e.g. memory.vectorBackend: "json") can't change the outcome.
+    setVectorBackendOverride('auto');
+    const vs = getVectorStore();
+    expect(['faiss-native', 'faiss-ivf']).toContain(await vs.backendName());
+
+    // Full cycle through the FAISS-backed store: store in "session 1"...
+    const id = await storeExecutionTrajectory(
+      makeResult({ goal: 'add JWT authentication to the API' }),
+      mockLLM,
+      makeTaskPlan(),
+      ['src/routes/auth.ts'],
+      false,
+    );
+    expect(id).toBeTruthy();
+    expect(await vs.count()).toBe(1);
+
+    // ...retrieve in "session 2" (fresh resolution, same shared index file).
+    // NOTE: reset clears the override, so re-apply 'auto' — otherwise a
+    // developer's real ~/.buff/buffconfig.json could pick a json backend.
+    resetVectorBackendSelection();
+    setVectorBackendOverride('auto');
+    const vs2 = getVectorStore();
+    expect(['faiss-native', 'faiss-ivf']).toContain(await vs2.backendName());
+    const memoryContext = await retrieveMemoryContext(
+      'implement authentication with JWT tokens',
+      mockLLM,
+      3,
+    );
+    expect(memoryContext.trajectories.length).toBeGreaterThan(0);
+    expect(memoryContext.trajectories[0].id).toBe(id);
+  });
 
   it('should store a trajectory and retrieve it via semantic search', async () => {
     // Step 1: Store

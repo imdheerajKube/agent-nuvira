@@ -1,15 +1,35 @@
-import { describe, it, expect, beforeEach, afterEach } from 'vitest';
+import { describe, it, expect, beforeAll, afterAll, beforeEach, afterEach } from 'vitest';
+import { mkdtempSync, rmSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { TrajectoryStore, getTrajectoryStore } from '../../src/memory/trajectory-store.js';
 import type { Trajectory, TrajectoryStep } from '../../src/memory/trajectory-store.js';
 import type { OrchestrationResult } from '../../src/agents/orchestrator.js';
 import type { TaskStep } from '../../src/agents/agent.js';
-import { getVectorStore } from '../../src/memory/vector-store.js';
+import { getVectorStore, resetVectorBackendSelection } from '../../src/memory/vector-store.js';
 import { clearEmbeddingCache } from '../../src/memory/embedder.js';
+
+// ─── Hermetic memory dir ────────────────────────────────────────────────────
+
+let memDir: string;
+const ORIGINAL_MEMORY_DIR = process.env.BUFF_MEMORY_DIR;
+
+beforeAll(() => {
+  memDir = mkdtempSync(join(tmpdir(), 'trajectory-store-test-'));
+  process.env.BUFF_MEMORY_DIR = memDir;
+});
+
+afterAll(() => {
+  if (ORIGINAL_MEMORY_DIR === undefined) delete process.env.BUFF_MEMORY_DIR;
+  else process.env.BUFF_MEMORY_DIR = ORIGINAL_MEMORY_DIR;
+  rmSync(memDir, { recursive: true, force: true });
+});
 
 describe('TrajectoryStore', () => {
   let store: TrajectoryStore;
 
   beforeEach(async () => {
+    resetVectorBackendSelection();
     store = new TrajectoryStore();
     await store.clear();
     clearEmbeddingCache();

@@ -495,6 +495,15 @@ export class Orchestrator {
           } else {
             logger.info('   No similar past tasks found in memory');
           }
+          // Transparency: surface which vector backend served the cross-session
+          // semantic search (faiss-native / faiss-ivf / json) so users can see
+          // the FAISS-style backend is active for trajectory memory.
+          try {
+            const { getVectorStore } = await import('../memory/vector-store.js');
+            logger.info(`   🧠 Cross-session memory backend: ${await getVectorStore().backendName()}`);
+          } catch {
+            // Best-effort — backend name is diagnostics-only.
+          }
         }
       } catch (err) {
         logger.debug(`Memory retrieval failed: ${err}`);

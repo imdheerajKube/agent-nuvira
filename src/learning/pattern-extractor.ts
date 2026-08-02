@@ -56,8 +56,20 @@ interface PatternData {
 
 // ─── Constants ──────────────────────────────────────────────────────────────
 
-const MEMORY_DIR = join(homedir(), '.buff', 'memory');
-const PATTERNS_PATH = join(MEMORY_DIR, 'patterns.json');
+/**
+ * Resolve the memory dir lazily (per call) so tests that set
+ * `BUFF_MEMORY_DIR` are genuinely hermetic — a module-import-time capture
+ * would silently keep reading/writing the real ~/.buff/memory (same fix as
+ * vector-store.ts / trajectory-store.ts).
+ */
+function memoryDir(): string {
+  return process.env.BUFF_MEMORY_DIR || join(homedir(), '.buff', 'memory');
+}
+
+function patternsPath(): string {
+  return join(memoryDir(), 'patterns.json');
+}
+
 const CURRENT_VERSION = 2;
 const MAX_PATTERNS = 30;
 const MIN_SCORE_FOR_EXTRACTION = 0.7; // Only extract from high-quality trajectories
@@ -313,8 +325,9 @@ export class PatternStore {
   private load(): CodingPattern[] {
     try {
       ensureDir();
-      if (!existsSync(PATTERNS_PATH)) return [];
-      const raw = readFileSync(PATTERNS_PATH, 'utf-8');
+      const path = patternsPath();
+      if (!existsSync(path)) return [];
+      const raw = readFileSync(path, 'utf-8');
       const data = JSON.parse(raw) as PatternData;
 
       // Migrate old-format patterns (version 1 → 2) that may lack lastUsedAt/usageCount
@@ -333,7 +346,7 @@ export class PatternStore {
   private save(): void {
     ensureDir();
     const data: PatternData = { patterns: this.patterns, version: CURRENT_VERSION };
-    writeFileSync(PATTERNS_PATH, JSON.stringify(data, null, 2), 'utf-8');
+    writeFileSync(patternsPath(), JSON.stringify(data, null, 2), 'utf-8');
   }
 
   private buildExtractionPrompt(trajectories: Trajectory[]): string {
@@ -399,7 +412,8 @@ export function getPatternStore(): PatternStore {
 // ─── Helpers ────────────────────────────────────────────────────────────────
 
 function ensureDir(): void {
-  if (!existsSync(MEMORY_DIR)) {
-    mkdirSync(MEMORY_DIR, { recursive: true });
+  const dir = memoryDir();
+  if (!existsSync(dir)) {
+    mkdirSync(dir, { recursive: true });
   }
 }

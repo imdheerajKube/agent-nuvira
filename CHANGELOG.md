@@ -7,6 +7,30 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [1.49.0] - 2026-08-02
+
+### Added
+
+- **Hermetic memory test suite** — `vector-store`, `trajectory-store`, and
+  `memory-integration` tests now run against a fresh temp `BUFF_MEMORY_DIR`
+  (they previously wrote to the real `~/.buff/memory`)
+- **IVF-vs-exact benchmark** — new `faiss-benchmark` test compares the pure-JS
+  IVF-flat ANN against the exact JSON backend on a 2,000-vector corpus:
+  asserts exact recall@5 ≥ 0.99, IVF recall@5 ≥ 0.9, recall@1 ≥ 0.8, and logs
+  per-query latency so the approximate-search tradeoff is measurable
+- **Cross-session FAISS transparency** — the orchestrator's memory-retrieval
+  step now logs the active vector backend (`faiss-native` / `faiss-ivf` /
+  `json`) in verbose mode; a new integration test verifies cross-session
+  trajectory memory is served through the FAISS-style backend under `auto`
+
+### Fixed
+
+- **Module-import path capture in trajectory/pattern stores** —
+  `trajectory-store.ts` and `pattern-extractor.ts` resolved their memory-dir
+  paths at module load (ignoring `BUFF_MEMORY_DIR`); they now resolve lazily
+  per operation, matching `vector-store.ts`, so hermetic tests and
+  `BUFF_MEMORY_DIR`-based redirects work everywhere
+
 ## [1.48.0] - 2026-08-02
 
 ### Added
