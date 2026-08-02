@@ -9,6 +9,46 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.42.1] - 2026-08-02
+
+### Fixed
+
+- **Pre-existing CI test failures (hermetic + cross-platform)** — fixed the five
+  environment-dependent test failures that had kept `test-linux.yml` red since
+  v1.41.1: `model.test.ts` seeds API keys so the explain JSON has a non-empty
+  fallback chain in a fresh-HOME CI; `safe-execution-layer.test.ts` uses a
+  hermetic `SandboxManager` stub (Docker-enabled runners);
+  `inspect-module.test.ts` skips the unreadable-dir assertion on Windows (no
+  POSIX chmod read bits); `history.test.ts` uses `TMPDIR || TEMP || '/tmp'`
+  instead of a hardcoded `/tmp`; and the dashboard server tests pin
+  `BUFF_MEMORY_DIR` before module import so the suite stays hermetic even when a
+  developer exports it in their shell
+- **Dashboard memory-dir consistency** — the dashboard server now honors
+  `BUFF_MEMORY_DIR` (`MEMORY_DIR = BUFF_MEMORY_DIR || ~/.buff/memory`), so the
+  bandit card and the promotion-gate card always read from the same directory as
+  the CLI and the learning router
+
+### Added
+
+- **Promotion-gate verdict in the dashboard** — the 🤖 Routing panel now renders a
+  live 🎖️ Promotion Gate card (ruflo ADR-150 mirror): promoted / not-promoted /
+  collecting-data verdict, sufficiency progress (diverged vs. min decisions), and
+  the three criteria — quality >+2%, cost <+1%, latency <+5% — with pass/fail
+  chips. Unmeasured latency honestly renders a `○ neutral` chip instead of a
+  misleading green pass. Backed by `readPromotionData()` on `/api/routing`
+  (also wired into `/api/all` and SSE)
+- **CI routing regression guard** — `test-linux.yml` runs the four learning-router
+  test files (bandit / promotion gate / auto-router / tier-0) in a dedicated step
+  before the full suite, so routing regressions fail fast with a clearly-labeled
+  step
+- **Dashboard component tests** — first frontend unit tests: the dashboard's own
+  vitest + jsdom + Testing Library setup (`src/web-dashboard/vitest.config.ts`,
+  `npm test`) covering `PromotionGateSection` rendering states (promoted,
+  collecting-data, not-promoted, neutral latency, hidden-empty, absent data), wired
+  into CI as a dedicated `Dashboard component tests` step
+
+---
+
 ## [1.42.0] - 2026-08-02
 
 ### Added
