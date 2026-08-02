@@ -9,12 +9,35 @@
  * - Failover timeline (parked → failover → re-enabled)
  *
  * The panel is purely read-only — it renders whatever CLIManager.getQuotaStatus()
- * returns and offers a single "Refresh" action (the panel owns the fetch loop,
- * so it never needs message plumbing beyond a simple refresh request).
+ * returns, offers a manual "Refresh" action, AND auto-refreshes live when the
+ * ledger/timeline files change (fs.watch on the memory dir, mirroring the
+ * dashboard's SSE quota watcher) so parked/failover events appear instantly
+ * without clicking.
  */
 
+import { existsSync, mkdirSync, watch } from 'node:fs';
+import { basename, join } from 'node:path';
+import { homedir } from 'node:os';
 import * as vscode from 'vscode';
 import type { QuotaStatusInfo } from './types.js';
+
+// ─── Helpers ────────────────────────────────────────────────────────────────
+
+/** Debounce window for the file watcher (ms) — fs.watch can fire multiple
+ * events per write; re-read once per burst. Mirrors the dashboard's 150ms. */
+const WATCH_DEBOUNCE_MS = 150;
+
+/**
+ * True when a watch event filename refers to a quota file we care about.
+ * A null/empty filename is treated as a trigger too (some platforms report
+ * null on directory watches); macOS FSEvents can report FULL PATHS, so
+ * normalize with basename() before comparing — exactly like the dashboard's
+ * armQuotaWatcher.
+ */
+export function isQuotaWatchFile(filename: string | null | undefined): boolean {
+  const name = basename(String(filename || ''));
+  return !name || name === 'quota-events.jsonl' || name === 'quota-ledger.json';
+}
 
 // ─── QuotaPanel ─────────────────────────────────────────────────────────────
 
@@ -24,9 +47,18 @@ export class QuotaPanel {
   private panel: vscode.WebviewPanel | null = null;
   private disposables: vscode.Disposable[] = [];
   private loadStatus: () => Promise<QuotaStatusInfo>;
+  /** Memory dir watched for live quota updates (BUFF_MEMORY_DIR-aware). */
+  private watchDir: string;
+  private watcher: ReturnType<typeof watch> | null = null;
+  private watchTimer: ReturnType<typeof setTimeout> | null = null;
 
-  constructor(loadStatus: () => Promise<QuotaStatusInfo>) {
-    this.loadStatus = loadStatus;
+  constructor(options: {
+    loadStatus: () => Promise<QuotaStatusInfo>;
+    /** Override the watched memory dir (defaults to BUFF_MEMORY_DIR || ~/.buff/memory). */
+    watchDir?: string;
+  }) {
+    this.loadStatus = options.loadStatus;
+    this.watchDir = options.watchDir || process.env.BUFF_MEMORY_DIR || join(homedir(), '.buff', 'memory');
   }
 
   /**
@@ -75,6 +107,9 @@ export class QuotaPanel {
     // responds with the payload — this guarantees the first postMessage lands
     // after the webview is ready (avoids a lost-initial-payload race). The
     // reveal path above fetches directly since the script doesn't re-run.
+
+    // Arm the live watcher for the panel's lifetime (disarmed in dispose).
+    this.armWatcher();
   }
 
   /**
@@ -119,7 +154,51 @@ export class QuotaPanel {
 
   // ── Private ──────────────────────────────────────────────────────────────
 
+  /**
+   * Watch the memory dir and auto-refresh when quota files change, so a
+   * failover/park/window-reset written by ANY process sharing BUFF_MEMORY_DIR
+   * (CLI, chat, dashboard) shows up instantly without clicking Refresh.
+   * Best-effort — a failed watcher must never break the panel.
+   */
+  private armWatcher(): void {
+    if (this.watcher) return;
+    try {
+      // The memory dir may not exist yet (panel opened before any CLI run) —
+      // create it first so watch() doesn't throw ENOENT (mirrors the dashboard).
+      if (!existsSync(this.watchDir)) {
+        mkdirSync(this.watchDir, { recursive: true });
+      }
+      this.watcher = watch(this.watchDir, (_eventType, filename) => {
+        if (!isQuotaWatchFile(filename)) return;
+        if (this.watchTimer) clearTimeout(this.watchTimer);
+        this.watchTimer = setTimeout(() => {
+          this.watchTimer = null;
+          void this.refresh();
+        }, WATCH_DEBOUNCE_MS);
+      });
+    } catch {
+      // Best-effort — fall back to manual Refresh only.
+      this.watcher = null;
+    }
+  }
+
+  private disarmWatcher(): void {
+    if (this.watchTimer) {
+      clearTimeout(this.watchTimer);
+      this.watchTimer = null;
+    }
+    if (this.watcher) {
+      try {
+        this.watcher.close();
+      } catch {
+        // ignore — already closed
+      }
+      this.watcher = null;
+    }
+  }
+
   private dispose(): void {
+    this.disarmWatcher();
     this.panel = null;
     for (const disposable of this.disposables) {
       disposable.dispose();

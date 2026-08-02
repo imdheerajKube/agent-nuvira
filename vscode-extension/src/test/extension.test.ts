@@ -49,6 +49,7 @@ vi.mock('../cliManager.js', () => ({
         paidRequests: 0,
         estimatedSavedUsd: 0,
       }),
+      getMemoryDir: vi.fn(() => '/tmp/test-buff-memory'),
       cancel: vi.fn(),
       dispose: vi.fn(),
     };

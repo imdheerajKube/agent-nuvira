@@ -8,6 +8,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- **Live quota updates** — the Quota Ledger view now watches the CLI memory
+  dir (`fs.watch`, `BUFF_MEMORY_DIR`-aware) and **auto-refreshes the moment**
+  `quota-ledger.json` or `quota-events.jsonl` changes, so a failover / park /
+  window-reset written by any process sharing the memory dir (CLI, chat,
+  dashboard) appears instantly without clicking Refresh. Debounced 150ms,
+  basename-normalized filter (macOS FSEvents full-path safe), null-filename
+  treated as trigger, ENOENT-safe watch arm, and the watcher is disarmed on
+  panel close
+
+---
+
+## [0.5.0] — 2026-08-02
+
+### Added
 - **Quota Ledger View** — new `Agent-Nuvira: Show Quota Ledger` command (and a
   quota status-bar indicator) opens a webview panel that visualizes the central
   quota ledger (`~/.buff/memory/quota-ledger.json` + `quota-events.jsonl`):

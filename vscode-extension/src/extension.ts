@@ -59,16 +59,21 @@ export function activate(context: vscode.ExtensionContext): void {
   // Initialize core components
   cliManager = new CLIManager(config);
   agentPanel = new AgentPanel();
-  quotaPanel = new QuotaPanel(() => cliManager?.getQuotaStatus() ?? Promise.resolve({
-    enabled: false,
-    entries: [],
-    events: [],
-    freeTokens: 0,
-    freeRequests: 0,
-    paidTokens: 0,
-    paidRequests: 0,
-    estimatedSavedUsd: 0,
-  }));
+  // The quota panel reads the ledger via getQuotaStatus() and auto-refreshes
+  // live by watching the same memory dir the reader uses.
+  quotaPanel = new QuotaPanel({
+    loadStatus: () => cliManager?.getQuotaStatus() ?? Promise.resolve({
+      enabled: false,
+      entries: [],
+      events: [],
+      freeTokens: 0,
+      freeRequests: 0,
+      paidTokens: 0,
+      paidRequests: 0,
+      estimatedSavedUsd: 0,
+    }),
+    watchDir: cliManager.getMemoryDir(),
+  });
   chatHistory = new ChatHistoryProvider(context);
   chatPanel = new ChatPanel(context, chatHistory, config, cliManager);
   // Refresh the status bar indicator when the model is switched from the chat panel

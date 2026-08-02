@@ -248,6 +248,15 @@ export class CLIManager {
   }
 
   /**
+   * Resolve the CLI's memory dir (`BUFF_MEMORY_DIR` override, else
+   * `~/.buff/memory`). Public so the quota panel can watch the same directory
+   * the reader uses for live updates.
+   */
+  getMemoryDir(): string {
+    return process.env.BUFF_MEMORY_DIR || join(homedir(), '.buff', 'memory');
+  }
+
+  /**
    * Read the central quota ledger + failover timeline directly from the CLI's
    * memory dir (`~/.buff/memory/quota-ledger.json` + `quota-events.jsonl`,
    * honoring BUFF_MEMORY_DIR like the dashboard does).
@@ -257,7 +266,7 @@ export class CLIManager {
    * install where the ledger doesn't exist yet.
    */
   async getQuotaStatus(): Promise<QuotaStatusInfo> {
-    const memoryDir = process.env.BUFF_MEMORY_DIR || join(homedir(), '.buff', 'memory');
+    const memoryDir = this.getMemoryDir();
     const empty: QuotaStatusInfo = {
       enabled: false,
       entries: [],
