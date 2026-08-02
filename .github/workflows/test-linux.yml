@@ -81,7 +81,13 @@ jobs:
       # Frontend component tests — the dashboard has its own package (react +
       # vite) with a committed lockfile; npm ci keeps the install hermetic and
       # --foreground-scripts ensures native install scripts (esbuild) run.
+      # Version note: the dashboard intentionally uses vitest 3.x (pairs with
+      # vite 5/esbuild 0.21) while the ROOT suite uses vitest 4.x — they are
+      # separate package trees. The tests are pure jsdom and platform-agnostic,
+      # so this step runs on ONE matrix combo instead of all four to avoid 3
+      # redundant npm ci runs.
       - name: Dashboard component tests (PromotionGateSection)
+        if: matrix.os == 'ubuntu-latest' && matrix.node-version == '22'
         run: cd src/web-dashboard && npm ci --no-audit --no-fund --foreground-scripts && npx vitest run
         env:
           CI: true

@@ -23,30 +23,6 @@ import {
   detectProjectImage,
 } from '../../src/sandbox/images.js';
 
-// ─── Helpers ────────────────────────────────────────────────────────────────
-
-/**
- * Create a mock execSync for testing. Replaces execSync in the manager.
- */
-function mockDockerAvailable(available: boolean, version = '24.0.0') {
-  const mockExecSync = vi.fn();
-  const mockSpawn = vi.fn();
-
-  if (available) {
-    mockExecSync.mockReturnValue(Buffer.from(version));
-  } else {
-    mockExecSync.mockImplementation(() => {
-      const err = new Error('Docker not available') as any;
-      err.status = 1;
-      err.stdout = '';
-      err.stderr = 'Cannot connect to the Docker daemon';
-      throw err;
-    });
-  }
-
-  return { mockExecSync, mockSpawn };
-}
-
 // ─── Tests ──────────────────────────────────────────────────────────────────
 
 describe('SandboxManager', () => {

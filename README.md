@@ -719,7 +719,7 @@ agent-nuvira model bandit --json
 agent-nuvira model bandit reset
 ```
 
-The dashboard's 🤖 **Routing** panel shows the same bandit live — an α/β heatmap plus a learning-history timeline (enable `routing.bandit` and run auto-routed tasks to populate it).
+The dashboard's 🤖 **Routing** panel shows the same bandit live — an α/β heatmap plus a learning-history timeline (enable `routing.bandit` and run auto-routed tasks to populate it). It also renders a live **🎖️ Promotion Gate** card (v1.42.1): an A/B verdict on whether the bandit is actually **better than the deterministic heuristic**, judged on real trajectories (`router-promotion.jsonl`) — quality must improve >2% while cost and latency don't regress (ruflo ADR-150). Unmeasured latency is honestly shown as a neutral chip, never a green pass.
 
 **Routing rules** — force a specific provider/model for task patterns (regex/string, evaluated before scoring):
 

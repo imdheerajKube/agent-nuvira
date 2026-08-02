@@ -469,6 +469,8 @@ src/web-dashboard/              # React web dashboard
 | 73 | **Routing Eval Mode** | ✅ Complete (v1.40.0) | v1.40.0 | `buff eval --routing` evaluates the exact provider/model pairs the Auto router picks per eval task — each distinct pick runs the full Agent Evaluation framework (real pipeline + hidden tests) and is ranked by composite score, closing the routing→reliability loop |
 | 74 | **Routing History Store** | ✅ Complete (v1.40.0) | v1.40.0 | `~/.buff/memory/routing-history.json` records every Auto router decision (chat, orchestrator, explain, benchmark, eval) — capped at 500, best-effort writes, powers the dashboard's usage stats and audit trail |
 | 75 | **Routing Usage + Audit Trail Dashboard** | ✅ Complete (v1.40.0) | v1.40.0 | Routing panel gains two views: actual picks over time (totals, last-24h, per-provider/model/source counts) and a 30-entry audit timeline of explain snapshots + routing-mode picks |
+| 76 | **Promotion Gate Dashboard** | ✅ Complete (v1.42.1) | v1.42.1 | The 🤖 Routing panel renders a live 🎖️ Promotion Gate card — bandit-vs-heuristic A/B verdict (quality >+2%, cost <+1%, latency <+5% criteria, promoted/collecting-data states) over `router-promotion.jsonl` trajectories; unmeasured latency shows a neutral chip |
+| 77 | **Routing Component Tests + CI Guard** | ✅ Complete (v1.42.1) | v1.42.1 | First dashboard frontend unit tests (vitest 3 + jsdom + Testing Library) covering PromotionGateSection states; `test-linux.yml` gains a dedicated routing regression-guard step (bandit/promotion-gate/auto-router/tier-0) running before the full suite |
 
 ### 3.2 Key Upgrades & Enhancements
 
@@ -502,6 +504,8 @@ src/web-dashboard/              # React web dashboard
 | **Model Explain JSON** | v1.39.3 | `buff model explain "<task>" --json` emits a machine-readable payload (weights, ranked providers, winner, fallback chain, effective per-provider pricing with override flags) for scripting and CI |
 | **Routing Eval Mode** | v1.40.0 | `buff eval --routing` evaluates each Auto router pick through the full Agent Evaluation framework and ranks picks by composite score — reliability, not just response quality |
 | **Routing Usage + Audit Trail** | v1.40.0 | Dashboard Routing panel shows actual picks over time (usage stats) and a 30-entry audit timeline; every explain snapshot and routing-mode pick is persisted to `routing-history.json` |
+| **Promotion Gate Dashboard** | v1.42.1 | Routing panel shows whether the learning bandit is actually better than the heuristic — quality/cost/latency A/B verdict over real trajectories |
+| **Routing Component Tests + CI Guard** | v1.42.1 | Dashboard frontend unit tests (vitest 3 + jsdom + Testing Library) wired into CI; dedicated routing regression-guard step runs the learning-router tests before the full suite |
 
 ### 3.3 Feature Maturity Matrix
 
