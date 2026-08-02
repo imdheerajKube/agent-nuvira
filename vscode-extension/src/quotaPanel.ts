@@ -28,6 +28,14 @@ import type { QuotaStatusInfo } from './types.js';
 const WATCH_DEBOUNCE_MS = 150;
 
 /**
+ * Poll fallback interval (ms) — fs.watch can be unreliable on some platforms
+ * (network drives, FUSE mounts, some containers). A modest periodic refresh
+ * guarantees the ledger view eventually catches up even if watch events are
+ * dropped. 60s keeps it cheap while the watcher remains the fast path.
+ */
+const WATCH_POLL_MS = 60_000;
+
+/**
  * True when a watch event filename refers to a quota file we care about.
  * A null/empty filename is treated as a trigger too (some platforms report
  * null on directory watches); macOS FSEvents can report FULL PATHS, so
@@ -51,15 +59,22 @@ export class QuotaPanel {
   private watchDir: string;
   private watcher: ReturnType<typeof watch> | null = null;
   private watchTimer: ReturnType<typeof setTimeout> | null = null;
+  /** Periodic poll fallback (undefined while not armed). */
+  private pollTimer: ReturnType<typeof setInterval> | null = null;
 
   constructor(options: {
     loadStatus: () => Promise<QuotaStatusInfo>;
     /** Override the watched memory dir (defaults to BUFF_MEMORY_DIR || ~/.buff/memory). */
     watchDir?: string;
+    /** Override the poll-fallback interval (ms). Default 60000. Tests inject a tiny value. */
+    pollMs?: number;
   }) {
     this.loadStatus = options.loadStatus;
     this.watchDir = options.watchDir || process.env.BUFF_MEMORY_DIR || join(homedir(), '.buff', 'memory');
+    this.pollMs = options.pollMs ?? WATCH_POLL_MS;
   }
+
+  private pollMs: number;
 
   /**
    * Create or reveal the quota panel.
@@ -162,6 +177,14 @@ export class QuotaPanel {
    */
   private armWatcher(): void {
     if (this.watcher) return;
+    // Poll fallback is ALWAYS armed (not just when watch() fails): fs.watch
+    // can silently drop events on some platforms, so a periodic refresh is the
+    // safety net that guarantees the ledger eventually catches up. The watcher
+    // remains the fast path; the poll just bounds the worst-case staleness.
+    if (this.pollTimer) clearInterval(this.pollTimer);
+    this.pollTimer = setInterval(() => {
+      void this.refresh();
+    }, this.pollMs);
     try {
       // The memory dir may not exist yet (panel opened before any CLI run) —
       // create it first so watch() doesn't throw ENOENT (mirrors the dashboard).
@@ -177,7 +200,7 @@ export class QuotaPanel {
         }, WATCH_DEBOUNCE_MS);
       });
     } catch {
-      // Best-effort — fall back to manual Refresh only.
+      // Best-effort — the poll fallback still runs even if watch() fails.
       this.watcher = null;
     }
   }
@@ -186,6 +209,10 @@ export class QuotaPanel {
     if (this.watchTimer) {
       clearTimeout(this.watchTimer);
       this.watchTimer = null;
+    }
+    if (this.pollTimer) {
+      clearInterval(this.pollTimer);
+      this.pollTimer = null;
     }
     if (this.watcher) {
       try {

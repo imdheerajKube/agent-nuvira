@@ -8,6 +8,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- **Poll-fallback auto-refresh** — on top of the file watcher, the Quota
+  Ledger view now runs a modest periodic refresh (60s) as a safety net for
+  platforms where `fs.watch` silently drops events (network drives, FUSE
+  mounts, some containers). The watcher stays the fast path; the poll just
+  bounds the worst-case staleness so the ledger always eventually catches up.
+  Injectable `pollMs` (tests use a tiny value) and disarmed with the watcher on
+  panel close
+
+## [0.6.0] — 2026-08-02
+
+### Added
 - **Live quota updates** — the Quota Ledger view now watches the CLI memory
   dir (`fs.watch`, `BUFF_MEMORY_DIR`-aware) and **auto-refreshes the moment**
   `quota-ledger.json` or `quota-events.jsonl` changes, so a failover / park /

@@ -281,4 +281,40 @@ describe('QuotaPanel', () => {
     await new Promise((r) => setTimeout(r, 600));
     expect(loader).toHaveBeenCalledTimes(1);
   });
+
+  it('poll fallback auto-refreshes periodically even without file writes', async () => {
+    const loader = vi.fn().mockResolvedValue(emptyStatus);
+    // Tiny poll interval so the test doesn't wait 60s; the watcher debounce is
+    // untouched — this exercises the safety-net poll path only.
+    const panel = new QuotaPanel({ loadStatus: loader, watchDir: tempDir, pollMs: 40 });
+    panels.push(panel);
+    panel.createOrShow(vscode.Uri.file('/test/extension'));
+
+    const webview = (vscode.window.createWebviewPanel as ReturnType<typeof vi.fn>).mock.results[0].value;
+    const handler = webview.webview.onDidReceiveMessage.mock.calls[0][0] as (msg: { type: string }) => void;
+    handler({ type: 'refresh' });
+    await vi.waitFor(() => expect(loader).toHaveBeenCalledTimes(1));
+
+    // No file writes — the poll timer alone must drive further refreshes.
+    await vi.waitFor(() => expect(loader).toHaveBeenCalledTimes(2), { timeout: 5000 });
+    await vi.waitFor(() => expect(loader).toHaveBeenCalledTimes(3), { timeout: 5000 });
+  });
+
+  it('stops the poll fallback on dispose', async () => {
+    const loader = vi.fn().mockResolvedValue(emptyStatus);
+    const panel = new QuotaPanel({ loadStatus: loader, watchDir: tempDir, pollMs: 40 });
+    panels.push(panel);
+    panel.createOrShow(vscode.Uri.file('/test/extension'));
+
+    const webview = (vscode.window.createWebviewPanel as ReturnType<typeof vi.fn>).mock.results[0].value;
+    const handler = webview.webview.onDidReceiveMessage.mock.calls[0][0] as (msg: { type: string }) => void;
+    handler({ type: 'refresh' });
+    await vi.waitFor(() => expect(loader).toHaveBeenCalledTimes(1));
+    await vi.waitFor(() => expect(loader).toHaveBeenCalledTimes(2), { timeout: 5000 });
+
+    (panel as unknown as { dispose(): void }).dispose();
+    const callsAfterDispose = loader.mock.calls.length;
+    await new Promise((r) => setTimeout(r, 200));
+    expect(loader.mock.calls.length).toBe(callsAfterDispose);
+  });
 });
