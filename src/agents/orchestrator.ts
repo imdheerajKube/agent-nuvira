@@ -17,7 +17,7 @@
  * Called by the `agent-nuvira execute` CLI command.
  */
 
-import { existsSync, writeFileSync, mkdirSync } from 'node:fs';
+import { existsSync, readFileSync, writeFileSync, mkdirSync } from 'node:fs';
 import { dirname, isAbsolute, join, resolve } from 'node:path';
 import inquirer from 'inquirer';
 
@@ -52,6 +52,7 @@ import { getQuotaLedger } from '../learning/quota-ledger.js';
 import { resolveWorkingModel } from '../inference/model-validator.js';
 import { recordRoutingDecision } from '../learning/routing-history.js';
 import { createReviewFromResult } from '../team/review.js';
+import { indexFiles, retrieve, recordRetrievalStats, retrievalOptionsFromConfig, estimateTokens as retrievalEstimateTokens } from '../learning/retrieval.js';
 
 // ─── DAG Integration (optional — dashboard may not be built) ─────────────────
 
@@ -1357,6 +1358,58 @@ export class Orchestrator {
           if (!contextFiles.includes(artifact.path)) {
             contextFiles.push(artifact.path);
           }
+        }
+      }
+
+      // ── Vector retrieval hook (post-gather) ───────────────────────────
+      // Once the gatherer has collected the relevant files, index them into
+      // the repo vector store (idempotent) and retrieve the top-k chunks for
+      // the goal. This gives the writer a SEMANTIC file ranking (relevance
+      // over size) and records token-savings transparency for the dashboard.
+      // Best-effort: any retrieval failure falls through silently — the
+      // pipeline must never break on an embedding/indexing error.
+      if (effectiveAgentType === 'context-gatherer' && result.success && contextFiles.length > 0) {
+        try {
+          const retrievalOpts = retrievalOptionsFromConfig(this.configManager);
+          if (retrievalOpts.enabled) {
+            const { files, chunks } = await indexFiles(contextFiles, retrievalOpts);
+            if (chunks > 0) {
+              const hits = await retrieve(vault.context.goal, retrievalOpts);
+              if (hits.length > 0) {
+                vault.setMeta('retrievalRanking', hits.map((h) => ({
+                  filePath: h.chunk.filePath,
+                  similarity: h.similarity,
+                })));
+              }
+              // Token-savings transparency (Step 5): record the retrieval into
+              // retrieval-stats.json so `buff retrieval stats` and the dashboard
+              // Retrieval card reflect pipeline retrieval too (not just chat).
+              try {
+                const originalTokens = contextFiles.reduce((sum, f) => {
+                  try { return sum + retrievalEstimateTokens(readFileSync(f, 'utf-8')); } catch { return sum; }
+                }, 0);
+                const reducedTokens = hits.reduce((sum, h) => sum + h.chunk.tokenCount, 0);
+                recordRetrievalStats({
+                  used: hits.length > 0,
+                  originalTokens,
+                  reducedTokens,
+                  savedTokens: Math.max(0, originalTokens - reducedTokens),
+                  pctReduced: originalTokens > 0 ? Math.round((1 - reducedTokens / originalTokens) * 1000) / 10 : 0,
+                  chunksRetrieved: hits.length,
+                  failover: false,
+                  hits: hits.map((h) => ({ filePath: h.chunk.filePath, similarity: h.similarity })),
+                  timestamp: Date.now(),
+                });
+              } catch {
+                // Best-effort — stats must never break the pipeline.
+              }
+              if (options.verbose) {
+                logger.info(`🧠 Indexed ${files} file(s) into ${chunks} retrieval chunk(s)`);
+              }
+            }
+          }
+        } catch (err) {
+          logger.debug(`Vector retrieval hook skipped: ${err instanceof Error ? err.message : err}`);
         }
       }
 

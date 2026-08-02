@@ -50,6 +50,7 @@ agent-nuvira config list
 - **Startup progress feedback** — first launch never looks like a silent hang: a live spinner reports each startup phase (plugins → history & search → semantic index) as it runs
 - **Auto-mode session failover** — in Auto routing, a provider whose API key/token expires or rate-limits mid-session is automatically swapped for the next-best provider (auth failures excluded for the session, rate-limit failures for a 120s cooldown, 5xx/network through the circuit breaker) — no more stuck sessions on a dead key
 - **Central quota ledger** — tokens/requests per provider × model with calendar-aware reset windows; exhausted providers are **parked** until the window rolls (auto re-enable, no timers), and Auto routing sinks parked providers below healthy candidates **before** a call — plus an optional free/local-first `allowPaid` gate and a `buff model quota` CLI with a cost summary (free vs paid tokens + estimated $ saved)
+- **Vector retrieval (token-efficient context)** — large gathered contexts are chunked, embedded locally (`bge-small-en-v1.5` via @huggingface/transformers, zero new deps) and reduced to the top-k semantically-relevant chunks before the LLM call — saving tokens so free quotas stretch further. Complements the quota ledger: **retrieval saves tokens, the ledger manages quotas**. Small contexts pass through untouched (zero overhead); any retrieval failure fails over to full context. `buff retrieval index/query/stats/clear` + a dashboard Retrieval card show the savings
 - **Checkpoint / resume** — `buff execute "<goal>" --checkpoint` saves a resume-able snapshot after every task batch; `--resume [id]` rehydrates the plan and continues from the first pending step (a crash / quota kill / token expiry mid-pipeline no longer restarts the whole plan); `--checkpoint-list` shows saved pipelines
 - **Security scan CLI** — `buff security scan` detects PII, prompt injections, and dangerous code patterns
 - **Feedback & rating system** — `buff feedback record/list/stats/clear` drives self-improvement scoring
@@ -834,6 +835,66 @@ agent-nuvira config set routing.alwaysWatchQuota true
 ```
 
 Always-on trades a tiny idle fs watch for instant-up-to-date quota state.
+
+#### Vector retrieval — token-efficient context (saves tokens, complements the quota ledger)
+
+Agent-Nuvira can **vectorize large context** with a local embedding model + the
+pure-JS vector store — no FAISS/native deps, no server. The retrieval layer
+saves tokens (stretching free quotas), while the quota ledger manages limits:
+
+| Piece | What it does |
+|---|---|
+| **Chunking** | Large files split into ~512-token chunks (64-token overlap, paragraph-aware) |
+| **Embedding** | `bge-small-en-v1.5` (384-dim) via @huggingface/transformers — local, free, offline, cached |
+| **Vector store** | Pure-JS cosine-similarity index in `~/.buff/memory/vectors-repo.json` (honors `BUFF_MEMORY_DIR`), isolated from memory/history vectors |
+| **Retrieval** | Goal/subtask embedded → top-k chunks (default 5) → reduced context |
+| **Router policy** | Context ≤ threshold (12k tokens) → **direct call, zero overhead**; larger → embed + retrieve; any failure → **failover to full context** (never breaks the LLM call) |
+| **Transparency** | `🧠 Retrieved 5 chunks — reduced context 20k → 3k tokens` + `buff retrieval stats` + dashboard Retrieval card |
+
+```bash
+# Pre-index a repo so Auto runs are instant (first run downloads the ~130MB
+# model once, then cached locally)
+agent-nuvira retrieval index .
+
+# Semantic search over the indexed repo
+agent-nuvira retrieval query "how does login with JWT work?"
+
+# Token-savings transparency
+agent-nuvira retrieval stats
+
+# Wipe index + stats
+agent-nuvira retrieval clear
+```
+
+Where retrieval applies (honest split):
+- **`buff chat --file <large-file>`** — the file is chunked, embedded, and
+  reduced to the top-k relevant chunks before the LLM call (big token savings).
+- **`buff execute` pipelines** — after the context-gatherer collects files, the
+  orchestrator indexes them and produces a **semantic file ranking** for the
+  writer (relevance over size when selecting which files fit the token budget),
+  and records the retrieval into the token-savings stats.
+
+**Config** (`routing.retrieval`):
+
+```bash
+# Master switch (default true)
+agent-nuvira config set routing.retrieval.enabled false
+
+# Top-k chunks (default 5), chunk size (default 512 tokens), vectorize threshold (default 12000 tokens)
+agent-nuvira config set routing.retrieval.topK 8
+agent-nuvira config set routing.retrieval.chunkTokens 640
+agent-nuvira config set routing.retrieval.thresholdTokens 20000
+```
+
+**Roadmap (Step 6 — future enhancements):**
+1. **Hybrid retrieval** — combine embeddings with keyword/BM25 scoring for
+   exact-match-sensitive queries.
+2. **Embedding caching** — the embedder already caches in-memory; a persistent
+   on-disk embedding cache would skip re-embedding unchanged chunks across
+   sessions.
+3. **Multi-vector routing** — different embedding models for code vs natural
+   language (the store already supports namespaced indexes, so this is a
+   config-level addition).
 
 **Opt-in failover confirmation.** By default Auto mode fails over silently
 (never get stuck). If you'd rather approve each mid-session swap, enable:

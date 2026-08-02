@@ -164,6 +164,27 @@ export interface RoutingConfig {
    * dashboard is left running between viewing sessions. Default: false.
    */
   alwaysWatchQuota?: boolean;
+  /**
+   * Vector retrieval (token-efficient context). Large gathered contexts are
+   * chunked, embedded locally (bge-small-en-v1.5 via @huggingface/transformers),
+   * and reduced to the top-k semantically relevant chunks before the LLM call
+   * — saving tokens so free quotas stretch further. Small contexts pass
+   * through untouched (zero overhead). Failures fall back to full context.
+   */
+  retrieval?: {
+    /** Master switch. Default: true (cheap for small contexts, big win for large). */
+    enabled?: boolean;
+    /** Top-k chunks to retrieve. Default: 5. */
+    topK?: number;
+    /** Chunk size in tokens. Default: 512. */
+    chunkTokens?: number;
+    /** Overlap between adjacent chunks (tokens). Default: 64. */
+    overlapTokens?: number;
+    /** Contexts above this token count are vectorized. Default: 12000. */
+    thresholdTokens?: number;
+    /** Embedding model override (default Xenova/bge-small-en-v1.5). */
+    model?: string;
+  };
 }
 
 /**

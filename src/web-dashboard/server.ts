@@ -1127,6 +1127,75 @@ function readRoutingInsights(): Record<string, unknown> {
     bandit: readBanditData(),
     promotion: readPromotionData(),
     quota: readQuotaData(),
+    retrieval: readRetrievalData(),
+    updatedAt: Date.now(),
+  };
+}
+
+/**
+ * Read the vector-retrieval token-savings transparency (retrieval-stats.json
+ * from the memory dir) plus the repo chunk index size. Backs the dashboard's
+ * Retrieval card: how many tokens were saved by vectorizing large contexts
+ * (complements the quota ledger — one saves tokens, the other manages quotas).
+ */
+function readRetrievalData(): Record<string, unknown> {
+  const data = readJSON<{
+    totalCalls?: number;
+    totalRetrievals?: number;
+    totalFailovers?: number;
+    totalOriginalTokens?: number;
+    totalReducedTokens?: number;
+    totalSavedTokens?: number;
+    avgPctReduced?: number;
+    lastCall?: Record<string, unknown>;
+    recent?: Array<Record<string, unknown>>;
+  }>(join(MEMORY_DIR, 'retrieval-stats.json'));
+
+  let repoChunks = 0;
+  let dimensions = 0;
+  try {
+    const idx = readJSON<{ entries?: Record<string, { vector?: number[] }> }>(
+      join(MEMORY_DIR, 'vectors-repo.json'),
+    );
+    if (idx?.entries) {
+      repoChunks = Object.keys(idx.entries).length;
+      const first = Object.values(idx.entries)[0];
+      dimensions = first?.vector?.length || 0;
+    }
+  } catch {
+    // Best-effort — the index may not exist yet.
+  }
+
+  if (!data) {
+    return {
+      enabled: false,
+      totalCalls: 0,
+      totalRetrievals: 0,
+      totalFailovers: 0,
+      totalOriginalTokens: 0,
+      totalReducedTokens: 0,
+      totalSavedTokens: 0,
+      avgPctReduced: 0,
+      repoChunks,
+      dimensions,
+      recent: [],
+      updatedAt: Date.now(),
+    };
+  }
+
+  return {
+    enabled: (data.totalCalls || 0) > 0 || repoChunks > 0,
+    totalCalls: data.totalCalls ?? 0,
+    totalRetrievals: data.totalRetrievals ?? 0,
+    totalFailovers: data.totalFailovers ?? 0,
+    totalOriginalTokens: data.totalOriginalTokens ?? 0,
+    totalReducedTokens: data.totalReducedTokens ?? 0,
+    totalSavedTokens: data.totalSavedTokens ?? 0,
+    avgPctReduced: data.avgPctReduced ?? 0,
+    lastCall: data.lastCall ?? null,
+    recent: (data.recent || []).slice(-10),
+    repoChunks,
+    dimensions,
     updatedAt: Date.now(),
   };
 }

@@ -11,7 +11,7 @@
  */
 
 import { existsSync, readFileSync } from 'node:fs';
-import { isAbsolute, join } from 'node:path';
+import { basename, isAbsolute, join } from 'node:path';
 
 import { Agent, type AgentContext, type AgentResult, type FileChange, type LLMCallFn } from '../agent.js';
 import { logger } from '../../utils/logger.js';
@@ -362,7 +362,24 @@ export class WriterAgent extends Agent {
 
     // Use token-budget-aware file selection: show as many files as possible
     // within MAX_CONTEXT_CHARS, prioritizing smaller files to max context.
-    const filesToSend = this.selectFilesWithinBudget(context.artifacts, MAX_CONTEXT_CHARS);
+    // When the orchestrator's vector-retrieval hook produced a semantic file
+    // ranking for this goal (retrievalRanking metadata), prefer those files
+    // first so the LLM sees the most RELEVANT code within the token budget
+    // (relevance over size — the retrieval layer complements the quota ledger
+    // by saving tokens while keeping the important context).
+    const retrievalRanking = (context.metadata.retrievalRanking as Array<{ filePath: string; similarity: number }> | undefined) || [];
+    // Match by BOTH exact path and basename so ranking still works whether the
+    // gatherer produced relative or absolute artifact paths (the retrieval
+    // index keys may differ in normalization from the artifact path form).
+    const rankedPaths = new Set(retrievalRanking.map((r) => r.filePath));
+    const rankedBaseNames = new Set(retrievalRanking.map((r) => basename(r.filePath)));
+    const isRanked = (p: string) => rankedPaths.has(p) || rankedBaseNames.has(basename(p));
+    const filesToSend = this.selectFilesWithinBudget(context.artifacts, MAX_CONTEXT_CHARS, (a, b) => {
+      const ra = isRanked(a.path) ? 0 : 1;
+      const rb = isRanked(b.path) ? 0 : 1;
+      if (ra !== rb) return ra - rb;
+      return 0; // keep the size-first tiebreak inside selectFilesWithinBudget
+    });
 
     const fileContext = filesToSend.length > 0
       ? filesToSend
@@ -431,10 +448,15 @@ export class WriterAgent extends Agent {
   private selectFilesWithinBudget(
     artifacts: import('../agent.js').Artifact[],
     budget: number,
+    priorityComparator?: (a: import('../agent.js').Artifact, b: import('../agent.js').Artifact) => number,
   ): Array<{ artifact: import('../agent.js').Artifact; truncated: string | null }> {
     const sorted = [...artifacts]
       .map((a) => ({ artifact: a, size: a.content.length }))
-      .sort((a, b) => a.size - b.size);
+      .sort((a, b) => {
+        // Optional priority pass (e.g. retrieval-ranking first), then size-first.
+        const cmp = priorityComparator ? priorityComparator(a.artifact, b.artifact) : 0;
+        return cmp !== 0 ? cmp : a.size - b.size;
+      });
 
     const result: Array<{ artifact: import('../agent.js').Artifact; truncated: string | null }> = [];
     let used = 0;

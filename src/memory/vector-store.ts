@@ -33,13 +33,16 @@ interface VectorIndexData {
 
 // ─── Constants ──────────────────────────────────────────────────────────────
 
-const MEMORY_DIR = join(homedir(), '.buff', 'memory');
-const INDEX_PATH = join(MEMORY_DIR, 'vectors.json');
+const MEMORY_DIR = process.env.BUFF_MEMORY_DIR || join(homedir(), '.buff', 'memory');
 
 /**
  * Schema version for the vector index.
- * Version 2: Increased embedding dimensionality from 64 to 384 (all-MiniLM-L6-v2).
- * Old version 1 entries (64-dim) are incompatible and will be cleared.
+ * Version 2: 384-dim embeddings (all-MiniLM-L6-v2 / bge-small-en-v1.5).
+ *
+ * Namespace support does NOT bump the version: each namespace lives in its own
+ * file (vectors.json default, vectors-<ns>.json otherwise) and the ENTRY format
+ * is unchanged, so existing memory/history vectors survive an upgrade. Only a
+ * format change (dim, fields) would warrant a bump.
  */
 const CURRENT_VERSION = 2;
 
@@ -51,13 +54,13 @@ function ensureDir(): void {
   }
 }
 
-function readIndex(): VectorIndexData {
+function readIndex(indexPath: string): VectorIndexData {
   try {
     ensureDir();
-    if (!existsSync(INDEX_PATH)) {
+    if (!existsSync(indexPath)) {
       return { entries: {}, version: CURRENT_VERSION };
     }
-    const raw = readFileSync(INDEX_PATH, 'utf-8');
+    const raw = readFileSync(indexPath, 'utf-8');
     const data = JSON.parse(raw) as VectorIndexData;
 
     // Version migration: if the on-disk version doesn't match the current
@@ -73,9 +76,9 @@ function readIndex(): VectorIndexData {
   }
 }
 
-function writeIndex(data: VectorIndexData): void {
+function writeIndex(indexPath: string, data: VectorIndexData): void {
   ensureDir();
-  writeFileSync(INDEX_PATH, JSON.stringify(data, null, 2), 'utf-8');
+  writeFileSync(indexPath, JSON.stringify(data, null, 2), 'utf-8');
 }
 
 // ─── Vector Math ────────────────────────────────────────────────────────────
@@ -124,26 +127,44 @@ export function cosineSimilarity(a: number[], b: number[]): number {
  * ```
  */
 export class VectorStore {
+  /** Namespace key — memory vectors use the default; repo retrieval uses 'repo'. */
+  private namespace: string;
+  /** Index file path for this store's namespace. */
+  private indexPath: string;
+
+  /**
+   * @param namespace Optional namespace. Each namespace gets its OWN index file
+   *   (vectors.json for the default, vectors-<namespace>.json otherwise), so
+   *   different vector families (memory/history vs repo retrieval chunks) never
+   *   cross-pollinate while sharing the same schema + vector math.
+   */
+  constructor(namespace: string = 'default') {
+    this.namespace = namespace;
+    this.indexPath = namespace === 'default'
+      ? join(MEMORY_DIR, 'vectors.json')
+      : join(MEMORY_DIR, `vectors-${namespace}.json`);
+  }
+
   /**
    * Insert a vector entry into the index.
    * If an entry with the same `id` already exists, it is overwritten.
    */
   async insert(id: string, vector: number[], metadata: Record<string, unknown> = {}): Promise<void> {
-    const data = readIndex();
+    const data = readIndex(this.indexPath);
     data.entries[id] = {
       id,
       vector,
       metadata,
       createdAt: Date.now(),
     };
-    writeIndex(data);
+    writeIndex(this.indexPath, data);
   }
 
   /**
    * Retrieve a single entry by ID.
    */
   async get(id: string): Promise<VectorEntry | null> {
-    const data = readIndex();
+    const data = readIndex(this.indexPath);
     return data.entries[id] || null;
   }
 
@@ -151,10 +172,10 @@ export class VectorStore {
    * Remove an entry from the index.
    */
   async delete(id: string): Promise<boolean> {
-    const data = readIndex();
+    const data = readIndex(this.indexPath);
     if (!data.entries[id]) return false;
     delete data.entries[id];
-    writeIndex(data);
+    writeIndex(this.indexPath, data);
     return true;
   }
 
@@ -167,7 +188,7 @@ export class VectorStore {
     k: number = 5,
     filterFn?: (entry: VectorEntry) => boolean,
   ): Promise<Array<{ entry: VectorEntry; similarity: number }>> {
-    const data = readIndex();
+    const data = readIndex(this.indexPath);
     const entries = Object.values(data.entries);
 
     // Compute similarities
@@ -187,7 +208,7 @@ export class VectorStore {
    * Get the total number of stored entries.
    */
   async count(): Promise<number> {
-    const data = readIndex();
+    const data = readIndex(this.indexPath);
     return Object.keys(data.entries).length;
   }
 
@@ -195,14 +216,14 @@ export class VectorStore {
    * Clear all entries from the index.
    */
   async clear(): Promise<void> {
-    writeIndex({ entries: {}, version: CURRENT_VERSION });
+    writeIndex(this.indexPath, { entries: {}, version: CURRENT_VERSION });
   }
 
   /**
    * Get all entries (for iteration/export).
    */
   async getAll(): Promise<VectorEntry[]> {
-    const data = readIndex();
+    const data = readIndex(this.indexPath);
     return Object.values(data.entries);
   }
 
@@ -210,7 +231,7 @@ export class VectorStore {
    * Get vector store statistics.
    */
   stats(): { totalEntries: number; dimensions: number } {
-    const data = readIndex();
+    const data = readIndex(this.indexPath);
     const entries = Object.values(data.entries);
     const dimensions = entries.length > 0 ? entries[0].vector.length : 0;
     return {
@@ -220,12 +241,14 @@ export class VectorStore {
   }
 }
 
-// Singleton instance
-let storeInstance: VectorStore | null = null;
+// Singleton instances per namespace
+const storeInstances = new Map<string, VectorStore>();
 
-export function getVectorStore(): VectorStore {
-  if (!storeInstance) {
-    storeInstance = new VectorStore();
+export function getVectorStore(namespace: string = 'default'): VectorStore {
+  let store = storeInstances.get(namespace);
+  if (!store) {
+    store = new VectorStore(namespace);
+    storeInstances.set(namespace, store);
   }
-  return storeInstance;
+  return store;
 }

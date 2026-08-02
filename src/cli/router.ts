@@ -43,6 +43,7 @@ import { MCPCommand } from './mcp.js';
 import { CICommand } from './ci.js';
 import { PublishCommand } from './publish.js';
 import { PhaseCommand } from './phase.js';
+import { RetrievalCommand } from './retrieval.js';
 import { logger } from '../utils/logger.js';
 
 /**
@@ -173,6 +174,10 @@ export function createCLI(): Command {
   // Register Phase command (Phase-wise scope execution)
   const phaseCmd = new PhaseCommand();
   program.addCommand(phaseCmd.create());
+
+  // Register Retrieval command (vectorized token-efficient context)
+  const retrievalCmd = new RetrievalCommand();
+  program.addCommand(retrievalCmd.create());
 
   // Default action: show help
   program.action(() => {

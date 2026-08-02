@@ -1,5 +1,5 @@
 import type { ReactNode } from 'react';
-import type { BanditInsights, DashboardData, PromotionInsights, QuotaInsights, RoutingHistoryEntry, RoutingInsights, RoutingUsage } from '../types';
+import type { BanditInsights, DashboardData, PromotionInsights, QuotaInsights, RetrievalInsights, RoutingHistoryEntry, RoutingInsights, RoutingUsage } from '../types';
 
 // ─── Helpers ────────────────────────────────────────────────────────────────
 
@@ -609,6 +609,78 @@ function BestModelsSection({ routing }: { routing: RoutingInsights }) {
 
 // ─── Quota Ledger (central quota tracking per provider × model) ─────────────
 
+// ─── Vector Retrieval (token savings transparency) ─────────────────────────
+
+function RetrievalSection({ retrieval }: { retrieval: RetrievalInsights }) {
+  // Render when there's any retrieval activity OR a non-empty repo index — the
+  // index may exist even before the first call (user ran `buff retrieval index`).
+  if (!retrieval.enabled && retrieval.repoChunks === 0) return null;
+
+  const saved = retrieval.totalSavedTokens ?? 0;
+  const avgReduction = retrieval.avgPctReduced ?? 0;
+  const lastCall = retrieval.lastCall;
+  const totalCalls = retrieval.totalCalls ?? 0;
+  const totalRetrievals = retrieval.totalRetrievals ?? 0;
+  const failovers = retrieval.totalFailovers ?? 0;
+
+  return (
+    <SectionCard
+      icon="🧠"
+      title="Vector Retrieval — token savings"
+      subtitle="Large contexts are chunked, embedded locally (bge-small-en-v1.5), and reduced to the top-k relevant chunks before the LLM — saving tokens so free quotas stretch further. Complements the quota ledger: retrieval saves, the ledger manages."
+    >
+      <div style={{ display: 'flex', gap: 20, flexWrap: 'wrap', marginBottom: 14 }}>
+        <div style={{ background: '#0d1117', border: '1px solid #238636', borderRadius: 10, padding: '12px 18px', textAlign: 'center' }}>
+          <div style={{ fontSize: 22, fontWeight: 700, color: '#3fb950', fontFamily: "'SFMono-Regular', Consolas, monospace" }}>
+            {saved.toLocaleString()}
+          </div>
+          <div style={{ fontSize: 11, color: '#8b949e', marginTop: 2 }}>tokens saved</div>
+        </div>
+        <div style={{ background: '#0d1117', border: '1px solid #21262d', borderRadius: 10, padding: '12px 18px', textAlign: 'center' }}>
+          <div style={{ fontSize: 22, fontWeight: 700, color: '#e6edf3', fontFamily: "'SFMono-Regular', Consolas, monospace" }}>
+            {avgReduction.toFixed(1)}%
+          </div>
+          <div style={{ fontSize: 11, color: '#8b949e', marginTop: 2 }}>avg context reduction</div>
+        </div>
+        <div style={{ background: '#0d1117', border: '1px solid #d29922', borderRadius: 10, padding: '12px 18px', textAlign: 'center' }}>
+          <div style={{ fontSize: 22, fontWeight: 700, color: '#d29922', fontFamily: "'SFMono-Regular', Consolas, monospace" }}>
+            {retrieval.repoChunks.toLocaleString()}
+          </div>
+          <div style={{ fontSize: 11, color: '#8b949e', marginTop: 2 }}>repo chunks indexed</div>
+        </div>
+      </div>
+
+      <div style={{ display: 'flex', gap: 20, flexWrap: 'wrap', fontSize: 12, color: '#8b949e', marginBottom: 14 }}>
+        <span>📞 {totalCalls} context calls · 🧠 {totalRetrievals} retrievals used · ⚠️ {failovers} failovers (full-context fallback)</span>
+        {retrieval.dimensions > 0 && <span>· {retrieval.dimensions}-dim embeddings</span>}
+      </div>
+
+      {lastCall && lastCall.used !== false && lastCall.hits?.length > 0 && (
+        <div style={{ background: '#0d1117', border: '1px solid #21262d', borderRadius: 10, padding: '12px 16px', marginBottom: 12 }}>
+          <div style={{ fontSize: 12, fontWeight: 600, color: '#e6edf3', marginBottom: 8 }}>
+            Latest retrieval — {lastCall.originalTokens.toLocaleString()} → {lastCall.reducedTokens.toLocaleString()} tokens
+            <span style={{ color: '#3fb950', fontFamily: "'SFMono-Regular', Consolas, monospace" }}> (−{lastCall.pctReduced?.toFixed(0)}%)</span>
+          </div>
+          <div style={{ fontSize: 11, color: '#8b949e' }}>
+            {lastCall.hits.slice(0, 5).map((h) => (
+              <div key={h.filePath} style={{ marginTop: 3 }}>
+                <span style={{ color: '#58a6ff' }}>▸</span> {h.filePath}{' '}
+                <span style={{ fontFamily: "'SFMono-Regular', Consolas, monospace" }}>(sim {h.similarity.toFixed(3)})</span>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+
+      <div style={{ fontSize: 11, color: '#6e7681' }}>
+        Pre-index your repo with <code style={{ color: '#58a6ff' }}>buff retrieval index &lt;dir&gt;</code>, query it with{' '}
+        <code style={{ color: '#58a6ff' }}>buff retrieval query "&lt;question&gt;"</code>, and see the same stats with{' '}
+        <code style={{ color: '#58a6ff' }}>buff retrieval stats</code>.
+      </div>
+    </SectionCard>
+  );
+}
+
 function QuotaSection({ quota }: { quota: QuotaInsights }) {
   // Render the card when there are usage entries OR failover-timeline events —
   // failovers can precede any successful call (auth/rate-limit on first use),
@@ -775,6 +847,7 @@ export default function RoutingInsightsPanel({ data }: { data: DashboardData | n
   const hasBandit = !!routing?.bandit?.enabled;
   const hasPromotion = !!routing?.promotion?.decisionCount;
   const hasQuota = !!routing?.quota?.enabled;
+  const hasRetrieval = !!routing?.retrieval?.enabled || !!routing?.retrieval?.repoChunks;
 
   return (
     <>
@@ -785,7 +858,7 @@ export default function RoutingInsightsPanel({ data }: { data: DashboardData | n
         <code>buff benchmark</code> and use Auto routing to build this up over time.
       </p>
 
-      {!hasAny && !hasUsage && !hasHistory && !hasBandit && !hasPromotion && !hasQuota ? (
+      {!hasAny && !hasUsage && !hasHistory && !hasBandit && !hasPromotion && !hasQuota && !hasRetrieval ? (
         <EmptyNote />
       ) : (
         <>
@@ -794,6 +867,7 @@ export default function RoutingInsightsPanel({ data }: { data: DashboardData | n
           {hasBandit && <BanditSection bandit={routing!.bandit!} />}
           {hasPromotion && <PromotionGateSection promotion={routing!.promotion!} />}
           {hasQuota && <QuotaSection quota={routing!.quota!} />}
+          {hasRetrieval && <RetrievalSection retrieval={routing!.retrieval!} />}
           <PreferenceSection routing={routing!} />
           <ProviderQualitySection routing={routing!} />
           <BestModelsSection routing={routing!} />

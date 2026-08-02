@@ -180,6 +180,54 @@ export interface RoutingInsights {
   promotion?: PromotionInsights;
   /** Central quota-ledger status (tokens/requests per provider × model) */
   quota?: QuotaInsights;
+  /**
+   * Vector-retrieval token savings (retrieval-stats.json) — how many tokens
+   * the retrieval layer saved by vectorizing large contexts. Optional: an
+   * older server won't send this, so the panel hides the card when absent.
+   */
+  retrieval?: RetrievalInsights;
+  updatedAt: number;
+}
+
+/**
+ * Vector-retrieval transparency — token-savings stats from the retrieval
+ * engine (local bge-small-en-v1.5 embeddings + pure-JS vector store).
+ * Complements the quota ledger: retrieval SAVES tokens, the ledger manages
+ * quota limits. The card shows cumulative savings + the latest retrieval hits.
+ */
+export interface RetrievalInsights {
+  enabled: boolean;
+  /** Total context-assembly calls that went through the retrieval check. */
+  totalCalls: number;
+  /** Calls where retrieval was actually used (context was large enough). */
+  totalRetrievals: number;
+  /** Calls where retrieval failed and fell back to full context. */
+  totalFailovers: number;
+  /** Tokens before retrieval (cumulative). */
+  totalOriginalTokens: number;
+  /** Tokens after retrieval (cumulative). */
+  totalReducedTokens: number;
+  /** Cumulative tokens saved. */
+  totalSavedTokens: number;
+  /** Average reduction percentage (0-100). */
+  avgPctReduced: number;
+  /** The most recent retrieval call. */
+  lastCall?: {
+    used: boolean;
+    originalTokens: number;
+    reducedTokens: number;
+    savedTokens: number;
+    pctReduced: number;
+    chunksRetrieved: number;
+    failover: boolean;
+    hits: Array<{ filePath: string; similarity: number }>;
+  } | null;
+  /** Recent retrieval calls (newest first). */
+  recent?: Array<Record<string, unknown>>;
+  /** Number of chunks in the repo vector index. */
+  repoChunks: number;
+  /** Embedding dimensionality. */
+  dimensions: number;
   updatedAt: number;
 }
 

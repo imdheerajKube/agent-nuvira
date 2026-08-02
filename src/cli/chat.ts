@@ -9,6 +9,7 @@ import { resolveWorkingModel } from '../inference/model-validator.js';
 import { showModelPicker } from './model-picker.js';
 import { ContextParser } from '../context/parser.js';
 import { getCache } from '../context/cache.js';
+import { assembleContext, retrievalOptionsFromConfig, recordRetrievalStats } from '../learning/retrieval.js';
 import { getChatHistory } from '../context/history.js';
 import { logger } from '../utils/logger.js';
 import { Orchestrator } from '../agents/orchestrator.js';
@@ -1308,7 +1309,13 @@ Commands:
       const parser = new ContextParser();
       const context = parser.parseFromFiles([options.file]);
       const contextStr = ContextParser.formatContext(context);
-      fullPrompt = `${contextStr}\n\n## User Query\n${prompt}`;
+      // Retrieval hook: if the file is large, reduce it to the top-k
+      // semantically-relevant chunks (saves tokens / stretches quotas).
+      // Small files pass through untouched — zero overhead.
+      const retrievalOpts = retrievalOptionsFromConfig(this.configManager);
+      const { context: reduced, stats } = await assembleContext(prompt, [options.file], contextStr, retrievalOpts);
+      recordRetrievalStats(stats);
+      fullPrompt = `${reduced}\n\n## User Query\n${prompt}`;
     }
 
     if (typeof provider.generateStream === 'function') {
