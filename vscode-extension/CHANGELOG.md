@@ -8,6 +8,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- **Quota Ledger View** — new `Agent-Nuvira: Show Quota Ledger` command (and a
+  quota status-bar indicator) opens a webview panel that visualizes the central
+  quota ledger (`~/.buff/memory/quota-ledger.json` + `quota-events.jsonl`):
+  summary cards for free/local vs paid token usage and estimated savings, a
+  per-provider window table (tokens, requests, time-to-reset, parked state), and
+  a failover timeline (parked → failover → re-enabled). Honors `BUFF_MEMORY_DIR`
+  like the CLI/dashboard. The status-bar item shows a parked-provider alert count
+  (or `quota ok` when all healthy); the panel has a manual Refresh button
 - **Searchable model picker** — the per-provider model quick-pick now uses
   `createQuickPick` with native type-to-filter matching against both the model
   name and its id, so long lists (e.g. OpenRouter's 100+ models) can be filtered

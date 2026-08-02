@@ -22,6 +22,7 @@
 import * as vscode from 'vscode';
 import { CLIManager } from './cliManager.js';
 import { AgentPanel } from './agentPanel.js';
+import { QuotaPanel } from './quotaPanel.js';
 import { ChatPanel } from './chatPanel.js';
 import { ChatHistoryProvider } from './chatProvider.js';
 import { CodeLensProvider } from './codeLensProvider.js';
@@ -35,6 +36,7 @@ import type { ExtensionConfig } from './types.js';
 
 let cliManager: CLIManager | null = null;
 let agentPanel: AgentPanel | null = null;
+let quotaPanel: QuotaPanel | null = null;
 let chatPanel: ChatPanel | null = null;
 let chatHistory: ChatHistoryProvider | null = null;
 let codeLensProvider: CodeLensProvider | null = null;
@@ -44,6 +46,7 @@ let commandRegistrar: CommandRegistrar | null = null;
 let inlineSuggestProvider: InlineSuggestProvider | null = null;
 let statusBarItem: vscode.StatusBarItem | null = null;
 let modelStatusBarItem: vscode.StatusBarItem | null = null;
+let quotaStatusBarItem: vscode.StatusBarItem | null = null;
 
 // ─── Activate ───────────────────────────────────────────────────────────────
 
@@ -56,6 +59,16 @@ export function activate(context: vscode.ExtensionContext): void {
   // Initialize core components
   cliManager = new CLIManager(config);
   agentPanel = new AgentPanel();
+  quotaPanel = new QuotaPanel(() => cliManager?.getQuotaStatus() ?? Promise.resolve({
+    enabled: false,
+    entries: [],
+    events: [],
+    freeTokens: 0,
+    freeRequests: 0,
+    paidTokens: 0,
+    paidRequests: 0,
+    estimatedSavedUsd: 0,
+  }));
   chatHistory = new ChatHistoryProvider(context);
   chatPanel = new ChatPanel(context, chatHistory, config, cliManager);
   // Refresh the status bar indicator when the model is switched from the chat panel
@@ -78,11 +91,16 @@ export function activate(context: vscode.ExtensionContext): void {
   modelStatusBarItem = createModelStatusBarItem();
   context.subscriptions.push(modelStatusBarItem);
 
+  // Quota indicator — click to open the quota ledger view
+  quotaStatusBarItem = createQuotaStatusBarItem();
+  context.subscriptions.push(quotaStatusBarItem);
+
   // Refresh the model indicator when a switch happens
   commandRegistrar.setOnModelChanged(() => {
     void refreshModelStatusBar();
   });
   void refreshModelStatusBar();
+  void refreshQuotaStatusBar();
 
   // Register all commands
   const commandDisposables = commandRegistrar.registerAll();
@@ -94,6 +112,13 @@ export function activate(context: vscode.ExtensionContext): void {
   context.subscriptions.push(
     vscode.commands.registerCommand('agent-nuvira.openChat', () => {
       chatPanel?.createOrShow(context.extensionUri);
+    }),
+  );
+
+  // Register the quota panel command
+  context.subscriptions.push(
+    vscode.commands.registerCommand('agent-nuvira.showQuota', () => {
+      quotaPanel?.createOrShow(context.extensionUri);
     }),
   );
 
@@ -189,6 +214,9 @@ export function deactivate(): void {
     cliManager = null;
   }
 
+  // Clean up quota panel
+  quotaPanel = null;
+
   // Clean up diff viewer temp files
   if (diffViewer) {
     diffViewer.dispose();
@@ -213,6 +241,10 @@ export function deactivate(): void {
   if (modelStatusBarItem) {
     modelStatusBarItem.dispose();
     modelStatusBarItem = null;
+  }
+  if (quotaStatusBarItem) {
+    quotaStatusBarItem.dispose();
+    quotaStatusBarItem = null;
   }
 
   inlineSuggestProvider = null;
@@ -305,6 +337,38 @@ function createModelStatusBarItem(): vscode.StatusBarItem {
 }
 
 /**
+ * Create the quota status bar item.
+ * Shows the parked-provider count (or a check when all healthy); click to
+ * open the quota ledger view. Shown only when there's an active workspace.
+ */
+function createQuotaStatusBarItem(): vscode.StatusBarItem {
+  const item = vscode.window.createStatusBarItem(
+    vscode.StatusBarAlignment.Right,
+    98,
+  );
+
+  item.command = 'agent-nuvira.showQuota';
+  item.tooltip = 'Agent-Nuvira — click to view quota ledger & failover timeline';
+  item.text = '$(dashboard) quota';
+
+  // Only show when there's an active workspace
+  if (vscode.workspace.workspaceFolders && vscode.workspace.workspaceFolders.length > 0) {
+    item.show();
+  }
+
+  // Show/hide based on workspace changes
+  vscode.workspace.onDidChangeWorkspaceFolders(() => {
+    if (vscode.workspace.workspaceFolders && vscode.workspace.workspaceFolders.length > 0) {
+      item.show();
+    } else {
+      item.hide();
+    }
+  });
+
+  return item;
+}
+
+/**
  * Update the status bar text and show it.
  */
 function updateStatusBar(text: string): void {
@@ -345,4 +409,38 @@ export async function refreshModelStatusBar(): Promise<void> {
   modelStatusBarItem.text = `$(chip) ${label}`;
   modelStatusBarItem.tooltip = tooltip;
   modelStatusBarItem.show();
+}
+
+/**
+ * Refresh the quota status bar indicator from the CLI's quota ledger.
+ * Shows a parked-provider count when any provider is parked (window exhausted),
+ * otherwise a checkmark. Best-effort — keeps the default label on read errors.
+ *
+ * Exported for unit testing.
+ */
+export async function refreshQuotaStatusBar(): Promise<void> {
+  if (!quotaStatusBarItem || !cliManager) return;
+
+  let label = '$(dashboard) quota';
+  let tooltip = 'Agent-Nuvira — click to view quota ledger & failover timeline';
+
+  try {
+    const status = await cliManager.getQuotaStatus();
+    if (status.enabled) {
+      const parked = status.entries.filter((e) => e.parked).length;
+      if (parked > 0) {
+        label = `$(alert) ${parked} parked`;
+        tooltip = `${parked} provider(s) parked (quota exhausted) — click for details`;
+      } else {
+        label = '$(check) quota ok';
+        tooltip = 'Quota ledger healthy — click to view details';
+      }
+    }
+  } catch {
+    // Keep the default label if the state can't be read
+  }
+
+  quotaStatusBarItem.text = label;
+  quotaStatusBarItem.tooltip = tooltip;
+  quotaStatusBarItem.show();
 }

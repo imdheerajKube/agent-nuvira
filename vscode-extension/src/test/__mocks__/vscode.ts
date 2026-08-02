@@ -318,9 +318,10 @@ export const window = {
   },
   showErrorMessage: vi.fn((message: string): Thenable<string | undefined> => Promise.resolve(undefined)),
 
-  createWebviewPanel: (viewType: string, title: string, column: ViewColumn, options?: { enableScripts?: boolean }): MockWebviewPanel => {
+  // vi.fn so tests can assert calls and inspect the returned panel
+  createWebviewPanel: vi.fn((viewType: string, title: string, column: ViewColumn, options?: { enableScripts?: boolean }): MockWebviewPanel => {
     return new MockWebviewPanel();
-  },
+  }),
 
   createStatusBarItem: (alignment?: StatusBarAlignment, priority?: number): MockStatusBarItem => {
     return new MockStatusBarItem();

@@ -39,6 +39,16 @@ vi.mock('../cliManager.js', () => ({
       switchModel: vi.fn(),
       getActiveModel: vi.fn().mockResolvedValue(null),
       checkModelHealth: vi.fn(),
+      getQuotaStatus: vi.fn().mockResolvedValue({
+        enabled: false,
+        entries: [],
+        events: [],
+        freeTokens: 0,
+        freeRequests: 0,
+        paidTokens: 0,
+        paidRequests: 0,
+        estimatedSavedUsd: 0,
+      }),
       cancel: vi.fn(),
       dispose: vi.fn(),
     };
@@ -110,7 +120,7 @@ vi.mock('../inlineSuggest.js', () => ({
 }));
 
 import * as vscode from 'vscode';
-import { activate, deactivate, refreshModelStatusBar } from '../extension.js';
+import { activate, deactivate, refreshModelStatusBar, refreshQuotaStatusBar } from '../extension.js';
 
 describe('extension status bar', () => {
   let context: any;
@@ -139,17 +149,86 @@ describe('extension status bar', () => {
     (vscode as any).__setWorkspaceFolders(['/workspace']);
     activate(context);
 
-    expect(statusBarItems).toHaveLength(2);
-    const [mainItem, modelItem] = statusBarItems;
+    expect(statusBarItems).toHaveLength(3);
+    const [mainItem, modelItem, quotaItem] = statusBarItems;
 
-    // Main item opens the chat panel; model item switches provider/model
+    // Main item opens the chat panel; model item switches provider/model;
+    // quota item opens the quota ledger view
     expect(mainItem.command).toBe('agent-nuvira.openChat');
     expect(modelItem.command).toBe('agent-nuvira.switchModel');
     expect(modelItem.tooltip).toBe('Agent-Nuvira — click to switch provider/model');
+    expect(quotaItem.command).toBe('agent-nuvira.showQuota');
 
-    // Both items are visible when a workspace is open
+    // All items are visible when a workspace is open
     expect(mainItem.show).toHaveBeenCalled();
     expect(modelItem.show).toHaveBeenCalled();
+    expect(quotaItem.show).toHaveBeenCalled();
+  });
+
+  it('shows the quota-ok label when the ledger is healthy', async () => {
+    (vscode as any).__setWorkspaceFolders(['/workspace']);
+    activate(context);
+    const quotaItem = statusBarItems[2];
+
+    (holders.cliManager.getQuotaStatus as any).mockResolvedValue({
+      enabled: true,
+      entries: [],
+      events: [],
+      freeTokens: 0,
+      freeRequests: 0,
+      paidTokens: 0,
+      paidRequests: 0,
+      estimatedSavedUsd: 0,
+    });
+
+    await refreshQuotaStatusBar();
+
+    expect(quotaItem.text).toBe('$(check) quota ok');
+    expect(quotaItem.tooltip).toContain('Quota ledger healthy');
+    expect(quotaItem.tooltip).toContain('click to view details');
+  });
+
+  it('shows a parked-provider alert count when providers are parked', async () => {
+    (vscode as any).__setWorkspaceFolders(['/workspace']);
+    activate(context);
+    const quotaItem = statusBarItems[2];
+
+    (holders.cliManager.getQuotaStatus as any).mockResolvedValue({
+      enabled: true,
+      entries: [
+        {
+          provider: 'groq',
+          model: 'llama-3.3-70b-versatile',
+          tokensConsumed: 80_000,
+          requests: 12,
+          windowLengthMs: 86_400_000,
+          resetsInMs: 3_600_000,
+          parked: true,
+          cooldownRemaining: 2_700_000,
+        },
+        {
+          provider: 'gemini',
+          model: 'gemini-2.0-flash',
+          tokensConsumed: 120_000,
+          requests: 20,
+          windowLengthMs: 86_400_000,
+          resetsInMs: 3_600_000,
+          parked: false,
+          cooldownRemaining: 0,
+        },
+      ],
+      events: [],
+      freeTokens: 120_000,
+      freeRequests: 20,
+      paidTokens: 80_000,
+      paidRequests: 12,
+      estimatedSavedUsd: 0.06,
+    });
+
+    await refreshQuotaStatusBar();
+
+    expect(quotaItem.text).toBe('$(alert) 1 parked');
+    expect(quotaItem.tooltip).toContain('1 provider(s) parked');
   });
 
   // ── refreshModelStatusBar ────────────────────────────────────────────────

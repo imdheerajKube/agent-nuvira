@@ -2,7 +2,7 @@
   "name": "agent-nuvira-vscode",
   "displayName": "Agent-Nuvira",
   "description": "Multi-agent AI coding assistant — plan, write, review, test, and publish code with local or cloud AI models",
-  "version": "0.4.0",
+  "version": "0.5.0",
   "publisher": "dheerajsharma",
   "license": "MIT",
   "icon": "icon.png",
@@ -46,6 +46,7 @@
     "onCommand:agent-nuvira.runWorkflow",
     "onCommand:agent-nuvira.switchModel",
     "onCommand:agent-nuvira.modelHealth",
+    "onCommand:agent-nuvira.showQuota",
     "onView:agent-nuvira.agentProgress",
     "onView:agent-nuvira.chatPanel"
   ],
@@ -134,6 +135,12 @@
         "title": "Agent-Nuvira: Check Model Health",
         "shortTitle": "Model Health",
         "description": "Run a health check on the active provider"
+      },
+      {
+        "command": "agent-nuvira.showQuota",
+        "title": "Agent-Nuvira: Show Quota Ledger",
+        "shortTitle": "Quotas",
+        "description": "View the quota ledger, parked providers, and failover timeline"
       }
     ],
     "keybindings": [

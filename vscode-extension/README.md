@@ -49,6 +49,7 @@ Supports 5 built-in providers plus custom plugins:
 - **Chat Panel dropdown** — a provider/model dropdown in the chat sidebar header switches the active provider (or enables Auto routing) without leaving the chat, and refreshes the status-bar indicator
 - **Check Model Health** — runs `agent-nuvira model health` for the active provider and shows the report
 - **Auto routing toggle** — when enabled, every AI flow routes each request to the best provider/model automatically: chat, execute, inline suggestions, code-lens actions, and diagnostic fixes. Note: inline completions are latency-sensitive — if suggestions feel slower with auto-routing enabled, pin a fast provider instead
+- **Quota Ledger View** — a quota status-bar indicator (alert count when providers are parked) plus `Agent-Nuvira: Show Quota Ledger` opens a webview with free/local vs paid token usage, estimated savings, per-provider window tables (tokens, requests, time-to-reset, parked state), and the failover timeline (parked → failover → re-enabled)
 
 ### 📊 Visual Feedback
 - **Agent Progress Panel** — Real-time webview showing agent execution status, logs, and diffs
@@ -167,6 +168,7 @@ Right-click any source file to **Review File**, **Quick Fix**, or **Generate Tes
 | `Agent-Nuvira: Reject All Changes` | Reject proposed changes |
 | `Agent-Nuvira: Switch Model / Provider...` | Switch the active provider/model or enable Auto routing |
 | `Agent-Nuvira: Check Model Health` | Run a health check on the active provider |
+| `Agent-Nuvira: Show Quota Ledger` | View quota usage, parked providers, and the failover timeline |
 
 ---
 
