@@ -484,15 +484,19 @@ function emptyAggregate(): RetrievalAggregateStats {
   };
 }
 
-/** Clear retrieval stats + the repo index (used by `buff retrieval clear`). */
-export function clearRetrievalState(): void {
+/**
+ * Clear retrieval stats + the repo index (used by `buff retrieval clear`).
+ * ASYNC: the VectorStore facade lazily resolves its backend, so the clear must
+ * be awaited to guarantee the on-disk index is wiped before callers check it.
+ */
+export async function clearRetrievalState(): Promise<void> {
   try {
     if (existsSync(statsPath())) writeFileSync(statsPath(), JSON.stringify(emptyAggregate(), null, 2), 'utf-8');
   } catch {
     // Best-effort.
   }
   try {
-    getVectorStore(REPO_NAMESPACE).clear();
+    await getVectorStore(REPO_NAMESPACE).clear();
   } catch {
     // Best-effort.
   }

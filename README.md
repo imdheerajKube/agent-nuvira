@@ -886,6 +886,35 @@ agent-nuvira config set routing.retrieval.chunkTokens 640
 agent-nuvira config set routing.retrieval.thresholdTokens 20000
 ```
 
+**Vector search backend** (`memory.vectorBackend`):
+
+```bash
+# Show which backend is active
+agent-nuvira memory stats        # ... Backend: faiss-ivf (FAISS-style IVF-flat ANN)
+
+# Choose the backend explicitly
+agent-nuvira config set memory.vectorBackend auto   # default: native FAISS when built, else pure-JS IVF
+agent-nuvira config set memory.vectorBackend faiss  # prefer FAISS-style; JSON fallback on native failure
+agent-nuvira config set memory.vectorBackend json   # exact flat cosine (the original behavior)
+```
+
+- **`auto` (default)** — uses the **FAISS-style backend**: real `@faiss-node/native`
+  bindings when the user has installed AND built them (smoke-tested at load),
+  otherwise a **pure-JS IVF-flat ANN** — a faithful TypeScript port of FAISS's
+  `IndexIVFFlat` (nlist inverted lists via deterministic k-means++, nprobe
+  probe lists, cosine = inner product of L2-normalized vectors). Small indexes
+  (≤ 512 entries) use an EXACT scan so results are identical to the JSON
+  backend; large indexes get sub-linear approximate search with filter-aware
+  probe expansion. Any native failure falls back gracefully — semantic search
+  never breaks.
+- **Why native FAISS is not the hard default (decision):** `@faiss-node/native`
+  ships no prebuilt binaries and requires compiling FAISS from source
+  (cmake + OpenBLAS + libomp) at install time — verified to fail on a stock
+  macOS dev box. Making it a required dependency would break zero-setup
+  `npx agent-nuvira`. The pure-JS IVF-flat backend provides the same
+  FAISS-style approximate-NN behavior with zero native deps; users who build
+  the native package automatically get the real thing.
+
 **Roadmap (Step 6 — future enhancements):**
 1. **Hybrid retrieval** — combine embeddings with keyword/BM25 scoring for
    exact-match-sensitive queries.

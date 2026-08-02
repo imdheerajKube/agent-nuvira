@@ -133,9 +133,11 @@ export class MemoryCommand extends BaseCommand {
       // Vector store stats
       const vs = getVectorStore();
       const vsStats = vs.stats();
+      const backend = await vs.backendName();
       console.log(`\n  🔍 Vector Index:`);
       console.log(`     Entries: ${vsStats.totalEntries}`);
       console.log(`     Dimensions: ${vsStats.dimensions}`);
+      console.log(`     Backend: ${backend}${backend === 'faiss-native' ? ' (native FAISS)' : backend === 'faiss-ivf' ? ' (FAISS-style IVF-flat ANN)' : ' (exact flat cosine)'}`);
 
       // Pattern store stats
       const patternStore = getPatternStore();
@@ -326,7 +328,7 @@ export class MemoryCommand extends BaseCommand {
     const feedbackStore = getFeedbackStore();
     const feedbackStats = feedbackStore.getStats();
 
-    console.log(`  🧠  Vector index: ${vsStats.totalEntries} entries (${vsStats.dimensions}-dim)`);
+    console.log(`  🧠  Vector index: ${vsStats.totalEntries} entries (${vsStats.dimensions}-dim, backend: ${await vs.backendName()})`);
     console.log(`  📝  Coding patterns: ${patterns.length}`);
     console.log(`  👍  User feedback: ${feedbackStats.totalRatings} ratings`);
     console.log('');

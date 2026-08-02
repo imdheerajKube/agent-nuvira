@@ -146,7 +146,7 @@ export class RetrievalCommand extends BaseCommand {
     cmd.command('clear')
       .description('Clear the retrieval index and token-savings stats')
       .action(async () => {
-        clearRetrievalState();
+        await clearRetrievalState();
         logger.success('   Retrieval index + stats cleared.');
       });
 

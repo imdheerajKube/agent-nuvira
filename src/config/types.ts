@@ -89,6 +89,23 @@ export interface HistoryConfig {
 }
 
 /**
+ * Memory / vector-store configuration.
+ * Set via `buff config set memory.<key> <value>` or directly in .buffconfig.json.
+ */
+export interface MemoryConfig {
+  /**
+   * Vector search backend:
+   *   - `auto` (default) — FAISS-style backend (native @faiss-node/native when
+   *     installed AND built, otherwise the pure-JS IVF-flat ANN) when usable,
+   *     falling back to the exact JSON backend on any failure.
+   *   - `faiss` — prefer the FAISS-style backend; still falls back to JSON on
+   *     native failure (semantic search never breaks).
+   *   - `json` — exact flat cosine scan (the original behavior).
+   */
+  vectorBackend?: 'auto' | 'faiss' | 'json';
+}
+
+/**
  * Per-provider quota limits for the central quota ledger.
  * Set via `buff config set routing.quota.<provider>.<field> <value>` or directly
  * in .buffconfig.json. The ledger parks a provider once it exhausts its current
@@ -199,6 +216,8 @@ export interface BuffConfig {
   team?: TeamConfig;
   /** Chat history configuration */
   history?: HistoryConfig;
+  /** Memory / vector-store configuration */
+  memory?: MemoryConfig;
   /** Per-provider pricing overrides for Auto model routing cost scoring */
   pricing?: PricingConfigMap;
   /** Learning-router config (bandit sampling + hard constraints) */

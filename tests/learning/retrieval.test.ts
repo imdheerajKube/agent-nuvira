@@ -27,7 +27,11 @@ import {
   REPO_NAMESPACE,
 } from '../../src/learning/retrieval.js';
 import { setForceLLM, clearEmbeddingCache } from '../../src/memory/embedder.js';
-import { getVectorStore, cosineSimilarity } from '../../src/memory/vector-store.js';
+import {
+  getVectorStore,
+  cosineSimilarity,
+  resetVectorBackendSelection,
+} from '../../src/memory/vector-store.js';
 
 // ─── Deterministic 384-dim embedding: hash-based so similar text → similar vector ───
 
@@ -63,6 +67,9 @@ let prevMemoryDir: string | undefined;
 beforeEach(() => {
   vi.restoreAllMocks();
   clearEmbeddingCache();
+  // Each test gets a fresh memory dir — clear cached store/backend instances
+  // so no backend pinned to a previous test's temp dir is reused.
+  resetVectorBackendSelection();
   setForceLLM(true); // Force the deterministic LLM tier everywhere in tests
   tempDir = mkdtempSync(join(tmpdir(), 'buff-retrieval-'));
   prevMemoryDir = process.env.BUFF_MEMORY_DIR;
@@ -70,9 +77,9 @@ beforeEach(() => {
   mkdirSync(process.env.BUFF_MEMORY_DIR, { recursive: true });
 });
 
-afterEach(() => {
+afterEach(async () => {
   setForceLLM(false);
-  clearRetrievalState();
+  await clearRetrievalState();
   if (prevMemoryDir === undefined) delete process.env.BUFF_MEMORY_DIR;
   else process.env.BUFF_MEMORY_DIR = prevMemoryDir;
   rmSync(tempDir, { recursive: true, force: true });
@@ -273,7 +280,7 @@ describe('retrieval stats', () => {
       timestamp: Date.now(),
     });
     await indexFiles([makeFile('x.ts', 'export const a = 1;')], { callLLM: mockLLM });
-    clearRetrievalState();
+    await clearRetrievalState();
     expect(readRetrievalAggregateStats().totalCalls).toBe(0);
     expect(getVectorStore(REPO_NAMESPACE).stats().totalEntries).toBe(0);
   });

@@ -18,6 +18,9 @@ const DEFAULT_CONFIG: BuffConfig = {
     retentionDays: 30,
     semanticSearch: true,
   },
+  memory: {
+    vectorBackend: 'auto',
+  },
   fallback: {
     enabled: true,
     providers: ['groq', 'nim', 'gemini', 'openrouter', 'local'],
@@ -58,6 +61,9 @@ export class ConfigManager {
 
     // Deep clone history defaults
     config.history = { ...DEFAULT_CONFIG.history };
+
+    // Deep clone memory defaults
+    config.memory = { ...(DEFAULT_CONFIG.memory || {}) };
 
     // Deep clone fallback defaults
     config.fallback = { ...(DEFAULT_CONFIG.fallback || {}) };

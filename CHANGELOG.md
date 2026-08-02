@@ -7,6 +7,29 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [1.48.0] - 2026-08-02
+
+### Added
+
+- **FAISS-style vector search backend** — the JSON vector store is now a
+  pluggable backend behind the same `VectorStore` interface. New
+  `src/memory/faiss-backend.ts` provides a **pure-JS IVF-flat ANN** (a faithful
+  TypeScript port of FAISS `IndexIVFFlat`: nlist inverted lists via
+  deterministic k-means++, nprobe probe lists, cosine = inner product of
+  L2-normalized vectors, filter-aware probe expansion) that is exact below the
+  512-entry threshold (identical results to the JSON backend) and approximate
+  above it, plus a **best-effort native tier** that uses real
+  `@faiss-node/native` bindings when the user has installed+build them
+  (smoke-tested at load; any failure falls back to the pure-JS tier, so
+  semantic search never breaks). Backend chosen by `memory.vectorBackend`
+  (`auto` default / `faiss` / `json`), the `BUFF_VECTOR_BACKEND` env var, and
+  shown in `buff memory stats`. `@faiss-node/native` added as an optional
+  dependency (npm skips it gracefully when it can't build). Decision
+  documented: native FAISS requires cmake/OpenBLAS/libomp compilation with no
+  prebuilt binaries, so it can't be a hard dependency for zero-setup
+  `npx agent-nuvira` — the pure-JS IVF-flat backend provides FAISS-style
+  behavior portably
+
 ## [Unreleased]
 
 ### Added
