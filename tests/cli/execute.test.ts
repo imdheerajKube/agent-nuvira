@@ -6,13 +6,14 @@
  */
 
 import { describe, it, expect, beforeEach, afterEach, afterAll, vi } from 'vitest';
-import { existsSync, rmSync } from 'node:fs';
+import { existsSync, rmSync, mkdirSync, mkdtempSync } from 'node:fs';
 import { join } from 'node:path';
-import { homedir } from 'node:os';
+import { homedir, tmpdir } from 'node:os';
 
-import { ExecuteCommand, parseGoalLines } from '../../src/cli/execute.js';
+import { ExecuteCommand, parseGoalLines, checkpointOptions } from '../../src/cli/execute.js';
 import { logger } from '../../src/utils/logger.js';
 import { ProviderFactory } from '../../src/inference/factory.js';
+import { saveCheckpoint, checkpointIdFor, loadCheckpoint } from '../../src/agents/checkpoint-store.js';
 import inquirer from 'inquirer';
 
 // ─── Test Constants ─────────────────────────────────────────────────────────
@@ -259,6 +260,109 @@ describe('ExecuteCommand — handleDevCommand', () => {
   it('should show empty message when session history is empty', () => {
     (cmd as any).showSessionHistory([]);
     expect(logger.info).toHaveBeenCalledWith(expect.stringContaining('No goals have been executed'));
+  });
+});
+
+// ─── Tests: checkpoint list (--checkpoint-list) ───────────────────────────
+
+describe('ExecuteCommand — checkpoint list (--checkpoint / --resume / --checkpoint-list)', () => {
+  let cmd: ExecuteCommand;
+  let memDir: string;
+
+  beforeEach(() => {
+    cmd = new ExecuteCommand();
+    memDir = mkdtempSync(join(tmpdir(), 'buff-exec-cp-'));
+    process.env.BUFF_MEMORY_DIR = memDir;
+    vi.spyOn(logger, 'info').mockImplementation(() => {});
+    vi.spyOn(logger, 'highlight').mockImplementation(() => {});
+    vi.spyOn(logger, 'success').mockImplementation(() => {});
+    vi.spyOn(logger, 'error').mockImplementation(() => {});
+    vi.spyOn(console, 'log').mockImplementation(() => {});
+  });
+
+  afterEach(() => {
+    vi.restoreAllMocks();
+    delete process.env.BUFF_MEMORY_DIR;
+    try { rmSync(memDir, { recursive: true, force: true }); } catch { /* best-effort */ }
+  });
+
+  function makeContext(goal = 'cp goal', status: 'pending' | 'completed' = 'completed') {
+    return {
+      goal,
+      workingDirectory: process.cwd(),
+      taskPlan: [{ id: 'step-1', agentType: 'writer', description: 'write', status, dependsOn: [] }],
+      artifacts: [],
+      conversations: [],
+      fileChanges: [],
+      metadata: {},
+    } as any;
+  }
+
+  it('should show a hint when no checkpoints exist', () => {
+    (cmd as any).showCheckpointList();
+    expect(logger.info).toHaveBeenCalledWith(expect.stringContaining('No checkpoints found'));
+    expect(logger.info).toHaveBeenCalledWith(expect.stringContaining('--checkpoint'));
+  });
+
+  it('should list saved checkpoints with goal and progress', () => {
+    const id = saveCheckpoint(makeContext('smoke goal'), 'cp-smoke-1');
+    expect(id).toBe('cp-smoke-1');
+
+    (cmd as any).showCheckpointList();
+    expect(logger.highlight).toHaveBeenCalledWith(expect.stringContaining('Checkpoints'));
+    expect(console.log).toHaveBeenCalledWith(expect.stringContaining('cp-smoke-1'));
+    expect(console.log).toHaveBeenCalledWith(expect.stringContaining('smoke goal'));
+    expect(console.log).toHaveBeenCalledWith(expect.stringContaining('1/1 steps (100%)'));
+  });
+
+  it('should list a partial checkpoint with correct progress percentage', () => {
+    saveCheckpoint(makeContext('partial goal', 'pending'), 'cp-partial-1');
+
+    (cmd as any).showCheckpointList();
+    expect(console.log).toHaveBeenCalledWith(expect.stringContaining('0/1 steps (0%)'));
+  });
+
+  it('should route --checkpoint-list to the list view and exit early', async () => {
+    const listSpy = vi.spyOn(cmd as any, 'showCheckpointList').mockImplementation(() => {});
+    // execute() with checkpointList: true should list and return without
+    // entering interactive mode or running a goal.
+    await (cmd as any).execute(undefined, { checkpointList: true } as any);
+    expect(listSpy).toHaveBeenCalledTimes(1);
+  });
+
+  it('should derive the resume id from the auto checkpoint id for goal + cwd', () => {
+    const autoId = checkpointIdFor('resume-me goal', process.cwd());
+    const id = saveCheckpoint(makeContext('resume-me goal'), autoId);
+    expect(id).toBe(autoId);
+    // The saved checkpoint round-trips — a bare `--resume` (auto id) can find it.
+    expect(loadCheckpoint(autoId)?.goal).toBe('resume-me goal');
+  });
+
+  it('should map --resume / --checkpoint flags via checkpointOptions()', () => {
+    // Bare --resume → resume the auto id (no explicit id) with save-on.
+    expect(checkpointOptions(false, true)).toEqual({
+      checkpoint: true,
+      resumeCheckpointId: undefined,
+      resumeRequested: true,
+    });
+    // --resume <id> → explicit id, resume requested.
+    expect(checkpointOptions(false, 'cp-abc')).toEqual({
+      checkpoint: true,
+      resumeCheckpointId: 'cp-abc',
+      resumeRequested: true,
+    });
+    // --checkpoint only → save forward, NO resume (load gate stays closed).
+    expect(checkpointOptions(true, undefined)).toEqual({
+      checkpoint: true,
+      resumeCheckpointId: undefined,
+      resumeRequested: false,
+    });
+    // No flags → checkpointing entirely off.
+    expect(checkpointOptions(false, undefined)).toEqual({
+      checkpoint: false,
+      resumeCheckpointId: undefined,
+      resumeRequested: false,
+    });
   });
 });
 

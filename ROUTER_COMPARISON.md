@@ -115,7 +115,7 @@ Ruflo's shipped router (`v3/@claude-flow/cli/src/ruvector/model-router.ts`,
 | **Deterministic $0 tier** | ✅ Tier-0 router (console-log strip, symbol rename, import dedupe) | ✅ Tier-1 Agent Booster WASM codemods (6 intents) |
 | **Hard constraints** | ✅ `maxCostUsd` / `minSpeed` / `minReasoning` eliminate providers | ⚠️ `maxCost` / `maxLatency` / `minQuality` on the multi-model-router request interface |
 | **Explainability / UX** | ✅ `buff model explain --json`, ranked lists, fallback chains, bandit heatmap CLI + dashboard | ⚠️ reasoning string only; ADR/benchmark docs internally |
-| **Learning-loop maturity** | ⚠️ young (bandit shipped recently; full repo suite 2,738 tests green) | ✅ heavily benchmarked, ADR-gated evolution, parallel-decision A/B |
+| **Learning-loop maturity** | ⚠️ young (bandit shipped recently; full repo suite 2,825 tests green) | ✅ heavily benchmarked, ADR-gated evolution, parallel-decision A/B |
 
 ---
 
@@ -219,9 +219,10 @@ layer, not the fundamentals.
 
 ## 5. Suggested follow-up work (ranked)
 
-> **Status 2026-08-01:** items 1–3 below are now **implemented** (this session),
-> validated with tsc + full suite (2,768 tests) + code review. See the
-> CHANGELOG [Unreleased] section.
+> **Status 2026-08-02:** items 1–3 below are **implemented**; the assessment-gap
+> layer (quota ledger, per-subtask complexity, checkpoint/resume, cost
+> transparency) has since shipped in v1.44.0 → v1.45.2. See the CHANGELOG and
+> [ASSESSMENT_OPPORTUNITIES.md](ASSESSMENT_OPPORTUNITIES.md) for the full status.
 
 1. ✅ **Uncertainty-driven escalation** — implemented in `auto-router.ts`:
    when the bandit's winner has fewer than `escalationMinSamples` (default 8)
@@ -234,9 +235,30 @@ layer, not the fundamentals.
    `src/learning/router-promotion.ts` with ruflo's three criteria (quality ↑
    > 2%, cost < +1%, p95 latency < +5%) over diverged A/B decisions, surfaced
    via `buff model bandit`.
-4. **Wire `resolveWorkingModel` deeper**: the chat/orchestrator/benchmark paths
+4. ⏳ **Wire `resolveWorkingModel` deeper**: the chat/orchestrator/benchmark paths
    are covered; the VS Code extension's model picker could surface the same
    live validation before switching.
+
+## 7. The assessment-gap layer Agent-Nuvira added after the comparison
+
+Since the original comparison, Agent-Nuvira shipped a cost/quota/continuity layer
+that ruflo's router does not have (mapped to a coding-assessment rubric in
+[ASSESSMENT_OPPORTUNITIES.md](ASSESSMENT_OPPORTUNITIES.md)):
+
+| Capability | Agent-Nuvira (v1.44.0+) | Ruflo |
+|---|---|---|
+| **Central quota ledger** | `QuotaLedger` write-throughs every LLM call; per-provider×model tokens/requests; calendar-aware reset windows auto re-enable parked providers at the exact boundary; persists to `~/.buff/memory/quota-ledger.json` | no persistent quota state in the router — cost optimization is price-table based only |
+| **Predictive exhaustion sinking** | parked/exhausted providers sink below healthy candidates **before** a call (`getRouterQuotaStatus` → same sink as the circuit breaker) | no pre-call quota awareness; failures handled reactively |
+| **Free/local-first gate** | `routing.allowPaid: false` restricts paid providers to complex/critical work; every paid pick flagged | no consent gate — tier router optimizes within one vendor |
+| **Per-subtask complexity routing** | every `TaskStep` carries a `complexity` label routed via `complexityHint` | complexity is goal-global (single heuristic per request) |
+| **Checkpoint/resume continuity** | `--checkpoint` / `--resume [id]` persist the plan after every batch; a quota kill or token expiry resumes on the next-best provider without re-running completed steps | no cross-model state serialization in the router |
+| **Cost transparency CLI** | `buff model quota` renders free vs paid tokens + estimated $ saved (human + `--json`), mirroring the dashboard Quota card | no equivalent user-facing savings metric |
+| **Sandbox install skip** | dep-less projects skip `npm install` entirely (fast, hermetic, offline-safe) | n/a |
+
+This layer closes the loop the original comparison flagged: Agent-Nuvira now not
+only **picks** the right provider (multi-vendor, working-model guarantee) but
+**governs** it — quota-aware, free-first, resumable, and with cost transparency —
+while ruflo's router remains a within-vendor picker.
 
 ---
 
@@ -252,7 +274,9 @@ layer, not the fundamentals.
 | Model health | `src/inference/model-validator.ts` (128 lines) | — |
 | Neural routing | — | `v3/@claude-flow/cli/src/ruvector/neural-router.ts` (961 lines) |
 | Multi-provider broad router | AutoModelRouter (this repo's core) | `v3/@claude-flow/integration/src/multi-model-router.ts` |
-| CLI surface | `src/cli/model.ts` (`explain`/`bandit`/`switch`) | `v3/@claude-flow/cli/src/commands/neural.ts` |
+| CLI surface | `src/cli/model.ts` (`explain`/`bandit`/`quota`/`switch`) | `v3/@claude-flow/cli/src/commands/neural.ts` |
+| Quota ledger | `src/learning/quota-ledger.ts` | — |
+| Continuity | `src/agents/checkpoint-store.ts` + orchestrator `--checkpoint`/`--resume` | — |
 
 ---
 

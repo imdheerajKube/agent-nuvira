@@ -134,6 +134,23 @@ export declare class QuotaLedger {
     getBestAvailable(providers: string[], configManager?: ConfigManager): string[];
     /** Full per-entry status snapshot (dashboard / CLI / tests). */
     getStatus(configManager?: ConfigManager): QuotaStatus[];
+    /**
+     * Free/local-first cost optics (assessment #7 transparency): split tracked
+     * usage into FREE providers (local Ollama, Gemini free tier — $0 default
+     * pricing) vs PAID providers, and estimate what the free-tier tokens would
+     * have cost on a typical paid provider. This is the "tokens saved / paid
+     * usage triggered" transparency metric: free usage = savings, paid usage =
+     * actual spend. Mirrors the dashboard's readQuotaData() classification.
+     *
+     * @returns Aggregated free/paid token & request counts plus estimated savings.
+     */
+    getCostSummary(): {
+        freeTokens: number;
+        freeRequests: number;
+        paidTokens: number;
+        paidRequests: number;
+        estimatedSavedUsd: number;
+    };
     /** Raw persisted state (tests / CLI). */
     getState(): QuotaLedgerData;
     /** Clear all entries (used by tests and `buff model quota reset`). */

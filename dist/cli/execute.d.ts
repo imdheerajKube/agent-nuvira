@@ -24,6 +24,18 @@ export interface SessionEntry {
     timestamp: number;
 }
 /**
+ * Map the CLI's `--checkpoint` / `--resume [id]` flags onto the orchestrator's
+ * checkpoint options. Bare `--resume` (value `true`) means "resume the auto id
+ * for this goal + cwd" → resumeCheckpointId undefined, resumeRequested true.
+ * `--checkpoint` alone saves forward without resuming. Extracted as a pure
+ * exported helper so the mapping is unit-testable without a full orchestration.
+ */
+export declare function checkpointOptions(checkpoint: boolean | undefined, resume: string | boolean | undefined): {
+    checkpoint: boolean;
+    resumeCheckpointId: string | undefined;
+    resumeRequested: boolean;
+};
+/**
  * Parse multi-line goal input into a single goal string.
  *
  * Used by readGoal() which collects lines from readline; extracted as a

@@ -31,6 +31,20 @@ import { isAutoModel } from '../learning/auto-router.js';
 import { getTrajectoryStore } from '../memory/trajectory-store.js';
 import { listCheckpoints } from '../agents/checkpoint-store.js';
 import { logger } from '../utils/logger.js';
+/**
+ * Map the CLI's `--checkpoint` / `--resume [id]` flags onto the orchestrator's
+ * checkpoint options. Bare `--resume` (value `true`) means "resume the auto id
+ * for this goal + cwd" → resumeCheckpointId undefined, resumeRequested true.
+ * `--checkpoint` alone saves forward without resuming. Extracted as a pure
+ * exported helper so the mapping is unit-testable without a full orchestration.
+ */
+export function checkpointOptions(checkpoint, resume) {
+    return {
+        checkpoint: checkpoint === true || !!resume,
+        resumeCheckpointId: resume === true ? undefined : resume || undefined,
+        resumeRequested: !!resume,
+    };
+}
 // ─── Pure Helpers ───────────────────────────────────────────────────────────
 /**
  * Parse multi-line goal input into a single goal string.
@@ -1086,9 +1100,7 @@ export class ExecuteCommand extends BaseCommand {
                 repairMode: options.repairMode,
                 repairFallbackModels: options.repairFallbackModels?.split(',').map((m) => m.trim()).filter(Boolean),
                 autoRouteModels: options.autoRoute || undefined,
-                checkpoint: options.checkpoint || !!options.resume,
-                resumeCheckpointId: options.resume === true ? undefined : options.resume || undefined,
-                resumeRequested: !!options.resume,
+                ...checkpointOptions(options.checkpoint, options.resume),
             });
             spinner.stop();
             console.log('');

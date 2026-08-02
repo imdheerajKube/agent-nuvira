@@ -201,3 +201,60 @@ describe('QuotaLedger — exhaustion & parking', () => {
     expect(text).toContain('resets in');
   });
 });
+
+describe('QuotaLedger — cost summary (tokens saved / paid usage)', () => {
+  beforeEach(() => {
+    tempDir = mkdtempSync(join(tmpdir(), 'buff-quota-'));
+    originalMemoryDir = process.env.BUFF_MEMORY_DIR;
+    process.env.BUFF_MEMORY_DIR = tempDir;
+    resetQuotaLedger();
+  });
+
+  afterEach(() => {
+    resetQuotaLedger();
+    if (originalMemoryDir === undefined) {
+      delete process.env.BUFF_MEMORY_DIR;
+    } else {
+      process.env.BUFF_MEMORY_DIR = originalMemoryDir;
+    }
+    rmSync(tempDir, { recursive: true, force: true });
+  });
+
+  it('classifies free (local/gemini) vs paid usage and estimates savings', () => {
+    const ledger = new QuotaLedger();
+    ledger.recordUsage('gemini', 'default', 1000, 500);   // free → 1500 tokens
+    ledger.recordUsage('local', 'llama3', 200, 300);      // free → 500 tokens
+    ledger.recordUsage('groq', 'llama-3.3-70b', 400, 100); // paid → 500 tokens
+
+    const summary = ledger.getCostSummary();
+    expect(summary.freeTokens).toBe(2000);
+    expect(summary.freeRequests).toBe(2);
+    expect(summary.paidTokens).toBe(500);
+    expect(summary.paidRequests).toBe(1);
+    // 2000 free tokens / 1000 * 0.0005 USD per 1K = $0.001
+    expect(summary.estimatedSavedUsd).toBeCloseTo(0.001, 5);
+  });
+
+  it('returns zeroed summary when the ledger is empty', () => {
+    const ledger = new QuotaLedger();
+    const summary = ledger.getCostSummary();
+    expect(summary).toEqual({
+      freeTokens: 0,
+      freeRequests: 0,
+      paidTokens: 0,
+      paidRequests: 0,
+      estimatedSavedUsd: 0,
+    });
+  });
+
+  it('treats unknown providers as paid (paid-first default)', () => {
+    const ledger = new QuotaLedger();
+    ledger.recordUsage('openrouter', 'gpt-oss-20b', 100, 100);
+    ledger.recordUsage('nim', 'mistral', 50, 50);
+
+    const summary = ledger.getCostSummary();
+    expect(summary.freeTokens).toBe(0);
+    expect(summary.paidTokens).toBe(300);
+    expect(summary.paidRequests).toBe(2);
+  });
+});

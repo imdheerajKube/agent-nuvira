@@ -92,6 +92,13 @@ export declare class DefaultTestModule implements TestModule {
      */
     private applyChanges;
     /**
+     * Does the project declare any dependencies to install? A package.json with
+     * no dependencies/devDependencies/etc. needs no `npm install` — skipping it
+     * makes sandboxed test runs fast, offline-safe, and immune to npm registry
+     * latency (the source of a flaky CI test).
+     */
+    private hasDependencies;
+    /**
      * Run npm install in the sandbox.
      */
     private runInstall;

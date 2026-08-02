@@ -9,6 +9,43 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.45.2] - 2026-08-02
+
+### Added
+
+- **`buff model quota` cost summary** — the quota CLI now renders a free/local-first
+  cost section (free tokens/requests vs paid tokens/requests + an estimated $ saved
+  figure) and includes the same `costSummary` in `--json` output, mirroring the
+  dashboard's Quota card (assessment item #7 transparency: tokens saved / paid usage
+  triggered)
+- **QuotaLedger.getCostSummary()** — the ledger now exposes a shared free/paid
+  classification + savings estimate (local + Gemini free tier = free; everything
+  else = paid; conservative $0.0005/1K blended paid rate), window-rotated so the CLI
+  summary always agrees with the status table rendered above it
+- **Checkpoint CLI smoke tests** — `--checkpoint` / `--resume [id]` /
+  `--checkpoint-list` option mapping is now covered in `tests/cli/execute.test.ts`
+  (empty-list hint, listing with progress %, `--checkpoint-list` routing, resume-id
+  round-trip, and the four `checkpointOptions()` flag combinations)
+
+### Changed
+
+- `src/cli/execute.ts` — checkpoint flag mapping extracted into an exported pure
+  helper `checkpointOptions(checkpoint, resume)` so the option wiring is
+  unit-testable and the `checkpoint: options.checkpoint || !!options.resume`
+  semantics are preserved exactly (plain runs never checkpoint by default)
+- `src/agents/test-module.ts` — sandboxed test runs now **skip `npm install` when
+  the project declares zero dependencies**, fixing a flaky CI test caused by a
+  network-bound npm install on dep-less temp projects; sandboxing is faster and
+  hermetic for offline/CI environments
+
+### Tests
+
+- `tests/learning/quota-ledger.test.ts` — 3 new `getCostSummary()` tests (free/paid
+  classification + savings math, zeroed empty ledger, unknown providers = paid)
+- `tests/cli/execute.test.ts` — 5 new checkpoint CLI smoke tests
+
+---
+
 ## [1.45.1] - 2026-08-02
 
 ### Fixed

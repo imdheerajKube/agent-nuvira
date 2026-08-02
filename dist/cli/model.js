@@ -750,11 +750,20 @@ export class ModelCommand extends BaseCommand {
             logger.error(`Unknown quota action: ${action}. Use \`buff model quota\` to view or \`buff model quota reset\` to reset.`);
             return;
         }
-        const statuses = getQuotaLedger().getStatus(this.configManager);
+        const ledger = getQuotaLedger();
+        const statuses = ledger.getStatus(this.configManager);
+        const summary = ledger.getCostSummary();
         if (opts.json) {
             console.log(JSON.stringify({
                 enabled: statuses.length > 0,
                 entries: statuses,
+                costSummary: {
+                    freeTokens: summary.freeTokens,
+                    freeRequests: summary.freeRequests,
+                    paidTokens: summary.paidTokens,
+                    paidRequests: summary.paidRequests,
+                    estimatedSavedUsd: summary.estimatedSavedUsd,
+                },
                 updatedAt: Date.now(),
             }, null, 2));
             return;
@@ -771,7 +780,19 @@ export class ModelCommand extends BaseCommand {
             console.log('');
             return;
         }
-        console.log(getQuotaLedger().formatStatus(this.configManager));
+        console.log(ledger.formatStatus(this.configManager));
+        // ── Cost transparency (assessment #7) ────────────────────────────────
+        // Free/local-first split + "what the free tokens would have cost" savings
+        // estimate — mirrors the dashboard's Quota card.
+        console.log('');
+        logger.highlight('  ── Cost Summary (free/local-first) ──');
+        console.log('');
+        console.log(`   🆓 Free tokens:  ${summary.freeTokens.toLocaleString()}  (${summary.freeRequests.toLocaleString()} req)`);
+        console.log(`   💳 Paid tokens:  ${summary.paidTokens.toLocaleString()}  (${summary.paidRequests.toLocaleString()} req)`);
+        if (summary.estimatedSavedUsd > 0) {
+            console.log(`   💰 Estimated saved: $${summary.estimatedSavedUsd.toFixed(4)}  (free-tier usage at a typical paid rate)`);
+        }
+        console.log('');
     }
     // ── Subcommand: bandit ────────────────────────────────────────────────
     showBandit(action, opts) {

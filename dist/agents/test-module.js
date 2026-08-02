@@ -92,9 +92,11 @@ export class DefaultTestModule {
             this.copyProject(workingDirectory, sandboxPath);
             // Apply file changes to the sandbox
             this.applyChanges(sandboxPath, fileChanges);
-            // Install dependencies (only if package.json exists)
+            // Install dependencies (only if package.json exists AND declares any
+            // dependencies — a package with zero deps needs no network install,
+            // which keeps sandboxing fast and hermetic on CI).
             const pkgExists = existsSync(join(sandboxPath, 'package.json'));
-            if (pkgExists) {
+            if (pkgExists && this.hasDependencies(sandboxPath)) {
                 this.runInstall(sandboxPath);
             }
             // Run tests
@@ -209,6 +211,28 @@ export class DefaultTestModule {
                 mkdirSync(dir, { recursive: true });
             }
             writeFileSync(filePath, change.newContent, 'utf-8');
+        }
+    }
+    /**
+     * Does the project declare any dependencies to install? A package.json with
+     * no dependencies/devDependencies/etc. needs no `npm install` — skipping it
+     * makes sandboxed test runs fast, offline-safe, and immune to npm registry
+     * latency (the source of a flaky CI test).
+     */
+    hasDependencies(sandboxPath) {
+        try {
+            const pkg = JSON.parse(readFileSync(join(sandboxPath, 'package.json'), 'utf-8'));
+            for (const key of ['dependencies', 'devDependencies', 'peerDependencies', 'optionalDependencies']) {
+                const section = pkg[key];
+                if (section && typeof section === 'object' && Object.keys(section).length > 0) {
+                    return true;
+                }
+            }
+            return false;
+        }
+        catch {
+            // If we can't read package.json, run install anyway (safe default).
+            return true;
         }
     }
     /**

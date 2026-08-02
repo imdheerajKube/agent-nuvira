@@ -49,6 +49,8 @@ agent-nuvira config list
 - **Provider fallback routing** — automatic failover between providers with circuit breaker and configurable chain
 - **Startup progress feedback** — first launch never looks like a silent hang: a live spinner reports each startup phase (plugins → history & search → semantic index) as it runs
 - **Auto-mode session failover** — in Auto routing, a provider whose API key/token expires or rate-limits mid-session is automatically swapped for the next-best provider (auth failures excluded for the session, rate-limit failures for a 120s cooldown, 5xx/network through the circuit breaker) — no more stuck sessions on a dead key
+- **Central quota ledger** — tokens/requests per provider × model with calendar-aware reset windows; exhausted providers are **parked** until the window rolls (auto re-enable, no timers), and Auto routing sinks parked providers below healthy candidates **before** a call — plus an optional free/local-first `allowPaid` gate and a `buff model quota` CLI with a cost summary (free vs paid tokens + estimated $ saved)
+- **Checkpoint / resume** — `buff execute "<goal>" --checkpoint` saves a resume-able snapshot after every task batch; `--resume [id]` rehydrates the plan and continues from the first pending step (a crash / quota kill / token expiry mid-pipeline no longer restarts the whole plan); `--checkpoint-list` shows saved pipelines
 - **Security scan CLI** — `buff security scan` detects PII, prompt injections, and dangerous code patterns
 - **Feedback & rating system** — `buff feedback record/list/stats/clear` drives self-improvement scoring
 - **Marketplace unified CLI** — `buff marketplace browse/search/install/info` for workflow templates + plugins
@@ -775,6 +777,62 @@ Simple mechanical edits never touch an LLM (ruflo's `enhanced-model-router` Tier
 - If the goal isn't mechanical (or validation fails), the pipeline **falls through to the LLM** unchanged.
 - Tier-0 results flow through the same safe-apply pipeline (dry-run, sandbox, review bundles) and emit `edit:written` events tagged `via: tier0`.
 - Disable per call with `useTier0: false` in the EditModule API.
+
+#### Central quota ledger — free/local-first routing with reset windows
+
+Every Auto-routed call is write-through recorded into a **central quota ledger** (tokens/requests per provider × model). The ledger powers four things:
+
+1. **Calendar-aware reset windows** — daily/hourly free-tier limits with automatic re-enable exactly when the window rolls (no arbitrary timers).
+2. **Predictive parking** — a provider that exhausts its window is **parked** and sinks below healthy candidates **before** the next call, not after a reactive failure.
+3. **Free/local-first gate** — `routing.allowPaid: false` keeps paid providers out of trivial/simple/moderate tasks; complex/critical tasks may still use paid high-capacity models.
+4. **Cost transparency** — `buff model quota` shows free vs paid tokens and an **estimated $ saved** figure (what the free-tier usage would have cost at a typical paid rate).
+
+```bash
+# Set per-provider quota limits (requests per reset window)
+agent-nuvira config set routing.quota.gemini.requestsPerWindow 1500
+agent-nuvira config set routing.quota.groq.requestsPerWindow 14400
+agent-nuvira config set routing.quota.groq.tokensPerWindow 1000000
+agent-nuvira config set routing.quota.groq.windowMs 86400000   # 24h reset window
+
+# Free/local-only unless complexity demands paid (assessment-gap gate)
+agent-nuvira config set routing.allowPaid false
+
+# Inspect the ledger (tokens/requests per provider × model, resets in, parked state)
+# and the cost summary (free vs paid tokens + estimated $ saved)
+agent-nuvira model quota
+
+# Same data machine-readable (costSummary field) for scripting/CI
+agent-nuvira model quota --json
+
+# Clear all ledger entries
+agent-nuvira model quota reset
+```
+
+The dashboard's 📒 **Quota Ledger** card shows the same data live — per-entry status plus a free/local-first cost split (free tokens = savings, paid tokens = actual spend) with an estimated $ saved badge.
+
+#### Checkpoint / resume — crash-proof multi-agent pipelines
+
+Long `buff execute` pipelines can be killed by a crash, quota exhaustion, or a token expiry mid-run. Checkpoints serialize the pipeline state so work is never lost:
+
+```bash
+# Save a resume-able checkpoint after every task batch (in ~/.buff/memory/checkpoints/)
+agent-nuvira execute "build the API" --checkpoint
+
+# Resume the latest checkpoint for this goal + cwd (skips completed steps + the planner)
+agent-nuvira execute "build the API" --resume
+
+# Resume a specific checkpoint
+agent-nuvira execute "build the API" --resume cp-3f9a2c1d0b7e
+
+# List saved checkpoints (goal, progress %, saved-at)
+agent-nuvira execute --checkpoint-list
+```
+
+How it works:
+- After **every task batch** the orchestrator saves a snapshot of the task plan (per-step statuses), artifacts, file changes, and metadata.
+- `--resume` rehydrates the vault, **skips completed steps and the planner**, and continues from the first pending step — on whatever provider/model is now available.
+- `--checkpoint` alone always starts **fresh** (it never silently resumes a stale checkpoint); only an explicit `--resume` loads.
+- State persists across sessions, so a provider that died mid-pipeline can resume on the next-best provider with zero rework (assessment item #6: continuity across models).
 
 ---
 

@@ -436,5 +436,46 @@ describe('DefaultTestModule', () => {
 
       expect(result.success).toBe(true);
     });
+
+    it('should skip npm install for dep-less projects (hermetic, no network)', async () => {
+      // The temp project declares NO dependencies, so hasDependencies() returns
+      // false and runTests() must skip npm install entirely — fast, offline-safe,
+      // and immune to npm registry latency (the source of a flaky CI test). The
+      // npm install path would otherwise attempt a network call.
+      const result = await module.runTests({
+        workingDirectory: testDir,
+        fileChanges: [],
+      });
+
+      expect(result.success).toBe(true);
+      expect(result.exitCode).toBe(0);
+    });
+
+    it('should still run the test command for projects that declare dependencies', async () => {
+      // Positive branch: hasDependencies() must return true so the test command
+      // still executes. The dependency uses a `file:` protocol pointing at a
+      // LOCAL folder inside the sandbox — fully offline, no npm registry fetch
+      // (keeping the suite hermetic), while genuinely exercising the positive
+      // hasDependencies() branch. Install is best-effort anyway: a failing
+      // install must never block the test run.
+      mkdirSync(join(testDir, 'local-dep'), { recursive: true });
+      writeFileSync(join(testDir, 'local-dep', 'package.json'), JSON.stringify({
+        name: 'local-dep',
+        version: '1.0.0',
+      }));
+      writeFileSync(join(testDir, 'package.json'), JSON.stringify({
+        name: 'test',
+        scripts: { test: 'echo "deps-ok" && exit 0' },
+        dependencies: { 'local-dep': 'file:./local-dep' },
+      }));
+
+      const result = await module.runTests({
+        workingDirectory: testDir,
+        fileChanges: [],
+      });
+
+      expect(result.success).toBe(true);
+      expect(result.output).toContain('deps-ok');
+    });
   });
 });

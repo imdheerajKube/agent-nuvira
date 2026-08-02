@@ -364,6 +364,52 @@ export class QuotaLedger {
       .sort((a, b) => a.provider.localeCompare(b.provider) || a.model.localeCompare(b.model));
   }
 
+  /**
+   * Free/local-first cost optics (assessment #7 transparency): split tracked
+   * usage into FREE providers (local Ollama, Gemini free tier — $0 default
+   * pricing) vs PAID providers, and estimate what the free-tier tokens would
+   * have cost on a typical paid provider. This is the "tokens saved / paid
+   * usage triggered" transparency metric: free usage = savings, paid usage =
+   * actual spend. Mirrors the dashboard's readQuotaData() classification.
+   *
+   * @returns Aggregated free/paid token & request counts plus estimated savings.
+   */
+  getCostSummary(): {
+    freeTokens: number;
+    freeRequests: number;
+    paidTokens: number;
+    paidRequests: number;
+    estimatedSavedUsd: number;
+  } {
+    // Free-tier providers whose DEFAULT pricing is $0. NOTE: a user-configured
+    // `pricing.gemini` override would make Gemini paid — this follows the
+    // DEFAULT pricing table (the ledger doesn't store pricing), matching the
+    // dashboard's readQuotaData().
+    const FREE_PROVIDERS = new Set(['local', 'gemini']);
+    // Conservative blended rate (USD per 1K tokens) for the "would have cost"
+    // estimate — mirrors the auto router's default pricing for a mid-tier model.
+    const AVG_PAID_RATE_PER_1K = 0.0005;
+
+    let freeTokens = 0;
+    let freeRequests = 0;
+    let paidTokens = 0;
+    let paidRequests = 0;
+    for (const e of Object.values(this.state.entries)) {
+      // Rotate first so the summary agrees with getStatus()/formatStatus()
+      // rendered in the same CLI output (counters reset on window roll).
+      this.rotateWindow(e);
+      if (FREE_PROVIDERS.has(e.provider)) {
+        freeTokens += e.tokensConsumed;
+        freeRequests += e.requests;
+      } else {
+        paidTokens += e.tokensConsumed;
+        paidRequests += e.requests;
+      }
+    }
+    const estimatedSavedUsd = Math.round((freeTokens / 1000) * AVG_PAID_RATE_PER_1K * 100000) / 100000;
+    return { freeTokens, freeRequests, paidTokens, paidRequests, estimatedSavedUsd };
+  }
+
   /** Raw persisted state (tests / CLI). */
   getState(): QuotaLedgerData {
     return {

@@ -125,6 +125,28 @@ interface RetryGoalData {
   orchestrationResult: OrchestrationResult;
 }
 
+/**
+ * Map the CLI's `--checkpoint` / `--resume [id]` flags onto the orchestrator's
+ * checkpoint options. Bare `--resume` (value `true`) means "resume the auto id
+ * for this goal + cwd" → resumeCheckpointId undefined, resumeRequested true.
+ * `--checkpoint` alone saves forward without resuming. Extracted as a pure
+ * exported helper so the mapping is unit-testable without a full orchestration.
+ */
+export function checkpointOptions(
+  checkpoint: boolean | undefined,
+  resume: string | boolean | undefined,
+): {
+  checkpoint: boolean;
+  resumeCheckpointId: string | undefined;
+  resumeRequested: boolean;
+} {
+  return {
+    checkpoint: checkpoint === true || !!resume,
+    resumeCheckpointId: resume === true ? undefined : resume || undefined,
+    resumeRequested: !!resume,
+  };
+}
+
 /** A parsed action result from the post-execution prompt */
 interface PostExecutionAction {
   type: 'continue' | 'switch-model' | 'history' | 'exit' | 'retry-fix' | 'followup';
@@ -1388,9 +1410,7 @@ export class ExecuteCommand extends BaseCommand {
         repairMode: options.repairMode as 'auto' | 'prompt' | 'off' | undefined,
         repairFallbackModels: options.repairFallbackModels?.split(',').map((m: string) => m.trim()).filter(Boolean),
         autoRouteModels: options.autoRoute || undefined,
-        checkpoint: options.checkpoint || !!options.resume,
-        resumeCheckpointId: options.resume === true ? undefined : options.resume || undefined,
-        resumeRequested: !!options.resume,
+        ...checkpointOptions(options.checkpoint, options.resume),
       });
 
       spinner.stop();
