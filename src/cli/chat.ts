@@ -1069,6 +1069,26 @@ export class ChatCommand extends BaseCommand {
         // of failing again.
         this.recordAutoProviderFailure(candidateType, err);
         const msg = err instanceof Error ? err.message : String(err);
+        // Opt-in confirmation (routing.promptOnFailover): when the user wants
+        // control over failover, ask before auto-switching to the next
+        // candidate. 'manual' surfaces the original error instead of silently
+        // switching — single-shot has no interactive recovery, so the CLI
+        // exits with the failure (matching non-auto behavior).
+        const order = [first.type, ...first.ranked];
+        const nextCandidate = order.find((c) => !attempted.has(c));
+        if (nextCandidate && shouldConfirmFailover(this.configManager.getAll())) {
+          let nextProviderName = nextCandidate;
+          try {
+            nextProviderName = resolveProvider(this.configManager, nextCandidate).provider.name;
+          } catch {
+            // Keep the raw type name if the provider can't resolve.
+          }
+          const nextModel = nextCandidate === first.type
+            ? first.model
+            : getAutoRouter().resolveModel(nextCandidate, 'chat', this.configManager);
+          const choice = await promptFailoverChoice(candidateType, nextProviderName, nextModel);
+          if (choice === 'manual') throw lastError;
+        }
         logger.warn(`   ⚠️ ${candidateType} failed (${msg.slice(0, 160)}) — trying the next auto candidate...`);
       }
     }

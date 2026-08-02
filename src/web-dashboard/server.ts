@@ -73,6 +73,32 @@ let nextClientId = 1;
  */
 let quotaWatcher: ReturnType<typeof watch> | null = null;
 let quotaWatchTimer: ReturnType<typeof setTimeout> | null = null;
+/**
+ * When true (config `routing.alwaysWatchQuota`), the quota watcher stays armed
+ * from server start and is NEVER disarmed by client count — so the Failover
+ * Timeline is always current the moment a dashboard connects, even if the
+ * server sat idle between viewing sessions.
+ */
+let alwaysWatchQuota = false;
+
+/**
+ * Read `routing.alwaysWatchQuota` from ~/.buff/buffconfig.json (same source
+ * loadApiKeysFromConfig uses). Best-effort — a missing/corrupt config just
+ * keeps the default (false = arm-on-connect only).
+ */
+function loadAlwaysWatchQuotaFlag(): void {
+  try {
+    const configPath = join(homedir(), '.buff', 'buffconfig.json');
+    if (!existsSync(configPath)) return;
+    const raw = readFileSync(configPath, 'utf-8');
+    const config = JSON.parse(raw) as { routing?: { alwaysWatchQuota?: boolean } };
+    if (config?.routing?.alwaysWatchQuota === true) {
+      alwaysWatchQuota = true;
+    }
+  } catch {
+    // Best-effort — keep the default.
+  }
+}
 
 function broadcastQuotaEvent(): void {
   const payload = `event: quota\ndata: ${JSON.stringify({
@@ -118,6 +144,16 @@ function disarmQuotaWatcher(): void {
     try { quotaWatcher.close(); } catch { /* ignore */ }
     quotaWatcher = null;
   }
+}
+
+/** Test hook: is the quota file watcher currently armed? */
+export function isQuotaWatcherArmed(): boolean {
+  return quotaWatcher !== null;
+}
+
+/** Test hook: override the always-on quota watcher flag (config re-read on next create). */
+export function setAlwaysWatchQuota(value: boolean): void {
+  alwaysWatchQuota = value;
 }
 
 // ─── In-Memory DAG Store ────────────────────────────────────────────────────
@@ -1387,7 +1423,9 @@ function handleRequest(req: IncomingMessage, res: ServerResponse): void {
       clearInterval(heartbeat);
       clearInterval(refreshInterval);
       sseClients = sseClients.filter((c) => c.id !== clientId);
-      if (sseClients.length === 0) disarmQuotaWatcher();
+      // Only disarm when nobody is viewing AND always-on is not configured —
+      // otherwise the watcher persists to keep quota state warm between sessions.
+      if (sseClients.length === 0 && !alwaysWatchQuota) disarmQuotaWatcher();
     });
 
     return;
@@ -1486,6 +1524,11 @@ export function createDashboardServer(): { server: ReturnType<typeof createServe
   // This is the primary source if the user configured providers via
   // the CLI model picker or `buff config set` commands.
   loadApiKeysFromConfig();
+
+  // Step 3: If routing.alwaysWatchQuota is set, arm the quota watcher NOW and
+  // never disarm on client disconnect (always-on real-time quota updates).
+  loadAlwaysWatchQuotaFlag();
+  if (alwaysWatchQuota) armQuotaWatcher();
 
   // Log env var status once at startup for debugging
   console.log('  Provider configuration:');

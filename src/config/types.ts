@@ -156,6 +156,14 @@ export interface RoutingConfig {
    * Default: 20.
    */
   promotionMinDecisions?: number;
+  /**
+   * Keep the dashboard's quota file watcher armed permanently instead of only
+   * while an SSE client is connected. When true, the server watches the memory
+   * dir from startup (never disarming on client disconnect), so quota events
+   * are always current the moment a dashboard connects — useful when the
+   * dashboard is left running between viewing sessions. Default: false.
+   */
+  alwaysWatchQuota?: boolean;
 }
 
 /**

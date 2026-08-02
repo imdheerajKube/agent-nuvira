@@ -9,6 +9,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **Always-on dashboard quota watcher** — new `routing.alwaysWatchQuota` config flag: when enabled, the dashboard's quota file watcher arms at server start and is **never disarmed by client count**, so the Failover Timeline is already current the moment a dashboard connects even after the server sat idle between viewing sessions (was: armed only while an SSE client was connected). Test hook `setAlwaysWatchQuota()` / `isQuotaWatcherArmed()` exported for hermetic tests
+- **Single-shot Auto failover confirmation** — `routing.promptOnFailover` now also applies to one-shot Auto prompts (`buff chat "..." -m auto`): before silently hopping to the next candidate, the CLI asks (switch recommended / pick manually); choosing "manual" surfaces the original provider error instead of switching behind your back. Previously the confirmation prompt only ran in the interactive chat loop
+
 ## [1.45.5] - 2026-08-02
 
 ### Added

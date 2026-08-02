@@ -1,192 +1,162 @@
 /**
- * Chat command — auto-mode session failover tests.
+ * Chat command — single-shot auto-failover confirmation tests.
  *
- * Regression tests for the "auto mode gets stuck when a provider dies
- * mid-session" bug:
- * - A provider whose token expired (auth) or quota ran out (rate-limit) must be
- *   excluded from auto routing for the REST of the session, so the next message
- *   routes to another provider instead of re-picking the broken one and failing
- *   again.
- * - Transient 5xx/network errors must NOT permanently exclude a provider — they
- *   flow through the shared circuit breaker (which needs repeated failures
- *   before opening a cooldown).
+ * Regression tests for `routing.promptOnFailover` on the SINGLE-SHOT path
+ * (`buff chat "prompt"` with Auto routing): when a provider fails mid-call,
+ * Auto mode walks the ranked candidates. With promptOnFailover enabled the
+ * CLI must ASK before auto-switching to the next candidate; choosing 'manual'
+ * surfaces the original error instead of silently switching (single-shot has
+ * no interactive recovery, so the CLI exits with the failure — matching
+ * non-auto behavior).
  */
 
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 
 import { ChatCommand } from '../../src/cli/chat.js';
-import { resetProviderFallback, getProviderFallback } from '../../src/learning/provider-fallback.js';
-import type { InferenceProvider } from '../../src/inference/interface.js';
+import { logger } from '../../src/utils/logger.js';
 
-// ─── Provider fixture ───────────────────────────────────────────────────────
+// ─── Module mocks ───────────────────────────────────────────────────────────
 
-const providers = new Map<string, InferenceProvider>();
-
-function makeProvider(name: string): InferenceProvider {
-  return {
-    name,
-    listModels: vi.fn().mockResolvedValue([{ id: 'model-x', name: 'Model X', provider: name, tags: ['chat'] }]),
-    isAvailable: vi.fn().mockResolvedValue(true),
-    generate: vi.fn().mockResolvedValue('ok'),
-    getInfo: () => name,
-  } as unknown as InferenceProvider;
-}
-
-// resolveProvider returns a provider keyed by the requested type — so the auto
-// router's candidate walk can actually fail over gemini → groq in the tests.
-vi.mock('../../src/cli/router.js', () => ({
-  resolveProvider: vi.fn((_cm: unknown, type?: string) => {
-    const t = type || 'gemini';
-    return { type: t, provider: providers.get(t) || makeProvider(t) };
-  }),
+// Mock the failover-prompt module so we can flip the config gate and the
+// user's choice deterministically.
+vi.mock('../../src/cli/failover-prompt.js', () => ({
+  shouldConfirmFailover: vi.fn().mockReturnValue(false),
+  promptFailoverChoice: vi.fn().mockResolvedValue('switch'),
 }));
 
-// Deterministic auto router: winner = gemini, ranked = [gemini, groq].
+// Mock the auto router's model resolver (real one reads machine config).
 vi.mock('../../src/learning/auto-router.js', async (importOriginal) => {
   const actual = await importOriginal<typeof import('../../src/learning/auto-router.js')>();
   return {
     ...actual,
     getAutoRouter: () => ({
-      resolve: () => ({
-        agentType: 'chat',
-        provider: 'gemini',
-        model: 'gemini-2.0-flash',
-        complexity: 'simple',
-        taskProfile: { intent: 'coding', requiresVerification: false, notes: [] },
-        escalationApplied: false,
-        taskType: 'code-generation',
-        score: 0.8,
-        weights: { reasoning: 0.2, speed: 0.3, cost: 0.3, privacy: 0.1, reliability: 0.1 },
-        ranked: [
-          { provider: 'gemini', score: 0.8, dimensions: {}, weightTotal: 1, inCooldown: false, reason: 'test' },
-          { provider: 'groq', score: 0.7, dimensions: {}, weightTotal: 1, inCooldown: false, reason: 'test' },
-        ],
-        fallbackChain: [],
-        explanation: 'test decision',
-        routedBy: 'heuristic',
-      }),
-      resolveModel: (provider: string) => (provider === 'gemini' ? 'gemini-2.0-flash' : 'llama-3.3-70b'),
-      isAutoModel: actual.isAutoModel,
-      isAutoProvider: actual.isAutoProvider,
+      resolve: vi.fn(),
+      resolveModel: vi.fn().mockReturnValue('gemini-2.0-flash'),
     }),
   };
 });
 
-// Hermetic: no real routing-history writes or live model-list fetches.
-vi.mock('../../src/learning/routing-history.js', () => ({
-  recordRoutingDecision: vi.fn(),
+// Mock the router so candidates resolve to fake providers.
+vi.mock('../../src/cli/router.js', () => ({
+  resolveProvider: vi.fn((_cm: any, type: string) => ({
+    type,
+    provider: {
+      name: type === 'groq' ? 'Groq' : 'Gemini',
+      isAvailable: vi.fn().mockResolvedValue(true),
+    },
+  })),
 }));
+
+// Mock the model-health layer to keep the resolved model unchanged.
 vi.mock('../../src/inference/model-validator.js', () => ({
-  resolveWorkingModel: vi.fn(async (_p: unknown, _t: string, desired?: string) => desired || 'default'),
+  resolveWorkingModel: vi.fn((_provider: any, _type: string, desired: string) => Promise.resolve(desired)),
 }));
 
-// ─── Tests ──────────────────────────────────────────────────────────────────
+// ─── Test setup ─────────────────────────────────────────────────────────────
 
-describe('ChatCommand — auto-mode session failover', () => {
+import { shouldConfirmFailover, promptFailoverChoice } from '../../src/cli/failover-prompt.js';
+
+const mockedShouldConfirm = vi.mocked(shouldConfirmFailover);
+const mockedPromptChoice = vi.mocked(promptFailoverChoice);
+
+describe('generateAutoWithFailover — single-shot failover confirmation', () => {
   beforeEach(() => {
-    providers.clear();
-    providers.set('gemini', makeProvider('Fake Gemini'));
-    providers.set('groq', makeProvider('Fake Groq'));
-    resetProviderFallback();
     vi.spyOn(console, 'log').mockImplementation(() => {});
+    vi.spyOn(logger, 'info').mockImplementation(() => {});
+    vi.spyOn(logger, 'success').mockImplementation(() => {});
+    vi.spyOn(logger, 'warn').mockImplementation(() => {});
+    vi.spyOn(logger, 'error').mockImplementation(() => {});
+    vi.spyOn(logger, 'highlight').mockImplementation(() => {});
+    mockedShouldConfirm.mockReturnValue(false);
+    mockedPromptChoice.mockResolvedValue('switch');
   });
 
   afterEach(() => {
-    resetProviderFallback();
     vi.restoreAllMocks();
+    vi.clearAllMocks();
   });
 
-  it('routes to the ranked winner when nothing has failed', async () => {
-    const cmd = new ChatCommand();
-    const routed = await (cmd as any).routeMessageAuto('implement login');
-    expect(routed.type).toBe('gemini');
+  /**
+   * Build a ChatCommand wired to a single-shot auto failover:
+   * - routeMessageAuto returns groq as the first pick with gemini ranked next
+   * - groq's generation throws (quota exhausted), gemini's succeeds
+   * Returns the command plus the mocked generateWithContext.
+   */
+  function setupCommand(): {
+    cmd: ChatCommand;
+    generateMock: ReturnType<typeof vi.fn>;
+  } {
+    const cmd = new ChatCommand() as any;
+    cmd.routeMessageAuto = vi.fn().mockResolvedValue({
+      type: 'groq',
+      provider: { name: 'Groq', isAvailable: vi.fn().mockResolvedValue(true) },
+      model: 'llama-3.3-70b-versatile',
+      ranked: ['gemini'],
+      complexity: 'simple',
+      score: 0.85,
+    });
+    const generateMock = vi.fn()
+      .mockRejectedValueOnce(new Error('429: quota exceeded'))
+      .mockResolvedValueOnce('hello from gemini');
+    cmd.generateWithContext = generateMock;
+    return { cmd, generateMock };
+  }
+
+  it('silently fails over to the next candidate when promptOnFailover is off (default)', async () => {
+    const { cmd, generateMock } = setupCommand();
+    mockedShouldConfirm.mockReturnValue(false);
+
+    const result = await cmd.generateAutoWithFailover('explain this', 'explain this', {}, true);
+
+    expect(result).toBe('hello from gemini');
+    expect(generateMock).toHaveBeenCalledTimes(2); // groq failed → gemini answered
+    expect(mockedPromptChoice).not.toHaveBeenCalled();
   });
 
-  it('skips a provider that failed earlier in the session (expired token mid-session)', async () => {
-    const cmd = new ChatCommand();
-    // Simulate gemini's key expiring mid-session (auth → whole-session exclusion)
-    (cmd as any).sessionFailedProviders = new Map([['gemini', Number.MAX_SAFE_INTEGER]]);
+  it('asks before switching and adopts the next candidate when the user confirms', async () => {
+    const { cmd, generateMock } = setupCommand();
+    mockedShouldConfirm.mockReturnValue(true);
+    mockedPromptChoice.mockResolvedValue('switch');
 
-    const routed = await (cmd as any).routeMessageAuto('implement login');
+    const result = await cmd.generateAutoWithFailover('explain this', 'explain this', {}, true);
 
-    // Auto routing must fail over to the next-ranked provider instead of
-    // re-picking the broken gemini.
-    expect(routed.type).toBe('groq');
-    expect(routed.provider.name).toBe('Fake Groq');
+    expect(result).toBe('hello from gemini');
+    expect(generateMock).toHaveBeenCalledTimes(2);
+    // Prompt shown once, with the failed provider and the next candidate
+    expect(mockedPromptChoice).toHaveBeenCalledTimes(1);
+    expect(mockedPromptChoice.mock.calls[0][0]).toBe('groq');
+    expect(mockedPromptChoice.mock.calls[0][1]).toBe('Gemini');
   });
 
-  it('excludes a provider from the session on auth errors (expired token)', () => {
-    const cmd = new ChatCommand();
-    (cmd as any).recordAutoProviderFailure('gemini', new Error('401 Unauthorized: API key not valid'));
+  it('surfaces the original error instead of switching when the user picks manual', async () => {
+    const { cmd, generateMock } = setupCommand();
+    mockedShouldConfirm.mockReturnValue(true);
+    mockedPromptChoice.mockResolvedValue('manual');
 
-    // Auth exclusion is permanent for the session
-    expect((cmd as any).sessionFailedProviders.get('gemini')).toBe(Number.MAX_SAFE_INTEGER);
-    // The shared circuit breaker must ALSO have recorded the failure so the
-    // auto router deprioritizes gemini by scoring on subsequent messages.
-    // (configManager is protected — access via the same `as any` cast used for
-    // the other private members above.)
-    const status = getProviderFallback((cmd as any).configManager).getCircuitBreakerStatus();
-    const geminiStatus = status.find((s) => s.provider === 'gemini');
-    expect(geminiStatus).toBeDefined();
-    expect(geminiStatus!.failures).toBeGreaterThanOrEqual(1);
+    await expect(cmd.generateAutoWithFailover('explain this', 'explain this', {}, true))
+      .rejects.toThrow('429: quota exceeded');
+    // The gemini candidate was never attempted — 'manual' aborts the walk.
+    expect(generateMock).toHaveBeenCalledTimes(1);
+    expect(mockedPromptChoice).toHaveBeenCalledTimes(1);
   });
 
-  it('excludes a provider only briefly on rate-limit errors (exhausted quota)', () => {
-    const cmd = new ChatCommand();
-    (cmd as any).recordAutoProviderFailure('gemini', new Error('token limit exceeded for this project'));
+  it('does not prompt when there is no next candidate to switch to', async () => {
+    const cmd = new ChatCommand() as any;
+    cmd.routeMessageAuto = vi.fn().mockResolvedValue({
+      type: 'groq',
+      provider: { name: 'Groq', isAvailable: vi.fn().mockResolvedValue(true) },
+      model: 'llama-3.3-70b-versatile',
+      ranked: [],
+      complexity: 'simple',
+      score: 0.85,
+    });
+    const generateMock = vi.fn().mockRejectedValue(new Error('boom'));
+    cmd.generateWithContext = generateMock;
+    mockedShouldConfirm.mockReturnValue(true);
 
-    // Rate-limit exclusion is TRANSIENT (5-min cooldown), not permanent — a
-    // throttled-but-working provider must be re-admitted, not blacklisted.
-    const expiresAt = (cmd as any).sessionFailedProviders.get('gemini');
-    expect(typeof expiresAt).toBe('number');
-    expect(expiresAt).toBeGreaterThan(Date.now());
-    expect(expiresAt).not.toBe(Number.MAX_SAFE_INTEGER);
-    // The circuit breaker also recorded the failure for scoring deprioritization
-    const status = getProviderFallback((cmd as any).configManager).getCircuitBreakerStatus();
-    const geminiStatus = status.find((s) => s.provider === 'gemini');
-    expect(geminiStatus).toBeDefined();
-    expect(geminiStatus!.failures).toBe(1);
-  });
-
-  it('does NOT exclude a provider on transient server errors (circuit breaker only)', () => {
-    const cmd = new ChatCommand();
-    (cmd as any).recordAutoProviderFailure('groq', new Error('500 Internal Server Error'));
-
-    // Transient failures must not exclude the provider from the session —
-    // only the circuit breaker counts them toward cooldown.
-    expect((cmd as any).sessionFailedProviders.get('groq')).toBeUndefined();
-    const status = getProviderFallback((cmd as any).configManager).getCircuitBreakerStatus();
-    const groqStatus = status.find((s) => s.provider === 'groq');
-    expect(groqStatus).toBeDefined();
-    expect(groqStatus!.failures).toBe(1);
-  });
-
-  it('re-admits a rate-limited provider once its cooldown expires', async () => {
-    const cmd = new ChatCommand();
-    // gemini rate-limited 5 minutes ago → exclusion already expired → it can be
-    // routed to again (it is the ranked winner).
-    (cmd as any).sessionFailedProviders = new Map([['gemini', Date.now() - 1000]]);
-
-    const routed = await (cmd as any).routeMessageAuto('implement login');
-    expect(routed.type).toBe('gemini');
-  });
-
-  it('fails over repeatedly until a working provider is found (gemini then groq both tried)', async () => {
-    const cmd = new ChatCommand();
-    // Both gemini AND groq session-failed → the fallback surfaces the best
-    // remaining candidate so the caller's isAvailable() gate shows a real error
-    // rather than silently re-entering a broken provider.
-    (cmd as any).sessionFailedProviders = new Map([
-      ['gemini', Number.MAX_SAFE_INTEGER],
-      ['groq', Number.MAX_SAFE_INTEGER],
-    ]);
-
-    const routed = await (cmd as any).routeMessageAuto('implement login');
-    // With every ranked candidate excluded, the router's literal winner is
-    // returned (gemini) — routeMessageAuto still returns a shape the caller can
-    // gate on instead of throwing.
-    expect(routed).toBeDefined();
-    expect(typeof routed.type).toBe('string');
-    expect(typeof routed.model).toBe('string');
+    await expect(cmd.generateAutoWithFailover('explain this', 'explain this', {}, true))
+      .rejects.toThrow('boom');
+    // No ranked candidates remain → nothing to offer, so no prompt.
+    expect(mockedPromptChoice).not.toHaveBeenCalled();
   });
 });

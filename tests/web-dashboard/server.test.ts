@@ -39,7 +39,7 @@ vi.mock('node:os', () => ({
 }));
 
 // Import the server after env/os mocks are in place
-const { createDashboardServer } = await import('../../src/web-dashboard/server.js');
+const { createDashboardServer, isQuotaWatcherArmed, setAlwaysWatchQuota } = await import('../../src/web-dashboard/server.js');
 
 // ─── Fixture data helpers ───────────────────────────────────────────────────
 
@@ -913,6 +913,61 @@ describe('Dashboard Server', () => {
         stream.close();
         try { rmSync(ledgerPath, { force: true }); } catch { /* ignore */ }
       }
+    });
+
+    it('keeps the quota watcher armed after the last client disconnects when routing.alwaysWatchQuota is set', async () => {
+      // Write the config flag into the mocked homedir's buffconfig.json, then
+      // start a fresh server: with routing.alwaysWatchQuota=true the watcher
+      // arms AT STARTUP (before any SSE client) and is NEVER disarmed by the
+      // client count — so quota state stays warm between dashboard sessions.
+      const configPath = join(testDir, '.buff', 'buffconfig.json');
+      writeFileSync(configPath, JSON.stringify({ routing: { alwaysWatchQuota: true } }));
+      const srv2 = createDashboardServer();
+      try {
+        const addr = await new Promise<any>((resolve) => {
+          srv2.server.once('listening', () => resolve(srv2.server.address()));
+        });
+        const base2 = `http://127.0.0.1:${addr.port}`;
+
+        // Armed at startup — before ANY SSE client connects.
+        expect(isQuotaWatcherArmed()).toBe(true);
+
+        // Connect + disconnect: the watcher must NOT disarm (always-on).
+        const stream = await openSSE(`${base2}/api/sse`);
+        await stream.waitFor('init');
+        stream.close();
+        // Give the req 'close' handler a tick to process the disconnect.
+        await new Promise((r) => setTimeout(r, 150));
+        expect(isQuotaWatcherArmed()).toBe(true);
+      } finally {
+        srv2.server.close();
+        rmSync(configPath, { force: true });
+        // Reset the module flag so the rest of the suite sees default behavior.
+        setAlwaysWatchQuota(false);
+        // Disarm the lingering watcher via a connect/disconnect cycle now that
+        // the flag is off (disarm fires when the last client disconnects).
+        const cleanup = await openSSE(`${baseUrl}/api/sse`);
+        try {
+          await cleanup.waitFor('init');
+        } finally {
+          cleanup.close();
+        }
+        await new Promise((r) => setTimeout(r, 150));
+        expect(isQuotaWatcherArmed()).toBe(false);
+      }
+    });
+
+    it('disarms the quota watcher on last disconnect when always-watch is OFF (default)', async () => {
+      setAlwaysWatchQuota(false);
+      const stream = await openSSE(`${baseUrl}/api/sse`);
+      try {
+        await stream.waitFor('init');
+        expect(isQuotaWatcherArmed()).toBe(true); // armed while viewing
+      } finally {
+        stream.close();
+      }
+      await new Promise((r) => setTimeout(r, 150));
+      expect(isQuotaWatcherArmed()).toBe(false); // disarmed with nobody viewing
     });
   });
 

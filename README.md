@@ -823,6 +823,17 @@ agent-nuvira model quota
 The timeline is also **live**: the dashboard watches `quota-events.jsonl` /
 `quota-ledger.json` on disk and pushes a `quota` SSE event the moment a failover
 or park lands — so the card updates in real time, no page refresh or 10s wait.
+(The watcher arms while a dashboard is connected and disarms when the last one
+disconnects. To keep it armed from server start — so the timeline is already
+current the moment a dashboard connects, even after the server sat idle between
+viewing sessions — enable `routing.alwaysWatchQuota`:
+
+```bash
+agent-nuvira config set routing.alwaysWatchQuota true
+```
+
+The always-on mode never disarms on client disconnect, trading a tiny idle fs
+watch for instant-up-to-date quota state.)
 
 **Opt-in failover confirmation.** By default Auto mode fails over silently
 (never get stuck). If you'd rather approve each mid-session swap, enable:
@@ -835,6 +846,11 @@ agent-nuvira config set routing.promptOnFailover true
 With this on, a failed provider shows the next-ranked candidate and lets you
 choose "switch (recommended)" or "pick a provider myself" — so every swap is
 an informed decision, not a silent surprise.
+
+This also applies to **single-shot Auto prompts** (`buff chat "ask something"`
+with `-m auto`): before Auto mode silently hops to the next candidate, the CLI
+asks; picking "manual" surfaces the original provider error instead of
+switching behind your back.
 
 #### Checkpoint / resume — crash-proof multi-agent pipelines
 
