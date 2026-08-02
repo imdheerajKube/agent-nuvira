@@ -35,7 +35,8 @@ import {
   type ScoredProvider,
   type RoutingDimension,
 } from '../../src/learning/auto-router.js';
-import { resetRouterBandit, getRouterBandit } from '../../src/learning/router-bandit.js';
+import { resetRouterBandit, getRouterBandit, DEFAULT_MIN_SAMPLES } from '../../src/learning/router-bandit.js';
+import { resetRouterPromotion, getRouterPromotion } from '../../src/learning/router-promotion.js';
 
 // ─── Bandit test isolation ─────────────────────────────────────────────────
 
@@ -50,6 +51,7 @@ function isolateBandit() {
 function cleanupBandit() {
   delete process.env.BUFF_MEMORY_DIR;
   resetRouterBandit();
+  resetRouterPromotion();
   if (banditTempDir) {
     rmSync(banditTempDir, { recursive: true, force: true });
   }
@@ -622,15 +624,198 @@ describe('AutoModelRouter.resolve with bandit learning', () => {
     });
     router.recordOutcome('writer', 'implement a login form', 'success');
     // No crash, and the outcome lands in the bandit's learning history
+    // (ONE entry for the provider prior + ONE for the per-model prior)
     const state = getRouterBandit().getState();
     const history = state.learningHistory;
-    expect(history.length).toBe(1);
+    expect(history.length).toBe(2);
     expect(history[0].outcome).toBe('success');
+    expect(history[1].outcome).toBe('success');
+    expect(history[1].model).toBeTruthy();
+  });
+
+  it('records the per-model prior for the concrete model that served the task', () => {
+    const router = new AutoModelRouter();
+    router.resolve('writer', 'implement a login form', {
+      allowedProviders: ['groq', 'gemini'],
+      useBandit: true,
+    });
+    router.recordOutcome('writer', 'implement a login form', 'failure');
+    const state = getRouterBandit().getState();
+    // The provider's failure → provider β bumped; the model's failure → model β bumped
+    const modelEntry = state.learningHistory.find((h) => h.model);
+    expect(modelEntry?.outcome).toBe('failure');
+    const model = modelEntry!.model!;
+    const modelPrior = getRouterBandit().getModelPrior(model, 'moderate');
+    expect(modelPrior.beta).toBeGreaterThan(1);
+  });
+
+  it('writes the promotion A/B trajectory on resolve + recordOutcome', () => {
+    const router = new AutoModelRouter();
+    router.resolve('writer', 'implement a login form', {
+      allowedProviders: ['groq', 'gemini'],
+      useBandit: true,
+    });
+    router.recordOutcome('writer', 'implement a login form', 'success');
+    // The promotion gate trajectory records the finalized decision
+    expect(getRouterPromotion().getDecisions().length).toBe(1);
+    const decision = getRouterPromotion().getDecisions()[0];
+    expect(decision.heuristic.provider).toBeTruthy();
+    expect(decision.bandit.provider).toBeTruthy();
+    expect(decision.outcome).toBe('success');
+    // Both picks were recorded for the SAME task (A/B comparison)
+    expect(decision.task).toBe('implement a login form');
+  });
+
+  it('does not write a promotion trajectory when bandit is off', () => {
+    const router = new AutoModelRouter();
+    router.resolve('writer', 'implement a login form', {
+      allowedProviders: ['groq', 'gemini'],
+    });
+    router.recordOutcome('writer', 'implement a login form', 'success');
+    expect(getRouterPromotion().getDecisions().length).toBe(0);
   });
 
   it('recordOutcome is a no-op when no decision was made for the agent type', () => {
     const router = new AutoModelRouter();
     expect(() => router.recordOutcome('planner', 'design architecture', 'failure')).not.toThrow();
+  });
+
+  it('keeps the configured model on cold start (per-model learning is deterministic)', () => {
+    const router = new AutoModelRouter();
+    const configManager = {
+      getAll: vi.fn(() => ({ pricing: {} })),
+      getProviderConfig: vi.fn(() => ({ config: { model: 'pinned-model' } })),
+    } as any;
+    const decision = router.resolve('writer', 'implement a login form', {
+      allowedProviders: ['groq'],
+      useBandit: true,
+    }, configManager);
+    // No per-model data → the configured pin is kept (deterministic cold start)
+    expect(decision.provider).toBe('groq');
+    expect(decision.model).toBe('pinned-model');
+    // The model was still noted so future outcomes can learn it
+    expect(getRouterBandit().getLastModel('writer')).toBe('pinned-model');
+  });
+
+  it('per-model learning prefers a learned model over an unlearned configured pin', () => {
+    const router = new AutoModelRouter();
+    const configManager = {
+      getAll: vi.fn(() => ({ pricing: {} })),
+      getProviderConfig: vi.fn(() => ({ config: { model: 'llama-3.3-70b-versatile' } })),
+    } as any;
+    // Learn successes on a DIFFERENT groq model (a curated candidate) so it is
+    // the only LEARNED candidate and always wins the per-model Thompson pick.
+    const bandit = getRouterBandit();
+    for (let i = 0; i < 20; i++) {
+      bandit.recordModelOutcome('openai/gpt-oss-20b', 'implement a login form', 'success', 1.0);
+    }
+    const decision = router.resolve('writer', 'implement a login form', {
+      allowedProviders: ['groq'],
+      useBandit: true,
+    }, configManager);
+    expect(decision.provider).toBe('groq');
+    // openai/gpt-oss-20b is a PREFERRED_MODELS groq candidate and is learned
+    expect(decision.model).toBe('openai/gpt-oss-20b');
+    expect(getRouterBandit().getLastModel('writer')).toBe('openai/gpt-oss-20b');
+  });
+
+  it('cold-start bandit with several unlearned candidates picks the configured pin', () => {
+    const router = new AutoModelRouter();
+    const configManager = {
+      getAll: vi.fn(() => ({ pricing: {} })),
+      getProviderConfig: vi.fn(() => ({ config: { model: 'llama-3.3-70b-versatile' } })),
+    } as any;
+    const decision = router.resolve('writer', 'implement a login form', {
+      allowedProviders: ['groq', 'gemini'],
+      useBandit: true,
+    }, configManager);
+    // Both providers cold-start (no data) → no escalation, deterministic pick
+    expect(decision.banditEscalation).toBeFalsy();
+    // Whatever provider wins, the model stays the configured pin or a curated default
+    expect(decision.model).toBeTruthy();
+  });
+});
+
+// ─── Uncertainty-driven escalation (ruflo model-router mirror) ─────────────
+// When the bandit's winner has almost no accumulated samples (α+β < threshold),
+// its sampled score is a cold-start guess. Escalate to the next-ranked provider
+// that HAS learned data — a strictly better cold-start policy.
+
+describe('AutoModelRouter.resolve uncertainty escalation', () => {
+  beforeEach(() => {
+    isolateBandit();
+  });
+
+  afterEach(() => {
+    cleanupBandit();
+  });
+
+  /** Force θ = 1 on every bandit draw so the winner is deterministic (the
+   * deterministic ranking) and escalation behavior is fully predictable. */
+  function deterministicSampling(): { mockRestore: () => void } {
+    const bandit = getRouterBandit();
+    const spy = vi.spyOn(bandit, 'sampleScore').mockImplementation(
+      (_provider: string, _complexity: unknown, score: number) => score,
+    );
+    return { mockRestore: () => spy.mockRestore() };
+  }
+
+  it('escalates to a learned provider when the winner is unlearned', () => {
+    const bandit = getRouterBandit();
+    // Seed groq with many successes so it is the ONLY learned provider in the
+    // moderate bucket. For 'implement a login form' the deterministic winner is
+    // gemini (free tier + strong reasoning), which stays unlearned (Beta(1,1)).
+    for (let i = 0; i < 20; i++) {
+      bandit.recordOutcome('groq', 'implement a login form', 'success', 1.0);
+    }
+    const sampling = deterministicSampling();
+    try {
+      const decision = new AutoModelRouter().resolve('writer', 'implement a login form', {
+        allowedProviders: ['groq', 'gemini', 'openrouter'],
+        useBandit: true,
+      });
+      // gemini won deterministically but is unlearned → escalate to learned groq
+      expect(decision.provider).toBe('groq');
+      expect(decision.banditEscalation).toBe(true);
+      expect(decision.explanation).toContain('escalated: winner unlearned');
+    } finally {
+      sampling.mockRestore();
+    }
+  });
+
+  it('does not escalate when the winner already has learned data', () => {
+    const bandit = getRouterBandit();
+    // Seed gemini so the deterministic winner IS learned
+    for (let i = 0; i < 20; i++) {
+      bandit.recordOutcome('gemini', 'implement a login form', 'success', 1.0);
+    }
+    const sampling = deterministicSampling();
+    try {
+      const decision = new AutoModelRouter().resolve('writer', 'implement a login form', {
+        allowedProviders: ['groq', 'gemini', 'openrouter'],
+        useBandit: true,
+      });
+      expect(decision.provider).toBe('gemini');
+      expect(decision.banditEscalation).toBeFalsy();
+    } finally {
+      sampling.mockRestore();
+    }
+  });
+
+  it('does not escalate when no provider has learned data (pure cold start)', () => {
+    const sampling = deterministicSampling();
+    try {
+      const decision = new AutoModelRouter().resolve('writer', 'implement a login form', {
+        allowedProviders: ['groq', 'gemini', 'openrouter'],
+        useBandit: true,
+      });
+      // All Beta(1,1) → nothing learned → deterministic pick, no escalation flag
+      expect(decision.banditEscalation).toBeFalsy();
+      expect(decision.provider).toBeTruthy();
+      expect(decision.explanation).not.toContain('escalated: winner unlearned');
+    } finally {
+      sampling.mockRestore();
+    }
   });
 });
 

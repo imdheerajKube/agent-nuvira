@@ -41,7 +41,9 @@ import { analyzeComplexity, type ComplexityLevel, type ModelCandidate, type Pref
 import { getTaskType, type TaskType } from './model-router.js';
 import { getBenchmarkRuns } from './benchmark.js';
 import { getAgentStats } from './agent-stats.js';
-import { getRouterBandit, type BanditOutcome } from './router-bandit.js';
+import { getRouterBandit, DEFAULT_MIN_SAMPLES, type BanditOutcome } from './router-bandit.js';
+import { getRouterPromotion, type ParallelPick } from './router-promotion.js';
+import { PREFERRED_MODELS } from '../inference/model-validator.js';
 import type { ConfigManager } from '../config/manager.js';
 import type { ProviderPricing } from '../config/types.js';
 import { logger } from '../utils/logger.js';
@@ -128,6 +130,13 @@ export interface AutoRouterOptions {
    */
   useBandit?: boolean;
   /**
+   * Minimum accumulated samples (α+β) before a provider's bandit prior counts
+   * as "learned". When the bandit's winner has FEWER samples, routing escalates
+   * to the next-ranked provider that HAS learned data (uncertainty-driven
+   * escalation, mirroring ruflo's model-router). Default: DEFAULT_MIN_SAMPLES (8).
+   */
+  escalationMinSamples?: number;
+  /**
    * Hard constraint: max estimated USD cost per call. Providers whose
    * typical-call cost exceeds this are ELIMINATED (not just scored lower).
    */
@@ -213,6 +222,11 @@ export interface AutoRouteResult {
   explanation: string;
   /** How this decision was produced: heuristic | rule | bandit */
   routedBy: RoutedBy;
+  /**
+   * True when bandit uncertainty escalated selection away from an unlearned
+   * winner to the next-ranked provider WITH learned data.
+   */
+  banditEscalation?: boolean;
 }
 
 // ─── Provider Capability Profiles ───────────────────────────────────────────
@@ -226,6 +240,13 @@ export interface AutoRouteResult {
 //   - openrouter — frontier reasoning (GPT/Claude tier), slower, pricier
 //
 // Profiles can be overridden per-call via AutoRouterOptions (see weights).
+
+/**
+ * Minimum expected win rate (α/(α+β)) for a provider to qualify as an
+ * escalation target. A learned-but-failing provider (win rate near or below
+ * 0.5) must never steal routing from a strong cold-start winner.
+ */
+export const ESCALATION_WIN_RATE_FLOOR = 0.55;
 
 const DEFAULT_PROFILES: Record<string, ProviderCapabilities> = {
   local: { reasoning: 0.30, speed: 0.55, cost: 1.00, privacy: 1.00, reliability: 0.60 },
@@ -651,7 +672,13 @@ export class AutoModelRouter {
     // ── Thompson-sampling bandit: multiply each score by a Beta draw ────────
     // Mirrors ruflo's model-router: final score = deterministicScore × θ where
     // θ ~ Beta(α, β) per complexity bucket. Cold start Beta(1,1) ≈ deterministic.
+    // Also: the DETERMINISTIC ranking is captured BEFORE bandit sampling so the
+    // promotion gate can A/B the two strategies on the same task (feature 3).
+    const deterministicRanking = [...scored];
+    const heuristicWinner = deterministicRanking.find((s) => !s.inCooldown) || deterministicRanking[0];
     let routedBy: RoutedBy = 'heuristic';
+    let banditEscalation = false;
+    let escalatedProvider: string | undefined;
     if (options.useBandit) {
       const bandit = getRouterBandit();
       scored = scored.map((s) => ({
@@ -663,17 +690,83 @@ export class AutoModelRouter {
         return b.score - a.score;
       });
       routedBy = 'bandit';
+
+      // ── Uncertainty-driven escalation (ruflo model-router mirror) ─────────
+      // If the bandit's winner has almost no accumulated data (α+β < threshold),
+      // its sampled score is a cold-start guess — committing to it is a coin
+      // flip. Escalate to the next-ranked provider that HAS learned data so a
+      // strictly better cold-start policy: prefer learned providers over
+      // unlearned ones when data exists, behave deterministically otherwise.
+      // SANITY BOUND: only escalate to a provider the bandit actually believes
+      // in — expected win rate (α/(α+β)) must be meaningfully above 0.5, so a
+      // learned-but-failing provider can never steal routing from a strong
+      // cold-start winner.
+      const minSamples = options.escalationMinSamples ?? DEFAULT_MIN_SAMPLES;
+      const winner = scored.find((s) => !s.inCooldown) || scored[0];
+      const winnerPrior = bandit.getPrior(winner.provider, complexity);
+      if (winnerPrior.alpha + winnerPrior.beta < minSamples) {
+        const learnedAlternative = scored.find(
+          (s) =>
+            s.provider !== winner.provider &&
+            !s.inCooldown &&
+            (() => {
+              const p = bandit.getPrior(s.provider, complexity);
+              return (
+                p.alpha + p.beta >= minSamples &&
+                p.alpha / (p.alpha + p.beta) >= ESCALATION_WIN_RATE_FLOOR
+              );
+            })(),
+        );
+        if (learnedAlternative) {
+          banditEscalation = true;
+          escalatedProvider = learnedAlternative.provider;
+          if (options.verbose) {
+            logger.info(
+              `  🎲 Bandit uncertainty: ${winner.provider} has no learning data (α+β=${winnerPrior.alpha + winnerPrior.beta}) — escalating to learned ${learnedAlternative.provider} (win-rate ≥ ${ESCALATION_WIN_RATE_FLOOR})`,
+            );
+          }
+        }
+      }
     }
 
-    // Pick the best candidate that is not in cooldown (unless ALL are in cooldown)
-    const selected = scored.find((s) => !s.inCooldown) || scored[0];
+    // Pick the best candidate that is not in cooldown (unless ALL are in cooldown).
+    // When uncertainty escalation fired, select the learned alternative instead.
+    const selected = escalatedProvider
+      ? scored.find((s) => s.provider === escalatedProvider)!
+      : scored.find((s) => !s.inCooldown) || scored[0];
     const provider = selected.provider;
-    const model = this.resolveModel(provider, agentType, configManager);
+    let model = this.resolveModel(provider, agentType, configManager);
 
     // Note the decision so outcome recording (recordOutcome) can reward the
     // provider that actually served the task.
     if (options.useBandit) {
-      getRouterBandit().noteDecision(agentType, provider);
+      const bandit = getRouterBandit();
+      bandit.noteDecision(agentType, provider);
+
+      // ── Per-modelId learning (ruflo ADR-149 mirror) ───────────────────────
+      // The provider-level prior learns "which PROVIDER won"; the per-model
+      // prior learns "which concrete MODEL won" within that provider
+      // (llama-3.3-70b-versatile ≠ openai/gpt-oss-20b on the SAME provider).
+      // When any candidate model has learned data, prefer the best Thompson-
+      // sampled one; cold start keeps the configured model (deterministic).
+      model = this.resolveModelWithLearning(
+        provider,
+        model,
+        complexity,
+        options.escalationMinSamples ?? DEFAULT_MIN_SAMPLES,
+      );
+      bandit.noteModelDecision(agentType, model);
+
+      // ── Promotion gate A/B (ruflo router-parallel mirror) ─────────────────
+      // Record both the deterministic pick and the bandit pick for this task.
+      // The orchestrator's recordOutcome() finalizes it with the real outcome,
+      // and `buff model bandit` evaluates the three promotion criteria.
+      getRouterPromotion().noteParallelDecision(
+        agentType,
+        taskDescription,
+        this.toParallelPick(heuristicWinner, agentType, configManager),
+        this.toParallelPick(selected, agentType, configManager, model),
+      );
     }
 
     // Build fallback chain (skip in-cooldown providers when alternatives exist)
@@ -696,7 +789,8 @@ export class AutoModelRouter {
       model,
       weights,
       taskProfile,
-    ) + (routedBy === 'bandit' ? ' | bandit-learned' : '');
+    ) + (routedBy === 'bandit' ? ' | bandit-learned' : '') +
+      (banditEscalation ? ' | escalated: winner unlearned' : '');
 
     if (options.verbose) {
       logger.info(`  🤖 Auto routing: ${explanation}`);
@@ -716,6 +810,7 @@ export class AutoModelRouter {
       fallbackChain,
       explanation,
       routedBy,
+      banditEscalation,
     };
   }
 
@@ -737,12 +832,93 @@ export class AutoModelRouter {
     taskDescription: string,
     outcome: BanditOutcome,
     configManager?: ConfigManager,
+    outcomeData?: { latencyMs?: number; costUsd?: number; qualityScore?: number },
   ): void {
     const bandit = getRouterBandit();
     const provider = bandit.getLastProvider(agentType);
     if (!provider) return;
     const costScore = computeCostScore(provider, this.getProviderPricing(provider, configManager));
     bandit.recordOutcome(provider, taskDescription, outcome, costScore);
+
+    // Per-modelId learning: attribute the same outcome to the concrete model
+    // that served the task (ruflo ADR-149 mirror) so the model choice learns.
+    const model = bandit.getLastModel(agentType);
+    if (model) {
+      bandit.recordModelOutcome(model, taskDescription, outcome, costScore);
+    }
+
+    // Promotion gate: finalize the parallel A/B decision with the real outcome
+    // so `buff model bandit` can judge bandit-vs-heuristic on real trajectories.
+    // Keyed by agentType+task so parallel tasks never misattribute outcomes.
+    try {
+      getRouterPromotion().recordOutcome(agentType, taskDescription, outcome, outcomeData);
+    } catch {
+      // Best-effort — never break outcome recording on a promotion error.
+    }
+  }
+
+  /**
+   * Choose the concrete model within the selected provider using per-model
+   * bandit priors (ruflo ADR-149 mirror).
+   *
+   * Candidate models = the provider's configured pin (if real) + the curated
+   * known-good defaults for the provider. Cold start (no per-model data yet)
+   * keeps the configured model — deterministic. Once outcomes accumulate,
+   * the best Thompson-sampled LEARNED model wins, so the model choice learns.
+   */
+  resolveModelWithLearning(
+    provider: string,
+    configuredModel: string,
+    complexity: ComplexityLevel,
+    minSamples: number = DEFAULT_MIN_SAMPLES,
+  ): string {
+    const bandit = getRouterBandit();
+    const candidates: string[] = [];
+    if (configuredModel && configuredModel !== 'default') candidates.push(configuredModel);
+    for (const m of PREFERRED_MODELS[provider] || []) {
+      if (!candidates.includes(m)) candidates.push(m);
+    }
+    if (candidates.length === 0) return configuredModel || 'default';
+
+    const learned = candidates.filter((m) => {
+      const p = bandit.getModelPrior(m, complexity);
+      return p.alpha + p.beta >= minSamples;
+    });
+    // Cold start: no per-model data → keep the configured model (deterministic).
+    if (learned.length === 0) return candidates[0];
+
+    // Learned: pick the candidate with the best Thompson-sampled per-model draw.
+    const sampled = learned
+      .map((m) => ({ model: m, score: bandit.sampleModelScore(m, complexity, 1) }))
+      .sort((a, b) => b.score - a.score);
+    return sampled[0].model;
+  }
+
+  /**
+   * Build a ParallelPick (promotion-gate A/B record) for a scored provider.
+   * Used to log the deterministic pick vs the bandit pick for the same task.
+   *
+   * @param modelOverride  The ACTUAL model chosen for the bandit side (e.g. a
+   *                       per-model-learned pick). Defaults to the provider's
+   *                       configured pin so the A/B records the real served
+   *                       model — otherwise per-model divergence would be
+   *                       invisible to the promotion gate.
+   */
+  private toParallelPick(
+    scored: ScoredProvider,
+    agentType: string,
+    configManager?: ConfigManager,
+    modelOverride?: string,
+  ): ParallelPick {
+    const caps = this.getCapabilities(scored.provider);
+    return {
+      provider: scored.provider,
+      model: modelOverride ?? this.resolveModel(scored.provider, agentType, configManager),
+      predictedQuality: scored.score,
+      predictedCostUsd: estimateCallCostUsd(scored.provider, this.getProviderPricing(scored.provider, configManager)),
+      // Rough latency estimate from the speed capability (higher = faster).
+      estimatedLatencyMs: Math.round(3000 + (1 - caps.speed) * 6000),
+    };
   }
 
   /**

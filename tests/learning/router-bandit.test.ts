@@ -229,6 +229,95 @@ describe('noteDecision / getLastProvider', () => {
   });
 });
 
+// ─── Per-modelId learning (ruflo ADR-149 mirror) ───────────────────────────
+
+describe('per-model learning (modelPriors)', () => {
+  it('getModelPrior returns Beta(1,1) before any outcomes', () => {
+    const bandit = new RouterBandit();
+    expect(bandit.getModelPrior('llama-3.3-70b-versatile', 'moderate')).toEqual({ alpha: 1, beta: 1 });
+  });
+
+  it('noteModelDecision / getLastModel tracks the concrete model per agent type', () => {
+    const bandit = new RouterBandit();
+    bandit.noteModelDecision('writer', 'llama-3.3-70b-versatile');
+    bandit.noteModelDecision('planner', 'gemini-2.5-flash');
+    expect(bandit.getLastModel('writer')).toBe('llama-3.3-70b-versatile');
+    expect(bandit.getLastModel('planner')).toBe('gemini-2.5-flash');
+    expect(bandit.getLastModel('chat')).toBeUndefined();
+  });
+
+  it('recordModelOutcome updates the per-model prior in the right complexity bucket', () => {
+    const bandit = new RouterBandit();
+    bandit.recordModelOutcome('llama-3.3-70b-versatile', 'implement a login form', 'success', 0.85);
+    const prior = bandit.getModelPrior('llama-3.3-70b-versatile', 'moderate');
+    expect(prior.alpha).toBeGreaterThan(1);
+    expect(prior.alpha + prior.beta).toBeCloseTo(3, 5);
+    // Bucket isolation: other complexity buckets untouched
+    expect(bandit.getModelPrior('llama-3.3-70b-versatile', 'trivial')).toEqual({ alpha: 1, beta: 1 });
+  });
+
+  it('recordModelOutcome failure bumps beta only', () => {
+    const bandit = new RouterBandit();
+    bandit.recordModelOutcome('gemini-2.5-flash', 'implement a login form', 'failure');
+    const prior = bandit.getModelPrior('gemini-2.5-flash', 'moderate');
+    expect(prior.beta).toBe(2);
+    expect(prior.alpha).toBe(1);
+  });
+
+  it('model priors are independent of provider priors', () => {
+    const bandit = new RouterBandit();
+    // Same task, provider-level success for groq and model-level failure for a groq model
+    bandit.recordOutcome('groq', 'implement a login form', 'success', 1.0);
+    bandit.recordModelOutcome('openai/gpt-oss-20b', 'implement a login form', 'failure');
+    expect(bandit.getPrior('groq', 'moderate').alpha).toBeGreaterThan(1);
+    expect(bandit.getModelPrior('openai/gpt-oss-20b', 'moderate').beta).toBe(2);
+    // The provider prior and the model prior are different surfaces
+    expect(bandit.getModelPrior('groq', 'moderate')).toEqual({ alpha: 1, beta: 1 });
+  });
+
+  it('sampleModelScore cold start scales the deterministic score by a uniform draw', () => {
+    const bandit = new RouterBandit();
+    for (let i = 0; i < 20; i++) {
+      const s = bandit.sampleModelScore('llama-3.3-70b-versatile', 'moderate', 0.8);
+      expect(s).toBeGreaterThan(0);
+      expect(s).toBeLessThanOrEqual(0.8);
+    }
+  });
+
+  it('accumulated model successes skew the per-model sample upward', () => {
+    const fresh = new RouterBandit();
+    const trained = new RouterBandit();
+    for (let i = 0; i < 100; i++) {
+      trained.recordModelOutcome('llama-3.3-70b-versatile', 'implement a login form', 'success', 1.0);
+    }
+    let trainedSum = 0;
+    let freshSum = 0;
+    const n = 500;
+    for (let i = 0; i < n; i++) {
+      trainedSum += trained.sampleModelScore('llama-3.3-70b-versatile', 'moderate', 1);
+      freshSum += fresh.sampleModelScore('llama-3.3-70b-versatile', 'moderate', 1);
+    }
+    expect(trainedSum / n).toBeGreaterThan(freshSum / n);
+  });
+
+  it('persists modelPriors to disk and reloads them', () => {
+    const bandit = new RouterBandit();
+    bandit.recordModelOutcome('llama-3.3-70b-versatile', 'implement a login form', 'success', 0.85);
+    resetRouterBandit();
+    const reloaded = getRouterBandit();
+    expect(reloaded.getModelPrior('llama-3.3-70b-versatile', 'moderate').alpha).toBeGreaterThan(1);
+  });
+
+  it('reset() clears model priors and last-model wiring', () => {
+    const bandit = new RouterBandit();
+    bandit.recordModelOutcome('llama-3.3-70b-versatile', 'implement a login form', 'success');
+    bandit.noteModelDecision('writer', 'llama-3.3-70b-versatile');
+    bandit.reset();
+    expect(bandit.getModelPrior('llama-3.3-70b-versatile', 'moderate')).toEqual({ alpha: 1, beta: 1 });
+    expect(bandit.getLastModel('writer')).toBeUndefined();
+  });
+});
+
 // ─── Persistence ───────────────────────────────────────────────────────────
 
 describe('persistence', () => {

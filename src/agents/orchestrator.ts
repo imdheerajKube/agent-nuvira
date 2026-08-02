@@ -1312,6 +1312,7 @@ export class Orchestrator {
         maxCostUsd: routing.maxCostUsd,
         minSpeed: routing.minSpeed,
         minReasoning: routing.minReasoning,
+        escalationMinSamples: routing.escalationMinSamples,
       },
       this.configManager,
     );

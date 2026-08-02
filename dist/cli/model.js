@@ -30,6 +30,7 @@ import { getHybridRouter } from '../learning/hybrid-router.js';
 import { AUTO_MODEL, AUTO_PROVIDER, getAutoRouter, isAutoModel, isAutoProvider, } from '../learning/auto-router.js';
 import { recordRoutingDecision } from '../learning/routing-history.js';
 import { getRouterBandit, COMPLEXITY_BUCKETS, } from '../learning/router-bandit.js';
+import { getRouterPromotion, DEFAULT_MIN_PROMOTION_DECISIONS, } from '../learning/router-promotion.js';
 import { logger } from '../utils/logger.js';
 const BUFF_DIR = join(homedir(), '.buff');
 const ACTIVE_MODEL_PATH = join(BUFF_DIR, 'active-model.json');
@@ -736,8 +737,9 @@ export class ModelCommand extends BaseCommand {
             // Call .reset() on the INSTANCE (persists an empty state to disk), not the
             // module-level resetRouterBandit() which only drops the in-memory singleton.
             getRouterBandit().reset();
+            getRouterPromotion().reset();
             console.log('');
-            logger.success('✅ Bandit state reset — all Beta(α, β) priors back to Beta(1,1)');
+            logger.success('✅ Bandit state reset — all Beta(α, β) priors back to Beta(1,1), promotion trajectory cleared');
             console.log('');
             return;
         }
@@ -752,6 +754,8 @@ export class ModelCommand extends BaseCommand {
         }
         console.log('');
         logger.highlight('═══  Learning Router — Bandit State  ═══');
+        console.log('');
+        this.renderPromotionGate();
         console.log('');
         // Collect all providers that have any learning data
         const providers = new Set();
@@ -790,6 +794,31 @@ export class ModelCommand extends BaseCommand {
         console.log('  Cell format: α/β (expected win %)  ·  α/β = Beta prior for that complexity bucket');
         console.log('  Higher α = more successful outcomes; higher β = more failures.');
         console.log('');
+        // ── Per-modelId priors (ruflo ADR-149 mirror) ────────────────────────
+        const modelPriors = state.modelPriors || {};
+        const modelProviders = new Set();
+        for (const bucket of COMPLEXITY_BUCKETS) {
+            for (const model of Object.keys(modelPriors[bucket] || {})) {
+                modelProviders.add(model);
+            }
+        }
+        if (modelProviders.size > 0) {
+            logger.highlight(`  ── Per-model priors (${modelProviders.size} learned model(s)) ──`);
+            console.log('');
+            for (const model of [...modelProviders].sort().slice(0, 12)) {
+                const cells = COMPLEXITY_BUCKETS.map((bucket) => {
+                    const prior = modelPriors[bucket]?.[model];
+                    if (!prior)
+                        return ''.padStart(14);
+                    const mean = prior.alpha / (prior.alpha + prior.beta);
+                    return `${prior.alpha}/${prior.beta} (${(mean * 100).toFixed(0)}%)`.padStart(14).slice(0, 14);
+                }).join('');
+                console.log(`  ${model.padEnd(22).slice(0, 22)}${cells}`);
+            }
+            console.log('');
+            logger.info(`  Model cells: α/β (expected win %) per complexity bucket — higher α = more successful outcomes for that model.`);
+            console.log('');
+        }
         // Learning history
         const history = state.learningHistory;
         if (history.length > 0) {
@@ -797,12 +826,48 @@ export class ModelCommand extends BaseCommand {
             console.log('');
             for (const h of history.slice(-15)) {
                 const icon = h.outcome === 'success' ? '✅' : h.outcome === 'escalated' ? '🔄' : '❌';
+                // Model-level history entries carry the concrete model id (provider is
+                // the same string) — render just the model to avoid 'x (x)' noise.
+                const label = h.model ?? h.provider;
                 const ts = new Date(h.timestamp).toLocaleTimeString();
-                console.log(`   ${icon} ${h.provider.padEnd(12)} ${h.complexity.padEnd(10)} reward ${h.reward.toFixed(2)}  ${ts}`);
+                console.log(`   ${icon} ${label.padEnd(24).slice(0, 24)} ${h.complexity.padEnd(10)} reward ${h.reward.toFixed(2)}  ${ts}`);
             }
             console.log('');
         }
         logger.info('Reset: `buff model bandit reset` · JSON: `buff model bandit --json`');
+        console.log('');
+    }
+    /** Render the promotion gate (bandit-vs-heuristic A/B verdict). */
+    renderPromotionGate() {
+        const minDecisions = this.configManager.getAll().routing?.promotionMinDecisions ?? DEFAULT_MIN_PROMOTION_DECISIONS;
+        const status = getRouterPromotion().evaluate(minDecisions);
+        logger.highlight('  ── Promotion Gate (bandit vs. heuristic) ──');
+        console.log('');
+        if (status.decisionCount === 0) {
+            logger.info('  No A/B trajectory yet. Enable `routing.bandit` and run auto-routed tasks to populate it.');
+            console.log('');
+            return;
+        }
+        const pct = (v) => `${(v * 100).toFixed(2)}%`;
+        const pass = (ok) => (ok ? '✅ PASS' : '❌ FAIL');
+        console.log(`   Decisions recorded: ${status.decisionCount}  ·  Diverged (A/B signal): ${status.divergedCount} / required ${status.minDecisions}`);
+        console.log('');
+        console.log(`   (a) Quality  Δ ${pct(status.qualityDelta)}   (need > +2%)            ${pass(status.criteria.quality)}`);
+        console.log(`   (b) Cost     Δ ${pct(status.costDelta)}   (need < +1%)            ${pass(status.criteria.cost)}`);
+        const latencyDisplay = status.latencyMeasured ? pct(status.latencyDelta) : 'n/a';
+        const latencyBadge = status.latencyMeasured ? pass(status.criteria.latency) : 'n/a';
+        console.log(`   (c) Latency  Δ ${latencyDisplay}   (p95, need < +5%)       ${latencyBadge}`);
+        console.log('');
+        if (!status.sufficient) {
+            logger.info(`  ⏳ Not enough diverged decisions yet (${status.divergedCount}/${status.minDecisions}) — keep the bandit on; more real tasks will settle the verdict.`);
+        }
+        else if (status.promoted) {
+            logger.success('  🏆 PROMOTED — the bandit measurably beats the deterministic heuristic (quality up, no cost/latency regression).');
+        }
+        else {
+            logger.warn('  ⚠️  NOT promoted — the bandit does not yet beat the deterministic heuristic on real trajectories.');
+            logger.info('     Consider `buff config set routing.bandit false` or `buff model bandit reset` to restart learning.');
+        }
         console.log('');
     }
     /** Build a machine-readable bandit snapshot for scripting/CI. */
@@ -827,18 +892,54 @@ export class ModelCommand extends BaseCommand {
                     : { alpha: 0, beta: 0, expectedWinRate: 0 };
             }
         }
+        // Per-model priors (ruflo ADR-149 mirror)
+        const modelPriorsMap = state.modelPriors || {};
+        const modelPriors = {};
+        for (const bucket of COMPLEXITY_BUCKETS) {
+            const bucketPriors = modelPriorsMap[bucket] || {};
+            for (const model of Object.keys(bucketPriors)) {
+                modelPriors[model] ??= {};
+                const prior = bucketPriors[model];
+                modelPriors[model][bucket] = {
+                    alpha: Math.round(prior.alpha * 1000) / 1000,
+                    beta: Math.round(prior.beta * 1000) / 1000,
+                    expectedWinRate: Math.round((prior.alpha / (prior.alpha + prior.beta)) * 1000) / 1000,
+                };
+            }
+        }
+        // Promotion gate
+        const minDecisions = this.configManager.getAll().routing?.promotionMinDecisions ?? DEFAULT_MIN_PROMOTION_DECISIONS;
+        const promotion = this.toPromotionJSON(getRouterPromotion().evaluate(minDecisions));
         return {
             version: state.version,
             enabled: this.configManager.getAll().routing?.bandit === true,
             priors,
+            modelPriors,
+            promotion,
             learningHistory: state.learningHistory.slice(-50).map((h) => ({
                 provider: h.provider,
+                model: h.model,
                 complexity: h.complexity,
                 outcome: h.outcome,
                 reward: h.reward,
                 timestamp: h.timestamp,
             })),
             updatedAt: Date.now(),
+        };
+    }
+    /** Machine-readable promotion-gate snapshot. */
+    toPromotionJSON(status) {
+        return {
+            decisionCount: status.decisionCount,
+            divergedCount: status.divergedCount,
+            minDecisions: status.minDecisions,
+            qualityDelta: Math.round(status.qualityDelta * 10000) / 10000,
+            costDelta: Math.round(status.costDelta * 10000) / 10000,
+            latencyDelta: Math.round(status.latencyDelta * 10000) / 10000,
+            latencyMeasured: status.latencyMeasured,
+            criteria: status.criteria,
+            sufficient: status.sufficient,
+            promoted: status.promoted,
         };
     }
     // ── Interactive prompt ─────────────────────────────────────────────────

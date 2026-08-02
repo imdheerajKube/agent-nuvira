@@ -1008,6 +1008,7 @@ export class Orchestrator {
             maxCostUsd: routing.maxCostUsd,
             minSpeed: routing.minSpeed,
             minReasoning: routing.minReasoning,
+            escalationMinSamples: routing.escalationMinSamples,
         }, this.configManager);
         // Record for the dashboard usage stats + audit trail
         recordRoutingDecision({

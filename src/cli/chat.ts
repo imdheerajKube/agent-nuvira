@@ -755,6 +755,7 @@ export class ChatCommand extends BaseCommand {
         maxCostUsd: routing.maxCostUsd,
         minSpeed: routing.minSpeed,
         minReasoning: routing.minReasoning,
+        escalationMinSamples: routing.escalationMinSamples,
       },
       this.configManager,
     );

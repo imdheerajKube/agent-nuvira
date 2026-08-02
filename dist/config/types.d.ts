@@ -96,6 +96,19 @@ export interface RoutingConfig {
     minSpeed?: number;
     /** Minimum reasoning score (0–1) for a candidate provider to be considered */
     minReasoning?: number;
+    /**
+     * Minimum accumulated bandit samples (α+β) before a provider counts as
+     * "learned". When the bandit's winner has fewer samples, Auto routing
+     * escalates to the next-ranked provider WITH learned data (uncertainty-
+     * driven escalation, ruflo model-router mirror). Default: 8.
+     */
+    escalationMinSamples?: number;
+    /**
+     * Minimum diverged A/B decisions before the promotion gate (bandit-vs-
+     * heuristic) evaluates as meaningful. Surfaced by `buff model bandit`.
+     * Default: 20.
+     */
+    promotionMinDecisions?: number;
 }
 /**
  * Full configuration schema for .buffconfig.json

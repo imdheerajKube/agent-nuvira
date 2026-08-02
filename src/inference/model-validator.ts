@@ -29,7 +29,7 @@ import { logger } from '../utils/logger.js';
 // that are stable, chat-capable, and known to work on each provider.
 
 /** Preferred repair models per provider id, best first. */
-const PREFERRED_MODELS: Record<string, string[]> = {
+export const PREFERRED_MODELS: Record<string, string[]> = {
   groq: ['llama-3.3-70b-versatile', 'llama-3.1-8b-instant', 'openai/gpt-oss-20b'],
   gemini: ['gemini-2.5-flash', 'gemini-2.0-flash', 'gemini-1.5-flash'],
   openrouter: ['openai/gpt-4o-mini', 'meta-llama/llama-3.3-70b-instruct', 'mistralai/mistral-7b-instruct'],

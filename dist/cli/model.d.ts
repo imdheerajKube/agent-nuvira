@@ -80,8 +80,12 @@ export declare class ModelCommand extends BaseCommand {
     private showRecommendations;
     private checkHealth;
     private showBandit;
+    /** Render the promotion gate (bandit-vs-heuristic A/B verdict). */
+    private renderPromotionGate;
     /** Build a machine-readable bandit snapshot for scripting/CI. */
     private buildBanditJSON;
+    /** Machine-readable promotion-gate snapshot. */
+    private toPromotionJSON;
     private promptSwitchIfWanted;
 }
 //# sourceMappingURL=model.d.ts.map

@@ -631,6 +631,7 @@ export class ChatCommand extends BaseCommand {
             maxCostUsd: routing.maxCostUsd,
             minSpeed: routing.minSpeed,
             minReasoning: routing.minReasoning,
+            escalationMinSamples: routing.escalationMinSamples,
         }, this.configManager);
         // Walk the ranked candidates (winner first) and return the first available
         // provider — never a provider that lacks a key or endpoint. Providers that

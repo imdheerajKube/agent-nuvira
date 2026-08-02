@@ -7,6 +7,42 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [Unreleased]
+
+## [1.42.0] - 2026-08-02
+
+### Added
+
+- **Uncertainty-driven escalation (ruflo model-router mirror)** — when the
+  bandit's winner has almost no accumulated samples (α+β <
+  `routing.escalationMinSamples`, default 8), Auto routing **escalates to the
+  next-ranked provider that HAS learned data** instead of committing to a
+  cold-start guess — a strictly better cold-start policy. A sanity bound
+  (`ESCALATION_WIN_RATE_FLOOR = 0.55`) ensures a learned-but-failing provider
+  can never steal routing from a strong cold-start winner. Decisions record a
+  `banditEscalation` flag + `| escalated: winner unlearned` explanation marker
+- **Per-modelId bandit priors (ruflo ADR-149 mirror)** — the learning router now
+  learns per **concrete model**, not just per provider: `modelPriors[complexity]
+  [modelId] = Beta(α, β)` shadow state updated alongside provider priors
+  (`recordModelOutcome`), so `llama-3.3-70b-versatile` ≠ `openai/gpt-oss-20b`
+  within the SAME provider. `resolveModelWithLearning()` keeps the configured
+  pin on cold start (deterministic) and picks the best Thompson-sampled
+  LEARNED model once data accumulates — the model choice learns too. State file
+  bumped to v2 (`router-bandit.json`), CLI shows per-model α/β heatmap
+- **Promotion gate / A/B validation (ruflo router-parallel mirror)** — new
+  `src/learning/router-promotion.ts` answers "is the bandit actually better than
+  the heuristic?" on real trajectories. Every auto-routed task records BOTH the
+  deterministic pick and the bandit pick (keyed by agentType+task, bounded at
+  64 pending), and `recordOutcome()` finalizes it with the real result to
+  `~/.buff/memory/router-promotion.jsonl`. `evaluate()` applies ruflo's THREE
+  promotion criteria — quality ↑ > 2%, cost regression < 1%, p95 latency
+  regression < 5% — over diverged decisions only, with `sufficient`/`promoted`
+  verdicts. Config: `routing.promotionMinDecisions` (default 20). `buff model
+  bandit` now renders the gate (human + `--json`); `bandit reset` clears the
+  trajectory too
+
+---
+
 ## [1.41.2] - 2026-08-01
 
 ### Fixed
@@ -26,46 +62,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 > routing rules/hard constraints, dashboard routing panels, per-provider model
 > drill-down, VS Code extension updates) — everything that shipped in this
 > published tarball.
-
----
-
-## [Unreleased]
-
-### Added
-- **Routing roadmap handoff artifacts** — added a repo-local implementation roadmap and activity log for the next developer agent: [ACTIVITY_LOG_ROUTING_ROADMAP.md](ACTIVITY_LOG_ROUTING_ROADMAP.md)
-- **Follow-up implementation plan** — added a milestone-based execution plan with acceptance criteria for the next routing iteration: [FOLLOW_UP_IMPLEMENTATION_PLAN.md](FOLLOW_UP_IMPLEMENTATION_PLAN.md)
-- **Intent-aware routing scaffold** — the auto router now derives a lightweight task profile from the request text, classifies verification-heavy work, and shifts reasoning/reliability weights accordingly before selecting a provider
-- **Learning Router (ruflo-inspired Thompson-sampling bandit)** — Auto model routing
-  now learns from real task outcomes. Each provider keeps a Beta(α, β) prior **per
-  complexity bucket**; final score = deterministic score × Thompson draw θ ~ Beta(α, β),
-  so cold-start behaves like the heuristic router until outcomes accumulate. The
-  orchestrator records every auto-routed task's success/failure, and success rewards
-  are **cost-adjusted** (cheap provider success is worth the most). State persists to
-  `~/.buff/memory/router-bandit.json`. Enable with `buff config set routing.bandit true`
-- **Hard routing constraints** — `routing.maxCostUsd` / `routing.minSpeed` /
-  `routing.minReasoning` per-call filters that **eliminate** violating providers
-  (mirroring ruflo's `maxCost`/`maxLatency`/`minQuality`), with a safe fallback when
-  constraints would eliminate everything
-- **Routing rules** — regex/string task-pattern overrides that force a specific
-  provider/model before scoring (first match wins), plus a `routedBy`
-  (`heuristic | rule | bandit`) audit field on every decision
-- **`buff model bandit` CLI** — inspect the learning router's Thompson-sampling
-  state: α/β priors per provider × complexity bucket with expected win %, recent
-  learning history, `--json` output for scripting/CI, and `reset` to clear state
-- **Dashboard Bandit panel** — the 🤖 Routing panel now renders a live α/β
-  heatmap (provider × complexity bucket) plus a learning-history timeline from
-  `/api/routing` (bandit field) / SSE, backed by `router-bandit.json`
-- **Deterministic Tier-0 routing** — mechanical edits short-circuit the LLM for
-  **$0 in <1ms** (ruflo `enhanced-model-router` Tier-1 codemod idea): strips
-  standalone `console.*` lines, renames symbols across references, dedupes
-  imports — each transform AST-validated before apply, with graceful fallthrough
-  to the LLM when a goal isn't mechanical. Wired into the EditModule
-  (`useTier0` param, default on) with `edit:written` events tagged `via: tier0`
-- **Per-provider model drill-down in `buff model switch`** — the interactive picker
-  gained a "Browse by provider" option that first lists available providers, then
-  shows the chosen provider's **full** model list (no 20-model cap, so long lists
-  like OpenRouter's 100+ models are fully browsable) and lets you pick a specific
-  model or keep the provider default. Mirrors the VS Code extension's two-step flow
 
 ---
 

@@ -48,6 +48,13 @@ export interface BetaPrior {
   beta: number;
 }
 
+/**
+ * Minimum accumulated samples (α+β) before a prior is considered "learned".
+ * Priors below this have essentially no data — bandit routing treats them as
+ * unlearned and (when enabled) escalates to a provider/model that has data.
+ */
+export const DEFAULT_MIN_SAMPLES = 8;
+
 /** The complexity buckets the bandit learns per provider. */
 export const COMPLEXITY_BUCKETS: ComplexityLevel[] = [
   'trivial',
@@ -62,9 +69,18 @@ export interface RouterBanditState {
   version: number;
   /** priors[complexityBucket][provider] = Beta(α, β) */
   priors: Record<string, Record<string, BetaPrior>>;
+  /**
+   * Per-modelId Beta priors — modelPriors[complexityBucket][modelId] = Beta(α, β).
+   * Mirrors ruflo's ADR-149 `priorsById` shadow state: the bandit learns that
+   * e.g. `llama-3.3-70b-versatile` ≠ `openai/gpt-oss-20b` within the SAME
+   * provider, so the concrete model choice can learn from real outcomes.
+   */
+  modelPriors: Record<string, Record<string, BetaPrior>>;
   /** Recent learning history (bounded, for observability). */
   learningHistory: Array<{
     provider: string;
+    /** Concrete model id this outcome was attributed to (per-model learning). */
+    model?: string;
     complexity: string;
     outcome: string;
     reward: number;
@@ -82,7 +98,7 @@ export interface RouterBanditState {
 // ─── Storage ────────────────────────────────────────────────────────────────
 
 const DEFAULT_MEMORY_DIR = join(homedir(), '.buff', 'memory');
-const CURRENT_VERSION = 1;
+const CURRENT_VERSION = 2; // v2 = adds per-modelId modelPriors (ADR-149 mirror)
 const MAX_HISTORY = 200;
 
 function memoryDir(): string {
@@ -94,7 +110,7 @@ function statePath(): string {
 }
 
 function emptyState(): RouterBanditState {
-  return { version: CURRENT_VERSION, priors: {}, learningHistory: [] };
+  return { version: CURRENT_VERSION, priors: {}, modelPriors: {}, learningHistory: [] };
 }
 
 // ─── Sampling (Marsaglia–Tsang gamma + Beta via gamma ratio) ────────────────
@@ -169,6 +185,8 @@ export class RouterBandit {
   private state: RouterBanditState;
   /** Provider chosen by the last resolve() per agent type (for outcome wiring). */
   private lastProviderByAgent: Record<string, string> = {};
+  /** Concrete model chosen by the last resolve() per agent type (for per-model learning). */
+  private lastModelByAgent: Record<string, string> = {};
 
   constructor() {
     this.state = this.load();
@@ -197,6 +215,32 @@ export class RouterBandit {
     }
   }
 
+  /** Get the Beta prior for a model in a complexity bucket (per-model learning). */
+  getModelPrior(model: string, complexity: ComplexityLevel): BetaPrior {
+    return this.state.modelPriors[complexity]?.[model] ?? { alpha: 1, beta: 1 };
+  }
+
+  /** Note the concrete model picked for an agent type (per-model outcome wiring). */
+  noteModelDecision(agentType: string, model: string): void {
+    this.lastModelByAgent[agentType] = model;
+  }
+
+  /** Concrete model picked last for an agent type, if any. */
+  getLastModel(agentType: string): string | undefined {
+    return this.lastModelByAgent[agentType];
+  }
+
+  /**
+   * Thompson-sample a model's score for a complexity bucket using its
+   * per-model prior. Cold-start Beta(1,1) → uniform draw, so the model choice
+   * behaves deterministically until per-model outcomes accumulate.
+   */
+  sampleModelScore(model: string, complexity: ComplexityLevel, score: number): number {
+    const prior = this.getModelPrior(model, complexity);
+    const theta = sampleBeta(prior.alpha, prior.beta);
+    return score * theta;
+  }
+
   /** Get the Beta prior for a provider in a complexity bucket. */
   getPrior(provider: string, complexity: ComplexityLevel): BetaPrior {
     return this.state.priors[complexity]?.[provider] ?? { alpha: 1, beta: 1 };
@@ -210,6 +254,52 @@ export class RouterBandit {
   /** Provider picked last for an agent type, if any. */
   getLastProvider(agentType: string): string | undefined {
     return this.lastProviderByAgent[agentType];
+  }
+
+  /**
+   * Apply a reward to a Beta prior for the given outcome.
+   * Shared by provider-level and per-modelId learning so both surfaces use
+   * exactly the same reward math (cost-adjusted success, partial credit for
+   * escalation, penalties for failures). Returns the reward applied.
+   */
+  private applyReward(
+    prior: BetaPrior,
+    outcome: BanditOutcome,
+    costScore: number,
+    outcomeData?: Partial<BanditOutcomeData>,
+  ): number {
+    if (outcome === 'success') {
+      let reward = costAdjustedSuccessReward(costScore);
+      if (outcomeData?.qualityScore !== undefined) {
+        reward += Math.max(-0.15, Math.min(0.2, (outcomeData.qualityScore - 0.5) * 0.2));
+      }
+      if (outcomeData?.testPassed === false) reward -= 0.1;
+      if (outcomeData?.userAccepted === false) reward -= 0.1;
+      if (outcomeData?.verificationPassed === false) reward -= 0.08;
+      reward = Math.max(0.1, Math.min(0.9, reward));
+      prior.alpha += reward;
+      prior.beta += 1 - reward;
+      return reward;
+    }
+    if (outcome === 'escalated') {
+      let reward = 0.2;
+      if (outcomeData?.verificationPassed === true) reward += 0.1;
+      if (outcomeData?.qualityScore !== undefined) {
+        reward += Math.max(-0.05, Math.min(0.05, (outcomeData.qualityScore - 0.5) * 0.05));
+      }
+      reward = Math.max(0.1, Math.min(0.9, reward));
+      prior.alpha += reward;
+      prior.beta += 1 - reward;
+      return reward;
+    }
+    // failure — β++ (the model underperformed for this task type)
+    let penalty = 0;
+    if (outcomeData?.qualityScore !== undefined) {
+      penalty += Math.max(0.05, Math.min(0.2, (0.5 - outcomeData.qualityScore) * 0.2));
+    }
+    if (outcomeData?.verificationPassed === false) penalty += 0.08;
+    prior.beta += 1 + penalty;
+    return 0;
   }
 
   /**
@@ -234,51 +324,55 @@ export class RouterBandit {
     const complexity = analyzeComplexity(taskDescription);
     const bucket = this.state.priors[complexity] ?? (this.state.priors[complexity] = {});
     const prior = bucket[provider] ?? (bucket[provider] = { alpha: 1, beta: 1 });
-
-    let reward = 0;
-    if (outcome === 'success') {
-      reward = costAdjustedSuccessReward(costScore);
-      if (outcomeData?.qualityScore !== undefined) {
-        reward += Math.max(-0.15, Math.min(0.2, (outcomeData.qualityScore - 0.5) * 0.2));
-      }
-      if (outcomeData?.testPassed === false) {
-        reward -= 0.1;
-      }
-      if (outcomeData?.userAccepted === false) {
-        reward -= 0.1;
-      }
-      if (outcomeData?.verificationPassed === false) {
-        reward -= 0.08;
-      }
-      reward = Math.max(0.1, Math.min(0.9, reward));
-      prior.alpha += reward;
-      prior.beta += 1 - reward;
-    } else if (outcome === 'escalated') {
-      reward = 0.2;
-      if (outcomeData?.verificationPassed === true) {
-        reward += 0.1;
-      }
-      if (outcomeData?.qualityScore !== undefined) {
-        reward += Math.max(-0.05, Math.min(0.05, (outcomeData.qualityScore - 0.5) * 0.05));
-      }
-      reward = Math.max(0.1, Math.min(0.9, reward));
-      prior.alpha += reward;
-      prior.beta += 1 - reward;
-    } else {
-      // failure — β++ (the model underperformed for this task type)
-      reward = 0;
-      let penalty = 0;
-      if (outcomeData?.qualityScore !== undefined) {
-        penalty += Math.max(0.05, Math.min(0.2, (0.5 - outcomeData.qualityScore) * 0.2));
-      }
-      if (outcomeData?.verificationPassed === false) {
-        penalty += 0.08;
-      }
-      prior.beta += 1 + penalty;
-    }
+    const reward = this.applyReward(prior, outcome, costScore, outcomeData);
 
     this.state.learningHistory.push({
       provider,
+      complexity,
+      outcome,
+      reward,
+      latencyMs: outcomeData?.latencyMs,
+      tokensUsed: outcomeData?.tokensUsed,
+      costUsd: outcomeData?.costUsd,
+      testPassed: outcomeData?.testPassed,
+      qualityScore: outcomeData?.qualityScore,
+      userAccepted: outcomeData?.userAccepted,
+      verificationPassed: outcomeData?.verificationPassed,
+      timestamp: new Date().toISOString(),
+    });
+    if (this.state.learningHistory.length > MAX_HISTORY) {
+      this.state.learningHistory = this.state.learningHistory.slice(-MAX_HISTORY);
+    }
+    this.save();
+  }
+
+  /**
+   * Update the PER-MODEL prior for a concrete model id in the task's complexity
+   * bucket (mirror of ruflo's ADR-149 `priorsById` shadow state). Called by the
+   * router alongside the provider-level recordOutcome so the model choice learns
+   * which concrete model within a provider performs best.
+   *
+   * @param model          The concrete model id (e.g. 'llama-3.3-70b-versatile').
+   * @param taskDescription Task text — complexity bucket re-derived identically.
+   * @param outcome        success | failure | escalated
+   * @param costScore      0–1 cost score of the model's provider (1 = cheapest).
+   * @param outcomeData    Optional richer outcome telemetry for the reward model.
+   */
+  recordModelOutcome(
+    model: string,
+    taskDescription: string,
+    outcome: BanditOutcome,
+    costScore = 0.5,
+    outcomeData?: Partial<BanditOutcomeData>,
+  ): void {
+    const complexity = analyzeComplexity(taskDescription);
+    const bucket = this.state.modelPriors[complexity] ?? (this.state.modelPriors[complexity] = {});
+    const prior = bucket[model] ?? (bucket[model] = { alpha: 1, beta: 1 });
+    const reward = this.applyReward(prior, outcome, costScore, outcomeData);
+
+    this.state.learningHistory.push({
+      provider: model, // model-id surface; provider field keeps CLI history rendering
+      model,
       complexity,
       outcome,
       reward,
@@ -313,6 +407,7 @@ export class RouterBandit {
     return {
       version: this.state.version,
       priors: this.state.priors,
+      modelPriors: this.state.modelPriors,
       learningHistory: [...this.state.learningHistory],
     };
   }
@@ -321,6 +416,7 @@ export class RouterBandit {
   reset(): void {
     this.state = emptyState();
     this.lastProviderByAgent = {};
+    this.lastModelByAgent = {};
     this.save();
   }
 }
