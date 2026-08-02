@@ -218,15 +218,75 @@ describe('FaissIvfBackend — large index (IVF-flat ANN)', () => {
   });
 });
 
-// ─── NativeFaissBackend: graceful fallback when native fails ────────────────
+// ─── NativeFaissBackend: real API (FaissIndex) + graceful fallback ─────────
+
+/** A faithful mock of @faiss-node/native's FaissIndex (FLAT_IP). */
+class MockFaissIndex {
+  dims: number;
+  vectors: Float32Array[] = [];
+
+  constructor(config: { type: string; dims: number }) {
+    this.dims = config.dims;
+  }
+
+  async add(vectors: Float32Array, ids?: Int32Array): Promise<void> {
+    for (let i = 0; i < vectors.length; i += this.dims) {
+      this.vectors.push(vectors.slice(i, i + this.dims));
+    }
+    void ids; // ids are positional 0..n-1 in FLAT_IP
+  }
+
+  async search(query: Float32Array, k: number): Promise<{ labels: Int32Array; distances: Float32Array }> {
+    const q = Array.from(query);
+    const scored = this.vectors
+      .map((v, i) => ({ i, d: dotProd(Array.from(v), q) }))
+      .sort((a, b) => b.d - a.d)
+      .slice(0, k);
+    return {
+      labels: new Int32Array(scored.map((s) => s.i)),
+      distances: new Float32Array(scored.map((s) => s.d)),
+    };
+  }
+
+  dispose(): void { /* noop */ }
+}
+
+function dotProd(a: number[], b: number[]): number {
+  let s = 0;
+  for (let i = 0; i < Math.min(a.length, b.length); i++) s += a[i] * b[i];
+  return s;
+}
 
 describe('NativeFaissBackend', () => {
+  it('uses the real FaissIndex API (FLAT_IP) and maps labels back to ids', async () => {
+    const backend = new NativeFaissBackend('native-ok', { FaissIndex: MockFaissIndex });
+    await backend.insert('a', [1, 0, 0], { label: 'a' });
+    await backend.insert('b', [0, 1, 0], { label: 'b' });
+
+    expect(await backend.count()).toBe(2);
+    // Native FLAT_IP over normalized vectors → cosine similarity.
+    const res = await backend.search([1, 0, 0], 2);
+    expect(res[0].entry.id).toBe('a');
+    expect(res[0].similarity).toBeCloseTo(1, 5);
+    expect(res[1].entry.id).toBe('b');
+    expect(res[1].similarity).toBeCloseTo(0, 5);
+  });
+
+  it('applies the filter function after native search', async () => {
+    const backend = new NativeFaissBackend('native-filter', { FaissIndex: MockFaissIndex });
+    await backend.insert('a', [1, 0, 0], { kind: 'x' });
+    await backend.insert('b', [1, 0, 0], { kind: 'y' });
+    const res = await backend.search([1, 0, 0], 5, (e) => e.metadata.kind === 'y');
+    expect(res).toHaveLength(1);
+    expect(res[0].entry.id).toBe('b');
+  });
+
   it('falls back to the pure-JS IVF backend when the native search throws', async () => {
     const brokenModule = {
-      IndexFlatIP: class {
+      FaissIndex: class {
         add(): void { throw new Error('native crash'); }
-        addWithIds(): void { throw new Error('native crash'); }
         search(): never { throw new Error('native search down'); }
+        dispose(): void { /* noop */ }
       },
     };
     const backend = new NativeFaissBackend('native-ns', brokenModule as unknown);

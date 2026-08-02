@@ -447,13 +447,21 @@ export class NativeFaissBackend implements VectorStoreBackend {
     this.faiss = faissModule as any;
   }
 
-  /** Rebuild the native IndexFlatIP from the shared entries file. */
-  private rebuildNative(): void {
+  /**
+   * Rebuild the native FLAT_IP index from the shared entries file.
+   *
+   * `@faiss-node/native` v0.1.11 exposes a `FaissIndex` class configured with
+   * `{ type: 'FLAT_IP', dims }` (NOT the raw `IndexFlatIP`). Vectors are
+   * L2-normalized before add, so FAISS's inner-product distance equals cosine
+   * similarity (higher = more similar).
+   */
+  private async rebuildNative(): Promise<void> {
+    this.disposeNative();
     const entries = Object.values(readNamespaceEntries(this.namespace));
     const dim = entries.length > 0 ? entries[0].vector.length : 0;
     if (dim === 0) return;
 
-    this.nativeIndex = new this.faiss.IndexFlatIP(dim);
+    this.nativeIndex = new this.faiss.FaissIndex({ type: 'FLAT_IP', dims: dim });
     this.idToNative.clear();
     this.nativeToId.clear();
     this.nextId = 0;
@@ -463,17 +471,33 @@ export class NativeFaissBackend implements VectorStoreBackend {
       const nid = this.nextId++;
       this.idToNative.set(e.id, nid);
       this.nativeToId.set(nid, e.id);
-      const v = e.vector.length === dim ? e.vector : e.vector.concat(new Array(dim - e.vector.length).fill(0));
-      matrix.push(...v);
+      // Guard the pad length (Math.max(0,...)) — a longer-than-dim vector must
+      // never build a negative-length array.
+      const v = e.vector.length === dim
+        ? e.vector
+        : e.vector.concat(new Array(Math.max(0, dim - e.vector.length)).fill(0));
+      matrix.push(...normalize(v));
       nativeIds.push(nid);
     }
-    this.nativeIndex.addWithIds(matrix, nativeIds);
+    await this.nativeIndex.add(new Float32Array(matrix), new Int32Array(nativeIds));
+  }
+
+  /** Dispose the native index (frees C++ memory); safe when null. */
+  private disposeNative(): void {
+    if (this.nativeIndex) {
+      try {
+        this.nativeIndex.dispose();
+      } catch {
+        // best-effort
+      }
+      this.nativeIndex = null;
+    }
   }
 
   async insert(id: string, vector: number[], metadata: Record<string, unknown> = {}): Promise<void> {
     try {
       await this.fallback.insert(id, vector, metadata);
-      this.rebuildNative();
+      await this.rebuildNative();
     } catch {
       // Persistence already handled by fallback; index rebuild is best-effort.
     }
@@ -487,7 +511,7 @@ export class NativeFaissBackend implements VectorStoreBackend {
     const ok = await this.fallback.delete(id);
     if (ok) {
       try {
-        this.rebuildNative();
+        await this.rebuildNative();
       } catch {
         // best-effort
       }
@@ -501,13 +525,13 @@ export class NativeFaissBackend implements VectorStoreBackend {
     filterFn?: (entry: VectorEntry) => boolean,
   ): Promise<SearchResult[]> {
     try {
-      if (!this.nativeIndex) this.rebuildNative();
+      if (!this.nativeIndex) await this.rebuildNative();
       if (!this.nativeIndex) return this.fallback.search(queryVector, k, filterFn);
 
       const q = normalize(queryVector);
-      const res = this.nativeIndex.search([q], k);
-      const labels: number[] = res?.labels?.[0] ?? [];
-      const distances: number[] = res?.distances?.[0] ?? [];
+      const res = await this.nativeIndex.search(new Float32Array(q), k);
+      const labels: number[] = Array.from(res?.labels ?? []);
+      const distances: number[] = Array.from(res?.distances ?? []);
 
       const out: SearchResult[] = [];
       for (let i = 0; i < labels.length; i++) {
@@ -516,6 +540,7 @@ export class NativeFaissBackend implements VectorStoreBackend {
         const entry = await this.fallback.get(id);
         if (!entry) continue;
         if (filterFn && !filterFn(entry)) continue;
+        // FLAT_IP on normalized vectors → distance = cosine similarity.
         out.push({ entry, similarity: distances[i] ?? 0 });
       }
       return out;
@@ -530,8 +555,8 @@ export class NativeFaissBackend implements VectorStoreBackend {
   }
 
   async clear(): Promise<void> {
+    this.disposeNative();
     await this.fallback.clear();
-    this.nativeIndex = null;
     this.idToNative.clear();
     this.nativeToId.clear();
   }
@@ -550,26 +575,38 @@ export class NativeFaissBackend implements VectorStoreBackend {
 let nativeModule: any = null;
 let nativeChecked = false;
 
-/** Load @faiss-node/native once; smoke-test it; null when unusable. */
+/**
+ * Load @faiss-node/native once; smoke-test it; null when unusable.
+ *
+ * v0.1.11 API: `FaissIndex` class with `{ type, dims }` config, async
+ * `add(Float32Array, Int32Array?)` / `search(Float32Array, k)` and `dispose()`.
+ */
 async function loadNativeFaiss(): Promise<any | null> {
   if (nativeChecked) return nativeModule;
   nativeChecked = true;
   try {
     const mod = await import('@faiss-node/native');
-    if (!mod || typeof mod.IndexFlatIP !== 'function') {
+    // Normalize CJS/ESM interop: an ESM namespace may only expose the exports
+    // under `default` (cjs-module-lexer can miss dynamically-built exports).
+    const native = mod?.default ?? mod;
+    if (!native || typeof native.FaissIndex !== 'function') {
       nativeModule = null;
       return null;
     }
-    // Smoke test: build a tiny index and search it.
-    const idx = new mod.IndexFlatIP(2);
-    idx.add([1, 0]);
-    const res = idx.search([1, 0], 1);
-    if (!res || !Array.isArray(res.labels) || res.labels.length === 0) {
+    // Smoke test: build a tiny FLAT_IP index and search it.
+    const idx = new native.FaissIndex({ type: 'FLAT_IP', dims: 2 });
+    await idx.add(new Float32Array([1, 0]));
+    const res = await idx.search(new Float32Array([1, 0]), 1);
+    // NOTE: labels is a TYPED ARRAY (Int32Array) — Array.isArray() is false,
+    // so check .length on the object (typed arrays have .length).
+    const ok = !!res && typeof res.labels !== 'undefined' && res.labels.length > 0;
+    idx.dispose();
+    if (!ok) {
       nativeModule = null;
       return null;
     }
-    nativeModule = mod;
-    return mod;
+    nativeModule = native;
+    return native;
   } catch {
     nativeModule = null;
     return null;

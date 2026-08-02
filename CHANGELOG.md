@@ -7,6 +7,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [1.49.1] - 2026-08-02
+
+### Fixed
+
+- **Native FAISS tier now actually activates** — `NativeFaissBackend` was
+  written against the wrong `@faiss-node/native` API (`IndexFlatIP`), so the
+  load-time smoke test always failed and agent-nuvira silently ran the pure-JS
+  IVF backend even when the native module was installed and built. Rewritten
+  for the real v0.1.11 API (`FaissIndex` with `{ type: 'FLAT_IP', dims }`,
+  async `add(Float32Array, Int32Array?)` / `search(Float32Array, k)` returning
+  typed arrays, `dispose()`), with L2-normalization so FLAT_IP inner product =
+  cosine similarity, a typed-array-safe smoke test (the `Array.isArray` check
+  is false for `Int32Array` labels — the second silent-fallback bug), CJS/ESM
+  interop normalization, and a `Math.max(0, …)` pad guard. Verified: on a
+  machine with `@faiss-node/native` built, `createFaissBackend` now resolves
+  to `faiss-native` and searches correctly. New mock-based native-tier tests
+  (end-to-end + filter) and an updated fallback test
+
 ## [1.49.0] - 2026-08-02
 
 ### Added
