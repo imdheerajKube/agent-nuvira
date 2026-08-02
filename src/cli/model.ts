@@ -903,6 +903,7 @@ export class ModelCommand extends BaseCommand {
     const ledger = getQuotaLedger();
     const statuses = ledger.getStatus(this.configManager);
     const summary = ledger.getCostSummary();
+    const events = ledger.listEvents(20);
 
     if (opts.json) {
       console.log(JSON.stringify({
@@ -915,6 +916,7 @@ export class ModelCommand extends BaseCommand {
           paidRequests: summary.paidRequests,
           estimatedSavedUsd: summary.estimatedSavedUsd,
         },
+        events,
         updatedAt: Date.now(),
       }, null, 2));
       return;
@@ -930,6 +932,11 @@ export class ModelCommand extends BaseCommand {
       logger.info('  `buff config set routing.quota.gemini.requestsPerWindow 1500`');
       logger.info('  `buff config set routing.quota.groq.requestsPerWindow 14400`');
       console.log('');
+      // Still show the failover timeline — events (parked/failover) can exist
+      // even before any usage is recorded.
+      if (events.length > 0) {
+        this.renderQuotaEvents(events);
+      }
       return;
     }
     console.log(ledger.formatStatus(this.configManager));
@@ -944,6 +951,23 @@ export class ModelCommand extends BaseCommand {
     console.log(`   💳 Paid tokens:  ${summary.paidTokens.toLocaleString()}  (${summary.paidRequests.toLocaleString()} req)`);
     if (summary.estimatedSavedUsd > 0) {
       console.log(`   💰 Estimated saved: $${summary.estimatedSavedUsd.toFixed(4)}  (free-tier usage at a typical paid rate)`);
+    }
+
+    // ── Failover timeline (assessment #7) ────────────────────────────────
+    this.renderQuotaEvents(events);
+  }
+
+  /** Render the quota failover timeline in the human CLI output. */
+  private renderQuotaEvents(events: Array<{ type: string; provider: string; reason?: string; timestamp: number }>): void {
+    if (events.length === 0) return;
+    console.log('');
+    logger.highlight(`  ── Failover Timeline (last ${events.length}) ──`);
+    console.log('');
+    for (const ev of events) {
+      const icon = ev.type === 'parked' ? '⏸' : ev.type === 're-enabled' ? '🔁' : ev.type === 'released' ? '✅' : '⚡';
+      const ts = new Date(ev.timestamp).toLocaleString();
+      const reason = ev.reason ? `  (${ev.reason})` : '';
+      console.log(`   ${icon} ${ev.type.padEnd(11)} ${ev.provider.padEnd(12)} ${reason}  ${ts}`);
     }
     console.log('');
   }

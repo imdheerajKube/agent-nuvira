@@ -64,12 +64,24 @@ export interface QuotaStatus {
     /** Remaining ms of an explicit cooldown (0 = none). */
     cooldownRemaining: number;
 }
+/** Event types recorded in the quota failover timeline (quota-events.jsonl). */
+export type QuotaEventType = 'parked' | 're-enabled' | 'released' | 'failover';
+/** One entry in the quota failover timeline (assessment #7 transparency). */
+export interface QuotaEvent {
+    type: QuotaEventType;
+    provider: string;
+    /** Short human reason, e.g. 'rate-limit', 'window reset', 'manual'. */
+    reason?: string;
+    timestamp: number;
+}
 /**
  * Central quota ledger — tracks usage per provider/model across reset windows
  * and parks exhausted providers until the window rolls (auto re-enable).
  */
 export declare class QuotaLedger {
     private state;
+    /** In-memory dedupe of emitted window-reset events (prevents read-path dupes). */
+    private emittedResets;
     constructor();
     /** Load persisted state (best-effort). */
     private load;
@@ -82,6 +94,13 @@ export declare class QuotaLedger {
      * RE-ENABLE: a provider parked for exhaustion un-parks the moment its
      * reset window rolls. Explicit cooldowns (cooldownUntil) survive rotation
      * so a manual park isn't wiped by an unrelated window roll.
+     *
+     * Records a `re-enabled` timeline event ONCE per real window roll (a window
+     * that actually carried usage) — deduped by windowStart so the many read
+     * paths that call rotateWindow (getStatus, getCostSummary, router feed)
+     * can't emit the same reset twice. The rotation is PERSISTED (save()) so a
+     * fresh process re-reading the ledger sees the advanced windowStart instead
+     * of re-rotating and re-emitting a duplicate 're-enabled' event.
      */
     private rotateWindow;
     /**
@@ -100,10 +119,25 @@ export declare class QuotaLedger {
      * Explicitly park a provider until a given epoch ms (used by chat failover
      * and quota-killed providers so the exclusion survives across sessions).
      * Parked providers are excluded from Auto routing until `until`.
+     * Records a `parked` timeline event (best-effort).
      */
-    parkProvider(provider: string, until: number): void;
+    parkProvider(provider: string, until: number, reason?: string): void;
     /** Clear an explicit cooldown for a provider (manual re-enable). */
     releaseProvider(provider: string): void;
+    /**
+     * Append an event to the quota failover timeline (quota-events.jsonl,
+     * capped at MAX_EVENTS). Best-effort: a failed write must never break
+     * routing. Also exposed so callers (chat failover) can record `failover`
+     * events directly.
+     */
+    recordEvent(type: QuotaEventType, provider: string, reason?: string): void;
+    /**
+     * Read the failover timeline, newest first (dashboard / CLI / tests).
+     * Corrupt lines are skipped; best-effort.
+     */
+    listEvents(limit?: number): QuotaEvent[];
+    /** Clear the persisted timeline (used by `buff model quota reset`). */
+    clearEvents(): void;
     /**
      * Is a provider parked (explicit cooldown OR over its configured limit in
      * the current window)? Limits come from `routing.quota.<provider>` config.

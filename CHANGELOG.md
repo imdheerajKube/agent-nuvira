@@ -9,6 +9,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.45.3] - 2026-08-02
+
+### Added
+
+- **Quota failover timeline** — a persistent event log (`~/.buff/memory/quota-events.jsonl`, capped at 200 events) records when providers are **parked**, **re-enabled** (window reset), **released** (manual), or **failed over** mid-session (auth/rate-limit). Chat's auto-mode failover bookkeeping writes `failover` events directly; the ledger's park/release/window-roll paths write the rest (assessment item #7: "show which models were used and when failover occurred")
+- **Dashboard Failover Timeline card** — the 📒 Quota Ledger panel now renders the recent event timeline (type, provider, reason, time) from `/api/routing` (`quota.events`, newest first, max 50, corrupt-line-safe)
+- **CLI failover timeline** — `buff model quota` shows the last 20 events in the human output and includes them as `events` in `--json` — and renders them even when the ledger has no usage entries yet (failovers can precede any successful call)
+
+### Fixed
+
+- **Empty-ledger dashboard timeline** — `readQuotaData()` previously returned without the `events` field when no `quota-ledger.json` existed, hiding the failover timeline; it now always includes events
+
 ## [1.45.2] - 2026-08-02
 
 ### Added

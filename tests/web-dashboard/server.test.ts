@@ -588,6 +588,75 @@ describe('Dashboard Server', () => {
       expect(body.bandit.priors).toEqual({});
     });
 
+    it('GET /api/routing returns the quota failover timeline from quota-events.jsonl', async () => {
+      // quota-events.jsonl is a JSONL timeline — one {type, provider, reason?,
+      // timestamp} event per line, appended by the ledger's park/release/
+      // window-roll paths and chat's mid-session failover bookkeeping.
+      const eventsPath = join(memoryDir, 'quota-events.jsonl');
+      // The ledger APPENDS events chronologically (oldest first in the file),
+      // and readQuotaEvents() reverses the lines to surface newest first — so
+      // the fixture must be written oldest→newest to mirror real append order.
+      const events = [
+        { type: 're-enabled', provider: 'groq', reason: 'window reset', timestamp: Date.now() - 60000 },
+        { type: 'parked', provider: 'gemini', reason: 'rate-limit', timestamp: Date.now() - 10000 },
+        { type: 'failover', provider: 'gemini', reason: 'rate-limit', timestamp: Date.now() - 5000 },
+      ];
+      try {
+        writeFileSync(eventsPath, events.map((e) => JSON.stringify(e)).join('\n') + '\n');
+
+        const res = await httpGet(`${baseUrl}/api/routing`);
+        expect(res.statusCode).toBe(200);
+        const body = JSON.parse(res.body);
+
+        expect(body.quota).toBeDefined();
+        expect(body.quota.events).toHaveLength(3);
+        // Newest first
+        expect(body.quota.events[0].type).toBe('failover');
+        expect(body.quota.events[0].provider).toBe('gemini');
+        expect(body.quota.events[0].reason).toBe('rate-limit');
+        expect(body.quota.events[1].type).toBe('parked');
+        expect(body.quota.events[2].type).toBe('re-enabled');
+        // Event shape preserved end-to-end
+        for (const ev of body.quota.events) {
+          expect(typeof ev.type).toBe('string');
+          expect(typeof ev.provider).toBe('string');
+          expect(typeof ev.timestamp).toBe('number');
+        }
+      } finally {
+        rmSync(eventsPath, { force: true });
+      }
+    });
+
+    it('GET /api/routing returns an empty quota events timeline when the file is missing', async () => {
+      const eventsPath = join(memoryDir, 'quota-events.jsonl');
+      try { rmSync(eventsPath, { force: true }); } catch { /* ignore */ }
+      const res = await httpGet(`${baseUrl}/api/routing`);
+      expect(res.statusCode).toBe(200);
+      const body = JSON.parse(res.body);
+      expect(body.quota).toBeDefined();
+      expect(body.quota.events).toEqual([]);
+    });
+
+    it('GET /api/routing skips corrupt lines in the quota failover timeline', async () => {
+      const eventsPath = join(memoryDir, 'quota-events.jsonl');
+      try {
+        writeFileSync(
+          eventsPath,
+          JSON.stringify({ type: 'parked', provider: 'groq', timestamp: Date.now() - 5000 }) + '\n' +
+          '{corrupt-line\n' +
+          JSON.stringify({ type: 'released', provider: 'local', reason: 'manual', timestamp: Date.now() - 1000 }) + '\n',
+        );
+        const res = await httpGet(`${baseUrl}/api/routing`);
+        expect(res.statusCode).toBe(200);
+        const body = JSON.parse(res.body);
+        expect(body.quota.events).toHaveLength(2);
+        expect(body.quota.events[0].type).toBe('released'); // newest valid first
+        expect(body.quota.events[1].type).toBe('parked');
+      } finally {
+        rmSync(eventsPath, { force: true });
+      }
+    });
+
     it('GET /api/routing returns the promotion-gate verdict from the trajectory', async () => {
       // router-promotion.jsonl is a JSONL trajectory — one A/B decision per line.
       // Both decisions diverge (bandit pick != heuristic pick) so the gate has signal.

@@ -610,7 +610,10 @@ function BestModelsSection({ routing }: { routing: RoutingInsights }) {
 // ─── Quota Ledger (central quota tracking per provider × model) ─────────────
 
 function QuotaSection({ quota }: { quota: QuotaInsights }) {
-  if (!quota.enabled || quota.entries.length === 0) return null;
+  // Render the card when there are usage entries OR failover-timeline events —
+  // failovers can precede any successful call (auth/rate-limit on first use),
+  // so the timeline must be visible even on an empty ledger.
+  if ((!quota.enabled || quota.entries.length === 0) && (quota.events?.length ?? 0) === 0) return null;
 
   const totalTokens = quota.entries.reduce((s, e) => s + e.tokensConsumed, 0);
   const totalRequests = quota.entries.reduce((s, e) => s + e.requests, 0);
@@ -727,6 +730,35 @@ function QuotaSection({ quota }: { quota: QuotaInsights }) {
         Configure limits with <code style={{ color: '#58a6ff' }}>buff config set routing.quota.gemini.requestsPerWindow 1500</code>;
         the ledger always tracks usage but only parks when limits are set.
       </div>
+
+      {/* Failover timeline (assessment #7: show users when failover occurred and why) */}
+      {quota.events && quota.events.length > 0 && (
+        <div style={{ marginTop: 18 }}>
+          <div style={{ fontSize: 13, fontWeight: 600, color: '#e6edf3', marginBottom: 10 }}>
+            🛟 Failover Timeline — quota management & mid-session swaps
+          </div>
+          <div style={{ maxHeight: 220, overflowY: 'auto', background: '#0d1117', border: '1px solid #21262d', borderRadius: 10, padding: '8px 0' }}>
+            {quota.events.map((ev, i) => {
+              const icon = ev.type === 'parked' ? '⏸' : ev.type === 're-enabled' ? '🔁' : ev.type === 'released' ? '✅' : '⚡';
+              const color = ev.type === 'parked' ? '#f85149' : ev.type === 're-enabled' ? '#3fb950' : ev.type === 'released' ? '#3fb950' : '#d29922';
+              const label = ev.type === 'parked' ? 'parked' : ev.type === 're-enabled' ? 're-enabled' : ev.type === 'released' ? 'released' : 'failover';
+              return (
+                <div key={`${ev.timestamp}-${i}`} style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '6px 14px', borderBottom: i < quota.events!.length - 1 ? '1px solid #161b22' : 'none' }}>
+                  <span style={{ fontSize: 13 }}>{icon}</span>
+                  <span style={{ width: 80, flexShrink: 0, fontSize: 11, padding: '1px 8px', borderRadius: 10, background: '#161b22', border: `1px solid ${color}`, color, textAlign: 'center' }}>
+                    {label}
+                  </span>
+                  <span style={{ flex: 1, fontSize: 12, color: '#e6edf3', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
+                    {providerIcon(ev.provider)} {providerLabel(ev.provider)}
+                  </span>
+                  {ev.reason && <span style={{ fontSize: 11, color: '#8b949e' }}>{ev.reason}</span>}
+                  <span style={{ fontSize: 11, color: '#6e7681', whiteSpace: 'nowrap' }}>{timeAgo(ev.timestamp)}</span>
+                </div>
+              );
+            })}
+          </div>
+        </div>
+      )}
     </SectionCard>
   );
 }

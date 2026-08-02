@@ -686,11 +686,20 @@ export class ChatCommand extends BaseCommand {
             try {
                 const limit = this.configManager.getAll().routing?.quota?.[providerType];
                 const windowMs = limit?.windowMs ?? 24 * 60 * 60 * 1000;
-                getQuotaLedger().parkProvider(providerType, Date.now() + windowMs);
+                getQuotaLedger().parkProvider(providerType, Date.now() + windowMs, failureKind);
             }
             catch {
                 // Best-effort — ledger bookkeeping must not crash chat
             }
+        }
+        // Record the failover in the QUOTA TIMELINE (assessment #7: show users
+        // when failover occurred and why). Auth + rate-limit failures both show up
+        // so the dashboard's Failover Timeline explains every mid-session swap.
+        try {
+            getQuotaLedger().recordEvent('failover', providerType, failureKind);
+        }
+        catch {
+            // Best-effort — timeline bookkeeping must not crash chat
         }
         try {
             getProviderFallback(this.configManager).recordFailure(providerType);

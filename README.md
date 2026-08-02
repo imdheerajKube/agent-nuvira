@@ -810,6 +810,16 @@ agent-nuvira model quota reset
 
 The dashboard's 📒 **Quota Ledger** card shows the same data live — per-entry status plus a free/local-first cost split (free tokens = savings, paid tokens = actual spend) with an estimated $ saved badge.
 
+**Failover timeline (transparency: when failover occurred).** Every park, window-reset re-enable, manual release, and mid-session failover is appended to `~/.buff/memory/quota-events.jsonl` (capped at 200). The dashboard's Quota card renders it as a **Failover Timeline**, and `buff model quota` prints the last 20 events:
+
+```bash
+agent-nuvira model quota
+#   ── Failover Timeline (last 20) ──
+#    ⚡ failover    gemini        (rate-limit)  8/2/2026, 5:10:02 PM
+#    ⏸ parked      gemini        (rate-limit)  8/2/2026, 5:10:02 PM
+#    🔁 re-enabled  groq          (window reset) 8/2/2026, 5:09:00 PM
+```
+
 #### Checkpoint / resume — crash-proof multi-agent pipelines
 
 Long `buff execute` pipelines can be killed by a crash, quota exhaustion, or a token expiry mid-run. Checkpoints serialize the pipeline state so work is never lost:

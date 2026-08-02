@@ -13,7 +13,7 @@
  */
 
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
-import { mkdtempSync, existsSync, readFileSync, rmSync } from 'node:fs';
+import { mkdtempSync, existsSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
@@ -256,5 +256,117 @@ describe('QuotaLedger — cost summary (tokens saved / paid usage)', () => {
     expect(summary.freeTokens).toBe(0);
     expect(summary.paidTokens).toBe(300);
     expect(summary.paidRequests).toBe(2);
+  });
+});
+
+describe('QuotaLedger — failover timeline (quota-events.jsonl)', () => {
+  beforeEach(() => {
+    tempDir = mkdtempSync(join(tmpdir(), 'buff-quota-'));
+    originalMemoryDir = process.env.BUFF_MEMORY_DIR;
+    process.env.BUFF_MEMORY_DIR = tempDir;
+    resetQuotaLedger();
+  });
+
+  afterEach(() => {
+    resetQuotaLedger();
+    if (originalMemoryDir === undefined) {
+      delete process.env.BUFF_MEMORY_DIR;
+    } else {
+      process.env.BUFF_MEMORY_DIR = originalMemoryDir;
+    }
+    rmSync(tempDir, { recursive: true, force: true });
+  });
+
+  it('parkProvider records a parked event with the given reason', () => {
+    const ledger = new QuotaLedger();
+    ledger.parkProvider('gemini', Date.now() + 60_000, 'rate-limit');
+
+    const events = ledger.listEvents();
+    expect(events).toHaveLength(1);
+    expect(events[0].type).toBe('parked');
+    expect(events[0].provider).toBe('gemini');
+    expect(events[0].reason).toBe('rate-limit');
+  });
+
+  it('releaseProvider records a released event', () => {
+    const ledger = new QuotaLedger();
+    ledger.parkProvider('groq', Date.now() + 60_000);
+    ledger.releaseProvider('groq');
+
+    const events = ledger.listEvents();
+    expect(events).toHaveLength(2);
+    expect(events[0].type).toBe('released'); // newest first
+    expect(events[0].provider).toBe('groq');
+  });
+
+  it('recordEvent appends a failover event (chat failover wiring)', () => {
+    const ledger = new QuotaLedger();
+    ledger.recordEvent('failover', 'openrouter', 'auth');
+
+    const events = ledger.listEvents();
+    expect(events).toHaveLength(1);
+    expect(events[0].type).toBe('failover');
+    expect(events[0].provider).toBe('openrouter');
+    expect(events[0].reason).toBe('auth');
+    expect(typeof events[0].timestamp).toBe('number');
+  });
+
+  it('lists newest first across multiple events', () => {
+    const ledger = new QuotaLedger();
+    ledger.recordEvent('parked', 'gemini', 'cooldown');
+    ledger.recordEvent('re-enabled', 'gemini', 'window reset');
+
+    const events = ledger.listEvents();
+    expect(events.map((e) => e.type)).toEqual(['re-enabled', 'parked']);
+  });
+
+  it('persists to BUFF_MEMORY_DIR/quota-events.jsonl', () => {
+    const ledger = new QuotaLedger();
+    ledger.recordEvent('failover', 'nim', 'rate-limit');
+
+    const path = join(tempDir, 'quota-events.jsonl');
+    expect(existsSync(path)).toBe(true);
+    const raw = readFileSync(path, 'utf-8');
+    expect(raw).toContain('failover');
+    expect(raw).toContain('nim');
+  });
+
+  it('caps the timeline at MAX_EVENTS (200) keeping the newest', () => {
+    const ledger = new QuotaLedger();
+    for (let i = 0; i < 250; i++) {
+      ledger.recordEvent('failover', 'prov', `e${i}`);
+    }
+
+    const path = join(tempDir, 'quota-events.jsonl');
+    const lineCount = readFileSync(path, 'utf-8').split('\n').filter((l) => l.trim()).length;
+    expect(lineCount).toBe(200);
+    const events = ledger.listEvents(300);
+    expect(events).toHaveLength(200);
+    // Newest first: the LAST recorded event (e249) must be the first returned.
+    expect(events[0].reason).toBe('e249');
+  });
+
+  it('skips corrupt lines when reading', () => {
+    const ledger = new QuotaLedger();
+    ledger.recordEvent('parked', 'gemini');
+    writeFileSync(join(tempDir, 'quota-events.jsonl'), 'NOT_JSON\n', { flag: 'a' });
+    ledger.recordEvent('released', 'gemini');
+
+    const events = ledger.listEvents();
+    // Corrupt line skipped; valid events still returned newest-first.
+    expect(events.map((e) => e.type)).toEqual(['released', 'parked']);
+  });
+
+  it('reset clears the timeline and entries', () => {
+    const ledger = new QuotaLedger();
+    ledger.recordUsage('gemini', 'default', 100, 50);
+    ledger.parkProvider('gemini', Date.now() + 60_000);
+    expect(ledger.listEvents().length).toBeGreaterThan(0);
+
+    ledger.reset();
+    expect(ledger.getStatus()).toHaveLength(0);
+    expect(ledger.listEvents()).toHaveLength(0);
+    const path = join(tempDir, 'quota-events.jsonl');
+    expect(readFileSync(path, 'utf-8').trim()).toBe('');
   });
 });

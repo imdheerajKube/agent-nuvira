@@ -208,6 +208,17 @@ export interface QuotaInsights {
   paidRequests?: number;
   /** Estimated USD the free-tier tokens would have cost on a typical paid provider. */
   estimatedSavedUsd?: number;
+  /**
+   * Failover timeline — parked / re-enabled / released / failover events,
+   * newest first (from quota-events.jsonl). Optional: an older server won't
+   * send these, so the panel hides the timeline when absent.
+   */
+  events?: Array<{
+    type: 'parked' | 're-enabled' | 'released' | 'failover';
+    provider: string;
+    reason?: string;
+    timestamp: number;
+  }>;
   updatedAt: number;
 }
 

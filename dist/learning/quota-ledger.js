@@ -34,6 +34,11 @@ function memoryDir() {
 function ledgerPath() {
     return join(memoryDir(), 'quota-ledger.json');
 }
+function eventsPath() {
+    return join(memoryDir(), 'quota-events.jsonl');
+}
+/** Cap on persisted timeline events — trim oldest beyond this. */
+const MAX_EVENTS = 200;
 function emptyState() {
     return { version: CURRENT_VERSION, entries: {} };
 }
@@ -47,6 +52,8 @@ function entryKey(provider, model) {
  */
 export class QuotaLedger {
     state;
+    /** In-memory dedupe of emitted window-reset events (prevents read-path dupes). */
+    emittedResets = new Set();
     constructor() {
         this.state = this.load();
     }
@@ -99,13 +106,34 @@ export class QuotaLedger {
      * RE-ENABLE: a provider parked for exhaustion un-parks the moment its
      * reset window rolls. Explicit cooldowns (cooldownUntil) survive rotation
      * so a manual park isn't wiped by an unrelated window roll.
+     *
+     * Records a `re-enabled` timeline event ONCE per real window roll (a window
+     * that actually carried usage) — deduped by windowStart so the many read
+     * paths that call rotateWindow (getStatus, getCostSummary, router feed)
+     * can't emit the same reset twice. The rotation is PERSISTED (save()) so a
+     * fresh process re-reading the ledger sees the advanced windowStart instead
+     * of re-rotating and re-emitting a duplicate 're-enabled' event.
      */
     rotateWindow(entry) {
         const now = Date.now();
         if (now - entry.windowStart >= entry.windowLengthMs) {
+            const hadUsage = entry.tokensConsumed > 0 || entry.requests > 0;
+            const dedupeKey = `${entryKey(entry.provider, entry.model)}|${entry.windowStart}`;
             entry.tokensConsumed = 0;
             entry.requests = 0;
             entry.windowStart = now;
+            let changed = false;
+            if (hadUsage && !this.emittedResets.has(dedupeKey)) {
+                this.emittedResets.add(dedupeKey);
+                this.recordEvent('re-enabled', entry.provider, 'window reset');
+                changed = true;
+            }
+            // Persist the advanced windowStart so OTHER processes (dashboard server,
+            // CLI, chat) see the rotated state and don't each emit their own
+            // 're-enabled' duplicate. Rotations are rare (once per window per entry),
+            // so the extra save is negligible.
+            if (changed)
+                this.save();
         }
     }
     /**
@@ -137,8 +165,9 @@ export class QuotaLedger {
      * Explicitly park a provider until a given epoch ms (used by chat failover
      * and quota-killed providers so the exclusion survives across sessions).
      * Parked providers are excluded from Auto routing until `until`.
+     * Records a `parked` timeline event (best-effort).
      */
-    parkProvider(provider, until) {
+    parkProvider(provider, until, reason) {
         try {
             const now = Date.now();
             // Park every model entry for the provider (plus a provider-level entry
@@ -155,6 +184,8 @@ export class QuotaLedger {
                     entry.cooldownUntil = until;
             }
             this.save();
+            if (until > now)
+                this.recordEvent('parked', provider, reason || 'cooldown');
         }
         catch {
             // Best-effort.
@@ -169,6 +200,69 @@ export class QuotaLedger {
                 }
             }
             this.save();
+            this.recordEvent('released', provider, 'manual');
+        }
+        catch {
+            // Best-effort.
+        }
+    }
+    /**
+     * Append an event to the quota failover timeline (quota-events.jsonl,
+     * capped at MAX_EVENTS). Best-effort: a failed write must never break
+     * routing. Also exposed so callers (chat failover) can record `failover`
+     * events directly.
+     */
+    recordEvent(type, provider, reason) {
+        try {
+            const event = { type, provider, timestamp: Date.now() };
+            if (reason)
+                event.reason = reason;
+            if (!existsSync(memoryDir()))
+                mkdirSync(memoryDir(), { recursive: true });
+            const path = eventsPath();
+            const existing = existsSync(path) ? readFileSync(path, 'utf-8') : '';
+            const lines = existing.split('\n').filter((l) => l.trim().length > 0);
+            lines.push(JSON.stringify(event));
+            // Cap: keep the newest MAX_EVENTS lines.
+            const trimmed = lines.slice(-MAX_EVENTS);
+            writeFileSync(path, trimmed.join('\n') + '\n', 'utf-8');
+        }
+        catch {
+            // Best-effort — the timeline must never break routing.
+        }
+    }
+    /**
+     * Read the failover timeline, newest first (dashboard / CLI / tests).
+     * Corrupt lines are skipped; best-effort.
+     */
+    listEvents(limit = 50) {
+        try {
+            const path = eventsPath();
+            if (!existsSync(path))
+                return [];
+            const lines = readFileSync(path, 'utf-8').split('\n').filter((l) => l.trim().length > 0);
+            const events = [];
+            for (const line of lines.slice(-limit).reverse()) {
+                try {
+                    const e = JSON.parse(line);
+                    if (e && typeof e === 'object' && e.type && e.provider)
+                        events.push(e);
+                }
+                catch {
+                    // Skip corrupt lines.
+                }
+            }
+            return events;
+        }
+        catch {
+            return [];
+        }
+    }
+    /** Clear the persisted timeline (used by `buff model quota reset`). */
+    clearEvents() {
+        try {
+            writeFileSync(eventsPath(), '', 'utf-8');
+            this.emittedResets.clear();
         }
         catch {
             // Best-effort.
@@ -350,6 +444,7 @@ export class QuotaLedger {
     reset() {
         this.state = emptyState();
         this.save();
+        this.clearEvents();
     }
     /** Remove all entries for one provider. */
     resetProvider(provider) {

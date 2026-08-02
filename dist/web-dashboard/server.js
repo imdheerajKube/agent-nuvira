@@ -692,7 +692,10 @@ const AVG_PAID_RATE_PER_1K = 0.0005;
 function readQuotaData() {
     const data = readJSON(join(MEMORY_DIR, 'quota-ledger.json'));
     if (!data?.entries) {
-        return { enabled: false, entries: [], updatedAt: Date.now() };
+        // Failover timeline can exist even when the ledger has no usage entries
+        // (chat records failover events on auth/rate-limit failures without a
+        // prior successful call) — always include events.
+        return { enabled: false, entries: [], events: readQuotaEvents(), updatedAt: Date.now() };
     }
     const now = Date.now();
     const entries = Object.values(data.entries)
@@ -732,6 +735,9 @@ function readQuotaData() {
         }
     }
     const estimatedSavedUsd = Math.round((freeTokens / 1000) * AVG_PAID_RATE_PER_1K * 100000) / 100000;
+    // Failover timeline (assessment #7): events appended by the ledger's
+    // park/release/window-roll paths + chat's mid-session failover bookkeeping.
+    const events = readQuotaEvents();
     return {
         enabled: entries.length > 0,
         entries,
@@ -740,8 +746,41 @@ function readQuotaData() {
         paidTokens,
         paidRequests,
         estimatedSavedUsd,
+        events,
         updatedAt: now,
     };
+}
+/**
+ * Read the quota failover timeline (quota-events.jsonl) — parked / re-enabled /
+ * released / failover events, newest first. Backs the dashboard's Failover
+ * Timeline card in the Quota section.
+ */
+function readQuotaEvents() {
+    try {
+        const path = join(MEMORY_DIR, 'quota-events.jsonl');
+        if (!existsSync(path))
+            return [];
+        const raw = readFileSync(path, 'utf-8');
+        const events = [];
+        for (const line of raw.split('\n').reverse()) {
+            if (!line.trim())
+                continue;
+            try {
+                const e = JSON.parse(line);
+                if (e && typeof e === 'object' && e.type && e.provider)
+                    events.push(e);
+            }
+            catch {
+                // Skip corrupt lines.
+            }
+            if (events.length >= 50)
+                break;
+        }
+        return events;
+    }
+    catch {
+        return [];
+    }
 }
 function readRoutingInsights() {
     // 1. Per-provider benchmark quality from benchmarks.json
