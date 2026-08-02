@@ -620,6 +620,9 @@ describe('DefaultInspectModule', () => {
     });
 
     it('should return empty array when walking unreadable directory', async () => {
+      // Windows does not enforce POSIX chmod read bits — the directory stays
+      // readable, so the unreadable-dir scenario cannot be reproduced there.
+      if (process.platform === 'win32') return;
       const badDir = join(testDir, 'nope');
       mkdirSync(badDir);
       writeFileSync(join(badDir, 'target.ts'), 'export const t = 1;');

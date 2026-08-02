@@ -31,7 +31,9 @@ import type { Mock } from 'vitest';
 const testDirHolder = vi.hoisted(() => {
   const { mkdtempSync } = require('node:fs');
   const { join } = require('node:path');
-  return { value: mkdtempSync(join('/tmp', 'buff-history-')) };
+  // Cross-platform temp base — hardcoded '/tmp' doesn't exist on Windows.
+  const base = process.env.TMPDIR || process.env.TEMP || '/tmp';
+  return { value: mkdtempSync(join(base, 'buff-history-')) };
 });
 
 vi.mock('node:os', () => ({

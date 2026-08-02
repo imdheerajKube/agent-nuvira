@@ -14,6 +14,21 @@ import { describe, it, expect, beforeEach, vi, afterEach } from 'vitest';
 import { DefaultSafeExecutionLayer } from '../../src/agents/safe-execution-layer.js';
 import { EventBus, EventNames } from '../../src/observability/event-bus.js';
 import type { SafetyCheck, SafetyResult } from '../../src/agents/safe-execution-layer.js';
+import type { SandboxManager } from '../../src/sandbox/manager.js';
+
+// ─── Helpers ────────────────────────────────────────────────────────────────
+
+/**
+ * A SandboxManager stub whose Docker check always fails. CI runners may or may
+ * not have Docker installed (ubuntu-latest does), so the Docker-unavailable
+ * path must be tested hermetically instead of relying on the host environment.
+ */
+function makeNoDockerSandbox(): SandboxManager {
+  return {
+    isDockerAvailable: async () => false,
+    getDockerError: () => 'Docker not available (test stub)',
+  } as unknown as SandboxManager;
+}
 
 // ─── Tests ──────────────────────────────────────────────────────────────────
 
@@ -278,9 +293,17 @@ describe('DefaultSafeExecutionLayer', () => {
   // ── executeInSandbox() ──────────────────────────────────────────────
 
   describe('executeInSandbox()', () => {
+    // CI runners may or may not have the Docker daemon running, so the whole
+    // block uses a hermetic stub whose Docker check always fails — the sandbox
+    // error path is what we're testing, not the host's Docker state.
+    let noDockerLayer: DefaultSafeExecutionLayer;
+
+    beforeEach(() => {
+      noDockerLayer = new DefaultSafeExecutionLayer(bus, makeNoDockerSandbox());
+    });
+
     it('should fail gracefully when Docker is unavailable', async () => {
-      // SandboxManager will check Docker and fail because it's not available
-      const result = await layer.executeInSandbox({
+      const result = await noDockerLayer.executeInSandbox({
         command: 'echo hello',
       });
 
@@ -289,7 +312,7 @@ describe('DefaultSafeExecutionLayer', () => {
     });
 
     it('should emit SAFE_EXEC_SANDBOX_STARTING event', async () => {
-      await layer.executeInSandbox({
+      await noDockerLayer.executeInSandbox({
         command: 'echo hello',
       });
 
@@ -301,7 +324,7 @@ describe('DefaultSafeExecutionLayer', () => {
     });
 
     it('should emit SAFE_EXEC_SANDBOX_FAILED on error', async () => {
-      await layer.executeInSandbox({
+      await noDockerLayer.executeInSandbox({
         command: 'test',
       });
 

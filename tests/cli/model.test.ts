@@ -24,10 +24,19 @@ const TMP_BASE = process.env.TMPDIR || process.env.TMP || '/tmp';
 const tmpMemoryDir = mkdtempSync(join(TMP_BASE, 'buff-model-test-'));
 beforeAll(() => {
   process.env.BUFF_MEMORY_DIR = join(tmpMemoryDir, '.buff', 'memory');
+  // Seed fake API keys so the router sees MULTIPLE usable providers. Without
+  // them (fresh ~/.buff in CI), only 'local' has credentials → the explain
+  // decision has a winner but an EMPTY fallback chain, and the JSON assertions
+  // below (fallbackChain.length > 0) fail. With a couple of keys set, the
+  // router ranks groq/gemini/local and the fallback chain is non-empty.
+  process.env.GROQ_API_KEY = 'test-groq-key';
+  process.env.GEMINI_API_KEY = 'test-gemini-key';
 });
 
 afterAll(() => {
   delete process.env.BUFF_MEMORY_DIR;
+  delete process.env.GROQ_API_KEY;
+  delete process.env.GEMINI_API_KEY;
   rmSync(tmpMemoryDir, { recursive: true, force: true });
 });
 

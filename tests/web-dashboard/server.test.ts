@@ -271,7 +271,8 @@ describe('Dashboard Server', () => {
       expect(body.feedback).toBe(0);
       expect(body.vectors).toBe(0);
       expect(body.agentStats).toBeNull();
-      expect(body.memoryDir).toContain('.buff/memory');
+      // Normalize Windows backslashes before the substring check
+      expect(String(body.memoryDir).replace(/\\/g, '/')).toContain('.buff/memory');
     });
 
     it('GET /api/all returns combined empty data', async () => {
