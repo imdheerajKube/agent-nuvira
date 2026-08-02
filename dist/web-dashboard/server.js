@@ -670,6 +670,14 @@ function readHealthData() {
         memoryDir: MEMORY_DIR,
     };
 }
+// Free/local-first cost optics: providers whose default pricing is $0 (local
+// Ollama, Gemini free tier). NOTE: a user-configured `pricing.gemini` override
+// would make Gemini paid — this classification follows the DEFAULT pricing
+// table and is a simplification (the ledger itself doesn't store pricing).
+const FREE_PROVIDERS = new Set(['local', 'gemini']);
+// Conservative blended rate (USD per 1K tokens) for the "would have cost"
+// estimate — mirrors the auto router's default pricing for a mid-tier model.
+const AVG_PAID_RATE_PER_1K = 0.0005;
 // ─── Auto Routing Insights ──────────────────────────────────────────────────
 /**
  * Aggregate routing insights for the dashboard:
@@ -704,7 +712,36 @@ function readQuotaData() {
         };
     })
         .sort((a, b) => a.provider.localeCompare(b.provider) || a.model.localeCompare(b.model));
-    return { enabled: entries.length > 0, entries, updatedAt: now };
+    // Free/local-first cost optics (assessment #7 transparency): split tracked
+    // usage into FREE providers (local, gemini free tier — $0) vs PAID providers,
+    // and estimate what the free-tier tokens would have cost on a typical paid
+    // provider. This is the "tokens saved / paid usage triggered" transparency
+    // metric: free usage = savings, paid usage = actual spend.
+    let freeTokens = 0;
+    let freeRequests = 0;
+    let paidTokens = 0;
+    let paidRequests = 0;
+    for (const e of entries) {
+        if (FREE_PROVIDERS.has(e.provider)) {
+            freeTokens += e.tokensConsumed;
+            freeRequests += e.requests;
+        }
+        else {
+            paidTokens += e.tokensConsumed;
+            paidRequests += e.requests;
+        }
+    }
+    const estimatedSavedUsd = Math.round((freeTokens / 1000) * AVG_PAID_RATE_PER_1K * 100000) / 100000;
+    return {
+        enabled: entries.length > 0,
+        entries,
+        freeTokens,
+        freeRequests,
+        paidTokens,
+        paidRequests,
+        estimatedSavedUsd,
+        updatedAt: now,
+    };
 }
 function readRoutingInsights() {
     // 1. Per-provider benchmark quality from benchmarks.json

@@ -24,6 +24,7 @@ import { ConfigManager } from '../config/manager.js';
 import { showModelPicker } from '../cli/model-picker.js';
 import { logger } from '../utils/logger.js';
 import { ContextVault } from './context-vault.js';
+import { saveCheckpoint, loadCheckpoint, checkpointIdFor } from './checkpoint-store.js';
 import { buildProjectFileTree, truncateTree } from './utils/file-tree.js';
 import { cleanupSandbox } from './agents/tester.js';
 import { getMCPManager, resetMCPManager } from '../mcp/manager.js';
@@ -123,7 +124,39 @@ export class Orchestrator {
      */
     async execute(goal, options = {}) {
         const startTime = Date.now();
-        const vault = new ContextVault(goal, process.cwd());
+        // ── Checkpoint resume: rehydrate a saved vault instead of starting fresh ──
+        // Assessment item #6 (continuity): if a previous run saved a checkpoint for
+        // this goal, `--resume` continues from the first pending step — completed
+        // steps are never re-run, and the resumed provider/model can differ.
+        const checkpointId = checkpointIdFor(goal, process.cwd());
+        const resumeId = options.resumeCheckpointId || checkpointId;
+        const checkpointEnabled = options.checkpoint === true || !!options.resumeCheckpointId;
+        let resumed = false;
+        let vault;
+        if (checkpointEnabled) {
+            const saved = loadCheckpoint(resumeId);
+            if (saved) {
+                vault = ContextVault.fromSnapshot(saved.context);
+                resumed = true;
+                const done = saved.context.taskPlan.filter((s) => s.status === 'completed').length;
+                if (options.verbose) {
+                    logger.info(`   ♻️ Resumed from checkpoint '${resumeId}' — ${done}/${saved.context.taskPlan.length} steps already complete`);
+                }
+            }
+            else {
+                // Resume explicitly requested (bare `--resume` or explicit id) but no
+                // checkpoint found — warn (a reworded goal silently misses the auto id)
+                // and start fresh with checkpointing on, so a later crash can still be
+                // resumed.
+                if (options.resumeRequested || options.resumeCheckpointId) {
+                    logger.warn(`   ⚠️ No checkpoint found for '${resumeId}' — starting a fresh pipeline (run with --checkpoint to save one)`);
+                }
+                vault = new ContextVault(goal, process.cwd());
+            }
+        }
+        else {
+            vault = new ContextVault(goal, process.cwd());
+        }
         // Reset execution telemetry for this pipeline (shared accumulator used by
         // createLLMProvider, executeSingleTask, and buildResult).
         this.stats = {
@@ -144,7 +177,10 @@ export class Orchestrator {
         // Matches executeSingleTask's rule: an explicit --model always wins.
         const autoRoutingActive = (options.autoRouteModels === true && !options.model) ||
             isAutoModel(options.model) || isAutoProvider(options.provider);
-        const plannerRoutingDecision = autoRoutingActive
+        // On RESUME the restored vault already carries the routingContext from the
+        // original run — recomputing it here would overwrite the checkpointed
+        // metadata (and the planner isn't re-run anyway, so the override is moot).
+        const plannerRoutingDecision = autoRoutingActive && !resumed
             ? this.resolveAutoRoutingDecision({ agentType: 'planner', description: goal }, options)
             : undefined;
         if (plannerRoutingDecision) {
@@ -161,7 +197,18 @@ export class Orchestrator {
         const defaultCallLLM = autoRoutingActive
             ? this.createAutoRoutedLLM({ agentType: 'planner', description: goal }, options)
             : this.createLLMProvider(options);
-        const agentResults = [];
+        // On resume, seed the report with the steps already finished in the original
+        // run (completed/failed) so the final agent breakdown is complete — these
+        // steps are never re-executed, but they still count toward the summary.
+        const agentResults = resumed
+            ? vault.context.taskPlan
+                .filter((s) => s.status === 'completed' || s.status === 'failed')
+                .map((s) => ({
+                agent: s.agentType,
+                success: s.status === 'completed',
+                summary: s.result || (s.status === 'completed' ? 'Completed (previous run)' : 'Failed (previous run)'),
+            }))
+            : [];
         const contextFiles = [];
         // ── Emit: pipeline started event ───────────────────────────────────
         this.eventBus.emit(EventNames.ORCHESTRATOR_PIPELINE_STARTED, {
@@ -274,7 +321,18 @@ export class Orchestrator {
         // `--auto-route` / autoRouteModels enables per-task AutoModelRouter
         // routing in executeSingleTask (no static map needed).
         // ── 4. Planner (or pre-built plan from workflow template) ────────────
-        if (options.prefillPlan && options.prefillPlan.length > 0) {
+        // When resuming from a checkpoint the plan is already in the vault — skip
+        // the planner entirely (no re-plan, no re-gather) and continue execution.
+        if (resumed && vault.context.taskPlan.length > 0) {
+            if (options.verbose) {
+                logger.highlight('\n♻️  Resuming existing plan from checkpoint...');
+                for (const step of vault.context.taskPlan) {
+                    const icon = step.status === 'completed' ? '✅' : step.status === 'failed' ? '❌' : '⏳';
+                    logger.info(`      ${icon} [${step.agentType}] ${step.description}`);
+                }
+            }
+        }
+        else if (options.prefillPlan && options.prefillPlan.length > 0) {
             for (const step of options.prefillPlan) {
                 vault.context.taskPlan.push({ ...step });
             }
@@ -417,6 +475,42 @@ export class Orchestrator {
                 for (const { task, strategy } of taskStrategies) {
                     await this.executeSingleTask(task, vault, options, agentResults, contextFiles, defaultCallLLM, strategy);
                 }
+            }
+            // ── Checkpoint after every task batch ──────────────────────────────
+            // Persist the vault (per-step statuses, artifacts, file changes) so a
+            // crash / quota kill / token expiry mid-pipeline can `--resume` from
+            // here instead of restarting the whole plan (assessment item #6).
+            // Guarded by !vault.isComplete: in-progress states are saved per batch,
+            // and the terminal state is persisted once by the final save below —
+            // no redundant double-write on the completing iteration.
+            if (checkpointEnabled && !vault.isComplete) {
+                try {
+                    const cid = saveCheckpoint(vault.context, resumeId);
+                    if (cid && options.verbose) {
+                        const done = vault.context.taskPlan.filter((s) => s.status === 'completed').length;
+                        logger.debug(`   💾 Checkpoint saved (${cid}): ${done}/${vault.context.taskPlan.length} steps complete`);
+                    }
+                }
+                catch {
+                    // Best-effort — checkpointing must never break the pipeline
+                }
+            }
+        }
+        // ── 5b. Final checkpoint (pipeline completing) ────────────────────────
+        // Save once more after the loop so the newest on-disk checkpoint reflects
+        // the COMPLETED state (including the final batch). Without this, the last
+        // saved checkpoint would show the final step still 'pending', and a
+        // --resume after a successful run would re-execute it.
+        if (checkpointEnabled) {
+            try {
+                const cid = saveCheckpoint(vault.context, resumeId);
+                if (cid && options.verbose) {
+                    const done = vault.context.taskPlan.filter((s) => s.status === 'completed').length;
+                    logger.debug(`   💾 Final checkpoint saved (${cid}): ${done}/${vault.context.taskPlan.length} steps complete`);
+                }
+            }
+            catch {
+                // Best-effort — checkpointing must never break the pipeline
             }
         }
         // ── 6. Clean up sandbox if any ────────────────────────────────────────

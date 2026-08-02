@@ -196,6 +196,18 @@ export interface QuotaInsights {
     parked: boolean;
     cooldownRemaining: number;
   }>;
+  /**
+   * Tokens/requests served by FREE providers (local, gemini free tier — $0).
+   * Optional: an older server won't send these, so the panel falls back to
+   * totals-derived defaults for forward/backward bundle compatibility.
+   */
+  freeTokens?: number;
+  freeRequests?: number;
+  /** Tokens/requests served by PAID providers (actual spend triggered). */
+  paidTokens?: number;
+  paidRequests?: number;
+  /** Estimated USD the free-tier tokens would have cost on a typical paid provider. */
+  estimatedSavedUsd?: number;
   updatedAt: number;
 }
 

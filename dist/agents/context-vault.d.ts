@@ -43,7 +43,14 @@ export declare class ContextVault {
     setMeta(key: string, value: unknown): void;
     /** Retrieve a metadata value */
     getMeta<T = unknown>(key: string): T | undefined;
-    /** Get a serialisable snapshot (handy for logging / Phase 2 persistence) */
+    /** Get a serialisable snapshot (handy for logging / checkpoint persistence) */
     snapshot(): AgentContext;
+    /**
+     * Rehydrate a vault from a previously saved snapshot (checkpoint resume).
+     * Restores the goal, task plan (with per-step statuses), artifacts,
+     * conversations, file changes, and metadata so a resumed pipeline continues
+     * from the first pending step instead of restarting the whole plan.
+     */
+    static fromSnapshot(snapshot: AgentContext): ContextVault;
 }
 //# sourceMappingURL=context-vault.d.ts.map

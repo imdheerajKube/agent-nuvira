@@ -148,8 +148,24 @@ export class ContextVault {
 
   // ─── Snapshot ───────────────────────────────────────────────────────────
 
-  /** Get a serialisable snapshot (handy for logging / Phase 2 persistence) */
+  /** Get a serialisable snapshot (handy for logging / checkpoint persistence) */
   snapshot(): AgentContext {
     return structuredClone(this.context);
+  }
+
+  /**
+   * Rehydrate a vault from a previously saved snapshot (checkpoint resume).
+   * Restores the goal, task plan (with per-step statuses), artifacts,
+   * conversations, file changes, and metadata so a resumed pipeline continues
+   * from the first pending step instead of restarting the whole plan.
+   */
+  static fromSnapshot(snapshot: AgentContext): ContextVault {
+    const vault = new ContextVault(snapshot.goal, snapshot.workingDirectory);
+    vault.context.taskPlan = snapshot.taskPlan ?? [];
+    vault.context.artifacts = snapshot.artifacts ?? [];
+    vault.context.conversations = snapshot.conversations ?? [];
+    vault.context.fileChanges = snapshot.fileChanges ?? [];
+    vault.context.metadata = snapshot.metadata ?? {};
+    return vault;
   }
 }

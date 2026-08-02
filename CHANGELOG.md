@@ -9,6 +9,34 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.45.0] - 2026-08-02
+
+### Added
+
+- **Checkpoint / resume** — `buff execute "<goal>" --checkpoint` saves a
+  resume-able snapshot after every task batch (task plan with per-step
+  statuses, artifacts, file changes, metadata) to `~/.buff/memory/checkpoints/`
+  (honors `BUFF_MEMORY_DIR`). A crash / quota kill / token expiry mid-pipeline
+  no longer restarts the whole plan: `buff execute "<goal>" --resume [id]`
+  rehydrates the vault and continues from the first pending step, skipping
+  completed steps and the planner entirely (assessment item #6: continuity
+  across models). Bare `--resume` auto-finds the id for the current goal + cwd;
+  `--checkpoint-list` shows saved checkpoints
+- **Quota cost-transparency card** — the dashboard's 📒 Quota Ledger panel now
+  splits tracked usage into **free/local tokens** (local + Gemini free tier —
+  $0) vs **paid tokens** (actual spend triggered), shows the free-tier share of
+  usage, and an **estimated $ saved** figure (free tokens × conservative paid
+  rate). Assessment item #7: show users which models were used and how
+  free/local-first routing saved money
+
+### Tests
+
+- New `tests/agents/checkpoint-store.test.ts` (save/load round-trip,
+  deterministic auto id, listing, corrupt-file handling, function-field
+  stripping)
+- Orchestrator checkpoint-resume regression tests (resume skips completed steps
+  + planner; fresh pipeline on missing id)
+
 ## [1.44.0] - 2026-08-02
 
 ### Added

@@ -96,6 +96,26 @@ export interface OrchestratorOptions {
         stop(): void;
         start(text?: string): void;
     };
+    /**
+     * Save a checkpoint after every task batch so the pipeline can be resumed
+     * later with `--resume` (or a fresh run of the same goal). Checkpoints live
+     * in ~/.buff/memory/checkpoints/ and let a crash / quota kill / token expiry
+     * mid-pipeline continue from the first pending step instead of restarting.
+     * Default: false. Implied true when resumeCheckpointId is set.
+     */
+    checkpoint?: boolean;
+    /**
+     * Resume a previously saved pipeline from a checkpoint id (or the auto id
+     * for goal + cwd). Completed steps are skipped; execution continues from the
+     * first pending step with its dependencies satisfied.
+     */
+    resumeCheckpointId?: string;
+    /**
+     * True when the user explicitly asked to RESUME (bare `--resume` with no id
+     * included). Lets the orchestrator warn when no checkpoint matches the auto
+     * id (e.g. a reworded goal) instead of silently starting a fresh pipeline.
+     */
+    resumeRequested?: boolean;
 }
 /** The final result of an orchestration session */
 export interface OrchestrationResult {

@@ -110,6 +110,10 @@ export declare class ExecuteCommand extends BaseCommand {
      * Returns the outcome so the caller can record it in session history.
      */
     private runSingleGoal;
+    /**
+     * Show saved checkpoints (goal, completion, age) and how to resume them.
+     */
+    private showCheckpointList;
     private showMemoryStats;
     private clearMemory;
 }

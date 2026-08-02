@@ -29,6 +29,7 @@ import { showModelPicker } from './model-picker.js';
 import { resolveProvider } from './router.js';
 import { isAutoModel } from '../learning/auto-router.js';
 import { getTrajectoryStore } from '../memory/trajectory-store.js';
+import { listCheckpoints } from '../agents/checkpoint-store.js';
 import { logger } from '../utils/logger.js';
 // ─── Pure Helpers ───────────────────────────────────────────────────────────
 /**
@@ -74,7 +75,11 @@ export class ExecuteCommand extends BaseCommand {
             .option('--max-repairs <number>', 'Max auto-repair attempts per failed task (default: 3, 0 = disabled)', parseInt)
             .option('--repair-mode <mode>', 'Repair mode: auto | prompt | off (default: auto)')
             .option('--repair-fallback-models <models>', 'Comma-separated fallback models for repair (e.g., groq/llama3,nim/mistral)')
-            .option('--auto-route', 'Route each agent to the best provider/model automatically (Auto model)', false).action(async (goal, options) => {
+            .option('--auto-route', 'Route each agent to the best provider/model automatically (Auto model)', false)
+            .option('--checkpoint', 'Save a resume-able checkpoint after every task batch (in ~/.buff/memory/checkpoints/)', false)
+            .option('--resume [id]', 'Resume a saved checkpoint (defaults to the auto id for this goal + cwd). Completed steps are skipped', false)
+            .option('--checkpoint-list', 'List saved checkpoints and exit', false)
+            .action(async (goal, options) => {
             await this.execute(goal, options || {});
         });
         return command;
@@ -87,6 +92,11 @@ export class ExecuteCommand extends BaseCommand {
         }
         if (options.memoryClear) {
             await this.clearMemory();
+            return;
+        }
+        // ── List saved checkpoints ───────────────────────────────────────────
+        if (options.checkpointList) {
+            this.showCheckpointList();
             return;
         }
         // ── Apply active model from `buff model switch` as defaults ────────────
@@ -1076,6 +1086,9 @@ export class ExecuteCommand extends BaseCommand {
                 repairMode: options.repairMode,
                 repairFallbackModels: options.repairFallbackModels?.split(',').map((m) => m.trim()).filter(Boolean),
                 autoRouteModels: options.autoRoute || undefined,
+                checkpoint: options.checkpoint || !!options.resume,
+                resumeCheckpointId: options.resume === true ? undefined : options.resume || undefined,
+                resumeRequested: !!options.resume,
             });
             spinner.stop();
             console.log('');
@@ -1087,6 +1100,33 @@ export class ExecuteCommand extends BaseCommand {
             logger.error(String(err));
             return { success: false };
         }
+    }
+    // ─── Checkpoint Listing ────────────────────────────────────────────────
+    /**
+     * Show saved checkpoints (goal, completion, age) and how to resume them.
+     */
+    showCheckpointList() {
+        const checkpoints = listCheckpoints();
+        if (checkpoints.length === 0) {
+            logger.highlight('📒 Checkpoints');
+            console.log('');
+            logger.info('  No checkpoints found.');
+            logger.info('  Run a goal with --checkpoint to save a resume-able pipeline:');
+            logger.info('    buff execute "my goal" --checkpoint');
+            console.log('');
+            return;
+        }
+        logger.highlight('📒 Checkpoints (resume with `buff execute "<goal>" --resume <id>`)');
+        console.log('');
+        for (const cp of checkpoints) {
+            const date = new Date(cp.savedAt).toLocaleString();
+            const pct = cp.tasksTotal > 0 ? Math.round((cp.tasksCompleted / cp.tasksTotal) * 100) : 0;
+            console.log(`  • ${cp.id}`);
+            console.log(`      Goal: ${cp.goal.slice(0, 90)}`);
+            console.log(`      Progress: ${cp.tasksCompleted}/${cp.tasksTotal} steps (${pct}%) · Saved: ${date}`);
+            console.log('');
+        }
+        console.log('');
     }
     // ─── Memory Management ─────────────────────────────────────────────────
     async showMemoryStats() {

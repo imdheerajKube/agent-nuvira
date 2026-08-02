@@ -524,6 +524,180 @@ describe('Orchestrator — createRateLimitHandler', () => {
   });
 });
 
+// ─── Checkpoint Resume ──────────────────────────────────────────────────────
+// Assessment item #6 (continuity): a checkpointed pipeline resumes from the
+// first pending step — completed steps are never re-run, the planner is skipped,
+// and the resumed run continues with the restored plan.
+
+describe('Orchestrator — checkpoint resume', () => {
+  let orchestrator: Orchestrator;
+  let tempDir: string;
+  let originalMemoryDir: string | undefined;
+
+  beforeEach(() => {
+    orchestrator = new Orchestrator();
+    tempDir = (require('node:fs') as typeof import('node:fs')).mkdtempSync(
+      (require('node:os') as typeof import('node:os')).tmpdir() + '/buff-orch-cp-',
+    );
+    originalMemoryDir = process.env.BUFF_MEMORY_DIR;
+    process.env.BUFF_MEMORY_DIR = tempDir;
+
+    mockWriterExecute.mockClear();
+    mockPlannerExecute.mockClear();
+    mockReviewerExecute.mockClear();
+
+    // Prevent applyFileChanges from writing to disk during writer steps
+    vi.spyOn(orchestrator as any, 'applyFileChanges').mockReturnValue(0);
+    // Suppress logger output during tests
+    vi.spyOn(logger, 'info').mockImplementation(() => {});
+    vi.spyOn(logger, 'success').mockImplementation(() => {});
+    vi.spyOn(logger, 'warn').mockImplementation(() => {});
+    vi.spyOn(logger, 'highlight').mockImplementation(() => {});
+    vi.spyOn(logger, 'error').mockImplementation(() => {});
+    vi.spyOn(logger, 'debug').mockImplementation(() => {});
+  });
+
+  afterEach(() => {
+    vi.restoreAllMocks();
+    if (originalMemoryDir === undefined) {
+      delete process.env.BUFF_MEMORY_DIR;
+    } else {
+      process.env.BUFF_MEMORY_DIR = originalMemoryDir;
+    }
+    (require('node:fs') as typeof import('node:fs')).rmSync(tempDir, { recursive: true, force: true });
+  });
+
+  it('resumes a checkpointed plan without re-running completed steps', async () => {
+    // Seed a checkpoint: step-1 (context-gatherer) already completed,
+    // step-2 (writer) pending with a dependency on step-1.
+    const { saveCheckpoint, checkpointIdFor } =
+      await import('../../src/agents/checkpoint-store.js');
+    const context = {
+      goal: 'resume goal',
+      workingDirectory: process.cwd(),
+      taskPlan: [
+        { id: 'step-1', description: 'Gather context', agentType: 'context-gatherer', dependsOn: [] as string[], status: 'completed' as const, result: 'done' },
+        { id: 'step-2', description: 'Write code', agentType: 'writer', dependsOn: ['step-1'], status: 'pending' as const },
+      ],
+      artifacts: [] as Array<{ path: string; content: string; description: string }>,
+      conversations: [] as Array<{ from: string; to: string; content: string; timestamp: number }>,
+      fileChanges: [] as Array<{ path: string; originalContent?: string; newContent?: string; status: string }>,
+      metadata: {} as Record<string, unknown>,
+    };
+    const id = saveCheckpoint(context as any, checkpointIdFor('resume goal', process.cwd()));
+
+    mockWriterExecute.mockImplementation(async (ctx: any) => {
+      ctx.fileChanges.push({
+        path: 'src/resumed.ts',
+        originalContent: '',
+        newContent: 'export const ok = true;\n',
+        status: 'created',
+      });
+      return { success: true, summary: 'Wrote resumed.ts' };
+    });
+
+    const result = await orchestrator.execute('resume goal', {
+      resumeCheckpointId: id,
+      provider: 'groq',
+      model: 'llama-3.3-70b',
+    });
+
+    expect(result.success).toBe(true);
+    expect(result.tasksCompleted).toBe(2);
+    expect(result.tasksTotal).toBe(2);
+    // The writer step ran (resumed from pending); the completed step did NOT re-run
+    expect(mockWriterExecute).toHaveBeenCalledTimes(1);
+    // The planner must NOT run on resume — the plan comes from the checkpoint
+    expect(mockPlannerExecute).not.toHaveBeenCalled();
+    // Only the pending step produced an agent result
+    expect(result.agentResults.some((r) => r.agent === 'writer' && r.success)).toBe(true);
+  });
+
+  it('keeps checkpointing forward on a resumed run and persists the completed state', async () => {
+    const { saveCheckpoint, checkpointIdFor, loadCheckpoint } =
+      await import('../../src/agents/checkpoint-store.js');
+    const context = {
+      goal: 'forward goal',
+      workingDirectory: process.cwd(),
+      taskPlan: [
+        { id: 'step-1', description: 'Gather context', agentType: 'context-gatherer', dependsOn: [] as string[], status: 'completed' as const, result: 'done' },
+        { id: 'step-2', description: 'Write code', agentType: 'writer', dependsOn: ['step-1'], status: 'pending' as const },
+      ],
+      artifacts: [] as Array<{ path: string; content: string; description: string }>,
+      conversations: [] as Array<{ from: string; to: string; content: string; timestamp: number }>,
+      fileChanges: [] as Array<{ path: string; originalContent?: string; newContent?: string; status: string }>,
+      metadata: {} as Record<string, unknown>,
+    };
+    const id = saveCheckpoint(context as any, checkpointIdFor('forward goal', process.cwd()));
+
+    mockWriterExecute.mockImplementation(async (ctx: any) => {
+      ctx.fileChanges.push({
+        path: 'src/forwarded.ts',
+        originalContent: '',
+        newContent: 'export const ok = true;\n',
+        status: 'created',
+      });
+      return { success: true, summary: 'Wrote forwarded.ts' };
+    });
+
+    const result = await orchestrator.execute('forward goal', {
+      resumeCheckpointId: id,
+      provider: 'groq',
+      model: 'llama-3.3-70b',
+    });
+
+    expect(result.success).toBe(true);
+    expect(result.tasksCompleted).toBe(2);
+
+    // The resumed run must keep saving checkpoints forward, and the FINAL save
+    // must capture the completed state (2/2) — so a later `--resume` after this
+    // run won't re-execute the last step.
+    const after = loadCheckpoint(id);
+    expect(after).not.toBeNull();
+    expect(after!.tasksCompleted).toBe(2);
+    expect(after!.tasksTotal).toBe(2);
+    expect(after!.context.taskPlan.every((s) => s.status === 'completed')).toBe(true);
+  });
+
+  it('runs a fresh pipeline when the checkpoint id does not exist', async () => {
+    mockPlannerExecute.mockImplementation(async () => ({
+      success: true,
+      summary: 'planned',
+    }));
+    mockPlannerExecute.mockImplementation(async (context: any) => {
+      context.taskPlan = [{
+        id: 'step-1',
+        agentType: 'writer',
+        description: 'Write fresh code',
+        dependsOn: [],
+        status: 'pending' as const,
+      }];
+      return { success: true, summary: 'planned' };
+    });
+    mockWriterExecute.mockImplementation(async (ctx: any) => {
+      ctx.fileChanges.push({
+        path: 'src/fresh.ts',
+        originalContent: '',
+        newContent: 'export const fresh = true;\n',
+        status: 'created',
+      });
+      return { success: true, summary: 'Wrote fresh.ts' };
+    });
+
+    const result = await orchestrator.execute('fresh goal', {
+      resumeCheckpointId: 'cp-does-not-exist',
+      provider: 'groq',
+      model: 'llama-3.3-70b',
+    });
+
+    expect(result.success).toBe(true);
+    // Fresh pipeline: planner runs, single writer step executes
+    expect(mockPlannerExecute).toHaveBeenCalledTimes(1);
+    expect(mockWriterExecute).toHaveBeenCalledTimes(1);
+    expect(result.tasksCompleted).toBe(1);
+  });
+});
+
 // ─── Review Mode Integration ────────────────────────────────────────────────
 
 describe('Orchestrator — review mode integration', () => {

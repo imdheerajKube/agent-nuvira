@@ -615,6 +615,12 @@ function QuotaSection({ quota }: { quota: QuotaInsights }) {
   const totalTokens = quota.entries.reduce((s, e) => s + e.tokensConsumed, 0);
   const totalRequests = quota.entries.reduce((s, e) => s + e.requests, 0);
   const parkedCount = quota.entries.filter((e) => e.parked).length;
+  // Free/local-first transparency (assessment #7): free-tier tokens = money
+  // saved (would have cost on a paid provider); paid tokens = actual spend.
+  const freeTokens = quota.freeTokens ?? totalTokens - (quota.paidTokens ?? 0);
+  const paidTokens = quota.paidTokens ?? 0;
+  const estimatedSavedUsd = quota.estimatedSavedUsd ?? 0;
+  const freePct = totalTokens > 0 ? (freeTokens / totalTokens) * 100 : 0;
 
   return (
     <SectionCard
@@ -636,6 +642,38 @@ function QuotaSection({ quota }: { quota: QuotaInsights }) {
         <div style={{ background: '#0d1117', border: '1px solid #21262d', borderRadius: 10, padding: '12px 18px', textAlign: 'center' }}>
           <div style={{ fontSize: 22, fontWeight: 700, color: parkedCount > 0 ? '#d29922' : '#3fb950', fontFamily: "'SFMono-Regular', Consolas, monospace" }}>{parkedCount}</div>
           <div style={{ fontSize: 11, color: '#8b949e', marginTop: 2 }}>parked</div>
+        </div>
+      </div>
+
+      {/* Cost transparency: free/local tokens saved vs paid spend triggered */}
+      <div style={{ display: 'flex', gap: 20, flexWrap: 'wrap', marginBottom: 16 }}>
+        <div style={{
+          flex: '1 1 200px', background: '#0d1117', borderRadius: 10, padding: '12px 16px',
+          border: '1px solid #238636',
+        }}>
+          <div style={{ fontSize: 20, fontWeight: 700, color: '#3fb950', fontFamily: "'SFMono-Regular', Consolas, monospace" }}>
+            {freeTokens.toLocaleString()}
+          </div>
+          <div style={{ fontSize: 11, color: '#8b949e', marginTop: 2 }}>
+            tokens on free/local · {freePct.toFixed(0)}% of usage
+          </div>
+          <div style={{ fontSize: 12, color: '#3fb950', marginTop: 4, fontFamily: "'SFMono-Regular', Consolas, monospace" }}>
+            💰 est. ${estimatedSavedUsd.toFixed(4)} saved
+          </div>
+        </div>
+        <div style={{
+          flex: '1 1 200px', background: '#0d1117', borderRadius: 10, padding: '12px 16px',
+          border: '1px solid #d29922',
+        }}>
+          <div style={{ fontSize: 20, fontWeight: 700, color: paidTokens > 0 ? '#d29922' : '#8b949e', fontFamily: "'SFMono-Regular', Consolas, monospace" }}>
+            {paidTokens.toLocaleString()}
+          </div>
+          <div style={{ fontSize: 11, color: '#8b949e', marginTop: 2 }}>
+            tokens on paid providers (spend triggered)
+          </div>
+          <div style={{ fontSize: 12, color: paidTokens > 0 ? '#d29922' : '#8b949e', marginTop: 4 }}>
+            {quota.paidRequests ?? 0} paid request{quota.paidRequests === 1 ? '' : 's'}
+          </div>
         </div>
       </div>
 
