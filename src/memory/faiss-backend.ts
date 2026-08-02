@@ -570,6 +570,41 @@ export class NativeFaissBackend implements VectorStoreBackend {
   }
 }
 
+// ─── Diagnostics ────────────────────────────────────────────────────────────
+
+/** Result of a native-FAISS availability check. */
+export interface NativeFaissCheck {
+  /** Whether the native @faiss-node/native module is installed AND usable. */
+  available: boolean;
+  /** Human-readable reason (why it's available / why it fell back). */
+  reason: string;
+}
+
+/**
+ * Check whether native FAISS is actually usable on this machine.
+ * Used by `buff memory backend --check` for diagnostics.
+ */
+export async function checkNativeFaiss(): Promise<NativeFaissCheck> {
+  try {
+    const mod = await loadNativeFaiss();
+    if (mod) {
+      return {
+        available: true,
+        reason: 'native @faiss-node/native module is installed, built, and passed the FLAT_IP smoke test',
+      };
+    }
+    return {
+      available: false,
+      reason: '@faiss-node/native is not installed/built or its smoke test failed — falling back to the pure-JS IVF backend',
+    };
+  } catch (err) {
+    return {
+      available: false,
+      reason: `@faiss-node/native load failed: ${err instanceof Error ? err.message : String(err)}`,
+    };
+  }
+}
+
 // ─── Factory ────────────────────────────────────────────────────────────────
 
 let nativeModule: any = null;

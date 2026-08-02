@@ -92,6 +92,15 @@ export class MemoryCommand extends BaseCommand {
         await this.showInfo();
       });
 
+    // ── backend (--check) ────────────────────────────────────────────────
+    const backendCmd = new Command('backend')
+      .description('Show the active vector-search backend and why it was chosen')
+      .option('--check', 'Run a native-FAISS availability check + report the active backend', false)
+      .action(async (options?: { check?: boolean }) => {
+        await this.showBackend(options || {});
+      });
+    command.addCommand(backendCmd);
+
     // ── clear ────────────────────────────────────────────────────────────
     command
       .command('clear')
@@ -335,6 +344,43 @@ export class MemoryCommand extends BaseCommand {
 
     logger.info('To clear everything: buff memory clear --force');
     console.log('');
+  }
+
+  private async showBackend(options: { check?: boolean }): Promise<void> {
+    try {
+      const vs = getVectorStore();
+      const backend = await vs.backendName();
+      const label =
+        backend === 'faiss-native' ? 'native FAISS (@faiss-node/native)' :
+        backend === 'faiss-ivf' ? 'pure-JS FAISS-style IVF-flat ANN' :
+        'exact flat cosine (JSON)';
+
+      logger.highlight('═'.repeat(60));
+      logger.highlight('  🧠  Vector Search Backend');
+      logger.highlight('═'.repeat(60));
+      console.log(`\n  Active backend: ${backend} (${label})`);
+      console.log(`  Config: memory.vectorBackend = ${process.env.BUFF_VECTOR_BACKEND || 'auto (default)'}`);
+      console.log(`  Entries: ${vs.stats().totalEntries} | Dimensions: ${vs.stats().dimensions}`);
+
+      if (options.check) {
+        console.log('');
+        const { checkNativeFaiss } = await import('../memory/faiss-backend.js');
+        const native = await checkNativeFaiss();
+        const icon = native.available ? '✅' : '⚠️';
+        console.log(`  ${icon} Native FAISS: ${native.reason}`);
+        console.log('');
+        if (!native.available) {
+          console.log('  To enable native FAISS on macOS:  brew install faiss libomp openblas && npm rebuild @faiss-node/native');
+          console.log('  Then run this again — the active backend should switch to faiss-native on the next search.');
+        }
+      } else {
+        console.log('');
+        logger.info('Run `buff memory backend --check` for a native-FAISS availability check.');
+      }
+      console.log('');
+    } catch (err) {
+      logger.error(`Backend check failed: ${err instanceof Error ? err.message : String(err)}`);
+    }
   }
 
   private async clearMemory(options: { force?: boolean }): Promise<void> {

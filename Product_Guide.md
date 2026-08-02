@@ -486,6 +486,9 @@ src/web-dashboard/              # React web dashboard
 | 90 | **Vector Retrieval (Token-Efficient Context)** | ✅ Complete (v1.47.0) | v1.47.0 | Chunking (~512 tokens, paragraph-aware, 64 overlap) + local embeddings (`bge-small-en-v1.5`, 384-dim) + top-k reduction before the LLM call; small contexts pass through untouched; any failure fails over to full context. `buff retrieval index/query/stats/clear` + dashboard 🧠 Retrieval card |
 | 91 | **VectorStore Namespaces** | ✅ Complete (v1.47.0) | v1.47.0 | Each namespace gets its own index file (`vectors-<ns>.json`) so repo retrieval chunks never pollute memory/history vectors; entry format unchanged so existing vectors survive upgrades |
 | 92 | **VS Code Quota Ledger View** | ✅ Complete (v0.5.0–v0.6.1) | v0.6.x | VS Code extension renders the quota ledger (free/paid usage, parked providers, failover timeline) with live auto-refresh on ledger/timeline change + poll-fallback |
+| 93 | **FAISS-Backed Vector Store** | ✅ Complete (v1.48.0) | v1.48.0 | `VectorStoreBackend` interface with pluggable tiers — **faiss-native** (`@faiss-node/native` real FAISS) → **faiss-ivf** (pure-JS IVF-flat ANN) → **json** (exact flat cosine, original behavior). Auto-selected in that priority order; lazy backend resolution, same JSON entry format, fully backward-compatible. `routing.vectorBackend` / `BUFF_VECTOR_BACKEND` overrides |
+| 94 | **FAISS Benchmark + Recall Validation** | ✅ Complete (v1.49.0) | v1.49.0 | 2,000-vector corpus benchmark — exact JSON ground truth recall@5 ≥ 0.99, IVF recall@5 ≥ 0.9 / recall@1 ≥ 0.8, latency logged; hermetic memory test suite (temp BUFF_MEMORY_DIR) |
+| 95 | **Native FAISS Tier Activation** | ✅ Complete (v1.49.1) | v1.49.1 | Native tier rewritten for the real `@faiss-node/native` v0.1.11 API (`FaissIndex` FLAT_IP, async add/search, L2-normalize → cosine) so the installed native module is actually used — was silently falling back to pure-JS IVF; `buff memory backend --check` diagnostics |
 
 ### 3.2 Key Upgrades & Enhancements
 
@@ -532,6 +535,7 @@ src/web-dashboard/              # React web dashboard
 | **Opt-in Failover Confirmation** | v1.45.5 | Ask before mid-session provider swaps (interactive + one-shot) |
 | **Always-On Dashboard Quota Watcher** | v1.46.0 | Quota state current the moment a dashboard connects |
 | **Vector Retrieval** | v1.47.0 | Local embeddings + top-k chunk reduction save tokens, stretch free quotas; `buff retrieval` CLI + dashboard card |
+| **FAISS-Backed Vector Store** | v1.48.0 | Pluggable backend tiers — real FAISS native bindings when built, pure-JS IVF ANN otherwise, exact JSON fallback; `buff memory backend --check` diagnostics |
 | **VS Code Quota Ledger View** | v0.5.0–v0.6.1 | Live free/paid usage + failover timeline inside the editor |
 
 ### 3.3 Feature Maturity Matrix
@@ -877,6 +881,9 @@ options:
 | **v1.45.5** | Aug 2026 | Opt-in failover confirmation (`routing.promptOnFailover`) — control over every auto-mode swap |
 | **v1.46.0** | Aug 2026 | Always-on dashboard quota watcher + single-shot Auto failover confirmation |
 | **v1.47.0** | Aug 2026 | Vector retrieval — token-efficient context via local embeddings + pure-JS vector store; `buff retrieval` CLI + dashboard Retrieval card |
+| **v1.48.0** | Aug 2026 | FAISS-backed vector store — pluggable backend tiers (faiss-native → faiss-ivf → json), lazy resolution, config override, backward-compatible entry format |
+| **v1.49.0** | Aug 2026 | FAISS follow-ups — hermetic memory test suite, IVF-vs-exact recall benchmark, cross-session backend transparency |
+| **v1.49.1** | Aug 2026 | Native FAISS tier actually activates — rewritten for the real `@faiss-node/native` v0.1.11 API; `buff memory backend --check` |
 | **v0.5.0–v0.6.1** (VS Code ext) | Aug 2026 | VS Code quota ledger view — free/paid usage, parked providers, failover timeline, live auto-refresh + poll-fallback |
 
 ### 5.2 Detailed Changelog (v1.14.x – v1.16.x)

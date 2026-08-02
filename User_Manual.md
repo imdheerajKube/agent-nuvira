@@ -776,6 +776,27 @@ agent-nuvira retrieval clear                  # wipe the repo index
 
 **Config** (`routing.retrieval`): `enabled` (default true), `topK` (default 5), `chunkTokens` (default 512), `overlapTokens` (default 64), `thresholdTokens` (default 12,000 — contexts above this trigger retrieval), and `model` (default `bge-small-en-v1.5`).
 
+### Vector Search Backend — FAISS-backed similarity search
+
+The vector store that powers memory, history, and repo retrieval is **backend-pluggable** (v1.48.0+). Agent-Nuvira auto-selects the fastest available tier in this priority order:
+
+| Tier | Engine | When used |
+|---|---|---|
+| `faiss-native` | Real [FAISS](https://github.com/facebookresearch/faiss) via `@faiss-node/native` (C++ bindings, `FLAT_IP` + L2-normalization = exact cosine) | When the native module is installed and built — fastest, hardware-accelerated |
+| `faiss-ivf` | Pure-JS IVF-flat approximate nearest neighbor (no native deps) | Fallback on machines without native bindings — 100x faster than brute force on large corpora |
+| `json` | Exact flat cosine over the original JSON index | Final fallback — the original v1.47 behavior, always works |
+
+Every tier reads/writes the **same** JSON entry format, so switching backends never loses existing vectors. Resolution is lazy (per call), with the chosen tier logged in `--verbose` mode and shown in the dashboard Memory card.
+
+```bash
+agent-nuvira memory backend --check   # show the active backend + why it was chosen
+agent-nuvira memory stats             # Backend: faiss-native (or faiss-ivf / json)
+```
+
+**Config:** set `routing.vectorBackend` to `auto` (default), `native`, `ivf`, or `json` — or the `BUFF_VECTOR_BACKEND` env var. `auto` probes native availability once per process and falls back gracefully; an unavailable explicit tier also falls back rather than erroring.
+
+> **Tip:** `@faiss-node/native` is an optional dependency — install it and run `npm rebuild` to get the hardware-accelerated tier. The pure-JS IVF tier keeps CI and fresh installs fast with zero native toolchain requirements.
+
 ### Auto-mode failover confirmation — control over every swap
 
 `routing.promptOnFailover: true` makes Auto mode **ask** before a mid-session provider swap: when a provider dies (expired key, exhausted quota, deprecated model), the CLI shows the next-ranked candidate and offers **switch (recommended)** or **pick a provider myself** instead of silently auto-switching. Default stays silent auto-failover (never get stuck). Applies to both the interactive chat loop and one-shot Auto prompts (`buff chat "..." -m auto`).

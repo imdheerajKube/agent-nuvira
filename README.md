@@ -110,6 +110,44 @@ npm run build
 npm link
 ```
 
+### Native FAISS acceleration (optional, recommended)
+
+Agent-Nuvira includes an optional native FAISS backend for faster semantic retrieval. The runtime now prefers this backend automatically when the native addon can build successfully; if that path is unavailable, it falls back to the pure-JS IVF implementation and then the exact JSON backend so your workflow stays reliable.
+
+> **v1.49.1 note:** the native tier was rewritten against the real
+> `@faiss-node/native` v0.1.11 API (`FaissIndex` with `{ type: 'FLAT_IP', dims }`,
+> async typed-array `add`/`search`) — earlier builds referenced a non-existent
+> `IndexFlatIP` class, so the load-time smoke test silently failed and the
+> pure-JS IVF backend ran even when the native module was built. It now
+> activates for real. Verify with `buff memory backend --check`.
+
+For npm-installed users, the setup is:
+
+```bash
+# 1) Install the CLI
+npm install -g agent-nuvira
+
+# 2) Install the native build prerequisites (macOS example)
+brew install faiss libomp openblas
+
+# 3) Rebuild the optional native addon
+npm rebuild @faiss-node/native
+
+# 4) Enable the FAISS-style backend (or leave it on 'auto' to prefer it automatically)
+agent-nuvira config set memory.vectorBackend auto
+# or force it explicitly:
+# agent-nuvira config set memory.vectorBackend faiss
+```
+
+If you want to confirm the backend in use:
+
+```bash
+agent-nuvira memory stats        # ... Backend: faiss-native (native FAISS)
+agent-nuvira memory backend --check   # native availability check + active backend + why
+```
+
+If the native addon cannot be built on your machine, Agent-Nuvira will continue to work using the pure-JS fallback path.
+
 ### Verify
 
 ```bash
@@ -1829,6 +1867,16 @@ npx tsc --noEmit
 | **v1.32.0** | Oct 2026 | Pillar A — GitLab Agent (MRs, issues, pipelines) + PR Review Agent (inline review, security scans) + website Git & PR section |
 | **v1.33.0** | Oct 2026 | Pillar B1+B3 — VS Code Chat Panel with streaming, slash commands, session history + Diagnostic → AI Fix from lightbulb menu |
 | **v1.34.0** | Oct 2026 | Pillar B5 — VS Code Code Lens actions (Test/Review/Explain/Fix) via quick pick menu above functions and classes |
+| **v1.42.0** | Aug 2026 | Learning-router escalation + per-model bandit priors + Promotion Gate (ruflo ADR-149/150 mirrors) |
+| **v1.43.0** | Aug 2026 | Startup progress feedback + Auto-mode session failover on token expiry |
+| **v1.44.0** | Aug 2026 | Central quota ledger, per-subtask complexity labels, free/local-first gate |
+| **v1.45.0** | Aug 2026 | Checkpoint/resume pipelines + quota cost-transparency card |
+| **v1.45.5** | Aug 2026 | Opt-in Auto failover confirmation (interactive + one-shot) |
+| **v1.46.0** | Aug 2026 | Always-on dashboard quota watcher |
+| **v1.47.0** | Aug 2026 | Vector retrieval — token-efficient context via local embeddings + pure-JS vector store |
+| **v1.48.0** | Aug 2026 | FAISS-style vector search backend — pluggable `VectorStore` (pure-JS IVF-flat ANN + optional native tier) |
+| **v1.49.0** | Aug 2026 | Hermetic memory tests, IVF-vs-exact recall/latency benchmark, cross-session backend transparency |
+| **v1.49.1** | Aug 2026 | Native FAISS tier actually activates — rewritten for the real `@faiss-node/native` v0.1.11 API; `buff memory backend --check` |
 
 ---
 

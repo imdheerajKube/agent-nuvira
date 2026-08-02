@@ -90,8 +90,8 @@ export type { ScoreComponents, ScoreInput } from './learning/scorer.js';
 // ─── Memory exports ────────────────────────────────────────────────────────
 export { VectorStore, getVectorStore, cosineSimilarity, JsonBackend, setVectorBackendOverride, resetVectorBackendSelection } from './memory/vector-store.js';
 export type { VectorEntry, SearchResult, VectorStoreBackend, VectorBackendType } from './memory/vector-store.js';
-export { FaissIvfBackend, NativeFaissBackend, createFaissBackend } from './memory/faiss-backend.js';
-export type { FaissIvfOptions } from './memory/faiss-backend.js';
+export { FaissIvfBackend, NativeFaissBackend, checkNativeFaiss, createFaissBackend } from './memory/faiss-backend.js';
+export type { FaissIvfOptions, NativeFaissCheck } from './memory/faiss-backend.js';
 export { embed, clearEmbeddingCache, embeddingCacheSize } from './memory/embedder.js';
 export { TrajectoryStore, getTrajectoryStore } from './memory/trajectory-store.js';
 export type { Trajectory, TrajectoryStep } from './memory/trajectory-store.js';

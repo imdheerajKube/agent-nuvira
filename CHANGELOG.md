@@ -7,6 +7,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [1.50.0] - 2026-08-02
+
+### Added
+
+- **`buff memory backend --check` diagnostics** — new `backend` subcommand
+  shows the active vector-search backend (faiss-native / faiss-ivf / json),
+  why it was chosen, and (with `--check`) whether native FAISS is installed
+  and usable, with install guidance when it isn't. `checkNativeFaiss()` is
+  also exported from the package API.
+- **Docs & website coverage for the FAISS-backed vector store** — README
+  version history, Product_Guide inventory rows 93–95 + release timeline
+  (v1.48.0–v1.49.1), User_Manual "Vector Search Backend" section, and a new
+  FAISS feature card on agent-nuvira.com with test counts updated to 2,880+.
+
+---
+
 ## [1.49.1] - 2026-08-02
 
 ### Fixed
