@@ -57,11 +57,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `src/inference/model-validator.ts` — live-list model validation + curated per-provider working defaults (`resolveWorkingModel`)
 - Regression tests: `tests/inference/model-validator.test.ts` (12 tests), `tests/cli/router.test.ts` (4 tests), deterministic auto-routing tests in `tests/cli/chat.test.ts`, credential-filtering tests in `tests/learning/auto-router.test.ts`
 
-> **Note:** this release bundles the previously-unreleased routing work from the
-> [Unreleased] section below (learning bandit, tier-0 deterministic routing,
-> routing rules/hard constraints, dashboard routing panels, per-provider model
-> drill-down, VS Code extension updates) — everything that shipped in this
-> published tarball.
+> **Note:** this release bundles the previously-unreleased routing work
+> (learning bandit, tier-0 deterministic routing, routing rules/hard
+> constraints, dashboard routing panels, per-provider model drill-down, VS Code
+> extension updates) — everything that shipped in this published tarball.
 
 ---
 
