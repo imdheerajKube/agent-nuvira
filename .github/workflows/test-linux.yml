@@ -77,3 +77,11 @@ jobs:
         env:
           CI: true
           NODE_OPTIONS: --no-warnings
+
+      # Frontend component tests — the dashboard has its own package (react +
+      # vite) with a committed lockfile; npm ci keeps the install hermetic and
+      # --foreground-scripts ensures native install scripts (esbuild) run.
+      - name: Dashboard component tests (PromotionGateSection)
+        run: cd src/web-dashboard && npm ci --no-audit --no-fund --foreground-scripts && npx vitest run
+        env:
+          CI: true
