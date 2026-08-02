@@ -46,6 +46,8 @@ import type { RepairMode } from '../learning/error-repair.js';
 import { estimateTokens } from '../learning/cost-tracker.js';
 import { scanForInjections, formatScanReport } from '../security/scanner.js';
 import { getAutoRouter, isAutoModel, isAutoProvider, type AutoRouteResult } from '../learning/auto-router.js';
+import { analyzeComplexity, type ComplexityLevel } from '../learning/hybrid-router.js';
+import { getQuotaLedger } from '../learning/quota-ledger.js';
 import { resolveWorkingModel } from '../inference/model-validator.js';
 import { recordRoutingDecision } from '../learning/routing-history.js';
 import { createReviewFromResult } from '../team/review.js';
@@ -224,6 +226,11 @@ export interface ExecutionStats {
   /** Number of file changes that were rolled back (reverted to original) */
   rollbackCount: number;
 }
+
+// ─── Constants ──────────────────────────────────────────────────────────────
+
+/** Valid per-subtask complexity labels (mirrors ComplexityLevel). */
+const VALID_COMPLEXITY = new Set<string>(['trivial', 'simple', 'moderate', 'complex', 'critical']);
 
 // ─── Agent Registry Bridge ───────────────────────────────────────────────────
 
@@ -507,6 +514,17 @@ export class Orchestrator {
       this.pruneContext(vault, options);
     }
 
+    // ── 4b. Label every step with a per-subtask complexity bucket ──────
+    // Assessment item #1: subtasks carry a complexity label so Auto routing
+    // is subtask-local, not goal-global. Trust the planner's label when valid;
+    // otherwise derive deterministically from the step description so every
+    // step is ALWAYS labeled.
+    for (const step of vault.context.taskPlan) {
+      if (!step.complexity || !VALID_COMPLEXITY.has(step.complexity)) {
+        step.complexity = analyzeComplexity(step.description);
+      }
+    }
+
     // ── 4b. Push initial DAG state to dashboard ─────────────────────────
     if (vault.context.taskPlan.length > 0) {
       await tryResetDAG();
@@ -515,6 +533,7 @@ export class Orchestrator {
         agentType: step.agentType,
         status: 'pending' as const,
         description: step.description,
+        complexity: step.complexity,
       }));
       const edges: Array<{ from: string; to: string }> = [];
       for (const step of vault.context.taskPlan) {
@@ -953,6 +972,11 @@ export class Orchestrator {
   ): Promise<void> {
     const routingContext = vault.getMeta<{ taskProfile?: { intent?: string; requiresVerification?: boolean } }>('routingContext');
     const strategy = executionStrategy ?? this.getExecutionStrategy(task, routingContext);
+    // Per-subtask complexity label (set by the plan-labeling pass in execute();
+    // this fallback covers direct executeSingleTask calls in tests).
+    if (!task.complexity || !VALID_COMPLEXITY.has(task.complexity)) {
+      task.complexity = analyzeComplexity(task.description);
+    }
     task.routingHints = {
       effectiveAgentType: strategy.effectiveAgentType,
       followUpAgentType: strategy.followUpAgentType,
@@ -1001,7 +1025,10 @@ export class Orchestrator {
       const effectiveAgentType = strategy.effectiveAgentType || task.agentType;
       const agentModel = options.model || options.agentModels?.[effectiveAgentType] || options.agentModels?.[task.agentType];
       const agentCallLLM = autoRouting
-        ? this.createAutoRoutedLLM({ agentType: effectiveAgentType, description: task.description }, options)
+        ? this.createAutoRoutedLLM(
+            { agentType: effectiveAgentType, description: task.description, complexity: task.complexity },
+            options,
+          )
         : agentModel
           ? this.createLLMProvider({ ...options, model: agentModel })
           : defaultCallLLM;
@@ -1126,6 +1153,8 @@ export class Orchestrator {
             task.description,
             result.success ? 'success' : 'failure',
             this.configManager,
+            undefined,
+            task.complexity as ComplexityLevel | undefined,
           );
         } catch {
           // Learning is best-effort — never break the pipeline on a bandit error
@@ -1298,10 +1327,19 @@ export class Orchestrator {
    * provider/model per agent type.
    */
   private resolveAutoRoutingDecision(
-    task: { agentType: string; description: string },
+    task: { agentType: string; description: string; complexity?: string },
     options: OrchestratorOptions,
   ): AutoRouteResult {
     const routing = this.configManager.getAll().routing || {};
+    // Quota-ledger parked providers sink below healthy ones — a provider whose
+    // free-tier window is exhausted (or was parked by a mid-session failure) is
+    // skipped predictively instead of failing reactively.
+    let quotaStatus: Array<{ provider: string; cooldownRemaining: number }> = [];
+    try {
+      quotaStatus = getQuotaLedger().getRouterQuotaStatus(this.configManager);
+    } catch {
+      // Best-effort — routing must never crash on ledger bookkeeping.
+    }
     const decision = getAutoRouter().resolve(
       task.agentType,
       task.description,
@@ -1313,6 +1351,9 @@ export class Orchestrator {
         minSpeed: routing.minSpeed,
         minReasoning: routing.minReasoning,
         escalationMinSamples: routing.escalationMinSamples,
+        complexityHint: task.complexity as ComplexityLevel | undefined,
+        quotaStatus,
+        allowPaid: routing.allowPaid,
       },
       this.configManager,
     );
@@ -1330,7 +1371,7 @@ export class Orchestrator {
   }
 
   private createAutoRoutedLLM(
-    task: { agentType: string; description: string },
+    task: { agentType: string; description: string; complexity?: string },
     options: OrchestratorOptions,
   ): LLMCallFn {
     const decisionOverride = this.routingDecisionOverrides.get(task.agentType);
@@ -1340,7 +1381,7 @@ export class Orchestrator {
 
 
   private createAutoRoutedLLMFromDecision(
-    task: { agentType: string; description: string },
+    task: { agentType: string; description: string; complexity?: string },
     options: OrchestratorOptions,
     decision: AutoRouteResult,
   ): LLMCallFn {

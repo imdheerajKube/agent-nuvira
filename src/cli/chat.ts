@@ -19,6 +19,7 @@ import { InferenceProvider } from '../inference/interface.js';
 import type { ProviderType } from '../config/types.js';
 import { getProviderFallback, classifyFallbackError, isRetryableError } from '../learning/provider-fallback.js';
 import { getAutoRouter, isAutoModel, isAutoProvider } from '../learning/auto-router.js';
+import { getQuotaLedger } from '../learning/quota-ledger.js';
 import { recordRoutingDecision } from '../learning/routing-history.js';
 
 // ─── Error Recovery Types ───────────────────────────────────────────────────
@@ -803,6 +804,18 @@ export class ChatCommand extends BaseCommand {
       // Exhausted quota / token-limit — usually transient, so only a short
       // cooldown before the provider is re-admitted to auto routing.
       this.sessionFailedProviders.set(providerType, Date.now() + ChatCommand.RATE_LIMIT_EXCLUSION_MS);
+      // Park the provider in the CENTRAL quota ledger until its reset window
+      // rolls so the exclusion survives across chat sessions (assessment #4:
+      // never surface quota errors — keep routing around them). The ledger is
+      // read by routeMessageAuto before every pick, so the next session skips
+      // the exhausted provider predictively instead of failing reactively.
+      try {
+        const limit = this.configManager.getAll().routing?.quota?.[providerType];
+        const windowMs = limit?.windowMs ?? 24 * 60 * 60 * 1000;
+        getQuotaLedger().parkProvider(providerType, Date.now() + windowMs);
+      } catch {
+        // Best-effort — ledger bookkeeping must not crash chat
+      }
     }
     try {
       getProviderFallback(this.configManager).recordFailure(providerType);
@@ -842,6 +855,15 @@ export class ChatCommand extends BaseCommand {
     } catch {
       // Best-effort — routing must never crash on circuit-breaker bookkeeping
     }
+    // Feed the QUOTA ledger too: a provider whose free-tier window is exhausted
+    // (or was parked by a mid-session failure) sinks below healthy candidates
+    // predictively, matching the orchestrator path.
+    let quotaStatus: Array<{ provider: string; cooldownRemaining: number }> = [];
+    try {
+      quotaStatus = getQuotaLedger().getRouterQuotaStatus(this.configManager);
+    } catch {
+      // Best-effort — routing must never crash on ledger bookkeeping
+    }
     const decision = getAutoRouter().resolve(
       'chat',
       message,
@@ -854,6 +876,8 @@ export class ChatCommand extends BaseCommand {
         minReasoning: routing.minReasoning,
         escalationMinSamples: routing.escalationMinSamples,
         circuitBreakerStatus,
+        quotaStatus,
+        allowPaid: routing.allowPaid,
       },
       this.configManager,
     );

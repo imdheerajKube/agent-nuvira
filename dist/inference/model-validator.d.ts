@@ -24,6 +24,14 @@ import type { InferenceProvider } from './interface.js';
 /** Preferred repair models per provider id, best first. */
 export declare const PREFERRED_MODELS: Record<string, string[]>;
 /**
+ * Clear the module-level model-list cache.
+ *
+ * Called automatically by `buff config set providers.*` (a provider key/model/
+ * baseURL change can invalidate the cached live list) and used by tests to
+ * isolate TTL behavior. Public so tooling/embeddings can force a fresh fetch.
+ */
+export declare function clearModelListCache(): void;
+/**
  * Validate a model against the provider's live model list and return a
  * working model:
  *

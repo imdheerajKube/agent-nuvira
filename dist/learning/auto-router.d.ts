@@ -133,6 +133,33 @@ export interface AutoRouterOptions {
      * Rule overrides evaluated before scoring. First match wins.
      */
     rules?: RoutingRule[];
+    /**
+     * Quota-ledger parked providers (ms remaining until auto re-enable) — same
+     * shape as `circuitBreakerStatus` so the router treats quota exhaustion
+     * exactly like a circuit-breaker cooldown: parked providers sink below
+     * healthy ones and are only picked when every candidate is parked.
+     * Computed by `QuotaLedger.getRouterQuotaStatus()` from configured
+     * `routing.quota` limits + explicit cooldowns.
+     */
+    quotaStatus?: Array<{
+        provider: string;
+        cooldownRemaining: number;
+    }>;
+    /**
+     * Per-task complexity label from the plan (TaskStep.complexity). When set,
+     * routing uses it INSTEAD of re-analyzing the description, so a planner that
+     * decomposes a goal into labeled subtasks gets subtask-local routing
+     * instead of goal-global routing.
+     */
+    complexityHint?: ComplexityLevel;
+    /**
+     * Free/local-first gate. When false, providers whose typical call is PAID
+     * (non-zero cost) are excluded from Auto routing for non-complex tasks
+     * (trivial/simple/moderate); complex/critical tasks may still use paid
+     * models. Falls back to the full ranking if the gate would eliminate
+     * everyone. Default: true (paid providers always allowed).
+     */
+    allowPaid?: boolean;
 }
 /**
  * A routing rule that overrides scoring when its task pattern matches.
@@ -165,6 +192,8 @@ export interface ScoredProvider {
     weightTotal: number;
     /** Whether this provider is currently in circuit-breaker cooldown */
     inCooldown: boolean;
+    /** Whether this provider is parked by the quota ledger (exhausted window) */
+    quotaParked?: boolean;
     /** Why this provider ranked where it did */
     reason: string;
 }
@@ -289,6 +318,8 @@ export declare class AutoModelRouter {
     resolve(agentType: string, taskDescription: string, options?: AutoRouterOptions, configManager?: ConfigManager): AutoRouteResult;
     /**
      * Record a real task outcome so the bandit can learn from actual results.
+     * A `complexityHint` (the plan's TaskStep.complexity) keeps the bandit
+     * bucket consistent with the hint used at resolve() time.
      * Only meaningful when `useBandit` is enabled during resolve(); the reward
      * is cost-adjusted — the provider's real pricing drives the α bump so a
      * cheap provider's success is worth the most (mirrors ruflo's cost-adjusted
@@ -304,7 +335,7 @@ export declare class AutoModelRouter {
         latencyMs?: number;
         costUsd?: number;
         qualityScore?: number;
-    }): void;
+    }, complexityHint?: ComplexityLevel): void;
     /**
      * Choose the concrete model within the selected provider using per-model
      * bandit priors (ruflo ADR-149 mirror).

@@ -2,6 +2,7 @@ import { Command } from 'commander';
 import { BaseCommand } from './commands.js';
 import { getPluginRegistry } from '../plugins/registry.js';
 import { logger } from '../utils/logger.js';
+import { clearModelListCache } from '../inference/model-validator.js';
 /**
  * Config command — manage buff configuration
  * buff config [set|get|list]
@@ -150,7 +151,7 @@ export class ConfigCommand extends BaseCommand {
                 this.configManager.save({ defaultProvider: value });
             }
             else {
-                logger.error(`Unknown config key: ${key}. Expected formats:\n  defaultProvider\n  providers.<name>.<field>\n  pricing.<provider>.inputPer1K\n  pricing.<provider>.outputPer1K\n  history.retentionDays\n  history.semanticSearch\n  fallback.enabled\n  fallback.providers`);
+                logger.error(`Unknown config key: ${key}. Expected formats:\n  defaultProvider\n  providers.<name>.<field>\n  pricing.<provider>.inputPer1K\n  pricing.<provider>.outputPer1K\n  history.retentionDays\n  history.semanticSearch\n  fallback.enabled\n  fallback.providers\n  routing.bandit\n  routing.allowPaid\n  routing.quota.<provider>.requestsPerWindow`);
                 return;
             }
         }
@@ -202,6 +203,10 @@ export class ConfigCommand extends BaseCommand {
                     },
                 },
             });
+            // A provider key/model/baseURL change can invalidate the cached live
+            // model list (model-validator caches listModels() for 60s). Drop it now
+            // so auto routing re-fetches against the new credentials immediately.
+            clearModelListCache();
         }
         else if (parts.length === 3 && parts[0] === 'pricing') {
             // pricing.<provider>.inputPer1K | pricing.<provider>.outputPer1K
@@ -282,9 +287,9 @@ export class ConfigCommand extends BaseCommand {
             }
         }
         else if (parts.length === 2 && parts[0] === 'routing') {
-            // routing.bandit | routing.maxCostUsd | routing.minSpeed | routing.minReasoning
+            // routing.bandit | routing.allowPaid | routing.maxCostUsd | routing.minSpeed | routing.minReasoning
             const field = parts[1];
-            if (field === 'bandit') {
+            if (field === 'bandit' || field === 'allowPaid') {
                 const lower = value.trim().toLowerCase();
                 let typedValue;
                 if (lower === 'true' || lower === '1' || lower === 'yes') {
@@ -297,7 +302,7 @@ export class ConfigCommand extends BaseCommand {
                     logger.error(`Invalid boolean value for ${key}: "${value}". Use true or false.`);
                     return;
                 }
-                this.configManager.save({ routing: { bandit: typedValue } });
+                this.configManager.save({ routing: { [field]: typedValue } });
             }
             else if (field === 'maxCostUsd' || field === 'minSpeed' || field === 'minReasoning') {
                 const num = Number(value);
@@ -308,12 +313,34 @@ export class ConfigCommand extends BaseCommand {
                 this.configManager.save({ routing: { [field]: num } });
             }
             else {
-                logger.error(`Unknown routing config key: ${field}. Valid keys: bandit, maxCostUsd, minSpeed, minReasoning`);
+                logger.error(`Unknown routing config key: ${field}. Valid keys: bandit, allowPaid, maxCostUsd, minSpeed, minReasoning`);
                 return;
             }
         }
+        else if (parts.length === 4 && parts[0] === 'routing' && parts[1] === 'quota') {
+            // routing.quota.<provider>.<field> — e.g. routing.quota.gemini.requestsPerWindow 1500
+            const providerName = parts[2];
+            const field = parts[3];
+            if (field !== 'tokensPerWindow' && field !== 'requestsPerWindow' && field !== 'windowMs') {
+                logger.error(`Unknown quota config key: ${field}. Valid keys: tokensPerWindow, requestsPerWindow, windowMs`);
+                return;
+            }
+            const num = Number(value);
+            if (isNaN(num) || num < 0) {
+                logger.error(`Invalid number for ${key}: "${value}". Must be a non-negative number.`);
+                return;
+            }
+            const existing = config.routing?.quota?.[providerName] || {};
+            this.configManager.save({
+                routing: {
+                    quota: {
+                        [providerName]: { ...existing, [field]: num },
+                    },
+                },
+            });
+        }
         else {
-            logger.error(`Invalid config key format: ${key}. Expected formats:\n  defaultProvider\n  providers.<name>.<field>\n  pricing.<provider>.inputPer1K\n  pricing.<provider>.outputPer1K\n  history.retentionDays\n  history.semanticSearch\n  fallback.enabled\n  fallback.providers\n  routing.bandit\n  routing.maxCostUsd`);
+            logger.error(`Invalid config key format: ${key}. Expected formats:\n  defaultProvider\n  providers.<name>.<field>\n  pricing.<provider>.inputPer1K\n  pricing.<provider>.outputPer1K\n  history.retentionDays\n  history.semanticSearch\n  fallback.enabled\n  fallback.providers\n  routing.bandit\n  routing.allowPaid\n  routing.quota.<provider>.requestsPerWindow`);
             return;
         }
         logger.success(`Set ${key} = ${value}`);

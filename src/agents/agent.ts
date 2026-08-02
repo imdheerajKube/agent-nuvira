@@ -20,6 +20,13 @@ export interface TaskStep {
   agentType: string;
   dependsOn: string[];
   status: TaskStatus;
+  /**
+   * Complexity label for THIS subtask (assessment item #1: "decompose tasks
+   * into subtasks labeled by complexity"). Emitted by the planner and used as
+   * a complexityHint by Auto routing so routing is subtask-local instead of
+   * goal-global. Values mirror ComplexityLevel.
+   */
+  complexity?: 'trivial' | 'simple' | 'moderate' | 'complex' | 'critical';
   result?: string;
   routingHints?: {
     effectiveAgentType?: string;

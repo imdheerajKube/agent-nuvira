@@ -19,6 +19,8 @@ interface DAGNode {
     agentType: string;
     status: 'pending' | 'running' | 'completed' | 'failed';
     description: string;
+    /** Per-subtask complexity label (trivial/simple/moderate/complex/critical). */
+    complexity?: string;
     summary?: string;
     startedAt?: number;
     completedAt?: number;

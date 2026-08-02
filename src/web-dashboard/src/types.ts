@@ -178,6 +178,24 @@ export interface RoutingInsights {
   bandit?: BanditInsights;
   /** Promotion-gate verdict — is the bandit actually better than the heuristic? */
   promotion?: PromotionInsights;
+  /** Central quota-ledger status (tokens/requests per provider × model) */
+  quota?: QuotaInsights;
+  updatedAt: number;
+}
+
+/** Central quota-ledger status surfaced by the dashboard Quota card. */
+export interface QuotaInsights {
+  enabled: boolean;
+  entries: Array<{
+    provider: string;
+    model: string;
+    tokensConsumed: number;
+    requests: number;
+    windowLengthMs: number;
+    resetsInMs: number;
+    parked: boolean;
+    cooldownRemaining: number;
+  }>;
   updatedAt: number;
 }
 
@@ -271,6 +289,8 @@ export interface AgentNode {
   agentType: string;
   status: 'pending' | 'running' | 'completed' | 'failed';
   description: string;
+  /** Per-subtask complexity label (trivial/simple/moderate/complex/critical). */
+  complexity?: string;
   summary?: string;
   startedAt?: number;
   completedAt?: number;

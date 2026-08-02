@@ -217,6 +217,34 @@ describe('Orchestrator — routing hints on task plan', () => {
     expect(agentResults[0].agent).toBe('writer');
   });
 
+  it('should label every executed task step with a per-subtask complexity bucket', async () => {
+    const vault = new ContextVault('Write code', '/tmp');
+    vault.setTaskPlan([
+      { id: 'step-1', agentType: 'writer', description: 'format this code', dependsOn: [], status: 'pending' as const },
+    ]);
+
+    mockWriterExecute.mockImplementation(async () => ({ success: true, summary: 'Wrote code' }));
+    const mockLLM = vi.fn().mockResolvedValue('mock response');
+    const agentResults: any[] = [];
+
+    await (orchestrator as any).executeSingleTask(
+      vault.context.taskPlan[0],
+      vault,
+      {},
+      agentResults,
+      [],
+      mockLLM,
+    );
+
+    // Assessment item #1: every subtask carries a complexity label so Auto
+    // routing is subtask-local (cheapest adequate model per step).
+    const step = vault.context.taskPlan[0];
+    expect(step.complexity).toBeDefined();
+    expect(['trivial', 'simple', 'moderate', 'complex', 'critical']).toContain(step.complexity);
+    // Deterministic fallback from the step description
+    expect(step.complexity).toBe('trivial');
+  });
+
   it('should reflect verification-heavy routing in routingHints (writer → reviewer remap)', async () => {
     const vault = new ContextVault('Verify a fix', '/tmp');
     vault.setTaskPlan([

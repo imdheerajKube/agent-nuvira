@@ -1,5 +1,5 @@
 import type { ReactNode } from 'react';
-import type { BanditInsights, DashboardData, PromotionInsights, RoutingHistoryEntry, RoutingInsights, RoutingUsage } from '../types';
+import type { BanditInsights, DashboardData, PromotionInsights, QuotaInsights, RoutingHistoryEntry, RoutingInsights, RoutingUsage } from '../types';
 
 // ─── Helpers ────────────────────────────────────────────────────────────────
 
@@ -107,6 +107,15 @@ function timeAgo(ts: number): string {
   if (diff < 3_600_000) return `${Math.floor(diff / 60_000)}m ago`;
   if (diff < 86_400_000) return `${Math.floor(diff / 3_600_000)}h ago`;
   return `${Math.floor(diff / 86_400_000)}d ago`;
+}
+
+function fmtDuration(ms: number): string {
+  if (ms <= 0) return 'now';
+  const h = Math.floor(ms / 3_600_000);
+  const m = Math.floor((ms % 3_600_000) / 60_000);
+  if (h > 0) return `${h}h ${m}m`;
+  if (m > 0) return `${m}m`;
+  return `${Math.ceil(ms / 1000)}s`;
 }
 
 // ─── Routing Usage Stats (actual picks over time) ───────────────────────────
@@ -598,6 +607,92 @@ function BestModelsSection({ routing }: { routing: RoutingInsights }) {
   );
 }
 
+// ─── Quota Ledger (central quota tracking per provider × model) ─────────────
+
+function QuotaSection({ quota }: { quota: QuotaInsights }) {
+  if (!quota.enabled || quota.entries.length === 0) return null;
+
+  const totalTokens = quota.entries.reduce((s, e) => s + e.tokensConsumed, 0);
+  const totalRequests = quota.entries.reduce((s, e) => s + e.requests, 0);
+  const parkedCount = quota.entries.filter((e) => e.parked).length;
+
+  return (
+    <SectionCard
+      icon="📒"
+      title="Quota Ledger — free-tier usage & auto re-enable"
+      subtitle="Tokens/requests per provider × model with reset windows. Exhausted providers are parked (excluded from Auto routing) and re-enable when the window rolls."
+    >
+      <div style={{ display: 'flex', gap: 20, flexWrap: 'wrap', marginBottom: 14 }}>
+        <div style={{ background: '#0d1117', border: '1px solid #21262d', borderRadius: 10, padding: '12px 18px', textAlign: 'center' }}>
+          <div style={{ fontSize: 22, fontWeight: 700, color: '#e6edf3', fontFamily: "'SFMono-Regular', Consolas, monospace" }}>
+            {totalTokens.toLocaleString()}
+          </div>
+          <div style={{ fontSize: 11, color: '#8b949e', marginTop: 2 }}>tokens tracked</div>
+        </div>
+        <div style={{ background: '#0d1117', border: '1px solid #21262d', borderRadius: 10, padding: '12px 18px', textAlign: 'center' }}>
+          <div style={{ fontSize: 22, fontWeight: 700, color: '#e6edf3', fontFamily: "'SFMono-Regular', Consolas, monospace" }}>{totalRequests}</div>
+          <div style={{ fontSize: 11, color: '#8b949e', marginTop: 2 }}>requests</div>
+        </div>
+        <div style={{ background: '#0d1117', border: '1px solid #21262d', borderRadius: 10, padding: '12px 18px', textAlign: 'center' }}>
+          <div style={{ fontSize: 22, fontWeight: 700, color: parkedCount > 0 ? '#d29922' : '#3fb950', fontFamily: "'SFMono-Regular', Consolas, monospace" }}>{parkedCount}</div>
+          <div style={{ fontSize: 11, color: '#8b949e', marginTop: 2 }}>parked</div>
+        </div>
+      </div>
+
+      <div style={{ overflowX: 'auto' }}>
+        <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 12 }}>
+          <thead>
+            <tr style={{ borderBottom: '1px solid #21262d', color: '#8b949e' }}>
+              <th style={{ padding: '8px 10px', textAlign: 'left', fontWeight: 500 }}>Provider / Model</th>
+              <th style={{ padding: '8px 10px', textAlign: 'right', fontWeight: 500 }}>Tokens</th>
+              <th style={{ padding: '8px 10px', textAlign: 'right', fontWeight: 500 }}>Requests</th>
+              <th style={{ padding: '8px 10px', textAlign: 'right', fontWeight: 500 }}>Resets in</th>
+              <th style={{ padding: '8px 10px', textAlign: 'center', fontWeight: 500 }}>State</th>
+            </tr>
+          </thead>
+          <tbody>
+            {quota.entries.map((e) => (
+              <tr key={`${e.provider}|${e.model}`} style={{ borderBottom: '1px solid #21262d' }}>
+                <td style={{ padding: '8px 10px', whiteSpace: 'nowrap' }}>
+                  <span style={{ color: '#e6edf3' }}>{providerIcon(e.provider)} {providerLabel(e.provider).split(' ')[0]}</span>
+                  <span style={{ color: '#8b949e', fontFamily: "'SFMono-Regular', Consolas, monospace" }}>
+                    {' / '}{e.model.length > 24 ? e.model.slice(0, 21) + '…' : e.model}
+                  </span>
+                </td>
+                <td style={{ padding: '8px 10px', textAlign: 'right', fontFamily: "'SFMono-Regular', Consolas, monospace", color: '#8b949e' }}>
+                  {e.tokensConsumed.toLocaleString()}
+                </td>
+                <td style={{ padding: '8px 10px', textAlign: 'right', fontFamily: "'SFMono-Regular', Consolas, monospace", color: '#8b949e' }}>
+                  {e.requests}
+                </td>
+                <td style={{ padding: '8px 10px', textAlign: 'right', color: '#8b949e', whiteSpace: 'nowrap' }}>
+                  {fmtDuration(e.resetsInMs)}
+                </td>
+                <td style={{ padding: '8px 10px', textAlign: 'center' }}>
+                  {e.parked ? (
+                    <span style={{ fontSize: 11, padding: '1px 8px', borderRadius: 10, background: '#2d1616', border: '1px solid #f85149', color: '#f85149' }}>
+                      ⏸ parked
+                    </span>
+                  ) : (
+                    <span style={{ fontSize: 11, padding: '1px 8px', borderRadius: 10, background: '#12291a', border: '1px solid #238636', color: '#3fb950' }}>
+                      ✓ available
+                    </span>
+                  )}
+                </td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+
+      <div style={{ fontSize: 11, color: '#6e7681', marginTop: 12 }}>
+        Configure limits with <code style={{ color: '#58a6ff' }}>buff config set routing.quota.gemini.requestsPerWindow 1500</code>;
+        the ledger always tracks usage but only parks when limits are set.
+      </div>
+    </SectionCard>
+  );
+}
+
 // ─── Main Component ─────────────────────────────────────────────────────────
 
 export default function RoutingInsightsPanel({ data }: { data: DashboardData | null }) {
@@ -609,6 +704,7 @@ export default function RoutingInsightsPanel({ data }: { data: DashboardData | n
   const hasHistory = !!routing?.history?.length;
   const hasBandit = !!routing?.bandit?.enabled;
   const hasPromotion = !!routing?.promotion?.decisionCount;
+  const hasQuota = !!routing?.quota?.enabled;
 
   return (
     <>
@@ -619,7 +715,7 @@ export default function RoutingInsightsPanel({ data }: { data: DashboardData | n
         <code>buff benchmark</code> and use Auto routing to build this up over time.
       </p>
 
-      {!hasAny && !hasUsage && !hasHistory && !hasBandit && !hasPromotion ? (
+      {!hasAny && !hasUsage && !hasHistory && !hasBandit && !hasPromotion && !hasQuota ? (
         <EmptyNote />
       ) : (
         <>
@@ -627,6 +723,7 @@ export default function RoutingInsightsPanel({ data }: { data: DashboardData | n
           {hasHistory && <AuditTimelineSection history={routing!.history!} />}
           {hasBandit && <BanditSection bandit={routing!.bandit!} />}
           {hasPromotion && <PromotionGateSection promotion={routing!.promotion!} />}
+          {hasQuota && <QuotaSection quota={routing!.quota!} />}
           <PreferenceSection routing={routing!} />
           <ProviderQualitySection routing={routing!} />
           <BestModelsSection routing={routing!} />

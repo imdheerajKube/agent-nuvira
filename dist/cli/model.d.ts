@@ -79,6 +79,7 @@ export declare class ModelCommand extends BaseCommand {
     private renderRoutingDecision;
     private showRecommendations;
     private checkHealth;
+    private showQuota;
     private showBandit;
     /** Render the promotion gate (bandit-vs-heuristic A/B verdict). */
     private renderPromotionGate;

@@ -12,6 +12,21 @@ import { getPluginRegistry } from '../plugins/registry.js';
 import { CATEGORY_INFO, categorizeModel, getModelBadge, formatModelName, } from '../inference/model-catalog.js';
 import { logger } from '../utils/logger.js';
 import { AUTO_MODEL, AUTO_PROVIDER } from '../learning/auto-router.js';
+// ─── Timeouts ───────────────────────────────────────────────────────────────
+// First-run / provider availability checks and model-list fetches can hang
+// (e.g. the local/Ollama probe, a stalled network). Time out per provider so
+// the picker never blocks silently on a single hung provider.
+const AVAILABILITY_TIMEOUT_MS = 10_000;
+const LIST_MODELS_TIMEOUT_MS = 20_000;
+/** Resolve a promise, rejecting with a clear timeout error after `ms`. */
+function withTimeout(promise, ms, label) {
+    return new Promise((resolve, reject) => {
+        const timer = setTimeout(() => {
+            reject(new Error(`${label} timed out after ${Math.round(ms / 1000)}s`));
+        }, ms);
+        promise.then((value) => { clearTimeout(timer); resolve(value); }, (err) => { clearTimeout(timer); reject(err); });
+    });
+}
 // ─── Category Display Order ─────────────────────────────────────────────────
 const CATEGORY_ORDER = {
     chat: 0,
@@ -58,11 +73,22 @@ export async function showModelPicker(configManager) {
         'groq',
         ...pluginTypes,
     ]));
+    // Availability checks can hang (e.g. the local/Ollama probe, stalled network)
+    // — show a live spinner and time out per-provider so first run never sits
+    // silently on a single provider.
+    const checkSpinner = ora({ text: '🔍 Checking provider availability…', spinner: 'dots' }).start();
     const checkResults = await Promise.all(providerTypes.map(async (pt) => {
         const resolved = resolveProvider(configManager, pt);
-        const available = await resolved.provider.isAvailable();
+        let available = false;
+        try {
+            available = await withTimeout(resolved.provider.isAvailable(), AVAILABILITY_TIMEOUT_MS, `${resolved.provider.name} availability`);
+        }
+        catch {
+            logger.warn(`    ⏱️  ${resolved.provider.name} availability check timed out — treating as unavailable`);
+        }
         return { pt, resolved, available };
     }));
+    checkSpinner.stop();
     const availableProviders = [];
     for (const { pt, resolved, available } of checkResults) {
         const icon = PROVIDER_ICONS[pt] || '🔹';
@@ -87,15 +113,20 @@ export async function showModelPicker(configManager) {
     }
     logger.highlight('\n📡 Fetching available models...');
     console.log('');
-    const loadingSpinner = ora('  Loading models...').start();
-    // Collect ALL models from all providers
+    const loadingSpinner = ora({ text: '📡 Loading models…', spinner: 'dots' }).start();
+    // Collect ALL models from all providers — show live per-provider progress
+    // and time out individually so one slow provider can't block the picker.
     const allModels = [];
+    let fetchedCount = 0;
+    const totalProviders = availableProviders.length;
     const modelResults = await Promise.all(availableProviders.map(async ({ type, provider: prov, name }) => {
         try {
-            const models = await prov.listModels();
+            const models = await withTimeout(prov.listModels(), LIST_MODELS_TIMEOUT_MS, `${name} model list`);
+            loadingSpinner.text = `📡 Loaded models from ${name} (${++fetchedCount}/${totalProviders})…`;
             return { type, name, models, error: null };
         }
         catch (err) {
+            loadingSpinner.text = `📡 Skipped ${name} — timed out (${++fetchedCount}/${totalProviders})…`;
             return { type, name, models: null, error: err };
         }
     }));
@@ -312,7 +343,7 @@ async function browseProviderModels(configManager, availableProviders) {
         const spinner = ora(`Loading models from ${chosen.name}...`).start();
         let models = [];
         try {
-            models = await chosen.provider.listModels();
+            models = await withTimeout(chosen.provider.listModels(), LIST_MODELS_TIMEOUT_MS, `${chosen.name} model list`);
         }
         catch {
             models = [];

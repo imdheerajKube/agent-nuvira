@@ -89,6 +89,21 @@ export interface HistoryConfig {
 }
 
 /**
+ * Per-provider quota limits for the central quota ledger.
+ * Set via `buff config set routing.quota.<provider>.<field> <value>` or directly
+ * in .buffconfig.json. The ledger parks a provider once it exhausts its current
+ * reset window and AUTO RE-ENABLES it when the window rolls (calendar-aware).
+ */
+export interface QuotaLimit {
+  /** Max tokens (input+output) per reset window */
+  tokensPerWindow?: number;
+  /** Max requests per reset window */
+  requestsPerWindow?: number;
+  /** Reset window length in ms (default: 24h = 86400000) */
+  windowMs?: number;
+}
+
+/**
  * Learning-router configuration (Thompson-sampling bandit + hard constraints).
  * Set via `buff config set routing.<key> <value>` or directly in .buffconfig.json.
  */
@@ -100,6 +115,21 @@ export interface RoutingConfig {
    * Default: false.
    */
   bandit?: boolean;
+  /**
+   * Central quota limits per provider (free-tier token/request caps with reset
+   * windows). When a provider exhausts its window it is parked (excluded from
+   * Auto routing) and auto re-enabled when the window resets. The ledger
+   * ALWAYS tracks usage; it only parks when limits are configured here.
+   */
+  quota?: Record<string, QuotaLimit>;
+  /**
+   * Free/local-first gate. When false, providers whose typical call is PAID
+   * (non-zero cost) are excluded from Auto routing for non-complex tasks
+   * (trivial/simple/moderate) — paid/high-capacity models are reserved for
+   * complex/critical work or when every free/local option is exhausted or
+   * parked. Default: true (paid providers always allowed).
+   */
+  allowPaid?: boolean;
   /** Hard max cost per call (USD) — providers whose typical call exceeds this are excluded */
   maxCostUsd?: number;
   /** Minimum speed score (0–1) for a candidate provider to be considered */

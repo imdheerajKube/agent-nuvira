@@ -9,6 +9,28 @@ export declare function runDeveloperMode(goal: string, configManager: any, optio
 }): Promise<void>;
 export declare class ChatCommand extends BaseCommand {
     private devModeAuto;
+    /**
+     * Providers that failed MID-SESSION in auto mode, with the expiry of their
+     * exclusion (ms epoch):
+     * - AUTH failures (expired token/key) are definitive → excluded for the whole
+     *   session (Number.MAX_SAFE_INTEGER), so a provider whose key died mid-session
+     *   is never re-picked (and re-failed) on a later message.
+     * - RATE-LIMIT failures (429 / exhausted quota / "token limit exceeded") are
+     *   usually TRANSIENT (a 1-minute quota window) → excluded only for a short
+     *   cooldown, then re-admitted, so a throttled-but-working provider isn't
+     *   blacklisted for the entire chat.
+     * - 5xx/network errors are NOT session-excluded at all — they flow through
+     *   the circuit breaker (which needs repeated failures before opening).
+     * Cleared when the chat exits.
+     */
+    private sessionFailedProviders;
+    /**
+     * How long a rate-limit failure excludes a provider from auto routing (ms).
+     * Aligned with the circuit breaker's COOLDOWN_DURATION_MS (120s) so the
+     * session-level exclusion and the breaker's scoring cooldown expire together
+     * — one consistent recovery window, not two competing ones.
+     */
+    private static readonly RATE_LIMIT_EXCLUSION_MS;
     create(): Command;
     private execute;
     /**
@@ -27,6 +49,21 @@ export declare class ChatCommand extends BaseCommand {
      *
      *   Enter a number (0-8):
      */
+    /**
+     * Record an auto-mode provider failure so the session fails over instead of
+     * getting stuck on a broken provider (the core of "auto routing should pick
+     * another provider when the current one dies mid-session"):
+     *
+     * - Definitive failures — auth (expired token/key) and rate-limit (exhausted
+     *   quota, "token limit exceeded") — exclude the provider for the WHOLE
+     *   session, so the next message never re-picks it and re-fails.
+     * - EVERY failure also feeds the shared circuit breaker, so the auto router
+     *   deprioritizes the provider by scoring even for transient 5xx/network
+     *   errors (which need repeated failures before cooldown opens).
+     *
+     * Best-effort: never throws, so failover bookkeeping can't crash the chat.
+     */
+    private recordAutoProviderFailure;
     private showModelPicker;
     /**
      * Resolve the best provider/model for a message via the AutoModelRouter.

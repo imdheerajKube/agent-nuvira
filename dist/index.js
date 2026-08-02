@@ -3,6 +3,7 @@ import { createCLI } from './cli/router.js';
 import { setLogLevel } from './utils/logger.js';
 import { runAutoDiscovery } from './plugins/agent-plugin.js';
 import { logger } from './utils/logger.js';
+import ora from 'ora';
 // ─── Agent exports (public API) ─────────────────────────────────────────────
 export { Orchestrator } from './agents/orchestrator.js';
 export { buildProjectFileTree, truncateTree } from './agents/utils/file-tree.js';
@@ -137,10 +138,20 @@ async function main() {
     if (debugIndex > -1 || process.argv.includes('-d')) {
         setLogLevel('debug');
     }
+    // ── Startup progress feedback ────────────────────────────────────────────
+    // First-run / cold start can take a while (plugin discovery + history init +,
+    // when enabled, semantic reindex). Give the user a live status line instead
+    // of a silent hang. Ora auto-suppresses when stdout is not a TTY, so piped
+    // output stays clean.
+    const startupSpinner = ora({
+        text: '⚙️  Agent-Nuvira starting…',
+        spinner: 'dots',
+    }).start();
     // Run auto-discovery for plugins before parsing commands
     // This ensures provider plugins are loaded before any command runs.
     try {
         const startTime = Date.now();
+        startupSpinner.text = '⚙️  Loading plugins…';
         const discovered = await runAutoDiscovery();
         const elapsed = Date.now() - startTime;
         const total = discovered.providerPlugins + discovered.agentPlugins + discovered.workflowPlugins;
@@ -155,6 +166,7 @@ async function main() {
     // apply history.semanticSearch config to ChatHistory singleton,
     // and auto-trigger semantic reindex if enabled but vector store is empty.
     try {
+        startupSpinner.text = '⚙️  Initializing history & search…';
         const { ConfigManager } = await import('./config/manager.js');
         const { getChatHistory, ChatHistory } = await import('./context/history.js');
         const { getVectorStore } = await import('./memory/vector-store.js');
@@ -177,6 +189,7 @@ async function main() {
                 const allEntries = await vs.getAll();
                 const hasChatEntries = allEntries.some((e) => e.id.startsWith('session-'));
                 if (!hasChatEntries) {
+                    startupSpinner.text = '📦 Building semantic search index…';
                     logger.debug('📦 Building semantic search index for past conversations...');
                     const indexed = await getChatHistory().reindexSemantic();
                     if (indexed > 0) {
@@ -190,6 +203,7 @@ async function main() {
         // Non-critical — startup shouldn't fail due to history initialization
         logger.debug(`History initialization failed (non-critical): ${err}`);
     }
+    startupSpinner.stop();
     await program.parseAsync(process.argv);
 }
 main().catch((err) => {

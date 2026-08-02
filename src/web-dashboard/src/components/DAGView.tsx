@@ -52,6 +52,14 @@ const STATUS_BADGES = {
   failed: '❌ Failed',
 };
 
+const COMPLEXITY_BADGES: Record<string, { icon: string; color: string }> = {
+  trivial: { icon: '🟢', color: '#3fb950' },
+  simple: { icon: '🔵', color: '#58a6ff' },
+  moderate: { icon: '🟡', color: '#d29922' },
+  complex: { icon: '🟠', color: '#f0883e' },
+  critical: { icon: '🔴', color: '#f85149' },
+};
+
 const AGENT_LABELS: Record<string, string> = {
   planner: 'Planner',
   'context-gatherer': 'Context',
@@ -393,6 +401,19 @@ export default function DAGView({ data }: DAGViewProps) {
                     : node.description}
                 </text>
 
+                {/* Complexity badge (per-subtask label) */}
+                {node.complexity && COMPLEXITY_BADGES[node.complexity] && (
+                  <text
+                    x={node.x + 10}
+                    y={node.y + 54}
+                    fill={COMPLEXITY_BADGES[node.complexity].color}
+                    fontSize={8}
+                    fontWeight={600}
+                  >
+                    {COMPLEXITY_BADGES[node.complexity].icon} {node.complexity}
+                  </text>
+                )}
+
                 {/* Duration */}
                 <text
                   x={node.x + 10}
@@ -453,6 +474,7 @@ export default function DAGView({ data }: DAGViewProps) {
             <tr>
               <th>Step</th>
               <th>Agent</th>
+              <th>Complexity</th>
               <th>Status</th>
               <th>Duration</th>
               <th>Time</th>
@@ -466,6 +488,13 @@ export default function DAGView({ data }: DAGViewProps) {
                 <td className="dag-cell-agent">
                   <span className="dag-agent-dot" style={{ background: AGENT_COLORS[node.agentType] || '#58a6ff' }} />
                   {AGENT_LABELS[node.agentType] || node.agentType}
+                </td>
+                <td className="dag-cell-complexity">
+                  {node.complexity && COMPLEXITY_BADGES[node.complexity]
+                    ? <span style={{ color: COMPLEXITY_BADGES[node.complexity].color, fontSize: 12 }}>
+                        {COMPLEXITY_BADGES[node.complexity].icon} {node.complexity}
+                      </span>
+                    : <span style={{ color: '#6e7681', fontSize: 12 }}>—</span>}
                 </td>
                 <td className={`dag-cell-status dag-status-${node.status}`}>
                   {STATUS_BADGES[node.status]}

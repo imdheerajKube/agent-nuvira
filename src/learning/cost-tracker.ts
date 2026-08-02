@@ -18,6 +18,8 @@ import { readFileSync, writeFileSync, existsSync, mkdirSync } from 'node:fs';
 import { join } from 'node:path';
 import { homedir } from 'node:os';
 
+import { getQuotaLedger } from './quota-ledger.js';
+
 // ─── Types ──────────────────────────────────────────────────────────────────
 
 export interface CostEntry {
@@ -201,6 +203,16 @@ export class CostTracker {
     }
 
     writeCosts(data);
+
+    // ── Write-through to the central quota ledger ────────────────────────
+    // Every LLM call (via the adapters' recordCallEstimated) also records
+    // usage in the quota ledger so Auto routing can park exhausted providers
+    // until their reset window rolls. Best-effort — never break the call.
+    try {
+      getQuotaLedger().recordUsage(provider, model, inputTokens, outputTokens);
+    } catch {
+      // Ledger is best-effort; cost recording must never crash on it.
+    }
 
     return entry;
   }

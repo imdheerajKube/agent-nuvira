@@ -104,8 +104,12 @@ export declare class ProviderFallback {
     }): Promise<FallbackResult>;
     /**
      * Record a provider failure in the circuit breaker.
+     *
+     * Public so auto-routing (chat's per-message failover) can feed the SAME
+     * circuit breaker the fallback engine uses — repeated failures open the
+     * breaker and the auto router deprioritizes/excludes in-cooldown providers.
      */
-    private recordFailure;
+    recordFailure(providerType: string): void;
     /**
      * Reset circuit breaker for a specific provider (user explicitly configured it).
      */

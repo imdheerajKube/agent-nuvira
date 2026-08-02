@@ -304,8 +304,6 @@ export class RouterBandit {
 
   /**
    * Update the bandit prior for a provider in the task's complexity bucket.
-   *
-   * @param provider       The provider whose prior to update.
    * @param taskDescription Task text — complexity is re-derived with the SAME
    *                        analyzeComplexity path route() uses, so record-time
    *                        and select-time buckets always match.
@@ -322,6 +320,22 @@ export class RouterBandit {
     outcomeData?: Partial<BanditOutcomeData>,
   ): void {
     const complexity = analyzeComplexity(taskDescription);
+    this.recordOutcomeWithComplexity(provider, complexity, outcome, costScore, outcomeData);
+  }
+
+  /**
+   * Update the bandit prior for a provider in an EXPLICIT complexity bucket.
+   * Used when the plan's TaskStep.complexity (a subtask label) differs from
+   * what re-analyzing the description would return — keeps select-time and
+   * record-time buckets identical for subtask-local routing.
+   */
+  recordOutcomeWithComplexity(
+    provider: string,
+    complexity: ComplexityLevel,
+    outcome: BanditOutcome,
+    costScore = 0.5,
+    outcomeData?: Partial<BanditOutcomeData>,
+  ): void {
     const bucket = this.state.priors[complexity] ?? (this.state.priors[complexity] = {});
     const prior = bucket[provider] ?? (bucket[provider] = { alpha: 1, beta: 1 });
     const reward = this.applyReward(prior, outcome, costScore, outcomeData);
@@ -347,6 +361,9 @@ export class RouterBandit {
   }
 
   /**
+   * Update the bandit prior for a provider in the task's complexity bucket.
+
+  /**
    * Update the PER-MODEL prior for a concrete model id in the task's complexity
    * bucket (mirror of ruflo's ADR-149 `priorsById` shadow state). Called by the
    * router alongside the provider-level recordOutcome so the model choice learns
@@ -366,6 +383,21 @@ export class RouterBandit {
     outcomeData?: Partial<BanditOutcomeData>,
   ): void {
     const complexity = analyzeComplexity(taskDescription);
+    this.recordModelOutcomeWithComplexity(model, complexity, outcome, costScore, outcomeData);
+  }
+
+  /**
+   * Update the PER-MODEL prior for a concrete model id in an EXPLICIT
+   * complexity bucket. Mirrors recordOutcomeWithComplexity for per-model
+   * learning (ADR-149) so subtask labels stay consistent.
+   */
+  recordModelOutcomeWithComplexity(
+    model: string,
+    complexity: ComplexityLevel,
+    outcome: BanditOutcome,
+    costScore = 0.5,
+    outcomeData?: Partial<BanditOutcomeData>,
+  ): void {
     const bucket = this.state.modelPriors[complexity] ?? (this.state.modelPriors[complexity] = {});
     const prior = bucket[model] ?? (bucket[model] = { alpha: 1, beta: 1 });
     const reward = this.applyReward(prior, outcome, costScore, outcomeData);
@@ -390,6 +422,9 @@ export class RouterBandit {
     }
     this.save();
   }
+
+  /**
+   * Update the PER-MODEL prior for a concrete model id in the task's complexity
 
   /**
    * Thompson-sample a provider's deterministic score for a complexity bucket.

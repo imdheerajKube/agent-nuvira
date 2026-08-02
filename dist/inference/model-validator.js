@@ -32,14 +32,39 @@ export const PREFERRED_MODELS = {
     nim: ['meta/llama-3.3-70b-instruct', 'meta/llama-3.1-8b-instruct'],
     local: [], // Ollama models vary per machine — use the live list
 };
-async function fetchLiveModels(provider) {
-    // No caching: resolveProvider() constructs a fresh adapter per call, so an
-    // instance-keyed cache would never hit. Live validation per auto-routed call
-    // is the intended behavior — one small listModels() GET is acceptable.
+// ─── Live model-list cache ─────────────────────────────────────────────────
+// resolveProvider() constructs a FRESH adapter per call, so an instance-keyed
+// cache would never hit. But the provider TYPE is stable, so we cache the live
+// list by provider type with a short TTL. This kills the repeated listModels()
+// GETs that happened on every auto-routed chat message (a real first-run and
+// per-message latency win) while staying fresh enough that new models show up
+// within a minute.
+const MODEL_LIST_TTL_MS = 60_000;
+const modelListCache = new Map();
+/**
+ * Clear the module-level model-list cache.
+ *
+ * Called automatically by `buff config set providers.*` (a provider key/model/
+ * baseURL change can invalidate the cached live list) and used by tests to
+ * isolate TTL behavior. Public so tooling/embeddings can force a fresh fetch.
+ */
+export function clearModelListCache() {
+    modelListCache.clear();
+}
+async function fetchLiveModels(provider, providerType) {
+    const key = providerType || provider.name;
+    const cached = modelListCache.get(key);
+    if (cached && Date.now() < cached.expiresAt) {
+        return cached.models;
+    }
     try {
-        return await provider.listModels();
+        const models = await provider.listModels();
+        modelListCache.set(key, { expiresAt: Date.now() + MODEL_LIST_TTL_MS, models });
+        return models;
     }
     catch {
+        // Don't cache failures — a transient network error must not pin an empty
+        // list for the TTL window.
         return [];
     }
 }
@@ -74,7 +99,7 @@ function modelFallbackScore(m) {
  * @returns A model id guaranteed (best-effort) to exist on the provider.
  */
 export async function resolveWorkingModel(provider, providerType, desiredModel) {
-    const live = await fetchLiveModels(provider);
+    const live = await fetchLiveModels(provider, providerType);
     // 'default' means "no explicit model" — validate it too: the adapter's
     // hardcoded default can be deprecated (gemini-2.0-flash-exp) or the literal
     // string 'default' would 404 on most APIs.

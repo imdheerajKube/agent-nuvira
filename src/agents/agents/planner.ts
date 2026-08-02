@@ -19,6 +19,7 @@ const PLANNER_SYSTEM_PROMPT = [
   '- description: What needs to be done in clear language',
   '- agentType: One of "context-gatherer", "writer", "reviewer", "tester", "debugger", "runner", "security", "mcp", "git", "gitlab", "pr-review"',
   '- dependsOn: Array of step IDs that must complete before this one (empty array for first steps)',
+  '- complexity: One of "trivial", "simple", "moderate", "complex", "critical" — label THIS subtask\'s difficulty (routing uses it to pick the cheapest adequate model)',
   '',
   'Rules:',
   '1. Start with a "context-gatherer" step to understand the codebase (if files exist)',
@@ -43,24 +44,28 @@ const PLANNER_SYSTEM_PROMPT = [
   '    "id": "step-01-understand",',
   '    "description": "Scan the codebase to understand the current project structure and identify files related to authentication",',
   '    "agentType": "context-gatherer",',
+  '    "complexity": "simple",',
   '    "dependsOn": []',
   '  },',
   '  {',
   '    "id": "step-02-add-routes",',
   '    "description": "Create JWT authentication routes in src/routes/auth.ts with login, register, and refresh endpoints",',
   '    "agentType": "writer",',
+  '    "complexity": "moderate",',
   '    "dependsOn": ["step-01-understand"]',
   '  },',
   '  {',
   '    "id": "step-03-add-middleware",',
   '    "description": "Add JWT verification middleware in src/middleware/auth.ts",',
   '    "agentType": "writer",',
+  '    "complexity": "moderate",',
   '    "dependsOn": ["step-01-understand"]',
   '  },',
   '  {',
   '    "id": "step-04-review",',
   '    "description": "Review all changes for security vulnerabilities, correctness, and code quality",',
   '    "agentType": "reviewer",',
+  '    "complexity": "complex",',
   '    "dependsOn": ["step-02-add-routes", "step-03-add-middleware"]',
   '  }',
   ']',
@@ -193,11 +198,21 @@ export class PlannerAgent extends Agent {
           dependsOn = [String(step.dependsOn)];
         }
 
+        // Normalize the per-subtask complexity label (assessment item #1).
+        // Only accept valid levels; anything else is left undefined so the
+        // orchestrator applies a deterministic analyzeComplexity fallback.
+        const rawComplexity = (step as { complexity?: unknown }).complexity;
+        const VALID_COMPLEXITY = ['trivial', 'simple', 'moderate', 'complex', 'critical'] as const;
+        const complexity = VALID_COMPLEXITY.includes(rawComplexity as any)
+          ? (rawComplexity as typeof VALID_COMPLEXITY[number])
+          : undefined;
+
         plan.push({
           id,
           description: String(step.description),
           agentType: String(step.agentType),
           dependsOn,
+          complexity,
           status: 'pending',
         });
       }

@@ -301,7 +301,13 @@ export class AutoModelRouter {
      * @returns An AutoRouteResult with ranked providers, fallback chain, and explanation
      */
     resolve(agentType, taskDescription, options = {}, configManager) {
-        const complexity = analyzeComplexity(taskDescription);
+        // Subtask-local routing: a complexityHint from the plan (TaskStep.complexity)
+        // wins over re-analyzing the description, so a planner that labels each
+        // step simple/moderate/complex routes that step accordingly — not the whole
+        // goal's complexity. Bandit bucketing uses the SAME value on recordOutcome
+        // (the orchestrator threads task.complexity through), keeping select-time
+        // and record-time buckets consistent.
+        const complexity = options.complexityHint ?? analyzeComplexity(taskDescription);
         const taskType = getTaskType(agentType);
         const taskProfile = analyzeTaskProfile(taskDescription);
         const mode = options.preferenceMode || 'balanced';
@@ -383,6 +389,15 @@ export class AutoModelRouter {
             if (cb.cooldownRemaining > 0)
                 cooldown.set(cb.provider, cb.cooldownRemaining);
         }
+        // ── Quota ledger (quotaStatus): exhausted providers sink exactly like
+        // circuit-breaker cooldown providers. Quota parking is SEPARATE from
+        // cooldown so a provider can be quota-parked without circuit-breaker
+        // state (and vice versa) — both exclude it from the healthy pick.
+        const quotaParked = new Map();
+        for (const qs of options.quotaStatus || []) {
+            if (qs.cooldownRemaining > 0)
+                quotaParked.set(qs.provider, qs.cooldownRemaining);
+        }
         // Load runtime stats once (benchmark quality + best-model per agent type)
         const runtime = options.useRuntimeStats ? this.loadRuntimeAdjustments(agentType) : null;
         if (runtime && options.verbose) {
@@ -402,13 +417,36 @@ export class AutoModelRouter {
             }
             const { score, dimensions, weightTotal } = scoreProvider(provider, caps, weights);
             const inCooldown = cooldown.has(provider);
-            const reason = this.buildReason(provider, caps, complexity, mode, inCooldown, runtime?.adjusted.has(provider));
-            return { provider, score, dimensions, weightTotal, inCooldown, reason };
+            const qp = quotaParked.get(provider);
+            const reason = qp !== undefined
+                ? `${provider} (quota exhausted — auto re-enables in ${Math.ceil(qp / 1000)}s)`
+                : this.buildReason(provider, caps, complexity, mode, inCooldown, runtime?.adjusted.has(provider));
+            return { provider, score, dimensions, weightTotal, inCooldown, quotaParked: qp !== undefined, reason };
         });
         // ── Hard constraints: ELIMINATE candidates that can't meet the ask ──────
         // Mirrors ruflo's per-request maxCost/maxLatency/minQuality hard filters —
         // violating providers are dropped (not just scored lower). If constraints
         // eliminate everything, fall back to the full list rather than erroring.
+        // ── Free/local-first gate (allowPaid: false) ───────────────────────────
+        // Mirrors the assessment's "prefer free/local unless complexity demands":
+        // when the user disallows paid providers, ELIMINATE paid ones (typical
+        // call cost > $0) for trivial/simple/moderate tasks so free/local models
+        // win unless the task demands otherwise. Complex/critical tasks may still
+        // use paid/high-capacity models. Falls back to the full list when the gate
+        // would eliminate everyone (e.g. only paid providers have credentials).
+        if (options.allowPaid === false &&
+            (complexity === 'trivial' || complexity === 'simple' || complexity === 'moderate')) {
+            const freeOnly = scored.filter((s) => {
+                const costUsd = estimateCallCostUsd(s.provider, this.getProviderPricing(s.provider, configManager));
+                return costUsd === 0;
+            });
+            if (freeOnly.length > 0) {
+                scored = freeOnly;
+            }
+            else if (options.verbose) {
+                logger.warn('  ⚠️ allowPaid: false eliminated every provider — falling back to full ranking');
+            }
+        }
         if (options.maxCostUsd !== undefined ||
             options.minSpeed !== undefined ||
             options.minReasoning !== undefined) {
@@ -435,10 +473,14 @@ export class AutoModelRouter {
                 logger.warn('  ⚠️ Hard constraints eliminated every provider — falling back to full ranking');
             }
         }
-        // Rank: in-cooldown providers sink below non-cooldown ones; ties broken by score
+        // Rank: circuit-breaker-cooldown providers sink first, then quota-parked
+        // ones, then healthy ones; ties broken by score. A quota-parked provider
+        // is only selected when every candidate is parked (matching cooldown).
         scored.sort((a, b) => {
             if (a.inCooldown !== b.inCooldown)
                 return a.inCooldown ? 1 : -1;
+            if (!!a.quotaParked !== !!b.quotaParked)
+                return a.quotaParked ? 1 : -1;
             return b.score - a.score;
         });
         // ── Thompson-sampling bandit: multiply each score by a Beta draw ────────
@@ -493,11 +535,12 @@ export class AutoModelRouter {
                 }
             }
         }
-        // Pick the best candidate that is not in cooldown (unless ALL are in cooldown).
-        // When uncertainty escalation fired, select the learned alternative instead.
+        // Pick the best candidate that is not in cooldown and not quota-parked
+        // (unless ALL are). When uncertainty escalation fired, select the learned
+        // alternative instead.
         const selected = escalatedProvider
             ? scored.find((s) => s.provider === escalatedProvider)
-            : scored.find((s) => !s.inCooldown) || scored[0];
+            : scored.find((s) => !s.inCooldown && !s.quotaParked) || scored[0];
         const provider = selected.provider;
         let model = this.resolveModel(provider, agentType, configManager);
         // Note the decision so outcome recording (recordOutcome) can reward the
@@ -553,6 +596,8 @@ export class AutoModelRouter {
     }
     /**
      * Record a real task outcome so the bandit can learn from actual results.
+     * A `complexityHint` (the plan's TaskStep.complexity) keeps the bandit
+     * bucket consistent with the hint used at resolve() time.
      * Only meaningful when `useBandit` is enabled during resolve(); the reward
      * is cost-adjusted — the provider's real pricing drives the α bump so a
      * cheap provider's success is worth the most (mirrors ruflo's cost-adjusted
@@ -564,18 +609,28 @@ export class AutoModelRouter {
      * @param configManager Optional — used to resolve per-provider pricing
      *                       overrides when computing the cost-adjusted reward
      */
-    recordOutcome(agentType, taskDescription, outcome, configManager, outcomeData) {
+    recordOutcome(agentType, taskDescription, outcome, configManager, outcomeData, complexityHint) {
         const bandit = getRouterBandit();
         const provider = bandit.getLastProvider(agentType);
         if (!provider)
             return;
         const costScore = computeCostScore(provider, this.getProviderPricing(provider, configManager));
-        bandit.recordOutcome(provider, taskDescription, outcome, costScore);
+        if (complexityHint) {
+            bandit.recordOutcomeWithComplexity(provider, complexityHint, outcome, costScore);
+        }
+        else {
+            bandit.recordOutcome(provider, taskDescription, outcome, costScore);
+        }
         // Per-modelId learning: attribute the same outcome to the concrete model
         // that served the task (ruflo ADR-149 mirror) so the model choice learns.
         const model = bandit.getLastModel(agentType);
         if (model) {
-            bandit.recordModelOutcome(model, taskDescription, outcome, costScore);
+            if (complexityHint) {
+                bandit.recordModelOutcomeWithComplexity(model, complexityHint, outcome, costScore);
+            }
+            else {
+                bandit.recordModelOutcome(model, taskDescription, outcome, costScore);
+            }
         }
         // Promotion gate: finalize the parallel A/B decision with the real outcome
         // so `buff model bandit` can judge bandit-vs-heuristic on real trajectories.

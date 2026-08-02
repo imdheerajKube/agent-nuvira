@@ -133,8 +133,6 @@ export declare class RouterBandit {
     private applyReward;
     /**
      * Update the bandit prior for a provider in the task's complexity bucket.
-     *
-     * @param provider       The provider whose prior to update.
      * @param taskDescription Task text — complexity is re-derived with the SAME
      *                        analyzeComplexity path route() uses, so record-time
      *                        and select-time buckets always match.
@@ -144,6 +142,16 @@ export declare class RouterBandit {
      * @param outcomeData    Optional richer outcome telemetry for the reward model.
      */
     recordOutcome(provider: string, taskDescription: string, outcome: BanditOutcome, costScore?: number, outcomeData?: Partial<BanditOutcomeData>): void;
+    /**
+     * Update the bandit prior for a provider in an EXPLICIT complexity bucket.
+     * Used when the plan's TaskStep.complexity (a subtask label) differs from
+     * what re-analyzing the description would return — keeps select-time and
+     * record-time buckets identical for subtask-local routing.
+     */
+    recordOutcomeWithComplexity(provider: string, complexity: ComplexityLevel, outcome: BanditOutcome, costScore?: number, outcomeData?: Partial<BanditOutcomeData>): void;
+    /**
+     * Update the bandit prior for a provider in the task's complexity bucket.
+  
     /**
      * Update the PER-MODEL prior for a concrete model id in the task's complexity
      * bucket (mirror of ruflo's ADR-149 `priorsById` shadow state). Called by the
@@ -157,6 +165,15 @@ export declare class RouterBandit {
      * @param outcomeData    Optional richer outcome telemetry for the reward model.
      */
     recordModelOutcome(model: string, taskDescription: string, outcome: BanditOutcome, costScore?: number, outcomeData?: Partial<BanditOutcomeData>): void;
+    /**
+     * Update the PER-MODEL prior for a concrete model id in an EXPLICIT
+     * complexity bucket. Mirrors recordOutcomeWithComplexity for per-model
+     * learning (ADR-149) so subtask labels stay consistent.
+     */
+    recordModelOutcomeWithComplexity(model: string, complexity: ComplexityLevel, outcome: BanditOutcome, costScore?: number, outcomeData?: Partial<BanditOutcomeData>): void;
+    /**
+     * Update the PER-MODEL prior for a concrete model id in the task's complexity
+  
     /**
      * Thompson-sample a provider's deterministic score for a complexity bucket.
      * Cold-start Beta(1,1) → uniform draws, so expected behavior matches the

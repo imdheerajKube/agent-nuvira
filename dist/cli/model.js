@@ -30,6 +30,7 @@ import { getHybridRouter } from '../learning/hybrid-router.js';
 import { AUTO_MODEL, AUTO_PROVIDER, getAutoRouter, isAutoModel, isAutoProvider, } from '../learning/auto-router.js';
 import { recordRoutingDecision } from '../learning/routing-history.js';
 import { getRouterBandit, COMPLEXITY_BUCKETS, } from '../learning/router-bandit.js';
+import { getQuotaLedger } from '../learning/quota-ledger.js';
 import { getRouterPromotion, DEFAULT_MIN_PROMOTION_DECISIONS, } from '../learning/router-promotion.js';
 import { logger } from '../utils/logger.js';
 const BUFF_DIR = join(homedir(), '.buff');
@@ -166,6 +167,11 @@ export class ModelCommand extends BaseCommand {
             .description('Show learning-router bandit state (Thompson-sampling priors per provider × complexity bucket). Action: reset')
             .option('-j, --json', 'Output as JSON (for scripting and CI)', false)
             .action((action, opts) => this.showBandit(action, opts));
+        cmd
+            .command('quota [action]')
+            .description('Show the central quota ledger (tokens/requests per provider × model, reset windows, parked state). Action: reset')
+            .option('-j, --json', 'Output as JSON (for scripting and CI)', false)
+            .action((action, opts) => this.showQuota(action, opts));
         // Default action (no subcommand): show info and offer to switch
         cmd
             .action(async () => {
@@ -730,6 +736,42 @@ export class ModelCommand extends BaseCommand {
             logger.error(`Health check failed: ${err instanceof Error ? err.message : String(err)}`);
             console.log('');
         }
+    }
+    // ── Subcommand: quota ─────────────────────────────────────────────────
+    showQuota(action, opts) {
+        if (action === 'reset') {
+            getQuotaLedger().reset();
+            console.log('');
+            logger.success('🧹 Quota ledger cleared.');
+            console.log('');
+            return;
+        }
+        if (action && action !== 'reset') {
+            logger.error(`Unknown quota action: ${action}. Use \`buff model quota\` to view or \`buff model quota reset\` to reset.`);
+            return;
+        }
+        const statuses = getQuotaLedger().getStatus(this.configManager);
+        if (opts.json) {
+            console.log(JSON.stringify({
+                enabled: statuses.length > 0,
+                entries: statuses,
+                updatedAt: Date.now(),
+            }, null, 2));
+            return;
+        }
+        console.log('');
+        logger.highlight('═══  Quota Ledger  ═══');
+        console.log('');
+        if (statuses.length === 0) {
+            logger.info('  No quota usage recorded yet.');
+            console.log('');
+            logger.info('  The ledger write-throughs every Auto-routed call; set limits to enforce:');
+            logger.info('  `buff config set routing.quota.gemini.requestsPerWindow 1500`');
+            logger.info('  `buff config set routing.quota.groq.requestsPerWindow 14400`');
+            console.log('');
+            return;
+        }
+        console.log(getQuotaLedger().formatStatus(this.configManager));
     }
     // ── Subcommand: bandit ────────────────────────────────────────────────
     showBandit(action, opts) {

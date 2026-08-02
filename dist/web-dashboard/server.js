@@ -677,6 +677,35 @@ function readHealthData() {
  * - Best-performing model per agent type (from agent stats)
  * - What the Auto router would pick for sample tasks across complexity levels
  */
+/**
+ * Read the central quota-ledger status (tokens/requests per provider × model,
+ * reset windows, parked state). Backs the dashboard's Quota card.
+ */
+function readQuotaData() {
+    const data = readJSON(join(MEMORY_DIR, 'quota-ledger.json'));
+    if (!data?.entries) {
+        return { enabled: false, entries: [], updatedAt: Date.now() };
+    }
+    const now = Date.now();
+    const entries = Object.values(data.entries)
+        .map((e) => {
+        const windowEnd = e.windowStart + e.windowLengthMs;
+        const resetsInMs = Math.max(0, windowEnd - now);
+        const cooldownRemaining = Math.max(0, e.cooldownUntil - now);
+        return {
+            provider: e.provider,
+            model: e.model,
+            tokensConsumed: e.tokensConsumed,
+            requests: e.requests,
+            windowLengthMs: e.windowLengthMs,
+            resetsInMs,
+            parked: cooldownRemaining > 0,
+            cooldownRemaining,
+        };
+    })
+        .sort((a, b) => a.provider.localeCompare(b.provider) || a.model.localeCompare(b.model));
+    return { enabled: entries.length > 0, entries, updatedAt: now };
+}
 function readRoutingInsights() {
     // 1. Per-provider benchmark quality from benchmarks.json
     const benchData = readJSON(join(MEMORY_DIR, 'benchmarks.json'));
@@ -755,6 +784,7 @@ function readRoutingInsights() {
         history: readRoutingHistory(),
         bandit: readBanditData(),
         promotion: readPromotionData(),
+        quota: readQuotaData(),
         updatedAt: Date.now(),
     };
 }
