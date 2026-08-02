@@ -154,6 +154,11 @@ export function isQuotaWatcherArmed(): boolean {
 /** Test hook: override the always-on quota watcher flag (config re-read on next create). */
 export function setAlwaysWatchQuota(value: boolean): void {
   alwaysWatchQuota = value;
+  // Turning the flag OFF must also disarm an already-armed watcher —
+  // otherwise a test that armed it would leak the fs.watch handle into
+  // later tests in the same process (the only other disarm path is an SSE
+  // connect→disconnect cycle, which may never happen).
+  if (!value) disarmQuotaWatcher();
 }
 
 // ─── In-Memory DAG Store ────────────────────────────────────────────────────

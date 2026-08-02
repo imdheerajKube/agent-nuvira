@@ -69,11 +69,17 @@ describe('generateAutoWithFailover — single-shot failover confirmation', () =>
     vi.spyOn(logger, 'highlight').mockImplementation(() => {});
     mockedShouldConfirm.mockReturnValue(false);
     mockedPromptChoice.mockResolvedValue('switch');
+    // The failover prompt is gated on an interactive stdin (a prompt in CI /
+    // piped input would block forever) — most tests here exercise the prompt,
+    // so simulate an interactive terminal by default.
+    Object.defineProperty(process.stdin, 'isTTY', { value: true, configurable: true });
   });
 
   afterEach(() => {
     vi.restoreAllMocks();
     vi.clearAllMocks();
+    // Restore the real (non-TTY) stdin for the next test.
+    Object.defineProperty(process.stdin, 'isTTY', { value: undefined, configurable: true });
   });
 
   /**
@@ -138,6 +144,21 @@ describe('generateAutoWithFailover — single-shot failover confirmation', () =>
     // The gemini candidate was never attempted — 'manual' aborts the walk.
     expect(generateMock).toHaveBeenCalledTimes(1);
     expect(mockedPromptChoice).toHaveBeenCalledTimes(1);
+  });
+
+  it('skips the prompt entirely when stdin is not a TTY (CI / piped safety)', async () => {
+    const { cmd, generateMock } = setupCommand();
+    Object.defineProperty(process.stdin, 'isTTY', { value: undefined, configurable: true });
+    mockedShouldConfirm.mockReturnValue(true);
+
+    const result = await cmd.generateAutoWithFailover('explain this', 'explain this', {}, true);
+
+    // Even with promptOnFailover on, a non-interactive stdin falls through to
+    // silent auto-failover (the pre-existing safe behavior) instead of
+    // blocking forever on an inquirer prompt.
+    expect(result).toBe('hello from gemini');
+    expect(generateMock).toHaveBeenCalledTimes(2);
+    expect(mockedPromptChoice).not.toHaveBeenCalled();
   });
 
   it('does not prompt when there is no next candidate to switch to', async () => {

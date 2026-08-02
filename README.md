@@ -824,16 +824,16 @@ The timeline is also **live**: the dashboard watches `quota-events.jsonl` /
 `quota-ledger.json` on disk and pushes a `quota` SSE event the moment a failover
 or park lands — so the card updates in real time, no page refresh or 10s wait.
 (The watcher arms while a dashboard is connected and disarms when the last one
-disconnects. To keep it armed from server start — so the timeline is already
+disconnects.) To keep it armed from server start — so the timeline is already
 current the moment a dashboard connects, even after the server sat idle between
-viewing sessions — enable `routing.alwaysWatchQuota`:
+viewing sessions — enable always-on mode:
 
 ```bash
+# Keep the quota watcher armed from server start (never disarms on client count)
 agent-nuvira config set routing.alwaysWatchQuota true
 ```
 
-The always-on mode never disarms on client disconnect, trading a tiny idle fs
-watch for instant-up-to-date quota state.)
+Always-on trades a tiny idle fs watch for instant-up-to-date quota state.
 
 **Opt-in failover confirmation.** By default Auto mode fails over silently
 (never get stuck). If you'd rather approve each mid-session swap, enable:

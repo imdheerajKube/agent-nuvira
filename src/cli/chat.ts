@@ -1076,7 +1076,10 @@ export class ChatCommand extends BaseCommand {
         // exits with the failure (matching non-auto behavior).
         const order = [first.type, ...first.ranked];
         const nextCandidate = order.find((c) => !attempted.has(c));
-        if (nextCandidate && shouldConfirmFailover(this.configManager.getAll())) {
+        // Only prompt when stdin is a TTY — in a CI/piped context an inquirer
+        // prompt would block forever, so fall through to silent auto-failover
+        // (the pre-existing safe behavior for non-interactive runs).
+        if (nextCandidate && shouldConfirmFailover(this.configManager.getAll()) && process.stdin.isTTY) {
           let nextProviderName = nextCandidate;
           try {
             nextProviderName = resolveProvider(this.configManager, nextCandidate).provider.name;
