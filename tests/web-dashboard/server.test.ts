@@ -202,6 +202,88 @@ function httpGetSSE(url: string): Promise<{ statusCode: number; contentType: str
   });
 }
 
+/**
+ * Open a persistent SSE stream and resolve once the connection is established
+ * (the server has sent the `init` snapshot). Returns a handle to wait for
+ * specific named events (e.g. `quota`) and close the connection.
+ */
+function openSSE(url: string): Promise<{
+  req: ReturnType<typeof httpRequest>;
+  waitFor: (eventName: string, timeoutMs?: number) => Promise<{ event: string; data: unknown }>;
+  close: () => void;
+}> {
+  return new Promise((resolve, reject) => {
+    const req = httpRequest(url, { method: 'GET' }, (res) => {
+      let buffer = '';
+      // Events that arrive BEFORE a waitFor() registers (e.g. `init` can be
+      // emitted on the same tick the response callback fires) are buffered and
+      // served to the waiter when it registers — otherwise they'd be lost and
+      // the test would hang.
+      const received: Array<{ event: string; data: unknown }> = [];
+      const waiters: Array<{
+        name: string;
+        resolve: (v: { event: string; data: unknown }) => void;
+        reject: (e: Error) => void;
+        timer: ReturnType<typeof setTimeout>;
+      }> = [];
+
+      const emit = (name: string, data: unknown) => {
+        // Serve an already-registered waiter first.
+        for (let i = 0; i < waiters.length; i++) {
+          if (waiters[i].name === name) {
+            const w = waiters.splice(i, 1)[0];
+            clearTimeout(w.timer);
+            w.resolve({ event: name, data });
+            return;
+          }
+        }
+        // No waiter yet — buffer for a later waitFor().
+        received.push({ event: name, data });
+      };
+
+      res.on('data', (chunk: Buffer) => {
+        buffer += chunk.toString('utf-8');
+        // Split on complete event blocks (\n\n); keep the tail for more data.
+        const blocks = buffer.split('\n\n');
+        buffer = blocks.pop() || '';
+        for (const block of blocks) {
+          const eventMatch = block.match(/event: (.+)/);
+          const dataMatch = block.match(/data: (.+)/);
+          if (eventMatch && dataMatch) {
+            let parsed: unknown = null;
+            try { parsed = JSON.parse(dataMatch[1]); } catch { /* ignore */ }
+            emit(eventMatch[1], parsed);
+          }
+        }
+      });
+      res.on('error', () => { /* connection destroyed by test */ });
+
+      resolve({
+        req,
+        waitFor: (eventName: string, timeoutMs = 5000) => {
+          // Serve a buffered event first (arrived before this waiter registered).
+          const idx = received.findIndex((e) => e.event === eventName);
+          if (idx !== -1) {
+            const ev = received.splice(idx, 1)[0];
+            return Promise.resolve(ev);
+          }
+          return new Promise((resolveWait, rejectWait) => {
+            const timer = setTimeout(() => {
+              const i = waiters.findIndex((w) => w.name === eventName);
+              if (i !== -1) waiters.splice(i, 1);
+              rejectWait(new Error(`Timed out waiting for SSE event '${eventName}'`));
+            }, timeoutMs);
+            waiters.push({ name: eventName, resolve: resolveWait, reject: rejectWait, timer });
+          });
+        },
+        close: () => req.destroy(),
+      });
+    });
+    req.on('error', reject);
+    req.end();
+  });
+}
+
 // ─── Suite setup ────────────────────────────────────────────────────────────
 
 let baseUrl: string;
@@ -769,6 +851,68 @@ describe('Dashboard Server', () => {
       expect(d).toHaveProperty('memory');
       expect(d).toHaveProperty('health');
       expect(d).toHaveProperty('serverTime');
+    });
+
+    it('SSE pushes a quota event in real time when the failover timeline changes', async () => {
+      // The server watches the memory dir and emits a `quota` SSE event the
+      // moment quota-events.jsonl / quota-ledger.json change — simulating
+      // chat's mid-session failover bookkeeping writing from another process.
+      const eventsPath = join(memoryDir, 'quota-events.jsonl');
+      try { rmSync(eventsPath, { force: true }); } catch { /* ignore */ }
+
+      const stream = await openSSE(`${baseUrl}/api/sse`);
+      try {
+        // Prove the connection is open (init snapshot sent) before writing,
+        // so the quota watcher is guaranteed armed.
+        await stream.waitFor('init');
+
+        // Simulate chat's recordAutoProviderFailure appending a failover event.
+        writeFileSync(eventsPath, JSON.stringify({
+          type: 'failover',
+          provider: 'gemini',
+          reason: 'rate-limit',
+          timestamp: Date.now(),
+        }) + '\n');
+
+        const ev = await stream.waitFor('quota');
+        const data = ev.data as { quota: { events: Array<{ type: string; provider: string }> } };
+        expect(data.quota).toBeDefined();
+        expect(data.quota.events[0].type).toBe('failover');
+        expect(data.quota.events[0].provider).toBe('gemini');
+        expect(data.quota.events[0].reason).toBe('rate-limit');
+      } finally {
+        stream.close();
+        try { rmSync(eventsPath, { force: true }); } catch { /* ignore */ }
+      }
+    });
+
+    it('SSE pushes a quota event when a provider is parked (ledger write)', async () => {
+      // Same real-time path for quota-ledger.json writes (park/release).
+      const ledgerPath = join(memoryDir, 'quota-ledger.json');
+      try { rmSync(ledgerPath, { force: true }); } catch { /* ignore */ }
+
+      const stream = await openSSE(`${baseUrl}/api/sse`);
+      try {
+        await stream.waitFor('init');
+
+        writeFileSync(ledgerPath, JSON.stringify({
+          version: 1,
+          entries: {
+            'groq|default': {
+              provider: 'groq', model: 'default', tokensConsumed: 100, requests: 1,
+              windowStart: Date.now(), windowLengthMs: 86400000, cooldownUntil: 0,
+            },
+          },
+        }));
+
+        const ev = await stream.waitFor('quota');
+        const data = ev.data as { quota: { entries: Array<{ provider: string }> } };
+        expect(data.quota.entries).toHaveLength(1);
+        expect(data.quota.entries[0].provider).toBe('groq');
+      } finally {
+        stream.close();
+        try { rmSync(ledgerPath, { force: true }); } catch { /* ignore */ }
+      }
     });
   });
 

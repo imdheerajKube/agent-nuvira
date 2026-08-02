@@ -9,6 +9,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.45.4] - 2026-08-02
+
+### Added
+
+- **Real-time quota events over SSE** — the dashboard server now watches
+  `quota-events.jsonl` / `quota-ledger.json` in the memory dir and pushes a
+  dedicated `quota` SSE event the moment a failover, park, or window reset is
+  written (from the CLI, chat failover, or any process sharing `BUFF_MEMORY_DIR`)
+  — the Failover Timeline updates instantly instead of waiting for the next 10s
+  refresh tick. The watcher is armed only while a dashboard client is connected
+  and disarmed when the last one disconnects; debounced so rapid append bursts
+  coalesce into a single push
+- **Frontend `quota` SSE handler** — `api.ts` merges the pushed quota payload
+  into `routing.quota` and notifies subscribers, so the Quota card + Failover
+  Timeline re-render in real time (mirrors the existing `dag` event pattern)
+
 ## [1.45.3] - 2026-08-02
 
 ### Added

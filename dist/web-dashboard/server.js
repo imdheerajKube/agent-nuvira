@@ -10,8 +10,8 @@
  * Opens at: http://localhost:3030
  */
 import { createServer } from 'node:http';
-import { createReadStream, readFileSync, existsSync, statSync } from 'node:fs';
-import { join, extname, dirname } from 'node:path';
+import { createReadStream, readFileSync, existsSync, statSync, watch, mkdirSync } from 'node:fs';
+import { join, extname, dirname, basename } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { homedir } from 'node:os';
 import { loadEnv } from '../utils/env.js';
@@ -42,6 +42,77 @@ const MIME_TYPES = {
 };
 let sseClients = [];
 let nextClientId = 1;
+// ─── Quota File Watcher (real-time Failover Timeline) ───────────────────────
+/**
+ * Watch the memory dir for quota ledger/timeline writes and push a `quota`
+ * SSE event to connected dashboards IMMEDIATELY — so the Failover Timeline
+ * updates in real time instead of waiting for the next 10s `refresh` tick.
+ *
+ * The ledger and chat run in OTHER processes (CLI / extension) writing to
+ * quota-events.jsonl / quota-ledger.json on disk; a directory fs.watch catches
+ * those writes. Debounced because fs.watch may fire multiple events per write.
+ * Armed while at least one SSE client is connected, disarmed when the last one
+ * disconnects (no dangling watcher when nobody is viewing).
+ */
+let quotaWatcher = null;
+let quotaWatchTimer = null;
+function broadcastQuotaEvent() {
+    const payload = `event: quota\ndata: ${JSON.stringify({
+        quota: readQuotaData(),
+        serverTime: Date.now(),
+    })}\n\n`;
+    for (const client of sseClients) {
+        try {
+            client.res.write(payload);
+        }
+        catch { /* client disconnected */ }
+    }
+}
+function armQuotaWatcher() {
+    if (quotaWatcher)
+        return;
+    try {
+        // The memory dir may not exist yet (dashboard started before any ledger /
+        // CLI write) — create it first so watch() doesn't throw ENOENT and silently
+        // disable real-time pushes for the whole session.
+        if (!existsSync(MEMORY_DIR))
+            mkdirSync(MEMORY_DIR, { recursive: true });
+        // Watch the DIRECTORY so we catch file creation too (quota-events.jsonl
+        // may not exist until the first failover).
+        quotaWatcher = watch(MEMORY_DIR, (_eventType, filename) => {
+            // Some platforms report a null filename on directory watches — treat
+            // that as a trigger too (worst case: a harmless extra quota push, since
+            // broadcastQuotaEvent re-reads fresh data). macOS FSEvents can also
+            // report FULL PATHS, so normalize with basename() before comparing.
+            const name = basename(String(filename || ''));
+            if (name && name !== 'quota-events.jsonl' && name !== 'quota-ledger.json')
+                return;
+            if (quotaWatchTimer)
+                clearTimeout(quotaWatchTimer);
+            quotaWatchTimer = setTimeout(() => {
+                quotaWatchTimer = null;
+                broadcastQuotaEvent();
+            }, 150);
+        });
+    }
+    catch {
+        // Best-effort — a failed watcher must never break the dashboard.
+        quotaWatcher = null;
+    }
+}
+function disarmQuotaWatcher() {
+    if (quotaWatchTimer) {
+        clearTimeout(quotaWatchTimer);
+        quotaWatchTimer = null;
+    }
+    if (quotaWatcher) {
+        try {
+            quotaWatcher.close();
+        }
+        catch { /* ignore */ }
+        quotaWatcher = null;
+    }
+}
 let activePipeline = null; // goal/description of current pipeline
 let activeNodes = [];
 let activeEdges = [];
@@ -1090,6 +1161,12 @@ function handleRequest(req, res) {
         const clientId = nextClientId++;
         const client = { id: clientId, res };
         sseClients.push(client);
+        // Real-time quota pushes only matter while someone is viewing — arm the
+        // file watcher (idempotent) and disarm when the last client disconnects.
+        // NOTE: arm unconditionally — the length===1 guard raced with a previous
+        // client's async close (arm skipped when the stale client was still listed,
+        // then disarm skipped too, leaving the watcher never armed).
+        armQuotaWatcher();
         const heartbeat = setInterval(() => {
             try {
                 res.write(': heartbeat\n\n');
@@ -1121,6 +1198,8 @@ function handleRequest(req, res) {
             clearInterval(heartbeat);
             clearInterval(refreshInterval);
             sseClients = sseClients.filter((c) => c.id !== clientId);
+            if (sseClients.length === 0)
+                disarmQuotaWatcher();
         });
         return;
     }

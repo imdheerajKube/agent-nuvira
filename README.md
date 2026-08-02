@@ -820,6 +820,10 @@ agent-nuvira model quota
 #    🔁 re-enabled  groq          (window reset) 8/2/2026, 5:09:00 PM
 ```
 
+The timeline is also **live**: the dashboard watches `quota-events.jsonl` /
+`quota-ledger.json` on disk and pushes a `quota` SSE event the moment a failover
+or park lands — so the card updates in real time, no page refresh or 10s wait.
+
 #### Checkpoint / resume — crash-proof multi-agent pipelines
 
 Long `buff execute` pipelines can be killed by a crash, quota exhaustion, or a token expiry mid-run. Checkpoints serialize the pipeline state so work is never lost:

@@ -1,4 +1,4 @@
-import type { DashboardData, DAGData } from './types';
+import type { DashboardData, DAGData, QuotaInsights, RoutingInsights } from './types';
 
 export type DashboardListener = (data: DashboardData) => void;
 export type ConnectionListener = (connected: boolean) => void;
@@ -71,6 +71,30 @@ export class DashboardAPI {
         }
       } catch (e) {
         console.error('Failed to parse SSE dag event:', e);
+      }
+    });
+
+    // Real-time quota pushes: the server watches quota-events.jsonl /
+    // quota-ledger.json and emits a `quota` event the moment a failover,
+    // park, or window reset lands — so the Failover Timeline updates without
+    // waiting for the next 10s refresh tick. Merge into routing.quota.
+    this.sse.addEventListener('quota', (event) => {
+      try {
+        const payload = JSON.parse(event.data) as { quota?: QuotaInsights; serverTime?: number };
+        if (this.lastData && payload.quota) {
+          const updated: DashboardData = {
+            ...this.lastData,
+            routing: {
+              ...(this.lastData.routing || {}),
+              quota: payload.quota,
+            } as RoutingInsights,
+            serverTime: payload.serverTime || this.lastData.serverTime,
+          };
+          this.lastData = updated;
+          this.notify(updated);
+        }
+      } catch (e) {
+        console.error('Failed to parse SSE quota event:', e);
       }
     });
 
