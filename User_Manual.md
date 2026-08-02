@@ -1,6 +1,6 @@
 # Agent-Nuvira — User Manual
 
-**Version 1.38.1 | July 2026**
+**Version 1.42.1 | August 2026**
 
 > *Agent-Nuvira: Multi-agent AI coding CLI — plan, write, review, test, and publish code with local models (Ollama) or cloud APIs (Groq, NVIDIA NIM, Google Gemini, OpenRouter).*
 
@@ -683,6 +683,31 @@ Selection scores every configured provider across **5 dimensions** — reasoning
 - `buff chat` — routes every message (switch mid-session with `/model` → Auto)
 - `buff execute "<goal>" -m auto` or `--auto-route` — routes each agent task independently
 - `buff plan`, `buff run`, and any command reading the active model state
+
+### Promotion Gate — is the bandit actually better?
+
+With `routing.bandit` enabled, the Auto router doesn't just learn — it **proves it improves routing before you trust it**. The **Promotion Gate** (ruflo ADR-150 mirror) A/B-tests the bandit router against the deterministic heuristic router on real trajectories and reports whether the bandit has *earned* promotion:
+
+```bash
+# 1. Enable bandit learning so both routers produce picks
+agent-nuvira config set routing.bandit true
+
+# 2. Run auto-routed tasks (chat with Auto, execute -m auto, --auto-route)
+#    — each task records BOTH the heuristic pick and the bandit pick, then
+#    finalizes with the real outcome (success/failure, latency, cost)
+```
+
+Each finalized decision is appended to `~/.buff/memory/router-promotion.jsonl` (honors `BUFF_MEMORY_DIR`). The gate evaluates only **diverged** decisions — tasks where the bandit picked a different provider/model than the heuristic. A pick both routers agree on carries no promotion signal.
+
+**Read the verdict** in the dashboard's 🎖️ **Promotion Gate** card (Routing panel, `GET /api/routing` → `promotion`) or via `agent-nuvira model bandit`:
+
+| State | Meaning |
+|---|---|
+| **Collecting data…** | Fewer than 20 diverged decisions yet (`minDecisions: 20`) — the gate needs a sample before judging |
+| **✅ Promoted** | Bandit is a genuine improvement: quality delta **> +2%**, cost regression **< +1%**, latency regression **< +5%** |
+| **Criteria detail** | Each pass/fail (`quality` / `cost` / `latency`) is listed with its measured delta, so you can see exactly which criterion blocked promotion |
+
+Latency is treated as **neutral** until real latency measurements exist — missing telemetry never blocks a quality/cost win, but it doesn't count as a win either. The gate is a *go/no-go signal*: it reports whether the bandit is better but does **not** disable the bandit at runtime.
 
 ### 6.9 Skill Command — Reusable Skill Scripts
 

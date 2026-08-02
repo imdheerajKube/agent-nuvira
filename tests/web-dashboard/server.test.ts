@@ -307,6 +307,27 @@ describe('Dashboard Server', () => {
       }
     });
 
+    it('GET /api/routing returns a fully-shaped promotion gate in the empty state', async () => {
+      // Smoke test: with NO router-promotion.jsonl trajectory, the promotion
+      // field must still be fully shaped ("collecting data") so the dashboard
+      // can render the card instead of a blank panel.
+      const res = await httpGet(`${baseUrl}/api/routing`);
+      expect(res.statusCode).toBe(200);
+      const body = JSON.parse(res.body);
+      expect(body.promotion).toBeDefined();
+      expect(body.promotion.decisionCount).toBe(0);
+      expect(body.promotion.divergedCount).toBe(0);
+      expect(body.promotion.minDecisions).toBe(20);
+      expect(body.promotion.sufficient).toBe(false);
+      expect(body.promotion.promoted).toBe(false);
+      // All three criteria are present (quality neutral-false, cost/latency neutral-true)
+      expect(body.promotion.criteria).toEqual({ quality: false, cost: true, latency: true });
+      expect(typeof body.promotion.qualityDelta).toBe('number');
+      expect(typeof body.promotion.costDelta).toBe('number');
+      expect(typeof body.promotion.latencyDelta).toBe('number');
+      expect(body.promotion.latencyMeasured).toBe(false);
+    });
+
     it('GET /api/all includes routing insights', async () => {
       const res = await httpGet(`${baseUrl}/api/all`);
       expect(res.statusCode).toBe(200);

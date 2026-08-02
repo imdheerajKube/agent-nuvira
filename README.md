@@ -1487,7 +1487,8 @@ src/
 ### Testing
 
 ```bash
-# Run all tests (1150+ tests)
+# Run all tests (2,769 tests across 84 test files)
+# Plus 6 dashboard component tests (src/web-dashboard)
 npm test
 
 # Watch mode
@@ -1553,7 +1554,7 @@ npx tsc --noEmit
 | 5.2 | Failure analysis — per-agent-type diagnosis with recovery actions | ✅ Complete |
 | 5.3 | Follow-up suggestions — LLM-powered contextual next-step recommendations | ✅ Complete |
 | 5.4 | /fix command — retry last failed goal with failure context | ✅ Complete |
-| 5.5 | Test coverage — 1830+ tests across 55 test files | ✅ Complete |
+| 5.5 | Test coverage — 2,769 tests across 84 test files (+6 dashboard component tests) | ✅ Complete |
 | **Phase 6: Architecture Migration** | | |
 | 6.1 | RecoverModule — extracted from ErrorRepairEngine with RepairBudget | ✅ Complete (v1.18.0) |
 | 6.2 | ModuleRegistry — plugin-based agent loading replacing createAgent() | ✅ Complete (v1.18.0) |
