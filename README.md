@@ -47,6 +47,8 @@ agent-nuvira config list
 - **Agent SDK** — `@agent-nuvira/sdk` npm package for building custom agents with scaffolding CLI
 - **Provider CLI** — `buff provider list` with color-coded status table, `buff provider health` with per-provider diagnostics
 - **Provider fallback routing** — automatic failover between providers with circuit breaker and configurable chain
+- **Startup progress feedback** — first launch never looks like a silent hang: a live spinner reports each startup phase (plugins → history & search → semantic index) as it runs
+- **Auto-mode session failover** — in Auto routing, a provider whose API key/token expires or rate-limits mid-session is automatically swapped for the next-best provider (auth failures excluded for the session, rate-limit failures for a 120s cooldown, 5xx/network through the circuit breaker) — no more stuck sessions on a dead key
 - **Security scan CLI** — `buff security scan` detects PII, prompt injections, and dangerous code patterns
 - **Feedback & rating system** — `buff feedback record/list/stats/clear` drives self-improvement scoring
 - **Marketplace unified CLI** — `buff marketplace browse/search/install/info` for workflow templates + plugins
@@ -738,6 +740,26 @@ The dashboard's 🤖 **Routing** panel shows the same bandit live — an α/β h
 ```
 
 Every decision records a `routedBy` source (`heuristic` | `rule` | `bandit`) in the dashboard's routing audit trail so you can see exactly how each pick was produced.
+
+#### Auto-mode session failover — providers that die mid-session get swapped automatically
+
+A provider can look healthy at pick time and still fail mid-session: Gemini's
+`token limit exceeded`, OpenRouter 401s, quota exhaustion, or a rate limit on a
+free tier. In Auto mode, `chat` now **remembers failed providers for the session**
+and routes around them instead of getting stuck:
+
+| Failure kind | Handling |
+|---|---|
+| **Auth** (expired/invalid key, 401) | Provider excluded from Auto routing for the **whole session** — re-picked routes skip it entirely |
+| **Rate limit** (429, quota exceeded, `token limit`, `insufficient_quota`, `resource has been exhausted`) | Provider parked for a **120s cooldown** (aligned with the circuit breaker), then automatically re-admitted |
+| **5xx / network** | Flows through the shared **circuit breaker** (3 failures in 60s → 120s cooldown); never session-excluded |
+
+On failure the chat loop prints `⚠️ <provider> failed — automatically switching to
+<provider> (<model>)` and transparently re-routes to the next-best candidate.
+In-cooldown providers are deprioritized by router scoring (via circuit-breaker
+state), the final fallback always prefers a provider that hasn't failed this
+session, and the failover path is crash-proof — a throwing re-route can't kill
+the interactive loop. Works for both streaming and non-streaming responses.
 
 #### Deterministic Tier-0 routing — mechanical edits without an LLM
 

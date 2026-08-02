@@ -105,6 +105,11 @@ describe('classifyFallbackError', () => {
     ['too many requests, try again later', 'rate-limit'],
     ['quota exceeded for API calls', 'rate-limit'],
     ['rate_limit hit on endpoint', 'rate-limit'],
+    // Mid-session quota/limit exhaustion (Gemini-style) must also classify as
+    // retryable so auto routing fails over instead of surfacing a raw error.
+    ['token limit exceeded', 'rate-limit'],
+    ['Resource has been exhausted for project', 'rate-limit'],
+    ['insufficient_quota', 'rate-limit'],
   ])('detects rate-limit error from: "%s"', (err, expected) => {
     expect(classifyFallbackError(err)).toBe(expected);
   });

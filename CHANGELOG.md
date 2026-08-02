@@ -9,6 +9,44 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.43.0] - 2026-08-02
+
+### Added
+
+- **Startup progress feedback (first-run UX)** — `agent-nuvira` now shows a live
+  spinner with phase text while starting up (`⚙️ Loading plugins…`,
+  `⚙️ Initializing history & search…`, `📦 Building semantic search index…`) so a
+  cold start never looks like a silent hang. Ora auto-suppresses when stdout is
+  not a TTY, keeping piped output clean
+- **Model-picker loading progress** — provider availability checks now show a
+  spinner, print per-provider loading progress, and each `isAvailable()` /
+  `listModels()` call is wrapped in a timeout so one hanging provider can't
+  stall first run or `model switch`
+- **Live model-list cache (60s TTL)** — `model-validator.ts` caches
+  `listModels()` results for 60 seconds (was: re-fetched on every auto-routed
+  chat message, a real per-message latency cost). Failures are not cached.
+  `buff config set providers.*` clears the cache immediately so a new
+  key/model/baseURL takes effect right away
+
+### Fixed
+
+- **Auto-mode failover on token expiry** — when Auto routing picked a provider
+  whose API key/token expires mid-session (Gemini token-limit errors, OpenRouter
+  401s, quota exhaustion), chat used to get stuck re-failing on the same
+  provider. Now the session **remembers failed providers** and Auto routing
+  routes around them: auth failures (expired key) exclude the provider for the
+  whole session, rate-limit failures for a 120s cooldown (aligned with the
+  circuit breaker), and 5xx/network errors flow through the circuit breaker
+  only. In-cooldown providers are deprioritized by router scoring, the final
+  fallback always prefers a non-failed provider, and the failover is
+  crash-proof — a throwing re-route can't kill the interactive loop
+- **Broader rate-limit classification** — `classifyFallbackError` (and the chat
+  error handler) now recognize `token limit`, `resource has been exhausted`,
+  and `insufficient_quota`, so these are labeled "Rate limit" (retryable)
+  instead of falling through as unknown
+
+---
+
 ## [1.42.1] - 2026-08-02
 
 ### Fixed

@@ -3,6 +3,7 @@ import { BaseCommand } from './commands.js';
 import { getPluginRegistry } from '../plugins/registry.js';
 import { logger } from '../utils/logger.js';
 import { ProviderType, BuffConfig } from '../config/types.js';
+import { clearModelListCache } from '../inference/model-validator.js';
 
 /**
  * Config command — manage buff configuration
@@ -214,6 +215,11 @@ export class ConfigCommand extends BaseCommand {
           },
         },
       } as Partial<typeof config>);
+
+      // A provider key/model/baseURL change can invalidate the cached live
+      // model list (model-validator caches listModels() for 60s). Drop it now
+      // so auto routing re-fetches against the new credentials immediately.
+      clearModelListCache();
     } else if (parts.length === 3 && parts[0] === 'pricing') {
       // pricing.<provider>.inputPer1K | pricing.<provider>.outputPer1K
       const providerName = parts[1];

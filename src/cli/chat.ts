@@ -25,6 +25,16 @@ import { recordRoutingDecision } from '../learning/routing-history.js';
 
 type ErrorRecoveryAction = 'retry' | 'switch' | 'cancel' | 'exit';
 
+/** The resolved-route shape returned by ChatCommand.routeMessageAuto(). */
+type AutoRoutedMessage = {
+  type: string;
+  provider: InferenceProvider;
+  model: string;
+  ranked: string[];
+  complexity: string;
+  score: number;
+};
+
 interface ErrorRecoveryResult {
   action: ErrorRecoveryAction;
   newType?: string;
@@ -52,7 +62,12 @@ async function handleInferenceError(
     errorStr.includes('rate limit') ||
     errorStr.includes('too many requests') ||
     errorStr.includes('quota exceeded') ||
-    errorStr.includes('rate_limit');
+    errorStr.includes('rate_limit') ||
+    // Keep in sync with classifyFallbackError(): mid-session quota/limit
+    // exhaustion (Gemini-style) must also offer "wait and retry".
+    errorStr.includes('token limit') ||
+    errorStr.includes('resource has been exhausted') ||
+    errorStr.includes('insufficient_quota');
 
   const isAuthError =
     errorStr.includes('401') ||
@@ -250,6 +265,30 @@ export async function runDeveloperMode(
 
 export class ChatCommand extends BaseCommand {
   private devModeAuto = false;
+
+  /**
+   * Providers that failed MID-SESSION in auto mode, with the expiry of their
+   * exclusion (ms epoch):
+   * - AUTH failures (expired token/key) are definitive → excluded for the whole
+   *   session (Number.MAX_SAFE_INTEGER), so a provider whose key died mid-session
+   *   is never re-picked (and re-failed) on a later message.
+   * - RATE-LIMIT failures (429 / exhausted quota / "token limit exceeded") are
+   *   usually TRANSIENT (a 1-minute quota window) → excluded only for a short
+   *   cooldown, then re-admitted, so a throttled-but-working provider isn't
+   *   blacklisted for the entire chat.
+   * - 5xx/network errors are NOT session-excluded at all — they flow through
+   *   the circuit breaker (which needs repeated failures before opening).
+   * Cleared when the chat exits.
+   */
+  private sessionFailedProviders = new Map<string, number>();
+
+  /**
+   * How long a rate-limit failure excludes a provider from auto routing (ms).
+   * Aligned with the circuit breaker's COOLDOWN_DURATION_MS (120s) so the
+   * session-level exclusion and the breaker's scoring cooldown expire together
+   * — one consistent recovery window, not two competing ones.
+   */
+  private static readonly RATE_LIMIT_EXCLUSION_MS = 2 * 60 * 1000;
 
   create(): Command {
     const command = new Command('chat')
@@ -483,11 +522,20 @@ export class ChatCommand extends BaseCommand {
             if (autoMode) {
               const failedProviderName = provider.name;
               autoFailedProviders.add(type);
-              const next = await this.routeMessageAuto(message, [...autoFailedProviders]);
+              this.recordAutoProviderFailure(type, err);
+              // Failover routing itself can throw (e.g. an unresolvable plugin
+              // provider) — never let that escape the catch and crash the
+              // interactive loop; fall through to interactive recovery instead.
+              let next: AutoRoutedMessage | null = null;
+              try {
+                next = await this.routeMessageAuto(message, [...autoFailedProviders]);
+              } catch {
+                next = null;
+              }
               // Only switch to a provider that hasn't already failed this
               // message — otherwise we'd re-enter a known-broken provider
               // (e.g. the router's fallback returns the original winner).
-              if (next.type !== type && !autoFailedProviders.has(next.type)) {
+              if (next && next.type !== type && !autoFailedProviders.has(next.type)) {
                 type = next.type;
                 provider = next.provider;
                 effectiveModel = next.model;
@@ -569,11 +617,20 @@ export class ChatCommand extends BaseCommand {
             if (autoMode) {
               const failedProviderName = provider.name;
               autoFailedProviders.add(type);
-              const next = await this.routeMessageAuto(message, [...autoFailedProviders]);
+              this.recordAutoProviderFailure(type, err);
+              // Failover routing itself can throw (e.g. an unresolvable plugin
+              // provider) — never let that escape the catch and crash the
+              // interactive loop; fall through to interactive recovery instead.
+              let next: AutoRoutedMessage | null = null;
+              try {
+                next = await this.routeMessageAuto(message, [...autoFailedProviders]);
+              } catch {
+                next = null;
+              }
               // Only switch to a provider that hasn't already failed this
               // message — otherwise we'd re-enter a known-broken provider
               // (e.g. the router's fallback returns the original winner).
-              if (next.type !== type && !autoFailedProviders.has(next.type)) {
+              if (next && next.type !== type && !autoFailedProviders.has(next.type)) {
                 type = next.type;
                 provider = next.provider;
                 effectiveModel = next.model;
@@ -723,6 +780,37 @@ export class ChatCommand extends BaseCommand {
    *
    *   Enter a number (0-8):
    */
+  /**
+   * Record an auto-mode provider failure so the session fails over instead of
+   * getting stuck on a broken provider (the core of "auto routing should pick
+   * another provider when the current one dies mid-session"):
+   *
+   * - Definitive failures — auth (expired token/key) and rate-limit (exhausted
+   *   quota, "token limit exceeded") — exclude the provider for the WHOLE
+   *   session, so the next message never re-picks it and re-fails.
+   * - EVERY failure also feeds the shared circuit breaker, so the auto router
+   *   deprioritizes the provider by scoring even for transient 5xx/network
+   *   errors (which need repeated failures before cooldown opens).
+   *
+   * Best-effort: never throws, so failover bookkeeping can't crash the chat.
+   */
+  private recordAutoProviderFailure(providerType: string, err: unknown): void {
+    const failureKind = classifyFallbackError(err);
+    if (failureKind === 'auth') {
+      // Expired token/key — definitive for the rest of the session
+      this.sessionFailedProviders.set(providerType, Number.MAX_SAFE_INTEGER);
+    } else if (failureKind === 'rate-limit') {
+      // Exhausted quota / token-limit — usually transient, so only a short
+      // cooldown before the provider is re-admitted to auto routing.
+      this.sessionFailedProviders.set(providerType, Date.now() + ChatCommand.RATE_LIMIT_EXCLUSION_MS);
+    }
+    try {
+      getProviderFallback(this.configManager).recordFailure(providerType);
+    } catch {
+      // Best-effort — circuit-breaker bookkeeping must not crash chat
+    }
+  }
+
   private async showModelPicker(): Promise<{ provider: string; model: string } | null> {
     return showModelPicker(this.configManager);
   }
@@ -743,8 +831,17 @@ export class ChatCommand extends BaseCommand {
   private async routeMessageAuto(
     message: string,
     excludeProviders: string[] = [],
-  ): Promise<{ type: string; provider: InferenceProvider; model: string; ranked: string[]; complexity: string; score: number }> {
+  ): Promise<AutoRoutedMessage> {
     const routing = this.configManager.getAll().routing || {};
+    // Feed the SHARED circuit breaker into the router so a provider that has
+    // failed repeatedly (recorded by recordFailure below) is deprioritized by
+    // scoring, not just skipped by the candidate walk.
+    let circuitBreakerStatus: Array<{ provider: string; cooldownRemaining: number }> = [];
+    try {
+      circuitBreakerStatus = getProviderFallback(this.configManager).getCircuitBreakerStatus();
+    } catch {
+      // Best-effort — routing must never crash on circuit-breaker bookkeeping
+    }
     const decision = getAutoRouter().resolve(
       'chat',
       message,
@@ -756,20 +853,32 @@ export class ChatCommand extends BaseCommand {
         minSpeed: routing.minSpeed,
         minReasoning: routing.minReasoning,
         escalationMinSamples: routing.escalationMinSamples,
+        circuitBreakerStatus,
       },
       this.configManager,
     );
 
     // Walk the ranked candidates (winner first) and return the first available
     // provider — never a provider that lacks a key or endpoint. Providers that
-    // already failed this message (excludeProviders) are skipped so runtime
-    // failover walks forward instead of repeating the failing provider.
+    // already failed this message (excludeProviders) OR earlier in this session
+    // with an ACTIVE exclusion (sessionFailedProviders, time-based) are skipped
+    // so runtime failover walks forward instead of repeating a known-broken
+    // provider. Expired rate-limit exclusions re-admit the provider.
+    const exclusionTime = Date.now();
+    const isActiveExclusion = (p: string) => {
+      const expiresAt = this.sessionFailedProviders.get(p);
+      return expiresAt !== undefined && expiresAt > exclusionTime;
+    };
+    const excluded = new Set([
+      ...excludeProviders,
+      ...[...this.sessionFailedProviders.keys()].filter((p) => isActiveExclusion(p)),
+    ]);
     const candidates = [
       decision.provider,
       ...decision.ranked
         .filter((r) => r.provider !== decision.provider)
         .map((r) => r.provider),
-    ].filter((p) => !excludeProviders.includes(p));
+    ].filter((p) => !excluded.has(p));
 
     for (const candidate of candidates) {
       try {
@@ -806,19 +915,25 @@ export class ChatCommand extends BaseCommand {
       }
     }
 
-    // Nothing available — surface the router's pick so the caller's
-    // isAvailable() gate shows a clear, actionable error.
+    // Nothing available — surface a usable pick so the caller's isAvailable()
+    // gate shows a clear, actionable error. Prefer the best-ranked provider
+    // that has NOT failed this session (the literal router winner could be a
+    // provider whose key just died — re-surfacing it would re-fail and confuse
+    // the user instead of failing over).
+    const usableProvider =
+      [decision.provider, ...decision.ranked.map((r) => r.provider)]
+        .find((p) => !isActiveExclusion(p)) || decision.provider;
     recordRoutingDecision({
       source: 'chat',
       agentType: 'chat',
       task: message,
       complexity: decision.complexity,
-      provider: decision.provider,
+      provider: usableProvider,
       model: decision.model,
       score: decision.score,
     });
-    const resolved = resolveProvider(this.configManager, decision.provider);
-    const model = await resolveWorkingModel(resolved.provider, decision.provider, decision.model);
+    const resolved = resolveProvider(this.configManager, usableProvider);
+    const model = await resolveWorkingModel(resolved.provider, usableProvider, decision.model);
     return {
       type: resolved.type,
       provider: resolved.provider,
@@ -881,6 +996,11 @@ export class ChatCommand extends BaseCommand {
         return result;
       } catch (err) {
         lastError = err;
+        // Single-shot auto path: definitive failures (auth / exhausted quota)
+        // exclude the provider for the session + feed the circuit breaker so a
+        // follow-up interactive session (or the next message) skips it instead
+        // of failing again.
+        this.recordAutoProviderFailure(candidateType, err);
         const msg = err instanceof Error ? err.message : String(err);
         logger.warn(`   ⚠️ ${candidateType} failed (${msg.slice(0, 160)}) — trying the next auto candidate...`);
       }

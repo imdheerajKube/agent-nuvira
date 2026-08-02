@@ -8,9 +8,9 @@
  * to a verified-working model.
  */
 
-import { describe, it, expect, vi } from 'vitest';
+import { describe, it, expect, vi, beforeEach } from 'vitest';
 
-import { resolveWorkingModel } from '../../src/inference/model-validator.js';
+import { resolveWorkingModel, clearModelListCache } from '../../src/inference/model-validator.js';
 import type { InferenceProvider, ModelDescriptor } from '../../src/inference/interface.js';
 
 // ─── Helpers ────────────────────────────────────────────────────────────────
@@ -35,6 +35,37 @@ function model(id: string, tags?: string[]): ModelDescriptor {
 // ─── Tests ──────────────────────────────────────────────────────────────────
 
 describe('resolveWorkingModel', () => {
+  // The live model list is cached per provider type (TTL) to avoid a
+  // listModels() GET on every auto-routed message. Tests must clear the cache
+  // so each test sees the provider's OWN mock list, not a prior test's.
+  beforeEach(() => {
+    clearModelListCache();
+  });
+
+  it('caches the live model list per provider type within the TTL window', async () => {
+    const provider = makeProvider([model('gemini-2.5-flash', ['chat'])]);
+    // First call hits listModels() and populates the cache
+    const first = await resolveWorkingModel(provider, 'gemini', 'gemini-2.5-flash');
+    expect(first).toBe('gemini-2.5-flash');
+
+    // Second call for the same provider type must be served from the cache —
+    // listModels() is NOT called again (this is the per-message latency win).
+    const second = await resolveWorkingModel(provider, 'gemini', 'gemini-2.5-flash');
+    expect(second).toBe('gemini-2.5-flash');
+    expect(provider.listModels).toHaveBeenCalledTimes(1);
+  });
+
+  it('does not cache a failed listModels() fetch (transient errors stay transparent)', async () => {
+    const failing = makeProvider([], { listThrows: true });
+    await resolveWorkingModel(failing, 'groq', 'llama-3.3-70b-versatile');
+    // Failed fetch → nothing cached → a later healthy provider for the same
+    // type must still hit its own listModels().
+    const healthy = makeProvider([model('llama-3.3-70b-versatile', ['chat'])]);
+    const result = await resolveWorkingModel(healthy, 'groq', 'llama-3.3-70b-versatile');
+    expect(result).toBe('llama-3.3-70b-versatile');
+    expect(healthy.listModels).toHaveBeenCalledTimes(1);
+  });
+
   it('keeps the desired model when it is present in the live list', async () => {
     const provider = makeProvider([
       model('gemini-2.5-flash', ['chat']),

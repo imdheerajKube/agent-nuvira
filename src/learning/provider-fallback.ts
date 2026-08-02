@@ -97,7 +97,16 @@ export function classifyFallbackError(err: unknown): FallbackErrorType {
   if (lower.includes('401') || lower.includes('403') || lower.includes('unauthorized') || lower.includes('forbidden') || lower.includes('api key') || lower.includes('auth')) {
     return 'auth';
   }
-  if (lower.includes('429') || lower.includes('rate limit') || lower.includes('too many requests') || lower.includes('quota exceeded') || lower.includes('rate_limit')) {
+  if (
+    lower.includes('429') ||
+    lower.includes('rate limit') ||
+    lower.includes('too many requests') ||
+    lower.includes('quota exceeded') ||
+    lower.includes('rate_limit') ||
+    lower.includes('token limit') ||
+    lower.includes('resource has been exhausted') ||
+    lower.includes('insufficient_quota')
+  ) {
     return 'rate-limit';
   }
   if (lower.includes('500') || lower.includes('502') || lower.includes('503') || lower.includes('server error') || lower.includes('internal server')) {
@@ -346,8 +355,12 @@ export class ProviderFallback {
 
   /**
    * Record a provider failure in the circuit breaker.
+   *
+   * Public so auto-routing (chat's per-message failover) can feed the SAME
+   * circuit breaker the fallback engine uses — repeated failures open the
+   * breaker and the auto router deprioritizes/excludes in-cooldown providers.
    */
-  private recordFailure(providerType: string): void {
+  recordFailure(providerType: string): void {
     const now = Date.now();
     let state = this.circuitBreakers.get(providerType);
 
