@@ -62,20 +62,34 @@ describe('SandboxManager', () => {
   });
 
   describe('isDockerAvailable', () => {
+    /**
+     * Simulate the docker CLI failing (daemon unreachable / CLI missing).
+     * Stubs the private execHostCommand so these tests are hermetic and fast
+     * on EVERY platform — on Windows CI the real `docker info` spawn hangs and
+     * trips the 5s vitest timeout.
+     */
+    function stubDockerUnavailable() {
+      vi.spyOn(manager as any, 'execHostCommand').mockResolvedValue({
+        exitCode: 1,
+        stdout: '',
+        stderr: 'Cannot connect to the Docker daemon',
+      });
+    }
+
     it('returns false when docker is not available', async () => {
-      // Mock execSync to simulate Docker not available
+      stubDockerUnavailable();
       const available = await manager.isDockerAvailable();
-      // In CI/test environments, Docker is typically not available
-      // This test validates the method doesn't throw
-      expect(typeof available).toBe('boolean');
+      expect(available).toBe(false);
     });
 
     it('caches the result after first check', async () => {
+      stubDockerUnavailable();
       await manager.isDockerAvailable();
       expect(manager['dockerChecked']).toBe(true);
     });
 
     it('resets check on resetDockerCheck', async () => {
+      stubDockerUnavailable();
       await manager.isDockerAvailable();
       manager.resetDockerCheck();
       expect(manager['dockerChecked']).toBe(false);
@@ -102,13 +116,16 @@ describe('SandboxManager', () => {
 
   describe('createContainer', () => {
     it('throws if Docker is not available', async () => {
-      // In test environments Docker likely isn't available
-      const available = await manager.isDockerAvailable();
-      if (!available) {
-        await expect(
-          manager.createContainer('node:20-slim'),
-        ).rejects.toThrow(/Docker is not available/);
-      }
+      // Stub docker unavailable so the guard branch is deterministic everywhere
+      // (a real `docker info` spawn hangs on Windows CI).
+      vi.spyOn(manager as any, 'execHostCommand').mockResolvedValue({
+        exitCode: 1,
+        stdout: '',
+        stderr: 'Cannot connect to the Docker daemon',
+      });
+      await expect(
+        manager.createContainer('node:20-slim'),
+      ).rejects.toThrow(/Docker is not available/);
     });
   });
 });  describe('SandboxConfig', () => {
