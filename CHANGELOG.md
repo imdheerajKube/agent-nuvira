@@ -9,6 +9,51 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.44.0] - 2026-08-02
+
+### Added
+
+- **Central quota ledger** — `QuotaLedger` tracks tokens/requests per provider ×
+  model with calendar-aware reset windows (daily/hourly free-tier limits).
+  Exhausted providers are **parked** (excluded from Auto routing) until the
+  window rolls — automatic re-enable at the exact reset boundary, no timers.
+  Every LLM call write-throughs usage via `CostTracker.recordCall`. Persists to
+  `~/.buff/memory/quota-ledger.json` (honors `BUFF_MEMORY_DIR`); all writes
+  best-effort
+- **Predictive quota-aware routing** — Auto routing sinks quota-parked providers
+  below healthy candidates BEFORE a call is made (previously only reactive
+  failover). Wired into the AutoModelRouter, chat, and orchestrator
+- **Free/local-first gate** — `routing.allowPaid: false` excludes PAID providers
+  for non-complex tasks (trivial/simple/moderate) so free/local models win unless
+  complexity demands otherwise; complex/critical tasks may still use paid
+  high-capacity models. Falls back safely if the gate would eliminate everyone
+- **Per-subtask complexity labels** — the Planner now emits a `complexity` label
+  per `TaskStep` (trivial → critical); the orchestrator labels any step lacking
+  a valid label and threads the label into routing as `complexityHint`, so each
+  subtask routes by its OWN complexity, not the whole goal's
+- **`buff model quota` CLI** — inspect the ledger (tokens/requests per
+  provider × model, resets in, parked state), `--json` for scripting, and
+  `reset` to clear
+- **`routing.quota` config** — per-provider `tokensPerWindow` /
+  `requestsPerWindow` / `windowMs` limits via `buff config set routing.quota.<provider>.*`
+- **Mid-session failover persistence** — rate-limit failures now park the
+  provider in the central ledger, so the exclusion survives across chat sessions
+  (auth failures stay permanent, never re-enabled by a window roll)
+- **Dashboard quota card + DAG complexity badges** — the web dashboard's
+  🤖 Routing panel shows live quota status; DAG nodes display their complexity
+  label
+- **Assessment-gap roadmap** — [ASSESSMENT_OPPORTUNITIES.md](ASSESSMENT_OPPORTUNITIES.md)
+  maps the coding-assessment recommendations (cost-efficient tier routing,
+  quota ledger, graceful failover, cost transparency) to implementation status
+
+### Tests
+
+- New `tests/learning/quota-ledger.test.ts` (usage recording, window rotation
+  auto re-enable, exhaustion parking, `getBestAvailable` never-empty, persistence)
+- New `tests/learning/quota-routing.test.ts` (complexityHint, allowPaid gate,
+  quota-sink ranking)
+- Orchestrator regression test for per-step complexity labeling
+
 ## [1.43.0] - 2026-08-02
 
 ### Added
