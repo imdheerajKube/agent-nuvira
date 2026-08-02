@@ -1,5 +1,5 @@
 import type { ReactNode } from 'react';
-import type { BanditInsights, DashboardData, RoutingHistoryEntry, RoutingInsights, RoutingUsage } from '../types';
+import type { BanditInsights, DashboardData, PromotionInsights, RoutingHistoryEntry, RoutingInsights, RoutingUsage } from '../types';
 
 // ─── Helpers ────────────────────────────────────────────────────────────────
 
@@ -440,6 +440,112 @@ function BanditSection({ bandit }: { bandit: BanditInsights }) {
   );
 }
 
+// ─── Promotion Gate (bandit vs heuristic A/B verdict) ──────────────────────
+
+function deltaPct(value: number, digits = 1): string {
+  const sign = value > 0 ? '+' : '';
+  return `${sign}${(value * 100).toFixed(digits)}%`;
+}
+
+function PassChip({ state }: { state: 'pass' | 'fail' | 'neutral' }) {
+  const styles = {
+    pass: { bg: '#12291a', border: '#238636', color: '#3fb950', label: '✓ pass' },
+    fail: { bg: '#2d1616', border: '#f85149', color: '#f85149', label: '✗ fail' },
+    neutral: { bg: '#1c2128', border: '#6e7681', color: '#8b949e', label: '○ neutral' },
+  }[state];
+  return (
+    <span style={{
+      fontSize: 11, padding: '1px 8px', borderRadius: 10,
+      background: styles.bg,
+      border: `1px solid ${styles.border}`,
+      color: styles.color,
+    }}>
+      {styles.label}
+    </span>
+  );
+}
+
+function PromotionGateSection({ promotion }: { promotion: PromotionInsights }) {
+  if (!promotion.decisionCount) return null;
+
+  const verdict = promotion.promoted
+    ? { icon: '🎖️', label: 'Promoted — the bandit beats the heuristic', color: '#3fb950' }
+    : promotion.sufficient
+      ? { icon: '⚠️', label: 'Not promoted — the bandit is not (yet) better', color: '#d29922' }
+      : { icon: '⏳', label: 'Collecting data — need more diverged decisions', color: '#58a6ff' };
+
+  const progress = promotion.minDecisions > 0
+    ? Math.min(100, Math.round((promotion.divergedCount / promotion.minDecisions) * 100))
+    : 0;
+
+  const rows = [
+    {
+      key: 'quality', label: 'Quality ↑',
+      delta: promotion.qualityDelta,
+      state: promotion.criteria.quality ? 'pass' as const : 'fail' as const,
+      note: 'needs > +2%',
+    },
+    {
+      key: 'cost', label: 'Cost ↓',
+      delta: promotion.costDelta,
+      state: promotion.criteria.cost ? 'pass' as const : 'fail' as const,
+      note: 'regression < +1%',
+    },
+    {
+      key: 'latency', label: 'Latency ↓',
+      delta: promotion.latencyDelta,
+      // Unmeasured latency is treated as neutral by the gate (never a win,
+      // never a fail) — reflect that honestly instead of a green 'pass'.
+      state: promotion.latencyMeasured
+        ? (promotion.criteria.latency ? 'pass' as const : 'fail' as const)
+        : 'neutral' as const,
+      note: promotion.latencyMeasured ? 'regression < +5%' : 'no latency measurements yet',
+    },
+  ];
+
+  return (
+    <SectionCard
+      icon="🎖️"
+      title="Promotion Gate — is the bandit better than the heuristic?"
+      subtitle="A/B verdict from real trajectories (router-promotion.jsonl): quality must improve >2% while cost and latency don't regress (ruflo ADR-150)"
+    >
+      <div style={{ display: 'flex', alignItems: 'center', gap: 12, marginBottom: 14 }}>
+        <span style={{ fontSize: 22 }}>{verdict.icon}</span>
+        <span style={{ fontSize: 14, fontWeight: 600, color: verdict.color }}>{verdict.label}</span>
+      </div>
+
+      <div style={{ marginBottom: 14 }}>
+        <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 11, color: '#8b949e', marginBottom: 5 }}>
+          <span>{promotion.divergedCount} diverged decisions</span>
+          <span>need {promotion.minDecisions} for a verdict</span>
+        </div>
+        <div style={{ background: '#0d1117', borderRadius: 4, height: 8, overflow: 'hidden', border: '1px solid #21262d' }}>
+          <div style={{ width: `${progress}%`, background: promotion.sufficient ? '#3fb950' : '#58a6ff', height: '100%', transition: 'width 0.4s ease' }} />
+        </div>
+        <div style={{ fontSize: 11, color: '#6e7681', marginTop: 4 }}>
+          {promotion.decisionCount} total decisions logged
+        </div>
+      </div>
+
+      {rows.map((row) => (
+        <div key={row.key} style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '7px 0', borderBottom: '1px solid #21262d' }}>
+          <span style={{ width: 70, fontSize: 12, color: '#e6edf3' }}>{row.label}</span>
+          <span style={{ width: 92, fontFamily: "'SFMono-Regular', Consolas, monospace", fontSize: 12, color: '#8b949e' }}>
+            {deltaPct(row.delta)}
+          </span>
+          <span style={{ fontSize: 11, color: '#6e7681', flex: 1 }}>{row.note}</span>
+          <PassChip state={row.state} />
+        </div>
+      ))}
+
+      <div style={{ fontSize: 11, color: '#6e7681', marginTop: 12 }}>
+        Run auto-routed tasks with <code style={{ color: '#58a6ff' }}>routing.bandit true</code> to accumulate A/B
+        decisions. The gate does not disable the bandit — it tells you whether it's actually winning.
+      </div>
+    </SectionCard>
+  );
+}
+
 // ─── Best Model per Agent ───────────────────────────────────────────────────
 
 function BestModelsSection({ routing }: { routing: RoutingInsights }) {
@@ -502,6 +608,7 @@ export default function RoutingInsightsPanel({ data }: { data: DashboardData | n
   const hasUsage = !!routing?.usage?.total;
   const hasHistory = !!routing?.history?.length;
   const hasBandit = !!routing?.bandit?.enabled;
+  const hasPromotion = !!routing?.promotion?.decisionCount;
 
   return (
     <>
@@ -512,13 +619,14 @@ export default function RoutingInsightsPanel({ data }: { data: DashboardData | n
         <code>buff benchmark</code> and use Auto routing to build this up over time.
       </p>
 
-      {!hasAny && !hasUsage && !hasHistory && !hasBandit ? (
+      {!hasAny && !hasUsage && !hasHistory && !hasBandit && !hasPromotion ? (
         <EmptyNote />
       ) : (
         <>
           {hasUsage && <UsageSection usage={routing!.usage!} />}
           {hasHistory && <AuditTimelineSection history={routing!.history!} />}
           {hasBandit && <BanditSection bandit={routing!.bandit!} />}
+          {hasPromotion && <PromotionGateSection promotion={routing!.promotion!} />}
           <PreferenceSection routing={routing!} />
           <ProviderQualitySection routing={routing!} />
           <BestModelsSection routing={routing!} />

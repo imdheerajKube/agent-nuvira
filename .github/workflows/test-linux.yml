@@ -62,6 +62,16 @@ jobs:
       - name: Build project
         run: npm run build
 
+      # Regression guard for the learning router: uncertainty escalation,
+      # per-model bandit priors, and the promotion gate. Runs BEFORE the full
+      # suite so a routing regression fails fast with a clearly-labeled step
+      # (this is the exact area that shipped in v1.42.0).
+      - name: Routing regression guard (bandit / promotion gate)
+        run: npx vitest run tests/learning/router-bandit.test.ts tests/learning/router-promotion.test.ts tests/learning/auto-router.test.ts tests/learning/tier0-router.test.ts
+        env:
+          CI: true
+          NODE_OPTIONS: --no-warnings
+
       - name: Run tests
         run: npx vitest run --reporter=verbose
         env:

@@ -176,7 +176,37 @@ export interface RoutingInsights {
   history?: RoutingHistoryEntry[];
   /** Learning-router bandit state (Thompson-sampling priors + history) */
   bandit?: BanditInsights;
+  /** Promotion-gate verdict — is the bandit actually better than the heuristic? */
+  promotion?: PromotionInsights;
   updatedAt: number;
+}
+
+/**
+ * Promotion-gate A/B verdict (ruflo ADR-150 mirror) — evaluated over the
+ * router-promotion.jsonl trajectory: quality must improve >2% while cost and
+ * latency don't regress, on a sufficient sample of DIVERGED decisions.
+ */
+export interface PromotionInsights {
+  /** Total finalized A/B decisions in the trajectory. */
+  decisionCount: number;
+  /** Decisions where the bandit pick diverged from the heuristic pick. */
+  divergedCount: number;
+  /** Minimum diverged decisions required before the gate is meaningful. */
+  minDecisions: number;
+  /** Relative quality delta: (bandit − heuristic) / heuristic. */
+  qualityDelta: number;
+  /** Relative cost delta: (bandit − heuristic) / heuristic. */
+  costDelta: number;
+  /** Relative p95 latency delta: (bandit − heuristic) / heuristic. */
+  latencyDelta: number;
+  /** True when at least one decision had a measured latency. */
+  latencyMeasured: boolean;
+  /** Per-criterion pass/fail. */
+  criteria: { quality: boolean; cost: boolean; latency: boolean };
+  /** True when divergedCount >= minDecisions (enough data to judge). */
+  sufficient: boolean;
+  /** True when ALL criteria pass (bandit is a genuine improvement). */
+  promoted: boolean;
 }
 
 export interface BanditPrior {

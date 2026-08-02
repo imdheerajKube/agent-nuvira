@@ -18,6 +18,7 @@ import { homedir } from 'node:os';
 
 import { loadEnv } from '../utils/env.js';
 import { getAutoRouter } from '../learning/auto-router.js';
+import { getRouterPromotion } from '../learning/router-promotion.js';
 
 // ─── Constants ──────────────────────────────────────────────────────────────
 
@@ -33,7 +34,9 @@ const POSSIBLE_PUBLIC_DIRS = [
   join(__dirname, '..', '..', 'src', 'web-dashboard', 'public'), // node: dist/web-dashboard/server.js
 ];
 const PUBLIC_DIR = POSSIBLE_PUBLIC_DIRS.find((p) => existsSync(p)) || POSSIBLE_PUBLIC_DIRS[0];
-const MEMORY_DIR = join(homedir(), '.buff', 'memory');
+// Honor BUFF_MEMORY_DIR (same as the CLI and the learning router) so the bandit
+// card and the promotion-gate card always read from the SAME memory directory.
+const MEMORY_DIR = process.env.BUFF_MEMORY_DIR || join(homedir(), '.buff', 'memory');
 
 const MIME_TYPES: Record<string, string> = {
   '.html': 'text/html; charset=utf-8',
@@ -904,7 +907,31 @@ function readRoutingInsights(): Record<string, unknown> {
     usage: readRoutingUsage(),
     history: readRoutingHistory(),
     bandit: readBanditData(),
+    promotion: readPromotionData(),
     updatedAt: Date.now(),
+  };
+}
+
+/**
+ * Read the promotion-gate verdict — bandit-vs-heuristic A/B status from
+ * router-promotion.jsonl (ruflo ADR-150 mirror). Evaluated live via the
+ * RouterPromotion singleton so the dashboard always shows the current gate.
+ * Returns a fully-shaped snapshot even with zero decisions so the frontend
+ * can render "collecting data" instead of a blank card.
+ */
+function readPromotionData(): Record<string, unknown> {
+  const status = getRouterPromotion().evaluate();
+  return {
+    decisionCount: status.decisionCount,
+    divergedCount: status.divergedCount,
+    minDecisions: status.minDecisions,
+    qualityDelta: Math.round(status.qualityDelta * 10000) / 10000,
+    costDelta: Math.round(status.costDelta * 10000) / 10000,
+    latencyDelta: Math.round(status.latencyDelta * 10000) / 10000,
+    latencyMeasured: status.latencyMeasured,
+    criteria: status.criteria,
+    sufficient: status.sufficient,
+    promoted: status.promoted,
   };
 }
 

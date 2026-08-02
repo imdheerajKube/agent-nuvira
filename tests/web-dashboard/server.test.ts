@@ -23,9 +23,13 @@ const memoryDir = join(testDir, '.buff', 'memory');
 // Create the memory directory structure
 mkdirSync(memoryDir, { recursive: true });
 
-// Set env vars BEFORE importing the server module (PORT/HOST are read at import time)
+// Set env vars BEFORE importing the server module (PORT/HOST/MEMORY_DIR are
+// read at import time). Pinning BUFF_MEMORY_DIR keeps the suite hermetic even
+// for developers who export it in their shell — otherwise the server would read
+// fixtures from the real memory dir while the tests write to the temp one.
 process.env.BUFF_DASHBOARD_PORT = '0';
 process.env.BUFF_DASHBOARD_HOST = '127.0.0.1';
+process.env.BUFF_MEMORY_DIR = memoryDir;
 
 // Mock node:os so the server reads from our temp directory
 // NOTE: vi.mock is hoisted above imports, so importing from node:os in this
@@ -561,6 +565,50 @@ describe('Dashboard Server', () => {
       expect(body.bandit).toBeDefined();
       expect(body.bandit.enabled).toBe(false);
       expect(body.bandit.priors).toEqual({});
+    });
+
+    it('GET /api/routing returns the promotion-gate verdict from the trajectory', async () => {
+      // router-promotion.jsonl is a JSONL trajectory — one A/B decision per line.
+      // Both decisions diverge (bandit pick != heuristic pick) so the gate has signal.
+      const promoPath = join(memoryDir, 'router-promotion.jsonl');
+      const decisions = [
+        {
+          agentType: 'chat', task: 'implement login',
+          heuristic: { provider: 'groq', model: 'llama-3.3-70b', predictedQuality: 0.7, predictedCostUsd: 0.0001, estimatedLatencyMs: 100 },
+          bandit: { provider: 'gemini', model: 'gemini-2.0-flash', predictedQuality: 0.8, predictedCostUsd: 0.0002, estimatedLatencyMs: 200 },
+          outcome: 'success', timestamp: new Date().toISOString(),
+        },
+        {
+          agentType: 'chat', task: 'fix login bug',
+          heuristic: { provider: 'groq', model: 'llama-3.3-70b', predictedQuality: 0.6, predictedCostUsd: 0.0001, estimatedLatencyMs: 100 },
+          bandit: { provider: 'gemini', model: 'gemini-2.0-flash', predictedQuality: 0.9, predictedCostUsd: 0.0002, estimatedLatencyMs: 200 },
+          outcome: 'success', timestamp: new Date().toISOString(),
+        },
+      ];
+      try {
+        writeFileSync(promoPath, decisions.map((d) => JSON.stringify(d)).join('\n') + '\n');
+
+        const res = await httpGet(`${baseUrl}/api/routing`);
+        expect(res.statusCode).toBe(200);
+        const body = JSON.parse(res.body);
+
+        expect(body.promotion).toBeDefined();
+        expect(body.promotion.decisionCount).toBe(2);
+        expect(body.promotion.divergedCount).toBe(2);
+        expect(body.promotion.minDecisions).toBe(20);
+        // 2 < 20 required diverged decisions → collecting data, never promoted
+        expect(body.promotion.sufficient).toBe(false);
+        expect(body.promotion.promoted).toBe(false);
+        // Deltas are numbers and the three criteria are present
+        expect(typeof body.promotion.qualityDelta).toBe('number');
+        expect(typeof body.promotion.costDelta).toBe('number');
+        expect(typeof body.promotion.latencyDelta).toBe('number');
+        expect(body.promotion.criteria).toHaveProperty('quality');
+        expect(body.promotion.criteria).toHaveProperty('cost');
+        expect(body.promotion.criteria).toHaveProperty('latency');
+      } finally {
+        rmSync(promoPath, { force: true });
+      }
     });
   });
 
