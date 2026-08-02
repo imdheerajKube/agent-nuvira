@@ -130,10 +130,20 @@ export class Orchestrator {
         // steps are never re-run, and the resumed provider/model can differ.
         const checkpointId = checkpointIdFor(goal, process.cwd());
         const resumeId = options.resumeCheckpointId || checkpointId;
-        const checkpointEnabled = options.checkpoint === true || !!options.resumeCheckpointId;
+        // SAVE checkpoints whenever the user opted in (--checkpoint, or implied by
+        // any --resume so a resumed run keeps checkpointing forward — including
+        // direct API callers that only set resumeRequested).
+        const checkpointEnabled = options.checkpoint === true ||
+            !!options.resumeCheckpointId ||
+            options.resumeRequested === true;
+        // LOAD only when the user explicitly asked to RESUME (bare --resume or an
+        // explicit id). Plain `--checkpoint` must NEVER silently resume a stale
+        // checkpoint from a previous run of the same goal — that would re-enter a
+        // completed plan and skip every task.
+        const resumeWanted = options.resumeRequested === true || !!options.resumeCheckpointId;
         let resumed = false;
         let vault;
-        if (checkpointEnabled) {
+        if (resumeWanted) {
             const saved = loadCheckpoint(resumeId);
             if (saved) {
                 vault = ContextVault.fromSnapshot(saved.context);
@@ -144,13 +154,10 @@ export class Orchestrator {
                 }
             }
             else {
-                // Resume explicitly requested (bare `--resume` or explicit id) but no
-                // checkpoint found — warn (a reworded goal silently misses the auto id)
-                // and start fresh with checkpointing on, so a later crash can still be
-                // resumed.
-                if (options.resumeRequested || options.resumeCheckpointId) {
-                    logger.warn(`   ⚠️ No checkpoint found for '${resumeId}' — starting a fresh pipeline (run with --checkpoint to save one)`);
-                }
+                // Resume explicitly requested but no checkpoint found — warn (a
+                // reworded goal silently misses the auto id) and start fresh with
+                // checkpointing on, so a later crash can still be resumed.
+                logger.warn(`   ⚠️ No checkpoint found for '${resumeId}' — starting a fresh pipeline (run with --checkpoint to save one)`);
                 vault = new ContextVault(goal, process.cwd());
             }
         }

@@ -659,6 +659,51 @@ describe('Orchestrator — checkpoint resume', () => {
     expect(after!.context.taskPlan.every((s) => s.status === 'completed')).toBe(true);
   });
 
+  it('does NOT resume a stale checkpoint when only --checkpoint is set (no resume intent)', async () => {
+    const { saveCheckpoint, checkpointIdFor } =
+      await import('../../src/agents/checkpoint-store.js');
+    // Seed a COMPLETED checkpoint at the auto id for this goal + cwd
+    const context = {
+      goal: 'stale goal',
+      workingDirectory: process.cwd(),
+      taskPlan: [
+        { id: 'step-1', description: 'Gather context', agentType: 'context-gatherer', dependsOn: [] as string[], status: 'completed' as const, result: 'done' },
+      ],
+      artifacts: [] as Array<{ path: string; content: string; description: string }>,
+      conversations: [] as Array<{ from: string; to: string; content: string; timestamp: number }>,
+      fileChanges: [] as Array<{ path: string; originalContent?: string; newContent?: string; status: string }>,
+      metadata: {} as Record<string, unknown>,
+    };
+    saveCheckpoint(context as any, checkpointIdFor('stale goal', process.cwd()));
+
+    mockPlannerExecute.mockImplementation(async (ctx: any) => {
+      ctx.taskPlan = [{
+        id: 'step-fresh',
+        agentType: 'writer',
+        description: 'Write fresh code',
+        dependsOn: [],
+        status: 'pending' as const,
+      }];
+      return { success: true, summary: 'planned' };
+    });
+    mockWriterExecute.mockImplementation(async () => ({ success: true, summary: 'Wrote fresh code' }));
+
+    // --checkpoint only (no resume intent): must START FRESH, not re-enter the
+    // stale completed plan (which would skip every task and report success
+    // without doing anything).
+    const result = await orchestrator.execute('stale goal', {
+      checkpoint: true,
+      provider: 'groq',
+      model: 'llama-3.3-70b',
+    });
+
+    expect(result.success).toBe(true);
+    expect(mockPlannerExecute).toHaveBeenCalledTimes(1);
+    expect(mockWriterExecute).toHaveBeenCalledTimes(1);
+    expect(result.tasksCompleted).toBe(1);
+    expect(result.tasksTotal).toBe(1);
+  });
+
   it('runs a fresh pipeline when the checkpoint id does not exist', async () => {
     mockPlannerExecute.mockImplementation(async () => ({
       success: true,

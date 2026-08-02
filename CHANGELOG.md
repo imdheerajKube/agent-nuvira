@@ -9,6 +9,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.45.1] - 2026-08-02
+
+### Fixed
+
+- **`--checkpoint` no longer silently resumes a stale checkpoint** — plain
+  `buff execute "<goal>" --checkpoint` (no resume intent) previously loaded any
+  prior checkpoint at the auto id (goal + cwd) — including a previously
+  **completed** run — and re-entered it, skipping every task and reporting
+  success without doing work. The checkpoint LOAD is now gated strictly on
+  resume intent (`--resume` / `resumeRequested` / explicit id); `--checkpoint`
+  always starts fresh while still saving forward. A resumed run (including
+  direct API callers that only set `resumeRequested`) keeps checkpointing
+  forward. Regression test covers the stale-checkpoint case
+
 ## [1.45.0] - 2026-08-02
 
 ### Added
