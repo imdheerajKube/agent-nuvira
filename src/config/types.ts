@@ -144,6 +144,13 @@ export interface RoutingConfig {
    */
   escalationMinSamples?: number;
   /**
+   * Confirm before auto mode fails over mid-session. When true, a provider
+   * that fails in Auto mode shows the next-ranked candidate and asks the user
+   * to confirm the switch (or pick a provider manually) instead of switching
+   * silently. Default: false (silent auto-failover — never get stuck).
+   */
+  promptOnFailover?: boolean;
+  /**
    * Minimum diverged A/B decisions before the promotion gate (bandit-vs-
    * heuristic) evaluates as meaningful. Surfaced by `buff model bandit`.
    * Default: 20.

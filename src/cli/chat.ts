@@ -21,6 +21,7 @@ import { getProviderFallback, classifyFallbackError, isRetryableError } from '..
 import { getAutoRouter, isAutoModel, isAutoProvider } from '../learning/auto-router.js';
 import { getQuotaLedger } from '../learning/quota-ledger.js';
 import { recordRoutingDecision } from '../learning/routing-history.js';
+import { shouldConfirmFailover, promptFailoverChoice } from './failover-prompt.js';
 
 // ─── Error Recovery Types ───────────────────────────────────────────────────
 
@@ -520,6 +521,12 @@ export class ChatCommand extends BaseCommand {
           } catch (err) {
             console.log();
             // ── Auto mode: transparently fail over to the next candidate ──
+            // failoverDeclined records that the user opted out of the automatic
+            // swap (routing.promptOnFailover + 'manual') so the retryable-error
+            // fallback chain below is skipped too — 'manual' must land on the
+            // interactive recovery (handleInferenceError), never silently
+            // auto-switch behind the user's back.
+            let failoverDeclined = false;
             if (autoMode) {
               const failedProviderName = provider.name;
               autoFailedProviders.add(type);
@@ -537,18 +544,29 @@ export class ChatCommand extends BaseCommand {
               // message — otherwise we'd re-enter a known-broken provider
               // (e.g. the router's fallback returns the original winner).
               if (next && next.type !== type && !autoFailedProviders.has(next.type)) {
-                type = next.type;
-                provider = next.provider;
-                effectiveModel = next.model;
-                model = effectiveModel;
-                logger.warn(`   ⚠️ ${failedProviderName} failed — automatically switching to ${provider.name} (${effectiveModel})`);
-                console.log('');
-                continue;
+                // Opt-in confirmation (routing.promptOnFailover): when the
+                // user wants control over failover, ask before switching.
+                // 'manual' falls through to the standard interactive recovery
+                // (picker etc.); 'switch' (or the silent default) adopts the
+                // next-ranked candidate so auto mode never gets stuck.
+                const declined =
+                  shouldConfirmFailover(this.configManager.getAll()) &&
+                  (await promptFailoverChoice(failedProviderName, next.provider.name, next.model)) === 'manual';
+                if (declined) failoverDeclined = true;
+                if (!declined) {
+                  type = next.type;
+                  provider = next.provider;
+                  effectiveModel = next.model;
+                  model = effectiveModel;
+                  logger.warn(`   ⚠️ ${failedProviderName} failed — automatically switching to ${provider.name} (${effectiveModel})`);
+                  console.log('');
+                  continue;
+                }
               }
             }
             // Try automatic fallback before prompting user
             const errorType = classifyFallbackError(err);
-            if (isRetryableError(errorType)) {
+            if (!failoverDeclined && isRetryableError(errorType)) {
               try {
                 const fallback = getProviderFallback(this.configManager, this.configManager.getAll().fallback);
                 logger.warn(`🔄 Attempting automatic failover to next provider...`);
@@ -615,6 +633,12 @@ export class ChatCommand extends BaseCommand {
           } catch (err) {
             spinner.stop();
             // ── Auto mode: transparently fail over to the next candidate ──
+            // failoverDeclined records that the user opted out of the automatic
+            // swap (routing.promptOnFailover + 'manual') so the retryable-error
+            // fallback chain below is skipped too — 'manual' must land on the
+            // interactive recovery (handleInferenceError), never silently
+            // auto-switch behind the user's back.
+            let failoverDeclined = false;
             if (autoMode) {
               const failedProviderName = provider.name;
               autoFailedProviders.add(type);
@@ -632,18 +656,29 @@ export class ChatCommand extends BaseCommand {
               // message — otherwise we'd re-enter a known-broken provider
               // (e.g. the router's fallback returns the original winner).
               if (next && next.type !== type && !autoFailedProviders.has(next.type)) {
-                type = next.type;
-                provider = next.provider;
-                effectiveModel = next.model;
-                model = effectiveModel;
-                logger.warn(`   ⚠️ ${failedProviderName} failed — automatically switching to ${provider.name} (${effectiveModel})`);
-                console.log('');
-                continue;
+                // Opt-in confirmation (routing.promptOnFailover): when the
+                // user wants control over failover, ask before switching.
+                // 'manual' falls through to the standard interactive recovery
+                // (picker etc.); 'switch' (or the silent default) adopts the
+                // next-ranked candidate so auto mode never gets stuck.
+                const declined =
+                  shouldConfirmFailover(this.configManager.getAll()) &&
+                  (await promptFailoverChoice(failedProviderName, next.provider.name, next.model)) === 'manual';
+                if (declined) failoverDeclined = true;
+                if (!declined) {
+                  type = next.type;
+                  provider = next.provider;
+                  effectiveModel = next.model;
+                  model = effectiveModel;
+                  logger.warn(`   ⚠️ ${failedProviderName} failed — automatically switching to ${provider.name} (${effectiveModel})`);
+                  console.log('');
+                  continue;
+                }
               }
             }
             // Try automatic fallback before prompting user
             const errorType = classifyFallbackError(err);
-            if (isRetryableError(errorType)) {
+            if (!failoverDeclined && isRetryableError(errorType)) {
               try {
                 const fallback = getProviderFallback(this.configManager, this.configManager.getAll().fallback);
                 const fallbackResult = await fallback.callWithFallback(

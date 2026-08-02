@@ -824,6 +824,18 @@ The timeline is also **live**: the dashboard watches `quota-events.jsonl` /
 `quota-ledger.json` on disk and pushes a `quota` SSE event the moment a failover
 or park lands — so the card updates in real time, no page refresh or 10s wait.
 
+**Opt-in failover confirmation.** By default Auto mode fails over silently
+(never get stuck). If you'd rather approve each mid-session swap, enable:
+
+```bash
+# Ask before Auto mode switches providers mid-session
+agent-nuvira config set routing.promptOnFailover true
+```
+
+With this on, a failed provider shows the next-ranked candidate and lets you
+choose "switch (recommended)" or "pick a provider myself" — so every swap is
+an informed decision, not a silent surprise.
+
 #### Checkpoint / resume — crash-proof multi-agent pipelines
 
 Long `buff execute` pipelines can be killed by a crash, quota exhaustion, or a token expiry mid-run. Checkpoints serialize the pipeline state so work is never lost:

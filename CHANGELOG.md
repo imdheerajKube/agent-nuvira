@@ -9,6 +9,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.45.5] - 2026-08-02
+
+### Added
+
+- **Opt-in failover confirmation** — `routing.promptOnFailover: true` makes Auto mode ASK before a mid-session provider swap: when a provider dies (expired key, exhausted quota, deprecated model), the CLI shows the next-ranked candidate and offers "switch (recommended)" or "pick a provider myself" instead of silently auto-switching. Default stays silent auto-failover (never get stuck). New unit-tested `src/cli/failover-prompt.ts`
+
 ## [1.45.4] - 2026-08-02
 
 ### Added
