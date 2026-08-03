@@ -2,21 +2,21 @@
 #   1. Visual Studio Code Marketplace (vsce publish)
 #   2. Open VSX Registry (ovsx publish)
 #
-# Renamed from agent-baba-d-vscode to agent-nuvira-vscode
-#
 # Triggered when:
 #   - A tag matching "vscode-v*" is pushed (e.g., vscode-v0.2.0)
 #   - Manually via workflow_dispatch
 #
 # Prerequisites:
-#   - VSCE_PAT secret set in GitHub repository settings (for Marketplace)
-#   - OPEN_VSX_TOKEN secret set (for Open VSX)
-#   - Publisher "dheerajsharma" registered on VS Code Marketplace
-#
-# Note: As of December 2026, Microsoft has deprecated PATs for vsce in favor
-# of Microsoft Entra ID (Azure AD) with Workload Identity Federation.
-# If you're using the new identity-based auth, replace the VSCE_PAT step
-# with azure/login and vsce publish --azure-credential.
+#   - Marketplace publishing uses Microsoft Entra ID identity-based auth
+#     (PATs are deprecated by Microsoft as of Dec 2026):
+#       * AZURE_CLIENT_ID  — App Registration (service principal) Application ID
+#       * AZURE_TENANT_ID  — Microsoft Entra tenant ID (28d5cc5b-5659-4241-a5ae-dba1f94d6a19)
+#       * AZURE_SUBSCRIPTION_ID — any subscription in the tenant (context)
+#       * The App Registration must have a GitHub Actions OIDC federated
+#         credential (branch: main / tag: vscode-v*) AND be granted access to
+#         the Marketplace publisher "dheerajsharma" (Members -> Contributor)
+#       * Workflow-level `permissions: id-token: write` is set on the job
+#   - OPEN_VSX_TOKEN secret set (for Open VSX — separate Eclipse/Open VSX token)
 
 name: publish-vscode
 
@@ -106,6 +106,9 @@ jobs:
     runs-on: ubuntu-latest
     if: github.event_name != 'workflow_dispatch' || !inputs.dry_run
     timeout-minutes: 10
+    permissions:
+      contents: read
+      id-token: write   # required for OIDC / Workload Identity Federation
 
     steps:
       - name: Download VSIX artifact
@@ -119,11 +122,17 @@ jobs:
         with:
           node-version: 22
 
-      - name: Publish to VS Code Marketplace
+      - name: Azure Login (Entra ID / Workload Identity Federation)
+        uses: azure/login@v2
+        with:
+          client-id: ${{ secrets.AZURE_CLIENT_ID }}
+          tenant-id: ${{ secrets.AZURE_TENANT_ID }}
+          subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+          allow-no-subscriptions: true
+
+      - name: Publish to VS Code Marketplace (Entra ID)
         run: |
-          npx @vscode/vsce publish --packagePath agent-nuvira-vscode.vsix
-        env:
-          VSCE_PAT: ${{ secrets.VSCE_PAT }}
+          npx @vscode/vsce publish --packagePath agent-nuvira-vscode.vsix --azure-credential
 
   publish-openvsx:
     name: Publish to Open VSX Registry
