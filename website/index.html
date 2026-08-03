@@ -33,6 +33,7 @@
         <a href="#quickstart" class="nav-link">Quick Start</a>
         <a href="#extensions" class="nav-link">Extensions</a>
         <a href="#git-pr" class="nav-link">Git & PR</a>
+        <a href="#arch-diagrams" class="nav-link">Architecture</a>
         <a href="#architecture" class="nav-link">Roadmap</a>
         <div class="nav-ctas">
           <a href="https://github.com/imdheerajKube/agent-nuvira" target="_blank" rel="noopener" class="btn btn-ghost btn-sm">
@@ -792,6 +793,81 @@
           <span class="arch-highlight-icon">🧪</span>
           <span class="arch-highlight-count">2,880+</span>
           <span class="arch-highlight-label">Unit Tests</span>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- Architecture & Diagrams Section -->
+  <section class="architecture" id="arch-diagrams">
+    <div class="container">
+      <div class="section-header">
+        <span class="section-tag">Architecture & Diagrams</span>
+        <h2 class="section-title">17 Agents. FAISS-Backed Memory.<br /><span class="gradient-text">One Engine.</span></h2>
+        <p class="section-desc">A dependency-graph execution engine orchestrates a registry of 17 specialized agents, and a pluggable FAISS vector store keeps semantic memory fast, private, and token-efficient. Full Mermaid diagrams live in the repo.</p>
+      </div>
+      <div class="features-grid">
+        <div class="feature-card" data-delay="0">
+          <div class="feature-icon agents">
+            <svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M23 21v-2a4 4 0 0 0-3-3.87"/><path d="M16 3.13a4 4 0 0 1 0 7.75"/></svg>
+          </div>
+          <h3>17-Agent Registry</h3>
+          <p>Every task in the pipeline is handled by a registered agent. The orchestrator builds a dependency graph from this registry — each with its own role:</p>
+          <div class="arch-agent-tags">
+            <span class="model-tag">Planner</span>
+            <span class="model-tag">Context-Gatherer</span>
+            <span class="model-tag">Writer</span>
+            <span class="model-tag">Reviewer</span>
+            <span class="model-tag">Runner</span>
+            <span class="model-tag">Tester</span>
+            <span class="model-tag">Debugger</span>
+            <span class="model-tag">Git</span>
+            <span class="model-tag">GitLab</span>
+            <span class="model-tag">Package</span>
+            <span class="model-tag">GitHub Release</span>
+            <span class="model-tag">Security</span>
+            <span class="model-tag">Skill Runner</span>
+            <span class="model-tag">MCP</span>
+            <span class="model-tag">PR Review</span>
+            <span class="model-tag">Issue Triage</span>
+            <span class="model-tag">Branch Automation</span>
+          </div>
+        </div>
+        <div class="feature-card" data-delay="100">
+          <div class="feature-icon learning">
+            <svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3v3m0 12v3M3 12h3m12 0h3M5.6 5.6l2.1 2.1m8.6 8.6l2.1 2.1M18.4 5.6l-2.1 2.1M7.7 16.3l-2.1 2.1"/></svg>
+          </div>
+          <h3>FAISS-Backed Vector Store Tiers</h3>
+          <p>Semantic search runs on a pluggable backend, auto-selected per machine in priority order — same data format, zero migration:</p>
+          <div class="arch-tier-chain">
+            <span class="arch-tier">1 · faiss-native</span>
+            <span class="arch-tier-arrow">→</span>
+            <span class="arch-tier">2 · faiss-ivf</span>
+            <span class="arch-tier-arrow">→</span>
+            <span class="arch-tier">3 · json</span>
+          </div>
+          <p class="arch-tier-note"><code>faiss-native</code> uses real FAISS (<code>@faiss-node/native</code>, FLAT_IP + L2-normalized → cosine); <code>faiss-ivf</code> is a pure-JS IVF-flat ANN; <code>json</code> is exact flat cosine. Check your active tier with:</p>
+          <div class="code-block code-block-sm">
+            <code><span class="prompt">$</span> agent-nuvira memory backend --check</code>
+          </div>
+        </div>
+        <div class="feature-card" data-delay="200">
+          <div class="feature-icon sdk">
+            <svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="16 18 22 12 16 6"/><polyline points="8 6 2 12 8 18"/></svg>
+          </div>
+          <h3>Full Architecture Docs</h3>
+          <p>Deep-dive design docs with Mermaid diagrams — module specs, extensibility registry, safe execution layer, data flow, and observability bus. They render natively on GitHub.</p>
+          <div class="arch-doc-links">
+            <a href="https://github.com/imdheerajKube/agent-nuvira/blob/main/ARCHITECTURE.md" target="_blank" rel="noopener" class="btn btn-ghost btn-sm">📘 ARCHITECTURE.md</a>
+            <a href="https://github.com/imdheerajKube/agent-nuvira/blob/main/ARCHITECTURE_DIAGRAMS.md" target="_blank" rel="noopener" class="btn btn-ghost btn-sm">📐 ARCHITECTURE_DIAGRAMS.md</a>
+          </div>
+        </div>
+        <div class="feature-card" data-delay="300">
+          <div class="feature-icon providers">
+            <svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M12 2L2 7l10 5 10-5-10-5z"/><path d="M2 17l10 5 10-5"/><path d="M2 12l10 5 10-5"/></svg>
+          </div>
+          <h3>What This Means For You</h3>
+          <p>The registry keeps the pipeline <strong>extensible</strong> — plugins and the SDK register new agents without touching the engine. The FAISS tiers keep retrieval <strong>fast and private</strong> (local embeddings, <code>.gitignore</code>-aware), and token-efficient top-k context means free quotas stretch further. Fully documented, fully open.</p>
         </div>
       </div>
     </div>

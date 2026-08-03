@@ -1480,6 +1480,57 @@ code { font-family: var(--font-mono); }
   }
 }
 
+/* --- Architecture & Diagrams Section additions --- */
+.arch-agent-tags {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-top: 16px;
+}
+
+.arch-tier-chain {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+  margin-top: 16px;
+  margin-bottom: 12px;
+}
+
+.arch-tier {
+  padding: 6px 12px;
+  border-radius: var(--radius-md);
+  background: rgba(99, 102, 241, 0.1);
+  border: 1px solid var(--border-color);
+  color: var(--accent-1);
+  font-family: var(--font-mono);
+  font-size: 13px;
+  font-weight: 600;
+  white-space: nowrap;
+}
+
+.arch-tier-arrow {
+  color: var(--text-muted);
+  font-weight: 700;
+}
+
+.arch-tier-note {
+  font-size: 13.5px;
+  color: var(--text-muted);
+  margin-top: 8px;
+}
+
+.arch-doc-links {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  margin-top: 16px;
+}
+
+.arch-doc-links .btn {
+  margin: 0;
+}
+
 /* --- Architecture Migration Section --- */
 .architecture {
   padding: 120px 0;
