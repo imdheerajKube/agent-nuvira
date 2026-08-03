@@ -1,11 +1,26 @@
 # Change Log
 
-All notable changes to the Agent-Baba-D VS Code extension will be documented in this file.
+All notable changes to the Agent-Nuvira VS Code extension will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
+
+## [0.6.2] — 2026-08-03
+
+### Changed
+- **Marketplace README refresh** — the extension listing now leads with a
+  banner clarifying that Agent-Nuvira is **not just an editor extension — it's
+  the full 17-agent development agent** that also runs from the terminal
+  (`npx agent-nuvira execute "<goal>"`). Agent table expanded 11 → **17 agents**
+  (added GitLab, PR Review, Issue Triage, Branch Automation, Skill Runner,
+  MCP), provider list expanded to **17+** (5 built-in + 12 configurable,
+  LM Studio included), and a new **FAISS Vector Store + Team Collaboration**
+  section documents the local vector backend (`buff memory backend --check`)
+  and Git-synced team memory
+
+## [0.6.1] — 2026-08-03
 
 ### Added
 - **Poll-fallback auto-refresh** — on top of the file watcher, the Quota
