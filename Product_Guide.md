@@ -199,14 +199,14 @@ User: "add JWT authentication to the Express app"
 │                                                            │
 │  ┌────────────────┐  ┌────────────────┐  ┌──────────────┐ │
 │  │  Vector Store   │  │ Trajectory     │  │  Embedder     │ │
-│  │  (semantic      │  │ Store          │  │  (3 methods)  │ │
-│  │   similarity)   │  │ (few-shot      │  │               │ │
-│  │                 │  │  examples)     │  │  1. Xenova    │ │
-│  │  ~/.buff/memory │  │                │  │     (fast)    │ │
-│  │  /vectors.json  │  │ ~/.buff/memory │  │  2. Python    │ │
-│  │                 │  │ /trajectories  │  │     (medium)  │ │
-│  │  Cosine sim.    │  │ .json          │  │  3. LLM      │ │
-│  │  search         │  │                │  │     (fallback)│ │
+│  │  (FAISS-backed) │  │ Store          │  │  (3 methods)  │ │
+│  │  tiers:         │  │ (few-shot      │  │               │ │
+│  │   1. faiss-     │  │  examples)     │  │  1. Xenova    │ │
+│  │      native     │  │                │  │     (fast)    │ │
+│  │   2. faiss-ivf  │  │ ~/.buff/memory │  │  2. Python    │ │
+│  │   3. json       │  │ /trajectories  │  │     (medium)  │ │
+│  │  (auto-selected)│  │ .json          │  │  3. LLM      │ │
+│  │  Cosine sim.    │  │                │  │     (fallback)│ │
 │  └────────────────┘  └────────────────┘  └──────────────┘ │
 │                                                            │
 │  Memory Types:                                              │
@@ -215,6 +215,13 @@ User: "add JWT authentication to the Express app"
 │  • Semantic: "The project uses Express with MongoDB"       │
 └────────────────────────────────────────────────────────────┘
 ```
+
+The **Vector Store** is now FAISS-backed with three pluggable tiers
+(`src/memory/faiss-backend.ts`): `faiss-native` (`@faiss-node/native` real
+FAISS, FLAT_IP + L2-normalized → cosine) → `faiss-ivf` (pure-JS IVF-flat ANN)
+→ `json` (exact flat cosine, original behavior). Auto-selected per machine in
+priority order with lazy resolution; `buff memory backend --check` reports the
+active tier. See §4.5.
 
 ### 2.4 Self-Learning System
 
@@ -258,18 +265,25 @@ src/
 │   ├── agent.ts                # Abstract Agent base class + types
 │   ├── orchestrator.ts         # Pipeline coordinator (dependency-aware)
 │   ├── context-vault.ts        # Shared context bus for agents
-│   └── agents/                 # Agent implementations
-│       ├── planner.ts          # Goal decomposition, task planning
-│       ├── context-gatherer.ts # Codebase scanning, file discovery
-│       ├── writer.ts           # Code implementation with retry logic
-│       ├── reviewer.ts         # Code review, bug detection, style checks
-│       ├── tester.ts           # Sandboxed test execution│   ├── runner.ts               # Sandboxed program execution
-│   ├── debugger.ts             # Iterative test-fix loop
-│   ├── skill-runner.ts         # Injects skill steps into execution plan
-│   ├── git-agent.ts            # Git branch, commit, PR generation
-│       ├── package-agent.ts    # Version bump, npm build
-│       ├── github-release-agent.ts # GitHub tag + release creation
-│       └── security-agent.ts   # Prompt injection + secret scanning
+│   ├── module-registry.ts      # 17-agent registry (register/getModule/listModules)
+│   └── agents/                 # Agent implementations (17 registered agents)
+│       ├── planner.ts          # #1 Goal decomposition, task planning
+│       ├── context-gatherer.ts # #2 Codebase scanning, file discovery
+│       ├── writer.ts           # #3 Code implementation with retry logic
+│       ├── reviewer.ts         # #4 Code review, bug detection, style checks
+│       ├── runner.ts           # #5 Sandboxed program execution
+│       ├── tester.ts           # #6 Sandboxed test execution
+│       ├── debugger.ts         # #7 Iterative test-fix loop
+│       ├── git-agent.ts        # #8 Git branch, commit, PR generation
+│       ├── gitlab-agent.ts     # #9 Full GitLab REST API — MRs, issues, pipelines
+│       ├── package-agent.ts    # #10 Dependency management / version bump
+│       ├── github-release-agent.ts # #11 GitHub tag + release creation
+│       ├── security-agent.ts   # #12 Prompt injection + secret scanning
+│       ├── skill-runner.ts     # #13 Injects skill steps into execution plan
+│       ├── mcp-agent.ts        # #14 MCP tool invocation (Model Context Protocol)
+│       ├── pr-review-agent.ts  # #15 Inline code review on open PRs
+│       ├── issue-triage-agent.ts # #16 Issue classification + prioritization
+│       └── branch-automation-agent.ts # #17 Git hooks + auto-branch workflows
 ├── cli/                        # CLI command implementations
 │   ├── router.ts               # Command registration + provider resolution
 │   ├── commands.ts             # BaseCommand abstract class
@@ -317,7 +331,9 @@ src/
 │   └── history.ts              # Chat session history (JSON file)
 ├── memory/                     # Persistent memory system
 │   ├── embedder.ts             # Embedding (Xenova / Python / LLM fallback)
-│   ├── vector-store.ts         # JSON-based cosine similarity search
+│   ├── vector-store.ts         # VectorStore facade + backend resolution
+│   ├── faiss-backend.ts        # FAISS-backed vector store tiers (native → IVF → JSON)
+│   ├── faiss-node.d.ts         # Type declarations for @faiss-node/native
 │   ├── trajectory-store.ts     # Successful execution records
 │   └── memory-integration.ts   # Context retrieval + storage orchestration
 ├── learning/                   # Self-learning system
@@ -707,7 +723,18 @@ embed(text)
         └── Always succeeds
 ```
 
-### 4.5 Vector Store Search Algorithm
+### 4.5 Vector Store Search Algorithm (FAISS-Backed Tiers)
+
+The vector store (`src/memory/vector-store.ts` + `faiss-backend.ts`) exposes a
+pluggable backend, auto-selected per machine in priority order:
+
+| Priority | Backend | Implementation | Notes |
+|---|---|---|---|
+| 1 | `faiss-native` | `@faiss-node/native` (`FaissIndex` FLAT_IP) | Vectors L2-normalized so inner product = cosine; requires the native addon to build + pass a load-time smoke test (v1.49.1 fixed the silent-fallback bug) |
+| 2 | `faiss-ivf` | Pure-JS IVF-flat ANN (no native deps) | Default fast path when native is unavailable |
+| 3 | `json` | Exact flat cosine over `vectors-<ns>.json` | Original behavior; always works; zero data migration |
+
+**Exact JSON tier — cosine similarity search (original behavior):**
 
 ```typescript
 // Cosine similarity search
@@ -729,6 +756,19 @@ function cosineSimilarity(a: number[], b: number[]): number {
   return dotProduct / (magnitudeA * magnitudeB);
 }
 ```
+
+**Backend behaviors:**
+- **Auto-selection** — `createFaissBackend()` tries `faiss-native` first; load
+  or smoke-test failure falls back to `faiss-ivf`, then `json` (same entry
+  format, no migration). Overridable via `routing.vectorBackend` /
+  `BUFF_VECTOR_BACKEND`.
+- **Diagnostics** — `buff memory backend` prints the active backend and why it
+  was chosen; `--check` runs a native-FAISS availability probe;
+  `checkNativeFaiss()` is exported from the package API.
+- **Namespaced indexes** — `vectors-<ns>.json` per namespace, so repo retrieval
+  chunks never pollute memory/history vectors.
+- **Benchmark-validated** — 2,000-vector corpus: exact JSON recall@5 ≥ 0.99,
+  IVF recall@5 ≥ 0.9 / recall@1 ≥ 0.8.
 
 ### 4.6 Cost Tracking Architecture
 
