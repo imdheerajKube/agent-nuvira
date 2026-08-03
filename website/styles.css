@@ -1675,6 +1675,24 @@ code { font-family: var(--font-mono); }
   border: 1px solid rgba(233, 69, 96, 0.4);
 }
 
+/* Mobile: stack the FAISS tier boxes top-to-bottom so the fallback labels
+   (native ↓ ivf ↓ json) read as a clean vertical chain instead of wrapping
+   into a ragged horizontal scramble between wrapped tier boxes. */
+@media (max-width: 480px) {
+  .arch-faiss-tiers {
+    flex-direction: column;
+    align-items: center;
+  }
+  .arch-faiss-tier {
+    flex: 0 0 auto;
+    width: 100%;
+    max-width: 260px;
+  }
+  .arch-faiss-fb {
+    white-space: normal;
+  }
+}
+
 .arch-doc-links {
   display: flex;
   flex-wrap: wrap;
