@@ -1,6 +1,6 @@
 # Agent-Nuvira — User Manual
 
-**Version 1.42.1 | August 2026**
+**Version 1.50.0 | August 2026**
 
 > *Agent-Nuvira: Multi-agent AI coding CLI — plan, write, review, test, and publish code with local models (Ollama) or cloud APIs (Groq, NVIDIA NIM, Google Gemini, OpenRouter).*
 
@@ -1742,7 +1742,7 @@ rm -rf ~/.buff   # Remove all configuration and cached data
 | **TestModule (Phase 8)** | Sandboxed test execution — temp directory, multi-framework output parsing (vitest, jest, generic), EventBus events |
 | **SafeExecutionLayer (Phase 9)** | 3-domain safety system — file validation (size, gitignore, syntax, security scan), Docker sandbox (resource limits, container lifecycle), safe LLM calls (injection guardrail, prompt/response truncation, exponential backoff with circuit breaker) |
 
-### Agent Catalog — 16+ Agent Roles & Management
+### Agent Catalog — 17 Agent Roles & Management
 | Agent/Component | Type | Description |
 |-----------------|------|-------------|
 | **PlannerAgent** | Core | Analyzes goals, creates dependency-aware task plans |
