@@ -1,0 +1,68 @@
+# Deploy Website — Cloudflare Pages auto-deploy via wrangler
+#
+# The agent-nuvira.com site is hosted on Cloudflare Pages (project: agent-nuvira)
+# as a DIRECT-UPLOAD project — it has no native Cloudflare git integration
+# (Cloudflare API error 8000069: "You cannot update the `source` object in a
+# Direct Uploads project"). To keep the existing project and custom domains
+# (agent-nuvira.com, www.agent-nuvira.com), we deploy the website/ directory
+# with the same command we use locally:
+#
+#   wrangler pages deploy website --project-name agent-nuvira
+#
+# This workflow runs that command on every push to main that touches website/,
+# so future pushes auto-deploy without needing the dashboard.
+#
+# Prerequisites:
+#   - CLOUDFLARE_API_TOKEN secret set in GitHub repository settings.
+#     Create it at https://dash.cloudflare.com/profile/api-tokens with
+#     permission "Cloudflare Pages" -> Edit on account
+#     "Imdheeraj@gmail.com's Account" (7bfea81d4bfe569521359bb90b608ff4).
+#   - CLOUDFLARE_ACCOUNT_ID secret set to 7bfea81d4bfe569521359bb90b608ff4.
+
+name: deploy-website
+
+on:
+  push:
+    branches: [main]
+    # Only rebuild when the site content actually changes (avoid CI noise from
+    # code-only commits). Use `workflow_dispatch` for a manual re-deploy.
+    paths:
+      - 'website/**'
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  deploy:
+    name: Deploy website to Cloudflare Pages
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js 22
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: package-lock.json
+
+      - name: Verify secrets present
+        run: |
+          if [ -z "${{ secrets.CLOUDFLARE_API_TOKEN }}" ] || [ -z "${{ secrets.CLOUDFLARE_ACCOUNT_ID }}" ]; then
+            echo "::error::CLOUDFLARE_API_TOKEN and/or CLOUDFLARE_ACCOUNT_ID secrets are not set."
+            echo "Create an API token at https://dash.cloudflare.com/profile/api-tokens (Cloudflare Pages -> Edit)"
+            echo "then add CLOUDFLARE_API_TOKEN and CLOUDFLARE_ACCOUNT_ID to GitHub repo secrets."
+            exit 1
+          fi
+
+      - name: Deploy website to Cloudflare Pages
+        uses: cloudflare/wrangler-action@v3
+        with:
+          apiToken: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          accountId: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          command: pages deploy website --project-name agent-nuvira --commit-dirty=true
