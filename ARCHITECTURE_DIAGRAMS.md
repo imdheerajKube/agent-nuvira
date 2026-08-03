@@ -208,7 +208,92 @@ flowchart TB
 
 ---
 
-## 5. Observability Bus — Event Flow (ARCHITECTURE.md §4.2)
+## 5. 17-Agent Registry (ARCHITECTURE.md §4.1)
+
+```mermaid
+flowchart LR
+    subgraph Orchestrator["⚡ Orchestrator"]
+        O["builds task plan\nvia ModuleRegistry"]
+    end
+
+    subgraph Registry["ModuleRegistry — 17 built-in agents"]
+        direction TB
+        A1["📋 planner"]
+        A2["📁 context-gatherer"]
+        A3["✏️ writer"]
+        A4["🔍 reviewer"]
+        A5["🏃 runner"]
+        A6["🧪 tester"]
+        A7["🐛 debugger"]
+        A8["🌿 git"]
+        A9["🦊 gitlab"]
+        A10["📦 package"]
+        A11["🚀 github-release"]
+        A12["🛡️ security"]
+        A13["⚙️ skill-runner"]
+        A14["🔌 mcp"]
+        A15["👀 pr-review"]
+        A16["🏷️ issue-triage"]
+        A17["🔀 branch-automation"]
+    end
+
+    O -->|register / lookup| Registry
+    Registry -->|agent instance| Pipeline["🔄 Execution Pipeline"]
+
+    style Orchestrator fill:#1a1a2e,stroke:#e94560,color:#fff
+    style Registry fill:#16213e,stroke:#0f3460,color:#fff,stroke-width:2px
+    style Pipeline fill:#e94560,stroke:#fff,color:#fff,stroke-width:2px
+```
+
+Every agent is registered via `registry.register(name, factory, metadata)`;
+plugins and SDK users can add or override agents with
+`registerOrOverride`. The 17 built-ins wrap the engine modules (e.g. `writer`
+→ EditModule, `tester` → TestModule, `debugger` → RecoverModule,
+`reviewer` → VerifyModule).
+
+---
+
+## 6. Vector Store — FAISS-Backed Backend Tiers (ARCHITECTURE.md §4.5)
+
+```mermaid
+flowchart TB
+    Query["🔎 Query / gathered context"]
+
+    subgraph Facade["VectorStore facade"]
+        Resolve["createFaissBackend()\n(lazily-resolved)"]
+    end
+
+    Query --> Resolve
+    Resolve -->|tier 1| Native["faiss-native\n@faiss-node/native\nFLAT_IP + L2 → cosine"]
+    Resolve -->|tier 2| Ivf["faiss-ivf\npure-JS IVF-flat ANN"]
+    Resolve -->|tier 3| Json["json\nexact flat cosine"]
+
+    Native -->|top-k| Out["📦 top-k relevant chunks\n→ reduced LLM context"]
+    Ivf -->|top-k| Out
+    Json -->|top-k| Out
+
+    Native -.->|load / smoke-test fails| Ivf
+    Ivf -.->|unavailable| Json
+
+    Diag["buff memory backend --check"] --> Resolve
+
+    style Facade fill:#16213e,stroke:#0f3460,color:#fff,stroke-width:2px
+    style Native fill:#533483,stroke:#e94560,color:#fff
+    style Ivf fill:#533483,stroke:#e94560,color:#fff
+    style Json fill:#533483,stroke:#e94560,color:#fff
+    style Out fill:#e94560,stroke:#fff,color:#fff,stroke-width:2px
+    style Diag fill:#1a1a2e,stroke:#0f3460,color:#ccc
+```
+
+Priority order: `faiss-native` → `faiss-ivf` → `json` (same entry format,
+zero migration). Overridable via `routing.vectorBackend` /
+`BUFF_VECTOR_BACKEND`. Retrieval chunks (~512 tokens) → local embeddings
+(`bge-small-en-v1.5`) → top-k reduction before the model call; any failure
+fails over to full context.
+
+---
+
+## 7. Observability Bus — Event Flow (ARCHITECTURE.md §4.2)
 
 ```mermaid
 flowchart LR
@@ -263,4 +348,4 @@ This enables:
 
 ---
 
-> Generated from [ARCHITECTURE.md](./ARCHITECTURE.md) §2, §4.1, §4.2, §4.3, §4.4.
+> Generated from [ARCHITECTURE.md](./ARCHITECTURE.md) §2, §4.1, §4.2, §4.3, §4.4, §4.5.

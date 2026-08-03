@@ -435,6 +435,34 @@ const engine = new ExecutionEngine();
 engine.modules.register('plan', new MyCustomPlanner());
 ```
 
+**17-Agent Registry** — the engine-level module system above composes with the
+**17 registered agents** in `src/agents/module-registry.ts`, which the
+orchestrator uses to build task plans:
+
+| # | Agent type | Role |
+|---|---|---|
+| 1 | `planner` | Decompose goal into an ordered, dependency-aware task plan |
+| 2 | `context-gatherer` | Scan the codebase, discover relevant files (wraps InspectModule) |
+| 3 | `writer` | Generate and apply code changes (wraps EditModule incl. Tier-0 routing) |
+| 4 | `reviewer` | Code review, bug detection, style checks (wraps VerifyModule) |
+| 5 | `runner` | Sandboxed command execution |
+| 6 | `tester` | Sandboxed test execution (wraps TestModule) |
+| 7 | `debugger` | Iterative test-fix loop (wraps RecoverModule) |
+| 8 | `git` | Commit, branch, PR generation |
+| 9 | `gitlab` | Full GitLab REST API — MRs, issues, pipelines |
+| 10 | `package` | Dependency management / package publishing |
+| 11 | `github-release` | Tag + release creation, npm publish |
+| 12 | `security` | Prompt-injection + secret/PII scanning |
+| 13 | `skill-runner` | Inject compiled skills into the execution plan |
+| 14 | `mcp` | Invoke external tools via Model Context Protocol |
+| 15 | `pr-review` | Inline code review on open PRs |
+| 16 | `issue-triage` | Issue classification, prioritization, labeling |
+| 17 | `branch-automation` | Git hooks, auto-branch workflows, CI diagnosis |
+
+Every agent is registered with `registry.register(name, factory, metadata)`;
+plugins and SDK users can register additional agents or override built-ins
+(`registerOrOverride`), which is how custom agent roles enter the pipeline.
+
 ### 4.2 Observability Bus
 
 Every module emits structured events on a shared EventBus:
@@ -530,13 +558,63 @@ User Goal
                      └──────────────┘
 ```
 
+**Data flow with retrieval (token-efficient context):** before an LLM call, the
+context assembler may route the gathered context through the vector store —
+chunk → embed → top-k retrieval — and the reduced context feeds the EditModule
+/ planner. The retrieval layer sits between the Inspect/Context-Gatherer stage
+and the model call, and is fully transparent to the pipeline above (see §4.5).
+
+### 4.5 Vector Store — Pluggable Backend Tiers (FAISS-backed)
+
+The memory/retrieval subsystem (`src/memory/`) exposes a **pluggable vector-store
+backend** with three tiers, auto-selected per machine in priority order:
+
+| Priority | Backend | Implementation | Notes |
+|---|---|---|---|
+| 1 | `faiss-native` | `@faiss-node/native` real FAISS (`FaissIndex` FLAT_IP, L2-normalized → cosine) | Fastest; activates only when the native addon builds and passes a load-time smoke test (v1.49.1 fixed the silent-fallback bug) |
+| 2 | `faiss-ivf` | Pure-JS IVF-flat ANN (no native deps) | Fast approximate search; default when native is unavailable |
+| 3 | `json` | Exact flat cosine over `vectors-<ns>.json` | Original behavior; always works; zero data migration |
+
+```
+┌─────────────────────────────────────────────────────────────┐
+│                 VectorStore (facade)                         │
+│  createFaissBackend() → lazily-resolved backend             │
+└────────────────────────┬────────────────────────────────────┘
+                         │
+        ┌────────────────┼────────────────┐
+        ▼                ▼                ▼
+┌──────────────┐ ┌──────────────┐ ┌──────────────┐
+│ faiss-native │ │  faiss-ivf   │ │    json      │
+│ (FAISS addon)│ │ (pure-JS IVF)│ │ (exact flat) │
+└──────────────┘ └──────────────┘ └──────────────┘
+```
+
+**Key behaviors:**
+- **Auto-selection** — resolution tries `faiss-native` first; any load/smoke-test
+  failure falls back to `faiss-ivf`, then `json` (same entry format, no
+  migration). `routing.vectorBackend` / `BUFF_VECTOR_BACKEND` override the
+  priority.
+- **Backend diagnostics** — `buff memory backend` prints the active backend and
+  why it was chosen; `--check` runs a native-FAISS availability probe with
+  install guidance; `checkNativeFaiss()` is exported from the package API.
+- **Namespaced indexes** — each namespace has its own file
+  (`vectors-<ns>.json`) so repo retrieval chunks never pollute memory/history
+  vectors.
+- **Retrieval integration** — gathered contexts are chunked (~512 tokens,
+  paragraph-aware), embedded locally (`bge-small-en-v1.5`, 384-dim), reduced to
+  top-k relevant chunks, and the reduced context is sent to the model — small
+  contexts pass through untouched, and any retrieval failure fails over to the
+  full context (graceful degradation).
+- **Benchmark-validated** — 2,000-vector corpus: exact JSON recall@5 ≥ 0.99,
+  IVF recall@5 ≥ 0.9 / recall@1 ≥ 0.8.
+
 ---
 
 ## 5. Current State vs. Target Architecture
 
-| Aspect | Current (v1.18.0) | Target |
+| Aspect | Current (v1.50.0) | Target |
 |---|---|---|
-| **Module boundaries** | Agents switch on `agentType` string in a hardcoded `createAgent()` function | Module registry with plugin-based loading |
+| **Module boundaries** | 17-agent `ModuleRegistry` with plugin-based loading (v1.18.0+) | Registry-driven loading for all modules, incl. custom plugins |
 | **Error recovery** | `ErrorRepairEngine` class called from specific agent failure paths | `RecoverModule` as first-class pipeline stage with configurable budgets |
 | **Verification** | Implicit (ReviewerAgent checks code) | Explicit `VerifyModule` with check pipeline |
 | **Reporting** | Hardcoded text summary in Orchestrator | Pluggable `ReportModule` with multiple output formats |
