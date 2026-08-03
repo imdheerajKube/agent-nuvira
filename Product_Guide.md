@@ -24,7 +24,7 @@
 
 ### 1.1 What is Agent-Nuvira?
 
-**Agent-Nuvira** is an open-source, multi-agent AI coding assistant that runs entirely from the command line. It connects to 5 AI model providers (Groq, NVIDIA NIM, Google Gemini, OpenRouter, and local models via Ollama) and orchestrates specialized AI agents to plan, write, review, test, and publish code — all from a single goal statement.
+**Agent-Nuvira** is an open-source, multi-agent AI coding assistant that runs entirely from the command line. It connects to **17+ AI model providers** (5 built-in — Groq, NVIDIA NIM, Google Gemini, OpenRouter, and local models via Ollama — plus 12 more configurable via environment variables: OpenAI, Anthropic, Mistral, Cohere, Together, DeepInfra, Fireworks, Perplexity, Azure, LM Studio, Anyscale, vLLM) and orchestrates 17 specialized AI agents to plan, write, review, test, and publish code — all from a single goal statement.
 
 Unlike cloud-dependent coding assistants, Agent-Nuvira is **fully offline-capable** (with local models), **server-independent** (no intermediary backend), and **privacy-first** (your code and prompts go directly to your chosen provider or stay on your machine).
 
@@ -32,7 +32,7 @@ Unlike cloud-dependent coding assistants, Agent-Nuvira is **fully offline-capabl
 
 | Factor | Agent-Nuvira | Typical Competitors |
 |---|---|---|
-| **Architecture** | Multi-agent orchestration (15 agent roles + management) | Single-agent chat |
+| **Architecture** | Multi-agent orchestration (17 agent roles + management) | Single-agent chat |
 | **Provider Choice** | 17+ providers (5 built-in + 12 configurable via env vars) + plugin system | Vendor-locked |
 | **Offline Capability** | ✅ Full offline with local models | ❌ Cloud-dependent |
 | **Data Privacy** | Direct-to-provider or local-only | Routes through intermediary server |
@@ -112,7 +112,7 @@ Agent-Nuvira occupies a unique position in the AI developer tools landscape:
 
 ### 2.2 Multi-Agent Orchestration Engine
 
-The orchestrator is the brain of the system. It coordinates 15 specialized agents and management components:
+The orchestrator is the brain of the system. It coordinates 17 specialized agents and management components:
 
 ```
 User: "add JWT authentication to the Express app"
@@ -489,6 +489,8 @@ src/web-dashboard/              # React web dashboard
 | 93 | **FAISS-Backed Vector Store** | ✅ Complete (v1.48.0) | v1.48.0 | `VectorStoreBackend` interface with pluggable tiers — **faiss-native** (`@faiss-node/native` real FAISS) → **faiss-ivf** (pure-JS IVF-flat ANN) → **json** (exact flat cosine, original behavior). Auto-selected in that priority order; lazy backend resolution, same JSON entry format, fully backward-compatible. `routing.vectorBackend` / `BUFF_VECTOR_BACKEND` overrides |
 | 94 | **FAISS Benchmark + Recall Validation** | ✅ Complete (v1.49.0) | v1.49.0 | 2,000-vector corpus benchmark — exact JSON ground truth recall@5 ≥ 0.99, IVF recall@5 ≥ 0.9 / recall@1 ≥ 0.8, latency logged; hermetic memory test suite (temp BUFF_MEMORY_DIR) |
 | 95 | **Native FAISS Tier Activation** | ✅ Complete (v1.49.1) | v1.49.1 | Native tier rewritten for the real `@faiss-node/native` v0.1.11 API (`FaissIndex` FLAT_IP, async add/search, L2-normalize → cosine) so the installed native module is actually used — was silently falling back to pure-JS IVF; `buff memory backend --check` diagnostics |
+| 96 | **`buff memory backend` Diagnostics CLI** | ✅ Complete (v1.50.0) | v1.50.0 | `buff memory backend` shows the active vector-search backend (faiss-native / faiss-ivf / json) and why it was chosen; `--check` runs a native-FAISS availability probe with install guidance; `checkNativeFaiss()` exported from the package API |
+| 97 | **README Core-Edge Marketing** | ✅ Complete (v1.50.0) | v1.50.0 | "Why Agent-Nuvira? (The Core Edge)" — punchy feature pitch covering 17+ providers, 17-agent swarm, learning router, tier-0 routing, FAISS indexing, MCP, team collaboration, and the no-server/no-telemetry promise |
 
 ### 3.2 Key Upgrades & Enhancements
 

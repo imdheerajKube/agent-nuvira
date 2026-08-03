@@ -13,6 +13,19 @@ agent-nuvira config list
 
 ---
 
+## Why Agent-Nuvira? (The Core Edge)
+
+- **🪙 Smart Multi-Provider Token Routing** — stop paying flat premium fees. Nuvira dynamically routes every sub-task across **17+ providers** — local models (Ollama, LM Studio), free tiers (Groq, Google Gemini), and paid/high-capacity clouds (OpenAI, Anthropic, Mistral, Cohere, Together, DeepInfra, Fireworks, Perplexity, NVIDIA NIM, OpenRouter, Azure, Anyscale, vLLM) — so you maximize free-use limits and pay only when complexity demands it. A **central quota ledger** tracks tokens per provider × model with calendar-aware reset windows, parks exhausted providers until free quota resets, and **auto-fails-over mid-session** when a token expires or a rate limit hits — never a stuck session, never a quota error thrown at you
+- **🐝 17 Specialized Agent Swarm** — no generic single-prompt boxes. Your goal is decomposed into a DAG of tasks handled by dedicated agents working in parallel: Planner, Context-Gatherer, Writer, Reviewer, Runner, Tester, Debugger, Security Auditor, Git/GitLab specialist, Package installer, PR Reviewer, Issue Triage, Branch Automation, and more
+- **🧠 Learning Router that gets better with use** — a Thompson-sampling bandit learns per provider × complexity bucket from *real* task outcomes (cost-adjusted rewards), with hard constraints (`maxCostUsd`, `minSpeed`, `minReasoning`), regex routing rules, uncertainty-driven escalation when the bandit has no data, and **promotion gates** that only keep router changes that measurably improve quality without regressing cost
+- **⚡ Deterministic Tier-0 routing** — mechanical edits (remove `console.log`, rename symbols, dedupe imports) complete in **<1ms for $0**, AST-validated before apply, and never touch an LLM unless the goal genuinely needs one
+- **🧠 Local FAISS Context Indexing** — blazing-fast, private, semantic code search and retrieval with an optional **native FAISS backend** (pure-JS fallback) that strictly respects your `.gitignore`. Retrieval shrinks a 20k-token gathered context to the top-k relevant chunks — saving tokens so free quotas stretch further
+- **🔌 First-Class MCP Integration** — seamlessly connect to Jira, Slack, PostgreSQL, GitHub Issues, and file systems using standard Model Context Protocol servers with SSE transport
+- **👥 Real-Time Team Collaboration** — share context, synchronized vector indices, custom agents, and review pipelines across your engineering team via Git-synced config and memory
+- **🛡️ No server, no telemetry, no subscriptions** — everything runs locally on your machine
+
+---
+
 ## Features
 
 - **Unified interface** across 17+ providers: 5 built-in (local/Ollama, Groq, NVIDIA NIM, Google Gemini, OpenRouter) + 12 configurable via environment variables (OpenAI, Anthropic, Mistral, Cohere, Together, DeepInfra, Fireworks, Perplexity, Azure, LM Studio, Anyscale, vLLM)
@@ -50,6 +63,10 @@ agent-nuvira config list
 - **Startup progress feedback** — first launch never looks like a silent hang: a live spinner reports each startup phase (plugins → history & search → semantic index) as it runs
 - **Auto-mode session failover** — in Auto routing, a provider whose API key/token expires or rate-limits mid-session is automatically swapped for the next-best provider (auth failures excluded for the session, rate-limit failures for a 120s cooldown, 5xx/network through the circuit breaker) — no more stuck sessions on a dead key
 - **Central quota ledger** — tokens/requests per provider × model with calendar-aware reset windows; exhausted providers are **parked** until the window rolls (auto re-enable, no timers), and Auto routing sinks parked providers below healthy candidates **before** a call — plus an optional free/local-first `allowPaid` gate and a `buff model quota` CLI with a cost summary (free vs paid tokens + estimated $ saved)
+- **Learning Router CLI** — `buff model bandit` inspects the Thompson-sampling state (α/β priors per provider × complexity bucket, expected win %, learning history, `--json` for CI) and `buff model bandit reset` clears it; routing decisions record a `routedBy` source (`heuristic | rule | bandit`) for full auditability
+- **Routing rules & hard constraints** — regex/string task-pattern rules force a provider/model before scoring (first match wins); per-call filters (`routing.maxCostUsd`, `routing.minSpeed`, `routing.minReasoning`) *eliminate* violating providers with a safe fallback when constraints would remove everything
+- **Deterministic Tier-0 routing** — mechanical edits short-circuit the LLM entirely (strip `console.*` lines, word-boundary symbol renames, import dedupes) with AST validation and graceful fallthrough to the LLM when a goal isn't mechanical — `$0` and `<1ms` per edit
+- **Native FAISS vector backend** — `buff memory backend` shows the active backend (`faiss-native` / `faiss-ivf` / `json`) and why it was chosen; `--check` runs a native-FAISS availability probe with install guidance, and `@faiss-node/native` is used automatically whenever it builds
 - **Vector retrieval (token-efficient context)** — large gathered contexts are chunked, embedded locally (`bge-small-en-v1.5` via @huggingface/transformers, zero new deps) and reduced to the top-k semantically-relevant chunks before the LLM call — saving tokens so free quotas stretch further. Complements the quota ledger: **retrieval saves tokens, the ledger manages quotas**. Small contexts pass through untouched (zero overhead); any retrieval failure fails over to full context. `buff retrieval index/query/stats/clear` + a dashboard Retrieval card show the savings
 - **Checkpoint / resume** — `buff execute "<goal>" --checkpoint` saves a resume-able snapshot after every task batch; `--resume [id]` rehydrates the plan and continues from the first pending step (a crash / quota kill / token expiry mid-pipeline no longer restarts the whole plan); `--checkpoint-list` shows saved pipelines
 - **Security scan CLI** — `buff security scan` detects PII, prompt injections, and dangerous code patterns

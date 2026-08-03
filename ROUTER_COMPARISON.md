@@ -1,6 +1,6 @@
 # Agent-Nuvira vs. Ruflo — Model Selection & Router Strategy Comparison
 
-> **Date:** 2026-08-01
+> **Date:** 2026-08-01 (updated 2026-08-03)
 > **Scope:** Comparison of the model-selection / auto-routing strategies of
 > **Agent-Nuvira** (this repo — `src/learning/auto-router.ts`,
 > `router-bandit.ts`, `hybrid-router.ts`, `model-router.ts`, `tier0-router.ts`,
@@ -11,7 +11,9 @@
 > `v3/@claude-flow/integration/src/multi-model-router.ts`).
 
 This document was produced by reading both codebases directly. Line counts and
-mechanisms are accurate as of the dates above.
+mechanisms are accurate as of the dates above. The 2026-08-03 update reflects
+the shipped FAISS-backed vector store (v1.48.0–v1.49.1) and the `buff memory
+backend` diagnostics (v1.50.0).
 
 ---
 
@@ -19,9 +21,11 @@ mechanisms are accurate as of the dates above.
 
 ### Agent-Nuvira — a multi-provider weighted scorer with a working-model guarantee
 
-Agent-Nuvira routes across **five independent providers** (`local · groq · nim ·
-gemini · openrouter`) with real per-provider pricing. The core is a weighted
-scorer, not a tier picker:
+Agent-Nuvira routes across a **17+ provider ecosystem** — five built-in
+(`local · groq · nim · gemini · openrouter`) plus 12 more configurable via env
+vars (OpenAI, Anthropic, Mistral, Cohere, Together, DeepInfra, Fireworks,
+Perplexity, Azure, LM Studio, Anyscale, vLLM) — with real per-provider pricing.
+The core is a weighted scorer, not a tier picker:
 
 - **5 routing dimensions** — `reasoning / speed / cost / privacy / reliability`
   (each scored 0–1 per provider), combined into a weighted composite score.
@@ -106,7 +110,7 @@ Ruflo's shipped router (`v3/@claude-flow/cli/src/ruvector/model-router.ts`,
 
 | Criterion | Agent-Nuvira | Ruflo |
 |---|---|---|
-| **Vendor diversity** | ✅ 5 independent providers + local; real cost arbitrage | ⚠️ 3 tiers of one vendor (OpenRouter used only as provider alternate); broader `multi-model-router` exists but isn't the core loop |
+| **Vendor diversity** | ✅ 17+ providers (5 built-in + 12 env-configurable + plugins); real cost arbitrage | ⚠️ 3 tiers of one vendor (OpenRouter used only as provider alternate); broader `multi-model-router` exists but isn't the core loop |
 | **Cost optimization** | ✅ real pricing, cost-adjusted bandit rewards, per-call `maxCostUsd` | ✅ per-tier cost multipliers, budget periods, cost-optimized mode |
 | **"Only working models" guarantee** | ✅ **credential filter + live model-list validation + runtime failover** — proven end-to-end (broken Gemini key 404 → answered from Groq, no crash) | ❌ assumes a valid Anthropic key + tier→model map; no live validation or generate-time failover in the router itself |
 | **Bandit sophistication** | ⚠️ multiplier on deterministic score; no confidence-based escalation | ✅ native Beta-Bernoulli selection + **uncertainty-driven escalation** + per-modelId shadow priors |
@@ -248,6 +252,7 @@ that ruflo's router does not have (mapped to a coding-assessment rubric in
 | Capability | Agent-Nuvira (v1.44.0+) | Ruflo |
 |---|---|---|
 | **Central quota ledger** | `QuotaLedger` write-throughs every LLM call; per-provider×model tokens/requests; calendar-aware reset windows auto re-enable parked providers at the exact boundary; persists to `~/.buff/memory/quota-ledger.json` | no persistent quota state in the router — cost optimization is price-table based only |
+| **Vector-DB-backed context** | FAISS-backed vector store (v1.48.0–v1.49.1) — native `@faiss-node/native` → pure-JS IVF → exact JSON tiers auto-selected per machine (`buff memory backend --check`); retrieval chunking + top-k reduction cuts gathered context before the LLM call, stretching free quotas | no vector store in the router; neural-router requires an external embedding corpus and is opt-in |
 | **Predictive exhaustion sinking** | parked/exhausted providers sink below healthy candidates **before** a call (`getRouterQuotaStatus` → same sink as the circuit breaker) | no pre-call quota awareness; failures handled reactively |
 | **Free/local-first gate** | `routing.allowPaid: false` restricts paid providers to complex/critical work; every paid pick flagged | no consent gate — tier router optimizes within one vendor |
 | **Per-subtask complexity routing** | every `TaskStep` carries a `complexity` label routed via `complexityHint` | complexity is goal-global (single heuristic per request) |
@@ -274,6 +279,7 @@ while ruflo's router remains a within-vendor picker.
 | Model health | `src/inference/model-validator.ts` (128 lines) | — |
 | Neural routing | — | `v3/@claude-flow/cli/src/ruvector/neural-router.ts` (961 lines) |
 | Multi-provider broad router | AutoModelRouter (this repo's core) | `v3/@claude-flow/integration/src/multi-model-router.ts` |
+| Vector store | `src/memory/faiss-backend.ts` + `vector-store.ts` (`faiss-native` / `faiss-ivf` / `json`) | — (no bundled vector store) |
 | CLI surface | `src/cli/model.ts` (`explain`/`bandit`/`quota`/`switch`) | `v3/@claude-flow/cli/src/commands/neural.ts` |
 | Quota ledger | `src/learning/quota-ledger.ts` | — |
 | Continuity | `src/agents/checkpoint-store.ts` + orchestrator `--checkpoint`/`--resume` | — |

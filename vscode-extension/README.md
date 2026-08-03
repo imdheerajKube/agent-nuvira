@@ -4,14 +4,21 @@
 [![Visual Studio Marketplace Downloads](https://img.shields.io/visual-studio-marketplace/d/dheerajsharma.agent-nuvira-vscode)](https://marketplace.visualstudio.com/items?itemName=dheerajsharma.agent-nuvira-vscode)
 [![Open VSX Registry](https://img.shields.io/open-vsx/v/dheerajsharma/agent-nuvira-vscode)](https://open-vsx.org/extension/dheerajsharma/agent-nuvira-vscode)
 
-> **Multi-agent AI coding assistant** — plan, write, review, test, and publish code using local or cloud AI models, all from within VS Code.
+> **This is not just a VS Code extension — it's the full Agent-Nuvira development agent, on your editor *and* on the CLI.**
+>
+> Agent-Nuvira is a complete, open-source multi-agent AI coding assistant that runs entirely from your terminal (`agent-nuvira` on npm — `npx agent-nuvira`). The VS Code extension is the editor surface for the **same 17-agent engine**: every agent, every routing decision, every vector-store lookup in this extension is powered by the CLI, and every feature below is equally available — and more powerful — from the command line.
+>
+> ```bash
+> # The full agent, no editor required
+> npx agent-nuvira execute "implement user authentication with JWT"
+> ```
+>
+> ---
+>
+> ## Features
 
----
-
-## Features
-
-### 🤖 11+ Specialized Agents
-Agent-Nuvira orchestrates multiple AI agents that collaborate to accomplish complex coding tasks:
+### 🤖 17 Specialized Agents
+Agent-Nuvira orchestrates 17 AI agents that collaborate to accomplish complex coding tasks — in VS Code *and* from the CLI:
 
 | Agent | Role |
 |-------|------|
@@ -24,8 +31,14 @@ Agent-Nuvira orchestrates multiple AI agents that collaborate to accomplish comp
 | **Runner** | Executes commands and captures output |
 | **Security** | Audits code for vulnerabilities |
 | **Git** | Commits, branches, and manages version control |
+| **GitLab** | Full GitLab REST API — MRs, issues, pipelines |
 | **Package** | Manages npm/pip dependencies |
 | **GitHub Release** | Creates releases and changelogs |
+| **PR Review** | Inline code review on open PRs |
+| **Issue Triage** | Classifies and prioritizes issues |
+| **Branch Automation** | Git hooks, auto-branch workflows |
+| **Skill Runner** | Runs compiled reusable skills |
+| **MCP** | Invokes external tools via Model Context Protocol |
 
 ### 🎯 Smart Code Assistance
 - **Inline Code Suggestions** — As-you-type completions powered by AI agents (debounced, context-aware)
@@ -34,14 +47,15 @@ Agent-Nuvira orchestrates multiple AI agents that collaborate to accomplish comp
 - **Explain Code** — Get detailed explanations of selected code
 - **Generate Tests** — Automatically create unit tests for files or selections
 
-### 🔌 Multiple AI Providers
-Supports 5 built-in providers plus custom plugins:
-- **Local** — Ollama, HuggingFace, GGML (fully offline, free)
-- **Groq** — Fast cloud inference
+### 🔌 17+ Multiple AI Providers
+Supports 17+ providers (5 built-in + 12 configurable via env vars) plus custom plugins:
+- **Local** — Ollama, HuggingFace, GGML, LM Studio (fully offline, free)
+- **Groq** — Fast cloud inference, generous free tier
 - **NVIDIA NIM** — Enterprise-grade models
 - **Google Gemini** — Free tier available
 - **OpenRouter** — Access to 100+ models
-- **Auto routing** — Let the agent pick the best provider/model per task
+- **OpenAI · Anthropic · Mistral · Cohere · Together · DeepInfra · Fireworks · Perplexity · Azure · LM Studio · Anyscale · vLLM** — configurable via environment variables
+- **Auto routing** — a Thompson-sampling bandit learns which provider/model wins per task type and picks the best one automatically (free/local-first via the quota ledger), with mid-session failover when a key expires or a quota resets
 
 ### 🎛️ Model & Provider Switcher
 - **Status-bar model indicator** — shows the active provider/model; click to switch
@@ -50,6 +64,11 @@ Supports 5 built-in providers plus custom plugins:
 - **Check Model Health** — runs `agent-nuvira model health` for the active provider and shows the report
 - **Auto routing toggle** — when enabled, every AI flow routes each request to the best provider/model automatically: chat, execute, inline suggestions, code-lens actions, and diagnostic fixes. Note: inline completions are latency-sensitive — if suggestions feel slower with auto-routing enabled, pin a fast provider instead
 - **Quota Ledger View** — a quota status-bar indicator (alert count when providers are parked) plus `Agent-Nuvira: Show Quota Ledger` opens a webview with free/local vs paid token usage, estimated savings, per-provider window tables (tokens, requests, time-to-reset, parked state), and the failover timeline (parked → failover → re-enabled). **Live updates**: the panel watches the CLI memory dir and auto-refreshes the moment a failover/park/window-reset is written by any process sharing it (CLI, chat, dashboard) — no manual Refresh needed, with a periodic 60s poll as a safety net for platforms where file watching is unreliable
+
+### 🧠 FAISS Vector Store + Team Collaboration
+- **Local FAISS-backed vector store** — semantic code search with a native FAISS backend (pure-JS fallback) that respects `.gitignore`; large contexts are chunked, embedded locally, and reduced to the top-k relevant chunks so free quotas stretch further
+- **Real-Time Team Collaboration** — Git-synced shared config, memory, and review pipelines across your team
+- **`buff memory backend --check`** — see which vector backend (faiss-native / faiss-ivf / json) is active on your machine
 
 ### 📊 Visual Feedback
 - **Agent Progress Panel** — Real-time webview showing agent execution status, logs, and diffs
