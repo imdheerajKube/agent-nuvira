@@ -832,6 +832,14 @@
             <span class="model-tag">Issue Triage</span>
             <span class="model-tag">Branch Automation</span>
           </div>
+          <div class="arch-flow" role="img" aria-label="Agent pipeline flow: Orchestrator builds a task plan via the ModuleRegistry, which dispatches each task to its registered agent in the execution pipeline">
+            <div class="arch-flow-node arch-flow-orb">⚡ Orchestrator</div>
+            <div class="arch-flow-arrow">→</div>
+            <div class="arch-flow-node arch-flow-reg">🗂️ ModuleRegistry <small>17 built-ins</small></div>
+            <div class="arch-flow-arrow">→</div>
+            <div class="arch-flow-node arch-flow-pipe">🔄 Execution Pipeline</div>
+          </div>
+          <p class="arch-flow-caption">register / lookup → agent instance → dependency-graph scheduling</p>
         </div>
         <div class="feature-card" data-delay="100">
           <div class="feature-icon learning">
@@ -845,6 +853,20 @@
             <span class="arch-tier">2 · faiss-ivf</span>
             <span class="arch-tier-arrow">→</span>
             <span class="arch-tier">3 · json</span>
+          </div>
+          <div class="arch-faiss" role="img" aria-label="FAISS fallback chain: the VectorStore facade lazily resolves faiss-native, falls back to faiss-ivf then json, and returns top-k chunks to the LLM">
+            <div class="arch-faiss-query">🔎 Query / gathered context</div>
+            <div class="arch-faiss-vline"></div>
+            <div class="arch-faiss-facade">VectorStore facade <small>lazy resolve</small></div>
+            <div class="arch-faiss-tiers">
+              <div class="arch-faiss-tier arch-faiss-tier-active">1 · faiss-native<br /><small>@faiss-node/native · FLAT_IP + L2 → cosine</small></div>
+              <div class="arch-faiss-fb">↓ fallback</div>
+              <div class="arch-faiss-tier">2 · faiss-ivf<br /><small>pure-JS IVF-flat ANN</small></div>
+              <div class="arch-faiss-fb">↓ fallback</div>
+              <div class="arch-faiss-tier">3 · json<br /><small>exact flat cosine</small></div>
+            </div>
+            <div class="arch-faiss-vline"></div>
+            <div class="arch-faiss-out">📦 top-k chunks → reduced LLM context</div>
           </div>
           <p class="arch-tier-note"><code>faiss-native</code> uses real FAISS (<code>@faiss-node/native</code>, FLAT_IP + L2-normalized → cosine); <code>faiss-ivf</code> is a pure-JS IVF-flat ANN; <code>json</code> is exact flat cosine. Check your active tier with:</p>
           <div class="code-block code-block-sm">
