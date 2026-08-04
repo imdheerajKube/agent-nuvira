@@ -39,7 +39,7 @@ vi.mock('node:os', () => ({
 }));
 
 // Import the server after env/os mocks are in place
-const { createDashboardServer, isQuotaWatcherArmed, setAlwaysWatchQuota } = await import('../../src/web-dashboard/server.js');
+const { createDashboardServer, isQuotaWatcherArmed, setAlwaysWatchQuota, pushDAGUpdate, updateDAGNode, resetDAG, readPipelineRuns } = await import('../../src/web-dashboard/server.js');
 
 // ─── Fixture data helpers ───────────────────────────────────────────────────
 
@@ -439,6 +439,24 @@ describe('Dashboard Server', () => {
       const body = JSON.parse(res.body);
       expect(body).toHaveProperty('routing');
       expect(body.routing.preference).toHaveLength(5);
+    });
+
+    it('GET /api/pipeline-runs returns empty when no runs file exists', async () => {
+      try { rmSync(join(memoryDir, 'pipeline-runs.json'), { force: true }); } catch { /* ignore */ }
+      const res = await httpGet(`${baseUrl}/api/pipeline-runs`);
+      expect(res.statusCode).toBe(200);
+      const body = JSON.parse(res.body);
+      expect(body.total).toBe(0);
+      expect(body.runs).toEqual([]);
+    });
+
+    it('GET /api/all includes the pipelineRuns field (scrubbable run timeline)', async () => {
+      const res = await httpGet(`${baseUrl}/api/all`);
+      expect(res.statusCode).toBe(200);
+      const body = JSON.parse(res.body);
+      expect(body).toHaveProperty('pipelineRuns');
+      expect(body.pipelineRuns.total).toBe(0);
+      expect(body.pipelineRuns.runs).toEqual([]);
     });
   });
 
@@ -921,6 +939,134 @@ describe('Dashboard Server', () => {
       } finally {
         rmSync(promoPath, { force: true });
       }
+    });
+  });
+
+  // ═══════════════════════════════════════════════════════════════════════
+  // Pipeline runs — persisted scrubbable phase timeline
+  // ═══════════════════════════════════════════════════════════════════════
+
+  describe('pipeline runs — persisted phase timeline', () => {
+    it('finalizes and persists a run when every DAG node reaches a terminal state', async () => {
+      // Hermetic: reset in-memory DAG state and remove any prior runs file.
+      resetDAG();
+      try { rmSync(join(memoryDir, 'pipeline-runs.json'), { force: true }); } catch { /* ignore */ }
+
+      const pipelineId = `pipeline-${Date.now()}`;
+      pushDAGUpdate({
+        pipelineId,
+        pipelineDescription: 'Implement login flow',
+        nodes: [
+          { id: 'step-1', agentType: 'planner', status: 'pending', description: 'Plan the login flow' },
+          { id: 'step-2', agentType: 'context-gatherer', status: 'pending', description: 'Gather relevant files' },
+          { id: 'step-3', agentType: 'writer', status: 'pending', description: 'Write the implementation' },
+          { id: 'step-4', agentType: 'reviewer', status: 'pending', description: 'Review the changes' },
+          { id: 'step-5', agentType: 'tester', status: 'pending', description: 'Run the test suite' },
+        ],
+        edges: [
+          { from: 'step-1', to: 'step-2' },
+          { from: 'step-2', to: 'step-3' },
+          { from: 'step-3', to: 'step-4' },
+          { from: 'step-4', to: 'step-5' },
+        ],
+      });
+
+      for (const id of ['step-1', 'step-2', 'step-3', 'step-4', 'step-5']) {
+        updateDAGNode(id, { status: 'running' });
+      }
+      updateDAGNode('step-1', { status: 'completed', summary: 'Plan ready' });
+      updateDAGNode('step-2', { status: 'completed', summary: '5 files gathered' });
+      updateDAGNode('step-3', { status: 'completed', summary: 'auth.ts written' });
+      updateDAGNode('step-4', { status: 'completed', summary: 'approved' });
+      updateDAGNode('step-5', { status: 'completed', summary: '12/12 passed' });
+
+      // In-memory reader sees the persisted run with full phase detail.
+      const runs = readPipelineRuns();
+      expect(runs.total).toBe(1);
+      expect(runs.runs[0].id).toBe(pipelineId);
+      expect(runs.runs[0].goal).toBe('Implement login flow');
+      expect(runs.runs[0].success).toBe(true);
+      expect(runs.runs[0].phases).toHaveLength(5);
+      expect(runs.runs[0].phases.map((p) => p.agentType)).toEqual([
+        'planner', 'context-gatherer', 'writer', 'reviewer', 'tester',
+      ]);
+      // Every phase has computed start/end/duration for proportional layout.
+      for (const p of runs.runs[0].phases) {
+        expect(p.status).toBe('completed');
+        expect(typeof p.startedAt).toBe('number');
+        expect(typeof p.completedAt).toBe('number');
+        expect(typeof p.durationMs).toBe('number');
+        expect(p.summary).toBeTruthy();
+      }
+      expect(runs.runs[0].totalDurationMs).toBeGreaterThanOrEqual(0);
+
+      // HTTP endpoint serves the persisted run.
+      const res = await httpGet(`${baseUrl}/api/pipeline-runs`);
+      expect(res.statusCode).toBe(200);
+      const body = JSON.parse(res.body);
+      expect(body.total).toBe(1);
+      expect(body.runs[0].id).toBe(pipelineId);
+      expect(body.runs[0].phases).toHaveLength(5);
+
+      // /api/all includes it so the dashboard's Run Timeline can render it.
+      const all = await httpGet(`${baseUrl}/api/all`);
+      const allBody = JSON.parse(all.body);
+      expect(allBody.pipelineRuns.total).toBe(1);
+      expect(allBody.pipelineRuns.runs[0].phases[0].agentType).toBe('planner');
+    });
+
+    it('orders persisted runs newest-first and de-duplicates by id', async () => {
+      resetDAG();
+      try { rmSync(join(memoryDir, 'pipeline-runs.json'), { force: true }); } catch { /* ignore */ }
+
+      pushDAGUpdate({
+        pipelineId: 'run-1', pipelineDescription: 'First run',
+        nodes: [{ id: 'a', agentType: 'planner', status: 'pending', description: 'plan' }], edges: [],
+      });
+      updateDAGNode('a', { status: 'running' });
+      updateDAGNode('a', { status: 'completed' });
+
+      // A new pipeline id starts a fresh run draft.
+      pushDAGUpdate({
+        pipelineId: 'run-2', pipelineDescription: 'Second run',
+        nodes: [{ id: 'b', agentType: 'writer', status: 'pending', description: 'write' }], edges: [],
+      });
+      updateDAGNode('b', { status: 'running' });
+      updateDAGNode('b', { status: 'completed' });
+
+      const res = await httpGet(`${baseUrl}/api/pipeline-runs`);
+      expect(res.statusCode).toBe(200);
+      const body = JSON.parse(res.body);
+      expect(body.total).toBe(2);
+      expect(body.runs[0].id).toBe('run-2'); // newest first
+      expect(body.runs[1].id).toBe('run-1');
+    });
+
+    it('does not persist an incomplete run (still running steps)', async () => {
+      resetDAG();
+      try { rmSync(join(memoryDir, 'pipeline-runs.json'), { force: true }); } catch { /* ignore */ }
+
+      pushDAGUpdate({
+        pipelineId: 'partial', pipelineDescription: 'Incomplete run',
+        nodes: [
+          { id: 'x', agentType: 'planner', status: 'pending', description: 'plan' },
+          { id: 'y', agentType: 'writer', status: 'pending', description: 'write' },
+        ], edges: [],
+      });
+      updateDAGNode('x', { status: 'running' });
+      updateDAGNode('x', { status: 'completed' });
+      // y is still pending/running → run must NOT be persisted yet.
+      updateDAGNode('y', { status: 'running' });
+
+      expect(readPipelineRuns().total).toBe(0);
+
+      // Completing the last step flips it to persisted.
+      updateDAGNode('y', { status: 'failed' });
+      const runs = readPipelineRuns();
+      expect(runs.total).toBe(1);
+      expect(runs.runs[0].id).toBe('partial');
+      expect(runs.runs[0].success).toBe(false);
+      expect(runs.runs[0].phases[1].status).toBe('failed');
     });
   });
 

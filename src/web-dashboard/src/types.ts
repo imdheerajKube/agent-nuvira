@@ -433,7 +433,41 @@ export interface DashboardData {
   /** Model Availability Registry — the unified sub-ms read store routing uses. */
   modelRegistry?: ModelRegistryInsights;
   dag?: DAGData;
+  /**
+   * Persisted pipeline runs (from pipeline-runs.json) — powers the scrubbable
+   * Run Timeline. Optional: an older server won't send these, so the panel
+   * falls back to live-DAG-only runs.
+   */
+  pipelineRuns?: { total: number; runs: PipelineRun[] };
   serverTime: number;
+}
+
+// ─── Pipeline Run Timeline Types ────────────────────────────────────────────
+
+/** One phase (agent step) within a pipeline run timeline. */
+export interface PipelinePhase {
+  id: string;
+  agentType: string;
+  status: 'pending' | 'running' | 'completed' | 'failed';
+  description: string;
+  /** Per-subtask complexity label (trivial/simple/moderate/complex/critical). */
+  complexity?: string;
+  summary?: string;
+  startedAt?: number;
+  completedAt?: number;
+  /** Computed duration (ms) when both timestamps are known. */
+  durationMs?: number;
+}
+
+/** One persisted pipeline execution — the unit the Run Timeline scrubs. */
+export interface PipelineRun {
+  id: string;
+  goal: string;
+  startedAt: number;
+  endedAt?: number;
+  success?: boolean;
+  totalDurationMs: number;
+  phases: PipelinePhase[];
 }
 
 // ─── Agent Execution Types ──────────────────────────────────────────────────

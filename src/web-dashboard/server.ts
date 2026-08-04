@@ -11,7 +11,7 @@
  */
 
 import { createServer, IncomingMessage, ServerResponse } from 'node:http';
-import { createReadStream, readFileSync, existsSync, statSync, watch, mkdirSync } from 'node:fs';
+import { createReadStream, readFileSync, existsSync, statSync, watch, mkdirSync, writeFileSync } from 'node:fs';
 import { join, extname, dirname, basename } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { homedir } from 'node:os';
@@ -202,8 +202,14 @@ export function pushDAGUpdate(update: {
 }): void {
   if (update.pipelineId) {
     activePipeline = update.pipelineDescription || update.pipelineId;
-    // If this is a new pipeline, reset nodes/edges
+    // If this is a new pipeline, reset nodes/edges AND start a run draft for
+    // the persisted phase timeline (the event-bus DAG timeline: the orchestrator
+    // emits plan → gather → write → review → test via DAGConsumer, which lands
+    // here as pushDAGUpdate / updateDAGNode).
     if (update.nodes.length > 0) {
+      activeRunId = update.pipelineId;
+      activeRunGoal = update.pipelineDescription || update.pipelineId;
+      activeRunStartedAt = Date.now();
       activeNodes = update.nodes.map((n) => ({
         ...n,
         startedAt: n.status === 'running' || n.status === 'completed' || n.status === 'failed' ? Date.now() : undefined,
@@ -225,6 +231,10 @@ export function updateDAGNode(nodeId: string, update: { status: DAGNode['status'
   if (update.status === 'completed' || update.status === 'failed') {
     if (!node.completedAt) node.completedAt = Date.now();
   }
+  // When every step of the active run has reached a terminal state, persist
+  // the run to pipeline-runs.json so the scrubbable phase timeline can show it
+  // after the in-memory DAG is reset.
+  maybeFinalizeRun();
   broadcastDAG();
 }
 
@@ -233,6 +243,9 @@ export function resetDAG(): void {
   activePipeline = null;
   activeNodes = [];
   activeEdges = [];
+  activeRunId = null;
+  activeRunGoal = '';
+  activeRunStartedAt = 0;
   broadcastDAG();
 }
 
@@ -289,6 +302,116 @@ export function readDAGData(): Record<string, unknown> {
 
   // Fallback: return empty
   return { pipeline: null, nodes: [], edges: [], timestamp: Date.now(), active: false };
+}
+
+// ─── Persisted Pipeline Runs (scrubbable phase timeline) ─────────────────────
+
+/**
+ * A phase in a pipeline run — mirrors the DAG node shape with a computed
+ * duration so the frontend can size timeline blocks proportionally.
+ */
+interface PipelinePhase {
+  id: string;
+  agentType: string;
+  status: 'pending' | 'running' | 'completed' | 'failed';
+  description: string;
+  /** Per-subtask complexity label (trivial/simple/moderate/complex/critical). */
+  complexity?: string;
+  summary?: string;
+  startedAt?: number;
+  completedAt?: number;
+  /** Computed duration (ms) when both timestamps are known. */
+  durationMs?: number;
+}
+
+/** One persisted pipeline execution, rebuilt from the event-bus DAG timeline. */
+interface PipelineRun {
+  id: string;
+  goal: string;
+  startedAt: number;
+  endedAt?: number;
+  success?: boolean;
+  totalDurationMs: number;
+  phases: PipelinePhase[];
+}
+
+/** File in the memory dir that backs the dashboard's Run Timeline. */
+const PIPELINE_RUNS_FILENAME = 'pipeline-runs.json';
+/** Keep the most recent 25 runs (enough for a scrubber without unbounded disk). */
+const MAX_PIPELINE_RUNS = 25;
+
+let activeRunId: string | null = null;
+let activeRunGoal = '';
+let activeRunStartedAt = 0;
+
+function pipelineRunsPath(): string {
+  return join(MEMORY_DIR, PIPELINE_RUNS_FILENAME);
+}
+
+/**
+ * Read the persisted pipeline runs, most recent first.
+ */
+export function readPipelineRuns(): { total: number; runs: PipelineRun[] } {
+  const data = readJSON<{ runs: PipelineRun[] }>(pipelineRunsPath());
+  if (!data?.runs || !Array.isArray(data.runs)) {
+    return { total: 0, runs: [] };
+  }
+  return { total: data.runs.length, runs: data.runs };
+}
+
+/**
+ * Best-effort append of a finalized run to pipeline-runs.json. Never throws —
+ * a failed write must not break the dashboard or the DAG broadcast path.
+ */
+function appendPipelineRun(run: PipelineRun): void {
+  try {
+    if (!existsSync(MEMORY_DIR)) mkdirSync(MEMORY_DIR, { recursive: true });
+    const current = readPipelineRuns();
+    const runs = [run, ...current.runs.filter((r) => r.id !== run.id)].slice(0, MAX_PIPELINE_RUNS);
+    writeFileSync(pipelineRunsPath(), JSON.stringify({ runs }, null, 2), 'utf-8');
+  } catch {
+    // Best-effort — a failed write must never break the dashboard.
+  }
+}
+
+/**
+ * When every node of the active run is terminal (completed/failed), persist it.
+ * Called from updateDAGNode after each status transition; idempotent via the
+ * activeRunId latch (cleared once the run is persisted).
+ */
+function maybeFinalizeRun(): void {
+  if (!activeRunId || activeNodes.length === 0) return;
+  const allTerminal = activeNodes.every((n) => n.status === 'completed' || n.status === 'failed');
+  if (!allTerminal) return;
+
+  const phases: PipelinePhase[] = activeNodes.map((n) => ({
+    id: n.id,
+    agentType: n.agentType,
+    status: n.status,
+    description: n.description,
+    complexity: n.complexity,
+    summary: n.summary,
+    startedAt: n.startedAt,
+    completedAt: n.completedAt,
+    durationMs: n.startedAt && n.completedAt ? n.completedAt - n.startedAt : undefined,
+  }));
+  const starts = phases.map((p) => p.startedAt || 0);
+  const ends = phases.map((p) => p.completedAt || 0);
+  const started = activeRunStartedAt || (starts.length > 0 ? Math.min(...starts) : Date.now());
+  const ended = ends.length > 0 ? Math.max(...ends) : Date.now();
+
+  appendPipelineRun({
+    id: activeRunId,
+    goal: activeRunGoal || 'Execution pipeline',
+    startedAt: started,
+    endedAt: ended,
+    success: phases.length > 0 && phases.every((p) => p.status === 'completed'),
+    totalDurationMs: Math.max(0, ended - started),
+    phases,
+  });
+  activeRunId = null;
+  activeRunGoal = '';
+  activeRunStartedAt = 0;
 }
 
 // ─── Model Health Check ────────────────────────────────────────────────────
@@ -1517,6 +1640,12 @@ function handleRequest(req: IncomingMessage, res: ServerResponse): void {
     return;
   }
 
+  if (pathname === '/api/pipeline-runs') {
+    res.writeHead(200, { 'Content-Type': 'application/json' });
+    res.end(JSON.stringify(readPipelineRuns()));
+    return;
+  }
+
   if (pathname === '/api/routing') {
     res.writeHead(200, { 'Content-Type': 'application/json' });
     res.end(JSON.stringify(readRoutingInsights()));
@@ -1535,6 +1664,7 @@ function handleRequest(req: IncomingMessage, res: ServerResponse): void {
       routing: readRoutingInsights(),
       modelRegistry: readModelRegistryData(),
       dag: readDAGData(),
+      pipelineRuns: readPipelineRuns(),
       serverTime: Date.now(),
     }));
     return;
@@ -1559,6 +1689,7 @@ function handleRequest(req: IncomingMessage, res: ServerResponse): void {
       routing: readRoutingInsights(),
       modelRegistry: readModelRegistryData(),
       dag: readDAGData(),
+      pipelineRuns: readPipelineRuns(),
       serverTime: Date.now(),
     };
     res.write(`event: init\ndata: ${JSON.stringify(allData)}\n\n`);
@@ -1589,6 +1720,7 @@ function handleRequest(req: IncomingMessage, res: ServerResponse): void {
           routing: readRoutingInsights(),
           modelRegistry: readModelRegistryData(),
           dag: readDAGData(),
+          pipelineRuns: readPipelineRuns(),
           serverTime: Date.now(),
         };
         res.write(`event: refresh\ndata: ${JSON.stringify(data)}\n\n`);

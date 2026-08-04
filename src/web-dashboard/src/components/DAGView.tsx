@@ -1,6 +1,7 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useMemo } from 'react';
 import { dashboardAPI } from '../api';
 import type { DashboardData, AgentNode, AgentEdge, DAGData } from '../types';
+import PhaseTimeline, { collectPipelineRuns } from './PhaseTimeline';
 
 interface DAGViewProps {
   data: DashboardData | null;
@@ -230,11 +231,29 @@ export default function DAGView({ data }: DAGViewProps) {
   // Use data.dag from dashboard updates (init/refresh events include dag field)
   const displayDAG = dag || liveDAG;
 
-  if (!displayDAG || (displayDAG.nodes.length === 0 && !displayDAG.active)) {
+  // Persisted + live pipeline runs powering the scrubbable Run Timeline.
+  const pipelineRuns = useMemo(
+    () => collectPipelineRuns(displayDAG, data?.pipelineRuns),
+    [displayDAG, data?.pipelineRuns],
+  );
+
+  // Scrubbing the timeline highlights the corresponding node in the DAG below.
+  const handleScrub = (phaseId: string | null) => {
+    setSelectedNode(phaseId);
+  };
+
+  // The Run Timeline must stay reachable for HISTORICAL runs even when no
+  // pipeline is live (the normal dashboard state) — only fall back to the
+  // empty state when there are neither runs nor a live DAG.
+  const hasLiveDAG = !!(displayDAG && (displayDAG.nodes.length > 0 || displayDAG.active));
+  const hasRuns = pipelineRuns.length > 0;
+
+  if (!hasLiveDAG && !hasRuns) {
     return <EmptyDAGState memoryTotal={memoryTotal} />;
   }
 
-  const { nodes, edges, pipeline, active } = displayDAG;
+  const { nodes, edges, pipeline, active } =
+    displayDAG ?? { nodes: [] as AgentNode[], edges: [] as AgentEdge[], pipeline: null, active: false };
   const { layoutNodes, svgW, svgH } = computeLayout(nodes, edges);
 
   const runningCount = nodes.filter((n) => n.status === 'running').length;
@@ -247,6 +266,18 @@ export default function DAGView({ data }: DAGViewProps) {
     <>
       <h2 className="section-title">🔀 Agent Execution DAG</h2>
 
+      {/* Scrubbable Run Timeline — scrub to replay the run and highlight each
+          step. Shown whenever runs exist (live or historical), so past runs
+          stay reachable even with no active pipeline. */}
+      {hasRuns && (
+        <div className="dag-timeline-section">
+          <h3 className="section-subtitle">⏱ Run Timeline <span className="timeline-subtitle">— scrub to replay · click a run to switch</span></h3>
+          <PhaseTimeline runs={pipelineRuns} onScrub={handleScrub} />
+        </div>
+      )}
+
+      {hasLiveDAG && (
+        <>
       {/* Pipeline Header */}
       <div className={`dag-status-bar ${active ? 'active' : ''}`}>
         <div className="dag-pipeline-name">
@@ -526,6 +557,8 @@ export default function DAGView({ data }: DAGViewProps) {
           <span className="legend-label">Live node</span>
         </div>
       </div>
+        </>
+      )}
     </>
   );
 }
