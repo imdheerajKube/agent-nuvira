@@ -239,6 +239,62 @@ describe('PlannerAgent', () => {
       expect(capturedPrompt).toContain('senior software architect');
     });
 
+    it('should instruct the model to emit parallel-friendly plans (independent steps run concurrently)', async () => {
+      const context = {
+        goal: 'add auth',
+        workingDirectory: '/test',
+        taskPlan: [],
+        artifacts: [],
+        conversations: [],
+        fileChanges: [],
+        metadata: {},
+      } as any;
+
+      let capturedPrompt = '';
+      const mockLLM = async (prompt: string) => {
+        capturedPrompt = prompt;
+        return JSON.stringify([
+          { id: 's1', description: 'Write', agentType: 'writer', dependsOn: [] },
+        ]);
+      };
+
+      await planner.execute(context, mockLLM as any);
+      expect(capturedPrompt).toContain('PARALLELISM');
+      expect(capturedPrompt).toContain('independent steps run CONCURRENTLY');
+      expect(capturedPrompt).toContain('run at the same');
+      // The example plan must show the parallel pattern (multiple writers +
+      // a shared review/security pass depending on all of them).
+      expect(capturedPrompt).toContain('step-04-security-scan');
+      expect(capturedPrompt).toContain('so the engine runs them in');
+      expect(capturedPrompt).toContain('PARALLEL;');
+    });
+
+    it('should inject the pre-flight inspection digest when present in metadata', async () => {
+      const context = {
+        goal: 'add auth',
+        workingDirectory: '/test',
+        taskPlan: [],
+        artifacts: [],
+        conversations: [],
+        fileChanges: [],
+        metadata: {
+          projectInspection: 'Project type: Node.js\n42 source files · 8 test files found',
+        },
+      } as any;
+
+      let capturedPrompt = '';
+      const mockLLM = async (prompt: string) => {
+        capturedPrompt = prompt;
+        return JSON.stringify([
+          { id: 's1', description: 'Write', agentType: 'writer', dependsOn: [] },
+        ]);
+      };
+
+      await planner.execute(context, mockLLM as any);
+      expect(capturedPrompt).toContain('Pre-flight Project Inspection');
+      expect(capturedPrompt).toContain('42 source files · 8 test files found');
+    });
+
     it('should inject routing guidance into the prompt when verification intent is detected', async () => {
       const context = {
         goal: 'verify a bug fix',

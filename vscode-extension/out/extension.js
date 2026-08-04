@@ -56,9 +56,11 @@ Object.defineProperty(exports, "__esModule", { value: true });
 exports.activate = activate;
 exports.deactivate = deactivate;
 exports.refreshModelStatusBar = refreshModelStatusBar;
+exports.refreshQuotaStatusBar = refreshQuotaStatusBar;
 const vscode = __importStar(require("vscode"));
 const cliManager_js_1 = require("./cliManager.js");
 const agentPanel_js_1 = require("./agentPanel.js");
+const quotaPanel_js_1 = require("./quotaPanel.js");
 const chatPanel_js_1 = require("./chatPanel.js");
 const chatProvider_js_1 = require("./chatProvider.js");
 const codeLensProvider_js_1 = require("./codeLensProvider.js");
@@ -69,6 +71,7 @@ const inlineSuggest_js_1 = require("./inlineSuggest.js");
 // ─── Module State ───────────────────────────────────────────────────────────
 let cliManager = null;
 let agentPanel = null;
+let quotaPanel = null;
 let chatPanel = null;
 let chatHistory = null;
 let codeLensProvider = null;
@@ -78,6 +81,7 @@ let commandRegistrar = null;
 let inlineSuggestProvider = null;
 let statusBarItem = null;
 let modelStatusBarItem = null;
+let quotaStatusBarItem = null;
 // ─── Activate ───────────────────────────────────────────────────────────────
 /**
  * Called when the extension is activated (first command is run).
@@ -87,8 +91,27 @@ function activate(context) {
     // Initialize core components
     cliManager = new cliManager_js_1.CLIManager(config);
     agentPanel = new agentPanel_js_1.AgentPanel();
+    // The quota panel reads the ledger via getQuotaStatus() and auto-refreshes
+    // live by watching the same memory dir the reader uses.
+    quotaPanel = new quotaPanel_js_1.QuotaPanel({
+        loadStatus: () => cliManager?.getQuotaStatus() ?? Promise.resolve({
+            enabled: false,
+            entries: [],
+            events: [],
+            freeTokens: 0,
+            freeRequests: 0,
+            paidTokens: 0,
+            paidRequests: 0,
+            estimatedSavedUsd: 0,
+        }),
+        watchDir: cliManager.getMemoryDir(),
+    });
     chatHistory = new chatProvider_js_1.ChatHistoryProvider(context);
-    chatPanel = new chatPanel_js_1.ChatPanel(context, chatHistory, config);
+    chatPanel = new chatPanel_js_1.ChatPanel(context, chatHistory, config, cliManager);
+    // Refresh the status bar indicator when the model is switched from the chat panel
+    chatPanel.setOnModelChanged(() => {
+        void refreshModelStatusBar();
+    });
     diffViewer = new diffViewer_js_1.DiffViewer(context);
     diagnosticFixer = new diagnosticFixer_js_1.DiagnosticFixProvider(cliManager, diffViewer);
     codeLensProvider = new codeLensProvider_js_1.CodeLensProvider(cliManager);
@@ -101,11 +124,15 @@ function activate(context) {
     // Model/provider indicator — click to switch provider/model
     modelStatusBarItem = createModelStatusBarItem();
     context.subscriptions.push(modelStatusBarItem);
+    // Quota indicator — click to open the quota ledger view
+    quotaStatusBarItem = createQuotaStatusBarItem();
+    context.subscriptions.push(quotaStatusBarItem);
     // Refresh the model indicator when a switch happens
     commandRegistrar.setOnModelChanged(() => {
         void refreshModelStatusBar();
     });
     void refreshModelStatusBar();
+    void refreshQuotaStatusBar();
     // Register all commands
     const commandDisposables = commandRegistrar.registerAll();
     for (const disposable of commandDisposables) {
@@ -114,6 +141,10 @@ function activate(context) {
     // Register the chat panel command
     context.subscriptions.push(vscode.commands.registerCommand('agent-nuvira.openChat', () => {
         chatPanel?.createOrShow(context.extensionUri);
+    }));
+    // Register the quota panel command
+    context.subscriptions.push(vscode.commands.registerCommand('agent-nuvira.showQuota', () => {
+        quotaPanel?.createOrShow(context.extensionUri);
     }));
     // Register the diagnostic fix command
     context.subscriptions.push(vscode.commands.registerCommand(diagnosticFixer_js_1.DiagnosticFixProvider.fixCommandId, (uri, line, error, code, lang, range) => diagnosticFixer?.handleFix(uri, line, error, code, lang, range)));
@@ -134,6 +165,7 @@ function activate(context) {
             cliManager = new cliManager_js_1.CLIManager(newConfig);
             commandRegistrar?.updateConfig(newConfig);
             chatPanel?.updateConfig(newConfig);
+            chatPanel?.updateCliManager(cliManager);
             inlineSuggestProvider?.updateConfig(newConfig);
             codeLensProvider?.updateCliManager(cliManager);
             diagnosticFixer?.updateCliManager(cliManager);
@@ -166,6 +198,8 @@ function deactivate() {
         cliManager.dispose();
         cliManager = null;
     }
+    // Clean up quota panel
+    quotaPanel = null;
     // Clean up diff viewer temp files
     if (diffViewer) {
         diffViewer.dispose();
@@ -187,6 +221,10 @@ function deactivate() {
     if (modelStatusBarItem) {
         modelStatusBarItem.dispose();
         modelStatusBarItem = null;
+    }
+    if (quotaStatusBarItem) {
+        quotaStatusBarItem.dispose();
+        quotaStatusBarItem = null;
     }
     inlineSuggestProvider = null;
     codeLensProvider = null;
@@ -259,6 +297,31 @@ function createModelStatusBarItem() {
     return item;
 }
 /**
+ * Create the quota status bar item.
+ * Shows the parked-provider count (or a check when all healthy); click to
+ * open the quota ledger view. Shown only when there's an active workspace.
+ */
+function createQuotaStatusBarItem() {
+    const item = vscode.window.createStatusBarItem(vscode.StatusBarAlignment.Right, 98);
+    item.command = 'agent-nuvira.showQuota';
+    item.tooltip = 'Agent-Nuvira — click to view quota ledger & failover timeline';
+    item.text = '$(dashboard) quota';
+    // Only show when there's an active workspace
+    if (vscode.workspace.workspaceFolders && vscode.workspace.workspaceFolders.length > 0) {
+        item.show();
+    }
+    // Show/hide based on workspace changes
+    vscode.workspace.onDidChangeWorkspaceFolders(() => {
+        if (vscode.workspace.workspaceFolders && vscode.workspace.workspaceFolders.length > 0) {
+            item.show();
+        }
+        else {
+            item.hide();
+        }
+    });
+    return item;
+}
+/**
  * Update the status bar text and show it.
  */
 function updateStatusBar(text) {
@@ -298,5 +361,38 @@ async function refreshModelStatusBar() {
     modelStatusBarItem.text = `$(chip) ${label}`;
     modelStatusBarItem.tooltip = tooltip;
     modelStatusBarItem.show();
+}
+/**
+ * Refresh the quota status bar indicator from the CLI's quota ledger.
+ * Shows a parked-provider count when any provider is parked (window exhausted),
+ * otherwise a checkmark. Best-effort — keeps the default label on read errors.
+ *
+ * Exported for unit testing.
+ */
+async function refreshQuotaStatusBar() {
+    if (!quotaStatusBarItem || !cliManager)
+        return;
+    let label = '$(dashboard) quota';
+    let tooltip = 'Agent-Nuvira — click to view quota ledger & failover timeline';
+    try {
+        const status = await cliManager.getQuotaStatus();
+        if (status.enabled) {
+            const parked = status.entries.filter((e) => e.parked).length;
+            if (parked > 0) {
+                label = `$(alert) ${parked} parked`;
+                tooltip = `${parked} provider(s) parked (quota exhausted) — click for details`;
+            }
+            else {
+                label = '$(check) quota ok';
+                tooltip = 'Quota ledger healthy — click to view details';
+            }
+        }
+    }
+    catch {
+        // Keep the default label if the state can't be read
+    }
+    quotaStatusBarItem.text = label;
+    quotaStatusBarItem.tooltip = tooltip;
+    quotaStatusBarItem.show();
 }
 //# sourceMappingURL=extension.js.map

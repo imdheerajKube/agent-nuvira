@@ -158,8 +158,8 @@ describe('Orchestrator — routing hints on task plan', () => {
 
   beforeEach(() => {
     orchestrator = new Orchestrator();
-    mockWriterExecute.mockClear();
-    mockReviewerExecute.mockClear();
+    mockWriterExecute.mockReset();
+    mockReviewerExecute.mockReset();
     // Prevent applyFileChanges from writing to disk during writer/debugger steps
     vi.spyOn(orchestrator as any, 'applyFileChanges').mockReturnValue(0);
     // Suppress logger output during tests
@@ -542,9 +542,12 @@ describe('Orchestrator — checkpoint resume', () => {
     originalMemoryDir = process.env.BUFF_MEMORY_DIR;
     process.env.BUFF_MEMORY_DIR = tempDir;
 
-    mockWriterExecute.mockClear();
-    mockPlannerExecute.mockClear();
-    mockReviewerExecute.mockClear();
+    // Reset mock implementations and call history — mockReset clears both.
+    // Using mockReset (not mockClear) prevents cross-test interference where
+    // a previous test's mockImplementation leaks into the next test.
+    mockWriterExecute.mockReset();
+    mockPlannerExecute.mockReset();
+    mockReviewerExecute.mockReset();
 
     // Prevent applyFileChanges from writing to disk during writer steps
     vi.spyOn(orchestrator as any, 'applyFileChanges').mockReturnValue(0);
@@ -751,9 +754,11 @@ describe('Orchestrator — review mode integration', () => {
   beforeEach(() => {
     orchestrator = new Orchestrator();
 
-    // Reset mock call tracking
-    mockCreateReviewFromResult.mockClear();
-    mockWriterExecute.mockClear();
+    // Reset mock call tracking AND implementation — mockReset prevents
+    // cross-test pollution from other describe blocks.
+    mockCreateReviewFromResult.mockReset();
+    mockCreateReviewFromResult.mockReturnValue(mockReviewBundle);
+    mockWriterExecute.mockReset();
 
     // Mock createLLMProvider to return a no-op function (avoids real provider config lookup)
     const mockLLM = vi.fn().mockResolvedValue('mock response');
@@ -1058,6 +1063,15 @@ describe('Orchestrator — auto model resolution', () => {
 
   beforeEach(() => {
     orchestrator = new Orchestrator();
+    // Reset module-level mocks that could have leaked from previous describe blocks.
+    // mockReset is critical here: the 'review mode integration' describe sets
+    // mockWriterExecute.mockImplementation(...) which would leak into auto model
+    // resolution tests that do NOT set their own implementation.
+    mockWriterExecute.mockReset();
+    mockPlannerExecute.mockReset();
+    mockReviewerExecute.mockReset();
+    mockCreateReviewFromResult.mockReset();
+    mockCreateReviewFromResult.mockReturnValue(mockReviewBundle);
   });
 
   afterEach(() => {

@@ -35,4 +35,12 @@ export declare function deactivate(): void;
  * Exported for unit testing.
  */
 export declare function refreshModelStatusBar(): Promise<void>;
+/**
+ * Refresh the quota status bar indicator from the CLI's quota ledger.
+ * Shows a parked-provider count when any provider is parked (window exhausted),
+ * otherwise a checkmark. Best-effort — keeps the default label on read errors.
+ *
+ * Exported for unit testing.
+ */
+export declare function refreshQuotaStatusBar(): Promise<void>;
 //# sourceMappingURL=extension.d.ts.map

@@ -5,10 +5,17 @@ import { resolveProvider } from './router.js';
 import { getPluginRegistry } from '../plugins/registry.js';
 import { logger } from '../utils/logger.js';
 import { ProviderType } from '../config/types.js';
+import { getModelRegistry } from '../learning/model-registry.js';
+import { refreshModelRegistry, startRegistryWatcher, PROBE_PROVIDERS } from '../inference/model-probe.js';
 
 /**
  * Models command — list available models from providers
  * agent-baba-d models [--provider nim]
+ *
+ * Subcommands:
+ *   buff models refresh [provider]  — probe + spot-check, update the registry
+ *   buff models status [--json]     — show the Model Availability Registry
+ *   buff models watch [--interval N]— background daemon keeping the registry fresh
  */
 export class ModelsCommand extends BaseCommand {
   create(): Command {
@@ -21,6 +28,77 @@ export class ModelsCommand extends BaseCommand {
       .option('-j, --json', 'Output as JSON (for scripting and IDE integration)', false)
       .action(async (options?: { provider?: string; search?: string; all?: boolean; verify?: boolean; json?: boolean }) => {
         await this.execute(options || {});
+      });
+
+    // ── Subcommand: models refresh — probe + spot-check the registry ──────
+    command
+      .command('refresh')
+      .description('Probe providers and spot-check models, updating the Model Availability Registry')
+      .argument('[provider]', 'Only refresh this provider')
+      .option('--no-spot-check', 'Only run listModels probes (skip 1-token spot-checks)')
+      .option('-j, --json', 'Output as JSON', false)
+      .action(async (provider: string | undefined, opts?: { spotCheck?: boolean; json?: boolean }) => {
+        const providers = provider ? [provider] : PROBE_PROVIDERS;
+        logger.highlight('\n📡 Refreshing Model Registry…\n');
+        const result = await refreshModelRegistry(this.configManager, {
+          providers,
+          spotCheck: opts?.spotCheck !== false,
+          onProgress: (label, detail) => console.log(`  ${label} — ${detail}`),
+        });
+        if (opts?.json) {
+          console.log(JSON.stringify(result, null, 2));
+          return;
+        }
+        console.log('');
+        logger.success(
+          `Registry refreshed — ${result.providersProbed.length} provider(s), ${result.modelsListed} models listed, ` +
+          `${result.verified} verified, ${result.unavailable} unavailable, ${result.skipped} skipped`,
+        );
+        console.log('');
+        console.log(await getModelRegistry().formatStatus());
+      });
+
+    // ── Subcommand: models status — show the registry ────────────────────
+    command
+      .command('status')
+      .description('Show the Model Availability Registry (verified / unavailable / quota-parked models)')
+      .option('-j, --json', 'Output as JSON', false)
+      .action(async (opts?: { json?: boolean }) => {
+        if (opts?.json) {
+          console.log(JSON.stringify(await getModelRegistry().getStatus(), null, 2));
+          return;
+        }
+        console.log('');
+        console.log(await getModelRegistry().formatStatus());
+        console.log('');
+        logger.info('  Registry updates automatically from real usage. Run `buff models refresh` to probe now,');
+        logger.info('  or `buff models watch` to run a background maintenance daemon.');
+      });
+
+    // ── Subcommand: models watch — background maintenance daemon ──────────
+    command
+      .command('watch')
+      .description('Run the model-registry maintenance daemon: probe + spot-check on a schedule')
+      .option('--interval <seconds>', 'Refresh interval in seconds (default: 600)', '600')
+      .option('--no-spot-check', 'Only run listModels probes (skip spot-checks)', false)
+      .action(async (opts?: { interval?: string; spotCheck?: boolean }) => {
+        const intervalMs = Math.max(60, parseInt(opts?.interval || '600', 10) || 600) * 1000;
+        logger.highlight('\n👁️  Model Registry Watch started — keeping availability fresh…');
+        logger.info(`  Interval: ${Math.round(intervalMs / 1000)}s · Ctrl+C to stop\n`);
+        startRegistryWatcher(this.configManager, {
+          spotCheck: opts?.spotCheck !== false,
+          intervalMs,
+          onProgress: (label, detail) => console.log(`  ${label} — ${detail}`),
+        });
+        // Hold until the user stops the daemon.
+        await new Promise<void>((resolve) => {
+          const stop = () => {
+            console.log('\nWatch stopped.');
+            resolve();
+          };
+          process.once('SIGINT', stop);
+          process.once('SIGTERM', stop);
+        });
       });
 
     return command;

@@ -12,6 +12,9 @@
  */
 
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
+import { mkdtempSync, rmSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 
 import {
   classifyFallbackError,
@@ -22,9 +25,34 @@ import {
   type ProviderFallbackConfig,
   type FallbackResult,
 } from '../../src/learning/provider-fallback.js';
+import { resetModelRegistry } from '../../src/learning/model-registry.js';
 import type { InferenceProvider } from '../../src/inference/interface.js';
 import type { ConfigManager } from '../../src/config/manager.js';
 import type { ProviderType } from '../../src/config/types.js';
+
+// ─── Hermetic storage isolation ──────────────────────────────────────────────
+// The registry write-through hook fires on every callWithFallback failure.
+// Without BUFF_MEMORY_DIR isolation, those writes hit the real user registry.
+
+let tempDir: string;
+let originalMemoryDir: string | undefined;
+
+beforeEach(() => {
+  tempDir = mkdtempSync(join(tmpdir(), 'buff-fallback-'));
+  originalMemoryDir = process.env.BUFF_MEMORY_DIR;
+  process.env.BUFF_MEMORY_DIR = tempDir;
+  resetModelRegistry();
+});
+
+afterEach(() => {
+  resetModelRegistry();
+  if (originalMemoryDir === undefined) {
+    delete process.env.BUFF_MEMORY_DIR;
+  } else {
+    process.env.BUFF_MEMORY_DIR = originalMemoryDir;
+  }
+  rmSync(tempDir, { recursive: true, force: true });
+});
 
 // ─── Mocks ──────────────────────────────────────────────────────────────────
 

@@ -22,6 +22,13 @@ export const EMBEDDING_DIM = 384;
 const MAX_EMBEDDING_TEXT_LENGTH = 2000;
 /** Default model for @huggingface/transformers */
 const XENOVA_MODEL = 'Xenova/all-MiniLM-L6-v2';
+/**
+ * Retrieval-grade embedding model (bge-small-en-v1.5 — better retrieval
+ * quality for code + docs, still 384-dim so vectors stay compatible with the
+ * same VectorStore). Used by the retrieval engine (src/learning/retrieval.ts);
+ * the memory/history path keeps the lighter all-MiniLM default.
+ */
+export const RETRIEVAL_MODEL = 'Xenova/bge-small-en-v1.5';
 /** LLM-based embedding system prompt (Tier 3 fallback) */
 const EMBEDDING_PROMPT = `You are a semantic embedding generator. Given a piece of text, generate a dense vector representation that captures its semantic meaning.
 
@@ -87,8 +94,8 @@ function cacheKey(text) {
  * @param forceLLM      If true, skip native tiers and use LLM directly (useful for testing)
  * @returns             A promise that resolves to a number[] embedding vector (384-dim)
  */
-export async function embed(text, callLLM, forceLLM) {
-    const key = cacheKey(text);
+export async function embed(text, callLLM, forceLLM, model) {
+    const key = cacheKey(`${model || XENOVA_MODEL}:${text}`);
     // Check cache first
     const cached = cache.get(key);
     if (cached)
@@ -99,7 +106,7 @@ export async function embed(text, callLLM, forceLLM) {
     if (!forceLLM) {
         // Tier 1: @huggingface/transformers (fast, local, free)
         try {
-            const vector = await embedWithXenova(truncatedText);
+            const vector = await embedWithXenova(truncatedText, model);
             if (vector) {
                 cache.set(key, vector);
                 return vector;
@@ -141,15 +148,17 @@ export async function embed(text, callLLM, forceLLM) {
  * This is the fastest and most reliable tier — runs locally with ONNX runtime.
  * Returns null if the library is not installed or model fails to load.
  */
-async function embedWithXenova(text) {
+async function embedWithXenova(text, model) {
     if (_xenovaAvailable === false)
         return null;
     try {
         // Dynamic import — the package is optional (user may not have it installed)
         const { pipeline } = await import('@huggingface/transformers');
-        // Use 'feature-extraction' pipeline with all-MiniLM-L6-v2
-        // This model produces 384-dimensional embeddings
-        const extractor = await pipeline('feature-extraction', XENOVA_MODEL);
+        // Use 'feature-extraction' pipeline with the requested model (default
+        // all-MiniLM-L6-v2 for memory/history; bge-small-en-v1.5 for retrieval).
+        // Both produce 384-dimensional embeddings, so vectors stay compatible
+        // with the same VectorStore schema.
+        const extractor = await pipeline('feature-extraction', model || XENOVA_MODEL);
         const output = await extractor(text, {
             pooling: 'mean',
             normalize: true,

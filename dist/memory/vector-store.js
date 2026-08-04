@@ -1,36 +1,64 @@
 /**
- * VectorStore — A lightweight, JSON-based vector index with cosine similarity search.
+ * VectorStore — pluggable vector index for semantic search.
  *
- * Stores embeddings as `{ id, vector, metadata }` entries in a single JSON file.
- * No external dependencies — uses only Node.js built-in fs and crypto.
+ * Stores embeddings as `{ id, vector, metadata }` entries in a JSON file
+ * (~/.buff/memory/vectors.json, or vectors-<namespace>.json). No hard native
+ * dependencies — uses only Node.js built-in fs and crypto.
  *
- * File location: ~/.buff/memory/vectors.json
+ * Backends (selected by `memory.vectorBackend` in config):
+ *   - `json`  → JsonBackend: exact flat cosine scan (the original behavior).
+ *   - `faiss` → a FAISS-style backend: pure-JS IVF-flat ANN by default
+ *               (FaissIvfBackend, see faiss-backend.ts), or the real
+ *               `@faiss-node/native` bindings when the user has installed and
+ *               built them (best-effort native tier with graceful fallback).
+ *   - `auto`  → FAISS-style backend when usable, JSON otherwise (default).
+ *
+ * The on-disk ENTRY format is identical across backends, so existing
+ * memory/history/repo vectors survive upgrades AND backend switches.
  */
 import { readFileSync, writeFileSync, existsSync, mkdirSync } from 'node:fs';
 import { join } from 'node:path';
 import { homedir } from 'node:os';
 // ─── Constants ──────────────────────────────────────────────────────────────
-const MEMORY_DIR = join(homedir(), '.buff', 'memory');
-const INDEX_PATH = join(MEMORY_DIR, 'vectors.json');
+/**
+ * Resolve the memory dir lazily (per call) so tests that set
+ * `BUFF_MEMORY_DIR` in beforeAll are genuinely hermetic — a module-import-
+ * time capture would silently keep writing to the real ~/.buff/memory.
+ */
+function memoryDir() {
+    return process.env.BUFF_MEMORY_DIR || join(homedir(), '.buff', 'memory');
+}
 /**
  * Schema version for the vector index.
- * Version 2: Increased embedding dimensionality from 64 to 384 (all-MiniLM-L6-v2).
- * Old version 1 entries (64-dim) are incompatible and will be cleared.
+ * Version 2: 384-dim embeddings (all-MiniLM-L6-v2 / bge-small-en-v1.5).
+ *
+ * Namespace support does NOT bump the version: each namespace lives in its own
+ * file (vectors.json default, vectors-<ns>.json otherwise) and the ENTRY format
+ * is unchanged, so existing memory/history vectors survive an upgrade. Only a
+ * format change (dim, fields) would warrant a bump.
  */
 const CURRENT_VERSION = 2;
-// ─── Helpers ────────────────────────────────────────────────────────────────
+// ─── File helpers (shared by every backend) ────────────────────────────────
 function ensureDir() {
-    if (!existsSync(MEMORY_DIR)) {
-        mkdirSync(MEMORY_DIR, { recursive: true });
+    const dir = memoryDir();
+    if (!existsSync(dir)) {
+        mkdirSync(dir, { recursive: true });
     }
 }
-function readIndex() {
+/** Resolve the index file path for a namespace (default → vectors.json). */
+export function indexPathFor(namespace) {
+    const dir = memoryDir();
+    return namespace === 'default'
+        ? join(dir, 'vectors.json')
+        : join(dir, `vectors-${namespace}.json`);
+}
+function readIndex(indexPath) {
     try {
         ensureDir();
-        if (!existsSync(INDEX_PATH)) {
+        if (!existsSync(indexPath)) {
             return { entries: {}, version: CURRENT_VERSION };
         }
-        const raw = readFileSync(INDEX_PATH, 'utf-8');
+        const raw = readFileSync(indexPath, 'utf-8');
         const data = JSON.parse(raw);
         // Version migration: if the on-disk version doesn't match the current
         // schema version, clear old entries to prevent incompatible vectors
@@ -44,9 +72,17 @@ function readIndex() {
         return { entries: {}, version: CURRENT_VERSION };
     }
 }
-function writeIndex(data) {
+function writeIndex(indexPath, data) {
     ensureDir();
-    writeFileSync(INDEX_PATH, JSON.stringify(data, null, 2), 'utf-8');
+    writeFileSync(indexPath, JSON.stringify(data, null, 2), 'utf-8');
+}
+/**
+ * Synchronously read all entries for a namespace (used by backends' sync
+ * `stats()` and by the FAISS-style backend to rebuild its in-memory index).
+ * Returns an empty map when the file is missing/corrupt — never throws.
+ */
+export function readNamespaceEntries(namespace) {
+    return readIndex(indexPathFor(namespace)).entries;
 }
 // ─── Vector Math ────────────────────────────────────────────────────────────
 /** Compute the dot product of two vectors */
@@ -79,58 +115,47 @@ export function cosineSimilarity(a, b) {
         return 0;
     return dot / (magA * magB);
 }
-// ─── VectorStore ────────────────────────────────────────────────────────────
+// ─── JsonBackend — exact flat cosine scan (the original behavior) ───────────
 /**
- * Lightweight vector store for semantic search.
- *
- * Usage:
- * ```ts
- * const store = new VectorStore();
- * await store.insert("traj-001", [0.1, 0.2, ...], { goal: "add auth" });
- * const results = await store.search([0.15, 0.25, ...], 3);
- * ```
+ * Exact backend: linear scan with cosine similarity over the namespace index
+ * file. This is the historical VectorStore behavior — deterministic, lossless,
+ * and used for small indexes where exact search is cheapest.
  */
-export class VectorStore {
-    /**
-     * Insert a vector entry into the index.
-     * If an entry with the same `id` already exists, it is overwritten.
-     */
+export class JsonBackend {
+    name = 'json';
+    namespace;
+    constructor(namespace = 'default') {
+        this.namespace = namespace;
+    }
+    /** Resolve the index path per operation so `BUFF_MEMORY_DIR` changes (tests) take effect. */
+    get indexPath() {
+        return indexPathFor(this.namespace);
+    }
     async insert(id, vector, metadata = {}) {
-        const data = readIndex();
+        const data = readIndex(this.indexPath);
         data.entries[id] = {
             id,
             vector,
             metadata,
             createdAt: Date.now(),
         };
-        writeIndex(data);
+        writeIndex(this.indexPath, data);
     }
-    /**
-     * Retrieve a single entry by ID.
-     */
     async get(id) {
-        const data = readIndex();
+        const data = readIndex(this.indexPath);
         return data.entries[id] || null;
     }
-    /**
-     * Remove an entry from the index.
-     */
     async delete(id) {
-        const data = readIndex();
+        const data = readIndex(this.indexPath);
         if (!data.entries[id])
             return false;
         delete data.entries[id];
-        writeIndex(data);
+        writeIndex(this.indexPath, data);
         return true;
     }
-    /**
-     * Search for the top-k most similar entries to the query vector.
-     * Returns results sorted by similarity (highest first).
-     */
     async search(queryVector, k = 5, filterFn) {
-        const data = readIndex();
+        const data = readIndex(this.indexPath);
         const entries = Object.values(data.entries);
-        // Compute similarities
         const scored = [];
         for (const entry of entries) {
             if (filterFn && !filterFn(entry))
@@ -138,35 +163,22 @@ export class VectorStore {
             const sim = cosineSimilarity(queryVector, entry.vector);
             scored.push({ entry, similarity: sim });
         }
-        // Sort by similarity descending, take top-k
         scored.sort((a, b) => b.similarity - a.similarity);
         return scored.slice(0, k);
     }
-    /**
-     * Get the total number of stored entries.
-     */
     async count() {
-        const data = readIndex();
+        const data = readIndex(this.indexPath);
         return Object.keys(data.entries).length;
     }
-    /**
-     * Clear all entries from the index.
-     */
     async clear() {
-        writeIndex({ entries: {}, version: CURRENT_VERSION });
+        writeIndex(this.indexPath, { entries: {}, version: CURRENT_VERSION });
     }
-    /**
-     * Get all entries (for iteration/export).
-     */
     async getAll() {
-        const data = readIndex();
+        const data = readIndex(this.indexPath);
         return Object.values(data.entries);
     }
-    /**
-     * Get vector store statistics.
-     */
     stats() {
-        const data = readIndex();
+        const data = readIndex(this.indexPath);
         const entries = Object.values(data.entries);
         const dimensions = entries.length > 0 ? entries[0].vector.length : 0;
         return {
@@ -175,12 +187,209 @@ export class VectorStore {
         };
     }
 }
-// Singleton instance
-let storeInstance = null;
-export function getVectorStore() {
-    if (!storeInstance) {
-        storeInstance = new VectorStore();
+// ─── Backend selection ──────────────────────────────────────────────────────
+let backendOverride = null;
+let resolvedBackendCache = {};
+let configBackend = null;
+let configBackendLoaded = false;
+/**
+ * Read `memory.vectorBackend` from ~/.buff/buffconfig.json (lazy, cached).
+ * Read directly (not via ConfigManager) to avoid a heavyweight dependency in
+ * the hot vector path; env/override still win over config.
+ */
+function readConfigBackendType() {
+    if (configBackendLoaded)
+        return configBackend;
+    configBackendLoaded = true;
+    try {
+        const configPath = join(homedir(), '.buff', 'buffconfig.json');
+        if (!existsSync(configPath))
+            return null;
+        const raw = JSON.parse(readFileSync(configPath, 'utf-8'));
+        const b = raw.memory?.vectorBackend;
+        configBackend = b === 'json' || b === 'faiss' ? b : null;
+        return configBackend;
     }
-    return storeInstance;
+    catch {
+        return null;
+    }
+}
+/** Preferred backend from env → test override → config → default 'faiss'.
+ *
+ * In practice this means the runtime prefers the FAISS-style backend (native
+ * when available, otherwise the pure-JS IVF implementation) and only falls
+ * back to the exact JSON backend when the FAISS stack is unavailable.
+ */
+function resolvePreferredBackendType() {
+    const env = process.env.BUFF_VECTOR_BACKEND;
+    if (env === 'json')
+        return 'json';
+    if (env === 'faiss' || env === 'auto')
+        return 'faiss';
+    if (backendOverride === 'json')
+        return 'json';
+    if (backendOverride === 'faiss' || backendOverride === 'auto')
+        return 'faiss';
+    const cfg = readConfigBackendType();
+    if (cfg)
+        return cfg;
+    return 'faiss';
+}
+/**
+ * Resolve (and cache) the backend for a namespace.
+ * 'json' → JsonBackend; 'faiss'/'auto' → FAISS-style (native when available,
+ * else pure-JS IVF); any native failure falls back to the exact JSON backend
+ * so semantic search NEVER breaks.
+ */
+async function resolveBackend(namespace) {
+    const cached = resolvedBackendCache[namespace];
+    if (cached)
+        return cached;
+    const preferred = resolvePreferredBackendType();
+    let backend;
+    if (preferred === 'json') {
+        backend = new JsonBackend(namespace);
+    }
+    else {
+        try {
+            // Dynamic import avoids a hard dependency on the FAISS module.
+            const { createFaissBackend } = await import('./faiss-backend.js');
+            backend = await createFaissBackend(namespace);
+        }
+        catch (err) {
+            backend = new JsonBackend(namespace);
+        }
+    }
+    resolvedBackendCache[namespace] = backend;
+    return backend;
+}
+// ─── VectorStore — facade delegating to the selected backend ────────────────
+/**
+ * Pluggable vector store for semantic search.
+ *
+ * Usage:
+ * ```ts
+ * const store = getVectorStore();            // config-selected backend
+ * await store.insert("traj-001", [0.1, 0.2], { goal: "add auth" });
+ * const results = await store.search([0.15, 0.25], 3);
+ * ```
+ *
+ * Direct construction (`new VectorStore()`) defaults to the exact JSON backend
+ * (backward compatible); `getVectorStore()` applies config-driven selection.
+ */
+export class VectorStore {
+    namespace;
+    /** Explicit backend (direct construction) — null means resolve via config. */
+    explicitBackend;
+    backendPromise = null;
+    constructor(namespace = 'default', backend) {
+        this.namespace = namespace;
+        this.explicitBackend = backend ?? null;
+    }
+    /** Lazily resolve the backend once (config-selected when not explicit). */
+    async backend() {
+        if (this.explicitBackend)
+            return this.explicitBackend;
+        if (!this.backendPromise) {
+            this.backendPromise = resolveBackend(this.namespace);
+        }
+        return this.backendPromise;
+    }
+    /** Name of the active backend (`json` | `faiss-ivf` | `faiss-native`). */
+    async backendName() {
+        return (await this.backend()).name;
+    }
+    /**
+     * Insert a vector entry into the index.
+     * If an entry with the same `id` already exists, it is overwritten.
+     */
+    async insert(id, vector, metadata = {}) {
+        const b = await this.backend();
+        await b.insert(id, vector, metadata);
+    }
+    /**
+     * Retrieve a single entry by ID.
+     */
+    async get(id) {
+        const b = await this.backend();
+        return b.get(id);
+    }
+    /**
+     * Remove an entry from the index.
+     */
+    async delete(id) {
+        const b = await this.backend();
+        return b.delete(id);
+    }
+    /**
+     * Search for the top-k most similar entries to the query vector.
+     * Returns results sorted by similarity (highest first).
+     */
+    async search(queryVector, k = 5, filterFn) {
+        const b = await this.backend();
+        return b.search(queryVector, k, filterFn);
+    }
+    /**
+     * Get the total number of stored entries.
+     */
+    async count() {
+        const b = await this.backend();
+        return b.count();
+    }
+    /**
+     * Clear all entries from the index.
+     */
+    async clear() {
+        const b = await this.backend();
+        await b.clear();
+    }
+    /**
+     * Get all entries (for iteration/export).
+     */
+    async getAll() {
+        const b = await this.backend();
+        return b.getAll();
+    }
+    /**
+     * Get vector store statistics (SYNCHRONOUS — reads the on-disk index file,
+     * identical format across backends, so callers like the CLI can call it
+     * without awaiting).
+     */
+    stats() {
+        const data = readIndex(indexPathFor(this.namespace));
+        const entries = Object.values(data.entries);
+        const dimensions = entries.length > 0 ? entries[0].vector.length : 0;
+        return {
+            totalEntries: entries.length,
+            dimensions,
+        };
+    }
+}
+// Singleton instances per namespace
+const storeInstances = new Map();
+export function getVectorStore(namespace = 'default', backend) {
+    let store = storeInstances.get(namespace);
+    if (!store) {
+        store = new VectorStore(namespace, backend);
+        storeInstances.set(namespace, store);
+    }
+    return store;
+}
+// ─── Test / diagnostics hooks ───────────────────────────────────────────────
+/**
+ * Force a backend type for tests (`'json' | 'faiss' | 'auto'`).
+ * Also honored via the `BUFF_VECTOR_BACKEND` env var.
+ */
+export function setVectorBackendOverride(type) {
+    backendOverride = type;
+    resolvedBackendCache = {};
+}
+/** Clear the backend-type override + cached backend instances. */
+export function resetVectorBackendSelection() {
+    backendOverride = null;
+    resolvedBackendCache = {};
+    storeInstances.clear();
+    configBackendLoaded = false;
+    configBackend = null;
 }
 //# sourceMappingURL=vector-store.js.map

@@ -10,7 +10,7 @@
  * The orchestrator decides whether to apply them (based on dry-run mode).
  */
 import { existsSync, readFileSync } from 'node:fs';
-import { isAbsolute, join } from 'node:path';
+import { basename, isAbsolute, join } from 'node:path';
 import { Agent } from '../agent.js';
 import { logger } from '../../utils/logger.js';
 import { detectLanguage } from '../../editing/types.js';
@@ -129,14 +129,17 @@ export class WriterAgent extends Agent {
     async execute(context, callLLM) {
         let lastError;
         let latestCallLLM = callLLM;
+        this.report(context, 'thinking', `Reviewing task and gathered context (${context.artifacts.length} file(s) available)…`);
         // Outer retry loop: handles transient API errors (rate limits, timeouts)
         for (let attempt = 0; attempt <= MAX_API_RETRIES; attempt++) {
             try {
+                this.report(context, 'drafting', 'Generating code changes…');
                 const result = await this.attemptWrite(context, latestCallLLM);
                 // Inner retry: handles empty parse results (format issue)
                 // This runs on EVERY API attempt — API errors and format issues are independent.
                 // The format retry always returns (success or note), so no infinite loop risk.
                 if (result.success && result.summary === 'No files needed changes') {
+                    this.report(context, 'retrying', 'Response was not parseable — retrying with stricter format instructions');
                     // Retry once with stricter format instructions
                     const retryResult = await this.attemptWrite(context, latestCallLLM, true);
                     if (retryResult.success && retryResult.summary !== 'No files needed changes') {
@@ -263,6 +266,10 @@ export class WriterAgent extends Agent {
                 context.fileChanges.push(change);
             }
         }
+        if (fileChanges.length > 0) {
+            const paths = fileChanges.map((c) => c.path).join(', ');
+            this.report(context, 'decided', `Proposing changes to ${fileChanges.length} file(s): ${paths}`);
+        }
         // ── AST Validation: check syntax for modified files ────────────────
         for (const change of fileChanges) {
             if (change.newContent) {
@@ -307,12 +314,34 @@ export class WriterAgent extends Agent {
      * When isRetry is true, uses a more explicit prompt.
      */
     buildPrompt(context, isRetry = false) {
-        // Find the writer tasks in the plan
-        const writerTask = context.taskPlan.find((s) => s.agentType === 'writer' && s.status === 'running');
+        // Find the writer task for this step. When several writers run in
+        // parallel, the orchestrator marks the CURRENT step via
+        // metadata.currentTaskId so each writer sees its OWN description.
+        const currentTaskId = context.metadata.currentTaskId;
+        const writerTask = context.taskPlan.find((s) => s.agentType === 'writer' &&
+            (currentTaskId ? s.id === currentTaskId : s.status === 'running'));
         const taskDescription = writerTask?.description || context.goal;
         // Use token-budget-aware file selection: show as many files as possible
         // within MAX_CONTEXT_CHARS, prioritizing smaller files to max context.
-        const filesToSend = this.selectFilesWithinBudget(context.artifacts, MAX_CONTEXT_CHARS);
+        // When the orchestrator's vector-retrieval hook produced a semantic file
+        // ranking for this goal (retrievalRanking metadata), prefer those files
+        // first so the LLM sees the most RELEVANT code within the token budget
+        // (relevance over size — the retrieval layer complements the quota ledger
+        // by saving tokens while keeping the important context).
+        const retrievalRanking = context.metadata.retrievalRanking || [];
+        // Match by BOTH exact path and basename so ranking still works whether the
+        // gatherer produced relative or absolute artifact paths (the retrieval
+        // index keys may differ in normalization from the artifact path form).
+        const rankedPaths = new Set(retrievalRanking.map((r) => r.filePath));
+        const rankedBaseNames = new Set(retrievalRanking.map((r) => basename(r.filePath)));
+        const isRanked = (p) => rankedPaths.has(p) || rankedBaseNames.has(basename(p));
+        const filesToSend = this.selectFilesWithinBudget(context.artifacts, MAX_CONTEXT_CHARS, (a, b) => {
+            const ra = isRanked(a.path) ? 0 : 1;
+            const rb = isRanked(b.path) ? 0 : 1;
+            if (ra !== rb)
+                return ra - rb;
+            return 0; // keep the size-first tiebreak inside selectFilesWithinBudget
+        });
         const fileContext = filesToSend.length > 0
             ? filesToSend
                 .map(({ artifact, truncated }) => `--- ${artifact.path} ---${truncated ? ` (truncated, ${artifact.content.length}\u2192${truncated.length} chars)` : ''}\n${truncated || artifact.content}`)
@@ -363,10 +392,14 @@ export class WriterAgent extends Agent {
      * Select files within the given character budget.
      * Prioritizes smaller files first so the LLM sees as much complete context as possible.
      */
-    selectFilesWithinBudget(artifacts, budget) {
+    selectFilesWithinBudget(artifacts, budget, priorityComparator) {
         const sorted = [...artifacts]
             .map((a) => ({ artifact: a, size: a.content.length }))
-            .sort((a, b) => a.size - b.size);
+            .sort((a, b) => {
+            // Optional priority pass (e.g. retrieval-ranking first), then size-first.
+            const cmp = priorityComparator ? priorityComparator(a.artifact, b.artifact) : 0;
+            return cmp !== 0 ? cmp : a.size - b.size;
+        });
         const result = [];
         let used = 0;
         const OVERHEAD_PER_FILE = 50;

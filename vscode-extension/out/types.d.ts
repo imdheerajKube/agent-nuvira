@@ -123,4 +123,39 @@ export interface ActiveModelInfo {
     explicit: boolean;
     providerLabel?: string;
 }
+/** One ledger entry (provider × model within its current reset window). */
+export interface QuotaLedgerEntry {
+    provider: string;
+    model: string;
+    tokensConsumed: number;
+    requests: number;
+    windowLengthMs: number;
+    resetsInMs: number;
+    parked: boolean;
+    cooldownRemaining: number;
+}
+/** One failover-timeline event (quota-events.jsonl). */
+export interface QuotaEventInfo {
+    type: 'parked' | 're-enabled' | 'released' | 'failover';
+    provider: string;
+    reason?: string;
+    timestamp: number;
+}
+/**
+ * The quota ledger + failover timeline read from the CLI's memory dir
+ * (`~/.buff/memory/quota-ledger.json` + `quota-events.jsonl`). Mirrors the
+ * shape the dashboard Quota card renders, so the extension view matches it.
+ */
+export interface QuotaStatusInfo {
+    enabled: boolean;
+    entries: QuotaLedgerEntry[];
+    events: QuotaEventInfo[];
+    /** Free/local tokens (savings) vs paid tokens (spend). */
+    freeTokens: number;
+    freeRequests: number;
+    paidTokens: number;
+    paidRequests: number;
+    /** Estimated USD saved by free/local usage at a typical paid rate. */
+    estimatedSavedUsd: number;
+}
 //# sourceMappingURL=types.d.ts.map

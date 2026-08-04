@@ -16,8 +16,18 @@ import { join } from 'node:path';
 import { homedir } from 'node:os';
 import { logger } from '../utils/logger.js';
 // ─── Constants ──────────────────────────────────────────────────────────────
-const MEMORY_DIR = join(homedir(), '.buff', 'memory');
-const PATTERNS_PATH = join(MEMORY_DIR, 'patterns.json');
+/**
+ * Resolve the memory dir lazily (per call) so tests that set
+ * `BUFF_MEMORY_DIR` are genuinely hermetic — a module-import-time capture
+ * would silently keep reading/writing the real ~/.buff/memory (same fix as
+ * vector-store.ts / trajectory-store.ts).
+ */
+function memoryDir() {
+    return process.env.BUFF_MEMORY_DIR || join(homedir(), '.buff', 'memory');
+}
+function patternsPath() {
+    return join(memoryDir(), 'patterns.json');
+}
 const CURRENT_VERSION = 2;
 const MAX_PATTERNS = 30;
 const MIN_SCORE_FOR_EXTRACTION = 0.7; // Only extract from high-quality trajectories
@@ -232,9 +242,10 @@ export class PatternStore {
     load() {
         try {
             ensureDir();
-            if (!existsSync(PATTERNS_PATH))
+            const path = patternsPath();
+            if (!existsSync(path))
                 return [];
-            const raw = readFileSync(PATTERNS_PATH, 'utf-8');
+            const raw = readFileSync(path, 'utf-8');
             const data = JSON.parse(raw);
             // Migrate old-format patterns (version 1 → 2) that may lack lastUsedAt/usageCount
             const patterns = (data.patterns || []).map((p) => ({
@@ -251,7 +262,7 @@ export class PatternStore {
     save() {
         ensureDir();
         const data = { patterns: this.patterns, version: CURRENT_VERSION };
-        writeFileSync(PATTERNS_PATH, JSON.stringify(data, null, 2), 'utf-8');
+        writeFileSync(patternsPath(), JSON.stringify(data, null, 2), 'utf-8');
     }
     buildExtractionPrompt(trajectories) {
         const trajText = trajectories
@@ -303,8 +314,9 @@ export function getPatternStore() {
 }
 // ─── Helpers ────────────────────────────────────────────────────────────────
 function ensureDir() {
-    if (!existsSync(MEMORY_DIR)) {
-        mkdirSync(MEMORY_DIR, { recursive: true });
+    const dir = memoryDir();
+    if (!existsSync(dir)) {
+        mkdirSync(dir, { recursive: true });
     }
 }
 //# sourceMappingURL=pattern-extractor.js.map

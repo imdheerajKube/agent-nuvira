@@ -8,10 +8,12 @@ import { resolveWorkingModel } from '../inference/model-validator.js';
 import { showModelPicker } from './model-picker.js';
 import { ContextParser } from '../context/parser.js';
 import { getCache } from '../context/cache.js';
+import { assembleContext, retrievalOptionsFromConfig, recordRetrievalStats } from '../learning/retrieval.js';
 import { getChatHistory } from '../context/history.js';
 import { logger } from '../utils/logger.js';
 import { Orchestrator } from '../agents/orchestrator.js';
 import { printOrchestrationResult } from './execute.js';
+import { PipelineBoard } from './pipeline-board.js';
 import { applyActiveModel } from './model.js';
 import { getProviderFallback, classifyFallbackError, isRetryableError } from '../learning/provider-fallback.js';
 import { getAutoRouter, isAutoModel, isAutoProvider } from '../learning/auto-router.js';
@@ -167,27 +169,28 @@ export async function runDeveloperMode(goal, configManager, options) {
         // the provider's live list and repair to a verified-working model first.
         model = await resolveWorkingModel(resolved.provider, decision.provider, decision.model);
     }
-    const spinner = ora({
-        text: '📋 Planning...',
-        spinner: 'dots',
-    }).start();
+    // Live pipeline board — replaces the single spinner so the user sees every
+    // step, parallel lanes, and the agent's "thinking" updates in real time.
+    const board = new PipelineBoard();
+    board.start(goal);
     try {
         const orchestrator = new Orchestrator(configManager);
         const result = await orchestrator.execute(goal, {
             provider,
             model,
-            verbose: true,
-            spinner: {
-                stop: () => spinner.stop(),
-                start: (text) => spinner.start(text),
-            },
+            // The board now supplies the live detail (task statuses, agent updates,
+            // routing decisions) — no need for raw verbose log interleaving.
+            verbose: false,
+            // The board implements the spinner interface so interactive prompts
+            // (rate limits, model pickers) can pause/resume the live view.
+            spinner: board,
         });
-        spinner.stop();
+        board.finish(result.success);
         console.log('');
         printOrchestrationResult(result);
     }
     catch (err) {
-        spinner.fail('Developer mode execution failed');
+        board.finish(false);
         logger.error(String(err));
     }
 }
@@ -930,6 +933,31 @@ export class ChatCommand extends BaseCommand {
                 // of failing again.
                 this.recordAutoProviderFailure(candidateType, err);
                 const msg = err instanceof Error ? err.message : String(err);
+                // Opt-in confirmation (routing.promptOnFailover): when the user wants
+                // control over failover, ask before auto-switching to the next
+                // candidate. 'manual' surfaces the original error instead of silently
+                // switching — single-shot has no interactive recovery, so the CLI
+                // exits with the failure (matching non-auto behavior).
+                const order = [first.type, ...first.ranked];
+                const nextCandidate = order.find((c) => !attempted.has(c));
+                // Only prompt when stdin is a TTY — in a CI/piped context an inquirer
+                // prompt would block forever, so fall through to silent auto-failover
+                // (the pre-existing safe behavior for non-interactive runs).
+                if (nextCandidate && shouldConfirmFailover(this.configManager.getAll()) && process.stdin.isTTY) {
+                    let nextProviderName = nextCandidate;
+                    try {
+                        nextProviderName = resolveProvider(this.configManager, nextCandidate).provider.name;
+                    }
+                    catch {
+                        // Keep the raw type name if the provider can't resolve.
+                    }
+                    const nextModel = nextCandidate === first.type
+                        ? first.model
+                        : getAutoRouter().resolveModel(nextCandidate, 'chat', this.configManager);
+                    const choice = await promptFailoverChoice(candidateType, nextProviderName, nextModel);
+                    if (choice === 'manual')
+                        throw lastError;
+                }
                 logger.warn(`   ⚠️ ${candidateType} failed (${msg.slice(0, 160)}) — trying the next auto candidate...`);
             }
         }
@@ -1127,7 +1155,13 @@ Commands:
             const parser = new ContextParser();
             const context = parser.parseFromFiles([options.file]);
             const contextStr = ContextParser.formatContext(context);
-            fullPrompt = `${contextStr}\n\n## User Query\n${prompt}`;
+            // Retrieval hook: if the file is large, reduce it to the top-k
+            // semantically-relevant chunks (saves tokens / stretches quotas).
+            // Small files pass through untouched — zero overhead.
+            const retrievalOpts = retrievalOptionsFromConfig(this.configManager);
+            const { context: reduced, stats } = await assembleContext(prompt, [options.file], contextStr, retrievalOpts);
+            recordRetrievalStats(stats);
+            fullPrompt = `${reduced}\n\n## User Query\n${prompt}`;
         }
         if (typeof provider.generateStream === 'function') {
             const chunks = [];

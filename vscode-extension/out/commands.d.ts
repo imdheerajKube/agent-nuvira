@@ -96,6 +96,14 @@ export declare class CommandRegistrar {
      */
     private pickProviderModel;
     /**
+     * Show a searchable quick-pick for long lists (e.g. OpenRouter's 100+ models).
+     * Uses `createQuickPick` so the native search box filters items as the user
+     * types, matching against both the label and the description (model id).
+     *
+     * Resolves with the picked item, or undefined when dismissed (Esc).
+     */
+    private showSearchableQuickPick;
+    /**
      * Run a health check for the active provider and show the report.
      */
     private modelHealth;

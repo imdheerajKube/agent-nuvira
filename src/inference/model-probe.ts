@@ -1,0 +1,336 @@
+/**
+ * Model Probe — keeps the ModelRegistry fresh ("ping and gather statistics").
+ *
+ * Three layers, mirroring the ModelAvailabilityRegistry's feed design:
+ *
+ *   1. `probeProviderList()` — listModels() per provider (free). Marks every
+ *      returned model as listed/unverified in the registry and confirms the
+ *      provider is reachable with the configured key.
+ *   2. `spotCheckModel()` — a 1-token generation against a candidate model.
+ *      This is what separates "listed" from "actually usable": a configured key
+ *      whose account can't purchase/access a model surfaces as 403/404 here
+ *      and the registry marks it `unavailable` BEFORE routing ever picks it.
+ *      Throttled so repeated refreshes don't burn the free tier.
+ *   3. `refreshModelRegistry()` — orchestrates probes + spot-checks across all
+ *      configured providers and writes the registry (JSON mirror + vector
+ *      mirror). `watchModelRegistry()` runs it on a schedule as the standalone
+ *      maintenance daemon (`buff models watch`).
+ *
+ * All providers are resolved through ProviderFactory with the user's configured
+ * credentials; a missing key simply skips the provider (never throws).
+ */
+
+import { ProviderFactory } from './factory.js';
+import type { ConfigManager } from '../config/manager.js';
+import type { InferenceProvider } from './interface.js';
+import { PREFERRED_MODELS } from './model-validator.js';
+import { getModelRegistry } from '../learning/model-registry.js';
+import { classifyFallbackError, type FallbackErrorType } from '../learning/provider-fallback.js';
+import { logger } from '../utils/logger.js';
+
+// ─── Constants ──────────────────────────────────────────────────────────────
+
+/** Built-in providers considered by the probe (same set the auto-router uses). */
+export const PROBE_PROVIDERS = ['local', 'groq', 'gemini', 'nim', 'openrouter'];
+
+/** The one-token probe prompt — tiny, deterministic, near-free. */
+export const SPOT_CHECK_PROMPT = 'Reply with the single word: ok';
+
+/** Minimum gap between spot-checks of the SAME model (ms) — protects free tiers. */
+export const SPOT_CHECK_MIN_INTERVAL_MS = 10 * 60 * 1000; // 10 min
+
+/** Generation timeout for a spot-check (ms). */
+export const SPOT_CHECK_TIMEOUT_MS = 20_000;
+
+/** In-flight throttle: how many spot-checks can run concurrently per refresh. */
+const SPOT_CHECK_CONCURRENCY = 3;
+
+// ─── Provider resolution ────────────────────────────────────────────────────
+
+/**
+ * Build an inference provider for a provider type using the user's configured
+ * credentials. Returns null when the type is unknown or has no key (local is
+ * always attempted — it needs no key).
+ */
+export function buildProvider(providerType: string, configManager: ConfigManager): InferenceProvider | null {
+  try {
+    const { config } = configManager.getProviderConfig(providerType as never);
+    if (!configManager.hasRequiredCredentials(providerType) && providerType !== 'local') {
+      return null;
+    }
+    return ProviderFactory.createProvider(providerType, config);
+  } catch {
+    return null;
+  }
+}
+
+// ─── Layer 1: listModels probe ──────────────────────────────────────────────
+
+/**
+ * Probe a provider's live model list and record it in the registry.
+ * Returns the model ids listed (empty on failure) — never throws.
+ */
+export async function probeProviderList(providerType: string, configManager: ConfigManager): Promise<string[]> {
+  const provider = buildProvider(providerType, configManager);
+  if (!provider) return [];
+  try {
+    const models = await provider.listModels();
+    const ids = models.map((m) => m.id).filter(Boolean);
+    if (ids.length > 0) {
+      getModelRegistry().markListed(providerType, ids);
+    }
+    return ids;
+  } catch {
+    return [];
+  }
+}
+
+// ─── Layer 2: spot-check (1-token generation) ───────────────────────────────
+
+/**
+ * Verify a model actually serves requests with a 1-token generation.
+ * Success → `verified` (with measured latency). 401/403/404 → `unavailable`
+ * (the "key exists but model not purchasable" case). 429 → unavailable +
+ * quota-parked. Network/timeout → left untouched (transient).
+ *
+ * Returns the outcome for callers that want to render a summary.
+ */
+export async function spotCheckModel(
+  providerType: string,
+  model: string,
+  configManager: ConfigManager,
+): Promise<'verified' | 'unavailable' | 'skipped' | 'error'> {
+  const registry = getModelRegistry();
+  const now = Date.now();
+
+  // Throttle: skip models verified recently — don't burn the free tier on
+  // every refresh cycle.
+  const existing = registry.getEntry(providerType, model);
+  if (existing?.status === 'verified' && now - existing.lastVerifiedAt < SPOT_CHECK_MIN_INTERVAL_MS) {
+    return 'skipped';
+  }
+
+  const provider = buildProvider(providerType, configManager);
+  if (!provider) return 'error';
+
+  const startedAt = Date.now();
+  try {
+    const result = await withTimeout(
+      provider.generate(SPOT_CHECK_PROMPT, {
+        model,
+        maxTokens: 1,
+        temperature: 0,
+      }),
+      SPOT_CHECK_TIMEOUT_MS,
+    );
+    // A usable model returns non-empty text. (Some providers echo nothing on a
+    // maxTokens=1 stop — treat "returned" as success regardless of content.)
+    void result;
+    const latencyMs = Date.now() - startedAt;
+    registry.markVerified(providerType, model, 'spot-check', latencyMs);
+    return 'verified';
+  } catch (err) {
+    const type = classifyFallbackError(err);
+    const msg = err instanceof Error ? err.message.slice(0, 160) : String(err).slice(0, 160);
+    if (type === 'auth' || isPermissionError(msg)) {
+      registry.markUnavailable(providerType, model, `${type}: ${msg}`, 'spot-check');
+      return 'unavailable';
+    }
+    if (type === 'rate-limit') {
+      registry.markUnavailable(providerType, model, 'rate-limit (quota parked)', 'spot-check');
+      return 'unavailable';
+    }
+    // Transient (network/timeout/server/unknown) — leave the entry as-is so a
+    // blip never flips a good model to unavailable.
+    logger.debug(`Model probe: ${providerType}/${model} transient error (${type}) — ignored`);
+    return 'error';
+  }
+}
+
+/** 403/404 = "you can't buy/access this model" — treat as unavailable, not transient. */
+function isPermissionError(message: string): boolean {
+  const lower = message.toLowerCase();
+  return (
+    lower.includes('403') ||
+    lower.includes('404') ||
+    lower.includes('permission denied') ||
+    lower.includes('not found') ||
+    lower.includes('does not exist') ||
+    lower.includes('model not found') ||
+    lower.includes('access denied') ||
+    lower.includes('billing') ||
+    lower.includes('not enabled')
+  );
+}
+
+function withTimeout<T>(promise: Promise<T>, ms: number): Promise<T> {
+  return new Promise<T>((resolve, reject) => {
+    const timer = setTimeout(() => reject(new Error('probe timeout')), ms);
+    promise.then(
+      (v) => { clearTimeout(timer); resolve(v); },
+      (e) => { clearTimeout(timer); reject(e); },
+    );
+  });
+}
+
+// ─── Layer 3: refresh orchestration ─────────────────────────────────────────
+
+/** Options for a registry refresh pass. */
+export interface RefreshOptions {
+  /** Restrict to these providers (default: all PROBE_PROVIDERS with keys). */
+  providers?: string[];
+  /** Also run 1-token spot-checks against candidate models (default: true). */
+  spotCheck?: boolean;
+  /**
+   * Extra candidate models per provider to spot-check on TOP of the curated
+   * PREFERRED_MODELS + configured pin (default: []).
+   */
+  extraModels?: Record<string, string[]>;
+  /** Max spot-checks per provider per pass (default: 5 — protects free tiers). */
+  maxSpotChecksPerProvider?: number;
+  /** Callback fired after each provider pass (daemon progress reporting). */
+  onProgress?: (label: string, detail: string) => void;
+}
+
+export interface RefreshResult {
+  providersProbed: string[];
+  modelsListed: number;
+  verified: number;
+  unavailable: number;
+  skipped: number;
+  errors: number;
+}
+
+/**
+ * One refresh pass: probe every configured provider's list, then spot-check
+ * candidate models (curated defaults + configured pin + user extras) against
+ * the LIVE API, throttled by the registry's last-verified timestamps.
+ */
+export async function refreshModelRegistry(configManager: ConfigManager, options: RefreshOptions = {}): Promise<RefreshResult> {
+  const registry = getModelRegistry();
+  const providers = options.providers || PROBE_PROVIDERS;
+  const spotCheckEnabled = options.spotCheck !== false;
+  const maxChecks = options.maxSpotChecksPerProvider ?? 5;
+
+  const result: RefreshResult = {
+    providersProbed: [],
+    modelsListed: 0,
+    verified: 0,
+    unavailable: 0,
+    skipped: 0,
+    errors: 0,
+  };
+
+  for (const providerType of providers) {
+    const label = `  🔎 ${providerType}`;
+    try {
+      const listed = await probeProviderList(providerType, configManager);
+      result.modelsListed += listed.length;
+      if (listed.length === 0) {
+        options.onProgress?.(label, 'no models listed (no key / unreachable)');
+        continue;
+      }
+      result.providersProbed.push(providerType);
+      options.onProgress?.(label, `${listed.length} models listed`);
+
+      if (!spotCheckEnabled) continue;
+
+      // Candidate models to spot-check: curated defaults + configured pin +
+      // previously verified models + user extras. Dedupe, cap per provider.
+      const configuredModel = getConfiguredModel(configManager, providerType);
+      const candidates = [
+        ...(PREFERRED_MODELS[providerType] || []),
+        ...(configuredModel && configuredModel !== 'default' ? [configuredModel] : []),
+        ...registry.getVerifiedModels(providerType),
+        ...(options.extraModels?.[providerType] || []),
+      ].filter((m, i, arr) => arr.indexOf(m) === i && listed.includes(m));
+      const toCheck = candidates.slice(0, maxChecks);
+
+      // Throttle concurrency so bursts of spot-checks don't hammer a free tier.
+      let idx = 0;
+      const worker = async (): Promise<void> => {
+        while (idx < toCheck.length) {
+          const model = toCheck[idx++];
+          const outcome = await spotCheckModel(providerType, model, configManager);
+          if (outcome === 'verified') result.verified++;
+          else if (outcome === 'unavailable') result.unavailable++;
+          else if (outcome === 'skipped') result.skipped++;
+          else result.errors++;
+          options.onProgress?.(`  🎯 ${providerType}/${model}`, outcome);
+        }
+      };
+      await Promise.all(Array.from({ length: Math.min(SPOT_CHECK_CONCURRENCY, toCheck.length) }, worker));
+    } catch (err) {
+      result.errors++;
+      options.onProgress?.(label, `error: ${err instanceof Error ? err.message : String(err)}`);
+    }
+  }
+
+  // Sync quota parks from the ledger + demote stale verified entries.
+  try {
+    registry.syncQuota(configManager);
+    registry.pruneStale();
+  } catch {
+    // Best-effort.
+  }
+
+  return result;
+}
+
+/** Read the configured model pin for a provider ('' when none). */
+function getConfiguredModel(configManager: ConfigManager, providerType: string): string | undefined {
+  try {
+    const { config } = configManager.getProviderConfig(providerType as never);
+    return config?.model;
+  } catch {
+    return undefined;
+  }
+}
+
+// ─── Watch daemon (standalone maintainer) ───────────────────────────────────
+
+/**
+ * Run a maintenance pass immediately, then every `intervalMs`. Used by
+ * `buff models watch` as the dedicated background agent that keeps the
+ * registry fresh even when the CLI isn't running a pipeline.
+ *
+ * Returns a stop function that also cleans up signal handlers — designed for
+ * the CLI command's lifecycle (the command awaits a stop signal).
+ */
+export function startRegistryWatcher(
+  configManager: ConfigManager,
+  options: RefreshOptions & { intervalMs?: number } = {},
+): { stop: () => void; runOnce: () => Promise<RefreshResult> } {
+  const intervalMs = options.intervalMs ?? 10 * 60 * 1000; // 10 min default
+  let timer: ReturnType<typeof setInterval> | null = null;
+  let stopped = false;
+
+  const runOnce = async (): Promise<RefreshResult> => {
+    if (stopped) return { providersProbed: [], modelsListed: 0, verified: 0, unavailable: 0, skipped: 0, errors: 0 };
+    const result = await refreshModelRegistry(configManager, options);
+    logger.info(
+      `Model registry refreshed — ${result.providersProbed.length} provider(s), ` +
+      `${result.modelsListed} listed, ${result.verified} verified, ${result.unavailable} unavailable, ${result.skipped} skipped`,
+    );
+    return result;
+  };
+
+  // Immediate first pass, then the scheduled loop.
+  void runOnce();
+  timer = setInterval(() => void runOnce(), intervalMs);
+  if (timer.unref) timer.unref(); // Don't hold the process open on the timer alone.
+
+  const stop = (): void => {
+    stopped = true;
+    if (timer) {
+      clearInterval(timer);
+      timer = null;
+    }
+  };
+
+  return { stop, runOnce };
+}
+
+// ─── Re-export for callers that need to classify probe errors ───────────────
+
+export type { FallbackErrorType };

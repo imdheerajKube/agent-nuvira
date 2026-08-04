@@ -63,6 +63,7 @@ export class ReviewerAgent extends Agent {
     let lastError: string | undefined;
 
     if (context.fileChanges.length === 0) {
+      this.report(context, 'skipped', 'No changes to review');
       return {
         success: true,
         summary: 'No files to review',
@@ -70,9 +71,12 @@ export class ReviewerAgent extends Agent {
       };
     }
 
+    this.report(context, 'reviewing', `Reviewing ${context.fileChanges.length} change(s) for correctness, security, and quality…`);
+
     for (let attempt = 0; attempt <= MAX_API_RETRIES; attempt++) {
       try {
         const prompt = this.buildPrompt(context);
+        this.report(context, 'thinking', 'Checking for security issues, edge cases, and type safety…');
         const response = await callLLM(prompt, {
           temperature: 0.2,
           maxTokens: 4096,
@@ -87,6 +91,14 @@ export class ReviewerAgent extends Agent {
         });
 
         const hasCriticalIssues = this.hasCriticalIssues(response);
+
+        this.report(
+          context,
+          hasCriticalIssues ? 'blocked' : 'passed',
+          hasCriticalIssues
+            ? 'Found critical issues — the change will be sent back for repair'
+            : 'Review passed — changes are safe to apply',
+        );
 
         return {
           success: !hasCriticalIssues,

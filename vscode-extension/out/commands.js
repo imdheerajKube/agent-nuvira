@@ -382,11 +382,42 @@ class CommandRegistrar {
                 model: m.id,
             });
         }
-        const picked = await vscode.window.showQuickPick(options, {
-            placeHolder: `Pick a model for ${providerLabel} (Esc keeps the default):`,
-        });
+        const picked = await this.showSearchableQuickPick(options, `Search ${providerLabel} models (Esc keeps the default):`);
         // Dismissing the picker (or picking the default option) keeps the default model
         return picked?.model;
+    }
+    /**
+     * Show a searchable quick-pick for long lists (e.g. OpenRouter's 100+ models).
+     * Uses `createQuickPick` so the native search box filters items as the user
+     * types, matching against both the label and the description (model id).
+     *
+     * Resolves with the picked item, or undefined when dismissed (Esc).
+     */
+    showSearchableQuickPick(items, placeholder) {
+        const quickPick = vscode.window.createQuickPick();
+        quickPick.placeholder = placeholder;
+        // Match the fuzzy filter against the description (model id) too, so users
+        // can search "llama-3.3" or "mixtral" even though those live in the
+        // description rather than the label.
+        quickPick.matchOnDescription = true;
+        quickPick.matchOnDetail = true;
+        quickPick.items = items;
+        return new Promise((resolve) => {
+            let settled = false;
+            const finish = (picked) => {
+                if (settled)
+                    return;
+                settled = true;
+                quickPick.hide();
+                quickPick.dispose();
+                resolve(picked);
+            };
+            quickPick.onDidChangeSelection((selected) => {
+                finish(selected[0]);
+            });
+            quickPick.onDidHide(() => finish(undefined));
+            quickPick.show();
+        });
     }
     /**
      * Run a health check for the active provider and show the report.

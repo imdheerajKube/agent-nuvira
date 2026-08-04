@@ -19,6 +19,7 @@ import { join } from 'node:path';
 import { homedir } from 'node:os';
 
 import { getQuotaLedger } from './quota-ledger.js';
+import { getModelRegistry } from './model-registry.js';
 
 // ─── Types ──────────────────────────────────────────────────────────────────
 
@@ -212,6 +213,16 @@ export class CostTracker {
       getQuotaLedger().recordUsage(provider, model, inputTokens, outputTokens);
     } catch {
       // Ledger is best-effort; cost recording must never crash on it.
+    }
+
+    // ── Write-through to the Model Availability Registry ─────────────────
+    // A successful real call is the strongest signal a model works — upgrade
+    // it to `verified` (source: telemetry) so future routing trusts it without
+    // a network probe. Best-effort — never break the call.
+    try {
+      getModelRegistry().recordCall(provider, model, true);
+    } catch {
+      // Registry is best-effort.
     }
 
     return entry;

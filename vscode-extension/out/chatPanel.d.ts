@@ -15,6 +15,7 @@
  */
 import * as vscode from 'vscode';
 import { ChatHistoryProvider } from './chatProvider.js';
+import { CLIManager } from './cliManager.js';
 import type { ExtensionConfig } from './types.js';
 export declare class ChatPanel {
     static readonly viewType = "agent-nuvira.chatPanel";
@@ -22,19 +23,23 @@ export declare class ChatPanel {
     private disposables;
     private historyProvider;
     private config;
+    private cliManager;
+    private onModelChanged?;
     private cliProcess;
     private abortController;
     private streamingMessageId;
     private workspaceRoot;
     private extensionUri;
     private loadedHtml;
+    /** Monotonic token so stale model refreshes never clobber newer ones */
+    private modelStateSeq;
     /** Track pipeline state for DAG visualization */
     private pipelineNodes;
     private pipelineActive;
     private pipelineName;
     private pipelineMessageId;
     private lastAgentType;
-    constructor(context: vscode.ExtensionContext, historyProvider: ChatHistoryProvider, config: ExtensionConfig);
+    constructor(context: vscode.ExtensionContext, historyProvider: ChatHistoryProvider, config: ExtensionConfig, cliManager: CLIManager);
     /**
      * Pre-load the HTML template from the extension directory.
      */
@@ -51,6 +56,16 @@ export declare class ChatPanel {
      * Update the extension config.
      */
     updateConfig(config: ExtensionConfig): void;
+    /**
+     * Swap the CLI manager when extension config changes
+     * (so provider/model settings take effect immediately).
+     */
+    updateCliManager(cliManager: CLIManager): void;
+    /**
+     * Register a callback fired after a provider/model switch
+     * (lets the extension refresh its status bar indicator).
+     */
+    setOnModelChanged(cb: () => void): void;
     private handleMessage;
     /**
      * Handle a user message: add to history, send to CLI, stream response.
@@ -60,6 +75,16 @@ export declare class ChatPanel {
      * Handle slash commands.
      */
     private handleSlashCommand;
+    /**
+     * Fetch the active provider/model and the available providers, then send
+     * them to the webview so the header dropdown reflects the current state.
+     */
+    private refreshModelState;
+    /**
+     * Switch the active provider/model from the header dropdown
+     * ('auto' enables Auto model routing), then refresh + notify.
+     */
+    private handleModelSwitch;
     /**
      * Reset the pipeline state for a new non-slash-command message.
      */

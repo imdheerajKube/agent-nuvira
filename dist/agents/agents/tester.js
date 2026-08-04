@@ -72,6 +72,7 @@ export class TesterAgent extends Agent {
      */
     async execute(context, _callLLM) {
         ensureCleanupRegistered();
+        this.report(context, 'preparing', 'Preparing a sandboxed environment to run tests…');
         // Check if Docker sandbox should be used
         // Skip if we already tried Docker and it was unavailable
         const triedDocker = context.metadata._dockerTried === true;
@@ -89,11 +90,13 @@ export class TesterAgent extends Agent {
                 if (context.metadata.verboseLogging) {
                     logger.info('     ⏭️  No test script found in package.json — skipping tests');
                 }
+                this.report(context, 'skipped', 'No test script found — skipping the test step');
                 return {
                     success: true,
                     summary: '⏭️  No test script found — skipped',
                 };
             }
+            this.report(context, 'running', `Running \`${testCommand.replace(' 2>&1', '')}\` in an isolated sandbox…`);
             // 2. Create sandbox
             sandboxPath = mkdtempSync(join(tmpdir(), 'buff-sandbox-'));
             activeSandboxes.push(sandboxPath);
@@ -130,6 +133,9 @@ export class TesterAgent extends Agent {
                 summaryLines.push(`${parsed.passed}/${parsed.total} tests passed`);
             }
             summaryLines.push(testResult.success ? '✅ All tests passed' : `❌ Tests failed (exit code ${testResult.exitCode})`);
+            this.report(context, testResult.success ? 'passed' : 'failed', testResult.success
+                ? `All tests passed${parsed.total !== undefined ? ` (${parsed.total} total)` : ''}`
+                : `Tests failed${parsed.total !== undefined ? ` — ${parsed.failed}/${parsed.total} failing` : ''}`);
             const details = testResult.success
                 ? undefined
                 : `Test output:\n${this.truncateOutput(testResult.output, 2000)}`;

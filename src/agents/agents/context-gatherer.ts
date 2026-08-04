@@ -77,9 +77,11 @@ export class ContextGathererAgent extends Agent {
   async execute(context: AgentContext, callLLM: LLMCallFn): Promise<AgentResult> {
     try {
       // 1. Get a broad overview of the project structure
+      this.report(context, 'scanning', 'Scanning the project to map relevant files…');
       const fileTree = await buildProjectFileTree(context.workingDirectory);
 
       // 2. Ask the LLM which files are relevant — with retry and rate-limit handling
+      this.report(context, 'thinking', 'Asking the model which files are relevant to this goal…');
       const { paths: relevantPaths, llmError } = await this.identifyWithRetry(
         context,
         fileTree,
@@ -96,6 +98,7 @@ export class ContextGathererAgent extends Agent {
         if (llmError) {
           logger.warn(`   LLM error: ${llmError}`);
         }
+        this.report(context, 'fallback', 'Model could not identify files — falling back to keyword matching');
         effectivePaths = this.scanByKeywords(context.goal, context.workingDirectory);
       }
 
@@ -107,6 +110,7 @@ export class ContextGathererAgent extends Agent {
         logger.debug(`Keywords matched ${effectivePaths.length} file(s) after LLM error`);
       }
 
+      this.report(context, 'reading', `Reading ${effectivePaths.length} relevant file(s) into context…`);
       for (const filePath of effectivePaths) {
         const absolutePath = join(context.workingDirectory, filePath);
         if (!existsSync(absolutePath) || !statSync(absolutePath).isFile()) {
@@ -136,6 +140,8 @@ export class ContextGathererAgent extends Agent {
       const resultSummary = artifacts.length > 0
         ? `Gathered ${artifacts.length} file${artifacts.length !== 1 ? 's' : ''}`
         : `No relevant files found${errors.length > 0 ? ` (${errors.length} errors while scanning)` : ''}`;
+
+      this.report(context, 'decided', `Selected ${artifacts.length} file(s) as relevant context for this goal`);
 
       return {
         success: true,

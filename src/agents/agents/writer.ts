@@ -146,15 +146,19 @@ export class WriterAgent extends Agent {
     let lastError: string | undefined;
     let latestCallLLM = callLLM;
 
+    this.report(context, 'thinking', `Reviewing task and gathered context (${context.artifacts.length} file(s) available)…`);
+
     // Outer retry loop: handles transient API errors (rate limits, timeouts)
     for (let attempt = 0; attempt <= MAX_API_RETRIES; attempt++) {
       try {
+        this.report(context, 'drafting', 'Generating code changes…');
         const result = await this.attemptWrite(context, latestCallLLM);
 
         // Inner retry: handles empty parse results (format issue)
         // This runs on EVERY API attempt — API errors and format issues are independent.
         // The format retry always returns (success or note), so no infinite loop risk.
         if (result.success && result.summary === 'No files needed changes') {
+          this.report(context, 'retrying', 'Response was not parseable — retrying with stricter format instructions');
           // Retry once with stricter format instructions
           const retryResult = await this.attemptWrite(context, latestCallLLM, true);
 
@@ -308,6 +312,11 @@ export class WriterAgent extends Agent {
       }
     }
 
+    if (fileChanges.length > 0) {
+      const paths = fileChanges.map((c) => c.path).join(', ');
+      this.report(context, 'decided', `Proposing changes to ${fileChanges.length} file(s): ${paths}`);
+    }
+
     // ── AST Validation: check syntax for modified files ────────────────
     for (const change of fileChanges) {
       if (change.newContent) {
@@ -354,9 +363,13 @@ export class WriterAgent extends Agent {
    * When isRetry is true, uses a more explicit prompt.
    */
   private buildPrompt(context: AgentContext, isRetry: boolean = false): string {
-    // Find the writer tasks in the plan
+    // Find the writer task for this step. When several writers run in
+    // parallel, the orchestrator marks the CURRENT step via
+    // metadata.currentTaskId so each writer sees its OWN description.
+    const currentTaskId = context.metadata.currentTaskId as string | undefined;
     const writerTask = context.taskPlan.find(
-      (s) => s.agentType === 'writer' && s.status === 'running',
+      (s) => s.agentType === 'writer' &&
+        (currentTaskId ? s.id === currentTaskId : s.status === 'running'),
     );
     const taskDescription = writerTask?.description || context.goal;
 

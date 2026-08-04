@@ -17,8 +17,9 @@
  * Called by the `agent-nuvira execute` CLI command.
  */
 
-import { existsSync, readFileSync, writeFileSync, mkdirSync } from 'node:fs';
-import { dirname, isAbsolute, join, resolve } from 'node:path';
+import { existsSync, readFileSync, writeFileSync, mkdirSync, readdirSync } from 'node:fs';
+import { dirname, isAbsolute, join, relative, resolve } from 'node:path';
+import { spawnSync } from 'node:child_process';
 import inquirer from 'inquirer';
 
 import { ProviderFactory } from '../inference/factory.js';
@@ -31,7 +32,7 @@ import { ContextVault } from './context-vault.js';
 import { saveCheckpoint, loadCheckpoint, checkpointIdFor } from './checkpoint-store.js';
 import { Agent } from './agent.js';
 import type { LLMCallFn, AgentResult, TaskStep, OnRateLimit } from './agent.js';
-import { buildProjectFileTree, truncateTree } from './utils/file-tree.js';
+import { buildProjectFileTree, truncateTree, SOURCE_EXTENSIONS, IGNORE_DIRS } from './utils/file-tree.js';
 import type { RunResult } from './agents/runner.js';
 import { cleanupSandbox } from './agents/tester.js';
 import type { McpToolEntry } from './agents/mcp-agent.js';
@@ -312,8 +313,26 @@ export class Orchestrator {
 
   /**
    * Execute a multi-agent pipeline for the given goal.
+   *
+   * Wraps the pipeline in a try/finally so MCP server connections are torn down
+   * on EVERY exit path. Early returns (e.g. planner failure) previously skipped
+   * the cleanup at the end of the method, leaking the spawned MCP subprocesses
+   * and keeping the CLI process alive long after the pipeline finished.
    */
   async execute(goal: string, options: OrchestratorOptions = {}): Promise<OrchestrationResult> {
+    try {
+      return await this.executePipeline(goal, options);
+    } finally {
+      try {
+        resetMCPManager();
+      } catch {
+        // Best-effort cleanup — never break the result delivery.
+      }
+    }
+  }
+
+  /** Internal pipeline implementation (see execute()). */
+  private async executePipeline(goal: string, options: OrchestratorOptions = {}): Promise<OrchestrationResult> {
     const startTime = Date.now();
     // ── Checkpoint resume: rehydrate a saved vault instead of starting fresh ──
     // Assessment item #6 (continuity): if a previous run saved a checkpoint for
@@ -354,6 +373,22 @@ export class Orchestrator {
     } else {
       vault = new ContextVault(goal, process.cwd());
     }
+    // ── Transparency channel ─────────────────────────────────────────────
+    // Agents call context.onAgentUpdate() (via Agent.report()) to stream
+    // user-readable "thinking" updates. Forward every update to the event bus
+    // so the CLI pipeline board and web dashboard can display them live.
+    vault.context.onAgentUpdate = (update) => {
+      try {
+        this.eventBus.emit(EventNames.ORCHESTRATOR_AGENT_UPDATE, {
+          agentType: update.agentType,
+          stage: update.stage,
+          message: update.message,
+          taskId: update.taskId,
+        }, 'orchestrator');
+      } catch {
+        // Transparency is best-effort — never break the pipeline.
+      }
+    };
     // Reset execution telemetry for this pipeline (shared accumulator used by
     // createLLMProvider, executeSingleTask, and buildResult).
     this.stats = {
@@ -431,6 +466,13 @@ export class Orchestrator {
       vault.setMeta('projectFileTree', '');
     }
 
+    // ── 2b2. Pre-flight project inspection (always-on, deterministic) ─────
+    // Look before you leap: detect the project type, existing tests, and git
+    // state BEFORE planning so the planner reuses what already exists instead
+    // of reworking it, and the user sees a readable summary instead of a
+    // black hole. Fast, no LLM calls — pure filesystem + git inspection.
+    this.runProjectInspection(vault, options);
+
     // ── 2c. Auto-connect MCP servers and inject tool descriptions ────────
     const enableMcp = options.enableMcp !== false; // default true
     if (enableMcp && options.verbose) logger.highlight('\n🔌 Discovering MCP servers...');
@@ -461,6 +503,11 @@ export class Orchestrator {
           // And a formatted string (for LLM prompt injection)
           const formattedTools = formatMcpToolsForPrompt(toolEntries);
           vault.setMeta('mcpToolsFormatted', formattedTools);
+          this.eventBus.emit(EventNames.ORCHESTRATOR_AGENT_UPDATE, {
+            agentType: 'orchestrator',
+            stage: 'mcp',
+            message: `Connected to ${connected.length} MCP server(s) with ${allTools.length} tool(s)`, 
+          }, 'orchestrator');
 
           if (options.verbose) {
             logger.info(`   Connected to ${connected.length} MCP server(s) with ${allTools.length} tool(s)`);
@@ -489,6 +536,13 @@ export class Orchestrator {
         memoryContext = memoryResult.fewShotContext;
         // Also inject coding patterns if available
         patternContext = memoryResult.patternContext || '';
+        this.eventBus.emit(EventNames.ORCHESTRATOR_AGENT_UPDATE, {
+          agentType: 'orchestrator',
+          stage: 'memory',
+          message: memoryResult.trajectories.length > 0
+            ? `Found ${memoryResult.trajectories.length} similar past task(s) in memory`
+            : 'No similar past tasks found in memory',
+        }, 'orchestrator');
         if (options.verbose) {
           if (memoryResult.trajectories.length > 0) {
             logger.info(`   Found ${memoryResult.trajectories.length} similar past trajectories`);
@@ -640,6 +694,20 @@ export class Orchestrator {
         nodes,
         edges,
       });
+
+      // ── Emit: plan ready (the CLI board renders the task list from this) ──
+      const rootCount = nodes.filter((n) => !edges.some((e) => e.to === n.id)).length;
+      this.eventBus.emit(EventNames.ORCHESTRATOR_PLAN_READY, {
+        pipelineId: goal,
+        nodes: nodes.map(({ id, agentType, description, complexity }) => ({ id, agentType, description, complexity })),
+        edges,
+        parallelCount: rootCount,
+      }, 'orchestrator');
+      this.eventBus.emit(EventNames.ORCHESTRATOR_AGENT_UPDATE, {
+        agentType: 'orchestrator',
+        stage: 'planned',
+        message: `${nodes.length} step(s) planned${rootCount > 1 ? ` — ${rootCount} can start in parallel` : ''}`,
+      }, 'orchestrator');
     }
 
     // ── 5. Execute tasks ─────────────────────────────────────────────────
@@ -682,28 +750,46 @@ export class Orchestrator {
         break;
       }
 
-      // Runner and sandbox agents need exclusive access (no parallel)
+      // Runner and sandbox agents need exclusive access (no parallel).
+      // Conservative parallelism (recommended): independent tasks — gatherers,
+      // writers, reviewers — run in PARALLEL within a batch (Freebuff-style),
+      // while tester/debugger/runner (and any strategy-marked serial step) run
+      // one at a time because they share files, commands, ports, and sandboxes.
       const exclusiveAgentTypes = ['tester', 'debugger', 'runner'];
-      const canParallel = runnableTasks.length > 1 &&
-        !taskStrategies.some(({ task, strategy }) => strategy.runSerially || exclusiveAgentTypes.includes(task.agentType));
-
-      if (canParallel) {
-        for (const task of runnableTasks) {
-          vault.updateTaskStatus(task.id, 'running');
+      const parallelGroup: Array<{ task: TaskStep; strategy: RoutingExecutionStrategy }> = [];
+      const serialGroup: Array<{ task: TaskStep; strategy: RoutingExecutionStrategy }> = [];
+      for (const { task, strategy } of taskStrategies) {
+        if (strategy.runSerially || exclusiveAgentTypes.includes(task.agentType)) {
+          serialGroup.push({ task, strategy });
+        } else {
+          parallelGroup.push({ task, strategy });
         }
+      }
 
-        if (options.verbose) {
-          logger.info(`\n   ⚡ Running ${runnableTasks.length} tasks in parallel...`);
+      // Mark every runnable task as running up front so the live board shows
+      // the whole batch (and its parallel lanes) at once.
+      for (const { task } of taskStrategies) {
+        vault.updateTaskStatus(task.id, 'running');
+      }
+
+      if (parallelGroup.length > 0) {
+        if (parallelGroup.length > 1) {
+          if (options.verbose) {
+            logger.info(`\n   ⚡ Running ${parallelGroup.length} independent tasks in parallel...`);
+          }
+          this.eventBus.emit(EventNames.ORCHESTRATOR_AGENT_UPDATE, {
+            agentType: 'orchestrator',
+            stage: 'parallel',
+            message: `Running ${parallelGroup.length} independent tasks in parallel`, 
+          }, 'orchestrator');
         }
-
-        const taskPromises = taskStrategies.map(({ task, strategy }) =>
+        await Promise.all(parallelGroup.map(({ task, strategy }) =>
           this.executeSingleTask(task, vault, options, agentResults, contextFiles, defaultCallLLM, strategy)
-        );
-        await Promise.all(taskPromises);
-      } else {
-        for (const { task, strategy } of taskStrategies) {
-          await this.executeSingleTask(task, vault, options, agentResults, contextFiles, defaultCallLLM, strategy);
-        }
+        ));
+      }
+
+      for (const { task, strategy } of serialGroup) {
+        await this.executeSingleTask(task, vault, options, agentResults, contextFiles, defaultCallLLM, strategy);
       }
 
       // ── Checkpoint after every task batch ──────────────────────────────
@@ -753,13 +839,6 @@ export class Orchestrator {
       }
     }
 
-    // Clean up MCP server connections
-    try {
-      resetMCPManager();
-    } catch {
-      // Best-effort cleanup
-    }
-
     // ── 6b. Review mode — create a review bundle instead of applying changes
     let reviewId: string | undefined;
     if (options.reviewMode && vault.context.fileChanges.filter(c => c.newContent || c.status === 'deleted').length > 0) {
@@ -794,8 +873,15 @@ export class Orchestrator {
     // ── 6c. Apply file changes ────────────────────────────────────────────
     if (!options.reviewMode && !options.dryRun) {
       const applied = this.applyFileChanges(vault);
-      if (applied > 0 && options.verbose) {
-        logger.success(`\n   💾 Applied ${applied} file change${applied !== 1 ? 's' : ''} to disk`);
+      if (applied > 0) {
+        this.eventBus.emit(EventNames.ORCHESTRATOR_AGENT_UPDATE, {
+          agentType: 'orchestrator',
+          stage: 'applied',
+          message: `Applied ${applied} file change${applied !== 1 ? 's' : ''} to disk`, 
+        }, 'orchestrator');
+        if (options.verbose) {
+          logger.success(`\n   💾 Applied ${applied} file change${applied !== 1 ? 's' : ''} to disk`);
+        }
       }
     } else if (options.verbose && options.reviewMode) {
       logger.info('   📋 Review mode — changes saved as review bundle instead of written to disk');
@@ -923,6 +1009,166 @@ export class Orchestrator {
   }
 
   // ─── Private Helpers ──────────────────────────────────────────────────
+
+  /**
+   * Pre-flight project inspection — deterministic, always-on, no LLM calls.
+   *
+   * Scans the working directory for the project type (manifest files), counts
+   * source + test files, and reads the git state. The readable digest is:
+   * - Stored in the vault as `projectInspection` so the Planner builds a plan
+   *   that REUSES the existing codebase (no rework) and keeps backward
+   *   integrity (existing tests are taken into account).
+   * - Emitted on the event bus so the CLI board / dashboard can show the
+   *   user what was found before planning starts.
+   */
+  private runProjectInspection(vault: ContextVault, options: OrchestratorOptions): void {
+    const cwd = vault.context.workingDirectory;
+    const lines: string[] = [];
+
+    try {
+      // 1. Manifest / framework detection
+      const manifests: Array<[string, string]> = [
+        ['package.json', 'Node.js'],
+        ['requirements.txt', 'Python'],
+        ['pyproject.toml', 'Python (pyproject)'],
+        ['go.mod', 'Go'],
+        ['Cargo.toml', 'Rust'],
+        ['pom.xml', 'Java (Maven)'],
+        ['build.gradle', 'Java (Gradle)'],
+        ['Gemfile', 'Ruby'],
+        ['composer.json', 'PHP'],
+        ['pubspec.yaml', 'Dart/Flutter'],
+        ['Dockerfile', 'Docker'],
+      ];
+      const found = manifests.filter(([f]) => existsSync(join(cwd, f)));
+      if (found.length > 0) {
+        lines.push(`Project type: ${found.map(([, label]) => label).join(', ')}`);
+      } else {
+        lines.push('Project type: not detected (no recognized manifest)');
+      }
+
+      // Extra package.json details (name, test/build scripts)
+      try {
+        const pkg = JSON.parse(readFileSync(join(cwd, 'package.json'), 'utf-8')) as {
+          name?: string;
+          scripts?: Record<string, string>;
+        };
+        const extra: string[] = [];
+        if (pkg.name) extra.push(`name: ${pkg.name}`);
+        if (pkg.scripts?.test) extra.push('test script present');
+        if (pkg.scripts?.build) extra.push('build script present');
+        if (extra.length > 0) lines.push(`package.json — ${extra.join(' · ')}`);
+      } catch {
+        // Not a package.json project — fine.
+      }
+
+      // 2. Source + test file counts and top-level source directories
+      const { sourceCount, testCount, topDirs } = this.countSourceFiles(cwd);
+      lines.push(
+        `${sourceCount} source file(s)` +
+        (testCount > 0 ? ` · ${testCount} test file(s) found` : ' · no test files found'),
+      );
+      if (topDirs.length > 0) {
+        lines.push(`Main directories: ${topDirs.slice(0, 5).join(', ')}`);
+      }
+
+      // 3. Git state (branch + uncommitted changes)
+      const git = this.gitState(cwd);
+      if (git) {
+        lines.push(
+          git.dirty > 0
+            ? `Git: branch '${git.branch}' with ${git.dirty} uncommitted change(s)`
+            : `Git: branch '${git.branch}' — clean working tree`,
+        );
+      }
+
+      // 4. Backward-integrity note — existing tests act as the safety net
+      if (testCount > 0) {
+        lines.push('Backward-integrity: existing test suite detected — changes will be verified against it');
+      }
+    } catch (err) {
+      logger.debug(`Project inspection failed (non-critical): ${err}`);
+      lines.push('Inspection: could not fully inspect the project (non-critical)');
+    }
+
+    vault.setMeta('projectInspection', lines.join('\n'));
+    this.eventBus.emit(EventNames.ORCHESTRATOR_INSPECTION, { lines }, 'orchestrator');
+    if (options.verbose) {
+      logger.highlight('\n🔍 Pre-flight project inspection:');
+      for (const line of lines) logger.info(`   ${line}`);
+    }
+  }
+
+  /** Count source/test files and top-level source directories (no LLM). */
+  private countSourceFiles(cwd: string): { sourceCount: number; testCount: number; topDirs: string[] } {
+    let sourceCount = 0;
+    let testCount = 0;
+    const dirCounts = new Map<string, number>();
+    // Files under any of these directories are treated as test files even when
+    // their filename doesn't carry a .test/.spec marker (e.g. tests/auth.ts).
+    const TEST_DIR = /^(test|tests|__tests__|spec|specs)$/i;
+
+    const walk = (dir: string, depth: number, inTestDir: boolean) => {
+      if (depth > 6) return;
+      let entries;
+      try {
+        entries = readdirSync(dir, { withFileTypes: true });
+      } catch {
+        return;
+      }
+      for (const entry of entries) {
+        if (IGNORE_DIRS.has(entry.name)) continue;
+        const p = join(dir, entry.name);
+        if (entry.isDirectory()) {
+          walk(p, depth + 1, inTestDir || TEST_DIR.test(entry.name));
+        } else if (entry.isFile()) {
+          const ext = entry.name.slice(entry.name.lastIndexOf('.'));
+          if (!SOURCE_EXTENSIONS.has(ext)) continue;
+          sourceCount++;
+          const base = entry.name.slice(0, entry.name.lastIndexOf('.'));
+          if (
+            inTestDir ||
+            /\.(test|spec)([._-]|$)/i.test(entry.name) ||
+            /^(test|tests|__tests__)$/i.test(base)
+          ) {
+            testCount++;
+          }
+          const rel = relative(cwd, p);
+          const top = rel.split(/[\\/]/)[0];
+          if (top && top !== entry.name && top !== '.') {
+            dirCounts.set(top, (dirCounts.get(top) || 0) + 1);
+          }
+        }
+      }
+    };
+
+    walk(cwd, 0, false);
+    const topDirs = [...dirCounts.entries()]
+      .sort((a, b) => b[1] - a[1])
+      .map(([name, count]) => `${name} (${count})`);
+    return { sourceCount, testCount, topDirs };
+  }
+
+  /** Read the git branch and uncommitted-change count. Returns null if not a repo. */
+  private gitState(cwd: string): { branch: string; dirty: number } | null {
+    try {
+      const branch = spawnSync('git', ['rev-parse', '--abbrev-ref', 'HEAD'], {
+        cwd,
+        encoding: 'utf-8',
+        timeout: 5000,
+      });
+      if (branch.status !== 0) return null;
+      const status = spawnSync('git', ['status', '--porcelain'], {
+        cwd,
+        encoding: 'utf-8',
+        timeout: 5000,
+      });
+      const dirty = (status.stdout || '').split('\n').filter((l) => l.trim().length > 0).length;
+      return { branch: branch.stdout.trim() || 'unknown', dirty };
+    } catch {
+      return null;
+    }
+  }
 
   private createLLMProvider(options: OrchestratorOptions): LLMCallFn {
     // Guard: 'auto' is not a real provider — resolve to the configured default
@@ -1124,6 +1370,10 @@ export class Orchestrator {
     const useRepair = strategy.useRepair || (maxRepairs > 0 && repairMode !== 'off');
 
     vault.updateTaskStatus(task.id, 'running');
+    // Let agents know which task step they are working on. Needed for parallel
+    // batches: writer/runner look up "the running task" in the shared plan, so
+    // a per-task marker disambiguates when several run concurrently.
+    vault.setMeta('currentTaskId', task.id);
     await tryUpdateDAGNode(task.id, { status: 'running' });
     this.eventBus.emit(EventNames.ORCHESTRATOR_TASK_STARTED, {
       taskId: task.id,
@@ -1200,6 +1450,10 @@ export class Orchestrator {
         });
         return;
       }
+
+      // Tag this agent instance with its task step so its "thinking" updates
+      // attach to the correct board line (fresh instance per task → no races).
+      agent.currentTaskId = task.id;
 
       // Wire up the rate-limit handler so agents can prompt the user
       vault.context.onRateLimit = this.createRateLimitHandler(options, agentModel || options.model);
@@ -1569,6 +1823,13 @@ export class Orchestrator {
     if (options.verbose) {
       logger.info(`      🤖 Auto: ${decision.explanation}`);
     }
+    // Surface the routing decision to the user ("how it's taking decisions"):
+    // which provider/model was chosen for this agent and why.
+    this.eventBus.emit(EventNames.ORCHESTRATOR_AGENT_UPDATE, {
+      agentType: task.agentType,
+      stage: 'routing',
+      message: decision.explanation || `Routed to ${decision.provider}/${decision.model}`,
+    }, 'orchestrator');
     // Model health: the router resolves each provider's PINNED config model,
     // which can be stale (deprecated gemini-2.0-flash-exp → 404) or a
     // placeholder (nim 'new-nim-model'). Don't bake the unvalidated model into

@@ -88,21 +88,26 @@ class ChatPanel {
     disposables = [];
     historyProvider;
     config;
+    cliManager;
+    onModelChanged;
     cliProcess = null;
     abortController = null;
     streamingMessageId = null;
     workspaceRoot;
     extensionUri;
     loadedHtml = null;
+    /** Monotonic token so stale model refreshes never clobber newer ones */
+    modelStateSeq = 0;
     /** Track pipeline state for DAG visualization */
     pipelineNodes = [];
     pipelineActive = false;
     pipelineName = '';
     pipelineMessageId = null;
     lastAgentType = '';
-    constructor(context, historyProvider, config) {
+    constructor(context, historyProvider, config, cliManager) {
         this.historyProvider = historyProvider;
         this.config = config;
+        this.cliManager = cliManager;
         this.extensionUri = context.extensionUri;
         this.workspaceRoot = vscode.workspace.workspaceFolders?.[0]?.uri?.fsPath || process.cwd();
         this.loadHtml();
@@ -161,6 +166,7 @@ class ChatPanel {
         // Send initial state
         this.refreshSessions();
         this.sendSessionMessages();
+        void this.refreshModelState();
     }
     /**
      * Check if the panel is visible.
@@ -173,6 +179,21 @@ class ChatPanel {
      */
     updateConfig(config) {
         this.config = config;
+    }
+    /**
+     * Swap the CLI manager when extension config changes
+     * (so provider/model settings take effect immediately).
+     */
+    updateCliManager(cliManager) {
+        this.cliManager = cliManager;
+        void this.refreshModelState();
+    }
+    /**
+     * Register a callback fired after a provider/model switch
+     * (lets the extension refresh its status bar indicator).
+     */
+    setOnModelChanged(cb) {
+        this.onModelChanged = cb;
     }
     // ── Message Handlers ─────────────────────────────────────────────────────
     async handleMessage(message) {
@@ -217,6 +238,10 @@ class ChatPanel {
             case 'requestInitialState':
                 this.refreshSessions();
                 this.sendSessionMessages();
+                await this.refreshModelState();
+                break;
+            case 'switchModel':
+                await this.handleModelSwitch(message.value);
                 break;
             case 'openFile':
                 await this.openFile(message.path, message.line);
@@ -339,6 +364,64 @@ class ChatPanel {
             fullPrompt = `${prompt}\n\n**Active File:**\n\`\`\`${language}:${activeFile.fileName}\n${content.slice(0, 5000)}\n\`\`\``;
         }
         await this.streamResponse(fullPrompt);
+    }
+    // ── Model Switcher ───────────────────────────────────────────────────────
+    /**
+     * Fetch the active provider/model and the available providers, then send
+     * them to the webview so the header dropdown reflects the current state.
+     */
+    async refreshModelState() {
+        if (!this.panel)
+            return;
+        // Drop this response if a newer refresh was started while we were awaiting
+        const seq = ++this.modelStateSeq;
+        let providers = [];
+        try {
+            providers = await this.cliManager.listModels();
+        }
+        catch {
+            providers = [];
+        }
+        let active = null;
+        try {
+            const activeModel = await this.cliManager.getActiveModel();
+            if (activeModel) {
+                active = { provider: activeModel.provider, model: activeModel.model };
+            }
+        }
+        catch {
+            active = null;
+        }
+        if (seq !== this.modelStateSeq)
+            return; // stale — a newer refresh won
+        this.postMessage({
+            type: 'modelState',
+            providers,
+            active,
+        });
+    }
+    /**
+     * Switch the active provider/model from the header dropdown
+     * ('auto' enables Auto model routing), then refresh + notify.
+     */
+    async handleModelSwitch(value) {
+        try {
+            const result = await this.cliManager.switchModel(value);
+            if (result.success) {
+                this.onModelChanged?.();
+                vscode.window.showInformationMessage(value === 'auto' ? '🤖 Auto routing enabled' : `✅ Switched to ${value}`);
+            }
+            else {
+                vscode.window.showErrorMessage(`Switch failed: ${result.stderr || 'Unknown error'}`);
+            }
+        }
+        catch (err) {
+            vscode.window.showErrorMessage(`Switch failed: ${err.message || 'Unknown error'}`);
+        }
+        finally {
+            // Re-fetch so the dropdown reflects the (possibly unchanged) state
+            await this.refreshModelState();
+        }
     }
     // ── Pipeline DAG Visualization ────────────────────────────────────────────
     /**

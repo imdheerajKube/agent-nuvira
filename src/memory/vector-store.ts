@@ -292,14 +292,21 @@ function readConfigBackendType(): VectorBackendType | null {
   }
 }
 
-/** Preferred backend from env → test override → config → default 'auto'. */
+/** Preferred backend from env → test override → config → default 'faiss'.
+ *
+ * In practice this means the runtime prefers the FAISS-style backend (native
+ * when available, otherwise the pure-JS IVF implementation) and only falls
+ * back to the exact JSON backend when the FAISS stack is unavailable.
+ */
 function resolvePreferredBackendType(): VectorBackendType {
   const env = process.env.BUFF_VECTOR_BACKEND as VectorBackendType | undefined;
-  if (env === 'json' || env === 'faiss') return env;
-  if (backendOverride) return backendOverride;
+  if (env === 'json') return 'json';
+  if (env === 'faiss' || env === 'auto') return 'faiss';
+  if (backendOverride === 'json') return 'json';
+  if (backendOverride === 'faiss' || backendOverride === 'auto') return 'faiss';
   const cfg = readConfigBackendType();
   if (cfg) return cfg;
-  return 'auto';
+  return 'faiss';
 }
 
 /**
