@@ -90,6 +90,11 @@ export declare class ProviderFallback {
      */
     private getProvider;
     /**
+     * Resolve the configured model for a provider ('' when none / config error).
+     * Used by the Model Registry write-through on failure.
+     */
+    private resolveConfiguredModel;
+    /**
      * Call a provider with automatic fallback.
      *
      * @param primaryProvider - The preferred provider type to try first

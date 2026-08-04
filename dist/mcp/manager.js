@@ -79,8 +79,29 @@ export class MCPManager {
         if (!config) {
             throw new Error(`MCP server '${name}' not found in ${this.configDir}. Create a JSON config file or check the name.`);
         }
+        // Detached stdio children are the ones that need process-level reaping —
+        // install the cleanup only for stdio configs so SSE-only setups don't pick
+        // up signal-handler side effects.
+        if (config.transport !== 'sse')
+            installProcessCleanup();
         const client = new MCPClient(config);
-        await client.connect();
+        try {
+            await client.connect();
+        }
+        catch (err) {
+            // Failed connection: the client may already have spawned a stdio child
+            // process or opened an SSE socket. It is NOT yet tracked in this.clients
+            // (we only register on success), so disconnectAll() would never reach
+            // it — explicitly tear it down here or the child process / socket leaks
+            // and keeps the CLI process alive after the pipeline finishes.
+            try {
+                client.disconnect();
+            }
+            catch {
+                // Best-effort cleanup
+            }
+            throw err;
+        }
         this.clients.set(name, client);
         return client;
     }
@@ -200,6 +221,54 @@ export class MCPManager {
 }
 // ─── Singleton ───────────────────────────────────────────────────────────────
 let _instance = null;
+let processCleanupInstalled = false;
+/**
+ * Install one-time process-level cleanup for MCP children.
+ *
+ * stdio MCP children are spawned `detached: true` so disconnect() can SIGKILL
+ * the whole process tree (negative pid). But a detached child lives in its own
+ * process group, so a plain Ctrl+C / SIGTERM sent to the CLI never reaches it —
+ * if the CLI dies without running resetMCPManager() (user interrupt, SIGTERM,
+ * terminal close), those children survive as orphans and keep spawning new
+ * processes every run. Register handlers that disconnectAll() (group-SIGKILL)
+ * on every exit path, however the process dies.
+ */
+function installProcessCleanup() {
+    if (processCleanupInstalled)
+        return;
+    processCleanupInstalled = true;
+    const cleanup = () => {
+        try {
+            _instance?.disconnectAll();
+        }
+        catch {
+            // Best-effort — the process is exiting anyway.
+        }
+    };
+    // 'exit' covers process.exit() and normal termination. Dev-mode's own SIGINT
+    // handler calls process.exit(0), so detached children still get reaped here.
+    process.on('exit', cleanup);
+    // Signals: clean up, then restore the default action so the process still
+    // dies with the conventional signal exit status (130 for SIGINT, etc.).
+    const signals = ['SIGINT', 'SIGTERM', 'SIGHUP', 'SIGQUIT'];
+    for (const signal of signals) {
+        const onSignal = () => {
+            cleanup();
+            process.removeListener(signal, onSignal);
+            try {
+                process.kill(process.pid, signal);
+            }
+            catch {
+                // Re-raise failed (process already dying, ESRCH, etc.) — never leave
+                // the CLI alive after it consumed the signal; fall back to exiting
+                // with the conventional 128+signo status.
+                const code = { SIGINT: 130, SIGTERM: 143, SIGHUP: 129, SIGQUIT: 131 }[signal] ?? 1;
+                process.exit(code);
+            }
+        };
+        process.on(signal, onSignal);
+    }
+}
 export function getMCPManager() {
     if (!_instance) {
         _instance = new MCPManager();

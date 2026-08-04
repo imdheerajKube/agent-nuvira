@@ -238,6 +238,19 @@ export class ProviderFallback {
   }
 
   /**
+   * Resolve the configured model for a provider ('' when none / config error).
+   * Used by the Model Registry write-through on failure.
+   */
+  private resolveConfiguredModel(providerType: string): string {
+    try {
+      const { config } = this.configManager.getProviderConfig(providerType as ProviderType);
+      return config?.model || 'default';
+    } catch {
+      return 'default';
+    }
+  }
+
+  /**
    * Call a provider with automatic fallback.
    *
    * @param primaryProvider - The preferred provider type to try first
@@ -318,6 +331,20 @@ export class ProviderFallback {
 
         // Track failure in circuit breaker
         this.recordFailure(pt);
+
+        // ── Write-through to the Model Availability Registry ───────────────
+        // A failed real call is the strongest signal a model is NOT usable:
+        // auth/rate-limit failures flip it to `unavailable` (+ quota park for
+        // rate-limit), so the registry learns from usage exactly as designed.
+        // The model is the provider's configured pin (the fallback loop itself
+        // doesn't carry a model override). Best-effort — never break the loop.
+        try {
+          const { getModelRegistry } = await import('./model-registry.js');
+          const model = this.resolveConfiguredModel(pt);
+          getModelRegistry().recordCall(pt, model, false, errorType);
+        } catch {
+          // Registry is best-effort.
+        }
 
         attemptsMade.push({ provider: pt, error: errorMsg.slice(0, 200), duration });
 

@@ -55,6 +55,22 @@ export const EventNames = {
     ORCHESTRATOR_PIPELINE_COMPLETED: 'orchestrator:pipeline-completed',
     ORCHESTRATOR_TASK_STARTED: 'orchestrator:task-started',
     ORCHESTRATOR_TASK_COMPLETED: 'orchestrator:task-completed',
+    /**
+     * Emitted once the planner has produced a plan and the orchestrator knows
+     * the full task DAG (nodes + edges). The CLI board renders the task list
+     * from this event; the web dashboard DAG consumes the same data.
+     */
+    ORCHESTRATOR_PLAN_READY: 'orchestrator:plan-ready',
+    /**
+     * Emitted for live user-readable agent "thinking" updates (stage + message).
+     * Powering the CLI pipeline board's activity lines.
+     */
+    ORCHESTRATOR_AGENT_UPDATE: 'orchestrator:agent-update',
+    /**
+     * Emitted for deterministic pre-flight project inspection results (framework,
+     * test suite, git state) shown to the user before planning starts.
+     */
+    ORCHESTRATOR_INSPECTION: 'orchestrator:inspection',
     // Safe execution layer events
     SAFE_EXEC_FILE_VALIDATED: 'safe-exec:file-validated',
     SAFE_EXEC_SANDBOX_STARTING: 'safe-exec:sandbox-starting',
@@ -424,6 +440,26 @@ export class LoggerConsumer {
                         const d = data;
                         const icon = d.success ? '✅' : '❌';
                         logger.info(`   ${icon} Pipeline ${d.success ? 'succeeded' : 'failed'} (${d.tasksCompleted}/${d.tasksTotal} tasks)`);
+                    }
+                    break;
+                case 'orchestrator:plan-ready':
+                    if (typeof data === 'object' && data !== null) {
+                        const d = data;
+                        logger.info(`   📋 Plan ready: ${d.nodeCount || 0} step(s) — ${d.parallelCount || 0} can run in parallel`);
+                    }
+                    break;
+                case 'orchestrator:agent-update':
+                    if (typeof data === 'object' && data !== null) {
+                        const d = data;
+                        logger.debug(`   ${d.agentType || ''} · ${d.stage || ''}: ${String(d.message || '').slice(0, 120)}`);
+                    }
+                    break;
+                case 'orchestrator:inspection':
+                    if (typeof data === 'object' && data !== null) {
+                        const d = data;
+                        for (const line of d.lines || []) {
+                            logger.info(`   ${line}`);
+                        }
                     }
                     break;
                 // Safe execution events

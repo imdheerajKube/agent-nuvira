@@ -21,6 +21,7 @@
  * verified-working model from the live list when one is available.
  */
 import { logger } from '../utils/logger.js';
+import { getModelRegistry } from '../learning/model-registry.js';
 // ─── Curated known-good default models per provider ─────────────────────────
 // These are checked BEFORE generic fallback so Auto routing prefers models
 // that are stable, chat-capable, and known to work on each provider.
@@ -99,11 +100,24 @@ function modelFallbackScore(m) {
  * @returns A model id guaranteed (best-effort) to exist on the provider.
  */
 export async function resolveWorkingModel(provider, providerType, desiredModel) {
-    const live = await fetchLiveModels(provider, providerType);
-    // 'default' means "no explicit model" — validate it too: the adapter's
-    // hardcoded default can be deprecated (gemini-2.0-flash-exp) or the literal
-    // string 'default' would 404 on most APIs.
     const explicit = desiredModel && desiredModel !== 'default' ? desiredModel : undefined;
+    // ── 0. FAST PATH — the Model Availability Registry (sub-ms, no network) ─
+    // When the registry has already verified this model works (via a prior
+    // spot-check or real telemetry), trust it WITHOUT hitting listModels():
+    // model selection drops from a ~300-900ms live fetch to a map lookup.
+    const registry = getModelRegistry();
+    if (explicit && registry.isUsable(providerType, explicit)) {
+        return explicit;
+    }
+    if (!explicit) {
+        // No pin: prefer a curated known-good model the registry has verified.
+        const curated = registry.resolveVerifiedModel(providerType, PREFERRED_MODELS[providerType] || []);
+        if (curated)
+            return curated;
+    }
+    // Registry didn't have the answer — fall back to the live model list
+    // (cached in-memory with a short TTL by the validator).
+    const live = await fetchLiveModels(provider, providerType);
     // ── 1. Desired model is live → use it ─────────────────────────────────
     if (explicit && live.some((m) => m.id === explicit)) {
         return explicit;

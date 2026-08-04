@@ -53,6 +53,33 @@ export interface AgentMessage {
   timestamp: number;
 }
 
+/**
+ * A user-readable "thinking" update emitted by an agent while it works.
+ *
+ * This is the transparency channel that turns the pipeline from a black box
+ * into something the user can follow: agents report what they are doing,
+ * what they found, and which decision they are making at each stage.
+ *
+ * @example
+ * ```ts
+ * context.onAgentUpdate?.({
+ *   agentType: 'Writer',
+ *   stage: 'drafting',
+ *   message: 'Implementing JWT middleware in src/middleware/auth.ts',
+ * });
+ * ```
+ */
+export interface AgentUpdate {
+  /** Human-readable agent name (e.g. 'Planner', 'Writer', 'Tester') */
+  agentType: string;
+  /** Short stage label (e.g. 'analyzing', 'drafting', 'reviewing') */
+  stage: string;
+  /** User-readable description of what the agent is doing / thinking */
+  message: string;
+  /** Optional id of the task step this update belongs to */
+  taskId?: string;
+}
+
 /** A file change proposed or applied by an agent */
 export interface FileChange {
   path: string;
@@ -93,6 +120,14 @@ export interface AgentContext {
    * The orchestrator sets this to prompt the user for their preferred action.
    */
   onRateLimit?: OnRateLimit;
+
+  /**
+   * Optional transparency callback. Agents call this (via Agent.report())
+   * to stream user-readable progress — what they are doing, what they found,
+   * and how they are making decisions. The orchestrator forwards these to
+   * the event bus so the CLI board / web dashboard can display them live.
+   */
+  onAgentUpdate?: (update: AgentUpdate) => void;
 }
 
 /** The result returned by an agent after execution */
@@ -158,6 +193,37 @@ export abstract class Agent {
 
   /** Short description of what this agent does */
   abstract readonly description: string;
+
+  /**
+   * Id of the task step this agent instance is currently working on.
+   * Set by the orchestrator right before execute(); used to attach agent
+   * "thinking" updates to the correct task line (safe under parallelism
+   * because a fresh agent instance is created per task).
+   */
+  currentTaskId?: string;
+
+  /**
+   * Stream a user-readable "thinking" update to the pipeline UI.
+   *
+   * Best-effort: never throws. If no listener is attached (e.g. tests or
+   * non-UI callers), the call is a no-op.
+   *
+   * @param context  The shared context bus (provides the onAgentUpdate sink)
+   * @param stage    Short stage label (e.g. 'analyzing', 'drafting')
+   * @param message  User-readable description of what the agent is doing
+   */
+  protected report(context: AgentContext, stage: string, message: string): void {
+    try {
+      context.onAgentUpdate?.({
+        agentType: this.name,
+        stage,
+        message,
+        taskId: this.currentTaskId,
+      });
+    } catch {
+      // Transparency is best-effort — never let a reporting failure break the agent.
+    }
+  }
 
   /**
    * Execute the agent's specialized task.

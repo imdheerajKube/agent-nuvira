@@ -28,7 +28,8 @@ export { SelfImprover, getSelfImprover } from './learning/self-improver.js';
 export { AgentStats, getAgentStats } from './learning/agent-stats.js';
 export { scoreTrajectory, scoreOrchestrationResult } from './learning/scorer.js';
 // ─── Memory exports ────────────────────────────────────────────────────────
-export { VectorStore, getVectorStore, cosineSimilarity } from './memory/vector-store.js';
+export { VectorStore, getVectorStore, cosineSimilarity, JsonBackend, setVectorBackendOverride, resetVectorBackendSelection } from './memory/vector-store.js';
+export { FaissIvfBackend, NativeFaissBackend, checkNativeFaiss, createFaissBackend } from './memory/faiss-backend.js';
 export { embed, clearEmbeddingCache, embeddingCacheSize } from './memory/embedder.js';
 export { TrajectoryStore, getTrajectoryStore } from './memory/trajectory-store.js';
 export { retrieveMemoryContext, storeExecutionTrajectory, getMemoryStats, clearMemory, } from './memory/memory-integration.js';
@@ -71,6 +72,10 @@ export { createFederationServer, startFederationServer } from './federation/serv
 export { WorkflowCommand } from './cli/workflow.js';
 export { getWorkflowTemplates, getWorkflowTemplate, buildTaskPlanFromTemplate, buildWorkflowOptions, isValidWorkflowTemplate, } from './workflow/templates.js';
 export { fetchRegistryIndex, searchRegistry, installTemplate, getInstalledTemplates, validateForPublish, prepareForPublish, getPublishUrl, checkForUpgrades, resolveDependencies, compareVersions, versionSatisfies, } from './workflow/registry.js';
+// ─── Phase 4.1 — MCP (Model Context Protocol) exports ─────────────────────────
+// ─── Model Availability Registry (enterprise model intelligence layer) ──────
+export { ModelRegistry, getModelRegistry, resetModelRegistry, DEFAULT_STALE_MS, } from './learning/model-registry.js';
+export { refreshModelRegistry, startRegistryWatcher, spotCheckModel, probeProviderList, buildProvider, PROBE_PROVIDERS, SPOT_CHECK_PROMPT, } from './inference/model-probe.js';
 // ─── Phase 4.1 — MCP (Model Context Protocol) exports ─────────────────────────
 export { MCPClient, createMCPClient } from './mcp/client.js';
 export { MCPManager, getMCPManager, resetMCPManager } from './mcp/manager.js';
@@ -142,16 +147,21 @@ async function main() {
     // First-run / cold start can take a while (plugin discovery + history init +,
     // when enabled, semantic reindex). Give the user a live status line instead
     // of a silent hang. Ora auto-suppresses when stdout is not a TTY, so piped
-    // output stays clean.
-    const startupSpinner = ora({
-        text: '⚙️  Agent-Nuvira starting…',
-        spinner: 'dots',
-    }).start();
+    // output stays clean. In machine-readable mode (--json-events) a TTY run must
+    // stay byte-clean on stdout too, so skip the spinner entirely there.
+    const wantsJsonEvents = process.argv.includes('--json-events');
+    const startupSpinner = wantsJsonEvents
+        ? null
+        : ora({
+            text: '⚙️  Agent-Nuvira starting…',
+            spinner: 'dots',
+        }).start();
     // Run auto-discovery for plugins before parsing commands
     // This ensures provider plugins are loaded before any command runs.
     try {
         const startTime = Date.now();
-        startupSpinner.text = '⚙️  Loading plugins…';
+        if (startupSpinner)
+            startupSpinner.text = '⚙️  Loading plugins…';
         const discovered = await runAutoDiscovery();
         const elapsed = Date.now() - startTime;
         const total = discovered.providerPlugins + discovered.agentPlugins + discovered.workflowPlugins;
@@ -166,7 +176,8 @@ async function main() {
     // apply history.semanticSearch config to ChatHistory singleton,
     // and auto-trigger semantic reindex if enabled but vector store is empty.
     try {
-        startupSpinner.text = '⚙️  Initializing history & search…';
+        if (startupSpinner)
+            startupSpinner.text = '⚙️  Initializing history & search…';
         const { ConfigManager } = await import('./config/manager.js');
         const { getChatHistory, ChatHistory } = await import('./context/history.js');
         const { getVectorStore } = await import('./memory/vector-store.js');
@@ -189,7 +200,8 @@ async function main() {
                 const allEntries = await vs.getAll();
                 const hasChatEntries = allEntries.some((e) => e.id.startsWith('session-'));
                 if (!hasChatEntries) {
-                    startupSpinner.text = '📦 Building semantic search index…';
+                    if (startupSpinner)
+                        startupSpinner.text = '📦 Building semantic search index…';
                     logger.debug('📦 Building semantic search index for past conversations...');
                     const indexed = await getChatHistory().reindexSemantic();
                     if (indexed > 0) {
@@ -203,7 +215,7 @@ async function main() {
         // Non-critical — startup shouldn't fail due to history initialization
         logger.debug(`History initialization failed (non-critical): ${err}`);
     }
-    startupSpinner.stop();
+    startupSpinner?.stop();
     await program.parseAsync(process.argv);
 }
 main().catch((err) => {

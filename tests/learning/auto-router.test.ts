@@ -37,6 +37,7 @@ import {
 } from '../../src/learning/auto-router.js';
 import { resetRouterBandit, getRouterBandit, DEFAULT_MIN_SAMPLES } from '../../src/learning/router-bandit.js';
 import { resetRouterPromotion, getRouterPromotion } from '../../src/learning/router-promotion.js';
+import { resetModelRegistry } from '../../src/learning/model-registry.js';
 
 // ─── Bandit test isolation ─────────────────────────────────────────────────
 
@@ -825,6 +826,29 @@ describe('AutoModelRouter.resolve uncertainty escalation', () => {
 // When a ConfigManager is provided, unconfigured providers are excluded.
 
 describe('AutoModelRouter.resolve credential filtering', () => {
+  // The registry fast-path filters providers by VERIFIED models — a real
+  // persisted registry would leak into this describe (which simulates
+  // credential-only availability), so isolate it exactly like the bandit does.
+  let registryTempDir: string;
+  let originalMemoryDir: string | undefined;
+
+  beforeEach(() => {
+    registryTempDir = mkdtempSync(join(tmpdir(), 'buff-autorouter-registry-'));
+    originalMemoryDir = process.env.BUFF_MEMORY_DIR;
+    process.env.BUFF_MEMORY_DIR = registryTempDir;
+    resetModelRegistry();
+  });
+
+  afterEach(() => {
+    resetModelRegistry();
+    if (originalMemoryDir === undefined) {
+      delete process.env.BUFF_MEMORY_DIR;
+    } else {
+      process.env.BUFF_MEMORY_DIR = originalMemoryDir;
+    }
+    rmSync(registryTempDir, { recursive: true, force: true });
+  });
+
   // NOTE: every mock configManager must include getAll() (returns { pricing: {} })
   // because resolve() calls getProviderPricing(provider, configManager) during
   // scoring, which reads configManager.getAll().pricing.

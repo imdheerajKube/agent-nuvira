@@ -79,6 +79,22 @@ export interface HistoryConfig {
     semanticSearch?: boolean;
 }
 /**
+ * Memory / vector-store configuration.
+ * Set via `buff config set memory.<key> <value>` or directly in .buffconfig.json.
+ */
+export interface MemoryConfig {
+    /**
+     * Vector search backend:
+     *   - `auto` (default) — FAISS-style backend (native @faiss-node/native when
+     *     installed AND built, otherwise the pure-JS IVF-flat ANN) when usable,
+     *     falling back to the exact JSON backend on any failure.
+     *   - `faiss` — prefer the FAISS-style backend; still falls back to JSON on
+     *     native failure (semantic search never breaks).
+     *   - `json` — exact flat cosine scan (the original behavior).
+     */
+    vectorBackend?: 'auto' | 'faiss' | 'json';
+}
+/**
  * Per-provider quota limits for the central quota ledger.
  * Set via `buff config set routing.quota.<provider>.<field> <value>` or directly
  * in .buffconfig.json. The ledger parks a provider once it exhausts its current
@@ -145,6 +161,35 @@ export interface RoutingConfig {
      * Default: 20.
      */
     promotionMinDecisions?: number;
+    /**
+     * Keep the dashboard's quota file watcher armed permanently instead of only
+     * while an SSE client is connected. When true, the server watches the memory
+     * dir from startup (never disarming on client disconnect), so quota events
+     * are always current the moment a dashboard connects — useful when the
+     * dashboard is left running between viewing sessions. Default: false.
+     */
+    alwaysWatchQuota?: boolean;
+    /**
+     * Vector retrieval (token-efficient context). Large gathered contexts are
+     * chunked, embedded locally (bge-small-en-v1.5 via @huggingface/transformers),
+     * and reduced to the top-k semantically relevant chunks before the LLM call
+     * — saving tokens so free quotas stretch further. Small contexts pass
+     * through untouched (zero overhead). Failures fall back to full context.
+     */
+    retrieval?: {
+        /** Master switch. Default: true (cheap for small contexts, big win for large). */
+        enabled?: boolean;
+        /** Top-k chunks to retrieve. Default: 5. */
+        topK?: number;
+        /** Chunk size in tokens. Default: 512. */
+        chunkTokens?: number;
+        /** Overlap between adjacent chunks (tokens). Default: 64. */
+        overlapTokens?: number;
+        /** Contexts above this token count are vectorized. Default: 12000. */
+        thresholdTokens?: number;
+        /** Embedding model override (default Xenova/bge-small-en-v1.5). */
+        model?: string;
+    };
 }
 /**
  * Full configuration schema for .buffconfig.json
@@ -158,6 +203,8 @@ export interface BuffConfig {
     team?: TeamConfig;
     /** Chat history configuration */
     history?: HistoryConfig;
+    /** Memory / vector-store configuration */
+    memory?: MemoryConfig;
     /** Per-provider pricing overrides for Auto model routing cost scoring */
     pricing?: PricingConfigMap;
     /** Learning-router config (bandit sampling + hard constraints) */

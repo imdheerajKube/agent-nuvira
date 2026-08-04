@@ -3,6 +3,10 @@
  * budget checking, multi-model consensus, and the HybridModelRouter class.
  */
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
+import { mkdtempSync, rmSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+
 import {
   analyzeComplexity,
   buildFallbackChain,
@@ -17,6 +21,31 @@ import {
   type HybridRouterOptions,
   type ConsensusResult,
 } from '../../src/learning/hybrid-router.js';
+import { resetModelRegistry } from '../../src/learning/model-registry.js';
+
+// ─── Hermetic storage isolation ──────────────────────────────────────────────
+// Fallback-chain failures can flow through the registry telemetry hook;
+// isolate BUFF_MEMORY_DIR so no real user registry is ever written.
+
+let tempDir: string;
+let originalMemoryDir: string | undefined;
+
+beforeEach(() => {
+  tempDir = mkdtempSync(join(tmpdir(), 'buff-hybrid-'));
+  originalMemoryDir = process.env.BUFF_MEMORY_DIR;
+  process.env.BUFF_MEMORY_DIR = tempDir;
+  resetModelRegistry();
+});
+
+afterEach(() => {
+  resetModelRegistry();
+  if (originalMemoryDir === undefined) {
+    delete process.env.BUFF_MEMORY_DIR;
+  } else {
+    process.env.BUFF_MEMORY_DIR = originalMemoryDir;
+  }
+  rmSync(tempDir, { recursive: true, force: true });
+});
 
 // ─── Mocks ──────────────────────────────────────────────────────────────────
 

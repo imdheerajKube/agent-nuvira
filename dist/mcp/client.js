@@ -100,7 +100,22 @@ export class MCPClient extends EventEmitter {
             this.lineReader = null;
         }
         if (this.process && !this.process.killed) {
-            this.process.kill();
+            // SIGTERM is unreliable here: github-mcp-server ignores it, and killing an
+            // npx wrapper leaves the firecrawl-mcp grandchild running. SIGKILL the
+            // whole detached process group (negative pid) so nothing survives.
+            try {
+                if (this.process.pid !== undefined) {
+                    process.kill(-this.process.pid, 'SIGKILL');
+                }
+            }
+            catch {
+                try {
+                    this.process.kill('SIGKILL');
+                }
+                catch {
+                    // Process already exited — nothing to do.
+                }
+            }
             this.process = null;
         }
         this.emit('disconnected');
@@ -167,9 +182,14 @@ export class MCPClient extends EventEmitter {
             throw new Error(`MCP[${this.config.name}]: No command specified for stdio transport`);
         }
         const env = { ...process.env, ...this.config.env };
+        // `detached: true` makes the child its own process-group leader so
+        // disconnect() can SIGKILL the WHOLE tree (negative pid). Without it, an
+        // `npx firecrawl-mcp` wrapper's grandchild survives the parent kill and
+        // every pipeline run leaks an orphaned process.
         this.process = spawn(this.config.command, this.config.args || [], {
             stdio: ['pipe', 'pipe', 'pipe'],
             env,
+            detached: true,
         });
         this.process.on('error', (err) => {
             this.emit('error', err);
@@ -210,7 +230,13 @@ export class MCPClient extends EventEmitter {
         // Test the connection — try GET first (standard SSE), fall back if server only accepts POST
         try {
             const headers = { ...this.config.headers };
-            const response = await fetch(this.config.url, { headers, method: 'GET' });
+            // Abort the probe after requestTimeoutMs so an unreachable / streaming
+            // endpoint can never hang the pipeline or leak an open socket.
+            const response = await fetch(this.config.url, {
+                headers,
+                method: 'GET',
+                signal: AbortSignal.timeout(this.requestTimeoutMs),
+            });
             if (response.ok || response.status === 405) {
                 // 405 means the server accepts POST only, which is fine for our implementation
                 logger.debug(`MCP[${this.config.name}]: SSE endpoint reachable at ${this.config.url}`);
@@ -281,6 +307,9 @@ export class MCPClient extends EventEmitter {
                 ...this.config.headers,
             },
             body: raw,
+            // Abort after requestTimeoutMs so a streaming SSE response body can
+            // never leave a dangling fetch/socket that keeps the CLI alive.
+            signal: AbortSignal.timeout(this.requestTimeoutMs),
         });
         if (!response.ok) {
             throw new Error(`SSE request failed: ${response.status}`);

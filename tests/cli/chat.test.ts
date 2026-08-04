@@ -8,11 +8,15 @@
  */
 
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
+import { mkdtempSync, rmSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 
 import { runDeveloperMode } from '../../src/cli/chat.js';
 import { ConfigManager } from '../../src/config/manager.js';
 import { logger } from '../../src/utils/logger.js';
 import type { InferenceProvider } from '../../src/inference/interface.js';
+import { resetModelRegistry } from '../../src/learning/model-registry.js';
 
 // ─── Model-health mock ──────────────────────────────────────────────────────
 // Simulates a provider whose pinned model is GONE (like the user's
@@ -145,6 +149,13 @@ describe('runDeveloperMode — auto provider/model resolution', () => {
 });
 
 describe('runDeveloperMode — model health (working models only)', () => {
+  // Isolate the ModelRegistry: its JSON mirror lives in BUFF_MEMORY_DIR and a
+  // real (previously populated) registry would short-circuit the model-health
+  // repair path (a stale pinned model verified in the registry would pass
+  // through instead of being swapped for a live one).
+  let registryTempDir: string;
+  let originalMemoryDir: string | undefined;
+
   beforeEach(() => {
     vi.spyOn(console, 'log').mockImplementation(() => {});
     vi.spyOn(logger, 'info').mockImplementation(() => {});
@@ -153,9 +164,20 @@ describe('runDeveloperMode — model health (working models only)', () => {
     vi.spyOn(logger, 'error').mockImplementation(() => {});
     vi.spyOn(logger, 'highlight').mockImplementation(() => {});
     mockExecute.mockClear();
+    registryTempDir = mkdtempSync(join(tmpdir(), 'buff-chat-registry-'));
+    originalMemoryDir = process.env.BUFF_MEMORY_DIR;
+    process.env.BUFF_MEMORY_DIR = registryTempDir;
+    resetModelRegistry();
   });
 
   afterEach(() => {
+    resetModelRegistry();
+    if (originalMemoryDir === undefined) {
+      delete process.env.BUFF_MEMORY_DIR;
+    } else {
+      process.env.BUFF_MEMORY_DIR = originalMemoryDir;
+    }
+    rmSync(registryTempDir, { recursive: true, force: true });
     vi.restoreAllMocks();
   });
 

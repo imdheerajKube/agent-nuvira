@@ -7,6 +7,70 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [1.51.0] - 2026-08-04
+
+### Added
+
+- **Routing strategy super-enhancement** — Auto model selection now scores
+  providers across 5 weighted dimensions (reasoning, speed, cost, privacy,
+  reliability) with per-complexity weight matrices for all 5 levels (trivial →
+  critical). Key enhancements:
+  - **Thompson-sampling bandit** with cost-adjusted rewards per complexity
+    bucket; Beta(1,1) cold start behaves deterministically until outcomes
+    accumulate. State persists to `~/.buff/memory/router-bandit.json`
+  - **Uncertainty-driven escalation** — when the bandit's winner has no learned
+    data (α+β < default 8 samples), routing escalates to the next-ranked
+    provider that HAS learned data with a ≥55% win-rate floor, so a cold-start
+    winner never commits to a coin flip
+  - **Per-modelId learning** (ruflo ADR-149 mirror) — both provider-level and
+    model-level Beta priors track which concrete model won; cold start keeps
+    the configured pin, learned models prefer the best Thompson-sampled one
+  - **Promotion gate A/B** — every auto-routed task records both the
+    deterministic heuristic pick and the bandit pick for the same task;
+    `buff model bandit` evaluates 3 criteria (quality improvement >2%, cost
+    regression ≤1%, p95 latency regression ≤5%) before promoting the bandit
+  - **Routing rules** — regex/string task-pattern rules force a specific
+    provider/model before scoring (first match wins); rules also note the
+    forced provider for correct bandit outcome attribution
+  - **Hard constraints** — `routing.maxCostUsd`, `routing.minSpeed`,
+    `routing.minReasoning` eliminate violating providers with graceful fallback
+    when constraints would remove everything
+  - **Credential-aware filtering** — Auto routing never picks a provider
+    without configured credentials (ModelRegistry fast path verifies usable
+    models); explicit `allowedProviders` always win
+  - **Quota-ledger integration** — exhausted providers sink below healthy ones
+    like circuit-breaker cooldown, only picked when every candidate is parked
+  - **Runtime stats blending** — benchmark quality scores (30%) + per-agent
+    best-model stats adjust provider capability scores in real time
+  - **Verification-aware escalation** — verification-heavy tasks (deploy,
+    security audit) boost reasoning+reliability weights and reorder candidates
+    so the strongest provider for verification is tried first
+  - **Free/local-first gate** (`routing.allowPaid: false`) — keeps paid
+    providers out of trivial/simple/moderate tasks; complex/critical tasks may
+    still use high-capacity models
+
+- **Orchestrator test pollution fix** — 2 flaky checkpoint-resume tests were
+  failing under parallel load due to module-level `mockClear()` (which clears
+  call counts but not implementations) vs `mockReset()` (which clears both).
+  Changed all 3 `describe` blocks to use `mockReset()`, added cross-describe
+  mock reset in auto-model resolution `beforeEach`, and restored
+  `mockReturnValue()` after each reset. Full suite: 2,934 tests, 0 failures.
+
+- **Model-registry test FAISS backend fix** — widened the expected backend
+  assertion from `['json', 'faiss-ivf']` to `['json', 'faiss-ivf',
+  'faiss-native']` since `@faiss-node/native` is now installed and functional
+  on this machine. All 19/19 model-registry tests pass.
+
+### Changed
+
+- **Auto routing tests expanded** — 95 tests covering: 5 complexity levels ×
+  4 preference modes, pricing overrides, runtime stats, bandit learning,
+  uncertainty escalation, credential filtering, hard constraints, routing
+  rules, per-model learning, and promotion gate A/B
+- **Total test count** updated to 2,934 tests (96 test files) — all passing
+
+---
+
 ## [1.50.0] - 2026-08-02
 
 ### Added

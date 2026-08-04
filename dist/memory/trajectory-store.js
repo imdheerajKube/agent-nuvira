@@ -19,23 +19,35 @@ import { embed, EMBEDDING_DIM } from './embedder.js';
 import { logger } from '../utils/logger.js';
 import { scoreTrajectory } from '../learning/scorer.js';
 // ─── Constants ──────────────────────────────────────────────────────────────
-const MEMORY_DIR = join(homedir(), '.buff', 'memory');
-const TRAJECTORIES_PATH = join(MEMORY_DIR, 'trajectories.json');
+/**
+ * Resolve the memory dir lazily (per call) so tests that set
+ * `BUFF_MEMORY_DIR` in beforeAll are genuinely hermetic — a module-import-
+ * time capture would silently keep writing to the real ~/.buff/memory
+ * (same fix as vector-store.ts).
+ */
+function memoryDir() {
+    return process.env.BUFF_MEMORY_DIR || join(homedir(), '.buff', 'memory');
+}
+function trajectoriesPath() {
+    return join(memoryDir(), 'trajectories.json');
+}
 const CURRENT_VERSION = 1;
 const MAX_TRAJECTORIES = 500;
 // ─── Helpers ────────────────────────────────────────────────────────────────
 function ensureDir() {
-    if (!existsSync(MEMORY_DIR)) {
-        mkdirSync(MEMORY_DIR, { recursive: true });
+    const dir = memoryDir();
+    if (!existsSync(dir)) {
+        mkdirSync(dir, { recursive: true });
     }
 }
 function readTrajectories() {
     try {
         ensureDir();
-        if (!existsSync(TRAJECTORIES_PATH)) {
+        const path = trajectoriesPath();
+        if (!existsSync(path)) {
             return { trajectories: {}, version: CURRENT_VERSION };
         }
-        const raw = readFileSync(TRAJECTORIES_PATH, 'utf-8');
+        const raw = readFileSync(path, 'utf-8');
         return JSON.parse(raw);
     }
     catch {
@@ -44,7 +56,7 @@ function readTrajectories() {
 }
 function writeTrajectories(data) {
     ensureDir();
-    writeFileSync(TRAJECTORIES_PATH, JSON.stringify(data, null, 2), 'utf-8');
+    writeFileSync(trajectoriesPath(), JSON.stringify(data, null, 2), 'utf-8');
 }
 /** Generate a unique trajectory ID */
 function generateId() {

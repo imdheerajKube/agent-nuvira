@@ -9,7 +9,7 @@
  * - Handle errors, timeouts, and cleanup
  * - Provide progress callbacks for the webview panel
  */
-import type { ActiveModelInfo, CLIResult, ExtensionConfig, ProviderInfo, ProviderModelInfo } from './types.js';
+import type { ActiveModelInfo, CLIResult, ExtensionConfig, ProviderInfo, ProviderModelInfo, QuotaStatusInfo } from './types.js';
 /**
  * Manages the lifecycle of a CLI subprocess for agent tasks.
  * Each task gets its own subprocess instance.
@@ -95,6 +95,22 @@ export declare class CLIManager {
      * Corresponds to: buff model health [-p <provider>]
      */
     checkModelHealth(provider?: string): Promise<CLIResult>;
+    /**
+     * Resolve the CLI's memory dir (`BUFF_MEMORY_DIR` override, else
+     * `~/.buff/memory`). Public so the quota panel can watch the same directory
+     * the reader uses for live updates.
+     */
+    getMemoryDir(): string;
+    /**
+     * Read the central quota ledger + failover timeline directly from the CLI's
+     * memory dir (`~/.buff/memory/quota-ledger.json` + `quota-events.jsonl`,
+     * honoring BUFF_MEMORY_DIR like the dashboard does).
+     *
+     * Returns a fully-shaped (possibly empty) QuotaStatusInfo — never throws, so
+     * the extension's quota view always has data to render even on a fresh
+     * install where the ledger doesn't exist yet.
+     */
+    getQuotaStatus(): Promise<QuotaStatusInfo>;
     /**
      * Build CLI arguments with common options.
      *

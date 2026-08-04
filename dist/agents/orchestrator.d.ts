@@ -188,8 +188,31 @@ export declare class Orchestrator {
     constructor(configManager?: ConfigManager, moduleRegistry?: ModuleRegistry, eventBus?: EventBus, reportModule?: ReportModule);
     /**
      * Execute a multi-agent pipeline for the given goal.
+     *
+     * Wraps the pipeline in a try/finally so MCP server connections are torn down
+     * on EVERY exit path. Early returns (e.g. planner failure) previously skipped
+     * the cleanup at the end of the method, leaking the spawned MCP subprocesses
+     * and keeping the CLI process alive long after the pipeline finished.
      */
     execute(goal: string, options?: OrchestratorOptions): Promise<OrchestrationResult>;
+    /** Internal pipeline implementation (see execute()). */
+    private executePipeline;
+    /**
+     * Pre-flight project inspection — deterministic, always-on, no LLM calls.
+     *
+     * Scans the working directory for the project type (manifest files), counts
+     * source + test files, and reads the git state. The readable digest is:
+     * - Stored in the vault as `projectInspection` so the Planner builds a plan
+     *   that REUSES the existing codebase (no rework) and keeps backward
+     *   integrity (existing tests are taken into account).
+     * - Emitted on the event bus so the CLI board / dashboard can show the
+     *   user what was found before planning starts.
+     */
+    private runProjectInspection;
+    /** Count source/test files and top-level source directories (no LLM). */
+    private countSourceFiles;
+    /** Read the git branch and uncommitted-change count. Returns null if not a repo. */
+    private gitState;
     private createLLMProvider;
     private runAgent;
     /**

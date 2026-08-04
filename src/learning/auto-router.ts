@@ -43,6 +43,7 @@ import { getBenchmarkRuns } from './benchmark.js';
 import { getAgentStats } from './agent-stats.js';
 import { getRouterBandit, DEFAULT_MIN_SAMPLES, type BanditOutcome } from './router-bandit.js';
 import { getRouterPromotion, type ParallelPick } from './router-promotion.js';
+import { getModelRegistry } from './model-registry.js';
 import { PREFERRED_MODELS } from '../inference/model-validator.js';
 import type { ConfigManager } from '../config/manager.js';
 import type { ProviderPricing } from '../config/types.js';
@@ -524,6 +525,21 @@ export class AutoModelRouter {
     if (!configManager || typeof configManager.hasRequiredCredentials !== 'function') {
       return DEFAULT_AUTO_PROVIDERS;
     }
+
+    // ── Registry-aware filtering: prefer providers with VERIFIED, usable
+    // models over bare credential checks. A key existing ≠ the models on that
+    // provider actually serving (OpenRouter lists 300+ models your credits
+    // can't buy; Gemini paid models 403 without billing). When the registry
+    // has real data, restrict Auto routing to providers we've verified — this
+    // is the "no more routing into 404s" guarantee.
+    const registered = getModelRegistry().getUsableProviders();
+    if (registered.length > 0) {
+      const intersection = DEFAULT_AUTO_PROVIDERS.filter((p) => registered.includes(p));
+      if (intersection.length > 0) {
+        return intersection;
+      }
+    }
+
     const usable = DEFAULT_AUTO_PROVIDERS.filter((p) => {
       try {
         return configManager.hasRequiredCredentials(p);

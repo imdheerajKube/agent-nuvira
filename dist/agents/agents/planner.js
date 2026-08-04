@@ -32,6 +32,12 @@ const PLANNER_SYSTEM_PROMPT = [
     '6. Set dependsOn correctly so steps run in the right order',
     '7. Keep steps granular — each step should change at most 2-3 files',
     '8. Maximum 12 steps total',
+    '9. PARALLELISM: independent steps run CONCURRENTLY — the execution engine',
+    '   batches every step whose dependencies are satisfied, so do NOT chain',
+    '   steps serially when they could run in parallel. When the goal has',
+    '   independent parts (separate files/modules/concerns), create MULTIPLE',
+    '   writer steps with EMPTY or shared dependencies (so they run at the same',
+    '   time) and ONE reviewer step whose dependsOn lists ALL of them.',
     '',
     'Return ONLY a valid JSON array. No markdown, no explanations.',
     '',
@@ -59,13 +65,23 @@ const PLANNER_SYSTEM_PROMPT = [
     '    "dependsOn": ["step-01-understand"]',
     '  },',
     '  {',
-    '    "id": "step-04-review",',
-    '    "description": "Review all changes for security vulnerabilities, correctness, and code quality",',
+    '    "id": "step-04-security-scan",',
+    '    "description": "Scan the new auth code for PII and injection vulnerabilities",',
+    '    "agentType": "security",',
+    '    "complexity": "moderate",',
+    '    "dependsOn": ["step-02-add-routes", "step-03-add-middleware"]',
+    '  },',
+    '  {',
+    '    "id": "step-05-review",',
+    '    "description": "Review all changes for correctness, security, and code quality",',
     '    "agentType": "reviewer",',
     '    "complexity": "complex",',
     '    "dependsOn": ["step-02-add-routes", "step-03-add-middleware"]',
     '  }',
     ']',
+    '',
+    'Note: step-02 and step-03 depend only on step-01, so the engine runs them in',
+    'PARALLEL; step-04 (security) and step-05 (review) then run after BOTH finish.',
     '',
     'Example (creating from scratch + running):',
     '[',
@@ -99,7 +115,9 @@ export class PlannerAgent extends Agent {
         try {
             // Check for file tree (injected by Orchestrator) and memory context
             const fileTree = context.metadata.projectFileTree;
+            const inspection = context.metadata.projectInspection;
             const memoryContext = context.metadata.memoryContext;
+            this.report(context, 'analyzing', 'Analyzing goal and current project structure…');
             const routingContext = context.metadata.routingContext;
             const promptParts = [
                 PLANNER_SYSTEM_PROMPT,
@@ -138,12 +156,19 @@ export class PlannerAgent extends Agent {
             else {
                 promptParts.push('', '## Current Project Structure', '(unknown — file tree not available)');
             }
+            // Inject the deterministic pre-flight inspection digest (framework, test
+            // suite, git state) so the plan reuses what already exists instead of
+            // reworking it — e.g. don't add a test step when tests already exist.
+            if (inspection) {
+                promptParts.push('', '## Pre-flight Project Inspection', inspection);
+            }
             // Append memory/few-shot examples if available
             if (memoryContext) {
                 promptParts.push('', memoryContext);
             }
             promptParts.push('', 'Create an execution plan for this goal. Return ONLY a valid JSON array of task steps.');
             const prompt = promptParts.join('\n');
+            this.report(context, 'drafting', 'Drafting a dependency-aware execution plan…');
             const response = await callLLM(prompt, {
                 temperature: 0.3, // Low temperature for structured output
                 maxTokens: 4096,
@@ -185,6 +210,7 @@ export class PlannerAgent extends Agent {
                 });
             }
             if (plan.length === 0) {
+                this.report(context, 'failed', 'Could not produce a valid plan — retrying with a different approach');
                 return {
                     success: false,
                     summary: 'Planner produced an empty or invalid plan',
@@ -194,6 +220,7 @@ export class PlannerAgent extends Agent {
             }
             // Store the parsed plan directly in the shared context for the orchestrator
             context.taskPlan.push(...plan);
+            this.report(context, 'decided', `Plan ready: ${plan.length} step(s) — ${plan.map((s) => s.agentType).join(', ')}`);
             return {
                 success: true,
                 summary: `Created ${plan.length} task steps`,

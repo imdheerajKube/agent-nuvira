@@ -52,14 +52,17 @@ export class RunnerAgent extends Agent {
         this._callLLM = callLLM;
         try {
             // 1. Determine which command to run
+            this.report(context, 'thinking', 'Determining which command to run…');
             const command = await this.determineCommand(context, callLLM);
             if (!command) {
+                this.report(context, 'failed', 'Could not determine a command to run');
                 return {
                     success: false,
                     summary: 'No command to run',
                     error: 'Could not determine which command to execute from the task description or context.',
                 };
             }
+            this.report(context, 'running', `Executing \`${command}\` and capturing output…`);
             // Check if we should run inside a Docker sandbox
             const useDocker = context.metadata.useDockerSandbox === true ||
                 getSandboxConfig().enabled === true;
@@ -86,8 +89,12 @@ export class RunnerAgent extends Agent {
      * 2. Ask the LLM what command to run based on the files that were created
      */
     async determineCommand(context, callLLM) {
-        // Find the current 'runner' task in the plan
-        const runnerTask = context.taskPlan.find((s) => s.agentType === 'runner' && s.status === 'running');
+        // Find the current 'runner' task in the plan. When several tasks run in
+        // parallel, the orchestrator marks the CURRENT step via
+        // metadata.currentTaskId so the runner uses ITS OWN description.
+        const currentTaskId = context.metadata.currentTaskId;
+        const runnerTask = context.taskPlan.find((s) => s.agentType === 'runner' &&
+            (currentTaskId ? s.id === currentTaskId : s.status === 'running'));
         const description = runnerTask?.description || context.goal;
         // Strategy 1: Extract command from backticks in the description
         // e.g., "Run `python hello.py` and verify output"
@@ -810,6 +817,11 @@ export class RunnerAgent extends Agent {
             dependencyInstallToolInstalled: depInstallToolInstalled,
         };
         context.metadata['runResult'] = runResult;
+        if (depInstallAttempted) {
+            this.report(context, depInstallSucceeded ? 'installed' : 'failed', depInstallSucceeded
+                ? 'Installed missing dependencies — re-running the command'
+                : `Dependency install failed (${depInstallTool || 'unknown tool'})`);
+        }
         context.metadata['dependencyInstallAttempted'] = depInstallAttempted;
         context.metadata['dependencyInstallSucceeded'] = depInstallSucceeded;
         context.metadata['dependencyInstallTool'] = depInstallTool;

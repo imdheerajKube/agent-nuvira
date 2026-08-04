@@ -8,10 +8,14 @@
  * to a verified-working model.
  */
 
-import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
+import { mkdtempSync, rmSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 
 import { resolveWorkingModel, clearModelListCache } from '../../src/inference/model-validator.js';
 import type { InferenceProvider, ModelDescriptor } from '../../src/inference/interface.js';
+import { resetModelRegistry } from '../../src/learning/model-registry.js';
 
 // ─── Helpers ────────────────────────────────────────────────────────────────
 
@@ -38,8 +42,28 @@ describe('resolveWorkingModel', () => {
   // The live model list is cached per provider type (TTL) to avoid a
   // listModels() GET on every auto-routed message. Tests must clear the cache
   // so each test sees the provider's OWN mock list, not a prior test's.
+  // The ModelRegistry fast-path must ALSO be isolated: it reads a persisted
+  // JSON mirror from BUFF_MEMORY_DIR, and a real registry would short-circuit
+  // the mocked listModels (verified entries bypass the live fetch).
+  let registryTempDir: string;
+  let originalMemoryDir: string | undefined;
+
   beforeEach(() => {
     clearModelListCache();
+    registryTempDir = mkdtempSync(join(tmpdir(), 'buff-val-registry-'));
+    originalMemoryDir = process.env.BUFF_MEMORY_DIR;
+    process.env.BUFF_MEMORY_DIR = registryTempDir;
+    resetModelRegistry();
+  });
+
+  afterEach(() => {
+    resetModelRegistry();
+    if (originalMemoryDir === undefined) {
+      delete process.env.BUFF_MEMORY_DIR;
+    } else {
+      process.env.BUFF_MEMORY_DIR = originalMemoryDir;
+    }
+    rmSync(registryTempDir, { recursive: true, force: true });
   });
 
   it('caches the live model list per provider type within the TTL window', async () => {

@@ -16,6 +16,13 @@ import type { LLMCallFn } from '../agents/agent.js';
 /** Dimensionality of the generated embeddings (all-MiniLM-L6-v2 default) */
 export declare const EMBEDDING_DIM = 384;
 /**
+ * Retrieval-grade embedding model (bge-small-en-v1.5 — better retrieval
+ * quality for code + docs, still 384-dim so vectors stay compatible with the
+ * same VectorStore). Used by the retrieval engine (src/learning/retrieval.ts);
+ * the memory/history path keeps the lighter all-MiniLM default.
+ */
+export declare const RETRIEVAL_MODEL = "Xenova/bge-small-en-v1.5";
+/**
  * Generate a vector embedding for the given text.
  *
  * Uses a tiered approach:
@@ -28,7 +35,7 @@ export declare const EMBEDDING_DIM = 384;
  * @param forceLLM      If true, skip native tiers and use LLM directly (useful for testing)
  * @returns             A promise that resolves to a number[] embedding vector (384-dim)
  */
-export declare function embed(text: string, callLLM?: LLMCallFn, forceLLM?: boolean): Promise<number[]>;
+export declare function embed(text: string, callLLM?: LLMCallFn, forceLLM?: boolean, model?: string): Promise<number[]>;
 /**
  * Reset the tier availability cache.
  * Call this when the environment changes (e.g., user installs a package)

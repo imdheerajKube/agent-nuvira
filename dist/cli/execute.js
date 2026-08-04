@@ -20,7 +20,6 @@ import { join } from 'node:path';
 import { homedir } from 'node:os';
 import { Command } from 'commander';
 import inquirer from 'inquirer';
-import ora from 'ora';
 import { BaseCommand } from './commands.js';
 import { ProviderFactory } from '../inference/factory.js';
 import { Orchestrator } from '../agents/orchestrator.js';
@@ -30,7 +29,8 @@ import { resolveProvider } from './router.js';
 import { isAutoModel } from '../learning/auto-router.js';
 import { getTrajectoryStore } from '../memory/trajectory-store.js';
 import { listCheckpoints } from '../agents/checkpoint-store.js';
-import { logger } from '../utils/logger.js';
+import { logger, setSilent } from '../utils/logger.js';
+import { PipelineBoard, PipelineEventStream } from './pipeline-board.js';
 /**
  * Map the CLI's `--checkpoint` / `--resume [id]` flags onto the orchestrator's
  * checkpoint options. Bare `--resume` (value `true`) means "resume the auto id
@@ -93,6 +93,7 @@ export class ExecuteCommand extends BaseCommand {
             .option('--checkpoint', 'Save a resume-able checkpoint after every task batch (in ~/.buff/memory/checkpoints/)', false)
             .option('--resume [id]', 'Resume a saved checkpoint (defaults to the auto id for this goal + cwd). Completed steps are skipped', false)
             .option('--checkpoint-list', 'List saved checkpoints and exit', false)
+            .option('--json-events', 'Emit machine-readable NDJSON pipeline events on stdout (no human board)', false)
             .action(async (goal, options) => {
             await this.execute(goal, options || {});
         });
@@ -1049,7 +1050,7 @@ export class ExecuteCommand extends BaseCommand {
      * Returns the outcome so the caller can record it in session history.
      */
     async runSingleGoal(goal, provider, model, options) {
-        if (options.verbose || options.dryRun || options.review || options.sandbox) {
+        if (!options.jsonEvents && (options.verbose || options.dryRun || options.review || options.sandbox)) {
             logger.info(`Goal: ${goal}`);
             if (options.dryRun)
                 logger.info('Mode: Dry run (files will not be modified)');
@@ -1078,11 +1079,22 @@ export class ExecuteCommand extends BaseCommand {
             agentModels['writer'] = options.writerModel;
         if (options.reviewerModel)
             agentModels['reviewer'] = options.reviewerModel;
-        const spinner = ora({
-            text: 'Planning...',
-            spinner: 'dots',
-        }).start();
+        // Live pipeline board — every step, parallel lane, and agent "thinking"
+        // update shown in real time (falls back to plain lines when not a TTY).
+        // Also implements the spinner interface so rate-limit prompts pause it.
+        // With --json-events, swap in the machine-readable NDJSON event stream so
+        // external consumers (CI, scripts, the VS Code panel) get the same events.
+        const board = options.jsonEvents ? new PipelineEventStream() : new PipelineBoard();
+        board.start(goal);
         try {
+            // Machine-readable mode: keep stdout a pure NDJSON stream. The event-bus
+            // LoggerConsumer and incidental warn/info calls would otherwise interleave
+            // human lines ("⚡ Pipeline started", inspection echoes, auto-routing
+            // warnings) into the JSON stream — silence the logger for the duration and
+            // let the NDJSON events carry all the detail. Set inside the try so the
+            // finally below ALWAYS restores it, even on an early throw.
+            if (options.jsonEvents)
+                setSilent(true);
             const orchestrator = new Orchestrator(this.configManager);
             const result = await orchestrator.execute(goal, {
                 provider,
@@ -1101,16 +1113,51 @@ export class ExecuteCommand extends BaseCommand {
                 repairFallbackModels: options.repairFallbackModels?.split(',').map((m) => m.trim()).filter(Boolean),
                 autoRouteModels: options.autoRoute || undefined,
                 ...checkpointOptions(options.checkpoint, options.resume),
+                spinner: board,
             });
-            spinner.stop();
-            console.log('');
-            printOrchestrationResult(result);
+            board.finish(result.success);
+            if (options.jsonEvents) {
+                // Machine-readable terminal event: the full orchestration result.
+                process.stdout.write(JSON.stringify({
+                    type: 'result',
+                    success: result.success,
+                    goal: result.goal,
+                    summary: result.summary,
+                    tasksCompleted: result.tasksCompleted,
+                    tasksTotal: result.tasksTotal,
+                    agentResults: result.agentResults,
+                    fileChanges: result.fileChanges,
+                    runOutput: result.runOutput,
+                    error: result.error,
+                    trajectoryId: result.trajectoryId,
+                    reviewId: result.reviewId,
+                    ts: Date.now(),
+                }) + '\n');
+            }
+            else {
+                console.log('');
+                printOrchestrationResult(result);
+            }
             return { success: result.success, orchestrationResult: result };
         }
         catch (err) {
-            spinner.fail('Execution failed');
-            logger.error(String(err));
+            board.finish(false);
+            if (options.jsonEvents) {
+                process.stdout.write(JSON.stringify({
+                    type: 'result',
+                    success: false,
+                    error: err instanceof Error ? err.message : String(err),
+                    ts: Date.now(),
+                }) + '\n');
+            }
+            else {
+                logger.error(String(err));
+            }
             return { success: false };
+        }
+        finally {
+            if (options.jsonEvents)
+                setSilent(false);
         }
     }
     // ─── Checkpoint Listing ────────────────────────────────────────────────

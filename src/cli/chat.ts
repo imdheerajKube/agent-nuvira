@@ -14,6 +14,7 @@ import { getChatHistory } from '../context/history.js';
 import { logger } from '../utils/logger.js';
 import { Orchestrator } from '../agents/orchestrator.js';
 import { printOrchestrationResult } from './execute.js';
+import { PipelineBoard } from './pipeline-board.js';
 import { applyActiveModel } from './model.js';
 import { ConfigManager } from '../config/manager.js';
 import { InferenceProvider } from '../inference/interface.js';
@@ -236,28 +237,29 @@ export async function runDeveloperMode(
     model = await resolveWorkingModel(resolved.provider, decision.provider, decision.model);
   }
 
-  const spinner = ora({
-    text: '📋 Planning...',
-    spinner: 'dots',
-  }).start();
+  // Live pipeline board — replaces the single spinner so the user sees every
+  // step, parallel lanes, and the agent's "thinking" updates in real time.
+  const board = new PipelineBoard();
+  board.start(goal);
 
   try {
     const orchestrator = new Orchestrator(configManager);
     const result = await orchestrator.execute(goal, {
       provider,
       model,
-      verbose: true,
-      spinner: {
-        stop: () => spinner.stop(),
-        start: (text?: string) => spinner.start(text),
-      },
+      // The board now supplies the live detail (task statuses, agent updates,
+      // routing decisions) — no need for raw verbose log interleaving.
+      verbose: false,
+      // The board implements the spinner interface so interactive prompts
+      // (rate limits, model pickers) can pause/resume the live view.
+      spinner: board,
     });
 
-    spinner.stop();
+    board.finish(result.success);
     console.log('');
     printOrchestrationResult(result);
   } catch (err) {
-    spinner.fail('Developer mode execution failed');
+    board.finish(false);
     logger.error(String(err));
   }
 }

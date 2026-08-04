@@ -1,3 +1,24 @@
+# ---
+name: agent-nuvira
+short_description: "Flexible AI inference CLI with multi-agent swarm, routing, and persistent memory"
+architecture: "multi-agent pipeline"
+agents: "Swarm (100+ agents, consensus)"
+orchestration: "Sequential sub-agent pipeline"
+orchestration_details: "planner, gatherer, writer, reviewer, tester, security auditor; GOAP & swarm topologies"
+memory: "Persistent AgentDB (vector DB) + JSON cache; optional session-only modes"
+parallel_execution: "Yes (parallel agent execution & async pipelines)"
+security_guardrails:
+  - "Privacy-focused"
+  - "AI Defence (prompt injection, PII detection)"
+  - "Security scan CLI"
+publishing: "Standalone eject available; npm publishing & npx installer"
+features:
+  - "multi-provider routing"
+  - "native FAISS backend"
+  - "checkpoint and resume"
+  - "plugin marketplace"
+---
+
 # Buff CLI — `agent-nuvira`
 
 **Flexible AI inference tool** — run large language models locally (Ollama) or route to cloud APIs (Groq, NVIDIA NIM, Google Gemini, OpenRouter) through a unified CLI. Discover available models, chat interactively, edit files with AI, and plan codebase changes — all from the terminal.
@@ -12,6 +33,23 @@ agent-nuvira config list
 ```
 
 ---
+
+## Feature Matrix (concise)
+
+This table highlights core capabilities for quick machine parsing and comparison.
+
+| Feature | Agent-Nuvira |
+|---|---|
+| Architecture | Multi-agent pipeline; Swarm (100+ agents, consensus) |
+| Orchestration | Sequential sub-agent pipeline; GOAP & swarm topologies |
+| Memory | Persistent AgentDB (vector DB) + JSON cache; optional session-only modes |
+| Parallel execution | Yes — parallel agent execution and async pipelines |
+| Security guardrails | Privacy-focused; PII detection; prompt-injection defenses; security scan CLI |
+| Publishing | Standalone eject & npm publishing (`npx agent-nuvira`) |
+| **Routing strategy** | **Thompson-sampling bandit + uncertainty escalation + per-model learning + promotion gate A/B + routing rules + hard constraints** |
+| **Test suite** | **2,934 tests across 96 files — 100% passing** |
+| **Vector backend** | **Native FAISS (automatic), pure-JS IVF fallback, exact JSON fallback** |
+
 
 ## Why Agent-Nuvira? (The Core Edge)
 
@@ -129,14 +167,15 @@ npm link
 
 ### Native FAISS acceleration (optional, recommended)
 
-Agent-Nuvira includes an optional native FAISS backend for faster semantic retrieval. The runtime now prefers this backend automatically when the native addon can build successfully; if that path is unavailable, it falls back to the pure-JS IVF implementation and then the exact JSON backend so your workflow stays reliable.
+Agent-Nuvira includes an optional native FAISS backend for faster semantic retrieval. The runtime prefers this backend automatically when the native addon can build successfully; if that path is unavailable, it falls back to the pure-JS IVF implementation and then the exact JSON backend so your workflow stays reliable.
 
-> **v1.49.1 note:** the native tier was rewritten against the real
-> `@faiss-node/native` v0.1.11 API (`FaissIndex` with `{ type: 'FLAT_IP', dims }`,
-> async typed-array `add`/`search`) — earlier builds referenced a non-existent
-> `IndexFlatIP` class, so the load-time smoke test silently failed and the
-> pure-JS IVF backend ran even when the native module was built. It now
-> activates for real. Verify with `buff memory backend --check`.
+> **How the auto-selection works:** At load time, `createFaissBackend()`
+> attempts to import `@faiss-node/native` and run a 1-vector smoke test.
+> If the native addon exists and passes the smoke test, the backend is
+> `faiss-native`. If the import fails (not installed, build error, or wrong
+> API), it falls back to the pure-JS IVF-flat ANN (`faiss-ivf`). If that
+> also fails to initialize, the exact JSON backend (`json`) is used as the
+> final safety net — semantic search NEVER breaks.
 
 For npm-installed users, the setup is:
 
@@ -151,6 +190,9 @@ brew install faiss libomp openblas
 npm rebuild @faiss-node/native
 
 # 4) Enable the FAISS-style backend (or leave it on 'auto' to prefer it automatically)
+#    'auto' (default) — tries native FAISS first, then pure-JS IVF, then JSON
+#    'faiss'         — prefer FAISS-style (native or pure-JS IVF); JSON fallback
+#    'json'          — exact flat cosine (the original behavior, no FAISS at all)
 agent-nuvira config set memory.vectorBackend auto
 # or force it explicitly:
 # agent-nuvira config set memory.vectorBackend faiss
@@ -159,9 +201,24 @@ agent-nuvira config set memory.vectorBackend auto
 If you want to confirm the backend in use:
 
 ```bash
-agent-nuvira memory stats        # ... Backend: faiss-native (native FAISS)
-agent-nuvira memory backend --check   # native availability check + active backend + why
+agent-nuvira memory stats                    # Shows active backend
+agent-nuvira memory backend                  # Active backend name + why it was chosen
+agent-nuvira memory backend --check          # Same + native availability probe + install guidance
 ```
+
+### Understanding the FAISS tiers
+
+| Tier | Backend name | When it's used | Performance |
+|---|---|---|---|
+| **1 — Native FAISS** | `faiss-native` | `@faiss-node/native` installed AND built successfully | Fastest — real FAISS C++ bindings |
+| **2 — Pure-JS IVF** | `faiss-ivf` | Native not available; runs TypeScript port of FAISS IndexIVFFlat | Approximate ANN; sub-linear search for large indexes |
+| **3 — Exact JSON** | `json` | Both FAISS paths unavailable; flat cosine scan | Exact results; O(n) linear scan |
+
+The pure-JS IVF tier uses deterministic k-means++ clustering (nlist=sqrt(n)),
+inner product of L2-normalized vectors (= cosine similarity), and nprobe probe
+lists. For small indexes (≤ 512 entries) it runs an exact scan so results are
+identical to the JSON backend. Filter-aware probe expansion ensures that
+metadata filters don't miss results.
 
 If the native addon cannot be built on your machine, Agent-Nuvira will continue to work using the pure-JS fallback path.
 
@@ -742,9 +799,9 @@ agent-nuvira model health
 
 **Priority chain:** CLI `--provider`/`--model` flags → `buff model switch` active state → default config file — the most specific wins.
 
-#### Learning Router — Thompson-sampling bandit + hard constraints
+#### Learning Router — Thompson-sampling bandit + hard constraints (v1.51.0 Enhanced)
 
-Auto routing can **learn from real outcomes** (ruflo-inspired `model-router` math, generalized to all providers):
+Auto routing can **learn from real outcomes** (ruflo-inspired `model-router` math, generalized to all providers). The routing engine scores providers across 5 weighted dimensions (reasoning, speed, cost, privacy, reliability) with per-complexity weight matrices for all 5 levels.
 
 ```bash
 # Enable bandit learning — each provider's score is multiplied by a Beta draw
@@ -760,13 +817,40 @@ agent-nuvira config set routing.minSpeed 0.5
 agent-nuvira config set routing.minReasoning 0.6
 ```
 
-How it works:
-- Each provider keeps a **Beta(α, β) prior per complexity bucket** (trivial/simple/moderate/complex/critical) so learning is task-type-local.
-- Final score = `deterministicScore × θ` where `θ ~ Beta(α, β)`. Cold start `Beta(1,1)` behaves like the plain heuristic router until outcomes accumulate.
-- The orchestrator **records every auto-routed task's outcome** (success/failure) into the bandit. Success rewards are **cost-adjusted** — a cheap provider's success is worth the most.
-- State persists to `~/.buff/memory/router-bandit.json` (honors `BUFF_MEMORY_DIR`) and is shared across CLI, chat, and the VS Code extension.
+#### How the routing engine works (v1.51.0)
 
-Inspect and manage the bandit from the CLI — the full α/β heatmap per provider × complexity bucket, recent learning history, JSON output for scripting, and a one-command reset:
+**5 scoring dimensions:** Every provider has a static capability profile (0–1) for reasoning, speed, cost, privacy, reliability. The cost dimension is computed from **real per-1K-token pricing** (free tiers = $0) — configurable via `buff config set pricing.<provider>.inputPer1K`.
+
+**5 complexity levels:** The task description is analyzed for keywords to determine complexity (trivial → critical). Each level has a distinct weight matrix that shifts dominance:
+- **Trivial/simple:** cost + speed dominate (fast small model)
+- **Moderate:** balanced
+- **Complex/critical:** reasoning + reliability dominate (deep reasoning with larger model)
+
+**4 preference modes:** `balanced`, `performance-first`, `cost-first`, `privacy-first` — each applies additive weight adjustments that shift the routing decision predictably.
+
+**1. Thompson-sampling bandit** — Each provider keeps a **Beta(α, β) prior per complexity bucket** so learning is task-type-local. Final score = `deterministicScore × θ` where `θ ~ Beta(α, β)`. Cold start `Beta(1,1)` behaves like the plain heuristic router until outcomes accumulate. The orchestrator **records every auto-routed task's outcome** (success/failure) into the bandit. Success rewards are **cost-adjusted** — a cheap provider's success is worth the most. State persists to `~/.buff/memory/router-bandit.json`.
+
+**2. Uncertainty-driven escalation** — When the bandit's winner has no learned data (α+β < default 8 samples), routing escalates to the next-ranked provider that HAS learned data with a ≥55% win-rate floor. This prevents a cold-start winner from committing to a coin flip.
+
+**3. Per-modelId learning** — Both provider-level and model-level Beta priors track which concrete model won (e.g., `llama-3.3-70b-versatile` ≠ `openai/gpt-oss-20b` on the same provider). Cold start keeps the configured pin; learned models prefer the best Thompson-sampled one.
+
+**4. Promotion gate A/B** — Every auto-routed task records both the deterministic heuristic pick and the bandit pick for the same task. The `buff model bandit` command evaluates 3 criteria (quality improvement >2%, cost regression ≤1%, p95 latency regression ≤5%) before promoting the bandit over the heuristic.
+
+**5. Routing rules** — Regex/string task-pattern rules force a specific provider/model before scoring (first match wins). Rules also note the forced provider for correct bandit outcome attribution.
+
+**6. Hard constraints** — `routing.maxCostUsd`, `routing.minSpeed`, `routing.minReasoning` eliminate violating providers with graceful fallback when constraints would remove everything.
+
+**7. Credential-aware filtering** — Auto routing never picks a provider without configured credentials. The ModelRegistry fast path verifies usable models; explicit `allowedProviders` always win.
+
+**8. Quota-ledger integration** — Exhausted providers sink below healthy ones like circuit-breaker cooldown, only picked when every candidate is parked.
+
+**9. Runtime stats blending** — Benchmark quality scores (30%) + per-agent best-model stats adjust provider capability scores in real time.
+
+**10. Verification-aware escalation** — Verification-heavy tasks (deploy, security audit) boost reasoning+reliability weights and reorder candidates so the strongest provider for verification is tried first.
+
+**11. Free/local-first gate** — `routing.allowPaid: false` keeps paid providers out of trivial/simple/moderate tasks; complex/critical tasks may still use high-capacity models.
+
+Inspect and manage the bandit from the CLI:
 
 ```bash
 # Show the bandit state (α/β priors + expected win % per provider × complexity bucket)
@@ -779,9 +863,9 @@ agent-nuvira model bandit --json
 agent-nuvira model bandit reset
 ```
 
-The dashboard's 🤖 **Routing** panel shows the same bandit live — an α/β heatmap plus a learning-history timeline (enable `routing.bandit` and run auto-routed tasks to populate it). It also renders a live **🎖️ Promotion Gate** card (v1.42.1): an A/B verdict on whether the bandit is actually **better than the deterministic heuristic**, judged on real trajectories (`router-promotion.jsonl`) — quality must improve >2% while cost and latency don't regress (ruflo ADR-150). Unmeasured latency is honestly shown as a neutral chip, never a green pass.
+The dashboard's 🤖 **Routing** panel shows the same bandit live — an α/β heatmap plus a learning-history timeline (enable `routing.bandit` and run auto-routed tasks to populate it). It also renders a live **🎖️ Promotion Gate** card: an A/B verdict on whether the bandit is actually **better than the deterministic heuristic**, judged on real trajectories (`router-promotion.jsonl`) — quality must improve >2% while cost and latency don't regress.
 
-**Routing rules** — force a specific provider/model for task patterns (regex/string, evaluated before scoring):
+**Routing rules** — force a specific provider/model for task patterns (regex/string, evaluated before scoring, first match wins):
 
 ```jsonc
 // ~/.buff/buffconfig.json
@@ -797,7 +881,7 @@ The dashboard's 🤖 **Routing** panel shows the same bandit live — an α/β h
 }
 ```
 
-Every decision records a `routedBy` source (`heuristic` | `rule` | `bandit`) in the dashboard's routing audit trail so you can see exactly how each pick was produced.
+Every decision records a `routedBy` source (`heuristic` | `rule` | `bandit`) in the dashboard's routing audit trail so you can see exactly how each pick was produced. The `routedBy` field is also exposed in the `AutoRouteResult` for programmatic access.
 
 #### Auto-mode session failover — providers that die mid-session get swapped automatically
 
@@ -1754,7 +1838,7 @@ src/
 ### Testing
 
 ```bash
-# Run all tests (2,769 tests across 84 test files)
+# Run all tests (2,934 tests across 96 test files)
 # Plus 6 dashboard component tests (src/web-dashboard)
 npm test
 
@@ -1821,7 +1905,7 @@ npx tsc --noEmit
 | 5.2 | Failure analysis — per-agent-type diagnosis with recovery actions | ✅ Complete |
 | 5.3 | Follow-up suggestions — LLM-powered contextual next-step recommendations | ✅ Complete |
 | 5.4 | /fix command — retry last failed goal with failure context | ✅ Complete |
-| 5.5 | Test coverage — 2,769 tests across 84 test files (+6 dashboard component tests) | ✅ Complete |
+| 5.5 | Test coverage — 2,934 tests across 96 test files (+6 dashboard component tests) | ✅ Complete |
 | **Phase 6: Architecture Migration** | | |
 | 6.1 | RecoverModule — extracted from ErrorRepairEngine with RepairBudget | ✅ Complete (v1.18.0) |
 | 6.2 | ModuleRegistry — plugin-based agent loading replacing createAgent() | ✅ Complete (v1.18.0) |

@@ -43,6 +43,22 @@ export declare const EventNames: {
     readonly ORCHESTRATOR_PIPELINE_COMPLETED: "orchestrator:pipeline-completed";
     readonly ORCHESTRATOR_TASK_STARTED: "orchestrator:task-started";
     readonly ORCHESTRATOR_TASK_COMPLETED: "orchestrator:task-completed";
+    /**
+     * Emitted once the planner has produced a plan and the orchestrator knows
+     * the full task DAG (nodes + edges). The CLI board renders the task list
+     * from this event; the web dashboard DAG consumes the same data.
+     */
+    readonly ORCHESTRATOR_PLAN_READY: "orchestrator:plan-ready";
+    /**
+     * Emitted for live user-readable agent "thinking" updates (stage + message).
+     * Powering the CLI pipeline board's activity lines.
+     */
+    readonly ORCHESTRATOR_AGENT_UPDATE: "orchestrator:agent-update";
+    /**
+     * Emitted for deterministic pre-flight project inspection results (framework,
+     * test suite, git state) shown to the user before planning starts.
+     */
+    readonly ORCHESTRATOR_INSPECTION: "orchestrator:inspection";
     readonly SAFE_EXEC_FILE_VALIDATED: "safe-exec:file-validated";
     readonly SAFE_EXEC_SANDBOX_STARTING: "safe-exec:sandbox-starting";
     readonly SAFE_EXEC_SANDBOX_CREATED: "safe-exec:sandbox-created";

@@ -253,6 +253,110 @@ class CLIManager {
             phaseLabels: ['Checking provider health'],
         });
     }
+    /**
+     * Resolve the CLI's memory dir (`BUFF_MEMORY_DIR` override, else
+     * `~/.buff/memory`). Public so the quota panel can watch the same directory
+     * the reader uses for live updates.
+     */
+    getMemoryDir() {
+        return process.env.BUFF_MEMORY_DIR || (0, node_path_1.join)((0, node_os_1.homedir)(), '.buff', 'memory');
+    }
+    /**
+     * Read the central quota ledger + failover timeline directly from the CLI's
+     * memory dir (`~/.buff/memory/quota-ledger.json` + `quota-events.jsonl`,
+     * honoring BUFF_MEMORY_DIR like the dashboard does).
+     *
+     * Returns a fully-shaped (possibly empty) QuotaStatusInfo — never throws, so
+     * the extension's quota view always has data to render even on a fresh
+     * install where the ledger doesn't exist yet.
+     */
+    async getQuotaStatus() {
+        const memoryDir = this.getMemoryDir();
+        const empty = {
+            enabled: false,
+            entries: [],
+            events: [],
+            freeTokens: 0,
+            freeRequests: 0,
+            paidTokens: 0,
+            paidRequests: 0,
+            estimatedSavedUsd: 0,
+        };
+        try {
+            const ledgerPath = (0, node_path_1.join)(memoryDir, 'quota-ledger.json');
+            const eventsPath = (0, node_path_1.join)(memoryDir, 'quota-events.jsonl');
+            if (!(0, node_fs_1.existsSync)(ledgerPath) && !(0, node_fs_1.existsSync)(eventsPath))
+                return empty;
+            const now = Date.now();
+            // ── Ledger entries ────────────────────────────────────────────────
+            const entries = [];
+            let freeTokens = 0;
+            let freeRequests = 0;
+            let paidTokens = 0;
+            let paidRequests = 0;
+            // Free/local-first cost optics (mirrors the CLI + dashboard): local
+            // Ollama + Gemini free tier count as FREE (savings); everything else is
+            // PAID (actual spend).
+            const FREE_PROVIDERS = new Set(['local', 'gemini']);
+            const AVG_PAID_RATE_PER_1K = 0.0005;
+            if ((0, node_fs_1.existsSync)(ledgerPath)) {
+                const raw = JSON.parse((0, node_fs_1.readFileSync)(ledgerPath, 'utf-8'));
+                for (const e of Object.values(raw.entries || {})) {
+                    const windowEnd = e.windowStart + (e.windowLengthMs || 24 * 60 * 60 * 1000);
+                    const cooldownRemaining = Math.max(0, e.cooldownUntil - now);
+                    const entry = {
+                        provider: e.provider,
+                        model: e.model,
+                        tokensConsumed: e.tokensConsumed,
+                        requests: e.requests,
+                        windowLengthMs: e.windowLengthMs,
+                        resetsInMs: Math.max(0, windowEnd - now),
+                        parked: cooldownRemaining > 0,
+                        cooldownRemaining,
+                    };
+                    entries.push(entry);
+                    if (FREE_PROVIDERS.has(e.provider)) {
+                        freeTokens += e.tokensConsumed;
+                        freeRequests += e.requests;
+                    }
+                    else {
+                        paidTokens += e.tokensConsumed;
+                        paidRequests += e.requests;
+                    }
+                }
+            }
+            // ── Failover timeline (quota-events.jsonl, newest first) ──────────
+            const events = [];
+            if ((0, node_fs_1.existsSync)(eventsPath)) {
+                const lines = (0, node_fs_1.readFileSync)(eventsPath, 'utf-8').split('\n').filter((l) => l.trim());
+                for (const line of lines.slice(-50).reverse()) {
+                    try {
+                        const e = JSON.parse(line);
+                        if (e && typeof e === 'object' && e.type && e.provider)
+                            events.push(e);
+                    }
+                    catch {
+                        // Skip corrupt lines — best-effort read.
+                    }
+                }
+            }
+            const estimatedSavedUsd = Math.round((freeTokens / 1000) * AVG_PAID_RATE_PER_1K * 100000) / 100000;
+            return {
+                enabled: entries.length > 0 || events.length > 0,
+                entries: entries.sort((a, b) => a.provider.localeCompare(b.provider) || a.model.localeCompare(b.model)),
+                events,
+                freeTokens,
+                freeRequests,
+                paidTokens,
+                paidRequests,
+                estimatedSavedUsd,
+            };
+        }
+        catch {
+            // Best-effort — the quota view must never crash on a corrupt ledger.
+            return empty;
+        }
+    }
     // ── Private ──────────────────────────────────────────────────────────────
     /**
      * Build CLI arguments with common options.
