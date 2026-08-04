@@ -35,6 +35,87 @@ export interface ModelsHealthData {
   unavailable: number;
 }
 
+// ─── Model Availability Registry Types ─────────────────────────────────────
+
+/**
+ * One entry in the Model Availability Registry — the UNIFIED enterprise read
+ * store the Auto router consults on every pick (sub-ms, FAISS/JSON). Carries
+ * availability + quota telemetry mirrored from the ledger (tokens remaining,
+ * reset window) so the dashboard shows the exact snapshot routing uses.
+ */
+export interface RegistryModelEntry {
+  model: string;
+  status: 'verified' | 'unverified' | 'unavailable';
+  latencyMs?: number;
+  errorRate: number;
+  /** True when the entry is quota-parked (excluded until the window resets). */
+  parked: boolean;
+  quotaParkedUntil: number;
+  /** Tokens remaining in the current window (-1 = no limit configured). */
+  remainingTokens: number;
+  tokensConsumed: number;
+  requests: number;
+  /** Ms until the current quota window resets. */
+  resetsInMs: number;
+  lastVerifiedAt: number;
+  lastError?: string;
+  source?: string;
+}
+
+export interface RegistryProvider {
+  provider: string;
+  total: number;
+  verified: number;
+  unverified: number;
+  unavailable: number;
+  parked: number;
+  models: RegistryModelEntry[];
+}
+
+export interface ModelRegistryInsights {
+  enabled: boolean;
+  total: number;
+  verified: number;
+  unverified: number;
+  unavailable: number;
+  parked: number;
+  providers: RegistryProvider[];
+  /**
+   * Per-action "learned from real usage" telemetry — which provider × model
+   * each action killed or verified. Optional: an older server won't send this,
+   * so the panel hides the section when absent.
+   */
+  actionTelemetry?: ActionTelemetryInsights;
+  updatedAt: number;
+}
+
+/**
+ * Per-action "learned from real usage" telemetry — the feed that keeps the
+ * registry's health fresh. Shows exactly which action (chat / execute / plan /
+ * edit / skill / learn / ci / doctor / spot-check) verified or killed each
+ * provider × model, so the predictive skips routing makes are visible.
+ */
+export interface ActionTelemetryInsights {
+  enabled: boolean;
+  /** Total logged events (capped by the registry at MAX_ACTION_LOG_ENTRIES). */
+  total: number;
+  updatedAt: number;
+  /** Per-action aggregates (sorted by action name). */
+  actions: Array<{
+    action: string;
+    /** Events where the action verified a provider × model. */
+    verified: number;
+    /** Events where the action marked a provider × model unavailable. */
+    killed: number;
+    /** Events where a transient failure decayed health (no flip). */
+    transient: number;
+    /** Provider × model combos this action verified (latest event each). */
+    verifiedModels: Array<{ provider: string; model: string; at: number }>;
+    /** Provider × model combos this action killed (latest event each). */
+    killedModels: Array<{ provider: string; model: string; reason?: string; at: number }>;
+  }>;
+}
+
 // ─── Dashboard Data Types ───────────────────────────────────────────────────
 
 export interface CostData {
@@ -349,6 +430,8 @@ export interface DashboardData {
   memory: MemoryData;
   health: HealthData;
   routing?: RoutingInsights;
+  /** Model Availability Registry — the unified sub-ms read store routing uses. */
+  modelRegistry?: ModelRegistryInsights;
   dag?: DAGData;
   serverTime: number;
 }

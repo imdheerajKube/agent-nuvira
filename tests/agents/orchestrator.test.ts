@@ -19,6 +19,9 @@
  */
 
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
+import { mkdtempSync, rmSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import inquirer from 'inquirer';
 
 import { Orchestrator } from '../../src/agents/orchestrator.js';
@@ -29,6 +32,8 @@ import type { PickerResult } from '../../src/cli/model-picker.js';
 import { logger } from '../../src/utils/logger.js';
 import { ProviderFactory } from '../../src/inference/factory.js';
 import { ConfigManager } from '../../src/config/manager.js';
+import { getModelRegistry, resetModelRegistry } from '../../src/learning/model-registry.js';
+import * as modelProbe from '../../src/inference/model-probe.js';
 
 // ─── Module-level mocks ─────────────────────────────────────────────────────
 
@@ -1202,5 +1207,208 @@ describe('Orchestrator — auto model resolution', () => {
     expect(createSpy).not.toHaveBeenCalledWith(
       expect.objectContaining({ provider: 'auto', model: 'auto' }),
     );
+  });
+});
+
+// ─── Auto-routed failure telemetry ──────────────────────────────────────────
+// The routing upgrade must NOT be chat-only: a failed auto-routed LLM call in
+// execute/orchestrator writes the SAME registry telemetry (recordRegistryFailure)
+// that chat and the fallback commands use — so the next task in the pipeline
+// (and every future session) routes around the dead provider×model predictively.
+
+describe('Orchestrator — auto-routed failure telemetry', () => {
+  let tempDir: string;
+  let originalMemoryDir: string | undefined;
+
+  beforeEach(() => {
+    tempDir = mkdtempSync(join(tmpdir(), 'buff-orch-tele-'));
+    originalMemoryDir = process.env.BUFF_MEMORY_DIR;
+    process.env.BUFF_MEMORY_DIR = tempDir;
+    resetModelRegistry();
+  });
+
+  afterEach(() => {
+    resetModelRegistry();
+    if (originalMemoryDir === undefined) {
+      delete process.env.BUFF_MEMORY_DIR;
+    } else {
+      process.env.BUFF_MEMORY_DIR = originalMemoryDir;
+    }
+    rmSync(tempDir, { recursive: true, force: true });
+    vi.restoreAllMocks();
+  });
+
+  /** Fake provider whose generate() rejects — the exact "dead provider" case. */
+  function makeFailingProvider(error: Error): any {
+    return {
+      name: 'FakeProvider',
+      generate: vi.fn().mockRejectedValue(error),
+      isAvailable: vi.fn().mockResolvedValue(true),
+      listModels: vi.fn().mockResolvedValue([]),
+      generateStream: vi.fn(),
+      getInfo: vi.fn().mockReturnValue('fake'),
+    };
+  }
+
+  it('writes auto-routed LLM failures through to the model registry (rate-limit)', async () => {
+    const cm = new ConfigManager();
+    const orch = new Orchestrator(cm);
+
+    vi.spyOn(ProviderFactory, 'createProvider').mockReturnValue(makeFailingProvider(new Error('429 rate limit exceeded')));
+
+    const decision = {
+      provider: 'gemini',
+      model: 'gemini-2.0-flash-exp',
+      explanation: 'test routing',
+      score: 0.9,
+      taskProfile: undefined,
+      escalationApplied: false,
+      complexity: 'moderate',
+      ranked: [],
+    } as any;
+
+    const callLLM = (orch as any).createAutoRoutedLLMFromDecision(
+      { agentType: 'planner', description: 'write a plan' },
+      {},
+      decision,
+    );
+
+    await expect(callLLM('build a login form')).rejects.toThrow('429');
+
+    // Telemetry learned the provider×model is dead → next task skips it
+    // predictively instead of failing into it again.
+    const entry = getModelRegistry().getEntry('gemini', 'gemini-2.0-flash-exp');
+    expect(entry).toBeDefined();
+    expect(entry!.status).toBe('unavailable');
+    expect(entry!.lastError).toContain('rate-limit');
+    expect(getModelRegistry().getBlockedProviders()).toContain('gemini');
+  });
+
+  it('marks a 404 model definitively unavailable (model-not-found telemetry)', async () => {
+    const cm = new ConfigManager();
+    const orch = new Orchestrator(cm);
+
+    vi.spyOn(ProviderFactory, 'createProvider').mockReturnValue(makeFailingProvider(new Error('404 model not found')));
+
+    const decision = {
+      provider: 'nim',
+      model: 'meta/llama-3.1-8b-instruct',
+      explanation: 'test routing',
+      score: 0.5,
+      taskProfile: undefined,
+      escalationApplied: false,
+      complexity: 'moderate',
+      ranked: [],
+    } as any;
+
+    const callLLM = (orch as any).createAutoRoutedLLMFromDecision(
+      { agentType: 'writer', description: 'write code' },
+      {},
+      decision,
+    );
+
+    await expect(callLLM('hello')).rejects.toThrow('404');
+
+    const entry = getModelRegistry().getEntry('nim', 'meta/llama-3.1-8b-instruct');
+    expect(entry?.status).toBe('unavailable');
+    expect(entry?.lastError).toContain('model not found');
+  });
+
+  it('keeps transient (server) failures non-blocking but learned (error rate)', async () => {
+    const cm = new ConfigManager();
+    const orch = new Orchestrator(cm);
+
+    vi.spyOn(ProviderFactory, 'createProvider').mockReturnValue(makeFailingProvider(new Error('500 internal server error')));
+
+    const decision = {
+      provider: 'groq',
+      model: 'llama-3.3-70b-versatile',
+      explanation: 'test routing',
+      score: 0.8,
+      taskProfile: undefined,
+      escalationApplied: false,
+      complexity: 'moderate',
+      ranked: [],
+    } as any;
+
+    const callLLM = (orch as any).createAutoRoutedLLMFromDecision(
+      { agentType: 'writer', description: 'write code' },
+      {},
+      decision,
+    );
+
+    await expect(callLLM('hello')).rejects.toThrow('500');
+
+    const entry = getModelRegistry().getEntry('groq', 'llama-3.3-70b-versatile');
+    expect(entry?.status).not.toBe('unavailable');
+    expect((entry?.errorRate ?? 0)).toBeGreaterThan(0);
+    expect(getModelRegistry().getBlockedProviders()).not.toContain('groq');
+  });
+
+  it('writes NON-auto (createLLMProvider) failures through to the registry', async () => {
+    // `buff execute --provider gemini` (no auto routing) uses createLLMProvider
+    // — a failed call there must learn the same way the auto path does.
+    const cm = new ConfigManager();
+    const orch = new Orchestrator(cm);
+
+    vi.spyOn(ProviderFactory, 'createProvider').mockReturnValue(makeFailingProvider(new Error('403 permission denied')));
+
+    const callLLM = (orch as any).createLLMProvider({ provider: 'gemini' });
+    await expect(callLLM('hello')).rejects.toThrow('403');
+
+    const entry = getModelRegistry().getEntry('gemini', 'gemini-2.0-flash-exp');
+    expect(entry?.status).toBe('unavailable');
+    expect(entry?.lastError).toContain('auth');
+    expect(getModelRegistry().getBlockedProviders()).toContain('gemini');
+  });
+
+  // ── Cold-start probe (fires once, only when cold, never blocks) ──────────
+
+  it('fires ONE background registry probe on a cold registry, never re-fires', async () => {
+    const cm = new ConfigManager();
+    const orch = new Orchestrator(cm);
+
+    const refreshSpy = vi.spyOn(modelProbe, 'refreshModelRegistry').mockResolvedValue({
+      providersProbed: ['groq'],
+      modelsListed: 5,
+      verified: 3,
+      unavailable: 0,
+      skipped: 0,
+      errors: 0,
+    } as any);
+
+    (orch as any).maybeFireColdStartProbe();
+    (orch as any).maybeFireColdStartProbe();
+    (orch as any).maybeFireColdStartProbe();
+
+    expect(refreshSpy).toHaveBeenCalledTimes(1);
+  });
+
+  it('does NOT fire the probe when the registry already has verified providers', async () => {
+    const cm = new ConfigManager();
+    const orch = new Orchestrator(cm);
+
+    getModelRegistry().markVerified('groq', 'llama-3.3-70b-versatile', 'spot-check');
+    const refreshSpy = vi.spyOn(modelProbe, 'refreshModelRegistry').mockResolvedValue({
+      providersProbed: [],
+      modelsListed: 0,
+      verified: 0,
+      unavailable: 0,
+      skipped: 0,
+      errors: 0,
+    } as any);
+
+    (orch as any).maybeFireColdStartProbe();
+
+    expect(refreshSpy).not.toHaveBeenCalled();
+  });
+
+  it('cold-start probe never throws (best-effort on a broken probe)', () => {
+    const cm = new ConfigManager();
+    const orch = new Orchestrator(cm);
+
+    vi.spyOn(modelProbe, 'refreshModelRegistry').mockRejectedValue(new Error('probe network failure'));
+
+    expect(() => (orch as any).maybeFireColdStartProbe()).not.toThrow();
   });
 });

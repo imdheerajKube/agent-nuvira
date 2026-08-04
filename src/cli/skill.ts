@@ -24,7 +24,7 @@ import { ConfigManager } from '../config/manager.js';
 import { ProviderFactory } from '../inference/factory.js';
 import type { ProviderType } from '../config/types.js';
 import { logger } from '../utils/logger.js';
-import { getProviderFallback, classifyFallbackError, isRetryableError } from '../learning/provider-fallback.js';
+import { getProviderFallback, classifyFallbackError, isRetryableError, recordRegistryFailure, recordRegistrySuccess } from '../learning/provider-fallback.js';
 
 export class SkillCommand {
   private configManager: ConfigManager;
@@ -297,13 +297,22 @@ export class SkillCommand {
 
     const callLLM = async (prompt: string) => {
       try {
-        return await provider.generate(prompt, {
+        const response = await provider.generate(prompt, {
           model: opts.model || config.model,
           temperature: 0.3,
           maxTokens: 4096,
         });
+        // Success attribution: this compile call PROVED the provider × model
+        // works — the per-action panel gains a 'skill' verified row.
+        recordRegistrySuccess(providerType, opts.model || config.model, 'skill');
+        return response;
       } catch (err) {
         const errorType = classifyFallbackError(err);
+        // Feed the SHARED registry telemetry path: an auth/404 failure on this
+        // FIRST direct call would otherwise never be learned (non-retryable
+        // errors skip the fallback loop entirely), so skill-compile now routes
+        // around the dead provider on the next pick like chat/execute do.
+        recordRegistryFailure(providerType, opts.model || config.model, err, errorType, 'skill');
         if (isRetryableError(errorType)) {
           try {
             const fallback = getProviderFallback(this.configManager, this.configManager.getAll().fallback);
@@ -316,7 +325,7 @@ export class SkillCommand {
                   maxTokens: 4096,
                 });
               },
-              { context: 'skill-compile', label: 'Skill compilation' },
+              { context: 'skill', label: 'Skill compilation' },
             );
             if (fallbackResult.attempts > 1) {
               logger.success(`✅ Auto-fallback: switched to ${fallbackResult.provider}`);

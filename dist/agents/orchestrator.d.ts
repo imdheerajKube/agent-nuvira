@@ -183,6 +183,12 @@ export declare class Orchestrator {
     private reportModule;
     /** Optional routing decision overrides keyed by agent type */
     private routingDecisionOverrides;
+    /**
+     * Latched one-shot cold-start registry probe: fired once per Orchestrator
+     * instance when auto routing is active on an empty registry (see
+     * maybeFireColdStartProbe). A long dev-mode session only pays for it once.
+     */
+    private coldStartProbeFired;
     /** Execution telemetry accumulator for the current pipeline */
     private stats;
     constructor(configManager?: ConfigManager, moduleRegistry?: ModuleRegistry, eventBus?: EventBus, reportModule?: ReportModule);
@@ -230,6 +236,17 @@ export declare class Orchestrator {
     private resolveAutoRoutingDecision;
     private createAutoRoutedLLM;
     private createAutoRoutedLLMFromDecision;
+    /**
+     * One-shot background model-registry refresh for a COLD registry.
+     *
+     * Fired when auto routing is active and the registry has no verified
+     * providers: probes listModels + spot-checks the configured providers so the
+     * pipeline's later tasks route on REAL health data (the dedicated model-
+     * health agent's job, started on demand instead of waiting for `buff models
+     * watch`). Latched per instance — a long dev-mode session only pays once.
+     * Fire-and-forget: never awaited, never blocks, never throws.
+     */
+    private maybeFireColdStartProbe;
     private applyRoutingPlanAdjustments;
     /**
      * Run the ContextPruner on the vault context.

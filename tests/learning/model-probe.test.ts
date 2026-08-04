@@ -24,9 +24,11 @@ import {
   probeProviderList,
   buildProvider,
   refreshModelRegistry,
+  startRegistryWatcher,
   SPOT_CHECK_MIN_INTERVAL_MS,
 } from '../../src/inference/model-probe.js';
 import { setVectorBackendOverride, resetVectorBackendSelection } from '../../src/memory/vector-store.js';
+import { getEventBus, EventNames, resetEventBus } from '../../src/observability/event-bus.js';
 
 // ─── Helpers ────────────────────────────────────────────────────────────────
 
@@ -293,5 +295,149 @@ describe('ModelProbe — refresh orchestration', () => {
 
   it('reports the throttle-window constant for CI visibility', () => {
     expect(SPOT_CHECK_MIN_INTERVAL_MS).toBe(10 * 60 * 1000);
+  });
+});
+
+describe('ModelProbe — event-driven wakeup (watch daemon reacts to mid-session changes)', () => {
+  beforeEach(() => {
+    tempDir = mkdtempSync(join(tmpdir(), 'buff-probe-'));
+    originalMemoryDir = process.env.BUFF_MEMORY_DIR;
+    process.env.BUFF_MEMORY_DIR = tempDir;
+    setVectorBackendOverride('json');
+    resetModelRegistry();
+    resetEventBus();
+  });
+
+  afterEach(() => {
+    resetModelRegistry();
+    resetVectorBackendSelection();
+    resetEventBus();
+    vi.restoreAllMocks();
+    if (originalMemoryDir === undefined) {
+      delete process.env.BUFF_MEMORY_DIR;
+    } else {
+      process.env.BUFF_MEMORY_DIR = originalMemoryDir;
+    }
+    rmSync(tempDir, { recursive: true, force: true });
+  });
+
+  it('a MODEL_REGISTRY_UPDATED event triggers an immediate targeted re-verification', async () => {
+    let listCalls = 0;
+    const working = makeProvider({
+      models: [{ id: 'gemini-2.5-flash' }],
+    });
+    // Track how many times the provider's listModels() is hit.
+    const spyProvider = {
+      ...working,
+      listModels: async () => {
+        listCalls++;
+        return working.listModels();
+      },
+    };
+    mockFactory(() => spyProvider);
+    const cm = makeConfigManager(() => spyProvider);
+
+    // Start the watcher with a long interval so ONLY the event can trigger a
+    // second pass during the test (the immediate first pass happens regardless).
+    const watcher = startRegistryWatcher(cm, {
+      intervalMs: 60 * 60 * 1000,
+      spotCheck: false, // probe-only so the event pass is fast + deterministic
+    });
+    try {
+      // Wait for the immediate first pass to land.
+      await new Promise((r) => setTimeout(r, 100));
+      const afterFirst = listCalls;
+      expect(afterFirst).toBeGreaterThan(0);
+
+      // Emit a mid-session state change exactly like chat telemetry does when
+      // it flips a model unavailable (source: telemetry — a REAL session write).
+      getEventBus().emit(EventNames.MODEL_REGISTRY_UPDATED, {
+        providers: ['gemini'],
+        blocked: [],
+        updatedAt: Date.now(),
+        detail: 'unavailable: 403 permission denied',
+        source: 'telemetry',
+      }, 'test');
+
+      // The watcher reacts IMMEDIATELY (no 10-min wait) with a targeted pass.
+      await new Promise((r) => setTimeout(r, 200));
+      expect(listCalls).toBeGreaterThan(afterFirst);
+    } finally {
+      watcher.stop();
+    }
+  });
+
+  it('ignores its OWN probe/spot-check events (no self-trigger loop)', async () => {
+    let listCalls = 0;
+    const spyProvider = {
+      ...makeProvider({ models: [{ id: 'gemini-2.5-flash' }] }),
+      listModels: async () => {
+        listCalls++;
+        return [{ id: 'gemini-2.5-flash' }];
+      },
+    };
+    mockFactory(() => spyProvider);
+    const cm = makeConfigManager(() => spyProvider);
+
+    const watcher = startRegistryWatcher(cm, {
+      intervalMs: 60 * 60 * 1000,
+      spotCheck: false,
+    });
+    try {
+      await new Promise((r) => setTimeout(r, 100));
+      const afterFirst = listCalls;
+
+      // The watcher's OWN spot-check marks a model unavailable → this event
+      // must NOT wake the daemon again (infinite loop guard).
+      getEventBus().emit(EventNames.MODEL_REGISTRY_UPDATED, {
+        providers: ['gemini'],
+        blocked: [],
+        updatedAt: Date.now(),
+        detail: 'unavailable: 403 permission denied',
+        source: 'spot-check',
+      }, 'test');
+      await new Promise((r) => setTimeout(r, 200));
+
+      expect(listCalls).toBe(afterFirst); // no extra pass from its own write
+    } finally {
+      watcher.stop();
+    }
+  });
+
+  it('event-triggered passes are throttled per provider (no spot-check storm)', async () => {
+    let listCalls = 0;
+    const spyProvider = {
+      ...makeProvider({ models: [{ id: 'gemini-2.5-flash' }] }),
+      listModels: async () => {
+        listCalls++;
+        return [{ id: 'gemini-2.5-flash' }];
+      },
+    };
+    mockFactory(() => spyProvider);
+    const cm = makeConfigManager(() => spyProvider);
+
+    const watcher = startRegistryWatcher(cm, {
+      intervalMs: 60 * 60 * 1000,
+      spotCheck: false,
+    });
+    try {
+      await new Promise((r) => setTimeout(r, 100));
+      const afterFirst = listCalls;
+
+      // Burst of events for the SAME provider — only the first triggers a pass.
+      for (let i = 0; i < 5; i++) {
+        getEventBus().emit(EventNames.MODEL_REGISTRY_UPDATED, {
+          providers: ['gemini'],
+          blocked: [],
+          updatedAt: Date.now(),
+          detail: `event ${i}`,
+        }, 'test');
+      }
+      await new Promise((r) => setTimeout(r, 250));
+      // 1 immediate pass + exactly 1 event pass (not 5).
+      expect(listCalls).toBe(afterFirst + 1);
+    } finally {
+      watcher.stop();
+    }
   });
 });

@@ -27,6 +27,7 @@ import {
 } from '../../src/learning/model-registry.js';
 import { QuotaLedger, resetQuotaLedger } from '../../src/learning/quota-ledger.js';
 import { resetVectorBackendSelection, setVectorBackendOverride } from '../../src/memory/vector-store.js';
+import { getEventBus, EventNames, resetEventBus } from '../../src/observability/event-bus.js';
 
 // ─── Helpers ────────────────────────────────────────────────────────────────
 
@@ -116,6 +117,42 @@ describe('ModelRegistry — probe / spot-check lifecycle', () => {
     // EMA(α=0.3): 0.3*300 + 0.7*100 = 160
     expect(registry.getEntry('groq', 'llama-3.3-70b-versatile')?.latencyMs).toBe(160);
   });
+
+  it('getBlockedProviders returns providers whose every model is unavailable/parked', () => {
+    const registry = new ModelRegistry();
+    registry.markVerified('groq', 'llama-3.3-70b-versatile', 'spot-check');
+    registry.markUnavailable('gemini', 'gemini-2.5-flash', '403 permission denied', 'spot-check');
+    registry.markUnavailable('nim', 'meta/llama-3.3-70b-instruct', 'auth', 'spot-check');
+    // openrouter only unverified → NOT blocked ("not yet probed" ≠ "dead")
+    registry.markListed('openrouter', ['openai/gpt-4o-mini']);
+
+    expect(registry.getBlockedProviders().sort()).toEqual(['gemini', 'nim']);
+  });
+
+  it('getBlockedProviders does not block a provider that still has a verified model', () => {
+    const registry = new ModelRegistry();
+    registry.markVerified('gemini', 'gemini-1.5-flash', 'spot-check');
+    registry.markUnavailable('gemini', 'gemini-2.5-flash', 'auth', 'telemetry');
+    expect(registry.getBlockedProviders()).not.toContain('gemini');
+  });
+
+  it('recordCall failures feed getBlockedProviders (chat telemetry → predictive skip)', () => {
+    const registry = new ModelRegistry();
+    registry.recordCall('gemini', 'gemini-2.5-flash', false, 'auth');
+    registry.recordCall('nim', 'meta/llama-3.3-70b-instruct', false, 'rate-limit');
+    // A successful local call keeps local usable (not blocked).
+    registry.recordCall('local', 'llama3.2', true);
+
+    expect(registry.getBlockedProviders().sort()).toEqual(['gemini', 'nim']);
+    expect(registry.getUsableProviders()).toEqual(['local']);
+  });
+
+  it('a transient (server) recordCall failure does not block the provider', () => {
+    const registry = new ModelRegistry();
+    registry.markVerified('groq', 'llama-3.3-70b-versatile', 'spot-check');
+    registry.recordCall('groq', 'llama-3.3-70b-versatile', false, 'server');
+    expect(registry.getBlockedProviders()).not.toContain('groq');
+  });
 });
 
 describe('ModelRegistry — quota parking & telemetry', () => {
@@ -132,6 +169,7 @@ describe('ModelRegistry — quota parking & telemetry', () => {
     resetModelRegistry();
     resetQuotaLedger();
     resetVectorBackendSelection();
+    resetEventBus();
     if (originalMemoryDir === undefined) {
       delete process.env.BUFF_MEMORY_DIR;
     } else {
@@ -164,6 +202,167 @@ describe('ModelRegistry — quota parking & telemetry', () => {
     registry.syncQuota(config);
     expect(registry.isUsable('gemini', 'gemini-2.5-flash')).toBe(false);
     expect(registry.isUsable('groq', 'llama-3.3-70b-versatile')).toBe(true);
+  });
+
+  it('syncQuota mirrors FULL quota telemetry (tokens/requests/reset/remaining) per model', () => {
+    const registry = new ModelRegistry();
+    registry.markVerified('gemini', 'gemini-2.5-flash', 'spot-check');
+    registry.markVerified('groq', 'llama-3.3-70b-versatile', 'spot-check');
+
+    const ledger = new QuotaLedger();
+    // gemini: 2000 tokens used, 2 requests, 1k-token window → 1000 remaining
+    ledger.recordUsage('gemini', 'gemini-2.5-flash', 1200, 800);
+    ledger.recordUsage('gemini', 'gemini-2.5-flash', 300, 100);
+    // groq: no limit configured → remaining = -1 (unlimited)
+    ledger.recordUsage('groq', 'llama-3.3-70b-versatile', 50, 10);
+    const config = makeConfigManager({
+      gemini: { tokensPerWindow: 3000, windowMs: 3_600_000 },
+    });
+
+    registry.syncQuota(config);
+
+    const gemini = registry.getEntry('gemini', 'gemini-2.5-flash');
+    expect(gemini?.tokensConsumed).toBe(2400);
+    expect(gemini?.requests).toBe(2);
+    expect(gemini?.remainingTokens).toBe(600); // 3000 - 2400
+    expect(gemini?.resetsInMs).toBeGreaterThan(0);
+
+    const groq = registry.getEntry('groq', 'llama-3.3-70b-versatile');
+    expect(groq?.tokensConsumed).toBe(60);
+    expect(groq?.remainingTokens).toBe(-1); // no limit → unlimited
+  });
+
+  it('getRouterQuotaStatus is a UNIFIED single-store feed (registry parks mirror the ledger)', () => {
+    const registry = new ModelRegistry();
+    registry.markVerified('gemini', 'gemini-2.5-flash', 'spot-check');
+    registry.markVerified('groq', 'llama-3.3-70b-versatile', 'spot-check');
+
+    const ledger = new QuotaLedger();
+    ledger.recordUsage('gemini', 'default', 100, 50);
+    const config = makeConfigManager({ gemini: { requestsPerWindow: 1, windowMs: 3_600_000 } });
+
+    const parked = registry.getRouterQuotaStatus(config);
+    expect(parked.some((p) => p.provider === 'gemini' && p.cooldownRemaining > 0)).toBe(true);
+    expect(parked.some((p) => p.provider === 'groq')).toBe(false);
+
+    // Idempotent + cheap: calling again mirrors nothing new (no crash, same
+    // shape). The cooldown countdown ticks down in real time, so compare the
+    // per-provider remaining-time with a small tolerance instead of exact
+    // equality (a 1ms drift between calls is expected and harmless).
+    const again = registry.getRouterQuotaStatus(config);
+    expect(again.map((p) => p.provider).sort()).toEqual(parked.map((p) => p.provider).sort());
+    const g1 = parked.find((p) => p.provider === 'gemini')!.cooldownRemaining;
+    const g2 = again.find((p) => p.provider === 'gemini')!.cooldownRemaining;
+    expect(Math.abs(g1 - g2)).toBeLessThan(100); // both reflect the same window
+    expect(again.some((p) => p.provider === 'groq')).toBe(false);
+  });
+
+  it('getRouterQuotaStatus unions ledger parks for providers the registry never tracked', () => {
+    const registry = new ModelRegistry();
+    // No registry entry for openrouter — but the ledger parks it explicitly.
+    const ledger = new QuotaLedger();
+    ledger.parkProvider('openrouter', Date.now() + 60_000, 'manual');
+
+    const parked = registry.getRouterQuotaStatus(undefined);
+    expect(parked.some((p) => p.provider === 'openrouter' && p.cooldownRemaining > 0)).toBe(true);
+  });
+
+  it('markUnavailable emits MODEL_REGISTRY_UPDATED so the watch daemon reacts', () => {
+    const registry = new ModelRegistry();
+    const events: Array<{ provider: string; detail: string }> = [];
+    const unsub = getEventBus().on(EventNames.MODEL_REGISTRY_UPDATED, (record) => {
+      const d = record.data as { providers: string[]; detail: string };
+      events.push({ provider: d.providers[0], detail: d.detail });
+    });
+
+    try {
+      registry.markVerified('gemini', 'gemini-2.5-flash', 'spot-check');
+      // The flip to unavailable must be reported to the watcher.
+      registry.markUnavailable('gemini', 'gemini-2.5-flash', '403 permission denied', 'telemetry');
+      const unavailable = events.find((e) => e.detail.includes('403'));
+      expect(unavailable).toBeDefined();
+      expect(unavailable?.provider).toBe('gemini');
+    } finally {
+      unsub();
+    }
+  });
+
+  it('recordCall auth failure emits MODEL_REGISTRY_UPDATED; transient failure does not', () => {
+    const registry = new ModelRegistry();
+    let count = 0;
+    const unsub = getEventBus().on(EventNames.MODEL_REGISTRY_UPDATED, () => {
+      count++;
+    });
+
+    try {
+      // Transient server failure — flips nothing, so no event.
+      registry.recordCall('groq', 'llama-3.3-70b-versatile', false, 'server');
+      expect(count).toBe(0);
+      // Definitive auth failure — flips to unavailable, so an event fires.
+      registry.recordCall('gemini', 'gemini-2.5-flash', false, 'auth');
+      expect(count).toBe(1);
+    } finally {
+      unsub();
+    }
+  });
+
+  it('parkProvider emits MODEL_REGISTRY_UPDATED; releaseProvider emits again', () => {
+    const registry = new ModelRegistry();
+    registry.markVerified('gemini', 'gemini-2.5-flash', 'spot-check');
+    const events: string[] = [];
+    const unsub = getEventBus().on(EventNames.MODEL_REGISTRY_UPDATED, (record) => {
+      events.push((record.data as { detail: string }).detail);
+    });
+
+    try {
+      registry.parkProvider('gemini', Date.now() + 60_000);
+      registry.releaseProvider('gemini');
+      expect(events).toHaveLength(2);
+      expect(events[0]).toContain('parked');
+      expect(events[1]).toContain('released');
+    } finally {
+      unsub();
+    }
+  });
+
+  it('emits source metadata so the watcher can ignore its own probe writes', () => {
+    const registry = new ModelRegistry();
+    const sources: string[] = [];
+    const unsub = getEventBus().on(EventNames.MODEL_REGISTRY_UPDATED, (record) => {
+      sources.push((record.data as { source: string }).source);
+    });
+
+    try {
+      // A spot-check (the watcher's own write) marks a model unavailable.
+      registry.markUnavailable('gemini', 'gemini-2.5-flash', '403 permission denied', 'spot-check');
+      // A telemetry failure (chat) marks another unavailable.
+      registry.markUnavailable('groq', 'llama-3.3-70b-versatile', 'auth', 'telemetry');
+      // A promotion from real usage (telemetry) is reported too.
+      registry.recordCall('nim', 'meta/llama-3.3-70b-instruct', true);
+
+      expect(sources).toContain('spot-check');
+      expect(sources).toContain('telemetry');
+      // The verified transition carries the telemetry source.
+      expect(sources.filter((s) => s === 'telemetry').length).toBeGreaterThanOrEqual(2);
+    } finally {
+      unsub();
+    }
+  });
+
+  it('markVerified only emits on genuine transitions, not every success', () => {
+    const registry = new ModelRegistry();
+    let count = 0;
+    const unsub = getEventBus().on(EventNames.MODEL_REGISTRY_UPDATED, () => {
+      count++;
+    });
+
+    try {
+      registry.markVerified('groq', 'llama-3.3-70b-versatile', 'spot-check'); // transition → 1
+      registry.markVerified('groq', 'llama-3.3-70b-versatile', 'spot-check'); // already verified → 0
+      expect(count).toBe(1);
+    } finally {
+      unsub();
+    }
   });
 
   it('recordCall success upgrades an entry to verified (telemetry source)', () => {
@@ -218,6 +417,110 @@ describe('ModelRegistry — quota parking & telemetry', () => {
     // Curated order: llama-3.3-70b-versatile (not verified) → llama-3.1-8b-instant (verified)
     expect(registry.resolveVerifiedModel('groq', ['llama-3.3-70b-versatile', 'llama-3.1-8b-instant']))
       .toBe('llama-3.1-8b-instant');
+  });
+});
+
+describe('ModelRegistry — per-action "learned from real usage" telemetry', () => {
+  beforeEach(() => {
+    tempDir = mkdtempSync(join(tmpdir(), 'buff-registry-'));
+    originalMemoryDir = process.env.BUFF_MEMORY_DIR;
+    process.env.BUFF_MEMORY_DIR = tempDir;
+    setVectorBackendOverride('json');
+    resetModelRegistry();
+    resetQuotaLedger();
+  });
+
+  afterEach(() => {
+    resetModelRegistry();
+    resetQuotaLedger();
+    resetVectorBackendSelection();
+    if (originalMemoryDir === undefined) {
+      delete process.env.BUFF_MEMORY_DIR;
+    } else {
+      process.env.BUFF_MEMORY_DIR = originalMemoryDir;
+    }
+    rmSync(tempDir, { recursive: true, force: true });
+  });
+
+  it('recordCall success logs a verified event attributed to the action', () => {
+    const registry = new ModelRegistry();
+    registry.recordCall('groq', 'llama-3.3-70b-versatile', true, undefined, 'chat');
+
+    const tele = registry.getActionTelemetry();
+    expect(tele.enabled).toBe(true);
+    expect(tele.total).toBe(1);
+    const chat = tele.actions.find((a) => a.action === 'chat');
+    expect(chat?.verified).toBe(1);
+    expect(chat?.verifiedModels).toHaveLength(1);
+    expect(chat?.verifiedModels[0]).toMatchObject({ provider: 'groq', model: 'llama-3.3-70b-versatile' });
+  });
+
+  it('recordCall auth failure logs a killed event with the reason', () => {
+    const registry = new ModelRegistry();
+    registry.recordCall('gemini', 'gemini-2.5-flash', false, 'auth', 'execute');
+
+    const tele = registry.getActionTelemetry();
+    const execute = tele.actions.find((a) => a.action === 'execute');
+    expect(execute?.killed).toBe(1);
+    expect(execute?.killedModels[0]).toMatchObject({ provider: 'gemini', model: 'gemini-2.5-flash', reason: 'auth' });
+  });
+
+  it('transient failures count as transient, never as killed', () => {
+    const registry = new ModelRegistry();
+    registry.recordCall('groq', 'llama-3.3-70b-versatile', false, 'server', 'chat');
+
+    const tele = registry.getActionTelemetry();
+    const chat = tele.actions.find((a) => a.action === 'chat');
+    expect(chat?.transient).toBe(1);
+    expect(chat?.killed).toBe(0);
+    expect(chat?.killedModels).toHaveLength(0);
+  });
+
+  it('markUnavailable with an action logs a killed event (model-not-found path)', () => {
+    const registry = new ModelRegistry();
+    registry.markUnavailable('nim', 'meta/llama-3.3-70b-instruct', 'model not found', 'telemetry', 0, 'plan');
+
+    const tele = registry.getActionTelemetry();
+    const plan = tele.actions.find((a) => a.action === 'plan');
+    expect(plan?.killed).toBe(1);
+    expect(plan?.killedModels[0].reason).toContain('model not found');
+  });
+
+  it('anonymous writes (no action) update health but are NOT logged', () => {
+    const registry = new ModelRegistry();
+    registry.recordCall('groq', 'llama-3.3-70b-versatile', true);
+    registry.markUnavailable('gemini', 'gemini-2.5-flash', 'auth', 'telemetry');
+
+    // Health updated...
+    expect(registry.isUsable('groq', 'llama-3.3-70b-versatile')).toBe(true);
+    expect(registry.getEntry('gemini', 'gemini-2.5-flash')?.status).toBe('unavailable');
+    // ...but no per-action rows (dashboard panel stays empty).
+    expect(registry.getActionTelemetry().enabled).toBe(false);
+  });
+
+  it('repeated writes dedupe to one chip per provider × model (latest wins)', () => {
+    const registry = new ModelRegistry();
+    registry.recordCall('groq', 'llama-3.3-70b-versatile', true, undefined, 'chat');
+    registry.recordCall('groq', 'llama-3.3-70b-versatile', true, undefined, 'chat');
+
+    const tele = registry.getActionTelemetry();
+    const chat = tele.actions.find((a) => a.action === 'chat');
+    expect(chat?.verified).toBe(2); // honest volume
+    expect(chat?.verifiedModels).toHaveLength(1); // one chip
+  });
+
+  it('action log persists to BUFF_MEMORY_DIR and survives a restart', () => {
+    const registry = new ModelRegistry();
+    registry.recordCall('groq', 'llama-3.3-70b-versatile', true, undefined, 'chat');
+
+    const path = join(tempDir, 'model-registry-actions.jsonl');
+    expect(existsSync(path)).toBe(true);
+
+    resetModelRegistry();
+    const fresh = new ModelRegistry();
+    const tele = fresh.getActionTelemetry();
+    expect(tele.enabled).toBe(true);
+    expect(tele.actions.find((a) => a.action === 'chat')?.verified).toBe(1);
   });
 });
 

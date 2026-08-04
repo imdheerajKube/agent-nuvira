@@ -15,9 +15,11 @@ import { Orchestrator } from '../agents/orchestrator.js';
 import { printOrchestrationResult } from './execute.js';
 import { PipelineBoard } from './pipeline-board.js';
 import { applyActiveModel } from './model.js';
-import { getProviderFallback, classifyFallbackError, isRetryableError } from '../learning/provider-fallback.js';
+import { getProviderFallback, classifyFallbackError, isRetryableError, recordRegistryFailure } from '../learning/provider-fallback.js';
 import { getAutoRouter, isAutoModel, isAutoProvider } from '../learning/auto-router.js';
 import { getQuotaLedger } from '../learning/quota-ledger.js';
+import { getModelRegistry } from '../learning/model-registry.js';
+import { refreshModelRegistry, spotCheckModel } from '../inference/model-probe.js';
 import { recordRoutingDecision } from '../learning/routing-history.js';
 import { shouldConfirmFailover, promptFailoverChoice } from './failover-prompt.js';
 /**
@@ -219,6 +221,30 @@ export class ChatCommand extends BaseCommand {
      * — one consistent recovery window, not two competing ones.
      */
     static RATE_LIMIT_EXCLUSION_MS = 2 * 60 * 1000;
+    /**
+     * How long a server/network/timeout/unknown failure excludes a provider
+     * from auto routing (ms). Shorter than rate-limit so a flaky-but-alive
+     * provider is re-admitted quickly, but long enough that the very NEXT
+     * message never re-picks a provider that just failed (the old behavior:
+     * only auth and rate-limit were session-excluded, so an unknown-classified
+     * failure re-picked the dead provider on every single message).
+     */
+    static TRANSIENT_FAILURE_EXCLUSION_MS = 60 * 1000;
+    /**
+     * Providers that failed TRANSIENTLY this session (server/network/timeout/
+     * unknown). Tracked separately from the exclusion map so that when a
+     * transient exclusion EXPIRES, the provider is only re-admitted to routing
+     * after a quick on-demand spot-check confirms it's actually back — recovery
+     * is discovered in seconds, not by blindly failing into it again.
+     */
+    sessionTransientFailedProviders = new Set();
+    /**
+     * Whether the cold-start probe has fired this session. On a fresh registry
+     * (no verified models yet) the FIRST auto pick fires a background
+     * probe + spot-check so routing learns from real API data instead of
+     * failing into dead ends — the fire-and-forget keeps the first message fast.
+     */
+    coldStartProbeFired = false;
     create() {
         const command = new Command('chat')
             .description('Start an interactive chat session with AI')
@@ -420,6 +446,14 @@ export class ChatCommand extends BaseCommand {
                             await cache.set(message, result, effectiveModel, type);
                         }
                         history.push({ role: 'assistant', content: result });
+                        // Success telemetry: verified models accumulate from real usage so
+                        // the registry's getUsableProviders() reflects what actually works.
+                        try {
+                            getModelRegistry().recordCall(type, effectiveModel, true, undefined, 'chat');
+                        }
+                        catch {
+                            // Best-effort
+                        }
                         generationComplete = true;
                     }
                     catch (err) {
@@ -434,7 +468,7 @@ export class ChatCommand extends BaseCommand {
                         if (autoMode) {
                             const failedProviderName = provider.name;
                             autoFailedProviders.add(type);
-                            this.recordAutoProviderFailure(type, err);
+                            this.recordAutoProviderFailure(type, err, effectiveModel);
                             // Failover routing itself can throw (e.g. an unresolvable plugin
                             // provider) — never let that escape the catch and crash the
                             // interactive loop; fall through to interactive recovery instead.
@@ -524,6 +558,14 @@ export class ChatCommand extends BaseCommand {
                             await cache.set(message, result, effectiveModel, type);
                         }
                         history.push({ role: 'assistant', content: result });
+                        // Success telemetry: verified models accumulate from real usage so
+                        // the registry's getUsableProviders() reflects what actually works.
+                        try {
+                            getModelRegistry().recordCall(type, effectiveModel, true, undefined, 'chat');
+                        }
+                        catch {
+                            // Best-effort
+                        }
                         generationComplete = true;
                     }
                     catch (err) {
@@ -538,7 +580,7 @@ export class ChatCommand extends BaseCommand {
                         if (autoMode) {
                             const failedProviderName = provider.name;
                             autoFailedProviders.add(type);
-                            this.recordAutoProviderFailure(type, err);
+                            this.recordAutoProviderFailure(type, err, effectiveModel);
                             // Failover routing itself can throw (e.g. an unresolvable plugin
                             // provider) — never let that escape the catch and crash the
                             // interactive loop; fall through to interactive recovery instead.
@@ -703,10 +745,18 @@ export class ChatCommand extends BaseCommand {
      * - EVERY failure also feeds the shared circuit breaker, so the auto router
      *   deprioritizes the provider by scoring even for transient 5xx/network
      *   errors (which need repeated failures before cooldown opens).
+     * - Transient failures (server/network/timeout/unknown) get a SHORT session
+     *   exclusion so the very next message skips the provider, while still
+     *   re-admitting it quickly if it recovers.
+     * - EVERY failure ALSO writes through to the persistent Model Availability
+     *   Registry (telemetry) so a dead provider×model is remembered across chat
+     *   sessions and skipped predictively on the next pick — the registry's
+     *   FAISS/JSON health data is what makes routing fast, and this is the feed
+     *   that keeps it fresh.
      *
      * Best-effort: never throws, so failover bookkeeping can't crash the chat.
      */
-    recordAutoProviderFailure(providerType, err) {
+    recordAutoProviderFailure(providerType, err, model) {
         const failureKind = classifyFallbackError(err);
         if (failureKind === 'auth') {
             // Expired token/key — definitive for the rest of the session
@@ -730,6 +780,24 @@ export class ChatCommand extends BaseCommand {
                 // Best-effort — ledger bookkeeping must not crash chat
             }
         }
+        else {
+            // Server / network / timeout / unknown — transient but definitive enough
+            // that the next message shouldn't re-pick this provider. Short cooldown,
+            // then re-admit (it may have recovered). Tracked as transient so the
+            // expiry path re-verifies with a spot-check before re-admitting.
+            this.sessionFailedProviders.set(providerType, Date.now() + ChatCommand.TRANSIENT_FAILURE_EXCLUSION_MS);
+            this.sessionTransientFailedProviders.add(providerType);
+        }
+        // Write-through to the persistent Model Availability Registry so this
+        // provider×model is remembered across sessions — via the SHARED helper
+        // every routing path uses (execute/orchestrator + the fallback commands
+        // plan/skill/learn/edit), so a provider that dies here is skipped
+        // predictively by ALL actions on the next pick. auth/rate-limit failures
+        // flip the entry to `unavailable` (rate-limit also parks it until the
+        // reset window), which `getBlockedProviders()` feeds back into routing as
+        // a predictive skip — the registry learns from real usage exactly as
+        // designed, no separate probe needed.
+        recordRegistryFailure(providerType, model, err, failureKind, 'chat');
         // Record the failover in the QUOTA TIMELINE (assessment #7: show users
         // when failover occurred and why). Auth + rate-limit failures both show up
         // so the dashboard's Failover Timeline explains every mid-session swap.
@@ -774,12 +842,15 @@ export class ChatCommand extends BaseCommand {
         catch {
             // Best-effort — routing must never crash on circuit-breaker bookkeeping
         }
-        // Feed the QUOTA ledger too: a provider whose free-tier window is exhausted
+        // Feed the QUOTA state too: a provider whose free-tier window is exhausted
         // (or was parked by a mid-session failure) sinks below healthy candidates
-        // predictively, matching the orchestrator path.
+        // predictively, matching the orchestrator path. Read through the Model
+        // Availability Registry's UNIFIED store — the registry mirrors the ledger's
+        // parks + full token/reset telemetry, so the pick path reads ONE primary
+        // sub-ms store (the ledger stays the writer, the registry the read model).
         let quotaStatus = [];
         try {
-            quotaStatus = getQuotaLedger().getRouterQuotaStatus(this.configManager);
+            quotaStatus = getModelRegistry().getRouterQuotaStatus(this.configManager);
         }
         catch {
             // Best-effort — routing must never crash on ledger bookkeeping
@@ -807,16 +878,84 @@ export class ChatCommand extends BaseCommand {
             const expiresAt = this.sessionFailedProviders.get(p);
             return expiresAt !== undefined && expiresAt > exclusionTime;
         };
+        // ── Cold-start probe (suggestion 3) ─────────────────────────────────────
+        // A fresh registry has zero verified models → routing would fall back to
+        // credential-based defaults and possibly fail into dead ends. Fire ONE
+        // background probe+spot-check so the registry learns from real API data.
+        if (!this.coldStartProbeFired) {
+            this.coldStartProbeFired = true;
+            try {
+                const registry = getModelRegistry();
+                if (registry.getUsableProviders().length === 0) {
+                    // Fire-and-forget: never block the first message on probe network I/O.
+                    void refreshModelRegistry(this.configManager, { spotCheck: true }).catch(() => {
+                        // Best-effort — cold-start probing must never break chat.
+                    });
+                }
+            }
+            catch {
+                // Best-effort.
+            }
+        }
+        // ── Re-verify before re-admit (suggestion 2) ───────────────────────────
+        // A provider whose TRANSIENT exclusion just expired is only re-admitted
+        // after a quick on-demand spot-check confirms it's actually back — the
+        // registry may still mark it unavailable (learned from the failure), and
+        // blindly re-admitting would fail again on the very next message. Recovery
+        // is discovered in SECONDS (a 1-token spot-check), not by re-failing.
+        // NOTE: iterate a SNAPSHOT — the loop mutates the set (delete + re-add),
+        // and Set iteration can revisit a re-added key, double-spot-checking.
+        // Bounded: at most one spot-check per provider per 60s (the exclusion is
+        // re-armed on failure), and only for registry-blocked providers.
+        for (const providerType of [...this.sessionTransientFailedProviders]) {
+            const expiresAt = this.sessionFailedProviders.get(providerType);
+            // Skip still-active exclusions and already-cleared providers.
+            if (expiresAt !== undefined && expiresAt > exclusionTime)
+                continue;
+            this.sessionTransientFailedProviders.delete(providerType);
+            this.sessionFailedProviders.delete(providerType);
+            try {
+                const registry = getModelRegistry();
+                // Only re-verify when the registry still believes the provider is dead
+                // (unavailable/parked) — a healthy entry means it recovered already.
+                if (!registry.getBlockedProviders().includes(providerType))
+                    continue;
+                const desired = getAutoRouter().resolveModel(providerType, 'chat', this.configManager);
+                const outcome = await spotCheckModel(providerType, desired, this.configManager);
+                // 'skipped' = the model was VERIFIED recently (within the spot-check
+                // throttle) — that's healthy, so treat it as a pass too.
+                if (outcome !== 'verified' && outcome !== 'skipped') {
+                    // Still down — keep it excluded for another transient window.
+                    this.sessionFailedProviders.set(providerType, Date.now() + ChatCommand.TRANSIENT_FAILURE_EXCLUSION_MS);
+                    this.sessionTransientFailedProviders.add(providerType);
+                }
+            }
+            catch {
+                // Best-effort — re-verification must never break routing.
+            }
+        }
         const excluded = new Set([
             ...excludeProviders,
             ...[...this.sessionFailedProviders.keys()].filter((p) => isActiveExclusion(p)),
         ]);
+        // Predictive skip from the Model Availability Registry: providers whose
+        // every tracked model the registry marks unavailable/quota-parked (learned
+        // from real usage telemetry) are never even attempted — sub-ms, no
+        // network, no failing call. This is what turns "fail gemini → fail nim →
+        // local" on every message into "straight to local" after the first learn.
+        let registryBlocked = new Set();
+        try {
+            registryBlocked = new Set(getModelRegistry().getBlockedProviders());
+        }
+        catch {
+            // Best-effort — registry bookkeeping must never break routing
+        }
         const candidates = [
             decision.provider,
             ...decision.ranked
                 .filter((r) => r.provider !== decision.provider)
                 .map((r) => r.provider),
-        ].filter((p) => !excluded.has(p));
+        ].filter((p) => !excluded.has(p) && !registryBlocked.has(p));
         for (const candidate of candidates) {
             try {
                 const resolved = resolveProvider(this.configManager, candidate);
@@ -854,11 +993,12 @@ export class ChatCommand extends BaseCommand {
         }
         // Nothing available — surface a usable pick so the caller's isAvailable()
         // gate shows a clear, actionable error. Prefer the best-ranked provider
-        // that has NOT failed this session (the literal router winner could be a
-        // provider whose key just died — re-surfacing it would re-fail and confuse
-        // the user instead of failing over).
+        // that has NOT failed this session and is NOT registry-blocked (the
+        // literal router winner could be a provider whose key just died —
+        // re-surfacing it would re-fail and confuse the user instead of failing
+        // over).
         const usableProvider = [decision.provider, ...decision.ranked.map((r) => r.provider)]
-            .find((p) => !isActiveExclusion(p)) || decision.provider;
+            .find((p) => !isActiveExclusion(p) && !registryBlocked.has(p)) || decision.provider;
         recordRoutingDecision({
             source: 'chat',
             agentType: 'chat',
@@ -897,6 +1037,9 @@ export class ChatCommand extends BaseCommand {
             if (attempted.has(candidateType))
                 continue;
             attempted.add(candidateType);
+            // Hoisted so the failure write-through below can attribute the exact
+            // model that was attempted (registry telemetry needs provider × model).
+            let candidateModel;
             try {
                 const resolved = resolveProvider(this.configManager, candidateType);
                 if (!(await resolved.provider.isAvailable())) {
@@ -907,6 +1050,7 @@ export class ChatCommand extends BaseCommand {
                     ? first.model
                     : getAutoRouter().resolveModel(candidateType, 'chat', this.configManager);
                 const model = await resolveWorkingModel(resolved.provider, candidateType, desired);
+                candidateModel = model;
                 const result = await this.generateWithContext(resolved.provider, prompt, resolved.type, { ...options, model }, cacheEnabled);
                 if (candidateType !== first.type) {
                     logger.success(`✅ Auto failover: answered from ${resolved.provider.name} (${model}) after ${first.type} failed`);
@@ -930,8 +1074,9 @@ export class ChatCommand extends BaseCommand {
                 // Single-shot auto path: definitive failures (auth / exhausted quota)
                 // exclude the provider for the session + feed the circuit breaker so a
                 // follow-up interactive session (or the next message) skips it instead
-                // of failing again.
-                this.recordAutoProviderFailure(candidateType, err);
+                // of failing again. Also write-throughs to the Model Registry so the
+                // provider×model is remembered across sessions.
+                this.recordAutoProviderFailure(candidateType, err, candidateModel);
                 const msg = err instanceof Error ? err.message : String(err);
                 // Opt-in confirmation (routing.promptOnFailover): when the user wants
                 // control over failover, ask before auto-switching to the next
@@ -1163,23 +1308,36 @@ Commands:
             recordRetrievalStats(stats);
             fullPrompt = `${reduced}\n\n## User Query\n${prompt}`;
         }
+        let result;
         if (typeof provider.generateStream === 'function') {
             const chunks = [];
             await provider.generateStream(fullPrompt, options, (token) => {
                 chunks.push(token);
             });
-            return chunks.join('');
+            result = chunks.join('');
         }
-        const spinner = ora(`Generating with ${provider.name}...`).start();
+        else {
+            const spinner = ora(`Generating with ${provider.name}...`).start();
+            try {
+                result = await provider.generate(fullPrompt, options);
+                spinner.stop();
+            }
+            catch (err) {
+                spinner.fail('Generation failed');
+                throw err;
+            }
+        }
+        // Record telemetry success in the Model Availability Registry so verified
+        // models accumulate from real usage — this is what populates
+        // getUsableProviders() over time and lets the router restrict Auto picks
+        // to providers we've actually seen work (no more routing into 404s).
         try {
-            const result = await provider.generate(fullPrompt, options);
-            spinner.stop();
-            return result;
+            getModelRegistry().recordCall(providerType, options?.model || 'default', true, undefined, 'chat');
         }
-        catch (err) {
-            spinner.fail('Generation failed');
-            throw err;
+        catch {
+            // Best-effort — registry telemetry must never break a response
         }
+        return result;
     }
 }
 //# sourceMappingURL=chat.js.map

@@ -26,6 +26,7 @@ import type { InferenceProvider } from './interface.js';
 import { PREFERRED_MODELS } from './model-validator.js';
 import { getModelRegistry } from '../learning/model-registry.js';
 import { classifyFallbackError, type FallbackErrorType } from '../learning/provider-fallback.js';
+import { getEventBus, EventNames } from '../observability/event-bus.js';
 import { logger } from '../utils/logger.js';
 
 // ─── Constants ──────────────────────────────────────────────────────────────
@@ -127,17 +128,17 @@ export async function spotCheckModel(
     // maxTokens=1 stop — treat "returned" as success regardless of content.)
     void result;
     const latencyMs = Date.now() - startedAt;
-    registry.markVerified(providerType, model, 'spot-check', latencyMs);
+    registry.markVerified(providerType, model, 'spot-check', latencyMs, 'spot-check');
     return 'verified';
   } catch (err) {
     const type = classifyFallbackError(err);
     const msg = err instanceof Error ? err.message.slice(0, 160) : String(err).slice(0, 160);
     if (type === 'auth' || isPermissionError(msg)) {
-      registry.markUnavailable(providerType, model, `${type}: ${msg}`, 'spot-check');
+      registry.markUnavailable(providerType, model, `${type}: ${msg}`, 'spot-check', 0, 'spot-check');
       return 'unavailable';
     }
     if (type === 'rate-limit') {
-      registry.markUnavailable(providerType, model, 'rate-limit (quota parked)', 'spot-check');
+      registry.markUnavailable(providerType, model, 'rate-limit (quota parked)', 'spot-check', 0, 'spot-check');
       return 'unavailable';
     }
     // Transient (network/timeout/server/unknown) — leave the entry as-is so a
@@ -315,6 +316,54 @@ export function startRegistryWatcher(
     return result;
   };
 
+  // ── Event-driven wakeup ────────────────────────────────────────────────────
+  // The watch daemon is the dedicated MODEL-HEALTH AGENT. Mid-session state
+  // changes (a chat/orchestrator failure that flipped a model unavailable, a
+  // quota park, a release) are REPORTED to it via MODEL_REGISTRY_UPDATED and
+  // it reacts IMMEDIATELY by re-verifying the affected provider — so recovery
+  // is discovered in seconds, not at the next scheduled cycle. This closes the
+  // "staleness window" between periodic probes without probing on every call.
+  let unsubscribeEvent: (() => void) | null = null;
+  // Per-provider throttle so a burst of failure events (e.g. a chat session
+  // failing the same provider repeatedly) can't trigger a spot-check storm.
+  const lastEventVerify = new Map<string, number>();
+  const EVENT_REVERIFY_MIN_INTERVAL_MS = 30 * 1000; // 30s per provider
+  try {
+    unsubscribeEvent = getEventBus().on(EventNames.MODEL_REGISTRY_UPDATED, (record) => {
+      if (stopped) return;
+      const data = record?.data as { providers?: string[]; source?: string } | undefined;
+      // Ignore the watcher's OWN writes (probe/spot-check): re-verifying a
+      // provider because ITS re-verification marked something unavailable would
+      // self-trigger forever. Only mid-session TELEMETRY (chat/orchestrator
+      // failures) and QUOTA parks/releases wake the daemon.
+      if (data?.source === 'probe' || data?.source === 'spot-check') return;
+      const providers = data?.providers || [];
+      const now = Date.now();
+      const toVerify = providers.filter((p) => {
+        const last = lastEventVerify.get(p) ?? 0;
+        if (now - last < EVENT_REVERIFY_MIN_INTERVAL_MS) return false;
+        lastEventVerify.set(p, now);
+        return true;
+      });
+      if (toVerify.length === 0) return;
+      // Fire-and-forget: never block the event emitter on probe network I/O.
+      void refreshModelRegistry(configManager, {
+        ...options,
+        providers: toVerify,
+        // Event-driven re-verification is a targeted health check — probe the
+        // provider's list + spot-check its candidate models right away.
+        spotCheck: options.spotCheck !== false,
+      }).then((result) => {
+        logger.info(
+          `Model registry event → re-verified ${result.providersProbed.join(', ')} ` +
+          `(${result.verified} verified, ${result.unavailable} unavailable)`,
+        );
+      });
+    });
+  } catch {
+    // Best-effort — the daemon must never crash on event-bus wiring.
+  }
+
   // Immediate first pass, then the scheduled loop.
   void runOnce();
   timer = setInterval(() => void runOnce(), intervalMs);
@@ -325,6 +374,14 @@ export function startRegistryWatcher(
     if (timer) {
       clearInterval(timer);
       timer = null;
+    }
+    if (unsubscribeEvent) {
+      try {
+        unsubscribeEvent();
+      } catch {
+        // Best-effort.
+      }
+      unsubscribeEvent = null;
     }
   };
 

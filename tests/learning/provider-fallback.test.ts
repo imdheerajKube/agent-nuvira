@@ -22,10 +22,11 @@ import {
   ProviderFallback,
   getProviderFallback,
   resetProviderFallback,
+  recordRegistryFailure,
   type ProviderFallbackConfig,
   type FallbackResult,
 } from '../../src/learning/provider-fallback.js';
-import { resetModelRegistry } from '../../src/learning/model-registry.js';
+import { resetModelRegistry, getModelRegistry } from '../../src/learning/model-registry.js';
 import type { InferenceProvider } from '../../src/inference/interface.js';
 import type { ConfigManager } from '../../src/config/manager.js';
 import type { ProviderType } from '../../src/config/types.js';
@@ -327,6 +328,32 @@ describe('ProviderFallback', () => {
       expect(oIndex).toBeLessThan(lIndex);
       expect(lIndex).toBeLessThan(gIndex);
     });
+
+    it('skips registry-blocked providers unless they are the explicit primary', () => {
+      // Telemetry learned gemini + nim are dead (auth) — the predictive skip
+      // must extend to fallback-based commands (plan/skill/learn/edit), not
+      // just chat/orchestrator auto routing.
+      getModelRegistry().markUnavailable('gemini', 'gemini-2.0-flash-exp', 'auth (invalid key)', 'telemetry');
+      getModelRegistry().markUnavailable('nim', 'meta/llama-3.1-8b-instruct', 'auth (invalid key)', 'telemetry');
+
+      // As learned FALLBACKS they're skipped without a network call…
+      const chain = fallback.getFallbackChain('groq');
+      expect(chain).not.toContain('gemini');
+      expect(chain).not.toContain('nim');
+      expect(chain).toContain('groq');
+
+      // …but an explicitly requested primary is still attempted once (the
+      // user asked for it; a spot-check may be about to re-admit it).
+      const withGeminiPrimary = fallback.getFallbackChain('gemini');
+      expect(withGeminiPrimary).toContain('gemini');
+      expect(withGeminiPrimary).not.toContain('nim');
+    });
+
+    it('does not skip unverified-only providers ("not yet probed" ≠ dead)', () => {
+      getModelRegistry().markListed('openrouter', ['openai/gpt-4o-mini']);
+      const chain = fallback.getFallbackChain('groq');
+      expect(chain).toContain('openrouter');
+    });
   });
 
   // ── callWithFallback ────────────────────────────────────────────────────
@@ -479,6 +506,68 @@ describe('ProviderFallback', () => {
 
       // callFn should have received 'groq' as second arg
       expect(callFn).toHaveBeenCalledWith(expect.anything(), 'groq');
+    });
+
+    it('marks a provider unavailable when its model is not found (404 telemetry)', async () => {
+      (fallback as any).getProvider = vi.fn().mockImplementation((type: string) => {
+        if (type === 'groq') {
+          return createMockProvider('Groq', {
+            generate: vi.fn().mockRejectedValue(new Error('404 model not found for groq')),
+          });
+        }
+        return createMockProvider(type, {
+          generate: vi.fn().mockResolvedValue(`response from ${type}`),
+        });
+      });
+
+      const result = await fallback.callWithFallback('groq', async (p, type) => p.generate('test', {}));
+
+      // Fell back to a healthy provider, AND the registry learned groq is dead
+      // (model-not-found is a definitive block — not a transient blip).
+      expect(result.response).toBeTruthy();
+      expect(result.provider).not.toBe('groq');
+      const entry = getModelRegistry().getEntry('groq', 'test-model');
+      expect(entry?.status).toBe('unavailable');
+      expect(entry?.lastError).toContain('model not found');
+      expect(getModelRegistry().getBlockedProviders()).toContain('groq');
+    });
+  });
+
+  // ── recordRegistryFailure (shared telemetry path) ─────────────────────────
+
+  describe('recordRegistryFailure', () => {
+    it('marks a model-not-found failure definitively unavailable', () => {
+      recordRegistryFailure('groq', 'llama-3.3-70b-versatile', new Error('404 model not found'));
+      const entry = getModelRegistry().getEntry('groq', 'llama-3.3-70b-versatile');
+      expect(entry?.status).toBe('unavailable');
+      expect(entry?.lastError).toContain('model not found');
+    });
+
+    it('flips auth failures to unavailable (predictive block)', () => {
+      recordRegistryFailure('gemini', 'gemini-2.0-flash-exp', new Error('403 permission denied'));
+      expect(getModelRegistry().getEntry('gemini', 'gemini-2.0-flash-exp')?.status).toBe('unavailable');
+      expect(getModelRegistry().getBlockedProviders()).toContain('gemini');
+    });
+
+    it('treats transient (server) failures as non-blocking health telemetry', () => {
+      recordRegistryFailure('groq', 'llama-3.3-70b-versatile', new Error('500 internal server error'));
+      const entry = getModelRegistry().getEntry('groq', 'llama-3.3-70b-versatile');
+      expect(entry?.status).not.toBe('unavailable');
+      expect(entry?.errorRate).toBeGreaterThan(0);
+      expect(getModelRegistry().getBlockedProviders()).not.toContain('groq');
+    });
+
+    it('honors a pre-classified error type (no re-classification)', () => {
+      // classifyFallbackError would say 'unknown', but the caller already
+      // classified it as rate-limit → flip to unavailable + park.
+      recordRegistryFailure('nim', 'meta/llama-3.1-8b-instruct', new Error('429 quota exhausted'), 'rate-limit');
+      const entry = getModelRegistry().getEntry('nim', 'meta/llama-3.1-8b-instruct');
+      expect(entry?.status).toBe('unavailable');
+      expect(entry?.quotaParkedUntil).toBeGreaterThan(Date.now());
+    });
+
+    it('never throws (best-effort telemetry)', () => {
+      expect(() => recordRegistryFailure('x', 'y', new Error('boom'), 'unknown' as any)).not.toThrow();
     });
   });
 

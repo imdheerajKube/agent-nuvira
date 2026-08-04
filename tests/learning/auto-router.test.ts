@@ -37,7 +37,7 @@ import {
 } from '../../src/learning/auto-router.js';
 import { resetRouterBandit, getRouterBandit, DEFAULT_MIN_SAMPLES } from '../../src/learning/router-bandit.js';
 import { resetRouterPromotion, getRouterPromotion } from '../../src/learning/router-promotion.js';
-import { resetModelRegistry } from '../../src/learning/model-registry.js';
+import { resetModelRegistry, getModelRegistry } from '../../src/learning/model-registry.js';
 
 // ─── Bandit test isolation ─────────────────────────────────────────────────
 
@@ -888,6 +888,34 @@ describe('AutoModelRouter.resolve credential filtering', () => {
     const decision = new AutoModelRouter().resolve('writer', 'implement a login form', {}, configManager);
     expect(decision.ranked.every((s) => s.provider === 'local')).toBe(true);
     expect(decision.provider).toBe('local');
+  });
+
+  it('excludes registry-blocked providers even when credentials exist (predictive skip)', () => {
+    const registry = getModelRegistry();
+    // Telemetry learned gemini is dead (auth) while groq is verified-working —
+    // the exact "gemini fails every message" scenario from real usage.
+    registry.markVerified('groq', 'llama-3.3-70b-versatile', 'spot-check');
+    registry.markUnavailable('gemini', 'gemini-2.5-flash', 'auth', 'telemetry');
+    const configManager = makeConfig(() => true);
+
+    const decision = new AutoModelRouter().resolve('writer', 'implement a login form', {}, configManager);
+    // gemini is blocked by the registry → never ranked, never picked.
+    expect(decision.ranked.some((s) => s.provider === 'gemini')).toBe(false);
+    expect(decision.provider).toBe('groq');
+  });
+
+  it('registry-blocked providers stay blocked until a verified model returns', () => {
+    const registry = getModelRegistry();
+    registry.markUnavailable('nim', 'meta/llama-3.3-70b-instruct', 'auth', 'telemetry');
+    const configManager = makeConfig(() => true);
+
+    const blocked = new AutoModelRouter().resolve('writer', 'implement a login form', {}, configManager);
+    expect(blocked.ranked.some((s) => s.provider === 'nim')).toBe(false);
+
+    // A later successful call re-verifies nim → unblocked again.
+    registry.recordCall('nim', 'meta/llama-3.3-70b-instruct', true);
+    const unblocked = new AutoModelRouter().resolve('writer', 'implement a login form', {}, configManager);
+    expect(unblocked.ranked.some((s) => s.provider === 'nim')).toBe(true);
   });
 
   it('ignores credential filtering when configManager lacks hasRequiredCredentials', () => {

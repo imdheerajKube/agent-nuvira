@@ -7,7 +7,7 @@ import { ContextParser } from '../context/parser.js';
 import { logger } from '../utils/logger.js';
 import { showModelPicker } from './model-picker.js';
 import { resolveProvider } from './router.js';
-import { getProviderFallback, classifyFallbackError, isRetryableError } from '../learning/provider-fallback.js';
+import { getProviderFallback, classifyFallbackError, isRetryableError, recordRegistryFailure, recordRegistrySuccess } from '../learning/provider-fallback.js';
 
 /**
  * Plan command — generate implementation plans for code changes
@@ -109,9 +109,18 @@ Use clear markdown formatting.`;
 
       try {
         result = await provider.generate(prompt, options);
+        // Success attribution: this plan call PROVED the provider × model
+        // works — the per-action "learned from real usage" panel gains a
+        // 'plan' verified row (mirror of the failure write in the catch).
+        recordRegistrySuccess(type, options?.model, 'plan');
       } catch (err) {
         // Try automatic fallback to another provider before giving up
         const errorType = classifyFallbackError(err);
+        // Feed the SHARED registry telemetry path: an auth/404 failure on this
+        // FIRST direct call would otherwise never be learned (non-retryable
+        // errors skip the fallback loop entirely), so plan now routes around
+        // the dead provider on the next pick like chat/execute do.
+        recordRegistryFailure(type, options?.model, err, errorType, 'plan');
         if (isRetryableError(errorType)) {
           try {
             const fallback = getProviderFallback(this.configManager, this.configManager.getAll().fallback);

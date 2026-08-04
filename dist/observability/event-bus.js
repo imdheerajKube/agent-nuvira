@@ -71,6 +71,16 @@ export const EventNames = {
      * test suite, git state) shown to the user before planning starts.
      */
     ORCHESTRATOR_INSPECTION: 'orchestrator:inspection',
+    // Model Availability Registry events (reported to the watch daemon)
+    /**
+     * Emitted when a mid-session state change flipped provider/model availability
+     * (a failure marked a model unavailable, a quota park was applied, a park was
+     * released). The registry watch daemon subscribes so it can re-verify the
+     * affected providers immediately instead of waiting for the next scheduled
+     * cycle — state changes found during a session are reported to the agent and
+     * recorded the moment they happen.
+     */
+    MODEL_REGISTRY_UPDATED: 'model-registry:updated',
     // Safe execution layer events
     SAFE_EXEC_FILE_VALIDATED: 'safe-exec:file-validated',
     SAFE_EXEC_SANDBOX_STARTING: 'safe-exec:sandbox-starting',

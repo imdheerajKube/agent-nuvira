@@ -128,19 +128,31 @@ export async function resolveWorkingModel(
     if (curated) return curated;
   }
 
+  // A model the registry has marked unavailable or quota-parked must NEVER be
+  // resurrected by the live-list repair below — the registry learned it fails
+  // (auth/rate-limit telemetry) and repair is supposed to route AROUND it,
+  // not back into it.
+  const registryBlocks = (model: string): boolean => {
+    const entry = registry.getEntry(providerType, model);
+    return !!entry && (entry.status === 'unavailable' || entry.quotaParkedUntil > Date.now());
+  };
+
   // Registry didn't have the answer — fall back to the live model list
   // (cached in-memory with a short TTL by the validator).
   const live = await fetchLiveModels(provider, providerType);
 
   // ── 1. Desired model is live → use it ─────────────────────────────────
-  if (explicit && live.some((m) => m.id === explicit)) {
+  if (explicit && live.some((m) => m.id === explicit) && !registryBlocks(explicit)) {
     return explicit;
   }
 
   // ── 2. Curated known-good default for this provider ───────────────────
+  // Prefer a curated candidate that is BOTH live AND not registry-blocked, so
+  // repair lands on a model we have reason to believe works — not just one
+  // that happens to be listed.
   const preferred = PREFERRED_MODELS[providerType] || [];
   for (const candidate of preferred) {
-    if (live.some((m) => m.id === candidate)) {
+    if (live.some((m) => m.id === candidate) && !registryBlocks(candidate)) {
       if (explicit) {
         logger.warn(
           `♻️  Auto routing: model '${explicit}' is not available on '${providerType}' — using '${candidate}' (verified working).`,

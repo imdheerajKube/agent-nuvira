@@ -25,6 +25,7 @@ import { ProviderType } from '../config/types.js';
 import type { ConfigManager } from '../config/manager.js';
 import { getPluginRegistry } from '../plugins/registry.js';
 import { logger } from '../utils/logger.js';
+import { getModelRegistry } from './model-registry.js';
 
 // ─── Types ──────────────────────────────────────────────────────────────────
 
@@ -130,6 +131,84 @@ export function isRetryableError(errorType: FallbackErrorType): boolean {
   return errorType !== 'auth';
 }
 
+/**
+ * Write a failed real LLM call through to the Model Availability Registry so
+ * EVERY routing path learns predictively — not just chat's auto-router:
+ * execute/orchestrator and the fallback-based commands (plan / skill / learn /
+ * edit) all feed the SAME store, so a provider that dies in one action is
+ * skipped predictively by every other action on the next pick.
+ *
+ * - A model-not-found error (404 / "does not exist") is a DEFINITIVE no:
+ *   classifyFallbackError buckets it as 'unknown' (transient), but a model
+ *   that doesn't exist will never come back — mark it `unavailable` so the
+ *   registry refuses to resurrect it across sessions.
+ * - auth/rate-limit flip the entry to `unavailable` (rate-limit also parks it
+ *   until the reset window), which `getBlockedProviders()` feeds back into
+ *   routing as a predictive skip.
+ * - transient (server/network/timeout/unknown) just decays the health score.
+ *
+ * Best-effort: never throws, so telemetry can never break a call or failover.
+ *
+ * @param providerType The provider id that failed (e.g. 'gemini').
+ * @param model        The model that was attempted (defaults to 'default').
+ * @param err          The failure (classified when errorType is omitted).
+ * @param errorType    Optional pre-classified error type (avoids re-classifying).
+ * @param action       The action that hit the failure (chat / execute / plan /
+ *   edit / ...) — attributed in the per-action "learned from real usage" log.
+ *   Omitted → health still updates, but no dashboard panel row is written.
+ */
+export function recordRegistryFailure(
+  providerType: string,
+  model: string | undefined,
+  err: unknown,
+  errorType?: FallbackErrorType,
+  action?: string,
+): void {
+  try {
+    const registry = getModelRegistry();
+    const kind = errorType ?? classifyFallbackError(err);
+    const errorMsg = err instanceof Error ? err.message : String(err);
+    const lower = errorMsg.toLowerCase();
+    // classifyFallbackError buckets model-not-found (404/deprecated) as
+    // 'unknown', which recordCall treats as transient — but a model that
+    // doesn't exist is a DEFINITIVE block: mark it unavailable explicitly so
+    // the registry refuses to resurrect it across sessions too.
+    const modelNotFound =
+      /(404|not found).*(model|endpoint|route)/.test(lower) ||
+      /(model|model id).*(does not exist|not found|no such|not supported)/.test(lower);
+    if (modelNotFound) {
+      registry.markUnavailable(providerType, model || 'default', 'model not found', 'telemetry', 0, action);
+    } else {
+      registry.recordCall(providerType, model || 'default', false, kind, action);
+    }
+  } catch {
+    // Best-effort — registry telemetry must never break failover.
+  }
+}
+
+/**
+ * Write a successful real LLM call through to the Model Availability Registry
+ * WITH its action tag, so the per-action "learned from real usage" telemetry
+ * panel shows which action VERIFIED which provider × model (the mirror of
+ * recordRegistryFailure). Success upgrades the entry to `verified` and proves
+ * the combo works — the feed that populates getUsableProviders() over time.
+ *
+ * Best-effort: never throws, so telemetry can never break a call.
+ *
+ * @param providerType The provider id that succeeded (e.g. 'groq').
+ * @param model        The model that was used (defaults to 'default').
+ * @param action       The action that succeeded (chat / execute / plan / edit /
+ *   ...) — attributed in the per-action log. Omitted → health still updates,
+ *   but no dashboard panel row is written.
+ */
+export function recordRegistrySuccess(providerType: string, model: string | undefined, action?: string): void {
+  try {
+    getModelRegistry().recordCall(providerType, model || 'default', true, undefined, action);
+  } catch {
+    // Best-effort — registry telemetry must never break a call.
+  }
+}
+
 // ─── Provider Fallback Engine ───────────────────────────────────────────────
 
 /**
@@ -202,12 +281,28 @@ export class ProviderFallback {
       }
     }
 
-    // Exclude providers currently in cooldown
+    // Exclude providers currently in cooldown AND providers the Model
+    // Availability Registry has definitively ruled out (every tracked model
+    // unavailable/quota-parked from real usage telemetry). The predictive skip
+    // makes fallback-based commands (plan/skill/learn/edit) avoid providers
+    // that chat/execute already learned are dead — the chain only filters
+    // LEARNED fallbacks; an explicitly requested primary is always attempted
+    // (the user asked for it, and a spot-check may be about to re-admit it).
+    let registryBlocked = new Set<string>();
+    try {
+      registryBlocked = new Set(getModelRegistry().getBlockedProviders());
+    } catch {
+      // Best-effort — the registry must never break the fallback chain.
+    }
     const now = Date.now();
     return chain.filter((p) => {
       const cb = this.circuitBreakers.get(p);
       if (cb && now < cb.cooldownUntil) {
         logger.debug(`  🔒 ${p} in cooldown (${((cb.cooldownUntil - now) / 1000).toFixed(0)}s remaining)`);
+        return false;
+      }
+      if (p !== primaryProvider && registryBlocked.has(p)) {
+        logger.debug(`  ⏭️  ${p} skipped (registry-blocked — learned unavailable)`);
         return false;
       }
       return true;
@@ -317,6 +412,13 @@ export class ProviderFallback {
 
         logger.success(`  ✅ ${options?.label || 'Call'} succeeded on ${pt} (${duration}ms)`);
 
+        // Action-attributed success telemetry: this action just PROVED the
+        // provider × model works, so the per-action "learned from real usage"
+        // panel gains a verified row (the mirror of the failure write above).
+        // Anonymous when the caller didn't pass a context — health still
+        // updates, no panel row.
+        recordRegistrySuccess(pt, this.resolveConfiguredModel(pt), options?.context);
+
         return {
           response,
           provider: pt,
@@ -333,18 +435,15 @@ export class ProviderFallback {
         this.recordFailure(pt);
 
         // ── Write-through to the Model Availability Registry ───────────────
-        // A failed real call is the strongest signal a model is NOT usable:
-        // auth/rate-limit failures flip it to `unavailable` (+ quota park for
-        // rate-limit), so the registry learns from usage exactly as designed.
-        // The model is the provider's configured pin (the fallback loop itself
-        // doesn't carry a model override). Best-effort — never break the loop.
-        try {
-          const { getModelRegistry } = await import('./model-registry.js');
-          const model = this.resolveConfiguredModel(pt);
-          getModelRegistry().recordCall(pt, model, false, errorType);
-        } catch {
-          // Registry is best-effort.
-        }
+        // A failed real call is the strongest signal a model is NOT usable.
+        // recordRegistryFailure handles model-not-found (definitive block) and
+        // auth/rate-limit flips, so getBlockedProviders() skips the provider
+        // predictively on the next pick — the same telemetry path chat and
+        // execute/orchestrator use. The model is the provider's configured pin
+        // (the fallback loop itself doesn't carry a model override).
+        // Best-effort — never break the loop. The `context` option carries the
+        // action tag (chat/plan/edit/...) into the per-action telemetry log.
+        recordRegistryFailure(pt, this.resolveConfiguredModel(pt), err, errorType, options?.context);
 
         attemptsMade.push({ provider: pt, error: errorMsg.slice(0, 200), duration });
 

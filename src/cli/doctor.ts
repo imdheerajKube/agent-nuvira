@@ -29,6 +29,7 @@ import { BaseCommand } from './commands.js';
 import { ProviderFactory } from '../inference/factory.js';
 import type { ProviderType } from '../config/types.js';
 import { getPluginRegistry } from '../plugins/registry.js';
+import { recordRegistryFailure } from '../learning/provider-fallback.js';
 import { logger } from '../utils/logger.js';
 
 // ─── Types ──────────────────────────────────────────────────────────────────
@@ -518,6 +519,10 @@ export class DoctorCommand extends BaseCommand {
               : `Unexpected response: "${quickResult.slice(0, 100)}"`,
           });
         } catch (err) {
+          // A failed real generation call is strong model-health evidence —
+          // feed the SHARED registry telemetry path so the doctor's probe
+          // (which is essentially a manual spot-check) teaches the router.
+          recordRegistryFailure(providerType, this.getDefaultModel(providerType), err, undefined, 'doctor');
           checks.push({
             name: 'Quick Generation',
             status: 'fail',

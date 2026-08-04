@@ -1,5 +1,5 @@
 import { useState, useEffect, useRef } from 'react';
-import type { ModelsHealthData, ProviderHealth, ModelStatus, TestedModel } from '../types';
+import type { ModelsHealthData, ProviderHealth, ModelStatus, TestedModel, ModelRegistryInsights, RegistryModelEntry, ActionTelemetryInsights } from '../types';
 
 // ─── Constants ──────────────────────────────────────────────────────────────
 
@@ -241,6 +241,400 @@ function ProviderCard({ provider }: { provider: ProviderHealth }) {
         </>
       )}
     </div>
+  );
+}
+
+// ─── Model Availability Registry Section ────────────────────────────────────
+// The UNIFIED enterprise read store: the exact sub-ms FAISS/JSON snapshot the
+// Auto router consults on every pick. Shows verified / unavailable / parked
+// availability + the quota telemetry (tokens remaining, reset windows) that
+// syncQuota mirrors from the ledger — one card, one source of truth.
+
+function fmtDuration(ms: number): string {
+  if (ms <= 0) return 'now';
+  const h = Math.floor(ms / 3_600_000);
+  const m = Math.floor((ms % 3_600_000) / 60_000);
+  if (h > 0) return `${h}h ${m}m`;
+  if (m > 0) return `${m}m`;
+  return `${Math.ceil(ms / 1000)}s`;
+}
+
+function registryStatusStyle(status: string) {
+  if (status === 'verified') return { text: '#3fb950', bg: '#0a2e1a', dot: '#3fb950' };
+  if (status === 'unavailable') return { text: '#f85149', bg: '#2d0f0f', dot: '#f85149' };
+  return { text: '#8b949e', bg: '#21262d', dot: '#8b949e' };
+}
+
+function RegistryEntryRow({ entry }: { entry: RegistryModelEntry }) {
+  const style = registryStatusStyle(entry.status);
+  const tokens = entry.remainingTokens >= 0
+    ? `${entry.remainingTokens.toLocaleString()} left`
+    : 'unlimited';
+  return (
+    <tr style={{ borderBottom: '1px solid #21262d' }}>
+      <td style={{ padding: '8px 12px', color: '#e6edf3', fontFamily: "'SFMono-Regular', Consolas, monospace", fontSize: 12 }}>
+        <span style={{ display: 'inline-block', width: 8, height: 8, borderRadius: '50%', background: style.dot, marginRight: 8 }} />
+        {entry.model.length > 32 ? entry.model.slice(0, 29) + '…' : entry.model}
+        {entry.parked && (
+          <span style={{
+            marginLeft: 8, fontSize: 10, padding: '1px 6px', borderRadius: 8,
+            background: '#2d1616', border: '1px solid #f85149', color: '#f85149',
+          }}>⏸ parked</span>
+        )}
+      </td>
+      <td style={{ padding: '8px 12px' }}>
+        <span style={{
+          display: 'inline-flex', alignItems: 'center', gap: 5, fontSize: 11, fontWeight: 600,
+          background: style.bg, color: style.text, padding: '2px 8px', borderRadius: 6,
+        }}>
+          {entry.status === 'verified' ? '✓ Verified' : entry.status === 'unavailable' ? '✗ Unavailable' : '◌ Unverified'}
+        </span>
+      </td>
+      <td style={{ padding: '8px 12px', textAlign: 'right', fontFamily: "'SFMono-Regular', Consolas, monospace", fontSize: 12, color: entry.remainingTokens >= 0 && entry.remainingTokens <= 100 ? '#d29922' : '#8b949e' }}>
+        {tokens}
+      </td>
+      <td style={{ padding: '8px 12px', textAlign: 'right', color: '#8b949e', fontSize: 12, whiteSpace: 'nowrap' }}>
+        {entry.resetsInMs > 0 ? fmtDuration(entry.resetsInMs) : '—'}
+      </td>
+      <td style={{ padding: '8px 12px', textAlign: 'right', color: '#8b949e', fontSize: 12, fontFamily: "'SFMono-Regular', Consolas, monospace" }}>
+        {entry.latencyMs !== undefined ? `${entry.latencyMs}ms` : '—'}
+      </td>
+      <td style={{ padding: '8px 12px', color: '#6e7681', fontSize: 11, maxWidth: 180, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+        {entry.lastError || (entry.source ? `learned via ${entry.source}` : '')}
+      </td>
+    </tr>
+  );
+}
+
+function RegistryCard({ provider }: { provider: ModelRegistryInsights['providers'][number] }) {
+  const [expanded, setExpanded] = useState(false);
+  const borderColor = provider.verified > 0 ? '#3fb950' : provider.unavailable > 0 ? '#f85149' : '#8b949e';
+
+  return (
+    <div style={{
+      background: '#161b22', borderRadius: 12,
+      border: `1px solid ${borderColor}44`,
+      borderLeft: `4px solid ${borderColor}`,
+      marginBottom: 12, overflow: 'hidden',
+    }}>
+      <div
+        onClick={() => setExpanded(!expanded)}
+        style={{ padding: '14px 18px', cursor: 'pointer', display: 'flex', alignItems: 'center', gap: 14, userSelect: 'none' }}
+      >
+        <span style={{ fontSize: 24 }}>{getProviderIcon(provider.provider)}</span>
+        <div style={{ flex: 1 }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 2 }}>
+            <span style={{ fontSize: 16, fontWeight: 600, color: '#e6edf3' }}>{getProviderLabel(provider.provider)}</span>
+            <span style={{
+              fontSize: 11, padding: '2px 8px', borderRadius: 10,
+              background: provider.parked > 0 ? '#2d1616' : '#12291a',
+              border: `1px solid ${provider.parked > 0 ? '#f85149' : '#238636'}`,
+              color: provider.parked > 0 ? '#f85149' : '#3fb950',
+            }}>
+              {provider.parked > 0 ? `${provider.parked} parked` : 'routable'}
+            </span>
+          </div>
+          <div style={{ fontSize: 13, color: '#8b949e' }}>
+            {provider.verified} verified · {provider.unverified} unverified · {provider.unavailable} unavailable
+          </div>
+        </div>
+        <span style={{ color: '#8b949e', fontSize: 18, transition: 'transform 0.2s', transform: expanded ? 'rotate(90deg)' : 'rotate(0deg)' }}>▶</span>
+      </div>
+      {expanded && (
+        <div style={{ overflowX: 'auto', borderTop: '1px solid #21262d' }}>
+          <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 13 }}>
+            <thead>
+              <tr style={{ borderBottom: '1px solid #21262d', color: '#8b949e' }}>
+                <th style={{ padding: '8px 12px', textAlign: 'left', fontWeight: 500 }}>Model</th>
+                <th style={{ padding: '8px 12px', textAlign: 'left', fontWeight: 500 }}>Availability</th>
+                <th style={{ padding: '8px 12px', textAlign: 'right', fontWeight: 500 }}>Tokens left</th>
+                <th style={{ padding: '8px 12px', textAlign: 'right', fontWeight: 500 }}>Resets in</th>
+                <th style={{ padding: '8px 12px', textAlign: 'right', fontWeight: 500 }}>Latency</th>
+                <th style={{ padding: '8px 12px', textAlign: 'left', fontWeight: 500 }}>Reason / Source</th>
+              </tr>
+            </thead>
+            <tbody>
+              {provider.models.map((entry) => (
+                <RegistryEntryRow key={entry.model} entry={entry} />
+              ))}
+            </tbody>
+          </table>
+        </div>
+      )}
+    </div>
+  );
+}
+
+function ModelRegistrySection({ data }: { data: ModelRegistryInsights }) {
+  if (!data.enabled) {
+    return (
+      <div style={{
+        background: '#161b22', borderRadius: 12, border: '1px dashed #30363d',
+        padding: '20px 24px', marginTop: 24, textAlign: 'center' as const,
+      }}>
+        <div style={{ fontSize: 24, marginBottom: 8 }}>📦</div>
+        <div style={{ fontSize: 14, fontWeight: 600, color: '#e6edf3', marginBottom: 4 }}>
+          Model Availability Registry
+        </div>
+        <div style={{ fontSize: 12, color: '#6e7681' }}>
+          No registry data yet — run <code style={{ color: '#58a6ff' }}>buff models refresh</code> or use Auto routing;
+          the registry learns from real usage and probes.
+        </div>
+      </div>
+    );
+  }
+
+  return (
+    <>
+      <h2 className="section-title" style={{ marginTop: 36 }}>📦 Model Availability Registry — the store routing reads</h2>
+      <p className="section-description">
+        The unified sub-ms FAISS/JSON snapshot the Auto router consults on every pick:
+        verified vs unavailable models plus quota telemetry (tokens remaining, reset
+        windows) mirrored from the ledger. State changes during a session are reported
+        to the watch daemon and recorded here immediately.
+      </p>
+
+      <div className="stats-grid" style={{ marginBottom: 16 }}>
+        <div className="stat-card">
+          <span className="stat-icon">📦</span>
+          <div className="stat-body">
+            <div className="stat-value">{data.total}</div>
+            <div className="stat-label">Tracked models</div>
+          </div>
+        </div>
+        <div className="stat-card">
+          <span className="stat-icon">✅</span>
+          <div className="stat-body">
+            <div className="stat-value" style={{ color: '#3fb950' }}>{data.verified}</div>
+            <div className="stat-label">Verified</div>
+          </div>
+        </div>
+        <div className="stat-card">
+          <span className="stat-icon">◌</span>
+          <div className="stat-body">
+            <div className="stat-value" style={{ color: '#8b949e' }}>{data.unverified}</div>
+            <div className="stat-label">Unverified</div>
+          </div>
+        </div>
+        <div className="stat-card">
+          <span className="stat-icon">⛔</span>
+          <div className="stat-body">
+            <div className="stat-value" style={{ color: '#f85149' }}>{data.unavailable}</div>
+            <div className="stat-label">Unavailable</div>
+          </div>
+        </div>
+        <div className="stat-card">
+          <span className="stat-icon">⏸</span>
+          <div className="stat-body">
+            <div className="stat-value" style={{ color: '#d29922' }}>{data.parked}</div>
+            <div className="stat-label">Quota-parked</div>
+          </div>
+        </div>
+      </div>
+
+      {data.providers.map((provider) => (
+        <RegistryCard key={provider.provider} provider={provider} />
+      ))}
+
+      <div style={{ textAlign: 'center', fontSize: 12, color: '#484f58', marginTop: 12 }}>
+        Backend snapshot · auto-refreshes every 60s
+      </div>
+    </>
+  );
+}
+
+// ─── Learned-from-real-usage Telemetry (per action) ─────────────────────────
+// Every LLM call writes through to the health store WITH its action tag (chat /
+// execute / plan / edit / ...). This section shows which provider × model each
+// action verified or killed — making the predictive skips routing performs
+// visible: a provider killed by ANY action is skipped by all others.
+
+const ACTION_ICONS: Record<string, string> = {
+  chat: '💬', execute: '⚙️', plan: '🗺️', edit: '✏️', skill: '🧩', learn: '📚',
+  ci: '🔁', doctor: '🩺', probe: '🔭', 'spot-check': '🧪', telemetry: '📡', usage: '🧮',
+};
+
+function actionLabel(action: string): string {
+  const map: Record<string, string> = {
+    chat: 'Chat', execute: 'Execute', plan: 'Plan', edit: 'Edit', skill: 'Skill',
+    learn: 'Learn', ci: 'CI Review', doctor: 'Doctor Probe', probe: 'Probe',
+    'spot-check': 'Spot-check', telemetry: 'Usage mirror',
+  };
+  return map[action] || action.charAt(0).toUpperCase() + action.slice(1);
+}
+
+function actionIcon(action: string): string {
+  return ACTION_ICONS[action] || '🎯';
+}
+
+function fmtShortTime(ms: number): string {
+  if (!ms) return '—';
+  return new Date(ms).toLocaleDateString() + ' ' +
+    new Date(ms).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+}
+
+function ModelLearnChip({ provider, model, reason, killed }: { provider: string; model: string; reason?: string; killed?: boolean }) {
+  const isKilled = killed === true;
+  const color = isKilled ? '#f85149' : '#3fb950';
+  const bg = isKilled ? '#2d0f0f' : '#0a2e1a';
+  return (
+    <span
+      title={isKilled
+        ? `Killed by this action — predictively skipped by routing${reason ? ` · ${reason}` : ''}`
+        : `Verified by this action — trusted by routing`}
+      style={{
+        display: 'inline-flex', alignItems: 'center', gap: 6,
+        background: bg, border: `1px solid ${color}`,
+        color, padding: '3px 9px', borderRadius: 8, fontSize: 11,
+        fontFamily: "'SFMono-Regular', Consolas, monospace", whiteSpace: 'nowrap',
+        transition: 'transform 0.15s',
+        cursor: 'default',
+      }}
+      onMouseEnter={(e) => { e.currentTarget.style.transform = 'scale(1.05)'; }}
+      onMouseLeave={(e) => { e.currentTarget.style.transform = 'scale(1)'; }}
+    >
+      <span style={{ opacity: 0.85 }}>{isKilled ? '✗' : '✓'}</span>
+      {provider}/{model.length > 30 ? model.slice(0, 27) + '…' : model}
+      {isKilled && reason && (
+        <span style={{ color: `${color}99`, fontSize: 10, fontWeight: 400 }}>· {reason}</span>
+      )}
+    </span>
+  );
+}
+
+function ActionTelemetryCard({ entry }: { entry: ActionTelemetryInsights['actions'][number] }) {
+  const [expanded, setExpanded] = useState(true);
+  const borderColor = entry.killed > 0 ? '#f85149' : entry.verified > 0 ? '#3fb950' : '#d29922';
+
+  return (
+    <div style={{
+      background: '#161b22', borderRadius: 12,
+      border: `1px solid ${borderColor}33`,
+      borderLeft: `4px solid ${borderColor}`,
+      marginBottom: 12, overflow: 'hidden',
+    }}>
+      <div
+        onClick={() => setExpanded(!expanded)}
+        style={{ padding: '12px 16px', cursor: 'pointer', display: 'flex', alignItems: 'center', gap: 12, userSelect: 'none' }}
+      >
+        <span style={{ fontSize: 20 }}>{actionIcon(entry.action)}</span>
+        <div style={{ flex: 1 }}>
+          <div style={{ fontSize: 14, fontWeight: 600, color: '#e6edf3', marginBottom: 2 }}>
+            {actionLabel(entry.action)}
+          </div>
+          <div style={{ fontSize: 12, color: '#8b949e', display: 'flex', gap: 14, flexWrap: 'wrap' }}>
+            <span><span style={{ color: '#3fb950' }}>✓ {entry.verified}</span> verified</span>
+            <span><span style={{ color: '#f85149' }}>✗ {entry.killed}</span> killed</span>
+            {entry.transient > 0 && <span><span style={{ color: '#d29922' }}>~ {entry.transient}</span> transient</span>}
+          </div>
+        </div>
+        <span style={{ color: '#8b949e', fontSize: 16, transition: 'transform 0.2s', transform: expanded ? 'rotate(90deg)' : 'rotate(0deg)' }}>▶</span>
+      </div>
+      {expanded && (
+        <div style={{ padding: '12px 16px', borderTop: '1px solid #21262d', background: '#0d1117' }}>
+          {entry.killedModels.length > 0 && (
+            <>
+              <div style={{
+                fontSize: 11, fontWeight: 600, color: '#f85149', marginBottom: 6,
+                textTransform: 'uppercase', letterSpacing: 0.4,
+              }}>
+                ⛔ Killed — skipped predictively by routing
+              </div>
+              <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6, marginBottom: 14 }}>
+                {entry.killedModels.map((m) => (
+                  <ModelLearnChip key={`${m.provider}|${m.model}`} provider={m.provider} model={m.model} reason={m.reason} killed />
+                ))}
+              </div>
+            </>
+          )}
+          {entry.verifiedModels.length > 0 && (
+            <>
+              <div style={{
+                fontSize: 11, fontWeight: 600, color: '#3fb950', marginBottom: 6,
+                textTransform: 'uppercase', letterSpacing: 0.4,
+              }}>
+                ✅ Verified — trusted by routing
+              </div>
+              <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6 }}>
+                {entry.verifiedModels.map((m) => (
+                  <ModelLearnChip key={`${m.provider}|${m.model}`} provider={m.provider} model={m.model} />
+                ))}
+              </div>
+            </>
+          )}
+          {entry.killedModels.length === 0 && entry.verifiedModels.length === 0 && (
+            <div style={{ fontSize: 12, color: '#6e7681' }}>
+              Only transient failures — health decayed, no model flipped.
+            </div>
+          )}
+        </div>
+      )}
+    </div>
+  );
+}
+
+function ActionTelemetrySection({ registry }: { registry: ModelRegistryInsights }) {
+  const tele = registry.actionTelemetry;
+  if (!tele) return null;
+  if (!tele.enabled) {
+    return (
+      <div style={{
+        background: '#161b22', borderRadius: 12, border: '1px dashed #30363d',
+        padding: '18px 24px', marginTop: 24, textAlign: 'center' as const,
+      }}>
+        <div style={{ fontSize: 22, marginBottom: 6 }}>🎓</div>
+        <div style={{ fontSize: 13, fontWeight: 600, color: '#e6edf3', marginBottom: 4 }}>
+          Learned from real usage — per action
+        </div>
+        <div style={{ fontSize: 12, color: '#6e7681', lineHeight: 1.5 }}>
+          No per-action telemetry yet. As you use <strong style={{ color: '#8b949e' }}>chat</strong>,{' '}
+          <strong style={{ color: '#8b949e' }}>execute</strong>, <strong style={{ color: '#8b949e' }}>plan</strong>,
+          and <strong style={{ color: '#8b949e' }}>edit</strong>, each action's verified / killed provider ×
+          model combos appear here — showing exactly what routing learned from real usage.
+        </div>
+      </div>
+    );
+  }
+  return (
+    <>
+      <h2 className="section-title" style={{ marginTop: 36 }}>🎓 Learned from real usage — per action</h2>
+      <p className="section-description">
+        Every LLM call writes through to the health store with its action tag. This panel shows which
+        provider × model each action <span style={{ color: '#3fb950' }}>verified</span> (routable) or{' '}
+        <span style={{ color: '#f85149' }}>killed</span> (predictively skipped) — the exact feed that turns
+        &ldquo;fail gemini → fail nim → local&rdquo; into &ldquo;straight to local&rdquo;.
+      </p>
+
+      <div className="stats-grid mini" style={{ marginBottom: 16 }}>
+        <div className="stat-card">
+          <span className="stat-icon">📊</span>
+          <div className="stat-body">
+            <div className="stat-value">{tele.total}</div>
+            <div className="stat-label">Telemetry events</div>
+          </div>
+        </div>
+        <div className="stat-card">
+          <span className="stat-icon">🎯</span>
+          <div className="stat-body">
+            <div className="stat-value">{tele.actions.length}</div>
+            <div className="stat-label">Actions learning</div>
+          </div>
+        </div>
+        <div className="stat-card">
+          <span className="stat-icon">⏱️</span>
+          <div className="stat-body">
+            <div className="stat-value" style={{ fontSize: 15 }}>{fmtShortTime(tele.updatedAt)}</div>
+            <div className="stat-label">Last update</div>
+          </div>
+        </div>
+      </div>
+
+      {tele.actions.map((a) => <ActionTelemetryCard key={a.action} entry={a} />)}
+
+      <div style={{ textAlign: 'center', fontSize: 12, color: '#484f58', marginTop: 12 }}>
+        All actions share one health store — a provider killed by any action is skipped by all others
+      </div>
+    </>
   );
 }
 
@@ -589,6 +983,7 @@ function Legend() {
 
 export default function ModelsPanel() {
   const [modelsData, setModelsData] = useState<ModelsHealthData | null>(null);
+  const [registryData, setRegistryData] = useState<ModelRegistryInsights | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [colsPerRow, setColsPerRow] = useState(4);
@@ -599,11 +994,20 @@ export default function ModelsPanel() {
     setLoading(true);
     setError(null);
     try {
-      const res = await fetch('/api/models');
+      const [modelsRes, registryRes] = await Promise.all([
+        fetch('/api/models'),
+        fetch('/api/model-registry'),
+      ]);
       if (!mountedRef.current) return;
-      if (!res.ok) throw new Error(`HTTP ${res.status}`);
-      const data = await res.json() as ModelsHealthData;
-      if (mountedRef.current) setModelsData(data);
+      if (!modelsRes.ok) throw new Error(`HTTP ${modelsRes.status}`);
+      const data = await modelsRes.json() as ModelsHealthData;
+      const registry = registryRes.ok
+        ? await registryRes.json() as ModelRegistryInsights
+        : null;
+      if (mountedRef.current) {
+        setModelsData(data);
+        setRegistryData(registry);
+      }
     } catch (err) {
       if (mountedRef.current) {
         setError(err instanceof Error ? err.message : 'Failed to fetch model status');
@@ -762,6 +1166,12 @@ export default function ModelsPanel() {
             colsPerRow={colsPerRow}
             searchQuery={searchQuery}
           />
+
+          {/* Model Availability Registry — the unified store routing reads */}
+          {registryData && <ModelRegistrySection data={registryData} />}
+
+          {/* Learned-from-real-usage telemetry — per-action verified/killed visibility */}
+          {registryData && <ActionTelemetrySection registry={registryData} />}
 
           {/* Speech provider coming-soon placeholder */}
           <SpeechProviderSection />
