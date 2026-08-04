@@ -1,6 +1,6 @@
 # Agent-Nuvira — Technical Product Guide
 
-**Version 1.38.1 | July 2026**
+**Version 1.51.1 | August 2026**
 
 > *A comprehensive technical overview of Agent-Nuvira: architecture, features, version history, and market readiness for investors, stakeholders, and technical reviewers.*
 
@@ -926,6 +926,8 @@ options:
 | **v1.48.0** | Aug 2026 | FAISS-backed vector store — pluggable backend tiers (faiss-native → faiss-ivf → json), lazy resolution, config override, backward-compatible entry format |
 | **v1.49.0** | Aug 2026 | FAISS follow-ups — hermetic memory test suite, IVF-vs-exact recall benchmark, cross-session backend transparency |
 | **v1.49.1** | Aug 2026 | Native FAISS tier actually activates — rewritten for the real `@faiss-node/native` v0.1.11 API; `buff memory backend --check` |
+| **v1.50.0** | Aug 2026 | `buff memory backend` diagnostics CLI — active backend, why it was chosen, native-FAISS availability probe (`--check`) + install guidance |
+| **v1.51.0** | Aug 2026 | Routing strategy super-enhancement — Thompson-sampling bandit, uncertainty escalation, per-model learning, promotion gate A/B, routing rules, hard constraints, credential-aware filtering, quota-ledger integration, runtime stats blending, verification escalation, free/local-first gate; 2,934 tests |
 | **v0.5.0–v0.6.1** (VS Code ext) | Aug 2026 | VS Code quota ledger view — free/paid usage, parked providers, failover timeline, live auto-refresh + poll-fallback |
 
 ### 5.2 Detailed Changelog (v1.14.x – v1.16.x)
