@@ -1,4 +1,5 @@
 import type { ReactNode } from 'react';
+import RoutingWalkthroughSection from './RoutingWalkthrough';
 import type { BanditInsights, DashboardData, PromotionInsights, QuotaInsights, RetrievalInsights, RoutingHistoryEntry, RoutingInsights, RoutingUsage } from '../types';
 
 // ─── Helpers ────────────────────────────────────────────────────────────────
@@ -844,6 +845,8 @@ export default function RoutingInsightsPanel({ data }: { data: DashboardData | n
     (routing.preference.length > 0 || routing.providers.length > 0 || routing.bestModels.length > 0);
   const hasUsage = !!routing?.usage?.total;
   const hasHistory = !!routing?.history?.length;
+  // The walkthrough needs replayable decisions: real history or complexity profiles.
+  const hasWalkthrough = !!routing && (routing.history?.length ?? 0) > 0 || !!routing?.preference?.length;
   const hasBandit = !!routing?.bandit?.enabled;
   const hasPromotion = !!routing?.promotion?.decisionCount;
   const hasQuota = !!routing?.quota?.enabled;
@@ -862,6 +865,7 @@ export default function RoutingInsightsPanel({ data }: { data: DashboardData | n
         <EmptyNote />
       ) : (
         <>
+          {hasWalkthrough && routing && <RoutingWalkthroughSection routing={routing} />}
           {hasUsage && <UsageSection usage={routing!.usage!} />}
           {hasHistory && <AuditTimelineSection history={routing!.history!} />}
           {hasBandit && <BanditSection bandit={routing!.bandit!} />}
