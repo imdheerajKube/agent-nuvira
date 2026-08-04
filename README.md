@@ -1978,6 +1978,8 @@ npx tsc --noEmit
 | **v1.48.0** | Aug 2026 | FAISS-style vector search backend — pluggable `VectorStore` (pure-JS IVF-flat ANN + optional native tier) |
 | **v1.49.0** | Aug 2026 | Hermetic memory tests, IVF-vs-exact recall/latency benchmark, cross-session backend transparency |
 | **v1.49.1** | Aug 2026 | Native FAISS tier actually activates — rewritten for the real `@faiss-node/native` v0.1.11 API; `buff memory backend --check` |
+| **v1.50.0** | Aug 2026 | `buff memory backend --check` diagnostics — active backend, why it was chosen, native-FAISS availability probe + install guidance |
+| **v1.51.0** | Aug 2026 | Routing strategy super-enhancement — Thompson-sampling bandit, uncertainty escalation, per-model learning, promotion gate A/B, routing rules, hard constraints, credential-aware filtering, quota-ledger integration, runtime stats blending, verification escalation, free/local-first gate; 2,934 tests |
 
 ---
 
