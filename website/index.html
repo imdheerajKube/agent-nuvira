@@ -4,7 +4,7 @@
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>Agent-Nuvira — Multi-Agent AI Coding Assistant</title>
-  <meta name="description" content="Agent-Nuvira is an open-source, multi-agent AI coding assistant that runs from your terminal. 17+ agents, 2,934 tests, GitLab + GitHub PR review built-in. Plan, write, review, test, and public code — from a single command." />          <meta name="keywords" content="AI coding assistant, multi-agent AI, terminal AI tool, open source, 17+ providers, Groq, NVIDIA NIM, Google Gemini, OpenRouter, Ollama, OpenAI, Anthropic, Mistral, Azure, vLLM, LM Studio, FAISS vector store, auto model routing, quota ledger, team collaboration, MCP, GitLab, PR review, GitHub, Thompson-sampling bandit, routing strategy, per-model learning, promotion gate" />
+  <meta name="description" content="Agent-Nuvira is an open-source, multi-agent AI coding assistant that runs from your terminal. 17+ agents, 2,934 tests, GitLab + GitHub PR review built-in. Plan, write, review, test, and publish code — from a single command." />          <meta name="keywords" content="AI coding assistant, multi-agent AI, terminal AI tool, open source, 17+ providers, Groq, NVIDIA NIM, Google Gemini, OpenRouter, Ollama, OpenAI, Anthropic, Mistral, Azure, vLLM, LM Studio, FAISS vector store, auto model routing, quota ledger, team collaboration, MCP, GitLab, PR review, GitHub, Thompson-sampling bandit, routing strategy, per-model learning, promotion gate" />
   <link rel="icon" type="image/png" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='8' fill='%236363f2'/%3E%3Ctext x='16' y='22' text-anchor='middle' fill='white' font-size='18' font-weight='bold' font-family='system-ui'%3EN%3C/text%3E%3C/svg%3E" />
   <meta property="og:title" content="Agent-Nuvira — Multi-Agent AI Coding Assistant" />          <meta property="og:description" content="The open-source multi-agent AI coding assistant. Plan, write, review, test, verify, and publish code from your terminal. 17+ providers. 17+ agents. 2,934 tests. GitLab + GitHub PR review built-in. No subscriptions. No telemetry." />
   <meta property="og:image" content="https://www.agent-nuvira.com/assets/hero.png" />
@@ -261,6 +261,34 @@
           </div>
           <h3>No Server. No Telemetry. No Subscriptions.</h3>
           <p>Everything runs locally on your machine. Free (MIT), BYO API keys, direct-to-provider connections, fully offline-capable — no intermediary server, no data leaving your machine without your control.</p>
+        </div>
+        <div class="feature-card" data-delay="800">
+          <div class="feature-icon learning">
+            <svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M13 2 3 14h9l-1 8 10-12h-9l1-8z"/></svg>
+          </div>
+          <h3>Uncertainty-Driven Escalation</h3>
+          <p>No coin-flip winners. When the bandit's top pick is a cold start with no learned data, routing escalates to the next-ranked provider that has real outcome data at a <strong>≥55% win-rate floor</strong> — so unproven models never get your critical tasks on a gamble.</p>
+        </div>
+        <div class="feature-card" data-delay="900">
+          <div class="feature-icon learning">
+            <svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="23 6 13.5 15.5 8.5 10.5 1 18"/><polyline points="17 6 23 6 23 12"/></svg>
+          </div>
+          <h3>Per-Model Learning, Promotion-Gated</h3>
+          <p>Every concrete model tracks its own Beta prior — <code>llama-3.3-70b-versatile</code> is learned separately from <code>openai/gpt-oss-20b</code> on the same provider. And nothing is promoted blindly: an <strong>A/B gate</strong> only switches the router to bandit decisions when they measurably beat the heuristic — quality up, cost and latency flat.</p>
+        </div>
+        <div class="feature-card" data-delay="1000">
+          <div class="feature-icon plugin">
+            <svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M18 8h1a4 4 0 0 1 0 8h-1"/><path d="M2 8h16v9a4 4 0 0 1-4 4H6a4 4 0 0 1-4-4V8z"/><line x1="6" y1="1" x2="6" y2="4"/><line x1="10" y1="1" x2="10" y2="4"/><line x1="14" y1="1" x2="14" y2="4"/></svg>
+          </div>
+          <h3>Routing Rules + Hard Constraints</h3>
+          <p>Force any task pattern to a specific provider/model with <strong>regex or string rules</strong> (first match wins). Set hard floors like <code>routing.maxCostUsd</code>, <code>routing.minSpeed</code>, and <code>routing.minReasoning</code> — violating providers are eliminated outright, with graceful fallback when constraints would remove everything.</p>
+        </div>
+        <div class="feature-card" data-delay="1100">
+          <div class="feature-icon privacy">
+            <svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M22 12A10 10 0 1 1 12 2"/><path d="M22 2 12 12"/><path d="M22 2v6"/><path d="M16 12a4 4 0 1 1-8 0 4 4 0 0 1 8 0z"/></svg>
+          </div>
+          <h3>Credential-Aware + Free/Local-First Gate</h3>
+          <p>Auto routing <strong>never picks a provider without configured credentials</strong> — it can't. A free/local-first gate keeps paid models out of trivial-to-moderate work (complex and critical tasks may still reach high-capacity clouds), so your budget is spent only where reasoning actually matters.</p>
         </div>
       </div>
     </div>

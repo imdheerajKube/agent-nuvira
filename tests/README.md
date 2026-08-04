@@ -1,6 +1,6 @@
 # 🧪 Agent-Nuvira Test Suite
 
-This directory contains the full test suite for Agent-Nuvira. The suite runs via [Vitest](https://vitest.dev/) and currently spans **84 test files** with **2,769 tests** (~145s runtime). The dashboard's own component tests add 6 more (`src/web-dashboard`).
+This directory contains the full test suite for Agent-Nuvira. The suite runs via [Vitest](https://vitest.dev/) and currently spans **96 test files** with **2,934 tests** (~176s runtime). The dashboard's own component tests add 6 more (`src/web-dashboard`).
 
 ---
 
@@ -109,7 +109,7 @@ Unlike the unit tests, these tests **do not mock** `child_process.spawn` or `rea
 ### All Tests
 
 ```bash
-npm test                      # Full suite (2,769 tests, ~145s)
+npm test                      # Full suite (2,934 tests, ~176s)
 npx vitest run                # Same as above
 npx vitest run --reporter=verbose  # Full suite with per-test names
 ```

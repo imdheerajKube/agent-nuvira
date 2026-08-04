@@ -7,6 +7,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [1.51.1] - 2026-08-04
+
+### Fixed
+
+- **Published README version-history table completed** — the README shipped in
+  the npm tarball was missing the v1.50.0 and v1.51.0 rows in the version
+  history table (it stopped at v1.49.1), so consumers of the published docs
+  couldn't see the two newest releases. Added both rows; the historical
+  v1.45.5 entry was verified against the npm registry and CHANGELOG and left
+  intact (it's a real release record, not a stale reference)
+
+---
+
 ## [1.51.0] - 2026-08-04
 
 ### Added
