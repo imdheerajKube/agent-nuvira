@@ -27,6 +27,7 @@ import { ReviewerAgent } from '../agents/agents/reviewer.js';
 import type { AgentContext, FileChange, LLMCallFn } from '../agents/agent.js';
 import { ProviderFactory } from '../inference/factory.js';
 import type { ProviderType } from '../config/types.js';
+import { recordRegistryFailure } from '../learning/provider-fallback.js';
 import { logger } from '../utils/logger.js';
 
 // ─── JSON Output Types ──────────────────────────────────────────────────────
@@ -390,7 +391,15 @@ export class CICommand extends BaseCommand {
     }
 
     const callLLM: LLMCallFn = async (prompt, opts) => {
-      return provider.generate(prompt, opts || {});
+      try {
+        return await provider.generate(prompt, opts || {});
+      } catch (err) {
+        // Feed the SHARED registry telemetry path so CI review failures teach
+        // the router which provider×model is dead. Best-effort — never mask
+        // the real error from the review loop.
+        recordRegistryFailure(providerType, finalConfig.model, err, undefined, 'ci');
+        throw err;
+      }
     };
 
     // Review each file

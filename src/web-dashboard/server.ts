@@ -19,6 +19,8 @@ import { homedir } from 'node:os';
 import { loadEnv } from '../utils/env.js';
 import { getAutoRouter } from '../learning/auto-router.js';
 import { getRouterPromotion } from '../learning/router-promotion.js';
+import { ACTION_LOG_FILENAME, aggregateActionTelemetry, readActionTelemetryFile } from '../learning/model-registry.js';
+import type { ActionTelemetryInsights } from '../learning/model-registry.js';
 
 // ─── Constants ──────────────────────────────────────────────────────────────
 
@@ -939,6 +941,97 @@ const AVG_PAID_RATE_PER_1K = 0.0005;
  * Read the central quota-ledger status (tokens/requests per provider × model,
  * reset windows, parked state). Backs the dashboard's Quota card.
  */
+/**
+ * Read the Model Availability Registry mirror (model-registry.json) — the
+ * UNIFIED enterprise read store: per provider × model it carries availability
+ * (verified / unverified / unavailable), quota telemetry mirrored from the
+ * ledger (tokens consumed, requests, resetsInMs, remainingTokens), latency,
+ * and error rate. Backs the dashboard's Model Registry card so users see the
+ * exact sub-ms snapshot the Auto router consults on every pick.
+ */
+function readModelRegistryData(): Record<string, unknown> {
+  const data = readJSON<{ entries: Record<string, {
+    provider: string;
+    model: string;
+    status: string;
+    latencyMs?: number;
+    errorRate?: number;
+    quotaParkedUntil?: number;
+    lastVerifiedAt?: number;
+    lastError?: string;
+    source?: string;
+    tokensConsumed?: number;
+    requests?: number;
+    resetsInMs?: number;
+    remainingTokens?: number;
+  }> }>(join(MEMORY_DIR, 'model-registry.json'));
+  if (!data?.entries) {
+    return { enabled: false, total: 0, providers: [], actionTelemetry: readRegistryTelemetry(), updatedAt: Date.now() };
+  }
+
+  const now = Date.now();
+  const byProvider = new Map<string, Array<Record<string, unknown>>>();
+  for (const e of Object.values(data.entries)) {
+    if (!byProvider.has(e.provider)) byProvider.set(e.provider, []);
+    byProvider.get(e.provider)!.push({
+      model: e.model,
+      status: e.status,
+      latencyMs: e.latencyMs,
+      errorRate: e.errorRate ?? 0,
+      parked: (e.quotaParkedUntil ?? 0) > now,
+      quotaParkedUntil: e.quotaParkedUntil ?? 0,
+      remainingTokens: e.remainingTokens ?? -1,
+      tokensConsumed: e.tokensConsumed ?? 0,
+      requests: e.requests ?? 0,
+      resetsInMs: e.resetsInMs ?? 0,
+      lastVerifiedAt: e.lastVerifiedAt ?? 0,
+      lastError: e.lastError,
+      source: e.source,
+    });
+  }
+
+  const providers = [...byProvider.entries()].map(([provider, models]) => {
+    models.sort((a, b) => String(a.model).localeCompare(String(b.model)));
+    return {
+      provider,
+      total: models.length,
+      verified: models.filter((m) => m.status === 'verified' && !m.parked).length,
+      unverified: models.filter((m) => m.status === 'unverified').length,
+      unavailable: models.filter((m) => m.status === 'unavailable').length,
+      parked: models.filter((m) => m.parked).length,
+      models,
+    };
+  }).sort((a, b) => a.provider.localeCompare(b.provider));
+
+  const allModels = providers.flatMap((p) => p.models as Array<Record<string, unknown>>);
+  return {
+    enabled: providers.length > 0,
+    total: allModels.length,
+    verified: allModels.filter((m) => m.status === 'verified' && !m.parked).length,
+    unverified: allModels.filter((m) => m.status === 'unverified').length,
+    unavailable: allModels.filter((m) => m.status === 'unavailable').length,
+    parked: allModels.filter((m) => m.parked).length,
+    providers,
+    // Per-action "learned from real usage" telemetry — which provider × model
+    // each action (chat / execute / plan / edit / ...) killed or verified, so
+    // the predictive skips routing makes are VISIBLE in the dashboard.
+    actionTelemetry: readRegistryTelemetry(),
+    updatedAt: now,
+  };
+}
+
+/**
+ * Read the per-action "learned from real usage" telemetry log
+ * (model-registry-actions.jsonl) — which provider × model each action killed
+ * or verified. Aggregated by the same pure function the registry uses, so the
+ * dashboard and the CLI always agree on the shape.
+ */
+function readRegistryTelemetry(): ActionTelemetryInsights {
+  // Same file + parse the registry itself uses — one source of truth for both
+  // the dashboard and the CLI, so they always agree on the shape.
+  return aggregateActionTelemetry(readActionTelemetryFile(join(MEMORY_DIR, ACTION_LOG_FILENAME)));
+}
+
 function readQuotaData(): Record<string, unknown> {
   const data = readJSON<{ entries: Record<string, {
     provider: string;
@@ -1412,6 +1505,12 @@ function handleRequest(req: IncomingMessage, res: ServerResponse): void {
     return;
   }
 
+  if (pathname === '/api/model-registry') {
+    res.writeHead(200, { 'Content-Type': 'application/json' });
+    res.end(JSON.stringify(readModelRegistryData()));
+    return;
+  }
+
   if (pathname === '/api/dag') {
     res.writeHead(200, { 'Content-Type': 'application/json' });
     res.end(JSON.stringify(readDAGData()));
@@ -1434,6 +1533,7 @@ function handleRequest(req: IncomingMessage, res: ServerResponse): void {
       memory: readMemoryData(),
       health: readHealthData(),
       routing: readRoutingInsights(),
+      modelRegistry: readModelRegistryData(),
       dag: readDAGData(),
       serverTime: Date.now(),
     }));
@@ -1457,6 +1557,7 @@ function handleRequest(req: IncomingMessage, res: ServerResponse): void {
       memory: readMemoryData(),
       health: readHealthData(),
       routing: readRoutingInsights(),
+      modelRegistry: readModelRegistryData(),
       dag: readDAGData(),
       serverTime: Date.now(),
     };
@@ -1486,6 +1587,7 @@ function handleRequest(req: IncomingMessage, res: ServerResponse): void {
           memory: readMemoryData(),
           health: readHealthData(),
           routing: readRoutingInsights(),
+          modelRegistry: readModelRegistryData(),
           dag: readDAGData(),
           serverTime: Date.now(),
         };

@@ -39,8 +39,10 @@ import { estimateTokens } from '../learning/cost-tracker.js';
 import { scanForInjections, formatScanReport } from '../security/scanner.js';
 import { getAutoRouter, isAutoModel, isAutoProvider } from '../learning/auto-router.js';
 import { analyzeComplexity } from '../learning/hybrid-router.js';
-import { getQuotaLedger } from '../learning/quota-ledger.js';
+import { getModelRegistry } from '../learning/model-registry.js';
+import { recordRegistryFailure, recordRegistrySuccess } from '../learning/provider-fallback.js';
 import { resolveWorkingModel } from '../inference/model-validator.js';
+import { refreshModelRegistry } from '../inference/model-probe.js';
 import { recordRoutingDecision } from '../learning/routing-history.js';
 import { createReviewFromResult } from '../team/review.js';
 import { indexFiles, retrieve, recordRetrievalStats, retrievalOptionsFromConfig, estimateTokens as retrievalEstimateTokens } from '../learning/retrieval.js';
@@ -102,6 +104,12 @@ export class Orchestrator {
     reportModule;
     /** Optional routing decision overrides keyed by agent type */
     routingDecisionOverrides = new Map();
+    /**
+     * Latched one-shot cold-start registry probe: fired once per Orchestrator
+     * instance when auto routing is active on an empty registry (see
+     * maybeFireColdStartProbe). A long dev-mode session only pays for it once.
+     */
+    coldStartProbeFired = false;
     /** Execution telemetry accumulator for the current pipeline */
     stats = {
         llmCalls: 0,
@@ -222,6 +230,16 @@ export class Orchestrator {
         // Matches executeSingleTask's rule: an explicit --model always wins.
         const autoRoutingActive = (options.autoRouteModels === true && !options.model) ||
             isAutoModel(options.model) || isAutoProvider(options.provider);
+        // Cold-start learning: when auto routing is active but the registry has ZERO
+        // verified providers (fresh install / stale store), fire ONE background probe
+        // pass so later tasks in this pipeline — and the next session — route on
+        // real health data instead of credential-guessing. Fire-and-forget, latched
+        // per instance, never blocks the first planner call. Skipped on RESUME: the
+        // checkpointed plan already carries its routing context, so the probe would
+        // only burn tokens re-verifying providers a completed run already used.
+        if (autoRoutingActive && !resumed) {
+            this.maybeFireColdStartProbe();
+        }
         // On RESUME the restored vault already carries the routingContext from the
         // original run — recomputing it here would overwrite the checkpointed
         // metadata (and the planner isn't re-run anyway, so the override is moot).
@@ -952,7 +970,28 @@ export class Orchestrator {
                 temperature: inferenceOptions?.temperature ?? config.temperature ?? 0.7,
                 maxTokens: inferenceOptions?.maxTokens ?? config.maxTokens ?? 4096,
             };
-            const output = await provider.generate(prompt, mergedOptions);
+            // The strongest signal the provider×model is NOT usable: a real call
+            // failed. Feed the SHARED registry telemetry path (the same one chat
+            // and the fallback commands use) so the NEXT call in this pipeline —
+            // and every future session — routes around it predictively instead of
+            // failing into it again. This is the SINGLE record point for the whole
+            // orchestrator: both the auto-routed path (its base() routes through
+            // here) and the non-auto path (`execute --provider X`, planner/writer/
+            // memory calls) land here. Best-effort — never mask the error.
+            let output;
+            try {
+                output = await provider.generate(prompt, mergedOptions);
+            }
+            catch (err) {
+                recordRegistryFailure(providerType, mergedOptions.model, err, undefined, 'execute');
+                throw err;
+            }
+            // Success attribution: this pipeline call just PROVED the provider ×
+            // model works — the per-action "learned from real usage" panel gains an
+            // 'execute' verified row (the mirror of the failure write above). Both
+            // the auto-routed path (its base routes through here) and the non-auto
+            // path land here, so this is the SINGLE success record point. Best-effort.
+            recordRegistrySuccess(providerType, mergedOptions.model, 'execute');
             this.stats.llmCalls += 1;
             this.stats.inputTokens += estimateTokens(prompt);
             this.stats.outputTokens += estimateTokens(output);
@@ -1442,10 +1481,14 @@ export class Orchestrator {
         const routing = this.configManager.getAll().routing || {};
         // Quota-ledger parked providers sink below healthy ones — a provider whose
         // free-tier window is exhausted (or was parked by a mid-session failure) is
-        // skipped predictively instead of failing reactively.
+        // skipped predictively instead of failing reactively. Read through the
+        // Model Availability Registry's UNIFIED store — same primary-store pick
+        // path as chat, so exhausted providers carry their remaining time-to-wait
+        // in the same sub-ms read (the ledger stays the writer, the registry the
+        // read model).
         let quotaStatus = [];
         try {
-            quotaStatus = getQuotaLedger().getRouterQuotaStatus(this.configManager);
+            quotaStatus = getModelRegistry().getRouterQuotaStatus(this.configManager);
         }
         catch {
             // Best-effort — routing must never crash on ledger bookkeeping.
@@ -1534,8 +1577,43 @@ export class Orchestrator {
                     }
                 }
             }
-            return base(prompt, { ...inferenceOptions, model: workingModel ?? decision.model });
+            // A failed call is recorded exactly ONCE, inside createLLMProvider (base
+            // routes through it): the same shared telemetry path chat and the
+            // fallback commands use, so the NEXT task in this pipeline — and every
+            // future session — routes around the dead provider×model predictively.
+            // Recording here instead of above avoids a double-write AND keeps
+            // guardrail blocks (injection scan, thrown BEFORE the generate call)
+            // out of the registry — those aren't provider failures.
+            return await base(prompt, { ...inferenceOptions, model: workingModel ?? decision.model });
         };
+    }
+    /**
+     * One-shot background model-registry refresh for a COLD registry.
+     *
+     * Fired when auto routing is active and the registry has no verified
+     * providers: probes listModels + spot-checks the configured providers so the
+     * pipeline's later tasks route on REAL health data (the dedicated model-
+     * health agent's job, started on demand instead of waiting for `buff models
+     * watch`). Latched per instance — a long dev-mode session only pays once.
+     * Fire-and-forget: never awaited, never blocks, never throws.
+     */
+    maybeFireColdStartProbe() {
+        if (this.coldStartProbeFired)
+            return;
+        try {
+            const registry = getModelRegistry();
+            if (registry.getUsableProviders().length > 0)
+                return; // not cold
+            this.coldStartProbeFired = true;
+            void refreshModelRegistry(this.configManager, { spotCheck: true }).then((result) => {
+                logger.info(`   🌱 Cold-start registry probe: ${result.providersProbed.length} provider(s), ${result.verified} verified, ${result.unavailable} unavailable`);
+            }).catch(() => {
+                // Best-effort — a failed probe must never break the pipeline.
+            });
+        }
+        catch {
+            // Best-effort.
+        }
     }
     applyRoutingPlanAdjustments(vault, routingContext) {
         if (!routingContext?.taskProfile?.requiresVerification) {

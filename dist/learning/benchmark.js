@@ -355,6 +355,10 @@ export async function runBenchmark(provider, providerName, model, options) {
         options?.onProgress?.(i + 1, tasks.length, task);
         const taskStartTime = Date.now();
         try {
+            // NOTE: intentionally NOT wired to recordRegistryFailure — benchmark
+            // runs many prompts per provider on purpose, so its (expected) failures
+            // are stress data, not routing health evidence. Feeding them in would
+            // pollute the Model Availability Registry with benchmark noise.
             const output = await provider.generate(task.prompt, {
                 model,
                 temperature: 0.3, // Low temperature for deterministic results

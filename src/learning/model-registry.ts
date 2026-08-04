@@ -34,12 +34,13 @@
  * already consumes).
  */
 
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, readFileSync, writeFileSync, appendFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { homedir } from 'node:os';
 
 import { getVectorStore, type VectorStore, type VectorEntry } from '../memory/vector-store.js';
 import { getQuotaLedger } from './quota-ledger.js';
+import { getEventBus, EventNames } from '../observability/event-bus.js';
 import type { ConfigManager } from '../config/manager.js';
 
 // ─── Types ──────────────────────────────────────────────────────────────────
@@ -71,6 +72,15 @@ export interface ModelRegistryEntry {
   source: ModelRegistrySource;
   /** Human reason for `unavailable` (e.g. '403 permission denied'). */
   lastError?: string;
+  // ── Quota telemetry (mirrored from QuotaLedger by syncQuota) ───────────────
+  /** Tokens consumed in the current quota window (0 = no window tracked). */
+  tokensConsumed?: number;
+  /** Requests made in the current quota window. */
+  requests?: number;
+  /** Ms until the current quota window resets (0 = no window tracked). */
+  resetsInMs?: number;
+  /** Tokens remaining in the window (-1 = no limit configured / unlimited). */
+  remainingTokens?: number;
 }
 
 /** Persisted registry state (JSON mirror + vector metadata shape). */
@@ -102,10 +112,55 @@ export interface ModelRegistryStatus {
   }>;
 }
 
+/**
+ * One "learned from real usage" event — which ACTION taught the registry what.
+ * Written by chat / execute / plan / edit / skill / learn / ci / doctor calls
+ * (and probe/spot-check maintenance) so the dashboard can show exactly which
+ * action killed or verified each provider × model — the predictive skips.
+ */
+export interface ActionTelemetryEntry {
+  /** Epoch ms of the write. */
+  timestamp: number;
+  /** The action that produced the call (chat / execute / plan / edit / ...). */
+  action: string;
+  provider: string;
+  model: string;
+  /** What the action learned: verified (works), unavailable (killed), error (transient decay). */
+  outcome: 'verified' | 'unavailable' | 'error';
+  /** Classified reason when outcome is unavailable/error (auth / rate-limit / model not found / ...). */
+  errorType?: string;
+}
+
+/** Aggregated "learned from real usage" view — per action (dashboard panel). */
+export interface ActionTelemetryInsights {
+  enabled: boolean;
+  /** Total logged events (capped at MAX_ACTION_LOG_ENTRIES). */
+  total: number;
+  updatedAt: number;
+  /** Per-action aggregates (actions with at least one event, sorted by name). */
+  actions: Array<{
+    action: string;
+    /** Events where the action verified a provider × model. */
+    verified: number;
+    /** Events where the action marked a provider × model unavailable (predictive skip). */
+    killed: number;
+    /** Events where a transient failure decayed health (no flip). */
+    transient: number;
+    /** Provider × model combos this action verified (latest event each). */
+    verifiedModels: Array<{ provider: string; model: string; at: number }>;
+    /** Provider × model combos this action killed (latest event each). */
+    killedModels: Array<{ provider: string; model: string; reason?: string; at: number }>;
+  }>;
+}
+
 // ─── Storage ────────────────────────────────────────────────────────────────
 
 const DEFAULT_MEMORY_DIR = join(homedir(), '.buff', 'memory');
 const CURRENT_VERSION = 1;
+/** Action-telemetry JSONL log — which action killed/verified which provider × model. */
+export const ACTION_LOG_FILENAME = 'model-registry-actions.jsonl';
+/** Keep at most this many action-log lines (rotated, newest kept). */
+export const MAX_ACTION_LOG_ENTRIES = 2000;
 /** VectorStore namespace that holds the enterprise mirror of the registry. */
 const VECTOR_NAMESPACE = 'model-registry';
 /** Single vector id holding the whole registry snapshot (1-dim — we never search). */
@@ -121,12 +176,83 @@ function mirrorPath(): string {
   return join(memoryDir(), 'model-registry.json');
 }
 
+function actionLogPath(): string {
+  return join(memoryDir(), ACTION_LOG_FILENAME);
+}
+
 function entryKey(provider: string, model: string): string {
   return `${provider}|${model || 'default'}`;
 }
 
 function emptyState(): ModelRegistryData {
   return { version: CURRENT_VERSION, entries: {}, updatedAt: Date.now() };
+}
+
+/**
+ * Aggregate raw action-telemetry entries into the per-action dashboard view.
+ * Pure + sync — the dashboard server calls this on the raw JSONL lines, and
+ * the registry uses it for `getActionTelemetry()`. Dedupes repeated writes of
+ * the same provider × model within an action (latest event wins) for the
+ * "verified/killed" chips; counts stay raw so volumes are honest.
+ */
+/**
+ * Parse a model-registry-actions.jsonl file into entries (skips corrupt lines).
+ * Shared by the registry's getActionTelemetry() AND the dashboard server, so
+ * both always agree on the parse — and on the filename (ACTION_LOG_FILENAME).
+ */
+export function readActionTelemetryFile(path: string): ActionTelemetryEntry[] {
+  try {
+    if (!existsSync(path)) return [];
+    const entries: ActionTelemetryEntry[] = [];
+    for (const line of readFileSync(path, 'utf-8').split('\n')) {
+      if (!line.trim()) continue;
+      try {
+        const e = JSON.parse(line) as ActionTelemetryEntry;
+        if (e && typeof e === 'object' && e.action && e.provider && e.model) entries.push(e);
+      } catch {
+        // Skip corrupt lines.
+      }
+    }
+    return entries;
+  } catch {
+    return [];
+  }
+}
+
+export function aggregateActionTelemetry(entries: ActionTelemetryEntry[]): ActionTelemetryInsights {
+  const byAction = new Map<string, ActionTelemetryEntry[]>();
+  for (const e of entries) {
+    const list = byAction.get(e.action);
+    if (list) list.push(e);
+    else byAction.set(e.action, [e]);
+  }
+  const actions = [...byAction.entries()]
+    .map(([action, evs]) => {
+      const verifiedEvents = evs.filter((e) => e.outcome === 'verified');
+      const killedEvents = evs.filter((e) => e.outcome === 'unavailable');
+      const transientEvents = evs.filter((e) => e.outcome === 'error');
+      // Latest event per provider|model (a success/failure repeats per call).
+      const latest = (list: ActionTelemetryEntry[]): ActionTelemetryEntry[] => {
+        const map = new Map<string, ActionTelemetryEntry>();
+        for (const e of list) map.set(`${e.provider}|${e.model}`, e);
+        return [...map.values()].sort((a, b) => b.timestamp - a.timestamp);
+      };
+      return {
+        action,
+        verified: verifiedEvents.length,
+        killed: killedEvents.length,
+        transient: transientEvents.length,
+        verifiedModels: latest(verifiedEvents).map((e) => ({ provider: e.provider, model: e.model, at: e.timestamp })),
+        killedModels: latest(killedEvents).map((e) => ({ provider: e.provider, model: e.model, reason: e.errorType, at: e.timestamp })),
+      };
+    })
+    .sort((a, b) => a.action.localeCompare(b.action));
+  return {
+    enabled: actions.length > 0,
+    total: entries.length,
+    updatedAt: Date.now(),
+    actions,
+  };
 }
 
 // ─── ModelRegistry ──────────────────────────────────────────────────────────
@@ -145,6 +271,8 @@ export class ModelRegistry {
   private vectorStore: VectorStore | null = null;
   /** Whether the vector mirror has been confirmed usable. */
   private vectorMirrored = false;
+  /** Lines in the action-telemetry JSONL log (-1 = not yet counted). */
+  private actionLogCount = -1;
 
   constructor() {
     this.data = this.loadMirror();
@@ -184,6 +312,35 @@ export class ModelRegistry {
       if (this.isUsable(e.provider, e.model, now)) providers.add(e.provider);
     }
     return [...providers];
+  }
+
+  /**
+   * Providers the registry has DEFINITIVELY ruled out right now: every tracked
+   * model for the provider is `unavailable` and/or quota-parked, with no
+   * verified usable alternative. Sync + sub-ms (in-memory only) — the
+   * predictive skip that lets routing avoid a provider the registry already
+   * knows is dead instead of failing into it reactively.
+   *
+   * Providers with ONLY `unverified` entries are NOT blocked — "not yet
+   * probed" is not "dead" — and a provider with any verified model stays
+   * routable (model repair will pick the working one).
+   */
+  getBlockedProviders(now: number = Date.now()): string[] {
+    const byProvider = new Map<string, ModelRegistryEntry[]>();
+    for (const e of Object.values(this.data.entries)) {
+      const list = byProvider.get(e.provider);
+      if (list) list.push(e);
+      else byProvider.set(e.provider, [e]);
+    }
+    const blocked: string[] = [];
+    for (const [provider, entries] of byProvider) {
+      if (entries.some((e) => this.isUsable(provider, e.model, now))) continue;
+      // All tracked models unusable — block only if at least one is a
+      // DEFINITIVE no (unavailable or quota-parked), never on unverified alone.
+      const definitive = entries.some((e) => e.status === 'unavailable' || e.quotaParkedUntil > now);
+      if (definitive) blocked.push(provider);
+    }
+    return blocked;
   }
 
   /** Get the raw entry (for diagnostics). Sync. */
@@ -243,7 +400,7 @@ export class ModelRegistry {
    * Mark a model verified (spot-check success or real telemetry success).
    * Optionally records measured latency (rolling EMA).
    */
-  markVerified(provider: string, model: string, source: ModelRegistrySource, latencyMs?: number): void {
+  markVerified(provider: string, model: string, source: ModelRegistrySource, latencyMs?: number, action?: string): void {
     const now = Date.now();
     const key = entryKey(provider, model);
     const existing = this.data.entries[key];
@@ -267,6 +424,19 @@ export class ModelRegistry {
       lastError: existing?.lastError,
     };
     this.persist();
+    // A GENUINE promotion (was not verified → now verified) is a state change
+    // the agent should know about — real usage just proved the model works.
+    // Emitting only on transitions (not every success) avoids event storms.
+    if (existing?.status !== 'verified') {
+      this.emitUpdated([provider], `verified: ${model}`, source);
+    }
+    // Action-attributed telemetry: which action proved this provider × model
+    // works (dashboard "learned from real usage" panel). Only when the caller
+    // passed an action — anonymous writes (e.g. the cost-tracker mirror) update
+    // health but don't add panel rows.
+    if (action) {
+      this.appendActionLog({ timestamp: now, action, provider, model, outcome: 'verified' });
+    }
   }
 
   /**
@@ -279,6 +449,7 @@ export class ModelRegistry {
     reason: string,
     source: ModelRegistrySource,
     quotaParkedUntil: number = 0,
+    action?: string,
   ): void {
     const now = Date.now();
     const key = entryKey(provider, model);
@@ -295,8 +466,23 @@ export class ModelRegistry {
       quotaParkedUntil: Math.max(existing?.quotaParkedUntil || 0, quotaParkedUntil),
       source,
       lastError: reason,
+      tokensConsumed: existing?.tokensConsumed,
+      requests: existing?.requests,
+      resetsInMs: existing?.resetsInMs,
+      remainingTokens: existing?.remainingTokens,
     };
     this.persist();
+    this.emitUpdated([provider], `unavailable: ${reason}`, source);
+    if (action) {
+      this.appendActionLog({
+        timestamp: now,
+        action,
+        provider,
+        model,
+        outcome: 'unavailable',
+        errorType: reason.slice(0, 120),
+      });
+    }
   }
 
   /** Apply the quota ledger's parked-provider status to all of a provider's entries. */
@@ -309,7 +495,10 @@ export class ModelRegistry {
         touched = true;
       }
     }
-    if (touched) this.persist();
+    if (touched) {
+      this.persist();
+      this.emitUpdated([provider], `quota-parked until ${new Date(until).toISOString()}`, 'quota');
+    }
   }
 
   /** Clear a quota park for a provider (manual re-enable / window reset). */
@@ -321,7 +510,10 @@ export class ModelRegistry {
         touched = true;
       }
     }
-    if (touched) this.persist();
+    if (touched) {
+      this.persist();
+      this.emitUpdated([provider], 'quota park released', 'quota');
+    }
   }
 
   /**
@@ -332,13 +524,13 @@ export class ModelRegistry {
    * @param ok        Did the call succeed?
    * @param errorType Optional classified error type ('auth' | 'rate-limit' | ...)
    */
-  recordCall(provider: string, model: string, ok: boolean, errorType?: string): void {
+  recordCall(provider: string, model: string, ok: boolean, errorType?: string, action?: string): void {
     const now = Date.now();
     const key = entryKey(provider, model);
     const existing = this.data.entries[key];
 
     if (ok) {
-      this.markVerified(provider, model, 'telemetry');
+      this.markVerified(provider, model, 'telemetry', undefined, action);
       this.data.entries[key].lastUsedAt = now;
       return;
     }
@@ -359,9 +551,11 @@ export class ModelRegistry {
     // EMA with a small α — a single failure shouldn't nuke a good model.
     entry.errorRate = Math.min(1, 0.2 + 0.8 * prevRate);
     entry.lastUsedAt = now;
+    let flipped = false;
     if (errorType === 'auth' || errorType === 'rate-limit') {
       entry.status = 'unavailable';
       entry.lastError = errorType === 'auth' ? 'auth (invalid key / forbidden)' : 'rate-limit';
+      flipped = true;
       if (errorType === 'rate-limit') {
         // Park until the likely reset window (aligned to the hour).
         const parkUntil = now + (60 - new Date().getMinutes()) * 60_000;
@@ -370,18 +564,191 @@ export class ModelRegistry {
     }
     this.data.entries[key] = entry;
     this.persist();
+    if (flipped) this.emitUpdated([provider], `telemetry failure (${errorType})`, 'telemetry');
+    if (action) {
+      this.appendActionLog({
+        timestamp: now,
+        action,
+        provider,
+        model,
+        outcome: errorType === 'auth' || errorType === 'rate-limit' ? 'unavailable' : 'error',
+        errorType,
+      });
+    }
   }
 
-  /** Sync quota parks from the QuotaLedger's router feed. */
+  /**
+   * Action-attributed telemetry log (model-registry-actions.jsonl) — which
+   * action killed or verified which provider × model, so the dashboard's
+   * "learned from real usage" panel makes predictive skips visible. Capped
+   * (rotation amortized). Best-effort — never breaks telemetry.
+   */
+  private appendActionLog(entry: ActionTelemetryEntry): void {
+    try {
+      const dir = memoryDir();
+      if (!existsSync(dir)) mkdirSync(dir, { recursive: true });
+      const path = actionLogPath();
+      appendFileSync(path, `${JSON.stringify(entry)}\n`, 'utf-8');
+      if (this.actionLogCount >= 0) {
+        this.actionLogCount++;
+      } else {
+        this.actionLogCount = this.countActionLogLines(path);
+      }
+      // Rotate when the log doubles past the cap — amortized O(1) per write.
+      if (this.actionLogCount > MAX_ACTION_LOG_ENTRIES * 2) {
+        const raw = readFileSync(path, 'utf-8');
+        const lines = raw.split('\n').filter((l) => l.trim()).slice(-MAX_ACTION_LOG_ENTRIES);
+        writeFileSync(path, lines.length ? `${lines.join('\n')}\n` : '', 'utf-8');
+        this.actionLogCount = lines.length;
+      }
+    } catch {
+      // Best-effort — a failed action log must never break telemetry.
+    }
+  }
+
+  private countActionLogLines(path: string): number {
+    try {
+      if (!existsSync(path)) return 0;
+      return readFileSync(path, 'utf-8').split('\n').filter((l) => l.trim()).length;
+    } catch {
+      return 0;
+    }
+  }
+
+  /** Aggregated per-action "learned from real usage" view (dashboard / CLI). Sync. */
+  getActionTelemetry(): ActionTelemetryInsights {
+    return aggregateActionTelemetry(readActionTelemetryFile(actionLogPath()));
+  }
+
+  /**
+   * Sync quota parks AND full usage telemetry from the QuotaLedger, so the
+   * registry's FAISS/JSON snapshot alone answers "is it healthy, how many
+   * tokens remain, how long until the window resets". The ledger stays the
+   * WRITER of usage; the registry is the enterprise READ model the router
+   * consumes — one sub-ms sync store on the pick path.
+   *
+   * Parks are applied only when the new window actually EXTENDS the existing
+   * park (no redundant writes), and the usage fields are only written when
+   * they differ, so calling this on every routing decision is cheap and never
+   * rewrites the mirror on a hot path.
+   */
   syncQuota(configManager?: ConfigManager): void {
     try {
-      const parked = getQuotaLedger().getRouterQuotaStatus(configManager);
+      const ledger = getQuotaLedger();
       const now = Date.now();
-      for (const { provider, cooldownRemaining } of parked) {
-        if (cooldownRemaining > 0) this.parkProvider(provider, now + cooldownRemaining);
+      let changed = false;
+      const newlyParked = new Set<string>();
+      // 1. Cooldown parks (explicit + configured-limit exhaustion) — provider level.
+      for (const { provider, cooldownRemaining } of ledger.getRouterQuotaStatus(configManager)) {
+        if (cooldownRemaining <= 0) continue;
+        const until = now + cooldownRemaining;
+        for (const e of Object.values(this.data.entries)) {
+          if (e.provider === provider && until > e.quotaParkedUntil) {
+            e.quotaParkedUntil = until;
+            changed = true;
+            newlyParked.add(provider);
+          }
+        }
+      }
+      // 2. Full usage telemetry mirror — tokens / requests / reset / remaining.
+      const limits = configManager?.getAll()?.routing?.quota || {};
+      for (const s of ledger.getStatus(configManager)) {
+        const entry = this.data.entries[entryKey(s.provider, s.model)];
+        if (!entry) continue;
+        if (entry.tokensConsumed !== s.tokensConsumed) {
+          entry.tokensConsumed = s.tokensConsumed;
+          changed = true;
+        }
+        if (entry.requests !== s.requests) {
+          entry.requests = s.requests;
+          changed = true;
+        }
+        if (entry.resetsInMs !== s.resetsInMs) {
+          entry.resetsInMs = s.resetsInMs;
+          changed = true;
+        }
+        const tokenLimit = limits[s.provider]?.tokensPerWindow;
+        const remaining = tokenLimit !== undefined ? Math.max(0, tokenLimit - s.tokensConsumed) : -1;
+        if (entry.remainingTokens !== remaining) {
+          entry.remainingTokens = remaining;
+          changed = true;
+        }
+      }
+      if (changed) {
+        this.persist();
+        // Mirror-applied parks are state changes too — report them the same way
+        // parkProvider does, so the watcher re-verifies an exhausted provider
+        // immediately instead of waiting for its next scheduled cycle.
+        for (const provider of newlyParked) {
+          this.emitUpdated([provider], 'quota-parked (window exhausted)', 'quota');
+        }
       }
     } catch {
       // Best-effort — quota sync must never break the registry.
+    }
+  }
+
+  /**
+   * UNIFIED router feed: providers that must sink below healthy candidates
+   * because they are quota-exhausted or in cooldown — computed from the
+   * registry's own mirrored data (sub-ms, no I/O) with a cheap union fallback
+   * to the in-memory ledger for providers the registry has never tracked (so
+   * an exhausted-but-unprobed provider is still excluded). Shape mirrors
+   * `circuitBreakerStatus` so the AutoModelRouter consumes it identically.
+   * The ledger remains the WRITER of usage; the registry is the primary READ
+   * model — the union is a same-process in-memory read, never disk or network.
+   */
+  getRouterQuotaStatus(configManager?: ConfigManager): Array<{ provider: string; cooldownRemaining: number }> {
+    try {
+      this.syncQuota(configManager); // fresh mirror first (cheap, no-op when unchanged)
+    } catch {
+      // Best-effort — routing must never crash on quota bookkeeping.
+    }
+    const now = Date.now();
+    const parked = new Map<string, number>();
+    for (const e of Object.values(this.data.entries)) {
+      if (e.quotaParkedUntil > now) {
+        const remaining = e.quotaParkedUntil - now;
+        const current = parked.get(e.provider) ?? 0;
+        if (remaining > current) parked.set(e.provider, remaining);
+      }
+    }
+    // Providers the ledger parked but the registry has no entries for (never
+    // probed/used) must still be excluded — union the ledger feed.
+    try {
+      for (const { provider, cooldownRemaining } of getQuotaLedger().getRouterQuotaStatus(configManager)) {
+        if (cooldownRemaining <= 0) continue;
+        const current = parked.get(provider) ?? 0;
+        if (cooldownRemaining > current) parked.set(provider, cooldownRemaining);
+      }
+    } catch {
+      // Best-effort.
+    }
+    return [...parked.entries()].map(([provider, cooldownRemaining]) => ({ provider, cooldownRemaining }));
+  }
+
+  /**
+   * Emit a MODEL_REGISTRY_UPDATED event so the watch daemon (the dedicated
+   * model-health agent) learns about a mid-session state change IMMEDIATELY
+   * and can re-verify the affected provider instead of waiting for its next
+   * scheduled cycle. Best-effort — observability must never break the registry.
+   *
+   * @param source Who wrote the change: 'telemetry' (real session usage),
+   *   'quota' (parks/releases), or 'probe' / 'spot-check' (the watcher's OWN
+   *   writes). The watcher only reacts to telemetry/quota — it ignores its own
+   *   probe writes so its re-verification can't self-trigger an infinite loop.
+   */
+  private emitUpdated(providers: string[], detail: string, source: string): void {
+    try {
+      getEventBus().emit(EventNames.MODEL_REGISTRY_UPDATED, {
+        providers,
+        blocked: this.getBlockedProviders(),
+        updatedAt: Date.now(),
+        detail,
+        source,
+      }, 'model-registry');
+    } catch {
+      // Best-effort — event emission must never break the registry.
     }
   }
 
@@ -545,9 +912,10 @@ export class ModelRegistry {
     };
   }
 
-  /** Human-readable summary for the CLI. */
+  /** Human-readable summary for the CLI (incl. quota telemetry from the unified store). */
   async formatStatus(): Promise<string> {
     const s = await this.getStatus();
+    const now = Date.now();
     const lines: string[] = [];
     lines.push(`📦 Model Registry — backend: ${s.backend}${s.vectorMirrored ? ' (vector-mirrored)' : ''}`);
     lines.push(`   ${s.total} tracked · ${s.verified} verified · ${s.unverified} unverified · ${s.unavailable} unavailable · ${s.parked} quota-parked`);
@@ -557,13 +925,32 @@ export class ModelRegistry {
       lines.push(`   ${p.provider}: ${p.verified} verified · ${p.unavailable} unavailable${p.parked ? ` · ${p.parked} parked` : ''}`);
       for (const m of verified) {
         const lat = m.latencyMs !== undefined ? ` · ${m.latencyMs}ms` : '';
-        lines.push(`     ✅ ${m.model}${lat}`);
+        // Unified-store quota telemetry: remaining tokens + time-to-wait (resets
+        // in) come from the same sub-ms FAISS/JSON snapshot routing reads.
+        const tokens = m.remainingTokens !== undefined && m.remainingTokens >= 0
+          ? ` · ${m.remainingTokens.toLocaleString()} tokens left`
+          : '';
+        const resets = m.resetsInMs !== undefined && m.resetsInMs > 0
+          ? ` · resets in ${this.formatMs(m.resetsInMs)}`
+          : '';
+        lines.push(`     ✅ ${m.model}${lat}${tokens}${resets}`);
       }
       for (const m of unavailable.slice(0, 3)) {
-        lines.push(`     ⛔ ${m.model} — ${m.lastError || 'unavailable'}`);
+        const wait = m.quotaParkedUntil > now ? ` · retry in ${this.formatMs(m.quotaParkedUntil - now)}` : '';
+        lines.push(`     ⛔ ${m.model} — ${m.lastError || 'unavailable'}${wait}`);
       }
     }
     return lines.join('\n');
+  }
+
+  /** Compact human duration (e.g. '3h 12m', '45s'). */
+  private formatMs(ms: number): string {
+    if (ms <= 0) return 'now';
+    const h = Math.floor(ms / 3_600_000);
+    const m = Math.floor((ms % 3_600_000) / 60_000);
+    if (h > 0) return `${h}h ${m}m`;
+    if (m > 0) return `${m}m`;
+    return `${Math.ceil(ms / 1000)}s`;
   }
 
   /** Clear the registry (CLI / tests). */

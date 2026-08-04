@@ -532,22 +532,33 @@ export class AutoModelRouter {
     // can't buy; Gemini paid models 403 without billing). When the registry
     // has real data, restrict Auto routing to providers we've verified — this
     // is the "no more routing into 404s" guarantee.
-    const registered = getModelRegistry().getUsableProviders();
+    const registry = getModelRegistry();
+    // Hard skip: providers whose every tracked model the registry marks
+    // unavailable/quota-parked (learned from real usage telemetry) are never
+    // even scored — dead providers can't win a task they'd fail.
+    const blocked = new Set(registry.getBlockedProviders());
+    let base = DEFAULT_AUTO_PROVIDERS.filter((p) => !blocked.has(p));
+
+    const registered = registry.getUsableProviders();
     if (registered.length > 0) {
-      const intersection = DEFAULT_AUTO_PROVIDERS.filter((p) => registered.includes(p));
+      const intersection = base.filter((p) => registered.includes(p));
       if (intersection.length > 0) {
         return intersection;
       }
     }
 
-    const usable = DEFAULT_AUTO_PROVIDERS.filter((p) => {
+    const usable = base.filter((p) => {
       try {
         return configManager.hasRequiredCredentials(p);
       } catch {
         return false;
       }
     });
-    return usable.length > 0 ? usable : DEFAULT_AUTO_PROVIDERS;
+    // Never return an empty list: if EVERY default provider is registry-blocked
+    // (pathological), fall back to the full built-in list so the caller still
+    // gets a decision and surfaces availability instead of crashing on an
+    // empty ranking.
+    return usable.length > 0 ? usable : (base.length > 0 ? base : DEFAULT_AUTO_PROVIDERS);
   }
 
   /**

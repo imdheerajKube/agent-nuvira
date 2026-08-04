@@ -23,6 +23,7 @@ import { Orchestrator } from '../agents/orchestrator.js';
 import { applyActiveModel } from './model.js';
 import { ReviewerAgent } from '../agents/agents/reviewer.js';
 import { ProviderFactory } from '../inference/factory.js';
+import { recordRegistryFailure } from '../learning/provider-fallback.js';
 import { logger } from '../utils/logger.js';
 // ─── CI Command ─────────────────────────────────────────────────────────────
 export class CICommand extends BaseCommand {
@@ -225,7 +226,16 @@ export class CICommand extends BaseCommand {
             return;
         }
         const callLLM = async (prompt, opts) => {
-            return provider.generate(prompt, opts || {});
+            try {
+                return await provider.generate(prompt, opts || {});
+            }
+            catch (err) {
+                // Feed the SHARED registry telemetry path so CI review failures teach
+                // the router which provider×model is dead. Best-effort — never mask
+                // the real error from the review loop.
+                recordRegistryFailure(providerType, finalConfig.model, err, undefined, 'ci');
+                throw err;
+            }
         };
         // Review each file
         for (const file of files) {

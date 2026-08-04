@@ -27,6 +27,7 @@ import { applyActiveModel } from './model.js';
 import { showModelPicker } from './model-picker.js';
 import { resolveProvider } from './router.js';
 import { isAutoModel } from '../learning/auto-router.js';
+import { recordRegistryFailure } from '../learning/provider-fallback.js';
 import { getTrajectoryStore } from '../memory/trajectory-store.js';
 import { listCheckpoints } from '../agents/checkpoint-store.js';
 import { logger, setSilent } from '../utils/logger.js';
@@ -888,8 +889,23 @@ export class ExecuteCommand extends BaseCommand {
                 }
             }
         }
-        catch {
-            // LLM failed — use fallback
+        catch (err) {
+            // LLM failed — feed the SHARED registry telemetry path: this follow-up
+            // generator is the ONLY execute-side LLM call that bypasses the
+            // orchestrator, so without this a dead provider×model here was never
+            // learned. Re-derived inside a guarded block (a throwing config read
+            // must never break the rule-based fallback), and the literal 'auto'
+            // provider is never written — it's a routing directive, not a real
+            // provider×model.
+            try {
+                const fbType = (activeProvider || this.configManager.getAll().defaultProvider || 'groq');
+                if (fbType !== 'auto') {
+                    recordRegistryFailure(fbType, activeModel || 'default', err, undefined, 'execute');
+                }
+            }
+            catch {
+                // Telemetry must never break the fallback to rule-based suggestions.
+            }
         }
         return fallbackSuggestions();
     }

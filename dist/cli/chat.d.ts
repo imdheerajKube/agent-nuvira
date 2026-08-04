@@ -31,6 +31,30 @@ export declare class ChatCommand extends BaseCommand {
      * — one consistent recovery window, not two competing ones.
      */
     private static readonly RATE_LIMIT_EXCLUSION_MS;
+    /**
+     * How long a server/network/timeout/unknown failure excludes a provider
+     * from auto routing (ms). Shorter than rate-limit so a flaky-but-alive
+     * provider is re-admitted quickly, but long enough that the very NEXT
+     * message never re-picks a provider that just failed (the old behavior:
+     * only auth and rate-limit were session-excluded, so an unknown-classified
+     * failure re-picked the dead provider on every single message).
+     */
+    private static readonly TRANSIENT_FAILURE_EXCLUSION_MS;
+    /**
+     * Providers that failed TRANSIENTLY this session (server/network/timeout/
+     * unknown). Tracked separately from the exclusion map so that when a
+     * transient exclusion EXPIRES, the provider is only re-admitted to routing
+     * after a quick on-demand spot-check confirms it's actually back — recovery
+     * is discovered in seconds, not by blindly failing into it again.
+     */
+    private sessionTransientFailedProviders;
+    /**
+     * Whether the cold-start probe has fired this session. On a fresh registry
+     * (no verified models yet) the FIRST auto pick fires a background
+     * probe + spot-check so routing learns from real API data instead of
+     * failing into dead ends — the fire-and-forget keeps the first message fast.
+     */
+    private coldStartProbeFired;
     create(): Command;
     private execute;
     /**
@@ -60,6 +84,14 @@ export declare class ChatCommand extends BaseCommand {
      * - EVERY failure also feeds the shared circuit breaker, so the auto router
      *   deprioritizes the provider by scoring even for transient 5xx/network
      *   errors (which need repeated failures before cooldown opens).
+     * - Transient failures (server/network/timeout/unknown) get a SHORT session
+     *   exclusion so the very next message skips the provider, while still
+     *   re-admitting it quickly if it recovers.
+     * - EVERY failure ALSO writes through to the persistent Model Availability
+     *   Registry (telemetry) so a dead provider×model is remembered across chat
+     *   sessions and skipped predictively on the next pick — the registry's
+     *   FAISS/JSON health data is what makes routing fast, and this is the feed
+     *   that keeps it fresh.
      *
      * Best-effort: never throws, so failover bookkeeping can't crash the chat.
      */

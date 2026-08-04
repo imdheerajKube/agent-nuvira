@@ -65,6 +65,49 @@ export declare function classifyFallbackError(err: unknown): FallbackErrorType;
  */
 export declare function isRetryableError(errorType: FallbackErrorType): boolean;
 /**
+ * Write a failed real LLM call through to the Model Availability Registry so
+ * EVERY routing path learns predictively — not just chat's auto-router:
+ * execute/orchestrator and the fallback-based commands (plan / skill / learn /
+ * edit) all feed the SAME store, so a provider that dies in one action is
+ * skipped predictively by every other action on the next pick.
+ *
+ * - A model-not-found error (404 / "does not exist") is a DEFINITIVE no:
+ *   classifyFallbackError buckets it as 'unknown' (transient), but a model
+ *   that doesn't exist will never come back — mark it `unavailable` so the
+ *   registry refuses to resurrect it across sessions.
+ * - auth/rate-limit flip the entry to `unavailable` (rate-limit also parks it
+ *   until the reset window), which `getBlockedProviders()` feeds back into
+ *   routing as a predictive skip.
+ * - transient (server/network/timeout/unknown) just decays the health score.
+ *
+ * Best-effort: never throws, so telemetry can never break a call or failover.
+ *
+ * @param providerType The provider id that failed (e.g. 'gemini').
+ * @param model        The model that was attempted (defaults to 'default').
+ * @param err          The failure (classified when errorType is omitted).
+ * @param errorType    Optional pre-classified error type (avoids re-classifying).
+ * @param action       The action that hit the failure (chat / execute / plan /
+ *   edit / ...) — attributed in the per-action "learned from real usage" log.
+ *   Omitted → health still updates, but no dashboard panel row is written.
+ */
+export declare function recordRegistryFailure(providerType: string, model: string | undefined, err: unknown, errorType?: FallbackErrorType, action?: string): void;
+/**
+ * Write a successful real LLM call through to the Model Availability Registry
+ * WITH its action tag, so the per-action "learned from real usage" telemetry
+ * panel shows which action VERIFIED which provider × model (the mirror of
+ * recordRegistryFailure). Success upgrades the entry to `verified` and proves
+ * the combo works — the feed that populates getUsableProviders() over time.
+ *
+ * Best-effort: never throws, so telemetry can never break a call.
+ *
+ * @param providerType The provider id that succeeded (e.g. 'groq').
+ * @param model        The model that was used (defaults to 'default').
+ * @param action       The action that succeeded (chat / execute / plan / edit /
+ *   ...) — attributed in the per-action log. Omitted → health still updates,
+ *   but no dashboard panel row is written.
+ */
+export declare function recordRegistrySuccess(providerType: string, model: string | undefined, action?: string): void;
+/**
  * ProviderFallback — Automatic provider failover with circuit breaker.
  *
  * This class manages:

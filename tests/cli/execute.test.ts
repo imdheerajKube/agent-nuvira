@@ -14,6 +14,7 @@ import { ExecuteCommand, parseGoalLines, checkpointOptions } from '../../src/cli
 import { logger } from '../../src/utils/logger.js';
 import { ProviderFactory } from '../../src/inference/factory.js';
 import { saveCheckpoint, checkpointIdFor, loadCheckpoint } from '../../src/agents/checkpoint-store.js';
+import { getModelRegistry, resetModelRegistry } from '../../src/learning/model-registry.js';
 import inquirer from 'inquirer';
 
 // ─── Test Constants ─────────────────────────────────────────────────────────
@@ -586,9 +587,16 @@ describe('ExecuteCommand — analyzeFailure', () => {
 
 describe('ExecuteCommand — generateFollowUpSuggestions (fallback)', () => {
   let cmd: ExecuteCommand;
+  let memDir: string;
 
   beforeEach(() => {
     cmd = new ExecuteCommand();
+    // Isolate the Model Registry: the failed-LLM path now writes telemetry
+    // (recordRegistryFailure), and without BUFF_MEMORY_DIR it would hit the
+    // REAL user registry.
+    memDir = mkdtempSync(join(tmpdir(), 'buff-exec-fu-'));
+    process.env.BUFF_MEMORY_DIR = memDir;
+    resetModelRegistry();
     vi.spyOn(logger, 'info').mockImplementation(() => {});
     vi.spyOn(logger, 'highlight').mockImplementation(() => {});
     vi.spyOn(console, 'log').mockImplementation(() => {});
@@ -603,6 +611,9 @@ describe('ExecuteCommand — generateFollowUpSuggestions (fallback)', () => {
 
   afterEach(() => {
     vi.restoreAllMocks();
+    resetModelRegistry();
+    delete process.env.BUFF_MEMORY_DIR;
+    try { rmSync(memDir, { recursive: true, force: true }); } catch { /* best-effort */ }
   });
 
   function makeResult(overrides: Partial<{
@@ -682,6 +693,18 @@ describe('ExecuteCommand — generateFollowUpSuggestions (fallback)', () => {
     const result = makeResult({ goal: 'Do something unrelated' });
     const suggestions = await (cmd as any).generateFollowUpSuggestions(result, 'groq', 'llama3');
     expect(suggestions).toHaveLength(0);
+  });
+
+  it('writes the failed LLM call through to the model registry (telemetry)', async () => {
+    // The LLM path fails (mock config throws) and falls back to rule-based —
+    // but the SHARED telemetry path must still have learned the provider×model
+    // so future routing in every action skips it predictively.
+    const result = makeResult({ goal: 'Add unit tests for the API' });
+    await (cmd as any).generateFollowUpSuggestions(result, 'groq', 'llama3');
+
+    const entry = getModelRegistry().getEntry('groq', 'llama3');
+    expect(entry).toBeDefined();
+    expect((entry?.errorRate ?? 0)).toBeGreaterThan(0);
   });
 });
 

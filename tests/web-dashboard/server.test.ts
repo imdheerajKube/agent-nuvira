@@ -374,6 +374,29 @@ describe('Dashboard Server', () => {
       expect(typeof body.serverTime).toBe('number');
     });
 
+    it('GET /api/model-registry returns empty state when no registry mirror exists', async () => {
+      const res = await httpGet(`${baseUrl}/api/model-registry`);
+      expect(res.statusCode).toBe(200);
+      const body = JSON.parse(res.body);
+      expect(body.enabled).toBe(false);
+      expect(body.total).toBe(0);
+      expect(body.providers).toEqual([]);
+      // Per-action telemetry is always present (even when empty) so the panel
+      // can render its "no data yet" hint instead of a blank area.
+      expect(body.actionTelemetry).toBeDefined();
+      expect(body.actionTelemetry.enabled).toBe(false);
+      expect(body.actionTelemetry.actions).toEqual([]);
+      expect(typeof body.updatedAt).toBe('number');
+    });
+
+    it('GET /api/all includes the modelRegistry field (unified read store)', async () => {
+      const res = await httpGet(`${baseUrl}/api/all`);
+      expect(res.statusCode).toBe(200);
+      const body = JSON.parse(res.body);
+      expect(body).toHaveProperty('modelRegistry');
+      expect(body.modelRegistry.enabled).toBe(false);
+    });
+
     it('GET /api/routing returns preference without benchmark data', async () => {
       const res = await httpGet(`${baseUrl}/api/routing`);
       expect(res.statusCode).toBe(200);
@@ -591,6 +614,123 @@ describe('Dashboard Server', () => {
       expect(body.usage.byModel).toEqual({ 'llama-3.3-70b': 2, 'gemini-2.0-flash': 1 });
       expect(body.usage.bySource).toEqual({ chat: 1, explain: 1, benchmark: 1 });
       expect(body.usage.byComplexity).toEqual({ moderate: 1, critical: 1, simple: 1 });
+    });
+
+    it('GET /api/model-registry surfaces the unified health + quota telemetry store', async () => {
+      const now = Date.now();
+      // Mirror the exact model-registry.json shape the ModelRegistry persists:
+      // provider × model entries with availability + quota telemetry.
+      writeFixture('model-registry', {
+        version: 1,
+        updatedAt: now,
+        entries: {
+          'gemini|gemini-2.5-flash': {
+            provider: 'gemini', model: 'gemini-2.5-flash', status: 'verified',
+            latencyMs: 420, errorRate: 0, quotaParkedUntil: 0, source: 'spot-check',
+            tokensConsumed: 2400, requests: 2, resetsInMs: 3_600_000, remainingTokens: 600,
+          },
+          'groq|llama-3.3-70b-versatile': {
+            provider: 'groq', model: 'llama-3.3-70b-versatile', status: 'verified',
+            latencyMs: 180, errorRate: 0.2, quotaParkedUntil: now + 60_000, source: 'telemetry',
+            tokensConsumed: 1500, requests: 5, resetsInMs: 60_000, remainingTokens: -1,
+            lastError: 'rate-limit',
+          },
+          'nim|meta/llama-3.3-70b-instruct': {
+            provider: 'nim', model: 'meta/llama-3.3-70b-instruct', status: 'unavailable',
+            errorRate: 0.5, quotaParkedUntil: 0, source: 'telemetry',
+            lastError: 'auth (invalid key / forbidden)',
+          },
+        },
+      });
+      try {
+        const res = await httpGet(`${baseUrl}/api/model-registry`);
+        expect(res.statusCode).toBe(200);
+        const body = JSON.parse(res.body);
+
+        expect(body.enabled).toBe(true);
+        expect(body.total).toBe(3);
+        expect(body.verified).toBe(1); // groq is parked → not counted verified
+        expect(body.unavailable).toBe(1);
+        expect(body.parked).toBe(1);
+        expect(body.providers).toHaveLength(3);
+
+        // Provider-level rollups
+        const gemini = body.providers.find((p: { provider: string }) => p.provider === 'gemini');
+        expect(gemini.verified).toBe(1);
+        expect(gemini.models[0].remainingTokens).toBe(600);
+        expect(gemini.models[0].resetsInMs).toBe(3_600_000);
+        expect(gemini.models[0].latencyMs).toBe(420);
+
+        // Quota-parked entry is flagged + carries the reason
+        const groq = body.providers.find((p: { provider: string }) => p.provider === 'groq');
+        expect(groq.models[0].parked).toBe(true);
+        expect(groq.models[0].lastError).toBe('rate-limit');
+        expect(groq.models[0].remainingTokens).toBe(-1); // no limit → unlimited
+
+        // Unavailable entry surfaces the learned reason
+        const nim = body.providers.find((p: { provider: string }) => p.provider === 'nim');
+        expect(nim.models[0].status).toBe('unavailable');
+        expect(nim.models[0].lastError).toContain('auth');
+      } finally {
+        removeFixture('model-registry');
+      }
+    });
+
+    it('GET /api/model-registry handles a malformed mirror gracefully', async () => {
+      writeFileSync(join(memoryDir, 'model-registry.json'), '{broken');
+      const res = await httpGet(`${baseUrl}/api/model-registry`);
+      expect(res.statusCode).toBe(200);
+      const body = JSON.parse(res.body);
+      expect(body.enabled).toBe(false);
+      expect(body.total).toBe(0);
+      removeFixture('model-registry');
+    });
+
+    it('GET /api/model-registry surfaces per-action "learned from real usage" telemetry', async () => {
+      // model-registry-actions.jsonl is a JSONL timeline — one
+      // {timestamp, action, provider, model, outcome, errorType?} event per
+      // line, appended by every LLM call WITH its action tag (chat / execute /
+      // plan / edit / ...). The server aggregates it with the same pure
+      // function the registry uses.
+      const actionsPath = join(memoryDir, 'model-registry-actions.jsonl');
+      const now = Date.now();
+      const lines = [
+        { timestamp: now - 90000, action: 'chat', provider: 'groq', model: 'llama-3.3-70b-versatile', outcome: 'verified' },
+        { timestamp: now - 60000, action: 'chat', provider: 'groq', model: 'llama-3.3-70b-versatile', outcome: 'verified' },
+        { timestamp: now - 30000, action: 'execute', provider: 'gemini', model: 'gemini-2.5-flash', outcome: 'unavailable', errorType: 'auth' },
+        { timestamp: now - 10000, action: 'plan', provider: 'nim', model: 'meta/llama-3.3-70b-instruct', outcome: 'error', errorType: 'server' },
+      ];
+      try {
+        writeFileSync(actionsPath, lines.map((l) => JSON.stringify(l)).join('\n') + '\n');
+
+        const res = await httpGet(`${baseUrl}/api/model-registry`);
+        expect(res.statusCode).toBe(200);
+        const body = JSON.parse(res.body);
+
+        expect(body.actionTelemetry).toBeDefined();
+        expect(body.actionTelemetry.enabled).toBe(true);
+        expect(body.actionTelemetry.total).toBe(4);
+
+        // chat verified the same model twice → honest volume, one deduped chip
+        const chat = body.actionTelemetry.actions.find((a: { action: string }) => a.action === 'chat');
+        expect(chat.verified).toBe(2);
+        expect(chat.verifiedModels).toHaveLength(1);
+        expect(chat.verifiedModels[0]).toMatchObject({ provider: 'groq', model: 'llama-3.3-70b-versatile' });
+
+        // execute killed gemini with a definitive auth reason → predictive skip
+        const execute = body.actionTelemetry.actions.find((a: { action: string }) => a.action === 'execute');
+        expect(execute.killed).toBe(1);
+        expect(execute.killedModels[0].reason).toBe('auth');
+        expect(execute.killedModels[0].provider).toBe('gemini');
+
+        // plan's transient failure decays health but kills nothing
+        const plan = body.actionTelemetry.actions.find((a: { action: string }) => a.action === 'plan');
+        expect(plan.transient).toBe(1);
+        expect(plan.killed).toBe(0);
+        expect(plan.killedModels).toEqual([]);
+      } finally {
+        rmSync(actionsPath, { force: true });
+      }
     });
 
     it('GET /api/routing returns the audit-trail timeline most-recent-first', async () => {
@@ -850,6 +990,7 @@ describe('Dashboard Server', () => {
       expect(d).toHaveProperty('benchmarks');
       expect(d).toHaveProperty('memory');
       expect(d).toHaveProperty('health');
+      expect(d).toHaveProperty('modelRegistry');
       expect(d).toHaveProperty('serverTime');
     });
 
