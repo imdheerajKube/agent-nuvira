@@ -52,6 +52,19 @@ export default function CostDashboard({ data }: CostDashboardProps) {
         </div>
       </div>
 
+      <div className="cost-summary cost-summary-sub">
+        <div className="cost-total">
+          <span className="cost-label">📏 Measured (exact wire tokens)</span>
+          <span className="cost-amount">{formatCost(cost.measuredCost)}</span>
+          <span className="cost-label">{formatNumber(cost.measuredCalls)} calls</span>
+        </div>
+        <div className="cost-total">
+          <span className="cost-label">📐 Estimated (length-based)</span>
+          <span className="cost-amount">{formatCost(cost.estimatedCost)}</span>
+          <span className="cost-label">{formatNumber(cost.estimatedCalls)} calls</span>
+        </div>
+      </div>
+
       <h3 className="section-subtitle">By Provider</h3>
       <div className="cost-list">
         {byProvider.length === 0 ? (

@@ -146,12 +146,20 @@ export interface CostData {
   totalTokens: number;
   byProvider: Record<string, number>;
   byModel: Record<string, number>;
+  /** M2.2: spend per provider from MEASURED (provider-reported) usage only. */
+  byProviderMeasured: Record<string, number>;
+  /** M2.2: calls + spend with exact wire tokens vs length-based estimates. */
+  measuredCalls: number;
+  estimatedCalls: number;
+  measuredCost: number;
+  estimatedCost: number;
   recent: Array<{
     provider: string;
     model: string;
     costUsd: number;
     totalTokens: number;
     timestamp: number;
+    measured: boolean;
   }>;
 }
 

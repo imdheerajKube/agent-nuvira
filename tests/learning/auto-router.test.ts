@@ -354,9 +354,29 @@ describe('analyzeTaskProfile', () => {
 
 describe('AutoModelRouter.resolve', () => {
   let router: AutoModelRouter;
+  let resolveTempDir: string;
+  let resolveOrigDir: string | undefined;
 
   beforeEach(() => {
     router = new AutoModelRouter();
+    // Hermetic registry: resolve() reads the Model Availability Registry
+    // (getBlockedProviders + M2.2 getMeasuredUsage for measured-cost scoring),
+    // so isolate it — ambient real-user data must never flip a deterministic
+    // ranking (the trivial-task gemini-vs-groq test is measured-cost sensitive).
+    resolveOrigDir = process.env.BUFF_MEMORY_DIR;
+    resolveTempDir = mkdtempSync(join(tmpdir(), 'buff-autorouter-resolve-'));
+    process.env.BUFF_MEMORY_DIR = resolveTempDir;
+    resetModelRegistry();
+  });
+
+  afterEach(() => {
+    if (resolveOrigDir === undefined) {
+      delete process.env.BUFF_MEMORY_DIR;
+    } else {
+      process.env.BUFF_MEMORY_DIR = resolveOrigDir;
+    }
+    resetModelRegistry();
+    rmSync(resolveTempDir, { recursive: true, force: true });
   });
 
   it('returns a valid decision with provider/model/explanation', () => {
@@ -561,6 +581,58 @@ describe('real provider pricing', () => {
     });
     // static trivial weights → groq wins on speed+cost as originally designed
     expect(decision.provider).toBe('groq');
+  });
+});
+
+// ─── M2.2 measured wire-token cost inputs ──────────────────────────────────
+
+describe('M2.2 measured wire-token cost inputs', () => {
+  let measuredTempDir: string;
+
+  beforeEach(() => {
+    measuredTempDir = mkdtempSync(join(tmpdir(), 'buff-autorouter-measured-'));
+    process.env.BUFF_MEMORY_DIR = measuredTempDir;
+    resetModelRegistry();
+  });
+
+  afterEach(() => {
+    delete process.env.BUFF_MEMORY_DIR;
+    resetModelRegistry();
+    if (measuredTempDir) {
+      rmSync(measuredTempDir, { recursive: true, force: true });
+    }
+  });
+
+  it('estimateCallCostUsd replaces typical tokens with measured tokens', () => {
+    // With a fixed pricing override, measured (100/50) tokens replace the
+    // TYPICAL 2000/500 tokens → strictly cheaper per call.
+    const pricing = { inputPer1K: 0.01, outputPer1K: 0.02 };
+    const typical = estimateCallCostUsd('groq', pricing); // 0.02 + 0.01 = 0.03
+    const measured = estimateCallCostUsd('groq', pricing, { inputTokens: 100, outputTokens: 50 });
+    expect(measured).toBeLessThan(typical);
+    expect(measured).toBeCloseTo(0.001 + 0.001, 6); // (100/1000)*0.01 + (50/1000)*0.02
+  });
+
+  it('computeCostScore with measured tokens reflects the real (smaller) cost', () => {
+    const est = computeCostScore('groq');
+    const measured = computeCostScore('groq', undefined, { inputTokens: 100, outputTokens: 50 });
+    // Cheaper in practice → HIGHER cost score, but still within 0–1.
+    expect(measured).toBeGreaterThan(est);
+    expect(measured).toBeLessThanOrEqual(1);
+    expect(measured).toBeGreaterThanOrEqual(0);
+  });
+
+  it('resolve surfaces costSource measured + costBasis when the registry has wire tokens', () => {
+    const registry = getModelRegistry();
+    registry.recordMeasuredUsage('groq', 'llama-3.3-70b-versatile', 100, 50);
+    const decision = new AutoModelRouter().resolve('writer', 'implement a login form');
+    const groq = decision.ranked.find((r) => r.provider === 'groq')!;
+    expect(groq.costSource).toBe('measured');
+    expect(groq.costBasis).toEqual({ inputTokens: 100, outputTokens: 50 });
+    // A provider with no wire tokens stays estimated (flag present, no basis).
+    const local = decision.ranked.find((r) => r.provider === 'local')!;
+    expect(local.costSource).toBe('estimated');
+    expect(local.costBasis).toBeUndefined();
   });
 });
 

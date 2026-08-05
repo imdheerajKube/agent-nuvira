@@ -3,7 +3,7 @@ import { InferenceOptions, ProviderConfig } from '../config/types.js';
 import { logger } from '../utils/logger.js';
 import { streamCompletion } from './sse.js';
 import { getModelTags } from './model-catalog.js';
-import { getCostTracker } from '../learning/cost-tracker.js';
+import { getCostTracker, recordCallWithUsage } from '../learning/cost-tracker.js';
 
 const GROQ_BASE_URL = 'https://api.groq.com/openai/v1';
 
@@ -59,10 +59,20 @@ export class GroqAdapter implements InferenceProvider {
     const data = (await response.json()) as GroqResponse;
     const content = data.choices[0]?.message?.content || '';
 
-    // Track cost
+    // Track cost — M2.2: use the endpoint-reported usage (exact wire tokens)
+    // when present, else the length-based estimate.
     try {
-      const costTracker = getCostTracker();
-      costTracker.recordCallEstimated('groq', model, prompt, content);
+      const usage = (data as { usage?: { prompt_tokens?: number; completion_tokens?: number } }).usage;
+      recordCallWithUsage(
+        getCostTracker(),
+        'groq',
+        model,
+        prompt,
+        content,
+        usage
+          ? { promptTokens: usage.prompt_tokens, completionTokens: usage.completion_tokens }
+          : undefined,
+      );
     } catch { /* Non-critical */ }
 
     return content;
@@ -84,17 +94,22 @@ export class GroqAdapter implements InferenceProvider {
 
     logger.debug(`Groq: Streaming with model=${model}, temperature=${temperature}, maxTokens=${maxTokens}`);
 
+    // M2.2: capture the endpoint-reported usage from the final SSE chunk
+    // (OpenAI stream_options.include_usage convention) for measured cost.
+    let streamUsage: { promptTokens?: number; completionTokens?: number } | undefined;
     const fullContent = await streamCompletion(
       `${GROQ_BASE_URL}/chat/completions`,
       { 'Authorization': `Bearer ${apiKey}` },
       { model, messages: [{ role: 'user', content: prompt }], temperature, max_tokens: maxTokens },
       onToken,
+      (u) => {
+        streamUsage = u;
+      },
     );
 
     // Track cost for streaming response
     try {
-      const costTracker = getCostTracker();
-      costTracker.recordCallEstimated('groq', model, prompt, fullContent);
+      recordCallWithUsage(getCostTracker(), 'groq', model, prompt, fullContent, streamUsage);
     } catch { /* Non-critical */ }
 
     return fullContent;

@@ -9,6 +9,40 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added — Nuvira-Router P2 (capability-aware scoring + wire-token metering)
+
+- **M2.1 — Capability-aware scoring** (`src/learning/auto-router.ts`). A new
+  soft task-type → capability signal: each task type's required model-catalog
+  tags (`plan`→reasoning, `code-review`→code+reasoning, quick edit→code,
+  `context-gather`→fast, …) are matched against each provider's offered tags,
+  nudging equally-scored candidates toward the one whose strengths fit the
+  task. Tags = static catalog ∪ tags derived from the provider's REAL
+  capability profile (custom/gateway providers are scored honestly); unknown
+  providers stay fully neutral (the fallback profile derives nothing) until
+  real usage data exists. Applied as a clamped soft multiplier
+  `min(1, score·(0.9+0.2·fit))` — it can never overturn a dimension-weight
+  advantage or break the 0–1 invariant. **Reversible gate**
+  `routing.capabilityFit` (default ON) — set false to revert to pure
+  dimension-weight scoring. Surfaced per ranked provider in `models explain`
+  (text `🎯 fit N%` + JSON `capabilityFit`); fit applies only to healthy
+  candidates (quota-parked reasons stay definitive, no chip).
+- **M2.2 — Wire-token cost inputs (measured cost beats the estimate)**.
+  OpenAI-compatible adapters (Nuvira gateway, Groq, NIM) now capture the
+  provider-reported `usage` — from the response body and from the final SSE
+  chunk (include_usage convention) — and record EXACT input/output tokens
+  (`recordCallMeasured`, `CostEntry.measured`). The Model Availability
+  Registry stores per-model token EMAs (`recordMeasuredUsage` /
+  `getMeasuredUsage`), and Auto routing's cost scoring uses MEASURED tokens
+  instead of the TYPICAL 2,000/500 estimate whenever real usage exists
+  (`costSource: 'measured' | 'estimated'` per ranked provider in
+  `models explain`, shown as `📏 measured N→M tok`). The dashboard cost panel
+  splits spend into 📏 measured (exact wire tokens) vs 📐 estimated
+  (length-based), per-call and per-provider. Providers that report no usage
+  fall back to estimates, flagged. Hermetic E2E
+  (`tests/e2e/gateway-measured-cost.test.ts`) drives the real adapter against
+  a mock OpenAI-compatible /v1 gateway and proves the full loop: measured
+  usage → registry → verified → measured-cost resolve.
+
 ### Added — Nuvira-Router M0.2 (shared failover machinery, phase P0)
 
 - **`recordActionFailure()` — one shared failure-composition for every action**

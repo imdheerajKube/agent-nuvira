@@ -19,6 +19,12 @@ export function parseSSELine(line: string): string | null {
   }
 }
 
+/** Measured token usage reported by an OpenAI-compatible endpoint. */
+export interface UsageInfo {
+  promptTokens: number;
+  completionTokens: number;
+}
+
 /**
  * Perform a streaming chat completion request for an OpenAI-compatible API.
  *
@@ -26,6 +32,11 @@ export function parseSSELine(line: string): string | null {
  * @param headers - HTTP headers (including Authorization)
  * @param body - The JSON request body (stream: true will be added automatically)
  * @param onToken - Callback for each content token as it arrives
+ * @param onUsage - Optional callback for the endpoint-reported token usage
+ *   (M2.2 wire-token metering): some endpoints emit a final data chunk carrying
+ *   a `usage` object (OpenAI stream_options.include_usage convention) — when
+ *   present it is forwarded so adapters can record MEASURED cost instead of
+ *   length-based estimates.
  * @returns The full concatenated response text
  */
 export async function streamCompletion(
@@ -33,6 +44,7 @@ export async function streamCompletion(
   headers: Record<string, string>,
   body: Record<string, unknown>,
   onToken: (token: string) => void,
+  onUsage?: (usage: UsageInfo) => void,
 ): Promise<string> {
   const response = await fetch(url, {
     method: 'POST',
@@ -60,6 +72,31 @@ export async function streamCompletion(
   const fullContent: string[] = [];
   let buffer = '';
 
+  // M2.2: capture the endpoint-reported usage from any data chunk that carries
+  // it (final chunk before [DONE] in the OpenAI include_usage convention).
+  const captureUsage = (trimmed: string): void => {
+    if (!onUsage || !trimmed.startsWith('data: ')) return;
+    const data = trimmed.slice(6).trim();
+    if (data === '[DONE]') return;
+    try {
+      const parsed = JSON.parse(data) as {
+        usage?: { prompt_tokens?: number; completion_tokens?: number };
+      };
+      if (
+        parsed?.usage &&
+        typeof parsed.usage.prompt_tokens === 'number' &&
+        typeof parsed.usage.completion_tokens === 'number'
+      ) {
+        onUsage({
+          promptTokens: parsed.usage.prompt_tokens,
+          completionTokens: parsed.usage.completion_tokens,
+        });
+      }
+    } catch {
+      // Non-JSON data lines are ignored.
+    }
+  };
+
   try {
     while (true) {
       const { done, value } = await reader.read();
@@ -80,6 +117,7 @@ export async function streamCompletion(
           fullContent.push(token);
           onToken(token);
         }
+        captureUsage(trimmed);
       }
     }
 
@@ -91,6 +129,7 @@ export async function streamCompletion(
         fullContent.push(token);
         onToken(token);
       }
+      captureUsage(remaining);
     }
   } finally {
     reader.releaseLock();

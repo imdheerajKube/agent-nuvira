@@ -40,6 +40,12 @@ export interface CostEntry {
   costUsd: number;
   /** The task/goal that triggered this request */
   task?: string;
+  /**
+   * M2.2: true when inputTokens/outputTokens are MEASURED from the provider's
+   * reported usage (wire-token metering), false/undefined when length-based
+   * estimates were used. The dashboard splits measured vs estimated spend.
+   */
+  measured?: boolean;
 }
 
 export interface CostSummary {
@@ -177,6 +183,7 @@ export class CostTracker {
     inputTokens: number,
     outputTokens: number,
     task?: string,
+    measured?: boolean,
   ): CostEntry {
     const costUsd = calculateCost(provider, model, inputTokens, outputTokens);
 
@@ -189,6 +196,10 @@ export class CostTracker {
       totalTokens: inputTokens + outputTokens,
       costUsd,
       task,
+      // M2.2: must be set BEFORE persist below — the entry is serialized in
+      // writeCosts and any post-hoc mutation never reaches disk (which would
+      // silently zero the dashboard's measured-vs-estimated split).
+      measured,
     };
 
     // Store in session
@@ -225,6 +236,33 @@ export class CostTracker {
       // Registry is best-effort.
     }
 
+    return entry;
+  }
+
+  /**
+   * Record a call with EXACT tokens reported by the provider/gateway usage
+   * (M2.2 wire-token metering). Cost is computed from real token counts × the
+   * same per-1K pricing, the entry is flagged `measured: true`, and the exact
+   * tokens also flow to the Model Availability Registry so Auto routing's cost
+   * scoring can prefer measured cost over TYPICAL-token estimates.
+   */
+  recordCallMeasured(
+    provider: string,
+    model: string,
+    inputTokens: number,
+    outputTokens: number,
+    task?: string,
+  ): CostEntry {
+    // measured: true is set inside recordCall BEFORE the entry is persisted,
+    // so the dashboard's measured-vs-estimated split reads correctly from disk.
+    const entry = this.recordCall(provider, model, inputTokens, outputTokens, task, true);
+    // Write the exact measured tokens through to the registry (best-effort) so
+    // getMeasuredUsage() feeds measured-cost routing scoring.
+    try {
+      getModelRegistry().recordMeasuredUsage(provider, model, inputTokens, outputTokens);
+    } catch {
+      // Registry is best-effort.
+    }
     return entry;
   }
 
@@ -344,4 +382,25 @@ export function getCostTracker(): CostTracker {
     trackerInstance = new CostTracker();
   }
   return trackerInstance;
+}
+
+/**
+ * M2.2: record a call preferring MEASURED wire tokens when the provider
+ * reported usage; otherwise fall back to the length-based estimate. Shared by
+ * the OpenAI-compatible adapters so the measured-vs-estimated logic lives in
+ * one place. Best-effort — never throws.
+ */
+export function recordCallWithUsage(
+  costTracker: CostTracker,
+  provider: string,
+  model: string,
+  prompt: string,
+  content: string,
+  usage?: { promptTokens?: number; completionTokens?: number },
+): void {
+  if (usage && typeof usage.promptTokens === 'number' && typeof usage.completionTokens === 'number') {
+    costTracker.recordCallMeasured(provider, model, usage.promptTokens, usage.completionTokens);
+  } else {
+    costTracker.recordCallEstimated(provider, model, prompt, content);
+  }
 }

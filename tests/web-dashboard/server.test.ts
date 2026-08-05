@@ -70,7 +70,9 @@ function writeDefaultFixtures(): Fixtures {
     entries: [
       { provider: 'groq', model: 'llama-3.3-70b', costUsd: 0.0015, totalTokens: 1500, timestamp: Date.now() - 60000 },
       { provider: 'groq', model: 'llama-3.3-70b', costUsd: 0.0020, totalTokens: 2000, timestamp: Date.now() - 30000 },
-      { provider: 'gemini', model: 'gemini-2.0-flash', costUsd: 0.0005, totalTokens: 800, timestamp: Date.now() - 10000 },
+      // M2.2: one entry flagged measured (exact wire tokens) to exercise the
+      // measured-vs-estimated split read path.
+      { provider: 'gemini', model: 'gemini-2.0-flash', costUsd: 0.0005, totalTokens: 800, timestamp: Date.now() - 10000, measured: true },
     ],
   };
 
@@ -549,6 +551,16 @@ describe('Dashboard Server', () => {
       expect(body.recent[0].provider).toBe('gemini');
       expect(body.recent[0].model).toBe('gemini-2.0-flash');
       expect(body.recent[1].provider).toBe('groq');
+
+      // M2.2 measured-vs-estimated split (exact wire tokens vs estimates)
+      expect(body.measuredCalls).toBe(1);
+      expect(body.estimatedCalls).toBe(2);
+      expect(body.measuredCost).toBeCloseTo(0.0005, 6);
+      expect(body.estimatedCost).toBeCloseTo(0.0035, 6);
+      expect(body.byProviderMeasured.gemini).toBeCloseTo(0.0005, 6);
+      expect(body.byProviderMeasured.groq).toBeUndefined();
+      expect(body.recent[0].measured).toBe(true);
+      expect(body.recent[1].measured).toBe(false);
     });
 
     it('GET /api/history returns sorted recent sessions', async () => {
