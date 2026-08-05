@@ -257,13 +257,14 @@ Verified as of 2026-08-05 (v1.57.0, 3,032 root tests + 42 dashboard component te
 | Phase | Milestone | Issue | Status | Released in |
 |---|---|---|---|
 | P0 | M0.1 Baseline lock | [#1](https://github.com/imdheerajKube/agent-nuvira/issues/1) | ✅ | `af1f931` |
-| P0 | M0.2 Shared failover runner | [#1](https://github.com/imdheerajKube/agent-nuvira/issues/1) | ✅ | Stage A (failure-bookkeeping) + Stage B (runner) + Stage C (plan/execute adoption) shipped |
+| P0 | M0.2 Shared failover runner | [#1](https://github.com/imdheerajKube/agent-nuvira/issues/1) | ✅ | Stages A/B/C shipped |
+| P0 | M0.3 Orchestrator resolve consultation | [#1](https://github.com/imdheerajKube/agent-nuvira/issues/1) | ✅ | Session-excluded provider never wins a task; fallbackChain filtered; all-excluded degrades gracefully |
 | P0 | M0.3 Telemetry schema v2 | [#1](https://github.com/imdheerajKube/agent-nuvira/issues/1) | ⬜ | — |
 | P0 | M0.4 Mid-stream classification | [#1](https://github.com/imdheerajKube/agent-nuvira/issues/1) | ⬜ | — |
-| P1 | M1.1 Nuvira adapter | [#2](https://github.com/imdheerajKube/agent-nuvira/issues/2) | ⬜ | — |
-| P1 | M1.2 Factory + config | [#2](https://github.com/imdheerajKube/agent-nuvira/issues/2) | ⬜ | — |
-| P1 | M1.3 Registry/ledger write-through | [#2](https://github.com/imdheerajKube/agent-nuvira/issues/2) | ⬜ | — |
-| P1 | M1.4 Parity harness | [#2](https://github.com/imdheerajKube/agent-nuvira/issues/2) | ⬜ | — |
+| P1 | M1.1 Nuvira adapter | [#2](https://github.com/imdheerajKube/agent-nuvira/issues/2) | ✅ | `src/inference/nuvira-adapter.ts` |
+| P1 | M1.2 Factory + config | [#2](https://github.com/imdheerajKube/agent-nuvira/issues/2) | ✅ | factory case + ProviderType + headers/timeoutMs + picker/doctor/router lists |
+| P1 | M1.3 Registry/ledger write-through | [#2](https://github.com/imdheerajKube/agent-nuvira/issues/2) | ✅ | Free — adapter implements InferenceProvider, all telemetry applies |
+| P1 | M1.4 Parity harness | [#2](https://github.com/imdheerajKube/agent-nuvira/issues/2) | ✅ | 14 mock-server parity tests |
 | P2 | M2.1 Capability-aware scoring | [#3](https://github.com/imdheerajKube/agent-nuvira/issues/3) | ⬜ | — |
 | P2 | M2.2 Wire-token cost inputs | [#3](https://github.com/imdheerajKube/agent-nuvira/issues/3) | ⬜ | — |
 | P2 | M2.3 Multi-account rotation | [#3](https://github.com/imdheerajKube/agent-nuvira/issues/3) | ⬜ | — |

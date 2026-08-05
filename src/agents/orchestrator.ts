@@ -301,13 +301,13 @@ export class Orchestrator {
   private coldStartProbeFired = false;
   /**
    * Per-pipeline failure session: the state recordActionFailure mutates when
-   * a per-task LLM call fails. The registry/quota/breaker write-throughs it
-   * composes are read by resolveAutoRoutingDecision BEFORE every task, so a
-   * mid-pipeline 429 on the planner makes the writer skip the exhausted
-   * provider predictively (parked in the quota ledger) without re-failing.
-   * Session-exclusion CONSULTATION at the orchestrator resolve level is a
-   * tracked Nuvira-Router follow-up (chat filters at its walk level; the
-   * orchestrator has no ranked walk yet).
+   * a per-task LLM call fails, and resolveAutoRoutingDecision CONSULTS it
+   * before every task (M0.3) — a provider that failed earlier in this pipeline
+   * (auth = rest of pipeline, rate-limit/transient = cooldown) never wins a
+   * subsequent task; the decision sinks to the best-ranked non-excluded
+   * provider. The registry/quota/breaker write-throughs it composes are also
+   * read by the router before every task (parked providers sink below healthy
+   * ones), so both mechanisms agree.
    */
   private readonly failureSession: FailureSessionState = {
     sessionFailedProviders: new Map(),
@@ -1858,17 +1858,56 @@ export class Orchestrator {
       },
       this.configManager,
     );
-    // Record for the dashboard usage stats + audit trail
+    // ── Session-exclusion consultation (Nuvira-Router M0.3) ──────────────
+    // A provider that failed EARLIER in this pipeline (auth = rest of the
+    // pipeline, rate-limit/transient = short cooldown) is excluded from the
+    // resolve-time winner, exactly like chat's walk skips session-failed
+    // providers. Without this, the registry/quota write-throughs from Stage C
+    // are learned but a task whose router pick IS the dead provider would
+    // still fail into it once per task before the walk learns again. Sink the
+    // decision to the best-ranked NON-excluded provider.
+    const exclusionNow = Date.now();
+    const isActiveExclusion = (p: string): boolean => {
+      const expiresAt = this.failureSession.sessionFailedProviders.get(p);
+      return expiresAt !== undefined && expiresAt > exclusionNow;
+    };
+    let effective = decision;
+    if (isActiveExclusion(decision.provider)) {
+      const next = decision.ranked.find((r) => !isActiveExclusion(r.provider));
+      if (next) {
+        const keptRanked = decision.ranked.filter((r) => !isActiveExclusion(r.provider));
+        effective = {
+          ...decision,
+          provider: next.provider,
+          model: getAutoRouter().resolveModel(next.provider, task.agentType, this.configManager),
+          score: next.score,
+          ranked: keptRanked,
+          // Keep the fallback chain consistent with the sunk pick — never walk
+          // back into the excluded provider via repair/escalation/switch.
+          fallbackChain: decision.fallbackChain.filter((c) => !isActiveExclusion(c.provider)),
+          explanation: `${decision.explanation} — ${decision.provider} excluded this pipeline (failed earlier); sank to ${next.provider}.`,
+        };
+        if (options.verbose) {
+          logger.warn(`      ⚠️ ${decision.provider} excluded this pipeline (failed earlier) — routing ${task.agentType} to ${next.provider}`);
+        }
+      } else if (options.verbose) {
+        // Winner + every ranked provider excluded — no sink possible. The pick
+        // falls through to the excluded winner and will fail once (graceful
+        // degradation, matching chat's exhausted-candidates behavior).
+        logger.warn(`      ⚠️ ${decision.provider} excluded this pipeline (failed earlier) and no non-excluded ranked provider remains — trying it once`);
+      }
+    }
+    // Record for the dashboard usage stats + audit trail (the EFFECTIVE pick)
     recordRoutingDecision({
       source: 'orchestrator',
       agentType: task.agentType,
       task: task.description,
-      complexity: decision.complexity,
-      provider: decision.provider,
-      model: decision.model,
-      score: decision.score,
+      complexity: effective.complexity,
+      provider: effective.provider,
+      model: effective.model,
+      score: effective.score,
     });
-    return decision;
+    return effective;
   }
 
   private createAutoRoutedLLM(

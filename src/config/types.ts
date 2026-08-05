@@ -1,7 +1,7 @@
 /**
  * Supported built-in inference providers.
  */
-export type BuiltInProviderType = 'nim' | 'gemini' | 'openrouter' | 'groq' | 'local';
+export type BuiltInProviderType = 'nim' | 'gemini' | 'openrouter' | 'groq' | 'local' | 'nuvira';
 
 /**
  * Any provider identifier, including built-in and plugin-provided types.
@@ -23,6 +23,14 @@ export interface ProviderConfig {
   baseUrl?: string;
   temperature?: number;
   maxTokens?: number;
+  /**
+   * Optional gateway headers merged into every request (Nuvira-Router P1):
+   * e.g. enterprise gateway API keys or tenant headers. Keys are validated
+   * against header-injection (no CR/LF/colon); values must be plain strings.
+   */
+  headers?: Record<string, unknown>;
+  /** Request timeout in ms (default 30_000 for the nuvira adapter). */
+  timeoutMs?: number;
 }
 
 /**

@@ -5,6 +5,7 @@ import { GeminiAdapter } from '../../src/inference/gemini-adapter.js';
 import { OpenRouterAdapter } from '../../src/inference/openrouter-adapter.js';
 import { GroqAdapter } from '../../src/inference/groq-adapter.js';
 import { LocalAdapter } from '../../src/inference/local-adapter.js';
+import { NuviraAdapter } from '../../src/inference/nuvira-adapter.js';
 import { getPluginRegistry } from '../../src/plugins/registry.js';
 
 describe('ProviderFactory', () => {
@@ -33,6 +34,12 @@ describe('ProviderFactory', () => {
       const provider = ProviderFactory.createProvider('local', emptyConfig);
       expect(provider).toBeInstanceOf(LocalAdapter);
       expect(provider.name).toBe('Local');
+    });
+
+    it('should create NuviraAdapter for nuvira type', () => {
+      const provider = ProviderFactory.createProvider('nuvira', emptyConfig);
+      expect(provider).toBeInstanceOf(NuviraAdapter);
+      expect(provider.name).toBe('Nuvira Gateway');
     });
 
     it('should create GroqAdapter for groq type', () => {

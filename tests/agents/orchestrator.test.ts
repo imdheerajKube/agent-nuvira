@@ -34,6 +34,7 @@ import { ProviderFactory } from '../../src/inference/factory.js';
 import { ConfigManager } from '../../src/config/manager.js';
 import { getModelRegistry, resetModelRegistry } from '../../src/learning/model-registry.js';
 import { getQuotaLedger, resetQuotaLedger } from '../../src/learning/quota-ledger.js';
+import { getAutoRouter } from '../../src/learning/auto-router.js';
 import * as modelProbe from '../../src/inference/model-probe.js';
 
 // ─── Module-level mocks ─────────────────────────────────────────────────────
@@ -1315,6 +1316,135 @@ describe('Orchestrator — auto-routed failure telemetry', () => {
     const entry = getModelRegistry().getEntry('nim', 'meta/llama-3.1-8b-instruct');
     expect(entry?.status).toBe('unavailable');
     expect(entry?.lastError).toContain('model not found');
+  });
+
+  it('M0.3: a session-excluded provider never wins a subsequent task (resolve consultation)', async () => {
+    // A mid-pipeline 429 parks gemini in the ledger AND marks it in the
+    // per-pipeline failure session. resolveAutoRoutingDecision must sink the
+    // decision to the best-ranked NON-excluded provider, so the next task
+    // routes around gemini at RESOLVE time — not after another failed call.
+    const cm = new ConfigManager();
+    const orch = new Orchestrator(cm);
+
+    // Seed the auto router with a deterministic ranked order: gemini first,
+    // groq second — the exact "gemini won the router but failed mid-pipeline"
+    // scenario. Spy at the module level so resolve() inside the orchestrator
+    // returns this decision.
+    const ranked = [
+      { provider: 'gemini', model: 'gemini-2.5-flash', score: 0.9, dimensions: {}, weightTotal: 1, inCooldown: false, reason: 'top' },
+      { provider: 'groq', model: 'llama-3.3-70b-versatile', score: 0.8, dimensions: {}, weightTotal: 1, inCooldown: false, reason: 'second' },
+    ];
+    const baseDecision = {
+      agentType: 'writer',
+      complexity: 'moderate',
+      taskProfile: undefined,
+      escalationApplied: false,
+      taskType: 'coding',
+      provider: 'gemini',
+      model: 'gemini-2.5-flash',
+      score: 0.9,
+      weights: {},
+      ranked,
+      fallbackChain: [],
+      explanation: 'gemini is top',
+      routedBy: 'heuristic',
+    } as any;
+    const resolveSpy = vi.spyOn(getAutoRouter(), 'resolve').mockReturnValue(baseDecision);
+    // Deterministic: the sink resolves the next provider's model through the
+    // router — stub it so the assertion never depends on machine config/env.
+    const resolveModelSpy = vi.spyOn(getAutoRouter(), 'resolveModel').mockReturnValue('llama-3.3-70b-versatile');
+
+    // Simulate the earlier mid-pipeline failure: gemini 429'd → session
+    // exclusion armed (active for the rest of the pipeline).
+    (orch as any).failureSession.sessionFailedProviders.set('gemini', Number.MAX_SAFE_INTEGER);
+
+    const decision = (orch as any).resolveAutoRoutingDecision(
+      { agentType: 'writer', description: 'write code' },
+      { verbose: true },
+    );
+
+    expect(decision.provider).toBe('groq');
+    expect(decision.model).toBe('llama-3.3-70b-versatile');
+    expect(decision.ranked.some((r: any) => r.provider === 'gemini')).toBe(false);
+    expect(decision.fallbackChain.some((c: any) => c.provider === 'gemini')).toBe(false);
+    expect(decision.explanation).toContain('excluded');
+    resolveSpy.mockRestore();
+    resolveModelSpy.mockRestore();
+  });
+
+  it('M0.3: excludes only ACTIVE exclusions — an expired cooldown re-admits the provider', async () => {
+    const cm = new ConfigManager();
+    const orch = new Orchestrator(cm);
+
+    const ranked = [
+      { provider: 'gemini', model: 'gemini-2.5-flash', score: 0.9, dimensions: {}, weightTotal: 1, inCooldown: false, reason: 'top' },
+    ];
+    const baseDecision = {
+      agentType: 'writer',
+      complexity: 'moderate',
+      taskProfile: undefined,
+      escalationApplied: false,
+      taskType: 'coding',
+      provider: 'gemini',
+      model: 'gemini-2.5-flash',
+      score: 0.9,
+      weights: {},
+      ranked,
+      fallbackChain: [],
+      explanation: 'gemini is top',
+      routedBy: 'heuristic',
+    } as any;
+    const resolveSpy = vi.spyOn(getAutoRouter(), 'resolve').mockReturnValue(baseDecision);
+
+    // Transient failure long ago → exclusion EXPIRED → provider re-admitted.
+    (orch as any).failureSession.sessionFailedProviders.set('gemini', Date.now() - 60_000);
+
+    const decision = (orch as any).resolveAutoRoutingDecision(
+      { agentType: 'writer', description: 'write code' },
+      {},
+    );
+
+    expect(decision.provider).toBe('gemini');
+    resolveSpy.mockRestore();
+  });
+
+  it('M0.3: winner + every ranked provider excluded → degrades gracefully (tries winner once)', async () => {
+    const cm = new ConfigManager();
+    const orch = new Orchestrator(cm);
+
+    const ranked = [
+      { provider: 'gemini', model: 'gemini-2.5-flash', score: 0.9, dimensions: {}, weightTotal: 1, inCooldown: false, reason: 'top' },
+      { provider: 'groq', model: 'llama-3.3-70b-versatile', score: 0.8, dimensions: {}, weightTotal: 1, inCooldown: false, reason: 'second' },
+    ];
+    const baseDecision = {
+      agentType: 'writer',
+      complexity: 'moderate',
+      taskProfile: undefined,
+      escalationApplied: false,
+      taskType: 'coding',
+      provider: 'gemini',
+      model: 'gemini-2.5-flash',
+      score: 0.9,
+      weights: {},
+      ranked,
+      fallbackChain: [{ provider: 'gemini', model: 'gemini-2.5-flash', estimatedCost: 0, qualityScore: 0.9, reason: 'top' }],
+      explanation: 'gemini is top',
+      routedBy: 'heuristic',
+    } as any;
+    const resolveSpy = vi.spyOn(getAutoRouter(), 'resolve').mockReturnValue(baseDecision);
+    // BOTH providers excluded — no sink possible.
+    (orch as any).failureSession.sessionFailedProviders.set('gemini', Number.MAX_SAFE_INTEGER);
+    (orch as any).failureSession.sessionFailedProviders.set('groq', Number.MAX_SAFE_INTEGER);
+
+    const decision = (orch as any).resolveAutoRoutingDecision(
+      { agentType: 'writer', description: 'write code' },
+      {},
+    );
+
+    // Graceful degradation: the excluded winner is kept (it will fail once and
+    // the failure bookkeeping records it) — never an empty/crashy decision.
+    expect(decision.provider).toBe('gemini');
+    resolveSpy.mockRestore();
   });
 
   it('parks the provider in the quota ledger on rate-limit (full bookkeeping)', async () => {
