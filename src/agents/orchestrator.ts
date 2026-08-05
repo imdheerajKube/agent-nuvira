@@ -50,7 +50,8 @@ import { scanForInjections, formatScanReport } from '../security/scanner.js';
 import { getAutoRouter, isAutoModel, isAutoProvider, type AutoRouteResult } from '../learning/auto-router.js';
 import { analyzeComplexity, type ComplexityLevel } from '../learning/hybrid-router.js';
 import { getModelRegistry } from '../learning/model-registry.js';
-import { recordRegistryFailure, recordRegistrySuccess } from '../learning/provider-fallback.js';
+import { recordRegistrySuccess } from '../learning/provider-fallback.js';
+import { recordActionFailure, type FailureSessionState } from '../learning/failure-bookkeeping.js';
 import { resolveWorkingModel } from '../inference/model-validator.js';
 import { refreshModelRegistry } from '../inference/model-probe.js';
 import { recordRoutingDecision } from '../learning/routing-history.js';
@@ -298,6 +299,20 @@ export class Orchestrator {
    * maybeFireColdStartProbe). A long dev-mode session only pays for it once.
    */
   private coldStartProbeFired = false;
+  /**
+   * Per-pipeline failure session: the state recordActionFailure mutates when
+   * a per-task LLM call fails. The registry/quota/breaker write-throughs it
+   * composes are read by resolveAutoRoutingDecision BEFORE every task, so a
+   * mid-pipeline 429 on the planner makes the writer skip the exhausted
+   * provider predictively (parked in the quota ledger) without re-failing.
+   * Session-exclusion CONSULTATION at the orchestrator resolve level is a
+   * tracked Nuvira-Router follow-up (chat filters at its walk level; the
+   * orchestrator has no ranked walk yet).
+   */
+  private readonly failureSession: FailureSessionState = {
+    sessionFailedProviders: new Map(),
+    sessionTransientFailedProviders: new Set(),
+  };
   /** Execution telemetry accumulator for the current pipeline */
   private stats: ExecutionStats = {
     llmCalls: 0,
@@ -1231,7 +1246,16 @@ export class Orchestrator {
       try {
         output = await provider.generate(prompt, mergedOptions);
       } catch (err) {
-        recordRegistryFailure(providerType, mergedOptions.model, err, undefined, 'execute');
+        // FULL shared bookkeeping (Nuvira-Router M0.2 Stage C): the previous
+        // bare recordRegistryFailure only updated health scores — a mid-pipeline
+        // 429 now also parks the provider in the quota ledger (so the NEXT task
+        // in this pipeline skips it predictively), records the quota-timeline
+        // failover event, feeds the circuit breaker, and applies the
+        // model-not-found → definitive-unavailable rule. Same classification.
+        recordActionFailure(this.failureSession, providerType, err, this.configManager, {
+          model: mergedOptions.model,
+          action: 'execute',
+        });
         throw err;
       }
       // Success attribution: this pipeline call just PROVED the provider ×

@@ -33,6 +33,7 @@ import { logger } from '../../src/utils/logger.js';
 import { ProviderFactory } from '../../src/inference/factory.js';
 import { ConfigManager } from '../../src/config/manager.js';
 import { getModelRegistry, resetModelRegistry } from '../../src/learning/model-registry.js';
+import { getQuotaLedger, resetQuotaLedger } from '../../src/learning/quota-ledger.js';
 import * as modelProbe from '../../src/inference/model-probe.js';
 
 // ─── Module-level mocks ─────────────────────────────────────────────────────
@@ -1225,10 +1226,12 @@ describe('Orchestrator — auto-routed failure telemetry', () => {
     originalMemoryDir = process.env.BUFF_MEMORY_DIR;
     process.env.BUFF_MEMORY_DIR = tempDir;
     resetModelRegistry();
+    resetQuotaLedger();
   });
 
   afterEach(() => {
     resetModelRegistry();
+    resetQuotaLedger();
     if (originalMemoryDir === undefined) {
       delete process.env.BUFF_MEMORY_DIR;
     } else {
@@ -1312,6 +1315,44 @@ describe('Orchestrator — auto-routed failure telemetry', () => {
     const entry = getModelRegistry().getEntry('nim', 'meta/llama-3.1-8b-instruct');
     expect(entry?.status).toBe('unavailable');
     expect(entry?.lastError).toContain('model not found');
+  });
+
+  it('parks the provider in the quota ledger on rate-limit (full bookkeeping)', async () => {
+    // Stage C: a mid-pipeline 429 now goes through recordActionFailure's FULL
+    // composition — the quota ledger parks the provider until its reset window,
+    // so the NEXT task in the pipeline skips it predictively (read via
+    // getRouterQuotaStatus before every task) instead of failing into it again.
+    const cm = new ConfigManager();
+    const orch = new Orchestrator(cm);
+
+    vi.spyOn(ProviderFactory, 'createProvider').mockReturnValue(makeFailingProvider(new Error('429 rate limit exceeded')));
+
+    const decision = {
+      provider: 'groq',
+      model: 'llama-3.3-70b-versatile',
+      explanation: 'test routing',
+      score: 0.8,
+      taskProfile: undefined,
+      escalationApplied: false,
+      complexity: 'moderate',
+      ranked: [],
+    } as any;
+
+    const callLLM = (orch as any).createAutoRoutedLLMFromDecision(
+      { agentType: 'writer', description: 'write code' },
+      {},
+      decision,
+    );
+
+    await expect(callLLM('hello')).rejects.toThrow('429');
+
+    // The ledger parked groq until its reset window → router feed skips it.
+    const status = getQuotaLedger().getStatus(cm).find((s) => s.provider === 'groq');
+    expect(status).toBeDefined();
+    expect(status!.parked).toBe(true);
+    expect(status!.cooldownRemaining).toBeGreaterThan(0);
+    // Registry agrees (mirrored read model) → predictive skip armed.
+    expect(getModelRegistry().getBlockedProviders()).toContain('groq');
   });
 
   it('keeps transient (server) failures non-blocking but learned (error rate)', async () => {

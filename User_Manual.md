@@ -744,6 +744,8 @@ agent-nuvira model quota reset  # clear the ledger
 
 **Failover timeline (transparency: when failover occurred).** Every park, window-reset re-enable, manual release, and mid-session failover is appended to `~/.buff/memory/quota-events.jsonl` (capped at 200). The dashboard's Quota card renders it as a **Failover Timeline**, and `buff model quota` prints the last 20 events. The timeline is **live**: the dashboard watches the files on disk and pushes a `quota` SSE event the moment a failover is written.
 
+**One shared failover walk for every action (Nuvira-Router).** Chat, plan, and the execute orchestrator all route through the same single-shot failover machinery: the auto router picks the best provider, and if that call fails — for **any** reason (expired key, exhausted quota, deprecated model, timeout) — the ranked candidate list is walked until one answers, with every attempt written through the full shared bookkeeping (session exclusion + quota-ledger park + model-availability registry + failover timeline + circuit breaker). That means `buff plan` and `buff execute` fail over across providers exactly like `buff chat` does, and a dead provider × model is learned **predictively** so the next pick skips it instead of failing into it again.
+
 ### Checkpoint / Resume — continuity across crashes and quota kills
 
 `buff execute "<goal>" --checkpoint` saves a resume-able snapshot after every task batch (task plan with per-step statuses, artifacts, file changes, metadata) to `~/.buff/memory/checkpoints/` (honors `BUFF_MEMORY_DIR`). A crash / quota kill / token expiry mid-pipeline no longer restarts the whole plan:

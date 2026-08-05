@@ -257,7 +257,7 @@ Verified as of 2026-08-05 (v1.57.0, 3,032 root tests + 42 dashboard component te
 | Phase | Milestone | Issue | Status | Released in |
 |---|---|---|---|
 | P0 | M0.1 Baseline lock | [#1](https://github.com/imdheerajKube/agent-nuvira/issues/1) | ✅ | `af1f931` |
-| P0 | M0.2 Shared failover runner | [#1](https://github.com/imdheerajKube/agent-nuvira/issues/1) | ✅ | Stage A (failure-bookkeeping) + Stage B (runner) shipped |
+| P0 | M0.2 Shared failover runner | [#1](https://github.com/imdheerajKube/agent-nuvira/issues/1) | ✅ | Stage A (failure-bookkeeping) + Stage B (runner) + Stage C (plan/execute adoption) shipped |
 | P0 | M0.3 Telemetry schema v2 | [#1](https://github.com/imdheerajKube/agent-nuvira/issues/1) | ⬜ | — |
 | P0 | M0.4 Mid-stream classification | [#1](https://github.com/imdheerajKube/agent-nuvira/issues/1) | ⬜ | — |
 | P1 | M1.1 Nuvira adapter | [#2](https://github.com/imdheerajKube/agent-nuvira/issues/2) | ⬜ | — |

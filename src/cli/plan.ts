@@ -7,7 +7,10 @@ import { ContextParser } from '../context/parser.js';
 import { logger } from '../utils/logger.js';
 import { showModelPicker } from './model-picker.js';
 import { resolveProvider } from './router.js';
-import { getProviderFallback, classifyFallbackError, isRetryableError, recordRegistryFailure, recordRegistrySuccess } from '../learning/provider-fallback.js';
+import { getAutoRouter } from '../learning/auto-router.js';
+import { recordRegistrySuccess } from '../learning/provider-fallback.js';
+import { recordActionFailure, type FailureSessionState } from '../learning/failure-bookkeeping.js';
+import { runSingleShotAuto } from './failover-runner.js';
 
 /**
  * Plan command — generate implementation plans for code changes
@@ -104,43 +107,64 @@ Use clear markdown formatting.`;
 
       spinner.text = 'Generating plan...';
 
-      // ── Generate with auto-fallback ─────────────────────────────────
-      let result: string;
-
-      try {
-        result = await provider.generate(prompt, options);
-        // Success attribution: this plan call PROVED the provider × model
-        // works — the per-action "learned from real usage" panel gains a
-        // 'plan' verified row (mirror of the failure write in the catch).
-        recordRegistrySuccess(type, options?.model, 'plan');
-      } catch (err) {
-        // Try automatic fallback to another provider before giving up
-        const errorType = classifyFallbackError(err);
-        // Feed the SHARED registry telemetry path: an auth/404 failure on this
-        // FIRST direct call would otherwise never be learned (non-retryable
-        // errors skip the fallback loop entirely), so plan now routes around
-        // the dead provider on the next pick like chat/execute do.
-        recordRegistryFailure(type, options?.model, err, errorType, 'plan');
-        if (isRetryableError(errorType)) {
+      // ── Generate with the SHARED single-shot auto-failover walk ────────
+      // (Nuvira-Router M0.2 Stage C): plan now walks the auto-router's ranked
+      // candidates for ANY failure class (auth/404/429/timeout) instead of
+      // only retryable errors via the old callWithFallback chain, and every
+      // attempt feeds the FULL shared bookkeeping (recordActionFailure: session
+      // exclusion + quota-ledger park + registry write-through + timeline +
+      // circuit breaker). The picked provider stays primary; the ranked list
+      // is the auto-router's ranking (minus the primary), so a dead key/model
+      // fails over to the router's best alternatives just like chat.
+      const failureSession: FailureSessionState = {
+        sessionFailedProviders: new Map(),
+        sessionTransientFailedProviders: new Set(),
+      };
+      const result = await runSingleShotAuto({
+        action: 'plan',
+        task,
+        configManager: this.configManager,
+        // Primary = the picked provider (explicit or default). Ranked =
+        // auto-router's ranked providers minus the primary + this-run
+        // exclusions, so plan never re-tries a provider that already failed.
+        route: async (excludeProviders) => {
+          let ranked: string[] = [];
+          let complexity = 'moderate';
+          let score = 0;
           try {
-            const fallback = getProviderFallback(this.configManager, this.configManager.getAll().fallback);
-            logger.warn(`🔄 ${provider.name} failed — attempting automatic failover...`);
-            const fallbackResult = await fallback.callWithFallback(
-              type,
-              async (fbProvider) => fbProvider.generate(prompt, options),
-              { context: 'plan', label: `Plan: ${task.slice(0, 60)}` },
-            );
-            result = fallbackResult.response;
-            if (fallbackResult.attempts > 1) {
-              logger.success(`✅ Auto-fallback: switched to ${fallbackResult.provider}`);
-            }
+            const decision = getAutoRouter().resolve('plan', task, {}, this.configManager);
+            ranked = decision.ranked
+              .map((r) => r.provider)
+              .filter((p) => p !== type && !excludeProviders.includes(p));
+            complexity = decision.complexity;
+            score = decision.score;
           } catch {
-            throw err; // Throw the original error — fallback exhausted
+            // Best-effort — a router failure must never break the plan walk;
+            // primary-only is the graceful degradation.
           }
-        } else {
-          throw err; // Not retryable — throw immediately
-        }
-      }
+          return {
+            type,
+            provider,
+            model: options?.model || 'default',
+            ranked,
+            complexity,
+            score,
+          };
+        },
+        generate: async (genProvider, genType, model) => {
+          const out = await genProvider.generate(prompt, { ...options, model });
+          // Success attribution: this plan call PROVED the provider × model
+          // works — the per-action "learned from real usage" panel gains a
+          // 'plan' verified row (mirror of the failure write in the runner).
+          recordRegistrySuccess(genType, model, 'plan');
+          return out;
+        },
+        recordFailure: (providerType, model, err) =>
+          recordActionFailure(failureSession, providerType, err, this.configManager, {
+            model,
+            action: 'plan',
+          }),
+      });
 
       spinner.stop();
 

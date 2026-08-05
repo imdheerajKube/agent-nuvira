@@ -34,7 +34,7 @@ import { applyActiveModel } from './model.js';
 import { showModelPicker } from './model-picker.js';
 import { resolveProvider } from './router.js';
 import { isAutoModel } from '../learning/auto-router.js';
-import { recordRegistryFailure } from '../learning/provider-fallback.js';
+import { recordActionFailure, type FailureSessionState } from '../learning/failure-bookkeeping.js';
 import { getTrajectoryStore } from '../memory/trajectory-store.js';
 import { listCheckpoints } from '../agents/checkpoint-store.js';
 import { logger, setSilent } from '../utils/logger.js';
@@ -182,6 +182,17 @@ export function parseGoalLines(lines: string[]): string {
  * Execute command — orchestrates multiple agents to accomplish a goal.
  */
 export class ExecuteCommand extends BaseCommand {
+  /**
+   * Per-run failure session for the execute-side direct LLM calls that bypass
+   * the orchestrator (generateFollowUpSuggestions). A dead provider×model
+   * here is written through the FULL shared bookkeeping so the next pick skips
+   * it predictively (mirror of the orchestrator's own per-task session).
+   */
+  private readonly failureSession: FailureSessionState = {
+    sessionFailedProviders: new Map(),
+    sessionTransientFailedProviders: new Set(),
+  };
+
   create(): Command {
     const command = new Command('execute')
       .description('Run a multi-agent pipeline to accomplish a goal')
@@ -1195,17 +1206,23 @@ export class ExecuteCommand extends BaseCommand {
         }
       }
     } catch (err) {
-      // LLM failed — feed the SHARED registry telemetry path: this follow-up
-      // generator is the ONLY execute-side LLM call that bypasses the
-      // orchestrator, so without this a dead provider×model here was never
-      // learned. Re-derived inside a guarded block (a throwing config read
+      // LLM failed — feed the FULL shared bookkeeping path (Nuvira-Router
+      // M0.2 Stage C): this follow-up generator is the ONLY execute-side LLM
+      // call that bypasses the orchestrator, so without this a dead
+      // provider×model here was never learned. recordActionFailure composes
+      // session exclusion + quota park + registry write-through + timeline +
+      // breaker (the old bare recordRegistryFailure only updated health
+      // scores). Re-derived inside a guarded block (a throwing config read
       // must never break the rule-based fallback), and the literal 'auto'
       // provider is never written — it's a routing directive, not a real
       // provider×model.
       try {
         const fbType = (activeProvider || this.configManager.getAll().defaultProvider || 'groq') as ProviderType;
         if (fbType !== 'auto') {
-          recordRegistryFailure(fbType, activeModel || 'default', err, undefined, 'execute');
+          recordActionFailure(this.failureSession, fbType, err, this.configManager, {
+            model: activeModel || 'default',
+            action: 'execute',
+          });
         }
       } catch {
         // Telemetry must never break the fallback to rule-based suggestions.
