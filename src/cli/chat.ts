@@ -859,7 +859,7 @@ export class ChatCommand extends BaseCommand {
    * registry write-through (per-action telemetry), quota-timeline event, and
    * the shared circuit breaker. Best-effort: never throws.
    */
-  private recordAutoProviderFailure(providerType: string, err: unknown, model?: string): void {
+  private recordAutoProviderFailure(providerType: string, err: unknown, model?: string, apiKey?: string): void {
     recordActionFailure(
       {
         sessionFailedProviders: this.sessionFailedProviders,
@@ -868,7 +868,7 @@ export class ChatCommand extends BaseCommand {
       providerType,
       err,
       this.configManager,
-      { model, action: 'chat' },
+      { model, action: 'chat', apiKey },
     );
   }
 
@@ -1112,9 +1112,9 @@ export class ChatCommand extends BaseCommand {
       task: message,
       configManager: this.configManager,
       route: (excludeProviders) => this.routeMessageAuto(message, excludeProviders),
-      generate: (provider, type, model) =>
-        this.generateWithContext(provider, prompt, type, { ...options, model }, cacheEnabled),
-      recordFailure: (type, model, err) => this.recordAutoProviderFailure(type, err, model),
+      generate: (provider, type, model, apiKey) =>
+        this.generateWithContext(provider, prompt, type, { ...options, model, apiKey }, cacheEnabled),
+      recordFailure: (type, model, err, apiKey) => this.recordAutoProviderFailure(type, err, model, apiKey),
     });
   }
 
@@ -1318,7 +1318,7 @@ Commands:
     provider: any,
     prompt: string,
     providerType: string,
-    options?: { file?: string; model?: string },
+    options?: { file?: string; model?: string; apiKey?: string },
     cacheEnabled: boolean = true,
   ): Promise<string> {
     let fullPrompt = prompt;

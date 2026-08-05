@@ -86,8 +86,10 @@ export class NuviraAdapter implements InferenceProvider {
       'Content-Type': 'application/json',
       ...extraHeaders(this.config),
     };
-    if (this.config.apiKey) {
-      headers['Authorization'] = `Bearer ${this.config.apiKey}`;
+    // M2.3: options.apiKey overrides the configured key (multi-account rotation).
+    const apiKey = options?.apiKey || this.config.apiKey;
+    if (apiKey) {
+      headers['Authorization'] = `Bearer ${apiKey}`;
     }
 
     const response = await fetch(`${this.baseUrl}/chat/completions`, {
@@ -153,8 +155,10 @@ export class NuviraAdapter implements InferenceProvider {
     const headers: Record<string, string> = {
       ...extraHeaders(this.config),
     };
-    if (this.config.apiKey) {
-      headers['Authorization'] = `Bearer ${this.config.apiKey}`;
+    // M2.3: options.apiKey overrides the configured key (multi-account rotation).
+    const apiKey = options?.apiKey || this.config.apiKey;
+    if (apiKey) {
+      headers['Authorization'] = `Bearer ${apiKey}`;
     }
 
     // NOTE: streamCompletion takes no signal, so timeoutMs applies to the
@@ -185,7 +189,10 @@ export class NuviraAdapter implements InferenceProvider {
 
   async isAvailable(): Promise<boolean> {
     // A gateway is "available" when it answers /models (short timeout). No
-    // key required — local gateways often run keyless.
+    // key required — local gateways often run keyless. Deliberately probes
+    // with the CONFIG (primary) key, not a rotated one: endpoint availability
+    // is account-independent, and the M2.3 rotation walk handles per-key
+    // auth/rate-limit at generate time.
     try {
       const headers = extraHeaders(this.config);
       if (this.config.apiKey) headers['Authorization'] = `Bearer ${this.config.apiKey}`;
@@ -208,6 +215,8 @@ export class NuviraAdapter implements InferenceProvider {
   }
 
   async listModels(): Promise<ModelDescriptor[]> {
+    // Primary-key probe by design (see isAvailable): the model list is shared
+    // across accounts of the same provider.
     try {
       const headers = extraHeaders(this.config);
       if (this.config.apiKey) headers['Authorization'] = `Bearer ${this.config.apiKey}`;

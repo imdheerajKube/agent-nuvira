@@ -11,6 +11,29 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added — Nuvira-Router P2 (capability-aware scoring + wire-token metering)
 
+- **M2.3 — Multi-account key rotation** (`src/config/types.ts`,
+  `src/learning/quota-ledger.ts`, `src/cli/failover-runner.ts`). A provider
+  can now carry MULTIPLE API keys (`ProviderConfig.apiKeys: string[]`, in
+  addition to the primary `apiKey`). The shared failover walk
+  (`runSingleShotAuto`) rotates through every non-parked key of a candidate
+  BEFORE switching providers: on a rate-limit/auth failure the dead ACCOUNT
+  is parked in the quota ledger (FNV-1a fingerprint via `accountIdForKey` —
+  raw keys are never persisted) and the next key is tried, so a quota-exhausted
+  secondary account no longer forces a provider switch. `options.apiKey`
+  overrides the configured key at the adapter level (Groq, NIM, Nuvira
+  gateway). Rotation is logged (`🔑 key#N …`), the next run SKIPS parked
+  accounts predictively (`isAccountParked`), and `releaseProvider` /
+  `releaseAccount` / `buff models unblock` clear them. Single-key and
+  keyless behavior is unchanged. Account parks act as a floor — the
+  config-aware `routing.quota.windowMs` window (via `recordActionFailure`)
+  wins when longer. Hermetic E2E (`tests/e2e/key-rotation.test.ts`) drives
+  the real adapter + runner against a mock gateway whose behavior keys on the
+  Authorization header: key-1 → 429 parks, key-2 → 200 answers, next run
+  skips key-1. Surfaced in `models explain` per ranked provider (`cost-source`
+  column) and in the dashboard Models panel (📏 measured-token chip).
+
+### Added — Nuvira-Router P2 (capability-aware scoring + wire-token metering)
+
 - **M2.1 — Capability-aware scoring** (`src/learning/auto-router.ts`). A new
   soft task-type → capability signal: each task type's required model-catalog
   tags (`plan`→reasoning, `code-review`→code+reasoning, quick edit→code,

@@ -18,6 +18,15 @@ export type LocalRunner = 'ollama' | 'huggingface' | 'ggml';
  */
 export interface ProviderConfig {
   apiKey?: string;
+  /**
+   * M2.3 multi-account rotation: ADDITIONAL API keys for the same provider
+   * (the primary stays in `apiKey`). When the failover runner hits a
+   * rate-limit/auth failure, it rotates to the next non-parked key of the
+   * SAME provider before switching providers. Set directly in
+   * .buffconfig.json (`providers.<type>.apiKeys: ["...", "..."]`); raw keys
+   * are never stored in the quota ledger — only a stable fingerprint.
+   */
+  apiKeys?: string[];
   model?: string;
   runner?: LocalRunner;
   baseUrl?: string;
@@ -252,4 +261,11 @@ export interface InferenceOptions {
   maxTokens?: number;
   provider?: string;
   stream?: boolean;
+  /**
+   * M2.3 multi-account rotation: override the adapter's configured key for
+   * this single call. Adapters prefer `options.apiKey` over `config.apiKey`,
+   * which lets the failover runner retry the SAME provider with the next
+   * account key instead of switching providers on a rate-limit/auth failure.
+   */
+  apiKey?: string;
 }

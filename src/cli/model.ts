@@ -743,12 +743,13 @@ export class ModelCommand extends BaseCommand {
       const mark = r.provider === decision.provider ? '✅' : '  ';
       const cd = r.inCooldown ? '  (circuit-breaker cooldown)' : '';
       const fit = r.capabilityFit !== undefined ? ` 🎯 fit ${Math.round(r.capabilityFit * 100)}%` : '';
-      // M2.2: measured wire-token basis vs estimate — visible cost transparency.
-      const measured =
+      // M2.2/visibility: cost source on EVERY ranked row — 📏 measured (with
+      // the real wire-token basis) or 📐 estimated (length-based default).
+      const costTag =
         r.costSource === 'measured' && r.costBasis
           ? ` 📏 measured ${r.costBasis.inputTokens}→${r.costBasis.outputTokens} tok`
-          : '';
-      console.log(`   ${mark} ${i + 1}. ${r.provider.padEnd(12)} score ${r.score.toFixed(3)}  ${r.reason}${fit}${measured}${cd}`);
+          : ' 📐 estimated';
+      console.log(`   ${mark} ${i + 1}. ${r.provider.padEnd(12)} score ${r.score.toFixed(3)}  ${r.reason}${fit}${costTag}${cd}`);
     });
     console.log('');
 

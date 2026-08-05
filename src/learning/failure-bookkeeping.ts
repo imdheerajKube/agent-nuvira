@@ -19,7 +19,7 @@
  */
 
 import type { ConfigManager } from '../config/manager.js';
-import { getQuotaLedger } from './quota-ledger.js';
+import { getQuotaLedger, accountIdForKey } from './quota-ledger.js';
 import {
   classifyFallbackError,
   getProviderFallback,
@@ -33,6 +33,25 @@ import {
  * Per-session failure state that the caller owns (so the helper stays pure and
  * the caller controls lifecycle). Chat keeps exactly this shape today.
  */
+/**
+ * M2.3: park a specific provider account/key in the quota ledger so key
+ * rotation skips it while other keys of the same provider stay usable.
+ * Best-effort — never throws; no-ops when no key was supplied.
+ */
+function parkAccountForKey(
+  providerType: string,
+  apiKey: string | undefined,
+  until: number,
+  reason: string,
+): void {
+  if (!apiKey) return;
+  try {
+    getQuotaLedger().parkAccount(providerType, accountIdForKey(apiKey), until, reason);
+  } catch {
+    // Best-effort — account bookkeeping must not crash a call.
+  }
+}
+
 export interface FailureSessionState {
   /**
    * Provider → expiry (ms epoch) of its session-level exclusion.
@@ -89,7 +108,7 @@ export function recordActionFailure(
   providerType: string,
   err: unknown,
   configManager: ConfigManager,
-  options?: { model?: string; action?: string },
+  options?: { model?: string; action?: string; apiKey?: string },
 ): void {
   const failureKind = classifyFallbackError(err);
   const now = Date.now();
@@ -98,6 +117,9 @@ export function recordActionFailure(
   if (failureKind === 'auth') {
     // Expired token/key — definitive for the rest of the session.
     session.sessionFailedProviders.set(providerType, Number.MAX_SAFE_INTEGER);
+    // M2.3: this SPECIFIC key is dead for the session — park its account so
+    // key rotation skips it while OTHER keys of the same provider stay usable.
+    parkAccountForKey(providerType, options?.apiKey, Number.MAX_SAFE_INTEGER, failureKind);
   } else if (failureKind === 'rate-limit') {
     // Exhausted quota / token-limit — usually transient, so only a short
     // cooldown before the provider is re-admitted to auto routing.
@@ -106,13 +128,17 @@ export function recordActionFailure(
     // rolls so the exclusion survives across chat sessions (the ledger is
     // read by the auto router before every pick, so the next session skips
     // the exhausted provider predictively instead of failing reactively).
+    let windowMs = 24 * 60 * 60 * 1000;
     try {
       const limit = configManager.getAll().routing?.quota?.[providerType];
-      const windowMs = limit?.windowMs ?? 24 * 60 * 60 * 1000;
+      windowMs = limit?.windowMs ?? windowMs;
       getQuotaLedger().parkProvider(providerType, now + windowMs, failureKind);
     } catch {
       // Best-effort — ledger bookkeeping must not crash a call.
     }
+    // M2.3: park the SPECIFIC account/key too (rotation skips it while
+    // other keys of the same provider stay usable).
+    parkAccountForKey(providerType, options?.apiKey, now + windowMs, failureKind);
   } else {
     // Server / network / timeout / unknown — transient but definitive enough
     // that the next message shouldn't re-pick this provider. Short cooldown,

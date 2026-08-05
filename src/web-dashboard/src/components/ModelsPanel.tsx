@@ -282,6 +282,19 @@ function RegistryEntryRow({ entry }: { entry: RegistryModelEntry }) {
             background: '#2d1616', border: '1px solid #f85149', color: '#f85149',
           }}>⏸ parked</span>
         )}
+        {entry.measuredSamples ? (
+          <span style={{
+            marginLeft: 8, fontSize: 10, padding: '1px 6px', borderRadius: 8, whiteSpace: 'nowrap',
+            background: '#0a2e1a', border: '1px solid #3fb950', color: '#3fb950',
+          }}>
+            📏 {entry.measuredInputTokens}→{entry.measuredOutputTokens} tok
+          </span>
+        ) : (
+          <span style={{
+            marginLeft: 8, fontSize: 10, padding: '1px 6px', borderRadius: 8, whiteSpace: 'nowrap',
+            background: '#21262d', border: '1px solid #8b949e', color: '#8b949e',
+          }}>📐 est</span>
+        )}
       </td>
       <td style={{ padding: '8px 12px' }}>
         <span style={{

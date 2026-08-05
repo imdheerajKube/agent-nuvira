@@ -26,7 +26,8 @@ export class NIMAdapter implements InferenceProvider {
   }
 
   async generate(prompt: string, options?: InferenceOptions): Promise<string> {
-    const apiKey = this.config.apiKey;
+    // M2.3: options.apiKey overrides the configured key (multi-account rotation).
+    const apiKey = options?.apiKey || this.config.apiKey;
     if (!apiKey) {
       throw new Error('NVIDIA NIM API key is not configured. Set NVIDIA_NIM_API_KEY env var.');
     }
@@ -87,7 +88,8 @@ export class NIMAdapter implements InferenceProvider {
     options: InferenceOptions | undefined,
     onToken: (token: string) => void,
   ): Promise<string> {
-    const apiKey = this.config.apiKey;
+    // M2.3: options.apiKey overrides the configured key (multi-account rotation).
+    const apiKey = options?.apiKey || this.config.apiKey;
     if (!apiKey) {
       throw new Error('NVIDIA NIM API key is not configured. Set NVIDIA_NIM_API_KEY env var.');
     }
@@ -122,6 +124,11 @@ export class NIMAdapter implements InferenceProvider {
   }
 
   async isAvailable(): Promise<boolean> {
+    // Deliberately checks availability with the CONFIG (primary) key only, not
+    // a rotated key: endpoint availability is account-independent, and the
+    // M2.3 rotation walk handles per-key auth/rate-limit at generate time. Do
+    // not "fix" this into a per-key probe — it would slow every candidate
+    // check for zero correctness gain.
     return !!this.config.apiKey;
   }
 
@@ -130,6 +137,8 @@ export class NIMAdapter implements InferenceProvider {
   }
 
   async listModels(): Promise<ModelDescriptor[]> {
+    // Primary-key probe by design (see isAvailable): the model list is shared
+    // across accounts of the same provider.
     const apiKey = this.config.apiKey;
     if (!apiKey) return [];
 

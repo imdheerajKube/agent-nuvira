@@ -54,11 +54,26 @@ export interface QuotaEntry {
   cooldownUntil: number;
 }
 
+/**
+ * M2.3 multi-account state for ONE provider key (never stores the raw key —
+ * only a stable fingerprint, e.g. `accountIdForKey`). Lets the failover
+ * runner rotate to another key of the same provider when one account is
+ * rate-limited/authed-out, instead of switching providers.
+ */
+export interface AccountState {
+  /** Epoch ms until which this account/key is parked (0 = not parked). */
+  parkedUntil: number;
+  /** Short reason, e.g. 'rate-limit' | 'auth' | 'cooldown'. */
+  reason?: string;
+}
+
 /** Persisted ledger state. */
 export interface QuotaLedgerData {
   version: number;
   /** Key: `${provider}|${model}` */
   entries: Record<string, QuotaEntry>;
+  /** M2.3: provider → account fingerprint → parked state (optional, additive). */
+  accounts?: Record<string, Record<string, AccountState>>;
 }
 
 /** Computed status for one entry (dashboard / CLI / tests). */
@@ -110,7 +125,7 @@ function eventsPath(): string {
 const MAX_EVENTS = 200;
 
 function emptyState(): QuotaLedgerData {
-  return { version: CURRENT_VERSION, entries: {} };
+  return { version: CURRENT_VERSION, entries: {}, accounts: {} };
 }
 
 function entryKey(provider: string, model: string): string {
@@ -274,11 +289,74 @@ export class QuotaLedger {
           this.state.entries[key].cooldownUntil = 0;
         }
       }
+      // Also clear every account of the provider (M2.3).
+      if (this.state.accounts && this.state.accounts[provider]) {
+        delete this.state.accounts[provider];
+      }
       this.save();
       this.recordEvent('released', provider, 'manual');
     } catch {
       // Best-effort.
     }
+  }
+
+  // ── M2.3 multi-account key state ─────────────────────────────────────────
+
+  /** Park a single provider account/key until an epoch ms (rate-limit/auth). */
+  parkAccount(provider: string, accountId: string, until: number, reason?: string): void {
+    try {
+      if (!this.state.accounts) this.state.accounts = {};
+      if (!this.state.accounts[provider]) this.state.accounts[provider] = {};
+      const existing = this.state.accounts[provider][accountId];
+      this.state.accounts[provider][accountId] = {
+        parkedUntil: Math.max(existing?.parkedUntil || 0, until),
+        reason: reason || existing?.reason,
+      };
+      this.save();
+      if (until > Date.now()) this.recordEvent('parked', provider, reason || 'cooldown');
+    } catch {
+      // Best-effort.
+    }
+  }
+
+  /** Clear a single account's park (e.g. a later call with the key succeeded). */
+  releaseAccount(provider: string, accountId: string): void {
+    try {
+      if (this.state.accounts?.[provider]) {
+        delete this.state.accounts[provider][accountId];
+        if (Object.keys(this.state.accounts[provider]).length === 0) {
+          delete this.state.accounts[provider];
+        }
+        this.save();
+      }
+    } catch {
+      // Best-effort.
+    }
+  }
+
+  /** Whether a specific provider account/key is currently parked. */
+  isAccountParked(provider: string, accountId: string): boolean {
+    try {
+      const a = this.state.accounts?.[provider]?.[accountId];
+      return !!a && a.parkedUntil > Date.now();
+    } catch {
+      return false;
+    }
+  }
+
+  /** Fingerprints of all currently-parked accounts for a provider. */
+  getParkedAccounts(provider: string): Set<string> {
+    const now = Date.now();
+    const parked = new Set<string>();
+    try {
+      const accounts = this.state.accounts?.[provider] || {};
+      for (const [id, a] of Object.entries(accounts)) {
+        if (a.parkedUntil > now) parked.add(id);
+      }
+    } catch {
+      // Best-effort.
+    }
+    return parked;
   }
 
   /**
@@ -518,6 +596,14 @@ export class QuotaLedger {
       entries: Object.fromEntries(
         Object.entries(this.state.entries).map(([k, v]) => [k, { ...v }]),
       ),
+      accounts: this.state.accounts
+        ? Object.fromEntries(
+            Object.entries(this.state.accounts).map(([p, accts]) => [
+              p,
+              Object.fromEntries(Object.entries(accts).map(([id, a]) => [id, { ...a }])),
+            ]),
+          )
+        : {},
     };
   }
 
@@ -569,6 +655,20 @@ function formatDuration(ms: number): string {
   if (h > 0) return `${h}h ${m}m`;
   if (m > 0) return `${m}m`;
   return `${Math.ceil(ms / 1000)}s`;
+}
+
+/**
+ * M2.3: stable fingerprint for a provider API key — the ledger (and every
+ * diagnostic surface) NEVER stores raw keys, only this. FNV-1a 32-bit:
+ * cheap, deterministic, collision-safe enough for account identity.
+ */
+export function accountIdForKey(key: string): string {
+  let h = 0x811c9dc5;
+  for (let i = 0; i < key.length; i++) {
+    h ^= key.charCodeAt(i);
+    h = Math.imul(h, 0x01000193) >>> 0;
+  }
+  return h.toString(16).padStart(8, '0');
 }
 
 // ─── Singleton ──────────────────────────────────────────────────────────────
