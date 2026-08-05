@@ -7,7 +7,27 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
-## [1.51.1] - 2026-08-04
+## [1.52.0] - 2026-08-04
+
+### Added
+
+- **Predictive model-availability routing** — the model registry now drives every
+  pick: models with no known API key or failed health probes are skipped before
+  scoring, so the router never opens a session on a dead provider (no more
+  "starts with Gemini, then NIM, then local" on every chat). Registry health,
+  availability, token remaining and reset windows feed the scorer directly.
+- **Web dashboard — scrubbable phase timeline** for pipeline runs (plan → gather
+  → write → review → test), persisted to `pipeline-runs.json` and replayed with a
+  draggable caret, play/pause sweep, and run selector; scrubbing highlights the
+  matching DAG node.
+- **Web dashboard — routing walkthrough** "Why did the router pick this?": a
+  narrated 4-step playback (request → candidates → exclusions → pick) built from
+  real routing-history decisions, with a complexity-profile fallback.
+
+### Notes
+
+- The dashboard is rebuilt into `src/web-dashboard/public/` and ships inside the
+  npm tarball, so `buff dashboard` serves the new timeline + walkthrough.
 
 ### Fixed
 
