@@ -52,6 +52,40 @@ export declare function updateDAGNode(nodeId: string, update: {
 export declare function resetDAG(): void;
 /** Read DAG data: in-memory first, fall back to recent trajectories */
 export declare function readDAGData(): Record<string, unknown>;
+/**
+ * A phase in a pipeline run — mirrors the DAG node shape with a computed
+ * duration so the frontend can size timeline blocks proportionally.
+ */
+interface PipelinePhase {
+    id: string;
+    agentType: string;
+    status: 'pending' | 'running' | 'completed' | 'failed';
+    description: string;
+    /** Per-subtask complexity label (trivial/simple/moderate/complex/critical). */
+    complexity?: string;
+    summary?: string;
+    startedAt?: number;
+    completedAt?: number;
+    /** Computed duration (ms) when both timestamps are known. */
+    durationMs?: number;
+}
+/** One persisted pipeline execution, rebuilt from the event-bus DAG timeline. */
+interface PipelineRun {
+    id: string;
+    goal: string;
+    startedAt: number;
+    endedAt?: number;
+    success?: boolean;
+    totalDurationMs: number;
+    phases: PipelinePhase[];
+}
+/**
+ * Read the persisted pipeline runs, most recent first.
+ */
+export declare function readPipelineRuns(): {
+    total: number;
+    runs: PipelineRun[];
+};
 export declare function createDashboardServer(): {
     server: ReturnType<typeof createServer>;
     port: number;
