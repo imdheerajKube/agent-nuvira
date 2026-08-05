@@ -7,6 +7,36 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [1.53.0] - 2026-08-05
+
+### Added
+
+- **Per-action "learned from real usage" telemetry everywhere** — every LLM call
+  (chat, execute, plan, edit, skill, learn, ci, doctor) writes through to the
+  Model Availability Registry WITH its action tag, so the registry learns which
+  provider × model each action killed or verified from real usage — not just
+  probes. `models status --verbose` prints registry-blocked providers (why
+  routing skips them) plus per-action verified/killed chips; the dashboard's
+  Models panel shows the same feed with a **daily timeline chart** (verified vs
+  killed vs transient per action over the last 14 days). A provider killed by
+  ANY action is skipped predictively by all others.
+- **Recovery loop** — a later real success re-verifies a provider AND clears a
+  stale learned quota-park (a real 1-token spot-check or usage success is
+  direct evidence the provider serves again; `syncQuota` re-parks genuine
+  exhaustion on the next routing read).
+- **Hermetic E2E failover test** (`tests/e2e/failover-learning.test.ts`) — a
+  real local HTTP mock returns 429, the real NIM adapter + ProviderFallback +
+  ModelRegistry + AutoModelRouter are exercised over that socket, proving
+  "registry learns the block, next pick skips it" (and the recovery loop) with
+  zero external network / Ollama.
+
+### Notes
+
+- Test suite: 2,996 tests across 98 files (added E2E + registry timeline +
+  `models status --verbose` coverage).
+
+---
+
 ## [1.52.0] - 2026-08-04
 
 ### Added

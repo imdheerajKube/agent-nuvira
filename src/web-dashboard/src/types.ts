@@ -113,6 +113,17 @@ export interface ActionTelemetryInsights {
     verifiedModels: Array<{ provider: string; model: string; at: number }>;
     /** Provider × model combos this action killed (latest event each). */
     killedModels: Array<{ provider: string; model: string; reason?: string; at: number }>;
+    /**
+     * Daily buckets (last 14 days, ascending) — verified vs killed vs
+     * transient per day, so the panel renders a mini time-series chart per
+     * action: how the action's learning evolved over time.
+     */
+    timeline: Array<{
+      day: number;
+      verified: number;
+      killed: number;
+      transient: number;
+    }>;
   }>;
 }
 

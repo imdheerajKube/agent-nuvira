@@ -746,6 +746,30 @@ describe('Dashboard Server', () => {
         expect(plan.transient).toBe(1);
         expect(plan.killed).toBe(0);
         expect(plan.killedModels).toEqual([]);
+
+        // Each action carries a daily timeline so the panel renders the
+        // "learned from real usage over time" chart (last 14 days, ascending).
+        expect(Array.isArray(chat.timeline)).toBe(true);
+        expect(chat.timeline.length).toBeGreaterThan(0);
+        // Buckets ascend oldest→newest by day start.
+        for (let i = 1; i < chat.timeline.length; i++) {
+          expect(chat.timeline[i].day).toBeGreaterThan(chat.timeline[i - 1].day);
+        }
+        // All events were written within the last 90s — they land in today's
+        // bucket OR (if the suite runs within ~90s of UTC midnight) the final
+        // two buckets. Sum the last two so the assertions are time-independent.
+        const lastTwo = (tl: Array<{ verified: number; killed: number; transient: number }>) => {
+          const a = tl[tl.length - 2] || { verified: 0, killed: 0, transient: 0 };
+          const b = tl[tl.length - 1];
+          return { verified: a.verified + b.verified, killed: a.killed + b.killed, transient: a.transient + b.transient };
+        };
+        const chatSum = lastTwo(chat.timeline);
+        expect(chatSum.verified).toBe(2);
+        expect(chatSum.killed).toBe(0);
+        const executeSum = lastTwo(execute.timeline);
+        expect(executeSum.killed).toBe(1);
+        const planSum = lastTwo(plan.timeline);
+        expect(planSum.transient).toBe(1);
       } finally {
         rmSync(actionsPath, { force: true });
       }

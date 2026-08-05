@@ -1,6 +1,6 @@
 # 🧪 Agent-Nuvira Test Suite
 
-This directory contains the full test suite for Agent-Nuvira. The suite runs via [Vitest](https://vitest.dev/) and currently spans **96 test files** with **2,934 tests** (~176s runtime). The dashboard's own component tests add 6 more (`src/web-dashboard`).
+This directory contains the full test suite for Agent-Nuvira. The suite runs via [Vitest](https://vitest.dev/) and currently spans **98 test files** with **2,996 tests** (~176s runtime). The dashboard's own component tests add 6 more (`src/web-dashboard`).
 
 ---
 
@@ -104,12 +104,36 @@ Unlike the unit tests, these tests **do not mock** `child_process.spawn` or `rea
 
 ---
 
+## 🔁 E2E — failover learning (registry learns the block, next pick skips it)
+
+**File:** `tests/e2e/failover-learning.test.ts`  
+**Source:** `src/learning/provider-fallback.ts` + `src/learning/model-registry.ts` + `src/learning/auto-router.ts` + `src/inference/nim-adapter.ts`
+
+The repeatable, CI-safe version of the manual tmux failover proof. No unit mocks
+for the routing layer, no external network, no Ollama:
+
+- A **real local HTTP server** mocks an OpenAI-compatible provider (NIM) that
+  returns **429** for `/chat/completions` and 200 for `/models`.
+- The **real NIM adapter → real ProviderFallback → real ModelRegistry → real
+  AutoModelRouter** are exercised over that socket.
+- Proves the full learning loop: a real 429 call is classified rate-limit and
+  written through → `getBlockedProviders()` includes nim → the next
+  `resolve()` predictively skips it even when every provider claims
+  credentials → the per-action telemetry log records the `plan` kill. A
+  flipped mock (200) then proves the **recovery loop**: the same path
+  re-verifies nim, un-parks it, and the router ranks it again.
+
+```bash
+# Run just the failover E2E
+npx vitest run tests/e2e/failover-learning.test.ts
+```
+
 ## 🚀 Running the Tests
 
 ### All Tests
 
 ```bash
-npm test                      # Full suite (2,934 tests, ~176s)
+npm test                      # Full suite (2,996 tests, ~176s)
 npx vitest run                # Same as above
 npx vitest run --reporter=verbose  # Full suite with per-test names
 ```

@@ -150,6 +150,18 @@ export interface ActionTelemetryInsights {
     verifiedModels: Array<{ provider: string; model: string; at: number }>;
     /** Provider × model combos this action killed (latest event each). */
     killedModels: Array<{ provider: string; model: string; reason?: string; at: number }>;
+    /**
+     * Daily buckets over the last TIMELINE_DAYS — verified vs killed vs
+     * transient counts per day (ascending), so the dashboard can render a
+     * "learned from real usage over time" sparkline/bar chart per action.
+     */
+    timeline: Array<{
+      /** Start of the UTC day bucket (epoch ms). */
+      day: number;
+      verified: number;
+      killed: number;
+      transient: number;
+    }>;
   }>;
 }
 
@@ -161,6 +173,8 @@ const CURRENT_VERSION = 1;
 export const ACTION_LOG_FILENAME = 'model-registry-actions.jsonl';
 /** Keep at most this many action-log lines (rotated, newest kept). */
 export const MAX_ACTION_LOG_ENTRIES = 2000;
+/** Days of per-action daily buckets included in the telemetry timeline. */
+export const TIMELINE_DAYS = 14;
 /** VectorStore namespace that holds the enterprise mirror of the registry. */
 const VECTOR_NAMESPACE = 'model-registry';
 /** Single vector id holding the whole registry snapshot (1-dim — we never search). */
@@ -219,6 +233,36 @@ export function readActionTelemetryFile(path: string): ActionTelemetryEntry[] {
   }
 }
 
+/**
+ * Daily buckets covering the last TIMELINE_DAYS days (ascending, oldest first).
+ * Pure — used by aggregateActionTelemetry so the dashboard gets a per-action
+ * verified/killed/transient series over time.
+ */
+export function buildActionTimeline(
+  entries: ActionTelemetryEntry[],
+  days: number = TIMELINE_DAYS,
+  now: number = Date.now(),
+): ActionTelemetryInsights['actions'][number]['timeline'] {
+  const DAY_MS = 24 * 60 * 60 * 1000;
+  const startOfToday = new Date(now).setUTCHours(0, 0, 0, 0);
+  const buckets = new Map<number, { verified: number; killed: number; transient: number }>();
+  for (let i = days - 1; i >= 0; i--) {
+    const day = startOfToday - i * DAY_MS;
+    buckets.set(day, { verified: 0, killed: 0, transient: 0 });
+  }
+  for (const e of entries) {
+    const day = new Date(e.timestamp).setUTCHours(0, 0, 0, 0);
+    const bucket = buckets.get(day);
+    if (!bucket) continue; // older than the window — totals still count it
+    if (e.outcome === 'verified') bucket.verified++;
+    else if (e.outcome === 'unavailable') bucket.killed++;
+    else bucket.transient++;
+  }
+  return [...buckets.entries()]
+    .sort((a, b) => a[0] - b[0])
+    .map(([day, counts]) => ({ day, ...counts }));
+}
+
 export function aggregateActionTelemetry(entries: ActionTelemetryEntry[]): ActionTelemetryInsights {
   const byAction = new Map<string, ActionTelemetryEntry[]>();
   for (const e of entries) {
@@ -244,6 +288,7 @@ export function aggregateActionTelemetry(entries: ActionTelemetryEntry[]): Actio
         transient: transientEvents.length,
         verifiedModels: latest(verifiedEvents).map((e) => ({ provider: e.provider, model: e.model, at: e.timestamp })),
         killedModels: latest(killedEvents).map((e) => ({ provider: e.provider, model: e.model, reason: e.errorType, at: e.timestamp })),
+        timeline: buildActionTimeline(evs),
       };
     })
     .sort((a, b) => a.action.localeCompare(b.action));
@@ -399,6 +444,21 @@ export class ModelRegistry {
   /**
    * Mark a model verified (spot-check success or real telemetry success).
    * Optionally records measured latency (rolling EMA).
+   *
+   * A genuine verification CLEARS any quota park: a real 1-token spot-check or
+   * a real usage success is direct evidence the provider serves requests again,
+   * so a stale learned park (e.g. an hour-aligned rate-limit park) must not
+   * keep a recovered provider blocked. This is safe because `syncQuota()`
+   * re-applies genuine ledger parks on the next routing read — a provider that
+   * is REALLY still quota-exhausted gets re-parked immediately, while one that
+   * merely had a stale learned park stays routable (the recovery loop).
+   *
+   * Asymmetry note: parks set by the REGISTRY's own rate-limit telemetry
+   * (`recordCall(ok=false, 'rate-limit')`) live only here and are NOT re-applied
+   * by syncQuota (which mirrors ledger cooldowns). Clearing them on any
+   * successful verification is deliberate and self-correcting: a probe or real
+   * call that SUCCEEDED is proof the limit lifted; if the limit persists, the
+   * next real call fails again and re-parks.
    */
   markVerified(provider: string, model: string, source: ModelRegistrySource, latencyMs?: number, action?: string): void {
     const now = Date.now();
@@ -419,7 +479,8 @@ export class ModelRegistry {
           : Math.round(latencyMs)
         : prevLatency,
       errorRate: existing?.errorRate || 0,
-      quotaParkedUntil: existing?.quotaParkedUntil || 0,
+      // Verified ⇒ serving right now ⇒ not parked (syncQuota re-parks real exhaustion).
+      quotaParkedUntil: 0,
       source,
       lastError: existing?.lastError,
     };
