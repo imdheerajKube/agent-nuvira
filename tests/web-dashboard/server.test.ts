@@ -10,7 +10,7 @@
  */
 
 import { describe, it, expect, beforeAll, afterAll, vi } from 'vitest';
-import { request as httpRequest } from 'node:http';
+import { request as httpRequest, createServer } from 'node:http';
 import { mkdtempSync, writeFileSync, rmSync, mkdirSync } from 'node:fs';
 import { join } from 'node:path';
 
@@ -309,6 +309,53 @@ afterAll(() => {
 // ─── Tests ──────────────────────────────────────────────────────────────────
 
 describe('Dashboard Server', () => {
+  // ═══════════════════════════════════════════════════════════════════════
+  // createDashboardServer — explicit port/host overrides
+  // ═══════════════════════════════════════════════════════════════════════
+
+  describe('createDashboardServer honors explicit port/host overrides', () => {
+    it('binds the requested port instead of the env/import-time default', async () => {
+      // Grab a free port by binding an ephemeral socket, then releasing it.
+      // Retry a few candidates in case something grabs one between release
+      // and re-bind.
+      let srv: ReturnType<typeof createDashboardServer> | undefined;
+      let bound: { port: number } | null = null;
+      try {
+        for (let i = 0; i < 5 && bound === null; i++) {
+          const probe = createServer();
+          const addr = await new Promise<{ port: number }>((resolve) =>
+            probe.listen(0, '127.0.0.1', () => resolve(probe.address() as { port: number })),
+          );
+          await new Promise<void>((resolve) => probe.close(() => resolve()));
+
+          const candidateSrv = createDashboardServer({ port: addr.port, host: '127.0.0.1' });
+          const got = await Promise.race([
+            new Promise<{ port: number }>((resolve) =>
+              candidateSrv.server.once('listening', () =>
+                resolve(candidateSrv.server.address() as { port: number }),
+              ),
+            ),
+            new Promise<null>((resolve) => candidateSrv.server.once('error', () => resolve(null))),
+          ]);
+          if (got) {
+            bound = got;
+            srv = candidateSrv;
+          } else {
+            candidateSrv.server.close();
+          }
+        }
+
+        // The override wins — the suite's import-time env is BUFF_DASHBOARD_PORT=0,
+        // so binding the requested port proves call-time resolution.
+        expect(bound).not.toBeNull();
+        expect(srv!.port).toBe(bound!.port);
+        expect(srv!.host).toBe('127.0.0.1');
+      } finally {
+        if (srv) srv.server.close();
+      }
+    });
+  });
+
   // ═══════════════════════════════════════════════════════════════════════
   // Data reader: empty/default state
   // ═══════════════════════════════════════════════════════════════════════

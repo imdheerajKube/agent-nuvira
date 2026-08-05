@@ -86,7 +86,10 @@ export declare function readPipelineRuns(): {
     total: number;
     runs: PipelineRun[];
 };
-export declare function createDashboardServer(): {
+export declare function createDashboardServer(opts?: {
+    port?: number;
+    host?: string;
+}): {
     server: ReturnType<typeof createServer>;
     port: number;
     host: string;
