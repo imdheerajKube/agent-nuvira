@@ -26,6 +26,7 @@ import { getModelRegistry } from '../learning/model-registry.js';
 import { refreshModelRegistry, spotCheckModel } from '../inference/model-probe.js';
 import { recordRoutingDecision } from '../learning/routing-history.js';
 import { shouldConfirmFailover, promptFailoverChoice } from './failover-prompt.js';
+import { runSingleShotAuto } from './failover-runner.js';
 
 // ─── Error Recovery Types ───────────────────────────────────────────────────
 
@@ -1094,6 +1095,11 @@ export class ChatCommand extends BaseCommand {
    * This walks the ranked candidates and returns the first successful response,
    * so Auto routing NEVER crashes the CLI — it always answers from a working
    * provider.
+   *
+   * Delegates to the SHARED single-shot runner (Nuvira-Router M0.2 Stage B) so
+   * every action walks candidates identically — behavior-identical to the
+   * previous inline walk (same order, same telemetry, same confirmation
+   * semantics).
    */
   private async generateAutoWithFailover(
     message: string,
@@ -1101,81 +1107,15 @@ export class ChatCommand extends BaseCommand {
     options?: { file?: string; model?: string },
     cacheEnabled: boolean = true,
   ): Promise<string> {
-    const first = await this.routeMessageAuto(message);
-    const attempted = new Set<string>();
-    let lastError: unknown = new Error(`No auto-routed provider succeeded for: ${message.slice(0, 80)}`);
-
-    for (const candidateType of [first.type, ...first.ranked]) {
-      if (attempted.has(candidateType)) continue;
-      attempted.add(candidateType);
-      // Hoisted so the failure write-through below can attribute the exact
-      // model that was attempted (registry telemetry needs provider × model).
-      let candidateModel: string | undefined;
-      try {
-        const resolved = resolveProvider(this.configManager, candidateType);
-        if (!(await resolved.provider.isAvailable())) {
-          logger.warn(`   ⚠️ ${candidateType} is not available — trying the next auto candidate...`);
-          continue;
-        }
-        const desired = candidateType === first.type
-          ? first.model
-          : getAutoRouter().resolveModel(candidateType, 'chat', this.configManager);
-        const model = await resolveWorkingModel(resolved.provider, candidateType, desired);
-        candidateModel = model;
-        const result = await this.generateWithContext(resolved.provider, prompt, resolved.type, { ...options, model }, cacheEnabled);
-        if (candidateType !== first.type) {
-          logger.success(`✅ Auto failover: answered from ${resolved.provider.name} (${model}) after ${first.type} failed`);
-          // Keep the dashboard audit trail accurate: the winner's route was
-          // recorded by the initial routeMessageAuto, but the actual answer
-          // came from this candidate.
-          recordRoutingDecision({
-            source: 'chat',
-            agentType: 'chat',
-            task: message,
-            complexity: first.complexity,
-            provider: candidateType,
-            model,
-            score: first.score,
-          });
-        }
-        return result;
-      } catch (err) {
-        lastError = err;
-        // Single-shot auto path: definitive failures (auth / exhausted quota)
-        // exclude the provider for the session + feed the circuit breaker so a
-        // follow-up interactive session (or the next message) skips it instead
-        // of failing again. Also write-throughs to the Model Registry so the
-        // provider×model is remembered across sessions.
-        this.recordAutoProviderFailure(candidateType, err, candidateModel);
-        const msg = err instanceof Error ? err.message : String(err);
-        // Opt-in confirmation (routing.promptOnFailover): when the user wants
-        // control over failover, ask before auto-switching to the next
-        // candidate. 'manual' surfaces the original error instead of silently
-        // switching — single-shot has no interactive recovery, so the CLI
-        // exits with the failure (matching non-auto behavior).
-        const order = [first.type, ...first.ranked];
-        const nextCandidate = order.find((c) => !attempted.has(c));
-        // Only prompt when stdin is a TTY — in a CI/piped context an inquirer
-        // prompt would block forever, so fall through to silent auto-failover
-        // (the pre-existing safe behavior for non-interactive runs).
-        if (nextCandidate && shouldConfirmFailover(this.configManager.getAll()) && process.stdin.isTTY) {
-          let nextProviderName = nextCandidate;
-          try {
-            nextProviderName = resolveProvider(this.configManager, nextCandidate).provider.name;
-          } catch {
-            // Keep the raw type name if the provider can't resolve.
-          }
-          const nextModel = nextCandidate === first.type
-            ? first.model
-            : getAutoRouter().resolveModel(nextCandidate, 'chat', this.configManager);
-          const choice = await promptFailoverChoice(candidateType, nextProviderName, nextModel);
-          if (choice === 'manual') throw lastError;
-        }
-        logger.warn(`   ⚠️ ${candidateType} failed (${msg.slice(0, 160)}) — trying the next auto candidate...`);
-      }
-    }
-
-    throw lastError;
+    return runSingleShotAuto({
+      action: 'chat',
+      task: message,
+      configManager: this.configManager,
+      route: (excludeProviders) => this.routeMessageAuto(message, excludeProviders),
+      generate: (provider, type, model) =>
+        this.generateWithContext(provider, prompt, type, { ...options, model }, cacheEnabled),
+      recordFailure: (type, model, err) => this.recordAutoProviderFailure(type, err, model),
+    });
   }
 
   /**
