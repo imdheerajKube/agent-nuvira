@@ -7,6 +7,41 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [Unreleased]
+
+### Added — Nuvira-Router M0.2 (shared failover machinery, phase P0)
+
+- **`recordActionFailure()` — one shared failure-composition for every action**
+  (`src/learning/failure-bookkeeping.ts`). Every LLM-call failure now runs the
+  SAME bookkeeping: classify → session exclusion (auth = rest of session,
+  rate-limit = cooldown + quota-ledger park, transient = cooldown + re-verify
+  marker) → per-action model-registry write-through (model-not-found →
+  definitive unavailable) → quota-timeline failover event → circuit-breaker
+  feed. Best-effort, never throws.
+- **`runSingleShotAuto()` — one shared auto-failover walk**
+  (`src/cli/failover-runner.ts`). Walks the auto-router's ranked candidates
+  for ANY failure class and returns the first success; same candidate order,
+  same per-attempt telemetry, same TTY-guarded prompt-on-failover, same
+  last-error throw — extracted behavior-identically from chat.
+- **`buff plan` now fails over like chat.** The old pick-then-`callWithFallback`
+  (retryable-only) path is replaced with the shared walk: plan tries the
+  picked provider first, then the auto-router's ranked alternatives, records
+  every attempt through the full bookkeeping (`action: 'plan'`), and repairs
+  models to live ones. Picker + auth UX preserved.
+- **`buff execute` now uses the full bookkeeping.** The orchestrator's per-agent
+  LLM catch (the single record point for the whole pipeline) switched from a
+  bare registry write to `recordActionFailure` — a mid-pipeline 429 now parks
+  the provider in the quota ledger so the next task skips it predictively.
+  `resolveAutoRoutingDecision` also consults the per-pipeline failure session
+  (M0.3): a provider that failed earlier in the pipeline never wins a
+  subsequent task. `generateFollowUpSuggestions` (the one execute-side call
+  that bypassed the orchestrator) now records through the same composition.
+- **Regression gate** (`scripts/ci/regression-gate.sh`) — canonical
+  no-regression gate (routing guard → hermetic failover E2E → full root suite
+  → dashboard suite, hard failure exit), wired into CI as the baseline lock.
+
+---
+
 ## [1.57.0] - 2026-08-05
 
 ### Added

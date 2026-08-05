@@ -4,6 +4,7 @@ import { GeminiAdapter } from './gemini-adapter.js';
 import { OpenRouterAdapter } from './openrouter-adapter.js';
 import { GroqAdapter } from './groq-adapter.js';
 import { LocalAdapter } from './local-adapter.js';
+import { NuviraAdapter } from './nuvira-adapter.js';
 import { ProviderType, ProviderConfig } from '../config/types.js';
 import { getPluginRegistry } from '../plugins/registry.js';
 
@@ -34,6 +35,8 @@ export class ProviderFactory {
         return new GroqAdapter(config);
       case 'local':
         return new LocalAdapter(config);
+      case 'nuvira':
+        return new NuviraAdapter(config);
       default: {
         // Check plugin registry for auto-discovered providers
         const registry = getPluginRegistry();
@@ -41,7 +44,7 @@ export class ProviderFactory {
           return registry.createProviderFromPlugin(type, config);
         }
         throw new Error(
-          `Unknown provider type: '${type}'. Available built-in: nim, gemini, openrouter, groq, local. ` +
+          `Unknown provider type: '${type}'. Available built-in: nim, gemini, openrouter, groq, local, nuvira. ` +
           `Check ~/.buff/plugins/ for auto-discovered plugins. ` +
           `Supports 17+ total providers via env vars and plugin system (OpenAI, Anthropic, Mistral, Cohere, Together, DeepInfra, Fireworks, Perplexity, Azure, LM Studio, Anyscale, vLLM and more).`
         );

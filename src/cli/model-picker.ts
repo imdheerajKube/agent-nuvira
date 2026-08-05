@@ -68,6 +68,7 @@ const PROVIDER_ICONS: Record<string, string> = {
   gemini: '🔷',
   openrouter: '🟣',
   groq: '🟢',
+  nuvira: '🧭',
 };
 
 const PROVIDER_ELIGIBILITY: Record<string, string> = {
@@ -76,6 +77,7 @@ const PROVIDER_ELIGIBILITY: Record<string, string> = {
   gemini: 'Google Gemini cloud service — set GEMINI_API_KEY',
   openrouter: 'OpenRouter unified API service — set OPENROUTER_API_KEY',
   groq: 'Groq LPU cloud inference — set GROQ_API_KEY',
+  nuvira: 'OpenAI-compatible gateway — set provider.nuvira.baseUrl (default http://127.0.0.1:20128/v1)',
 };
 
 // ─── Picker Result ──────────────────────────────────────────────────────────
