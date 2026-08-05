@@ -21,11 +21,7 @@ import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 
 // ─── Hoisted mocks (instantiated before vi.mock is hoisted) ────────────────
 
-const mockCreateDashboardServer = vi.hoisted(() =>
-  vi.fn(() => ({
-    server: { close: vi.fn() },
-  })),
-);
+const mockCreateDashboardServer = vi.hoisted(() => vi.fn());
 
 const mockExecSync = vi.hoisted(() => vi.fn(() => Buffer.from('')));
 const mockSpawn = vi.hoisted(() => vi.fn(() => ({ unref: vi.fn() })));
@@ -96,6 +92,32 @@ describe('DashboardCommand', () => {
 
   beforeEach(async () => {
     vi.clearAllMocks();
+
+    // Restore the DEFAULT server mock after the clear (clearAllMocks wipes
+    // base implementations passed to vi.fn — that's WHY this re-apply must
+    // live in beforeEach). Real-event shaped: 'listening' fires on the next
+    // tick (exactly like node's net.Server) so the CLI's success log +
+    // browser-open assertions work; 'error' is captured so tests can fire
+    // bind errors (EADDRINUSE) as node would.
+    mockCreateDashboardServer.mockImplementation(() => {
+      let listeningCb: (() => void) | undefined;
+      let errorCb: ((err: NodeJS.ErrnoException) => void) | undefined;
+      return {
+        server: {
+          close: vi.fn(),
+          once: vi.fn((event: string, cb: (...args: unknown[]) => void) => {
+            if (event === 'listening') {
+              listeningCb = cb as () => void;
+              // Fire on the next tick: listen() is async in the real server.
+              setImmediate(() => listeningCb?.());
+            } else if (event === 'error') {
+              errorCb = cb as (err: NodeJS.ErrnoException) => void;
+            }
+            return undefined;
+          }),
+        },
+      };
+    });
 
     // Prevent process.exit from killing the test runner
     processExitSpy = vi.spyOn(process, 'exit').mockImplementation((() => undefined) as any);
@@ -303,6 +325,44 @@ describe('DashboardCommand', () => {
     expect(mockLogger.info).toHaveBeenCalledWith(
       expect.stringContaining('dashboard module is available'),
     );
+  });
+
+  it('should log a clear EADDRINUSE message + exit(1) when the port is already taken (stale dashboard)', async () => {
+    // The launchDashboard promise resolves only on SIGINT — but the EADDRINUSE
+    // path calls process.exit(1) itself, so drive this manually instead of via
+    // the runDashboard helper.
+    let errorHandler: ((err: NodeJS.ErrnoException) => void) | undefined;
+    mockCreateDashboardServer.mockImplementationOnce(() => ({
+      server: {
+        close: vi.fn(),
+        once: vi.fn((event: string, cb: (...args: unknown[]) => void) => {
+          if (event === 'error') errorHandler = cb as (err: NodeJS.ErrnoException) => void;
+        }),
+      },
+    }));
+
+    const launchPromise = (cmd as any).launchDashboard({});
+    await new Promise<void>((resolve) => setImmediate(resolve));
+
+    // Fire the bind error exactly as node's net.Server would for EADDRINUSE.
+    errorHandler!({ code: 'EADDRINUSE', message: 'listen EADDRINUSE: address already in use 127.0.0.1:3030' } as NodeJS.ErrnoException);
+
+    // The handler calls process.exit(1) — MOCKED here, so the process survives
+    // — but launchDashboard's blocking promise only resolves via the SIGINT
+    // shutdown handler. Fire it to unblock (the exit(1) has already been
+    // asserted; this is purely to let the promise settle).
+    process.emit('SIGINT');
+    await launchPromise;
+
+    expect(mockLogger.error).toHaveBeenCalledWith(
+      expect.stringContaining('Port 3030 is already in use'),
+    );
+    expect(mockLogger.info).toHaveBeenCalledWith(
+      expect.stringContaining("pkill -f 'agent-nuvira dashboard'"),
+    );
+    expect(processExitSpy).toHaveBeenCalledWith(1);
+    // The server must be closed so the stale instance doesn't linger.
+    expect((mockCreateDashboardServer.mock.results[0].value as any).server.close).toHaveBeenCalled();
   });
 
   // ── Commander action wiring ───────────────────────────────────────────

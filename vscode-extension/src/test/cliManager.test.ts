@@ -181,6 +181,47 @@ describe('CLIManager', () => {
     });
   });
 
+  // ── BUFF_TELEMETRY_ACTION env (registry write-through attribution) ─────
+
+  describe('BUFF_TELEMETRY_ACTION env override', () => {
+    it('passes ide-<command> to spawn env for IDE-driven CLI calls', async () => {
+      const { spawn } = await import('node:child_process');
+      const m = new CLIManager(defaultConfig);
+      // Invoke the private runCommand via a public task method so the spawn
+      // path (with the telemetry env) is exercised exactly as in production.
+      (m as unknown as { runCommand(args: string[], timeoutMs: number): Promise<unknown> })
+        .runCommand(['execute', 'fix the bug'], 500);
+
+      expect(spawn).toHaveBeenCalledTimes(1);
+      const [cmd, args, opts] = (spawn as ReturnType<typeof vi.fn>).mock.calls[0];
+      expect(cmd).toBe('buff');
+      expect(args).toEqual(['execute', 'fix the bug']);
+      expect(opts.env).toMatchObject({ BUFF_TELEMETRY_ACTION: 'ide-execute' });
+    });
+
+    it('tags chat commands as ide-chat', async () => {
+      const { spawn } = await import('node:child_process');
+      const m = new CLIManager(defaultConfig);
+      (m as unknown as { runCommand(args: string[], timeoutMs: number): Promise<unknown> })
+        .runCommand(['chat', 'hello', '--stream'], 500);
+
+      const [, , opts] = (spawn as ReturnType<typeof vi.fn>).mock.calls[0];
+      expect(opts.env).toMatchObject({ BUFF_TELEMETRY_ACTION: 'ide-chat' });
+    });
+
+    it('does not clobber the parent environment (FORCE_COLOR + spread preserved)', async () => {
+      const { spawn } = await import('node:child_process');
+      const m = new CLIManager(defaultConfig);
+      (m as unknown as { runCommand(args: string[], timeoutMs: number): Promise<unknown> })
+        .runCommand(['edit', 'src/a.ts', '--quick'], 500);
+
+      const [, , opts] = (spawn as ReturnType<typeof vi.fn>).mock.calls[0];
+      expect(opts.env).toMatchObject({ FORCE_COLOR: '0', BUFF_TELEMETRY_ACTION: 'ide-edit' });
+      // The full parent env is still spread in (never replaced wholesale).
+      expect(opts.env).toHaveProperty('PATH');
+    });
+  });
+
   // ── setCallbacks ───────────────────────────────────────────────────────
 
   describe('setCallbacks', () => {

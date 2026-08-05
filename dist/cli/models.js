@@ -5,6 +5,7 @@ import { resolveProvider } from './router.js';
 import { getPluginRegistry } from '../plugins/registry.js';
 import { logger } from '../utils/logger.js';
 import { getModelRegistry } from '../learning/model-registry.js';
+import { getQuotaLedger } from '../learning/quota-ledger.js';
 import { refreshModelRegistry, startRegistryWatcher, PROBE_PROVIDERS } from '../inference/model-probe.js';
 /**
  * Models command — list available models from providers
@@ -13,6 +14,7 @@ import { refreshModelRegistry, startRegistryWatcher, PROBE_PROVIDERS } from '../
  * Subcommands:
  *   buff models refresh [provider]  — probe + spot-check, update the registry
  *   buff models status [--json]     — show the Model Availability Registry
+ *   buff models unblock <provider>  — manual escape hatch: release a blocked provider + re-probe
  *   buff models watch [--interval N]— background daemon keeping the registry fresh
  */
 export class ModelsCommand extends BaseCommand {
@@ -34,15 +36,16 @@ export class ModelsCommand extends BaseCommand {
             .argument('[provider]', 'Only refresh this provider')
             .option('--no-spot-check', 'Only run listModels probes (skip 1-token spot-checks)')
             .option('-j, --json', 'Output as JSON', false)
-            .action(async (provider, opts) => {
+            .action(async (provider, opts, cmd) => {
             const providers = provider ? [provider] : PROBE_PROVIDERS;
+            const json = this.isJsonMode(opts, cmd);
             logger.highlight('\n📡 Refreshing Model Registry…\n');
             const result = await refreshModelRegistry(this.configManager, {
                 providers,
                 spotCheck: opts?.spotCheck !== false,
                 onProgress: (label, detail) => console.log(`  ${label} — ${detail}`),
             });
-            if (opts?.json) {
+            if (json) {
                 console.log(JSON.stringify(result, null, 2));
                 return;
             }
@@ -58,8 +61,8 @@ export class ModelsCommand extends BaseCommand {
             .description('Show the Model Availability Registry (verified / unavailable / quota-parked models)')
             .option('-j, --json', 'Output as JSON', false)
             .option('-v, --verbose', 'Also show registry-blocked providers (predictive skips) + per-action telemetry', false)
-            .action(async (opts) => {
-            if (opts?.json) {
+            .action(async (opts, cmd) => {
+            if (this.isJsonMode(opts, cmd)) {
                 console.log(JSON.stringify(await getModelRegistry().getStatus(), null, 2));
                 return;
             }
@@ -71,14 +74,87 @@ export class ModelsCommand extends BaseCommand {
             }
             console.log('');
             logger.info('  Registry updates automatically from real usage. Run `buff models refresh` to probe now,');
-            logger.info('  or `buff models watch` to run a background maintenance daemon.');
+            logger.info('  `buff models watch` for a background daemon, or `buff models unblock <provider>` to');
+            logger.info('  manually release a provider that was learned blocked (escape hatch + re-probe).');
+        });
+        // ── Subcommand: models unblock — manual escape hatch ──────────────────
+        // Routing skips registry-blocked providers predictively (every tracked
+        // model unavailable/parked → no failing first call). Sometimes that
+        // learning is wrong (a provider recovered, a key was fixed, a model came
+        // back) and the user needs a manual override: release the block AND
+        // re-probe against the live API so the registry re-learns the truth.
+        command
+            .command('unblock')
+            .description('Manually release a registry-blocked provider (escape hatch) and re-probe it against the live API')
+            .argument('<provider>', 'Provider to unblock (e.g. gemini, nim)')
+            .option('--no-spot-check', 'Only re-probe the model list (skip 1-token spot-checks)')
+            .option('-j, --json', 'Output as JSON', false)
+            .action(async (provider, opts, cmd) => {
+            const registry = getModelRegistry();
+            const wasBlocked = registry.getBlockedProviders().includes(provider);
+            const { demoted, unparked } = registry.unblockProvider(provider);
+            // Clear the CENTRAL ledger cooldown too — otherwise syncQuota() would
+            // re-park the provider on the very next routing read, instantly
+            // undoing the manual release. (unblockProvider only clears REGISTRY
+            // state; the ledger is the cooldown writer.)
+            try {
+                getQuotaLedger().releaseProvider(provider);
+            }
+            catch {
+                // Best-effort — ledger bookkeeping must never break the escape hatch.
+            }
+            const json = this.isJsonMode(opts, cmd);
+            if (!json) {
+                logger.highlight(`\n🔓 Unblocking ${provider}…`);
+                console.log(`  ${wasBlocked ? 'was registry-blocked' : 'not currently blocked'}` +
+                    ` · ${demoted} unavailable demoted` +
+                    ` · ${unparked} quota parks cleared`);
+                console.log('  Re-probing against the live API…\n');
+            }
+            // Re-probe: the registry re-learns the truth from the live API. If the
+            // provider genuinely recovered it becomes verified again; if it is
+            // still dead the probe flips it back to unavailable (one honest probe,
+            // not a permanent skip).
+            const result = await refreshModelRegistry(this.configManager, {
+                providers: [provider],
+                spotCheck: opts?.spotCheck !== false,
+                onProgress: json ? undefined : (label, detail) => console.log(`  ${label} — ${detail}`),
+            });
+            const stillBlocked = registry.getBlockedProviders().includes(provider);
+            if (json) {
+                console.log(JSON.stringify({
+                    provider,
+                    wasBlocked,
+                    demoted,
+                    unparked,
+                    probe: result,
+                    stillBlocked,
+                }, null, 2));
+                return;
+            }
+            console.log('');
+            if (stillBlocked) {
+                logger.warn(`⛔ ${provider} is STILL blocked after re-probe — the live API still can't serve a model.`);
+                logger.info('   Fix the underlying issue (key / billing / model availability), then unblock again.');
+            }
+            else if (result.verified > 0) {
+                logger.success(`✅ ${provider} unblocked and verified — routing will use it again.`);
+            }
+            else {
+                logger.success(`✅ ${provider} unblocked — routing will try it again.`);
+            }
+            console.log('');
+            console.log(await registry.formatStatus());
         });
         // ── Subcommand: models watch — background maintenance daemon ──────────
         command
             .command('watch')
             .description('Run the model-registry maintenance daemon: probe + spot-check on a schedule')
             .option('--interval <seconds>', 'Refresh interval in seconds (default: 600)', '600')
-            .option('--no-spot-check', 'Only run listModels probes (skip spot-checks)', false)
+            // NOTE: no third arg — commander's negated option must default `spotCheck`
+            // to true (passing `--no-spot-check` flips it false). A `false` third arg
+            // would permanently disable spot-checks (the same bug `unblock` had).
+            .option('--no-spot-check', 'Only run listModels probes (skip spot-checks)')
             .action(async (opts) => {
             const intervalMs = Math.max(60, parseInt(opts?.interval || '600', 10) || 600) * 1000;
             logger.highlight('\n👁️  Model Registry Watch started — keeping availability fresh…');
@@ -99,6 +175,23 @@ export class ModelsCommand extends BaseCommand {
             });
         });
         return command;
+    }
+    /**
+     * Resolve the effective `--json` flag for a subcommand.
+     *
+     * BUG WORKAROUND: the parent `models` command also defines `-j, --json`, and
+     * commander's option parser scans the WHOLE arg list against the CURRENT
+     * command's options — so a `--json` token typed after a subcommand name
+     * (e.g. `models status --json`) is consumed by the PARENT's option, and the
+     * subcommand's own `opts.json` stays at its default. Without this, every
+     * subcommand `--json` silently fell back to human output (a pre-existing
+     * production bug). The token does land in `parent.opts()`, so read it from
+     * there when the child's own opts didn't see it.
+     */
+    isJsonMode(opts, cmd) {
+        // optsWithGlobals() merges this command's options with every parent's — the
+        // framework's own answer to reading a token consumed higher in the chain.
+        return !!(opts?.json || cmd?.optsWithGlobals().json);
     }
     /**
      * Verbose `models status` — the two things routing learns from real usage:

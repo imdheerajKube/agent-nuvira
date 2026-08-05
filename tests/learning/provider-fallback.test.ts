@@ -23,6 +23,8 @@ import {
   getProviderFallback,
   resetProviderFallback,
   recordRegistryFailure,
+  recordRegistrySuccess,
+  resolveTelemetryAction,
   type ProviderFallbackConfig,
   type FallbackResult,
 } from '../../src/learning/provider-fallback.js';
@@ -37,11 +39,19 @@ import type { ProviderType } from '../../src/config/types.js';
 
 let tempDir: string;
 let originalMemoryDir: string | undefined;
+let originalTelemetryAction: string | undefined;
 
 beforeEach(() => {
   tempDir = mkdtempSync(join(tmpdir(), 'buff-fallback-'));
   originalMemoryDir = process.env.BUFF_MEMORY_DIR;
   process.env.BUFF_MEMORY_DIR = tempDir;
+  // Telemetry-action isolation: the BUFF_TELEMETRY_ACTION env override (set
+  // by the VS Code extension spawns) re-tags every registry write in this
+  // process, so the whole suite must run with it cleared — otherwise a
+  // developer's shell exporting it would silently re-tag every action-log
+  // assertion below. The dedicated override tests set it themselves.
+  originalTelemetryAction = process.env.BUFF_TELEMETRY_ACTION;
+  delete process.env.BUFF_TELEMETRY_ACTION;
   resetModelRegistry();
 });
 
@@ -51,6 +61,11 @@ afterEach(() => {
     delete process.env.BUFF_MEMORY_DIR;
   } else {
     process.env.BUFF_MEMORY_DIR = originalMemoryDir;
+  }
+  if (originalTelemetryAction === undefined) {
+    delete process.env.BUFF_TELEMETRY_ACTION;
+  } else {
+    process.env.BUFF_TELEMETRY_ACTION = originalTelemetryAction;
   }
   rmSync(tempDir, { recursive: true, force: true });
 });
@@ -568,6 +583,56 @@ describe('ProviderFallback', () => {
 
     it('never throws (best-effort telemetry)', () => {
       expect(() => recordRegistryFailure('x', 'y', new Error('boom'), 'unknown' as any)).not.toThrow();
+    });
+  });
+
+  // ── BUFF_TELEMETRY_ACTION env override (VS Code extension spawns) ─────────
+
+  describe('BUFF_TELEMETRY_ACTION env override', () => {
+    it('resolveTelemetryAction returns the caller tag when env is unset', () => {
+      expect(resolveTelemetryAction('chat')).toBe('chat');
+      expect(resolveTelemetryAction()).toBeUndefined();
+    });
+
+    it('resolveTelemetryAction honors the env override and trims it', () => {
+      process.env.BUFF_TELEMETRY_ACTION = '  ide-chat  ';
+      expect(resolveTelemetryAction('chat')).toBe('ide-chat');
+    });
+
+    it('resolveTelemetryAction ignores a blank override (falls back to caller tag)', () => {
+      process.env.BUFF_TELEMETRY_ACTION = '   ';
+      expect(resolveTelemetryAction('chat')).toBe('chat');
+    });
+
+    it('recordRegistryFailure writes the action log under the IDE tag', () => {
+      process.env.BUFF_TELEMETRY_ACTION = 'ide-execute';
+      recordRegistryFailure('gemini', 'gemini-2.0-flash-exp', new Error('403 permission denied'), 'auth', 'execute');
+
+      const actions = getModelRegistry().getActionTelemetry().actions;
+      expect(actions.some((a) => a.action === 'ide-execute')).toBe(true);
+      // The caller's tag must NOT appear — the IDE attribution replaces it.
+      expect(actions.some((a) => a.action === 'execute')).toBe(false);
+      const tagged = actions.find((a) => a.action === 'ide-execute');
+      expect(tagged?.killed).toBe(1);
+      expect(tagged?.killedModels[0]).toMatchObject({ provider: 'gemini', reason: 'auth' });
+    });
+
+    it('recordRegistrySuccess writes the action log under the IDE tag', () => {
+      process.env.BUFF_TELEMETRY_ACTION = 'ide-inline';
+      recordRegistrySuccess('groq', 'llama-3.3-70b-versatile', 'chat');
+
+      const actions = getModelRegistry().getActionTelemetry().actions;
+      expect(actions.some((a) => a.action === 'ide-inline')).toBe(true);
+      expect(actions.some((a) => a.action === 'chat')).toBe(false);
+      const tagged = actions.find((a) => a.action === 'ide-inline');
+      expect(tagged?.verified).toBe(1);
+      expect(tagged?.verifiedModels[0]).toMatchObject({ provider: 'groq', model: 'llama-3.3-70b-versatile' });
+    });
+
+    it('no env override → telemetry uses the natural action tag', () => {
+      recordRegistrySuccess('groq', 'llama-3.3-70b-versatile', 'plan');
+      const actions = getModelRegistry().getActionTelemetry().actions;
+      expect(actions.some((a) => a.action === 'plan')).toBe(true);
     });
   });
 

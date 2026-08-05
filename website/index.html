@@ -4,13 +4,13 @@
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>Agent-Nuvira — Multi-Agent AI Coding Assistant</title>
-  <meta name="description" content="Agent-Nuvira is an open-source, multi-agent AI coding assistant that runs from your terminal. 17+ agents, 2,996 tests, GitLab + GitHub PR review built-in. Plan, write, review, test, and publish code — from a single command." />          <meta name="keywords" content="AI coding assistant, multi-agent AI, terminal AI tool, open source, 17+ providers, Groq, NVIDIA NIM, Google Gemini, OpenRouter, Ollama, OpenAI, Anthropic, Mistral, Azure, vLLM, LM Studio, FAISS vector store, auto model routing, quota ledger, team collaboration, MCP, GitLab, PR review, GitHub, Thompson-sampling bandit, routing strategy, per-model learning, promotion gate" />
+  <meta name="description" content="Agent-Nuvira is an open-source, multi-agent AI coding assistant that runs from your terminal. 17+ agents, 3,011 tests, GitLab + GitHub PR review built-in. Plan, write, review, test, and publish code — from a single command." />          <meta name="keywords" content="AI coding assistant, multi-agent AI, terminal AI tool, open source, 17+ providers, Groq, NVIDIA NIM, Google Gemini, OpenRouter, Ollama, OpenAI, Anthropic, Mistral, Azure, vLLM, LM Studio, FAISS vector store, auto model routing, quota ledger, team collaboration, MCP, GitLab, PR review, GitHub, Thompson-sampling bandit, routing strategy, per-model learning, promotion gate" />
   <link rel="icon" type="image/png" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='8' fill='%236363f2'/%3E%3Ctext x='16' y='22' text-anchor='middle' fill='white' font-size='18' font-weight='bold' font-family='system-ui'%3EN%3C/text%3E%3C/svg%3E" />
-  <meta property="og:title" content="Agent-Nuvira — Multi-Agent AI Coding Assistant" />          <meta property="og:description" content="The open-source multi-agent AI coding assistant. Plan, write, review, test, verify, and publish code from your terminal. 17+ providers. 17+ agents. 2,996 tests. GitLab + GitHub PR review built-in. No subscriptions. No telemetry." />
+  <meta property="og:title" content="Agent-Nuvira — Multi-Agent AI Coding Assistant" />          <meta property="og:description" content="The open-source multi-agent AI coding assistant. Plan, write, review, test, verify, and publish code from your terminal. 17+ providers. 17+ agents. 3,011 tests. GitLab + GitHub PR review built-in. No subscriptions. No telemetry." />
   <meta property="og:image" content="https://www.agent-nuvira.com/assets/hero.png" />
   <meta property="og:url" content="https://www.agent-nuvira.com" />
   <meta name="twitter:card" content="summary_large_image" />
-  <meta name="twitter:title" content="Agent-Nuvira — Multi-Agent AI Coding Assistant" />          <meta name="twitter:description" content="The open-source multi-agent AI coding assistant. 17+ providers. 17+ agents. 2,996 tests. GitLab + GitHub PR review. From your terminal." />
+  <meta name="twitter:title" content="Agent-Nuvira — Multi-Agent AI Coding Assistant" />          <meta name="twitter:description" content="The open-source multi-agent AI coding assistant. 17+ providers. 17+ agents. 3,011 tests. GitLab + GitHub PR review. From your terminal." />
   <link rel="preconnect" href="https://fonts.googleapis.com" />
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
   <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800;900&family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet" />
@@ -89,7 +89,7 @@
             <span class="metric-label">AI Providers</span>
           </div>
           <div class="metric">
-            <span class="metric-value">2,996</span>
+            <span class="metric-value">3,009</span>
             <span class="metric-label">Tests Passing</span>
           </div>
           <div class="metric">
@@ -121,7 +121,7 @@
               <span class="log info">📁 Context Gatherer scanning codebase...</span>
               <span class="log success">✅ Writer implemented auth middleware</span>
               <span class="log info">👀 Reviewer validating changes...</span>
-              <span class="log success">✅ All 2,996 tests passed</span>
+              <span class="log success">✅ All 3,011 tests passed</span>
               <span class="log info">🔒 VerifyModule running security scan...</span>
               <span class="log success">✅ No security issues found</span>
               <span class="log success">🚀 Changes committed to feature/auth</span>
@@ -225,7 +225,7 @@
             <svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="22 12 18 12 15 21 9 3 6 12 2 12"/></svg>
           </div>
           <h3>Learning Router That Gets Better</h3>
-          <p>A Thompson-sampling bandit learns per provider × complexity bucket from <em>real</em> outcomes (cost-adjusted rewards), with hard constraints, regex routing rules, uncertainty escalation on cold starts, and promotion gates that only keep router changes that measurably improve quality. A Model Availability Registry learns from <strong>real usage</strong> too — every chat/execute/plan/edit call writes which provider × model it verified or killed, so dead providers are skipped predictively (never a wasted first call) and a recovered provider is re-admitted automatically. Inspect it with <code>buff models status --verbose</code> or the dashboard's per-action timeline.</p>
+          <p>A Thompson-sampling bandit learns per provider × complexity bucket from <em>real</em> outcomes (cost-adjusted rewards), with hard constraints, regex routing rules, uncertainty escalation on cold starts, and promotion gates that only keep router changes that measurably improve quality. A Model Availability Registry learns from <strong>real usage</strong> too — every chat/execute/plan/edit call writes which provider × model it verified or killed, so dead providers are skipped predictively (never a wasted first call) and a recovered provider is re-admitted automatically — with <code>buff models unblock &lt;provider&gt;</code> as a manual escape hatch that demotes the block, clears quota parks, and re-probes the live API to re-learn the truth. Inspect it with <code>buff models status --verbose</code> or the dashboard's per-action timeline — scrub across days (drag, click, range slider, or ▶ play) to replay what each action verified or killed on any given day. The VS Code extension attributes its own usage (<code>ide-chat</code> / <code>ide-inline</code> / <code>ide-execute</code>) so IDE-driven calls feed the same registry.</p>
         </div>
         <div class="feature-card" data-delay="300">
           <div class="feature-icon offline">

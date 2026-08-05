@@ -1,6 +1,6 @@
 # 🧪 Agent-Nuvira Test Suite
 
-This directory contains the full test suite for Agent-Nuvira. The suite runs via [Vitest](https://vitest.dev/) and currently spans **98 test files** with **2,996 tests** (~176s runtime). The dashboard's own component tests add 6 more (`src/web-dashboard`).
+This directory contains the full test suite for Agent-Nuvira. The suite runs via [Vitest](https://vitest.dev/) and currently spans **98 test files** with **3,011 tests** (~177s runtime). The dashboard's own component tests add 42 across 6 files (`src/web-dashboard`); the VS Code extension's suite adds 213 across 10 files (`vscode-extension`).
 
 ---
 
@@ -133,7 +133,7 @@ npx vitest run tests/e2e/failover-learning.test.ts
 ### All Tests
 
 ```bash
-npm test                      # Full suite (2,996 tests, ~176s)
+npm test                      # Full suite (3,011 tests, ~177s)
 npx vitest run                # Same as above
 npx vitest run --reporter=verbose  # Full suite with per-test names
 ```

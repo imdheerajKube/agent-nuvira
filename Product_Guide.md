@@ -1,6 +1,6 @@
 # Agent-Nuvira — Technical Product Guide
 
-**Version 1.53.0 | August 2026**
+**Version 1.55.0 | August 2026**
 
 > *A comprehensive technical overview of Agent-Nuvira: architecture, features, version history, and market readiness for investors, stakeholders, and technical reviewers.*
 
@@ -931,6 +931,10 @@ options:
 | **v1.51.1** | Aug 2026 | Docs patch — completed the published README version-history table (added v1.50.0 + v1.51.0 rows; historical v1.45.5 entry verified and kept) |
 | **v1.52.0** | Aug 2026 | Predictive model-availability routing (model registry drives every pick — unkeyed/failed-health models skipped before scoring); web dashboard: scrubbable pipeline phase timeline + narrated routing walkthrough; 2,990 tests |
 | **v1.53.0** | Aug 2026 | Per-action "learned from real usage" telemetry everywhere (every LLM call writes which provider × model it killed/verified; `models status --verbose` + dashboard per-action panel with daily timeline); recovery loop (a real success re-verifies + un-parks a recovered provider); hermetic E2E failover test proving "registry learns the block, next pick skips it"; 2,996 tests |
+| **v1.54.0** | Aug 2026 | VS Code extension telemetry attribution — IDE-driven calls tagged `ide-chat` / `ide-inline` / `ide-<command>` via `BUFF_TELEMETRY_ACTION` at spawn, so IDE usage gets its own rows in the per-action registry log + dashboard panel; 3,002 tests |
+| **v1.55.0** | Aug 2026 | `buff models unblock <provider>` escape hatch — manually release a registry-blocked provider (demote unavailable→unverified, clear quota parks + ledger cooldown, live re-probe with honest `stillBlocked`); also fixed pre-existing `models status --json` / `refresh --json` shadowing bug; 3,011 tests |
+| **v1.56.1** | Aug 2026 | Dashboard Models-panel crash fix — stale-server HTML for an unknown /api/* route broke `res.json()` ("Unexpected token '<'"): unknown /api/* now returns JSON 404, all /api/* responses parse through a shared defensive helper, and `buff dashboard` surfaces a clear EADDRINUSE message; 3,011 tests + 42 dashboard component tests |
+| **v1.56.0** | Aug 2026 | Dashboard per-action telemetry timeline is now scrubbable — drag across days, click a day, or use the range slider to see that day's exact verified/killed chips (which provider × model each action killed or verified), with ▶ play/pause day-by-day sweep; 3,011 tests + 39 dashboard component tests |
 | **v0.5.0–v0.6.1** (VS Code ext) | Aug 2026 | VS Code quota ledger view — free/paid usage, parked providers, failover timeline, live auto-refresh + poll-fallback |
 
 ### 5.2 Detailed Changelog (v1.14.x – v1.16.x)

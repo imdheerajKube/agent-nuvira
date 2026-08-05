@@ -78,12 +78,43 @@ export class DashboardCommand extends BaseCommand {
         try {
             this.server = createDashboardServer();
             const url = `http://localhost:${port}`;
-            logger.success(`Dashboard running at: ${url}`);
-            console.log('  Press Ctrl+C to stop the dashboard.\n');
-            // Auto-open browser
-            if (shouldOpen) {
-                this.openBrowser(url);
-            }
+            // listen() is async: bind errors (EADDRINUSE — e.g. a STALE dashboard
+            // from an older version still running on this port) fire as an 'error'
+            // event. Without a listener node crashes with an unhandled 'error' event
+            // and NO explanation — and the browser stays pointed at the stale
+            // instance, whose older API can break newer panels (the JSON-parse
+            // errors users reported). Surface a clear, actionable message instead.
+            let started = false;
+            this.server.server.once('listening', () => {
+                started = true;
+                logger.success(`Dashboard running at: ${url}`);
+                console.log('  Press Ctrl+C to stop the dashboard.\n');
+                // Auto-open browser only once we're actually serving.
+                if (shouldOpen) {
+                    this.openBrowser(url);
+                }
+            });
+            this.server.server.once('error', (err) => {
+                if (err.code === 'EADDRINUSE') {
+                    logger.error(`Port ${port} is already in use — another dashboard instance is running (possibly an older version).`);
+                    logger.info(`Stop it first, e.g.:  pkill -f 'agent-nuvira dashboard'`);
+                    logger.info(`Or use another port:   agent-nuvira dashboard --port ${Number(port) + 1}`);
+                }
+                else if (!started) {
+                    logger.error(`Failed to start dashboard on ${host}:${port}: ${err.message}`);
+                }
+                else {
+                    // Runtime error after a successful bind — log, keep serving.
+                    logger.error(`Dashboard server error: ${err.message}`);
+                    return;
+                }
+                try {
+                    this.server?.server.close();
+                }
+                catch { /* ignore */ }
+                this.server = null;
+                process.exit(1);
+            });
             // Keep the process alive until Ctrl+C
             await new Promise((resolve) => {
                 const shutdown = () => {

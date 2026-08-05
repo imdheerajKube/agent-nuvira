@@ -1,3 +1,4 @@
+import { parseJsonOrNull } from './jsonOrNull';
 import type { DashboardData, DAGData, QuotaInsights, RoutingInsights } from './types';
 
 export type DashboardListener = (data: DashboardData) => void;
@@ -141,8 +142,11 @@ export class DashboardAPI {
   async fetchAll(): Promise<DashboardData | null> {
     try {
       const res = await fetch(`${this.baseUrl}/api/all`);
-      if (!res.ok) return null;
-      const data = (await res.json()) as DashboardData;
+      // parseJsonOrNull: an HTML-200 from a stale server degrades to null (with
+      // a console.warn hint) so App waits for the next SSE snapshot instead of
+      // crashing on "Unexpected token '<'".
+      const data = (await parseJsonOrNull(res)) as DashboardData | null;
+      if (!data) return null;
       this.lastData = data;
       return data;
     } catch {

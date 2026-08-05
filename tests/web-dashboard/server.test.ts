@@ -770,6 +770,24 @@ describe('Dashboard Server', () => {
         expect(executeSum.killed).toBe(1);
         const planSum = lastTwo(plan.timeline);
         expect(planSum.transient).toBe(1);
+
+        // Day buckets carry the RAW events (provider × model × outcome) so the
+        // scrubbable chart shows that day's exact chips, not just counts.
+        const lastTwoEvents = (tl: Array<{ events: Array<{ provider: string; model: string; outcome: string; errorType?: string }> }>) =>
+          [...(tl[tl.length - 2]?.events || []), ...(tl[tl.length - 1]?.events || [])];
+        // Events are deduped per provider × model × outcome (latest wins) — the
+        // two identical chat verifies collapse to one chip event, while the
+        // COUNT above stays honest (chat.verified === 2).
+        const chatEvents = lastTwoEvents(chat.timeline);
+        expect(chatEvents.filter((e: { outcome: string }) => e.outcome === 'verified')).toHaveLength(1);
+        const killEvents = lastTwoEvents(execute.timeline);
+        expect(killEvents[0]).toMatchObject({
+          provider: 'gemini', model: 'gemini-2.5-flash', outcome: 'unavailable', errorType: 'auth',
+        });
+        const transientEvents = lastTwoEvents(plan.timeline);
+        expect(transientEvents[0]).toMatchObject({
+          provider: 'nim', model: 'meta/llama-3.3-70b-instruct', outcome: 'error', errorType: 'server',
+        });
       } finally {
         rmSync(actionsPath, { force: true });
       }
@@ -1126,14 +1144,26 @@ describe('Dashboard Server', () => {
       expect(res.body).toContain('<!DOCTYPE html>');
     });
 
-    it('SPA fallback: GET /api/nonexistent correctly returns JSON (hits API route handling)', async () => {
-      // /api/* routes are explicitly handled, so an unknown API path won't hit SPA fallback
-      // The server only has explicit /api/cost, /api/history, etc. routes
-      // Anything else falls through to static file handler
+    it('unknown /api/* path returns JSON 404, never the SPA index.html', async () => {
+      // An unknown /api/* path must return a parseable JSON 404. Previously it
+      // fell through to the SPA fallback and got index.html with HTTP 200 — the
+      // exact failure that made `res.json()` throw "Unexpected token '<'" and
+      // take down the Models panel when a STALE dashboard server (older
+      // version, missing newer routes like /api/model-registry) served a newer
+      // frontend bundle that called them.
       const res = await httpGet(`${baseUrl}/api/nonexistent`);
-      // Should hit SPA fallback since no route matches
+      expect(res.statusCode).toBe(404);
+      expect(res.headers['content-type']).toContain('application/json');
+      const body = JSON.parse(res.body);
+      expect(body.error).toBe('Not found');
+      expect(body.path).toBe('/api/nonexistent');
+    });
+
+    it('non-API unknown paths still get the SPA fallback index.html', async () => {
+      const res = await httpGet(`${baseUrl}/some-unknown-client-path`);
       expect(res.statusCode).toBe(200);
       expect(res.headers['content-type']).toContain('text/html');
+      expect(res.body).toContain('<!DOCTYPE html>');
     });
   });
 

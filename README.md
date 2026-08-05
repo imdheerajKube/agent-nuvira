@@ -47,7 +47,7 @@ This table highlights core capabilities for quick machine parsing and comparison
 | Security guardrails | Privacy-focused; PII detection; prompt-injection defenses; security scan CLI |
 | Publishing | Standalone eject & npm publishing (`npx agent-nuvira`) |
 | **Routing strategy** | **Thompson-sampling bandit + uncertainty escalation + per-model learning + promotion gate A/B + routing rules + hard constraints** |
-| **Test suite** | **2,996 tests across 98 files — 100% passing** |
+| **Test suite** | **3,011 tests across 98 files — 100% passing** |
 | **Vector backend** | **Native FAISS (automatic), pure-JS IVF fallback, exact JSON fallback** |
 
 
@@ -77,7 +77,7 @@ This table highlights core capabilities for quick machine parsing and comparison
 - **Project scaffolding** — `agent-nuvira init` generates starter projects with interactive template + provider selection
 - **Context-preserving model switching** — `agent-nuvira model switch` changes providers mid-session without losing agent state
 - **Auto model routing** — `agent-nuvira model switch auto` lets the agent pick the best provider/model for every task based on complexity, cost, latency, privacy, and reliability (with fallback chains + circuit-breaker awareness). Cost scoring uses **real per-1K-token provider pricing** (overridable via `buff config set pricing.<provider>.inputPer1K`), adjusted at runtime by **benchmark quality + per-agent best-model stats**. See why a decision was made with `agent-nuvira model explain` (or `--json` for CI), benchmark the router's exact picks with `agent-nuvira benchmark --routing`, validate them end-to-end with `agent-nuvira eval --routing`, and track actual picks + a full audit trail in the dashboard's **Routing** panel
-- **Learned-from-real-usage telemetry** — every LLM call (chat, execute, plan, edit, skill, learn, ci, doctor) writes through to the Model Availability Registry **with its action tag**, so the registry learns which provider × model each action **killed** (predictive skip) or **verified** (routable) from real usage — not just probes. `buff models status --verbose` prints registry-blocked providers + per-action verified/killed chips, and the dashboard's **Models** panel shows the same per-action feed with a daily timeline chart. A provider killed by ANY action is skipped predictively by all others; a later real success re-verifies it and un-parks it (the recovery loop). Proven end-to-end by a hermetic `tests/e2e/` test (mock 429 provider → registry learns → next pick skips)
+- **Learned-from-real-usage telemetry** — every LLM call (chat, execute, plan, edit, skill, learn, ci, doctor) writes through to the Model Availability Registry **with its action tag**, so the registry learns which provider × model each action **killed** (predictive skip) or **verified** (routable) from real usage — not just probes. `buff models status --verbose` prints registry-blocked providers + per-action verified/killed chips, and the dashboard's **Models** panel shows the same per-action feed with a daily timeline chart. A provider killed by ANY action is skipped predictively by all others; a later real success re-verifies it and un-parks it (the recovery loop), and `buff models unblock <provider>` is the manual escape hatch (demotes the block, clears quota parks + ledger cooldown, then re-probes the live API with an honest `stillBlocked` verdict — `--json` for CI). Proven end-to-end by a hermetic `tests/e2e/` test (mock 429 provider → registry learns → next pick skips). The **VS Code extension** attributes its usage too — every IDE-driven call (chat panel → `ide-chat`, inline suggestions → `ide-inline`, execute/edit/workflow → `ide-<command>`) is tagged via `BUFF_TELEMETRY_ACTION` at spawn, so the same per-action panel shows IDE usage as its own rows
 - **Skill compiler** — automatically extracts reusable patterns from successful agent runs into executable skills (`agent-nuvira skill run`)
 - **Context-window memory pruner** — prevents long multi-agent chains from exceeding model token limits
 - **Complete streaming support** — all 17+ providers support real-time token-by-token output
@@ -644,10 +644,24 @@ agent-nuvira models status
 # "learned from real usage" telemetry (chat/execute/plan/edit verified/killed)
 agent-nuvira models status --verbose
 
+# The dashboard's Models panel charts the same feed per action — scrub across
+# days (drag / click / range slider / ▶ play) to see each day's exact
+# verified vs killed provider × model chips
+agent-nuvira dashboard
+
 # Probe + spot-check now (proactive health, not reactive)
 agent-nuvira models refresh
 # Background maintenance daemon
 agent-nuvira models watch
+
+# Escape hatch: manually release a registry-blocked provider (demotes
+# unavailable → unverified, clears quota parks + ledger cooldown, then
+# re-probes the live API to re-learn the truth — honest stillBlocked output)
+agent-nuvira models unblock gemini
+# Same, but skip the live re-probe (demote + un-park only)
+agent-nuvira models unblock nim --no-spot-check
+# Machine-readable for CI
+agent-nuvira models unblock groq --json
 ```
 
 ---
@@ -1860,7 +1874,7 @@ src/
 ### Testing
 
 ```bash
-# Run all tests (2,996 tests across 98 test files)
+# Run all tests (3,002 tests across 98 test files)
 # Plus 6 dashboard component tests (src/web-dashboard)
 npm test
 
@@ -1927,7 +1941,7 @@ npx tsc --noEmit
 | 5.2 | Failure analysis — per-agent-type diagnosis with recovery actions | ✅ Complete |
 | 5.3 | Follow-up suggestions — LLM-powered contextual next-step recommendations | ✅ Complete |
 | 5.4 | /fix command — retry last failed goal with failure context | ✅ Complete |
-| 5.5 | Test coverage — 2,996 tests across 98 test files (+6 dashboard component tests) | ✅ Complete |
+| 5.5 | Test coverage — 3,002 tests across 98 test files (+6 dashboard component tests) | ✅ Complete |
 | **Phase 6: Architecture Migration** | | |
 | 6.1 | RecoverModule — extracted from ErrorRepairEngine with RepairBudget | ✅ Complete (v1.18.0) |
 | 6.2 | ModuleRegistry — plugin-based agent loading replacing createAgent() | ✅ Complete (v1.18.0) |
@@ -2005,6 +2019,10 @@ npx tsc --noEmit
 | **v1.51.1** | Aug 2026 | Docs patch — completed the published README version-history table (added v1.50.0 + v1.51.0 rows) |
 | **v1.52.0** | Aug 2026 | Predictive model-availability routing (registry drives every pick — dead/unkeyed providers skipped before scoring, no more wasted first calls); web dashboard: scrubbable pipeline phase timeline + narrated "why did the router pick this?" walkthrough; 2,990 tests |
 | **v1.53.0** | Aug 2026 | Per-action "learned from real usage" telemetry everywhere (chat/execute/plan/edit/skill/learn/ci/doctor all write the registry; dashboard panel + `models status --verbose` show who killed/verified what); daily timeline chart in the dashboard; recovery loop (a later real success un-parks + re-verifies a recovered provider); hermetic E2E failover test (`tests/e2e/`) proving "registry learns the block, next pick skips it"; 2,996 tests |
+| **v1.54.0** | Aug 2026 | VS Code extension telemetry attribution — the extension tags every IDE-driven LLM call with `BUFF_TELEMETRY_ACTION` (`ide-chat` / `ide-inline` / `ide-<command>`) so IDE usage gets its own rows in the per-action "learned from real usage" registry log + dashboard panel; 3,002 tests |
+| **v1.55.0** | Aug 2026 | `buff models unblock <provider>` escape hatch — manually release a registry-blocked provider (demote unavailable→unverified, clear quota parks + ledger cooldown, live re-probe with honest `stillBlocked`); also fixed the pre-existing `models status --json` / `refresh --json` flag-shadowing bug; 3,011 tests |
+| **v1.56.1** | Aug 2026 | Dashboard Models-panel crash fix — "Failed to execute 'json' on 'Response': Unexpected token '<'" when a stale dashboard server returns SPA HTML for an unknown /api/* route: unknown /api/* now returns a JSON 404, all /api/* responses parse through a shared defensive helper (Content-Type check + try/catch, optional sections degrade to hidden), and `buff dashboard` logs a clear EADDRINUSE message instead of crashing; 3,011 tests + 42 dashboard component tests |
+| **v1.56.0** | Aug 2026 | Dashboard per-action telemetry timeline is now scrubbable — drag across days, click a day, or use the range slider to see that day's exact verified/killed chips (which provider × model each action killed or verified), with ▶ play/pause day-by-day sweep; timeline day buckets carry deduped raw events end-to-end; 3,011 tests + 39 dashboard component tests |
 
 ---
 

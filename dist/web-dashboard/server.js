@@ -1478,6 +1478,16 @@ function handleRequest(req, res) {
         });
         return;
     }
+    // ── API: unknown /api/* paths must NEVER return the SPA HTML ────
+    // A frontend fetching a newer endpoint from an older server (or a typo'd
+    // path) previously fell through to the SPA fallback below and got
+    // index.html with HTTP 200 — then `res.json()` threw "Unexpected token '<'"
+    // and took down the whole panel. API consumers get a parseable JSON 404.
+    if (pathname.startsWith('/api/')) {
+        res.writeHead(404, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ error: 'Not found', path: pathname }));
+        return;
+    }
     // ── Static Files / SPA Fallback ─────────────────────────────────
     const filePath = pathname === '/' ? '/index.html' : pathname;
     const normalizedPath = join(PUBLIC_DIR, filePath);

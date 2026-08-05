@@ -15,7 +15,7 @@ import { Orchestrator } from '../agents/orchestrator.js';
 import { printOrchestrationResult } from './execute.js';
 import { PipelineBoard } from './pipeline-board.js';
 import { applyActiveModel } from './model.js';
-import { getProviderFallback, classifyFallbackError, isRetryableError, recordRegistryFailure } from '../learning/provider-fallback.js';
+import { getProviderFallback, classifyFallbackError, isRetryableError, recordRegistryFailure, recordRegistrySuccess } from '../learning/provider-fallback.js';
 import { getAutoRouter, isAutoModel, isAutoProvider } from '../learning/auto-router.js';
 import { getQuotaLedger } from '../learning/quota-ledger.js';
 import { getModelRegistry } from '../learning/model-registry.js';
@@ -448,12 +448,10 @@ export class ChatCommand extends BaseCommand {
                         history.push({ role: 'assistant', content: result });
                         // Success telemetry: verified models accumulate from real usage so
                         // the registry's getUsableProviders() reflects what actually works.
-                        try {
-                            getModelRegistry().recordCall(type, effectiveModel, true, undefined, 'chat');
-                        }
-                        catch {
-                            // Best-effort
-                        }
+                        // Goes through the shared helper so the BUFF_TELEMETRY_ACTION env
+                        // override (VS Code extension spawns) re-tags IDE usage as
+                        // ide-chat instead of blending into terminal chat.
+                        recordRegistrySuccess(type, effectiveModel, 'chat');
                         generationComplete = true;
                     }
                     catch (err) {
@@ -560,12 +558,10 @@ export class ChatCommand extends BaseCommand {
                         history.push({ role: 'assistant', content: result });
                         // Success telemetry: verified models accumulate from real usage so
                         // the registry's getUsableProviders() reflects what actually works.
-                        try {
-                            getModelRegistry().recordCall(type, effectiveModel, true, undefined, 'chat');
-                        }
-                        catch {
-                            // Best-effort
-                        }
+                        // Goes through the shared helper so the BUFF_TELEMETRY_ACTION env
+                        // override (VS Code extension spawns) re-tags IDE usage as
+                        // ide-chat instead of blending into terminal chat.
+                        recordRegistrySuccess(type, effectiveModel, 'chat');
                         generationComplete = true;
                     }
                     catch (err) {
@@ -1331,12 +1327,9 @@ Commands:
         // models accumulate from real usage — this is what populates
         // getUsableProviders() over time and lets the router restrict Auto picks
         // to providers we've actually seen work (no more routing into 404s).
-        try {
-            getModelRegistry().recordCall(providerType, options?.model || 'default', true, undefined, 'chat');
-        }
-        catch {
-            // Best-effort — registry telemetry must never break a response
-        }
+        // Goes through the shared helper so the BUFF_TELEMETRY_ACTION env override
+        // (VS Code extension spawns) re-tags IDE usage as ide-chat.
+        recordRegistrySuccess(providerType, options?.model, 'chat');
         return result;
     }
 }
