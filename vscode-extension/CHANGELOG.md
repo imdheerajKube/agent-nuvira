@@ -7,6 +7,39 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.56.1] — 2026-08-05
+
+> Version aligned with the CLI release cycle — this extension release ships
+> alongside **CLI v1.56.1** (the extension drives the same `agent-nuvira` CLI).
+
+### Added
+- **IDE usage telemetry attribution** — every LLM call the extension drives is
+  written through to the CLI's Model Availability Registry "learned from real
+  usage" log **with its own action tag** via `BUFF_TELEMETRY_ACTION` at spawn:
+  chat panel → `ide-chat`, inline suggestions → `ide-inline`, and
+  execute/edit/workflow/review/code-lens actions → `ide-<command>`. IDE usage
+  now gets its own rows in the per-action dashboard **Models** panel and in
+  `buff models status --verbose`; a provider killed by an IDE action is
+  skipped predictively by every other action (CLI + IDE alike), and a later
+  real success re-verifies + un-parks it. Proven by a new `cliManager` test
+  asserting the env tag at spawn
+
+### Fixed (CLI v1.56.1 — inherited by the bundled CLI)
+- **Dashboard stale-server crash fix** — "Failed to execute 'json' on
+  'Response': Unexpected token '<'" when an older dashboard instance answers
+  newer `/api/*` routes with SPA HTML: unknown `/api/*` now returns a
+  parseable **JSON 404**, all `/api/*` responses parse through a shared
+  defensive helper (Content-Type check + try/catch), and `buff dashboard`
+  logs a clear **EADDRINUSE** message (with restart hints) instead of
+  crashing on an unhandled error event
+- `buff models unblock <provider>` escape hatch — manually release a
+  registry-blocked provider (demote unavailable → unverified, clear quota
+  parks + ledger cooldown, live re-probe) — plus the `models status --json` /
+  `refresh --json` flag-shadowing fix
+- Dashboard per-action telemetry timeline is now **scrubbable** — drag across
+  days, click a day, or use the range slider to see that day's exact
+  verified/killed chips, with ▶ play/pause day-by-day sweep
+
 ## [0.6.2] — 2026-08-03
 
 ### Changed
