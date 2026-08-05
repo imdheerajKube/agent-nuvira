@@ -212,7 +212,11 @@ export class InlineSuggestProvider implements vscode.InlineCompletionItemProvide
     return new Promise<string | null>((resolve) => {
       const child = spawn(command, spawnArgs, {
         stdio: ['pipe', 'pipe', 'pipe'],
-        env: { ...process.env, FORCE_COLOR: '0' },
+        // BUFF_TELEMETRY_ACTION: the CLI writes every real LLM call through to
+        // the Model Availability Registry's "learned from real usage" log with
+        // this tag, so inline-suggest usage shows up as `ide-inline` in the
+        // dashboard instead of blending into terminal-driven chat telemetry.
+        env: { ...process.env, FORCE_COLOR: '0', BUFF_TELEMETRY_ACTION: 'ide-inline' },
         timeout: 10_000, // 10s timeout for suggestions
       });
 

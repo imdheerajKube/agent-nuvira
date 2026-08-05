@@ -7,6 +7,122 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [1.56.1] - 2026-08-05
+
+### Fixed
+
+- **Dashboard Models panel crash — "Failed to execute 'json' on 'Response':
+  Unexpected token '<'"** — a STALE dashboard server (an older globally-installed
+  `agent-nuvira dashboard` still running on the port) returned the SPA
+  `index.html` (HTTP 200, `text/html`) for `/api/model-registry` — a route its
+  older server code doesn't have — while the newer frontend bundle fetched it.
+  `res.ok` was true, so `res.json()` threw on the HTML. Fixed at all three
+  layers:
+  - **Server** — unknown `/api/*` paths now return a parseable **JSON 404**
+    (`{ error: 'Not found', path }`) instead of falling through to the SPA
+    fallback, so API consumers never receive HTML. Non-API unknown paths still
+    get the SPA fallback.
+  - **Frontend** — all `/api/*` responses are parsed defensively through a
+    shared `parseJsonOrNull()` helper (Content-Type must be JSON + try/catch
+    parse; an HTML-200 logs a console hint and degrades to null).
+    `ModelsPanel`'s `/api/models` non-JSON surfaces a friendly "is the
+    dashboard server up to date?" error instead of an uncaught parse crash;
+    the registry/telemetry sections (optional data) simply hide when the
+    response isn't JSON, and `api.ts`'s `fetchAll()` (the app bootstrap)
+    waits for the next SSE snapshot instead of crashing.
+  - **CLI** — `buff dashboard` now listens for the `error` event on the server:
+    **EADDRINUSE** (the exact stale-instance scenario) logs a clear "port
+    already in use — another dashboard (possibly an older version) is running"
+    message with `pkill` / alternate-port hints, closes the server, and exits 1
+    instead of crashing with an unhandled error event and leaving the browser
+    pointed at the stale instance.
+- **Tests** — server suite flips the old contract (unknown `/api/*` → 200 HTML)
+  to JSON-404 + a non-API SPA-fallback test; `dashboard.test.ts` mock is now
+  EventEmitter-shaped (fires `listening` on `setImmediate`, captures `error`)
+  with a new EADDRINUSE test; `ModelsPanel.test.tsx` adds two fetch-degradation
+  tests (both endpoints HTML → friendly error; registry-only HTML → grid
+  survives). Root suite: 3,011 tests; dashboard component tests: 42 across 6
+  files.
+
+---
+
+## [1.56.0] - 2026-08-05
+
+### Added
+
+- **Scrubbable per-action telemetry timeline** — the dashboard's daily
+  "learned from real usage" chart (verified vs killed vs transient per
+  action over the last 14 days) now matches the Run Timeline interaction:
+  drag across the bars, click a day, or use the range slider to scrub the
+  caret to any day, with ▶ play/pause sweeping day-by-day. The detail panel
+  under the chart shows the scrubbed day's exact chips — which provider ×
+  model the action killed (predictively skipped) or verified that day.
+  Day buckets in the registry's action-telemetry timeline now carry their
+  raw events (provider × model × outcome × reason, deduped per combo so the
+  dashboard payload stays bounded as usage grows) end-to-end from the JSONL
+  log through `/api/model-registry`.
+
+### Notes
+
+- Test suite: 3,011 tests across 98 files. Web dashboard component tests:
+  39 across 5 files (added the scrubbable-chart suite).
+
+---
+
+## [1.55.0] - 2026-08-05
+
+### Added
+
+- **`buff models unblock <provider>` escape hatch** — manually release a
+  provider the Model Availability Registry has ruled out (predictive skip).
+  `ModelRegistry.unblockProvider()` demotes every `unavailable` entry to
+  `unverified` and clears quota parks, `getQuotaLedger().releaseProvider()`
+  clears the ledger cooldown (so `syncQuota` can't instantly re-park genuine
+  exhaustion), then the command re-probes the live API via
+  `refreshModelRegistry` to re-learn the truth. Output shows the demote
+  result, the re-probe verdict (`verified` / `unavailable` / `skipped` /
+  `error`), and an honest `stillBlocked: true/false` field — with `--json`
+  for CI. `--no-spot-check` skips the live probe (demote + un-park only).
+- **Fixed a pre-existing `models` subcommand JSON bug** — the parent `models`
+  command's `-j, --json` option shadowed the identical flag on its
+  subcommands, so `models status --json` and `models refresh --json` silently
+  emitted human output. New `isJsonMode()` helper resolves the flag through
+  `optsWithGlobals()`, fixing both commands (and the new `unblock --json`).
+
+### Notes
+
+- Test suite: 3,009 tests across 98 files (added the unblock registry + CLI
+  suites). VS Code extension: 213 tests across 10 files.
+
+---
+
+## [1.54.0] - 2026-08-05
+
+### Added
+
+- **VS Code extension telemetry attribution** — the extension now tags every
+  real LLM call it drives with `BUFF_TELEMETRY_ACTION` at each subprocess spawn
+  (`ide-chat` for the chat panel, `ide-inline` for inline suggestions,
+  `ide-<command>` for execute / edit / workflow / review via the CLI manager),
+  so IDE usage shows up as its own rows in the per-action "learned from real
+  usage" registry log and dashboard panel instead of blending into
+  terminal-driven telemetry. The CLI resolves the override centrally in
+  `recordRegistryFailure` / `recordRegistrySuccess` (`resolveTelemetryAction`),
+  so every write from an IDE-spawned CLI process — including developer-mode
+  orchestrator calls inside a chat session — inherits the spawning action's
+  tag (documented as process-wide by design).
+- **Env-override tests** — `provider-fallback.test.ts` covers the override
+  (IDE-tagged kill + verify writes, blank-override fallback, natural tag when
+  unset) with file-level `BUFF_TELEMETRY_ACTION` isolation; `cliManager.test.ts`
+  asserts the spawn env carries `ide-<command>` for execute/chat/edit.
+
+### Notes
+
+- Test suite: 3,002 tests across 98 files (added the env-override + spawn-env
+  suites). VS Code extension: 213 tests across 10 files.
+
+---
+
 ## [1.53.0] - 2026-08-05
 
 ### Added

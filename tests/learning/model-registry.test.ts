@@ -189,6 +189,51 @@ describe('ModelRegistry — quota parking & telemetry', () => {
     expect(registry.isUsable('gemini', 'gemini-2.5-flash')).toBe(true);
   });
 
+  it('unblockProvider demotes unavailable→unverified and clears parks (escape hatch)', () => {
+    const registry = new ModelRegistry();
+    // Every tracked model unavailable → provider is predictively blocked.
+    registry.markUnavailable('gemini', 'gemini-2.5-flash', 'auth', 'telemetry');
+    registry.markUnavailable('gemini', 'gemini-1.5-flash', '403 permission denied', 'spot-check');
+    registry.recordCall('groq', 'llama-3.3-70b-versatile', false, 'rate-limit'); // parks quota
+    expect(registry.getBlockedProviders().sort()).toEqual(['gemini', 'groq']);
+
+    const gemini = registry.unblockProvider('gemini');
+    expect(gemini).toEqual({ demoted: 2, unparked: 0 });
+    // Demoted → unverified, so the provider is no longer blocked (unverified alone never blocks).
+    expect(registry.getEntry('gemini', 'gemini-2.5-flash')?.status).toBe('unverified');
+    expect(registry.getBlockedProviders()).not.toContain('gemini');
+    // The unrelated provider is untouched.
+    expect(registry.getBlockedProviders()).toContain('groq');
+
+    const groq = registry.unblockProvider('groq');
+    expect(groq).toEqual({ demoted: 1, unparked: 1 });
+    expect(registry.getEntry('groq', 'llama-3.3-70b-versatile')?.quotaParkedUntil).toBe(0);
+    expect(registry.getBlockedProviders()).toHaveLength(0);
+  });
+
+  it('unblockProvider is a no-op for an untracked provider (0/0)', () => {
+    const registry = new ModelRegistry();
+    expect(registry.unblockProvider('openrouter')).toEqual({ demoted: 0, unparked: 0 });
+    expect(registry.getBlockedProviders()).toHaveLength(0);
+  });
+
+  it('unblockProvider emits MODEL_REGISTRY_UPDATED so the watcher re-probes the provider', () => {
+    const registry = new ModelRegistry();
+    registry.markUnavailable('gemini', 'gemini-2.5-flash', 'auth', 'telemetry');
+    const events: string[] = [];
+    const unsub = getEventBus().on(EventNames.MODEL_REGISTRY_UPDATED, (record) => {
+      events.push((record.data as { providers: string[]; detail: string }).detail);
+    });
+
+    try {
+      registry.unblockProvider('gemini');
+      expect(events).toHaveLength(1);
+      expect(events[0]).toContain('manually unblocked');
+    } finally {
+      unsub();
+    }
+  });
+
   it('syncQuota reads the QuotaLedger router feed (exhausted provider parked)', () => {
     const registry = new ModelRegistry();
     registry.markVerified('gemini', 'gemini-2.5-flash', 'spot-check');
@@ -507,6 +552,12 @@ describe('ModelRegistry — per-action "learned from real usage" telemetry', () 
     const chat = tele.actions.find((a) => a.action === 'chat');
     expect(chat?.verified).toBe(2); // honest volume
     expect(chat?.verifiedModels).toHaveLength(1); // one chip
+    // The daily timeline dedupes its per-day events the same way (latest per
+    // provider × model × outcome) while keeping raw counts.
+    const today = chat!.timeline[chat!.timeline.length - 1];
+    expect(today.verified).toBe(2);
+    expect(today.events).toHaveLength(1);
+    expect(today.events[0]).toMatchObject({ provider: 'groq', model: 'llama-3.3-70b-versatile', outcome: 'verified' });
   });
 
   it('action log persists to BUFF_MEMORY_DIR and survives a restart', () => {
@@ -542,6 +593,15 @@ describe('ModelRegistry — per-action "learned from real usage" telemetry', () 
     expect(today.transient).toBe(0);
     // Older days exist but hold zero events.
     expect(chat!.timeline[0].verified + chat!.timeline[0].killed + chat!.timeline[0].transient).toBe(0);
+    // Each day bucket carries the RAW events so the scrubbable dashboard chart
+    // can render that day's exact chips (provider × model × outcome).
+    expect(today.events).toHaveLength(2);
+    const verifiedEv = today.events.find((e) => e.outcome === 'verified');
+    expect(verifiedEv).toMatchObject({ provider: 'groq', model: 'llama-3.3-70b-versatile' });
+    const killedEv = today.events.find((e) => e.outcome === 'unavailable');
+    expect(killedEv).toMatchObject({ provider: 'gemini', model: 'gemini-2.5-flash', errorType: 'auth' });
+    // Days with no events carry an empty events array (stable shape).
+    expect(chat!.timeline[0].events).toEqual([]);
   });
 
   it('timeline buckets split by UTC day (an old event lands in its own day bucket)', () => {
@@ -564,7 +624,13 @@ describe('ModelRegistry — per-action "learned from real usage" telemetry', () 
     expect(today.verified).toBe(1);
     // The 3-day-old kill is in an earlier bucket, not today.
     expect(today.killed).toBe(0);
-    expect(execute!.timeline[execute!.timeline.length - 4].killed).toBe(1);
+    const oldDay = execute!.timeline[execute!.timeline.length - 4];
+    expect(oldDay.killed).toBe(1);
+    // The old kill's raw event (with reason) rides along in its own day bucket.
+    expect(oldDay.events).toHaveLength(1);
+    expect(oldDay.events[0]).toMatchObject({
+      provider: 'nim', model: 'm2', outcome: 'unavailable', errorType: 'auth',
+    });
   });
 });
 

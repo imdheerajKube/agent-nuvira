@@ -116,13 +116,24 @@ export interface ActionTelemetryInsights {
     /**
      * Daily buckets (last 14 days, ascending) — verified vs killed vs
      * transient per day, so the panel renders a mini time-series chart per
-     * action: how the action's learning evolved over time.
+     * action: how the action's learning evolved over time. Each bucket also
+     * carries the raw events that day so the chart can be scrubbed
+     * day-by-day to show that day's exact verified/killed chips.
      */
     timeline: Array<{
       day: number;
       verified: number;
       killed: number;
       transient: number;
+      /** Raw events that day — the chips the scrubbable chart shows per day. */
+      events: Array<{
+        provider: string;
+        model: string;
+        outcome: 'verified' | 'unavailable' | 'error';
+        errorType?: string;
+        /** Epoch ms of the event. */
+        at: number;
+      }>;
     }>;
   }>;
 }

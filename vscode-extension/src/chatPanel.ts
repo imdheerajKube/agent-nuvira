@@ -661,7 +661,11 @@ export class ChatPanel {
         cwd: this.workspaceRoot,
         stdio: ['pipe', 'pipe', 'pipe'],
         signal: this.abortController.signal,
-        env: { ...process.env, FORCE_COLOR: '0' },
+        // BUFF_TELEMETRY_ACTION: the CLI writes every real LLM call through to
+        // the Model Availability Registry's "learned from real usage" log with
+        // this tag, so IDE chat usage shows up as `ide-chat` in the dashboard
+        // instead of blending into terminal-driven chat telemetry.
+        env: { ...process.env, FORCE_COLOR: '0', BUFF_TELEMETRY_ACTION: 'ide-chat' },
       });
 
       let fullContent = '';

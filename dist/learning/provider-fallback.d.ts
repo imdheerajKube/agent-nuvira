@@ -90,6 +90,30 @@ export declare function isRetryableError(errorType: FallbackErrorType): boolean;
  *   edit / ...) — attributed in the per-action "learned from real usage" log.
  *   Omitted → health still updates, but no dashboard panel row is written.
  */
+/**
+ * Resolve the telemetry action tag for a registry write, honoring the
+ * BUFF_TELEMETRY_ACTION env override.
+ *
+ * The VS Code extension spawns the CLI as a subprocess (`buff chat` /
+ * `buff execute` / ...) and sets this env var at each spawn site, so IDE usage
+ * is attributed to its own action tags (ide-chat / ide-inline / ide-execute)
+ * instead of blending into terminal-driven usage in the per-action
+ * "learned from real usage" log. When unset, the caller's explicit action tag
+ * is used unchanged — the CLI's own calls keep their natural actions.
+ *
+ * NOTE: the override applies PROCESS-WIDE — every registry write from the
+ * spawned CLI inherits the spawning action's tag, even writes that would
+ * otherwise carry a different tag (e.g. a chat session that enters
+ * developer-mode runs the orchestrator, whose `execute` writes get attributed
+ * to the spawning `ide-chat`). That is deliberate: the whole subprocess is one
+ * IDE action, and splitting it would fragment the per-action telemetry.
+ *
+ * @param defaultAction The action tag the caller intended (chat / execute /
+ *   plan / ...), used when the env override is absent.
+ * @returns The effective action tag (never an empty string — a blank override
+ *   falls back to the caller's tag).
+ */
+export declare function resolveTelemetryAction(defaultAction?: string): string | undefined;
 export declare function recordRegistryFailure(providerType: string, model: string | undefined, err: unknown, errorType?: FallbackErrorType, action?: string): void;
 /**
  * Write a successful real LLM call through to the Model Availability Registry

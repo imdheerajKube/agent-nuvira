@@ -157,6 +157,34 @@ export function isRetryableError(errorType: FallbackErrorType): boolean {
  *   edit / ...) — attributed in the per-action "learned from real usage" log.
  *   Omitted → health still updates, but no dashboard panel row is written.
  */
+/**
+ * Resolve the telemetry action tag for a registry write, honoring the
+ * BUFF_TELEMETRY_ACTION env override.
+ *
+ * The VS Code extension spawns the CLI as a subprocess (`buff chat` /
+ * `buff execute` / ...) and sets this env var at each spawn site, so IDE usage
+ * is attributed to its own action tags (ide-chat / ide-inline / ide-execute)
+ * instead of blending into terminal-driven usage in the per-action
+ * "learned from real usage" log. When unset, the caller's explicit action tag
+ * is used unchanged — the CLI's own calls keep their natural actions.
+ *
+ * NOTE: the override applies PROCESS-WIDE — every registry write from the
+ * spawned CLI inherits the spawning action's tag, even writes that would
+ * otherwise carry a different tag (e.g. a chat session that enters
+ * developer-mode runs the orchestrator, whose `execute` writes get attributed
+ * to the spawning `ide-chat`). That is deliberate: the whole subprocess is one
+ * IDE action, and splitting it would fragment the per-action telemetry.
+ *
+ * @param defaultAction The action tag the caller intended (chat / execute /
+ *   plan / ...), used when the env override is absent.
+ * @returns The effective action tag (never an empty string — a blank override
+ *   falls back to the caller's tag).
+ */
+export function resolveTelemetryAction(defaultAction?: string): string | undefined {
+  const override = process.env.BUFF_TELEMETRY_ACTION;
+  return override && override.trim() ? override.trim() : defaultAction;
+}
+
 export function recordRegistryFailure(
   providerType: string,
   model: string | undefined,
@@ -166,6 +194,7 @@ export function recordRegistryFailure(
 ): void {
   try {
     const registry = getModelRegistry();
+    const tag = resolveTelemetryAction(action);
     const kind = errorType ?? classifyFallbackError(err);
     const errorMsg = err instanceof Error ? err.message : String(err);
     const lower = errorMsg.toLowerCase();
@@ -177,9 +206,9 @@ export function recordRegistryFailure(
       /(404|not found).*(model|endpoint|route)/.test(lower) ||
       /(model|model id).*(does not exist|not found|no such|not supported)/.test(lower);
     if (modelNotFound) {
-      registry.markUnavailable(providerType, model || 'default', 'model not found', 'telemetry', 0, action);
+      registry.markUnavailable(providerType, model || 'default', 'model not found', 'telemetry', 0, tag);
     } else {
-      registry.recordCall(providerType, model || 'default', false, kind, action);
+      registry.recordCall(providerType, model || 'default', false, kind, tag);
     }
   } catch {
     // Best-effort — registry telemetry must never break failover.
@@ -203,7 +232,7 @@ export function recordRegistryFailure(
  */
 export function recordRegistrySuccess(providerType: string, model: string | undefined, action?: string): void {
   try {
-    getModelRegistry().recordCall(providerType, model || 'default', true, undefined, action);
+    getModelRegistry().recordCall(providerType, model || 'default', true, undefined, resolveTelemetryAction(action));
   } catch {
     // Best-effort — registry telemetry must never break a call.
   }

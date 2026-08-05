@@ -154,6 +154,9 @@ export interface ActionTelemetryInsights {
      * Daily buckets over the last TIMELINE_DAYS — verified vs killed vs
      * transient counts per day (ascending), so the dashboard can render a
      * "learned from real usage over time" sparkline/bar chart per action.
+     * Each bucket also carries the RAW events that landed that day, so the
+     * chart can be scrubbed day-by-day to show that day's exact chips
+     * (which provider × model the action killed or verified).
      */
     timeline: Array<{
       /** Start of the UTC day bucket (epoch ms). */
@@ -161,6 +164,15 @@ export interface ActionTelemetryInsights {
       verified: number;
       killed: number;
       transient: number;
+      /** Raw events that day — the chips the scrubbable chart shows per day. */
+      events: Array<{
+        provider: string;
+        model: string;
+        outcome: 'verified' | 'unavailable' | 'error';
+        errorType?: string;
+        /** Epoch ms of the event. */
+        at: number;
+      }>;
     }>;
   }>;
 }
@@ -245,10 +257,18 @@ export function buildActionTimeline(
 ): ActionTelemetryInsights['actions'][number]['timeline'] {
   const DAY_MS = 24 * 60 * 60 * 1000;
   const startOfToday = new Date(now).setUTCHours(0, 0, 0, 0);
-  const buckets = new Map<number, { verified: number; killed: number; transient: number }>();
+  type Event = ActionTelemetryInsights['actions'][number]['timeline'][number]['events'][number];
+  type Bucket = {
+    verified: number;
+    killed: number;
+    transient: number;
+    /** Deduped by provider × model × outcome — latest event wins. */
+    events: Map<string, Event>;
+  };
+  const buckets = new Map<number, Bucket>();
   for (let i = days - 1; i >= 0; i--) {
     const day = startOfToday - i * DAY_MS;
-    buckets.set(day, { verified: 0, killed: 0, transient: 0 });
+    buckets.set(day, { verified: 0, killed: 0, transient: 0, events: new Map() });
   }
   for (const e of entries) {
     const day = new Date(e.timestamp).setUTCHours(0, 0, 0, 0);
@@ -257,10 +277,27 @@ export function buildActionTimeline(
     if (e.outcome === 'verified') bucket.verified++;
     else if (e.outcome === 'unavailable') bucket.killed++;
     else bucket.transient++;
+    // Carry the event so the scrubbable chart can render that day's chips —
+    // deduped per provider × model × outcome (latest wins) so the dashboard
+    // payload stays bounded as usage grows. Chips are one-per-combo-per-day
+    // anyway; the COUNTS above stay raw and honest.
+    bucket.events.set(`${e.provider}|${e.model}|${e.outcome}`, {
+      provider: e.provider,
+      model: e.model,
+      outcome: e.outcome,
+      errorType: e.errorType,
+      at: e.timestamp,
+    });
   }
   return [...buckets.entries()]
     .sort((a, b) => a[0] - b[0])
-    .map(([day, counts]) => ({ day, ...counts }));
+    .map(([day, counts]) => ({
+      day,
+      verified: counts.verified,
+      killed: counts.killed,
+      transient: counts.transient,
+      events: [...counts.events.values()],
+    }));
 }
 
 export function aggregateActionTelemetry(entries: ActionTelemetryEntry[]): ActionTelemetryInsights {
@@ -575,6 +612,51 @@ export class ModelRegistry {
       this.persist();
       this.emitUpdated([provider], 'quota park released', 'quota');
     }
+  }
+
+  /**
+   * Manual escape hatch — `buff models unblock <provider>`.
+   *
+   * Releases a provider that routing has predictively blocked (`getBlockedProviders()`):
+   * demotes every `unavailable` entry back to `unverified` and clears all quota
+   * parks, so the provider is no longer skipped before scoring. `unverified`
+   * alone never blocks ("not yet probed" ≠ "dead"), which is exactly the state
+   * an unblock should produce — the caller then RE-PROBES against the live API
+   * so the registry re-learns the truth: if the provider genuinely recovered it
+   * becomes `verified` again; if it is still dead the re-probe flips it back to
+   * `unavailable` (one honest probe, not a permanent skip).
+   *
+   * Also used by the ledger-sync boundary: the caller should release the central
+   * quota ledger's cooldown too, otherwise `syncQuota()` re-parks the provider
+   * on the very next routing read (this method only clears REGISTRY state).
+   *
+   * @returns How many entries were demoted / un-parked (0/0 when untracked).
+   */
+  unblockProvider(provider: string): { demoted: number; unparked: number } {
+    const now = Date.now();
+    let demoted = 0;
+    let unparked = 0;
+    for (const e of Object.values(this.data.entries)) {
+      if (e.provider !== provider) continue;
+      if (e.status === 'unavailable') {
+        // Demote the definitive no back to unverified — routing may try it again.
+        e.status = 'unverified';
+        e.source = 'probe'; // availability is now unknown until re-probed
+        // Clear the stale learned reason so a later re-verification can't carry
+        // a misleading old 'auth'/'403' message into `models status`.
+        e.lastError = 'manually unblocked — re-probe pending';
+        demoted++;
+      }
+      if (e.quotaParkedUntil > now) {
+        e.quotaParkedUntil = 0;
+        unparked++;
+      }
+    }
+    if (demoted > 0 || unparked > 0) {
+      this.persist();
+      this.emitUpdated([provider], `manually unblocked (${demoted} demoted, ${unparked} un-parked)`, 'quota');
+    }
+    return { demoted, unparked };
   }
 
   /**

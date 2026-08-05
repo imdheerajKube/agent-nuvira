@@ -433,11 +433,18 @@ export class CLIManager {
 
       // Spawn process
       this.abortController = new AbortController();
+      // BUFF_TELEMETRY_ACTION: the CLI writes every real LLM call through to
+      // the Model Availability Registry's "learned from real usage" log with
+      // this tag, so IDE-driven usage (execute / edit / chat / workflow)
+      // shows up as `ide-<command>` in the dashboard instead of blending into
+      // terminal-driven telemetry. Model-management commands never write
+      // telemetry, so the tag is harmless there.
+      const telemetryAction = `ide-${args[0] || 'cli'}`;
       this.process = spawn(cliCmd, allArgs, {
         cwd: this.workspaceRoot,
         stdio: ['pipe', 'pipe', 'pipe'],
         signal: this.abortController.signal,
-        env: { ...process.env, FORCE_COLOR: '0' }, // Disable color for parsing
+        env: { ...process.env, FORCE_COLOR: '0', BUFF_TELEMETRY_ACTION: telemetryAction }, // Disable color for parsing
       });
 
       // Handle stdout

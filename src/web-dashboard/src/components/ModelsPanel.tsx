@@ -1,4 +1,5 @@
-import { useState, useEffect, useRef } from 'react';
+import { useState, useEffect, useRef, useCallback } from 'react';
+import { parseJsonOrNull } from '../jsonOrNull';
 import type { ModelsHealthData, ProviderHealth, ModelStatus, TestedModel, ModelRegistryInsights, RegistryModelEntry, ActionTelemetryInsights } from '../types';
 
 // ─── Constants ──────────────────────────────────────────────────────────────
@@ -473,15 +474,24 @@ function fmtShortTime(ms: number): string {
     new Date(ms).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
 }
 
-function ModelLearnChip({ provider, model, reason, killed }: { provider: string; model: string; reason?: string; killed?: boolean }) {
+function ModelLearnChip({ provider, model, reason, killed, transient }: {
+  provider: string;
+  model: string;
+  reason?: string;
+  killed?: boolean;
+  transient?: boolean;
+}) {
   const isKilled = killed === true;
-  const color = isKilled ? '#f85149' : '#3fb950';
-  const bg = isKilled ? '#2d0f0f' : '#0a2e1a';
+  const isTransient = transient === true;
+  const color = isTransient ? '#d29922' : isKilled ? '#f85149' : '#3fb950';
+  const bg = isTransient ? '#2d1f00' : isKilled ? '#2d0f0f' : '#0a2e1a';
   return (
     <span
-      title={isKilled
-        ? `Killed by this action — predictively skipped by routing${reason ? ` · ${reason}` : ''}`
-        : `Verified by this action — trusted by routing`}
+      title={isTransient
+        ? `Transient failure — health decayed, no flip${reason ? ` · ${reason}` : ''}`
+        : isKilled
+          ? `Killed by this action — predictively skipped by routing${reason ? ` · ${reason}` : ''}`
+          : 'Verified by this action — trusted by routing'}
       style={{
         display: 'inline-flex', alignItems: 'center', gap: 6,
         background: bg, border: `1px solid ${color}`,
@@ -493,7 +503,7 @@ function ModelLearnChip({ provider, model, reason, killed }: { provider: string;
       onMouseEnter={(e) => { e.currentTarget.style.transform = 'scale(1.05)'; }}
       onMouseLeave={(e) => { e.currentTarget.style.transform = 'scale(1)'; }}
     >
-      <span style={{ opacity: 0.85 }}>{isKilled ? '✗' : '✓'}</span>
+      <span style={{ opacity: 0.85 }}>{isTransient ? '~' : isKilled ? '✗' : '✓'}</span>
       {provider}/{model.length > 30 ? model.slice(0, 27) + '…' : model}
       {isKilled && reason && (
         <span style={{ color: `${color}99`, fontSize: 10, fontWeight: 400 }}>· {reason}</span>
@@ -505,42 +515,221 @@ function ModelLearnChip({ provider, model, reason, killed }: { provider: string;
 // ─── Per-action timeline chart (verified vs killed vs transient over time) ──
 // Daily stacked bars for the last 14 days: each bar's height is the day's
 // total events, split into verified (green) / killed (red) / transient (amber)
-// segments. Hover shows the exact counts for that day.
+// segments. Scrub across days (drag the track, click a bar, or use the range
+// slider) to see that day's exact chips — which provider × model the action
+// killed or verified — matching the Run Timeline's draggable-caret pattern.
 
-function ActionTimelineChart({ timeline }: { timeline: ActionTelemetryInsights['actions'][number]['timeline'] }) {
-  if (!timeline || timeline.length === 0) return null;
+/** One raw learned event inside a day bucket (what the scrubber shows). */
+export type ActionDayEvent = {
+  provider: string;
+  model: string;
+  outcome: 'verified' | 'unavailable' | 'error';
+  errorType?: string;
+  /** Epoch ms of the event. */
+  at: number;
+};
+
+/** One day bucket in the per-action telemetry timeline. */
+export type ActionDayBucket = {
+  day: number;
+  verified: number;
+  killed: number;
+  transient: number;
+  events: ActionDayEvent[];
+};
+
+/**
+ * One chip per provider × model × outcome for a day (latest event wins),
+ * ordered killed → verified → transient so the most actionable learning
+ * (predictive skips) surfaces first.
+ */
+export function dedupeDayEvents(events: ActionDayEvent[]): ActionDayEvent[] {
+  const latest = new Map<string, ActionDayEvent>();
+  for (const e of events) latest.set(`${e.provider}|${e.model}|${e.outcome}`, e);
+  const priority: Record<ActionDayEvent['outcome'], number> = { unavailable: 0, verified: 1, error: 2 };
+  return [...latest.values()].sort((a, b) => priority[a.outcome] - priority[b.outcome] || b.at - a.at);
+}
+
+/** Default scrub position: the most recent day with events (else the last day). */
+function lastDayWithEvents(timeline: ActionDayBucket[]): number {
+  for (let i = timeline.length - 1; i >= 0; i--) {
+    const b = timeline[i];
+    if (b.verified + b.killed + b.transient > 0) return i;
+  }
+  return Math.max(0, timeline.length - 1);
+}
+
+export function ActionTimelineChart({ timeline }: { timeline: ActionDayBucket[] }) {
+  const [dayIdx, setDayIdx] = useState(() => lastDayWithEvents(timeline || []));
+  const [playing, setPlaying] = useState(false);
+  const trackRef = useRef<HTMLDivElement | null>(null);
+  const draggingRef = useRef(false);
+
+  const len = timeline?.length ?? 0;
+  const clamped = Math.max(0, Math.min(dayIdx, len - 1));
+
+  // Clamp the selection when the timeline refreshes (60s poll) and resizes.
+  useEffect(() => {
+    setDayIdx((cur) => Math.min(cur, Math.max(0, len - 1)));
+  }, [len]);
+
+  // Drag: pointer-down on the track grabs it; window move/up drive the caret.
+  const setFromClientX = useCallback((clientX: number) => {
+    const el = trackRef.current;
+    if (!el || len <= 0) return;
+    const rect = el.getBoundingClientRect();
+    const width = rect.width || 1;
+    const frac = Math.min(1, Math.max(0, (clientX - rect.left) / width));
+    setDayIdx(Math.min(len - 1, Math.floor(frac * len)));
+  }, [len]);
+
+  const handlePointerDown = (e: React.PointerEvent) => {
+    draggingRef.current = true;
+    setPlaying(false);
+    setFromClientX(e.clientX);
+  };
+
+  // Register the window listeners once; the drag flag lives in a ref so the
+  // listeners don't churn on every caret tick during playback.
+  useEffect(() => {
+    const onMove = (e: PointerEvent) => {
+      if (draggingRef.current) setFromClientX(e.clientX);
+    };
+    const onUp = () => {
+      draggingRef.current = false;
+    };
+    window.addEventListener('pointermove', onMove);
+    window.addEventListener('pointerup', onUp);
+    return () => {
+      window.removeEventListener('pointermove', onMove);
+      window.removeEventListener('pointerup', onUp);
+    };
+  }, [setFromClientX]);
+
+  // Playback: sweep one day at a time (~300ms/day), then rewind + rest.
+  useEffect(() => {
+    if (!playing || len <= 1) return;
+    const interval = setInterval(() => {
+      setDayIdx((prev) => Math.min(len - 1, prev + 1));
+    }, 300);
+    return () => clearInterval(interval);
+  }, [playing, len]);
+
+  // Reached the last day during playback → stop and rewind to the start.
+  // len > 1 guard keeps a single-day timeline from instantly stop/rewinding
+  // (the interval effect already refuses to sweep for len <= 1).
+  useEffect(() => {
+    if (playing && len > 1 && dayIdx >= len - 1) {
+      setPlaying(false);
+      setDayIdx(0);
+    }
+  }, [playing, len, dayIdx]);
+
+  if (!timeline || len === 0) return null;
+
   const max = Math.max(1, ...timeline.map((b) => b.verified + b.killed + b.transient));
   const dayLabel = (day: number): string =>
     new Date(day).toLocaleDateString([], { month: 'short', day: 'numeric' });
+  const day = timeline[clamped];
+  const chips = day ? dedupeDayEvents(day.events || []) : [];
+
   return (
     <div style={{ marginTop: 12, paddingTop: 10, borderTop: '1px solid #21262d' }}>
       <div style={{
         fontSize: 11, fontWeight: 600, color: '#8b949e', marginBottom: 8,
         textTransform: 'uppercase', letterSpacing: 0.4,
+        display: 'flex', alignItems: 'center', gap: 6, flexWrap: 'wrap',
       }}>
-        📈 Learned from real usage — last {timeline.length} days
+        <span>📈 Learned from real usage — last {len} days</span>
+        <span style={{ fontWeight: 400, color: '#6e7681', letterSpacing: 0 }}>
+          — drag across days · click a day · play to sweep
+        </span>
       </div>
-      <div style={{ display: 'flex', alignItems: 'flex-end', gap: 3, height: 64, padding: '0 2px' }}>
-        {timeline.map((b) => {
+
+      {/* Scrub controls (matches the Run Timeline interaction) */}
+      <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 8 }}>
+        <button
+          onClick={() => {
+            if (playing) {
+              setPlaying(false);
+            } else {
+              if (dayIdx >= len - 1) setDayIdx(0);
+              setPlaying(true);
+            }
+          }}
+          disabled={len <= 1}
+          aria-label={playing ? 'Pause scrub' : 'Play scrub'}
+          style={{
+            background: '#21262d', border: `1px solid ${playing ? '#f85149' : '#30363d'}`,
+            color: '#e6edf3', padding: '3px 10px', borderRadius: 6,
+            cursor: len <= 1 ? 'not-allowed' : 'pointer', fontSize: 11, fontWeight: 600,
+            transition: 'all 0.15s', whiteSpace: 'nowrap',
+            opacity: len <= 1 ? 0.5 : 1,
+          }}
+        >
+          {playing ? '⏸ Pause' : '▶ Play'}
+        </button>
+        <span style={{ fontSize: 11, color: '#8b949e', whiteSpace: 'nowrap' }}>
+          {dayLabel(day.day)} · ✓ {day.verified} · ✗ {day.killed}
+          {day.transient > 0 ? ` · ~ ${day.transient}` : ''}
+        </span>
+        <input
+          type="range"
+          min={0}
+          max={Math.max(0, len - 1)}
+          step={1}
+          value={clamped}
+          onChange={(e) => { setPlaying(false); setDayIdx(Number(e.target.value)); }}
+          aria-label="Scrub action timeline"
+          style={{ flex: 1, accentColor: '#58a6ff', cursor: 'pointer', minWidth: 80 }}
+        />
+      </div>
+
+      {/* Day bars — the scrub track */}
+      <div
+        ref={trackRef}
+        onPointerDown={handlePointerDown}
+        style={{
+          position: 'relative', display: 'flex', alignItems: 'flex-end',
+          gap: 3, height: 64, padding: '0 2px', cursor: 'grab',
+          userSelect: 'none', touchAction: 'none',
+        }}
+      >
+        {timeline.map((b, i) => {
           const total = b.verified + b.killed + b.transient;
           const hVerified = (b.verified / max) * 56;
           const hKilled = (b.killed / max) * 56;
           const hTransient = (b.transient / max) * 56;
+          const isActive = i === clamped;
           return (
             <div
               key={b.day}
+              onClick={() => { setPlaying(false); setDayIdx(i); }}
               title={`${dayLabel(b.day)} — ✓ ${b.verified} verified · ✗ ${b.killed} killed · ~ ${b.transient} transient`}
               style={{
                 flex: 1, display: 'flex', flexDirection: 'column-reverse',
-                alignItems: 'center', gap: 0, cursor: 'default',
+                alignItems: 'center', gap: 0, cursor: 'pointer',
               }}
             >
               <div style={{
-                width: '100%', borderRadius: 3, overflow: 'hidden',
+                position: 'relative', width: '100%', borderRadius: 3,
+                overflow: isActive ? 'visible' : 'hidden',
                 background: total === 0 ? '#21262d' : 'transparent',
                 height: total === 0 ? 4 : 56,
                 display: 'flex', flexDirection: 'column-reverse',
+                boxShadow: isActive ? '0 0 0 1.5px #58a6ff' : undefined,
+                opacity: total === 0 ? 0.5 : 1,
+                transition: 'box-shadow 0.15s',
               }}>
+                {/* Caret — pinned to the ACTIVE bar's own geometry (gap/padding exact) */}
+                {isActive && (
+                  <div style={{
+                    position: 'absolute', top: -3, bottom: -3, width: 2, left: '50%',
+                    transform: 'translateX(-50%)',
+                    background: '#58a6ff', borderRadius: 2, pointerEvents: 'none',
+                    boxShadow: '0 0 8px #58a6ff88', zIndex: 1,
+                  }} />
+                )}
                 {b.verified > 0 && (
                   <div style={{ height: hVerified, background: '#3fb950', minHeight: 3 }} />
                 )}
@@ -552,7 +741,8 @@ function ActionTimelineChart({ timeline }: { timeline: ActionTelemetryInsights['
                 )}
               </div>
               <div style={{
-                fontSize: 9, color: '#6e7681', marginTop: 4, whiteSpace: 'nowrap',
+                fontSize: 9, color: isActive ? '#58a6ff' : '#6e7681', marginTop: 4,
+                whiteSpace: 'nowrap', fontWeight: isActive ? 700 : 400,
               }}>
                 {dayLabel(b.day)}
               </div>
@@ -564,6 +754,52 @@ function ActionTimelineChart({ timeline }: { timeline: ActionTelemetryInsights['
         <span><span style={{ color: '#3fb950' }}>■</span> verified</span>
         <span><span style={{ color: '#f85149' }}>■</span> killed</span>
         <span><span style={{ color: '#d29922' }}>■</span> transient</span>
+      </div>
+
+      {/* Day detail — the chips for the scrubbed day */}
+      <div style={{
+        marginTop: 10, background: '#161b22', border: '1px solid #21262d',
+        borderRadius: 8, padding: '10px 12px',
+      }}>
+        <div style={{ fontSize: 12, fontWeight: 600, color: '#e6edf3', marginBottom: 6 }}>
+          {dayLabel(day.day)}{' '}
+          <span style={{ color: '#8b949e', fontWeight: 400 }}>
+            — what this action learned that day
+          </span>
+        </div>
+        {chips.length === 0 ? (
+          <div style={{ fontSize: 12, color: '#6e7681' }}>
+            No learning recorded that day — nothing verified or killed.
+          </div>
+        ) : (
+          <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6 }}>
+            {chips.map((e) =>
+              e.outcome === 'unavailable' ? (
+                <ModelLearnChip
+                  key={`${e.provider}|${e.model}|${e.outcome}`}
+                  provider={e.provider}
+                  model={e.model}
+                  reason={e.errorType}
+                  killed
+                />
+              ) : e.outcome === 'verified' ? (
+                <ModelLearnChip
+                  key={`${e.provider}|${e.model}|${e.outcome}`}
+                  provider={e.provider}
+                  model={e.model}
+                />
+              ) : (
+                <ModelLearnChip
+                  key={`${e.provider}|${e.model}|${e.outcome}`}
+                  provider={e.provider}
+                  model={e.model}
+                  reason={e.errorType}
+                  transient
+                />
+              ),
+            )}
+          </div>
+        )}
       </div>
     </div>
   );
@@ -1067,11 +1303,14 @@ export default function ModelsPanel() {
         fetch('/api/model-registry'),
       ]);
       if (!mountedRef.current) return;
-      if (!modelsRes.ok) throw new Error(`HTTP ${modelsRes.status}`);
-      const data = await modelsRes.json() as ModelsHealthData;
-      const registry = registryRes.ok
-        ? await registryRes.json() as ModelRegistryInsights
-        : null;
+      if (!modelsRes.ok) throw new Error(`Model health endpoint failed (HTTP ${modelsRes.status})`);
+      const data = await parseJsonOrNull(modelsRes) as ModelsHealthData | null;
+      if (!data || !Array.isArray(data.providers)) {
+        throw new Error('Model health endpoint returned an unexpected response — is the dashboard server up to date?');
+      }
+      // Registry/telemetry are OPTIONAL: an older server (or a plain 404) must
+      // hide those sections, never break the health grid.
+      const registry = await parseJsonOrNull(registryRes) as ModelRegistryInsights | null;
       if (mountedRef.current) {
         setModelsData(data);
         setRegistryData(registry);
@@ -1240,6 +1479,21 @@ export default function ModelsPanel() {
 
           {/* Learned-from-real-usage telemetry — per-action verified/killed visibility */}
           {registryData && <ActionTelemetrySection registry={registryData} />}
+
+          {/* Older/mismatched server: registry data missing — explain why the
+              sections above are absent instead of showing a blank gap. */}
+          {modelsData && !registryData && (
+            <div style={{
+              background: '#161b22', borderRadius: 12, border: '1px dashed #30363d',
+              padding: '14px 20px', marginTop: 24, fontSize: 12, color: '#8b949e',
+              lineHeight: 1.6,
+            }}>
+              📦 Registry &amp; telemetry sections are hidden — this dashboard
+              server did not return model-registry data (it may be an{' '}
+              <strong style={{ color: '#e6edf3' }}>older version</strong>).
+              Restart the dashboard from the latest install to see them.
+            </div>
+          )}
 
           {/* Speech provider coming-soon placeholder */}
           <SpeechProviderSection />

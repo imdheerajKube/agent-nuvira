@@ -79,6 +79,18 @@ vi.mock('../../src/plugins/registry.js', () => ({
   getPluginRegistry: vi.fn(() => PLUGIN_MOCK),
 }));
 
+// The unblock subcommand re-probes against the live API via
+// refreshModelRegistry — mock it so the CLI test is hermetic (no network).
+const mockRefreshRegistry = vi.hoisted(() => ({
+  refreshModelRegistry: vi.fn(),
+}));
+
+vi.mock('../../src/inference/model-probe.js', () => ({
+  refreshModelRegistry: mockRefreshRegistry.refreshModelRegistry,
+  startRegistryWatcher: vi.fn(() => ({ stop: vi.fn(), runOnce: vi.fn() })),
+  PROBE_PROVIDERS: ['local', 'groq', 'gemini', 'nim', 'openrouter'],
+}));
+
 // ─── Test helpers ───────────────────────────────────────────────────────────
 
 function muteConsole(): void {
@@ -275,5 +287,118 @@ describe('ModelsCommand status --verbose', () => {
     expect(output).toContain('killed');
     expect(output).toContain('chat');
     expect(output).toContain('verified');
+  });
+});
+
+describe('ModelsCommand unblock — manual escape hatch', () => {
+  let unblockTempDir: string;
+  let originalMemoryDir: string | undefined;
+  let configManager: any;
+
+  beforeEach(async () => {
+    vi.restoreAllMocks();
+    mockResolveResults.clear();
+    PLUGIN_MOCK.getAllPlugins.mockReturnValue([]);
+    muteConsole();
+    // Hermetic registry + ledger storage.
+    unblockTempDir = mkdtempSync(join(tmpdir(), 'buff-models-unblock-'));
+    originalMemoryDir = process.env.BUFF_MEMORY_DIR;
+    process.env.BUFF_MEMORY_DIR = unblockTempDir;
+    const { resetModelRegistry } = await import('../../src/learning/model-registry.js');
+    const { resetQuotaLedger } = await import('../../src/learning/quota-ledger.js');
+    resetModelRegistry();
+    resetQuotaLedger();
+    mockRefreshRegistry.refreshModelRegistry.mockResolvedValue({
+      providersProbed: ['gemini'],
+      modelsListed: 2,
+      verified: 1,
+      unavailable: 0,
+      skipped: 0,
+      errors: 0,
+    });
+    configManager = { getAll: vi.fn(() => ({})), getProviderConfig: vi.fn(() => ({ config: {} })) };
+  });
+
+  afterEach(async () => {
+    const { resetModelRegistry } = await import('../../src/learning/model-registry.js');
+    const { resetQuotaLedger } = await import('../../src/learning/quota-ledger.js');
+    resetModelRegistry();
+    resetQuotaLedger();
+    if (originalMemoryDir === undefined) delete process.env.BUFF_MEMORY_DIR;
+    else process.env.BUFF_MEMORY_DIR = originalMemoryDir;
+    rmSync(unblockTempDir, { recursive: true, force: true });
+    vi.restoreAllMocks();
+  });
+
+  /** Parse through the production CLI shape (root program → models child). */
+  async function runUnblock(args: string[]): Promise<string> {
+    const { Command } = await import('commander');
+    const { ModelsCommand } = await import('../../src/cli/models.js');
+    const cmd = new ModelsCommand();
+    (cmd as any).configManager = configManager;
+    const cli = new Command();
+    cli.addCommand(cmd.create());
+    cli.exitOverride();
+    await cli.parseAsync(['node', 'buff', 'models', ...args]);
+    return vi.mocked(console.log).mock.calls.map((c) => String(c[0])).join('\n');
+  }
+
+  it('unblocks a registry-blocked provider and re-probes it against the live API', async () => {
+    const { getModelRegistry } = await import('../../src/learning/model-registry.js');
+    const registry = getModelRegistry();
+    registry.markUnavailable('gemini', 'gemini-2.5-flash', 'auth', 'telemetry');
+    expect(registry.getBlockedProviders()).toContain('gemini');
+
+    await runUnblock(['unblock', 'gemini']);
+
+    // Provider is released from the predictive skip…
+    expect(registry.getBlockedProviders()).not.toContain('gemini');
+    expect(registry.getEntry('gemini', 'gemini-2.5-flash')?.status).toBe('unverified');
+    // …and re-probed against the live API (spot-check enabled by default).
+    expect(mockRefreshRegistry.refreshModelRegistry).toHaveBeenCalledWith(
+      configManager,
+      expect.objectContaining({ providers: ['gemini'], spotCheck: true }),
+    );
+  });
+
+  it('clears the central ledger cooldown so syncQuota cannot instantly re-park', async () => {
+    const { getQuotaLedger } = await import('../../src/learning/quota-ledger.js');
+    const ledger = getQuotaLedger();
+    ledger.parkProvider('gemini', Date.now() + 3600_000, 'rate-limit');
+    expect(ledger.getRouterQuotaStatus()).toEqual(
+      expect.arrayContaining([expect.objectContaining({ provider: 'gemini' })]),
+    );
+
+    await runUnblock(['unblock', 'gemini']);
+
+    expect(ledger.getRouterQuotaStatus()).toEqual([]);
+  });
+
+  it('reports wasBlocked / demoted / unparked in --json output', async () => {
+    const { getModelRegistry } = await import('../../src/learning/model-registry.js');
+    const registry = getModelRegistry();
+    registry.markUnavailable('gemini', 'gemini-2.5-flash', 'auth', 'telemetry');
+    registry.recordCall('groq', 'llama-3.3-70b-versatile', false, 'rate-limit');
+
+    const output = await runUnblock(['unblock', 'gemini', '--json']);
+    const parsed = JSON.parse(output);
+    expect(parsed.wasBlocked).toBe(true);
+    expect(parsed.demoted).toBe(1);
+    expect(parsed.unparked).toBe(0);
+    expect(parsed.provider).toBe('gemini');
+    expect(parsed.stillBlocked).toBe(false);
+    expect(parsed.probe.verified).toBe(1);
+  });
+
+  it('is a harmless no-op for a provider that was never tracked', async () => {
+    const output = await runUnblock(['unblock', 'openrouter', '--json']);
+    const parsed = JSON.parse(output);
+    expect(parsed.wasBlocked).toBe(false);
+    expect(parsed.demoted).toBe(0);
+    expect(parsed.unparked).toBe(0);
+    expect(mockRefreshRegistry.refreshModelRegistry).toHaveBeenCalledWith(
+      configManager,
+      expect.objectContaining({ providers: ['openrouter'] }),
+    );
   });
 });
