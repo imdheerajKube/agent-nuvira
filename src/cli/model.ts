@@ -684,6 +684,7 @@ export class ModelCommand extends BaseCommand {
           inCooldown: r.inCooldown,
           reason: r.reason,
           dimensions: r.dimensions,
+          capabilityFit: r.capabilityFit !== undefined ? Math.round(r.capabilityFit * 100) : undefined,
         })),
         fallbackChain: d.fallbackChain.map((c) => ({
           provider: c.provider,
@@ -738,7 +739,8 @@ export class ModelCommand extends BaseCommand {
     decision.ranked.forEach((r, i) => {
       const mark = r.provider === decision.provider ? '✅' : '  ';
       const cd = r.inCooldown ? '  (circuit-breaker cooldown)' : '';
-      console.log(`   ${mark} ${i + 1}. ${r.provider.padEnd(12)} score ${r.score.toFixed(3)}  ${r.reason}${cd}`);
+      const fit = r.capabilityFit !== undefined ? ` 🎯 fit ${Math.round(r.capabilityFit * 100)}%` : '';
+      console.log(`   ${mark} ${i + 1}. ${r.provider.padEnd(12)} score ${r.score.toFixed(3)}  ${r.reason}${fit}${cd}`);
     });
     console.log('');
 

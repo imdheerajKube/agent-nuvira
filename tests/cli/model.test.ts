@@ -66,6 +66,8 @@ describe('ModelCommand explain', () => {
     expect(output).toContain('Ranked providers');
     expect(output).toContain('Decision:');
     expect(output).toContain('Fallback chain');
+    // M2.1: the capability-fit chip renders on the default (gate-ON) path.
+    expect(output).toContain('fit');
   });
 
   it('walks all five complexity levels when no task is given', () => {
@@ -96,6 +98,10 @@ describe('ModelCommand explain', () => {
 
     // Pricing map covers every ranked provider with override flags
     for (const r of parsed.ranked) {
+      // M2.1: capability-fit is surfaced per ranked provider on the default
+      // path (gate-OFF leaves it undefined — omitted from JSON, locked at the
+      // resolve level in auto-router.test.ts).
+      expect(typeof r.capabilityFit).toBe('number');
       expect(parsed.pricing[r.provider]).toBeDefined();
       expect(typeof parsed.pricing[r.provider].inputPer1K).toBe('number');
       expect(typeof parsed.pricing[r.provider].outputPer1K).toBe('number');

@@ -182,6 +182,16 @@ export interface RoutingConfig {
    */
   promotionMinDecisions?: number;
   /**
+   * Enable the M2.1 capability-fit soft signal in Auto routing scoring: a
+   * task type's required model-catalog tags (plan → reasoning, quick edit →
+   * code, …) are matched against each provider's offered tags, nudging
+   * equally-scored candidates toward the one whose strengths match the task.
+   * Default: true. Set to false to revert to pure dimension-weight scoring
+   * (the signal becomes fully inert — scores, reasons and the explain view
+   * drop the capability-fit component).
+   */
+  capabilityFit?: boolean;
+  /**
    * Keep the dashboard's quota file watcher armed permanently instead of only
    * while an SSE client is connected. When true, the server watches the memory
    * dir from startup (never disarming on client disconnect), so quota events

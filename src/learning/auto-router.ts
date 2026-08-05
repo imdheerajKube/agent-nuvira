@@ -219,6 +219,11 @@ export interface ScoredProvider {
   quotaParked?: boolean;
   /** Why this provider ranked where it did */
   reason: string;
+  /**
+   * 0–1 task-type → capability fit (Nuvira-Router M2.1): how well the
+   * provider's offered tags cover the capabilities this task needs.
+   */
+  capabilityFit?: number;
 }
 
 /** The final auto-routing decision for a single task. */
@@ -282,6 +287,89 @@ const DEFAULT_PROFILES: Record<string, ProviderCapabilities> = {
   gemini: { reasoning: 0.85, speed: 0.80, cost: 0.40, privacy: 0.10, reliability: 0.88 },
   openrouter: { reasoning: 0.95, speed: 0.55, cost: 0.15, privacy: 0.10, reliability: 0.78 },
 };
+
+// ─── Capability-aware scoring (Nuvira-Router P2 M2.1) ───────────────────────
+//
+// A SOFT signal on top of the five weighted dimensions: which capabilities a
+// task ACTUALLY needs (from its task type) vs which capabilities a provider
+// offers (from its profile). This is deliberately a small, clamped multiplier
+// — it nudges equally-scored providers toward the one whose strengths match
+// the task (a code-review wants reasoning, a quick edit wants speed), but it
+// can never overturn a large dimension-weight advantage or break the 0–1
+// score invariant.
+
+/** Model-catalog-style tags a task type genuinely needs. */
+const TASK_CAPABILITY_TAGS: Record<string, string[]> = {
+  plan: ['reasoning'],
+  // Code generation cares about correctness, not latency — every code-capable
+  // provider fits equally, so the signal stays neutral for writer tasks and
+  // never overturns the dimension-weighted ranking.
+  'simple-edit': ['code'],
+  'code-review': ['code', 'reasoning'],
+  'test-generation': ['code'],
+  debug: ['code', 'reasoning'],
+  'context-gather': ['fast'],
+  default: ['chat'],
+};
+
+/** Model-catalog-style tags each built-in provider offers (from its profile). */
+const PROVIDER_CAPABILITY_TAGS: Record<string, string[]> = {
+  local: ['chat', 'code'],
+  groq: ['chat', 'code', 'fast'],
+  nim: ['chat', 'code', 'reasoning'],
+  gemini: ['chat', 'code', 'reasoning', 'fast', 'vision'],
+  openrouter: ['chat', 'code', 'reasoning', 'vision', 'agentic'],
+};
+
+/**
+ * Offered tags for a provider: static catalog tags UNION tags derived from
+ * the capability profile (so custom/gateway providers are scored by their
+ * REAL profile, not a hardcoded map — a custom strong-reasoning provider gets
+ * a 'reasoning' tag even though no static entry lists it).
+ */
+function providerOfferedTags(provider: string, caps?: ProviderCapabilities): string[] {
+  const staticTags = PROVIDER_CAPABILITY_TAGS[provider] || [];
+  const derived: string[] = [];
+  if (caps) {
+    if (caps.reasoning >= 0.75) derived.push('reasoning');
+    if (caps.speed >= 0.9) derived.push('fast');
+    // 'cheap'/'reliable' are derived for FUTURE task types — no current task
+    // requires them, so they don't affect today's fit computation (kept for
+    // completeness; the matched-filter simply never hits them yet).
+    if (caps.cost >= 0.85) derived.push('cheap');
+    if (caps.reliability >= 0.85) derived.push('reliable');
+  }
+  return [...new Set([...staticTags, ...derived])];
+}
+
+/**
+ * 0–1 fit between a task type's required capabilities and a provider's
+ * offered tags: matched-required / total-required. 1 = the provider covers
+ * every capability the task needs; 0 = none.
+ *
+ * A provider with NO assessable profile (truly unknown, e.g. a brand-new
+ * gateway with a neutral profile) returns 1 — neutral: it can host any model,
+ * so it is never unfairly boosted OR penalized until real usage data exists.
+ */
+export function capabilityFitScore(taskType: string, provider: string, caps?: ProviderCapabilities): number {
+  const required = TASK_CAPABILITY_TAGS[taskType] || TASK_CAPABILITY_TAGS.default;
+  const offered = providerOfferedTags(provider, caps);
+  // No assessable tags (unknown provider with no static entry and a neutral
+  // profile) → neutral fit: neither boosted nor penalized.
+  if (offered.length === 0) return 1;
+  if (required.length === 0) return 1;
+  const matched = required.filter((tag) => offered.includes(tag)).length;
+  return matched / required.length;
+}
+
+/**
+ * Apply the soft capability-fit multiplier, clamped so the score never
+ * exceeds 1 (the 0–1 invariant the bandit and tests rely on). Range:
+ * no-fit ≈ 0.85×, perfect-fit ≈ 1.10× (then clamped).
+ */
+export function applyCapabilityFit(score: number, fit: number): number {
+  return Math.min(1, score * (0.9 + 0.2 * fit));
+}
 
 /** Built-in provider ids considered by default. */
 export const DEFAULT_AUTO_PROVIDERS = Object.keys(DEFAULT_PROFILES);
@@ -684,6 +772,17 @@ export class AutoModelRouter {
       logger.info(`  📊 Runtime stats: ${runtime.summary}`);
     }
 
+    // M2.1 gate: `routing.capabilityFit` (default ON) makes the soft
+    // capability-fit signal reversible — set false to revert to pure
+    // dimension-weight scoring. Best-effort config read (mocks / plugin
+    // configs may lack getAll): never let the gate break routing.
+    let capabilityFitEnabled = true;
+    try {
+      capabilityFitEnabled = (configManager?.getAll?.()?.routing?.capabilityFit ?? true) !== false;
+    } catch {
+      // Best-effort
+    }
+
     // Score every allowed provider
     let scored: ScoredProvider[] = allowedProviders.map((provider) => {
       let caps = this.getCapabilities(provider);
@@ -699,10 +798,36 @@ export class AutoModelRouter {
       const { score, dimensions, weightTotal } = scoreProvider(provider, caps, weights);
       const inCooldown = cooldown.has(provider);
       const qp = quotaParked.get(provider);
+      // Capability fit (M2.1): the soft task-type → capability signal, gated
+      // by `routing.capabilityFit` (default ON). When disabled the signal is
+      // fully inert — raw dimension-weighted scores, no fit field, no suffix.
+      // Only HEALTHY candidates get a fit: a parked provider's reason is
+      // already definitive, so it carries no fit field (and the explain view
+      // shows no chip for it). `caps` is passed through so custom/gateway
+      // providers are scored by their REAL capability profile (a strong-
+      // reasoning custom provider gets a derived 'reasoning' tag even though
+      // no static entry lists it).
+      const capabilityFit = qp === undefined && capabilityFitEnabled
+        ? capabilityFitScore(taskType, provider, caps)
+        : undefined;
+      const fitScore = capabilityFit !== undefined ? applyCapabilityFit(score, capabilityFit) : score;
       const reason = qp !== undefined
         ? `${provider} (quota exhausted — auto re-enables in ${Math.ceil(qp / 1000)}s)`
         : this.buildReason(provider, caps, complexity, mode, inCooldown, runtime?.adjusted.has(provider));
-      return { provider, score, dimensions, weightTotal, inCooldown, quotaParked: qp !== undefined, reason };
+      return {
+        provider,
+        score: fitScore,
+        dimensions,
+        weightTotal,
+        inCooldown,
+        quotaParked: qp !== undefined,
+        capabilityFit,
+        // Fit suffix only on healthy candidates — a quota-parked reason is
+        // already definitive and shouldn't claim a fit score.
+        reason: qp !== undefined || capabilityFit === undefined
+          ? reason
+          : `${reason} · capability-fit ${Math.round(capabilityFit * 100)}%`,
+      };
     });
 
     // ── Hard constraints: ELIMINATE candidates that can't meet the ask ──────

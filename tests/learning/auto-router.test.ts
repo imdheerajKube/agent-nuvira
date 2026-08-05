@@ -27,6 +27,8 @@ import {
   computeCostScore,
   estimateCallCostUsd,
   analyzeTaskProfile,
+  capabilityFitScore,
+  applyCapabilityFit,
   PROVIDER_PRICING_PER_1K,
   AUTO_MODEL,
   AUTO_PROVIDER,
@@ -175,6 +177,119 @@ describe('computeWeights', () => {
 });
 
 // ─── scoreProvider ──────────────────────────────────────────────────────────
+
+describe('capabilityFitScore (M2.1 capability-aware scoring)', () => {
+  it('returns 1 when the provider covers every capability the task needs', () => {
+    // code-review needs code + reasoning; gemini offers both.
+    expect(capabilityFitScore('code-review', 'gemini')).toBe(1);
+    // test-generation needs code; groq/nim/gemini all offer code.
+    expect(capabilityFitScore('test-generation', 'groq')).toBe(1);
+  });
+
+  it('returns a partial fit when the provider covers some requirements', () => {
+    // context-gather needs fast; gemini is not tagged fast for this signal's
+    // profile set → 0/1 = 0. groq offers fast → 1.
+    expect(capabilityFitScore('context-gather', 'groq')).toBe(1);
+    expect(capabilityFitScore('context-gather', 'nim')).toBe(0);
+    // code-review needs code + reasoning; groq offers code but not reasoning
+    // in this profile set → 1/2.
+    expect(capabilityFitScore('code-review', 'groq')).toBe(0.5);
+  });
+
+  it('never penalizes unknown providers (fully neutral until real data exists)', () => {
+    // A gateway can host any model — a truly unknown provider (no static
+    // tags, no assessable profile) gets fit 1 for EVERY task type: neither
+    // boosted nor penalized until real usage data exists.
+    expect(capabilityFitScore('default', 'nuvira')).toBe(1);
+    expect(capabilityFitScore('plan', 'nuvira')).toBe(1);
+    expect(capabilityFitScore('code-review', 'nuvira')).toBe(1);
+    // The PRODUCTION fallback profile (getCapabilities' unmapped-provider
+    // default — all 0.5s) is below every derivation threshold, so the neutral
+    // contract holds in the real resolve loop, not just the unit function.
+    const neutralFallback: ProviderCapabilities = {
+      reasoning: 0.5, speed: 0.5, cost: 0.5, privacy: 0.2, reliability: 0.7,
+    };
+    expect(capabilityFitScore('plan', 'nuvira', neutralFallback)).toBe(1);
+  });
+
+  it('derives tags from the capability profile for custom/gateway providers', () => {
+    // A custom provider with a strong-reasoning REAL profile gets a derived
+    // 'reasoning' tag even though no static catalog entry lists it → it fits
+    // a plan task (requires reasoning) fully.
+    const strongReasoner: ProviderCapabilities = {
+      reasoning: 0.9, speed: 0.4, cost: 0.5, privacy: 0.5, reliability: 0.8,
+    };
+    expect(capabilityFitScore('plan', 'custom-gw', strongReasoner)).toBe(1);
+    // A weak-reasoning custom provider does NOT get the derived tag → plan
+    // task fit 0 (a plan needs reasoning, this gateway demonstrably lacks it).
+    const weakReasoner: ProviderCapabilities = {
+      reasoning: 0.3, speed: 0.95, cost: 0.5, privacy: 0.5, reliability: 0.8,
+    };
+    expect(capabilityFitScore('plan', 'custom-gw', weakReasoner)).toBe(0);
+  });
+
+  it('applyCapabilityFit stays within 0–1 and is a soft nudge', () => {
+    // No-fit ≈ 0.85×, perfect-fit ≈ 1.10× (clamped at 1).
+    expect(applyCapabilityFit(0.8, 0)).toBeCloseTo(0.72, 5);
+    expect(applyCapabilityFit(0.8, 1)).toBeCloseTo(0.88, 5);
+    // The 0–1 invariant holds even for a perfect-fit max score.
+    expect(applyCapabilityFit(1, 1)).toBe(1);
+    expect(applyCapabilityFit(0.5, 0.5)).toBeLessThanOrEqual(1);
+  });
+
+  it('resolve() surfaces capability-fit and reasons in ranked entries', () => {
+    const decision = new AutoModelRouter().resolve('writer', 'implement a feature');
+    const first = decision.ranked[0] as ScoredProvider;
+    expect(typeof first.capabilityFit).toBe('number');
+    expect(first.capabilityFit!).toBeGreaterThanOrEqual(0);
+    expect(first.capabilityFit!).toBeLessThanOrEqual(1);
+    expect(first.reason).toContain('capability-fit');
+  });
+
+  it('a code-review task prefers a reasoning-capable provider when scores are close', () => {
+    // code-review needs code + reasoning. gemini offers both (fit 1), groq
+    // offers code only (fit 0.5). With equal weight on reasoning vs speed, the
+    // soft signal nudges the equally-dimensioned ranking toward the fitter one.
+    const decision = new AutoModelRouter().resolve('reviewer', 'review this pull request for correctness');
+    const geminiFit = decision.ranked.find((r) => r.provider === 'gemini')?.capabilityFit;
+    const groqFit = decision.ranked.find((r) => r.provider === 'groq')?.capabilityFit;
+    expect(geminiFit).toBe(1);
+    expect(groqFit).toBe(0.5);
+  });
+
+  it('routing.capabilityFit: false disables the signal entirely (reversible gate)', () => {
+    const mockConfig = (capabilityFit: boolean) => ({
+      getAll: () => ({ routing: { capabilityFit } }),
+      hasRequiredCredentials: () => true,
+    });
+    // Gate OFF: raw dimension-weighted scores — no fit field, no suffix.
+    const off = new AutoModelRouter().resolve('reviewer', 'review this pull request', {}, mockConfig(false) as any);
+    const firstOff = off.ranked[0] as ScoredProvider;
+    expect(firstOff.capabilityFit).toBeUndefined();
+    expect(firstOff.reason).not.toContain('capability-fit');
+    // Gate ON (default): fit field + suffix present again.
+    const on = new AutoModelRouter().resolve('reviewer', 'review this pull request', {}, mockConfig(true) as any);
+    expect(on.ranked[0].capabilityFit).toBeDefined();
+    expect(on.ranked[0].reason).toContain('capability-fit');
+  });
+
+  it('quota-parked providers keep their definitive reason without a fit suffix', () => {
+    // A quota-parked provider's reason is already definitive (auto re-enables
+    // in Ns) — it must not claim a capability-fit score on top.
+    const decision = new AutoModelRouter().resolve(
+      'writer',
+      'implement a feature',
+      { quotaStatus: [{ provider: 'groq', cooldownRemaining: 90_000 }] },
+    );
+    const parked = decision.ranked.find((r) => r.provider === 'groq');
+    expect(parked).toBeDefined();
+    expect(parked!.quotaParked).toBe(true);
+    expect(parked!.reason).toContain('quota exhausted');
+    expect(parked!.reason).not.toContain('capability-fit');
+    // Parked providers carry NO fit field, so the explain view renders no chip.
+    expect(parked!.capabilityFit).toBeUndefined();
+  });
+});
 
 describe('scoreProvider', () => {
   it('scores a provider by weighted capabilities', () => {
