@@ -47,7 +47,7 @@ This table highlights core capabilities for quick machine parsing and comparison
 | Security guardrails | Privacy-focused; PII detection; prompt-injection defenses; security scan CLI |
 | Publishing | Standalone eject & npm publishing (`npx agent-nuvira`) |
 | **Routing strategy** | **Thompson-sampling bandit + uncertainty escalation + per-model learning + promotion gate A/B + routing rules + hard constraints** |
-| **Test suite** | **2,934 tests across 96 files — 100% passing** |
+| **Test suite** | **2,996 tests across 98 files — 100% passing** |
 | **Vector backend** | **Native FAISS (automatic), pure-JS IVF fallback, exact JSON fallback** |
 
 
@@ -77,6 +77,7 @@ This table highlights core capabilities for quick machine parsing and comparison
 - **Project scaffolding** — `agent-nuvira init` generates starter projects with interactive template + provider selection
 - **Context-preserving model switching** — `agent-nuvira model switch` changes providers mid-session without losing agent state
 - **Auto model routing** — `agent-nuvira model switch auto` lets the agent pick the best provider/model for every task based on complexity, cost, latency, privacy, and reliability (with fallback chains + circuit-breaker awareness). Cost scoring uses **real per-1K-token provider pricing** (overridable via `buff config set pricing.<provider>.inputPer1K`), adjusted at runtime by **benchmark quality + per-agent best-model stats**. See why a decision was made with `agent-nuvira model explain` (or `--json` for CI), benchmark the router's exact picks with `agent-nuvira benchmark --routing`, validate them end-to-end with `agent-nuvira eval --routing`, and track actual picks + a full audit trail in the dashboard's **Routing** panel
+- **Learned-from-real-usage telemetry** — every LLM call (chat, execute, plan, edit, skill, learn, ci, doctor) writes through to the Model Availability Registry **with its action tag**, so the registry learns which provider × model each action **killed** (predictive skip) or **verified** (routable) from real usage — not just probes. `buff models status --verbose` prints registry-blocked providers + per-action verified/killed chips, and the dashboard's **Models** panel shows the same per-action feed with a daily timeline chart. A provider killed by ANY action is skipped predictively by all others; a later real success re-verifies it and un-parks it (the recovery loop). Proven end-to-end by a hermetic `tests/e2e/` test (mock 429 provider → registry learns → next pick skips)
 - **Skill compiler** — automatically extracts reusable patterns from successful agent runs into executable skills (`agent-nuvira skill run`)
 - **Context-window memory pruner** — prevents long multi-agent chains from exceeding model token limits
 - **Complete streaming support** — all 17+ providers support real-time token-by-token output
@@ -626,6 +627,27 @@ Use a discovered model immediately:
 ```bash
 agent-nuvira chat --provider groq --model deepseek-ai/deepseek-v4-flash
 agent-nuvira edit src/server.ts --provider openrouter --model openai/gpt-4o
+```
+
+**Model Availability Registry** — the registry is the sub-ms FAISS/JSON store
+routing reads on every pick. `models status` shows verified / unavailable /
+quota-parked models; `--verbose` adds the two things routing learned from real
+usage: which providers are **registry-blocked** (skipped predictively — with the
+learned reason for each blocked model) and the **per-action telemetry** (which
+action verified/killed which provider × model):
+
+```bash
+# Show the registry (verified / unavailable / quota-parked)
+agent-nuvira models status
+
+# Same + registry-blocked providers (why routing skips them) + per-action
+# "learned from real usage" telemetry (chat/execute/plan/edit verified/killed)
+agent-nuvira models status --verbose
+
+# Probe + spot-check now (proactive health, not reactive)
+agent-nuvira models refresh
+# Background maintenance daemon
+agent-nuvira models watch
 ```
 
 ---
@@ -1838,7 +1860,7 @@ src/
 ### Testing
 
 ```bash
-# Run all tests (2,934 tests across 96 test files)
+# Run all tests (2,996 tests across 98 test files)
 # Plus 6 dashboard component tests (src/web-dashboard)
 npm test
 
@@ -1905,7 +1927,7 @@ npx tsc --noEmit
 | 5.2 | Failure analysis — per-agent-type diagnosis with recovery actions | ✅ Complete |
 | 5.3 | Follow-up suggestions — LLM-powered contextual next-step recommendations | ✅ Complete |
 | 5.4 | /fix command — retry last failed goal with failure context | ✅ Complete |
-| 5.5 | Test coverage — 2,934 tests across 96 test files (+6 dashboard component tests) | ✅ Complete |
+| 5.5 | Test coverage — 2,996 tests across 98 test files (+6 dashboard component tests) | ✅ Complete |
 | **Phase 6: Architecture Migration** | | |
 | 6.1 | RecoverModule — extracted from ErrorRepairEngine with RepairBudget | ✅ Complete (v1.18.0) |
 | 6.2 | ModuleRegistry — plugin-based agent loading replacing createAgent() | ✅ Complete (v1.18.0) |
@@ -1982,6 +2004,7 @@ npx tsc --noEmit
 | **v1.51.0** | Aug 2026 | Routing strategy super-enhancement — Thompson-sampling bandit, uncertainty escalation, per-model learning, promotion gate A/B, routing rules, hard constraints, credential-aware filtering, quota-ledger integration, runtime stats blending, verification escalation, free/local-first gate; 2,934 tests |
 | **v1.51.1** | Aug 2026 | Docs patch — completed the published README version-history table (added v1.50.0 + v1.51.0 rows) |
 | **v1.52.0** | Aug 2026 | Predictive model-availability routing (registry drives every pick — dead/unkeyed providers skipped before scoring, no more wasted first calls); web dashboard: scrubbable pipeline phase timeline + narrated "why did the router pick this?" walkthrough; 2,990 tests |
+| **v1.53.0** | Aug 2026 | Per-action "learned from real usage" telemetry everywhere (chat/execute/plan/edit/skill/learn/ci/doctor all write the registry; dashboard panel + `models status --verbose` show who killed/verified what); daily timeline chart in the dashboard; recovery loop (a later real success un-parks + re-verifies a recovered provider); hermetic E2E failover test (`tests/e2e/`) proving "registry learns the block, next pick skips it"; 2,996 tests |
 
 ---
 

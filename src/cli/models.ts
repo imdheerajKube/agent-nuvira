@@ -63,13 +63,18 @@ export class ModelsCommand extends BaseCommand {
       .command('status')
       .description('Show the Model Availability Registry (verified / unavailable / quota-parked models)')
       .option('-j, --json', 'Output as JSON', false)
-      .action(async (opts?: { json?: boolean }) => {
+      .option('-v, --verbose', 'Also show registry-blocked providers (predictive skips) + per-action telemetry', false)
+      .action(async (opts?: { json?: boolean; verbose?: boolean }) => {
         if (opts?.json) {
           console.log(JSON.stringify(await getModelRegistry().getStatus(), null, 2));
           return;
         }
         console.log('');
         console.log(await getModelRegistry().formatStatus());
+        if (opts?.verbose) {
+          console.log('');
+          await this.printVerboseStatus();
+        }
         console.log('');
         logger.info('  Registry updates automatically from real usage. Run `buff models refresh` to probe now,');
         logger.info('  or `buff models watch` to run a background maintenance daemon.');
@@ -102,6 +107,61 @@ export class ModelsCommand extends BaseCommand {
       });
 
     return command;
+  }
+
+  /**
+   * Verbose `models status` — the two things routing learns from real usage:
+   *  1. REGISTRY-BLOCKED providers — every tracked model unavailable/parked, so
+   *     the auto router and fallback chain skip them predictively (sub-ms, no
+   *     network). Shows WHY (the learned reason for each blocked model).
+   *  2. PER-ACTION telemetry — which action verified/killed which provider ×
+   *     model, the exact feed powering the dashboard's "learned from real
+   *     usage" panel. A provider killed by ANY action is skipped by all others.
+   */
+  private async printVerboseStatus(): Promise<void> {
+    const registry = getModelRegistry();
+    const status = await registry.getStatus();
+    const blocked = new Set(registry.getBlockedProviders());
+
+    // ── 1. Registry-blocked providers (predictive skips) ───────────────────
+    logger.highlight('⛔ Registry-blocked providers (skipped predictively by routing)\n');
+    const blockedProviders = status.providers.filter((p) => blocked.has(p.provider));
+    if (blockedProviders.length === 0) {
+      logger.success('  None — every tracked provider has a usable model. ✔');
+    } else {
+      const now = Date.now();
+      for (const p of blockedProviders) {
+        console.log(`  ⛔ ${p.provider}`);
+        for (const m of p.models.filter((m) => m.status === 'unavailable' || m.quotaParkedUntil > now).slice(0, 5)) {
+          const reason = m.lastError ? ` — ${m.lastError}` : '';
+          const parked = m.quotaParkedUntil > now ? ' (quota-parked)' : '';
+          console.log(`     ✗ ${m.model}${reason}${parked}`);
+        }
+        console.log('     └ skipped before scoring — no failing first call');
+      }
+    }
+
+    // ── 2. Per-action "learned from real usage" telemetry ──────────────────
+    logger.highlight('\n🎓 Learned from real usage — per action\n');
+    const tele = registry.getActionTelemetry();
+    if (!tele.enabled) {
+      logger.info('  No per-action telemetry yet — use chat / execute / plan / edit and this fills in.');
+    } else {
+      for (const a of tele.actions) {
+        const chips: string[] = [];
+        if (a.verified > 0) chips.push(`${a.verified} verified`);
+        if (a.killed > 0) chips.push(`${a.killed} killed`);
+        if (a.transient > 0) chips.push(`${a.transient} transient`);
+        console.log(`  ${a.action}: ${chips.join(' · ')}`);
+        for (const k of a.killedModels.slice(0, 4)) {
+          console.log(`     ✗ ${k.provider}/${k.model}${k.reason ? ` — ${k.reason}` : ''}`);
+        }
+        for (const v of a.verifiedModels.slice(0, 4)) {
+          console.log(`     ✓ ${v.provider}/${v.model}`);
+        }
+      }
+      console.log(`\n  ${tele.total} events total · a provider killed by any action is skipped by all`);
+    }
   }
 
   private async execute(options?: { provider?: string; search?: string; all?: boolean; verify?: boolean; json?: boolean }): Promise<void> {

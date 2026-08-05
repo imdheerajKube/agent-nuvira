@@ -502,6 +502,73 @@ function ModelLearnChip({ provider, model, reason, killed }: { provider: string;
   );
 }
 
+// ─── Per-action timeline chart (verified vs killed vs transient over time) ──
+// Daily stacked bars for the last 14 days: each bar's height is the day's
+// total events, split into verified (green) / killed (red) / transient (amber)
+// segments. Hover shows the exact counts for that day.
+
+function ActionTimelineChart({ timeline }: { timeline: ActionTelemetryInsights['actions'][number]['timeline'] }) {
+  if (!timeline || timeline.length === 0) return null;
+  const max = Math.max(1, ...timeline.map((b) => b.verified + b.killed + b.transient));
+  const dayLabel = (day: number): string =>
+    new Date(day).toLocaleDateString([], { month: 'short', day: 'numeric' });
+  return (
+    <div style={{ marginTop: 12, paddingTop: 10, borderTop: '1px solid #21262d' }}>
+      <div style={{
+        fontSize: 11, fontWeight: 600, color: '#8b949e', marginBottom: 8,
+        textTransform: 'uppercase', letterSpacing: 0.4,
+      }}>
+        📈 Learned from real usage — last {timeline.length} days
+      </div>
+      <div style={{ display: 'flex', alignItems: 'flex-end', gap: 3, height: 64, padding: '0 2px' }}>
+        {timeline.map((b) => {
+          const total = b.verified + b.killed + b.transient;
+          const hVerified = (b.verified / max) * 56;
+          const hKilled = (b.killed / max) * 56;
+          const hTransient = (b.transient / max) * 56;
+          return (
+            <div
+              key={b.day}
+              title={`${dayLabel(b.day)} — ✓ ${b.verified} verified · ✗ ${b.killed} killed · ~ ${b.transient} transient`}
+              style={{
+                flex: 1, display: 'flex', flexDirection: 'column-reverse',
+                alignItems: 'center', gap: 0, cursor: 'default',
+              }}
+            >
+              <div style={{
+                width: '100%', borderRadius: 3, overflow: 'hidden',
+                background: total === 0 ? '#21262d' : 'transparent',
+                height: total === 0 ? 4 : 56,
+                display: 'flex', flexDirection: 'column-reverse',
+              }}>
+                {b.verified > 0 && (
+                  <div style={{ height: hVerified, background: '#3fb950', minHeight: 3 }} />
+                )}
+                {b.killed > 0 && (
+                  <div style={{ height: hKilled, background: '#f85149', minHeight: 3 }} />
+                )}
+                {b.transient > 0 && (
+                  <div style={{ height: hTransient, background: '#d29922', minHeight: 3 }} />
+                )}
+              </div>
+              <div style={{
+                fontSize: 9, color: '#6e7681', marginTop: 4, whiteSpace: 'nowrap',
+              }}>
+                {dayLabel(b.day)}
+              </div>
+            </div>
+          );
+        })}
+      </div>
+      <div style={{ display: 'flex', gap: 14, marginTop: 6, fontSize: 11, color: '#8b949e' }}>
+        <span><span style={{ color: '#3fb950' }}>■</span> verified</span>
+        <span><span style={{ color: '#f85149' }}>■</span> killed</span>
+        <span><span style={{ color: '#d29922' }}>■</span> transient</span>
+      </div>
+    </div>
+  );
+}
+
 function ActionTelemetryCard({ entry }: { entry: ActionTelemetryInsights['actions'][number] }) {
   const [expanded, setExpanded] = useState(true);
   const borderColor = entry.killed > 0 ? '#f85149' : entry.verified > 0 ? '#3fb950' : '#d29922';
@@ -567,6 +634,7 @@ function ActionTelemetryCard({ entry }: { entry: ActionTelemetryInsights['action
               Only transient failures — health decayed, no model flipped.
             </div>
           )}
+          <ActionTimelineChart timeline={entry.timeline} />
         </div>
       )}
     </div>

@@ -1,6 +1,6 @@
 # Agent-Nuvira — Technical Product Guide
 
-**Version 1.52.0 | August 2026**
+**Version 1.53.0 | August 2026**
 
 > *A comprehensive technical overview of Agent-Nuvira: architecture, features, version history, and market readiness for investors, stakeholders, and technical reviewers.*
 
@@ -930,6 +930,7 @@ options:
 | **v1.51.0** | Aug 2026 | Routing strategy super-enhancement — Thompson-sampling bandit, uncertainty escalation, per-model learning, promotion gate A/B, routing rules, hard constraints, credential-aware filtering, quota-ledger integration, runtime stats blending, verification escalation, free/local-first gate; 2,934 tests |
 | **v1.51.1** | Aug 2026 | Docs patch — completed the published README version-history table (added v1.50.0 + v1.51.0 rows; historical v1.45.5 entry verified and kept) |
 | **v1.52.0** | Aug 2026 | Predictive model-availability routing (model registry drives every pick — unkeyed/failed-health models skipped before scoring); web dashboard: scrubbable pipeline phase timeline + narrated routing walkthrough; 2,990 tests |
+| **v1.53.0** | Aug 2026 | Per-action "learned from real usage" telemetry everywhere (every LLM call writes which provider × model it killed/verified; `models status --verbose` + dashboard per-action panel with daily timeline); recovery loop (a real success re-verifies + un-parks a recovered provider); hermetic E2E failover test proving "registry learns the block, next pick skips it"; 2,996 tests |
 | **v0.5.0–v0.6.1** (VS Code ext) | Aug 2026 | VS Code quota ledger view — free/paid usage, parked providers, failover timeline, live auto-refresh + poll-fallback |
 
 ### 5.2 Detailed Changelog (v1.14.x – v1.16.x)

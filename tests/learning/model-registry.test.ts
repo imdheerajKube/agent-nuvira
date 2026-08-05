@@ -522,6 +522,50 @@ describe('ModelRegistry — per-action "learned from real usage" telemetry', () 
     expect(tele.enabled).toBe(true);
     expect(tele.actions.find((a) => a.action === 'chat')?.verified).toBe(1);
   });
+
+  it('each action carries a 14-day daily timeline (ascending) bucketing events', () => {
+    const registry = new ModelRegistry();
+    registry.recordCall('groq', 'llama-3.3-70b-versatile', true, undefined, 'chat');
+    registry.recordCall('gemini', 'gemini-2.5-flash', false, 'auth', 'chat');
+
+    const tele = registry.getActionTelemetry();
+    const chat = tele.actions.find((a) => a.action === 'chat');
+    expect(chat?.timeline).toHaveLength(14); // TIMELINE_DAYS
+    // Buckets ascend oldest → newest by UTC day start.
+    for (let i = 1; i < (chat?.timeline.length ?? 0); i++) {
+      expect(chat!.timeline[i].day).toBeGreaterThan(chat!.timeline[i - 1].day);
+    }
+    // Both events landed in today's bucket.
+    const today = chat!.timeline[chat!.timeline.length - 1];
+    expect(today.verified).toBe(1);
+    expect(today.killed).toBe(1);
+    expect(today.transient).toBe(0);
+    // Older days exist but hold zero events.
+    expect(chat!.timeline[0].verified + chat!.timeline[0].killed + chat!.timeline[0].transient).toBe(0);
+  });
+
+  it('timeline buckets split by UTC day (an old event lands in its own day bucket)', () => {
+    const registry = new ModelRegistry();
+    // Force a deterministic timestamps by writing the JSONL directly.
+    const now = Date.now();
+    const DAY_MS = 24 * 60 * 60 * 1000;
+    const lines = [
+      { timestamp: now, action: 'execute', provider: 'groq', model: 'm1', outcome: 'verified' },
+      { timestamp: now - 3 * DAY_MS, action: 'execute', provider: 'nim', model: 'm2', outcome: 'unavailable', errorType: 'auth' },
+    ];
+    const fs = require('node:fs') as typeof import('node:fs');
+    fs.writeFileSync(join(tempDir, 'model-registry-actions.jsonl'), lines.map((l) => JSON.stringify(l)).join('\n') + '\n');
+
+    const tele = registry.getActionTelemetry();
+    const execute = tele.actions.find((a) => a.action === 'execute');
+    expect(execute?.verified).toBe(1);
+    expect(execute?.killed).toBe(1);
+    const today = execute!.timeline[execute!.timeline.length - 1];
+    expect(today.verified).toBe(1);
+    // The 3-day-old kill is in an earlier bucket, not today.
+    expect(today.killed).toBe(0);
+    expect(execute!.timeline[execute!.timeline.length - 4].killed).toBe(1);
+  });
 });
 
 describe('ModelRegistry — persistence (JSON mirror + vector auto-tier)', () => {
