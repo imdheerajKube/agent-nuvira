@@ -29,7 +29,7 @@ import { InferenceOptions, ProviderConfig } from '../config/types.js';
 import { logger } from '../utils/logger.js';
 import { streamCompletion } from './sse.js';
 import { getModelTags } from './model-catalog.js';
-import { getCostTracker } from '../learning/cost-tracker.js';
+import { getCostTracker, recordCallWithUsage } from '../learning/cost-tracker.js';
 
 const DEFAULT_NUVIRA_BASE_URL = 'http://127.0.0.1:20128/v1';
 
@@ -117,13 +117,21 @@ export class NuviraAdapter implements InferenceProvider {
       throw new Error('Nuvira API error (empty response)');
     }
 
-    // Cost tracking (best-effort, estimate-based like every adapter). Exact
-    // wire-token metering from the gateway's `usage` field is a P3 milestone;
-    // the per-action registry/ledger attribution flows through the caller's
-    // recordCall telemetry, so the adapter only needs the estimate here.
+    // Cost tracking (M2.2 wire-token metering): when the gateway reports exact
+    // `usage` in the response we record MEASURED tokens (cost from real wire
+    // counts × pricing, flagged measured in the dashboard + routing scoring);
+    // otherwise fall back to the length-based estimate.
     try {
-      const costTracker = getCostTracker();
-      costTracker.recordCallEstimated('nuvira', model, prompt, content);
+      recordCallWithUsage(
+        getCostTracker(),
+        'nuvira',
+        model,
+        prompt,
+        content,
+        data.usage
+          ? { promptTokens: data.usage.prompt_tokens, completionTokens: data.usage.completion_tokens }
+          : undefined,
+      );
     } catch {
       // Non-critical.
     }
@@ -153,16 +161,21 @@ export class NuviraAdapter implements InferenceProvider {
     // non-streaming path only (the shared SSE reader drives streaming and a
     // stalled idle stream is surfaced by the caller's read timeout). Documented
     // asymmetry — threading a signal through streamCompletion is a P1 follow-up.
+    // M2.2: the final SSE chunk may carry the gateway's `usage` — capture it
+    // for MEASURED cost recording (exact wire tokens) over the estimate.
+    let streamUsage: { promptTokens?: number; completionTokens?: number } | undefined;
     const fullContent = await streamCompletion(
       `${this.baseUrl}/chat/completions`,
       headers,
       { model, messages: [{ role: 'user', content: prompt }], temperature, max_tokens: maxTokens },
       onToken,
+      (u) => {
+        streamUsage = u;
+      },
     );
 
     try {
-      const costTracker = getCostTracker();
-      costTracker.recordCallEstimated('nuvira', model, prompt, fullContent);
+      recordCallWithUsage(getCostTracker(), 'nuvira', model, prompt, fullContent, streamUsage);
     } catch {
       // Non-critical.
     }

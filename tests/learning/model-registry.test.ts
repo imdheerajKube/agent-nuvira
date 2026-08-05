@@ -733,3 +733,68 @@ describe('ModelRegistry — persistence (JSON mirror + vector auto-tier)', () =>
     expect(registry.isUsable('gemini', 'gemini-2.5-flash')).toBe(false);
   });
 });
+
+describe('ModelRegistry — M2.2 wire-token metering (measured cost inputs)', () => {
+  let measuredTempDir: string;
+  let measuredOrigDir: string | undefined;
+
+  beforeEach(() => {
+    measuredTempDir = mkdtempSync(join(tmpdir(), 'buff-registry-measured-'));
+    measuredOrigDir = process.env.BUFF_MEMORY_DIR;
+    process.env.BUFF_MEMORY_DIR = measuredTempDir;
+    resetModelRegistry();
+  });
+
+  afterEach(() => {
+    resetModelRegistry();
+    if (measuredOrigDir === undefined) {
+      delete process.env.BUFF_MEMORY_DIR;
+    } else {
+      process.env.BUFF_MEMORY_DIR = measuredOrigDir;
+    }
+    rmSync(measuredTempDir, { recursive: true, force: true });
+  });
+
+  it('recordMeasuredUsage EMAs exact tokens per provider × model', () => {
+    const registry = new ModelRegistry();
+    registry.recordMeasuredUsage('groq', 'llama-3.3-70b-versatile', 100, 50);
+    registry.recordMeasuredUsage('groq', 'llama-3.3-70b-versatile', 300, 150);
+    const e = registry.getEntry('groq', 'llama-3.3-70b-versatile')!;
+    // EMA (α=0.3): 0.3*300 + 0.7*100 = 160; 0.3*150 + 0.7*50 = 80.
+    expect(e.measuredInputTokens).toBe(160);
+    expect(e.measuredOutputTokens).toBe(80);
+    expect(e.measuredSamples).toBe(2);
+  });
+
+  it('getMeasuredUsage aggregates sample-weighted across the provider models', () => {
+    const registry = new ModelRegistry();
+    // Model A: 3 samples @ 200/100  Model B: 1 sample @ 400/200
+    for (let i = 0; i < 3; i++) registry.recordMeasuredUsage('groq', 'm-a', 200, 100);
+    registry.recordMeasuredUsage('groq', 'm-b', 400, 200);
+    const m = registry.getMeasuredUsage('groq')!;
+    expect(m).toBeDefined();
+    expect(m.inputTokens).toBe(250); // (3*200 + 1*400) / 4
+    expect(m.outputTokens).toBe(125); // (3*100 + 1*200) / 4
+    expect(m.samples).toBe(4);
+    // Other providers untouched.
+    expect(registry.getMeasuredUsage('gemini')).toBeUndefined();
+  });
+
+  it('measured EMAs survive a later markVerified re-verify', () => {
+    const registry = new ModelRegistry();
+    registry.recordMeasuredUsage('groq', 'llama-3.3-70b-versatile', 200, 100);
+    registry.markVerified('groq', 'llama-3.3-70b-versatile', 'telemetry');
+    const e = registry.getEntry('groq', 'llama-3.3-70b-versatile')!;
+    expect(e.status).toBe('verified');
+    expect(e.measuredInputTokens).toBe(200);
+    expect(e.measuredOutputTokens).toBe(100);
+    expect(e.measuredSamples).toBe(1);
+  });
+
+  it('no measured usage anywhere → getMeasuredUsage undefined (estimate fallback)', () => {
+    const registry = new ModelRegistry();
+    registry.markVerified('gemini', 'gemini-2.5-flash', 'spot-check');
+    expect(registry.getMeasuredUsage('gemini')).toBeUndefined();
+    expect(registry.getMeasuredUsage('nim')).toBeUndefined();
+  });
+});

@@ -889,10 +889,25 @@ function readCostData(): Record<string, unknown> {
 
   const byProvider: Record<string, number> = {};
   const byModel: Record<string, number> = {};
+  const byProviderMeasured: Record<string, number> = {};
+  let measuredCalls = 0;
+  let estimatedCalls = 0;
+  let measuredCost = 0;
+  let estimatedCost = 0;
   for (const e of entries) {
     const cost = typeof e.costUsd === 'number' ? e.costUsd : 0;
     if (e.provider) byProvider[e.provider as string] = (byProvider[e.provider as string] || 0) + cost;
     if (e.model) byModel[e.model as string] = (byModel[e.model as string] || 0) + cost;
+    // M2.2 wire-token metering split: measured (exact provider-reported
+    // usage) vs estimated (length-based) spend.
+    if (e.measured === true) {
+      measuredCalls += 1;
+      measuredCost += cost;
+      if (e.provider) byProviderMeasured[e.provider as string] = (byProviderMeasured[e.provider as string] || 0) + cost;
+    } else {
+      estimatedCalls += 1;
+      estimatedCost += cost;
+    }
   }
 
   const recent = entries.slice(-50).reverse().map((e) => ({
@@ -901,6 +916,7 @@ function readCostData(): Record<string, unknown> {
     costUsd: e.costUsd,
     totalTokens: e.totalTokens,
     timestamp: e.timestamp,
+    measured: e.measured === true,
   }));
 
   return {
@@ -909,6 +925,11 @@ function readCostData(): Record<string, unknown> {
     totalTokens,
     byProvider,
     byModel,
+    byProviderMeasured,
+    measuredCalls,
+    estimatedCalls,
+    measuredCost: Math.round(measuredCost * 100000) / 100000,
+    estimatedCost: Math.round(estimatedCost * 100000) / 100000,
     recent,
   };
 }

@@ -223,6 +223,21 @@ body {
   margin-bottom: 20px;
 }
 
+/* M2.2 measured-vs-estimated sub-summary (secondary optics) */
+.cost-summary-sub {
+  margin-bottom: 20px;
+}
+
+.cost-summary-sub .cost-total {
+  padding: 10px 16px;
+  background: transparent;
+  border-style: dashed;
+}
+
+.cost-summary-sub .cost-amount {
+  font-size: 20px;
+}
+
 .cost-total {
   background: var(--bg-card);
   border: 1px solid var(--border);

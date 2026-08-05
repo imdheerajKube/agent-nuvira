@@ -224,6 +224,14 @@ export interface ScoredProvider {
    * provider's offered tags cover the capabilities this task needs.
    */
   capabilityFit?: number;
+  /**
+   * M2.2 cost scoring source: 'measured' when real wire tokens from
+   * provider-reported usage fed the cost score, 'estimated' when the
+   * TYPICAL-token estimate was used. Surfaced in `models explain`.
+   */
+  costSource?: 'measured' | 'estimated';
+  /** M2.2: the exact measured token basis used (when measured). */
+  costBasis?: { inputTokens: number; outputTokens: number };
 }
 
 /** The final auto-routing decision for a single task. */
@@ -398,29 +406,50 @@ const TYPICAL_INPUT_TOKENS = 2000;
 const TYPICAL_OUTPUT_TOKENS = 500;
 
 /**
+ * Measured per-call token profile (M2.2 wire-token metering): a sample-
+ * weighted average of exact tokens reported by the provider/gateway `usage`.
+ * When present, cost scoring uses MEASURED tokens instead of TYPICAL ones.
+ */
+export interface MeasuredCost {
+  inputTokens: number;
+  outputTokens: number;
+  /** How many measured calls fed the average (informational). */
+  samples?: number;
+}
+
+/**
  * Estimate the USD cost of a typical call for a provider.
  * An optional pricing override (e.g., from `buff config set pricing.*`)
  * takes precedence over the built-in table.
+ *
+ * M2.2: when `measured` (real wire tokens from provider-reported usage) is
+ * available, it replaces the TYPICAL-token estimate — measured cost is the
+ * truth when the provider reports it.
  */
 export function estimateCallCostUsd(
   provider: string,
   pricing?: { inputPer1K: number; outputPer1K: number },
+  measured?: MeasuredCost,
 ): number {
   const p = pricing || PROVIDER_PRICING_PER_1K[provider] || { inputPer1K: 0.00010, outputPer1K: 0.00010 };
-  const inputCost = (TYPICAL_INPUT_TOKENS / 1000) * p.inputPer1K;
-  const outputCost = (TYPICAL_OUTPUT_TOKENS / 1000) * p.outputPer1K;
+  const inputTokens = measured ? measured.inputTokens : TYPICAL_INPUT_TOKENS;
+  const outputTokens = measured ? measured.outputTokens : TYPICAL_OUTPUT_TOKENS;
+  const inputCost = (inputTokens / 1000) * p.inputPer1K;
+  const outputCost = (outputTokens / 1000) * p.outputPer1K;
   return Math.round((inputCost + outputCost) * 100000) / 100000;
 }
 
 /**
  * Derive the 0–1 cost score (higher = cheaper) from real provider pricing.
  * Free providers (local, Gemini free tier) score 1.0.
+ * M2.2: measured tokens (when present) replace the typical-call estimate.
  */
 export function computeCostScore(
   provider: string,
   pricing?: { inputPer1K: number; outputPer1K: number },
+  measured?: MeasuredCost,
 ): number {
-  const costUsd = estimateCallCostUsd(provider, pricing);
+  const costUsd = estimateCallCostUsd(provider, pricing, measured);
   const score = 1 - costUsd / COST_REFERENCE_USD;
   return Math.max(0, Math.min(1, score));
 }
@@ -786,10 +815,14 @@ export class AutoModelRouter {
     // Score every allowed provider
     let scored: ScoredProvider[] = allowedProviders.map((provider) => {
       let caps = this.getCapabilities(provider);
-      // Real pricing replaces the static cost capability
+      // Real pricing replaces the static cost capability; M2.2 measured wire
+      // tokens (when the provider/gateway reports usage) replace the
+      // TYPICAL-token estimate — measured cost is the truth when available.
+      let measuredCost: MeasuredCost | undefined;
       if (options.useRealPricing !== false) {
         const pricing = this.getProviderPricing(provider, configManager);
-        caps = { ...caps, cost: computeCostScore(provider, pricing) };
+        measuredCost = this.getMeasuredCost(provider);
+        caps = { ...caps, cost: computeCostScore(provider, pricing, measuredCost) };
       }
       // Runtime data adjusts reasoning/reliability from real performance
       if (runtime) {
@@ -822,6 +855,10 @@ export class AutoModelRouter {
         inCooldown,
         quotaParked: qp !== undefined,
         capabilityFit,
+        costSource: measuredCost ? 'measured' : 'estimated',
+        costBasis: measuredCost
+          ? { inputTokens: measuredCost.inputTokens, outputTokens: measuredCost.outputTokens }
+          : undefined,
         // Fit suffix only on healthy candidates — a quota-parked reason is
         // already definitive and shouldn't claim a fit score.
         reason: qp !== undefined || capabilityFit === undefined
@@ -846,7 +883,14 @@ export class AutoModelRouter {
       (complexity === 'trivial' || complexity === 'simple' || complexity === 'moderate')
     ) {
       const freeOnly = scored.filter((s) => {
-        const costUsd = estimateCallCostUsd(s.provider, this.getProviderPricing(s.provider, configManager));
+        // M2.2: judge by MEASURED cost when the provider reports usage — a
+        // gateway with real (tiny) token counts may be free-in-practice even
+        // if its list price is non-zero.
+        const costUsd = estimateCallCostUsd(
+          s.provider,
+          this.getProviderPricing(s.provider, configManager),
+          s.costBasis,
+        );
         return costUsd === 0;
       });
       if (freeOnly.length > 0) {
@@ -863,7 +907,11 @@ export class AutoModelRouter {
     ) {
       const constrained = scored.filter((s) => {
         if (options.maxCostUsd !== undefined) {
-          const costUsd = estimateCallCostUsd(s.provider, this.getProviderPricing(s.provider, configManager));
+          const costUsd = estimateCallCostUsd(
+            s.provider,
+            this.getProviderPricing(s.provider, configManager),
+            s.costBasis,
+          );
           if (costUsd > options.maxCostUsd) return false;
         }
         if (options.minSpeed !== undefined) {
@@ -1169,6 +1217,19 @@ export class AutoModelRouter {
       inputPer1K: override?.inputPer1K ?? builtin.inputPer1K,
       outputPer1K: override?.outputPer1K ?? builtin.outputPer1K,
     };
+  }
+
+  /**
+   * M2.2: measured wire-token profile for a provider from the Model
+   * Availability Registry (sample-weighted EMA). Best-effort — registry
+   * bookkeeping must never break routing; undefined ⇒ estimated cost.
+   */
+  private getMeasuredCost(provider: string): MeasuredCost | undefined {
+    try {
+      return getModelRegistry().getMeasuredUsage(provider);
+    } catch {
+      return undefined;
+    }
   }
 
   /**

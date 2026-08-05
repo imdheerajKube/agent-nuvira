@@ -685,6 +685,9 @@ export class ModelCommand extends BaseCommand {
           reason: r.reason,
           dimensions: r.dimensions,
           capabilityFit: r.capabilityFit !== undefined ? Math.round(r.capabilityFit * 100) : undefined,
+          // M2.2: measured vs estimated cost basis for this provider.
+          costSource: r.costSource || 'estimated',
+          costBasis: r.costBasis ? { inputTokens: r.costBasis.inputTokens, outputTokens: r.costBasis.outputTokens } : undefined,
         })),
         fallbackChain: d.fallbackChain.map((c) => ({
           provider: c.provider,
@@ -740,7 +743,12 @@ export class ModelCommand extends BaseCommand {
       const mark = r.provider === decision.provider ? '✅' : '  ';
       const cd = r.inCooldown ? '  (circuit-breaker cooldown)' : '';
       const fit = r.capabilityFit !== undefined ? ` 🎯 fit ${Math.round(r.capabilityFit * 100)}%` : '';
-      console.log(`   ${mark} ${i + 1}. ${r.provider.padEnd(12)} score ${r.score.toFixed(3)}  ${r.reason}${fit}${cd}`);
+      // M2.2: measured wire-token basis vs estimate — visible cost transparency.
+      const measured =
+        r.costSource === 'measured' && r.costBasis
+          ? ` 📏 measured ${r.costBasis.inputTokens}→${r.costBasis.outputTokens} tok`
+          : '';
+      console.log(`   ${mark} ${i + 1}. ${r.provider.padEnd(12)} score ${r.score.toFixed(3)}  ${r.reason}${fit}${measured}${cd}`);
     });
     console.log('');
 

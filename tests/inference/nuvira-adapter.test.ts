@@ -16,7 +16,7 @@ import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { NuviraAdapter } from '../../src/inference/nuvira-adapter.js';
-import { resetModelRegistry } from '../../src/learning/model-registry.js';
+import { resetModelRegistry, getModelRegistry } from '../../src/learning/model-registry.js';
 
 const mockFetch = vi.fn();
 global.fetch = mockFetch;
@@ -107,6 +107,32 @@ describe('NuviraAdapter', () => {
       await expect(adapter.generate('hi')).rejects.toThrow(/500/);
     });
 
+    it('records MEASURED tokens when the gateway reports usage (M2.2)', async () => {
+      mockFetch.mockResolvedValueOnce({
+        ok: true,
+        json: async () => ({
+          choices: [{ message: { content: 'hi' } }],
+          usage: { prompt_tokens: 42, completion_tokens: 7 },
+        }),
+      });
+      const adapter = new NuviraAdapter({ baseUrl: 'http://g:1/v1' });
+      await adapter.generate('hello', { model: 'm' });
+      // Exact wire tokens landed in the registry (measured cost routing input).
+      const measured = getModelRegistry().getMeasuredUsage('nuvira');
+      expect(measured).toEqual({ inputTokens: 42, outputTokens: 7, samples: 1 });
+    });
+
+    it('falls back to estimates when the gateway reports no usage', async () => {
+      mockFetch.mockResolvedValueOnce({
+        ok: true,
+        json: async () => ({ choices: [{ message: { content: 'hi' } }] }),
+      });
+      const adapter = new NuviraAdapter({ baseUrl: 'http://g:1/v1' });
+      await adapter.generate('hello', { model: 'm' });
+      // No usage → no measured registry entry → cost stays estimated.
+      expect(getModelRegistry().getMeasuredUsage('nuvira')).toBeUndefined();
+    });
+
     it('throws on an empty response body', async () => {
       mockFetch.mockResolvedValueOnce({ ok: true, json: async () => ({}) });
       const adapter = new NuviraAdapter({ baseUrl: 'http://g:1/v1' });
@@ -138,6 +164,34 @@ describe('NuviraAdapter', () => {
       const full = await adapter.generateStream('hi', { model: 'm' }, (t) => tokens.push(t));
       expect(tokens.join('')).toBe('Hello');
       expect(full).toBe('Hello');
+    });
+
+    it('captures usage from the final SSE chunk for measured cost (M2.2)', async () => {
+      // OpenAI include_usage convention: a final chunk carrying `usage` before
+      // [DONE]. The adapter must surface it to cost-tracker → registry.
+      const sseBody =
+        'data: {"choices":[{"delta":{"content":"Hi"}}]}\n\n' +
+        'data: {"usage":{"prompt_tokens":100,"completion_tokens":25}}\n\n' +
+        'data: [DONE]\n\n';
+      const encoder = new TextEncoder();
+      mockFetch.mockResolvedValueOnce({
+        ok: true,
+        body: {
+          getReader: () => {
+            let i = 0;
+            const chunks = [encoder.encode(sseBody)];
+            return {
+              read: async () => (i < chunks.length ? { value: chunks[i++], done: false } : { done: true }),
+              releaseLock: () => {},
+              cancel: () => {},
+            };
+          },
+        },
+      });
+      const adapter = new NuviraAdapter({ baseUrl: 'http://g:1/v1' });
+      await adapter.generateStream('hi', { model: 'm' }, () => {});
+      const measured = getModelRegistry().getMeasuredUsage('nuvira');
+      expect(measured).toEqual({ inputTokens: 100, outputTokens: 25, samples: 1 });
     });
   });
 

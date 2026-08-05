@@ -102,6 +102,9 @@ describe('ModelCommand explain', () => {
       // path (gate-OFF leaves it undefined — omitted from JSON, locked at the
       // resolve level in auto-router.test.ts).
       expect(typeof r.capabilityFit).toBe('number');
+      // M2.2: cost source is always flagged (measured | estimated); basis only
+      // when measured wire tokens exist.
+      expect(['measured', 'estimated']).toContain(r.costSource);
       expect(parsed.pricing[r.provider]).toBeDefined();
       expect(typeof parsed.pricing[r.provider].inputPer1K).toBe('number');
       expect(typeof parsed.pricing[r.provider].outputPer1K).toBe('number');

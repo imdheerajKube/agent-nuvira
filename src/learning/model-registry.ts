@@ -64,6 +64,13 @@ export interface ModelRegistryEntry {
   lastUsedAt: number;
   /** Rolling average latency (ms) — measured by spot-checks. */
   latencyMs?: number;
+  // ── M2.2 wire-token metering (measured cost inputs) ─────────────────────
+  /** Rolling EMA of input tokens per call, from provider-reported usage. */
+  measuredInputTokens?: number;
+  /** Rolling EMA of output tokens per call, from provider-reported usage. */
+  measuredOutputTokens?: number;
+  /** How many measured calls contributed to the token EMAs. */
+  measuredSamples?: number;
   /** Rolling error rate 0–1 (telemetry failures / calls). */
   errorRate: number;
   /** Epoch ms until which the entry is quota-parked (0 = not parked). */
@@ -520,6 +527,11 @@ export class ModelRegistry {
       quotaParkedUntil: 0,
       source,
       lastError: existing?.lastError,
+      // M2.2: measured wire-token EMAs survive a re-verify (they are
+      // model-level usage data, independent of the verify event).
+      measuredInputTokens: existing?.measuredInputTokens,
+      measuredOutputTokens: existing?.measuredOutputTokens,
+      measuredSamples: existing?.measuredSamples,
     };
     this.persist();
     // A GENUINE promotion (was not verified → now verified) is a state change
@@ -535,6 +547,67 @@ export class ModelRegistry {
     if (action) {
       this.appendActionLog({ timestamp: now, action, provider, model, outcome: 'verified' });
     }
+  }
+
+  /**
+   * M2.2: record EXACT tokens from a provider-reported usage payload. The
+   * per-call token EMAs (α=0.3, matching latency) feed getMeasuredUsage(),
+   * which Auto routing uses to replace TYPICAL-token estimates with measured
+   * cost. Best-effort — never throws.
+   */
+  recordMeasuredUsage(provider: string, model: string, inputTokens: number, outputTokens: number): void {
+    const now = Date.now();
+    const key = entryKey(provider, model);
+    const existing = this.data.entries[key];
+    const base = existing || {
+      provider,
+      model,
+      status: 'unverified' as ModelAvailabilityStatus,
+      lastVerifiedAt: 0,
+      lastProbedAt: now,
+      lastUsedAt: now,
+      errorRate: 0,
+      quotaParkedUntil: 0,
+      source: 'telemetry' as ModelRegistrySource,
+    };
+    const prevIn = base.measuredInputTokens;
+    const prevOut = base.measuredOutputTokens;
+    base.measuredInputTokens = prevIn !== undefined
+      ? Math.round(0.3 * inputTokens + 0.7 * prevIn)
+      : inputTokens;
+    base.measuredOutputTokens = prevOut !== undefined
+      ? Math.round(0.3 * outputTokens + 0.7 * prevOut)
+      : outputTokens;
+    base.measuredSamples = (base.measuredSamples || 0) + 1;
+    base.lastUsedAt = now;
+    this.data.entries[key] = base;
+    this.persist();
+  }
+
+  /**
+   * M2.2: aggregated measured token profile for a provider (sample-weighted
+   * average across its tracked models). Returns undefined when no measured
+   * usage exists → callers fall back to TYPICAL-token estimates (flagged).
+   * Sync + sub-ms.
+   */
+  getMeasuredUsage(
+    provider: string,
+  ): { inputTokens: number; outputTokens: number; samples: number } | undefined {
+    let totalIn = 0;
+    let totalOut = 0;
+    let samples = 0;
+    for (const e of Object.values(this.data.entries)) {
+      if (e.provider !== provider || !e.measuredSamples) continue;
+      totalIn += (e.measuredInputTokens || 0) * e.measuredSamples;
+      totalOut += (e.measuredOutputTokens || 0) * e.measuredSamples;
+      samples += e.measuredSamples;
+    }
+    if (samples === 0) return undefined;
+    return {
+      inputTokens: Math.round(totalIn / samples),
+      outputTokens: Math.round(totalOut / samples),
+      samples,
+    };
   }
 
   /**
