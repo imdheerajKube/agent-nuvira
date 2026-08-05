@@ -69,6 +69,10 @@ npx tsc --noEmit
 2. **Make your changes** following existing code conventions (TypeScript strict mode)
 3. **Add tests** for new functionality — match the existing test patterns
 4. **Run the full test suite** — `npm test` must pass with zero failures
+5. **Run the regression gate** — `bash scripts/ci/regression-gate.sh` must pass
+   with zero failures (routing guard + failover E2E + full root + dashboard
+   suites). It is the canonical no-regression guard for the routing/learning
+   subsystem; any failure is a regression that must be fixed before merge
 5. **Run type-check** — `npx tsc --noEmit` must pass
 6. **Submit a PR** with a clear description of the change
 
