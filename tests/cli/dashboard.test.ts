@@ -23,6 +23,12 @@ import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 
 const mockCreateDashboardServer = vi.hoisted(() => vi.fn());
 
+const mockProbePort = vi.hoisted(() => vi.fn());
+const mockConfirmRestart = vi.hoisted(() => vi.fn());
+const mockFindPid = vi.hoisted(() => vi.fn());
+const mockKillPid = vi.hoisted(() => vi.fn());
+const mockWaitFree = vi.hoisted(() => vi.fn());
+
 const mockExecSync = vi.hoisted(() => vi.fn(() => Buffer.from('')));
 const mockSpawn = vi.hoisted(() => vi.fn(() => ({ unref: vi.fn() })));
 
@@ -44,6 +50,14 @@ vi.mock('node:child_process', () => ({
 
 vi.mock('../../src/web-dashboard/server.js', () => ({
   createDashboardServer: mockCreateDashboardServer,
+}));
+
+vi.mock('../../src/cli/dashboard-restart.js', () => ({
+  probeDashboardPortState: mockProbePort,
+  confirmStaleRestart: mockConfirmRestart,
+  findPidOnPort: mockFindPid,
+  killPid: mockKillPid,
+  waitForPortFree: mockWaitFree,
 }));
 
 vi.mock('../../src/utils/logger.js', () => ({
@@ -119,6 +133,13 @@ describe('DashboardCommand', () => {
       };
     });
 
+    // Default force-restart helper behaviors (only consulted on EADDRINUSE + --force)
+    mockProbePort.mockResolvedValue('stale-dashboard');
+    mockConfirmRestart.mockResolvedValue(true);
+    mockFindPid.mockResolvedValue(4242);
+    mockKillPid.mockResolvedValue(true);
+    mockWaitFree.mockResolvedValue(true);
+
     // Prevent process.exit from killing the test runner
     processExitSpy = vi.spyOn(process, 'exit').mockImplementation((() => undefined) as any);
 
@@ -154,6 +175,9 @@ describe('DashboardCommand', () => {
 
     expect(process.env.BUFF_DASHBOARD_PORT).toBe('3030');
     expect(process.env.BUFF_DASHBOARD_HOST).toBe('127.0.0.1');
+    // The override must reach createDashboardServer explicitly — the server
+    // reads it at call time (env alone is ignored due to import-time binding).
+    expect(mockCreateDashboardServer).toHaveBeenCalledWith({ port: 3030, host: '127.0.0.1' });
     expect(mockCreateDashboardServer).toHaveBeenCalledOnce();
   });
 
@@ -218,6 +242,10 @@ describe('DashboardCommand', () => {
     await runDashboard(cmd, { port: 8080 });
 
     expect(process.env.BUFF_DASHBOARD_PORT).toBe('8080');
+    // Regression: the explicit port must be handed to createDashboardServer —
+    // otherwise the server binds the import-time default (3030), silently
+    // ignoring --port.
+    expect(mockCreateDashboardServer).toHaveBeenCalledWith({ port: 8080, host: '127.0.0.1' });
     expect(mockLogger.success).toHaveBeenCalledWith(expect.stringContaining('http://localhost:8080'));
   });
 
@@ -365,6 +393,102 @@ describe('DashboardCommand', () => {
     expect((mockCreateDashboardServer.mock.results[0].value as any).server.close).toHaveBeenCalled();
   });
 
+  // ── --force: stale-dashboard detection + restart ──────────────────────
+
+  it('--force detects a stale dashboard, kills it, and re-binds a fresh server', async () => {
+    mockProbePort.mockResolvedValue('stale-dashboard');
+    mockConfirmRestart.mockResolvedValue(true);
+    mockFindPid.mockResolvedValue(4242);
+    mockKillPid.mockResolvedValue(true);
+    mockWaitFree.mockResolvedValue(true);
+
+    // First bind fails with EADDRINUSE (capturing mock); the RETRY uses the
+    // beforeEach default mock, which fires 'listening' on the next tick.
+    let errorHandler: ((err: NodeJS.ErrnoException) => void) | undefined;
+    mockCreateDashboardServer.mockImplementationOnce(() => ({
+      server: {
+        close: vi.fn(),
+        once: vi.fn((event: string, cb: (...args: unknown[]) => void) => {
+          if (event === 'error') errorHandler = cb as (err: NodeJS.ErrnoException) => void;
+        }),
+      },
+    }));
+
+    const launchPromise = (cmd as any).launchDashboard({ force: true });
+    await new Promise<void>((resolve) => setImmediate(resolve));
+
+    errorHandler!({ code: 'EADDRINUSE', message: 'listen EADDRINUSE: address already in use 127.0.0.1:3030' } as NodeJS.ErrnoException);
+
+    // Let the async probe → confirm → kill → wait → re-bind chain complete.
+    await new Promise<void>((resolve) => setTimeout(resolve, 30));
+
+    // The stale dashboard was probed, confirmed, and killed.
+    expect(mockProbePort).toHaveBeenCalledWith('127.0.0.1', 3030);
+    expect(mockLogger.warn).toHaveBeenCalledWith(expect.stringContaining('Stale dashboard detected'));
+    expect(mockConfirmRestart).toHaveBeenCalledWith(3030);
+    expect(mockKillPid).toHaveBeenCalledWith(4242);
+    expect(mockWaitFree).toHaveBeenCalledWith('127.0.0.1', 3030);
+
+    // The CLI re-bound: a SECOND server was created and reached 'listening'.
+    expect(mockCreateDashboardServer).toHaveBeenCalledTimes(2);
+    expect(mockLogger.success).toHaveBeenCalledWith(expect.stringContaining('http://localhost:3030'));
+
+    process.emit('SIGINT');
+    await launchPromise;
+  });
+
+  it('--force does NOT restart a CURRENT dashboard (only stale ones)', async () => {
+    mockProbePort.mockResolvedValue('current-dashboard');
+
+    let errorHandler: ((err: NodeJS.ErrnoException) => void) | undefined;
+    mockCreateDashboardServer.mockImplementationOnce(() => ({
+      server: {
+        close: vi.fn(),
+        once: vi.fn((event: string, cb: (...args: unknown[]) => void) => {
+          if (event === 'error') errorHandler = cb as (err: NodeJS.ErrnoException) => void;
+        }),
+      },
+    }));
+
+    const launchPromise = (cmd as any).launchDashboard({ force: true });
+    await new Promise<void>((resolve) => setImmediate(resolve));
+
+    errorHandler!({ code: 'EADDRINUSE', message: 'listen EADDRINUSE: address already in use 127.0.0.1:3030' } as NodeJS.ErrnoException);
+    await new Promise<void>((resolve) => setTimeout(resolve, 30));
+
+    expect(mockLogger.info).toHaveBeenCalledWith(expect.stringContaining('CURRENT dashboard'));
+    expect(mockConfirmRestart).not.toHaveBeenCalled();
+    expect(mockKillPid).not.toHaveBeenCalled();
+    expect(processExitSpy).toHaveBeenCalledWith(1);
+    await launchPromise;
+  });
+
+  it('--force asks before killing and aborts when the user declines', async () => {
+    mockProbePort.mockResolvedValue('stale-dashboard');
+    mockConfirmRestart.mockResolvedValue(false);
+
+    let errorHandler: ((err: NodeJS.ErrnoException) => void) | undefined;
+    mockCreateDashboardServer.mockImplementationOnce(() => ({
+      server: {
+        close: vi.fn(),
+        once: vi.fn((event: string, cb: (...args: unknown[]) => void) => {
+          if (event === 'error') errorHandler = cb as (err: NodeJS.ErrnoException) => void;
+        }),
+      },
+    }));
+
+    const launchPromise = (cmd as any).launchDashboard({ force: true });
+    await new Promise<void>((resolve) => setImmediate(resolve));
+
+    errorHandler!({ code: 'EADDRINUSE', message: 'listen EADDRINUSE: address already in use 127.0.0.1:3030' } as NodeJS.ErrnoException);
+    await new Promise<void>((resolve) => setTimeout(resolve, 30));
+
+    expect(mockLogger.info).toHaveBeenCalledWith(expect.stringContaining('leaving the existing dashboard running'));
+    expect(mockKillPid).not.toHaveBeenCalled();
+    expect(processExitSpy).toHaveBeenCalledWith(1);
+    await launchPromise;
+  });
+
   // ── Commander action wiring ───────────────────────────────────────────
 
   it('should register the correct command with commander', async () => {
@@ -378,6 +502,7 @@ describe('DashboardCommand', () => {
     expect(opts.find((o) => o.long === '--host')).toBeTruthy();
     expect(opts.find((o) => o.long === '--no-open')).toBeTruthy();
     expect(opts.find((o) => o.long === '--build')).toBeTruthy();
+    expect(opts.find((o) => o.long === '--force')).toBeTruthy();
   });
 
   // ── Edge case: SIGTERM (not just SIGINT) ──────────────────────────────

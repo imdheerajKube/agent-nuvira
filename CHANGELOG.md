@@ -7,6 +7,45 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [1.57.0] - 2026-08-05
+
+### Added
+
+- **`buff dashboard --force`** — automatically detect a STALE dashboard on the
+  port (the API/SSE mismatch: `/api/model-registry` answers with SPA HTML
+  instead of JSON) and offer to restart it. A new unit-testable module
+  `src/cli/dashboard-restart.ts` provides `probeDashboardPortState` (classifies
+  what's on the port: unreachable / not-a-dashboard / current-dashboard /
+  stale-dashboard / unknown — only a stale Agent-Nuvira dashboard is ever
+  touched), `findPidOnPort`, `killPid` (SIGTERM→SIGKILL, `taskkill` on
+  Windows), `waitForPortFree`, and `confirmStaleRestart` (inquirer confirm;
+  non-TTY `--force` runs skip the prompt). The CLI then kills the stale PID,
+  waits for the port to free, and re-binds a fresh server (up to 3 attempts).
+
+### Fixed
+
+- **`buff dashboard --port <port>` silently ignored the port** (pre-existing
+  bug) — `createDashboardServer()` bound the module-**import-time** `PORT`/
+  `HOST` constants, so any non-default port still served on 3030. The server
+  now resolves the bind at **call time** from explicit `{ port, host }`
+  overrides (env vars → defaults as fallback), and the CLI passes them
+  explicitly. This was ALSO why the `--force` restart loop failed: after
+  killing the stale dashboard it kept re-binding 3030 (EADDRINUSE) instead of
+  the requested port — proven fixed live end-to-end (stale detected → killed →
+  fresh server re-bound on the requested port).
+- The `--force` retry now gates on the port actually freeing (the
+  `waitForPortFree` result is honored instead of discarded), and the restart
+  promise has a rejection handler so an unexpected error can never leave the
+  CLI hanging on an unsettled promise.
+
+### Tests
+
+- 3,032 root tests pass (+42 dashboard component tests): new
+  `tests/cli/dashboard-restart.test.ts` (17 tests for the probe/kill/wait/
+  prompt helpers), `--force` CLI paths (detect → restart, current-dashboard
+  decline, confirm decline), and a server regression proving an explicit
+  port override binds the requested port.
+
 ## [1.56.1] - 2026-08-05
 
 ### Fixed

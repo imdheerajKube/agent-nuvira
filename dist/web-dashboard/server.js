@@ -1566,7 +1566,14 @@ function loadApiKeysFromConfig() {
         // Best-effort — config file might be corrupted or unreadable
     }
 }
-export function createDashboardServer() {
+export function createDashboardServer(opts) {
+    // Bind values are resolved at CALL time: explicit override → env var →
+    // import-time default. (PORT/HOST above are module constants, so the CLI's
+    // `dashboard --port X` can NOT rely on setting BUFF_DASHBOARD_PORT after
+    // import — it must pass the override explicitly, or the server silently
+    // binds the default 3030.)
+    const bindPort = opts?.port ?? PORT;
+    const bindHost = opts?.host ?? HOST;
     // Step 1: Load .env file values into process.env
     loadEnv();
     // Step 2: Load API keys from ~/.buff/buffconfig.json into process.env
@@ -1599,14 +1606,14 @@ export function createDashboardServer() {
     console.log('  (AWS Bedrock & Vertex AI use IAM auth — not checked via simple API call)\n');
     console.log('');
     const server = createServer(handleRequest);
-    server.listen(PORT, HOST, () => {
+    server.listen(bindPort, bindHost, () => {
         console.log(`\n  🌐 Agent-Nuvira Dashboard`);
         console.log(`  ─────────────────────────`);
-        console.log(`  Local:   http://${HOST}:${PORT}`);
-        console.log(`  Network: http://localhost:${PORT}`);
+        console.log(`  Local:   http://${bindHost}:${bindPort}`);
+        console.log(`  Network: http://localhost:${bindPort}`);
         console.log(`  Press Ctrl+C to stop\n`);
     });
-    return { server, port: PORT, host: HOST };
+    return { server, port: bindPort, host: bindHost };
 }
 // ═══════════════════════════════════════════════════════════════════════════
 //  New Provider Health Checks
