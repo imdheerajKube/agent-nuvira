@@ -4,6 +4,26 @@ This directory contains the full test suite for Agent-Nuvira. The suite runs via
 
 ---
 
+## 🚧 Regression Gate (Nuvira-Router M0.1 baseline lock)
+
+`scripts/ci/regression-gate.sh` is the canonical no-regression guard for the
+routing/learning subsystem. Any failure in it is a **regression** — it must be
+fixed before merge, never silenced.
+
+```bash
+bash scripts/ci/regression-gate.sh          # full gate (CI, ~4 min)
+bash scripts/ci/regression-gate.sh --fast   # routing guard + failover E2E only (~1 min)
+```
+
+Runs, in order: (1) routing guard (bandit / promotion / auto-router / tier0 /
+hybrid / model-registry / provider-fallback), (2) the hermetic
+`tests/e2e/failover-learning.test.ts` (mock-429 → registry learns → next pick
+skips → flipped mock recovers — the single most important regression test for
+routing), (3) the full root suite, (4) the dashboard component suite. CI runs
+`--fast` before the full suite (`test-linux.yml`).
+
+---
+
 ## 📦 MCP (Model Context Protocol) Tests
 
 The MCP test suite validates the Model Context Protocol integration — client connections, manager orchestration, tool discovery, and end-to-end subprocess communication. Three complementary test files provide layered coverage:

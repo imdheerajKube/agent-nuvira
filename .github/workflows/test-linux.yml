@@ -62,12 +62,15 @@ jobs:
       - name: Build project
         run: npm run build
 
-      # Regression guard for the learning router: uncertainty escalation,
-      # per-model bandit priors, and the promotion gate. Runs BEFORE the full
-      # suite so a routing regression fails fast with a clearly-labeled step
-      # (this is the exact area that shipped in v1.42.0).
-      - name: Routing regression guard (bandit / promotion gate)
-        run: npx vitest run tests/learning/router-bandit.test.ts tests/learning/router-promotion.test.ts tests/learning/auto-router.test.ts tests/learning/tier0-router.test.ts
+      # Nuvira-Router M0.1 regression gate (baseline lock). Runs BEFORE the
+      # full suite so a routing/learning regression fails fast with a clearly
+      # labeled step. Covers: bandit / promotion / auto-router / tier0 /
+      # hybrid / model-registry / provider-fallback + the hermetic
+      # failover-learning E2E (mock-429 -> learn -> skip -> recover).
+      # Full gate: bash scripts/ci/regression-gate.sh (adds root + dashboard
+      # suites); --fast is the CI fast-path.
+      - name: Nuvira-Router regression gate (baseline lock)
+        run: bash scripts/ci/regression-gate.sh --fast
         env:
           CI: true
           NODE_OPTIONS: --no-warnings
