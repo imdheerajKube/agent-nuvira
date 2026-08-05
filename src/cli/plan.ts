@@ -151,18 +151,19 @@ Use clear markdown formatting.`;
             score,
           };
         },
-        generate: async (genProvider, genType, model) => {
-          const out = await genProvider.generate(prompt, { ...options, model });
+        generate: async (genProvider, genType, model, apiKey) => {
+          const out = await genProvider.generate(prompt, { ...options, model, apiKey });
           // Success attribution: this plan call PROVED the provider × model
           // works — the per-action "learned from real usage" panel gains a
           // 'plan' verified row (mirror of the failure write in the runner).
           recordRegistrySuccess(genType, model, 'plan');
           return out;
         },
-        recordFailure: (providerType, model, err) =>
+        recordFailure: (providerType, model, err, apiKey) =>
           recordActionFailure(failureSession, providerType, err, this.configManager, {
             model,
             action: 'plan',
+            apiKey,
           }),
       });
 

@@ -60,6 +60,10 @@ export interface RegistryModelEntry {
   lastVerifiedAt: number;
   lastError?: string;
   source?: string;
+  /** M2.2: rolling measured token EMAs from provider-reported usage. */
+  measuredInputTokens?: number;
+  measuredOutputTokens?: number;
+  measuredSamples?: number;
 }
 
 export interface RegistryProvider {

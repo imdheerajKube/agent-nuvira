@@ -9,8 +9,12 @@
  */
 
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
+import { mkdtempSync, rmSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 
 import { runSingleShotAuto } from '../../src/cli/failover-runner.js';
+import { getQuotaLedger, resetQuotaLedger, accountIdForKey } from '../../src/learning/quota-ledger.js';
 import type { ConfigManager } from '../../src/config/manager.js';
 
 // ─── Mocks ──────────────────────────────────────────────────────────────────
@@ -53,6 +57,14 @@ function makeConfigManager(): ConfigManager {
   return { getAll: () => ({}) } as unknown as ConfigManager;
 }
 
+/** Config manager whose provider carries TWO keys (M2.3 multi-account). */
+function makeMultiKeyConfigManager(): ConfigManager {
+  return {
+    getAll: () => ({}),
+    getProviderConfig: () => ({ config: { apiKey: 'key-1', apiKeys: ['key-2'] } }),
+  } as unknown as ConfigManager;
+}
+
 function baseRoute() {
   return {
     type: 'groq',
@@ -67,6 +79,9 @@ function baseRoute() {
 // ─── Tests ──────────────────────────────────────────────────────────────────
 
 describe('SingleShotAutoRunner — runSingleShotAuto', () => {
+  let runnerTempDir: string;
+  let runnerOrigDir: string | undefined;
+
   beforeEach(() => {
     vi.clearAllMocks();
     mockShouldConfirm.mockReturnValue(false);
@@ -74,6 +89,12 @@ describe('SingleShotAutoRunner — runSingleShotAuto', () => {
       type,
       provider: makeProvider(type),
     }));
+    // Isolate the quota ledger (the runner reads/park accounts since M2.3) so
+    // rotation tests never touch the real user ledger.
+    runnerOrigDir = process.env.BUFF_MEMORY_DIR;
+    runnerTempDir = mkdtempSync(join(tmpdir(), 'buff-failover-runner-'));
+    process.env.BUFF_MEMORY_DIR = runnerTempDir;
+    resetQuotaLedger();
   });
 
   it('returns the first candidate result without failover telemetry', async () => {
@@ -112,7 +133,8 @@ describe('SingleShotAutoRunner — runSingleShotAuto', () => {
     });
 
     expect(result).toBe('answer-nim');
-    expect(recordFailure).toHaveBeenCalledWith('groq', 'groq-model', expect.any(Error));
+    // M2.3: the 4th arg is the attempted key — undefined when keyless.
+    expect(recordFailure).toHaveBeenCalledWith('groq', 'groq-model', expect.any(Error), undefined);
     // Non-first winner → audit re-record with the actual provider.
     expect(mockRecordDecision).toHaveBeenCalledWith(
       expect.objectContaining({ source: 'chat', provider: 'nim', model: 'nim-model' }),
@@ -255,7 +277,80 @@ describe('SingleShotAutoRunner — runSingleShotAuto', () => {
     expect(mockPromptChoice).toHaveBeenCalled();
   });
 
+  it('rotates to the next key of the SAME provider before switching providers (M2.3)', async () => {
+    // key-1 rate-limited → the runner must retry with key-2, park key-1's
+    // account, and succeed WITHOUT ever touching a different provider.
+    const generate = vi.fn(async (_p: unknown, _t: string, _m: string, key?: string) => {
+      if (key === 'key-1') throw new Error('429 rate limit exceeded');
+      return `answer-with-${key}`;
+    });
+    const recordFailure = vi.fn();
+
+    const result = await runSingleShotAuto({
+      action: 'chat',
+      task: 't',
+      configManager: makeMultiKeyConfigManager(),
+      route: vi.fn(async () => baseRoute()),
+      generate,
+      recordFailure,
+    });
+
+    expect(result).toBe('answer-with-key-2');
+    // Both keys attempted: key-1 failed, key-2 succeeded.
+    expect(generate).toHaveBeenCalledTimes(2);
+    expect(generate).toHaveBeenNthCalledWith(1, expect.anything(), 'groq', 'groq-model', 'key-1');
+    expect(generate).toHaveBeenNthCalledWith(2, expect.anything(), 'groq', 'groq-model', 'key-2');
+    // The dead account is parked so the next run skips key-1 predictively.
+    expect(recordFailure).toHaveBeenCalledWith('groq', 'groq-model', expect.any(Error), 'key-1');
+    expect(getQuotaLedger().isAccountParked('groq', accountIdForKey('key-1'))).toBe(true);
+    expect(getQuotaLedger().isAccountParked('groq', accountIdForKey('key-2'))).toBe(false);
+  });
+
+  it('skips an already-parked account on the next run (predictive rotation)', async () => {
+    const ledger = getQuotaLedger();
+    ledger.parkAccount('groq', accountIdForKey('key-1'), Date.now() + 60_000, 'rate-limit');
+    const generate = vi.fn(async (_p: unknown, _t: string, _m: string, key?: string) => `ok-${key}`);
+
+    const result = await runSingleShotAuto({
+      action: 'chat',
+      task: 't',
+      configManager: makeMultiKeyConfigManager(),
+      route: vi.fn(async () => baseRoute()),
+      generate,
+      recordFailure: vi.fn(),
+    });
+
+    expect(result).toBe('ok-key-2');
+    // Only the non-parked key was attempted.
+    expect(generate).toHaveBeenCalledTimes(1);
+    expect(generate).toHaveBeenCalledWith(expect.anything(), 'groq', 'groq-model', 'key-2');
+  });
+
+  it('keeps the single-attempt behavior when no keys are configured (M2.3 no-op)', async () => {
+    const generate = vi.fn(async (_p: unknown, _t: string, _m: string, key?: string) => {
+      expect(key).toBeUndefined();
+      return 'answer';
+    });
+    const result = await runSingleShotAuto({
+      action: 'chat',
+      task: 't',
+      configManager: makeConfigManager(), // no getProviderConfig → no keys
+      route: vi.fn(async () => baseRoute()),
+      generate,
+      recordFailure: vi.fn(),
+    });
+    expect(result).toBe('answer');
+    expect(generate).toHaveBeenCalledTimes(1);
+  });
+
   afterEach(() => {
     Object.defineProperty(process.stdin, 'isTTY', { value: false, configurable: true });
+    resetQuotaLedger();
+    if (runnerOrigDir === undefined) {
+      delete process.env.BUFF_MEMORY_DIR;
+    } else {
+      process.env.BUFF_MEMORY_DIR = runnerOrigDir;
+    }
+    rmSync(runnerTempDir, { recursive: true, force: true });
   });
 });

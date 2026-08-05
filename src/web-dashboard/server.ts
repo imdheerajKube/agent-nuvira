@@ -1108,6 +1108,9 @@ function readModelRegistryData(): Record<string, unknown> {
     requests?: number;
     resetsInMs?: number;
     remainingTokens?: number;
+    measuredInputTokens?: number;
+    measuredOutputTokens?: number;
+    measuredSamples?: number;
   }> }>(join(MEMORY_DIR, 'model-registry.json'));
   if (!data?.entries) {
     return { enabled: false, total: 0, providers: [], actionTelemetry: readRegistryTelemetry(), updatedAt: Date.now() };
@@ -1131,6 +1134,11 @@ function readModelRegistryData(): Record<string, unknown> {
       lastVerifiedAt: e.lastVerifiedAt ?? 0,
       lastError: e.lastError,
       source: e.source,
+      // M2.2: measured wire-token EMAs — the panel flags which provider ×
+      // model drive their cost score from REAL usage data.
+      measuredInputTokens: e.measuredInputTokens,
+      measuredOutputTokens: e.measuredOutputTokens,
+      measuredSamples: e.measuredSamples,
     });
   }
 

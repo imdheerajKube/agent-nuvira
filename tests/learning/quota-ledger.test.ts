@@ -17,7 +17,7 @@ import { mkdtempSync, existsSync, readFileSync, rmSync, writeFileSync } from 'no
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
-import { QuotaLedger, resetQuotaLedger, getQuotaLedger } from '../../src/learning/quota-ledger.js';
+import { QuotaLedger, resetQuotaLedger, getQuotaLedger, accountIdForKey } from '../../src/learning/quota-ledger.js';
 
 // ─── Helpers ────────────────────────────────────────────────────────────────
 
@@ -368,5 +368,66 @@ describe('QuotaLedger — failover timeline (quota-events.jsonl)', () => {
     expect(ledger.listEvents()).toHaveLength(0);
     const path = join(tempDir, 'quota-events.jsonl');
     expect(readFileSync(path, 'utf-8').trim()).toBe('');
+  });
+});
+
+describe('QuotaLedger — M2.3 multi-account key state', () => {
+  beforeEach(() => {
+    tempDir = mkdtempSync(join(tmpdir(), 'buff-quota-m23-'));
+    originalMemoryDir = process.env.BUFF_MEMORY_DIR;
+    process.env.BUFF_MEMORY_DIR = tempDir;
+    resetQuotaLedger();
+  });
+
+  afterEach(() => {
+    resetQuotaLedger();
+    if (originalMemoryDir === undefined) {
+      delete process.env.BUFF_MEMORY_DIR;
+    } else {
+      process.env.BUFF_MEMORY_DIR = originalMemoryDir;
+    }
+    rmSync(tempDir, { recursive: true, force: true });
+  });
+
+  it('parkAccount/isAccountParked gate a specific key, not the whole provider', () => {
+    const ledger = new QuotaLedger();
+    const id1 = accountIdForKey('key-1');
+    const id2 = accountIdForKey('key-2');
+    ledger.parkAccount('groq', id1, Date.now() + 60_000, 'rate-limit');
+    expect(ledger.isAccountParked('groq', id1)).toBe(true);
+    expect(ledger.isAccountParked('groq', id2)).toBe(false);
+    expect(ledger.getParkedAccounts('groq')).toEqual(new Set([id1]));
+  });
+
+  it('expired parks are not reported as parked (auto re-admit)', () => {
+    const ledger = new QuotaLedger();
+    ledger.parkAccount('groq', accountIdForKey('key-1'), Date.now() - 1, 'rate-limit');
+    expect(ledger.isAccountParked('groq', accountIdForKey('key-1'))).toBe(false);
+    expect(ledger.getParkedAccounts('groq').size).toBe(0);
+  });
+
+  it('releaseAccount clears a single key; releaseProvider clears all accounts', () => {
+    const ledger = new QuotaLedger();
+    const id1 = accountIdForKey('key-1');
+    const id2 = accountIdForKey('key-2');
+    ledger.parkAccount('groq', id1, Date.now() + 60_000);
+    ledger.parkAccount('groq', id2, Date.now() + 60_000);
+    ledger.releaseAccount('groq', id1);
+    expect(ledger.getParkedAccounts('groq')).toEqual(new Set([id2]));
+    ledger.releaseProvider('groq');
+    expect(ledger.getParkedAccounts('groq').size).toBe(0);
+  });
+
+  it('raw keys are never persisted — only fingerprints (state has no key strings)', () => {
+    const ledger = new QuotaLedger();
+    ledger.parkAccount('groq', accountIdForKey('super-secret-key'), Date.now() + 60_000, 'auth');
+    const raw = JSON.stringify(ledger.getState());
+    expect(raw).not.toContain('super-secret-key');
+    expect(raw).toContain(accountIdForKey('super-secret-key'));
+  });
+
+  it('accountIdForKey is deterministic and distinct for different keys', () => {
+    expect(accountIdForKey('key-a')).toBe(accountIdForKey('key-a'));
+    expect(accountIdForKey('key-a')).not.toBe(accountIdForKey('key-b'));
   });
 });

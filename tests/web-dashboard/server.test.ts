@@ -705,6 +705,8 @@ describe('Dashboard Server', () => {
             provider: 'gemini', model: 'gemini-2.5-flash', status: 'verified',
             latencyMs: 420, errorRate: 0, quotaParkedUntil: 0, source: 'spot-check',
             tokensConsumed: 2400, requests: 2, resetsInMs: 3_600_000, remainingTokens: 600,
+            // M2.2: measured wire-token EMAs (real provider-reported usage).
+            measuredInputTokens: 210, measuredOutputTokens: 90, measuredSamples: 3,
           },
           'groq|llama-3.3-70b-versatile': {
             provider: 'groq', model: 'llama-3.3-70b-versatile', status: 'verified',
@@ -737,6 +739,11 @@ describe('Dashboard Server', () => {
         expect(gemini.models[0].remainingTokens).toBe(600);
         expect(gemini.models[0].resetsInMs).toBe(3_600_000);
         expect(gemini.models[0].latencyMs).toBe(420);
+        // M2.2: the measured wire-token basis is surfaced per provider × model
+        // (the Models panel flags which entries drive measured cost scoring).
+        expect(gemini.models[0].measuredSamples).toBe(3);
+        expect(gemini.models[0].measuredInputTokens).toBe(210);
+        expect(gemini.models[0].measuredOutputTokens).toBe(90);
 
         // Quota-parked entry is flagged + carries the reason
         const groq = body.providers.find((p: { provider: string }) => p.provider === 'groq');
