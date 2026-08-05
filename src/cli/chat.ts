@@ -19,9 +19,9 @@ import { applyActiveModel } from './model.js';
 import { ConfigManager } from '../config/manager.js';
 import { InferenceProvider } from '../inference/interface.js';
 import type { ProviderType } from '../config/types.js';
-import { getProviderFallback, classifyFallbackError, isRetryableError, recordRegistryFailure, recordRegistrySuccess } from '../learning/provider-fallback.js';
+import { getProviderFallback, classifyFallbackError, isRetryableError, recordRegistrySuccess } from '../learning/provider-fallback.js';
+import { recordActionFailure, RATE_LIMIT_EXCLUSION_MS, TRANSIENT_FAILURE_EXCLUSION_MS } from '../learning/failure-bookkeeping.js';
 import { getAutoRouter, isAutoModel, isAutoProvider } from '../learning/auto-router.js';
-import { getQuotaLedger } from '../learning/quota-ledger.js';
 import { getModelRegistry } from '../learning/model-registry.js';
 import { refreshModelRegistry, spotCheckModel } from '../inference/model-probe.js';
 import { recordRoutingDecision } from '../learning/routing-history.js';
@@ -289,23 +289,9 @@ export class ChatCommand extends BaseCommand {
    */
   private sessionFailedProviders = new Map<string, number>();
 
-  /**
-   * How long a rate-limit failure excludes a provider from auto routing (ms).
-   * Aligned with the circuit breaker's COOLDOWN_DURATION_MS (120s) so the
-   * session-level exclusion and the breaker's scoring cooldown expire together
-   * — one consistent recovery window, not two competing ones.
-   */
-  private static readonly RATE_LIMIT_EXCLUSION_MS = 2 * 60 * 1000;
-
-  /**
-   * How long a server/network/timeout/unknown failure excludes a provider
-   * from auto routing (ms). Shorter than rate-limit so a flaky-but-alive
-   * provider is re-admitted quickly, but long enough that the very NEXT
-   * message never re-picks a provider that just failed (the old behavior:
-   * only auth and rate-limit were session-excluded, so an unknown-classified
-   * failure re-picked the dead provider on every single message).
-   */
-  private static readonly TRANSIENT_FAILURE_EXCLUSION_MS = 60 * 1000;
+  // RATE_LIMIT_EXCLUSION_MS + TRANSIENT_FAILURE_EXCLUSION_MS now live in
+  // src/learning/failure-bookkeeping.ts (shared with every action) — see
+  // recordActionFailure. Behavior is identical: same values, same semantics.
 
   /**
    * Providers that failed TRANSIENTLY this session (server/network/timeout/
@@ -863,77 +849,26 @@ export class ChatCommand extends BaseCommand {
   /**
    * Record an auto-mode provider failure so the session fails over instead of
    * getting stuck on a broken provider (the core of "auto routing should pick
-   * another provider when the current one dies mid-session"):
+   * another provider when the current one dies mid-session").
    *
-   * - Definitive failures — auth (expired token/key) and rate-limit (exhausted
-   *   quota, "token limit exceeded") — exclude the provider for the WHOLE
-   *   session, so the next message never re-picks it and re-fails.
-   * - EVERY failure also feeds the shared circuit breaker, so the auto router
-   *   deprioritizes the provider by scoring even for transient 5xx/network
-   *   errors (which need repeated failures before cooldown opens).
-   * - Transient failures (server/network/timeout/unknown) get a SHORT session
-   *   exclusion so the very next message skips the provider, while still
-   *   re-admitting it quickly if it recovers.
-   * - EVERY failure ALSO writes through to the persistent Model Availability
-   *   Registry (telemetry) so a dead provider×model is remembered across chat
-   *   sessions and skipped predictively on the next pick — the registry's
-   *   FAISS/JSON health data is what makes routing fast, and this is the feed
-   *   that keeps it fresh.
-   *
-   * Best-effort: never throws, so failover bookkeeping can't crash the chat.
+   * Delegates to the SHARED failure-bookkeeping helper (Nuvira-Router M0.2
+   * Stage A) so every action composes the exact same bookkeeping: session
+   * exclusion (auth = whole session, rate-limit = short cooldown, transient =
+   * short cooldown + re-verify marker), quota-ledger parking on rate-limit,
+   * registry write-through (per-action telemetry), quota-timeline event, and
+   * the shared circuit breaker. Best-effort: never throws.
    */
   private recordAutoProviderFailure(providerType: string, err: unknown, model?: string): void {
-    const failureKind = classifyFallbackError(err);
-    if (failureKind === 'auth') {
-      // Expired token/key — definitive for the rest of the session
-      this.sessionFailedProviders.set(providerType, Number.MAX_SAFE_INTEGER);
-    } else if (failureKind === 'rate-limit') {
-      // Exhausted quota / token-limit — usually transient, so only a short
-      // cooldown before the provider is re-admitted to auto routing.
-      this.sessionFailedProviders.set(providerType, Date.now() + ChatCommand.RATE_LIMIT_EXCLUSION_MS);
-      // Park the provider in the CENTRAL quota ledger until its reset window
-      // rolls so the exclusion survives across chat sessions (assessment #4:
-      // never surface quota errors — keep routing around them). The ledger is
-      // read by routeMessageAuto before every pick, so the next session skips
-      // the exhausted provider predictively instead of failing reactively.
-      try {
-        const limit = this.configManager.getAll().routing?.quota?.[providerType];
-        const windowMs = limit?.windowMs ?? 24 * 60 * 60 * 1000;
-        getQuotaLedger().parkProvider(providerType, Date.now() + windowMs, failureKind);
-      } catch {
-        // Best-effort — ledger bookkeeping must not crash chat
-      }
-    } else {
-      // Server / network / timeout / unknown — transient but definitive enough
-      // that the next message shouldn't re-pick this provider. Short cooldown,
-      // then re-admit (it may have recovered). Tracked as transient so the
-      // expiry path re-verifies with a spot-check before re-admitting.
-      this.sessionFailedProviders.set(providerType, Date.now() + ChatCommand.TRANSIENT_FAILURE_EXCLUSION_MS);
-      this.sessionTransientFailedProviders.add(providerType);
-    }
-    // Write-through to the persistent Model Availability Registry so this
-    // provider×model is remembered across sessions — via the SHARED helper
-    // every routing path uses (execute/orchestrator + the fallback commands
-    // plan/skill/learn/edit), so a provider that dies here is skipped
-    // predictively by ALL actions on the next pick. auth/rate-limit failures
-    // flip the entry to `unavailable` (rate-limit also parks it until the
-    // reset window), which `getBlockedProviders()` feeds back into routing as
-    // a predictive skip — the registry learns from real usage exactly as
-    // designed, no separate probe needed.
-    recordRegistryFailure(providerType, model, err, failureKind, 'chat');
-    // Record the failover in the QUOTA TIMELINE (assessment #7: show users
-    // when failover occurred and why). Auth + rate-limit failures both show up
-    // so the dashboard's Failover Timeline explains every mid-session swap.
-    try {
-      getQuotaLedger().recordEvent('failover', providerType, failureKind);
-    } catch {
-      // Best-effort — timeline bookkeeping must not crash chat
-    }
-    try {
-      getProviderFallback(this.configManager).recordFailure(providerType);
-    } catch {
-      // Best-effort — circuit-breaker bookkeeping must not crash chat
-    }
+    recordActionFailure(
+      {
+        sessionFailedProviders: this.sessionFailedProviders,
+        sessionTransientFailedProviders: this.sessionTransientFailedProviders,
+      },
+      providerType,
+      err,
+      this.configManager,
+      { model, action: 'chat' },
+    );
   }
 
   private async showModelPicker(): Promise<{ provider: string; model: string } | null> {
@@ -1055,7 +990,7 @@ export class ChatCommand extends BaseCommand {
           // Still down — keep it excluded for another transient window.
           this.sessionFailedProviders.set(
             providerType,
-            Date.now() + ChatCommand.TRANSIENT_FAILURE_EXCLUSION_MS,
+            Date.now() + TRANSIENT_FAILURE_EXCLUSION_MS,
           );
           this.sessionTransientFailedProviders.add(providerType);
         }
