@@ -9,7 +9,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-## [1.59.6] - 2026-08-06
+## [1.59.7] - 2026-08-06
+
+### Added
+
+- **P6 M6.1 RBAC** — role-based access control over the admin surface: `src/enterprise/rbac.ts` (roles admin/operator/viewer with a permission matrix, local role file `~/.buff/rbac.json` with `BUFF_CONFIG_DIR` override, OIDC adapter interface as the token-identity seam). `buff admin role add/remove/list` + `buff admin whoami`; every policy-write and role command is gated (`policy.write` / `role.manage`); legacy single-user mode stays fully permissive until roles are assigned; a misconfigured `rbac.json` now logs a warning instead of silently downgrading.
+- **Dashboard governance card** — the Routing Insights page now renders the active `routing.governance.*` policy (allow/deny provider+model lists, max-cost, pii-min, unblock) read from the same config the router enforces.
+- **CLI flakiness trend** — `models status` flaky rows now tag `healing` (EMA trending down toward 0) or `worsening` (climbing) from the `partialHistory` trajectory.
 
 ### Added
 

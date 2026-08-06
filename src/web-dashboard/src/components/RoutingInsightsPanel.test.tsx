@@ -10,7 +10,7 @@
 import { describe, it, expect } from 'vitest';
 import { render, screen } from '@testing-library/react';
 import RoutingInsightsPanel from './RoutingInsightsPanel';
-import type { DashboardData, PromotionInsights } from '../types';
+import type { DashboardData, GovernanceInsights, PromotionInsights } from '../types';
 
 // ─── Helpers ────────────────────────────────────────────────────────────────
 
@@ -21,6 +21,20 @@ function makeData(promotion?: PromotionInsights): DashboardData {
       bestModels: [],
       preference: [],
       promotion,
+      updatedAt: Date.now(),
+    },
+  } as unknown as DashboardData;
+}
+
+// ─── Governance card helpers (P6 M6.5) ─────────────────────────────────────
+
+function makeGovernanceData(governance?: GovernanceInsights): DashboardData {
+  return {
+    routing: {
+      providers: [],
+      bestModels: [],
+      preference: [],
+      governance,
       updatedAt: Date.now(),
     },
   } as unknown as DashboardData;
@@ -201,3 +215,37 @@ function makePreferenceData(
     },
   } as unknown as DashboardData;
 }
+
+// ─── Governance card (P6 M6.5) ─────────────────────────────────────────────
+// The policy card mirrors `buff admin policy`: permissive empty state, rule
+// chips for allow/deny lists + caps, and the hard-constraint enforcement note.
+
+describe('GovernanceSection (via RoutingInsightsPanel)', () => {
+  it('shows the fully-permissive state when no policy is configured', () => {
+    render(<RoutingInsightsPanel data={makeGovernanceData({ enabled: false, updatedAt: Date.now() })} />);
+    expect(screen.getByText(/Fully permissive/)).toBeTruthy();
+    expect(screen.getByText(/buff admin allow/)).toBeTruthy();
+    expect(screen.getByText(/Admin Governance Policy/)).toBeTruthy();
+  });
+
+  it('renders allow/deny rule chips and cap extras when a policy is active', () => {
+    render(<RoutingInsightsPanel data={makeGovernanceData({
+      enabled: true,
+      allowProviders: ['groq', 'local'],
+      denyProviders: ['gemini'],
+      denyModels: ['gemini-2.5-pro'],
+      maxCostUsd: 0.01,
+      piiPatterns: ['api[_-]?key'],
+      allowUnblock: false,
+      updatedAt: Date.now(),
+    })} />);
+    expect(screen.getByText(/allow providers: groq, local/)).toBeTruthy();
+    expect(screen.getByText(/deny providers: gemini/)).toBeTruthy();
+    expect(screen.getByText(/deny models: gemini-2.5-pro/)).toBeTruthy();
+    expect(screen.getByText(/max cost \$0.01/)).toBeTruthy();
+    expect(screen.getByText(/PII guard/)).toBeTruthy();
+    expect(screen.getByText(/unblock admin-hard/)).toBeTruthy();
+    // Hard-constraint enforcement note.
+    expect(screen.getByText(/violating providers are eliminated/)).toBeTruthy();
+  });
+});

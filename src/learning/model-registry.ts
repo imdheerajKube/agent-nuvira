@@ -1334,6 +1334,23 @@ export class ModelRegistry {
       lines.push(`   ${p.provider}: ${p.verified} verified · ${p.unavailable} unavailable${p.parked ? ` · ${p.parked} parked` : ''}`);
       for (const m of verified) {
         const lat = m.latencyMs !== undefined ? ` · ${m.latencyMs}ms` : '';
+        // P4 M4.4 flakiness trend: when a trajectory exists, surface whether
+        // the model is HEALING (clean successes decay the EMA) or WORSENING
+        // (more mid-stream interruptions) — one glance at `models status`.
+        let flaky = '';
+        if (m.partialRate !== undefined && m.partialRate > 0) {
+          const pct = Math.round(m.partialRate * 100);
+          const h = m.partialHistory;
+          if (h && h.length >= 2) {
+            const first = h[0].rate;
+            const last = h[h.length - 1].rate;
+            if (last < first) flaky = ` · ⏸ flaky ${pct}% healing`;
+            else if (last > first) flaky = ` · ⏸ flaky ${pct}% worsening`;
+            else flaky = ` · ⏸ flaky ${pct}%`;
+          } else {
+            flaky = ` · ⏸ flaky ${pct}%`;
+          }
+        }
         // Unified-store quota telemetry: remaining tokens + time-to-wait (resets
         // in) come from the same sub-ms FAISS/JSON snapshot routing reads.
         const tokens = m.remainingTokens !== undefined && m.remainingTokens >= 0
@@ -1342,7 +1359,7 @@ export class ModelRegistry {
         const resets = m.resetsInMs !== undefined && m.resetsInMs > 0
           ? ` · resets in ${this.formatMs(m.resetsInMs)}`
           : '';
-        lines.push(`     ✅ ${m.model}${lat}${tokens}${resets}`);
+        lines.push(`     ✅ ${m.model}${lat}${flaky}${tokens}${resets}`);
       }
       for (const m of unavailable.slice(0, 3)) {
         const wait = m.quotaParkedUntil > now ? ` · retry in ${this.formatMs(m.quotaParkedUntil - now)}` : '';

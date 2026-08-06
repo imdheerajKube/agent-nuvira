@@ -1,6 +1,12 @@
 # Agent-Nuvira — User Manual
 
-**Version 1.59.6 | August 2026**
+**Version 1.59.7 | August 2026**
+
+### v1.59.7 — RBAC + governance policy card + flakiness trends
+
+- **`buff admin role`** — role-based access control over the admin surface: `add <user> <admin|operator|viewer>`, `remove <user>`, `list`, and `buff admin whoami` (your current role + permissions). Policy *writes* and role management require `admin`; reads are open to every role. Until any role is assigned, the CLI stays in legacy single-user mode (fully permissive) — enabling RBAC never locks you out. The OIDC adapter interface is the seam for token-backed identity (gateway milestone).
+- **Governance policy card** — the Routing Insights page shows the live `routing.governance.*` policy (allow/deny lists, max-cost, pii-min, unblock) that the router enforces on every Auto pick.
+- **Flakiness trends in `models status`** — flaky rows now show whether the mid-stream flakiness EMA is `healing` (trending down via clean completions) or `worsening` (climbing).
 
 ### v1.59.6 — Admin governance API + flakiness healing
 

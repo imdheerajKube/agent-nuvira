@@ -287,7 +287,7 @@ Verified as of 2026-08-05 (v1.57.0, 3,032 root tests + 42 dashboard component te
 | P5 | M5.2 Config & docs | [#6](https://github.com/imdheerajKube/agent-nuvira/issues/6) | ✅ | v1.58.4 |
 | P5 | M5.3 E2E through gateway | [#6](https://github.com/imdheerajKube/agent-nuvira/issues/6) | ✅ | v1.58.4 |
 | P5 | M5.4 Pinning & upgrade policy | [#6](https://github.com/imdheerajKube/agent-nuvira/issues/6) | ✅ | v1.58.4 |
-| P6 | M6.1 AuthN/AuthZ (RBAC) | [#7](https://github.com/imdheerajKube/agent-nuvira/issues/7) | ⬜ | — |
+| P6 | M6.1 AuthN/AuthZ (RBAC) | [#7](https://github.com/imdheerajKube/agent-nuvira/issues/7) | ✅ | v1.59.7 |
 | P6 | M6.2 Secrets management | [#7](https://github.com/imdheerajKube/agent-nuvira/issues/7) | ✅ | v1.59.0 |
 | P6 | M6.3 Tamper-evident audit | [#7](https://github.com/imdheerajKube/agent-nuvira/issues/7) | ✅ | v1.59.0 |
 | P6 | M6.4 Nuvira Gateway (central) | [#7](https://github.com/imdheerajKube/agent-nuvira/issues/7) | ⬜ | — |
