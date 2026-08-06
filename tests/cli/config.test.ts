@@ -140,6 +140,25 @@ describe('ConfigCommand set — M2.4 governance policy', () => {
     expect(saved?.routing?.nuviraSidecar?.image).toBe('ghcr.io/berriai/litellm:main-stable');
   });
 
+  it('sets the soft-signal gates routing.capabilityFit / contextFit / partialFlakiness as booleans', () => {
+    const cmd = makeCommand();
+    runSet(cmd, 'routing.partialFlakiness', 'false');
+    expect(saved?.routing?.partialFlakiness).toBe(false);
+    runSet(cmd, 'routing.partialFlakiness', 'true');
+    expect(saved?.routing?.partialFlakiness).toBe(true);
+    runSet(cmd, 'routing.capabilityFit', 'false');
+    expect(saved?.routing?.capabilityFit).toBe(false);
+    runSet(cmd, 'routing.contextFit', 'false');
+    expect(saved?.routing?.contextFit).toBe(false);
+  });
+
+  it('rejects an unknown routing key with the full valid-key list (P4 M4.4)', () => {
+    const cmd = makeCommand();
+    runSet(cmd, 'routing.partialFitness', 'true');
+    expect(saved?.routing?.partialFitness).toBeUndefined();
+    expect(console.error).toHaveBeenCalledWith(expect.stringContaining('partialFlakiness'));
+  });
+
   it('sets routing.compression.enabled as a boolean (M4.4, off by default)', () => {
     const cmd = makeCommand();
     runSet(cmd, 'routing.compression.enabled', 'true');

@@ -298,8 +298,14 @@ export class ConfigCommand extends BaseCommand {
         }
         else if (parts.length === 2 && parts[0] === 'routing') {
             // routing.bandit | routing.allowPaid | routing.maxCostUsd | routing.minSpeed | routing.minReasoning
+            // | routing.capabilityFit | routing.contextFit | routing.partialFlakiness
             const field = parts[1];
-            if (field === 'bandit' || field === 'allowPaid') {
+            // Boolean routing gates — the soft scoring signals (capability-fit,
+            // context preflight, P4 M4.4 partial-flakiness) are all boolean.
+            const BOOLEAN_ROUTING_KEYS = new Set([
+                'bandit', 'allowPaid', 'capabilityFit', 'contextFit', 'partialFlakiness',
+            ]);
+            if (BOOLEAN_ROUTING_KEYS.has(field)) {
                 const lower = value.trim().toLowerCase();
                 let typedValue;
                 if (lower === 'true' || lower === '1' || lower === 'yes') {
@@ -323,7 +329,7 @@ export class ConfigCommand extends BaseCommand {
                 this.configManager.save({ routing: { [field]: num } });
             }
             else {
-                logger.error(`Unknown routing config key: ${field}. Valid keys: bandit, allowPaid, maxCostUsd, minSpeed, minReasoning`);
+                logger.error(`Unknown routing config key: ${field}. Valid keys: bandit, allowPaid, capabilityFit, contextFit, partialFlakiness, maxCostUsd, minSpeed, minReasoning`);
                 return;
             }
         }
