@@ -20,10 +20,10 @@ beforeAll(async () => {
   // Warm up the FAISS-style backend ONCE so the first test doesn't pay the
   // full cold-start (dynamic import of the FAISS module + native tier probe)
   // inside vitest's default 5s per-test timeout on a fresh CI runner.
-  // Node's module cache stays warm after this, so per-test resets are cheap.
+  // Node's module cache stays warm after this, so per-test resets (which
+  // beforeEach performs anyway) are cheap.
   resetVectorBackendSelection();
   await getVectorStore().count();
-  resetVectorBackendSelection();
 });
 
 afterAll(() => {
