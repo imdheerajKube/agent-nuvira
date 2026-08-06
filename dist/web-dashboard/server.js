@@ -14,6 +14,7 @@ import { createReadStream, readFileSync, existsSync, statSync, watch, mkdirSync,
 import { join, extname, dirname, basename } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { homedir } from 'node:os';
+import { parseRbacUsers } from '../enterprise/rbac.js';
 import { loadEnv } from '../utils/env.js';
 import { getAutoRouter } from '../learning/auto-router.js';
 import { getRouterPromotion } from '../learning/router-promotion.js';
@@ -1325,6 +1326,10 @@ function readRoutingInsights() {
         // constraints — surfaced so the dashboard shows policy where routing
         // decisions are made (mirrors `buff admin policy`).
         governance: readGovernanceData(),
+        // P6 M6.1: RBAC identity + role assignments (mirrors `buff admin whoami` /
+        // `buff admin role list`) so the dashboard shows WHO may write policy
+        // alongside WHAT the policy is.
+        rbac: readRbacData(),
         updatedAt: Date.now(),
     };
 }
@@ -1402,6 +1407,35 @@ function readGovernanceData() {
     }
     catch {
         return { enabled: false, updatedAt: Date.now() };
+    }
+}
+/**
+ * Read the RBAC role file (~/.buff/rbac.json — the same file `buff admin
+ * role add` writes) into a shaped payload: the acting identity, their role
+ * (null when unassigned), the full user→role map, and whether the system is
+ * in legacy single-user mode (no roles assigned → fully permissive). Uses the
+ * same `join(homedir(), '.buff', ...)` path convention as the other readers.
+ */
+function readRbacData() {
+    try {
+        const configPath = join(homedir(), '.buff', 'rbac.json');
+        const identity = process.env.BUFF_ACT_AS || process.env.USER || 'local';
+        if (!existsSync(configPath)) {
+            return { legacy: true, identity, role: null, users: [], updatedAt: Date.now() };
+        }
+        const users = parseRbacUsers(readFileSync(configPath, 'utf-8'));
+        return {
+            legacy: Object.keys(users).length === 0,
+            identity,
+            role: users[identity]?.role || null,
+            users: Object.entries(users)
+                .map(([user, u]) => ({ user, role: u.role, via: u.via }))
+                .sort((a, b) => a.user.localeCompare(b.user)),
+            updatedAt: Date.now(),
+        };
+    }
+    catch {
+        return { legacy: true, identity: 'local', role: null, users: [], updatedAt: Date.now() };
     }
 }
 /**

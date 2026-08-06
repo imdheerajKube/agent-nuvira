@@ -131,12 +131,31 @@ export interface FederationHealth {
     version: string;
     loadAverage?: number[];
 }
+/**
+ * Federation gateway authentication mode (P6 M6.4).
+ * - 'secret' (default) — pre-shared key in the handshake body.
+ * - 'oidc' — the handshake requires a bearer token verified by the injected
+ *   OidcAdapter (JWT RS256 by default). No adapter wired → handshake 503s.
+ */
+export type FederationAuthMode = 'secret' | 'oidc';
 /** Configuration for a federation server or client */
 export interface FederationConfig {
     /** Whether federation is enabled */
     enabled: boolean;
-    /** Secret key for authentication */
+    /** Secret key for authentication (required when authMode is 'secret') */
     secret: string;
+    /** M6.4 gateway auth mode — 'secret' by default (backwards compatible). */
+    authMode?: FederationAuthMode;
+    /**
+     * M6.4 OIDC metadata. `issuer`/`audience` are enforced by the adapter;
+     * `publicKeyPath` is the persisted PEM path the CLI reloads on restart (the
+     * key itself is never stored in federation.json).
+     */
+    oidc?: {
+        issuer?: string;
+        audience?: string;
+        publicKeyPath?: string;
+    };
     /** Host to bind/connect to */
     host: string;
     /** Port to bind/connect to */

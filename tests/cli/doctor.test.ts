@@ -232,6 +232,19 @@ describe('doctor --enterprise (P7 M7.1)', () => {
     expect(result.message).toContain('plaintext');
   });
 
+  it('checkSecretsBackend flags M2.3 apiKeys rotation arrays in plaintext too', () => {
+    const cfg: BuffConfig = {
+      ...baseConfig,
+      providers: {
+        ...baseConfig.providers,
+        groq: { apiKeys: ['gsk_plaintext_1', 'gsk_plaintext_2'] },
+      },
+    };
+    const result = checkSecretsBackend(cfg, {});
+    expect(result.status).toBe('warn');
+    expect(result.message).toContain('plaintext');
+  });
+
   it('checkSecretsBackend passes when the key comes from the environment', () => {
     const cfg: BuffConfig = {
       ...baseConfig,

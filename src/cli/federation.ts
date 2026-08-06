@@ -37,6 +37,7 @@ import {
 import { startA2AServer as startA2AServerFn } from '../federation/a2a-server.js';
 import { A2A_DEFAULT_PORT, A2A_DEFAULT_HOST } from '../federation/a2a-types.js';
 import { discoverAgent, delegateAndWait, checkA2AHealth } from '../federation/a2a-client.js';
+import { JwtOidcAdapter } from '../federation/oidc-adapter.js';
 
 // ─── Constants ──────────────────────────────────────────────────────────────
 
@@ -90,14 +91,18 @@ export class FederationCommand extends BaseCommand {
       .command('start')
       .description('Start the federation server (listens for incoming connections)')
       .option('-p, --port <port>', 'Port to listen on', parseInt, DEFAULT_FEDERATION_PORT)
-      .option('-s, --secret <secret>', 'Pre-shared authentication key')
+      .option('-s, --secret <secret>', 'Pre-shared authentication key (authMode secret)')
       .option('--host <host>', 'Host to bind to', DEFAULT_FEDERATION_CONFIG.host)
       .option('--daemon', 'Run in background (detached process)', false)
+      .option('--auth <mode>', 'P6 M6.4 gateway auth: secret (default) or oidc (token-verified bearer via JwtOidcAdapter)', 'secret')
+      .option('--oidc-public-key <path>', 'P6 M6.4: PEM public key used to verify OIDC bearer tokens (required with --auth oidc)')
       .action(async (options?: {
         port?: number;
         secret?: string;
         host?: string;
         daemon?: boolean;
+        auth?: string;
+        oidcPublicKey?: string;
       }) => {
         await this.startServer(options || {});
       });
@@ -254,20 +259,46 @@ export class FederationCommand extends BaseCommand {
     secret?: string;
     host?: string;
     daemon?: boolean;
+    auth?: string;
+    oidcPublicKey?: string;
   }): Promise<void> {
     const config = loadConfig();
     const port = options.port || config.port;
     const secret = options.secret || config.secret || process.env.FEDERATION_SECRET || '';
     const host = options.host || config.host;
+    const authMode = options.auth === 'oidc' ? 'oidc' : 'secret';
 
-    if (!secret) {
-      logger.error('Federation secret is required.');
+    if (authMode === 'secret' && !secret) {
+      logger.error('Federation secret is required (or use --auth oidc for token-verified gateway auth).');
       logger.info('Set it with: buff federation config --set-secret <your-secret>');
       logger.info('Or via: export FEDERATION_SECRET=your-secret');
       return;
     }
 
-    logger.info(`Starting federation server on ${host}:${port}...`);
+    // P6 M6.4: OIDC mode requires a PEM public key so the JwtOidcAdapter can
+    // verify incoming bearer tokens. Without one the server cannot authenticate
+    // anyone — fail fast instead of silently running wide open.
+    let oidcAdapter: JwtOidcAdapter | undefined;
+    if (authMode === 'oidc') {
+      // The PEM path persists in federation.json (oidc.publicKeyPath) so a
+      // daemonized/restarted oidc server can reload its adapter without
+      // re-passing the flag. The key itself is never persisted.
+      const keyPath = options.oidcPublicKey || config.oidc?.publicKeyPath;
+      if (!keyPath) {
+        logger.error('--auth oidc requires --oidc-public-key <path-to-pem> (or a saved oidc.publicKeyPath in federation.json).');
+        logger.info('Generate one with: openssl genpkey -algorithm RSA -out priv.pem && openssl pkey -in priv.pem -pubout -out pub.pem');
+        return;
+      }
+      try {
+        const pem = readFileSync(keyPath, 'utf-8');
+        oidcAdapter = new JwtOidcAdapter({ publicKeyPem: pem });
+      } catch (err) {
+        logger.error(`Could not load OIDC public key from ${keyPath}: ${err instanceof Error ? err.message : String(err)}`);
+        return;
+      }
+    }
+
+    logger.info(`Starting federation server on ${host}:${port} (auth: ${authMode})...`);
 
     const updatedConfig: FederationConfig = {
       ...config,
@@ -275,6 +306,8 @@ export class FederationCommand extends BaseCommand {
       port,
       secret,
       host,
+      authMode,
+      oidc: authMode === 'oidc' ? { ...config.oidc, publicKeyPath: options.oidcPublicKey || config.oidc?.publicKeyPath } : config.oidc,
     };
     saveConfig(updatedConfig);
 
@@ -285,7 +318,8 @@ export class FederationCommand extends BaseCommand {
         host,
         nodeId: hostname(),
         capabilities: config.capabilities,
-      });
+        authMode,
+      }, { oidcAdapter });
 
       logger.success(`Federation server running on ${host}:${port}`);
       logger.info('  Press Ctrl+C to stop the server.');

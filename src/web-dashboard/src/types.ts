@@ -295,6 +295,24 @@ export interface HealthData {
 
 // ─── Auto Routing Insights Types ────────────────────────────────────────────
 
+/**
+ * P6 M6.1 RBAC snapshot — the acting identity, their role, and the full
+ * user→role map from ~/.buff/rbac.json (mirrors `buff admin whoami` / `role
+ * list`). `legacy: true` = no roles assigned → fully permissive single-user.
+ */
+export interface RbacInsights {
+  legacy: boolean;
+  identity: string;
+  /** Acting user's role (null when unassigned / legacy). */
+  role: 'admin' | 'operator' | 'viewer' | null;
+  users: Array<{
+    user: string;
+    role: 'admin' | 'operator' | 'viewer';
+    via?: 'local' | 'oidc';
+  }>;
+  updatedAt: number;
+}
+
 export interface RoutingInsights {
   providers: Array<{
     provider: string;
@@ -352,6 +370,12 @@ export interface RoutingInsights {
    * Optional: an older server won't send it, so the panel hides the card.
    */
   governance?: GovernanceInsights;
+  /**
+   * P6 M6.1 RBAC identity + role assignments (mirrors `buff admin whoami` /
+   * `buff admin role list`). Optional: an older server won't send it, so the
+   * panel hides the card when absent.
+   */
+  rbac?: RbacInsights;
   updatedAt: number;
 }
 

@@ -1,6 +1,6 @@
 import type { ReactNode } from 'react';
 import RoutingWalkthroughSection from './RoutingWalkthrough';
-import type { BanditInsights, DashboardData, GovernanceInsights, PromotionInsights, QuotaInsights, RetrievalInsights, RoutingHistoryEntry, RoutingInsights, RoutingUsage } from '../types';
+import type { BanditInsights, DashboardData, GovernanceInsights, PromotionInsights, QuotaInsights, RbacInsights, RetrievalInsights, RoutingHistoryEntry, RoutingInsights, RoutingUsage } from '../types';
 
 // ─── Helpers ────────────────────────────────────────────────────────────────
 
@@ -990,6 +990,54 @@ export function GovernanceSection({ governance }: { governance: GovernanceInsigh
   );
 }
 
+/**
+ * P6 M6.1 RBAC identity card — who is viewing, what role they hold, and the
+ * full user→role map from ~/.buff/rbac.json (mirrors `buff admin whoami` /
+ * `buff admin role list`). Legacy single-user mode (no roles assigned) shows
+ * the permissive notice; once roles exist, policy writes require admin.
+ */
+export function RbacSection({ rbac }: { rbac: RbacInsights }) {
+  const roleColor = (role: string): string =>
+    role === 'admin' ? '#d29922' : role === 'operator' ? '#3fb950' : '#8b949e';
+  return (
+    <SectionCard
+      icon="🔐"
+      title="RBAC Identity"
+      subtitle="Who may write policy — role file ~/.buff/rbac.json"
+    >
+      <div style={{ fontSize: 13, marginBottom: 10 }}>
+        <span style={{ color: '#c9d1d9' }}>You are </span>
+        <code style={{ color: '#58a6ff' }}>{rbac.identity}</code>
+        <span style={{ color: '#8b949e' }}> as </span>
+        {rbac.role ? (
+          <span style={{ color: roleColor(rbac.role), fontWeight: 600 }}>{rbac.role}</span>
+        ) : (
+          <span style={{ color: '#8b949e' }}>unassigned</span>
+        )}
+      </div>
+      {rbac.legacy ? (
+        <div style={{ fontSize: 12, color: '#6e7681' }}>
+          <span style={{ color: '#3fb950' }}>Legacy single-user mode</span> — no roles assigned; policy writes are
+          open to every user. Assign roles with{' '}
+          <code style={{ color: '#58a6ff' }}>buff admin role add &lt;you&gt; admin</code>.
+        </div>
+      ) : (
+        <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6 }}>
+          {rbac.users.map((u) => (
+            <RuleChip key={u.user} ok={u.role !== 'viewer'}>
+              {u.user} · {u.role}
+              {u.via === 'oidc' ? ' (oidc)' : ''}
+            </RuleChip>
+          ))}
+          <div style={{ width: '100%', fontSize: 12, color: '#6e7681', marginTop: 4 }}>
+            Policy <em>writes</em> require <code style={{ color: '#58a6ff' }}>admin</code>; reads are open to every role.
+          </div>
+        </div>
+      )}
+    </SectionCard>
+  );
+}
+
 export default function RoutingInsightsPanel({ data }: { data: DashboardData | null }) {
   const routing = data?.routing;
   const hasAny =
@@ -1004,6 +1052,7 @@ export default function RoutingInsightsPanel({ data }: { data: DashboardData | n
   const hasQuota = !!routing?.quota?.enabled;
   const hasRetrieval = !!routing?.retrieval?.enabled || !!routing?.retrieval?.repoChunks;
   const hasGovernance = !!routing?.governance;
+  const hasRbac = !!routing?.rbac;
 
   return (
     <>
@@ -1014,12 +1063,13 @@ export default function RoutingInsightsPanel({ data }: { data: DashboardData | n
         <code>buff benchmark</code> and use Auto routing to build this up over time.
       </p>
 
-      {!hasAny && !hasUsage && !hasHistory && !hasBandit && !hasPromotion && !hasQuota && !hasRetrieval && !hasGovernance ? (
+      {!hasAny && !hasUsage && !hasHistory && !hasBandit && !hasPromotion && !hasQuota && !hasRetrieval && !hasGovernance && !hasRbac ? (
         <EmptyNote />
       ) : (
         <>
           {hasWalkthrough && routing && <RoutingWalkthroughSection routing={routing} />}
           {hasGovernance && routing!.governance && <GovernanceSection governance={routing!.governance} />}
+          {routing?.rbac && <RbacSection rbac={routing.rbac} />}
           {hasUsage && <UsageSection usage={routing!.usage!} />}
           {hasHistory && <AuditTimelineSection history={routing!.history!} />}
           {hasBandit && <BanditSection bandit={routing!.bandit!} />}
