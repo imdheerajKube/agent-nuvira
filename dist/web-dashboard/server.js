@@ -743,12 +743,29 @@ function readCostData() {
     const totalTokens = entries.reduce((s, e) => s + (typeof e.totalTokens === 'number' ? e.totalTokens : 0), 0);
     const byProvider = {};
     const byModel = {};
+    const byProviderMeasured = {};
+    let measuredCalls = 0;
+    let estimatedCalls = 0;
+    let measuredCost = 0;
+    let estimatedCost = 0;
     for (const e of entries) {
         const cost = typeof e.costUsd === 'number' ? e.costUsd : 0;
         if (e.provider)
             byProvider[e.provider] = (byProvider[e.provider] || 0) + cost;
         if (e.model)
             byModel[e.model] = (byModel[e.model] || 0) + cost;
+        // M2.2 wire-token metering split: measured (exact provider-reported
+        // usage) vs estimated (length-based) spend.
+        if (e.measured === true) {
+            measuredCalls += 1;
+            measuredCost += cost;
+            if (e.provider)
+                byProviderMeasured[e.provider] = (byProviderMeasured[e.provider] || 0) + cost;
+        }
+        else {
+            estimatedCalls += 1;
+            estimatedCost += cost;
+        }
     }
     const recent = entries.slice(-50).reverse().map((e) => ({
         provider: e.provider,
@@ -756,6 +773,7 @@ function readCostData() {
         costUsd: e.costUsd,
         totalTokens: e.totalTokens,
         timestamp: e.timestamp,
+        measured: e.measured === true,
     }));
     return {
         totalRequests: entries.length,
@@ -763,6 +781,11 @@ function readCostData() {
         totalTokens,
         byProvider,
         byModel,
+        byProviderMeasured,
+        measuredCalls,
+        estimatedCalls,
+        measuredCost: Math.round(measuredCost * 100000) / 100000,
+        estimatedCost: Math.round(estimatedCost * 100000) / 100000,
         recent,
     };
 }
@@ -922,6 +945,11 @@ function readModelRegistryData() {
             lastVerifiedAt: e.lastVerifiedAt ?? 0,
             lastError: e.lastError,
             source: e.source,
+            // M2.2: measured wire-token EMAs — the panel flags which provider ×
+            // model drive their cost score from REAL usage data.
+            measuredInputTokens: e.measuredInputTokens,
+            measuredOutputTokens: e.measuredOutputTokens,
+            measuredSamples: e.measuredSamples,
         });
     }
     const providers = [...byProvider.entries()].map(([provider, models]) => {
@@ -968,8 +996,10 @@ function readQuotaData() {
     if (!data?.entries) {
         // Failover timeline can exist even when the ledger has no usage entries
         // (chat records failover events on auth/rate-limit failures without a
-        // prior successful call) — always include events.
-        return { enabled: false, entries: [], events: readQuotaEvents(), updatedAt: Date.now() };
+        // prior successful call) — always include events. Also always ship
+        // parkedAccounts as an empty array so the panel can iterate safely
+        // against an older ledger that predates multi-account rotation.
+        return { enabled: false, entries: [], events: readQuotaEvents(), parkedAccounts: [], updatedAt: Date.now() };
     }
     const now = Date.now();
     const entries = Object.values(data.entries)
@@ -1012,6 +1042,29 @@ function readQuotaData() {
     // Failover timeline (assessment #7): events appended by the ledger's
     // park/release/window-roll paths + chat's mid-session failover bookkeeping.
     const events = readQuotaEvents();
+    // M2.3/M2.4: parked multi-account keys (fingerprints only — the ledger never
+    // stores raw keys). Surfacing them makes key rotation visible: which account
+    // of a provider is skipped predictively and why. The ledger persists
+    // `accounts: { provider: { accountId: { parkedUntil, reason } } }`.
+    const rawAccounts = data.accounts;
+    const parkedAccounts = [];
+    if (rawAccounts) {
+        for (const [provider, accounts] of Object.entries(rawAccounts)) {
+            for (const [accountId, state] of Object.entries(accounts || {})) {
+                const parkedUntil = state?.parkedUntil || 0;
+                if (parkedUntil > now) {
+                    parkedAccounts.push({
+                        provider,
+                        accountId,
+                        reason: state?.reason,
+                        parkedUntil,
+                        remainingMs: parkedUntil - now,
+                    });
+                }
+            }
+        }
+        parkedAccounts.sort((a, b) => a.provider.localeCompare(b.provider) || b.remainingMs - a.remainingMs);
+    }
     return {
         enabled: entries.length > 0,
         entries,
@@ -1021,6 +1074,7 @@ function readQuotaData() {
         paidRequests,
         estimatedSavedUsd,
         events,
+        parkedAccounts,
         updatedAt: now,
     };
 }

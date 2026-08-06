@@ -44,11 +44,25 @@ export interface QuotaEntry {
     /** Epoch ms until which the entry is explicitly parked (0 = not parked). */
     cooldownUntil: number;
 }
+/**
+ * M2.3 multi-account state for ONE provider key (never stores the raw key —
+ * only a stable fingerprint, e.g. `accountIdForKey`). Lets the failover
+ * runner rotate to another key of the same provider when one account is
+ * rate-limited/authed-out, instead of switching providers.
+ */
+export interface AccountState {
+    /** Epoch ms until which this account/key is parked (0 = not parked). */
+    parkedUntil: number;
+    /** Short reason, e.g. 'rate-limit' | 'auth' | 'cooldown'. */
+    reason?: string;
+}
 /** Persisted ledger state. */
 export interface QuotaLedgerData {
     version: number;
     /** Key: `${provider}|${model}` */
     entries: Record<string, QuotaEntry>;
+    /** M2.3: provider → account fingerprint → parked state (optional, additive). */
+    accounts?: Record<string, Record<string, AccountState>>;
 }
 /** Computed status for one entry (dashboard / CLI / tests). */
 export interface QuotaStatus {
@@ -124,6 +138,14 @@ export declare class QuotaLedger {
     parkProvider(provider: string, until: number, reason?: string): void;
     /** Clear an explicit cooldown for a provider (manual re-enable). */
     releaseProvider(provider: string): void;
+    /** Park a single provider account/key until an epoch ms (rate-limit/auth). */
+    parkAccount(provider: string, accountId: string, until: number, reason?: string): void;
+    /** Clear a single account's park (e.g. a later call with the key succeeded). */
+    releaseAccount(provider: string, accountId: string): void;
+    /** Whether a specific provider account/key is currently parked. */
+    isAccountParked(provider: string, accountId: string): boolean;
+    /** Fingerprints of all currently-parked accounts for a provider. */
+    getParkedAccounts(provider: string): Set<string>;
     /**
      * Append an event to the quota failover timeline (quota-events.jsonl,
      * capped at MAX_EVENTS). Best-effort: a failed write must never break
@@ -194,6 +216,12 @@ export declare class QuotaLedger {
     /** Human-readable summary (CLI). */
     formatStatus(configManager?: ConfigManager): string;
 }
+/**
+ * M2.3: stable fingerprint for a provider API key — the ledger (and every
+ * diagnostic surface) NEVER stores raw keys, only this. FNV-1a 32-bit:
+ * cheap, deterministic, collision-safe enough for account identity.
+ */
+export declare function accountIdForKey(key: string): string;
 /** Get or create the QuotaLedger singleton. */
 export declare function getQuotaLedger(): QuotaLedger;
 /** Reset the singleton (useful for testing). */

@@ -15,13 +15,15 @@ import { Orchestrator } from '../agents/orchestrator.js';
 import { printOrchestrationResult } from './execute.js';
 import { PipelineBoard } from './pipeline-board.js';
 import { applyActiveModel } from './model.js';
-import { getProviderFallback, classifyFallbackError, isRetryableError, recordRegistryFailure, recordRegistrySuccess } from '../learning/provider-fallback.js';
+import { getProviderFallback, classifyFallbackError, isRetryableError, recordRegistrySuccess } from '../learning/provider-fallback.js';
+import { recordActionFailure, TRANSIENT_FAILURE_EXCLUSION_MS } from '../learning/failure-bookkeeping.js';
 import { getAutoRouter, isAutoModel, isAutoProvider } from '../learning/auto-router.js';
-import { getQuotaLedger } from '../learning/quota-ledger.js';
+import { estimateTokens } from '../learning/cost-tracker.js';
 import { getModelRegistry } from '../learning/model-registry.js';
 import { refreshModelRegistry, spotCheckModel } from '../inference/model-probe.js';
 import { recordRoutingDecision } from '../learning/routing-history.js';
 import { shouldConfirmFailover, promptFailoverChoice } from './failover-prompt.js';
+import { runSingleShotAuto } from './failover-runner.js';
 /**
  * Detect error type and prompt the user for a recovery action.
  * This is a standalone function (not a method) for clarity.
@@ -214,22 +216,9 @@ export class ChatCommand extends BaseCommand {
      * Cleared when the chat exits.
      */
     sessionFailedProviders = new Map();
-    /**
-     * How long a rate-limit failure excludes a provider from auto routing (ms).
-     * Aligned with the circuit breaker's COOLDOWN_DURATION_MS (120s) so the
-     * session-level exclusion and the breaker's scoring cooldown expire together
-     * — one consistent recovery window, not two competing ones.
-     */
-    static RATE_LIMIT_EXCLUSION_MS = 2 * 60 * 1000;
-    /**
-     * How long a server/network/timeout/unknown failure excludes a provider
-     * from auto routing (ms). Shorter than rate-limit so a flaky-but-alive
-     * provider is re-admitted quickly, but long enough that the very NEXT
-     * message never re-picks a provider that just failed (the old behavior:
-     * only auth and rate-limit were session-excluded, so an unknown-classified
-     * failure re-picked the dead provider on every single message).
-     */
-    static TRANSIENT_FAILURE_EXCLUSION_MS = 60 * 1000;
+    // RATE_LIMIT_EXCLUSION_MS + TRANSIENT_FAILURE_EXCLUSION_MS now live in
+    // src/learning/failure-bookkeeping.ts (shared with every action) — see
+    // recordActionFailure. Behavior is identical: same values, same semantics.
     /**
      * Providers that failed TRANSIENTLY this session (server/network/timeout/
      * unknown). Tracked separately from the exclusion map so that when a
@@ -384,7 +373,11 @@ export class ChatCommand extends BaseCommand {
             // Runs BEFORE the dev-mode check so a creation request in auto mode uses
             // the routed provider/model — never a literal 'auto' or a stale default.
             if (autoMode) {
-                const routed = await this.routeMessageAuto(message);
+                // M2.5: estimate the growing conversation (prior turns + this message)
+                // so context-fit routing reacts to a long session, not just the task
+                // text. Estimation only — never a hard block.
+                const historyEstimate = estimateTokens(history.map((h) => h.content).join('\n') + '\n' + message);
+                const routed = await this.routeMessageAuto(message, [], { contextHintTokens: historyEstimate });
                 type = routed.type;
                 provider = routed.provider;
                 effectiveModel = routed.model;
@@ -733,82 +726,20 @@ export class ChatCommand extends BaseCommand {
     /**
      * Record an auto-mode provider failure so the session fails over instead of
      * getting stuck on a broken provider (the core of "auto routing should pick
-     * another provider when the current one dies mid-session"):
+     * another provider when the current one dies mid-session").
      *
-     * - Definitive failures — auth (expired token/key) and rate-limit (exhausted
-     *   quota, "token limit exceeded") — exclude the provider for the WHOLE
-     *   session, so the next message never re-picks it and re-fails.
-     * - EVERY failure also feeds the shared circuit breaker, so the auto router
-     *   deprioritizes the provider by scoring even for transient 5xx/network
-     *   errors (which need repeated failures before cooldown opens).
-     * - Transient failures (server/network/timeout/unknown) get a SHORT session
-     *   exclusion so the very next message skips the provider, while still
-     *   re-admitting it quickly if it recovers.
-     * - EVERY failure ALSO writes through to the persistent Model Availability
-     *   Registry (telemetry) so a dead provider×model is remembered across chat
-     *   sessions and skipped predictively on the next pick — the registry's
-     *   FAISS/JSON health data is what makes routing fast, and this is the feed
-     *   that keeps it fresh.
-     *
-     * Best-effort: never throws, so failover bookkeeping can't crash the chat.
+     * Delegates to the SHARED failure-bookkeeping helper (Nuvira-Router M0.2
+     * Stage A) so every action composes the exact same bookkeeping: session
+     * exclusion (auth = whole session, rate-limit = short cooldown, transient =
+     * short cooldown + re-verify marker), quota-ledger parking on rate-limit,
+     * registry write-through (per-action telemetry), quota-timeline event, and
+     * the shared circuit breaker. Best-effort: never throws.
      */
-    recordAutoProviderFailure(providerType, err, model) {
-        const failureKind = classifyFallbackError(err);
-        if (failureKind === 'auth') {
-            // Expired token/key — definitive for the rest of the session
-            this.sessionFailedProviders.set(providerType, Number.MAX_SAFE_INTEGER);
-        }
-        else if (failureKind === 'rate-limit') {
-            // Exhausted quota / token-limit — usually transient, so only a short
-            // cooldown before the provider is re-admitted to auto routing.
-            this.sessionFailedProviders.set(providerType, Date.now() + ChatCommand.RATE_LIMIT_EXCLUSION_MS);
-            // Park the provider in the CENTRAL quota ledger until its reset window
-            // rolls so the exclusion survives across chat sessions (assessment #4:
-            // never surface quota errors — keep routing around them). The ledger is
-            // read by routeMessageAuto before every pick, so the next session skips
-            // the exhausted provider predictively instead of failing reactively.
-            try {
-                const limit = this.configManager.getAll().routing?.quota?.[providerType];
-                const windowMs = limit?.windowMs ?? 24 * 60 * 60 * 1000;
-                getQuotaLedger().parkProvider(providerType, Date.now() + windowMs, failureKind);
-            }
-            catch {
-                // Best-effort — ledger bookkeeping must not crash chat
-            }
-        }
-        else {
-            // Server / network / timeout / unknown — transient but definitive enough
-            // that the next message shouldn't re-pick this provider. Short cooldown,
-            // then re-admit (it may have recovered). Tracked as transient so the
-            // expiry path re-verifies with a spot-check before re-admitting.
-            this.sessionFailedProviders.set(providerType, Date.now() + ChatCommand.TRANSIENT_FAILURE_EXCLUSION_MS);
-            this.sessionTransientFailedProviders.add(providerType);
-        }
-        // Write-through to the persistent Model Availability Registry so this
-        // provider×model is remembered across sessions — via the SHARED helper
-        // every routing path uses (execute/orchestrator + the fallback commands
-        // plan/skill/learn/edit), so a provider that dies here is skipped
-        // predictively by ALL actions on the next pick. auth/rate-limit failures
-        // flip the entry to `unavailable` (rate-limit also parks it until the
-        // reset window), which `getBlockedProviders()` feeds back into routing as
-        // a predictive skip — the registry learns from real usage exactly as
-        // designed, no separate probe needed.
-        recordRegistryFailure(providerType, model, err, failureKind, 'chat');
-        // Record the failover in the QUOTA TIMELINE (assessment #7: show users
-        // when failover occurred and why). Auth + rate-limit failures both show up
-        // so the dashboard's Failover Timeline explains every mid-session swap.
-        try {
-            getQuotaLedger().recordEvent('failover', providerType, failureKind);
-        }
-        catch {
-            // Best-effort — timeline bookkeeping must not crash chat
-        }
-        try {
-            getProviderFallback(this.configManager).recordFailure(providerType);
-        }
-        catch {
-            // Best-effort — circuit-breaker bookkeeping must not crash chat
-        }
+    recordAutoProviderFailure(providerType, err, model, apiKey) {
+        recordActionFailure({
+            sessionFailedProviders: this.sessionFailedProviders,
+            sessionTransientFailedProviders: this.sessionTransientFailedProviders,
+        }, providerType, err, this.configManager, { model, action: 'chat', apiKey });
     }
     async showModelPicker() {
         return showModelPicker(this.configManager);
@@ -826,7 +757,7 @@ export class ChatCommand extends BaseCommand {
      * the ranked candidates and picks the first one whose isAvailable() passes —
      * so Auto routing never sends a request to a provider that would 401.
      */
-    async routeMessageAuto(message, excludeProviders = []) {
+    async routeMessageAuto(message, excludeProviders = [], opts) {
         const routing = this.configManager.getAll().routing || {};
         // Feed the SHARED circuit breaker into the router so a provider that has
         // failed repeatedly (recorded by recordFailure below) is deprioritized by
@@ -862,6 +793,11 @@ export class ChatCommand extends BaseCommand {
             circuitBreakerStatus,
             quotaStatus,
             allowPaid: routing.allowPaid,
+            // M2.5 context preflight: the caller passes its real estimated payload
+            // (conversation history + message, or the built full prompt) so the
+            // router's soft context-fit signal sees the ACTUAL prompt size — a
+            // growing session naturally routes toward big-window providers.
+            contextHintTokens: opts?.contextHintTokens,
         }, this.configManager);
         // Walk the ranked candidates (winner first) and return the first available
         // provider — never a provider that lacks a key or endpoint. Providers that
@@ -922,7 +858,7 @@ export class ChatCommand extends BaseCommand {
                 // throttle) — that's healthy, so treat it as a pass too.
                 if (outcome !== 'verified' && outcome !== 'skipped') {
                     // Still down — keep it excluded for another transient window.
-                    this.sessionFailedProviders.set(providerType, Date.now() + ChatCommand.TRANSIENT_FAILURE_EXCLUSION_MS);
+                    this.sessionFailedProviders.set(providerType, Date.now() + TRANSIENT_FAILURE_EXCLUSION_MS);
                     this.sessionTransientFailedProviders.add(providerType);
                 }
             }
@@ -1024,85 +960,21 @@ export class ChatCommand extends BaseCommand {
      * This walks the ranked candidates and returns the first successful response,
      * so Auto routing NEVER crashes the CLI — it always answers from a working
      * provider.
+     *
+     * Delegates to the SHARED single-shot runner (Nuvira-Router M0.2 Stage B) so
+     * every action walks candidates identically — behavior-identical to the
+     * previous inline walk (same order, same telemetry, same confirmation
+     * semantics).
      */
     async generateAutoWithFailover(message, prompt, options, cacheEnabled = true) {
-        const first = await this.routeMessageAuto(message);
-        const attempted = new Set();
-        let lastError = new Error(`No auto-routed provider succeeded for: ${message.slice(0, 80)}`);
-        for (const candidateType of [first.type, ...first.ranked]) {
-            if (attempted.has(candidateType))
-                continue;
-            attempted.add(candidateType);
-            // Hoisted so the failure write-through below can attribute the exact
-            // model that was attempted (registry telemetry needs provider × model).
-            let candidateModel;
-            try {
-                const resolved = resolveProvider(this.configManager, candidateType);
-                if (!(await resolved.provider.isAvailable())) {
-                    logger.warn(`   ⚠️ ${candidateType} is not available — trying the next auto candidate...`);
-                    continue;
-                }
-                const desired = candidateType === first.type
-                    ? first.model
-                    : getAutoRouter().resolveModel(candidateType, 'chat', this.configManager);
-                const model = await resolveWorkingModel(resolved.provider, candidateType, desired);
-                candidateModel = model;
-                const result = await this.generateWithContext(resolved.provider, prompt, resolved.type, { ...options, model }, cacheEnabled);
-                if (candidateType !== first.type) {
-                    logger.success(`✅ Auto failover: answered from ${resolved.provider.name} (${model}) after ${first.type} failed`);
-                    // Keep the dashboard audit trail accurate: the winner's route was
-                    // recorded by the initial routeMessageAuto, but the actual answer
-                    // came from this candidate.
-                    recordRoutingDecision({
-                        source: 'chat',
-                        agentType: 'chat',
-                        task: message,
-                        complexity: first.complexity,
-                        provider: candidateType,
-                        model,
-                        score: first.score,
-                    });
-                }
-                return result;
-            }
-            catch (err) {
-                lastError = err;
-                // Single-shot auto path: definitive failures (auth / exhausted quota)
-                // exclude the provider for the session + feed the circuit breaker so a
-                // follow-up interactive session (or the next message) skips it instead
-                // of failing again. Also write-throughs to the Model Registry so the
-                // provider×model is remembered across sessions.
-                this.recordAutoProviderFailure(candidateType, err, candidateModel);
-                const msg = err instanceof Error ? err.message : String(err);
-                // Opt-in confirmation (routing.promptOnFailover): when the user wants
-                // control over failover, ask before auto-switching to the next
-                // candidate. 'manual' surfaces the original error instead of silently
-                // switching — single-shot has no interactive recovery, so the CLI
-                // exits with the failure (matching non-auto behavior).
-                const order = [first.type, ...first.ranked];
-                const nextCandidate = order.find((c) => !attempted.has(c));
-                // Only prompt when stdin is a TTY — in a CI/piped context an inquirer
-                // prompt would block forever, so fall through to silent auto-failover
-                // (the pre-existing safe behavior for non-interactive runs).
-                if (nextCandidate && shouldConfirmFailover(this.configManager.getAll()) && process.stdin.isTTY) {
-                    let nextProviderName = nextCandidate;
-                    try {
-                        nextProviderName = resolveProvider(this.configManager, nextCandidate).provider.name;
-                    }
-                    catch {
-                        // Keep the raw type name if the provider can't resolve.
-                    }
-                    const nextModel = nextCandidate === first.type
-                        ? first.model
-                        : getAutoRouter().resolveModel(nextCandidate, 'chat', this.configManager);
-                    const choice = await promptFailoverChoice(candidateType, nextProviderName, nextModel);
-                    if (choice === 'manual')
-                        throw lastError;
-                }
-                logger.warn(`   ⚠️ ${candidateType} failed (${msg.slice(0, 160)}) — trying the next auto candidate...`);
-            }
-        }
-        throw lastError;
+        return runSingleShotAuto({
+            action: 'chat',
+            task: message,
+            configManager: this.configManager,
+            route: (excludeProviders) => this.routeMessageAuto(message, excludeProviders, { contextHintTokens: estimateTokens(prompt) }),
+            generate: (provider, type, model, apiKey) => this.generateWithContext(provider, prompt, type, { ...options, model, apiKey }, cacheEnabled),
+            recordFailure: (type, model, err, apiKey) => this.recordAutoProviderFailure(type, err, model, apiKey),
+        });
     }
     /**
      * Read multi-line input from stdin using readline.

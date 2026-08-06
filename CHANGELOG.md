@@ -9,6 +9,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.58.0] - 2026-08-06
+
+> First release to ship the Nuvira-Router P2 routing work below. Also carries
+> the `buff dashboard --force` + `--port` fixes staged as v1.57.0 (see that
+> entry) — v1.57.0 was bumped in `package.json` but never published, so all of
+> it lands here. 3,159 root tests pass (+ dashboard component tests).
+
 ### Added — Nuvira-Router P2 (capability-aware scoring + wire-token metering)
 
 - **M2.5 — Context-length preflight** (`src/learning/auto-router.ts`,

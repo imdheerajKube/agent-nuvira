@@ -16,7 +16,7 @@
  *
  * Called by the `agent-nuvira execute` CLI command.
  */
-import { existsSync, readFileSync, writeFileSync, mkdirSync, readdirSync } from 'node:fs';
+import { existsSync, readFileSync, writeFileSync, mkdirSync, readdirSync, statSync } from 'node:fs';
 import { dirname, isAbsolute, join, relative, resolve } from 'node:path';
 import { spawnSync } from 'node:child_process';
 import inquirer from 'inquirer';
@@ -40,7 +40,8 @@ import { scanForInjections, formatScanReport } from '../security/scanner.js';
 import { getAutoRouter, isAutoModel, isAutoProvider } from '../learning/auto-router.js';
 import { analyzeComplexity } from '../learning/hybrid-router.js';
 import { getModelRegistry } from '../learning/model-registry.js';
-import { recordRegistryFailure, recordRegistrySuccess } from '../learning/provider-fallback.js';
+import { recordRegistrySuccess } from '../learning/provider-fallback.js';
+import { recordActionFailure } from '../learning/failure-bookkeeping.js';
 import { resolveWorkingModel } from '../inference/model-validator.js';
 import { refreshModelRegistry } from '../inference/model-probe.js';
 import { recordRoutingDecision } from '../learning/routing-history.js';
@@ -110,6 +111,20 @@ export class Orchestrator {
      * maybeFireColdStartProbe). A long dev-mode session only pays for it once.
      */
     coldStartProbeFired = false;
+    /**
+     * Per-pipeline failure session: the state recordActionFailure mutates when
+     * a per-task LLM call fails, and resolveAutoRoutingDecision CONSULTS it
+     * before every task (M0.3) — a provider that failed earlier in this pipeline
+     * (auth = rest of pipeline, rate-limit/transient = cooldown) never wins a
+     * subsequent task; the decision sinks to the best-ranked non-excluded
+     * provider. The registry/quota/breaker write-throughs it composes are also
+     * read by the router before every task (parked providers sink below healthy
+     * ones), so both mechanisms agree.
+     */
+    failureSession = {
+        sessionFailedProviders: new Map(),
+        sessionTransientFailedProviders: new Set(),
+    };
     /** Execution telemetry accumulator for the current pipeline */
     stats = {
         llmCalls: 0,
@@ -243,6 +258,12 @@ export class Orchestrator {
         // On RESUME the restored vault already carries the routingContext from the
         // original run — recomputing it here would overwrite the checkpointed
         // metadata (and the planner isn't re-run anyway, so the override is moot).
+        // No contextHintTokens for the planner: its real payload (file tree, MCP
+        // tools, memory) isn't known at resolve time — the tree is built AFTER this
+        // call — and a goal-only hint would equal the router's default
+        // estimateTokens(description), a no-op. Per-task decisions DO pass the
+        // workspace payload estimate (see executeSingleTask), which is where the
+        // signal differentiates.
         const plannerRoutingDecision = autoRoutingActive && !resumed
             ? this.resolveAutoRoutingDecision({ agentType: 'planner', description: goal }, options)
             : undefined;
@@ -983,7 +1004,16 @@ export class Orchestrator {
                 output = await provider.generate(prompt, mergedOptions);
             }
             catch (err) {
-                recordRegistryFailure(providerType, mergedOptions.model, err, undefined, 'execute');
+                // FULL shared bookkeeping (Nuvira-Router M0.2 Stage C): the previous
+                // bare recordRegistryFailure only updated health scores — a mid-pipeline
+                // 429 now also parks the provider in the quota ledger (so the NEXT task
+                // in this pipeline skips it predictively), records the quota-timeline
+                // failover event, feeds the circuit breaker, and applies the
+                // model-not-found → definitive-unavailable rule. Same classification.
+                recordActionFailure(this.failureSession, providerType, err, this.configManager, {
+                    model: mergedOptions.model,
+                    action: 'execute',
+                });
                 throw err;
             }
             // Success attribution: this pipeline call just PROVED the provider ×
@@ -1155,7 +1185,15 @@ export class Orchestrator {
             const effectiveAgentType = strategy.effectiveAgentType || task.agentType;
             const agentModel = options.model || options.agentModels?.[effectiveAgentType] || options.agentModels?.[task.agentType];
             const agentCallLLM = autoRouting
-                ? this.createAutoRoutedLLM({ agentType: effectiveAgentType, description: task.description, complexity: task.complexity }, options)
+                ? this.createAutoRoutedLLM({
+                    agentType: effectiveAgentType,
+                    description: task.description,
+                    complexity: task.complexity,
+                    // M2.5: real payload estimate (goal + task + workspace context
+                    // files) so long-context pipelines route toward big-window
+                    // providers, not the tiny task-description estimate alone.
+                    contextHintTokens: this.estimateTaskPayloadTokens(vault, task.description, contextFiles),
+                }, options)
                 : agentModel
                     ? this.createLLMProvider({ ...options, model: agentModel })
                     : defaultCallLLM;
@@ -1477,6 +1515,29 @@ export class Orchestrator {
      * Uses the task description for complexity analysis and resolves the best
      * provider/model per agent type.
      */
+    /**
+     * M2.5: estimate the REAL prompt payload for a task — goal + task
+     * description + the workspace context files the agent will receive (sized by
+     * stat, the same chars→tokens heuristic as estimateTokens, without reading
+     * file contents). Passed as contextHintTokens so the context-fit signal
+     * differentiates per-task in multi-agent pipelines the way it does for chat's
+     * growing conversation history. Best-effort: any stat failure contributes 0
+     * (the router still falls back to the task-description estimate).
+     */
+    estimateTaskPayloadTokens(vault, taskDescription, contextFiles) {
+        // goal/description are pure string ops (can't throw); only statSync can —
+        // each file is guarded individually, so no outer guard needed.
+        let tokens = estimateTokens(vault.context.goal) + estimateTokens(taskDescription);
+        for (const file of contextFiles) {
+            try {
+                tokens += statSync(file).size / 4.5;
+            }
+            catch {
+                // Best-effort — a missing/unreadable file contributes nothing
+            }
+        }
+        return Math.ceil(tokens);
+    }
     resolveAutoRoutingDecision(task, options) {
         const routing = this.configManager.getAll().routing || {};
         // Quota-ledger parked providers sink below healthy ones — a provider whose
@@ -1504,18 +1565,59 @@ export class Orchestrator {
             complexityHint: task.complexity,
             quotaStatus,
             allowPaid: routing.allowPaid,
+            contextHintTokens: task.contextHintTokens,
         }, this.configManager);
-        // Record for the dashboard usage stats + audit trail
+        // ── Session-exclusion consultation (Nuvira-Router M0.3) ──────────────
+        // A provider that failed EARLIER in this pipeline (auth = rest of the
+        // pipeline, rate-limit/transient = short cooldown) is excluded from the
+        // resolve-time winner, exactly like chat's walk skips session-failed
+        // providers. Without this, the registry/quota write-throughs from Stage C
+        // are learned but a task whose router pick IS the dead provider would
+        // still fail into it once per task before the walk learns again. Sink the
+        // decision to the best-ranked NON-excluded provider.
+        const exclusionNow = Date.now();
+        const isActiveExclusion = (p) => {
+            const expiresAt = this.failureSession.sessionFailedProviders.get(p);
+            return expiresAt !== undefined && expiresAt > exclusionNow;
+        };
+        let effective = decision;
+        if (isActiveExclusion(decision.provider)) {
+            const next = decision.ranked.find((r) => !isActiveExclusion(r.provider));
+            if (next) {
+                const keptRanked = decision.ranked.filter((r) => !isActiveExclusion(r.provider));
+                effective = {
+                    ...decision,
+                    provider: next.provider,
+                    model: getAutoRouter().resolveModel(next.provider, task.agentType, this.configManager),
+                    score: next.score,
+                    ranked: keptRanked,
+                    // Keep the fallback chain consistent with the sunk pick — never walk
+                    // back into the excluded provider via repair/escalation/switch.
+                    fallbackChain: decision.fallbackChain.filter((c) => !isActiveExclusion(c.provider)),
+                    explanation: `${decision.explanation} — ${decision.provider} excluded this pipeline (failed earlier); sank to ${next.provider}.`,
+                };
+                if (options.verbose) {
+                    logger.warn(`      ⚠️ ${decision.provider} excluded this pipeline (failed earlier) — routing ${task.agentType} to ${next.provider}`);
+                }
+            }
+            else if (options.verbose) {
+                // Winner + every ranked provider excluded — no sink possible. The pick
+                // falls through to the excluded winner and will fail once (graceful
+                // degradation, matching chat's exhausted-candidates behavior).
+                logger.warn(`      ⚠️ ${decision.provider} excluded this pipeline (failed earlier) and no non-excluded ranked provider remains — trying it once`);
+            }
+        }
+        // Record for the dashboard usage stats + audit trail (the EFFECTIVE pick)
         recordRoutingDecision({
             source: 'orchestrator',
             agentType: task.agentType,
             task: task.description,
-            complexity: decision.complexity,
-            provider: decision.provider,
-            model: decision.model,
-            score: decision.score,
+            complexity: effective.complexity,
+            provider: effective.provider,
+            model: effective.model,
+            score: effective.score,
         });
-        return decision;
+        return effective;
     }
     createAutoRoutedLLM(task, options) {
         const decisionOverride = this.routingDecisionOverrides.get(task.agentType);

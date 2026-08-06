@@ -43,6 +43,7 @@ import { getAgentStats } from './agent-stats.js';
 import { getRouterBandit, DEFAULT_MIN_SAMPLES } from './router-bandit.js';
 import { getRouterPromotion } from './router-promotion.js';
 import { getModelRegistry } from './model-registry.js';
+import { estimateTokens } from './cost-tracker.js';
 import { PREFERRED_MODELS } from '../inference/model-validator.js';
 import { logger } from '../utils/logger.js';
 // ─── Constants ──────────────────────────────────────────────────────────────
@@ -58,6 +59,40 @@ export const DIMENSION_LABELS = {
     privacy: 'privacy',
     reliability: 'reliability',
 };
+/**
+ * Thrown by resolve() when a PII-domain task matches a configured governance
+ * PII pattern and EVERY candidate provider fails the privacy bar. The PII
+ * policy is a HARD gate — "no PII to low-privacy cloud" holds even when it
+ * eliminates every provider, so the router refuses to serve a violator and
+ * lets the caller surface the policy block to the user.
+ */
+export class PIIPolicyError extends Error {
+    /** Minimum privacy score the policy required (0–1). */
+    requiredPrivacy;
+    constructor(requiredPrivacy) {
+        super(`PII governance policy: no provider meets the privacy requirement (privacy ≥ ${requiredPrivacy}) for this task — refusing to route PII to a low-privacy provider.`);
+        this.name = 'PIIPolicyError';
+        this.requiredPrivacy = requiredPrivacy;
+    }
+}
+/**
+ * Thrown by resolve() when an ADMIN governance rule (provider allow/deny
+ * list, model allow/deny list, or the admin max-cost cap) eliminates EVERY
+ * candidate provider. Like PII, these are HARD policy gates: falling back to
+ * the full ranking would resurrect a provider the admin policy rules out, so
+ * the router refuses to serve a policy-violating provider and lets the caller
+ * surface the block (chat/plan render the message, `models explain` renders
+ * the full audit trail).
+ */
+export class GovernancePolicyError extends Error {
+    /** Providers eliminated by the policy, with the reason for each (audit). */
+    blocked;
+    constructor(blocked) {
+        super(`Governance policy: every candidate provider was eliminated by an admin rule (${blocked.length} blocked: ${blocked.map((b) => b.provider).join(', ')}) — refusing to serve a policy-violating provider.`);
+        this.name = 'GovernancePolicyError';
+        this.blocked = blocked;
+    }
+}
 // ─── Provider Capability Profiles ───────────────────────────────────────────
 //
 // Static baseline profiles for the built-in providers. These encode the
@@ -82,6 +117,89 @@ const DEFAULT_PROFILES = {
     gemini: { reasoning: 0.85, speed: 0.80, cost: 0.40, privacy: 0.10, reliability: 0.88 },
     openrouter: { reasoning: 0.95, speed: 0.55, cost: 0.15, privacy: 0.10, reliability: 0.78 },
 };
+// ─── Capability-aware scoring (Nuvira-Router P2 M2.1) ───────────────────────
+//
+// A SOFT signal on top of the five weighted dimensions: which capabilities a
+// task ACTUALLY needs (from its task type) vs which capabilities a provider
+// offers (from its profile). This is deliberately a small, clamped multiplier
+// — it nudges equally-scored providers toward the one whose strengths match
+// the task (a code-review wants reasoning, a quick edit wants speed), but it
+// can never overturn a large dimension-weight advantage or break the 0–1
+// score invariant.
+/** Model-catalog-style tags a task type genuinely needs. */
+const TASK_CAPABILITY_TAGS = {
+    plan: ['reasoning'],
+    // Code generation cares about correctness, not latency — every code-capable
+    // provider fits equally, so the signal stays neutral for writer tasks and
+    // never overturns the dimension-weighted ranking.
+    'simple-edit': ['code'],
+    'code-review': ['code', 'reasoning'],
+    'test-generation': ['code'],
+    debug: ['code', 'reasoning'],
+    'context-gather': ['fast'],
+    default: ['chat'],
+};
+/** Model-catalog-style tags each built-in provider offers (from its profile). */
+const PROVIDER_CAPABILITY_TAGS = {
+    local: ['chat', 'code'],
+    groq: ['chat', 'code', 'fast'],
+    nim: ['chat', 'code', 'reasoning'],
+    gemini: ['chat', 'code', 'reasoning', 'fast', 'vision'],
+    openrouter: ['chat', 'code', 'reasoning', 'vision', 'agentic'],
+};
+/**
+ * Offered tags for a provider: static catalog tags UNION tags derived from
+ * the capability profile (so custom/gateway providers are scored by their
+ * REAL profile, not a hardcoded map — a custom strong-reasoning provider gets
+ * a 'reasoning' tag even though no static entry lists it).
+ */
+function providerOfferedTags(provider, caps) {
+    const staticTags = PROVIDER_CAPABILITY_TAGS[provider] || [];
+    const derived = [];
+    if (caps) {
+        if (caps.reasoning >= 0.75)
+            derived.push('reasoning');
+        if (caps.speed >= 0.9)
+            derived.push('fast');
+        // 'cheap'/'reliable' are derived for FUTURE task types — no current task
+        // requires them, so they don't affect today's fit computation (kept for
+        // completeness; the matched-filter simply never hits them yet).
+        if (caps.cost >= 0.85)
+            derived.push('cheap');
+        if (caps.reliability >= 0.85)
+            derived.push('reliable');
+    }
+    return [...new Set([...staticTags, ...derived])];
+}
+/**
+ * 0–1 fit between a task type's required capabilities and a provider's
+ * offered tags: matched-required / total-required. 1 = the provider covers
+ * every capability the task needs; 0 = none.
+ *
+ * A provider with NO assessable profile (truly unknown, e.g. a brand-new
+ * gateway with a neutral profile) returns 1 — neutral: it can host any model,
+ * so it is never unfairly boosted OR penalized until real usage data exists.
+ */
+export function capabilityFitScore(taskType, provider, caps) {
+    const required = TASK_CAPABILITY_TAGS[taskType] || TASK_CAPABILITY_TAGS.default;
+    const offered = providerOfferedTags(provider, caps);
+    // No assessable tags (unknown provider with no static entry and a neutral
+    // profile) → neutral fit: neither boosted nor penalized.
+    if (offered.length === 0)
+        return 1;
+    if (required.length === 0)
+        return 1;
+    const matched = required.filter((tag) => offered.includes(tag)).length;
+    return matched / required.length;
+}
+/**
+ * Apply the soft capability-fit multiplier, clamped so the score never
+ * exceeds 1 (the 0–1 invariant the bandit and tests rely on). Range:
+ * no-fit ≈ 0.85×, perfect-fit ≈ 1.10× (then clamped).
+ */
+export function applyCapabilityFit(score, fit) {
+    return Math.min(1, score * (0.9 + 0.2 * fit));
+}
 /** Built-in provider ids considered by default. */
 export const DEFAULT_AUTO_PROVIDERS = Object.keys(DEFAULT_PROFILES);
 // ─── Real Provider Pricing ──────────────────────────────────────────────────
@@ -103,23 +221,80 @@ const COST_REFERENCE_USD = 0.01;
 /** Typical call size used for cost scoring (input/output tokens). */
 const TYPICAL_INPUT_TOKENS = 2000;
 const TYPICAL_OUTPUT_TOKENS = 500;
+// ─── M2.5 Context preflight — nominal input context windows ────────────────
+//
+// Approximate NOMINAL input context windows (tokens) per model, used ONLY for
+// the soft utilization estimate. These are published model specs — the router
+// never treats them as hard limits (models may exceed nominal windows and
+// providers may advertise more; estimation only). Config overrides via
+// `routing.contextWindows[model]` (or `[provider]` as a provider-level
+// default) always win.
+/** Per-model nominal input context window (tokens). */
+export const MODEL_CONTEXT_WINDOWS = {
+    // Gemini 2.x — 1M token context (Flash + Pro variants)
+    'gemini-2.5-flash': 1_048_576,
+    'gemini-2.0-flash': 1_048_576,
+    'gemini-1.5-flash': 1_048_576,
+    // Groq-hosted Llama / GPT-OSS — 128K context
+    'llama-3.3-70b-versatile': 131_072,
+    'llama-3.1-8b-instant': 131_072,
+    'openai/gpt-oss-20b': 131_072,
+    // NIM-hosted Llama — 128K context
+    'meta/llama-3.3-70b-instruct': 128_000,
+    'meta/llama-3.1-8b-instruct': 128_000,
+    // OpenRouter pass-through — GPT-4o-mini / Llama 128K, Mistral 32K
+    'openai/gpt-4o-mini': 128_000,
+    'meta-llama/llama-3.3-70b-instruct': 128_000,
+    'mistralai/mistral-7b-instruct': 32_000,
+};
+/** Provider-level fallback when the exact model isn't in the table. */
+export const PROVIDER_CONTEXT_WINDOWS = {
+    local: 8_192, // Ollama default varies 4K–128K by model; assume modest
+    groq: 131_072,
+    gemini: 1_048_576,
+    nim: 128_000,
+    openrouter: 128_000,
+};
+/** Fallback for unknown providers — large enough to rarely trigger a penalty. */
+export const DEFAULT_CONTEXT_WINDOW = 32_768;
+/**
+ * M2.5 context preflight — soft utilization-based fit (0–1, higher = better).
+ * NEVER a hard block: even a prompt that exceeds the nominal window only caps
+ * the penalty, and unknown/zero windows are neutral (fit 1). Neutral below
+ * 50% utilization so normal-size tasks never shift a ranking; ramps linearly
+ * to a 35% cap at ≥200% utilization.
+ */
+export function computeContextFit(promptTokens, windowTokens) {
+    if (!windowTokens || windowTokens <= 0)
+        return 1;
+    const utilization = Math.max(0, promptTokens) / windowTokens;
+    const penalty = Math.max(0, Math.min(0.35, (utilization - 0.5) / 1.5));
+    return 1 - penalty;
+}
 /**
  * Estimate the USD cost of a typical call for a provider.
  * An optional pricing override (e.g., from `buff config set pricing.*`)
  * takes precedence over the built-in table.
+ *
+ * M2.2: when `measured` (real wire tokens from provider-reported usage) is
+ * available, it replaces the TYPICAL-token estimate — measured cost is the
+ * truth when the provider reports it.
  */
-export function estimateCallCostUsd(provider, pricing) {
+export function estimateCallCostUsd(provider, pricing, measured) {
     const p = pricing || PROVIDER_PRICING_PER_1K[provider] || { inputPer1K: 0.00010, outputPer1K: 0.00010 };
-    const inputCost = (TYPICAL_INPUT_TOKENS / 1000) * p.inputPer1K;
-    const outputCost = (TYPICAL_OUTPUT_TOKENS / 1000) * p.outputPer1K;
+    const inputTokens = measured ? measured.inputTokens : TYPICAL_INPUT_TOKENS;
+    const outputTokens = measured ? measured.outputTokens : TYPICAL_OUTPUT_TOKENS;
+    const inputCost = (inputTokens / 1000) * p.inputPer1K;
+    const outputCost = (outputTokens / 1000) * p.outputPer1K;
     return Math.round((inputCost + outputCost) * 100000) / 100000;
 }
 /**
  * Derive the 0–1 cost score (higher = cheaper) from real provider pricing.
  * Free providers (local, Gemini free tier) score 1.0.
+ * M2.2: measured tokens (when present) replace the typical-call estimate.
  */
-export function computeCostScore(provider, pricing) {
-    const costUsd = estimateCallCostUsd(provider, pricing);
+export function computeCostScore(provider, pricing, measured) {
+    const costUsd = estimateCallCostUsd(provider, pricing, measured);
     const score = 1 - costUsd / COST_REFERENCE_USD;
     return Math.max(0, Math.min(1, score));
 }
@@ -427,13 +602,53 @@ export class AutoModelRouter {
         if (runtime && options.verbose) {
             logger.info(`  📊 Runtime stats: ${runtime.summary}`);
         }
+        // M2.1 gate: `routing.capabilityFit` (default ON) makes the soft
+        // capability-fit signal reversible — set false to revert to pure
+        // dimension-weight scoring. Best-effort config read (mocks / plugin
+        // configs may lack getAll): never let the gate break routing.
+        let capabilityFitEnabled = true;
+        try {
+            capabilityFitEnabled = (configManager?.getAll?.()?.routing?.capabilityFit ?? true) !== false;
+        }
+        catch {
+            // Best-effort
+        }
+        // M2.4 governance: admin policy from `routing.governance`. Best-effort
+        // config read — an unset/empty policy is fully permissive (existing
+        // behavior unchanged). All violations are hard-eliminations inside the
+        // constraint slot below (never scored lower).
+        let governance;
+        try {
+            governance = configManager?.getAll?.()?.routing?.governance;
+        }
+        catch {
+            // Best-effort — policy must never break routing.
+        }
+        // M2.5 context preflight: `routing.contextFit` (default ON) gates the soft
+        // utilization signal exactly like capability-fit — set false to revert to
+        // pure dimension-weight scoring. The estimated prompt size is the caller's
+        // context hint when provided (the REAL payload — conversation history,
+        // gathered context), else the task text itself. Estimation only, never a
+        // hard block. Best-effort config read — never let it break routing.
+        let contextFitEnabled = true;
+        try {
+            contextFitEnabled = (configManager?.getAll?.()?.routing?.contextFit ?? true) !== false;
+        }
+        catch {
+            // Best-effort
+        }
+        const promptTokens = options.contextHintTokens ?? estimateTokens(taskDescription);
         // Score every allowed provider
         let scored = allowedProviders.map((provider) => {
             let caps = this.getCapabilities(provider);
-            // Real pricing replaces the static cost capability
+            // Real pricing replaces the static cost capability; M2.2 measured wire
+            // tokens (when the provider/gateway reports usage) replace the
+            // TYPICAL-token estimate — measured cost is the truth when available.
+            let measuredCost;
             if (options.useRealPricing !== false) {
                 const pricing = this.getProviderPricing(provider, configManager);
-                caps = { ...caps, cost: computeCostScore(provider, pricing) };
+                measuredCost = this.getMeasuredCost(provider);
+                caps = { ...caps, cost: computeCostScore(provider, pricing, measuredCost) };
             }
             // Runtime data adjusts reasoning/reliability from real performance
             if (runtime) {
@@ -442,10 +657,67 @@ export class AutoModelRouter {
             const { score, dimensions, weightTotal } = scoreProvider(provider, caps, weights);
             const inCooldown = cooldown.has(provider);
             const qp = quotaParked.get(provider);
+            // Capability fit (M2.1): the soft task-type → capability signal, gated
+            // by `routing.capabilityFit` (default ON). When disabled the signal is
+            // fully inert — raw dimension-weighted scores, no fit field, no suffix.
+            // Only HEALTHY candidates get a fit: a parked provider's reason is
+            // already definitive, so it carries no fit field (and the explain view
+            // shows no chip for it). `caps` is passed through so custom/gateway
+            // providers are scored by their REAL capability profile (a strong-
+            // reasoning custom provider gets a derived 'reasoning' tag even though
+            // no static entry lists it).
+            const capabilityFit = qp === undefined && capabilityFitEnabled
+                ? capabilityFitScore(taskType, provider, caps)
+                : undefined;
+            const fitScore = capabilityFit !== undefined ? applyCapabilityFit(score, capabilityFit) : score;
+            // M2.5 context preflight (soft, estimation-only): how well the provider's
+            // nominal input window fits the estimated prompt size. Gated by
+            // `routing.contextFit` (default ON) like capability-fit. NEVER a hard
+            // block — even a prompt exceeding the window only caps the penalty
+            // (computeContextFit), and unknown windows are neutral. Healthy
+            // candidates only: a quota-parked reason is already definitive. NOTE: the
+            // window is judged on the CONFIGURED pin (resolveModel); bandit per-model
+            // learning may serve a different concrete model whose window differs —
+            // an acceptable soft-estimate divergence (bandit is off by default).
+            const contextWindowTokens = qp === undefined && contextFitEnabled
+                ? this.resolveContextWindow(provider, this.resolveModel(provider, agentType, configManager), configManager)
+                : undefined;
+            const contextUtilization = contextWindowTokens !== undefined && promptTokens > 0
+                ? promptTokens / contextWindowTokens
+                : undefined;
+            const contextFit = contextWindowTokens !== undefined
+                ? computeContextFit(promptTokens, contextWindowTokens)
+                : undefined;
+            const finalScore = fitScore * (contextFit ?? 1);
             const reason = qp !== undefined
                 ? `${provider} (quota exhausted — auto re-enables in ${Math.ceil(qp / 1000)}s)`
                 : this.buildReason(provider, caps, complexity, mode, inCooldown, runtime?.adjusted.has(provider));
-            return { provider, score, dimensions, weightTotal, inCooldown, quotaParked: qp !== undefined, reason };
+            let finalReason = qp !== undefined || capabilityFit === undefined
+                ? reason
+                : `${reason} · capability-fit ${Math.round(capabilityFit * 100)}%`;
+            // Context chip only when the window actually matters (penalty regime) —
+            // a normal-size task keeps a clean reason; a squeezed window shows the
+            // estimate and the nominal window it was judged against.
+            if (contextFit !== undefined && contextFit < 1 && contextWindowTokens !== undefined) {
+                finalReason = `${finalReason} · context-fit ${Math.round(contextFit * 100)}% (${promptTokens} tok of ${contextWindowTokens})`;
+            }
+            return {
+                provider,
+                score: finalScore,
+                dimensions,
+                weightTotal,
+                inCooldown,
+                quotaParked: qp !== undefined,
+                capabilityFit,
+                contextFit,
+                contextUtilization,
+                contextWindowTokens,
+                costSource: measuredCost ? 'measured' : 'estimated',
+                costBasis: measuredCost
+                    ? { inputTokens: measuredCost.inputTokens, outputTokens: measuredCost.outputTokens }
+                    : undefined,
+                reason: finalReason,
+            };
         });
         // ── Hard constraints: ELIMINATE candidates that can't meet the ask ──────
         // Mirrors ruflo's per-request maxCost/maxLatency/minQuality hard filters —
@@ -461,7 +733,10 @@ export class AutoModelRouter {
         if (options.allowPaid === false &&
             (complexity === 'trivial' || complexity === 'simple' || complexity === 'moderate')) {
             const freeOnly = scored.filter((s) => {
-                const costUsd = estimateCallCostUsd(s.provider, this.getProviderPricing(s.provider, configManager));
+                // M2.2: judge by MEASURED cost when the provider reports usage — a
+                // gateway with real (tiny) token counts may be free-in-practice even
+                // if its list price is non-zero.
+                const costUsd = estimateCallCostUsd(s.provider, this.getProviderPricing(s.provider, configManager), s.costBasis);
                 return costUsd === 0;
             });
             if (freeOnly.length > 0) {
@@ -471,14 +746,49 @@ export class AutoModelRouter {
                 logger.warn('  ⚠️ allowPaid: false eliminated every provider — falling back to full ranking');
             }
         }
+        // M2.4: eliminated-provider audit trail — populated only when the
+        // governance/hard-constraint slot actually removes a provider for POLICY
+        // reasons (admin lists, admin cost cap, PII block). minSpeed/minReasoning
+        // kills stay in the per-provider reason, not this list.
+        let governanceBlocked = [];
         if (options.maxCostUsd !== undefined ||
             options.minSpeed !== undefined ||
-            options.minReasoning !== undefined) {
+            options.minReasoning !== undefined ||
+            this.governanceActive(governance)) {
+            // ── Pass 1: NON-PII constraints (two-pass so the PII hard-gate always
+            // sees exactly the survivors of the other rules). ────────────────────
+            // M2.4: admin max-cost cap joins the per-call option — the effective
+            // cap is the stricter of the two. A governance allow/deny list or admin
+            // cap is a HARD elimination. Eliminated providers are recorded in
+            // `governanceBlocked` (only policy-related kills; minSpeed/minReasoning
+            // stay in the per-provider reason) so the audit trail + explain view
+            // show exactly what policy removed.
+            const effectiveMaxCostUsd = this.effectiveMaxCost(options.maxCostUsd, governance?.maxCostUsd);
+            const blockedHere = [];
+            // PII patterns are compiled ONCE per resolve (not per provider) — and a
+            // task that matches is computed once, not re-lowered per candidate.
+            const taskLower = (taskDescription || '').toLowerCase();
+            const compiledPii = (governance?.piiPatterns || [])
+                .map((p) => {
+                try {
+                    return new RegExp(p, 'i');
+                }
+                catch {
+                    return null; // malformed pattern — ignored, never breaks routing
+                }
+            })
+                .filter((r) => r !== null);
+            const piiMatched = compiledPii.length > 0 && compiledPii.some((re) => re.test(taskLower));
+            const minPrivacy = governance?.minPrivacyForPii ?? 1.0;
             const constrained = scored.filter((s) => {
-                if (options.maxCostUsd !== undefined) {
-                    const costUsd = estimateCallCostUsd(s.provider, this.getProviderPricing(s.provider, configManager));
-                    if (costUsd > options.maxCostUsd)
+                if (effectiveMaxCostUsd !== undefined) {
+                    const costUsd = estimateCallCostUsd(s.provider, this.getProviderPricing(s.provider, configManager), s.costBasis);
+                    if (costUsd > effectiveMaxCostUsd) {
+                        if (governance?.maxCostUsd !== undefined) {
+                            blockedHere.push({ provider: s.provider, reason: `admin max-cost cap $${effectiveMaxCostUsd} (cost $${costUsd})` });
+                        }
                         return false;
+                    }
                 }
                 if (options.minSpeed !== undefined) {
                     if (this.getCapabilities(s.provider).speed < options.minSpeed)
@@ -488,13 +798,78 @@ export class AutoModelRouter {
                     if (this.getCapabilities(s.provider).reasoning < options.minReasoning)
                         return false;
                 }
+                // ── M2.4 governance (non-PII rules) ─────────────────────────────
+                // Provider allow/deny lists (admin policy beats credential filtering).
+                if (governance?.allowProviders?.length && !governance.allowProviders.includes(s.provider)) {
+                    blockedHere.push({ provider: s.provider, reason: 'not on admin allowProviders list' });
+                    return false;
+                }
+                if (governance?.denyProviders?.length && governance.denyProviders.includes(s.provider)) {
+                    blockedHere.push({ provider: s.provider, reason: 'on admin denyProviders list' });
+                    return false;
+                }
+                // Model allow/deny lists enforced against the model the router will
+                // ACTUALLY serve (the configured pin, or the curated default when no
+                // pin is set) — never against an unrelated candidate that happens to
+                // be allowed. denyModels wins over allowModels.
+                const modelReason = this.governanceModelReason(s.provider, agentType, configManager, governance);
+                if (modelReason) {
+                    blockedHere.push({ provider: s.provider, reason: modelReason });
+                    return false;
+                }
                 return true;
             });
-            if (constrained.length > 0) {
-                scored = constrained;
+            // ── Pass 2: PII hard-gate on the NON-PII survivors. ────────────────
+            // PII is a PRIVACY policy, not a cost/speed tradeoff: "no PII to
+            // low-privacy cloud" holds even when it eliminates every candidate. If
+            // any compliant provider survives the other rules, keep ONLY the
+            // compliant subset. If NOTHING meets the privacy bar (or the non-PII
+            // pass already eliminated everyone), NEVER fall back to a violator —
+            // throw PIIPolicyError so the caller surfaces the block instead of
+            // silently leaking PII to the cloud.
+            if (piiMatched) {
+                const piiCompliant = constrained.filter((s) => this.getCapabilities(s.provider).privacy >= minPrivacy);
+                for (const s of constrained) {
+                    if (this.getCapabilities(s.provider).privacy < minPrivacy) {
+                        blockedHere.push({ provider: s.provider, reason: `PII-domain task — privacy ${this.getCapabilities(s.provider).privacy} < required ${minPrivacy}` });
+                    }
+                }
+                if (piiCompliant.length > 0) {
+                    scored = piiCompliant;
+                    governanceBlocked = blockedHere;
+                }
+                else {
+                    governanceBlocked = blockedHere;
+                    throw new PIIPolicyError(minPrivacy);
+                }
             }
-            else if (options.verbose) {
-                logger.warn('  ⚠️ Hard constraints eliminated every provider — falling back to full ranking');
+            else if (constrained.length > 0) {
+                scored = constrained;
+                governanceBlocked = blockedHere;
+            }
+            else if (blockedHere.length > 0) {
+                // HARD governance gate: an ADMIN rule (provider allow/deny list, model
+                // allow/deny list, or the admin max-cost cap) eliminated every
+                // candidate. The benign fallback below would resurrect those
+                // violators — NEVER serve a provider the admin policy rules out, even
+                // when that leaves nothing to serve. Throw so the caller surfaces the
+                // policy block honestly (chat/plan render the message, `models
+                // explain` renders the full audit trail) instead of silently
+                // violating the policy. NOTE: blockedHere holds ONLY governance kills
+                // (per-call maxCostUsd/minSpeed/minReasoning never push to it), so
+                // this branch is unreachable when only per-call SOFT options were set.
+                governanceBlocked = blockedHere;
+                throw new GovernancePolicyError(blockedHere);
+            }
+            else {
+                // Benign fallback — only PER-CALL soft options (maxCostUsd/minSpeed/
+                // minReasoning) eliminated everyone (an impossible per-request ask),
+                // not an admin policy. Keep the full ranking so the caller still gets
+                // a decision instead of erroring.
+                governanceBlocked = blockedHere;
+                if (options.verbose) {
+                    logger.warn('  ⚠️ Governance/hard constraints eliminated every provider — falling back to full ranking');
+                }
             }
         }
         // Rank: circuit-breaker-cooldown providers sink first, then quota-parked
@@ -594,6 +969,7 @@ export class AutoModelRouter {
             model: this.resolveModel(s.provider, agentType, configManager),
             estimatedCost: 0,
             qualityScore: s.score,
+            contextWindowTokens: s.contextWindowTokens,
             reason: s.inCooldown ? `Fallback (in cooldown): ${s.provider}` : `Fallback: ${s.provider}`,
         }));
         const explanation = this.buildExplanation(agentType, complexity, taskType, selected, mode, model, weights, taskProfile) + (routedBy === 'bandit' ? ' | bandit-learned' : '') +
@@ -601,6 +977,26 @@ export class AutoModelRouter {
         if (options.verbose) {
             logger.info(`  🤖 Auto routing: ${explanation}`);
         }
+        // M2.5: context preflight snapshot over the FINAL ranked set (post
+        // governance/constraints), so the explain view shows exactly what the
+        // surviving candidates were judged against.
+        const contextPreflight = contextFitEnabled
+            ? {
+                estimatedPromptTokens: promptTokens,
+                basis: options.contextHintTokens !== undefined ? 'hint' : 'task',
+                // Resolve the window even for quota-parked candidates (their scored
+                // entry deliberately omits the context fields — the park reason is
+                // definitive — but the preflight snapshot must still show a window;
+                // the human explain renderer calls toLocaleString() on it).
+                providers: scored.map((s) => ({
+                    provider: s.provider,
+                    contextWindowTokens: s.contextWindowTokens ??
+                        this.resolveContextWindow(s.provider, this.resolveModel(s.provider, agentType, configManager), configManager),
+                    utilization: s.contextUtilization,
+                    fit: s.contextFit,
+                })),
+            }
+            : undefined;
         return {
             agentType,
             complexity,
@@ -616,7 +1012,42 @@ export class AutoModelRouter {
             explanation,
             routedBy,
             banditEscalation,
+            governanceBlocked,
+            contextPreflight,
         };
+    }
+    /**
+     * M2.5: nominal input context window (tokens) for a provider×model. Model
+     * table → provider fallback → generous default. `routing.contextWindows`
+     * overrides (keyed by model, or by provider as a provider-level default)
+     * always win. Estimation-only input — never a hard block.
+     */
+    resolveContextWindow(provider, model, configManager) {
+        try {
+            const overrides = configManager?.getAll?.()?.routing?.contextWindows;
+            if (overrides) {
+                // Coerce string values (e.g. `buff config set routing.contextWindows.local
+                // 16384` stores "16384") to numbers so utilization math never relies on
+                // JS coercion; invalid/non-positive values fall through.
+                const fromOverride = (key) => {
+                    const v = overrides[key];
+                    if (v === undefined)
+                        return undefined;
+                    const n = Number(v);
+                    return Number.isFinite(n) && n > 0 ? n : undefined;
+                };
+                const modelWin = fromOverride(model);
+                if (modelWin !== undefined)
+                    return modelWin;
+                const providerWin = fromOverride(provider);
+                if (providerWin !== undefined)
+                    return providerWin;
+            }
+        }
+        catch {
+            // Best-effort — config read must never break routing.
+        }
+        return MODEL_CONTEXT_WINDOWS[model] ?? PROVIDER_CONTEXT_WINDOWS[provider] ?? DEFAULT_CONTEXT_WINDOW;
     }
     /**
      * Record a real task outcome so the bandit can learn from actual results.
@@ -732,6 +1163,70 @@ export class AutoModelRouter {
             inputPer1K: override?.inputPer1K ?? builtin.inputPer1K,
             outputPer1K: override?.outputPer1K ?? builtin.outputPer1K,
         };
+    }
+    /**
+     * M2.2: measured wire-token profile for a provider from the Model
+     * Availability Registry (sample-weighted EMA). Best-effort — registry
+     * bookkeeping must never break routing; undefined ⇒ estimated cost.
+     */
+    getMeasuredCost(provider) {
+        try {
+            return getModelRegistry().getMeasuredUsage(provider);
+        }
+        catch {
+            return undefined;
+        }
+    }
+    // ── M2.4 governance helpers ───────────────────────────────────────────────
+    /**
+     * Whether any governance policy is configured (so the constraint slot only
+     * runs when there is something to enforce).
+     */
+    governanceActive(g) {
+        if (!g)
+            return false;
+        return Boolean((g.allowProviders?.length ?? 0) > 0 ||
+            (g.denyProviders?.length ?? 0) > 0 ||
+            (g.allowModels?.length ?? 0) > 0 ||
+            (g.denyModels?.length ?? 0) > 0 ||
+            (g.piiPatterns?.length ?? 0) > 0 ||
+            g.maxCostUsd !== undefined);
+    }
+    /**
+     * Effective per-call max-cost cap: the stricter of the per-call option and
+     * the admin governance cap. undefined when neither is set.
+     */
+    effectiveMaxCost(perCallUsd, adminUsd) {
+        if (perCallUsd === undefined)
+            return adminUsd;
+        if (adminUsd === undefined)
+            return perCallUsd;
+        return Math.min(perCallUsd, adminUsd);
+    }
+    /**
+     * Why a provider fails the governance MODEL allow/deny lists, or undefined
+     * when it passes. Enforced against the model the router will ACTUALLY serve:
+     *   - the CONFIGURED pin when one is set (resolveModel returns it) — a pin
+     *     on the deny-list, or NOT on the allow-list, kills the provider. This
+     *     closes the "any candidate passes but the served pin violates" hole.
+     *   - the curated defaults when NO pin is set (the adapter's default model
+     *     is what a no-pin resolve serves) — deny wins, allow must include one.
+     * denyModels always wins over allowModels.
+     */
+    governanceModelReason(provider, agentType, configManager, governance) {
+        if (!governance)
+            return undefined;
+        const configured = this.resolveModel(provider, agentType, configManager);
+        const served = configured && configured !== 'default' ? [configured] : PREFERRED_MODELS[provider] || [];
+        const candidates = served.length > 0 ? served : ['default'];
+        if (governance.denyModels?.length && candidates.some((m) => governance.denyModels.includes(m))) {
+            const denied = candidates.find((m) => governance.denyModels.includes(m));
+            return `model '${denied}' on admin denyModels list`;
+        }
+        if (governance.allowModels?.length && !candidates.some((m) => governance.allowModels.includes(m))) {
+            return `model '${candidates.join(', ')}' not on admin allowModels list`;
+        }
+        return undefined;
     }
     /**
      * Resolve the model name to use within a chosen provider.

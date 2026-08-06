@@ -189,6 +189,17 @@ export declare class Orchestrator {
      * maybeFireColdStartProbe). A long dev-mode session only pays for it once.
      */
     private coldStartProbeFired;
+    /**
+     * Per-pipeline failure session: the state recordActionFailure mutates when
+     * a per-task LLM call fails, and resolveAutoRoutingDecision CONSULTS it
+     * before every task (M0.3) — a provider that failed earlier in this pipeline
+     * (auth = rest of pipeline, rate-limit/transient = cooldown) never wins a
+     * subsequent task; the decision sinks to the best-ranked non-excluded
+     * provider. The registry/quota/breaker write-throughs it composes are also
+     * read by the router before every task (parked providers sink below healthy
+     * ones), so both mechanisms agree.
+     */
+    private readonly failureSession;
     /** Execution telemetry accumulator for the current pipeline */
     private stats;
     constructor(configManager?: ConfigManager, moduleRegistry?: ModuleRegistry, eventBus?: EventBus, reportModule?: ReportModule);
@@ -233,6 +244,16 @@ export declare class Orchestrator {
      * Uses the task description for complexity analysis and resolves the best
      * provider/model per agent type.
      */
+    /**
+     * M2.5: estimate the REAL prompt payload for a task — goal + task
+     * description + the workspace context files the agent will receive (sized by
+     * stat, the same chars→tokens heuristic as estimateTokens, without reading
+     * file contents). Passed as contextHintTokens so the context-fit signal
+     * differentiates per-task in multi-agent pipelines the way it does for chat's
+     * growing conversation history. Best-effort: any stat failure contributes 0
+     * (the router still falls back to the task-description estimate).
+     */
+    private estimateTaskPayloadTokens;
     private resolveAutoRoutingDecision;
     private createAutoRoutedLLM;
     private createAutoRoutedLLMFromDecision;

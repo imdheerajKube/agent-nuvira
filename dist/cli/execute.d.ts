@@ -49,6 +49,13 @@ export declare function parseGoalLines(lines: string[]): string;
  * Execute command — orchestrates multiple agents to accomplish a goal.
  */
 export declare class ExecuteCommand extends BaseCommand {
+    /**
+     * Per-run failure session for the execute-side direct LLM calls that bypass
+     * the orchestrator (generateFollowUpSuggestions). A dead provider×model
+     * here is written through the FULL shared bookkeeping so the next pick skips
+     * it predictively (mirror of the orchestrator's own per-task session).
+     */
+    private readonly failureSession;
     create(): Command;
     private execute;
     /**

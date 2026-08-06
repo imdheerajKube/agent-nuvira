@@ -1,7 +1,7 @@
 import { logger } from '../utils/logger.js';
 import { streamCompletion } from './sse.js';
 import { getModelTags } from './model-catalog.js';
-import { getCostTracker } from '../learning/cost-tracker.js';
+import { getCostTracker, recordCallWithUsage } from '../learning/cost-tracker.js';
 const GROQ_BASE_URL = 'https://api.groq.com/openai/v1';
 /**
  * Groq Adapter
@@ -14,7 +14,8 @@ export class GroqAdapter {
         this.config = config;
     }
     async generate(prompt, options) {
-        const apiKey = this.config.apiKey;
+        // M2.3: options.apiKey overrides the configured key (multi-account rotation).
+        const apiKey = options?.apiKey || this.config.apiKey;
         if (!apiKey) {
             throw new Error('Groq API key is not configured. Set GROQ_API_KEY env var.');
         }
@@ -41,16 +42,20 @@ export class GroqAdapter {
         }
         const data = (await response.json());
         const content = data.choices[0]?.message?.content || '';
-        // Track cost
+        // Track cost — M2.2: use the endpoint-reported usage (exact wire tokens)
+        // when present, else the length-based estimate.
         try {
-            const costTracker = getCostTracker();
-            costTracker.recordCallEstimated('groq', model, prompt, content);
+            const usage = data.usage;
+            recordCallWithUsage(getCostTracker(), 'groq', model, prompt, content, usage
+                ? { promptTokens: usage.prompt_tokens, completionTokens: usage.completion_tokens }
+                : undefined);
         }
         catch { /* Non-critical */ }
         return content;
     }
     async generateStream(prompt, options, onToken) {
-        const apiKey = this.config.apiKey;
+        // M2.3: options.apiKey overrides the configured key (multi-account rotation).
+        const apiKey = options?.apiKey || this.config.apiKey;
         if (!apiKey) {
             throw new Error('Groq API key is not configured. Set GROQ_API_KEY env var.');
         }
@@ -58,22 +63,33 @@ export class GroqAdapter {
         const temperature = options?.temperature ?? this.config.temperature ?? 0.7;
         const maxTokens = options?.maxTokens ?? this.config.maxTokens ?? 4096;
         logger.debug(`Groq: Streaming with model=${model}, temperature=${temperature}, maxTokens=${maxTokens}`);
-        const fullContent = await streamCompletion(`${GROQ_BASE_URL}/chat/completions`, { 'Authorization': `Bearer ${apiKey}` }, { model, messages: [{ role: 'user', content: prompt }], temperature, max_tokens: maxTokens }, onToken);
+        // M2.2: capture the endpoint-reported usage from the final SSE chunk
+        // (OpenAI stream_options.include_usage convention) for measured cost.
+        let streamUsage;
+        const fullContent = await streamCompletion(`${GROQ_BASE_URL}/chat/completions`, { 'Authorization': `Bearer ${apiKey}` }, { model, messages: [{ role: 'user', content: prompt }], temperature, max_tokens: maxTokens }, onToken, (u) => {
+            streamUsage = u;
+        });
         // Track cost for streaming response
         try {
-            const costTracker = getCostTracker();
-            costTracker.recordCallEstimated('groq', model, prompt, fullContent);
+            recordCallWithUsage(getCostTracker(), 'groq', model, prompt, fullContent, streamUsage);
         }
         catch { /* Non-critical */ }
         return fullContent;
     }
     async isAvailable() {
+        // Deliberately checks availability with the CONFIG (primary) key only, not
+        // a rotated key: endpoint availability is account-independent, and the
+        // M2.3 rotation walk handles per-key auth/rate-limit at generate time. Do
+        // not "fix" this into a per-key probe — it would slow every candidate
+        // check for zero correctness gain.
         return !!this.config.apiKey;
     }
     getInfo() {
         return `Provider: Groq\nModel: ${this.config.model || 'default'}\nStatus: ${this.config.apiKey ? '✅ Configured' : '❌ Missing API key'}`;
     }
     async listModels() {
+        // Primary-key probe by design (see isAvailable): the model list is shared
+        // across accounts of the same provider.
         const apiKey = this.config.apiKey;
         if (!apiKey)
             return [];
