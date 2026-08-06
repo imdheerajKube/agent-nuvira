@@ -1,6 +1,6 @@
 # Agent-Nuvira — User Manual
 
-**Version 1.58.5 | August 2026**
+**Version 1.58.6 | August 2026**
 
 > *Agent-Nuvira: Multi-agent AI coding CLI — plan, write, review, test, and publish code with local models (Ollama) or cloud APIs (Groq, NVIDIA NIM, Google Gemini, OpenRouter).*
 

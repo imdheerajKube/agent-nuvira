@@ -93,6 +93,22 @@ export class ConfigManager {
                         config.pricing[provider] = { ...(config.pricing[provider] || {}), ...pricing };
                     }
                 }
+                // Merge routing config (learning router). FIX: this was previously
+                // dropped entirely on load, so `buff config set routing.*` (bandit,
+                // quota, governance, contextWindows, nuviraSidecar) never survived a
+                // restart. Nested maps are deep-merged so separate sets preserve each
+                // other (governance.allowProviders + governance.maxCostUsd coexist).
+                if (userConfig.routing) {
+                    const loadedRouting = userConfig.routing;
+                    config.routing = {
+                        ...(config.routing || {}),
+                        ...loadedRouting,
+                        quota: { ...(config.routing?.quota || {}), ...(loadedRouting.quota || {}) },
+                        governance: { ...(config.routing?.governance || {}), ...(loadedRouting.governance || {}) },
+                        contextWindows: { ...(config.routing?.contextWindows || {}), ...(loadedRouting.contextWindows || {}) },
+                        nuviraSidecar: { ...(config.routing?.nuviraSidecar || {}), ...(loadedRouting.nuviraSidecar || {}) },
+                    };
+                }
             }
             catch {
                 // If config is corrupted, fall back to defaults
