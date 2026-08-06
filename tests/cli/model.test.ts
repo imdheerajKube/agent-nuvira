@@ -223,6 +223,37 @@ describe('ModelCommand explain', () => {
     expect(output).toContain('utilization');
   });
 
+  it('renders the v1.58.0 chips (🎯 fit / 📏·📐 cost / ⏳ ctx) on ranked rows (M2.1 + M2.2 + M2.5)', () => {
+    const output = runCommand(['explain', 'implement a login form']);
+    // M2.1: capability-fit chip on ranked rows (gate ON by default).
+    expect(output).toContain('🎯 fit');
+    // M2.2: cost source is flagged on every ranked row — measured or estimated.
+    // (Hermetic env has no measured wire usage yet → estimated is guaranteed,
+    // measured appears once the registry holds real token EMAs.)
+    expect(output).toMatch(/📏 measured|📐 estimated/);
+    // M2.5: context-utilization chip with the nominal window on ranked rows.
+    expect(output).toMatch(/⏳ ctx \d+%/);
+  });
+
+  it('chips follow the gates: capabilityFit OFF drops 🎯, contextFit OFF drops ⏳', () => {
+    const cmd = new ModelCommand();
+    (cmd as any).configManager = {
+      getAll: vi.fn(() => ({
+        pricing: {},
+        routing: { capabilityFit: false, contextFit: false },
+      })),
+      hasRequiredCredentials: vi.fn(() => true),
+      getProviderConfig: vi.fn(() => ({ config: {} })),
+    };
+    cmd.create().parse(['explain', 'implement a login form'], { from: 'user' });
+    const output = vi.mocked(console.log).mock.calls.map((c) => c.map((v) => String(v)).join(' ')).join('\n');
+
+    expect(output).not.toContain('🎯 fit');
+    expect(output).not.toContain('⏳ ctx');
+    // Cost source stays on ranked rows even with both gates off.
+    expect(output).toMatch(/📏 measured|📐 estimated/);
+  });
+
   it('gate OFF (routing.contextFit: false) omits the context preflight entirely', () => {
     const cmd = new ModelCommand();
     (cmd as any).configManager = {
