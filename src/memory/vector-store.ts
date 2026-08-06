@@ -20,6 +20,7 @@
 import { readFileSync, writeFileSync, existsSync, mkdirSync } from 'node:fs';
 import { join } from 'node:path';
 import { homedir } from 'node:os';
+import { resolveBuffConfigPath } from '../config/paths.js';
 
 // ─── Types ──────────────────────────────────────────────────────────────────
 
@@ -273,7 +274,7 @@ let configBackend: VectorBackendType | null = null;
 let configBackendLoaded = false;
 
 /**
- * Read `memory.vectorBackend` from ~/.buff/buffconfig.json (lazy, cached).
+ * Read `memory.vectorBackend` from the buff config (lazy, cached).
  * Read directly (not via ConfigManager) to avoid a heavyweight dependency in
  * the hot vector path; env/override still win over config.
  */
@@ -281,7 +282,7 @@ function readConfigBackendType(): VectorBackendType | null {
   if (configBackendLoaded) return configBackend;
   configBackendLoaded = true;
   try {
-    const configPath = join(homedir(), '.buff', 'buffconfig.json');
+    const configPath = resolveBuffConfigPath();
     if (!existsSync(configPath)) return null;
     const raw = JSON.parse(readFileSync(configPath, 'utf-8')) as { memory?: { vectorBackend?: VectorBackendType } };
     const b = raw.memory?.vectorBackend;

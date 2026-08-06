@@ -15,6 +15,7 @@ import { createReadStream, readFileSync, existsSync, statSync, watch, mkdirSync,
 import { join, extname, dirname, basename } from 'node:path';
 import { fileURLToPath } from 'node:url';import { homedir } from 'node:os';
 import { parseRbacUsers } from '../enterprise/rbac.js';
+import { resolveBuffConfigDir, resolveBuffConfigPath } from '../config/paths.js';
 import { loadEnv } from '../utils/env.js';
 import { getAutoRouter } from '../learning/auto-router.js';
 import { getRouterPromotion } from '../learning/router-promotion.js';
@@ -89,7 +90,7 @@ let alwaysWatchQuota = false;
  */
 function loadAlwaysWatchQuotaFlag(): void {
   try {
-    const configPath = join(homedir(), '.buff', 'buffconfig.json');
+    const configPath = resolveBuffConfigPath();
     if (!existsSync(configPath)) return;
     const raw = readFileSync(configPath, 'utf-8');
     const config = JSON.parse(raw) as { routing?: { alwaysWatchQuota?: boolean } };
@@ -1641,7 +1642,7 @@ function readRetrievalData(): Record<string, unknown> {
  */
 function readGovernanceData(): Record<string, unknown> {
   try {
-    const configPath = join(homedir(), '.buff', 'buffconfig.json');
+    const configPath = resolveBuffConfigPath();
     if (!existsSync(configPath)) return { enabled: false, updatedAt: Date.now() };
     const config = JSON.parse(readFileSync(configPath, 'utf-8')) as {
       routing?: { governance?: Record<string, unknown> };
@@ -1662,11 +1663,11 @@ function readGovernanceData(): Record<string, unknown> {
  * role add` writes) into a shaped payload: the acting identity, their role
  * (null when unassigned), the full user→role map, and whether the system is
  * in legacy single-user mode (no roles assigned → fully permissive). Uses the
- * same `join(homedir(), '.buff', ...)` path convention as the other readers.
+ * same BUFF_CONFIG_DIR-aware path convention as the other readers.
  */
 function readRbacData(): Record<string, unknown> {
   try {
-    const configPath = join(homedir(), '.buff', 'rbac.json');
+    const configPath = join(resolveBuffConfigDir(), 'rbac.json');
     const identity = process.env.BUFF_ACT_AS || process.env.USER || 'local';
     if (!existsSync(configPath)) {
       return { legacy: true, identity, role: null, users: [], updatedAt: Date.now() };
@@ -2075,7 +2076,7 @@ function handleRequest(req: IncomingMessage, res: ServerResponse): void {
  * Does NOT override env vars that are already set.
  */
 function loadApiKeysFromConfig(): void {
-  const configPath = join(homedir(), '.buff', 'buffconfig.json');
+  const configPath = resolveBuffConfigPath();
   if (!existsSync(configPath)) return;
 
   try {

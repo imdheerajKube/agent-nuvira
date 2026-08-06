@@ -1062,6 +1062,37 @@ describe('Dashboard Server', () => {
       expect(body.governance.enabled).toBe(false);
     });
 
+    it('GET /api/routing honors BUFF_CONFIG_DIR over the homedir config', async () => {
+      // The server's governance reader resolves the config via the shared
+      // BUFF_CONFIG_DIR-aware path helper — a hermetic/alt config dir must win
+      // over the mocked homedir's ~/.buff/buffconfig.json.
+      const altDir = mkdtempSync(join(TMP_BASE, 'buff-alt-config-'));
+      const altConfigPath = join(altDir, 'buffconfig.json');
+      const prevConfigDir = process.env.BUFF_CONFIG_DIR;
+      // Make sure the mocked-homedir config is NOT the source of this policy.
+      const homedirConfigPath = join(testDir, '.buff', 'buffconfig.json');
+      try {
+        writeFileSync(altConfigPath, JSON.stringify({
+          routing: { governance: { allowProviders: ['openrouter'], maxCostUsd: 0.5 } },
+        }), 'utf-8');
+        writeFileSync(homedirConfigPath, JSON.stringify({
+          routing: { governance: { allowProviders: ['gemini'], maxCostUsd: 9.9 } },
+        }), 'utf-8');
+        process.env.BUFF_CONFIG_DIR = altDir;
+
+        const res = await httpGet(`${baseUrl}/api/routing`);
+        const body = JSON.parse(res.body);
+        expect(body.governance).toBeDefined();
+        expect(body.governance.allowProviders).toEqual(['openrouter']);
+        expect(body.governance.maxCostUsd).toBe(0.5);
+      } finally {
+        if (prevConfigDir === undefined) delete process.env.BUFF_CONFIG_DIR;
+        else process.env.BUFF_CONFIG_DIR = prevConfigDir;
+        try { rmSync(altDir, { recursive: true, force: true }); } catch { /* ignore */ }
+        try { rmSync(homedirConfigPath, { force: true }); } catch { /* ignore */ }
+      }
+    });
+
     it('GET /api/routing surfaces the RBAC role file (P6 M6.1)', async () => {
       // readRbacData reads ~/.buff/rbac.json (mocked homedir) — the SAME file
       // `buff admin role add` writes.

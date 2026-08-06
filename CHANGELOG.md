@@ -9,6 +9,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.59.9] - 2026-08-06
+
+### Fixed
+
+- **`BUFF_CONFIG_DIR` honored everywhere** — the config manager, dashboard server readers (`alwaysWatchQuota`, governance policy, API-key loader, RBAC role file), and the vector store's backend picker now resolve the config dir through one shared helper (`src/config/paths.ts`) with the same precedence as the RBAC layer: explicit dir > `$BUFF_CONFIG_DIR` > `~/.buff`. Previously only rbac.ts honored the override, so a hermetic smoke run pointed at `BUFF_CONFIG_DIR` could silently read/write the real `~/.buff/buffconfig.json` (exactly the stray-governance pollution seen in the v1.59.7 release).
+- **`src/enterprise/rbac.ts`** switched to the same shared resolver (removed its duplicate inline resolution).
+
+### Added
+
+- Tests: `ConfigManager` honors `BUFF_CONFIG_DIR` for reads and writes, explicit dir arg wins over the env var; the dashboard's `/api/routing` governance reader honors `BUFF_CONFIG_DIR` over the homedir config. 4 new tests; 3,367 total green.
+
 ## [1.59.8] - 2026-08-06
 
 ### Added

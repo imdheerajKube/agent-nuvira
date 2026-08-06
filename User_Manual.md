@@ -1,6 +1,10 @@
 # Agent-Nuvira — User Manual
 
-**Version 1.59.8 | August 2026**
+**Version 1.59.9 | August 2026**
+
+### v1.59.9 — Config-path consistency (`BUFF_CONFIG_DIR` honored everywhere)
+
+- **One config-path resolver** — the config manager, the dashboard server readers (`alwaysWatchQuota`, governance policy, API-key loader, RBAC role file), and the vector store's backend picker now resolve the config dir through a single shared helper with the same precedence as the RBAC layer: explicit dir > `$BUFF_CONFIG_DIR` > `~/.buff`. A hermetic/alternate-config run pointed at `BUFF_CONFIG_DIR` can no longer silently read or write the real `~/.buff/buffconfig.json` — the exact pollution class that bit the v1.59.7 RBAC smoke.
 
 ### v1.59.8 — Token-verified gateway + RBAC identity card
 

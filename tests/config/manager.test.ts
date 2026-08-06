@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
-import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, rmSync } from 'node:fs';
+import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, rmSync, existsSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { ConfigManager } from '../../src/config/manager.js';
@@ -18,10 +18,14 @@ describe('ConfigManager', () => {
     // secrets migration): point the home .env lookup at a non-existent path.
     delete process.env.BUFF_ENV_FILE;
     process.env.BUFF_ENV_FILE = join(testDir, 'home-env-does-not-exist.env');
+    // Isolate from any BUFF_CONFIG_DIR a developer may export in their shell —
+    // the ConfigManager must never read/write the real ~/.buff config in tests.
+    delete process.env.BUFF_CONFIG_DIR;
   });
 
   afterEach(() => {
     delete process.env.BUFF_ENV_FILE;
+    delete process.env.BUFF_CONFIG_DIR;
     if (testDir) {
       rmSync(testDir, { recursive: true, force: true });
     }
@@ -108,6 +112,58 @@ describe('ConfigManager', () => {
 
       expect(config.defaultProvider).toBe('local');
       expect(config.providers.local.runner).toBe('ollama');
+    });
+  });
+
+  describe('BUFF_CONFIG_DIR override', () => {
+    it('honors BUFF_CONFIG_DIR when no explicit dir is passed (reads there)', () => {
+      // The RBAC role file / credential store already honor BUFF_CONFIG_DIR; the
+      // config manager must too, so a hermetic run pointed at BUFF_CONFIG_DIR
+      // can never read or write the real ~/.buff/buffconfig.json.
+      const altDir = join(testDir, 'alt-config');
+      mkdirSync(altDir, { recursive: true });
+      writeFileSync(
+        join(altDir, 'buffconfig.json'),
+        JSON.stringify({ defaultProvider: 'groq', providers: { groq: { model: 'alt-model' } } }),
+        'utf-8',
+      );
+      process.env.BUFF_CONFIG_DIR = altDir;
+
+      const manager = new ConfigManager(); // no explicit dir
+      const config = manager.getAll();
+      expect(config.defaultProvider).toBe('groq');
+      expect(config.providers.groq.model).toBe('alt-model');
+    });
+
+    it('writes to the BUFF_CONFIG_DIR path on save (no leakage into ~/.buff)', () => {
+      const altDir = join(testDir, 'alt-config-save');
+      mkdirSync(altDir, { recursive: true });
+      process.env.BUFF_CONFIG_DIR = altDir;
+
+      const manager = new ConfigManager();
+      manager.save({ defaultProvider: 'openrouter' });
+
+      const saved = JSON.parse(readFileSync(join(altDir, 'buffconfig.json'), 'utf-8'));
+      expect(saved.defaultProvider).toBe('openrouter');
+      // The write landed inside the override dir — that's the proof the env
+      // was honored (a fallback would have targeted the real ~/.buff, which
+      // tests must never touch).
+    });
+
+    it('explicit dir argument wins over BUFF_CONFIG_DIR', () => {
+      const altDir = join(testDir, 'alt-config-explicit');
+      mkdirSync(altDir, { recursive: true });
+      writeFileSync(
+        join(altDir, 'buffconfig.json'),
+        JSON.stringify({ defaultProvider: 'nim' }),
+        'utf-8',
+      );
+      const explicitDir = join(testDir, 'explicit-dir');
+      mkdirSync(explicitDir, { recursive: true });
+      process.env.BUFF_CONFIG_DIR = altDir;
+
+      const manager = new ConfigManager(explicitDir);
+      expect(manager.getAll().defaultProvider).toBe('local'); // explicit dir has no file → defaults
     });
   });
 
