@@ -9,6 +9,40 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.58.3] - 2026-08-06
+
+### Added — Nuvira-Router P3 (Requests panel + decision diff)
+
+- **M3.2 — Dashboard Requests panel** (`src/web-dashboard/server.ts`,
+  `src/web-dashboard/src/components/RequestsPanel.tsx`). New
+  `GET /api/requests` endpoint + Requests nav item/route: a per
+  provider × model × action request table built from the action-telemetry
+  JSONL log — requests, failures, avg latency, p50/p95/p99 (percentiles
+  render only at ≥10 samples, per the roadmap contract; the avg renders
+  whenever any sample exists), last-call time, and measured spend per
+  provider × model sourced from the cost ledger (adapters record cost
+  without an action tag, so ledger spend is attributed at provider×model
+  and the panel sums unique pairs). Also wired into `/api/all` and both
+  SSE payloads.
+- **M3.3 — Decision diff (`models explain --since <ref>`)** — new pure
+  `src/learning/decision-diff.ts` module (`diffRoutingDecisions` +
+  `formatDecisionDiff`): `models explain` now records a full
+  `RoutingSnapshot` (winner, ranked scores, task type) per decision, and
+  `--since @1|@2|…` compares the current decision against that earlier
+  snapshot — candidate score deltas (▲ improved / ▼ regressed /
+  unchanged), winner changes, and gate/latency changes. Renders in human
+  output and `--json` (as `diff`).
+- **Telemetry latency threading** — `ModelRegistry.recordCall` /
+  `markVerified` and the shared failover runner now record measured
+  latency (and cost/callId where known) into each action-telemetry entry,
+  so the Requests panel has real per-call latency instead of zeros.
+
+### Tests
+
+- 85 root tests (decision-diff suite + explain `--since` + `/api/requests`
+  server contract) and 54 dashboard component tests (RequestsPanel suite),
+  all passing; typecheck clean on both sides.
+
 ## [1.58.2] - 2026-08-06
 
 ### Fixed

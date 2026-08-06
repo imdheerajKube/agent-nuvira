@@ -487,6 +487,45 @@ export interface RoutingHistoryEntry {
   score: number;
 }
 
+// ─── Requests Panel Types (P3-M3.2) ────────────────────────────────────────
+
+/**
+ * Per provider × model × action aggregate from the action-telemetry JSONL —
+ * the same file the Models panel reads, so both panels always agree. Latency
+ * percentiles appear only once >= 3 latency samples exist (the "p95 with <10
+ * samples shows —" contract); cost only when the caller recorded it.
+ */
+export interface RequestsInsights {
+  enabled: boolean;
+  /** Total action-telemetry events in the log. */
+  total: number;
+  rows: Array<{
+    provider: string;
+    model: string;
+    action: string;
+    /** Total requests for this provider × model × action. */
+    requests: number;
+    /** Failures ÷ requests (0–1). */
+    errorRate: number;
+    /** Latency summary — present only when latency samples were recorded. */
+    latency?: {
+      avg: number;
+      samples: number;
+      p50?: number;
+      p95?: number;
+      p99?: number;
+    };
+    /** Sum of recorded call costs (USD) — present only when callers logged it. */
+    costUsd?: number;
+    costCalls: number;
+    /** Recent correlation ids for traceability (max 5). */
+    callIds: string[];
+    /** Epoch ms of the most recent event in this group. */
+    lastAt: number;
+  }>;
+  updatedAt: number;
+}
+
 export interface DashboardData {
   cost: CostData;
   history: HistoryData;
@@ -497,6 +536,12 @@ export interface DashboardData {
   routing?: RoutingInsights;
   /** Model Availability Registry — the unified sub-ms read store routing uses. */
   modelRegistry?: ModelRegistryInsights;
+  /**
+   * Requests panel aggregate (P3-M3.2) — per provider × model × action
+   * requests, latency percentiles, error rate, measured cost. Optional: an
+   * older server won't send these, so the panel hides when absent.
+   */
+  requests?: RequestsInsights;
   dag?: DAGData;
   /**
    * Persisted pipeline runs (from pipeline-runs.json) — powers the scrubbable

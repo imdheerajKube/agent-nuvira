@@ -114,7 +114,7 @@ export declare function isRetryableError(errorType: FallbackErrorType): boolean;
  *   falls back to the caller's tag).
  */
 export declare function resolveTelemetryAction(defaultAction?: string): string | undefined;
-export declare function recordRegistryFailure(providerType: string, model: string | undefined, err: unknown, errorType?: FallbackErrorType, action?: string): void;
+export declare function recordRegistryFailure(providerType: string, model: string | undefined, err: unknown, errorType?: FallbackErrorType, action?: string, latencyMs?: number): void;
 /**
  * Write a successful real LLM call through to the Model Availability Registry
  * WITH its action tag, so the per-action "learned from real usage" telemetry
@@ -130,7 +130,7 @@ export declare function recordRegistryFailure(providerType: string, model: strin
  *   ...) — attributed in the per-action log. Omitted → health still updates,
  *   but no dashboard panel row is written.
  */
-export declare function recordRegistrySuccess(providerType: string, model: string | undefined, action?: string): void;
+export declare function recordRegistrySuccess(providerType: string, model: string | undefined, action?: string, latencyMs?: number): void;
 /**
  * ProviderFallback — Automatic provider failover with circuit breaker.
  *

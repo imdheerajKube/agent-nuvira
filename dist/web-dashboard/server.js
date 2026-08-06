@@ -991,6 +991,111 @@ function readRegistryTelemetry() {
     // the dashboard and the CLI, so they always agree on the shape.
     return aggregateActionTelemetry(readActionTelemetryFile(join(MEMORY_DIR, ACTION_LOG_FILENAME)));
 }
+/**
+ * P3-M3.2 — Requests panel aggregate. Per provider × model × action: request
+ * count, error rate, p50/p95/p99 latency (from logged latencyMs samples),
+ * measured cost, and recent correlation ids. Fed by the SAME action-telemetry
+ * JSONL the Models panel uses (readActionTelemetryFile) — one source of truth
+ * for both panels. Percentile columns are omitted when fewer than 3 latency
+ * samples exist (the roadmap's "p95 with <10 samples shows —" contract).
+ */
+function readRequestsData() {
+    const entries = readActionTelemetryFile(join(MEMORY_DIR, ACTION_LOG_FILENAME));
+    // Measured spend per provider × model from the cost ledger (cost-tracker.json)
+    // — the same file readCostData reads. Cost is attributed at provider×model
+    // level (the adapters record it without an action tag), so every action row
+    // for a provider×model shows that pair's ledger spend, and the panel sums
+    // UNIQUE pairs for the total.
+    const costData = readJSON(join(MEMORY_DIR, 'cost-tracker.json'));
+    const costByPm = new Map();
+    for (const e of costData?.entries ?? []) {
+        const provider = typeof e.provider === 'string' ? e.provider : '';
+        const model = typeof e.model === 'string' ? e.model : '';
+        const cost = typeof e.costUsd === 'number' ? e.costUsd : 0;
+        if (!provider || !model || cost <= 0)
+            continue;
+        const key = `${provider}|${model}`;
+        const c = costByPm.get(key) ?? { measured: 0, estimated: 0, measuredCalls: 0 };
+        if (e.measured === true) {
+            c.measured += cost;
+            c.measuredCalls++;
+        }
+        else {
+            c.estimated += cost;
+        }
+        costByPm.set(key, c);
+    }
+    const groups = new Map();
+    for (const e of entries) {
+        const key = `${e.provider}|${e.model}|${e.action}`;
+        let g = groups.get(key);
+        if (!g) {
+            g = {
+                provider: e.provider,
+                model: e.model,
+                action: e.action,
+                requests: 0,
+                failures: 0,
+                latencies: [],
+                callIds: [],
+                lastAt: 0,
+            };
+            groups.set(key, g);
+        }
+        g.requests++;
+        if (e.outcome !== 'verified')
+            g.failures++;
+        if (e.latencyMs !== undefined)
+            g.latencies.push(e.latencyMs);
+        if (e.callId)
+            g.callIds.push(e.callId);
+        g.lastAt = Math.max(g.lastAt, e.timestamp);
+    }
+    // Percentile gate: the roadmap contract is "p95 with <10 samples shows —".
+    // A p99 from 3 samples is noise — percentiles appear only at >= 10 samples;
+    // the avg still renders whenever any sample exists.
+    const pct = (sorted, p) => sorted.length >= 10
+        ? sorted[Math.min(sorted.length - 1, Math.floor(sorted.length * p))]
+        : undefined;
+    const rows = [...groups.values()]
+        .map((g) => {
+        const sorted = [...g.latencies].sort((a, b) => a - b);
+        const avg = sorted.length > 0
+            ? Math.round(sorted.reduce((a, b) => a + b, 0) / sorted.length)
+            : undefined;
+        const ledger = costByPm.get(`${g.provider}|${g.model}`);
+        const costUsd = ledger && ledger.measured > 0
+            ? Math.round(ledger.measured * 1e6) / 1e6
+            : ledger && ledger.estimated > 0
+                ? Math.round(ledger.estimated * 1e6) / 1e6
+                : undefined;
+        return {
+            provider: g.provider,
+            model: g.model,
+            action: g.action,
+            requests: g.requests,
+            failures: g.failures,
+            errorRate: Math.round((g.failures / g.requests) * 1000) / 1000,
+            latency: sorted.length >= 10
+                ? { avg, samples: sorted.length, p50: pct(sorted, 0.5), p95: pct(sorted, 0.95), p99: pct(sorted, 0.99) }
+                : sorted.length > 0
+                    ? { avg, samples: sorted.length }
+                    : undefined,
+            costUsd,
+            costBasis: ledger && ledger.measured > 0 ? 'measured' : ledger && ledger.estimated > 0 ? 'estimated' : undefined,
+            costCalls: ledger?.measuredCalls ?? 0,
+            callIds: g.callIds.slice(-5),
+            lastAt: g.lastAt,
+        };
+    })
+        .sort((a, b) => b.lastAt - a.lastAt);
+    return {
+        enabled: entries.length > 0,
+        total: entries.length,
+        rows: rows.slice(0, 300),
+        updatedAt: Date.now(),
+    };
+}
 function readQuotaData() {
     const data = readJSON(join(MEMORY_DIR, 'quota-ledger.json'));
     if (!data?.entries) {
@@ -1439,6 +1544,11 @@ function handleRequest(req, res) {
         res.end(JSON.stringify(readModelRegistryData()));
         return;
     }
+    if (pathname === '/api/requests') {
+        res.writeHead(200, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify(readRequestsData()));
+        return;
+    }
     if (pathname === '/api/dag') {
         res.writeHead(200, { 'Content-Type': 'application/json' });
         res.end(JSON.stringify(readDAGData()));
@@ -1465,6 +1575,7 @@ function handleRequest(req, res) {
             health: readHealthData(),
             routing: readRoutingInsights(),
             modelRegistry: readModelRegistryData(),
+            requests: readRequestsData(),
             dag: readDAGData(),
             pipelineRuns: readPipelineRuns(),
             serverTime: Date.now(),
@@ -1486,6 +1597,7 @@ function handleRequest(req, res) {
             evals: readEvalData(),
             memory: readMemoryData(),
             health: readHealthData(),
+            requests: readRequestsData(),
             routing: readRoutingInsights(),
             modelRegistry: readModelRegistryData(),
             dag: readDAGData(),
@@ -1521,6 +1633,7 @@ function handleRequest(req, res) {
                     health: readHealthData(),
                     routing: readRoutingInsights(),
                     modelRegistry: readModelRegistryData(),
+                    requests: readRequestsData(),
                     dag: readDAGData(),
                     pipelineRuns: readPipelineRuns(),
                     serverTime: Date.now(),

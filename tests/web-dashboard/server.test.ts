@@ -446,6 +446,26 @@ describe('Dashboard Server', () => {
       expect(body.modelRegistry.enabled).toBe(false);
     });
 
+    it('GET /api/requests returns empty state when no action log exists (P3-M3.2)', async () => {
+      const res = await httpGet(`${baseUrl}/api/requests`);
+      expect(res.statusCode).toBe(200);
+      const body = JSON.parse(res.body);
+      expect(body.enabled).toBe(false);
+      expect(body.total).toBe(0);
+      expect(Array.isArray(body.rows)).toBe(true);
+      expect(body.rows).toHaveLength(0);
+      expect(typeof body.updatedAt).toBe('number');
+    });
+
+    it('GET /api/all includes the requests field (Requests panel aggregate)', async () => {
+      const res = await httpGet(`${baseUrl}/api/all`);
+      expect(res.statusCode).toBe(200);
+      const body = JSON.parse(res.body);
+      expect(body).toHaveProperty('requests');
+      expect(body.requests.enabled).toBe(false);
+      expect(Array.isArray(body.requests.rows)).toBe(true);
+    });
+
     it('GET /api/routing returns preference without benchmark data', async () => {
       const res = await httpGet(`${baseUrl}/api/routing`);
       expect(res.statusCode).toBe(200);
