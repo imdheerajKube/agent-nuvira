@@ -30,6 +30,7 @@ import { logger } from '../utils/logger.js';
 import { streamCompletion } from './sse.js';
 import { getModelTags } from './model-catalog.js';
 import { getCostTracker, recordCallWithUsage } from '../learning/cost-tracker.js';
+import { buildConversationKey, cacheReasoning } from '../learning/reasoning-cache.js';
 
 const DEFAULT_NUVIRA_BASE_URL = 'http://127.0.0.1:20128/v1';
 
@@ -65,6 +66,36 @@ function extraHeaders(config: ProviderConfig): Record<string, string> {
   return out;
 }
 
+/**
+ * P4 M4.1: append a bounded continuation note to the prompt when retrying a
+ * mid-stream failure. Builds the note lazily (the partial output is the caller's
+ * already-streamed text) so a caller that only carries a partial string can pass
+ * it directly via options.continuation OR via the partial-output convenience.
+ */
+function withContinuation(prompt: string, options?: InferenceOptions): string {
+  if (!options?.continuation) return prompt;
+  return `${prompt}\n\n${options.continuation}`;
+}
+
+/**
+ * P4 M4.2: build the messages array with an optional prior assistant
+ * reasoning_content message. Strict reasoning providers 400 on a conversation
+ * that omits the reasoning that produced a prior turn — replaying it (from
+ * the reasoning cache) makes the retry acceptable.
+ */
+function buildMessages(prompt: string, options?: InferenceOptions): Array<Record<string, unknown>> {
+  const messages: Array<Record<string, unknown>> = [];
+  if (options?.reasoningContext) {
+    messages.push({
+      role: 'assistant',
+      content: '',
+      reasoning_content: options.reasoningContext,
+    });
+  }
+  messages.push({ role: 'user', content: withContinuation(prompt, options) });
+  return messages;
+}
+
 export class NuviraAdapter implements InferenceProvider {
   readonly name = 'Nuvira Gateway';
   private config: ProviderConfig;
@@ -97,7 +128,7 @@ export class NuviraAdapter implements InferenceProvider {
       headers,
       body: JSON.stringify({
         model,
-        messages: [{ role: 'user', content: prompt }],
+        messages: buildMessages(prompt, options),
         temperature,
         max_tokens: maxTokens,
       }),
@@ -167,16 +198,37 @@ export class NuviraAdapter implements InferenceProvider {
     // asymmetry — threading a signal through streamCompletion is a P1 follow-up.
     // M2.2: the final SSE chunk may carry the gateway's `usage` — capture it
     // for MEASURED cost recording (exact wire tokens) over the estimate.
+    // P4 M4.2: reasoning deltas are captured and cached per (provider, model,
+    // conversation) so a retry to this provider can re-inject them.
     let streamUsage: { promptTokens?: number; completionTokens?: number } | undefined;
+    const reasoningChunks: string[] = [];
+    const conversationKey = buildConversationKey([{ role: 'user', content: prompt }]);
     const fullContent = await streamCompletion(
       `${this.baseUrl}/chat/completions`,
       headers,
-      { model, messages: [{ role: 'user', content: prompt }], temperature, max_tokens: maxTokens },
+      { model, messages: buildMessages(prompt, options), temperature, max_tokens: maxTokens },
       onToken,
       (u) => {
         streamUsage = u;
       },
+      (r) => {
+        reasoningChunks.push(r);
+      },
     );
+
+    // Best-effort: persist the reasoning for M4.2 replay on a later retry.
+    if (reasoningChunks.length > 0) {
+      try {
+        cacheReasoning({
+          provider: 'nuvira',
+          model,
+          conversationKey,
+          reasoningContent: reasoningChunks.join(''),
+        });
+      } catch {
+        // Non-critical.
+      }
+    }
 
     try {
       recordCallWithUsage(getCostTracker(), 'nuvira', model, prompt, fullContent, streamUsage);

@@ -19,6 +19,24 @@ export function parseSSELine(line: string): string | null {
   }
 }
 
+/**
+ * Parse the reasoning-content delta from an SSE line (P4 M4.2): some
+ * reasoning models emit `delta.reasoning_content` alongside (or instead of)
+ * `delta.content`. Returns the reasoning delta or null when absent.
+ */
+export function parseSSEReasoning(line: string): string | null {
+  if (!line.startsWith('data: ')) return null;
+  const data = line.slice(6).trim();
+  if (data === '[DONE]') return null;
+  try {
+    const parsed = JSON.parse(data);
+    const reasoning = parsed?.choices?.[0]?.delta?.reasoning_content;
+    return typeof reasoning === 'string' && reasoning.length > 0 ? reasoning : null;
+  } catch {
+    return null;
+  }
+}
+
 /** Measured token usage reported by an OpenAI-compatible endpoint. */
 export interface UsageInfo {
   promptTokens: number;
@@ -45,6 +63,7 @@ export async function streamCompletion(
   body: Record<string, unknown>,
   onToken: (token: string) => void,
   onUsage?: (usage: UsageInfo) => void,
+  onReasoning?: (text: string) => void,
 ): Promise<string> {
   const response = await fetch(url, {
     method: 'POST',
@@ -117,6 +136,10 @@ export async function streamCompletion(
           fullContent.push(token);
           onToken(token);
         }
+        // P4 M4.2: forward reasoning-content deltas (cached by adapters for
+        // reasoning-replay on retry).
+        const reasoning = onReasoning ? parseSSEReasoning(trimmed) : null;
+        if (reasoning) onReasoning!(reasoning);
         captureUsage(trimmed);
       }
     }
@@ -129,6 +152,8 @@ export async function streamCompletion(
         fullContent.push(token);
         onToken(token);
       }
+      const reasoning = onReasoning ? parseSSEReasoning(remaining) : null;
+      if (reasoning) onReasoning!(reasoning);
       captureUsage(remaining);
     }
   } finally {

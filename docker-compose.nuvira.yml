@@ -1,0 +1,58 @@
+# Nuvira sidecar profile — external OpenAI-compatible gateway (Nuvira-Router P5 M5.1)
+#
+# Opt-in breadth for teams that want a self-hosted gateway (hundreds of
+# providers / free tiers / multi-account rotation) served as a SINGLE
+# OpenAI-compatible endpoint that the built-in `nuvira` provider talks to
+# (P1 adapter). Agent-Nuvira's decision layer stays authoritative — the
+# gateway joins the same model registry / bandit / quota-ledger learning as
+# any built-in provider.
+#
+#   docker compose -f docker-compose.nuvira.yml --profile base up -d
+#   buff doctor --nuvira            # probe the sidecar (GET /v1/models + version)
+#   buff chat -p nuvira -m auto     # route through the gateway
+#
+# SECURITY DEFAULTS (M5.2 — never weaken these):
+#   • Binds 127.0.0.1 ONLY — the gateway is never exposed publicly.
+#   • The CLI's nuvira adapter defaults to http://127.0.0.1:20128/v1, matching
+#     the host port below, so zero config is needed for a local sidecar.
+#   • Require an auth token in production: set NUVIRA_MASTER_KEY and mirror it
+#     in ~/.buff/buffconfig.json as providers.nuvira.apiKey (or send it via
+#     providers.nuvira.headers.Authorization). Never log it (secrets are
+#     redacted by the logger).
+#
+# IMAGE PINNING (M5.4): the tag below is pinned for reproducibility. Override
+# for upgrades via NUVIRA_GATEWAY_IMAGE; document the upgrade cadence in
+# UPGRADE_ROADMAP.md before bumping. `docker compose pull` before `up` on a
+# bumped tag.
+
+services:
+  nuvira-gateway:
+    image: ${NUVIRA_GATEWAY_IMAGE:-ghcr.io/berriai/litellm:main-stable}
+    profiles: ["base"]
+    container_name: agent-nuvira-gateway
+    # Loopback-only port mapping: host 20128 (= the nuvira adapter default) →
+    # container 4000 (liteLLM's serving port).
+    ports:
+      - "127.0.0.1:20128:4000"
+    environment:
+      # Persist the gateway's proxy DB (model configs / keys) so restarts
+      # keep the fleet config. Bind to the container-local data volume.
+      LITELLM_LOG: "INFO"
+      # Optional: require a gateway master key (recommended for production).
+      # NUVIRA_MASTER_KEY: "${NUVIRA_MASTER_KEY:-}"
+    volumes:
+      # Model + provider config for the gateway. See the sample in
+      # UPGRADE_ROADMAP.md (P5 section). The file is optional — a config-less
+      # gateway answers /v1/models with an empty list and routes nothing.
+      - ./nuvira-gateway-config.yaml:/app/config.yaml:ro
+    healthcheck:
+      # liteLLM exposes /health/liveliness — used by `buff doctor --nuvira`
+      # and by compose to report container health. `curl` ships in the
+      # ghcr.io/berriai/litellm image; if your image lacks it, swap the test
+      # for: ["CMD", "wget", "-qO", "/dev/null", "http://127.0.0.1:4000/health/liveliness"].
+      test: ["CMD", "curl", "-fsS", "http://127.0.0.1:4000/health/liveliness"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 20s
+    restart: unless-stopped

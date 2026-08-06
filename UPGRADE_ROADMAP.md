@@ -1637,5 +1637,78 @@ Phase 4.1 ───► Phase 4.2 ───► Phase 4.3 ───► Phase 4.4 �
 
 ---
 
-*Last updated: August 2026 — Phases 1–3: 25/25 completed · Phase 4: 6/6 completed (all items ✅)*
+## 🧭 Nuvira Sidecar (P5) — Quick Start & Upgrade Policy
+
+> **What it is (v1.58.4+):** an OPT-IN, self-hosted external gateway profile. Teams
+> that want hundreds of providers / free tiers / multi-account rotation behind a
+> SINGLE OpenAI-compatible endpoint run the sidecar (via the included compose
+> profile) and route through it with `--provider nuvira`. Agent-Nuvira's decision
+> layer stays authoritative — the gateway joins the same model registry / bandit /
+> quota-ledger learning as built-in providers. Everything is disabled by default;
+> no new runtime dependencies when unused.
+
+### Quick start
+
+```bash
+# 1. Start the sidecar (loopback-only, pinned image, healthchecked)
+docker compose -f docker-compose.nuvira.yml --profile base up -d
+
+# 2. Probe it (reachability + model count + gateway version)
+buff doctor --nuvira
+
+# 3. Route through it — chat, plan, execute, auto mode all work unchanged
+buff chat -p nuvira -m auto
+buff model list --provider nuvira
+```
+
+### Configuration (`provider.nuvira`)
+
+| Key | Default | Meaning |
+|---|---|---|
+| `providers.nuvira.baseUrl` | `http://127.0.0.1:20128/v1` | Gateway base URL (matches the compose host port — zero config for a local sidecar) |
+| `providers.nuvira.apiKey` | none | Optional auth token (REQUIRED for production gateways) |
+| `providers.nuvira.headers` | none | Extra gateway headers (tenant keys, etc.) — injection-guarded |
+| `routing.nuviraSidecar.enabled` | `false` | P5 feature flag — gate for sidecar-specific integration helpers |
+
+`buff config set providers.nuvira.baseUrl http://127.0.0.1:20128/v1`
+
+### Security defaults (never weaken)
+
+- **Bind 127.0.0.1 ONLY** — the compose profile maps the port to the loopback
+  interface; the gateway is never exposed publicly.
+- **Require an auth token in production** — set `NUVIRA_MASTER_KEY` in the
+  compose env and mirror it as `providers.nuvira.apiKey` (or
+  `providers.nuvira.headers.Authorization`). Tokens are redacted by the logger.
+- **Unreachable = skipped, not failed-into** — a dead gateway reports
+  `unavailable` via the adapter's `isAvailable()` probe; Auto routing skips it
+  predictively (existing path).
+
+### Image pinning & upgrade cadence (M5.4)
+
+- The compose file pins the gateway image (`NUVIRA_GATEWAY_IMAGE` env override;
+  default `ghcr.io/berriai/litellm:main-stable`).
+- **Before bumping:** `docker compose pull`, verify `buff doctor --nuvira`
+  passes against the new image, run the regression gate, then document the bump
+  in the CHANGELOG. Pin a versioned tag (`main-stable-vX.Y.Z`) for production.
+- **Rollback:** set `NUVIRA_GATEWAY_IMAGE` back to the previous tag and
+  `docker compose up -d` — the CLI is image-agnostic (any OpenAI-compatible
+  gateway works).
+
+### Mid-stream resilience (P4, v1.58.4 core)
+
+- **Continuation retry (M4.1)** — chat's auto-failover buffers streamed tokens;
+  a mid-stream death hands the next candidate a bounded "continue from here"
+  note (max 1 continuation per message; definitive failures — auth/
+  rate-limit/model-404 — never continue).
+- **Reasoning-replay cache (M4.2)** — the gateway adapter captures
+  `reasoning_content` deltas per conversation and caches them
+  (`~/.buff/memory/reasoning-cache.json`); a retry to the same provider can
+  re-inject the prior reasoning to satisfy strict reasoning models.
+- **Context-relay (M4.3)** — the continuation note doubles as the compact
+  "session so far" relay (prompt + partial output, budget-capped) so a rotated
+  provider has continuity.
+
+---
+
+*Last updated: August 2026 — Phases 1–3: 25/25 completed · Phase 4: 6/6 completed (all items ✅) · P5 sidecar + P4 resilience core (v1.58.4)*
 *Author: Dheeraj Sharma*

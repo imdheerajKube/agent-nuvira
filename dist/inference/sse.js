@@ -21,6 +21,26 @@ export function parseSSELine(line) {
     }
 }
 /**
+ * Parse the reasoning-content delta from an SSE line (P4 M4.2): some
+ * reasoning models emit `delta.reasoning_content` alongside (or instead of)
+ * `delta.content`. Returns the reasoning delta or null when absent.
+ */
+export function parseSSEReasoning(line) {
+    if (!line.startsWith('data: '))
+        return null;
+    const data = line.slice(6).trim();
+    if (data === '[DONE]')
+        return null;
+    try {
+        const parsed = JSON.parse(data);
+        const reasoning = parsed?.choices?.[0]?.delta?.reasoning_content;
+        return typeof reasoning === 'string' && reasoning.length > 0 ? reasoning : null;
+    }
+    catch {
+        return null;
+    }
+}
+/**
  * Perform a streaming chat completion request for an OpenAI-compatible API.
  *
  * @param url - The full URL for the chat completions endpoint
@@ -34,7 +54,7 @@ export function parseSSELine(line) {
  *   length-based estimates.
  * @returns The full concatenated response text
  */
-export async function streamCompletion(url, headers, body, onToken, onUsage) {
+export async function streamCompletion(url, headers, body, onToken, onUsage, onReasoning) {
     const response = await fetch(url, {
         method: 'POST',
         headers: {
@@ -99,6 +119,11 @@ export async function streamCompletion(url, headers, body, onToken, onUsage) {
                     fullContent.push(token);
                     onToken(token);
                 }
+                // P4 M4.2: forward reasoning-content deltas (cached by adapters for
+                // reasoning-replay on retry).
+                const reasoning = onReasoning ? parseSSEReasoning(trimmed) : null;
+                if (reasoning)
+                    onReasoning(reasoning);
                 captureUsage(trimmed);
             }
         }
@@ -110,6 +135,9 @@ export async function streamCompletion(url, headers, body, onToken, onUsage) {
                 fullContent.push(token);
                 onToken(token);
             }
+            const reasoning = onReasoning ? parseSSEReasoning(remaining) : null;
+            if (reasoning)
+                onReasoning(reasoning);
             captureUsage(remaining);
         }
     }

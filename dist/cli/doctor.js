@@ -35,10 +35,91 @@ const PROVIDER_LABELS = {
     nim: '🎮 NVIDIA NIM',
     gemini: '🌀 Google Gemini',
     openrouter: '🌐 OpenRouter',
+    nuvira: '🌐 Nuvira Gateway (OpenAI-compatible sidecar)',
 };
 const BUILTIN_PROVIDERS = ['local', 'groq', 'nim', 'gemini', 'openrouter', 'nuvira'];
 const CHECK_TIMEOUT_MS = 10_000; // 10s per check
 const TOTAL_TIMEOUT_MS = 30_000; // 30s total for all checks on one provider
+// Nuvira sidecar defaults (P5 M5.1): the adapter's default base URL is
+// http://127.0.0.1:20128/v1 — the same host:port docker-compose.nuvira.yml
+// binds, so a local sidecar is zero-config.
+const DEFAULT_NUVIRA_BASE_URL = 'http://127.0.0.1:20128/v1';
+/**
+ * Probe the Nuvira sidecar gateway (P5 M5.1). Pure + unit-testable: talks
+ * only over HTTP to the given base URL, never touches global state.
+ *
+ * @param baseUrl   Gateway base URL, default http://127.0.0.1:20128/v1
+ * @param timeoutMs Per-request timeout (default 5000ms)
+ * @param apiKey    Optional gateway auth token (from providers.nuvira.apiKey) —
+ *                  production gateways require one; the probe honors it.
+ */
+export async function probeNuviraSidecar(baseUrl, timeoutMs = 5000, apiKey) {
+    const base = (baseUrl || DEFAULT_NUVIRA_BASE_URL).trim().replace(/\/+$/, '');
+    const versionBase = base.replace(/\/v1$/, '');
+    const authHeaders = apiKey ? { Authorization: `Bearer ${apiKey}` } : {};
+    // ── 1. GET {base}/models — reachability + model count ──────────────
+    let modelCount = 0;
+    try {
+        const modelsRes = await fetch(`${base}/models`, {
+            headers: { Accept: 'application/json', ...authHeaders },
+            signal: AbortSignal.timeout(timeoutMs),
+        });
+        if (!modelsRes.ok) {
+            return {
+                status: 'fail',
+                modelCount: 0,
+                version: null,
+                baseUrl: base,
+                error: `GET /models → HTTP ${modelsRes.status}`,
+            };
+        }
+        const data = (await modelsRes.json());
+        modelCount = Array.isArray(data?.data) ? data.data.length : 0;
+    }
+    catch (err) {
+        return {
+            status: 'fail',
+            modelCount: 0,
+            version: null,
+            baseUrl: base,
+            error: err instanceof Error ? err.message : String(err),
+        };
+    }
+    // ── 2. Best-effort GET {versionBase}/version — version string ──────
+    let version = null;
+    let versionError;
+    try {
+        const versionRes = await fetch(`${versionBase}/version`, {
+            headers: { Accept: 'application/json', ...authHeaders },
+            signal: AbortSignal.timeout(timeoutMs),
+        });
+        if (versionRes.ok) {
+            const text = await versionRes.text();
+            try {
+                const parsed = JSON.parse(text);
+                version = parsed?.version != null ? String(parsed.version) : text.trim().slice(0, 60) || null;
+            }
+            catch {
+                version = text.trim().slice(0, 60) || null;
+            }
+        }
+        else {
+            versionError = `GET /version → HTTP ${versionRes.status}`;
+        }
+    }
+    catch {
+        versionError = 'GET /version timed out or failed';
+    }
+    // Models answered → the sidecar is up; a missing /version is only a WARN
+    // level detail (many OpenAI-compatible gateways don't expose one).
+    return {
+        status: 'pass',
+        modelCount,
+        version,
+        baseUrl: base,
+        error: versionError,
+    };
+}
 // ─── DoctorCommand ──────────────────────────────────────────────────────────
 export class DoctorCommand extends BaseCommand {
     create() {
@@ -46,6 +127,7 @@ export class DoctorCommand extends BaseCommand {
             .description('Run diagnostic checks on all provider configurations and system health');
         command
             .option('-p, --provider <provider>', 'Check only a specific provider')
+            .option('--nuvira', 'Probe the Nuvira sidecar gateway (GET /v1/models + version)', false)
             .option('--watch', 'Continuous monitoring mode (refreshes every 30s)', false)
             .option('--verbose', 'Show detailed diagnostic information', false)
             .option('--fix', 'Attempt to auto-fix common issues', false)
@@ -69,6 +151,38 @@ export class DoctorCommand extends BaseCommand {
         console.log('');
         // ── System-level checks ─────────────────────────────────────────────
         const sysChecks = await this.runSystemChecks();
+        // ── Nuvira sidecar probe (P5 M5.1) ─────────────────────────────────
+        // `buff doctor --nuvira` probes the external gateway: reachability via
+        // GET /v1/models, model count, and the gateway version. Runs INSTEAD of
+        // the per-provider loop (the flag's job is the sidecar, not the fleet).
+        // The probe honors the user's CONFIGURED gateway (providers.nuvira.baseUrl
+        // + apiKey) — an auth-token production gateway must not report FAIL just
+        // because the probe skipped its token.
+        if (options.nuvira) {
+            let nuviraCfg;
+            try {
+                nuviraCfg = this.configManager.getAll().providers?.nuvira;
+            }
+            catch {
+                // Best-effort — never break the probe on a config read failure.
+            }
+            const probe = await probeNuviraSidecar(nuviraCfg?.baseUrl, 5000, nuviraCfg?.apiKey);
+            console.log('');
+            this.renderNuviraSidecarSection(probe);
+            console.log('');
+            this.renderSummary(sysChecks, []);
+            console.log('');
+            logger.highlight('═'.repeat(62));
+            console.log(`  Completed in ${Date.now() - startTime}ms`);
+            logger.highlight('═'.repeat(62));
+            console.log('');
+            return {
+                timestamp: Date.now(),
+                system: sysChecks,
+                providers: [],
+                durationMs: Date.now() - startTime,
+            };
+        }
         // ── Provider checks ─────────────────────────────────────────────────
         const providersToCheck = options.provider
             ? [options.provider]
@@ -462,6 +576,21 @@ export class DoctorCommand extends BaseCommand {
             if (check.fix && check.status === 'fail') {
                 console.log(`     💡 Fix: ${check.fix}`);
             }
+        }
+    }
+    renderNuviraSidecarSection(probe) {
+        logger.highlight('  ── Nuvira Sidecar (P5) ──');
+        const icon = this.statusIcon(probe.status);
+        console.log(`\n  ${icon} Nuvira Sidecar Gateway`);
+        console.log(`     ${icon} Endpoint: ${probe.baseUrl}/models`);
+        if (probe.status === 'pass') {
+            console.log(`     ${icon} Models: ${probe.modelCount} available`);
+            console.log(`     ${probe.version ? '✅' : '⚠️'} Version: ${probe.version || 'unknown (gateway exposes no /version)'}`);
+        }
+        else {
+            console.log(`     ❌ Unreachable: ${probe.error}`);
+            console.log('     💡 Start the sidecar: docker compose -f docker-compose.nuvira.yml --profile base up -d');
+            console.log('     💡 Or set providers.nuvira.baseUrl in ~/.buff/buffconfig.json');
         }
     }
     renderProviderSection(results, verbose) {
