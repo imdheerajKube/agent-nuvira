@@ -34,6 +34,7 @@ import { SDKCommand } from './sdk.js';
 import { ProviderCommand } from './provider.js';
 import { SecurityCommand } from './security.js';
 import { AuditCommand } from './audit.js';
+import { SbomCommand } from './sbom.js';
 import { FeedbackCommand } from './feedback.js';
 import { MarketplaceCommand } from './marketplace.js';
 import { MCPCommand } from './mcp.js';
@@ -123,6 +124,8 @@ export function createCLI() {
     program.addCommand(securityCmd.create());
     const auditCmd = new AuditCommand();
     program.addCommand(auditCmd.create());
+    const sbomCmd = new SbomCommand();
+    program.addCommand(sbomCmd.create());
     // Register Feedback command (from nextlevel roadmap §4.3)
     const feedbackCmd = new FeedbackCommand();
     program.addCommand(feedbackCmd.create());

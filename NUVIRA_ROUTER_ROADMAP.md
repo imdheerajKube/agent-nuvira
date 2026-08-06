@@ -292,7 +292,7 @@ Verified as of 2026-08-05 (v1.57.0, 3,032 root tests + 42 dashboard component te
 | P6 | M6.3 Tamper-evident audit | [#7](https://github.com/imdheerajKube/agent-nuvira/issues/7) | ✅ | v1.59.0 |
 | P6 | M6.4 Nuvira Gateway (central) | [#7](https://github.com/imdheerajKube/agent-nuvira/issues/7) | ⬜ | — |
 | P6 | M6.5 Governance enforcement | [#7](https://github.com/imdheerajKube/agent-nuvira/issues/7) | ⬜ | — |
-| P6 | M6.6 Supply chain (SBOM) | [#7](https://github.com/imdheerajKube/agent-nuvira/issues/7) | ⬜ | — |
+| P6 | M6.6 Supply chain (SBOM) | [#7](https://github.com/imdheerajKube/agent-nuvira/issues/7) | ✅ | v1.59.4 |
 | P7 | M7.1 doctor --enterprise | [#8](https://github.com/imdheerajKube/agent-nuvira/issues/8) | ✅ | v1.58.7 |
 | P7 | M7.2 Upgrade guide | [#8](https://github.com/imdheerajKube/agent-nuvira/issues/8) | ✅ | v1.58.7 |
 | P7 | M7.3 Website/docs sync | [#8](https://github.com/imdheerajKube/agent-nuvira/issues/8) | ⬜ | — |

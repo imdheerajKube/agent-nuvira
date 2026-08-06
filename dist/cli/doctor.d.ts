@@ -140,6 +140,25 @@ export declare function buildGatewayUsage(configManager?: import('../config/mana
  * Legacy pre-chain stores verify as a WARN (records readable; chain starts on
  * the next write); broken chains are a FAIL with the exact tamper line.
  */
+/**
+ * P6 M6.6 supply-chain check: does the installed dependency set match what a
+ * generated SBOM claims? Pure core — the caller passes a pre-built verify
+ * result (file I/O lives in runDiagnosis). Drift/tamper → fail; flagged
+ * copyleft/unknown licenses → warn (compliance review, not a defect); a
+ * missing lockfile → warn (can't bill-of-material).
+ */
+export declare function checkSbomSupplyChain(verify: {
+    ok: boolean;
+    added: string[];
+    removed: string[];
+    changed: Array<{
+        name: string;
+    }>;
+    flaggedLicenses: Array<{
+        name: string;
+        license: string;
+    }>;
+} | null, lockfilePresent: boolean): CheckResult;
 export declare function checkAuditChainIntegrity(name: string, verify: {
     totalLines: number;
     legacyLines: number;
@@ -179,6 +198,25 @@ export declare function buildEnterpriseChecks(inputs: {
             verdict: string;
         };
     }>;
+    /**
+     * P6 M6.6 pre-computed SBOM verify result (pure core, file I/O done by the
+     * caller). Undefined → the supply-chain check is skipped (keeps non-
+     * enterprise doctor runs unchanged).
+     */
+    sbomVerify?: {
+        ok: boolean;
+        added: string[];
+        removed: string[];
+        changed: Array<{
+            name: string;
+        }>;
+        flaggedLicenses: Array<{
+            name: string;
+            license: string;
+        }>;
+    } | null;
+    /** Whether package-lock.json exists in the project root (for the warn path). */
+    lockfilePresent?: boolean;
 }): CheckResult[];
 export declare class DoctorCommand extends BaseCommand {
     create(): Command;

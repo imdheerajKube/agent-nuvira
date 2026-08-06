@@ -20,6 +20,7 @@ import {
   checkSecretsBackend,
   checkGatewayTelemetry,
   checkAuditChainIntegrity,
+  checkSbomSupplyChain,
   buildEnterpriseChecks,
 } from '../../src/cli/doctor.js';
 import type { BuffConfig } from '../../src/config/types.js';
@@ -438,5 +439,49 @@ describe('doctor --enterprise audit chain integrity (P6 M6.3)', () => {
     });
     expect(check.status).toBe('fail');
     expect(check.message).toContain('corrupt');
+  });
+});
+
+describe('doctor --enterprise supply chain (P6 M6.6 SBOM)', () => {
+  it('clean SBOM + clean licenses → pass', () => {
+    const check = checkSbomSupplyChain(
+      { ok: true, added: [], removed: [], changed: [], flaggedLicenses: [], totalComponents: 245 },
+      true,
+    );
+    expect(check.status).toBe('pass');
+    expect(check.message).toContain('matches package-lock.json');
+  });
+
+  it('dependency drift → fail with the add/remove/change breakdown', () => {
+    const check = checkSbomSupplyChain(
+      { ok: false, added: ['new-dep@1.0.0'], removed: [], changed: [{ name: 'commander' }], flaggedLicenses: [], totalComponents: 244 },
+      true,
+    );
+    expect(check.status).toBe('fail');
+    expect(check.message).toContain('1 added');
+    expect(check.message).toContain('1 changed');
+    expect(check.fix).toContain('buff sbom');
+  });
+
+  it('clean SBOM but copyleft/unknown licenses → warn (compliance review, not a defect)', () => {
+    const check = checkSbomSupplyChain(
+      { ok: true, added: [], removed: [], changed: [], flaggedLicenses: [{ name: 'gpl-dep@1.0.0', license: 'GPL-3.0' }], totalComponents: 245 },
+      true,
+    );
+    expect(check.status).toBe('warn');
+    expect(check.message).toContain('1 copyleft/unknown');
+    expect(check.fix).toContain('buff sbom licenses');
+  });
+
+  it('missing lockfile → warn (can bill-of-material nothing)', () => {
+    const check = checkSbomSupplyChain(null, false);
+    expect(check.status).toBe('warn');
+    expect(check.message).toContain('No package-lock.json');
+  });
+
+  it('no stored SBOM to verify → warn with the generate command', () => {
+    const check = checkSbomSupplyChain(null, true);
+    expect(check.status).toBe('warn');
+    expect(check.message).toContain('No stored SBOM');
   });
 });
