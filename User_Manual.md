@@ -1,6 +1,14 @@
 # Agent-Nuvira — User Manual
 
-**Version 1.59.2 | August 2026**
+**Version 1.59.3 | August 2026**
+
+### v1.59.3 — Config CLI accepts the routing gates
+
+- `buff config set routing.capabilityFit false` / `routing.contextFit false` /
+  `routing.partialFlakiness false` (and back to `true`) now work — the config
+  CLI previously rejected these boolean gate keys.
+
+---
 
 ### v1.59.2 — Routing learns from mid-stream flakiness
 

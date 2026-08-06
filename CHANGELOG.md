@@ -9,6 +9,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.59.3] - 2026-08-06
+
+### Fixed
+
+- **`buff config set routing.<gate>` accepts the soft-signal gate keys.** The
+  routing allowlist in the config CLI was stale — `capabilityFit`, `contextFit`
+  and the new `partialFlakiness` were rejected with "Unknown routing config
+  key". All three boolean gates now round-trip via `config set` (the router
+  always read them, but operators couldn't set them from the CLI).
+
 ## [1.59.2] - 2026-08-06
 
 ### Added
