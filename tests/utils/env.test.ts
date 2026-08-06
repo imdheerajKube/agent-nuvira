@@ -26,6 +26,12 @@ function withTempEnv(
   const envPath = join(tmpDir, '.env');
   writeFileSync(envPath, envContent, 'utf-8');
 
+  // Isolate from the real ~/.buff/.env (which may hold real keys): point the
+  // home .env lookup at a path that does not exist so tests never read it.
+  const origBuffEnvFile = process.env.BUFF_ENV_FILE;
+  const isolatedHomeEnv = join(tmpDir, 'home-env-does-not-exist.env');
+  process.env.BUFF_ENV_FILE = isolatedHomeEnv;
+
   // Save original cwd and change to temp dir
   const origCwd = process.cwd();
   process.chdir(tmpDir);
@@ -35,6 +41,11 @@ function withTempEnv(
     fn(env);
   } finally {
     process.chdir(origCwd);
+    if (origBuffEnvFile === undefined) {
+      delete process.env.BUFF_ENV_FILE;
+    } else {
+      process.env.BUFF_ENV_FILE = origBuffEnvFile;
+    }
     // Cleanup
     try { unlinkSync(envPath); } catch { /* best-effort */ }
     try { rmSync(tmpDir, { recursive: true, force: true }); } catch { /* best-effort */ }

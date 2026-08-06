@@ -27,6 +27,8 @@ import { BaseCommand } from './commands.js';
 import { ProviderFactory } from '../inference/factory.js';
 import { getPluginRegistry } from '../plugins/registry.js';
 import { recordRegistryFailure } from '../learning/provider-fallback.js';
+import { getQuotaLedger } from '../learning/quota-ledger.js';
+import { getCostTracker } from '../learning/cost-tracker.js';
 import { logger } from '../utils/logger.js';
 // ─── Constants ──────────────────────────────────────────────────────────────
 const PROVIDER_LABELS = {
@@ -256,9 +258,83 @@ function checkGatewayHealth(probe, configured) {
     };
 }
 /**
+ * M7.4 telemetry/usage-health check. OPT-IN AND OFF BY DEFAULT: privacy-
+ * preserving by construction — the numbers come from aggregate quota/cost
+ * tracking, never prompt content. When the flag is off (default) the check is
+ * an INFORMATIVE warn with the exact enable command, never a failure; when on
+ * it reports the aggregate headline, plus per-provider health flags when
+ * `healthFlags` is also enabled.
+ */
+export function checkGatewayTelemetry(config, usage) {
+    const telemetry = config.routing?.gatewayTelemetry;
+    const enabled = telemetry?.enabled === true;
+    if (!enabled) {
+        return {
+            name: 'Telemetry / Usage Health',
+            status: 'warn',
+            message: 'Gateway usage-health telemetry OFF (privacy-preserving default)',
+            detail: 'No prompt content is ever captured — enabling only reports aggregate requests/tokens/cost. ' +
+                'Set routing.gatewayTelemetry.enabled true to surface usage-health in this report.',
+            fix: 'buff config set routing.gatewayTelemetry.enabled true',
+        };
+    }
+    const showFlags = telemetry?.healthFlags === true;
+    const totalLines = [
+        `${usage.totalRequests} call(s) · ${usage.totalTokens.toLocaleString()} token(s) · $${usage.totalCostUsd.toFixed(4)} est. cost`,
+        'Aggregates only — no prompts, no payloads stored by this check (privacy-safe).',
+    ];
+    if (showFlags) {
+        for (const p of usage.providers) {
+            totalLines.push(`  ${p.provider}: ${p.requests} call(s) · ${p.tokens.toLocaleString()} tok · $${p.costUsd.toFixed(4)}${p.parked ? ' · ⛔ parked' : ''}${p.parked ? ` · resets in ${Math.ceil(p.resetsInMs / 60000)}m` : ''}`);
+        }
+    }
+    return {
+        name: 'Telemetry / Usage Health',
+        status: usage.totalRequests > 0 ? 'pass' : 'warn',
+        message: `Gateway telemetry ON — ${totalLines[0]}`,
+        detail: totalLines.join('\n'),
+    };
+}
+/**
+ * Build the M7.4 aggregate gateway-usage view from the quota ledger + cost
+ * tracker singletons (aggregate counts only — never prompt content).
+ * Best-effort: any read failure degrades to an empty usage view.
+ *
+ * @param configManager When provided, its `routing.quota` limits are used to
+ *   compute quota-configured parking (window exhausted), so the per-provider
+ *   health flags show parked state accurately.
+ */
+export function buildGatewayUsage(configManager) {
+    try {
+        const statuses = getQuotaLedger().getStatus(configManager);
+        const cost = getCostTracker().getSummary();
+        const byProvider = cost?.byProvider || {};
+        const providers = statuses
+            .map((s) => ({
+            provider: s.provider,
+            requests: s.requests,
+            tokens: s.tokensConsumed,
+            costUsd: byProvider[s.provider] || 0,
+            parked: s.parked,
+            resetsInMs: s.parked ? s.resetsInMs : 0,
+        }))
+            .sort((a, b) => a.provider.localeCompare(b.provider));
+        return {
+            providers,
+            totalRequests: providers.reduce((a, p) => a + p.requests, 0),
+            totalTokens: providers.reduce((a, p) => a + p.tokens, 0),
+            totalCostUsd: providers.reduce((a, p) => a + p.costUsd, 0),
+        };
+    }
+    catch {
+        return { providers: [], totalRequests: 0, totalTokens: 0, totalCostUsd: 0 };
+    }
+}
+/**
  * The full M7.1 enterprise self-check, built from pure inputs so it is
  * trivially testable: config snapshot + env + gateway probe result + audit
- * file paths. Returns the ordered CheckResult[] the CLI renders.
+ * file paths + opt-in gateway usage (M7.4). Returns the ordered CheckResult[]
+ * the CLI renders.
  */
 export function buildEnterpriseChecks(inputs) {
     const checks = [];
@@ -289,6 +365,8 @@ export function buildEnterpriseChecks(inputs) {
     }
     // 4. RBAC / governance policy
     checks.push(checkRbacConfig(inputs.config));
+    // 5. M7.4 opt-in gateway telemetry / usage health (off by default)
+    checks.push(checkGatewayTelemetry(inputs.config, inputs.gatewayUsage || { providers: [], totalRequests: 0, totalTokens: 0, totalCostUsd: 0 }));
     return checks;
 }
 // ─── DoctorCommand ──────────────────────────────────────────────────────────
@@ -353,6 +431,7 @@ export class DoctorCommand extends BaseCommand {
                     { name: 'quota-events.jsonl', path: join(memoryDir, 'quota-events.jsonl') },
                     { name: 'model-registry-actions.jsonl', path: join(memoryDir, 'model-registry-actions.jsonl') },
                 ],
+                gatewayUsage: buildGatewayUsage(this.configManager),
             });
             console.log('');
             this.renderEnterpriseSection(enterpriseChecks);

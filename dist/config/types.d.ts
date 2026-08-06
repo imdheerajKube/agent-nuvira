@@ -329,6 +329,31 @@ export interface RoutingConfig {
         /** Min PROSE length (chars) before compression kicks in. Default: 800. */
         minProseChars?: number;
     };
+    /**
+     * M7.4 opt-in gateway telemetry / usage-health flags. OFF BY DEFAULT —
+     * privacy-preserving by construction: enabling these NEVER captures prompt
+     * content; it only reports aggregate usage/health numbers (request counts,
+     * token totals, error rates) already tracked by the quota ledger and cost
+     * tracker, and surfaces them via `buff doctor --enterprise`.
+     *
+     * Set via `buff config set routing.gatewayTelemetry.enabled true` or
+     * directly in .buffconfig.json.
+     */
+    gatewayTelemetry?: {
+        /**
+         * Master switch for opt-in telemetry/usage health reporting. Default:
+         * false (no gateway usage-health reporting — `doctor --enterprise` shows
+         * an informative "off by default" note instead of metrics).
+         */
+        enabled?: boolean;
+        /**
+         * Include per-provider usage-health flag lines in the report (tokens
+         * consumed, requests, parked state, reset countdown per provider).
+         * Default: false. When false, the report only shows the aggregate
+         * headline (total calls / tokens) — never per-provider detail.
+         */
+        healthFlags?: boolean;
+    };
 }
 /**
  * Full configuration schema for .buffconfig.json

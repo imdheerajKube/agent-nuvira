@@ -163,6 +163,44 @@ describe('ConfigCommand set — M2.4 governance policy', () => {
     errorSpy.mockRestore();
   });
 
+  it('sets routing.gatewayTelemetry.enabled as a boolean (M7.4, off by default)', () => {
+    const cmd = makeCommand();
+    runSet(cmd, 'routing.gatewayTelemetry.enabled', 'true');
+    expect(saved?.routing?.gatewayTelemetry?.enabled).toBe(true);
+  });
+
+  it('sets routing.gatewayTelemetry.healthFlags as a boolean (M7.4 per-provider flags)', () => {
+    const cmd = makeCommand();
+    runSet(cmd, 'routing.gatewayTelemetry.healthFlags', 'true');
+    expect(saved?.routing?.gatewayTelemetry?.healthFlags).toBe(true);
+  });
+
+  it('merges gatewayTelemetry flags additively (M7.4)', () => {
+    configState.routing = { gatewayTelemetry: { enabled: true } } as BuffConfig['routing'];
+    const cmd = makeCommand();
+    runSet(cmd, 'routing.gatewayTelemetry.healthFlags', 'true');
+    expect(saved?.routing?.gatewayTelemetry?.enabled).toBe(true);
+    expect(saved?.routing?.gatewayTelemetry?.healthFlags).toBe(true);
+  });
+
+  it('rejects an unknown gatewayTelemetry key with an error (M7.4 validation)', () => {
+    const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
+    const cmd = makeCommand();
+    runSet(cmd, 'routing.gatewayTelemetry.nonsense', 'true');
+    expect(saved?.routing?.gatewayTelemetry?.nonsense).toBeUndefined();
+    expect(errorSpy).toHaveBeenCalled();
+    errorSpy.mockRestore();
+  });
+
+  it('rejects a non-boolean gatewayTelemetry.enabled value (M7.4 validation)', () => {
+    const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
+    const cmd = makeCommand();
+    runSet(cmd, 'routing.gatewayTelemetry.enabled', 'maybe');
+    expect(saved?.routing?.gatewayTelemetry?.enabled).toBeUndefined();
+    expect(errorSpy).toHaveBeenCalled();
+    errorSpy.mockRestore();
+  });
+
   it('merges into existing governance config (additive)', () => {
     configState.routing = { governance: { allowProviders: ['groq'] } } as BuffConfig['routing'];
     const cmd = makeCommand();

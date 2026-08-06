@@ -26,7 +26,11 @@ export function loadEnv() {
         Object.assign(env, projectEnv);
     }
     // Try loading from ~/.buff/.env
-    const homeEnvPath = join(homedir(), '.buff', '.env');
+    // BUFF_ENV_FILE overrides the home .env path (test isolation / alternate
+    // profiles) — mirrors BUFF_MEMORY_DIR for the memory dir.
+    const homeEnvPath = process.env.BUFF_ENV_FILE && process.env.BUFF_ENV_FILE.trim().length > 0
+        ? process.env.BUFF_ENV_FILE
+        : join(homedir(), '.buff', '.env');
     if (existsSync(homeEnvPath)) {
         const homeEnv = parseEnvFile(readFileSync(homeEnvPath, 'utf-8'));
         Object.assign(env, homeEnv);
