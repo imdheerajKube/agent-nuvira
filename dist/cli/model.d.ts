@@ -80,6 +80,24 @@ export declare class ModelCommand extends BaseCommand {
      * Includes effective per-provider pricing (with override flags).
      */
     private buildExplainJSON;
+    /**
+     * Build a RoutingSnapshot from a live decision — the ranked breakdown with
+     * dimensions and governance context, persisted with explain decisions so
+     * `--since` can diff two snapshots (P3-M3.3).
+     */
+    private buildSnapshot;
+    /**
+     * Resolve a `--since` ref: an explain entry id, `@n` (nth most recent
+     * explain with a snapshot), or an epoch-ms timestamp (closest at-or-before).
+     */
+    private resolveExplainRef;
+    /** Structured diff payload for --json mode (null when no prior snapshot). */
+    private buildDecisionDiffJSON;
+    /**
+     * P3-M3.3: resolve the previous explain decision and render the before →
+     * after diff for the current decision (which is also recorded).
+     */
+    private renderRoutingDecisionDiff;
     /** Render a single routing decision (compact or detailed). */
     private renderRoutingDecision;
     private showRecommendations;

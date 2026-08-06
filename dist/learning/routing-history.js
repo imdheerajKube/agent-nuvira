@@ -89,6 +89,13 @@ export function getRoutingHistory(limit = 100) {
     return [...data.entries].reverse().slice(0, limit);
 }
 /**
+ * Explain decisions that carry a full snapshot, most recent first — the
+ * candidate set for `model explain --since <ref>` diffs (P3-M3.3).
+ */
+export function getExplainSnapshots(limit = 100) {
+    return getRoutingHistory(limit).filter((e) => e.source === 'explain' && e.snapshot);
+}
+/**
  * Aggregate usage statistics over the recorded history:
  * totals, last-24h, and counts by provider/model/source/complexity.
  */

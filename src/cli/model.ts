@@ -42,7 +42,8 @@ import {
   type AutoModelRouter,
   type RoutingDimension,
 } from '../learning/auto-router.js';
-import { recordRoutingDecision } from '../learning/routing-history.js';
+import { recordRoutingDecision, getExplainSnapshots, type RoutingHistoryEntry, type RoutingSnapshot } from '../learning/routing-history.js';
+import { diffRoutingDecisions, formatDecisionDiff } from '../learning/decision-diff.js';
 import {
   getRouterBandit,
   COMPLEXITY_BUCKETS,
@@ -212,7 +213,8 @@ export class ModelCommand extends BaseCommand {
       .description('Explain Auto model routing — why a provider/model would be picked for a task')
       .option('-a, --agent <type>', 'Agent type to route for (default: chat)', 'chat')
       .option('-j, --json', 'Output as JSON (for scripting and CI)', false)
-      .action((task: string | undefined, opts: { agent?: string; json?: boolean }) => this.showExplain(task, opts));
+      .option('--since <ref>', 'P3-M3.3: diff against a previous decision — an explain id, @n (nth most recent explain), or an epoch-ms timestamp', undefined)
+      .action((task: string | undefined, opts: { agent?: string; json?: boolean; since?: string }) => this.showExplain(task, opts));
 
     cmd
       .command('health')
@@ -602,13 +604,13 @@ export class ModelCommand extends BaseCommand {
 
   // ── Subcommand: explain ───────────────────────────────────────────────
 
-  private showExplain(task: string | undefined, opts: { agent?: string; json?: boolean }): void {
+  private showExplain(task: string | undefined, opts: { agent?: string; json?: boolean; since?: string }): void {
     const router = getAutoRouter();
     const agentType = opts.agent || 'chat';
 
     if (opts.json) {
       try {
-        console.log(JSON.stringify(this.buildExplainJSON(router, agentType, task), null, 2));
+        console.log(JSON.stringify(this.buildExplainJSON(router, agentType, task, opts.since), null, 2));
       } catch (err) {
         // A PII/governance policy block must not crash the JSON contract —
         // emit a machine-readable error object instead.
@@ -632,7 +634,13 @@ export class ModelCommand extends BaseCommand {
       logger.info(`Task: "${task}"  ·  Agent: ${agentType}`);
       console.log('');
       try {
-        this.renderRoutingDecision(router, agentType, task);
+        // P3-M3.3: `--since <ref>` renders a before → after diff against a
+        // previous explain snapshot instead of the full decision view.
+        if (opts.since) {
+          this.renderRoutingDecisionDiff(router, agentType, task, opts.since);
+        } else {
+          this.renderRoutingDecision(router, agentType, task);
+        }
       } catch (err) {
         // A PII/governance policy block renders cleanly (with the audit trail)
         // instead of crashing `buff model explain` with a raw stack trace.
@@ -642,6 +650,12 @@ export class ModelCommand extends BaseCommand {
           throw err;
         }
       }
+      return;
+    }
+
+    // `--since` requires a task to diff.
+    if (opts.since) {
+      logger.error('`--since` requires a task — diff two decisions for the SAME task, e.g. `buff model explain "add auth" --since @1`');
       return;
     }
 
@@ -693,9 +707,11 @@ export class ModelCommand extends BaseCommand {
     router: AutoModelRouter,
     agentType: string,
     task: string | undefined,
+    since?: string,
   ): Record<string, unknown> {
     const toJSON = (t: string, agent: string): Record<string, unknown> => {
       const d = router.resolve(agent, t, { useRuntimeStats: true }, this.configManager);
+      const snapshot = this.buildSnapshot(d);
       // Record the explain snapshot for the dashboard audit trail + usage stats
       // (JSON mode returns early in showExplain, so this is the only hook here)
       recordRoutingDecision({
@@ -706,7 +722,12 @@ export class ModelCommand extends BaseCommand {
         provider: d.provider,
         model: d.model,
         score: d.score,
+        snapshot,
       });
+      // P3-M3.3: structured diff against a previous decision when --since.
+      const diff = since
+        ? this.buildDecisionDiffJSON(this.resolveExplainRef(since), snapshot)
+        : undefined;
       const pricingOverrides = this.configManager.getAll().pricing || {};
       const pricing: Record<string, { inputPer1K: number; outputPer1K: number; overridden: boolean }> = {};
       for (const r of d.ranked) {
@@ -766,6 +787,7 @@ export class ModelCommand extends BaseCommand {
           : undefined,
         pricing,
         explanation: d.explanation,
+        ...(diff ? { diff } : {}),
       };
     };
 
@@ -775,6 +797,122 @@ export class ModelCommand extends BaseCommand {
       agentType,
       decisions: EXPLAIN_SAMPLES.map((s) => toJSON(s.task, agentType)),
     };
+  }
+
+  /**
+   * Build a RoutingSnapshot from a live decision — the ranked breakdown with
+   * dimensions and governance context, persisted with explain decisions so
+   * `--since` can diff two snapshots (P3-M3.3).
+   */
+  private buildSnapshot(decision: {
+    complexity: string;
+    taskType?: string;
+    weights: Record<string, number>;
+    provider: string;
+    model: string;
+    score: number;
+    ranked: Array<{
+      provider: string;
+      score: number;
+      reason: string;
+      capabilityFit?: number;
+      costSource?: 'measured' | 'estimated';
+      contextFit?: number;
+    }>;
+    fallbackChain: Array<{ provider: string; model: string; reason: string }>;
+    governanceBlocked?: Array<{ provider: string; reason: string }>;
+  }): RoutingSnapshot {
+    return {
+      complexity: decision.complexity,
+      taskType: decision.taskType,
+      weights: decision.weights,
+      winner: { provider: decision.provider, model: decision.model, score: decision.score },
+      ranked: decision.ranked.map((r) => ({
+        provider: r.provider,
+        score: r.score,
+        reason: r.reason,
+        capabilityFit: r.capabilityFit,
+        costSource: r.costSource || 'estimated',
+        contextFit: r.contextFit,
+      })),
+      fallbackChain: decision.fallbackChain.map((c) => ({ provider: c.provider, model: c.model, reason: c.reason })),
+      governanceBlocked: (decision.governanceBlocked || []).map((b) => ({ provider: b.provider, reason: b.reason })),
+    };
+  }
+
+  /**
+   * Resolve a `--since` ref: an explain entry id, `@n` (nth most recent
+   * explain with a snapshot), or an epoch-ms timestamp (closest at-or-before).
+   */
+  private resolveExplainRef(ref: string): RoutingHistoryEntry | null {
+    const snaps = getExplainSnapshots(500);
+    if (/^@\d+$/.test(ref)) {
+      const idx = parseInt(ref.slice(1), 10);
+      return snaps[idx - 1] ?? null;
+    }
+    const byId = snaps.find((e) => e.id === ref);
+    if (byId) return byId;
+    if (/^\d+$/.test(ref)) {
+      const ts = parseInt(ref, 10);
+      return snaps.find((e) => e.timestamp <= ts) ?? null;
+    }
+    return null;
+  }
+
+  /** Structured diff payload for --json mode (null when no prior snapshot). */
+  private buildDecisionDiffJSON(
+    prev: RoutingHistoryEntry | null,
+    cur: RoutingSnapshot,
+  ): Record<string, unknown> | undefined {
+    if (!prev?.snapshot) return undefined;
+    const diff = diffRoutingDecisions(prev.snapshot, cur);
+    return {
+      against: { id: prev.id, timestamp: prev.timestamp, task: prev.task },
+      winnerChanged: diff.winnerChanged,
+      prevWinner: diff.prevWinner,
+      curWinner: diff.curWinner,
+      candidates: diff.candidates,
+      weightDeltas: diff.weightDeltas,
+      governance: diff.governance,
+      gates: diff.gates,
+    };
+  }
+
+  /**
+   * P3-M3.3: resolve the previous explain decision and render the before →
+   * after diff for the current decision (which is also recorded).
+   */
+  private renderRoutingDecisionDiff(router: AutoModelRouter, agentType: string, task: string, ref: string): void {
+    const prev = this.resolveExplainRef(ref);
+    const decision = router.resolve(agentType, task, { useRuntimeStats: true }, this.configManager);
+    const snapshot = this.buildSnapshot(decision);
+    recordRoutingDecision({
+      source: 'explain',
+      agentType,
+      task,
+      complexity: decision.complexity,
+      provider: decision.provider,
+      model: decision.model,
+      score: decision.score,
+      snapshot,
+    });
+
+    console.log('');
+    logger.highlight('═══  Auto Model Routing — Decision Diff (P3-M3.3)  ═══');
+    console.log('');
+    if (!prev?.snapshot) {
+      logger.warn(`  No prior explain snapshot found for ref "${ref}" (${getExplainSnapshots(1).length === 0 ? 'no explain history yet — run a plain `buff model explain "task"` first' : 'that ref does not match an explain decision'}).`);
+      console.log('');
+      return;
+    }
+    const diff = diffRoutingDecisions(prev.snapshot, snapshot);
+    console.log(formatDecisionDiff(diff, {
+      task,
+      refLabel: `${prev.id} · ${new Date(prev.timestamp).toLocaleString()} · "${prev.task.slice(0, 60)}"`,
+    }));
+    console.log('');
+    logger.info('Refs: an explain id · @n (nth most recent) · epoch ms. Run `buff model explain "task"` to record a new snapshot.');
+    console.log('');
   }
 
   /** Render a single routing decision (compact or detailed). */
@@ -789,6 +927,7 @@ export class ModelCommand extends BaseCommand {
       provider: decision.provider,
       model: decision.model,
       score: decision.score,
+      snapshot: this.buildSnapshot(decision),
     });
 
     if (compact) {

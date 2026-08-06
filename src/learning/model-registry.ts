@@ -136,6 +136,12 @@ export interface ActionTelemetryEntry {
   outcome: 'verified' | 'unavailable' | 'error';
   /** Classified reason when outcome is unavailable/error (auth / rate-limit / model not found / ...). */
   errorType?: string;
+  /** Measured round-trip latency (ms) of the call — feeds the Requests panel p50/p95/p99 (P3-M3.2). */
+  latencyMs?: number;
+  /** Measured cost (USD) of the call when the caller had usage data — feeds the Requests panel cost column. */
+  costUsd?: number;
+  /** Correlation id of the call when the caller has one (traceability). */
+  callId?: string;
 }
 
 /** Aggregated "learned from real usage" view — per action (dashboard panel). */
@@ -504,7 +510,15 @@ export class ModelRegistry {
    * call that SUCCEEDED is proof the limit lifted; if the limit persists, the
    * next real call fails again and re-parks.
    */
-  markVerified(provider: string, model: string, source: ModelRegistrySource, latencyMs?: number, action?: string): void {
+  markVerified(
+    provider: string,
+    model: string,
+    source: ModelRegistrySource,
+    latencyMs?: number,
+    action?: string,
+    costUsd?: number,
+    callId?: string,
+  ): void {
     const now = Date.now();
     const key = entryKey(provider, model);
     const existing = this.data.entries[key];
@@ -545,7 +559,7 @@ export class ModelRegistry {
     // passed an action — anonymous writes (e.g. the cost-tracker mirror) update
     // health but don't add panel rows.
     if (action) {
-      this.appendActionLog({ timestamp: now, action, provider, model, outcome: 'verified' });
+      this.appendActionLog({ timestamp: now, action, provider, model, outcome: 'verified', latencyMs, costUsd, callId });
     }
   }
 
@@ -740,13 +754,22 @@ export class ModelRegistry {
    * @param ok        Did the call succeed?
    * @param errorType Optional classified error type ('auth' | 'rate-limit' | ...)
    */
-  recordCall(provider: string, model: string, ok: boolean, errorType?: string, action?: string): void {
+  recordCall(
+    provider: string,
+    model: string,
+    ok: boolean,
+    errorType?: string,
+    action?: string,
+    latencyMs?: number,
+    costUsd?: number,
+    callId?: string,
+  ): void {
     const now = Date.now();
     const key = entryKey(provider, model);
     const existing = this.data.entries[key];
 
     if (ok) {
-      this.markVerified(provider, model, 'telemetry', undefined, action);
+      this.markVerified(provider, model, 'telemetry', latencyMs, action, costUsd, callId);
       this.data.entries[key].lastUsedAt = now;
       return;
     }
@@ -789,6 +812,9 @@ export class ModelRegistry {
         model,
         outcome: errorType === 'auth' || errorType === 'rate-limit' ? 'unavailable' : 'error',
         errorType,
+        latencyMs,
+        costUsd,
+        callId,
       });
     }
   }

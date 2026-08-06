@@ -128,7 +128,7 @@ export function resolveTelemetryAction(defaultAction) {
     const override = process.env.BUFF_TELEMETRY_ACTION;
     return override && override.trim() ? override.trim() : defaultAction;
 }
-export function recordRegistryFailure(providerType, model, err, errorType, action) {
+export function recordRegistryFailure(providerType, model, err, errorType, action, latencyMs) {
     try {
         const registry = getModelRegistry();
         const tag = resolveTelemetryAction(action);
@@ -145,7 +145,7 @@ export function recordRegistryFailure(providerType, model, err, errorType, actio
             registry.markUnavailable(providerType, model || 'default', 'model not found', 'telemetry', 0, tag);
         }
         else {
-            registry.recordCall(providerType, model || 'default', false, kind, tag);
+            registry.recordCall(providerType, model || 'default', false, kind, tag, latencyMs);
         }
     }
     catch {
@@ -167,9 +167,9 @@ export function recordRegistryFailure(providerType, model, err, errorType, actio
  *   ...) — attributed in the per-action log. Omitted → health still updates,
  *   but no dashboard panel row is written.
  */
-export function recordRegistrySuccess(providerType, model, action) {
+export function recordRegistrySuccess(providerType, model, action, latencyMs) {
     try {
-        getModelRegistry().recordCall(providerType, model || 'default', true, undefined, resolveTelemetryAction(action));
+        getModelRegistry().recordCall(providerType, model || 'default', true, undefined, resolveTelemetryAction(action), latencyMs);
     }
     catch {
         // Best-effort — registry telemetry must never break a call.
@@ -355,7 +355,7 @@ export class ProviderFallback {
                 // panel gains a verified row (the mirror of the failure write above).
                 // Anonymous when the caller didn't pass a context — health still
                 // updates, no panel row.
-                recordRegistrySuccess(pt, this.resolveConfiguredModel(pt), options?.context);
+                recordRegistrySuccess(pt, this.resolveConfiguredModel(pt), options?.context, duration);
                 return {
                     response,
                     provider: pt,
@@ -379,7 +379,7 @@ export class ProviderFallback {
                 // (the fallback loop itself doesn't carry a model override).
                 // Best-effort — never break the loop. The `context` option carries the
                 // action tag (chat/plan/edit/...) into the per-action telemetry log.
-                recordRegistryFailure(pt, this.resolveConfiguredModel(pt), err, errorType, options?.context);
+                recordRegistryFailure(pt, this.resolveConfiguredModel(pt), err, errorType, options?.context, duration);
                 attemptsMade.push({ provider: pt, error: errorMsg.slice(0, 200), duration });
                 if (!isRetryableError(errorType)) {
                     // Auth errors and similar — don't retry on other providers
