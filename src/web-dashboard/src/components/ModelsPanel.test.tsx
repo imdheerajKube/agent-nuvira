@@ -204,4 +204,49 @@ describe('ModelsPanel fetch degradation', () => {
     expect(screen.queryByText(/Model Availability Registry/i)).toBeNull();
     expect(screen.queryByText(/Learned from real usage/i)).toBeNull();
   });
+
+  it('recovers from a transient network failure (TypeError → backoff retry → grid renders)', async () => {
+    let modelsCalls = 0;
+    vi.spyOn(globalThis, 'fetch').mockImplementation((input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.includes('/api/model-registry')) return Promise.resolve(jsonResponse({ enabled: false }));
+      modelsCalls += 1;
+      // First attempt: network-level rejection — the reported "Failed to fetch".
+      if (modelsCalls === 1) return Promise.reject(new TypeError('Failed to fetch'));
+      return Promise.resolve(jsonResponse(modelsHealth));
+    });
+
+    render(<ModelsPanel />);
+    // Wait for a DATA-dependent element (only rendered after the retried fetch
+    // lands) — the section header renders before any data arrives.
+    expect(await screen.findByText(/llama3\.2/)).toBeTruthy();
+    // The transient failure was retried, not surfaced.
+    expect(modelsCalls).toBeGreaterThanOrEqual(2);
+    expect(screen.queryByText(/Failed to fetch/i)).toBeNull();
+    expect(screen.queryByText(/Dashboard server unreachable/i)).toBeNull();
+  });
+
+  it('shows a friendly retrying error when the dashboard is unreachable (all attempts fail)', async () => {
+    vi.spyOn(globalThis, 'fetch').mockRejectedValue(new TypeError('Failed to fetch'));
+
+    render(<ModelsPanel />);
+    // All retries exhaust after 300ms + 700ms backoff — allow time for that.
+    expect(await screen.findByText(/Dashboard server unreachable/i, {}, { timeout: 5000 })).toBeTruthy();
+    expect(screen.getByText(/Retrying automatically/i)).toBeTruthy();
+  });
+
+  it('keeps the grid when only /api/model-registry fails at the network level (optional section)', async () => {
+    vi.spyOn(globalThis, 'fetch').mockImplementation((input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.includes('/api/model-registry')) return Promise.reject(new TypeError('Failed to fetch'));
+      return Promise.resolve(jsonResponse(modelsHealth));
+    });
+
+    render(<ModelsPanel />);
+    expect(await screen.findByText(/llama3\.2/)).toBeTruthy();
+    // The registry is optional — a network failure there must not surface an
+    // error banner or hide the health grid.
+    expect(screen.queryByText(/Failed to fetch/i)).toBeNull();
+    expect(screen.queryByText(/Dashboard server unreachable/i)).toBeNull();
+  });
 });

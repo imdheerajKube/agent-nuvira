@@ -9,6 +9,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.58.2] - 2026-08-06
+
+### Fixed
+
+- **Models dashboard "Failed to fetch" repeat fix** — the Models page fetch was
+  un-hardened: a single transient network hiccup (browser socket-pool
+  contention with the persistent SSE feed, a slow provider probe, an
+  IPv4/IPv6 race on `localhost`) rejected the bare `fetch()` calls with
+  `TypeError: Failed to fetch` and left the panel stuck on an error banner.
+  The panel now uses per-request `AbortController` timeouts, fetches health
+  and registry independently (a failure on one never hides the other),
+  auto-retries network-level failures with backoff, re-polls quickly after a
+  failure (self-healing instead of waiting the 60s cadence), and shows a clear
+  "Dashboard server unreachable — retrying automatically…" message only after
+  retries are exhausted. 3 new component tests (total 48).
+
 ## [1.58.1] - 2026-08-06
 
 ### Added
