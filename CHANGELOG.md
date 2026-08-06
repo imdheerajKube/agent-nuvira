@@ -9,6 +9,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.58.5] - 2026-08-06
+
+### Added
+
+- **P5 M5.4 config keys** — `buff config set routing.nuviraSidecar.enabled <true|false>`
+  (the P5 feature flag) and `routing.nuviraSidecar.image <image:tag>` (pinned
+  gateway image override) are now accepted by the config schema (additive-only,
+  per the roadmap cross-cutting rule). 2 new config tests.
+
 ## [1.58.4] - 2026-08-06
 
 ### Added — Nuvira-Router P5 (sidecar interop) + P4 (mid-stream resilience core)

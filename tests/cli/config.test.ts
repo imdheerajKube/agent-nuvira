@@ -128,6 +128,18 @@ describe('ConfigCommand set — M2.4 governance policy', () => {
     expect(saved?.routing?.governance?.piiPatterns).toEqual(['api[_-]?key', 'password']);
   });
 
+  it('sets routing.nuviraSidecar.enabled as a boolean (P5 M5.4 flag)', () => {
+    const cmd = makeCommand();
+    runSet(cmd, 'routing.nuviraSidecar.enabled', 'true');
+    expect(saved?.routing?.nuviraSidecar?.enabled).toBe(true);
+  });
+
+  it('sets routing.nuviraSidecar.image as a pinned image:tag (P5 M5.4)', () => {
+    const cmd = makeCommand();
+    runSet(cmd, 'routing.nuviraSidecar.image', 'ghcr.io/berriai/litellm:main-stable');
+    expect(saved?.routing?.nuviraSidecar?.image).toBe('ghcr.io/berriai/litellm:main-stable');
+  });
+
   it('merges into existing governance config (additive)', () => {
     configState.routing = { governance: { allowProviders: ['groq'] } } as BuffConfig['routing'];
     const cmd = makeCommand();
