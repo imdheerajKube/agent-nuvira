@@ -924,7 +924,7 @@ const AVG_PAID_RATE_PER_1K = 0.0005;
 function readModelRegistryData() {
     const data = readJSON(join(MEMORY_DIR, 'model-registry.json'));
     if (!data?.entries) {
-        return { enabled: false, total: 0, providers: [], actionTelemetry: readRegistryTelemetry(), updatedAt: Date.now() };
+        return { enabled: false, total: 0, flaky: 0, providers: [], actionTelemetry: readRegistryTelemetry(), updatedAt: Date.now() };
     }
     const now = Date.now();
     const byProvider = new Map();
@@ -950,6 +950,10 @@ function readModelRegistryData() {
             measuredInputTokens: e.measuredInputTokens,
             measuredOutputTokens: e.measuredOutputTokens,
             measuredSamples: e.measuredSamples,
+            // P4 M4.4: mid-stream flakiness EMA — the Models panel flags which
+            // provider × model the router treats as flaky (started streaming, died
+            // before finish) and deprioritizes by up to 40% in scoring.
+            partialRate: e.partialRate,
         });
     }
     const providers = [...byProvider.entries()].map(([provider, models]) => {
@@ -961,6 +965,7 @@ function readModelRegistryData() {
             unverified: models.filter((m) => m.status === 'unverified').length,
             unavailable: models.filter((m) => m.status === 'unavailable').length,
             parked: models.filter((m) => m.parked).length,
+            flaky: models.filter((m) => Number(m.partialRate) > 0).length,
             models,
         };
     }).sort((a, b) => a.provider.localeCompare(b.provider));
@@ -972,6 +977,7 @@ function readModelRegistryData() {
         unverified: allModels.filter((m) => m.status === 'unverified').length,
         unavailable: allModels.filter((m) => m.status === 'unavailable').length,
         parked: allModels.filter((m) => m.parked).length,
+        flaky: allModels.filter((m) => Number(m.partialRate) > 0).length,
         providers,
         // Per-action "learned from real usage" telemetry — which provider × model
         // each action (chat / execute / plan / edit / ...) killed or verified, so

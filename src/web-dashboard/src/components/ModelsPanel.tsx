@@ -361,6 +361,27 @@ function registryStatusStyle(status: string) {
   return { text: '#8b949e', bg: '#21262d', dot: '#8b949e' };
 }
 
+/**
+ * P4 M4.4 — mid-stream flakiness chip (violet ⏸). Mirrors the CLI's `⏸ flaky
+ * N%` chip: this model started streaming then died before finishing, so the
+ * router scales its reliability down (capped 40%) and it ranks below
+ * otherwise-identical healthy models. `rate` is the 0-1 EMA from the registry.
+ */
+export function FlakinessChip({ rate }: { rate: number }) {
+  const pct = Math.round(rate * 100);
+  return (
+    <span
+      title={`⏸ flaky mid-stream ${pct}% — started streaming, died before finish; the router deprioritizes flaky models (P4 M4.4)`}
+      style={{
+        marginLeft: 8, fontSize: 10, padding: '1px 6px', borderRadius: 8, whiteSpace: 'nowrap',
+        background: '#21122e', border: '1px solid #bc8cff', color: '#bc8cff',
+      }}
+    >
+      ⏸ flaky {pct}%
+    </span>
+  );
+}
+
 function RegistryEntryRow({ entry }: { entry: RegistryModelEntry }) {
   const style = registryStatusStyle(entry.status);
   const tokens = entry.remainingTokens >= 0
@@ -371,6 +392,7 @@ function RegistryEntryRow({ entry }: { entry: RegistryModelEntry }) {
       <td style={{ padding: '8px 12px', color: '#e6edf3', fontFamily: "'SFMono-Regular', Consolas, monospace", fontSize: 12 }}>
         <span style={{ display: 'inline-block', width: 8, height: 8, borderRadius: '50%', background: style.dot, marginRight: 8 }} />
         {entry.model.length > 32 ? entry.model.slice(0, 29) + '…' : entry.model}
+        {(entry.partialRate ?? 0) > 0 && <FlakinessChip rate={entry.partialRate ?? 0} />}
         {entry.parked && (
           <span style={{
             marginLeft: 8, fontSize: 10, padding: '1px 6px', borderRadius: 8,
@@ -442,6 +464,14 @@ function RegistryCard({ provider }: { provider: ModelRegistryInsights['providers
             }}>
               {provider.parked > 0 ? `${provider.parked} parked` : 'routable'}
             </span>
+            {(provider.flaky ?? 0) > 0 && (
+              <span style={{
+                fontSize: 11, padding: '2px 8px', borderRadius: 10,
+                background: '#21122e', border: '1px solid #bc8cff', color: '#bc8cff',
+              }}>
+                ⏸ {provider.flaky} flaky
+              </span>
+            )}
           </div>
           <div style={{ fontSize: 13, color: '#8b949e' }}>
             {provider.verified} verified · {provider.unverified} unverified · {provider.unavailable} unavailable
@@ -537,6 +567,13 @@ function ModelRegistrySection({ data }: { data: ModelRegistryInsights }) {
           <div className="stat-body">
             <div className="stat-value" style={{ color: '#d29922' }}>{data.parked}</div>
             <div className="stat-label">Quota-parked</div>
+          </div>
+        </div>
+        <div className="stat-card">
+          <span className="stat-icon">⏸</span>
+          <div className="stat-body">
+            <div className="stat-value" style={{ color: '#bc8cff' }}>{data.flaky ?? 0}</div>
+            <div className="stat-label">Flaky mid-stream</div>
           </div>
         </div>
       </div>

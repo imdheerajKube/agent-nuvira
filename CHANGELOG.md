@@ -9,6 +9,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.59.5] - 2026-08-06
+
+### Added
+
+- **Dashboard: mid-stream flakiness feeds the registry cards** — the Models page now surfaces the P4 M4.4 flakiness signal the router uses: each registry row with a `partialRate` EMA > 0 renders a violet `⏸ flaky N%` chip (mirroring the CLI's `model explain` chip), provider headers show a `⏸ N flaky` badge, and the stats grid gains a **Flaky mid-stream** card. The dashboard server passes `partialRate` through the registry payload with provider + top-level `flaky` rollups; web types mark `flaky` optional so mixed-version bundles degrade gracefully. New server assertions + 3 `FlakinessChip` unit tests
+
 ## [1.59.4] - 2026-08-06
 
 ### Added

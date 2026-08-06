@@ -1,6 +1,11 @@
 # Agent-Nuvira — User Manual
 
-**Version 1.59.4 | August 2026**
+**Version 1.59.5 | August 2026**
+
+### v1.59.5 — Dashboard: mid-stream flakiness end-to-end
+
+- **Models page** now shows the flakiness signal the router uses: violet `⏸ flaky N%` chips on registry rows (mirroring the CLI's `model explain` chip), `⏸ N flaky` badges on provider headers, and a **Flaky mid-stream** stat card.
+- The dashboard server passes `partialRate` through the registry payload (provider + top-level `flaky` rollups); web types degrade gracefully with older bundles.
 
 ### v1.59.4 — Software Bill of Materials (P6 M6.6)
 
