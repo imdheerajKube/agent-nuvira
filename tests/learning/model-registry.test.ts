@@ -739,6 +739,102 @@ describe('ModelRegistry — per-action "learned from real usage" telemetry', () 
   });
 });
 
+describe('ModelRegistry — partialRate history (healing sparkline data)', () => {
+  beforeEach(() => {
+    tempDir = mkdtempSync(join(tmpdir(), 'buff-registry-hist-'));
+    originalMemoryDir = process.env.BUFF_MEMORY_DIR;
+    process.env.BUFF_MEMORY_DIR = tempDir;
+    setVectorBackendOverride('json'); // hermetic: force the JSON backend
+    resetModelRegistry();
+    resetQuotaLedger();
+  });
+
+  afterEach(() => {
+    resetModelRegistry();
+    resetQuotaLedger();
+    resetVectorBackendSelection();
+    if (originalMemoryDir === undefined) delete process.env.BUFF_MEMORY_DIR;
+    else process.env.BUFF_MEMORY_DIR = originalMemoryDir;
+    rmSync(tempDir, { recursive: true, force: true });
+  });
+
+  it('appends a history point on every partial bump and every decay (the sparkline trajectory)', () => {
+    const registry = new ModelRegistry();
+    registry.markVerified('groq', 'llama-3.3-70b-versatile', 'spot-check');
+
+    registry.recordPartial('groq', 'llama-3.3-70b-versatile', 'chat', 'timeout');
+    let e = registry.getEntry('groq', 'llama-3.3-70b-versatile')!;
+    expect(e.partialHistory).toHaveLength(1);
+    expect(e.partialHistory![0].rate).toBeCloseTo(0.25, 5); // 0 + (1-0)*0.25
+    expect(typeof e.partialHistory![0].t).toBe('number');
+
+    // A clean success DECAYS the EMA and appends the healed point — so the
+    // dashboard sparkline can show flakiness trending DOWN (healing).
+    registry.recordCall('groq', 'llama-3.3-70b-versatile', true, undefined, 'chat');
+    e = registry.getEntry('groq', 'llama-3.3-70b-versatile')!;
+    expect(e.partialHistory).toHaveLength(2);
+    expect(e.partialHistory![1].rate).toBeCloseTo(0.15, 5); // 0.25 - 0.1
+    expect(e.partialHistory![1].rate).toBeLessThan(e.partialHistory![0].rate);
+  });
+
+  it('preserves partialHistory through a markVerified re-verify (never hard-wiped)', () => {
+    const registry = new ModelRegistry();
+    registry.markVerified('groq', 'llama-3.3-70b-versatile', 'spot-check');
+    registry.recordPartial('groq', 'llama-3.3-70b-versatile', 'chat', 'timeout');
+    registry.recordPartial('groq', 'llama-3.3-70b-versatile', 'chat', 'server');
+    const before = registry.getEntry('groq', 'llama-3.3-70b-versatile')!.partialHistory;
+    expect(before).toHaveLength(2);
+
+    // The rebuild inside markVerified must carry the trajectory (same contract
+    // as partialRate surviving a re-verify).
+    registry.markVerified('groq', 'llama-3.3-70b-versatile', 'telemetry');
+    const after = registry.getEntry('groq', 'llama-3.3-70b-versatile')!.partialHistory;
+    expect(after).toHaveLength(2);
+    expect(after).toEqual(before);
+  });
+
+  it('preserves partialHistory through a markUnavailable availability flip', () => {
+    const registry = new ModelRegistry();
+    registry.markVerified('groq', 'llama-3.3-70b-versatile', 'spot-check');
+    registry.recordPartial('groq', 'llama-3.3-70b-versatile', 'chat', 'timeout');
+    const before = registry.getEntry('groq', 'llama-3.3-70b-versatile')!.partialHistory;
+    expect(before).toHaveLength(1);
+
+    // An auth/403 availability flip must NOT wipe the reliability signal —
+    // the rebuild carries the trajectory (never hard-reset contract).
+    registry.markUnavailable('groq', 'llama-3.3-70b-versatile', 'auth', 'spot-check');
+    const after = registry.getEntry('groq', 'llama-3.3-70b-versatile')!;
+    expect(after.status).toBe('unavailable');
+    expect(after.partialHistory).toEqual(before);
+    expect(after.partialRate).toBeGreaterThan(0);
+  });
+
+  it('caps partialHistory at MAX_PARTIAL_HISTORY (newest kept)', () => {
+    const registry = new ModelRegistry();
+    registry.markVerified('groq', 'llama-3.3-70b-versatile', 'spot-check');
+    for (let i = 0; i < 20; i++) {
+      registry.recordPartial('groq', 'llama-3.3-70b-versatile', 'chat', 'timeout');
+    }
+    const history = registry.getEntry('groq', 'llama-3.3-70b-versatile')!.partialHistory!;
+    expect(history).toHaveLength(16);
+    // Newest last, and the EMA climbed toward 1 across the burst.
+    expect(history[history.length - 1].rate).toBeCloseTo(1, 1);
+    expect(history[history.length - 1].rate).toBeGreaterThan(history[0].rate);
+  });
+
+  it('persists partialHistory across a restart (mirror write survives reload)', () => {
+    const registry = new ModelRegistry();
+    registry.markVerified('groq', 'llama-3.3-70b-versatile', 'spot-check');
+    registry.recordPartial('groq', 'llama-3.3-70b-versatile', 'chat', 'timeout');
+    registry.recordPartial('groq', 'llama-3.3-70b-versatile', 'chat', 'server');
+
+    resetModelRegistry();
+    const reloaded = new ModelRegistry();
+    const history = reloaded.getEntry('groq', 'llama-3.3-70b-versatile')?.partialHistory;
+    expect(history).toHaveLength(2);
+  });
+});
+
 describe('ModelRegistry — persistence (JSON mirror + vector auto-tier)', () => {
   beforeEach(() => {
     tempDir = mkdtempSync(join(tmpdir(), 'buff-registry-'));

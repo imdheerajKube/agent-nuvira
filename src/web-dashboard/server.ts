@@ -1113,6 +1113,8 @@ function readModelRegistryData(): Record<string, unknown> {
     measuredSamples?: number;
     /** P4 M4.4: mid-stream flakiness EMA (0-1) — the router deprioritizes flaky models. */
     partialRate?: number;
+    /** P4 M4.4: flakiness trajectory [{ t, rate }] — the panel's healing sparkline. */
+    partialHistory?: Array<{ t: number; rate: number }>;
   }> }>(join(MEMORY_DIR, 'model-registry.json'));
   if (!data?.entries) {
     return { enabled: false, total: 0, flaky: 0, providers: [], actionTelemetry: readRegistryTelemetry(), updatedAt: Date.now() };
@@ -1143,8 +1145,10 @@ function readModelRegistryData(): Record<string, unknown> {
       measuredSamples: e.measuredSamples,
       // P4 M4.4: mid-stream flakiness EMA — the Models panel flags which
       // provider × model the router treats as flaky (started streaming, died
-      // before finish) and deprioritizes by up to 40% in scoring.
+      // before finish) and deprioritizes by up to 40% in scoring — plus the
+      // trajectory so the row can sparkline healing (decay via clean calls).
       partialRate: e.partialRate,
+      partialHistory: e.partialHistory,
     });
   }
 
@@ -1232,6 +1236,8 @@ function readRequestsData(): Record<string, unknown> {
     action: string;
     requests: number;
     failures: number;
+    /** P4 M4.4: mid-stream partial-interruption events in this group. */
+    partials: number;
     latencies: number[];
     callIds: string[];
     lastAt: number;
@@ -1247,6 +1253,7 @@ function readRequestsData(): Record<string, unknown> {
         action: e.action,
         requests: 0,
         failures: 0,
+        partials: 0,
         latencies: [],
         callIds: [],
         lastAt: 0,
@@ -1254,7 +1261,12 @@ function readRequestsData(): Record<string, unknown> {
       groups.set(key, g);
     }
     g.requests++;
-    if (e.outcome !== 'verified') g.failures++;
+    // A mid-stream partial is NOT a request failure (the provider answered)
+    // — exclude it from the failure count entirely; it's the flakiness signal,
+    // surfaced separately so the panel can flag providers that start streams
+    // but can't finish them.
+    if (e.outcome !== 'verified' && e.outcome !== 'partial') g.failures++;
+    if (e.outcome === 'partial') g.partials++;
     if (e.latencyMs !== undefined) g.latencies.push(e.latencyMs);
     if (e.callId) g.callIds.push(e.callId);
     g.lastAt = Math.max(g.lastAt, e.timestamp);
@@ -1286,6 +1298,7 @@ function readRequestsData(): Record<string, unknown> {
         action: g.action,
         requests: g.requests,
         failures: g.failures,
+        partials: g.partials,
         errorRate: Math.round((g.failures / g.requests) * 1000) / 1000,
         latency: sorted.length >= 10
           ? { avg, samples: sorted.length, p50: pct(sorted, 0.5), p95: pct(sorted, 0.95), p99: pct(sorted, 0.99) }

@@ -88,6 +88,13 @@ export interface ModelRegistryEntry {
    * complete tomorrow); decays toward 0 on clean successes.
    */
   partialRate?: number;
+  /**
+   * P4 M4.4: recent mid-stream flakiness EMA samples [{ t, rate }] — newest
+   * last, capped at MAX_PARTIAL_HISTORY. Powers the dashboard's "flakiness
+   * over time" sparkline: a trend toward 0 = the provider is HEALING via
+   * clean successes; climbing = flakiness accumulating.
+   */
+  partialHistory?: Array<{ t: number; rate: number }>;
   /** Epoch ms until which the entry is quota-parked (0 = not parked). */
   quotaParkedUntil: number;
   /** Where the current status came from. */
@@ -242,6 +249,8 @@ export const MAX_ACTION_LOG_ENTRIES = 2000;
 export const TIMELINE_DAYS = 14;
 /** VectorStore namespace that holds the enterprise mirror of the registry. */
 const VECTOR_NAMESPACE = 'model-registry';
+/** Cap on per-entry partialRate history samples (dashboard sparkline points). */
+export const MAX_PARTIAL_HISTORY = 16;
 /** Single vector id holding the whole registry snapshot (1-dim — we never search). */
 const VECTOR_SNAPSHOT_ID = 'snapshot';
 /** Verified entries older than this are demoted to `unverified` on prune. */
@@ -509,6 +518,18 @@ export class ModelRegistry {
   // ─── Writes (probe / spot-check / telemetry) ──────────────────────────────
 
   /**
+   * P4 M4.4: append the entry's current partialRate to its history (newest
+   * last, capped at MAX_PARTIAL_HISTORY). Callers invoke this right after a
+   * partialRate mutation so the dashboard sparkline sees the exact trajectory.
+   */
+  private pushPartialHistory(entry: ModelRegistryEntry, now: number = Date.now()): void {
+    const rate = entry.partialRate || 0;
+    const history = entry.partialHistory ? [...entry.partialHistory] : [];
+    history.push({ t: now, rate });
+    entry.partialHistory = history.slice(-MAX_PARTIAL_HISTORY);
+  }
+
+  /**
    * listModels probe: mark the model as seen (unverified unless already
    * verified). Does NOT downgrade a verified entry — real verification wins.
    */
@@ -530,6 +551,10 @@ export class ModelRegistry {
         lastUsedAt: existing?.lastUsedAt || 0,
         latencyMs: existing?.latencyMs,
         errorRate: existing?.errorRate || 0,
+        // P4 M4.4: a re-list never wipes the flakiness signal (same contract
+        // as markVerified — availability and reliability are separate axes).
+        partialRate: existing?.partialRate,
+        partialHistory: existing?.partialHistory,
         quotaParkedUntil: existing?.quotaParkedUntil || 0,
         source: 'probe',
         lastError: existing?.lastError,
@@ -595,8 +620,10 @@ export class ModelRegistry {
       measuredSamples: existing?.measuredSamples,
       // P4 M4.4: mid-stream flakiness survives a re-verify too — a success
       // DECAYS it (recordCall) rather than wiping it, so a single clean call
-      // can't erase a flaky streak (that's the whole point of the EMA).
+      // can't erase a flaky streak (that's the whole point of the EMA). The
+      // trajectory (partialHistory) survives alongside it.
       partialRate: existing?.partialRate,
+      partialHistory: existing?.partialHistory,
     };
     this.persist();
     // A GENUINE promotion (was not verified → now verified) is a state change
@@ -699,6 +726,11 @@ export class ModelRegistry {
       lastUsedAt: existing?.lastUsedAt || 0,
       latencyMs: existing?.latencyMs,
       errorRate: existing?.errorRate || 0,
+      // P4 M4.4: an availability flip never resets reliability — the flaky
+      // streak (and its trajectory) survives an auth/403 mark, same contract
+      // as markVerified/markListed (a later success decays it, never a wipe).
+      partialRate: existing?.partialRate,
+      partialHistory: existing?.partialHistory,
       quotaParkedUntil: Math.max(existing?.quotaParkedUntil || 0, quotaParkedUntil),
       source,
       lastError: reason,
@@ -830,6 +862,9 @@ export class ModelRegistry {
       const prevPartial = this.data.entries[key].partialRate || 0;
       if (prevPartial > 0) {
         this.data.entries[key].partialRate = Math.max(0, prevPartial - 0.1);
+        // Record the healed point so the dashboard sparkline shows the decay
+        // (the provider demonstrably finishes → flakiness trending down).
+        this.pushPartialHistory(this.data.entries[key]);
         this.persist();
       }
       return;
@@ -926,6 +961,7 @@ export class ModelRegistry {
       if (existing) {
         const prev = existing.partialRate || 0;
         existing.partialRate = Math.min(1, prev + (1 - prev) * 0.25);
+        this.pushPartialHistory(existing);
         this.persist();
       }
     } catch {

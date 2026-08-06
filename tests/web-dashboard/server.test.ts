@@ -794,8 +794,14 @@ describe('Dashboard Server', () => {
             // M2.2: measured wire-token EMAs (real provider-reported usage).
             measuredInputTokens: 210, measuredOutputTokens: 90, measuredSamples: 3,
             // P4 M4.4: mid-stream flakiness EMA — this model started streaming
-            // then died before finish, so the router deprioritizes it.
+            // then died before finish, so the router deprioritizes it. The
+            // trajectory powers the row's healing sparkline (trending down =
+            // clean successes are decaying the signal).
             partialRate: 0.25,
+            partialHistory: [
+              { t: now - 20000, rate: 0.4375 },
+              { t: now - 10000, rate: 0.25 },
+            ],
           },
           'groq|llama-3.3-70b-versatile': {
             provider: 'groq', model: 'llama-3.3-70b-versatile', status: 'verified',
@@ -836,9 +842,12 @@ describe('Dashboard Server', () => {
         expect(gemini.models[0].measuredInputTokens).toBe(210);
         expect(gemini.models[0].measuredOutputTokens).toBe(90);
         // P4 M4.4: the mid-stream flakiness EMA survives the passthrough and
-        // rolls up to the provider-level flaky count.
+        // rolls up to the provider-level flaky count; the trajectory arrives
+        // for the healing sparkline.
         expect(gemini.models[0].partialRate).toBe(0.25);
         expect(gemini.flaky).toBe(1);
+        expect(gemini.models[0].partialHistory).toHaveLength(2);
+        expect(gemini.models[0].partialHistory[1].rate).toBe(0.25);
 
         // Quota-parked entry is flagged + carries the reason
         const groq = body.providers.find((p: { provider: string }) => p.provider === 'groq');
@@ -878,6 +887,7 @@ describe('Dashboard Server', () => {
         { timestamp: now - 60000, action: 'chat', provider: 'groq', model: 'llama-3.3-70b-versatile', outcome: 'verified' },
         { timestamp: now - 30000, action: 'execute', provider: 'gemini', model: 'gemini-2.5-flash', outcome: 'unavailable', errorType: 'auth' },
         { timestamp: now - 10000, action: 'plan', provider: 'nim', model: 'meta/llama-3.3-70b-instruct', outcome: 'error', errorType: 'server' },
+        { timestamp: now - 5000, action: 'chat', provider: 'groq', model: 'llama-3.3-70b-versatile', outcome: 'partial', errorType: 'timeout', streamedChunks: 128 },
       ];
       try {
         writeFileSync(actionsPath, lines.map((l) => JSON.stringify(l)).join('\n') + '\n');
@@ -888,11 +898,13 @@ describe('Dashboard Server', () => {
 
         expect(body.actionTelemetry).toBeDefined();
         expect(body.actionTelemetry.enabled).toBe(true);
-        expect(body.actionTelemetry.total).toBe(4);
+        expect(body.actionTelemetry.total).toBe(5);
 
-        // chat verified the same model twice → honest volume, one deduped chip
+        // chat verified the same model twice + hit one mid-stream partial →
+        // honest volume, one deduped chip per outcome
         const chat = body.actionTelemetry.actions.find((a: { action: string }) => a.action === 'chat');
         expect(chat.verified).toBe(2);
+        expect(chat.partial).toBe(1);
         expect(chat.verifiedModels).toHaveLength(1);
         expect(chat.verifiedModels[0]).toMatchObject({ provider: 'groq', model: 'llama-3.3-70b-versatile' });
 
@@ -907,6 +919,18 @@ describe('Dashboard Server', () => {
         expect(plan.transient).toBe(1);
         expect(plan.killed).toBe(0);
         expect(plan.killedModels).toEqual([]);
+
+        // P4 M4.4: the SAME action log feeds the Requests panel — the chat
+        // group shows its mid-stream partial count (flakiness context next to
+        // the error rate) without counting partials as request failures.
+        const reqRes = await httpGet(`${baseUrl}/api/requests`);
+        const reqBody = JSON.parse(reqRes.body);
+        const chatRow = reqBody.rows.find((r: { provider: string; model: string; action: string }) =>
+          r.provider === 'groq' && r.model === 'llama-3.3-70b-versatile' && r.action === 'chat');
+        expect(chatRow).toBeDefined();
+        expect(chatRow.requests).toBe(3); // 2 verified + 1 partial
+        expect(chatRow.partials).toBe(1); // NOT counted as a failure
+        expect(chatRow.errorRate).toBe(0);
 
         // Each action carries a daily timeline so the panel renders the
         // "learned from real usage over time" chart (last 14 days, ascending).

@@ -15,19 +15,19 @@ const makeRequests = (overrides: Partial<RequestsInsights> = {}): RequestsInsigh
   rows: [
     {
       provider: 'groq', model: 'llama-3.3-70b-versatile', action: 'chat',
-      requests: 10, errorRate: 0, costUsd: 0.00012, costCalls: 10,
+      requests: 10, errorRate: 0, partials: 3, costUsd: 0.00012, costCalls: 10,
       latency: { avg: 420, samples: 5, p50: 400, p95: 620, p99: 700 },
       callIds: ['call-1', 'call-2'], lastAt: 1750000000000,
     },
     {
       provider: 'gemini', model: 'gemini-2.0-flash', action: 'execute',
-      requests: 4, errorRate: 0.25, costUsd: 0.0008, costCalls: 4,
+      requests: 4, errorRate: 0.25, partials: 0, costUsd: 0.0008, costCalls: 4,
       latency: { avg: 900, samples: 2 }, // < 3 samples → percentiles hidden
       callIds: [], lastAt: 1749990000000,
     },
     {
       provider: 'nim', model: 'llama-3.1-8b-instruct', action: 'plan',
-      requests: 2, errorRate: 0.5, costCalls: 0,
+      requests: 2, errorRate: 0.5, partials: 0, costCalls: 0,
       latency: undefined, callIds: [], lastAt: 1749980000000,
     },
   ],
@@ -78,6 +78,14 @@ describe('RequestsPanel', () => {
     expect(screen.getByText('620ms')).toBeTruthy();
     // gemini row has 2 samples → its p50 is a dash.
     expect(screen.getAllByText('—').length).toBeGreaterThan(0);
+  });
+
+  it('shows a violet ⏸ partial chip on rows with mid-stream interruptions (P4 M4.4)', () => {
+    render(<RequestsPanel data={makeData(makeRequests())} />);
+    // groq row has 3 partials → the ⏸ 3 chip renders with the flaky tooltip.
+    expect(screen.getByText(/⏸ 3/)).toBeTruthy();
+    expect(screen.getByTitle(/mid-stream interruption\(s\)/)).toBeTruthy();
+    expect(screen.getByTitle(/deprioritizes flaky providers/)).toBeTruthy();
   });
 
   it('filters by action via the select', () => {

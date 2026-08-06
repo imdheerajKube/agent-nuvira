@@ -39,6 +39,7 @@ import { ProviderCommand } from './provider.js';
 import { SecurityCommand } from './security.js';
 import { AuditCommand } from './audit.js';
 import { SbomCommand } from './sbom.js';
+import { AdminCommand } from './admin.js';
 import { FeedbackCommand } from './feedback.js';
 import { MarketplaceCommand } from './marketplace.js';
 import { MCPCommand } from './mcp.js';
@@ -67,11 +68,13 @@ export function createCLI(): Command {
   const chatCmd = new ChatCommand();
   const editCmd = new EditCommand();
   const planCmd = new PlanCommand();
+  const adminCmd = new AdminCommand();
   const configCmd = new ConfigCommand();
   const cacheCmd = new CacheCommand();
   const modelsCmd = new ModelsCommand();
   const executeCmd = new ExecuteCommand();
 
+  program.addCommand(adminCmd.create());
   program.addCommand(chatCmd.create());
   program.addCommand(editCmd.create());
   program.addCommand(planCmd.create());

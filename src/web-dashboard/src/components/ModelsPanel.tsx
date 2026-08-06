@@ -382,6 +382,52 @@ export function FlakinessChip({ rate }: { rate: number }) {
   );
 }
 
+/**
+ * P4 M4.4 — flakiness-over-time mini sparkline (violet). Plots the entry's
+ * partialRate EMA trajectory: a trend toward 0 = the provider is HEALING via
+ * clean successes (each decay point recorded by recordCall); climbing =
+ * flakiness accumulating (each partial bump recorded by recordPartial).
+ * Renders only when >= 2 samples exist. Tooltip calls out the direction.
+ */
+export function FlakinessSparkline({ history }: { history?: Array<{ t: number; rate: number }> }) {
+  if (!history || history.length < 2) return null;
+  const W = 46;
+  const H = 14;
+  const PAD = 1.5;
+  const max = Math.max(0.01, ...history.map((p) => p.rate));
+  const pts = history.map((p, i) => {
+    const x = PAD + (i / (history.length - 1)) * (W - PAD * 2);
+    const y = H - PAD - (p.rate / max) * (H - PAD * 2);
+    return `${x.toFixed(1)},${y.toFixed(1)}`;
+  }).join(' ');
+  const first = history[0].rate;
+  const last = history[history.length - 1].rate;
+  const healing = last < first;
+  const pct = Math.round(last * 100);
+  return (
+    <svg
+      width={W}
+      height={H}
+      viewBox={`0 0 ${W} ${H}`}
+      style={{ marginLeft: 8, verticalAlign: 'middle', cursor: 'default' }}
+      aria-label="Flakiness trend"
+    >
+      <title>
+        {healing
+          ? `Flakiness healing — ${pct}% now, trending down (clean successes decay the signal)`
+          : `Flakiness climbing — ${pct}% now (recent mid-stream interruptions)`}
+      </title>
+      <polyline points={pts} fill="none" stroke="#bc8cff" strokeWidth={1.5} strokeLinecap="round" strokeLinejoin="round" opacity={0.9} />
+      <circle
+        cx={W - PAD}
+        cy={H - PAD - (last / max) * (H - PAD * 2)}
+        r={2}
+        fill={healing ? '#3fb950' : '#bc8cff'}
+      />
+    </svg>
+  );
+}
+
 function RegistryEntryRow({ entry }: { entry: RegistryModelEntry }) {
   const style = registryStatusStyle(entry.status);
   const tokens = entry.remainingTokens >= 0
@@ -393,6 +439,7 @@ function RegistryEntryRow({ entry }: { entry: RegistryModelEntry }) {
         <span style={{ display: 'inline-block', width: 8, height: 8, borderRadius: '50%', background: style.dot, marginRight: 8 }} />
         {entry.model.length > 32 ? entry.model.slice(0, 29) + '…' : entry.model}
         {(entry.partialRate ?? 0) > 0 && <FlakinessChip rate={entry.partialRate ?? 0} />}
+        {entry.partialHistory && entry.partialHistory.length >= 2 && <FlakinessSparkline history={entry.partialHistory} />}
         {entry.parked && (
           <span style={{
             marginLeft: 8, fontSize: 10, padding: '1px 6px', borderRadius: 8,

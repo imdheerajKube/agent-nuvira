@@ -9,6 +9,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.59.6] - 2026-08-06
+
+### Added
+
+- **P6 M6.5 Admin governance API** — `buff admin` promotes the M2.4 policy (already enforced as hard constraints in Auto routing) into a first-class admin surface: `admin policy [--json]`, `admin allow/deny <provider...>`, `admin allow-model/deny-model <model...>`, `admin max-cost <usd>`, `admin pii-min <0..1>`, `admin unblock on|off`, `admin clear <field>` — all writing the same `routing.governance.*` config the router reads
+- **Dashboard: flakiness healing sparkline** — the registry now records each `partialRate` EMA change as a bounded trajectory (`partialHistory`, capped at 16); registry rows render a mini sparkline (trending down = healing via clean successes, green end dot; climbing = accumulating). The signal survives every rebuild path (markVerified / markListed / markUnavailable — never hard-wiped) and persists across restarts
+- **Dashboard: Requests panel flakiness** — per provider × model × action rows show a violet `⏸ N` chip for mid-stream partial interruptions (excluded from the error rate — a partial is not a request failure, it's the flakiness signal)
+- Tests: registry 5 (history append/decay, preserve through re-verify + availability flip, 16-cap, restart persistence), admin 10, server partial/requests assertions, dashboard sparkline 3 + chip 1; 3,328 root green
+
 ## [1.59.5] - 2026-08-06
 
 ### Added
