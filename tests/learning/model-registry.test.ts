@@ -680,6 +680,63 @@ describe('ModelRegistry — per-action "learned from real usage" telemetry', () 
       expect.objectContaining({ provider: 'groq', model: 'llama-3.3-70b-instant', reason: 'disconnect' }),
     ]));
   });
+
+  it('recordPartial bumps a partialRate EMA the router can read (flakiness signal)', () => {
+    const registry = new ModelRegistry();
+    registry.markVerified('groq', 'llama-3.3-70b-versatile', 'spot-check');
+    registry.markVerified('groq', 'llama-3.3-70b-instant', 'spot-check');
+
+    // Two mid-stream interruptions on the versatile model.
+    registry.recordPartial('groq', 'llama-3.3-70b-versatile', 'chat', 'timeout');
+    const afterOne = registry.getEntry('groq', 'llama-3.3-70b-versatile')?.partialRate ?? 0;
+    expect(afterOne).toBeGreaterThan(0);
+    registry.recordPartial('groq', 'llama-3.3-70b-versatile', 'chat', 'server');
+    const afterTwo = registry.getEntry('groq', 'llama-3.3-70b-versatile')?.partialRate ?? 0;
+    expect(afterTwo).toBeGreaterThan(afterOne);
+
+    // Status NEVER flips — a partial is not a kill (it started, it can finish).
+    expect(registry.getEntry('groq', 'llama-3.3-70b-versatile')?.status).toBe('verified');
+    expect(registry.isUsable('groq', 'llama-3.3-70b-versatile')).toBe(true);
+    // The untouched model stays clean.
+    expect(registry.getEntry('groq', 'llama-3.3-70b-instant')?.partialRate || 0).toBe(0);
+    // Provider-level signal reflects the WORST model's flakiness.
+    expect(registry.getProviderFlakiness('groq')).toBeCloseTo(afterTwo, 5);
+  });
+
+  it('clean successes heal the partialRate flakiness EMA over time', () => {
+    const registry = new ModelRegistry();
+    registry.markVerified('groq', 'llama-3.3-70b-versatile', 'spot-check');
+    registry.recordPartial('groq', 'llama-3.3-70b-versatile', 'chat', 'timeout');
+    const flaky = registry.getEntry('groq', 'llama-3.3-70b-versatile')?.partialRate ?? 0;
+    expect(flaky).toBeGreaterThan(0);
+
+    // Repeated clean completions decay the signal (never hard-reset — a single
+    // success must NOT wipe the flaky streak, only shave it down).
+    registry.recordCall('groq', 'llama-3.3-70b-versatile', true, undefined, 'chat');
+    const afterOne = registry.getEntry('groq', 'llama-3.3-70b-versatile')?.partialRate ?? 0;
+    expect(afterOne).toBeGreaterThan(0); // decayed, NOT wiped
+    expect(afterOne).toBeLessThan(flaky);
+    for (let i = 0; i < 7; i++) {
+      registry.recordCall('groq', 'llama-3.3-70b-versatile', true, undefined, 'chat');
+    }
+    const healed = registry.getEntry('groq', 'llama-3.3-70b-versatile')?.partialRate ?? 0;
+    expect(healed).toBeLessThan(flaky);
+    // The provider-level signal heals with it.
+    expect(registry.getProviderFlakiness('groq')).toBeLessThan(flaky);
+
+    // The healed rate survives a RESTART — the decay is persisted, not just
+    // in-memory (a re-verify rebuild must carry + persist the shaved EMA).
+    resetModelRegistry();
+    const reloaded = new ModelRegistry();
+    expect(reloaded.getProviderFlakiness('groq')).toBeLessThan(flaky);
+  });
+
+  it('getProviderFlakiness is 0 for providers with no tracked partials', () => {
+    const registry = new ModelRegistry();
+    registry.markVerified('gemini', 'gemini-2.5-flash', 'spot-check');
+    expect(registry.getProviderFlakiness('gemini')).toBe(0);
+    expect(registry.getProviderFlakiness('openrouter')).toBe(0); // untracked
+  });
 });
 
 describe('ModelRegistry — persistence (JSON mirror + vector auto-tier)', () => {

@@ -16,6 +16,7 @@ import { mkdtempSync, rmSync } from 'node:fs';
 import { join } from 'node:path';
 import { ModelCommand } from '../../src/cli/model.js';
 import { getRouterBandit, resetRouterBandit } from '../../src/learning/router-bandit.js';
+import { getModelRegistry, resetModelRegistry } from '../../src/learning/model-registry.js';
 
 // ─── Isolate routing-history writes (explain records decisions) ────────────
 // The explain command now records routing decisions to the history store, which
@@ -56,6 +57,9 @@ describe('ModelCommand explain', () => {
 
   afterEach(() => {
     vi.restoreAllMocks();
+    // P4 M4.4 flaky-chip tests seed the registry — reset unconditionally so a
+    // mid-test failure can never leak seeded flakiness into later tests.
+    resetModelRegistry();
   });
 
   it('renders a detailed decision for a given task', () => {
@@ -233,6 +237,40 @@ describe('ModelCommand explain', () => {
     expect(output).toMatch(/📏 measured|📐 estimated/);
     // M2.5: context-utilization chip with the nominal window on ranked rows.
     expect(output).toMatch(/⏳ ctx \d+%/);
+  });
+
+  it('renders the P4 M4.4 ⏸ flaky mid-stream chip when the registry records partials (partialFlakiness ON)', () => {
+    // Seed the hermetic registry with a flaky provider: verified but with
+    // repeated mid-stream interruptions → partialRate EMA > 0.
+    resetModelRegistry();
+    const registry = getModelRegistry();
+    registry.markVerified('groq', 'llama-3.3-70b-versatile', 'spot-check');
+    registry.recordPartial('groq', 'llama-3.3-70b-versatile', 'chat', 'timeout');
+    registry.recordPartial('groq', 'llama-3.3-70b-versatile', 'chat', 'server');
+
+    const output = runCommand(['explain', 'deploy to production']);
+    expect(output).toContain('⏸ flaky mid-stream');
+  });
+
+  it('partialFlakiness OFF drops the ⏸ flaky chip entirely', () => {
+    resetModelRegistry();
+    const registry = getModelRegistry();
+    registry.markVerified('groq', 'llama-3.3-70b-versatile', 'spot-check');
+    registry.recordPartial('groq', 'llama-3.3-70b-versatile', 'chat', 'timeout');
+
+    const cmd = new ModelCommand();
+    (cmd as any).configManager = {
+      getAll: vi.fn(() => ({
+        pricing: {},
+        routing: { partialFlakiness: false },
+      })),
+      hasRequiredCredentials: vi.fn(() => true),
+      getProviderConfig: vi.fn(() => ({ config: {} })),
+    };
+    cmd.create().parse(['explain', 'implement a login form'], { from: 'user' });
+    const output = vi.mocked(console.log).mock.calls.map((c) => c.map((v) => String(v)).join(' ')).join('\n');
+
+    expect(output).not.toContain('⏸ flaky');
   });
 
   it('chips follow the gates: capabilityFit OFF drops 🎯, contextFit OFF drops ⏳', () => {

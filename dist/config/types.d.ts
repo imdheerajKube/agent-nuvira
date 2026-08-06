@@ -253,6 +253,17 @@ export interface RoutingConfig {
      */
     contextFit?: boolean;
     /**
+     * P4 M4.4: enable the mid-stream flakiness penalty in Auto routing scoring.
+     * Providers whose streams repeatedly START then DIE before completion
+     * (registry partialRate EMA) get their reliability dimension scaled down
+     * (capped at 40%), nudging the router toward providers that actually finish.
+     * Never a hard block — a flaky provider can heal via clean successes, and
+     * the penalty only applies when the registry has recorded partials.
+     * Default: true. Set to false to revert to pure dimension-weight scoring
+     * (no penalty, no ⏸ chip in `models explain`).
+     */
+    partialFlakiness?: boolean;
+    /**
      * Nominal input context window overrides (tokens) for the M2.5 context
      * preflight. Keyed by model id (exact match) or by provider id (provider-
      * level default for every model under that provider). Values replace the

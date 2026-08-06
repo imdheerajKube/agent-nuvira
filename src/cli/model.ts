@@ -963,7 +963,12 @@ export class ModelCommand extends BaseCommand {
         r.contextFit !== undefined && r.contextWindowTokens !== undefined
           ? ` ⏳ ctx ${Math.round((r.contextUtilization ?? 0) * 100)}% (${r.contextWindowTokens.toLocaleString()} tok)`
           : '';
-      console.log(`   ${mark} ${i + 1}. ${r.provider.padEnd(12)} score ${r.score.toFixed(3)}  ${r.reason}${fit}${costTag}${ctxTag}${cd}`);
+      // P4 M4.4: mid-stream flakiness chip — the reliability penalty applied
+      // to providers that keep starting streams that die before completion.
+      const flakyTag = r.flakiness !== undefined && r.flakiness > 0
+        ? ` ⏸ flaky ${Math.round(r.flakiness * 100)}%`
+        : '';
+      console.log(`   ${mark} ${i + 1}. ${r.provider.padEnd(12)} score ${r.score.toFixed(3)}  ${r.reason}${fit}${costTag}${ctxTag}${flakyTag}${cd}`);
     });
     console.log('');
 

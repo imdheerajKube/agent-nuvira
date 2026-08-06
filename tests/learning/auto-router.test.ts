@@ -541,6 +541,100 @@ describe('AutoModelRouter.resolve', () => {
   });
 });
 
+// ─── P4 M4.4 mid-stream flakiness penalty ──────────────────────────────────
+// The registry's partialRate EMA (providers that START streams then DIE)
+// scales the reliability dimension down when `routing.partialFlakiness` is on
+// (default). A flaky provider must rank below an otherwise-identical healthy
+// one, and the signal must be fully inert when the flag is off.
+
+describe('AutoModelRouter.resolve — P4 M4.4 partial-flakiness penalty', () => {
+  let router: AutoModelRouter;
+  let flakyTempDir: string;
+  let flakyOrigDir: string | undefined;
+
+  beforeEach(() => {
+    router = new AutoModelRouter();
+    flakyOrigDir = process.env.BUFF_MEMORY_DIR;
+    flakyTempDir = mkdtempSync(join(tmpdir(), 'buff-autorouter-flaky-'));
+    process.env.BUFF_MEMORY_DIR = flakyTempDir;
+    resetModelRegistry();
+  });
+
+  afterEach(() => {
+    if (flakyOrigDir === undefined) {
+      delete process.env.BUFF_MEMORY_DIR;
+    } else {
+      process.env.BUFF_MEMORY_DIR = flakyOrigDir;
+    }
+    resetModelRegistry();
+    rmSync(flakyTempDir, { recursive: true, force: true });
+  });
+
+  it('a provider with mid-stream partials ranks below an identical healthy provider (penalty ON by default)', () => {
+    // Identical capability profiles for both providers — ONLY flakiness may
+    // separate them. Higher reliability = better score for a critical task.
+    const identical = { reasoning: 0.8, speed: 0.6, cost: 0.5, privacy: 0.2, reliability: 0.9 };
+    router.updateProfiles({ providerA: identical, providerB: identical });
+    const registry = getModelRegistry();
+    registry.markVerified('providerA', 'm-a', 'spot-check');
+    registry.markVerified('providerB', 'm-b', 'spot-check');
+    // Provider B keeps starting streams that die mid-way.
+    registry.recordPartial('providerB', 'm-b', 'chat', 'timeout');
+    registry.recordPartial('providerB', 'm-b', 'chat', 'server');
+
+    const decision = router.resolve('writer', 'deploy to production', {
+      allowedProviders: ['providerA', 'providerB'],
+    });
+    const ranked = decision.ranked.map((r) => r.provider);
+    expect(ranked.indexOf('providerA')).toBeLessThan(ranked.indexOf('providerB'));
+    // The penalty is transparent: the flaky row carries the flakiness chip.
+    const flakyRow = decision.ranked.find((r) => r.provider === 'providerB');
+    expect(flakyRow?.flakiness).toBeGreaterThan(0);
+    expect(flakyRow?.reason).toContain('⏸ flaky mid-stream');
+  });
+
+  it('partialFlakiness=false disables the penalty entirely (identical providers tie)', () => {
+    const identical = { reasoning: 0.8, speed: 0.6, cost: 0.5, privacy: 0.2, reliability: 0.9 };
+    router.updateProfiles({ providerA: identical, providerB: identical });
+    const registry = getModelRegistry();
+    registry.markVerified('providerA', 'm-a', 'spot-check');
+    registry.markVerified('providerB', 'm-b', 'spot-check');
+    registry.recordPartial('providerB', 'm-b', 'chat', 'timeout');
+
+    const configManager = {
+      getAll: () => ({ routing: { partialFlakiness: false } }),
+      hasRequiredCredentials: () => true,
+      getProviderConfig: () => ({ config: { model: 'default' } }),
+    } as any;
+    const decision = router.resolve('writer', 'deploy to production', {
+      allowedProviders: ['providerA', 'providerB'],
+    }, configManager);
+    // No flakiness chip, no penalty — the identical profiles produce identical
+    // scores (deterministic tie, stable order).
+    expect(decision.ranked.find((r) => r.provider === 'providerB')?.flakiness).toBeUndefined();
+    const a = decision.ranked.find((r) => r.provider === 'providerA');
+    const b = decision.ranked.find((r) => r.provider === 'providerB');
+    expect(a?.score).toBeCloseTo(b?.score as number, 5);
+  });
+
+  it('healed flakiness (clean successes) removes the penalty', () => {
+    const identical = { reasoning: 0.8, speed: 0.6, cost: 0.5, privacy: 0.2, reliability: 0.9 };
+    router.updateProfiles({ providerA: identical, providerB: identical });
+    const registry = getModelRegistry();
+    registry.markVerified('providerA', 'm-a', 'spot-check');
+    registry.markVerified('providerB', 'm-b', 'spot-check');
+    registry.recordPartial('providerB', 'm-b', 'chat', 'timeout');
+    for (let i = 0; i < 12; i++) {
+      registry.recordCall('providerB', 'm-b', true, undefined, 'chat');
+    }
+
+    const decision = router.resolve('writer', 'deploy to production', {
+      allowedProviders: ['providerA', 'providerB'],
+    });
+    expect(decision.ranked.find((r) => r.provider === 'providerB')?.flakiness).toBeUndefined();
+  });
+});
+
 // ─── Real Pricing ──────────────────────────────────────────────────────────
 
 describe('real provider pricing', () => {
