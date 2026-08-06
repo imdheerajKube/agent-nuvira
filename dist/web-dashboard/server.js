@@ -1177,6 +1177,16 @@ function readRoutingInsights() {
                 provider: r.provider,
                 score: Math.round(r.score * 1000) / 1000,
                 reason: r.reason,
+                // v1.58.0 M2.x chips — mirror the CLI `model explain` guarantees so the
+                // dashboard shows WHY each provider ranks where it does.
+                capabilityFit: r.capabilityFit !== undefined ? Math.round(r.capabilityFit * 100) : undefined,
+                costSource: r.costSource || 'estimated',
+                costBasis: r.costBasis ? {
+                    inputTokens: r.costBasis.inputTokens,
+                    outputTokens: r.costBasis.outputTokens,
+                } : undefined,
+                contextUtilization: r.contextUtilization !== undefined ? Math.round(r.contextUtilization * 100) : undefined,
+                contextWindowTokens: r.contextWindowTokens,
             })),
         };
     });
