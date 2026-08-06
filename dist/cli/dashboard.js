@@ -49,6 +49,25 @@ export class DashboardCommand extends BaseCommand {
         });
         return command;
     }
+    /**
+     * Close BOTH the primary and the IPv6-loopback twin listeners (best-effort).
+     * The twin shares the same port family-differently, so it must be closed too
+     * or a restarted dashboard would hit EADDRINUSE on the ::1 side.
+     */
+    closeAllListeners() {
+        if (!this.server)
+            return;
+        try {
+            this.server.server.close();
+        }
+        catch { /* ignore */ }
+        if (this.server.ipv6Twin) {
+            try {
+                this.server.ipv6Twin.close();
+            }
+            catch { /* ignore */ }
+        }
+    }
     async launchDashboard(options) {
         const port = options.port || 3030;
         const host = options.host || '127.0.0.1';
@@ -117,7 +136,7 @@ export class DashboardCommand extends BaseCommand {
             const shutdown = () => {
                 logger.info('\nShutting down dashboard...');
                 if (this.server) {
-                    this.server.server.close();
+                    this.closeAllListeners();
                     this.server = null;
                 }
                 settle('running');
@@ -135,7 +154,11 @@ export class DashboardCommand extends BaseCommand {
                 settle('failed');
                 return;
             }
-            const url = `http://localhost:${port}`;
+            // PERMANENT "server unreachable" fix: open the DETERMINISTIC IPv4
+            // loopback URL. `http://localhost:` resolves to ::1 FIRST on macOS
+            // (IPv6 before IPv4), so browsers hit [::1]:port → ECONNREFUSED → the
+            // Models page error banner. 127.0.0.1 can never be mis-resolved.
+            const url = `http://127.0.0.1:${port}`;
             // listen() is async: bind errors (EADDRINUSE — e.g. a STALE dashboard
             // from an older version still running on this port) fire as an 'error'
             // event. Without a listener node crashes with an unhandled 'error' event
@@ -157,19 +180,13 @@ export class DashboardCommand extends BaseCommand {
                     // outcome so the caller can retry the bind.
                     void this.tryForceRestart(port, host).then((restarted) => {
                         if (restarted) {
-                            try {
-                                this.server?.server.close();
-                            }
-                            catch { /* ignore */ }
+                            this.closeAllListeners();
                             this.server = null;
                             settle('restart');
                             return;
                         }
                         this.logEADDRINUSE(port);
-                        try {
-                            this.server?.server.close();
-                        }
-                        catch { /* ignore */ }
+                        this.closeAllListeners();
                         this.server = null;
                         settle('failed');
                         process.exit(1);
@@ -177,10 +194,7 @@ export class DashboardCommand extends BaseCommand {
                         // tryForceRestart threw unexpectedly (inquirer regression, etc.) —
                         // never leave the CLI hanging on an unsettled promise.
                         this.logEADDRINUSE(port);
-                        try {
-                            this.server?.server.close();
-                        }
-                        catch { /* ignore */ }
+                        this.closeAllListeners();
                         this.server = null;
                         settle('failed');
                         process.exit(1);
@@ -198,10 +212,7 @@ export class DashboardCommand extends BaseCommand {
                     logger.error(`Dashboard server error: ${err.message}`);
                     return;
                 }
-                try {
-                    this.server?.server.close();
-                }
-                catch { /* ignore */ }
+                this.closeAllListeners();
                 this.server = null;
                 settle('failed');
                 process.exit(1);

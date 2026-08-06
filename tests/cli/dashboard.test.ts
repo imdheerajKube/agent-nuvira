@@ -186,7 +186,7 @@ describe('DashboardCommand', () => {
 
     expect(mockSpawn).toHaveBeenCalledWith(
       'open',
-      ['http://localhost:3030'],
+      ['http://127.0.0.1:3030'],
       expect.objectContaining({ stdio: 'ignore', detached: true }),
     );
     expect(mockSpawn).toHaveBeenCalledOnce();
@@ -195,7 +195,7 @@ describe('DashboardCommand', () => {
   it('should log the success message and dashboard URL', async () => {
     await runDashboard(cmd, {});
 
-    expect(mockLogger.success).toHaveBeenCalledWith(expect.stringContaining('http://localhost:3030'));
+    expect(mockLogger.success).toHaveBeenCalledWith(expect.stringContaining('http://127.0.0.1:3030'));
   });
 
   // ── --build flag ──────────────────────────────────────────────────────
@@ -246,7 +246,7 @@ describe('DashboardCommand', () => {
     // otherwise the server binds the import-time default (3030), silently
     // ignoring --port.
     expect(mockCreateDashboardServer).toHaveBeenCalledWith({ port: 8080, host: '127.0.0.1' });
-    expect(mockLogger.success).toHaveBeenCalledWith(expect.stringContaining('http://localhost:8080'));
+    expect(mockLogger.success).toHaveBeenCalledWith(expect.stringContaining('http://127.0.0.1:8080'));
   });
 
   // ── --host flag ───────────────────────────────────────────────────────
@@ -431,7 +431,7 @@ describe('DashboardCommand', () => {
 
     // The CLI re-bound: a SECOND server was created and reached 'listening'.
     expect(mockCreateDashboardServer).toHaveBeenCalledTimes(2);
-    expect(mockLogger.success).toHaveBeenCalledWith(expect.stringContaining('http://localhost:3030'));
+    expect(mockLogger.success).toHaveBeenCalledWith(expect.stringContaining('http://127.0.0.1:3030'));
 
     process.emit('SIGINT');
     await launchPromise;
