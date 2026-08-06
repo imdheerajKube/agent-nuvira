@@ -382,6 +382,23 @@ export interface QuotaInsights {
     reason?: string;
     timestamp: number;
   }>;
+  /**
+   * M2.3/M2.4: multi-account key rotation — currently-parked ACCOUNTS per
+   * provider (fingerprint only — raw keys are never persisted). Lets the
+   * dashboard show WHICH account of a provider is skipped by rotation and
+   * why, so multi-account state is visible. Optional: an older server won't
+   * send these, so the panel hides the list when absent.
+   */
+  parkedAccounts?: Array<{
+    provider: string;
+    /** Stable fingerprint (FNV-1a) — never the raw key. */
+    accountId: string;
+    reason?: string;
+    /** Ms until this account is re-admitted. */
+    parkedUntil: number;
+    /** Remaining ms of the park. */
+    remainingMs: number;
+  }>;
   updatedAt: number;
 }
 

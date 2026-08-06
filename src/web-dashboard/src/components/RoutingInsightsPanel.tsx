@@ -804,6 +804,42 @@ function QuotaSection({ quota }: { quota: QuotaInsights }) {
         the ledger always tracks usage but only parks when limits are set.
       </div>
 
+      {/* M2.3/M2.4: parked multi-account keys — makes key rotation visible. */}
+      {quota.parkedAccounts && quota.parkedAccounts.length > 0 && (
+        <div style={{ marginTop: 18 }}>
+          <div style={{ fontSize: 13, fontWeight: 600, color: '#e6edf3', marginBottom: 10 }}>
+            🔑 Parked Accounts — multi-account key rotation
+          </div>
+          <div style={{ fontSize: 11, color: '#8b949e', marginBottom: 8 }}>
+            Accounts skipped predictively by the failover walk (rate-limit / auth). Fingerprints only — raw keys are never stored.
+          </div>
+          <div style={{ maxHeight: 180, overflowY: 'auto', background: '#0d1117', border: '1px solid #21262d', borderRadius: 10, padding: '8px 0' }}>
+            {quota.parkedAccounts.map((acct, i) => {
+              const reason = acct.reason === 'auth' ? 'auth' : acct.reason === 'rate-limit' ? 'rate-limit' : acct.reason || 'cooldown';
+              const color = acct.reason === 'rate-limit' ? '#d29922' : '#f85149';
+              return (
+                <div key={`${acct.provider}-${acct.accountId}-${i}`} style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '6px 14px', borderBottom: i < quota.parkedAccounts!.length - 1 ? '1px solid #161b22' : 'none' }}>
+                  <span style={{ fontSize: 13 }}>🔒</span>
+                  <span style={{ width: 90, flexShrink: 0, fontSize: 12, color: '#e6edf3' }}>
+                    {providerIcon(acct.provider)} {providerLabel(acct.provider).split(' ')[0]}
+                  </span>
+                  <span style={{ fontFamily: "'SFMono-Regular', Consolas, monospace", fontSize: 11, color: '#8b949e' }} title={acct.accountId}>
+                    #{acct.accountId.slice(0, 8)}
+                  </span>
+                  <span style={{ fontSize: 11, padding: '1px 8px', borderRadius: 10, background: '#161b22', border: `1px solid ${color}`, color, textAlign: 'center' }}>
+                    {reason}
+                  </span>
+                  <span style={{ flex: 1 }} />
+                  <span style={{ fontSize: 11, color: '#6e7681', whiteSpace: 'nowrap' }}>
+                    re-admits in {fmtDuration(acct.remainingMs)}
+                  </span>
+                </div>
+              );
+            })}
+          </div>
+        </div>
+      )}
+
       {/* Failover timeline (assessment #7: show users when failover occurred and why) */}
       {quota.events && quota.events.length > 0 && (
         <div style={{ marginTop: 18 }}>

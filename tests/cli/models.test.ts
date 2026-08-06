@@ -308,6 +308,7 @@ describe('ModelsCommand unblock — manual escape hatch', () => {
     const { resetQuotaLedger } = await import('../../src/learning/quota-ledger.js');
     resetModelRegistry();
     resetQuotaLedger();
+    mockRefreshRegistry.refreshModelRegistry.mockReset();
     mockRefreshRegistry.refreshModelRegistry.mockResolvedValue({
       providersProbed: ['gemini'],
       modelsListed: 2,
@@ -399,6 +400,37 @@ describe('ModelsCommand unblock — manual escape hatch', () => {
     expect(mockRefreshRegistry.refreshModelRegistry).toHaveBeenCalledWith(
       configManager,
       expect.objectContaining({ providers: ['openrouter'] }),
+    );
+  });
+
+  it('refuses to unblock when routing.governance.allowUnblock is false (M2.4 admin hard-deny)', async () => {
+    const { getModelRegistry } = await import('../../src/learning/model-registry.js');
+    const registry = getModelRegistry();
+    registry.markUnavailable('gemini', 'gemini-2.5-flash', 'auth', 'telemetry');
+    expect(registry.getBlockedProviders()).toContain('gemini');
+    // Admin policy hard-denies the escape hatch.
+    configManager.getAll = vi.fn(() => ({ routing: { governance: { allowUnblock: false } } }));
+
+    const output = await runUnblock(['unblock', 'gemini']);
+
+    // The provider stays blocked AND no re-probe happened (the command bailed).
+    expect(registry.getBlockedProviders()).toContain('gemini');
+    expect(mockRefreshRegistry.refreshModelRegistry).not.toHaveBeenCalled();
+    expect(output).toContain('allowUnblock');
+  });
+
+  it('still unblocks when allowUnblock is true or unset (default escape hatch)', async () => {
+    const { getModelRegistry } = await import('../../src/learning/model-registry.js');
+    const registry = getModelRegistry();
+    registry.markUnavailable('gemini', 'gemini-2.5-flash', 'auth', 'telemetry');
+    configManager.getAll = vi.fn(() => ({ routing: { governance: { allowUnblock: true } } }));
+
+    await runUnblock(['unblock', 'gemini']);
+
+    expect(registry.getBlockedProviders()).not.toContain('gemini');
+    expect(mockRefreshRegistry.refreshModelRegistry).toHaveBeenCalledWith(
+      configManager,
+      expect.objectContaining({ providers: ['gemini'] }),
     );
   });
 });

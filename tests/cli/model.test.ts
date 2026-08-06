@@ -141,6 +141,85 @@ describe('ModelCommand explain', () => {
       expect(scores[i - 1]).toBeGreaterThanOrEqual(scores[i]);
     }
   });
+
+  it('surfaces governance-eliminated providers in JSON (M2.4)', () => {
+    const cmd = new ModelCommand();
+    (cmd as any).configManager = {
+      getAll: vi.fn(() => ({
+        pricing: {},
+        routing: { governance: { denyProviders: ['openrouter'] } },
+      })),
+      hasRequiredCredentials: vi.fn(() => true),
+      getProviderConfig: vi.fn(() => ({ config: {} })),
+    };
+    cmd.create().parse(['explain', 'implement a login form', '--json'], { from: 'user' });
+    const output = vi.mocked(console.log).mock.calls.map((c) => String(c[0])).join('\n');
+    const parsed = JSON.parse(output) as Record<string, any>;
+
+    // openrouter was eliminated by the admin deny-list and the audit trail shows why.
+    expect(parsed.ranked.some((r: { provider: string }) => r.provider === 'openrouter')).toBe(false);
+    expect(parsed.governanceBlocked).toEqual(
+      expect.arrayContaining([expect.objectContaining({ provider: 'openrouter', reason: expect.stringContaining('denyProviders') })]),
+    );
+  });
+
+  it('renders the governance-eliminated section in human output (M2.4)', () => {
+    const cmd = new ModelCommand();
+    (cmd as any).configManager = {
+      getAll: vi.fn(() => ({
+        pricing: {},
+        routing: { governance: { denyProviders: ['openrouter'] } },
+      })),
+      hasRequiredCredentials: vi.fn(() => true),
+      getProviderConfig: vi.fn(() => ({ config: {} })),
+    };
+    cmd.create().parse(['explain', 'implement a login form'], { from: 'user' });
+    const output = vi.mocked(console.log).mock.calls.map((c) => String(c[0])).join('\n');
+
+    expect(output).toContain('Governance policy');
+    expect(output).toContain('openrouter');
+    expect(output).toContain('denyProviders');
+  });
+
+  it('JSON explain emits a policy error object (not a crash) when governance eliminates every provider (M2.4 hard gate)', () => {
+    const cmd = new ModelCommand();
+    (cmd as any).configManager = {
+      getAll: vi.fn(() => ({
+        pricing: {},
+        routing: { governance: { allowProviders: ['nonexistent-provider'] } },
+      })),
+      hasRequiredCredentials: vi.fn(() => true),
+      getProviderConfig: vi.fn(() => ({ config: {} })),
+    };
+    cmd.create().parse(['explain', 'implement a login form', '--json'], { from: 'user' });
+    const output = vi.mocked(console.log).mock.calls.map((c) => String(c[0])).join('\n');
+    const parsed = JSON.parse(output) as Record<string, any>;
+
+    // The router refused to serve a policy violator; explain surfaces the
+    // block as a machine-readable error (never a raw stack trace).
+    expect(parsed.error).toContain('Governance');
+    expect(parsed.governanceBlocked.length).toBeGreaterThan(0);
+  });
+
+  it('human explain renders the audit trail when governance eliminates every provider (M2.4 hard gate)', () => {
+    const cmd = new ModelCommand();
+    (cmd as any).configManager = {
+      getAll: vi.fn(() => ({
+        pricing: {},
+        routing: { governance: { allowProviders: ['nonexistent-provider'] } },
+      })),
+      hasRequiredCredentials: vi.fn(() => true),
+      getProviderConfig: vi.fn(() => ({ config: {} })),
+    };
+    const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
+    cmd.create().parse(['explain', 'implement a login form'], { from: 'user' });
+    const errOut = errorSpy.mock.calls.map((c) => c.map((v) => String(v)).join(' ')).join('\n');
+    const out = vi.mocked(console.log).mock.calls.map((c) => c.map((v) => String(v)).join(' ')).join('\n');
+    errorSpy.mockRestore();
+
+    expect(errOut).toContain('Governance policy');
+    expect(out).toContain('allowProviders');
+  });
 });
 
 // ─── ModelCommand bandit ────────────────────────────────────────────────────

@@ -33,6 +33,7 @@ import {
   AUTO_MODEL,
   AUTO_PROVIDER,
   DEFAULT_AUTO_PROVIDERS,
+  GovernancePolicyError,
   type ProviderCapabilities,
   type ScoredProvider,
   type RoutingDimension,
@@ -1282,6 +1283,227 @@ describe('resolveModel / pickModelFromCatalog', () => {
 });
 
 // ─── Singleton ──────────────────────────────────────────────────────────────
+
+describe('AutoModelRouter.resolve governance (M2.4 admin policy)', () => {
+  // Isolate the registry like the credential-filtering describe: the
+  // registry fast-path (getUsableProviders) would leak the real ~/.buff
+  // registry into the candidate set and pre-filter providers before the
+  // governance slot even runs.
+  let registryTempDir: string;
+  let originalMemoryDir: string | undefined;
+
+  beforeEach(() => {
+    registryTempDir = mkdtempSync(join(tmpdir(), 'buff-autorouter-gov-'));
+    originalMemoryDir = process.env.BUFF_MEMORY_DIR;
+    process.env.BUFF_MEMORY_DIR = registryTempDir;
+    resetModelRegistry();
+  });
+
+  afterEach(() => {
+    resetModelRegistry();
+    if (originalMemoryDir === undefined) {
+      delete process.env.BUFF_MEMORY_DIR;
+    } else {
+      process.env.BUFF_MEMORY_DIR = originalMemoryDir;
+    }
+    rmSync(registryTempDir, { recursive: true, force: true });
+  });
+
+  // Every mock configManager needs getAll() — resolve() reads pricing + the
+  // governance policy from it. getProviderConfig feeds resolveModel so the
+  // governance MODEL gate can see the configured pin.
+  function makeConfig(routing?: Record<string, unknown>, providers: Record<string, { model?: string }> = {}) {
+    return {
+      getAll: vi.fn(() => ({ pricing: {}, routing: routing || {}, providers })),
+      hasRequiredCredentials: vi.fn(() => true),
+      getProviderConfig: vi.fn((p: string) => ({ config: providers[p] || {} })),
+    } as any;
+  }
+
+  it('allowProviders restricts the candidate set to the admin list', () => {
+    const configManager = makeConfig({ governance: { allowProviders: ['groq', 'local'] } });
+    const decision = new AutoModelRouter().resolve('writer', 'implement a login form', {}, configManager);
+    // nim/gemini/openrouter are eliminated — never ranked, never picked.
+    expect(decision.ranked.every((s) => s.provider === 'groq' || s.provider === 'local')).toBe(true);
+    // The audit trail shows the policy kills.
+    const blocked = decision.governanceBlocked || [];
+    expect(blocked.map((b) => b.provider).sort()).toEqual(['gemini', 'nim', 'openrouter']);
+    expect(blocked.every((b) => b.reason.includes('allowProviders'))).toBe(true);
+  });
+
+  it('denyProviders eliminates listed providers (wins over allowProviders)', () => {
+    const configManager = makeConfig({ governance: { allowProviders: ['groq', 'gemini', 'local'], denyProviders: ['gemini'] } });
+    const decision = new AutoModelRouter().resolve('writer', 'implement a login form', {}, configManager);
+    expect(decision.ranked.some((s) => s.provider === 'gemini')).toBe(false);
+    expect(decision.ranked.some((s) => s.provider === 'groq')).toBe(true);
+    const blocked = decision.governanceBlocked || [];
+    expect(blocked.find((b) => b.provider === 'gemini')?.reason).toContain('denyProviders');
+  });
+
+  it('denyModels eliminates providers whose candidate model is denied', () => {
+    // gemini's curated default is gemini-2.5-flash; deny it → gemini killed.
+    const configManager = makeConfig({ governance: { denyModels: ['gemini-2.5-flash'] } });
+    const decision = new AutoModelRouter().resolve('writer', 'implement a login form', {}, configManager);
+    expect(decision.ranked.some((s) => s.provider === 'gemini')).toBe(false);
+    const blocked = decision.governanceBlocked || [];
+    expect(blocked.find((b) => b.provider === 'gemini')?.reason).toContain('denyModels');
+  });
+
+  it('model allow-list that eliminates every provider THROWS (model list is a hard gate)', () => {
+    // Allow a model that NO default provider serves → every provider is a
+    // policy violator → the router must throw, never fall back to an unlisted
+    // model's provider.
+    const configManager = makeConfig({ governance: { allowModels: ['totally-unknown-model'] } });
+    expect(() => new AutoModelRouter().resolve('writer', 'implement a login form', {}, configManager))
+      .toThrow(/Governance/);
+  });
+
+  it('allowModels eliminates providers with no candidate on the allow list', () => {
+    // Allow ONLY a groq model → only groq survives.
+    const configManager = makeConfig({ governance: { allowModels: ['llama-3.3-70b-versatile'] } });
+    const decision = new AutoModelRouter().resolve('writer', 'implement a login form', {}, configManager);
+    expect(decision.ranked.every((s) => s.provider === 'groq')).toBe(true);
+    const blocked = decision.governanceBlocked || [];
+    expect(blocked.length).toBeGreaterThan(0);
+    expect(blocked.every((b) => b.reason.includes('allowModels'))).toBe(true);
+  });
+
+  it('admin maxCostUsd cap eliminates expensive providers (joins per-call option)', () => {
+    // openrouter costs ~$0.0075/call at TYPICAL tokens — well above a $0.001 cap.
+    const configManager = makeConfig({ governance: { maxCostUsd: 0.001 } });
+    const decision = new AutoModelRouter().resolve('writer', 'implement a login form', {}, configManager);
+    expect(decision.ranked.some((s) => s.provider === 'openrouter')).toBe(false);
+    const blocked = decision.governanceBlocked || [];
+    expect(blocked.find((b) => b.provider === 'openrouter')?.reason).toContain('max-cost');
+  });
+
+  it('PII-domain block restricts matching tasks to privacy >= required (local-only by default)', () => {
+    const configManager = makeConfig({ governance: { piiPatterns: ['api[_-]?key'] } });
+    // The task mentions an API key → privacy-sensitive → only local (privacy 1.0).
+    const decision = new AutoModelRouter().resolve('writer', 'rotate the api_key in .env safely', {}, configManager);
+    expect(decision.ranked.every((s) => s.provider === 'local')).toBe(true);
+    const blocked = decision.governanceBlocked || [];
+    expect(blocked.length).toBeGreaterThan(0);
+    expect(blocked.every((b) => b.reason.includes('PII'))).toBe(true);
+  });
+
+  it('PII block does NOT fire when the task does not match any pattern', () => {
+    const configManager = makeConfig({ governance: { piiPatterns: ['api[_-]?key'] } });
+    const decision = new AutoModelRouter().resolve('writer', 'implement a login form', {}, configManager);
+    expect(decision.ranked.some((s) => s.provider === 'local')).toBe(true);
+    expect(decision.ranked.some((s) => s.provider !== 'local')).toBe(true);
+    expect(decision.governanceBlocked || []).toEqual([]);
+  });
+
+  it('unset/empty governance policy is fully permissive (existing behavior)', () => {
+    const configManager = makeConfig({});
+    const decision = new AutoModelRouter().resolve('writer', 'implement a login form', {}, configManager);
+    expect(decision.ranked.length).toBe(DEFAULT_AUTO_PROVIDERS.length);
+    expect(decision.governanceBlocked || []).toEqual([]);
+  });
+
+  it('governance list policy that eliminates every provider THROWS (never falls back to a violator)', () => {
+    // Admin allow-list excludes everything (pathological) — the router must
+    // REFUSE to serve a provider the policy rules out, not fall back to one.
+    // Only PER-CALL soft options (maxCostUsd/minSpeed/minReasoning) get the
+    // benign fallback; an admin list is a HARD gate like PII.
+    const configManager = makeConfig({ governance: { allowProviders: ['nonexistent-provider'] } });
+    expect(() => new AutoModelRouter().resolve('writer', 'implement a login form', {}, configManager))
+      .toThrow(/Governance/);
+  });
+
+  it('governance hard-gate THROWS with the full audit trail when the admin deny list kills everyone', () => {
+    const configManager = makeConfig({ governance: { denyProviders: ['local', 'groq', 'gemini', 'nim', 'openrouter'] } });
+    let thrown: unknown;
+    try {
+      new AutoModelRouter().resolve('writer', 'implement a login form', {}, configManager);
+    } catch (err) {
+      thrown = err;
+    }
+    expect(thrown).toBeInstanceOf(GovernancePolicyError);
+    // The audit trail records every policy kill instead of being empty.
+    const blocked = (thrown as GovernancePolicyError).blocked;
+    expect(blocked.length).toBeGreaterThan(0);
+    expect(blocked.every((b) => b.reason.includes('denyProviders'))).toBe(true);
+  });
+
+  it('mixed soft+hard elimination THROWS (a governance kill must never be resurrected by a soft fallback)', () => {
+    // minReasoning 0.9 eliminates local/groq/nim/gemini on its own (SOFT →
+    // benign fallback on its own), while openrouter (reasoning 0.95) survives
+    // the soft checks and is killed by the ADMIN deny list. Falling back would
+    // resurrect the deny-listed openrouter, so the gate must throw.
+    const configManager = makeConfig({
+      governance: { denyProviders: ['openrouter'] },
+    });
+    expect(() => new AutoModelRouter().resolve('writer', 'implement a login form', {
+      minReasoning: 0.9,
+    }, configManager)).toThrow(/Governance/);
+  });
+
+  it('PII hard-gate THROWS when a PII task matches but every provider violates privacy (never serves a violator)', () => {
+    // Every default provider except local has privacy < 1.0; simulate a
+    // PII task where even local is removed (allowProviders excludes it) —
+    // the router must REFUSE rather than fall back to a low-privacy cloud.
+    const configManager = makeConfig({
+      governance: { piiPatterns: ['api[_-]?key'], allowProviders: ['groq', 'openrouter'] },
+    });
+    expect(() => new AutoModelRouter().resolve('writer', 'rotate the api_key in .env', {}, configManager)).toThrow(/PII/);
+  });
+
+  it('PII hard-gate uses the privacy-compliant subset when SOME providers pass the bar', () => {
+    // allowProviders admits groq+local; a PII task must keep local only
+    // (groq privacy 0.15 < 1.0), even though groq otherwise passes.
+    const configManager = makeConfig({
+      governance: { piiPatterns: ['api[_-]?key'], allowProviders: ['groq', 'local'] },
+    });
+    const decision = new AutoModelRouter().resolve('writer', 'rotate the api_key in .env', {}, configManager);
+    expect(decision.ranked.every((s) => s.provider === 'local')).toBe(true);
+    const blocked = decision.governanceBlocked || [];
+    expect(blocked.find((b) => b.provider === 'groq')?.reason).toContain('PII');
+  });
+
+  it('allowModels enforces the CONFIGURED PIN, not just any curated default (served-model hole)', () => {
+    // groq is pinned to a model NOT on the allow list, while groq's curated
+    // default (llama-3.3-70b-versatile) IS allowed — the pin is what gets
+    // served, so groq must be eliminated (never serve an unlisted model).
+    // gemini-2.5-flash is allowed so gemini survives (no throw).
+    const configManager = makeConfig(
+      { governance: { allowModels: ['llama-3.3-70b-versatile', 'gemini-2.5-flash'] } },
+      { groq: { model: 'my-custom-pinned-model' } },
+    );
+    const decision = new AutoModelRouter().resolve('writer', 'implement a login form', {}, configManager);
+    expect(decision.ranked.some((s) => s.provider === 'groq')).toBe(false);
+    expect(decision.ranked.some((s) => s.provider === 'gemini')).toBe(true);
+    const blocked = decision.governanceBlocked || [];
+    expect(blocked.find((b) => b.provider === 'groq')?.reason).toContain('my-custom-pinned-model');
+  });
+
+  it('denyModels enforces the CONFIGURED PIN (a denied pin kills the provider even if a curated default is clean)', () => {
+    const configManager = makeConfig(
+      { governance: { denyModels: ['gemini-2.5-flash'] } },
+      { gemini: { model: 'gemini-2.5-flash' } },
+    );
+    const decision = new AutoModelRouter().resolve('writer', 'implement a login form', {}, configManager);
+    expect(decision.ranked.some((s) => s.provider === 'gemini')).toBe(false);
+    const blocked = decision.governanceBlocked || [];
+    expect(blocked.find((b) => b.provider === 'gemini')?.reason).toContain('denyModels');
+  });
+
+  it('PER-CALL soft constraints eliminated everyone still fall back benignly (no governance configured)', () => {
+    // Without governance, only per-call SOFT options (maxCostUsd/minSpeed/
+    // minReasoning) ran — an impossible per-request ask keeps the full ranking
+    // so the caller still gets a decision (no policy is being violated).
+    const configManager = makeConfig({});
+    const decision = new AutoModelRouter().resolve('writer', 'implement a login form', {
+      maxCostUsd: 0.0000001,
+      minReasoning: 0.99,
+    }, configManager);
+    expect(DEFAULT_AUTO_PROVIDERS).toContain(decision.provider);
+    // No governance configured → the audit trail stays empty (nothing policy
+    // related was blocked; the soft kills live in the per-provider reasons).
+    expect(decision.governanceBlocked || []).toEqual([]);
+  });
+});
 
 describe('singleton', () => {
   afterEach(() => {

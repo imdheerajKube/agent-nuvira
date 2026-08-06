@@ -11,6 +11,30 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added — Nuvira-Router P2 (capability-aware scoring + wire-token metering)
 
+- **M2.4 — Governance constraints (admin policy)** (`src/config/types.ts`,
+  `src/learning/auto-router.ts`, `src/cli/models.ts`, `src/cli/model.ts`,
+  `src/web-dashboard/server.ts`). Admin routing policy via `routing.governance`
+  — config-additive, fully permissive when unset. Provider allow/deny lists,
+  model allow/deny lists (enforced against the model that will ACTUALLY be
+  served: the configured pin, or the curated defaults when unpinned — a pinned
+  violator is killed even if a curated default would pass), an admin per-call
+  max-cost cap (the stricter of admin vs per-call wins), and a PII-domain
+  block (task matches `piiPatterns` → only providers with privacy ≥
+  `minPrivacyForPii`, default 1.0 = local-only). All enforcement is a HARD
+  elimination in the router's constraint slot — never a score nudge.
+  **Hard-gate guarantees:** when a governance rule eliminates EVERY candidate
+  the router REFUSES to serve a policy violator — `PIIPolicyError` (privacy)
+  / `GovernancePolicyError` (lists/admin cap), each carrying the full
+  `governanceBlocked` audit trail (provider + reason); only per-call SOFT
+  options (`maxCostUsd`/`minSpeed`/`minReasoning`, which never populate the
+  audit) keep the benign fallback-to-ranking. `models explain` renders policy
+  blocks cleanly (human audit trail + JSON error object); `buff plan`
+  rethrows instead of degrading around a block. `buff models unblock` gains
+  the admin gate `governance.allowUnblock: false` (refuses the escape hatch)
+  and an advisory when the provider sits on an admin deny list (unblock alone
+  can't restore it). Dashboard Quota panel adds the parked key-account view
+  (`parkedAccounts`). `buff config set` supports `providers.<name>.apiKeys`
+  and `routing.governance.*`.
 - **M2.3 — Multi-account key rotation** (`src/config/types.ts`,
   `src/learning/quota-ledger.ts`, `src/cli/failover-runner.ts`). A provider
   can now carry MULTIPLE API keys (`ProviderConfig.apiKeys: string[]`, in

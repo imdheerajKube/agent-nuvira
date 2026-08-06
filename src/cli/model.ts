@@ -37,6 +37,8 @@ import {
   getAutoRouter,
   isAutoModel,
   isAutoProvider,
+  PIIPolicyError,
+  GovernancePolicyError,
   type AutoModelRouter,
   type RoutingDimension,
 } from '../learning/auto-router.js';
@@ -605,7 +607,20 @@ export class ModelCommand extends BaseCommand {
     const agentType = opts.agent || 'chat';
 
     if (opts.json) {
-      console.log(JSON.stringify(this.buildExplainJSON(router, agentType, task), null, 2));
+      try {
+        console.log(JSON.stringify(this.buildExplainJSON(router, agentType, task), null, 2));
+      } catch (err) {
+        // A PII/governance policy block must not crash the JSON contract —
+        // emit a machine-readable error object instead.
+        if (err instanceof PIIPolicyError || err instanceof GovernancePolicyError) {
+          console.log(JSON.stringify({
+            error: (err as Error).message,
+            governanceBlocked: err instanceof GovernancePolicyError ? err.blocked : undefined,
+          }, null, 2));
+          return;
+        }
+        throw err;
+      }
       return;
     }
 
@@ -616,14 +631,34 @@ export class ModelCommand extends BaseCommand {
     if (task) {
       logger.info(`Task: "${task}"  ·  Agent: ${agentType}`);
       console.log('');
-      this.renderRoutingDecision(router, agentType, task);
+      try {
+        this.renderRoutingDecision(router, agentType, task);
+      } catch (err) {
+        // A PII/governance policy block renders cleanly (with the audit trail)
+        // instead of crashing `buff model explain` with a raw stack trace.
+        if (err instanceof PIIPolicyError || err instanceof GovernancePolicyError) {
+          this.renderPolicyBlock(err);
+        } else {
+          throw err;
+        }
+      }
       return;
     }
 
     // No task given — walk through sample tasks across all complexity levels
     for (const s of EXPLAIN_SAMPLES) {
       logger.highlight(`  ${s.label} — "${s.task}"`);
-      this.renderRoutingDecision(router, agentType, s.task, true);
+      try {
+        this.renderRoutingDecision(router, agentType, s.task, true);
+      } catch (err) {
+        // A single sample that violates a PII/governance policy renders the
+        // block inline and keeps walking the remaining samples.
+        if (err instanceof PIIPolicyError || err instanceof GovernancePolicyError) {
+          this.renderPolicyBlock(err);
+        } else {
+          throw err;
+        }
+      }
       console.log('');
     }
 
@@ -631,6 +666,21 @@ export class ModelCommand extends BaseCommand {
     logger.info('Pass a task for a single detailed decision: `buff model explain "your task"`');
     logger.info('Route for a specific agent: `buff model explain --agent writer "your task"`');
     logger.info('JSON for scripting/CI: `buff model explain "your task" --json`');
+    console.log('');
+  }
+
+  /**
+   * Render a PII/governance policy block cleanly (M2.4 auditability): the
+   * message plus, for governance, the full eliminated-provider audit trail.
+   */
+  private renderPolicyBlock(err: PIIPolicyError | GovernancePolicyError): void {
+    console.log('');
+    logger.error(`  ⛔ ${err.message}`);
+    if (err instanceof GovernancePolicyError) {
+      for (const b of err.blocked) {
+        console.log(`     • ${b.provider} — ${b.reason}`);
+      }
+    }
     console.log('');
   }
 
@@ -695,6 +745,9 @@ export class ModelCommand extends BaseCommand {
           qualityScore: Math.round(c.qualityScore * 1000) / 1000,
           reason: c.reason,
         })),
+        // M2.4: providers eliminated by the governance policy (with reason) —
+        // empty array when no policy blocks.
+        governanceBlocked: (d.governanceBlocked || []).map((b) => ({ provider: b.provider, reason: b.reason })),
         pricing,
         explanation: d.explanation,
       };
@@ -755,6 +808,18 @@ export class ModelCommand extends BaseCommand {
 
     logger.success(`  Decision: ${decision.provider}/${decision.model}`);
     console.log(`  ${decision.explanation}`);
+
+    // M2.4: governance transparency — show policy-eliminated providers so the
+    // user sees WHY a provider is absent from the ranking (not just that it
+    // is). Renders only when the admin policy actually blocked something.
+    const gBlocked = decision.governanceBlocked || [];
+    if (gBlocked.length > 0) {
+      console.log('');
+      logger.highlight('  ── Governance policy — eliminated providers ──');
+      for (const b of gBlocked) {
+        console.log(`   ⛔ ${b.provider}: ${b.reason}`);
+      }
+    }
     console.log('');
 
     logger.highlight('  ── Fallback chain ──');

@@ -1197,8 +1197,10 @@ function readQuotaData(): Record<string, unknown> {
   if (!data?.entries) {
     // Failover timeline can exist even when the ledger has no usage entries
     // (chat records failover events on auth/rate-limit failures without a
-    // prior successful call) — always include events.
-    return { enabled: false, entries: [], events: readQuotaEvents(), updatedAt: Date.now() };
+    // prior successful call) — always include events. Also always ship
+    // parkedAccounts as an empty array so the panel can iterate safely
+    // against an older ledger that predates multi-account rotation.
+    return { enabled: false, entries: [], events: readQuotaEvents(), parkedAccounts: [], updatedAt: Date.now() };
   }
 
   const now = Date.now();
@@ -1244,6 +1246,36 @@ function readQuotaData(): Record<string, unknown> {
   // park/release/window-roll paths + chat's mid-session failover bookkeeping.
   const events = readQuotaEvents();
 
+  // M2.3/M2.4: parked multi-account keys (fingerprints only — the ledger never
+  // stores raw keys). Surfacing them makes key rotation visible: which account
+  // of a provider is skipped predictively and why. The ledger persists
+  // `accounts: { provider: { accountId: { parkedUntil, reason } } }`.
+  const rawAccounts = (data as { accounts?: Record<string, Record<string, { parkedUntil?: number; reason?: string }>> }).accounts;
+  const parkedAccounts: Array<{
+    provider: string;
+    accountId: string;
+    reason?: string;
+    parkedUntil: number;
+    remainingMs: number;
+  }> = [];
+  if (rawAccounts) {
+    for (const [provider, accounts] of Object.entries(rawAccounts)) {
+      for (const [accountId, state] of Object.entries(accounts || {})) {
+        const parkedUntil = state?.parkedUntil || 0;
+        if (parkedUntil > now) {
+          parkedAccounts.push({
+            provider,
+            accountId,
+            reason: state?.reason,
+            parkedUntil,
+            remainingMs: parkedUntil - now,
+          });
+        }
+      }
+    }
+    parkedAccounts.sort((a, b) => a.provider.localeCompare(b.provider) || b.remainingMs - a.remainingMs);
+  }
+
   return {
     enabled: entries.length > 0,
     entries,
@@ -1253,6 +1285,7 @@ function readQuotaData(): Record<string, unknown> {
     paidRequests,
     estimatedSavedUsd,
     events,
+    parkedAccounts,
     updatedAt: now,
   };
 }
