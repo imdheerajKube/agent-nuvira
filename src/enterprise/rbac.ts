@@ -18,8 +18,8 @@
  */
 
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { resolveBuffConfigDir } from '../config/paths.js';
 import { join } from 'node:path';
-import { homedir } from 'node:os';
 import { logger } from '../utils/logger.js';
 
 // ─── Types ──────────────────────────────────────────────────────────────────
@@ -109,8 +109,9 @@ export function parseRbacUsers(raw: string): Record<string, RbacUser> {
 // ─── Manager ────────────────────────────────────────────────────────────────
 
 function rbacPath(): string {
-  const dir = process.env.BUFF_CONFIG_DIR || join(homedir(), '.buff');
-  return join(dir, 'rbac.json');
+  // Same BUFF_CONFIG_DIR-aware resolution as every other ~/.buff reader — one
+  // source of truth for the precedence (explicit > BUFF_CONFIG_DIR > ~/.buff).
+  return join(resolveBuffConfigDir(), 'rbac.json');
 }
 
 export class RbacManager {
@@ -213,7 +214,7 @@ export class RbacManager {
 
   private persist(): void {
     try {
-      const dir = process.env.BUFF_CONFIG_DIR || join(homedir(), '.buff');
+      const dir = resolveBuffConfigDir();
       if (!existsSync(dir)) mkdirSync(dir, { recursive: true });
       writeFileSync(this.path, JSON.stringify({ version: 1, users: this.users }, null, 2), 'utf-8');
     } catch {

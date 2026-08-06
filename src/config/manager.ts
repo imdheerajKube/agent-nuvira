@@ -1,7 +1,7 @@
 import { readFileSync, writeFileSync, existsSync, mkdirSync } from 'node:fs';
 import { join } from 'node:path';
-import { homedir } from 'node:os';
 import { BuffConfig, ProviderType, ProviderConfig } from './types.js';
+import { resolveBuffConfigDir } from './paths.js';
 import { loadEnv } from '../utils/env.js';
 import { logger } from '../utils/logger.js';
 
@@ -37,7 +37,10 @@ export class ConfigManager {
 
   constructor(configDir?: string) {
     this.env = loadEnv();
-    this.configDir = configDir || join(homedir(), '.buff');
+    // BUFF_CONFIG_DIR override — the RBAC role file and credential store
+    // already honor it, so the config manager must too: a hermetic run pointed
+    // at BUFF_CONFIG_DIR must never read/write the real ~/.buff config.
+    this.configDir = resolveBuffConfigDir(configDir);
     this.configPath = join(this.configDir, 'buffconfig.json');
     this.config = this.loadConfig();
   }
