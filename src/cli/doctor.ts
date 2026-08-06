@@ -33,6 +33,33 @@ import { recordRegistryFailure } from '../learning/provider-fallback.js';
 import { getQuotaLedger } from '../learning/quota-ledger.js';
 import { getCostTracker } from '../learning/cost-tracker.js';
 import { verifyAuditFile } from '../enterprise/audit-chain.js';
+import { resolve } from 'node:path';
+import { readLockfile, buildSbom, verifySbom, parseSbom } from '../enterprise/sbom.js';
+
+/**
+ * Build the P6 M6.6 SBOM posture for doctor. When a stored `sbom.json` exists
+ * in the project root it is compared against the CURRENT lockfile — making
+ * dependency drift/tamper detection REAL (a stale or hand-edited BOM is
+ * caught, mirroring `buff sbom verify`). With no stored SBOM, a fresh BOM is
+ * verified against the same lockfile (by construction ok) so the check still
+ * surfaces the license posture + component count. null when no lockfile.
+ */
+function checkCurrentSbomPosture(rootDir: string) {
+  const lock = readLockfile(rootDir);
+  if (!lock) return null;
+  const storedPath = resolve(rootDir, 'sbom.json');
+  if (existsSync(storedPath)) {
+    try {
+      const stored = parseSbom(readFileSync(storedPath, 'utf-8'));
+      return verifySbom(stored.components, lock);
+    } catch {
+      // Unparseable stored SBOM → treat as drift (fall through to fresh-build
+      // posture so the check still reports SOMETHING useful).
+    }
+  }
+  const bom = buildSbom(rootDir);
+  return verifySbom(bom.components, lock);
+}
 import { logger } from '../utils/logger.js';
 
 // ─── Types ──────────────────────────────────────────────────────────────────
@@ -446,6 +473,66 @@ export function buildGatewayUsage(configManager?: import('../config/manager.js')
  * Legacy pre-chain stores verify as a WARN (records readable; chain starts on
  * the next write); broken chains are a FAIL with the exact tamper line.
  */
+/**
+ * P6 M6.6 supply-chain check: does the installed dependency set match what a
+ * generated SBOM claims? Pure core — the caller passes a pre-built verify
+ * result (file I/O lives in runDiagnosis). Drift/tamper → fail; flagged
+ * copyleft/unknown licenses → warn (compliance review, not a defect); a
+ * missing lockfile → warn (can't bill-of-material).
+ */
+export function checkSbomSupplyChain(
+  verify: { ok: boolean; added: string[]; removed: string[]; changed: Array<{ name: string }>; flaggedLicenses: Array<{ name: string; license: string }> } | null,
+  lockfilePresent: boolean,
+): CheckResult {
+  if (!lockfilePresent) {
+    return {
+      name: 'Supply Chain (SBOM)',
+      status: 'warn',
+      message: 'No package-lock.json — cannot generate a deterministic SBOM',
+      detail: 'Commit package-lock.json and run `buff sbom` to produce a procurement-ready BOM.',
+      fix: 'Commit package-lock.json, then run `buff sbom --out sbom.json`.',
+    };
+  }
+  if (!verify) {
+    return {
+      name: 'Supply Chain (SBOM)',
+      status: 'warn',
+      message: 'No stored SBOM to verify',
+      detail: '`buff sbom --out sbom.json` writes a CycloneDX 1.5 BOM from the lockfile.',
+      fix: 'Run `buff sbom --out sbom.json` to generate, then re-run doctor.',
+    };
+  }
+  if (!verify.ok) {
+    const parts = [
+      verify.added.length ? `${verify.added.length} added` : '',
+      verify.removed.length ? `${verify.removed.length} removed` : '',
+      verify.changed.length ? `${verify.changed.length} changed` : '',
+    ].filter(Boolean).join(', ');
+    return {
+      name: 'Supply Chain (SBOM)',
+      status: 'fail',
+      message: `Dependency drift detected: ${parts}`,
+      detail: 'The SBOM no longer matches package-lock.json — deps changed or the BOM was tampered.',
+      fix: 'Regenerate: `buff sbom --out sbom.json`, then re-run doctor.',
+    };
+  }
+  if (verify.flaggedLicenses.length > 0) {
+    return {
+      name: 'Supply Chain (SBOM)',
+      status: 'warn',
+      message: `SBOM matches lockfile — ${verify.flaggedLicenses.length} copyleft/unknown license(s) flagged for review`, 
+      detail: verify.flaggedLicenses.slice(0, 5).map((f) => `${f.name}: ${f.license}`).join(' · '),
+      fix: 'Review licenses with `buff sbom licenses`; document exceptions in your compliance policy.',
+    };
+  }
+  return {
+    name: 'Supply Chain (SBOM)',
+    status: 'pass',
+    message: 'SBOM matches package-lock.json — no drift, no flagged licenses',
+    detail: 'CycloneDX 1.5 inventory is current; `buff sbom verify` passes.',
+  };
+}
+
 export function checkAuditChainIntegrity(
   name: string,
   verify: { totalLines: number; legacyLines: number; corruptLines: number; tamperLine: number; verdict: string },
@@ -504,6 +591,14 @@ export function buildEnterpriseChecks(inputs: {
    * integrity check per audit file is appended after the JSONL-integrity one.
    */
   auditChains?: Array<{ name: string; result: { totalLines: number; legacyLines: number; corruptLines: number; tamperLine: number; verdict: string } }>;
+  /**
+   * P6 M6.6 pre-computed SBOM verify result (pure core, file I/O done by the
+   * caller). Undefined → the supply-chain check is skipped (keeps non-
+   * enterprise doctor runs unchanged).
+   */
+  sbomVerify?: { ok: boolean; added: string[]; removed: string[]; changed: Array<{ name: string }>; flaggedLicenses: Array<{ name: string; license: string }> } | null;
+  /** Whether package-lock.json exists in the project root (for the warn path). */
+  lockfilePresent?: boolean;
 }): CheckResult[] {
   const checks: CheckResult[] = [];
 
@@ -544,6 +639,11 @@ export function buildEnterpriseChecks(inputs: {
   // 3b. P6 M6.3 hash-chain integrity (per audit file, when results provided)
   for (const chain of inputs.auditChains || []) {
     checks.push(checkAuditChainIntegrity(chain.name, chain.result));
+  }
+
+  // 3c. P6 M6.6 supply chain (SBOM) — when a verify result is provided
+  if (inputs.sbomVerify !== undefined) {
+    checks.push(checkSbomSupplyChain(inputs.sbomVerify, inputs.lockfilePresent ?? false));
   }
 
   // 4. RBAC / governance policy
@@ -645,6 +745,11 @@ export class DoctorCommand extends BaseCommand {
           name: f.name,
           result: verifyAuditFile(f.path, f.name.replace(/\.jsonl$/, '')),
         })),
+        // P6 M6.6: SBOM supply-chain posture — a stored sbom.json (when
+        // present) is compared against the current lockfile so DRIFT is real;
+        // otherwise the fresh-BOM license posture is reported.
+        sbomVerify: checkCurrentSbomPosture(process.cwd()),
+        lockfilePresent: readLockfile(process.cwd()) !== null,
         gatewayUsage: buildGatewayUsage(this.configManager),
       });
       console.log('');

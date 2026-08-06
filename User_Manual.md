@@ -1,6 +1,21 @@
 # Agent-Nuvira — User Manual
 
-**Version 1.59.3 | August 2026**
+**Version 1.59.4 | August 2026**
+
+### v1.59.4 — Software Bill of Materials (P6 M6.6)
+
+- **`buff sbom`** generates a CycloneDX 1.5 BOM from `package-lock.json` —
+  exactly what's installed (versions + integrity hashes), no network, and
+  reproducible with `--reproducible`. Write it with `buff sbom --out sbom.json`.
+- **`buff sbom verify`** compares a stored BOM against the current lockfile:
+  added/removed/changed dependencies (drift) or hand-edited BOMs (tamper) exit
+  1; a clean match exits 0.
+- **`buff sbom licenses`** flags copyleft (GPL/AGPL/…) and unknown licenses
+  for compliance review.
+- **`doctor --enterprise`** now includes a Supply Chain (SBOM) check — real
+  drift detection when `sbom.json` exists, license posture otherwise.
+
+---
 
 ### v1.59.3 — Config CLI accepts the routing gates
 

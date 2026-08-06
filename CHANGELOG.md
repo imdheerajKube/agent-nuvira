@@ -9,6 +9,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.59.4] - 2026-08-06
+
+### Added
+
+- **P6 M6.6: Software Bill of Materials (`buff sbom`).** Generates a CycloneDX
+  1.5 SBOM from `package-lock.json` — the deterministic source of truth for
+  exactly-what-is-installed (resolved versions + integrity hashes), so no
+  network is needed and output is reproducible (`--reproducible` pins serial
+  + timestamp for byte-identical rebuilds). Subcommands:
+  - `buff sbom` — print the BOM (stdout) or `--out sbom.json` to write it
+  - `buff sbom verify` — compare a stored BOM against the current lockfile:
+    detects added/removed/changed dependencies (drift) and hand-edited BOMs
+    (tamper), exit 0 clean / 1 drift
+  - `buff sbom licenses` — license audit flagging copyleft (GPL/AGPL/…) and
+    unknown licenses for compliance review
+  - `doctor --enterprise` gains a Supply Chain (SBOM) check that verifies a
+    stored `sbom.json` against the lockfile when present (real drift
+    detection) and otherwise reports the fresh-BOM license posture
+
 ## [1.59.3] - 2026-08-06
 
 ### Fixed
