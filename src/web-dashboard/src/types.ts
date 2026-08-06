@@ -71,6 +71,12 @@ export interface RegistryModelEntry {
    * otherwise-identical healthy ones. Optional: an older server won't send it.
    */
   partialRate?: number;
+  /**
+   * P4 M4.4: flakiness trajectory [{ t, rate }] — the partialRate EMA's recent
+   * samples (newest last, capped). Renders the row's mini sparkline: a trend
+   * toward 0 = healing via clean successes; climbing = flakiness accumulating.
+   */
+  partialHistory?: Array<{ t: number; rate: number }>;
 }
 
 export interface RegistryProvider {
@@ -530,6 +536,13 @@ export interface RequestsInsights {
     action: string;
     /** Total requests for this provider × model × action. */
     requests: number;
+    /**
+     * P4 M4.4: mid-stream partial-interruption events in this group — the
+     * provider started streaming then died before finishing. NOT counted as
+     * request failures; surfaced so the panel can flag flaky providers.
+     * Optional: an older server won't send it, so the panel defaults to 0.
+     */
+    partials?: number;
     /** Failures ÷ requests (0–1). */
     errorRate: number;
     /** Latency summary — present only when latency samples were recorded. */

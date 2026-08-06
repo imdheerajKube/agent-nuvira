@@ -227,6 +227,18 @@ export default function RequestsPanel({ data }: RequestsPanelProps) {
                     fontSize: 12, color: errorColor(r.errorRate),
                   }}>
                     {(r.errorRate * 100).toFixed(1)}%
+                    {(r.partials ?? 0) > 0 && (
+                      <span
+                        title={`⏸ ${r.partials} mid-stream interruption(s) — started streaming, died before finish; the router deprioritizes flaky providers (P4 M4.4)`}
+                        style={{
+                          display: 'inline-flex', alignItems: 'center', gap: 3,
+                          marginLeft: 6, fontSize: 10, padding: '1px 6px', borderRadius: 8, whiteSpace: 'nowrap',
+                          background: '#21122e', border: '1px solid #bc8cff', color: '#bc8cff',
+                        }}
+                      >
+                        ⏸ {r.partials}
+                      </span>
+                    )}
                   </td>
                   <td style={{ padding: '8px 12px', textAlign: 'right', fontFamily: "'SFMono-Regular', Consolas, monospace", fontSize: 12 }}>
                     {fmtMs(r.latency?.avg)}

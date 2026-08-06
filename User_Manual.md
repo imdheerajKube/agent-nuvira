@@ -1,6 +1,12 @@
 # Agent-Nuvira — User Manual
 
-**Version 1.59.5 | August 2026**
+**Version 1.59.6 | August 2026**
+
+### v1.59.6 — Admin governance API + flakiness healing
+
+- **`buff admin`** — the M2.4 governance policy now has a first-class admin surface: `buff admin policy` (or `--json`), `allow` / `deny` providers, `allow-model` / `deny-model`, `max-cost`, `pii-min`, `unblock on|off`, and `clear <field>`. Same `routing.governance.*` config the router enforces on every Auto pick.
+- **Flakiness healing sparklines** — the Models page registry rows now plot the `partialRate` trajectory (a trend toward 0 = the provider is healing via clean successes; the signal is never hard-wiped and survives restarts).
+- **Requests panel** — rows show a violet `⏸ N` chip for mid-stream partial interruptions (kept out of the error rate — a partial is a flakiness signal, not a request failure).
 
 ### v1.59.5 — Dashboard: mid-stream flakiness end-to-end
 

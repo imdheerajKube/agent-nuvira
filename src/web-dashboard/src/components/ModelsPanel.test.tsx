@@ -10,7 +10,7 @@
 
 import { describe, it, expect, vi, afterEach } from 'vitest';
 import { render, screen, fireEvent, cleanup } from '@testing-library/react';
-import ModelsPanel, { ActionTimelineChart, dedupeDayEvents, ActionTelemetryCard, FlakinessChip } from './ModelsPanel';
+import ModelsPanel, { ActionTimelineChart, dedupeDayEvents, ActionTelemetryCard, FlakinessChip, FlakinessSparkline } from './ModelsPanel';
 import type { ActionDayBucket, ActionDayEvent } from './ModelsPanel';
 import type { ActionTelemetryInsights } from '../types';
 
@@ -232,6 +232,47 @@ describe('FlakinessChip', () => {
   it('renders the full 100% at the EMA ceiling', () => {
     render(<FlakinessChip rate={1} />);
     expect(screen.getByText(/⏸ flaky 100%/)).toBeTruthy();
+  });
+});
+
+// ─── FlakinessSparkline (P4 M4.4 healing trajectory) ───────────────────────
+// The mini sparkline plots the partialRate EMA trajectory: a trend toward 0
+// = healing via clean successes; climbing = flakiness accumulating. Renders
+// only when >= 2 samples exist so single-sample entries stay clean.
+
+describe('FlakinessSparkline', () => {
+  it('renders nothing with fewer than 2 history points', () => {
+    const { container } = render(<FlakinessSparkline history={[{ t: 1, rate: 0.25 }]} />);
+    expect(container.innerHTML).toBe('');
+    const { container: empty } = render(<FlakinessSparkline history={undefined} />);
+    expect(empty.innerHTML).toBe('');
+  });
+
+  it('renders a polyline + end dot for a decaying (healing) trajectory', () => {
+    const { container } = render(<FlakinessSparkline
+      history={[
+        { t: 1000, rate: 0.4375 },
+        { t: 2000, rate: 0.25 },
+        { t: 3000, rate: 0.15 },
+      ]}
+    />);
+    expect(container.querySelector('polyline')).toBeTruthy();
+    // Healing trend → tooltip + green end dot.
+    expect(screen.getByTitle(/Flakiness healing/)).toBeTruthy();
+    expect(screen.getByTitle(/trending down/)).toBeTruthy();
+    expect(container.querySelector('circle')?.getAttribute('fill')).toBe('#3fb950');
+  });
+
+  it('flags a climbing (worse) trajectory with the accumulating tooltip', () => {
+    const { container } = render(<FlakinessSparkline
+      history={[
+        { t: 1000, rate: 0.15 },
+        { t: 2000, rate: 0.25 },
+        { t: 3000, rate: 0.4375 },
+      ]}
+    />);
+    expect(screen.getByTitle(/Flakiness climbing/)).toBeTruthy();
+    expect(container.querySelector('circle')?.getAttribute('fill')).toBe('#bc8cff');
   });
 });
 
