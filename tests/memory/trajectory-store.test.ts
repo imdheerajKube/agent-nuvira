@@ -14,9 +14,16 @@ import { clearEmbeddingCache } from '../../src/memory/embedder.js';
 let memDir: string;
 const ORIGINAL_MEMORY_DIR = process.env.BUFF_MEMORY_DIR;
 
-beforeAll(() => {
+beforeAll(async () => {
   memDir = mkdtempSync(join(tmpdir(), 'trajectory-store-test-'));
   process.env.BUFF_MEMORY_DIR = memDir;
+  // Warm up the FAISS-style backend ONCE so the first test doesn't pay the
+  // full cold-start (dynamic import of the FAISS module + native tier probe)
+  // inside vitest's default 5s per-test timeout on a fresh CI runner.
+  // Node's module cache stays warm after this, so per-test resets are cheap.
+  resetVectorBackendSelection();
+  await getVectorStore().count();
+  resetVectorBackendSelection();
 });
 
 afterAll(() => {
@@ -73,6 +80,8 @@ describe('TrajectoryStore', () => {
   };
 
   describe('save', () => {
+    // Generous timeout: on a cold CI runner the first save() may still hit
+    // embedder-tier / vector-backend resolution for the first time.
     it('should save a successful trajectory', async () => {
       const id = await store.save(
         makeResult(),
@@ -82,7 +91,7 @@ describe('TrajectoryStore', () => {
       );
       expect(id).toBeTruthy();
       expect(id.startsWith('traj-')).toBe(true);
-    });
+    }, 60_000);
 
     it('should NOT save unsuccessful trajectories', async () => {
       const id = await store.save(
