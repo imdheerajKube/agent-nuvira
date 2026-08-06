@@ -9,6 +9,50 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.58.4] - 2026-08-06
+
+### Added — Nuvira-Router P5 (sidecar interop) + P4 (mid-stream resilience core)
+
+- **P5 M5.1 — Sidecar profile + `buff doctor --nuvira` probe.**
+  `docker-compose.nuvira.yml` (pinned external-gateway image, `base` profile,
+  healthcheck, loopback-only port mapping) + a sample `nuvira-gateway-config.yaml`.
+  `buff doctor --nuvira` probes the gateway (GET `/v1/models` → reachability +
+  model count; best-effort `/version` → gateway version) via the exported,
+  unit-tested `probeNuviraSidecar()`. Doctor tests use a real mock gateway.
+- **P5 M5.4 — Feature flag + router universe.** `routing.nuviraSidecar.enabled`
+  (default false). The auto-router now includes `nuvira` as a candidate with a
+  NEUTRAL profile (never dominates, never excluded — it joins the same
+  registry/bandit/quota learning), and `hasRequiredCredentials('nuvira')`
+  returns true (keyless loopback gateways by design; a dead gateway is skipped
+  at the availability walk, never failed into).
+- **P5 M5.3 — Hermetic E2E through the gateway** (`tests/e2e/sidecar-learning.test.ts`):
+  mock gateway-shaped server, real adapter + registry + router — a 429 teaches
+  the block, the next pick skips, a later success re-verifies (mirrors
+  `failover-learning.test.ts`).
+- **P4 M4.1 — Continuation retry core** (`src/learning/continuation.ts` +
+  chat wiring). `isPartialFailure()` (definitive auth/rate-limit/model-404 never
+  continue), `buildContinuationNote()` (bounded, head+tail partial relay,
+  prompt always included), `ContinuationBudget` (max 1 continuation per task).
+  Chat's interactive auto-failover buffers streamed tokens and hands the next
+  candidate a bounded "continue from here" note on a mid-stream death; the
+  nuvira adapter appends it via `InferenceOptions.continuation`.
+- **P4 M4.2 — Reasoning-replay cache** (`src/learning/reasoning-cache.ts` +
+  SSE capture). Last `reasoning_content` per (provider, model, conversation-key
+  fingerprint) persisted to `~/.buff/memory/reasoning-cache.json`;
+  `streamCompletion` forwards reasoning deltas (`parseSSEReasoning`); the nuvira
+  adapter caches them and re-injects via `InferenceOptions.reasoningContext` as
+  a prior assistant reasoning message.
+- **P4 M4.3 — Context-relay summaries.** The continuation note doubles as the
+  compact "session so far" relay (prompt + partial output, budget-capped) so a
+  rotated provider/key has continuity.
+
+### Tests
+
+- New: `tests/cli/doctor.test.ts` (4), `tests/e2e/sidecar-learning.test.ts` (3),
+  `tests/learning/continuation.test.ts` (12), `tests/learning/reasoning-cache.test.ts` (4),
+  +3 nuvira-adapter P4 tests. Auto-router governance tests updated for the nuvira
+  universe. ~3,300 root tests passing.
+
 ## [1.58.3] - 2026-08-06
 
 ### Added — Nuvira-Router P3 (Requests panel + decision diff)

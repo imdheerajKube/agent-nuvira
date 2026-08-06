@@ -24,6 +24,7 @@ import { refreshModelRegistry, spotCheckModel } from '../inference/model-probe.j
 import { recordRoutingDecision } from '../learning/routing-history.js';
 import { shouldConfirmFailover, promptFailoverChoice } from './failover-prompt.js';
 import { runSingleShotAuto } from './failover-runner.js';
+import { buildContinuationNote, isPartialFailure } from '../learning/continuation.js';
 /**
  * Detect error type and prompt the user for a recovery action.
  * This is a standalone function (not a method) for clarity.
@@ -426,12 +427,32 @@ export class ChatCommand extends BaseCommand {
             // failover walks forward through the ranked candidates, never repeating
             // a provider that just errored.
             const autoFailedProviders = new Set();
+            // P4 M4.1: mid-stream continuation — the streamed tokens are buffered so
+            // a mid-stream death can hand the NEXT candidate a bounded "continue from
+            // here" note instead of restarting. Bounded: at most ONE continuation per
+            // message (a second mid-stream death is definitive, not unlucky).
+            let continuationNote;
+            let continuationUsed = false;
             while (!generationComplete) {
                 if (typeof provider.generateStream === 'function') {
                     // ── Streaming path ───────────────────────────────────────
                     console.log();
+                    const streamedChunks = [];
+                    // P4 M4.1: consume the continuation note for THIS attempt — once a
+                    // candidate starts, the note is spent (max 1 continuation per
+                    // message; a later candidate that also dies mid-stream gets no
+                    // stale note).
+                    const activeContinuation = continuationNote;
+                    continuationNote = undefined;
                     try {
-                        const result = await provider.generateStream(fullPrompt, { ...options, model: effectiveModel }, (token) => {
+                        const result = await provider.generateStream(fullPrompt, {
+                            ...options,
+                            model: effectiveModel,
+                            // P4 M4.1: pass the bounded continuation note to this attempt
+                            // (built after the previous candidate died mid-stream).
+                            ...(activeContinuation ? { continuation: activeContinuation } : {}),
+                        }, (token) => {
+                            streamedChunks.push(token);
                             process.stdout.write(token);
                         });
                         console.log('\n');
@@ -484,6 +505,19 @@ export class ChatCommand extends BaseCommand {
                                 if (declined)
                                     failoverDeclined = true;
                                 if (!declined) {
+                                    // P4 M4.1: if the death was MID-STREAM (tokens already
+                                    // streamed) and we haven't continued yet this message, build
+                                    // a bounded continuation note so the next candidate picks up
+                                    // where this one stopped. Definitive failures (auth/
+                                    // rate-limit/model-404) never continue — a fresh start is
+                                    // correct there.
+                                    if (!continuationUsed &&
+                                        isPartialFailure(err) &&
+                                        streamedChunks.length > 0) {
+                                        continuationUsed = true;
+                                        continuationNote = buildContinuationNote(fullPrompt, streamedChunks.join(''));
+                                        logger.warn('   🔁 Mid-stream interruption — continuing on the next provider instead of restarting');
+                                    }
                                     type = next.type;
                                     provider = next.provider;
                                     effectiveModel = next.model;
@@ -502,7 +536,13 @@ export class ChatCommand extends BaseCommand {
                                 logger.warn(`🔄 Attempting automatic failover to next provider...`);
                                 console.log('');
                                 const fallbackResult = await fallback.callWithFallback(type, async (fbProvider, fbType) => {
-                                    const fbOpts = { ...options, model: effectiveModel };
+                                    const fbOpts = {
+                                        ...options,
+                                        model: effectiveModel,
+                                        // P4 M4.1: the automatic-fallback chain gets the same
+                                        // continuation note (bounded, once per message).
+                                        ...(continuationNote ? { continuation: continuationNote } : {}),
+                                    };
                                     let result = '';
                                     if (typeof fbProvider.generateStream === 'function') {
                                         const chunks = [];

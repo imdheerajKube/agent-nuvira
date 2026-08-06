@@ -389,6 +389,13 @@ const DEFAULT_PROFILES: Record<string, ProviderCapabilities> = {
   nim: { reasoning: 0.72, speed: 0.70, cost: 0.55, privacy: 0.15, reliability: 0.82 },
   gemini: { reasoning: 0.85, speed: 0.80, cost: 0.40, privacy: 0.10, reliability: 0.88 },
   openrouter: { reasoning: 0.95, speed: 0.55, cost: 0.15, privacy: 0.10, reliability: 0.78 },
+  // P5 M5.3: the Nuvira sidecar gateway (any OpenAI-compatible endpoint) is a
+  // NEUTRAL multi-model host — it can serve any upstream model, so it scores a
+  // deliberately neutral profile: never dominates a dimension it can't prove,
+  // never excluded from routing (it joins the same registry/bandit learning as
+  // built-ins once real usage data exists). Its REAL profile derives from
+  // measured usage / runtime stats over time.
+  nuvira: { reasoning: 0.50, speed: 0.50, cost: 0.50, privacy: 0.50, reliability: 0.70 },
 };
 
 // ─── Capability-aware scoring (Nuvira-Router P2 M2.1) ───────────────────────
@@ -436,11 +443,13 @@ function providerOfferedTags(provider: string, caps?: ProviderCapabilities): str
   if (caps) {
     if (caps.reasoning >= 0.75) derived.push('reasoning');
     if (caps.speed >= 0.9) derived.push('fast');
-    // 'cheap'/'reliable' are derived for FUTURE task types — no current task
-    // requires them, so they don't affect today's fit computation (kept for
-    // completeness; the matched-filter simply never hits them yet).
-    if (caps.cost >= 0.85) derived.push('cheap');
-    if (caps.reliability >= 0.85) derived.push('reliable');
+    // NOTE: 'cheap'/'reliable' are DELIBERATELY not derived. No current task
+    // type requires them, so deriving them would only add tags NO task ever
+    // matches — making every derived tag a guaranteed capability-fit MISS
+    // (fit = matched/required = 0 → a 0.9× penalty) for any provider that
+    // derives them (e.g. a zero-cost gateway like the nuvira sidecar, whose
+    // pricing-adjusted cost is 1.0). A provider is only penalized by the
+    // soft fit signal for capabilities a task ACTUALLY needs.
   }
   return [...new Set([...staticTags, ...derived])];
 }
@@ -491,6 +500,11 @@ export const PROVIDER_PRICING_PER_1K: Record<string, { inputPer1K: number; outpu
   gemini: { inputPer1K: 0, outputPer1K: 0 },              // free tier default
   openrouter: { inputPer1K: 0.00250, outputPer1K: 0.01000 }, // GPT-4o-class pass-through
   local: { inputPer1K: 0, outputPer1K: 0 },               // free (local compute)
+  // P5 M5.3: a local sidecar gateway is pass-through — its spend depends on
+  // the upstream model, which only real usage can know. Default 0 (local-first
+  // sidecar convention); M2.2 MEASURED wire-token cost replaces this the moment
+  // the gateway reports usage, so the free-first gate judges by truth.
+  nuvira: { inputPer1K: 0, outputPer1K: 0 },
 };
 
 /** Reference cost per call (USD) used to normalize the 0–1 cost score. */

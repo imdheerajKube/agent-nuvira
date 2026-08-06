@@ -7,6 +7,12 @@
  * Returns the content delta or null for non-content events (e.g., [DONE], usage info).
  */
 export declare function parseSSELine(line: string): string | null;
+/**
+ * Parse the reasoning-content delta from an SSE line (P4 M4.2): some
+ * reasoning models emit `delta.reasoning_content` alongside (or instead of)
+ * `delta.content`. Returns the reasoning delta or null when absent.
+ */
+export declare function parseSSEReasoning(line: string): string | null;
 /** Measured token usage reported by an OpenAI-compatible endpoint. */
 export interface UsageInfo {
     promptTokens: number;
@@ -26,5 +32,5 @@ export interface UsageInfo {
  *   length-based estimates.
  * @returns The full concatenated response text
  */
-export declare function streamCompletion(url: string, headers: Record<string, string>, body: Record<string, unknown>, onToken: (token: string) => void, onUsage?: (usage: UsageInfo) => void): Promise<string>;
+export declare function streamCompletion(url: string, headers: Record<string, string>, body: Record<string, unknown>, onToken: (token: string) => void, onUsage?: (usage: UsageInfo) => void, onReasoning?: (text: string) => void): Promise<string>;
 //# sourceMappingURL=sse.d.ts.map

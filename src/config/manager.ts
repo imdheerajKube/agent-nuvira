@@ -229,6 +229,11 @@ export class ConfigManager {
    */
   hasRequiredCredentials(provider: string): boolean {
     if (provider === 'local') return true; // Local doesn't need API key
+    // P5 M5.3: the Nuvira gateway is keyless-optional by design — a local
+    // sidecar (default http://127.0.0.1:20128/v1) often needs NO token. The
+    // adapter probes reachability (isAvailable) before use, so an unconfigured
+    // gateway is harmlessly skipped at the availability walk, never failed into.
+    if (provider === 'nuvira') return true;
     return !!this.config.providers[provider]?.apiKey;
   }
 }

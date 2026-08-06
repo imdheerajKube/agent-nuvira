@@ -1,0 +1,27 @@
+# Sample Nuvira sidecar gateway config (P5) — mounted by docker-compose.nuvira.yml.
+#
+# This is a liteLLM proxy config example: point it at the upstream providers
+# you want the sidecar to front (hundreds of providers / free tiers /
+# multi-account rotation behind ONE OpenAI-compatible endpoint). The CLI's
+# `nuvira` provider then routes through this gateway and joins the same
+# registry / bandit / quota-ledger learning as built-in providers.
+#
+# SECURITY (M5.2): the compose file binds 127.0.0.1 ONLY — never expose this
+# publicly. Add a master key via the NUVIRA_MASTER_KEY env in the compose
+# file and mirror it in ~/.buff/buffconfig.json as providers.nuvira.apiKey
+# (or providers.nuvira.headers.Authorization). Keys are never logged.
+
+model_list:
+  # ── Example: one upstream model served through the gateway ────────────
+  # - model_name: gateway/llama-3.3-70b-instruct
+  #   litellm_params:
+  #     model: groq/llama-3.3-70b-versatile
+  #     api_key: os.environ/GROQ_API_KEY
+  #
+  # - model_name: gateway/gemini-2.0-flash
+  #   litellm_params:
+  #     model: gemini/gemini-2.0-flash
+  #     api_key: os.environ/GEMINI_API_KEY
+
+# With no model_list entries the gateway is healthy (answers /v1/models with
+# an empty list and /health/liveliness) but routes nothing — add your models.

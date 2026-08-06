@@ -17,6 +17,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { NuviraAdapter } from '../../src/inference/nuvira-adapter.js';
 import { resetModelRegistry, getModelRegistry } from '../../src/learning/model-registry.js';
+import { buildConversationKey, getCachedReasoning, clearReasoningCache } from '../../src/learning/reasoning-cache.js';
 
 const mockFetch = vi.fn();
 global.fetch = mockFetch;
@@ -138,6 +139,47 @@ describe('NuviraAdapter', () => {
       const adapter = new NuviraAdapter({ baseUrl: 'http://g:1/v1' });
       await expect(adapter.generate('hi')).rejects.toThrow(/empty response/);
     });
+
+    it('P4 M4.1: options.continuation is appended to the prompt (continue-not-restart)', async () => {
+      mockFetch.mockResolvedValueOnce({
+        ok: true,
+        json: async () => ({ choices: [{ message: { content: 'continuing...' } }] }),
+      });
+      const adapter = new NuviraAdapter({ baseUrl: 'http://g:1/v1' });
+      await adapter.generate('implement jwt auth', {
+        model: 'm',
+        continuation: '── Previous attempt was interrupted mid-response ──\nContinue from here',
+      });
+      const [, opts] = mockFetch.mock.calls[0];
+      const body = JSON.parse(opts.body);
+      expect(body.messages[0].content).toContain('implement jwt auth');
+      expect(body.messages[0].content).toContain('Continue from here');
+      // Absent option → unchanged single user message (additive guarantee).
+      mockFetch.mockResolvedValueOnce({ ok: true, json: async () => ({ choices: [{ message: { content: 'x' } }] }) });
+      await adapter.generate('plain', { model: 'm' });
+      const [, opts2] = mockFetch.mock.calls[1];
+      expect(JSON.parse(opts2.body).messages).toEqual([{ role: 'user', content: 'plain' }]);
+    });
+
+    it('P4 M4.2: options.reasoningContext is replayed as a prior assistant reasoning message', async () => {
+      mockFetch.mockResolvedValueOnce({
+        ok: true,
+        json: async () => ({ choices: [{ message: { content: 'ok' } }] }),
+      });
+      const adapter = new NuviraAdapter({ baseUrl: 'http://g:1/v1' });
+      await adapter.generate('continue the answer', {
+        model: 'm',
+        reasoningContext: 'I reasoned about the token layout.',
+      });
+      const [, opts] = mockFetch.mock.calls[0];
+      const body = JSON.parse(opts.body);
+      expect(body.messages[0]).toEqual({
+        role: 'assistant',
+        content: '',
+        reasoning_content: 'I reasoned about the token layout.',
+      });
+      expect(body.messages[1].role).toBe('user');
+    });
   });
 
   describe('generateStream', () => {
@@ -164,6 +206,37 @@ describe('NuviraAdapter', () => {
       const full = await adapter.generateStream('hi', { model: 'm' }, (t) => tokens.push(t));
       expect(tokens.join('')).toBe('Hello');
       expect(full).toBe('Hello');
+    });
+
+    it('P4 M4.2: captures reasoning_content deltas and caches them per conversation', async () => {
+      const sseBody =
+        'data: {"choices":[{"delta":{"reasoning_content":"I should "}}]}\n\n' +
+        'data: {"choices":[{"delta":{"reasoning_content":"verify the token"}}]}\n\n' +
+        'data: {"choices":[{"delta":{"content":"The token is valid"}}]}\n\n' +
+        'data: [DONE]\n\n';
+      const encoder = new TextEncoder();
+      mockFetch.mockResolvedValueOnce({
+        ok: true,
+        body: {
+          getReader: () => {
+            let i = 0;
+            const chunks = [encoder.encode(sseBody)];
+            return {
+              read: async () => (i < chunks.length ? { value: chunks[i++], done: false } : { done: true }),
+              releaseLock: () => {},
+              cancel: () => {},
+            };
+          },
+        },
+      });
+      clearReasoningCache();
+      const adapter = new NuviraAdapter({ baseUrl: 'http://g:1/v1' });
+      const tokens: string[] = [];
+      const full = await adapter.generateStream('verify the token', { model: 'm' }, (t) => tokens.push(t));
+      expect(tokens.join('')).toBe('The token is valid');
+      // The reasoning was captured + cached for M4.2 replay on a retry.
+      const key = buildConversationKey([{ role: 'user', content: 'verify the token' }]);
+      expect(getCachedReasoning('nuvira', 'm', key)).toBe('I should verify the token');
     });
 
     it('captures usage from the final SSE chunk for measured cost (M2.2)', async () => {

@@ -1327,11 +1327,13 @@ describe('AutoModelRouter.resolve governance (M2.4 admin policy)', () => {
   it('allowProviders restricts the candidate set to the admin list', () => {
     const configManager = makeConfig({ governance: { allowProviders: ['groq', 'local'] } });
     const decision = new AutoModelRouter().resolve('writer', 'implement a login form', {}, configManager);
-    // nim/gemini/openrouter are eliminated — never ranked, never picked.
+    // nim/gemini/openrouter/nuvira are eliminated — never ranked, never picked.
     expect(decision.ranked.every((s) => s.provider === 'groq' || s.provider === 'local')).toBe(true);
-    // The audit trail shows the policy kills.
+    // The audit trail shows the policy kills (nuvira joined the candidate
+    // universe in P5, so it is blocked by the admin allow-list like any
+    // non-listed provider).
     const blocked = decision.governanceBlocked || [];
-    expect(blocked.map((b) => b.provider).sort()).toEqual(['gemini', 'nim', 'openrouter']);
+    expect(blocked.map((b) => b.provider).sort()).toEqual(['gemini', 'nim', 'nuvira', 'openrouter']);
     expect(blocked.every((b) => b.reason.includes('allowProviders'))).toBe(true);
   });
 
@@ -1417,7 +1419,7 @@ describe('AutoModelRouter.resolve governance (M2.4 admin policy)', () => {
   });
 
   it('governance hard-gate THROWS with the full audit trail when the admin deny list kills everyone', () => {
-    const configManager = makeConfig({ governance: { denyProviders: ['local', 'groq', 'gemini', 'nim', 'openrouter'] } });
+    const configManager = makeConfig({ governance: { denyProviders: ['local', 'groq', 'gemini', 'nim', 'openrouter', 'nuvira'] } });
     let thrown: unknown;
     try {
       new AutoModelRouter().resolve('writer', 'implement a login form', {}, configManager);

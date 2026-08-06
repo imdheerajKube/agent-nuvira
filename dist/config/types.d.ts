@@ -295,6 +295,26 @@ export interface RoutingConfig {
      * behavior unchanged). See GovernanceConfig.
      */
     governance?: GovernanceConfig;
+    /**
+     * Nuvira sidecar mode (Nuvira-Router P5). The `nuvira` provider is ALWAYS
+     * usable as a plain OpenAI-compatible provider (providers.nuvira.baseUrl,
+     * default http://127.0.0.1:20128/v1); this flag only gates sidecar-SPECIFIC
+     * integration helpers (the `buff doctor --nuvira` probe is run explicitly,
+     * independent of this switch). Default: false (fully disabled — no new
+     * runtime behavior when a gateway isn't in use). Set via
+     * `buff config set routing.nuviraSidecar.enabled true` or directly in
+     * .buffconfig.json.
+     */
+    nuviraSidecar?: {
+        /** Master switch. Default: false. */
+        enabled?: boolean;
+        /**
+         * Pinned gateway image/tag used by docker-compose.nuvira.yml
+         * (overrides the NUVIRA_GATEWAY_IMAGE env default). Document the upgrade
+         * cadence in UPGRADE_ROADMAP.md (P5 section) before bumping.
+         */
+        image?: string;
+    };
 }
 /**
  * Full configuration schema for .buffconfig.json
@@ -332,5 +352,19 @@ export interface InferenceOptions {
      * account key instead of switching providers on a rate-limit/auth failure.
      */
     apiKey?: string;
+    /**
+     * P4 M4.1 continuation retry: a bounded "continue from here" note (built by
+     * src/learning/continuation.ts) appended to the prompt when retrying after a
+     * mid-stream failure — the provider continues instead of restarting.
+     * Additive: absent → no behavior change. Off by default; the caller opts in.
+     */
+    continuation?: string;
+    /**
+     * P4 M4.2 reasoning replay: the previous turn's reasoning_content for this
+     * conversation (from src/learning/reasoning-cache.ts), sent as a prior
+     * assistant message so strict reasoning providers that 400 on missing prior
+     * reasoning accept the retry. Additive: absent → no behavior change.
+     */
+    reasoningContext?: string;
 }
 //# sourceMappingURL=types.d.ts.map
