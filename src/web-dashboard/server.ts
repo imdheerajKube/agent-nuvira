@@ -2033,7 +2033,25 @@ function loadApiKeysFromConfig(): void {
   }
 }
 
-export function createDashboardServer(opts?: { port?: number; host?: string }): { server: ReturnType<typeof createServer>; port: number; host: string } {
+export interface DashboardServerHandle {
+  server: ReturnType<typeof createServer>;
+  port: number;
+  host: string;
+  /**
+   * IPv6-loopback twin sharing the SAME request handler — the permanent fix
+   * for the "Dashboard server unreachable / Failed to fetch" issue. macOS
+   * resolves `localhost` → `::1` (IPv6) BEFORE `127.0.0.1` (IPv4), so an
+   * IPv4-only bind makes the browser hit `[::1]:port` → ECONNREFUSED → the
+   * Models page error banner. Binding BOTH loopback families means `localhost`
+   * works regardless of resolution order. Undefined when IPv6 loopback is
+   * unavailable or the primary host is non-loopback.
+   */
+  ipv6Twin?: ReturnType<typeof createServer>;
+}
+
+export function createDashboardServer(
+  opts?: { port?: number; host?: string },
+): DashboardServerHandle {
   // Bind values are resolved at CALL time: explicit override → env var →
   // import-time default. (PORT/HOST above are module constants, so the CLI's
   // `dashboard --port X` can NOT rely on setting BUFF_DASHBOARD_PORT after
@@ -2078,15 +2096,66 @@ export function createDashboardServer(opts?: { port?: number; host?: string }): 
 
   const server = createServer(handleRequest);
 
+  // ── Loopback-family twin (permanent "server unreachable" fix) ──────────
+  // macOS resolves `localhost` → ::1 (IPv6) BEFORE 127.0.0.1 (IPv4) — see
+  // /etc/hosts + dns.lookup ordering. An IPv4-only bind made the browser hit
+  // [::1]:port → ECONNREFUSED → "Failed to fetch" / "Dashboard server
+  // unreachable" intermittently (happy-eyeballs timing). Bind BOTH loopback
+  // families to the same handler so `localhost` and `127.0.0.1` both always
+  // work. Best-effort: if the twin family is unavailable (EAFNOSUPPORT) or
+  // already taken, the primary bind still serves — never fail the dashboard
+  // over the twin.
+  //
+  // EADDRINUSE retry: when bindHost is `localhost`, Node resolves it via
+  // getaddrinfo and binds the FIRST family (::1 on macOS) — so the "other"
+  // family guess must adapt. If the twin hits EADDRINUSE, the primary took
+  // that family; retry on the remaining loopback family instead of giving up.
+  const handle: DashboardServerHandle = { server, port: bindPort, host: bindHost };
+  const OTHER_LOOPBACK: Record<string, string> = { '127.0.0.1': '::1', '::1': '127.0.0.1' };
+  const isLoopbackHost =
+    bindHost === '127.0.0.1' || bindHost === 'localhost' || bindHost === '::1';
+  const fmtUrl = (host: string, port: number): string =>
+    host.includes(':') ? `http://[${host}]:${port}` : `http://${host}:${port}`;
+
+  const tryTwin = (host: string): void => {
+    const twin = createServer(handleRequest);
+    handle.ipv6Twin = twin; // keep the live handle in sync (retry swaps it)
+    twin.on('error', (err: NodeJS.ErrnoException) => {
+      const other = OTHER_LOOPBACK[host];
+      if (err.code === 'EADDRINUSE' && other && other !== bindHost) {
+        // Primary already bound this family (e.g. --host localhost → ::1) —
+        // flip to the other loopback family.
+        try { twin.close(); } catch { /* ignore */ }
+        tryTwin(other);
+        return;
+      }
+      console.log(`  ⚠️ Loopback (${host}) bind skipped: ${err.code || err.message}`);
+      try { twin.close(); } catch { /* ignore */ }
+      if (handle.ipv6Twin === twin) handle.ipv6Twin = undefined;
+    });
+    twin.listen(bindPort, host, () => {
+      console.log(`  Loopback twin: ${fmtUrl(host, bindPort)} (localhost race-proof)`);
+    });
+  };
+
+  if (isLoopbackHost) {
+    try {
+      tryTwin(bindHost === '::1' ? '127.0.0.1' : '::1');
+    } catch {
+      handle.ipv6Twin = undefined;
+    }
+  }
+
   server.listen(bindPort, bindHost, () => {
     console.log(`\n  🌐 Agent-Nuvira Dashboard`);
     console.log(`  ─────────────────────────`);
-    console.log(`  Local:   http://${bindHost}:${bindPort}`);
+    console.log(`  Local:   ${fmtUrl(bindHost, bindPort)}`);
     console.log(`  Network: http://localhost:${bindPort}`);
+    if (handle.ipv6Twin) console.log(`  IPv6:    ${fmtUrl('::1', bindPort)} (localhost race-proof)`);
     console.log(`  Press Ctrl+C to stop\n`);
   });
 
-  return { server, port: bindPort, host: bindHost };
+  return handle;
 }
 
 // ═══════════════════════════════════════════════════════════════════════════

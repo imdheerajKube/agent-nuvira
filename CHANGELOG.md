@@ -9,6 +9,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.58.8] - 2026-08-06
+
+### Fixed
+
+- **PERMANENT fix for the persistent "Dashboard server unreachable / Failed
+  to fetch" issue.** Root cause: macOS resolves `localhost` → `::1` (IPv6)
+  BEFORE `127.0.0.1` (IPv4), but the dashboard bound IPv4-only — so browsers
+  hitting `localhost:3030` intermittently refused the connection (happy-
+  eyeballs timing), and the frontend-only retries from v1.58.2 merely masked
+  it. The server now binds BOTH loopback families to the same handler
+  (IPv4 `127.0.0.1` + IPv6 `::1` twin), and `buff dashboard` auto-opens the
+  deterministic `http://127.0.0.1:<port>` URL. Regression test proves both
+  families serve HTTP 200. Reported repeatedly across sessions — now fixed
+  at the bind layer.
+
 ## [1.58.7] - 2026-08-06
 
 ### Added

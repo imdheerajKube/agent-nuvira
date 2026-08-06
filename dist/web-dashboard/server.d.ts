@@ -86,14 +86,25 @@ export declare function readPipelineRuns(): {
     total: number;
     runs: PipelineRun[];
 };
-export declare function createDashboardServer(opts?: {
-    port?: number;
-    host?: string;
-}): {
+export interface DashboardServerHandle {
     server: ReturnType<typeof createServer>;
     port: number;
     host: string;
-};
+    /**
+     * IPv6-loopback twin sharing the SAME request handler — the permanent fix
+     * for the "Dashboard server unreachable / Failed to fetch" issue. macOS
+     * resolves `localhost` → `::1` (IPv6) BEFORE `127.0.0.1` (IPv4), so an
+     * IPv4-only bind makes the browser hit `[::1]:port` → ECONNREFUSED → the
+     * Models page error banner. Binding BOTH loopback families means `localhost`
+     * works regardless of resolution order. Undefined when IPv6 loopback is
+     * unavailable or the primary host is non-loopback.
+     */
+    ipv6Twin?: ReturnType<typeof createServer>;
+}
+export declare function createDashboardServer(opts?: {
+    port?: number;
+    host?: string;
+}): DashboardServerHandle;
 export declare const DASHBOARD_DEFAULTS: {
     PORT: number;
     HOST: string;

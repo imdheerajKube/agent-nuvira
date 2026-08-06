@@ -26,6 +26,12 @@ import { BaseCommand } from './commands.js';
 export declare class DashboardCommand extends BaseCommand {
     private server;
     create(): Command;
+    /**
+     * Close BOTH the primary and the IPv6-loopback twin listeners (best-effort).
+     * The twin shares the same port family-differently, so it must be closed too
+     * or a restarted dashboard would hit EADDRINUSE on the ::1 side.
+     */
+    private closeAllListeners;
     private launchDashboard;
     /**
      * Bind one server on the port and keep serving until shutdown.

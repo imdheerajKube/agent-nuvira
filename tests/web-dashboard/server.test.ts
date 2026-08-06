@@ -302,8 +302,10 @@ beforeAll(async () => {
 });
 
 afterAll(() => {
-  // Close the server
+  // Close the primary AND the IPv6-loopback twin (both bind the same port on
+  // different families — leaving one open leaks the handle into later suites).
   server.server.close();
+  if (server.ipv6Twin) server.ipv6Twin.close();
   // Remove the temp test directory
   rmSync(testDir, { recursive: true, force: true });
 });
@@ -344,6 +346,7 @@ describe('Dashboard Server', () => {
             srv = candidateSrv;
           } else {
             candidateSrv.server.close();
+            if (candidateSrv.ipv6Twin) candidateSrv.ipv6Twin.close();
           }
         }
 
@@ -354,6 +357,54 @@ describe('Dashboard Server', () => {
         expect(srv!.host).toBe('127.0.0.1');
       } finally {
         if (srv) srv.server.close();
+        if (srv?.ipv6Twin) srv.ipv6Twin.close();
+      }
+    });
+
+    it('binds an IPv6-loopback twin so `localhost` (::1-first on macOS) can never refuse', async () => {
+      // Regression test for the persistent "Dashboard server unreachable"
+      // issue: macOS resolves `localhost` → ::1 BEFORE 127.0.0.1, so an
+      // IPv4-only bind made the browser hit [::1]:port → ECONNREFUSED. The
+      // twin shares the same handler on the other loopback family. Uses an
+      // EXPLICIT free port so both families bind the SAME port (port 0 would
+      // hand each family its own random port).
+      const probe = createServer();
+      const freePort = await new Promise<number>((resolve) =>
+        probe.listen(0, '127.0.0.1', () => resolve((probe.address() as { port: number }).port)),
+      );
+      await new Promise<void>((resolve) => probe.close(() => resolve()));
+
+      const srv = createDashboardServer({ port: freePort, host: '127.0.0.1' });
+      // Wait for the PRIMARY to be listening; the twin's listen() is called
+      // synchronously BEFORE it inside createDashboardServer, so by the time
+      // the primary fires, the twin is already bound (or errored out).
+      await new Promise<void>((resolve, reject) => {
+        srv.server.once('error', reject);
+        srv.server.once('listening', () => resolve());
+      });
+
+      try {
+        // IPv4 loopback serves (as always).
+        const ipv4 = await fetch(`http://127.0.0.1:${freePort}/api/health`, { signal: AbortSignal.timeout(5000) });
+        expect(ipv4.status).toBe(200);
+
+        if (srv.ipv6Twin) {
+          // The twin is bound on the SAME port — this is the fix.
+          const twinAddr = srv.ipv6Twin.address();
+          expect(twinAddr).not.toBeNull();
+          const port = (twinAddr as { port: number }).port;
+          expect(port).toBe(freePort);
+          const ipv6 = await fetch(`http://[::1]:${port}/api/health`, {
+            signal: AbortSignal.timeout(5000),
+          }).catch(() => null); // env without IPv6 loopback → twin can't be probed
+          if (ipv6) expect(ipv6.status).toBe(200);
+        } else {
+          // No IPv6 on this machine — primary still serves; acceptable.
+          expect(ipv4.status).toBe(200);
+        }
+      } finally {
+        srv.server.close();
+        if (srv.ipv6Twin) srv.ipv6Twin.close();
       }
     });
   });
@@ -1441,6 +1492,7 @@ describe('Dashboard Server', () => {
         expect(isQuotaWatcherArmed()).toBe(true);
       } finally {
         srv2.server.close();
+        if (srv2.ipv6Twin) srv2.ipv6Twin.close();
         rmSync(configPath, { force: true });
         // Reset the module flag so the rest of the suite sees default behavior.
         setAlwaysWatchQuota(false);
