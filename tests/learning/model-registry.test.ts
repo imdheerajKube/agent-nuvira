@@ -632,6 +632,33 @@ describe('ModelRegistry — per-action "learned from real usage" telemetry', () 
       provider: 'nim', model: 'm2', outcome: 'unavailable', errorType: 'auth',
     });
   });
+
+  it('recordPartial logs a dedicated partial outcome (P4 M4.4 mid-stream learning)', () => {
+    const registry = new ModelRegistry();
+    // A provider that STARTED streaming then died — distinct from a clean error.
+    registry.recordPartial('groq', 'llama-3.3-70b-versatile', 'chat', 'server', 128);
+
+    const tele = registry.getActionTelemetry();
+    expect(tele.enabled).toBe(true);
+    const chat = tele.actions.find((a) => a.action === 'chat');
+    expect(chat?.partial).toBe(1);
+    expect(chat?.transient).toBe(0); // NOT an error — a partial is its own signal
+    expect(chat?.killed).toBe(0); // and NOT a kill — it started, it can finish next time
+    // The raw event carries the streamed-chunk count for the dashboard.
+    const today = chat!.timeline[chat!.timeline.length - 1];
+    expect(today.partial).toBe(1);
+    const ev = today.events.find((e) => e.outcome === 'partial');
+    expect(ev).toMatchObject({ provider: 'groq', model: 'llama-3.3-70b-versatile', errorType: 'server' });
+  });
+
+  it('partial events do NOT flip registry status (started-but-died ≠ dead)', () => {
+    const registry = new ModelRegistry();
+    registry.markVerified('groq', 'llama-3.3-70b-versatile', 'spot-check');
+    registry.recordPartial('groq', 'llama-3.3-70b-versatile', 'chat', 'timeout', 64);
+    // Still verified and usable — a partial mid-stream interruption is not a
+    // definitive failure, so routing must not block the provider over it.
+    expect(registry.isUsable('groq', 'llama-3.3-70b-versatile')).toBe(true);
+  });
 });
 
 describe('ModelRegistry — persistence (JSON mirror + vector auto-tier)', () => {

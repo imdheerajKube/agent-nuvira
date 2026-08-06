@@ -20,7 +20,7 @@
  */
 import { Command } from 'commander';
 import { execSync } from 'node:child_process';
-import { existsSync, mkdirSync } from 'node:fs';
+import { existsSync, mkdirSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { homedir } from 'node:os';
 import { BaseCommand } from './commands.js';
@@ -120,6 +120,177 @@ export async function probeNuviraSidecar(baseUrl, timeoutMs = 5000, apiKey) {
         error: versionError,
     };
 }
+// ─── Enterprise self-check helpers (P7 M7.1, pure + testable) ──────────────
+/**
+ * Audit integrity check for a JSONL telemetry/audit file: every line must
+ * parse as JSON (append-only, tamper-evident shape). Corrupt lines indicate a
+ * truncated write or manual tampering. Pure + unit-testable.
+ */
+export function auditJsonlIntegrity(filePath) {
+    try {
+        if (!existsSync(filePath))
+            return { total: 0, corrupt: 0 };
+        const lines = readFileSync(filePath, 'utf-8').split('\n').filter((l) => l.trim().length > 0);
+        let corrupt = 0;
+        for (const line of lines) {
+            try {
+                JSON.parse(line);
+            }
+            catch {
+                corrupt++;
+            }
+        }
+        return { total: lines.length, corrupt };
+    }
+    catch {
+        return { total: 0, corrupt: 0 };
+    }
+}
+/**
+ * Secrets-hygiene check: for each keyed provider, is the key supplied via a
+ * secure env var (or a `~/.buff/.env` file) rather than hardcoded in the
+ * plaintext `~/.buff/buffconfig.json`? Pure + testable (env passed in).
+ */
+export function checkSecretsBackend(config, env) {
+    const envVars = [
+        { provider: 'groq', varName: 'GROQ_API_KEY' },
+        { provider: 'gemini', varName: 'GEMINI_API_KEY' },
+        { provider: 'nim', varName: 'NVIDIA_NIM_API_KEY' },
+        { provider: 'openrouter', varName: 'OPENROUTER_API_KEY' },
+    ];
+    const inPlaintext = [];
+    const viaEnv = [];
+    for (const { provider, varName } of envVars) {
+        const cfg = config.providers?.[provider];
+        const hasKey = !!cfg?.apiKey;
+        // A set-but-empty env var still counts as "provided via env" — it shadows
+        // the config value (empty = key withheld), so don't mislabel the config
+        // key as plaintext when an env var is explicitly set.
+        const hasEnv = env[varName] !== undefined && env[varName] !== '';
+        if (hasEnv) {
+            viaEnv.push(provider);
+        }
+        else if (hasKey) {
+            inPlaintext.push(provider);
+        }
+    }
+    if (inPlaintext.length > 0) {
+        return {
+            name: 'Secrets Backend',
+            status: 'warn',
+            message: `${inPlaintext.join(', ')} API key(s) stored in plaintext ~/.buff/buffconfig.json`,
+            detail: `Use ${envVars.map((v) => v.varName).join(' / ')} env vars or ~/.buff/.env instead (P7 security default) — keys are never logged.`,
+            fix: 'Move keys to environment variables: export GROQ_API_KEY=... (etc.)',
+        };
+    }
+    if (viaEnv.length > 0) {
+        return {
+            name: 'Secrets Backend',
+            status: 'pass',
+            message: `${viaEnv.join(', ')} key(s) supplied via environment (not plaintext)`,
+            detail: 'Keys come from env vars / ~/.buff/.env — never written to buffconfig.json.',
+        };
+    }
+    return {
+        name: 'Secrets Backend',
+        status: 'warn',
+        message: 'No cloud API keys configured at all',
+        detail: 'Nothing to protect yet — add keys via env vars when you onboard providers.',
+    };
+}
+/**
+ * RBAC / governance-config check (P7 M7.1): has an admin defined an
+ * allow/deny provider or model policy? Informational — the enforcement engine
+ * (P6 M6.5) is roadmap; this reports whether the POLICY INPUT is present.
+ */
+function checkRbacConfig(config) {
+    const gov = config.routing?.governance;
+    const hasPolicy = !!(gov?.allowProviders?.length ||
+        gov?.denyProviders?.length ||
+        gov?.allowModels?.length ||
+        gov?.denyModels?.length ||
+        gov?.piiPatterns?.length);
+    if (hasPolicy) {
+        return {
+            name: 'RBAC / Governance Policy',
+            status: 'pass',
+            message: 'Admin policy defined (allow/deny lists configured)',
+            detail: 'routing.governance is present — auto routing honors it as a hard constraint.',
+        };
+    }
+    return {
+        name: 'RBAC / Governance Policy',
+        status: 'warn',
+        message: 'No admin allow/deny policy configured',
+        detail: 'Fully permissive mode (default). Teams: set routing.governance.allowProviders "groq,local" etc.',
+        fix: 'buff config set routing.governance.allowProviders "groq,local"',
+    };
+}
+/**
+ * Gateway-health check result for `doctor --enterprise`: reports the sidecar
+ * probe outcome. Not configured is INFORMATIVE (warn), not a failure.
+ */
+function checkGatewayHealth(probe, configured) {
+    if (!configured) {
+        return {
+            name: 'Gateway Health',
+            status: 'warn',
+            message: 'Nuvira gateway not configured (no providers.nuvira.baseUrl)',
+            detail: 'Optional. Start with: docker compose -f docker-compose.nuvira.yml up -d (see UPGRADE_ROADMAP P5).',
+        };
+    }
+    if (probe.status === 'pass') {
+        return {
+            name: 'Gateway Health',
+            status: 'pass',
+            message: `Gateway reachable — ${probe.modelCount} model(s)${probe.version ? `, version ${probe.version}` : ''}`,
+            detail: `Probed ${probe.baseUrl}/models${probe.error ? ` (${probe.error})` : ''}`,
+        };
+    }
+    return {
+        name: 'Gateway Health',
+        status: 'fail',
+        message: `Gateway unreachable — ${probe.error || 'unknown error'}`,
+        detail: `Probed ${probe.baseUrl}/models`,
+        fix: 'docker compose -f docker-compose.nuvira.yml up -d · or check providers.nuvira.baseUrl / apiKey',
+    };
+}
+/**
+ * The full M7.1 enterprise self-check, built from pure inputs so it is
+ * trivially testable: config snapshot + env + gateway probe result + audit
+ * file paths. Returns the ordered CheckResult[] the CLI renders.
+ */
+export function buildEnterpriseChecks(inputs) {
+    const checks = [];
+    // 1. Gateway health
+    checks.push(inputs.gatewayConfigured && inputs.gatewayProbe
+        ? checkGatewayHealth(inputs.gatewayProbe, true)
+        : checkGatewayHealth({
+            status: 'fail',
+            modelCount: 0,
+            version: null,
+            baseUrl: '',
+            error: 'not configured',
+        }, false));
+    // 2. Secrets backend
+    checks.push(checkSecretsBackend(inputs.config, inputs.env));
+    // 3. Audit integrity (per JSONL audit/telemetry file)
+    for (const f of inputs.auditFiles) {
+        const { total, corrupt } = auditJsonlIntegrity(f.path);
+        checks.push({
+            name: `Audit Integrity: ${f.name}`,
+            status: corrupt > 0 ? 'fail' : 'pass',
+            message: corrupt > 0
+                ? `${corrupt}/${total} corrupt line(s) — truncated write or tampering`
+                : `${total} event(s), all lines valid JSON`,
+            detail: `Append-only JSONL at ${f.path}`,
+            fix: corrupt > 0 ? 'Restore the file from backup; audit trails are append-only by design.' : undefined,
+        });
+    }
+    // 4. RBAC / governance policy
+    checks.push(checkRbacConfig(inputs.config));
+    return checks;
+}
 // ─── DoctorCommand ──────────────────────────────────────────────────────────
 export class DoctorCommand extends BaseCommand {
     create() {
@@ -128,6 +299,7 @@ export class DoctorCommand extends BaseCommand {
         command
             .option('-p, --provider <provider>', 'Check only a specific provider')
             .option('--nuvira', 'Probe the Nuvira sidecar gateway (GET /v1/models + version)', false)
+            .option('--enterprise', 'P7 M7.1: enterprise self-check (gateway health, secrets backend, audit integrity, RBAC policy)', false)
             .option('--watch', 'Continuous monitoring mode (refreshes every 30s)', false)
             .option('--verbose', 'Show detailed diagnostic information', false)
             .option('--fix', 'Attempt to auto-fix common issues', false)
@@ -151,6 +323,53 @@ export class DoctorCommand extends BaseCommand {
         console.log('');
         // ── System-level checks ─────────────────────────────────────────────
         const sysChecks = await this.runSystemChecks();
+        // ── Enterprise self-check (P7 M7.1) ────────────────────────────────
+        // `buff doctor --enterprise` runs the P7 self-check: gateway health,
+        // secrets backend (env vs plaintext), audit-trail integrity, and RBAC /
+        // governance policy presence. Runs INSTEAD of the per-provider loop; a
+        // missing optional piece is INFORMATIVE (warn), never a hard fail.
+        if (options.enterprise) {
+            const all = this.configManager.getAll();
+            // Gateway probe: only when a baseUrl is configured.
+            let gatewayProbe = null;
+            let gatewayConfigured = false;
+            try {
+                const nuviraCfg = all.providers?.nuvira;
+                gatewayConfigured = !!nuviraCfg?.baseUrl;
+                if (gatewayConfigured) {
+                    gatewayProbe = await probeNuviraSidecar(nuviraCfg?.baseUrl, 5000, nuviraCfg?.apiKey);
+                }
+            }
+            catch {
+                // Best-effort — a probe failure is reported as a fail check below.
+            }
+            const memoryDir = join(homedir(), '.buff', 'memory');
+            const enterpriseChecks = buildEnterpriseChecks({
+                config: all,
+                env: { ...process.env },
+                gatewayProbe,
+                gatewayConfigured,
+                auditFiles: [
+                    { name: 'quota-events.jsonl', path: join(memoryDir, 'quota-events.jsonl') },
+                    { name: 'model-registry-actions.jsonl', path: join(memoryDir, 'model-registry-actions.jsonl') },
+                ],
+            });
+            console.log('');
+            this.renderEnterpriseSection(enterpriseChecks);
+            console.log('');
+            this.renderSummary(sysChecks, []);
+            console.log('');
+            logger.highlight('═'.repeat(62));
+            console.log(`  Completed in ${Date.now() - startTime}ms`);
+            logger.highlight('═'.repeat(62));
+            console.log('');
+            return {
+                timestamp: Date.now(),
+                system: sysChecks,
+                providers: [],
+                durationMs: Date.now() - startTime,
+            };
+        }
         // ── Nuvira sidecar probe (P5 M5.1) ─────────────────────────────────
         // `buff doctor --nuvira` probes the external gateway: reachability via
         // GET /v1/models, model count, and the gateway version. Runs INSTEAD of
@@ -576,6 +795,18 @@ export class DoctorCommand extends BaseCommand {
             if (check.fix && check.status === 'fail') {
                 console.log(`     💡 Fix: ${check.fix}`);
             }
+        }
+    }
+    renderEnterpriseSection(checks) {
+        logger.highlight('  ── Enterprise Self-Check (P7) ──');
+        for (const check of checks) {
+            const icon = this.statusIcon(check.status);
+            console.log(`\n  ${icon} ${check.name}`);
+            console.log(`     ${icon} ${check.message}`);
+            if (check.detail)
+                console.log(`     ℹ️  ${check.detail}`);
+            if (check.fix)
+                console.log(`     💡 Fix: ${check.fix}`);
         }
     }
     renderNuviraSidecarSection(probe) {

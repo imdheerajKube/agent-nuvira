@@ -319,14 +319,28 @@ export interface RoutingConfig {
    * .buffconfig.json.
    */
   nuviraSidecar?: {
-    /** Master switch. Default: false. */
+    /** Master switch for sidecar-specific integration helpers. Default: false. */
     enabled?: boolean;
-    /**
-     * Pinned gateway image/tag used by docker-compose.nuvira.yml
-     * (overrides the NUVIRA_GATEWAY_IMAGE env default). Document the upgrade
-     * cadence in UPGRADE_ROADMAP.md (P5 section) before bumping.
-     */
+    /** Pinned gateway image/tag for docker-compose.nuvira.yml. Default: ghcr.io/berriai/litellm:main-stable. */
     image?: string;
+  };
+  /**
+   * M4.4 conservative compression — LOSSLESS FOR CODE. When enabled, long
+   * prose context (system prompts / tool-output narration) is elided
+   * middle-out while fenced code blocks are preserved byte-identical, so
+   * identifiers/strings/symbols always survive (property-tested).
+   *
+   * ⚠️ OFF BY DEFAULT. Enable only when you understand the tradeoff: the
+   * elided prose middle is replaced by a marker, so a model that needed the
+   * omitted narration may answer less completely. Code is NEVER compressed.
+   */
+  compression?: {
+    /** Master switch. Default: false (pure pass-through). */
+    enabled?: boolean;
+    /** Fraction of ORIGINAL PROSE tokens to keep (head+tail). Default: 0.6. */
+    keepRatio?: number;
+    /** Min PROSE length (chars) before compression kicks in. Default: 800. */
+    minProseChars?: number;
   };
 }
 

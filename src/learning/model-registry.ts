@@ -133,7 +133,7 @@ export interface ActionTelemetryEntry {
   provider: string;
   model: string;
   /** What the action learned: verified (works), unavailable (killed), error (transient decay). */
-  outcome: 'verified' | 'unavailable' | 'error';
+  outcome: 'verified' | 'unavailable' | 'error' | 'partial';
   /** Classified reason when outcome is unavailable/error (auth / rate-limit / model not found / ...). */
   errorType?: string;
   /** Measured round-trip latency (ms) of the call — feeds the Requests panel p50/p95/p99 (P3-M3.2). */
@@ -142,6 +142,12 @@ export interface ActionTelemetryEntry {
   costUsd?: number;
   /** Correlation id of the call when the caller has one (traceability). */
   callId?: string;
+  /**
+   * P4 M4.4: tokens already streamed before a `partial` (mid-stream
+   * interruption) — the bigger the number, the more "almost finished" the
+   * provider was. Only set for outcome 'partial'.
+   */
+  streamedChunks?: number;
 }
 
 /** Aggregated "learned from real usage" view — per action (dashboard panel). */
@@ -159,6 +165,14 @@ export interface ActionTelemetryInsights {
     killed: number;
     /** Events where a transient failure decayed health (no flip). */
     transient: number;
+    /**
+     * Events where the action hit a MID-STREAM interruption (P4 M4.4 partial
+     * learning) — the provider started streaming then died before completion.
+     * A distinct signal from `transient` (a failed request) because a provider
+     * that starts-but-can't-finish is worse than one that errors cleanly: the
+     * router learns to deprioritize flaky mid-stream providers.
+     */
+    partial: number;
     /** Provider × model combos this action verified (latest event each). */
     verifiedModels: Array<{ provider: string; model: string; at: number }>;
     /** Provider × model combos this action killed (latest event each). */
@@ -177,11 +191,13 @@ export interface ActionTelemetryInsights {
       verified: number;
       killed: number;
       transient: number;
+      /** Mid-stream partial-interruption events that day (P4 M4.4). */
+      partial: number;
       /** Raw events that day — the chips the scrubbable chart shows per day. */
       events: Array<{
         provider: string;
         model: string;
-        outcome: 'verified' | 'unavailable' | 'error';
+        outcome: 'verified' | 'unavailable' | 'error' | 'partial';
         errorType?: string;
         /** Epoch ms of the event. */
         at: number;
@@ -275,13 +291,14 @@ export function buildActionTimeline(
     verified: number;
     killed: number;
     transient: number;
+    partial: number;
     /** Deduped by provider × model × outcome — latest event wins. */
     events: Map<string, Event>;
   };
   const buckets = new Map<number, Bucket>();
   for (let i = days - 1; i >= 0; i--) {
     const day = startOfToday - i * DAY_MS;
-    buckets.set(day, { verified: 0, killed: 0, transient: 0, events: new Map() });
+    buckets.set(day, { verified: 0, killed: 0, transient: 0, partial: 0, events: new Map() });
   }
   for (const e of entries) {
     const day = new Date(e.timestamp).setUTCHours(0, 0, 0, 0);
@@ -289,6 +306,7 @@ export function buildActionTimeline(
     if (!bucket) continue; // older than the window — totals still count it
     if (e.outcome === 'verified') bucket.verified++;
     else if (e.outcome === 'unavailable') bucket.killed++;
+    else if (e.outcome === 'partial') bucket.partial++;
     else bucket.transient++;
     // Carry the event so the scrubbable chart can render that day's chips —
     // deduped per provider × model × outcome (latest wins) so the dashboard
@@ -309,6 +327,7 @@ export function buildActionTimeline(
       verified: counts.verified,
       killed: counts.killed,
       transient: counts.transient,
+      partial: counts.partial,
       events: [...counts.events.values()],
     }));
 }
@@ -325,6 +344,7 @@ export function aggregateActionTelemetry(entries: ActionTelemetryEntry[]): Actio
       const verifiedEvents = evs.filter((e) => e.outcome === 'verified');
       const killedEvents = evs.filter((e) => e.outcome === 'unavailable');
       const transientEvents = evs.filter((e) => e.outcome === 'error');
+      const partialEvents = evs.filter((e) => e.outcome === 'partial');
       // Latest event per provider|model (a success/failure repeats per call).
       const latest = (list: ActionTelemetryEntry[]): ActionTelemetryEntry[] => {
         const map = new Map<string, ActionTelemetryEntry>();
@@ -336,6 +356,7 @@ export function aggregateActionTelemetry(entries: ActionTelemetryEntry[]): Actio
         verified: verifiedEvents.length,
         killed: killedEvents.length,
         transient: transientEvents.length,
+        partial: partialEvents.length,
         verifiedModels: latest(verifiedEvents).map((e) => ({ provider: e.provider, model: e.model, at: e.timestamp })),
         killedModels: latest(killedEvents).map((e) => ({ provider: e.provider, model: e.model, reason: e.errorType, at: e.timestamp })),
         timeline: buildActionTimeline(evs),
@@ -816,6 +837,47 @@ export class ModelRegistry {
         costUsd,
         callId,
       });
+    }
+  }
+
+  /**
+   * P4 M4.4: record a MID-STREAM interruption (the provider started streaming
+   * then died before completion) as a distinct `partial` telemetry event.
+   *
+   * Unlike `recordCall(ok=false)` — which flips status for definitive failures
+   * and decays errorRate — a partial death is neither a clean error nor a
+   * definitive kill: the provider demonstrably STARTED serving (its model is
+   * real and authenticated) but couldn't FINISH. That is the exact flaky-
+   * mid-stream signal the roadmap wants the router to learn from, so it is
+   * recorded as a dedicated outcome in the action log WITHOUT flipping status
+   * or mutating health (a partial today may complete tomorrow).
+   *
+   * Best-effort — never throws, never breaks the streaming call.
+   *
+   * @param action     The action that hit the interruption (chat / execute / ...).
+   * @param errorType  Classified reason (server / timeout / network / ...).
+   * @param streamedChunks  How many tokens had already streamed (context for
+   *   the dashboard — the bigger the partial, the more "almost finished").
+   */
+  recordPartial(
+    provider: string,
+    model: string,
+    action: string,
+    errorType?: string,
+    streamedChunks?: number,
+  ): void {
+    try {
+      this.appendActionLog({
+        timestamp: Date.now(),
+        action,
+        provider,
+        model,
+        outcome: 'partial',
+        errorType,
+        streamedChunks,
+      });
+    } catch {
+      // Best-effort — a partial telemetry write must never break streaming.
     }
   }
 
