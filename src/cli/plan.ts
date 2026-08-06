@@ -12,6 +12,7 @@ import { recordRegistrySuccess } from '../learning/provider-fallback.js';
 import { recordActionFailure, type FailureSessionState } from '../learning/failure-bookkeeping.js';
 import { runSingleShotAuto } from './failover-runner.js';
 import { PIIPolicyError, GovernancePolicyError } from '../learning/auto-router.js';
+import { estimateTokens } from '../learning/cost-tracker.js';
 
 /**
  * Plan command — generate implementation plans for code changes
@@ -133,7 +134,11 @@ Use clear markdown formatting.`;
           let complexity = 'moderate';
           let score = 0;
           try {
-            const decision = getAutoRouter().resolve('plan', task, {}, this.configManager);
+            // M2.5 context-length preflight: pass the REAL prompt payload (task +
+            // the codebase context parsed from the target) as the token hint so
+            // plan routes toward big-window providers for large contexts — the
+            // router falls back to the tiny task-description estimate otherwise.
+            const decision = getAutoRouter().resolve('plan', task, { contextHintTokens: estimateTokens(prompt) }, this.configManager);
             ranked = decision.ranked
               .map((r) => r.provider)
               .filter((p) => p !== type && !excludeProviders.includes(p));

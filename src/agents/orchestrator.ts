@@ -17,7 +17,7 @@
  * Called by the `agent-nuvira execute` CLI command.
  */
 
-import { existsSync, readFileSync, writeFileSync, mkdirSync, readdirSync } from 'node:fs';
+import { existsSync, readFileSync, writeFileSync, mkdirSync, readdirSync, statSync } from 'node:fs';
 import { dirname, isAbsolute, join, relative, resolve } from 'node:path';
 import { spawnSync } from 'node:child_process';
 import inquirer from 'inquirer';
@@ -445,6 +445,12 @@ export class Orchestrator {
     // On RESUME the restored vault already carries the routingContext from the
     // original run — recomputing it here would overwrite the checkpointed
     // metadata (and the planner isn't re-run anyway, so the override is moot).
+    // No contextHintTokens for the planner: its real payload (file tree, MCP
+    // tools, memory) isn't known at resolve time — the tree is built AFTER this
+    // call — and a goal-only hint would equal the router's default
+    // estimateTokens(description), a no-op. Per-task decisions DO pass the
+    // workspace payload estimate (see executeSingleTask), which is where the
+    // signal differentiates.
     const plannerRoutingDecision = autoRoutingActive && !resumed
       ? this.resolveAutoRoutingDecision({ agentType: 'planner', description: goal }, options)
       : undefined;
@@ -1467,7 +1473,15 @@ export class Orchestrator {
       const agentModel = options.model || options.agentModels?.[effectiveAgentType] || options.agentModels?.[task.agentType];
       const agentCallLLM = autoRouting
         ? this.createAutoRoutedLLM(
-            { agentType: effectiveAgentType, description: task.description, complexity: task.complexity },
+            {
+              agentType: effectiveAgentType,
+              description: task.description,
+              complexity: task.complexity,
+              // M2.5: real payload estimate (goal + task + workspace context
+              // files) so long-context pipelines route toward big-window
+              // providers, not the tiny task-description estimate alone.
+              contextHintTokens: this.estimateTaskPayloadTokens(vault, task.description, contextFiles),
+            },
             options,
           )
         : agentModel
@@ -1823,8 +1837,31 @@ export class Orchestrator {
    * Uses the task description for complexity analysis and resolves the best
    * provider/model per agent type.
    */
+  /**
+   * M2.5: estimate the REAL prompt payload for a task — goal + task
+   * description + the workspace context files the agent will receive (sized by
+   * stat, the same chars→tokens heuristic as estimateTokens, without reading
+   * file contents). Passed as contextHintTokens so the context-fit signal
+   * differentiates per-task in multi-agent pipelines the way it does for chat's
+   * growing conversation history. Best-effort: any stat failure contributes 0
+   * (the router still falls back to the task-description estimate).
+   */
+  private estimateTaskPayloadTokens(vault: ContextVault, taskDescription: string, contextFiles: string[]): number {
+    // goal/description are pure string ops (can't throw); only statSync can —
+    // each file is guarded individually, so no outer guard needed.
+    let tokens = estimateTokens(vault.context.goal) + estimateTokens(taskDescription);
+    for (const file of contextFiles) {
+      try {
+        tokens += statSync(file).size / 4.5;
+      } catch {
+        // Best-effort — a missing/unreadable file contributes nothing
+      }
+    }
+    return Math.ceil(tokens);
+  }
+
   private resolveAutoRoutingDecision(
-    task: { agentType: string; description: string; complexity?: string },
+    task: { agentType: string; description: string; complexity?: string; contextHintTokens?: number },
     options: OrchestratorOptions,
   ): AutoRouteResult {
     const routing = this.configManager.getAll().routing || {};
@@ -1855,6 +1892,7 @@ export class Orchestrator {
         complexityHint: task.complexity as ComplexityLevel | undefined,
         quotaStatus,
         allowPaid: routing.allowPaid,
+        contextHintTokens: task.contextHintTokens,
       },
       this.configManager,
     );
@@ -1911,7 +1949,7 @@ export class Orchestrator {
   }
 
   private createAutoRoutedLLM(
-    task: { agentType: string; description: string; complexity?: string },
+    task: { agentType: string; description: string; complexity?: string; contextHintTokens?: number },
     options: OrchestratorOptions,
   ): LLMCallFn {
     const decisionOverride = this.routingDecisionOverrides.get(task.agentType);
@@ -1921,7 +1959,7 @@ export class Orchestrator {
 
 
   private createAutoRoutedLLMFromDecision(
-    task: { agentType: string; description: string; complexity?: string },
+    task: { agentType: string; description: string; complexity?: string; contextHintTokens?: number },
     options: OrchestratorOptions,
     decision: AutoRouteResult,
   ): LLMCallFn {

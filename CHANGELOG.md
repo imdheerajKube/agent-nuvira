@@ -34,6 +34,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   integers. A 500K-token payload flips a privacy-first local pick to gemini
   (1M window) — the long-conversation/heavy-workspace case now routes toward
   big-window providers.
+  - **Followup: plan + orchestrator pass real payload estimates** (`src/cli/plan.ts`,
+    `src/agents/orchestrator.ts`). `buff plan` resolves with
+    `contextHintTokens: estimateTokens(prompt)` — the actual built prompt
+    (task + parsed codebase context). The orchestrator sizes each per-task
+    payload via `estimateTaskPayloadTokens(vault, description, contextFiles)`
+    (goal + task description + stat-sized workspace context files, best-effort)
+    and forwards it as `contextHintTokens` through `resolveAutoRoutingDecision`
+    into the router, so multi-agent pipelines (execute/plan) get the same
+    long-context awareness chat already had. Planner decision intentionally
+    omits the hint (its payload isn't known at resolve time; goal-only would
+    equal the router default). 3 new tests; 288 affected + full gate pass.
 - **M2.4 — Governance constraints (admin policy)** (`src/config/types.ts`,
   `src/learning/auto-router.ts`, `src/cli/models.ts`, `src/cli/model.ts`,
   `src/web-dashboard/server.ts`). Admin routing policy via `routing.governance`
