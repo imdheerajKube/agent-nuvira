@@ -201,6 +201,45 @@ describe('ModelCommand explain', () => {
     expect(parsed.governanceBlocked.length).toBeGreaterThan(0);
   });
 
+  it('surfaces the M2.5 context preflight in JSON (default gate ON)', () => {
+    const output = runCommand(['explain', 'implement a login form', '--json']);
+    const parsed = JSON.parse(output) as Record<string, any>;
+
+    expect(parsed.context).toBeDefined();
+    expect(parsed.context.estimatedPromptTokens).toBeGreaterThan(0);
+    expect(parsed.context.basis).toBe('task');
+    expect(parsed.context.providers.length).toBeGreaterThan(0);
+    for (const p of parsed.context.providers) {
+      expect(p.contextWindowTokens).toBeGreaterThan(0);
+      expect(typeof p.utilization).toBe('number');
+      expect(typeof p.fit).toBe('number');
+    }
+  });
+
+  it('renders the M2.5 context preflight section in human output', () => {
+    const output = runCommand(['explain', 'implement a login form']);
+    expect(output).toContain('Context preflight');
+    expect(output).toContain('Estimated prompt');
+    expect(output).toContain('utilization');
+  });
+
+  it('gate OFF (routing.contextFit: false) omits the context preflight entirely', () => {
+    const cmd = new ModelCommand();
+    (cmd as any).configManager = {
+      getAll: vi.fn(() => ({
+        pricing: {},
+        routing: { contextFit: false },
+      })),
+      hasRequiredCredentials: vi.fn(() => true),
+      getProviderConfig: vi.fn(() => ({ config: {} })),
+    };
+    cmd.create().parse(['explain', 'implement a login form', '--json'], { from: 'user' });
+    const output = vi.mocked(console.log).mock.calls.map((c) => String(c[0])).join('\n');
+    const parsed = JSON.parse(output) as Record<string, any>;
+
+    expect(parsed.context).toBeUndefined();
+  });
+
   it('human explain renders the audit trail when governance eliminates every provider (M2.4 hard gate)', () => {
     const cmd = new ModelCommand();
     (cmd as any).configManager = {

@@ -22,6 +22,7 @@ import type { ProviderType } from '../config/types.js';
 import { getProviderFallback, classifyFallbackError, isRetryableError, recordRegistrySuccess } from '../learning/provider-fallback.js';
 import { recordActionFailure, RATE_LIMIT_EXCLUSION_MS, TRANSIENT_FAILURE_EXCLUSION_MS } from '../learning/failure-bookkeeping.js';
 import { getAutoRouter, isAutoModel, isAutoProvider } from '../learning/auto-router.js';
+import { estimateTokens } from '../learning/cost-tracker.js';
 import { getModelRegistry } from '../learning/model-registry.js';
 import { refreshModelRegistry, spotCheckModel } from '../inference/model-probe.js';
 import { recordRoutingDecision } from '../learning/routing-history.js';
@@ -461,7 +462,13 @@ export class ChatCommand extends BaseCommand {
       // Runs BEFORE the dev-mode check so a creation request in auto mode uses
       // the routed provider/model — never a literal 'auto' or a stale default.
       if (autoMode) {
-        const routed = await this.routeMessageAuto(message);
+        // M2.5: estimate the growing conversation (prior turns + this message)
+        // so context-fit routing reacts to a long session, not just the task
+        // text. Estimation only — never a hard block.
+        const historyEstimate = estimateTokens(
+          history.map((h) => h.content).join('\n') + '\n' + message,
+        );
+        const routed = await this.routeMessageAuto(message, [], { contextHintTokens: historyEstimate });
         type = routed.type;
         provider = routed.provider;
         effectiveModel = routed.model;
@@ -892,6 +899,7 @@ export class ChatCommand extends BaseCommand {
   private async routeMessageAuto(
     message: string,
     excludeProviders: string[] = [],
+    opts?: { contextHintTokens?: number },
   ): Promise<AutoRoutedMessage> {
     const routing = this.configManager.getAll().routing || {};
     // Feed the SHARED circuit breaker into the router so a provider that has
@@ -929,6 +937,11 @@ export class ChatCommand extends BaseCommand {
         circuitBreakerStatus,
         quotaStatus,
         allowPaid: routing.allowPaid,
+        // M2.5 context preflight: the caller passes its real estimated payload
+        // (conversation history + message, or the built full prompt) so the
+        // router's soft context-fit signal sees the ACTUAL prompt size — a
+        // growing session naturally routes toward big-window providers.
+        contextHintTokens: opts?.contextHintTokens,
       },
       this.configManager,
     );
@@ -1111,7 +1124,8 @@ export class ChatCommand extends BaseCommand {
       action: 'chat',
       task: message,
       configManager: this.configManager,
-      route: (excludeProviders) => this.routeMessageAuto(message, excludeProviders),
+      route: (excludeProviders) =>
+        this.routeMessageAuto(message, excludeProviders, { contextHintTokens: estimateTokens(prompt) }),
       generate: (provider, type, model, apiKey) =>
         this.generateWithContext(provider, prompt, type, { ...options, model, apiKey }, cacheEnabled),
       recordFailure: (type, model, err, apiKey) => this.recordAutoProviderFailure(type, err, model, apiKey),

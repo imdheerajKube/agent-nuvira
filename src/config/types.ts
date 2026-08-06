@@ -254,6 +254,25 @@ export interface RoutingConfig {
    */
   capabilityFit?: boolean;
   /**
+   * Enable the M2.5 context preflight soft signal in Auto routing scoring: the
+   * task's estimated prompt size (caller hint when the real payload is known,
+   * else the task text) is scored against each provider's nominal input
+   * context window, nudging candidates away from windows that would be
+   * heavily utilized (a long conversation or heavy workspace routes toward
+   * big-window providers). NEVER a hard block — estimation only, models may
+   * exceed nominal windows (the penalty is capped at 35%). Default: true. Set
+   * to false to revert to pure dimension-weight scoring (no context-fit field,
+   * no preflight section in `models explain`).
+   */
+  contextFit?: boolean;
+  /**
+   * Nominal input context window overrides (tokens) for the M2.5 context
+   * preflight. Keyed by model id (exact match) or by provider id (provider-
+   * level default for every model under that provider). Values replace the
+   * built-in table. Example: `buff config set routing.contextWindows.local 16384`
+   */
+  contextWindows?: Record<string, number>;
+  /**
    * Keep the dashboard's quota file watcher armed permanently instead of only
    * while an SSE client is connected. When true, the server watches the memory
    * dir from startup (never disarming on client disconnect), so quota events

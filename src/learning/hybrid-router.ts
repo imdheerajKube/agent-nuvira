@@ -36,6 +36,12 @@ export interface ModelCandidate {
   qualityScore: number;
   /** Reason this candidate was selected */
   reason: string;
+  /**
+   * M2.5: nominal input context window (tokens) for this provider×model, from
+   * the context preflight table. Present when the context-fit signal is
+   * enabled; absent (undefined) when disabled or unknown.
+   */
+  contextWindowTokens?: number;
 }
 
 /** The final routing decision for a single LLM call */

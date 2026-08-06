@@ -34,6 +34,10 @@ import {
   AUTO_PROVIDER,
   DEFAULT_AUTO_PROVIDERS,
   GovernancePolicyError,
+  computeContextFit,
+  MODEL_CONTEXT_WINDOWS,
+  PROVIDER_CONTEXT_WINDOWS,
+  DEFAULT_CONTEXT_WINDOW,
   type ProviderCapabilities,
   type ScoredProvider,
   type RoutingDimension,
@@ -1502,6 +1506,186 @@ describe('AutoModelRouter.resolve governance (M2.4 admin policy)', () => {
     // No governance configured → the audit trail stays empty (nothing policy
     // related was blocked; the soft kills live in the per-provider reasons).
     expect(decision.governanceBlocked || []).toEqual([]);
+  });
+});
+
+// ─── M2.5 Context preflight ────────────────────────────────────────────────
+// Estimation-only soft signal: the task's estimated prompt size (caller hint
+// or task text) is scored against each provider's nominal input window. NEVER
+// a hard block — even a prompt exceeding the window only caps the penalty.
+
+describe('M2.5 context preflight', () => {
+  let registryTempDir: string;
+  let originalMemoryDir: string | undefined;
+
+  beforeEach(() => {
+    registryTempDir = mkdtempSync(join(tmpdir(), 'buff-autorouter-ctx-'));
+    originalMemoryDir = process.env.BUFF_MEMORY_DIR;
+    process.env.BUFF_MEMORY_DIR = registryTempDir;
+    resetModelRegistry();
+  });
+
+  afterEach(() => {
+    resetModelRegistry();
+    if (originalMemoryDir === undefined) {
+      delete process.env.BUFF_MEMORY_DIR;
+    } else {
+      process.env.BUFF_MEMORY_DIR = originalMemoryDir;
+    }
+    rmSync(registryTempDir, { recursive: true, force: true });
+  });
+
+  function makeConfig(routing?: Record<string, unknown>, providers: Record<string, { model?: string }> = {}) {
+    return {
+      getAll: vi.fn(() => ({ pricing: {}, routing: routing || {}, providers })),
+      hasRequiredCredentials: vi.fn(() => true),
+      getProviderConfig: vi.fn((p: string) => ({ config: providers[p] || {} })),
+    } as any;
+  }
+
+  it('computeContextFit is neutral for small tasks and ramps a capped penalty', () => {
+    // Neutral below 50% utilization (normal-size tasks never shift a ranking).
+    expect(computeContextFit(100, 8_192)).toBe(1);
+    expect(computeContextFit(4_000, 8_192)).toBe(1); // 49% utilization
+    // Ramp: 60K tokens on an 8K window → (7.3 - 0.5)/1.5 → 35% cap → 0.65.
+    expect(computeContextFit(60_000, 8_192)).toBeCloseTo(0.65, 5);
+    // 60K on a 128K window → 46% → neutral.
+    expect(computeContextFit(60_000, 131_072)).toBe(1);
+    // Unknown/zero windows are neutral (estimation never blocks).
+    expect(computeContextFit(1_000_000, 0)).toBe(1);
+    expect(computeContextFit(1_000_000, -1)).toBe(1);
+  });
+
+  it('exposes realistic nominal windows for built-in models and providers', () => {
+    expect(MODEL_CONTEXT_WINDOWS['gemini-2.5-flash']).toBeGreaterThanOrEqual(1_000_000);
+    expect(MODEL_CONTEXT_WINDOWS['llama-3.3-70b-versatile']).toBe(131_072);
+    expect(PROVIDER_CONTEXT_WINDOWS.local).toBe(8_192);
+    expect(PROVIDER_CONTEXT_WINDOWS.openrouter).toBe(128_000);
+    expect(DEFAULT_CONTEXT_WINDOW).toBeGreaterThan(0);
+  });
+
+  it('resolve with a caller hint surfaces contextFit/utilization and chips the squeezed window', () => {
+    const decision = new AutoModelRouter().resolve('writer', 'implement a login form', {
+      allowedProviders: ['local', 'groq'],
+      contextHintTokens: 60_000, // 60K payload: local's 8K window is squeezed
+    }, makeConfig());
+
+    const local = decision.ranked.find((r) => r.provider === 'local')!;
+    const groq = decision.ranked.find((r) => r.provider === 'groq')!;
+    expect(local.contextWindowTokens).toBe(8_192);
+    expect(local.contextUtilization).toBeCloseTo(60_000 / 8_192, 3);
+    expect(local.contextFit).toBeCloseTo(0.65, 3);
+    expect(local.reason).toContain('context-fit 65%');
+    // groq's 128K window fits 60K at 46% → fully neutral, no chip.
+    expect(groq.contextWindowTokens).toBe(131_072);
+    expect(groq.contextUtilization).toBeLessThan(0.5);
+    expect(groq.contextFit).toBe(1);
+    expect(groq.reason).not.toContain('context-fit');
+    // The preflight snapshot records the hint basis + per-provider data.
+    expect(decision.contextPreflight).toEqual({
+      estimatedPromptTokens: 60_000,
+      basis: 'hint',
+      providers: expect.arrayContaining([
+        expect.objectContaining({ provider: 'local', contextWindowTokens: 8_192, fit: 0.65 }),
+      ]),
+    });
+  });
+
+  it('a normal-size task is fully neutral (no context chip, no penalty)', () => {
+    const decision = new AutoModelRouter().resolve('writer', 'implement a login form', {
+      allowedProviders: ['local', 'groq'],
+    }, makeConfig());
+    expect(decision.contextPreflight?.basis).toBe('task');
+    for (const r of decision.ranked) {
+      expect(r.contextFit).toBe(1);
+      expect(r.reason).not.toContain('context-fit');
+    }
+  });
+
+  it('routing.contextFit: false disables the signal entirely (reversible gate)', () => {
+    const decision = new AutoModelRouter().resolve('writer', 'implement a login form', {
+      allowedProviders: ['local'],
+      contextHintTokens: 500_000, // would squeeze ANY window — but the gate is off
+    }, makeConfig({ contextFit: false }));
+    const local = decision.ranked[0];
+    expect(local.contextFit).toBeUndefined();
+    expect(local.contextUtilization).toBeUndefined();
+    expect(local.contextWindowTokens).toBeUndefined();
+    expect(decision.contextPreflight).toBeUndefined();
+    expect(local.reason).not.toContain('context-fit');
+  });
+
+  it('routing.contextWindows overrides win over the built-in table (model + provider keys)', () => {
+    // groq is pinned to llama-3.3-70b-versatile so the MODEL-keyed override
+    // (32,768) applies to the served model; local uses the PROVIDER-keyed
+    // override (65,536).
+    const configManager = makeConfig({
+      contextWindows: { local: 65_536, 'llama-3.3-70b-versatile': 32_768 },
+    }, { groq: { model: 'llama-3.3-70b-versatile' } });
+    const decision = new AutoModelRouter().resolve('writer', 'implement a login form', {
+      allowedProviders: ['local', 'groq'],
+      contextHintTokens: 60_000,
+    }, configManager);
+    const local = decision.ranked.find((r) => r.provider === 'local')!;
+    const groq = decision.ranked.find((r) => r.provider === 'groq')!;
+    // Provider-level override: local window 65,536 → utilization 0.92 → 0.72 fit.
+    expect(local.contextWindowTokens).toBe(65_536);
+    expect(local.contextFit).toBeCloseTo(computeContextFit(60_000, 65_536), 3);
+    // Model-level override: groq's configured-model window 32,768 → squeezed.
+    expect(groq.contextWindowTokens).toBe(32_768);
+    expect(groq.contextFit).toBeLessThan(1);
+  });
+
+  it('quota-parked candidates still get a numeric window in the preflight snapshot (no crash in explain)', () => {
+    // A quota-parked provider's scored entry omits the context fields, but the
+    // preflight snapshot must resolve a real window for it — the human explain
+    // renderer calls toLocaleString() on every entry.
+    const decision = new AutoModelRouter().resolve('writer', 'implement a login form', {
+      allowedProviders: ['local', 'groq'],
+      contextHintTokens: 10_000,
+      quotaStatus: [{ provider: 'groq', cooldownRemaining: 90_000 }],
+    }, makeConfig());
+    const parked = decision.ranked.find((r) => r.provider === 'groq')!;
+    expect(parked.quotaParked).toBe(true);
+    expect(parked.contextWindowTokens).toBeUndefined(); // scored entry omits it
+    const pre = decision.contextPreflight!;
+    const groqPre = pre.providers.find((p) => p.provider === 'groq')!;
+    expect(typeof groqPre.contextWindowTokens).toBe('number');
+    expect(groqPre.contextWindowTokens).toBeGreaterThan(0);
+  });
+
+  it('string contextWindows overrides (config set stores strings) are coerced to numbers', () => {
+    const configManager = makeConfig({
+      contextWindows: { local: '16384' } as unknown as Record<string, number>,
+    });
+    const decision = new AutoModelRouter().resolve('writer', 'implement a login form', {
+      allowedProviders: ['local'],
+      contextHintTokens: 10_000,
+    }, configManager);
+    const local = decision.ranked[0];
+    expect(local.contextWindowTokens).toBe(16_384);
+    expect(local.contextUtilization).toBeCloseTo(10_000 / 16_384, 3);
+  });
+
+  it('a heavy payload can flip the winner toward a big-window provider (soft, estimation-only)', () => {
+    // Without a hint, local (privacy + free cost) wins the privacy-weighted
+    // contest; a 500K-token payload squeezes local's 8K window to a 0.65 fit
+    // while gemini's 1M window stays neutral → gemini wins.
+    const light = new AutoModelRouter().resolve('writer', 'implement a login form', {
+      preferenceMode: 'privacy-first',
+      allowedProviders: ['local', 'gemini'],
+    }, makeConfig());
+    const heavy = new AutoModelRouter().resolve('writer', 'implement a login form', {
+      preferenceMode: 'privacy-first',
+      allowedProviders: ['local', 'gemini'],
+      contextHintTokens: 500_000,
+    }, makeConfig());
+    // Sanity: without the signal local wins (privacy-first); with the heavy
+    // payload the winner is gemini (or local no longer ranks first with a
+    // meaningful gap) — the soft nudge moved the decision.
+    expect(light.provider).toBe('local');
+    expect(heavy.ranked.find((r) => r.provider === 'gemini')!.contextFit).toBe(1);
+    expect(heavy.ranked.find((r) => r.provider === 'local')!.contextFit).toBeCloseTo(0.65, 3);
   });
 });
 

@@ -748,6 +748,22 @@ export class ModelCommand extends BaseCommand {
         // M2.4: providers eliminated by the governance policy (with reason) —
         // empty array when no policy blocks.
         governanceBlocked: (d.governanceBlocked || []).map((b) => ({ provider: b.provider, reason: b.reason })),
+        // M2.5: context preflight snapshot — estimated prompt size, its basis
+        // (task text vs caller-provided payload), and per-provider utilization
+        // against the nominal input window. Present only when the context-fit
+        // signal is enabled (routing.contextFit, default ON).
+        context: d.contextPreflight
+          ? {
+              estimatedPromptTokens: d.contextPreflight.estimatedPromptTokens,
+              basis: d.contextPreflight.basis,
+              providers: d.contextPreflight.providers.map((p) => ({
+                provider: p.provider,
+                contextWindowTokens: p.contextWindowTokens,
+                utilization: p.utilization !== undefined ? Math.round(p.utilization * 100) / 100 : undefined,
+                fit: p.fit !== undefined ? Math.round(p.fit * 100) / 100 : undefined,
+              })),
+            }
+          : undefined,
         pricing,
         explanation: d.explanation,
       };
@@ -802,7 +818,13 @@ export class ModelCommand extends BaseCommand {
         r.costSource === 'measured' && r.costBasis
           ? ` 📏 measured ${r.costBasis.inputTokens}→${r.costBasis.outputTokens} tok`
           : ' 📐 estimated';
-      console.log(`   ${mark} ${i + 1}. ${r.provider.padEnd(12)} score ${r.score.toFixed(3)}  ${r.reason}${fit}${costTag}${cd}`);
+      // M2.5: context-utilization chip on every ranked row when the preflight
+      // signal is on (⏳ % of the provider's nominal input window).
+      const ctxTag =
+        r.contextFit !== undefined && r.contextWindowTokens !== undefined
+          ? ` ⏳ ctx ${Math.round((r.contextUtilization ?? 0) * 100)}% (${r.contextWindowTokens.toLocaleString()} tok)`
+          : '';
+      console.log(`   ${mark} ${i + 1}. ${r.provider.padEnd(12)} score ${r.score.toFixed(3)}  ${r.reason}${fit}${costTag}${ctxTag}${cd}`);
     });
     console.log('');
 
@@ -819,6 +841,32 @@ export class ModelCommand extends BaseCommand {
       for (const b of gBlocked) {
         console.log(`   ⛔ ${b.provider}: ${b.reason}`);
       }
+    }
+
+    // M2.5: context preflight — the estimated prompt size and each provider's
+    // utilization against its nominal input window, so the soft context-fit
+    // nudge is visible and auditable. Renders only when the signal is enabled
+    // (routing.contextFit, default ON). Estimation only — never a hard block.
+    const pre = decision.contextPreflight;
+    if (pre) {
+      console.log('');
+      logger.highlight('  ── Context preflight (M2.5, estimation only) ──');
+      console.log(`   Estimated prompt: ${pre.estimatedPromptTokens.toLocaleString()} tokens (basis: ${pre.basis === 'hint' ? 'caller-provided payload' : 'task text'})`);
+      for (const p of pre.providers) {
+        // n/a when no context data was computed for a candidate (e.g. quota-
+        // parked — its scored entry omits the context fields by design); a
+        // literal 0% would read as "fits easily", which is misleading.
+        const utilTag = p.utilization !== undefined ? `${Math.round(p.utilization * 100)}%` : 'n/a';
+        const fit = p.fit !== undefined ? ` · context-fit ${Math.round(p.fit * 100)}%` : '';
+        // Guard against a missing window (defensive — the preflight builder
+        // resolves one even for parked candidates, but renderers must never
+        // crash a CLI command).
+        const windowTag = p.contextWindowTokens !== undefined
+          ? p.contextWindowTokens.toLocaleString()
+          : 'unknown';
+        console.log(`   ${p.provider.padEnd(12)} window ${windowTag} tok · utilization ${utilTag}${fit}`);
+      }
+      console.log('   (estimation only — models may exceed nominal windows; never a hard block)');
     }
     console.log('');
 
