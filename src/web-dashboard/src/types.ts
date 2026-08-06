@@ -64,6 +64,13 @@ export interface RegistryModelEntry {
   measuredInputTokens?: number;
   measuredOutputTokens?: number;
   measuredSamples?: number;
+  /**
+   * P4 M4.4: mid-stream flakiness EMA (0-1, only present when > 0) — the
+   * model started streaming then died before finish. The router scales this
+   * model's reliability down (capped 40%) so flaky providers rank below
+   * otherwise-identical healthy ones. Optional: an older server won't send it.
+   */
+  partialRate?: number;
 }
 
 export interface RegistryProvider {
@@ -73,6 +80,8 @@ export interface RegistryProvider {
   unverified: number;
   unavailable: number;
   parked: number;
+  /** P4 M4.4: models with a mid-stream flakiness EMA > 0 (router deprioritizes). */
+  flaky?: number;
   models: RegistryModelEntry[];
 }
 
@@ -83,6 +92,8 @@ export interface ModelRegistryInsights {
   unverified: number;
   unavailable: number;
   parked: number;
+  /** P4 M4.4: models with a mid-stream flakiness EMA > 0 (router deprioritizes). */
+  flaky?: number;
   providers: RegistryProvider[];
   /**
    * Per-action "learned from real usage" telemetry — which provider × model

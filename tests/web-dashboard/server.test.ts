@@ -793,6 +793,9 @@ describe('Dashboard Server', () => {
             tokensConsumed: 2400, requests: 2, resetsInMs: 3_600_000, remainingTokens: 600,
             // M2.2: measured wire-token EMAs (real provider-reported usage).
             measuredInputTokens: 210, measuredOutputTokens: 90, measuredSamples: 3,
+            // P4 M4.4: mid-stream flakiness EMA — this model started streaming
+            // then died before finish, so the router deprioritizes it.
+            partialRate: 0.25,
           },
           'groq|llama-3.3-70b-versatile': {
             provider: 'groq', model: 'llama-3.3-70b-versatile', status: 'verified',
@@ -817,6 +820,8 @@ describe('Dashboard Server', () => {
         expect(body.verified).toBe(1); // groq is parked → not counted verified
         expect(body.unavailable).toBe(1);
         expect(body.parked).toBe(1);
+        // P4 M4.4: exactly one model carries a mid-stream flakiness EMA.
+        expect(body.flaky).toBe(1);
         expect(body.providers).toHaveLength(3);
 
         // Provider-level rollups
@@ -830,6 +835,10 @@ describe('Dashboard Server', () => {
         expect(gemini.models[0].measuredSamples).toBe(3);
         expect(gemini.models[0].measuredInputTokens).toBe(210);
         expect(gemini.models[0].measuredOutputTokens).toBe(90);
+        // P4 M4.4: the mid-stream flakiness EMA survives the passthrough and
+        // rolls up to the provider-level flaky count.
+        expect(gemini.models[0].partialRate).toBe(0.25);
+        expect(gemini.flaky).toBe(1);
 
         // Quota-parked entry is flagged + carries the reason
         const groq = body.providers.find((p: { provider: string }) => p.provider === 'groq');

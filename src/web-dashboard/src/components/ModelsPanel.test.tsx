@@ -10,7 +10,7 @@
 
 import { describe, it, expect, vi, afterEach } from 'vitest';
 import { render, screen, fireEvent, cleanup } from '@testing-library/react';
-import ModelsPanel, { ActionTimelineChart, dedupeDayEvents, ActionTelemetryCard } from './ModelsPanel';
+import ModelsPanel, { ActionTimelineChart, dedupeDayEvents, ActionTelemetryCard, FlakinessChip } from './ModelsPanel';
 import type { ActionDayBucket, ActionDayEvent } from './ModelsPanel';
 import type { ActionTelemetryInsights } from '../types';
 
@@ -207,6 +207,31 @@ describe('ActionTimelineChart', () => {
 
     fireEvent.click(screen.getByRole('button', { name: 'Pause scrub' }));
     expect(screen.getByRole('button', { name: 'Play scrub' })).toBeTruthy();
+  });
+});
+
+// ─── FlakinessChip (P4 M4.4 registry presentation) ─────────────────────────
+// The registry row chip mirrors the CLI's `⏸ flaky N%` — a mid-stream
+// flakiness EMA > 0 means the router deprioritizes this model (reliability
+// scaled down, capped 40%), so the dashboard must surface it where routing
+// reads availability.
+
+describe('FlakinessChip', () => {
+  it('renders ⏸ flaky N% from the 0-1 EMA rate with the mid-stream tooltip', () => {
+    render(<FlakinessChip rate={0.25} />);
+    expect(screen.getByText(/⏸ flaky 25%/)).toBeTruthy();
+    expect(screen.getByTitle(/flaky mid-stream 25%/)).toBeTruthy();
+    expect(screen.getByTitle(/deprioritizes flaky models/)).toBeTruthy();
+  });
+
+  it('rounds the percentage (0.4375 → 44%)', () => {
+    render(<FlakinessChip rate={0.4375} />);
+    expect(screen.getByText(/⏸ flaky 44%/)).toBeTruthy();
+  });
+
+  it('renders the full 100% at the EMA ceiling', () => {
+    render(<FlakinessChip rate={1} />);
+    expect(screen.getByText(/⏸ flaky 100%/)).toBeTruthy();
   });
 });
 
