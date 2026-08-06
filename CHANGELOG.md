@@ -9,6 +9,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.58.6] - 2026-08-06
+
+### Fixed
+
+- **`routing.*` config was silently dropped on every reload.** `loadConfig`
+  merged providers/history/fallback/pricing but NOT the routing section — so
+  `buff config set routing.bandit`, `routing.quota.*`, `routing.governance.*`,
+  `routing.contextWindows.*` and the new `routing.nuviraSidecar.*` keys never
+  survived a restart (they worked within a session only). The routing section
+  is now merged with deep-merges for the nested maps. New regression test.
+
 ## [1.58.5] - 2026-08-06
 
 ### Added

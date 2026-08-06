@@ -36,6 +36,32 @@ describe('ConfigManager', () => {
       expect(config.providers.local.model).toBe('llama2');
     });
 
+    it('should load routing config from the file (bandit/quota/governance/nuviraSidecar survive reload)', () => {
+      const configDir = join(testDir, 'test-routing');
+      mkdirSync(configDir, { recursive: true });
+
+      writeFileSync(
+        join(configDir, 'buffconfig.json'),
+        JSON.stringify({
+          routing: {
+            bandit: true,
+            quota: { gemini: { requestsPerWindow: 1500 } },
+            governance: { allowProviders: ['groq', 'local'] },
+            nuviraSidecar: { enabled: true, image: 'ghcr.io/berriai/litellm:main-stable' },
+          },
+        }),
+        'utf-8',
+      );
+
+      const manager = new ConfigManager(configDir);
+      const config = manager.getAll();
+      expect(config.routing?.bandit).toBe(true);
+      expect(config.routing?.quota?.gemini?.requestsPerWindow).toBe(1500);
+      expect(config.routing?.governance?.allowProviders).toEqual(['groq', 'local']);
+      expect(config.routing?.nuviraSidecar?.enabled).toBe(true);
+      expect(config.routing?.nuviraSidecar?.image).toBe('ghcr.io/berriai/litellm:main-stable');
+    });
+
     it('should merge config file with defaults', () => {
       const configDir = join(testDir, 'test-b');
       mkdirSync(configDir, { recursive: true });
