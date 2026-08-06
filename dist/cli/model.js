@@ -27,7 +27,7 @@ import { showModelPicker } from './model-picker.js';
 import { getPluginRegistry } from '../plugins/registry.js';
 import { getModelBadge } from '../inference/model-catalog.js';
 import { getHybridRouter } from '../learning/hybrid-router.js';
-import { AUTO_MODEL, AUTO_PROVIDER, getAutoRouter, isAutoModel, isAutoProvider, } from '../learning/auto-router.js';
+import { AUTO_MODEL, AUTO_PROVIDER, getAutoRouter, isAutoModel, isAutoProvider, PIIPolicyError, GovernancePolicyError, } from '../learning/auto-router.js';
 import { recordRoutingDecision } from '../learning/routing-history.js';
 import { getRouterBandit, COMPLEXITY_BUCKETS, } from '../learning/router-bandit.js';
 import { getQuotaLedger } from '../learning/quota-ledger.js';
@@ -491,7 +491,21 @@ export class ModelCommand extends BaseCommand {
         const router = getAutoRouter();
         const agentType = opts.agent || 'chat';
         if (opts.json) {
-            console.log(JSON.stringify(this.buildExplainJSON(router, agentType, task), null, 2));
+            try {
+                console.log(JSON.stringify(this.buildExplainJSON(router, agentType, task), null, 2));
+            }
+            catch (err) {
+                // A PII/governance policy block must not crash the JSON contract —
+                // emit a machine-readable error object instead.
+                if (err instanceof PIIPolicyError || err instanceof GovernancePolicyError) {
+                    console.log(JSON.stringify({
+                        error: err.message,
+                        governanceBlocked: err instanceof GovernancePolicyError ? err.blocked : undefined,
+                    }, null, 2));
+                    return;
+                }
+                throw err;
+            }
             return;
         }
         console.log('');
@@ -500,19 +514,57 @@ export class ModelCommand extends BaseCommand {
         if (task) {
             logger.info(`Task: "${task}"  ·  Agent: ${agentType}`);
             console.log('');
-            this.renderRoutingDecision(router, agentType, task);
+            try {
+                this.renderRoutingDecision(router, agentType, task);
+            }
+            catch (err) {
+                // A PII/governance policy block renders cleanly (with the audit trail)
+                // instead of crashing `buff model explain` with a raw stack trace.
+                if (err instanceof PIIPolicyError || err instanceof GovernancePolicyError) {
+                    this.renderPolicyBlock(err);
+                }
+                else {
+                    throw err;
+                }
+            }
             return;
         }
         // No task given — walk through sample tasks across all complexity levels
         for (const s of EXPLAIN_SAMPLES) {
             logger.highlight(`  ${s.label} — "${s.task}"`);
-            this.renderRoutingDecision(router, agentType, s.task, true);
+            try {
+                this.renderRoutingDecision(router, agentType, s.task, true);
+            }
+            catch (err) {
+                // A single sample that violates a PII/governance policy renders the
+                // block inline and keeps walking the remaining samples.
+                if (err instanceof PIIPolicyError || err instanceof GovernancePolicyError) {
+                    this.renderPolicyBlock(err);
+                }
+                else {
+                    throw err;
+                }
+            }
             console.log('');
         }
         console.log('');
         logger.info('Pass a task for a single detailed decision: `buff model explain "your task"`');
         logger.info('Route for a specific agent: `buff model explain --agent writer "your task"`');
         logger.info('JSON for scripting/CI: `buff model explain "your task" --json`');
+        console.log('');
+    }
+    /**
+     * Render a PII/governance policy block cleanly (M2.4 auditability): the
+     * message plus, for governance, the full eliminated-provider audit trail.
+     */
+    renderPolicyBlock(err) {
+        console.log('');
+        logger.error(`  ⛔ ${err.message}`);
+        if (err instanceof GovernancePolicyError) {
+            for (const b of err.blocked) {
+                console.log(`     • ${b.provider} — ${b.reason}`);
+            }
+        }
         console.log('');
     }
     /**
@@ -561,6 +613,10 @@ export class ModelCommand extends BaseCommand {
                     inCooldown: r.inCooldown,
                     reason: r.reason,
                     dimensions: r.dimensions,
+                    capabilityFit: r.capabilityFit !== undefined ? Math.round(r.capabilityFit * 100) : undefined,
+                    // M2.2: measured vs estimated cost basis for this provider.
+                    costSource: r.costSource || 'estimated',
+                    costBasis: r.costBasis ? { inputTokens: r.costBasis.inputTokens, outputTokens: r.costBasis.outputTokens } : undefined,
                 })),
                 fallbackChain: d.fallbackChain.map((c) => ({
                     provider: c.provider,
@@ -568,6 +624,25 @@ export class ModelCommand extends BaseCommand {
                     qualityScore: Math.round(c.qualityScore * 1000) / 1000,
                     reason: c.reason,
                 })),
+                // M2.4: providers eliminated by the governance policy (with reason) —
+                // empty array when no policy blocks.
+                governanceBlocked: (d.governanceBlocked || []).map((b) => ({ provider: b.provider, reason: b.reason })),
+                // M2.5: context preflight snapshot — estimated prompt size, its basis
+                // (task text vs caller-provided payload), and per-provider utilization
+                // against the nominal input window. Present only when the context-fit
+                // signal is enabled (routing.contextFit, default ON).
+                context: d.contextPreflight
+                    ? {
+                        estimatedPromptTokens: d.contextPreflight.estimatedPromptTokens,
+                        basis: d.contextPreflight.basis,
+                        providers: d.contextPreflight.providers.map((p) => ({
+                            provider: p.provider,
+                            contextWindowTokens: p.contextWindowTokens,
+                            utilization: p.utilization !== undefined ? Math.round(p.utilization * 100) / 100 : undefined,
+                            fit: p.fit !== undefined ? Math.round(p.fit * 100) / 100 : undefined,
+                        })),
+                    }
+                    : undefined,
                 pricing,
                 explanation: d.explanation,
             };
@@ -609,11 +684,58 @@ export class ModelCommand extends BaseCommand {
         decision.ranked.forEach((r, i) => {
             const mark = r.provider === decision.provider ? '✅' : '  ';
             const cd = r.inCooldown ? '  (circuit-breaker cooldown)' : '';
-            console.log(`   ${mark} ${i + 1}. ${r.provider.padEnd(12)} score ${r.score.toFixed(3)}  ${r.reason}${cd}`);
+            const fit = r.capabilityFit !== undefined ? ` 🎯 fit ${Math.round(r.capabilityFit * 100)}%` : '';
+            // M2.2/visibility: cost source on EVERY ranked row — 📏 measured (with
+            // the real wire-token basis) or 📐 estimated (length-based default).
+            const costTag = r.costSource === 'measured' && r.costBasis
+                ? ` 📏 measured ${r.costBasis.inputTokens}→${r.costBasis.outputTokens} tok`
+                : ' 📐 estimated';
+            // M2.5: context-utilization chip on every ranked row when the preflight
+            // signal is on (⏳ % of the provider's nominal input window).
+            const ctxTag = r.contextFit !== undefined && r.contextWindowTokens !== undefined
+                ? ` ⏳ ctx ${Math.round((r.contextUtilization ?? 0) * 100)}% (${r.contextWindowTokens.toLocaleString()} tok)`
+                : '';
+            console.log(`   ${mark} ${i + 1}. ${r.provider.padEnd(12)} score ${r.score.toFixed(3)}  ${r.reason}${fit}${costTag}${ctxTag}${cd}`);
         });
         console.log('');
         logger.success(`  Decision: ${decision.provider}/${decision.model}`);
         console.log(`  ${decision.explanation}`);
+        // M2.4: governance transparency — show policy-eliminated providers so the
+        // user sees WHY a provider is absent from the ranking (not just that it
+        // is). Renders only when the admin policy actually blocked something.
+        const gBlocked = decision.governanceBlocked || [];
+        if (gBlocked.length > 0) {
+            console.log('');
+            logger.highlight('  ── Governance policy — eliminated providers ──');
+            for (const b of gBlocked) {
+                console.log(`   ⛔ ${b.provider}: ${b.reason}`);
+            }
+        }
+        // M2.5: context preflight — the estimated prompt size and each provider's
+        // utilization against its nominal input window, so the soft context-fit
+        // nudge is visible and auditable. Renders only when the signal is enabled
+        // (routing.contextFit, default ON). Estimation only — never a hard block.
+        const pre = decision.contextPreflight;
+        if (pre) {
+            console.log('');
+            logger.highlight('  ── Context preflight (M2.5, estimation only) ──');
+            console.log(`   Estimated prompt: ${pre.estimatedPromptTokens.toLocaleString()} tokens (basis: ${pre.basis === 'hint' ? 'caller-provided payload' : 'task text'})`);
+            for (const p of pre.providers) {
+                // n/a when no context data was computed for a candidate (e.g. quota-
+                // parked — its scored entry omits the context fields by design); a
+                // literal 0% would read as "fits easily", which is misleading.
+                const utilTag = p.utilization !== undefined ? `${Math.round(p.utilization * 100)}%` : 'n/a';
+                const fit = p.fit !== undefined ? ` · context-fit ${Math.round(p.fit * 100)}%` : '';
+                // Guard against a missing window (defensive — the preflight builder
+                // resolves one even for parked candidates, but renderers must never
+                // crash a CLI command).
+                const windowTag = p.contextWindowTokens !== undefined
+                    ? p.contextWindowTokens.toLocaleString()
+                    : 'unknown';
+                console.log(`   ${p.provider.padEnd(12)} window ${windowTag} tok · utilization ${utilTag}${fit}`);
+            }
+            console.log('   (estimation only — models may exceed nominal windows; never a hard block)');
+        }
         console.log('');
         logger.highlight('  ── Fallback chain ──');
         for (const c of decision.fallbackChain) {

@@ -25,22 +25,6 @@ export declare class ChatCommand extends BaseCommand {
      */
     private sessionFailedProviders;
     /**
-     * How long a rate-limit failure excludes a provider from auto routing (ms).
-     * Aligned with the circuit breaker's COOLDOWN_DURATION_MS (120s) so the
-     * session-level exclusion and the breaker's scoring cooldown expire together
-     * — one consistent recovery window, not two competing ones.
-     */
-    private static readonly RATE_LIMIT_EXCLUSION_MS;
-    /**
-     * How long a server/network/timeout/unknown failure excludes a provider
-     * from auto routing (ms). Shorter than rate-limit so a flaky-but-alive
-     * provider is re-admitted quickly, but long enough that the very NEXT
-     * message never re-picks a provider that just failed (the old behavior:
-     * only auth and rate-limit were session-excluded, so an unknown-classified
-     * failure re-picked the dead provider on every single message).
-     */
-    private static readonly TRANSIENT_FAILURE_EXCLUSION_MS;
-    /**
      * Providers that failed TRANSIENTLY this session (server/network/timeout/
      * unknown). Tracked separately from the exclusion map so that when a
      * transient exclusion EXPIRES, the provider is only re-admitted to routing
@@ -76,24 +60,14 @@ export declare class ChatCommand extends BaseCommand {
     /**
      * Record an auto-mode provider failure so the session fails over instead of
      * getting stuck on a broken provider (the core of "auto routing should pick
-     * another provider when the current one dies mid-session"):
+     * another provider when the current one dies mid-session").
      *
-     * - Definitive failures — auth (expired token/key) and rate-limit (exhausted
-     *   quota, "token limit exceeded") — exclude the provider for the WHOLE
-     *   session, so the next message never re-picks it and re-fails.
-     * - EVERY failure also feeds the shared circuit breaker, so the auto router
-     *   deprioritizes the provider by scoring even for transient 5xx/network
-     *   errors (which need repeated failures before cooldown opens).
-     * - Transient failures (server/network/timeout/unknown) get a SHORT session
-     *   exclusion so the very next message skips the provider, while still
-     *   re-admitting it quickly if it recovers.
-     * - EVERY failure ALSO writes through to the persistent Model Availability
-     *   Registry (telemetry) so a dead provider×model is remembered across chat
-     *   sessions and skipped predictively on the next pick — the registry's
-     *   FAISS/JSON health data is what makes routing fast, and this is the feed
-     *   that keeps it fresh.
-     *
-     * Best-effort: never throws, so failover bookkeeping can't crash the chat.
+     * Delegates to the SHARED failure-bookkeeping helper (Nuvira-Router M0.2
+     * Stage A) so every action composes the exact same bookkeeping: session
+     * exclusion (auth = whole session, rate-limit = short cooldown, transient =
+     * short cooldown + re-verify marker), quota-ledger parking on rate-limit,
+     * registry write-through (per-action telemetry), quota-timeline event, and
+     * the shared circuit breaker. Best-effort: never throws.
      */
     private recordAutoProviderFailure;
     private showModelPicker;
@@ -120,6 +94,11 @@ export declare class ChatCommand extends BaseCommand {
      * This walks the ranked candidates and returns the first successful response,
      * so Auto routing NEVER crashes the CLI — it always answers from a working
      * provider.
+     *
+     * Delegates to the SHARED single-shot runner (Nuvira-Router M0.2 Stage B) so
+     * every action walks candidates identically — behavior-identical to the
+     * previous inline walk (same order, same telemetry, same confirmation
+     * semantics).
      */
     private generateAutoWithFailover;
     /**

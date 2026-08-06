@@ -36,7 +36,7 @@ const PROVIDER_LABELS = {
     gemini: '🌀 Google Gemini',
     openrouter: '🌐 OpenRouter',
 };
-const BUILTIN_PROVIDERS = ['local', 'groq', 'nim', 'gemini', 'openrouter'];
+const BUILTIN_PROVIDERS = ['local', 'groq', 'nim', 'gemini', 'openrouter', 'nuvira'];
 const CHECK_TIMEOUT_MS = 10_000; // 10s per check
 const TOTAL_TIMEOUT_MS = 30_000; // 30s total for all checks on one provider
 // ─── DoctorCommand ──────────────────────────────────────────────────────────

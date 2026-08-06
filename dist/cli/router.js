@@ -151,7 +151,7 @@ export function createCLI() {
  * Check if a provider type is one of the built-in types.
  */
 function isBuiltInProvider(type) {
-    return ['local', 'nim', 'gemini', 'openrouter', 'groq'].includes(type);
+    return ['local', 'nim', 'gemini', 'openrouter', 'groq', 'nuvira'].includes(type);
 }
 /**
  * Resolve the inference provider from CLI options.

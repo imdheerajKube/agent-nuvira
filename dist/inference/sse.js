@@ -27,9 +27,14 @@ export function parseSSELine(line) {
  * @param headers - HTTP headers (including Authorization)
  * @param body - The JSON request body (stream: true will be added automatically)
  * @param onToken - Callback for each content token as it arrives
+ * @param onUsage - Optional callback for the endpoint-reported token usage
+ *   (M2.2 wire-token metering): some endpoints emit a final data chunk carrying
+ *   a `usage` object (OpenAI stream_options.include_usage convention) — when
+ *   present it is forwarded so adapters can record MEASURED cost instead of
+ *   length-based estimates.
  * @returns The full concatenated response text
  */
-export async function streamCompletion(url, headers, body, onToken) {
+export async function streamCompletion(url, headers, body, onToken, onUsage) {
     const response = await fetch(url, {
         method: 'POST',
         headers: {
@@ -52,6 +57,29 @@ export async function streamCompletion(url, headers, body, onToken) {
     const decoder = new TextDecoder();
     const fullContent = [];
     let buffer = '';
+    // M2.2: capture the endpoint-reported usage from any data chunk that carries
+    // it (final chunk before [DONE] in the OpenAI include_usage convention).
+    const captureUsage = (trimmed) => {
+        if (!onUsage || !trimmed.startsWith('data: '))
+            return;
+        const data = trimmed.slice(6).trim();
+        if (data === '[DONE]')
+            return;
+        try {
+            const parsed = JSON.parse(data);
+            if (parsed?.usage &&
+                typeof parsed.usage.prompt_tokens === 'number' &&
+                typeof parsed.usage.completion_tokens === 'number') {
+                onUsage({
+                    promptTokens: parsed.usage.prompt_tokens,
+                    completionTokens: parsed.usage.completion_tokens,
+                });
+            }
+        }
+        catch {
+            // Non-JSON data lines are ignored.
+        }
+    };
     try {
         while (true) {
             const { done, value } = await reader.read();
@@ -71,6 +99,7 @@ export async function streamCompletion(url, headers, body, onToken) {
                     fullContent.push(token);
                     onToken(token);
                 }
+                captureUsage(trimmed);
             }
         }
         // Process remaining buffer
@@ -81,6 +110,7 @@ export async function streamCompletion(url, headers, body, onToken) {
                 fullContent.push(token);
                 onToken(token);
             }
+            captureUsage(remaining);
         }
     }
     finally {

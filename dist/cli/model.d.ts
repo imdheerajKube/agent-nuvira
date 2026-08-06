@@ -70,6 +70,11 @@ export declare class ModelCommand extends BaseCommand {
     private showInfo;
     private showExplain;
     /**
+     * Render a PII/governance policy block cleanly (M2.4 auditability): the
+     * message plus, for governance, the full eliminated-provider audit trail.
+     */
+    private renderPolicyBlock;
+    /**
      * Build a machine-readable explanation payload.
      * Single task → one decision object; no task → all 5 sample complexities.
      * Includes effective per-provider pricing (with override flags).

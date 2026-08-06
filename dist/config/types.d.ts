@@ -1,7 +1,7 @@
 /**
  * Supported built-in inference providers.
  */
-export type BuiltInProviderType = 'nim' | 'gemini' | 'openrouter' | 'groq' | 'local';
+export type BuiltInProviderType = 'nim' | 'gemini' | 'openrouter' | 'groq' | 'local' | 'nuvira';
 /**
  * Any provider identifier, including built-in and plugin-provided types.
  */
@@ -15,11 +15,28 @@ export type LocalRunner = 'ollama' | 'huggingface' | 'ggml';
  */
 export interface ProviderConfig {
     apiKey?: string;
+    /**
+     * M2.3 multi-account rotation: ADDITIONAL API keys for the same provider
+     * (the primary stays in `apiKey`). When the failover runner hits a
+     * rate-limit/auth failure, it rotates to the next non-parked key of the
+     * SAME provider before switching providers. Set directly in
+     * .buffconfig.json (`providers.<type>.apiKeys: ["...", "..."]`); raw keys
+     * are never stored in the quota ledger — only a stable fingerprint.
+     */
+    apiKeys?: string[];
     model?: string;
     runner?: LocalRunner;
     baseUrl?: string;
     temperature?: number;
     maxTokens?: number;
+    /**
+     * Optional gateway headers merged into every request (Nuvira-Router P1):
+     * e.g. enterprise gateway API keys or tenant headers. Keys are validated
+     * against header-injection (no CR/LF/colon); values must be plain strings.
+     */
+    headers?: Record<string, unknown>;
+    /** Request timeout in ms (default 30_000 for the nuvira adapter). */
+    timeoutMs?: number;
 }
 /**
  * Provider config map keyed by provider type.
@@ -109,6 +126,58 @@ export interface QuotaLimit {
     windowMs?: number;
 }
 /**
+ * Admin governance policy for Auto model routing (Nuvira-Router M2.4).
+ * All fields optional + additive — an empty/unset policy is fully permissive,
+ * so existing configurations behave exactly as before. Set via
+ * `buff config set routing.governance.<key> ...` or directly in
+ * .buffconfig.json.
+ *
+ * Enforcement happens inside the auto-router's existing hard-constraint slot
+ * (violating providers are ELIMINATED, never just scored lower), and
+ * `models explain` / the dashboard surface which providers policy blocked.
+ */
+export interface GovernanceConfig {
+    /** Admin allow-list of provider ids (empty = all allowed). */
+    allowProviders?: string[];
+    /** Admin deny-list of provider ids (wins over allowProviders). */
+    denyProviders?: string[];
+    /**
+     * Admin allow-list of model ids (empty = all allowed). A provider survives
+     * only if at least one of its candidate models (configured pin OR curated
+     * default) is on the list.
+     */
+    allowModels?: string[];
+    /** Admin deny-list of model ids (wins over allowModels). */
+    denyModels?: string[];
+    /**
+     * Admin hard max cost per call (USD). Providers whose typical/measured call
+     * exceeds this are eliminated. Joins `routing.maxCostUsd` (the effective
+     * cap is the stricter of the two).
+     */
+    maxCostUsd?: number;
+    /**
+     * PII / confidential-domain patterns (regex, case-insensitive). When a task
+     * description matches ANY pattern, only providers whose privacy score is
+     * >= `minPrivacyForPii` may serve it — e.g. `["password", "api[_-]?key",
+     * "social[_-]?security", "credit[_-]?card"]` keeps secret-handling tasks
+     * on local/first-party providers.
+     */
+    piiPatterns?: string[];
+    /**
+     * Minimum privacy score (0–1) required for a provider when a PII pattern
+     * matches (default: 1.0 = local-only). 0.5+ admits mid-privacy providers;
+     * 1.0 restricts to fully-local.
+     */
+    minPrivacyForPii?: number;
+    /**
+     * Whether `buff models unblock` may override REGISTRY-learned blocks
+     * (default: true — the escape hatch works). Set false to make registry
+     * blocks admin-hard: unblock refuses and the provider stays skipped.
+     * Governance allow/deny lists are ALWAYS admin-hard regardless of this.
+     */
+    allowUnblock?: boolean;
+}
+/**
  * Learning-router configuration (Thompson-sampling bandit + hard constraints).
  * Set via `buff config set routing.<key> <value>` or directly in .buffconfig.json.
  */
@@ -162,6 +231,35 @@ export interface RoutingConfig {
      */
     promotionMinDecisions?: number;
     /**
+     * Enable the M2.1 capability-fit soft signal in Auto routing scoring: a
+     * task type's required model-catalog tags (plan → reasoning, quick edit →
+     * code, …) are matched against each provider's offered tags, nudging
+     * equally-scored candidates toward the one whose strengths match the task.
+     * Default: true. Set to false to revert to pure dimension-weight scoring
+     * (the signal becomes fully inert — scores, reasons and the explain view
+     * drop the capability-fit component).
+     */
+    capabilityFit?: boolean;
+    /**
+     * Enable the M2.5 context preflight soft signal in Auto routing scoring: the
+     * task's estimated prompt size (caller hint when the real payload is known,
+     * else the task text) is scored against each provider's nominal input
+     * context window, nudging candidates away from windows that would be
+     * heavily utilized (a long conversation or heavy workspace routes toward
+     * big-window providers). NEVER a hard block — estimation only, models may
+     * exceed nominal windows (the penalty is capped at 35%). Default: true. Set
+     * to false to revert to pure dimension-weight scoring (no context-fit field,
+     * no preflight section in `models explain`).
+     */
+    contextFit?: boolean;
+    /**
+     * Nominal input context window overrides (tokens) for the M2.5 context
+     * preflight. Keyed by model id (exact match) or by provider id (provider-
+     * level default for every model under that provider). Values replace the
+     * built-in table. Example: `buff config set routing.contextWindows.local 16384`
+     */
+    contextWindows?: Record<string, number>;
+    /**
      * Keep the dashboard's quota file watcher armed permanently instead of only
      * while an SSE client is connected. When true, the server watches the memory
      * dir from startup (never disarming on client disconnect), so quota events
@@ -190,6 +288,13 @@ export interface RoutingConfig {
         /** Embedding model override (default Xenova/bge-small-en-v1.5). */
         model?: string;
     };
+    /**
+     * Admin governance policy (Nuvira-Router M2.4): allow/deny provider + model
+     * lists, admin max-cost cap, PII-domain privacy block, and control over the
+     * `models unblock` escape hatch. Empty/unset = fully permissive (existing
+     * behavior unchanged). See GovernanceConfig.
+     */
+    governance?: GovernanceConfig;
 }
 /**
  * Full configuration schema for .buffconfig.json
@@ -220,5 +325,12 @@ export interface InferenceOptions {
     maxTokens?: number;
     provider?: string;
     stream?: boolean;
+    /**
+     * M2.3 multi-account rotation: override the adapter's configured key for
+     * this single call. Adapters prefer `options.apiKey` over `config.apiKey`,
+     * which lets the failover runner retry the SAME provider with the next
+     * account key instead of switching providers on a rate-limit/auth failure.
+     */
+    apiKey?: string;
 }
 //# sourceMappingURL=types.d.ts.map

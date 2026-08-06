@@ -30,6 +30,12 @@ export interface CostEntry {
     costUsd: number;
     /** The task/goal that triggered this request */
     task?: string;
+    /**
+     * M2.2: true when inputTokens/outputTokens are MEASURED from the provider's
+     * reported usage (wire-token metering), false/undefined when length-based
+     * estimates were used. The dashboard splits measured vs estimated spend.
+     */
+    measured?: boolean;
 }
 export interface CostSummary {
     /** Total cost in USD across all time */
@@ -74,7 +80,15 @@ export declare class CostTracker {
      * @param outputTokens Output tokens generated (or estimated)
      * @param task      Optional task description
      */
-    recordCall(provider: string, model: string, inputTokens: number, outputTokens: number, task?: string): CostEntry;
+    recordCall(provider: string, model: string, inputTokens: number, outputTokens: number, task?: string, measured?: boolean): CostEntry;
+    /**
+     * Record a call with EXACT tokens reported by the provider/gateway usage
+     * (M2.2 wire-token metering). Cost is computed from real token counts × the
+     * same per-1K pricing, the entry is flagged `measured: true`, and the exact
+     * tokens also flow to the Model Availability Registry so Auto routing's cost
+     * scoring can prefer measured cost over TYPICAL-token estimates.
+     */
+    recordCallMeasured(provider: string, model: string, inputTokens: number, outputTokens: number, task?: string): CostEntry;
     /**
      * Record a call with estimated tokens from prompt/response lengths.
      * Useful when the API doesn't return exact token counts.
@@ -98,4 +112,14 @@ export declare class CostTracker {
     getAllEntries(): CostEntry[];
 }
 export declare function getCostTracker(): CostTracker;
+/**
+ * M2.2: record a call preferring MEASURED wire tokens when the provider
+ * reported usage; otherwise fall back to the length-based estimate. Shared by
+ * the OpenAI-compatible adapters so the measured-vs-estimated logic lives in
+ * one place. Best-effort — never throws.
+ */
+export declare function recordCallWithUsage(costTracker: CostTracker, provider: string, model: string, prompt: string, content: string, usage?: {
+    promptTokens?: number;
+    completionTokens?: number;
+}): void;
 //# sourceMappingURL=cost-tracker.d.ts.map

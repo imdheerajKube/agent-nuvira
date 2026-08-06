@@ -40,7 +40,7 @@ function eventsPath() {
 /** Cap on persisted timeline events — trim oldest beyond this. */
 const MAX_EVENTS = 200;
 function emptyState() {
-    return { version: CURRENT_VERSION, entries: {} };
+    return { version: CURRENT_VERSION, entries: {}, accounts: {} };
 }
 function entryKey(provider, model) {
     return `${provider}|${model || 'default'}`;
@@ -199,12 +199,78 @@ export class QuotaLedger {
                     this.state.entries[key].cooldownUntil = 0;
                 }
             }
+            // Also clear every account of the provider (M2.3).
+            if (this.state.accounts && this.state.accounts[provider]) {
+                delete this.state.accounts[provider];
+            }
             this.save();
             this.recordEvent('released', provider, 'manual');
         }
         catch {
             // Best-effort.
         }
+    }
+    // ── M2.3 multi-account key state ─────────────────────────────────────────
+    /** Park a single provider account/key until an epoch ms (rate-limit/auth). */
+    parkAccount(provider, accountId, until, reason) {
+        try {
+            if (!this.state.accounts)
+                this.state.accounts = {};
+            if (!this.state.accounts[provider])
+                this.state.accounts[provider] = {};
+            const existing = this.state.accounts[provider][accountId];
+            this.state.accounts[provider][accountId] = {
+                parkedUntil: Math.max(existing?.parkedUntil || 0, until),
+                reason: reason || existing?.reason,
+            };
+            this.save();
+            if (until > Date.now())
+                this.recordEvent('parked', provider, reason || 'cooldown');
+        }
+        catch {
+            // Best-effort.
+        }
+    }
+    /** Clear a single account's park (e.g. a later call with the key succeeded). */
+    releaseAccount(provider, accountId) {
+        try {
+            if (this.state.accounts?.[provider]) {
+                delete this.state.accounts[provider][accountId];
+                if (Object.keys(this.state.accounts[provider]).length === 0) {
+                    delete this.state.accounts[provider];
+                }
+                this.save();
+            }
+        }
+        catch {
+            // Best-effort.
+        }
+    }
+    /** Whether a specific provider account/key is currently parked. */
+    isAccountParked(provider, accountId) {
+        try {
+            const a = this.state.accounts?.[provider]?.[accountId];
+            return !!a && a.parkedUntil > Date.now();
+        }
+        catch {
+            return false;
+        }
+    }
+    /** Fingerprints of all currently-parked accounts for a provider. */
+    getParkedAccounts(provider) {
+        const now = Date.now();
+        const parked = new Set();
+        try {
+            const accounts = this.state.accounts?.[provider] || {};
+            for (const [id, a] of Object.entries(accounts)) {
+                if (a.parkedUntil > now)
+                    parked.add(id);
+            }
+        }
+        catch {
+            // Best-effort.
+        }
+        return parked;
     }
     /**
      * Append an event to the quota failover timeline (quota-events.jsonl,
@@ -438,6 +504,12 @@ export class QuotaLedger {
         return {
             version: this.state.version,
             entries: Object.fromEntries(Object.entries(this.state.entries).map(([k, v]) => [k, { ...v }])),
+            accounts: this.state.accounts
+                ? Object.fromEntries(Object.entries(this.state.accounts).map(([p, accts]) => [
+                    p,
+                    Object.fromEntries(Object.entries(accts).map(([id, a]) => [id, { ...a }])),
+                ]))
+                : {},
         };
     }
     /** Clear all entries (used by tests and `buff model quota reset`). */
@@ -486,6 +558,19 @@ function formatDuration(ms) {
     if (m > 0)
         return `${m}m`;
     return `${Math.ceil(ms / 1000)}s`;
+}
+/**
+ * M2.3: stable fingerprint for a provider API key — the ledger (and every
+ * diagnostic surface) NEVER stores raw keys, only this. FNV-1a 32-bit:
+ * cheap, deterministic, collision-safe enough for account identity.
+ */
+export function accountIdForKey(key) {
+    let h = 0x811c9dc5;
+    for (let i = 0; i < key.length; i++) {
+        h ^= key.charCodeAt(i);
+        h = Math.imul(h, 0x01000193) >>> 0;
+    }
+    return h.toString(16).padStart(8, '0');
 }
 // ─── Singleton ──────────────────────────────────────────────────────────────
 let ledgerInstance = null;
