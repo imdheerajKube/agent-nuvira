@@ -46,7 +46,7 @@ import { getRouterPromotion, type ParallelPick } from './router-promotion.js';
 import { getModelRegistry } from './model-registry.js';
 import { PREFERRED_MODELS } from '../inference/model-validator.js';
 import type { ConfigManager } from '../config/manager.js';
-import type { ProviderPricing } from '../config/types.js';
+import type { ProviderPricing, GovernanceConfig } from '../config/types.js';
 import { logger } from '../utils/logger.js';
 
 // ─── Constants ──────────────────────────────────────────────────────────────
@@ -97,6 +97,48 @@ export interface ProviderCapabilities {
   privacy: number;
   /** Reliability / uptime (1 = most reliable) */
   reliability: number;
+}
+
+/**
+ * Thrown by resolve() when a PII-domain task matches a configured governance
+ * PII pattern and EVERY candidate provider fails the privacy bar. The PII
+ * policy is a HARD gate — "no PII to low-privacy cloud" holds even when it
+ * eliminates every provider, so the router refuses to serve a violator and
+ * lets the caller surface the policy block to the user.
+ */
+export class PIIPolicyError extends Error {
+  /** Minimum privacy score the policy required (0–1). */
+  readonly requiredPrivacy: number;
+
+  constructor(requiredPrivacy: number) {
+    super(
+      `PII governance policy: no provider meets the privacy requirement (privacy ≥ ${requiredPrivacy}) for this task — refusing to route PII to a low-privacy provider.`,
+    );
+    this.name = 'PIIPolicyError';
+    this.requiredPrivacy = requiredPrivacy;
+  }
+}
+
+/**
+ * Thrown by resolve() when an ADMIN governance rule (provider allow/deny
+ * list, model allow/deny list, or the admin max-cost cap) eliminates EVERY
+ * candidate provider. Like PII, these are HARD policy gates: falling back to
+ * the full ranking would resurrect a provider the admin policy rules out, so
+ * the router refuses to serve a policy-violating provider and lets the caller
+ * surface the block (chat/plan render the message, `models explain` renders
+ * the full audit trail).
+ */
+export class GovernancePolicyError extends Error {
+  /** Providers eliminated by the policy, with the reason for each (audit). */
+  readonly blocked: Array<{ provider: string; reason: string }>;
+
+  constructor(blocked: Array<{ provider: string; reason: string }>) {
+    super(
+      `Governance policy: every candidate provider was eliminated by an admin rule (${blocked.length} blocked: ${blocked.map((b) => b.provider).join(', ')}) — refusing to serve a policy-violating provider.`,
+    );
+    this.name = 'GovernancePolicyError';
+    this.blocked = blocked;
+  }
 }
 
 /** Options for a single resolve() call. */
@@ -267,6 +309,13 @@ export interface AutoRouteResult {
    * winner to the next-ranked provider WITH learned data.
    */
   banditEscalation?: boolean;
+  /**
+   * M2.4: providers eliminated by the governance policy (allow/deny lists,
+   * admin max-cost cap, or PII privacy block), with the reason. Empty when no
+   * policy is configured or nothing was blocked — keeps the audit trail
+   * honest and lets `models explain` / the dashboard show policy decisions.
+   */
+  governanceBlocked?: Array<{ provider: string; reason: string }>;
 }
 
 // ─── Provider Capability Profiles ───────────────────────────────────────────
@@ -812,6 +861,17 @@ export class AutoModelRouter {
       // Best-effort
     }
 
+    // M2.4 governance: admin policy from `routing.governance`. Best-effort
+    // config read — an unset/empty policy is fully permissive (existing
+    // behavior unchanged). All violations are hard-eliminations inside the
+    // constraint slot below (never scored lower).
+    let governance: GovernanceConfig | undefined;
+    try {
+      governance = configManager?.getAll?.()?.routing?.governance;
+    } catch {
+      // Best-effort — policy must never break routing.
+    }
+
     // Score every allowed provider
     let scored: ScoredProvider[] = allowedProviders.map((provider) => {
       let caps = this.getCapabilities(provider);
@@ -900,19 +960,56 @@ export class AutoModelRouter {
       }
     }
 
+    // M2.4: eliminated-provider audit trail — populated only when the
+    // governance/hard-constraint slot actually removes a provider for POLICY
+    // reasons (admin lists, admin cost cap, PII block). minSpeed/minReasoning
+    // kills stay in the per-provider reason, not this list.
+    let governanceBlocked: Array<{ provider: string; reason: string }> = [];
     if (
       options.maxCostUsd !== undefined ||
       options.minSpeed !== undefined ||
-      options.minReasoning !== undefined
+      options.minReasoning !== undefined ||
+      this.governanceActive(governance)
     ) {
+      // ── Pass 1: NON-PII constraints (two-pass so the PII hard-gate always
+      // sees exactly the survivors of the other rules). ────────────────────
+      // M2.4: admin max-cost cap joins the per-call option — the effective
+      // cap is the stricter of the two. A governance allow/deny list or admin
+      // cap is a HARD elimination. Eliminated providers are recorded in
+      // `governanceBlocked` (only policy-related kills; minSpeed/minReasoning
+      // stay in the per-provider reason) so the audit trail + explain view
+      // show exactly what policy removed.
+      const effectiveMaxCostUsd = this.effectiveMaxCost(options.maxCostUsd, governance?.maxCostUsd);
+      const blockedHere: Array<{ provider: string; reason: string }> = [];
+
+      // PII patterns are compiled ONCE per resolve (not per provider) — and a
+      // task that matches is computed once, not re-lowered per candidate.
+      const taskLower = (taskDescription || '').toLowerCase();
+      const compiledPii: RegExp[] = (governance?.piiPatterns || [])
+        .map((p) => {
+          try {
+            return new RegExp(p, 'i');
+          } catch {
+            return null; // malformed pattern — ignored, never breaks routing
+          }
+        })
+        .filter((r): r is RegExp => r !== null);
+      const piiMatched = compiledPii.length > 0 && compiledPii.some((re) => re.test(taskLower));
+      const minPrivacy = governance?.minPrivacyForPii ?? 1.0;
+
       const constrained = scored.filter((s) => {
-        if (options.maxCostUsd !== undefined) {
+        if (effectiveMaxCostUsd !== undefined) {
           const costUsd = estimateCallCostUsd(
             s.provider,
             this.getProviderPricing(s.provider, configManager),
             s.costBasis,
           );
-          if (costUsd > options.maxCostUsd) return false;
+          if (costUsd > effectiveMaxCostUsd) {
+            if (governance?.maxCostUsd !== undefined) {
+              blockedHere.push({ provider: s.provider, reason: `admin max-cost cap $${effectiveMaxCostUsd} (cost $${costUsd})` });
+            }
+            return false;
+          }
         }
         if (options.minSpeed !== undefined) {
           if (this.getCapabilities(s.provider).speed < options.minSpeed) return false;
@@ -920,12 +1017,75 @@ export class AutoModelRouter {
         if (options.minReasoning !== undefined) {
           if (this.getCapabilities(s.provider).reasoning < options.minReasoning) return false;
         }
+        // ── M2.4 governance (non-PII rules) ─────────────────────────────
+        // Provider allow/deny lists (admin policy beats credential filtering).
+        if (governance?.allowProviders?.length && !governance.allowProviders.includes(s.provider)) {
+          blockedHere.push({ provider: s.provider, reason: 'not on admin allowProviders list' });
+          return false;
+        }
+        if (governance?.denyProviders?.length && governance.denyProviders.includes(s.provider)) {
+          blockedHere.push({ provider: s.provider, reason: 'on admin denyProviders list' });
+          return false;
+        }
+        // Model allow/deny lists enforced against the model the router will
+        // ACTUALLY serve (the configured pin, or the curated default when no
+        // pin is set) — never against an unrelated candidate that happens to
+        // be allowed. denyModels wins over allowModels.
+        const modelReason = this.governanceModelReason(s.provider, agentType, configManager, governance);
+        if (modelReason) {
+          blockedHere.push({ provider: s.provider, reason: modelReason });
+          return false;
+        }
         return true;
       });
-      if (constrained.length > 0) {
+
+      // ── Pass 2: PII hard-gate on the NON-PII survivors. ────────────────
+      // PII is a PRIVACY policy, not a cost/speed tradeoff: "no PII to
+      // low-privacy cloud" holds even when it eliminates every candidate. If
+      // any compliant provider survives the other rules, keep ONLY the
+      // compliant subset. If NOTHING meets the privacy bar (or the non-PII
+      // pass already eliminated everyone), NEVER fall back to a violator —
+      // throw PIIPolicyError so the caller surfaces the block instead of
+      // silently leaking PII to the cloud.
+      if (piiMatched) {
+        const piiCompliant = constrained.filter((s) => this.getCapabilities(s.provider).privacy >= minPrivacy);
+        for (const s of constrained) {
+          if (this.getCapabilities(s.provider).privacy < minPrivacy) {
+            blockedHere.push({ provider: s.provider, reason: `PII-domain task — privacy ${this.getCapabilities(s.provider).privacy} < required ${minPrivacy}` });
+          }
+        }
+        if (piiCompliant.length > 0) {
+          scored = piiCompliant;
+          governanceBlocked = blockedHere;
+        } else {
+          governanceBlocked = blockedHere;
+          throw new PIIPolicyError(minPrivacy);
+        }
+      } else if (constrained.length > 0) {
         scored = constrained;
-      } else if (options.verbose) {
-        logger.warn('  ⚠️ Hard constraints eliminated every provider — falling back to full ranking');
+        governanceBlocked = blockedHere;
+      } else if (blockedHere.length > 0) {
+        // HARD governance gate: an ADMIN rule (provider allow/deny list, model
+        // allow/deny list, or the admin max-cost cap) eliminated every
+        // candidate. The benign fallback below would resurrect those
+        // violators — NEVER serve a provider the admin policy rules out, even
+        // when that leaves nothing to serve. Throw so the caller surfaces the
+        // policy block honestly (chat/plan render the message, `models
+        // explain` renders the full audit trail) instead of silently
+        // violating the policy. NOTE: blockedHere holds ONLY governance kills
+        // (per-call maxCostUsd/minSpeed/minReasoning never push to it), so
+        // this branch is unreachable when only per-call SOFT options were set.
+        governanceBlocked = blockedHere;
+        throw new GovernancePolicyError(blockedHere);
+      } else {
+        // Benign fallback — only PER-CALL soft options (maxCostUsd/minSpeed/
+        // minReasoning) eliminated everyone (an impossible per-request ask),
+        // not an admin policy. Keep the full ranking so the caller still gets
+        // a decision instead of erroring.
+        governanceBlocked = blockedHere;
+        if (options.verbose) {
+          logger.warn('  ⚠️ Governance/hard constraints eliminated every provider — falling back to full ranking');
+        }
       }
     }
 
@@ -1081,6 +1241,7 @@ export class AutoModelRouter {
       explanation,
       routedBy,
       banditEscalation,
+      governanceBlocked,
     };
   }
 
@@ -1230,6 +1391,68 @@ export class AutoModelRouter {
     } catch {
       return undefined;
     }
+  }
+
+  // ── M2.4 governance helpers ───────────────────────────────────────────────
+
+  /**
+   * Whether any governance policy is configured (so the constraint slot only
+   * runs when there is something to enforce).
+   */
+  private governanceActive(g: GovernanceConfig | undefined): boolean {
+    if (!g) return false;
+    return Boolean(
+      (g.allowProviders?.length ?? 0) > 0 ||
+      (g.denyProviders?.length ?? 0) > 0 ||
+      (g.allowModels?.length ?? 0) > 0 ||
+      (g.denyModels?.length ?? 0) > 0 ||
+      (g.piiPatterns?.length ?? 0) > 0 ||
+      g.maxCostUsd !== undefined,
+    );
+  }
+
+  /**
+   * Effective per-call max-cost cap: the stricter of the per-call option and
+   * the admin governance cap. undefined when neither is set.
+   */
+  private effectiveMaxCost(
+    perCallUsd: number | undefined,
+    adminUsd: number | undefined,
+  ): number | undefined {
+    if (perCallUsd === undefined) return adminUsd;
+    if (adminUsd === undefined) return perCallUsd;
+    return Math.min(perCallUsd, adminUsd);
+  }
+
+  /**
+   * Why a provider fails the governance MODEL allow/deny lists, or undefined
+   * when it passes. Enforced against the model the router will ACTUALLY serve:
+   *   - the CONFIGURED pin when one is set (resolveModel returns it) — a pin
+   *     on the deny-list, or NOT on the allow-list, kills the provider. This
+   *     closes the "any candidate passes but the served pin violates" hole.
+   *   - the curated defaults when NO pin is set (the adapter's default model
+   *     is what a no-pin resolve serves) — deny wins, allow must include one.
+   * denyModels always wins over allowModels.
+   */
+  private governanceModelReason(
+    provider: string,
+    agentType: string,
+    configManager: ConfigManager | undefined,
+    governance: GovernanceConfig | undefined,
+  ): string | undefined {
+    if (!governance) return undefined;
+    const configured = this.resolveModel(provider, agentType, configManager);
+    const served = configured && configured !== 'default' ? [configured] : PREFERRED_MODELS[provider] || [];
+    const candidates = served.length > 0 ? served : ['default'];
+
+    if (governance.denyModels?.length && candidates.some((m) => governance.denyModels!.includes(m))) {
+      const denied = candidates.find((m) => governance.denyModels!.includes(m));
+      return `model '${denied}' on admin denyModels list`;
+    }
+    if (governance.allowModels?.length && !candidates.some((m) => governance.allowModels!.includes(m))) {
+      return `model '${candidates.join(', ')}' not on admin allowModels list`;
+    }
+    return undefined;
   }
 
   /**

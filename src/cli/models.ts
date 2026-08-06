@@ -97,9 +97,60 @@ export class ModelsCommand extends BaseCommand {
       .option('--no-spot-check', 'Only re-probe the model list (skip 1-token spot-checks)')
       .option('-j, --json', 'Output as JSON', false)
       .action(async (provider: string, opts?: { spotCheck?: boolean; json?: boolean }, cmd?: Command) => {
+        // M2.4 admin gate: `routing.governance.allowUnblock: false` makes the
+        // registry's learned blocks admin-HARD — the escape hatch refuses so
+        // a policy-set block can't be silently released by an operator. (The
+        // governance allow/deny LISTS are always admin-hard regardless; this
+        // only governs the registry-telemetry blocks.)
+        let allowUnblock = true;
+        try {
+          allowUnblock = (this.configManager.getAll()?.routing?.governance?.allowUnblock ?? true) !== false;
+        } catch {
+          // Best-effort — policy read must never break the command.
+        }
+        if (!allowUnblock) {
+          const json = this.isJsonMode(opts, cmd);
+          if (json) {
+            console.log(JSON.stringify({ provider, refused: true, reason: 'routing.governance.allowUnblock is false — admin-hard block' }, null, 2));
+          } else {
+            logger.error(`⛔ Cannot unblock ${provider} — admin policy (routing.governance.allowUnblock: false) makes registry blocks admin-hard.`);
+            logger.info('   Override in .buffconfig.json (set routing.governance.allowUnblock true) if this was intentional.');
+          }
+          return;
+        }
+        // M2.4 advisory: even when the REGISTRY block is released, an admin
+        // governance deny list may still eliminate this provider at routing
+        // time (the deny gate is a hard elimination that runs after the
+        // registry fast-path). Surface that honestly instead of implying the
+        // unblock fully restored the provider.
+        let governanceListed = false;
+        try {
+          const g = this.configManager.getAll()?.routing?.governance;
+          if (g) {
+            if (g.denyProviders?.includes(provider)) governanceListed = true;
+            // Model deny check against the CONFIGURED pin (the model that
+            // would actually be served) — same served-model semantics as the
+            // router's governanceModelReason gate.
+            if (!governanceListed && g.denyModels?.length) {
+              try {
+                const pin = this.configManager.getProviderConfig(provider)?.config?.model;
+                if (pin && g.denyModels.includes(pin)) governanceListed = true;
+              } catch {
+                // Best-effort — pin lookup must never break the escape hatch.
+              }
+            }
+          }
+        } catch {
+          // Best-effort — policy read must never break the escape hatch.
+        }
         const registry = getModelRegistry();
         const wasBlocked = registry.getBlockedProviders().includes(provider);
         const { demoted, unparked } = registry.unblockProvider(provider);
+        if (governanceListed && !this.isJsonMode(opts, cmd)) {
+          logger.warn(
+            `   ⚠️ ${provider} is on an admin governance deny list (routing.governance.denyProviders/denyModels) — routing will STILL eliminate it even after this unblock. Edit routing.governance in .buffconfig.json to fully restore it.`,
+          );
+        }
         // Clear the CENTRAL ledger cooldown too — otherwise syncQuota() would
         // re-park the provider on the very next routing read, instantly
         // undoing the manual release. (unblockProvider only clears REGISTRY

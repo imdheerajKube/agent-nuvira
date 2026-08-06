@@ -138,6 +138,59 @@ export interface QuotaLimit {
 }
 
 /**
+ * Admin governance policy for Auto model routing (Nuvira-Router M2.4).
+ * All fields optional + additive — an empty/unset policy is fully permissive,
+ * so existing configurations behave exactly as before. Set via
+ * `buff config set routing.governance.<key> ...` or directly in
+ * .buffconfig.json.
+ *
+ * Enforcement happens inside the auto-router's existing hard-constraint slot
+ * (violating providers are ELIMINATED, never just scored lower), and
+ * `models explain` / the dashboard surface which providers policy blocked.
+ */
+export interface GovernanceConfig {
+  /** Admin allow-list of provider ids (empty = all allowed). */
+  allowProviders?: string[];
+  /** Admin deny-list of provider ids (wins over allowProviders). */
+  denyProviders?: string[];
+  /**
+   * Admin allow-list of model ids (empty = all allowed). A provider survives
+   * only if at least one of its candidate models (configured pin OR curated
+   * default) is on the list.
+   */
+  allowModels?: string[];
+  /** Admin deny-list of model ids (wins over allowModels). */
+  denyModels?: string[];
+  /**
+   * Admin hard max cost per call (USD). Providers whose typical/measured call
+   * exceeds this are eliminated. Joins `routing.maxCostUsd` (the effective
+   * cap is the stricter of the two).
+   */
+  maxCostUsd?: number;
+  /**
+   * PII / confidential-domain patterns (regex, case-insensitive). When a task
+   * description matches ANY pattern, only providers whose privacy score is
+   * >= `minPrivacyForPii` may serve it — e.g. `["password", "api[_-]?key",
+   * "social[_-]?security", "credit[_-]?card"]` keeps secret-handling tasks
+   * on local/first-party providers.
+   */
+  piiPatterns?: string[];
+  /**
+   * Minimum privacy score (0–1) required for a provider when a PII pattern
+   * matches (default: 1.0 = local-only). 0.5+ admits mid-privacy providers;
+   * 1.0 restricts to fully-local.
+   */
+  minPrivacyForPii?: number;
+  /**
+   * Whether `buff models unblock` may override REGISTRY-learned blocks
+   * (default: true — the escape hatch works). Set false to make registry
+   * blocks admin-hard: unblock refuses and the provider stays skipped.
+   * Governance allow/deny lists are ALWAYS admin-hard regardless of this.
+   */
+  allowUnblock?: boolean;
+}
+
+/**
  * Learning-router configuration (Thompson-sampling bandit + hard constraints).
  * Set via `buff config set routing.<key> <value>` or directly in .buffconfig.json.
  */
@@ -229,6 +282,13 @@ export interface RoutingConfig {
     /** Embedding model override (default Xenova/bge-small-en-v1.5). */
     model?: string;
   };
+  /**
+   * Admin governance policy (Nuvira-Router M2.4): allow/deny provider + model
+   * lists, admin max-cost cap, PII-domain privacy block, and control over the
+   * `models unblock` escape hatch. Empty/unset = fully permissive (existing
+   * behavior unchanged). See GovernanceConfig.
+   */
+  governance?: GovernanceConfig;
 }
 
 /**

@@ -162,7 +162,7 @@ export class ConfigCommand extends BaseCommand {
       if (key === 'defaultProvider') {
         this.configManager.save({ defaultProvider: value as ProviderType });
       } else {
-        logger.error(`Unknown config key: ${key}. Expected formats:\n  defaultProvider\n  providers.<name>.<field>\n  pricing.<provider>.inputPer1K\n  pricing.<provider>.outputPer1K\n  history.retentionDays\n  history.semanticSearch\n  fallback.enabled\n  fallback.providers\n  routing.bandit\n  routing.allowPaid\n  routing.quota.<provider>.requestsPerWindow`);
+        logger.error(`Unknown config key: ${key}. Expected formats:\n  defaultProvider\n  providers.<name>.<field>\n  providers.<name>.apiKeys "k1,k2"  (M2.3 multi-account rotation)\n  pricing.<provider>.inputPer1K\n  pricing.<provider>.outputPer1K\n  history.retentionDays\n  history.semanticSearch\n  fallback.enabled\n  fallback.providers\n  routing.bandit\n  routing.allowPaid\n  routing.quota.<provider>.requestsPerWindow\n  routing.governance.allowProviders "groq,local"  (M2.4 admin policy)`);
         return;
       }
     } else if (parts.length === 2 && parts[0] === 'history') {
@@ -201,10 +201,20 @@ export class ConfigCommand extends BaseCommand {
       const field = parts[2];
       const providerConfig = config.providers[providerName] || {};
 
-      // Coerce numeric values
-      let typedValue: string | number = value;
-      if (!isNaN(Number(value)) && value.trim() !== '') {
-        typedValue = Number(value);
+      let typedValue: string | number | string[] = value;
+
+      if (field === 'apiKeys') {
+        // M2.3 multi-account rotation: comma-separated list of ADDITIONAL keys
+        // for the same provider (the primary stays in `apiKey`). E.g.
+        //   buff config set providers.groq.apiKeys "k1,k2,k3"
+        // Empty/whitespace-only input CLEARS the list (remove rotation keys).
+        const keys = value.split(',').map((k) => k.trim()).filter((k) => k.length > 0);
+        typedValue = keys;
+      } else {
+        // Coerce numeric values (existing behavior for model/temperature/maxTokens)
+        if (!isNaN(Number(value)) && value.trim() !== '') {
+          typedValue = Number(value);
+        }
       }
 
       this.configManager.save({
@@ -342,8 +352,54 @@ export class ConfigCommand extends BaseCommand {
           },
         },
       } as Partial<BuffConfig>);
+    } else if (parts.length >= 3 && parts[0] === 'routing' && parts[1] === 'governance') {
+      // M2.4 governance policy — routing.governance.<field> where <field> is
+      // one of: allowProviders, denyProviders, allowModels, denyModels
+      // (comma-separated lists), maxCostUsd / minPrivacyForPii (numbers), or
+      // allowUnblock (boolean). Empty/whitespace clears a list.
+      const field = parts[2];
+      const existing = config.routing?.governance || {};
+      let typedValue: string[] | number | boolean;
+
+      if (field === 'allowProviders' || field === 'denyProviders' || field === 'allowModels' || field === 'denyModels') {
+        typedValue = value.split(',').map((v) => v.trim()).filter((v) => v.length > 0);
+        this.configManager.save({
+          routing: { governance: { ...existing, [field]: typedValue } },
+        } as Partial<BuffConfig>);
+      } else if (field === 'maxCostUsd' || field === 'minPrivacyForPii') {
+        const num = Number(value);
+        if (isNaN(num) || num < 0) {
+          logger.error(`Invalid number for ${key}: "${value}". Must be a non-negative number.`);
+          return;
+        }
+        typedValue = num;
+        this.configManager.save({
+          routing: { governance: { ...existing, [field]: typedValue } },
+        } as Partial<BuffConfig>);
+      } else if (field === 'allowUnblock') {
+        const lower = value.trim().toLowerCase();
+        if (lower === 'true' || lower === '1' || lower === 'yes') {
+          typedValue = true;
+        } else if (lower === 'false' || lower === '0' || lower === 'no') {
+          typedValue = false;
+        } else {
+          logger.error(`Invalid boolean value for ${key}: "${value}". Use true or false.`);
+          return;
+        }
+        this.configManager.save({
+          routing: { governance: { ...existing, [field]: typedValue } },
+        } as Partial<BuffConfig>);
+      } else if (field === 'piiPatterns') {
+        typedValue = value.split(',').map((v) => v.trim()).filter((v) => v.length > 0);
+        this.configManager.save({
+          routing: { governance: { ...existing, [field]: typedValue } },
+        } as Partial<BuffConfig>);
+      } else {
+        logger.error(`Unknown governance config key: ${field}. Valid keys: allowProviders, denyProviders, allowModels, denyModels, piiPatterns, maxCostUsd, minPrivacyForPii, allowUnblock`);
+        return;
+      }
     } else {
-      logger.error(`Invalid config key format: ${key}. Expected formats:\n  defaultProvider\n  providers.<name>.<field>\n  pricing.<provider>.inputPer1K\n  pricing.<provider>.outputPer1K\n  history.retentionDays\n  history.semanticSearch\n  fallback.enabled\n  fallback.providers\n  routing.bandit\n  routing.allowPaid\n  routing.quota.<provider>.requestsPerWindow`);
+      logger.error(`Invalid config key format: ${key}. Expected formats:\n  defaultProvider\n  providers.<name>.<field>\n  providers.<name>.apiKeys "k1,k2"\n  pricing.<provider>.inputPer1K\n  pricing.<provider>.outputPer1K\n  history.retentionDays\n  history.semanticSearch\n  fallback.enabled\n  fallback.providers\n  routing.bandit\n  routing.allowPaid\n  routing.quota.<provider>.requestsPerWindow\n  routing.governance.allowProviders "groq,local"`);
       return;
     }
 

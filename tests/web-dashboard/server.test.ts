@@ -1005,6 +1005,64 @@ describe('Dashboard Server', () => {
       }
     });
 
+    it('GET /api/routing surfaces M2.3 parked accounts (multi-account key rotation)', async () => {
+      // quota-ledger.json may carry `accounts: { provider: { fingerprint:
+      // { parkedUntil, reason } } }` — the M2.3 per-key rotation state. The
+      // dashboard must surface which ACCOUNT of a provider is parked (and why)
+      // so key rotation is visible, not just provider-level parks.
+      const ledgerPath = join(memoryDir, 'quota-ledger.json');
+      const now = Date.now();
+      writeFileSync(
+        ledgerPath,
+        JSON.stringify({
+          version: 1,
+          entries: {
+            'gemini|gemini-2.5-flash': {
+              provider: 'gemini', model: 'gemini-2.5-flash', tokensConsumed: 500,
+              requests: 2, windowStart: now - 60000, windowLengthMs: 86400000, cooldownUntil: 0,
+            },
+          },
+          accounts: {
+            gemini: {
+              'a1b2c3d4': { parkedUntil: now + 3600_000, reason: 'rate-limit' },
+              'e5f6a7b8': { parkedUntil: now - 1000, reason: 'auth' }, // expired → excluded
+            },
+          },
+        }),
+      );
+      try {
+        const res = await httpGet(`${baseUrl}/api/routing`);
+        expect(res.statusCode).toBe(200);
+        const body = JSON.parse(res.body);
+
+        expect(body.quota.parkedAccounts).toBeDefined();
+        expect(body.quota.parkedAccounts).toHaveLength(1);
+        expect(body.quota.parkedAccounts[0]).toMatchObject({
+          provider: 'gemini',
+          accountId: 'a1b2c3d4',
+          reason: 'rate-limit',
+        });
+        // Expired park is filtered out; remaining > 0.
+        expect(body.quota.parkedAccounts[0].remainingMs).toBeGreaterThan(0);
+        // Raw keys are NEVER surfaced — only the fingerprint.
+        expect(JSON.stringify(body.quota.parkedAccounts)).not.toContain('sk-sk-');
+      } finally {
+        rmSync(ledgerPath, { force: true });
+      }
+    });
+
+    it('GET /api/routing omits parkedAccounts when the ledger has no accounts (backward compat)', async () => {
+      const ledgerPath = join(memoryDir, 'quota-ledger.json');
+      try { rmSync(ledgerPath, { force: true }); } catch { /* ignore */ }
+      const res = await httpGet(`${baseUrl}/api/routing`);
+      expect(res.statusCode).toBe(200);
+      const body = JSON.parse(res.body);
+      // Older ledger without `accounts` → empty array (never undefined/null),
+      // so the panel can safely iterate.
+      expect(Array.isArray(body.quota.parkedAccounts)).toBe(true);
+      expect(body.quota.parkedAccounts).toEqual([]);
+    });
+
     it('GET /api/routing returns the promotion-gate verdict from the trajectory', async () => {
       // router-promotion.jsonl is a JSONL trajectory — one A/B decision per line.
       // Both decisions diverge (bandit pick != heuristic pick) so the gate has signal.

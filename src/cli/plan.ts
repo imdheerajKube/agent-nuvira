@@ -11,6 +11,7 @@ import { getAutoRouter } from '../learning/auto-router.js';
 import { recordRegistrySuccess } from '../learning/provider-fallback.js';
 import { recordActionFailure, type FailureSessionState } from '../learning/failure-bookkeeping.js';
 import { runSingleShotAuto } from './failover-runner.js';
+import { PIIPolicyError, GovernancePolicyError } from '../learning/auto-router.js';
 
 /**
  * Plan command — generate implementation plans for code changes
@@ -138,7 +139,13 @@ Use clear markdown formatting.`;
               .filter((p) => p !== type && !excludeProviders.includes(p));
             complexity = decision.complexity;
             score = decision.score;
-          } catch {
+          } catch (err) {
+            // A PII or governance policy block is NOT a router failure to
+            // degrade around — the router refused to route to any provider
+            // that meets the privacy bar / admin policy. Degrading to
+            // primary-only could serve a provider the policy rules out,
+            // defeating it. Rethrow so the plan surfaces the block honestly.
+            if (err instanceof PIIPolicyError || err instanceof GovernancePolicyError) throw err;
             // Best-effort — a router failure must never break the plan walk;
             // primary-only is the graceful degradation.
           }
