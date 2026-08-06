@@ -346,6 +346,34 @@ export interface RoutingInsights {
    * older server won't send this, so the panel hides the card when absent.
    */
   retrieval?: RetrievalInsights;
+  /**
+   * Admin governance policy (P6 M6.5) — the allow/deny + cap rules the Auto
+   * router enforces as hard constraints (mirrors `buff admin policy`).
+   * Optional: an older server won't send it, so the panel hides the card.
+   */
+  governance?: GovernanceInsights;
+  updatedAt: number;
+}
+
+/**
+ * Admin governance policy (P6 M6.5) — the exact `routing.governance` the
+ * auto-router enforces as hard constraints on every pick (violating providers
+ * are ELIMINATED, never just scored lower). Mirrors `buff admin policy`.
+ */
+export interface GovernanceInsights {
+  /** True when any rule is active; false = fully permissive. */
+  enabled: boolean;
+  allowProviders?: string[];
+  denyProviders?: string[];
+  allowModels?: string[];
+  denyModels?: string[];
+  /** Admin hard max cost per call (USD) — joins routing.maxCostUsd (stricter wins). */
+  maxCostUsd?: number;
+  /** Min privacy score (0-1) required when a PII pattern matches (default 1.0). */
+  minPrivacyForPii?: number;
+  piiPatterns?: string[];
+  /** Whether `buff models unblock` may override REGISTRY-learned blocks. */
+  allowUnblock?: boolean;
   updatedAt: number;
 }
 

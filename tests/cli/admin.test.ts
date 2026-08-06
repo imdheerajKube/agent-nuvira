@@ -7,10 +7,44 @@
  */
 
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
+import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { Command } from 'commander';
 
 import { AdminCommand } from '../../src/cli/admin.js';
 import type { BuffConfig, GovernanceConfig } from '../../src/config/types.js';
+
+// ─── Hermetic RBAC dir (the admin command's RbacManager reads BUFF_CONFIG_DIR) ─
+
+let rbacDir: string;
+let originalConfigDir: string | undefined;
+let originalActAs: string | undefined;
+
+/** Point BUFF_CONFIG_DIR at a fresh temp dir so RBAC state is hermetic. */
+function setupRbacDir(): void {
+  rbacDir = mkdtempSync(join(tmpdir(), 'buff-admin-rbac-'));
+  originalConfigDir = process.env.BUFF_CONFIG_DIR;
+  process.env.BUFF_CONFIG_DIR = rbacDir;
+  originalActAs = process.env.BUFF_ACT_AS;
+  delete process.env.BUFF_ACT_AS; // legacy mode by default
+}
+
+function teardownRbacDir(): void {
+  if (originalConfigDir === undefined) delete process.env.BUFF_CONFIG_DIR;
+  else process.env.BUFF_CONFIG_DIR = originalConfigDir;
+  if (originalActAs === undefined) delete process.env.BUFF_ACT_AS;
+  else process.env.BUFF_ACT_AS = originalActAs;
+  rmSync(rbacDir, { recursive: true, force: true });
+}
+
+/** Pre-seed a role assignment so the command exits legacy mode. */
+function seedRole(user: string, role: string): void {
+  writeFileSync(join(rbacDir, 'rbac.json'), JSON.stringify({
+    version: 1,
+    users: { [user]: { role, addedAt: Date.now(), via: 'local' } },
+  }), 'utf-8');
+}
 
 // ─── Test helpers ───────────────────────────────────────────────────────────
 
@@ -51,10 +85,12 @@ describe('AdminCommand — allow/deny lists (P6 M6.5)', () => {
     vi.spyOn(console, 'log').mockImplementation(() => {});
     vi.spyOn(console, 'error').mockImplementation(() => {});
     vi.spyOn(console, 'warn').mockImplementation(() => {});
+    setupRbacDir(); // empty → legacy single-user mode (writes allowed)
   });
 
   afterEach(() => {
     vi.restoreAllMocks();
+    teardownRbacDir();
   });
 
   it('allow adds providers to governance.allowProviders (deduped, merged with existing)', () => {
@@ -132,10 +168,12 @@ describe('AdminCommand — policy renderer', () => {
   beforeEach(() => {
     saved = null;
     configState = { defaultProvider: 'local', providers: {} } as BuffConfig;
+    setupRbacDir(); // legacy mode → policy read is always allowed
   });
 
   afterEach(() => {
     vi.restoreAllMocks();
+    teardownRbacDir();
   });
 
   it('reports a fully permissive policy when no rules are set', () => {
@@ -174,5 +212,86 @@ describe('AdminCommand — policy renderer', () => {
     expect(jsonCall).toBeTruthy();
     const parsed = JSON.parse(String(jsonCall![0]));
     expect(parsed.governance.allowProviders).toEqual(['groq', 'local']);
+  });
+});
+
+describe('AdminCommand — RBAC gating (P6 M6.1)', () => {
+  beforeEach(() => {
+    saved = null;
+    configState = { defaultProvider: 'local', providers: {} } as BuffConfig;
+    vi.spyOn(console, 'log').mockImplementation(() => {});
+    vi.spyOn(console, 'error').mockImplementation(() => {});
+    vi.spyOn(console, 'warn').mockImplementation(() => {});
+    setupRbacDir();
+  });
+
+  afterEach(() => {
+    vi.restoreAllMocks();
+    teardownRbacDir();
+  });
+
+  it('legacy mode (no roles) allows policy writes', () => {
+    const cmd = makeCommand();
+    run(cmd, ['allow', 'groq']);
+    expect(gov().allowProviders).toEqual(['groq']);
+  });
+
+  it('blocks policy writes for a viewer and logs an RbacError', () => {
+    seedRole('alice', 'viewer');
+    process.env.BUFF_ACT_AS = 'alice';
+    const errSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
+    const cmd = makeCommand();
+    run(cmd, ['allow', 'groq']);
+    // The write was rejected — no governance payload saved.
+    expect(gov().allowProviders).toBeUndefined();
+    expect(errSpy.mock.calls.some((c) => c.join(' ').includes('Access denied'))).toBe(true);
+  });
+
+  it('allows policy writes for an admin', () => {
+    seedRole('alice', 'admin');
+    process.env.BUFF_ACT_AS = 'alice';
+    const cmd = makeCommand();
+    run(cmd, ['allow', 'groq']);
+    expect(gov().allowProviders).toEqual(['groq']);
+  });
+
+  it('policy read stays open to every role', () => {
+    seedRole('alice', 'viewer');
+    process.env.BUFF_ACT_AS = 'alice';
+    const cmd = makeCommand();
+    run(cmd, ['policy']); // must not throw / log an access error
+    expect(gov()).toEqual({});
+  });
+
+  it('role add works in legacy mode (first assignment exits legacy)', () => {
+    const cmd = makeCommand();
+    run(cmd, ['role', 'add', 'bob', 'operator']);
+    const rbacFile = join(rbacDir, 'rbac.json');
+    const raw = JSON.parse(require('node:fs').readFileSync(rbacFile, 'utf-8'));
+    expect(raw.users.bob.role).toBe('operator');
+  });
+
+  it('blocks role management for a non-admin', () => {
+    seedRole('bob', 'operator');
+    process.env.BUFF_ACT_AS = 'bob';
+    const errSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
+    const cmd = makeCommand();
+    run(cmd, ['role', 'add', 'mallory', 'viewer']);
+    expect(errSpy.mock.calls.some((c) => c.join(' ').includes('Access denied'))).toBe(true);
+    // mallory was NOT added.
+    const raw = JSON.parse(require('node:fs').readFileSync(join(rbacDir, 'rbac.json'), 'utf-8'));
+    expect(raw.users.mallory).toBeUndefined();
+  });
+
+  it('whoami reports the acting identity and role', () => {
+    seedRole('alice', 'admin');
+    process.env.BUFF_ACT_AS = 'alice';
+    const logSpy = vi.spyOn(console, 'log').mockImplementation(() => {});
+    const cmd = makeCommand();
+    run(cmd, ['whoami']);
+    const out = logSpy.mock.calls.map((c) => c.join(' ')).join('\n');
+    expect(out).toContain('alice');
+    expect(out).toContain('admin');
+    expect(out).toContain('policy.write');
   });
 });

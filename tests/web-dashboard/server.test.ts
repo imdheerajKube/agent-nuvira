@@ -1020,6 +1020,48 @@ describe('Dashboard Server', () => {
       writeDefaultFixtures();
     });
 
+    it('GET /api/routing surfaces the admin governance policy (P6 M6.5)', async () => {
+      // readGovernanceData reads routing.governance from the mocked homedir's
+      // buffconfig.json — the SAME file `buff admin` writes.
+      const configPath = join(testDir, '.buff', 'buffconfig.json');
+      try {
+        writeFileSync(configPath, JSON.stringify({
+          defaultProvider: 'local',
+          routing: {
+            governance: {
+              allowProviders: ['groq', 'local'],
+              denyProviders: ['gemini'],
+              maxCostUsd: 0.01,
+              allowUnblock: false,
+            },
+          },
+        }), 'utf-8');
+
+        const res = await httpGet(`${baseUrl}/api/routing`);
+        expect(res.statusCode).toBe(200);
+        const body = JSON.parse(res.body);
+
+        expect(body.governance).toBeDefined();
+        expect(body.governance.enabled).toBe(true);
+        expect(body.governance.allowProviders).toEqual(['groq', 'local']);
+        expect(body.governance.denyProviders).toEqual(['gemini']);
+        expect(body.governance.maxCostUsd).toBe(0.01);
+        expect(body.governance.allowUnblock).toBe(false);
+        expect(typeof body.governance.updatedAt).toBe('number');
+      } finally {
+        try { rmSync(configPath, { force: true }); } catch { /* ignore */ }
+      }
+    });
+
+    it('GET /api/routing reports a fully permissive governance policy when unset', async () => {
+      const configPath = join(testDir, '.buff', 'buffconfig.json');
+      try { rmSync(configPath, { force: true }); } catch { /* ignore */ }
+      const res = await httpGet(`${baseUrl}/api/routing`);
+      const body = JSON.parse(res.body);
+      expect(body.governance).toBeDefined();
+      expect(body.governance.enabled).toBe(false);
+    });
+
     it('GET /api/routing returns bandit state when a router-bandit fixture exists', async () => {
       writeFixture('router-bandit', {
         version: 1,

@@ -1,6 +1,6 @@
 import type { ReactNode } from 'react';
 import RoutingWalkthroughSection from './RoutingWalkthrough';
-import type { BanditInsights, DashboardData, PromotionInsights, QuotaInsights, RetrievalInsights, RoutingHistoryEntry, RoutingInsights, RoutingUsage } from '../types';
+import type { BanditInsights, DashboardData, GovernanceInsights, PromotionInsights, QuotaInsights, RetrievalInsights, RoutingHistoryEntry, RoutingInsights, RoutingUsage } from '../types';
 
 // ─── Helpers ────────────────────────────────────────────────────────────────
 
@@ -911,6 +911,85 @@ function QuotaSection({ quota }: { quota: QuotaInsights }) {
 
 // ─── Main Component ─────────────────────────────────────────────────────────
 
+// ─── Admin Governance Policy (P6 M6.5) ─────────────────────────────────────
+// The allow/deny + cap rules the Auto router enforces as HARD constraints on
+// every pick — mirrored from `buff admin policy` so policy is visible exactly
+// where routing decisions are made (violating providers are eliminated, never
+// just scored lower).
+
+function RuleChip({ ok, children }: { ok?: boolean; children: ReactNode }) {
+  return (
+    <span style={{
+      display: 'inline-flex', alignItems: 'center', gap: 5,
+      fontSize: 11, padding: '3px 9px', borderRadius: 8,
+      background: ok === false ? '#2d1616' : '#12291a',
+      border: `1px solid ${ok === false ? '#f85149' : '#238636'}`,
+      color: ok === false ? '#f85149' : '#3fb950',
+      whiteSpace: 'nowrap' as const,
+    }}>
+      {children}
+    </span>
+  );
+}
+
+export function GovernanceSection({ governance }: { governance: GovernanceInsights }) {
+  if (!governance.enabled) {
+    return (
+      <SectionCard
+        icon="⚖️"
+        title="Admin Governance Policy"
+        subtitle="Hard-constraint rules the Auto router enforces on every pick"
+      >
+        <div style={{ fontSize: 13, color: '#8b949e' }}>
+          <span style={{ color: '#3fb950' }}>Fully permissive</span> — no governance rules active; any provider × model is eligible.
+          <div style={{ marginTop: 6, fontSize: 12, color: '#6e7681' }}>
+            Add rules with <code style={{ color: '#58a6ff' }}>buff admin allow &lt;provider&gt;</code> ·{' '}
+            <code style={{ color: '#58a6ff' }}>buff admin deny &lt;provider&gt;</code> ·{' '}
+            <code style={{ color: '#58a6ff' }}>buff admin max-cost &lt;usd&gt;</code>
+          </div>
+        </div>
+      </SectionCard>
+    );
+  }
+
+  const rules: Array<{ label: string; items: string[]; deny?: boolean }> = [];
+  if (governance.allowProviders?.length) rules.push({ label: 'allow providers', items: governance.allowProviders });
+  if (governance.denyProviders?.length) rules.push({ label: 'deny providers', items: governance.denyProviders, deny: true });
+  if (governance.allowModels?.length) rules.push({ label: 'allow models', items: governance.allowModels });
+  if (governance.denyModels?.length) rules.push({ label: 'deny models', items: governance.denyModels, deny: true });
+  const extras: string[] = [];
+  if (governance.maxCostUsd !== undefined) extras.push(`max cost $${governance.maxCostUsd}`);
+  if (governance.minPrivacyForPii !== undefined && governance.minPrivacyForPii < 1) {
+    extras.push(`PII min privacy ${governance.minPrivacyForPii}`);
+  }
+  if (governance.piiPatterns?.length) extras.push(`PII guard (${governance.piiPatterns.length} patterns)`);
+  if (governance.allowUnblock === false) extras.push('unblock admin-hard');
+
+  return (
+    <SectionCard
+      icon="⚖️"
+      title="Admin Governance Policy"
+      subtitle="Hard-constraint rules — violating providers are eliminated, never just scored lower"
+    >
+      <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6, marginBottom: 10 }}>
+        {rules.map((r) => (
+          <RuleChip key={r.label} ok={!r.deny}>
+            {r.deny ? '⛔' : '✅'} {r.label}: {r.items.join(', ')}
+          </RuleChip>
+        ))}
+        {extras.map((e) => <RuleChip key={e}>{e}</RuleChip>)}
+        {rules.length === 0 && extras.length === 0 && (
+          <RuleChip ok={false}>policy configured but no rules active</RuleChip>
+        )}
+      </div>
+      <div style={{ fontSize: 12, color: '#6e7681' }}>
+        Managed via <code style={{ color: '#58a6ff' }}>buff admin</code> — the same policy the CLI&rsquo;s{' '}
+        <code>model explain</code> surfaces as governance-blocked.
+      </div>
+    </SectionCard>
+  );
+}
+
 export default function RoutingInsightsPanel({ data }: { data: DashboardData | null }) {
   const routing = data?.routing;
   const hasAny =
@@ -924,6 +1003,7 @@ export default function RoutingInsightsPanel({ data }: { data: DashboardData | n
   const hasPromotion = !!routing?.promotion?.decisionCount;
   const hasQuota = !!routing?.quota?.enabled;
   const hasRetrieval = !!routing?.retrieval?.enabled || !!routing?.retrieval?.repoChunks;
+  const hasGovernance = !!routing?.governance;
 
   return (
     <>
@@ -934,11 +1014,12 @@ export default function RoutingInsightsPanel({ data }: { data: DashboardData | n
         <code>buff benchmark</code> and use Auto routing to build this up over time.
       </p>
 
-      {!hasAny && !hasUsage && !hasHistory && !hasBandit && !hasPromotion && !hasQuota && !hasRetrieval ? (
+      {!hasAny && !hasUsage && !hasHistory && !hasBandit && !hasPromotion && !hasQuota && !hasRetrieval && !hasGovernance ? (
         <EmptyNote />
       ) : (
         <>
           {hasWalkthrough && routing && <RoutingWalkthroughSection routing={routing} />}
+          {hasGovernance && routing!.governance && <GovernanceSection governance={routing!.governance} />}
           {hasUsage && <UsageSection usage={routing!.usage!} />}
           {hasHistory && <AuditTimelineSection history={routing!.history!} />}
           {hasBandit && <BanditSection bandit={routing!.bandit!} />}

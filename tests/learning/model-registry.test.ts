@@ -822,6 +822,29 @@ describe('ModelRegistry — partialRate history (healing sparkline data)', () =>
     expect(history[history.length - 1].rate).toBeGreaterThan(history[0].rate);
   });
 
+  it('formatStatus surfaces the flakiness trend (worsening then healing)', async () => {
+    const registry = new ModelRegistry();
+    registry.markVerified('groq', 'llama-3.3-70b-versatile', 'spot-check');
+
+    // Two mid-stream interruptions → EMA climbs → "worsening".
+    registry.recordPartial('groq', 'llama-3.3-70b-versatile', 'chat', 'timeout');
+    registry.recordPartial('groq', 'llama-3.3-70b-versatile', 'chat', 'server');
+    let status = await registry.formatStatus();
+    expect(status).toContain('⏸ flaky');
+    expect(status).toContain('worsening');
+
+    // Two clean completions decay the EMA (0.4375 → 0.2375) below its FIRST
+    // history sample (0.25) → "healing", while the signal survives (> 0).
+    // (Five decays would fully heal it to 0 — a clean model shows no chip.)
+    for (let i = 0; i < 2; i++) {
+      registry.recordCall('groq', 'llama-3.3-70b-versatile', true, undefined, 'chat');
+    }
+    status = await registry.formatStatus();
+    expect(status).toContain('healing');
+    // The signal was decayed, never wiped.
+    expect(status).toContain('⏸ flaky');
+  });
+
   it('persists partialHistory across a restart (mirror write survives reload)', () => {
     const registry = new ModelRegistry();
     registry.markVerified('groq', 'llama-3.3-70b-versatile', 'spot-check');

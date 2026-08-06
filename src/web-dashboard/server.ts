@@ -1554,6 +1554,10 @@ function readRoutingInsights(): Record<string, unknown> {
     promotion: readPromotionData(),
     quota: readQuotaData(),
     retrieval: readRetrievalData(),
+    // P6 M6.5: the admin governance policy the router enforces as hard
+    // constraints — surfaced so the dashboard shows policy where routing
+    // decisions are made (mirrors `buff admin policy`).
+    governance: readGovernanceData(),
     updatedAt: Date.now(),
   };
 }
@@ -1624,6 +1628,30 @@ function readRetrievalData(): Record<string, unknown> {
     dimensions,
     updatedAt: Date.now(),
   };
+}
+
+/**
+ * Read the admin governance policy (routing.governance from buffconfig.json)
+ * — the exact policy `buff admin` writes and the auto-router enforces as hard
+ * constraints. Always returns a shaped payload: `enabled: false` when empty
+ * (fully permissive) so the dashboard can render the policy card either way.
+ */
+function readGovernanceData(): Record<string, unknown> {
+  try {
+    const configPath = join(homedir(), '.buff', 'buffconfig.json');
+    if (!existsSync(configPath)) return { enabled: false, updatedAt: Date.now() };
+    const config = JSON.parse(readFileSync(configPath, 'utf-8')) as {
+      routing?: { governance?: Record<string, unknown> };
+    };
+    const gov = config?.routing?.governance || {};
+    return {
+      enabled: Object.keys(gov).length > 0,
+      ...gov,
+      updatedAt: Date.now(),
+    };
+  } catch {
+    return { enabled: false, updatedAt: Date.now() };
+  }
 }
 
 /**
