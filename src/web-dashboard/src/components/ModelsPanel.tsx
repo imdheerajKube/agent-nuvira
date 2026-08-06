@@ -16,6 +16,101 @@ const STATUS_STYLES: Record<ModelStatus, { bg: string; text: string; dot: string
 
 const COL_OPTIONS = [3, 4, 5] as const;
 
+// ─── Resilient fetch helpers ────────────────────────────────────────────────
+// The Models page must never die to a single transient network hiccup (browser
+// socket-pool contention with the SSE feed, tab throttling, a slow provider
+// probe, an IPv4/IPv6 race on `localhost`). Each fetch gets a hard
+// AbortController timeout, the two endpoints are fetched INDEPENDENTLY (a
+// failure on one must never hide the other), and network-level failures
+// auto-retry with backoff before the panel ever shows an error.
+
+/** Hard ceiling for one fetch — the server probes providers with a 5s budget. */
+const FETCH_TIMEOUT_MS = 12_000;
+/** Backoff before retrying a TRANSIENT (network-level) failure. */
+const RETRY_BACKOFF_MS = [300, 700];
+/** Healthy auto-refresh cadence. */
+const POLL_INTERVAL_MS = 60_000;
+/** After a failed load, re-poll this quickly so the panel self-heals. */
+const FAILED_REPOLL_MS = 5_000;
+
+function sleep(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+async function fetchWithTimeout(url: string, timeoutMs: number): Promise<Response> {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), timeoutMs);
+  try {
+    return await fetch(url, { signal: controller.signal });
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+function isTransientNetworkError(err: unknown): boolean {
+  // TypeError("Failed to fetch") or an AbortError (a DOMException in browsers,
+  // a plain Error with name 'AbortError' in Node/undici) means the server never
+  // answered — a transient hiccup worth retrying. HTTP errors / parse failures
+  // are definitive (the server answered) and are NOT retried.
+  return err instanceof TypeError
+    || (err instanceof Error && err.name === 'AbortError');
+}
+
+/**
+ * GET /api/models with timeout + retry. Throws after retries are exhausted.
+ * `onTransient` fires whenever a network-level (transient) failure occurred,
+ * so the caller can trigger a fast self-healing re-poll. Returns the parsed
+ * health payload, or throws "unexpected response" if the server answered with
+ * something that isn't a health payload (stale server — definitive, no retry).
+ */
+async function fetchHealthWithRetry(onTransient?: () => void): Promise<ModelsHealthData> {
+  let lastStatus: number | null = null;
+  let sawTransient = false;
+  for (let attempt = 0; ; attempt++) {
+    try {
+      const res = await fetchWithTimeout('/api/models', FETCH_TIMEOUT_MS);
+      if (!res.ok) {
+        lastStatus = res.status;
+      } else {
+        const data = await parseJsonOrNull(res) as ModelsHealthData | null;
+        if (data && Array.isArray(data.providers)) return data;
+        // Answered, but not a health payload → stale/incompatible dashboard server.
+        throw new Error('Model health endpoint returned an unexpected response — is the dashboard server up to date?');
+      }
+    } catch (err) {
+      if (!isTransientNetworkError(err)) throw err;
+      sawTransient = true;
+      onTransient?.();
+    }
+    if (attempt >= RETRY_BACKOFF_MS.length) {
+      throw new Error(
+        sawTransient
+          ? 'Dashboard server unreachable — is it still running? Retrying automatically…'
+          : `Model health endpoint failed (HTTP ${lastStatus})`,
+      );
+    }
+    await sleep(RETRY_BACKOFF_MS[attempt]);
+  }
+}
+
+/**
+ * GET /api/model-registry, best-effort: null on ANY failure, never throws.
+ * Retries a transient network failure once; onTransient lets the caller
+ * schedule a fast re-poll so the optional section self-heals quickly too.
+ */
+async function fetchRegistryBestEffort(onTransient?: () => void): Promise<ModelRegistryInsights | null> {
+  for (let attempt = 0; ; attempt++) {
+    try {
+      const res = await fetchWithTimeout('/api/model-registry', FETCH_TIMEOUT_MS);
+      if (!res.ok) return null;
+      return await parseJsonOrNull(res) as ModelRegistryInsights | null;
+    } catch (err) {
+      if (!isTransientNetworkError(err) || attempt >= 1) return null;
+      onTransient?.();
+    }
+  }
+}
+
 // ─── Helpers ────────────────────────────────────────────────────────────────
 
 function getStatusLabel(status: ModelStatus): string {
@@ -1306,32 +1401,44 @@ export default function ModelsPanel() {
   const [colsPerRow, setColsPerRow] = useState(4);
   const [searchQuery, setSearchQuery] = useState('');
   const mountedRef = useRef(true);
+  const retryTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  // True when the LAST load hit a transient (network-level) failure — used to
+  // decide whether a fast self-healing re-poll is warranted. Definitive errors
+  // (stale server, persistent HTTP 5xx) fall back to the 60s cadence instead.
+  const transientFailureRef = useRef(false);
+
+  function scheduleRepoll() {
+    if (retryTimerRef.current) clearTimeout(retryTimerRef.current);
+    retryTimerRef.current = setTimeout(() => {
+      if (mountedRef.current) fetchModels();
+    }, FAILED_REPOLL_MS);
+  }
 
   async function fetchModels() {
     setLoading(true);
     setError(null);
+    transientFailureRef.current = false;
     try {
-      const [modelsRes, registryRes] = await Promise.all([
-        fetch('/api/models'),
-        fetch('/api/model-registry'),
+      // Health is REQUIRED (throws after retries); registry/telemetry are
+      // OPTIONAL — an older server (or a plain 404) must hide those sections,
+      // never break the health grid.
+      const [data, registry] = await Promise.all([
+        fetchHealthWithRetry(() => { transientFailureRef.current = true; }),
+        fetchRegistryBestEffort(() => { transientFailureRef.current = true; }),
       ]);
       if (!mountedRef.current) return;
-      if (!modelsRes.ok) throw new Error(`Model health endpoint failed (HTTP ${modelsRes.status})`);
-      const data = await parseJsonOrNull(modelsRes) as ModelsHealthData | null;
-      if (!data || !Array.isArray(data.providers)) {
-        throw new Error('Model health endpoint returned an unexpected response — is the dashboard server up to date?');
-      }
-      // Registry/telemetry are OPTIONAL: an older server (or a plain 404) must
-      // hide those sections, never break the health grid.
-      const registry = await parseJsonOrNull(registryRes) as ModelRegistryInsights | null;
-      if (mountedRef.current) {
-        setModelsData(data);
-        setRegistryData(registry);
-      }
+      setModelsData(data);
+      setRegistryData(registry);
+      // Recovered from a transient blip (or the optional registry flapped) —
+      // re-check shortly so the panel settles into the fresh state.
+      if (transientFailureRef.current) scheduleRepoll();
     } catch (err) {
-      if (mountedRef.current) {
-        setError(err instanceof Error ? err.message : 'Failed to fetch model status');
-      }
+      if (!mountedRef.current) return;
+      setError(err instanceof Error && err.message ? err.message : 'Failed to fetch model status');
+      // Self-heal only on TRANSIENT failures: re-poll quickly instead of
+      // waiting the full 60s cadence. Definitive errors (stale server, hard
+      // HTTP failures) are NOT hammered — they wait for the next poll.
+      if (transientFailureRef.current) scheduleRepoll();
     } finally {
       if (mountedRef.current) setLoading(false);
     }
@@ -1340,10 +1447,11 @@ export default function ModelsPanel() {
   useEffect(() => {
     mountedRef.current = true;
     fetchModels();
-    const interval = setInterval(fetchModels, 60_000);
+    const interval = setInterval(fetchModels, POLL_INTERVAL_MS);
     return () => {
       mountedRef.current = false;
       clearInterval(interval);
+      if (retryTimerRef.current) clearTimeout(retryTimerRef.current);
     };
   }, []);
 
