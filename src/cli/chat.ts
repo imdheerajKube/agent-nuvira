@@ -29,6 +29,7 @@ import { recordRoutingDecision } from '../learning/routing-history.js';
 import { shouldConfirmFailover, promptFailoverChoice } from './failover-prompt.js';
 import { runSingleShotAuto } from './failover-runner.js';
 import { buildContinuationNote, isPartialFailure } from '../learning/continuation.js';
+import { compressLossless } from '../learning/compression.js';
 
 // ─── Error Recovery Types ───────────────────────────────────────────────────
 
@@ -512,7 +513,27 @@ export class ChatCommand extends BaseCommand {
       }
 
       const context = new ContextParser().parseFromString(contextStr, 'chat');
-      const fullPrompt = ContextParser.formatContext(context);
+      let fullPrompt = ContextParser.formatContext(context);
+
+      // M4.4 conservative compression (lossless-for-code, OFF by default).
+      // When routing.compression.enabled is true, long PROSE is elided
+      // middle-out; fenced code blocks are preserved byte-identical, so
+      // identifiers/strings/symbols always survive. Off = pure pass-through.
+      const compressionCfg = this.configManager.getAll().routing?.compression;
+      if (compressionCfg?.enabled) {
+        const compressed = compressLossless(fullPrompt, {
+          enabled: true,
+          keepRatio: compressionCfg.keepRatio,
+          minProseChars: compressionCfg.minProseChars,
+        });
+        if (compressed.elided) {
+          logger.debug(
+            `   M4.4 compression: ${compressed.originalTokens} → ${compressed.compressedTokens} tokens` +
+              ` (${compressed.proseCharsRemoved} prose chars elided, ${compressed.codeBlocks} code block(s) preserved verbatim)`,
+          );
+          fullPrompt = compressed.text;
+        }
+      }
 
       // ── Generation retry loop ────────────────────────────────────
       // Wraps both streaming and non-streaming paths with error recovery.
@@ -620,6 +641,18 @@ export class ChatCommand extends BaseCommand {
                   ) {
                     continuationUsed = true;
                     continuationNote = buildContinuationNote(fullPrompt, streamedChunks.join(''));
+                    // P4 M4.4: learn the mid-stream interruption as a `partial`
+                    // telemetry event — the provider STARTED streaming but
+                    // couldn't finish, which is a distinct flakiness signal for
+                    // the router (a clean error is NOT the same as a started-
+                    // but-died mid-stream). Best-effort (never throws).
+                    getModelRegistry().recordPartial(
+                      type,
+                      effectiveModel,
+                      'chat',
+                      classifyFallbackError(err),
+                      streamedChunks.length,
+                    );
                     logger.warn('   🔁 Mid-stream interruption — continuing on the next provider instead of restarting');
                   }
                   type = next.type;

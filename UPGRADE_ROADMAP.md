@@ -1710,5 +1710,67 @@ buff model list --provider nuvira
 
 ---
 
-*Last updated: August 2026 — Phases 1–3: 25/25 completed · Phase 4: 6/6 completed (all items ✅) · P5 sidecar + P4 resilience core (v1.58.4)*
+## 🧰 Upgrade Guide & Migration Notes (P7 M7.2)
+
+> Covers the migration path across shipped capability phases (P2–P5) so teams
+> upgrading from earlier releases know exactly what changed, what is safe to
+> turn on, and what needs a decision before upgrading. Feature-flag-off-by-
+> default is the rule: nothing here changes behavior until you opt in.
+
+### How to upgrade (all versions)
+
+1. **Back up state** — `~/.buff/` holds config + learned memory:
+   ```bash
+   cp -r ~/.buff ~/.buff.bak
+   ```
+2. **Install the new CLI version:** `npm install -g agent-nuvira@latest`
+   (or the pinned version you standardize on).
+3. **Verify** — `agent-nuvira --version` and `agent-nuvira doctor` should both
+   report clean.
+4. **Re-check learned state:** the model registry / quota ledger / bandit data
+   files are additive and forward-compatible — old state always loads
+   (cross-cutting requirement #2). No migration scripts are required for any
+   release in this guide.
+
+### Migration notes by capability
+
+| Capability (shipped) | Since | Behavior change | Migration action needed?
+|---|---|---|---|
+| **Auto routing (bandit, quota, governance, context fit, capability fit)** | v1.51.0+ | Auto mode scores providers by learned data + hard constraints; quota parks exhausted providers predictively | **No** — off by default (`routing.bandit`); old `routing.*` keys now PERSIST across reloads (fixed v1.58.6) |
+| **Nuvira sidecar interop** | v1.58.4 | `nuvira` provider joins the router universe (neutral profile, keyless loopback gateway); compose profile + `doctor --nuvira` | **Opt-in** — `routing.nuviraSidecar.enabled` (default **false**); gateway is optional |
+| **Mid-stream resilience (continuation / reasoning-replay / context-relay)** | v1.58.4 | Chat auto-failover continues mid-stream instead of restarting; reasoning deltas cached per conversation | **No** — automatic; bounded to 1 continuation/message |
+| **Conservative compression (M4.4)** | v1.58.7 | Prose elided middle-out; **code blocks preserved byte-identical** (lossless-for-code, property-tested) | **Opt-in** — `routing.compression.enabled` (default **false**); warning: elided narration is dropped for the model |
+| **`partial` mid-stream telemetry** | v1.58.7 | Registry learns started-but-died providers as a distinct signal (dashboard `partial` chips) | **No** — automatic; never flips availability |
+| **`doctor --enterprise`** | v1.58.7 | Self-check: gateway health, secrets backend, audit integrity, RBAC policy presence | **No** — read-only diagnostic; missing optional config is a warn, not a fail |
+
+### Key decisions before upgrading
+
+1. **Do you route through a self-hosted gateway (P5)?** If yes: run
+   `docker compose -f docker-compose.nuvira.yml up -d`, set
+   `providers.nuvira.baseUrl` (+ `apiKey` for auth-token gateways), and enable
+   `routing.nuviraSidecar.enabled`. If no: ignore — everything stays off.
+2. **Do you want conservative compression (M4.4)?** It saves tokens on long
+   prose-heavy prompts but ELIDES prose the model never sees. Code is never
+   affected. Start with the default off; enable per-workload and measure
+   answer quality before making it a team default.
+3. **Plaintext API keys?** Prefer env vars / `~/.buff/.env` over keys in
+   `buffconfig.json`. `doctor --enterprise` flags plaintext keys (P7 security
+   default).
+4. **Admin policy (RBAC)?** Set `routing.governance.allowProviders` (etc.) to
+   constrain what Auto routing may pick. Unset = fully permissive (unchanged
+   behavior).
+
+### Rollback
+
+- **CLI:** `npm install -g agent-nuvira@<previous-version>` — state files are
+  forward-compatible, so downgrading is safe (newer keys are ignored).
+- **Sidecar:** `docker compose -f docker-compose.nuvira.yml down` and set
+  `routing.nuviraSidecar.enabled false`.
+- **Compression:** `agent-nuvira config set routing.compression.enabled false`.
+- Learned files (`model-registry.json`, `quota-ledger.json`, `router-bandit.json`)
+  can be deleted to reset learning; they are rebuilt from real usage.
+
+---
+
+*Last updated: August 2026 — Phases 1–3: 25/25 completed · Phase 4: 6/6 completed (all items ✅) · P5 sidecar + P4 resilience core (v1.58.4) · M4.4 compression + `partial` telemetry + doctor --enterprise (v1.58.7)*
 *Author: Dheeraj Sharma*

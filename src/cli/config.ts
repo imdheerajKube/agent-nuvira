@@ -162,7 +162,7 @@ export class ConfigCommand extends BaseCommand {
       if (key === 'defaultProvider') {
         this.configManager.save({ defaultProvider: value as ProviderType });
       } else {
-        logger.error(`Unknown config key: ${key}. Expected formats:\n  defaultProvider\n  providers.<name>.<field>\n  providers.<name>.apiKeys "k1,k2"  (M2.3 multi-account rotation)\n  pricing.<provider>.inputPer1K\n  pricing.<provider>.outputPer1K\n  history.retentionDays\n  history.semanticSearch\n  fallback.enabled\n  fallback.providers\n  routing.bandit\n  routing.allowPaid\n  routing.quota.<provider>.requestsPerWindow\n  routing.governance.allowProviders "groq,local"  (M2.4 admin policy)\n  routing.contextWindows.<model> 16384  (M2.5 context preflight)\n  routing.nuviraSidecar.enabled  (P5 sidecar flag, default false)`);
+        logger.error(`Unknown config key: ${key}. Expected formats:\n  defaultProvider\n  providers.<name>.<field>\n  providers.<name>.apiKeys "k1,k2"  (M2.3 multi-account rotation)\n  pricing.<provider>.inputPer1K\n  pricing.<provider>.outputPer1K\n  history.retentionDays\n  history.semanticSearch\n  fallback.enabled\n  fallback.providers\n  routing.bandit\n  routing.allowPaid\n  routing.quota.<provider>.requestsPerWindow\n  routing.governance.allowProviders "groq,local"  (M2.4 admin policy)\n  routing.contextWindows.<model> 16384  (M2.5 context preflight)\n  routing.nuviraSidecar.enabled  (P5 sidecar flag, default false)\n  routing.compression.enabled  (M4.4 conservative compression, default false)`);
         return;
       }
     } else if (parts.length === 2 && parts[0] === 'history') {
@@ -446,8 +446,50 @@ export class ConfigCommand extends BaseCommand {
         logger.error(`Unknown nuviraSidecar config key: ${field}. Valid keys: enabled, image`);
         return;
       }
+    } else if (parts.length === 3 && parts[0] === 'routing' && parts[1] === 'compression') {
+      // M4.4 — routing.compression.enabled (boolean, DEFAULT FALSE — lossless-
+      // for-code prose compression) | routing.compression.keepRatio (0.1–1) |
+      // routing.compression.minProseChars (positive int).
+      const field = parts[2];
+      const existing = config.routing?.compression || {};
+      if (field === 'enabled') {
+        const lower = value.trim().toLowerCase();
+        let typedValue: boolean;
+        if (lower === 'true' || lower === '1' || lower === 'yes') {
+          typedValue = true;
+        } else if (lower === 'false' || lower === '0' || lower === 'no') {
+          typedValue = false;
+        } else {
+          logger.error(`Invalid boolean value for ${key}: "${value}". Use true or false.`);
+          return;
+        }
+        this.configManager.save({
+          routing: { compression: { ...existing, enabled: typedValue } },
+        } as Partial<BuffConfig>);
+      } else if (field === 'keepRatio') {
+        const num = Number(value);
+        if (isNaN(num) || num < 0.1 || num > 1) {
+          logger.error(`Invalid keepRatio for ${key}: "${value}". Must be between 0.1 and 1 (fraction of prose kept).`);
+          return;
+        }
+        this.configManager.save({
+          routing: { compression: { ...existing, keepRatio: num } },
+        } as Partial<BuffConfig>);
+      } else if (field === 'minProseChars') {
+        const num = Number(value);
+        if (isNaN(num) || num <= 0 || !Number.isInteger(num)) {
+          logger.error(`Invalid minProseChars for ${key}: "${value}". Must be a positive integer (chars).`);
+          return;
+        }
+        this.configManager.save({
+          routing: { compression: { ...existing, minProseChars: num } },
+        } as Partial<BuffConfig>);
+      } else {
+        logger.error(`Unknown compression config key: ${field}. Valid keys: enabled, keepRatio, minProseChars`);
+        return;
+      }
     } else {
-      logger.error(`Invalid config key format: ${key}. Expected formats:\n  defaultProvider\n  providers.<name>.<field>\n  providers.<name>.apiKeys "k1,k2"\n  pricing.<provider>.inputPer1K\n  pricing.<provider>.outputPer1K\n  history.retentionDays\n  history.semanticSearch\n  fallback.enabled\n  fallback.providers\n  routing.bandit\n  routing.allowPaid\n  routing.quota.<provider>.requestsPerWindow\n  routing.governance.allowProviders "groq,local"\n  routing.nuviraSidecar.enabled`);
+      logger.error(`Invalid config key format: ${key}. Expected formats:\n  defaultProvider\n  providers.<name>.<field>\n  providers.<name>.apiKeys "k1,k2"\n  pricing.<provider>.inputPer1K\n  pricing.<provider>.outputPer1K\n  history.retentionDays\n  history.semanticSearch\n  fallback.enabled\n  fallback.providers\n  routing.bandit\n  routing.allowPaid\n  routing.quota.<provider>.requestsPerWindow\n  routing.governance.allowProviders "groq,local"\n  routing.nuviraSidecar.enabled\n  routing.compression.enabled  (M4.4, DEFAULT FALSE)`);
       return;
     }
 

@@ -9,6 +9,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.58.7] - 2026-08-06
+
+### Added
+
+- **M4.4 conservative compression** (`routing.compression.*`, off by default):
+  lossless-for-code prose elision — fenced code blocks are preserved
+  byte-identical (identifiers/strings/symbols always survive, property-tested),
+  only long prose is trimmed middle-out. `config set routing.compression.enabled`
+  to opt in.
+- **`partial` mid-stream telemetry**: the model registry now records providers
+  that STARTED streaming but died mid-stream as a distinct `partial` outcome
+  (aggregated per action + in the 14-day timeline; never flips availability).
+  Chat's auto-failover write-throughs the interruption.
+- **`buff doctor --enterprise`** (P7 M7.1): self-check for gateway health,
+  secrets backend (env vs plaintext keys), audit-trail integrity (JSONL), and
+  RBAC/governance policy presence. Missing optional config is informational.
+- **Upgrade guide + migration notes** (P7 M7.2) added to UPGRADE_ROADMAP.md.
+
 ## [1.58.6] - 2026-08-06
 
 ### Fixed

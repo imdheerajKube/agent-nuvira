@@ -11,8 +11,16 @@
 import { describe, it, expect, beforeAll, afterAll } from 'vitest';
 import { createServer, type Server } from 'node:http';
 import type { AddressInfo } from 'node:net';
+import { writeFileSync, mkdirSync, rmSync } from 'node:fs';
+import { join } from 'node:path';
 
-import { probeNuviraSidecar } from '../../src/cli/doctor.js';
+import {
+  probeNuviraSidecar,
+  auditJsonlIntegrity,
+  checkSecretsBackend,
+  buildEnterpriseChecks,
+} from '../../src/cli/doctor.js';
+import type { BuffConfig } from '../../src/config/types.js';
 
 // ─── Mock gateway-shaped server ─────────────────────────────────────────────
 
@@ -183,5 +191,110 @@ describe('doctor --nuvira sidecar probe (P5 M5.1)', () => {
     const authed = await probeNuviraSidecar(`http://127.0.0.1:${authPort}/v1`, 3000, 'prod-token');
     expect(authed.status).toBe('pass');
     expect(authed.modelCount).toBe(1);
+  });
+});
+
+// ─── P7 M7.1: enterprise self-check (pure helpers) ──────────────────────────
+
+describe('doctor --enterprise (P7 M7.1)', () => {
+  const baseConfig: BuffConfig = {
+    defaultProvider: 'local',
+    providers: {
+      local: { runner: 'ollama', model: 'llama2', temperature: 0.7, maxTokens: 4096 },
+    },
+  };
+
+  it('auditJsonlIntegrity counts valid lines and flags corrupt lines', () => {
+    const dir = '/tmp/buff-doctor-audit-test';
+    mkdirSync(dir, { recursive: true });
+    const good = join(dir, 'good.jsonl');
+    const bad = join(dir, 'bad.jsonl');
+    writeFileSync(good, '{"a":1}\n{"b":2}\n', 'utf-8');
+    writeFileSync(bad, '{"a":1}\n{corrupt\n{"b":2}\n', 'utf-8');
+    expect(auditJsonlIntegrity(good)).toEqual({ total: 2, corrupt: 0 });
+    expect(auditJsonlIntegrity(bad)).toEqual({ total: 3, corrupt: 1 });
+    expect(auditJsonlIntegrity(join(dir, 'missing.jsonl'))).toEqual({ total: 0, corrupt: 0 });
+    rmSync(dir, { recursive: true, force: true });
+  });
+
+  it('checkSecretsBackend warns when a key is in plaintext config (not env)', () => {
+    const cfg: BuffConfig = {
+      ...baseConfig,
+      providers: { ...baseConfig.providers, groq: { apiKey: 'gsk_plaintext_secret' } },
+    };
+    const result = checkSecretsBackend(cfg, {});
+    expect(result.status).toBe('warn');
+    expect(result.message).toContain('plaintext');
+  });
+
+  it('checkSecretsBackend passes when the key comes from the environment', () => {
+    const cfg: BuffConfig = {
+      ...baseConfig,
+      providers: { ...baseConfig.providers, groq: { apiKey: 'gsk_from_env' } },
+    };
+    const result = checkSecretsBackend(cfg, { GROQ_API_KEY: 'gsk_from_env' });
+    expect(result.status).toBe('pass');
+    expect(result.message).toContain('environment');
+  });
+
+  it('buildEnterpriseChecks: healthy gateway + clean audits + policy = all pass', () => {
+    const dir = '/tmp/buff-doctor-enterprise-test';
+    mkdirSync(dir, { recursive: true });
+    const events = join(dir, 'quota-events.jsonl');
+    const actions = join(dir, 'model-registry-actions.jsonl');
+    writeFileSync(events, '{"type":"parked"}\n', 'utf-8');
+    writeFileSync(actions, '{"outcome":"verified"}\n', 'utf-8');
+    const checks = buildEnterpriseChecks({
+      config: {
+        ...baseConfig,
+        routing: { governance: { allowProviders: ['groq', 'local'] } },
+      },
+      env: { GROQ_API_KEY: 'k' },
+      gatewayProbe: { status: 'pass', modelCount: 3, version: '1.2.3', baseUrl: 'http://127.0.0.1:20128/v1' },
+      gatewayConfigured: true,
+      auditFiles: [
+        { name: 'quota-events.jsonl', path: events },
+        { name: 'model-registry-actions.jsonl', path: actions },
+      ],
+    });
+    expect(checks.map((c) => c.status)).toEqual(['pass', 'pass', 'pass', 'pass', 'pass']);
+    rmSync(dir, { recursive: true, force: true });
+  });
+
+  it('buildEnterpriseChecks: unreachable gateway + corrupt audit = fail with informative details', () => {
+    const dir = '/tmp/buff-doctor-enterprise-bad';
+    mkdirSync(dir, { recursive: true });
+    const events = join(dir, 'quota-events.jsonl');
+    writeFileSync(events, '{corrupt-line\n', 'utf-8');
+    const checks = buildEnterpriseChecks({
+      config: baseConfig,
+      env: {},
+      gatewayProbe: { status: 'fail', modelCount: 0, version: null, baseUrl: 'http://127.0.0.1:1/v1', error: 'ECONNREFUSED' },
+      gatewayConfigured: true,
+      auditFiles: [{ name: 'quota-events.jsonl', path: events }],
+    });
+    const gateway = checks.find((c) => c.name === 'Gateway Health');
+    const audit = checks.find((c) => c.name.includes('Audit Integrity'));
+    expect(gateway?.status).toBe('fail');
+    expect(gateway?.fix).toContain('docker compose');
+    expect(audit?.status).toBe('fail');
+    expect(audit?.message).toContain('corrupt');
+    // Missing-config (RBAC) is INFORMATIVE — a warn, not a fail.
+    const rbac = checks.find((c) => c.name.includes('RBAC'));
+    expect(rbac?.status).toBe('warn');
+    rmSync(dir, { recursive: true, force: true });
+  });
+
+  it('buildEnterpriseChecks: unconfigured gateway is informative (warn), not a failure', () => {
+    const checks = buildEnterpriseChecks({
+      config: baseConfig,
+      env: {},
+      gatewayProbe: null,
+      gatewayConfigured: false,
+      auditFiles: [],
+    });
+    const gateway = checks.find((c) => c.name === 'Gateway Health');
+    expect(gateway?.status).toBe('warn');
+    expect(gateway?.message).toContain('not configured');
   });
 });

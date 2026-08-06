@@ -140,6 +140,29 @@ describe('ConfigCommand set — M2.4 governance policy', () => {
     expect(saved?.routing?.nuviraSidecar?.image).toBe('ghcr.io/berriai/litellm:main-stable');
   });
 
+  it('sets routing.compression.enabled as a boolean (M4.4, off by default)', () => {
+    const cmd = makeCommand();
+    runSet(cmd, 'routing.compression.enabled', 'true');
+    expect(saved?.routing?.compression?.enabled).toBe(true);
+  });
+
+  it('sets routing.compression.keepRatio + minProseChars as numbers (M4.4)', () => {
+    const cmd = makeCommand();
+    runSet(cmd, 'routing.compression.keepRatio', '0.4');
+    runSet(cmd, 'routing.compression.minProseChars', '1200');
+    expect(saved?.routing?.compression?.keepRatio).toBe(0.4);
+    expect(saved?.routing?.compression?.minProseChars).toBe(1200);
+  });
+
+  it('rejects an out-of-range compression keepRatio (M4.4 validation)', () => {
+    const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
+    const cmd = makeCommand();
+    runSet(cmd, 'routing.compression.keepRatio', '2.5');
+    expect(saved?.routing?.compression?.keepRatio).toBeUndefined();
+    expect(errorSpy).toHaveBeenCalled();
+    errorSpy.mockRestore();
+  });
+
   it('merges into existing governance config (additive)', () => {
     configState.routing = { governance: { allowProviders: ['groq'] } } as BuffConfig['routing'];
     const cmd = makeCommand();

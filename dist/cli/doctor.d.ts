@@ -20,6 +20,7 @@
  */
 import { Command } from 'commander';
 import { BaseCommand } from './commands.js';
+import type { BuffConfig } from '../config/types.js';
 export type HealthStatus = 'pass' | 'warn' | 'fail';
 export interface CheckResult {
     name: string;
@@ -71,6 +72,36 @@ export interface NuviraSidecarProbe {
  *                  production gateways require one; the probe honors it.
  */
 export declare function probeNuviraSidecar(baseUrl?: string, timeoutMs?: number, apiKey?: string): Promise<NuviraSidecarProbe>;
+/**
+ * Audit integrity check for a JSONL telemetry/audit file: every line must
+ * parse as JSON (append-only, tamper-evident shape). Corrupt lines indicate a
+ * truncated write or manual tampering. Pure + unit-testable.
+ */
+export declare function auditJsonlIntegrity(filePath: string): {
+    total: number;
+    corrupt: number;
+};
+/**
+ * Secrets-hygiene check: for each keyed provider, is the key supplied via a
+ * secure env var (or a `~/.buff/.env` file) rather than hardcoded in the
+ * plaintext `~/.buff/buffconfig.json`? Pure + testable (env passed in).
+ */
+export declare function checkSecretsBackend(config: BuffConfig, env: Record<string, string | undefined>): CheckResult;
+/**
+ * The full M7.1 enterprise self-check, built from pure inputs so it is
+ * trivially testable: config snapshot + env + gateway probe result + audit
+ * file paths. Returns the ordered CheckResult[] the CLI renders.
+ */
+export declare function buildEnterpriseChecks(inputs: {
+    config: BuffConfig;
+    env: Record<string, string | undefined>;
+    gatewayProbe: NuviraSidecarProbe | null;
+    gatewayConfigured: boolean;
+    auditFiles: Array<{
+        name: string;
+        path: string;
+    }>;
+}): CheckResult[];
 export declare class DoctorCommand extends BaseCommand {
     create(): Command;
     private runDiagnosis;
@@ -84,6 +115,7 @@ export declare class DoctorCommand extends BaseCommand {
     private checkConnectivity;
     private checkProvider;
     private renderSystemSection;
+    private renderEnterpriseSection;
     private renderNuviraSidecarSection;
     private renderProviderSection;
     private renderSummary;
