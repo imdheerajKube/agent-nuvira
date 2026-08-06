@@ -14,9 +14,14 @@ describe('ConfigManager', () => {
     delete process.env.GEMINI_API_KEY;
     delete process.env.OPENROUTER_API_KEY;
     delete process.env.GROQ_API_KEY;
+    // Isolate from the real ~/.buff/.env (may hold real keys after the M7.4
+    // secrets migration): point the home .env lookup at a non-existent path.
+    delete process.env.BUFF_ENV_FILE;
+    process.env.BUFF_ENV_FILE = join(testDir, 'home-env-does-not-exist.env');
   });
 
   afterEach(() => {
+    delete process.env.BUFF_ENV_FILE;
     if (testDir) {
       rmSync(testDir, { recursive: true, force: true });
     }

@@ -9,6 +9,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.58.9] - 2026-08-06
+
+### Added
+
+- **P7 M7.4 — opt-in gateway telemetry / usage-health flags** (`routing.gatewayTelemetry.enabled` / `healthFlags`, both **OFF by default**). Privacy-preserving by construction: enabling never captures prompt content — it only reports aggregate gateway usage/health (request counts, token totals, estimated cost, per-provider parked state + reset countdown) already tracked by the quota ledger + cost tracker, surfaced via `buff doctor --enterprise`.
+  - `buff config set routing.gatewayTelemetry.enabled true` turns the report on; `healthFlags true` adds per-provider detail lines.
+  - Off by default: `doctor --enterprise` shows an informative "Telemetry / Usage Health OFF (privacy-preserving default)" note with the enable command — never a failure.
+  - `~/.buff/.env` is now overridable via `BUFF_ENV_FILE` (mirrors `BUFF_MEMORY_DIR`) so tests isolate from a real home env file; env/config tests updated.
+
 ## [1.58.8] - 2026-08-06
 
 ### Fixed

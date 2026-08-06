@@ -88,9 +88,57 @@ export declare function auditJsonlIntegrity(filePath: string): {
  */
 export declare function checkSecretsBackend(config: BuffConfig, env: Record<string, string | undefined>): CheckResult;
 /**
+ * One provider's gateway usage-health flags (M7.4). Aggregated from the
+ * quota ledger + cost tracker — NEVER from captured prompt content.
+ */
+export interface GatewayUsageFlags {
+    provider: string;
+    /** Total requests tracked for this provider (quota ledger). */
+    requests: number;
+    /** Total tokens consumed for this provider (quota ledger). */
+    tokens: number;
+    /** Estimated spend in USD (cost tracker). */
+    costUsd: number;
+    /** Whether the provider is currently parked (window exhausted / cooldown). */
+    parked: boolean;
+    /** Ms until the current window resets (0 when not parked). */
+    resetsInMs: number;
+}
+/** Aggregate gateway usage-health view (M7.4), fed to checkGatewayTelemetry. */
+export interface GatewayUsage {
+    /** Per-provider health flags, sorted by provider name. */
+    providers: GatewayUsageFlags[];
+    /** Sum of requests across all tracked providers. */
+    totalRequests: number;
+    /** Sum of tokens across all tracked providers. */
+    totalTokens: number;
+    /** Sum of estimated spend in USD across all tracked providers. */
+    totalCostUsd: number;
+}
+/**
+ * M7.4 telemetry/usage-health check. OPT-IN AND OFF BY DEFAULT: privacy-
+ * preserving by construction — the numbers come from aggregate quota/cost
+ * tracking, never prompt content. When the flag is off (default) the check is
+ * an INFORMATIVE warn with the exact enable command, never a failure; when on
+ * it reports the aggregate headline, plus per-provider health flags when
+ * `healthFlags` is also enabled.
+ */
+export declare function checkGatewayTelemetry(config: BuffConfig, usage: GatewayUsage): CheckResult;
+/**
+ * Build the M7.4 aggregate gateway-usage view from the quota ledger + cost
+ * tracker singletons (aggregate counts only — never prompt content).
+ * Best-effort: any read failure degrades to an empty usage view.
+ *
+ * @param configManager When provided, its `routing.quota` limits are used to
+ *   compute quota-configured parking (window exhausted), so the per-provider
+ *   health flags show parked state accurately.
+ */
+export declare function buildGatewayUsage(configManager?: import('../config/manager.js').ConfigManager): GatewayUsage;
+/**
  * The full M7.1 enterprise self-check, built from pure inputs so it is
  * trivially testable: config snapshot + env + gateway probe result + audit
- * file paths. Returns the ordered CheckResult[] the CLI renders.
+ * file paths + opt-in gateway usage (M7.4). Returns the ordered CheckResult[]
+ * the CLI renders.
  */
 export declare function buildEnterpriseChecks(inputs: {
     config: BuffConfig;
@@ -101,6 +149,8 @@ export declare function buildEnterpriseChecks(inputs: {
         name: string;
         path: string;
     }>;
+    /** M7.4 opt-in gateway usage-health flags (default: empty = no tracked usage). */
+    gatewayUsage?: GatewayUsage;
 }): CheckResult[];
 export declare class DoctorCommand extends BaseCommand {
     create(): Command;

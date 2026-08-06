@@ -245,7 +245,7 @@ Verified as of 2026-08-05 (v1.57.0, 3,032 root tests + 42 dashboard component te
 - **M7.1 — `buff doctor --enterprise`** self-check (gateway health, secrets backend, audit integrity, RBAC config). ✅ Doctor tests.
 - **M7.2 — Upgrade guide + migration notes** in `UPGRADE_ROADMAP.md` (new section) + CHANGELOG per release. ✅ Doc review.
 - **M7.3 — Website + Product_Guide + tests/README** updated per phase (test counts, feature rows). ✅ Consistency sweep script (no stale counts).
-- **M7.4 — Telemetry/usage health** for gateway traffic (opt-in, privacy-preserving, off by default). ✅ Flag tests.
+- **M7.4 — Telemetry/usage health** for gateway traffic (opt-in, privacy-preserving, off by default). ✅ v1.58.9: `routing.gatewayTelemetry.enabled` / `healthFlags` + `doctor --enterprise` Telemetry Health check + flag tests.
 - **M7.5 — Milestone tracker hygiene** — this roadmap's tracking matrix kept current each release.
 
 🛡️ **Guarantee:** docs never claim unshipped features (feature rows only after phase closes).
@@ -296,7 +296,7 @@ Verified as of 2026-08-05 (v1.57.0, 3,032 root tests + 42 dashboard component te
 | P7 | M7.1 doctor --enterprise | [#8](https://github.com/imdheerajKube/agent-nuvira/issues/8) | ✅ | v1.58.7 |
 | P7 | M7.2 Upgrade guide | [#8](https://github.com/imdheerajKube/agent-nuvira/issues/8) | ✅ | v1.58.7 |
 | P7 | M7.3 Website/docs sync | [#8](https://github.com/imdheerajKube/agent-nuvira/issues/8) | ⬜ | — |
-| P7 | M7.4 Telemetry health flags | [#8](https://github.com/imdheerajKube/agent-nuvira/issues/8) | ⬜ | — |
+| P7 | M7.4 Telemetry health flags | [#8](https://github.com/imdheerajKube/agent-nuvira/issues/8) | ✅ | v1.58.9 |
 | P7 | M7.5 Tracker hygiene | [#8](https://github.com/imdheerajKube/agent-nuvira/issues/8) | ⬜ | — |
 
 ---

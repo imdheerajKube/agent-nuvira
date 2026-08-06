@@ -488,8 +488,33 @@ export class ConfigCommand extends BaseCommand {
         logger.error(`Unknown compression config key: ${field}. Valid keys: enabled, keepRatio, minProseChars`);
         return;
       }
+    } else if (parts.length === 3 && parts[0] === 'routing' && parts[1] === 'gatewayTelemetry') {
+      // M7.4 — routing.gatewayTelemetry.enabled (boolean, DEFAULT FALSE) |
+      // routing.gatewayTelemetry.healthFlags (boolean). OPT-IN, privacy-
+      // preserving: enabling never captures prompt content — it only reports
+      // aggregate gateway usage/health numbers (requests, tokens, error
+      // rates) via `buff doctor --enterprise`.
+      const field = parts[2];
+      const existing = config.routing?.gatewayTelemetry || {};
+      if (field !== 'enabled' && field !== 'healthFlags') {
+        logger.error(`Unknown gatewayTelemetry config key: ${field}. Valid keys: enabled, healthFlags`);
+        return;
+      }
+      const lower = value.trim().toLowerCase();
+      let typedValue: boolean;
+      if (lower === 'true' || lower === '1' || lower === 'yes') {
+        typedValue = true;
+      } else if (lower === 'false' || lower === '0' || lower === 'no') {
+        typedValue = false;
+      } else {
+        logger.error(`Invalid boolean value for ${key}: "${value}". Use true or false.`);
+        return;
+      }
+      this.configManager.save({
+        routing: { gatewayTelemetry: { ...existing, [field]: typedValue } },
+      } as Partial<BuffConfig>);
     } else {
-      logger.error(`Invalid config key format: ${key}. Expected formats:\n  defaultProvider\n  providers.<name>.<field>\n  providers.<name>.apiKeys "k1,k2"\n  pricing.<provider>.inputPer1K\n  pricing.<provider>.outputPer1K\n  history.retentionDays\n  history.semanticSearch\n  fallback.enabled\n  fallback.providers\n  routing.bandit\n  routing.allowPaid\n  routing.quota.<provider>.requestsPerWindow\n  routing.governance.allowProviders "groq,local"\n  routing.nuviraSidecar.enabled\n  routing.compression.enabled  (M4.4, DEFAULT FALSE)`);
+      logger.error(`Invalid config key format: ${key}. Expected formats:\n  defaultProvider\n  providers.<name>.<field>\n  providers.<name>.apiKeys "k1,k2"\n  pricing.<provider>.inputPer1K\n  pricing.<provider>.outputPer1K\n  history.retentionDays\n  history.semanticSearch\n  fallback.enabled\n  fallback.providers\n  routing.bandit\n  routing.allowPaid\n  routing.quota.<provider>.requestsPerWindow\n  routing.governance.allowProviders "groq,local"\n  routing.nuviraSidecar.enabled\n  routing.compression.enabled  (M4.4, DEFAULT FALSE)\n  routing.gatewayTelemetry.enabled  (M7.4, DEFAULT FALSE)`);
       return;
     }
 

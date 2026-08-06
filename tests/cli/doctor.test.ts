@@ -18,6 +18,7 @@ import {
   probeNuviraSidecar,
   auditJsonlIntegrity,
   checkSecretsBackend,
+  checkGatewayTelemetry,
   buildEnterpriseChecks,
 } from '../../src/cli/doctor.js';
 import type { BuffConfig } from '../../src/config/types.js';
@@ -196,13 +197,15 @@ describe('doctor --nuvira sidecar probe (P5 M5.1)', () => {
 
 // ─── P7 M7.1: enterprise self-check (pure helpers) ──────────────────────────
 
+// Shared minimal config fixture (used by the M7.1 and M7.4 enterprise blocks).
+const baseConfig: BuffConfig = {
+  defaultProvider: 'local',
+  providers: {
+    local: { runner: 'ollama', model: 'llama2', temperature: 0.7, maxTokens: 4096 },
+  },
+};
+
 describe('doctor --enterprise (P7 M7.1)', () => {
-  const baseConfig: BuffConfig = {
-    defaultProvider: 'local',
-    providers: {
-      local: { runner: 'ollama', model: 'llama2', temperature: 0.7, maxTokens: 4096 },
-    },
-  };
 
   it('auditJsonlIntegrity counts valid lines and flags corrupt lines', () => {
     const dir = '/tmp/buff-doctor-audit-test';
@@ -247,7 +250,11 @@ describe('doctor --enterprise (P7 M7.1)', () => {
     const checks = buildEnterpriseChecks({
       config: {
         ...baseConfig,
-        routing: { governance: { allowProviders: ['groq', 'local'] } },
+        routing: {
+          governance: { allowProviders: ['groq', 'local'] },
+          // M7.4 opt-in telemetry ON with tracked usage → all six checks pass.
+          gatewayTelemetry: { enabled: true },
+        },
       },
       env: { GROQ_API_KEY: 'k' },
       gatewayProbe: { status: 'pass', modelCount: 3, version: '1.2.3', baseUrl: 'http://127.0.0.1:20128/v1' },
@@ -256,8 +263,18 @@ describe('doctor --enterprise (P7 M7.1)', () => {
         { name: 'quota-events.jsonl', path: events },
         { name: 'model-registry-actions.jsonl', path: actions },
       ],
+      gatewayUsage: {
+        providers: [{ provider: 'groq', requests: 5, tokens: 100, costUsd: 0, parked: false, resetsInMs: 0 }],
+        totalRequests: 5,
+        totalTokens: 100,
+        totalCostUsd: 0,
+      },
     });
-    expect(checks.map((c) => c.status)).toEqual(['pass', 'pass', 'pass', 'pass', 'pass']);
+    // 6 checks: gateway, secrets, 2× audit, RBAC, M7.4 telemetry — all pass.
+    expect(checks.map((c) => c.status)).toEqual(['pass', 'pass', 'pass', 'pass', 'pass', 'pass']);
+    const telemetry = checks.find((c) => c.name === 'Telemetry / Usage Health');
+    expect(telemetry?.status).toBe('pass');
+    expect(telemetry?.message).toContain('5 call(s)');
     rmSync(dir, { recursive: true, force: true });
   });
 
@@ -296,5 +313,76 @@ describe('doctor --enterprise (P7 M7.1)', () => {
     const gateway = checks.find((c) => c.name === 'Gateway Health');
     expect(gateway?.status).toBe('warn');
     expect(gateway?.message).toContain('not configured');
+  });
+});
+
+describe('doctor --enterprise telemetry flags (P7 M7.4, opt-in, off by default)', () => {
+  const usage = {
+    providers: [
+      { provider: 'groq', requests: 12, tokens: 3400, costUsd: 0.0012, parked: false, resetsInMs: 0 },
+      { provider: 'gemini', requests: 4, tokens: 900, costUsd: 0, parked: true, resetsInMs: 3_600_000 },
+    ],
+    totalRequests: 16,
+    totalTokens: 4300,
+    totalCostUsd: 0.0012,
+  };
+
+  it('flag OFF by default: informative warn with the enable command, never a fail', () => {
+    const check = checkGatewayTelemetry(baseConfig, usage);
+    expect(check.name).toBe('Telemetry / Usage Health');
+    expect(check.status).toBe('warn');
+    expect(check.message).toContain('OFF');
+    expect(check.fix).toContain('routing.gatewayTelemetry.enabled true');
+    expect(check.detail).not.toContain('16 call'); // no metrics leak when off
+  });
+
+  it('flag ON without healthFlags: aggregate headline only, no per-provider detail', () => {
+    const cfg: BuffConfig = {
+      ...baseConfig,
+      routing: { gatewayTelemetry: { enabled: true } },
+    };
+    const check = checkGatewayTelemetry(cfg, usage);
+    expect(check.status).toBe('pass');
+    expect(check.message).toContain('16 call(s)');
+    expect(check.message).toContain('4,300 token(s)');
+    // Aggregate privacy default: no per-provider flags unless healthFlags is on
+    expect(check.detail).not.toContain('groq:');
+  });
+
+  it('flag ON with healthFlags: per-provider usage-health flags rendered (parked + reset shown)', () => {
+    const cfg: BuffConfig = {
+      ...baseConfig,
+      routing: { gatewayTelemetry: { enabled: true, healthFlags: true } },
+    };
+    const check = checkGatewayTelemetry(cfg, usage);
+    expect(check.status).toBe('pass');
+    expect(check.detail).toContain('groq: 12 call(s)');
+    expect(check.detail).toContain('gemini: 4 call(s)');
+    expect(check.detail).toContain('⛔ parked');
+    expect(check.detail).toContain('resets in 60m');
+  });
+
+  it('flag ON but no tracked usage yet: warn (nothing to report), not a fail', () => {
+    const cfg: BuffConfig = {
+      ...baseConfig,
+      routing: { gatewayTelemetry: { enabled: true, healthFlags: true } },
+    };
+    const check = checkGatewayTelemetry(cfg, { providers: [], totalRequests: 0, totalTokens: 0, totalCostUsd: 0 });
+    expect(check.status).toBe('warn');
+    expect(check.message).toContain('ON');
+  });
+
+  it('buildEnterpriseChecks includes the M7.4 telemetry check with default-off semantics', () => {
+    const checks = buildEnterpriseChecks({
+      config: baseConfig,
+      env: {},
+      gatewayProbe: null,
+      gatewayConfigured: false,
+      auditFiles: [],
+    });
+    const telemetry = checks.find((c) => c.name === 'Telemetry / Usage Health');
+    expect(telemetry).toBeDefined();
+    expect(telemetry?.status).toBe('warn');
+    expect(telemetry?.message).toContain('OFF');
   });
 });
