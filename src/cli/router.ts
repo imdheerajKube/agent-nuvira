@@ -37,6 +37,7 @@ import { TeamCommand } from './team.js';
 import { SDKCommand } from './sdk.js';
 import { ProviderCommand } from './provider.js';
 import { SecurityCommand } from './security.js';
+import { AuditCommand } from './audit.js';
 import { FeedbackCommand } from './feedback.js';
 import { MarketplaceCommand } from './marketplace.js';
 import { MCPCommand } from './mcp.js';
@@ -150,6 +151,9 @@ export function createCLI(): Command {
   // Register Security command (from nextlevel roadmap §4.1)
   const securityCmd = new SecurityCommand();
   program.addCommand(securityCmd.create());
+
+  const auditCmd = new AuditCommand();
+  program.addCommand(auditCmd.create());
 
   // Register Feedback command (from nextlevel roadmap §4.3)
   const feedbackCmd = new FeedbackCommand();

@@ -10,8 +10,9 @@
 
 import { describe, it, expect, vi, afterEach } from 'vitest';
 import { render, screen, fireEvent, cleanup } from '@testing-library/react';
-import ModelsPanel, { ActionTimelineChart, dedupeDayEvents } from './ModelsPanel';
+import ModelsPanel, { ActionTimelineChart, dedupeDayEvents, ActionTelemetryCard } from './ModelsPanel';
 import type { ActionDayBucket, ActionDayEvent } from './ModelsPanel';
+import type { ActionTelemetryInsights } from '../types';
 
 // ─── Fixtures ───────────────────────────────────────────────────────────────
 
@@ -27,6 +28,7 @@ const makeTimeline = (spec: Record<number, Partial<ActionDayBucket>> = {}): Acti
       verified: 0,
       killed: 0,
       transient: 0,
+      partial: 0,
       events: [],
       ...(spec[i] || {}),
     });
@@ -52,6 +54,35 @@ describe('dedupeDayEvents', () => {
     expect(deduped[2].outcome).toBe('error');
     // latest event wins for the repeated provider × model × outcome
     expect(deduped[1].at).toBe(200);
+  });
+
+  it('prioritizes partial chips after killed, before verified (flaky mid-stream is actionable)', () => {
+    const events: ActionDayEvent[] = [
+      { provider: 'groq', model: 'm1', outcome: 'verified', at: 300 },
+      { provider: 'groq', model: 'm1', outcome: 'partial', errorType: 'timeout', at: 100 },
+      { provider: 'groq', model: 'm1', outcome: 'partial', errorType: 'timeout', at: 400 },
+      { provider: 'nim', model: 'n1', outcome: 'error', errorType: 'server', at: 200 },
+    ];
+    const deduped = dedupeDayEvents(events);
+    expect(deduped).toHaveLength(3);
+    // partial sorts before verified (flaky mid-stream is a worse reliability
+    // signal than a clean success), and after killed.
+    expect(deduped[0].outcome).toBe('partial');
+    expect(deduped[1].outcome).toBe('verified');
+    expect(deduped[2].outcome).toBe('error');
+    // repeated provider × model × outcome dedupes — latest partial wins
+    expect(deduped[0].at).toBe(400);
+  });
+
+  it('dedupes partials per provider × model × outcome (a repeat does not double-count)', () => {
+    const events: ActionDayEvent[] = [
+      { provider: 'groq', model: 'm1', outcome: 'partial', errorType: 'timeout', at: 100 },
+      { provider: 'groq', model: 'm1', outcome: 'partial', errorType: 'server', at: 200 },
+    ];
+    const deduped = dedupeDayEvents(events);
+    expect(deduped).toHaveLength(1);
+    expect(deduped[0].outcome).toBe('partial');
+    expect(deduped[0].at).toBe(200);
   });
 });
 
@@ -127,6 +158,46 @@ describe('ActionTimelineChart', () => {
     expect(screen.getByText(/nim\/n1/)).toBeTruthy();
   });
 
+  it('shows a violet ⏸ chip for a partial mid-stream interruption and counts it in the day summary', () => {
+    const timeline = makeTimeline({
+      3: {
+        partial: 1,
+        events: [
+          { provider: 'groq', model: 'm1', outcome: 'partial', errorType: 'timeout', at: 100 },
+        ],
+      },
+    });
+    render(<ActionTimelineChart timeline={timeline} />);
+
+    // The partial-only day is the default scrub position (it has events).
+    expect(screen.getByText(/groq\/m1/)).toBeTruthy();
+    // The day summary surfaces the ⏸ partial count.
+    expect(screen.getByText(/⏸ 1/)).toBeTruthy();
+    // The chip carries the mid-stream interruption tooltip.
+    expect(screen.getByTitle(/Mid-stream interruption/)).toBeTruthy();
+  });
+
+  it('mixes partial chips with verified chips on the same day (flaky provider is visible, not buried)', () => {
+    const timeline = makeTimeline({
+      4: {
+        verified: 1,
+        partial: 1,
+        events: [
+          { provider: 'groq', model: 'm1', outcome: 'verified', at: 300 },
+          { provider: 'groq', model: 'm1', outcome: 'partial', errorType: 'timeout', at: 200 },
+        ],
+      },
+    });
+    render(<ActionTimelineChart timeline={timeline} />);
+
+    // Both chips render — the partial ⏸ chip sorts BEFORE the verified ✓ chip
+    // (flaky mid-stream is more actionable than a clean success).
+    const chips = screen.getAllByText(/groq\/m1/);
+    expect(chips).toHaveLength(2);
+    expect(screen.getByTitle(/Mid-stream interruption/)).toBeTruthy();
+    expect(screen.getByTitle(/Verified by this action/)).toBeTruthy();
+  });
+
   it('toggles play/pause on the scrub button', () => {
     render(<ActionTimelineChart timeline={makeTimeline()} />);
 
@@ -136,6 +207,40 @@ describe('ActionTimelineChart', () => {
 
     fireEvent.click(screen.getByRole('button', { name: 'Pause scrub' }));
     expect(screen.getByRole('button', { name: 'Play scrub' })).toBeTruthy();
+  });
+});
+
+// ─── ActionTelemetryCard partial presentation ───────────────────────────────
+// The card is the PRIMARY presentation surface for M3.4 partial chips —
+// asserting the violet border, the ⏸ header stat, and the Partial chips
+// section keeps the feature's headline surface regression-proof.
+
+describe('ActionTelemetryCard partial presentation', () => {
+  it('shows the ⏸ partial stat, violet border, and a Partial chips section with the streamed-chunk tooltip', () => {
+    const entry: ActionTelemetryInsights['actions'][number] = {
+      action: 'chat',
+      verified: 2,
+      killed: 0,
+      transient: 1,
+      partial: 2,
+      verifiedModels: [{ provider: 'groq', model: 'm1', at: 100 }],
+      killedModels: [],
+      partialModels: [
+        { provider: 'groq', model: 'm1', reason: 'timeout', at: 200, streamedChunks: 128 },
+      ],
+      timeline: [],
+    };
+    const { container } = render(<ActionTelemetryCard entry={entry} />);
+
+    // ⏸ 2 partial stat in the header.
+    expect(screen.getByText(/⏸ 2/)).toBeTruthy();
+    expect(screen.getByText(/partial/)).toBeTruthy();
+    // Partial chips section heading.
+    expect(screen.getByText(/mid-stream interruption/i)).toBeTruthy();
+    // The chip carries the streamed-chunk detail in its tooltip.
+    expect(screen.getByTitle(/~128 chunks in/)).toBeTruthy();
+    // Violet border wins (partial > killed > verified) — jsdom computes rgb().
+    expect(container.querySelector('[style*="rgb(188, 140, 255)"]')).toBeTruthy();
   });
 });
 

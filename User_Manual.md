@@ -1,6 +1,21 @@
 # Agent-Nuvira — User Manual
 
-**Version 1.58.9 | August 2026**
+**Version 1.59.1 | August 2026**
+
+### v1.59.1 — Dashboard: partial mid-stream interruption chips
+
+- The **Models tab → Learned from real usage** section now surfaces P4 M4.4
+  **partial** (mid-stream interruption) events end-to-end:
+  - Scrubbable timeline: violet `⏸` bar segment, day-summary count, legend entry.
+  - Per-day chips: violet `⏸` variant with the streamed-chunk detail in the
+    tooltip (e.g. "died after ~128 chunks").
+  - Per-action cards: `⏸ N partial` stat + a dedicated **Partial** chips
+    section; the card border turns violet when flaky mid-stream providers are
+    present. Chips order: killed → partial → verified → error.
+
+---
+
+**Version 1.59.0 | August 2026**
 
 > *Agent-Nuvira: Multi-agent AI coding CLI — plan, write, review, test, and publish code with local models (Ollama) or cloud APIs (Groq, NVIDIA NIM, Google Gemini, OpenRouter).*
 

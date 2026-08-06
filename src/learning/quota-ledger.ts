@@ -27,6 +27,7 @@ import { homedir } from 'node:os';
 
 import type { ConfigManager } from '../config/manager.js';
 import { logger } from '../utils/logger.js';
+import { appendChainedRecord } from '../enterprise/audit-chain.js';
 
 // ─── Types ──────────────────────────────────────────────────────────────────
 
@@ -370,13 +371,9 @@ export class QuotaLedger {
       const event: QuotaEvent = { type, provider, timestamp: Date.now() };
       if (reason) event.reason = reason;
       if (!existsSync(memoryDir())) mkdirSync(memoryDir(), { recursive: true });
-      const path = eventsPath();
-      const existing = existsSync(path) ? readFileSync(path, 'utf-8') : '';
-      const lines = existing.split('\n').filter((l) => l.trim().length > 0);
-      lines.push(JSON.stringify(event));
-      // Cap: keep the newest MAX_EVENTS lines.
-      const trimmed = lines.slice(-MAX_EVENTS);
-      writeFileSync(path, trimmed.join('\n') + '\n', 'utf-8');
+      // P6 M6.2 + M6.3: every quota event is scrubbed (no secrets) and
+      // hash-chained (tamper-evident) via the enterprise audit chain.
+      appendChainedRecord(eventsPath(), 'quota-events', event, MAX_EVENTS);
     } catch {
       // Best-effort — the timeline must never break routing.
     }

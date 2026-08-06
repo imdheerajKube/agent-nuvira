@@ -42,6 +42,12 @@ import { getVectorStore, type VectorStore, type VectorEntry } from '../memory/ve
 import { getQuotaLedger } from './quota-ledger.js';
 import { getEventBus, EventNames } from '../observability/event-bus.js';
 import type { ConfigManager } from '../config/manager.js';
+import {
+  appendChainedRecordFast,
+  rechainRecords,
+  writeHeadState,
+  headOfLines,
+} from '../enterprise/audit-chain.js';
 
 // ─── Types ──────────────────────────────────────────────────────────────────
 
@@ -178,11 +184,18 @@ export interface ActionTelemetryInsights {
     /** Provider × model combos this action killed (latest event each). */
     killedModels: Array<{ provider: string; model: string; reason?: string; at: number }>;
     /**
+     * Provider × model combos this action interrupted MID-STREAM (latest
+     * event each) — P4 M4.4 partial learning: the provider started streaming
+     * then died before completion. Surfaced as chips in the dashboard so a
+     * flaky-but-responsive provider is distinguishable from a clean error.
+     */
+    partialModels: Array<{ provider: string; model: string; reason?: string; at: number; streamedChunks?: number }>;
+    /**
      * Daily buckets over the last TIMELINE_DAYS — verified vs killed vs
-     * transient counts per day (ascending), so the dashboard can render a
-     * "learned from real usage over time" sparkline/bar chart per action.
-     * Each bucket also carries the RAW events that landed that day, so the
-     * chart can be scrubbed day-by-day to show that day's exact chips
+     * transient vs partial counts per day (ascending), so the dashboard can
+     * render a "learned from real usage over time" sparkline/bar chart per
+     * action. Each bucket also carries the RAW events that landed that day,
+     * so the chart can be scrubbed day-by-day to show that day's exact chips
      * (which provider × model the action killed or verified).
      */
     timeline: Array<{
@@ -201,6 +214,8 @@ export interface ActionTelemetryInsights {
         errorType?: string;
         /** Epoch ms of the event. */
         at: number;
+        /** P4 M4.4: chunks streamed before a partial died (surfaced in the chip tooltip). */
+        streamedChunks?: number;
       }>;
     }>;
   }>;
@@ -318,6 +333,7 @@ export function buildActionTimeline(
       outcome: e.outcome,
       errorType: e.errorType,
       at: e.timestamp,
+      streamedChunks: e.outcome === 'partial' ? e.streamedChunks : undefined,
     });
   }
   return [...buckets.entries()]
@@ -359,6 +375,7 @@ export function aggregateActionTelemetry(entries: ActionTelemetryEntry[]): Actio
         partial: partialEvents.length,
         verifiedModels: latest(verifiedEvents).map((e) => ({ provider: e.provider, model: e.model, at: e.timestamp })),
         killedModels: latest(killedEvents).map((e) => ({ provider: e.provider, model: e.model, reason: e.errorType, at: e.timestamp })),
+        partialModels: latest(partialEvents).map((e) => ({ provider: e.provider, model: e.model, reason: e.errorType, at: e.timestamp, streamedChunks: e.streamedChunks })),
         timeline: buildActionTimeline(evs),
       };
     })
@@ -892,18 +909,20 @@ export class ModelRegistry {
       const dir = memoryDir();
       if (!existsSync(dir)) mkdirSync(dir, { recursive: true });
       const path = actionLogPath();
-      appendFileSync(path, `${JSON.stringify(entry)}\n`, 'utf-8');
-      if (this.actionLogCount >= 0) {
-        this.actionLogCount++;
-      } else {
-        this.actionLogCount = this.countActionLogLines(path);
-      }
+      // P6 M6.2 + M6.3: every action line is scrubbed (no secrets) and
+      // hash-chained (tamper-evident). O(1) append on the hot path; the
+      // amortized rotation below re-chains the surviving slice.
+      appendChainedRecordFast(path, 'model-registry-actions', entry);
+      this.actionLogCount = this.actionLogCount >= 0 ? this.actionLogCount + 1 : this.countActionLogLines(path);
       // Rotate when the log doubles past the cap — amortized O(1) per write.
       if (this.actionLogCount > MAX_ACTION_LOG_ENTRIES * 2) {
         const raw = readFileSync(path, 'utf-8');
         const lines = raw.split('\n').filter((l) => l.trim()).slice(-MAX_ACTION_LOG_ENTRIES);
-        writeFileSync(path, lines.length ? `${lines.join('\n')}\n` : '', 'utf-8');
-        this.actionLogCount = lines.length;
+        const rechained = rechainRecords(lines);
+        writeFileSync(path, rechained.length ? `${rechained.join('\n')}\n` : '', 'utf-8');
+        // Keep the sidecar head in sync with the re-chained slice.
+        writeHeadState(path, 'model-registry-actions', headOfLines(rechained), rechained.length);
+        this.actionLogCount = rechained.length;
       }
     } catch {
       // Best-effort — a failed action log must never break telemetry.

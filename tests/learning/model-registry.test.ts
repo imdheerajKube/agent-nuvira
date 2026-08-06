@@ -659,6 +659,27 @@ describe('ModelRegistry — per-action "learned from real usage" telemetry', () 
     // definitive failure, so routing must not block the provider over it.
     expect(registry.isUsable('groq', 'llama-3.3-70b-versatile')).toBe(true);
   });
+
+  it('partialModels aggregates one chip per provider × model (latest wins) for the dashboard', () => {
+    const registry = new ModelRegistry();
+    // Same provider × model interrupted twice, plus a second model once.
+    registry.recordPartial('groq', 'llama-3.3-70b-versatile', 'chat', 'timeout', 64);
+    registry.recordPartial('groq', 'llama-3.3-70b-versatile', 'chat', 'server', 512);
+    registry.recordPartial('groq', 'llama-3.3-70b-instant', 'chat', 'disconnect', 8);
+
+    const tele = registry.getActionTelemetry();
+    const chat = tele.actions.find((a) => a.action === 'chat');
+    // Honest volume counts every interruption.
+    expect(chat?.partial).toBe(3);
+    // But the chip list dedupes — one chip per provider × model.
+    expect(chat?.partialModels).toHaveLength(2);
+    const flaky = chat!.partialModels.find((m) => m.model === 'llama-3.3-70b-versatile');
+    // Latest reason + streamed-chunk count win.
+    expect(flaky?.reason).toBe('server');
+    expect(chat!.partialModels).toEqual(expect.arrayContaining([
+      expect.objectContaining({ provider: 'groq', model: 'llama-3.3-70b-instant', reason: 'disconnect' }),
+    ]));
+  });
 });
 
 describe('ModelRegistry — persistence (JSON mirror + vector auto-tier)', () => {
