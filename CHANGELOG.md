@@ -9,6 +9,28 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.58.1] - 2026-08-06
+
+### Added
+
+- **Dashboard mirrors the CLI `model explain` guarantees** — the Auto Router
+  preference panel now renders the v1.58.0 M2.x chips on every provider row:
+  🎯 capability fit (`capabilityFit`), 📏 measured wire-token cost
+  (`costSource` + `costBasis`), and ⏳ context preflight (`contextUtilization` +
+  `contextWindowTokens`). `/api/routing` and `/api/all` carry the fields per
+  ranked provider; rows whose gates are OFF simply omit the chip (the cost
+  source always renders, exactly like the CLI). Verified live end-to-end.
+- `MODELS_EXPLAIN_DEMO.md` gains a dashboard-mirroring section.
+
+### Tests
+
+- 3,161 root tests pass (+45 dashboard component tests): new component tests
+  for the preference-table chips (measured renders, gates-OFF leaves only the
+  cost chip, no chip row when fields absent) and a server assertion loop
+  proving the measured/estimated cost-source contract. Also fixed a
+  cold-start timeout flake in `trajectory-store.test.ts` (vector-backend
+  warmup in `beforeAll` + 60s timeout on the first save test).
+
 ## [1.58.0] - 2026-08-06
 
 > First release to ship the Nuvira-Router P2 routing work below. Also carries
