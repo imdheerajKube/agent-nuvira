@@ -283,7 +283,21 @@ export interface RoutingInsights {
     complexity: string;
     winner: string;
     score: number;
-    providers: Array<{ provider: string; score: number; reason: string }>;
+    providers: Array<{
+      provider: string;
+      score: number;
+      reason: string;
+      /** v1.58.0 M2.1: task-type capability fit (0-100, undefined = gate OFF) */
+      capabilityFit?: number;
+      /** v1.58.0 M2.2: measured (real wire tokens) vs estimated cost basis */
+      costSource?: 'measured' | 'estimated';
+      /** v1.58.0 M2.2: the exact measured token basis when costSource = measured */
+      costBasis?: { inputTokens: number; outputTokens: number };
+      /** v1.58.0 M2.5: % of nominal input window used by the estimated prompt */
+      contextUtilization?: number;
+      /** v1.58.0 M2.5: provider's nominal input context window (tokens) */
+      contextWindowTokens?: number;
+    }>;
   }>;
   /** Which providers/models were actually picked over time */
   usage?: RoutingUsage;

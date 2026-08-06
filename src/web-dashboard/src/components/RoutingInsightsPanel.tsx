@@ -69,6 +69,19 @@ function ScoreBar({ value, color }: { value: number; color: string }) {
   );
 }
 
+function chipStyle(background: string, border: string, textColor = '#8b949e') {
+  return {
+    fontSize: 10,
+    padding: '1px 7px',
+    borderRadius: 9,
+    background,
+    border: `1px solid ${border}`,
+    color: textColor,
+    fontFamily: "'SFMono-Regular', Consolas, monospace" as const,
+    whiteSpace: 'nowrap' as const,
+  };
+}
+
 function EmptyNote() {
   return (
     <div style={{
@@ -280,17 +293,41 @@ function PreferenceSection({ routing }: { routing: RoutingInsights }) {
                 <td style={{ padding: '10px 12px', fontFamily: "'SFMono-Regular', Consolas, monospace", color: '#8b949e' }}>
                   {p.score.toFixed(3)}
                 </td>
-                <td style={{ padding: '10px 12px', minWidth: 260 }}>
+                <td style={{ padding: '10px 12px', minWidth: 300 }}>
                   {p.providers.map((prov, i) => (
-                    <div key={prov.provider} style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 4 }}>
-                      <span style={{ width: 16, fontSize: 11, color: '#6e7681', textAlign: 'right' }}>{i + 1}.</span>
-                      <span style={{ width: 90, color: '#e6edf3', whiteSpace: 'nowrap', fontSize: 12 }}>
-                        {providerIcon(prov.provider)} {providerLabel(prov.provider).split(' ')[0]}
-                      </span>
-                      <ScoreBar value={prov.score} color={i === 0 ? '#3fb950' : '#58a6ff'} />
-                      <span style={{ width: 40, textAlign: 'right', fontFamily: "'SFMono-Regular', Consolas, monospace", fontSize: 11, color: '#8b949e' }}>
-                        {prov.score.toFixed(2)}
-                      </span>
+                    <div key={prov.provider} style={{ marginBottom: 5 }}>
+                      <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                        <span style={{ width: 16, fontSize: 11, color: '#6e7681', textAlign: 'right' }}>{i + 1}.</span>
+                        <span style={{ width: 90, color: '#e6edf3', whiteSpace: 'nowrap', fontSize: 12 }}>
+                          {providerIcon(prov.provider)} {providerLabel(prov.provider).split(' ')[0]}
+                        </span>
+                        <ScoreBar value={prov.score} color={i === 0 ? '#3fb950' : '#58a6ff'} />
+                        <span style={{ width: 40, textAlign: 'right', fontFamily: "'SFMono-Regular', Consolas, monospace", fontSize: 11, color: '#8b949e' }}>
+                          {prov.score.toFixed(2)}
+                        </span>
+                      </div>
+                      {/* v1.58.0 M2.x chips — same guarantees as the CLI `model explain` output.
+                          Rendered only when at least one chip applies, so rows under gates-off
+                          configs don't leave an empty strip. */}
+                      {(prov.capabilityFit !== undefined || prov.costSource || prov.contextUtilization !== undefined) && (
+                        <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap', paddingLeft: 16, marginTop: 2 }}>
+                          {prov.capabilityFit !== undefined && (
+                            <span style={chipStyle('#1c2128', '#6e7681')}>🎯 fit {prov.capabilityFit}%</span>
+                          )}
+                          {prov.costSource === 'measured' && prov.costBasis ? (
+                            <span style={chipStyle('#12291a', '#3fb950', '#3fb950')}>
+                              📏 measured {prov.costBasis.inputTokens.toLocaleString()}→{prov.costBasis.outputTokens.toLocaleString()} tok
+                            </span>
+                          ) : (
+                            <span style={chipStyle('#1c2128', '#8b949e')}>📐 estimated</span>
+                          )}
+                          {prov.contextUtilization !== undefined && prov.contextWindowTokens !== undefined && (
+                            <span style={chipStyle('#1c2128', '#58a6ff', '#58a6ff')}>
+                              ⏳ ctx {prov.contextUtilization}% ({prov.contextWindowTokens.toLocaleString()} tok)
+                            </span>
+                          )}
+                        </div>
+                      )}
                     </div>
                   ))}
                 </td>

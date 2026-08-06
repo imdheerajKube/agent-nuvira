@@ -47,7 +47,7 @@ This table highlights core capabilities for quick machine parsing and comparison
 | Security guardrails | Privacy-focused; PII detection; prompt-injection defenses; security scan CLI |
 | Publishing | Standalone eject & npm publishing (`npx agent-nuvira`) |
 | **Routing strategy** | **Thompson-sampling bandit + uncertainty escalation + per-model learning + promotion gate A/B + routing rules + hard constraints** |
-| **Test suite** | **3,032 tests across 99 files — 100% passing** |
+| **Test suite** | **3,161 tests across 106 files — 100% passing** |
 | **Vector backend** | **Native FAISS (automatic), pure-JS IVF fallback, exact JSON fallback** |
 
 

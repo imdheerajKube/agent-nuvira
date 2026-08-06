@@ -458,6 +458,21 @@ describe('Dashboard Server', () => {
       for (const p of body.preference) {
         expect(p.winner).toBeTruthy();
         expect(p.providers.length).toBeGreaterThan(0);
+        // v1.58.0 M2.x chips mirror the CLI guarantees on every ranked provider.
+        for (const prov of p.providers) {
+          expect(['measured', 'estimated']).toContain(prov.costSource);
+          if (prov.costSource === 'measured') {
+            expect(typeof prov.costBasis.inputTokens).toBe('number');
+            expect(typeof prov.costBasis.outputTokens).toBe('number');
+          } else {
+            // Estimated providers carry no measured basis (symmetric contract).
+            expect(prov.costBasis).toBeUndefined();
+          }
+          // capabilityFit / context fields may be undefined (gates OFF) — never crash.
+          if (prov.capabilityFit !== undefined) expect(prov.capabilityFit).toBeGreaterThanOrEqual(0);
+          if (prov.contextUtilization !== undefined) expect(prov.contextUtilization).toBeGreaterThanOrEqual(0);
+          if (prov.contextWindowTokens !== undefined) expect(prov.contextWindowTokens).toBeGreaterThan(0);
+        }
       }
     });
 
