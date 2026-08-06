@@ -21,6 +21,7 @@ import { join } from 'node:path';
 
 import { PlanCommand } from '../../src/cli/plan.js';
 import { resetModelRegistry, getModelRegistry } from '../../src/learning/model-registry.js';
+import { estimateTokens } from '../../src/learning/cost-tracker.js';
 import type { InferenceProvider } from '../../src/inference/interface.js';
 
 // ─── Mocks ──────────────────────────────────────────────────────────────────
@@ -111,6 +112,27 @@ describe('PlanCommand — shared single-shot failover runner adoption', () => {
     expect(opts.task).toBe('add auth');
     // The picker is not triggered: the picked provider is available.
     expect(opts.configManager).toBeDefined();
+  });
+
+  it('M2.5: route() passes the REAL prompt payload as contextHintTokens (codebase context)', async () => {
+    const plan = new PlanCommand();
+    // A non-trivial codebase context so the estimate is meaningfully > task-only
+    writeFileSync(join(tempDir, 'src.ts'), '// src\n' + 'const x = 1;\n'.repeat(200));
+    await (plan as any).execute(tempDir, { task: 'add auth' });
+
+    // The route closure resolves with options that carry the prompt estimate.
+    const opts = mockRunSingleShotAuto.mock.calls[0][0];
+    const route = await opts.route([]);
+    expect(route.type).toBe('local');
+    // mockAutoResolve receives (agentType, task, options) — assert the hint.
+    const resolveCall = mockAutoResolve.mock.calls[0];
+    expect(resolveCall[0]).toBe('plan');
+    expect(resolveCall[2]).toBeDefined();
+    // The prompt includes the parsed codebase context (src.ts × 200 lines), so
+    // the estimate must exceed a bare task-description estimate.
+    const hint = (resolveCall[2] as { contextHintTokens?: number }).contextHintTokens;
+    expect(hint).toBeDefined();
+    expect(hint!).toBeGreaterThan(estimateTokens('add auth'));
   });
 
   it('route() keeps the picked provider primary and ranks auto-router alternatives', async () => {

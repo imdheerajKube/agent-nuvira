@@ -19,7 +19,7 @@
  */
 
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
-import { mkdtempSync, rmSync } from 'node:fs';
+import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import inquirer from 'inquirer';
@@ -1445,6 +1445,63 @@ describe('Orchestrator — auto-routed failure telemetry', () => {
     // the failure bookkeeping records it) — never an empty/crashy decision.
     expect(decision.provider).toBe('gemini');
     resolveSpy.mockRestore();
+  });
+
+  it('M2.5: resolveAutoRoutingDecision forwards contextHintTokens to the router', async () => {
+    const cm = new ConfigManager();
+    const orch = new Orchestrator(cm);
+
+    const baseDecision = {
+      agentType: 'writer',
+      complexity: 'moderate',
+      taskProfile: undefined,
+      escalationApplied: false,
+      taskType: 'coding',
+      provider: 'gemini',
+      model: 'gemini-2.5-flash',
+      score: 0.9,
+      weights: {},
+      ranked: [],
+      fallbackChain: [],
+      explanation: 'gemini is top',
+      routedBy: 'heuristic',
+    } as any;
+    const resolveSpy = vi.spyOn(getAutoRouter(), 'resolve').mockReturnValue(baseDecision);
+
+    const decision = (orch as any).resolveAutoRoutingDecision(
+      { agentType: 'writer', description: 'write code', contextHintTokens: 42_000 },
+      {},
+    );
+
+    // The workspace payload estimate reaches the router as contextHintTokens.
+    expect(decision.provider).toBe('gemini');
+    const resolveOpts = resolveSpy.mock.calls[0][2] as { contextHintTokens?: number };
+    expect(resolveOpts.contextHintTokens).toBe(42_000);
+    resolveSpy.mockRestore();
+  });
+
+  it('M2.5: estimateTaskPayloadTokens sizes goal + task + workspace context files', () => {
+    const cm = new ConfigManager();
+    const orch = new Orchestrator(cm);
+
+    const dir = mkdtempSync(join(tmpdir(), 'buff-orch-ctx-'));
+    try {
+      const bigFile = join(dir, 'big.ts');
+      writeFileSync(bigFile, '// filler\n' + 'const x = 1;\n'.repeat(500));
+      const vault = new ContextVault('implement authentication with JWT refresh tokens', dir);
+
+      const tokens = (orch as any).estimateTaskPayloadTokens(vault, 'add login form', [bigFile]);
+      // goal + task description + the big file's stat-size tokens
+      expect(tokens).toBeGreaterThan(100);
+      expect(Number.isInteger(tokens)).toBe(true);
+
+      // No context files → still estimates goal + description (never 0)
+      const noFiles = (orch as any).estimateTaskPayloadTokens(vault, 'add login form', []);
+      expect(noFiles).toBeGreaterThan(0);
+      expect(noFiles).toBeLessThan(tokens);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
   });
 
   it('parks the provider in the quota ledger on rate-limit (full bookkeeping)', async () => {
