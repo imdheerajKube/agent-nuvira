@@ -162,7 +162,7 @@ export class ConfigCommand extends BaseCommand {
       if (key === 'defaultProvider') {
         this.configManager.save({ defaultProvider: value as ProviderType });
       } else {
-        logger.error(`Unknown config key: ${key}. Expected formats:\n  defaultProvider\n  providers.<name>.<field>\n  providers.<name>.apiKeys "k1,k2"  (M2.3 multi-account rotation)\n  pricing.<provider>.inputPer1K\n  pricing.<provider>.outputPer1K\n  history.retentionDays\n  history.semanticSearch\n  fallback.enabled\n  fallback.providers\n  routing.bandit\n  routing.allowPaid\n  routing.quota.<provider>.requestsPerWindow\n  routing.governance.allowProviders "groq,local"  (M2.4 admin policy)\n  routing.contextWindows.<model> 16384  (M2.5 context preflight)`);
+        logger.error(`Unknown config key: ${key}. Expected formats:\n  defaultProvider\n  providers.<name>.<field>\n  providers.<name>.apiKeys "k1,k2"  (M2.3 multi-account rotation)\n  pricing.<provider>.inputPer1K\n  pricing.<provider>.outputPer1K\n  history.retentionDays\n  history.semanticSearch\n  fallback.enabled\n  fallback.providers\n  routing.bandit\n  routing.allowPaid\n  routing.quota.<provider>.requestsPerWindow\n  routing.governance.allowProviders "groq,local"  (M2.4 admin policy)\n  routing.contextWindows.<model> 16384  (M2.5 context preflight)\n  routing.nuviraSidecar.enabled  (P5 sidecar flag, default false)`);
         return;
       }
     } else if (parts.length === 2 && parts[0] === 'history') {
@@ -413,8 +413,41 @@ export class ConfigCommand extends BaseCommand {
         routing: { contextWindows: { ...(config.routing?.contextWindows || {}), [windowKey]: num } },
       } as Partial<BuffConfig>);
       console.log(`✓ ${key} = ${num}`);
+    } else if (parts.length === 3 && parts[0] === 'routing' && parts[1] === 'nuviraSidecar') {
+      // P5 M5.4 — routing.nuviraSidecar.enabled (boolean feature flag, default
+      // false) | routing.nuviraSidecar.image (pinned gateway image/tag for
+      // docker-compose.nuvira.yml, overriding the NUVIRA_GATEWAY_IMAGE env).
+      const field = parts[2];
+      const existing = config.routing?.nuviraSidecar || {};
+      if (field === 'enabled') {
+        const lower = value.trim().toLowerCase();
+        let typedValue: boolean;
+        if (lower === 'true' || lower === '1' || lower === 'yes') {
+          typedValue = true;
+        } else if (lower === 'false' || lower === '0' || lower === 'no') {
+          typedValue = false;
+        } else {
+          logger.error(`Invalid boolean value for ${key}: "${value}". Use true or false.`);
+          return;
+        }
+        this.configManager.save({
+          routing: { nuviraSidecar: { ...existing, enabled: typedValue } },
+        } as Partial<BuffConfig>);
+      } else if (field === 'image') {
+        const image = value.trim();
+        if (!image || !/^[a-z0-9._\/-]+(:[\w.\-]+)?$/.test(image)) {
+          logger.error(`Invalid gateway image for ${key}: "${value}". Expected an image:tag (e.g. ghcr.io/berriai/litellm:main-stable).`);
+          return;
+        }
+        this.configManager.save({
+          routing: { nuviraSidecar: { ...existing, image } },
+        } as Partial<BuffConfig>);
+      } else {
+        logger.error(`Unknown nuviraSidecar config key: ${field}. Valid keys: enabled, image`);
+        return;
+      }
     } else {
-      logger.error(`Invalid config key format: ${key}. Expected formats:\n  defaultProvider\n  providers.<name>.<field>\n  providers.<name>.apiKeys "k1,k2"\n  pricing.<provider>.inputPer1K\n  pricing.<provider>.outputPer1K\n  history.retentionDays\n  history.semanticSearch\n  fallback.enabled\n  fallback.providers\n  routing.bandit\n  routing.allowPaid\n  routing.quota.<provider>.requestsPerWindow\n  routing.governance.allowProviders "groq,local"`);
+      logger.error(`Invalid config key format: ${key}. Expected formats:\n  defaultProvider\n  providers.<name>.<field>\n  providers.<name>.apiKeys "k1,k2"\n  pricing.<provider>.inputPer1K\n  pricing.<provider>.outputPer1K\n  history.retentionDays\n  history.semanticSearch\n  fallback.enabled\n  fallback.providers\n  routing.bandit\n  routing.allowPaid\n  routing.quota.<provider>.requestsPerWindow\n  routing.governance.allowProviders "groq,local"\n  routing.nuviraSidecar.enabled`);
       return;
     }
 
