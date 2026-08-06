@@ -146,3 +146,42 @@ describe('ConfigCommand set — M2.4 governance policy', () => {
     expect(saved).toBeNull();
   });
 });
+
+describe('ConfigCommand set — M2.5 context preflight windows', () => {
+  beforeEach(() => {
+    saved = null;
+    configState = {
+      defaultProvider: 'local',
+      providers: {},
+      routing: {},
+    } as BuffConfig;
+    vi.spyOn(console, 'log').mockImplementation(() => {});
+    vi.spyOn(console, 'error').mockImplementation(() => {});
+  });
+
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  it('sets routing.contextWindows.<key> as a NUMBER (not a string)', () => {
+    const cmd = makeCommand();
+    runSet(cmd, 'routing.contextWindows.local', '16384');
+    expect(saved?.routing?.contextWindows).toEqual({ local: 16384 });
+    expect(typeof saved?.routing?.contextWindows?.local).toBe('number');
+  });
+
+  it('merges into existing contextWindows (additive)', () => {
+    configState.routing = { contextWindows: { gemini: 1_048_576 } } as BuffConfig['routing'];
+    const cmd = makeCommand();
+    runSet(cmd, 'routing.contextWindows.groq', '32768');
+    expect(saved?.routing?.contextWindows).toEqual({ gemini: 1_048_576, groq: 32768 });
+  });
+
+  it('rejects a non-positive or non-integer window value', () => {
+    const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
+    const cmd = makeCommand();
+    runSet(cmd, 'routing.contextWindows.local', 'abc');
+    expect(errorSpy.mock.calls.map((c) => String(c[0])).join(' ')).toContain('Invalid context window');
+    expect(saved).toBeNull();
+  });
+});

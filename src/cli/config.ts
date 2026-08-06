@@ -162,7 +162,7 @@ export class ConfigCommand extends BaseCommand {
       if (key === 'defaultProvider') {
         this.configManager.save({ defaultProvider: value as ProviderType });
       } else {
-        logger.error(`Unknown config key: ${key}. Expected formats:\n  defaultProvider\n  providers.<name>.<field>\n  providers.<name>.apiKeys "k1,k2"  (M2.3 multi-account rotation)\n  pricing.<provider>.inputPer1K\n  pricing.<provider>.outputPer1K\n  history.retentionDays\n  history.semanticSearch\n  fallback.enabled\n  fallback.providers\n  routing.bandit\n  routing.allowPaid\n  routing.quota.<provider>.requestsPerWindow\n  routing.governance.allowProviders "groq,local"  (M2.4 admin policy)`);
+        logger.error(`Unknown config key: ${key}. Expected formats:\n  defaultProvider\n  providers.<name>.<field>\n  providers.<name>.apiKeys "k1,k2"  (M2.3 multi-account rotation)\n  pricing.<provider>.inputPer1K\n  pricing.<provider>.outputPer1K\n  history.retentionDays\n  history.semanticSearch\n  fallback.enabled\n  fallback.providers\n  routing.bandit\n  routing.allowPaid\n  routing.quota.<provider>.requestsPerWindow\n  routing.governance.allowProviders "groq,local"  (M2.4 admin policy)\n  routing.contextWindows.<model> 16384  (M2.5 context preflight)`);
         return;
       }
     } else if (parts.length === 2 && parts[0] === 'history') {
@@ -398,6 +398,21 @@ export class ConfigCommand extends BaseCommand {
         logger.error(`Unknown governance config key: ${field}. Valid keys: allowProviders, denyProviders, allowModels, denyModels, piiPatterns, maxCostUsd, minPrivacyForPii, allowUnblock`);
         return;
       }
+    } else if (parts.length >= 3 && parts[0] === 'routing' && parts[1] === 'contextWindows') {
+      // M2.5 context preflight — routing.contextWindows.<model|provider> where
+      // the value is a positive integer token count: the nominal input window
+      // override used by the soft context-fit signal. Stored as a NUMBER so
+      // utilization math never relies on JS coercion of a string.
+      const windowKey = parts[2];
+      const num = Number(value);
+      if (isNaN(num) || num <= 0 || !Number.isInteger(num)) {
+        logger.error(`Invalid context window for ${key}: "${value}". Must be a positive integer token count (e.g. 16384).`);
+        return;
+      }
+      this.configManager.save({
+        routing: { contextWindows: { ...(config.routing?.contextWindows || {}), [windowKey]: num } },
+      } as Partial<BuffConfig>);
+      console.log(`✓ ${key} = ${num}`);
     } else {
       logger.error(`Invalid config key format: ${key}. Expected formats:\n  defaultProvider\n  providers.<name>.<field>\n  providers.<name>.apiKeys "k1,k2"\n  pricing.<provider>.inputPer1K\n  pricing.<provider>.outputPer1K\n  history.retentionDays\n  history.semanticSearch\n  fallback.enabled\n  fallback.providers\n  routing.bandit\n  routing.allowPaid\n  routing.quota.<provider>.requestsPerWindow\n  routing.governance.allowProviders "groq,local"`);
       return;

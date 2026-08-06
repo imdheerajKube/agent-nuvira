@@ -11,6 +11,29 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added — Nuvira-Router P2 (capability-aware scoring + wire-token metering)
 
+- **M2.5 — Context-length preflight** (`src/learning/auto-router.ts`,
+  `src/learning/hybrid-router.ts`, `src/cli/chat.ts`, `src/cli/model.ts`,
+  `src/cli/config.ts`). The genuine gap Copilot identified — the router now
+  scores each provider's NOMINAL INPUT CONTEXT WINDOW against the task's
+  estimated prompt size before picking. Built-in per-model + per-provider
+  window tables (`MODEL_CONTEXT_WINDOWS` / `PROVIDER_CONTEXT_WINDOWS`,
+  `routing.contextWindows` overrides keyed by model or provider always win),
+  and the estimate comes from the caller's `contextHintTokens` when the REAL
+  payload is known (chat passes the growing conversation history and the
+  built full prompt) — else the task text. **Soft, estimation-only, NEVER a
+  hard block**: `computeContextFit` is neutral below 50% utilization
+  (normal-size tasks never shift a ranking), ramps linearly, and even a
+  prompt exceeding the window only caps the penalty at 35% (models may
+  exceed nominal windows). Reversible gate `routing.contextFit` (default ON,
+  like capability-fit — gate-off omits the signal entirely). Surfaced per
+  provider in `models explain`: a `⏳ ctx N%` chip on ranked rows, a full
+  `── Context preflight ──` section (estimated tokens, basis task|hint,
+  per-provider window/utilization/fit), and a JSON `context` block; fallback
+  chain candidates carry `contextWindowTokens`. `buff config set
+  routing.contextWindows.<model|provider> <tokens>` stores validated
+  integers. A 500K-token payload flips a privacy-first local pick to gemini
+  (1M window) — the long-conversation/heavy-workspace case now routes toward
+  big-window providers.
 - **M2.4 — Governance constraints (admin policy)** (`src/config/types.ts`,
   `src/learning/auto-router.ts`, `src/cli/models.ts`, `src/cli/model.ts`,
   `src/web-dashboard/server.ts`). Admin routing policy via `routing.governance`

@@ -44,6 +44,7 @@ import { getAgentStats } from './agent-stats.js';
 import { getRouterBandit, DEFAULT_MIN_SAMPLES, type BanditOutcome } from './router-bandit.js';
 import { getRouterPromotion, type ParallelPick } from './router-promotion.js';
 import { getModelRegistry } from './model-registry.js';
+import { estimateTokens } from './cost-tracker.js';
 import { PREFERRED_MODELS } from '../inference/model-validator.js';
 import type { ConfigManager } from '../config/manager.js';
 import type { ProviderPricing, GovernanceConfig } from '../config/types.js';
@@ -222,6 +223,15 @@ export interface AutoRouterOptions {
    * everyone. Default: true (paid providers always allowed).
    */
   allowPaid?: boolean;
+  /**
+   * M2.5 context preflight: caller-provided estimate of the prompt size in
+   * tokens (the REAL payload about to be sent — conversation history, gathered
+   * context, workspace files). When set, it REPLACES the router's default
+   * task-text estimate for context-fit scoring, so a long conversation or a
+   * heavy workspace naturally routes toward providers whose nominal input
+   * windows fit. Estimation only — never a hard block.
+   */
+  contextHintTokens?: number;
 }
 
 /**
@@ -274,6 +284,25 @@ export interface ScoredProvider {
   costSource?: 'measured' | 'estimated';
   /** M2.2: the exact measured token basis used (when measured). */
   costBasis?: { inputTokens: number; outputTokens: number };
+  /**
+   * M2.5: nominal input context window (tokens) for this provider×model, from
+   * the context preflight table (or `routing.contextWindows` overrides). Set
+   * only when the context-fit signal is enabled.
+   */
+  contextWindowTokens?: number;
+  /**
+   * M2.5: estimated utilization — prompt tokens ÷ nominal window (0–1; may
+   * exceed 1 when the prompt is larger than the window). Set only when the
+   * context-fit signal is enabled.
+   */
+  contextUtilization?: number;
+  /**
+   * M2.5: soft context-fit score (0–1) applied to this provider's score.
+   * 1 = neutral (small task, big window); lower = heavily-utilized window.
+   * NEVER eliminates — even a prompt exceeding the window only caps the
+   * penalty. Set only when the context-fit signal is enabled.
+   */
+  contextFit?: number;
 }
 
 /** The final auto-routing decision for a single task. */
@@ -316,6 +345,23 @@ export interface AutoRouteResult {
    * honest and lets `models explain` / the dashboard show policy decisions.
    */
   governanceBlocked?: Array<{ provider: string; reason: string }>;
+  /**
+   * M2.5: context preflight snapshot — the estimated prompt size used for
+   * scoring, its basis (task text vs caller hint), and per-provider
+   * utilization (estimated tokens ÷ nominal window). Present only when the
+   * context-fit signal is enabled (`routing.contextFit`, default ON) — the
+   * gate-off path omits it entirely (reversible, like capability-fit).
+   */
+  contextPreflight?: {
+    estimatedPromptTokens: number;
+    basis: 'task' | 'hint';
+    providers: Array<{
+      provider: string;
+      contextWindowTokens: number;
+      utilization?: number;
+      fit?: number;
+    }>;
+  };
 }
 
 // ─── Provider Capability Profiles ───────────────────────────────────────────
@@ -453,6 +499,60 @@ const COST_REFERENCE_USD = 0.01;
 /** Typical call size used for cost scoring (input/output tokens). */
 const TYPICAL_INPUT_TOKENS = 2000;
 const TYPICAL_OUTPUT_TOKENS = 500;
+
+// ─── M2.5 Context preflight — nominal input context windows ────────────────
+//
+// Approximate NOMINAL input context windows (tokens) per model, used ONLY for
+// the soft utilization estimate. These are published model specs — the router
+// never treats them as hard limits (models may exceed nominal windows and
+// providers may advertise more; estimation only). Config overrides via
+// `routing.contextWindows[model]` (or `[provider]` as a provider-level
+// default) always win.
+
+/** Per-model nominal input context window (tokens). */
+export const MODEL_CONTEXT_WINDOWS: Record<string, number> = {
+  // Gemini 2.x — 1M token context (Flash + Pro variants)
+  'gemini-2.5-flash': 1_048_576,
+  'gemini-2.0-flash': 1_048_576,
+  'gemini-1.5-flash': 1_048_576,
+  // Groq-hosted Llama / GPT-OSS — 128K context
+  'llama-3.3-70b-versatile': 131_072,
+  'llama-3.1-8b-instant': 131_072,
+  'openai/gpt-oss-20b': 131_072,
+  // NIM-hosted Llama — 128K context
+  'meta/llama-3.3-70b-instruct': 128_000,
+  'meta/llama-3.1-8b-instruct': 128_000,
+  // OpenRouter pass-through — GPT-4o-mini / Llama 128K, Mistral 32K
+  'openai/gpt-4o-mini': 128_000,
+  'meta-llama/llama-3.3-70b-instruct': 128_000,
+  'mistralai/mistral-7b-instruct': 32_000,
+};
+
+/** Provider-level fallback when the exact model isn't in the table. */
+export const PROVIDER_CONTEXT_WINDOWS: Record<string, number> = {
+  local: 8_192, // Ollama default varies 4K–128K by model; assume modest
+  groq: 131_072,
+  gemini: 1_048_576,
+  nim: 128_000,
+  openrouter: 128_000,
+};
+
+/** Fallback for unknown providers — large enough to rarely trigger a penalty. */
+export const DEFAULT_CONTEXT_WINDOW = 32_768;
+
+/**
+ * M2.5 context preflight — soft utilization-based fit (0–1, higher = better).
+ * NEVER a hard block: even a prompt that exceeds the nominal window only caps
+ * the penalty, and unknown/zero windows are neutral (fit 1). Neutral below
+ * 50% utilization so normal-size tasks never shift a ranking; ramps linearly
+ * to a 35% cap at ≥200% utilization.
+ */
+export function computeContextFit(promptTokens: number, windowTokens: number): number {
+  if (!windowTokens || windowTokens <= 0) return 1;
+  const utilization = Math.max(0, promptTokens) / windowTokens;
+  const penalty = Math.max(0, Math.min(0.35, (utilization - 0.5) / 1.5));
+  return 1 - penalty;
+}
 
 /**
  * Measured per-call token profile (M2.2 wire-token metering): a sample-
@@ -872,6 +972,20 @@ export class AutoModelRouter {
       // Best-effort — policy must never break routing.
     }
 
+    // M2.5 context preflight: `routing.contextFit` (default ON) gates the soft
+    // utilization signal exactly like capability-fit — set false to revert to
+    // pure dimension-weight scoring. The estimated prompt size is the caller's
+    // context hint when provided (the REAL payload — conversation history,
+    // gathered context), else the task text itself. Estimation only, never a
+    // hard block. Best-effort config read — never let it break routing.
+    let contextFitEnabled = true;
+    try {
+      contextFitEnabled = (configManager?.getAll?.()?.routing?.contextFit ?? true) !== false;
+    } catch {
+      // Best-effort
+    }
+    const promptTokens = options.contextHintTokens ?? estimateTokens(taskDescription);
+
     // Score every allowed provider
     let scored: ScoredProvider[] = allowedProviders.map((provider) => {
       let caps = this.getCapabilities(provider);
@@ -904,26 +1018,53 @@ export class AutoModelRouter {
         ? capabilityFitScore(taskType, provider, caps)
         : undefined;
       const fitScore = capabilityFit !== undefined ? applyCapabilityFit(score, capabilityFit) : score;
+      // M2.5 context preflight (soft, estimation-only): how well the provider's
+      // nominal input window fits the estimated prompt size. Gated by
+      // `routing.contextFit` (default ON) like capability-fit. NEVER a hard
+      // block — even a prompt exceeding the window only caps the penalty
+      // (computeContextFit), and unknown windows are neutral. Healthy
+      // candidates only: a quota-parked reason is already definitive. NOTE: the
+      // window is judged on the CONFIGURED pin (resolveModel); bandit per-model
+      // learning may serve a different concrete model whose window differs —
+      // an acceptable soft-estimate divergence (bandit is off by default).
+      const contextWindowTokens = qp === undefined && contextFitEnabled
+        ? this.resolveContextWindow(provider, this.resolveModel(provider, agentType, configManager), configManager)
+        : undefined;
+      const contextUtilization = contextWindowTokens !== undefined && promptTokens > 0
+        ? promptTokens / contextWindowTokens
+        : undefined;
+      const contextFit = contextWindowTokens !== undefined
+        ? computeContextFit(promptTokens, contextWindowTokens)
+        : undefined;
+      const finalScore = fitScore * (contextFit ?? 1);
       const reason = qp !== undefined
         ? `${provider} (quota exhausted — auto re-enables in ${Math.ceil(qp / 1000)}s)`
         : this.buildReason(provider, caps, complexity, mode, inCooldown, runtime?.adjusted.has(provider));
+      let finalReason = qp !== undefined || capabilityFit === undefined
+        ? reason
+        : `${reason} · capability-fit ${Math.round(capabilityFit * 100)}%`;
+      // Context chip only when the window actually matters (penalty regime) —
+      // a normal-size task keeps a clean reason; a squeezed window shows the
+      // estimate and the nominal window it was judged against.
+      if (contextFit !== undefined && contextFit < 1 && contextWindowTokens !== undefined) {
+        finalReason = `${finalReason} · context-fit ${Math.round(contextFit * 100)}% (${promptTokens} tok of ${contextWindowTokens})`;
+      }
       return {
         provider,
-        score: fitScore,
+        score: finalScore,
         dimensions,
         weightTotal,
         inCooldown,
         quotaParked: qp !== undefined,
         capabilityFit,
+        contextFit,
+        contextUtilization,
+        contextWindowTokens,
         costSource: measuredCost ? 'measured' : 'estimated',
         costBasis: measuredCost
           ? { inputTokens: measuredCost.inputTokens, outputTokens: measuredCost.outputTokens }
           : undefined,
-        // Fit suffix only on healthy candidates — a quota-parked reason is
-        // already definitive and shouldn't claim a fit score.
-        reason: qp !== undefined || capabilityFit === undefined
-          ? reason
-          : `${reason} · capability-fit ${Math.round(capabilityFit * 100)}%`,
+        reason: finalReason,
       };
     });
 
@@ -1207,6 +1348,7 @@ export class AutoModelRouter {
         model: this.resolveModel(s.provider, agentType, configManager),
         estimatedCost: 0,
         qualityScore: s.score,
+        contextWindowTokens: s.contextWindowTokens,
         reason: s.inCooldown ? `Fallback (in cooldown): ${s.provider}` : `Fallback: ${s.provider}`,
       }));
 
@@ -1226,6 +1368,28 @@ export class AutoModelRouter {
       logger.info(`  🤖 Auto routing: ${explanation}`);
     }
 
+    // M2.5: context preflight snapshot over the FINAL ranked set (post
+    // governance/constraints), so the explain view shows exactly what the
+    // surviving candidates were judged against.
+    const contextPreflight = contextFitEnabled
+      ? {
+          estimatedPromptTokens: promptTokens,
+          basis: options.contextHintTokens !== undefined ? ('hint' as const) : ('task' as const),
+          // Resolve the window even for quota-parked candidates (their scored
+          // entry deliberately omits the context fields — the park reason is
+          // definitive — but the preflight snapshot must still show a window;
+          // the human explain renderer calls toLocaleString() on it).
+          providers: scored.map((s) => ({
+            provider: s.provider,
+            contextWindowTokens:
+              s.contextWindowTokens ??
+              this.resolveContextWindow(s.provider, this.resolveModel(s.provider, agentType, configManager), configManager),
+            utilization: s.contextUtilization,
+            fit: s.contextFit,
+          })),
+        }
+      : undefined;
+
     return {
       agentType,
       complexity,
@@ -1242,7 +1406,38 @@ export class AutoModelRouter {
       routedBy,
       banditEscalation,
       governanceBlocked,
+      contextPreflight,
     };
+  }
+
+  /**
+   * M2.5: nominal input context window (tokens) for a provider×model. Model
+   * table → provider fallback → generous default. `routing.contextWindows`
+   * overrides (keyed by model, or by provider as a provider-level default)
+   * always win. Estimation-only input — never a hard block.
+   */
+  private resolveContextWindow(provider: string, model: string, configManager?: ConfigManager): number {
+    try {
+      const overrides = configManager?.getAll?.()?.routing?.contextWindows;
+      if (overrides) {
+        // Coerce string values (e.g. `buff config set routing.contextWindows.local
+        // 16384` stores "16384") to numbers so utilization math never relies on
+        // JS coercion; invalid/non-positive values fall through.
+        const fromOverride = (key: string): number | undefined => {
+          const v = overrides[key];
+          if (v === undefined) return undefined;
+          const n = Number(v);
+          return Number.isFinite(n) && n > 0 ? n : undefined;
+        };
+        const modelWin = fromOverride(model);
+        if (modelWin !== undefined) return modelWin;
+        const providerWin = fromOverride(provider);
+        if (providerWin !== undefined) return providerWin;
+      }
+    } catch {
+      // Best-effort — config read must never break routing.
+    }
+    return MODEL_CONTEXT_WINDOWS[model] ?? PROVIDER_CONTEXT_WINDOWS[provider] ?? DEFAULT_CONTEXT_WINDOW;
   }
 
   /**
