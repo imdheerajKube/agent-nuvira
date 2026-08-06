@@ -4,13 +4,13 @@
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>Agent-Nuvira — Multi-Agent AI Coding Assistant</title>
-  <meta name="description" content="Agent-Nuvira is an open-source, multi-agent AI coding assistant that runs from your terminal. 17+ agents, 3,032 tests, GitLab + GitHub PR review built-in. Plan, write, review, test, and publish code — from a single command." />          <meta name="keywords" content="AI coding assistant, multi-agent AI, terminal AI tool, open source, 17+ providers, Groq, NVIDIA NIM, Google Gemini, OpenRouter, Ollama, OpenAI, Anthropic, Mistral, Azure, vLLM, LM Studio, FAISS vector store, auto model routing, quota ledger, team collaboration, MCP, GitLab, PR review, GitHub, Thompson-sampling bandit, routing strategy, per-model learning, promotion gate" />
+  <meta name="description" content="Agent-Nuvira is an open-source, multi-agent AI coding assistant that runs from your terminal. 17+ agents, 3,159 tests, GitLab + GitHub PR review built-in. Plan, write, review, test, and publish code — from a single command." />          <meta name="keywords" content="AI coding assistant, multi-agent AI, terminal AI tool, open source, 17+ providers, Groq, NVIDIA NIM, Google Gemini, OpenRouter, Ollama, OpenAI, Anthropic, Mistral, Azure, vLLM, LM Studio, FAISS vector store, auto model routing, quota ledger, team collaboration, MCP, GitLab, PR review, GitHub, Thompson-sampling bandit, routing strategy, per-model learning, promotion gate, capability-aware scoring, wire-token measured cost, governance constraints, multi-account key rotation, context-length preflight" />
   <link rel="icon" type="image/png" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='8' fill='%236363f2'/%3E%3Ctext x='16' y='22' text-anchor='middle' fill='white' font-size='18' font-weight='bold' font-family='system-ui'%3EN%3C/text%3E%3C/svg%3E" />
-  <meta property="og:title" content="Agent-Nuvira — Multi-Agent AI Coding Assistant" />          <meta property="og:description" content="The open-source multi-agent AI coding assistant. Plan, write, review, test, verify, and publish code from your terminal. 17+ providers. 17+ agents. 3,032 tests. GitLab + GitHub PR review built-in. No subscriptions. No telemetry." />
+  <meta property="og:title" content="Agent-Nuvira — Multi-Agent AI Coding Assistant" />          <meta property="og:description" content="The open-source multi-agent AI coding assistant. Plan, write, review, test, verify, and publish code from your terminal. 17+ providers. 17+ agents. 3,159 tests. GitLab + GitHub PR review built-in. No subscriptions. No telemetry." />
   <meta property="og:image" content="https://www.agent-nuvira.com/assets/hero.png" />
   <meta property="og:url" content="https://www.agent-nuvira.com" />
   <meta name="twitter:card" content="summary_large_image" />
-  <meta name="twitter:title" content="Agent-Nuvira — Multi-Agent AI Coding Assistant" />          <meta name="twitter:description" content="The open-source multi-agent AI coding assistant. 17+ providers. 17+ agents. 3,032 tests. GitLab + GitHub PR review. From your terminal." />
+  <meta name="twitter:title" content="Agent-Nuvira — Multi-Agent AI Coding Assistant" />          <meta name="twitter:description" content="The open-source multi-agent AI coding assistant. 17+ providers. 17+ agents. 3,159 tests. GitLab + GitHub PR review. From your terminal." />
   <link rel="preconnect" href="https://fonts.googleapis.com" />
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
   <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800;900&family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet" />
@@ -89,7 +89,7 @@
             <span class="metric-label">AI Providers</span>
           </div>
           <div class="metric">
-            <span class="metric-value">3,032</span>
+            <span class="metric-value">3,159</span>
             <span class="metric-label">Tests Passing</span>
           </div>
           <div class="metric">
@@ -121,7 +121,7 @@
               <span class="log info">📁 Context Gatherer scanning codebase...</span>
               <span class="log success">✅ Writer implemented auth middleware</span>
               <span class="log info">👀 Reviewer validating changes...</span>
-              <span class="log success">✅ All 3,032 tests passed</span>
+              <span class="log success">✅ All 3,159 tests passed</span>
               <span class="log info">🔒 VerifyModule running security scan...</span>
               <span class="log success">✅ No security issues found</span>
               <span class="log success">🚀 Changes committed to feature/auth</span>
@@ -289,6 +289,41 @@
           </div>
           <h3>Credential-Aware + Free/Local-First Gate</h3>
           <p>Auto routing <strong>never picks a provider without configured credentials</strong> — it can't. A free/local-first gate keeps paid models out of trivial-to-moderate work (complex and critical tasks may still reach high-capacity clouds), so your budget is spent only where reasoning actually matters.</p>
+        </div>
+        <div class="feature-card" data-delay="1200">
+          <div class="feature-icon learning">
+            <svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M12 2a10 10 0 1 0 10 10"/><path d="M12 6v6l4 2"/><path d="M22 12h-4l3-3 3 3z"/></svg>
+          </div>
+          <h3>Capability-Aware Scoring (🎯 fit)</h3>
+          <p>Every task type knows what it needs — <code>plan</code> wants reasoning, quick edits want speed, code review wants code + reasoning. Each candidate is matched against those requirements (<strong>🎯 fit N%</strong> in <code>models explain</code>), nudging equally-scored providers toward the one whose strengths actually fit the job. Tagged by real capability profile, clamped so it never overturns a dimension-weight advantage, and reversible via <code>routing.capabilityFit</code> (default ON).</p>
+        </div>
+        <div class="feature-card" data-delay="1300">
+          <div class="feature-icon providers">
+            <svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M4 2v20l16-4V2z"/><path d="M4 12h16"/><path d="M8 6.5l2.5 1.5L8 9.5z"/></svg>
+          </div>
+          <h3>Wire-Token Measured Costs (📏 measured)</h3>
+          <p>Routing no longer guesses on token counts. OpenAI-compatible providers report their real <code>usage</code> (response body + final SSE chunk), and the router records <strong>exact input/output tokens</strong> per model (EMA) — cost scoring then uses <strong>📏 measured</strong> tokens instead of the typical 2,000/500 estimate whenever real usage exists (<code>costSource: measured | estimated</code> per ranked provider). The dashboard splits spend into 📏 measured vs 📐 estimated, per call and per provider.</p>
+        </div>
+        <div class="feature-card" data-delay="1400">
+          <div class="feature-icon privacy">
+            <svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M12 1v22M17 5H9.5a3.5 3.5 0 0 0 0 7h5a3.5 3.5 0 0 1 0 7H6"/></svg>
+          </div>
+          <h3>Governance Constraints (admin policy)</h3>
+          <p>Set real admin policy with <code>routing.governance</code>: provider/model allow &amp; deny lists, an admin per-call max-cost cap (stricter of admin vs per-call wins), and a <strong>PII-domain block</strong> — tasks matching your <code>piiPatterns</code> are only served by providers with the privacy floor you set (default local-only). Enforcement is a <strong>hard elimination</strong>, never a score nudge — and when policy eliminates every candidate, the router refuses to serve a violator with a full <code>governanceBlocked</code> audit trail (<code>PIIPolicyError</code> / <code>GovernancePolicyError</code>).</p>
+        </div>
+        <div class="feature-card" data-delay="1500">
+          <div class="feature-icon offline">
+            <svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><path d="M12 6v6l4 2"/><path d="M8 2h8M9 22h6"/></svg>
+          </div>
+          <h3>Context-Length Preflight (⏳ ctx)</h3>
+          <p>Before picking, the router scores each provider's nominal input window against your task's estimated prompt size (<code>routing.contextFit</code>, default ON). Chat passes the <strong>real</strong> conversation length; plan &amp; execute pass real per-task payload estimates. Soft and estimation-only — normal-size tasks are untouched, and even an over-window prompt only caps the penalty at 35% (models can exceed nominal windows). A 500K-token workspace now routes toward big-window providers automatically — see <strong>⏳ ctx N%</strong> chips in <code>models explain</code>.</p>
+        </div>
+        <div class="feature-card" data-delay="1600">
+          <div class="feature-icon learning">
+            <svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M16 3h5v5M21 3l-7 7M8 21H3v-5M3 21l7-7"/></svg>
+          </div>
+          <h3>Multi-Account Key Rotation (🔑 key#N)</h3>
+          <p>One provider, many keys. A provider can carry <strong>multiple API keys</strong> (<code>apiKeys[]</code>), and failover rotates through every non-parked key <em>before</em> switching providers — a quota-exhausted secondary account is parked (FNV fingerprint, raw keys never persisted) and the next key is tried. Parked accounts are skipped predictively on the next run and cleared by <code>releaseAccount</code> / <code>buff models unblock</code>. Rotation is logged (<code>🔑 key#N …</code>) and proven by a hermetic E2E test driving real adapters against a mock gateway.</p>
         </div>
       </div>
     </div>
