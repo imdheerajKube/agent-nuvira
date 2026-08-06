@@ -79,6 +79,15 @@ export interface ModelRegistryEntry {
   measuredSamples?: number;
   /** Rolling error rate 0–1 (telemetry failures / calls). */
   errorRate: number;
+  /**
+   * P4 M4.4 rolling mid-stream flakiness 0–1 (EMA): how often this provider ×
+   * model STARTED streaming but DIED before completion (partial). Distinct
+   * from `errorRate` — a partial is not an error (the model is real and
+   * authenticated) but it IS a reliability signal: the router deprioritizes
+   * flaky mid-stream providers. Never flips status (a partial today may
+   * complete tomorrow); decays toward 0 on clean successes.
+   */
+  partialRate?: number;
   /** Epoch ms until which the entry is quota-parked (0 = not parked). */
   quotaParkedUntil: number;
   /** Where the current status came from. */
@@ -584,6 +593,10 @@ export class ModelRegistry {
       measuredInputTokens: existing?.measuredInputTokens,
       measuredOutputTokens: existing?.measuredOutputTokens,
       measuredSamples: existing?.measuredSamples,
+      // P4 M4.4: mid-stream flakiness survives a re-verify too — a success
+      // DECAYS it (recordCall) rather than wiping it, so a single clean call
+      // can't erase a flaky streak (that's the whole point of the EMA).
+      partialRate: existing?.partialRate,
     };
     this.persist();
     // A GENUINE promotion (was not verified → now verified) is a state change
@@ -809,6 +822,16 @@ export class ModelRegistry {
     if (ok) {
       this.markVerified(provider, model, 'telemetry', latencyMs, action, costUsd, callId);
       this.data.entries[key].lastUsedAt = now;
+      // P4 M4.4: a clean success heals mid-stream flakiness (the provider
+      // demonstrably finishes). Decay the EMA toward 0 — never hard-reset,
+      // so a single success doesn't erase a flaky streak. markVerified already
+      // persisted the rebuild (which preserved partialRate), so the decayed
+      // value must be persisted again to survive a restart.
+      const prevPartial = this.data.entries[key].partialRate || 0;
+      if (prevPartial > 0) {
+        this.data.entries[key].partialRate = Math.max(0, prevPartial - 0.1);
+        this.persist();
+      }
       return;
     }
 
@@ -893,9 +916,36 @@ export class ModelRegistry {
         errorType,
         streamedChunks,
       });
+      // P4 M4.4 flakiness signal: bump the entry's mid-stream EMA so the
+      // router can deprioritize providers that start-but-die. The status is
+      // NEVER flipped (a partial today may complete tomorrow) — only the
+      // partialRate EMA moves, so the signal is a soft reliability nudge, not
+      // a hard block.
+      const key = entryKey(provider, model);
+      const existing = this.data.entries[key];
+      if (existing) {
+        const prev = existing.partialRate || 0;
+        existing.partialRate = Math.min(1, prev + (1 - prev) * 0.25);
+        this.persist();
+      }
     } catch {
       // Best-effort — a partial telemetry write must never break streaming.
     }
+  }
+
+  /**
+   * P4 M4.4: worst mid-stream flakiness (partialRate) across a provider's
+   * tracked models — the router's single-number signal for "this provider
+   * keeps starting streams that die." 0 = no partials recorded (or healed).
+   */
+  getProviderFlakiness(provider: string): number {
+    let worst = 0;
+    for (const [k, e] of Object.entries(this.data.entries)) {
+      if (k.startsWith(provider + '|') && (e.partialRate || 0) > worst) {
+        worst = e.partialRate || 0;
+      }
+    }
+    return worst;
   }
 
   /**

@@ -254,6 +254,13 @@ export interface ScoredProvider {
         outputTokens: number;
     };
     /**
+     * P4 M4.4: mid-stream flakiness (partialRate EMA 0–1) read from the model
+     * registry at decision time — present only when `routing.partialFlakiness`
+     * is enabled and the provider has a positive partial rate. The reliability
+     * dimension was scaled down by this much.
+     */
+    flakiness?: number;
+    /**
      * M2.5: nominal input context window (tokens) for this provider×model, from
      * the context preflight table (or `routing.contextWindows` overrides). Set
      * only when the context-fit signal is enabled.

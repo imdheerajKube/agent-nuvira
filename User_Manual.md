@@ -1,6 +1,23 @@
 # Agent-Nuvira — User Manual
 
-**Version 1.59.1 | August 2026**
+**Version 1.59.2 | August 2026**
+
+### v1.59.2 — Routing learns from mid-stream flakiness
+
+- Each registry entry now tracks a **partialRate flakiness EMA** (0–1): a
+  mid-stream interruption (the provider started streaming, then died) bumps
+  it — **without ever flipping the provider unavailable** (a partial today may
+  complete tomorrow). Clean successes decay it, so flakiness heals over time
+  but a single success can't erase a flaky streak.
+- **Auto routing** reads this signal: providers that keep starting streams that
+  die mid-way get a reliability penalty (capped at 40% of the dimension), so
+  they rank below otherwise-identical healthy providers. Gated by
+  `routing.partialFlakiness` (default ON — `buff config set
+  routing.partialFlakiness false` to disable).
+- **`models explain`** shows the penalty transparently as a `⏸ flaky
+  mid-stream (N%)` chip on affected ranked rows.
+
+---
 
 ### v1.59.1 — Dashboard: partial mid-stream interruption chips
 

@@ -9,6 +9,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.59.2] - 2026-08-06
+
+### Added
+
+- **P4 M4.4: mid-stream flakiness now feeds the ROUTER, not just the dashboard.**
+  Each registry entry carries a `partialRate` EMA (0–1): `recordPartial` bumps
+  it (status never flips — a partial today may complete tomorrow), clean
+  `recordCall` successes decay it (never a hard wipe; a single success can't
+  erase a flaky streak). New `getProviderFlakiness()` exposes the worst
+  rate across a provider's models. Auto routing applies a reliability penalty
+  (capped at 40% of the dimension) gated by `routing.partialFlakiness`
+  (default ON), so providers that keep starting streams that die mid-way rank
+  below otherwise-identical healthy ones — and `models explain` renders a
+  transparent `⏸ flaky mid-stream (N%)` chip on affected rows. Set
+  `routing.partialFlakiness false` to disable.
+
 ## [1.59.1] - 2026-08-06
 
 ### Added

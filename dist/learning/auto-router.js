@@ -649,6 +649,18 @@ export class AutoModelRouter {
         catch {
             // Best-effort
         }
+        // P4 M4.4 mid-stream flakiness: `routing.partialFlakiness` (default ON)
+        // gates the reliability penalty the registry's partialRate EMA applies to
+        // providers that keep starting streams that die mid-way. When OFF the
+        // signal is fully inert (no penalty, no ⏸ chip in `models explain`).
+        // Best-effort config read — never let it break routing.
+        let partialFlakinessEnabled = true;
+        try {
+            partialFlakinessEnabled = (configManager?.getAll?.()?.routing?.partialFlakiness ?? true) !== false;
+        }
+        catch {
+            // Best-effort
+        }
         const promptTokens = options.contextHintTokens ?? estimateTokens(taskDescription);
         // Score every allowed provider
         let scored = allowedProviders.map((provider) => {
@@ -665,6 +677,24 @@ export class AutoModelRouter {
             // Runtime data adjusts reasoning/reliability from real performance
             if (runtime) {
                 caps = this.adjustCapabilitiesForRuntime(caps, provider, runtime);
+            }
+            // P4 M4.4 mid-stream flakiness penalty: a provider that keeps starting
+            // streams that die before completion is a WORSE reliability bet than one
+            // that errors cleanly (its model is real — it just can't finish). The
+            // registry's partialRate EMA (0–1, healed by clean successes) scales the
+            // reliability dimension down; gated by `routing.partialFlakiness`.
+            let flakiness;
+            if (partialFlakinessEnabled) {
+                const registryFlakiness = getModelRegistry().getProviderFlakiness(provider);
+                if (registryFlakiness > 0) {
+                    flakiness = registryFlakiness;
+                    // Cap the penalty at 40% of the reliability dimension — a flaky
+                    // provider loses ground but is never hard-blocked (it may heal).
+                    caps = {
+                        ...caps,
+                        reliability: Math.max(0, (caps.reliability ?? 0) * (1 - Math.min(0.4, registryFlakiness * 0.5))),
+                    };
+                }
             }
             const { score, dimensions, weightTotal } = scoreProvider(provider, caps, weights);
             const inCooldown = cooldown.has(provider);
@@ -713,6 +743,10 @@ export class AutoModelRouter {
             if (contextFit !== undefined && contextFit < 1 && contextWindowTokens !== undefined) {
                 finalReason = `${finalReason} · context-fit ${Math.round(contextFit * 100)}% (${promptTokens} tok of ${contextWindowTokens})`;
             }
+            // P4 M4.4 flakiness chip — the reliability penalty is transparent.
+            if (flakiness !== undefined && flakiness > 0) {
+                finalReason = `${finalReason} · ⏸ flaky mid-stream (${Math.round(flakiness * 100)}%)`;
+            }
             return {
                 provider,
                 score: finalScore,
@@ -724,6 +758,7 @@ export class AutoModelRouter {
                 contextFit,
                 contextUtilization,
                 contextWindowTokens,
+                flakiness,
                 costSource: measuredCost ? 'measured' : 'estimated',
                 costBasis: measuredCost
                     ? { inputTokens: measuredCost.inputTokens, outputTokens: measuredCost.outputTokens }
