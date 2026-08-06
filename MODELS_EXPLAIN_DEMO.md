@@ -151,7 +151,30 @@ For CI / scripting, the important new fields:
 
 ---
 
-## 4. When policy gets in the way (M2.4)
+## 4. The dashboard mirrors these chips
+
+The same guarantees are visible in the **web dashboard** (`buff dashboard` →
+🤖 Auto Routing Insights → *Auto Router — What the agent would pick*). Each
+provider row carries the same chips the CLI renders:
+
+```
+ 1. 🔷 Gemini        ████████████  0.87
+    🎯 fit 85%  📏 measured 12,480→3,110 tok  ⏳ ctx 3% (1,048,576 tok)
+ 2. 🔶 NIM           ██████████░░  0.74
+    🎯 fit 72%  📏 measured 12,480→3,110 tok  ⏳ ctx 12% (131,072 tok)
+ 3. 🟢 Groq          ████████░░░░  0.70
+    🎯 fit 48%  📐 estimated               ⏳ ctx 9% (131,072 tok)
+```
+
+The server's `/api/routing` and `/api/all` payloads carry `capabilityFit`,
+`costSource`, `costBasis`, `contextUtilization`, and `contextWindowTokens` per
+ranked provider, so the UI and the CLI never drift apart. Rows whose gates are
+OFF simply omit the chip (only the cost source always renders, exactly like the
+CLI).
+
+---
+
+## 5. When policy gets in the way (M2.4)
 
 If your admin policy blocks a provider, it's **eliminated, then shown** — never
 silently missing:
@@ -175,7 +198,7 @@ violator:
 
 ---
 
-## 5. Tying the chips to their gates
+## 6. Tying the chips to their gates
 
 | Chip / signal | Config gate | Default | Effect when OFF |
 |---|---|---|---|
@@ -185,7 +208,7 @@ violator:
 
 ---
 
-## 6. Try it
+## 7. Try it
 
 ```bash
 npm install -g agent-nuvira        # 1.58.0+
