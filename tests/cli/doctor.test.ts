@@ -19,6 +19,7 @@ import {
   auditJsonlIntegrity,
   checkSecretsBackend,
   checkGatewayTelemetry,
+  checkAuditChainIntegrity,
   buildEnterpriseChecks,
 } from '../../src/cli/doctor.js';
 import type { BuffConfig } from '../../src/config/types.js';
@@ -384,5 +385,58 @@ describe('doctor --enterprise telemetry flags (P7 M7.4, opt-in, off by default)'
     expect(telemetry).toBeDefined();
     expect(telemetry?.status).toBe('warn');
     expect(telemetry?.message).toContain('OFF');
+  });
+});
+
+describe('doctor --enterprise audit chain integrity (P6 M6.3)', () => {
+  it('intact chain → pass with tamper-evident message', () => {
+    const check = checkAuditChainIntegrity('quota-events.jsonl', {
+      totalLines: 12,
+      legacyLines: 0,
+      corruptLines: 0,
+      tamperLine: 0,
+      verdict: 'ok',
+    });
+    expect(check.status).toBe('pass');
+    expect(check.message).toContain('12 record(s)');
+    expect(check.message).toContain('intact');
+  });
+
+  it('tampered chain → fail with the exact tamper line + restore fix', () => {
+    const check = checkAuditChainIntegrity('quota-events.jsonl', {
+      totalLines: 12,
+      legacyLines: 0,
+      corruptLines: 0,
+      tamperLine: 7,
+      verdict: 'tampered',
+    });
+    expect(check.status).toBe('fail');
+    expect(check.message).toContain('TAMPER DETECTED');
+    expect(check.message).toContain('line 7');
+    expect(check.fix).toContain('Restore');
+  });
+
+  it('legacy pre-chain store → informative warn, never a fail', () => {
+    const check = checkAuditChainIntegrity('quota-events.jsonl', {
+      totalLines: 200,
+      legacyLines: 200,
+      corruptLines: 0,
+      tamperLine: 0,
+      verdict: 'legacy',
+    });
+    expect(check.status).toBe('warn');
+    expect(check.message).toContain('legacy');
+  });
+
+  it('corrupt lines → fail (chain cannot be trusted past a corrupt line)', () => {
+    const check = checkAuditChainIntegrity('quota-events.jsonl', {
+      totalLines: 5,
+      legacyLines: 0,
+      corruptLines: 1,
+      tamperLine: 3,
+      verdict: 'corrupt',
+    });
+    expect(check.status).toBe('fail');
+    expect(check.message).toContain('corrupt');
   });
 });

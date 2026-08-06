@@ -135,6 +135,19 @@ export declare function checkGatewayTelemetry(config: BuffConfig, usage: Gateway
  */
 export declare function buildGatewayUsage(configManager?: import('../config/manager.js').ConfigManager): GatewayUsage;
 /**
+ * P6 M6.3 chain-integrity check, built from a pure verify result (callers
+ * run `verifyAuditFile` — this function never touches the filesystem).
+ * Legacy pre-chain stores verify as a WARN (records readable; chain starts on
+ * the next write); broken chains are a FAIL with the exact tamper line.
+ */
+export declare function checkAuditChainIntegrity(name: string, verify: {
+    totalLines: number;
+    legacyLines: number;
+    corruptLines: number;
+    tamperLine: number;
+    verdict: string;
+}): CheckResult;
+/**
  * The full M7.1 enterprise self-check, built from pure inputs so it is
  * trivially testable: config snapshot + env + gateway probe result + audit
  * file paths + opt-in gateway usage (M7.4). Returns the ordered CheckResult[]
@@ -151,6 +164,21 @@ export declare function buildEnterpriseChecks(inputs: {
     }>;
     /** M7.4 opt-in gateway usage-health flags (default: empty = no tracked usage). */
     gatewayUsage?: GatewayUsage;
+    /**
+     * P6 M6.3 pre-computed chain-verify results (pure core, file I/O done by
+     * the caller) — keyed by audit-file name. When present, an extra chain
+     * integrity check per audit file is appended after the JSONL-integrity one.
+     */
+    auditChains?: Array<{
+        name: string;
+        result: {
+            totalLines: number;
+            legacyLines: number;
+            corruptLines: number;
+            tamperLine: number;
+            verdict: string;
+        };
+    }>;
 }): CheckResult[];
 export declare class DoctorCommand extends BaseCommand {
     create(): Command;

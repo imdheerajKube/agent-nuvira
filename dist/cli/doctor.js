@@ -29,6 +29,7 @@ import { getPluginRegistry } from '../plugins/registry.js';
 import { recordRegistryFailure } from '../learning/provider-fallback.js';
 import { getQuotaLedger } from '../learning/quota-ledger.js';
 import { getCostTracker } from '../learning/cost-tracker.js';
+import { verifyAuditFile } from '../enterprise/audit-chain.js';
 import { logger } from '../utils/logger.js';
 // ─── Constants ──────────────────────────────────────────────────────────────
 const PROVIDER_LABELS = {
@@ -331,6 +332,46 @@ export function buildGatewayUsage(configManager) {
     }
 }
 /**
+ * P6 M6.3 chain-integrity check, built from a pure verify result (callers
+ * run `verifyAuditFile` — this function never touches the filesystem).
+ * Legacy pre-chain stores verify as a WARN (records readable; chain starts on
+ * the next write); broken chains are a FAIL with the exact tamper line.
+ */
+export function checkAuditChainIntegrity(name, verify) {
+    if (verify.verdict === 'tampered') {
+        return {
+            name: `Audit Chain: ${name}`,
+            status: 'fail',
+            message: `TAMPER DETECTED — first broken record at line ${verify.tamperLine}`,
+            detail: `${verify.totalLines} record(s), ${verify.legacyLines} legacy. Stored head ≠ recomputed chain head.`,
+            fix: 'Restore the file from backup; audit trails are append-only by design.',
+        };
+    }
+    if (verify.verdict === 'corrupt') {
+        return {
+            name: `Audit Chain: ${name}`,
+            status: 'fail',
+            message: `${verify.corruptLines} corrupt line(s) — truncated write or tampering`,
+            detail: `Hash chain cannot be trusted past a corrupt line. Restore from backup.`,
+            fix: 'Restore the file from backup; audit trails are append-only by design.',
+        };
+    }
+    if (verify.verdict === 'legacy') {
+        return {
+            name: `Audit Chain: ${name}`,
+            status: 'warn',
+            message: `${verify.totalLines} legacy pre-chain record(s) — readable, chain starts on next write`,
+            detail: 'Pre-M6.3 lines are outside the hash chain. New writes are chained and verified.',
+        };
+    }
+    return {
+        name: `Audit Chain: ${name}`,
+        status: 'pass',
+        message: `${verify.totalLines} record(s), hash chain intact (tamper-evident)`,
+        detail: `Head matches the persisted sidecar state — no tampering detected.`,
+    };
+}
+/**
  * The full M7.1 enterprise self-check, built from pure inputs so it is
  * trivially testable: config snapshot + env + gateway probe result + audit
  * file paths + opt-in gateway usage (M7.4). Returns the ordered CheckResult[]
@@ -362,6 +403,10 @@ export function buildEnterpriseChecks(inputs) {
             detail: `Append-only JSONL at ${f.path}`,
             fix: corrupt > 0 ? 'Restore the file from backup; audit trails are append-only by design.' : undefined,
         });
+    }
+    // 3b. P6 M6.3 hash-chain integrity (per audit file, when results provided)
+    for (const chain of inputs.auditChains || []) {
+        checks.push(checkAuditChainIntegrity(chain.name, chain.result));
     }
     // 4. RBAC / governance policy
     checks.push(checkRbacConfig(inputs.config));
@@ -422,15 +467,22 @@ export class DoctorCommand extends BaseCommand {
                 // Best-effort — a probe failure is reported as a fail check below.
             }
             const memoryDir = join(homedir(), '.buff', 'memory');
+            const auditFiles = [
+                { name: 'quota-events.jsonl', path: join(memoryDir, 'quota-events.jsonl') },
+                { name: 'model-registry-actions.jsonl', path: join(memoryDir, 'model-registry-actions.jsonl') },
+            ];
             const enterpriseChecks = buildEnterpriseChecks({
                 config: all,
                 env: { ...process.env },
                 gatewayProbe,
                 gatewayConfigured,
-                auditFiles: [
-                    { name: 'quota-events.jsonl', path: join(memoryDir, 'quota-events.jsonl') },
-                    { name: 'model-registry-actions.jsonl', path: join(memoryDir, 'model-registry-actions.jsonl') },
-                ],
+                auditFiles,
+                // P6 M6.3: chain verification for each audit store (file I/O here,
+                // pure core in the check).
+                auditChains: auditFiles.map((f) => ({
+                    name: f.name,
+                    result: verifyAuditFile(f.path, f.name.replace(/\.jsonl$/, '')),
+                })),
                 gatewayUsage: buildGatewayUsage(this.configManager),
             });
             console.log('');

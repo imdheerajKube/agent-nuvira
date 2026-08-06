@@ -582,24 +582,34 @@ function fmtShortTime(ms: number): string {
     new Date(ms).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
 }
 
-function ModelLearnChip({ provider, model, reason, killed, transient }: {
+function ModelLearnChip({ provider, model, reason, killed, transient, partial, streamedChunks }: {
   provider: string;
   model: string;
   reason?: string;
   killed?: boolean;
   transient?: boolean;
+  /** P4 M4.4 mid-stream interruption — started streaming, died before finish. */
+  partial?: boolean;
+  /** P4 M4.4: how many chunks streamed before the interruption (tooltip detail). */
+  streamedChunks?: number;
 }) {
   const isKilled = killed === true;
   const isTransient = transient === true;
-  const color = isTransient ? '#d29922' : isKilled ? '#f85149' : '#3fb950';
-  const bg = isTransient ? '#2d1f00' : isKilled ? '#2d0f0f' : '#0a2e1a';
+  const isPartial = partial === true;
+  // Partial gets its own violet signal: distinct from a clean error (transient)
+  // because a provider that starts-but-can't-finish is a worse reliability
+  // signal — the router deprioritizes flaky mid-stream providers.
+  const color = isPartial ? '#bc8cff' : isTransient ? '#d29922' : isKilled ? '#f85149' : '#3fb950';
+  const bg = isPartial ? '#21122e' : isTransient ? '#2d1f00' : isKilled ? '#2d0f0f' : '#0a2e1a';
   return (
     <span
-      title={isTransient
-        ? `Transient failure — health decayed, no flip${reason ? ` · ${reason}` : ''}`
-        : isKilled
-          ? `Killed by this action — predictively skipped by routing${reason ? ` · ${reason}` : ''}`
-          : 'Verified by this action — trusted by routing'}
+      title={isPartial
+        ? `Mid-stream interruption — started streaming${typeof streamedChunks === 'number' ? ` ~${streamedChunks} chunks in` : ''}, died before finish (P4 M4.4); router deprioritizes flaky mid-stream providers${reason ? ` · ${reason}` : ''}`
+        : isTransient
+          ? `Transient failure — health decayed, no flip${reason ? ` · ${reason}` : ''}`
+          : isKilled
+            ? `Killed by this action — predictively skipped by routing${reason ? ` · ${reason}` : ''}`
+            : 'Verified by this action — trusted by routing'}
       style={{
         display: 'inline-flex', alignItems: 'center', gap: 6,
         background: bg, border: `1px solid ${color}`,
@@ -611,9 +621,9 @@ function ModelLearnChip({ provider, model, reason, killed, transient }: {
       onMouseEnter={(e) => { e.currentTarget.style.transform = 'scale(1.05)'; }}
       onMouseLeave={(e) => { e.currentTarget.style.transform = 'scale(1)'; }}
     >
-      <span style={{ opacity: 0.85 }}>{isTransient ? '~' : isKilled ? '✗' : '✓'}</span>
+      <span style={{ opacity: 0.85 }}>{isPartial ? '⏸' : isTransient ? '~' : isKilled ? '✗' : '✓'}</span>
       {provider}/{model.length > 30 ? model.slice(0, 27) + '…' : model}
-      {isKilled && reason && (
+      {(isKilled || isPartial) && reason && (
         <span style={{ color: `${color}99`, fontSize: 10, fontWeight: 400 }}>· {reason}</span>
       )}
     </span>
@@ -631,10 +641,12 @@ function ModelLearnChip({ provider, model, reason, killed, transient }: {
 export type ActionDayEvent = {
   provider: string;
   model: string;
-  outcome: 'verified' | 'unavailable' | 'error';
+  outcome: 'verified' | 'unavailable' | 'error' | 'partial';
   errorType?: string;
   /** Epoch ms of the event. */
   at: number;
+  /** P4 M4.4: chunks streamed before a partial died (chip tooltip detail). */
+  streamedChunks?: number;
 };
 
 /** One day bucket in the per-action telemetry timeline. */
@@ -643,18 +655,21 @@ export type ActionDayBucket = {
   verified: number;
   killed: number;
   transient: number;
+  /** Mid-stream partial-interruption events that day (P4 M4.4). */
+  partial: number;
   events: ActionDayEvent[];
 };
 
 /**
  * One chip per provider × model × outcome for a day (latest event wins),
- * ordered killed → verified → transient so the most actionable learning
- * (predictive skips) surfaces first.
+ * ordered killed → partial → verified → transient so the most actionable
+ * learning (predictive skips first, then flaky mid-stream providers) surfaces
+ * first.
  */
 export function dedupeDayEvents(events: ActionDayEvent[]): ActionDayEvent[] {
   const latest = new Map<string, ActionDayEvent>();
   for (const e of events) latest.set(`${e.provider}|${e.model}|${e.outcome}`, e);
-  const priority: Record<ActionDayEvent['outcome'], number> = { unavailable: 0, verified: 1, error: 2 };
+  const priority: Record<ActionDayEvent['outcome'], number> = { unavailable: 0, partial: 1, verified: 2, error: 3 };
   return [...latest.values()].sort((a, b) => priority[a.outcome] - priority[b.outcome] || b.at - a.at);
 }
 
@@ -662,7 +677,7 @@ export function dedupeDayEvents(events: ActionDayEvent[]): ActionDayEvent[] {
 function lastDayWithEvents(timeline: ActionDayBucket[]): number {
   for (let i = timeline.length - 1; i >= 0; i--) {
     const b = timeline[i];
-    if (b.verified + b.killed + b.transient > 0) return i;
+    if (b.verified + b.killed + b.transient + (b.partial || 0) > 0) return i;
   }
   return Math.max(0, timeline.length - 1);
 }
@@ -735,7 +750,7 @@ export function ActionTimelineChart({ timeline }: { timeline: ActionDayBucket[] 
 
   if (!timeline || len === 0) return null;
 
-  const max = Math.max(1, ...timeline.map((b) => b.verified + b.killed + b.transient));
+  const max = Math.max(1, ...timeline.map((b) => b.verified + b.killed + b.transient + (b.partial || 0)));
   const dayLabel = (day: number): string =>
     new Date(day).toLocaleDateString([], { month: 'short', day: 'numeric' });
   const day = timeline[clamped];
@@ -780,6 +795,7 @@ export function ActionTimelineChart({ timeline }: { timeline: ActionDayBucket[] 
         <span style={{ fontSize: 11, color: '#8b949e', whiteSpace: 'nowrap' }}>
           {dayLabel(day.day)} · ✓ {day.verified} · ✗ {day.killed}
           {day.transient > 0 ? ` · ~ ${day.transient}` : ''}
+          {day.partial > 0 ? ` · ⏸ ${day.partial}` : ''}
         </span>
         <input
           type="range"
@@ -804,16 +820,17 @@ export function ActionTimelineChart({ timeline }: { timeline: ActionDayBucket[] 
         }}
       >
         {timeline.map((b, i) => {
-          const total = b.verified + b.killed + b.transient;
+          const total = b.verified + b.killed + b.transient + (b.partial || 0);
           const hVerified = (b.verified / max) * 56;
           const hKilled = (b.killed / max) * 56;
           const hTransient = (b.transient / max) * 56;
+          const hPartial = ((b.partial || 0) / max) * 56;
           const isActive = i === clamped;
           return (
             <div
               key={b.day}
               onClick={() => { setPlaying(false); setDayIdx(i); }}
-              title={`${dayLabel(b.day)} — ✓ ${b.verified} verified · ✗ ${b.killed} killed · ~ ${b.transient} transient`}
+              title={`${dayLabel(b.day)} — ✓ ${b.verified} verified · ✗ ${b.killed} killed · ~ ${b.transient} transient${(b.partial || 0) > 0 ? ` · ⏸ ${b.partial} partial` : ''}`}
               style={{
                 flex: 1, display: 'flex', flexDirection: 'column-reverse',
                 alignItems: 'center', gap: 0, cursor: 'pointer',
@@ -847,6 +864,9 @@ export function ActionTimelineChart({ timeline }: { timeline: ActionDayBucket[] 
                 {b.transient > 0 && (
                   <div style={{ height: hTransient, background: '#d29922', minHeight: 3 }} />
                 )}
+                {b.partial > 0 && (
+                  <div style={{ height: hPartial, background: '#bc8cff', minHeight: 3 }} />
+                )}
               </div>
               <div style={{
                 fontSize: 9, color: isActive ? '#58a6ff' : '#6e7681', marginTop: 4,
@@ -862,6 +882,7 @@ export function ActionTimelineChart({ timeline }: { timeline: ActionDayBucket[] 
         <span><span style={{ color: '#3fb950' }}>■</span> verified</span>
         <span><span style={{ color: '#f85149' }}>■</span> killed</span>
         <span><span style={{ color: '#d29922' }}>■</span> transient</span>
+        <span><span style={{ color: '#bc8cff' }}>■</span> partial</span>
       </div>
 
       {/* Day detail — the chips for the scrubbed day */}
@@ -877,7 +898,7 @@ export function ActionTimelineChart({ timeline }: { timeline: ActionDayBucket[] 
         </div>
         {chips.length === 0 ? (
           <div style={{ fontSize: 12, color: '#6e7681' }}>
-            No learning recorded that day — nothing verified or killed.
+            No learning recorded that day — nothing verified, killed, or partial.
           </div>
         ) : (
           <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6 }}>
@@ -896,6 +917,15 @@ export function ActionTimelineChart({ timeline }: { timeline: ActionDayBucket[] 
                   provider={e.provider}
                   model={e.model}
                 />
+              ) : e.outcome === 'partial' ? (
+                <ModelLearnChip
+                  key={`${e.provider}|${e.model}|${e.outcome}`}
+                  provider={e.provider}
+                  model={e.model}
+                  reason={e.errorType}
+                  partial
+                  streamedChunks={e.streamedChunks}
+                />
               ) : (
                 <ModelLearnChip
                   key={`${e.provider}|${e.model}|${e.outcome}`}
@@ -913,9 +943,12 @@ export function ActionTimelineChart({ timeline }: { timeline: ActionDayBucket[] 
   );
 }
 
-function ActionTelemetryCard({ entry }: { entry: ActionTelemetryInsights['actions'][number] }) {
+export function ActionTelemetryCard({ entry }: { entry: ActionTelemetryInsights['actions'][number] }) {
   const [expanded, setExpanded] = useState(true);
-  const borderColor = entry.killed > 0 ? '#f85149' : entry.verified > 0 ? '#3fb950' : '#d29922';
+  // Partial mid-stream interruptions are the strongest reliability signal —
+  // violet border wins even over killed (a provider that starts-but-can't-
+  // finish is worse than one that errors cleanly).
+  const borderColor = (entry.partial || 0) > 0 ? '#bc8cff' : entry.killed > 0 ? '#f85149' : entry.verified > 0 ? '#3fb950' : '#d29922';
 
   return (
     <div style={{
@@ -937,6 +970,7 @@ function ActionTelemetryCard({ entry }: { entry: ActionTelemetryInsights['action
             <span><span style={{ color: '#3fb950' }}>✓ {entry.verified}</span> verified</span>
             <span><span style={{ color: '#f85149' }}>✗ {entry.killed}</span> killed</span>
             {entry.transient > 0 && <span><span style={{ color: '#d29922' }}>~ {entry.transient}</span> transient</span>}
+            {(entry.partial || 0) > 0 && <span><span style={{ color: '#bc8cff' }}>⏸ {entry.partial}</span> partial</span>}
           </div>
         </div>
         <span style={{ color: '#8b949e', fontSize: 16, transition: 'transform 0.2s', transform: expanded ? 'rotate(90deg)' : 'rotate(0deg)' }}>▶</span>
@@ -973,7 +1007,22 @@ function ActionTelemetryCard({ entry }: { entry: ActionTelemetryInsights['action
               </div>
             </>
           )}
-          {entry.killedModels.length === 0 && entry.verifiedModels.length === 0 && (
+          {(entry.partialModels?.length || 0) > 0 && (
+            <>
+              <div style={{
+                fontSize: 11, fontWeight: 600, color: '#bc8cff', marginBottom: 6,
+                textTransform: 'uppercase', letterSpacing: 0.4,
+              }}>
+                ⏸ Partial — mid-stream interruption (flaky provider, deprioritized)
+              </div>
+              <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6, marginBottom: 14 }}>
+                {entry.partialModels.map((m) => (
+                  <ModelLearnChip key={`${m.provider}|${m.model}`} provider={m.provider} model={m.model} reason={m.reason} partial streamedChunks={m.streamedChunks} />
+                ))}
+              </div>
+            </>
+          )}
+          {entry.killedModels.length === 0 && entry.verifiedModels.length === 0 && (entry.partialModels?.length || 0) === 0 && (
             <div style={{ fontSize: 12, color: '#6e7681' }}>
               Only transient failures — health decayed, no model flipped.
             </div>

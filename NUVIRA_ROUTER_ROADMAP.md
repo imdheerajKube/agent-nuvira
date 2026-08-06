@@ -222,8 +222,8 @@ Verified as of 2026-08-05 (v1.57.0, 3,032 root tests + 42 dashboard component te
 **Milestones**
 
 - **M6.1 — AuthN/AuthZ.** RBAC layer over `src/agents/credential-store.ts` / team config: roles (admin/operator/viewer), scoped permissions; optional OIDC/SAML via `src/enterprise/auth/` adapter interface (local default). ✅ RBAC matrix tests.
-- **M6.2 — Secrets management.** Vault/keychain backends behind an interface (macOS Keychain, `pass`, AWS SSM, env) + logger redaction scrubber (N6). ✅ Secret-scrubber tests; nothing sensitive in any log/audit.
-- **M6.3 — Tamper-evident audit log.** Extend `src/agents/pipeline-audit.ts`: hash-chained records, retention policy, JSONL/SIEM export, `buff audit export`. ✅ Chain-integrity tests (tamper detection).
+- **M6.2 — Secrets management.** ✅ v1.59.0: central `src/enterprise/secrets.ts` redaction scrubber wired into EVERY logger method + both JSONL audit writers; 12 scrubber tests; nothing sensitive in any log/audit. (Vault/keychain backends behind the interface — future work.)
+- **M6.3 — Tamper-evident audit log.** ✅ v1.59.0: `src/enterprise/audit-chain.ts` SHA-256 hash-chained records + sidecar head state + `verifyChain` tamper-line detection + CEF/SIEM export + `buff audit verify/export`; `doctor --enterprise` chain verification; 13 chain + 8 CLI + 4 doctor tests.
 - **M6.4 — Nuvira Gateway (central mode).** `buff nuvira serve`: headless OpenAI-compatible server exposing our decision layer (the P1 adapter in reverse); optional shared state (Redis or SQLite+file-lock) so a fleet shares registry/ledger. ✅ Gateway E2E (curl through it); concurrency tests.
 - **M6.5 — Model governance enforcement.** Admin allow/deny + policy rules enforced in `auto-router` hard constraints (schema from M2.4 promoted to admin API). ✅ Governance tests.
 - **M6.6 — Supply chain.** SBOM (cyclonedx), SLSA provenance on releases, signed VSIX/tarball, license audit. ✅ `npm sbom` output validated.
@@ -288,8 +288,8 @@ Verified as of 2026-08-05 (v1.57.0, 3,032 root tests + 42 dashboard component te
 | P5 | M5.3 E2E through gateway | [#6](https://github.com/imdheerajKube/agent-nuvira/issues/6) | ✅ | v1.58.4 |
 | P5 | M5.4 Pinning & upgrade policy | [#6](https://github.com/imdheerajKube/agent-nuvira/issues/6) | ✅ | v1.58.4 |
 | P6 | M6.1 AuthN/AuthZ (RBAC) | [#7](https://github.com/imdheerajKube/agent-nuvira/issues/7) | ⬜ | — |
-| P6 | M6.2 Secrets management | [#7](https://github.com/imdheerajKube/agent-nuvira/issues/7) | ⬜ | — |
-| P6 | M6.3 Tamper-evident audit | [#7](https://github.com/imdheerajKube/agent-nuvira/issues/7) | ⬜ | — |
+| P6 | M6.2 Secrets management | [#7](https://github.com/imdheerajKube/agent-nuvira/issues/7) | ✅ | v1.59.0 |
+| P6 | M6.3 Tamper-evident audit | [#7](https://github.com/imdheerajKube/agent-nuvira/issues/7) | ✅ | v1.59.0 |
 | P6 | M6.4 Nuvira Gateway (central) | [#7](https://github.com/imdheerajKube/agent-nuvira/issues/7) | ⬜ | — |
 | P6 | M6.5 Governance enforcement | [#7](https://github.com/imdheerajKube/agent-nuvira/issues/7) | ⬜ | — |
 | P6 | M6.6 Supply chain (SBOM) | [#7](https://github.com/imdheerajKube/agent-nuvira/issues/7) | ⬜ | — |

@@ -113,30 +113,44 @@ export interface ActionTelemetryInsights {
     killed: number;
     /** Events where a transient failure decayed health (no flip). */
     transient: number;
+    /**
+     * Events where the action hit a MID-STREAM interruption (P4 M4.4 partial
+     * learning) — the provider started streaming then died before completion.
+     */
+    partial: number;
     /** Provider × model combos this action verified (latest event each). */
     verifiedModels: Array<{ provider: string; model: string; at: number }>;
     /** Provider × model combos this action killed (latest event each). */
     killedModels: Array<{ provider: string; model: string; reason?: string; at: number }>;
     /**
+     * Provider × model combos this action interrupted MID-STREAM (latest
+     * event each) — P4 M4.4 partial learning: started streaming then died.
+     */
+    partialModels: Array<{ provider: string; model: string; reason?: string; at: number; streamedChunks?: number }>;
+    /**
      * Daily buckets (last 14 days, ascending) — verified vs killed vs
-     * transient per day, so the panel renders a mini time-series chart per
-     * action: how the action's learning evolved over time. Each bucket also
-     * carries the raw events that day so the chart can be scrubbed
-     * day-by-day to show that day's exact verified/killed chips.
+     * transient vs partial per day, so the panel renders a mini time-series
+     * chart per action: how the action's learning evolved over time. Each
+     * bucket also carries the raw events that day so the chart can be
+     * scrubbed day-by-day to show that day's exact chips.
      */
     timeline: Array<{
       day: number;
       verified: number;
       killed: number;
       transient: number;
+      /** Mid-stream partial-interruption events that day (P4 M4.4). */
+      partial: number;
       /** Raw events that day — the chips the scrubbable chart shows per day. */
       events: Array<{
         provider: string;
         model: string;
-        outcome: 'verified' | 'unavailable' | 'error';
+        outcome: 'verified' | 'unavailable' | 'error' | 'partial';
         errorType?: string;
         /** Epoch ms of the event. */
         at: number;
+        /** P4 M4.4: chunks streamed before a partial died (surfaced in the chip tooltip). */
+        streamedChunks?: number;
       }>;
     }>;
   }>;

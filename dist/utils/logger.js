@@ -1,4 +1,5 @@
 import chalk from 'chalk';
+import { applyRedaction, redactValue } from '../enterprise/secrets.js';
 let currentLogLevel = 'info';
 /**
  * When true, the logger emits nothing at all (not even errors).
@@ -27,46 +28,67 @@ export function isSilent() {
 function shouldLog(level) {
     return LOG_LEVELS[level] >= LOG_LEVELS[currentLogLevel];
 }
+/**
+ * Redact a log line (message + any extra args) before it reaches the console
+ * (P6 M6.2). Never throws: if redaction fails for any reason, the original
+ * line is logged unchanged (logging must never break).
+ */
+function scrub(line, args) {
+    try {
+        return {
+            line: applyRedaction(line),
+            args: args.map((a) => redactValue(a)),
+        };
+    }
+    catch {
+        return { line, args };
+    }
+}
 export const logger = {
     debug: (message, ...args) => {
         if (silent)
             return;
         if (shouldLog('debug')) {
-            console.log(chalk.gray(`[debug] ${message}`), ...args);
+            const s = scrub(message, args);
+            console.log(chalk.gray(`[debug] ${s.line}`), ...s.args);
         }
     },
     info: (message, ...args) => {
         if (silent)
             return;
         if (shouldLog('info')) {
-            console.log(chalk.blue(`ℹ ${message}`), ...args);
+            const s = scrub(message, args);
+            console.log(chalk.blue(`ℹ ${s.line}`), ...s.args);
         }
     },
     success: (message, ...args) => {
         if (silent)
             return;
         if (shouldLog('info')) {
-            console.log(chalk.green(`✔ ${message}`), ...args);
+            const s = scrub(message, args);
+            console.log(chalk.green(`✔ ${s.line}`), ...s.args);
         }
     },
     warn: (message, ...args) => {
         if (silent)
             return;
         if (shouldLog('warn')) {
-            console.log(chalk.yellow(`⚠ ${message}`), ...args);
+            const s = scrub(message, args);
+            console.log(chalk.yellow(`⚠ ${s.line}`), ...s.args);
         }
     },
     error: (message, ...args) => {
         if (silent)
             return;
         if (shouldLog('error')) {
-            console.error(chalk.red(`✖ ${message}`), ...args);
+            const s = scrub(message, args);
+            console.error(chalk.red(`✖ ${s.line}`), ...s.args);
         }
     },
     highlight: (message) => {
         if (silent)
             return;
-        console.log(chalk.cyan(message));
+        console.log(chalk.cyan(applyRedaction(message)));
     },
 };
 //# sourceMappingURL=logger.js.map

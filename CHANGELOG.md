@@ -9,6 +9,29 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.59.1] - 2026-08-06
+
+### Added
+
+- **Dashboard: P4 M4.4 partial mid-stream chips surface everywhere (M3.4 presentation).**
+  The "learned from real usage" per-action telemetry now surfaces `partial`
+  (mid-stream interruption) events end-to-end: the scrubbable timeline renders
+  a violet `⏸` segment + day-summary count + legend, per-day chips render a
+  violet `⏸` variant with the streamed-chunk detail in the tooltip ("died
+  after ~N chunks"), and each action card shows a `⏸ N partial` stat + a
+  dedicated Partial chips section (violet border wins the card when flaky
+  mid-stream providers are present). `dedupeDayEvents` orders chips
+  killed → partial → verified → error so flaky mid-stream providers surface
+  right after predictive skips. Registry aggregation exposes `partialModels`
+  (latest per provider × model, with `streamedChunks`).
+
+## [1.59.0] - 2026-08-06
+
+### Added
+
+- **P6 M6.2 — Secrets management**: central `src/enterprise/secrets.ts` redaction scrubber — `redact()` masks API keys (known prefixes, Bearer tokens, key=value + JSON-encoded fields) everywhere; wired into EVERY logger method (message + args, non-plain values like Error preserved) and the two JSONL audit writers (quota-events, model-registry-actions). Nothing sensitive reaches a log or audit record. `BUFF_NO_REDACT=1` disables (debug only).
+- **P6 M6.3 — Tamper-evident audit log**: `src/enterprise/audit-chain.ts` — SHA-256 hash-chained records (`chain.hash = sha256(prevHash ‖ canonical(record))`), sidecar head state (`<file>.chain.json`), `verifyChain()` with exact tamper-line detection + legacy pre-chain compatibility, rotation-safe re-chaining, O(1) fast append for hot paths, and CEF/SIEM export. New `buff audit verify` (exit 0 ok / 1 tampered|corrupt / 2 legacy) + `buff audit export`. `doctor --enterprise` Audit Integrity checks are now hash-chain verification (tamper = FAIL with the exact line).
+
 ## [1.58.9] - 2026-08-06
 
 ### Added
