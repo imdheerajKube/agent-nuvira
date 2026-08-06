@@ -47,6 +47,7 @@ export const DEFAULT_HEARTBEAT_INTERVAL_MS = 15_000;
 export const DEFAULT_FEDERATION_CONFIG = {
     enabled: false,
     secret: '',
+    authMode: 'secret',
     host: DEFAULT_FEDERATION_HOST,
     port: DEFAULT_FEDERATION_PORT,
     maxConcurrentTasks: 4,

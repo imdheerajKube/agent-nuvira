@@ -9,8 +9,8 @@
 
 import { describe, it, expect } from 'vitest';
 import { render, screen } from '@testing-library/react';
-import RoutingInsightsPanel from './RoutingInsightsPanel';
-import type { DashboardData, GovernanceInsights, PromotionInsights } from '../types';
+import RoutingInsightsPanel, { RbacSection } from './RoutingInsightsPanel';
+import type { DashboardData, GovernanceInsights, PromotionInsights, RbacInsights } from '../types';
 
 // ─── Helpers ────────────────────────────────────────────────────────────────
 
@@ -247,5 +247,65 @@ describe('GovernanceSection (via RoutingInsightsPanel)', () => {
     expect(screen.getByText(/unblock admin-hard/)).toBeTruthy();
     // Hard-constraint enforcement note.
     expect(screen.getByText(/violating providers are eliminated/)).toBeTruthy();
+  });
+});
+
+// ─── RBAC identity card (P6 M6.1) ──────────────────────────────────────────
+
+function makeRbacData(rbac?: RbacInsights): DashboardData {
+  return {
+    routing: {
+      providers: [],
+      bestModels: [],
+      preference: [],
+      rbac,
+      updatedAt: Date.now(),
+    },
+  } as unknown as DashboardData;
+}
+
+describe('RbacSection (P6 M6.1)', () => {
+  it('renders the acting identity, role, and user→role map', () => {
+    render(<RbacSection rbac={{
+      legacy: false,
+      identity: 'alice',
+      role: 'admin',
+      users: [
+        { user: 'alice', role: 'admin' },
+        { user: 'bob', role: 'viewer' },
+      ],
+      updatedAt: Date.now(),
+    }} />);
+    expect(screen.getByText(/You are/)).toBeTruthy();
+    expect(screen.getByText('alice')).toBeTruthy();
+    // 'admin' appears in the role badge AND the "writes require admin" hint.
+    expect(screen.getAllByText('admin').length).toBeGreaterThan(0);
+    expect(screen.getByText(/bob · viewer/)).toBeTruthy();
+    // The em/code tags split the hint text into separate nodes — match on textContent.
+    expect(
+      screen.getAllByText((_, el) => !!el?.textContent?.includes('Policy writes require admin')).length,
+    ).toBeGreaterThan(0);
+  });
+
+  it('renders the legacy permissive notice when no roles are assigned', () => {
+    render(<RbacSection rbac={{ legacy: true, identity: 'dheeraj', role: null, users: [], updatedAt: Date.now() }} />);
+    expect(screen.getByText(/Legacy single-user mode/)).toBeTruthy();
+    expect(screen.getByText(/policy writes are/)).toBeTruthy();
+  });
+
+  it('renders an unassigned role honestly (null role)', () => {
+    render(<RbacSection rbac={{ legacy: false, identity: 'mallory', role: null, users: [{ user: 'alice', role: 'admin' }], updatedAt: Date.now() }} />);
+    expect(screen.getByText(/unassigned/)).toBeTruthy();
+  });
+
+  it('renders through the panel when routing.rbac is present', () => {
+    render(<RoutingInsightsPanel data={makeRbacData({
+      legacy: false,
+      identity: 'alice',
+      role: 'admin',
+      users: [{ user: 'alice', role: 'admin' }],
+      updatedAt: Date.now(),
+    })} />);
+    expect(screen.getByText(/RBAC Identity/)).toBeTruthy();
   });
 });

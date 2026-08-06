@@ -192,8 +192,57 @@ async function executeDelegatedTask(task, taskId, abortController) {
     }
 }
 // ─── Route Handlers ─────────────────────────────────────────────────────────
-async function handleHandshake(req, res, config) {
+async function handleHandshake(req, res, config, oidcAdapter) {
     const body = await parseBody(req);
+    // P6 M6.4 gateway auth: OIDC mode requires a verified bearer token instead
+    // of the pre-shared secret. The adapter is injected at server creation — a
+    // configured-but-unwired mode is a 503 (misconfiguration), never silent.
+    if (config.authMode === 'oidc') {
+        if (!oidcAdapter) {
+            sendError(res, 503, 'OIDC auth requested but no OidcAdapter is wired');
+            return;
+        }
+        if (!body.clientId && !body.secret) {
+            // clientId is optional in oidc mode (derived from the verified subject),
+            // but a completely empty body is still a malformed handshake.
+            sendError(res, 400, 'Missing handshake payload');
+            return;
+        }
+        const bearerToken = getBearerToken(req);
+        if (!bearerToken) {
+            sendError(res, 401, 'OIDC bearer token required');
+            return;
+        }
+        let identity;
+        try {
+            identity = await oidcAdapter.verify(bearerToken);
+        }
+        catch {
+            identity = null;
+        }
+        if (!identity) {
+            sendError(res, 401, 'Invalid or expired OIDC token');
+            return;
+        }
+        const clientId = body.clientId || identity.sub;
+        const sessionToken = generateToken();
+        const expiresAt = Date.now() + 24 * 60 * 60 * 1000; // 24 hours
+        sessions.set(sessionToken, {
+            token: sessionToken,
+            clientId,
+            createdAt: Date.now(),
+            expiresAt,
+        });
+        logger.success(`Federation: OIDC identity '${identity.sub}' connected (client '${clientId}')`);
+        const response = {
+            sessionToken,
+            serverId: config.nodeId,
+            expiresAt,
+            capabilities: config.capabilities,
+        };
+        sendJSON(res, 200, createEnvelope('response', response));
+        return;
+    }
     if (!body.secret || !body.clientId) {
         sendError(res, 400, 'Missing secret or clientId');
         return;
@@ -316,7 +365,7 @@ function handleHealth(_req, res) {
     sendJSON(res, 200, createEnvelope('response', health));
 }
 // ─── Request Router ─────────────────────────────────────────────────────────
-function routeRequest(req, res, config) {
+function routeRequest(req, res, config, oidcAdapter) {
     // CORS preflight
     if (req.method === 'OPTIONS') {
         res.writeHead(204, {
@@ -331,7 +380,7 @@ function routeRequest(req, res, config) {
     const method = req.method || 'GET';
     try {
         if (method === 'POST' && url === '/federation/handshake') {
-            handleHandshake(req, res, config);
+            void handleHandshake(req, res, config, oidcAdapter);
         }
         else if (method === 'POST' && url === '/federation/task') {
             handleTaskDelegation(req, res, config);
@@ -352,35 +401,37 @@ function routeRequest(req, res, config) {
         logger.error(`Federation server error: ${msg}`);
     }
 }
-// ─── Server Creation ────────────────────────────────────────────────────────
 /**
  * Create and start a federation server.
  *
  * @param config — Federation configuration (defaults to reading from env/config)
+ * @param options — Server options (OIDC adapter for authMode 'oidc')
  * @returns The started HTTP server instance
  */
-export function createFederationServer(config) {
+export function createFederationServer(config, options) {
     const resolvedConfig = {
         ...DEFAULT_FEDERATION_CONFIG,
         ...config,
     };
-    if (!resolvedConfig.secret) {
-        // Try to read from env or config
-        resolvedConfig.secret = process.env.FEDERATION_SECRET || '';
+    if (resolvedConfig.authMode !== 'oidc') {
+        if (!resolvedConfig.secret) {
+            // Try to read from env or config
+            resolvedConfig.secret = process.env.FEDERATION_SECRET || '';
+        }
+        if (!resolvedConfig.secret) {
+            throw new Error('Federation secret not configured. Set FEDERATION_SECRET env var ' +
+                'or pass it via FederationConfig.secret.');
+        }
     }
-    if (!resolvedConfig.secret) {
-        throw new Error('Federation secret not configured. Set FEDERATION_SECRET env var ' +
-            'or pass it via FederationConfig.secret.');
-    }
-    const server = createServer((req, res) => routeRequest(req, res, resolvedConfig));
+    const server = createServer((req, res) => routeRequest(req, res, resolvedConfig, options?.oidcAdapter));
     return server;
 }
 /**
  * Start the federation server on the configured port.
  */
-export function startFederationServer(config) {
+export function startFederationServer(config, options) {
     const resolvedConfig = { ...DEFAULT_FEDERATION_CONFIG, ...config };
-    const server = createFederationServer(resolvedConfig);
+    const server = createFederationServer(resolvedConfig, options);
     return new Promise((resolve, reject) => {
         server.listen(resolvedConfig.port, resolvedConfig.host, () => {
             logger.success(`Federation server listening on ${resolvedConfig.host}:${resolvedConfig.port}`);

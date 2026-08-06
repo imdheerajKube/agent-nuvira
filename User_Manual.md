@@ -1,6 +1,12 @@
 # Agent-Nuvira — User Manual
 
-**Version 1.59.7 | August 2026**
+**Version 1.59.8 | August 2026**
+
+### v1.59.8 — Token-verified gateway + RBAC identity card
+
+- **Token-verified federation gateway (P6 M6.4, minimal slice)** — `buff federation start --auth oidc --oidc-public-key <pem>` turns the handshake into a bearer-token check: clients must present an RS256-signed JWT that verifies against your public key (expiry/issuer/audience enforced). The PEM path is persisted in `~/.buff/federation.json` so a daemonized server reloads it on restart. Secret-mode federation is unchanged.
+- **RBAC identity card** — the Routing Insights page now shows the acting identity, their role, and the full `~/.buff/rbac.json` user→role map (mirrors `buff admin whoami`), alongside the governance policy card.
+- **Secrets hardening** — `buff doctor --enterprise` now flags M2.3 multi-account `apiKeys` arrays stored in plaintext `buffconfig.json` (previously only single `apiKey` values were caught).
 
 ### v1.59.7 — RBAC + governance policy card + flakiness trends
 

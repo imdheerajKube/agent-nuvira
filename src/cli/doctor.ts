@@ -258,7 +258,10 @@ export function checkSecretsBackend(
   const viaEnv: string[] = [];
   for (const { provider, varName } of envVars) {
     const cfg = config.providers?.[provider as ProviderType];
-    const hasKey = !!cfg?.apiKey;
+    // Both credential forms count as plaintext config: the single `apiKey` and
+    // the M2.3 multi-account `apiKeys` rotation array. A provider using the
+    // array in buffconfig.json is just as exposed as one with a bare key.
+    const hasKey = !!cfg?.apiKey || (!!cfg?.apiKeys && cfg.apiKeys.length > 0);
     // A set-but-empty env var still counts as "provided via env" — it shadows
     // the config value (empty = key withheld), so don't mislabel the config
     // key as plaintext when an env var is explicitly set.
@@ -274,7 +277,7 @@ export function checkSecretsBackend(
       name: 'Secrets Backend',
       status: 'warn',
       message: `${inPlaintext.join(', ')} API key(s) stored in plaintext ~/.buff/buffconfig.json`,
-      detail: `Use ${envVars.map((v) => v.varName).join(' / ')} env vars or ~/.buff/.env instead (P7 security default) — keys are never logged.`,
+      detail: `Use ${envVars.map((v) => v.varName).join(' / ')} env vars or ~/.buff/.env instead (P7 security default) — keys are never logged. Multi-account apiKeys arrays are flagged too.`,
       fix: 'Move keys to environment variables: export GROQ_API_KEY=... (etc.)',
     };
   }

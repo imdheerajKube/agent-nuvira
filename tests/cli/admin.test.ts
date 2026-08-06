@@ -283,6 +283,33 @@ describe('AdminCommand — RBAC gating (P6 M6.1)', () => {
     expect(raw.users.mallory).toBeUndefined();
   });
 
+  it('blocks EVERY mutating policy command for a viewer (guard coverage parity)', () => {
+    seedRole('alice', 'viewer');
+    process.env.BUFF_ACT_AS = 'alice';
+    const errSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
+    // Every subcommand that mutates the governance policy must be gated by
+    // guard('policy.write') — not just `allow`. If one is missed, its payload
+    // would land in configState and this test catches the regression.
+    const mutating: Array<[string[], keyof GovernanceConfig]> = [
+      [['allow', 'groq'], 'allowProviders'],
+      [['deny', 'gemini'], 'denyProviders'],
+      [['allow-model', 'm1'], 'allowModels'],
+      [['deny-model', 'm2'], 'denyModels'],
+      [['max-cost', '0.5'], 'maxCostUsd'],
+      [['pii-min', '0.8'], 'minPrivacyForPii'],
+      [['unblock', 'off'], 'allowUnblock'],
+      [['clear', 'allowProviders'], 'allowProviders'],
+    ];
+    for (const [args] of mutating) {
+      run(makeCommand(), args);
+    }
+    // Nothing was written — every payload would have been rejected.
+    expect(gov()).toEqual({});
+    // One Access-denied log per blocked write (8 total).
+    const denied = errSpy.mock.calls.filter((c) => c.join(' ').includes('Access denied')).length;
+    expect(denied).toBe(mutating.length);
+  });
+
   it('whoami reports the acting identity and role', () => {
     seedRole('alice', 'admin');
     process.env.BUFF_ACT_AS = 'alice';

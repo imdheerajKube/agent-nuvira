@@ -1062,6 +1062,48 @@ describe('Dashboard Server', () => {
       expect(body.governance.enabled).toBe(false);
     });
 
+    it('GET /api/routing surfaces the RBAC role file (P6 M6.1)', async () => {
+      // readRbacData reads ~/.buff/rbac.json (mocked homedir) — the SAME file
+      // `buff admin role add` writes.
+      const rbacPath = join(testDir, '.buff', 'rbac.json');
+      const prevActAs = process.env.BUFF_ACT_AS;
+      try {
+        writeFileSync(rbacPath, JSON.stringify({
+          version: 1,
+          users: {
+            alice: { role: 'admin', addedAt: Date.now(), via: 'local' },
+            bob: { role: 'viewer', addedAt: Date.now(), via: 'local' },
+          },
+        }), 'utf-8');
+        process.env.BUFF_ACT_AS = 'alice';
+
+        const res = await httpGet(`${baseUrl}/api/routing`);
+        expect(res.statusCode).toBe(200);
+        const body = JSON.parse(res.body);
+        expect(body.rbac).toBeDefined();
+        expect(body.rbac.legacy).toBe(false);
+        expect(body.rbac.identity).toBe('alice');
+        expect(body.rbac.role).toBe('admin');
+        expect(body.rbac.users).toHaveLength(2);
+        expect(body.rbac.users[0].user).toBe('alice');
+        expect(typeof body.rbac.updatedAt).toBe('number');
+      } finally {
+        if (prevActAs === undefined) delete process.env.BUFF_ACT_AS;
+        else process.env.BUFF_ACT_AS = prevActAs;
+        try { rmSync(rbacPath, { force: true }); } catch { /* ignore */ }
+      }
+    });
+
+    it('GET /api/routing reports legacy RBAC mode when no role file exists', async () => {
+      const rbacPath = join(testDir, '.buff', 'rbac.json');
+      try { rmSync(rbacPath, { force: true }); } catch { /* ignore */ }
+      const res = await httpGet(`${baseUrl}/api/routing`);
+      const body = JSON.parse(res.body);
+      expect(body.rbac).toBeDefined();
+      expect(body.rbac.legacy).toBe(true);
+      expect(body.rbac.users).toEqual([]);
+    });
+
     it('GET /api/routing returns bandit state when a router-bandit fixture exists', async () => {
       writeFixture('router-bandit', {
         version: 1,

@@ -9,7 +9,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-## [1.59.7] - 2026-08-06
+## [1.59.8] - 2026-08-06
+
+### Added
+
+- **P6 M6.4 Nuvira Gateway (minimal slice)** — the federation server is now a token-verified gateway: `FederationConfig.authMode 'oidc'` turns `/federation/handshake` into an `Authorization: Bearer` check verified by the new dependency-free `JwtOidcAdapter` (RS256 JWT verification via `node:crypto`, enforcing sub/exp/issuer/audience). `buff federation start --auth oidc --oidc-public-key <pem>`; the PEM path persists in `federation.json` so a daemonized server reloads it. Secret-mode servers are unchanged.
+- **Dashboard RBAC identity card** — Routing Insights now shows who is looking (`buff admin whoami` mirror): acting identity, role badge, the full user→role map, and the legacy single-user notice, read from the same `~/.buff/rbac.json` the CLI writes.
+- **Secrets hardening** — `buff doctor --enterprise` now flags M2.3 `apiKeys` rotation arrays stored in plaintext `buffconfig.json`, not just single `apiKey` values.
+- **Admin guard-coverage parity test** — every mutating `buff admin` subcommand (allow/deny/allow-model/deny-model/max-cost/pii-min/unblock/clear) is asserted blocked for a viewer role.
 
 ### Added
 

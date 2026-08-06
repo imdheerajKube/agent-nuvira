@@ -89,6 +89,23 @@ interface RbacConfig {
   users: Record<string, RbacUser>;
 }
 
+/**
+ * Parse a raw rbac.json file into validated users. Pure — shared by
+ * RbacManager.load() and the dashboard server's readRbacData() so both always
+ * agree on the shape. Invalid roles are dropped. THROWS on malformed JSON
+ * (callers own the try/catch: RbacManager.load logs a warning and falls back
+ * to legacy; readRbacData falls back to the legacy payload).
+ */
+export function parseRbacUsers(raw: string): Record<string, RbacUser> {
+  const data = JSON.parse(raw) as RbacConfig;
+  if (!data || typeof data !== 'object' || !data.users) return {};
+  const users: Record<string, RbacUser> = {};
+  for (const [user, u] of Object.entries(data.users)) {
+    if (u && typeof u === 'object' && ROLES.includes(u.role)) users[user] = u;
+  }
+  return users;
+}
+
 // ─── Manager ────────────────────────────────────────────────────────────────
 
 function rbacPath(): string {
@@ -185,14 +202,7 @@ export class RbacManager {
   private load(): Record<string, RbacUser> {
     try {
       if (!existsSync(this.path)) return {};
-      const raw = readFileSync(this.path, 'utf-8');
-      const data = JSON.parse(raw) as RbacConfig;
-      if (!data || typeof data !== 'object' || !data.users) return {};
-      const users: Record<string, RbacUser> = {};
-      for (const [user, u] of Object.entries(data.users)) {
-        if (u && typeof u === 'object' && ROLES.includes(u.role)) users[user] = u;
-      }
-      return users;
+      return parseRbacUsers(readFileSync(this.path, 'utf-8'));
     } catch (err) {
       // A misconfigured role file must not silently downgrade to permissive —
       // surface it so an operator notices, then fall back safely (legacy mode).
