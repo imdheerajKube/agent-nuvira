@@ -383,6 +383,34 @@ export function FlakinessChip({ rate }: { rate: number }) {
 }
 
 /**
+ * v1.60.1/1.60.2 — live context-window chip (⏳). The provider-advertised
+ * input window the model probe recorded into the registry (Ollama /api/tags +
+ * /api/show fallback, OpenRouter /models, Gemini inputTokenLimit, NIM
+ * max_model_len) — the REAL spec the router's context preflight prefers over
+ * static estimates. Mirrors the CLI's `⏳ ctx` chip and the Routing Insights
+ * preference panel. Renders compact (128K / 1M) with the exact tokens in the
+ * tooltip.
+ */
+export function ContextWindowChip({ tokens }: { tokens: number }) {
+  const compact = tokens >= 1_048_576
+    ? `${(tokens / 1_048_576).toFixed(1).replace(/\.0$/, '')}M`
+    : tokens >= 1024
+      ? `${(tokens / 1024).toFixed(0)}K`
+      : `${tokens}`;
+  return (
+    <span
+      title={`⏳ context window ${tokens.toLocaleString()} tokens — live from the provider's model list (v1.60.x); feeds the router's context preflight`}
+      style={{
+        marginLeft: 8, fontSize: 10, padding: '1px 6px', borderRadius: 8, whiteSpace: 'nowrap',
+        background: '#0a1e2e', border: '1px solid #58a6ff', color: '#58a6ff',
+      }}
+    >
+      ⏳ {compact}
+    </span>
+  );
+}
+
+/**
  * P4 M4.4 — flakiness-over-time mini sparkline (violet). Plots the entry's
  * partialRate EMA trajectory: a trend toward 0 = the provider is HEALING via
  * clean successes (each decay point recorded by recordCall); climbing =
@@ -459,6 +487,7 @@ function RegistryEntryRow({ entry }: { entry: RegistryModelEntry }) {
             background: '#21262d', border: '1px solid #8b949e', color: '#8b949e',
           }}>📐 est</span>
         )}
+        {entry.contextWindowTokens && <ContextWindowChip tokens={entry.contextWindowTokens} />}
       </td>
       <td style={{ padding: '8px 12px' }}>
         <span style={{
@@ -576,8 +605,11 @@ function ModelRegistrySection({ data }: { data: ModelRegistryInsights }) {
       <p className="section-description">
         The unified sub-ms FAISS/JSON snapshot the Auto router consults on every pick:
         verified vs unavailable models plus quota telemetry (tokens remaining, reset
-        windows) mirrored from the ledger. State changes during a session are reported
-        to the watch daemon and recorded here immediately.
+        windows) mirrored from the ledger. Each row's <strong>⏳ chip</strong> is the
+        LIVE provider-advertised context window (v1.60.x) — the real spec the router's
+        context preflight uses, recorded by the probe from each provider's model list
+        (Ollama /api/tags + /api/show, OpenRouter, Gemini, NIM). State changes during a
+        session are reported to the watch daemon and recorded here immediately.
       </p>
 
       <div className="stats-grid" style={{ marginBottom: 16 }}>

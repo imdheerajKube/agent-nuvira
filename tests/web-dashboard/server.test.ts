@@ -793,6 +793,9 @@ describe('Dashboard Server', () => {
             tokensConsumed: 2400, requests: 2, resetsInMs: 3_600_000, remainingTokens: 600,
             // M2.2: measured wire-token EMAs (real provider-reported usage).
             measuredInputTokens: 210, measuredOutputTokens: 90, measuredSamples: 3,
+            // v1.60.1/1.60.2: the live provider-advertised context window the
+            // probe recorded (Gemini inputTokenLimit — 1M for this model).
+            contextWindowTokens: 1_048_576,
             // P4 M4.4: mid-stream flakiness EMA — this model started streaming
             // then died before finish, so the router deprioritizes it. The
             // trajectory powers the row's healing sparkline (trending down =
@@ -841,6 +844,10 @@ describe('Dashboard Server', () => {
         expect(gemini.models[0].measuredSamples).toBe(3);
         expect(gemini.models[0].measuredInputTokens).toBe(210);
         expect(gemini.models[0].measuredOutputTokens).toBe(90);
+        // v1.60.1/1.60.2: the live provider-advertised context window survives
+        // the passthrough — the Models panel ⏳ chip renders the real spec the
+        // router's context preflight prefers over static estimates.
+        expect(gemini.models[0].contextWindowTokens).toBe(1_048_576);
         // P4 M4.4: the mid-stream flakiness EMA survives the passthrough and
         // rolls up to the provider-level flaky count; the trajectory arrives
         // for the healing sparkline.

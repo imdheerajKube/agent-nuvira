@@ -77,6 +77,14 @@ export interface RegistryModelEntry {
    * toward 0 = healing via clean successes; climbing = flakiness accumulating.
    */
   partialHistory?: Array<{ t: number; rate: number }>;
+  /**
+   * v1.60.1/1.60.2: the model's provider-advertised input context window in
+   * tokens, recorded LIVE by the model probe (Ollama /api/tags + /api/show,
+   * OpenRouter /models, Gemini inputTokenLimit, NIM max_model_len). The
+   * router's context preflight prefers this real spec over static estimates.
+   * Optional: an older server won't send it.
+   */
+  contextWindowTokens?: number;
 }
 
 export interface RegistryProvider {
