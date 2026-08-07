@@ -94,6 +94,12 @@ vi.mock('../../src/agents/orchestrator.js', () => ({
 // ─── Tests ──────────────────────────────────────────────────────────────────
 
 describe('runDeveloperMode — auto provider/model resolution', () => {
+  // Isolate the ModelRegistry: the model-health repair path can WRITE to the
+  // registry (teaching that a repaired-away pin is dead), and a real
+  // ~/.buff registry must never be mutated by tests.
+  let registryTempDir: string;
+  let originalMemoryDir: string | undefined;
+
   beforeEach(() => {
     vi.spyOn(console, 'log').mockImplementation(() => {});
     vi.spyOn(logger, 'info').mockImplementation(() => {});
@@ -102,9 +108,20 @@ describe('runDeveloperMode — auto provider/model resolution', () => {
     vi.spyOn(logger, 'error').mockImplementation(() => {});
     vi.spyOn(logger, 'highlight').mockImplementation(() => {});
     mockExecute.mockClear();
+    registryTempDir = mkdtempSync(join(tmpdir(), 'buff-chat-resolve-'));
+    originalMemoryDir = process.env.BUFF_MEMORY_DIR;
+    process.env.BUFF_MEMORY_DIR = registryTempDir;
+    resetModelRegistry();
   });
 
   afterEach(() => {
+    resetModelRegistry();
+    if (originalMemoryDir === undefined) {
+      delete process.env.BUFF_MEMORY_DIR;
+    } else {
+      process.env.BUFF_MEMORY_DIR = originalMemoryDir;
+    }
+    rmSync(registryTempDir, { recursive: true, force: true });
     vi.restoreAllMocks();
   });
 

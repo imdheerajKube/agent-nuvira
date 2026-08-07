@@ -35,7 +35,7 @@ afterEach(() => {
 describe('GeminiAdapter', () => {
   const baseConfig = {
     apiKey: 'test-gemini-key',
-    model: 'gemini-2.0-flash-exp',
+    model: 'gemini-2.5-flash',
     temperature: 0.3,
     maxTokens: 4096,
   };
@@ -71,7 +71,7 @@ describe('GeminiAdapter', () => {
       // Verify the request URL includes the API key
       const callUrl = mockFetch.mock.calls[0][0];
       expect(callUrl).toContain('generativelanguage.googleapis.com/v1beta/models');
-      expect(callUrl).toContain('gemini-2.0-flash-exp:generateContent');
+      expect(callUrl).toContain('gemini-2.5-flash:generateContent');
       expect(callUrl).toContain('key=test-gemini-key');
 
       // Verify request body

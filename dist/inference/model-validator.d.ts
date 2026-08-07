@@ -17,8 +17,8 @@
  *
  * IMPORTANT: `desiredModel === 'default'` (a provider key set but no pinned
  * model) is also validated. Adapter hardcoded defaults can be deprecated too
- * (Gemini's is still `gemini-2.0-flash-exp`), so 'default' resolves to a
- * verified-working model from the live list when one is available.
+ * (Gemini's was `gemini-2.0-flash-exp` until retired), so 'default' resolves
+ * to a verified-working model from the live list when one is available.
  */
 import type { InferenceProvider } from './interface.js';
 /** Preferred repair models per provider id, best first. */

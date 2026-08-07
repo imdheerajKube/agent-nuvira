@@ -1040,7 +1040,7 @@ export class ModelCommand extends BaseCommand {
 
     // Default agent-to-model mapping
     const defaultMapping: Array<{ agent: string; icon: string; recommended: string }> = [
-      { agent: 'planner', icon: '📋', recommended: 'gemini/gemini-2.0-flash-exp' },
+      { agent: 'planner', icon: '📋', recommended: 'gemini/gemini-2.5-flash' },
       { agent: 'context-gatherer', icon: '📂', recommended: 'groq/llama-3.3-70b-versatile' },
       { agent: 'writer', icon: '✏️', recommended: 'groq/llama-3.3-70b-versatile' },
       { agent: 'reviewer', icon: '👁️', recommended: 'openrouter/meta-llama/llama-3.1-8b-instruct' },

@@ -17,8 +17,8 @@
  *
  * IMPORTANT: `desiredModel === 'default'` (a provider key set but no pinned
  * model) is also validated. Adapter hardcoded defaults can be deprecated too
- * (Gemini's is still `gemini-2.0-flash-exp`), so 'default' resolves to a
- * verified-working model from the live list when one is available.
+ * (Gemini's was `gemini-2.0-flash-exp` until retired), so 'default' resolves
+ * to a verified-working model from the live list when one is available.
  */
 import { logger } from '../utils/logger.js';
 import { getModelRegistry } from '../learning/model-registry.js';
@@ -115,6 +115,23 @@ export async function resolveWorkingModel(provider, providerType, desiredModel) 
         if (curated)
             return curated;
     }
+    // A pin the registry has DEFINITIVELY ruled out (unavailable / quota-parked
+    // from real telemetry or a probe) is repaired SILENTLY — the registry
+    // already verified a working replacement, so there is nothing new to learn
+    // and nothing to warn about. Re-warning "model X is not available" on every
+    // message (chat start, each message, each failover) is the recursive UX
+    // that made auto routing look broken. NOTE: a merely-unverified pin is NOT
+    // replaced here — the live-list check below keeps it when it exists; only a
+    // pin the registry has learned is dead is silently swapped.
+    if (explicit) {
+        const entry = registry.getEntry(providerType, explicit);
+        const pinDead = !!entry && (entry.status === 'unavailable' || entry.quotaParkedUntil > Date.now());
+        if (pinDead) {
+            const verified = registry.resolveVerifiedModel(providerType, PREFERRED_MODELS[providerType] || []);
+            if (verified)
+                return verified;
+        }
+    }
     // A model the registry has marked unavailable or quota-parked must NEVER be
     // resurrected by the live-list repair below — the registry learned it fails
     // (auth/rate-limit telemetry) and repair is supposed to route AROUND it,
@@ -129,6 +146,31 @@ export async function resolveWorkingModel(provider, providerType, desiredModel) 
     // ── 1. Desired model is live → use it ─────────────────────────────────
     if (explicit && live.some((m) => m.id === explicit) && !registryBlocks(explicit)) {
         return explicit;
+    }
+    // ── Teach the registry: the pinned model is absent from the provider's
+    // successfully-fetched live list. Marking it unavailable makes BOTH the auto
+    // router (resolveModel) and this validator skip it on the next route — the
+    // repair is LEARNED once instead of re-performed with a warning on every
+    // message (the recursion the user saw). Only when the list actually came
+    // back (non-empty fetch) is the absence definitive; an empty/failed list
+    // keeps the desired model and stays silent (step 4).
+    //
+    // SAFETY GATE: only teach when the provider already has a VERIFIED usable
+    // model. getBlockedProviders() blocks a provider when ALL its tracked models
+    // are unavailable/parked with no verified alternative — marking the pin dead
+    // on a cold registry (replacement not yet verified/untracked) would flip the
+    // whole provider into the blocked set, and routeMessageAuto's candidate
+    // filter would then skip it on the very next message → straight to local
+    // WITHOUT ever trying the working replacement. Teaching only when a verified
+    // model exists keeps the provider routable (it retains a usable entry) while
+    // still killing the recursion for the next route.
+    if (explicit && live.length > 0 && registry.getVerifiedModels(providerType).length > 0) {
+        try {
+            registry.markUnavailable(providerType, explicit, 'not in live model list', 'probe');
+        }
+        catch {
+            // Best-effort — a registry write must never break repair.
+        }
     }
     // ── 2. Curated known-good default for this provider ───────────────────
     // Prefer a curated candidate that is BOTH live AND not registry-blocked, so
@@ -146,7 +188,11 @@ export async function resolveWorkingModel(provider, providerType, desiredModel) 
     // ── 3. Generic fallback: first usable model from the live list ────────
     if (live.length > 0) {
         const ranked = [...live].sort((a, b) => modelFallbackScore(a) - modelFallbackScore(b));
-        const usable = ranked.find((m) => modelFallbackScore(m) < 100);
+        // NEVER resurrect a model the registry has definitively ruled out — a
+        // live-list entry is not proof the model works (listModels can list
+        // models the key can't actually use), but an `unavailable`/quota-parked
+        // registry entry is proof it FAILED. Repair routes AROUND it, not into it.
+        const usable = ranked.find((m) => modelFallbackScore(m) < 100 && !registryBlocks(m.id));
         if (usable) {
             if (explicit) {
                 logger.warn(`♻️  Auto routing: model '${explicit}' is not available on '${providerType}' — using '${usable.id}'.`);

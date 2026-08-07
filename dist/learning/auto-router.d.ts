@@ -33,7 +33,7 @@
  * import { getAutoRouter } from './auto-router.js';
  * const router = getAutoRouter();
  * const decision = router.resolve('writer', 'implement JWT auth with refresh tokens');
- * // → { provider: 'gemini', model: 'gemini-2.0-flash-exp', explanation: '...' }
+ * // → { provider: 'gemini', model: 'gemini-2.5-flash', explanation: '...' }
  * ```
  */
 import { type ComplexityLevel, type ModelCandidate, type PreferenceMode } from './hybrid-router.js';
@@ -559,6 +559,18 @@ export declare class AutoModelRouter {
     /**
      * Resolve the model name to use within a chosen provider.
      * Prefers the provider's configured model; falls back to 'default'.
+     *
+     * Registry-aware pin preference (the "no more recursion" guarantee): when
+     * the Model Availability Registry has DEFINITIVELY ruled out the configured
+     * pin (unavailable / quota-parked from real telemetry or a probe), the
+     * router must NOT keep re-selecting it — the validator would re-repair it
+     * with a "model not available" warning on every message. Instead, prefer a
+     * registry-VERIFIED working model for the provider so auto routing lands on
+     * a model that is known to work from the start.
+     *
+     * A pin the registry has no data on (cold start) is returned unchanged —
+     * the live-list validator repairs it (once) and telemetry then verifies the
+     * replacement, so the registry learns before the next message.
      */
     resolveModel(provider: string, agentType: string, configManager?: ConfigManager): string;
     /**
