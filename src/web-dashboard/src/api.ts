@@ -1,5 +1,5 @@
 import { parseJsonOrNull } from './jsonOrNull';
-import type { DashboardData, DAGData, QuotaInsights, RoutingInsights } from './types';
+import type { DashboardData, DAGData, QuotaInsights, RoutingInsights, TraceEntry } from './types';
 
 export type DashboardListener = (data: DashboardData) => void;
 export type ConnectionListener = (connected: boolean) => void;
@@ -149,6 +149,29 @@ export class DashboardAPI {
       if (!data) return null;
       this.lastData = data;
       return data;
+    } catch {
+      return null;
+    }
+  }
+
+  /** P0: fetch the reasoning-trace index (list view, no step previews). */
+  async fetchTraces(): Promise<TraceEntry[] | null> {
+    try {
+      const res = await fetch(`${this.baseUrl}/api/traces`, { signal: AbortSignal.timeout(8000) });
+      const data = (await parseJsonOrNull(res)) as { total?: number; traces?: TraceEntry[] } | null;
+      if (!data?.traces) return null;
+      return data.traces;
+    } catch {
+      return null;
+    }
+  }
+
+  /** P0: fetch a single trace's full detail (steps + previews). */
+  async fetchTraceDetail(id: string): Promise<TraceEntry | null> {
+    try {
+      const res = await fetch(`${this.baseUrl}/api/traces/${encodeURIComponent(id)}`, { signal: AbortSignal.timeout(8000) });
+      const data = (await parseJsonOrNull(res)) as TraceEntry | null;
+      return data && Array.isArray(data.steps) ? data : null;
     } catch {
       return null;
     }

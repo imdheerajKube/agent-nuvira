@@ -19,6 +19,7 @@ import type { Trajectory } from '../memory/trajectory-store.js';
 import type { LLMCallFn } from '../agents/agent.js';
 import { getTrajectoryStore } from '../memory/trajectory-store.js';
 import { getPatternStore } from './pattern-extractor.js';
+import { getFailureLessonStore } from './failure-lessons.js';
 import { getAgentStats } from './agent-stats.js';
 import { scoreOrchestrationResult } from './scorer.js';
 import { getSkillCompiler } from './skill-compiler.js';
@@ -33,6 +34,9 @@ const PATTERN_EXTRACTION_INTERVAL = 5;
 /** How many successful runs before auto-compiling skills */
 const SKILL_COMPILATION_INTERVAL = 8;
 
+/** How many failed runs before auto-extracting failure lessons */
+const FAILURE_LESSON_EXTRACTION_INTERVAL = 5;
+
 /** How many trajectories to pass for pattern extraction */
 const TRAJECTORIES_FOR_EXTRACTION = 3;
 
@@ -44,14 +48,16 @@ const GOOD_SCORE_THRESHOLD = 0.6;
 export class SelfImprover {
   private runCountSinceLastExtraction: number = 0;
   private runCountSinceLastSkillCompilation: number = 0;
+  private runCountSinceLastFailureExtraction: number = 0;
 
   /**
    * Process a completed orchestration run through the self-improvement loop.
-   * Scores the result, tracks agent stats, and conditionally extracts patterns
-   * and compiles skills.
+   * Scores the result, tracks agent stats, records failures into episodic
+   * memory, and conditionally extracts patterns, compiles skills, and
+   * distills failure lessons.
    *
    * @param result       The completed orchestration result
-   * @param callLLM      LLM function for pattern extraction
+   * @param callLLM      LLM function for pattern/lesson extraction
    * @param agentModels  The model map used for this run (for tracking model perf)
    * @param verbose      Whether to log details
    */
@@ -71,7 +77,41 @@ export class SelfImprover {
     const stats = getAgentStats();
     stats.recordRuns(result.agentResults, agentModels);
 
-    // Step 3: Conditionally extract patterns from good trajectories
+    // Step 3: Capture FAILED runs into episodic memory (assessment P1 — the
+    // trajectory store only persists successes, so the system never learned
+    // from its own misses). Record the failure, then periodically distill the
+    // accumulated failures into reusable lessons.
+    const hasFailedAgents = (result.agentResults || []).some((a) => !a.success);
+    if (!result.success || hasFailedAgents) {
+      const lessonStore = getFailureLessonStore();
+      const failureId = lessonStore.recordFailure({
+        goal: result.goal,
+        error: result.error,
+        agentResults: result.agentResults || [],
+        taskPlan: result.taskPlan || [],
+        fileChanges: result.fileChanges || '',
+        tasksCompleted: result.tasksCompleted,
+        tasksTotal: result.tasksTotal,
+      });
+
+      if (failureId) {
+        if (verbose) {
+          logger.info(`   📉 Recorded failed run into episodic memory (${failureId.slice(0, 16)}...)`);
+        }
+
+        // Failure-lesson distillation (every FAILURE_LESSON_EXTRACTION_INTERVAL failures)
+        this.runCountSinceLastFailureExtraction++;
+        if (this.runCountSinceLastFailureExtraction >= FAILURE_LESSON_EXTRACTION_INTERVAL) {
+          this.runCountSinceLastFailureExtraction = 0;
+          if (verbose) {
+            logger.info('   Extracting failure lessons from failed runs...');
+          }
+          await this.extractFailureLessons(callLLM, verbose);
+        }
+      }
+    }
+
+    // Step 4: Conditionally extract patterns from good trajectories
     if (score >= GOOD_SCORE_THRESHOLD) {
       this.runCountSinceLastExtraction++;
       this.runCountSinceLastSkillCompilation++;
@@ -97,6 +137,34 @@ export class SelfImprover {
 
         await this.compileSkills(callLLM, verbose);
       }
+    }
+  }
+
+  /**
+   * Force failure-lesson extraction from the most recent failed runs.
+   *
+   * @param callLLM  LLM function for lesson extraction
+   * @param verbose  Whether to log details
+   * @returns        Number of NEW lessons extracted
+   */
+  async extractFailureLessons(
+    callLLM: LLMCallFn,
+    verbose: boolean = false,
+  ): Promise<number> {
+    try {
+      const lessonStore = getFailureLessonStore();
+      const count = await lessonStore.extractLessons(callLLM);
+      if (verbose && count > 0) {
+        logger.success(`   Extracted ${count} new failure lesson(s) from recent failed runs`);
+      } else if (verbose) {
+        logger.info('   No new failure lessons extracted (no failed runs recorded, or no new insights)');
+      }
+      return count;
+    } catch (err) {
+      if (verbose) {
+        logger.debug(`Failure-lesson extraction failed: ${err}`);
+      }
+      return 0;
     }
   }
 
@@ -200,6 +268,19 @@ export class SelfImprover {
       }
     }
 
+    // Also show failure-lesson stats (episodic memory of what didn't work)
+    const lessonStore = getFailureLessonStore();
+    const lessonStats = lessonStore.getStats();
+    if (lessonStats.totalFailures > 0 || lessonStats.totalLessons > 0) {
+      lines.push('');
+      lines.push('── Failure Lessons (what didn\'t work) ──');
+      lines.push(`   Failed runs captured: ${lessonStats.totalFailures}`);
+      lines.push(`   Distilled lessons: ${lessonStats.totalLessons}`);
+      if (lessonStats.domainsCovered.length > 0) {
+        lines.push(`   Domains covered: ${lessonStats.domainsCovered.join(', ')}`);
+      }
+    }
+
     lines.push('');
     lines.push(stats.formatStats());
     lines.push('');
@@ -261,6 +342,14 @@ export class SelfImprover {
    */
   resetSkillCompilationCounter(): void {
     this.runCountSinceLastSkillCompilation = 0;
+  }
+
+  /**
+   * Reset failure-lesson extraction counter (called when user manually
+   * extracts lessons so the auto-interval restarts).
+   */
+  resetFailureLessonCounter(): void {
+    this.runCountSinceLastFailureExtraction = 0;
   }
 
   // ── Private ────────────────────────────────────────────────────────────

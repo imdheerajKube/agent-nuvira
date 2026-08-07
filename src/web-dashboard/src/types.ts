@@ -624,6 +624,59 @@ export interface RequestsInsights {
   updatedAt: number;
 }
 
+// ─── Reasoning Trace Types (P0) ────────────────────────────────────────────
+
+/** One LLM call recorded in a reasoning trace. */
+export interface TraceStep {
+  seq: number;
+  timestamp: number;
+  agentType: string;
+  taskId?: string;
+  description?: string;
+  provider: string;
+  model: string;
+  promptDigest: string;
+  promptPreview: string;
+  responsePreview: string;
+  responseLength: number;
+  inputTokens: number;
+  outputTokens: number;
+  latencyMs: number;
+  success: boolean;
+  error?: string;
+  routing?: {
+    provider: string;
+    model: string;
+    score: number;
+    complexity: string;
+    explanation: string;
+  };
+}
+
+/** A reasoning trace (list view omits steps/previews). */
+export interface TraceEntry {
+  id: string;
+  goal: string;
+  source: string;
+  startedAt: number;
+  endedAt?: number;
+  durationMs?: number;
+  provider?: string;
+  model?: string;
+  success?: boolean;
+  /** Present in the detail endpoint only. */
+  steps?: TraceStep[];
+  /** List-view aggregates. */
+  stepCount?: number;
+  failedSteps?: number;
+  totalTokens?: number;
+}
+
+export interface TracesData {
+  total: number;
+  traces: TraceEntry[];
+}
+
 export interface DashboardData {
   cost: CostData;
   history: HistoryData;
@@ -647,6 +700,12 @@ export interface DashboardData {
    * falls back to live-DAG-only runs.
    */
   pipelineRuns?: { total: number; runs: PipelineRun[] };
+  /**
+   * P0 reasoning traces — every LLM call in past pipelines (agent × model ×
+   * prompt digest × response × tokens × latency × routing snapshot). Optional:
+   * an older server won't send these, so the panel hides when absent.
+   */
+  traces?: TracesData;
   serverTime: number;
 }
 

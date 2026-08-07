@@ -13,6 +13,7 @@ import HealthPanel from './components/HealthPanel';
 import ModelsPanel from './components/ModelsPanel';
 import RoutingInsightsPanel from './components/RoutingInsightsPanel';
 import RequestsPanel from './components/RequestsPanel';
+import TracePanel from './components/TracePanel';
 
 export default function App() {
   const [data, setData] = useState<DashboardData | null>(null);
@@ -58,6 +59,7 @@ export default function App() {
         <Route path="/models" element={<ModelsPanel />} />
         <Route path="/routing" element={<RoutingInsightsPanel data={data} />} />
         <Route path="/requests" element={<RequestsPanel data={data} />} />
+        <Route path="/traces" element={<TracePanel />} />
         <Route path="/system" element={<HealthPanel data={data} />} />
         <Route path="*" element={<Navigate to="/" replace />} />
       </Routes>

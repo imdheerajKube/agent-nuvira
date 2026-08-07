@@ -24,6 +24,14 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import inquirer from 'inquirer';
 
+// ─── Hermetic memory dir ────────────────────────────────────────────────────
+// execute() begins a reasoning trace (P0) on every run — pin BUFF_MEMORY_DIR
+// to a temp dir so trace writes (and any other memory store writes) never
+// leak into the real ~/.buff during tests. Individual describes that manage
+// their own temp dir save/restore this value correctly.
+const orchidTestDir = mkdtempSync(join(tmpdir(), 'buff-orch-test-'));
+process.env.BUFF_MEMORY_DIR = join(orchidTestDir, '.buff', 'memory');
+
 import { Orchestrator } from '../../src/agents/orchestrator.js';
 import type { OrchestratorOptions } from '../../src/agents/orchestrator.js';
 import type { OnRateLimit, RateLimitInfo } from '../../src/agents/agent.js';
@@ -1640,5 +1648,187 @@ describe('Orchestrator — auto-routed failure telemetry', () => {
     vi.spyOn(modelProbe, 'refreshModelRegistry').mockRejectedValue(new Error('probe network failure'));
 
     expect(() => (orch as any).maybeFireColdStartProbe()).not.toThrow();
+  });
+});
+
+// ─── Planner-repair MODEL ESCALATION (assessment P0) ────────────────────────
+// The NVDA-addon failure chain: a weak routed planner returned garbage ("no
+// valid task steps"), and the repair loop re-prompted THE SAME weak model until
+// the budget died. Fix: when auto routing is active, planner failures are
+// re-routed through the Auto router at the NEXT complexity level, so the repair
+// re-prompt uses a STRONGER model — never the same one that just failed.
+
+describe('Orchestrator — planner-repair model escalation', () => {
+  let orchestrator: Orchestrator;
+
+  beforeEach(() => {
+    orchestrator = new Orchestrator();
+    mockPlannerExecute.mockReset();
+    mockWriterExecute.mockReset();
+    mockReviewerExecute.mockReset();
+    mockCreateReviewFromResult.mockReset();
+    mockCreateReviewFromResult.mockReturnValue(mockReviewBundle);
+    // Prevent writes to disk from the writer mock
+    vi.spyOn(orchestrator as any, 'applyFileChanges').mockReturnValue(0);
+    // Suppress logger output during tests
+    vi.spyOn(logger, 'info').mockImplementation(() => {});
+    vi.spyOn(logger, 'success').mockImplementation(() => {});
+    vi.spyOn(logger, 'warn').mockImplementation(() => {});
+    vi.spyOn(logger, 'highlight').mockImplementation(() => {});
+    vi.spyOn(logger, 'error').mockImplementation(() => {});
+    vi.spyOn(logger, 'debug').mockImplementation(() => {});
+    // Never fire real network probes from tests
+    vi.spyOn(modelProbe, 'refreshModelRegistry').mockResolvedValue({
+      providersProbed: [],
+      modelsListed: 0,
+      verified: 0,
+      unavailable: 0,
+      skipped: 0,
+      errors: 0,
+    } as any);
+  });
+
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  it('escalates planner repair to a stronger model (auto routing) and completes the goal', async () => {
+    const cm = new ConfigManager();
+    const orch = new Orchestrator(cm);
+
+    // The escalated repair LLM — intercept and record that it was created.
+    const escalateSpy = vi
+      .spyOn(orch as any, 'createEscalatedPlannerLLM')
+      .mockReturnValue(vi.fn().mockResolvedValue('escalated plan response'));
+
+    // Planner: first attempt returns garbage (the exact "no valid task steps"
+    // failure). The repair re-prompt (stronger model) succeeds with a plan.
+    let plannerCalls = 0;
+    mockPlannerExecute.mockImplementation(async (context: any) => {
+      plannerCalls += 1;
+      if (plannerCalls === 1) {
+        return { success: false, error: 'The LLM returned a plan with no valid task steps' };
+      }
+      context.taskPlan.push({
+        id: 'step-1',
+        agentType: 'writer',
+        description: 'Write the addon files',
+        dependsOn: [],
+        status: 'pending',
+      });
+      return { success: true, summary: 'Created 1 task steps' };
+    });
+
+    mockWriterExecute.mockImplementation(async (context: any) => {
+      context.fileChanges.push({
+        path: 'addon/__init__.py',
+        originalContent: '',
+        newContent: 'print("hello anuj")\n',
+        status: 'created',
+      });
+      return { success: true, summary: 'Wrote addon files' };
+    });
+
+    const result = await orch.execute('create an NVDA addon that says hello on NVDA+alt+1', {
+      provider: 'auto',
+      model: 'auto',
+    });
+
+    // Escalation happened exactly once — never re-prompted the same weak model.
+    expect(escalateSpy).toHaveBeenCalledTimes(1);
+    // Planner ran twice: initial (failed) + repair with the escalated LLM.
+    expect(mockPlannerExecute).toHaveBeenCalledTimes(2);
+    // The goal was COMPLETED — repair iterations converge instead of dying.
+    expect(result.success).toBe(true);
+    expect(result.tasksCompleted).toBe(1);
+  });
+
+  it('createEscalatedPlannerLLM re-routes at the NEXT complexity level above the planner\'s current decision', async () => {
+    const cm = new ConfigManager();
+    const orch = new Orchestrator(cm);
+
+    // Seed the planner's original decision at 'simple' — escalation must
+    // re-resolve the task at 'moderate' (one rung up the ladder).
+    (orch as any).routingDecisionOverrides.set('planner', {
+      provider: 'groq',
+      model: 'llama-3.3-70b-versatile',
+      complexity: 'simple',
+      score: 0.8,
+    } as any);
+
+    const resolveSpy = vi.spyOn(orch as any, 'resolveAutoRoutingDecision').mockReturnValue({
+      provider: 'groq',
+      model: 'llama-3.3-70b-versatile',
+      complexity: 'moderate',
+      score: 0.9,
+    } as any);
+    vi.spyOn(orch as any, 'createAutoRoutedLLMFromDecision').mockReturnValue(
+      vi.fn().mockResolvedValue('ok'),
+    );
+
+    (orch as any).createEscalatedPlannerLLM('write an addon', { verbose: true });
+
+    // The escalated task carries the NEXT complexity level — the router will
+    // pick a STRONGER model than the one that just failed.
+    expect(resolveSpy).toHaveBeenCalledWith(
+      expect.objectContaining({ agentType: 'planner', complexity: 'moderate' }),
+      expect.anything(),
+    );
+  });
+
+  it('clamps complexity escalation at the top of the ladder (critical)', async () => {
+    const cm = new ConfigManager();
+    const orch = new Orchestrator(cm);
+
+    (orch as any).routingDecisionOverrides.set('planner', {
+      provider: 'groq',
+      model: 'llama-3.3-70b-versatile',
+      complexity: 'critical',
+      score: 0.8,
+    } as any);
+
+    const resolveSpy = vi.spyOn(orch as any, 'resolveAutoRoutingDecision').mockReturnValue({
+      provider: 'groq',
+      model: 'llama-3.3-70b-versatile',
+      complexity: 'critical',
+      score: 0.9,
+    } as any);
+    vi.spyOn(orch as any, 'createAutoRoutedLLMFromDecision').mockReturnValue(
+      vi.fn().mockResolvedValue('ok'),
+    );
+
+    (orch as any).createEscalatedPlannerLLM('write an addon', { verbose: true });
+
+    // Already at the top → stays 'critical' (never goes off the ladder).
+    expect(resolveSpy).toHaveBeenCalledWith(
+      expect.objectContaining({ agentType: 'planner', complexity: 'critical' }),
+      expect.anything(),
+    );
+  });
+
+  it('does NOT escalate when auto routing is inactive (keeps the explicit model)', async () => {
+    const cm = new ConfigManager();
+    const orch = new Orchestrator(cm);
+
+    mockPlannerExecute.mockImplementation(async () => ({
+      success: false,
+      error: 'The LLM returned a plan with no valid task steps',
+    }));
+
+    const escalateSpy = vi.spyOn(orch as any, 'createEscalatedPlannerLLM');
+    const createLLMSpy = vi.spyOn(orch as any, 'createLLMProvider').mockReturnValue(
+      vi.fn().mockResolvedValue('ok'),
+    );
+
+    const result = await orch.execute('some goal', {
+      provider: 'groq',
+      model: 'llama-3.3-70b-versatile',
+    });
+
+    // Explicit model path: no escalation — the LLM is created directly.
+    expect(escalateSpy).not.toHaveBeenCalled();
+    expect(createLLMSpy).toHaveBeenCalled();
+    expect(result.success).toBe(false);
+    expect(result.error).toContain('no valid task steps');
   });
 });

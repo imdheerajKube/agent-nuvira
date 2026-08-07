@@ -215,6 +215,152 @@ describe('PlannerAgent', () => {
       expect(result.error).toContain('API timeout');
     });
 
+    // ─── Goal-fidelity guard (assessment P0) ────────────────────────────
+    // These reproduce the observed NVDA-addon failure: the model regurgitated
+    // the few-shot example (JWT/sync routes) for an unrelated goal and the
+    // pipeline "succeeded" while building the wrong thing. The guard must
+    // reject plans that share no significant goal token.
+
+    it('should REJECT a plan that copies the example for an unrelated goal (NVDA addon case)', async () => {
+      const context = {
+        goal: 'create an NVDA addon compatible with NVDA 2026.1 that says Hello Anuj when the user presses NVDA key+alt+1 and build it',
+        workingDirectory: '/test',
+        taskPlan: [],
+        artifacts: [],
+        conversations: [],
+        fileChanges: [],
+        metadata: {},
+      } as any;
+
+      // The exact verbatim example-copy that the real model returned:
+      // JWT auth steps for an NVDA addon goal.
+      const mockLLM = async () => JSON.stringify([
+        { id: 'step-01-understand', description: 'Scan the codebase to understand the current project structure and identify files related to the inventory sync feature', agentType: 'context-gatherer', dependsOn: [] },
+        { id: 'step-02-add-routes', description: 'Create the inventory sync endpoint in src/sync/inventory.ts that reads the local catalog and reconciles it with the remote store', agentType: 'writer', dependsOn: ['step-01-understand'] },
+        { id: 'step-04-security-scan', description: 'Scan the new sync code for PII and injection vulnerabilities', agentType: 'security', dependsOn: ['step-02-add-routes'] },
+        { id: 'step-05-review', description: 'Review all changes for correctness, security, and code quality', agentType: 'reviewer', dependsOn: ['step-02-add-routes'] },
+      ]);
+
+      const result = await planner.execute(context, mockLLM as any);
+      expect(result.success).toBe(false);
+      expect(result.error).toContain('unrelated');
+      expect(result.error).toContain('nvda');
+      expect(context.taskPlan).toHaveLength(0); // nothing scheduled
+    });
+
+    it('should REJECT a plan that ignores the goal domain entirely', async () => {
+      const context = {
+        goal: 'add a dark mode toggle to the settings page',
+        workingDirectory: '/test',
+        taskPlan: [],
+        artifacts: [],
+        conversations: [],
+        fileChanges: [],
+        metadata: {},
+      } as any;
+
+      const mockLLM = async () => JSON.stringify([
+        { id: 's1', description: 'Set up database connection pool', agentType: 'writer', dependsOn: [] },
+      ]);
+
+      const result = await planner.execute(context, mockLLM as any);
+      expect(result.success).toBe(false);
+      expect(result.error).toContain('unrelated');
+      expect(context.taskPlan).toHaveLength(0);
+    });
+
+    it('should ACCEPT a faithful plan that references the goal domain (NVDA addon case)', async () => {
+      const context = {
+        goal: 'create an NVDA addon compatible with NVDA 2026.1 that says Hello Anuj when the user presses NVDA key+alt+1 and build it',
+        workingDirectory: '/test',
+        taskPlan: [],
+        artifacts: [],
+        conversations: [],
+        fileChanges: [],
+        metadata: {},
+      } as any;
+
+      const mockLLM = async () => JSON.stringify([
+        { id: 'step-01-create-manifest', description: 'Create manifest.ini declaring the NVDA addon metadata for NVDA 2026.1', agentType: 'writer', dependsOn: [] },
+        { id: 'step-02-create-addon-script', description: 'Create the addon Python script with a global plugin that speaks Hello Anuj when NVDA key+alt+1 is pressed', agentType: 'writer', dependsOn: ['step-01-create-manifest'] },
+        { id: 'step-03-review', description: 'Review the addon for NVDA 2026.1 compatibility', agentType: 'reviewer', dependsOn: ['step-02-create-addon-script'] },
+      ]);
+
+      const result = await planner.execute(context, mockLLM as any);
+      expect(result.success).toBe(true);
+      expect(context.taskPlan).toHaveLength(3);
+    });
+
+    it('should REJECT an example-copy plan even for a SHORT 1-token goal (run-2 NVDA case)', async () => {
+      // The user's second run: goal was literally "create the addon" (1
+      // significant token: "addon") and the model regurgitated the JWT/sync
+      // example verbatim. The example-copy marker check must catch it.
+      const context = {
+        goal: 'create the addon',
+        workingDirectory: '/test',
+        taskPlan: [],
+        artifacts: [],
+        conversations: [],
+        fileChanges: [],
+        metadata: {},
+      } as any;
+
+      const mockLLM = async () => JSON.stringify([
+        { id: 'step-01-understand', description: 'Scan the codebase to understand the current project structure and identify files related to the inventory sync feature', agentType: 'context-gatherer', dependsOn: [] },
+        { id: 'step-02-add-routes', description: 'Create the inventory sync endpoint in src/sync/inventory.ts', agentType: 'writer', dependsOn: ['step-01-understand'] },
+        { id: 'step-04-security-scan', description: 'Scan the new sync code for PII and injection vulnerabilities', agentType: 'security', dependsOn: ['step-02-add-routes'] },
+        { id: 'step-05-review', description: 'Review all changes for correctness, security, and code quality', agentType: 'reviewer', dependsOn: ['step-02-add-routes'] },
+      ]);
+
+      const result = await planner.execute(context, mockLLM as any);
+      expect(result.success).toBe(false);
+      expect(result.error).toContain('unrelated');
+      expect(context.taskPlan).toHaveLength(0);
+    });
+
+    it('should ACCEPT a faithful 1-token-goal plan that is NOT an example copy', async () => {
+      const context = {
+        goal: 'create the addon',
+        workingDirectory: '/test',
+        taskPlan: [],
+        artifacts: [],
+        conversations: [],
+        fileChanges: [],
+        metadata: {},
+      } as any;
+
+      const mockLLM = async () => JSON.stringify([
+        { id: 's1', description: 'Create manifest.ini for the NVDA addon', agentType: 'writer', dependsOn: [] },
+        { id: 's2', description: 'Write the addon plugin script with the greeting speech', agentType: 'writer', dependsOn: ['s1'] },
+        { id: 's3', description: 'Review the addon files', agentType: 'reviewer', dependsOn: ['s2'] },
+      ]);
+
+      const result = await planner.execute(context, mockLLM as any);
+      expect(result.success).toBe(true);
+      expect(context.taskPlan).toHaveLength(3);
+    });
+
+    it('should NOT block a plan when the goal has no significant tokens (vague goal)', async () => {
+      const context = {
+        goal: 'help me make it work',
+        workingDirectory: '/test',
+        taskPlan: [],
+        artifacts: [],
+        conversations: [],
+        fileChanges: [],
+        metadata: {},
+      } as any;
+
+      const mockLLM = async () => JSON.stringify([
+        { id: 's1', description: 'Investigate the current behavior', agentType: 'context-gatherer', dependsOn: [] },
+        { id: 's2', description: 'Apply the fix and verify', agentType: 'writer', dependsOn: ['s1'] },
+      ]);
+
+      const result = await planner.execute(context, mockLLM as any);
+      expect(result.success).toBe(true);
+      expect(context.taskPlan).toHaveLength(2);
+    });
+
     it('should include memory context when present in metadata', async () => {
       const context = {
         goal: 'test',
