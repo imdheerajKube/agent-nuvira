@@ -9,9 +9,13 @@
  * that will fail.
  */
 
-import { describe, it, expect, vi } from 'vitest';
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
+import { mkdtempSync, rmSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 
 import { resolveProvider } from '../../src/cli/router.js';
+import { resetModelRegistry } from '../../src/learning/model-registry.js';
 
 // ─── Helpers ────────────────────────────────────────────────────────────────
 
@@ -38,6 +42,29 @@ function makeConfigManager(overrides: {
 // ─── resolveProvider('auto') ────────────────────────────────────────────────
 
 describe('resolveProvider with provider "auto"', () => {
+  // The auto branch ranks providers via the Model Availability Registry —
+  // isolate it so a real machine registry (learned blocks/parks) can't leak
+  // into the deterministic credential ranking under test.
+  let memDir: string;
+  let originalMemoryDir: string | undefined;
+
+  beforeEach(() => {
+    memDir = mkdtempSync(join(tmpdir(), 'buff-router-'));
+    originalMemoryDir = process.env.BUFF_MEMORY_DIR;
+    process.env.BUFF_MEMORY_DIR = memDir;
+    resetModelRegistry();
+  });
+
+  afterEach(() => {
+    resetModelRegistry();
+    if (originalMemoryDir === undefined) {
+      delete process.env.BUFF_MEMORY_DIR;
+    } else {
+      process.env.BUFF_MEMORY_DIR = originalMemoryDir;
+    }
+    rmSync(memDir, { recursive: true, force: true });
+  });
+
   it('falls back to the first provider with credentials instead of an unconfigured default', () => {
     const cm = makeConfigManager({
       defaultProvider: 'openrouter', // unconfigured default — the old bug
@@ -75,5 +102,18 @@ describe('resolveProvider with provider "auto"', () => {
     const { type } = resolveProvider(cm, 'groq');
 
     expect(type).toBe('groq');
+  });
+
+  it('resolves the defaultProvider "auto" directive to a concrete provider (factory never sees a literal auto)', () => {
+    // No explicit provider option → rawType = defaultProvider = 'auto'. The
+    // auto branch must resolve to a real built-in provider, never pass a
+    // literal 'auto' to ProviderFactory (which would throw).
+    const cm = makeConfigManager({ defaultProvider: 'auto', creds: ['groq'] });
+
+    const { type, provider } = resolveProvider(cm);
+
+    expect(type).not.toBe('auto');
+    expect(type).toBe('groq');
+    expect(provider.name).toBeTruthy();
   });
 });

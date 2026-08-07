@@ -33,7 +33,7 @@
  * import { getAutoRouter } from './auto-router.js';
  * const router = getAutoRouter();
  * const decision = router.resolve('writer', 'implement JWT auth with refresh tokens');
- * // → { provider: 'gemini', model: 'gemini-2.5-flash', explanation: '...' }
+ * // → { provider: '<best available>', model: '<resolved model>', explanation: '...' }
  * ```
  */
 import { type ComplexityLevel, type ModelCandidate, type PreferenceMode } from './hybrid-router.js';
@@ -370,10 +370,6 @@ export declare const PROVIDER_PRICING_PER_1K: Record<string, {
     inputPer1K: number;
     outputPer1K: number;
 }>;
-/** Per-model nominal input context window (tokens). */
-export declare const MODEL_CONTEXT_WINDOWS: Record<string, number>;
-/** Provider-level fallback when the exact model isn't in the table. */
-export declare const PROVIDER_CONTEXT_WINDOWS: Record<string, number>;
 /** Fallback for unknown providers — large enough to rarely trigger a penalty. */
 export declare const DEFAULT_CONTEXT_WINDOW = 32768;
 /**

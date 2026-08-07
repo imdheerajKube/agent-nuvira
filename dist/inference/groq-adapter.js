@@ -2,6 +2,7 @@ import { logger } from '../utils/logger.js';
 import { streamCompletion } from './sse.js';
 import { getModelTags } from './model-catalog.js';
 import { getCostTracker, recordCallWithUsage } from '../learning/cost-tracker.js';
+import { requireAdapterModel } from '../learning/model-selection.js';
 const GROQ_BASE_URL = 'https://api.groq.com/openai/v1';
 /**
  * Groq Adapter
@@ -19,7 +20,7 @@ export class GroqAdapter {
         if (!apiKey) {
             throw new Error('Groq API key is not configured. Set GROQ_API_KEY env var.');
         }
-        const model = options?.model || this.config.model || 'llama-3.3-70b-versatile';
+        const model = options?.model || requireAdapterModel('groq', this.config.model);
         const temperature = options?.temperature ?? this.config.temperature ?? 0.7;
         const maxTokens = options?.maxTokens ?? this.config.maxTokens ?? 4096;
         logger.debug(`Groq: Generating with model=${model}, temperature=${temperature}, maxTokens=${maxTokens}`);
@@ -59,7 +60,7 @@ export class GroqAdapter {
         if (!apiKey) {
             throw new Error('Groq API key is not configured. Set GROQ_API_KEY env var.');
         }
-        const model = options?.model || this.config.model || 'llama-3.3-70b-versatile';
+        const model = options?.model || requireAdapterModel('groq', this.config.model);
         const temperature = options?.temperature ?? this.config.temperature ?? 0.7;
         const maxTokens = options?.maxTokens ?? this.config.maxTokens ?? 4096;
         logger.debug(`Groq: Streaming with model=${model}, temperature=${temperature}, maxTokens=${maxTokens}`);

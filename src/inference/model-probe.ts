@@ -23,7 +23,6 @@
 import { ProviderFactory } from './factory.js';
 import type { ConfigManager } from '../config/manager.js';
 import type { InferenceProvider } from './interface.js';
-import { PREFERRED_MODELS } from './model-validator.js';
 import { getModelRegistry } from '../learning/model-registry.js';
 import { classifyFallbackError, type FallbackErrorType } from '../learning/provider-fallback.js';
 import { getEventBus, EventNames } from '../observability/event-bus.js';
@@ -184,7 +183,7 @@ export interface RefreshOptions {
   spotCheck?: boolean;
   /**
    * Extra candidate models per provider to spot-check on TOP of the curated
-   * PREFERRED_MODELS + configured pin (default: []).
+   * live-list candidates + configured pin (default: []).
    */
   extraModels?: Record<string, string[]>;
   /** Max spot-checks per provider per pass (default: 5 — protects free tiers). */
@@ -236,14 +235,16 @@ export async function refreshModelRegistry(configManager: ConfigManager, options
 
       if (!spotCheckEnabled) continue;
 
-      // Candidate models to spot-check: curated defaults + configured pin +
-      // previously verified models + user extras. Dedupe, cap per provider.
+      // Candidate models to spot-check — all derived from the LIVE list, never
+      // a hardcoded catalog: the configured pin (if set), previously verified
+      // models, user extras, then the live list ranked by generic capability
+      // scoring (chat-capable, non-speech, stable over preview). Dedupe, cap.
       const configuredModel = getConfiguredModel(configManager, providerType);
       const candidates = [
-        ...(PREFERRED_MODELS[providerType] || []),
         ...(configuredModel && configuredModel !== 'default' ? [configuredModel] : []),
         ...registry.getVerifiedModels(providerType),
         ...(options.extraModels?.[providerType] || []),
+        ...rankProbeCandidates(listed),
       ].filter((m, i, arr) => arr.indexOf(m) === i && listed.includes(m));
       const toCheck = candidates.slice(0, maxChecks);
 
@@ -279,6 +280,22 @@ export async function refreshModelRegistry(configManager: ConfigManager, options
 }
 
 /** Read the configured model pin for a provider ('' when none). */
+/**
+ * Generic capability ranking for probe spot-check candidates — no specific
+ * model names: speech/audio sinks, then preview/experimental sinks, so
+ * stable chat-capable models are verified first.
+ */
+function rankProbeCandidates(ids: string[]): string[] {
+  const score = (id: string): number => {
+    const l = id.toLowerCase();
+    let s = 0;
+    if (/(whisper|tts|stt|speech|audio|transcrib|voice)/.test(l)) s += 100;
+    if (/(preview|exp$|latest)/.test(l)) s += 10;
+    return s;
+  };
+  return [...ids].sort((a, b) => score(a) - score(b));
+}
+
 function getConfiguredModel(configManager: ConfigManager, providerType: string): string | undefined {
   try {
     const { config } = configManager.getProviderConfig(providerType as never);

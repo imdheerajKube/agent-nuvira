@@ -16,27 +16,22 @@
  *      so the error (if any) stays accurate and the user sees a real message.
  *
  * IMPORTANT: `desiredModel === 'default'` (a provider key set but no pinned
- * model) is also validated. Adapter hardcoded defaults can be deprecated too
- * (Gemini's was `gemini-2.0-flash-exp` until retired), so 'default' resolves
- * to a verified-working model from the live list when one is available.
+ * model) is also validated. A 'default' pin means "the agent decides": it
+ * resolves to a verified-working model from the registry, or from the live
+ * list when the registry hasn't verified anything yet.
  */
 
 import type { InferenceProvider, ModelDescriptor } from './interface.js';
 import { logger } from '../utils/logger.js';
 import { getModelRegistry } from '../learning/model-registry.js';
+import { preferredModelsFor } from '../learning/model-selection.js';
 
-// ─── Curated known-good default models per provider ─────────────────────────
-// These are checked BEFORE generic fallback so Auto routing prefers models
-// that are stable, chat-capable, and known to work on each provider.
-
-/** Preferred repair models per provider id, best first. */
-export const PREFERRED_MODELS: Record<string, string[]> = {
-  groq: ['llama-3.3-70b-versatile', 'llama-3.1-8b-instant', 'openai/gpt-oss-20b'],
-  gemini: ['gemini-2.5-flash', 'gemini-2.0-flash', 'gemini-1.5-flash'],
-  openrouter: ['openai/gpt-4o-mini', 'meta-llama/llama-3.3-70b-instruct', 'mistralai/mistral-7b-instruct'],
-  nim: ['meta/llama-3.3-70b-instruct', 'meta/llama-3.1-8b-instruct'],
-  local: [], // Ollama models vary per machine — use the live list
-};
+// ─── Dynamic preference — never hardcoded model names ──────────────────────
+// Repair/selection prefers models the registry has VERIFIED working for this
+// user (probe + real usage), ranked by learned health — see
+// `preferredModelsFor()`. Nothing here names a model; a provider with no
+// verified models falls through to the live list ranked by generic
+// capability scoring (modelFallbackScore below).
 
 // ─── Live model-list cache ─────────────────────────────────────────────────
 // resolveProvider() constructs a FRESH adapter per call, so an instance-keyed
@@ -123,9 +118,9 @@ export async function resolveWorkingModel(
     return explicit;
   }
   if (!explicit) {
-    // No pin: prefer a curated known-good model the registry has verified.
-    const curated = registry.resolveVerifiedModel(providerType, PREFERRED_MODELS[providerType] || []);
-    if (curated) return curated;
+    // No pin: prefer a verified-working model (registry, health-ranked).
+    const verified = preferredModelsFor(providerType)[0];
+    if (verified) return verified;
   }
   // A pin the registry has DEFINITIVELY ruled out (unavailable / quota-parked
   // from real telemetry or a probe) is repaired SILENTLY — the registry
@@ -139,7 +134,7 @@ export async function resolveWorkingModel(
     const entry = registry.getEntry(providerType, explicit);
     const pinDead = !!entry && (entry.status === 'unavailable' || entry.quotaParkedUntil > Date.now());
     if (pinDead) {
-      const verified = registry.resolveVerifiedModel(providerType, PREFERRED_MODELS[providerType] || []);
+      const verified = preferredModelsFor(providerType)[0];
       if (verified) return verified;
     }
   }
@@ -187,37 +182,28 @@ export async function resolveWorkingModel(
     }
   }
 
-  // ── 2. Curated known-good default for this provider ───────────────────
-  // Prefer a curated candidate that is BOTH live AND not registry-blocked, so
-  // repair lands on a model we have reason to believe works — not just one
-  // that happens to be listed.
-  const preferred = PREFERRED_MODELS[providerType] || [];
-  for (const candidate of preferred) {
-    if (live.some((m) => m.id === candidate) && !registryBlocks(candidate)) {
-      if (explicit) {
-        logger.warn(
-          `♻️  Auto routing: model '${explicit}' is not available on '${providerType}' — using '${candidate}' (verified working).`,
-        );
-      }
-      return candidate;
-    }
-  }
-
-  // ── 3. Generic fallback: first usable model from the live list ────────
+  // ── 2+3. Repair target: verified models first, then the live list ranked
+  // by generic capability scoring. NEVER resurrect a model the registry has
+  // definitively ruled out — a live-list entry is not proof the model works
+  // (listModels can list models the key can't actually use), but an
+  // `unavailable`/quota-parked registry entry is proof it FAILED. Repair
+  // routes AROUND it, not into it.
   if (live.length > 0) {
-    const ranked = [...live].sort((a, b) => modelFallbackScore(a) - modelFallbackScore(b));
-    // NEVER resurrect a model the registry has definitively ruled out — a
-    // live-list entry is not proof the model works (listModels can list
-    // models the key can't actually use), but an `unavailable`/quota-parked
-    // registry entry is proof it FAILED. Repair routes AROUND it, not into it.
-    const usable = ranked.find((m) => modelFallbackScore(m) < 100 && !registryBlocks(m.id));
-    if (usable) {
+    const liveRanked = [...live].sort((a, b) => modelFallbackScore(a) - modelFallbackScore(b));
+    const preferred = [...preferredModelsFor(providerType), ...liveRanked.map((m) => m.id)];
+    // Never pick speech/audio (score >= 100) or a registry-blocked model.
+    const chosen = preferred.find((id) => {
+      const m = live.find((mm) => mm.id === id);
+      return !!m && modelFallbackScore(m) < 100 && !registryBlocks(id);
+    });
+    if (chosen) {
       if (explicit) {
+        const fromVerified = preferredModelsFor(providerType).includes(chosen);
         logger.warn(
-          `♻️  Auto routing: model '${explicit}' is not available on '${providerType}' — using '${usable.id}'.`,
+          `♻️  Auto routing: model '${explicit}' is not available on '${providerType}' — using '${chosen}'${fromVerified ? ' (verified working)' : ''}.`,
         );
       }
-      return usable.id;
+      return chosen;
     }
   }
 

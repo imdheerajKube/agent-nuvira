@@ -33,6 +33,7 @@ import { logger } from '../../src/utils/logger.js';
 import { ProviderFactory } from '../../src/inference/factory.js';
 import { ConfigManager } from '../../src/config/manager.js';
 import { getModelRegistry, resetModelRegistry } from '../../src/learning/model-registry.js';
+import { BUILTIN_PROVIDERS } from '../../src/learning/model-selection.js';
 import { getQuotaLedger, resetQuotaLedger } from '../../src/learning/quota-ledger.js';
 import { getAutoRouter } from '../../src/learning/auto-router.js';
 import * as modelProbe from '../../src/inference/model-probe.js';
@@ -1132,13 +1133,14 @@ describe('Orchestrator — auto model resolution', () => {
     const orch = new Orchestrator(cm);
 
     const createSpy = vi.spyOn(ProviderFactory, 'createProvider');
-    // createLLMProvider resolves provider 'auto' to the configured default
+    // createLLMProvider resolves provider 'auto' to the best AVAILABLE
+    // provider at runtime (registry-verified → configured → local)
     (orch as any).createLLMProvider({ provider: 'auto', model: 'llama3' });
 
     expect(createSpy).toHaveBeenCalledTimes(1);
+    // Never a literal 'auto' — always a real built-in adapter
     expect(createSpy.mock.calls[0][0]).not.toBe('auto');
-    // Should resolve to the actual configured default provider
-    expect(createSpy.mock.calls[0][0]).toBe(cm.getAll().defaultProvider);
+    expect(BUILTIN_PROVIDERS).toContain(createSpy.mock.calls[0][0]);
   });
 
   it('should auto-route the planner/default LLM when model is auto', async () => {

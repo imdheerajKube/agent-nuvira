@@ -144,7 +144,9 @@ describe('LocalAdapter', () => {
 
       (spawn as ReturnType<typeof vi.fn>).mockReturnValue(proc);
 
-      const adapter = new LocalAdapter({ runner: 'huggingface' as const });
+      // A model is pinned (otherwise the adapter would refuse to invent one)
+      // — the missing-python path is what's under test.
+      const adapter = new LocalAdapter({ runner: 'huggingface' as const, model: 'phi-2' });
       await expect(adapter.generate('test')).rejects.toThrow('Python 3 is not installed');
     });
 

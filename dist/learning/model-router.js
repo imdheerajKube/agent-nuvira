@@ -1,49 +1,45 @@
 /**
- * ModelRouter — Recommends the optimal inference provider and model
- * for different types of agent tasks.
+ * ModelRouter — Recommends the optimal inference provider and model for
+ * different types of agent tasks.
  *
- * Task categories and their recommended providers:
+ * NO hardcoded provider/model names: every task/agent maps to a CAPABILITY
+ * PROFILE (needs like "large context" or "high reasoning"), and the
+ * recommendation is resolved at runtime against what actually works for THIS
+ * user — registry-verified models first (health-ranked), then configured
+ * providers, then zero-config local. See `src/learning/model-selection.ts`.
  *
- * | Task Type              | Recommended Provider       | Rationale                     |
- * |------------------------|---------------------------|-------------------------------|
- * | code-format, lint      | local (small model)       | Fast, private, cheap          |
- * | simple-edit, refactor  | groq / nim                | Low latency, good quality     |
- * | architect, plan        | gemini / openrouter       | Large context, strong reasoning |
- * | security-audit, review | openrouter (GPT-4/Claude) | Best at finding subtle issues |
- * | test-generation        | any capable               | Depends on test framework     |
- *
- * The mapping is fully configurable — users can override via config file.
+ * The mapping is fully configurable — users can override via config file
+ * (providers.<type>.model pins, routing.* overrides, fallback.providers).
  * The router integrates with Orchestrator's `agentModels` option.
  */
-// ─── Default Mappings ───────────────────────────────────────────────────────
-/** Maps agent types to their recommended model strings */
-const DEFAULT_AGENT_MODELS = {
-    planner: 'gemini-2.5-flash',
-    'context-gatherer': 'groq/llama-3.3-70b-versatile',
-    writer: 'groq/llama-3.3-70b-versatile',
-    reviewer: 'openrouter/meta-llama/llama-3.1-8b-instruct',
-    tester: 'groq/llama-3.3-70b-versatile',
-    debugger: 'openrouter/meta-llama/llama-3.1-8b-instruct',
+import { bestAvailable, rankAvailableProviders } from './model-selection.js';
+import { getModelRegistry } from './model-registry.js';
+// ─── Capability Profiles (needs, never names) ───────────────────────────────
+/** Maps agent types to their capability needs (used to pick the best AVAILABLE model). */
+const AGENT_CAPABILITIES = {
+    planner: { context: 'large', reasoning: 'high' },
+    'context-gatherer': { context: 'large' },
+    writer: { speed: 'high' },
+    reviewer: { reasoning: 'high' },
+    tester: { speed: 'high' },
+    debugger: { reasoning: 'medium' },
 };
-/**
- * Maps task types to their ideal provider (used for config-level routing).
- * Agent-level routing is more specific and takes precedence.
- */
-const TASK_TO_PROVIDER = {
-    'code-format': 'local',
-    lint: 'local',
-    'simple-edit': 'groq',
-    refactor: 'nim',
-    architect: 'gemini',
-    plan: 'gemini',
-    'security-audit': 'openrouter',
-    'code-review': 'openrouter',
-    'test-generation': 'groq',
-    'context-gather': 'groq',
-    debug: 'groq',
-    default: 'groq',
+/** Maps task types to their capability needs. */
+const TASK_CAPABILITIES = {
+    'code-format': { speed: 'high' },
+    lint: { speed: 'high' },
+    'simple-edit': { speed: 'high' },
+    refactor: { reasoning: 'medium' },
+    architect: { context: 'large', reasoning: 'high' },
+    plan: { context: 'large', reasoning: 'high' },
+    'security-audit': { reasoning: 'high' },
+    'code-review': { reasoning: 'high' },
+    'test-generation': { speed: 'high' },
+    'context-gather': { context: 'large' },
+    debug: { speed: 'high' },
+    default: {},
 };
-/** Maps agent types to their task type */
+/** Maps agent types to their task type (taxonomy — not a selection). */
 const AGENT_TO_TASK = {
     planner: 'plan',
     'context-gatherer': 'context-gather',
@@ -54,62 +50,47 @@ const AGENT_TO_TASK = {
 };
 // ─── Router ────────────────────────────────────────────────────────────────
 /**
- * Get the recommended model string for a given agent type.
- * Format: "provider/model" or just "model" to use the default provider.
+ * Recommend the best AVAILABLE model for an agent type — resolved at runtime
+ * from verified/configured providers, never a hardcoded name.
+ *
+ * @param configManager Optional — when omitted, ranking is registry-only
+ *   (what the learning layer can see without CLI config access).
+ * Format of the returned `model`: 'default' means "let the agent resolve a
+ * verified working model at call time".
  */
-export function recommendModel(agentType) {
-    const modelStr = DEFAULT_AGENT_MODELS[agentType];
-    if (!modelStr) {
-        // Fall back to default
+export function recommendModel(agentType, configManager) {
+    const profile = AGENT_CAPABILITIES[agentType] || TASK_CAPABILITIES[getTaskType(agentType)] || {};
+    const pick = bestAvailable(profile, configManager);
+    if (pick) {
         return {
-            provider: TASK_TO_PROVIDER.default,
-            reason: `No specific recommendation for '${agentType}', using default`,
+            provider: pick.provider,
+            model: pick.model,
+            reason: `Best available for '${agentType}' (discovered from live model availability)`,
         };
     }
-    // Parse "provider/model" format
-    const slashIdx = modelStr.indexOf('/');
-    if (slashIdx > 0) {
-        const provider = modelStr.slice(0, slashIdx);
-        const model = modelStr.slice(slashIdx + 1);
-        return {
-            provider,
-            model,
-            reason: `Recommended for '${agentType}' tasks`,
-        };
-    }
-    // Just a model name — use its task type's preferred provider
-    const taskType = AGENT_TO_TASK[agentType] || 'default';
-    const provider = TASK_TO_PROVIDER[taskType];
     return {
-        provider,
-        model: modelStr,
-        reason: `Recommended for '${agentType}' tasks`,
+        provider: 'local',
+        reason: 'Nothing available yet — run `buff models refresh` or set an API key (local-only if Ollama is running)',
     };
 }
 /**
  * Build an `agentModels` map for the Orchestrator's `execute` options.
- * This can be passed directly to automatically route each agent to
- * its recommended model.
- *
- * @param overrides Optional overrides to customize specific agent models
+ * Values default to the 'default' sentinel (the agent resolves a verified
+ * working model at call time); explicit overrides always win.
  */
 export function buildAgentModelMap(overrides) {
     const map = {};
-    for (const agentType of Object.keys(DEFAULT_AGENT_MODELS)) {
-        if (overrides?.[agentType]) {
-            map[agentType] = overrides[agentType];
-        }
-        else {
-            map[agentType] = DEFAULT_AGENT_MODELS[agentType];
-        }
+    for (const agentType of Object.keys(AGENT_CAPABILITIES)) {
+        map[agentType] = overrides?.[agentType] ?? 'default';
     }
     return map;
 }
 /**
- * Get the recommended provider type for a task type.
+ * Recommend the best AVAILABLE provider for a task type — dynamic.
  */
-export function recommendProvider(taskType) {
-    return TASK_TO_PROVIDER[taskType] || TASK_TO_PROVIDER.default;
+export function recommendProvider(taskType, configManager) {
+    const pick = bestAvailable(TASK_CAPABILITIES[taskType] || {}, configManager);
+    return pick?.provider || 'local';
 }
 /**
  * Get the task type for an agent type.
@@ -118,23 +99,13 @@ export function getTaskType(agentType) {
     return AGENT_TO_TASK[agentType] || 'default';
 }
 /**
- * Check whether a provider is well-suited for a given task type.
- * Returns true if the provider matches or is a reasonable alternative.
+ * Whether a provider is currently usable by this user (verified models or
+ * credentials configured) — dynamic, no hardcoded suitability list.
  */
-export function isProviderSuitable(provider, taskType) {
-    const recommended = TASK_TO_PROVIDER[taskType] || TASK_TO_PROVIDER.default;
-    if (provider === recommended)
-        return true;
-    // Reasonable alternatives
-    const alternatives = {
-        'simple-edit': ['groq', 'nim', 'gemini'],
-        refactor: ['nim', 'groq', 'gemini'],
-        plan: ['gemini', 'openrouter'],
-        'code-review': ['openrouter', 'gemini'],
-    };
-    const alt = alternatives[taskType];
-    if (alt)
-        return alt.includes(provider);
-    return false;
+export function isProviderSuitable(provider, _taskType, configManager) {
+    if (configManager) {
+        return rankAvailableProviders(configManager).some((r) => r.provider === provider);
+    }
+    return getModelRegistry().getUsableProviders().includes(provider) || provider === 'local';
 }
 //# sourceMappingURL=model-router.js.map

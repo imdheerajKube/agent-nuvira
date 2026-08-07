@@ -218,7 +218,9 @@ export class CICommand extends BaseCommand {
         const providerType = (activeOpts.provider || options.provider || 'local');
         const providerConfig = this.configManager.getProviderConfig(providerType);
         const finalConfig = { ...providerConfig.config, model: activeOpts.model || providerConfig.config.model };
-        const provider = ProviderFactory.createProvider(providerType, finalConfig);
+        // providerConfig.type resolves the 'auto' directive — never feed a literal
+        // 'auto' to the adapter factory.
+        const provider = ProviderFactory.createProvider(providerConfig.type, finalConfig);
         const available = await provider.isAvailable();
         if (!available) {
             logger.error(`Provider ${providerType} is not available. Cannot perform review.`);

@@ -2,6 +2,7 @@ import { logger } from '../utils/logger.js';
 import { streamCompletion } from './sse.js';
 import { getModelTags } from './model-catalog.js';
 import { getCostTracker, recordCallWithUsage } from '../learning/cost-tracker.js';
+import { requireAdapterModel } from '../learning/model-selection.js';
 const DEFAULT_NIM_BASE_URL = 'https://integrate.api.nvidia.com/v1';
 /**
  * NVIDIA NIM Adapter
@@ -19,7 +20,7 @@ export class NIMAdapter {
         if (!apiKey) {
             throw new Error('NVIDIA NIM API key is not configured. Set NVIDIA_NIM_API_KEY env var.');
         }
-        const model = options?.model || this.config.model || 'meta/llama-3.1-8b-instruct';
+        const model = options?.model || requireAdapterModel('nim', this.config.model);
         const temperature = options?.temperature ?? this.config.temperature ?? 0.7;
         const maxTokens = options?.maxTokens ?? this.config.maxTokens ?? 4096;
         logger.debug(`NIM: Generating with model=${model}, temperature=${temperature}, maxTokens=${maxTokens}`);
@@ -62,7 +63,7 @@ export class NIMAdapter {
         if (!apiKey) {
             throw new Error('NVIDIA NIM API key is not configured. Set NVIDIA_NIM_API_KEY env var.');
         }
-        const model = options?.model || this.config.model || 'meta/llama-3.1-8b-instruct';
+        const model = options?.model || requireAdapterModel('nim', this.config.model);
         const temperature = options?.temperature ?? this.config.temperature ?? 0.7;
         const maxTokens = options?.maxTokens ?? this.config.maxTokens ?? 4096;
         logger.debug(`NIM: Streaming with model=${model}, temperature=${temperature}, maxTokens=${maxTokens}`);
