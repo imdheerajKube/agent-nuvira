@@ -1115,6 +1115,8 @@ function readModelRegistryData(): Record<string, unknown> {
     partialRate?: number;
     /** P4 M4.4: flakiness trajectory [{ t, rate }] — the panel's healing sparkline. */
     partialHistory?: Array<{ t: number; rate: number }>;
+    /** v1.60.1/1.60.2: live provider-advertised context window (tokens). */
+    contextWindowTokens?: number;
   }> }>(join(MEMORY_DIR, 'model-registry.json'));
   if (!data?.entries) {
     return { enabled: false, total: 0, flaky: 0, providers: [], actionTelemetry: readRegistryTelemetry(), updatedAt: Date.now() };
@@ -1149,6 +1151,10 @@ function readModelRegistryData(): Record<string, unknown> {
       // trajectory so the row can sparkline healing (decay via clean calls).
       partialRate: e.partialRate,
       partialHistory: e.partialHistory,
+      // v1.60.1/1.60.2: the live provider-advertised context window the probe
+      // recorded into the registry — the real spec the router's context
+      // preflight prefers over static provider-level estimates.
+      contextWindowTokens: e.contextWindowTokens,
     });
   }
 

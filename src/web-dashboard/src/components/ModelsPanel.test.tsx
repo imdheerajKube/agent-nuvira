@@ -10,7 +10,7 @@
 
 import { describe, it, expect, vi, afterEach } from 'vitest';
 import { render, screen, fireEvent, cleanup } from '@testing-library/react';
-import ModelsPanel, { ActionTimelineChart, dedupeDayEvents, ActionTelemetryCard, FlakinessChip, FlakinessSparkline } from './ModelsPanel';
+import ModelsPanel, { ActionTimelineChart, dedupeDayEvents, ActionTelemetryCard, FlakinessChip, FlakinessSparkline, ContextWindowChip } from './ModelsPanel';
 import type { ActionDayBucket, ActionDayEvent } from './ModelsPanel';
 import type { ActionTelemetryInsights } from '../types';
 
@@ -232,6 +232,36 @@ describe('FlakinessChip', () => {
   it('renders the full 100% at the EMA ceiling', () => {
     render(<FlakinessChip rate={1} />);
     expect(screen.getByText(/⏸ flaky 100%/)).toBeTruthy();
+  });
+});
+
+// ─── ContextWindowChip (v1.60.x live context-window presentation) ──────────
+// The registry row chip mirrors the CLI's `⏳ ctx` — the LIVE provider-
+// advertised context window the probe recorded (Ollama /api/tags + /api/show,
+// OpenRouter /models, Gemini inputTokenLimit, NIM max_model_len). It is the
+// real spec the router's context preflight prefers over static estimates.
+
+describe('ContextWindowChip', () => {
+  it('renders a compact 128K for a 131,072-token window with the exact tokens in the tooltip', () => {
+    render(<ContextWindowChip tokens={131072} />);
+    expect(screen.getByText('⏳ 128K')).toBeTruthy();
+    expect(screen.getByTitle(/131,072 tokens/)).toBeTruthy();
+    expect(screen.getByTitle(/feeds the router's context preflight/)).toBeTruthy();
+  });
+
+  it('renders 1M for a 1,048,576-token window (Gemini 2.5 class)', () => {
+    render(<ContextWindowChip tokens={1048576} />);
+    expect(screen.getByText('⏳ 1M')).toBeTruthy();
+  });
+
+  it('renders 16K for a 16,384-token local model window', () => {
+    render(<ContextWindowChip tokens={16384} />);
+    expect(screen.getByText('⏳ 16K')).toBeTruthy();
+  });
+
+  it('renders the raw count below 1024 tokens', () => {
+    render(<ContextWindowChip tokens={512} />);
+    expect(screen.getByText('⏳ 512')).toBeTruthy();
   });
 });
 

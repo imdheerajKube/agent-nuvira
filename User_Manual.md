@@ -1,6 +1,22 @@
 # Agent-Nuvira — User Manual
 
-**Version 1.59.9 | August 2026**
+**Version 1.60.2 | August 2026**
+
+### v1.60.2 — Live context windows from every provider that exposes one
+
+- **Ollama multi-source parsing** — the local adapter reads the advertised context length from whichever location the Ollama version uses: `details.context_length` (0.32.x+), `model_info["general.context_length"]` / `["llama.context_length"]` (mid builds), or a family-keyed `model_info["<family>.context_length"]` (e.g. `gemma4.context_length`).
+- **Bounded `/api/show` fallback** — models `/api/tags` can't describe get a targeted `POST /api/show` lookup (capped at 8 per list — never an unbounded N+1 on large local libraries). Live-verified: `gemma4:e4b` (custom model, no metadata in tags) now records its 131,072-token window.
+- **Gemini** — `models.list` `inputTokenLimit` is recorded as the live window, gated on `supportedGenerationMethods` containing `generateContent` (embedding models' input caps are never mistaken for chat windows).
+- **NIM** — vLLM-backed deployments expose `max_model_len` in the OpenAI-compatible list (total sequence length — a slight overestimate of the input window, fine for a soft preflight estimate); TensorRT-LLM deployments omit it and fall back to the provider-level estimate. **Groq** — `/models` exposes only id/object/created/owned_by (no window) — documented, falls back to the provider-level estimate.
+
+### v1.60.1 — Live per-model context windows feed the router's context preflight
+
+- The model probe records each provider-advertised context window into the Model Availability Registry when the list endpoint exposes it (Ollama `/api/tags` `general.context_length`, OpenRouter `/models` `context_length`). `resolveContextWindow` precedence is now: user override (`routing.contextWindows`) → **live registry descriptor** → provider-level nominal window → generous default. The static provider-level estimate is only a fallback when the API doesn't expose the real spec.
+
+### v1.60.0 — No hardcoded model defaults: fully dynamic selection
+
+- `defaultProvider` is now the routing directive `'auto'`, resolved at runtime to the best *available* provider for your keys + learned registry (verified → configured-with-key → zero-config local). Every provider's model pin is the `'default'` sentinel, resolved at call time to a registry-verified working model — explicit pins still win (health-checked).
+- New `src/learning/model-selection.ts` is the single selection authority (`rankAvailableProviders` / `resolveDefaultProvider` / `requireAdapterModel`), and fallback chains are built from what you actually configured — never a fixed provider list. `'auto'` can never reach an adapter factory; a cold start with nothing usable gets clear onboarding guidance (`buff models refresh`).
 
 ### v1.59.9 — Config-path consistency (`BUFF_CONFIG_DIR` honored everywhere)
 
