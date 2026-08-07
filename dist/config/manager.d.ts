@@ -15,7 +15,10 @@ export declare class ConfigManager {
      */
     private overrideFromEnv;
     /**
-     * Get configuration for a specific provider
+     * Get configuration for a specific provider.
+     * The 'auto' routing directive is resolved here to the best currently-
+     * available provider (registry-verified → configured → local) so callers
+     * never see a literal 'auto' reach an adapter factory.
      */
     getProviderConfig(provider?: string): {
         type: string;

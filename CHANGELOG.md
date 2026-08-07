@@ -9,6 +9,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.60.0] - 2026-08-07
+
+### Changed
+
+- **No hardcoded model defaults — fully dynamic selection.** The agent no longer ships a hardcoded default provider or per-provider model pins. `defaultProvider` is now the routing directive `'auto'`, resolved at runtime to the best *available* provider for the user's keys + learned registry (verified → configured-with-key → zero-config local). Every provider's model pin is the `'default'` sentinel, resolved at call time to a registry-verified working model. Explicit user pins still win (health-checked).
+- **New `src/learning/model-selection.ts`** is the single selection authority: `rankAvailableProviders`, `resolveDefaultProvider`, `bestAvailable`, `preferredModelsFor`, `requireAdapterModel` — all derived from the Model Availability Registry (probe → spot-check → verified/unavailable), ranked by learned health (error rate, then latency). Provider-level nominal context windows replace the static per-model map; adapters resolve their last-resort model from the registry and never invent a name (clear onboarding error instead).
+- **Fallback chain derived at runtime** — `fallback.providers` defaults to empty; the chain is built from what the user actually configured + verified, never a fixed provider list.
+- **`'auto'` can never reach an adapter factory** — `getProviderConfig` resolves the directive, and every `ProviderFactory.createProvider` call site (router, orchestrator, skill compile, learn extract, CI review, provider-fallback) uses the resolved type.
+- **Cold-start onboarding guidance** when nothing usable is configured (`buildOnboardingGuidance`): key hints + `buff models refresh`.
+- Removed static selection data: `PREFERRED_MODELS`, `MODEL_CONTEXT_WINDOWS`, `DEFAULT_AGENT_MODELS`, `TASK_TO_PROVIDER`.
+
+### Added
+
+- `tests/learning/model-selection.test.ts` (16 tests): no-keys → local only, verified-first health ranking, blocked-provider exclusion, capability-profile picks, adapter model resolution, guidance on empty state. Router regression: `defaultProvider 'auto'` resolves to a concrete provider. 3,395 tests green.
+
 ## [1.59.9] - 2026-08-06
 
 ### Fixed

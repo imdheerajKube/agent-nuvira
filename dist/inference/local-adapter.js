@@ -3,6 +3,7 @@ import { spawn } from 'node:child_process';
 import { existsSync } from 'node:fs';
 import { getModelTags } from './model-catalog.js';
 import { getCostTracker } from '../learning/cost-tracker.js';
+import { requireAdapterModel } from '../learning/model-selection.js';
 const OLLAMA_API_BASE = 'http://localhost:11434';
 /**
  * Local Model Adapter
@@ -30,7 +31,7 @@ export class LocalAdapter {
    * Generate using Ollama HTTP API
    */
     async generateOllama(prompt, options) {
-        const model = options?.model || this.config.model || 'llama2';
+        const model = options?.model || requireAdapterModel('local', this.config.model);
         const temperature = options?.temperature ?? this.config.temperature ?? 0.7;
         logger.debug(`Ollama: Generating with model=${model}, temperature=${temperature}`);
         const response = await fetch(`${OLLAMA_API_BASE}/api/generate`, {
@@ -133,7 +134,7 @@ export class LocalAdapter {
      * Requires transformers Python package to be installed
      */
     async generateHuggingFace(prompt, options) {
-        const model = options?.model || this.config.model || 'microsoft/phi-2';
+        const model = options?.model || requireAdapterModel('local', this.config.model);
         const maxTokens = options?.maxTokens ?? this.config.maxTokens ?? 512;
         logger.debug(`HuggingFace: Generating with model=${model}, maxTokens=${maxTokens}`);
         // Use a Python script for reliability
@@ -210,7 +211,7 @@ except Exception as e:
      * Expects a path to a GGML-compatible model file or the llama.cpp binary
      */
     async generateGGML(prompt, options) {
-        const model = options?.model || this.config.model || './models/llama-2-7b.gguf';
+        const model = options?.model || requireAdapterModel('local', this.config.model);
         const maxTokens = options?.maxTokens ?? this.config.maxTokens ?? 512;
         logger.debug(`GGML: Generating with model=${model}, maxTokens=${maxTokens}`);
         // Check if the model file exists
@@ -263,7 +264,7 @@ except Exception as e:
             logger.debug(`Local: Streaming not supported for runner '${runner}', falling back to non-streaming`);
             return this.generate(prompt, options);
         }
-        const model = options?.model || this.config.model || 'llama2';
+        const model = options?.model || requireAdapterModel('local', this.config.model);
         const temperature = options?.temperature ?? this.config.temperature ?? 0.7;
         logger.debug(`Ollama: Streaming with model=${model}, temperature=${temperature}`);
         return this.generateOllamaStream(prompt, model, temperature, onToken);

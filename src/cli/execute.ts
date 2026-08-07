@@ -1148,10 +1148,12 @@ export class ExecuteCommand extends BaseCommand {
     try {
       const config = this.configManager.getAll();
       const type = (activeProvider ||
-        config.defaultProvider || 'groq') as ProviderType;
-      const { config: providerConfig } = this.configManager.getProviderConfig(type);
+        config.defaultProvider || 'auto') as ProviderType;
+      // getProviderConfig resolves the 'auto' directive to the best available
+      // provider, so the adapter factory never sees a literal 'auto'.
+      const { type: resolvedType, config: providerConfig } = this.configManager.getProviderConfig(type);
 
-      const provider: InferenceProvider = ProviderFactory.createProvider(type, providerConfig);
+      const provider: InferenceProvider = ProviderFactory.createProvider(resolvedType, providerConfig);
 
       const model = activeModel || 'default';
 
@@ -1217,8 +1219,30 @@ export class ExecuteCommand extends BaseCommand {
       // provider is never written — it's a routing directive, not a real
       // provider×model.
       try {
-        const fbType = (activeProvider || this.configManager.getAll().defaultProvider || 'groq') as ProviderType;
-        if (fbType !== 'auto') {
+        // Resolve the provider for failure attribution WITHOUT calling the
+        // config getters when an explicit activeProvider is already known (a
+        // throwing config read must never break the rule-based fallback). The
+        // 'auto' directive is resolved to the concrete best-available provider.
+        let fbType = activeProvider;
+        if (!fbType) {
+          try {
+            fbType = this.configManager.getAll().defaultProvider;
+            if (fbType === 'auto') {
+              try {
+                fbType = this.configManager.getProviderConfig().type;
+              } catch {
+                // Keep 'auto' — skipped below.
+              }
+            }
+          } catch {
+            try {
+              fbType = this.configManager.getProviderConfig().type;
+            } catch {
+              fbType = 'default';
+            }
+          }
+        }
+        if (fbType && fbType !== 'auto') {
           recordActionFailure(this.failureSession, fbType, err, this.configManager, {
             model: activeModel || 'default',
             action: 'execute',

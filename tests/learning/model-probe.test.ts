@@ -272,13 +272,15 @@ describe('ModelProbe — refresh orchestration', () => {
   });
 
   it('probes + spot-checks candidates and aggregates results', async () => {
-    // gemini lists 2 models; only the curated candidate gets spot-checked.
+    // gemini lists 2 models; with a single spot-check the top LIVE-list
+    // candidate (generic capability ranking, never a hardcoded catalog) gets
+    // verified first.
     const cm = makeConfigManager(() => makeProvider({ models: [{ id: 'gemini-2.5-flash' }, { id: 'other' }] }));
-    const result = await refreshModelRegistry(cm, { providers: ['gemini'] });
+    const result = await refreshModelRegistry(cm, { providers: ['gemini'], maxSpotChecksPerProvider: 1 });
 
     expect(result.providersProbed).toContain('gemini');
     expect(result.modelsListed).toBe(2);
-    expect(result.verified).toBe(1); // gemini-2.5-flash is curated & works
+    expect(result.verified).toBe(1); // top live-list candidate verified first
     expect(getModelRegistry().isUsable('gemini', 'gemini-2.5-flash')).toBe(true);
     expect(getModelRegistry().isUsable('gemini', 'other')).toBe(false);
   });

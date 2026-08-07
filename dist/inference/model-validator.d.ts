@@ -16,13 +16,11 @@
  *      so the error (if any) stays accurate and the user sees a real message.
  *
  * IMPORTANT: `desiredModel === 'default'` (a provider key set but no pinned
- * model) is also validated. Adapter hardcoded defaults can be deprecated too
- * (Gemini's was `gemini-2.0-flash-exp` until retired), so 'default' resolves
- * to a verified-working model from the live list when one is available.
+ * model) is also validated. A 'default' pin means "the agent decides": it
+ * resolves to a verified-working model from the registry, or from the live
+ * list when the registry hasn't verified anything yet.
  */
 import type { InferenceProvider } from './interface.js';
-/** Preferred repair models per provider id, best first. */
-export declare const PREFERRED_MODELS: Record<string, string[]>;
 /**
  * Clear the module-level model-list cache.
  *

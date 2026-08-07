@@ -290,7 +290,8 @@ const BUILTIN_TEMPLATES = [
             },
         ],
         recommendedModels: {
-            planner: 'gemini-2.5-flash',
+            // 'default' = the agent resolves a verified working model at runtime
+            planner: 'default',
             writer: 'groq/llama-3.1-8b-instant',
             reviewer: 'groq/llama-3.1-8b-instant',
         },

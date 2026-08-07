@@ -25,6 +25,7 @@ import inquirer from 'inquirer';
 import { BaseCommand } from './commands.js';
 import { showModelPicker } from './model-picker.js';
 import { getPluginRegistry } from '../plugins/registry.js';
+import { recommendModel } from '../learning/model-router.js';
 import { getModelBadge } from '../inference/model-catalog.js';
 import { getHybridRouter } from '../learning/hybrid-router.js';
 import { AUTO_MODEL, AUTO_PROVIDER, getAutoRouter, isAutoModel, isAutoProvider, PIIPolicyError, GovernancePolicyError, } from '../learning/auto-router.js';
@@ -876,14 +877,15 @@ export class ModelCommand extends BaseCommand {
             console.log(`  Current: ${icon} ${active.providerLabel || active.provider} / ${active.model}`);
             console.log('');
         }
-        // Default agent-to-model mapping
+        // Agent→capability rows; the recommended model is DISCOVERED at runtime
+        // from the user's keys + verified availability (never hardcoded names).
         const defaultMapping = [
-            { agent: 'planner', icon: '📋', recommended: 'gemini/gemini-2.5-flash' },
-            { agent: 'context-gatherer', icon: '📂', recommended: 'groq/llama-3.3-70b-versatile' },
-            { agent: 'writer', icon: '✏️', recommended: 'groq/llama-3.3-70b-versatile' },
-            { agent: 'reviewer', icon: '👁️', recommended: 'openrouter/meta-llama/llama-3.1-8b-instruct' },
-            { agent: 'tester', icon: '🧪', recommended: 'groq/llama-3.3-70b-versatile' },
-            { agent: 'debugger', icon: '🐛', recommended: 'openrouter/meta-llama/llama-3.1-8b-instruct' },
+            { agent: 'planner', icon: '📋' },
+            { agent: 'context-gatherer', icon: '📂' },
+            { agent: 'writer', icon: '✏️' },
+            { agent: 'reviewer', icon: '👁️' },
+            { agent: 'tester', icon: '🧪' },
+            { agent: 'debugger', icon: '🐛' },
         ];
         if (recommendations.length > 0) {
             logger.highlight('  ── Benchmark-Driven Recommendations ──');
@@ -894,10 +896,12 @@ export class ModelCommand extends BaseCommand {
             }
         }
         console.log('');
-        logger.highlight('  ── Default Recommendations ──');
+        logger.highlight('  ── Runtime Recommendations (from your keys + availability) ──');
         console.log('');
-        for (const { agent, icon, recommended } of defaultMapping) {
-            console.log(`  ${icon} ${agent.padEnd(20)} → ${recommended}`);
+        for (const { agent, icon } of defaultMapping) {
+            const rec = recommendModel(agent, this.configManager);
+            const label = rec.model && rec.model !== 'default' ? `${rec.provider}/${rec.model}` : `${rec.provider} (auto-resolved)`;
+            console.log(`  ${icon} ${agent.padEnd(20)} → ${label}`);
         }
         console.log('');
         logger.info('To use routing: add `--auto-route` to `buff execute` commands.');
@@ -906,7 +910,7 @@ export class ModelCommand extends BaseCommand {
     }
     // ── Subcommand: health ─────────────────────────────────────────────────
     async checkHealth(opts) {
-        const targetProvider = opts.provider || readActiveModelState()?.provider || 'local';
+        const targetProvider = opts.provider || readActiveModelState()?.provider || this.configManager.getProviderConfig().type;
         const icon = PROVIDER_ICONS[targetProvider] || '🔹';
         const label = PROVIDER_LABELS[targetProvider] || targetProvider;
         console.log('');

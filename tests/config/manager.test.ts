@@ -36,13 +36,16 @@ describe('ConfigManager', () => {
       const manager = new ConfigManager(join(testDir, 'test-a'));
       const config = manager.getAll();
 
-      expect(config.defaultProvider).toBe('local');
-      expect(config.providers.nim.model).toBe('meta/llama-3.1-8b-instruct');
-      expect(config.providers.gemini.model).toBe('gemini-2.5-flash');
-      expect(config.providers.openrouter.model).toBe('mistralai/mistral-7b-instruct');
-      expect(config.providers.groq.model).toBe('llama-3.3-70b-versatile');
+      // No hardcoded defaults: the default provider is the dynamic 'auto'
+      // routing directive and every provider's model pin is the 'default'
+      // sentinel (the agent resolves a verified working model at runtime).
+      expect(config.defaultProvider).toBe('auto');
+      expect(config.providers.nim.model).toBe('default');
+      expect(config.providers.gemini.model).toBe('default');
+      expect(config.providers.openrouter.model).toBe('default');
+      expect(config.providers.groq.model).toBe('default');
       expect(config.providers.local.runner).toBe('ollama');
-      expect(config.providers.local.model).toBe('llama2');
+      expect(config.providers.local.model).toBe('default');
     });
 
     it('should load routing config from the file (bandit/quota/governance/nuviraSidecar survive reload)', () => {
@@ -110,7 +113,7 @@ describe('ConfigManager', () => {
       const manager = new ConfigManager(configDir);
       const config = manager.getAll();
 
-      expect(config.defaultProvider).toBe('local');
+      expect(config.defaultProvider).toBe('auto');
       expect(config.providers.local.runner).toBe('ollama');
     });
   });
@@ -163,7 +166,7 @@ describe('ConfigManager', () => {
       process.env.BUFF_CONFIG_DIR = altDir;
 
       const manager = new ConfigManager(explicitDir);
-      expect(manager.getAll().defaultProvider).toBe('local'); // explicit dir has no file → defaults
+      expect(manager.getAll().defaultProvider).toBe('auto'); // explicit dir has no file → defaults
     });
   });
 
@@ -205,7 +208,7 @@ describe('ConfigManager', () => {
       const { type, config } = manager.getProviderConfig('gemini');
 
       expect(type).toBe('gemini');
-      expect(config.model).toBe('gemini-2.5-flash');
+      expect(config.model).toBe('default');
     });
 
     it('should return default provider when none specified', () => {
@@ -282,7 +285,7 @@ describe('ConfigManager', () => {
 
       config.defaultProvider = 'nim';
 
-      expect(manager.getAll().defaultProvider).toBe('local');
+      expect(manager.getAll().defaultProvider).toBe('auto');
     });
   });
 

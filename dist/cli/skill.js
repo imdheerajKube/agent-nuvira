@@ -235,8 +235,10 @@ export class SkillCommand {
     async compileSkills(opts) {
         console.log('🧠 Compiling skills from stored trajectories...\n');
         const providerType = (opts.provider || this.configManager.getAll().defaultProvider);
-        const { config } = this.configManager.getProviderConfig(providerType);
-        const provider = ProviderFactory.createProvider(providerType, config);
+        // getProviderConfig resolves the 'auto' directive to a concrete provider,
+        // so the adapter factory never sees a literal 'auto'.
+        const { type: resolvedType, config } = this.configManager.getProviderConfig(providerType);
+        const provider = ProviderFactory.createProvider(resolvedType, config);
         const callLLM = async (prompt) => {
             try {
                 const response = await provider.generate(prompt, {

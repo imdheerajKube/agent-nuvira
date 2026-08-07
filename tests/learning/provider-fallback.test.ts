@@ -309,15 +309,20 @@ describe('ProviderFallback', () => {
     });
 
     it('returns empty chain when all providers are in cooldown', () => {
+      // Pin an explicit chain so this test exercises the COOLDOWN filter, not
+      // the dynamic (default) chain derivation.
+      const explicit = new ProviderFallback(mockConfigManager as unknown as ConfigManager, {
+        providers: ['groq', 'nim', 'gemini', 'openrouter', 'local'],
+      });
       for (const p of ['groq', 'nim', 'gemini', 'openrouter', 'local', 'custom-ai']) {
-        (fallback as any).circuitBreakers.set(p, {
+        (explicit as any).circuitBreakers.set(p, {
           failures: 3,
           lastFailure: Date.now(),
           cooldownUntil: Date.now() + 60_000,
         });
       }
 
-      const chain = fallback.getFallbackChain('groq');
+      const chain = explicit.getFallbackChain('groq');
       expect(chain).toHaveLength(0);
     });
 
@@ -702,7 +707,11 @@ describe('ProviderFallback', () => {
 
   describe('updateConfig / getConfig', () => {
     it('returns the config passed at construction', () => {
-      const config = fallback.getConfig();
+      // Explicit chain — the DEFAULT is empty (derived dynamically at runtime).
+      const explicit = new ProviderFallback(mockConfigManager as unknown as ConfigManager, {
+        providers: ['groq', 'nim', 'gemini', 'openrouter', 'local'],
+      });
+      const config = explicit.getConfig();
       expect(config.enabled).toBe(true);
       expect(config.providers).toContain('groq');
       expect(config.maxAttempts).toBe(3);

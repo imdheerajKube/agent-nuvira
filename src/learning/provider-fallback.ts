@@ -26,6 +26,7 @@ import type { ConfigManager } from '../config/manager.js';
 import { getPluginRegistry } from '../plugins/registry.js';
 import { logger } from '../utils/logger.js';
 import { getModelRegistry } from './model-registry.js';
+import { rankAvailableProviders, resolveDefaultProvider } from './model-selection.js';
 
 // ─── Types ──────────────────────────────────────────────────────────────────
 
@@ -70,11 +71,12 @@ export type FallbackErrorType = 'auth' | 'rate-limit' | 'server' | 'network' | '
 
 // ─── Constants ──────────────────────────────────────────────────────────────
 
-const DEFAULT_FALLBACK_CHAIN: string[] = ['groq', 'nim', 'gemini', 'openrouter', 'local'];
-
+// NO hardcoded fallback chain: when fallback.providers is empty (the default),
+// the chain is derived at runtime from what the user has configured + verified
+// (rankAvailableProviders). Users may still pin an explicit order.
 const DEFAULT_FALLBACK_CONFIG: ProviderFallbackConfig = {
   enabled: true,
-  providers: DEFAULT_FALLBACK_CHAIN,
+  providers: [],
   maxAttempts: 3,
   retryDelayMs: 1000,
 };
@@ -275,7 +277,12 @@ export class ProviderFallback {
    * Merges user config with defaults and excludes providers in cooldown.
    */
   getFallbackChain(primaryProvider?: string): string[] {
-    const configured = this.fallbackConfig.providers;
+    // Empty config → derive the chain dynamically from what the user actually
+    // has configured + verified (never a hardcoded provider list).
+    const configured =
+      this.fallbackConfig.providers.length > 0
+        ? this.fallbackConfig.providers
+        : rankAvailableProviders(this.configManager).map((r) => r.provider);
     const allProviders = new Set<string>();
 
     // Primary is first if specified
@@ -357,8 +364,11 @@ export class ProviderFallback {
     }
 
     try {
-      const { config } = this.configManager.getProviderConfig(providerType as ProviderType);
-      const provider = ProviderFactory.createProvider(providerType, config);
+      // getProviderConfig resolves the 'auto' directive — use the resolved
+      // type so the adapter factory never sees a literal 'auto'. Fall back to
+      // the requested type when the resolver returns no type (stub managers).
+      const resolved = this.configManager.getProviderConfig(providerType as ProviderType);
+      const provider = ProviderFactory.createProvider(resolved.type || providerType, resolved.config);
       this.providerCache.set(cacheKey, { provider, expiresAt: Date.now() + 60_000 });
       return provider;
     } catch (err) {
@@ -403,8 +413,8 @@ export class ProviderFallback {
     const isEnabled = this.fallbackConfig.enabled;
 
     if (!isEnabled) {
-      // Fallback disabled — just try the primary
-      const primary = chain[0] || primaryProvider || 'groq';
+      // Fallback disabled — just try the primary (resolved dynamically if unset)
+      const primary = chain[0] || primaryProvider || resolveDefaultProvider(this.configManager);
       const provider = this.getProvider(primary);
       if (!provider) {
         throw new Error(`Provider '${primary}' could not be created and fallback is disabled`);

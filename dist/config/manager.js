@@ -3,14 +3,21 @@ import { join } from 'node:path';
 import { resolveBuffConfigDir } from './paths.js';
 import { loadEnv } from '../utils/env.js';
 import { logger } from '../utils/logger.js';
+import { resolveDefaultProvider } from '../learning/model-selection.js';
+// NO hardcoded provider/model defaults: the default provider is the routing
+// directive 'auto' (the best AVAILABLE provider is resolved at runtime from
+// the user's keys + verified models — see resolveDefaultProvider), and every
+// provider's model pin is the 'default' sentinel (the agent resolves a
+// verified working model at call time). A user who pins a provider/model
+// explicitly still overrides these (explicit wins, health-checked).
 const DEFAULT_CONFIG = {
-    defaultProvider: 'local',
+    defaultProvider: 'auto',
     providers: {
-        nim: { model: 'meta/llama-3.1-8b-instruct', temperature: 0.7, maxTokens: 4096 },
-        gemini: { model: 'gemini-2.5-flash', temperature: 0.7, maxTokens: 8192 },
-        openrouter: { model: 'mistralai/mistral-7b-instruct', temperature: 0.7, maxTokens: 4096 },
-        groq: { model: 'llama-3.3-70b-versatile', temperature: 0.7, maxTokens: 4096 },
-        local: { runner: 'ollama', model: 'llama2', temperature: 0.7, maxTokens: 4096 },
+        nim: { model: 'default', temperature: 0.7, maxTokens: 4096 },
+        gemini: { model: 'default', temperature: 0.7, maxTokens: 8192 },
+        openrouter: { model: 'default', temperature: 0.7, maxTokens: 4096 },
+        groq: { model: 'default', temperature: 0.7, maxTokens: 4096 },
+        local: { runner: 'ollama', model: 'default', temperature: 0.7, maxTokens: 4096 },
     },
     history: {
         retentionDays: 30,
@@ -19,9 +26,12 @@ const DEFAULT_CONFIG = {
     memory: {
         vectorBackend: 'auto',
     },
+    // Empty by default: the fallback chain is derived at runtime from what the
+    // user has configured + verified (rankAvailableProviders), never a fixed
+    // provider list. Users may still set fallback.providers explicitly.
     fallback: {
         enabled: true,
-        providers: ['groq', 'nim', 'gemini', 'openrouter', 'local'],
+        providers: [],
         maxAttempts: 3,
         retryDelayMs: 1000,
     },
@@ -152,10 +162,16 @@ export class ConfigManager {
         }
     }
     /**
-     * Get configuration for a specific provider
+     * Get configuration for a specific provider.
+     * The 'auto' routing directive is resolved here to the best currently-
+     * available provider (registry-verified → configured → local) so callers
+     * never see a literal 'auto' reach an adapter factory.
      */
     getProviderConfig(provider) {
-        const type = provider || this.config.defaultProvider;
+        let type = provider || this.config.defaultProvider;
+        if (type === 'auto') {
+            type = resolveDefaultProvider(this);
+        }
         const config = this.config.providers[type] || {};
         return { type, config };
     }

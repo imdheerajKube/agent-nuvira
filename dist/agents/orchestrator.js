@@ -964,11 +964,11 @@ export class Orchestrator {
         }
     }
     createLLMProvider(options) {
-        // Guard: 'auto' is not a real provider — resolve to the configured default
+        // Guard: 'auto' is not a real provider — getProviderConfig resolves the
+        // 'auto' routing directive to the best AVAILABLE provider at runtime, so
+        // the adapter factory never sees a literal 'auto'.
         const rawProvider = options.provider || this.configManager.getAll().defaultProvider;
-        const providerType = (isAutoProvider(rawProvider) ? undefined : rawProvider) ||
-            this.configManager.getAll().defaultProvider;
-        const { config } = this.configManager.getProviderConfig(providerType);
+        const { type: providerType, config } = this.configManager.getProviderConfig(rawProvider);
         const provider = ProviderFactory.createProvider(providerType, config);
         return async (prompt, inferenceOptions) => {
             // Runtime injection guardrail

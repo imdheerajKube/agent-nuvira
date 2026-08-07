@@ -1,6 +1,7 @@
 import { logger } from '../utils/logger.js';
 import { getModelTags } from './model-catalog.js';
 import { getCostTracker } from '../learning/cost-tracker.js';
+import { requireAdapterModel } from '../learning/model-selection.js';
 const GEMINI_BASE_URL = 'https://generativelanguage.googleapis.com/v1beta/models';
 /**
  * Parse a Gemini SSE streaming response line.
@@ -38,7 +39,7 @@ export class GeminiAdapter {
         if (!apiKey) {
             throw new Error('Google Gemini API key is not configured. Set GEMINI_API_KEY env var.');
         }
-        const model = options?.model || this.config.model || 'gemini-2.5-flash';
+        const model = options?.model || requireAdapterModel('gemini', this.config.model);
         const temperature = options?.temperature ?? this.config.temperature ?? 0.7;
         const maxTokens = options?.maxTokens ?? this.config.maxTokens ?? 8192;
         logger.debug(`Gemini: Generating with model=${model}, temperature=${temperature}, maxTokens=${maxTokens}`);
@@ -72,7 +73,7 @@ export class GeminiAdapter {
         if (!apiKey) {
             throw new Error('Google Gemini API key is not configured. Set GEMINI_API_KEY env var.');
         }
-        const model = options?.model || this.config.model || 'gemini-2.5-flash';
+        const model = options?.model || requireAdapterModel('gemini', this.config.model);
         const temperature = options?.temperature ?? this.config.temperature ?? 0.7;
         const maxTokens = options?.maxTokens ?? this.config.maxTokens ?? 8192;
         logger.debug(`Gemini: Streaming with model=${model}, temperature=${temperature}, maxTokens=${maxTokens}`);

@@ -6,6 +6,7 @@ import { ConfigManager } from '../config/manager.js';
 /** Read version from package.json at build time */
 const pkg = JSON.parse(readFileSync(fileURLToPath(new URL('../../package.json', import.meta.url)), 'utf-8'));
 import { ProviderFactory } from '../inference/factory.js';
+import { rankAvailableProviders, buildOnboardingGuidance } from '../learning/model-selection.js';
 import { InferenceProvider } from '../inference/interface.js';
 import { ProviderType } from '../config/types.js';
 import { getPluginRegistry } from '../plugins/registry.js';
@@ -240,32 +241,37 @@ export function resolveProvider(
   // ── 'auto' is a routing directive, not a concrete provider ─────────────
   // Auto must be resolved per-task through the AutoModelRouter. If it leaks
   // into resolveProvider (e.g. a stale active-model state), NEVER fall back to
-  // an unconfigured default provider (that caused confusing 401s when the
-  // default had no API key). Prefer the first provider with credentials.
+  // a hardcoded provider (that caused confusing 401s when the default had no
+  // API key). Resolve to the best AVAILABLE provider right now: registry-
+  // verified first, then configured-with-key, then local (zero-config). If
+  // nothing is configured, surface onboarding guidance instead of failing
+  // into a dead provider.
   if (rawType === 'auto') {
-    const configuredFallback =
-      ['groq', 'nim', 'gemini', 'openrouter', 'local'].find((p) => {
-        try {
-          return configManager.hasRequiredCredentials(p);
-        } catch {
-          return false;
-        }
-      }) || configManager.getAll().defaultProvider;
-    logger.warn(
-      `Provider 'auto' must be routed via Auto model routing — falling back to configured provider '${configuredFallback}'. ` +
-      `Run \`buff model switch auto\` for per-task routing.`
-    );
+    const ranked = rankAvailableProviders(configManager);
+    const configuredFallback = ranked[0]?.provider || 'local';
+    if (!ranked.some((r) => r.provider !== 'local')) {
+      // No cloud provider configured (and local is the only zero-config pick)
+      // — tell the user how to unlock providers instead of silently using a
+      // dead default.
+      logger.warn(
+        `Provider 'auto' resolved to '${configuredFallback}' (the only zero-config option). ` +
+          `${buildOnboardingGuidance(configManager)}`
+      );
+    } else {
+      logger.debug(`Resolved provider (auto fallback): ${configuredFallback}`);
+    }
     const { config } = configManager.getProviderConfig(configuredFallback);
     const provider = ProviderFactory.createProvider(configuredFallback, config);
-    logger.debug(`Resolved provider (auto fallback): ${configuredFallback} (${provider.name})`);
     return { type: configuredFallback, provider };
   }
 
-  // Unknown provider — warn and fall back to default
-  logger.warn(`Unknown provider '${rawType}'. Falling back to '${configManager.getAll().defaultProvider}'`);
+  // Unknown provider — warn and fall back to the default. getProviderConfig
+  // resolves the 'auto' directive to the best available provider, so the
+  // adapter factory never sees a literal 'auto'.
+  logger.warn(`Unknown provider '${rawType}'. Falling back to the default provider.`);
   const fallbackType = configManager.getAll().defaultProvider;
-  const { config } = configManager.getProviderConfig(fallbackType);
-  const provider = ProviderFactory.createProvider(fallbackType, config);
-  logger.debug(`Resolved provider (fallback): ${fallbackType} (${provider.name})`);
-  return { type: fallbackType, provider };
+  const { type: resolvedFallback, config } = configManager.getProviderConfig(fallbackType);
+  const provider = ProviderFactory.createProvider(resolvedFallback, config);
+  logger.debug(`Resolved provider (fallback): ${resolvedFallback} (${provider.name})`);
+  return { type: resolvedFallback, provider };
 }

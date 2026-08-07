@@ -33,7 +33,7 @@
  * import { getAutoRouter } from './auto-router.js';
  * const router = getAutoRouter();
  * const decision = router.resolve('writer', 'implement JWT auth with refresh tokens');
- * // → { provider: 'gemini', model: 'gemini-2.5-flash', explanation: '...' }
+ * // → { provider: '<best available>', model: '<resolved model>', explanation: '...' }
  * ```
  */
 import { analyzeComplexity } from './hybrid-router.js';
@@ -44,7 +44,7 @@ import { getRouterBandit, DEFAULT_MIN_SAMPLES } from './router-bandit.js';
 import { getRouterPromotion } from './router-promotion.js';
 import { getModelRegistry } from './model-registry.js';
 import { estimateTokens } from './cost-tracker.js';
-import { PREFERRED_MODELS } from '../inference/model-validator.js';
+import { preferredModelsFor, PROVIDER_CONTEXT_WINDOWS } from './model-selection.js';
 import { logger } from '../utils/logger.js';
 // ─── Constants ──────────────────────────────────────────────────────────────
 /** The special model value that triggers automatic per-task routing. */
@@ -234,39 +234,11 @@ const COST_REFERENCE_USD = 0.01;
 const TYPICAL_INPUT_TOKENS = 2000;
 const TYPICAL_OUTPUT_TOKENS = 500;
 // ─── M2.5 Context preflight — nominal input context windows ────────────────
-//
-// Approximate NOMINAL input context windows (tokens) per model, used ONLY for
-// the soft utilization estimate. These are published model specs — the router
-// never treats them as hard limits (models may exceed nominal windows and
-// providers may advertise more; estimation only). Config overrides via
-// `routing.contextWindows[model]` (or `[provider]` as a provider-level
-// default) always win.
-/** Per-model nominal input context window (tokens). */
-export const MODEL_CONTEXT_WINDOWS = {
-    // Gemini 2.x — 1M token context (Flash + Pro variants)
-    'gemini-2.5-flash': 1_048_576,
-    'gemini-2.0-flash': 1_048_576,
-    'gemini-1.5-flash': 1_048_576,
-    // Groq-hosted Llama / GPT-OSS — 128K context
-    'llama-3.3-70b-versatile': 131_072,
-    'llama-3.1-8b-instant': 131_072,
-    'openai/gpt-oss-20b': 131_072,
-    // NIM-hosted Llama — 128K context
-    'meta/llama-3.3-70b-instruct': 128_000,
-    'meta/llama-3.1-8b-instruct': 128_000,
-    // OpenRouter pass-through — GPT-4o-mini / Llama 128K, Mistral 32K
-    'openai/gpt-4o-mini': 128_000,
-    'meta-llama/llama-3.3-70b-instruct': 128_000,
-    'mistralai/mistral-7b-instruct': 32_000,
-};
-/** Provider-level fallback when the exact model isn't in the table. */
-export const PROVIDER_CONTEXT_WINDOWS = {
-    local: 8_192, // Ollama default varies 4K–128K by model; assume modest
-    groq: 131_072,
-    gemini: 1_048_576,
-    nim: 128_000,
-    openrouter: 128_000,
-};
+// Nominal provider-level context windows (tokens) are imported from
+// model-selection (PROVIDER_CONTEXT_WINDOWS) — capability metadata, never a
+// per-model name table. Config overrides via `routing.contextWindows[model]`
+// (or `[provider]` as a provider-level default) always win, and the live
+// model descriptors from a probe win where available.
 /** Fallback for unknown providers — large enough to rarely trigger a penalty. */
 export const DEFAULT_CONTEXT_WINDOW = 32_768;
 /**
@@ -1094,7 +1066,9 @@ export class AutoModelRouter {
         catch {
             // Best-effort — config read must never break routing.
         }
-        return MODEL_CONTEXT_WINDOWS[model] ?? PROVIDER_CONTEXT_WINDOWS[provider] ?? DEFAULT_CONTEXT_WINDOW;
+        // Provider-level nominal window + user overrides only — never a hardcoded
+        // per-model table (live model descriptors / registry win where available).
+        return PROVIDER_CONTEXT_WINDOWS[provider] ?? DEFAULT_CONTEXT_WINDOW;
     }
     /**
      * Record a real task outcome so the bandit can learn from actual results.
@@ -1158,7 +1132,7 @@ export class AutoModelRouter {
         const candidates = [];
         if (configuredModel && configuredModel !== 'default')
             candidates.push(configuredModel);
-        for (const m of PREFERRED_MODELS[provider] || []) {
+        for (const m of preferredModelsFor(provider)) {
             if (!candidates.includes(m))
                 candidates.push(m);
         }
@@ -1264,7 +1238,7 @@ export class AutoModelRouter {
         if (!governance)
             return undefined;
         const configured = this.resolveModel(provider, agentType, configManager);
-        const served = configured && configured !== 'default' ? [configured] : PREFERRED_MODELS[provider] || [];
+        const served = configured && configured !== 'default' ? [configured] : preferredModelsFor(provider);
         const candidates = served.length > 0 ? served : ['default'];
         if (governance.denyModels?.length && candidates.some((m) => governance.denyModels.includes(m))) {
             const denied = candidates.find((m) => governance.denyModels.includes(m));
@@ -1302,7 +1276,7 @@ export class AutoModelRouter {
                         const entry = registry.getEntry(provider, config.model);
                         const pinDead = !!entry && (entry.status === 'unavailable' || entry.quotaParkedUntil > Date.now());
                         if (pinDead) {
-                            const verified = registry.resolveVerifiedModel(provider, PREFERRED_MODELS[provider] || []);
+                            const verified = registry.resolveVerifiedModel(provider, preferredModelsFor(provider));
                             if (verified)
                                 return verified;
                         }

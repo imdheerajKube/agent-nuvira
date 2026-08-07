@@ -35,8 +35,6 @@ import {
   DEFAULT_AUTO_PROVIDERS,
   GovernancePolicyError,
   computeContextFit,
-  MODEL_CONTEXT_WINDOWS,
-  PROVIDER_CONTEXT_WINDOWS,
   DEFAULT_CONTEXT_WINDOW,
   type ProviderCapabilities,
   type ScoredProvider,
@@ -45,6 +43,7 @@ import {
 import { resetRouterBandit, getRouterBandit, DEFAULT_MIN_SAMPLES } from '../../src/learning/router-bandit.js';
 import { resetRouterPromotion, getRouterPromotion } from '../../src/learning/router-promotion.js';
 import { resetModelRegistry, getModelRegistry } from '../../src/learning/model-registry.js';
+import { PROVIDER_CONTEXT_WINDOWS } from '../../src/learning/model-selection.js';
 
 // ─── Bandit test isolation ─────────────────────────────────────────────────
 
@@ -990,8 +989,10 @@ describe('AutoModelRouter.resolve with bandit learning', () => {
       getAll: vi.fn(() => ({ pricing: {} })),
       getProviderConfig: vi.fn(() => ({ config: { model: 'llama-3.3-70b-versatile' } })),
     } as any;
-    // Learn successes on a DIFFERENT groq model (a curated candidate) so it is
-    // the only LEARNED candidate and always wins the per-model Thompson pick.
+    // Learn successes on a DIFFERENT groq model — a verified working model
+    // (the dynamic candidate pool is registry-verified, health-ranked) — so it
+    // is the only LEARNED candidate and always wins the per-model Thompson pick.
+    getModelRegistry().markVerified('groq', 'openai/gpt-oss-20b', 'telemetry');
     const bandit = getRouterBandit();
     for (let i = 0; i < 20; i++) {
       bandit.recordModelOutcome('openai/gpt-oss-20b', 'implement a login form', 'success', 1.0);
@@ -1499,8 +1500,11 @@ describe('AutoModelRouter.resolve governance (M2.4 admin policy)', () => {
   });
 
   it('denyModels eliminates providers whose candidate model is denied', () => {
-    // gemini's curated default is gemini-2.5-flash; deny it → gemini killed.
-    const configManager = makeConfig({ governance: { denyModels: ['gemini-2.5-flash'] } });
+    // gemini is PINNED to gemini-2.5-flash; deny it → gemini killed.
+    const configManager = makeConfig(
+      { governance: { denyModels: ['gemini-2.5-flash'] } },
+      { gemini: { model: 'gemini-2.5-flash' } },
+    );
     const decision = new AutoModelRouter().resolve('writer', 'implement a login form', {}, configManager);
     expect(decision.ranked.some((s) => s.provider === 'gemini')).toBe(false);
     const blocked = decision.governanceBlocked || [];
@@ -1517,8 +1521,11 @@ describe('AutoModelRouter.resolve governance (M2.4 admin policy)', () => {
   });
 
   it('allowModels eliminates providers with no candidate on the allow list', () => {
-    // Allow ONLY a groq model → only groq survives.
-    const configManager = makeConfig({ governance: { allowModels: ['llama-3.3-70b-versatile'] } });
+    // Allow ONLY a groq model; groq is pinned to it → only groq survives.
+    const configManager = makeConfig(
+      { governance: { allowModels: ['llama-3.3-70b-versatile'] } },
+      { groq: { model: 'llama-3.3-70b-versatile' } },
+    );
     const decision = new AutoModelRouter().resolve('writer', 'implement a login form', {}, configManager);
     expect(decision.ranked.every((s) => s.provider === 'groq')).toBe(true);
     const blocked = decision.governanceBlocked || [];
@@ -1621,13 +1628,13 @@ describe('AutoModelRouter.resolve governance (M2.4 admin policy)', () => {
   });
 
   it('allowModels enforces the CONFIGURED PIN, not just any curated default (served-model hole)', () => {
-    // groq is pinned to a model NOT on the allow list, while groq's curated
-    // default (llama-3.3-70b-versatile) IS allowed — the pin is what gets
-    // served, so groq must be eliminated (never serve an unlisted model).
-    // gemini-2.5-flash is allowed so gemini survives (no throw).
+    // groq is pinned to a model NOT on the allow list, while groq's allowed
+    // model IS on it — the pin is what gets served, so groq must be
+    // eliminated (never serve an unlisted model). gemini is pinned to an
+    // allowed model so gemini survives (no throw).
     const configManager = makeConfig(
       { governance: { allowModels: ['llama-3.3-70b-versatile', 'gemini-2.5-flash'] } },
-      { groq: { model: 'my-custom-pinned-model' } },
+      { groq: { model: 'my-custom-pinned-model' }, gemini: { model: 'gemini-2.5-flash' } },
     );
     const decision = new AutoModelRouter().resolve('writer', 'implement a login form', {}, configManager);
     expect(decision.ranked.some((s) => s.provider === 'groq')).toBe(false);
@@ -1710,9 +1717,10 @@ describe('M2.5 context preflight', () => {
     expect(computeContextFit(1_000_000, -1)).toBe(1);
   });
 
-  it('exposes realistic nominal windows for built-in models and providers', () => {
-    expect(MODEL_CONTEXT_WINDOWS['gemini-2.5-flash']).toBeGreaterThanOrEqual(1_000_000);
-    expect(MODEL_CONTEXT_WINDOWS['llama-3.3-70b-versatile']).toBe(131_072);
+  it('exposes realistic nominal windows for built-in providers', () => {
+    // Provider-level capability metadata only — no hardcoded per-model table.
+    expect(PROVIDER_CONTEXT_WINDOWS.gemini).toBeGreaterThanOrEqual(1_000_000);
+    expect(PROVIDER_CONTEXT_WINDOWS.groq).toBe(131_072);
     expect(PROVIDER_CONTEXT_WINDOWS.local).toBe(8_192);
     expect(PROVIDER_CONTEXT_WINDOWS.openrouter).toBe(128_000);
     expect(DEFAULT_CONTEXT_WINDOW).toBeGreaterThan(0);
