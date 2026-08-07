@@ -149,14 +149,27 @@ export class NIMAdapter implements InferenceProvider {
         headers: { 'Authorization': `Bearer ${apiKey}` },
       });
       if (!response.ok) return [];
-      const data = (await response.json()) as { data: Array<{ id: string; owned_by?: string }> };
-      return (data.data || []).map((m: { id: string; owned_by?: string }) => ({
-        id: m.id,
-        name: m.id.split('/').pop() || m.id,
-        provider: 'nim',
-        owner: m.owned_by || 'nvidia',
-        tags: getModelTags(m.id, m.owned_by),
-      }));
+      // vLLM-backed NIM deployments expose `max_model_len` in the
+      // OpenAI-compatible list (total sequence length = input + output — a
+      // slight overestimate of the input window for preflight, fine for a soft
+      // estimate); others (TensorRT-LLM) omit it. Parse defensively, fall back
+      // to the provider-level default.
+      const data = (await response.json()) as {
+        data: Array<{ id: string; owned_by?: string; max_model_len?: number }>;
+      };
+      return (data.data || []).map(
+        (m: { id: string; owned_by?: string; max_model_len?: number }) => {
+          const ctx = typeof m.max_model_len === 'number' && m.max_model_len > 0 ? m.max_model_len : undefined;
+          return {
+            id: m.id,
+            name: m.id.split('/').pop() || m.id,
+            provider: 'nim',
+            owner: m.owned_by || 'nvidia',
+            tags: getModelTags(m.id, m.owned_by),
+            ...(ctx !== undefined ? { contextWindowTokens: ctx } : {}),
+          };
+        },
+      );
     } catch {
       return [];
     }

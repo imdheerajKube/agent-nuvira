@@ -100,6 +100,11 @@ export class GroqAdapter {
             });
             if (!response.ok)
                 return [];
+            // NOTE: Groq's /models response exposes ONLY id/object/created/owned_by —
+            // it does NOT return a per-model context window (that lives in static
+            // docs). No contextWindowTokens to parse here; the router falls back to
+            // the provider-level estimate (131K). Filter out non-chat models
+            // (speech/audio/whisper) that can't be used with chat completions.
             const data = (await response.json());
             // Filter out non-chat models (speech/audio/whisper) that can't be used
             // with the chat completions endpoint

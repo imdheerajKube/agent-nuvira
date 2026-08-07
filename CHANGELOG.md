@@ -9,6 +9,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.60.2] - 2026-08-07
+
+### Added
+
+- **Live context windows for every provider that exposes one.**
+  - **Ollama multi-source parsing** — the local adapter reads the advertised context length from whichever location the Ollama version uses: `details.context_length` (0.32.x+), `model_info["general.context_length"]` / `["llama.context_length"]` (mid builds), or a family-keyed `model_info["<family>.context_length"]` (e.g. `gemma4.context_length`).
+  - **Bounded `/api/show` fallback** — models that `/api/tags` can't describe get a targeted `POST /api/show` lookup (capped at 8 per list, so a large local library never triggers an unbounded N+1; localhost round-trips are ~ms). Live-verified: `gemma4:e4b` (custom model, no metadata in tags) now records its 131,072-token window via the fallback.
+  - **Gemini** — `models.list` `inputTokenLimit` is recorded as the live window, gated on `supportedGenerationMethods` containing `generateContent` so embedding models' input caps are never mistaken for chat context windows.
+  - **NIM** — vLLM-backed deployments expose `max_model_len` in the OpenAI-compatible list (total sequence length — a slight overestimate of the input window, fine for a soft preflight estimate); TensorRT-LLM deployments omit it and fall back to the provider-level estimate.
+  - **Groq** — documented in code that `/models` exposes only id/object/created/owned_by (no window) — nothing to parse; falls back to the provider-level estimate.
+
+### Fixed
+
+- The 1.60.1 local-adapter parser looked only at `model_info.general.context_length`/`llama.context_length`; Ollama 0.32.x actually reports the value in `details.context_length`, so no local windows were recorded until the multi-source parse. Now all real local models carry live windows (verified on this machine: gemma4:e4b → 131,072, qwen2.5:0.5b → 32,768, deepseek-coder → 16,384).
+
+### Added
+
+- Tests: adapter window parsing for gemini (chat vs embedding vs no-fields), nim (max_model_len present/absent), and local (all three key locations + `/api/show` fallback + bounded N+1 + graceful failure). 6 new tests; 3,404 total green.
+
 ## [1.60.1] - 2026-08-07
 
 ### Added
