@@ -217,6 +217,78 @@ describe('LocalAdapter', () => {
       expect(mockFetch).toHaveBeenCalledWith('http://localhost:11434/api/tags');
     });
 
+    it('should record the advertised context window wherever Ollama exposes it (details.* / general.* / llama.*)', async () => {
+      mockFetch.mockResolvedValueOnce({
+        ok: true,
+        json: async () => ({
+          models: [
+            // 0.32.x exposes it in details.context_length.
+            { name: 'qwen2.5:0.5b', details: { context_length: 32_768 } },
+            // Mid builds: model_info.general.context_length.
+            { name: 'qwen3:32b', model_info: { 'general.context_length': 32_768 } },
+            // Runner-keyed builds: model_info.llama.context_length.
+            { name: 'llama3:8b', model_info: { 'llama.context_length': 8_192 } },
+            // No metadata at all → graceful fallback.
+            { name: 'old-model', model_info: {} },
+          ],
+        }),
+      });
+
+      const adapter = new LocalAdapter({ runner: 'ollama' as const });
+      const models = await adapter.listModels();
+
+      expect(models[0].contextWindowTokens).toBe(32_768);
+      expect(models[1].contextWindowTokens).toBe(32_768);
+      expect(models[2].contextWindowTokens).toBe(8_192);
+      expect(models[3].contextWindowTokens).toBeUndefined();
+    });
+
+    it('falls back to /api/show (family-keyed context_length) for models missing a window in /api/tags', async () => {
+      mockFetch
+        .mockResolvedValueOnce({
+          ok: true,
+          json: async () => ({ models: [{ name: 'gemma4:e4b' }] }), // no details/model_info in tags
+        })
+        .mockResolvedValueOnce({
+          ok: true,
+          json: async () => ({ model_info: { 'gemma4.context_length': 131_072 } }),
+        });
+
+      const adapter = new LocalAdapter({ runner: 'ollama' as const });
+      const models = await adapter.listModels();
+
+      expect(models[0].contextWindowTokens).toBe(131_072);
+      expect(mockFetch.mock.calls[1][0]).toBe('http://localhost:11434/api/show');
+      const body = JSON.parse(mockFetch.mock.calls[1][1].body);
+      expect(body.model).toBe('gemma4:e4b');
+    });
+
+    it('bounds the /api/show fallback so a large library never triggers an unbounded N+1', async () => {
+      const many = Array.from({ length: 10 }, (_, i) => ({ name: `model-${i}` }));
+      mockFetch.mockResolvedValueOnce({ ok: true, json: async () => ({ models: many }) });
+      for (let i = 0; i < 8; i++) {
+        mockFetch.mockResolvedValueOnce({ ok: false, status: 404 });
+      }
+
+      const adapter = new LocalAdapter({ runner: 'ollama' as const });
+      const models = await adapter.listModels();
+
+      expect(models).toHaveLength(10);
+      // 1 tags fetch + at most 8 show fallbacks — never 10.
+      expect(mockFetch).toHaveBeenCalledTimes(9);
+      expect(models.every((m) => m.contextWindowTokens === undefined)).toBe(true);
+    });
+
+    it('gracefully skips the /api/show fallback when it fails (no window, no throw)', async () => {
+      mockFetch
+        .mockResolvedValueOnce({ ok: true, json: async () => ({ models: [{ name: 'x-model' }] }) })
+        .mockResolvedValueOnce({ ok: false, status: 500 });
+
+      const adapter = new LocalAdapter({ runner: 'ollama' as const });
+      const models = await adapter.listModels();
+      expect(models[0].contextWindowTokens).toBeUndefined();
+    });
+
     it('should return empty array for non-ollama runners', async () => {
       const adapter = new LocalAdapter({ runner: 'huggingface' as const });
       const models = await adapter.listModels();

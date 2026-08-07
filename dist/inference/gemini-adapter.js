@@ -157,15 +157,25 @@ export class GeminiAdapter {
             const response = await fetch(`${GEMINI_BASE_URL}?key=${apiKey}`);
             if (!response.ok)
                 return [];
+            // Gemini's models.list exposes each model's inputTokenLimit (its context
+            // window) + supportedGenerationMethods — record the live window for
+            // generation-capable models so the router's preflight uses the real spec.
             const data = (await response.json());
             return (data.models || []).map((m) => {
                 const id = m.name.replace('models/', '');
+                // Only chat/generation-capable models get a live window — for
+                // embedding/text-only methods inputTokenLimit means something else.
+                const chatCapable = m.supportedGenerationMethods?.includes('generateContent');
+                const ctx = chatCapable && typeof m.inputTokenLimit === 'number' && m.inputTokenLimit > 0
+                    ? m.inputTokenLimit
+                    : undefined;
                 return {
                     id,
                     name: m.displayName || id,
                     provider: 'gemini',
                     description: m.description,
                     tags: getModelTags(id),
+                    ...(ctx !== undefined ? { contextWindowTokens: ctx } : {}),
                 };
             });
         }

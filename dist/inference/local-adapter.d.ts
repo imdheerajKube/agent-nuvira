@@ -31,5 +31,7 @@ export declare class LocalAdapter implements InferenceProvider {
     isAvailable(): Promise<boolean>;
     getInfo(): string;
     listModels(): Promise<ModelDescriptor[]>;
+    /** POST /api/show for one model and read its advertised context window. */
+    private fetchContextWindow;
 }
 //# sourceMappingURL=local-adapter.d.ts.map

@@ -5,6 +5,32 @@ import { getModelTags } from './model-catalog.js';
 import { getCostTracker } from '../learning/cost-tracker.js';
 import { requireAdapterModel } from '../learning/model-selection.js';
 const OLLAMA_API_BASE = 'http://localhost:11434';
+/** Cap on /api/show fallback fetches per listModels call — bounds the N+1 cost
+ *  on machines with large local model libraries. */
+const MAX_SHOW_FALLBACKS = 8;
+/**
+ * Extract a nominal context window (tokens) from an Ollama model_info map.
+ * Ollama keys the value by GGUF architecture family in many builds
+ * (`gemma4.context_length`, `qwen2.context_length`, `llama.context_length`)
+ * and by `general.context_length` / `llama.context_length` in others.
+ * Attention/embedding lengths (`*.key_length`, `*.embedding_length`) never
+ * match the `<family>.context_length` pattern. Returns undefined when unknown.
+ */
+function contextLengthFromModelInfo(modelInfo) {
+    if (!modelInfo)
+        return undefined;
+    for (const key of ['general.context_length', 'llama.context_length']) {
+        const v = modelInfo[key];
+        if (typeof v === 'number' && Number.isFinite(v) && v > 0)
+            return v;
+    }
+    for (const [key, v] of Object.entries(modelInfo)) {
+        if (/^[a-z0-9_.-]+\.context_length$/.test(key) && typeof v === 'number' && Number.isFinite(v) && v > 0) {
+            return v;
+        }
+    }
+    return undefined;
+}
 /**
  * Local Model Adapter
  * Supports Ollama, Hugging Face Transformers, and GGML models
@@ -289,31 +315,56 @@ except Exception as e:
     }
     async listModels() {
         const runner = this.config.runner || 'ollama';
-        if (runner === 'ollama') {
-            try {
-                const response = await fetch(`${OLLAMA_API_BASE}/api/tags`);
-                if (!response.ok)
-                    return [];
-                // Ollama exposes each model's context length under `model_info["general.context_length"]`
-                // (older versions omit model_info entirely — that's fine, undefined).
-                const data = (await response.json());
-                return (data.models || []).map((m) => {
-                    const raw = m.model_info?.['general.context_length'];
-                    const ctx = typeof raw === 'number' && Number.isFinite(raw) && raw > 0 ? raw : undefined;
-                    return {
-                        id: m.name,
-                        name: m.name,
-                        provider: 'local',
-                        tags: getModelTags(m.name),
-                        ...(ctx !== undefined ? { contextWindowTokens: ctx } : {}),
-                    };
-                });
-            }
-            catch {
+        if (runner !== 'ollama')
+            return [];
+        try {
+            const response = await fetch(`${OLLAMA_API_BASE}/api/tags`);
+            if (!response.ok)
                 return [];
+            // Ollama exposes each model's context length in DIFFERENT places by
+            // version: `details.context_length` (0.32.x+), `model_info["general.context_length"]`
+            // (mid builds), or a family-keyed `model_info["<family>.context_length"]`.
+            const data = (await response.json());
+            const models = (data.models || []).map((m) => {
+                const ctx = contextLengthFromModelInfo(m.model_info) ?? m.details?.context_length;
+                return {
+                    id: m.name,
+                    name: m.name,
+                    provider: 'local',
+                    tags: getModelTags(m.name),
+                    ...(ctx !== undefined ? { contextWindowTokens: ctx } : {}),
+                };
+            });
+            // Fallback: models /api/tags couldn't describe get a targeted /api/show
+            // lookup (bounded so a large local library never triggers an unbounded
+            // N+1 probe; localhost round-trips are ~ms each). Never throws.
+            for (const m of models.filter((x) => x.contextWindowTokens === undefined).slice(0, MAX_SHOW_FALLBACKS)) {
+                const ctx = await this.fetchContextWindow(m.id);
+                if (ctx !== undefined)
+                    m.contextWindowTokens = ctx;
             }
+            return models;
         }
-        return [];
+        catch {
+            return [];
+        }
+    }
+    /** POST /api/show for one model and read its advertised context window. */
+    async fetchContextWindow(model) {
+        try {
+            const response = await fetch(`${OLLAMA_API_BASE}/api/show`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ model }),
+            });
+            if (!response.ok)
+                return undefined;
+            const data = (await response.json());
+            return contextLengthFromModelInfo(data.model_info);
+        }
+        catch {
+            return undefined;
+        }
     }
 }
 //# sourceMappingURL=local-adapter.js.map

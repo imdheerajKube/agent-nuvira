@@ -220,6 +220,41 @@ describe('GeminiAdapter', () => {
       expect(models[0].name).toBe('no-display');
     });
 
+    it('should record the live context window (inputTokenLimit) for generation-capable models only', async () => {
+      mockFetch.mockResolvedValueOnce({
+        ok: true,
+        json: async () => ({
+          models: [
+            {
+              name: 'models/gemini-2.5-flash',
+              displayName: 'Gemini 2.5 Flash',
+              inputTokenLimit: 1_048_576,
+              supportedGenerationMethods: ['generateContent'],
+            },
+            {
+              name: 'models/text-embedding-004',
+              displayName: 'Text Embedding',
+              inputTokenLimit: 2_048,
+              supportedGenerationMethods: ['embedContent'],
+            },
+            { name: 'models/gemma-2-2b-it', displayName: 'Gemma 2' },
+          ],
+        }),
+      });
+
+      const adapter = new GeminiAdapter({ apiKey: 'test-key' });
+      const models = await adapter.listModels();
+
+      // Chat-capable model → live window recorded.
+      expect(models[0].id).toBe('gemini-2.5-flash');
+      expect(models[0].contextWindowTokens).toBe(1_048_576);
+      // Embedding-only model → inputTokenLimit means something else → no window.
+      expect(models[1].id).toBe('text-embedding-004');
+      expect(models[1].contextWindowTokens).toBeUndefined();
+      // No token-limit fields at all → no window (graceful fallback).
+      expect(models[2].contextWindowTokens).toBeUndefined();
+    });
+
     it('should return empty array when API key is missing', async () => {
       const adapter = new GeminiAdapter({});
       const models = await adapter.listModels();
