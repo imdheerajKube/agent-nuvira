@@ -1,6 +1,6 @@
 # Nuvira-Router — Phasewise Roadmap & Milestone Tracker
 
-**Status:** Living plan (authoritative reference for the Nuvira-Router program)
+**Status:** ✅ **COMPLETE** — v1.59.9 (2026-08-07). All phases P0–P7 shipped; authoritative reference for shipped capabilities.
 **Version:** 1.0 — 2026-08-05
 **Owner:** Agent-Nuvira core team
 **Style:** World-class delivery over speed. Every phase is independently shippable, **zero-regression**, fully tested, and documented. Smallest requirements (edge cases, failure modes, backward compatibility) are factored in at design time, not patched later.
