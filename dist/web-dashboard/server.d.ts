@@ -86,6 +86,59 @@ export declare function readPipelineRuns(): {
     total: number;
     runs: PipelineRun[];
 };
+/** One LLM call recorded in a trace (matches the CLI's reasoning-trace shape). */
+interface DashboardTraceStep {
+    seq: number;
+    timestamp: number;
+    agentType: string;
+    taskId?: string;
+    description?: string;
+    provider: string;
+    model: string;
+    promptDigest: string;
+    promptPreview: string;
+    responsePreview: string;
+    responseLength: number;
+    inputTokens: number;
+    outputTokens: number;
+    latencyMs: number;
+    success: boolean;
+    error?: string;
+    routing?: {
+        provider: string;
+        model: string;
+        score: number;
+        complexity: string;
+        explanation: string;
+    };
+}
+interface DashboardTrace {
+    id: string;
+    goal: string;
+    source: string;
+    startedAt: number;
+    endedAt?: number;
+    durationMs?: number;
+    provider?: string;
+    model?: string;
+    success?: boolean;
+    steps: DashboardTraceStep[];
+}
+/**
+ * List traces, most recent first, WITHOUT prompt/response previews (the index
+ * view stays small). Includes per-trace aggregate counts so the panel can
+ * render summary cards without the full steps.
+ */
+export declare function readTracesData(): {
+    total: number;
+    traces: Array<Omit<DashboardTrace, 'steps'> & {
+        stepCount: number;
+        failedSteps: number;
+        totalTokens: number;
+    }>;
+};
+/** Full trace detail (steps included) for the replay view. */
+export declare function readTraceDetail(id: string): DashboardTrace | null;
 export interface DashboardServerHandle {
     server: ReturnType<typeof createServer>;
     port: number;

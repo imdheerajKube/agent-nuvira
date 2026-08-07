@@ -75,6 +75,10 @@ export interface TraceStep {
   error?: string;
   /** Auto-router decision snapshot when the call was auto-routed. */
   routing?: TraceRoutingSnapshot;
+  /** True when this step is a REPAIR re-prompt escalated to a stronger model
+   *  (v1.60.4 per-task/planner escalation — the routing snapshot then carries
+   *  the escalated decision at the next complexity level). */
+  escalated?: boolean;
 }
 
 /** A full reasoning trace — one pipeline execution. */
@@ -127,6 +131,8 @@ export interface TraceCaptureContext {
   model?: string;
   /** Auto-router decision snapshot (captured at decision time). */
   routing?: TraceRoutingSnapshot;
+  /** True for escalated repair re-prompts (v1.60.4 model escalation). */
+  escalated?: boolean;
 }
 
 interface TraceFile {
@@ -364,6 +370,7 @@ export function withTraceCapture(
         success,
         error: errorMsg,
         routing: ctx.routing,
+        escalated: ctx.escalated,
       });
     }
     return output;

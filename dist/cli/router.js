@@ -44,6 +44,7 @@ import { CICommand } from './ci.js';
 import { PublishCommand } from './publish.js';
 import { PhaseCommand } from './phase.js';
 import { RetrievalCommand } from './retrieval.js';
+import { TraceCommand } from './trace.js';
 import { logger } from '../utils/logger.js';
 /**
  * Create and configure the CLI program
@@ -151,6 +152,9 @@ export function createCLI() {
     // Register Retrieval command (vectorized token-efficient context)
     const retrievalCmd = new RetrievalCommand();
     program.addCommand(retrievalCmd.create());
+    // Register Trace command (P0 reasoning-trace capture + replay)
+    const traceCmd = new TraceCommand();
+    program.addCommand(traceCmd.create());
     // Default action: show help
     program.action(() => {
         program.help();

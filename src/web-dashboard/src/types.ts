@@ -651,6 +651,9 @@ export interface TraceStep {
     complexity: string;
     explanation: string;
   };
+  /** True when this step is a REPAIR re-prompt escalated to a stronger model
+   *  (v1.60.4 per-task/planner escalation). */
+  escalated?: boolean;
 }
 
 /** A reasoning trace (list view omits steps/previews). */

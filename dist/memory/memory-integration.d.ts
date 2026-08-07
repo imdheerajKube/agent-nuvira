@@ -13,7 +13,7 @@ import type { OrchestrationResult } from '../agents/orchestrator.js';
 import type { Trajectory } from './trajectory-store.js';
 /**
  * Retrieve relevant past trajectories to use as few-shot examples
- * for the PlannerAgent.
+ * for the PlannerAgent, plus coding patterns and failure lessons.
  *
  * @param goal     The current user goal
  * @param callLLM  LLM function for embedding generation
@@ -21,11 +21,14 @@ import type { Trajectory } from './trajectory-store.js';
  * @returns        An object with:
  *   - trajectories: the raw trajectory objects
  *   - fewShotContext: formatted string for injection into planner prompts
+ *   - patternContext: reusable patterns from successful runs (may be '')
+ *   - failureLessonContext: lessons from past FAILED runs (may be '')
  */
 export declare function retrieveMemoryContext(goal: string, callLLM: LLMCallFn, k?: number): Promise<{
     trajectories: Trajectory[];
     fewShotContext: string;
     patternContext: string;
+    failureLessonContext: string;
 }>;
 /**
  * Store a successful orchestration result as a trajectory for future use.
@@ -48,7 +51,7 @@ export declare function getMemoryStats(): Promise<{
     byProjectFingerprint: Record<string, number>;
 }>;
 /**
- * Clear all stored memory (trajectories and vector index).
+ * Clear all stored memory (trajectories, failure lessons, and vector index).
  * Also resets the embedding tier cache so native embeddings (Xenova/Python)
  * can be re-detected on the next embedding call.
  */

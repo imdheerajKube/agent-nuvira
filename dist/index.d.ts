@@ -35,6 +35,11 @@ export { embed, clearEmbeddingCache, embeddingCacheSize } from './memory/embedde
 export { TrajectoryStore, getTrajectoryStore } from './memory/trajectory-store.js';
 export type { Trajectory, TrajectoryStep } from './memory/trajectory-store.js';
 export { retrieveMemoryContext, storeExecutionTrajectory, getMemoryStats, clearMemory, } from './memory/memory-integration.js';
+export { FailureLessonStore, getFailureLessonStore } from './learning/failure-lessons.js';
+export { beginTrace, recordStep, endTrace, getTrace, listTraces, deleteTrace, clearTraces, getTraceStats, withTraceCapture, } from './learning/reasoning-trace.js';
+export type { ReasoningTrace, TraceStep, TraceStats, TraceRoutingSnapshot, TraceCaptureContext, } from './learning/reasoning-trace.js';
+export { TraceCommand } from './cli/trace.js';
+export type { FailedRunRecord, FailureLesson, } from './learning/failure-lessons.js';
 export { ConfigManager } from './config/manager.js';
 export { ProviderFactory } from './inference/factory.js';
 export type { InferenceProvider, ModelDescriptor } from './inference/interface.js';
