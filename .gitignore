@@ -9,5 +9,8 @@ dist/
 *scope*.md
 SCOPE.md
 
+# Generated addon builds (agent output during addon-creation tasks)
+addon/
+
 # macOS
 .DS_Store
