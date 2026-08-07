@@ -1,6 +1,18 @@
 # Agent-Nuvira — User Manual
 
-**Version 1.60.2 | August 2026**
+**Version 1.60.4 | August 2026**
+
+### v1.60.4 — Per-task repair model escalation for every agent
+
+- **A failing task now escalates to a stronger model** — when auto routing is active and a writer / debugger / security / tester / reviewer agent fails, the repair loop is handed a re-routed LLM at the **next complexity level** via the Auto router instead of re-prompting the same weak model that just failed (the fix that previously existed only for the planner).
+- **Climbs from the routed complexity** — the escalation starts from the tier the task *actually* ran at (captured per task id, including any escalation the router already applied), so the repair is always strictly stronger than what failed.
+- **Fully auditable** — the escalated decision's routing snapshot is recorded in the reasoning trace (`buff trace replay <id>`), so you can see exactly which stronger model handled the repair.
+
+### v1.60.3 — Reasoning traces, failure-lesson memory, goal-fidelity planning
+
+- **Reasoning traces (P0)** — every LLM call in a pipeline (planner, memory, per-task, repair) is recorded with agent type, provider × model, prompt digest, response preview, tokens, latency, and the routing snapshot. Inspect with `buff trace list` / `buff trace show <id>` / `buff trace replay <id>` / `buff trace clear`, or in the dashboard's 🔍 **Reasoning Traces** panel.
+- **Failure-lesson memory (P1)** — the self-improver now distills *negative* trajectories ("what didn't work") into episodic memory and injects them into future planning prompts, so past mistakes are avoided proactively.
+- **Goal-fidelity planning** — the planner rejects plans that don't reference your goal's domain (or that regurgitate the few-shot example) with an actionable error, then re-plans. If planning still fails under auto routing, repair is re-routed to a **stronger model** via the complexity ladder.
 
 ### v1.60.2 — Live context windows from every provider that exposes one
 

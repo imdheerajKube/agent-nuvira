@@ -146,6 +146,9 @@ export interface OrchestrationResult {
     reviewId?: string;
     /** Execution telemetry — attempts, repair activity, dependency installs */
     stats?: ExecutionStats;
+    /** The execution plan (lightweight — descriptions only); used by the
+     *  self-improvement loop to capture failed runs into episodic memory. */
+    taskPlan?: TaskStep[];
 }
 /**
  * Telemetry about how the pipeline executed — used by the evaluation
@@ -184,11 +187,27 @@ export declare class Orchestrator {
     /** Optional routing decision overrides keyed by agent type */
     private routingDecisionOverrides;
     /**
+     * The ROUTED complexity per task (keyed by task id), recorded when the
+     * auto-routed LLM is created. The router may escalate complexity itself at
+     * resolve time (escalationApplied) — so the FAILED call may have actually
+     * run at a higher tier than the raw task.complexity label. Repair escalation
+     * must climb from the ROUTED tier, or it can land back on the same tier that
+     * just failed (only re-rolling provider/model, not reasoning capacity).
+     */
+    private routedComplexities;
+    /**
      * Latched one-shot cold-start registry probe: fired once per Orchestrator
      * instance when auto routing is active on an empty registry (see
      * maybeFireColdStartProbe). A long dev-mode session only pays for it once.
      */
     private coldStartProbeFired;
+    /**
+     * P0 reasoning trace: the id of the trace for the CURRENT pipeline (set in
+     * execute(), ended in its finally). All LLM calls made while this is set are
+     * recorded as steps so `buff trace replay <id>` and the dashboard can show
+     * exactly which agent × model × prompt produced each result.
+     */
+    private activeTraceId;
     /**
      * Per-pipeline failure session: the state recordActionFailure mutates when
      * a per-task LLM call fails, and resolveAutoRoutingDecision CONSULTS it
@@ -256,6 +275,28 @@ export declare class Orchestrator {
     private estimateTaskPayloadTokens;
     private resolveAutoRoutingDecision;
     private createAutoRoutedLLM;
+    /**
+     * Build an ESCALATED planner LLM for repair attempts (assessment P0).
+     *
+     * The Auto router picks the cheapest ADEQUATE model per task. When that
+     * model fails to plan (garbage JSON, example regurgitation), re-resolving at
+     * the NEXT complexity level forces the router to rank reasoning capacity
+     * higher — the repair then runs on a genuinely stronger model instead of
+     * re-prompting the same weak one that already failed. Uses a fresh decision
+     * (not the latched planner override) so the escalation actually applies.
+     */
+    private createEscalatedPlannerLLM;
+    /**
+     * Re-route a task's repair at the NEXT complexity level so the Auto router
+     * picks a STRONGER model than the one that just failed (assessment P0).
+     *
+     * Used by BOTH the planner repair path and the per-task agent repair path
+     * (writer/debugger/security/tester...): re-prompting the same weak model
+     * that already failed just repeats the failure until the repair budget
+     * dies. The escalation carries the stronger decision's routing snapshot
+     * into the reasoning trace so repairs are fully auditable.
+     */
+    private createEscalatedLLM;
     private createAutoRoutedLLMFromDecision;
     /**
      * One-shot background model-registry refresh for a COLD registry.

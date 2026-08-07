@@ -148,6 +148,45 @@ describe('reasoning-trace store', () => {
     expect(step.routing?.score).toBe(0.92);
   });
 
+  it('withTraceCapture records the escalated marker for model-escalated repair steps (v1.60.4)', async () => {
+    const id = beginTrace({ goal: 'g', source: 'orchestrator' });
+    const traced = withTraceCapture(fakeLLM('escalated response'), {
+      traceId: id,
+      agentType: 'writer',
+      taskId: 'step-1',
+      description: 'Write the module (repair attempt)',
+      escalated: true,
+      routing: {
+        provider: 'groq',
+        model: 'llama-3.3-70b-versatile',
+        score: 0.95,
+        complexity: 'complex',
+        explanation: 'escalated — next complexity level',
+      },
+    });
+
+    await traced('Try again with a stronger model');
+
+    const trace = getTrace(id);
+    const step = trace?.steps[0];
+    expect(step?.escalated).toBe(true);
+    expect(step?.routing?.complexity).toBe('complex');
+  });
+
+  it('withTraceCapture leaves escalated unset (undefined) for normal calls', async () => {
+    const id = beginTrace({ goal: 'g', source: 'orchestrator' });
+    const traced = withTraceCapture(fakeLLM('normal response'), {
+      traceId: id,
+      agentType: 'planner',
+      description: 'Plan',
+    });
+
+    await traced('Plan the work');
+
+    const trace = getTrace(id);
+    expect(trace?.steps[0]?.escalated).toBeUndefined();
+  });
+
   it('withTraceCapture records failed calls with the error and re-throws', async () => {
     const id = beginTrace({ goal: 'g', source: 'orchestrator' });
     const traced = withTraceCapture(fakeLLM('ok', { throwOn: 'boom' }), {

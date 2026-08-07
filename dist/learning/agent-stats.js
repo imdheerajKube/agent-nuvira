@@ -14,9 +14,19 @@ import { readFileSync, writeFileSync, existsSync, mkdirSync } from 'node:fs';
 import { join } from 'node:path';
 import { homedir } from 'node:os';
 // ─── Constants ──────────────────────────────────────────────────────────────
-const MEMORY_DIR = join(homedir(), '.buff', 'memory');
-const STATS_PATH = join(MEMORY_DIR, 'agent-stats.json');
 const CURRENT_VERSION = 1;
+/**
+ * Resolve the memory dir lazily (per call) so tests that set `BUFF_MEMORY_DIR`
+ * are genuinely hermetic — a module-import-time capture would silently keep
+ * writing to the real ~/.buff/memory (same fix as trajectory-store.ts /
+ * pattern-extractor.ts / failure-lessons.ts).
+ */
+function memoryDir() {
+    return process.env.BUFF_MEMORY_DIR || join(homedir(), '.buff', 'memory');
+}
+function statsPath() {
+    return join(memoryDir(), 'agent-stats.json');
+}
 // ─── AgentStats Tracker ─────────────────────────────────────────────────────
 export class AgentStats {
     data;
@@ -210,9 +220,10 @@ export class AgentStats {
     load() {
         try {
             this.ensureDir();
-            if (!existsSync(STATS_PATH))
+            const path = statsPath();
+            if (!existsSync(path))
                 return this.createFresh();
-            const raw = readFileSync(STATS_PATH, 'utf-8');
+            const raw = readFileSync(path, 'utf-8');
             return JSON.parse(raw);
         }
         catch {
@@ -221,11 +232,12 @@ export class AgentStats {
     }
     save() {
         this.ensureDir();
-        writeFileSync(STATS_PATH, JSON.stringify(this.data, null, 2), 'utf-8');
+        writeFileSync(statsPath(), JSON.stringify(this.data, null, 2), 'utf-8');
     }
     ensureDir() {
-        if (!existsSync(MEMORY_DIR)) {
-            mkdirSync(MEMORY_DIR, { recursive: true });
+        const dir = memoryDir();
+        if (!existsSync(dir)) {
+            mkdirSync(dir, { recursive: true });
         }
     }
 }

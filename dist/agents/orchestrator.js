@@ -45,6 +45,7 @@ import { recordActionFailure } from '../learning/failure-bookkeeping.js';
 import { resolveWorkingModel } from '../inference/model-validator.js';
 import { refreshModelRegistry } from '../inference/model-probe.js';
 import { recordRoutingDecision } from '../learning/routing-history.js';
+import { withTraceCapture, beginTrace, endTrace } from '../learning/reasoning-trace.js';
 import { createReviewFromResult } from '../team/review.js';
 import { indexFiles, retrieve, recordRetrievalStats, retrievalOptionsFromConfig, estimateTokens as retrievalEstimateTokens } from '../learning/retrieval.js';
 // ─── DAG Integration (optional — dashboard may not be built) ─────────────────
@@ -106,11 +107,27 @@ export class Orchestrator {
     /** Optional routing decision overrides keyed by agent type */
     routingDecisionOverrides = new Map();
     /**
+     * The ROUTED complexity per task (keyed by task id), recorded when the
+     * auto-routed LLM is created. The router may escalate complexity itself at
+     * resolve time (escalationApplied) — so the FAILED call may have actually
+     * run at a higher tier than the raw task.complexity label. Repair escalation
+     * must climb from the ROUTED tier, or it can land back on the same tier that
+     * just failed (only re-rolling provider/model, not reasoning capacity).
+     */
+    routedComplexities = new Map();
+    /**
      * Latched one-shot cold-start registry probe: fired once per Orchestrator
      * instance when auto routing is active on an empty registry (see
      * maybeFireColdStartProbe). A long dev-mode session only pays for it once.
      */
     coldStartProbeFired = false;
+    /**
+     * P0 reasoning trace: the id of the trace for the CURRENT pipeline (set in
+     * execute(), ended in its finally). All LLM calls made while this is set are
+     * recorded as steps so `buff trace replay <id>` and the dashboard can show
+     * exactly which agent × model × prompt produced each result.
+     */
+    activeTraceId = null;
     /**
      * Per-pipeline failure session: the state recordActionFailure mutates when
      * a per-task LLM call fails, and resolveAutoRoutingDecision CONSULTS it
@@ -153,10 +170,28 @@ export class Orchestrator {
      * and keeping the CLI process alive long after the pipeline finished.
      */
     async execute(goal, options = {}) {
+        // P0 reasoning trace: begin the per-pipeline trace so every planner,
+        // memory, and task LLM call lands in ~/.buff/memory/reasoning-traces.json
+        // (best-effort — a trace failure must never break the pipeline).
+        this.activeTraceId = beginTrace({
+            goal,
+            source: 'orchestrator',
+            provider: options.provider,
+            model: options.model,
+        });
+        let result;
         try {
-            return await this.executePipeline(goal, options);
+            result = await this.executePipeline(goal, options);
+            return result;
         }
         finally {
+            try {
+                endTrace(this.activeTraceId, result?.success);
+            }
+            catch {
+                // Best-effort — never break the result delivery over telemetry.
+            }
+            this.activeTraceId = null;
             try {
                 resetMCPManager();
             }
@@ -281,6 +316,15 @@ export class Orchestrator {
         const defaultCallLLM = autoRoutingActive
             ? this.createAutoRoutedLLM({ agentType: 'planner', description: goal }, options)
             : this.createLLMProvider(options);
+        // P0 reasoning trace: the planner + memory + trajectory calls share the
+        // raw defaultCallLLM, so wrap AT EACH USE SITE (never at creation) — a
+        // task fallback re-uses defaultCallLLM and wrapping it here would cause
+        // every task call to be recorded twice (once as planner, once as task).
+        const plannerCallLLM = withTraceCapture(defaultCallLLM, {
+            traceId: this.activeTraceId ?? '',
+            agentType: 'planner',
+            description: goal,
+        });
         // On resume, seed the report with the steps already finished in the original
         // run (completed/failed) so the final agent breakdown is complete — these
         // steps are never re-executed, but they still count toward the summary.
@@ -380,12 +424,19 @@ export class Orchestrator {
             if (options.verbose)
                 logger.highlight('\n🔍 Searching memory for similar past tasks...');
             let patternContext = '';
+            let failureLessonContext = '';
             try {
                 const { retrieveMemoryContext } = await import('../memory/memory-integration.js');
-                const memoryResult = await retrieveMemoryContext(goal, defaultCallLLM, 3);
+                const memoryResult = await retrieveMemoryContext(goal, withTraceCapture(defaultCallLLM, {
+                    traceId: this.activeTraceId ?? '',
+                    agentType: 'memory',
+                    description: `Memory retrieval for: ${goal.slice(0, 80)}`,
+                }), 3);
                 memoryContext = memoryResult.fewShotContext;
-                // Also inject coding patterns if available
+                // Also inject coding patterns (positive episodic memory) and failure
+                // lessons (negative episodic memory — assessment P1) if available.
                 patternContext = memoryResult.patternContext || '';
+                failureLessonContext = memoryResult.failureLessonContext || '';
                 this.eventBus.emit(EventNames.ORCHESTRATOR_AGENT_UPDATE, {
                     agentType: 'orchestrator',
                     stage: 'memory',
@@ -399,6 +450,9 @@ export class Orchestrator {
                     }
                     else {
                         logger.info('   No similar past tasks found in memory');
+                    }
+                    if (failureLessonContext) {
+                        logger.info('   🛡️ Injected failure lessons — planner will avoid past mistakes');
                     }
                     // Transparency: surface which vector backend served the cross-session
                     // semantic search (faiss-native / faiss-ivf / json) so users can see
@@ -415,13 +469,17 @@ export class Orchestrator {
             catch (err) {
                 logger.debug(`Memory retrieval failed: ${err}`);
             }
-            // Inject memory context and patterns into vault for agents
+            // Inject memory context, patterns, and failure lessons into vault for agents
             if (memoryContext) {
                 vault.setMeta('memoryContext', memoryContext);
             }
             if (patternContext) {
                 vault.setMeta('patternContext', patternContext);
                 memoryContext += `\n${patternContext}`;
+            }
+            if (failureLessonContext) {
+                vault.setMeta('failureLessonContext', failureLessonContext);
+                memoryContext += `\n${failureLessonContext}`;
             }
         }
         // ── 2d. Log MCP tools availability ───────────────────────────────────
@@ -462,18 +520,31 @@ export class Orchestrator {
                 logger.highlight('\n📋 Planning...');
             // Planner with auto-repair — if planning fails, try alternative approaches
             // instead of immediately giving up with "Planning failed".
-            let planResult = await this.runAgent(this.moduleRegistry.getModule('planner'), vault, defaultCallLLM, options);
+            let planResult = await this.runAgent(this.moduleRegistry.getModule('planner'), vault, plannerCallLLM, options);
             if (!planResult.success) {
+                // MODEL ESCALATION on planner failure (assessment P0: "deliver the
+                // goal, complete the task in iterations"). A planner failure is almost
+                // always the routed model being too weak to produce a faithful plan
+                // (garbage JSON, or regurgitating the few-shot example). Re-route the
+                // repair attempts through the Auto router at the NEXT complexity level
+                // so it picks a STRONGER model — re-prompting the same weak model (the
+                // old behavior) just repeats the same failure until the budget dies.
+                // Non-auto paths keep the same provider/model but honor explicit
+                // repairFallbackModels for the switch-model strategy.
+                const escalatedPlannerLLM = autoRoutingActive
+                    ? this.createEscalatedPlannerLLM(goal, options)
+                    : undefined;
                 const plannerRepair = new ErrorRepairEngine({
                     maxRepairs: 3,
                     repairMode: 'auto',
                     verbose: options.verbose,
+                    fallbackModels: options.repairFallbackModels,
                 });
                 if (options.verbose) {
-                    logger.info('      🔧 Planner failed — attempting auto-repair with alternative approaches');
+                    logger.info('      🔧 Planner failed — attempting auto-repair with a stronger model');
                 }
                 const planner = this.moduleRegistry.getModule('planner');
-                planResult = await plannerRepair.repair('planner', vault.context, defaultCallLLM, planResult.error || planResult.summary || 'Planning failed', async (ctx, llm) => planner.execute(ctx, llm));
+                planResult = await plannerRepair.repair('planner', vault.context, escalatedPlannerLLM ?? plannerCallLLM, planResult.error || planResult.summary || 'Planning failed', async (ctx, llm) => planner.execute(ctx, llm));
                 this.stats.repairAttempts += plannerRepair.budget.getAttempts('planner');
                 this.stats.alternativeApproaches += plannerRepair.alternativeApproaches;
                 this.stats.taskFailures += 1;
@@ -745,14 +816,23 @@ export class Orchestrator {
                     tasksTotal: vault.context.taskPlan.length,
                     agentResults,
                     fileChanges: vault.getDiffSummary(),
+                    taskPlan: vault.context.taskPlan,
                 };
                 const { storeExecutionTrajectory } = await import('../memory/memory-integration.js');
-                trajectoryId = await storeExecutionTrajectory(orchestrationSummary, defaultCallLLM, vault.context.taskPlan, contextFiles, options.verbose);
+                trajectoryId = await storeExecutionTrajectory(orchestrationSummary, withTraceCapture(defaultCallLLM, {
+                    traceId: this.activeTraceId ?? '',
+                    agentType: 'memory',
+                    description: `Trajectory summarization for: ${goal.slice(0, 80)}`,
+                }), vault.context.taskPlan, contextFiles, options.verbose);
                 // Self-improvement
                 try {
                     const { getSelfImprover } = await import('../learning/self-improver.js');
                     const improver = getSelfImprover();
-                    await improver.processRun({ ...orchestrationSummary, trajectoryId }, defaultCallLLM, options.agentModels, options.verbose);
+                    await improver.processRun({ ...orchestrationSummary, trajectoryId }, withTraceCapture(defaultCallLLM, {
+                        traceId: this.activeTraceId ?? '',
+                        agentType: 'self-improver',
+                        description: `Pattern/failure-lesson extraction for: ${goal.slice(0, 80)}`,
+                    }), options.agentModels, options.verbose);
                     if (options.verbose && trajectoryId) {
                         logger.info('   Self-improvement stats saved. Run `buff learn optimize` to see recommendations.');
                     }
@@ -1120,7 +1200,13 @@ export class Orchestrator {
                         provider: picked.provider,
                         model: picked.model,
                     };
-                    newCallLLM = this.createLLMProvider(newOptions);
+                    newCallLLM = withTraceCapture(this.createLLMProvider(newOptions), {
+                        traceId: this.activeTraceId ?? '',
+                        agentType: info.agentName || 'chat',
+                        description: 'Rate-limit retry',
+                        provider: picked.provider,
+                        model: picked.model,
+                    });
                 }
                 restartSpinner();
                 return { action: 'switch-model', callLLM: newCallLLM };
@@ -1189,14 +1275,22 @@ export class Orchestrator {
                     agentType: effectiveAgentType,
                     description: task.description,
                     complexity: task.complexity,
+                    taskId: task.id,
                     // M2.5: real payload estimate (goal + task + workspace context
                     // files) so long-context pipelines route toward big-window
                     // providers, not the tiny task-description estimate alone.
                     contextHintTokens: this.estimateTaskPayloadTokens(vault, task.description, contextFiles),
                 }, options)
-                : agentModel
+                : withTraceCapture(agentModel
                     ? this.createLLMProvider({ ...options, model: agentModel })
-                    : defaultCallLLM;
+                    : defaultCallLLM, {
+                    traceId: this.activeTraceId ?? '',
+                    agentType: effectiveAgentType,
+                    taskId: task.id,
+                    description: task.description,
+                    provider: options.provider,
+                    model: agentModel || options.model,
+                });
             // Skip tester and debugger tasks in skip-tests mode
             if (options.skipTests && (task.agentType === 'tester' || task.agentType === 'debugger')) {
                 vault.updateTaskStatus(task.id, 'completed', 'Skipped (--skip-tests)');
@@ -1254,13 +1348,24 @@ export class Orchestrator {
                         logger.info(`      🔧 Agent failed — attempting auto-repair (mode: ${repairMode}, max: ${maxRepairs})`);
                     }
                     const errorMessage = firstResult.error || firstResult.summary || 'Unknown error';
+                    // MODEL ESCALATION on task failure (assessment P0, same principle as
+                    // the planner repair): when auto routing is active, hand the repair
+                    // engine a re-routed LLM at the NEXT complexity level so it picks a
+                    // STRONGER model than the one that just failed. Re-prompting the
+                    // same weak model repeats the same failure until the budget dies —
+                    // the exact failure mode seen when a weak writer kept failing.
+                    // Non-auto paths keep the explicit model but honor
+                    // repairFallbackModels for the switch-model strategy.
+                    const escalatedTaskLLM = autoRouting
+                        ? this.createEscalatedLLM(effectiveAgentType, task.description, options, task.complexity, task.id)
+                        : undefined;
                     const repairEngine = new ErrorRepairEngine({
                         maxRepairs,
                         repairMode,
                         verbose: options.verbose,
                         fallbackModels: options.repairFallbackModels,
                     });
-                    result = await repairEngine.repair(task.id, vault.context, agentCallLLM, errorMessage, async (ctx, llm) => {
+                    result = await repairEngine.repair(task.id, vault.context, escalatedTaskLLM ?? agentCallLLM, errorMessage, async (ctx, llm) => {
                         return agent.execute(ctx, llm);
                     });
                     if (options.verbose) {
@@ -1622,7 +1727,61 @@ export class Orchestrator {
     createAutoRoutedLLM(task, options) {
         const decisionOverride = this.routingDecisionOverrides.get(task.agentType);
         const decision = decisionOverride ?? this.resolveAutoRoutingDecision(task, options);
+        // Remember the ROUTED complexity for this task — the tier the LLM actually
+        // runs at (the router may have escalated it). Repair escalation climbs
+        // from this, never from the raw label. Keyed by task id; the planner
+        // (no task id) is covered by the routingDecisionOverrides latch instead.
+        if (task.taskId && decision.complexity) {
+            this.routedComplexities.set(task.taskId, decision.complexity);
+        }
         return this.createAutoRoutedLLMFromDecision(task, options, decision);
+    }
+    /**
+     * Build an ESCALATED planner LLM for repair attempts (assessment P0).
+     *
+     * The Auto router picks the cheapest ADEQUATE model per task. When that
+     * model fails to plan (garbage JSON, example regurgitation), re-resolving at
+     * the NEXT complexity level forces the router to rank reasoning capacity
+     * higher — the repair then runs on a genuinely stronger model instead of
+     * re-prompting the same weak one that already failed. Uses a fresh decision
+     * (not the latched planner override) so the escalation actually applies.
+     */
+    createEscalatedPlannerLLM(goal, options) {
+        const plannerDecision = this.routingDecisionOverrides.get('planner');
+        return this.createEscalatedLLM('planner', goal, options, plannerDecision?.complexity);
+    }
+    /**
+     * Re-route a task's repair at the NEXT complexity level so the Auto router
+     * picks a STRONGER model than the one that just failed (assessment P0).
+     *
+     * Used by BOTH the planner repair path and the per-task agent repair path
+     * (writer/debugger/security/tester...): re-prompting the same weak model
+     * that already failed just repeats the failure until the repair budget
+     * dies. The escalation carries the stronger decision's routing snapshot
+     * into the reasoning trace so repairs are fully auditable.
+     */
+    createEscalatedLLM(agentType, description, options, baseComplexity, taskId) {
+        // Prefer the ROUTED complexity (the tier that actually failed — the router
+        // may have escalated the raw label) so the escalation is guaranteed to be
+        // strictly above the failing tier. Fall back to the raw label / undefined
+        // (undefined → 'critical', the top of the ladder) for the planner path.
+        const effectiveBase = (taskId && this.routedComplexities.get(taskId)) || baseComplexity;
+        const COMPLEXITY_LADDER = ['trivial', 'simple', 'moderate', 'complex', 'critical'];
+        const currentIdx = COMPLEXITY_LADDER.indexOf(effectiveBase);
+        const escalatedComplexity = currentIdx >= 0 && currentIdx < COMPLEXITY_LADDER.length - 1
+            ? COMPLEXITY_LADDER[currentIdx + 1]
+            : 'critical';
+        const escalatedTask = {
+            agentType,
+            description,
+            complexity: escalatedComplexity,
+            taskId,
+        };
+        const decision = this.resolveAutoRoutingDecision(escalatedTask, options);
+        if (options.verbose) {
+            logger.info(`      🚀 Escalating ${agentType} repair to a stronger model (${escalatedComplexity}): ${decision.provider}/${decision.model}`);
+        }
+        return this.createAutoRoutedLLMFromDecision(escalatedTask, options, decision);
     }
     createAutoRoutedLLMFromDecision(task, options, decision) {
         if (options.verbose) {
@@ -1648,7 +1807,12 @@ export class Orchestrator {
         });
         let workingModel;
         let validated = false;
-        return async (prompt, inferenceOptions) => {
+        // P0 reasoning trace: the auto-routed LLM carries its routing snapshot, so
+        // every call records which provider×model the router picked AND the
+        // verified model actually used. taskId (when present) links steps to the
+        // dashboard DAG node. withTraceCapture is best-effort and never changes
+        // the call behavior (errors still propagate to fallback/repair handling).
+        return withTraceCapture(async (prompt, inferenceOptions) => {
             if (!validated) {
                 validated = true;
                 try {
@@ -1687,7 +1851,19 @@ export class Orchestrator {
             // guardrail blocks (injection scan, thrown BEFORE the generate call)
             // out of the registry — those aren't provider failures.
             return await base(prompt, { ...inferenceOptions, model: workingModel ?? decision.model });
-        };
+        }, {
+            traceId: this.activeTraceId ?? '',
+            agentType: task.agentType,
+            taskId: task.taskId,
+            description: task.description,
+            routing: {
+                provider: decision.provider,
+                model: decision.model,
+                score: decision.score,
+                complexity: decision.complexity,
+                explanation: decision.explanation,
+            },
+        });
     }
     /**
      * One-shot background model-registry refresh for a COLD registry.

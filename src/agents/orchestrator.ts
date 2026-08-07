@@ -2126,6 +2126,9 @@ export class Orchestrator {
       description,
       complexity: escalatedComplexity,
       taskId,
+      // Mark repair steps in the reasoning trace so the dashboard can show
+      // exactly which calls were model-escalated repairs (v1.60.4).
+      escalated: true,
     };
     const decision = this.resolveAutoRoutingDecision(escalatedTask, options);
     if (options.verbose) {
@@ -2136,7 +2139,7 @@ export class Orchestrator {
 
 
   private createAutoRoutedLLMFromDecision(
-    task: { agentType: string; description: string; complexity?: string; contextHintTokens?: number; taskId?: string },
+    task: { agentType: string; description: string; complexity?: string; contextHintTokens?: number; taskId?: string; escalated?: boolean },
     options: OrchestratorOptions,
     decision: AutoRouteResult,
   ): LLMCallFn {
@@ -2212,6 +2215,7 @@ export class Orchestrator {
         agentType: task.agentType,
         taskId: task.taskId,
         description: task.description,
+        escalated: task.escalated,
         routing: {
           provider: decision.provider,
           model: decision.model,

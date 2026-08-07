@@ -4,6 +4,7 @@
  * Subcommands:
  *   buff learn stats         — Show agent performance stats
  *   buff learn patterns      — Show/extract coding patterns
+ *   buff learn lessons       — Show/extract failure lessons (what didn't work)
  *   buff learn optimize      — Generate optimized model routing
  *   buff learn status        — Show overall self-improvement status
  *   buff learn clear         — Reset learning data
@@ -20,6 +21,15 @@ export declare class LearnCommand {
     create(): Command;
     private showStats;
     private showPatterns;
+    private showLessons;
+    /**
+     * Build the shared LLM call function used by `learn patterns --extract` and
+     * `learn lessons --extract`. Resolves the provider config (handling 'auto'),
+     * attributes success/failure to the registry (per-action 'learn' rows), and
+     * falls back to the next provider on retryable errors — the same discipline
+     * chat/execute use.
+     */
+    private buildLearnCallLLM;
     private showOptimizations;
     private showStatus;
     private clearData;

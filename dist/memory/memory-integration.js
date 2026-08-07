@@ -9,10 +9,11 @@
  */
 import { getTrajectoryStore } from './trajectory-store.js';
 import { getPatternStore } from '../learning/pattern-extractor.js';
+import { getFailureLessonStore } from '../learning/failure-lessons.js';
 import { logger } from '../utils/logger.js';
 /**
  * Retrieve relevant past trajectories to use as few-shot examples
- * for the PlannerAgent.
+ * for the PlannerAgent, plus coding patterns and failure lessons.
  *
  * @param goal     The current user goal
  * @param callLLM  LLM function for embedding generation
@@ -20,25 +21,44 @@ import { logger } from '../utils/logger.js';
  * @returns        An object with:
  *   - trajectories: the raw trajectory objects
  *   - fewShotContext: formatted string for injection into planner prompts
+ *   - patternContext: reusable patterns from successful runs (may be '')
+ *   - failureLessonContext: lessons from past FAILED runs (may be '')
  */
 export async function retrieveMemoryContext(goal, callLLM, k = 3) {
     const store = getTrajectoryStore();
     const trajectories = await store.searchByGoal(goal, callLLM, k);
     const fewShotContext = store.formatAsFewShot(trajectories);
-    // Also retrieve relevant coding patterns
+    // Derive domain tags from the trajectory project fingerprint when available.
+    const domainTags = trajectories.length > 0
+        ? trajectories[0].projectFingerprint.split(',').map((s) => s.trim())
+        : [];
+    // Also retrieve relevant coding patterns (positive episodic memory)
     let patternContext = '';
     try {
         const patternStore = getPatternStore();
-        // Use the first trajectory's project fingerprint for domain matching
-        const domainTags = trajectories.length > 0
-            ? trajectories[0].projectFingerprint.split(',').map((s) => s.trim())
-            : [];
         patternContext = patternStore.formatAsPrompt(domainTags);
     }
     catch {
         // Non-critical — patterns are optional
     }
-    return { trajectories, fewShotContext, patternContext: patternContext || '' };
+    // Also retrieve failure lessons (negative episodic memory — assessment P1).
+    // Lessons match the same domain tags so the planner avoids past mistakes in
+    // the same kind of project; when no tags are known (fresh project), the store
+    // falls back to the most recent lessons. Never throws — corrupt store = ''.
+    let failureLessonContext = '';
+    try {
+        const lessonStore = getFailureLessonStore();
+        failureLessonContext = lessonStore.formatAsPrompt(domainTags);
+    }
+    catch {
+        // Non-critical — failure lessons are optional
+    }
+    return {
+        trajectories,
+        fewShotContext,
+        patternContext: patternContext || '',
+        failureLessonContext: failureLessonContext || '',
+    };
 }
 /**
  * Store a successful orchestration result as a trajectory for future use.
@@ -75,13 +95,20 @@ export async function getMemoryStats() {
     return store.stats();
 }
 /**
- * Clear all stored memory (trajectories and vector index).
+ * Clear all stored memory (trajectories, failure lessons, and vector index).
  * Also resets the embedding tier cache so native embeddings (Xenova/Python)
  * can be re-detected on the next embedding call.
  */
 export async function clearMemory() {
     const store = getTrajectoryStore();
     await store.clear();
+    // Also clear the failure-lesson episodic memory (assessment P1).
+    try {
+        getFailureLessonStore().clear();
+    }
+    catch {
+        // Non-critical
+    }
     // Reset embedding tier cache — allows re-detection of newly installed
     // @huggingface/transformers or sentence-transformers packages
     try {

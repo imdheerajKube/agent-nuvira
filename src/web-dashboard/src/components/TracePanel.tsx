@@ -117,6 +117,9 @@ function StepRow({ step }: { step: TraceStep }) {
         <span style={{ width: 46, fontSize: 11, color: statusColor, textAlign: 'right' }}>
           {statusLabel}
         </span>
+        <span style={{ width: 22, fontSize: 11, textAlign: 'right' }}>
+          {step.escalated ? <span title="Repair escalated to a stronger routed model (v1.60.4)">🚀</span> : ''}
+        </span>
         <span style={{ fontSize: 11, color: '#6e7681' }}>{open ? '▾' : '▸'}</span>
       </button>
 
@@ -134,10 +137,17 @@ function StepRow({ step }: { step: TraceStep }) {
             <div style={{ marginBottom: 6 }}>
               <span style={{
                 fontSize: 10, padding: '1px 8px', borderRadius: 10,
-                background: '#1c2128', border: '1px solid #58a6ff', color: '#58a6ff',
+                background: step.escalated ? '#3d2c00' : '#1c2128',
+                border: step.escalated ? '1px solid #d29922' : '1px solid #58a6ff',
+                color: step.escalated ? '#d29922' : '#58a6ff',
               }}>
-                🤖 auto → {step.routing.provider}/{step.routing.model} · score {step.routing.score.toFixed(3)} · {step.routing.complexity}
+                {step.escalated ? '🚀 escalated auto → ' : '🤖 auto → '}{step.routing.provider}/{step.routing.model} · score {step.routing.score.toFixed(3)} · {step.routing.complexity}
               </span>
+              {step.escalated && (
+                <div style={{ color: '#d29922', marginTop: 4, fontSize: 11 }}>
+                  Repair escalated to a stronger routed model (next complexity level).
+                </div>
+              )}
               {step.routing.explanation && (
                 <div style={{ color: '#6e7681', marginTop: 4, fontSize: 11 }}>
                   {step.routing.explanation}
@@ -213,6 +223,11 @@ function TraceDetail({ trace }: { trace: TraceEntry }) {
         <span style={{ fontSize: 11, padding: '2px 10px', borderRadius: 12, background: '#0d1117', border: '1px solid #30363d', color: '#8b949e' }}>
           🔢 {steps?.length ?? '?'} call(s)
         </span>
+        {steps && steps.some((s) => s.escalated) && (
+          <span style={{ fontSize: 11, padding: '2px 10px', borderRadius: 12, background: '#3d2c00', border: '1px solid #d29922', color: '#d29922' }}>
+            🚀 {steps.filter((s) => s.escalated).length} escalated repair(s)
+          </span>
+        )}
         {trace.totalTokens !== undefined && (
           <span style={{ fontSize: 11, padding: '2px 10px', borderRadius: 12, background: '#0d1117', border: '1px solid #30363d', color: '#8b949e' }}>
             🧮 {fmtTokens(trace.totalTokens)} tok
@@ -308,8 +323,6 @@ function TraceList({ traces }: { traces: TraceEntry[] }) {
 }
 
 export default function TracePanel() {
-  const [traces, setTraces] = useState<TraceEntry[] | null>(null);
-
   const [traces, setTraces] = useState<TraceEntry[] | null>(null);
   const [loadError, setLoadError] = useState(false);
 

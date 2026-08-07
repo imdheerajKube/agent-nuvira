@@ -18,17 +18,27 @@ import type { LLMCallFn } from '../agents/agent.js';
 export declare class SelfImprover {
     private runCountSinceLastExtraction;
     private runCountSinceLastSkillCompilation;
+    private runCountSinceLastFailureExtraction;
     /**
      * Process a completed orchestration run through the self-improvement loop.
-     * Scores the result, tracks agent stats, and conditionally extracts patterns
-     * and compiles skills.
+     * Scores the result, tracks agent stats, records failures into episodic
+     * memory, and conditionally extracts patterns, compiles skills, and
+     * distills failure lessons.
      *
      * @param result       The completed orchestration result
-     * @param callLLM      LLM function for pattern extraction
+     * @param callLLM      LLM function for pattern/lesson extraction
      * @param agentModels  The model map used for this run (for tracking model perf)
      * @param verbose      Whether to log details
      */
     processRun(result: OrchestrationResult, callLLM: LLMCallFn, agentModels?: Record<string, string>, verbose?: boolean): Promise<void>;
+    /**
+     * Force failure-lesson extraction from the most recent failed runs.
+     *
+     * @param callLLM  LLM function for lesson extraction
+     * @param verbose  Whether to log details
+     * @returns        Number of NEW lessons extracted
+     */
+    extractFailureLessons(callLLM: LLMCallFn, verbose?: boolean): Promise<number>;
     /**
      * Force pattern extraction from the best trajectories in the store.
      */
@@ -54,6 +64,11 @@ export declare class SelfImprover {
      * Reset skill compilation counter (called when user manually compiles skills).
      */
     resetSkillCompilationCounter(): void;
+    /**
+     * Reset failure-lesson extraction counter (called when user manually
+     * extracts lessons so the auto-interval restarts).
+     */
+    resetFailureLessonCounter(): void;
     private averageScore;
 }
 export declare function getSelfImprover(): SelfImprover;
