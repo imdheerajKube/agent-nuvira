@@ -246,7 +246,7 @@ Verified as of 2026-08-05 (v1.57.0, 3,032 root tests + 42 dashboard component te
 - **M7.2 — Upgrade guide + migration notes** in `UPGRADE_ROADMAP.md` (new section) + CHANGELOG per release. ✅ Doc review.
 - **M7.3 — Website + Product_Guide + tests/README** updated per phase (test counts, feature rows). ✅ Consistency sweep script (no stale counts).
 - **M7.4 — Telemetry/usage health** for gateway traffic (opt-in, privacy-preserving, off by default). ✅ v1.58.9: `routing.gatewayTelemetry.enabled` / `healthFlags` + `doctor --enterprise` Telemetry Health check + flag tests.
-- **M7.5 — Milestone tracker hygiene** — this roadmap's tracking matrix kept current each release.
+- **M7.5 — Milestone tracker hygiene** — this roadmap's tracking matrix kept current each release. ✅ v1.59.9 (2026-08-06): tracker sweep — GitHub issues #5 (P4), #7 (P6), #8 (P7) reconciled against this matrix, all checkboxes verified against shipped releases, all three closed; zero open Nuvira-Router issues. P0–P7 complete.
 
 🛡️ **Guarantee:** docs never claim unshipped features (feature rows only after phase closes).
 🎯/📊 **Selection & presentation:** consolidated — new capabilities documented with worked examples (`models explain --deep` sample outputs in docs).
