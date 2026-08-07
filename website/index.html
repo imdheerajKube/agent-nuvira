@@ -982,6 +982,35 @@
           <h3>What This Means For You</h3>
           <p>The registry keeps the pipeline <strong>extensible</strong> — plugins and the SDK register new agents without touching the engine. The FAISS tiers keep retrieval <strong>fast and private</strong> (local embeddings, <code>.gitignore</code>-aware), and token-efficient top-k context means free quotas stretch further. Fully documented, fully open.</p>
         </div>
+        <div class="feature-card" data-delay="400">
+          <div class="feature-icon privacy">
+            <svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/><path d="M9 12l2 2 4-4"/></svg>
+          </div>
+          <h3>Enterprise Hardening — P0–P7 Complete</h3>
+          <p>The Nuvira-Router program shipped every milestone through <strong>v1.59.9</strong>, including a full enterprise-hardening layer that gates what the admin surface, federation endpoint, and audit trail allow:</p>
+          <div class="arch-cap-rows">
+            <div class="arch-cap-row">
+              <span class="arch-tier">🔐 RBAC</span>
+              <span class="arch-cap-desc"><strong>Role-based access control</strong> — <code>buff admin role add/remove/list</code> + <code>whoami</code>; admin / operator / viewer permission matrix; optional OIDC identity seam; legacy single-user stays permissive until roles are assigned.</span>
+            </div>
+            <div class="arch-cap-row">
+              <span class="arch-tier">🛡️ Audit chain</span>
+              <span class="arch-cap-desc"><strong>Tamper-evident audit log</strong> — SHA-256 hash-chained records (<code>buff audit verify/export</code>), CEF/SIEM export, and a secret-redaction scrubber on every logger + audit writer.</span>
+            </div>
+            <div class="arch-cap-row">
+              <span class="arch-tier">🔑 OIDC gateway</span>
+              <span class="arch-cap-desc"><strong>Token-verified federation</strong> — <code>buff federation start --auth oidc</code> checks RS256-JWT bearer tokens (sub/exp/issuer/audience); the PEM path persists for daemon restart; <code>buff nuvira serve</code> exposes the decision layer headlessly.</span>
+            </div>
+          </div>
+          <div class="arch-tier-chain" style="margin-top: 16px">
+            <span class="arch-tier">P0–P7</span>
+            <span class="arch-tier-arrow">→</span>
+            <span class="arch-tier">40 milestones</span>
+            <span class="arch-tier-arrow">→</span>
+            <span class="arch-tier">v1.59.9 · 3,367 tests</span>
+          </div>
+          <p class="arch-tier-note">Program complete — the tracking matrix in <code>NUVIRA_ROUTER_ROADMAP.md</code> is 100% ✅ across P0–P7 and every phase issue is closed.</p>
+        </div>
       </div>
     </div>
   </section>
