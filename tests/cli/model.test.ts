@@ -30,8 +30,8 @@ beforeAll(() => {
   // decision has a winner but an EMPTY fallback chain, and the JSON assertions
   // below (fallbackChain.length > 0) fail. With a couple of keys set, the
   // router ranks groq/gemini/local and the fallback chain is non-empty.
-  process.env.GROQ_API_KEY = 'test-groq-key';
-  process.env.GEMINI_API_KEY = 'test-gemini-key';
+  process.env.GROQ_API_KEY = 'gsk_test-key-for-routing-fixture-0123456789abcdef';
+  process.env.GEMINI_API_KEY = 'AIzaSyTestKeyForRoutingFixture0123456789abcdef';
 });
 
 afterAll(() => {
