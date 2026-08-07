@@ -2,7 +2,7 @@ import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, rmSync, existsSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
-import { ConfigManager } from '../../src/config/manager.js';
+import { ConfigManager, isPlaceholderApiKey } from '../../src/config/manager.js';
 
 describe('ConfigManager', () => {
   let testDir: string;
@@ -271,10 +271,74 @@ describe('ConfigManager', () => {
       expect(manager.hasRequiredCredentials('groq')).toBe(false);
     });
 
-    it('should return true for configured cloud providers', () => {
-      process.env.GEMINI_API_KEY = 'test-key';
+    it('should return true for configured cloud providers with a REAL key', () => {
+      process.env.GEMINI_API_KEY = 'AIzaSyB5x2Xk9-fake-google-key-abcdefghijklmnop';
       const manager = new ConfigManager(join(testDir, 'test-m'));
       expect(manager.hasRequiredCredentials('gemini')).toBe(true);
+    });
+
+    it('should return FALSE for placeholder/sentinel API keys (docs examples, env-var names)', () => {
+      // The exact failure mode seen on-device: docs placeholders copy-pasted as
+      // the value ("openrouter-env-key", "new-key") pass a bare truthiness check
+      // and get routed into → guaranteed 401 while real-keyed providers idle.
+      const cases: Array<[string, string]> = [
+        ['openrouter', 'openrouter-env-key'],
+        ['openrouter', 'OPENROUTER_API_KEY'],
+        ['nim', 'new-key'],
+        ['groq', '<your-groq-api-key>'],
+        ['gemini', 'test-key'],
+        ['openrouter', 'sk-'],
+        ['openrouter', 'sk-test'],
+        ['groq', 'xxxx'],
+      ];
+      for (const [provider, key] of cases) {
+        const dir = join(testDir, `test-ph-${provider}-${key.length}`);
+        mkdirSync(dir, { recursive: true });
+        writeFileSync(
+          join(dir, 'buffconfig.json'),
+          JSON.stringify({ providers: { [provider]: { apiKey: key } } }),
+          'utf-8',
+        );
+        const manager = new ConfigManager(dir);
+        expect(manager.hasRequiredCredentials(provider)).toBe(false);
+      }
+    });
+
+    it('should accept REAL keys across providers (never false-positive on valid formats)', () => {
+      const realKeys: Array<[string, string]> = [
+        ['groq', 'gsk_testKey1234567890abcdefABCDEF1234567890abcdefABCDEF'],
+        ['gemini', 'AIzaSyFakeTestKey0123456789abcdefghijklmnopqrstuvwxyz'],
+        ['openrouter', 'sk-or-v1-abcdef1234567890abcdef1234567890abcdef1234567890'],
+        ['nim', 'nvapi-abcdef1234567890abcdef1234567890abcdef1234567890'],
+        ['gemini', 'AIzaSyB5x2Xk9-fake-google-key-abcdefghijklmnop'],
+      ];
+      for (const [provider, key] of realKeys) {
+        const dir = join(testDir, `test-real-${provider}-${key.length}`);
+        mkdirSync(dir, { recursive: true });
+        writeFileSync(
+          join(dir, 'buffconfig.json'),
+          JSON.stringify({ providers: { [provider]: { apiKey: key } } }),
+          'utf-8',
+        );
+        const manager = new ConfigManager(dir);
+        expect(manager.hasRequiredCredentials(provider)).toBe(true);
+      }
+    });
+
+    it('isPlaceholderApiKey unit behavior', () => {
+      // Real formats must never match.
+      expect(isPlaceholderApiKey('gsk_testKey1234567890abcdefABCDEF1234567890abcdefABCDEF')).toBe(false);
+      expect(isPlaceholderApiKey('sk-or-v1-abcdef1234567890abcdef1234567890abcdef1234567890')).toBe(false);
+      expect(isPlaceholderApiKey('nvapi-abcdef1234567890abcdef1234567890abcdef1234567890')).toBe(false);
+      expect(isPlaceholderApiKey('AIzaSyFakeTestKey0123456789abcdefghijklmnopqrstuvwxyz')).toBe(false);
+      expect(isPlaceholderApiKey(undefined)).toBe(false);
+      // Docs placeholders must match.
+      expect(isPlaceholderApiKey('openrouter-env-key')).toBe(true);
+      expect(isPlaceholderApiKey('new-key')).toBe(true);
+      expect(isPlaceholderApiKey('<your-key>')).toBe(true);
+      expect(isPlaceholderApiKey('test-key')).toBe(true);
+      expect(isPlaceholderApiKey('sk-')).toBe(true);
+      expect(isPlaceholderApiKey('sk-test')).toBe(true);
     });
   });
 

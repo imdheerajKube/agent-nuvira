@@ -601,6 +601,10 @@ async function main(): Promise<void> {
     const { getChatHistory, ChatHistory } = await import('./context/history.js');
     const { getVectorStore } = await import('./memory/vector-store.js');
     const configManager = new ConfigManager();
+    // Surface placeholder/sentinel API keys (env-var names as values, doc
+    // examples) so the user knows why a provider is being skipped by auto
+    // routing — instead of discovering it via mysterious 401s. Best-effort.
+    configManager.warnPlaceholderKeys();
     const historyConfig = configManager.getAll().history || {};
 
     // Apply semantic search toggle from config

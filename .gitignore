@@ -12,5 +12,8 @@ SCOPE.md
 # Generated addon builds (agent output during addon-creation tasks)
 addon/
 
+# Local issue tracking (not synced to the upstream repo)
+issues/
+
 # macOS
 .DS_Store
