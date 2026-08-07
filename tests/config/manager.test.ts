@@ -38,7 +38,7 @@ describe('ConfigManager', () => {
 
       expect(config.defaultProvider).toBe('local');
       expect(config.providers.nim.model).toBe('meta/llama-3.1-8b-instruct');
-      expect(config.providers.gemini.model).toBe('gemini-2.0-flash-exp');
+      expect(config.providers.gemini.model).toBe('gemini-2.5-flash');
       expect(config.providers.openrouter.model).toBe('mistralai/mistral-7b-instruct');
       expect(config.providers.groq.model).toBe('llama-3.3-70b-versatile');
       expect(config.providers.local.runner).toBe('ollama');
@@ -205,7 +205,7 @@ describe('ConfigManager', () => {
       const { type, config } = manager.getProviderConfig('gemini');
 
       expect(type).toBe('gemini');
-      expect(config.model).toBe('gemini-2.0-flash-exp');
+      expect(config.model).toBe('gemini-2.5-flash');
     });
 
     it('should return default provider when none specified', () => {

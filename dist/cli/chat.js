@@ -783,7 +783,7 @@ export class ChatCommand extends BaseCommand {
      *    2. 🟢  gemma2-9b-it
      *
      *   💻 Code (Code generation, programming)
-     *    3. 🔷  gemini-2.0-flash-exp  ⭐ Latest Gemini — fast, multimodal...
+     *    3. 🔷  gemini-2.5-flash  ⭐ Latest Gemini — fast, multimodal...
      *
      *   Enter a number (0-8):
      */

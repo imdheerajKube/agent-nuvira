@@ -53,7 +53,7 @@ export class GeminiAdapter implements InferenceProvider {
       throw new Error('Google Gemini API key is not configured. Set GEMINI_API_KEY env var.');
     }
 
-    const model = options?.model || this.config.model || 'gemini-2.0-flash-exp';
+    const model = options?.model || this.config.model || 'gemini-2.5-flash';
     const temperature = options?.temperature ?? this.config.temperature ?? 0.7;
     const maxTokens = options?.maxTokens ?? this.config.maxTokens ?? 8192;
 
@@ -99,7 +99,7 @@ export class GeminiAdapter implements InferenceProvider {
       throw new Error('Google Gemini API key is not configured. Set GEMINI_API_KEY env var.');
     }
 
-    const model = options?.model || this.config.model || 'gemini-2.0-flash-exp';
+    const model = options?.model || this.config.model || 'gemini-2.5-flash';
     const temperature = options?.temperature ?? this.config.temperature ?? 0.7;
     const maxTokens = options?.maxTokens ?? this.config.maxTokens ?? 8192;
 

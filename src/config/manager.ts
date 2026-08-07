@@ -9,7 +9,7 @@ const DEFAULT_CONFIG: BuffConfig = {
   defaultProvider: 'local',
   providers: {
     nim: { model: 'meta/llama-3.1-8b-instruct', temperature: 0.7, maxTokens: 4096 },
-    gemini: { model: 'gemini-2.0-flash-exp', temperature: 0.7, maxTokens: 8192 },
+    gemini: { model: 'gemini-2.5-flash', temperature: 0.7, maxTokens: 8192 },
     openrouter: { model: 'mistralai/mistral-7b-instruct', temperature: 0.7, maxTokens: 4096 },
     groq: { model: 'llama-3.3-70b-versatile', temperature: 0.7, maxTokens: 4096 },
     local: { runner: 'ollama', model: 'llama2', temperature: 0.7, maxTokens: 4096 },

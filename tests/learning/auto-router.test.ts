@@ -1380,6 +1380,64 @@ describe('resolveModel / pickModelFromCatalog', () => {
   });
 });
 
+// ─── Registry-aware resolveModel (no-recursion guarantee) ───────────────────
+// Once the Model Availability Registry learns a configured pin is dead, the
+// router must stop re-selecting it and prefer a verified working model instead
+// — this is what kills the "select a model, then it's not available" recursion
+// the user observed in auto chat mode.
+
+describe('resolveModel — registry-aware pin preference', () => {
+  let registryTempDir: string;
+  let originalMemoryDir: string | undefined;
+
+  beforeEach(() => {
+    registryTempDir = mkdtempSync(join(tmpdir(), 'buff-autorouter-pin-'));
+    originalMemoryDir = process.env.BUFF_MEMORY_DIR;
+    process.env.BUFF_MEMORY_DIR = registryTempDir;
+    resetModelRegistry();
+  });
+
+  afterEach(() => {
+    resetModelRegistry();
+    if (originalMemoryDir === undefined) {
+      delete process.env.BUFF_MEMORY_DIR;
+    } else {
+      process.env.BUFF_MEMORY_DIR = originalMemoryDir;
+    }
+    rmSync(registryTempDir, { recursive: true, force: true });
+  });
+
+  it('prefers a registry-verified model when the configured pin is known dead', () => {
+    const router = new AutoModelRouter();
+    // Simulate the user's exact scenario: config pins gemini-2.0-flash-exp
+    // (retired → 404), but the registry has already VERIFIED gemini-2.5-flash.
+    const registry = getModelRegistry();
+    registry.markUnavailable('gemini', 'gemini-2.0-flash-exp', '404 model not found', 'telemetry');
+    registry.markVerified('gemini', 'gemini-2.5-flash', 'telemetry');
+    const configManager = {
+      getProviderConfig: vi.fn(() => ({ config: { model: 'gemini-2.0-flash-exp' } })),
+    } as any;
+    expect(router.resolveModel('gemini', 'chat', configManager)).toBe('gemini-2.5-flash');
+  });
+
+  it('keeps the configured pin when it is verified-usable (user intent wins)', () => {
+    const router = new AutoModelRouter();
+    getModelRegistry().markVerified('groq', 'llama-3.3-70b-versatile', 'telemetry');
+    const configManager = {
+      getProviderConfig: vi.fn(() => ({ config: { model: 'llama-3.3-70b-versatile' } })),
+    } as any;
+    expect(router.resolveModel('groq', 'writer', configManager)).toBe('llama-3.3-70b-versatile');
+  });
+
+  it('keeps the configured pin when the registry has no data on it (cold start)', () => {
+    const router = new AutoModelRouter();
+    const configManager = {
+      getProviderConfig: vi.fn(() => ({ config: { model: 'gemini-2.0-flash-exp' } })),
+    } as any;
+    expect(router.resolveModel('gemini', 'chat', configManager)).toBe('gemini-2.0-flash-exp');
+  });
+});
+
 // ─── Singleton ──────────────────────────────────────────────────────────────
 
 describe('AutoModelRouter.resolve governance (M2.4 admin policy)', () => {

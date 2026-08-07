@@ -18,7 +18,7 @@
 // ─── Default Mappings ───────────────────────────────────────────────────────
 /** Maps agent types to their recommended model strings */
 const DEFAULT_AGENT_MODELS = {
-    planner: 'gemini-2.0-flash-exp',
+    planner: 'gemini-2.5-flash',
     'context-gatherer': 'groq/llama-3.3-70b-versatile',
     writer: 'groq/llama-3.3-70b-versatile',
     reviewer: 'openrouter/meta-llama/llama-3.1-8b-instruct',
