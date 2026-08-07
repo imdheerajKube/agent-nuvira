@@ -101,6 +101,30 @@ export {
   getMemoryStats,
   clearMemory,
 } from './memory/memory-integration.js';
+export { FailureLessonStore, getFailureLessonStore } from './learning/failure-lessons.js';
+export {
+  beginTrace,
+  recordStep,
+  endTrace,
+  getTrace,
+  listTraces,
+  deleteTrace,
+  clearTraces,
+  getTraceStats,
+  withTraceCapture,
+} from './learning/reasoning-trace.js';
+export type {
+  ReasoningTrace,
+  TraceStep,
+  TraceStats,
+  TraceRoutingSnapshot,
+  TraceCaptureContext,
+} from './learning/reasoning-trace.js';
+export { TraceCommand } from './cli/trace.js';
+export type {
+  FailedRunRecord,
+  FailureLesson,
+} from './learning/failure-lessons.js';
 
 // ─── Existing exports ───────────────────────────────────────────────────────
 export { ConfigManager } from './config/manager.js';

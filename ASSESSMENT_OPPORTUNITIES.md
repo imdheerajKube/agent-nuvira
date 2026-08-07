@@ -8,6 +8,9 @@
 > cost-efficient, quota-aware, resilient multi-model routing. Each item maps to the
 > assessment's recommendations, the current state of the code, and the concrete
 > implementation opportunity.
+> **Related:** [ASSESSMENT_VALIDATION_COPILOT.md](ASSESSMENT_VALIDATION_COPILOT.md) —
+> claim-by-claim validation of a Copilot assessment of the multi-agent stack
+> (orchestration, memory, observability) with the P0–P5 follow-up list.
 
 ---
 

@@ -18,6 +18,8 @@ import { getVectorStore, cosineSimilarity, resetVectorBackendSelection, setVecto
 import { getTrajectoryStore } from '../../src/memory/trajectory-store.js';
 import { embed, clearEmbeddingCache, EMBEDDING_DIM } from '../../src/memory/embedder.js';
 import { storeExecutionTrajectory, retrieveMemoryContext, clearMemory, getMemoryStats } from '../../src/memory/memory-integration.js';
+import { getFailureLessonStore } from '../../src/learning/failure-lessons.js';
+import { getSelfImprover } from '../../src/learning/self-improver.js';
 import { setForceLLM } from '../../src/memory/embedder.js';
 import type { OrchestrationResult } from '../../src/agents/orchestrator.js';
 import type { TaskStep } from '../../src/agents/agent.js';
@@ -227,6 +229,66 @@ describe('Memory Integration — Full Cycle', () => {
     // Search should find nothing
     const memoryContext = await retrieveMemoryContext('anything', mockLLM, 3);
     expect(memoryContext.trajectories).toEqual([]);
+  });
+
+  // ── Failure lessons (negative episodic memory, assessment P1) ─────────
+
+  it('should surface failure lessons in retrieveMemoryContext after failed runs', async () => {
+    // Simulate a failed orchestration run recorded by the self-improver.
+    const failedResult = makeResult({
+      success: false,
+      error: 'Writer failed: LLM returned malformed output',
+      agentResults: [
+        { agent: 'Planner', success: true, summary: 'Created 2 steps' },
+        { agent: 'Writer', success: false, summary: 'LLM returned malformed output' },
+        { agent: 'Tester', success: false, summary: 'No tests to run' },
+      ],
+      taskPlan: makeTaskPlan(),
+    });
+
+    await getSelfImprover().processRun(failedResult, mockLLM, undefined, false);
+
+    // The failed run is captured in episodic memory (not the trajectory store).
+    expect(getFailureLessonStore().getFailedRuns()).toHaveLength(1);
+
+    // Empty first (no distilled lessons yet — extraction is interval-gated),
+    // then distill and confirm it flows through retrieveMemoryContext.
+    let memoryContext = await retrieveMemoryContext('authentication', mockLLM, 3);
+    expect(memoryContext.failureLessonContext).toBe('');
+
+    const lessonLLM = async (): Promise<string> => JSON.stringify([
+      {
+        title: 'Writer output parsing fails on malformed JSON',
+        applicableDomains: ['typescript', 'node'],
+        description: 'The writer returned malformed output. Future runs should validate JSON before applying edits.',
+      },
+    ]);
+    await getFailureLessonStore().extractLessons(lessonLLM);
+
+    memoryContext = await retrieveMemoryContext('authentication', mockLLM, 3);
+    expect(memoryContext.failureLessonContext).toContain('Writer output parsing fails on malformed JSON');
+  });
+
+  it('should return empty failureLessonContext when no lessons are distilled', async () => {
+    const memoryContext = await retrieveMemoryContext('anything', mockLLM, 3);
+    expect(memoryContext.failureLessonContext).toBe('');
+  });
+
+  it('clearMemory should clear failure lessons too', async () => {
+    const failedResult = makeResult({
+      success: false,
+      agentResults: [
+        { agent: 'Planner', success: true, summary: 'ok' },
+        { agent: 'Writer', success: false, summary: 'boom' },
+      ],
+      taskPlan: makeTaskPlan(),
+    });
+    await getSelfImprover().processRun(failedResult, mockLLM, undefined, false);
+    expect(getFailureLessonStore().getFailedRuns()).toHaveLength(1);
+
+    await clearMemory();
+    expect(getFailureLessonStore().getFailedRuns()).toHaveLength(0);
+    expect(getFailureLessonStore().getLessons()).toHaveLength(0);
   });
 
   // ── Partial success (some tasks failed) ──────────────────────────────

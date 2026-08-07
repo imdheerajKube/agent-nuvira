@@ -4,6 +4,7 @@
  * Subcommands:
  *   buff learn stats         — Show agent performance stats
  *   buff learn patterns      — Show/extract coding patterns
+ *   buff learn lessons       — Show/extract failure lessons (what didn't work)
  *   buff learn optimize      — Generate optimized model routing
  *   buff learn status        — Show overall self-improvement status
  *   buff learn clear         — Reset learning data
@@ -17,6 +18,7 @@ import { Command } from 'commander';
 import { getAgentStats } from '../learning/agent-stats.js';
 import { getSelfImprover } from '../learning/self-improver.js';
 import { getPatternStore } from '../learning/pattern-extractor.js';
+import { getFailureLessonStore } from '../learning/failure-lessons.js';
 import { getFeedbackStore } from '../learning/feedback.js';
 import type { Rating } from '../learning/feedback.js';
 import {
@@ -55,6 +57,14 @@ export class LearnCommand {
       .option('--provider <provider>', 'Provider to use for LLM calls during extraction')
       .option('--model <model>', 'Model to use for extraction')
       .action((opts) => this.showPatterns(opts));
+
+    cmd
+      .command('lessons')
+      .description('Show failure lessons — what past runs learned from mistakes')
+      .option('--extract', 'Force lesson extraction from recorded failed runs')
+      .option('--provider <provider>', 'Provider to use for LLM calls during extraction')
+      .option('--model <model>', 'Model to use for extraction')
+      .action((opts) => this.showLessons(opts));
 
     cmd
       .command('optimize')
@@ -125,56 +135,7 @@ export class LearnCommand {
     if (opts.extract) {
       console.log('🔄 Extracting patterns from stored trajectories...\n');
 
-      const providerType = (opts.provider || this.configManager.getAll().defaultProvider) as ProviderType;
-      // getProviderConfig resolves the 'auto' directive to a concrete provider,
-      // so the adapter factory never sees a literal 'auto'.
-      const { type: resolvedType, config } = this.configManager.getProviderConfig(providerType);
-      const provider = ProviderFactory.createProvider(resolvedType, config);
-
-      const callLLM = async (prompt: string) => {
-        try {
-          const response = await provider.generate(prompt, {
-            model: opts.model || config.model,
-            temperature: 0.3,
-            maxTokens: 4096,
-          });
-          // Success attribution: this extraction call PROVED the provider ×
-          // model works — the per-action panel gains a 'learn' verified row.
-          recordRegistrySuccess(providerType, opts.model || config.model, 'learn');
-          return response;
-        } catch (err) {
-          const errorType = classifyFallbackError(err);
-          // Feed the SHARED registry telemetry path: an auth/404 failure on
-          // this FIRST direct call would otherwise never be learned (non-
-          // retryable errors skip the fallback loop entirely), so learn now
-          // routes around the dead provider on the next pick like chat/execute
-          // do.
-          recordRegistryFailure(providerType, opts.model || config.model, err, errorType, 'learn');
-          if (isRetryableError(errorType)) {
-            try {
-              const fallback = getProviderFallback(this.configManager, this.configManager.getAll().fallback);
-              const fallbackResult = await fallback.callWithFallback(
-                providerType,
-                async (fbProvider, fbType) => {
-                  return await fbProvider.generate(prompt, {
-                    model: opts.model || config.model,
-                    temperature: 0.3,
-                    maxTokens: 4096,
-                  });
-                },
-                { context: 'learn', label: 'Pattern extraction' },
-              );
-              if (fallbackResult.attempts > 1) {
-                logger.success(`✅ Auto-fallback: switched to ${fallbackResult.provider}`);
-              }
-              return fallbackResult.response;
-            } catch {
-              throw err;
-            }
-          }
-          throw err;
-        }
-      };
+      const callLLM = this.buildLearnCallLLM(opts);
 
       const improver = getSelfImprover();
       const count = await improver.extractPatterns(callLLM, true);
@@ -209,6 +170,132 @@ export class LearnCommand {
     }
 
     console.log(`${'─'.repeat(50)}`);
+  }
+
+  private async showLessons(opts: { extract?: boolean; provider?: string; model?: string }): Promise<void> {
+    const lessonStore = getFailureLessonStore();
+    const stats = lessonStore.getStats();
+
+    if (opts.extract) {
+      console.log('🔄 Distilling failure lessons from recorded failed runs...\n');
+
+      const callLLM = this.buildLearnCallLLM(opts);
+
+      const improver = getSelfImprover();
+      const count = await improver.extractFailureLessons(callLLM, true);
+      improver.resetFailureLessonCounter();
+
+      if (count === 0) {
+        console.log('   No new lessons distilled. Check that failed runs have been recorded.');
+      }
+      return;
+    }
+
+    const lessons = lessonStore.getLessons();
+    const failedRuns = lessonStore.getFailedRuns();
+
+    console.log(`📉 Failure Lessons — episodic memory of what didn't work\n`);
+    console.log(`   Failed runs captured: ${stats.totalFailures}`);
+    console.log(`   Distilled lessons: ${stats.totalLessons}`);
+    if (stats.domainsCovered.length > 0) {
+      console.log(`   Domains covered: ${stats.domainsCovered.join(', ')}`);
+    }
+
+    if (failedRuns.length === 0 && lessons.length === 0) {
+      console.log('');
+      console.log('   No failures recorded yet. Failed `execute --use-memory` runs are captured here.');
+      console.log('   Run with `--extract` to distill lessons from recorded failures.');
+      return;
+    }
+
+    if (failedRuns.length > 0) {
+      console.log('');
+      console.log('── Recent failed runs ──');
+      for (const run of failedRuns.slice(-5).reverse()) {
+        const agents = run.failedAgents.map((a) => a.agent).join(', ');
+        console.log(`   ❌ ${run.goal.slice(0, 60)} — failed: ${agents}`);
+      }
+    }
+
+    if (lessons.length > 0) {
+      console.log('');
+      console.log(`── Distilled lessons (${lessons.length}) ──`);
+      for (let i = 0; i < lessons.length; i++) {
+        const l = lessons[i];
+        console.log(`${'─'.repeat(50)}`);
+        console.log(`Lesson ${i + 1}: ${l.title}`);
+        console.log(`   Domains: ${l.applicableDomains.join(', ')}`);
+        console.log(`   Source failures: ${l.sourceCount}`);
+        console.log(`   Injected: ${l.usageCount} time(s)`);
+        console.log('');
+        console.log(`   ${l.description}`);
+      }
+      console.log(`${'─'.repeat(50)}`);
+    }
+
+    console.log('');
+    console.log('   Lessons are injected into future planning prompts so the agent');
+    console.log('   avoids repeating these mistakes (episodic memory, assessment P1).');
+  }
+
+  /**
+   * Build the shared LLM call function used by `learn patterns --extract` and
+   * `learn lessons --extract`. Resolves the provider config (handling 'auto'),
+   * attributes success/failure to the registry (per-action 'learn' rows), and
+   * falls back to the next provider on retryable errors — the same discipline
+   * chat/execute use.
+   */
+  private buildLearnCallLLM(opts: { provider?: string; model?: string }): (prompt: string) => Promise<string> {
+    const providerType = (opts.provider || this.configManager.getAll().defaultProvider) as ProviderType;
+    // getProviderConfig resolves the 'auto' directive to a concrete provider,
+    // so the adapter factory never sees a literal 'auto'.
+    const { type: resolvedType, config } = this.configManager.getProviderConfig(providerType);
+    const provider = ProviderFactory.createProvider(resolvedType, config);
+
+    return async (prompt: string) => {
+      try {
+        const response = await provider.generate(prompt, {
+          model: opts.model || config.model,
+          temperature: 0.3,
+          maxTokens: 4096,
+        });
+        // Success attribution: this extraction call PROVED the provider ×
+        // model works — the per-action panel gains a 'learn' verified row.
+        recordRegistrySuccess(providerType, opts.model || config.model, 'learn');
+        return response;
+      } catch (err) {
+        const errorType = classifyFallbackError(err);
+        // Feed the SHARED registry telemetry path: an auth/404 failure on
+        // this FIRST direct call would otherwise never be learned (non-
+        // retryable errors skip the fallback loop entirely), so learn now
+        // routes around the dead provider on the next pick like chat/execute
+        // do.
+        recordRegistryFailure(providerType, opts.model || config.model, err, errorType, 'learn');
+        if (isRetryableError(errorType)) {
+          try {
+            const fallback = getProviderFallback(this.configManager, this.configManager.getAll().fallback);
+            const fallbackResult = await fallback.callWithFallback(
+              providerType,
+              async (fbProvider, fbType) => {
+                return await fbProvider.generate(prompt, {
+                  model: opts.model || config.model,
+                  temperature: 0.3,
+                  maxTokens: 4096,
+                });
+              },
+              { context: 'learn', label: 'Pattern / failure-lesson extraction' },
+            );
+            if (fallbackResult.attempts > 1) {
+              logger.success(`✅ Auto-fallback: switched to ${fallbackResult.provider}`);
+            }
+            return fallbackResult.response;
+          } catch {
+            throw err;
+          }
+        }
+        throw err;
+      }
+    };
   }
 
   private showOptimizations(): void {
@@ -271,8 +358,10 @@ export class LearnCommand {
 
     getAgentStats().clear();
     getPatternStore().clear();
+    getFailureLessonStore().clear();
     getFeedbackStore().clear();
     getSelfImprover().resetExtractionCounter();
+    getSelfImprover().resetFailureLessonCounter();
 
     logger.success('All learning data cleared.');
   }

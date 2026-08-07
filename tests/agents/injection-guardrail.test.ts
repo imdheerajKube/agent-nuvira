@@ -13,9 +13,18 @@
  * - empty prompts pass through
  */
 
-import { describe, it, expect, beforeEach } from 'vitest';
+import { describe, it, expect, beforeEach, afterEach } from 'vitest';
+import { mkdtempSync, rmSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { Orchestrator } from '../../src/agents/orchestrator.js';
 import { ConfigManager } from '../../src/config/manager.js';
+
+// ─── Hermetic memory dir ────────────────────────────────────────────────────
+// execute() begins a reasoning trace (P0) on every run — pin BUFF_MEMORY_DIR
+// to a temp dir so trace writes never leak into the real ~/.buff.
+const traceDir = mkdtempSync(join(tmpdir(), 'buff-injection-guardrail-'));
+process.env.BUFF_MEMORY_DIR = join(traceDir, '.buff', 'memory');
 
 // ─── Helpers ────────────────────────────────────────────────────────────────
 
@@ -125,6 +134,10 @@ describe('injection guardrail in createLLMProvider', () => {
 });
 
 // ─── Integration: error handling in executeSingleTask ───────────────────────
+
+afterEach(() => {
+  rmSync(traceDir, { recursive: true, force: true });
+});
 
 describe('injection guardrail integration with executeSingleTask', () => {
   it('should handle guardrail errors gracefully when running a task', async () => {

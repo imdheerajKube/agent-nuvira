@@ -414,6 +414,92 @@ function maybeFinalizeRun(): void {
   activeRunStartedAt = 0;
 }
 
+// ─── Reasoning Traces (P0) ─────────────────────────────────────────────────
+
+/** One LLM call recorded in a trace (matches the CLI's reasoning-trace shape). */
+interface DashboardTraceStep {
+  seq: number;
+  timestamp: number;
+  agentType: string;
+  taskId?: string;
+  description?: string;
+  provider: string;
+  model: string;
+  promptDigest: string;
+  promptPreview: string;
+  responsePreview: string;
+  responseLength: number;
+  inputTokens: number;
+  outputTokens: number;
+  latencyMs: number;
+  success: boolean;
+  error?: string;
+  routing?: {
+    provider: string;
+    model: string;
+    score: number;
+    complexity: string;
+    explanation: string;
+  };
+}
+
+interface DashboardTrace {
+  id: string;
+  goal: string;
+  source: string;
+  startedAt: number;
+  endedAt?: number;
+  durationMs?: number;
+  provider?: string;
+  model?: string;
+  success?: boolean;
+  steps: DashboardTraceStep[];
+}
+
+interface DashboardTraceFile {
+  traces: DashboardTrace[];
+}
+
+function tracesPath(): string {
+  return join(MEMORY_DIR, 'reasoning-traces.json');
+}
+
+function readTracesFile(): DashboardTraceFile {
+  const data = readJSON<DashboardTraceFile>(tracesPath());
+  if (!data || !Array.isArray(data.traces)) return { traces: [] };
+  return data;
+}
+
+/**
+ * List traces, most recent first, WITHOUT prompt/response previews (the index
+ * view stays small). Includes per-trace aggregate counts so the panel can
+ * render summary cards without the full steps.
+ */
+export function readTracesData(): {
+  total: number;
+  traces: Array<Omit<DashboardTrace, 'steps'> & { stepCount: number; failedSteps: number; totalTokens: number }>;
+} {
+  const file = readTracesFile();
+  // Newest first — sort by startedAt (defensive: file order may not be
+  // append order if a trace was re-written).
+  const traces = [...file.traces]
+    .sort((a, b) => b.startedAt - a.startedAt)
+    .map((t) => {
+      const { steps, ...rest } = t;
+      const stepCount = steps.length;
+      const failedSteps = steps.filter((s) => !s.success).length;
+      const totalTokens = steps.reduce((sum, s) => sum + s.inputTokens + s.outputTokens, 0);
+      return { ...rest, stepCount, failedSteps, totalTokens };
+    });
+  return { total: file.traces.length, traces };
+}
+
+/** Full trace detail (steps included) for the replay view. */
+export function readTraceDetail(id: string): DashboardTrace | null {
+  const file = readTracesFile();
+  return file.traces.find((t) => t.id === id) || null;
+}
+
 // ─── Model Health Check ────────────────────────────────────────────────────
 
 /** Log which env vars were (or weren't) found for debugging */
@@ -1929,6 +2015,28 @@ function handleRequest(req: IncomingMessage, res: ServerResponse): void {
     return;
   }
 
+  // P0 reasoning traces: list (summarized) + single-trace detail. The list
+  // omits prompt/response previews so the dashboard index stays small; the
+  // detail endpoint returns the full steps for the replay view.
+  if (pathname === '/api/traces') {
+    res.writeHead(200, { 'Content-Type': 'application/json' });
+    res.end(JSON.stringify(readTracesData()));
+    return;
+  }
+
+  if (pathname.startsWith('/api/traces/')) {
+    const traceId = decodeURIComponent(pathname.slice('/api/traces/'.length));
+    const trace = readTraceDetail(traceId);
+    if (!trace) {
+      res.writeHead(404, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({ error: `Trace not found: ${traceId}` }));
+      return;
+    }
+    res.writeHead(200, { 'Content-Type': 'application/json' });
+    res.end(JSON.stringify(trace));
+    return;
+  }
+
   if (pathname === '/api/routing') {
     res.writeHead(200, { 'Content-Type': 'application/json' });
     res.end(JSON.stringify(readRoutingInsights()));
@@ -1949,6 +2057,7 @@ function handleRequest(req: IncomingMessage, res: ServerResponse): void {
       requests: readRequestsData(),
       dag: readDAGData(),
       pipelineRuns: readPipelineRuns(),
+      traces: readTracesData(),
       serverTime: Date.now(),
     }));
     return;

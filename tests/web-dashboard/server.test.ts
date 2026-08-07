@@ -517,6 +517,31 @@ describe('Dashboard Server', () => {
       expect(Array.isArray(body.requests.rows)).toBe(true);
     });
 
+    it('GET /api/traces returns empty state when no reasoning-traces.json exists (P0)', async () => {
+      const res = await httpGet(`${baseUrl}/api/traces`);
+      expect(res.statusCode).toBe(200);
+      const body = JSON.parse(res.body);
+      expect(body.total).toBe(0);
+      expect(Array.isArray(body.traces)).toBe(true);
+      expect(body.traces).toHaveLength(0);
+    });
+
+    it('GET /api/traces/<id> returns 404 for an unknown trace', async () => {
+      const res = await httpGet(`${baseUrl}/api/traces/trace-nope`);
+      expect(res.statusCode).toBe(404);
+      const body = JSON.parse(res.body);
+      expect(body.error).toContain('trace-nope');
+    });
+
+    it('GET /api/all includes the traces field (Trace panel)', async () => {
+      const res = await httpGet(`${baseUrl}/api/all`);
+      expect(res.statusCode).toBe(200);
+      const body = JSON.parse(res.body);
+      expect(body).toHaveProperty('traces');
+      expect(body.traces.total).toBe(0);
+      expect(Array.isArray(body.traces.traces)).toBe(true);
+    });
+
     it('GET /api/routing returns preference without benchmark data', async () => {
       const res = await httpGet(`${baseUrl}/api/routing`);
       expect(res.statusCode).toBe(200);
@@ -1345,6 +1370,82 @@ describe('Dashboard Server', () => {
         expect(body.promotion.criteria).toHaveProperty('latency');
       } finally {
         rmSync(promoPath, { force: true });
+      }
+    });
+
+    it('GET /api/traces lists traces without step previews and GET /api/traces/<id> returns full steps (P0)', async () => {
+      const tracePath = join(memoryDir, 'reasoning-traces.json');
+      const now = Date.now();
+      const fixtureTrace = {
+        traces: [
+          {
+            id: 'trace-aaa', goal: 'Add auth to API', source: 'orchestrator',
+            startedAt: now - 60000, endedAt: now - 50000, durationMs: 10000,
+            success: false,
+            steps: [
+              {
+                seq: 1, timestamp: now - 60000, agentType: 'planner',
+                provider: 'groq', model: 'llama-3.3-70b',
+                promptDigest: 'a1b2c3d4e5f6a7b8', promptPreview: 'Plan this',
+                responsePreview: '1. Add routes', responseLength: 20,
+                inputTokens: 100, outputTokens: 50, latencyMs: 1200, success: true,
+                routing: { provider: 'groq', model: 'llama-3.3-70b', score: 0.92, complexity: 'moderate', explanation: 'best available' },
+              },
+              {
+                seq: 2, timestamp: now - 55000, agentType: 'writer', taskId: 'step-1',
+                description: 'Write auth middleware',
+                provider: 'gemini', model: 'gemini-2.0-flash',
+                promptDigest: 'c9d8e7f6a5b4c3d2', promptPreview: 'Write the code',
+                responsePreview: 'boom', responseLength: 4,
+                inputTokens: 200, outputTokens: 80, latencyMs: 2400, success: false,
+                error: 'boom: rate limit',
+              },
+            ],
+          },
+          {
+            id: 'trace-bbb', goal: 'Refactor API', source: 'orchestrator',
+            startedAt: now - 120000, endedAt: now - 100000, durationMs: 20000,
+            success: true, steps: [],
+          },
+        ],
+      };
+      try {
+        writeFileSync(tracePath, JSON.stringify(fixtureTrace));
+
+        // List — most recent first, aggregates present, NO previews.
+        const listRes = await httpGet(`${baseUrl}/api/traces`);
+        expect(listRes.statusCode).toBe(200);
+        const listBody = JSON.parse(listRes.body);
+        expect(listBody.total).toBe(2);
+        expect(listBody.traces).toHaveLength(2);
+        expect(listBody.traces[0].id).toBe('trace-aaa'); // newest first
+        expect(listBody.traces[0].stepCount).toBe(2);
+        expect(listBody.traces[0].failedSteps).toBe(1);
+        expect(listBody.traces[0].totalTokens).toBe(430); // 150 + 280
+        expect(listBody.traces[0].steps).toBeUndefined();
+        expect(listBody.traces[0].promptPreview).toBeUndefined();
+
+        // Detail — full steps with previews + routing snapshot.
+        const detailRes = await httpGet(`${baseUrl}/api/traces/trace-aaa`);
+        expect(detailRes.statusCode).toBe(200);
+        const detail = JSON.parse(detailRes.body);
+        expect(detail.id).toBe('trace-aaa');
+        expect(detail.steps).toHaveLength(2);
+        expect(detail.steps[0].routing?.score).toBe(0.92);
+        expect(detail.steps[1].success).toBe(false);
+        expect(detail.steps[1].error).toContain('rate limit');
+        expect(detail.steps[0].promptPreview).toBe('Plan this');
+
+        // Missing id → 404.
+        const missing = await httpGet(`${baseUrl}/api/traces/trace-missing`);
+        expect(missing.statusCode).toBe(404);
+
+        // /api/all carries the traces field.
+        const allRes = await httpGet(`${baseUrl}/api/all`);
+        const allBody = JSON.parse(allRes.body);
+        expect(allBody.traces.total).toBe(2);
+      } finally {
+        rmSync(tracePath, { force: true });
       }
     });
   });

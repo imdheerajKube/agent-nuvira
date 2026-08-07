@@ -9,6 +9,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.60.3] - 2026-08-07
+
+### Added
+
+- **P0 reasoning traces** — every LLM call in a pipeline (planner, memory, per-task, repair escalation) records `{agentType, provider×model, prompt digest, response preview, tokens, latency, routing snapshot}` to a per-run trace file. New `buff trace list/show/replay/clear` CLI plus a dashboard 🔍 Reasoning Traces panel — the full per-step provenance needed to debug "why did the agent build the wrong thing" instead of just counting tokens.
+- **P1 failure-lesson episodic memory** — the self-improver now distills NEGATIVE trajectories ("what didn't work") into episodic memory and injects them into future planning prompts, so past mistakes (dead-end approaches, bad model choices, ignored goals) are avoided proactively. Previously only successful runs were stored.
+- **Planner goal-fidelity validation** — plans must reference the goal's significant tokens (≥2-token goals) or pass an example-copy marker check (1-token goals). Off-topic or few-shot-regurgitated plans are rejected with an actionable error and re-planned. Fixes the NVDA-addon failure where the planner copied the JWT few-shot example verbatim (including its fake `path/to/...` path).
+- **Planner-repair model escalation** — when the planner fails under auto routing, repair re-routes through the Auto router at the NEXT complexity level so a STRONGER model is used instead of re-prompting the same weak one until the repair budget dies. Non-auto paths keep the explicit model and honor `repairFallbackModels`.
+- **`buff trace replay <id>`** — replays a captured trace step-by-step with the routing snapshot that selected each model (dashboard and CLI parity).
+
+### Changed
+
+- Planner few-shot example moved from JWT-auth to a neutral domain with an explicit `CRITICAL — DO NOT COPY THE EXAMPLES` instruction.
+- Orchestrator + injection-guardrail tests pinned to a hermetic `BUFF_MEMORY_DIR` so trace writes never leak into the real `~/.buff` during the suite.
+
 ## [1.60.2] - 2026-08-07
 
 ### Added
