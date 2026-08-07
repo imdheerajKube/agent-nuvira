@@ -37,7 +37,7 @@ let originalMemoryDir: string | undefined;
 
 /** A fake InferenceProvider for hermetic probe tests. */
 function makeProvider(overrides: {
-  models?: Array<{ id: string }>;
+  models?: Array<{ id: string; contextWindowTokens?: number }>;
   generateError?: Error;
   listModelsError?: Error;
 }) {
@@ -140,6 +140,24 @@ describe('ModelProbe — listModels probe', () => {
 
     expect(ids).toEqual(['a-model', 'b-model']);
     expect(getModelRegistry().getEntry('gemini', 'a-model')?.status).toBe('unverified');
+  });
+
+  it('records the provider-advertised context window into the registry', async () => {
+    // The describe's beforeEach mocks the factory with bare ids — override it
+    // so listModels returns descriptors carrying the advertised window.
+    mockFactory(() =>
+      makeProvider({
+        models: [
+          { id: 'openai/gpt-4o', name: 'GPT-4o', provider: 'openrouter', contextWindowTokens: 128_000 },
+          { id: 'a-model' },
+        ],
+      }),
+    );
+    const cm = makeConfigManager(() => makeProvider({ models: [] }));
+    await probeProviderList('openrouter', cm);
+
+    expect(getModelRegistry().getEntry('openrouter', 'openai/gpt-4o')?.contextWindowTokens).toBe(128_000);
+    expect(getModelRegistry().getEntry('openrouter', 'a-model')?.contextWindowTokens).toBeUndefined();
   });
 
   it('returns empty and never throws when listModels fails', async () => {

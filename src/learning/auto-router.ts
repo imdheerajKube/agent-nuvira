@@ -1462,8 +1462,14 @@ export class AutoModelRouter {
     } catch {
       // Best-effort — config read must never break routing.
     }
-    // Provider-level nominal window + user overrides only — never a hardcoded
-    // per-model table (live model descriptors / registry win where available).
+    // LIVE provider-advertised window first: recorded by the listModels probe
+    // when the endpoint exposes it (Ollama context_length, OpenRouter
+    // context_length). The router's preflight prefers the model's real spec
+    // over a static provider-level default.
+    const live = getModelRegistry().getEntry(provider, model)?.contextWindowTokens;
+    if (live !== undefined && live > 0) return live;
+    // Provider-level nominal window + user overrides — never a hardcoded
+    // per-model table.
     return PROVIDER_CONTEXT_WINDOWS[provider] ?? DEFAULT_CONTEXT_WINDOW;
   }
 

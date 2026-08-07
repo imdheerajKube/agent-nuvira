@@ -13,6 +13,14 @@ export interface ModelDescriptor {
    * Populated by the model-catalog utility when listing models.
    */
   tags?: string[];
+  /**
+   * The provider's OWN advertised nominal input context window (tokens) for
+   * this model, when the list endpoint exposes it (Ollama `/api/tags`
+   * `general.context_length`, OpenRouter `/models` `context_length`).
+   * Recorded into the Model Availability Registry on probe so the router's
+   * context preflight uses the LIVE descriptor, not a static table.
+   */
+  contextWindowTokens?: number;
 }
 
 import { InferenceOptions } from '../config/types.js';
