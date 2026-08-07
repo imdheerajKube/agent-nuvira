@@ -325,6 +325,27 @@
           <h3>Multi-Account Key Rotation (🔑 key#N)</h3>
           <p>One provider, many keys. A provider can carry <strong>multiple API keys</strong> (<code>apiKeys[]</code>), and failover rotates through every non-parked key <em>before</em> switching providers — a quota-exhausted secondary account is parked (FNV fingerprint, raw keys never persisted) and the next key is tried. Parked accounts are skipped predictively on the next run and cleared by <code>releaseAccount</code> / <code>buff models unblock</code>. Rotation is logged (<code>🔑 key#N …</code>) and proven by a hermetic E2E test driving real adapters against a mock gateway.</p>
         </div>
+        <div class="feature-card" data-delay="1700">
+          <div class="feature-icon privacy">
+            <svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="11" width="18" height="11" rx="2" ry="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/><path d="M12 14v3"/></svg>
+          </div>
+          <h3>Role-Based Access Control (RBAC)</h3>
+          <p>Enterprise-grade authorization over the admin surface: <code>buff admin role add/remove/list</code> + <code>buff admin whoami</code> assign <strong>admin / operator / viewer</strong> roles with a scoped permission matrix (policy writes, role management, unblock). Legacy single-user mode stays fully permissive until roles are assigned, a misconfigured <code>rbac.json</code> logs a warning instead of silently downgrading, and an OIDC adapter interface is the token-identity seam for SSO. The dashboard mirrors it in a 🔐 RBAC Identity card.</p>
+        </div>
+        <div class="feature-card" data-delay="1800">
+          <div class="feature-icon learning">
+            <svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M12 2a10 10 0 1 0 10 10"/><path d="M12 6v6l4 2"/><path d="M22 12h-4l3-3 3 3z"/></svg>
+          </div>
+          <h3>Tamper-Evident Audit Chain</h3>
+          <p>Every action lands in a <strong>SHA-256 hash-chained audit log</strong> (<code>buff audit verify/export</code>) — each record's hash includes the previous one, so a single edited line breaks the chain and <code>doctor --enterprise</code> flags the exact tamper point. CEF/SIEM export feeds your security pipeline, and a secret-redaction scrubber wired into every logger + audit writer guarantees nothing sensitive is ever persisted.</p>
+        </div>
+        <div class="feature-card" data-delay="1900">
+          <div class="feature-icon providers">
+            <svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M12 2L2 7l10 5 10-5-10-5z"/><path d="M2 17l10 5 10-5"/><path d="M2 12l10 5 10-5"/></svg>
+          </div>
+          <h3>OIDC-Verified Nuvira Gateway</h3>
+          <p>Turn your federation server into a <strong>token-verified gateway</strong>: <code>buff federation start --auth oidc --oidc-public-key &lt;pem&gt;</code> makes the handshake an RS256-JWT bearer check (sub/exp/issuer/audience enforced by a dependency-free adapter), with the PEM path persisted for daemon restart. Secret-mode interop is unchanged, and <code>buff nuvira serve</code> exposes the same decision layer as a headless OpenAI-compatible endpoint — RBAC, audit, and governance all gate what the gateway will do.</p>
+        </div>
       </div>
     </div>
   </section>
