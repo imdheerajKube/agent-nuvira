@@ -9,6 +9,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.60.4] - 2026-08-07
+
+### Added
+
+- **Per-task repair model escalation** — the same stronger-model escalation that fixes planner failures now applies to EVERY failing agent (writer, debugger, security, tester, reviewer...). When a task fails under auto routing, the repair engine is handed a re-routed LLM at the NEXT complexity level instead of re-prompting the same weak model that just failed. The escalation climbs from the task's ROUTED complexity (captured per task id, including any escalation the router already applied) so the repair is always strictly above the tier that failed.
+
+### Changed
+
+- `createEscalatedLLM` is now the single shared escalation primitive (planner + per-task repair), carrying the stronger decision's routing snapshot into the reasoning trace.
+
 ## [1.60.3] - 2026-08-07
 
 ### Added

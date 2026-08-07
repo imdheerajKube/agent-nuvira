@@ -298,6 +298,15 @@ export class Orchestrator {
   /** Optional routing decision overrides keyed by agent type */
   private routingDecisionOverrides = new Map<string, AutoRouteResult>();
   /**
+   * The ROUTED complexity per task (keyed by task id), recorded when the
+   * auto-routed LLM is created. The router may escalate complexity itself at
+   * resolve time (escalationApplied) — so the FAILED call may have actually
+   * run at a higher tier than the raw task.complexity label. Repair escalation
+   * must climb from the ROUTED tier, or it can land back on the same tier that
+   * just failed (only re-rolling provider/model, not reasoning capacity).
+   */
+  private routedComplexities = new Map<string, string>();
+  /**
    * Latched one-shot cold-start registry probe: fired once per Orchestrator
    * instance when auto routing is active on an empty registry (see
    * maybeFireColdStartProbe). A long dev-mode session only pays for it once.
@@ -1646,6 +1655,17 @@ export class Orchestrator {
           }
 
           const errorMessage = firstResult.error || firstResult.summary || 'Unknown error';
+          // MODEL ESCALATION on task failure (assessment P0, same principle as
+          // the planner repair): when auto routing is active, hand the repair
+          // engine a re-routed LLM at the NEXT complexity level so it picks a
+          // STRONGER model than the one that just failed. Re-prompting the
+          // same weak model repeats the same failure until the budget dies —
+          // the exact failure mode seen when a weak writer kept failing.
+          // Non-auto paths keep the explicit model but honor
+          // repairFallbackModels for the switch-model strategy.
+          const escalatedTaskLLM = autoRouting
+            ? this.createEscalatedLLM(effectiveAgentType, task.description, options, task.complexity, task.id)
+            : undefined;
           const repairEngine = new ErrorRepairEngine({
             maxRepairs,
             repairMode,
@@ -1656,7 +1676,7 @@ export class Orchestrator {
           result = await repairEngine.repair(
             task.id,
             vault.context,
-            agentCallLLM,
+            escalatedTaskLLM ?? agentCallLLM,
             errorMessage,
             async (ctx, llm) => {
               return agent.execute(ctx, llm);
@@ -2048,6 +2068,13 @@ export class Orchestrator {
   ): LLMCallFn {
     const decisionOverride = this.routingDecisionOverrides.get(task.agentType);
     const decision = decisionOverride ?? this.resolveAutoRoutingDecision(task, options);
+    // Remember the ROUTED complexity for this task — the tier the LLM actually
+    // runs at (the router may have escalated it). Repair escalation climbs
+    // from this, never from the raw label. Keyed by task id; the planner
+    // (no task id) is covered by the routingDecisionOverrides latch instead.
+    if (task.taskId && decision.complexity) {
+      this.routedComplexities.set(task.taskId, decision.complexity);
+    }
     return this.createAutoRoutedLLMFromDecision(task, options, decision);
   }
 
@@ -2062,22 +2089,47 @@ export class Orchestrator {
    * (not the latched planner override) so the escalation actually applies.
    */
   private createEscalatedPlannerLLM(goal: string, options: OrchestratorOptions): LLMCallFn {
-    const COMPLEXITY_LADDER = ['trivial', 'simple', 'moderate', 'complex', 'critical'] as const;
     const plannerDecision = this.routingDecisionOverrides.get('planner');
-    const baseComplexity = plannerDecision?.complexity as string | undefined;
-    const currentIdx = COMPLEXITY_LADDER.indexOf(baseComplexity as any);
+    return this.createEscalatedLLM('planner', goal, options, plannerDecision?.complexity as string | undefined);
+  }
+
+  /**
+   * Re-route a task's repair at the NEXT complexity level so the Auto router
+   * picks a STRONGER model than the one that just failed (assessment P0).
+   *
+   * Used by BOTH the planner repair path and the per-task agent repair path
+   * (writer/debugger/security/tester...): re-prompting the same weak model
+   * that already failed just repeats the failure until the repair budget
+   * dies. The escalation carries the stronger decision's routing snapshot
+   * into the reasoning trace so repairs are fully auditable.
+   */
+  private createEscalatedLLM(
+    agentType: string,
+    description: string,
+    options: OrchestratorOptions,
+    baseComplexity?: string,
+    taskId?: string,
+  ): LLMCallFn {
+    // Prefer the ROUTED complexity (the tier that actually failed — the router
+    // may have escalated the raw label) so the escalation is guaranteed to be
+    // strictly above the failing tier. Fall back to the raw label / undefined
+    // (undefined → 'critical', the top of the ladder) for the planner path.
+    const effectiveBase = (taskId && this.routedComplexities.get(taskId)) || baseComplexity;
+    const COMPLEXITY_LADDER = ['trivial', 'simple', 'moderate', 'complex', 'critical'] as const;
+    const currentIdx = COMPLEXITY_LADDER.indexOf(effectiveBase as any);
     const escalatedComplexity =
       currentIdx >= 0 && currentIdx < COMPLEXITY_LADDER.length - 1
         ? COMPLEXITY_LADDER[currentIdx + 1]
         : 'critical';
     const escalatedTask = {
-      agentType: 'planner',
-      description: goal,
+      agentType,
+      description,
       complexity: escalatedComplexity,
+      taskId,
     };
     const decision = this.resolveAutoRoutingDecision(escalatedTask, options);
     if (options.verbose) {
-      logger.info(`      🚀 Escalating planner repair to a stronger model (${escalatedComplexity}): ${decision.provider}/${decision.model}`);
+      logger.info(`      🚀 Escalating ${agentType} repair to a stronger model (${escalatedComplexity}): ${decision.provider}/${decision.model}`);
     }
     return this.createAutoRoutedLLMFromDecision(escalatedTask, options, decision);
   }

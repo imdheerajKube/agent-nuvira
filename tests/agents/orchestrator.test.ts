@@ -1832,3 +1832,213 @@ describe('Orchestrator — planner-repair model escalation', () => {
     expect(result.error).toContain('no valid task steps');
   });
 });
+
+// ─── Per-task repair MODEL ESCALATION (assessment P0) ───────────────────────
+// The planner escalation alone only fixes the planning stage — a weak writer/
+// debugger/security agent failing mid-task would STILL re-prompt the same weak
+// model until the repair budget died. The same escalation now applies to the
+// per-task repair engine (createEscalatedLLM) when auto routing is active.
+
+describe('Orchestrator — per-task repair model escalation', () => {
+  let orchestrator: Orchestrator;
+
+  beforeEach(() => {
+    orchestrator = new Orchestrator();
+    mockPlannerExecute.mockReset();
+    mockWriterExecute.mockReset();
+    mockReviewerExecute.mockReset();
+    mockCreateReviewFromResult.mockReset();
+    mockCreateReviewFromResult.mockReturnValue(mockReviewBundle);
+    // Prevent writes to disk from the writer mock
+    vi.spyOn(orchestrator as any, 'applyFileChanges').mockReturnValue(0);
+    // Suppress logger output during tests
+    vi.spyOn(logger, 'info').mockImplementation(() => {});
+    vi.spyOn(logger, 'success').mockImplementation(() => {});
+    vi.spyOn(logger, 'warn').mockImplementation(() => {});
+    vi.spyOn(logger, 'highlight').mockImplementation(() => {});
+    vi.spyOn(logger, 'error').mockImplementation(() => {});
+    vi.spyOn(logger, 'debug').mockImplementation(() => {});
+    // Never fire real network probes from tests
+    vi.spyOn(modelProbe, 'refreshModelRegistry').mockResolvedValue({
+      providersProbed: [],
+      modelsListed: 0,
+      verified: 0,
+      unavailable: 0,
+      skipped: 0,
+      errors: 0,
+    } as any);
+
+    // Default planner: succeeds with a single writer step.
+    mockPlannerExecute.mockImplementation(async (context: any) => {
+      context.taskPlan.push({
+        id: 'step-1',
+        agentType: 'writer',
+        description: 'Write the feature code',
+        dependsOn: [],
+        status: 'pending',
+      });
+      return { success: true, summary: 'Created 1 task steps' };
+    });
+  });
+
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  it('escalates a failing writer\'s repair to a stronger model (auto routing) and completes the task', async () => {
+    const cm = new ConfigManager();
+    const orch = new Orchestrator(cm);
+    // Never write the writer mock's file changes to the real repo.
+    vi.spyOn(orch as any, 'applyFileChanges').mockReturnValue(0);
+
+    // Intercept the escalated task LLM — record that it was created.
+    const escalateSpy = vi
+      .spyOn(orch as any, 'createEscalatedLLM')
+      .mockReturnValue(vi.fn().mockResolvedValue('escalated writer response'));
+
+    // Writer: first attempt fails (the exact "weak model produces garbage"
+    // case). The repair re-prompt (stronger model) succeeds.
+    let writerCalls = 0;
+    mockWriterExecute.mockImplementation(async (context: any) => {
+      writerCalls += 1;
+      if (writerCalls === 1) {
+        return { success: false, error: 'The LLM returned an invalid implementation' };
+      }
+      context.fileChanges.push({
+        path: 'src/feature.ts',
+        originalContent: '',
+        newContent: 'export function feature() { return 42; }\n',
+        status: 'created',
+      });
+      return { success: true, summary: 'Wrote feature.ts' };
+    });
+
+    const result = await orch.execute('implement the feature', {
+      provider: 'auto',
+      model: 'auto',
+    });
+
+    // Per-task escalation happened exactly once — the task repair used a
+    // stronger model, not the same weak one that failed.
+    expect(escalateSpy).toHaveBeenCalledTimes(1);
+    expect(escalateSpy).toHaveBeenCalledWith(
+      'writer',
+      expect.stringContaining('Write the feature code'),
+      expect.anything(),
+      expect.anything(),
+      'step-1',
+    );
+    // Writer ran twice: initial (failed) + repair with the escalated LLM.
+    expect(mockWriterExecute).toHaveBeenCalledTimes(2);
+    // The task was COMPLETED — repair converges instead of dying.
+    expect(result.success).toBe(true);
+    expect(result.tasksCompleted).toBe(1);
+  });
+
+  it('does NOT escalate the per-task repair when auto routing is inactive (keeps explicit model)', async () => {
+    const cm = new ConfigManager();
+    const orch = new Orchestrator(cm);
+    // Never write the writer mock's file changes to the real repo.
+    vi.spyOn(orch as any, 'applyFileChanges').mockReturnValue(0);
+
+    mockWriterExecute.mockImplementation(async () => ({
+      success: false,
+      error: 'The LLM returned an invalid implementation',
+    }));
+
+    const escalateSpy = vi.spyOn(orch as any, 'createEscalatedLLM');
+    const createLLMSpy = vi.spyOn(orch as any, 'createLLMProvider').mockReturnValue(
+      vi.fn().mockResolvedValue('ok'),
+    );
+
+    const result = await orch.execute('implement the feature', {
+      provider: 'groq',
+      model: 'llama-3.3-70b-versatile',
+    });
+
+    // Explicit model path: no escalation — the repair re-prompts the same
+    // provider/model and honors repairFallbackModels instead.
+    expect(escalateSpy).not.toHaveBeenCalled();
+    expect(createLLMSpy).toHaveBeenCalled();
+    expect(result.success).toBe(false);
+  });
+
+  it('createEscalatedLLM re-routes ANY agent type at the next complexity level', async () => {
+    const cm = new ConfigManager();
+    const orch = new Orchestrator(cm);
+
+    const resolveSpy = vi.spyOn(orch as any, 'resolveAutoRoutingDecision').mockReturnValue({
+      provider: 'groq',
+      model: 'llama-3.3-70b-versatile',
+      complexity: 'moderate',
+      score: 0.9,
+    } as any);
+    vi.spyOn(orch as any, 'createAutoRoutedLLMFromDecision').mockReturnValue(
+      vi.fn().mockResolvedValue('ok'),
+    );
+
+    (orch as any).createEscalatedLLM('security', 'Scan the new auth code for PII', {}, 'simple', 'step-9');
+
+    // The escalated task carries the NEXT complexity level + the task id, so
+    // the router picks a stronger model and the trace links to the DAG node.
+    expect(resolveSpy).toHaveBeenCalledWith(
+      expect.objectContaining({
+        agentType: 'security',
+        complexity: 'moderate',
+        taskId: 'step-9',
+      }),
+      expect.anything(),
+    );
+  });
+
+  it('escalates from the ROUTED complexity (not the raw label) when the router escalated the task', async () => {
+    const cm = new ConfigManager();
+    const orch = new Orchestrator(cm);
+
+    // The router escalated the raw 'simple' task to 'complex' at resolve time
+    // (escalationApplied) — the failed call actually ran at 'complex'.
+    (orch as any).routedComplexities.set('step-7', 'complex');
+
+    const resolveSpy = vi.spyOn(orch as any, 'resolveAutoRoutingDecision').mockReturnValue({
+      provider: 'groq',
+      model: 'llama-3.3-70b-versatile',
+      complexity: 'critical',
+      score: 0.9,
+    } as any);
+    vi.spyOn(orch as any, 'createAutoRoutedLLMFromDecision').mockReturnValue(
+      vi.fn().mockResolvedValue('ok'),
+    );
+
+    // Raw label says 'simple', but the routed complexity ('complex') must win
+    // — otherwise repair would land back on 'moderate' (below the failed tier).
+    (orch as any).createEscalatedLLM('writer', 'Write the feature code', {}, 'simple', 'step-7');
+
+    expect(resolveSpy).toHaveBeenCalledWith(
+      expect.objectContaining({ agentType: 'writer', complexity: 'critical', taskId: 'step-7' }),
+      expect.anything(),
+    );
+  });
+
+  it('createAutoRoutedLLM records the routed complexity per task for escalation', async () => {
+    const cm = new ConfigManager();
+    const orch = new Orchestrator(cm);
+
+    vi.spyOn(orch as any, 'resolveAutoRoutingDecision').mockReturnValue({
+      provider: 'groq',
+      model: 'llama-3.3-70b-versatile',
+      complexity: 'complex',
+      score: 0.9,
+    } as any);
+    vi.spyOn(orch as any, 'createAutoRoutedLLMFromDecision').mockReturnValue(
+      vi.fn().mockResolvedValue('ok'),
+    );
+
+    (orch as any).createAutoRoutedLLM(
+      { agentType: 'writer', description: 'Write code', complexity: 'simple', taskId: 'step-4' },
+      {},
+    );
+
+    // The routed (post-escalation) complexity is latched for step-4.
+    expect((orch as any).routedComplexities.get('step-4')).toBe('complex');
+  });
+});
