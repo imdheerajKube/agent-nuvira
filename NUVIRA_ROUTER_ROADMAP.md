@@ -360,4 +360,24 @@ Verified as of 2026-08-05 (v1.57.0, 3,032 root tests + 42 dashboard component te
 
 For traceability, the analysis that informed this roadmap cloned **diegosouzapw/OmniRoute** (v3.8.50, MIT, self-hosted, local-only; `http://localhost:20128/v1`, OpenAI-compatible; combo/account fallback, policy engine, circuit breakers, reasoning-replay cache, context relay, compression pipeline, 290 providers/19 strategies; clone at `/tmp/omniroute-analysis`). Its *patterns* (reasoning replay, context relay, wire-token metering, account rotation) are ported natively in P4/P2 with our own conservative defaults. Its weaknesses (lossy compression, MITM cert friction, upstream fragility, heavy footprint) are explicitly avoided by this roadmap (N6, P4.4, P5 pinning).
 
+## 12. Future Work (post-program, optional)
+
+Items deliberately deferred at program close (v1.59.9) — **not blockers**; each builds on shipped foundations and slots into an existing seam. Tracked here so they survive the archive.
+
+### FW-1 — Pluggable secrets backends (M6.2 extension)
+
+- **What:** a `SecretBackend` interface behind `src/agents/credential-store.ts` with backends for macOS Keychain, `pass`, AWS SSM Parameter Store, and env-var-only, selectable via `buff config set secrets.backend keychain|pass|ssm|env`.
+- **Why:** ops/compliance teams need keys out of `~/.buff/buffconfig.json` entirely — even redacted at rest — and a per-backend `doctor --enterprise` verification.
+- **Shipped foundation:** redaction scrubber wired into every logger/audit writer (v1.59.0), `~/.buff/.env` key relocation, M2.3 `apiKeys` rotation arrays flagged by `doctor --enterprise`.
+- **Rough scope:** ~4–6 team-days incl. backend interface + macOS Keychain + pass + SSM adapters + tests.
+
+### FW-2 — Fleet-wide shared state (M6.4 extension)
+
+- **What:** optional shared state for `buff nuvira serve` — Redis or SQLite+file-lock — so a fleet of gateway hosts shares one model registry + quota ledger (consistent learning/quotas across the fleet). Feature-flagged off by default.
+- **Why:** multi-host gateway deployments otherwise fragment registry/ledger state per node.
+- **Shipped foundation:** token-verified OIDC gateway minimal slice (v1.59.8); registry/ledger persistence already exists and is the seam to back with the shared adapter.
+- **Rough scope:** ~5–8 team-days incl. shared-state adapter, conflict handling, and fleet E2E.
+
+---
+
 *End of roadmap.*
