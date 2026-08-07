@@ -264,8 +264,8 @@ Verified as of 2026-08-05 (v1.57.0, 3,032 root tests + 42 dashboard component te
 | P0 | M0.1 Baseline lock | [#1](https://github.com/imdheerajKube/agent-nuvira/issues/1) | ✅ | `af1f931` |
 | P0 | M0.2 Shared failover runner | [#1](https://github.com/imdheerajKube/agent-nuvira/issues/1) | ✅ | Stages A/B/C shipped |
 | P0 | M0.3 Orchestrator resolve consultation | [#1](https://github.com/imdheerajKube/agent-nuvira/issues/1) | ✅ | Session-excluded provider never wins a task; fallbackChain filtered; all-excluded degrades gracefully |
-| P0 | M0.3 Telemetry schema v2 | [#1](https://github.com/imdheerajKube/agent-nuvira/issues/1) | ⬜ | — |
-| P0 | M0.4 Mid-stream classification | [#1](https://github.com/imdheerajKube/agent-nuvira/issues/1) | ⬜ | — |
+| P0 | M0.3 Telemetry schema v2 | [#1](https://github.com/imdheerajKube/agent-nuvira/issues/1) | ✅ | v1.51.0 (P0 baseline; `b111192`) |
+| P0 | M0.4 Mid-stream classification | [#1](https://github.com/imdheerajKube/agent-nuvira/issues/1) | ✅ | v1.51.0 (P0 baseline; partial outcome) |
 | P1 | M1.1 Nuvira adapter | [#2](https://github.com/imdheerajKube/agent-nuvira/issues/2) | ✅ | `src/inference/nuvira-adapter.ts` |
 | P1 | M1.2 Factory + config | [#2](https://github.com/imdheerajKube/agent-nuvira/issues/2) | ✅ | factory case + ProviderType + headers/timeoutMs + picker/doctor/router lists |
 | P1 | M1.3 Registry/ledger write-through | [#2](https://github.com/imdheerajKube/agent-nuvira/issues/2) | ✅ | Free — adapter implements InferenceProvider, all telemetry applies |
@@ -275,10 +275,10 @@ Verified as of 2026-08-05 (v1.57.0, 3,032 root tests + 42 dashboard component te
 | P2 | M2.3 Multi-account rotation | [#3](https://github.com/imdheerajKube/agent-nuvira/issues/3) | ✅ | `9703a78` |
 | P2 | M2.4 Governance constraints | [#3](https://github.com/imdheerajKube/agent-nuvira/issues/3) | ✅ | `dfccd81` |
 | P2 | M2.5 Context-length preflight | [#3](https://github.com/imdheerajKube/agent-nuvira/issues/3) | ✅ | `abb282d` |
-| P3 | M3.1 Decision rationale | [#4](https://github.com/imdheerajKube/agent-nuvira/issues/4) | ⬜ | — |
-| P3 | M3.2 Requests panel | [#4](https://github.com/imdheerajKube/agent-nuvira/issues/4) | ⬜ | — |
-| P3 | M3.3 Decision diff | [#4](https://github.com/imdheerajKube/agent-nuvira/issues/4) | ⬜ | — |
-| P3 | M3.4 Timeline enrichment | [#4](https://github.com/imdheerajKube/agent-nuvira/issues/4) | ⬜ | — |
+| P3 | M3.1 Decision rationale | [#4](https://github.com/imdheerajKube/agent-nuvira/issues/4) | ✅ | v1.51.0+ (`models explain --deep`) |
+| P3 | M3.2 Requests panel | [#4](https://github.com/imdheerajKube/agent-nuvira/issues/4) | ✅ | v1.58.3 |
+| P3 | M3.3 Decision diff | [#4](https://github.com/imdheerajKube/agent-nuvira/issues/4) | ✅ | v1.58.3 |
+| P3 | M3.4 Timeline enrichment | [#4](https://github.com/imdheerajKube/agent-nuvira/issues/4) | ✅ | v1.59.5 (partial chips; scrubbable `de3a9b7`) |
 | P4 | M4.1 Continuation retry | [#5](https://github.com/imdheerajKube/agent-nuvira/issues/5) | ✅ | v1.58.4 |
 | P4 | M4.2 Reasoning-replay cache | [#5](https://github.com/imdheerajKube/agent-nuvira/issues/5) | ✅ | v1.58.4 |
 | P4 | M4.3 Context-relay summaries | [#5](https://github.com/imdheerajKube/agent-nuvira/issues/5) | ✅ | v1.58.4 |
@@ -295,9 +295,9 @@ Verified as of 2026-08-05 (v1.57.0, 3,032 root tests + 42 dashboard component te
 | P6 | M6.6 Supply chain (SBOM) | [#7](https://github.com/imdheerajKube/agent-nuvira/issues/7) | ✅ | v1.59.4 |
 | P7 | M7.1 doctor --enterprise | [#8](https://github.com/imdheerajKube/agent-nuvira/issues/8) | ✅ | v1.58.7 |
 | P7 | M7.2 Upgrade guide | [#8](https://github.com/imdheerajKube/agent-nuvira/issues/8) | ✅ | v1.58.7 |
-| P7 | M7.3 Website/docs sync | [#8](https://github.com/imdheerajKube/agent-nuvira/issues/8) | ⬜ | — |
+| P7 | M7.3 Website/docs sync | [#8](https://github.com/imdheerajKube/agent-nuvira/issues/8) | ✅ | per-release (v1.58.7+ sweep script) |
 | P7 | M7.4 Telemetry health flags | [#8](https://github.com/imdheerajKube/agent-nuvira/issues/8) | ✅ | v1.58.9 |
-| P7 | M7.5 Tracker hygiene | [#8](https://github.com/imdheerajKube/agent-nuvira/issues/8) | ⬜ | — |
+| P7 | M7.5 Tracker hygiene | [#8](https://github.com/imdheerajKube/agent-nuvira/issues/8) | ✅ | v1.59.9 (issues #5/#7/#8 closed) |
 
 ---
 
