@@ -9,6 +9,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.60.1] - 2026-08-07
+
+### Added
+
+- **Live per-model context windows in the router's context preflight.** The model probe now records each model's provider-advertised context window into the Model Availability Registry when the list endpoint exposes it — Ollama `/api/tags` (`general.context_length`) and OpenRouter `/models` (`context_length`). `resolveContextWindow` precedence is now: user override (`routing.contextWindows`) → **live registry descriptor** → provider-level nominal window → generous default. Providers whose list endpoints don't advertise windows (Groq, NIM, Gemini) fall back to the provider-level estimate. `ModelDescriptor` and `ModelRegistryEntry` gained `contextWindowTokens`; `markListed` accepts full descriptors (legacy string-id callers unchanged) and the window survives re-verify/re-kill rebuilds and JSON-mirror reloads.
+
+### Fixed
+
+- The v1.60.0 comment "live model descriptors win where available" is now actually true — the static provider-level estimate is only a fallback, not the primary source, when the API exposes the real spec.
+
+### Added
+
+- Tests: registry descriptor roundtrip (incl. reload), probe records advertised windows, router precedence (live beats provider default; explicit override still beats live). 3 new tests; 3,398 total green.
+
 ## [1.60.0] - 2026-08-07
 
 ### Changed

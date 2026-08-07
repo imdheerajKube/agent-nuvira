@@ -122,14 +122,22 @@ export class OpenRouterAdapter implements InferenceProvider {
         headers: { 'Authorization': `Bearer ${apiKey}` },
       });
       if (!response.ok) return [];
-      const data = (await response.json()) as { data: Array<{ id: string; name?: string; description?: string }> };
-      return (data.data || []).map((m: { id: string; name?: string; description?: string }) => ({
-        id: m.id,
-        name: m.name || m.id,
-        provider: 'openrouter',
-        description: m.description,
-        tags: getModelTags(m.id),
-      }));
+      // OpenRouter's /models exposes each model's `context_length` — carry it
+      // so the registry records the LIVE advertised window for preflight.
+      const data = (await response.json()) as {
+        data: Array<{ id: string; name?: string; description?: string; context_length?: number }>;
+      };
+      return (data.data || []).map((m: { id: string; name?: string; description?: string; context_length?: number }) => {
+        const ctx = typeof m.context_length === 'number' && m.context_length > 0 ? m.context_length : undefined;
+        return {
+          id: m.id,
+          name: m.name || m.id,
+          provider: 'openrouter',
+          description: m.description,
+          tags: getModelTags(m.id),
+          ...(ctx !== undefined ? { contextWindowTokens: ctx } : {}),
+        };
+      });
     } catch {
       return [];
     }

@@ -294,13 +294,20 @@ except Exception as e:
                 const response = await fetch(`${OLLAMA_API_BASE}/api/tags`);
                 if (!response.ok)
                     return [];
+                // Ollama exposes each model's context length under `model_info["general.context_length"]`
+                // (older versions omit model_info entirely — that's fine, undefined).
                 const data = (await response.json());
-                return (data.models || []).map((m) => ({
-                    id: m.name,
-                    name: m.name,
-                    provider: 'local',
-                    tags: getModelTags(m.name),
-                }));
+                return (data.models || []).map((m) => {
+                    const raw = m.model_info?.['general.context_length'];
+                    const ctx = typeof raw === 'number' && Number.isFinite(raw) && raw > 0 ? raw : undefined;
+                    return {
+                        id: m.name,
+                        name: m.name,
+                        provider: 'local',
+                        tags: getModelTags(m.name),
+                        ...(ctx !== undefined ? { contextWindowTokens: ctx } : {}),
+                    };
+                });
             }
             catch {
                 return [];

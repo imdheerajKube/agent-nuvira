@@ -88,6 +88,29 @@ describe('ModelRegistry — probe / spot-check lifecycle', () => {
     expect(registry.getEntry('gemini', 'new-model')?.status).toBe('unverified');
   });
 
+  it('markListed records the provider-advertised context window and preserves it across rebuilds/reloads', () => {
+    const registry = new ModelRegistry();
+    registry.markListed('openrouter', [
+      { id: 'openai/gpt-4o', name: 'GPT-4o', provider: 'openrouter', contextWindowTokens: 128_000 },
+      'meta-llama/llama-3.3-70b-instruct', // legacy bare id — no window
+    ]);
+
+    expect(registry.getEntry('openrouter', 'openai/gpt-4o')?.contextWindowTokens).toBe(128_000);
+    expect(registry.getEntry('openrouter', 'meta-llama/llama-3.3-70b-instruct')?.contextWindowTokens).toBeUndefined();
+
+    // markVerified rebuilds the entry — the live window survives.
+    registry.markVerified('openrouter', 'openai/gpt-4o', 'spot-check', 300);
+    expect(registry.getEntry('openrouter', 'openai/gpt-4o')?.contextWindowTokens).toBe(128_000);
+
+    // markUnavailable rebuilds too.
+    registry.markUnavailable('openrouter', 'openai/gpt-4o', '403 permission denied', 'spot-check');
+    expect(registry.getEntry('openrouter', 'openai/gpt-4o')?.contextWindowTokens).toBe(128_000);
+
+    // And the JSON mirror survives a full reload.
+    const reloaded = new ModelRegistry();
+    expect(reloaded.getEntry('openrouter', 'openai/gpt-4o')?.contextWindowTokens).toBe(128_000);
+  });
+
   it('markUnavailable captures the 403/404 "key exists but model not purchasable" case', () => {
     const registry = new ModelRegistry();
     registry.markListed('openrouter', ['openai/gpt-4o', 'meta-llama/llama-3.3-70b-instruct']);

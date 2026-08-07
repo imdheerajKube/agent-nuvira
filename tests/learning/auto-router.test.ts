@@ -1829,6 +1829,26 @@ describe('M2.5 context preflight', () => {
     expect(local.contextUtilization).toBeCloseTo(10_000 / 16_384, 3);
   });
 
+  it('live probe descriptors beat provider defaults; explicit overrides still win', () => {
+    // The registry carries the model's ADVERTISED window (recorded by the
+    // listModels probe) — the preflight prefers it over the provider default.
+    getModelRegistry().markListed('local', [
+      { id: 'qwen3:32b', name: 'qwen3:32b', provider: 'local', contextWindowTokens: 32_768 },
+    ]);
+
+    // No override: the live 32,768 descriptor beats local's 8K nominal default.
+    const live = new AutoModelRouter().resolve('writer', 'implement a login form', {
+      allowedProviders: ['local'],
+    }, makeConfig({}, { local: { model: 'qwen3:32b' } }));
+    expect(live.ranked.find((r) => r.provider === 'local')!.contextWindowTokens).toBe(32_768);
+
+    // An explicit routing.contextWindows override still beats the live descriptor.
+    const overridden = new AutoModelRouter().resolve('writer', 'implement a login form', {
+      allowedProviders: ['local'],
+    }, makeConfig({ contextWindows: { local: 65_536 } }, { local: { model: 'qwen3:32b' } }));
+    expect(overridden.ranked.find((r) => r.provider === 'local')!.contextWindowTokens).toBe(65_536);
+  });
+
   it('a heavy payload can flip the winner toward a big-window provider (soft, estimation-only)', () => {
     // Without a hint, local (privacy + free cost) wins the privacy-weighted
     // contest; a 500K-token payload squeezes local's 8K window to a 0.65 fit

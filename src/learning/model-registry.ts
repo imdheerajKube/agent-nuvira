@@ -39,6 +39,7 @@ import { join } from 'node:path';
 import { homedir } from 'node:os';
 
 import { getVectorStore, type VectorStore, type VectorEntry } from '../memory/vector-store.js';
+import type { ModelDescriptor } from '../inference/interface.js';
 import { getQuotaLedger } from './quota-ledger.js';
 import { getEventBus, EventNames } from '../observability/event-bus.js';
 import type { ConfigManager } from '../config/manager.js';
@@ -70,6 +71,14 @@ export interface ModelRegistryEntry {
   lastUsedAt: number;
   /** Rolling average latency (ms) — measured by spot-checks. */
   latencyMs?: number;
+  /**
+   * Live provider-advertised nominal context window (tokens) for this model,
+   * recorded from the listModels probe when the endpoint exposes it (Ollama
+   * `general.context_length`, OpenRouter `context_length`). The auto-router's
+   * context preflight prefers this LIVE descriptor over the static
+   * provider-level default. Undefined = the provider doesn't advertise it.
+   */
+  contextWindowTokens?: number;
   // ── M2.2 wire-token metering (measured cost inputs) ─────────────────────
   /** Rolling EMA of input tokens per call, from provider-reported usage. */
   measuredInputTokens?: number;
@@ -532,14 +541,20 @@ export class ModelRegistry {
   /**
    * listModels probe: mark the model as seen (unverified unless already
    * verified). Does NOT downgrade a verified entry — real verification wins.
+   * Accepts either bare ids (legacy callers) or full model descriptors; when
+   * a descriptor carries the provider-advertised context window, it is
+   * recorded so the router's context preflight can use the LIVE value.
    */
-  markListed(provider: string, models: string[]): void {
+  markListed(provider: string, models: Array<string | ModelDescriptor>): void {
     const now = Date.now();
-    for (const model of models) {
+    for (const raw of models) {
+      const model = typeof raw === 'string' ? raw : raw.id;
+      const contextWindowTokens = typeof raw === 'string' ? undefined : raw.contextWindowTokens;
       const key = entryKey(provider, model);
       const existing = this.data.entries[key];
       if (existing && existing.status === 'verified') {
         existing.lastProbedAt = now;
+        if (contextWindowTokens && contextWindowTokens > 0) existing.contextWindowTokens = contextWindowTokens;
         continue;
       }
       this.data.entries[key] = {
@@ -550,6 +565,9 @@ export class ModelRegistry {
         lastProbedAt: now,
         lastUsedAt: existing?.lastUsedAt || 0,
         latencyMs: existing?.latencyMs,
+        contextWindowTokens: contextWindowTokens && contextWindowTokens > 0
+          ? contextWindowTokens
+          : existing?.contextWindowTokens,
         errorRate: existing?.errorRate || 0,
         // P4 M4.4: a re-list never wipes the flakiness signal (same contract
         // as markVerified — availability and reliability are separate axes).
@@ -609,6 +627,9 @@ export class ModelRegistry {
           : Math.round(latencyMs)
         : prevLatency,
       errorRate: existing?.errorRate || 0,
+      // The provider-advertised context window survives a re-verify (it is
+      // model metadata, independent of the verify event).
+      contextWindowTokens: existing?.contextWindowTokens,
       // Verified ⇒ serving right now ⇒ not parked (syncQuota re-parks real exhaustion).
       quotaParkedUntil: 0,
       source,
@@ -731,6 +752,7 @@ export class ModelRegistry {
       // as markVerified/markListed (a later success decays it, never a wipe).
       partialRate: existing?.partialRate,
       partialHistory: existing?.partialHistory,
+      contextWindowTokens: existing?.contextWindowTokens,
       quotaParkedUntil: Math.max(existing?.quotaParkedUntil || 0, quotaParkedUntil),
       source,
       lastError: reason,

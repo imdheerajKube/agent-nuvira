@@ -77,7 +77,9 @@ export async function probeProviderList(providerType: string, configManager: Con
     const models = await provider.listModels();
     const ids = models.map((m) => m.id).filter(Boolean);
     if (ids.length > 0) {
-      getModelRegistry().markListed(providerType, ids);
+      // Pass the full descriptors so the registry records the provider's
+      // advertised context window (live preflight data) alongside availability.
+      getModelRegistry().markListed(providerType, models);
     }
     return ids;
   } catch {
