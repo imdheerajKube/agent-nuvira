@@ -580,6 +580,39 @@ function RegistryCard({ provider }: { provider: ModelRegistryInsights['providers
   );
 }
 
+// ISSUE-004: providers with consecutive 401/403 auth failures climbing toward
+// the auto-clear threshold (3). Warns BEFORE the key is cleared so the user can
+// fix it — and confirms the cleanup happened once it's past the threshold.
+export function keyHygieneWarning(hygiene?: { threshold: number; consecutive: Record<string, number> }) {
+  if (!hygiene) return null;
+  const pending = Object.entries(hygiene.consecutive).filter(([, count]) => count > 0);
+  if (pending.length === 0) return null;
+  return (
+    <div style={{
+      background: 'rgba(210, 153, 34, 0.08)', border: '1px solid #9e6a03',
+      borderRadius: 10, padding: '10px 14px', marginBottom: 14,
+      fontSize: 12, color: '#d29922', display: 'flex', gap: 10, alignItems: 'flex-start',
+    }}>
+      <span style={{ fontSize: 15, lineHeight: '18px' }}>🧹</span>
+      <div>
+        <div style={{ fontWeight: 600, color: '#e3b341', marginBottom: 2 }}>Key hygiene in progress</div>
+        <div>
+          {pending.map(([provider, count]) => (
+            <span key={provider} style={{ display: 'inline-block', marginRight: 12 }}>
+              <code style={{ color: '#e6edf3' }}>{provider}</code> {count}/{hygiene.threshold} consecutive auth failures
+              {count >= hygiene.threshold ? ' — key auto-cleared 🚫' : ' — key will be auto-cleared at the threshold'}
+            </span>
+          ))}
+        </div>
+        <div style={{ marginTop: 4, color: '#9e6a03' }}>
+          After {hygiene.threshold} consecutive 401/403s the invalid key is removed from config; run{' '}
+          <code style={{ color: '#58a6ff' }}>buff config set providers.&lt;provider&gt;.apiKey &lt;real-key&gt;</code> to re-enable.
+        </div>
+      </div>
+    </div>
+  );
+}
+
 function ModelRegistrySection({ data }: { data: ModelRegistryInsights }) {
   if (!data.enabled) {
     return (
@@ -655,7 +688,16 @@ function ModelRegistrySection({ data }: { data: ModelRegistryInsights }) {
             <div className="stat-label">Flaky mid-stream</div>
           </div>
         </div>
+        <div className="stat-card">
+          <span className="stat-icon">🗑️</span>
+          <div className="stat-body">
+            <div className="stat-value" style={{ color: '#8b949e' }}>{data.deletedLocal ?? 0}</div>
+            <div className="stat-label">Deleted locally</div>
+          </div>
+        </div>
       </div>
+
+      {keyHygieneWarning(data.keyHygiene)}
 
       {data.providers.map((provider) => (
         <RegistryCard key={provider.provider} provider={provider} />

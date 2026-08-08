@@ -115,6 +115,14 @@ export interface ModelRegistryInsights {
    * so the panel hides the section when absent.
    */
   actionTelemetry?: ActionTelemetryInsights;
+  /**
+   * ISSUE-004: key-hygiene state — per-provider consecutive 401/403 counters
+   * climbing toward the auto-clear threshold (dead keys are cleared from
+   * config at 3). Optional: older servers don't send it.
+   */
+  keyHygiene?: { threshold: number; consecutive: Record<string, number> };
+  /** ISSUE-004: verified local models demoted because they were deleted from the machine. */
+  deletedLocal?: number;
   updatedAt: number;
 }
 
