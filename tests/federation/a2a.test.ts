@@ -12,7 +12,29 @@
 import { describe, it, expect, beforeAll, afterAll } from 'vitest';
 import { request as httpRequest } from 'node:http';
 import { createServer, type AddressInfo } from 'node:net';
+import { mkdtempSync, rmSync, writeFileSync, mkdirSync } from 'node:fs';
+import { join } from 'node:path';
+import { tmpdir } from 'node:os';
 
+// ─── Hermetic config dir ────────────────────────────────────────────────────
+// The delegated-task tests spin a REAL A2A server whose Orchestrator processes
+// the goal. With a working machine model it actually runs the full pipeline
+// (slow → 30s timeout). Pinning BUFF_CONFIG_DIR to a temp config with a
+// NONEXISTENT local model makes the pipeline fail fast (model-not-found), the
+// behavior these tests were written against.
+const a2aCfgDir = mkdtempSync(join(tmpdir(), 'buff-a2a-cfg-'));
+const origA2aConfigDir = process.env.BUFF_CONFIG_DIR;
+process.env.BUFF_CONFIG_DIR = a2aCfgDir;
+mkdirSync(a2aCfgDir, { recursive: true });
+writeFileSync(
+  join(a2aCfgDir, 'buffconfig.json'),
+  JSON.stringify({
+    defaultProvider: 'local',
+    providers: {
+      local: { runner: 'ollama', model: 'nonexistent-fast-fail', temperature: 0.7, maxTokens: 1024 },
+    },
+  }),
+);
 
 import {
   A2A_PROTOCOL_VERSION,
@@ -34,6 +56,12 @@ import {
   delegateAndWait,
   checkA2AHealth,
 } from '../../src/federation/a2a-client.js';
+
+afterAll(() => {
+  rmSync(a2aCfgDir, { recursive: true, force: true });
+  if (origA2aConfigDir === undefined) delete process.env.BUFF_CONFIG_DIR;
+  else process.env.BUFF_CONFIG_DIR = origA2aConfigDir;
+});
 
 // ─── Tests: Types & Constants ───────────────────────────────────────────────
 

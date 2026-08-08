@@ -13,18 +13,35 @@
  * - empty prompts pass through
  */
 
-import { describe, it, expect, beforeEach, afterEach } from 'vitest';
-import { mkdtempSync, rmSync } from 'node:fs';
+import { describe, it, expect, beforeEach, afterEach, afterAll } from 'vitest';
+import { mkdtempSync, rmSync, writeFileSync, mkdirSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { Orchestrator } from '../../src/agents/orchestrator.js';
 import { ConfigManager } from '../../src/config/manager.js';
 
-// ─── Hermetic memory dir ────────────────────────────────────────────────────
+// ─── Hermetic memory + config dirs ──────────────────────────────────────────
 // execute() begins a reasoning trace (P0) on every run — pin BUFF_MEMORY_DIR
-// to a temp dir so trace writes never leak into the real ~/.buff.
+// to a temp dir so trace writes never leak into the real ~/.buff. BUFF_CONFIG_DIR
+// is ALSO pinned: the pass-through tests call the real local provider, and the
+// machine's live model would actually generate (slow → timeout). A temp config
+// pinning local to a NONEXISTENT model fails fast (the model-not-found path),
+// keeping these tests hermetic regardless of which models are installed.
 const traceDir = mkdtempSync(join(tmpdir(), 'buff-injection-guardrail-'));
 process.env.BUFF_MEMORY_DIR = join(traceDir, '.buff', 'memory');
+const cfgDir = mkdtempSync(join(tmpdir(), 'buff-injection-guardrail-cfg-'));
+const origConfigDir = process.env.BUFF_CONFIG_DIR;
+process.env.BUFF_CONFIG_DIR = cfgDir;
+mkdirSync(cfgDir, { recursive: true });
+writeFileSync(
+  join(cfgDir, 'buffconfig.json'),
+  JSON.stringify({
+    defaultProvider: 'local',
+    providers: {
+      local: { runner: 'ollama', model: 'nonexistent-fast-fail', temperature: 0.7, maxTokens: 1024 },
+    },
+  }),
+);
 
 // ─── Helpers ────────────────────────────────────────────────────────────────
 
@@ -135,8 +152,17 @@ describe('injection guardrail in createLLMProvider', () => {
 
 // ─── Integration: error handling in executeSingleTask ───────────────────────
 
+// Clean the trace dir after each run; the hermetic CONFIG dir stays alive for
+// the whole file (every test constructs a fresh ConfigManager) and is removed
+// once in afterAll below.
 afterEach(() => {
   rmSync(traceDir, { recursive: true, force: true });
+});
+
+afterAll(() => {
+  rmSync(cfgDir, { recursive: true, force: true });
+  if (origConfigDir === undefined) delete process.env.BUFF_CONFIG_DIR;
+  else process.env.BUFF_CONFIG_DIR = origConfigDir;
 });
 
 describe('injection guardrail integration with executeSingleTask', () => {
