@@ -1132,8 +1132,10 @@ describe('Orchestrator — auto model resolution', () => {
     expect(generate).toHaveBeenCalledTimes(1);
     const options = generate.mock.calls[0][1];
     expect(options.model).not.toBe('auto');
-    // Falls back to the provider's configured model (local default is 'llama2')
-    expect(options.model).toBe('llama2');
+    // Falls back to the provider's configured model — derive it from the same
+    // config the orchestrator reads (never hardcode a machine-specific pin).
+    const { config } = cm.getProviderConfig('local');
+    expect(options.model).toBe(config.model || 'default');
   });
 
   it('should never pass provider "auto" to ProviderFactory when createLLMProvider is called', async () => {

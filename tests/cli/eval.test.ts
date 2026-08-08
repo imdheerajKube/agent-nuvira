@@ -14,7 +14,7 @@
  */
 
 import { describe, it, expect, beforeEach, afterEach, beforeAll, afterAll, vi } from 'vitest';
-import { mkdtempSync, rmSync } from 'node:fs';
+import { mkdtempSync, rmSync, writeFileSync, mkdirSync } from 'node:fs';
 import { join } from 'node:path';
 import { getEvalTasks, runEvalSuite } from '../../src/learning/eval-framework.js';
 import { resolveProvider } from '../../src/cli/router.js';
@@ -24,13 +24,37 @@ import { EvalCommand } from '../../src/cli/eval.js';
 // ─── Isolate routing-history writes (routing mode records decisions) ────────
 const TMP_BASE = process.env.TMPDIR || process.env.TMP || '/tmp';
 const tmpMemoryDir = mkdtempSync(join(TMP_BASE, 'buff-eval-test-'));
+// Hermetic config dir for the placeholder-key guard test (eval reads
+// BUFF_CONFIG_DIR/buffconfig.json for the resolved provider's key).
+const tmpConfigDir = mkdtempSync(join(TMP_BASE, 'buff-eval-cfg-'));
+let originalConfigDir: string | undefined;
+
 beforeAll(() => {
   process.env.BUFF_MEMORY_DIR = join(tmpMemoryDir, '.buff', 'memory');
+  originalConfigDir = process.env.BUFF_CONFIG_DIR;
+  process.env.BUFF_CONFIG_DIR = tmpConfigDir;
+  mkdirSync(tmpConfigDir, { recursive: true });
+  // A provider pinned with a placeholder key (the "openrouter-env-key" class).
+  writeFileSync(
+    join(tmpConfigDir, 'buffconfig.json'),
+    JSON.stringify({
+      defaultProvider: 'auto',
+      providers: {
+        openrouter: {
+          model: 'mistralai/mistral-7b-instruct',
+          apiKey: 'openrouter-env-key',
+        },
+      },
+    }),
+  );
 });
 
 afterAll(() => {
   delete process.env.BUFF_MEMORY_DIR;
+  if (originalConfigDir === undefined) delete process.env.BUFF_CONFIG_DIR;
+  else process.env.BUFF_CONFIG_DIR = originalConfigDir;
   rmSync(tmpMemoryDir, { recursive: true, force: true });
+  rmSync(tmpConfigDir, { recursive: true, force: true });
 });
 
 // ─── Module mocks (hoisted before imports) ─────────────────────────────────
@@ -182,6 +206,25 @@ describe('EvalCommand --routing', () => {
     expect(runEvalSuite).not.toHaveBeenCalled();
     expect(output).toContain('is not available');
     expect(output).toContain('No router picks could be evaluated');
+  });
+
+  it('ISSUE-004 guard: refuses to evaluate a provider pinned with a placeholder API key', async () => {
+    const output = await runCommand(['run', '-p', 'openrouter']);
+
+    // The guard fires BEFORE any availability probe or suite run.
+    expect(runEvalSuite).not.toHaveBeenCalled();
+    expect(output).toContain('placeholder API key');
+    expect(output).toContain('openrouter-env-key');
+    expect(output).toContain('Set a real key: buff config set providers.openrouter.apiKey <real-key>');
+  });
+
+  it('ISSUE-004 guard: warns (not refuses) when an explicit --model is passed with a placeholder-keyed provider', async () => {
+    const output = await runCommand(['run', '-p', 'openrouter', '-m', 'some-model']);
+
+    // Explicit model override → warn loudly but let the run proceed.
+    expect(output).toContain('placeholder API key');
+    expect(output).toContain('cannot fix a dead key');
+    expect(runEvalSuite).toHaveBeenCalled();
   });
 
   it('ISSUE-003: resolves with the FULL chat/orchestrator feature set (bandit, quota, runtime stats, floors, paid gate)', async () => {
