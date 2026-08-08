@@ -9,6 +9,38 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **Dynamic provider catalog (Issue 001) — ALL 17+ configured providers join routing.** A new `src/inference/provider-catalog.ts` is the single source of truth for 21 providers (id, label, env var, base URL, OpenAI-compat flag, keyless flag, api-key header, api-version query, capability profile, list pricing, context window). Routing/probing/CLI discovery are now derived at runtime from the user's credentials instead of hardcoded built-ins:
+  - `ConfigManager` maps EVERY catalog env var (`OPENAI_API_KEY`, `ANTHROPIC_API_KEY`, `MISTRAL_API_KEY`, `DEEPINFRA_TOKEN`, `REPLICATE_API_TOKEN`, ...) into config, and keyless catalog providers (local, nuvira, lmstudio, vllm) count as configured (reachability probed).
+  - `rankAvailableProviders` + the auto-router's `getDefaultAllowedProviders` consider every catalog provider with real credentials (registry-block-aware), falling back to the built-ins only when nothing is configured — a user who sets `OPENAI_API_KEY` now sees OpenAI scored and routed to.
+  - Capability profiles, list pricing, and context windows fall back to the catalog for extended providers (real metadata, never a neutral guess).
+  - `OpenAICompatAdapter` (generalized from NuviraAdapter) serves every OpenAI-compatible catalog provider via metadata — baseUrl, `api-key` header + api-version query for Azure, etc.; `AnthropicAdapter` serves Anthropic's native Messages API (streaming + measured usage).
+  - `buff models refresh` probes every configured provider; `buff provider list/health`, `buff models`, `buff doctor`, and the model picker list the full catalog with real env-var hints.
+
+- **ISSUE-002 — the router now leverages the data it already gathers.** Auto routing decisions are driven by (and cite) the registry's real telemetry:
+  - **Registry pre-filter strength**: a provider with ZERO verified models AND ≥3 unavailable entries is DEGRADED — excluded from candidates even when credentials exist, so a dead provider (0 verified, N unavailable) can never win a task it would fail (`ModelRegistry.getDegradedProviders` + `getProviderStats`).
+  - **Bandit learning ON by default**: `routing.bandit` now defaults to enabled (opt out with `buff config set routing.bandit false`) in chat, the orchestrator, and outcome recording — the Thompson-sampling bandit actually improves routing from real results instead of collecting dust. Cold start is DETERMINISTIC (untouched Beta(1,1) priors sample the mean), so enabling it never randomizes an unlearned ranking — it only shifts routing once real outcomes accumulate.
+  - **Context-window transparency**: scored providers now carry a `contextWindowSource` ('live' | 'override' | 'provider' | 'default'); estimate/default windows are flagged in the reason and preflight snapshot, so "no advertised spec" is never silently treated like a real one.
+  - **Explanation transparency**: the decision explanation cites the registry counts that excluded a provider (e.g. `excluded: openrouter (0 verified models, 9 unavailable)`) via the new `registryExcluded` audit field — users can see the gathered data is driving every auto decision.
+
+- **ISSUE-004 — invalid API keys are deleted and stale local models are purged (config hygiene).**
+  - **Key auto-clear after N consecutive 401/403s**: a new `KeyHygiene` store counts consecutive auth failures per provider (`AUTH_CLEAR_THRESHOLD = 3`, persisted across restarts). At the threshold `ConfigManager.clearProviderApiKey(provider, failedKey)` removes the SPECIFIC dead credential — the primary `apiKey` or a matching `apiKeys[]` rotation entry — and the user sees `🚫 ... the invalid API key has been CLEARED ... buff config set providers.X.apiKey <real-key>`. Env-sourced keys (value equals the catalog env var) are NOT cleared from the file — the user is told to unset/fix the env var instead. The counter resets only when the key was actually handled (a throwing clear retries on the next failure); a real success also resets it so one blip never clears a valid key. Hooked into the single `recordActionFailure` auth path (covers chat/execute/plan/edit/failover) + `recordRegistrySuccess`.
+  - **Stale local-model purge**: `ModelRegistry.pruneAbsentModels` removes entries for models the user deleted from the local system (e.g. `ollama rm`) — unverified/unavailable entries deleted, verified entries demoted to `unavailable` ("model deleted from local system") so a partial `listModels()` response never destroys learned telemetry. Wired into `buff models refresh` for KEYLESS runners only (local/nuvira/lmstudio/vllm — authoritative lists). Keyed providers are never pruned (remote catalogs can legitimately drop models). `RefreshResult.prunedLocal` + the refresh summary report the removed count.
+
+- **ISSUE-003 — the router's full feature set now fires at EVERY action point, not just chat.** A single shared `buildAutoResolveOptions` helper assembles the complete option set chat + the orchestrator pass (bandit learning ON by default, quota-ledger status, runtime stats, cost/speed/reasoning floors, paid-model gate) and every other entry point routes through it:
+  - `buff plan` — the route callback now resolves with the FULL feature set (previously only the context-hint token estimate), so a plan's ranked failover walk is driven by the same learned, quota-aware, registry-filtered ranking as chat.
+  - `buff eval --routing` / `buff benchmark` / `buff model explain` — scored picks now run through bandit + quota + floors + paid gate instead of a bare runtime-stats resolve, so the measured quality reflects the real production routing path.
+  - `buff edit` — NEW `--auto-route` flag (or `--provider auto` / `--model auto`) drives the edit through the shared ranked walk (`runSingleShotAuto`): auto-router primary pick, ranked failover for ALL failure classes, key rotation, session exclusion, and per-action 'edit' registry attribution. The legacy explicit-provider path is unchanged.
+
+### Changed
+
+- `ProviderFactory` resolves all 21 catalog ids (dedicated adapters for the built-ins, generic/native adapters for the extended set).
+- NuviraAdapter is now a thin subclass of OpenAICompatAdapter (behavior contract unchanged).
+- **Cold-start guard (review fix):** keyless runners BEYOND `local` (nuvira, lmstudio, vllm) only join the ROUTING candidate pool once the registry verifies them or the user configures them explicitly — a not-running localhost endpoint can never out-rank a running Ollama on a fresh machine. `buff models refresh` still probes the full configured set.
+- **Azure OpenAI works out of the box (review fix):** `AZURE_OPENAI_ENDPOINT` maps into `providers.azure.baseUrl`, and the generic adapter builds the real Azure shape (`/openai/deployments/{model}/chat/completions?api-version=…`, `api-key` header, `/openai/models`).
+- **CLI probe fast-path (review fix):** `buff models` and the model picker skip network availability probes for providers with no configured key (and not keyless) — no more waiting on 16 dead endpoints.
+
 ## [1.60.4] - 2026-08-07
 
 ### Added

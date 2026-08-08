@@ -530,10 +530,11 @@ describe('showModelPicker', () => {
       }),
     });
 
-    // Main menu (1 = Auto, 2 = OpenRouter model, 3 = browse) → provider 2 (Groq) → cancel
+    // Main menu (1 = Auto, 2 = OpenRouter model, 3 = browse) → provider 1
+    // (Groq — catalog order puts groq before openrouter, Issue 001) → cancel.
     vi.spyOn(inquirer, 'prompt')
       .mockResolvedValueOnce({ selected: '3' }) // browse
-      .mockResolvedValueOnce({ selected: '2' }) // Groq
+      .mockResolvedValueOnce({ selected: '1' }) // Groq
       .mockResolvedValueOnce({ selected: '0' }); // cancel at provider list
 
     const result = await showModelPicker(mockConfigManager);

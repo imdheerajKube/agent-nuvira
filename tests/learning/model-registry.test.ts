@@ -159,6 +159,69 @@ describe('ModelRegistry — probe / spot-check lifecycle', () => {
     expect(registry.getBlockedProviders()).not.toContain('gemini');
   });
 
+  it('getDegradedProviders flags a provider with 0 verified + ≥3 unavailable (ISSUE-002 pre-filter)', () => {
+    const registry = new ModelRegistry();
+    // openrouter: 3 unavailable, 0 verified → DEGRADED by the explicit
+    // 0-verified + ≥3-unavailable rule (the router's registry pre-filter).
+    registry.markUnavailable('openrouter', 'openai/gpt-4o', '401', 'telemetry');
+    registry.markUnavailable('openrouter', 'openai/gpt-4o-mini', '401', 'telemetry');
+    registry.markUnavailable('openrouter', 'anthropic/claude-3.5-sonnet', '401', 'telemetry');
+    // gemini: only 2 unavailable + 1 verified — NOT degraded (has a working model).
+    registry.markVerified('gemini', 'gemini-2.5-flash', 'spot-check');
+    registry.markUnavailable('gemini', 'gemini-1.5-pro', '403', 'telemetry');
+    registry.markUnavailable('gemini', 'gemini-2.0-flash', '403', 'telemetry');
+    // groq: only 1 unavailable — NOT degraded (below the threshold).
+    registry.markUnavailable('groq', 'llama-3.3-70b-versatile', 'auth', 'telemetry');
+    // A verified (usable) provider is never degraded even with dead models
+    // alongside — nim verifies one model after accumulating failures.
+    registry.markUnavailable('nim', 'meta/llama-3.3-70b-instruct', '503', 'telemetry');
+    registry.markUnavailable('nim', 'meta/llama-3.1-8b-instruct', '503', 'telemetry');
+    registry.markUnavailable('nim', 'mistralai/mixtral-8x7b', '503', 'telemetry');
+    registry.markVerified('nim', 'meta/llama-3.3-70b-instruct', 'spot-check');
+
+    expect(registry.getDegradedProviders().sort()).toEqual(['openrouter']);
+    // Consistency: an all-models-unavailable provider is ALSO blocked by the
+    // existing (stricter) check — the degraded rule is the explicit
+    // thresholded form of the same registry knowledge.
+    expect(registry.getBlockedProviders()).toContain('openrouter');
+    // gemini/nim keep a verified model → neither blocked nor degraded.
+    expect(registry.getBlockedProviders()).not.toContain('gemini');
+    expect(registry.getDegradedProviders()).not.toContain('gemini');
+    expect(registry.getDegradedProviders()).not.toContain('nim');
+  });
+
+  it('getDegradedProviders does not flag a provider that later verifies a model (recovery)', () => {
+    const registry = new ModelRegistry();
+    registry.markUnavailable('nim', 'meta/llama-3.3-70b-instruct', '503', 'telemetry');
+    registry.markUnavailable('nim', 'meta/llama-3.1-8b-instruct', '503', 'telemetry');
+    registry.markUnavailable('nim', 'mistralai/mixtral-8x7b', '503', 'telemetry');
+    expect(registry.getDegradedProviders()).toContain('nim');
+    // One genuine verification proves the provider serves again → not degraded.
+    registry.markVerified('nim', 'meta/llama-3.3-70b-instruct', 'spot-check');
+    expect(registry.getDegradedProviders()).not.toContain('nim');
+  });
+
+  it('getProviderStats cites verified/unverified/unavailable/parked counts per provider', () => {
+    const registry = new ModelRegistry();
+    registry.markVerified('gemini', 'gemini-2.5-flash', 'spot-check');
+    registry.markListed('gemini', ['gemini-1.5-pro']);
+    registry.markUnavailable('gemini', 'gemini-2.0-flash', '403', 'telemetry');
+    registry.markUnavailable('gemini', 'gemini-1.0-pro', '403', 'telemetry');
+
+    const stats = registry.getProviderStats('gemini');
+    expect(stats.verified).toBe(1);
+    expect(stats.unverified).toBe(1);
+    expect(stats.unavailable).toBe(2);
+    expect(stats.parked).toBe(0);
+    // Parking the whole provider flips the count to parked (parked wins).
+    registry.parkProvider('gemini', Date.now() + 60_000);
+    const parked = registry.getProviderStats('gemini');
+    expect(parked.parked).toBe(4);
+    expect(parked.verified).toBe(0);
+    // Untracked provider → all zeros, never throws.
+    expect(registry.getProviderStats('untracked')).toEqual({ verified: 0, unverified: 0, unavailable: 0, parked: 0 });
+  });
+
   it('recordCall failures feed getBlockedProviders (chat telemetry → predictive skip)', () => {
     const registry = new ModelRegistry();
     registry.recordCall('gemini', 'gemini-2.5-flash', false, 'auth');
@@ -475,6 +538,47 @@ describe('ModelRegistry — quota parking & telemetry', () => {
     expect(demoted).toBe(1);
     expect(registry.isUsable('gemini', 'gemini-2.5-flash')).toBe(false);
     expect(registry.getEntry('gemini', 'gemini-2.5-flash')?.status).toBe('unverified');
+  });
+
+  it('pruneAbsentModels removes entries for models deleted from the local system', () => {
+    const registry = new ModelRegistry();
+    registry.markListed('local', [{ id: 'still-here' }, { id: 'deleted-by-user' }]);
+
+    // The user ran `ollama rm deleted-by-user` — the next refresh lists only
+    // the surviving model.
+    const pruned = registry.pruneAbsentModels('local', ['still-here']);
+    expect(pruned).toBe(1);
+    expect(registry.getEntry('local', 'deleted-by-user')).toBeUndefined();
+    expect(registry.getEntry('local', 'still-here')).toBeDefined();
+  });
+
+  it('pruneAbsentModels DEMOTES verified-but-absent models instead of deleting them (preserves learned telemetry)', () => {
+    const registry = new ModelRegistry();
+    registry.markListed('local', [{ id: 'verified-model' }]);
+    registry.markVerified('local', 'verified-model', 'telemetry', 120, 'chat');
+
+    // A PARTIAL listModels response (model mid-pull / gateway hiccup) — the
+    // verified model is absent this pass but its history must survive.
+    const pruned = registry.pruneAbsentModels('local', []);
+    expect(pruned).toBe(1);
+    const entry = registry.getEntry('local', 'verified-model');
+    expect(entry).toBeDefined();
+    expect(entry!.status).toBe('unavailable');
+    expect(entry!.lastError).toContain('model deleted from local system');
+    // Learned telemetry survives the demote.
+    expect(entry!.latencyMs).toBe(120);
+  });
+
+  it('pruneAbsentModels never removes entries from OTHER providers', () => {
+    const registry = new ModelRegistry();
+    registry.markListed('local', [{ id: 'local-model' }]);
+    registry.markListed('gemini', [{ id: 'gemini-model' }]);
+
+    const pruned = registry.pruneAbsentModels('local', ['different-local-model']);
+    expect(pruned).toBe(1);
+    // The gemini entry is untouched — pruning is scoped to the provider.
+    expect(registry.getEntry('gemini', 'gemini-model')).toBeDefined();
+    expect(registry.getEntry('local', 'local-model')).toBeUndefined();
   });
 
   it('resolveVerifiedModel prefers curated candidates, falls back to any verified', () => {

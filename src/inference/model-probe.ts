@@ -26,12 +26,39 @@ import type { InferenceProvider } from './interface.js';
 import { getModelRegistry } from '../learning/model-registry.js';
 import { classifyFallbackError, type FallbackErrorType } from '../learning/provider-fallback.js';
 import { getEventBus, EventNames } from '../observability/event-bus.js';
+import { CATALOG_PROVIDER_IDS, isCatalogKeyless } from './provider-catalog.js';
 import { logger } from '../utils/logger.js';
 
 // ─── Constants ──────────────────────────────────────────────────────────────
 
-/** Built-in providers considered by the probe (same set the auto-router uses). */
+/**
+ * Fallback provider set for the probe when nothing is configured (kept for
+ * backward-compat imports). `defaultProbeProviders()` below is the DYNAMIC
+ * set (Issue 001): every catalog provider the user has credentials for.
+ */
 export const PROBE_PROVIDERS = ['local', 'groq', 'gemini', 'nim', 'openrouter'];
+
+/**
+ * DYNAMIC default probe set (Issue 001): every catalog provider the user can
+ * actually reach — keyed providers with a real key, plus keyless providers
+ * (local, nuvira, lmstudio, vllm — reachability is probed, never assumed).
+ * A user who sets OPENAI_API_KEY / ANTHROPIC_API_KEY / ... gets those
+ * providers probed + spot-checked automatically.
+ */
+export function defaultProbeProviders(configManager: ConfigManager): string[] {
+  try {
+    const withCreds = CATALOG_PROVIDER_IDS.filter((p) => {
+      try {
+        return isCatalogKeyless(p) || configManager.hasRequiredCredentials(p);
+      } catch {
+        return false;
+      }
+    });
+    return withCreds.length > 0 ? withCreds : PROBE_PROVIDERS;
+  } catch {
+    return PROBE_PROVIDERS;
+  }
+}
 
 /** The one-token probe prompt — tiny, deterministic, near-free. */
 export const SPOT_CHECK_PROMPT = 'Reply with the single word: ok';
@@ -201,6 +228,8 @@ export interface RefreshResult {
   unavailable: number;
   skipped: number;
   errors: number;
+  /** ISSUE-004 (4c): stale local-model entries purged (user deleted the model). */
+  prunedLocal: number;
 }
 
 /**
@@ -210,7 +239,9 @@ export interface RefreshResult {
  */
 export async function refreshModelRegistry(configManager: ConfigManager, options: RefreshOptions = {}): Promise<RefreshResult> {
   const registry = getModelRegistry();
-  const providers = options.providers || PROBE_PROVIDERS;
+  // Dynamic default (Issue 001): all configured providers, not just the 5
+  // built-ins — a configured OPENAI_API_KEY gets probed without hardcoding.
+  const providers = options.providers || defaultProbeProviders(configManager);
   const spotCheckEnabled = options.spotCheck !== false;
   const maxChecks = options.maxSpotChecksPerProvider ?? 5;
 
@@ -221,6 +252,7 @@ export async function refreshModelRegistry(configManager: ConfigManager, options
     unavailable: 0,
     skipped: 0,
     errors: 0,
+    prunedLocal: 0,
   };
 
   for (const providerType of providers) {
@@ -231,6 +263,22 @@ export async function refreshModelRegistry(configManager: ConfigManager, options
       if (listed.length === 0) {
         options.onProgress?.(label, 'no models listed (no key / unreachable)');
         continue;
+      }
+      // ISSUE-004 (4c): for KEYLESS/LOCAL runners the live list is
+      // AUTHORITATIVE — if the user deleted a model from the system (e.g.
+      // `ollama rm`), purge its stale registry entry so it stops being checked
+      // every time. Never prunes keyed providers (their lists are portals to
+      // large catalogs, not the local disk).
+      if (isCatalogKeyless(providerType)) {
+        try {
+          const pruned = getModelRegistry().pruneAbsentModels(providerType, listed);
+          if (pruned > 0) {
+            result.prunedLocal += pruned;
+            options.onProgress?.(label, `${pruned} stale local model(s) removed (deleted from system)`);
+          }
+        } catch {
+          // Best-effort — pruning must never break the refresh.
+        }
       }
       result.providersProbed.push(providerType);
       options.onProgress?.(label, `${listed.length} models listed`);
@@ -326,7 +374,7 @@ export function startRegistryWatcher(
   let stopped = false;
 
   const runOnce = async (): Promise<RefreshResult> => {
-    if (stopped) return { providersProbed: [], modelsListed: 0, verified: 0, unavailable: 0, skipped: 0, errors: 0 };
+    if (stopped) return { providersProbed: [], modelsListed: 0, verified: 0, unavailable: 0, skipped: 0, errors: 0, prunedLocal: 0 };
     const result = await refreshModelRegistry(configManager, options);
     logger.info(
       `Model registry refreshed — ${result.providersProbed.length} provider(s), ` +

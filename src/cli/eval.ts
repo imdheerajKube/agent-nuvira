@@ -24,6 +24,7 @@ import ora from 'ora';
 import { BaseCommand } from './commands.js';
 import { resolveProvider } from './router.js';
 import { getAutoRouter } from '../learning/auto-router.js';
+import { buildAutoResolveOptions } from '../learning/resolve-options.js';
 import { recordRoutingDecision } from '../learning/routing-history.js';
 import { logger } from '../utils/logger.js';
 import {
@@ -148,7 +149,10 @@ export class EvalCommand extends BaseCommand {
     // Ask the Auto router which provider/model it would pick for each task
     const picks = new Map<string, { provider: string; model: string; tasks: number }>();
     for (const t of tasks) {
-      const d = router.resolve('chat', t.goal, { useRuntimeStats: true }, this.configManager);
+      // ISSUE-003: eval routes with the SAME full feature set as chat / the
+      // orchestrator (bandit, quota, runtime stats, floors, paid gate) so the
+      // measured quality reflects the real production routing path.
+      const d = router.resolve('chat', t.goal, buildAutoResolveOptions(this.configManager), this.configManager);
       // Record for the dashboard audit trail + usage stats
       recordRoutingDecision({
         source: 'eval',

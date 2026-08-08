@@ -187,13 +187,27 @@ describe('recordOutcome', () => {
 // ─── sampleScore ───────────────────────────────────────────────────────────
 
 describe('sampleScore', () => {
-  it('cold start returns the deterministic score scaled by a uniform draw', () => {
+  it('cold start is DETERMINISTIC — untouched Beta(1,1) priors sample the mean (ISSUE-002)', () => {
+    // The bandit is on by default now, so a cold start MUST NOT randomize the
+    // heuristic ranking (a uniform draw would let a 0.5 provider beat a 0.9
+    // one by chance). Untouched priors sample the mean (0.5), which scales
+    // every provider identically → the deterministic ordering is preserved.
     const bandit = new RouterBandit();
     for (let i = 0; i < 20; i++) {
       const s = bandit.sampleScore('groq', 'moderate', 0.8);
-      expect(s).toBeGreaterThan(0);
-      expect(s).toBeLessThanOrEqual(0.8);
+      expect(s).toBe(0.4);
     }
+  });
+
+  it('a single recorded outcome breaks cold-start determinism (sampling resumes)', () => {
+    const bandit = new RouterBandit();
+    bandit.recordOutcome('groq', 'implement a login form', 'success', 1.0);
+    const values = new Set<number>();
+    for (let i = 0; i < 20; i++) {
+      values.add(bandit.sampleScore('groq', 'moderate', 0.8));
+    }
+    // With real data the draws vary (Thompson sampling) — not a constant mean.
+    expect(values.size).toBeGreaterThan(1);
   });
 
   it('positive history skews the sample upward vs a fresh prior', () => {

@@ -316,6 +316,44 @@ describe('ModelProbe — refresh orchestration', () => {
   it('reports the throttle-window constant for CI visibility', () => {
     expect(SPOT_CHECK_MIN_INTERVAL_MS).toBe(10 * 60 * 1000);
   });
+
+  it('ISSUE-004: purges stale local models the user deleted from the system (keyless runners)', async () => {
+    // Seed a stale entry that no longer exists on the local runner.
+    const registry = getModelRegistry();
+    registry.markListed('lmstudio', [{ id: 'deleted-model' }]);
+    expect(registry.getEntry('lmstudio', 'deleted-model')).toBeDefined();
+
+    // lmstudio now lists ONLY the surviving model — the deleted one is gone.
+    mockFactory(() => makeProvider({ models: [{ id: 'survivor' }] }));
+    const cm = makeConfigManager(() => makeProvider({ models: [{ id: 'survivor' }] }));
+    const result = await refreshModelRegistry(cm, {
+      providers: ['lmstudio'],
+      spotCheck: false,
+    });
+
+    // The absent entry was pruned and reported in the result summary.
+    expect(result.prunedLocal).toBe(1);
+    expect(registry.getEntry('lmstudio', 'deleted-model')).toBeUndefined();
+    // The surviving model is listed normally.
+    expect(registry.getEntry('lmstudio', 'survivor')?.status).toBe('unverified');
+  });
+
+  it('ISSUE-004: does NOT prune keyed providers (their lists are portals, not local disk)', async () => {
+    const registry = getModelRegistry();
+    registry.markListed('gemini', [{ id: 'stale-remote' }]);
+
+    mockFactory(() => makeProvider({ models: [{ id: 'gemini-2.5-flash' }] }));
+    const cm = makeConfigManager(() => makeProvider({ models: [{ id: 'gemini-2.5-flash' }] }));
+    const result = await refreshModelRegistry(cm, {
+      providers: ['gemini'],
+      spotCheck: false,
+    });
+
+    // Keyed providers never prune — a remote catalog can legitimately drop a
+    // model temporarily without the user deleting anything.
+    expect(result.prunedLocal).toBe(0);
+    expect(registry.getEntry('gemini', 'stale-remote')).toBeDefined();
+  });
 });
 
 describe('ModelProbe — event-driven wakeup (watch daemon reacts to mid-session changes)', () => {

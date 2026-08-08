@@ -59,11 +59,22 @@ describe('model selection — dynamic defaults (nothing hardcoded)', () => {
   });
 
   describe('rankAvailableProviders', () => {
-    it('never assumes a cloud provider — a user with NO keys gets local (zero-config) only', () => {
+    it('never assumes a cloud provider — a user with NO keys gets local (the universal zero-config fallback) only', () => {
+      // Issue 001: no cloud provider is ever assumed. `local` is the universal
+      // zero-config fallback; the OTHER keyless runners (nuvira, lmstudio,
+      // vllm) only join once the registry VERIFIES them or the user configures
+      // them explicitly — a not-running localhost endpoint must never
+      // out-rank running local on a cold start.
       const ranked = rankAvailableProviders(makeConfig([]));
-      expect(ranked).toHaveLength(2); // local + nuvira (keyless)
+      expect(ranked).toHaveLength(1);
       expect(ranked[0].provider).toBe('local');
       expect(ranked[0].verifiedModels).toEqual([]);
+      // Once verified, the other keyless runners join the pool.
+      const registry = getModelRegistry();
+      registry.markVerified('lmstudio', 'local-model', 'telemetry');
+      const afterVerify = rankAvailableProviders(makeConfig([])).map((r) => r.provider);
+      expect(afterVerify).toContain('lmstudio');
+      expect(afterVerify).toContain('local');
     });
 
     it('puts providers with VERIFIED models first, in learned-health order', () => {
@@ -79,6 +90,21 @@ describe('model selection — dynamic defaults (nothing hardcoded)', () => {
       // unverified-but-configured providers come after verified ones
       expect(ranked.map((r) => r.provider)).toContain('nim');
       expect(ranked[2].provider).toBe('nim');
+    });
+
+    it('includes extended catalog providers the user has keys for (Issue 001)', () => {
+      // A user who sets OPENAI_API_KEY / ANTHROPIC_API_KEY gets those
+      // providers ranked — the candidate pool is the full catalog, not the
+      // old 6 built-ins.
+      const ranked = rankAvailableProviders(makeConfig(['groq', 'openai', 'anthropic', 'deepseek']));
+      const providers = ranked.map((r) => r.provider);
+      expect(providers).toContain('openai');
+      expect(providers).toContain('anthropic');
+      expect(providers).toContain('deepseek');
+      // Without keys they stay out.
+      const noKey = rankAvailableProviders(makeConfig(['groq'])).map((r) => r.provider);
+      expect(noKey).not.toContain('openai');
+      expect(noKey).not.toContain('anthropic');
     });
 
     it('excludes providers the registry has definitively blocked', () => {

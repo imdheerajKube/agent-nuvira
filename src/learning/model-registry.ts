@@ -264,6 +264,12 @@ export const MAX_PARTIAL_HISTORY = 16;
 const VECTOR_SNAPSHOT_ID = 'snapshot';
 /** Verified entries older than this are demoted to `unverified` on prune. */
 export const DEFAULT_STALE_MS = 7 * 24 * 60 * 60 * 1000; // 7 days
+/**
+ * Minimum unavailable entries (with zero verified models) before a provider is
+ * deemed DEGRADED by `getDegradedProviders()` — the registry pre-filter that
+ * stops the router from scoring a provider it already knows is dead. ISSUE-002.
+ */
+export const DEGRADED_UNAVAILABLE_THRESHOLD = 3;
 
 function memoryDir(): string {
   return process.env.BUFF_MEMORY_DIR || DEFAULT_MEMORY_DIR;
@@ -501,6 +507,59 @@ export class ModelRegistry {
       if (definitive) blocked.push(provider);
     }
     return blocked;
+  }
+
+  /**
+   * Providers the registry has effectively written off: ZERO verified models
+   * AND at least DEGRADED_UNAVAILABLE_THRESHOLD (3) unavailable entries.
+   *
+   * Stronger than `getBlockedProviders()` (which requires EVERY tracked model
+   * to be unusable): a provider that has never verified a single model while
+   * accumulating ≥3 definitive failures is a dead candidate — it should not
+   * be scored, because the registry already knows it will fail. It stays
+   * excluded until a re-probe / spot-check verifies something or the user
+   * unblocks it (unblockProvider demotes to unverified, which no longer
+   * meets the degraded bar). Sync + sub-ms.
+   */
+  getDegradedProviders(now: number = Date.now()): string[] {
+    const byProvider = new Map<string, ModelRegistryEntry[]>();
+    for (const e of Object.values(this.data.entries)) {
+      const list = byProvider.get(e.provider);
+      if (list) list.push(e);
+      else byProvider.set(e.provider, [e]);
+    }
+    const degraded: string[] = [];
+    for (const [provider, entries] of byProvider) {
+      if (entries.some((e) => this.isUsable(provider, e.model, now))) continue;
+      const unavailable = entries.filter((e) => e.status === 'unavailable').length;
+      if (unavailable >= DEGRADED_UNAVAILABLE_THRESHOLD) degraded.push(provider);
+    }
+    return degraded;
+  }
+
+  /**
+   * Per-provider availability snapshot for a provider (sync) — the raw counts
+   * the router and `models explain` cite when a provider is excluded by
+   * registry data ("openrouter excluded — 0 verified, 6 unavailable").
+   */
+  getProviderStats(provider: string, now: number = Date.now()): {
+    verified: number;
+    unverified: number;
+    unavailable: number;
+    parked: number;
+  } {
+    let verified = 0;
+    let unverified = 0;
+    let unavailable = 0;
+    let parked = 0;
+    for (const e of Object.values(this.data.entries)) {
+      if (e.provider !== provider) continue;
+      if (e.quotaParkedUntil > now) parked++;
+      else if (e.status === 'verified') verified++;
+      else if (e.status === 'unavailable') unavailable++;
+      else unverified++;
+    }
+    return { verified, unverified, unavailable, parked };
   }
 
   /** Get the raw entry (for diagnostics). Sync. */
@@ -1200,6 +1259,52 @@ export class ModelRegistry {
     }
     if (demoted > 0) this.persist();
     return demoted;
+  }
+
+  /**
+   * ISSUE-004 (4c): clean up entries for models that no longer exist on the
+   * LOCAL system. When the user deletes a model (e.g. `ollama rm modelname`),
+   * the registry was still holding its entry and every probe/stats pass kept
+   * re-checking a model that's gone — the "deleted model is still checked every
+   * time" feedback.
+   *
+   * Only call this with an AUTHORITATIVE live list (the refresh probe of a
+   * keyless/local runner). Entries whose model is NOT in the list are handled:
+   *   - UNVERIFIED / UNAVAILABLE entries are DELETED entirely (never checked
+   *     again — they have no learned value worth keeping).
+   *   - VERIFIED entries are DEMOTED to `unavailable` with reason "model
+   *     deleted from local system" instead of being hard-deleted — a partial
+   *     listModels response (a model mid-pull, a gateway hiccup) must not
+   *     silently destroy the learned latency/token telemetry of a model that
+   *     may merely be temporarily unlisted. The demote keeps it out of routing
+   *     while preserving its history for re-verification.
+   *
+   * Returns the number of entries cleaned up (deleted + demoted). Best-effort
+   * — never throws.
+   */
+  pruneAbsentModels(provider: string, liveModels: string[]): number {
+    const live = new Set(liveModels);
+    const removedKeys: string[] = [];
+    const demotedKeys: string[] = [];
+    for (const [key, e] of Object.entries(this.data.entries)) {
+      if (e.provider !== provider || live.has(e.model)) continue;
+      if (e.status === 'verified') demotedKeys.push(key);
+      else removedKeys.push(key);
+    }
+    const now = Date.now();
+    for (const k of demotedKeys) {
+      const e = this.data.entries[k];
+      e.status = 'unavailable';
+      e.lastError = 'model deleted from local system';
+      e.lastProbedAt = now;
+    }
+    for (const k of removedKeys) delete this.data.entries[k];
+    const touched = demotedKeys.length + removedKeys.length;
+    if (touched > 0) {
+      this.persist();
+      this.emitUpdated([provider], `pruned ${touched} deleted local model(s)`, 'probe');
+    }
+    return touched;
   }
 
   // ─── Persistence ──────────────────────────────────────────────────────────

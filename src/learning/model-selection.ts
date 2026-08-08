@@ -22,36 +22,42 @@
 
 import type { ConfigManager } from '../config/manager.js';
 import { getModelRegistry } from './model-registry.js';
+import {
+  CATALOG_PROVIDER_IDS,
+  CATALOG_KEYLESS_IDS,
+  isCatalogKeyless,
+  catalogContextWindow,
+} from '../inference/provider-catalog.js';
 
 /** Built-in provider adapters shipped with the CLI — a catalog, not a preference. */
 export const BUILTIN_PROVIDERS = ['local', 'groq', 'gemini', 'nim', 'openrouter', 'nuvira'] as const;
 
 /**
  * Nominal provider-level context windows (tokens), used ONLY for the soft
- * context-fit estimate. Provider-level capability metadata (not per-model
- * names). Users override per-model via `routing.contextWindows[model]` when
- * the probe's live descriptors know better.
+ * context-fit estimate. Seeded from the provider catalog (the metadata home);
+ * users override per-model via `routing.contextWindows[model]` when the
+ * probe's live descriptors know better.
  */
-export const PROVIDER_CONTEXT_WINDOWS: Record<string, number> = {
-  local: 8_192, // Ollama default varies 4K–128K by model; assume modest
-  groq: 131_072,
-  gemini: 1_048_576,
-  nim: 128_000,
-  openrouter: 128_000,
-  nuvira: 131_072,
-};
+export const PROVIDER_CONTEXT_WINDOWS: Record<string, number> = {};
+for (const id of CATALOG_PROVIDER_IDS) {
+  const window = catalogContextWindow(id);
+  if (window !== undefined) PROVIDER_CONTEXT_WINDOWS[id] = window;
+}
 
-/** Keyless providers — usable with zero configuration (reachability still probed). */
-const KEYLESS_PROVIDERS = ['local', 'nuvira'] as const;
+/**
+ * Keyless providers — usable with zero configuration (reachability still
+ * probed). Derived from the catalog so every keyless entry participates
+ * (local, nuvira, lmstudio, vllm, ...).
+ */
+export const KEYLESS_PROVIDERS: string[] = [...CATALOG_KEYLESS_IDS];
 
 /**
  * True when the user has the credentials to actually use this provider.
- * Keyless zero-config providers (local, the optional nuvira gateway) are
- * always "configured" by definition — their reachability is probed later by
- * isAvailable(), never assumed here.
+ * Keyless zero-config providers are always "configured" by definition — their
+ * reachability is probed later by isAvailable(), never assumed here.
  */
 export function hasCredentials(configManager: ConfigManager, provider: string): boolean {
-  if (KEYLESS_PROVIDERS.includes(provider as (typeof KEYLESS_PROVIDERS)[number])) return true;
+  if (isCatalogKeyless(provider) || KEYLESS_PROVIDERS.includes(provider)) return true;
   try {
     return configManager.hasRequiredCredentials(provider);
   } catch {
@@ -119,22 +125,50 @@ export function rankAvailableProviders(configManager: ConfigManager): RankedProv
   }
   const usable = new Set(registry.getUsableProviders());
 
-  const keyed = BUILTIN_PROVIDERS.filter(
-    (p) => !KEYLESS_PROVIDERS.includes(p as (typeof KEYLESS_PROVIDERS)[number]),
-  );
-  const zeroConfig = KEYLESS_PROVIDERS.filter(
-    (p) => !blocked.has(p) && hasCredentials(configManager, p),
-  );
+  // DYNAMIC candidate set (Issue 001): every catalog provider the user can
+  // actually use — keyed providers with real credentials, plus keyless ones
+  // (local, nuvira, lmstudio, vllm, ...) — AND any provider the user has
+  // explicitly configured (config.providers / plugin providers), so custom
+  // providers join routing the moment they appear in config. Nothing is
+  // hardcoded to the 6 built-ins anymore.
+  let configuredIds: string[] = [];
+  try {
+    configuredIds = Object.keys(configManager.getAll?.()?.providers ?? {});
+  } catch {
+    // Best-effort.
+  }
+  const candidates = [...new Set([...CATALOG_PROVIDER_IDS, ...configuredIds])].filter((p) => {
+    if (blocked.has(p)) return false;
+    // Keyless runners BEYOND `local` (nuvira, lmstudio, vllm) only join when the
+    // registry has VERIFIED them or the user explicitly configured them — a
+    // not-running localhost endpoint must never out-rank running local on a
+    // cold start (Issue 001 review feedback). `local` is the universal
+    // zero-config fallback (Ollama); the others are optional local runners.
+    if (isCatalogKeyless(p) && p !== 'local') {
+      const explicit = configuredIds.includes(p);
+      const verified = usable.has(p);
+      if (!explicit && !verified) return false;
+    }
+    return hasCredentials(configManager, p);
+  });
 
-  const candidates = [...keyed, ...zeroConfig].filter((p) => !blocked.has(p) && hasCredentials(configManager, p));
-
-  const verified = candidates.filter((p) => usable.has(p)).sort((a, b) => providerHealth(a) - providerHealth(b));
+  const verified = candidates.filter((p) => usable.has(p)).sort((a, b) => {
+    const healthDiff = providerHealth(a) - providerHealth(b);
+    if (healthDiff !== 0) return healthDiff;
+    // Health tiebreak: verified KEYLESS providers sink below verified cloud
+    // providers (a verified local/gateway model and a verified cloud model at
+    // equal health — the cloud provider wins the tie, matching the historical
+    // keyed-first candidate order now that the catalog drives discovery).
+    const az = KEYLESS_PROVIDERS.includes(a) ? 1 : 0;
+    const bz = KEYLESS_PROVIDERS.includes(b) ? 1 : 0;
+    return az - bz;
+  });
   const rest = candidates
     .filter((p) => !usable.has(p))
     .sort((a, b) => {
-      // zero-config providers last; local before the optional gateway
-      const az = KEYLESS_PROVIDERS.includes(a as (typeof KEYLESS_PROVIDERS)[number]) ? 1 : 0;
-      const bz = KEYLESS_PROVIDERS.includes(b as (typeof KEYLESS_PROVIDERS)[number]) ? 1 : 0;
+      // zero-config (keyless) providers last; local before the others
+      const az = KEYLESS_PROVIDERS.includes(a) ? 1 : 0;
+      const bz = KEYLESS_PROVIDERS.includes(b) ? 1 : 0;
       if (az !== bz) return az - bz;
       if (a === 'local') return -1;
       if (b === 'local') return 1;
@@ -190,7 +224,7 @@ export function bestAvailable(
   // onboarding guidance instead of inventing a provider/model.
   const anyVerified = ranked.some((r) => r.verifiedModels.length > 0);
   const anyKeyed = configManager
-    ? ranked.some((r) => !KEYLESS_PROVIDERS.includes(r.provider as (typeof KEYLESS_PROVIDERS)[number]))
+    ? ranked.some((r) => !KEYLESS_PROVIDERS.includes(r.provider) && !isCatalogKeyless(r.provider))
     : false;
   if (!anyVerified && !anyKeyed) return undefined;
 
@@ -232,8 +266,8 @@ export function requireAdapterModel(providerType: string, configuredModel?: stri
 
 /** Human-readable guidance when the user has no usable provider/model configured. */
 export function buildOnboardingGuidance(configManager: ConfigManager): string {
-  const hasCloudKey = BUILTIN_PROVIDERS.some(
-    (p) => !KEYLESS_PROVIDERS.includes(p as (typeof KEYLESS_PROVIDERS)[number]) && hasCredentials(configManager, p),
+  const hasCloudKey = CATALOG_PROVIDER_IDS.some(
+    (p) => !KEYLESS_PROVIDERS.includes(p) && hasCredentials(configManager, p),
   );
   const parts: string[] = [];
   if (!hasCloudKey) {
