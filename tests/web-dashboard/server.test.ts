@@ -896,6 +896,51 @@ describe('Dashboard Server', () => {
       }
     });
 
+    it('GET /api/model-registry surfaces ISSUE-004 key hygiene + deleted-local prune state', async () => {
+      const now = Date.now();
+      // key-hygiene.json — the consecutive 401/403 counter store the
+      // KeyHygiene class persists (provider → consecutive auth failures).
+      writeFixture('key-hygiene', {
+        version: 1,
+        updatedAt: now,
+        consecutiveAuthFailures: { groq: 2, nim: 3 },
+      });
+      // model-registry.json with a verified entry demoted because the model
+      // was deleted from the local system (ollama rm) — the prune demotes
+      // verified entries instead of hard-deleting them (telemetry preserved).
+      writeFixture('model-registry', {
+        version: 1,
+        updatedAt: now,
+        entries: {
+          'local|gemma4:e4b': {
+            provider: 'local', model: 'gemma4:e4b', status: 'unavailable',
+            errorRate: 0, quotaParkedUntil: 0, source: 'probe',
+            lastError: 'model deleted from local system',
+          },
+        },
+      });
+      try {
+        const res = await httpGet(`${baseUrl}/api/model-registry`);
+        expect(res.statusCode).toBe(200);
+        const body = JSON.parse(res.body);
+
+        // Key hygiene: threshold + per-provider consecutive counters climb
+        // toward it (the Models panel warns BEFORE the auto-clear at 3).
+        expect(body.keyHygiene).toBeDefined();
+        expect(body.keyHygiene.threshold).toBe(3);
+        expect(body.keyHygiene.consecutive).toEqual({ groq: 2, nim: 3 });
+
+        // Deleted-local count: verified models demoted because they were
+        // removed from the machine (ollama rm) — surfaced as its own stat.
+        expect(body.deletedLocal).toBe(1);
+        const local = body.providers.find((p: { provider: string }) => p.provider === 'local');
+        expect(local.models[0].lastError).toBe('model deleted from local system');
+      } finally {
+        removeFixture('key-hygiene');
+        removeFixture('model-registry');
+      }
+    });
+
     it('GET /api/model-registry handles a malformed mirror gracefully', async () => {
       writeFileSync(join(memoryDir, 'model-registry.json'), '{broken');
       const res = await httpGet(`${baseUrl}/api/model-registry`);

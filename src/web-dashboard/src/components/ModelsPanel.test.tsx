@@ -10,7 +10,7 @@
 
 import { describe, it, expect, vi, afterEach } from 'vitest';
 import { render, screen, fireEvent, cleanup } from '@testing-library/react';
-import ModelsPanel, { ActionTimelineChart, dedupeDayEvents, ActionTelemetryCard, FlakinessChip, FlakinessSparkline, ContextWindowChip } from './ModelsPanel';
+import ModelsPanel, { ActionTimelineChart, dedupeDayEvents, ActionTelemetryCard, FlakinessChip, FlakinessSparkline, ContextWindowChip, keyHygieneWarning } from './ModelsPanel';
 import type { ActionDayBucket, ActionDayEvent } from './ModelsPanel';
 import type { ActionTelemetryInsights } from '../types';
 
@@ -269,6 +269,39 @@ describe('ContextWindowChip', () => {
 // The mini sparkline plots the partialRate EMA trajectory: a trend toward 0
 // = healing via clean successes; climbing = flakiness accumulating. Renders
 // only when >= 2 samples exist so single-sample entries stay clean.
+
+describe('keyHygieneWarning (ISSUE-004)', () => {
+  it('renders nothing when hygiene is absent or all counters are zero', () => {
+    expect(keyHygieneWarning(undefined)).toBeNull();
+    expect(keyHygieneWarning({ threshold: 3, consecutive: {} })).toBeNull();
+  });
+
+  it('shows each provider climbing toward the auto-clear threshold', () => {
+    const { container } = render(keyHygieneWarning({
+      threshold: 3,
+      consecutive: { groq: 2, nim: 1 },
+    }));
+    const text = container.textContent || '';
+    expect(text).toContain('Key hygiene in progress');
+    expect(text).toContain('groq');
+    expect(text).toContain('2/3 consecutive auth failures');
+    expect(text).toContain('nim');
+    expect(text).toContain('1/3');
+    // Below threshold → warns the key WILL be auto-cleared.
+    expect(text).toContain('key will be auto-cleared at the threshold');
+  });
+
+  it('flags a provider at/over the threshold as already cleared', () => {
+    const { container } = render(keyHygieneWarning({
+      threshold: 3,
+      consecutive: { openrouter: 4 },
+    }));
+    const text = container.textContent || '';
+    expect(text).toContain('openrouter');
+    expect(text).toContain('4/3 consecutive auth failures');
+    expect(text).toContain('key auto-cleared');
+  });
+});
 
 describe('FlakinessSparkline', () => {
   it('renders nothing with fewer than 2 history points', () => {
