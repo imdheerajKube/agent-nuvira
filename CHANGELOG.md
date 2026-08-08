@@ -7,11 +7,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
-## [Unreleased]
+## [1.61.1] - 2026-08-08
 
 ### Added
 
 - **`buff eval run` (non-routing) refuses placeholder-keyed providers** — if the resolved provider's configured API key is a sentinel/placeholder (e.g. the literal `openrouter-env-key`), eval aborts with a clear error instead of burning minutes producing auth-dead scores (the "consistent 25%" failure mode reported on the dev machine). Guidance points to `buff config set providers.X.apiKey <real-key>` or `defaultProvider auto`. `defaultProvider auto` already resolves through `rankAvailableProviders` (registry-verified first), so `buff eval run` now measures the best available provider, and `buff eval run --routing` measures the router's exact per-task picks.
+
+### Changed
+
+- **Eval guard also warns (not just aborts) when an explicit `--model` is passed with a placeholder-keyed provider** — a model override can't fix a dead key.
+
+### Fixed
+
+- **Hermetic test isolation** — `eval`, `orchestrator`, `injection-guardrail`, and `a2a` tests no longer depend on the dev machine's `buffconfig.json`; they pin temp `BUFF_CONFIG_DIR`s so local-model availability on the host can't flip pass/fail (the `llama2` → `gemma4:e4b` config change exposed this).
 
 ---
 

@@ -1,6 +1,6 @@
 # Agent-Nuvira — Technical Product Guide
 
-**Version 1.61.0 | August 2026**
+**Version 1.61.1 | August 2026**
 
 > *A comprehensive technical overview of Agent-Nuvira: architecture, features, version history, and market readiness for investors, stakeholders, and technical reviewers.*
 
