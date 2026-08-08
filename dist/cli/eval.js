@@ -21,6 +21,7 @@ import { Command } from 'commander';
 import ora from 'ora';
 import { BaseCommand } from './commands.js';
 import { resolveProvider } from './router.js';
+import { isPlaceholderApiKey } from '../config/manager.js';
 import { getAutoRouter } from '../learning/auto-router.js';
 import { buildAutoResolveOptions } from '../learning/resolve-options.js';
 import { recordRoutingDecision } from '../learning/routing-history.js';
@@ -220,7 +221,28 @@ export class EvalCommand extends BaseCommand {
         const resolved = resolveProvider(this.configManager, options.provider);
         const provider = resolved.provider;
         const providerName = resolved.type;
-        const model = options.model || this.configManager.getProviderConfig(providerName).config.model || 'default';
+        const resolvedConfig = this.configManager.getProviderConfig(providerName).config;
+        const model = options.model || resolvedConfig.model || 'default';
+        // ISSUE-004 guard: refuse to evaluate a provider whose configured key is a
+        // placeholder/sentinel (e.g. the literal "openrouter-env-key"). Running
+        // eval on it just burns minutes producing auth-dead scores (0% completion,
+        // ~$0 cost) — the exact misleading "consistent 25%" result reported on
+        // this machine. Point the user at the fix instead.
+        if (isPlaceholderApiKey(resolvedConfig.apiKey)) {
+            const tip = `     Set a real key: buff config set providers.${providerName}.apiKey <real-key>`;
+            if (options.model) {
+                // An explicit --model does NOT fix a dead key — warn loudly but let the
+                // explicit user choice proceed (they may be testing something specific).
+                logger.warn(`  ⚠️ ${providerName} is pinned with a placeholder API key ("${resolvedConfig.apiKey}") — every eval task will fail auth. An explicit --model cannot fix a dead key.`);
+                logger.warn(tip);
+            }
+            else {
+                logger.error(`  🚫 ${providerName} is pinned with a placeholder API key ("${resolvedConfig.apiKey}") — this is NOT a real key, so every eval task would fail auth.`);
+                logger.error(tip);
+                logger.error(`     Or let the router pick the best available provider: buff config set defaultProvider auto (then rerun buff eval run).`);
+                return;
+            }
+        }
         const available = await provider.isAvailable();
         if (!available) {
             logger.error(`${provider.name} is not available. Check your configuration.`);
