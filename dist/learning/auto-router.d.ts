@@ -135,8 +135,9 @@ export interface AutoRouterOptions {
     /**
      * Enable Thompson-sampling bandit learning. Each provider's score is
      * multiplied by a Beta draw from its complexity-bucketed prior, learned
-     * from `recordOutcome()`. Cold start = Beta(1,1) = deterministic behavior
-     * until outcomes accumulate (default: false).
+     * from `recordOutcome()`. Cold start = Beta(1,1) = deterministic (the
+     * mean is sampled, so an unlearned ranking is preserved exactly). ISSUE-002:
+     * chat/orchestrator enable this by default (routing.bandit !== false).
      */
     useBandit?: boolean;
     /**
@@ -267,6 +268,15 @@ export interface ScoredProvider {
      */
     contextWindowTokens?: number;
     /**
+     * M2.5 ISSUE-002: where the context window came from — 'live' (provider-
+     * advertised, recorded by the probe), 'override' (user `routing.contextWindows`),
+     * 'provider' (static provider-level estimate), or 'default' (no advertised
+     * spec — fell back to the generous default). The explanation flags
+     * estimate/default windows so "no advertised window" is never silently
+     * treated like a real one.
+     */
+    contextWindowSource?: 'live' | 'override' | 'provider' | 'default';
+    /**
      * M2.5: estimated utilization — prompt tokens ÷ nominal window (0–1; may
      * exceed 1 when the prompt is larger than the window). Set only when the
      * context-fit signal is enabled.
@@ -324,6 +334,17 @@ export interface AutoRouteResult {
         reason: string;
     }>;
     /**
+     * ISSUE-002: providers EXCLUDED from the candidate pool by registry data
+     * (all-models-unavailable, or degraded: 0 verified + ≥3 unavailable), with
+     * the registry-cited reason ("0 verified, 6 unavailable"). Empty when no
+     * registry data excluded anyone — keeps the audit trail honest and lets the
+     * explanation show the data is actually working.
+     */
+    registryExcluded?: Array<{
+        provider: string;
+        reason: string;
+    }>;
+    /**
      * M2.5: context preflight snapshot — the estimated prompt size used for
      * scoring, its basis (task text vs caller hint), and per-provider
      * utilization (estimated tokens ÷ nominal window). Present only when the
@@ -336,6 +357,7 @@ export interface AutoRouteResult {
         providers: Array<{
             provider: string;
             contextWindowTokens: number;
+            contextWindowSource?: 'live' | 'override' | 'provider' | 'default';
             utilization?: number;
             fit?: number;
         }>;
@@ -442,15 +464,24 @@ export declare function scoreProvider(provider: string, capabilities: ProviderCa
 export declare class AutoModelRouter {
     private profiles;
     constructor(profiles?: Record<string, ProviderCapabilities>);
-    /** Get the capability profile for a provider (falls back to a neutral profile). */
+    /**
+     * Get the capability profile for a provider: an explicit profile (constructor
+     * / updateProfiles / user config) wins, then the provider catalog's baseline
+     * (Issue 001 — every catalog provider scores with real metadata, not a
+     * neutral guess), then a neutral fallback for truly unknown providers.
+     */
     getCapabilities(provider: string): ProviderCapabilities;
     /** Update/override capability profiles (e.g., from config). */
     updateProfiles(profiles: Record<string, ProviderCapabilities>): void;
     /**
-     * Default candidate providers — restricted to providers that have required
-     * credentials configured when a ConfigManager is available, so Auto routing
-     * NEVER picks a cloud provider with no API key (which would fail with a 401
-     * and undermine trust in auto model selection).
+     * Default candidate providers — DYNAMIC (Issue 001): every provider the user
+     * has credentials for participates, not just the 6 built-ins. The candidate
+     * pool is derived at runtime from the provider catalog + the config manager:
+     * keyless catalog providers (local, nuvira, lmstudio, vllm) are always
+     * candidates (reachability is probed), and any catalog provider whose env
+     * var / config carries a REAL key joins — so a user who sets OPENAI_API_KEY,
+     * ANTHROPIC_API_KEY, MISTRAL_API_KEY, ... sees those providers routed to.
+     * Explicitly configured non-catalog providers (plugins/custom) join too.
      *
      * Falls back to the full built-in list when nothing has credentials (or when
      * no config manager is provided), so the router still produces a decision
@@ -473,6 +504,10 @@ export declare class AutoModelRouter {
      * table → provider fallback → generous default. `routing.contextWindows`
      * overrides (keyed by model, or by provider as a provider-level default)
      * always win. Estimation-only input — never a hard block.
+     *
+     * ISSUE-002: also returns WHERE the window came from so the explanation can
+     * flag estimate/default windows — "no advertised spec" is never silently
+     * treated like a real one.
      */
     private resolveContextWindow;
     /**

@@ -9,6 +9,7 @@ import inquirer from 'inquirer';
 import ora from 'ora';
 import { resolveProvider } from './router.js';
 import { getPluginRegistry } from '../plugins/registry.js';
+import { CATALOG_PROVIDER_IDS, getCatalogProvider, catalogEnvVar, isCatalogKeyless } from '../inference/provider-catalog.js';
 import { CATEGORY_INFO, categorizeModel, getModelBadge, formatModelName, } from '../inference/model-catalog.js';
 import { logger } from '../utils/logger.js';
 import { AUTO_MODEL, AUTO_PROVIDER } from '../learning/auto-router.js';
@@ -42,22 +43,25 @@ const CATEGORY_ORDER = {
     speech: 10,
 };
 // ─── Provider Metadata ──────────────────────────────────────────────────────
-const PROVIDER_ICONS = {
-    local: '💻',
-    nim: '🔶',
-    gemini: '🔷',
-    openrouter: '🟣',
-    groq: '🟢',
-    nuvira: '🧭',
-};
-const PROVIDER_ELIGIBILITY = {
-    local: 'Works offline — no API key needed',
-    nim: 'NVIDIA NIM cloud service — set NVIDIA_NIM_API_KEY',
-    gemini: 'Google Gemini cloud service — set GEMINI_API_KEY',
-    openrouter: 'OpenRouter unified API service — set OPENROUTER_API_KEY',
-    groq: 'Groq LPU cloud inference — set GROQ_API_KEY',
-    nuvira: 'OpenAI-compatible gateway — set provider.nuvira.baseUrl (default http://127.0.0.1:20128/v1)',
-};
+// Provider icons + eligibility hints derived from the catalog (Issue 001) so
+// the picker covers all 17+ onboardable providers without hardcoding.
+const PROVIDER_ICONS = {};
+for (const id of CATALOG_PROVIDER_IDS) {
+    const entry = getCatalogProvider(id);
+    if (entry)
+        PROVIDER_ICONS[id] = entry.icon;
+}
+const PROVIDER_ELIGIBILITY = {};
+for (const id of CATALOG_PROVIDER_IDS) {
+    const entry = getCatalogProvider(id);
+    if (!entry)
+        continue;
+    const env = catalogEnvVar(id);
+    const base = entry.baseUrl ? ` (default ${entry.baseUrl})` : '';
+    PROVIDER_ELIGIBILITY[id] = isCatalogKeyless(id)
+        ? `No API key needed — runs locally${base}`
+        : `${entry.label} cloud service — set ${env || `${id.toUpperCase()}_API_KEY`}`;
+}
 // ─── Shared picker ──────────────────────────────────────────────────────────
 /**
  * Show a categorized model picker that groups models by capability.
@@ -67,12 +71,9 @@ export async function showModelPicker(configManager) {
     logger.highlight('\n🔍 Checking available providers...\n');
     const registry = getPluginRegistry();
     const pluginTypes = registry.getAllPlugins().map((plugin) => plugin.getProviderType());
+    // Issue 001: the full catalog — every onboardable provider participates.
     const providerTypes = Array.from(new Set([
-        'local',
-        'nim',
-        'gemini',
-        'openrouter',
-        'groq',
+        ...CATALOG_PROVIDER_IDS,
         ...pluginTypes,
     ]));
     // Availability checks can hang (e.g. the local/Ollama probe, stalled network)
@@ -81,6 +82,21 @@ export async function showModelPicker(configManager) {
     const checkSpinner = ora({ text: '🔍 Checking provider availability…', spinner: 'dots' }).start();
     const checkResults = await Promise.all(providerTypes.map(async (pt) => {
         const resolved = resolveProvider(configManager, pt);
+        // Fast-skip: a provider with no configured key (and not keyless) can't be
+        // available — skip the network probe so the picker never waits on 16
+        // dead endpoints (Issue 001 review feedback). Keyless local runners ARE
+        // probed — they may be running without any key.
+        const configured = (() => {
+            try {
+                return configManager.hasRequiredCredentials?.(pt) ?? true;
+            }
+            catch {
+                return false;
+            }
+        })();
+        if (!configured && !isCatalogKeyless(pt)) {
+            return { pt, resolved, available: false };
+        }
         let available = false;
         try {
             available = await withTimeout(resolved.provider.isAvailable(), AVAILABILITY_TIMEOUT_MS, `${resolved.provider.name} availability`);

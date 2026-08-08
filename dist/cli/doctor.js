@@ -25,6 +25,7 @@ import { join } from 'node:path';
 import { homedir } from 'node:os';
 import { BaseCommand } from './commands.js';
 import { ProviderFactory } from '../inference/factory.js';
+import { CATALOG_PROVIDER_IDS, getCatalogProvider } from '../inference/provider-catalog.js';
 import { getPluginRegistry } from '../plugins/registry.js';
 import { recordRegistryFailure } from '../learning/provider-fallback.js';
 import { getQuotaLedger } from '../learning/quota-ledger.js';
@@ -68,7 +69,19 @@ const PROVIDER_LABELS = {
     openrouter: '🌐 OpenRouter',
     nuvira: '🌐 Nuvira Gateway (OpenAI-compatible sidecar)',
 };
-const BUILTIN_PROVIDERS = ['local', 'groq', 'nim', 'gemini', 'openrouter', 'nuvira'];
+// Issue 001: the full catalog — every onboardable provider is health-checked
+// and listed. Unconfigured ones fail fast (no network) with a clear "set
+// <ENV_VAR>" hint, so all 17+ providers show up in `buff doctor`.
+const BUILTIN_PROVIDERS = [...CATALOG_PROVIDER_IDS];
+// Give the extended catalog providers labels too (falls back to the map above
+// for the built-ins, which carry richer descriptions).
+for (const id of CATALOG_PROVIDER_IDS) {
+    if (PROVIDER_LABELS[id] === undefined) {
+        const entry = getCatalogProvider(id);
+        if (entry)
+            PROVIDER_LABELS[id] = `${entry.icon} ${entry.label}`;
+    }
+}
 const CHECK_TIMEOUT_MS = 10_000; // 10s per check
 const TOTAL_TIMEOUT_MS = 30_000; // 30s total for all checks on one provider
 // Nuvira sidecar defaults (P5 M5.1): the adapter's default base URL is

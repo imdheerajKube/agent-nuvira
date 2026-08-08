@@ -29,6 +29,7 @@ import { recommendModel } from '../learning/model-router.js';
 import { getModelBadge } from '../inference/model-catalog.js';
 import { getHybridRouter } from '../learning/hybrid-router.js';
 import { AUTO_MODEL, AUTO_PROVIDER, getAutoRouter, isAutoModel, isAutoProvider, PIIPolicyError, GovernancePolicyError, } from '../learning/auto-router.js';
+import { buildAutoResolveOptions } from '../learning/resolve-options.js';
 import { recordRoutingDecision, getExplainSnapshots } from '../learning/routing-history.js';
 import { diffRoutingDecisions, formatDecisionDiff } from '../learning/decision-diff.js';
 import { getRouterBandit, COMPLEXITY_BUCKETS, } from '../learning/router-bandit.js';
@@ -589,7 +590,7 @@ export class ModelCommand extends BaseCommand {
      */
     buildExplainJSON(router, agentType, task, since) {
         const toJSON = (t, agent) => {
-            const d = router.resolve(agent, t, { useRuntimeStats: true }, this.configManager);
+            const d = router.resolve(agent, t, buildAutoResolveOptions(this.configManager), this.configManager);
             const snapshot = this.buildSnapshot(d);
             // Record the explain snapshot for the dashboard audit trail + usage stats
             // (JSON mode returns early in showExplain, so this is the only hook here)
@@ -740,7 +741,7 @@ export class ModelCommand extends BaseCommand {
      */
     renderRoutingDecisionDiff(router, agentType, task, ref) {
         const prev = this.resolveExplainRef(ref);
-        const decision = router.resolve(agentType, task, { useRuntimeStats: true }, this.configManager);
+        const decision = router.resolve(agentType, task, buildAutoResolveOptions(this.configManager), this.configManager);
         const snapshot = this.buildSnapshot(decision);
         recordRoutingDecision({
             source: 'explain',
@@ -771,7 +772,7 @@ export class ModelCommand extends BaseCommand {
     }
     /** Render a single routing decision (compact or detailed). */
     renderRoutingDecision(router, agentType, task, compact = false) {
-        const decision = router.resolve(agentType, task, { useRuntimeStats: true }, this.configManager);
+        const decision = router.resolve(agentType, task, buildAutoResolveOptions(this.configManager), this.configManager);
         // Record the explain snapshot for the dashboard audit trail + usage stats
         recordRoutingDecision({
             source: 'explain',
@@ -1099,9 +1100,9 @@ export class ModelCommand extends BaseCommand {
         if (providers.size === 0) {
             logger.info('  No bandit learning data yet.');
             console.log('');
-            logger.info('  Enable learning:  `buff config set routing.bandit true`');
-            logger.info('  Then run tasks under Auto routing (`buff model switch auto` / `-m auto`).');
+            logger.info('  Learning is ON by default — run tasks under Auto routing (`buff model switch auto` / `-m auto`).');
             logger.info('  Each auto-routed task updates the Beta prior for its complexity bucket.');
+            logger.info('  Disable: `buff config set routing.bandit false`');
             console.log('');
             return;
         }
