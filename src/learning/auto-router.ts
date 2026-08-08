@@ -46,6 +46,7 @@ import { getRouterPromotion, type ParallelPick } from './router-promotion.js';
 import { getModelRegistry } from './model-registry.js';
 import { estimateTokens } from './cost-tracker.js';
 import { preferredModelsFor, PROVIDER_CONTEXT_WINDOWS } from './model-selection.js';
+import { CATALOG_PROVIDER_IDS, getCatalogProvider, isCatalogKeyless } from '../inference/provider-catalog.js';
 import type { ConfigManager } from '../config/manager.js';
 import type { ProviderPricing, GovernanceConfig } from '../config/types.js';
 import { logger } from '../utils/logger.js';
@@ -169,8 +170,9 @@ export interface AutoRouterOptions {
   /**
    * Enable Thompson-sampling bandit learning. Each provider's score is
    * multiplied by a Beta draw from its complexity-bucketed prior, learned
-   * from `recordOutcome()`. Cold start = Beta(1,1) = deterministic behavior
-   * until outcomes accumulate (default: false).
+   * from `recordOutcome()`. Cold start = Beta(1,1) = deterministic (the
+   * mean is sampled, so an unlearned ranking is preserved exactly). ISSUE-002:
+   * chat/orchestrator enable this by default (routing.bandit !== false).
    */
   useBandit?: boolean;
   /**
@@ -298,6 +300,15 @@ export interface ScoredProvider {
    */
   contextWindowTokens?: number;
   /**
+   * M2.5 ISSUE-002: where the context window came from — 'live' (provider-
+   * advertised, recorded by the probe), 'override' (user `routing.contextWindows`),
+   * 'provider' (static provider-level estimate), or 'default' (no advertised
+   * spec — fell back to the generous default). The explanation flags
+   * estimate/default windows so "no advertised window" is never silently
+   * treated like a real one.
+   */
+  contextWindowSource?: 'live' | 'override' | 'provider' | 'default';
+  /**
    * M2.5: estimated utilization — prompt tokens ÷ nominal window (0–1; may
    * exceed 1 when the prompt is larger than the window). Set only when the
    * context-fit signal is enabled.
@@ -353,6 +364,14 @@ export interface AutoRouteResult {
    */
   governanceBlocked?: Array<{ provider: string; reason: string }>;
   /**
+   * ISSUE-002: providers EXCLUDED from the candidate pool by registry data
+   * (all-models-unavailable, or degraded: 0 verified + ≥3 unavailable), with
+   * the registry-cited reason ("0 verified, 6 unavailable"). Empty when no
+   * registry data excluded anyone — keeps the audit trail honest and lets the
+   * explanation show the data is actually working.
+   */
+  registryExcluded?: Array<{ provider: string; reason: string }>;
+  /**
    * M2.5: context preflight snapshot — the estimated prompt size used for
    * scoring, its basis (task text vs caller hint), and per-provider
    * utilization (estimated tokens ÷ nominal window). Present only when the
@@ -365,6 +384,7 @@ export interface AutoRouteResult {
     providers: Array<{
       provider: string;
       contextWindowTokens: number;
+      contextWindowSource?: 'live' | 'override' | 'provider' | 'default';
       utilization?: number;
       fit?: number;
     }>;
@@ -513,6 +533,18 @@ export const PROVIDER_PRICING_PER_1K: Record<string, { inputPer1K: number; outpu
   // the gateway reports usage, so the free-first gate judges by truth.
   nuvira: { inputPer1K: 0, outputPer1K: 0 },
 };
+
+// Issue 001: seed the pricing table from the provider catalog so the EXTENDED
+// providers (openai, anthropic, mistral, cohere, together, deepinfra, ...)
+// get real list pricing for cost scoring without per-provider hardcoding. The
+// built-in entries above already mirror the catalog; catalog values fill the
+// rest, so estimateCallCostUsd / computeCostScore work for every catalog id.
+for (const id of CATALOG_PROVIDER_IDS) {
+  const catalog = getCatalogProvider(id);
+  if (catalog && PROVIDER_PRICING_PER_1K[id] === undefined) {
+    PROVIDER_PRICING_PER_1K[id] = { ...catalog.pricing };
+  }
+}
 
 /** Reference cost per call (USD) used to normalize the 0–1 cost score. */
 const COST_REFERENCE_USD = 0.01;
@@ -757,9 +789,25 @@ export class AutoModelRouter {
     this.profiles = profiles ? { ...DEFAULT_PROFILES, ...profiles } : { ...DEFAULT_PROFILES };
   }
 
-  /** Get the capability profile for a provider (falls back to a neutral profile). */
+  /**
+   * Get the capability profile for a provider: an explicit profile (constructor
+   * / updateProfiles / user config) wins, then the provider catalog's baseline
+   * (Issue 001 — every catalog provider scores with real metadata, not a
+   * neutral guess), then a neutral fallback for truly unknown providers.
+   */
   getCapabilities(provider: string): ProviderCapabilities {
-    return this.profiles[provider] || { reasoning: 0.5, speed: 0.5, cost: 0.5, privacy: 0.2, reliability: 0.7 };
+    if (this.profiles[provider]) return this.profiles[provider];
+    const catalog = getCatalogProvider(provider);
+    if (catalog) {
+      return {
+        reasoning: catalog.capabilities.reasoning,
+        speed: catalog.capabilities.speed,
+        cost: catalog.capabilities.cost,
+        privacy: catalog.capabilities.privacy,
+        reliability: catalog.capabilities.reliability,
+      };
+    }
+    return { reasoning: 0.5, speed: 0.5, cost: 0.5, privacy: 0.2, reliability: 0.7 };
   }
 
   /** Update/override capability profiles (e.g., from config). */
@@ -768,19 +816,26 @@ export class AutoModelRouter {
   }
 
   /**
-   * Default candidate providers — restricted to providers that have required
-   * credentials configured when a ConfigManager is available, so Auto routing
-   * NEVER picks a cloud provider with no API key (which would fail with a 401
-   * and undermine trust in auto model selection).
+   * Default candidate providers — DYNAMIC (Issue 001): every provider the user
+   * has credentials for participates, not just the 6 built-ins. The candidate
+   * pool is derived at runtime from the provider catalog + the config manager:
+   * keyless catalog providers (local, nuvira, lmstudio, vllm) are always
+   * candidates (reachability is probed), and any catalog provider whose env
+   * var / config carries a REAL key joins — so a user who sets OPENAI_API_KEY,
+   * ANTHROPIC_API_KEY, MISTRAL_API_KEY, ... sees those providers routed to.
+   * Explicitly configured non-catalog providers (plugins/custom) join too.
    *
    * Falls back to the full built-in list when nothing has credentials (or when
    * no config manager is provided), so the router still produces a decision
    * and the caller surfaces availability. Explicit `allowedProviders` always
    * win over this filtering.
    */
-  private getDefaultAllowedProviders(configManager?: ConfigManager): string[] {
+  private getDefaultAllowedProviders(configManager?: ConfigManager): {
+    allowed: string[];
+    excluded: Array<{ provider: string; reason: string }>;
+  } {
     if (!configManager || typeof configManager.hasRequiredCredentials !== 'function') {
-      return DEFAULT_AUTO_PROVIDERS;
+      return { allowed: DEFAULT_AUTO_PROVIDERS, excluded: [] };
     }
 
     // ── Registry-aware filtering: prefer providers with VERIFIED, usable
@@ -794,28 +849,68 @@ export class AutoModelRouter {
     // unavailable/quota-parked (learned from real usage telemetry) are never
     // even scored — dead providers can't win a task they'd fail.
     const blocked = new Set(registry.getBlockedProviders());
-    let base = DEFAULT_AUTO_PROVIDERS.filter((p) => !blocked.has(p));
+    // ISSUE-002 registry pre-filter STRENGTH: a provider with ZERO verified
+    // models AND ≥3 unavailable entries is DEGRADED — excluded even when some
+    // entries are merely unverified (the lenient all-models-blocked check
+    // alone would still score it, so the registry's own data would be
+    // ignored until every last model failed). 0 verified + 3+ dead = the
+    // registry already knows this provider won't serve.
+    const degraded = new Set(registry.getDegradedProviders());
+    const excluded: Array<{ provider: string; reason: string }> = [];
 
-    const registered = registry.getUsableProviders();
-    if (registered.length > 0) {
-      const intersection = base.filter((p) => registered.includes(p));
-      if (intersection.length > 0) {
-        return intersection;
-      }
+    // DYNAMIC base: catalog ids + explicitly-configured provider ids, filtered
+    // to providers with credentials. Keyless catalog providers pass through
+    // hasRequiredCredentials (they need no key); keyed ones need a real key.
+    let configuredIds: string[] = [];
+    try {
+      configuredIds = Object.keys(configManager.getAll?.()?.providers ?? {});
+    } catch {
+      // Best-effort — a config read must never break routing.
     }
-
-    const usable = base.filter((p) => {
+    const registered = registry.getUsableProviders();
+    const base = [...new Set([...CATALOG_PROVIDER_IDS, ...configuredIds])].filter((p) => {
+      if (blocked.has(p) || degraded.has(p)) {
+        // Cite the registry's own counts so the explanation proves the data
+        // is working ("openrouter excluded — 0 verified, 6 unavailable"). The
+        // DEGRADED reason (with exact counts) is the more informative one — a
+        // provider that meets the degraded bar also meets the blocked bar, but
+        // "0 verified, 6 unavailable" tells the user far more than "all models
+        // unavailable".
+        const stats = registry.getProviderStats(p);
+        const reason = degraded.has(p)
+          ? `0 verified models, ${stats.unavailable} unavailable`
+          : `all tracked models unavailable`;
+        excluded.push({ provider: p, reason });
+        return false;
+      }
+      // Keyless runners BEYOND `local` (nuvira, lmstudio, vllm) only join when
+      // the registry has VERIFIED them or the user explicitly configured them
+      // — a not-running localhost endpoint must never out-rank running local
+      // on a cold start (Issue 001 review feedback).
+      if (isCatalogKeyless(p) && p !== 'local') {
+        const explicit = configuredIds.includes(p);
+        const verified = registered.includes(p);
+        if (!explicit && !verified) return false;
+      }
       try {
         return configManager.hasRequiredCredentials(p);
       } catch {
         return false;
       }
     });
-    // Never return an empty list: if EVERY default provider is registry-blocked
-    // (pathological), fall back to the full built-in list so the caller still
-    // gets a decision and surfaces availability instead of crashing on an
-    // empty ranking.
-    return usable.length > 0 ? usable : (base.length > 0 ? base : DEFAULT_AUTO_PROVIDERS);
+
+    if (registered.length > 0) {
+      const intersection = base.filter((p) => registered.includes(p));
+      if (intersection.length > 0) {
+        return { allowed: intersection, excluded };
+      }
+    }
+
+    // Never return an empty list: if EVERY configured provider is
+    // registry-blocked (pathological), fall back to the full built-in list so
+    // the caller still gets a decision and surfaces availability instead of
+    // crashing on an empty ranking.
+    return { allowed: base.length > 0 ? base : DEFAULT_AUTO_PROVIDERS, excluded };
   }
 
   /**
@@ -876,7 +971,7 @@ export class AutoModelRouter {
           // Note the forced decision so bandit outcome recording attributes
           // successes/failures to the rule's provider — not a stale one from a
           // previous task of the same agent type. Harmless when bandit is off
-          // (the orchestrator gates recording on routing.bandit === true).
+          // (the orchestrator gates recording on routing.bandit !== false).
           getRouterBandit().noteDecision(agentType, provider);
           if (options.verbose) {
             logger.info(`  🛑 Routing rule '${rule.name}' matched → ${provider}/${model}`);
@@ -907,9 +1002,19 @@ export class AutoModelRouter {
       }
     }
 
-    const allowed = options.allowedProviders?.length
-      ? options.allowedProviders
-      : this.getDefaultAllowedProviders(configManager);
+    // ISSUE-002: the default candidate pool is now registry-filtered — capture
+    // WHY providers were excluded (registry-cited counts) so the explanation
+    // proves the gathered data is driving decisions. Explicit allowedProviders
+    // opt out of the registry filter entirely (caller knows best).
+    let registryExcluded: Array<{ provider: string; reason: string }> = [];
+    let allowed: string[];
+    if (options.allowedProviders?.length) {
+      allowed = options.allowedProviders;
+    } else {
+      const defaultPool = this.getDefaultAllowedProviders(configManager);
+      allowed = defaultPool.allowed;
+      registryExcluded = defaultPool.excluded;
+    }
 
     let escalationApplied = false;
     let allowedProviders = allowed;
@@ -1046,10 +1151,13 @@ export class AutoModelRouter {
       // candidates only: a quota-parked reason is already definitive. NOTE: the
       // window is judged on the CONFIGURED pin (resolveModel); bandit per-model
       // learning may serve a different concrete model whose window differs —
-      // an acceptable soft-estimate divergence (bandit is off by default).
-      const contextWindowTokens = qp === undefined && contextFitEnabled
+      // an acceptable soft-estimate divergence (bandit is on by default, but
+      // cold start stays deterministic until outcomes accumulate).
+      const resolvedWindow = qp === undefined && contextFitEnabled
         ? this.resolveContextWindow(provider, this.resolveModel(provider, agentType, configManager), configManager)
         : undefined;
+      const contextWindowTokens = resolvedWindow?.window;
+      const contextWindowSource = resolvedWindow?.source;
       const contextUtilization = contextWindowTokens !== undefined && promptTokens > 0
         ? promptTokens / contextWindowTokens
         : undefined;
@@ -1069,6 +1177,16 @@ export class AutoModelRouter {
       if (contextFit !== undefined && contextFit < 1 && contextWindowTokens !== undefined) {
         finalReason = `${finalReason} · context-fit ${Math.round(contextFit * 100)}% (${promptTokens} tok of ${contextWindowTokens})`;
       }
+      // ISSUE-002 context-window transparency: a provider with NO advertised
+      // spec anywhere (no live descriptor, no provider-level estimate — the
+      // DEFAULT fallback) is flagged so an unadvertised window is never
+      // silently treated like a real one. Live/override/provider-estimate
+      // windows are known quantities and keep the reason clean for normal-size
+      // tasks (the preflight snapshot still carries `contextWindowSource` for
+      // every candidate — the explain view shows the full provenance).
+      if (contextWindowSource === 'default') {
+        finalReason = `${finalReason} · window: no advertised spec (default)`;
+      }
       // P4 M4.4 flakiness chip — the reliability penalty is transparent.
       if (flakiness !== undefined && flakiness > 0) {
         finalReason = `${finalReason} · ⏸ flaky mid-stream (${Math.round(flakiness * 100)}%)`;
@@ -1084,6 +1202,7 @@ export class AutoModelRouter {
         contextFit,
         contextUtilization,
         contextWindowTokens,
+        contextWindowSource,
         flakiness,
         costSource: measuredCost ? 'measured' : 'estimated',
         costBasis: measuredCost
@@ -1387,7 +1506,14 @@ export class AutoModelRouter {
       weights,
       taskProfile,
     ) + (routedBy === 'bandit' ? ' | bandit-learned' : '') +
-      (banditEscalation ? ' | escalated: winner unlearned' : '');
+      (banditEscalation ? ' | escalated: winner unlearned' : '') +
+      // ISSUE-002 explanation transparency: cite the registry data that
+      // excluded providers from the candidate pool, so auto routing proves
+      // its gathered telemetry is driving decisions ("excluded: openrouter
+      // (0 verified models, 6 unavailable)").
+      (registryExcluded.length > 0
+        ? ` | excluded: ${registryExcluded.map((e) => `${e.provider} (${e.reason})`).join(', ')}`
+        : '');
 
     if (options.verbose) {
       logger.info(`  🤖 Auto routing: ${explanation}`);
@@ -1404,14 +1530,18 @@ export class AutoModelRouter {
           // entry deliberately omits the context fields — the park reason is
           // definitive — but the preflight snapshot must still show a window;
           // the human explain renderer calls toLocaleString() on it).
-          providers: scored.map((s) => ({
-            provider: s.provider,
-            contextWindowTokens:
-              s.contextWindowTokens ??
-              this.resolveContextWindow(s.provider, this.resolveModel(s.provider, agentType, configManager), configManager),
-            utilization: s.contextUtilization,
-            fit: s.contextFit,
-          })),
+          providers: scored.map((s) => {
+            const w = s.contextWindowTokens !== undefined
+              ? { window: s.contextWindowTokens, source: s.contextWindowSource }
+              : this.resolveContextWindow(s.provider, this.resolveModel(s.provider, agentType, configManager), configManager);
+            return {
+              provider: s.provider,
+              contextWindowTokens: w.window,
+              contextWindowSource: w.source,
+              utilization: s.contextUtilization,
+              fit: s.contextFit,
+            };
+          }),
         }
       : undefined;
 
@@ -1431,6 +1561,7 @@ export class AutoModelRouter {
       routedBy,
       banditEscalation,
       governanceBlocked,
+      registryExcluded,
       contextPreflight,
     };
   }
@@ -1440,8 +1571,16 @@ export class AutoModelRouter {
    * table → provider fallback → generous default. `routing.contextWindows`
    * overrides (keyed by model, or by provider as a provider-level default)
    * always win. Estimation-only input — never a hard block.
+   *
+   * ISSUE-002: also returns WHERE the window came from so the explanation can
+   * flag estimate/default windows — "no advertised spec" is never silently
+   * treated like a real one.
    */
-  private resolveContextWindow(provider: string, model: string, configManager?: ConfigManager): number {
+  private resolveContextWindow(
+    provider: string,
+    model: string,
+    configManager?: ConfigManager,
+  ): { window: number; source: 'live' | 'override' | 'provider' | 'default' } {
     try {
       const overrides = configManager?.getAll?.()?.routing?.contextWindows;
       if (overrides) {
@@ -1455,9 +1594,9 @@ export class AutoModelRouter {
           return Number.isFinite(n) && n > 0 ? n : undefined;
         };
         const modelWin = fromOverride(model);
-        if (modelWin !== undefined) return modelWin;
+        if (modelWin !== undefined) return { window: modelWin, source: 'override' };
         const providerWin = fromOverride(provider);
-        if (providerWin !== undefined) return providerWin;
+        if (providerWin !== undefined) return { window: providerWin, source: 'override' };
       }
     } catch {
       // Best-effort — config read must never break routing.
@@ -1467,10 +1606,15 @@ export class AutoModelRouter {
     // context_length). The router's preflight prefers the model's real spec
     // over a static provider-level default.
     const live = getModelRegistry().getEntry(provider, model)?.contextWindowTokens;
-    if (live !== undefined && live > 0) return live;
-    // Provider-level nominal window + user overrides — never a hardcoded
-    // per-model table.
-    return PROVIDER_CONTEXT_WINDOWS[provider] ?? DEFAULT_CONTEXT_WINDOW;
+    if (live !== undefined && live > 0) return { window: live, source: 'live' };
+    // Provider-level nominal window — a static estimate, never a per-model
+    // hardcoded table. Flagged as 'provider' so the explanation can say the
+    // window is an estimate, not the provider's advertised spec.
+    const providerWindow = PROVIDER_CONTEXT_WINDOWS[provider];
+    if (providerWindow !== undefined && providerWindow > 0) {
+      return { window: providerWindow, source: 'provider' };
+    }
+    return { window: DEFAULT_CONTEXT_WINDOW, source: 'default' };
   }
 
   /**
@@ -1601,7 +1745,14 @@ export class AutoModelRouter {
     configManager?: ConfigManager,
   ): { inputPer1K: number; outputPer1K: number } {
     const override: ProviderPricing | undefined = configManager?.getAll().pricing?.[provider];
-    const builtin = PROVIDER_PRICING_PER_1K[provider] || { inputPer1K: 0.00010, outputPer1K: 0.00010 };
+    // Issue 001: fall back through the pricing table, then the provider
+    // catalog's list pricing, then a cheap default — extended catalog
+    // providers cost-score with real numbers, never a neutral guess.
+    const catalog = getCatalogProvider(provider);
+    const builtin =
+      PROVIDER_PRICING_PER_1K[provider] ||
+      (catalog ? catalog.pricing : undefined) ||
+      { inputPer1K: 0.00010, outputPer1K: 0.00010 };
     return {
       inputPer1K: override?.inputPer1K ?? builtin.inputPer1K,
       outputPer1K: override?.outputPer1K ?? builtin.outputPer1K,

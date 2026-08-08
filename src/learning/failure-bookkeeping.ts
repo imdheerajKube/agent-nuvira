@@ -20,6 +20,7 @@
 
 import type { ConfigManager } from '../config/manager.js';
 import { getQuotaLedger, accountIdForKey } from './quota-ledger.js';
+import { getKeyHygiene } from './key-hygiene.js';
 import {
   classifyFallbackError,
   getProviderFallback,
@@ -120,6 +121,15 @@ export function recordActionFailure(
     // M2.3: this SPECIFIC key is dead for the session — park its account so
     // key rotation skips it while OTHER keys of the same provider stay usable.
     parkAccountForKey(providerType, options?.apiKey, Number.MAX_SAFE_INTEGER, failureKind);
+    // ISSUE-004 (4b/4d): N consecutive auth failures CLEARS the invalid key
+    // from the config (or tells the user which env var to fix) and surfaces an
+    // actionable error — the key stops being a routing candidate instead of
+    // failing reactively forever. Best-effort — never breaks the call.
+    try {
+      getKeyHygiene().recordAuthFailure(providerType, configManager, options?.apiKey);
+    } catch {
+      // Best-effort — key hygiene must never crash a call.
+    }
   } else if (failureKind === 'rate-limit') {
     // Exhausted quota / token-limit — usually transient, so only a short
     // cooldown before the provider is re-admitted to auto routing.

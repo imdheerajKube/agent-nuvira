@@ -7,7 +7,8 @@ import { logger } from '../utils/logger.js';
 import { ProviderType } from '../config/types.js';
 import { getModelRegistry } from '../learning/model-registry.js';
 import { getQuotaLedger } from '../learning/quota-ledger.js';
-import { refreshModelRegistry, startRegistryWatcher, PROBE_PROVIDERS } from '../inference/model-probe.js';
+import { refreshModelRegistry, startRegistryWatcher, defaultProbeProviders } from '../inference/model-probe.js';
+import { CATALOG_PROVIDER_IDS, isCatalogKeyless } from '../inference/provider-catalog.js';
 
 /**
  * Models command — list available models from providers
@@ -40,7 +41,9 @@ export class ModelsCommand extends BaseCommand {
       .option('--no-spot-check', 'Only run listModels probes (skip 1-token spot-checks)')
       .option('-j, --json', 'Output as JSON', false)
       .action(async (provider: string | undefined, opts?: { spotCheck?: boolean; json?: boolean }, cmd?: Command) => {
-        const providers = provider ? [provider] : PROBE_PROVIDERS;
+        // Issue 001: refresh ALL configured providers dynamically (every catalog
+        // provider with a real key or keyless), not just the 5 built-ins.
+        const providers = provider ? [provider] : defaultProbeProviders(this.configManager);
         const json = this.isJsonMode(opts, cmd);
         logger.highlight('\n📡 Refreshing Model Registry…\n');
         const result = await refreshModelRegistry(this.configManager, {
@@ -53,9 +56,12 @@ export class ModelsCommand extends BaseCommand {
           return;
         }
         console.log('');
+        const pruneNote = result.prunedLocal > 0
+          ? `, ${result.prunedLocal} stale local model(s) removed (deleted from system)`
+          : '';
         logger.success(
           `Registry refreshed — ${result.providersProbed.length} provider(s), ${result.modelsListed} models listed, ` +
-          `${result.verified} verified, ${result.unavailable} unavailable, ${result.skipped} skipped`,
+          `${result.verified} verified, ${result.unavailable} unavailable, ${result.skipped} skipped${pruneNote}`,
         );
         console.log('');
         console.log(await getModelRegistry().formatStatus());
@@ -319,7 +325,8 @@ export class ModelsCommand extends BaseCommand {
     const providersToCheck: string[] = options?.provider
       ? [options.provider]
       : (() => {
-          const builtin: ProviderType[] = ['nim', 'gemini', 'openrouter', 'groq', 'local'];
+          // Issue 001: the full catalog — every onboardable provider is listed.
+          const builtin: ProviderType[] = [...CATALOG_PROVIDER_IDS];
           const registry = getPluginRegistry();
           const pluginTypes = registry.getAllPlugins().map((p) => p.getProviderType());
           return Array.from(new Set([...builtin, ...pluginTypes]));
@@ -360,6 +367,25 @@ export class ModelsCommand extends BaseCommand {
     }> = [];
 
     for (const providerType of providersToCheck) {
+      // Fast-skip unconfigured providers (no key, not keyless): a dead endpoint
+      // probe on 16 unused providers would make `buff models` noticeably slow
+      // (Issue 001 review feedback). Keyless local runners ARE probed. When no
+      // credential check is available (mocks/plugins), never skip — probe as
+      // before.
+      const configured = typeof this.configManager.hasRequiredCredentials === 'function'
+        ? (() => {
+            try {
+              return this.configManager.hasRequiredCredentials(providerType);
+            } catch {
+              return false;
+            }
+          })()
+        : true;
+      if (!configured && !isCatalogKeyless(providerType)) {
+        logger.debug(`${providerType} not configured — skipping`);
+        continue;
+      }
+
       const resolved = resolveProvider(this.configManager, providerType);
       const provider = resolved.provider;
       const available = await provider.isAvailable();

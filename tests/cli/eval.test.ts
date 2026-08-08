@@ -83,24 +83,24 @@ vi.mock('../../src/cli/router.js', () => ({
   })),
 }));
 
+const mockAutoResolve = vi.hoisted(() => vi.fn(() => ({
+  provider: 'groq',
+  model: 'llama-3.3-70b-versatile',
+  complexity: 'simple',
+  score: 0.87,
+  ranked: [],
+  fallbackChain: [],
+  explanation: 'test decision',
+  agentType: 'chat',
+  taskType: 'code',
+  weights: { reasoning: 0.3, speed: 0.3, cost: 0.2, privacy: 0.1, reliability: 0.1 },
+})));
+
 vi.mock('../../src/learning/auto-router.js', async (importOriginal) => {
   const actual = await importOriginal<typeof import('../../src/learning/auto-router.js')>();
   return {
     ...actual,
-    getAutoRouter: vi.fn(() => ({
-      resolve: vi.fn(() => ({
-        provider: 'groq',
-        model: 'llama-3.3-70b-versatile',
-        complexity: 'simple',
-        score: 0.87,
-        ranked: [],
-        fallbackChain: [],
-        explanation: 'test decision',
-        agentType: 'chat',
-        taskType: 'code',
-        weights: { reasoning: 0.3, speed: 0.3, cost: 0.2, privacy: 0.1, reliability: 0.1 },
-      })),
-    })),
+    getAutoRouter: vi.fn(() => ({ resolve: mockAutoResolve })),
   };
 });
 
@@ -128,6 +128,7 @@ describe('EvalCommand --routing', () => {
     vi.mocked(getEvalTasks).mockClear();
     vi.mocked(runEvalSuite).mockClear();
     vi.mocked(resolveProvider).mockClear();
+    mockAutoResolve.mockClear();
   });
 
   afterEach(() => {
@@ -181,6 +182,23 @@ describe('EvalCommand --routing', () => {
     expect(runEvalSuite).not.toHaveBeenCalled();
     expect(output).toContain('is not available');
     expect(output).toContain('No router picks could be evaluated');
+  });
+
+  it('ISSUE-003: resolves with the FULL chat/orchestrator feature set (bandit, quota, runtime stats, floors, paid gate)', async () => {
+    await runCommand(['run', '--routing']);
+
+    // The hoisted resolve mock is a vi.fn — assert the options handed to it.
+    expect(mockAutoResolve).toHaveBeenCalled();
+    const options = mockAutoResolve.mock.calls[0][2] as Record<string, unknown>;
+    expect(options.useRuntimeStats).toBe(true);
+    expect('useBandit' in options).toBe(true); // bandit ON by default (ISSUE-002)
+    // Routing config is empty here — floor values are unset-but-wired: the
+    // KEYS must be present exactly like chat/orchestrator assemble them.
+    expect('maxCostUsd' in options).toBe(true);
+    expect('minSpeed' in options).toBe(true);
+    expect('minReasoning' in options).toBe(true);
+    expect('allowPaid' in options).toBe(true);
+    expect(Array.isArray(options.quotaStatus)).toBe(true);
   });
 
   it('records routing decisions to the history store', async () => {

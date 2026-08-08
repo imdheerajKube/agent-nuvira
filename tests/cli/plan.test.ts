@@ -135,6 +135,28 @@ describe('PlanCommand — shared single-shot failover runner adoption', () => {
     expect(hint!).toBeGreaterThan(estimateTokens('add auth'));
   });
 
+  it('ISSUE-003: route() resolves with the FULL chat/orchestrator feature set (bandit, quota, runtime stats, floors, paid gate)', async () => {
+    const plan = new PlanCommand();
+    await (plan as any).execute(tempDir, { task: 'add auth' });
+
+    const opts = mockRunSingleShotAuto.mock.calls[0][0];
+    await opts.route([]);
+    const resolveOptions = mockAutoResolve.mock.calls[0][2] as Record<string, unknown>;
+    // Same levers chat + the orchestrator pass — never a degraded plan-only call.
+    // (Routing config is empty in this test, so floor values are unset-but-wired:
+    // the KEYS must be present exactly like chat/orchestrator assemble them.)
+    expect(resolveOptions.useRuntimeStats).toBe(true);
+    expect('useBandit' in resolveOptions).toBe(true); // bandit ON by default (ISSUE-002)
+    expect('maxCostUsd' in resolveOptions).toBe(true);
+    expect('minSpeed' in resolveOptions).toBe(true);
+    expect('minReasoning' in resolveOptions).toBe(true);
+    expect('allowPaid' in resolveOptions).toBe(true);
+    // Quota-ledger status flows through the registry's unified read path.
+    expect(Array.isArray(resolveOptions.quotaStatus)).toBe(true);
+    // Context preflight hint survives alongside the new full option set.
+    expect((resolveOptions as { contextHintTokens?: number }).contextHintTokens).toBeDefined();
+  });
+
   it('route() keeps the picked provider primary and ranks auto-router alternatives', async () => {
     const plan = new PlanCommand();
     await (plan as any).execute(tempDir, { task: 't' });

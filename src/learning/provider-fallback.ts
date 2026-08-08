@@ -26,6 +26,7 @@ import type { ConfigManager } from '../config/manager.js';
 import { getPluginRegistry } from '../plugins/registry.js';
 import { logger } from '../utils/logger.js';
 import { getModelRegistry } from './model-registry.js';
+import { getKeyHygiene } from './key-hygiene.js';
 import { rankAvailableProviders, resolveDefaultProvider } from './model-selection.js';
 
 // ─── Types ──────────────────────────────────────────────────────────────────
@@ -241,6 +242,10 @@ export function recordRegistrySuccess(
 ): void {
   try {
     getModelRegistry().recordCall(providerType, model || 'default', true, undefined, resolveTelemetryAction(action), latencyMs);
+    // ISSUE-004 (4b): a real success PROVES the provider's key works — reset
+    // the consecutive auth-failure counter so one blip can never clear a valid
+    // key. Best-effort — never breaks the call.
+    getKeyHygiene().recordAuthSuccess(providerType);
   } catch {
     // Best-effort — registry telemetry must never break a call.
   }

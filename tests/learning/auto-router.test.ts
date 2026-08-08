@@ -44,6 +44,7 @@ import { resetRouterBandit, getRouterBandit, DEFAULT_MIN_SAMPLES } from '../../s
 import { resetRouterPromotion, getRouterPromotion } from '../../src/learning/router-promotion.js';
 import { resetModelRegistry, getModelRegistry } from '../../src/learning/model-registry.js';
 import { PROVIDER_CONTEXT_WINDOWS } from '../../src/learning/model-selection.js';
+import { CATALOG_PROVIDER_IDS } from '../../src/inference/provider-catalog.js';
 
 // ─── Bandit test isolation ─────────────────────────────────────────────────
 
@@ -1155,6 +1156,27 @@ describe('AutoModelRouter.resolve credential filtering', () => {
     expect(decision.provider).not.toBe('gemini');
   });
 
+  it('considers EVERY catalog provider with credentials — an OPENAI key makes openai a candidate (Issue 001)', () => {
+    // Issue 001: the candidate pool is the FULL catalog, credential-filtered.
+    // Setting OPENAI_API_KEY (here: granting openai credentials) must make
+    // openai participate in routing — not just the 6 built-ins.
+    const configManager = makeConfig((p) => p === 'groq' || p === 'openai' || p === 'local');
+    const decision = new AutoModelRouter().resolve('writer', 'implement a login form', {}, configManager);
+    expect(decision.ranked.some((s) => s.provider === 'openai')).toBe(true);
+    // Providers WITHOUT credentials stay out entirely.
+    expect(decision.ranked.some((s) => s.provider === 'gemini')).toBe(false);
+    expect(decision.ranked.some((s) => s.provider === 'openrouter')).toBe(false);
+    expect(decision.ranked.some((s) => s.provider === 'anthropic')).toBe(false);
+  });
+
+  it('excludes extended catalog providers with no credentials (Issue 001)', () => {
+    const configManager = makeConfig((p) => p === 'groq' || p === 'local');
+    const decision = new AutoModelRouter().resolve('writer', 'implement a login form', {}, configManager);
+    expect(decision.ranked.some((s) => s.provider === 'openai')).toBe(false);
+    expect(decision.ranked.some((s) => s.provider === 'mistral')).toBe(false);
+    expect(decision.ranked.some((s) => s.provider === 'deepseek')).toBe(false);
+  });
+
   it('falls back to all default providers when none have credentials (caller surfaces availability)', () => {
     const configManager = makeConfig(() => false);
     const decision = new AutoModelRouter().resolve('writer', 'implement a login form', {}, configManager);
@@ -1203,6 +1225,43 @@ describe('AutoModelRouter.resolve credential filtering', () => {
     registry.recordCall('nim', 'meta/llama-3.3-70b-instruct', true);
     const unblocked = new AutoModelRouter().resolve('writer', 'implement a login form', {}, configManager);
     expect(unblocked.ranked.some((s) => s.provider === 'nim')).toBe(true);
+  });
+
+  it('excludes DEGRADED providers (0 verified + ≥3 unavailable) and cites the registry counts (ISSUE-002)', () => {
+    const registry = getModelRegistry();
+    // openrouter: 3 unavailable + 0 verified → degraded by the ISSUE-002
+    // pre-filter even when credentials exist. The explanation must cite the
+    // registry data so users can see the gathered telemetry driving decisions.
+    registry.markUnavailable('openrouter', 'openai/gpt-4o', '401', 'telemetry');
+    registry.markUnavailable('openrouter', 'openai/gpt-4o-mini', '401', 'telemetry');
+    registry.markUnavailable('openrouter', 'anthropic/claude-3.5-sonnet', '401', 'telemetry');
+    const configManager = makeConfig(() => true);
+
+    const decision = new AutoModelRouter().resolve('writer', 'implement a login form', {}, configManager);
+    expect(decision.ranked.some((s) => s.provider === 'openrouter')).toBe(false);
+    expect(decision.provider).not.toBe('openrouter');
+    // The audit trail + explanation cite the registry counts.
+    const excluded = decision.registryExcluded || [];
+    expect(excluded.find((e) => e.provider === 'openrouter')?.reason).toContain('0 verified');
+    expect(decision.explanation).toContain('openrouter');
+    expect(decision.explanation).toContain('0 verified');
+    expect(decision.explanation).toContain('3 unavailable');
+  });
+
+  it('explicit allowedProviders bypass the registry pre-filter (caller knows best)', () => {
+    const registry = getModelRegistry();
+    registry.markUnavailable('openrouter', 'openai/gpt-4o', '401', 'telemetry');
+    registry.markUnavailable('openrouter', 'openai/gpt-4o-mini', '401', 'telemetry');
+    registry.markUnavailable('openrouter', 'anthropic/claude-3.5-sonnet', '401', 'telemetry');
+    const configManager = makeConfig(() => true);
+
+    // Explicitly listing openrouter opts out of the registry filter — the
+    // caller (a user forcing a provider) takes precedence over registry data.
+    const decision = new AutoModelRouter().resolve('writer', 'implement a login form', {
+      allowedProviders: ['openrouter'],
+    }, configManager);
+    expect(decision.ranked.some((s) => s.provider === 'openrouter')).toBe(true);
+    expect(decision.registryExcluded || []).toEqual([]);
   });
 
   it('ignores credential filtering when configManager lacks hasRequiredCredentials', () => {
@@ -1480,13 +1539,18 @@ describe('AutoModelRouter.resolve governance (M2.4 admin policy)', () => {
   it('allowProviders restricts the candidate set to the admin list', () => {
     const configManager = makeConfig({ governance: { allowProviders: ['groq', 'local'] } });
     const decision = new AutoModelRouter().resolve('writer', 'implement a login form', {}, configManager);
-    // nim/gemini/openrouter/nuvira are eliminated — never ranked, never picked.
+    // Only groq + local survive the admin allow-list — never ranked, never picked.
     expect(decision.ranked.every((s) => s.provider === 'groq' || s.provider === 'local')).toBe(true);
-    // The audit trail shows the policy kills (nuvira joined the candidate
-    // universe in P5, so it is blocked by the admin allow-list like any
-    // non-listed provider).
+    // Issue 001: the FULL catalog is the candidate universe now, so the audit
+    // trail shows every non-listed catalog provider killed by the allow-list
+    // (keyless runners beyond local — nuvira/lmstudio/vllm — aren't candidates
+    // unless verified/configured, so they never appear in the blocked audit).
     const blocked = decision.governanceBlocked || [];
-    expect(blocked.map((b) => b.provider).sort()).toEqual(['gemini', 'nim', 'nuvira', 'openrouter']);
+    expect(blocked.map((b) => b.provider).sort()).toEqual(
+      CATALOG_PROVIDER_IDS.filter(
+        (p) => p !== 'groq' && p !== 'local' && !['nuvira', 'lmstudio', 'vllm'].includes(p),
+      ).sort(),
+    );
     expect(blocked.every((b) => b.reason.includes('allowProviders'))).toBe(true);
   });
 
@@ -1546,7 +1610,9 @@ describe('AutoModelRouter.resolve governance (M2.4 admin policy)', () => {
     const configManager = makeConfig({ governance: { piiPatterns: ['api[_-]?key'] } });
     // The task mentions an API key → privacy-sensitive → only local (privacy 1.0).
     const decision = new AutoModelRouter().resolve('writer', 'rotate the api_key in .env safely', {}, configManager);
-    expect(decision.ranked.every((s) => s.provider === 'local')).toBe(true);
+    // Issue 001: every catalog provider with privacy >= 1.0 survives — local
+    // AND lmstudio (both fully-local runners). Cloud providers are blocked.
+    expect(decision.ranked.every((s) => s.provider === 'local' || s.provider === 'lmstudio')).toBe(true);
     const blocked = decision.governanceBlocked || [];
     expect(blocked.length).toBeGreaterThan(0);
     expect(blocked.every((b) => b.reason.includes('PII'))).toBe(true);
@@ -1563,7 +1629,11 @@ describe('AutoModelRouter.resolve governance (M2.4 admin policy)', () => {
   it('unset/empty governance policy is fully permissive (existing behavior)', () => {
     const configManager = makeConfig({});
     const decision = new AutoModelRouter().resolve('writer', 'implement a login form', {}, configManager);
-    expect(decision.ranked.length).toBe(DEFAULT_AUTO_PROVIDERS.length);
+    // Issue 001: with credentials for the full catalog (the mock grants all),
+    // every catalog provider is a candidate — except the keyless runners
+    // beyond local (nuvira/lmstudio/vllm), which need verification or explicit
+    // config. The policy stays permissive either way.
+    expect(decision.ranked.length).toBe(CATALOG_PROVIDER_IDS.length - 3);
     expect(decision.governanceBlocked || []).toEqual([]);
   });
 
@@ -1578,7 +1648,10 @@ describe('AutoModelRouter.resolve governance (M2.4 admin policy)', () => {
   });
 
   it('governance hard-gate THROWS with the full audit trail when the admin deny list kills everyone', () => {
-    const configManager = makeConfig({ governance: { denyProviders: ['local', 'groq', 'gemini', 'nim', 'openrouter', 'nuvira'] } });
+    // Issue 001: the deny list must cover the FULL catalog to kill everyone
+    // (previously 6 built-ins sufficed; now every catalog provider is a
+    // candidate when credentials are granted).
+    const configManager = makeConfig({ governance: { denyProviders: [...CATALOG_PROVIDER_IDS] } });
     let thrown: unknown;
     try {
       new AutoModelRouter().resolve('writer', 'implement a login form', {}, configManager);
@@ -1593,12 +1666,13 @@ describe('AutoModelRouter.resolve governance (M2.4 admin policy)', () => {
   });
 
   it('mixed soft+hard elimination THROWS (a governance kill must never be resurrected by a soft fallback)', () => {
-    // minReasoning 0.9 eliminates local/groq/nim/gemini on its own (SOFT →
-    // benign fallback on its own), while openrouter (reasoning 0.95) survives
-    // the soft checks and is killed by the ADMIN deny list. Falling back would
-    // resurrect the deny-listed openrouter, so the gate must throw.
+    // minReasoning 0.9 eliminates most providers on its own (SOFT → benign
+    // fallback on its own), while the reasoning-≥0.9 survivors (openrouter,
+    // openai, anthropic, azure — the full catalog now) are killed by the
+    // ADMIN deny list. Falling back would resurrect a deny-listed provider,
+    // so the gate must throw.
     const configManager = makeConfig({
-      governance: { denyProviders: ['openrouter'] },
+      governance: { denyProviders: ['openrouter', 'openai', 'anthropic', 'azure'] },
     });
     expect(() => new AutoModelRouter().resolve('writer', 'implement a login form', {
       minReasoning: 0.9,
@@ -1868,6 +1942,54 @@ describe('M2.5 context preflight', () => {
     expect(light.provider).toBe('local');
     expect(heavy.ranked.find((r) => r.provider === 'gemini')!.contextFit).toBe(1);
     expect(heavy.ranked.find((r) => r.provider === 'local')!.contextFit).toBeCloseTo(0.65, 3);
+  });
+
+  it('provider-estimate windows carry contextWindowSource but keep the reason clean (ISSUE-002)', () => {
+    // local has a provider-level nominal window (8K) but no LIVE advertised
+    // descriptor in the registry → source 'provider' (a known estimate). The
+    // window is a known quantity, so the REASON stays clean for normal-size
+    // tasks; the source is still surfaced on the row + preflight snapshot.
+    const decision = new AutoModelRouter().resolve('writer', 'implement a login form', {
+      allowedProviders: ['local', 'groq'],
+      contextHintTokens: 60_000,
+    }, makeConfig());
+    const local = decision.ranked.find((r) => r.provider === 'local')!;
+    expect(local.contextWindowSource).toBe('provider');
+    expect(local.reason).not.toContain('no advertised spec');
+    const groq = decision.ranked.find((r) => r.provider === 'groq')!;
+    expect(groq.contextWindowSource).toBe('provider');
+    // The preflight snapshot carries the source for the explain view.
+    expect(decision.contextPreflight?.providers.find((p) => p.provider === 'local')?.contextWindowSource)
+      .toBe('provider');
+  });
+
+  it('LIVE advertised windows are NOT flagged as estimates (the truth needs no chip)', () => {
+    // A live probe descriptor (Ollama/OpenRouter context_length) recorded in
+    // the registry is the provider's ADVERTISED spec — no estimate chip.
+    getModelRegistry().markListed('local', [
+      { id: 'qwen3:32b', name: 'qwen3:32b', provider: 'local', contextWindowTokens: 32_768 },
+    ]);
+    const decision = new AutoModelRouter().resolve('writer', 'implement a login form', {
+      allowedProviders: ['local'],
+    }, makeConfig({}, { local: { model: 'qwen3:32b' } }));
+    const local = decision.ranked.find((r) => r.provider === 'local')!;
+    expect(local.contextWindowSource).toBe('live');
+    expect(local.reason).not.toContain('provider estimate');
+    expect(local.reason).not.toContain('no advertised spec');
+  });
+
+  it('a provider with NO window anywhere falls back to the default and is flagged (ISSUE-002)', () => {
+    // A custom (non-catalog) provider has no provider-level window and no live
+    // descriptor → the generous default. The reason must flag it as an
+    // unadvertised-spec default, never silently treat it like a real window.
+    const decision = new AutoModelRouter({ mycustom: { reasoning: 0.5, speed: 0.5, cost: 0.5, privacy: 0.3, reliability: 0.7 } })
+      .resolve('writer', 'implement a login form', {
+        allowedProviders: ['mycustom'],
+      }, makeConfig());
+    const row = decision.ranked.find((r) => r.provider === 'mycustom')!;
+    expect(row.contextWindowSource).toBe('default');
+    expect(row.contextWindowTokens).toBe(DEFAULT_CONTEXT_WINDOW);
+    expect(row.reason).toContain('no advertised spec');
   });
 });
 

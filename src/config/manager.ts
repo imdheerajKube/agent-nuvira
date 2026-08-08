@@ -5,6 +5,7 @@ import { resolveBuffConfigDir } from './paths.js';
 import { loadEnv } from '../utils/env.js';
 import { logger } from '../utils/logger.js';
 import { resolveDefaultProvider } from '../learning/model-selection.js';
+import { CATALOG_ENV_VARS, isCatalogKeyless } from '../inference/provider-catalog.js';
 
 // NO hardcoded provider/model defaults: the default provider is the routing
 // directive 'auto' (the best AVAILABLE provider is resolved at runtime from
@@ -179,28 +180,37 @@ export class ConfigManager {
   }
 
   /**
-   * Override API keys from environment variables
+   * Override API keys from environment variables.
    * Environment variables take priority over the config file.
+   *
+   * DYNAMIC (Issue 001): every catalog provider's standard env var is mapped,
+   * so a user who sets ANY of the 17+ provider keys (OPENAI_API_KEY,
+   * ANTHROPIC_API_KEY, MISTRAL_API_KEY, ...) sees that provider become a
+   * routing/probing candidate — not just the original four hardcoded vars.
    */
   private overrideFromEnv(config: BuffConfig): void {
     // Debug logging to help troubleshoot env var detection
     const envVarsChecked: string[] = [];
 
-    if (this.env.NVIDIA_NIM_API_KEY) {
-      config.providers.nim.apiKey = this.env.NVIDIA_NIM_API_KEY;
-      envVarsChecked.push('NVIDIA_NIM_API_KEY');
+    for (const [provider, envVar] of Object.entries(CATALOG_ENV_VARS)) {
+      const value = this.env[envVar];
+      if (value) {
+        if (!config.providers[provider]) {
+          config.providers[provider] = { model: 'default', temperature: 0.7, maxTokens: 4096 };
+        }
+        config.providers[provider].apiKey = value;
+        envVarsChecked.push(envVar);
+      }
     }
-    if (this.env.GEMINI_API_KEY) {
-      config.providers.gemini.apiKey = this.env.GEMINI_API_KEY;
-      envVarsChecked.push('GEMINI_API_KEY');
-    }
-    if (this.env.OPENROUTER_API_KEY) {
-      config.providers.openrouter.apiKey = this.env.OPENROUTER_API_KEY;
-      envVarsChecked.push('OPENROUTER_API_KEY');
-    }
-    if (this.env.GROQ_API_KEY) {
-      config.providers.groq.apiKey = this.env.GROQ_API_KEY;
-      envVarsChecked.push('GROQ_API_KEY');
+
+    // Azure OpenAI: the ENDPOINT (resource base URL) is required alongside the
+    // key — map AZURE_OPENAI_ENDPOINT into providers.azure.baseUrl so the
+    // generic adapter targets the resource, not the localhost fallback.
+    if (this.env.AZURE_OPENAI_ENDPOINT) {
+      if (!config.providers.azure) {
+        config.providers.azure = { model: 'default', temperature: 0.7, maxTokens: 4096 };
+      }
+      config.providers.azure.baseUrl = this.env.AZURE_OPENAI_ENDPOINT.trim().replace(/\/+$/, '');
     }
 
     if (envVarsChecked.length > 0) {
@@ -290,6 +300,54 @@ export class ConfigManager {
   }
 
   /**
+   * ISSUE-004 (4b): remove a provider's API key from the config file after it
+   * has been proven invalid (consecutive 401/403s).
+   *
+   * `failedKey` is the SPECIFIC credential that 401'd (undefined = the primary
+   * `apiKey`). It is removed wherever it lives — the primary field, or a
+   * matching entry in the `apiKeys[]` rotation list (M2.3), so a dead rotation
+   * key can't keep failing while the provider's other keys stay usable.
+   *
+   * Env-sourced keys (loaded via `overrideFromEnv`) are re-injected on every
+   * load, so they cannot be removed from the file — the caller is told which
+   * env var to fix instead (`envSourced: true` + the var name). Only keys
+   * written to the FILE are actually cleared. Best-effort — never throws (a
+   * failed clear must never break a live call).
+   */
+  clearProviderApiKey(
+    provider: string,
+    failedKey?: string,
+  ): { cleared: boolean; envSourced: boolean; envVar?: string } {
+    try {
+      const envVar = CATALOG_ENV_VARS[provider];
+      const envValue = envVar ? this.env[envVar] : undefined;
+      const cfg = this.config.providers[provider];
+      if (!cfg) return { cleared: false, envSourced: false };
+      const target = failedKey ?? cfg.apiKey;
+      if (!target) return { cleared: false, envSourced: false };
+      // A key whose value equals its catalog env var was injected from the
+      // environment — the file can't clear it (it re-injects on load).
+      if (envValue && target === envValue) {
+        return { cleared: false, envSourced: true, envVar };
+      }
+      let removed = false;
+      if (cfg.apiKey === target) {
+        delete cfg.apiKey;
+        removed = true;
+      }
+      if (Array.isArray(cfg.apiKeys) && cfg.apiKeys.includes(target)) {
+        cfg.apiKeys = cfg.apiKeys.filter((k) => k !== target);
+        removed = true;
+      }
+      if (removed) this.save({ providers: { [provider]: cfg } });
+      return { cleared: removed, envSourced: false };
+    } catch {
+      // Best-effort — never break a live call over key hygiene.
+      return { cleared: false, envSourced: false };
+    }
+  }
+
+  /**
    * Check if a provider has a REAL, usable API key.
    *
    * A non-empty string is NOT enough: docs placeholders ("openrouter-env-key",
@@ -306,6 +364,9 @@ export class ConfigManager {
     // adapter probes reachability (isAvailable) before use, so an unconfigured
     // gateway is harmlessly skipped at the availability walk, never failed into.
     if (provider === 'nuvira') return true;
+    // Issue 001: catalog keyless providers (LM Studio, vLLM/TGI, ...) need no
+    // API key — they count as configured and reachability is probed instead.
+    if (isCatalogKeyless(provider)) return true;
     const apiKey = this.config.providers[provider]?.apiKey;
     if (!apiKey) return false;
     // A docs placeholder is NOT a credential — skip predictively.

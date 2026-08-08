@@ -12,6 +12,7 @@ import { recordRegistrySuccess } from '../learning/provider-fallback.js';
 import { recordActionFailure, type FailureSessionState } from '../learning/failure-bookkeeping.js';
 import { runSingleShotAuto } from './failover-runner.js';
 import { PIIPolicyError, GovernancePolicyError } from '../learning/auto-router.js';
+import { buildAutoResolveOptions } from '../learning/resolve-options.js';
 import { estimateTokens } from '../learning/cost-tracker.js';
 
 /**
@@ -134,11 +135,19 @@ Use clear markdown formatting.`;
           let complexity = 'moderate';
           let score = 0;
           try {
-            // M2.5 context-length preflight: pass the REAL prompt payload (task +
-            // the codebase context parsed from the target) as the token hint so
-            // plan routes toward big-window providers for large contexts — the
-            // router falls back to the tiny task-description estimate otherwise.
-            const decision = getAutoRouter().resolve('plan', task, { contextHintTokens: estimateTokens(prompt) }, this.configManager);
+            // ISSUE-003: plan routes with the SAME full feature set as chat /
+            // the orchestrator (bandit learning, quota-ledger status, runtime
+            // stats, cost/speed/reasoning floors, paid-model gate) — never a
+            // degraded "fixed-in-chat-only" decision. The M2.5 context preflight
+            // passes the REAL prompt payload (task + parsed codebase context) as
+            // the token hint so plan routes toward big-window providers for
+            // large contexts.
+            const decision = getAutoRouter().resolve(
+              'plan',
+              task,
+              buildAutoResolveOptions(this.configManager, { contextHintTokens: estimateTokens(prompt) }),
+              this.configManager,
+            );
             ranked = decision.ranked
               .map((r) => r.provider)
               .filter((p) => p !== type && !excludeProviders.includes(p));

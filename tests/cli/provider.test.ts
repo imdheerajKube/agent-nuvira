@@ -23,6 +23,7 @@ import { logger } from '../../src/utils/logger.js';
 import type { InferenceProvider, ModelDescriptor } from '../../src/inference/interface.js';
 import type { ProviderType } from '../../src/config/types.js';
 import type { ProviderConfig, BuffConfig } from '../../src/config/types.js';
+import { CATALOG_PROVIDER_IDS } from '../../src/inference/provider-catalog.js';
 
 // ─── Mock helpers ───────────────────────────────────────────────────────────
 
@@ -157,13 +158,10 @@ describe('ProviderCommand', () => {
     PLUGIN_MOCK.getAllPlugins.mockReturnValue([]);
     muteConsole();
 
-    // Default: all providers with keys and available
-    mockApiKeyPresence = {
-      groq: true,
-      nim: true,
-      gemini: true,
-      openrouter: true,
-    };
+    // Issue 001: the CLI lists the FULL catalog now — give every catalog
+    // provider a key + an available mock so list/health summary counts cover
+    // the whole catalog (individual tests flip specific providers as needed).
+    mockApiKeyPresence = {};
     mockFullConfig = makeBuffConfig();
     mockConfigs = {
       groq: { model: 'llama-3.3-70b-versatile', apiKey: 'gsk_test_key' },
@@ -172,13 +170,12 @@ describe('ProviderCommand', () => {
       openrouter: { model: 'mistralai/mistral-7b-instruct', apiKey: 'openrouter_test_key' },
       local: { model: 'llama2' },
     };
-
-    // Default: all providers available
-    for (const pt of ['local', 'groq', 'nim', 'gemini', 'openrouter']) {
+    for (const pt of CATALOG_PROVIDER_IDS) {
+      mockApiKeyPresence[pt] = true;
       mockResolveResults.set(pt, {
         type: pt as ProviderType,
         provider: createMockProvider({
-          name: pt === 'local' ? 'Local' : pt.charAt(0).toUpperCase() + pt.slice(1),
+          name: pt,
           isAvailable: vi.fn().mockResolvedValue(true),
           listModels: vi.fn().mockResolvedValue([
             makeModel(mockConfigs[pt]?.model || 'test-model', { provider: pt }),
@@ -195,13 +192,14 @@ describe('ProviderCommand', () => {
   // ── provider list ─────────────────────────────────────────────────────
 
   describe('provider list', () => {
-    it('should list all 5 built-in providers with available status', async () => {
+    it('should list the built-in providers with available status', async () => {
       const highlightSpy = vi.spyOn(logger, 'highlight');
 
       await runProvider(['list']);
 
       expect(highlightSpy).toHaveBeenCalledWith(expect.stringContaining('Provider Status'));
-      // Verify all providers were logged
+      // Verify the well-known providers were logged (Issue 001: the full
+      // catalog is listed, not just these five).
       for (const label of ['Local', 'Groq', 'NVIDIA', 'Gemini', 'OpenRouter']) {
         expect(console.log).toHaveBeenCalledWith(expect.stringContaining(label));
       }
@@ -210,8 +208,9 @@ describe('ProviderCommand', () => {
     it('should show summary counts when all providers available', async () => {
       await runProvider(['list']);
 
+      // Issue 001: every catalog provider is listed (all keyed + available here).
       expect(console.log).toHaveBeenCalledWith(
-        expect.stringContaining('✅ 5 available')
+        expect.stringContaining(`✅ ${CATALOG_PROVIDER_IDS.length} available`)
       );
     });
 
@@ -240,14 +239,17 @@ describe('ProviderCommand', () => {
     });
 
     it('should show not configured status when providers have no API key', async () => {
-      // Remove API keys for groq and openrouter
+      // Remove API keys for groq and openrouter — the rest of the catalog stays
+      // keyed (local is always configured), so the not-configured count is the
+      // catalog minus the still-configured providers.
       mockApiKeyPresence.groq = false;
       mockApiKeyPresence.openrouter = false;
 
       await runProvider(['list']);
 
+      const configured = CATALOG_PROVIDER_IDS.filter((p) => p !== 'groq' && p !== 'openrouter');
       expect(console.log).toHaveBeenCalledWith(
-        expect.stringContaining('❌ 2 not configured')
+        expect.stringContaining(`❌ ${CATALOG_PROVIDER_IDS.length - configured.length} not configured`)
       );
     });
 

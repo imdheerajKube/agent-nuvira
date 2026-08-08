@@ -14,6 +14,7 @@ import { resolveProvider } from './router.js';
 import { getPluginRegistry } from '../plugins/registry.js';
 import { ProviderType } from '../config/types.js';
 import { InferenceProvider, ModelDescriptor } from '../inference/interface.js';
+import { CATALOG_PROVIDER_IDS, getCatalogProvider, catalogEnvVar, isCatalogKeyless } from '../inference/provider-catalog.js';
 import {
   ModelCategory,
   CATEGORY_INFO,
@@ -62,23 +63,24 @@ const CATEGORY_ORDER: Record<ModelCategory, number> = {
 
 // ─── Provider Metadata ──────────────────────────────────────────────────────
 
-const PROVIDER_ICONS: Record<string, string> = {
-  local: '💻',
-  nim: '🔶',
-  gemini: '🔷',
-  openrouter: '🟣',
-  groq: '🟢',
-  nuvira: '🧭',
-};
+// Provider icons + eligibility hints derived from the catalog (Issue 001) so
+// the picker covers all 17+ onboardable providers without hardcoding.
+const PROVIDER_ICONS: Record<string, string> = {};
+for (const id of CATALOG_PROVIDER_IDS) {
+  const entry = getCatalogProvider(id);
+  if (entry) PROVIDER_ICONS[id] = entry.icon;
+}
 
-const PROVIDER_ELIGIBILITY: Record<string, string> = {
-  local: 'Works offline — no API key needed',
-  nim: 'NVIDIA NIM cloud service — set NVIDIA_NIM_API_KEY',
-  gemini: 'Google Gemini cloud service — set GEMINI_API_KEY',
-  openrouter: 'OpenRouter unified API service — set OPENROUTER_API_KEY',
-  groq: 'Groq LPU cloud inference — set GROQ_API_KEY',
-  nuvira: 'OpenAI-compatible gateway — set provider.nuvira.baseUrl (default http://127.0.0.1:20128/v1)',
-};
+const PROVIDER_ELIGIBILITY: Record<string, string> = {};
+for (const id of CATALOG_PROVIDER_IDS) {
+  const entry = getCatalogProvider(id);
+  if (!entry) continue;
+  const env = catalogEnvVar(id);
+  const base = entry.baseUrl ? ` (default ${entry.baseUrl})` : '';
+  PROVIDER_ELIGIBILITY[id] = isCatalogKeyless(id)
+    ? `No API key needed — runs locally${base}`
+    : `${entry.label} cloud service — set ${env || `${id.toUpperCase()}_API_KEY`}`;
+}
 
 // ─── Picker Result ──────────────────────────────────────────────────────────
 
@@ -98,12 +100,9 @@ export async function showModelPicker(configManager: ConfigManager): Promise<Pic
 
   const registry = getPluginRegistry();
   const pluginTypes = registry.getAllPlugins().map((plugin) => plugin.getProviderType());
+  // Issue 001: the full catalog — every onboardable provider participates.
   const providerTypes: string[] = Array.from(new Set([
-    'local',
-    'nim',
-    'gemini',
-    'openrouter',
-    'groq',
+    ...CATALOG_PROVIDER_IDS,
     ...pluginTypes,
   ]));
 
@@ -114,6 +113,20 @@ export async function showModelPicker(configManager: ConfigManager): Promise<Pic
   const checkResults = await Promise.all(
     providerTypes.map(async (pt) => {
       const resolved = resolveProvider(configManager, pt);
+      // Fast-skip: a provider with no configured key (and not keyless) can't be
+      // available — skip the network probe so the picker never waits on 16
+      // dead endpoints (Issue 001 review feedback). Keyless local runners ARE
+      // probed — they may be running without any key.
+      const configured = (() => {
+        try {
+          return configManager.hasRequiredCredentials?.(pt) ?? true;
+        } catch {
+          return false;
+        }
+      })();
+      if (!configured && !isCatalogKeyless(pt)) {
+        return { pt, resolved, available: false };
+      }
       let available = false;
       try {
         available = await withTimeout(

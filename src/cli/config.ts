@@ -4,6 +4,7 @@ import { getPluginRegistry } from '../plugins/registry.js';
 import { logger } from '../utils/logger.js';
 import { ProviderType, BuffConfig } from '../config/types.js';
 import { clearModelListCache } from '../inference/model-validator.js';
+import { CATALOG_PROVIDER_IDS, getCatalogProvider, catalogEnvVar, isCatalogKeyless } from '../inference/provider-catalog.js';
 
 /**
  * Config command — manage buff configuration
@@ -531,13 +532,18 @@ export class ConfigCommand extends BaseCommand {
     const config = this.configManager.getAll();
     logger.highlight('\nAvailable Providers:\n');
 
-    const providers: Array<{ name: string; type: ProviderType; status: string }> = [
-      { name: 'NVIDIA NIM', type: 'nim', status: this.configManager.hasRequiredCredentials('nim') ? '✅' : '❌ No API key' },
-      { name: 'Google Gemini', type: 'gemini', status: this.configManager.hasRequiredCredentials('gemini') ? '✅' : '❌ No API key' },
-      { name: 'OpenRouter', type: 'openrouter', status: this.configManager.hasRequiredCredentials('openrouter') ? '✅' : '❌ No API key' },
-      { name: 'Groq', type: 'groq', status: this.configManager.hasRequiredCredentials('groq') ? '✅' : '❌ No API key' },
-      { name: 'Local', type: 'local', status: '✅ Always available' },
-    ];
+    // Issue 001: the FULL catalog — every onboardable provider is listed with
+    // its catalog label + real env-var hint, not just the 5 built-ins.
+    const providers: Array<{ name: string; type: ProviderType; status: string }> = CATALOG_PROVIDER_IDS.map((type) => {
+      const entry = getCatalogProvider(type);
+      const name = entry ? `${entry.icon} ${entry.label}` : type;
+      const status = isCatalogKeyless(type)
+        ? '✅ No key needed (reachability probed)'
+        : this.configManager.hasRequiredCredentials(type)
+          ? '✅'
+          : `❌ No API key (${catalogEnvVar(type) || `${type.toUpperCase()}_API_KEY`})`;
+      return { name, type: type as ProviderType, status };
+    });
 
     for (const p of providers) {
       const model = config.providers[p.type]?.model || 'default';

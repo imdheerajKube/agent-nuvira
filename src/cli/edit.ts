@@ -5,10 +5,16 @@ import { BaseCommand } from './commands.js';
 import { ContextParser } from '../context/parser.js';
 import { logger } from '../utils/logger.js';
 import { getProviderFallback, classifyFallbackError, isRetryableError, recordRegistryFailure, recordRegistrySuccess } from '../learning/provider-fallback.js';
+import { getAutoRouter, isAutoModel, isAutoProvider } from '../learning/auto-router.js';
+import { buildAutoResolveOptions } from '../learning/resolve-options.js';
+import { runSingleShotAuto } from './failover-runner.js';
+import { recordActionFailure, type FailureSessionState } from '../learning/failure-bookkeeping.js';
+import { resolveProvider } from './router.js';
 
 /**
  * Edit command — edit files using AI assistance
  * buff edit <file> [--provider nim] [--instruction "add error handling"]
+ * buff edit <file> --auto-route -i "add error handling"   (router-ranked walk)
  */
 export class EditCommand extends BaseCommand {
   create(): Command {
@@ -18,26 +24,19 @@ export class EditCommand extends BaseCommand {
       .option('-i, --instruction <text>', 'Edit instruction')
       .option('-p, --provider <provider>', 'Inference provider')
       .option('-m, --model <model>', 'Model to use')
+      .option('--auto-route', 'Auto-route the edit to the best provider/model (Auto model)', false)
       .option('--dry-run', 'Show proposed changes without modifying the file')
       .option('--review', 'Create a review bundle capturing proposed changes instead of writing directly')
-      .action(async (file: string, options?: { instruction?: string; provider?: string; model?: string; dryRun?: boolean; review?: boolean }) => {
+      .action(async (file: string, options?: { instruction?: string; provider?: string; model?: string; autoRoute?: boolean; dryRun?: boolean; review?: boolean }) => {
         await this.execute(file, options || {});
       });
 
     return command;
   }
 
-  private async execute(file: string, options?: { instruction?: string; provider?: string; model?: string; dryRun?: boolean; review?: boolean }): Promise<void> {
+  private async execute(file: string, options?: { instruction?: string; provider?: string; model?: string; autoRoute?: boolean; dryRun?: boolean; review?: boolean }): Promise<void> {
     if (!existsSync(file)) {
       logger.error(`File not found: ${file}`);
-      return;
-    }
-
-    const { type, provider } = await this.getProvider(options || {});
-
-    const available = await provider.isAvailable();
-    if (!available) {
-      logger.error(`${provider.name} is not available. Check your configuration.`);
       return;
     }
 
@@ -49,6 +48,28 @@ export class EditCommand extends BaseCommand {
     const contextStr = ContextParser.formatContext(context);
 
     const prompt = `I have the following code in ${file}:\n\n${contextStr}\n\nInstruction: ${instruction}\n\nPlease provide the complete updated file content. Return ONLY the code, no explanations.`;
+
+    // ISSUE-003: edit supports the SAME auto routing as chat/execute/plan —
+    // either via an explicit --auto-route flag or an 'auto' provider/model.
+    // The router-ranked walk (runSingleShotAuto) handles the primary pick,
+    // ranked failover for ALL failure classes, key rotation, and full shared
+    // bookkeeping — never the degraded single-provider path of the past.
+    if (options?.autoRoute || isAutoProvider(options?.provider) || isAutoModel(options?.model)) {
+      await this.executeAutoRouted(file, options, prompt, content, instruction);
+    } else {
+      await this.executeDirect(file, options, prompt, content);
+    }
+  }
+
+  /** Legacy single-provider path (explicit --provider/--model, no auto). */
+  private async executeDirect(file: string, options: { instruction?: string; provider?: string; model?: string; autoRoute?: boolean; dryRun?: boolean; review?: boolean } | undefined, prompt: string, content: string): Promise<void> {
+    const { type, provider } = await this.getProvider(options || {});
+
+    const available = await provider.isAvailable();
+    if (!available) {
+      logger.error(`${provider.name} is not available. Check your configuration.`);
+      return;
+    }
 
     const spinner = ora(`Editing ${file} with ${provider.name}...`).start();
 
@@ -132,6 +153,122 @@ export class EditCommand extends BaseCommand {
 
       writeFileSync(file, codeResult, 'utf-8');
       spinner.succeed(`Updated ${file}`);
+    } catch (err) {
+      spinner.fail('Edit failed');
+      logger.error(String(err));
+    }
+  }
+
+  /**
+   * ISSUE-003: router-ranked edit walk. Resolves the PRIMARY through the auto
+   * router (full feature set: bandit, quota, runtime stats, floors, paid gate)
+   * and fails over through the router's ranked candidates via the SHARED
+   * single-shot walk — identical to plan/chat/execute so a dead provider is
+   * never retried and every failure feeds the shared bookkeeping.
+   */
+  private async executeAutoRouted(file: string, options: { instruction?: string; provider?: string; model?: string; autoRoute?: boolean; dryRun?: boolean; review?: boolean } | undefined, prompt: string, content: string, instruction: string): Promise<void> {
+    const failureSession: FailureSessionState = {
+      sessionFailedProviders: new Map(),
+      sessionTransientFailedProviders: new Set(),
+    };
+    // Captured by generate() so the review bundle attributes the ACTUAL winner
+    // provider × model (the walk may fail over away from the primary).
+    let winner: { provider: string; model: string } = { provider: 'auto', model: 'default' };
+
+    const spinner = ora(`Auto-routing edit for ${file}...`).start();
+    try {
+      const result = await runSingleShotAuto({
+        action: 'edit',
+        task: instruction,
+        configManager: this.configManager,
+        route: async (excludeProviders) => {
+          const decision = getAutoRouter().resolve(
+            'edit',
+            instruction,
+            buildAutoResolveOptions(this.configManager),
+            this.configManager,
+          );
+          // ISSUE-003: an explicit --provider stays PRIMARY (user intent wins,
+          // mirroring plan.ts); the router supplies the ranked fallback. Only
+          // when no provider is pinned does the router's pick lead the walk.
+          const primaryType = options?.provider && !isAutoProvider(options.provider)
+            ? options.provider
+            : decision.provider;
+          const primary = resolveProvider(this.configManager, primaryType);
+          const model = options?.model && !isAutoModel(options.model)
+            ? options.model
+            : decision.model;
+          const ranked = decision.ranked
+            .map((r) => r.provider)
+            .filter((p) => p !== primaryType && !excludeProviders.includes(p));
+          return {
+            type: primaryType,
+            provider: primary.provider,
+            model,
+            ranked,
+            complexity: decision.complexity,
+            score: decision.score,
+          };
+        },
+        generate: async (genProvider, genType, model, apiKey) => {
+          winner = { provider: genType, model: model || 'default' };
+          const out = await genProvider.generate(prompt, { ...options, model, apiKey });
+          // Success attribution: this edit call PROVED the provider × model
+          // works — per-action "learned from real usage" panel gains an
+          // 'edit' verified row.
+          recordRegistrySuccess(genType, model, 'edit');
+          return out;
+        },
+        recordFailure: (providerType, model, err, apiKey) =>
+          recordActionFailure(failureSession, providerType, err, this.configManager, {
+            model,
+            action: 'edit',
+            apiKey,
+          }),
+      });
+
+      spinner.stop();
+
+      if (options?.dryRun) {
+        logger.highlight('\n--- Proposed Changes ---\n');
+        console.log(result);
+        logger.highlight('\n--- End ---\n');
+        return;
+      }
+
+      // Extract code block if present
+      let codeResult = result;
+      const codeBlockMatch = result.match(/```[\w]*\n([\s\S]*?)```/);
+      if (codeBlockMatch) {
+        codeResult = codeBlockMatch[1];
+      }
+
+      if (options?.review) {
+        const { createReviewFromResult } = await import('../team/review.js');
+        const review = createReviewFromResult(
+          instruction,
+          [{
+            path: file,
+            originalContent: content,
+            newContent: codeResult,
+            status: 'modified',
+          }],
+          `Edit: ${instruction}\n\nModified: ${file}`,
+          {
+            provider: winner.provider,
+            model: winner.model,
+            author: process.env.USER || 'agent-baba-d',
+          },
+        );
+
+        logger.highlight(`\n📋 Created review bundle: ${review.id}`);
+        logger.info(`   Run \`buff team review show ${review.id}\` to view`);
+        logger.info(`   Run \`buff team review approve ${review.id}\` then \`buff team review merge ${review.id}\` to apply`);
+        return;
+      }
+
+      writeFileSync(file, codeResult, 'utf-8');
+      logger.success(`✅ Updated ${file}`);
     } catch (err) {
       spinner.fail('Edit failed');
       logger.error(String(err));

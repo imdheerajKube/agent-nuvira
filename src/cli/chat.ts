@@ -28,6 +28,7 @@ import { refreshModelRegistry, spotCheckModel } from '../inference/model-probe.j
 import { recordRoutingDecision } from '../learning/routing-history.js';
 import { shouldConfirmFailover, promptFailoverChoice } from './failover-prompt.js';
 import { runSingleShotAuto } from './failover-runner.js';
+import { buildAutoResolveOptions } from '../learning/resolve-options.js';
 import { buildContinuationNote, isPartialFailure } from '../learning/continuation.js';
 import { compressLossless } from '../learning/compression.js';
 
@@ -976,7 +977,6 @@ export class ChatCommand extends BaseCommand {
     excludeProviders: string[] = [],
     opts?: { contextHintTokens?: number },
   ): Promise<AutoRoutedMessage> {
-    const routing = this.configManager.getAll().routing || {};
     // Feed the SHARED circuit breaker into the router so a provider that has
     // failed repeatedly (recorded by recordFailure below) is deprioritized by
     // scoring, not just skipped by the candidate walk.
@@ -986,37 +986,20 @@ export class ChatCommand extends BaseCommand {
     } catch {
       // Best-effort — routing must never crash on circuit-breaker bookkeeping
     }
-    // Feed the QUOTA state too: a provider whose free-tier window is exhausted
-    // (or was parked by a mid-session failure) sinks below healthy candidates
-    // predictively, matching the orchestrator path. Read through the Model
-    // Availability Registry's UNIFIED store — the registry mirrors the ledger's
-    // parks + full token/reset telemetry, so the pick path reads ONE primary
-    // sub-ms store (the ledger stays the writer, the registry the read model).
-    let quotaStatus: Array<{ provider: string; cooldownRemaining: number }> = [];
-    try {
-      quotaStatus = getModelRegistry().getRouterQuotaStatus(this.configManager);
-    } catch {
-      // Best-effort — routing must never crash on ledger bookkeeping
-    }
+    // ISSUE-003: ONE resolve-options assembly for every action point. The
+    // shared helper supplies the full chat/orchestrator feature set (bandit
+    // learning ON by default, quota-ledger status, runtime stats, cost/speed/
+    // reasoning floors, paid-model gate, context preflight); chat layers its
+    // circuit-breaker state on top.
     const decision = getAutoRouter().resolve(
       'chat',
       message,
       {
-        verbose: process.env.BUFF_DEBUG === 'true',
-        useRuntimeStats: true,
-        useBandit: routing.bandit === true,
-        maxCostUsd: routing.maxCostUsd,
-        minSpeed: routing.minSpeed,
-        minReasoning: routing.minReasoning,
-        escalationMinSamples: routing.escalationMinSamples,
+        ...buildAutoResolveOptions(this.configManager, {
+          verbose: process.env.BUFF_DEBUG === 'true',
+          contextHintTokens: opts?.contextHintTokens,
+        }),
         circuitBreakerStatus,
-        quotaStatus,
-        allowPaid: routing.allowPaid,
-        // M2.5 context preflight: the caller passes its real estimated payload
-        // (conversation history + message, or the built full prompt) so the
-        // router's soft context-fit signal sees the ACTUAL prompt size — a
-        // growing session naturally routes toward big-window providers.
-        contextHintTokens: opts?.contextHintTokens,
       },
       this.configManager,
     );

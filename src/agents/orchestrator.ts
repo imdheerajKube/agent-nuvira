@@ -50,6 +50,7 @@ import { scanForInjections, formatScanReport } from '../security/scanner.js';
 import { getAutoRouter, isAutoModel, isAutoProvider, type AutoRouteResult } from '../learning/auto-router.js';
 import { analyzeComplexity, type ComplexityLevel } from '../learning/hybrid-router.js';
 import { getModelRegistry } from '../learning/model-registry.js';
+import { buildAutoResolveOptions } from '../learning/resolve-options.js';
 import { recordRegistrySuccess } from '../learning/provider-fallback.js';
 import { recordActionFailure, type FailureSessionState } from '../learning/failure-bookkeeping.js';
 import { resolveWorkingModel } from '../inference/model-validator.js';
@@ -1719,7 +1720,8 @@ export class Orchestrator {
       // improves from actual results. Only when bandit learning is ENABLED —
       // otherwise the getLastProvider() lookup could reward/penalize a stale
       // provider noted by an earlier bandit-enabled run in this process.
-      if (autoRouting && this.configManager.getAll().routing?.bandit === true) {
+      // ISSUE-002: enabled by default (opt-out via routing.bandit = false).
+      if (autoRouting && this.configManager.getAll().routing?.bandit !== false) {
         try {
           getAutoRouter().recordOutcome(
             task.agentType,
@@ -1978,35 +1980,21 @@ export class Orchestrator {
     task: { agentType: string; description: string; complexity?: string; contextHintTokens?: number },
     options: OrchestratorOptions,
   ): AutoRouteResult {
-    const routing = this.configManager.getAll().routing || {};
-    // Quota-ledger parked providers sink below healthy ones — a provider whose
-    // free-tier window is exhausted (or was parked by a mid-session failure) is
-    // skipped predictively instead of failing reactively. Read through the
-    // Model Availability Registry's UNIFIED store — same primary-store pick
-    // path as chat, so exhausted providers carry their remaining time-to-wait
-    // in the same sub-ms read (the ledger stays the writer, the registry the
-    // read model).
-    let quotaStatus: Array<{ provider: string; cooldownRemaining: number }> = [];
-    try {
-      quotaStatus = getModelRegistry().getRouterQuotaStatus(this.configManager);
-    } catch {
-      // Best-effort — routing must never crash on ledger bookkeeping.
-    }
+    // ISSUE-003: ONE resolve-options assembly for every action point. The
+    // shared helper supplies the full chat/orchestrator feature set (bandit
+    // learning ON by default, quota-ledger status via the registry's unified
+    // read path, runtime stats, cost/speed/reasoning floors, paid-model gate,
+    // context preflight); the orchestrator layers its per-task complexity hint
+    // on top.
     const decision = getAutoRouter().resolve(
       task.agentType,
       task.description,
       {
-        verbose: options.verbose,
-        useRuntimeStats: true,
-        useBandit: routing.bandit === true,
-        maxCostUsd: routing.maxCostUsd,
-        minSpeed: routing.minSpeed,
-        minReasoning: routing.minReasoning,
-        escalationMinSamples: routing.escalationMinSamples,
+        ...buildAutoResolveOptions(this.configManager, {
+          verbose: options.verbose,
+          contextHintTokens: task.contextHintTokens,
+        }),
         complexityHint: task.complexity as ComplexityLevel | undefined,
-        quotaStatus,
-        allowPaid: routing.allowPaid,
-        contextHintTokens: task.contextHintTokens,
       },
       this.configManager,
     );

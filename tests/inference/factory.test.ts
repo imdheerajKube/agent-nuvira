@@ -6,6 +6,8 @@ import { OpenRouterAdapter } from '../../src/inference/openrouter-adapter.js';
 import { GroqAdapter } from '../../src/inference/groq-adapter.js';
 import { LocalAdapter } from '../../src/inference/local-adapter.js';
 import { NuviraAdapter } from '../../src/inference/nuvira-adapter.js';
+import { OpenAICompatAdapter } from '../../src/inference/openai-compat-adapter.js';
+import { AnthropicAdapter } from '../../src/inference/anthropic-adapter.js';
 import { getPluginRegistry } from '../../src/plugins/registry.js';
 
 describe('ProviderFactory', () => {
@@ -46,6 +48,46 @@ describe('ProviderFactory', () => {
       const provider = ProviderFactory.createProvider('groq', emptyConfig);
       expect(provider).toBeInstanceOf(GroqAdapter);
       expect(provider.name).toBe('Groq');
+    });
+
+    // ── Issue 001: the extended catalog is served by the generic adapters ──
+
+    it('should create OpenAICompatAdapter for extended OpenAI-compatible providers (openai)', () => {
+      const provider = ProviderFactory.createProvider('openai', emptyConfig);
+      expect(provider).toBeInstanceOf(OpenAICompatAdapter);
+      expect(provider.name).toBe('OpenAI');
+    });
+
+    it('should create OpenAICompatAdapter for every catalog OpenAI-compatible provider', () => {
+      for (const type of ['mistral', 'cohere', 'together', 'deepinfra', 'fireworks', 'perplexity', 'azure', 'lmstudio', 'anyscale', 'vllm', 'deepseek', 'xai', 'replicate']) {
+        const provider = ProviderFactory.createProvider(type, emptyConfig);
+        expect(provider).toBeInstanceOf(OpenAICompatAdapter);
+      }
+    });
+
+    it('should create AnthropicAdapter for the native anthropic type', () => {
+      const provider = ProviderFactory.createProvider('anthropic', emptyConfig);
+      expect(provider).toBeInstanceOf(AnthropicAdapter);
+      expect(provider.name).toBe('Anthropic');
+    });
+
+    it('should use the azure api-key header + api-version query from the catalog', () => {
+      const provider = ProviderFactory.createProvider('azure', { apiKey: 'az-key' }) as OpenAICompatAdapter;
+      expect(provider.getInfo()).toContain('Azure OpenAI');
+      // The adapter applies the api-key header and api-version on requests —
+      // exercise the request builder via a mocked fetch.
+      const fetchMock = vi.fn().mockResolvedValue({
+        ok: true,
+        json: async () => ({ choices: [{ message: { content: 'ok' } }] }),
+      });
+      vi.stubGlobal('fetch', fetchMock);
+      return provider.generate('hi').then(() => {
+        const [url, init] = fetchMock.mock.calls[0] as [string, { headers: Record<string, string> }];
+        expect(String(url)).toContain('api-version=');
+        expect(init.headers['api-key']).toBe('az-key');
+        expect(init.headers['Authorization']).toBeUndefined();
+        vi.unstubAllGlobals();
+      });
     });
 
     it('should throw for unknown provider type', () => {

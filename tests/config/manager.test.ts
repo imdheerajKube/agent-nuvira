@@ -9,11 +9,17 @@ describe('ConfigManager', () => {
 
   beforeEach(() => {
     testDir = mkdtempSync(join(tmpdir(), 'buff-config-test-'));
-    // Ensure env vars don't leak between tests
+    // Ensure env vars don't leak between tests (the extended catalog set too
+    // — Issue 001 env mapping covers all of them).
     delete process.env.NVIDIA_NIM_API_KEY;
     delete process.env.GEMINI_API_KEY;
     delete process.env.OPENROUTER_API_KEY;
     delete process.env.GROQ_API_KEY;
+    delete process.env.OPENAI_API_KEY;
+    delete process.env.ANTHROPIC_API_KEY;
+    delete process.env.MISTRAL_API_KEY;
+    delete process.env.DEEPINFRA_TOKEN;
+    delete process.env.REPLICATE_API_TOKEN;
     // Isolate from the real ~/.buff/.env (may hold real keys after the M7.4
     // secrets migration): point the home .env lookup at a non-existent path.
     delete process.env.BUFF_ENV_FILE;
@@ -199,6 +205,39 @@ describe('ConfigManager', () => {
       const config = manager.getAll();
 
       expect(config.providers.nim.apiKey).toBe('env-key-override');
+    });
+
+    it('maps EVERY catalog provider env var — a user who sets any of the 17+ keys is configured (Issue 001)', () => {
+      // Real-looking keys (NOT placeholders — the manager rejects those).
+      process.env.OPENAI_API_KEY = 'sk-proj-fakekey1234567890';
+      process.env.ANTHROPIC_API_KEY = 'sk-ant-api03-fakekey1234567890';
+      process.env.MISTRAL_API_KEY = 'Mfakekey1234567890';
+      process.env.DEEPINFRA_TOKEN = 'df-infra-fakekey1234567890';
+      process.env.REPLICATE_API_TOKEN = 'r8_fakekey1234567890';
+
+      const manager = new ConfigManager(join(testDir, 'test-env-catalog'));
+      const config = manager.getAll();
+
+      expect(config.providers.openai.apiKey).toBe('sk-proj-fakekey1234567890');
+      expect(config.providers.anthropic.apiKey).toBe('sk-ant-api03-fakekey1234567890');
+      expect(config.providers.mistral.apiKey).toBe('Mfakekey1234567890');
+      expect(config.providers.deepinfra.apiKey).toBe('df-infra-fakekey1234567890');
+      expect(config.providers.replicate.apiKey).toBe('r8_fakekey1234567890');
+      // And they all count as configured for routing/probing.
+      expect(manager.hasRequiredCredentials('openai')).toBe(true);
+      expect(manager.hasRequiredCredentials('anthropic')).toBe(true);
+      expect(manager.hasRequiredCredentials('deepinfra')).toBe(true);
+    });
+
+    it('counts catalog KEYLESS providers as configured without any env var (Issue 001)', () => {
+      const manager = new ConfigManager(join(testDir, 'test-env-keyless'));
+      expect(manager.hasRequiredCredentials('local')).toBe(true);
+      expect(manager.hasRequiredCredentials('nuvira')).toBe(true);
+      expect(manager.hasRequiredCredentials('lmstudio')).toBe(true);
+      expect(manager.hasRequiredCredentials('vllm')).toBe(true);
+      // Keyed providers without a key are NOT configured.
+      expect(manager.hasRequiredCredentials('openai')).toBe(false);
+      expect(manager.hasRequiredCredentials('openrouter')).toBe(false);
     });
   });
 
@@ -551,6 +590,86 @@ describe('ConfigManager', () => {
 
       expect(config.history!.retentionDays).toBe(14);
       expect(config.history!.semanticSearch).toBe(false);
+    });
+  });
+
+  describe('clearProviderApiKey (ISSUE-004)', () => {
+    it('removes a file-written invalid key and persists the change', () => {
+      const configDir = join(testDir, 'test-clear-key');
+      mkdirSync(configDir, { recursive: true });
+      writeFileSync(
+        join(configDir, 'buffconfig.json'),
+        JSON.stringify({ providers: { groq: { apiKey: 'dead-groq-key' } } }),
+        'utf-8',
+      );
+
+      const manager = new ConfigManager(configDir);
+      const result = manager.clearProviderApiKey('groq');
+      expect(result.cleared).toBe(true);
+      expect(result.envSourced).toBe(false);
+      expect(manager.getAll().providers.groq.apiKey).toBeUndefined();
+      // Persisted — a reload sees the cleared key.
+      const reloaded = new ConfigManager(configDir);
+      expect(reloaded.getAll().providers.groq.apiKey).toBeUndefined();
+    });
+
+    it('reports env-sourced keys instead of clearing the file', () => {
+      const configDir = join(testDir, 'test-env-key');
+      mkdirSync(configDir, { recursive: true });
+      writeFileSync(
+        join(configDir, 'buffconfig.json'),
+        JSON.stringify({ providers: { openrouter: { apiKey: 'stale-file-key' } } }),
+        'utf-8',
+      );
+
+      // The env var wins over the file (overrideFromEnv) — the live key IS the
+      // env value, so clearing the file cannot fix it and envSourced is true.
+      const prevEnv = process.env.OPENROUTER_API_KEY;
+      process.env.OPENROUTER_API_KEY = 'live-env-key';
+      try {
+        const manager = new ConfigManager(configDir);
+        expect(manager.getAll().providers.openrouter.apiKey).toBe('live-env-key');
+        const result = manager.clearProviderApiKey('openrouter');
+        expect(result.cleared).toBe(false);
+        expect(result.envSourced).toBe(true);
+        expect(result.envVar).toBe('OPENROUTER_API_KEY');
+      } finally {
+        if (prevEnv === undefined) {
+          delete process.env.OPENROUTER_API_KEY;
+        } else {
+          process.env.OPENROUTER_API_KEY = prevEnv;
+        }
+      }
+    });
+
+    it('removes a dead ROTATION key from apiKeys[] while keeping the primary', () => {
+      const configDir = join(testDir, 'test-rotation-clear');
+      mkdirSync(configDir, { recursive: true });
+      writeFileSync(
+        join(configDir, 'buffconfig.json'),
+        JSON.stringify({ providers: { groq: { apiKey: 'good-primary', apiKeys: ['dead-rot', 'good-rot'] } } }),
+        'utf-8',
+      );
+
+      const manager = new ConfigManager(configDir);
+      const result = manager.clearProviderApiKey('groq', 'dead-rot');
+      expect(result.cleared).toBe(true);
+      expect(manager.getAll().providers.groq.apiKey).toBe('good-primary');
+      expect(manager.getAll().providers.groq.apiKeys).toEqual(['good-rot']);
+      // Persisted.
+      const reloaded = new ConfigManager(configDir);
+      expect(reloaded.getAll().providers.groq.apiKeys).toEqual(['good-rot']);
+    });
+
+    it('is a no-op for providers with no configured key', () => {
+      const configDir = join(testDir, 'test-no-key');
+      mkdirSync(configDir, { recursive: true });
+      writeFileSync(join(configDir, 'buffconfig.json'), JSON.stringify({ providers: {} }), 'utf-8');
+
+      const manager = new ConfigManager(configDir);
+      const result = manager.clearProviderApiKey('groq');
+      expect(result.cleared).toBe(false);
+      expect(result.envSourced).toBe(false);
     });
   });
 });
