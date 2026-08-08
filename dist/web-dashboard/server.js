@@ -19,6 +19,7 @@ import { resolveBuffConfigDir, resolveBuffConfigPath } from '../config/paths.js'
 import { loadEnv } from '../utils/env.js';
 import { getAutoRouter } from '../learning/auto-router.js';
 import { getRouterPromotion } from '../learning/router-promotion.js';
+import { AUTH_CLEAR_THRESHOLD } from '../learning/key-hygiene.js';
 import { ACTION_LOG_FILENAME, aggregateActionTelemetry, readActionTelemetryFile } from '../learning/model-registry.js';
 // ─── Constants ──────────────────────────────────────────────────────────────
 const PORT = parseInt(process.env.BUFF_DASHBOARD_PORT || '3030', 10);
@@ -950,6 +951,19 @@ const AVG_PAID_RATE_PER_1K = 0.0005;
  * reset windows, parked state). Backs the dashboard's Quota card.
  */
 /**
+ * ISSUE-004: read the key-hygiene store (key-hygiene.json) — the consecutive
+ * 401/403 auth-failure counters per provider that drive the auto-clear at
+ * AUTH_CLEAR_THRESHOLD. Surfaces how close each provider is to having its
+ * dead key cleared, so the Models panel can warn BEFORE the threshold.
+ */
+function readKeyHygieneData() {
+    const data = readJSON(join(MEMORY_DIR, 'key-hygiene.json'));
+    return {
+        threshold: AUTH_CLEAR_THRESHOLD,
+        consecutive: data?.consecutiveAuthFailures ?? {},
+    };
+}
+/**
  * Read the Model Availability Registry mirror (model-registry.json) — the
  * UNIFIED enterprise read store: per provider × model it carries availability
  * (verified / unverified / unavailable), quota telemetry mirrored from the
@@ -960,7 +974,13 @@ const AVG_PAID_RATE_PER_1K = 0.0005;
 function readModelRegistryData() {
     const data = readJSON(join(MEMORY_DIR, 'model-registry.json'));
     if (!data?.entries) {
-        return { enabled: false, total: 0, flaky: 0, providers: [], actionTelemetry: readRegistryTelemetry(), updatedAt: Date.now() };
+        return {
+            enabled: false, total: 0, flaky: 0, providers: [],
+            actionTelemetry: readRegistryTelemetry(),
+            keyHygiene: readKeyHygieneData(),
+            deletedLocal: 0,
+            updatedAt: Date.now(),
+        };
     }
     const now = Date.now();
     const byProvider = new Map();
@@ -1025,6 +1045,11 @@ function readModelRegistryData() {
         // each action (chat / execute / plan / edit / ...) killed or verified, so
         // the predictive skips routing makes are VISIBLE in the dashboard.
         actionTelemetry: readRegistryTelemetry(),
+        // ISSUE-004: how close each provider is to having its dead key auto-
+        // cleared (3 consecutive 401/403s) + how many verified local models were
+        // demoted because they were deleted from the machine (ollama rm).
+        keyHygiene: readKeyHygieneData(),
+        deletedLocal: allModels.filter((m) => m.lastError === 'model deleted from local system').length,
         updatedAt: now,
     };
 }

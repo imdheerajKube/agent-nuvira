@@ -13,16 +13,30 @@ import chalk from 'chalk';
 import { BaseCommand } from './commands.js';
 import { resolveProvider } from './router.js';
 import { getPluginRegistry } from '../plugins/registry.js';
+import { CATALOG_PROVIDER_IDS, getCatalogProvider, catalogEnvVar } from '../inference/provider-catalog.js';
 import { logger } from '../utils/logger.js';
 // ─── Provider Display Metadata ──────────────────────────────────────────────
-const PROVIDER_DISPLAY = {
-    local: { icon: '💻', label: 'Local (Ollama)', color: (s) => chalk.hex('#5dade2')(s) },
-    groq: { icon: '⚡', label: 'Groq', color: (s) => chalk.hex('#00c853')(s) },
-    nim: { icon: '🎮', label: 'NVIDIA NIM', color: (s) => chalk.hex('#76b900')(s) },
-    gemini: { icon: '🌀', label: 'Google Gemini', color: (s) => chalk.hex('#4285f4')(s) },
-    openrouter: { icon: '🌐', label: 'OpenRouter', color: (s) => chalk.hex('#a855f7')(s) },
+// Built from the provider catalog (Issue 001): every catalog provider gets its
+// icon + label in the list — nothing hardcoded to the 6 built-ins.
+const PROVIDER_DISPLAY = {};
+for (const id of CATALOG_PROVIDER_IDS) {
+    const entry = getCatalogProvider(id);
+    if (entry) {
+        PROVIDER_DISPLAY[id] = { icon: entry.icon, label: entry.label, color: (s) => chalk.hex('#5dade2')(s) };
+    }
+}
+// Brand colors for the well-known providers (fallback: default blue).
+const BRAND_COLORS = {
+    groq: '#00c853', nim: '#76b900', gemini: '#4285f4', openrouter: '#a855f7', openai: '#10a37f',
+    anthropic: '#d97757', mistral: '#f97316', cohere: '#3b82f6', deepseek: '#4f8cc9',
 };
-const BUILTIN_PROVIDERS = ['local', 'groq', 'nim', 'gemini', 'openrouter'];
+for (const [id, hex] of Object.entries(BRAND_COLORS)) {
+    if (PROVIDER_DISPLAY[id])
+        PROVIDER_DISPLAY[id].color = (s) => chalk.hex(hex)(s);
+}
+// Dynamic provider universe: every catalog provider (Issue 001) — the status
+// table marks configured vs not, so all 17+ onboardable providers are visible.
+const BUILTIN_PROVIDERS = [...CATALOG_PROVIDER_IDS];
 // ─── Table Helpers ──────────────────────────────────────────────────────────
 function statusIcon(available, configured) {
     if (available)
@@ -285,13 +299,12 @@ export class ProviderCommand extends BaseCommand {
     }
     // ── Helpers ───────────────────────────────────────────────────────────────
     getEnvVarName(providerType) {
-        const map = {
-            groq: 'GROQ_API_KEY',
-            gemini: 'GEMINI_API_KEY',
-            nim: 'NVIDIA_NIM_API_KEY',
-            openrouter: 'OPENROUTER_API_KEY',
-        };
-        return map[providerType] || `${providerType.toUpperCase()}_API_KEY`;
+        // Issue 001: the catalog knows the REAL env var for every provider
+        // (DEEPINFRA_TOKEN, REPLICATE_API_TOKEN, ... not just *_API_KEY).
+        const catalog = catalogEnvVar(providerType);
+        if (catalog)
+            return catalog;
+        return `${providerType.toUpperCase()}_API_KEY`;
     }
     getEndpointDetail(providerType) {
         const endpoints = {

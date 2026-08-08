@@ -4,12 +4,42 @@ import { resolveBuffConfigDir } from './paths.js';
 import { loadEnv } from '../utils/env.js';
 import { logger } from '../utils/logger.js';
 import { resolveDefaultProvider } from '../learning/model-selection.js';
+import { CATALOG_ENV_VARS, isCatalogKeyless } from '../inference/provider-catalog.js';
 // NO hardcoded provider/model defaults: the default provider is the routing
 // directive 'auto' (the best AVAILABLE provider is resolved at runtime from
 // the user's keys + verified models — see resolveDefaultProvider), and every
 // provider's model pin is the 'default' sentinel (the agent resolves a
 // verified working model at call time). A user who pins a provider/model
 // explicitly still overrides these (explicit wins, health-checked).
+/**
+ * Sentinel/placeholder API keys — values that LOOK like a key but are docs
+ * placeholders or env-var names copy-pasted as the value (e.g. the literal
+ * string "openrouter-env-key", "new-key", "your-key", "<key>"). A provider
+ * whose key is a placeholder must NOT count as "configured": the router would
+ * otherwise route into it and burn real attempts on a guaranteed 401 (the
+ * observed failure: OpenRouter/NIM had placeholder keys, were treated as
+ * configured, and were routed into while groq/gemini/local — real keys — sat
+ * idle). Real keys never match these patterns (gsk_*, AQ.*, sk-or-v1-*,
+ * nvapi-*, AIza*, sk-ant-*...).
+ */
+const PLACEHOLDER_KEY_PATTERNS = [
+    /-env-key$/i, // "openrouter-env-key" — env var NAME used as the value
+    /^(new|your|my|some|sample|demo|test|fake|placeholder|changeme|change-me)[-_ ]?key$/i,
+    /^<[^>]+>$/, // "<your-api-key>"
+    /^sk-$/i,
+    /^sk-[a-z]+$/i, // "sk-test", "sk-abc" — no real token
+    /^x{4,}$/i, // "xxxx"
+    /^(OPENROUTER|GROQ|GEMINI|NVIDIA_NIM|NIM|OPENAI|ANTHROPIC|DEEPSEEK|MISTRAL|TOGETHER|PERPLEXITY|XAI|COHERE|REPLICATE|AZURE)_API_KEY$/i,
+];
+/** True when a key value is a docs placeholder / env-var name, not a real credential. */
+export function isPlaceholderApiKey(key) {
+    if (!key)
+        return false;
+    const trimmed = key.trim();
+    if (trimmed.length === 0)
+        return false;
+    return PLACEHOLDER_KEY_PATTERNS.some((re) => re.test(trimmed));
+}
 const DEFAULT_CONFIG = {
     defaultProvider: 'auto',
     providers: {
@@ -132,27 +162,35 @@ export class ConfigManager {
         return config;
     }
     /**
-     * Override API keys from environment variables
+     * Override API keys from environment variables.
      * Environment variables take priority over the config file.
+     *
+     * DYNAMIC (Issue 001): every catalog provider's standard env var is mapped,
+     * so a user who sets ANY of the 17+ provider keys (OPENAI_API_KEY,
+     * ANTHROPIC_API_KEY, MISTRAL_API_KEY, ...) sees that provider become a
+     * routing/probing candidate — not just the original four hardcoded vars.
      */
     overrideFromEnv(config) {
         // Debug logging to help troubleshoot env var detection
         const envVarsChecked = [];
-        if (this.env.NVIDIA_NIM_API_KEY) {
-            config.providers.nim.apiKey = this.env.NVIDIA_NIM_API_KEY;
-            envVarsChecked.push('NVIDIA_NIM_API_KEY');
+        for (const [provider, envVar] of Object.entries(CATALOG_ENV_VARS)) {
+            const value = this.env[envVar];
+            if (value) {
+                if (!config.providers[provider]) {
+                    config.providers[provider] = { model: 'default', temperature: 0.7, maxTokens: 4096 };
+                }
+                config.providers[provider].apiKey = value;
+                envVarsChecked.push(envVar);
+            }
         }
-        if (this.env.GEMINI_API_KEY) {
-            config.providers.gemini.apiKey = this.env.GEMINI_API_KEY;
-            envVarsChecked.push('GEMINI_API_KEY');
-        }
-        if (this.env.OPENROUTER_API_KEY) {
-            config.providers.openrouter.apiKey = this.env.OPENROUTER_API_KEY;
-            envVarsChecked.push('OPENROUTER_API_KEY');
-        }
-        if (this.env.GROQ_API_KEY) {
-            config.providers.groq.apiKey = this.env.GROQ_API_KEY;
-            envVarsChecked.push('GROQ_API_KEY');
+        // Azure OpenAI: the ENDPOINT (resource base URL) is required alongside the
+        // key — map AZURE_OPENAI_ENDPOINT into providers.azure.baseUrl so the
+        // generic adapter targets the resource, not the localhost fallback.
+        if (this.env.AZURE_OPENAI_ENDPOINT) {
+            if (!config.providers.azure) {
+                config.providers.azure = { model: 'default', temperature: 0.7, maxTokens: 4096 };
+            }
+            config.providers.azure.baseUrl = this.env.AZURE_OPENAI_ENDPOINT.trim().replace(/\/+$/, '');
         }
         if (envVarsChecked.length > 0) {
             logger.debug(`Config: Loaded API keys from env vars: ${envVarsChecked.join(', ')}`);
@@ -230,7 +268,62 @@ export class ConfigManager {
         writeFileSync(this.configPath, JSON.stringify(this.config, null, 2), 'utf-8');
     }
     /**
-     * Check if a provider has the required API key
+     * ISSUE-004 (4b): remove a provider's API key from the config file after it
+     * has been proven invalid (consecutive 401/403s).
+     *
+     * `failedKey` is the SPECIFIC credential that 401'd (undefined = the primary
+     * `apiKey`). It is removed wherever it lives — the primary field, or a
+     * matching entry in the `apiKeys[]` rotation list (M2.3), so a dead rotation
+     * key can't keep failing while the provider's other keys stay usable.
+     *
+     * Env-sourced keys (loaded via `overrideFromEnv`) are re-injected on every
+     * load, so they cannot be removed from the file — the caller is told which
+     * env var to fix instead (`envSourced: true` + the var name). Only keys
+     * written to the FILE are actually cleared. Best-effort — never throws (a
+     * failed clear must never break a live call).
+     */
+    clearProviderApiKey(provider, failedKey) {
+        try {
+            const envVar = CATALOG_ENV_VARS[provider];
+            const envValue = envVar ? this.env[envVar] : undefined;
+            const cfg = this.config.providers[provider];
+            if (!cfg)
+                return { cleared: false, envSourced: false };
+            const target = failedKey ?? cfg.apiKey;
+            if (!target)
+                return { cleared: false, envSourced: false };
+            // A key whose value equals its catalog env var was injected from the
+            // environment — the file can't clear it (it re-injects on load).
+            if (envValue && target === envValue) {
+                return { cleared: false, envSourced: true, envVar };
+            }
+            let removed = false;
+            if (cfg.apiKey === target) {
+                delete cfg.apiKey;
+                removed = true;
+            }
+            if (Array.isArray(cfg.apiKeys) && cfg.apiKeys.includes(target)) {
+                cfg.apiKeys = cfg.apiKeys.filter((k) => k !== target);
+                removed = true;
+            }
+            if (removed)
+                this.save({ providers: { [provider]: cfg } });
+            return { cleared: removed, envSourced: false };
+        }
+        catch {
+            // Best-effort — never break a live call over key hygiene.
+            return { cleared: false, envSourced: false };
+        }
+    }
+    /**
+     * Check if a provider has a REAL, usable API key.
+     *
+     * A non-empty string is NOT enough: docs placeholders ("openrouter-env-key",
+     * "new-key", "<your-key>") pass a bare truthiness check and then fail with a
+     * guaranteed 401 on the first call — which is exactly how a provider with a
+     * fake key can be routed into while real-keyed providers sit idle. Placeholder
+     * keys are treated as NOT configured so the router skips them predictively
+     * and only surfaces an error after every genuinely-configured option fails.
      */
     hasRequiredCredentials(provider) {
         if (provider === 'local')
@@ -241,7 +334,36 @@ export class ConfigManager {
         // gateway is harmlessly skipped at the availability walk, never failed into.
         if (provider === 'nuvira')
             return true;
-        return !!this.config.providers[provider]?.apiKey;
+        // Issue 001: catalog keyless providers (LM Studio, vLLM/TGI, ...) need no
+        // API key — they count as configured and reachability is probed instead.
+        if (isCatalogKeyless(provider))
+            return true;
+        const apiKey = this.config.providers[provider]?.apiKey;
+        if (!apiKey)
+            return false;
+        // A docs placeholder is NOT a credential — skip predictively.
+        if (isPlaceholderApiKey(apiKey))
+            return false;
+        return true;
+    }
+    /**
+     * Log a clear, one-time warning for providers holding placeholder API keys,
+     * so the user knows why a provider is skipped by auto routing (instead of
+     * discovering it via repeated 401s). Best-effort — never throws.
+     */
+    warnPlaceholderKeys() {
+        try {
+            for (const [provider, cfg] of Object.entries(this.config.providers)) {
+                if (cfg?.apiKey && isPlaceholderApiKey(cfg.apiKey)) {
+                    logger.warn(`      ⚠️ ${provider} has a placeholder API key ('${cfg.apiKey}') — this looks like ` +
+                        `a docs example or env-var name, not a real key. Auto routing will SKIP ${provider} ` +
+                        `until a valid key is set (buff config set provider.${provider}.apiKey ...).`);
+                }
+            }
+        }
+        catch {
+            // Best-effort — a config warning must never break startup.
+        }
     }
 }
 //# sourceMappingURL=manager.js.map

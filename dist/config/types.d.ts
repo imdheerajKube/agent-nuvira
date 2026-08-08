@@ -186,7 +186,11 @@ export interface RoutingConfig {
      * Enable Thompson-sampling bandit learning for Auto model routing.
      * Providers are scored by deterministic heuristics × a Beta draw learned
      * from real task outcomes (recorded automatically by the orchestrator).
-     * Default: false.
+     * ISSUE-002: enabled by default — set false to opt out. Cold start is
+     * deterministic (untouched Beta(1,1) priors sample the mean), so enabling
+     * it never randomizes an unlearned ranking; it only starts shifting routing
+     * once real outcomes accumulate.
+     * Default: true.
      */
     bandit?: boolean;
     /**

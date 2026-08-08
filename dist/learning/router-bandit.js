@@ -331,6 +331,16 @@ export class RouterBandit {
      */
     sampleScore(provider, complexity, score) {
         const prior = this.getPrior(provider, complexity);
+        // ISSUE-002: an untouched Beta(1,1) prior (no outcomes accumulated) means
+        // there is NO learned data — a random uniform draw would randomize the
+        // ranking on a cold start (a 0.9 provider could lose to a 0.5 one purely
+        // by chance). Returning the prior MEAN (0.5) is deterministic AND scales
+        // every provider identically, so a cold-start bandit preserves the
+        // heuristic ordering exactly until real outcomes accumulate. The bandit
+        // is now enabled by default, so this determinism is load-bearing.
+        if (prior.alpha === 1 && prior.beta === 1) {
+            return score * 0.5;
+        }
         const theta = sampleBeta(prior.alpha, prior.beta);
         return score * theta;
     }

@@ -11,6 +11,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+_(nothing yet — this section fills with the next release's changes.)_
+
+---
+
+## [1.61.0] - 2026-08-08
+
+### Added
+
 - **Dynamic provider catalog (Issue 001) — ALL 17+ configured providers join routing.** A new `src/inference/provider-catalog.ts` is the single source of truth for 21 providers (id, label, env var, base URL, OpenAI-compat flag, keyless flag, api-key header, api-version query, capability profile, list pricing, context window). Routing/probing/CLI discovery are now derived at runtime from the user's credentials instead of hardcoded built-ins:
   - `ConfigManager` maps EVERY catalog env var (`OPENAI_API_KEY`, `ANTHROPIC_API_KEY`, `MISTRAL_API_KEY`, `DEEPINFRA_TOKEN`, `REPLICATE_API_TOKEN`, ...) into config, and keyless catalog providers (local, nuvira, lmstudio, vllm) count as configured (reachability probed).
   - `rankAvailableProviders` + the auto-router's `getDefaultAllowedProviders` consider every catalog provider with real credentials (registry-block-aware), falling back to the built-ins only when nothing is configured — a user who sets `OPENAI_API_KEY` now sees OpenAI scored and routed to.
