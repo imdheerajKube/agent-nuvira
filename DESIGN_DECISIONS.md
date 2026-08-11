@@ -782,3 +782,36 @@ TTY — or the "silently continue on a healthy provider" guarantee silently disa
   skips the provider the agent is already bound to even when the fresh decision re-picks
   it (park lag). Previously only pinned mode seeded this; auto mode could "switch" to the
   very provider that just rate-limited, burn one wasted switch, then self-correct.
+- **Dashboard visibility:** every auto-switch writes a `failover` event to the quota
+  timeline (`quota-events.jsonl`, via `getQuotaLedger().recordEvent`) with the reason
+  ("rate-limited 2x" / "exhausted"), so the dashboard's Failover Timeline card shows
+  mid-task provider swaps live — same store the CLI `model quota` last-20 and the audit
+  chain read. Verified live: the NVDA-addon run's "auto-switched to local" and
+  "auto-switched to groq" events now land in the timeline instead of only the event bus.
+
+## 27. The interactive rate-limit prompt is opt-in — askOnRateLimit (v1.62.2)
+
+**Decision:** the legacy interactive rate-limit prompt (wait / switch / skip / abort) is
+now **opt-in** via `routing.askOnRateLimit: true` in `.buffconfig.json`, and even then it
+only appears on a real TTY. The default — and the only behavior in non-interactive/CI
+runs — is fully automatic recovery (decision #26): silent wait + retry for transient
+hits, silent auto-switch for exhaustion and storms.
+
+**Why opt-in rather than removed or default-on:**
+- **Removed** would strand operators who genuinely want to intervene on every quota hit
+  (e.g. cost-sensitive users who prefer to pause rather than burn quota on an unplanned
+  provider). The flag preserves that choice explicitly.
+- **Default-on** would reintroduce the exact failure class the multi-provider stack
+  exists to prevent (the pipeline dying on one provider while the user is away) and
+  breaks non-interactive/CI runs, where no one can answer the prompt.
+- **TTY-only** keeps the flag honest: on a pipe there is no one to ask, so asking would
+  hang the run — the handler silently degrades to automatic instead.
+
+**Precedence:** `options.askOnRateLimit ?? (config.routing.askOnRateLimit === true)` — an
+explicit CLI/API option wins over config; an explicit `false` disables prompts even if
+config enables them.
+
+**Why this decision is recorded:** the flag is the escape hatch for the automatic default
+of #26. Future refactors must keep the ordering — auto-switch before any prompt, prompt
+only when explicitly opted in AND on a TTY — or the "silently continue on a healthy
+provider" guarantee silently disappears.

@@ -878,6 +878,44 @@ describe('Orchestrator — createRateLimitHandler', () => {
     );
   });
 
+  it('should record a failover event on the quota timeline when auto-switching', async () => {
+    Object.defineProperty(process.stdout, 'isTTY', {
+      value: true,
+      configurable: true,
+    });
+
+    vi.spyOn(inquirer, 'prompt').mockResolvedValue({ action: 'retry' });
+
+    const mockDecision = {
+      provider: 'groq',
+      model: 'llama-3.1-8b-instant',
+      ranked: [
+        { provider: 'groq', model: 'llama-3.1-8b-instant', score: 0.9 },
+        { provider: 'gemini', model: 'gemini-flash-latest', score: 0.7 },
+      ],
+    } as any;
+    vi.spyOn(orchestrator as any, 'resolveAutoRoutingDecision').mockReturnValue(mockDecision);
+    vi.spyOn(orchestrator as any, 'createAutoRoutedLLMFromDecision')
+      .mockReturnValue(vi.fn().mockResolvedValue('storm response'));
+
+    // Reset the singleton FIRST — resetting after the spy would null the
+    // instance the spy is attached to, and the orchestrator's getQuotaLedger()
+    // would create a fresh un-spied instance on the auto-switch.
+    resetQuotaLedger();
+    const recordSpy = vi.spyOn(getQuotaLedger(), 'recordEvent');
+
+    const handler = getHandler({ provider: 'auto' })!;
+    await handler(makeRateLimitInfo());
+    await handler(makeRateLimitInfo()); // strike 2 → auto-switch to groq
+
+    expect(recordSpy).toHaveBeenCalledWith(
+      'failover',
+      'groq',
+      expect.stringContaining('rate-limited 2x'),
+    );
+    recordSpy.mockRestore();
+  });
+
   it('should exclude the bound provider in auto mode when the fresh winner is the same (park lag)', async () => {
     Object.defineProperty(process.stdout, 'isTTY', {
       value: true,
