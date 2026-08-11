@@ -21,6 +21,7 @@ import { InferenceProvider, ModelDescriptor } from './interface.js';
 import { InferenceOptions, ProviderConfig } from '../config/types.js';
 import { logger } from '../utils/logger.js';
 import { getCostTracker, recordCallWithUsage } from '../learning/cost-tracker.js';
+import { attachHttpContext } from './http-error.js';
 
 const ANTHROPIC_BASE_URL = 'https://api.anthropic.com';
 const ANTHROPIC_VERSION = '2023-06-01';
@@ -103,7 +104,7 @@ export class AnthropicAdapter implements InferenceProvider {
 
     if (!response.ok) {
       const errorBody = await response.text();
-      throw new Error(`Anthropic API error (${response.status}): ${errorBody}`);
+      throw attachHttpContext(new Error(`Anthropic API error (${response.status}): ${errorBody}`), response.status, response.headers);
     }
 
     const data = (await response.json()) as AnthropicMessageResponse;
@@ -158,7 +159,7 @@ export class AnthropicAdapter implements InferenceProvider {
 
     if (!response.ok) {
       const errorBody = await response.text();
-      throw new Error(`Anthropic API error (${response.status}): ${errorBody}`);
+      throw attachHttpContext(new Error(`Anthropic API error (${response.status}): ${errorBody}`), response.status, response.headers);
     }
 
     const reader = response.body?.getReader();

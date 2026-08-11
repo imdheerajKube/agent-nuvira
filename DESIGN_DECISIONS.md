@@ -618,3 +618,167 @@ when it needs grounding, it doesn't crawl.
 
 **Why this decision is recorded:** so the "why free backends / why a guard / why decode redirects"
 questions never re-open as debates. The tool ships; the reasoning is pinned here.
+
+## 23. Rate-limit failures PARK, they never demote a verified model
+
+**Decision (post-revamp bug fix, v1.62.1):** a `rate-limit` (429 / quota-exhausted) failure
+must NOT flip a model's registry status to `unavailable`. It sets `lastError`, applies a
+quota park (`quotaParkedUntil`), and PRESERVES the existing status (`verified` stays
+`verified`). `auth` failures still demote permanently (the key is dead until re-probed).
+
+**What broke before:** `recordCall(ok=false, 'rate-limit')` flipped `status → 'unavailable'`.
+`isUsable()` requires `status === 'verified'`, so a rate-limited cloud model was excluded
+FOREVER even after the park window lapsed — it only ever came back via a manual
+`buff models unblock` / `models refresh`. On free tiers (Groq/Gemini) a single busy burst
+(repair loops, parallel runs) 429s → every cloud model parked AND demoted → the auto-router
+silently routed ALL agents to the weak local model → slow pipelines + false-success code
+artifacts. The user-visible symptom was "chat answers in seconds, execute is slow + wrong".
+
+**Why park (not demote) is correct:** a 429 is transient by definition. The park is already
+the exclusion mechanism — `getBlockedProviders()` counts a parked entry as a definitive no,
+so routing still predictively skips the provider while the window is active, and the
+per-action telemetry still records the failed call. `markVerified()` clears registry-level
+parks on any real success and `syncQuota()` re-applies only LIVE ledger parks, so recovery
+is self-correcting: if the quota is genuinely exhausted the next call fails and re-parks.
+
+**Recovery window:** governed by the quota ledger (`routing.quota.<provider>.windowMs`,
+default 24h — set from the dashboard quota UI). Free-tier RPM resets are much shorter; a
+24h default can still strand a provider for a day after one burst, so teams on free tiers
+should set a shorter `windowMs` (e.g. 4h) in the dashboard. The registry-level hour-aligned
+park is a floor for the case where no ledger window is configured.
+
+**Why this decision is recorded:** so "why did my cloud provider vanish after a 429" never
+re-opens as a debate, and so no future refactor re-introduces the permanent-demotion bug.
+Tests pin the behavior in `model-registry`, `provider-fallback`, `failure-bookkeeping`,
+`orchestrator`, `plan`/`edit` CLI, and the `failover-learning`/`sidecar-learning` E2E suites.
+
+**Addendum — park for the provider's ACTUAL reset time, not a fixed window (v1.62.1):**
+most 429s are available again in seconds-to-minutes (Groq free tier resets per-minute/hour;
+the registry's own status display says "resets in 17h 51m"), and providers TELL us the reset
+via `Retry-After`, Groq/Anthropic's "Please try again in 16.5s", or Groq's
+`x-ratelimit-reset-*` epoch headers. So the park duration now honors that hint:
+`extractRetryAfterMs(err)` (shared util in `provider-fallback.ts`, also replacing the three
+duplicated `parseRetryAfterHint` copies) reads attached fields → headers → message patterns
+("try again in Xs/ms", "Retry-After: N", "reset in N minutes", "resets in Nh Nm"), and both
+the ledger park (`failure-bookkeeping`) and the registry floor (`recordCall`) park for
+`clamp(hint, 10s, configured windowMs)` instead of `windowMs`/hour-aligned defaults. The
+configured window remains the hard CAP (the user's `routing.quota.<provider>.windowMs` is the
+final say), and a bare 429 with no hint still falls back to the conservative window. Verified
+model + 16.5s hint = parked 16.5s, then auto-recovers — no manual unblock.
+
+## 24. Agent LLM calls fail over across providers (v1.62.1)
+
+**Decision:** an auto-routed agent LLM call (orchestrator's `createAutoRoutedLLMFromDecision`)
+that fails with a RETRYABLE error (503 high-demand / 429 / network / timeout) walks the
+router's next-ranked provider candidates (best-first, up to 3, skipping circuit-breaker
+cooldown) instead of exhausting the repair budget on the single winner. Auth failures on
+the winner never fail over; a user-PINNED provider (ranked list empty) is honored as-is.
+The board shows the live move ("⚠️ gemini server — failing over to groq").
+
+**Why:** the end-to-end NVDA-addon run proved the gap — gemini 503'd ("high demand") and
+the writer retried gemini 3× and died, while groq (verified, available) sat idle. Chat
+already had this failover walk; the orchestrator didn't. Each failed provider×model still
+records exactly once through the shared telemetry path, so the NEXT task routes around
+the dead combo predictively. The repair/escalation engine still fires after all
+candidates fail (the original winner error rethrows as the primary signal).
+
+**Companion decisions in the same release:** adapter errors now carry their HTTP context
+(`attachHttpContext` — status + Retry-After / x-ratelimit-reset-* headers on every
+adapter), so even body-less 429s feed decision #23's hint-aware park; and the pinned
+Gemini model was updated from the retired `gemini-2.0-flash-exp` to the live
+`gemini-flash-latest` (2026 accounts 404 on the 2.x line).
+
+**Why this decision is recorded:** so "the reviewer hit a rate limit — why didn't it take
+another model" never re-opens as a debate, and so a future refactor doesn't reintroduce
+single-provider-only agent calls.
+
+## 25. Consecutive rate limits auto-switch providers mid-task (v1.62.1)
+
+**Decision:** the orchestrator's per-task rate-limit handler counts CONSECUTIVE rate
+limits. After the 2nd within one task, it stops prompting the user and auto-switches to
+the router's next healthy provider (returns `{ action: 'switch-model', callLLM }`, which
+writer/edit-module already honor by rebinding `latestCallLLM`/`currentCallLLM`).
+
+**Why the storm guard, not the interactive prompt:** a single rate limit is a "wait and
+retry" situation — the prompt is right. But an agent's `callLLM` is bound to one provider
+mid-task, so grinding the same provider's "wait and retry" after a burst is futile (the
+registry park can't help the ALREADY-bound call, and the failover walk only fires if the
+error propagates past the writer's prompt). Two in a row is the signal that the provider
+is having a burst; the fix is a different provider, not patience.
+
+**Target selection semantics (learned in review):**
+- **Auto mode** — trust the fresh decision's winner. By the 2nd hit, the hint-aware park
+  (decision #23) has already moved the winner OFF the rate-limited provider, so the
+  winner IS the best healthy pick. Excluding it (as an earlier draft did) skipped ranked[0]
+  and forced a worse ranked[1] provider.
+- **Pinned mode** — exclude the bound provider explicitly; the fresh winner may still be
+  the rate-limited one when the park hasn't propagated, and switching back to it would loop.
+- **Model never leaks:** the override passes `model: 'default'` (the codebase's "no pin"
+  sentinel), so `resolveWorkingModel` picks the target provider's best VERIFIED model. The
+  spread must not carry the rate-limited provider's model ID (a gemini ID on groq = 404).
+- **Cooldown-aware:** candidates in circuit-breaker cooldown are never chosen; if no
+  healthy alternative exists, the guard falls through to the interactive prompt.
+- **No ping-pong (added in review):** the handler closure keeps `triedProviders` — the
+  bound provider (pinned mode) plus every provider auto-switched-to this task. Without
+  it, two providers both in quota-storms (gemini 503 + groq TPM, the live NVDA failure)
+  ping-pong: their short hint-aware parks (~16s) can lapse mid-task, making each the
+  fresh winner again right after we switched away. The set forces the guard to keep
+  moving forward; when every ranked provider is tried/cooldown-parked it falls through
+  to the interactive prompt.
+
+**Why this decision is recorded:** the "gemini 503'd → writer retried gemini 3× and died"
+failure (observed live in the NVDA-addon end-to-end) is precisely the class of failure the
+multi-provider stack exists to prevent. Future refactors must keep the storm guard BEFORE
+any interactive rate-limit prompt, or the auto-failover guarantee silently disappears.
+
+## 26. Rate-limit recovery is fully automatic — no prompts, no grinding (v1.62.2)
+
+**Decision:** rate-limit handling in the orchestrator is FULLY AUTOMATIC by default. The
+user is never interrupted mid-build because a provider is temporarily exhausted:
+
+- **Transient hit** (reset hint ≤ 60s, e.g. "try again in 16.5s"): silently wait out the
+  hint and auto-retry on the same provider. Waiting is cheaper than switching for a
+  sub-minute pause.
+- **Exhaustion** (reset hint > 60s, e.g. "resets in 17h 51m" — a daily-quota cap): the
+  provider is down for a while, so auto-switch to the router's next healthy provider on
+  the FIRST hit — not after two.
+- **Storm** (2+ consecutive hits in one task): same auto-switch (decision #25 semantics).
+- **No healthy alternative / resolution error:** fall through to silent wait + retry, or —
+  only when `routing.askOnRateLimit: true` is configured AND the run is on a real TTY —
+  the legacy interactive prompt (wait / switch / skip / abort).
+
+**Why fully automatic rather than asking:** the user's explicit requirement — "if gemini
+failed/exhausted it should leverage another model in the build, why throw an error to the
+user?" A build that pauses to ask on every quota burst is a build that feels broken; a
+build that silently continues on whichever provider is healthy is the multi-provider
+promise actually working. The single-provider edge (no alternative exists) is the only
+case where a user decision is meaningful, and even there the default is to wait and retry,
+not to fail.
+
+**Trade-off considered — always prompt:** rejected. It reintroduces the exact failure
+class the stack exists to prevent (the pipeline dying on one provider), and is hostile to
+non-interactive/CI runs. `askOnRateLimit` preserves the choice for operators who want
+fine-grained control (e.g. cost-sensitive users who prefer to pause than burn a quota on
+an unplanned provider).
+
+**Interactions with prior decisions:** builds on #23 (hint-aware registry park — the fresh
+decision's winner usually already moved off the rate-limited provider) and #25 (storm
+guard + triedProviders + `model: 'default'` no-leak). #24's cross-provider failover walk
+remains the backstop for non-rate-limit retryable errors.
+
+**Why this decision is recorded:** the threshold (60s), the opt-in flag, and the
+"exhausted on first hit" rule are subtle behavioral contracts. Future refactors must keep
+this ordering — auto-switch before any prompt, prompt only when explicitly opted in and
+TTY — or the "silently continue on a healthy provider" guarantee silently disappears.
+
+**Review refinements (added after review):**
+- **Honest "consecutive":** the storm counter resets after each successful auto-switch
+  (the new provider starts a fresh streak) and strikes farther apart than 5 minutes are
+  treated as a new incident. Without this, a single transient hit on a provider that just
+  succeeded 10× would re-trigger a switch because the counter carried over from the
+  previous provider's storm.
+- **Auto-mode bound-provider seed:** `createRateLimitHandler` now receives the task's
+  routed provider (captured from `createAutoRoutedLLM` — no extra resolve), so the guard
+  skips the provider the agent is already bound to even when the fresh decision re-picks
+  it (park lag). Previously only pinned mode seeded this; auto mode could "switch" to the
+  very provider that just rate-limited, burn one wasted switch, then self-correct.

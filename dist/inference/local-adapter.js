@@ -4,6 +4,7 @@ import { existsSync } from 'node:fs';
 import { getModelTags } from './model-catalog.js';
 import { getCostTracker } from '../learning/cost-tracker.js';
 import { requireAdapterModel } from '../learning/model-selection.js';
+import { attachHttpContext } from './http-error.js';
 const OLLAMA_API_BASE = 'http://localhost:11434';
 /** Cap on /api/show fallback fetches per listModels call — bounds the N+1 cost
  *  on machines with large local model libraries. */
@@ -74,8 +75,8 @@ export class LocalAdapter {
         });
         if (!response.ok) {
             const errorBody = await response.text();
-            throw new Error(`Ollama API error (${response.status}): ${errorBody}\n` +
-                `Ensure Ollama is running: ollama serve`);
+            throw attachHttpContext(new Error(`Ollama API error (${response.status}): ${errorBody}\n` +
+                `Ensure Ollama is running: ollama serve`), response.status, response.headers);
         }
         const data = (await response.json());
         const content = data.response || '';
@@ -103,8 +104,8 @@ export class LocalAdapter {
         });
         if (!response.ok) {
             const errorBody = await response.text();
-            throw new Error(`Ollama streaming API error (${response.status}): ${errorBody}\n` +
-                `Ensure Ollama is running: ollama serve`);
+            throw attachHttpContext(new Error(`Ollama streaming API error (${response.status}): ${errorBody}\n` +
+                `Ensure Ollama is running: ollama serve`), response.status, response.headers);
         }
         const reader = response.body?.getReader();
         if (!reader) {

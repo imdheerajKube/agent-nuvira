@@ -65,6 +65,34 @@ export declare function classifyFallbackError(err: unknown): FallbackErrorType;
  */
 export declare function isRetryableError(errorType: FallbackErrorType): boolean;
 /**
+ * Floor for hint-derived quota parks — never re-admit faster than this, so a
+ * 429 with a 1s reset hint can't hot-loop the router back into the same
+ * exhausted provider (the session cooldown already lasts 2 min anyway).
+ */
+export declare const MIN_RATE_LIMIT_PARK_MS = 10000;
+/**
+ * Parse a provider rate-limit reset hint from an error MESSAGE string.
+ * Returns the suggested wait in ms, or null when no hint is present.
+ *
+ * Formats seen across the supported providers:
+ *   - "try again in 10.49s" / "try again in 5000ms"  (Groq, Anthropic)
+ *   - "Retry-After: 16" (seconds, or RFC 7231 HTTP-date)
+ *   - "reset in 5 minutes" / "resets in 17h 51m"     (Groq status style)
+ *   - "rate limit ... retry after 30 seconds"
+ */
+export declare function parseRetryAfterHint(message: string): number | null;
+/**
+ * Extract the provider's rate-limit RESET hint from a thrown error, so the
+ * quota park reflects the ACTUAL time the limit lifts instead of a fixed
+ * default window. Checks, in order:
+ *   1. an attached `retryAfterMs` / `retryAfter` field (seconds),
+ *   2. a Headers-like object (`retry-after` seconds/date, and the
+ *      Groq/OpenAI `x-ratelimit-reset-*` epoch-ms headers),
+ *   3. the error message via parseRetryAfterHint().
+ * Returns ms until reset, or null when no hint is available.
+ */
+export declare function extractRetryAfterMs(err: unknown): number | null;
+/**
  * Write a failed real LLM call through to the Model Availability Registry so
  * EVERY routing path learns predictively — not just chat's auto-router:
  * execute/orchestrator and the fallback-based commands (plan / skill / learn /

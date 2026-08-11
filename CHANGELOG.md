@@ -2,6 +2,82 @@
 
 All notable changes to **Agent-Nuvira** are documented in this file.
 
+## v1.62.2 — Fix: rate-limit recovery is fully automatic (no more prompts, no more grinding)
+
+- **Automatic recovery by default:** the orchestrator's rate-limit handler no longer
+  interrupts the user. Transient hits (short reset hints, e.g. "try again in 16.5s") are
+  silently waited out and retried; exhaustion (long hints, e.g. "resets in 17h 51m" —
+  daily-quota caps) and storms (2+ consecutive hits in one task) silently auto-switch to
+  the router's next healthy provider mid-task. The pipeline keeps building on whichever
+  provider is healthy — the exact failure the user hit (gemini 503 → writer retried gemini
+  3× and died, never failing over to the available groq) can no longer surface as an error.
+- **Interactive prompt is now opt-in** (`routing.askOnRateLimit: true` in .buffconfig.json)
+  and only ever appears on a real TTY. Non-interactive runs (CI, pipes) get the same
+  silent auto-switch + auto-wait instead of grinding the same exhausted provider.
+- **Threshold:** a reset hint over 60s counts as exhausted (provider is down for a while →
+  switch); under 60s is transient (waiting is cheaper than switching).
+- **Honest "consecutive" storm semantics:** the streak counter resets after each successful
+  auto-switch (the new provider starts fresh — one transient hit after 10 successes is NOT
+  a storm) and strikes more than 5 minutes apart are treated as a fresh incident, not a
+  continuation (a long healthy run between them means the provider recovered).
+- **Auto-mode bound-provider seed:** the storm guard never "switches" to the provider the
+  agent is already on — in auto mode the task's routed provider is seeded into the
+  tried-providers set, so a fresh decision that re-picks the just-rate-limited provider
+  (registry park lag) is skipped in favor of the next healthy ranked provider.
+- **No ping-pong / no model leak:** per-task `triedProviders` set prevents bouncing between
+  two exhausted providers; the auto-switch target resolves its own best verified model
+  (`model: 'default'` no-pin sentinel) so a gemini model ID can never be sent to groq.
+- **Tests:** orchestrator suite updated for the silent default + new paths (first-hit
+  exhausted auto-switch, non-TTY silent retry, opt-in prompt, counter reset, time-window,
+  auto-mode bound-provider seed) — 168/168 files pass.
+
+## v1.62.1 — Fix: rate-limit no longer permanently kills cloud models
+
+- **Registry (model-registry.ts):** a `rate-limit` failure now PARKS an entry without
+  demoting it to `unavailable` (auth still demotes). Previously a 429 flipped `verified →
+  unavailable`, and since `isUsable()` requires `verified`, rate-limited cloud models never
+  auto-recovered — the router silently forced every agent onto the weak local model after
+  one quota burst (the "chat fast, execute slow+wrong" symptom). Verified models now return
+  automatically when the park window lapses.
+- **Recovery path:** `markVerified` clears registry parks on real success; `syncQuota` only
+  re-applies live ledger parks. Manual escape hatch unchanged: `buff models unblock <provider>`
+  (release + re-probe) and `buff models refresh <provider>`.
+- **Tests:** updated 8 files encoding the old demotion semantics; added a regression test
+  proving a verified model is parked but auto-recovers after the window.
+- **Docs:** decision #23 in DESIGN_DECISIONS.md (park, never demote).
+- **Fix 2 — park for the provider's ACTUAL reset time:** a 429 that says "try again in
+  16.5s" / `Retry-After: N` / `x-ratelimit-reset-*` now parks for ~that long (floored 10s,
+  capped by the configured `routing.quota.<provider>.windowMs`) instead of the 24h default —
+  so a per-minute/token-window quota burst re-admits the provider the moment it lifts, with
+  zero manual intervention. New shared `parseRetryAfterHint`/`extractRetryAfterMs` in
+  `provider-fallback.ts` (replaces 3 duplicated copies in writer/context-gatherer/edit-module).
+- **Fix 3 — rate-limit STORM auto-switch (the "gemini 503 → writer died" failure):** when
+  an agent hits 2+ consecutive rate limits within one task, the orchestrator now stops
+  prompting and AUTO-SWITCHES to the router's next healthy provider mid-task (fresh
+  auto-routing decision; pinned mode excludes the bound provider; auto mode trusts the
+  fresh winner, which the hint-aware park already moved off the rate-limited provider).
+  The switch uses `model: 'default'` so the new provider resolves its own best VERIFIED
+  model — never leaking the rate-limited provider's model ID (a gemini ID on groq = 404).
+  Falls back to the interactive prompt only when no healthy alternative exists. A per-task
+  `triedProviders` set prevents ping-ponging between two exhausted providers (their short
+  hint-aware parks can lapse mid-task).
+  Both the quota-ledger park and the registry floor honor the hint.
+- **Fix 3 — cross-provider failover for agent LLM calls ("why didn't it take another
+  model?"):** the orchestrator's auto-routed LLM now walks the router's next-ranked
+  candidates on a retryable failure (503 high-demand / 429 / network) instead of
+  exhausting the repair budget on one provider. Auth never fails over; a user-pinned
+  provider is honored as-is. A live agent-update event shows "⚠️ gemini server — failing
+  over to groq" on the board. Each failed provider×model still records exactly once via
+  the shared telemetry path.
+- **Fix 4 — adapter errors now carry their HTTP context:** new `attachHttpContext`
+  attaches status + headers (Retry-After, x-ratelimit-reset-*) to errors from ALL
+  adapters (groq, gemini, anthropic, nim, ollama, openai-compat, tools), so even a
+  body-less 429 parks for the provider's actual reset time.
+- **Fix 5 — Gemini model IDs:** the pinned `gemini-2.0-flash-exp` (retired for new
+  accounts) is replaced with `gemini-flash-latest` (verified live); catalog updated to
+  2026 model IDs. Config also set `routing.quota.{groq,gemini}.windowMs = 4h` so a
+  hint-less 429 parks 4h max instead of 24h.
+
 ## v1.62.0 — Revamp complete — reliability stack, code-map, scheduled jobs, gateway
 
 - **Major revamp complete** — all 30 rows of the Freebuff/Hermes parity program are landed (AGENT_NUVIRA_MAJOR_REVAMP_PLAN)

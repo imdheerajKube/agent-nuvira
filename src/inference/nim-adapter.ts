@@ -3,6 +3,7 @@ import { InferenceOptions, ProviderConfig } from '../config/types.js';
 import { logger } from '../utils/logger.js';
 import { streamCompletion } from './sse.js';
 import { chatCompletionsWithTools } from './tools.js';
+import { attachHttpContext } from './http-error.js';
 import { getModelTags } from './model-catalog.js';
 import { getCostTracker, recordCallWithUsage } from '../learning/cost-tracker.js';
 import { requireAdapterModel } from '../learning/model-selection.js';
@@ -60,7 +61,7 @@ export class NIMAdapter implements InferenceProvider {
 
     if (!response.ok) {
       const errorBody = await response.text();
-      throw new Error(`NVIDIA NIM API error (${response.status}): ${errorBody}`);
+      throw attachHttpContext(new Error(`NVIDIA NIM API error (${response.status}): ${errorBody}`), response.status, response.headers);
     }
 
     const data = (await response.json()) as NIMResponse;

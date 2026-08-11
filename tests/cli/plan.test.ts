@@ -207,8 +207,11 @@ describe('PlanCommand — shared single-shot failover runner adoption', () => {
 
     const entry = getModelRegistry().getEntry('gemini', 'gemini-2.5-flash');
     expect(entry).toBeDefined();
-    expect(entry!.status).toBe('unavailable');
+    // Rate-limit parks WITHOUT demoting (transient — auto-recovers after the
+    // window); the park is what blocks the provider while it is active.
+    expect(entry!.status).not.toBe('unavailable');
     expect(entry!.lastError).toContain('rate-limit');
+    expect(entry!.quotaParkedUntil).toBeGreaterThan(Date.now());
     // The predictive skip is armed: the next pick routes around gemini.
     expect(getModelRegistry().getBlockedProviders()).toContain('gemini');
   });

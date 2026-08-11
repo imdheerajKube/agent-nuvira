@@ -10,6 +10,7 @@
  */
 
 import type { ToolCallResponse, ToolMessage, ToolSchema } from './interface.js';
+import { attachHttpContext } from './http-error.js';
 
 /** OpenAI wire form of a tool call (arguments as a JSON string). */
 interface WireToolCall {
@@ -115,7 +116,9 @@ export async function chatCompletionsWithTools(opts: {
 
   if (!response.ok) {
     const errorBody = await response.text();
-    throw new Error(`Tool-calling API error (${response.status}): ${errorBody}`);
+    // Headers attached so extractRetryAfterMs() can read Retry-After /
+    // x-ratelimit-reset-* and park for the provider's ACTUAL reset time.
+    throw attachHttpContext(new Error(`Tool-calling API error (${response.status}): ${errorBody}`), response.status, response.headers);
   }
 
   const result = parseToolCallResponse((await response.json()) as WireResponse);

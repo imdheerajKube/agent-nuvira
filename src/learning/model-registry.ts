@@ -26,7 +26,8 @@
  *      (403 permission / 404 / auth) — catches "key exists but model not
  *      purchasable" up front
  *   3. **Telemetry** (real usage) → success upgrades to `verified`, latency EMA
- *      updates, auth/rate-limit failures mark unavailable / park quota
+ *      updates, auth failures mark unavailable, rate-limit failures park
+ *      quota without demoting (auto-recovery after the window)
  *
  * Quota integration: `syncQuota()` reads the QuotaLedger's router feed and
  * applies `quotaParkedUntil` to every entry of a parked provider, so a token-
@@ -913,7 +914,9 @@ export class ModelRegistry {
   /**
    * Telemetry write-through from a real LLM call.
    * Success → verified (source 'telemetry') + lastUsedAt. Failure → errorRate
-   * bump; auth/rate-limit failures optionally park/mark-unavailable.
+   * bump; auth failures demote to unavailable; rate-limit failures park the
+   * entry WITHOUT demoting it (transient exclusion, auto-recovery after the
+   * window lapses).
    *
    * @param ok        Did the call succeed?
    * @param errorType Optional classified error type ('auth' | 'rate-limit' | ...)
@@ -927,6 +930,8 @@ export class ModelRegistry {
     latencyMs?: number,
     costUsd?: number,
     callId?: string,
+    /** Provider-reported reset hint in ms (Retry-After / "try again in Ns"). */
+    retryAfterMs?: number,
   ): void {
     const now = Date.now();
     const key = entryKey(provider, model);
@@ -968,15 +973,34 @@ export class ModelRegistry {
     entry.errorRate = Math.min(1, 0.2 + 0.8 * prevRate);
     entry.lastUsedAt = now;
     let flipped = false;
-    if (errorType === 'auth' || errorType === 'rate-limit') {
+    if (errorType === 'auth') {
+      // Auth is DEFINITIVE — the key is dead; demote permanently until the
+      // user fixes it and re-probes (unblockProvider / models refresh).
       entry.status = 'unavailable';
-      entry.lastError = errorType === 'auth' ? 'auth (invalid key / forbidden)' : 'rate-limit';
+      entry.lastError = 'auth (invalid key / forbidden)';
       flipped = true;
-      if (errorType === 'rate-limit') {
-        // Park until the likely reset window (aligned to the hour).
-        const parkUntil = now + (60 - new Date().getMinutes()) * 60_000;
-        entry.quotaParkedUntil = Math.max(entry.quotaParkedUntil, parkUntil);
-      }
+    } else if (errorType === 'rate-limit') {
+      // Rate-limit is TRANSIENT (429 / quota window). Park the entry — the
+      // park is the exclusion mechanism (isUsable() gates on quotaParkedUntil
+      // and the provider feeds getBlockedProviders while parked) — but do NOT
+      // flip the status to 'unavailable'. A verified model must come back
+      // automatically when the window lapses; demoting it permanently was a
+      // real bug: isUsable() requires status === 'verified', so rate-limited
+      // cloud models (groq/gemini free tiers) stayed dead forever even after
+      // the park expired, silently forcing everything onto weak local models.
+      entry.lastError = 'rate-limit';
+      // Honor the provider's OWN reset hint when the caller extracted one:
+      // a 429 that says "resets in 16 minutes" must park ~16 minutes, not a
+      // fixed window. Capped at 1h — LONGER parks are the quota ledger's job
+      // (syncQuota extends from there); this registry park is only a FLOOR.
+      // No hint → a SHORT 60s floor: the authoritative exclusion is the
+      // ledger park, and an hour-aligned floor could OUTLIVE a short ledger
+      // park (syncQuota only extends, never shrinks) and strand the provider.
+      const hintMs = retryAfterMs && retryAfterMs > 0 ? retryAfterMs : null;
+      const parkMs = Math.min(60 * 60 * 1000, Math.max(10 * 1000, hintMs ?? 60_000));
+      const parkUntil = now + parkMs;
+      entry.quotaParkedUntil = Math.max(entry.quotaParkedUntil, parkUntil);
+      flipped = true;
     }
     this.data.entries[key] = entry;
     this.persist();

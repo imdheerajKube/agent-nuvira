@@ -131,7 +131,9 @@ describe('FailureBookkeeping — recordActionFailure', () => {
     const parkExpiry = mockLedger.parkProvider.mock.calls[0][1] as number;
     expect(parkExpiry).toBeGreaterThanOrEqual(before + 5000);
     expect(parkExpiry).toBeLessThan(before + 5000 + 100);
-    expect(getModelRegistry().getEntry('groq', 'llama-3.3-70b-versatile')?.status).toBe('unavailable');
+    // Rate-limit parks but does NOT demote the entry (transient — the model
+    // must auto-recover when the window lapses).
+    expect(getModelRegistry().getEntry('groq', 'llama-3.3-70b-versatile')?.status).not.toBe('unavailable');
   });
 
   it('rate-limit without quota config: parks for the 24h default window', () => {
@@ -143,6 +145,40 @@ describe('FailureBookkeeping — recordActionFailure', () => {
     const parkExpiry = mockLedger.parkProvider.mock.calls[0][1] as number;
     expect(parkExpiry).toBeGreaterThanOrEqual(before + 24 * 60 * 60 * 1000);
     expect(parkExpiry).toBeLessThan(before + 24 * 60 * 60 * 1000 + 100);
+  });
+
+  it('rate-limit WITH a provider reset hint parks for the HINT, not the 24h default', () => {
+    const session = makeSession();
+    const before = Date.now();
+    // Groq-style 429 that names its own reset time — the user's exact
+    // scenario: "available again in ~16 minutes" must not become a day-long
+    // exclusion.
+    recordActionFailure(
+      session,
+      'groq',
+      new Error(
+        '429 Rate limit reached for model `llama-3.3-70b-versatile` on tokens per minute (TPM). Please try again in 16.5s.',
+      ),
+      makeConfig(),
+      { model: 'llama-3.3-70b-versatile', action: 'chat' },
+    );
+
+    const parkExpiry = mockLedger.parkProvider.mock.calls[0][1] as number;
+    // ~16.5s (floored at 10s) — NOT the 24h default.
+    expect(parkExpiry).toBeGreaterThanOrEqual(before + 10_000);
+    expect(parkExpiry).toBeLessThan(before + 20_000);
+  });
+
+  it('rate-limit hint is capped by the configured window (user has the final say)', () => {
+    const session = makeSession();
+    const before = Date.now();
+    // Provider says reset in 5 min, but the user configured a 60s window.
+    recordActionFailure(session, 'groq', new Error('429 try again in 300s'), makeConfig({ groq: { windowMs: 60_000 } }), {
+      action: 'chat',
+    });
+    const parkExpiry = mockLedger.parkProvider.mock.calls[0][1] as number;
+    expect(parkExpiry).toBeGreaterThanOrEqual(before + 60_000);
+    expect(parkExpiry).toBeLessThan(before + 60_000 + 100);
   });
 
   it('transient failure (server): short cooldown + re-verify marker, registry decays (not unavailable)', () => {

@@ -265,8 +265,11 @@ function TaskLane({
             {earlierRepairs > 0 && (
               <Text color="yellow">      │  ↻ +{earlierRepairs} earlier repair(s)</Text>
             )}
-            {task.retries.map((r) => (
-              <Text key={r} color="yellow">
+            {/* Index keys, NOT message-text keys: retry/stage messages repeat
+                (e.g. "Generating code changes…" across attempts), and text keys
+                made React flood stderr with duplicate-key warnings every tick. */}
+            {task.retries.map((r, i) => (
+              <Text key={i} color="yellow">
                 {'      │  ↻ '}
                 {r}
               </Text>
@@ -274,8 +277,8 @@ function TaskLane({
             {task.updates.length > MAX_THINKING_LINES && (
               <Text dimColor>      │  ··· +{task.updates.length - MAX_THINKING_LINES} earlier step(s)</Text>
             )}
-            {task.updates.slice(-MAX_THINKING_LINES).map((u) => (
-              <Text key={u} dimColor>
+            {task.updates.slice(-MAX_THINKING_LINES).map((u, i) => (
+              <Text key={i} dimColor>
                 {'      │  💭 '}
                 {u.replace(/\s+/g, ' ').slice(0, 80)}
               </Text>
@@ -403,8 +406,8 @@ export function BoardView({ board }: { board: PipelineBoard }) {
         <Text dimColor>{`  [${model.elapsedLabel}]`}</Text>
       </Box>
       {model.progressLabel && <Text dimColor>{`   ${model.progressLabel}`}</Text>}
-      {model.notes.map((n) => (
-        <Text key={n} dimColor>
+      {model.notes.map((n, i) => (
+        <Text key={i} dimColor>
           {'   '}
           {n}
         </Text>

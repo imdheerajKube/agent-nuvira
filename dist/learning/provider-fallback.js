@@ -80,6 +80,130 @@ export function isRetryableError(errorType) {
     return errorType !== 'auth';
 }
 /**
+ * Floor for hint-derived quota parks — never re-admit faster than this, so a
+ * 429 with a 1s reset hint can't hot-loop the router back into the same
+ * exhausted provider (the session cooldown already lasts 2 min anyway).
+ */
+export const MIN_RATE_LIMIT_PARK_MS = 10_000;
+/**
+ * Parse a provider rate-limit reset hint from an error MESSAGE string.
+ * Returns the suggested wait in ms, or null when no hint is present.
+ *
+ * Formats seen across the supported providers:
+ *   - "try again in 10.49s" / "try again in 5000ms"  (Groq, Anthropic)
+ *   - "Retry-After: 16" (seconds, or RFC 7231 HTTP-date)
+ *   - "reset in 5 minutes" / "resets in 17h 51m"     (Groq status style)
+ *   - "rate limit ... retry after 30 seconds"
+ */
+export function parseRetryAfterHint(message) {
+    // Retry-After header value echoed in the body: seconds or HTTP-date.
+    const retryAfter = message.match(/retry-after\s*:\s*(\d+)/i);
+    if (retryAfter) {
+        const s = parseInt(retryAfter[1], 10);
+        if (!isNaN(s) && s > 0)
+            return s * 1000;
+    }
+    const date = message.match(/retry-after\s*:\s*([A-Z][a-z]{2}, \d{2} [A-Z][a-z]{2} \d{4} \d{2}:\d{2}:\d{2} GMT)/i);
+    if (date) {
+        const t = Date.parse(date[1]);
+        if (!isNaN(t))
+            return Math.max(0, t - Date.now());
+    }
+    // "try again in 36.36s" / "try again in 36.36 s"
+    const secondMatch = message.match(/try again in ([\d.]+)\s*s/i);
+    if (secondMatch) {
+        const seconds = parseFloat(secondMatch[1]);
+        if (!isNaN(seconds) && seconds > 0)
+            return Math.ceil(seconds * 1000);
+    }
+    // "try again in 5000ms"
+    const msMatch = message.match(/try again in (\d+)\s*ms/i);
+    if (msMatch) {
+        const ms = parseInt(msMatch[1], 10);
+        if (!isNaN(ms) && ms > 0)
+            return ms;
+    }
+    // "reset in 5 minutes" / "resets in 30m" / "retry after 30 seconds"
+    const minMatch = message.match(/(?:reset|resets|retry after)\s+in\s+(\d+)\s*(?:minute|min|m\b)/i);
+    if (minMatch) {
+        const minutes = parseInt(minMatch[1], 10);
+        if (!isNaN(minutes) && minutes > 0)
+            return minutes * 60 * 1000;
+    }
+    const retrySeconds = message.match(/retry after (\d+)\s*(?:seconds?|s)/i);
+    if (retrySeconds) {
+        const s = parseInt(retrySeconds[1], 10);
+        if (!isNaN(s) && s > 0)
+            return s * 1000;
+    }
+    // "resets in 17h 51m" / "resets in 2h"
+    const hMatch = message.match(/(?:reset|resets)\s+in\s+(\d+)h(?:\s+(\d+)m)?/i);
+    if (hMatch) {
+        const hours = parseInt(hMatch[1], 10);
+        if (!isNaN(hours) && hours > 0) {
+            const mins = hMatch[2] ? parseInt(hMatch[2], 10) : 0;
+            if (!isNaN(mins))
+                return (hours * 60 + mins) * 60 * 1000;
+        }
+    }
+    return null;
+}
+/**
+ * Extract the provider's rate-limit RESET hint from a thrown error, so the
+ * quota park reflects the ACTUAL time the limit lifts instead of a fixed
+ * default window. Checks, in order:
+ *   1. an attached `retryAfterMs` / `retryAfter` field (seconds),
+ *   2. a Headers-like object (`retry-after` seconds/date, and the
+ *      Groq/OpenAI `x-ratelimit-reset-*` epoch-ms headers),
+ *   3. the error message via parseRetryAfterHint().
+ * Returns ms until reset, or null when no hint is available.
+ */
+export function extractRetryAfterMs(err) {
+    if (err && typeof err === 'object') {
+        const e = err;
+        const direct = e.retryAfterMs ?? e.retryAfter;
+        if (typeof direct === 'number' && direct > 0)
+            return direct;
+        if (typeof direct === 'string') {
+            const n = parseFloat(direct);
+            if (!isNaN(n) && n > 0)
+                return n * 1000;
+        }
+        const headers = e.headers;
+        if (headers && typeof headers.get === 'function') {
+            const ra = headers.get('retry-after');
+            if (ra) {
+                const fromSeconds = ra.match(/^(\d+)$/);
+                if (fromSeconds) {
+                    const s = parseInt(fromSeconds[1], 10);
+                    if (s > 0)
+                        return s * 1000;
+                }
+                const t = Date.parse(ra);
+                if (!isNaN(t))
+                    return Math.max(0, t - Date.now());
+            }
+            // Groq/OpenAI `x-ratelimit-reset-*` headers. On OpenAI-compatible APIs
+            // these are SECONDS-until-reset (e.g. "12"); a few stacks emit epoch ms.
+            // Distinguish by magnitude: small values are seconds, huge ones epoch ms.
+            for (const h of ['x-ratelimit-reset-tokens', 'x-ratelimit-reset-requests', 'x-ratelimit-reset']) {
+                const v = headers.get(h);
+                if (v) {
+                    const n = parseFloat(v);
+                    if (isNaN(n) || n <= 0)
+                        continue;
+                    if (n < 1e12)
+                        return n * 1000; // seconds until reset
+                    if (n > Date.now())
+                        return n - Date.now(); // epoch ms
+                }
+            }
+        }
+    }
+    const message = err instanceof Error ? err.message : String(err);
+    return parseRetryAfterHint(message);
+}
+/**
  * Write a failed real LLM call through to the Model Availability Registry so
  * EVERY routing path learns predictively — not just chat's auto-router:
  * execute/orchestrator and the fallback-based commands (plan / skill / learn /
@@ -149,7 +273,10 @@ export function recordRegistryFailure(providerType, model, err, errorType, actio
             registry.markUnavailable(providerType, model || 'default', 'model not found', 'telemetry', 0, tag);
         }
         else {
-            registry.recordCall(providerType, model || 'default', false, kind, tag, latencyMs);
+            // Pass the provider's rate-limit reset hint through so the registry
+            // parks for the ACTUAL reset time (Retry-After / "try again in Ns")
+            // instead of a fixed window.
+            registry.recordCall(providerType, model || 'default', false, kind, tag, latencyMs, undefined, undefined, kind === 'rate-limit' ? (extractRetryAfterMs(err) ?? undefined) : undefined);
         }
     }
     catch {

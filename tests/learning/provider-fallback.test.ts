@@ -18,7 +18,9 @@ import { join } from 'node:path';
 
 import {
   classifyFallbackError,
+  extractRetryAfterMs,
   isRetryableError,
+  parseRetryAfterHint,
   ProviderFallback,
   getProviderFallback,
   resetProviderFallback,
@@ -234,6 +236,57 @@ describe('isRetryableError', () => {
       expect(isRetryableError(type as any)).toBe(true);
     },
   );
+});
+
+// ─── Rate-limit reset-hint parsing ──────────────────────────────────────────
+
+describe('parseRetryAfterHint / extractRetryAfterMs', () => {
+  it('parses "try again in Xs" (Groq/Anthropic style)', () => {
+    expect(parseRetryAfterHint('Rate limit reached for model `x` ... Please try again in 36.36s.')).toBe(
+      Math.ceil(36.36 * 1000),
+    );
+    expect(parseRetryAfterHint('... please try again in 5000ms')).toBe(5000);
+  });
+
+  it('parses Retry-After: N seconds echoed in the body', () => {
+    expect(parseRetryAfterHint('Error 429 Too Many Requests — Retry-After: 16')).toBe(16_000);
+  });
+
+  it('parses "resets in Nh Nm" / "reset in N minutes" / bare minutes', () => {
+    expect(parseRetryAfterHint('quota exhausted — resets in 17h 51m')).toBe((17 * 60 + 51) * 60_000);
+    expect(parseRetryAfterHint('limit exceeded, reset in 5 minutes')).toBe(5 * 60_000);
+    expect(parseRetryAfterHint('rate limited, resets in 30m')).toBe(30 * 60_000);
+  });
+
+  it('parses "retry after N seconds" and Retry-After HTTP-date', () => {
+    expect(parseRetryAfterHint('rate limit reached — retry after 30 seconds')).toBe(30_000);
+    const future = new Date(Date.now() + 2 * 60_000).toUTCString();
+    const parsed = parseRetryAfterHint(`429 — Retry-After: ${future}`);
+    expect(parsed).not.toBeNull();
+    expect(parsed!).toBeGreaterThan(60_000);
+    expect(parsed!).toBeLessThan(3 * 60_000);
+  });
+
+  it('returns null when no hint is present', () => {
+    expect(parseRetryAfterHint('429 Too Many Requests')).toBeNull();
+    expect(parseRetryAfterHint('quota exceeded')).toBeNull();
+  });
+
+  it('extractRetryAfterMs reads attached fields, headers, then the message', () => {
+    expect(extractRetryAfterMs({ retryAfterMs: 12_000 })).toBe(12_000);
+    expect(extractRetryAfterMs({ retryAfter: '30' })).toBe(30_000);
+    expect(extractRetryAfterMs({ headers: { get: (k: string) => (k === 'retry-after' ? '16' : null) } })).toBe(16_000);
+    const future = Date.now() + 45_000;
+    expect(
+      extractRetryAfterMs({ headers: { get: (k: string) => (k === 'x-ratelimit-reset-tokens' ? String(future) : null) } }),
+    ).toBeGreaterThan(40_000);
+    // OpenAI/Groq reset headers are SECONDS-until-reset (small values).
+    expect(
+      extractRetryAfterMs({ headers: { get: (k: string) => (k === 'x-ratelimit-reset-requests' ? '12' : null) } }),
+    ).toBe(12_000);
+    expect(extractRetryAfterMs(new Error('Rate limit reached — try again in 8s'))).toBe(8000);
+    expect(extractRetryAfterMs(new Error('quota exceeded'))).toBeNull();
+  });
 });
 
 // ─── ProviderFallback class ─────────────────────────────────────────────────
@@ -579,11 +632,20 @@ describe('ProviderFallback', () => {
 
     it('honors a pre-classified error type (no re-classification)', () => {
       // classifyFallbackError would say 'unknown', but the caller already
-      // classified it as rate-limit → flip to unavailable + park.
+      // classified it as rate-limit → park WITHOUT demoting (transient).
       recordRegistryFailure('nim', 'meta/llama-3.1-8b-instruct', new Error('429 quota exhausted'), 'rate-limit');
       const entry = getModelRegistry().getEntry('nim', 'meta/llama-3.1-8b-instruct');
-      expect(entry?.status).toBe('unavailable');
+      expect(entry?.status).not.toBe('unavailable');
       expect(entry?.quotaParkedUntil).toBeGreaterThan(Date.now());
+    });
+
+    it('rate-limit with a reset hint parks the registry entry for the HINT (not a fixed window)', () => {
+      recordRegistryFailure('groq', 'llama-3.3-70b-versatile', new Error('429 ... Please try again in 16s.'));
+      const entry = getModelRegistry().getEntry('groq', 'llama-3.3-70b-versatile');
+      expect(entry?.status).not.toBe('unavailable');
+      const parkMs = (entry?.quotaParkedUntil || 0) - Date.now();
+      expect(parkMs).toBeGreaterThan(10_000); // floored
+      expect(parkMs).toBeLessThan(30_000); // ~16s, not 24h
     });
 
     it('never throws (best-effort telemetry)', () => {

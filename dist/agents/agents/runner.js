@@ -52,7 +52,7 @@ export class RunnerAgent extends Agent {
         try {
             // 1. Determine which command to run
             this.report(context, 'thinking', 'Determining which command to run…');
-            const command = await this.determineCommand(context, callLLM);
+            let command = await this.determineCommand(context, callLLM);
             if (!command) {
                 this.report(context, 'failed', 'Could not determine a command to run');
                 return {
@@ -61,6 +61,12 @@ export class RunnerAgent extends Agent {
                     error: 'Could not determine which command to execute from the task description or context.',
                 };
             }
+            // Normalize `python` → `python3` / `pip` → `pip3` when the bare binary
+            // is missing (macOS/Ubuntu ship only the versioned ones). Done at the
+            // SINGLE choke point so BOTH host and Docker/sandbox execution get the
+            // fix — otherwise the exit-127 repair loop just re-runs the same broken
+            // `python …` command until the budget is exhausted.
+            command = this.normalizeInterpreter(command);
             this.report(context, 'running', `Executing \`${command}\` and capturing output…`);
             // Check if we should run inside a Docker sandbox
             const useDocker = context.metadata.useDockerSandbox === true ||
@@ -233,6 +239,38 @@ export class RunnerAgent extends Agent {
             }
         }
         return { available: true };
+    }
+    /**
+     * Rewrite interpreter tokens that don't exist on this machine to their
+     * versioned equivalents. On modern macOS/Ubuntu there is no `python` — only
+     * `python3` (and `pip3`) — so a command like `python main.py` exits 127
+     * even though Python IS installed. The repair loop was re-running the same
+     * broken `python …` command until the budget was exhausted. Normalizing
+     * here (before execution and before any retry) is what makes Python tasks
+     * actually runnable.
+     */
+    normalizeInterpreter(command) {
+        if (!command || process.platform === 'win32')
+            return command;
+        const hasPython = this.commandExists('python');
+        const hasPython3 = this.commandExists('python3');
+        const hasPip = this.commandExists('pip');
+        const hasPip3 = this.commandExists('pip3');
+        if (hasPython && hasPip)
+            return command; // common case — nothing to do
+        return command
+            .split('&&')
+            .map((segment) => {
+            let seg = segment;
+            if (!hasPython && hasPython3) {
+                seg = seg.replace(/^(\s*)(python)(?=\s|$)/g, '$1python3');
+            }
+            if (!hasPip && hasPip3) {
+                seg = seg.replace(/^(\s*)(pip)(?=\s|$)/g, '$1pip3');
+            }
+            return seg;
+        })
+            .join('&&');
     }
     /**
      * Execute a command directly on the host machine.
@@ -674,8 +712,10 @@ export class RunnerAgent extends Agent {
                         message: `Package manager '${plan.tool}' is missing and could not be auto-installed: ${installResult.message}`,
                     };
                 }
-                // Tool was installed — retry the actual install command
-                const attempt = this.runInstallCommand(plan.command, workingDir);
+                // Tool was installed — retry the actual install command (normalize
+                // `pip` → `pip3` first — after ensurepip on macOS only the versioned
+                // binary may exist on PATH).
+                const attempt = this.runInstallCommand(this.normalizeInterpreter(plan.command), workingDir);
                 return {
                     success: attempt.success,
                     command: plan.command,
@@ -694,8 +734,9 @@ export class RunnerAgent extends Agent {
                 message: `Package manager '${plan.tool}' is not installed (auto-install of tools is disabled)`,
             };
         }
-        // ── Tool exists — just run the install command ─────────────────────
-        const attempt = this.runInstallCommand(plan.command, workingDir);
+        // ── Tool exists — just run the install command (normalized: macOS has
+        //    `pip3`, not `pip`, so `pip install -r …` would otherwise 127).
+        const attempt = this.runInstallCommand(this.normalizeInterpreter(plan.command), workingDir);
         return {
             success: attempt.success,
             command: plan.command,
@@ -705,6 +746,8 @@ export class RunnerAgent extends Agent {
         };
     }
     async executeOnHost(context, command, fallbackAttempts = 0, depRetries = 0) {
+        // (Command was already normalized at the execute() choke point — retries
+        // here simply carry the normalized command forward.)
         // Validate the command before executing
         const validation = this.isCommandAvailable(command, context.workingDirectory);
         if (!validation.available) {

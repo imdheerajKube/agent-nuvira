@@ -176,10 +176,12 @@ describe('E2E: gateway 429 teaches the registry and the router skips it on the n
       ),
     ).rejects.toThrow();
 
-    // ── 2. Registry learned the block (definitive, not transient) ──────────
+    // ── 2. Registry learned the block (quota-park, not permanent demotion) ─
     const registry = getModelRegistry();
-    expect(registry.getEntry('nuvira', MOCK_MODEL)?.status).toBe('unavailable');
-    expect(registry.getEntry('nuvira', MOCK_MODEL)?.lastError).toContain('rate-limit');
+    const entry = registry.getEntry('nuvira', MOCK_MODEL);
+    expect(entry?.status).not.toBe('unavailable'); // transient — park only
+    expect(entry?.lastError).toContain('rate-limit');
+    expect(entry?.quotaParkedUntil).toBeGreaterThan(Date.now());
     expect(registry.getBlockedProviders()).toContain('nuvira');
 
     // ── 3. Next pick SKIPS nuvira — registry block, not credential filtering ──

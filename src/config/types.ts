@@ -207,6 +207,15 @@ export interface RoutingConfig {
    */
   bandit?: boolean;
   /**
+   * Opt-in to the interactive rate-limit prompt (wait / switch / skip / abort).
+   * Default: false — rate limits are handled FULLY AUTOMATICALLY: transient
+   * hits (short reset hints) silently wait + retry, and exhausted providers
+   * (long reset hints or repeated hits) silently auto-switch to another
+   * healthy provider, so the build continues without interrupting the user.
+   * Set true only if you want to be asked on every rate limit.
+   */
+  askOnRateLimit?: boolean;
+  /**
    * Central quota limits per provider (free-tier token/request caps with reset
    * windows). When a provider exhausts its window it is parked (excluded from
    * Auto routing) and auto re-enabled when the window resets. The ledger

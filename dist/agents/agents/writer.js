@@ -16,6 +16,7 @@ import { logger } from '../../utils/logger.js';
 import { detectLanguage } from '../../editing/types.js';
 import { validateSyntax } from '../../editing/ast.js';
 import { buildStructuralContext } from '../../editing/edit.js';
+import { parseRetryAfterHint as parseRetryHintShared } from '../../learning/provider-fallback.js';
 const WRITER_SYSTEM_PROMPT = `You are an expert software engineer implementing changes to a codebase.
 
 Given file contents and an implementation task, you will:
@@ -67,22 +68,9 @@ const LONG_WAIT_THRESHOLD_MS = 3000;
  * Returns the suggested wait time in ms, or null if not found.
  */
 function parseRetryAfterHint(errorMessage) {
-    // Match patterns like: "try again in 10.49s" or "try again in 5000ms"
-    const secondMatch = errorMessage.match(/try again in ([\d.]+)s/i);
-    if (secondMatch) {
-        const seconds = parseFloat(secondMatch[1]);
-        if (!isNaN(seconds) && seconds > 0) {
-            return Math.ceil(seconds * 1000);
-        }
-    }
-    const msMatch = errorMessage.match(/try again in (\d+)ms/i);
-    if (msMatch) {
-        const ms = parseInt(msMatch[1], 10);
-        if (!isNaN(ms) && ms > 0) {
-            return ms;
-        }
-    }
-    return null;
+    // Shared parser (provider-fallback.ts) — single source of truth covering
+    // "try again in Xs", "Retry-After: N", "resets in Nh Nm", …
+    return parseRetryHintShared(errorMessage);
 }
 /**
  * Extract the model name from a rate-limit error message.
