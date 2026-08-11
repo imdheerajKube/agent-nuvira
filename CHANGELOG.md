@@ -2,6 +2,31 @@
 
 All notable changes to **Agent-Nuvira** are documented in this file.
 
+## v1.62.4 — Deliverable match check + domain reference docs + NVDA eval task
+
+- **Deliverable match check (fixes the wrong-file success bug).** `TaskStep` gains
+  `expectedFiles`; the planner now declares the exact files each writer step must
+  produce, and the orchestrator **fails a writer step that claims success without
+  producing its declared files** (checked before the result is recorded, so a step
+  that wrote `globalPlugins/hello_anuj.py` while reporting "Create manifest.ini"
+  can no longer mark itself ✅ — the exact false-success from the live NVDA run).
+- **Domain reference-docs injection (fixes hallucinated APIs).** New
+  `src/agents/reference-docs.ts` injects curated, verified API snippets into the
+  writer prompt when the task targets a known domain — NVDA addons first
+  (`globalPluginHandler` / `scriptHandler` / `addonHandler` / `ui.message`,
+  `kb:NVDA+alt+1`), keyword-matched so ordinary tasks are untouched. The live run's
+  `nvda.register_key_handler` hallucination is now blocked at prompt level.
+- **NVDA addon eval task (`py-nvda-addon`).** New eval-framework task whose hidden
+  test checks the real addon contract (manifest + `globalPlugins/*.py` with the
+  NVDA+alt+1 script) and whose `referencePatterns` reject the hallucinated API
+  surface — so this failure class is now caught in the eval suite, not just on a
+  user's machine.
+- **Decision #28** — "Where the pipeline loses to interactive execution" — a full
+  comparison of agent-nuvira's stage-by-stage pipeline vs. tool-driven interactive
+  execution, with seven concrete efficiency wins (parallel step fan-out, tool-based
+  context gathering, structured writer output, latency-based provider failover,
+  toolchain pre-flight for the runner, deterministic-first review, reference docs).
+
 ## v1.62.2 — Fix: rate-limit recovery is fully automatic (no more prompts, no more grinding)
 
 - **Automatic recovery by default:** the orchestrator's rate-limit handler no longer

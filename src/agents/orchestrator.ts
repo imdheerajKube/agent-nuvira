@@ -318,6 +318,11 @@ const VALID_COMPLEXITY = new Set<string>(['trivial', 'simple', 'moderate', 'comp
  * Create an agent instance by looking it up in the ModuleRegistry.
  * Replaces the old hardcoded switch statement.
  */
+/** Normalize path separators for deliverable comparison (Windows vs POSIX). */
+function normalizeSlash(p: string): string {
+  return p.replace(/\\/g, '/');
+}
+
 function createAgent(agentType: string, registry: ModuleRegistry): Agent | null {
   try {
     return registry.getModule(agentType);
@@ -2046,6 +2051,35 @@ export class Orchestrator {
         stats.taskFailures += 1;
       } else if (firstFailed) {
         stats.recoveredFailures += 1;
+      }
+
+      // v1.62.4 — Deliverable verification: a writer step must actually
+      // produce its declared expectedFiles. Catches the live NVDA-addon bug
+      // where step "Create manifest.ini" reported success while writing
+      // globalPlugins/hello_anuj.py instead — a step that claims success
+      // without its deliverable is a FAILURE, so the pipeline repairs it
+      // instead of silently building on the wrong file. Checked BEFORE the
+      // result is pushed so agentResults/status reflect the corrected outcome.
+      if (effectiveAgentType === 'writer' && result.success && task.expectedFiles && task.expectedFiles.length > 0) {
+        const proposedPaths = vault.context.fileChanges
+          .filter((c) => c.status === 'created' || c.status === 'modified')
+          .map((c) => normalizeSlash(c.path));
+        const missing = task.expectedFiles.filter((f) => {
+          const norm = normalizeSlash(f);
+          // On disk (applied) OR proposed in this step's changes — either
+          // satisfies the deliverable.
+          return !proposedPaths.includes(norm) &&
+            !existsSync(isAbsolute(norm) ? norm : resolve(process.cwd(), norm));
+        });
+        if (missing.length > 0) {
+          const msg = `Deliverable mismatch — step claimed success but did not produce expected file(s): ${missing.join(', ')}`;
+          logger.warn(`      ⚠️ ${msg}`);
+          result = {
+            success: false,
+            summary: msg,
+            error: msg,
+          };
+        }
       }
 
       vault.updateTaskStatus(task.id, result.success ? 'completed' : 'failed', result.summary);

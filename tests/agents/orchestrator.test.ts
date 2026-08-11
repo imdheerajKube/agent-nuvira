@@ -262,6 +262,49 @@ describe('Orchestrator — routing hints on task plan', () => {
     expect(step.complexity).toBe('trivial');
   });
 
+  it('should FAIL a writer step that succeeds without producing its expected files (deliverable check, v1.62.4)', async () => {
+    const vault = new ContextVault('Create an NVDA addon', '/tmp');
+    vault.setTaskPlan([
+      {
+        id: 'step-1',
+        agentType: 'writer',
+        description: 'Create manifest.ini',
+        dependsOn: [],
+        status: 'pending' as const,
+        // The planner declared this step must produce manifest.ini.
+        expectedFiles: ['addon/manifest.ini'],
+      },
+    ]);
+
+    // The writer claims success but wrote the WRONG file — exactly the live
+    // NVDA bug (step said manifest.ini, writer wrote globalPlugins/hello.py).
+    mockWriterExecute.mockImplementation(async (context: any) => {
+      context.fileChanges.push({
+        path: 'globalPlugins/hello.py',
+        originalContent: '',
+        newContent: '# wrong file\n',
+        status: 'created',
+      });
+      return { success: true, summary: 'Proposed changes to 1 file' };
+    });
+
+    const mockLLM = vi.fn().mockResolvedValue('mock response');
+    const agentResults: any[] = [];
+
+    await (orchestrator as any).executeSingleTask(
+      vault.context.taskPlan[0],
+      vault,
+      { dryRun: true }, // no disk writes — deliverable check uses proposed files
+      agentResults,
+      [],
+      mockLLM,
+    );
+
+    expect(agentResults[0].success).toBe(false);
+    expect(agentResults[0].summary).toContain('Deliverable mismatch');
+    expect(agentResults[0].summary).toContain('addon/manifest.ini');
+  });
+
   it('should reflect verification-heavy routing in routingHints (writer → reviewer remap)', async () => {
     const vault = new ContextVault('Verify a fix', '/tmp');
     vault.setTaskPlan([

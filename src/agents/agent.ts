@@ -48,6 +48,15 @@ export interface TaskStep {
    * goal-global. Values mirror ComplexityLevel.
    */
   complexity?: 'trivial' | 'simple' | 'moderate' | 'complex' | 'critical';
+  /**
+   * v1.62.4 — the files this step MUST create or modify (relative to cwd).
+   * Declared by the planner so the orchestrator can verify the writer actually
+   * produced the step's deliverable. Catches "step said Create manifest.ini but
+   * wrote globalPlugins/hello_anuj.py" (observed live in the NVDA-addon run):
+   * a step that succeeds without touching its expected files is a failure, not
+   * a success.
+   */
+  expectedFiles?: string[];
   result?: string;
   routingHints?: {
     effectiveAgentType?: string;

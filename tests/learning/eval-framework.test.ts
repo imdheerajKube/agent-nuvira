@@ -253,6 +253,21 @@ describe('getEvalTasks', () => {
     }
   });
 
+  it('includes the NVDA addon task with real-API constraints (v1.62.4)', () => {
+    const task = getEvalTask('py-nvda-addon');
+    expect(task).toBeDefined();
+    expect(task!.goal).toContain('NVDA+Alt+1');
+    // The hidden test verifies REAL APIs are used, and the reference patterns
+    // reject the hallucinated APIs observed in the live NVDA run.
+    // The hallucinated-API rejection lives in the shell hidden test (directory
+    // patterns can't be read by computeEditAccuracy); referencePatterns scores
+    // the manifest only.
+    expect(task!.hiddenTests[0].command).toContain('register_key_handler');
+    expect(task!.hiddenTests[0].command).toContain('from nvda import');
+    expect(task!.hiddenTests[0].command).toContain('globalPluginHandler');
+    expect(task!.referencePatterns![0].file).toBe('manifest.ini');
+  });
+
   it('covers multiple categories including dependency-setup', () => {
     const tasks = getEvalTasks();
     const categories = new Set(tasks.map((t) => t.category));

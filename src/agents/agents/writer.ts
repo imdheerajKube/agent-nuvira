@@ -19,6 +19,7 @@ import { detectLanguage } from '../../editing/types.js';
 import { analyzeStructure, validateSyntax } from '../../editing/ast.js';
 import { buildStructuralContext } from '../../editing/edit.js';
 import { parseRetryAfterHint as parseRetryHintShared } from '../../learning/provider-fallback.js';
+import { referenceDocsFor } from '../reference-docs.js';
 
 const WRITER_SYSTEM_PROMPT = `You are an expert software engineer implementing changes to a codebase.
 
@@ -453,11 +454,18 @@ export class WriterAgent extends Agent {
     const mcpToolsFormatted = context.metadata.mcpToolsFormatted as string | undefined;
     const mcpSection = mcpToolsFormatted ? `\n${mcpToolsFormatted}\n` : '';
 
+    // v1.62.4 — Domain reference-docs injection: when the task/goal names a
+    // known framework (NVDA addon, ...), inject curated REAL API snippets so
+    // the model cannot hallucinate the API. This is the fix for the live
+    // NVDA-addon failure (the model invented nvda.register_key_handler instead
+    // of using globalPluginHandler/scriptHandler/addonHandler).
+    const referenceSection = referenceDocsFor(`${taskDescription} ${context.goal}`);
+
     const instructions = isRetry
       ? `\n## CRITICAL — Read This Carefully\nThe previous response could not be parsed because the files were not wrapped in correctly formatted code blocks.\n\nYou MUST follow this format EXACTLY for EACH file you modify:\n\n\`\`\`filepath:src/example.ts\n// THE COMPLETE UPDATED FILE CONTENT GOES HERE (every line, full file)\n\`\`\`\n\nIMPORTANT:\n- The filepath: prefix is REQUIRED after the opening backticks\n- Return the FULL file, not a diff or snippet\n- If you modify 2 files, return 2 separate code blocks in this format`
       : `\n## Instructions\nImplement the changes described in the task. Return the complete updated file content for each file you modify. Remember: each file must be wrapped in \`\`\`filepath:...\n\`\`\` format.`;
 
-    return `${WRITER_SYSTEM_PROMPT}\n\n## Task Description\n${taskDescription}${goalSection}\n\n## Current File Content\n${fileContext}${structureSection}${mcpSection}\n${instructions}`;
+    return `${WRITER_SYSTEM_PROMPT}\n\n## Task Description\n${taskDescription}${goalSection}${referenceSection}\n\n## Current File Content\n${fileContext}${structureSection}${mcpSection}\n${instructions}`;
   }
 
   /**
