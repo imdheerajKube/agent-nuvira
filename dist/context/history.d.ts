@@ -21,6 +21,8 @@ export interface HistoryMessage {
 export interface HistorySession {
     /** Unique session ID */
     id: string;
+    /** Project id (A2 deriveProjectId — git slug / cwd hash) this session belongs to, when known */
+    projectId?: string;
     /** Provider used */
     provider: string;
     /** Model used */
@@ -67,7 +69,7 @@ export declare class ChatHistory {
      *                        fast and free.
      * @returns               The session ID, or '' if messages is empty
      */
-    storeSession(messages: HistoryMessage[], provider: string, model: string, indexSemantic?: boolean): string;
+    storeSession(messages: HistoryMessage[], provider: string, model: string, indexSemantic?: boolean, projectId?: string): string;
     /**
      * Get a specific session by ID.
      */
@@ -81,6 +83,25 @@ export declare class ChatHistory {
      * @returns      Matching sessions sorted by relevance
      */
     search(query: string, limit?: number): HistorySession[];
+    /**
+     * Search sessions by project, time range, and/or keyword (D1 auto-recall).
+     *
+     * - projectId filters to one project's sessions (A2 deriveProjectId).
+     * - timeRange filters by session start time (epoch ms) — the temporal
+     *   "continue last week's plan" path, no LLM involved.
+     * - query uses the same keyword scoring as `search`.
+     * Results are newest-first when no query is given; relevance-first with a
+     * query.
+     */
+    searchSessions(opts: {
+        projectId?: string;
+        timeRange?: {
+            start?: number;
+            end?: number;
+        };
+        query?: string;
+        limit?: number;
+    }): HistorySession[];
     /**
      * Get all sessions, sorted by recency.
      */

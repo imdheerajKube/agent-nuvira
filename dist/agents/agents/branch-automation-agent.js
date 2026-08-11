@@ -13,10 +13,10 @@
  * - `buff execute "auto-commit changes" --auto-branch`
  * - `buff execute "fix CI for PR #42" --auto-branch`
  */
-import { existsSync } from 'node:fs';
+import { existsSync, writeFileSync, openSync } from 'node:fs';
 import { join } from 'node:path';
-import { homedir } from 'node:os';
-import { execSync } from 'node:child_process';
+import { homedir, tmpdir } from 'node:os';
+import { execSync, spawn } from 'node:child_process';
 import { Agent } from '../agent.js';
 import { installHooks, removeHooks, getHookStatus, detectIssueBranch, generateBranchName, createAndCheckoutBranch, autoCommit, generateCommitMessage, } from './branch-automation-hooks.js';
 // ─── Constants ──────────────────────────────────────────────────────────────
@@ -83,7 +83,10 @@ export class BranchAutomationAgent extends Agent {
     // ─── Helpers ──────────────────────────────────────────────────────────────
     getRepoPath() {
         try {
-            const output = execSync('git rev-parse --show-toplevel 2>/dev/null', {
+            // No `2>/dev/null` redirect — that's bash syntax; on Windows cmd.exe
+            // it would try to write to a literal \dev\null path. The try/catch
+            // already swallows the error case.
+            const output = execSync('git rev-parse --show-toplevel', {
                 encoding: 'utf-8',
                 timeout: 5000,
             }).trim();
@@ -324,16 +327,47 @@ export class BranchAutomationAgent extends Agent {
             };
             installHooks(config);
         }
-        // Start file-watch in background using the installed script
+        // Start file-watch in background using the installed script.
+        // Cross-platform: a detached Node spawn replaces the Unix-only
+        // `nohup sh ... > /tmp/... 2>&1 & echo $!` incantation (nohup, sh and
+        // /tmp don't exist on Windows). Windows gets a matching .cmd wrapper;
+        // the watcher's output is appended to a tmpdir log file on both.
         try {
-            const pid = execSync(`nohup sh "${join(homedir(), '.buff', 'hooks', 'file-watch.sh')}" "${repoPath}" > /tmp/agent-nuvira-filewatch.log 2>&1 & echo $!`, { encoding: 'utf-8', timeout: 5000 }).trim();
+            const isWindows = process.platform === 'win32';
+            const scriptPath = join(homedir(), '.buff', 'hooks', 'file-watch.sh');
+            const wrapperPath = join(homedir(), '.buff', 'hooks', isWindows ? 'file-watch.cmd' : 'file-watch.sh');
+            if (isWindows && !existsSync(wrapperPath)) {
+                // A .cmd wrapper that calls the sh script via Git Bash's sh.
+                // Resolve the sh path once and bake it in — checking only the
+                // default Program Files location would miss Scoop/Chocolatey
+                // installs and silently report a false success.
+                const shPath = this.resolveGitBashSh();
+                if (!shPath) {
+                    return {
+                        success: false,
+                        summary: 'Failed to start file watch',
+                        error: 'Git Bash (sh.exe) not found — install Git for Windows to use file-watch on this machine',
+                    };
+                }
+                writeFileSync(wrapperPath, `@echo off\r\n"${shPath}" "${scriptPath}" "${repoPath}"\r\n`, 'utf-8');
+            }
+            const logPath = join(tmpdir(), 'agent-nuvira-filewatch.log');
+            // Append the watcher's stdout/stderr to the log file so the advertised
+            // Log path is real (the old `> log 2>&1` redirect).
+            const logFd = openSync(logPath, 'a');
+            const child = spawn(isWindows ? wrapperPath : scriptPath, isWindows ? [] : [repoPath], {
+                detached: true,
+                stdio: ['ignore', logFd, logFd],
+                windowsHide: true,
+            });
+            child.unref();
             return {
                 success: true,
-                summary: `File watch started (PID: ${pid})`,
+                summary: `File watch started`,
                 details: [
                     `Watching: ${repoPath}`,
                     `Interval: ${DEFAULT_WATCH_INTERVAL_MS / 1000}s`,
-                    `Log: /tmp/agent-nuvira-filewatch.log`,
+                    `Log: ${logPath}`,
                     '',
                     'Auto-commits will be triggered when file changes are detected.',
                     'To stop: buff execute "stop file watch" --auto-branch',
@@ -348,6 +382,29 @@ export class BranchAutomationAgent extends Agent {
                 error: msg.slice(0, 200),
             };
         }
+    }
+    /**
+     * Locate Git Bash's sh.exe on Windows (used by the file-watch .cmd
+     * wrapper). Tries the standard install location, Program Files (x86),
+     * and a PATH lookup — Git Bash from Scoop/Chocolatey lives elsewhere.
+     */
+    resolveGitBashSh() {
+        const candidates = [
+            join(process.env.ProgramFiles || 'C:\\Program Files', 'Git', 'bin', 'sh.exe'),
+            join(process.env['ProgramFiles(x86)'] || 'C:\\Program Files (x86)', 'Git', 'bin', 'sh.exe'),
+        ];
+        for (const c of candidates) {
+            if (existsSync(c))
+                return c;
+        }
+        try {
+            const out = execSync('where sh', { encoding: 'utf-8', timeout: 5000 });
+            const first = out.split(/\r?\n/).find((l) => l.trim())?.trim();
+            if (first)
+                return first;
+        }
+        catch { /* not on PATH */ }
+        return null;
     }
     // ─── Auto-Commit ──────────────────────────────────────────────────────────
     async handleAutoCommit(context, callLLM, repoPath) {

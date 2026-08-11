@@ -22,6 +22,15 @@
  */
 import { Command } from 'commander';
 import { BaseCommand } from './commands.js';
+import { type PhaseDefinition } from '../agents/phase-engine.js';
+import { type PublishCredentials } from '../agents/credential-store.js';
+/**
+ * The publish pipeline's PHASE LIST — one shared source for the CLI command
+ * AND the H1 `publish` tool (E3c model-decides vocabulary). Both entry points
+ * build the exact same phases from the same credentials, so a chat-loop
+ * publish can never diverge from `buff publish` (STANDING RULE).
+ */
+export declare function buildPublishPhases(bumpType: string, skipTests: boolean, creds: PublishCredentials): PhaseDefinition[];
 export declare class PublishCommand extends BaseCommand {
     create(): Command;
     private publishRelease;

@@ -11,11 +11,11 @@ import { existsSync, readFileSync, writeFileSync, mkdirSync, cpSync, rmSync, rea
 import { join, dirname } from 'node:path';
 import { tmpdir } from 'node:os';
 import { mkdtempSync } from 'node:fs';
-import { execSync } from 'node:child_process';
 
 import { Agent, type AgentContext, type AgentResult } from '../agent.js';
 import type { LLMCallFn } from '../agent.js';
 import { logger } from '../../utils/logger.js';
+import { runShellSync } from '../../utils/shell.js';
 import { SandboxManager } from '../../sandbox/manager.js';
 import { detectProjectImage } from '../../sandbox/images.js';
 import { getSandboxConfig } from '../../sandbox/types.js';
@@ -409,62 +409,37 @@ BUFFEOF`,
   }
 
   /**
-   * Run npm install in the sandbox.
+   * Run npm install in the sandbox (through the shared shell choke point —
+   * E1 emits exec:shell events; never throws on non-zero exit).
    */
   private runInstall(sandboxPath: string): string {
-    try {
-      return execSync('npm install --prefer-offline --no-audit --no-fund 2>&1', {
-        cwd: sandboxPath,
-        timeout: 120_000, // 2 minutes
-        stdio: 'pipe',
-        encoding: 'utf-8',
-      });
-    } catch (err) {
-      const output = err instanceof Error ? err.message : String(err);
-      // npm install warnings are normal — only throw on critical errors
-      return output;
-    }
+    const result = runShellSync('npm install --prefer-offline --no-audit --no-fund', {
+      cwd: sandboxPath,
+      timeoutMs: 120_000, // 2 minutes
+      source: 'tester',
+    });
+    const output = [result.stdout, result.stderr].filter(Boolean).join('\n');
+    return output || (result.success ? '' : 'npm install failed');
   }
 
   /**
    * Run the test command and capture output.
    */
   private runTests(sandboxPath: string, command: string): TestResult {
-    try {
-      const output = execSync(command, {
-        cwd: sandboxPath,
-        timeout: 180_000, // 3 minutes
-        stdio: 'pipe',
-        encoding: 'utf-8',
-      });
+    const result = runShellSync(command, {
+      cwd: sandboxPath,
+      timeoutMs: 180_000, // 3 minutes
+      source: 'tester',
+    });
 
-      return {
-        success: true,
-        output,
-        exitCode: 0,
-        sandboxPath,
-      };
-    } catch (err) {
-      const error = err as {
-        status?: number;
-        stdout?: string;
-        stderr?: string;
-        message?: string;
-      };
+    const output = [result.stdout, result.stderr].filter(Boolean).join('\n');
 
-      const output = [
-        error.stdout || '',
-        error.stderr || '',
-        error.message || '',
-      ].filter(Boolean).join('\n');
-
-      return {
-        success: false,
-        output,
-        exitCode: error.status ?? 1,
-        sandboxPath,
-      };
-    }
+    return {
+      success: result.success,
+      output,
+      exitCode: result.exitCode,
+      sandboxPath,
+    };
   }
 
   /**

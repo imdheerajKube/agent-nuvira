@@ -20,6 +20,7 @@ import { detectLanguage } from '../editing/types.js';
 import { validateSyntax } from '../editing/ast.js';
 import { buildStructuralContext } from '../editing/edit.js';
 import { tryTier0Route } from '../learning/tier0-router.js';
+import { responseIndicatesNoChanges } from './agents/writer.js';
 
 // ─── Constants ──────────────────────────────────────────────────────────────
 
@@ -217,9 +218,6 @@ export class DefaultEditModule implements EditModule {
 
         const count = fileChanges.length;
         if (count === 0) {
-          // Emit empty result
-          const excerpt = response.slice(0, 300).replace(/\n/g, '\\n');
-
           // If first attempt returned empty, retry with stricter prompt
           if (attempt === 0) {
             this.eventBus.emit(EventNames.EDIT_GENERATING, {
@@ -231,11 +229,17 @@ export class DefaultEditModule implements EditModule {
             continue;
           }
 
+          // Session 46 parity with WriterAgent: a GENUINE "no changes needed"
+          // decline is a clean no-op (no warning); anything else is a format
+          // failure worth surfacing to the caller.
+          const genuineDecline = responseIndicatesNoChanges(response);
           return {
             changes: [],
             summary: 'No files needed changes',
             changeCount: 0,
-            warnings: ['LLM produced no parseable file changes'],
+            warnings: genuineDecline
+              ? undefined
+              : ['LLM produced no parseable file changes'],
           };
         }
 

@@ -104,6 +104,73 @@ describe('SandboxManager', () => {
       ).rejects.toThrow(/Docker is not available/);
     });
   });
+
+  describe('runCommand (cross-platform timeout)', () => {
+    it('delegates to spawnDockerExec instead of the GNU `timeout` binary', async () => {
+      // The GNU coreutils `timeout` CLI does not exist on stock macOS (nor
+      // behaves the same on Windows cmd.exe). runCommand must enforce timeouts
+      // via Node-side spawn machinery, not a shell wrapper.
+      const spawnSpy = vi.spyOn(manager as any, 'spawnDockerExec').mockResolvedValue({
+        success: true,
+        stdout: 'ok',
+        stderr: '',
+        exitCode: 0,
+        durationMs: 5,
+        timedOut: false,
+      });
+
+      const container = {
+        containerId: 'abc123',
+        name: 'test',
+        createdAt: Date.now(),
+        status: 'running',
+        limits: { memoryLimit: '1g', cpuLimit: 1, pidsLimit: 100, diskLimit: '2g', networkAccess: false, timeoutMs: 600000 },
+        image: 'node:20-slim',
+      };
+      manager['containers'].set('abc123', container);
+
+      const result = await manager.runCommand('abc123', 'echo hi', 30_000);
+
+      expect(spawnSpy).toHaveBeenCalledWith('abc123', '/bin/bash', 'echo hi', 30_000);
+      expect(result.success).toBe(true);
+      // No GNU `timeout` shell wrapper in the executed command
+      const execCall = spawnSpy.mock.calls[0];
+      expect(JSON.stringify(execCall)).not.toMatch(/timeout\s+\d+/);
+    });
+  });
+
+  describe('destroyContainer (cross-platform redirects)', () => {
+    it('never uses bash-only `2>/dev/null` in host commands', async () => {
+      const hostCommands: string[] = [];
+      vi.spyOn(manager as any, 'execHostCommand').mockImplementation(
+        async (command: string) => {
+          hostCommands.push(command);
+          return { exitCode: 0, stdout: '', stderr: '' };
+        },
+      );
+
+      const container = {
+        containerId: 'xyz789',
+        name: 'test',
+        createdAt: Date.now(),
+        status: 'running',
+        limits: { memoryLimit: '1g', cpuLimit: 1, pidsLimit: 100, diskLimit: '2g', networkAccess: false, timeoutMs: 600000 },
+        image: 'node:20-slim',
+      };
+      manager['containers'].set('xyz789', container);
+
+      await manager.destroyContainer('xyz789');
+
+      expect(hostCommands.length).toBeGreaterThan(0);
+      for (const cmd of hostCommands) {
+        // `2>/dev/null` is bash syntax; cmd.exe needs `2>nul` — the agent
+        // must stay shell-neutral here so destroy works on all platforms.
+        expect(cmd).not.toContain('2>/dev/null');
+      }
+      expect(hostCommands[0]).toMatch(/docker stop/);
+      expect(hostCommands[1]).toMatch(/docker rm -f/);
+    });
+  });
 });  describe('SandboxConfig', () => {
     beforeEach(() => {
       // Reset cached config and delete any persisted config file

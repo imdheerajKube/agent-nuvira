@@ -20,6 +20,7 @@ import { existsSync, readFileSync, writeFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { Command } from 'commander';
 import { BaseCommand } from './commands.js';
+import { guardRbacAction } from './rbac-guard.js';
 import { logger } from '../utils/logger.js';
 import {
   buildSbom,
@@ -130,6 +131,8 @@ export class SbomCommand extends BaseCommand {
         // ── Generate mode ──────────────────────────────────────────────────
         const json = serializeSbom(bom);
         if (options?.out) {
+          // K4: writing an SBOM artifact is a supply-chain write.
+          if (!guardRbacAction('sbom.write')) return;
           writeFileSync(options.out, json + '\n', 'utf-8');
           logger.success(`Wrote SBOM (${bom.components.length} components) to ${options.out}`);
         } else {

@@ -13,6 +13,7 @@
  */
 import { Command } from 'commander';
 import ora from 'ora';
+import { guardRbacAction } from './rbac-guard.js';
 import { getSkillStore } from '../learning/skill-store.js';
 import { SkillCompiler } from '../learning/skill-compiler.js';
 import { getSelfImprover } from '../learning/self-improver.js';
@@ -299,6 +300,9 @@ export class SkillCommand {
         console.log(SkillCompiler.formatSkillList(results));
     }
     garbageCollect(opts) {
+        // K4: dry-run is read-only (anyone); real removal deletes compiled skills.
+        if (!opts.dryRun && !guardRbacAction('skill.remove'))
+            return;
         const store = getSkillStore();
         const qualityReport = store.getQualityReport();
         if (qualityReport.length === 0) {
@@ -364,6 +368,8 @@ export class SkillCommand {
         }
     }
     clearSkills(opts) {
+        if (!guardRbacAction('skill.remove'))
+            return;
         if (!opts.force) {
             logger.warn('Use `--force` to confirm removing all compiled skills.');
             logger.warn('This action cannot be undone.');

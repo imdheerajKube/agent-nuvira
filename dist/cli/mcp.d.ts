@@ -10,6 +10,7 @@
  *   buff mcp call <tool> --args '{"key":"value"}'
  *   buff mcp info <name>       — Show detailed info for an MCP server
  *   buff mcp refresh           — Re-discover and reconnect to MCP servers
+ *   buff mcp serve             — Expose agent tools as an MCP server (stdio)
  */
 import { Command } from 'commander';
 import { BaseCommand } from './commands.js';
@@ -20,6 +21,7 @@ export declare class MCPCommand extends BaseCommand {
     private callTool;
     private showInfo;
     private refreshServers;
+    private serveTools;
     private renderToolResult;
 }
 //# sourceMappingURL=mcp.d.ts.map

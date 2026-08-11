@@ -476,6 +476,130 @@ describe('PlannerAgent', () => {
       expect(capturedPrompt).toContain('validation step');
       expect(capturedPrompt).toContain('reviewer');
     });
+
+    // ─── H2 delegation ───────────────────────────────────────────────────
+
+    it('should preserve a delegation spec on a delegate step', async () => {
+      const context = {
+        goal: 'triple-check the sync module',
+        workingDirectory: '/test',
+        taskPlan: [],
+        artifacts: [],
+        conversations: [],
+        fileChanges: [],
+        metadata: {},
+      } as any;
+
+      const mockLLM = async () => JSON.stringify([
+        {
+          id: 's1',
+          description: 'Triple-check the sync module: run independent checks in parallel',
+          agentType: 'delegate',
+          dependsOn: [],
+          delegation: [
+            { agentType: 'reviewer', prompt: 'Review the sync module for correctness' },
+            { agentType: 'security', prompt: 'Scan the sync module for vulnerabilities' },
+          ],
+        },
+      ]);
+
+      const result = await planner.execute(context, mockLLM as any);
+      expect(result.success).toBe(true);
+      expect(context.taskPlan).toHaveLength(1);
+      expect(context.taskPlan[0].agentType).toBe('delegate');
+      expect(context.taskPlan[0].delegation).toHaveLength(2);
+      expect(context.taskPlan[0].delegation![0]).toEqual({
+        agentType: 'reviewer',
+        prompt: 'Review the sync module for correctness',
+      });
+    });
+
+    it('should drop malformed delegation entries but keep the valid ones', async () => {
+      const context = {
+        goal: 'run checks',
+        workingDirectory: '/test',
+        taskPlan: [],
+        artifacts: [],
+        conversations: [],
+        fileChanges: [],
+        metadata: {},
+      } as any;
+
+      const mockLLM = async () => JSON.stringify([
+        {
+          id: 's1',
+          description: 'Run checks on the module',
+          agentType: 'delegate',
+          dependsOn: [],
+          delegation: [
+            { agentType: 'reviewer', prompt: 'Review' },
+            { agentType: 'security' }, // missing prompt — malformed
+            'garbage',
+            null,
+          ],
+        },
+      ]);
+
+      const result = await planner.execute(context, mockLLM as any);
+      expect(result.success).toBe(true);
+      expect(context.taskPlan[0].delegation).toHaveLength(1);
+      expect(context.taskPlan[0].delegation![0].agentType).toBe('reviewer');
+    });
+
+    it('should drop delegation entries whose files is not a string array', async () => {
+      const context = {
+        goal: 'run checks',
+        workingDirectory: '/test',
+        taskPlan: [],
+        artifacts: [],
+        conversations: [],
+        fileChanges: [],
+        metadata: {},
+      } as any;
+
+      const mockLLM = async () => JSON.stringify([
+        {
+          id: 's1',
+          description: 'Run checks on the module',
+          agentType: 'delegate',
+          dependsOn: [],
+          delegation: [
+            { agentType: 'reviewer', prompt: 'Review', files: ['src/a.ts'] },
+            { agentType: 'security', prompt: 'Scan', files: 'not-an-array' }, // malformed files
+          ],
+        },
+      ]);
+
+      const result = await planner.execute(context, mockLLM as any);
+      expect(result.success).toBe(true);
+      expect(context.taskPlan[0].delegation).toHaveLength(1);
+      expect(context.taskPlan[0].delegation![0].files).toEqual(['src/a.ts']);
+    });
+
+    it('should document delegation in the planner prompt', async () => {
+      const context = {
+        goal: 'add auth',
+        workingDirectory: '/test',
+        taskPlan: [],
+        artifacts: [],
+        conversations: [],
+        fileChanges: [],
+        metadata: {},
+      } as any;
+
+      let capturedPrompt = '';
+      const mockLLM = async (prompt: string) => {
+        capturedPrompt = prompt;
+        return JSON.stringify([
+          { id: 's1', description: 'Write', agentType: 'writer', dependsOn: [] },
+        ]);
+      };
+
+      await planner.execute(context, mockLLM as any);
+      expect(capturedPrompt).toContain('"delegate"');
+      expect(capturedPrompt).toContain('delegation');
+      expect(capturedPrompt).toContain('fresh isolated contexts');
+    });
   });
 
   describe('metadata', () => {

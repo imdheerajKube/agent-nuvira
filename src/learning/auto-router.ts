@@ -145,6 +145,14 @@ export class GovernancePolicyError extends Error {
 
 /** Options for a single resolve() call. */
 export interface AutoRouterOptions {
+  /**
+   * C3: NLU-provided task-intent hint. When set, it OVERRIDES the intent label
+   * produced by analyzeTaskProfile(text) — but NEVER its safety flags
+   * (requiresVerification / escalationTarget), which stay text-derived so a
+   * "fix" hint on a migration request cannot silently disable verification.
+   * Callers set it only when NLU confidence is ≥ RULE_TRUST_THRESHOLD.
+   */
+  taskIntentHint?: TaskIntent;
   /** Preference mode — shifts dimension weights (default: 'balanced') */
   preferenceMode?: PreferenceMode;
   /** Restrict candidates to these providers (default: all built-in) */
@@ -936,7 +944,13 @@ export class AutoModelRouter {
     // and record-time buckets consistent.
     const complexity = options.complexityHint ?? analyzeComplexity(taskDescription);
     const taskType = getTaskType(agentType);
-    const taskProfile = analyzeTaskProfile(taskDescription);
+    // C3: an NLU intent hint overrides the intent LABEL while keeping the
+    // text-derived safety flags (verification/escalation) intact — see the
+    // taskIntentHint doc on AutoRouterOptions.
+    const analyzedProfile = analyzeTaskProfile(taskDescription);
+    const taskProfile = options.taskIntentHint
+      ? { ...analyzedProfile, intent: options.taskIntentHint }
+      : analyzedProfile;
     const mode = options.preferenceMode || 'balanced';
     let weights = computeWeights(complexity, mode, options.weights);
 

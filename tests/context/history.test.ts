@@ -645,4 +645,132 @@ describe('ChatHistory', () => {
       expect(count).toBe(2);
     });
   });
+
+  // ── G3 privacy: redaction on session writes (P6 M6.2) ────────────────
+
+  describe('storeSession redaction (G3 P6 M6.2)', () => {
+    it('redacts API-key-shaped content before persisting', () => {
+      const id = history.storeSession(
+        [
+          userMsg('Here is my key: gsk_AbCdEfGh1234567890abcdef — is it valid?'),
+          assistantMsg('That looks like a Groq key. Do not share it.'),
+        ],
+        'groq',
+        'llama',
+      );
+      const session = history.getSession(id)!;
+      // The raw key must never appear in the persisted message content.
+      expect(session.messages[0].content).not.toContain('gsk_AbCdEfGh1234567890abcdef');
+      expect(session.messages[0].content).toContain('gsk_'); // masked, not deleted
+    });
+
+    it('redacts Bearer tokens in assistant messages', () => {
+      const id = history.storeSession(
+        [
+          userMsg('Check this endpoint with the token'),
+          assistantMsg('Calling with Authorization: Bearer abcdefghijklmnopqrstuvwxyz1234567890'),
+        ],
+        'groq',
+        'llama',
+      );
+      const session = history.getSession(id)!;
+      expect(session.messages[1].content).not.toContain('abcdefghijklmnopqrstuvwxyz1234567890');
+      expect(session.messages[1].content).toContain('Bearer'); // scheme preserved
+    });
+
+    it('does not mutate the caller message array', () => {
+      const original = [userMsg('Plain text with gsk_AbCdEfGh1234567890abcdef inside')];
+      const id = history.storeSession(original, 'groq', 'llama', false);
+      const session = history.getSession(id)!;
+      // The caller's array stays untouched (redact returns a new string).
+      expect(original[0].content).toContain('gsk_AbCdEfGh1234567890abcdef');
+      expect(session.messages[0].content).not.toContain('gsk_AbCdEfGh1234567890abcdef');
+    });
+
+    it('redacts on disk (read raw file, no key-shaped text survives)', () => {
+      history.storeSession(
+        [userMsg('apiKey = sk-abcdefghijklmnopqrstuvwxyz1234567890'), assistantMsg('ok')],
+        'groq',
+        'llama',
+        false,
+      );
+      const raw = existsSync(join(testDirHolder.value, '.buff', 'memory', 'history.json'))
+        ? JSON.parse(require('node:fs').readFileSync(join(testDirHolder.value, '.buff', 'memory', 'history.json'), 'utf-8'))
+        : null;
+      const serialized = JSON.stringify(raw);
+      expect(serialized).not.toContain('sk-abcdefghijklmnopqrstuvwxyz1234567890');
+    });
+  });
+
+  describe('searchSessions (D1 auto-recall)', () => {
+    it('filters sessions by projectId', () => {
+      const h = getChatHistory();
+      h.clear();
+      const t = Date.now();
+      h.storeSession(
+        [{ role: 'user', content: 'fix the login bug', timestamp: t }],
+        'groq', 'm1', false, 'repo:acme/shop',
+      );
+      h.storeSession(
+        [{ role: 'user', content: 'set up CI for the worker', timestamp: t }],
+        'groq', 'm1', false, 'repo:acme/other',
+      );
+      const results = h.searchSessions({ projectId: 'repo:acme/shop' });
+      expect(results).toHaveLength(1);
+      expect(results[0].summary).toContain('login bug');
+    });
+
+    it('filters sessions by time range (epoch ms)', () => {
+      const h = getChatHistory();
+      h.clear();
+      const now = Date.now();
+      const weekAgo = now - 7 * 24 * 60 * 60 * 1000;
+      h.storeSession(
+        [{ role: 'user', content: 'old session from last week', timestamp: weekAgo }],
+        'groq', 'm1', false, 'repo:x',
+      );
+      h.storeSession(
+        [{ role: 'user', content: 'recent session today', timestamp: now }],
+        'groq', 'm1', false, 'repo:x',
+      );
+      const results = h.searchSessions({
+        projectId: 'repo:x',
+        timeRange: { start: now - 24 * 60 * 60 * 1000 },
+      });
+      expect(results).toHaveLength(1);
+      expect(results[0].summary).toContain('recent');
+    });
+
+    it('scores by keyword query within a project', () => {
+      const h = getChatHistory();
+      h.clear();
+      const t = Date.now();
+      h.storeSession(
+        [{ role: 'user', content: 'implement stripe payments', timestamp: t }],
+        'groq', 'm1', false, 'repo:x',
+      );
+      h.storeSession(
+        [{ role: 'user', content: 'fix auth token expiry', timestamp: t }],
+        'groq', 'm1', false, 'repo:x',
+      );
+      const results = h.searchSessions({ projectId: 'repo:x', query: 'stripe' });
+      expect(results).toHaveLength(1);
+      expect(results[0].summary).toContain('stripe');
+    });
+
+    it('returns newest-first with no query and respects limit', () => {
+      const h = getChatHistory();
+      h.clear();
+      const now = Date.now();
+      for (let i = 0; i < 3; i++) {
+        h.storeSession(
+          [{ role: 'user', content: `session number ${i}`, timestamp: now - i * 1000 }],
+          'groq', 'm1', false, 'repo:x',
+        );
+      }
+      const results = h.searchSessions({ projectId: 'repo:x', limit: 2 });
+      expect(results).toHaveLength(2);
+      expect(results[0].summary).toContain('session number 0');
+    });
+  });
 });

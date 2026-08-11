@@ -284,6 +284,12 @@ export interface MemoryData {
   total: number;
   avgScore: number;
   byFingerprint: Record<string, number>;
+  /** G2: project-scoped facts (B1) — { total, byProject }. */
+  facts?: { total: number; byProject: Record<string, number> };
+  /** G2: D1 recall-hit telemetry — { total, today, last7d }. */
+  recall?: { total: number; today: number; last7d: number; byProject?: Record<string, number> };
+  /** G2: active memory backend tier (F1 Mem0 is an optional provider; local = default). */
+  backend?: string;
 }
 
 export interface AgentPerfStats {
@@ -686,6 +692,134 @@ export interface TraceEntry {
 export interface TracesData {
   total: number;
   traces: TraceEntry[];
+}
+
+// ─── Admin Command-Runner Types (E3c follow-up — dashboard executes the
+// state commands so the user never types them; keys ALWAYS masked) ──────────
+
+export type CheckStatus = 'pass' | 'warn' | 'fail';
+
+export interface AdminCheck {
+  name: string;
+  status: CheckStatus;
+  message: string;
+  detail?: string;
+  fix?: string;
+}
+
+export interface AdminProviderSummary {
+  type: string;
+  configured: boolean;
+  keySource: 'env' | 'config' | 'vault' | 'none' | 'local';
+  keyMasked: string | null;
+  model?: string;
+  baseUrl?: string;
+}
+
+export interface AdminChecksData {
+  system: AdminCheck[];
+  enterprise: AdminCheck[];
+  providers: AdminProviderSummary[];
+  serverTime: number;
+}
+
+// ─── Admin write surface (Session 18 — user-id + password control layer) ───
+
+/** Whether the admin write surface is configured and this session is authed. */
+export interface AdminAuthStatus {
+  configured: boolean;
+  authenticated: boolean;
+  user?: string | null;
+  /** The acting RBAC role ('admin' | 'operator' | 'viewer') — gates the write surface. */
+  role?: string | null;
+}
+
+/** One dashboard admin user (never carries salt/hash). */
+export interface AdminUser {
+  user: string;
+  role: 'admin' | 'operator' | 'viewer';
+  createdAt: number;
+}
+
+/** User-management response (role.manage = admin). */
+export interface AdminUsersResult {
+  ok: boolean;
+  users?: AdminUser[];
+  error?: string;
+  /** True when a DELETE actually removed a user. */
+  removed?: boolean;
+  /** 403 — authenticated but the role may not manage users. */
+  forbidden?: boolean;
+  unauthorized?: boolean;
+}
+
+/** Login/setup response: ok + the Bearer token to persist, or a server error. */
+export interface AdminLoginResult {
+  ok: boolean;
+  user?: string;
+  /** The acting RBAC role — gates what this session may write. */
+  role?: string;
+  token?: string;
+  error?: string;
+  /** 401 — session missing/expired; the UI must show the login form again. */
+  unauthorized?: boolean;
+}
+
+/** Provider save/remove response: the refreshed (masked) row on success. */
+export interface AdminWriteResult {
+  ok: boolean;
+  error?: string;
+  cleared?: boolean;
+  /** True when the key lives in the environment and cannot be removed from config. */
+  envSourced?: boolean;
+  /** The env var the key comes from (only meaningful when envSourced). */
+  envVar?: string;
+  provider?: AdminProviderSummary;
+  unauthorized?: boolean;
+}
+
+/** Provider test-connection response (model list on success). */
+export interface AdminTestResult {
+  ok: boolean;
+  models?: string[];
+  error?: string;
+  unauthorized?: boolean;
+}
+
+/** One entry of the provider catalog (drives the Add-provider selector). */
+export interface AdminCatalogProvider {
+  id: string;
+  label: string;
+  icon?: string;
+  envVar?: string | null;
+  keyless?: boolean;
+}
+
+export interface AdminCatalog {
+  providers: AdminCatalogProvider[];
+}
+
+/** Session 36 — user-declared daily budget (routing.quota + cost cap). */
+export interface AdminQuotaLimit {
+  tokensPerWindow?: number;
+  requestsPerWindow?: number;
+  windowMs?: number;
+}
+
+/** GET /api/admin/quota — the current budget config + editable provider set. */
+export interface AdminQuotaConfig {
+  ok: boolean;
+  quota: Record<string, AdminQuotaLimit>;
+  costUsd: number | null;
+  providers: string[];
+  error?: string;
+}
+
+/** PUT /api/admin/quota body — null clears a field; clearProvider removes a row. */
+export interface AdminQuotaPayload {
+  quota?: Record<string, AdminQuotaLimit | null>;
+  costUsd?: number | null;
+  clearProvider?: string;
 }
 
 export interface DashboardData {

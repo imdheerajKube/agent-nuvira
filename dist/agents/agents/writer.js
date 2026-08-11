@@ -99,6 +99,27 @@ function isRateLimitError(errorMessage) {
     return /rate\s*limit|429|too many requests|try again in/i.test(errorMessage);
 }
 /**
+ * Distinguish a GENUINE "no changes needed" LLM judgment from a format
+ * failure (Session 46). A writer that explicitly declines — nothing to
+ * change, already implemented, no modifications required — produced a valid
+ * result and the step is a legitimate no-op. A writer that rambled or was
+ * truncated WITHOUT emitting any `filepath:` code block did not do its job;
+ * stamping that as a success silently skipped the task's real work (the
+ * exact failure observed when a weak model left an NVDA addon incomplete
+ * and the reviewer correctly blocked it three times in a row).
+ *
+ * Exported so sibling LLM-driven modules (EditModule) apply the same
+ * decline-vs-format-failure distinction (Session 46 follow-up).
+ */
+export function responseIndicatesNoChanges(response) {
+    const lower = response.toLowerCase();
+    return (/no (changes?|modifications?|files?|work) (needed|required|necessary|to (make|change|modify|be made))/.test(lower) ||
+        /nothing (to (change|modify|do)|needs (changing|modifying|to be done))/.test(lower) ||
+        /(does not|doesn'?t) (need|require) (any )?(changes?|modifications?|work|action)/.test(lower) ||
+        /already (implemented|contains|handles|covers|satisfies|satisfied|done|exists|complete|present)/.test(lower) ||
+        /no (further|additional) (changes?|work|action) (needed|required)/.test(lower));
+}
+/**
  * Calculate the retry delay for a given attempt.
  * If the error message contains a "try again in Xs" hint, use that.
  * Otherwise, fall back to exponential backoff with BASE_RETRY_DELAY_MS.
@@ -135,21 +156,23 @@ export class WriterAgent extends Agent {
             try {
                 this.report(context, 'drafting', 'Generating code changes…');
                 const result = await this.attemptWrite(context, latestCallLLM);
-                // Inner retry: handles empty parse results (format issue)
-                // This runs on EVERY API attempt — API errors and format issues are independent.
-                // The format retry always returns (success or note), so no infinite loop risk.
+                // Session 46: a GENUINE "no changes needed" decline is a valid no-op —
+                // accept it immediately (a misleading "stricter format" retry would
+                // only push a declining model to fabricate changes it correctly
+                // declined). A FORMAT FAILURE (no filepath: blocks, no decline
+                // language) gets one strict-format retry, then FAILS LOUDLY so the
+                // orchestrator's repair engine escalates the model instead of
+                // silently skipping the task's real work.
                 if (result.success && result.summary === 'No files needed changes') {
-                    this.report(context, 'retrying', 'Response was not parseable — retrying with stricter format instructions');
-                    // Retry once with stricter format instructions
+                    return result;
+                }
+                if (!result.success && result.summary === 'Writer produced no parseable output') {
+                    this.report(context, 'retrying', 'No parseable file changes — retrying with stricter format instructions');
                     const retryResult = await this.attemptWrite(context, latestCallLLM, true);
                     if (retryResult.success && retryResult.summary !== 'No files needed changes') {
                         return retryResult;
                     }
-                    return {
-                        success: true,
-                        summary: result.summary,
-                        details: `${result.details}\n(Retried once with explicit format instructions — still no parseable output)`,
-                    };
+                    return retryResult;
                 }
                 return result;
             }
@@ -291,10 +314,24 @@ export class WriterAgent extends Agent {
         if (count === 0) {
             const excerpt = response.slice(0, 300).replace(/\n/g, '\\n');
             logger.debug(`[Writer ${label}] No files parsed. Response starts with: ${excerpt.slice(0, 200)}...`);
+            // Session 46: distinguish a genuine "no changes needed" judgment from a
+            // format failure. A model that explicitly declines is a legitimate no-op;
+            // a model that returned no `filepath:` code blocks AND did not decline
+            // produced an invalid result — surface it as a FAILURE so the repair
+            // engine can escalate (the old behavior stamped it success:true, which
+            // silently skipped the task's real work and stranded downstream steps).
+            if (responseIndicatesNoChanges(response)) {
+                return {
+                    success: true,
+                    summary: 'No files needed changes',
+                    details: `Response preview: ${excerpt}...`,
+                };
+            }
+            logger.warn(`[Writer ${label}] LLM returned no parseable file changes (no filepath: code blocks)`);
             return {
-                success: true,
-                summary: 'No files needed changes',
-                details: `Response preview: ${excerpt}...`,
+                success: false,
+                summary: 'Writer produced no parseable output',
+                error: `No filepath: code blocks could be parsed from the LLM response (parse error). Response preview: ${excerpt.slice(0, 250)}...`,
             };
         }
         return {
@@ -321,6 +358,13 @@ export class WriterAgent extends Agent {
         const writerTask = context.taskPlan.find((s) => s.agentType === 'writer' &&
             (currentTaskId ? s.id === currentTaskId : s.status === 'running'));
         const taskDescription = writerTask?.description || context.goal;
+        // Session 46: repair / alternative-approach / review-fix context rides in
+        // context.goal (the repair engine appends the failure there, the fix pass
+        // appends the review feedback). Surface it whenever it differs from the
+        // step description — otherwise a running writer step would swallow the
+        // error/fix context and the repair would re-prompt the model with NO
+        // information about what failed.
+        const goalSection = taskDescription !== context.goal ? `\n\n## Goal\n${context.goal}` : '';
         // Use token-budget-aware file selection: show as many files as possible
         // within MAX_CONTEXT_CHARS, prioritizing smaller files to max context.
         // When the orchestrator's vector-retrieval hook produced a semantic file
@@ -367,7 +411,7 @@ export class WriterAgent extends Agent {
         const instructions = isRetry
             ? `\n## CRITICAL — Read This Carefully\nThe previous response could not be parsed because the files were not wrapped in correctly formatted code blocks.\n\nYou MUST follow this format EXACTLY for EACH file you modify:\n\n\`\`\`filepath:src/example.ts\n// THE COMPLETE UPDATED FILE CONTENT GOES HERE (every line, full file)\n\`\`\`\n\nIMPORTANT:\n- The filepath: prefix is REQUIRED after the opening backticks\n- Return the FULL file, not a diff or snippet\n- If you modify 2 files, return 2 separate code blocks in this format`
             : `\n## Instructions\nImplement the changes described in the task. Return the complete updated file content for each file you modify. Remember: each file must be wrapped in \`\`\`filepath:...\n\`\`\` format.`;
-        return `${WRITER_SYSTEM_PROMPT}\n\n## Task Description\n${taskDescription}\n\n## Current File Content\n${fileContext}${structureSection}${mcpSection}\n${instructions}`;
+        return `${WRITER_SYSTEM_PROMPT}\n\n## Task Description\n${taskDescription}${goalSection}\n\n## Current File Content\n${fileContext}${structureSection}${mcpSection}\n${instructions}`;
     }
     /**
      * Parse the LLM response to extract file changes.

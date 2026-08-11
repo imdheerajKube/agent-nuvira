@@ -17,9 +17,9 @@
  */
 import { join, resolve, isAbsolute, dirname } from 'node:path';
 import { existsSync, mkdirSync, writeFileSync, readFileSync } from 'node:fs';
-import { execSync } from 'node:child_process';
 import { getEventBus, EventNames } from '../observability/event-bus.js';
 import { logger } from '../utils/logger.js';
+import { runShell } from '../utils/shell.js';
 import { DefaultInspectModule } from './inspect-module.js';
 import { DefaultVerifyModule } from './verify-module.js';
 import { DefaultReportModule } from './report-module.js';
@@ -156,7 +156,7 @@ export class TaskExecutionPipeline {
                 testsFailed: testResult.data?.failedCount ?? 0,
             });
             // ── Step 5: Verify ────────────────────────────────────────────
-            verifyResult = await this.stepVerify(editResult.data, testResult.data, planOutput.goal, callLLM, config.strictness, audit, verbose);
+            verifyResult = await this.stepVerify(editResult.data, testResult.data, planOutput.goal, callLLM, config.strictness, config.acceptanceCriteria, audit, verbose);
             audit.snapshot(4, 'verify', {
                 artifactsCollected: inspectionOutput.artifacts.length,
                 filesChanged: editResult.data?.changes.length ?? 0,
@@ -381,28 +381,17 @@ export class TaskExecutionPipeline {
             if (verbose)
                 logger.info(`   Test command: ${testCommand}`);
             audit.log('test', 'test:command', 'info', `Running: ${testCommand}`);
-            // Execute the test command
-            let stdout;
-            let stderr;
-            let exitCode;
-            try {
-                const result = execSync(testCommand, {
-                    cwd: workingDirectory,
-                    timeout: 60_000,
-                    maxBuffer: 10 * 1024 * 1024,
-                    stdio: 'pipe',
-                    shell: true,
-                    windowsHide: true,
-                });
-                stdout = typeof result === 'string' ? result : result.toString();
-                stderr = '';
-                exitCode = 0;
-            }
-            catch (execErr) {
-                stdout = execErr.stdout?.toString() || '';
-                stderr = execErr.stderr?.toString() || '';
-                exitCode = execErr.status ?? 1;
-            }
+            // Execute the test command through the shared shell choke point —
+            // emits exec:shell-start / exec:shell-end so the run is visible as a
+            // live `$ npm test` lane (E1). Never throws on non-zero exit.
+            const shellResult = await runShell(testCommand, {
+                cwd: workingDirectory,
+                timeoutMs: 60_000,
+                source: 'task-execution-pipeline',
+            });
+            const stdout = shellResult.stdout;
+            const stderr = shellResult.stderr;
+            const exitCode = shellResult.exitCode;
             // Parse test results from output
             const parsed = this.parseTestOutput(stdout + '\n' + stderr, exitCode);
             const output = {
@@ -445,7 +434,7 @@ export class TaskExecutionPipeline {
      * Checks: security, goal-alignment, test results, code quality.
      * If verification fails, the pipeline can retry the edit step.
      */
-    async stepVerify(editOutput, testOutput, goal, callLLM, strictness, audit, verbose) {
+    async stepVerify(editOutput, testOutput, goal, callLLM, strictness, acceptanceCriteria, audit, verbose) {
         const stepStart = Date.now();
         audit.log('verify', 'verify:started', 'info', 'Running verification checks');
         if (verbose)
@@ -461,6 +450,7 @@ export class TaskExecutionPipeline {
                     originalContent: c.originalContent,
                 })),
                 goal,
+                acceptanceCriteria,
                 testResults: testOutput ? { passed: testOutput.passedCount, failed: testOutput.failedCount, total: testOutput.totalCount } : undefined,
                 strictness: strictness ?? 'medium',
                 callLLM,

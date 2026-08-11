@@ -21,6 +21,7 @@
 import { Command } from 'commander';
 import { BaseCommand } from './commands.js';
 import type { BuffConfig } from '../config/types.js';
+import { ConfigManager } from '../config/manager.js';
 export type HealthStatus = 'pass' | 'warn' | 'fail';
 export interface CheckResult {
     name: string;
@@ -218,17 +219,26 @@ export declare function buildEnterpriseChecks(inputs: {
     /** Whether package-lock.json exists in the project root (for the warn path). */
     lockfilePresent?: boolean;
 }): CheckResult[];
+export declare function runSystemChecks(configManager: ConfigManager): Promise<CheckResult[]>;
+/**
+ * The shared all-checks composition (dashboard command-runner + `buff doctor
+ * --enterprise`): system checks + the enterprise self-check. One source — the
+ * dashboard's /api/admin/checks and the CLI render the SAME checks.
+ */
+export declare function runAllChecks(configManager: ConfigManager): Promise<{
+    system: CheckResult[];
+    enterprise: CheckResult[];
+}>;
+/**
+ * Build the P7 M7.1 enterprise self-check (gateway, secrets backend, audit
+ * chains, SBOM posture, governance) as pure CheckResults — shared between the
+ * CLI (--enterprise) and the dashboard command-runner.
+ */
+export declare function runEnterpriseChecks(configManager: ConfigManager): Promise<CheckResult[]>;
 export declare class DoctorCommand extends BaseCommand {
     create(): Command;
     private runDiagnosis;
     private runWatchMode;
-    private runSystemChecks;
-    /**
-     * Check availability of common CLI tools needed by the runner and sandbox.
-     */
-    private checkCliTools;
-    private checkDocker;
-    private checkConnectivity;
     private checkProvider;
     private renderSystemSection;
     private renderEnterpriseSection;

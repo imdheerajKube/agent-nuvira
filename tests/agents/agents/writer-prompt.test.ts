@@ -254,17 +254,6 @@ describe('WriterAgent — execute retry logic', () => {
   }
 
   /**
-   * Create a mock callLLM that returns a response with NO parseable file changes.
-   * This simulates the LLM responding with explanations but no code blocks.
-   */
-  function emptyLLM(): LLMCallFn {
-    return async () => {
-      llmCallCount++;
-      return 'I think the file looks fine as-is. No changes needed.';
-    };
-  }
-
-  /**
    * Create a mock callLLM that throws an API error.
    * Optionally succeeds after a given number of failures (for testing retry).
    */
@@ -331,11 +320,12 @@ describe('WriterAgent — execute retry logic', () => {
   // ── Format Retry (empty parse) ──────────────────────────────────────
 
   it('should retry with stricter prompt when first response has no parseable files', async () => {
-    // First response is empty (no code blocks), second has valid content
+    // First response is ambiguous prose (no code blocks, no decline language),
+    // second has valid content
     const mockLLM: LLMCallFn = async () => {
       llmCallCount++;
       if (llmCallCount === 1) {
-        return 'This file looks fine, no changes needed.';
+        return 'I will outline my approach below, starting with the file structure.';
       }
       return '```filepath:src/output.ts\nconst updated = true;\n```';
     };
@@ -347,27 +337,33 @@ describe('WriterAgent — execute retry logic', () => {
     expect(llmCallCount).toBe(2); // 1 empty + 1 successful format retry
   });
 
-  it('should return with note when both attempts produce no parseable files', async () => {
-    const result = await writer.execute(context(), emptyLLM());
+  it('should fail loudly when both attempts produce no parseable files (Session 46)', async () => {
+    const mockLLM: LLMCallFn = async () => {
+      llmCallCount++;
+      return 'I will implement the handler now. First the imports, then the gesture registration logic.';
+    };
 
-    expect(result.success).toBe(true);
-    expect(result.summary).toBe('No files needed changes');
-    expect(result.details).toContain('still no parseable output');
-    expect(llmCallCount).toBe(2); // 1 initial + 1 format retry
+    const result = await writer.execute(context(), mockLLM);
+
+    // Session 46: a persistent parse failure is a FAILURE (repair engine
+    // escalates) — not a masked success.
+    expect(result.success).toBe(false);
+    expect(result.summary).toBe('Writer produced no parseable output');
+    expect(llmCallCount).toBe(2); // 1 initial + 1 format retry, then surfaced
   });
 
   // ── Combined: API Error + Format Retry ──────────────────────────────
 
   it('should retry API error AND apply format retry on the retried attempt', { timeout: 30000 }, async () => {
     // Call 1: throws API error
-    // Call 2: succeeds but produces empty parse (no code blocks)
+    // Call 2: succeeds but produces ambiguous prose (no code blocks)
     // Call 3: format retry produces valid content
     let call = 0;
     const mockLLM: LLMCallFn = async () => {
       call++;
       llmCallCount++;
       if (call === 1) throw new Error('API timeout');
-      if (call === 2) return 'No changes needed, the code is fine.';
+      if (call === 2) return 'Here is my implementation plan for the module.';
       return '```filepath:src/output.ts\nconst result = "fixed";\n```';
     };
 
@@ -378,7 +374,7 @@ describe('WriterAgent — execute retry logic', () => {
     expect(llmCallCount).toBe(3); // 1 API error + 1 empty + 1 format retry success
   });
 
-  it('should handle API error followed by failed format retry', { timeout: 30000 }, async () => {
+  it('should fail loudly after API error when both format attempts produce no parseable files', { timeout: 30000 }, async () => {
     // Call 1: throws API error
     // Call 2: produces empty parse
     // Call 3: format retry also produces empty parse
@@ -387,14 +383,13 @@ describe('WriterAgent — execute retry logic', () => {
       call++;
       llmCallCount++;
       if (call === 1) throw new Error('Rate limit hit');
-      return 'I reviewed the code and no changes are needed.';
+      return 'I reviewed the code and the implementation is correct as-is.';
     };
 
     const result = await writer.execute(context(), mockLLM);
 
-    expect(result.success).toBe(true);
-    expect(result.summary).toBe('No files needed changes');
-    expect(result.details).toContain('still no parseable output');
+    expect(result.success).toBe(false);
+    expect(result.summary).toBe('Writer produced no parseable output');
     expect(llmCallCount).toBe(3); // 1 API error + 1 empty + 1 format retry empty
   });
 
@@ -408,7 +403,7 @@ describe('WriterAgent — execute retry logic', () => {
     const mockLLM: LLMCallFn = async () => {
       call++;
       llmCallCount++;
-      if (call === 1) return 'This code is fine, no changes.';
+      if (call === 1) return 'I will describe my approach to the implementation.';
       if (call === 2) throw new Error('API timeout on retry');
       return '```filepath:src/output.ts\nconst result = "fixed";\n```';
     };

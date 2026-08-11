@@ -4,6 +4,9 @@ import { getPluginRegistry } from '../plugins/registry.js';
 import { logger } from '../utils/logger.js';
 import { clearModelListCache } from '../inference/model-validator.js';
 import { CATALOG_PROVIDER_IDS, getCatalogProvider, catalogEnvVar, isCatalogKeyless } from '../inference/provider-catalog.js';
+import { Vault } from '../enterprise/vault.js';
+import { guardRbacAction } from './rbac-guard.js';
+import { countKeyStates } from '../config/manager.js';
 /**
  * Config command — manage buff configuration
  * buff config [set|get|list]
@@ -16,6 +19,7 @@ export class ConfigCommand extends BaseCommand {
             .addCommand(this.createGetCommand())
             .addCommand(this.createListCommand())
             .addCommand(this.createInitCommand())
+            .addCommand(this.createVaultCommand())
             .action(() => {
             // Show current config when no subcommand is given
             this.displayConfig();
@@ -57,6 +61,104 @@ export class ConfigCommand extends BaseCommand {
             .action(() => {
             this.initConfig();
         });
+    }
+    /**
+     * Phase A1 secret vault: `buff config vault status|migrate-keys`.
+     * Vault stores provider API keys in the OS keychain (or an AES-256-GCM
+     * encrypted file fallback) so `buffconfig.json` holds `vault:` refs instead
+     * of plaintext secrets.
+     */
+    createVaultCommand() {
+        const vault = new Command('vault').description('Secret vault management (Phase A1)');
+        vault
+            .command('status')
+            .description('Show the active vault tier and migration state')
+            .action(async () => {
+            const v = Vault.open({});
+            const st = v.status();
+            const cfg = this.configManager.getAll();
+            const { refs: refCount, plaintext: plaintextCount } = countKeyStates(cfg);
+            const tierLabel = st.tier === 'keyring'
+                ? '🔐 OS keychain'
+                : st.tier === 'os-cli'
+                    ? '🔑 OS credential tool'
+                    : st.tier === 'aes-file'
+                        ? '🔒 AES-256-GCM file'
+                        : '❌ none';
+            console.log(`\n  Vault tier: ${tierLabel}`);
+            console.log(`  Platform: ${st.platform}`);
+            console.log(`  Backend: ${st.backend}`);
+            console.log(`  OS keyring reachable: ${st.keyringAvailable ? 'yes' : 'no'}`);
+            if (st.tier === 'aes-file')
+                console.log(`  Encrypted-file entries: ${st.fileEntryCount}`);
+            console.log(`  Provider keys in config: ${refCount} vault ref(s), ${plaintextCount} plaintext`);
+            if (plaintextCount > 0) {
+                console.log(`\n  Run 'buff config vault migrate-keys' to move ${plaintextCount} plaintext key(s) into the vault.`);
+            }
+            console.log('');
+        });
+        vault
+            .command('log')
+            .description('Show recent vault access-log entries (K3 tamper-evident audit)')
+            .option('-n, --limit <n>', 'Number of entries to show (default 20)', (v) => parseInt(v, 10) || 20)
+            .action(async (options) => {
+            const { readVaultAccessLog, VAULT_AUDIT_FILENAME } = await import('../enterprise/vault-audit.js');
+            const entries = readVaultAccessLog(options?.limit ?? 20);
+            logger.highlight('═'.repeat(64));
+            logger.highlight(`  🔐  Vault Access Log (${entries.length} most recent)`);
+            logger.highlight('═'.repeat(64));
+            console.log('');
+            if (entries.length === 0) {
+                logger.info(`No vault accesses recorded yet (store: ~/.buff/memory/${VAULT_AUDIT_FILENAME}).`);
+                console.log('');
+                return;
+            }
+            for (const e of entries) {
+                const when = new Date(e.ts).toLocaleString('en-US', {
+                    month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit', second: '2-digit',
+                });
+                const opIcon = e.op === 'get' ? '👁' : e.op === 'set' ? '✍️' : '🗑';
+                const okIcon = e.ok ? '✅' : '❌';
+                const viaTag = e.via === 'sync' ? 'sync' : 'async';
+                console.log(`  ${opIcon} ${e.op.padEnd(6)} ${okIcon}  ${when}  ${e.account}  (${e.tier}, ${viaTag})`);
+            }
+            console.log('');
+            console.log('  Store is hash-chained + secret-scrubbed (never logs values).');
+            console.log('  Verify integrity: buff audit verify · full posture: buff doctor --enterprise');
+            console.log('');
+        });
+        vault
+            .command('migrate-keys')
+            .description('Move plaintext provider API keys from buffconfig.json into the vault')
+            .action(async () => {
+            // K4: moving plaintext keys into the vault is a credential write —
+            // requires the admin role once RBAC is configured.
+            if (!guardRbacAction('credential.write'))
+                return;
+            const v = Vault.open({});
+            const st = v.status();
+            if (st.tier === 'none') {
+                logger.error('Vault unavailable — no OS keyring and no BUFF_VAULT_PASSPHRASE env. ' +
+                    'Set BUFF_VAULT_PASSPHRASE to enable the encrypted-file fallback tier.');
+                return;
+            }
+            this.configManager.attachVault(v);
+            try {
+                const result = await this.configManager.migrateKeysToVault();
+                if (result.migrated === 0) {
+                    console.log('  No plaintext keys to migrate — config is already vault-clean.');
+                }
+                else {
+                    const storeLabel = st.tier === 'keyring' ? 'OS keychain' : st.tier === 'os-cli' ? `${st.backend}` : 'AES-256-GCM vault';
+                    console.log(`  ✅ Moved ${result.migrated} key(s) into the ${storeLabel} for: ${result.providers.join(', ')}`);
+                    console.log('  buffconfig.json now stores vault refs — plaintext keys removed.');
+                }
+            }
+            catch (err) {
+                logger.error(`Migration failed: ${err instanceof Error ? err.message : String(err)}`);
+            }
+        });
+        return vault;
     }
     displayConfig() {
         const config = this.configManager.getAll();
@@ -347,14 +449,11 @@ export class ConfigCommand extends BaseCommand {
                 logger.error(`Invalid number for ${key}: "${value}". Must be a non-negative number.`);
                 return;
             }
-            const existing = config.routing?.quota?.[providerName] || {};
-            this.configManager.save({
-                routing: {
-                    quota: {
-                        [providerName]: { ...existing, [field]: num },
-                    },
-                },
-            });
+            // ConfigManager.save shallow-merges `routing` — save the FULL merged
+            // quota map so sibling providers' limits are never wiped (Session 36).
+            const quota = { ...(config.routing?.quota || {}) };
+            quota[providerName] = { ...(quota[providerName] || {}), [field]: num };
+            this.configManager.save({ routing: { quota } });
         }
         else if (parts.length >= 3 && parts[0] === 'routing' && parts[1] === 'governance') {
             // M2.4 governance policy — routing.governance.<field> where <field> is

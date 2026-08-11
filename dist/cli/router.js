@@ -21,7 +21,10 @@ import { LearnCommand } from './learn.js';
 import { InitCommand } from './init.js';
 import { StatsCommand } from './stats.js';
 import { HistoryCommand } from './history.js';
+import { SessionCommand } from './session.js';
 import { SkillCommand } from './skill.js';
+import { SkillsCommand } from './skills.js';
+import { GatewayCommand } from './gateway.js';
 import { BenchmarkCommand } from './benchmark.js';
 import { EvalCommand } from './eval.js';
 import { SandboxCommand } from './sandbox.js';
@@ -45,6 +48,9 @@ import { PublishCommand } from './publish.js';
 import { PhaseCommand } from './phase.js';
 import { RetrievalCommand } from './retrieval.js';
 import { TraceCommand } from './trace.js';
+import { NluCommand } from './nlu.js';
+import { CodeMapCommand } from './code-map.js';
+import { ToolsCommand } from './tools.js';
 import { logger } from '../utils/logger.js';
 /**
  * Create and configure the CLI program
@@ -93,6 +99,12 @@ export function createCLI() {
     // Register Skill commands (Phase 1 enhancement)
     const skillCmd = new SkillCommand();
     program.addCommand(skillCmd.create());
+    // Register Skills hub command (J3 — community skills search/install/update)
+    const skillsCmd = new SkillsCommand();
+    program.addCommand(skillsCmd.create());
+    // Register Gateway command (J1 — multi-channel Telegram/Discord/Slack/WhatsApp)
+    const gatewayCmd = new GatewayCommand();
+    program.addCommand(gatewayCmd.create());
     // Register Model command (Phase 1.2: model switching)
     const modelCmd = new ModelCommand();
     program.addCommand(modelCmd.create());
@@ -134,6 +146,12 @@ export function createCLI() {
     // Register Feedback command (from nextlevel roadmap §4.3)
     const feedbackCmd = new FeedbackCommand();
     program.addCommand(feedbackCmd.create());
+    // Register C3 NLU command
+    program.addCommand(new NluCommand().create());
+    program.addCommand(new CodeMapCommand().create());
+    program.addCommand(new ToolsCommand().create());
+    // Register G1 session command (D1 debug surface)
+    program.addCommand(new SessionCommand().create());
     // Register Marketplace command (from nextlevel roadmap §5.3)
     const marketplaceCmd = new MarketplaceCommand();
     program.addCommand(marketplaceCmd.create());
@@ -188,7 +206,7 @@ export function resolveProvider(configManager, providerOption) {
     const registry = getPluginRegistry();
     if (registry.hasPlugin(rawType)) {
         const plugin = registry.getPlugin(rawType);
-        const config = configManager.getAll().providers[rawType] || {};
+        const { config } = configManager.getProviderConfig(rawType);
         const provider = plugin.createProvider(config);
         logger.debug(`Resolved plugin provider: ${rawType} (${plugin.metadata.name})`);
         return { type: rawType, provider };

@@ -17,10 +17,19 @@ import { homedir } from 'node:os';
 import { parseRbacUsers } from '../enterprise/rbac.js';
 import { resolveBuffConfigDir, resolveBuffConfigPath } from '../config/paths.js';
 import { loadEnv } from '../utils/env.js';
+import { ConfigManager } from '../config/manager.js';
+import { runAllChecks } from '../cli/doctor.js';
 import { getAutoRouter } from '../learning/auto-router.js';
+import { readRecallHits } from '../context/session-recall.js';
 import { getRouterPromotion } from '../learning/router-promotion.js';
 import { AUTH_CLEAR_THRESHOLD } from '../learning/key-hygiene.js';
 import { ACTION_LOG_FILENAME, aggregateActionTelemetry, readActionTelemetryFile } from '../learning/model-registry.js';
+import { AdminSessions, countAdminRoleUsers, isAdminConfigured, listAdminUsers, removeAdminUser, roleForUser, verifyAdmin, writeAdminUser, MIN_ADMIN_PASSWORD_LENGTH, } from './src/admin-auth.js';
+import { isVaultRef } from '../enterprise/vault.js';
+import { ROLES, roleCan } from '../enterprise/rbac.js';
+import { clearModelListCache } from '../inference/model-validator.js';
+import { probeProviderList } from '../inference/model-probe.js';
+import { CATALOG_PROVIDER_IDS, getCatalogProvider } from '../inference/provider-catalog.js';
 // ─── Constants ──────────────────────────────────────────────────────────────
 const PORT = parseInt(process.env.BUFF_DASHBOARD_PORT || '3030', 10);
 const HOST = process.env.BUFF_DASHBOARD_HOST || '127.0.0.1';
@@ -896,10 +905,9 @@ function readBenchmarkData() {
 }
 function readMemoryData() {
     const data = readJSON(join(MEMORY_DIR, 'trajectories.json'));
-    if (!data?.trajectories) {
-        return { total: 0 };
-    }
-    const trajectories = Object.values(data.trajectories);
+    const trajectories = data?.trajectories
+        ? Object.values(data.trajectories)
+        : [];
     const avgScore = trajectories.length > 0
         ? trajectories.reduce((s, t) => s + (t.score || 0), 0) / trajectories.length
         : 0;
@@ -908,10 +916,35 @@ function readMemoryData() {
         const fp = t.projectFingerprint || 'unknown';
         byFingerprint[fp] = (byFingerprint[fp] || 0) + 1;
     }
+    // G2: facts (B1) + recall hits (D1) + vector backend — read from the same
+    // files the CLI reads so the panel and CLI always agree.
+    let facts = { total: 0, byProject: {} };
+    try {
+        // The vector store persists entries as a RECORD keyed by id (same shape
+        // as vectors.json) — Object.values, never array iteration.
+        const factsData = readJSON(join(MEMORY_DIR, 'vectors-facts.json'));
+        const factEntries = factsData?.entries ? Object.values(factsData.entries) : [];
+        if (factEntries.length > 0) {
+            const byProject = {};
+            for (const e of factEntries) {
+                const pid = e.metadata?.projectId || 'unknown';
+                byProject[pid] = (byProject[pid] || 0) + 1;
+            }
+            facts = { total: factEntries.length, byProject };
+        }
+    }
+    catch {
+        // Best-effort.
+    }
+    // Shared parser (session-recall.ts) — one source of truth for the counter.
+    const recall = readRecallHits();
     return {
         total: trajectories.length,
         avgScore: Math.round(avgScore * 100) / 100,
         byFingerprint,
+        facts,
+        recall,
+        backend: 'local', // memory.backend tier (F1 Mem0 is an optional provider — local is the default)
     };
 }
 function readHealthData() {
@@ -1626,14 +1659,164 @@ function readRoutingHistory() {
         score: typeof e.score === 'number' ? Math.round(e.score * 1000) / 1000 : 0,
     }));
 }
+/** Mask a secret so the dashboard never exposes a raw key. */
+function maskKey(key) {
+    if (!key)
+        return null;
+    if (key.length <= 8)
+        return '••••';
+    return `${key.slice(0, 4)}…${key.slice(-4)}`;
+}
+/**
+ * The per-provider env var used for key detection (mirrors doctor.ts).
+ * The dashboard reports where a key lives WITHOUT ever printing it.
+ */
+const PROVIDER_ENV_VARS = {
+    groq: 'GROQ_API_KEY',
+    gemini: 'GEMINI_API_KEY',
+    nim: 'NVIDIA_NIM_API_KEY',
+    openrouter: 'OPENROUTER_API_KEY',
+    openai: 'OPENAI_API_KEY',
+    anthropic: 'ANTHROPIC_API_KEY',
+};
+/**
+ * One provider's summary row (read path, keys ALWAYS masked). Shared by
+ * buildAdminProviderSummary AND the write routes' response, so the frontend
+ * always receives the same shape after a save/remove. The key SOURCE is
+ * detected the same way the CLI sees it: env override > vault ref > config
+ * plaintext > none (local providers are keyless by design).
+ */
+function summarizeProvider(type, configManager) {
+    const c = (configManager.getAll().providers || {})[type];
+    const envVar = PROVIDER_ENV_VARS[type];
+    const viaEnv = envVar ? !!process.env[envVar] : false;
+    const key = c?.apiKey;
+    const rotationKeys = Array.isArray(c?.apiKeys) ? c.apiKeys : [];
+    const vaultKey = typeof key === 'string' && isVaultRef(key);
+    const keySource = type === 'local'
+        ? 'local'
+        : viaEnv
+            ? 'env'
+            : vaultKey
+                ? 'vault'
+                : (key || rotationKeys.length > 0)
+                    ? 'config'
+                    : 'none';
+    return {
+        type,
+        configured: (keySource !== 'none' && keySource !== 'local') || !!c?.baseUrl || type === 'local',
+        keySource,
+        keyMasked: rotationKeys.length > 0
+            ? `${rotationKeys.length} rotation key(s): ${maskKey(key || rotationKeys[0])}`
+            : maskKey(key),
+        model: c?.model,
+        baseUrl: c?.baseUrl,
+    };
+}
+/**
+ * The provider configuration summary (read path, keys masked). This is the
+ * foundation of the admin surface: the same rows become editable (API-key /
+ * provider configuration) via the authed PUT/DELETE routes — CLI and dashboard
+ * stay parallel, never deprecating either.
+ */
+function buildAdminProviderSummary(configManager) {
+    const providers = configManager.getAll().providers || {};
+    return Object.keys(providers).map((type) => summarizeProvider(type, configManager));
+}
+/** Run ALL state checks — the dashboard command-runner payload. */
+async function runAdminChecks() {
+    const configManager = new ConfigManager();
+    const { system, enterprise } = await runAllChecks(configManager);
+    return {
+        system,
+        enterprise,
+        providers: buildAdminProviderSummary(configManager),
+        serverTime: Date.now(),
+    };
+}
+// ─── Admin Write Surface Helpers (Session 18) ───────────────────────────────
+/** One session store per server process (in-memory Bearer tokens, 8h expiry). */
+const adminSessions = new AdminSessions();
+/**
+ * Login brute-force throttle (the control layer's first hardening): per-IP
+ * failed-attempt counter with a 1-minute window. After 10 failures the IP is
+ * refused with 429 until the window rolls. A successful login clears the IP's
+ * counter. In-memory — a restart resets it (acceptable for local-first).
+ */
+const LOGIN_MAX_FAILURES = 10;
+const LOGIN_WINDOW_MS = 60_000;
+const loginFailures = new Map();
+function loginFailureCount(ip) {
+    const now = Date.now();
+    const e = loginFailures.get(ip);
+    if (!e || e.resetAt < now)
+        return 0;
+    return e.count;
+}
+function recordLoginFailure(ip) {
+    const now = Date.now();
+    const e = loginFailures.get(ip);
+    if (!e || e.resetAt < now)
+        loginFailures.set(ip, { count: 1, resetAt: now + LOGIN_WINDOW_MS });
+    else
+        e.count += 1;
+}
+function clearLoginFailures(ip) {
+    loginFailures.delete(ip);
+}
+/** Providers the admin editor can configure: the full catalog + local/nuvira. */
+const VALID_ADMIN_PROVIDERS = new Set([...CATALOG_PROVIDER_IDS, 'local', 'nuvira']);
+/** Extract the Bearer token from the Authorization header, or null. */
+function bearerToken(req) {
+    const h = req.headers.authorization;
+    if (!h)
+        return null;
+    const m = /^Bearer\s+(.+)$/i.exec(h);
+    return m ? m[1].trim() : null;
+}
+/**
+ * Read a JSON request body (cap 256KB). Returns null on parse failure, empty
+ * body, or size overflow — callers respond 400. Never throws.
+ */
+function readJsonBody(req) {
+    return new Promise((resolve) => {
+        const chunks = [];
+        let size = 0;
+        req.on('data', (chunk) => {
+            size += chunk.length;
+            if (size > 262144) {
+                resolve(null);
+                req.destroy();
+                return;
+            }
+            chunks.push(chunk);
+        });
+        req.on('end', () => {
+            try {
+                const parsed = JSON.parse(Buffer.concat(chunks).toString('utf-8') || '{}');
+                resolve(typeof parsed === 'object' && parsed !== null ? parsed : null);
+            }
+            catch {
+                resolve(null);
+            }
+        });
+        req.on('error', () => resolve(null));
+    });
+}
+/** Send a JSON response (the admin routes' single writer). */
+function writeJson(res, status, data) {
+    res.writeHead(status, { 'Content-Type': 'application/json' });
+    res.end(JSON.stringify(data));
+}
 // ─── Request Handler ────────────────────────────────────────────────────────
 function handleRequest(req, res) {
     const url = new URL(req.url || '/', `http://${req.headers.host || HOST}`);
     const pathname = url.pathname;
-    // CORS headers
+    // CORS headers (Session 18: admin write surface adds POST/PUT/DELETE +
+    // the Bearer Authorization header the admin panel sends).
     res.setHeader('Access-Control-Allow-Origin', '*');
-    res.setHeader('Access-Control-Allow-Methods', 'GET, OPTIONS');
-    res.setHeader('Access-Control-Allow-Headers', 'Content-Type');
+    res.setHeader('Access-Control-Allow-Methods', 'GET, POST, PUT, DELETE, OPTIONS');
+    res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Authorization');
     if (req.method === 'OPTIONS') {
         res.writeHead(204);
         res.end();
@@ -1668,6 +1851,348 @@ function handleRequest(req, res) {
     if (pathname === '/api/health') {
         res.writeHead(200, { 'Content-Type': 'application/json' });
         res.end(JSON.stringify(readHealthData()));
+        return;
+    }
+    // ── Admin command-runner: run ALL state commands on demand ───────────
+    // The dashboard executes doctor/system/enterprise checks (one source with
+    // `buff doctor` — runAllChecks) so the user never types a command. Read
+    // path only: keys are NEVER exposed — the provider summary masks them.
+    if (pathname === '/api/admin/checks') {
+        runAdminChecks().then((payload) => {
+            res.writeHead(200, { 'Content-Type': 'application/json' });
+            res.end(JSON.stringify(payload));
+        }).catch((err) => {
+            res.writeHead(500, { 'Content-Type': 'application/json' });
+            res.end(JSON.stringify({ error: String(err), system: [], enterprise: [], providers: [], serverTime: Date.now() }));
+        });
+        return;
+    }
+    // ── Admin auth + write surface (Session 18 — the user's control layer) ──
+    // The READ paths (checks/catalog) stay open; every WRITE (provider config,
+    // API keys) is gated behind a user-id + password login. Keys NEVER leave the
+    // server unmasked, and provider writes go through the SAME ConfigManager
+    // save() the CLI uses — GUI and CLI stay parallel, never deprecating the CLI.
+    if (pathname === '/api/admin/auth-status') {
+        const configured = isAdminConfigured();
+        const session = adminSessions.validate(bearerToken(req));
+        writeJson(res, 200, {
+            configured,
+            authenticated: session !== null,
+            user: session?.user ?? null,
+            role: session?.role ?? null,
+        });
+        return;
+    }
+    if (pathname === '/api/admin/catalog') {
+        const providers = CATALOG_PROVIDER_IDS.map((id) => {
+            const entry = getCatalogProvider(id);
+            return {
+                id,
+                label: entry?.label || id,
+                icon: entry?.icon,
+                envVar: entry?.envVar || null,
+                keyless: entry?.keyless === true,
+            };
+        });
+        writeJson(res, 200, { providers });
+        return;
+    }
+    if (pathname === '/api/admin/setup' && req.method === 'POST') {
+        void (async () => {
+            try {
+                if (isAdminConfigured()) {
+                    writeJson(res, 400, { ok: false, error: 'Admin is already configured. Log in instead.' });
+                    return;
+                }
+                const body = await readJsonBody(req);
+                const user = typeof body?.user === 'string' ? body.user.trim() : '';
+                const password = typeof body?.password === 'string' ? body.password : '';
+                if (!user || password.length < MIN_ADMIN_PASSWORD_LENGTH) {
+                    writeJson(res, 400, { ok: false, error: `A username and a password of at least ${MIN_ADMIN_PASSWORD_LENGTH} characters are required.` });
+                    return;
+                }
+                // The FIRST user is always an admin (bootstrap). Later users are created
+                // by an admin through POST /api/admin/users with an explicit role.
+                const cred = writeAdminUser(user, password, 'admin');
+                writeJson(res, 200, { ok: true, user: cred.user, role: roleForUser(cred.user), token: adminSessions.issue(cred.user, roleForUser(cred.user)) });
+            }
+            catch (err) {
+                writeJson(res, 500, { ok: false, error: err instanceof Error ? err.message : String(err) });
+            }
+        })();
+        return;
+    }
+    if (pathname === '/api/admin/login' && req.method === 'POST') {
+        void (async () => {
+            const ip = req.socket.remoteAddress || 'local';
+            if (loginFailureCount(ip) >= LOGIN_MAX_FAILURES) {
+                writeJson(res, 429, { ok: false, error: 'Too many failed attempts — try again in a minute.' });
+                return;
+            }
+            const body = await readJsonBody(req);
+            const user = typeof body?.user === 'string' ? body.user.trim() : '';
+            const password = typeof body?.password === 'string' ? body.password : '';
+            if (verifyAdmin(user, password)) {
+                clearLoginFailures(ip);
+                const role = roleForUser(user);
+                writeJson(res, 200, { ok: true, user, role, token: adminSessions.issue(user, role) });
+            }
+            else {
+                recordLoginFailure(ip);
+                writeJson(res, 401, { ok: false, error: 'Invalid username or password.' });
+            }
+        })();
+        return;
+    }
+    if (pathname === '/api/admin/logout' && req.method === 'POST') {
+        adminSessions.revoke(bearerToken(req));
+        writeJson(res, 200, { ok: true });
+        return;
+    }
+    // ── User management (Session 19 — RBAC on the dashboard control layer) ──
+    // role.manage (admin) gates who may add/remove dashboard admin users.
+    // rbac.json assignments override a credential's stored role (CLI parity),
+    // so an operator/viewer logged in here can never escalate via a role
+    // stored in the dashboard file.
+    if (pathname === '/api/admin/users' && req.method === 'GET') {
+        const session = adminSessions.validate(bearerToken(req));
+        if (!session) {
+            writeJson(res, 401, { ok: false, error: 'Not authenticated — log in first.' });
+            return;
+        }
+        if (!roleCan(session.role, 'role.manage')) {
+            writeJson(res, 403, { ok: false, error: `Access denied — role '${session.role}' cannot manage users (requires admin).` });
+            return;
+        }
+        writeJson(res, 200, { ok: true, users: listAdminUsers() });
+        return;
+    }
+    if (pathname === '/api/admin/users' && req.method === 'POST') {
+        void (async () => {
+            try {
+                const session = adminSessions.validate(bearerToken(req));
+                if (!session) {
+                    writeJson(res, 401, { ok: false, error: 'Not authenticated — log in first.' });
+                    return;
+                }
+                if (!roleCan(session.role, 'role.manage')) {
+                    writeJson(res, 403, { ok: false, error: `Access denied — role '${session.role}' cannot manage users (requires admin).` });
+                    return;
+                }
+                const body = await readJsonBody(req);
+                const name = typeof body?.user === 'string' ? body.user.trim() : '';
+                const password = typeof body?.password === 'string' ? body.password : '';
+                const role = typeof body?.role === 'string' && ROLES.includes(body.role) ? body.role : null;
+                if (!name || password.length < MIN_ADMIN_PASSWORD_LENGTH) {
+                    writeJson(res, 400, { ok: false, error: `A username and a password of at least ${MIN_ADMIN_PASSWORD_LENGTH} characters are required.` });
+                    return;
+                }
+                if (!role) {
+                    writeJson(res, 400, { ok: false, error: `Invalid role. Valid: ${ROLES.join(', ')}.` });
+                    return;
+                }
+                writeAdminUser(name, password, role);
+                writeJson(res, 200, { ok: true });
+            }
+            catch (err) {
+                writeJson(res, 500, { ok: false, error: err instanceof Error ? err.message : String(err) });
+            }
+        })();
+        return;
+    }
+    const userMatch = /^\/api\/admin\/users\/([^/]+)$/.exec(pathname);
+    if (userMatch && req.method === 'DELETE') {
+        try {
+            const session = adminSessions.validate(bearerToken(req));
+            if (!session) {
+                writeJson(res, 401, { ok: false, error: 'Not authenticated — log in first.' });
+                return;
+            }
+            if (!roleCan(session.role, 'role.manage')) {
+                writeJson(res, 403, { ok: false, error: `Access denied — role '${session.role}' cannot manage users (requires admin).` });
+                return;
+            }
+            const target = decodeURIComponent(userMatch[1]);
+            if (target === session.user) {
+                writeJson(res, 400, { ok: false, error: 'You cannot remove your own user.' });
+                return;
+            }
+            if (roleForUser(target) === 'admin' && countAdminRoleUsers() <= 1) {
+                writeJson(res, 400, { ok: false, error: 'Cannot remove the last admin user.' });
+                return;
+            }
+            const removed = removeAdminUser(target);
+            writeJson(res, 200, { ok: true, removed });
+        }
+        catch (err) {
+            writeJson(res, 500, { ok: false, error: err instanceof Error ? err.message : String(err) });
+        }
+        return;
+    }
+    // ── Authed provider write routes: PUT upsert / DELETE remove / POST test ──
+    const providerMatch = /^\/api\/admin\/providers\/([a-z0-9-]+)(\/test)?$/.exec(pathname);
+    if (providerMatch && (req.method === 'PUT' || req.method === 'DELETE' || req.method === 'POST')) {
+        void (async () => {
+            const type = providerMatch[1];
+            if (!VALID_ADMIN_PROVIDERS.has(type)) {
+                writeJson(res, 400, { ok: false, error: `Unknown provider '${type}'.` });
+                return;
+            }
+            const session = adminSessions.validate(bearerToken(req));
+            if (!session) {
+                writeJson(res, 401, { ok: false, error: 'Not authenticated — log in first.' });
+                return;
+            }
+            // Session 19: provider WRITES are gated by the RBAC matrix —
+            // credential.write requires admin (operator/viewer are read-only here).
+            if (!roleCan(session.role, 'credential.write')) {
+                writeJson(res, 403, { ok: false, error: `Access denied — role '${session.role}' cannot modify provider configuration (requires admin).` });
+                return;
+            }
+            // POST /test — reachability probe: list the provider's models with the
+            // CURRENT (possibly edited-but-unsaved is NOT applied — we test what is
+            // configured) credentials. Mirrors the CLI's probe path (one source).
+            if (providerMatch[2] === '/test' && req.method === 'POST') {
+                try {
+                    const configManager = new ConfigManager();
+                    const models = await probeProviderList(type, configManager);
+                    writeJson(res, 200, { ok: true, models });
+                }
+                catch (err) {
+                    writeJson(res, 200, { ok: false, error: err instanceof Error ? err.message : String(err) });
+                }
+                return;
+            }
+            const configManager = new ConfigManager();
+            if (req.method === 'PUT') {
+                const body = await readJsonBody(req);
+                if (!body) {
+                    writeJson(res, 400, { ok: false, error: 'Invalid JSON body.' });
+                    return;
+                }
+                const updates = {};
+                if (typeof body.apiKey === 'string' && body.apiKey.trim().length > 0)
+                    updates.apiKey = body.apiKey.trim();
+                // Empty string EXPLICITLY CLEARS baseUrl/model (the editor lets users
+                // blank a field; a save must take effect, not silently keep the old
+                // value). JSON.stringify drops undefined, so the field leaves the file.
+                if (typeof body.baseUrl === 'string') {
+                    updates.baseUrl = body.baseUrl.trim() ? body.baseUrl.trim().replace(/\/+$/, '') : undefined;
+                }
+                if (typeof body.model === 'string') {
+                    updates.model = body.model.trim() ? body.model.trim() : undefined;
+                }
+                if (typeof body.runner === 'string' && body.runner.trim().length > 0)
+                    updates.runner = body.runner.trim();
+                // Raw config (vault refs INTACT) — never save a resolved key back to
+                // plaintext (the documented resolveVaultRefs footgun).
+                const raw = configManager.getAll().providers[type] || {};
+                configManager.save({ providers: { [type]: { ...raw, ...updates } } });
+                // A key/model/baseURL change can invalidate the cached live model list
+                // — the CLI does the same after `buff config set providers.*`.
+                clearModelListCache();
+                writeJson(res, 200, { ok: true, provider: summarizeProvider(type, configManager) });
+                return;
+            }
+            // DELETE — remove the key (vault-purged by clearProviderApiKey) + the
+            // credential-ish fields (apiKey/baseUrl/model). JSON.stringify drops
+            // explicit undefineds, so the fields vanish from the file.
+            if (req.method === 'DELETE') {
+                const cleared = configManager.clearProviderApiKey(type);
+                configManager.save({ providers: { [type]: { apiKey: undefined, baseUrl: undefined, model: undefined, runner: undefined } } });
+                clearModelListCache();
+                // An ENV-sourced key cannot be removed from the file (env re-injects on
+                // every load) — surface that so the UI warns instead of hiding the row.
+                writeJson(res, 200, {
+                    ok: true,
+                    cleared: cleared.cleared,
+                    envSourced: cleared.envSourced === true,
+                    envVar: cleared.envSourced ? cleared.envVar : undefined,
+                    provider: summarizeProvider(type, configManager),
+                });
+                return;
+            }
+        })();
+        return;
+    }
+    // ── Session 36: user-declared daily budget (routing.quota + cost cap) ──
+    // Same config the CLI writes (`buff model quota set`) — dashboard is a
+    // parallel GUI, never a fork. Reads are open (like checks/catalog); writes
+    // are authed: budget fields need routing.operate, the cost cap needs
+    // policy.write. Legacy single-user mode stays fully permissive (role admin).
+    if (pathname === '/api/admin/quota' && req.method === 'GET') {
+        const configManager = new ConfigManager();
+        const all = configManager.getAll();
+        writeJson(res, 200, {
+            ok: true,
+            quota: all.routing?.quota || {},
+            costUsd: all.routing?.governance?.maxCostUsd ?? null,
+            providers: [...CATALOG_PROVIDER_IDS, 'local', 'nuvira'],
+        });
+        return;
+    }
+    if (pathname === '/api/admin/quota' && req.method === 'PUT') {
+        void (async () => {
+            const session = adminSessions.validate(bearerToken(req));
+            if (!session) {
+                writeJson(res, 401, { ok: false, error: 'Not authenticated — log in first.' });
+                return;
+            }
+            const body = await readJsonBody(req);
+            if (!body) {
+                writeJson(res, 400, { ok: false, error: 'Invalid JSON body.' });
+                return;
+            }
+            if (body.quota !== undefined || body.clearProvider !== undefined) {
+                if (!roleCan(session.role, 'routing.operate')) {
+                    writeJson(res, 403, { ok: false, error: `Access denied — role '${session.role}' cannot modify budget limits (requires admin or operator).` });
+                    return;
+                }
+            }
+            if (body.costUsd !== undefined) {
+                if (!roleCan(session.role, 'policy.write')) {
+                    writeJson(res, 403, { ok: false, error: `Access denied — role '${session.role}' cannot modify the cost cap (requires admin).` });
+                    return;
+                }
+            }
+            const configManager = new ConfigManager();
+            const all = configManager.getAll();
+            const quota = { ...(all.routing?.quota || {}) };
+            // clearProvider — remove the provider's budget entry entirely.
+            if (typeof body.clearProvider === 'string' && body.clearProvider) {
+                delete quota[body.clearProvider];
+            }
+            // quota — merge per-provider field updates; explicit null clears a field.
+            if (body.quota && typeof body.quota === 'object') {
+                for (const [provider, fields] of Object.entries(body.quota)) {
+                    if (!fields || typeof fields !== 'object')
+                        continue;
+                    const cur = { ...quota[provider] };
+                    for (const field of ['tokensPerWindow', 'requestsPerWindow', 'windowMs']) {
+                        const v = fields[field];
+                        if (v === null)
+                            delete cur[field];
+                        else if (typeof v === 'number' && Number.isFinite(v) && v >= 0)
+                            cur[field] = v;
+                    }
+                    if (Object.keys(cur).length === 0)
+                        delete quota[provider];
+                    else
+                        quota[provider] = cur;
+                }
+            }
+            const patch = { routing: { quota } };
+            if (body.costUsd !== undefined) {
+                const governance = { ...(all.routing?.governance || {}) };
+                if (body.costUsd === null || body.costUsd === 0)
+                    delete governance.maxCostUsd;
+                else
+                    governance.maxCostUsd = body.costUsd;
+                patch.routing.governance = governance;
+            }
+            configManager.save(patch);
+            writeJson(res, 200, { ok: true, quota, costUsd: configManager.getAll().routing?.governance?.maxCostUsd ?? null });
+        })();
         return;
     }
     if (pathname === '/api/models') {

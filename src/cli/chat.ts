@@ -2,7 +2,6 @@ import { createInterface } from 'node:readline';
 
 import { Command } from 'commander';
 import inquirer from 'inquirer';
-import ora from 'ora';
 import { BaseCommand } from './commands.js';
 import { resolveProvider } from './router.js';
 import { resolveWorkingModel } from '../inference/model-validator.js';
@@ -11,10 +10,9 @@ import { ContextParser } from '../context/parser.js';
 import { getCache } from '../context/cache.js';
 import { assembleContext, retrievalOptionsFromConfig, recordRetrievalStats } from '../learning/retrieval.js';
 import { getChatHistory } from '../context/history.js';
+import { getMemoryManager } from '../memory/manager.js';
 import { logger } from '../utils/logger.js';
-import { Orchestrator } from '../agents/orchestrator.js';
 import { printOrchestrationResult } from './execute.js';
-import { PipelineBoard } from './pipeline-board.js';
 import { applyActiveModel } from './model.js';
 import { ConfigManager } from '../config/manager.js';
 import { InferenceProvider } from '../inference/interface.js';
@@ -29,7 +27,19 @@ import { recordRoutingDecision } from '../learning/routing-history.js';
 import { shouldConfirmFailover, promptFailoverChoice } from './failover-prompt.js';
 import { runSingleShotAuto } from './failover-runner.js';
 import { buildAutoResolveOptions } from '../learning/resolve-options.js';
-import { buildContinuationNote, isPartialFailure } from '../learning/continuation.js';
+import { parseRequestSync } from '../nlu/parser.js';
+import { withLogCorrelation } from '../enterprise/log.js';
+import { recordMetricTime, getMetrics } from '../enterprise/metrics.js';
+import type { ParsedRequest } from '../nlu/parser.js';
+import { resolveDispatch } from '../nlu/actions.js';
+import { runToolLoop, extractFallbackToolCalls } from '../tools/tool-loop.js';
+import type { ToolLoopDeps, StepResponse, ToolLoopResult } from '../tools/tool-loop.js';
+import { getTool, TOOL_CONTRACT_JSON, type ToolContext, type FollowupSuggestion } from '../tools/registry.js';
+import { runPipelineTool } from '../tools/pipeline-tool.js';
+import type { ToolMessage } from '../inference/interface.js';
+import { getEventBus } from '../observability/event-bus.js';
+import { maybeRunBackgroundDuties } from './duties.js';
+import { deriveProjectId } from '../config/workspace.js';
 import { compressLossless } from '../learning/compression.js';
 
 // ─── Error Recovery Types ───────────────────────────────────────────────────
@@ -173,102 +183,94 @@ async function handleInferenceError(
   return { action: answer.action as ErrorRecoveryAction };
 }
 
-/**
- * Patterns that indicate a user wants to CREATE or MODIFY files on disk
- * (as opposed to just asking a conversational question).
- */
-const CREATION_PATTERNS = [
-  /\b(?:create|write|make|build|generate|implement|scaffold)\b.*\b(?:file|program|script|app|function|class|module|component|page|route|api|endpoint|service|cli|tool|package|library|project)\b/i,
-  /\b(?:add|create|write|make)\b.*\b(?:new)\b.*\b(?:file|function|class|feature)\b/i,
-  /\b(?:set\s*up|scaffold|bootstrap|init|start)\b.*\b(?:project|app|module|package)\b/i,
-  /\b(?:create|write)\b.*\bpython|javascript|typescript|go|rust|java|ruby|bash|shell|node\b.*\b(?:program|script|file)\b/i,
-  /^\s*(?:create|write|make|build|generate)\s+(?:a|an|the)\s+/i,
-];
-
-function hasCreationIntent(message: string): boolean {
-  return CREATION_PATTERNS.some((pattern) => pattern.test(message));
+/** E3a — the menu-free dispatch decision (rule-based, C1/C3 only). */
+export interface PipelineDispatchDecision {
+  /** Whether the request runs the coding pipeline. */
+  dispatch: boolean;
+  /** Whether a single confirm is required first (ambiguous create only). */
+  needConfirm: boolean;
 }
 
 /**
- * Prompt the user whether they want to switch to developer mode.
+ * E3a/E3c — the rule assessment (hint + no-model fallback source).
+ *
+ * The legacy `promptDeveloperMode` menu ("1. Chat mode / 2. Developer mode")
+ * is DELETED (Session 7c re-scope, landed in E3a). E3c demotes the rules
+ * further (model-decides, Freebuff/Hermes parity): EVERY request runs as a
+ * tool-call turn and the MODEL decides what to do. This function computes
+ * what the RULES would say, used for two things only:
+ * - the rule hint injected into the model's context (buildToolSystemPrompt),
+ * - the no-model fallback decision: when the tool loop fails to generate a
+ *   single response AND the rules assessed a high-confidence pipeline intent,
+ *   the pipeline runs directly — rules act ONLY when the model is unavailable,
+ *   never as a bypass.
+ * `dev` (the --dev flag / /dev toggle) forces the assessment to dispatch.
  */
-async function promptDeveloperMode(message: string): Promise<boolean> {
-  console.log('');
-  logger.info('💡 I noticed you\'re asking me to create something!');
-  logger.info('   I can either:');
-  logger.info('     1. 💬  Just show you the code as text (chat mode)');
-  logger.info('     2. 🏗️  Actually create the files in your project (developer mode)');
-  console.log('');
-
-  const answer = await inquirer.prompt<{ choice: string }>([
-    {
-      type: 'list',
-      name: 'choice',
-      message: 'How would you like me to handle this?',
-      prefix: '🔧',
-      choices: [
-        { name: '🏗️  Developer mode — Create the files in my project directory', value: 'dev' },
-        { name: '💬  Chat mode — Just show me the code as text', value: 'chat' },
-      ],
-    },
-  ]);
-
-  console.log('');
-  return answer.choice === 'dev';
+export function resolvePipelineDispatch(
+  parsed: ParsedRequest,
+  opts?: { dev?: boolean },
+): PipelineDispatchDecision {
+  if (opts?.dev) return { dispatch: true, needConfirm: false };
+  if (parsed.action.run !== 'pipeline') return { dispatch: false, needConfirm: false };
+  const d = resolveDispatch(parsed);
+  return d.autoDispatch
+    ? { dispatch: true, needConfirm: false }
+    : { dispatch: true, needConfirm: true };
 }
 
+
+
 /**
- * Execute the multi-agent pipeline for a user's goal.
+ * Execute the multi-agent pipeline for a user's goal (H1/E3b refactor).
+ *
+ * Thin wrapper over the shared `runPipelineTool` (src/tools/pipeline-tool.ts)
+ * — the SAME pipeline core the tool registry's build/resume/repair tools use,
+ * so `buff chat` pre-dispatch and in-loop pipeline tool calls can never
+ * diverge (STANDING RULE). Prints the orchestration result; the tool path
+ * returns the summary text instead.
  */
 export async function runDeveloperMode(
   goal: string,
   configManager: any,
   options?: { provider?: string; model?: string },
 ): Promise<void> {
-  // Guard: never hand a literal 'auto' provider/model to the orchestrator.
-  // Resolve via the AutoModelRouter so developer mode uses a real model.
-  let provider = options?.provider;
-  let model = options?.model;
-  if (isAutoProvider(provider) || isAutoModel(model)) {
-    const decision = getAutoRouter().resolve(
-      'chat',
-      goal,
-      { verbose: true, useRuntimeStats: true },
-      configManager,
-    );
-    const resolved = resolveProvider(configManager, decision.provider);
-    provider = resolved.type;
-    // Model health: the router resolves the provider's PINNED model, which can
-    // be stale (e.g. deprecated gemini-2.0-flash-exp → 404). Validate against
-    // the provider's live list and repair to a verified-working model first.
-    model = await resolveWorkingModel(resolved.provider, decision.provider, decision.model);
-  }
-
-  // Live pipeline board — replaces the single spinner so the user sees every
-  // step, parallel lanes, and the agent's "thinking" updates in real time.
-  const board = new PipelineBoard();
-  board.start(goal);
-
-  try {
-    const orchestrator = new Orchestrator(configManager);
-    const result = await orchestrator.execute(goal, {
-      provider,
-      model,
-      // The board now supplies the live detail (task statuses, agent updates,
-      // routing decisions) — no need for raw verbose log interleaving.
-      verbose: false,
-      // The board implements the spinner interface so interactive prompts
-      // (rate limits, model pickers) can pause/resume the live view.
-      spinner: board,
-    });
-
-    board.finish(result.success);
+  const r = await runPipelineTool(goal, configManager, {
+    provider: options?.provider,
+    model: options?.model,
+    board: true,
+  });
+  if (r.result) {
     console.log('');
-    printOrchestrationResult(result);
-  } catch (err) {
-    board.finish(false);
-    logger.error(String(err));
+    printOrchestrationResult(r.result);
+  } else if (r.error) {
+    logger.error(r.error);
   }
+}
+
+/**
+ * E3b — the tool-loop system prompt: base identity + the Freebuff/Hermes tool
+ * contract (clarify via ask_user, end every response with suggest_followups).
+ *
+ * E3c — the rule assessment is a HINT, never a bypass: when the rules parsed
+ * a confident intent, the model sees it as context ("rule assessment: … you
+ * decide") so it can act faster — but the MODEL is the sole decision-maker
+ * (Freebuff/Hermes parity; rules act only as the no-model fallback in the
+ * caller, never to skip the loop).
+ */
+function buildToolSystemPrompt(parsed?: ParsedRequest): string {
+  const ruleHint =
+    parsed && parsed.intent !== 'unknown'
+      ? `
+Rule assessment (best-effort hint, NOT an order — verify against the actual request and decide for yourself):
+intent=${parsed.intent} (${Math.round(parsed.confidence * 100)}%), likely action=${parsed.action.name}.`
+      : '';
+  return [
+    "You are Buff, an expert coding agent working inside the user's project.",
+    'Be precise and honest. When a request is ambiguous or incomplete, clarify with ask_user instead of guessing.',
+    ruleHint,
+    '',
+    TOOL_CONTRACT_JSON,
+  ].join('\n');
 }
 
 
@@ -323,7 +325,7 @@ export class ChatCommand extends BaseCommand {
       .option('-p, --provider <provider>', 'Inference provider')
       .option('-m, --model <model>', 'Model to use (if omitted, an interactive picker will appear)')
       .option('--no-cache', 'Disable response caching')
-      .option('-d, --dev', 'Skip the prompt and always use developer mode for creation requests', false)
+      .option('-d, --dev', 'Always dispatch requests to the coding pipeline (no confirmation)', false)
       .action(async (prompt?: string, options?: { file?: string; provider?: string; model?: string; cache?: boolean; dev?: boolean }) => {
         await this.execute(prompt, options || {});
       });
@@ -405,21 +407,37 @@ export class ChatCommand extends BaseCommand {
         model = routed.model;
       }
 
-      if (options?.dev || hasCreationIntent(prompt)) {
-        const proceed = options?.dev || await promptDeveloperMode(prompt);
-        if (proceed) {
-          await runDeveloperMode(prompt, this.configManager, { provider: type, model });
-          return;
-        }
+      // E3c: model-decides — EVERY request runs as a TOOL-CALL TURN. The
+      // rule assessment is a HINT in the model's context (buildToolSystemPrompt)
+      // — the model decides what to do (Freebuff/Hermes parity). Rules act
+      // ONLY as the no-model fallback below (generation failed entirely), never
+      // as a bypass.
+      const parsed = parseRequestSync(prompt);
+      const dispatchDecision = resolvePipelineDispatch(parsed, { dev: options?.dev });
+
+      const answer = await this.runChatAnswer(
+        prompt,
+        [],
+        { type, provider, model },
+        options || {},
+        cacheEnabled,
+        { auto: autoMode },
+        false,
+        parsed,
+      );
+
+      // No-model fallback: the tool loop could not generate a single response
+      // AND the rules assessed a high-confidence pipeline intent — run the
+      // pipeline directly (rules decide only when the model is unavailable;
+      // the pipeline resolves its own working provider/model).
+      if (answer.generationFailed && dispatchDecision.dispatch && !dispatchDecision.needConfirm) {
+        await runDeveloperMode(prompt, this.configManager, { provider: type, model });
+        return;
       }
 
-      // Auto mode fails over across the ranked candidates so a broken provider
-      // (deprecated model, exhausted quota) never crashes the CLI — the next
-      // working candidate answers instead. Non-auto uses the pinned provider.
-      const result = autoMode
-        ? await this.generateAutoWithFailover(prompt, prompt, options, cacheEnabled)
-        : await this.generateWithContext(provider, prompt, type, { ...options, model }, cacheEnabled);
-      console.log('\n' + result);
+      if (answer.content.trim()) {
+        console.log('\n' + answer.content + '\n');
+      }
       return;
     }
 
@@ -430,19 +448,42 @@ export class ChatCommand extends BaseCommand {
       logger.info(`Model: ${model}`);
     }
     logger.info(`Type your messages, or /help for commands, /exit to quit.`);
-    logger.info(`💡 Tip: Ask me to "create" something and I'll offer to switch to developer mode!\n`);
+    logger.info(`💡 Tip: every request runs through the agent loop — the model decides what to do (code, fix, docs, publish, analysis). /dev prefers file-creating actions.\n`);
+
+    // D2: agent-driven background duties — one-line health + models status at
+    // session start (throttled, best-effort). The agent does them, not the user.
+    await maybeRunBackgroundDuties(this.configManager).catch(() => { /* best-effort */ });
 
     const history: Array<{ role: string; content: string }> = [];
     let effectiveModelForHistory = model || this.configManager.getProviderConfig(type as ProviderType).config.model || 'default';
     let effectiveModel = effectiveModelForHistory;
     this.devModeAuto = false;
 
+    // K1: one chat session = one sessionId — created once, threaded through
+    // the memory session AND every log line emitted by this session's turns.
+    const chatSessionId = `chat-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+
+    // Phase B2: begin the persistent-memory session (provider.initialize).
+    // The chat loop records each completed turn; endSession on exit distills
+    // the buffered turns into project facts. Best-effort, fire-and-forget.
+    try {
+      await getMemoryManager().startSession(chatSessionId);
+    } catch {
+      // Best-effort — memory must never break chat startup.
+    }
+
+    let pendingMessage: string | undefined;
     while (true) {
-      const message = await this.readMultiLineInput('You:');
+      // E3b: a chosen follow-up recommendation becomes the next message.
+      const message = pendingMessage ?? (await this.readMultiLineInput('You:'));
+      pendingMessage = undefined;
       if (!message) continue;
 
       if (message.startsWith('/')) {
-        const result = await this.handleCommand(message, provider, model, type);
+        // K1: /commands also ride the session correlation.
+        const result = await withLogCorrelation({ sessionId: chatSessionId }, () =>
+          this.handleCommand(message, provider, model, type),
+        );
         if (result.exit) break;
         if (result.auto) {
           autoMode = true;
@@ -479,419 +520,87 @@ export class ChatCommand extends BaseCommand {
         model = effectiveModel;
       }
 
-      if (hasCreationIntent(message) || this.devModeAuto) {
-        const proceed = this.devModeAuto || await promptDeveloperMode(message);
-        if (proceed) {
-          await runDeveloperMode(message, this.configManager, { provider: type, model });
-          const continueAnswer = await inquirer.prompt<{ cont: string }>([
-            {
-              type: 'input',
-              name: 'cont',
-              message: 'Press Enter to continue chatting, or type /exit to quit:',
-              prefix: '',
-            },
-          ]);
-          if (continueAnswer.cont.trim().toLowerCase() === '/exit' || continueAnswer.cont.trim().toLowerCase() === '/quit') {
-            console.log('Goodbye!');
-            break;
-          }
-          continue;
-        }
-      }
+      // E3c: model-decides — EVERY message runs as a TOOL-CALL TURN; the model
+      // decides what to do (Freebuff/Hermes parity). The rule assessment is a
+      // HINT in the model context — never a bypass. Rules act ONLY as the
+      // no-model fallback below (generation failed entirely + high-confidence
+      // pipeline intent), never to skip the loop. K1: the sessionId rides on
+      // every log line from this turn's processing.
+      // K2: rule-vs-LLM latency budget — time the C1 rule path (intent
+      // parse + dispatch assessment) and the model path (tool-loop answer)
+      // separately so the budget is measurable.
+      const parsed = recordMetricTime('rule.parse.ms', () => parseRequestSync(message));
+      const dispatchDecision = recordMetricTime('rule.dispatch.ms', () =>
+        resolvePipelineDispatch(parsed, { dev: this.devModeAuto }),
+      );
+      const session = { type, provider, model: effectiveModel };
+      const answer = await withLogCorrelation({ sessionId: chatSessionId }, () =>
+        recordMetricTime('llm.answer.ms', () =>
+          this.runChatAnswer(
+            message,
+            history,
+            session,
+            options || {},
+            cacheEnabled,
+            { auto: autoMode },
+            true,
+            parsed,
+          ),
+        ),
+      );
 
-      history.push({ role: 'user', content: message });
-
-      const contextStr = history.map((h) => `${h.role}: ${h.content}`).join('\n');
-      const cache = getCache();
-
-      if (cacheEnabled) {
-        const cachedResult = await cache.get(message, effectiveModel, type);
-        if (cachedResult) {
-          console.log(`\n${cachedResult}\n`);
-          history.push({ role: 'assistant', content: cachedResult });
-          continue;
-        }
-      }
-
-      const context = new ContextParser().parseFromString(contextStr, 'chat');
-      let fullPrompt = ContextParser.formatContext(context);
-
-      // M4.4 conservative compression (lossless-for-code, OFF by default).
-      // When routing.compression.enabled is true, long PROSE is elided
-      // middle-out; fenced code blocks are preserved byte-identical, so
-      // identifiers/strings/symbols always survive. Off = pure pass-through.
-      const compressionCfg = this.configManager.getAll().routing?.compression;
-      if (compressionCfg?.enabled) {
-        const compressed = compressLossless(fullPrompt, {
-          enabled: true,
-          keepRatio: compressionCfg.keepRatio,
-          minProseChars: compressionCfg.minProseChars,
-        });
-        if (compressed.elided) {
-          logger.debug(
-            `   M4.4 compression: ${compressed.originalTokens} → ${compressed.compressedTokens} tokens` +
-              ` (${compressed.proseCharsRemoved} prose chars elided, ${compressed.codeBlocks} code block(s) preserved verbatim)`,
-          );
-          fullPrompt = compressed.text;
-        }
-      }
-
-      // ── Generation retry loop ────────────────────────────────────
-      // Wraps both streaming and non-streaming paths with error recovery.
-      // On error, the user can retry, switch provider, cancel, or exit.
-      // History is preserved so switching providers is seamless.
-      let generationComplete = false;
-      let recovery: ErrorRecoveryResult | null = null;
-      // Auto mode tracks providers that already failed for THIS message so
-      // failover walks forward through the ranked candidates, never repeating
-      // a provider that just errored.
-      const autoFailedProviders = new Set<string>();
-      // P4 M4.1: mid-stream continuation — the streamed tokens are buffered so
-      // a mid-stream death can hand the NEXT candidate a bounded "continue from
-      // here" note instead of restarting. Bounded: at most ONE continuation per
-      // message (a second mid-stream death is definitive, not unlucky).
-      let continuationNote: string | undefined;
-      let continuationUsed = false;
-
-      while (!generationComplete) {
-        if (typeof provider.generateStream === 'function') {
-          // ── Streaming path ───────────────────────────────────────
-          console.log();
-          const streamedChunks: string[] = [];
-          // P4 M4.1: consume the continuation note for THIS attempt — once a
-          // candidate starts, the note is spent (max 1 continuation per
-          // message; a later candidate that also dies mid-stream gets no
-          // stale note).
-          const activeContinuation = continuationNote;
-          continuationNote = undefined;
-          try {
-            const result = await provider.generateStream(
-              fullPrompt,
-              {
-                ...options,
-                model: effectiveModel,
-                // P4 M4.1: pass the bounded continuation note to this attempt
-                // (built after the previous candidate died mid-stream).
-                ...(activeContinuation ? { continuation: activeContinuation } : {}),
-              },
-              (token: string) => {
-                streamedChunks.push(token);
-                process.stdout.write(token);
-              },
-            );
-            console.log('\n');
-
-            if (cacheEnabled) {
-              await cache.set(message, result, effectiveModel, type);
-            }
-
-            history.push({ role: 'assistant', content: result });
-            // Success telemetry: verified models accumulate from real usage so
-            // the registry's getUsableProviders() reflects what actually works.
-            // Goes through the shared helper so the BUFF_TELEMETRY_ACTION env
-            // override (VS Code extension spawns) re-tags IDE usage as
-            // ide-chat instead of blending into terminal chat.
-            recordRegistrySuccess(type, effectiveModel, 'chat');
-            generationComplete = true;
-          } catch (err) {
-            console.log();
-            // ── Auto mode: transparently fail over to the next candidate ──
-            // failoverDeclined records that the user opted out of the automatic
-            // swap (routing.promptOnFailover + 'manual') so the retryable-error
-            // fallback chain below is skipped too — 'manual' must land on the
-            // interactive recovery (handleInferenceError), never silently
-            // auto-switch behind the user's back.
-            let failoverDeclined = false;
-            if (autoMode) {
-              const failedProviderName = provider.name;
-              autoFailedProviders.add(type);
-              this.recordAutoProviderFailure(type, err, effectiveModel);
-              // Failover routing itself can throw (e.g. an unresolvable plugin
-              // provider) — never let that escape the catch and crash the
-              // interactive loop; fall through to interactive recovery instead.
-              let next: AutoRoutedMessage | null = null;
-              try {
-                next = await this.routeMessageAuto(message, [...autoFailedProviders]);
-              } catch {
-                next = null;
-              }
-              // Only switch to a provider that hasn't already failed this
-              // message — otherwise we'd re-enter a known-broken provider
-              // (e.g. the router's fallback returns the original winner).
-              if (next && next.type !== type && !autoFailedProviders.has(next.type)) {
-                // Opt-in confirmation (routing.promptOnFailover): when the
-                // user wants control over failover, ask before switching.
-                // 'manual' falls through to the standard interactive recovery
-                // (picker etc.); 'switch' (or the silent default) adopts the
-                // next-ranked candidate so auto mode never gets stuck.
-                const declined =
-                  shouldConfirmFailover(this.configManager.getAll()) &&
-                  (await promptFailoverChoice(failedProviderName, next.provider.name, next.model)) === 'manual';
-                if (declined) failoverDeclined = true;
-                if (!declined) {
-                  // P4 M4.1: if the death was MID-STREAM (tokens already
-                  // streamed) and we haven't continued yet this message, build
-                  // a bounded continuation note so the next candidate picks up
-                  // where this one stopped. Definitive failures (auth/
-                  // rate-limit/model-404) never continue — a fresh start is
-                  // correct there.
-                  if (
-                    !continuationUsed &&
-                    isPartialFailure(err) &&
-                    streamedChunks.length > 0
-                  ) {
-                    continuationUsed = true;
-                    continuationNote = buildContinuationNote(fullPrompt, streamedChunks.join(''));
-                    // P4 M4.4: learn the mid-stream interruption as a `partial`
-                    // telemetry event — the provider STARTED streaming but
-                    // couldn't finish, which is a distinct flakiness signal for
-                    // the router (a clean error is NOT the same as a started-
-                    // but-died mid-stream). Best-effort (never throws).
-                    getModelRegistry().recordPartial(
-                      type,
-                      effectiveModel,
-                      'chat',
-                      classifyFallbackError(err),
-                      streamedChunks.length,
-                    );
-                    logger.warn('   🔁 Mid-stream interruption — continuing on the next provider instead of restarting');
-                  }
-                  type = next.type;
-                  provider = next.provider;
-                  effectiveModel = next.model;
-                  model = effectiveModel;
-                  logger.warn(`   ⚠️ ${failedProviderName} failed — automatically switching to ${provider.name} (${effectiveModel})`);
-                  console.log('');
-                  continue;
-                }
-              }
-            }
-            // Try automatic fallback before prompting user
-            const errorType = classifyFallbackError(err);
-            if (!failoverDeclined && isRetryableError(errorType)) {
-              try {
-                const fallback = getProviderFallback(this.configManager, this.configManager.getAll().fallback);
-                logger.warn(`🔄 Attempting automatic failover to next provider...`);
-                console.log('');
-                const fallbackResult = await fallback.callWithFallback(
-                  type,
-                  async (fbProvider, fbType) => {
-                    const fbOpts = {
-                      ...options,
-                      model: effectiveModel,
-                      // P4 M4.1: the automatic-fallback chain gets the same
-                      // continuation note (bounded, once per message).
-                      ...(continuationNote ? { continuation: continuationNote } : {}),
-                    };
-                    let result = '';
-                    if (typeof fbProvider.generateStream === 'function') {
-                      const chunks: string[] = [];
-                      await fbProvider.generateStream(fullPrompt, fbOpts, (t: string) => { chunks.push(t); process.stdout.write(t); });
-                      result = chunks.join('');
-                    } else {
-                      result = await fbProvider.generate(fullPrompt, fbOpts);
-                    }
-                    return result;
-                  },
-                  { context: 'chat', label: 'Chat response' },
-                );
-
-                console.log('\n');
-                if (cacheEnabled) {
-                  await cache.set(message, fallbackResult.response, effectiveModel, fallbackResult.provider);
-                }
-                history.push({ role: 'assistant', content: fallbackResult.response });
-
-                // Update current provider/model to the successful fallback
-                const resolved = resolveProvider(this.configManager, fallbackResult.provider);
-                type = resolved.type;
-                provider = resolved.provider;
-                // Don't update effectiveModel since we want to keep the original model
-                if (fallbackResult.attempts > 1) {
-                  logger.success(`✅ Auto-fallback: switched to ${fallbackResult.provider} (attempt ${fallbackResult.attempts})`);
-                  console.log('');
-                }
-
-                generationComplete = true;
-                continue;
-              } catch {
-                // Auto-fallback exhausted — fall through to interactive recovery
-              }
-            }
-            recovery = await handleInferenceError(
-              err,
-              provider.name,
-              this.configManager,
-            );
-          }
-        } else {
-          // ── Non-streaming path ───────────────────────────────────
-          const spinner = ora('Thinking...').start();
-          try {
-            const result = await provider.generate(fullPrompt, { ...options, model: effectiveModel });
-            spinner.stop();
-            console.log(`\n${result}\n`);
-
-            if (cacheEnabled) {
-              await cache.set(message, result, effectiveModel, type);
-            }
-
-            history.push({ role: 'assistant', content: result });
-            // Success telemetry: verified models accumulate from real usage so
-            // the registry's getUsableProviders() reflects what actually works.
-            // Goes through the shared helper so the BUFF_TELEMETRY_ACTION env
-            // override (VS Code extension spawns) re-tags IDE usage as
-            // ide-chat instead of blending into terminal chat.
-            recordRegistrySuccess(type, effectiveModel, 'chat');
-            generationComplete = true;
-          } catch (err) {
-            spinner.stop();
-            // ── Auto mode: transparently fail over to the next candidate ──
-            // failoverDeclined records that the user opted out of the automatic
-            // swap (routing.promptOnFailover + 'manual') so the retryable-error
-            // fallback chain below is skipped too — 'manual' must land on the
-            // interactive recovery (handleInferenceError), never silently
-            // auto-switch behind the user's back.
-            let failoverDeclined = false;
-            if (autoMode) {
-              const failedProviderName = provider.name;
-              autoFailedProviders.add(type);
-              this.recordAutoProviderFailure(type, err, effectiveModel);
-              // Failover routing itself can throw (e.g. an unresolvable plugin
-              // provider) — never let that escape the catch and crash the
-              // interactive loop; fall through to interactive recovery instead.
-              let next: AutoRoutedMessage | null = null;
-              try {
-                next = await this.routeMessageAuto(message, [...autoFailedProviders]);
-              } catch {
-                next = null;
-              }
-              // Only switch to a provider that hasn't already failed this
-              // message — otherwise we'd re-enter a known-broken provider
-              // (e.g. the router's fallback returns the original winner).
-              if (next && next.type !== type && !autoFailedProviders.has(next.type)) {
-                // Opt-in confirmation (routing.promptOnFailover): when the
-                // user wants control over failover, ask before switching.
-                // 'manual' falls through to the standard interactive recovery
-                // (picker etc.); 'switch' (or the silent default) adopts the
-                // next-ranked candidate so auto mode never gets stuck.
-                const declined =
-                  shouldConfirmFailover(this.configManager.getAll()) &&
-                  (await promptFailoverChoice(failedProviderName, next.provider.name, next.model)) === 'manual';
-                if (declined) failoverDeclined = true;
-                if (!declined) {
-                  type = next.type;
-                  provider = next.provider;
-                  effectiveModel = next.model;
-                  model = effectiveModel;
-                  logger.warn(`   ⚠️ ${failedProviderName} failed — automatically switching to ${provider.name} (${effectiveModel})`);
-                  console.log('');
-                  continue;
-                }
-              }
-            }
-            // Try automatic fallback before prompting user
-            const errorType = classifyFallbackError(err);
-            if (!failoverDeclined && isRetryableError(errorType)) {
-              try {
-                const fallback = getProviderFallback(this.configManager, this.configManager.getAll().fallback);
-                const fallbackResult = await fallback.callWithFallback(
-                  type,
-                  async (fbProvider, fbType) => {
-                    return await fbProvider.generate(fullPrompt, { ...options, model: effectiveModel });
-                  },
-                  { context: 'chat', label: 'Chat response' },
-                );
-
-                spinner.stop();
-                console.log(`\n${fallbackResult.response}\n`);
-
-                if (cacheEnabled) {
-                  await cache.set(message, fallbackResult.response, effectiveModel, fallbackResult.provider);
-                }
-                history.push({ role: 'assistant', content: fallbackResult.response });
-
-                const resolved = resolveProvider(this.configManager, fallbackResult.provider);
-                type = resolved.type;
-                provider = resolved.provider;
-                if (fallbackResult.attempts > 1) {
-                  logger.success(`✅ Auto-fallback: switched to ${fallbackResult.provider} (attempt ${fallbackResult.attempts})`);
-                  console.log('');
-                }
-
-                generationComplete = true;
-                continue;
-              } catch {
-                spinner.stop();
-                // Auto-fallback exhausted — fall through to interactive recovery
-              }
-            }
-            recovery = await handleInferenceError(
-              err,
-              provider.name,
-              this.configManager,
-            );
-          }
-        }
-
-        // ── Handle recovery action ────────────────────────────────
-        if (!recovery) {
-          // No recovery needed — generation succeeded or wasn't attempted
-          continue;
-        }
-
-        if (recovery.action === 'retry') {
-          continue; // retry with the same provider/model
-        }
-
-        if (recovery.action === 'switch' && recovery.auto) {
-          // Auto routing re-enabled via the picker's Auto option.
-          // Resolve the route inline (the per-message block already ran) so
-          // this message retries with the routed provider, not the failed one.
-          autoMode = true;
-          const routed = await this.routeMessageAuto(message);
-          type = routed.type;
-          provider = routed.provider;
-          effectiveModel = routed.model;
-          model = effectiveModel;
-          logger.success('🤖 Auto routing enabled — agent picks the best model per message');
-          console.log('');
-          continue; // retry this message with auto routing
-        }
-
-        if (recovery.action === 'switch' && recovery.newProvider) {
-          type = recovery.newType!;
-          provider = recovery.newProvider;
-          effectiveModel = recovery.newModel || effectiveModelForHistory;
-          model = effectiveModel; // keep model in sync for /info command
-          autoMode = false; // explicit picker choice overrides auto routing
-          logger.success(`✅ Switched to ${provider.name} / ${effectiveModel}`);
-          console.log('');
-          continue; // retry with the new provider
-        }
-
-        if (recovery.action === 'exit') {
-          // Clean exit — outer return handles history storage
-          generationComplete = true;
+      // No-model fallback: the tool loop could not generate a single response
+      // AND the rules assessed a high-confidence pipeline intent — run the
+      // pipeline directly (rules decide only when the model is unavailable).
+      if (answer.generationFailed && dispatchDecision.dispatch && !dispatchDecision.needConfirm) {
+        await runDeveloperMode(message, this.configManager, { provider: type, model });
+        const continueAnswer = await inquirer.prompt<{ cont: string }>([
+          {
+            type: 'input',
+            name: 'cont',
+            message: 'Press Enter to continue chatting, or type /exit to quit:',
+            prefix: '',
+          },
+        ]);
+        if (continueAnswer.cont.trim().toLowerCase() === '/exit' || continueAnswer.cont.trim().toLowerCase() === '/quit') {
+          console.log('Goodbye!');
           break;
         }
-
-        // Cancel: remove the unanswered user message from history
-        history.pop();
-        console.log('');
-        logger.info('Message cancelled. You can type a new one.');
-        console.log('');
-        generationComplete = true;
+        continue;
       }
-
-      if (recovery?.action === 'exit') {
-        console.log('Goodbye!');
-        break;
+      type = session.type;
+      provider = session.provider;
+      effectiveModel = session.model;
+      effectiveModelForHistory = session.model || effectiveModelForHistory;
+      model = effectiveModel;
+      if (answer.content.trim()) {
+        console.log('\n' + answer.content + '\n');
       }
+      if (answer.followupPrompt) {
+        pendingMessage = answer.followupPrompt;
+      }
+      console.log('');
+      continue;
     }
 
     // Cleanup SIGINT handler
     process.off('SIGINT', sigintHandler);
+
+    // Phase B2: end the persistent-memory session — buffered turns are
+    // distilled into project facts (best-effort; never blocks the exit path).
+    try {
+      await getMemoryManager().endSession();
+    } catch {
+      // Best-effort — memory extraction must never break chat exit.
+    }
+
+    // K2: persist runtime metrics (rule/LLM latency, memory hits/misses)
+    // accumulated during this chat session.
+    try {
+      getMetrics().save();
+    } catch {
+      // Best-effort — a metrics write must never break chat exit.
+    }
 
     // Store chat session in history when exiting
     if (history.length > 0) {
@@ -902,8 +611,31 @@ export class ChatCommand extends BaseCommand {
           timestamp: Date.now(),
         }));
         const chatHistory = getChatHistory();
-        const sessionId = chatHistory.storeSession(historyMessages, type, effectiveModelForHistory);
+        const sessionId = chatHistory.storeSession(
+          historyMessages,
+          type,
+          effectiveModelForHistory,
+          true,
+          deriveProjectId(process.cwd()).id,
+        );
         logger.debug(`Chat session stored: ${sessionId}`);
+        // Phase A2: workspace continuity — record the session in the project
+        // registry (the last user goal + last assistant summary + session id)
+        // so `buff doctor` and the D1 auto-recall can show what this project
+        // was last working on. Best-effort — a workspace write must never
+        // affect the chat exit path.
+        try {
+          const lastUser = [...history].reverse().find((h) => h.role === 'user');
+          const lastAssistant = [...history].reverse().find((h) => h.role === 'assistant');
+          this.configManager.getWorkspaceStore().recordRun({
+            cwd: process.cwd(),
+            goal: lastUser?.content || 'chat session',
+            summary: lastAssistant?.content,
+            sessionId,
+          });
+        } catch (wsErr) {
+          logger.debug(`Workspace record failed (non-critical): ${wsErr}`);
+        }
       } catch (err) {
         // Non-critical — history storage failure shouldn't affect user experience
         logger.debug(`Failed to store chat session: ${err}`);
@@ -912,6 +644,322 @@ export class ChatCommand extends BaseCommand {
 
     // Actually exit the process — Commander keeps the event loop alive otherwise
     process.exit(0);
+  }
+
+  /**
+   * E3b — run one chat answer as a TOOL-CALL TURN (Freebuff/Hermes parity).
+   *
+   * The model may call ask_user (clarify), verify_requirement, the pipeline
+   * tools (build/repair/resume), and must end with suggest_followups (3
+   * followups, Freebuff contract). Native tool-calling when the provider
+   * supports it; JSON fallback otherwise. Carries the legacy generation
+   * machinery forward: auto-mode failover + shared fallback chain inside
+   * callModel, caching, memory recording, and registry telemetry.
+   *
+   * Returns the final content + an optional follow-up prompt (interactive
+   * mode renders numbered options; choosing one sends it as the next message).
+   */
+  private async runChatAnswer(
+    message: string,
+    history: Array<{ role: string; content: string }>,
+    session: { type: string; provider: InferenceProvider; model: string | undefined },
+    options: { file?: string; provider?: string; model?: string; cache?: boolean; dev?: boolean },
+    cacheEnabled: boolean,
+    mode: { auto: boolean },
+    interactive: boolean,
+    parsed?: ParsedRequest,
+  ): Promise<{ content: string; followupPrompt?: string; generationFailed?: boolean }> {
+    // Cache check first (same as the legacy path).
+    const cache = getCache();
+    if (cacheEnabled) {
+      try {
+        const cachedResult = await cache.get(message, session.model ?? 'default', session.type);
+        if (cachedResult) {
+          console.log(`\n${cachedResult}\n`);
+          history.push({ role: 'user', content: message });
+          history.push({ role: 'assistant', content: cachedResult });
+          this.memoryNoteTurn(message, cachedResult);
+          return { content: cachedResult };
+        }
+      } catch {
+        // Cache must never break the turn.
+      }
+    }
+
+    history.push({ role: 'user', content: message });
+
+    // System prompt: base identity + the Freebuff/Hermes tool contract — the
+    // model clarifies with ask_user and ends every response with followups.
+    // E3c: the rule assessment rides in as a hint when the rules parsed a
+    // confident intent (model decides; hint only).
+    const systemText = buildToolSystemPrompt(parsed);
+
+    // `-f/--file` file-context parity: the legacy generateWithContext loaded
+    // + retrieval-reduced file context. Inject it as a context message before
+    // the user's message so the tool-loop path keeps the flag working.
+    let fileContext: string | null = null;
+    if (options.file) {
+      try {
+        const parser = new ContextParser();
+        const fileCtx = parser.parseFromFiles([options.file]);
+        const fileCtxStr = ContextParser.formatContext(fileCtx);
+        const retrievalOpts = retrievalOptionsFromConfig(this.configManager);
+        const { context: reduced, stats } = await assembleContext(
+          message,
+          [options.file],
+          fileCtxStr,
+          retrievalOpts,
+        );
+        recordRetrievalStats(stats);
+        fileContext = reduced;
+      } catch {
+        // A file-context failure must never break the turn.
+        fileContext = null;
+      }
+    }
+
+    const thread: ToolMessage[] = [
+      { role: 'system', content: systemText },
+      ...(fileContext
+        ? [{ role: 'user' as const, content: `[File context]\n${fileContext}` }]
+        : []),
+      ...history
+        .slice(0, -1)
+        .map((h) => ({
+          role: (h.role === 'assistant' ? 'assistant' : 'user') as 'user' | 'assistant',
+          content: h.content,
+        })),
+      { role: 'user', content: message },
+    ];
+
+    const toolContext: ToolContext = {
+      configManager: this.configManager,
+      cwd: process.cwd(),
+      emit: (event, data, source) => getEventBus().emit(event as never, data, source),
+      // C2 verify with the actual session model (verify_requirement tool).
+      callLLM: (prompt, opts) =>
+        session.provider.generate(prompt, { ...(opts as Record<string, unknown> | undefined), model: session.model }),
+    };
+    const callModel = this.buildToolCallModel(message, session, options, mode);
+
+    let result: ToolLoopResult;
+    try {
+      result = await runToolLoop({
+        messages: thread,
+        context: toolContext,
+        maxSteps: 8,
+        deps: {
+          callModel,
+          executeTool: async (name, args, ctx) => {
+            const tool = getTool(name);
+            if (!tool) throw new Error(`Unknown tool: ${name}`);
+            return tool.run(args, ctx);
+          },
+          onEvent: (line) => logger.info(line),
+        },
+      });
+    } catch (err) {
+      // The tool loop never throws by design; this guards future changes.
+      logger.error(String(err));
+      result = {
+        content: `I ran into a problem: ${err instanceof Error ? err.message : String(err)}`,
+        followups: [],
+        toolCalls: [],
+        steps: 0,
+        bounded: false,
+      };
+    }
+
+    // Finalize the turn (cache + memory + registry telemetry).
+    // E3c: a generationFailed turn is NOT cached/persisted — the caller may
+    // fall back to the rule decision, and the failure text must not pollute
+    // history or the cache.
+    if (result.content.trim() && !result.generationFailed) {
+      if (cacheEnabled) {
+        try {
+          await cache.set(message, result.content, session.model ?? 'default', session.type);
+        } catch {
+          // Best-effort.
+        }
+      }
+      history.push({ role: 'assistant', content: result.content });
+      this.memoryNoteTurn(message, result.content);
+      try {
+        recordRegistrySuccess(session.type, session.model, 'chat');
+      } catch {
+        // Best-effort.
+      }
+    }
+
+    const followupPrompt = await this.renderFollowups(result.followups, interactive);
+    return { content: result.content, followupPrompt, generationFailed: result.generationFailed };
+  }
+
+  /**
+   * E3b — the model-call step for the tool loop (Freebuff run-agent-step):
+   * native generateTools when the provider supports it, JSON fallback
+   * otherwise. Auto-mode failover + the shared fallback chain live here — a
+   * broken provider never crashes the turn (it answers from the next working
+   * candidate, exactly like the legacy generation block).
+   */
+  private buildToolCallModel(
+    message: string,
+    session: { type: string; provider: InferenceProvider; model: string | undefined },
+    options: { file?: string; provider?: string; model?: string; cache?: boolean; dev?: boolean },
+    mode: { auto: boolean },
+  ): ToolLoopDeps['callModel'] {
+    return async (messages, schemas) => {
+      const tryGenerate = async (
+        prov: InferenceProvider,
+        typ: string,
+        mdl: string | undefined,
+      ): Promise<StepResponse> => {
+        if (typeof prov.generateTools === 'function' && schemas.length > 0) {
+          return prov.generateTools(messages, schemas, { ...options, model: mdl });
+        }
+        // JSON fallback transport: flatten the thread into one prompt.
+        const prompt = messages
+          .map((m) => {
+            if (m.role === 'system') return `[System]\n${m.content}`;
+            if (m.role === 'user') return `[User]\n${m.content}`;
+            if (m.role === 'assistant') return m.content ? `[Assistant]\n${m.content}` : '';
+            if (m.role === 'tool') return `[Tool result]\n${m.content}`;
+            return '';
+          })
+          .filter(Boolean)
+          .join('\n\n');
+        let raw: string;
+        if (typeof prov.generateStream === 'function') {
+          const chunks: string[] = [];
+          await prov.generateStream(prompt, { ...options, model: mdl }, (t) => chunks.push(t));
+          raw = chunks.join('');
+        } else {
+          raw = await prov.generate(prompt, { ...options, model: mdl });
+        }
+        const { text, calls } = extractFallbackToolCalls(raw);
+        return { content: text, toolCalls: calls };
+      };
+
+      try {
+        return await tryGenerate(session.provider, session.type, session.model);
+      } catch (err) {
+        // Auto mode: fail over across the ranked candidates (never stuck).
+        if (mode.auto) {
+          const firstType = session.type;
+          // Observable telemetry, identical to the shared single-shot runner
+          // (the E2E repair-failover contract): one warn per walk, one
+          // success log per landed candidate.
+          logger.warn(`   ⚠️ ${session.provider.name} failed — trying the next auto candidate...`);
+          const failed = new Set<string>([session.type]);
+          for (let i = 0; i < 3; i++) {
+            let next: AutoRoutedMessage | null = null;
+            try {
+              next = await this.routeMessageAuto(message, [...failed]);
+            } catch {
+              break;
+            }
+            if (!next || next.type === session.type || failed.has(next.type)) break;
+            failed.add(next.type);
+            // Opt-in confirmation (routing.promptOnFailover): 'manual' stops
+            // the walk and lets the caller's error recovery handle it. Gated on
+            // an interactive stdin (inherited from the shared single-shot
+            // runner) — a piped/CI input must never block on an inquirer
+            // prompt; it falls through to silent auto-failover instead.
+            if (shouldConfirmFailover(this.configManager.getAll()) && process.stdin.isTTY) {
+              try {
+                const choice = await promptFailoverChoice(session.provider.name, next.provider.name, next.model);
+                if (choice === 'manual') break;
+              } catch {
+                // Fall through to the candidate.
+              }
+            }
+            try {
+              const resp = await tryGenerate(next.provider, next.type, next.model);
+              session.type = next.type;
+              session.provider = next.provider;
+              session.model = next.model;
+              logger.success(`✅ Auto failover: answered from ${next.provider.name} (${next.model}) after ${firstType} failed`);
+              return resp;
+            } catch {
+              // Next candidate.
+            }
+          }
+        } else if (isRetryableError(classifyFallbackError(err))) {
+          // Non-auto: walk the shared fallback chain (retryable errors only).
+          try {
+            const fallback = getProviderFallback(this.configManager, this.configManager.getAll().fallback);
+            const chain = fallback.getFallbackChain(session.type);
+            for (const fbType of chain) {
+              if (fbType === session.type) continue;
+              try {
+                const resolved = resolveProvider(this.configManager, fbType);
+                return await tryGenerate(resolved.provider, resolved.type, session.model);
+              } catch {
+                // Next fallback candidate.
+              }
+            }
+          } catch {
+            // Fall through to rethrow.
+          }
+        }
+        throw err;
+      }
+    };
+  }
+
+  /**
+   * E3b — render suggest_followups results (Freebuff parity). Interactive:
+   * numbered options; choosing one sends its prompt as the next message.
+   * Single-shot: printed after the answer.
+   */
+  private async renderFollowups(
+    followups: FollowupSuggestion[],
+    interactive: boolean,
+  ): Promise<string | undefined> {
+    if (!followups || followups.length === 0) return undefined;
+    console.log('');
+    logger.highlight('➡️  Next steps:');
+    followups.forEach((f, i) => {
+      console.log(`  ${i + 1}. ${f.label || f.prompt}`);
+    });
+    if (!interactive) {
+      console.log('');
+      return undefined;
+    }
+    console.log('');
+    try {
+      const answer = await inquirer.prompt<{ n: string }>([
+        {
+          type: 'input',
+          name: 'n',
+          message: 'Pick a number to continue, or press Enter to keep chatting:',
+          prefix: '',
+        },
+      ]);
+      const idx = parseInt(answer.n.trim(), 10);
+      if (idx >= 1 && idx <= followups.length) {
+        return followups[idx - 1].prompt;
+      }
+    } catch {
+      // The followup pick must never break the chat loop.
+    }
+    return undefined;
+  }
+
+  /**
+   * Record a completed user↔assistant turn into the persistent-memory manager
+   * (Phase B2). Best-effort and fire-and-forget: the provider only BUFFERS the
+   * turn here (zero latency); extraction into project facts happens once at
+   * session end. A memory failure must never break the chat loop.
+   */
+  private memoryNoteTurn(userText: string, assistantText: string): void {
+    try {
+      void getMemoryManager().recordTurn(userText, assistantText).catch(() => {
+        // Best-effort — never break chat over memory.
+      });
+    } catch {
+      // Best-effort — never break chat over memory.
+    }
   }
 
   /**
@@ -991,6 +1039,10 @@ export class ChatCommand extends BaseCommand {
     // learning ON by default, quota-ledger status, runtime stats, cost/speed/
     // reasoning floors, paid-model gate, context preflight); chat layers its
     // circuit-breaker state on top.
+    // C3: the NLU parser seeds the router task-intent (same vocabulary every
+    // action command derives from resolveDispatch) when confident.
+    const parsed = parseRequestSync(message);
+    const dispatch = resolveDispatch(parsed);
     const decision = getAutoRouter().resolve(
       'chat',
       message,
@@ -1000,6 +1052,7 @@ export class ChatCommand extends BaseCommand {
           contextHintTokens: opts?.contextHintTokens,
         }),
         circuitBreakerStatus,
+        ...(dispatch.taskIntentHint ? { taskIntentHint: dispatch.taskIntentHint } : {}),
       },
       this.configManager,
     );
@@ -1158,39 +1211,6 @@ export class ChatCommand extends BaseCommand {
   }
 
   /**
-   * Generate a single-shot response in auto mode with runtime failover.
-   *
-   * The auto router picks the best provider, but a provider's key/model can
-   * still fail at generation time (quota exhausted → 429, deprecated model →
-   * 404 — Gemini's listModels() lists models the key can't actually use).
-   * This walks the ranked candidates and returns the first successful response,
-   * so Auto routing NEVER crashes the CLI — it always answers from a working
-   * provider.
-   *
-   * Delegates to the SHARED single-shot runner (Nuvira-Router M0.2 Stage B) so
-   * every action walks candidates identically — behavior-identical to the
-   * previous inline walk (same order, same telemetry, same confirmation
-   * semantics).
-   */
-  private async generateAutoWithFailover(
-    message: string,
-    prompt: string,
-    options?: { file?: string; model?: string },
-    cacheEnabled: boolean = true,
-  ): Promise<string> {
-    return runSingleShotAuto({
-      action: 'chat',
-      task: message,
-      configManager: this.configManager,
-      route: (excludeProviders) =>
-        this.routeMessageAuto(message, excludeProviders, { contextHintTokens: estimateTokens(prompt) }),
-      generate: (provider, type, model, apiKey) =>
-        this.generateWithContext(provider, prompt, type, { ...options, model, apiKey }, cacheEnabled),
-      recordFailure: (type, model, err, apiKey) => this.recordAutoProviderFailure(type, err, model, apiKey),
-    });
-  }
-
-  /**
    * Read multi-line input from stdin using readline.
    *
    * - First line prompt: "You: "
@@ -1314,9 +1334,9 @@ Commands:
       case '/dev':
         this.devModeAuto = !this.devModeAuto;
         if (this.devModeAuto) {
-          logger.success('✅ Developer mode ACTIVATED — all messages will auto-create files.');
+          logger.success('✅ Developer mode ACTIVATED — the rule hint prefers file-creating pipeline actions.');
         } else {
-          logger.info('ℹ️  Developer mode DEACTIVATED — creation requests will ask for confirmation.');
+          logger.info('ℹ️  Developer mode DEACTIVATED — the model decides freely; rules are hints only.');
         }
         return { exit: false };
       case '/model': {
@@ -1386,57 +1406,4 @@ Commands:
     }
   }
 
-  private async generateWithContext(
-    provider: any,
-    prompt: string,
-    providerType: string,
-    options?: { file?: string; model?: string; apiKey?: string },
-    cacheEnabled: boolean = true,
-  ): Promise<string> {
-    let fullPrompt = prompt;
-
-    if (options?.file) {
-      const parser = new ContextParser();
-      const context = parser.parseFromFiles([options.file]);
-      const contextStr = ContextParser.formatContext(context);
-      // Retrieval hook: if the file is large, reduce it to the top-k
-      // semantically-relevant chunks (saves tokens / stretches quotas).
-      // Small files pass through untouched — zero overhead.
-      const retrievalOpts = retrievalOptionsFromConfig(this.configManager);
-      const { context: reduced, stats } = await assembleContext(prompt, [options.file], contextStr, retrievalOpts);
-      recordRetrievalStats(stats);
-      fullPrompt = `${reduced}\n\n## User Query\n${prompt}`;
-    }
-
-    let result: string;
-    if (typeof provider.generateStream === 'function') {
-      const chunks: string[] = [];
-      await provider.generateStream(
-        fullPrompt,
-        options,
-        (token: string) => {
-          chunks.push(token);
-        },
-      );
-      result = chunks.join('');
-    } else {
-      const spinner = ora(`Generating with ${provider.name}...`).start();
-      try {
-        result = await provider.generate(fullPrompt, options);
-        spinner.stop();
-      } catch (err) {
-        spinner.fail('Generation failed');
-        throw err;
-      }
-    }
-
-    // Record telemetry success in the Model Availability Registry so verified
-    // models accumulate from real usage — this is what populates
-    // getUsableProviders() over time and lets the router restrict Auto picks
-    // to providers we've actually seen work (no more routing into 404s).
-    // Goes through the shared helper so the BUFF_TELEMETRY_ACTION env override
-    // (VS Code extension spawns) re-tags IDE usage as ide-chat.
-    recordRegistrySuccess(providerType, options?.model, 'chat');
-    return result;
-  }
 }

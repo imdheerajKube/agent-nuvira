@@ -1,18 +1,30 @@
 /**
- * MCP Client — Connects to MCP servers via stdio or SSE transport.
+ * MCP Client — Connects to MCP servers via stdio or Streamable HTTP.
  *
- * The Model Context Protocol (MCP) allows AI agents to discover and invoke
- * tools exposed by external servers. This client implements:
- * - stdio transport: spawns a subprocess and communicates via stdin/stdout
- * - SSE transport: connects to a remote HTTP server with Server-Sent Events
+ * F2: the transport + JSON-RPC internals now run on the OFFICIAL
+ * `@modelcontextprotocol/sdk` (Client + StdioClientTransport +
+ * StreamableHTTPClientTransport) — replacing the hand-rolled JSON-RPC loop
+ * with identical call behavior (no API break for callers): same constructor,
+ * methods, getters, events, and `MCPConnectionState` shape.
  *
- * Protocol: JSON-RPC 2.0
+ * Transports:
+ * - stdio: spawns a subprocess; the SDK's close() reaps the child with a
+ *   stdin-end → SIGTERM → SIGKILL escalation (the old client's detached
+ *   process-group kill is an SDK trade-off — the direct child is always
+ *   reaped, npx-wrapped grandchildren are not).
+ * - sse: maps to StreamableHTTPClientTransport (Streamable HTTP is the spec
+ *   successor of the old SSE transport; the same `transport: 'sse'` config
+ *   entries keep working unchanged).
+ *
  * Spec: https://modelcontextprotocol.io/specification/
  */
 
-import { spawn, type ChildProcess } from 'node:child_process';
 import { EventEmitter } from 'node:events';
-import { createInterface } from 'node:readline';
+
+import { Client } from '@modelcontextprotocol/sdk/client/index.js';
+import { StdioClientTransport } from '@modelcontextprotocol/sdk/client/stdio.js';
+import { StreamableHTTPClientTransport } from '@modelcontextprotocol/sdk/client/streamableHttp.js';
+import type { Transport } from '@modelcontextprotocol/sdk/shared/transport.js';
 
 import { logger } from '../utils/logger.js';
 import {
@@ -21,14 +33,10 @@ import {
   type Prompt,
   type CallToolResult,
   type TextContent,
-  type ImageContent,
   type EmbeddedResource,
   type Implementation,
   type MCPServerConfig,
   type MCPConnectionState,
-  type JSONRPCRequest,
-  type JSONRPCResponse,
-  MCP_PROTOCOL_VERSION,
 } from './types.js';
 
 // ─── Events ──────────────────────────────────────────────────────────────────
@@ -41,18 +49,23 @@ export interface MCPClientEvents {
   'resource-list-changed': [];
 }
 
+/**
+ * Optional transport factory — a test seam. Production callers never pass it;
+ * unit tests inject an in-memory Transport to drive the SDK client without
+ * spawning a subprocess or opening sockets.
+ */
+export type TransportFactory = (config: MCPServerConfig) => Transport;
+
+const CLIENT_NAME = 'agent-nuvira';
+const CLIENT_VERSION = '1.61.1';
+
 // ─── MCP Client ─────────────────────────────────────────────────────────────
 
 export class MCPClient extends EventEmitter {
   private config: MCPServerConfig;
-  private process: ChildProcess | null = null;
-  private lineReader: ReturnType<typeof createInterface> | null = null;
-  private requestId = 0;
-  private pendingRequests = new Map<number | string, {
-    resolve: (value: unknown) => void;
-    reject: (reason: Error) => void;
-    timer: NodeJS.Timeout;
-  }>();
+  private client: Client | null = null;
+  private transport: Transport | null = null;
+  private transportFactory: TransportFactory | undefined;
 
   private _connected = false;
   private _serverInfo: Implementation | null = null;
@@ -60,13 +73,14 @@ export class MCPClient extends EventEmitter {
   private _resources: Resource[] = [];
   private _prompts: Prompt[] = [];
 
-  /** Timeout for JSON-RPC requests (ms) */
+  /** Timeout for JSON-RPC requests (ms) — passed through to the SDK. */
   private readonly requestTimeoutMs: number;
 
-  constructor(config: MCPServerConfig, requestTimeoutMs = 15_000) {
+  constructor(config: MCPServerConfig, requestTimeoutMs = 15_000, transportFactory?: TransportFactory) {
     super();
     this.config = config;
     this.requestTimeoutMs = requestTimeoutMs;
+    this.transportFactory = transportFactory;
   }
 
   // ─── Public Accessors ─────────────────────────────────────────────────────
@@ -94,7 +108,8 @@ export class MCPClient extends EventEmitter {
 
   /**
    * Connect to the MCP server. For stdio transport this spawns the subprocess;
-   * for SSE transport this connects to the HTTP endpoint.
+   * for sse transport this connects to the Streamable HTTP endpoint. The SDK
+   * performs the initialize handshake inside `client.connect(transport)`.
    */
   async connect(): Promise<void> {
     if (this._connected) {
@@ -103,16 +118,32 @@ export class MCPClient extends EventEmitter {
     }
 
     try {
-      if (this.config.transport === 'stdio') {
-        await this.connectStdio();
-      } else {
-        await this.connectSSE();
-      }
+      const transport = this.transportFactory
+        ? this.transportFactory(this.config)
+        : this.buildTransport();
+      this.transport = transport;
 
-      // Perform initialization handshake
-      await this.initialize();
+      const client = new Client({ name: CLIENT_NAME, version: CLIENT_VERSION }, { capabilities: {} });
+      this.client = client;
+
+      // Race the SDK connect against our request timeout so a transport that
+      // starts but never completes the handshake can't hang the pipeline.
+      await this.withTimeout(client.connect(transport, { timeout: this.requestTimeoutMs }));
+
+      // Surface runtime transport errors as 'error' events. The SDK routes
+      // transport errors through `client.onerror`; without a handler they are
+      // silently dropped. Set only AFTER a successful connect so a connect
+      // failure emits exactly one 'error' (from the catch below), never two.
+      client.onerror = (err) => {
+        this.emit('error', err);
+      };
+
       this._connected = true;
+      const serverInfo = client.getServerVersion();
+      this._serverInfo = serverInfo ? { name: serverInfo.name, version: serverInfo.version } : null;
       this.emit('connected');
+
+      logger.debug(`MCP[${this.config.name}]: Connected (${this._serverInfo?.name ?? 'unknown'} ${this._serverInfo?.version ?? ''})`);
 
       // Discover available capabilities
       await this.discoverCapabilities();
@@ -122,47 +153,28 @@ export class MCPClient extends EventEmitter {
       const msg = err instanceof Error ? err.message : String(err);
       logger.debug(`MCP[${this.config.name}]: Connection failed: ${msg}`);
       this.emit('error', err instanceof Error ? err : new Error(msg));
-      throw err;
+      // Best-effort teardown so a half-started transport / spawned child
+      // can't leak and keep the CLI process alive.
+      await this.closeClient().catch(() => {});
+      throw new Error(`MCP[${this.config.name}]: Failed to connect: ${msg}`);
     }
   }
 
   /**
-   * Disconnect from the MCP server, cleaning up any subprocess or SSE connection.
+   * Disconnect from the MCP server. The SDK's close() reaps the stdio child
+   * (stdin end → SIGTERM → SIGKILL) or tears down the HTTP stream. Sync by
+   * design — callers (MCPManager.disconnectAll) tear down in a loop.
    */
   disconnect(): void {
     this._connected = false;
     this._serverInfo = null;
-
-    // Reject all pending requests
-    for (const [id, pending] of this.pendingRequests) {
-      clearTimeout(pending.timer);
-      pending.reject(new Error('Disconnected'));
-      this.pendingRequests.delete(id);
+    const client = this.client;
+    this.client = null;
+    if (client) {
+      void client.close().catch((err) => {
+        logger.debug(`MCP[${this.config.name}]: close error: ${err instanceof Error ? err.message : String(err)}`);
+      });
     }
-
-    if (this.lineReader) {
-      this.lineReader.close();
-      this.lineReader = null;
-    }
-
-    if (this.process && !this.process.killed) {
-      // SIGTERM is unreliable here: github-mcp-server ignores it, and killing an
-      // npx wrapper leaves the firecrawl-mcp grandchild running. SIGKILL the
-      // whole detached process group (negative pid) so nothing survives.
-      try {
-        if (this.process.pid !== undefined) {
-          process.kill(-this.process.pid, 'SIGKILL');
-        }
-      } catch {
-        try {
-          this.process.kill('SIGKILL');
-        } catch {
-          // Process already exited — nothing to do.
-        }
-      }
-      this.process = null;
-    }
-
     this.emit('disconnected');
     logger.debug(`MCP[${this.config.name}]: Disconnected`);
   }
@@ -173,8 +185,17 @@ export class MCPClient extends EventEmitter {
    * List all tools available from this MCP server.
    */
   async listTools(): Promise<Tool[]> {
-    const result = await this.sendRequest<{ tools: Tool[] }>('tools/list');
-    this._tools = result.tools || [];
+    if (!this.ensureConnected()) throw this.notConnectedError();
+    const result = await this.client!.listTools({}, { timeout: this.requestTimeoutMs });
+    const tools = (result.tools ?? []).map((t) => ({
+      name: t.name,
+      description: t.description,
+      inputSchema: t.inputSchema as Record<string, unknown> | undefined,
+    }));
+    const changed = tools.length !== this._tools.length
+      || tools.some((t, i) => t.name !== this._tools[i]?.name);
+    this._tools = tools;
+    if (changed) this.emit('tool-list-changed');
     return this._tools;
   }
 
@@ -186,8 +207,14 @@ export class MCPClient extends EventEmitter {
    * @returns The tool call result with content blocks
    */
   async callTool(name: string, args?: Record<string, unknown>): Promise<CallToolResult> {
-    const result = await this.sendRequest<CallToolResult>('tools/call', { name, arguments: args });
-    return result;
+    if (!this.ensureConnected()) throw this.notConnectedError();
+    const result = await this.client!.callTool({ name, arguments: args }, undefined, {
+      timeout: this.requestTimeoutMs,
+    });
+    return {
+      content: result.content as CallToolResult['content'],
+      isError: result.isError as boolean | undefined,
+    };
   }
 
   // ─── Resource Access ─────────────────────────────────────────────────────
@@ -196,18 +223,36 @@ export class MCPClient extends EventEmitter {
    * List all resources available from this MCP server.
    */
   async listResources(): Promise<Resource[]> {
-    const result = await this.sendRequest<{ resources: Resource[] }>('resources/list');
-    this._resources = result.resources || [];
+    if (!this.ensureConnected()) throw this.notConnectedError();
+    const result = await this.client!.listResources({}, { timeout: this.requestTimeoutMs });
+    const resources = (result.resources ?? []).map((r) => ({
+      uri: r.uri,
+      name: r.name,
+      description: r.description,
+      mimeType: r.mimeType,
+    }));
+    const changed = resources.length !== this._resources.length
+      || resources.some((r, i) => r.uri !== this._resources[i]?.uri);
+    this._resources = resources;
+    if (changed) this.emit('resource-list-changed');
     return this._resources;
   }
 
   /**
-   * Read a resource by URI.
+   * Read a resource by URI. Returns the first content block (the SDK
+   * normalizes `resources/read` to `{ contents: [...] }`).
    *
    * @param uri — The resource URI to read
    */
   async readResource(uri: string): Promise<TextContent | EmbeddedResource> {
-    return this.sendRequest<TextContent | EmbeddedResource>('resources/read', { uri });
+    if (!this.ensureConnected()) throw this.notConnectedError();
+    const result = await this.client!.readResource({ uri }, { timeout: this.requestTimeoutMs });
+    const first = result.contents?.[0];
+    if (!first) return { type: 'text', text: '' };
+    if ('text' in first) {
+      return { type: 'text', text: first.text ?? '' };
+    }
+    return { type: 'resource', resource: { uri: first.uri, mimeType: first.mimeType, blob: first.blob } };
   }
 
   // ─── Prompt Access ───────────────────────────────────────────────────────
@@ -216,8 +261,13 @@ export class MCPClient extends EventEmitter {
    * List all prompts available from this MCP server.
    */
   async listPrompts(): Promise<Prompt[]> {
-    const result = await this.sendRequest<{ prompts: Prompt[] }>('prompts/list');
-    this._prompts = result.prompts || [];
+    if (!this.ensureConnected()) throw this.notConnectedError();
+    const result = await this.client!.listPrompts({}, { timeout: this.requestTimeoutMs });
+    this._prompts = (result.prompts ?? []).map((p) => ({
+      name: p.name,
+      description: p.description,
+      arguments: p.arguments,
+    }));
     return this._prompts;
   }
 
@@ -225,242 +275,55 @@ export class MCPClient extends EventEmitter {
    * Get a specific prompt by name with optional arguments.
    */
   async getPrompt(name: string, args?: Record<string, string>): Promise<unknown> {
-    return this.sendRequest('prompts/get', { name, arguments: args });
+    if (!this.ensureConnected()) throw this.notConnectedError();
+    const result = await this.client!.getPrompt({ name, arguments: args }, {
+      timeout: this.requestTimeoutMs,
+    });
+    return result;
   }
 
-  // ─── Private: Transport Implementations ───────────────────────────────────
+  // ─── Private: Transport Construction ─────────────────────────────────────
 
-  /**
-   * Connect via stdio — spawns a subprocess and communicates via stdin/stdout.
-   */
-  private async connectStdio(): Promise<void> {
-    if (!this.config.command) {
-      throw new Error(`MCP[${this.config.name}]: No command specified for stdio transport`);
+  /** Build the SDK transport for this server's config (stdio vs sse). */
+  private buildTransport(): Transport {
+    if (this.config.transport === 'stdio') {
+      if (!this.config.command) {
+        throw new Error(`MCP[${this.config.name}]: No command specified for stdio transport`);
+      }
+      const transport = new StdioClientTransport({
+        command: this.config.command,
+        args: this.config.args ?? [],
+        env: this.config.env ?? {},
+        // Pipe stderr so the old client's debug logging behavior is preserved
+        // (the getter returns a PassThrough immediately — safe to attach
+        // before start()).
+        stderr: 'pipe',
+      });
+      transport.stderr?.on('data', (chunk: Buffer) => {
+        const text = chunk.toString().trim();
+        if (text) {
+          logger.debug(`MCP[${this.config.name}] stderr: ${text}`);
+        }
+      });
+      return transport;
     }
 
-    const env = { ...process.env, ...this.config.env };
-
-    // `detached: true` makes the child its own process-group leader so
-    // disconnect() can SIGKILL the WHOLE tree (negative pid). Without it, an
-    // `npx firecrawl-mcp` wrapper's grandchild survives the parent kill and
-    // every pipeline run leaks an orphaned process.
-    this.process = spawn(this.config.command, this.config.args || [], {
-      stdio: ['pipe', 'pipe', 'pipe'],
-      env,
-      detached: true,
-    });
-
-    this.process.on('error', (err) => {
-      this.emit('error', err);
-    });
-
-    this.process.on('exit', (code) => {
-      if (this._connected) {
-        logger.debug(`MCP[${this.config.name}]: Process exited with code ${code}`);
-        this.disconnect();
-      }
-    });
-
-    // Set up line-based reader on stdout
-    this.lineReader = createInterface({
-      input: this.process.stdout!,
-      crlfDelay: Infinity,
-    });
-
-    this.lineReader.on('line', (line: string) => {
-      this.handleMessage(line);
-    });
-
-    // Log stderr for debugging
-    this.process.stderr?.on('data', (data: Buffer) => {
-      const text = data.toString().trim();
-      if (text) {
-        logger.debug(`MCP[${this.config.name}] stderr: ${text}`);
-      }
-    });
-  }
-
-  /**
-   * Connect via SSE — connects to a remote HTTP SSE endpoint.
-   */
-  private async connectSSE(): Promise<void> {
     if (!this.config.url) {
       throw new Error(`MCP[${this.config.name}]: No URL specified for SSE transport`);
     }
-
-    // For SSE transport, we send JSON-RPC messages via HTTP POST
-    // and receive responses via the SSE stream.
-    // This is a simplified implementation that uses fetch + EventSource-like polling.
-    // A full implementation would use an EventSource-compatible reader.
-
-    // Test the connection — try GET first (standard SSE), fall back if server only accepts POST
-    try {
-      const headers = { ...this.config.headers };
-      // Abort the probe after requestTimeoutMs so an unreachable / streaming
-      // endpoint can never hang the pipeline or leak an open socket.
-      const response = await fetch(this.config.url, {
-        headers,
-        method: 'GET',
-        signal: AbortSignal.timeout(this.requestTimeoutMs),
-      });
-      if (response.ok || response.status === 405) {
-        // 405 means the server accepts POST only, which is fine for our implementation
-        logger.debug(`MCP[${this.config.name}]: SSE endpoint reachable at ${this.config.url}`);
-      } else {
-        throw new Error(`SSE endpoint returned status ${response.status}`);
-      }
-    } catch (err) {
-      throw new Error(`Failed to connect to SSE endpoint: ${err instanceof Error ? err.message : String(err)}`);
-    }
-  }
-
-  // ─── Private: JSON-RPC Messaging ─────────────────────────────────────────
-
-  /**
-   * Send a JSON-RPC request and wait for the response.
-   */
-  private async sendRequest<T>(method: string, params?: Record<string, unknown>): Promise<T> {
-    if (!this._connected && method !== 'initialize') {
-      throw new Error('Not connected to MCP server');
-    }
-
-    const id = ++this.requestId;
-    const request: JSONRPCRequest = {
-      jsonrpc: '2.0',
-      id,
-      method,
-      params,
-    };
-
-    return new Promise<T>((resolve, reject) => {
-      const timer = setTimeout(() => {
-        this.pendingRequests.delete(id);
-        reject(new Error(`MCP[${this.config.name}]: Request '${method}' timed out after ${this.requestTimeoutMs}ms`));
-      }, this.requestTimeoutMs);
-
-      this.pendingRequests.set(id, { resolve: resolve as (v: unknown) => void, reject, timer });
-
-      this.sendRaw(request);
+    // Request-level timeouts are enforced per-call via `{ timeout }` on the
+    // client; the transport itself doesn't take one in SDK v1.30.
+    return new StreamableHTTPClientTransport(new URL(this.config.url), {
+      requestInit: this.config.headers ? { headers: this.config.headers } : undefined,
     });
-  }
-
-  /**
-   * Send a raw JSON-RPC message over the transport.
-   */
-  private sendRaw(message: JSONRPCRequest | JSONRPCResponse): void {
-    const raw = JSON.stringify(message) + '\n';
-
-    if (this.config.transport === 'stdio') {
-      if (this.process?.stdin?.writable) {
-        this.process.stdin.write(raw);
-      } else {
-        logger.debug(`MCP[${this.config.name}]: Cannot write to stdin (not writable)`);
-      }
-    } else {
-      // SSE transport: send via HTTP POST
-      this.sendSSEMessage(raw).catch((err) => {
-        logger.debug(`MCP[${this.config.name}]: SSE send failed: ${err.message}`);
-      });
-    }
-  }
-
-  /**
-   * Send a message via SSE HTTP POST.
-   */
-  private async sendSSEMessage(raw: string): Promise<void> {
-    if (!this.config.url) return;
-
-    const response = await fetch(this.config.url, {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        'Accept': 'application/json, text/event-stream',
-        ...this.config.headers,
-      },
-      body: raw,
-      // Abort after requestTimeoutMs so a streaming SSE response body can
-      // never leave a dangling fetch/socket that keeps the CLI alive.
-      signal: AbortSignal.timeout(this.requestTimeoutMs),
-    });
-
-    if (!response.ok) {
-      throw new Error(`SSE request failed: ${response.status}`);
-    }
-
-    // For simplicity, parse the SSE response for the result
-    const text = await response.text();
-    for (const line of text.split('\n')) {
-      if (line.startsWith('data: ')) {
-        const data = line.slice(6).trim();
-        if (data) {
-          this.handleMessage(data);
-        }
-      }
-    }
-  }
-
-  /**
-   * Handle an incoming JSON-RPC message from the transport.
-   */
-  private handleMessage(raw: string): void {
-    let msg: JSONRPCResponse;
-    try {
-      msg = JSON.parse(raw) as JSONRPCResponse;
-    } catch {
-      logger.debug(`MCP[${this.config.name}]: Failed to parse message: ${raw.slice(0, 100)}`);
-      return;
-    }
-
-    // Resolve the matching pending request
-    if (msg.id !== undefined) {
-      const pending = this.pendingRequests.get(msg.id);
-      if (pending) {
-        clearTimeout(pending.timer);
-        this.pendingRequests.delete(msg.id);
-
-        if (msg.error) {
-          pending.reject(new Error(`MCP RPC Error (${msg.error.code}): ${msg.error.message}`));
-        } else {
-          pending.resolve(msg.result);
-        }
-      }
-    }
   }
 
   // ─── Private: Handshake & Discovery ─────────────────────────────────────
 
   /**
-   * Perform the MCP initialization handshake.
-   */
-  private async initialize(): Promise<void> {
-    const result = await this.sendRequest<{
-      protocolVersion: string;
-      capabilities: Record<string, unknown>;
-      serverInfo: Implementation;
-    }>('initialize', {
-      protocolVersion: MCP_PROTOCOL_VERSION,
-      capabilities: {
-        tools: { listChanged: true },
-        resources: { subscribe: true },
-      },
-      clientInfo: {
-        name: 'agent-nuvira',
-        version: '1.14.6',
-      },
-    });
-
-    this._serverInfo = result.serverInfo;
-    logger.debug(`MCP[${this.config.name}]: Initialized — ${result.serverInfo.name} v${result.serverInfo.version} (protocol ${result.protocolVersion})`);
-
-    // Send initialized notification
-    this.sendRaw({
-      jsonrpc: '2.0',
-      method: 'notifications/initialized',
-    } as JSONRPCRequest);
-  }
-
-  /**
-   * Discover server capabilities after initialization.
+   * Discover server capabilities after initialization. The SDK already
+   * re-lists tools/resources when the server advertises `listChanged`; this
+   * is the explicit initial snapshot (mirrors the old client).
    */
   private async discoverCapabilities(): Promise<void> {
     // Try to list tools
@@ -482,6 +345,39 @@ export class MCPClient extends EventEmitter {
       await this.listPrompts();
     } catch {
       // Some servers may not support prompts
+    }
+  }
+
+  /** Reject if `p` doesn't settle within the request timeout. */
+  private withTimeout<T>(p: Promise<T>): Promise<T> {
+    let timer: NodeJS.Timeout | undefined;
+    const timeout = new Promise<never>((_, reject) => {
+      timer = setTimeout(
+        () => reject(new Error(`Connection timed out after ${this.requestTimeoutMs}ms`)),
+        this.requestTimeoutMs,
+      );
+    });
+    return Promise.race([p, timeout]).finally(() => {
+      if (timer) clearTimeout(timer);
+    });
+  }
+
+  /** Whether the SDK client is usable (connected + created). */
+  private ensureConnected(): boolean {
+    return this._connected && this.client !== null;
+  }
+
+  /** The not-connected error message (stable across callers/tests). */
+  private notConnectedError(): Error {
+    return new Error('Not connected to MCP server');
+  }
+
+  /** Fire-and-forget teardown used on connect failure paths. */
+  private async closeClient(): Promise<void> {
+    if (this.client) {
+      const client = this.client;
+      this.client = null;
+      await client.close();
     }
   }
 }

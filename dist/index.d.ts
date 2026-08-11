@@ -17,7 +17,7 @@ export { GitHubReleaseAgent } from './agents/agents/github-release-agent.js';
 export { SecurityAgent } from './agents/agents/security-agent.js';
 export { runAllScans, scanForPII, scanForInjections, scanForDangerousCode, formatScanReport } from './security/scanner.js';
 export type { SecurityFinding, ScanResult } from './security/scanner.js';
-export { runEvalSuite, runEvalTask, scaffoldWorkspace, runHiddenTest, computeEditAccuracy, scoreEvalMetrics, computeEvalSummary, formatEvalReport, formatEvalJSON, formatEvalMarkdown, formatEvalScoreRules, getEvalTasks, getEvalTask, getEvalRuns, getLatestEvalRun, clearEvals, EVAL_SCORE_WEIGHTS, IDEAL_TIME_TO_FIX_MS, } from './learning/eval-framework.js';
+export { runEvalSuite, runEvalTask, scaffoldWorkspace, runHiddenTest, computeEditAccuracy, scoreEvalMetrics, computeEvalSummary, formatEvalReport, formatEvalJSON, formatEvalMarkdown, formatEvalScoreRules, getEvalTasks, getEvalTask, getM2bTasks, getEvalRuns, getLatestEvalRun, writeBenchmarkReport, clearEvals, EVAL_SCORE_WEIGHTS, IDEAL_TIME_TO_FIX_MS, } from './learning/eval-framework.js';
 export type { EvalTask, EvalMetrics, EvalResult, EvalRun, EvalSummary, EvalCategory, RunEvalOptions, } from './learning/eval-framework.js';
 export { EvalCommand } from './cli/eval.js';
 export { RouterBandit, getRouterBandit, resetRouterBandit, sampleBeta, sampleGamma, costAdjustedSuccessReward, COMPLEXITY_BUCKETS, } from './learning/router-bandit.js';

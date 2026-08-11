@@ -25,6 +25,49 @@ export interface ModelDescriptor {
 
 import { InferenceOptions } from '../config/types.js';
 
+// ─── Tool-calling types (H1) ────────────────────────────────────────────────
+
+/** One message in a tool-calling conversation (OpenAI wire shape). */
+export interface ToolMessage {
+  role: 'system' | 'user' | 'assistant' | 'tool';
+  content: string;
+  /** Assistant only — the tool calls this assistant message made. */
+  toolCalls?: ToolCallRequest[];
+  /** Tool only — the id of the tool call being answered. */
+  toolCallId?: string;
+}
+
+/** A tool call in the assistant message (wire form: arguments is a JSON string). */
+export interface ToolCallRequest {
+  id: string;
+  name: string;
+  /** JSON string of the arguments (OpenAI wire convention). */
+  arguments: string;
+}
+
+/** A parsed tool call (arguments is an object). */
+export interface ToolCall {
+  id: string;
+  name: string;
+  arguments: Record<string, unknown>;
+}
+
+/** The JSON-schema form of a tool handed to native tool-calling providers. */
+export interface ToolSchema {
+  name: string;
+  description: string;
+  /** OpenAPI-style JSON schema for the tool's parameters. */
+  parameters: Record<string, unknown>;
+}
+
+/** The response of a native tool-calling call. */
+export interface ToolCallResponse {
+  /** Assistant text content (usually empty when tool calls are present). */
+  content: string;
+  /** Parsed tool calls (empty = end turn). */
+  toolCalls: ToolCall[];
+}
+
 /**
  * Unified inference provider interface.
  * All adapters (local, nim, gemini, openrouter) implement this.
@@ -38,6 +81,18 @@ export interface InferenceProvider {
    * Returns the generated text content.
    */
   generate(prompt: string, options?: InferenceOptions): Promise<string>;
+
+  /**
+   * H1 — native tool-calling (optional). Implemented by providers that speak
+   * the OpenAI `tools`/`tool_calls` protocol. When absent, callers fall back
+   * to the JSON-fallback transport (tools contract in the system prompt).
+   * Returns text content + parsed tool calls (empty toolCalls = end turn).
+   */
+  generateTools?(
+    messages: ToolMessage[],
+    tools: ToolSchema[],
+    options?: InferenceOptions
+  ): Promise<ToolCallResponse>;
 
   /**
    * Generate a streaming completion for the given prompt.

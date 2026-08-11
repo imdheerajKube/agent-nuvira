@@ -11,7 +11,7 @@
 
 import { describe, it, expect, beforeAll, afterAll, vi } from 'vitest';
 import { request as httpRequest, createServer } from 'node:http';
-import { mkdtempSync, writeFileSync, rmSync, mkdirSync } from 'node:fs';
+import { mkdtempSync, writeFileSync, rmSync, mkdirSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
 
 // ─── Test directory (avoid node:os.tmpdir since it gets mocked below) ──────
@@ -1903,5 +1903,105 @@ describe('Dashboard Server', () => {
       // Success = no crash
       expect(true).toBe(true);
     });
+  });
+});
+
+// ═══════════════════════════════════════════════════════════════════════
+// Session 36 — user-declared daily budget (/api/admin/quota)
+// The dashboard edits the SAME routing.quota config the CLI writes.
+// ═══════════════════════════════════════════════════════════════════════
+
+describe('Session 36 — user-declared daily budget (/api/admin/quota)', () => {
+  const buffDir = join(testDir, '.buff');
+  const adminConfig = join(buffDir, 'buffconfig.json');
+  const rbacFile = join(buffDir, 'rbac.json');
+  let adminToken: string;
+
+  async function jsonReq(path: string, method: string, body?: unknown, token?: string) {
+    const res = await fetch(`${baseUrl}${path}`, {
+      method,
+      headers: {
+        'Content-Type': 'application/json',
+        ...(token ? { Authorization: `Bearer ${token}` } : {}),
+      },
+      body: body !== undefined ? JSON.stringify(body) : undefined,
+    });
+    const type = res.headers.get('content-type') || '';
+    const data = type.includes('json') ? await res.json() : null;
+    return { status: res.status, data: data as Record<string, unknown> };
+  }
+
+  const readConfig = () => JSON.parse(readFileSync(adminConfig, 'utf-8')) as {
+    routing?: { quota?: Record<string, { tokensPerWindow?: number; requestsPerWindow?: number }>; governance?: { maxCostUsd?: number } };
+  };
+
+  beforeAll(async () => {
+    mkdirSync(buffDir, { recursive: true });
+    rmSync(adminConfig, { force: true });
+    rmSync(rbacFile, { force: true });
+    const setup = await jsonReq('/api/admin/setup', 'POST', { user: 'admin', password: 'password123' });
+    adminToken = setup.data.token as string;
+    expect(typeof adminToken).toBe('string');
+  });
+
+  afterEach(() => {
+    rmSync(adminConfig, { force: true });
+    rmSync(rbacFile, { force: true });
+  });
+
+  it('GET returns the configured quota + cost cap and the provider list', async () => {
+    writeFileSync(adminConfig, JSON.stringify({
+      routing: {
+        quota: { groq: { tokensPerWindow: 12000, requestsPerWindow: 14400 } },
+        governance: { maxCostUsd: 0.1 },
+      },
+    }), 'utf-8');
+    const r = await jsonReq('/api/admin/quota', 'GET');
+    expect(r.status).toBe(200);
+    const d = r.data as { ok: boolean; quota: Record<string, { tokensPerWindow: number }>; costUsd: number; providers: string[] };
+    expect(d.ok).toBe(true);
+    expect(d.quota.groq.tokensPerWindow).toBe(12000);
+    expect(d.costUsd).toBe(0.1);
+    expect(d.providers).toContain('groq');
+  });
+
+  it('PUT without a token is rejected (401)', async () => {
+    const r = await jsonReq('/api/admin/quota', 'PUT', { quota: { groq: { tokensPerWindow: 5000 } } });
+    expect(r.status).toBe(401);
+  });
+
+  it('PUT with an admin token writes the budget to the SAME config the CLI writes', async () => {
+    const r = await jsonReq('/api/admin/quota', 'PUT', {
+      quota: { groq: { tokensPerWindow: 8000 } },
+      costUsd: 0.05,
+    }, adminToken);
+    expect(r.status).toBe(200);
+    const saved = readConfig();
+    expect(saved.routing?.quota?.groq.tokensPerWindow).toBe(8000);
+    expect(saved.routing?.governance?.maxCostUsd).toBe(0.05);
+    // GET confirms the same numbers — one source of truth.
+    const g = await jsonReq('/api/admin/quota', 'GET');
+    expect((g.data as { quota: Record<string, { tokensPerWindow: number }> }).quota.groq.tokensPerWindow).toBe(8000);
+  });
+
+  it('PUT clears a field when null and removes the provider row via clearProvider', async () => {
+    writeFileSync(adminConfig, JSON.stringify({ routing: { quota: { groq: { tokensPerWindow: 8000 } } } }), 'utf-8');
+    const r = await jsonReq('/api/admin/quota', 'PUT', {
+      quota: { groq: { tokensPerWindow: null } },
+      clearProvider: 'gemini',
+    }, adminToken);
+    expect(r.status).toBe(200);
+    const saved = readConfig();
+    // All fields cleared → the row is removed entirely.
+    expect(saved.routing?.quota?.groq).toBeUndefined();
+  });
+
+  it('PUT with a viewer role is denied for budget fields (403)', async () => {
+    writeFileSync(rbacFile, JSON.stringify({ version: 1, users: { viewer: { role: 'viewer', addedAt: Date.now(), via: 'local' } } }), 'utf-8');
+    await jsonReq('/api/admin/users', 'POST', { user: 'viewer', password: 'password123', role: 'viewer' }, adminToken);
+    const login = await jsonReq('/api/admin/login', 'POST', { user: 'viewer', password: 'password123' });
+    const viewerToken = login.data.token as string;
+    const r = await jsonReq('/api/admin/quota', 'PUT', { quota: { groq: { tokensPerWindow: 5000 } } }, viewerToken);
+    expect(r.status).toBe(403);
   });
 });

@@ -172,10 +172,14 @@ export class ModelCommand extends BaseCommand {
             .option('-j, --json', 'Output as JSON (for scripting and CI)', false)
             .action((action, opts) => this.showBandit(action, opts));
         cmd
-            .command('quota [action]')
-            .description('Show the central quota ledger (tokens/requests per provider × model, reset windows, parked state). Action: reset')
+            .command('quota [action] [provider]')
+            .description('Show the central quota ledger (tokens/requests per provider × model, reset windows, parked state). Actions: reset | set <provider> | clear <provider>')
             .option('-j, --json', 'Output as JSON (for scripting and CI)', false)
-            .action((action, opts) => this.showQuota(action, opts));
+            .option('-t, --tokens <n>', 'Max tokens per reset window (with `set <provider>`; the user-declared daily budget)', parseInt)
+            .option('-r, --requests <n>', 'Max requests per reset window (with `set <provider>`)', parseInt)
+            .option('-w, --window-ms <n>', 'Reset window length in ms, default 24h (with `set <provider>`)', parseInt)
+            .option('-c, --cost-usd <n>', 'Admin hard max cost per call — writes routing.governance.maxCostUsd (with `set <provider>`)', parseFloat)
+            .action((action, provider, opts) => this.showQuota(action, provider, opts));
         // Default action (no subcommand): show info and offer to switch
         cmd
             .action(async () => {
@@ -985,7 +989,7 @@ export class ModelCommand extends BaseCommand {
         }
     }
     // ── Subcommand: quota ─────────────────────────────────────────────────
-    showQuota(action, opts) {
+    showQuota(action, provider, opts) {
         if (action === 'reset') {
             getQuotaLedger().reset();
             console.log('');
@@ -993,8 +997,75 @@ export class ModelCommand extends BaseCommand {
             console.log('');
             return;
         }
-        if (action && action !== 'reset') {
-            logger.error(`Unknown quota action: ${action}. Use \`buff model quota\` to view or \`buff model quota reset\` to reset.`);
+        // Session 36 — user-declared budget: `buff model quota set <provider>`.
+        // Writes the SAME config the dashboard editor writes (routing.quota + the
+        // governance cost cap) so the user's number is enforced by the ledger /
+        // auto-router before requests go out.
+        if (action === 'set' || action === 'clear') {
+            if (!provider) {
+                logger.error(`\`buff model quota ${action}\` needs a provider: buff model quota ${action} <provider> [options].`);
+                return;
+            }
+            if (action === 'clear') {
+                // ConfigManager.save shallow-merges `routing` — save the FULL merged
+                // quota map so sibling providers' limits are never wiped.
+                const all = this.configManager.getAll();
+                const quota = { ...(all.routing?.quota || {}) };
+                if (!quota[provider]) {
+                    logger.info(`No quota limits configured for ${provider} — nothing to clear.`);
+                    return;
+                }
+                delete quota[provider];
+                this.configManager.save({ routing: { quota } });
+                logger.success(`🗑️  Cleared quota limits for ${provider}.`);
+                return;
+            }
+            const { tokens, requests, windowMs, costUsd } = opts;
+            if (tokens === undefined && requests === undefined && windowMs === undefined && costUsd === undefined) {
+                logger.error('Nothing to set — provide at least one of --tokens / --requests / --window-ms / --cost-usd.');
+                logger.info('  Example: buff model quota set groq --tokens 12000 --requests 14400 --cost-usd 0.10');
+                return;
+            }
+            if ((tokens !== undefined && (isNaN(tokens) || tokens < 0)) ||
+                (requests !== undefined && (isNaN(requests) || requests < 0)) ||
+                (windowMs !== undefined && (isNaN(windowMs) || windowMs < 0)) ||
+                (costUsd !== undefined && (isNaN(costUsd) || costUsd < 0))) {
+                logger.error('Invalid limit — all values must be non-negative numbers.');
+                return;
+            }
+            // routing.quota.<provider> — the ledger's configured-limit source.
+            // ConfigManager.save shallow-merges `routing`, so save the FULL merged
+            // quota map (sibling providers survive) + governance in one patch.
+            const all = this.configManager.getAll();
+            const quota = { ...(all.routing?.quota || {}) };
+            quota[provider] = {
+                ...(quota[provider] || {}),
+                ...(tokens !== undefined ? { tokensPerWindow: tokens } : {}),
+                ...(requests !== undefined ? { requestsPerWindow: requests } : {}),
+                ...(windowMs !== undefined ? { windowMs } : {}),
+            };
+            const patch = { routing: { quota } };
+            // Cost cap rides on the existing admin governance surface.
+            if (costUsd !== undefined) {
+                patch.routing.governance = {
+                    ...(all.routing?.governance || {}),
+                    maxCostUsd: costUsd,
+                };
+            }
+            this.configManager.save(patch);
+            console.log('');
+            logger.success(`✅ Budget set for ${provider}:`);
+            console.log(`     tokens/window: ${tokens !== undefined ? tokens.toLocaleString() : (quota[provider]?.tokensPerWindow ?? 'unset')}`);
+            console.log(`     requests/window: ${requests !== undefined ? requests.toLocaleString() : (quota[provider]?.requestsPerWindow ?? 'unset')}`);
+            console.log(`     window ms: ${windowMs !== undefined ? windowMs.toLocaleString() : (quota[provider]?.windowMs ?? '24h default')}`);
+            console.log(`     max cost/call: $${costUsd !== undefined ? costUsd : (this.configManager.getAll().routing?.governance?.maxCostUsd ?? 'unset')}`);
+            console.log('');
+            logger.info('The quota ledger + auto-router enforce this before requests go out; the dashboard');
+            logger.info('Admin → Budget panel edits the same config. `buff model quota reset` clears usage.');
+            return;
+        }
+        if (action && action !== 'reset' && action !== 'set' && action !== 'clear') {
+            logger.error(`Unknown quota action: ${action}. Use \`buff model quota\` to view, \`buff model quota reset\` to reset, or \`buff model quota set <provider> [options]\` to declare a budget.`);
             return;
         }
         const ledger = getQuotaLedger();
@@ -1023,9 +1094,9 @@ export class ModelCommand extends BaseCommand {
         if (statuses.length === 0) {
             logger.info('  No quota usage recorded yet.');
             console.log('');
-            logger.info('  The ledger write-throughs every Auto-routed call; set limits to enforce:');
-            logger.info('  `buff config set routing.quota.gemini.requestsPerWindow 1500`');
-            logger.info('  `buff config set routing.quota.groq.requestsPerWindow 14400`');
+            logger.info('  The ledger write-throughs every Auto-routed call; declare a budget to enforce:');
+            logger.info('  `buff model quota set groq --tokens 12000 --requests 14400 --cost-usd 0.10`');
+            logger.info('  (or `buff config set routing.quota.gemini.requestsPerWindow 1500`)');
             console.log('');
             // Still show the failover timeline — events (parked/failover) can exist
             // even before any usage is recorded.

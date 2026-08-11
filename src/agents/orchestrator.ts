@@ -31,7 +31,7 @@ import { logger } from '../utils/logger.js';
 import { ContextVault } from './context-vault.js';
 import { saveCheckpoint, loadCheckpoint, checkpointIdFor } from './checkpoint-store.js';
 import { Agent } from './agent.js';
-import type { LLMCallFn, AgentResult, TaskStep, OnRateLimit } from './agent.js';
+import type { AgentContext, LLMCallFn, AgentResult, TaskStep, OnRateLimit } from './agent.js';
 import { buildProjectFileTree, truncateTree, SOURCE_EXTENSIONS, IGNORE_DIRS } from './utils/file-tree.js';
 import type { RunResult } from './agents/runner.js';
 import { cleanupSandbox } from './agents/tester.js';
@@ -47,7 +47,15 @@ import { ErrorRepairEngine } from '../learning/error-repair.js';
 import type { RepairMode } from '../learning/error-repair.js';
 import { estimateTokens } from '../learning/cost-tracker.js';
 import { scanForInjections, formatScanReport } from '../security/scanner.js';
-import { getAutoRouter, isAutoModel, isAutoProvider, type AutoRouteResult } from '../learning/auto-router.js';
+import { withLogCorrelation } from '../enterprise/log.js';
+import { getMetrics } from '../enterprise/metrics.js';
+import {
+  getAutoRouter,
+  isAutoModel,
+  isAutoProvider,
+  type AutoRouteResult,
+  type TaskIntent,
+} from '../learning/auto-router.js';
 import { analyzeComplexity, type ComplexityLevel } from '../learning/hybrid-router.js';
 import { getModelRegistry } from '../learning/model-registry.js';
 import { buildAutoResolveOptions } from '../learning/resolve-options.js';
@@ -122,6 +130,28 @@ export interface OrchestratorOptions {
   reviewMode?: boolean;
   /** Auto-route each agent to its recommended model from the ModelRouter */
   autoRouteModels?: boolean;
+  /**
+   * C3: NLU task-intent hint (router TaskIntent vocabulary) from the parsed
+   * goal. Seeded into the planner routing decision's taskProfile.intent so the
+   * orchestrator's strategy switch + the router's task-type see the SAME
+   * vocabulary every action command derives from the shared NLU parser.
+   * Safety flags (requiresVerification / escalationTarget) stay text-derived.
+   */
+  taskIntentHint?: TaskIntent;
+  /**
+   * D1: agent-driven recall context (continue/resume goals). Recalled project
+   * state (sessions/facts/checkpoint) is prepended to the planner's memory
+   * block so the planner sees prior work before planning.
+   */
+  recallContext?: string;
+  /**
+   * Session 20 — RequestContract acceptance criteria for this goal. Seeded
+   * into vault metadata so the verification pass (the reviewer follow-up)
+   * checks the changes against the contract, not just the loose goal
+   * (Decision 3: spec→verify). Optional — the pipeline verifies normally
+   * when absent.
+   */
+  acceptanceCriteria?: string[];
   /**
    * Enable automatic MCP server discovery and tool injection.
    * Set to false to skip MCP auto-connect for a specific pipeline.
@@ -365,6 +395,14 @@ export class Orchestrator {
    * and keeping the CLI process alive long after the pipeline finished.
    */
   async execute(goal: string, options: OrchestratorOptions = {}): Promise<OrchestrationResult> {
+    // K1: one pipeline run = one runId on every log line emitted below.
+    return withLogCorrelation({ runId: `run-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 6)}` }, () =>
+      this.executeCorrelated(goal, options),
+    );
+  }
+
+  /** The actual pipeline body — wrapped by execute() with a K1 runId. */
+  private async executeCorrelated(goal: string, options: OrchestratorOptions = {}): Promise<OrchestrationResult> {
     // P0 reasoning trace: begin the per-pipeline trace so every planner,
     // memory, and task LLM call lands in ~/.buff/memory/reasoning-traces.json
     // (best-effort — a trace failure must never break the pipeline).
@@ -377,6 +415,20 @@ export class Orchestrator {
     let result: OrchestrationResult | undefined;
     try {
       result = await this.executePipeline(goal, options);
+      // Phase A2: workspace continuity — record this run in the project
+      // registry so the current project's last goal / outcome / session are
+      // persisted for `buff doctor` and the D1 auto-recall. Best-effort — a
+      // workspace write must never break the result delivery.
+      try {
+        this.configManager.getWorkspaceStore().recordRun({
+          cwd: process.cwd(),
+          goal,
+          summary: result.summary,
+          success: result.success,
+        });
+      } catch {
+        // Best-effort — never break the pipeline over a workspace write.
+      }
       return result;
     } finally {
       try {
@@ -385,6 +437,14 @@ export class Orchestrator {
         // Best-effort — never break the result delivery over telemetry.
       }
       this.activeTraceId = null;
+      // K2: persist runtime metrics (memory hits/misses, rule/LLM latency)
+      // at the end of every pipeline run so buff doctor / the dashboard see
+      // them in a fresh process.
+      try {
+        getMetrics().save();
+      } catch {
+        // Best-effort — a metrics write must never break result delivery.
+      }
       try {
         resetMCPManager();
       } catch {
@@ -451,6 +511,12 @@ export class Orchestrator {
         // Transparency is best-effort — never break the pipeline.
       }
     };
+    // Session 20: seed the RequestContract acceptance criteria into vault
+    // metadata so every agent (especially the reviewer verification pass)
+    // reads them via context.metadata.acceptanceCriteria. Best-effort.
+    if (options.acceptanceCriteria?.length) {
+      vault.setMeta('acceptanceCriteria', options.acceptanceCriteria);
+    }
     // Reset execution telemetry for this pipeline (shared accumulator used by
     // createLLMProvider, executeSingleTask, and buildResult).
     this.stats = {
@@ -494,6 +560,15 @@ export class Orchestrator {
       ? this.resolveAutoRoutingDecision({ agentType: 'planner', description: goal }, options)
       : undefined;
     if (plannerRoutingDecision) {
+      // Session 46 — weak-model pre-flight gate: when auto routing lands on a
+      // LOCAL model with a low learned score (no verified cloud provider was
+      // available at decision time), warn BEFORE the pipeline burns minutes on
+      // a model that is likely to fail complex tasks. Observed failure: a 4B
+      // local model ran the whole pipeline, the writer silently skipped the
+      // real work, and the reviewer blocked the unchanged code 3× — 12m51s
+      // wasted. Warning only — the user keeps control and can switch
+      // provider/model.
+      this.maybeWarnWeakLocalModel(plannerRoutingDecision);
       this.routingDecisionOverrides.set('planner', plannerRoutingDecision);
       vault.setMeta('routingContext', {
         taskProfile: plannerRoutingDecision.taskProfile,
@@ -618,22 +693,30 @@ export class Orchestrator {
       if (options.verbose) logger.highlight('\n🔍 Searching memory for similar past tasks...');
       let patternContext = '';
       let failureLessonContext = '';
+      let factContext = '';
       try {
-        const { retrieveMemoryContext } = await import('../memory/memory-integration.js');
-        const memoryResult = await retrieveMemoryContext(
+        // Phase B2: route memory recall through the MemoryManager so the
+        // active provider (local today, Mem0 later) builds the persistent-
+        // memory block. Identical recall underneath (retrieveMemoryContext),
+        // plus the is_trivial_prompt gate — a one-word goal returns empty
+        // without touching the stores.
+        const { getMemoryManager } = await import('../memory/manager.js');
+        const memoryResult = await getMemoryManager().buildMemoryBlock(
           goal,
           withTraceCapture(defaultCallLLM, {
             traceId: this.activeTraceId ?? '',
             agentType: 'memory',
             description: `Memory retrieval for: ${goal.slice(0, 80)}`,
           }),
-          3,
         );
-        memoryContext = memoryResult.fewShotContext;
-        // Also inject coding patterns (positive episodic memory) and failure
-        // lessons (negative episodic memory — assessment P1) if available.
+        // The manager composes the FULL persistent-memory block (provider's
+        // static system block framing the per-field recall). Consume it
+        // directly — the old re-composition here was redundant work.
+        memoryContext = memoryResult.block;
+        // Keep the individual contexts for vault meta (dashboard/audit view).
         patternContext = memoryResult.patternContext || '';
         failureLessonContext = memoryResult.failureLessonContext || '';
+        factContext = memoryResult.factContext || '';
         this.eventBus.emit(EventNames.ORCHESTRATOR_AGENT_UPDATE, {
           agentType: 'orchestrator',
           stage: 'memory',
@@ -663,17 +746,26 @@ export class Orchestrator {
       } catch (err) {
         logger.debug(`Memory retrieval failed: ${err}`);
       }
-      // Inject memory context, patterns, and failure lessons into vault for agents
+      // Inject memory context, patterns, and failure lessons into vault for
+      // agents. The composed block already contains every non-empty part, so
+      // there is no re-composition here.
+      // D1: agent-driven recall context (continue/resume) — prepended so the
+      // planner sees the recalled project state before the memory block.
+      if (options.recallContext) {
+        memoryContext = options.recallContext + (memoryContext ? `\n\n${memoryContext}` : '');
+      }
+
       if (memoryContext) {
         vault.setMeta('memoryContext', memoryContext);
       }
       if (patternContext) {
         vault.setMeta('patternContext', patternContext);
-        memoryContext += `\n${patternContext}`;
       }
       if (failureLessonContext) {
         vault.setMeta('failureLessonContext', failureLessonContext);
-        memoryContext += `\n${failureLessonContext}`;
+      }
+      if (factContext) {
+        vault.setMeta('factContext', factContext);
       }
     }
 
@@ -1138,6 +1230,32 @@ export class Orchestrator {
   // ─── Private Helpers ──────────────────────────────────────────────────
 
   /**
+   * Session 46 — weak-model pre-flight warning (extracted for testability).
+   *
+   * When auto routing resolves to a LOCAL model with a low learned score
+   * (score < 0.5), no verified cloud provider was available at decision
+   * time. Warn BEFORE the pipeline burns minutes on a model that is likely
+   * to fail complex tasks. Warning only — the user keeps control.
+   */
+  private maybeWarnWeakLocalModel(decision: AutoRouteResult): void {
+    if (
+      decision.provider === 'local' &&
+      typeof decision.score === 'number' &&
+      decision.score < 0.5
+    ) {
+      logger.warn(
+        `   ⚠️  Auto-routing found only a weak LOCAL model (${decision.model}, score ${decision.score.toFixed(2)}/1.0) — no verified cloud model is available. ` +
+        `Complex tasks may run slowly or fail. Add a real API key (buff provider set) or run with an explicit --model for reliable results.`,
+      );
+      this.eventBus.emit(EventNames.ORCHESTRATOR_AGENT_UPDATE, {
+        agentType: 'orchestrator',
+        stage: 'routing',
+        message: `⚠️ Only a weak local model (${decision.model}) is available — this pipeline may be slow or fail. Add a real API key for better results.`,
+      }, 'orchestrator');
+    }
+  }
+
+  /**
    * Pre-flight project inspection — deterministic, always-on, no LLM calls.
    *
    * Scans the working directory for the project type (manifest files), counts
@@ -1371,7 +1489,7 @@ export class Orchestrator {
     _options: OrchestratorOptions,
   ): Promise<AgentResult> {
     try {
-      return await agent.execute(vault.context, callLLM);
+      return await withLogCorrelation({ taskId: 'single' }, () => agent.execute(vault.context, callLLM));
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
       return { success: false, summary: `${agent.name} errored`, error: msg };
@@ -1643,8 +1761,11 @@ export class Orchestrator {
       let firstFailed = false;
 
       if (useRepair) {
-        // Try the agent — if it fails, attempt auto-repair
-        const firstResult = await agent.execute(vault.context, agentCallLLM);
+        // Try the agent — if it fails, attempt auto-repair. K1: taskId rides
+        // on every log line from this agent's execution.
+        const firstResult = await withLogCorrelation({ taskId: task.id }, () =>
+          agent.execute(vault.context, agentCallLLM),
+        );
 
         if (firstResult.success) {
           result = firstResult;
@@ -1674,14 +1795,72 @@ export class Orchestrator {
             fallbackModels: options.repairFallbackModels,
           });
 
+          // Session 46 — REVIEWER-BLOCKED → WRITER FIX PASS: when the failure
+          // is a REVIEW VERDICT (not an LLM/provider error), repair must apply
+          // the reviewer's feedback via the WRITER and then re-verify with the
+          // reviewer. Re-running the reviewer alone on the same code repeats
+          // the same verdict until the budget dies — the exact failure mode
+          // seen when a weak writer silently skipped a task's real work and
+          // the reviewer correctly blocked the unchanged code three times.
+          const isReviewVerdictFailure =
+            effectiveAgentType === 'reviewer' &&
+            typeof firstResult.error === 'string' &&
+            firstResult.error.includes('Critical issues found');
+          const repairExecuteFn: (ctx: AgentContext, llm: LLMCallFn) => Promise<AgentResult> =
+            isReviewVerdictFailure
+              ? async (ctx, llm) => {
+                  const writer = createAgent('writer', this.moduleRegistry);
+                  const reviewer = createAgent('reviewer', this.moduleRegistry);
+                  if (!writer || !reviewer) return firstResult;
+                  // Latest review output — each fix cycle re-reviews, so the
+                  // feedback evolves toward the still-open issues.
+                  const latestReview = [...ctx.conversations]
+                    .reverse()
+                    .find((c) => c.from === 'Reviewer' && c.to === 'Orchestrator');
+                  const feedback = String(
+                    latestReview?.content || firstResult.details || 'Fix the issues the reviewer found.',
+                  );
+                  // The writer targets the ORIGINAL writer task descriptions
+                  // (the plan's writer steps), not the reviewer step that is
+                  // currently marked running in the shared plan.
+                  const writerTasks = ctx.taskPlan
+                    .filter((s) => s.agentType === 'writer')
+                    .map((s) => `- ${s.description}`)
+                    .join('\n');
+                  const fixGoal = [
+                    ctx.goal,
+                    '',
+                    '[REVIEW FEEDBACK — FIX THESE ISSUES]',
+                    writerTasks ? `Original implementation task(s):\n${writerTasks}` : '',
+                    feedback.slice(0, 6000),
+                  ]
+                    .filter((l) => l !== '')
+                    .join('\n');
+                  this.eventBus.emit(EventNames.ORCHESTRATOR_AGENT_UPDATE, {
+                    agentType: 'writer',
+                    stage: 'fixing',
+                    message: 'Applying reviewer feedback to fix the reported issues…',
+                    taskId: task.id,
+                  }, 'orchestrator');
+                  const fixContext: AgentContext = { ...ctx, goal: fixGoal };
+                  const writeResult = await withLogCorrelation({ taskId: task.id }, () =>
+                    writer.execute(fixContext, llm),
+                  );
+                  if (!writeResult.success) return writeResult;
+                  // Verify the fix — the reviewer verdict is the gate.
+                  return withLogCorrelation({ taskId: task.id }, () =>
+                    reviewer.execute(fixContext, llm),
+                  );
+                }
+              : async (ctx, llm) =>
+                  withLogCorrelation({ taskId: task.id }, () => agent.execute(ctx, llm));
+
           result = await repairEngine.repair(
             task.id,
             vault.context,
             escalatedTaskLLM ?? agentCallLLM,
             errorMessage,
-            async (ctx, llm) => {
-              return agent.execute(ctx, llm);
-            },
+            repairExecuteFn,
           );
 
           if (options.verbose) {
@@ -1693,7 +1872,9 @@ export class Orchestrator {
           stats.alternativeApproaches += repairEngine.alternativeApproaches;
         }
       } else {
-        result = await agent.execute(vault.context, agentCallLLM);
+        result = await withLogCorrelation({ taskId: task.id }, () =>
+          agent.execute(vault.context, agentCallLLM),
+        );
       }
 
       // Track task failure/recovery telemetry
@@ -1933,6 +2114,17 @@ export class Orchestrator {
         break;
     }
 
+    // H2 — delegate steps: the DelegateAgent fans out sub-agent specs in
+    // PARALLEL and aggregates partial failures itself, so the step runs in the
+    // parallel batch like other independent tasks, and the ErrorRepairEngine
+    // is NOT layered on top (re-running a delegate step would re-fan-out every
+    // sub-agent; its own aggregation is the repair signal).
+    if (task.agentType === 'delegate') {
+      runSerially = false;
+      useRepair = false;
+      effectiveAgentType = 'delegate';
+    }
+
     if (requiresVerification && !followUpAgentType && task.agentType !== 'reviewer') {
       followUpAgentType = 'reviewer';
       verificationPass = true;
@@ -1995,6 +2187,7 @@ export class Orchestrator {
           contextHintTokens: task.contextHintTokens,
         }),
         complexityHint: task.complexity as ComplexityLevel | undefined,
+        ...(options.taskIntentHint ? { taskIntentHint: options.taskIntentHint } : {}),
       },
       this.configManager,
     );

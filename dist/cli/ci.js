@@ -19,6 +19,7 @@
 import { Command } from 'commander';
 import { readFileSync, existsSync } from 'node:fs';
 import { BaseCommand } from './commands.js';
+import { PipelineBoard } from './pipeline-board.js';
 import { Orchestrator } from '../agents/orchestrator.js';
 import { applyActiveModel } from './model.js';
 import { ReviewerAgent } from '../agents/agents/reviewer.js';
@@ -77,6 +78,11 @@ export class CICommand extends BaseCommand {
     // ─── Execute ──────────────────────────────────────────────────────────────
     async ciExecute(goal, options) {
         const startTime = Date.now();
+        // E2: live board to STDERR — stdout stays pure machine JSON for CI.
+        // When stderr is a TTY the user sees the full pipeline board; in CI it
+        // degrades to readable log lines. Never pollutes the JSON contract.
+        const board = new PipelineBoard({ stream: process.stderr });
+        board.start(goal);
         // Apply active model from `buff model switch` as defaults
         const activeOpts = applyActiveModel({ provider: options.provider, model: options.model });
         const mergedProvider = activeOpts.provider;
@@ -144,9 +150,11 @@ export class CICommand extends BaseCommand {
                 emitGitHubError('execute', goal, result.error, result.summary);
             }
             // Exit with appropriate code
+            board.finish(result.success);
             process.exit(result.success ? 0 : 1);
         }
         catch (err) {
+            board.finish(false);
             const durationMs = Date.now() - startTime;
             const msg = err instanceof Error ? err.message : String(err);
             const output = {
@@ -170,6 +178,9 @@ export class CICommand extends BaseCommand {
     // ─── Check ────────────────────────────────────────────────────────────────
     async ciCheck(goal, options) {
         const startTime = Date.now();
+        // E2: live board to stderr (same machine-JSON purity rationale as ciExecute).
+        const board = new PipelineBoard({ stream: process.stderr });
+        board.start(goal);
         // Apply active model
         const activeOpts = applyActiveModel({ provider: options.provider, model: options.model });
         try {
@@ -179,6 +190,7 @@ export class CICommand extends BaseCommand {
                 model: activeOpts.model,
                 verbose: false,
             });
+            board.finish(result.success);
             const durationMs = Date.now() - startTime;
             const checkResult = {
                 passed: result.success,
@@ -195,6 +207,7 @@ export class CICommand extends BaseCommand {
             process.exit(result.success ? 0 : 1);
         }
         catch (err) {
+            board.finish(false);
             const durationMs = Date.now() - startTime;
             const msg = err instanceof Error ? err.message : String(err);
             const checkResult = {

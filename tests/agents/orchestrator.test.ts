@@ -45,6 +45,7 @@ import { BUILTIN_PROVIDERS } from '../../src/learning/model-selection.js';
 import { getQuotaLedger, resetQuotaLedger } from '../../src/learning/quota-ledger.js';
 import { getAutoRouter } from '../../src/learning/auto-router.js';
 import * as modelProbe from '../../src/inference/model-probe.js';
+import { EventNames } from '../../src/observability/event-bus.js';
 
 // ─── Module-level mocks ─────────────────────────────────────────────────────
 
@@ -298,6 +299,182 @@ describe('Orchestrator — routing hints on task plan', () => {
     expect(agentResults[0].agent).toBe('reviewer');
     expect(mockReviewerExecute).toHaveBeenCalledTimes(1);
     expect(mockWriterExecute).not.toHaveBeenCalled();
+  });
+
+  it('passes seeded acceptance-criteria metadata to the reviewer verification pass (Session 20)', async () => {
+    // executePipeline seeds options.acceptanceCriteria into vault metadata;
+    // the reviewer follow-up must RECEIVE that metadata (Decision 3: spec→verify).
+    const vault = new ContextVault('Fix the login bug', '/tmp');
+    vault.setTaskPlan([
+      { id: 'step-1', agentType: 'writer', description: 'Apply fix', dependsOn: [], status: 'pending' as const },
+    ]);
+    vault.setMeta('routingContext', {
+      taskProfile: { intent: 'verification', requiresVerification: true },
+    });
+    // The exact seeding executePipeline performs:
+    vault.setMeta('acceptanceCriteria', ['The reported problem is resolved']);
+
+    mockReviewerExecute.mockImplementation(async () => ({ success: true, summary: 'Reviewed' }));
+    mockWriterExecute.mockImplementation(async () => ({ success: true, summary: 'unexpected' }));
+
+    const mockLLM = vi.fn().mockResolvedValue('mock response');
+    const agentResults: any[] = [];
+
+    await (orchestrator as any).executeSingleTask(
+      vault.context.taskPlan[0],
+      vault,
+      {},
+      agentResults,
+      [],
+      mockLLM,
+    );
+
+    expect(mockReviewerExecute).toHaveBeenCalledTimes(1);
+    const reviewerCtx = mockReviewerExecute.mock.calls[0][0];
+    expect(reviewerCtx.metadata.acceptanceCriteria).toEqual(['The reported problem is resolved']);
+  });
+});
+
+describe('Orchestrator — reviewer-blocked → writer fix pass (Session 46)', () => {
+  let orchestrator: Orchestrator;
+
+  beforeEach(() => {
+    orchestrator = new Orchestrator();
+    mockReviewerExecute.mockReset();
+    mockWriterExecute.mockReset();
+    vi.spyOn(orchestrator as any, 'applyFileChanges').mockReturnValue(0);
+    vi.spyOn(logger, 'info').mockImplementation(() => {});
+    vi.spyOn(logger, 'success').mockImplementation(() => {});
+    vi.spyOn(logger, 'warn').mockImplementation(() => {});
+    vi.spyOn(logger, 'highlight').mockImplementation(() => {});
+    vi.spyOn(logger, 'error').mockImplementation(() => {});
+    vi.spyOn(logger, 'debug').mockImplementation(() => {});
+  });
+
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  it('routes a review-verdict failure through a WRITER fix pass instead of re-running the reviewer alone', async () => {
+    const vault = new ContextVault('Build the NVDA addon', '/tmp');
+    vault.setTaskPlan([
+      { id: 'step-0', agentType: 'writer', description: 'Implement addon_handler.py shortcut logic', dependsOn: [], status: 'completed' as const, complexity: 'moderate' as const },
+      { id: 'step-1', agentType: 'reviewer', description: 'Review the addon', dependsOn: ['step-0'], status: 'pending' as const, complexity: 'complex' as const },
+    ]);
+    vault.setMeta('routingContext', {
+      taskProfile: { intent: 'verification', requiresVerification: true },
+    });
+    // Simulate the reviewer's real output already on the conversation log.
+    vault.context.conversations.push({
+      from: 'Reviewer',
+      to: 'Orchestrator',
+      content: 'CRITICAL: shortcut handler missing.\nLocation: addon/addon_handler.py\nFix: register the gesture.',
+      timestamp: Date.now(),
+    });
+
+    // Initial review blocks; the post-fix re-review passes.
+    mockReviewerExecute
+      .mockResolvedValueOnce({ success: false, summary: 'Review found critical issues', error: 'Critical issues found — see review details' })
+      .mockResolvedValueOnce({ success: true, summary: 'Review passed' });
+    mockWriterExecute.mockImplementation(async (ctx: any) => {
+      ctx.fileChanges.push({ path: 'addon/addon_handler.py', newContent: 'fixed', status: 'modified' });
+      return { success: true, summary: 'Applied reviewer feedback' };
+    });
+
+    const mockLLM = vi.fn().mockResolvedValue('mock response');
+    const agentResults: any[] = [];
+
+    await (orchestrator as any).executeSingleTask(
+      vault.context.taskPlan[0],
+      vault,
+      {},
+      agentResults,
+      [],
+      mockLLM,
+    );
+
+    // Initial review failed → fix pass ran the WRITER with the feedback,
+    // then re-reviewed and passed. The writer ran exactly once.
+    expect(mockReviewerExecute).toHaveBeenCalledTimes(2);
+    expect(mockWriterExecute).toHaveBeenCalledTimes(1);
+    const writerCtx = mockWriterExecute.mock.calls[0][0];
+    expect(writerCtx.goal).toContain('REVIEW FEEDBACK');
+    expect(writerCtx.goal).toContain('CRITICAL: shortcut handler missing');
+    expect(writerCtx.goal).toContain('Original implementation task(s)');
+
+    const step = vault.context.taskPlan[0];
+    expect(step.status).toBe('completed');
+    expect(agentResults[0]).toMatchObject({ agent: 'reviewer', success: true, summary: 'Review passed' });
+  });
+
+  it('still fails when the writer fix pass cannot clear the review verdict (budget exhausted)', async () => {
+    const vault = new ContextVault('Build the NVDA addon', '/tmp');
+    vault.setTaskPlan([
+      { id: 'step-0', agentType: 'writer', description: 'Implement addon_handler.py shortcut logic', dependsOn: [], status: 'completed' as const, complexity: 'moderate' as const },
+      { id: 'step-1', agentType: 'reviewer', description: 'Review the addon', dependsOn: ['step-0'], status: 'pending' as const, complexity: 'complex' as const },
+    ]);
+    vault.setMeta('routingContext', {
+      taskProfile: { intent: 'verification', requiresVerification: true },
+    });
+
+    // Reviewer ALWAYS blocks; the writer fix produces no effective change.
+    mockReviewerExecute.mockResolvedValue({ success: false, summary: 'Review found critical issues', error: 'Critical issues found — see review details' });
+    mockWriterExecute.mockResolvedValue({ success: true, summary: 'No files needed changes' });
+
+    const mockLLM = vi.fn().mockResolvedValue('mock response');
+    const agentResults: any[] = [];
+
+    await (orchestrator as any).executeSingleTask(
+      vault.context.taskPlan[0],
+      vault,
+      {},
+      agentResults,
+      [],
+      mockLLM,
+    );
+
+    const step = vault.context.taskPlan[0];
+    expect(step.status).toBe('failed');
+    expect(mockWriterExecute.mock.calls.length).toBeGreaterThanOrEqual(1);
+    expect(agentResults[0].success).toBe(false);
+  });
+});
+
+describe('Orchestrator — weak-model pre-flight gate (Session 46)', () => {
+  it('warns + emits a board event when auto routing lands on a weak local model', () => {
+    const orchestrator = new Orchestrator();
+    const warnSpy = vi.spyOn(logger, 'warn').mockImplementation(() => {});
+    const bus = (orchestrator as any).eventBus;
+    const emitSpy = vi.spyOn(bus, 'emit');
+
+    (orchestrator as any).maybeWarnWeakLocalModel({
+      provider: 'local',
+      model: 'gemma4:e4b',
+      score: 0.28,
+    });
+
+    expect(warnSpy).toHaveBeenCalled();
+    const message = String(warnSpy.mock.calls[0][0]);
+    expect(message).toContain('weak LOCAL model');
+    expect(message).toContain('gemma4:e4b');
+    expect(emitSpy).toHaveBeenCalledWith(
+      EventNames.ORCHESTRATOR_AGENT_UPDATE,
+      expect.objectContaining({ stage: 'routing' }),
+      'orchestrator',
+    );
+    vi.restoreAllMocks();
+  });
+
+  it('stays silent for healthy local scores and non-local providers', () => {
+    const orchestrator = new Orchestrator();
+    const warnSpy = vi.spyOn(logger, 'warn').mockImplementation(() => {});
+
+    (orchestrator as any).maybeWarnWeakLocalModel({ provider: 'local', model: 'qwen3:32b', score: 0.82 });
+    (orchestrator as any).maybeWarnWeakLocalModel({ provider: 'groq', model: 'llama-3.3-70b', score: 0.2 });
+    (orchestrator as any).maybeWarnWeakLocalModel({ provider: 'local', model: 'gemma4:e4b', score: 0.5 }); // boundary: 0.5 is NOT below the gate
+
+    expect(warnSpy).not.toHaveBeenCalled();
+    vi.restoreAllMocks();
   });
 });
 

@@ -23,10 +23,11 @@
  * failover/registry pipeline as the built-ins.
  */
 
-import { InferenceProvider, ModelDescriptor } from './interface.js';
+import { InferenceProvider, ModelDescriptor, ToolCallResponse, ToolMessage, ToolSchema } from './interface.js';
 import { InferenceOptions, ProviderConfig } from '../config/types.js';
 import { logger } from '../utils/logger.js';
 import { streamCompletion } from './sse.js';
+import { chatCompletionsWithTools } from './tools.js';
 import { getModelTags } from './model-catalog.js';
 import { getCostTracker, recordCallWithUsage } from '../learning/cost-tracker.js';
 import { buildConversationKey, cacheReasoning } from '../learning/reasoning-cache.js';
@@ -230,6 +231,42 @@ export class OpenAICompatAdapter implements InferenceProvider {
     }
 
     return content;
+  }
+
+  /** H1 — native tool-calling via the OpenAI `tools` protocol. */
+  async generateTools(
+    messages: ToolMessage[],
+    tools: ToolSchema[],
+    options?: InferenceOptions,
+  ): Promise<ToolCallResponse> {
+    const model = options?.model || this.config.model || 'default';
+    const headers: Record<string, string> = {
+      ...extraHeaders(this.config),
+      ...buildAuthHeaders(this.meta, this.config, options?.apiKey),
+    };
+    return chatCompletionsWithTools({
+      // Azure deployments live at /openai/deployments/{model}/chat/completions
+      // (chatUrl handles the meta.azureDeployments shape — the shared helper's
+      // plain /chat/completions path would 404 there).
+      baseUrl: this.baseUrl,
+      url: chatUrl(this.baseUrl, model, this.meta),
+      headers,
+      model,
+      messages,
+      tools,
+      temperature: options?.temperature ?? this.config.temperature ?? 0.7,
+      maxTokens: options?.maxTokens ?? this.config.maxTokens ?? 4096,
+      timeoutMs: this.config.timeoutMs ?? 30_000,
+      // Cost parity with generate(): tool-calling turns are metered so the
+      // quota ledger enforces free-tier limits here too.
+      onCost: (promptText, contentText) => {
+        try {
+          recordCallWithUsage(getCostTracker(), this.meta.providerId, model, promptText, contentText, undefined);
+        } catch {
+          // Non-critical.
+        }
+      },
+    });
   }
 
   async generateStream(

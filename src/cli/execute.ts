@@ -34,6 +34,12 @@ import { applyActiveModel } from './model.js';
 import { showModelPicker } from './model-picker.js';
 import { resolveProvider } from './router.js';
 import { isAutoModel } from '../learning/auto-router.js';
+import { parseRequestSync } from '../nlu/parser.js';
+import { resolveDispatch } from '../nlu/actions.js';
+import { contractFromParsed, renderContractCard } from '../nlu/contract.js';
+import { maybeAutoRecall, recallCard, recallContextBlock } from '../context/session-recall.js';
+import { toFollowupSuggestions } from '../tools/registry.js';
+import { maybeRunBackgroundDuties } from './duties.js';
 import { recordActionFailure, type FailureSessionState } from '../learning/failure-bookkeeping.js';
 import { getTrajectoryStore } from '../memory/trajectory-store.js';
 import { listCheckpoints } from '../agents/checkpoint-store.js';
@@ -1157,9 +1163,13 @@ export class ExecuteCommand extends BaseCommand {
 
       const model = activeModel || 'default';
 
+      // E3b parity: the Freebuff suggest_followups contract (one vocabulary
+      // everywhere) — exactly 3 followups, specific to this conversation.
       const prompt = [
-        'Given the following goal execution result, suggest 2-3 short follow-up goals',
-        'that build on what was just accomplished. Be specific and actionable.',
+        'Given the following goal execution result, suggest exactly 3 follow-ups',
+        'the user is likely to want next — natural next questions, deeper dives,',
+        'or related directions that build on what was just accomplished;',
+        'specific to this conversation, not generic.',
         '',
         '## Goal',
         result.goal,
@@ -1174,12 +1184,11 @@ export class ExecuteCommand extends BaseCommand {
           : '',
         '',
         'Respond with ONLY a JSON array of objects, each with keys:',
-        '  - "label": A short action label (max 40 chars)',
-        '  - "description": A brief description (max 80 chars)',
-        '  - "goal": The full follow-up goal text (max 200 chars)',
+        '  - "prompt": The full follow-up prompt (max 200 chars)',
+        '  - "label": An optional short action label (max 40 chars)',
         '',
         'Example:',
-        '[{"label":"Add error handling","description":"Handle edge cases and errors","goal":"Add comprehensive error handling to the API routes"}]',
+        '[{"prompt":"Add comprehensive error handling to the API routes","label":"Add error handling"}]',
         '',
         'Return ONLY the JSON array, no other text.',
       ].filter(Boolean).join('\n');
@@ -1190,22 +1199,15 @@ export class ExecuteCommand extends BaseCommand {
         maxTokens: 1024,
       });
 
-      // Parse JSON response
-      const jsonMatch = response.match(/\[[\s\S]*\]/);
-      if (jsonMatch) {
-        const parsed = JSON.parse(jsonMatch[0]) as Array<{
-          label: string;
-          description: string;
-          goal: string;
-        }>;
-
-        if (Array.isArray(parsed) && parsed.length > 0) {
-          return parsed.slice(0, 3).map((s) => ({
-            label: s.label.replace(/^[\u{1F300}-\u{1F9FF}\s]*/u, '').trim() || s.label,
-            description: s.description,
-            goal: s.goal,
-          }));
-        }
+      // E3b parity: validate against the SHARED suggest_followups schema
+      // (the same one the chat loop's tool uses) — one contract everywhere.
+      const followups = toFollowupSuggestions(response);
+      if (followups.length > 0) {
+        return followups.slice(0, 3).map((f) => ({
+          label: (f.label || f.prompt).replace(/^[\u{1F300}-\u{1F9FF}\s]*/u, '').trim() || f.prompt,
+          description: f.label ? f.prompt.slice(0, 80) : '',
+          goal: f.prompt,
+        }));
       }
     } catch (err) {
       // LLM failed — feed the FULL shared bookkeeping path (Nuvira-Router
@@ -1451,6 +1453,21 @@ export class ExecuteCommand extends BaseCommand {
     if (options.writerModel) agentModels['writer'] = options.writerModel;
     if (options.reviewerModel) agentModels['reviewer'] = options.reviewerModel;
 
+    // Session 20: resolve the REQUEST CONTRACT BEFORE the board starts so the
+    // 🧠 understand-card is visible before execution (cross-command parity with
+    // chat's pipeline runs — same shared choke point). Suppressed under
+    // --json-events so stdout stays a pure NDJSON stream.
+    const parsedGoal = parseRequestSync(goal);
+    const dispatch = resolveDispatch(parsedGoal);
+    const contract = contractFromParsed(goal, parsedGoal);
+    if (!options.jsonEvents) {
+      console.log('\n' + renderContractCard(contract, {
+        // The card's resumability claim must match reality: only true when
+        // checkpointing is actually enabled for this run (--checkpoint / --resume).
+        resumable: checkpointOptions(options.checkpoint, options.resume).checkpoint,
+      }) + '\n');
+    }
+
     // Live pipeline board — every step, parallel lane, and agent "thinking"
     // update shown in real time (falls back to plain lines when not a TTY).
     // Also implements the spinner interface so rate-limit prompts pause it.
@@ -1468,10 +1485,35 @@ export class ExecuteCommand extends BaseCommand {
       // finally below ALWAYS restores it, even on an early throw.
       if (options.jsonEvents) setSilent(true);
 
+      // D2: agent-driven background duties — one-line health + models status
+      // at session start (throttled; silent in jsonEvents so stdout stays
+      // NDJSON). Best-effort — never breaks execution.
+      await maybeRunBackgroundDuties(this.configManager, {
+        silent: !!options.jsonEvents,
+      }).catch(() => { /* best-effort */ });
+
+      // D1: agent-driven auto-recall — continue/resume goals recall the
+      // project's prior work into the planner context (cross-command parity
+      // with chat). Best-effort — never breaks execution. In --json-events
+      // mode the card is suppressed so stdout stays pure NDJSON.
+      let recallContext: string | undefined;
+      if (dispatch.mode === 'recall') {
+        try {
+          const recall = await maybeAutoRecall(process.cwd(), this.configManager.getWorkspaceStore());
+          if (recall) {
+            if (!options.jsonEvents) console.log(recallCard(recall));
+            recallContext = recallContextBlock(recall);
+          }
+        } catch { /* recall must never break execution */ }
+      }
+
       const orchestrator = new Orchestrator(this.configManager);
       const result = await orchestrator.execute(goal, {
         provider,
         model,
+        taskIntentHint: dispatch.taskIntentHint,
+        recallContext,
+        acceptanceCriteria: contract.acceptanceCriteria,
         agentModels: Object.keys(agentModels).length > 0 ? agentModels : undefined,
         dryRun: options.dryRun,
         verbose: options.verbose,

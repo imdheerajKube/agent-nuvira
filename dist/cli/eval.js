@@ -18,15 +18,16 @@
  *   buff eval clear                    — Clear all eval data
  */
 import { Command } from 'commander';
-import ora from 'ora';
 import { BaseCommand } from './commands.js';
+import { PipelineBoard } from './pipeline-board.js';
+import { getEventBus, EventNames } from '../observability/event-bus.js';
 import { resolveProvider } from './router.js';
 import { isPlaceholderApiKey } from '../config/manager.js';
 import { getAutoRouter } from '../learning/auto-router.js';
 import { buildAutoResolveOptions } from '../learning/resolve-options.js';
 import { recordRoutingDecision } from '../learning/routing-history.js';
 import { logger } from '../utils/logger.js';
-import { runEvalSuite, getEvalTasks, getEvalRuns, formatEvalReport, formatEvalMarkdown, formatEvalScoreRules, clearEvals, } from '../learning/eval-framework.js';
+import { runEvalSuite, getEvalTasks, getM2bTasks, getEvalRuns, formatEvalReport, formatEvalMarkdown, formatEvalScoreRules, resolvePaceBudget, writeBenchmarkReport, compareEvalRuns, selectCompareRuns, clearEvals, } from '../learning/eval-framework.js';
 export class EvalCommand extends BaseCommand {
     create() {
         const command = new Command('eval')
@@ -38,7 +39,9 @@ export class EvalCommand extends BaseCommand {
             .option('-p, --provider <provider>', 'Provider to evaluate')
             .option('-m, --model <model>', 'Model to evaluate')
             .option('--tasks <filter>', 'Task filter: task ID, or "quick"/"medium"/"slow" by time estimate')
+            .option('--suite <suite>', 'Curated task suite: "m2b" (experience-parity benchmark) or "full" (all tasks)', 'full')
             .option('--budget <amount>', 'Maximum cost in USD before stopping', parseFloat)
+            .option('--pace', 'Stop when the provider\'s declared DAILY token budget (routing.quota.<provider>.tokensPerWindow) is reached — the Decision 21 gate guard', false)
             .option('--format <format>', 'Output format: text (default), json, markdown', 'text')
             .option('--keep-workspaces', 'Keep temp workspaces for debugging', false)
             .option('--routing', 'Evaluate the exact provider/model pairs the Auto router picks (closes the routing→quality loop)', false)
@@ -62,6 +65,7 @@ export class EvalCommand extends BaseCommand {
             .command('results')
             .description('Show previous eval runs')
             .option('--last', 'Show only the most recent run', false)
+            .option('--compare', 'Compare the two most recent runs across the M2b experience-parity axes', false)
             .option('--format <format>', 'Output format: text (default), json, markdown', 'text')
             .action(async (options) => {
             await this.showResults(options || {});
@@ -174,25 +178,44 @@ export class EvalCommand extends BaseCommand {
             }
             logger.highlight(`  ── Evaluating router pick: ${key} ──`);
             console.log('');
-            const spinner = ora({ text: `Running ${tasks.length} eval tasks against ${key}...`, spinner: 'dots' }).start();
+            // E2: live board — the eval suite runs the real pipeline per task, so
+            // orchestrator lanes flow in automatically; onProgress drives the
+            // activity line between tasks.
+            const board = new PipelineBoard();
+            board.start(`Eval: ${key}`);
             try {
                 const onProgress = (current, total, task) => {
-                    spinner.text = `[${current}/${total}] ${task.title} (${task.difficulty})`;
+                    getEventBus().emit(EventNames.ORCHESTRATOR_AGENT_UPDATE, {
+                        agentType: 'eval',
+                        stage: 'running',
+                        message: `[${current}/${total}] ${task.title} (${task.difficulty})`,
+                    }, 'eval');
                 };
+                // Session 37 — --pace: honor the user-declared daily token budget.
+                // (Decision 21) Same warn as the direct run path: --pace with no
+                // declared budget must not silently run unpaced.
+                const pace = options.pace
+                    ? resolvePaceBudget(this.configManager, resolved.type)
+                    : { paceTokens: undefined, usedBefore: 0 };
+                if (options.pace && pace.paceTokens === undefined) {
+                    logger.warn(`--pace: no declared daily budget for ${resolved.type} — running unpaced. Declare one with \`buff model quota set ${resolved.type} --tokens N\`.`);
+                }
                 const run = await runEvalSuite(resolved.provider, resolved.type, pick.model, {
                     taskIds,
                     timeEstimate,
                     budget: options.budget,
+                    paceTokens: pace.paceTokens,
+                    paceUsedBefore: pace.usedBefore,
                     onProgress,
                     keepWorkspaces: options.keepWorkspaces,
                 });
-                spinner.stop();
+                board.finish(true);
                 runs.push(run);
                 console.log(formatEvalReport(run));
                 console.log('');
             }
             catch (err) {
-                spinner.fail(`Evaluation failed for ${key}`);
+                board.finish(false);
                 logger.error(String(err));
             }
         }
@@ -262,7 +285,14 @@ export class EvalCommand extends BaseCommand {
                 taskIds = options.tasks.split(',').map((t) => t.trim());
             }
         }
-        let tasks = getEvalTasks();
+        let tasks;
+        if (options.suite === 'm2b') {
+            tasks = getM2bTasks();
+            logger.info(`  Suite: M2b experience-parity benchmark (${tasks.length} tasks)`);
+        }
+        else {
+            tasks = getEvalTasks();
+        }
         if (taskIds && taskIds.length > 0)
             tasks = tasks.filter((t) => taskIds.includes(t.id));
         if (timeEstimate)
@@ -275,20 +305,54 @@ export class EvalCommand extends BaseCommand {
         if (options.budget)
             logger.info(`  Budget: $${options.budget.toFixed(2)}`);
         console.log('');
-        const spinner = ora({ text: `Running ${tasks.length} evaluation tasks...`, spinner: 'dots' }).start();
+        // E2: live board — replaces the bare ora spinner (standing rule).
+        const board = new PipelineBoard();
+        board.start(`Evaluation: ${providerName}/${model}`);
         try {
             const onProgress = (current, total, task) => {
-                spinner.text = `[${current}/${total}] ${task.title} (${task.difficulty})`;
+                getEventBus().emit(EventNames.ORCHESTRATOR_AGENT_UPDATE, {
+                    agentType: 'eval',
+                    stage: 'running',
+                    message: `[${current}/${total}] ${task.title} (${task.difficulty})`,
+                }, 'eval');
             };
+            // Session 37 — --pace: honor the user-declared daily token budget
+            // (Decision 21): the run stops before a task would cross the cap.
+            let paceTokens;
+            let paceUsedBefore = 0;
+            if (options.pace) {
+                const pace = resolvePaceBudget(this.configManager, providerName);
+                paceTokens = pace.paceTokens;
+                paceUsedBefore = pace.usedBefore;
+                if (paceTokens === undefined) {
+                    logger.warn(`--pace: no declared daily budget for ${providerName} — running unpaced. Declare one with \`buff model quota set ${providerName} --tokens N\`.`);
+                }
+                else {
+                    logger.info(`⏱  Pacing under the declared daily budget: ${paceTokens.toLocaleString()} tokens (${paceUsedBefore.toLocaleString()} used today).`);
+                }
+            }
             const run = await runEvalSuite(provider, providerName, model, {
                 taskIds,
                 timeEstimate,
                 budget: options.budget,
+                paceTokens,
+                paceUsedBefore,
                 onProgress,
                 keepWorkspaces: options.keepWorkspaces,
             });
-            spinner.stop();
+            board.finish(true);
             console.log('');
+            // Auto-write M2b benchmark report to docs/benchmarks/ when running the suite
+            if (options.suite === 'm2b') {
+                try {
+                    const { join } = await import('node:path');
+                    const reportPath = writeBenchmarkReport(run, join(process.cwd(), 'docs', 'benchmarks'));
+                    logger.success(`📊 M2b benchmark report: ${reportPath}`);
+                }
+                catch {
+                    // non-critical
+                }
+            }
             switch (options.format) {
                 case 'json':
                     console.log(JSON.stringify(run, null, 2));
@@ -317,7 +381,7 @@ export class EvalCommand extends BaseCommand {
             }
         }
         catch (err) {
-            spinner.fail('Evaluation failed');
+            board.finish(false);
             logger.error(String(err));
         }
     }
@@ -351,6 +415,19 @@ export class EvalCommand extends BaseCommand {
             logger.info('No eval results found. Run `buff eval run` first.');
             return;
         }
+        if (options.compare) {
+            // M2b Part 1.9 gate (getEvalRuns is newest-first). selectCompareRuns
+            // prefers the most recent run with the SAME provider+model so a phase's
+            // metric movement is never confounded by a model/provider switch.
+            const pair = selectCompareRuns(runs);
+            if (!pair) {
+                logger.error('Need at least two eval runs to compare. Run `buff eval run --suite m2b` again.');
+                console.log('');
+                return;
+            }
+            console.log(compareEvalRuns(pair[0], pair[1]));
+            return;
+        }
         if (options.last) {
             const format = options.format || 'text';
             switch (format) {
@@ -382,7 +459,7 @@ export class EvalCommand extends BaseCommand {
             console.log(`     Score: ${(s.avgCompositeScore * 100).toFixed(1)}%  |  Completion: ${(s.completionRate * 100).toFixed(0)}%  |  Tests: ${(s.testPassRate * 100).toFixed(0)}%  |  Recovery: ${(s.recoveryRate * 100).toFixed(0)}%  |  Cost: $${s.totalCostUsd.toFixed(6)}`);
         }
         console.log(`\n  Show details: buff eval results --last`);
-        console.log(`  Compare improvement: run ` + '`buff eval run` again and compare scores across runs.');
+        console.log(`  Compare runs: buff eval results --compare  (M2b experience-parity axes: stuck / rework / time)`);
         console.log('');
     }
 }

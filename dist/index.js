@@ -20,7 +20,7 @@ export { GitHubReleaseAgent } from './agents/agents/github-release-agent.js';
 export { SecurityAgent } from './agents/agents/security-agent.js';
 export { runAllScans, scanForPII, scanForInjections, scanForDangerousCode, formatScanReport } from './security/scanner.js';
 // ─── Evaluation Framework exports ───────────────────────────────────────────
-export { runEvalSuite, runEvalTask, scaffoldWorkspace, runHiddenTest, computeEditAccuracy, scoreEvalMetrics, computeEvalSummary, formatEvalReport, formatEvalJSON, formatEvalMarkdown, formatEvalScoreRules, getEvalTasks, getEvalTask, getEvalRuns, getLatestEvalRun, clearEvals, EVAL_SCORE_WEIGHTS, IDEAL_TIME_TO_FIX_MS, } from './learning/eval-framework.js';
+export { runEvalSuite, runEvalTask, scaffoldWorkspace, runHiddenTest, computeEditAccuracy, scoreEvalMetrics, computeEvalSummary, formatEvalReport, formatEvalJSON, formatEvalMarkdown, formatEvalScoreRules, getEvalTasks, getEvalTask, getM2bTasks, getEvalRuns, getLatestEvalRun, writeBenchmarkReport, clearEvals, EVAL_SCORE_WEIGHTS, IDEAL_TIME_TO_FIX_MS, } from './learning/eval-framework.js';
 export { EvalCommand } from './cli/eval.js';
 // ─── Learning exports ───────────────────────────────────────────────────────
 export { RouterBandit, getRouterBandit, resetRouterBandit, sampleBeta, sampleGamma, costAdjustedSuccessReward, COMPLEXITY_BUCKETS, } from './learning/router-bandit.js';
@@ -185,6 +185,22 @@ async function main() {
         const { getChatHistory, ChatHistory } = await import('./context/history.js');
         const { getVectorStore } = await import('./memory/vector-store.js');
         const configManager = new ConfigManager();
+        // Phase A1: attach the secret vault and hydrate `vault:` key refs into
+        // real secrets. Runtime adapters/router then read keys transparently
+        // whether they live in the OS keychain, the encrypted-file tier, or
+        // plaintext (legacy). Best-effort — never blocks startup.
+        try {
+            const { Vault } = await import('./enterprise/vault.js');
+            const vault = Vault.open({});
+            configManager.attachVault(vault);
+            const hydrated = await configManager.hydrateVaultRefs();
+            if (hydrated > 0) {
+                logger.debug(`Vault: hydrated ${hydrated} provider key ref(s)`);
+            }
+        }
+        catch {
+            // Best-effort — a vault failure must never prevent the CLI from starting.
+        }
         // Surface placeholder/sentinel API keys (env-var names as values, doc
         // examples) so the user knows why a provider is being skipped by auto
         // routing — instead of discovering it via mysterious 401s. Best-effort.

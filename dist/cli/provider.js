@@ -151,7 +151,7 @@ export class ProviderCommand extends BaseCommand {
             const pStatus = statusIcon(r.available, r.configured) + '  ' + statusLabel(r.available, r.configured);
             const pKey = r.pt === 'local'
                 ? chalk.dim('No key needed')
-                : keyPreview(this.configManager.getAll().providers[r.pt]?.apiKey);
+                : keyPreview(this.configManager.getProviderConfig(r.pt).config.apiKey);
             const pModel = modelLabel(r.model);
             console.log(`  ${padRight(pName, 24)} ${padRight(pStatus, 18)} ${padRight(pKey, 18)} ${pModel}`);
             // Show error for unreachable configured providers
@@ -205,7 +205,7 @@ export class ProviderCommand extends BaseCommand {
                 console.log(`    ${chalk.green('✅')} API Key: ${chalk.dim('No key needed (local)')}`);
             }
             else if (hasKey) {
-                const key = this.configManager.getAll().providers[pt]?.apiKey;
+                const key = this.configManager.getProviderConfig(pt).config.apiKey;
                 console.log(`    ${chalk.green('✅')} API Key: ${keyPreview(key)}`);
             }
             else {

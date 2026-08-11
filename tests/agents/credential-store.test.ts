@@ -193,15 +193,39 @@ describe('CredentialStore', () => {
       try { rmSync(askPassPath, { force: true }); } catch { /* best-effort */ }
     });
 
-    it('should write the correct token to the askpass script', async () => {
+    it('should pass the token via env, not inline in the askpass script', async () => {
+      // Cross-platform safety: the token rides in BUFF_GIT_TOKEN env so a
+      // token containing &, %, ^, quotes, etc. can never break the helper
+      // script, and the secret never lands in a temp file on disk.
       const store = new CredentialStore();
       (store as any)._git.token = 'super_secret_token_123';
       (store as any)._collected = true;
 
       store.setupGitCredentials();
+      expect(process.env.BUFF_GIT_TOKEN).toBe('super_secret_token_123');
+      expect(process.env.BUFF_GIT_USERNAME).toBeTruthy();
+
       const askPassPath = process.env.GIT_ASKPASS!;
       const scriptContent = readFileSync(askPassPath, 'utf-8');
-      expect(scriptContent).toContain('super_secret_token_123');
+      expect(scriptContent).not.toContain('super_secret_token_123');
+      try { rmSync(askPassPath, { force: true }); } catch { /* best-effort */ }
+    });
+
+    it('should write a platform-appropriate askpass helper (.sh on unix, .cmd on win32)', async () => {
+      const store = new CredentialStore();
+      (store as any)._git.token = 'ghp_plat';
+      (store as any)._collected = true;
+
+      store.setupGitCredentials();
+      const askPassPath = process.env.GIT_ASKPASS!;
+      expect(existsSync(askPassPath)).toBe(true);
+      if (process.platform === 'win32') {
+        expect(askPassPath.endsWith('.cmd')).toBe(true);
+        expect(readFileSync(askPassPath, 'utf-8')).toContain('@echo off');
+      } else {
+        expect(askPassPath.endsWith('.sh')).toBe(true);
+        expect(readFileSync(askPassPath, 'utf-8')).toContain('#!/bin/sh');
+      }
       try { rmSync(askPassPath, { force: true }); } catch { /* best-effort */ }
     });
   });
@@ -274,15 +298,19 @@ describe('CredentialStore', () => {
   // ── cleanup() ─────────────────────────────────────────────────────────
 
   describe('cleanup()', () => {
-    it('should unset GIT_ASKPASS and GIT_TERMINAL_PROMPT', () => {
+    it('should unset GIT_ASKPASS, helper env vars, and GIT_TERMINAL_PROMPT', () => {
       const store = new CredentialStore();
       (store as any)._git.token = 'ghp_test';
       (store as any)._collected = true;
 
       store.setupGitCredentials();
+      expect(process.env.BUFF_GIT_TOKEN).toBeTruthy();
+      expect(process.env.BUFF_GIT_USERNAME).toBeTruthy();
       store.cleanup();
 
       expect(process.env.GIT_ASKPASS).toBeUndefined();
+      expect(process.env.BUFF_GIT_TOKEN).toBeUndefined();
+      expect(process.env.BUFF_GIT_USERNAME).toBeUndefined();
       expect(process.env.GIT_TERMINAL_PROMPT).toBeUndefined();
     });
 

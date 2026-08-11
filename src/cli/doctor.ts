@@ -30,12 +30,15 @@ import { ProviderFactory } from '../inference/factory.js';
 import { CATALOG_PROVIDER_IDS, getCatalogProvider } from '../inference/provider-catalog.js';
 import type { ProviderType, BuffConfig } from '../config/types.js';
 import { getPluginRegistry } from '../plugins/registry.js';
+import { countKeyStates, ConfigManager } from '../config/manager.js';
 import { recordRegistryFailure } from '../learning/provider-fallback.js';
 import { getQuotaLedger } from '../learning/quota-ledger.js';
 import { getCostTracker } from '../learning/cost-tracker.js';
 import { verifyAuditFile } from '../enterprise/audit-chain.js';
 import { resolve } from 'node:path';
 import { readLockfile, buildSbom, verifySbom, parseSbom } from '../enterprise/sbom.js';
+import { VAULT_AUDIT_FILENAME } from '../enterprise/vault-audit.js';
+import { getMetrics } from '../enterprise/metrics.js';
 
 /**
  * Build the P6 M6.6 SBOM posture for doctor. When a stored `sbom.json` exists
@@ -670,10 +673,420 @@ export function buildEnterpriseChecks(inputs: {
     checkGatewayTelemetry(inputs.config, inputs.gatewayUsage || { providers: [], totalRequests: 0, totalTokens: 0, totalCostUsd: 0 }),
   );
 
+  // 6. K2 runtime metrics (counters/timers persisted to metrics.json)
+  checks.push(checkRuntimeMetrics());
+
   return checks;
 }
 
+/**
+ * K2 — surface the runtime metrics store (counters/timers) as a doctor check.
+ * Reads the same `metrics.json` the dashboard uses; never writes (the store
+ * is written by the runs themselves).
+ */
+function checkRuntimeMetrics(): CheckResult {
+  try {
+    const snap = getMetrics().snapshot();
+    const counterNames = Object.keys(snap.counters);
+    const timerNames = Object.keys(snap.timers);
+    const detail: string[] = [];
+    if (counterNames.length > 0) {
+      detail.push(`counters: ${counterNames.map((n) => `${n}=${snap.counters[n]}`).join(', ')}`);
+    }
+    if (timerNames.length > 0) {
+      detail.push(
+        `timers: ${timerNames.map((n) => `${n} avg=${snap.timers[n].avgMs.toFixed(0)}ms max=${snap.timers[n].maxMs.toFixed(0)}ms (${snap.timers[n].count}x)`).join(', ')}`,
+      );}
+    return {
+      name: 'Runtime Metrics (K2)',
+      status: 'pass',
+      message:
+        counterNames.length + timerNames.length > 0
+          ? `${counterNames.length} counter(s) + ${timerNames.length} timer(s) recorded`
+          : 'No metrics recorded yet — they accumulate as you run tasks',
+      detail: detail.length > 0 ? detail.join(' · ') : 'Enable metrics by running any task (memory hits/misses, rule/LLM latency).',
+      fix: undefined,
+    };
+  } catch {
+    return {
+      name: 'Runtime Metrics (K2)',
+      status: 'pass',
+      message: 'No metrics recorded yet',
+      detail: 'Enable metrics by running any task (memory hits/misses, rule/LLM latency).',
+      fix: undefined,
+    };
+  }
+}
+
+
 // ─── DoctorCommand ──────────────────────────────────────────────────────────
+
+
+// ── System Checks ─────────────────────────────────────────────────────────
+
+export async function runSystemChecks(configManager: ConfigManager): Promise<CheckResult[]> {
+  const checks: CheckResult[] = [];
+
+  // 1. Config directory
+  const buffDir = join(homedir(), '.buff');
+  checks.push({
+    name: 'Config Directory',
+    status: existsSync(buffDir) ? 'pass' : 'warn',
+    message: existsSync(buffDir)
+      ? `~/.buff/ exists`
+      : `~/.buff/ not found`,
+    detail: existsSync(buffDir)
+      ? `Path: ${buffDir}`
+      : `Run 'buff config' or create ~/.buff/ manually`,
+    fix: !existsSync(buffDir) ? 'Run `buff doctor --fix` to create required directories' : undefined,
+  });
+
+  // 1b. Secret vault tier (Phase A1) — OS keychain when available, else the
+  // AES-256-GCM encrypted-file fallback, else none. Informational: a missing
+  // vault is a WARN (keys fall back to plaintext config), never a failure.
+  try {
+    const { Vault } = await import('../enterprise/vault.js');
+    const vault = Vault.open({});
+    const st = vault.status();
+    const cfg = configManager.getAll();
+    const { refs: vaultRefs, plaintext: plaintextKeys } = countKeyStates(cfg);
+    const plaintextNote = plaintextKeys > 0
+      ? `, ${plaintextKeys} key(s) still plaintext — run 'buff config vault migrate-keys'`
+      : '';
+    const fixMigrate = plaintextKeys > 0 ? 'buff config vault migrate-keys' : undefined;
+    if (st.tier === 'keyring') {
+      checks.push({
+        name: 'Secret Vault',
+        status: 'pass',
+        message: 'OS keychain active (Tier 1)',
+        detail: `${st.backend} on ${st.platform}. ${vaultRefs} vault ref(s) in config${plaintextNote}.`,
+        fix: fixMigrate,
+      });
+    } else if (st.tier === 'os-cli') {
+      checks.push({
+        name: 'Secret Vault',
+        status: 'pass',
+        message: 'OS-native credential store active (Tier 1b)',
+        detail: `${st.backend} on ${st.platform}. ${vaultRefs} vault ref(s) in config${plaintextNote}.`,
+        fix: fixMigrate,
+      });
+    } else if (st.tier === 'aes-file') {
+      checks.push({
+        name: 'Secret Vault',
+        status: 'pass',
+        message: 'AES-256-GCM encrypted file active (Tier 2 fallback)',
+        detail: `No OS keyring/CLI store available — using ${buffDir}/vault.enc (0600). ${vaultRefs} vault ref(s) in config${plaintextNote}.`,
+        fix: fixMigrate,
+      });
+    } else {
+      checks.push({
+        name: 'Secret Vault',
+        status: 'warn',
+        message: 'No vault — API keys stored in plaintext buffconfig.json',
+        detail: `No reachable OS keyring, no OS credential tool, and BUFF_VAULT_PASSPHRASE not set (platform ${st.platform}). ${plaintextKeys} plaintext key(s) in config.`,
+        fix: 'Install an OS keychain/Secret Service, or set BUFF_VAULT_PASSPHRASE, then run `buff config vault migrate-keys`',
+      });
+    }
+  } catch {
+    // Best-effort — a vault check failure must never break doctor.
+  }
+
+  // 2. Memory directory
+  const memoryDir = join(buffDir, 'memory');
+  const memoryExists = existsSync(memoryDir);
+  checks.push({
+    name: 'Memory Directory',
+    status: memoryExists ? 'pass' : 'warn',
+    message: memoryExists
+      ? `~/.buff/memory/ exists`
+      : `~/.buff/memory/ not found (will be created on first use)`,
+    detail: `Path: ${memoryDir}`,
+  });
+
+  // 2b. Workspace DB + current project (Phase A2). The project registry
+  // (node:sqlite with a JSON fallback tier) is where project continuity is
+  // read from — `buff doctor` reports the active backend + path and the
+  // project bound to the CURRENT cwd so the user sees continuity state at
+  // a glance. Informational: a degraded/missing workspace is a WARN (the
+  // agent still works), never a failure.
+  try {
+    const workspace = configManager.getWorkspaceStore();
+    const status = workspace.status(process.cwd());
+    const backendLabel = status.backend === 'sqlite' ? 'SQLite' : 'JSON fallback';
+    checks.push({
+      name: 'Workspace DB',
+      status: 'pass',
+      message: `${backendLabel} project registry — ${status.projectCount} project(s) tracked`,
+      detail: `Path: ${status.dbPath}`,
+    });
+    const current = status.currentProject;
+    if (current) {
+      checks.push({
+        name: 'Current Project',
+        status: 'pass',
+        message: `${current.id} — last ${current.lastRunAt > 0 ? `run ${new Date(current.lastRunAt).toLocaleString()}` : 'activity: none yet'}`,
+        detail: current.lastGoal
+          ? `Last goal: ${current.lastGoal.slice(0, 140)}`
+          : 'No goal recorded yet for this project',
+      });
+    } else {
+      checks.push({
+        name: 'Current Project',
+        status: 'warn',
+        message: 'No project row for the current directory yet',
+        detail: 'It will be registered on the first chat/execute session (project switch is instant).',
+      });
+    }
+  } catch {
+    checks.push({
+      name: 'Workspace DB',
+      status: 'warn',
+      message: 'Workspace registry unavailable',
+      detail: 'Project continuity is degraded (non-critical) — the agent still works.',
+    });
+  }
+
+  // 2c. Fact memory (Phase B1). The project-scoped fact store feeds planner
+  // prompts and D1 auto-recall — `buff doctor` reports how many facts exist
+  // per project so memory state is visible at a glance. Best-effort: a
+  // degraded store is a WARN, never a failure.
+  try {
+    const { getFactStore } = await import('../memory/fact-store.js');
+    const factStats = await getFactStore().stats();
+    const perProject = Object.entries(factStats.byProject)
+      .sort(([, a], [, b]) => b - a)
+      .slice(0, 5)
+      .map(([p, c]) => `${p} (${c})`)
+      .join(', ');
+    checks.push({
+      name: 'Fact Memory',
+      status: factStats.total > 0 ? 'pass' : 'warn',
+      message: `${factStats.total} fact(s) stored`,
+      detail: factStats.total > 0
+        ? `By project: ${perProject}${Object.keys(factStats.byProject).length > 5 ? '…' : ''}`
+        : 'No facts yet — facts are extracted from sessions and injected into planner prompts (Phase B1).',
+      fix: factStats.total === 0 ? 'Run a chat session; facts accumulate automatically (or `buff memory facts add --text "…"`)' : undefined,
+    });
+  } catch {
+    checks.push({
+      name: 'Fact Memory',
+      status: 'warn',
+      message: 'Fact store unavailable',
+      detail: 'Fact memory is degraded (non-critical) — the agent still works.',
+    });
+  }
+
+  // 3. Docker availability (quick check)
+  try {
+    const dockerCheck = await checkDocker();
+    checks.push(dockerCheck);
+  } catch {
+    checks.push({
+      name: 'Docker',
+      status: 'warn',
+      message: 'Docker check skipped',
+      detail: 'Could not verify Docker installation',
+    });
+  }
+
+  // 4. Plugin directories
+  const pluginDir = join(buffDir, 'plugins');
+  const agentDir = join(buffDir, 'agents');
+  const workflowDir = join(buffDir, 'workflows');
+
+  checks.push({
+    name: 'Plugin Directories',
+    status: 'pass',
+    message: `plugins/${existsSync(pluginDir) ? '✅' : '⏳'} agents/${existsSync(agentDir) ? '✅' : '⏳'} workflows/${existsSync(workflowDir) ? '✅' : '⏳'}`,
+    detail: `~/.buff/plugins/: ${existsSync(pluginDir) ? 'exists' : 'will create on first scan'}\n` +
+            `~/.buff/agents/: ${existsSync(agentDir) ? 'exists' : 'will create on first scan'}\n` +
+            `~/.buff/workflows/: ${existsSync(workflowDir) ? 'exists' : 'will create on first scan'}`,
+  });
+
+  // 5. CLI tool availability checks
+  const cliChecks = checkCliTools();
+  checks.push(...cliChecks);
+
+  // 6. Online connectivity check
+  try {
+    const onlineCheck = await checkConnectivity();
+    checks.push(onlineCheck);
+  } catch {
+    checks.push({
+      name: 'Internet Connectivity',
+      status: 'warn',
+      message: 'Connectivity check skipped',
+      detail: 'Could not verify internet access',
+    });
+  }
+
+  return checks;
+}
+
+/**
+ * The shared all-checks composition (dashboard command-runner + `buff doctor
+ * --enterprise`): system checks + the enterprise self-check. One source — the
+ * dashboard's /api/admin/checks and the CLI render the SAME checks.
+ */
+export async function runAllChecks(
+  configManager: ConfigManager,
+): Promise<{ system: CheckResult[]; enterprise: CheckResult[] }> {
+  const [system, enterprise] = await Promise.all([
+    runSystemChecks(configManager),
+    runEnterpriseChecks(configManager),
+  ]);
+  return { system, enterprise };
+}
+
+/**
+ * Build the P7 M7.1 enterprise self-check (gateway, secrets backend, audit
+ * chains, SBOM posture, governance) as pure CheckResults — shared between the
+ * CLI (--enterprise) and the dashboard command-runner.
+ */
+export async function runEnterpriseChecks(configManager: ConfigManager): Promise<CheckResult[]> {
+  const all = configManager.getAll();
+  // Gateway probe: only when a baseUrl is configured.
+  let gatewayProbe: NuviraSidecarProbe | null = null;
+  let gatewayConfigured = false;
+  try {
+    const nuviraCfg = all.providers?.nuvira;
+    gatewayConfigured = !!nuviraCfg?.baseUrl;
+    if (gatewayConfigured) {
+      gatewayProbe = await probeNuviraSidecar(nuviraCfg?.baseUrl, 5000, nuviraCfg?.apiKey);
+    }
+  } catch {
+    // Best-effort — a probe failure is reported as a fail check below.
+  }
+  const memoryDir = join(homedir(), '.buff', 'memory');
+  const auditFiles = [
+    { name: 'quota-events.jsonl', path: join(memoryDir, 'quota-events.jsonl') },
+    { name: 'model-registry-actions.jsonl', path: join(memoryDir, 'model-registry-actions.jsonl') },
+    // K3: the vault access log is a first-class audit chain (verify below).
+    // Filename from the vault-audit module — single source of truth.
+    { name: VAULT_AUDIT_FILENAME, path: join(memoryDir, VAULT_AUDIT_FILENAME) },
+  ];
+  return buildEnterpriseChecks({
+    config: all,
+    env: { ...process.env },
+    gatewayProbe,
+    gatewayConfigured,
+    auditFiles,
+    // P6 M6.3: chain verification for each audit store (file I/O here,
+    // pure core in the check).
+    auditChains: auditFiles.map((f) => ({
+      name: f.name,
+      result: verifyAuditFile(f.path, f.name.replace(/\.jsonl$/, '')),
+    })),
+    // P6 M6.6: SBOM supply-chain posture — a stored sbom.json (when
+    // present) is compared against the current lockfile so DRIFT is real;
+    // otherwise the fresh-BOM license posture is reported.
+    sbomVerify: checkCurrentSbomPosture(process.cwd()),
+    lockfilePresent: readLockfile(process.cwd()) !== null,
+    gatewayUsage: buildGatewayUsage(configManager),
+  });
+}
+
+/**
+ * Check availability of common CLI tools needed by the runner and sandbox.
+ */
+function checkCliTools(): CheckResult[] {
+  const tools = ['node', 'npm', 'git', 'python3', 'python'];
+  const results: CheckResult[] = [];
+
+  for (const tool of tools) {
+    try {
+      const output = execSync(`${tool} --version 2>&1`, {
+        encoding: 'utf-8',
+        timeout: 5000,
+        stdio: 'pipe',
+      });
+      const version = output.trim().split('\n')[0] || 'unknown';
+      results.push({
+        name: `CLI: ${tool}`,
+        status: 'pass',
+        message: `${tool} ${version}`,
+        detail: `${tool} is available at PATH`,
+      });
+    } catch {
+      // For python, both python3 and python are tried; only warn if both missing
+      if (tool === 'python' && results.some((r) => r.name === 'CLI: python3' && r.status === 'pass')) {
+        continue; // python3 already found, skip warning for python
+      }
+      results.push({
+        name: `CLI: ${tool}`,
+        status: 'warn',
+        message: `${tool} not found in PATH`,
+        detail: `The ${tool} command is not available. Some runner steps may not work.`,
+        fix: tool === 'node'
+          ? 'Install Node.js from https://nodejs.org/'
+          : tool === 'npm'
+            ? 'npm is bundled with Node.js — install Node.js from https://nodejs.org/'
+            : tool === 'git'
+              ? 'Install Git from https://git-scm.com/downloads'
+              : `Install ${tool} using your system package manager`,
+      });
+    }
+  }
+
+  return results;
+}
+
+async function checkDocker(): Promise<CheckResult> {
+  try {
+    const { getSandboxManager } = await import('../sandbox/manager.js');
+    const manager = getSandboxManager();
+    const available = await manager.isDockerAvailable();
+
+    return {
+      name: 'Docker',
+      status: available ? 'pass' : 'warn',
+      message: available ? 'Docker is available' : 'Docker is not available',
+      detail: available
+        ? 'Sandbox mode can use Docker for isolated code execution'
+        : 'Code execution will use temp directories (less secure)',
+      fix: !available ? 'Install Docker Desktop: https://docs.docker.com/get-docker/' : undefined,
+    };
+  } catch {
+    return {
+      name: 'Docker',
+      status: 'warn',
+      message: 'Docker module not loaded',
+      detail: 'Sandbox features may be limited',
+    };
+  }
+}
+
+async function checkConnectivity(): Promise<CheckResult> {
+  try {
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), 5000);
+
+    const response = await fetch('https://www.google.com/generate_204', {
+      signal: controller.signal,
+      method: 'HEAD',
+    });
+    clearTimeout(timeout);
+
+    const status = response.ok || response.status === 204 ? 'pass' : 'warn';
+    return {
+      name: 'Internet Connectivity',
+      status: status as HealthStatus,
+      message: status === 'pass' ? 'Internet reachable' : 'Connectivity issues detected',
+      detail: status === 'pass'
+        ? 'Cloud providers can make API calls'
+        : 'Check your network connection for cloud providers',
+    };
+  } catch {
+    return {
+      name: 'Internet Connectivity',
+      status: 'warn',
+      message: 'No internet access detected',
+      detail: 'Cloud providers (Groq, Gemini, NIM, OpenRouter) will not work. Local models are unaffected.',
+      fix: 'Check your WiFi/Ethernet connection or proxy settings',
+    };
+  }
+}
+
 
 export class DoctorCommand extends BaseCommand {
   create(): Command {
@@ -723,7 +1136,7 @@ export class DoctorCommand extends BaseCommand {
     console.log('');
 
     // ── System-level checks ─────────────────────────────────────────────
-    const sysChecks = await this.runSystemChecks();
+    const sysChecks = await runSystemChecks(this.configManager);
 
     // ── Enterprise self-check (P7 M7.1) ────────────────────────────────
     // `buff doctor --enterprise` runs the P7 self-check: gateway health,
@@ -731,43 +1144,9 @@ export class DoctorCommand extends BaseCommand {
     // governance policy presence. Runs INSTEAD of the per-provider loop; a
     // missing optional piece is INFORMATIVE (warn), never a hard fail.
     if (options.enterprise) {
-      const all = this.configManager.getAll();
-      // Gateway probe: only when a baseUrl is configured.
-      let gatewayProbe: NuviraSidecarProbe | null = null;
-      let gatewayConfigured = false;
-      try {
-        const nuviraCfg = all.providers?.nuvira;
-        gatewayConfigured = !!nuviraCfg?.baseUrl;
-        if (gatewayConfigured) {
-          gatewayProbe = await probeNuviraSidecar(nuviraCfg?.baseUrl, 5000, nuviraCfg?.apiKey);
-        }
-      } catch {
-        // Best-effort — a probe failure is reported as a fail check below.
-      }
-      const memoryDir = join(homedir(), '.buff', 'memory');
-      const auditFiles = [
-        { name: 'quota-events.jsonl', path: join(memoryDir, 'quota-events.jsonl') },
-        { name: 'model-registry-actions.jsonl', path: join(memoryDir, 'model-registry-actions.jsonl') },
-      ];
-      const enterpriseChecks = buildEnterpriseChecks({
-        config: all,
-        env: { ...process.env },
-        gatewayProbe,
-        gatewayConfigured,
-        auditFiles,
-        // P6 M6.3: chain verification for each audit store (file I/O here,
-        // pure core in the check).
-        auditChains: auditFiles.map((f) => ({
-          name: f.name,
-          result: verifyAuditFile(f.path, f.name.replace(/\.jsonl$/, '')),
-        })),
-        // P6 M6.6: SBOM supply-chain posture — a stored sbom.json (when
-        // present) is compared against the current lockfile so DRIFT is real;
-        // otherwise the fresh-BOM license posture is reported.
-        sbomVerify: checkCurrentSbomPosture(process.cwd()),
-        lockfilePresent: readLockfile(process.cwd()) !== null,
-        gatewayUsage: buildGatewayUsage(this.configManager),
-      });
+      // Shared core (dashboard command-runner + CLI): the SAME enterprise
+      // self-check both surfaces render — one source, zero divergence.
+      const enterpriseChecks = await runEnterpriseChecks(this.configManager);
       console.log('');
       this.renderEnterpriseSection(enterpriseChecks);
       console.log('');
@@ -795,7 +1174,7 @@ export class DoctorCommand extends BaseCommand {
     if (options.nuvira) {
       let nuviraCfg: { baseUrl?: string; apiKey?: string } | undefined;
       try {
-        nuviraCfg = this.configManager.getAll().providers?.nuvira;
+        nuviraCfg = this.configManager.getProviderConfig('nuvira').config;
       } catch {
         // Best-effort — never break the probe on a config read failure.
       }
@@ -893,185 +1272,6 @@ export class DoctorCommand extends BaseCommand {
       logger.info('\nWatch mode stopped.');
       process.exit(0);
     });
-  }
-
-  // ── System Checks ─────────────────────────────────────────────────────────
-
-  private async runSystemChecks(): Promise<CheckResult[]> {
-    const checks: CheckResult[] = [];
-
-    // 1. Config directory
-    const buffDir = join(homedir(), '.buff');
-    checks.push({
-      name: 'Config Directory',
-      status: existsSync(buffDir) ? 'pass' : 'warn',
-      message: existsSync(buffDir)
-        ? `~/.buff/ exists`
-        : `~/.buff/ not found`,
-      detail: existsSync(buffDir)
-        ? `Path: ${buffDir}`
-        : `Run 'buff config' or create ~/.buff/ manually`,
-      fix: !existsSync(buffDir) ? 'Run `buff doctor --fix` to create required directories' : undefined,
-    });
-
-    // 2. Memory directory
-    const memoryDir = join(buffDir, 'memory');
-    const memoryExists = existsSync(memoryDir);
-    checks.push({
-      name: 'Memory Directory',
-      status: memoryExists ? 'pass' : 'warn',
-      message: memoryExists
-        ? `~/.buff/memory/ exists`
-        : `~/.buff/memory/ not found (will be created on first use)`,
-      detail: `Path: ${memoryDir}`,
-    });
-
-    // 3. Docker availability (quick check)
-    try {
-      const dockerCheck = await this.checkDocker();
-      checks.push(dockerCheck);
-    } catch {
-      checks.push({
-        name: 'Docker',
-        status: 'warn',
-        message: 'Docker check skipped',
-        detail: 'Could not verify Docker installation',
-      });
-    }
-
-    // 4. Plugin directories
-    const pluginDir = join(buffDir, 'plugins');
-    const agentDir = join(buffDir, 'agents');
-    const workflowDir = join(buffDir, 'workflows');
-
-    checks.push({
-      name: 'Plugin Directories',
-      status: 'pass',
-      message: `plugins/${existsSync(pluginDir) ? '✅' : '⏳'} agents/${existsSync(agentDir) ? '✅' : '⏳'} workflows/${existsSync(workflowDir) ? '✅' : '⏳'}`,
-      detail: `~/.buff/plugins/: ${existsSync(pluginDir) ? 'exists' : 'will create on first scan'}\n` +
-              `~/.buff/agents/: ${existsSync(agentDir) ? 'exists' : 'will create on first scan'}\n` +
-              `~/.buff/workflows/: ${existsSync(workflowDir) ? 'exists' : 'will create on first scan'}`,
-    });
-
-    // 5. CLI tool availability checks
-    const cliChecks = this.checkCliTools();
-    checks.push(...cliChecks);
-
-    // 6. Online connectivity check
-    try {
-      const onlineCheck = await this.checkConnectivity();
-      checks.push(onlineCheck);
-    } catch {
-      checks.push({
-        name: 'Internet Connectivity',
-        status: 'warn',
-        message: 'Connectivity check skipped',
-        detail: 'Could not verify internet access',
-      });
-    }
-
-    return checks;
-  }
-
-  /**
-   * Check availability of common CLI tools needed by the runner and sandbox.
-   */
-  private checkCliTools(): CheckResult[] {
-    const tools = ['node', 'npm', 'git', 'python3', 'python'];
-    const results: CheckResult[] = [];
-
-    for (const tool of tools) {
-      try {
-        const output = execSync(`${tool} --version 2>&1`, {
-          encoding: 'utf-8',
-          timeout: 5000,
-          stdio: 'pipe',
-        });
-        const version = output.trim().split('\n')[0] || 'unknown';
-        results.push({
-          name: `CLI: ${tool}`,
-          status: 'pass',
-          message: `${tool} ${version}`,
-          detail: `${tool} is available at PATH`,
-        });
-      } catch {
-        // For python, both python3 and python are tried; only warn if both missing
-        if (tool === 'python' && results.some((r) => r.name === 'CLI: python3' && r.status === 'pass')) {
-          continue; // python3 already found, skip warning for python
-        }
-        results.push({
-          name: `CLI: ${tool}`,
-          status: 'warn',
-          message: `${tool} not found in PATH`,
-          detail: `The ${tool} command is not available. Some runner steps may not work.`,
-          fix: tool === 'node'
-            ? 'Install Node.js from https://nodejs.org/'
-            : tool === 'npm'
-              ? 'npm is bundled with Node.js — install Node.js from https://nodejs.org/'
-              : tool === 'git'
-                ? 'Install Git from https://git-scm.com/downloads'
-                : `Install ${tool} using your system package manager`,
-        });
-      }
-    }
-
-    return results;
-  }
-
-  private async checkDocker(): Promise<CheckResult> {
-    try {
-      const { getSandboxManager } = await import('../sandbox/manager.js');
-      const manager = getSandboxManager();
-      const available = await manager.isDockerAvailable();
-
-      return {
-        name: 'Docker',
-        status: available ? 'pass' : 'warn',
-        message: available ? 'Docker is available' : 'Docker is not available',
-        detail: available
-          ? 'Sandbox mode can use Docker for isolated code execution'
-          : 'Code execution will use temp directories (less secure)',
-        fix: !available ? 'Install Docker Desktop: https://docs.docker.com/get-docker/' : undefined,
-      };
-    } catch {
-      return {
-        name: 'Docker',
-        status: 'warn',
-        message: 'Docker module not loaded',
-        detail: 'Sandbox features may be limited',
-      };
-    }
-  }
-
-  private async checkConnectivity(): Promise<CheckResult> {
-    try {
-      const controller = new AbortController();
-      const timeout = setTimeout(() => controller.abort(), 5000);
-
-      const response = await fetch('https://www.google.com/generate_204', {
-        signal: controller.signal,
-        method: 'HEAD',
-      });
-      clearTimeout(timeout);
-
-      const status = response.ok || response.status === 204 ? 'pass' : 'warn';
-      return {
-        name: 'Internet Connectivity',
-        status: status as HealthStatus,
-        message: status === 'pass' ? 'Internet reachable' : 'Connectivity issues detected',
-        detail: status === 'pass'
-          ? 'Cloud providers can make API calls'
-          : 'Check your network connection for cloud providers',
-      };
-    } catch {
-      return {
-        name: 'Internet Connectivity',
-        status: 'warn',
-        message: 'No internet access detected',
-        detail: 'Cloud providers (Groq, Gemini, NIM, OpenRouter) will not work. Local models are unaffected.',
-        fix: 'Check your WiFi/Ethernet connection or proxy settings',
-      };
-    }
   }
 
   // ── Provider Checks ───────────────────────────────────────────────────────
@@ -1431,7 +1631,7 @@ export class DoctorCommand extends BaseCommand {
       throw new Error(`No plugin found for provider type: ${providerType}`);
     }
 
-    const config = this.configManager.getAll().providers[providerType as ProviderType] || {};
+    const { config } = this.configManager.getProviderConfig(providerType as ProviderType);
     return plugin.createProvider(config);
   }
 

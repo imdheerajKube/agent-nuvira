@@ -11,6 +11,20 @@
  */
 import { Agent, type AgentContext, type AgentResult, type LLMCallFn } from '../agent.js';
 /**
+ * Distinguish a GENUINE "no changes needed" LLM judgment from a format
+ * failure (Session 46). A writer that explicitly declines — nothing to
+ * change, already implemented, no modifications required — produced a valid
+ * result and the step is a legitimate no-op. A writer that rambled or was
+ * truncated WITHOUT emitting any `filepath:` code block did not do its job;
+ * stamping that as a success silently skipped the task's real work (the
+ * exact failure observed when a weak model left an NVDA addon incomplete
+ * and the reviewer correctly blocked it three times in a row).
+ *
+ * Exported so sibling LLM-driven modules (EditModule) apply the same
+ * decline-vs-format-failure distinction (Session 46 follow-up).
+ */
+export declare function responseIndicatesNoChanges(response: string): boolean;
+/**
  * WriterAgent — Proposes code changes by reading files, generating new versions
  * via the LLM, and storing FileChange objects in the shared context.
  * Does NOT write to disk directly; the orchestrator handles that.

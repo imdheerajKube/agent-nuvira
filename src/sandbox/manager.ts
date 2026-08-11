@@ -31,14 +31,14 @@
  * ```
  */
 
-import { execSync, spawn } from 'node:child_process';
+import { spawn } from 'node:child_process';
 import { existsSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { mkdtempSync, readdirSync } from 'node:fs';
 
 import { logger } from '../utils/logger.js';
-import { getHostShell } from '../utils/shell.js';
+import { getHostShell, runShellSync } from '../utils/shell.js';
 import type {
   ResourceLimits,
   SandboxConfig,
@@ -286,6 +286,10 @@ export class SandboxManager {
   /**
    * Execute a command inside the sandbox container with timeout enforcement.
    *
+   * Timeout is enforced with a Node-side timer (SIGTERM then SIGKILL), never
+   * with the GNU coreutils `timeout` binary — that tool is absent from stock
+   * macOS and behaves differently on Windows cmd.exe.
+   *
    * @param containerId - Container ID
    * @param command - Command to execute (as a string, passed to /bin/sh -c)
    * @param timeoutMs - Timeout in milliseconds (default: config timeout)
@@ -299,45 +303,14 @@ export class SandboxManager {
     const container = this.ensureContainer(containerId);
     const resolvedTimeout = timeoutMs || this.config.limits.timeoutMs;
 
-    // Escape the command for safe shell execution
-    const escapedCommand = command.replace(/"/g, '\\"').replace(/`/g, '\\`').replace(/\$/g, '\\$');
-
     const shell = this.config.image.shell || '/bin/bash';
-    const execCmd = `docker exec -i "${container.containerId}" ${shell} -c "${escapedCommand}"`;
 
-    const startTime = Date.now();
-    let timedOut = false;
-
-    // Use a timeout wrapper
-    const timeoutCmd = `timeout ${Math.floor(resolvedTimeout / 1000)} ${execCmd}`;
-
-    try {
-      const result = await this.execHostCommand(timeoutCmd, resolvedTimeout + 10_000);
-
-      if (result.exitCode === 124) {
-        // Exit code 124 means 'timeout' command killed the process
-        timedOut = true;
-      }
-
-      return {
-        success: result.exitCode === 0,
-        stdout: result.stdout,
-        stderr: result.stderr,
-        exitCode: timedOut ? 124 : result.exitCode,
-        durationMs: Date.now() - startTime,
-        timedOut,
-      };
-    } catch (err) {
-      return {
-        success: false,
-        stdout: '',
-        stderr: '',
-        exitCode: -1,
-        durationMs: Date.now() - startTime,
-        timedOut,
-        error: err instanceof Error ? err.message : String(err),
-      };
-    }
+    return this.spawnDockerExec(
+      container.containerId,
+      shell,
+      command,
+      resolvedTimeout,
+    );
   }
 
   /**
@@ -353,16 +326,45 @@ export class SandboxManager {
     const container = this.ensureContainer(containerId);
     const resolvedTimeout = timeoutMs || this.config.limits.timeoutMs;
 
+    const shell = this.config.image.shell || '/bin/bash';
+
+    return this.spawnDockerExec(
+      container.containerId,
+      shell,
+      command,
+      resolvedTimeout,
+      onChunk,
+    );
+  }
+
+  /**
+   * Spawn `docker exec` with a Node-side timeout and stream optional chunks.
+   * Shared by runCommand / runCommandWithOutput so timeout semantics are
+   * identical across all platforms (no reliance on the GNU `timeout` binary).
+   */
+  private spawnDockerExec(
+    containerId: string,
+    shell: string,
+    rawCommand: string,
+    timeoutMs: number,
+    onChunk?: (chunk: string) => void,
+  ): Promise<SandboxExecResult> {
     return new Promise<SandboxExecResult>((resolvePromise) => {
       const startTime = Date.now();
-      const escapedCommand = command.replace(/"/g, '\\"').replace(/`/g, '\\`');
-      const shell = this.config.image.shell || '/bin/bash';
-      const fullCommand = `docker exec -i "${container.containerId}" ${shell} -c "${escapedCommand}"`;
+      // Escape consistently here — the single choke point for shell safety.
+      // Note: on Windows the command string still flows through cmd.exe via
+      // getHostShell(), where `%` is expanded; `%` escaping is intentionally
+      // left to the caller's command text (pre-existing behavior).
+      const escapedCommand = rawCommand
+        .replace(/"/g, '\\"')
+        .replace(/`/g, '\\`')
+        .replace(/\$/g, '\\$');
+      const fullCommand = `docker exec -i "${containerId}" ${shell} -c "${escapedCommand}"`;
 
       const childProcess = spawn(fullCommand, [], {
         shell: getHostShell(),
         stdio: ['pipe', 'pipe', 'pipe'],
-        timeout: resolvedTimeout,
+        timeout: timeoutMs,
       });
 
       let stdout = '';
@@ -376,7 +378,7 @@ export class SandboxManager {
         setTimeout(() => {
           try { childProcess.kill('SIGKILL'); } catch { /* already dead */ }
         }, 2000);
-      }, resolvedTimeout);
+      }, timeoutMs);
 
       childProcess.stdout?.on('data', (data: Buffer) => {
         const chunk = data.toString();
@@ -446,9 +448,11 @@ export class SandboxManager {
     const container = this.ensureContainer(containerId);
 
     try {
-      // Stop the container gracefully first
+      // Stop the container gracefully first. No `2>/dev/null` redirect —
+      // that's bash syntax; cmd.exe needs `2>nul`. stderr is captured by
+      // execHostCommand and simply ignored here.
       await this.execHostCommand(
-        `docker stop --time ${Math.floor(this.config.stopTimeoutMs / 1000)} "${containerId}" 2>/dev/null`,
+        `docker stop --time ${Math.floor(this.config.stopTimeoutMs / 1000)} "${containerId}"`,
         30_000,
       );
     } catch {
@@ -458,7 +462,7 @@ export class SandboxManager {
     try {
       // Remove the container
       await this.execHostCommand(
-        `docker rm -f "${containerId}" 2>/dev/null`,
+        `docker rm -f "${containerId}"`,
         30_000,
       );
     } catch {
@@ -501,42 +505,24 @@ export class SandboxManager {
 
   /**
    * Run a command on the host machine (not inside a container).
-   * Used for docker CLI operations.
+   * Used for docker CLI operations. Goes through the shared shell choke
+   * point (E1) — emits exec:shell events; never throws on non-zero exit.
    */
   private async execHostCommand(
     command: string,
     timeoutMs = 60_000,
   ): Promise<{ exitCode: number; stdout: string; stderr: string }> {
-    return new Promise((resolve) => {
-      try {
-        const output = execSync(command, {
-          timeout: timeoutMs,
-          stdio: 'pipe',
-          encoding: 'utf-8',
-          shell: getHostShell(),
-          maxBuffer: 10 * 1024 * 1024, // 10 MB
-        });
-
-        resolve({
-          exitCode: 0,
-          stdout: output.trim(),
-          stderr: '',
-        });
-      } catch (err) {
-        const error = err as {
-          status?: number;
-          stdout?: string | Buffer;
-          stderr?: string | Buffer;
-          message?: string;
-        };
-
-        resolve({
-          exitCode: error.status ?? 1,
-          stdout: (typeof error.stdout === 'string' ? error.stdout : String(error.stdout || '')).trim(),
-          stderr: (typeof error.stderr === 'string' ? error.stderr : String(error.stderr || '')).trim(),
-        });
-      }
+    const result = runShellSync(command, {
+      timeoutMs,
+      maxBuffer: 10 * 1024 * 1024, // 10 MB
+      source: 'sandbox',
     });
+
+    return {
+      exitCode: result.exitCode,
+      stdout: result.stdout.trim(),
+      stderr: result.stderr.trim(),
+    };
   }
 
   /**

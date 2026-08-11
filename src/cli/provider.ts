@@ -171,7 +171,7 @@ export class ProviderCommand extends BaseCommand {
       const pStatus = statusIcon(r.available, r.configured) + '  ' + statusLabel(r.available, r.configured);
       const pKey = r.pt === 'local'
         ? chalk.dim('No key needed')
-        : keyPreview(this.configManager.getAll().providers[r.pt as ProviderType]?.apiKey);
+        : keyPreview(this.configManager.getProviderConfig(r.pt as ProviderType).config.apiKey);
       const pModel = modelLabel(r.model);
 
       console.log(`  ${padRight(pName, 24)} ${padRight(pStatus, 18)} ${padRight(pKey, 18)} ${pModel}`);
@@ -239,7 +239,7 @@ export class ProviderCommand extends BaseCommand {
       if (isLocal) {
         console.log(`    ${chalk.green('✅')} API Key: ${chalk.dim('No key needed (local)')}`);
       } else if (hasKey) {
-        const key = this.configManager.getAll().providers[pt as ProviderType]?.apiKey;
+        const key = this.configManager.getProviderConfig(pt as ProviderType).config.apiKey;
         console.log(`    ${chalk.green('✅')} API Key: ${keyPreview(key)}`);
       } else {
         allPassed = false;

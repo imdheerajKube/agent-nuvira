@@ -296,15 +296,31 @@ export class CredentialStore {
                 });
                 if (!addedKeys.includes(keyPath)) {
                     if (_sshPassphrase) {
-                        // Use SSH_ASKPASS for password-protected keys
-                        const askPassScript = join(tmpdir(), 'buff-ssh-askpass.sh');
-                        writeFileSync(askPassScript, `#!/bin/sh\necho "${_sshPassphrase}"\n`, 'utf-8');
+                        // Use an askpass helper for password-protected keys.
+                        // Platform-aware: `.cmd` on Windows (no chmod, no /dev/null),
+                        // `.sh` on Unix. The passphrase rides in env (never inlined into
+                        // the script) so special chars can't break the helper.
+                        const isWindows = process.platform === 'win32';
+                        const askPassScript = join(tmpdir(), isWindows ? 'buff-ssh-askpass.cmd' : 'buff-ssh-askpass.sh');
+                        const askPassContent = isWindows
+                            ? '@echo off\r\necho %BUFF_SSH_PASSPHRASE%\r\n'
+                            : `#!/bin/sh\necho "${_sshPassphrase}"\n`;
+                        writeFileSync(askPassScript, askPassContent, 'utf-8');
                         try {
-                            execSync('chmod +x ' + askPassScript, { timeout: 2000 });
-                            execSync(`SSH_ASKPASS="${askPassScript}" ssh-add "${keyPath}" < /dev/null 2>&1`, {
+                            if (!isWindows) {
+                                execSync('chmod +x ' + askPassScript, { timeout: 2000 });
+                            }
+                            execSync(`ssh-add "${keyPath}"`, {
                                 timeout: 5000,
                                 encoding: 'utf-8',
                                 stdio: 'pipe',
+                                env: {
+                                    ...process.env,
+                                    SSH_ASKPASS: askPassScript,
+                                    // OpenSSH 8.4+: force askpass even without a TTY/display
+                                    SSH_ASKPASS_REQUIRE: 'force',
+                                    BUFF_SSH_PASSPHRASE: _sshPassphrase,
+                                },
                             });
                         }
                         finally {
@@ -329,20 +345,38 @@ export class CredentialStore {
         }
         else if (this._git.token) {
             // HTTPS mode: set up GIT_ASKPASS credential helper
-            const askPassPath = join(tmpdir(), 'buff-git-askpass.sh');
-            const username = this._git.username || process.env.USER || 'git';
+            // Platform-aware: `.cmd` on Windows, `.sh` on Unix. Username/token ride
+            // in env (never inlined into the script file on disk), which removes the
+            // biggest breakage vector (tokens with &, %, ^, quotes, spaces) and keeps
+            // secrets out of temp files. cmd.exe still expands %BUFF_GIT_TOKEN% at
+            // runtime, so values containing `%` remain best-effort on Windows.
+            const isWindows = process.platform === 'win32';
+            const askPassPath = join(tmpdir(), isWindows ? 'buff-git-askpass.cmd' : 'buff-git-askpass.sh');
+            const username = this._git.username || process.env.USER || process.env.USERNAME || 'git';
             const token = this._git.token;
-            const askPassContent = `#!/bin/sh
-case "$1" in
-  *Username*) echo "${username}" ;;
-  *Password*) echo "${token}" ;;
-  *Token*)    echo "${token}" ;;
-  *)          echo "${token}" ;;
-esac
-`;
+            const askPassContent = isWindows
+                ? '@echo off\r\n' +
+                    'echo %1 | findstr /i "Username" >nul\r\n' +
+                    'if not errorlevel 1 (\r\n' +
+                    '  echo %BUFF_GIT_USERNAME%\r\n' +
+                    ') else (\r\n' +
+                    '  echo %BUFF_GIT_TOKEN%\r\n' +
+                    ')\r\n'
+                // Unix variant reads the values from env too — never inlines secrets
+                // into the script file on disk.
+                : '#!/bin/sh\n' +
+                    'case "$1" in\n' +
+                    '  *Username*) echo "$BUFF_GIT_USERNAME" ;;\n' +
+                    '  *)          echo "$BUFF_GIT_TOKEN" ;;\n' +
+                    'esac\n';
             writeFileSync(askPassPath, askPassContent, 'utf-8');
+            // Values ride in env so the script text stays literal and safe.
+            process.env.BUFF_GIT_USERNAME = username;
+            process.env.BUFF_GIT_TOKEN = token;
             try {
-                execSync(`chmod +x "${askPassPath}"`, { timeout: 2000 });
+                if (!isWindows) {
+                    execSync(`chmod +x "${askPassPath}"`, { timeout: 2000 });
+                }
             }
             catch { /* best-effort */ }
             process.env.GIT_ASKPASS = askPassPath;
@@ -382,7 +416,7 @@ esac
      * Call this after publishing is complete.
      */
     cleanup() {
-        // Remove GIT_ASKPASS script
+        // Remove GIT_ASKPASS script and the helper env vars
         if (process.env.GIT_ASKPASS) {
             try {
                 unlinkSync(process.env.GIT_ASKPASS);
@@ -390,6 +424,8 @@ esac
             catch { /* best-effort */ }
             delete process.env.GIT_ASKPASS;
         }
+        delete process.env.BUFF_GIT_USERNAME;
+        delete process.env.BUFF_GIT_TOKEN;
         // Remove SSH_ASKPASS script if we created one
         // (already cleaned up in setupGitCredentials)
         // Unset terminal prompt disable

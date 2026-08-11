@@ -10,6 +10,13 @@ export declare class ConfigCommand extends BaseCommand {
     private createGetCommand;
     private createListCommand;
     private createInitCommand;
+    /**
+     * Phase A1 secret vault: `buff config vault status|migrate-keys`.
+     * Vault stores provider API keys in the OS keychain (or an AES-256-GCM
+     * encrypted file fallback) so `buffconfig.json` holds `vault:` refs instead
+     * of plaintext secrets.
+     */
+    private createVaultCommand;
     private displayConfig;
     private getValue;
     private setValue;

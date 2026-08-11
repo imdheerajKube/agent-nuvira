@@ -1,7 +1,39 @@
 import { Command } from 'commander';
 import { BaseCommand } from './commands.js';
+import type { ParsedRequest } from '../nlu/parser.js';
+/** E3a — the menu-free dispatch decision (rule-based, C1/C3 only). */
+export interface PipelineDispatchDecision {
+    /** Whether the request runs the coding pipeline. */
+    dispatch: boolean;
+    /** Whether a single confirm is required first (ambiguous create only). */
+    needConfirm: boolean;
+}
 /**
- * Execute the multi-agent pipeline for a user's goal.
+ * E3a/E3c — the rule assessment (hint + no-model fallback source).
+ *
+ * The legacy `promptDeveloperMode` menu ("1. Chat mode / 2. Developer mode")
+ * is DELETED (Session 7c re-scope, landed in E3a). E3c demotes the rules
+ * further (model-decides, Freebuff/Hermes parity): EVERY request runs as a
+ * tool-call turn and the MODEL decides what to do. This function computes
+ * what the RULES would say, used for two things only:
+ * - the rule hint injected into the model's context (buildToolSystemPrompt),
+ * - the no-model fallback decision: when the tool loop fails to generate a
+ *   single response AND the rules assessed a high-confidence pipeline intent,
+ *   the pipeline runs directly — rules act ONLY when the model is unavailable,
+ *   never as a bypass.
+ * `dev` (the --dev flag / /dev toggle) forces the assessment to dispatch.
+ */
+export declare function resolvePipelineDispatch(parsed: ParsedRequest, opts?: {
+    dev?: boolean;
+}): PipelineDispatchDecision;
+/**
+ * Execute the multi-agent pipeline for a user's goal (H1/E3b refactor).
+ *
+ * Thin wrapper over the shared `runPipelineTool` (src/tools/pipeline-tool.ts)
+ * — the SAME pipeline core the tool registry's build/resume/repair tools use,
+ * so `buff chat` pre-dispatch and in-loop pipeline tool calls can never
+ * diverge (STANDING RULE). Prints the orchestration result; the tool path
+ * returns the summary text instead.
  */
 export declare function runDeveloperMode(goal: string, configManager: any, options?: {
     provider?: string;
@@ -41,6 +73,41 @@ export declare class ChatCommand extends BaseCommand {
     private coldStartProbeFired;
     create(): Command;
     private execute;
+    /**
+     * E3b — run one chat answer as a TOOL-CALL TURN (Freebuff/Hermes parity).
+     *
+     * The model may call ask_user (clarify), verify_requirement, the pipeline
+     * tools (build/repair/resume), and must end with suggest_followups (3
+     * followups, Freebuff contract). Native tool-calling when the provider
+     * supports it; JSON fallback otherwise. Carries the legacy generation
+     * machinery forward: auto-mode failover + shared fallback chain inside
+     * callModel, caching, memory recording, and registry telemetry.
+     *
+     * Returns the final content + an optional follow-up prompt (interactive
+     * mode renders numbered options; choosing one sends it as the next message).
+     */
+    private runChatAnswer;
+    /**
+     * E3b — the model-call step for the tool loop (Freebuff run-agent-step):
+     * native generateTools when the provider supports it, JSON fallback
+     * otherwise. Auto-mode failover + the shared fallback chain live here — a
+     * broken provider never crashes the turn (it answers from the next working
+     * candidate, exactly like the legacy generation block).
+     */
+    private buildToolCallModel;
+    /**
+     * E3b — render suggest_followups results (Freebuff parity). Interactive:
+     * numbered options; choosing one sends its prompt as the next message.
+     * Single-shot: printed after the answer.
+     */
+    private renderFollowups;
+    /**
+     * Record a completed user↔assistant turn into the persistent-memory manager
+     * (Phase B2). Best-effort and fire-and-forget: the provider only BUFFERS the
+     * turn here (zero latency); extraction into project facts happens once at
+     * session end. A memory failure must never break the chat loop.
+     */
+    private memoryNoteTurn;
     /**
      * Show a categorized model picker that groups models by capability.
      *
@@ -86,22 +153,6 @@ export declare class ChatCommand extends BaseCommand {
      */
     private routeMessageAuto;
     /**
-     * Generate a single-shot response in auto mode with runtime failover.
-     *
-     * The auto router picks the best provider, but a provider's key/model can
-     * still fail at generation time (quota exhausted → 429, deprecated model →
-     * 404 — Gemini's listModels() lists models the key can't actually use).
-     * This walks the ranked candidates and returns the first successful response,
-     * so Auto routing NEVER crashes the CLI — it always answers from a working
-     * provider.
-     *
-     * Delegates to the SHARED single-shot runner (Nuvira-Router M0.2 Stage B) so
-     * every action walks candidates identically — behavior-identical to the
-     * previous inline walk (same order, same telemetry, same confirmation
-     * semantics).
-     */
-    private generateAutoWithFailover;
-    /**
      * Read multi-line input from stdin using readline.
      *
      * - First line prompt: "You: "
@@ -112,6 +163,5 @@ export declare class ChatCommand extends BaseCommand {
      */
     private readMultiLineInput;
     private handleCommand;
-    private generateWithContext;
 }
 //# sourceMappingURL=chat.d.ts.map

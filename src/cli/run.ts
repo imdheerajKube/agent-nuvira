@@ -14,6 +14,8 @@
 import { Command } from 'commander';
 
 import { BaseCommand } from './commands.js';
+import { maybeRunBackgroundDuties } from './duties.js';
+import { PipelineBoard } from './pipeline-board.js';
 import { RunnerAgent } from '../agents/agents/runner.js';
 import type { AgentContext } from '../agents/agent.js';
 import { logger } from '../utils/logger.js';
@@ -50,6 +52,10 @@ export class RunCommand extends BaseCommand {
     },
   ): Promise<void> {
     // ── Setup ──────────────────────────────────────────────────────────────
+    // D2: agent-driven background duties — one-line health + models status at
+    // session start (throttled, best-effort). The agent does them, not the user.
+    await maybeRunBackgroundDuties(this.configManager).catch(() => { /* best-effort */ });
+
     if (options.verbose) {
       logger.info(`Command: ${command}`);
       console.log('');
@@ -80,6 +86,11 @@ export class RunCommand extends BaseCommand {
     };
 
     // ── Execute via RunnerAgent ────────────────────────────────────────────
+    // E2: live activity board — `buff run` was silent execution; now the goal
+    // + pulsing activity show, and the RunnerAgent's runShell emits real
+    // `$ command` shell lanes (E1) while the subprocess runs.
+    const board = new PipelineBoard();
+    board.start(`Run: ${command}`);
     const runner = new RunnerAgent();
 
     try {
@@ -90,6 +101,8 @@ export class RunCommand extends BaseCommand {
         throw new Error('Unexpected LLM call in run command');
       });
       const elapsed = ((Date.now() - startTime) / 1000).toFixed(1);
+
+      board.finish(result.success);
 
       // ── Display Results ──────────────────────────────────────────────────
       const runResult = context.metadata['runResult'] as {
@@ -138,6 +151,7 @@ export class RunCommand extends BaseCommand {
       console.log('');
 
     } catch (err) {
+      board.finish(false);
       logger.error(`Run failed: ${err instanceof Error ? err.message : String(err)}`);
     }
   }

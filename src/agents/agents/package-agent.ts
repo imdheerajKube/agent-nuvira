@@ -21,6 +21,7 @@ import { execSync } from 'node:child_process';
 
 import { Agent, type AgentContext, type AgentResult } from '../agent.js';
 import type { LLMCallFn } from '../agent.js';
+import { getHostShell } from '../../utils/shell.js';
 
 const CHANGELOG_PROMPT = `You are generating a changelog entry.
 
@@ -277,8 +278,18 @@ export class PackageAgent extends Agent {
 
   private async generateChangelog(callLLM: LLMCallFn): Promise<AgentResult> {
     try {
-      const log = this.exec('git log --oneline --no-decorate $(git describe --tags --abbrev=0 2>/dev/null || git rev-list --max-parents=0 HEAD)..HEAD 2>&1');
-      const logLines = log.trim().split('\n').filter(Boolean);
+      // The `$(...)` command-substitution form below is bash-only and fails
+      // on Windows cmd.exe — split it into two execSync calls instead:
+      //   base = latest tag, or the root commit when no tags exist.
+      let base = '';
+      try {
+        base = this.exec('git describe --tags --abbrev=0').trim();
+      } catch { /* no tags yet */ }
+      if (!base) {
+        base = this.exec('git rev-list --max-parents=0 HEAD').trim();
+      }
+      const log = this.exec(`git log --oneline --no-decorate ${base}..HEAD 2>&1`);
+      const logLines = log.trim().split(/\r?\n/).filter(Boolean);
 
       if (logLines.length === 0) {
         return { success: true, summary: 'No new commits since last tag', details: 'Changelog is empty' };
@@ -332,6 +343,7 @@ export class PackageAgent extends Agent {
         timeout: 30_000,
         encoding: 'utf-8',
         stdio: 'pipe',
+        shell: getHostShell(),
       });
     } catch (err) {
       const error = err as { stdout?: string; stderr?: string; message?: string };

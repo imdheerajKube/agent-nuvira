@@ -389,7 +389,9 @@ const BENCHMARK_TASKS: BenchmarkTask[] = [
 
 // ─── Constants ──────────────────────────────────────────────────────────────
 
-const MEMORY_DIR = join(homedir(), '.buff', 'memory');
+// BUFF_MEMORY_DIR override keeps test suites out of the real ~/.buff store
+// (same convention as eval-framework.ts / session-recall.ts / dashboard).
+const MEMORY_DIR = process.env.BUFF_MEMORY_DIR || join(homedir(), '.buff', 'memory');
 const BENCHMARK_PATH = join(MEMORY_DIR, 'benchmarks.json');
 const CURRENT_VERSION = 1;
 

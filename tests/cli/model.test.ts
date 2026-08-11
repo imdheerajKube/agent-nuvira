@@ -12,7 +12,7 @@
  */
 
 import { describe, it, expect, beforeEach, afterEach, beforeAll, afterAll, vi } from 'vitest';
-import { mkdtempSync, rmSync } from 'node:fs';
+import { mkdtempSync, rmSync, mkdirSync, writeFileSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { ModelCommand } from '../../src/cli/model.js';
 import { getRouterBandit, resetRouterBandit } from '../../src/learning/router-bandit.js';
@@ -385,5 +385,109 @@ describe('ModelCommand bandit', () => {
     const errOut = errorSpy.mock.calls.map((c) => c.map((v) => String(v)).join(' ')).join('\n');
     expect(errOut).toContain('Unknown bandit action');
     errorSpy.mockRestore();
+  });
+});
+
+// ═══════════════════════════════════════════════════════════════════════
+// Session 36 — `buff model quota set` (user-declared daily budget)
+// Writes the SAME routing.quota + governance.maxCostUsd the dashboard edits.
+// ═══════════════════════════════════════════════════════════════════════
+
+describe('ModelCommand quota set (Session 36 — user-declared budget)', () => {
+  const tmpCfgDir = mkdtempSync(join(TMP_BASE, 'buff-quota-set-test-'));
+  const cfgPath = join(tmpCfgDir, 'buffconfig.json');
+  const prevConfigDir = process.env.BUFF_CONFIG_DIR;
+
+  beforeAll(() => {
+    mkdirSync(tmpCfgDir, { recursive: true });
+    process.env.BUFF_CONFIG_DIR = tmpCfgDir;
+  });
+
+  afterAll(() => {
+    if (prevConfigDir === undefined) delete process.env.BUFF_CONFIG_DIR;
+    else process.env.BUFF_CONFIG_DIR = prevConfigDir;
+    rmSync(tmpCfgDir, { recursive: true, force: true });
+  });
+
+  beforeEach(() => {
+    vi.spyOn(console, 'log').mockImplementation(() => {});
+    vi.spyOn(console, 'error').mockImplementation(() => {});
+  });
+
+  afterEach(() => {
+    vi.restoreAllMocks();
+    rmSync(cfgPath, { force: true });
+  });
+
+  it('set declares a daily budget — writes routing.quota + the cost cap', () => {
+    runCommand(['quota', 'set', 'groq', '--tokens', '12000', '--requests', '14400', '--cost-usd', '0.10']);
+    const cfg = JSON.parse(readFileSync(cfgPath, 'utf-8')) as {
+      routing: {
+        quota: { groq: { tokensPerWindow: number; requestsPerWindow: number } };
+        governance: { maxCostUsd: number };
+      };
+    };
+    expect(cfg.routing.quota.groq.tokensPerWindow).toBe(12000);
+    expect(cfg.routing.quota.groq.requestsPerWindow).toBe(14400);
+    expect(cfg.routing.governance.maxCostUsd).toBe(0.1);
+  });
+
+  it('set merges into an existing provider entry instead of wiping it', () => {
+    writeFileSync(cfgPath, JSON.stringify({ routing: { quota: { groq: { tokensPerWindow: 5000 } } } }), 'utf-8');
+    runCommand(['quota', 'set', 'groq', '--requests', '100']);
+    const cfg = JSON.parse(readFileSync(cfgPath, 'utf-8')) as {
+      routing: { quota: { groq: { tokensPerWindow?: number; requestsPerWindow?: number } } };
+    };
+    expect(cfg.routing.quota.groq.tokensPerWindow).toBe(5000); // preserved
+    expect(cfg.routing.quota.groq.requestsPerWindow).toBe(100); // added
+  });
+
+  it('set without a provider errors helpfully', () => {
+    const errorSpy = vi.spyOn(console, 'error');
+    runCommand(['quota', 'set']);
+    const errOut = errorSpy.mock.calls.map((c) => c.map((v) => String(v)).join(' ')).join('\n');
+    expect(errOut).toContain('needs a provider');
+  });
+
+  it('set with no limit options errors helpfully', () => {
+    const errorSpy = vi.spyOn(console, 'error');
+    runCommand(['quota', 'set', 'groq']);
+    const errOut = errorSpy.mock.calls.map((c) => c.map((v) => String(v)).join(' ')).join('\n');
+    expect(errOut).toContain('Nothing to set');
+  });
+
+  it('clear removes the provider budget entry', () => {
+    writeFileSync(cfgPath, JSON.stringify({ routing: { quota: { groq: { tokensPerWindow: 5000 } } } }), 'utf-8');
+    runCommand(['quota', 'clear', 'groq']);
+    const cfg = JSON.parse(readFileSync(cfgPath, 'utf-8')) as { routing?: { quota?: Record<string, unknown> } };
+    expect(cfg.routing?.quota?.groq).toBeUndefined();
+  });
+
+  it('set preserves SIBLING providers quota + governance (save shallow-merges routing)', () => {
+    writeFileSync(cfgPath, JSON.stringify({
+      routing: {
+        quota: { gemini: { requestsPerWindow: 1500 } },
+        governance: { maxCostUsd: 0.2 },
+        bandit: true,
+      },
+    }), 'utf-8');
+    runCommand(['quota', 'set', 'groq', '--tokens', '5000']);
+    const cfg = JSON.parse(readFileSync(cfgPath, 'utf-8')) as {
+      routing: { quota: Record<string, { requestsPerWindow?: number; tokensPerWindow?: number }>; governance: { maxCostUsd: number }; bandit: boolean };
+    };
+    expect(cfg.routing.quota.gemini.requestsPerWindow).toBe(1500); // sibling preserved
+    expect(cfg.routing.quota.groq.tokensPerWindow).toBe(5000); // new provider added
+    expect(cfg.routing.governance.maxCostUsd).toBe(0.2); // governance preserved
+    expect(cfg.routing.bandit).toBe(true); // sibling routing key preserved
+  });
+
+  it('clear preserves SIBLING providers (no map wipe)', () => {
+    writeFileSync(cfgPath, JSON.stringify({
+      routing: { quota: { groq: { tokensPerWindow: 5000 }, gemini: { requestsPerWindow: 1500 } } },
+    }), 'utf-8');
+    runCommand(['quota', 'clear', 'groq']);
+    const cfg = JSON.parse(readFileSync(cfgPath, 'utf-8')) as { routing: { quota: Record<string, { requestsPerWindow?: number }> } };
+    expect(cfg.routing.quota.groq).toBeUndefined();
+    expect(cfg.routing.quota.gemini.requestsPerWindow).toBe(1500); // sibling preserved
   });
 });

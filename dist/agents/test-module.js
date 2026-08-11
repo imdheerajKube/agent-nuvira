@@ -12,8 +12,8 @@
 import { existsSync, readFileSync, writeFileSync, mkdirSync, cpSync, rmSync, readdirSync, mkdtempSync } from 'node:fs';
 import { join, dirname } from 'node:path';
 import { tmpdir } from 'node:os';
-import { execSync } from 'node:child_process';
 import { getEventBus, EventNames } from '../observability/event-bus.js';
+import { runShellSync } from '../utils/shell.js';
 // ─── Constants ──────────────────────────────────────────────────────────────
 /** Common directories to exclude when copying to the sandbox */
 const EXCLUDE_DIRS = ['node_modules', '.git', 'dist', '.next', 'coverage', '.cache'];
@@ -236,40 +236,29 @@ export class DefaultTestModule {
         }
     }
     /**
-     * Run npm install in the sandbox.
+     * Run npm install in the sandbox (through the shared shell choke point —
+     * E1 emits exec:shell events; never throws on non-zero exit).
      */
     runInstall(sandboxPath) {
-        try {
-            return execSync('npm install --prefer-offline --no-audit --no-fund 2>&1', {
-                cwd: sandboxPath,
-                timeout: 120_000,
-                stdio: 'pipe',
-                encoding: 'utf-8',
-            });
-        }
-        catch (err) {
-            const output = err instanceof Error ? err.message : String(err);
-            return output;
-        }
+        const result = runShellSync('npm install --prefer-offline --no-audit --no-fund', {
+            cwd: sandboxPath,
+            timeoutMs: 120_000,
+            source: 'test-module',
+        });
+        const output = [result.stdout, result.stderr].filter(Boolean).join('\n');
+        return output || (result.success ? '' : 'npm install failed');
     }
     /**
      * Run the test command and capture output.
      */
     runTestCommand(sandboxPath, command, timeoutMs) {
-        try {
-            const output = execSync(command, {
-                cwd: sandboxPath,
-                timeout: timeoutMs,
-                stdio: 'pipe',
-                encoding: 'utf-8',
-            });
-            return { success: true, output, exitCode: 0 };
-        }
-        catch (err) {
-            const error = err;
-            const output = [error.stdout || '', error.stderr || '', error.message || ''].filter(Boolean).join('\n');
-            return { success: false, output, exitCode: error.status ?? 1 };
-        }
+        const result = runShellSync(command, {
+            cwd: sandboxPath,
+            timeoutMs,
+            source: 'test-module',
+        });
+        const output = [result.stdout, result.stderr].filter(Boolean).join('\n');
+        return { success: result.success, output, exitCode: result.exitCode };
     }
     /**
      * Parse test output to extract pass/fail/total counts.
