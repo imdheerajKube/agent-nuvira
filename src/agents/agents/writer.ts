@@ -18,7 +18,14 @@ import { logger } from '../../utils/logger.js';
 import { detectLanguage } from '../../editing/types.js';
 import { analyzeStructure, validateSyntax } from '../../editing/ast.js';
 import { buildStructuralContext } from '../../editing/edit.js';
-import { parseRetryAfterHint as parseRetryHintShared } from '../../learning/provider-fallback.js';
+import {
+  BASE_RETRY_DELAY_MS,
+  LONG_WAIT_THRESHOLD_MS,
+  calculateRetryDelay,
+  isRateLimitError,
+  parseModelName,
+  parseRetryAfterHint,
+} from '../rate-limit-retry.js';
 import { referenceDocsFor } from '../reference-docs.js';
 
 const WRITER_SYSTEM_PROMPT = `You are an expert software engineer implementing changes to a codebase.
@@ -63,42 +70,6 @@ const MAX_CONTEXT_CHARS = 16_000;
 /** Maximum number of API retry attempts for transient LLM failures (rate limits, timeouts, etc.) */
 const MAX_API_RETRIES = 2;
 
-/** Base delay for exponential backoff in milliseconds (doubles each retry: 5s, 10s) */
-const BASE_RETRY_DELAY_MS = 5000;
-
-/**
- * Threshold above which we consider a rate-limit wait "long" and prompt the user.
- * Short waits (< 3s) are auto-retried silently. Long waits prompt the user.
- */
-const LONG_WAIT_THRESHOLD_MS = 3000;
-
-/**
- * Parse the "try again in Xs" hint from a rate-limit error response.
- * Supports formats: "try again in 10.49s", "try again in 5000ms"
- * Returns the suggested wait time in ms, or null if not found.
- */
-function parseRetryAfterHint(errorMessage: string): number | null {
-  // Shared parser (provider-fallback.ts) — single source of truth covering
-  // "try again in Xs", "Retry-After: N", "resets in Nh Nm", …
-  return parseRetryHintShared(errorMessage);
-}
-
-/**
- * Extract the model name from a rate-limit error message.
- * Matches patterns like: "Rate limit reached for model `qwen/qwen3-32b`"
- */
-function parseModelName(errorMessage: string): string | undefined {
-  const match = errorMessage.match(/model\s+`([^`]+)`|model\s+'([^']+)'|model\s+([^\s]+)/i);
-  return match?.[1] || match?.[2] || match?.[3] || undefined;
-}
-
-/**
- * Check if an error message indicates a rate-limit (429) error.
- */
-function isRateLimitError(errorMessage: string): boolean {
-  return /rate\s*limit|429|too many requests|try again in/i.test(errorMessage);
-}
-
 /**
  * Distinguish a GENUINE "no changes needed" LLM judgment from a format
  * failure (Session 46). A writer that explicitly declines — nothing to
@@ -121,20 +92,6 @@ export function responseIndicatesNoChanges(response: string): boolean {
     /already (implemented|contains|handles|covers|satisfies|satisfied|done|exists|complete|present)/.test(lower) ||
     /no (further|additional) (changes?|work|action) (needed|required)/.test(lower)
   );
-}
-
-/**
- * Calculate the retry delay for a given attempt.
- * If the error message contains a "try again in Xs" hint, use that.
- * Otherwise, fall back to exponential backoff with BASE_RETRY_DELAY_MS.
- */
-function calculateRetryDelay(attempt: number, errorMessage: string): number {
-  const hintDelay = parseRetryAfterHint(errorMessage);
-  if (hintDelay !== null) {
-    return hintDelay;
-  }
-  // Fallback: exponential backoff (5s, 10s, 20s...)
-  return BASE_RETRY_DELAY_MS * Math.pow(2, attempt);
 }
 
 /**
