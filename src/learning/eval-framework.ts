@@ -34,8 +34,46 @@ import { execSync } from 'node:child_process';
 
 import type { InferenceProvider } from '../inference/interface.js';
 import { ConfigManager } from '../config/manager.js';
+import { getQuotaLedger } from './quota-ledger.js';
 import { Orchestrator, type OrchestrationResult } from '../agents/orchestrator.js';
+import { classifyFallbackError } from './provider-fallback.js';
 import { logger } from '../utils/logger.js';
+
+// ─── M2b Benchmark Suite ────────────────────────────────────────────────────
+
+/**
+ * M2b curated task IDs — the experience-parity benchmark suite that measures
+ * agent-nuvira against Freebuff and Hermes on the axes users actually feel:
+ * completion rate, stuck states, rework turns, and time-to-done.
+ *
+ * Run with: `buff eval run --suite m2b`
+ *
+ * The suite includes:
+ * - Bug-fix tasks (easy): measure quick-turnaround repair
+ * - Feature tasks (easy/medium): measure greenfield creation
+ * - Refactor tasks (medium): measure code understanding
+ * - Continuation tasks (medium): measure session continuity (the Request
+ *   Contract's visible understanding + follow-up recommendations)
+ * - Project-analysis tasks (hard): measure cross-file reasoning
+ */
+export const M2B_TASK_IDS: string[] = [
+  'js-fizzbuzz-fix',
+  'js-closure-fix',
+  'js-queue',
+  'js-anagram',
+  'js-refactor-async',
+  'py-fibonacci',
+  'dep-local-module',
+  'js-continuation',
+  'py-multi-file',
+];
+
+
+
+/** Get the M2b curated task suite. */
+export function getM2bTasks(): EvalTask[] {
+  return EVAL_TASKS.filter((t) => M2B_TASK_IDS.includes(t.id));
+}
 
 // ─── Types ──────────────────────────────────────────────────────────────────
 
@@ -102,6 +140,8 @@ export interface EvalMetrics {
   editAccuracy: number;
   /** Token efficiency (0-1) — budget / used, capped at 1 */
   tokenEfficiency: number;
+  /** Total input+output tokens consumed by this task (Session 37 — pacing). */
+  totalTokens: number;
   /** Number of file changes reverted to their original content */
   rollbackCount: number;
   /** Whether the runner attempted a dependency install */
@@ -518,6 +558,136 @@ const EVAL_TASKS: EvalTask[] = [
     timeoutMs: 180_000,
   },
 
+  // ── Continuation: multi-step task with follow-up ───────────────────────
+  {
+    id: 'js-continuation',
+    title: 'Add Validation + Tests (Continuation)',
+    category: 'feature',
+    difficulty: 'medium',
+    goal: 'Add input validation to `processOrder(order)` in order.js so that empty string items, negative quantities, and missing fields are rejected with a clear error message. Then add comprehensive tests to test.js. The function signature must not change. Verify by running the tests.',
+    setupFiles: [
+      {
+        path: 'order.js',
+        content: [
+          '// Accepts an order object with items array (each item has name, qty, price)',
+          'function processOrder(order) {',
+          '  // No validation currently — just sums prices',
+          '  return order.items.reduce((total, item) => total + (item.qty || 0) * (item.price || 0), 0);',
+          '}',
+          'module.exports = { processOrder };',
+          '',
+        ].join('\n'),
+      },
+      {
+        path: 'test.js',
+        content: [
+          '// TODO: add tests for processOrder',
+          'const assert = require("assert");',
+          'const { processOrder } = require("./order");',
+          '',
+          '// Basic case (should work)',
+          'const result = processOrder({"items":[{"name":"widget","qty":2,"price":10}]});',
+          'assert.strictEqual(result, 20);',
+          'console.log("BASIC TEST PASSED");',
+          '',
+        ].join('\n'),
+      },
+      {
+        path: 'package.json',
+        content: JSON.stringify({
+          name: 'order-task',
+          version: '1.0.0',
+          scripts: { test: 'node test.js' },
+        }, null, 2),
+      },
+    ],
+    hiddenTests: [
+      {
+        file: 'test.js',
+        command: 'node test.js',
+      },
+    ],
+    referencePatterns: [
+      {
+        file: 'order.js',
+        mustContain: ['throw', 'error', 'valid'],
+        mustNotContain: ['TODO'],
+      },
+    ],
+    tokenBudget: 8000,
+    timeEstimate: 'medium',
+    timeoutMs: 300_000,
+  },
+
+  // ── Multi-file: Python data pipeline ────────────────────────────────────
+  {
+    id: 'py-multi-file',
+    title: 'Implement Multi-File Data Pipeline',
+    category: 'feature',
+    difficulty: 'hard',
+    goal: 'Implement a simple data pipeline in Python. Create `pipeline.py` with `read_csv(path)`, `filter_rows(data, column, min_val)`, and `summarize(data)` functions. Create `config.py` with a `PipelineConfig` class that stores a source path and column name. The pipeline should read CSV lines, filter rows where the given column\'s numeric value ≥ min_val, and return a summary dict with count and total. Then edit `main.py` to use PipelineConfig and run the pipeline. Verify by running the tests.',
+    setupFiles: [
+      {
+        path: 'pipeline.py',
+        content: [
+          'def read_csv(path):',
+          '    # TODO: implement',
+          '    return []',
+          '',
+          'def filter_rows(data, column, min_val):',
+          '    # TODO: implement',
+          '    return []',
+          '',
+          'def summarize(data):',
+          '    # TODO: implement',
+          '    return {}',
+          '',
+        ].join('\n'),
+      },
+      {
+        path: 'config.py',
+        content: [
+          '# TODO: implement PipelineConfig class',
+          'class PipelineConfig:',
+          '    pass',
+          '',
+        ].join('\n'),
+      },
+      {
+        path: 'main.py',
+        content: [
+          '# TODO: import and run the pipeline',
+          'def run():',
+          '    # Implement using PipelineConfig and pipeline functions',
+          '    pass',
+          '',
+          'if __name__ == "__main__":',
+          '    run()',
+          '',
+        ].join('\n'),
+      },
+    ],
+    hiddenTests: [
+      {
+        file: 'test_pipeline.py',
+        command: 'python3 test_pipeline.py',
+      },
+    ],
+    referencePatterns: [
+      {
+        file: 'pipeline.py',
+        mustContain: ['def read_csv', 'def filter_rows', 'def summarize'],
+      },
+      {
+        file: 'config.py',
+        mustContain: ['class PipelineConfig', 'source_path', 'column'],
+      },
+    ],
+    tokenBudget: 10000,
+    timeEstimate: 'slow',
+    timeoutMs: 360_000,
+  },
+
   // ── Refactor: callback → async/await ─────────────────────────────────
   {
     id: 'js-refactor-async',
@@ -649,6 +819,42 @@ const HIDDEN_TEST_FILES: Record<string, string> = {
     'console.log("ALL TESTS PASSED");',
     '',
   ].join('\n'),
+  'js-continuation': [
+    'const assert = require("assert");',
+    'const { processOrder } = require("./order");',
+    '',
+    '// Validation tests — all should throw or return 0 with bad input',
+    'assert.throws(() => processOrder({ items: [{ name: "", qty: 1, price: 10 }] }), /error/i);',
+    'assert.throws(() => processOrder({ items: [{ name: "x", qty: -1, price: 10 }] }), /error/i);',
+    'assert.throws(() => processOrder({}), /error/i);',
+    'assert.throws(() => processOrder(null), /error/i);',
+    'console.log("VALIDATION TESTS PASSED");',
+    '',
+  ].join('\n'),
+  'py-multi-file': [
+    'from pipeline import read_csv, filter_rows, summarize',
+    'from config import PipelineConfig',
+    '',
+    '# Test 1: pipeline functions exist and handle missing file gracefully',
+    'try:',
+    '    data = read_csv("nonexistent.csv")',
+    '    assert isinstance(data, list)',
+    'except FileNotFoundError:',
+    '    pass',
+    '',
+    '# Test 2: PipelineConfig has required attributes',
+    'config = PipelineConfig("data.csv", "sales")',
+    'assert hasattr(config, \'source_path\'), "missing source_path"',
+    'assert hasattr(config, \'column\'), "missing column"',
+    '',
+    '# Test 3: filter_rows with sample data',
+    'sample = [{"name": "a", "val": "10"}, {"name": "b", "val": "5"}]',
+    'filtered = filter_rows(sample, "val", 7)',
+    'assert len(filtered) == 1, f"expected 1 filtered row, got {len(filtered)}"',
+    'assert filtered[0]["name"] == "a"',
+    'print("ALL PIPELINE TESTS PASSED")',
+    '',
+  ].join('\n'),
   'js-refactor-async': [
     'const assert = require("assert");',
     'const { getUserData } = require("./fetchUser");',
@@ -666,7 +872,9 @@ const HIDDEN_TEST_FILES: Record<string, string> = {
 
 // ─── Persistence ────────────────────────────────────────────────────────────
 
-const MEMORY_DIR = join(homedir(), '.buff', 'memory');
+// BUFF_MEMORY_DIR override keeps test suites out of the real ~/.buff store
+// (same convention as session-recall.ts / history.ts).
+const MEMORY_DIR = process.env.BUFF_MEMORY_DIR || join(homedir(), '.buff', 'memory');
 const EVAL_PATH = join(MEMORY_DIR, 'evals.json');
 const CURRENT_VERSION = 1;
 const MAX_EVAL_RUNS = 50;
@@ -784,6 +992,15 @@ export interface RunEvalOptions {
   timeEstimate?: 'quick' | 'medium' | 'slow';
   /** Maximum cost in USD before stopping */
   budget?: number;
+  /**
+   * Session 37 — pace the run under the user-declared DAILY token budget
+   * (routing.quota.<provider>.tokensPerWindow, resolved by the CLI): the run
+   * stops once paceUsedBefore + this run's tokens reaches paceTokens, so a
+   * free-tier TPD cap can't invalidate the measurement mid-run.
+   */
+  paceTokens?: number;
+  /** Tokens this provider already consumed today per the quota ledger. */
+  paceUsedBefore?: number;
   /** Progress callback */
   onProgress?: (current: number, total: number, task: EvalTask) => void;
   /** Config manager (for provider config) */
@@ -877,6 +1094,7 @@ export async function runEvalTask(
     timeToFixMs: firstGreenAt ?? (testPassed ? elapsedMs : Number.POSITIVE_INFINITY),
     editAccuracy,
     tokenEfficiency,
+    totalTokens,
     rollbackCount: stats?.rollbackCount ?? 0,
     dependencyInstallAttempted: stats?.dependencyInstallAttempted ?? false,
     dependencyInstallSucceeded: stats?.dependencyInstallSucceeded ?? false,
@@ -939,6 +1157,7 @@ export async function runEvalSuite(
   const startedAt = Date.now();
   const results: EvalResult[] = [];
   let totalCost = 0;
+  let totalTokens = 0;
 
   for (let i = 0; i < tasks.length; i++) {
     const task = tasks[i];
@@ -946,9 +1165,19 @@ export async function runEvalSuite(
       logger.info(`Budget of $${options.budget.toFixed(2)} reached. Stopping evaluation.`);
       break;
     }
+    // Session 37 — daily-token pacing (Decision 21): stop BEFORE a task that
+    // would cross the user-declared cap, so free-tier TPD exhaustion can't
+    // invalidate the measurement mid-run. Note: we can't know a task's token
+    // cost until it runs, so a single oversized task may still cross the cap
+    // (same limitation as the --budget cost gate) — that's inherent, not a bug.
+    if (options.paceTokens !== undefined && (options.paceUsedBefore ?? 0) + totalTokens >= options.paceTokens) {
+      logger.warn(`Daily token budget of ${options.paceTokens.toLocaleString()} reached (${((options.paceUsedBefore ?? 0) + totalTokens).toLocaleString()} tokens today). Stopping evaluation — raise it with \`buff model quota set ${providerName} --tokens N\` or resume after the window rolls.`);
+      break;
+    }
     options.onProgress?.(i + 1, tasks.length, task);
     const res = await runEvalTask(task, provider, providerName, model, options);
     totalCost += res.metrics.costUsd;
+    totalTokens += res.metrics.totalTokens;
     results.push(res);
   }
 
@@ -975,6 +1204,31 @@ export async function runEvalSuite(
 }
 
 /** Compute the aggregate summary from a list of eval results. */
+/**
+ * Session 37 — resolve the `--pace` budget for a provider: the user-declared
+ * DAILY cap (routing.quota.<provider>.tokensPerWindow) + tokens this provider
+ * already consumed today per the quota ledger (best-effort). Returns
+ * `paceTokens: undefined` when no budget is declared (run unpaced).
+ */
+export function resolvePaceBudget(
+  configManager: ConfigManager | undefined,
+  providerName: string,
+): { paceTokens?: number; usedBefore: number } {
+  const limit = configManager?.getAll().routing?.quota?.[providerName];
+  const paceTokens = limit?.tokensPerWindow;
+  if (paceTokens === undefined) return { paceTokens: undefined, usedBefore: 0 };
+  let usedBefore = 0;
+  try {
+    usedBefore = getQuotaLedger()
+      .getStatus(configManager)
+      .filter((s) => s.provider === providerName)
+      .reduce((sum, s) => sum + (s.tokensConsumed || 0), 0);
+  } catch {
+    // Best-effort — a ledger read failure must never break a run.
+  }
+  return { paceTokens, usedBefore };
+}
+
 export function computeEvalSummary(results: EvalResult[]): EvalSummary {
   if (results.length === 0) {
     return {
@@ -999,9 +1253,11 @@ export function computeEvalSummary(results: EvalResult[]): EvalSummary {
   const depSucceeded = depAttempted.filter((r) => r.metrics.dependencyInstallSucceeded);
   const hadFailures = results.filter((r) => r.metrics.recoveryAttempts > 0 || !r.metrics.completed);
   const recovered = results.filter((r) => r.metrics.recovered);
+  // JSON round-trip turns Infinity (never green) into null — exclude both
+  // so a re-rendered persisted run doesn't count null as a 0ms fix.
   const finiteFixTimes = passed
     .map((r) => r.metrics.timeToFixMs)
-    .filter((t) => isFinite(t));
+    .filter((t) => t !== null && isFinite(t));
 
   return {
     totalTasks: results.length,
@@ -1019,6 +1275,148 @@ export function computeEvalSummary(results: EvalResult[]): EvalSummary {
     avgCompositeScore: results.reduce((a, r) => a + r.compositeScore, 0) / results.length,
     totalCostUsd: results.reduce((a, r) => a + r.metrics.costUsd, 0),
   };
+}
+
+// ─── Experience-Parity Breakdown (M2b) ─────────────────────────────────────
+
+/**
+ * Rework turns for one task — repair-engine retries, alternative-approach
+ * attempts, and file rollbacks. This is the user-visible "the agent had to
+ * try again" count.
+ *
+ * NOTE: `attempts` (llmCalls + 1) is deliberately NOT counted — the standard
+ * multi-agent pipeline (planner → context-gatherer → writer → runner →
+ * reviewer) makes ~4-5 LLM calls BY DESIGN, so llmCalls would inflate the
+ * metric to ~4x on every smooth task. Only explicit try-again events count.
+ */
+export function computeReworkTurns(metrics: EvalMetrics): number {
+  return (
+    metrics.recoveryAttempts +
+    metrics.alternativeApproaches +
+    metrics.rollbackCount
+  );
+}
+
+/**
+ * A task is user-visible STUCK when it produced NO working outcome (hidden
+ * tests not green) AND either the pipeline crashed/timed out (error set) or
+ * it thrashed (3+ rework turns without reaching done).
+ *
+ * A task that PASSED tests is never flagged stuck, even if the pipeline
+ * reported a failure — e.g. a transient provider 429 during repair that the
+ * reliability stack recovered from: the user got working code, so it is
+ * provider interference, not user-visible stuckness. Measured from the run's
+ * own data — never agent-declared done.
+ *
+ * Session 44 — a task whose TERMINAL failure is provider infrastructure
+ * (rate-limit / server / network, e.g. a free-tier 429 that opened the circuit
+ * breaker) is also NOT stuck: the pipeline never got a chance to do the work
+ * (attempts=1 in the S44 run), so the failure is interference, not agent
+ * stuckness. Such tasks are surfaced separately on the 'Provider
+ * interference' report line instead of inflating the stuck count. Design
+ * decision: even when rework turns accumulated before the provider gave out,
+ * the terminal cause is infra — the rework was spent retrying a throttled
+ * provider, so interference wins by design (documented in tracker S45).
+ */
+export function computeStuckStates(results: EvalResult[]): EvalResult[] {
+  return results.filter(
+    (r) =>
+      !r.metrics.testPassed &&
+      // Derive interference from the error text (not the stored flag) so
+      // persisted runs from BEFORE Session 44 also get the corrected count
+      // when re-analyzed.
+      !isProviderInterferenceError(r.metrics.error) &&
+      (r.metrics.error !== undefined || computeReworkTurns(r.metrics) >= 3),
+  );
+}
+
+/**
+ * True when a terminal error string is provider infrastructure failure
+ * (rate-limit / server / network) rather than agent stuckness. Reuses the
+ * canonical `classifyFallbackError` classifier — a 429/500/network failure
+ * means the provider throttled or dropped the request, not that the agent
+ * spun without progress. Auth is NOT interference (wrong key is a config
+ * problem, and would recur on every provider), and timeout is NOT
+ * interference (a slow agent is still the agent's problem).
+ */
+export function isProviderInterferenceError(error: string | undefined): boolean {
+  if (!error) return false;
+  const type = classifyFallbackError(new Error(error));
+  return type === 'rate-limit' || type === 'server' || type === 'network';
+}
+
+/**
+ * Compare two eval runs side by side across the M2b experience-parity axes —
+ * the Part 1.9 gate: after a phase lands, re-run the suite and confirm a
+ * metric moved. Composite / test-pass / completion are HIGHER-better;
+ * stuck / rework / time / cost are LOWER-better. Mirrors compareBenchmarks().
+ */
+export function compareEvalRuns(runA: EvalRun, runB: EvalRun): string {
+  const aModel = `${runA.model}`.slice(0, 22).padEnd(22);
+  const bModel = `${runB.model}`.slice(0, 22).padEnd(22);
+  const higher = (a: number, b: number): string =>
+    a === b ? 'tie' : a > b ? `← ${runA.model}` : `${runB.model} →`;
+  const lower = (a: number, b: number): string =>
+    a === b ? 'tie' : a < b ? `← ${runA.model}` : `${runB.model} →`;
+
+  const a = runA.summary;
+  const b = runB.summary;
+  const stuckA = computeStuckStates(runA.results).map((r) => r.taskId);
+  const stuckB = computeStuckStates(runB.results).map((r) => r.taskId);
+  const reworkA = runA.results.reduce((s, r) => s + computeReworkTurns(r.metrics), 0);
+  const reworkB = runB.results.reduce((s, r) => s + computeReworkTurns(r.metrics), 0);
+  const perTask = (n: number, total: number): string =>
+    n === 0 ? '0' : `${n}${total > 0 ? ` (${(n / total).toFixed(1)}/task)` : ''}`;
+  const stuckText = (ids: string[]): string => {
+    if (ids.length === 0) return '0';
+    const joined = ids.join(', ');
+    return `${ids.length}${joined.length > 48 ? ` (${joined.slice(0, 48)}…)` : ` (${joined})`}`;
+  };
+  const durA = ((runA.endedAt - runA.startedAt) / 1000).toFixed(1) + 's';
+  const durB = ((runB.endedAt - runB.startedAt) / 1000).toFixed(1) + 's';
+  const fixA = a.avgTimeToFixMs > 0 ? (a.avgTimeToFixMs / 1000).toFixed(1) + 's' : 'n/a';
+  const fixB = b.avgTimeToFixMs > 0 ? (b.avgTimeToFixMs / 1000).toFixed(1) + 's' : 'n/a';
+
+  const rows: Array<[string, string, string, string]> = [
+    ['Composite score', `${(a.avgCompositeScore * 100).toFixed(1)}%`, `${(b.avgCompositeScore * 100).toFixed(1)}%`, higher(a.avgCompositeScore, b.avgCompositeScore)],
+    ['Test pass rate', `${(a.testPassRate * 100).toFixed(0)}% (${a.tasksPassed}/${a.totalTasks})`, `${(b.testPassRate * 100).toFixed(0)}% (${b.tasksPassed}/${b.totalTasks})`, higher(a.testPassRate, b.testPassRate)],
+    ['Completion rate', `${(a.completionRate * 100).toFixed(0)}%`, `${(b.completionRate * 100).toFixed(0)}%`, higher(a.completionRate, b.completionRate)],
+    ['Stuck states', stuckText(stuckA), stuckText(stuckB), lower(stuckA.length, stuckB.length)],
+    ['Rework turns', perTask(reworkA, a.totalTasks), perTask(reworkB, b.totalTasks), lower(reworkA, reworkB)],
+    ['Time-to-done', durA, durB, lower(runA.endedAt - runA.startedAt, runB.endedAt - runB.startedAt)],
+    // n/a (no passing task → avg 0) must never WIN the lower-better axis.
+    ['Avg time-to-fix', fixA, fixB, lower(a.avgTimeToFixMs > 0 ? a.avgTimeToFixMs : Number.POSITIVE_INFINITY, b.avgTimeToFixMs > 0 ? b.avgTimeToFixMs : Number.POSITIVE_INFINITY)],
+    ['Total cost', `$${a.totalCostUsd.toFixed(4)}`, `$${b.totalCostUsd.toFixed(4)}`, lower(a.totalCostUsd, b.totalCostUsd)],
+  ];
+
+  const lines: string[] = [
+    '═'.repeat(64),
+    `  ⚔️  Eval Comparison: ${runA.provider}/${runA.model} vs ${runB.provider}/${runB.model}`,
+    '═'.repeat(64),
+    '',
+    `  ${'Metric'.padEnd(24)} ${aModel} ${bModel} Winner`,
+    `  ${'─'.repeat(72)}`,
+  ];
+  for (const [metric, va, vb, w] of rows) {
+    lines.push(`  ${metric.padEnd(24)} ${va.padEnd(22)} ${vb.padEnd(22)} ${w}`);
+  }
+  lines.push('');
+  return lines.join('\n');
+}
+
+/**
+ * Pick the two runs to compare for the Part 1.9 gate: the newest run, then the
+ * most recent run with the SAME provider+model (so a phase's metric movement
+ * is never confounded by a model/provider switch), falling back to the previous
+ * run. Assumes newest-first ordering (as returned by getEvalRuns()).
+ */
+export function selectCompareRuns(runs: EvalRun[]): [EvalRun, EvalRun] | null {
+  if (runs.length < 2) return null;
+  const newest = runs[0];
+  const sameSetup = runs
+    .slice(1)
+    .find((r) => r.provider === newest.provider && r.model === newest.model);
+  return [newest, sameSetup ?? runs[1]];
 }
 
 // ─── Report Formatting ──────────────────────────────────────────────────────
@@ -1046,25 +1444,39 @@ export function formatEvalReport(run: EvalRun): string {
   lines.push(`  ↩️  Rollbacks:             ${s.totalRollbacks}`);
   lines.push(`  📦 Dependency install:    ${(s.dependencyInstallRate * 100).toFixed(0)}% success`);
   lines.push(`  💡 Recovery rate:         ${(s.recoveryRate * 100).toFixed(0)}%  (tried new approaches)`);
+  const stuckIds = new Set(computeStuckStates(run.results).map((r) => r.taskId));
+  const totalRework = run.results.reduce((a, r) => a + computeReworkTurns(r.metrics), 0);
+  lines.push(`  🔁 Rework turns:         ${totalRework} total  (${run.results.length > 0 ? (totalRework / run.results.length).toFixed(1) : '0.0'}/task)`);
+  lines.push(`  🚧 Stuck states:         ${stuckIds.size}  ${stuckIds.size > 0 ? '(' + [...stuckIds].join(', ') + ')' : ''}`);
+  // Derive from the error text so persisted runs saved before Session 44 also
+  // show the corrected interference breakdown. Only non-passing tasks are
+  // listed — a task that PASSED despite touching a 429 is a success, not
+  // interference worth flagging next to 'Stuck states'.
+  const interferenceIds = run.results
+    .filter((r) => !r.metrics.testPassed && isProviderInterferenceError(r.metrics.error))
+    .map((r) => r.taskId);
+  lines.push(`  🌩️ Provider interference: ${interferenceIds.length}  ${interferenceIds.length > 0 ? '(' + interferenceIds.join(', ') + ')' : ''}  — not agent stuckness (429/5xx/network)`);
   lines.push(`  💰 Total cost:            $${s.totalCostUsd.toFixed(6)}`);
   lines.push('');
   lines.push('  ── Per-Task Results ──');
-  lines.push(`  ${'─'.repeat(62)}`);
-  lines.push(`  ${'Task'.padEnd(26)} ${'Status'.padEnd(9)} ${'Score'.padEnd(8)} ${'FixTime'.padEnd(9)} ${'Deps'.padEnd(6)} ${'NewIdeas'}`);
-  lines.push(`  ${'─'.repeat(62)}`);
+  lines.push(`  ${'─'.repeat(74)}`);
+  lines.push(`  ${'Task'.padEnd(26)} ${'Status'.padEnd(9)} ${'Score'.padEnd(8)} ${'FixTime'.padEnd(9)} ${'Deps'.padEnd(6)} ${'Rework'.padEnd(8)} ${'NewIdeas'.padEnd(9)} Stuck`);
+  lines.push(`  ${'─'.repeat(74)}`);
   for (const r of run.results) {
     const status = r.metrics.testPassed ? '✅' : '❌';
     const score = `${(r.compositeScore * 100).toFixed(0)}%`;
-    const fix = isFinite(r.metrics.timeToFixMs)
+    const fix = r.metrics.timeToFixMs !== null && isFinite(r.metrics.timeToFixMs)
       ? `${(r.metrics.timeToFixMs / 1000).toFixed(1)}s`
       : 'never';
     const deps = r.metrics.dependencyInstallAttempted
       ? (r.metrics.dependencyInstallSucceeded ? '✓' : '✗')
       : '—';
+    const rework = computeReworkTurns(r.metrics) > 0 ? `${computeReworkTurns(r.metrics)}x` : '—';
     const ideas = r.metrics.alternativeApproaches > 0 ? `${r.metrics.alternativeApproaches}x` : '—';
-    lines.push(`  ${r.taskId.padEnd(26)} ${status.padEnd(9)} ${score.padEnd(8)} ${fix.padEnd(9)} ${deps.padEnd(6)} ${ideas}`);
+    const stuckMark = stuckIds.has(r.taskId) ? '🚧' : '—';
+    lines.push(`  ${r.taskId.padEnd(26)} ${status.padEnd(9)} ${score.padEnd(8)} ${fix.padEnd(9)} ${deps.padEnd(6)} ${rework.padEnd(8)} ${ideas.padEnd(9)} ${stuckMark}`);
   }
-  lines.push(`  ${'─'.repeat(62)}`);
+  lines.push(`  ${'─'.repeat(74)}`);
   lines.push('');
   return lines.join('\n');
 }
@@ -1100,22 +1512,66 @@ export function formatEvalMarkdown(run: EvalRun): string {
     '',
     '## Per-Task Results',
     '',
-    '| Task | Status | Score | Time-to-fix | Deps | New ideas |',
-    '|------|--------|-------|-------------|------|-----------|',
+    '| Task | Status | Score | Time-to-fix | Deps | New ideas | Rework | Stuck |',
+    '|------|--------|-------|-------------|------|-----------|--------|-------|',
   ];
+  const stuckIds = new Set(computeStuckStates(run.results).map((r) => r.taskId));
   for (const r of run.results) {
     const status = r.metrics.testPassed ? '✅ Pass' : '❌ Fail';
-    const fix = isFinite(r.metrics.timeToFixMs)
+    const fix = r.metrics.timeToFixMs !== null && isFinite(r.metrics.timeToFixMs)
       ? `${(r.metrics.timeToFixMs / 1000).toFixed(1)}s`
       : 'never';
     const deps = r.metrics.dependencyInstallAttempted
       ? (r.metrics.dependencyInstallSucceeded ? '✓' : '✗')
       : '—';
+    const rework = computeReworkTurns(r.metrics) > 0 ? `${computeReworkTurns(r.metrics)}` : '—';
     const ideas = r.metrics.alternativeApproaches > 0 ? `${r.metrics.alternativeApproaches}x` : '—';
-    lines.push(`| ${r.taskId} | ${status} | ${(r.compositeScore * 100).toFixed(0)}% | ${fix} | ${deps} | ${ideas} |`);
+    const stuckMark = stuckIds.has(r.taskId) ? '🚧' : '—';
+    lines.push(`| ${r.taskId} | ${status} | ${(r.compositeScore * 100).toFixed(0)}% | ${fix} | ${deps} | ${ideas} | ${rework} | ${stuckMark} |`);
   }
+  const totalRework = run.results.reduce((a, r) => a + computeReworkTurns(r.metrics), 0);
+  lines.push('');
+  lines.push('## Experience Parity (stuck / rework)');
+  lines.push('');
+  lines.push('| Metric | Value |');
+  lines.push('|--------|-------|');
+  lines.push(`| Total rework turns | ${totalRework} |`);
+  lines.push(`| Avg rework turns / task | ${run.results.length > 0 ? (totalRework / run.results.length).toFixed(1) : '0.0'} |`);
+  lines.push(`| Stuck states | ${stuckIds.size}${stuckIds.size > 0 ? ' (' + [...stuckIds].join(', ') + ')' : ''} |`);
+  const interferenceIds = run.results
+    .filter((r) => !r.metrics.testPassed && isProviderInterferenceError(r.metrics.error))
+    .map((r) => r.taskId);
+  lines.push(`| Provider interference (429/5xx/network — not stuck) | ${interferenceIds.length}${interferenceIds.length > 0 ? ' (' + interferenceIds.join(', ') + ')' : ''} |`);
   lines.push('');
   return lines.join('\n');
+}
+
+/**
+ * Write an M2b benchmark report to docs/benchmarks/.
+ * Creates the directory if it doesn't exist. The report uses the same markdown
+ * format as formatEvalMarkdown but prefixed with metadata for the benchmark
+ * index, and includes a per-task stuck/rework breakdown.
+ */
+export function writeBenchmarkReport(run: EvalRun, outputDir: string): string {
+  const md = formatEvalMarkdown(run);
+  const header = [
+    '---',
+    `benchmark_run: ${run.id}`,
+    `provider: ${run.provider}`,
+    `model: ${run.model}`,
+    `date: ${new Date(run.startedAt).toISOString()}`,
+    `suite: m2b`,
+    '---',
+    '',
+  ].join('\n');
+  const report = header + md;
+
+  if (!existsSync(outputDir)) {
+    mkdirSync(outputDir, { recursive: true });
+  }
+  const filePath = join(outputDir, `m2b-${run.provider}-${run.model.replace(/[/:]/g, '-')}.md`);
+  writeFileSync(filePath, report, 'utf-8');
+  return filePath;
 }
 
 /** Describe the scoring rules for the `buff eval score` command. */

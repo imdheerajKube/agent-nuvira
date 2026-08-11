@@ -47,20 +47,33 @@ This table highlights core capabilities for quick machine parsing and comparison
 | Security guardrails | Privacy-focused; PII detection; prompt-injection defenses; security scan CLI |
 | Publishing | Standalone eject & npm publishing (`npx agent-nuvira`) |
 | **Routing strategy** | **Thompson-sampling bandit + uncertainty escalation + per-model learning + promotion gate A/B + routing rules + hard constraints** |
-| **Test suite** | **3,161 tests across 106 files — 100% passing** |
+| **Test suite** | **3,806 tests across 149 files — 100% passing** |
 | **Vector backend** | **Native FAISS (automatic), pure-JS IVF fallback, exact JSON fallback** |
 
 
 ## Why Agent-Nuvira? (The Core Edge)
 
+- **🎯 Understands what you asked — then shows you the contract before it runs** — every
+  request in `chat`, `execute`, `plan`, and `edit` resolves through one shared understanding
+  layer: a deterministic rule fast-path (<5ms, works offline) with LLM verification behind it,
+  collapsing to a single action every command consumes identically. Before any work begins,
+  Agent-Nuvira prints a 🧠 Understanding card — the resolved goal, target, scope, acceptance
+  criteria, and risk flags — so the request is **seen before it is run**. Neither Freebuff nor
+  Hermes does this. The live activity board then renders each agent step as it happens —
+  no black box, no silently half-understood goals
+- **🛠️ Execution that repairs itself** — a failed task is not just reported: failures are
+  classified, automatically repaired with escalating retries, independently verified after the
+  fix, and the lesson is stored in persistent failure memory so the same mistake is less likely
+  next time. Runs finish — or they tell you exactly why and what to do next
 - **🪙 Smart Multi-Provider Token Routing** — stop paying flat premium fees. Nuvira dynamically routes every sub-task across **17+ providers** — local models (Ollama, LM Studio), free tiers (Groq, Google Gemini), and paid/high-capacity clouds (OpenAI, Anthropic, Mistral, Cohere, Together, DeepInfra, Fireworks, Perplexity, NVIDIA NIM, OpenRouter, Azure, Anyscale, vLLM) — so you maximize free-use limits and pay only when complexity demands it. A **central quota ledger** tracks tokens per provider × model with calendar-aware reset windows, parks exhausted providers until free quota resets, and **auto-fails-over mid-session** when a token expires or a rate limit hits — never a stuck session, never a quota error thrown at you
-- **🐝 17 Specialized Agent Swarm** — no generic single-prompt boxes. Your goal is decomposed into a DAG of tasks handled by dedicated agents working in parallel: Planner, Context-Gatherer, Writer, Reviewer, Runner, Tester, Debugger, Security Auditor, Git/GitLab specialist, Package installer, PR Reviewer, Issue Triage, Branch Automation, and more
 - **🧠 Learning Router that gets better with use** — a Thompson-sampling bandit learns per provider × complexity bucket from *real* task outcomes (cost-adjusted rewards), with hard constraints (`maxCostUsd`, `minSpeed`, `minReasoning`), regex routing rules, uncertainty-driven escalation when the bandit has no data, and **promotion gates** that only keep router changes that measurably improve quality without regressing cost
+- **🐝 17 Specialized Agent Swarm** — no generic single-prompt boxes. Your goal is decomposed into a DAG of tasks handled by dedicated agents working in parallel: Planner, Context-Gatherer, Writer, Reviewer, Runner, Tester, Debugger, Security Auditor, Git/GitLab specialist, Package installer, PR Reviewer, Issue Triage, Branch Automation, and more
 - **⚡ Deterministic Tier-0 routing** — mechanical edits (remove `console.log`, rename symbols, dedupe imports) complete in **<1ms for $0**, AST-validated before apply, and never touch an LLM unless the goal genuinely needs one
 - **🧠 Local FAISS Context Indexing** — blazing-fast, private, semantic code search and retrieval with an optional **native FAISS backend** (pure-JS fallback) that strictly respects your `.gitignore`. Retrieval shrinks a 20k-token gathered context to the top-k relevant chunks — saving tokens so free quotas stretch further
+- **📌 Persistent project memory** — facts, preferences, and trajectories are stored per project and recalled automatically in later sessions; memory is pluggable (local by default, external backends optional)
 - **🔌 First-Class MCP Integration** — seamlessly connect to Jira, Slack, PostgreSQL, GitHub Issues, and file systems using standard Model Context Protocol servers with SSE transport
 - **👥 Real-Time Team Collaboration** — share context, synchronized vector indices, custom agents, and review pipelines across your engineering team via Git-synced config and memory
-- **🛡️ No server, no telemetry, no subscriptions** — everything runs locally on your machine
+- **🖥️ Runs anywhere** — zero native dependencies, tested on macOS / Windows / Linux (3,806 tests), no server, no telemetry, no subscriptions, and bring-your-own-keys for every provider. For the reasoning behind the architecture, see [DESIGN_DECISIONS.md](DESIGN_DECISIONS.md). For benchmark results, see [docs/benchmarks/INDEX.md](docs/benchmarks/INDEX.md)
 
 ---
 

@@ -1,5 +1,84 @@
 import { parseJsonOrNull } from './jsonOrNull';
-import type { DashboardData, DAGData, QuotaInsights, RoutingInsights, TraceEntry } from './types';
+import type {
+  AdminAuthStatus,
+  AdminCatalog,
+  AdminCatalogProvider,
+  AdminChecksData,
+  AdminLoginResult,
+  AdminQuotaConfig,
+  AdminQuotaPayload,
+  AdminTestResult,
+  AdminUsersResult,
+  AdminWriteResult,
+  DashboardData,
+  DAGData,
+  QuotaInsights,
+  RoutingInsights,
+  TraceEntry,
+} from './types';
+
+// ─── Admin session token persistence (Session 18) ────────────────────────────
+// The Bearer token issued at login/setup rides in localStorage so a refresh of
+// the dashboard keeps the session. localStorage may be unavailable (SSR/node
+// tests) — every access is guarded.
+const ADMIN_TOKEN_KEY = 'buff-dashboard-admin-token';
+
+/**
+ * window.localStorage — NOT the bare `localStorage` identifier: newer Node
+ * versions expose an experimental global localStorage that is undefined
+ * unless --localstorage-file is passed, and it shadows jsdom's window
+ * storage. window.localStorage works in the browser; some environments
+ * (jsdom under certain Node versions, private browsing, embedded webviews)
+ * expose no usable storage at all — the in-memory fallback keeps the session
+ * working for the page's lifetime there. Helpers never throw.
+ */
+function getLocalStorage(): Storage | null {
+  try {
+    if (typeof window !== 'undefined' && window.localStorage) return window.localStorage;
+  } catch {
+    /* not a browser-like environment */
+  }
+  return null;
+}
+
+/** In-memory fallback when window.localStorage is unavailable. */
+const adminTokenMemory = new Map<string, string>();
+
+function readAdminToken(): string | null {
+  const ls = getLocalStorage();
+  if (ls) {
+    try {
+      const v = ls.getItem(ADMIN_TOKEN_KEY);
+      if (v) return v;
+    } catch {
+      /* fall through to memory */
+    }
+  }
+  return adminTokenMemory.get(ADMIN_TOKEN_KEY) ?? null;
+}
+
+function writeAdminToken(token: string | null): void {
+  const ls = getLocalStorage();
+  if (ls) {
+    try {
+      if (token) ls.setItem(ADMIN_TOKEN_KEY, token);
+      else ls.removeItem(ADMIN_TOKEN_KEY);
+      return;
+    } catch {
+      /* fall through to memory */
+    }
+  }
+  if (token) adminTokenMemory.set(ADMIN_TOKEN_KEY, token);
+  else adminTokenMemory.delete(ADMIN_TOKEN_KEY);
+}
+
+export function getAdminToken(): string | null {
+  return readAdminToken();
+}
+
+export function setAdminToken(token: string | null): void {
+  writeAdminToken(token);
+}
 
 export type DashboardListener = (data: DashboardData) => void;
 export type ConnectionListener = (connected: boolean) => void;
@@ -166,6 +245,22 @@ export class DashboardAPI {
     }
   }
 
+  /**
+   * E3c follow-up: run ALL state commands (doctor/system/enterprise checks)
+   * on demand — the dashboard command-runner. The server executes the checks
+   * (one source with `buff doctor`) and returns masked provider status.
+   */
+  async fetchAdminChecks(): Promise<AdminChecksData | null> {
+    try {
+      const res = await fetch(`${this.baseUrl}/api/admin/checks`, { signal: AbortSignal.timeout(15000) });
+      const data = (await parseJsonOrNull(res)) as AdminChecksData | null;
+      if (!data || !Array.isArray(data.system) || !Array.isArray(data.enterprise) || !Array.isArray(data.providers)) return null;
+      return data;
+    } catch {
+      return null;
+    }
+  }
+
   /** P0: fetch a single trace's full detail (steps + previews). */
   async fetchTraceDetail(id: string): Promise<TraceEntry | null> {
     try {
@@ -175,6 +270,172 @@ export class DashboardAPI {
     } catch {
       return null;
     }
+  }
+
+  // ─── Admin write surface (Session 18 — user-id + password control layer) ─
+
+  /**
+   * Send an admin request with the persisted Bearer token. Unlike
+   * parseJsonOrNull, this keeps non-2xx JSON bodies (401/400 carry the server's
+   * error message) while still guarding the content-type (an HTML-200 from a
+   * stale server must never crash on res.json()). Returns null on network
+   * failure.
+   */
+  private async sendAdminRequest(
+    path: string,
+    method: string,
+    body?: unknown,
+  ): Promise<{ status: number; data: unknown } | null> {
+    try {
+      const token = getAdminToken();
+      const res = await fetch(`${this.baseUrl}${path}`, {
+        method,
+        headers: {
+          'Content-Type': 'application/json',
+          ...(token ? { Authorization: `Bearer ${token}` } : {}),
+        },
+        body: body !== undefined ? JSON.stringify(body) : undefined,
+        signal: AbortSignal.timeout(15000),
+      });
+      const type = res.headers.get('content-type') || '';
+      let data: unknown = null;
+      if (type.includes('application/json') || type.includes('text/json')) {
+        try { data = await res.json(); } catch { data = null; }
+      }
+      return { status: res.status, data };
+    } catch {
+      return null;
+    }
+  }
+
+  /** Is the admin surface configured + is the stored token still valid? */
+  async fetchAdminAuthStatus(): Promise<AdminAuthStatus | null> {
+    const r = await this.sendAdminRequest('/api/admin/auth-status', 'GET');
+    if (!r || typeof r.data !== 'object' || r.data === null) return null;
+    const d = r.data as Record<string, unknown>;
+    if (typeof d.configured !== 'boolean' || typeof d.authenticated !== 'boolean') return null;
+    return {
+      configured: d.configured,
+      authenticated: d.authenticated,
+      user: typeof d.user === 'string' ? d.user : null,
+      role: typeof d.role === 'string' ? d.role : null,
+    };
+  }
+
+  /** The dashboard admin users (role.manage = admin only). */
+  async fetchAdminUsers(): Promise<AdminUsersResult> {
+    const r = await this.sendAdminRequest('/api/admin/users', 'GET');
+    if (!r) return { ok: false, error: 'Could not reach the dashboard server.' };
+    const d = (r.data ?? {}) as AdminUsersResult;
+    if (r.status === 200 && d.ok && Array.isArray(d.users)) return d;
+    return { ok: false, error: d.error || 'Failed to load users.', forbidden: r.status === 403, unauthorized: r.status === 401 };
+  }
+
+  /** Add a dashboard admin user with a role (admin only). */
+  async addAdminUser(user: string, password: string, role: string): Promise<AdminUsersResult> {
+    const r = await this.sendAdminRequest('/api/admin/users', 'POST', { user, password, role });
+    if (!r) return { ok: false, error: 'Could not reach the dashboard server.' };
+    const d = (r.data ?? {}) as AdminUsersResult;
+    if (r.status === 200 && d.ok) return d;
+    return { ok: false, error: d.error || 'Failed to add user.', forbidden: r.status === 403, unauthorized: r.status === 401 };
+  }
+
+  /** Remove a dashboard admin user (admin only). */
+  async removeAdminUser(user: string): Promise<AdminUsersResult> {
+    const r = await this.sendAdminRequest(`/api/admin/users/${encodeURIComponent(user)}`, 'DELETE');
+    if (!r) return { ok: false, error: 'Could not reach the dashboard server.' };
+    const d = (r.data ?? {}) as AdminUsersResult;
+    if (r.status === 200 && d.ok) return d;
+    return { ok: false, error: d.error || 'Failed to remove user.', forbidden: r.status === 403, unauthorized: r.status === 401 };
+  }
+
+  /** The provider catalog (Add-provider selector source). */
+  async fetchAdminCatalog(): Promise<AdminCatalogProvider[] | null> {
+    const r = await this.sendAdminRequest('/api/admin/catalog', 'GET');
+    const d = r?.data as AdminCatalog | null;
+    if (!d || !Array.isArray(d.providers)) return null;
+    return d.providers;
+  }
+
+  /** Bootstrap the admin credential (only valid while unconfigured). */
+  async adminSetup(user: string, password: string): Promise<AdminLoginResult> {
+    const r = await this.sendAdminRequest('/api/admin/setup', 'POST', { user, password });
+    if (!r) return { ok: false, error: 'Could not reach the dashboard server.' };
+    const d = (r.data ?? {}) as AdminLoginResult;
+    if (r.status === 200 && typeof d.token === 'string') {
+      setAdminToken(d.token);
+      return { ok: true, user: d.user, token: d.token };
+    }
+    return { ok: false, error: d.error || 'Setup failed.', unauthorized: r.status === 401 };
+  }
+
+  /** Login with the admin user-id + password. Persists the returned token. */
+  async adminLogin(user: string, password: string): Promise<AdminLoginResult> {
+    const r = await this.sendAdminRequest('/api/admin/login', 'POST', { user, password });
+    if (!r) return { ok: false, error: 'Could not reach the dashboard server.' };
+    const d = (r.data ?? {}) as AdminLoginResult;
+    if (r.status === 200 && typeof d.token === 'string') {
+      setAdminToken(d.token);
+      return { ok: true, user: d.user, token: d.token };
+    }
+    return { ok: false, error: d.error || 'Login failed.', unauthorized: r.status === 401 };
+  }
+
+  /** Log out — revoke the stored token server-side and locally. */
+  async adminLogout(): Promise<void> {
+    await this.sendAdminRequest('/api/admin/logout', 'POST');
+    setAdminToken(null);
+  }
+
+  /** Save/update a provider's key + config (authed). Mirrors `buff config set providers.*`. */
+  async saveProvider(
+    type: string,
+    fields: { apiKey?: string; baseUrl?: string; model?: string; runner?: string },
+  ): Promise<AdminWriteResult> {
+    const r = await this.sendAdminRequest(`/api/admin/providers/${encodeURIComponent(type)}`, 'PUT', fields);
+    if (!r) return { ok: false, error: 'Could not reach the dashboard server.' };
+    const d = (r.data ?? {}) as AdminWriteResult;
+    if (r.status === 200 && d.ok) return d;
+    return { ok: false, error: d.error || 'Save failed.', unauthorized: r.status === 401 };
+  }
+
+  /** Remove a provider's key + credential fields (authed). */
+  async deleteProvider(type: string): Promise<AdminWriteResult> {
+    const r = await this.sendAdminRequest(`/api/admin/providers/${encodeURIComponent(type)}`, 'DELETE');
+    if (!r) return { ok: false, error: 'Could not reach the dashboard server.' };
+    const d = (r.data ?? {}) as AdminWriteResult;
+    if (r.status === 200 && d.ok) return d;
+    return { ok: false, error: d.error || 'Remove failed.', unauthorized: r.status === 401 };
+  }
+
+  /** Test a provider's configured credentials (authed — lists its models). */
+  async testProvider(type: string): Promise<AdminTestResult> {
+    const r = await this.sendAdminRequest(`/api/admin/providers/${encodeURIComponent(type)}/test`, 'POST');
+    if (!r) return { ok: false, error: 'Could not reach the dashboard server.' };
+    const d = (r.data ?? {}) as AdminTestResult;
+    if (r.status === 200) return d;
+    return { ok: false, error: d.error || 'Test failed.', unauthorized: r.status === 401 };
+  }
+
+  /** The user-declared budget (routing.quota + cost cap). Read is open. */
+  async fetchAdminQuota(): Promise<AdminQuotaConfig | null> {
+    const r = await this.sendAdminRequest('/api/admin/quota', 'GET');
+    if (!r) return null;
+    const d = r.data as AdminQuotaConfig | null;
+    if (!d || !d.ok || typeof d.quota !== 'object') return null;
+    return d;
+  }
+
+  /**
+   * Save the user-declared budget (authed). Quota fields are gated by
+   * routing.operate (admin + operator); the cost cap by policy.write (admin).
+   */
+  async saveAdminQuota(body: AdminQuotaPayload): Promise<AdminWriteResult> {
+    const r = await this.sendAdminRequest('/api/admin/quota', 'PUT', body);
+    if (!r) return { ok: false, error: 'Could not reach the dashboard server.' };
+    const d = (r.data ?? {}) as AdminWriteResult;
+    if (r.status === 200 && d.ok) return d;
+    return { ok: false, error: d.error || 'Save failed.', unauthorized: r.status === 401 };
   }
 }
 

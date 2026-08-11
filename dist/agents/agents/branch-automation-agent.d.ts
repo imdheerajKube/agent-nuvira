@@ -29,6 +29,12 @@ export declare class BranchAutomationAgent extends Agent {
     private handleIssueBranch;
     private handlePRUpdate;
     private handleFileWatch;
+    /**
+     * Locate Git Bash's sh.exe on Windows (used by the file-watch .cmd
+     * wrapper). Tries the standard install location, Program Files (x86),
+     * and a PATH lookup — Git Bash from Scoop/Chocolatey lives elsewhere.
+     */
+    private resolveGitBashSh;
     private handleAutoCommit;
     private handleCIFix;
     private handleAutoDetect;

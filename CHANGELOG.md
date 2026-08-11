@@ -2,6 +2,117 @@
 
 All notable changes to **Agent-Nuvira** are documented in this file.
 
+## v1.62.0 — Revamp complete — reliability stack, code-map, scheduled jobs, gateway
+
+- **Major revamp complete** — all 30 rows of the Freebuff/Hermes parity program are landed (AGENT_NUVIRA_MAJOR_REVAMP_PLAN)
+- **Reliability stack** — writer surfaces unparseable output instead of masking it (repair escalates the model), reviewer-blocked verdicts route through a writer fix pass, weak-local-model pre-flight warning before long runs
+- **New `buff code-map`** — project symbol map (functions/classes/methods) via the AST engine; closes the last revamp row; AST dedupe fix recovered silently-dropped top-level functions
+- **Scheduled jobs** — `buff admin cron add/list/remove/run` with schema-validated args, RBAC-gated writes, channel delivery
+- **Multi-channel gateway** — Telegram / Discord / Slack / WhatsApp via `buff gateway`
+- **Web tools + modality packs** — `web_search`/`read_page` (SSRF-guarded) plus browser / image / voice / vision tools
+- **Structured logging (K1) + runtime metrics (K2)** — JSON logs with correlation IDs; `buff doctor --enterprise` runtime metrics
+- **Session recall** — chat auto-recalls per-project sessions and facts
+- **4,031 tests passing across 167 files**
+
+### Session 47 — post-revamp followups + last revamp row
+- feat: NEW buff code-map [dir] [--json] — project symbol map (functions/classes/methods with 1-based lines) via the AST engine; closes revamp row 11 (engine-agnostic; web-tree-sitter remains the upgrade follow-up)
+- fix: editing/ast.ts — duplicate pattern matches for the same declaration (explicit "function name(" + generic "name(") produced equal-end nodes that the nesting filter dropped BOTH of; top-level functions silently vanished from the structure map (pre-existing bug that also affected the edit pipeline). Same-end nodes are now excluded from nesting + deduped, and JS/TS function patterns accept an export prefix.
+- fix: writer buildPrompt now surfaces a ## Goal section when context.goal differs from the step description — repair/fix-pass/alternative-approach context in the goal previously never reached the LLM (caught by the new E2E)
+- fix: edit-module empty-parse parity — a genuine "no changes needed" decline is a clean no-op; a format failure keeps the parseable warning
+- test: NEW tests/integration/reliability-fixes.test.ts — real Orchestrator + scripted fake LLM E2E (writer parse-failure repair recovery, loud failure, reviewer-blocked fix pass); NEW tests/cli/code-map.test.ts (3)
+### Session 46 — NVDA-run reliability fixes (post-revamp)
+- fix: writer no longer masks unparseable LLM output as "No files needed changes" — a genuine "no changes needed" decline stays a no-op, but a format failure (no filepath: code blocks) now FAILS the task so the repair engine escalates the model instead of silently skipping the real work (was: masked success → incomplete deliverable → reviewer loop)
+- fix: reviewer "blocked" verdicts now route through a WRITER fix pass (writer applies the reviewer feedback, then the reviewer re-verifies) instead of re-running the reviewer on unchanged code until the repair budget dies
+- feat: weak-local-model pre-flight warning — when auto-routing lands on a LOCAL model scoring < 0.5 (no verified cloud provider available), warn before the pipeline burns minutes on a model likely to fail complex tasks
+- test: writer parse-failure surfacing (4) · orchestrator reviewer fix-pass (2) · weak-model gate (2) · updated writer-prompt suite to the new contract
+
+### Session 45b — K1 structured logging + K2 runtime metrics (last revamp rows)
+- **Structured logging (K1)** — `BUFF_LOG_JSON=1` now emits one machine-readable JSON object per log line (level/time/msg + correlation IDs), with secrets redacted BEFORE serialization. Every chat session carries ONE `sessionId`; every pipeline run carries a `runId`; every agent execution carries a `taskId` — so `buff chat` → pipeline → agent logs are correlateable end-to-end, without any parameter plumbing (AsyncLocalStorage carrier in `src/enterprise/log.ts`).
+- **Runtime metrics (K2)** — dependency-free counters + latency timers persisted to `~/.buff/memory/metrics.json`: memory hits/misses, and the C1 rule-vs-LLM latency budget (`rule.parse.ms` / `rule.dispatch.ms` / `llm.answer.ms`). `buff doctor --enterprise` now surfaces a **Runtime Metrics (K2)** check. These are the last two rows of the major revamp — **all 30 rows are now Done/Baseline/skipped-by-design**.
+
+### Session 45 — Honest stuck-scoring + plan sweep + key hygiene
+- **Stuck states now exclude provider interference** — a task whose terminal failure is rate-limit / server / network (e.g. a free-tier 429 that opened the circuit breaker) is reported on a separate `Provider interference` line instead of inflating the user-visible stuck count. The S44 run re-analyzes from **5 stuck → 0 stuck, 6 interference** (all 429s, attempts=1 — the pipeline never got a chance to work). Persisted runs saved earlier re-analyze correctly, and auth/timeout failures remain genuinely stuck. `buff eval run` / `results --compare` both use the corrected counts.
+- **Full-plan sweep** — the revamp plan is complete except two rows now actionable (K1 structured logging, K2 latency metrics); M3 (zod) confirmed landed inside the H1 registry.
+- **Key hygiene** — `~/.buff/.env` carries real GROQ/GEMINI keys but placeholder `new-key` / `openrouter-env-key` values for NIM and OpenRouter. Replace those two lines with real keys (`NVIDIA_NIM_API_KEY=...`, `OPENROUTER_API_KEY=...`) to unlock both providers; `buff doctor` and `buff models refresh` then pick them up. Note: the configured `gemini-2.0-flash-exp` model and catalog `gemini-2.5-flash` both return 404 on this account — switch to a model `buff models list` shows as served, or use the auto router.
+
+### Session 44 — M2b experience-parity re-run (final revamp item)
+- **Post-revamp benchmark run** — `buff eval run --suite m2b --provider groq --budget 0.05` (9 tasks, $0.008, 110.7s). The instrumented `buff eval results --compare` gate shows a **win on every experience axis vs the immediately-prior run**: composite 47.2% vs 26.9%, test-pass 44% (4/9) vs 11% (1/9), completion 22% vs 0%, stuck 5 vs 8, rework 32 vs 36.
+- **Honest caveats** — the composite sits below the Session 31 peak (72.2%) within the documented ±17pt free-tier Groq noise floor, and this run hit 2 circuit-breaker cooldowns (120s each) — a post-baseline failure mode that scores recoverable rate-limit pauses as "stuck". The revamp did not regress; absolute movement past noise requires a stable provider run.
+
+### Session 43 — I2–I5 modality packs (browser / image / voice / vision)
+- **New `src/tools/modality/` family** — four capability packs, every backend OPTIONAL and availability-gated (Hermes registry pattern): `browser` (Playwright optional via `require.resolve`, SSRF guard reusing web-research's `isAllowedReadUrl`), `generate_image` (Pollinations.ai free endpoint default, local SD/ComfyUI via `BUFF_IMAGE_API_URL`), `speak`/`transcribe` (edge-tts + Piper stdin fallback; whisper.cpp/whisper-cli with transcript file read-back), `describe_image` (Ollama llava/llama3.2-vision or Gemini via the existing model router). All four registered in the H1 tool registry with availability-gated `run()` — a missing backend returns a clear "install … then retry" message, never throws. Artifacts land in `<cwd>/.buff/artifacts/<kind>` (`BUFF_ARTIFACTS_DIR` overrides).
+- **Code-search race fix** — the ripgrep engine could parse pipe-buffered matches after truncating (async `kill()`), making `maxResults` flaky; the stdout handler now bails once truncated/timed-out.
+- **Validation**: tsc clean · full suite 163/163 files (+modality tests) · build OK · `buff tools list` shows the new tools.
+
+### Session 42 — J1 Multi-channel gateway
+- **`buff gateway start / send / status / alias`** — talk to the agent from Telegram, Discord, Slack, or WhatsApp (Hermes `gateway/` parity). Dependency-free adapters (pure fetch — deliberately no grammY/discord.js/@slack/web-api SDKs): Telegram long-poll `getUpdates`, Discord/Slack incoming-webhook send, WhatsApp Meta Cloud API; all opt-in via env bot tokens.
+- **`GatewayRegistry`** — inbound message → `parseRequestSync` (C3) → the SAME shared `runPipelineTool` core as `buff chat`/`execute` → reply to the originating channel; every ORCHESTRATOR/EXEC/CRON board event streams as a compact channel status line. Pipeline runs serialize so events route to the right channel.
+- **Channel directory + aliases** — Hermes `channel_directory.py` pattern: `buff gateway alias add ops slack C0123`, persisted to `~/.buff/gateway/aliases.json`, `platform:channelId` targets supported.
+- **Security**: webhook receiver binds 127.0.0.1 by default (`--host 0.0.0.0` for a tunnel); Slack `X-Slack-Signature` (HMAC v0) + WhatsApp `X-Hub-Signature-256` verified when secrets configured; **pipeline triggers gated by `BUFF_GATEWAY_ALLOW_IDS`** (platform:channelId allow-list); alias writes RBAC-gated on `gateway.manage`.
+- **Cron delivery**: `buff admin cron add … --channel <alias>` → job results forwarded to the channel after each run (best-effort — never fails the run).
+- **Validation**: tsc clean · full suite 162/162 files (+19 tests) · build OK · live smoke.
+
+### Session 41 — M1 Integration tests + M4 CI matrix
+- **`tests/integration/` (M1)** — the three foundation systems pass as ONE hermetic unit: one temp `BUFF_CONFIG_DIR` + `BUFF_MEMORY_DIR` harness drives the REAL Vault (aes-file set→get round-trip surviving fresh instances), WorkspaceStore (recordRun → reload), and FactStore (addFact → reload) — plus a "secret never on disk in plaintext" check. A second file runs a REAL `Orchestrator.execute()` against a nonexistent local model (fast-fail, zero network) and proves the best-effort workspace `recordRun` fires even when the pipeline FAILS (❌ row) and that a second run upserts the same project row.
+- **CI matrix (M4)** — `test-linux.yml` extended in place (no new pipeline file): Node 22/24/26 × ubuntu/macos + a new `bun` job (committed `bun.lock`, `bunx tsc --noEmit`, `bun run build`, `bunx vitest run`).
+- **Validation**: tsc clean · full suite 160/160 files (+2 integration files) · build OK · integration suite passes under both Node and Bun.
+
+### Session 40 — J2 Scheduled jobs (cron)
+- **`buff admin cron add / list / remove / run`** — scheduled tool invocations (Hermes `cron/jobs.py` parity): 5-field node-cron validation, `--dry-run` (validate + next run WITHOUT executing), persisted jobs in `~/.buff/cron/jobs.json`, `run <name>` invokes the H1 registry tool now (fresh ConfigManager — pipeline tools need one) and emits `cron:run/result/error` events for the future gateway/dashboard.
+- **Safety**: job names sandboxed (`^[a-z0-9][a-z0-9-]{0,49}$`), **`--args` validated against the tool's zod schema at add time** (a typo surfaces immediately, not at 3am), all writes RBAC-gated on the new `cron.manage` action (admin + operator).
+- **Validation**: tsc clean · full suite 158/158 files (+11 tests) · isolated-HOME live smoke.
+
+### Session 39 — J3 Skills hub + sync (capability gap #10)
+- **`buff skills search / install / update / list`** — community skills discovered from a configurable registry (default GitHub raw; `BUFF_SKILLS_REGISTRY` can point at a local dir for offline use) and installed into `<project>/.agents/skills/` — Hermes `skills_hub.py` + Freebuff `npx skills add` parity. Distinct from `buff skill` (singular), which manages internal trajectory-compiled skills.
+- **Trust + safety**: sandboxed install names (`^[a-z0-9-]+$`), frontmatter `name:` cross-checked against the registry entry, SHA-256 provenance recorded in `~/.buff/skills-hub/provenance.json`, mismatched reinstall content quarantined; `buff skills update` is version-gated (never downgrades, never clobbers local edits) and RBAC-gated on `skill.remove` like `skill gc`/`clear`.
+- **Validation**: tsc clean · full suite 157/157 files (+19 tests) · local-dir registry tests, no network.
+
+### Session 38 — I1 Web research tools (capability gap #3)
+- **`web_search` / `read_page` tools** — the model can now search the web (DuckDuckGo free tier by default, SearXNG opt-in) and read a page's text (Jina Reader free tier or a plain fetch) to ground its answers — Freebuff `researcher-web.ts` / Hermes `web_search_registry.py` parity. Registered in the H1 tool registry + the safe MCP surface; `buff tools list` shows them under 🧰 Workflow.
+- **SSRF guard** — `read_page` only fetches public http(s): loopback/link-local/private/metadata hosts blocked unless `BUFF_WEB_ALLOW_PRIVATE=1`; DDG redirect URLs decoded to real targets.
+- **Validation**: tsc clean · full suite 156/156 files (+17 tests) · mocked-fetch tests, no network.
+
+### Session 37 — Eval `--pace` (Decision 21's gate fix)
+- **`buff eval run --pace`** stops the suite BEFORE a task would cross the user-declared daily token budget (`routing.quota.<provider>.tokensPerWindow`), so free-tier TPD exhaustion can't invalidate an M2b measurement mid-run. Resolves the budget from the config + today's quota-ledger consumption (`resolvePaceBudget`); warns when `--pace` is set but no budget is declared; works in both direct-provider and `--routing` modes alongside the existing `--budget` (USD) gate.
+- **`EvalMetrics.totalTokens`** — per-task input+output token total powers the cumulative pacing check.
+- **Validation**: full suite **3,908/3,908** (+6 tests) · tsc clean · live smoke (500-token cap, 84K used → stopped before task 1).
+
+### K4 — RBAC enforcement (Session 34)
+- **Enforcement everywhere**: the RBAC engine previously only gated `buff admin`. K4 adds `credential.write`/`team.manage`/`sbom.write`/`skill.remove` to the action matrix and wires a shared `guardRbacAction()` helper into every sensitive surface: `buff team` mutations (init/join/sync/share + all review actions), `buff skill gc` real removal + `buff skill clear` (dry-run stays open), `buff sbom --out`, and `buff config vault migrate`. Denied → clear message + exit code 3; legacy single-user mode remains fully permissive.
+- **Single enforcement path**: `buff admin`'s private guard now delegates to the shared helper.
+- **New**: `src/cli/rbac-guard.ts` + `tests/cli/rbac-guard.test.ts` (13 tests).
+
+### M2b gate re-run + noise-floor verdict (Session 35)
+- **Gate ran, verdict: measurement-integrity.** Post-K3/K4 re-run scored 26.9% composite vs the 72.2% baseline — but with **12 tokens-per-DAY 429s and 0 TPM events**: free-tier Groq's daily budget was exhausted mid-run (cost $0.0018, 8/9 tasks starved of any model response). NOT a regression — the gate's anti-coverup job.
+- **Noise floor widened to ~±45pt** (72.2% / 55.0% / 26.9% across identical setups) — TPD exhaustion dominates. The Part 1.9 gate must run on a paid tier or with per-task pacing; documented in the benchmark INDEX + plan.
+- **RBAC user docs**: Product_Guide v1.61.1 row + User_Manual section (enforcement everywhere, vault audit, eval compare). Dashboard parity confirmed automatic (same `roleCan` matrix).
+
+### User-declared daily token budget (Session 36, Design Decision 21)
+- **Your plan, your say** — free-tier TPD caps are invisible to us, so the USER declares their budget: `buff model quota set <provider> --tokens N --requests N --window-ms N --cost-usd N` (CLI) + a dashboard **💰 Daily Budget** panel (Admin) editing the SAME `routing.quota.*` + `governance.maxCostUsd` config. Advisory + pacing, never a product hard cap: unset = current behavior, set = the quota ledger parks the provider at the cap and auto-resumes at window rollover.
+- **Backend enforcement is real** — `getRouterQuotaStatus()` derives configured-limit exhaustion and feeds the auto-router before every pick; rate-limited providers park for the declared window.
+- **Fixed a latent merge bug** — ConfigManager.save shallow-merges `routing`; quota setters (CLI + `config set routing.quota.*`) now save the full merged map so sibling providers' limits are never wiped.
+- **RBAC-aware** — budget fields gate `routing.operate` (admin+operator), the cost cap gates `policy.write` (admin); viewer read-only. 3,899 tests.
+- **Update as and when** — `ConfigManager` live-re-reads on file change: a running chat/execute/dashboard honors a limit change from `buff model quota set` or the Daily Budget panel immediately, no restart (verified on a live instance). `save()` refreshes before merging so concurrent CLI ↔ dashboard edits never clobber each other; a partial concurrent write keeps the last good config. 3,902 tests.
+
+### G1–G3 — Observability, dashboard & docs surfacing
+- **`buff session`** (new): `list` (project + temporal filter via `--since`), `summarize <id>`, `resume` — the explicit debug surface over D1 auto-recall (a bare `continue` remains the primary path).
+- **`buff doctor`** now reports a **Fact Memory** section (facts per project, B1) alongside the existing vault / workspace checks.
+- **Privacy (P6 M6.2):** chat session writes (`history.json` + the semantic vector index) are now **redacted** — API keys / Bearer tokens / key=value secrets are masked before persisting; the caller's message array is never mutated.
+- **Dashboard memory panel:** Facts, recall hits (total / today / this week, per project), and the backend tier are now surfaced; recall hits come from a deduped JSONL counter at the shared auto-recall choke point.
+
+### H1 follow-up — Agent-Nuvira as an MCP server
+- **`buff mcp serve`** exposes the agent's H1 tools as an MCP **server** over stdio (Claude Desktop / IDEs / other agents can connect). Safe surface by explicit allowlist: pipeline tools (`build` / `resume` / `repair` / `document` / `website` / `analyze` / `test`) + `code_search`; loop-internal / LLM-dependent / irreversible tools (`ask_user`, `suggest_followups`, `verify_requirement`, `delegate`, `publish`) are **excluded by default** — opt in explicitly with `--with <tools>`. Runs are headless (`board: false`), errors map to MCP `isError` results, and pre-connect output routes to stderr so the protocol owns stdout cleanly.
+
+### M2b — Experience-parity baseline + stuck/rework breakdown
+- **First real M2b baseline** (`buff eval run --suite m2b`, auto-routed to `groq/llama-3.3-70b-versatile`): 9/9 tasks in 142s for **$0.02** — composite **72.2%**, test-pass **78% (7/9)**, avg time-to-fix **9.9s**, 0 rollbacks. Report: `docs/benchmarks/m2b-groq-llama-3.3-70b-versatile.md`.
+- **Stuck / rework breakdown** — the benchmark spec promised these axes; now actually measured and rendered: `computeReworkTurns()` (repairs + alternative approaches + rollbacks — NOT llmCalls, which the multi-agent pipeline makes ~4-5 of by design) and `computeStuckStates()` (crash/timeout, or 3+ rework turns, with **no working outcome**) drive new columns + an **Experience Parity** section in eval reports. Baseline: **15 rework turns (1.7/task), 2 stuck states** — Groq free-tier TPM 429 rate-limits hit 3 tasks; 2 recovered to correct code (interference, not stuckness), 1 failed.
+- **Test-isolation fix** — eval-framework tests now run against a temp homedir (`vi.mock('node:os')` + hoisted temp dir); previously `afterEach(clearEvals)` wiped the real `~/.buff/memory/evals.json`.
+- **`buff eval results --compare`** — one-command Part 1.9 gate: diffs two runs across the M2b axes (composite / test-pass / completion higher-better; stuck / rework / time-to-done / avg-fix / cost lower-better) with per-axis winner arrows. `selectCompareRuns()` compares against the most recent **same provider+model** run so a model switch never confounds the gate. A second identical-setup run quantified the free-tier Groq noise floor at ~±17 composite points (17 TPM 429s — 55.0% vs 72.2%) — phase-gating movement must exceed that band.
+
+### K3 — Vault access auditing
+- **Vault access log** — every credential read/write/delete is now recorded as a hash-chained, secret-scrubbed record in `~/.buff/memory/vault-access.jsonl` (**account names only, never values**). View with `buff config vault log [--limit N]`; verify integrity with `buff audit verify` / `buff doctor --enterprise`. Rotation keeps the store bounded (~5k–10k lines) with the chain re-chained intact.
+- **`buff audit verify` fix** — builtin chain ids now carry the `.jsonl` extension, so `buff audit verify` verifies the REAL stores (quota-events 200 records, model-registry 2,408 records — previously every builtin silently reported as an empty bogus "legacy" chain).
+
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
@@ -933,8 +1044,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   prebuilt binaries, so it can't be a hard dependency for zero-setup
   `npx agent-nuvira` — the pure-JS IVF-flat backend provides FAISS-style
   behavior portably
-
-## [Unreleased]
 
 ### Added
 
@@ -2339,3 +2448,4 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 | **Phase 3: Major Upgrades** | v1.11.0 – v1.14.6 | Skills, pruner, VS Code, federation, dashboard, SDK |
 | **Phase 4: Industry Standards** | v1.15.0 – v1.16.0 | MCP, A2A, CI/CD, npm publishing, error-repair |
 | **Phase 5: Interactive UX** | v1.16.1 | Interactive dev mode, failure analysis, follow-up suggestions, /fix |
+

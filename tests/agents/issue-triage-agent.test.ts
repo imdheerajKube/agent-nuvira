@@ -19,6 +19,15 @@ import { describe, it, expect, beforeEach, vi } from 'vitest';
 import { IssueTriageAgent, type IssueClassification, type IssuePriority, type IssueDifficulty, type TriageResult, type IssueSummary } from '../../src/agents/agents/issue-triage-agent.js';
 import type { AgentContext } from '../../src/agents/agent.js';
 
+// Mock node:child_process so inferAssigneeFromGitBlame's execSync can be fed
+// raw --line-porcelain output without touching a real git repo.
+vi.mock('node:child_process', () => ({
+  execSync: vi.fn(),
+}));
+
+import { execSync } from 'node:child_process';
+const mockExecSync = vi.mocked(execSync);
+
 // ─── Context Factory ─────────────────────────────────────────────────────────
 
 function createContext(overrides: Partial<AgentContext> = {}): AgentContext {
@@ -452,6 +461,54 @@ describe('IssueTriageAgent', () => {
       expect((agent as any).groupByClassification([])).toEqual({});
       expect((agent as any).groupByPriority([])).toEqual({});
       expect((agent as any).groupByDifficulty([])).toEqual({});
+    });
+  });
+
+  describe('inferAssigneeFromGitBlame (cross-platform parsing)', () => {
+    it('extracts the most frequent author from --line-porcelain output without a shell pipeline', async () => {
+      // Windows cmd.exe has no grep/sort/uniq/head — the agent must count
+      // authors in pure JS from raw porcelain output.
+      const porcelain = [
+        '1a2b3c4d5e6f7a8b9c0d1e2f3a4b5c6d7e8f9a0b 1 1 1',
+        'author Alice <alice@example.com>',
+        'author-mail <alice@example.com>',
+        'author-time 1700000000',
+        'author-tz +0000',
+        'committer Alice <alice@example.com>',
+        'committer-time 1700000000',
+        'committer-tz +0000',
+        'summary fix login',
+        '\tconst x = 1;',
+        'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa 2 2 1',
+        'author Bob <bob@example.com>',
+        'author-mail <bob@example.com>',
+        'author-time 1700000001',
+        'author-tz +0000',
+        '\tconst y = 2;',
+        'bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb 3 3 1',
+        'author Bob <bob@example.com>',
+        'author-mail <bob@example.com>',
+        '\tconst z = 3;',
+      ].join('\n');
+
+      mockExecSync.mockReturnValue(porcelain as any);
+      const assignee = await (agent as any).inferAssigneeFromGitBlame(
+        'Bug in `src/auth.ts` when clicking login',
+      );
+      expect(assignee).toBe('Bob <bob@example.com>');
+      // The command must be plain git blame — no shell pipeline with
+      // grep/sort/uniq/head that would fail on Windows cmd.exe.
+      expect(mockExecSync.mock.calls[0][0]).toContain('git blame --line-porcelain');
+      expect(mockExecSync.mock.calls[0][0]).not.toContain('|');
+    });
+
+    it('returns undefined when the issue mentions no files', async () => {
+      mockExecSync.mockClear();
+      const assignee = await (agent as any).inferAssigneeFromGitBlame(
+        'Random prose with no file references at all',
+      );
+      expect(assignee).toBeUndefined();
+      expect(mockExecSync).not.toHaveBeenCalled();
     });
   });
 

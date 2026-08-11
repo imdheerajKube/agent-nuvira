@@ -15,5 +15,9 @@ addon/
 # Local issue tracking (not synced to the upstream repo)
 issues/
 
+# Internal revamp plan + progress tracker (stays local, never published)
+AGENT_NUVIRA_MAJOR_REVAMP_PLAN.md
+REVAMP_PROGRESS.md
+
 # macOS
 .DS_Store

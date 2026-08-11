@@ -23,11 +23,21 @@
  */
 
 import { Command } from 'commander';
+import ora from 'ora';
 import { BaseCommand } from './commands.js';
+import { guardRbacAction } from './rbac-guard.js';
 import { logger } from '../utils/logger.js';
 import { RbacManager, RbacError, ROLES } from '../enterprise/rbac.js';
 import type { AdminAction, Role } from '../enterprise/rbac.js';
 import type { BuffConfig, GovernanceConfig } from '../config/types.js';
+import {
+  addCronJob,
+  listCronJobs,
+  removeCronJob,
+  dryRunCronJob,
+  nextRunAt,
+  runJobNow,
+} from '../gateway/cron.js';
 
 /** The governance fields `buff admin clear` accepts. */
 const GOVERNANCE_FIELDS: ReadonlyArray<keyof GovernanceConfig> = [
@@ -51,17 +61,9 @@ export class AdminCommand extends BaseCommand {
    * policy writes require `admin`. Callers abort on false.
    */
   private guard(action: AdminAction): boolean {
-    if (this.rbac.isLegacyMode()) return true;
-    try {
-      this.rbac.requireCan(action);
-      return true;
-    } catch (err) {
-      if (err instanceof RbacError) {
-        logger.error(`⛔ ${err.message}`);
-        logger.error('   Run `buff admin role add <you> admin` once as the initial admin.');
-      }
-      return false;
-    }
+    // K4: single enforcement path — delegate to the shared guard so the
+    // admin surface and every other guarded command can never drift.
+    return guardRbacAction(action);
   }
 
   create(): Command {
@@ -78,6 +80,7 @@ export class AdminCommand extends BaseCommand {
       .addCommand(this.clearCommand())
       .addCommand(this.roleCommand())
       .addCommand(this.whoamiCommand())
+      .addCommand(this.cronCommand())
       .action(() => {
         this.showPolicy(false);
       });
@@ -349,11 +352,131 @@ export class AdminCommand extends BaseCommand {
         } else if (this.rbac.isLegacyMode()) {
           console.log('  Role: none (legacy single-user mode — full access)');
           console.log('  Can:  everything (until roles are assigned)');
-        } else {
-          console.log('  Role: unassigned (viewer-equivalent — read-only)');
-          console.log('  Can:  policy.read');
+        } else {        console.log('  Role: unassigned (viewer-equivalent — read-only)');
+        console.log('  Can:  policy.read');
         }
         console.log('');
       });
+  }
+
+  // ─── cron (J2 — scheduled tool invocations) ─────────────────────────────
+
+  private cronCommand(): Command {
+    const cron = new Command('cron')
+      .description('Scheduled tool invocations (J2 — mirrors Hermes cron/jobs.py)');
+
+    cron
+      .command('add <name> <schedule> <tool>')
+      .description('Add a cron job: buff admin cron add nightly-build "0 3 * * *" build')
+      .option('--args <json>', 'Tool arguments as JSON (e.g. {"goal":"build"})')
+      .option('--channel <alias>', 'Deliver the result to a gateway channel alias (J1)')
+      .option('--dry-run', 'Validate the schedule + tool WITHOUT saving', false)
+      .action((name, schedule, tool, opts) => this.cronAdd(name, schedule, tool, opts));
+
+    cron
+      .command('list')
+      .description('List cron jobs with schedule + next run')
+      .action(() => this.cronList());
+
+    cron
+      .command('remove <name>')
+      .description('Remove a cron job')
+      .action((name) => this.cronRemove(name));
+
+    cron
+      .command('run <name>')
+      .description('Run a cron job NOW (invoke its tool immediately)')
+      .action(async (name) => this.cronRun(name));
+
+    return cron;
+  }
+
+  private parseCronArgs(raw?: string): { ok: true; args: Record<string, unknown> } | { ok: false; error: string } {
+    if (!raw) return { ok: true, args: {} };
+    try {
+      const parsed = JSON.parse(raw) as unknown;
+      if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
+        return { ok: false, error: '--args must be a JSON object' };
+      }
+      return { ok: true, args: parsed as Record<string, unknown> };
+    } catch {
+      return { ok: false, error: `--args is not valid JSON: ${raw}` };
+    }
+  }
+
+  private cronAdd(
+    name: string,
+    schedule: string,
+    tool: string,
+    opts: { args?: string; dryRun?: boolean; channel?: string },
+  ): void {
+    if (!this.guard('cron.manage')) return;
+    const parsedArgs = this.parseCronArgs(opts.args);
+    if (!parsedArgs.ok) {
+      logger.error(parsedArgs.error);
+      return;
+    }
+    if (opts.dryRun) {
+      const dry = dryRunCronJob(name, schedule, tool, parsedArgs.args);
+      if (!dry.ok) {
+        logger.error(dry.error);
+        return;
+      }
+      logger.info(`✅ DRY RUN: ${dry.description}`);
+      logger.info(`   Next run: ${dry.nextRun}`);
+      return;
+    }
+    const result = addCronJob(name, schedule, tool, parsedArgs.args, opts.channel);
+    if (!result.ok) {
+      logger.error(result.error);
+      return;
+    }
+    logger.success(`✅ Added cron job '${result.job.name}' → ${result.job.tool} every '${result.job.schedule}'`);
+  }
+
+  private cronList(): void {
+    const jobs = listCronJobs();
+    if (jobs.length === 0) {
+      logger.info('No cron jobs defined.');
+      logger.info('  Add one: buff admin cron add <name> "0 3 * * *" <tool> [--args <json>]');
+      return;
+    }
+    console.log(`\n⏱  ${jobs.length} cron job(s):\n`);
+    for (const j of jobs) {
+      const next = nextRunAt(j.schedule);
+      const nextStr = next ? next.toLocaleString() : 'never';
+      const enabled = j.enabled ? '✅' : '⏸️';
+      const lastRun = j.lastRunAt ? new Date(j.lastRunAt).toLocaleString() : 'never';
+      console.log(`  ${enabled} ${j.name} — ${j.tool} every '${j.schedule}'`);
+      console.log(`     next: ${nextStr} · last run: ${lastRun}`);
+      console.log('');
+    }
+  }
+
+  private cronRemove(name: string): void {
+    if (!this.guard('cron.manage')) return;
+    if (removeCronJob(name)) {
+      logger.success(`✅ Removed cron job '${name}'.`);
+    } else {
+      logger.error(`No cron job named '${name}'.`);
+    }
+  }
+
+  private async cronRun(name: string): Promise<void> {
+    if (!this.guard('cron.manage')) return;
+    const job = listCronJobs().find((j) => j.name === name);
+    if (!job) {
+      logger.error(`No cron job named '${name}'.`);
+      return;
+    }
+    const spinner = ora({ text: `Running '${job.name}'...`, spinner: 'dots' }).start();
+    const { ok, output } = await runJobNow(job);
+    spinner.stop();
+    if (ok) {
+      logger.success(`✅ '${job.name}' completed.`);
+      if (output) console.log(output);
+    } else {
+      logger.error(`❌ '${job.name}' failed: ${output}`);
+    }
   }
 }

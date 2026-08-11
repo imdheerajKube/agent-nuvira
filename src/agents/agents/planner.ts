@@ -17,9 +17,15 @@ const PLANNER_SYSTEM_PROMPT = [
   'For each step, specify:',
   '- id: A short unique identifier (e.g., "step-01-gather-context")',
   '- description: What needs to be done in clear language',
-  '- agentType: One of "context-gatherer", "writer", "reviewer", "tester", "debugger", "runner", "security", "mcp", "git", "gitlab", "pr-review"',
+  '- agentType: One of "context-gatherer", "writer", "reviewer", "tester", "debugger", "runner", "security", "mcp", "git", "gitlab", "pr-review", "delegate"',
   '- dependsOn: Array of step IDs that must complete before this one (empty array for first steps)',
   '- complexity: One of "trivial", "simple", "moderate", "complex", "critical" — label THIS subtask\'s difficulty (routing uses it to pick the cheapest adequate model)',
+  '',
+  'DELEGATION (optional): when a step\'s work can be split into independent,',
+  'specialized sub-tasks, use agentType "delegate" and add a "delegation" array',
+  'of { agentType, prompt, files? } specs — the engine runs them in PARALLEL with',
+  'fresh isolated contexts and aggregates the results. Only delegate when the',
+  'sub-tasks are truly independent (e.g. review + security scan + context probe).',
   '',
   'Rules:',
   '1. Start with a "context-gatherer" step to understand the codebase (if files exist)',
@@ -242,6 +248,28 @@ export class PlannerAgent extends Agent {
           ? (rawComplexity as typeof VALID_COMPLEXITY[number])
           : undefined;
 
+        // H2 — preserve the delegation spec when the LLM emitted one (delegate
+        // steps fan out these sub-agent specs in parallel). Validated to the
+        // TaskDelegation shape; anything malformed is dropped (the step then
+        // runs as a normal agent task or fails loudly if agentType=delegate).
+        // files is validated to a string array too — an LLM emitting
+        // files: "x" would otherwise break spawnSubagent's "never throws"
+        // contract at buildSubagentContext time.
+        const rawDelegation = (step as { delegation?: unknown }).delegation;
+        const delegation = Array.isArray(rawDelegation)
+          ? rawDelegation
+              .filter(
+                (d): d is { agentType: string; prompt: string; files?: string[] } =>
+                  !!d &&
+                  typeof d === 'object' &&
+                  typeof (d as { agentType?: unknown }).agentType === 'string' &&
+                  typeof (d as { prompt?: unknown }).prompt === 'string' &&
+                  ((d as { files?: unknown }).files === undefined ||
+                    Array.isArray((d as { files?: unknown }).files)),
+              )
+              .map((d) => ({ agentType: d.agentType, prompt: d.prompt, files: d.files }))
+          : undefined;
+
         plan.push({
           id,
           description: String(step.description),
@@ -249,6 +277,7 @@ export class PlannerAgent extends Agent {
           dependsOn,
           complexity,
           status: 'pending',
+          ...(delegation && delegation.length > 0 ? { delegation } : {}),
         });
       }
 

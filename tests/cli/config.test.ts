@@ -276,4 +276,16 @@ describe('ConfigCommand set — M2.5 context preflight windows', () => {
     expect(errorSpy.mock.calls.map((c) => String(c[0])).join(' ')).toContain('Invalid context window');
     expect(saved).toBeNull();
   });
+
+  it('merges quota limits across providers (sibling preservation, Session 36)', () => {
+    configState.routing = { quota: { gemini: { requestsPerWindow: 1500 } } } as BuffConfig['routing'];
+    const cmd = makeCommand();
+    runSet(cmd, 'routing.quota.groq.tokensPerWindow', '12000');
+    // ConfigManager.save shallow-merges `routing` — the setter must send the
+    // FULL merged quota map so sibling providers survive.
+    expect(saved?.routing?.quota).toEqual({
+      gemini: { requestsPerWindow: 1500 },
+      groq: { tokensPerWindow: 12000 },
+    });
+  });
 });

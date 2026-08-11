@@ -25,6 +25,7 @@ import { Command } from 'commander';
 import { readFileSync, existsSync, writeFileSync } from 'node:fs';
 import { join, resolve } from 'node:path';
 import { BaseCommand } from './commands.js';
+import { guardRbacAction } from './rbac-guard.js';
 import { logger } from '../utils/logger.js';
 import { findProjectConfig, getTeamConfig, hasProjectConfig, getTeamDataDir, } from '../team/config.js';
 import { initTeamMemory, syncTeamMemory, shareTrajectories, getTeamMemoryStats, } from '../team/memory.js';
@@ -132,6 +133,9 @@ export class TeamCommand extends BaseCommand {
     }
     // ── init ─────────────────────────────────────────────────────────────────
     async handleInit(name, options) {
+        // K4: team state is shared/collaborative — writes require team.manage.
+        if (!guardRbacAction('team.manage'))
+            return;
         const cwd = process.cwd();
         const configPath = join(cwd, '.buffconfig.json');
         if (existsSync(configPath) || hasProjectConfig(cwd)) {
@@ -168,6 +172,8 @@ export class TeamCommand extends BaseCommand {
     }
     // ── join ─────────────────────────────────────────────────────────────────
     async handleJoin(repoUrl) {
+        if (!guardRbacAction('team.manage'))
+            return;
         const cwd = process.cwd();
         logger.info(`Joining team repository: ${repoUrl}`);
         try {
@@ -198,6 +204,8 @@ export class TeamCommand extends BaseCommand {
     }
     // ── sync ─────────────────────────────────────────────────────────────────
     async handleSync() {
+        if (!guardRbacAction('team.manage'))
+            return;
         logger.info('Syncing team memory...');
         const projectConfig = findProjectConfig();
         if (!projectConfig?.team?.repository) {
@@ -300,6 +308,8 @@ export class TeamCommand extends BaseCommand {
     }
     // ── share ────────────────────────────────────────────────────────────────
     async handleShare() {
+        if (!guardRbacAction('team.manage'))
+            return;
         const config = getTeamConfig();
         if (!config.shareTrajectories) {
             logger.warn('Sharing trajectories is disabled in team config.');
@@ -382,6 +392,8 @@ export class TeamCommand extends BaseCommand {
         console.log('');
     }
     async handleReviewApprove(id, options) {
+        if (!guardRbacAction('team.manage'))
+            return;
         const bundle = getReview(id);
         if (!bundle) {
             logger.error(`Review not found: ${id}`);
@@ -395,6 +407,8 @@ export class TeamCommand extends BaseCommand {
         }
     }
     async handleReviewRequestChanges(id, reason) {
+        if (!guardRbacAction('team.manage'))
+            return;
         const bundle = getReview(id);
         if (!bundle) {
             logger.error(`Review not found: ${id}`);
@@ -407,6 +421,8 @@ export class TeamCommand extends BaseCommand {
         }
     }
     async handleReviewReject(id, reason) {
+        if (!guardRbacAction('team.manage'))
+            return;
         const success = rejectReview(id, reason);
         if (success) {
             const suffix = reason ? ` — Reason: "${reason}"` : '';
@@ -414,6 +430,8 @@ export class TeamCommand extends BaseCommand {
         }
     }
     async handleReviewMerge(id) {
+        if (!guardRbacAction('team.manage'))
+            return;
         const count = mergeReview(id);
         if (count > 0) {
             logger.success(`Merged ${count} file change(s) from review ${id}.`);
@@ -421,6 +439,8 @@ export class TeamCommand extends BaseCommand {
         }
     }
     async handleReviewCreate(title, goal, options) {
+        if (!guardRbacAction('team.manage'))
+            return;
         const cwd = process.cwd();
         // Parse file paths from option
         const filePaths = options?.files

@@ -1,13 +1,15 @@
 /**
- * Chat command — single-shot auto-failover confirmation tests.
+ * Chat command — E3b tool-loop auto-failover confirmation tests.
  *
- * Regression tests for `routing.promptOnFailover` on the SINGLE-SHOT path
- * (`buff chat "prompt"` with Auto routing): when a provider fails mid-call,
- * Auto mode walks the ranked candidates. With promptOnFailover enabled the
- * CLI must ASK before auto-switching to the next candidate; choosing 'manual'
- * surfaces the original error instead of silently switching (single-shot has
- * no interactive recovery, so the CLI exits with the failure — matching
- * non-auto behavior).
+ * Regression tests for `routing.promptOnFailover` on the chat tool-loop path
+ * (`buildToolCallModel`'s auto-mode failover walk — the E3b successor to the
+ * deleted single-shot `generateAutoWithFailover`): when a provider fails
+ * mid-call, Auto mode walks the ranked candidates. With promptOnFailover
+ * enabled the CLI must ASK before auto-switching to the next candidate;
+ * choosing 'manual' surfaces the original error instead of silently
+ * switching (single-shot has no interactive recovery, so the CLI exits with
+ * the failure — matching non-auto behavior). A non-interactive stdin skips
+ * the prompt entirely (piped/CI safety).
  */
 
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
@@ -59,7 +61,7 @@ import { shouldConfirmFailover, promptFailoverChoice } from '../../src/cli/failo
 const mockedShouldConfirm = vi.mocked(shouldConfirmFailover);
 const mockedPromptChoice = vi.mocked(promptFailoverChoice);
 
-describe('generateAutoWithFailover — single-shot failover confirmation', () => {
+describe('tool-loop auto failover — promptOnFailover confirmation', () => {
   beforeEach(() => {
     vi.spyOn(console, 'log').mockImplementation(() => {});
     vi.spyOn(logger, 'info').mockImplementation(() => {});
@@ -83,63 +85,71 @@ describe('generateAutoWithFailover — single-shot failover confirmation', () =>
   });
 
   /**
-   * Build a ChatCommand wired to a single-shot auto failover:
-   * - routeMessageAuto returns groq as the first pick with gemini ranked next
-   * - groq's generation throws (quota exhausted), gemini's succeeds
-   * Returns the command plus the mocked generateWithContext.
+   * Build a ChatCommand wired to an auto-mode tool-loop failover walk:
+   * - the session provider (groq) throws on generate,
+   * - routeMessageAuto returns gemini (ranked next) whose generate succeeds.
+   * Returns the command, the session, and the generation mock.
    */
   function setupCommand(): {
     cmd: ChatCommand;
+    session: { type: string; provider: { name: string; generate: ReturnType<typeof vi.fn> }; model: string };
     generateMock: ReturnType<typeof vi.fn>;
   } {
+    const generateMock = vi.fn()
+      .mockRejectedValueOnce(new Error('429: quota exceeded'))
+      .mockResolvedValueOnce('hello from gemini');
     const cmd = new ChatCommand() as any;
     cmd.routeMessageAuto = vi.fn().mockResolvedValue({
-      type: 'groq',
-      provider: { name: 'Groq', isAvailable: vi.fn().mockResolvedValue(true) },
-      model: 'llama-3.3-70b-versatile',
+      type: 'gemini',
+      provider: { name: 'Gemini', generate: generateMock },
+      model: 'gemini-2.0-flash',
       ranked: ['gemini'],
       complexity: 'simple',
       score: 0.85,
     });
-    const generateMock = vi.fn()
-      .mockRejectedValueOnce(new Error('429: quota exceeded'))
-      .mockResolvedValueOnce('hello from gemini');
-    cmd.generateWithContext = generateMock;
-    return { cmd, generateMock };
+    const session = {
+      type: 'groq',
+      provider: { name: 'Groq', generate: generateMock },
+      model: 'llama-3.3-70b-versatile',
+    };
+    return { cmd, session, generateMock };
   }
 
   it('silently fails over to the next candidate when promptOnFailover is off (default)', async () => {
-    const { cmd, generateMock } = setupCommand();
+    const { cmd, session, generateMock } = setupCommand();
     mockedShouldConfirm.mockReturnValue(false);
 
-    const result = await cmd.generateAutoWithFailover('explain this', 'explain this', {}, true);
+    const callModel = (cmd as any).buildToolCallModel('explain this', session, {}, { auto: true });
+    const result = await callModel([{ role: 'user', content: 'explain this' }], []);
 
-    expect(result).toBe('hello from gemini');
+    expect(result.content).toBe('hello from gemini');
     expect(generateMock).toHaveBeenCalledTimes(2); // groq failed → gemini answered
     expect(mockedPromptChoice).not.toHaveBeenCalled();
   });
 
   it('asks before switching and adopts the next candidate when the user confirms', async () => {
-    const { cmd, generateMock } = setupCommand();
+    const { cmd, session, generateMock } = setupCommand();
     mockedShouldConfirm.mockReturnValue(true);
     mockedPromptChoice.mockResolvedValue('switch');
 
-    const result = await cmd.generateAutoWithFailover('explain this', 'explain this', {}, true);
+    const callModel = (cmd as any).buildToolCallModel('explain this', session, {}, { auto: true });
+    const result = await callModel([{ role: 'user', content: 'explain this' }], []);
 
-    expect(result).toBe('hello from gemini');
+    expect(result.content).toBe('hello from gemini');
     expect(generateMock).toHaveBeenCalledTimes(2);
     // Prompt shown once, with the failed provider and the next candidate
     expect(mockedPromptChoice).toHaveBeenCalledTimes(1);
-    expect(mockedPromptChoice.mock.calls[0][0]).toBe('groq');
+    expect(mockedPromptChoice.mock.calls[0][0]).toBe('Groq');
     expect(mockedPromptChoice.mock.calls[0][1]).toBe('Gemini');
   });
 
   it('surfaces the original error instead of switching when the user picks manual', async () => {
-    const { cmd, generateMock } = setupCommand();
+    const { cmd, session, generateMock } = setupCommand();
     mockedShouldConfirm.mockReturnValue(true);
     mockedPromptChoice.mockResolvedValue('manual');
 
-    await expect(cmd.generateAutoWithFailover('explain this', 'explain this', {}, true))
+    const callModel = (cmd as any).buildToolCallModel('explain this', session, {}, { auto: true });
+    await expect(callModel([{ role: 'user', content: 'explain this' }], []))
       .rejects.toThrow('429: quota exceeded');
     // The gemini candidate was never attempted — 'manual' aborts the walk.
     expect(generateMock).toHaveBeenCalledTimes(1);
@@ -147,35 +157,34 @@ describe('generateAutoWithFailover — single-shot failover confirmation', () =>
   });
 
   it('skips the prompt entirely when stdin is not a TTY (CI / piped safety)', async () => {
-    const { cmd, generateMock } = setupCommand();
+    const { cmd, session, generateMock } = setupCommand();
     Object.defineProperty(process.stdin, 'isTTY', { value: undefined, configurable: true });
     mockedShouldConfirm.mockReturnValue(true);
 
-    const result = await cmd.generateAutoWithFailover('explain this', 'explain this', {}, true);
+    const callModel = (cmd as any).buildToolCallModel('explain this', session, {}, { auto: true });
+    const result = await callModel([{ role: 'user', content: 'explain this' }], []);
 
     // Even with promptOnFailover on, a non-interactive stdin falls through to
     // silent auto-failover (the pre-existing safe behavior) instead of
     // blocking forever on an inquirer prompt.
-    expect(result).toBe('hello from gemini');
+    expect(result.content).toBe('hello from gemini');
     expect(generateMock).toHaveBeenCalledTimes(2);
     expect(mockedPromptChoice).not.toHaveBeenCalled();
   });
 
   it('does not prompt when there is no next candidate to switch to', async () => {
-    const cmd = new ChatCommand() as any;
-    cmd.routeMessageAuto = vi.fn().mockResolvedValue({
-      type: 'groq',
-      provider: { name: 'Groq', isAvailable: vi.fn().mockResolvedValue(true) },
-      model: 'llama-3.3-70b-versatile',
-      ranked: [],
-      complexity: 'simple',
-      score: 0.85,
-    });
     const generateMock = vi.fn().mockRejectedValue(new Error('boom'));
-    cmd.generateWithContext = generateMock;
+    const cmd = new ChatCommand() as any;
+    cmd.routeMessageAuto = vi.fn().mockResolvedValue(null);
+    const session = {
+      type: 'groq',
+      provider: { name: 'Groq', generate: generateMock },
+      model: 'llama-3.3-70b-versatile',
+    };
     mockedShouldConfirm.mockReturnValue(true);
 
-    await expect(cmd.generateAutoWithFailover('explain this', 'explain this', {}, true))
+    const callModel = (cmd as any).buildToolCallModel('explain this', session, {}, { auto: true });
+    await expect(callModel([{ role: 'user', content: 'explain this' }], []))
       .rejects.toThrow('boom');
     // No ranked candidates remain → nothing to offer, so no prompt.
     expect(mockedPromptChoice).not.toHaveBeenCalled();

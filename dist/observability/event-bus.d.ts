@@ -68,6 +68,14 @@ export declare const EventNames: {
      * recorded the moment they happen.
      */
     readonly MODEL_REGISTRY_UPDATED: "model-registry:updated";
+    readonly EXEC_SHELL_START: "exec:shell-start";
+    readonly EXEC_SHELL_END: "exec:shell-end";
+    readonly DELEGATION_SPAWN: "delegation:spawn";
+    readonly DELEGATION_RESULT: "delegation:result";
+    readonly DELEGATION_ERROR: "delegation:error";
+    readonly CRON_RUN: "cron:run";
+    readonly CRON_RESULT: "cron:result";
+    readonly CRON_ERROR: "cron:error";
     readonly SAFE_EXEC_FILE_VALIDATED: "safe-exec:file-validated";
     readonly SAFE_EXEC_SANDBOX_STARTING: "safe-exec:sandbox-starting";
     readonly SAFE_EXEC_SANDBOX_CREATED: "safe-exec:sandbox-created";

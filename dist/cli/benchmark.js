@@ -14,8 +14,9 @@
  *   buff benchmark clear                — Clear all benchmark data
  */
 import { Command } from 'commander';
-import ora from 'ora';
 import { BaseCommand } from './commands.js';
+import { PipelineBoard } from './pipeline-board.js';
+import { getEventBus, EventNames } from '../observability/event-bus.js';
 import { resolveProvider } from './router.js';
 import { resolveWorkingModel } from '../inference/model-validator.js';
 import { getAutoRouter } from '../learning/auto-router.js';
@@ -117,14 +118,16 @@ export class BenchmarkCommand extends BaseCommand {
         }
         logger.info(`  Tasks: ${tasks.length} (${tasks.filter((t) => t.timeEstimate === 'quick').length} quick, ${tasks.filter((t) => t.timeEstimate === 'medium').length} medium, ${tasks.filter((t) => t.timeEstimate === 'slow').length} slow)`);
         console.log('');
-        // Spinner-based progress (fallback when no onProgress callback)
-        const spinner = ora({
-            text: `Running ${tasks.length} benchmark tasks...`,
-            spinner: 'dots',
-        }).start();
+        // E2: live board — replaces the bare ora spinner (standing rule).
+        const board = new PipelineBoard();
+        board.start(`Benchmark: ${providerName}/${model}`);
         try {
             const onProgress = (current, total, task) => {
-                spinner.text = `[${current}/${total}] ${task.title} (${task.difficulty}/${task.timeEstimate})`;
+                getEventBus().emit(EventNames.ORCHESTRATOR_AGENT_UPDATE, {
+                    agentType: 'benchmark',
+                    stage: 'running',
+                    message: `[${current}/${total}] ${task.title} (${task.difficulty}/${task.timeEstimate})`,
+                }, 'benchmark');
             };
             const run = await runBenchmark(provider, providerName, model, {
                 taskIds,
@@ -132,7 +135,7 @@ export class BenchmarkCommand extends BaseCommand {
                 budget,
                 onProgress,
             });
-            spinner.stop();
+            board.finish(true);
             // Display results
             console.log('');
             switch (options.format) {
@@ -165,7 +168,7 @@ export class BenchmarkCommand extends BaseCommand {
             }
         }
         catch (err) {
-            spinner.fail('Benchmark failed');
+            board.finish(false);
             logger.error(String(err));
         }
     }
@@ -280,10 +283,16 @@ export class BenchmarkCommand extends BaseCommand {
             }
             logger.highlight(`  ── Benchmarking router pick: ${pick.provider}/${workingModel} ──`);
             console.log('');
-            const spinner = ora({ text: `Running ${tasks.length} tasks against ${pick.provider}/${workingModel}...`, spinner: 'dots' }).start();
+            // E2: live board for each router pick.
+            const board = new PipelineBoard();
+            board.start(`Benchmark: ${key}`);
             try {
                 const onProgress = (current, total, task) => {
-                    spinner.text = `[${current}/${total}] ${task.title}`;
+                    getEventBus().emit(EventNames.ORCHESTRATOR_AGENT_UPDATE, {
+                        agentType: 'benchmark',
+                        stage: 'running',
+                        message: `[${current}/${total}] ${task.title}`,
+                    }, 'benchmark');
                 };
                 const run = await runBenchmark(resolved.provider, resolved.type, workingModel, {
                     taskIds,
@@ -291,13 +300,13 @@ export class BenchmarkCommand extends BaseCommand {
                     budget,
                     onProgress,
                 });
-                spinner.stop();
+                board.finish(true);
                 runs.push(run);
                 console.log(formatBenchmarkReport(run));
                 console.log('');
             }
             catch (err) {
-                spinner.fail(`Benchmark failed for ${key}`);
+                board.finish(false);
                 logger.error(String(err));
             }
         }

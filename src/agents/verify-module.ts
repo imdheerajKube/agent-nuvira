@@ -56,6 +56,12 @@ export interface VerifyParams {
   changes: FileChange[];
   /** The original user goal */
   goal: string;
+  /**
+   * Session 20 — RequestContract acceptance criteria. When present, the
+   * goal-alignment LLM check verifies EACH criterion explicitly and any
+   * `FAIL:` verdict marks the check as failed (Decision 3: spec→verify).
+   */
+  acceptanceCriteria?: string[];
   /** Optional test results summary */
   testResults?: { passed: number; failed: number; total: number };
   /** Optional runner output */
@@ -292,7 +298,16 @@ export class DefaultVerifyModule implements VerifyModule {
   private async runGoalAlignmentCheck(params: VerifyParams): Promise<VerificationCheck> {
     const prompt = this.buildAlignmentPrompt(params);
     const response = await params.callLLM!(prompt);
-    const passed = !response.includes('MISALIGNED') && !response.includes('BLOCKING');
+    const hasCriteria = (params.acceptanceCriteria?.length ?? 0) > 0;
+    // With acceptance criteria, a `FAIL:` verdict on any criterion means the
+    // changes do not satisfy the contract — blocking regardless of the loose
+    // ALIGNED/MISALIGNED verdict. Line-anchored (same pattern as the
+    // reviewer) so stray "FAIL:" text in prose never blocks.
+    const criterionFail = /(?:^|\n)[-*]?\s*FAIL\s*:/im;
+    const passed =
+      !response.includes('MISALIGNED') &&
+      !response.includes('BLOCKING') &&
+      !(hasCriteria && criterionFail.test(response));
 
     return {
       type: 'goal-alignment',
@@ -372,14 +387,24 @@ Changes:
       prompt += `\n### ${change.path} (${change.status})\n\`\`\`\n${content}\n\`\`\`\n`;
     }
 
+    // Session 20: acceptance criteria from the RequestContract — verify EACH
+    // one explicitly (spec→verify).
+    if (params.acceptanceCriteria && params.acceptanceCriteria.length > 0) {
+      prompt += `\n## Acceptance Criteria\nThe user defined these success criteria. Verify EACH one against the changes.\n${params.acceptanceCriteria
+        .map((c, i) => `${i + 1}. ${c}`)
+        .join('\n')}\n`;
+    }
+
     prompt += `\nRespond with ONLY one of the following verdicts:
 - ALIGNED: The changes correctly implement the goal.
 - MISALIGNED: The changes do NOT correctly implement the goal.
-- BLOCKING: <specific issue>: The changes contain a specific issue that must be fixed.
+- BLOCKING: <specific issue>: The changes contain a specific issue that must be fixed.`;
 
-If MISALIGNED or BLOCKING, briefly explain why (one sentence).
+    if (params.acceptanceCriteria && params.acceptanceCriteria.length > 0) {
+      prompt += `\n\nAfter your verdict, emit a PASS/FAIL line for EVERY acceptance criterion above:\n- PASS: <criterion>\n- FAIL: <criterion> — <reason>\n\nAny FAIL means the changes do not satisfy the contract — respond BLOCKING.`;
+    }
 
-Verdict:`;
+    prompt += `\n\nIf MISALIGNED or BLOCKING, briefly explain why (one sentence).\n\nVerdict:`;
 
     return prompt;
   }

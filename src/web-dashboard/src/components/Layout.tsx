@@ -19,6 +19,7 @@ const NAV_ITEMS = [
   { path: '/benchmarks', label: 'Benchmarks', icon: '📈' },
   { path: '/memory', label: 'Memory', icon: '💾' },
   { path: '/system', label: 'System', icon: '⚙️' },
+  { path: '/admin', label: 'Admin', icon: '🛠️' },
 ];
 
 export default function Layout({ children, connected, lastUpdated }: LayoutProps) {

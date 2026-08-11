@@ -1,7 +1,8 @@
-import { InferenceProvider, ModelDescriptor } from './interface.js';
+import { InferenceProvider, ModelDescriptor, ToolCallResponse, ToolMessage, ToolSchema } from './interface.js';
 import { InferenceOptions, ProviderConfig } from '../config/types.js';
 import { logger } from '../utils/logger.js';
 import { streamCompletion } from './sse.js';
+import { chatCompletionsWithTools } from './tools.js';
 import { getModelTags } from './model-catalog.js';
 import { getCostTracker, recordCallWithUsage } from '../learning/cost-tracker.js';
 import { requireAdapterModel } from '../learning/model-selection.js';
@@ -82,6 +83,35 @@ export class NIMAdapter implements InferenceProvider {
     } catch { /* Non-critical */ }
 
     return content;
+  }
+
+  /** H1 — native tool-calling via the OpenAI `tools` protocol. */
+  async generateTools(
+    messages: ToolMessage[],
+    tools: ToolSchema[],
+    options?: InferenceOptions,
+  ): Promise<ToolCallResponse> {
+    const apiKey = options?.apiKey || this.config.apiKey;
+    if (!apiKey) throw new Error('NVIDIA NIM API key is not configured. Set NVIDIA_NIM_API_KEY env var.');
+    const model = options?.model || requireAdapterModel('nim', this.config.model);
+    return chatCompletionsWithTools({
+      baseUrl: this.config.baseUrl || DEFAULT_NIM_BASE_URL,
+      headers: { 'Authorization': `Bearer ${apiKey}` },
+      model,
+      messages,
+      tools,
+      temperature: options?.temperature ?? this.config.temperature ?? 0.7,
+      maxTokens: options?.maxTokens ?? this.config.maxTokens ?? 4096,
+      timeoutMs: this.config.timeoutMs ?? 30_000,
+      // Cost parity with generate(): meter tool-calling turns too.
+      onCost: (promptText, contentText) => {
+        try {
+          recordCallWithUsage(getCostTracker(), 'nim', model, promptText, contentText, undefined);
+        } catch {
+          // Non-critical.
+        }
+      },
+    });
   }
 
   async generateStream(

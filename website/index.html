@@ -4,13 +4,13 @@
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>Agent-Nuvira — Multi-Agent AI Coding Assistant</title>
-  <meta name="description" content="Agent-Nuvira is an open-source, multi-agent AI coding assistant that runs from your terminal. 17+ agents, 3,509 tests, GitLab + GitHub PR review built-in. Plan, write, review, test, and publish code — from a single command." />          <meta name="keywords" content="AI coding assistant, multi-agent AI, terminal AI tool, open source, 17+ providers, Groq, NVIDIA NIM, Google Gemini, OpenRouter, Ollama, OpenAI, Anthropic, Mistral, Azure, vLLM, LM Studio, FAISS vector store, auto model routing, quota ledger, team collaboration, MCP, GitLab, PR review, GitHub, Thompson-sampling bandit, routing strategy, per-model learning, promotion gate, capability-aware scoring, wire-token measured cost, governance constraints, multi-account key rotation, context-length preflight, RBAC, role-based access control, tamper-evident audit chain, OIDC gateway, enterprise security, P0-P7 program complete" />
+  <meta name="description" content="Agent-Nuvira is an open-source, multi-agent AI coding assistant that runs from your terminal. 17+ agents, 4,031 tests, GitLab + GitHub PR review built-in. Plan, write, review, test, and publish code — from a single command." />          <meta name="keywords" content="AI coding assistant, multi-agent AI, terminal AI tool, open source, 17+ providers, Groq, NVIDIA NIM, Google Gemini, OpenRouter, Ollama, OpenAI, Anthropic, Mistral, Azure, vLLM, LM Studio, FAISS vector store, auto model routing, quota ledger, team collaboration, MCP, GitLab, PR review, GitHub, Thompson-sampling bandit, routing strategy, per-model learning, promotion gate, capability-aware scoring, wire-token measured cost, governance constraints, multi-account key rotation, context-length preflight, RBAC, role-based access control, tamper-evident audit chain, OIDC gateway, enterprise security, P0-P7 program complete" />
   <link rel="icon" type="image/png" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='8' fill='%236363f2'/%3E%3Ctext x='16' y='22' text-anchor='middle' fill='white' font-size='18' font-weight='bold' font-family='system-ui'%3EN%3C/text%3E%3C/svg%3E" />
-  <meta property="og:title" content="Agent-Nuvira — Multi-Agent AI Coding Assistant" />          <meta property="og:description" content="The open-source multi-agent AI coding assistant. Plan, write, review, test, verify, and publish code from your terminal. 17+ providers. 17+ agents. 3,509 tests. GitLab + GitHub PR review built-in. RBAC, tamper-evident audit, OIDC gateway. No subscriptions. No telemetry." />
+  <meta property="og:title" content="Agent-Nuvira — Multi-Agent AI Coding Assistant" />          <meta property="og:description" content="The open-source multi-agent AI coding assistant. Plan, write, review, test, verify, and publish code from your terminal. 17+ providers. 17+ agents. 4,031 tests. GitLab + GitHub PR review built-in. RBAC, tamper-evident audit, OIDC gateway. No subscriptions. No telemetry." />
   <meta property="og:image" content="https://www.agent-nuvira.com/assets/hero.png" />
   <meta property="og:url" content="https://www.agent-nuvira.com" />
   <meta name="twitter:card" content="summary_large_image" />
-  <meta name="twitter:title" content="Agent-Nuvira — Multi-Agent AI Coding Assistant" />          <meta name="twitter:description" content="The open-source multi-agent AI coding assistant. 17+ providers. 17+ agents. 3,509 tests. GitLab + GitHub PR review. Enterprise hardening (RBAC, audit, OIDC). From your terminal." />
+  <meta name="twitter:title" content="Agent-Nuvira — Multi-Agent AI Coding Assistant" />          <meta name="twitter:description" content="The open-source multi-agent AI coding assistant. 17+ providers. 17+ agents. 4,031 tests. GitLab + GitHub PR review. Enterprise hardening (RBAC, audit, OIDC). From your terminal." />
   <link rel="preconnect" href="https://fonts.googleapis.com" />
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
   <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800;900&family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet" />
@@ -89,7 +89,7 @@
             <span class="metric-label">AI Providers</span>
           </div>
           <div class="metric">
-            <span class="metric-value">3,404</span>
+            <span class="metric-value">4,031</span>
             <span class="metric-label">Tests Passing</span>
           </div>
           <div class="metric">
@@ -121,7 +121,7 @@
               <span class="log info">📁 Context Gatherer scanning codebase...</span>
               <span class="log success">✅ Writer implemented auth middleware</span>
               <span class="log info">👀 Reviewer validating changes...</span>
-              <span class="log success">✅ All 3,404 tests passed</span>
+              <span class="log success">✅ All 4,031 tests passed</span>
               <span class="log info">🔒 VerifyModule running security scan...</span>
               <span class="log success">✅ No security issues found</span>
               <span class="log success">🚀 Changes committed to feature/auth</span>
@@ -484,6 +484,41 @@
           </div>
           <h3>Self-Healing Failover</h3>
           <p>When a provider dies mid-session (expired key, exhausted quota, deprecated model), Auto mode automatically hops to the next-best provider — and an optional confirmation prompt keeps you in control of every swap. Every failover is recorded in a live timeline.</p>
+        </div>
+        <div class="feature-card" data-delay="1400">
+          <div class="feature-icon learning">
+            <svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M9 12l2 2 4-4"/><circle cx="12" cy="12" r="10"/></svg>
+          </div>
+          <h3>No Silent Failures — The Reliability Stack</h3>
+          <p>Since <strong>v1.62.0</strong> the pipeline can't quietly skip work: a writer that returns unparseable output now <strong>fails the task</strong> so the repair engine escalates to a stronger model (a genuine "no changes needed" decline stays a no-op). A reviewer that blocks a change routes through a <strong>writer fix pass</strong> — the writer applies the review feedback, then the reviewer re-verifies as the gate. And when only a weak local model is available, you get a <strong>pre-flight warning</strong> before the pipeline burns minutes on a task likely to fail.</p>
+        </div>
+        <div class="feature-card" data-delay="1500">
+          <div class="feature-icon agents">
+            <svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M4 19.5A2.5 2.5 0 0 1 6.5 17H20"/><path d="M6.5 2H20v20H6.5A2.5 2.5 0 0 1 4 19.5v-15A2.5 2.5 0 0 1 6.5 2z"/></svg>
+          </div>
+          <h3><code>buff code-map</code> — Project Symbol Map</h3>
+          <p>One command maps your whole project: <code>buff code-map</code> lists every function, class, and method with its 1-based source line — <code>--json</code> for machine output, multi-language via the AST engine. No native parser dependencies, works offline — and the engine fix behind it recovered top-level functions that were silently dropped from the structure map (which also sharpened the edit pipeline).</p>
+        </div>
+        <div class="feature-card" data-delay="1600">
+          <div class="feature-icon plugin">
+            <svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/></svg>
+          </div>
+          <h3>Scheduled Jobs (<code>buff admin cron</code>)</h3>
+          <p>Run any pipeline tool on a schedule: <code>buff admin cron add "0 9 * * *" build --args '...'</code> validates the 5-field cron expression and the tool's argument schema <em>at add time</em> — a typo surfaces immediately, not at 3am. Jobs persist to disk, are RBAC-gated (<code>cron.manage</code>), support <code>--dry-run</code> (validate + next run without executing), and can deliver results to a gateway channel.</p>
+        </div>
+        <div class="feature-card" data-delay="1700">
+          <div class="feature-icon learning">
+            <svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M21 12a9 9 0 1 1-9-9"/><path d="M21 3l-9 9"/><path d="M21 3v6"/><path d="M21 9h-6"/></svg>
+          </div>
+          <h3>Session Recall — Memory Across Runs</h3>
+          <p>Chat doesn't start from zero. Each session auto-recalls <strong>this project's</strong> past sessions, learned facts, and your last checkpoint — surfaced as a recall card before the answer — so "continue where we left off" and cross-session context work out of the box, scoped per project with temporal filters.</p>
+        </div>
+        <div class="feature-card" data-delay="1800">
+          <div class="feature-icon agents">
+            <svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M23 21v-2a4 4 0 0 0-3-3.87"/><path d="M16 3.13a4 4 0 0 1 0 7.75"/></svg>
+          </div>
+          <h3>Model-Decides Routing + Sub-Agent Delegation</h3>
+          <p>Since the revamp, <strong>every request enters the tool loop</strong> — the model itself decides whether a task is chat, a plan, an edit, a build, a test, or something to delegate. The orchestrator can spawn <strong>isolated sub-agents in parallel</strong> (per-subagent timeout + kill), each with its own fresh context, then merge their results — the model's own judgment, not a menu, drives what happens next.</p>
         </div>
       </div>
     </div>
@@ -1007,9 +1042,9 @@
             <span class="arch-tier-arrow">→</span>
             <span class="arch-tier">40 milestones</span>
             <span class="arch-tier-arrow">→</span>
-            <span class="arch-tier">v1.61.1 · 3,510+ tests</span>
+            <span class="arch-tier">v1.62.0 · 4,031 tests</span>
           </div>
-          <p class="arch-tier-note">Program complete — the tracking matrix in <code>NUVIRA_ROUTER_ROADMAP.md</code> is 100% ✅ across P0–P7 and every phase issue is closed. Current release <strong>v1.61.1</strong> — dynamic 17+ provider catalog joins routing (no hardcoded defaults), the router leverages gathered data at every action point, invalid API keys auto-cleared, stale local models pruned, and eval now refuses dead placeholder-keyed providers. 3,510+ tests.</p>
+          <p class="arch-tier-note">Program complete — the tracking matrix in <code>NUVIRA_ROUTER_ROADMAP.md</code> is 100% ✅ across P0–P7, and the Freebuff/Hermes parity revamp is fully landed. Current release <strong>v1.62.0</strong> — the reliability stack (no masked writer failures, reviewer→writer fix passes, weak-local-model pre-flight warnings), <code>buff code-map</code>, scheduled jobs, the multi-channel gateway, web + modality tools, and 4,031 passing tests.</p>
         </div>
       </div>
     </div>

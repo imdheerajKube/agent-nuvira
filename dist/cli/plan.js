@@ -1,8 +1,9 @@
 import { Command } from 'commander';
 import { existsSync, statSync } from 'node:fs';
 import inquirer from 'inquirer';
-import ora from 'ora';
 import { BaseCommand } from './commands.js';
+import { PipelineBoard } from './pipeline-board.js';
+import { getEventBus, EventNames } from '../observability/event-bus.js';
 import { ContextParser } from '../context/parser.js';
 import { logger } from '../utils/logger.js';
 import { showModelPicker } from './model-picker.js';
@@ -14,6 +15,11 @@ import { runSingleShotAuto } from './failover-runner.js';
 import { PIIPolicyError, GovernancePolicyError } from '../learning/auto-router.js';
 import { buildAutoResolveOptions } from '../learning/resolve-options.js';
 import { estimateTokens } from '../learning/cost-tracker.js';
+import { parseRequestSync } from '../nlu/parser.js';
+import { resolveDispatch } from '../nlu/actions.js';
+import { contractFromParsed, renderContractCard } from '../nlu/contract.js';
+import { maybeAutoRecall, recallCard, recallContextBlock } from '../context/session-recall.js';
+import { maybeRunBackgroundDuties } from './duties.js';
 /**
  * Plan command — generate implementation plans for code changes
  * buff plan <directory> [--provider openrouter] [--task "add user auth"]
@@ -57,7 +63,20 @@ export class PlanCommand extends BaseCommand {
             priorityPatterns: ['package.json', 'tsconfig.json', 'index.ts', 'main.ts', 'README.md'],
         });
         let contextStr;
-        const spinner = ora('Analyzing codebase...').start();
+        // Session 21: request-contract understand-card before the board starts —
+        // cross-command parity with chat/execute (same shared choke point: the
+        // user always sees what the agent understood). Plan parses ONCE here and
+        // reuses the result for the D1 recall check below (zero-reparse).
+        const parsedTask = parseRequestSync(task);
+        const contract = contractFromParsed(task, parsedTask);
+        console.log('\n' + renderContractCard(contract, {
+            // Plan never modifies files — the footer states the plan-only contract
+            // instead of a pipeline/resumability claim.
+            footer: '→ Generating an implementation plan — no files are changed until you execute it.',
+        }) + '\n');
+        // E2: live activity board — replaces the bare ora spinner (standing rule).
+        const board = new PipelineBoard();
+        board.start(`Plan: ${task}`);
         try {
             if (existsSync(target) && statSync(target).isDirectory()) {
                 const context = await parser.parseFromDirectory(target);
@@ -68,18 +87,26 @@ export class PlanCommand extends BaseCommand {
                 contextStr = ContextParser.formatContext(context);
             }
             else {
-                spinner.stop();
+                // Input error — nothing was attempted: freeze leaves the static frame
+                // without a misleading "pipeline failed" completion line.
+                board.freeze();
                 logger.error(`Target not found: ${target}`);
                 return;
             }
+            getEventBus().emit(EventNames.ORCHESTRATOR_INSPECTION, {
+                lines: [`Analyzed ${target}`, `Context: ~${contextStr.length.toLocaleString()} chars`],
+            }, 'plan');
             if (options?.verbose) {
-                spinner.stop();
+                board.stop();
                 logger.highlight('\n--- Context Sent to Model ---\n');
                 console.log(contextStr.slice(0, 2000) + (contextStr.length > 2000 ? '\n\n[...truncated...]' : ''));
                 logger.highlight('\n--- End Context ---\n');
-                spinner.start('Generating plan...');
+                board.start('Generating plan...');
             }
-            const prompt = `You are a senior software engineer. Given the following codebase context, create a detailed implementation plan for this task:
+            // D2: agent-driven background duties — one-line health + models status
+            // at session start (throttled, best-effort).
+            await maybeRunBackgroundDuties(this.configManager).catch(() => { });
+            let prompt = `You are a senior software engineer. Given the following codebase context, create a detailed implementation plan for this task:
 
 ## Task
 ${task}
@@ -97,7 +124,27 @@ Please provide:
 6. **Testing Strategy** — How to verify the changes work
 
 Use clear markdown formatting.`;
-            spinner.text = 'Generating plan...';
+            // D1: agent-driven auto-recall — continue/resume tasks recall the
+            // project's prior work into the plan prompt (cross-command parity with
+            // chat/execute). Best-effort — never breaks plan.
+            try {
+                if (parsedTask.intent === 'continue') {
+                    const recall = await maybeAutoRecall(process.cwd(), this.configManager.getWorkspaceStore());
+                    if (recall) {
+                        // Pause the live board so the recall card prints cleanly (TTY).
+                        board.stop();
+                        console.log(recallCard(recall));
+                        board.start('Generating plan...');
+                        prompt = `${recallContextBlock(recall)}\n\n${prompt}`;
+                    }
+                }
+            }
+            catch { /* recall must never break plan */ }
+            getEventBus().emit(EventNames.ORCHESTRATOR_AGENT_UPDATE, {
+                agentType: 'planner',
+                stage: 'generating',
+                message: 'Generating implementation plan…',
+            }, 'plan');
             // ── Generate with the SHARED single-shot auto-failover walk ────────
             // (Nuvira-Router M0.2 Stage C): plan now walks the auto-router's ranked
             // candidates for ANY failure class (auth/404/429/timeout) instead of
@@ -130,7 +177,13 @@ Use clear markdown formatting.`;
                         // passes the REAL prompt payload (task + parsed codebase context) as
                         // the token hint so plan routes toward big-window providers for
                         // large contexts.
-                        const decision = getAutoRouter().resolve('plan', task, buildAutoResolveOptions(this.configManager, { contextHintTokens: estimateTokens(prompt) }), this.configManager);
+                        // C3: the NLU parser seeds the router task-intent (cross-command
+                        // parity — same choke point as chat/execute).
+                        const dispatch = resolveDispatch(parseRequestSync(task));
+                        const decision = getAutoRouter().resolve('plan', task, {
+                            ...buildAutoResolveOptions(this.configManager, { contextHintTokens: estimateTokens(prompt) }),
+                            ...(dispatch.taskIntentHint ? { taskIntentHint: dispatch.taskIntentHint } : {}),
+                        }, this.configManager);
                         ranked = decision.ranked
                             .map((r) => r.provider)
                             .filter((p) => p !== type && !excludeProviders.includes(p));
@@ -171,7 +224,7 @@ Use clear markdown formatting.`;
                     apiKey,
                 }),
             });
-            spinner.stop();
+            board.finish(true);
             console.log(`\n${'='.repeat(60)}`);
             logger.highlight(`📋 Implementation Plan`);
             console.log(`${'='.repeat(60)}\n`);
@@ -180,7 +233,7 @@ Use clear markdown formatting.`;
             logger.info(`Generated by ${provider.name}`);
         }
         catch (err) {
-            spinner.fail('Planning failed');
+            board.finish(false);
             const errorMessage = err instanceof Error ? err.message : String(err);
             const isAuthError = errorMessage.includes('401') ||
                 errorMessage.includes('403') ||

@@ -17,6 +17,7 @@ import { homedir } from 'node:os';
 
 import { embed } from '../memory/embedder.js';
 import { getVectorStore } from '../memory/vector-store.js';
+import { redact } from '../enterprise/secrets.js';
 
 // ─── Types ──────────────────────────────────────────────────────────────────
 
@@ -32,6 +33,8 @@ export interface HistoryMessage {
 export interface HistorySession {
   /** Unique session ID */
   id: string;
+  /** Project id (A2 deriveProjectId — git slug / cwd hash) this session belongs to, when known */
+  projectId?: string;
   /** Provider used */
   provider: string;
   /** Model used */
@@ -132,6 +135,25 @@ function extractTags(messages: HistoryMessage[]): string[] {
   return tags.slice(0, 5); // Max 5 tags
 }
 
+/**
+ * Shared keyword scorer for `search` and `searchSessions` (D1): summary +5,
+ * tag +3, user message +2 / assistant +1, early-message bonus +0.5.
+ */
+function scoreSessionForQuery(session: HistorySession, q: string): number {
+  let score = 0;
+  if (session.summary.toLowerCase().includes(q)) score += 5;
+  if (session.tags.some((t) => t.includes(q))) score += 3;
+  for (const msg of session.messages) {
+    const content = msg.content.toLowerCase();
+    if (content.includes(q)) {
+      score += msg.role === 'user' ? 2 : 1;
+      const idx = session.messages.indexOf(msg);
+      if (idx < 3) score += 0.5;
+    }
+  }
+  return score;
+}
+
 // ─── ChatHistory ────────────────────────────────────────────────────────────
 
 /**
@@ -176,15 +198,23 @@ export class ChatHistory {
     provider: string,
     model: string,
     indexSemantic: boolean = true,
+    projectId?: string,
   ): string {
     if (messages.length === 0) return '';
+
+    // G3 privacy (P6 M6.2): redact every secret-shaped substring from message
+    // content BEFORE it touches disk. Sessions can contain pasted API keys,
+    // tokens, or Bearer headers (e.g. a user asking the agent to inspect one)
+    // — history.json must never persist them in the clear. The original
+    // message array is NOT mutated (redact() returns a new string).
+    const redactedMessages = messages.map((m) => ({ ...m, content: redact(m.content) }));
 
     const data = readHistory();
     this.pruneIfNeeded(data);
 
     const id = generateSessionId();
-    const startedAt = messages[0]?.timestamp || Date.now();
-    const endedAt = messages[messages.length - 1]?.timestamp || Date.now();
+    const startedAt = redactedMessages[0]?.timestamp || Date.now();
+    const endedAt = redactedMessages[redactedMessages.length - 1]?.timestamp || Date.now();
 
     const session: HistorySession = {
       id,
@@ -192,9 +222,10 @@ export class ChatHistory {
       model,
       startedAt,
       endedAt,
-      messages,
-      summary: generateSummary(messages),
-      tags: extractTags(messages),
+      messages: redactedMessages,
+      summary: generateSummary(redactedMessages),
+      tags: extractTags(redactedMessages),
+      ...(projectId ? { projectId } : {}),
     };
 
     data.sessions[id] = session;
@@ -231,34 +262,52 @@ export class ChatHistory {
     if (!q) return [];
 
     const scored = Object.values(data.sessions)
-      .map((session) => {
-        let score = 0;
+      .map((session) => ({ session, score: scoreSessionForQuery(session, q) }))
+      .filter((s) => s.score > 0)
+      .sort((a, b) => b.score - a.score)
+      .slice(0, limit)
+      .map((s) => s.session);
 
-        // Score based on summary match
-        if (session.summary.toLowerCase().includes(q)) {
-          score += 5;
-        }
+    return scored;
+  }
 
-        // Score based on tag matches
-        if (session.tags.some((t) => t.includes(q))) {
-          score += 3;
-        }
+  /**
+   * Search sessions by project, time range, and/or keyword (D1 auto-recall).
+   *
+   * - projectId filters to one project's sessions (A2 deriveProjectId).
+   * - timeRange filters by session start time (epoch ms) — the temporal
+   *   "continue last week's plan" path, no LLM involved.
+   * - query uses the same keyword scoring as `search`.
+   * Results are newest-first when no query is given; relevance-first with a
+   * query.
+   */
+  searchSessions(opts: {
+    projectId?: string;
+    timeRange?: { start?: number; end?: number };
+    query?: string;
+    limit?: number;
+  }): HistorySession[] {
+    const { projectId, timeRange, query, limit = 10 } = opts;
+    const data = readHistory();
 
-        // Score based on message content matches
-        for (const msg of session.messages) {
-          const content = msg.content.toLowerCase();
-          if (content.includes(q)) {
-            // More weight for user messages and exact matches
-            score += msg.role === 'user' ? 2 : 1;
+    let sessions = Object.values(data.sessions);
+    if (projectId) {
+      sessions = sessions.filter((s) => s.projectId === projectId);
+    }
+    if (timeRange) {
+      sessions = sessions.filter((s) => {
+        if (timeRange.start !== undefined && s.startedAt < timeRange.start) return false;
+        if (timeRange.end !== undefined && s.startedAt > timeRange.end) return false;
+        return true;
+      });
+    }
+    sessions.sort((a, b) => b.startedAt - a.startedAt);
 
-            // Bonus for early messages (more relevant to the topic)
-            const idx = session.messages.indexOf(msg);
-            if (idx < 3) score += 0.5;
-          }
-        }
+    if (!query?.trim()) return sessions.slice(0, limit);
 
-        return { session, score };
-      })
+    const q = query.trim().toLowerCase();
+    const scored = sessions
+      .map((session) => ({ session, score: scoreSessionForQuery(session, q) }))
       .filter((s) => s.score > 0)
       .sort((a, b) => b.score - a.score)
       .slice(0, limit)
@@ -449,11 +498,15 @@ export class ChatHistory {
         const vs = getVectorStore();
         await vs.insert(session.id, vector, {
           type: 'chat_history',
+          // G3: the vector-store metadata is derived from the ALREADY-redacted
+          // session (storeSession redacts before insert), so no secret-shaped
+          // content can ride along in the search index either.
           summary: session.summary,
           tags: session.tags,
           provider: session.provider,
           model: session.model,
           startedAt: session.startedAt,
+          ...(session.projectId ? { projectId: session.projectId } : {}),
         });
       }
     } catch {

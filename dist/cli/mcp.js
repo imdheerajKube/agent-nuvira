@@ -10,6 +10,7 @@
  *   buff mcp call <tool> --args '{"key":"value"}'
  *   buff mcp info <name>       — Show detailed info for an MCP server
  *   buff mcp refresh           — Re-discover and reconnect to MCP servers
+ *   buff mcp serve             — Expose agent tools as an MCP server (stdio)
  */
 import { Command } from 'commander';
 import { BaseCommand } from './commands.js';
@@ -73,6 +74,14 @@ Configured via JSON files in: ~/${MCP_CONFIG_DIR}/
             .description('Re-discover and reconnect to all MCP servers')
             .action(async () => {
             await this.refreshServers();
+        });
+        // ── serve (F2 follow-up: expose agent tools as an MCP server) ─────────
+        command
+            .command('serve')
+            .description('Expose the agent\'s H1 tools as an MCP server over stdio (Claude Desktop / IDEs / other agents can connect)')
+            .option('--with <tools>', 'Comma-separated extra tools to expose beyond the safe surface (e.g. publish)', '')
+            .action(async (options) => {
+            await this.serveTools(options || {});
         });
         return command;
     }
@@ -285,6 +294,33 @@ Configured via JSON files in: ~/${MCP_CONFIG_DIR}/
             console.log(`  🟢 ${client.name} — ${toolCount} tools`);
         }
         console.log('');
+    }
+    // ── MCP server (F2 follow-up) ─────────────────────────────────────────
+    async serveTools(options) {
+        try {
+            const { serveStdio, AGENT_MCP_TOOL_NAMES } = await import('../mcp/server.js');
+            const extraTools = (options.with || '').split(',').map((t) => t.trim()).filter(Boolean);
+            // CRITICAL: the MCP stdio protocol owns stdout — every byte written
+            // there must be a protocol frame, or clients (Claude Desktop, IDEs)
+            // fail their initialize handshake. Route ALL human output to stderr.
+            const banner = (s) => { process.stderr.write(s + '\n'); };
+            banner('═'.repeat(60));
+            banner('  🖥️  Agent-Nuvira MCP Server (stdio)');
+            banner('═'.repeat(60));
+            banner('');
+            banner(`  Exposing ${AGENT_MCP_TOOL_NAMES.length + extraTools.length} tool(s):`);
+            for (const name of [...AGENT_MCP_TOOL_NAMES, ...extraTools]) {
+                banner(`    • ${name}`);
+            }
+            banner('');
+            banner('  Waiting for MCP client on stdin/stdout... (Ctrl+C to stop)');
+            banner('');
+            await serveStdio({ extraTools });
+        }
+        catch (err) {
+            // logger.error goes to stderr — safe here.
+            logger.error(`MCP server failed: ${err instanceof Error ? err.message : String(err)}`);
+        }
     }
     // ── Rendering ───────────────────────────────────────────────────────────
     renderToolResult(result) {

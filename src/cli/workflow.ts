@@ -14,6 +14,7 @@ import { Command } from 'commander';
 import ora from 'ora';
 
 import { BaseCommand } from './commands.js';
+import { PipelineBoard } from './pipeline-board.js';
 import { Orchestrator } from '../agents/orchestrator.js';
 import { getWorkflowTemplates, getWorkflowTemplate, buildTaskPlanFromTemplate, buildWorkflowOptions } from '../workflow/templates.js';
 import {
@@ -192,11 +193,9 @@ export class WorkflowCommand extends BaseCommand {
       console.log('');
     }
 
-    // Execute via orchestrator with the pre-built plan
-    const spinner = ora({
-      text: `Running workflow '${template.id}'...`,
-      spinner: 'dots',
-    }).start();
+    // E2: live activity board — replaces the bare ora spinner (standing rule).
+    const board = new PipelineBoard();
+    board.start(`Workflow '${template.id}': ${goal}`);
 
     try {
       const orchestrator = new Orchestrator(this.configManager);
@@ -209,12 +208,12 @@ export class WorkflowCommand extends BaseCommand {
         prefillPlan: taskPlan, // Skip the planner, use the pre-built plan
       });
 
-      spinner.stop();
+      board.finish(result.success);
       console.log('');
       printOrchestrationResult(result);
 
     } catch (err) {
-      spinner.fail(`Workflow '${template.id}' failed`);
+      board.finish(false);
       logger.error(String(err));
     }
   }

@@ -29,6 +29,24 @@
 import type { InferenceProvider } from '../inference/interface.js';
 import { ConfigManager } from '../config/manager.js';
 import { type OrchestrationResult } from '../agents/orchestrator.js';
+/**
+ * M2b curated task IDs — the experience-parity benchmark suite that measures
+ * agent-nuvira against Freebuff and Hermes on the axes users actually feel:
+ * completion rate, stuck states, rework turns, and time-to-done.
+ *
+ * Run with: `buff eval run --suite m2b`
+ *
+ * The suite includes:
+ * - Bug-fix tasks (easy): measure quick-turnaround repair
+ * - Feature tasks (easy/medium): measure greenfield creation
+ * - Refactor tasks (medium): measure code understanding
+ * - Continuation tasks (medium): measure session continuity (the Request
+ *   Contract's visible understanding + follow-up recommendations)
+ * - Project-analysis tasks (hard): measure cross-file reasoning
+ */
+export declare const M2B_TASK_IDS: string[];
+/** Get the M2b curated task suite. */
+export declare function getM2bTasks(): EvalTask[];
 /** Category of an evaluation task */
 export type EvalCategory = 'bug-fix' | 'feature' | 'refactor' | 'test-writing' | 'dependency-setup' | 'algorithm';
 /** A single end-to-end evaluation task */
@@ -87,6 +105,8 @@ export interface EvalMetrics {
     editAccuracy: number;
     /** Token efficiency (0-1) — budget / used, capped at 1 */
     tokenEfficiency: number;
+    /** Total input+output tokens consumed by this task (Session 37 — pacing). */
+    totalTokens: number;
     /** Number of file changes reverted to their original content */
     rollbackCount: number;
     /** Whether the runner attempted a dependency install */
@@ -191,6 +211,15 @@ export interface RunEvalOptions {
     timeEstimate?: 'quick' | 'medium' | 'slow';
     /** Maximum cost in USD before stopping */
     budget?: number;
+    /**
+     * Session 37 — pace the run under the user-declared DAILY token budget
+     * (routing.quota.<provider>.tokensPerWindow, resolved by the CLI): the run
+     * stops once paceUsedBefore + this run's tokens reaches paceTokens, so a
+     * free-tier TPD cap can't invalidate the measurement mid-run.
+     */
+    paceTokens?: number;
+    /** Tokens this provider already consumed today per the quota ledger. */
+    paceUsedBefore?: number;
     /** Progress callback */
     onProgress?: (current: number, total: number, task: EvalTask) => void;
     /** Config manager (for provider config) */
@@ -209,13 +238,87 @@ export declare function runEvalTask(task: EvalTask, _provider: InferenceProvider
  */
 export declare function runEvalSuite(provider: InferenceProvider, providerName: string, model: string, options?: RunEvalOptions): Promise<EvalRun>;
 /** Compute the aggregate summary from a list of eval results. */
+/**
+ * Session 37 — resolve the `--pace` budget for a provider: the user-declared
+ * DAILY cap (routing.quota.<provider>.tokensPerWindow) + tokens this provider
+ * already consumed today per the quota ledger (best-effort). Returns
+ * `paceTokens: undefined` when no budget is declared (run unpaced).
+ */
+export declare function resolvePaceBudget(configManager: ConfigManager | undefined, providerName: string): {
+    paceTokens?: number;
+    usedBefore: number;
+};
 export declare function computeEvalSummary(results: EvalResult[]): EvalSummary;
+/**
+ * Rework turns for one task — repair-engine retries, alternative-approach
+ * attempts, and file rollbacks. This is the user-visible "the agent had to
+ * try again" count.
+ *
+ * NOTE: `attempts` (llmCalls + 1) is deliberately NOT counted — the standard
+ * multi-agent pipeline (planner → context-gatherer → writer → runner →
+ * reviewer) makes ~4-5 LLM calls BY DESIGN, so llmCalls would inflate the
+ * metric to ~4x on every smooth task. Only explicit try-again events count.
+ */
+export declare function computeReworkTurns(metrics: EvalMetrics): number;
+/**
+ * A task is user-visible STUCK when it produced NO working outcome (hidden
+ * tests not green) AND either the pipeline crashed/timed out (error set) or
+ * it thrashed (3+ rework turns without reaching done).
+ *
+ * A task that PASSED tests is never flagged stuck, even if the pipeline
+ * reported a failure — e.g. a transient provider 429 during repair that the
+ * reliability stack recovered from: the user got working code, so it is
+ * provider interference, not user-visible stuckness. Measured from the run's
+ * own data — never agent-declared done.
+ *
+ * Session 44 — a task whose TERMINAL failure is provider infrastructure
+ * (rate-limit / server / network, e.g. a free-tier 429 that opened the circuit
+ * breaker) is also NOT stuck: the pipeline never got a chance to do the work
+ * (attempts=1 in the S44 run), so the failure is interference, not agent
+ * stuckness. Such tasks are surfaced separately on the 'Provider
+ * interference' report line instead of inflating the stuck count. Design
+ * decision: even when rework turns accumulated before the provider gave out,
+ * the terminal cause is infra — the rework was spent retrying a throttled
+ * provider, so interference wins by design (documented in tracker S45).
+ */
+export declare function computeStuckStates(results: EvalResult[]): EvalResult[];
+/**
+ * True when a terminal error string is provider infrastructure failure
+ * (rate-limit / server / network) rather than agent stuckness. Reuses the
+ * canonical `classifyFallbackError` classifier — a 429/500/network failure
+ * means the provider throttled or dropped the request, not that the agent
+ * spun without progress. Auth is NOT interference (wrong key is a config
+ * problem, and would recur on every provider), and timeout is NOT
+ * interference (a slow agent is still the agent's problem).
+ */
+export declare function isProviderInterferenceError(error: string | undefined): boolean;
+/**
+ * Compare two eval runs side by side across the M2b experience-parity axes —
+ * the Part 1.9 gate: after a phase lands, re-run the suite and confirm a
+ * metric moved. Composite / test-pass / completion are HIGHER-better;
+ * stuck / rework / time / cost are LOWER-better. Mirrors compareBenchmarks().
+ */
+export declare function compareEvalRuns(runA: EvalRun, runB: EvalRun): string;
+/**
+ * Pick the two runs to compare for the Part 1.9 gate: the newest run, then the
+ * most recent run with the SAME provider+model (so a phase's metric movement
+ * is never confounded by a model/provider switch), falling back to the previous
+ * run. Assumes newest-first ordering (as returned by getEvalRuns()).
+ */
+export declare function selectCompareRuns(runs: EvalRun[]): [EvalRun, EvalRun] | null;
 /** Format an eval run as a human-readable text report. */
 export declare function formatEvalReport(run: EvalRun): string;
 /** Format an eval run as JSON. */
 export declare function formatEvalJSON(run: EvalRun): string;
 /** Format an eval run as Markdown. */
 export declare function formatEvalMarkdown(run: EvalRun): string;
+/**
+ * Write an M2b benchmark report to docs/benchmarks/.
+ * Creates the directory if it doesn't exist. The report uses the same markdown
+ * format as formatEvalMarkdown but prefixed with metadata for the benchmark
+ * index, and includes a per-task stuck/rework breakdown.
+ */
+export declare function writeBenchmarkReport(run: EvalRun, outputDir: string): string;
 /** Describe the scoring rules for the `buff eval score` command. */
 export declare function formatEvalScoreRules(): string;
 /** Get all available eval tasks. */

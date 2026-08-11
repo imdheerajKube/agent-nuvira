@@ -27,6 +27,7 @@ import { MCPAgent } from './agents/mcp-agent.js';
 import { PRReviewAgent } from './agents/pr-review-agent.js';
 import { IssueTriageAgent } from './agents/issue-triage-agent.js';
 import { BranchAutomationAgent } from './agents/branch-automation-agent.js';
+import { DelegateAgent } from './agents/delegate-agent.js';
 import { getEventBus, EventNames } from '../observability/event-bus.js';
 import type { EventBus } from '../observability/event-bus.js';
 
@@ -341,6 +342,15 @@ export class ModuleRegistry {
       name: 'Branch Automation',
       description: 'Automates branch workflows: issue-driven branches, PR updates, file-watch commits, CI fix detection',
       icon: '🔀',
+      isBuiltin: true,
+    });
+
+    // H2 — delegate agent: fans out taskStep.delegation sub-agent specs in
+    // parallel (Freebuff spawn_agents / Hermes delegate_tool.py parity).
+    registry.register('delegate', () => new DelegateAgent(), {
+      name: 'Delegate',
+      description: 'Fans out sub-agent delegation specs in parallel with fresh isolated contexts and aggregates their summary results',
+      icon: '🧑🔧',
       isBuiltin: true,
     });
 

@@ -1,15 +1,25 @@
 /**
- * MCP Client — Connects to MCP servers via stdio or SSE transport.
+ * MCP Client — Connects to MCP servers via stdio or Streamable HTTP.
  *
- * The Model Context Protocol (MCP) allows AI agents to discover and invoke
- * tools exposed by external servers. This client implements:
- * - stdio transport: spawns a subprocess and communicates via stdin/stdout
- * - SSE transport: connects to a remote HTTP server with Server-Sent Events
+ * F2: the transport + JSON-RPC internals now run on the OFFICIAL
+ * `@modelcontextprotocol/sdk` (Client + StdioClientTransport +
+ * StreamableHTTPClientTransport) — replacing the hand-rolled JSON-RPC loop
+ * with identical call behavior (no API break for callers): same constructor,
+ * methods, getters, events, and `MCPConnectionState` shape.
  *
- * Protocol: JSON-RPC 2.0
+ * Transports:
+ * - stdio: spawns a subprocess; the SDK's close() reaps the child with a
+ *   stdin-end → SIGTERM → SIGKILL escalation (the old client's detached
+ *   process-group kill is an SDK trade-off — the direct child is always
+ *   reaped, npx-wrapped grandchildren are not).
+ * - sse: maps to StreamableHTTPClientTransport (Streamable HTTP is the spec
+ *   successor of the old SSE transport; the same `transport: 'sse'` config
+ *   entries keep working unchanged).
+ *
  * Spec: https://modelcontextprotocol.io/specification/
  */
 import { EventEmitter } from 'node:events';
+import type { Transport } from '@modelcontextprotocol/sdk/shared/transport.js';
 import { type Tool, type Resource, type Prompt, type CallToolResult, type TextContent, type EmbeddedResource, type Implementation, type MCPServerConfig, type MCPConnectionState } from './types.js';
 export interface MCPClientEvents {
     connected: [];
@@ -18,20 +28,25 @@ export interface MCPClientEvents {
     'tool-list-changed': [];
     'resource-list-changed': [];
 }
+/**
+ * Optional transport factory — a test seam. Production callers never pass it;
+ * unit tests inject an in-memory Transport to drive the SDK client without
+ * spawning a subprocess or opening sockets.
+ */
+export type TransportFactory = (config: MCPServerConfig) => Transport;
 export declare class MCPClient extends EventEmitter {
     private config;
-    private process;
-    private lineReader;
-    private requestId;
-    private pendingRequests;
+    private client;
+    private transport;
+    private transportFactory;
     private _connected;
     private _serverInfo;
     private _tools;
     private _resources;
     private _prompts;
-    /** Timeout for JSON-RPC requests (ms) */
+    /** Timeout for JSON-RPC requests (ms) — passed through to the SDK. */
     private readonly requestTimeoutMs;
-    constructor(config: MCPServerConfig, requestTimeoutMs?: number);
+    constructor(config: MCPServerConfig, requestTimeoutMs?: number, transportFactory?: TransportFactory);
     get name(): string;
     get connected(): boolean;
     get serverInfo(): Implementation | null;
@@ -41,11 +56,14 @@ export declare class MCPClient extends EventEmitter {
     get state(): MCPConnectionState;
     /**
      * Connect to the MCP server. For stdio transport this spawns the subprocess;
-     * for SSE transport this connects to the HTTP endpoint.
+     * for sse transport this connects to the Streamable HTTP endpoint. The SDK
+     * performs the initialize handshake inside `client.connect(transport)`.
      */
     connect(): Promise<void>;
     /**
-     * Disconnect from the MCP server, cleaning up any subprocess or SSE connection.
+     * Disconnect from the MCP server. The SDK's close() reaps the stdio child
+     * (stdin end → SIGTERM → SIGKILL) or tears down the HTTP stream. Sync by
+     * design — callers (MCPManager.disconnectAll) tear down in a loop.
      */
     disconnect(): void;
     /**
@@ -65,7 +83,8 @@ export declare class MCPClient extends EventEmitter {
      */
     listResources(): Promise<Resource[]>;
     /**
-     * Read a resource by URI.
+     * Read a resource by URI. Returns the first content block (the SDK
+     * normalizes `resources/read` to `{ contents: [...] }`).
      *
      * @param uri — The resource URI to read
      */
@@ -78,38 +97,22 @@ export declare class MCPClient extends EventEmitter {
      * Get a specific prompt by name with optional arguments.
      */
     getPrompt(name: string, args?: Record<string, string>): Promise<unknown>;
+    /** Build the SDK transport for this server's config (stdio vs sse). */
+    private buildTransport;
     /**
-     * Connect via stdio — spawns a subprocess and communicates via stdin/stdout.
-     */
-    private connectStdio;
-    /**
-     * Connect via SSE — connects to a remote HTTP SSE endpoint.
-     */
-    private connectSSE;
-    /**
-     * Send a JSON-RPC request and wait for the response.
-     */
-    private sendRequest;
-    /**
-     * Send a raw JSON-RPC message over the transport.
-     */
-    private sendRaw;
-    /**
-     * Send a message via SSE HTTP POST.
-     */
-    private sendSSEMessage;
-    /**
-     * Handle an incoming JSON-RPC message from the transport.
-     */
-    private handleMessage;
-    /**
-     * Perform the MCP initialization handshake.
-     */
-    private initialize;
-    /**
-     * Discover server capabilities after initialization.
+     * Discover server capabilities after initialization. The SDK already
+     * re-lists tools/resources when the server advertises `listChanged`; this
+     * is the explicit initial snapshot (mirrors the old client).
      */
     private discoverCapabilities;
+    /** Reject if `p` doesn't settle within the request timeout. */
+    private withTimeout;
+    /** Whether the SDK client is usable (connected + created). */
+    private ensureConnected;
+    /** The not-connected error message (stable across callers/tests). */
+    private notConnectedError;
+    /** Fire-and-forget teardown used on connect failure paths. */
+    private closeClient;
 }
 /**
  * Create an MCP client from a server configuration.

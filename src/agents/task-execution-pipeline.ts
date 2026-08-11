@@ -18,12 +18,12 @@
 
 import { join, resolve, isAbsolute, dirname } from 'node:path';
 import { existsSync, mkdirSync, writeFileSync, readFileSync } from 'node:fs';
-import { execSync } from 'node:child_process';
 
 import { getEventBus, EventNames } from '../observability/event-bus.js';
 import type { EventBus } from '../observability/event-bus.js';
 import { logger } from '../utils/logger.js';
 import { ProviderFactory } from '../inference/factory.js';
+import { runShell } from '../utils/shell.js';
 import { ConfigManager } from '../config/manager.js';
 import type { ProviderType } from '../config/types.js';
 import type { LLMCallFn } from './agent.js';
@@ -54,6 +54,12 @@ export interface PipelineConfig {
   maxVerifyRetries?: number;
   /** Verification strictness (default: 'medium') */
   strictness?: 'low' | 'medium' | 'high';
+  /**
+   * Session 20 — RequestContract acceptance criteria. Threaded through to the
+   * VerifyModule goal-alignment check so verification is contract-driven
+   * (Decision 3: spec→verify). Optional — verify runs normally when absent.
+   */
+  acceptanceCriteria?: string[];
   /** Whether to enable dry-run mode (no disk writes, default: false) */
   dryRun?: boolean;
   /** Whether to enable verbose logging (default: false) */
@@ -306,6 +312,7 @@ export class TaskExecutionPipeline {
         planOutput.goal,
         callLLM,
         config.strictness,
+        config.acceptanceCriteria,
         audit,
         verbose,
       );
@@ -584,28 +591,17 @@ export class TaskExecutionPipeline {
 
       audit.log('test', 'test:command', 'info', `Running: ${testCommand}`);
 
-      // Execute the test command
-      let stdout: string;
-      let stderr: string;
-      let exitCode: number;
-
-      try {
-        const result = execSync(testCommand, {
-          cwd: workingDirectory,
-          timeout: 60_000,
-          maxBuffer: 10 * 1024 * 1024,
-          stdio: 'pipe',
-          shell: true,
-          windowsHide: true,
-        } as any) as string | Buffer;
-        stdout = typeof result === 'string' ? result : result.toString();
-        stderr = '';
-        exitCode = 0;
-      } catch (execErr: any) {
-        stdout = execErr.stdout?.toString() || '';
-        stderr = execErr.stderr?.toString() || '';
-        exitCode = execErr.status ?? 1;
-      }
+      // Execute the test command through the shared shell choke point —
+      // emits exec:shell-start / exec:shell-end so the run is visible as a
+      // live `$ npm test` lane (E1). Never throws on non-zero exit.
+      const shellResult = await runShell(testCommand, {
+        cwd: workingDirectory,
+        timeoutMs: 60_000,
+        source: 'task-execution-pipeline',
+      });
+      const stdout = shellResult.stdout;
+      const stderr = shellResult.stderr;
+      const exitCode = shellResult.exitCode;
 
       // Parse test results from output
       const parsed = this.parseTestOutput(stdout + '\n' + stderr, exitCode);
@@ -660,6 +656,7 @@ export class TaskExecutionPipeline {
     goal: string,
     callLLM: LLMCallFn,
     strictness: string | undefined,
+    acceptanceCriteria: string[] | undefined,
     audit: PipelineAudit,
     verbose: boolean,
   ): Promise<StepResult<VerificationResult>> {
@@ -677,6 +674,7 @@ export class TaskExecutionPipeline {
           originalContent: c.originalContent,
         })),
         goal,
+        acceptanceCriteria,
         testResults: testOutput ? { passed: testOutput.passedCount, failed: testOutput.failedCount, total: testOutput.totalCount } : undefined,
         strictness: (strictness as any) ?? 'medium',
         callLLM,

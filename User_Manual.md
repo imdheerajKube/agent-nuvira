@@ -1,6 +1,35 @@
 # Agent-Nuvira — User Manual
 
-**Version 1.60.4 | August 2026**
+**Version 1.61.4 | August 2026**
+
+### v1.61.4 — Modality packs: browser, image, voice, vision (I2–I5)
+
+- **`browser`** — automate a real browser (open / click / type / extract / screenshot) for login flows, scraping dynamic sites, or any task needing a live page. Requires the optional `playwright` package (`npm i playwright && npx playwright install chromium`); until then the tool reports a clear install hint instead of failing. Pages are guarded against private/loopback targets (SSRF), and screenshots land in `.buff/artifacts/browser/`.
+- **`generate_image`** — turn a prompt into an image. Defaults to Pollinations.ai (free, no API key); point `BUFF_IMAGE_API_URL` at a local Stable Diffusion / ComfyUI for a fully local setup. Images save to `.buff/artifacts/images/` and the path is returned.
+- **`speak` / `transcribe`** — voice in both directions. `speak(text)` synthesizes speech via **edge-tts** (free Microsoft voices; `pip install edge-tts`) or Piper; `transcribe(audio)` runs **whisper.cpp** locally (`whisper` on PATH). Output audio lands in `.buff/artifacts/audio/`. Both degrade with install hints when a backend is missing.
+- **`describe_image`** — describe any image (screenshot, diagram, photo) via a local **Ollama** llava/llama3.2-vision model, or the free Gemini vision tier when `BUFF_GEMINI_API_KEY` is set. Reuses the same model router as everything else.
+- **Optional everything** — all four packs are capability-gated: `buff tools list` shows them regardless, but a missing backend never crashes a run — you get a clear "install … then retry" message.
+
+### v1.61.3 — Multi-channel gateway (J1)
+
+- **`buff gateway start / send / status / alias`** — run the agent from **Telegram, Discord, Slack, or WhatsApp** (Hermes `gateway/` parity). Every adapter is opt-in via an env bot token (`BUFF_TELEGRAM_TOKEN`, `BUFF_DISCORD_BOT_TOKEN`/`BUFF_DISCORD_WEBHOOK_URL`, `BUFF_SLACK_BOT_TOKEN`/`BUFF_SLACK_WEBHOOK_URL`, `BUFF_WHATSAPP_TOKEN` + `BUFF_WHATSAPP_PHONE_ID`) — set one, and `buff gateway start` picks it up. No SDK dependencies (pure fetch): Telegram uses long-polling (no public URL needed); Discord/Slack use incoming webhooks; WhatsApp uses Meta's Cloud API.
+- **Natural-language task dispatch** — send a channel message like "fix the failing test" and the gateway runs the SAME pipeline as `buff chat`/`buff execute`, replying with the result in the channel and streaming progress lines as it goes (plan ready, task started, shell commands, done/failed).
+- **Channel aliases** — `buff gateway alias add ops slack C0123` registers a friendly alias (persisted), so `buff gateway send ops "nightly done"` works across restarts; `platform:channelId` targets also work directly.
+- **Security defaults** — the webhook listener binds to 127.0.0.1 (use `--host 0.0.0.0` only with a tunnel); Slack and WhatsApp webhook signatures are verified when secrets are configured; and **only channels in `BUFF_GATEWAY_ALLOW_IDS` can trigger pipelines** (e.g. `telegram:123456,slack:C0123`) — everyone else gets a polite refusal.
+- **Cron delivery** — `buff admin cron add nightly "0 3 * * *" build --channel ops` delivers each run's result to the channel.
+
+### v1.61.2 — Integration-tested foundations + extended CI matrix (M1/M4)
+
+- **Integration tests (M1)** — the foundation now passes as ONE unit, not just isolated unit tests. `tests/integration/a1-a2-b1.test.ts` drives the real Vault, Workspace registry, and Fact memory in a single hermetic temp harness: a secret set→read survives a fresh vault instance, a recorded run survives a fresh workspace store, a fact survives a fresh fact store, and a `vault.enc` scan proves no secret ever touches disk in plaintext. `tests/integration/orchestrator-workspace.test.ts` runs a REAL pipeline against a fast-failing local model (zero network) and proves the workspace row is written even when the pipeline FAILS (❌ outcome) and that repeat runs update the same project row.
+- **Extended CI matrix (M4)** — the existing Linux/macOS workflow now tests Node 22/24/26 and adds a **Bun-latest** job (committed `bun.lock`, `bunx tsc`, `bunx vitest`) — all in the existing pipeline file, no new CI pipeline.
+
+### v1.61.1 — RBAC enforcement everywhere + vault access audit + eval comparison gate
+
+- **RBAC enforcement (K4)** — the role engine that previously gated only `buff admin` now guards every sensitive surface through one shared enforcement path: `buff team` mutations (init / join / sync / share and all review actions), `buff skill gc` real removal + `buff skill clear` (the dry-run preview stays open to everyone), `buff sbom --out <file>`, and `buff config vault migrate`. An unauthorized role gets a clear `⛔ Access denied` message and exit code 3; nothing is written. Roles: **admin** (everything), **operator** (routing + team + sbom writes), **viewer** (reads only). Until any role is assigned you stay in legacy single-user mode (fully permissive) — enabling RBAC never locks you out.
+- **Vault access audit (K3)** — every vault credential read / write / delete is appended to a tamper-evident, secret-scrubbed chain at `~/.buff/memory/vault-access.jsonl`. `buff config vault log` shows recent accesses (account names only — the raw secret never appears), and `buff audit verify` + `buff doctor --enterprise` verify chain integrity alongside the other stores.
+- **Eval comparison gate** — `buff eval results --compare` diffs the two most recent same-setup eval runs across the M2b experience-parity axes (composite score / test pass / stuck / rework / time-to-done) with per-axis winner arrows — the instrument for proving that a landed phase actually improved the agent.
+- **Declare your daily token budget (your plan, your say)** — free-tier providers enforce tokens-per-day caps the API doesn't advertise; only you know your plan's allowance. Set it with `buff model quota set groq --tokens 12000 --requests 14400 --cost-usd 0.10` (or in the dashboard's Admin → **💰 Daily Budget** panel — the same config). The agent then **paces around it** instead of exhausting your budget mid-task: when a provider hits the declared cap, the quota ledger parks it, auto routing prefers other providers, and it auto-resumes at window rollover. Unset = current behavior. `buff model quota` shows the ledger; `quota reset` clears usage.
+- **Paced eval runs** — `buff eval run --pace` makes the evaluation suite honor your declared daily budget: it stops **before** a task that would cross the cap, so a free-tier token-exhaustion mid-run can't produce misleading scores. If you pass `--pace` without a declared budget it warns and runs unpaced — declare one with `buff model quota set <provider> --tokens N`. Works with `--provider` and `--routing` modes, alongside the existing `--budget` (USD) stop.
 
 ### v1.60.4 — Per-task repair model escalation for every agent
 
@@ -937,6 +966,45 @@ Examples:
 
 Skills are auto-compiled from the top 5 highest-scoring trajectories every 8 successful orchestration runs.
 
+### 6.9c Scheduled Jobs — `buff admin cron` (J2)
+
+`buff admin cron` schedules **tool invocations** on a cron schedule (Hermes `cron/jobs.py` parity) — e.g. a nightly `build` or `test` run. Jobs persist to `~/.buff/cron/jobs.json`; the schedule is a standard 5-field cron expression validated by node-cron.
+
+```
+buff admin cron add nightly-build "0 3 * * *" build --args '{"goal":"build all"}'
+buff admin cron add nightly "0 3 * * *" test --dry-run   # validate WITHOUT saving
+buff admin cron list                                     # schedule + next run + last run
+buff admin cron run nightly                              # invoke the tool NOW
+buff admin cron remove nightly
+```
+
+- **`--args` is validated against the tool's schema at add time** — a typo is reported immediately, not at 3am.
+- **`run`** invokes the H1 registry tool with a fresh ConfigManager and emits `cron:run/result/error` events (the future gateway/dashboard render surface).
+- **RBAC**: add/remove/run require the `cron.manage` permission (admin or operator); list is open to every role. Legacy single-user mode stays fully permissive until roles are assigned.
+
+### 6.9b Skills Hub — Community Skills (J3)
+
+`buff skills` (plural) is the **community skills hub** — discover and install skills from a registry (Hermes `skills_hub` / Freebuff `npx skills add` parity). It is distinct from `buff skill` (singular), which manages *internal* skills compiled from your trajectories.
+
+```bash
+agent-nuvira skills [command] [options]
+
+Commands:
+  search <query> [--refresh]       Search the skills registry (default: GitHub raw;
+                                   set BUFF_SKILLS_REGISTRY to a local dir for offline)
+  install <name> [--project <path>]  Install a skill into <project>/.agents/skills/
+  update [--project <path>]        Update installed skills to newer registry versions
+  list [--origin registry|local] [--project <path>]  List installed skills with provenance
+
+Examples:
+  agent-nuvira skills search release
+  agent-nuvira skills install release-bumper
+  agent-nuvira skills update
+  agent-nuvira skills list --origin registry
+```
+
+**Trust & safety:** skill names are sandboxed (`^[a-z0-9-]+$` — no traversal), the skill's frontmatter `name:` must match the registry entry, every install records a SHA-256 checksum + provenance in `~/.buff/skills-hub/provenance.json`, and a reinstall with *changed* content is **quarantined** rather than silently overwritten. `skills update` is version-gated — it never downgrades an installed skill and never clobbers your local edits; only a genuinely newer registry version overwrites. (In RBAC mode, `update` needs the `skill.remove` role, same as `skill gc`/`clear`.)
+
 ### 6.10 Init Command — Project Scaffolding
 
 ```bash
@@ -1060,6 +1128,28 @@ Examples:
 
 History is stored in `~/.buff/history/`. Retention is configurable via `buff config set history.retentionDays 30`. Semantic search uses native embeddings (Xenova → Python → LLM fallback) and requires the semantic index to exist — run `buff history reindex` to build it from existing sessions.
 
+> **Privacy (P6 M6.2):** session content is **redacted before it is persisted** —
+> API keys, Bearer tokens, and key=value secrets are masked in both
+> `history.json` and the semantic search index. You can paste a key into a
+> chat without it surviving in your history files.
+
+### 6.14b Session Command — project-scoped recall (debug surface)
+
+The **primary** resume path is a bare `continue` / `resume` request (D1 auto-recall
+shows a recall card automatically). `buff session` is the explicit/scriptable
+surface for the same machinery:
+
+```bash
+buff session list                           # Recent sessions for the current project
+buff session list --project repo:acme/shop  # Sessions for a specific project
+buff session list --since "last week"       # Temporal filter (no LLM)
+buff session summarize <id>                 # Summary + metadata for one session
+buff session resume                         # Print the D1 recall card (facts, resume point, last goal)
+```
+
+Facts and recall counts are also visible in `buff memory facts`, `buff memory facts
+stats`, and the dashboard's Memory panel.
+
 ### 6.15 Security Scan Command — PII, Injection & Code Safety
 
 ```bash
@@ -1116,6 +1206,44 @@ Examples:
   agent-nuvira feedback list                       # Most recent 10 entries
   agent-nuvira feedback list --limit 20 --trajectory traj-001
   agent-nuvira feedback stats                      # Bar chart + trend
+
+### 6.16b MCP Command — Server Connections & Serving
+
+```bash
+agent-nuvira mcp [command]
+
+Commands:
+  list                              List discovered MCP servers and their tools
+  connect [name] | --all            Connect to an MCP server (or all)
+  call <tool> [--server <name>] [--args '<json>']  Invoke a tool on a server
+  info <name>                       Show server details
+  refresh                           Re-discover and reconnect to all servers
+  serve [--with <tools>]            Expose the agent's H1 tools as an MCP server (stdio)
+
+Examples:
+  agent-nuvira mcp connect filesystem
+  agent-nuvira mcp call read_file --server fs --args '{"path":"/tmp/test.txt"}'
+
+  # Expose the agent's own tools over MCP (Claude Desktop / IDEs / other agents
+  # connect by launching `agent-nuvira mcp serve` as a subprocess).
+  agent-nuvira mcp serve
+  agent-nuvira mcp serve --with publish    # opt in an irreversible tool explicitly
+```
+
+`serve` exposes the **safe surface** only: pipeline tools (`build` / `resume` / `repair` /
+`document` / `website` / `analyze` / `test`) plus `code_search` and the I1 web-research tools
+(`web_search` / `read_page` — read-only network with a built-in SSRF guard). Loop-internal
+tools (`ask_user`, `suggest_followups`), LLM-dependent tools (`verify_requirement`,
+`delegate`), and irreversible tools (`publish`) are excluded unless explicitly added with
+`--with`. Human output is written to stderr so the MCP protocol owns stdout.
+
+**Web research (I1, Session 38):** the agent can now search the web and read pages to ground
+its answers — `buff tools list` shows `web_search` (DuckDuckGo free tier by default, or a
+self-hosted SearXNG via `BUFF_SEARXNG_URL`) and `read_page` (Jina Reader free tier when
+`JINA_API_KEY` is set, else a plain fetch). Both are available to the model in chat/execute
+and over MCP. `read_page` only fetches public http(s) URLs — private/link-local/cloud-metadata
+hosts are blocked unless you set `BUFF_WEB_ALLOW_PRIVATE=1`. Results are cached, so repeat
+queries cost nothing.
   agent-nuvira feedback clear                      # With confirmation
 ```
 

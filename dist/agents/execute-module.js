@@ -8,11 +8,10 @@
  *
  * @see ARCHITECTURE.md §3.8 — Execute Module specification
  */
-import { execSync } from 'node:child_process';
 import { existsSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { getEventBus, EventNames } from '../observability/event-bus.js';
-import { getHostShell } from '../utils/shell.js';
+import { runShell } from '../utils/shell.js';
 // ─── Constants ──────────────────────────────────────────────────────────────
 const MAX_OUTPUT_LENGTH = 10_000;
 const DEFAULT_TIMEOUT_MS = 120_000;
@@ -70,30 +69,23 @@ export class DefaultExecuteModule {
                 error: validation.reason,
             };
         }
-        // Execute the command
+        // Execute the command through the shared shell choke point (E1) — emits
+        // exec:shell-start / exec:shell-end events; never throws on non-zero exit.
         const startTime = Date.now();
-        let exitCode = 0;
-        let stdout = '';
-        let stderr = '';
-        let execError;
-        try {
-            const output = execSync(command, {
-                cwd: workingDirectory,
-                timeout: timeoutMs,
-                stdio: 'pipe',
-                encoding: 'utf-8',
-                shell: getHostShell(),
-                maxBuffer: 1024 * 1024,
-            });
-            stdout = output.trim();
-        }
-        catch (err) {
-            const error = err;
-            exitCode = error.status ?? 1;
-            stdout = (typeof error.stdout === 'string' ? error.stdout : String(error.stdout || '')).trim();
-            stderr = (typeof error.stderr === 'string' ? error.stderr : String(error.stderr || '')).trim();
-            execError = error.message;
-        }
+        const shellResult = await runShell(command, {
+            cwd: workingDirectory,
+            timeoutMs,
+            maxBuffer: 1024 * 1024,
+            source: 'execute-module',
+        });
+        const exitCode = shellResult.exitCode;
+        const stdout = shellResult.stdout.trim();
+        const stderr = shellResult.stderr.trim();
+        // Keep diagnostic detail in the error field (stderr/stdout snippet first,
+        // exit code as fallback) so orchestrator/UI surfaces stay informative.
+        const execError = shellResult.success
+            ? undefined
+            : (stderr || stdout).trim().slice(0, 500) || `Command exited with code ${shellResult.exitCode}`;
         const duration = Date.now() - startTime;
         const result = {
             success: exitCode === 0,

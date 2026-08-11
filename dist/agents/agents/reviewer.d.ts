@@ -21,6 +21,13 @@ export declare class ReviewerAgent extends Agent {
     execute(context: AgentContext, callLLM: LLMCallFn): Promise<AgentResult>;
     /**
      * Build the review prompt from the task plan, relevant context, and changes.
+     *
+     * Session 20 (Decision 3 — spec→verify): when the orchestrator seeded the
+     * RequestContract acceptance criteria into context.metadata, they are
+     * appended as an Acceptance Criteria section. The reviewer must then emit a
+     * per-criterion verdict line (PASS/FAIL), and any FAIL marks the review as
+     * blocking — "done" means the changes satisfy the contract, not just a
+     * loose goal match.
      */
     private buildPrompt;
     /**

@@ -390,6 +390,70 @@ describe('ConfigManager', () => {
 
       expect(manager.getAll().defaultProvider).toBe('auto');
     });
+
+    it('picks up an externally-modified config on the SAME instance (update-as-and-when, Session 36)', async () => {
+      const configDir = join(testDir, 'test-live-reload');
+      mkdirSync(configDir, { recursive: true });
+      const cfgPath = join(configDir, 'buffconfig.json');
+      writeFileSync(
+        cfgPath,
+        JSON.stringify({ routing: { quota: { groq: { tokensPerWindow: 1000 } } } }),
+        'utf-8',
+      );
+
+      const manager = new ConfigManager(configDir);
+      expect(manager.getAll().routing?.quota?.groq?.tokensPerWindow).toBe(1000);
+
+      // External change — e.g. `buff model quota set groq --tokens 9000` or the
+      // dashboard's Daily Budget panel — while THIS instance is alive:
+      await new Promise((r) => setTimeout(r, 15)); // ensure a distinct mtime tick
+      writeFileSync(
+        cfgPath,
+        JSON.stringify({ routing: { quota: { groq: { tokensPerWindow: 9000 } } } }),
+        'utf-8',
+      );
+
+      expect(manager.getAll().routing?.quota?.groq?.tokensPerWindow).toBe(9000);
+    });
+
+    it('save() refreshes first — never clobbers a newer external write (Session 36 lost-update guard)', async () => {
+      const configDir = join(testDir, 'test-live-save-guard');
+      mkdirSync(configDir, { recursive: true });
+      const cfgPath = join(configDir, 'buffconfig.json');
+      writeFileSync(cfgPath, JSON.stringify({ routing: { quota: { groq: { tokensPerWindow: 1000 } } } }), 'utf-8');
+
+      const manager = new ConfigManager(configDir);
+      // External process (e.g. the dashboard's Daily Budget panel) raises
+      // groq's limit AFTER this instance was constructed:
+      await new Promise((r) => setTimeout(r, 15));
+      writeFileSync(cfgPath, JSON.stringify({ routing: { quota: { groq: { tokensPerWindow: 9000 } } } }), 'utf-8');
+
+      // Our save mirrors `buff model quota set gemini` — a full merged map built
+      // from a refreshed getAll(). It must NOT clobber the external change.
+      const all = manager.getAll(); // refreshes → sees the 9000
+      const quota = { ...(all.routing?.quota || {}) };
+      quota.gemini = { requestsPerWindow: 500 };
+      manager.save({ routing: { quota } });
+
+      const merged = manager.getAll().routing?.quota || {};
+      expect((merged.groq as { tokensPerWindow: number }).tokensPerWindow).toBe(9000); // preserved
+      expect((merged.gemini as { requestsPerWindow: number }).requestsPerWindow).toBe(500);
+    });
+
+    it('save() does not trigger a redundant re-read (mtime stamped)', () => {
+      const configDir = join(testDir, 'test-live-reload-save');
+      mkdirSync(configDir, { recursive: true });
+      const cfgPath = join(configDir, 'buffconfig.json');
+      writeFileSync(cfgPath, JSON.stringify({ routing: { bandit: true } }), 'utf-8');
+
+      const manager = new ConfigManager(configDir);
+      const reloadSpy = vi.spyOn(manager as unknown as { loadConfig: () => unknown }, 'loadConfig');
+      manager.save({ routing: { bandit: false } });
+      manager.getAll();
+      // save() stamps the mtime, so the getAll right after must NOT re-read.
+      expect(reloadSpy).not.toHaveBeenCalled();
+      reloadSpy.mockRestore();
+    });
   });
 
   describe('history config', () => {

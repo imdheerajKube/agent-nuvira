@@ -119,6 +119,13 @@ export class ReviewerAgent extends Agent {
     }
     /**
      * Build the review prompt from the task plan, relevant context, and changes.
+     *
+     * Session 20 (Decision 3 — spec→verify): when the orchestrator seeded the
+     * RequestContract acceptance criteria into context.metadata, they are
+     * appended as an Acceptance Criteria section. The reviewer must then emit a
+     * per-criterion verdict line (PASS/FAIL), and any FAIL marks the review as
+     * blocking — "done" means the changes satisfy the contract, not just a
+     * loose goal match.
      */
     buildPrompt(context) {
         // Format the task description
@@ -140,7 +147,13 @@ export class ReviewerAgent extends Agent {
             return header;
         })
             .join('\n\n');
-        return `${REVIEWER_SYSTEM_PROMPT}\n\n## Task Description\n${taskDescriptions || context.goal}\n\n## Changes to Review\n${diffs || '(No changes provided)'}\n\n## Instructions\nReview the above changes. Identify any issues and provide feedback.`;
+        const acceptanceCriteria = context.metadata?.acceptanceCriteria ?? [];
+        const criteriaSection = acceptanceCriteria.length > 0
+            ? `\n\n## Acceptance Criteria\nThe user (via the request contract) defined these success criteria. Verify EACH one explicitly against the changes.\n${acceptanceCriteria
+                .map((c, i) => `${i + 1}. ${c}`)
+                .join('\n')}\n\nAfter your issue review, emit a verdict line for EVERY criterion:\n- PASS: <criterion>\n- FAIL: <criterion> — <reason>\n\nAny FAIL means the changes do not satisfy the contract — mark the overall review as blocked.`
+            : '';
+        return `${REVIEWER_SYSTEM_PROMPT}\n\n## Task Description\n${taskDescriptions || context.goal}\n\n## Changes to Review\n${diffs || '(No changes provided)'}${criteriaSection}\n\n## Instructions\nReview the above changes. Identify any issues and provide feedback.`;
     }
     /**
      * Check if the review response contains any critical issues.
@@ -153,13 +166,18 @@ export class ReviewerAgent extends Agent {
         // The colon prefix is critical — it's how the prompt tells the LLM to format issues.
         // "No critical issues found" won't match; "CRITICAL: SQL injection" will.
         const criticalPrefix = /(?:^|\n|[-*]\s*)CRITICAL\s*:/im;
+        // Session 20: a per-criterion FAIL verdict from the Acceptance Criteria
+        // section means the changes do not satisfy the contract → blocking.
+        const criterionFail = /(?:^|\n)[-*]?\s*FAIL\s*:/im;
         // Also match the old patterns for backwards compatibility
         const oldPatterns = [
             /🔴/,
             /\bBlocking\b/,
             /\bSecurity\s*vulnerability\b/i,
         ];
-        return criticalPrefix.test(review) || oldPatterns.some((p) => p.test(review));
+        return (criticalPrefix.test(review) ||
+            criterionFail.test(review) ||
+            oldPatterns.some((p) => p.test(review)));
     }
 }
 //# sourceMappingURL=reviewer.js.map

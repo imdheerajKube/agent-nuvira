@@ -555,18 +555,37 @@ export class IssueTriageAgent extends Agent {
 
       if (mentionedFiles.length === 0) return undefined;
 
-      // Run git blame on the first mentioned file that exists
+      // Run git blame on the first mentioned file that exists.
+      // Pure-JS author counting replaces the Unix-only shell pipeline
+      // (`grep | sort | uniq -c | sort -rn | head`) which would fail on
+      // Windows cmd.exe where those tools don't exist.
       for (const file of mentionedFiles.slice(0, 3)) {
         try {
-          const blameOutput = execSync(`git blame --line-porcelain "${file}" 2>/dev/null | grep "^author " | sort | uniq -c | sort -rn | head -3`, {
+          const blameOutput = execSync(`git blame --line-porcelain "${file}"`, {
             timeout: 10_000,
             encoding: 'utf-8',
             stdio: 'pipe',
           });
-          const lines = blameOutput.trim().split('\n').filter(Boolean);
-          if (lines.length > 0) {
-            // Extract the author name from the first line: "42 author Name"
-            const topAuthor = lines[0].replace(/^\s*\d+\s+author\s+/, '').trim();
+
+          // `--line-porcelain` emits `author <name>` header lines; count
+          // occurrences per author, then pick the most frequent.
+          const authorCounts = new Map<string, number>();
+          for (const line of blameOutput.split(/\r?\n/)) {
+            if (!line.startsWith('author ')) continue;
+            const author = line.slice('author '.length).trim();
+            if (!author) continue;
+            authorCounts.set(author, (authorCounts.get(author) || 0) + 1);
+          }
+
+          if (authorCounts.size > 0) {
+            let topAuthor = '';
+            let topCount = 0;
+            for (const [author, count] of authorCounts) {
+              if (count > topCount) {
+                topAuthor = author;
+                topCount = count;
+              }
+            }
             if (topAuthor) return topAuthor;
           }
         } catch {

@@ -45,6 +45,12 @@ export interface VerifyParams {
     changes: FileChange[];
     /** The original user goal */
     goal: string;
+    /**
+     * Session 20 — RequestContract acceptance criteria. When present, the
+     * goal-alignment LLM check verifies EACH criterion explicitly and any
+     * `FAIL:` verdict marks the check as failed (Decision 3: spec→verify).
+     */
+    acceptanceCriteria?: string[];
     /** Optional test results summary */
     testResults?: {
         passed: number;

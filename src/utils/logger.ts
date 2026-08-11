@@ -1,5 +1,6 @@
 import chalk from 'chalk';
 import { applyRedaction, redactValue } from '../enterprise/secrets.js';
+import { isJsonLogMode, jsonLogLine } from '../enterprise/log.js';
 
 export type LogLevel = 'debug' | 'info' | 'warn' | 'error';
 
@@ -54,12 +55,39 @@ function scrub(line: string, args: unknown[]): { line: string; args: unknown[] }
   }
 }
 
+/**
+ * Emit a line — JSON mode (K1) when BUFF_LOG_JSON=1, else chalk text.
+ * `success` is a display-only level (info-weight): the JSON record uses the
+ * canonical `info` level so consumers see one of the four LogLevel values.
+ */
+function emit(level: LogLevel | 'success', message: string, args: unknown[]): void {
+  if (isJsonLogMode()) {
+    const line = jsonLogLine(level === 'success' ? 'info' : level, message, args);
+    if (level === 'error') {
+      console.error(line);
+    } else {
+      console.log(line);
+    }
+    return;
+  }
+  if (level === 'error') {
+    console.error(chalk.red(`✖ ${message}`), ...args);
+    return;
+  }
+  const prefix =
+    level === 'debug' ? chalk.gray('[debug]') :
+    level === 'warn' ? chalk.yellow('⚠') :
+    level === 'success' ? chalk.green('✔') :
+    chalk.blue('ℹ');
+  console.log(`${prefix} ${message}`, ...args);
+}
+
 export const logger = {
   debug: (message: string, ...args: unknown[]) => {
     if (silent) return;
     if (shouldLog('debug')) {
       const s = scrub(message, args);
-      console.log(chalk.gray(`[debug] ${s.line}`), ...s.args);
+      emit('debug', s.line, s.args);
     }
   },
 
@@ -67,7 +95,7 @@ export const logger = {
     if (silent) return;
     if (shouldLog('info')) {
       const s = scrub(message, args);
-      console.log(chalk.blue(`ℹ ${s.line}`), ...s.args);
+      emit('info', s.line, s.args);
     }
   },
 
@@ -75,7 +103,7 @@ export const logger = {
     if (silent) return;
     if (shouldLog('info')) {
       const s = scrub(message, args);
-      console.log(chalk.green(`✔ ${s.line}`), ...s.args);
+      emit('success', s.line, s.args);
     }
   },
 
@@ -83,7 +111,7 @@ export const logger = {
     if (silent) return;
     if (shouldLog('warn')) {
       const s = scrub(message, args);
-      console.log(chalk.yellow(`⚠ ${s.line}`), ...s.args);
+      emit('warn', s.line, s.args);
     }
   },
 
@@ -91,7 +119,7 @@ export const logger = {
     if (silent) return;
     if (shouldLog('error')) {
       const s = scrub(message, args);
-      console.error(chalk.red(`✖ ${s.line}`), ...s.args);
+      emit('error', s.line, s.args);
     }
   },
 

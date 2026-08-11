@@ -566,7 +566,13 @@ export class AutoModelRouter {
         // and record-time buckets consistent.
         const complexity = options.complexityHint ?? analyzeComplexity(taskDescription);
         const taskType = getTaskType(agentType);
-        const taskProfile = analyzeTaskProfile(taskDescription);
+        // C3: an NLU intent hint overrides the intent LABEL while keeping the
+        // text-derived safety flags (verification/escalation) intact — see the
+        // taskIntentHint doc on AutoRouterOptions.
+        const analyzedProfile = analyzeTaskProfile(taskDescription);
+        const taskProfile = options.taskIntentHint
+            ? { ...analyzedProfile, intent: options.taskIntentHint }
+            : analyzedProfile;
         const mode = options.preferenceMode || 'balanced';
         let weights = computeWeights(complexity, mode, options.weights);
         if (taskProfile.requiresVerification) {

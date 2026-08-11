@@ -1,5 +1,6 @@
 import chalk from 'chalk';
 import { applyRedaction, redactValue } from '../enterprise/secrets.js';
+import { isJsonLogMode, jsonLogLine } from '../enterprise/log.js';
 let currentLogLevel = 'info';
 /**
  * When true, the logger emits nothing at all (not even errors).
@@ -44,13 +45,39 @@ function scrub(line, args) {
         return { line, args };
     }
 }
+/**
+ * Emit a line — JSON mode (K1) when BUFF_LOG_JSON=1, else chalk text.
+ * `success` is a display-only level (info-weight): the JSON record uses the
+ * canonical `info` level so consumers see one of the four LogLevel values.
+ */
+function emit(level, message, args) {
+    if (isJsonLogMode()) {
+        const line = jsonLogLine(level === 'success' ? 'info' : level, message, args);
+        if (level === 'error') {
+            console.error(line);
+        }
+        else {
+            console.log(line);
+        }
+        return;
+    }
+    if (level === 'error') {
+        console.error(chalk.red(`✖ ${message}`), ...args);
+        return;
+    }
+    const prefix = level === 'debug' ? chalk.gray('[debug]') :
+        level === 'warn' ? chalk.yellow('⚠') :
+            level === 'success' ? chalk.green('✔') :
+                chalk.blue('ℹ');
+    console.log(`${prefix} ${message}`, ...args);
+}
 export const logger = {
     debug: (message, ...args) => {
         if (silent)
             return;
         if (shouldLog('debug')) {
             const s = scrub(message, args);
-            console.log(chalk.gray(`[debug] ${s.line}`), ...s.args);
+            emit('debug', s.line, s.args);
         }
     },
     info: (message, ...args) => {
@@ -58,7 +85,7 @@ export const logger = {
             return;
         if (shouldLog('info')) {
             const s = scrub(message, args);
-            console.log(chalk.blue(`ℹ ${s.line}`), ...s.args);
+            emit('info', s.line, s.args);
         }
     },
     success: (message, ...args) => {
@@ -66,7 +93,7 @@ export const logger = {
             return;
         if (shouldLog('info')) {
             const s = scrub(message, args);
-            console.log(chalk.green(`✔ ${s.line}`), ...s.args);
+            emit('success', s.line, s.args);
         }
     },
     warn: (message, ...args) => {
@@ -74,7 +101,7 @@ export const logger = {
             return;
         if (shouldLog('warn')) {
             const s = scrub(message, args);
-            console.log(chalk.yellow(`⚠ ${s.line}`), ...s.args);
+            emit('warn', s.line, s.args);
         }
     },
     error: (message, ...args) => {
@@ -82,7 +109,7 @@ export const logger = {
             return;
         if (shouldLog('error')) {
             const s = scrub(message, args);
-            console.error(chalk.red(`✖ ${s.line}`), ...s.args);
+            emit('error', s.line, s.args);
         }
     },
     highlight: (message) => {

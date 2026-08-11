@@ -73,7 +73,8 @@ export declare class TesterAgent extends Agent {
      */
     private applyChangesToSandbox;
     /**
-     * Run npm install in the sandbox.
+     * Run npm install in the sandbox (through the shared shell choke point —
+     * E1 emits exec:shell events; never throws on non-zero exit).
      */
     private runInstall;
     /**

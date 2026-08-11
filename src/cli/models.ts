@@ -1,6 +1,6 @@
 import { Command } from 'commander';
-import ora from 'ora';
 import { BaseCommand } from './commands.js';
+import { PipelineBoard } from './pipeline-board.js';
 import { resolveProvider } from './router.js';
 import { getPluginRegistry } from '../plugins/registry.js';
 import { logger } from '../utils/logger.js';
@@ -395,11 +395,16 @@ export class ModelsCommand extends BaseCommand {
         continue;
       }
 
-      const s = options?.json ? null : ora(`Fetching models from ${provider.name}...`).start();
+      // E2: live board for the fetch when not in --json mode (standing rule).
+      // Stderr stream: `buff models` output is user-facing/pipeable — the board
+      // must never pollute stdout (non-TTY would print orphaned completion
+      // lines into the model list).
+      const board = options?.json ? null : new PipelineBoard({ stream: process.stderr });
+      board?.start(`Fetching models from ${provider.name}...`);
 
       try {
         const models = await provider.listModels();
-        s?.stop();
+        board?.finish(true);
 
         if (models.length === 0) {
           if (!options?.json) {
@@ -427,7 +432,7 @@ export class ModelsCommand extends BaseCommand {
           logger.success(`${provider.name}: ${models.length} models found`);
         }
       } catch (err) {
-        s?.stop();
+        board?.finish(false);
         if (!options?.json) {
           logger.error(`${provider.name}: Failed to fetch models — ${String(err)}`);
         }

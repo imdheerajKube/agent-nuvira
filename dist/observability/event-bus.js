@@ -81,6 +81,20 @@ export const EventNames = {
      * recorded the moment they happen.
      */
     MODEL_REGISTRY_UPDATED: 'model-registry:updated',
+    // Shell execution events (E1 — every subprocess is a visible lane)
+    EXEC_SHELL_START: 'exec:shell-start',
+    EXEC_SHELL_END: 'exec:shell-end',
+    // Delegation events (H2 — sub-agent spawning, Freebuff spawn_agents /
+    // Hermes delegate_tool.py parity). Emitted by src/agents/tools/delegation.ts
+    // so the E2 board renders live delegation lanes and the web dashboard DAG
+    // can consume the same stream.
+    DELEGATION_SPAWN: 'delegation:spawn',
+    DELEGATION_RESULT: 'delegation:result',
+    DELEGATION_ERROR: 'delegation:error',
+    // Cron events (J2 — scheduled tool invocations, src/gateway/cron.ts)
+    CRON_RUN: 'cron:run',
+    CRON_RESULT: 'cron:result',
+    CRON_ERROR: 'cron:error',
     // Safe execution layer events
     SAFE_EXEC_FILE_VALIDATED: 'safe-exec:file-validated',
     SAFE_EXEC_SANDBOX_STARTING: 'safe-exec:sandbox-starting',
@@ -348,6 +362,40 @@ export class LoggerConsumer {
                     if (typeof data === 'object' && data !== null) {
                         const d = data;
                         logger.info(`   ✏️ Skipped: ${d.path} — ${d.reason || 'no changes'}`);
+                    }
+                    break;
+                // Delegation events (H2 — sub-agent lanes)
+                case 'delegation:spawn':
+                    if (typeof data === 'object' && data !== null) {
+                        const d = data;
+                        logger.info(`   🧑🔧 Sub-agent ${d.agentType}: ${String(d.prompt || '').slice(0, 80)}`);
+                    }
+                    break;
+                case 'delegation:result':
+                    if (typeof data === 'object' && data !== null) {
+                        const d = data;
+                        const icon = d.success ? '✅' : '❌';
+                        logger.info(`   ${icon} Sub-agent ${d.agentType}: ${String(d.summary || '').slice(0, 100)}`);
+                    }
+                    break;
+                case 'delegation:error':
+                    if (typeof data === 'object' && data !== null) {
+                        const d = data;
+                        logger.error(`   ❌ Sub-agent ${d.agentType} failed: ${String(d.error || '').slice(0, 200)}`);
+                    }
+                    break;
+                // Shell execution events
+                case 'exec:shell-start':
+                    if (typeof data === 'object' && data !== null) {
+                        const d = data;
+                        logger.info(`   💻 $ ${d.command?.slice(0, 60)}`);
+                    }
+                    break;
+                case 'exec:shell-end':
+                    if (typeof data === 'object' && data !== null) {
+                        const d = data;
+                        const icon = d.success ? '✅' : d.timedOut ? '⏱️' : '❌';
+                        logger.info(`   ${icon} $ ${d.command?.slice(0, 60)} (exit ${d.exitCode ?? '?'}${d.durationMs !== undefined ? `, ${d.durationMs}ms` : ''})`);
                     }
                     break;
                 // Execute events

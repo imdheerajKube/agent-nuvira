@@ -43,11 +43,17 @@ export type AdminAction =
   | 'policy.write'       // allow/deny/max-cost/pii-min/unblock/clear (admin)
   | 'role.manage'        // assign/remove roles (admin)
   | 'credential.write'   // rotate provider credentials (admin; reserved for the gateway milestone)
-  | 'routing.operate';   // run routing/model commands (admin + operator)
+  | 'routing.operate'    // run routing/model commands (admin + operator)
+  // K4 — enforcement extended beyond the admin surface to sensitive commands:
+  | 'team.manage'        // team init/join/sync/share/review approve/reject/merge (admin + operator)
+  | 'sbom.write'         // `buff sbom --out <file>` (admin + operator)
+  | 'skill.remove'       // `buff skill gc` real removal (admin)
+  | 'cron.manage'        // `buff admin cron add/remove` (J2 — admin + operator)
+  | 'gateway.manage';    // `buff gateway alias add/remove` (J1 — admin + operator)
 
 const PERMISSION_MATRIX: Record<Role, ReadonlySet<AdminAction>> = {
-  admin: new Set(['policy.read', 'policy.write', 'role.manage', 'credential.write', 'routing.operate']),
-  operator: new Set(['policy.read', 'routing.operate']),
+  admin: new Set(['policy.read', 'policy.write', 'role.manage', 'credential.write', 'routing.operate', 'team.manage', 'sbom.write', 'skill.remove', 'cron.manage', 'gateway.manage']),
+  operator: new Set(['policy.read', 'routing.operate', 'team.manage', 'sbom.write', 'cron.manage', 'gateway.manage']),
   viewer: new Set(['policy.read']),
 };
 
@@ -57,7 +63,23 @@ const REQUIRED_ROLE_HINT: Record<AdminAction, string> = {
   'role.manage': 'admin',
   'credential.write': 'admin',
   'routing.operate': 'admin or operator',
+  'team.manage': 'admin or operator',
+  'sbom.write': 'admin or operator',
+  'skill.remove': 'admin',
+  'cron.manage': 'admin or operator',
+  'gateway.manage': 'admin or operator',
 };
+
+/**
+ * Pure role→permission check — the dashboard server uses this to gate its
+ * write surface by the SAME matrix the CLI enforces (a logged-in dashboard
+ * user's role resolves via roleForUser, then roleCan decides the action).
+ * Unknown roles have no permissions (deny by default).
+ */
+export function roleCan(role: Role | undefined | null, action: AdminAction): boolean {
+  if (!role) return false;
+  return PERMISSION_MATRIX[role]?.has(action) ?? false;
+}
 
 /** Thrown when the current identity lacks permission for an action. */
 export class RbacError extends Error {

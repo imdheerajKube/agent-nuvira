@@ -128,6 +128,55 @@ describe('DefaultVerifyModule', () => {
     });
   });
 
+  // ── verify() — Acceptance criteria (Session 20: spec→verify) ─────────
+
+  describe('verify() — acceptance criteria (Session 20)', () => {
+    const CRITERIA = [
+      'The requested files/features are created as described',
+      'Existing functionality is not broken',
+    ];
+
+    it('passes the criteria into the alignment prompt', async () => {
+      let capturedPrompt = '';
+      const callLLM = vi.fn(async (prompt: string) => {
+        capturedPrompt = prompt;
+        return 'ALIGNED\nPASS: The requested files/features are created as described\nPASS: Existing functionality is not broken';
+      });
+
+      const result = await module.verify(makeParams({ callLLM, acceptanceCriteria: CRITERIA }));
+      const alignmentCheck = result.checks.find((c) => c.type === 'goal-alignment');
+
+      expect(alignmentCheck).toBeDefined();
+      expect(alignmentCheck!.passed).toBe(true);
+      expect(capturedPrompt).toContain('## Acceptance Criteria');
+      for (const criterion of CRITERIA) {
+        expect(capturedPrompt).toContain(criterion);
+      }
+    });
+
+    it('blocks when any criterion verdict is FAIL', async () => {
+      const callLLM = vi.fn(async () =>
+        'ALIGNED\nPASS: Existing functionality is not broken\nFAIL: The requested files/features are created as described — missing edge case',
+      );
+
+      const result = await module.verify(makeParams({ callLLM, acceptanceCriteria: CRITERIA }));
+      const alignmentCheck = result.checks.find((c) => c.type === 'goal-alignment');
+
+      expect(alignmentCheck).toBeDefined();
+      expect(alignmentCheck!.passed).toBe(false);
+      expect(alignmentCheck!.severity).toBe('blocking');
+      expect(result.blockers.length).toBeGreaterThanOrEqual(1);
+    });
+
+    it('does not treat stray FAIL text as blocking when no criteria are set', async () => {
+      const callLLM = vi.fn(async () => 'ALIGNED — note: a failing build would block here');
+      const result = await module.verify(makeParams({ callLLM }));
+      const alignmentCheck = result.checks.find((c) => c.type === 'goal-alignment');
+      expect(alignmentCheck).toBeDefined();
+      expect(alignmentCheck!.passed).toBe(true);
+    });
+  });
+
   // ── verify() — Test result check ────────────────────────────────────
 
   describe('verify() — test result check', () => {

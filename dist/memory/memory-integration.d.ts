@@ -23,12 +23,14 @@ import type { Trajectory } from './trajectory-store.js';
  *   - fewShotContext: formatted string for injection into planner prompts
  *   - patternContext: reusable patterns from successful runs (may be '')
  *   - failureLessonContext: lessons from past FAILED runs (may be '')
+ *   - factContext: project-scoped facts/preferences (Phase B1, may be '')
  */
 export declare function retrieveMemoryContext(goal: string, callLLM: LLMCallFn, k?: number): Promise<{
     trajectories: Trajectory[];
     fewShotContext: string;
     patternContext: string;
     failureLessonContext: string;
+    factContext: string;
 }>;
 /**
  * Store a successful orchestration result as a trajectory for future use.

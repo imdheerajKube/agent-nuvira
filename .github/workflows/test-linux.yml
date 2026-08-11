@@ -23,7 +23,8 @@ on:
         type: choice
         options:
           - '22'
-          - '23'
+          - '24'
+          - '26'
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
@@ -41,7 +42,8 @@ jobs:
           - macos-latest
         node-version:
           - 22
-          - 23
+          - 24
+          - 26
     # macOS runners are 2-3x slower than Linux; Ubuntu tests finish quickly
     timeout-minutes: ${{ matrix.os == 'macos-latest' && 15 || 10 }}
 
@@ -92,5 +94,34 @@ jobs:
       - name: Dashboard component tests (PromotionGateSection)
         if: matrix.os == 'ubuntu-latest' && matrix.node-version == '22'
         run: cd src/web-dashboard && npm ci --no-audit --no-fund --foreground-scripts && npx vitest run
+        env:
+          CI: true
+
+  # Bun latest — validates the full root suite under the Bun runtime (M4).
+  # Bun can run vitest via bunx; the tsc typecheck is part of the gate so a
+  # Bun-specific resolution regression is caught the same way Node catches it.
+  bun:
+    name: ubuntu-latest (Bun latest)
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup Bun
+        uses: oven-sh/setup-bun@v2
+
+      - name: Install dependencies
+        run: bun install --frozen-lockfile
+
+      - name: Typecheck
+        run: bunx tsc --noEmit
+
+      - name: Build project
+        run: bun run build
+
+      - name: Run tests
+        run: bunx vitest run --reporter=verbose
         env:
           CI: true

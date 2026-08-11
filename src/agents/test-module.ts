@@ -13,10 +13,10 @@
 import { existsSync, readFileSync, writeFileSync, mkdirSync, cpSync, rmSync, readdirSync, mkdtempSync } from 'node:fs';
 import { join, dirname } from 'node:path';
 import { tmpdir } from 'node:os';
-import { execSync } from 'node:child_process';
 
 import { getEventBus, EventNames } from '../observability/event-bus.js';
 import type { EventBus } from '../observability/event-bus.js';
+import { runShellSync } from '../utils/shell.js';
 import type { FileChange } from './agent.js';
 
 // ─── Types ──────────────────────────────────────────────────────────────────  /** Result of running tests in the sandbox */
@@ -317,47 +317,32 @@ export class DefaultTestModule implements TestModule {
   }
 
   /**
-   * Run npm install in the sandbox.
+   * Run npm install in the sandbox (through the shared shell choke point —
+   * E1 emits exec:shell events; never throws on non-zero exit).
    */
   private runInstall(sandboxPath: string): string {
-    try {
-      return execSync('npm install --prefer-offline --no-audit --no-fund 2>&1', {
-        cwd: sandboxPath,
-        timeout: 120_000,
-        stdio: 'pipe',
-        encoding: 'utf-8' as const,
-      });
-    } catch (err) {
-      const output = err instanceof Error ? err.message : String(err);
-      return output;
-    }
+    const result = runShellSync('npm install --prefer-offline --no-audit --no-fund', {
+      cwd: sandboxPath,
+      timeoutMs: 120_000,
+      source: 'test-module',
+    });
+    const output = [result.stdout, result.stderr].filter(Boolean).join('\n');
+    return output || (result.success ? '' : 'npm install failed');
   }
 
   /**
    * Run the test command and capture output.
    */
   private runTestCommand(sandboxPath: string, command: string, timeoutMs: number): { success: boolean; output: string; exitCode: number } {
-    try {
-      const output = execSync(command, {
-        cwd: sandboxPath,
-        timeout: timeoutMs,
-        stdio: 'pipe',
-        encoding: 'utf-8' as const,
-      });
+    const result = runShellSync(command, {
+      cwd: sandboxPath,
+      timeoutMs,
+      source: 'test-module',
+    });
 
-      return { success: true, output, exitCode: 0 };
-    } catch (err) {
-      const error = err as {
-        status?: number;
-        stdout?: string;
-        stderr?: string;
-        message?: string;
-      };
+    const output = [result.stdout, result.stderr].filter(Boolean).join('\n');
 
-      const output = [error.stdout || '', error.stderr || '', error.message || ''].filter(Boolean).join('\n');
-
-      return { success: false, output, exitCode: error.status ?? 1 };
-    }
+    return { success: result.success, output, exitCode: result.exitCode };
   }
 
   /**

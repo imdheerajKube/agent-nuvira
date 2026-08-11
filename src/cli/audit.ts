@@ -27,12 +27,18 @@ import {
   auditFilePath,
   type ChainVerifyResult,
 } from '../enterprise/audit-chain.js';
+import { VAULT_AUDIT_FILENAME } from '../enterprise/vault-audit.js';
 import { join, basename } from 'node:path';
 import { homedir } from 'node:os';
 
+// NOTE: ids carry the .jsonl EXTENSION — resolvePath(undefined, builtin) treats
+// the builtin as a FILENAME (join(memoryDir(), builtin)). Previously the ids
+// omitted the extension, so builtin verify silently resolved to nonexistent
+// paths and every store rendered as a bogus empty "legacy" chain.
 const BUILTIN_CHAINS: Array<{ id: string; label: string }> = [
-  { id: 'quota-events', label: 'quota-events.jsonl (quota failover timeline)' },
-  { id: 'model-registry-actions', label: 'model-registry-actions.jsonl (registry action telemetry)' },
+  { id: 'quota-events.jsonl', label: 'quota-events.jsonl (quota failover timeline)' },
+  { id: 'model-registry-actions.jsonl', label: 'model-registry-actions.jsonl (registry action telemetry)' },
+  { id: VAULT_AUDIT_FILENAME, label: `${VAULT_AUDIT_FILENAME} (vault access log — K3)` },
 ];
 
 function memoryDir(): string {

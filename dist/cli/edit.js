@@ -8,6 +8,10 @@ import { getProviderFallback, classifyFallbackError, isRetryableError, recordReg
 import { getAutoRouter, isAutoModel, isAutoProvider } from '../learning/auto-router.js';
 import { buildAutoResolveOptions } from '../learning/resolve-options.js';
 import { runSingleShotAuto } from './failover-runner.js';
+import { parseRequestSync } from '../nlu/parser.js';
+import { resolveDispatch } from '../nlu/actions.js';
+import { contractFromParsed, renderContractCard } from '../nlu/contract.js';
+import { maybeAutoRecall, recallCard, recallContextBlock } from '../context/session-recall.js';
 import { recordActionFailure } from '../learning/failure-bookkeeping.js';
 import { resolveProvider } from './router.js';
 /**
@@ -42,6 +46,14 @@ export class EditCommand extends BaseCommand {
         const context = parser.parseFromString(content, file);
         const contextStr = ContextParser.formatContext(context);
         const prompt = `I have the following code in ${file}:\n\n${contextStr}\n\nInstruction: ${instruction}\n\nPlease provide the complete updated file content. Return ONLY the code, no explanations.`;
+        // Session 22: cross-command parity card — the user sees what the agent
+        // understood before the edit runs, just like execute/plan/chat do. Edit
+        // is a direct file edit (no pipeline), so the footer states the boundary.
+        const parsedEdit = parseRequestSync(instruction);
+        const contract = contractFromParsed(instruction, parsedEdit);
+        console.log('\n' + renderContractCard(contract, {
+            footer: '→ Editing the file directly — no pipeline run.',
+        }) + '\n');
         // ISSUE-003: edit supports the SAME auto routing as chat/execute/plan —
         // either via an explicit --auto-route flag or an 'auto' provider/model.
         // The router-ranked walk (runSingleShotAuto) handles the primary pick,
@@ -153,12 +165,32 @@ export class EditCommand extends BaseCommand {
         let winner = { provider: 'auto', model: 'default' };
         const spinner = ora(`Auto-routing edit for ${file}...`).start();
         try {
+            // D1: agent-driven auto-recall — continue/resume instructions recall the
+            // project's prior work into the edit prompt (cross-command parity with
+            // chat/execute/plan). Best-effort — never breaks edit.
+            try {
+                const parsedEdit = parseRequestSync(instruction);
+                if (parsedEdit.intent === 'continue') {
+                    const recall = await maybeAutoRecall(process.cwd(), this.configManager.getWorkspaceStore());
+                    if (recall) {
+                        console.log(recallCard(recall));
+                        prompt = `${recallContextBlock(recall)}\n\n${prompt}`;
+                    }
+                }
+            }
+            catch { /* recall must never break edit */ }
             const result = await runSingleShotAuto({
                 action: 'edit',
                 task: instruction,
                 configManager: this.configManager,
                 route: async (excludeProviders) => {
-                    const decision = getAutoRouter().resolve('edit', instruction, buildAutoResolveOptions(this.configManager), this.configManager);
+                    // C3: the NLU parser seeds the router task-intent (cross-command
+                    // parity — same choke point as chat/execute/plan).
+                    const dispatch = resolveDispatch(parseRequestSync(instruction));
+                    const decision = getAutoRouter().resolve('edit', instruction, {
+                        ...buildAutoResolveOptions(this.configManager),
+                        ...(dispatch.taskIntentHint ? { taskIntentHint: dispatch.taskIntentHint } : {}),
+                    }, this.configManager);
                     // ISSUE-003: an explicit --provider stays PRIMARY (user intent wins,
                     // mirroring plan.ts); the router supplies the ranked fallback. Only
                     // when no provider is pinned does the router's pick lead the walk.

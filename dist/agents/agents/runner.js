@@ -20,12 +20,11 @@
  *
  * Output is stored in context metadata as `runResult` and returned in the summary.
  */
-import { execSync } from 'node:child_process';
 import { existsSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { Agent } from '../agent.js';
 import { logger } from '../../utils/logger.js';
-import { getHostShell } from '../../utils/shell.js';
+import { runShell, runShellSync } from '../../utils/shell.js';
 import { SandboxManager } from '../../sandbox/manager.js';
 import { detectProjectImage } from '../../sandbox/images.js';
 import { getSandboxConfig } from '../../sandbox/types.js';
@@ -320,13 +319,7 @@ export class RunnerAgent extends Agent {
      * Check whether a CLI tool is available on PATH (cross-platform).
      */
     commandExists(tool) {
-        try {
-            execSync(process.platform === 'win32' ? `where ${tool}` : `which ${tool}`, { stdio: 'ignore', timeout: 5000, shell: getHostShell() });
-            return true;
-        }
-        catch {
-            return false;
-        }
+        return runShellSync(process.platform === 'win32' ? `where ${tool}` : `which ${tool}`, { timeoutMs: 5000, emitEvents: false, source: 'runner' }).success;
     }
     /**
      * Bootstrap-install a missing package-manager tool so that the project's
@@ -586,20 +579,16 @@ export class RunnerAgent extends Agent {
      * Run an install command and return its outcome.
      */
     runInstallCommand(command, cwd) {
-        try {
-            execSync(command, {
-                cwd,
-                timeout: TOOL_INSTALL_TIMEOUT_MS,
-                stdio: 'pipe',
-                encoding: 'utf-8',
-                shell: getHostShell(),
-                maxBuffer: 2 * 1024 * 1024,
-            });
+        const result = runShellSync(command, {
+            cwd,
+            timeoutMs: TOOL_INSTALL_TIMEOUT_MS,
+            maxBuffer: 2 * 1024 * 1024,
+            source: 'runner',
+        });
+        if (result.success) {
             return { success: true, command, toolInstalled: true, message: `Installed via: ${command}` };
         }
-        catch (err) {
-            return { success: false, command, message: err instanceof Error ? err.message : String(err) };
-        }
+        return { success: false, command, message: (result.stderr || result.stdout).trim() || 'Install command failed' };
     }
     /**
      * When no manifest exists, detect a missing interpreter/tool from the failed
@@ -745,29 +734,19 @@ export class RunnerAgent extends Agent {
         const timeoutMs = (typeof context.metadata.runnerTimeout === 'number')
             ? context.metadata.runnerTimeout
             : DEFAULT_TIMEOUT_MS;
+        // Execute through the shared shell choke point (E1) — emits exec:shell
+        // events so every run is a visible lane; never throws on non-zero exit.
         const startTime = Date.now();
-        let exitCode = 0;
-        let stdout = '';
-        let stderr = '';
-        let execError;
-        try {
-            const output = execSync(command, {
-                cwd: context.workingDirectory,
-                timeout: timeoutMs,
-                stdio: 'pipe',
-                encoding: 'utf-8',
-                shell: getHostShell(),
-                maxBuffer: 1024 * 1024,
-            });
-            stdout = output.trim();
-        }
-        catch (err) {
-            const error = err;
-            exitCode = error.status ?? 1;
-            stdout = (typeof error.stdout === 'string' ? error.stdout : String(error.stdout || '')).trim();
-            stderr = (typeof error.stderr === 'string' ? error.stderr : String(error.stderr || '')).trim();
-            execError = error.message;
-        }
+        const shellResult = await runShell(command, {
+            cwd: context.workingDirectory,
+            timeoutMs,
+            maxBuffer: 1024 * 1024,
+            source: 'runner',
+        });
+        const exitCode = shellResult.exitCode;
+        const stdout = shellResult.stdout.trim();
+        const stderr = shellResult.stderr.trim();
+        const execError = shellResult.success ? undefined : (stderr || stdout).slice(0, 500) || `Command exited with code ${shellResult.exitCode}`;
         const duration = Date.now() - startTime;
         // ── Auto-install missing dependencies and retry once ───────────────
         // If the command failed because a module/command is missing, try to install

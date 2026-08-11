@@ -32,6 +32,8 @@ export declare class MemoryCommand extends BaseCommand {
     private prune;
     private summarize;
     private showInfo;
+    private listFacts;
+    private addFact;
     private showBackend;
     private clearMemory;
     private formatBytes;

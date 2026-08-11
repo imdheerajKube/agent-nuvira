@@ -32,6 +32,7 @@ import { getMemoryStats, clearMemory } from '../memory/memory-integration.js';
 import { getPatternStore } from '../learning/pattern-extractor.js';
 import { getVectorStore } from '../memory/vector-store.js';
 import { getFeedbackStore } from '../learning/feedback.js';
+import { getFactStore } from '../memory/fact-store.js';
 import { logger } from '../utils/logger.js';
 
 export class MemoryCommand extends BaseCommand {
@@ -101,6 +102,48 @@ export class MemoryCommand extends BaseCommand {
       });
     command.addCommand(backendCmd);
 
+    // ── facts (Phase B1: fact & preference memory) ────────────────────────
+    const factsCmd = new Command('facts')
+      .description('Fact & preference memory (project-scoped, cross-session)');
+
+    const factsList = new Command('list')
+      .description('List facts, optionally for a project (git slug or cwd:<hash>)')
+      .option('--project <id>', 'Only facts for this project')
+      .action(async (options?: { project?: string }) => {
+        await this.listFacts(options || {});
+      });
+    factsCmd.addCommand(factsList);
+
+    const factsAdd = new Command('add')
+      .description('Manually store a fact for the current project')
+      .argument('<text>', 'The fact text')
+      .option('--project <id>', 'Project id (default: derived from cwd)')
+      .option('--tags <tags>', 'Comma-separated tags')
+      .action(async (text: string, options?: { project?: string; tags?: string }) => {
+        await this.addFact(text, options || {});
+      });
+    factsCmd.addCommand(factsAdd);
+
+    const factsStats = new Command('stats')
+      .description('Show fact-store statistics')
+      .action(async () => {
+        const stats = await getFactStore().stats();
+        logger.highlight('  ── Fact Memory (Phase B1) ──');
+        console.log(`  Total facts: ${stats.total}`);
+        if (Object.keys(stats.byProject).length > 0) {
+          console.log('  By project:');
+          for (const [p, c] of Object.entries(stats.byProject).sort(([, a], [, b]) => b - a)) {
+            console.log(`    ${p.padEnd(28)} ${c}`);
+          }
+        }
+        console.log('');
+        logger.info('Run `buff memory facts list --project <id>` to see facts.');
+        console.log('');
+      });
+    factsCmd.addCommand(factsStats);
+
+    command.addCommand(factsCmd);
+
     // ── clear ────────────────────────────────────────────────────────────
     command
       .command('clear')
@@ -153,6 +196,18 @@ export class MemoryCommand extends BaseCommand {
       const patterns = patternStore.getAll();
       console.log(`\n  📝 Coding Patterns:`);
       console.log(`     Total: ${patterns.length}`);
+
+      // Phase B1: fact memory stats
+      const factStore = getFactStore();
+      const factStats = await factStore.stats();
+      console.log(`\n  🧾 Facts (project-scoped):`);
+      console.log(`     Total: ${factStats.total}`);
+      if (Object.keys(factStats.byProject).length > 0) {
+        console.log('     By project:');
+        for (const [p, c] of Object.entries(factStats.byProject).sort(([, a], [, b]) => b - a)) {
+          console.log(`        ${p.padEnd(28)} ${c}`);
+        }
+      }
 
       // Trajectory compression stats
       const trajStore = getTrajectoryStore();
@@ -344,6 +399,62 @@ export class MemoryCommand extends BaseCommand {
 
     logger.info('To clear everything: buff memory clear --force');
     console.log('');
+  }
+
+  // ── Fact memory handlers (Phase B1) ────────────────────────────────────
+
+  private async listFacts(options: { project?: string }): Promise<void> {
+    try {
+      const facts = await getFactStore().listFacts(options.project);
+      logger.highlight('═'.repeat(60));
+      logger.highlight('  🧾  Fact Memory');
+      logger.highlight('═'.repeat(60));
+      if (options.project) {
+        console.log(`\n  Project: ${options.project}`);
+      }
+      console.log('');
+      if (facts.length === 0) {
+        logger.info('  No facts stored yet.');
+        if (!options.project) {
+          logger.info('  Tip: `buff memory facts list --project <id>` filters by project.');
+        }
+        console.log('');
+        return;
+      }
+      for (const f of facts) {
+        const ageDays = Math.floor((Date.now() - f.timestamp) / (24 * 60 * 60 * 1000));
+        const meta = [f.projectId, f.source, f.agentRole, ageDays > 0 ? `${ageDays}d ago` : 'just now']
+          .filter(Boolean)
+          .join(' · ');
+        console.log(`  • ${f.text}`);
+        console.log(`      (${meta})${f.tags.length ? ` — tags: ${f.tags.join(', ')}` : ''}`);
+      }
+      console.log('');
+      logger.info('Facts are injected into planner prompts when `--use-memory` is on.');
+      console.log('');
+    } catch (err) {
+      logger.error(`Failed to list facts: ${err instanceof Error ? err.message : String(err)}`);
+    }
+  }
+
+  private async addFact(text: string, options: { project?: string; tags?: string }): Promise<void> {
+    try {
+      const { deriveProjectId } = await import('../config/workspace.js');
+      const projectId = options.project || deriveProjectId(process.cwd()).id;
+      const tags = options.tags ? options.tags.split(',').map((t) => t.trim()).filter(Boolean) : [];
+      const id = await getFactStore().addFact(projectId, {
+        text,
+        tags,
+        source: 'manual',
+      });
+      if (id) {
+        logger.success(`✅ Fact stored (${projectId}): ${text.slice(0, 80)}`);
+      } else {
+        logger.info('ℹ️  Fact was a near-duplicate or could not be embedded — not stored.');
+      }
+    } catch (err) {
+      logger.error(`Failed to store fact: ${err instanceof Error ? err.message : String(err)}`);
+    }
   }
 
   private async showBackend(options: { check?: boolean }): Promise<void> {

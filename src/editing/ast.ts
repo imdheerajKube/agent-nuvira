@@ -42,7 +42,7 @@ const LANGUAGE_PATTERNS: Record<string, LanguagePatterns> = {
   javascript: {
     blockStyle: 'brace',
     functionPatterns: [
-      /(?:async\s+)?function\s*(\*?\s*)(\w+)\s*\(/g,
+      /(?:(?:export|async)\s+)*function\s*(\*?\s*)(\w+)\s*\(/g,
       /(\w+)\s*:\s*(?:async\s+)?function\s*\(/g,
       /(\w+)\s*=\s*(?:async\s+)?function\s*\(/g,
       /(\w+)\s*=\s*\([^)]*\)\s*=>\s*{/g,
@@ -68,7 +68,7 @@ const LANGUAGE_PATTERNS: Record<string, LanguagePatterns> = {
   typescript: {
     blockStyle: 'brace',
     functionPatterns: [
-      /(?:async\s+)?function\s*(\*?\s*)(\w+)\s*\(/g,
+      /(?:(?:export|async)\s+)*function\s*(\*?\s*)(\w+)\s*\(/g,
       /(\w+)\s*:\s*(?:async\s+)?function\s*\(/g,
       /(\w+)\s*=\s*(?:async\s+)?function\s*\(/g,
       /(\w+)\s*=\s*\([^)]*\)\s*=>\s*{/g,
@@ -490,7 +490,13 @@ export function analyzeStructure(
     return a.range.start.column - b.range.start.column;
   });
 
-  // Filter out nodes that are nested inside other nodes (e.g., methods inside classes)
+  // Filter out nodes that are nested inside other nodes (e.g., methods inside
+  // classes). Two patterns can match the SAME declaration (the explicit
+  // `function name(` pattern AND the generic `name(` pattern) producing two
+  // nodes with DIFFERENT starts but the SAME end — without the same-end
+  // exclusion, each would look "nested" inside the other and BOTH would be
+  // dropped (a pre-existing bug that silently removed top-level functions
+  // from the structure map; surfaced by `buff code-map`, Session 47).
   const topLevel: StructuralNode[] = [];
   for (const node of sorted) {
     const isNested = sorted.some(
@@ -499,6 +505,10 @@ export function analyzeStructure(
         other.bodyRange &&
         node.range.start.line >= other.bodyRange.start.line &&
         node.range.end.line <= other.bodyRange.end.line &&
+        !(
+          node.range.end.line === other.range.end.line &&
+          node.range.end.column === other.range.end.column
+        ) &&
         other.depth === 0,
     );
     if (!isNested) {
@@ -506,8 +516,21 @@ export function analyzeStructure(
     }
   }
 
+  // Dedupe duplicate pattern matches for the same declaration: when two nodes
+  // share the same END position (same function matched by two patterns), keep
+  // the most specific one — the earliest start (the explicit `function` match
+  // starts before the generic `name(` match).
+  const seenEnds = new Set<string>();
+  const dedupedTop: StructuralNode[] = [];
+  for (const node of topLevel) {
+    const key = `${node.range.end.line}:${node.range.end.column}`;
+    if (seenEnds.has(key)) continue;
+    seenEnds.add(key);
+    dedupedTop.push(node);
+  }
+
   // Find nested nodes (methods inside classes)
-  for (const parent of topLevel) {
+  for (const parent of dedupedTop) {
     if (!parent.bodyRange || (parent.type !== 'class' && parent.type !== 'struct' && parent.type !== 'interface' && parent.type !== 'trait')) continue;
 
     const bodyStart = positionToOffset(code, parent.bodyRange.start);
@@ -530,7 +553,7 @@ export function analyzeStructure(
     }
   }
 
-  return topLevel;
+  return dedupedTop;
 }
 
 /**

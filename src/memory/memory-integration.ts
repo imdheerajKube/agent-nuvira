@@ -15,6 +15,7 @@ import { getTrajectoryStore } from './trajectory-store.js';
 import type { Trajectory } from './trajectory-store.js';
 import { getPatternStore } from '../learning/pattern-extractor.js';
 import { getFailureLessonStore } from '../learning/failure-lessons.js';
+import { getFactStore } from './fact-store.js';
 import { logger } from '../utils/logger.js';
 
 /**
@@ -29,6 +30,7 @@ import { logger } from '../utils/logger.js';
  *   - fewShotContext: formatted string for injection into planner prompts
  *   - patternContext: reusable patterns from successful runs (may be '')
  *   - failureLessonContext: lessons from past FAILED runs (may be '')
+ *   - factContext: project-scoped facts/preferences (Phase B1, may be '')
  */
 export async function retrieveMemoryContext(
   goal: string,
@@ -39,6 +41,7 @@ export async function retrieveMemoryContext(
   fewShotContext: string;
   patternContext: string;
   failureLessonContext: string;
+  factContext: string;
 }> {
   const store = getTrajectoryStore();
   const trajectories = await store.searchByGoal(goal, callLLM, k);
@@ -70,11 +73,26 @@ export async function retrieveMemoryContext(
     // Non-critical — failure lessons are optional
   }
 
+  // Phase B1: project-scoped fact & preference memory. The projectId comes
+  // from the A2 workspace derivation (repo:<slug> or cwd:<hash>) so facts are
+  // scoped to the CURRENT project — the same project the A2 row tracks.
+  // Best-effort: a missing/corrupt fact store degrades to ''.
+  let factContext = '';
+  try {
+    const { deriveProjectId } = await import('../config/workspace.js');
+    const { id: projectId } = deriveProjectId(process.cwd());
+    const facts = await getFactStore().retrieveFacts(projectId, goal, callLLM, { k: 5 });
+    factContext = getFactStore().formatAsPrompt(facts);
+  } catch {
+    // Non-critical — facts are optional
+  }
+
   return {
     trajectories,
     fewShotContext,
     patternContext: patternContext || '',
     failureLessonContext: failureLessonContext || '',
+    factContext,
   };
 }
 
@@ -137,6 +155,13 @@ export async function clearMemory(): Promise<void> {
   // Also clear the failure-lesson episodic memory (assessment P1).
   try {
     getFailureLessonStore().clear();
+  } catch {
+    // Non-critical
+  }
+
+  // Phase B1: also clear project-scoped facts.
+  try {
+    await getFactStore().clear();
   } catch {
     // Non-critical
   }

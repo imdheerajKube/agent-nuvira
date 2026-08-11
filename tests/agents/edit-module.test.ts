@@ -52,9 +52,14 @@ function mockLLMFailure(): () => Promise<string> {
   return vi.fn().mockRejectedValue(new Error('LLM API error'));
 }
 
-/** A mock LLMCallFn that returns no parseable file blocks */
-function mockLLMEmptyResponse(): () => Promise<string> {
+/** A mock LLMCallFn that returns a GENUINE "no changes needed" decline */
+function mockLLMDeclineResponse(): () => Promise<string> {
   return vi.fn().mockResolvedValue('I think the code looks fine. No changes needed.');
+}
+
+/** A mock LLMCallFn that returns ambiguous prose with no filepath: blocks */
+function mockLLMAmbiguousProse(): () => Promise<string> {
+  return vi.fn().mockResolvedValue('I will outline my approach to the refactor below, starting with the imports.');
 }
 
 /** A mock rate-limit callback */
@@ -229,12 +234,12 @@ describe('DefaultEditModule', () => {
   // ── edit() — Empty Results ──────────────────────────────────────────
 
   describe('edit() — empty results', () => {
-    it('should return zero changes when LLM returns no parseable blocks', async () => {
+    it('should return zero changes when LLM returns a genuine decline (Session 46)', async () => {
       const params: EditParams = {
         goal: 'Review code',
         workingDirectory: testDir,
         artifacts: [makeArtifact('auth.ts', 'export function login() { return "token"; }')],
-        callLLM: mockLLMEmptyResponse(),
+        callLLM: mockLLMDeclineResponse(),
       };
 
       const result = await module.edit(params);
@@ -242,20 +247,23 @@ describe('DefaultEditModule', () => {
       expect(result.changeCount).toBe(0);
       expect(result.changes).toHaveLength(0);
       expect(result.summary).toContain('No files needed changes');
+      // A GENUINE decline is a clean no-op — no failure warning.
+      expect(result.warnings).toBeUndefined();
     });
 
-    it('should include a warning when no changes produced', async () => {
+    it('should warn when no changes produced AND no decline language present (Session 46)', async () => {
       const params: EditParams = {
         goal: 'Review',
         workingDirectory: testDir,
         artifacts: [makeArtifact('auth.ts', 'export function login() { return "token"; }')],
-        callLLM: mockLLMEmptyResponse(),
+        callLLM: mockLLMAmbiguousProse(),
       };
 
       const result = await module.edit(params);
 
       expect(result.warnings).toBeDefined();
       expect(result.warnings!.length).toBeGreaterThanOrEqual(1);
+      expect(result.warnings![0]).toContain('parseable');
     });
   });
 

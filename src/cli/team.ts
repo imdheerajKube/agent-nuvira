@@ -27,6 +27,7 @@ import { readFileSync, existsSync, writeFileSync } from 'node:fs';
 import { join, resolve } from 'node:path';
 
 import { BaseCommand } from './commands.js';
+import { guardRbacAction } from './rbac-guard.js';
 import { logger } from '../utils/logger.js';
 
 import {
@@ -178,6 +179,8 @@ export class TeamCommand extends BaseCommand {
     name?: string,
     options?: { repo?: string; branch?: string },
   ): Promise<void> {
+    // K4: team state is shared/collaborative — writes require team.manage.
+    if (!guardRbacAction('team.manage')) return;
     const cwd = process.cwd();
     const configPath = join(cwd, '.buffconfig.json');
 
@@ -228,6 +231,7 @@ export class TeamCommand extends BaseCommand {
   // ── join ─────────────────────────────────────────────────────────────────
 
   private async handleJoin(repoUrl: string): Promise<void> {
+    if (!guardRbacAction('team.manage')) return;
     const cwd = process.cwd();
 
     logger.info(`Joining team repository: ${repoUrl}`);
@@ -262,6 +266,7 @@ export class TeamCommand extends BaseCommand {
   // ── sync ─────────────────────────────────────────────────────────────────
 
   private async handleSync(): Promise<void> {
+    if (!guardRbacAction('team.manage')) return;
     logger.info('Syncing team memory...');
 
     const projectConfig = findProjectConfig();
@@ -376,6 +381,7 @@ export class TeamCommand extends BaseCommand {
   // ── share ────────────────────────────────────────────────────────────────
 
   private async handleShare(): Promise<void> {
+    if (!guardRbacAction('team.manage')) return;
     const config = getTeamConfig();
     if (!config.shareTrajectories) {
       logger.warn('Sharing trajectories is disabled in team config.');
@@ -474,6 +480,7 @@ export class TeamCommand extends BaseCommand {
     id: string,
     options?: { message?: string },
   ): Promise<void> {
+    if (!guardRbacAction('team.manage')) return;
     const bundle = getReview(id);
     if (!bundle) {
       logger.error(`Review not found: ${id}`);
@@ -490,6 +497,7 @@ export class TeamCommand extends BaseCommand {
   }
 
   private async handleReviewRequestChanges(id: string, reason: string): Promise<void> {
+    if (!guardRbacAction('team.manage')) return;
     const bundle = getReview(id);
     if (!bundle) {
       logger.error(`Review not found: ${id}`);
@@ -505,6 +513,7 @@ export class TeamCommand extends BaseCommand {
   }
 
   private async handleReviewReject(id: string, reason?: string): Promise<void> {
+    if (!guardRbacAction('team.manage')) return;
     const success = rejectReview(id, reason);
     if (success) {
       const suffix = reason ? ` — Reason: "${reason}"` : '';
@@ -513,6 +522,7 @@ export class TeamCommand extends BaseCommand {
   }
 
   private async handleReviewMerge(id: string): Promise<void> {
+    if (!guardRbacAction('team.manage')) return;
     const count = mergeReview(id);
     if (count > 0) {
       logger.success(`Merged ${count} file change(s) from review ${id}.`);
@@ -525,6 +535,7 @@ export class TeamCommand extends BaseCommand {
     goal: string,
     options?: { files?: string; provider?: string; model?: string },
   ): Promise<void> {
+    if (!guardRbacAction('team.manage')) return;
     const cwd = process.cwd();
 
     // Parse file paths from option

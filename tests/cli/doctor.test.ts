@@ -22,8 +22,10 @@ import {
   checkAuditChainIntegrity,
   checkSbomSupplyChain,
   buildEnterpriseChecks,
+  runAllChecks,
 } from '../../src/cli/doctor.js';
 import type { BuffConfig } from '../../src/config/types.js';
+import { getMetrics, resetMetrics } from '../../src/enterprise/metrics.js';
 
 // ─── Mock gateway-shaped server ─────────────────────────────────────────────
 
@@ -255,6 +257,33 @@ describe('doctor --enterprise (P7 M7.1)', () => {
     expect(result.message).toContain('environment');
   });
 
+  it('runSystemChecks includes the G1 Fact Memory check (best-effort, never throws)', async () => {
+    const { ConfigManager } = await import('../../src/config/manager.js');
+    const cm = new ConfigManager();
+    const { system } = await runAllChecks(cm);
+    const factCheck = system.find((c) => c.name === 'Fact Memory');
+    expect(factCheck).toBeDefined();
+    expect(['pass', 'warn', 'fail']).toContain(factCheck!.status);
+    expect(factCheck!.message).toMatch(/fact\(s\)/);
+  });
+
+  it('runAllChecks (dashboard command-runner shared core) returns both system and enterprise arrays', async () => {
+    // The dashboard's /api/admin/checks calls this SAME function as
+    // `buff doctor` — one source. A ConfigManager with no config must not
+    // crash the composition; checks degrade to informative results.
+    const { ConfigManager } = await import('../../src/config/manager.js');
+    const cm = new ConfigManager();
+    const { system, enterprise } = await runAllChecks(cm);
+    expect(Array.isArray(system)).toBe(true);
+    expect(Array.isArray(enterprise)).toBe(true);
+    expect(system.length).toBeGreaterThan(0);
+    for (const c of [...system, ...enterprise]) {
+      expect(['pass', 'warn', 'fail']).toContain(c.status);
+      expect(typeof c.name).toBe('string');
+      expect(c.name.length).toBeGreaterThan(0);
+    }
+  });
+
   it('buildEnterpriseChecks: healthy gateway + clean audits + policy = all pass', () => {
     const dir = '/tmp/buff-doctor-enterprise-test';
     mkdirSync(dir, { recursive: true });
@@ -285,8 +314,8 @@ describe('doctor --enterprise (P7 M7.1)', () => {
         totalCostUsd: 0,
       },
     });
-    // 6 checks: gateway, secrets, 2× audit, RBAC, M7.4 telemetry — all pass.
-    expect(checks.map((c) => c.status)).toEqual(['pass', 'pass', 'pass', 'pass', 'pass', 'pass']);
+    // 7 checks: gateway, secrets, 2× audit, RBAC, M7.4 telemetry, K2 metrics — all pass.
+    expect(checks.map((c) => c.status)).toEqual(['pass', 'pass', 'pass', 'pass', 'pass', 'pass', 'pass']);
     const telemetry = checks.find((c) => c.name === 'Telemetry / Usage Health');
     expect(telemetry?.status).toBe('pass');
     expect(telemetry?.message).toContain('5 call(s)');
@@ -496,5 +525,28 @@ describe('doctor --enterprise supply chain (P6 M6.6 SBOM)', () => {
     const check = checkSbomSupplyChain(null, true);
     expect(check.status).toBe('warn');
     expect(check.message).toContain('No stored SBOM');
+  });
+});
+
+describe('doctor — K2 runtime metrics check', () => {
+  it('appears in buildEnterpriseChecks and reflects recorded metrics', () => {
+    resetMetrics();
+    // Record one counter + one timer so the check has data to surface.
+    getMetrics().increment('memory.hits', 3);
+    getMetrics().record('rule.parse.ms', 12);
+
+    const checks = buildEnterpriseChecks({
+      config: {} as BuffConfig,
+      env: {},
+      gatewayProbe: null,
+      gatewayConfigured: false,
+      auditFiles: [],
+    });
+    const k2 = checks.find((c) => c.name === 'Runtime Metrics (K2)');
+    expect(k2).toBeDefined();
+    expect(k2!.status).toBe('pass');
+    expect(k2!.message).toContain('1 counter(s) + 1 timer(s) recorded');
+    expect(k2!.detail).toContain('memory.hits=3');
+    resetMetrics();
   });
 });

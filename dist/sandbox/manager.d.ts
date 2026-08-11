@@ -77,6 +77,10 @@ export declare class SandboxManager {
     /**
      * Execute a command inside the sandbox container with timeout enforcement.
      *
+     * Timeout is enforced with a Node-side timer (SIGTERM then SIGKILL), never
+     * with the GNU coreutils `timeout` binary — that tool is absent from stock
+     * macOS and behaves differently on Windows cmd.exe.
+     *
      * @param containerId - Container ID
      * @param command - Command to execute (as a string, passed to /bin/sh -c)
      * @param timeoutMs - Timeout in milliseconds (default: config timeout)
@@ -88,6 +92,12 @@ export declare class SandboxManager {
      * Calls onChunk for each line of stdout.
      */
     runCommandWithOutput(containerId: string, command: string, onChunk?: (chunk: string) => void, timeoutMs?: number): Promise<SandboxExecResult>;
+    /**
+     * Spawn `docker exec` with a Node-side timeout and stream optional chunks.
+     * Shared by runCommand / runCommandWithOutput so timeout semantics are
+     * identical across all platforms (no reliance on the GNU `timeout` binary).
+     */
+    private spawnDockerExec;
     /**
      * Get the status of a managed container.
      */
@@ -110,7 +120,8 @@ export declare class SandboxManager {
     private ensureContainer;
     /**
      * Run a command on the host machine (not inside a container).
-     * Used for docker CLI operations.
+     * Used for docker CLI operations. Goes through the shared shell choke
+     * point (E1) — emits exec:shell events; never throws on non-zero exit.
      */
     private execHostCommand;
     /**

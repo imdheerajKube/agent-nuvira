@@ -28,8 +28,67 @@ import ora from 'ora';
 import { BaseCommand } from './commands.js';
 import { Orchestrator } from '../agents/orchestrator.js';
 import { PhaseExecutionEngine, type PhaseDefinition } from '../agents/phase-engine.js';
-import { CredentialStore } from '../agents/credential-store.js';
+import { CredentialStore, type PublishCredentials } from '../agents/credential-store.js';
 import { logger } from '../utils/logger.js';
+
+/**
+ * The publish pipeline's PHASE LIST — one shared source for the CLI command
+ * AND the H1 `publish` tool (E3c model-decides vocabulary). Both entry points
+ * build the exact same phases from the same credentials, so a chat-loop
+ * publish can never diverge from `buff publish` (STANDING RULE).
+ */
+export function buildPublishPhases(
+  bumpType: string,
+  skipTests: boolean,
+  creds: PublishCredentials,
+): PhaseDefinition[] {
+  const phases: PhaseDefinition[] = [];
+
+  // Phase 1: Tests (optional)
+  if (!skipTests) {
+    phases.push({
+      id: 'phase-1-tests',
+      goal: 'Run the full test suite to verify the codebase is healthy',
+      description: 'Test Verification',
+    });
+  }
+
+  // Phase 2: Version bump + changelog
+  phases.push({
+    id: 'phase-2-version',
+    goal: `Bump version (${bumpType}), update CHANGELOG.md with release notes`,
+    description: `Version Bump (${bumpType})`,
+  });
+
+  // Phase 3: Git commit, tag, and push
+  if (creds.git.token || creds.git.sshKeyPath) {
+    phases.push({
+      id: 'phase-3-git',
+      goal: 'Commit version bump and changelog changes to git, create annotated tag, push commit and tag to remote',
+      description: 'Git Commit, Tag & Push',
+    });
+  }
+
+  // Phase 4: npm build + publish
+  if (creds.npm.token) {
+    phases.push({
+      id: 'phase-4-npm',
+      goal: `Full npm publish: build project, publish to npm registry (${bumpType} version)`,
+      description: 'npm Build & Publish',
+    });
+  }
+
+  // Phase 5: GitHub release
+  if (creds.git.token || process.env.GITHUB_API_KEY || process.env.GH_TOKEN) {
+    phases.push({
+      id: 'phase-5-github',
+      goal: 'Create GitHub release with auto-generated release notes from git log',
+      description: 'GitHub Release',
+    });
+  }
+
+  return phases;
+}
 
 export class PublishCommand extends BaseCommand {
   create(): Command {
@@ -110,51 +169,9 @@ export class PublishCommand extends BaseCommand {
       logger.warn(`  ⚠️  Credential setup issue: ${err}`);
     }
 
-    // ── Step 3: Define the publish pipeline as phases ───────────────────
-    const phases: PhaseDefinition[] = [];
-
-    // Phase 1: Tests (optional)
-    if (!options.skipTests) {
-      phases.push({
-        id: 'phase-1-tests',
-        goal: 'Run the full test suite to verify the codebase is healthy',
-        description: 'Test Verification',
-      });
-    }
-
-    // Phase 2: Version bump + changelog
-    phases.push({
-      id: 'phase-2-version',
-      goal: `Bump version (${bumpType}), update CHANGELOG.md with release notes`,
-      description: `Version Bump (${bumpType})`,
-    });
-
-    // Phase 3: Git commit, tag, and push
-    if (creds.git.token || creds.git.sshKeyPath) {
-      phases.push({
-        id: 'phase-3-git',
-        goal: 'Commit version bump and changelog changes to git, create annotated tag, push commit and tag to remote',
-        description: 'Git Commit, Tag & Push',
-      });
-    }
-
-    // Phase 4: npm build + publish
-    if (creds.npm.token) {
-      phases.push({
-        id: 'phase-4-npm',
-        goal: `Full npm publish: build project, publish to npm registry (${bumpType} version)`,
-        description: 'npm Build & Publish',
-      });
-    }
-
-    // Phase 5: GitHub release
-    if (creds.git.token || process.env.GITHUB_API_KEY || process.env.GH_TOKEN) {
-      phases.push({
-        id: 'phase-5-github',
-        goal: 'Create GitHub release with auto-generated release notes from git log',
-        description: 'GitHub Release',
-      });
-    }
+    // ── Step 3: Define the publish pipeline as phases (shared core — the
+    // H1 `publish` tool builds the exact same list from the same creds) ──
+    const phases = buildPublishPhases(bumpType, options.skipTests ?? false, creds);
 
     if (options.verbose) {
       logger.info(`\n  Publish pipeline: ${phases.length} phase(s)`);

@@ -21,6 +21,7 @@ import type { TaskStep } from './agent.js';
 import { type ModuleRegistry } from './module-registry.js';
 import type { EventBus } from '../observability/event-bus.js';
 import { type ReportModule } from './report-module.js';
+import { type TaskIntent } from '../learning/auto-router.js';
 /** Configuration for an orchestration session */
 export interface OrchestratorOptions {
     /** Inference provider type (default: from configManager) */
@@ -39,6 +40,28 @@ export interface OrchestratorOptions {
     reviewMode?: boolean;
     /** Auto-route each agent to its recommended model from the ModelRouter */
     autoRouteModels?: boolean;
+    /**
+     * C3: NLU task-intent hint (router TaskIntent vocabulary) from the parsed
+     * goal. Seeded into the planner routing decision's taskProfile.intent so the
+     * orchestrator's strategy switch + the router's task-type see the SAME
+     * vocabulary every action command derives from the shared NLU parser.
+     * Safety flags (requiresVerification / escalationTarget) stay text-derived.
+     */
+    taskIntentHint?: TaskIntent;
+    /**
+     * D1: agent-driven recall context (continue/resume goals). Recalled project
+     * state (sessions/facts/checkpoint) is prepended to the planner's memory
+     * block so the planner sees prior work before planning.
+     */
+    recallContext?: string;
+    /**
+     * Session 20 — RequestContract acceptance criteria for this goal. Seeded
+     * into vault metadata so the verification pass (the reviewer follow-up)
+     * checks the changes against the contract, not just the loose goal
+     * (Decision 3: spec→verify). Optional — the pipeline verifies normally
+     * when absent.
+     */
+    acceptanceCriteria?: string[];
     /**
      * Enable automatic MCP server discovery and tool injection.
      * Set to false to skip MCP auto-connect for a specific pipeline.
@@ -231,8 +254,19 @@ export declare class Orchestrator {
      * and keeping the CLI process alive long after the pipeline finished.
      */
     execute(goal: string, options?: OrchestratorOptions): Promise<OrchestrationResult>;
+    /** The actual pipeline body — wrapped by execute() with a K1 runId. */
+    private executeCorrelated;
     /** Internal pipeline implementation (see execute()). */
     private executePipeline;
+    /**
+     * Session 46 — weak-model pre-flight warning (extracted for testability).
+     *
+     * When auto routing resolves to a LOCAL model with a low learned score
+     * (score < 0.5), no verified cloud provider was available at decision
+     * time. Warn BEFORE the pipeline burns minutes on a model that is likely
+     * to fail complex tasks. Warning only — the user keeps control.
+     */
+    private maybeWarnWeakLocalModel;
     /**
      * Pre-flight project inspection — deterministic, always-on, no LLM calls.
      *

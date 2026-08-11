@@ -1,0 +1,18 @@
+v1.62.0: revamp complete — reliability stack, code-map, scheduled jobs, gateway
+
+Major revamp fully landed (all 30 rows of the Freebuff/Hermes parity plan):
+- Reliability stack: writer surfaces unparseable output instead of masking it
+  (repair escalates the model), reviewer-blocked verdicts route through a
+  writer fix pass with re-verify as the gate, weak-local-model pre-flight warning
+- NEW buff code-map (project symbol map via AST engine); AST dedupe fix
+  recovered silently-dropped top-level functions in the edit pipeline
+- Scheduled jobs (buff admin cron) with schema-validated args + RBAC gating
+- Multi-channel gateway (Telegram/Discord/Slack/WhatsApp) + cron channel delivery
+- Web research tools (web_search/read_page, SSRF-guarded) + browser/image/voice/
+  vision modality packs
+- Structured logging (K1, JSON + correlation IDs) + runtime metrics (K2)
+- Session recall: chat auto-recalls per-project sessions + facts
+- E2E reliability integration tests (real orchestrator + scripted fake LLM)
+- CHANGELOG consolidated under v1.62.0; website updated with v1.62.0 features,
+  new feature cards, and 4,031-test count
+- 4,031 tests passing across 167 files

@@ -31,6 +31,12 @@ export interface PipelineConfig {
     maxVerifyRetries?: number;
     /** Verification strictness (default: 'medium') */
     strictness?: 'low' | 'medium' | 'high';
+    /**
+     * Session 20 — RequestContract acceptance criteria. Threaded through to the
+     * VerifyModule goal-alignment check so verification is contract-driven
+     * (Decision 3: spec→verify). Optional — verify runs normally when absent.
+     */
+    acceptanceCriteria?: string[];
     /** Whether to enable dry-run mode (no disk writes, default: false) */
     dryRun?: boolean;
     /** Whether to enable verbose logging (default: false) */

@@ -13,6 +13,20 @@ import type { InferenceOptions } from '../config/types.js';
 /** Status of a single task step within the execution plan */
 export type TaskStatus = 'pending' | 'running' | 'completed' | 'failed';
 
+/**
+ * H2 — one sub-agent delegation spec on a delegate task step. The agent runs
+ * this sub-agent with a FRESH isolated context (Freebuff `spawn_agents` /
+ * Hermes `delegate_tool.py` parity).
+ */
+export interface TaskDelegation {
+  /** The specialized sub-agent type (registered in the ModuleRegistry). */
+  agentType: string;
+  /** The focused prompt for the sub-agent (its context goal). */
+  prompt: string;
+  /** Optional file paths the sub-agent should read as context (relative to cwd). */
+  files?: string[];
+}
+
 /** A single step in the ordered execution plan produced by the PlannerAgent */
 export interface TaskStep {
   id: string;
@@ -20,6 +34,13 @@ export interface TaskStep {
   agentType: string;
   dependsOn: string[];
   status: TaskStatus;
+  /**
+   * H2 — when set, this step is a DELEGATE step: the agent fans out these
+   * sub-agent specs in parallel, each with a fresh isolated context, and
+   * aggregates their summary results. The parent task line renders on the
+   * board alongside the live delegation lanes.
+   */
+  delegation?: TaskDelegation[];
   /**
    * Complexity label for THIS subtask (assessment item #1: "decompose tasks
    * into subtasks labeled by complexity"). Emitted by the planner and used as

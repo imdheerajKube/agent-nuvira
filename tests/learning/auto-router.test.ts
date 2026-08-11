@@ -1397,6 +1397,30 @@ describe('AutoModelRouter.resolve routing rules', () => {
 // ─── resolveModel / pickModelFromCatalog ────────────────────────────────────
 
 describe('resolveModel / pickModelFromCatalog', () => {
+  // Hermetic registry: resolveModel() consults the Model Availability Registry
+  // (a dead configured pin falls back to a registry-verified model), so isolate
+  // it exactly like the sibling describes — ambient telemetry on the dev
+  // machine must never flip a deterministic pin test.
+  let resolveModelTempDir: string;
+  let resolveModelOrigDir: string | undefined;
+
+  beforeEach(() => {
+    resolveModelOrigDir = process.env.BUFF_MEMORY_DIR;
+    resolveModelTempDir = mkdtempSync(join(tmpdir(), 'buff-autorouter-resolvemodel-'));
+    process.env.BUFF_MEMORY_DIR = resolveModelTempDir;
+    resetModelRegistry();
+  });
+
+  afterEach(() => {
+    if (resolveModelOrigDir === undefined) {
+      delete process.env.BUFF_MEMORY_DIR;
+    } else {
+      process.env.BUFF_MEMORY_DIR = resolveModelOrigDir;
+    }
+    resetModelRegistry();
+    rmSync(resolveModelTempDir, { recursive: true, force: true });
+  });
+
   it('returns default when no configManager is provided', () => {
     const router = new AutoModelRouter();
     expect(router.resolveModel('groq', 'writer')).toBe('default');
