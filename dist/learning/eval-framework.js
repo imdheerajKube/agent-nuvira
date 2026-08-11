@@ -60,6 +60,7 @@ export const M2B_TASK_IDS = [
     'dep-local-module',
     'js-continuation',
     'py-multi-file',
+    'py-nvda-addon',
 ];
 /** Get the M2b curated task suite. */
 export function getM2bTasks() {
@@ -573,6 +574,41 @@ const EVAL_TASKS = [
         tokenBudget: 8000,
         timeEstimate: 'medium',
         timeoutMs: 240_000,
+    },
+    // ── Feature: NVDA addon (reference-docs injection target) ──────────────
+    {
+        id: 'py-nvda-addon',
+        title: 'Create an NVDA addon with a keyboard shortcut',
+        category: 'feature',
+        difficulty: 'hard',
+        goal: 'Create an NVDA addon compatible with NVDA 2026.1. When the user presses NVDA+Alt+1 the addon should speak "Hello Anuj Mote". The addon source tree must contain a manifest.ini at its root and a globalPlugins/ module. Use the real NVDA APIs (globalPluginHandler, scriptHandler, addonHandler, ui).',
+        setupFiles: [
+            {
+                path: 'README.md',
+                content: 'Scratch workspace for an NVDA addon. Create the addon source tree here.',
+            },
+        ],
+        hiddenTests: [
+            {
+                // Shell-based, self-contained (no template file needed): manifest.ini
+                // exists AND a globalPlugins module uses the REAL APIs AND does NOT
+                // contain the hallucinated APIs observed in the live NVDA run.
+                file: 'verify.sh',
+                command: 'test -f manifest.ini && ls globalPlugins/*.py >/dev/null 2>&1 && grep -rl "globalPluginHandler" globalPlugins/*.py >/dev/null && grep -rl "@scriptHandler.script\|scriptHandler.script" globalPlugins/*.py >/dev/null && grep -rq "ui.message" globalPlugins/*.py && grep -q "kb:NVDA+alt+1\|kb:nvda+alt+1" globalPlugins/*.py && ! grep -rq "register_key_handler\|from nvda import" globalPlugins/*.py',
+            },
+        ],
+        referencePatterns: [
+            {
+                // Directory-based patterns can't be read as files by computeEditAccuracy
+                // — the shell hidden test above is the authoritative check; this entry
+                // is kept for edit-accuracy scoring on the manifest file only.
+                file: 'manifest.ini',
+                mustContain: ['[addon]'],
+            },
+        ],
+        tokenBudget: 9000,
+        timeEstimate: 'slow',
+        timeoutMs: 300_000,
     },
 ];
 // ─── Hidden Test Files ──────────────────────────────────────────────────────

@@ -112,6 +112,42 @@ describe('WriterAgent — buildPrompt', () => {
 
   // ── Format Instructions ──────────────────────────────────────────────
 
+  it('should inject NVDA reference docs when the task names an NVDA addon (v1.62.4)', () => {
+    const ctx = makeContext({
+      goal: 'Create an NVDA addon that speaks a message on NVDA+Alt+1',
+      taskPlan: [{
+        id: 'step-01',
+        agentType: 'writer',
+        description: 'Create manifest.ini and globalPlugins/hello.py',
+        dependsOn: [],
+        status: 'running',
+      }],
+    });
+    const prompt = buildPrompt(ctx);
+    // Real APIs must be present so the model cannot hallucinate them.
+    expect(prompt).toContain('globalPluginHandler');
+    expect(prompt).toContain('scriptHandler.script');
+    expect(prompt).toContain('ui.message');
+    expect(prompt).toContain('kb:NVDA+alt+1');
+    expect(prompt).toContain('addonHandler.initTranslation');
+  });
+
+  it('should NOT inject reference docs for unrelated tasks (no false positives)', () => {
+    const ctx = makeContext({
+      goal: 'Fix the failing login test',
+      taskPlan: [{
+        id: 'step-01',
+        agentType: 'writer',
+        description: 'Update auth logic',
+        dependsOn: [],
+        status: 'running',
+      }],
+    });
+    const prompt = buildPrompt(ctx);
+    expect(prompt).not.toContain('Reference: NVDA addon');
+    expect(prompt).not.toContain('globalPluginHandler');
+  });
+
   it('should include the WRITER_SYSTEM_PROMPT with filepath: format', () => {
     const context = makeContext({
       goal: 'update auth',

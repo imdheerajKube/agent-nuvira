@@ -815,3 +815,62 @@ config enables them.
 of #26. Future refactors must keep the ordering — auto-switch before any prompt, prompt
 only when explicitly opted in AND on a TTY — or the "silently continue on a healthy
 provider" guarantee silently disappears.
+
+## 28. Where the pipeline loses to interactive execution — and the efficiency wins (v1.62.4)
+
+**Context:** a live NVDA-addon task ("create an addon that speaks 'Hello Anuj Mote' on
+NVDA+alt+1") took 12–18 minutes through `execute` and failed, while the same question in
+`chat` answers in seconds. This decision records the root-cause comparison and the
+concrete efficiency levers.
+
+**How the pipeline executed the task (observed, real run):**
+- Linear stage chain with one LLM call per stage and **no parallelization**: planner
+  (94s) → context-gatherer (LLM deciding which files to read) → writer step 1 (~68s) →
+  writer step 2 (~3 min, incl. a 2× parse-failure retry loop) → reviewer (3 passes,
+  ~1–2 min each) → runner (2 failed build attempts, ~2 min) — 771s+ total.
+- The **model hallucinated the NVDA API** (`nvda.register_key_handler`, `from nvda
+  import ui`) — no reference material was in the prompt — which drove the reviewer's
+  repeated "critical issues" verdicts and the repair-budget exhaustion.
+- A step reported ✅ while writing the **wrong file** (manifest step wrote
+  `globalPlugins/hello_anuj.py`), so later steps built on a lie.
+- The runner **didn't check the toolchain**: `python` (exit 127 — not installed),
+  then `python3 -m venv` without verifying `requirements.txt` existed.
+
+**How interactive/tool-driven execution (the Buffy-style loop) does the same task:**
+- Context is gathered by **tools, not LLM calls** (directory listing, globs, greps run
+  in parallel in one round-trip; the model only reads what actually matters).
+- Independent subtasks **fan out in parallel** instead of serializing.
+- Files are **applied directly** (precise string replaces / full-file writes) — no
+  LLM-emitted diff blocks to parse, so the parse-failure retry loop cannot exist.
+- Domain knowledge is **verified up front** (reference docs / docs research) rather
+  than regenerated from model memory — no hallucinated APIs to review-reject.
+- **Deterministic checks run as tools, not reviewer LLM passes**: syntax check, file
+  existence, imports resolution, build command — instant and exact. The LLM is
+  reserved for semantic review only.
+- Build/verify happens **continuously** (write → run the real build → fix), so the
+  failing command surfaces within seconds of the code that caused it.
+
+**Seven concrete efficiency wins adopted or queued for the pipeline:**
+1. **Parallel step fan-out** — steps whose `expectedFiles` don't overlap (and which
+   don't read each other's outputs) run concurrently instead of sequentially. The
+   NVDA task's two writer steps were independent and ran back-to-back (~4 min → ~2).
+2. **Tool-based context gathering** — deterministic manifest/directory scanning for
+   the inspection step instead of an LLM call that re-discovers the obvious.
+3. **Structured writer output** — a JSON file-changes envelope (or direct apply)
+   replaces prose+code-block parsing; the 2–3 min parse-failure retries disappear.
+4. **Latency-based provider failover** — v1.62.2/3 handle quota errors; the 94s
+   planner stall shows a per-call wall-clock budget with auto-switch would cut the
+   critical path by minutes.
+5. **Toolchain pre-flight in the runner** — detect `python`/`python3`/`node`,
+   presence of `requirements.txt`/`package.json`, and buildability BEFORE attempting
+   commands (the NVDA run burned ~2 min on exit-127 then a missing requirements file).
+6. **Deterministic-first review** — syntax/import/file-existence checks run as tools
+   before any LLM review; the LLM only reviews what mechanical checks can't.
+7. **Reference-docs injection (shipped in v1.62.4)** — curated, verified API
+   snippets for known domains (NVDA first) at prompt time, eliminating the
+   hallucination→review-reject→repair loop at its source.
+
+**Status:** #7 (reference docs) and the deliverable match check are shipped in
+v1.62.4; the NVDA eval task (`py-nvda-addon`) locks both in. #1–#6 are queued as the
+next performance program; they target wall-clock, not correctness — correctness
+already improved with the deliverable check + reference docs.
