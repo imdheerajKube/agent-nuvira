@@ -17,7 +17,13 @@ import { Agent, type AgentContext, type AgentResult, type Artifact } from '../ag
 import type { LLMCallFn } from '../agent.js';
 import { buildProjectFileTree, truncateTree } from '../utils/file-tree.js';
 import { logger } from '../../utils/logger.js';
-import { parseRetryAfterHint as parseRetryHintShared } from '../../learning/provider-fallback.js';
+import {
+  BASE_RETRY_DELAY_MS,
+  LONG_WAIT_THRESHOLD_MS,
+  isRateLimitError,
+  parseModelName,
+  parseRetryAfterHint,
+} from '../rate-limit-retry.js';
 
 /** File extensions we consider as source code */
 const SOURCE_EXTENSIONS = new Set([
@@ -36,29 +42,6 @@ const IGNORE_DIRS = new Set([
 
 /** Maximum number of API retry attempts for transient LLM failures (rate limits, timeouts) */
 const MAX_API_RETRIES = 2;
-
-/** Base delay for exponential backoff in milliseconds (doubles each retry: 5s, 10s) */
-const BASE_RETRY_DELAY_MS = 5000;
-
-/** Threshold above which we consider a rate-limit wait "long" and prompt the user. */
-const LONG_WAIT_THRESHOLD_MS = 3000;
-
-// ─── Rate-limit Helpers ────────────────────────────────────────────────────
-
-function parseRetryAfterHint(errorMessage: string): number | null {
-  // Shared parser (provider-fallback.ts) — single source of truth covering
-  // "try again in Xs", "Retry-After: N", "resets in Nh Nm", …
-  return parseRetryHintShared(errorMessage);
-}
-
-function parseModelName(errorMessage: string): string | undefined {
-  const match = errorMessage.match(/model\s+`([^`]+)`|model\s+'([^']+)'|model\s+([^\s]+)/i);
-  return match?.[1] || match?.[2] || match?.[3] || undefined;
-}
-
-function isRateLimitError(errorMessage: string): boolean {
-  return /rate\s*limit|429|too many requests|try again in/i.test(errorMessage);
-}
 
 /**
  * ContextGathererAgent — Discovers and reads relevant files from the codebase.

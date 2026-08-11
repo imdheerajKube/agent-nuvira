@@ -2,6 +2,31 @@
 
 All notable changes to **Agent-Nuvira** are documented in this file.
 
+## v1.62.5 — Reviewer rate-limit recovery: eval 429s are waited out, not fatal
+
+- **Root cause fixed (eval interference).** The reviewer's retry loop used a
+  fixed 1s/2s backoff and never invoked `context.onRateLimit` — so a transient
+  429 with an 18s reset hint (e.g. Groq TPM) fired all 3 attempts inside the
+  reset window and the review died, killing the task. Observed: 6/9 eval tasks
+  failed with "Provider interference" and the reviewer errored on an 18.165s
+  reset. The reviewer now mirrors the writer/context-gatherer: long reset
+  hints (>= 3s) delegate to the orchestrator's `onRateLimit` handler (decision
+  #26 — silent wait for transient, silent auto-switch for exhaustion/storms,
+  dashboard failover events), short hints use the hint-aware delay, and
+  switch-model/skip/abort are honored. The pipeline now waits out transient
+  quota blips instead of failing on them.
+- **Shared retry helpers.** New `src/agents/rate-limit-retry.ts`
+  (`isRateLimitError`, `calculateRetryDelay`, `parseModelName`,
+  `parseRetryAfterHint`, base/threshold constants) — writer and
+  context-gatherer were refactored onto it, removing their duplicated local
+  copies (single source of truth, no drift).
+- **Tests.** 3 new reviewer tests (wait-then-retry with fake timers verifying
+  the full 18.2s hint is honored, switch-model uses the handler's LLM, abort
+  path) — 168/168 files pass. Live smoke eval on groq: 100% completion, 100%
+  test pass, 0 provider interference.
+- **Decision #29** — "Transient quota blips must never fail a task" — full
+  analysis of the eval 429 failure and the fix.
+
 ## v1.62.4 — Deliverable match check + domain reference docs + NVDA eval task
 
 - **Deliverable match check (fixes the wrong-file success bug).** `TaskStep` gains

@@ -12,6 +12,7 @@
  */
 import { Agent } from '../agent.js';
 import { logger } from '../../utils/logger.js';
+import { BASE_RETRY_DELAY_MS, LONG_WAIT_THRESHOLD_MS, calculateRetryDelay, isRateLimitError, parseModelName, parseRetryAfterHint, } from '../rate-limit-retry.js';
 const REVIEWER_SYSTEM_PROMPT = `You are a senior code reviewer. Review the following code changes for quality, correctness, and security.
 
 Focus on:
@@ -44,8 +45,6 @@ If NO issues are found, respond ONLY with:
 Do NOT mention potential issues that don't exist. Do NOT use the words "CRITICAL", "WARNING", or "SUGGESTION" unless you are actually flagging an issue.`;
 /** Maximum API retry attempts for transient LLM failures */
 const MAX_API_RETRIES = 2;
-/** Base delay for exponential backoff (doubles each retry: 1s, 2s) */
-const BASE_RETRY_DELAY_MS = 1000;
 /**
  * ReviewerAgent — Validates code changes produced by WriterAgent.
  */
@@ -63,11 +62,14 @@ export class ReviewerAgent extends Agent {
             };
         }
         this.report(context, 'reviewing', `Reviewing ${context.fileChanges.length} change(s) for correctness, security, and quality…`);
+        // The rate-limit handler can swap the LLM mid-review (auto-switch), so the
+        // loop must call through a mutable reference, not the original parameter.
+        let activeCallLLM = callLLM;
         for (let attempt = 0; attempt <= MAX_API_RETRIES; attempt++) {
             try {
                 const prompt = this.buildPrompt(context);
                 this.report(context, 'thinking', 'Checking for security issues, edge cases, and type safety…');
-                const response = await callLLM(prompt, {
+                const response = await activeCallLLM(prompt, {
                     temperature: 0.2,
                     maxTokens: 4096,
                 });
@@ -95,11 +97,66 @@ export class ReviewerAgent extends Agent {
             }
             catch (err) {
                 lastError = err instanceof Error ? err.message : String(err);
+                // ── Rate-limit handling via the orchestrator (decision #26) ─────
+                // A 429 with a reset hint (e.g. "try again in 18.2s") needs the FULL
+                // wait — the fixed backoff below would fire every attempt inside the
+                // reset window and kill the review on a transient TPM blip. Long
+                // hints delegate to context.onRateLimit so the orchestrator can wait
+                // silently, auto-switch provider (storm/exhaustion), or prompt.
+                if (isRateLimitError(lastError) && context.onRateLimit) {
+                    const retryAfterMs = parseRetryAfterHint(lastError) || BASE_RETRY_DELAY_MS;
+                    if (retryAfterMs >= LONG_WAIT_THRESHOLD_MS) {
+                        const action = await context.onRateLimit({
+                            retryAfterMs,
+                            modelName: parseModelName(lastError),
+                            agentName: this.name,
+                            errorMessage: lastError.slice(0, 300),
+                        });
+                        if (action.action === 'abort') {
+                            logger.error(`Reviewer aborted by user: ${lastError}`);
+                            return {
+                                success: false,
+                                summary: 'Review aborted by user due to rate limit',
+                                error: lastError,
+                            };
+                        }
+                        if (action.action === 'skip') {
+                            logger.info('Reviewer step skipped by user');
+                            return {
+                                success: true,
+                                summary: 'Skipped by user (rate limit)',
+                                details: 'The review step was skipped because the API rate limit was exceeded.',
+                            };
+                        }
+                        if (action.action === 'switch-model') {
+                            logger.info('Switching model per user request...');
+                            activeCallLLM = action.callLLM ?? activeCallLLM;
+                            // Brief pause before retrying with the new provider/model.
+                            await new Promise((resolve) => setTimeout(resolve, 500));
+                            continue;
+                        }
+                        // 'retry': wait the full reset hint, then retry.
+                        logger.warn(`Reviewer rate limited. Waiting ${(retryAfterMs / 1000).toFixed(1)}s as chosen by user...`);
+                        await new Promise((resolve) => setTimeout(resolve, retryAfterMs));
+                        continue;
+                    }
+                }
+                // ── Standard retry for transient errors ───────────────────────
                 if (attempt < MAX_API_RETRIES) {
-                    const delayMs = BASE_RETRY_DELAY_MS * Math.pow(2, attempt);
-                    logger.warn(`Reviewer API error (attempt ${attempt + 1}/${MAX_API_RETRIES + 1}): ` +
-                        `${lastError.slice(0, 200)}. Retrying in ${delayMs}ms...`);
-                    await new Promise((resolve) => setTimeout(resolve, delayMs));
+                    if (isRateLimitError(lastError)) {
+                        // Short rate limit: auto-retry with the hint-aware delay.
+                        const delayMs = calculateRetryDelay(attempt, lastError);
+                        logger.warn(`Reviewer API error (attempt ${attempt + 1}/${MAX_API_RETRIES + 1}): ` +
+                            `${lastError.slice(0, 200)}. Waiting ${(delayMs / 1000).toFixed(1)}s...`);
+                        await new Promise((resolve) => setTimeout(resolve, delayMs));
+                    }
+                    else {
+                        // Other transient errors (timeout, network): standard backoff.
+                        const delayMs = BASE_RETRY_DELAY_MS * Math.pow(2, attempt);
+                        logger.warn(`Reviewer API error (attempt ${attempt + 1}/${MAX_API_RETRIES + 1}): ` +
+                            `${lastError.slice(0, 200)}. Retrying in ${delayMs}ms...`);
+                        await new Promise((resolve) => setTimeout(resolve, delayMs));
+                    }
                     continue;
                 }
                 logger.error(`Reviewer failed after ${MAX_API_RETRIES + 1} API attempts: ${lastError}`);

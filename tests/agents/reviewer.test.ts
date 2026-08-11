@@ -107,3 +107,75 @@ describe('ReviewerAgent — acceptance criteria (Session 20)', () => {
     expect(result.success).toBe(true);
   });
 });
+
+describe('ReviewerAgent — rate-limit recovery (eval 429 fix)', () => {
+  const RATE_LIMIT_ERROR =
+    'Groq API error (429): {"error":{"message":"Rate limit reached for model `llama-3.3-70b-versatile` ' +
+    'in organization `org_x` service tier `on_demand` on tokens per minute (TPM): Limit 12000, ' +
+    'Used 11036, Requested 4597. Please try again in 18.165s."}}';
+
+  it('waits out a transient reset hint via onRateLimit and succeeds (no naive 1s backoff)', async () => {
+    vi.useFakeTimers();
+    try {
+      const callLLM = vi.fn()
+        .mockImplementationOnce(async () => { throw new Error(RATE_LIMIT_ERROR); })
+        .mockImplementationOnce(async () => '✅ Review passed. No issues found.');
+      const onRateLimit = vi.fn(async () => ({ action: 'retry' } as const));
+
+      const agent = new ReviewerAgent();
+      const execPromise = agent.execute(makeContext({ onRateLimit }), callLLM);
+      // Let the 429 surface and the handler resolve, then advance past the
+      // 18.2s reset window — the retry must NOT fire inside it.
+      await vi.advanceTimersByTimeAsync(20_000);
+      const result = await execPromise;
+
+      expect(onRateLimit).toHaveBeenCalledTimes(1);
+      expect(onRateLimit.mock.calls[0][0].retryAfterMs).toBeGreaterThanOrEqual(18_000);
+      expect(onRateLimit.mock.calls[0][0].agentName).toBe('Reviewer');
+      expect(callLLM).toHaveBeenCalledTimes(2);
+      expect(result.success).toBe(true);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('uses the handler-provided LLM after a switch-model action', async () => {
+    vi.useFakeTimers();
+    try {
+      const switchedLLM = vi.fn(async () => '✅ Review passed. No issues found.');
+      const failingLLM = vi.fn(async () => {
+        throw new Error('Rate limit reached — please try again in 5.0s');
+      });
+      const onRateLimit = vi.fn(async () => ({
+        action: 'switch-model' as const,
+        callLLM: switchedLLM,
+      }));
+
+      const agent = new ReviewerAgent();
+      const execPromise = agent.execute(makeContext({ onRateLimit }), failingLLM);
+      await vi.advanceTimersByTimeAsync(2_000); // 500ms pause before retry
+      const result = await execPromise;
+
+      expect(onRateLimit).toHaveBeenCalledTimes(1);
+      expect(failingLLM).toHaveBeenCalledTimes(1);
+      expect(switchedLLM).toHaveBeenCalledTimes(1);
+      expect(result.success).toBe(true);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('aborts the review when the handler says abort', async () => {
+    const callLLM = vi.fn(async () => {
+      throw new Error('Rate limit reached — please try again in 10.0s');
+    });
+    const onRateLimit = vi.fn(async () => ({ action: 'abort' } as const));
+
+    const agent = new ReviewerAgent();
+    const result = await agent.execute(makeContext({ onRateLimit }), callLLM);
+
+    expect(onRateLimit).toHaveBeenCalledTimes(1);
+    expect(result.success).toBe(false);
+    expect(result.summary).toContain('aborted');
+  });
+});

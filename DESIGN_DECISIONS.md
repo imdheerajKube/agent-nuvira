@@ -874,3 +874,47 @@ concrete efficiency levers.
 v1.62.4; the NVDA eval task (`py-nvda-addon`) locks both in. #1–#6 are queued as the
 next performance program; they target wall-clock, not correctness — correctness
 already improved with the deliverable check + reference docs.
+
+## 29. Transient quota blips must never fail a task — the reviewer rate-limit gap (v1.62.5)
+
+**Observed:** a `buff eval run` against groq/llama-3.3-70b produced 6/9 tasks
+marked "Provider interference" and a composite of 51.6% — not because the agent
+was stuck, but because the Reviewer died with:
+
+    ✖ Reviewer failed after 3 API attempts: Groq API error (429) …
+      Limit 12000, Used 11036, Requested 4597. Please try again in 18.165s.
+
+The whole suite ran in 59.9s, which proves no wait ever happened: honoring an
+18s reset per task would alone have taken longer. Decision #26 made the
+orchestrator's rate-limit recovery fully automatic, but that recovery is only
+reachable through `context.onRateLimit` — which agents must invoke themselves.
+
+**Root cause:** the reviewer's retry loop used a fixed 1s/2s exponential backoff
+and never called `context.onRateLimit`. All three attempts fired inside the
+18s reset window, each 429d, and the review returned failure. The writer,
+context-gatherer, and edit-module all had the correct hint-aware pattern; the
+reviewer was the missing piece — and since the reviewer runs at the END of
+nearly every pipeline, its failure killed tasks that had already been written
+and tested.
+
+**Fix (v1.62.5):**
+1. **Reviewer mirrors the proven pattern.** Rate-limit errors with a reset hint
+   >= 3s delegate to `context.onRateLimit`, so the orchestrator's decision #26
+   logic applies: silent wait for transient hints (an 18s TPM blip is waited
+   out and retried), silent auto-switch for exhaustion/storms (with the
+   dashboard failover event), opt-in interactive prompt on a TTY. Shorter
+   hints use the hint-aware delay; non-rate-limit transients keep backoff.
+   `switch-model` swaps the active callLLM mid-review; `skip`/`abort` are
+   honored.
+2. **Single source of truth.** `src/agents/rate-limit-retry.ts` now holds the
+   shared helpers; writer and context-gatherer were refactored onto it
+   (removing their local copies) so the hint parsing, thresholds, and backoff
+   base can never drift between agents.
+3. **Regression coverage.** Fake-timer tests assert an 18.2s hint is fully
+   waited out before retry (not a 1s backoff), switch-model routes the retry
+   through the handler-provided LLM, and abort fails fast.
+
+**Remaining policy:** tasks whose TERMINAL error is still provider interference
+(rare now) are classified non-stuck by the eval framework and surfaced on the
+'Provider interference' line — the measurement never counts them as agent
+stuckness. A full eval re-run is the acceptance test for this decision.
