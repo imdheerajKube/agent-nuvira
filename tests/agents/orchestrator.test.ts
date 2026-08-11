@@ -1770,7 +1770,10 @@ describe('Orchestrator — auto-routed failure telemetry', () => {
 
     vi.spyOn(ProviderFactory, 'createProvider').mockReturnValue(makeFailingProvider(new Error('403 permission denied')));
 
-    const callLLM = (orch as any).createLLMProvider({ provider: 'gemini' });
+    // Model passed EXPLICITLY — createLLMProvider resolves a missing model from
+    // the machine config, which makes the registry key environment-dependent
+    // (fails in CI where no ~/.buff config exists). Pin it for hermeticity.
+    const callLLM = (orch as any).createLLMProvider({ provider: 'gemini', model: 'gemini-2.0-flash-exp' });
     await expect(callLLM('hello')).rejects.toThrow('403');
 
     const entry = getModelRegistry().getEntry('gemini', 'gemini-2.0-flash-exp');

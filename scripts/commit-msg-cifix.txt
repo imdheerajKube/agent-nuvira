@@ -1,0 +1,10 @@
+fix: make NON-auto registry telemetry test hermetic (unblocks CI release)
+
+createLLMProvider({ provider: 'gemini' }) without an explicit model resolves
+the model from the machine's ~/.buff config — the test asserted the registry
+entry under 'gemini-2.0-flash-exp' (the developer's configured model), so it
+passed locally but failed in CI (fresh checkout, no config) on every
+runner/Node/Bun, which blocked the v1.61.1 and v1.62.0 publish pipelines.
+
+Pin the model explicitly in the test so the registry key is deterministic.
+Verified: passes with the local config AND with an empty HOME (CI-like).
