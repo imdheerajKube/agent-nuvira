@@ -28,6 +28,7 @@ import { InferenceOptions, ProviderConfig } from '../config/types.js';
 import { logger } from '../utils/logger.js';
 import { streamCompletion } from './sse.js';
 import { chatCompletionsWithTools } from './tools.js';
+import { attachHttpContext } from './http-error.js';
 import { getModelTags } from './model-catalog.js';
 import { getCostTracker, recordCallWithUsage } from '../learning/cost-tracker.js';
 import { buildConversationKey, cacheReasoning } from '../learning/reasoning-cache.js';
@@ -204,7 +205,13 @@ export class OpenAICompatAdapter implements InferenceProvider {
     if (!response.ok) {
       const errorBody = await response.text();
       // Status code in the message → classifyFallbackError buckets correctly.
-      throw new Error(`${this.meta.label} API error (${response.status}): ${errorBody}`);
+      // Headers attached → extractRetryAfterMs() can read Retry-After /
+      // x-ratelimit-reset-* and park for the provider's ACTUAL reset time.
+      throw attachHttpContext(
+        new Error(`${this.meta.label} API error (${response.status}): ${errorBody}`),
+        response.status,
+        response.headers,
+      );
     }
 
     const data = (await response.json()) as ChatCompletionResponse;

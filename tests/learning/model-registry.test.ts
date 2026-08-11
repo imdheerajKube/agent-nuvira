@@ -280,7 +280,10 @@ describe('ModelRegistry — quota parking & telemetry', () => {
     // Every tracked model unavailable → provider is predictively blocked.
     registry.markUnavailable('gemini', 'gemini-2.5-flash', 'auth', 'telemetry');
     registry.markUnavailable('gemini', 'gemini-1.5-flash', '403 permission denied', 'spot-check');
-    registry.recordCall('groq', 'llama-3.3-70b-versatile', false, 'rate-limit'); // parks quota
+    // A verified model that rate-limits stays VERIFIED (only parked) — the
+    // rate-limit demotion bug fix: transient quota must never kill a model.
+    registry.markVerified('groq', 'llama-3.3-70b-versatile', 'spot-check');
+    registry.recordCall('groq', 'llama-3.3-70b-versatile', false, 'rate-limit'); // parks quota, preserves verified
     expect(registry.getBlockedProviders().sort()).toEqual(['gemini', 'groq']);
 
     const gemini = registry.unblockProvider('gemini');
@@ -288,13 +291,33 @@ describe('ModelRegistry — quota parking & telemetry', () => {
     // Demoted → unverified, so the provider is no longer blocked (unverified alone never blocks).
     expect(registry.getEntry('gemini', 'gemini-2.5-flash')?.status).toBe('unverified');
     expect(registry.getBlockedProviders()).not.toContain('gemini');
-    // The unrelated provider is untouched.
+    // The unrelated provider is untouched (still parked).
     expect(registry.getBlockedProviders()).toContain('groq');
 
     const groq = registry.unblockProvider('groq');
-    expect(groq).toEqual({ demoted: 1, unparked: 1 });
+    expect(groq).toEqual({ demoted: 0, unparked: 1 });
+    // Status survived the rate-limit (verified) and the park was cleared.
+    expect(registry.getEntry('groq', 'llama-3.3-70b-versatile')?.status).toBe('verified');
     expect(registry.getEntry('groq', 'llama-3.3-70b-versatile')?.quotaParkedUntil).toBe(0);
+    expect(registry.isUsable('groq', 'llama-3.3-70b-versatile')).toBe(true);
     expect(registry.getBlockedProviders()).toHaveLength(0);
+  });
+
+  it('a rate-limit parks a verified model but it recovers automatically after the window', () => {
+    const registry = new ModelRegistry();
+    registry.markVerified('groq', 'qwen/qwen3.6-27b', 'spot-check');
+
+    registry.recordCall('groq', 'qwen/qwen3.6-27b', false, 'rate-limit');
+    // Parked → not usable while the window is active, but status PRESERVED.
+    expect(registry.getEntry('groq', 'qwen/qwen3.6-27b')?.status).toBe('verified');
+    expect(registry.isUsable('groq', 'qwen/qwen3.6-27b')).toBe(false);
+
+    // Simulate the park window lapsing → the model comes back WITHOUT any
+    // manual intervention (this never happened before the fix).
+    const entry = registry.getEntry('groq', 'qwen/qwen3.6-27b');
+    if (entry) entry.quotaParkedUntil = 0;
+    expect(registry.isUsable('groq', 'qwen/qwen3.6-27b')).toBe(true);
+    expect(registry.getBlockedProviders()).not.toContain('groq');
   });
 
   it('unblockProvider is a no-op for an untracked provider (0/0)', () => {
@@ -511,9 +534,22 @@ describe('ModelRegistry — quota parking & telemetry', () => {
 
     registry.recordCall('groq', 'llama-3.3-70b-versatile', false, 'rate-limit');
     const groq = registry.getEntry('groq', 'llama-3.3-70b-versatile');
-    expect(groq?.status).toBe('unavailable');
+    // Rate-limit is transient: parks WITHOUT demoting (verified survives so the
+    // model auto-recovers after the window — the demotion bug fix).
+    expect(groq?.status).not.toBe('unavailable');
     expect(groq?.quotaParkedUntil).toBeGreaterThan(Date.now());
     expect(registry.isUsable('groq', 'llama-3.3-70b-versatile')).toBe(false);
+  });
+
+  it('recordCall rate-limit with a reset hint parks for the HINT (not the hour-aligned fallback)', () => {
+    const registry = new ModelRegistry();
+    registry.markVerified('groq', 'qwen/qwen3.6-27b', 'spot-check');
+    registry.recordCall('groq', 'qwen/qwen3.6-27b', false, 'rate-limit', undefined, undefined, undefined, undefined, 16_000);
+    const entry = registry.getEntry('groq', 'qwen/qwen3.6-27b')!;
+    const parkMs = entry.quotaParkedUntil - Date.now();
+    expect(entry.status).toBe('verified'); // still preserved
+    expect(parkMs).toBeGreaterThan(10_000); // floored
+    expect(parkMs).toBeLessThan(30_000); // ~16s hint, not ~1h
   });
 
   it('transient recordCall failures bump errorRate but keep the model usable', () => {

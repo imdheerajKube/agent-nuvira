@@ -232,6 +232,13 @@ export class WorkspaceStore {
     this.dbPath = join(this.configDir, 'workspaces.db');
     this.jsonPath = join(this.configDir, 'workspaces.json');
     this.backend = opts.forceBackend ?? this.pickBackend();
+    // Register in the singleton cache so resetWorkspaceStore() closes the SQLite
+    // handle even for DIRECTLY-constructed stores. Without this, an open
+    // workspaces.db handle makes rmSync() of the config dir fail on Windows
+    // (EPERM/EBUSY — POSIX allows deleting open files, Windows does not) and,
+    // when that failure is swallowed, leaves stale rows behind for the next
+    // test. getWorkspaceStore() checks the cache first, so this is idempotent.
+    storeCache.set(this.configDir, this);
   }
 
   /** Feature-detect node:sqlite; fall back to the JSON tier when absent. */

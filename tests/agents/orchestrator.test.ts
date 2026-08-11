@@ -500,8 +500,9 @@ describe('Orchestrator — createRateLimitHandler', () => {
   function getHandler(
     options: OrchestratorOptions = {},
     model?: string,
+    boundProvider?: string,
   ): OnRateLimit | undefined {
-    return (orchestrator as any).createRateLimitHandler.call(orchestrator, options, model);
+    return (orchestrator as any).createRateLimitHandler.call(orchestrator, options, model, boundProvider);
   }
 
   // ── Gating: dryRun and TTY ──────────────────────────────────────────────
@@ -517,7 +518,7 @@ describe('Orchestrator — createRateLimitHandler', () => {
     expect(handler).toBeUndefined();
   });
 
-  it('should return undefined when not a TTY (e.g., piped output)', () => {
+  it('should return a SILENT handler when not a TTY (e.g., piped output)', () => {
     Object.defineProperty(process.stdout, 'isTTY', {
       value: false,
       configurable: true,
@@ -525,7 +526,9 @@ describe('Orchestrator — createRateLimitHandler', () => {
 
     const handler = getHandler({});
 
-    expect(handler).toBeUndefined();
+    // Non-interactive runs still get auto-switch/auto-wait — never a prompt.
+    expect(handler).toBeDefined();
+    expect(typeof handler).toBe('function');
   });
 
   it('should return undefined when both dryRun and non-TTY', () => {
@@ -551,9 +554,94 @@ describe('Orchestrator — createRateLimitHandler', () => {
     expect(typeof handler).toBe('function');
   });
 
-  // ── Action: retry ───────────────────────────────────────────────────────
+  // ── Silent default: transient hints wait without prompting ──────────────
 
-  it('should return retry action when user selects retry', async () => {
+  it('should silently wait + retry on a transient rate limit (no prompt by default)', async () => {
+    Object.defineProperty(process.stdout, 'isTTY', {
+      value: true,
+      configurable: true,
+    });
+
+    const promptSpy = vi.spyOn(inquirer, 'prompt').mockResolvedValue({ action: 'abort' });
+
+    const handler = getHandler({})!;
+    const result = await handler(makeRateLimitInfo());
+
+    expect(result).toEqual({ action: 'retry' });
+    // The user is NEVER interrupted — inquirer is never called by default.
+    expect(promptSpy).not.toHaveBeenCalled();
+  });
+
+  it('should silently auto-switch on the FIRST hit when the provider is exhausted (long hint)', async () => {
+    Object.defineProperty(process.stdout, 'isTTY', {
+      value: true,
+      configurable: true,
+    });
+
+    const promptSpy = vi.spyOn(inquirer, 'prompt').mockResolvedValue({ action: 'abort' });
+
+    const mockDecision = {
+      provider: 'groq',
+      model: 'llama-3.1-8b-instant',
+      ranked: [
+        { provider: 'groq', model: 'llama-3.1-8b-instant', score: 0.9 },
+        { provider: 'openrouter', model: 'o4-mini', score: 0.6 },
+      ],
+    } as any;
+    vi.spyOn(orchestrator as any, 'resolveAutoRoutingDecision').mockReturnValue(mockDecision);
+
+    const mockCallLLM = vi.fn().mockResolvedValue('response');
+    const switchSpy = vi
+      .spyOn(orchestrator as any, 'createAutoRoutedLLMFromDecision')
+      .mockReturnValue(mockCallLLM);
+
+    // Daily-quota exhaustion: "resets in 17h 51m" → 64_260_000ms
+    const handler = getHandler({ provider: 'auto' })!;
+    const result = await handler(makeRateLimitInfo({ retryAfterMs: 64_260_000 }));
+
+    expect(result.action).toBe('switch-model');
+    expect(switchSpy).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.anything(),
+      expect.objectContaining({ provider: 'groq', model: 'default' }),
+    );
+    expect(promptSpy).not.toHaveBeenCalled();
+  });
+
+  it('should silently auto-switch in NON-TTY mode too (CI/piped runs)', async () => {
+    Object.defineProperty(process.stdout, 'isTTY', {
+      value: false,
+      configurable: true,
+    });
+
+    const promptSpy = vi.spyOn(inquirer, 'prompt').mockResolvedValue({ action: 'abort' });
+
+    const mockDecision = {
+      provider: 'groq',
+      model: 'llama-3.1-8b-instant',
+      ranked: [
+        { provider: 'groq', model: 'llama-3.1-8b-instant', score: 0.9 },
+      ],
+    } as any;
+    vi.spyOn(orchestrator as any, 'resolveAutoRoutingDecision').mockReturnValue(mockDecision);
+
+    const mockCallLLM = vi.fn().mockResolvedValue('response');
+    const switchSpy = vi
+      .spyOn(orchestrator as any, 'createAutoRoutedLLMFromDecision')
+      .mockReturnValue(mockCallLLM);
+
+    // Exhausted (long hint) on first hit, even without a TTY → auto-switch
+    const handler = getHandler({ provider: 'auto' })!;
+    const result = await handler(makeRateLimitInfo({ retryAfterMs: 7_200_000 }));
+
+    expect(result.action).toBe('switch-model');
+    expect(switchSpy).toHaveBeenCalled();
+    expect(promptSpy).not.toHaveBeenCalled();
+  });
+
+  // ── Opt-in interactive prompt (routing.askOnRateLimit) ──────────────────
+
+  it('should return retry action when user selects retry (askOnRateLimit opt-in)', async () => {
     Object.defineProperty(process.stdout, 'isTTY', {
       value: true,
       configurable: true,
@@ -561,7 +649,7 @@ describe('Orchestrator — createRateLimitHandler', () => {
 
     vi.spyOn(inquirer, 'prompt').mockResolvedValue({ action: 'retry' });
 
-    const handler = getHandler({})!;
+    const handler = getHandler({ askOnRateLimit: true })!;
     const result = await handler(makeRateLimitInfo());
 
     expect(result).toEqual({ action: 'retry' });
@@ -569,7 +657,7 @@ describe('Orchestrator — createRateLimitHandler', () => {
 
   // ── Action: skip ────────────────────────────────────────────────────────
 
-  it('should return skip action when user selects skip', async () => {
+  it('should return skip action when user selects skip (askOnRateLimit opt-in)', async () => {
     Object.defineProperty(process.stdout, 'isTTY', {
       value: true,
       configurable: true,
@@ -577,7 +665,7 @@ describe('Orchestrator — createRateLimitHandler', () => {
 
     vi.spyOn(inquirer, 'prompt').mockResolvedValue({ action: 'skip' });
 
-    const handler = getHandler({})!;
+    const handler = getHandler({ askOnRateLimit: true })!;
     const result = await handler(makeRateLimitInfo());
 
     expect(result).toEqual({ action: 'skip' });
@@ -585,7 +673,7 @@ describe('Orchestrator — createRateLimitHandler', () => {
 
   // ── Action: abort ───────────────────────────────────────────────────────
 
-  it('should return abort action when user selects abort', async () => {
+  it('should return abort action when user selects abort (askOnRateLimit opt-in)', async () => {
     Object.defineProperty(process.stdout, 'isTTY', {
       value: true,
       configurable: true,
@@ -593,7 +681,7 @@ describe('Orchestrator — createRateLimitHandler', () => {
 
     vi.spyOn(inquirer, 'prompt').mockResolvedValue({ action: 'abort' });
 
-    const handler = getHandler({})!;
+    const handler = getHandler({ askOnRateLimit: true })!;
     const result = await handler(makeRateLimitInfo());
 
     expect(result).toEqual({ action: 'abort' });
@@ -620,7 +708,7 @@ describe('Orchestrator — createRateLimitHandler', () => {
     const mockCallLLM = vi.fn().mockResolvedValue('mock response');
     vi.spyOn(orchestrator as any, 'createLLMProvider').mockReturnValue(mockCallLLM);
 
-    const handler = getHandler({ provider: 'groq' })!;
+    const handler = getHandler({ provider: 'groq', askOnRateLimit: true })!;
     const result = await handler(makeRateLimitInfo());
 
     expect(result.action).toBe('switch-model');
@@ -647,7 +735,7 @@ describe('Orchestrator — createRateLimitHandler', () => {
     const mockCallLLM = vi.fn().mockResolvedValue('response');
     vi.spyOn(orchestrator as any, 'createLLMProvider').mockReturnValue(mockCallLLM);
 
-    const handler = getHandler({ provider: 'gemini', verbose: true })!;
+    const handler = getHandler({ provider: 'gemini', verbose: true, askOnRateLimit: true })!;
     await handler(makeRateLimitInfo({ modelName: 'old-model' }));
 
     // Should preserve provider and verbose from original options, with model from picker
@@ -658,6 +746,265 @@ describe('Orchestrator — createRateLimitHandler', () => {
         verbose: true,
       }),
     );
+  });
+
+  // ── Storm guard: auto-switch after consecutive rate limits ─────────────
+
+  it('should auto-switch to the fresh decision winner after 2 consecutive rate limits (auto mode)', async () => {
+    Object.defineProperty(process.stdout, 'isTTY', {
+      value: true,
+      configurable: true,
+    });
+
+    // Default (no askOnRateLimit): strike 1 is a silent wait+retry.
+    vi.spyOn(inquirer, 'prompt').mockResolvedValue({ action: 'retry' });
+
+    // Auto mode: the hint-aware park has ALREADY moved the fresh winner off the
+    // rate-limited provider (gemini parked → groq is the fresh winner). The
+    // storm guard must TRUST that winner — not skip it in favor of ranked[1].
+    const mockDecision = {
+      provider: 'groq',
+      model: 'llama-3.1-8b-instant',
+      explanation: 'test decision',
+      ranked: [
+        { provider: 'groq', model: 'llama-3.1-8b-instant', score: 0.9 },
+        { provider: 'gemini', model: 'gemini-flash-latest', score: 0.7 },
+      ],
+    } as any;
+    vi.spyOn(orchestrator as any, 'resolveAutoRoutingDecision').mockReturnValue(mockDecision);
+
+    const mockCallLLM = vi.fn().mockResolvedValue('storm response');
+    const switchSpy = vi
+      .spyOn(orchestrator as any, 'createAutoRoutedLLMFromDecision')
+      .mockReturnValue(mockCallLLM);
+
+    const handler = getHandler({ provider: 'auto' })!;
+    await handler(makeRateLimitInfo()); // strike 1 → silent wait+retry
+    const result = await handler(makeRateLimitInfo()); // strike 2 → auto-switch
+
+    expect(result.action).toBe('switch-model');
+    expect(typeof (result as any).callLLM).toBe('function');
+    // Switches to the fresh winner (groq) and MUST NOT leak the rate-limited
+    // provider's model into the new provider — 'default' lets resolveWorkingModel
+    // pick groq's best verified model (a gemini model ID would 404 on groq).
+    expect(switchSpy).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.anything(),
+      expect.objectContaining({ provider: 'groq', model: 'default' }),
+    );
+  });
+
+  it('should exclude the bound provider in pinned mode even when it is the fresh winner', async () => {
+    Object.defineProperty(process.stdout, 'isTTY', {
+      value: true,
+      configurable: true,
+    });
+
+    vi.spyOn(inquirer, 'prompt').mockResolvedValue({ action: 'retry' });
+
+    // Pinned to gemini, which is ALSO what the fresh decision would pick (park
+    // hasn't moved the winner). The storm guard must NOT switch back to gemini
+    // — it must go to the next healthy ranked provider (groq).
+    const mockDecision = {
+      provider: 'gemini',
+      model: 'gemini-flash-latest',
+      ranked: [
+        { provider: 'gemini', model: 'gemini-flash-latest', score: 0.9 },
+        { provider: 'groq', model: 'llama-3.1-8b-instant', score: 0.7 },
+      ],
+    } as any;
+    vi.spyOn(orchestrator as any, 'resolveAutoRoutingDecision').mockReturnValue(mockDecision);
+
+    const mockCallLLM = vi.fn().mockResolvedValue('storm response');
+    const switchSpy = vi
+      .spyOn(orchestrator as any, 'createAutoRoutedLLMFromDecision')
+      .mockReturnValue(mockCallLLM);
+
+    const handler = getHandler({ provider: 'gemini' })!;
+    await handler(makeRateLimitInfo()); // strike 1 → silent wait+retry
+    const result = await handler(makeRateLimitInfo()); // strike 2 → auto-switch
+
+    expect(result.action).toBe('switch-model');
+    expect(switchSpy).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.anything(),
+      expect.objectContaining({ provider: 'groq' }),
+    );
+  });
+
+  it('should not ping-pong back to a provider auto-switched to earlier in the task', async () => {
+    Object.defineProperty(process.stdout, 'isTTY', {
+      value: true,
+      configurable: true,
+    });
+
+    vi.spyOn(inquirer, 'prompt').mockResolvedValue({ action: 'retry' });
+
+    // Strike 2: fresh winner = groq → auto-switch to groq (added to tried, and
+    // the streak counter resets — groq starts fresh). Strike 3 is groq's FIRST
+    // strike since the switch, so it is a silent wait+retry, NOT another
+    // switch. Strike 4 (groq's 2nd in a row) re-triggers the storm guard: the
+    // fresh decision re-picks groq as winner (park lag — the rate-limit park
+    // hasn't propagated to the router yet). Without the tried set this would
+    // auto-switch BACK to groq — the exact ping-pong loop. The guard must skip
+    // groq and take the next healthy provider (openrouter).
+    const mockDecision = () => ({
+      provider: 'groq',
+      model: 'llama-3.1-8b-instant',
+      ranked: [
+        { provider: 'groq', model: 'llama-3.1-8b-instant', score: 0.9 },
+        { provider: 'openrouter', model: 'o4-mini', score: 0.6 },
+      ],
+    }) as any;
+    vi.spyOn(orchestrator as any, 'resolveAutoRoutingDecision').mockImplementation(mockDecision);
+
+    const mockCallLLM = vi.fn().mockResolvedValue('response');
+    const switchSpy = vi
+      .spyOn(orchestrator as any, 'createAutoRoutedLLMFromDecision')
+      .mockReturnValue(mockCallLLM);
+
+    const handler = getHandler({ provider: 'auto' })!;
+    await handler(makeRateLimitInfo()); // strike 1 → silent wait+retry
+    await handler(makeRateLimitInfo()); // strike 2 → auto-switch to groq
+    const fresh = await handler(makeRateLimitInfo()); // strike 3 → groq's 1st → retry
+    expect(fresh).toEqual({ action: 'retry' });
+    const result = await handler(makeRateLimitInfo()); // strike 4 → storm, skip groq
+
+    expect(result.action).toBe('switch-model');
+    expect(switchSpy).toHaveBeenLastCalledWith(
+      expect.anything(),
+      expect.anything(),
+      expect.objectContaining({ provider: 'openrouter' }),
+    );
+  });
+
+  it('should exclude the bound provider in auto mode when the fresh winner is the same (park lag)', async () => {
+    Object.defineProperty(process.stdout, 'isTTY', {
+      value: true,
+      configurable: true,
+    });
+
+    vi.spyOn(inquirer, 'prompt').mockResolvedValue({ action: 'retry' });
+
+    // Auto mode bound to gemini (the task's callLLM was routed there). The
+    // fresh decision STILL picks gemini (park lag — the registry park hasn't
+    // propagated). Without the bound-provider seed this would "switch" to
+    // gemini — the provider we are already on — and immediately re-rate-limit.
+    const mockDecision = {
+      provider: 'gemini',
+      model: 'gemini-flash-latest',
+      ranked: [
+        { provider: 'gemini', model: 'gemini-flash-latest', score: 0.9 },
+        { provider: 'groq', model: 'llama-3.1-8b-instant', score: 0.7 },
+      ],
+    } as any;
+    vi.spyOn(orchestrator as any, 'resolveAutoRoutingDecision').mockReturnValue(mockDecision);
+
+    const mockCallLLM = vi.fn().mockResolvedValue('storm response');
+    const switchSpy = vi
+      .spyOn(orchestrator as any, 'createAutoRoutedLLMFromDecision')
+      .mockReturnValue(mockCallLLM);
+
+    const handler = getHandler({ provider: 'auto' }, undefined, 'gemini')!;
+    await handler(makeRateLimitInfo());
+    const result = await handler(makeRateLimitInfo());
+
+    expect(result.action).toBe('switch-model');
+    expect(switchSpy).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.anything(),
+      expect.objectContaining({ provider: 'groq' }),
+    );
+  });
+
+  it('should not count rate limits minutes apart as a storm (consecutive window)', async () => {
+    Object.defineProperty(process.stdout, 'isTTY', {
+      value: true,
+      configurable: true,
+    });
+
+    vi.spyOn(inquirer, 'prompt').mockResolvedValue({ action: 'retry' });
+    const mockDecision = {
+      provider: 'groq',
+      model: 'llama-3.1-8b-instant',
+      ranked: [
+        { provider: 'groq', model: 'llama-3.1-8b-instant', score: 0.9 },
+        { provider: 'openrouter', model: 'o4-mini', score: 0.6 },
+      ],
+    } as any;
+    vi.spyOn(orchestrator as any, 'resolveAutoRoutingDecision').mockReturnValue(mockDecision);
+    const switchSpy = vi
+      .spyOn(orchestrator as any, 'createAutoRoutedLLMFromDecision')
+      .mockReturnValue(vi.fn().mockResolvedValue('response'));
+
+    const nowSpy = vi.spyOn(Date, 'now');
+    let fakeNow = 1_700_000_000_000;
+    nowSpy.mockReturnValue(fakeNow);
+
+    try {
+      const handler = getHandler({ provider: 'auto' })!;
+      await handler(makeRateLimitInfo()); // strike 1 → counter 1
+      // 10 minutes pass — the provider ran healthy in between (real successes).
+      fakeNow += 10 * 60_000;
+      nowSpy.mockReturnValue(fakeNow);
+      const result = await handler(makeRateLimitInfo()); // strike 2 → window reset → 1
+
+      expect(result).toEqual({ action: 'retry' });
+      expect(switchSpy).not.toHaveBeenCalled();
+    } finally {
+      // Never leak the frozen Date.now into subsequent tests (registry parks,
+      // routing-history expiry and failureSession expirations all read it).
+      nowSpy.mockRestore();
+    }
+  });
+
+  it('should silently wait when storm guard finds no healthy alternative (default)', async () => {
+    Object.defineProperty(process.stdout, 'isTTY', {
+      value: true,
+      configurable: true,
+    });
+
+    // Real-world case: every ranked candidate is in circuit-breaker cooldown
+    const promptSpy = vi.spyOn(inquirer, 'prompt').mockResolvedValue({ action: 'abort' });
+    const mockDecision = {
+      provider: 'gemini',
+      model: 'gemini-flash-latest',
+      ranked: [
+        { provider: 'gemini', model: 'gemini-flash-latest', score: 1, inCooldown: true },
+        { provider: 'groq', model: 'llama-3.1-8b-instant', score: 0.5, inCooldown: true },
+      ],
+    } as any;
+    vi.spyOn(orchestrator as any, 'resolveAutoRoutingDecision').mockReturnValue(mockDecision);
+
+    const handler = getHandler({})!;
+    await handler(makeRateLimitInfo());
+    // No healthy alternative → silent wait + retry, NEVER an interactive prompt
+    const result = await handler(makeRateLimitInfo());
+    expect(result).toEqual({ action: 'retry' });
+    expect(promptSpy).not.toHaveBeenCalled();
+  });
+
+  it('should fall back to interactive prompt when storm guard finds no healthy alternative (askOnRateLimit opt-in)', async () => {
+    Object.defineProperty(process.stdout, 'isTTY', {
+      value: true,
+      configurable: true,
+    });
+
+    vi.spyOn(inquirer, 'prompt').mockResolvedValue({ action: 'abort' });
+    const mockDecision = {
+      provider: 'gemini',
+      model: 'gemini-flash-latest',
+      ranked: [
+        { provider: 'gemini', model: 'gemini-flash-latest', score: 1, inCooldown: true },
+        { provider: 'groq', model: 'llama-3.1-8b-instant', score: 0.5, inCooldown: true },
+      ],
+    } as any;
+    vi.spyOn(orchestrator as any, 'resolveAutoRoutingDecision').mockReturnValue(mockDecision);
+
+    const handler = getHandler({ askOnRateLimit: true })!;
+    await handler(makeRateLimitInfo());
+    // No healthy alternative → hits the interactive prompt (abort chosen)
+    expect(await handler(makeRateLimitInfo())).toEqual({ action: 'abort' });
   });
 
   // ── Model name display ─────────────────────────────────────────────────
@@ -671,7 +1018,7 @@ describe('Orchestrator — createRateLimitHandler', () => {
     vi.spyOn(inquirer, 'prompt').mockResolvedValue({ action: 'retry' });
     const infoSpy = vi.spyOn(logger, 'info');
 
-    const handler = getHandler({}, 'fallback-model')!;
+    const handler = getHandler({ askOnRateLimit: true }, 'fallback-model')!;
     await handler(makeRateLimitInfo({ modelName: 'qwen/qwen3-32b' }));
 
     // Model name is displayed via logger.info, not logger.warn
@@ -689,7 +1036,7 @@ describe('Orchestrator — createRateLimitHandler', () => {
     vi.spyOn(inquirer, 'prompt').mockResolvedValue({ action: 'retry' });
     const infoSpy = vi.spyOn(logger, 'info');
 
-    const handler = getHandler({}, 'llama-3.1-8b-instant')!;
+    const handler = getHandler({ askOnRateLimit: true }, 'llama-3.1-8b-instant')!;
     await handler(makeRateLimitInfo({ modelName: undefined }));
 
     // Should fall back to the currentModel from options
@@ -709,7 +1056,7 @@ describe('Orchestrator — createRateLimitHandler', () => {
     // Return an unknown action
     vi.spyOn(inquirer, 'prompt').mockResolvedValue({ action: 'unknown-option' });
 
-    const handler = getHandler({})!;
+    const handler = getHandler({ askOnRateLimit: true })!;
     const result = await handler(makeRateLimitInfo());
 
     // Fallback should be retry
@@ -1275,8 +1622,9 @@ describe('Orchestrator — auto model resolution', () => {
   function getHandler(
     options: OrchestratorOptions = {},
     model?: string,
+    boundProvider?: string,
   ): OnRateLimit | undefined {
-    return (orchestrator as any).createRateLimitHandler.call(orchestrator, options, model);
+    return (orchestrator as any).createRateLimitHandler.call(orchestrator, options, model, boundProvider);
   }
 
   const autoSingleWriterPlan = [{
@@ -1388,7 +1736,7 @@ describe('Orchestrator — auto model resolution', () => {
       .mockReturnValue(async () => 'routed');
     const createSpy = vi.spyOn(orchestrator as any, 'createLLMProvider');
 
-    const handler = getHandler({ provider: 'groq' })!;
+    const handler = getHandler({ provider: 'groq', askOnRateLimit: true })!;
     const result = await handler(makeRateLimitInfo());
 
     expect(result.action).toBe('switch-model');
@@ -1468,12 +1816,14 @@ describe('Orchestrator — auto-routed failure telemetry', () => {
 
     await expect(callLLM('build a login form')).rejects.toThrow('429');
 
-    // Telemetry learned the provider×model is dead → next task skips it
-    // predictively instead of failing into it again.
+    // Telemetry learned the provider×model is quota-parked → next task skips
+    // it predictively instead of failing into it again. Rate-limit must NOT
+    // demote the entry (transient — it auto-recovers after the window).
     const entry = getModelRegistry().getEntry('gemini', 'gemini-2.0-flash-exp');
     expect(entry).toBeDefined();
-    expect(entry!.status).toBe('unavailable');
+    expect(entry!.status).not.toBe('unavailable');
     expect(entry!.lastError).toContain('rate-limit');
+    expect(entry!.quotaParkedUntil).toBeGreaterThan(Date.now());
     expect(getModelRegistry().getBlockedProviders()).toContain('gemini');
   });
 
@@ -1505,6 +1855,160 @@ describe('Orchestrator — auto-routed failure telemetry', () => {
     const entry = getModelRegistry().getEntry('nim', 'meta/llama-3.1-8b-instruct');
     expect(entry?.status).toBe('unavailable');
     expect(entry?.lastError).toContain('model not found');
+  });
+
+  it('fails over to the next ranked provider on a retryable winner failure (gemini 503 → groq)', async () => {
+    const cm = new ConfigManager();
+    const orch = new Orchestrator(cm);
+
+    const failingGemini = makeFailingProvider(
+      new Error('Gemini API error (503): This model is currently experiencing high demand'),
+    );
+    const workingGroq = {
+      name: 'FakeGroq',
+      generate: vi.fn().mockResolvedValue('answer from groq'),
+      isAvailable: vi.fn().mockResolvedValue(true),
+      listModels: vi.fn().mockResolvedValue([]),
+      generateStream: vi.fn(),
+      getInfo: vi.fn().mockReturnValue('fake'),
+    };
+    vi.spyOn(ProviderFactory, 'createProvider').mockImplementation((providerType: any) =>
+      providerType === 'gemini' ? failingGemini : workingGroq,
+    );
+
+    const decision = {
+      provider: 'gemini',
+      model: 'gemini-flash-latest',
+      explanation: 'test routing',
+      score: 0.9,
+      taskProfile: undefined,
+      escalationApplied: false,
+      complexity: 'moderate',
+      ranked: [
+        { provider: 'gemini', score: 0.9, reason: 'winner' },
+        { provider: 'groq', score: 0.7, reason: 'fallback' },
+      ],
+    } as any;
+
+    const callLLM = (orch as any).createAutoRoutedLLMFromDecision(
+      { agentType: 'planner', description: 'write a plan' },
+      {},
+      decision,
+    );
+
+    // The winner 503s, but the router's next-ranked cloud provider answers.
+    await expect(callLLM('build a login form')).resolves.toBe('answer from groq');
+    // The winner's failure still reached shared telemetry (health decay — a
+    // single 503 is transient, so it is NOT predictively blocked).
+    const entry = getModelRegistry().getEntry('gemini', 'gemini-flash-latest');
+    expect(entry?.errorRate ?? 0).toBeGreaterThan(0);
+  });
+
+  it('does NOT fail over when the provider is pinned (ranked empty)', async () => {
+    const cm = new ConfigManager();
+    const orch = new Orchestrator(cm);
+
+    vi.spyOn(ProviderFactory, 'createProvider').mockReturnValue(
+      makeFailingProvider(new Error('Gemini API error (503): high demand')),
+    );
+
+    const decision = {
+      provider: 'gemini',
+      model: 'gemini-flash-latest',
+      explanation: 'pinned',
+      score: 0.9,
+      taskProfile: undefined,
+      escalationApplied: false,
+      complexity: 'moderate',
+      ranked: [], // pinned → no auto-ranked alternatives
+    } as any;
+
+    const callLLM = (orch as any).createAutoRoutedLLMFromDecision(
+      { agentType: 'planner', description: 'write a plan' },
+      {},
+      decision,
+    );
+
+    await expect(callLLM('hi')).rejects.toThrow('503');
+  });
+
+  it('continues the failover walk past an auth-failing candidate', async () => {
+    const cm = new ConfigManager();
+    const orch = new Orchestrator(cm);
+
+    const fail = (msg: string) => makeFailingProvider(new Error(msg));
+    const workingOpenrouter = {
+      name: 'FakeOpenRouter',
+      generate: vi.fn().mockResolvedValue('answer from openrouter'),
+      isAvailable: vi.fn().mockResolvedValue(true),
+      listModels: vi.fn().mockResolvedValue([]),
+      generateStream: vi.fn(),
+      getInfo: vi.fn().mockReturnValue('fake'),
+    };
+    vi.spyOn(ProviderFactory, 'createProvider').mockImplementation((providerType: any) => {
+      if (providerType === 'gemini') return fail('Gemini API error (503): high demand');
+      if (providerType === 'groq') return fail('Groq API error (401): unauthorized');
+      return workingOpenrouter;
+    });
+
+    const decision = {
+      provider: 'gemini',
+      model: 'gemini-flash-latest',
+      explanation: 'test',
+      score: 0.9,
+      taskProfile: undefined,
+      escalationApplied: false,
+      complexity: 'moderate',
+      ranked: [
+        { provider: 'gemini', score: 0.9, reason: 'winner' },
+        { provider: 'groq', score: 0.7, reason: 'candidate 1 (auth-broken)' },
+        { provider: 'openrouter', score: 0.5, reason: 'candidate 2' },
+      ],
+    } as any;
+
+    const callLLM = (orch as any).createAutoRoutedLLMFromDecision(
+      { agentType: 'planner', description: 'write a plan' },
+      {},
+      decision,
+    );
+
+    // groq's key is dead but openrouter answers — the walk must NOT abort.
+    await expect(callLLM('hi')).resolves.toBe('answer from openrouter');
+  });
+
+  it('rethrows the winner error when every failover candidate also fails', async () => {
+    const cm = new ConfigManager();
+    const orch = new Orchestrator(cm);
+
+    const fail = (msg: string) => makeFailingProvider(new Error(msg));
+    vi.spyOn(ProviderFactory, 'createProvider').mockImplementation((providerType: any) =>
+      fail(`${providerType} API error (503): high demand`),
+    );
+
+    const decision = {
+      provider: 'gemini',
+      model: 'gemini-flash-latest',
+      explanation: 'test',
+      score: 0.9,
+      taskProfile: undefined,
+      escalationApplied: false,
+      complexity: 'moderate',
+      ranked: [
+        { provider: 'gemini', score: 0.9, reason: 'winner' },
+        { provider: 'groq', score: 0.7, reason: 'candidate 1' },
+        { provider: 'openrouter', score: 0.5, reason: 'candidate 2' },
+      ],
+    } as any;
+
+    const callLLM = (orch as any).createAutoRoutedLLMFromDecision(
+      { agentType: 'planner', description: 'write a plan' },
+      {},
+      decision,
+    );
+
+    // The ORIGINAL winner error surfaces so the repair/escalation engine
+    // can act on the primary signal.
+    await expect(callLLM('hi')).rejects.toThrow('503');
   });
 
   it('M0.3: a session-excluded provider never wins a subsequent task (resolve consultation)', async () => {

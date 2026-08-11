@@ -4,6 +4,7 @@ import { logger } from '../utils/logger.js';
 import { getModelTags } from './model-catalog.js';
 import { getCostTracker } from '../learning/cost-tracker.js';
 import { requireAdapterModel } from '../learning/model-selection.js';
+import { attachHttpContext } from './http-error.js';
 
 const GEMINI_BASE_URL = 'https://generativelanguage.googleapis.com/v1beta/models';
 
@@ -76,7 +77,9 @@ export class GeminiAdapter implements InferenceProvider {
 
     if (!response.ok) {
       const errorBody = await response.text();
-      throw new Error(`Gemini API error (${response.status}): ${errorBody}`);
+      // Headers attached so extractRetryAfterMs() can read Retry-After and
+      // park for the provider's ACTUAL reset time (not a fixed window).
+      throw attachHttpContext(new Error(`Gemini API error (${response.status}): ${errorBody}`), response.status, response.headers);
     }
 
     const data = (await response.json()) as GeminiResponse;
@@ -123,7 +126,11 @@ export class GeminiAdapter implements InferenceProvider {
 
     if (!response.ok) {
       const errorBody = await response.text();
-      throw new Error(`Gemini streaming API error (${response.status}): ${errorBody}`);
+      throw attachHttpContext(
+        new Error(`Gemini streaming API error (${response.status}): ${errorBody}`),
+        response.status,
+        response.headers,
+      );
     }
 
     const reader = response.body?.getReader();

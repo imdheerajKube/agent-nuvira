@@ -332,8 +332,15 @@ export function getModelBadge(modelId: string): string | undefined {
     'deepseek-r1-distill-llama-70b': 'Strong reasoning with distilled efficiency',
     'deepseek-r1-distill-qwen-32b': 'Excellent reasoning in a compact package',
 
-    // Gemini
-    'gemini-2.0-flash-exp': 'Latest Gemini — fast, multimodal, strong all-around',
+    // Gemini — the 2.x line (2.0-flash-exp / 2.5-flash / 2.5-pro) is RETIRED
+    // for new accounts (404 "no longer available to new users"); the stable
+    // -latest aliases and 3.x previews are what a 2026 account can actually use.
+    'gemini-flash-latest': 'Latest Gemini Flash — fast, multimodal, strong all-around',
+    'gemini-pro-latest': 'Latest Gemini Pro — best quality, slower',
+    'gemini-flash-lite-latest': 'Lightweight Gemini Flash — fastest, lowest cost',
+    'gemini-3-flash-preview': 'Gemini 3 Flash — current-gen fast model',
+    'gemini-3-pro-preview': 'Gemini 3 Pro — current-gen highest quality',
+    'gemini-2.0-flash-exp': 'DEPRECATED — retired for new accounts (404); use gemini-flash-latest',
     'gemini-2.0-flash': 'Fast & capable — balances speed and quality',
     'gemini-1.5-flash': 'Quick responses with good quality',
     'gemini-1.5-pro': 'Best quality — slower but more accurate',

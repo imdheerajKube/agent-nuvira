@@ -386,10 +386,14 @@ describe('getModelBadge', () => {
   });
 
   it('should return badge for known Gemini models', () => {
-    expect(getModelBadge('gemini-2.0-flash-exp')).toContain('Latest Gemini');
+    // Current-gen (2026) aliases — the 2.x line is retired for new accounts.
+    expect(getModelBadge('gemini-flash-latest')).toContain('Latest Gemini Flash');
+    expect(getModelBadge('gemini-pro-latest')).toContain('Latest Gemini Pro');
+    expect(getModelBadge('gemini-3-flash-preview')).toContain('current-gen');
     expect(getModelBadge('gemini-2.0-flash')).toContain('balances');
     expect(getModelBadge('gemini-1.5-flash')).toContain('Quick');
     expect(getModelBadge('gemini-1.5-pro')).toContain('Best quality');
+    expect(getModelBadge('gemini-2.0-flash-exp')).toContain('DEPRECATED');
   });
 
   it('should return badge for known OpenRouter models', () => {

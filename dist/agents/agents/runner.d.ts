@@ -100,6 +100,16 @@ export declare class RunnerAgent extends Agent {
      */
     private isCommandAvailable;
     /**
+     * Rewrite interpreter tokens that don't exist on this machine to their
+     * versioned equivalents. On modern macOS/Ubuntu there is no `python` — only
+     * `python3` (and `pip3`) — so a command like `python main.py` exits 127
+     * even though Python IS installed. The repair loop was re-running the same
+     * broken `python …` command until the budget was exhausted. Normalizing
+     * here (before execution and before any retry) is what makes Python tasks
+     * actually runnable.
+     */
+    private normalizeInterpreter;
+    /**
      * Execute a command directly on the host machine.
      * Validates the command first, and falls back to LLM suggestion if the command is not available.
      */

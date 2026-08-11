@@ -2,6 +2,7 @@ import { logger } from '../utils/logger.js';
 import { getModelTags } from './model-catalog.js';
 import { getCostTracker } from '../learning/cost-tracker.js';
 import { requireAdapterModel } from '../learning/model-selection.js';
+import { attachHttpContext } from './http-error.js';
 const GEMINI_BASE_URL = 'https://generativelanguage.googleapis.com/v1beta/models';
 /**
  * Parse a Gemini SSE streaming response line.
@@ -57,7 +58,9 @@ export class GeminiAdapter {
         });
         if (!response.ok) {
             const errorBody = await response.text();
-            throw new Error(`Gemini API error (${response.status}): ${errorBody}`);
+            // Headers attached so extractRetryAfterMs() can read Retry-After and
+            // park for the provider's ACTUAL reset time (not a fixed window).
+            throw attachHttpContext(new Error(`Gemini API error (${response.status}): ${errorBody}`), response.status, response.headers);
         }
         const data = (await response.json());
         const content = data.candidates?.[0]?.content?.parts?.[0]?.text || '';
@@ -92,7 +95,7 @@ export class GeminiAdapter {
         });
         if (!response.ok) {
             const errorBody = await response.text();
-            throw new Error(`Gemini streaming API error (${response.status}): ${errorBody}`);
+            throw attachHttpContext(new Error(`Gemini streaming API error (${response.status}): ${errorBody}`), response.status, response.headers);
         }
         const reader = response.body?.getReader();
         if (!reader) {

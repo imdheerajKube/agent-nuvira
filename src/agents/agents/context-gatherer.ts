@@ -17,6 +17,7 @@ import { Agent, type AgentContext, type AgentResult, type Artifact } from '../ag
 import type { LLMCallFn } from '../agent.js';
 import { buildProjectFileTree, truncateTree } from '../utils/file-tree.js';
 import { logger } from '../../utils/logger.js';
+import { parseRetryAfterHint as parseRetryHintShared } from '../../learning/provider-fallback.js';
 
 /** File extensions we consider as source code */
 const SOURCE_EXTENSIONS = new Set([
@@ -45,17 +46,9 @@ const LONG_WAIT_THRESHOLD_MS = 3000;
 // ─── Rate-limit Helpers ────────────────────────────────────────────────────
 
 function parseRetryAfterHint(errorMessage: string): number | null {
-  const secondMatch = errorMessage.match(/try again in ([\d.]+)s/i);
-  if (secondMatch) {
-    const seconds = parseFloat(secondMatch[1]);
-    if (!isNaN(seconds) && seconds > 0) return Math.ceil(seconds * 1000);
-  }
-  const msMatch = errorMessage.match(/try again in (\d+)ms/i);
-  if (msMatch) {
-    const ms = parseInt(msMatch[1], 10);
-    if (!isNaN(ms) && ms > 0) return ms;
-  }
-  return null;
+  // Shared parser (provider-fallback.ts) — single source of truth covering
+  // "try again in Xs", "Retry-After: N", "resets in Nh Nm", …
+  return parseRetryHintShared(errorMessage);
 }
 
 function parseModelName(errorMessage: string): string | undefined {

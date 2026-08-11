@@ -20,6 +20,7 @@ import { detectLanguage } from '../editing/types.js';
 import { validateSyntax } from '../editing/ast.js';
 import { buildStructuralContext } from '../editing/edit.js';
 import { tryTier0Route } from '../learning/tier0-router.js';
+import { parseRetryAfterHint as parseRetryHintShared } from '../learning/provider-fallback.js';
 import { responseIndicatesNoChanges } from './agents/writer.js';
 
 // ─── Constants ──────────────────────────────────────────────────────────────
@@ -490,18 +491,8 @@ export class DefaultEditModule implements EditModule {
    * Parse the "try again in Xs" hint from a rate-limit error response.
    */
   private parseRetryAfterHint(errorMessage: string): number | null {
-    const secondMatch = errorMessage.match(/try again in ([\d.]+)s/i);
-    if (secondMatch) {
-      const seconds = parseFloat(secondMatch[1]);
-      if (!isNaN(seconds) && seconds > 0) return Math.ceil(seconds * 1000);
-    }
-
-    const msMatch = errorMessage.match(/try again in (\d+)ms/i);
-    if (msMatch) {
-      const ms = parseInt(msMatch[1], 10);
-      if (!isNaN(ms) && ms > 0) return ms;
-    }
-
-    return null;
+    // Shared parser (provider-fallback.ts) — single source of truth covering
+    // "try again in Xs", "Retry-After: N", "resets in Nh Nm", …
+    return parseRetryHintShared(errorMessage);
   }
 }

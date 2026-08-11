@@ -23,7 +23,9 @@ import { getQuotaLedger, accountIdForKey } from './quota-ledger.js';
 import { getKeyHygiene } from './key-hygiene.js';
 import {
   classifyFallbackError,
+  extractRetryAfterMs,
   getProviderFallback,
+  MIN_RATE_LIMIT_PARK_MS,
   recordRegistryFailure,
   type FallbackErrorType,
 } from './provider-fallback.js';
@@ -142,13 +144,27 @@ export function recordActionFailure(
     try {
       const limit = configManager.getAll().routing?.quota?.[providerType];
       windowMs = limit?.windowMs ?? windowMs;
-      getQuotaLedger().parkProvider(providerType, now + windowMs, failureKind);
+    } catch {
+      // Best-effort — config read must not crash a call.
+    }
+    // Honor the provider's OWN reset hint when the 429 carries one
+    // (Retry-After / "try again in 16s" / x-ratelimit-reset-* headers): a
+    // provider that says "resets in 16 minutes" must be re-admitted in ~16
+    // minutes, NOT parked for the full 24h default window. Fall back to the
+    // configured window when no hint is present (a bare 429 gives us nothing
+    // to trust, so the conservative window stands). Capped by windowMs and
+    // floored by MIN_RATE_LIMIT_PARK_MS so a 1s hint can't hot-loop.
+    const hintMs = extractRetryAfterMs(err);
+    const parkMs =
+      hintMs !== null ? Math.min(Math.max(hintMs, MIN_RATE_LIMIT_PARK_MS), windowMs) : windowMs;
+    try {
+      getQuotaLedger().parkProvider(providerType, now + parkMs, failureKind);
     } catch {
       // Best-effort — ledger bookkeeping must not crash a call.
     }
     // M2.3: park the SPECIFIC account/key too (rotation skips it while
     // other keys of the same provider stay usable).
-    parkAccountForKey(providerType, options?.apiKey, now + windowMs, failureKind);
+    parkAccountForKey(providerType, options?.apiKey, now + parkMs, failureKind);
   } else {
     // Server / network / timeout / unknown — transient but definitive enough
     // that the next message shouldn't re-pick this provider. Short cooldown,

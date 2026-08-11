@@ -15,8 +15,8 @@
  * ```
  */
 
-import { existsSync, readFileSync, writeFileSync } from 'node:fs';
-import { join } from 'node:path';
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { dirname, join } from 'node:path';
 import { execSync } from 'node:child_process';
 
 import { Agent, type AgentContext, type AgentResult } from '../agent.js';
@@ -67,7 +67,7 @@ export class PackageAgent extends Agent {
         case 'publish':
           return this.publish();
         case 'changelog':
-          return this.generateChangelog(callLLM);
+          return this.generateChangelog(context, callLLM);
         case 'full-publish':
           return this.fullPublish(context, taskDesc, callLLM);
         default:
@@ -276,7 +276,7 @@ export class PackageAgent extends Agent {
     }
   }
 
-  private async generateChangelog(callLLM: LLMCallFn): Promise<AgentResult> {
+  private async generateChangelog(context: AgentContext, callLLM: LLMCallFn): Promise<AgentResult> {
     try {
       // The `$(...)` command-substitution form below is bash-only and fails
       // on Windows cmd.exe — split it into two execSync calls instead:
@@ -305,12 +305,17 @@ export class PackageAgent extends Agent {
         changelogEntry = `## [Unreleased]\n${logLines.map((l) => `- ${l}`).join('\n')}`;
       }
 
-      const changelogPath = join(process.cwd(), 'CHANGELOG.md');
+      // Write to the project the agent is working in, NOT the CLI's cwd —
+      // running tests (or the CLI from another directory) previously dumped
+      // the entry into the REPO-root CHANGELOG.md and polluted it.
+      const changelogPath = join(context.workingDirectory || process.cwd(), 'CHANGELOG.md');
       let existingContent = '';
       if (existsSync(changelogPath)) {
         existingContent = readFileSync(changelogPath, 'utf-8');
       }
 
+      // Ensure the project dir exists (fresh scratch dirs may not) before writing.
+      mkdirSync(dirname(changelogPath), { recursive: true });
       const newContent = changelogEntry + '\n\n' + existingContent;
       writeFileSync(changelogPath, newContent, 'utf-8');
 

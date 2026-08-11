@@ -177,10 +177,12 @@ describe('E2E: registry learns the block, next pick skips it', () => {
       ),
     ).rejects.toThrow();
 
-    // ── 2. Registry learned the block (definitive, not transient) ──────────
+    // ── 2. Registry learned the block (quota-park, not permanent demotion) ─
     const registry = getModelRegistry();
-    expect(registry.getEntry('nim', MOCK_MODEL)?.status).toBe('unavailable');
-    expect(registry.getEntry('nim', MOCK_MODEL)?.lastError).toContain('rate-limit');
+    const entry = registry.getEntry('nim', MOCK_MODEL);
+    expect(entry?.status).not.toBe('unavailable'); // transient — park only
+    expect(entry?.lastError).toContain('rate-limit');
+    expect(entry?.quotaParkedUntil).toBeGreaterThan(Date.now());
     expect(registry.getBlockedProviders()).toContain('nim');
 
     // ── 3. Next pick SKIPS nim — registry block, not credential filtering ──

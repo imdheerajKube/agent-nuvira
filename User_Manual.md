@@ -1,6 +1,23 @@
 # Agent-Nuvira — User Manual
 
-**Version 1.61.4 | August 2026**
+**Version 1.62.2 | August 2026**
+
+### v1.62.2 — Automatic rate-limit recovery: the build never stops on a quota error
+
+- **Rate limits are now handled fully automatically — you are never interrupted mid-build.** The orchestrator's rate-limit handler waits out transient hits and silently moves the task to another provider when the current one is exhausted or rate-limiting repeatedly:
+  - **Transient hit** (reset hint ≤ 60s, e.g. "try again in 16.5s") → silently waits the hint and auto-retries. Waiting is cheaper than switching for a sub-minute pause.
+  - **Exhaustion** (reset hint > 60s, e.g. "resets in 17h 51m" — a daily-quota cap) → auto-switches to the router's next healthy provider **on the first hit**. The provider is down for a while; the task doesn't wait with it.
+  - **Storm** (2+ consecutive hits in one task) → auto-switches mid-task, even if each hit looked transient on its own.
+  - **Non-interactive runs (CI, pipes)** get the same silent auto-switch + auto-wait — previously they ground the same exhausted provider.
+- **Legacy interactive prompt is opt-in:** set `routing.askOnRateLimit: true` in `.buff/buffconfig.json` to be asked (wait / switch / skip / abort) on every rate limit — only ever shown on a real terminal.
+- **Honest "consecutive" semantics:** the storm counter resets after each successful auto-switch (the new provider starts fresh — one transient hit after 10 successes is NOT a storm) and strikes more than 5 minutes apart count as a new incident (a long healthy run between them means the provider recovered).
+- **Never "switch" to the provider you're already on:** the guard is seeded with the task's routed provider in auto mode too, so a fresh routing decision that re-picks the just-rate-limited provider (registry park lag) is skipped for the next healthy ranked provider.
+- **No ping-pong / no model leak:** a per-task tried-providers set prevents bouncing between two exhausted providers (e.g. gemini 503 + groq TPM); the auto-switch target resolves its own best verified model (`model: 'default'`), so a gemini model ID is never sent to groq.
+- **Example .buffconfig.json:**
+  ```json
+  {"routing": {"askOnRateLimit": true}}
+  ```
+  Leave it unset (or `false`) for the fully automatic default.
 
 ### v1.61.4 — Modality packs: browser, image, voice, vision (I2–I5)
 

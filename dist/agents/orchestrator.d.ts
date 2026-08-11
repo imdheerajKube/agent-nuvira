@@ -41,6 +41,14 @@ export interface OrchestratorOptions {
     /** Auto-route each agent to its recommended model from the ModelRouter */
     autoRouteModels?: boolean;
     /**
+     * Opt-in to the interactive rate-limit prompt (wait / switch / skip / abort).
+     * Default: false — rate limits are handled fully automatically (silent wait
+     * for transient hints, silent auto-switch to another provider when the
+     * current one is exhausted). Also settable via `routing.askOnRateLimit` in
+     * .buffconfig.json.
+     */
+    askOnRateLimit?: boolean;
+    /**
      * C3: NLU task-intent hint (router TaskIntent vocabulary) from the parsed
      * goal. Seeded into the planner routing decision's taskProfile.intent so the
      * orchestrator's strategy switch + the router's task-type see the SAME
@@ -286,8 +294,19 @@ export declare class Orchestrator {
     private createLLMProvider;
     private runAgent;
     /**
-     * Create the onRateLimit callback that prompts the user.
-     * Returns undefined if we're in non-interactive mode (no TTY or dry-run).
+     * Create the onRateLimit callback.
+     *
+     * Rate-limit recovery is FULLY AUTOMATIC by default (decision #26): the
+     * pipeline silently waits out transient hits (short reset hints) and silently
+     * auto-switches to another provider when the current one is exhausted or
+     * rate-limiting repeatedly — the user is never interrupted, and the build
+     * continues on whichever provider is healthy. The interactive prompt
+     * (wait / switch / skip / abort) is opt-in via `routing.askOnRateLimit: true`
+     * in .buffconfig.json and only ever appears on a real TTY.
+     *
+     * Returns undefined only for dry-run (no LLM calls happen anyway), so even
+     * non-interactive runs (CI, pipes) get silent auto-switch instead of grinding
+     * the same exhausted provider.
      */
     private createRateLimitHandler;
     private executeSingleTask;

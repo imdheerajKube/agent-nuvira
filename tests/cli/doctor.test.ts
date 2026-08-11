@@ -11,7 +11,8 @@
 import { describe, it, expect, beforeAll, afterAll } from 'vitest';
 import { createServer, type Server } from 'node:http';
 import type { AddressInfo } from 'node:net';
-import { writeFileSync, mkdirSync, rmSync } from 'node:fs';
+import { writeFileSync, mkdirSync, rmSync, mkdtempSync } from 'node:fs';
+import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
 import {
@@ -26,6 +27,34 @@ import {
 } from '../../src/cli/doctor.js';
 import type { BuffConfig } from '../../src/config/types.js';
 import { getMetrics, resetMetrics } from '../../src/enterprise/metrics.js';
+
+// ─── Hermetic env for runAllChecks ──────────────────────────────────────────
+// runAllChecks() (and ConfigManager default resolution) must never touch the
+// real ~/.buff on CI. Point config + memory at a temp dir, pin the vault to the
+// fast AES-file tier (BUFF_VAULT_PASSPHRASE — avoids the OS-keyring probe that
+// can hang on headless Windows runners), and force the pure-JS vector backend
+// (no native FAISS addon load). Restored in afterAll.
+const ORIG_DOCTOR_ENV: Record<string, string | undefined> = {
+  BUFF_CONFIG_DIR: process.env.BUFF_CONFIG_DIR,
+  BUFF_MEMORY_DIR: process.env.BUFF_MEMORY_DIR,
+  BUFF_VAULT_PASSPHRASE: process.env.BUFF_VAULT_PASSPHRASE,
+  BUFF_VECTOR_BACKEND: process.env.BUFF_VECTOR_BACKEND,
+};
+
+beforeAll(() => {
+  const base = mkdtempSync(join(tmpdir(), 'buff-doctor-'));
+  process.env.BUFF_CONFIG_DIR = join(base, 'cfg');
+  process.env.BUFF_MEMORY_DIR = join(base, 'memory');
+  process.env.BUFF_VAULT_PASSPHRASE = 'test-passphrase';
+  process.env.BUFF_VECTOR_BACKEND = 'json';
+});
+
+afterAll(() => {
+  for (const [key, value] of Object.entries(ORIG_DOCTOR_ENV)) {
+    if (value === undefined) delete process.env[key];
+    else process.env[key] = value;
+  }
+});
 
 // ─── Mock gateway-shaped server ─────────────────────────────────────────────
 
@@ -258,6 +287,8 @@ describe('doctor --enterprise (P7 M7.1)', () => {
   });
 
   it('runSystemChecks includes the G1 Fact Memory check (best-effort, never throws)', async () => {
+    // 15s budget: the full check suite runs native-free here, but keep a
+    // generous window for slow CI runners.
     const { ConfigManager } = await import('../../src/config/manager.js');
     const cm = new ConfigManager();
     const { system } = await runAllChecks(cm);
@@ -265,7 +296,7 @@ describe('doctor --enterprise (P7 M7.1)', () => {
     expect(factCheck).toBeDefined();
     expect(['pass', 'warn', 'fail']).toContain(factCheck!.status);
     expect(factCheck!.message).toMatch(/fact\(s\)/);
-  });
+  }, 15_000);
 
   it('runAllChecks (dashboard command-runner shared core) returns both system and enterprise arrays', async () => {
     // The dashboard's /api/admin/checks calls this SAME function as

@@ -564,9 +564,104 @@ describe('RunnerAgent', () => {
         rmSync(tmpDir, { recursive: true, force: true });
       }
     });
-  });
+  });    // ── Interpreter normalization (macOS/Linux have no bare `python`) ──
+    //
+    // A command like `python main.py` exits 127 on modern macOS/Ubuntu where
+    // only `python3` exists. The runner must rewrite the interpreter before
+    // execution so the repair loop stops re-running the same broken command.
 
-  // ─── Working Directory Edge Cases ───────────────────────────────────────
+    describe('interpreter normalization', () => {
+      /** Access private normalizeInterpreter via prototype */
+      function normalize(cmd: string) {
+        return (runner as any).normalizeInterpreter.call(runner, cmd);
+      }
+
+      it('rewrites bare python to python3 when python is missing but python3 exists', () => {
+        const spy = vi
+          .spyOn(runner as any, 'commandExists')
+          .mockImplementation((t: string) => t === 'python3' || t === 'pip3');
+        try {
+          expect(normalize('python hello.py')).toBe('python3 hello.py');
+          expect(normalize('python -m venv .venv')).toBe('python3 -m venv .venv');
+        } finally {
+          spy.mockRestore();
+        }
+      });
+
+      it('rewrites each &&-chained segment independently', () => {
+        const spy = vi
+          .spyOn(runner as any, 'commandExists')
+          .mockImplementation((t: string) => t === 'python3' || t === 'pip3');
+        try {
+          expect(
+            normalize('python3 -m venv .venv && source .venv/bin/activate && python addon/__init__.py'),
+          ).toBe('python3 -m venv .venv && source .venv/bin/activate && python3 addon/__init__.py');
+        } finally {
+          spy.mockRestore();
+        }
+      });
+
+      it('rewrites bare pip to pip3 when pip is missing but pip3 exists', () => {
+        const spy = vi
+          .spyOn(runner as any, 'commandExists')
+          .mockImplementation((t: string) => t === 'python3' || t === 'pip3');
+        try {
+          expect(normalize('pip install -r requirements.txt')).toBe('pip3 install -r requirements.txt');
+        } finally {
+          spy.mockRestore();
+        }
+      });
+
+      it('does not rewrite when the bare binary already exists', () => {
+        const spy = vi
+          .spyOn(runner as any, 'commandExists')
+          .mockImplementation(() => true);
+        try {
+          expect(normalize('python hello.py')).toBe('python hello.py');
+          expect(normalize('pip install x')).toBe('pip install x');
+        } finally {
+          spy.mockRestore();
+        }
+      });
+
+      it('does not rewrite when neither binary exists', () => {
+        const spy = vi
+          .spyOn(runner as any, 'commandExists')
+          .mockImplementation(() => false);
+        try {
+          expect(normalize('python hello.py')).toBe('python hello.py');
+        } finally {
+          spy.mockRestore();
+        }
+      });
+
+      it('does not mangle python3 or pip3 tokens already present', () => {
+        const spy = vi
+          .spyOn(runner as any, 'commandExists')
+          .mockImplementation((t: string) => t === 'python3' || t === 'pip3');
+        try {
+          expect(normalize('python3 app.py && python3 -m pip install x')).toBe(
+            'python3 app.py && python3 -m pip install x',
+          );
+        } finally {
+          spy.mockRestore();
+        }
+      });
+
+      it('leaves non-python commands untouched', () => {
+        const spy = vi
+          .spyOn(runner as any, 'commandExists')
+          .mockImplementation((t: string) => t === 'python3' || t === 'pip3');
+        try {
+          expect(normalize('node index.js')).toBe('node index.js');
+          expect(normalize('npm test')).toBe('npm test');
+        } finally {
+          spy.mockRestore();
+        }
+      });
+    });
+
+    // ─── Working Directory Edge Cases ───────────────────────────────────────
 
   describe('working directory edge cases', () => {
     let tmpDir: string;

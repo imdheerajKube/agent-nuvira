@@ -39,6 +39,16 @@ import type { McpToolEntry } from './agents/mcp-agent.js';
 import { getMCPManager, resetMCPManager } from '../mcp/manager.js';
 import { formatMcpToolsForPrompt } from './agents/mcp-agent.js';
 import { getModuleRegistry, type ModuleRegistry } from './module-registry.js';
+
+// Rate limits with a reset hint LONGER than this (e.g. "resets in 17h 51m" — a
+// daily-quota exhaustion) are treated as EXHAUSTED: the provider is down for a
+// while, so the pipeline silently auto-switches to another provider even on the
+// first hit. Shorter hints (e.g. Groq/Anthropic "try again in 16.5s" TPM blips)
+// are transient — a silent wait + retry is cheaper than switching.
+const AUTO_SWITCH_WAIT_THRESHOLD_MS = 60_000;
+// Strikes farther apart than this are NOT a "consecutive" storm — the provider
+// ran healthy in between (real successes take minutes), so the counter resets.
+const STORM_WINDOW_MS = 5 * 60_000;
 import { getEventBus, EventNames } from '../observability/event-bus.js';
 import type { EventBus } from '../observability/event-bus.js';
 import { DefaultReportModule, type ReportModule, type ReportFormat } from './report-module.js';
@@ -59,7 +69,7 @@ import {
 import { analyzeComplexity, type ComplexityLevel } from '../learning/hybrid-router.js';
 import { getModelRegistry } from '../learning/model-registry.js';
 import { buildAutoResolveOptions } from '../learning/resolve-options.js';
-import { recordRegistrySuccess } from '../learning/provider-fallback.js';
+import { classifyFallbackError, recordRegistrySuccess } from '../learning/provider-fallback.js';
 import { recordActionFailure, type FailureSessionState } from '../learning/failure-bookkeeping.js';
 import { resolveWorkingModel } from '../inference/model-validator.js';
 import { refreshModelRegistry } from '../inference/model-probe.js';
@@ -130,6 +140,14 @@ export interface OrchestratorOptions {
   reviewMode?: boolean;
   /** Auto-route each agent to its recommended model from the ModelRouter */
   autoRouteModels?: boolean;
+  /**
+   * Opt-in to the interactive rate-limit prompt (wait / switch / skip / abort).
+   * Default: false — rate limits are handled fully automatically (silent wait
+   * for transient hints, silent auto-switch to another provider when the
+   * current one is exhausted). Also settable via `routing.askOnRateLimit` in
+   * .buffconfig.json.
+   */
+  askOnRateLimit?: boolean;
   /**
    * C3: NLU task-intent hint (router TaskIntent vocabulary) from the parsed
    * goal. Seeded into the planner routing decision's taskProfile.intent so the
@@ -1497,119 +1515,242 @@ export class Orchestrator {
   }
 
   /**
-   * Create the onRateLimit callback that prompts the user.
-   * Returns undefined if we're in non-interactive mode (no TTY or dry-run).
+   * Create the onRateLimit callback.
+   *
+   * Rate-limit recovery is FULLY AUTOMATIC by default (decision #26): the
+   * pipeline silently waits out transient hits (short reset hints) and silently
+   * auto-switches to another provider when the current one is exhausted or
+   * rate-limiting repeatedly — the user is never interrupted, and the build
+   * continues on whichever provider is healthy. The interactive prompt
+   * (wait / switch / skip / abort) is opt-in via `routing.askOnRateLimit: true`
+   * in .buffconfig.json and only ever appears on a real TTY.
+   *
+   * Returns undefined only for dry-run (no LLM calls happen anyway), so even
+   * non-interactive runs (CI, pipes) get silent auto-switch instead of grinding
+   * the same exhausted provider.
    */
   private createRateLimitHandler(
     options: OrchestratorOptions,
     currentModel: string | undefined,
+    boundProvider?: string,
   ): OnRateLimit | undefined {
-    // Don't prompt in non-interactive or dry-run mode — just use auto-retry
-    if (options.dryRun || !process.stdout.isTTY) {
+    // Dry-run: no LLM calls occur, so no rate-limit handler is needed.
+    if (options.dryRun) {
       return undefined;
     }
 
+    // The interactive prompt is opt-in (routing.askOnRateLimit) and only
+    // reachable on a real TTY. Non-interactive runs (CI, pipes) get the same
+    // handler in SILENT mode — auto-switch + auto-wait, never a prompt.
+    const interactive = process.stdout.isTTY === true;
+    const askUser =
+      interactive &&
+      (options.askOnRateLimit ??
+        this.configManager.getAll().routing?.askOnRateLimit === true);
+
+    // Rate-limit STORM guard: a fresh handler is created per task, so this
+    // counter tracks CONSECUTIVE rate-limits WITHIN one task execution. After
+    // the second one, grinding the same provider's "wait and retry" is futile
+    // (the agent's callLLM is bound to that provider mid-task) — auto-switch
+    // to the router's next-ranked provider instead of prompting again.
+    //
+    // "Consecutive" is honest: (a) the counter resets to 0 after a successful
+    // auto-switch (the new provider starts a fresh streak — one transient hit
+    // on a provider that just succeeded 10x is NOT a storm), and (b) strikes
+    // farther apart than STORM_WINDOW_MS (a long healthy run between them) are
+    // treated as a fresh incident, not a continuation.
+    let consecutiveRateLimits = 0;
+    let lastRateLimitAt = 0;
+    // Providers already auto-switched-to this task. Guards against ping-pong
+    // between two providers that are BOTH in quota-storms (e.g. gemini 503 +
+    // groq TPM): their short hint-aware parks (~16s) can lapse mid-task, making
+    // each the fresh winner again right after we switched away from it.
+    const triedProviders = new Set<string>();
+    const pinnedProvider =
+      options.provider && options.provider !== 'auto' ? options.provider : undefined;
+    // Seed with the provider the agent is bound to in BOTH modes: pinned mode
+    // from options, auto mode from the caller (captured when the task's callLLM
+    // was routed). Without the auto-mode seed, a fresh decision that still
+    // picks the just-rate-limited provider (park lag) would "switch" to the
+    // very provider we're on — a wasted switch that immediately re-rate-limits.
+    // Note: this makes the exclusion per-task — the guard never auto-returns to
+    // the originally-bound provider even if it fully recovers mid-task (the
+    // ping-pong trade-off; a fresh task re-routes normally).
+    if (pinnedProvider) triedProviders.add(pinnedProvider);
+    if (boundProvider) triedProviders.add(boundProvider);
+
     return async (info) => {
-      // ── Stop the CLI spinner before showing interactive prompts ──────
+      // ── Stop the CLI spinner before any wait / prompt ────────────────
       const spl = options.spinner;
       if (spl) spl.stop();
+      // Honest "consecutive": a long healthy run between strikes resets the
+      // streak (Date.now is cheap; only consulted on the rare rate-limit path).
+      const now = Date.now();
+      if (lastRateLimitAt === 0 || now - lastRateLimitAt > STORM_WINDOW_MS) {
+        consecutiveRateLimits = 0;
+      }
+      consecutiveRateLimits++;
+      lastRateLimitAt = now;
+
+      // ── Auto-switch: storm (2+ in a row) OR exhaustion (long reset) ──
+      // A short reset hint (e.g. "try again in 16.5s") is TRANSIENT — waiting
+      // is cheaper than switching. A LONG hint (e.g. "resets in 17h 51m" — a
+      // daily-quota exhaustion) or repeated hits means the provider is down for
+      // a while: silently switch to the router's next healthy provider.
+      const exhausted = info.retryAfterMs > AUTO_SWITCH_WAIT_THRESHOLD_MS;
+      if (consecutiveRateLimits >= 2 || exhausted) {
+        try {
+          const task = { agentType: info.agentName.toLowerCase(), description: 'auto-failover' };
+          const decision = this.resolveAutoRoutingDecision(task, options);
+          // Auto mode trusts the fresh decision's winner: the hint-aware park
+          // (decision #23) has usually already moved it OFF the rate-limited
+          // provider, so the winner IS the best healthy pick — excluding it
+          // would skip ranked[0] for a worse ranked[1] provider. Pinned mode
+          // seeds triedProviders so the bound provider is never re-selected.
+          const target = decision.ranked?.find(
+            (c) => !c.inCooldown && !triedProviders.has(c.provider),
+          );
+          if (target) {
+            logger.warn(
+              `\u26A0\uFE0F  ${info.agentName} ${exhausted ? 'exhausted' : `rate-limited ${consecutiveRateLimits}x in a row`} — auto-switching to ${target.provider}…`,
+            );
+            this.eventBus.emit(EventNames.ORCHESTRATOR_AGENT_UPDATE, {
+              agentType: info.agentName.toLowerCase(),
+              stage: 'routing',
+              message: `⚠️ ${info.agentName} ${exhausted ? 'exhausted' : `rate-limited ${consecutiveRateLimits}x`} — auto-switched to ${target.provider}`,
+            }, 'orchestrator');
+            const callLLM = this.createAutoRoutedLLMFromDecision(task, options, {
+              ...decision,
+              provider: target.provider,
+              // ScoredProvider carries no model — and the spread must NOT leak
+              // the winner's model to the new provider (groq would get gemini's
+              // model ID → 404). 'default' is the codebase's "no pin" sentinel:
+              // resolveWorkingModel treats it as explicit=undefined and resolves
+              // the target provider's best VERIFIED model.
+              model: 'default',
+            });
+            // Remember this provider for the rest of the task — if IT then
+            // rate-limits too, we move on instead of coming back to it.
+            triedProviders.add(target.provider);
+            // The new provider starts a FRESH streak: one transient hit on it
+            // after a long successful run must NOT trigger another switch.
+            consecutiveRateLimits = 0;
+            lastRateLimitAt = 0;
+            if (spl) spl.start();
+            return { action: 'switch-model', callLLM };
+          }
+        } catch {
+          // Best-effort — fall through to wait/prompt below.
+        }
+      }
 
       const waitSeconds = (info.retryAfterMs / 1000).toFixed(1);
-      const modelStr = info.modelName
-        ? `Model: ${info.modelName}`
-        : currentModel
-          ? `Model: ${currentModel}`
-          : '';
 
-      console.log('');
-      logger.warn(`\u26A0\uFE0F  Rate limit hit for ${info.agentName}`);
-      logger.info(`   ${modelStr}`);
-      logger.info(`   Please wait ${waitSeconds}s before next request`);
-      console.log('');
+      // ── Interactive prompt (opt-in: routing.askOnRateLimit) ──────────
+      if (askUser) {
+        const modelStr = info.modelName
+          ? `Model: ${info.modelName}`
+          : currentModel
+            ? `Model: ${currentModel}`
+            : '';
 
-      const { action } = await inquirer.prompt<{ action: string }>([
-        {
-          type: 'list',
-          name: 'action',
-          message: `What would you like to do?`,
-          prefix: '\u{1F504}',
-          choices: [
-            { name: `\u23F3  Wait ${waitSeconds}s and retry`, value: 'retry' },
-            { name: '\u{1F500}  Switch to a different model', value: 'switch-model' },
-            { name: '\u23ED  Skip this step', value: 'skip' },
-            { name: '\u274C  Abort the pipeline', value: 'abort' },
-          ],
-        },
-      ]);
+        console.log('');
+        logger.warn(`\u26A0\uFE0F  Rate limit hit for ${info.agentName}`);
+        logger.info(`   ${modelStr}`);
+        logger.info(`   Please wait ${waitSeconds}s before next request`);
+        console.log('');
 
-      console.log('');
+        const { action } = await inquirer.prompt<{ action: string }>([
+          {
+            type: 'list',
+            name: 'action',
+            message: `What would you like to do?`,
+            prefix: '\u{1F504}',
+            choices: [
+              { name: `\u23F3  Wait ${waitSeconds}s and retry`, value: 'retry' },
+              { name: '\u{1F500}  Switch to a different model', value: 'switch-model' },
+              { name: '\u23ED  Skip this step', value: 'skip' },
+              { name: '\u274C  Abort the pipeline', value: 'abort' },
+            ],
+          },
+        ]);
 
-      // Helper to restart the spinner before returning
-      const restartSpinner = () => {
-        if (spl) spl.start();
-      };
+        console.log('');
 
-      if (action === 'retry') {
-        logger.info(`Waiting ${waitSeconds}s as requested...`);
-        restartSpinner();
-        return { action: 'retry' };
-      }
+        // Helper to restart the spinner before returning
+        const restartSpinner = () => {
+          if (spl) spl.start();
+        };
 
-      if (action === 'skip') {
-        logger.info('Skipping this step.');
-        restartSpinner();
-        return { action: 'skip' };
-      }
-
-      if (action === 'abort') {
-        logger.error('Pipeline aborted by user.');
-        // Don't restart spinner — pipeline is ending
-        return { action: 'abort' };
-      }
-
-      if (action === 'switch-model') {
-        // Show the categorized model picker so the user can choose visually
-        const picked = await showModelPicker(this.configManager);
-
-        if (!picked) {
-          logger.info('Model selection cancelled — retrying with current model.');
+        if (action === 'retry') {
+          logger.info(`Waiting ${waitSeconds}s as requested...`);
           restartSpinner();
           return { action: 'retry' };
         }
 
-        console.log('');
-        logger.info(`Switching to model: ${picked.model} (provider: ${picked.provider})`);
-
-        let newCallLLM: LLMCallFn;
-        if (picked.provider === 'auto' || isAutoModel(picked.model)) {
-          // Auto picked — route through the AutoModelRouter for this agent
-          // instead of handing the literal 'auto' provider/model to a real API.
-          newCallLLM = this.createAutoRoutedLLM(
-            { agentType: info.agentName || 'chat', description: 'Rate-limit retry' },
-            options,
-          );
-        } else {
-          // Create a new LLM provider with the switched model
-          const newOptions = {
-            ...options,
-            provider: picked.provider,
-            model: picked.model,
-          };
-          newCallLLM = withTraceCapture(this.createLLMProvider(newOptions), {
-            traceId: this.activeTraceId ?? '',
-            agentType: info.agentName || 'chat',
-            description: 'Rate-limit retry',
-            provider: picked.provider,
-            model: picked.model,
-          });
+        if (action === 'skip') {
+          logger.info('Skipping this step.');
+          restartSpinner();
+          return { action: 'skip' };
         }
 
+        if (action === 'abort') {
+          logger.error('Pipeline aborted by user.');
+          // Don't restart spinner — pipeline is ending
+          return { action: 'abort' };
+        }
+
+        if (action === 'switch-model') {
+          // Show the categorized model picker so the user can choose visually
+          const picked = await showModelPicker(this.configManager);
+
+          if (!picked) {
+            logger.info('Model selection cancelled — retrying with current model.');
+            restartSpinner();
+            return { action: 'retry' };
+          }
+
+          console.log('');
+          logger.info(`Switching to model: ${picked.model} (provider: ${picked.provider})`);
+
+          let newCallLLM: LLMCallFn;
+          if (picked.provider === 'auto' || isAutoModel(picked.model)) {
+            // Auto picked — route through the AutoModelRouter for this agent
+            // instead of handing the literal 'auto' provider/model to a real API.
+            newCallLLM = this.createAutoRoutedLLM(
+              { agentType: info.agentName || 'chat', description: 'Rate-limit retry' },
+              options,
+            );
+          } else {
+            // Create a new LLM provider with the switched model
+            const newOptions = {
+              ...options,
+              provider: picked.provider,
+              model: picked.model,
+            };
+            newCallLLM = withTraceCapture(this.createLLMProvider(newOptions), {
+              traceId: this.activeTraceId ?? '',
+              agentType: info.agentName || 'chat',
+              description: 'Rate-limit retry',
+              provider: picked.provider,
+              model: picked.model,
+            });
+          }
+
+          restartSpinner();
+          return { action: 'switch-model', callLLM: newCallLLM };
+        }
+
+        // Fallback: retry
         restartSpinner();
-        return { action: 'switch-model', callLLM: newCallLLM };
+        return { action: 'retry' };
       }
 
-      // Fallback: retry
-      restartSpinner();
+      // ── Default (fully automatic): silent wait + retry ──────────────
+      logger.warn(
+        `\u26A0\uFE0F  ${info.agentName} rate-limited — waiting ${waitSeconds}s and auto-retrying…`,
+      );
+      if (spl) spl.start();
       return { action: 'retry' };
     };
   }
@@ -1682,6 +1823,7 @@ export class Orchestrator {
         isAutoModel(options.model) || isAutoProvider(options.provider);
       const effectiveAgentType = strategy.effectiveAgentType || task.agentType;
       const agentModel = options.model || options.agentModels?.[effectiveAgentType] || options.agentModels?.[task.agentType];
+      let taskBoundProvider: string | undefined;
       const agentCallLLM = autoRouting
         ? this.createAutoRoutedLLM(
             {
@@ -1695,6 +1837,9 @@ export class Orchestrator {
               contextHintTokens: this.estimateTaskPayloadTokens(vault, task.description, contextFiles),
             },
             options,
+            (provider) => {
+              taskBoundProvider = provider;
+            },
           )
         : withTraceCapture(
             agentModel
@@ -1753,8 +1898,15 @@ export class Orchestrator {
       // attach to the correct board line (fresh instance per task → no races).
       agent.currentTaskId = task.id;
 
-      // Wire up the rate-limit handler so agents can prompt the user
-      vault.context.onRateLimit = this.createRateLimitHandler(options, agentModel || options.model);
+      // Wire up the rate-limit handler so agents can prompt the user. Pass the
+      // task's bound provider (auto mode) so the storm guard never auto-switches
+      // to the very provider the agent is on (park lag: the fresh decision can
+      // re-pick the just-rate-limited provider before the registry park lands).
+      vault.context.onRateLimit = this.createRateLimitHandler(
+        options,
+        agentModel || options.model,
+        taskBoundProvider,
+      );
 
       // ── Execute agent with optional auto-repair loop ────────────────
       let result: AgentResult;
@@ -2246,9 +2398,13 @@ export class Orchestrator {
   private createAutoRoutedLLM(
     task: { agentType: string; description: string; complexity?: string; contextHintTokens?: number; taskId?: string },
     options: OrchestratorOptions,
+    onRouted?: (provider: string) => void,
   ): LLMCallFn {
     const decisionOverride = this.routingDecisionOverrides.get(task.agentType);
     const decision = decisionOverride ?? this.resolveAutoRoutingDecision(task, options);
+    // Let the caller learn which provider this callLLM is bound to (used to
+    // seed the rate-limit storm guard's tried-providers set in auto mode).
+    onRouted?.(decision.provider);
     // Remember the ROUTED complexity for this task — the tier the LLM actually
     // runs at (the router may have escalated it). Repair escalation climbs
     // from this, never from the raw label. Keyed by task id; the planner
@@ -2347,6 +2503,18 @@ export class Orchestrator {
     });
     let workingModel: string | undefined;
     let validated = false;
+    // Failover targets: the router's OTHER ranked providers, best-first, only
+    // when this decision was AUTO-routed (ranked non-empty). A pinned provider
+    // (e.g. --provider groq) has an empty ranked list and is never overridden.
+    // Providers already in circuit-breaker cooldown are skipped by the router's
+    // scoring, so re-checking here is cheap and defensive.
+    const failoverCandidates =
+      decision.ranked && decision.ranked.length > 1
+        ? decision.ranked
+            .filter((c) => c.provider !== decision.provider && !c.inCooldown)
+            .slice(0, 3)
+        : [];
+
     // P0 reasoning trace: the auto-routed LLM carries its routing snapshot, so
     // every call records which provider×model the router picked AND the
     // verified model actually used. taskId (when present) links steps to the
@@ -2354,6 +2522,17 @@ export class Orchestrator {
     // the call behavior (errors still propagate to fallback/repair handling).
     return withTraceCapture(
       async (prompt: string, inferenceOptions?: InferenceOptions) => {
+        // Runs a provider×model through the SAME guarded path as `base`
+        // (injection scan, 'auto'-model guard, shared failure telemetry). The
+        // winner uses the validated working model; failover candidates let the
+        // adapter resolve its own best verified model (undefined).
+        const callWithProvider = (provider: string, model: string | undefined): Promise<string> => {
+          const llm =
+            provider === decision.provider
+              ? base
+              : this.createLLMProvider({ ...options, provider, model: undefined });
+          return llm(prompt, { ...inferenceOptions, model }) as Promise<string>;
+        };
         if (!validated) {
           validated = true;
           try {
@@ -2389,7 +2568,40 @@ export class Orchestrator {
         // Recording here instead of above avoids a double-write AND keeps
         // guardrail blocks (injection scan, thrown BEFORE the generate call)
         // out of the registry — those aren't provider failures.
-        return await base(prompt, { ...inferenceOptions, model: workingModel ?? decision.model });
+        //
+        // Cross-provider failover ("the reviewer hit a rate limit — why didn't
+        // it take another model?"): a RETRYABLE failure on the auto-picked
+        // winner (503 high-demand / 429 / network) walks to the router's next
+        // ranked cloud candidate instead of exhausting the repair budget on
+        // one provider. Auth failures never fail over (broken key ≠ other
+        // providers broken) and a user-PINNED provider (ranked empty) is
+        // honored as-is.
+        try {
+          return await callWithProvider(decision.provider, workingModel ?? decision.model);
+        } catch (err) {
+          const kind = classifyFallbackError(err);
+          if (kind === 'auth' || failoverCandidates.length === 0) throw err;
+          // Winner is transiently down — try the next-ranked candidates.
+          for (const candidate of failoverCandidates) {
+            try {
+              logger.warn(
+                `   ⚠️  ${decision.provider} (${kind}) — failing over to ${candidate.provider} for ${task.agentType}`,
+              );
+              this.eventBus.emit(EventNames.ORCHESTRATOR_AGENT_UPDATE, {
+                agentType: task.agentType,
+                stage: 'routing',
+                message: `⚠️ ${decision.provider} ${kind} — failing over to ${candidate.provider}`,
+              }, 'orchestrator');
+              return await callWithProvider(candidate.provider, undefined);
+            } catch (err2) {
+              // Recorded by createLLMProvider's shared telemetry. An auth
+              // failure on ONE candidate (e.g. groq's key rotated) must NOT
+              // abort the walk — other providers have their own keys. Only
+              // rethrow the winner's error once every candidate is exhausted.
+            }
+          }
+          throw err;
+        }
       },
       {
         traceId: this.activeTraceId ?? '',
