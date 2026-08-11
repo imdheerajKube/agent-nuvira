@@ -74,6 +74,7 @@ import { recordActionFailure, type FailureSessionState } from '../learning/failu
 import { resolveWorkingModel } from '../inference/model-validator.js';
 import { refreshModelRegistry } from '../inference/model-probe.js';
 import { recordRoutingDecision } from '../learning/routing-history.js';
+import { getQuotaLedger } from '../learning/quota-ledger.js';
 import { withTraceCapture, beginTrace, endTrace } from '../learning/reasoning-trace.js';
 import { createReviewFromResult } from '../team/review.js';
 import { indexFiles, retrieve, recordRetrievalStats, retrievalOptionsFromConfig, estimateTokens as retrievalEstimateTokens } from '../learning/retrieval.js';
@@ -1619,6 +1620,17 @@ export class Orchestrator {
               stage: 'routing',
               message: `⚠️ ${info.agentName} ${exhausted ? 'exhausted' : `rate-limited ${consecutiveRateLimits}x`} — auto-switched to ${target.provider}`,
             }, 'orchestrator');
+            // Surface the auto-switch on the dashboard Failover Timeline
+            // (quota-events.jsonl, same store the CLI's `model quota` last-20
+            // and the audit chain read). Best-effort — the timeline must never
+            // break routing.
+            getQuotaLedger().recordEvent(
+              'failover',
+              target.provider,
+              exhausted
+                ? `auto-switch (${info.agentName.toLowerCase()} exhausted: reset hint > ${AUTO_SWITCH_WAIT_THRESHOLD_MS / 1000}s)`
+                : `auto-switch (${info.agentName.toLowerCase()} rate-limited ${consecutiveRateLimits}x)`,
+            );
             const callLLM = this.createAutoRoutedLLMFromDecision(task, options, {
               ...decision,
               provider: target.provider,

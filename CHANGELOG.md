@@ -31,6 +31,21 @@ All notable changes to **Agent-Nuvira** are documented in this file.
   exhausted auto-switch, non-TTY silent retry, opt-in prompt, counter reset, time-window,
   auto-mode bound-provider seed) — 168/168 files pass.
 
+## v1.62.3 — Dashboard Failover Timeline shows auto-switches + decision #27
+
+- **Auto-switches are now visible on the dashboard.** Every rate-limit auto-switch the
+  orchestrator makes (storm or exhaustion) writes a `failover` event to the quota
+  timeline (`quota-events.jsonl`) with the reason ("rate-limited 2x" / "exhausted"), so
+  the dashboard's 🛟 **Failover Timeline** card shows mid-task provider swaps live — same
+  store the CLI `model quota` last-20 and the audit chain read. Verified in the live
+  NVDA-addon run: the "auto-switched to local" / "auto-switched to groq" events now land
+  in the timeline instead of only the event bus.
+- **Decision #27** — `routing.askOnRateLimit: true` documented as the explicit opt-in
+  for the legacy interactive rate-limit prompt (TTY only), with the revised-auto
+  rationale (default = fully automatic; opt-in for operators who want to intervene).
+- **Tests:** new orchestrator regression — an auto-switch records `failover` on the
+  quota ledger (82/82 orchestrator, 168/168 files).
+
 ## v1.62.1 — Fix: rate-limit no longer permanently kills cloud models
 
 - **Registry (model-registry.ts):** a `rate-limit` failure now PARKS an entry without
