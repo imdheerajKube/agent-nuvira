@@ -274,14 +274,21 @@ export class WorkspaceStore {
   }
 
   private tryOpenSqlite(): boolean {
+    let db: DatabaseSyncLike | null = null;
     try {
       const mod = require('node:sqlite') as { DatabaseSync: new (path: string) => DatabaseSyncLike };
-      const db = new mod.DatabaseSync(this.dbPath);
+      db = new mod.DatabaseSync(this.dbPath);
       db.exec('PRAGMA journal_mode = WAL');
       db.exec(CREATE_TABLE_SQL);
       this.db = db;
       return true;
     } catch {
+      // Close the half-opened handle: a corrupt DB leaves `db` allocated, and
+      // on Windows an open workspaces.db handle makes rmSync() of the config
+      // dir fail with EBUSY (POSIX allows deleting open files, Windows does not).
+      try {
+        db?.close();
+      } catch { /* already closed */ }
       this.db = null;
       return false;
     }

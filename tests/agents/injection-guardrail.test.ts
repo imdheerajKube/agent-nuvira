@@ -19,6 +19,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { Orchestrator } from '../../src/agents/orchestrator.js';
 import { ConfigManager } from '../../src/config/manager.js';
+import { resetWorkspaceStore } from '../../src/config/workspace.js';
 
 // ─── Hermetic memory + config dirs ──────────────────────────────────────────
 // execute() begins a reasoning trace (P0) on every run — pin BUFF_MEMORY_DIR
@@ -160,6 +161,9 @@ afterEach(() => {
 });
 
 afterAll(() => {
+  // Close the SQLite workspace handle BEFORE removing the dir — an open
+  // workspaces.db makes rmSync fail on Windows (EBUSY).
+  resetWorkspaceStore();
   rmSync(cfgDir, { recursive: true, force: true });
   if (origConfigDir === undefined) delete process.env.BUFF_CONFIG_DIR;
   else process.env.BUFF_CONFIG_DIR = origConfigDir;

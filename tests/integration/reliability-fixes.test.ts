@@ -25,6 +25,7 @@ import { join } from 'node:path';
 
 import { Orchestrator } from '../../src/agents/orchestrator.js';
 import { ProviderFactory } from '../../src/inference/factory.js';
+import { resetWorkspaceStore } from '../../src/config/workspace.js';
 
 const root = mkdtempSync(join(tmpdir(), 'buff-relfix-'));
 const cfgDir = join(root, '.buff');
@@ -39,6 +40,9 @@ beforeAll(() => {
 });
 
 afterAll(() => {
+  // Close the SQLite workspace handle BEFORE removing the dir — an open
+  // workspaces.db makes rmSync fail on Windows (EBUSY).
+  resetWorkspaceStore();
   if (ORIG_CONFIG_DIR === undefined) delete process.env.BUFF_CONFIG_DIR;
   else process.env.BUFF_CONFIG_DIR = ORIG_CONFIG_DIR;
   if (ORIG_MEMORY_DIR === undefined) delete process.env.BUFF_MEMORY_DIR;

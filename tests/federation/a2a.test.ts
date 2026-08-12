@@ -15,6 +15,7 @@ import { createServer, type AddressInfo } from 'node:net';
 import { mkdtempSync, rmSync, writeFileSync, mkdirSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
+import { resetWorkspaceStore } from '../../src/config/workspace.js';
 
 // ─── Hermetic config dir ────────────────────────────────────────────────────
 // The delegated-task tests spin a REAL A2A server whose Orchestrator processes
@@ -58,6 +59,9 @@ import {
 } from '../../src/federation/a2a-client.js';
 
 afterAll(() => {
+  // Close the SQLite workspace handle BEFORE removing the dir — an open
+  // workspaces.db makes rmSync fail on Windows (EBUSY).
+  resetWorkspaceStore();
   rmSync(a2aCfgDir, { recursive: true, force: true });
   if (origA2aConfigDir === undefined) delete process.env.BUFF_CONFIG_DIR;
   else process.env.BUFF_CONFIG_DIR = origA2aConfigDir;
