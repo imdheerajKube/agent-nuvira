@@ -631,8 +631,10 @@ describe('RunnerAgent', () => {
     // A command like `python main.py` exits 127 on modern macOS/Ubuntu where
     // only `python3` exists. The runner must rewrite the interpreter before
     // execution so the repair loop stops re-running the same broken command.
+    // Skipped on Windows: normalizeInterpreter is a deliberate no-op there
+    // (the native `python` launcher exists, so there is nothing to rewrite).
 
-    describe('interpreter normalization', () => {
+    describe.skipIf(process.platform === 'win32')('interpreter normalization', () => {
       /** Access private normalizeInterpreter via prototype */
       function normalize(cmd: string) {
         return (runner as any).normalizeInterpreter.call(runner, cmd);

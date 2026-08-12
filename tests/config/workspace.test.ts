@@ -138,6 +138,12 @@ describe('WorkspaceStore', () => {
       expect(existsSync(store.status().dbPath)).toBe(true);
 
       store.recordRun({ cwd: testDir, goal: 'sqlite goal', summary: 'ok', sessionId: 's1' });
+      // Close the first handle before a second store for the SAME dir replaces
+      // it in the per-dir cache — otherwise resetWorkspaceStore() only closes
+      // the latest store and the first sqlite handle stays open, making the
+      // afterEach rmSync fail on Windows (EBUSY — Windows cannot delete an
+      // open file).
+      store.close();
       const fresh = new WorkspaceStore(testDir, { forceBackend: 'sqlite' });
       expect(fresh.getProjectForCwd(testDir).lastGoal).toBe('sqlite goal');
       expect(fresh.status().projectCount).toBe(1);

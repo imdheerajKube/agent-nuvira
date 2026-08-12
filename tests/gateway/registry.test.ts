@@ -11,6 +11,7 @@ import { join } from 'node:path';
 import { GatewayRegistry, eventToStatusLine } from '../../src/gateway/registry.js';
 import type { ChannelAdapter, InboundMessage, MessageHandler } from '../../src/gateway/adapters.js';
 import { getEventBus, EventNames } from '../../src/observability/event-bus.js';
+import { resetWorkspaceStore } from '../../src/config/workspace.js';
 
 const cfgDir = mkdtempSync(join(tmpdir(), 'buff-gw-reg-'));
 const ORIG_CONFIG_DIR = process.env.BUFF_CONFIG_DIR;
@@ -32,6 +33,9 @@ beforeAll(() => {
 });
 
 afterAll(() => {
+  // Close the SQLite workspace handle BEFORE removing the dir — an open
+  // workspaces.db makes rmSync fail on Windows (EBUSY).
+  resetWorkspaceStore();
   if (ORIG_CONFIG_DIR === undefined) delete process.env.BUFF_CONFIG_DIR;
   else process.env.BUFF_CONFIG_DIR = ORIG_CONFIG_DIR;
   if (ORIG_MEMORY_DIR === undefined) delete process.env.BUFF_MEMORY_DIR;
