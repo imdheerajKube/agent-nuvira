@@ -42,6 +42,18 @@ import { ROLES, roleCan, type Role } from '../enterprise/rbac.js';
 import { clearModelListCache } from '../inference/model-validator.js';
 import { probeProviderList } from '../inference/model-probe.js';
 import { CATALOG_PROVIDER_IDS, getCatalogProvider } from '../inference/provider-catalog.js';
+import { readHubData } from './hub-data.js';
+import { setToolsetEnabled } from '../tools/toolsets.js';
+import { setSkillEnabled } from '../learning/hub-skill-catalog.js';
+// I11 — dashboard channel send-test: the same registry/adapters `buff gateway
+// send` uses, so a Channels-tab test message behaves identically to the CLI.
+// GatewayRegistry is intentionally a LAZY import inside the handler: it pulls
+// the whole pipeline (pipeline-tool → cli/router, which reads package.json at
+// module top level) — loading it at server-import time breaks test files that
+// mock node:fs before importing the server (router's package.json read would
+// hit the mocked readFileSync).
+import { createConfiguredAdapters } from '../gateway/adapters.js';
+import { ChannelDirectory, PLATFORM_ENV_VARS } from '../gateway/channel-directory.js';
 
 // ─── Constants ──────────────────────────────────────────────────────────────
 
@@ -2232,6 +2244,20 @@ function handleRequest(req: IncomingMessage, res: ServerResponse): void {
     return;
   }
 
+  // ── Agent Hub (I4) — aggregated read for the Skills/Tools/Channels/Artifacts
+  // tabs. One endpoint the AgentHub panel polls; every sub-read degrades to
+  // empty data, never a crash. Write toggles live under /api/admin/hub/*.
+  // Defensive try/catch — readHubData is best-effort by design, but a broken
+  // config/disk must surface as a 500 JSON, never a hanging request.
+  if (pathname === '/api/hub') {
+    try {
+      writeJson(res, 200, readHubData());
+    } catch (err) {
+      writeJson(res, 500, { error: err instanceof Error ? err.message : String(err) });
+    }
+    return;
+  }
+
   // ── Admin command-runner: run ALL state commands on demand ───────────
   // The dashboard executes doctor/system/enterprise checks (one source with
   // `buff doctor` — runAllChecks) so the user never types a command. Read
@@ -2329,6 +2355,153 @@ function handleRequest(req: IncomingMessage, res: ServerResponse): void {
   if (pathname === '/api/admin/logout' && req.method === 'POST') {
     adminSessions.revoke(bearerToken(req));
     writeJson(res, 200, { ok: true });
+    return;
+  }
+
+  // ── Agent Hub toggles (I5) — admin-gated writes honored by the I1 runtime
+  // gate (tool-loop schema + execution gating), so the dashboard toggle is
+  // NEVER cosmetic. Same config the CLI writes (`buff tools toolsets`);
+  // capability control rides on routing.operate (admin or operator).
+  if (pathname.startsWith('/api/admin/hub/toolsets/') && req.method === 'PUT') {
+    void (async () => {
+      const session = adminSessions.validate(bearerToken(req));
+      if (!session) {
+        writeJson(res, 401, { ok: false, error: 'Not authenticated — log in first.' });
+        return;
+      }
+      if (!roleCan(session.role, 'routing.operate')) {
+        writeJson(res, 403, {
+          ok: false,
+          error: `Access denied — role '${session.role}' cannot change tool capabilities (requires admin or operator).`,
+        });
+        return;
+      }
+      // Validate the toolset name on the RAW segment — toolset ids are
+      // lowercase alphanumeric + hyphen and never need URL-decoding, so the
+      // allowlist here is both throw-free (no decodeURIComponent → no URIError
+      // crash on '%zz' inputs) and authoritative.
+      const name = pathname.slice('/api/admin/hub/toolsets/'.length);
+      if (!/^[a-z0-9-]+$/.test(name)) {
+        writeJson(res, 400, { ok: false, error: 'Invalid toolset name.' });
+        return;
+      }
+      const body = await readJsonBody(req);
+      if (!body || typeof body.enabled !== 'boolean') {
+        writeJson(res, 400, { ok: false, error: 'Invalid JSON body — expected { enabled: boolean }.' });
+        return;
+      }
+      try {
+        setToolsetEnabled(name, body.enabled, new ConfigManager());
+        writeJson(res, 200, { ok: true, toolset: name, enabled: body.enabled });
+      } catch (err) {
+        writeJson(res, 400, { ok: false, error: err instanceof Error ? err.message : String(err) });
+      }
+    })();
+    return;
+  }
+
+  // ── Agent Hub skill toggles (P3) — admin-gated writes honored by the I7
+  // match gate (compiled findMatch + hub catalog), so the toggle is NEVER
+  // cosmetic. Same `skills.disabled[]` config the CLI writes; capability
+  // control rides on routing.operate (admin or operator).
+  if (pathname.startsWith('/api/admin/hub/skills/') && req.method === 'PUT') {
+    void (async () => {
+      const session = adminSessions.validate(bearerToken(req));
+      if (!session) {
+        writeJson(res, 401, { ok: false, error: 'Not authenticated — log in first.' });
+        return;
+      }
+      if (!roleCan(session.role, 'routing.operate')) {
+        writeJson(res, 403, {
+          ok: false,
+          error: `Access denied — role '${session.role}' cannot change skill capabilities (requires admin or operator).`,
+        });
+        return;
+      }
+      // Validate the skill id on the RAW segment — skill ids are lowercase
+      // alphanumeric + hyphen (the sandbox rule shared by installs and the
+      // catalog) and never need URL-decoding, so the allowlist here is both
+      // throw-free (no decodeURIComponent → no URIError crash on '%zz') and
+      // authoritative. Unknown-but-well-formed ids fall through to
+      // setSkillEnabled's typo-safety check (400).
+      const name = pathname.slice('/api/admin/hub/skills/'.length);
+      if (!/^[a-z0-9-]+$/.test(name)) {
+        writeJson(res, 400, { ok: false, error: 'Invalid skill name.' });
+        return;
+      }
+      const body = await readJsonBody(req);
+      if (!body || typeof body.enabled !== 'boolean') {
+        writeJson(res, 400, { ok: false, error: 'Invalid JSON body — expected { enabled: boolean }.' });
+        return;
+      }
+      try {
+        setSkillEnabled(name, body.enabled, new ConfigManager());
+        writeJson(res, 200, { ok: true, skill: name, enabled: body.enabled });
+      } catch (err) {
+        writeJson(res, 400, { ok: false, error: err instanceof Error ? err.message : String(err) });
+      }
+    })();
+    return;
+  }
+
+  // ── Agent Hub channel send-test (I11) — admin-gated gateway send ────────
+  // Mirrors `buff gateway send <target> <text>`: resolve the target (alias or
+  // platform:channelId) through the SAME ChannelDirectory, then send through
+  // the SAME GatewayRegistry + configured adapters. Rides on routing.operate
+  // (admin or operator) like the toolset/skill toggles. The dashboard process
+  // must have the platform env tokens set (e.g. BUFF_SMTP_HOST) — the error
+  // message says so when the adapter is unconfigured.
+  if (pathname === '/api/admin/hub/channels/send' && req.method === 'POST') {
+    void (async () => {
+      const session = adminSessions.validate(bearerToken(req));
+      if (!session) {
+        writeJson(res, 401, { ok: false, error: 'Not authenticated — log in first.' });
+        return;
+      }
+      if (!roleCan(session.role, 'routing.operate')) {
+        writeJson(res, 403, {
+          ok: false,
+          error: `Access denied — role '${session.role}' cannot send channel messages (requires admin or operator).`,
+        });
+        return;
+      }
+      const body = await readJsonBody(req);
+      const target = typeof body?.target === 'string' ? body.target.trim() : '';
+      const text = typeof body?.text === 'string' ? body.text : '';
+      if (!target || target.length > 128) {
+        writeJson(res, 400, { ok: false, error: 'Invalid target — expected an alias or platform:channelId (max 128 chars).' });
+        return;
+      }
+      if (!text || text.length > 4000) {
+        writeJson(res, 400, { ok: false, error: 'Invalid text — expected a non-empty message (max 4000 chars).' });
+        return;
+      }
+      const ref = new ChannelDirectory().resolve(target);
+      if (!ref) {
+        writeJson(res, 400, { ok: false, error: `Unknown channel target '${target}' — use an alias or platform:channelId.` });
+        return;
+      }
+      const { GatewayRegistry } = await import('../gateway/registry.js');
+      const registry = new GatewayRegistry({ streamEvents: false });
+      for (const adapter of createConfiguredAdapters()) registry.register(adapter);
+      // Bound the send — the webhook adapters use bare fetch with no internal
+      // timeout, so a hung endpoint must not wedge the dashboard request.
+      // The underlying fetch continues in the background (harmless; the
+      // ledger/CLI paths do the same), but the route always answers.
+      const ok = await Promise.race([
+        registry.sendToRef(ref, text),
+        new Promise<boolean>((resolve) => setTimeout(() => resolve(false), 15000)),
+      ]);
+      if (!ok) {
+        const envVars = PLATFORM_ENV_VARS[ref.platform].join(', ');
+        writeJson(res, 400, {
+          ok: false,
+          error: `Send failed — the '${ref.platform}' adapter is not configured in the dashboard process (set ${envVars} and restart) or the endpoint timed out.`,
+        });
+        return;
+      }
+      writeJson(res, 200, { ok: true, target, platform: ref.platform, channelId: ref.channelId });
+    })();
     return;
   }
 

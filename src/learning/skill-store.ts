@@ -18,6 +18,7 @@ import { homedir } from 'node:os';
 
 import type { Skill, SkillSummary, SkillParameter } from './skill-types.js';
 import { MAX_SKILLS } from './skill-types.js';
+import { BUNDLED_SKILLS } from '../skills/bundled-skills.js';
 import { logger } from '../utils/logger.js';
 
 // ─── Constants ──────────────────────────────────────────────────────────────
@@ -83,6 +84,66 @@ export class SkillStore {
   constructor() {
     ensureDir();
     this.index = this.loadIndex();
+    // Seed first-party bundled skills so every install gets them (idempotent:
+    // a same-version bundled skill already on disk is left untouched, so
+    // user edits survive re-seeding). Best-effort — never break startup.
+    try {
+      this.seedBundledSkills();
+    } catch {
+      // Best-effort — a seeding failure must never break the store.
+    }
+  }
+
+  /**
+   * Install first-party bundled skills (src/skills/bundled-skills.ts) into the
+   * user skill store. Idempotent — a bundled skill whose version matches the
+   * on-disk version is NOT overwritten (preserves user edits and usage stats);
+   * a newer bundled version replaces the older one.
+   *
+   * @returns The number of skills seeded/updated.
+   */
+  seedBundledSkills(): number {
+    let seeded = 0;
+    for (const skill of BUNDLED_SKILLS) {
+      const existing = this.get(skill.id);
+      if (existing && existing.version === skill.version) {
+        // Same version already on disk — preserve it (user edits + usage
+        // stats survive). But the INDEX may be out of sync (e.g. an
+        // index.json clear/corruption while the skill file survived):
+        // findMatch/getAll read the index, so an unindexed skill silently
+        // disappears. Re-register it without touching the file.
+        if (!this.index.skills.some((s) => s.id === skill.id)) {
+          this.index.skills.push({
+            id: skill.id,
+            name: skill.name,
+            description: skill.description,
+            tags: skill.tags,
+            qualityScore: skill.qualityScore,
+            usageCount: existing.usageCount,
+            createdAt: existing.createdAt,
+            lastUsedAt: existing.lastUsedAt,
+          });
+          this.saveIndex();
+        }
+        continue;
+      }
+      // Keep the user's usage count when upgrading a bundled skill. Spread
+      // a copy so the module-level BUNDLED_SKILLS singletons are never
+      // mutated (shared state across store instances). First-time seeds get a
+      // FRESH timestamp so decay/quality reports treat them as new (a fixed
+      // 2025 timestamp would make `buff skill gc` prune a freshly-seeded
+      // first-party skill as 120+ days old).
+      const now = Date.now();
+      const toSave: Skill = {
+        ...skill,
+        usageCount: existing?.usageCount ?? 0,
+        lastUsedAt: existing?.lastUsedAt ?? now,
+        createdAt: existing?.createdAt ?? now,
+      };
+      this.save(toSave);
+      seeded++;
+    }
+    return seeded;
   }
 
   // ── Public API ──────────────────────────────────────────────────────────
@@ -302,6 +363,10 @@ export class SkillStore {
         toRemove.push(entry.id);
         continue;
       }
+      // First-party bundled skills are exempt from decay GC — they ship with
+      // the product and re-seed on every install, so pruning them as "expired"
+      // is always wrong (they would just reappear on the next store load).
+      if (skill.sourceTrajectoryIds.includes('bundled')) continue;
       const score = this.computeDecayScore(skill);
       if (score < MIN_SKILL_SCORE) {
         toRemove.push(entry.id);

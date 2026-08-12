@@ -1606,6 +1606,10 @@ body {
   color: var(--text-secondary);
 }
 
+.admin-row-msg-err {
+  color: var(--accent-red);
+}
+
 .admin-empty-cell {
   text-align: center;
   color: var(--text-secondary);
@@ -1711,4 +1715,319 @@ body {
   border-radius: 6px;
   padding: 6px 8px;
   font-size: 12px;
+}
+
+/* ═══ Agent Hub (I4/I5 — Skills / Tools / Channels / Artifacts) ═══ */
+
+.hub-tabs {
+  display: flex;
+  gap: 6px;
+  flex-wrap: wrap;
+  margin: 16px 0;
+  border-bottom: 1px solid var(--border-light);
+  padding-bottom: 10px;
+}
+
+.hub-tab {
+  background: var(--bg-tertiary);
+  color: var(--text-secondary);
+  border: 1px solid var(--border-light);
+  border-radius: 8px;
+  padding: 8px 14px;
+  font-size: 13px;
+  cursor: pointer;
+  transition: var(--transition);
+}
+
+.hub-tab:hover {
+  background: var(--bg-hover);
+  color: var(--text-primary);
+  border-color: var(--border);
+}
+
+.hub-tab.active {
+  background: var(--accent-blue);
+  border-color: var(--accent-blue);
+  color: #0d1117;
+  font-weight: 600;
+}
+
+.hub-tab-count {
+  margin-left: 6px;
+  background: rgba(0, 0, 0, 0.25);
+  border-radius: 10px;
+  padding: 1px 8px;
+  font-size: 11px;
+  font-weight: 700;
+}
+
+.hub-tab.active .hub-tab-count {
+  background: rgba(0, 0, 0, 0.3);
+}
+
+.hub-toolset-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(320px, 1fr));
+  gap: 12px;
+  margin-top: 14px;
+}
+
+.hub-card {
+  background: var(--bg-card);
+  border: 1px solid var(--border-light);
+  border-radius: 10px;
+  padding: 14px;
+  transition: var(--transition);
+}
+
+.hub-card:hover {
+  border-color: var(--border);
+}
+
+.hub-card-disabled {
+  opacity: 0.72;
+  border-color: var(--accent-red);
+}
+
+.hub-card-top {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+  gap: 10px;
+}
+
+.hub-card-title {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+
+.hub-card-name {
+  font-weight: 600;
+  font-size: 14px;
+}
+
+.hub-card-id {
+  font-size: 11px;
+  color: var(--text-muted);
+  font-family: 'SF Mono', Menlo, Consolas, monospace;
+}
+
+.hub-card-desc {
+  margin: 8px 0;
+  color: var(--text-secondary);
+  font-size: 12px;
+}
+
+.hub-card-tools {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-top: 6px;
+}
+
+.hub-chip {
+  background: rgba(88, 166, 255, 0.12);
+  color: var(--accent-blue);
+  border: 1px solid rgba(88, 166, 255, 0.25);
+  border-radius: 6px;
+  padding: 2px 8px;
+  font-size: 11px;
+  font-family: 'SF Mono', Menlo, Consolas, monospace;
+}
+
+.hub-card-note {
+  margin-top: 10px;
+  font-size: 11px;
+  color: var(--accent-yellow);
+}
+
+/* Switch (role=switch) */
+.hub-switch {
+  position: relative;
+  width: 40px;
+  height: 22px;
+  border-radius: 12px;
+  border: 1px solid var(--border);
+  background: rgba(0, 0, 0, 0.35);
+  cursor: pointer;
+  transition: var(--transition);
+  flex-shrink: 0;
+}
+
+.hub-switch:hover:not(:disabled) {
+  border-color: var(--accent-blue);
+}
+
+.hub-switch:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.hub-switch.on {
+  background: var(--accent-green);
+  border-color: var(--accent-green);
+}
+
+.hub-switch-knob {
+  position: absolute;
+  top: 2px;
+  left: 2px;
+  width: 16px;
+  height: 16px;
+  border-radius: 50%;
+  background: #e6edf3;
+  transition: var(--transition);
+}
+
+.hub-switch.on .hub-switch-knob {
+  left: 20px;
+}
+
+.hub-alias-list {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-top: 8px;
+}
+
+.hub-platform-grid {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-top: 8px;
+}
+
+.hub-platform {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  background: var(--bg-tertiary);
+  border: 1px solid var(--border-light);
+  border-radius: 8px;
+  padding: 6px 10px;
+  font-size: 12px;
+}
+
+.hub-platform.configured {
+  border-color: rgba(63, 185, 80, 0.4);
+}
+
+.hub-platform-label {
+  font-weight: 600;
+  color: var(--text-primary);
+}
+
+.hub-platform-env {
+  color: var(--text-muted);
+  font-size: 11px;
+  font-family: 'SF Mono', Menlo, Consolas, monospace;
+}
+
+.hub-alias-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  background: var(--bg-tertiary);
+  border: 1px solid var(--border-light);
+  border-radius: 8px;
+  padding: 6px 10px;
+}
+
+/* I11 — Channels-tab test-send form (mirrors `buff gateway send`) */
+.hub-send-form {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-end;
+  gap: 10px;
+  margin-top: 8px;
+  padding: 14px;
+  background: var(--bg-card);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+}
+
+.hub-send-form label {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  min-width: 0;
+}
+
+.hub-send-form .hub-send-target {
+  flex: 2;
+  min-width: 240px;
+}
+
+.hub-send-form .hub-send-message {
+  flex: 3;
+  min-width: 240px;
+}
+
+.hub-send-form input {
+  background: rgba(0, 0, 0, 0.25);
+  border: 1px solid var(--border);
+  color: var(--text-primary);
+  border-radius: 6px;
+  padding: 8px 10px;
+  font-size: 12px;
+  min-width: 0;
+  width: 100%;
+  transition: border-color 0.15s ease;
+}
+
+.hub-send-form input:focus {
+  outline: none;
+  border-color: var(--accent-blue);
+}
+
+.hub-send-form input:disabled {
+  opacity: 0.55;
+}
+
+.hub-send-form .admin-refresh-btn {
+  flex-shrink: 0;
+}
+
+.hub-session-list {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  margin-top: 10px;
+}
+
+.hub-artifact-list {
+  list-style: none;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin-top: 8px;
+}
+
+.hub-artifact-list li {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+  font-size: 12px;
+}
+
+.hub-artifact-title {
+  color: var(--text-primary);
+  font-weight: 500;
+}
+
+.hub-artifact-preview {
+  flex-basis: 100%;
+  color: var(--text-muted);
+  font-size: 11px;
+  background: rgba(0, 0, 0, 0.2);
+  border-radius: 6px;
+  padding: 6px 8px;
+  white-space: pre-wrap;
+  word-break: break-word;
+  font-family: 'SF Mono', Menlo, Consolas, monospace;
+  max-height: 60px;
+  overflow: hidden;
 }

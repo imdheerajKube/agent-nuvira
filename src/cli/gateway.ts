@@ -27,15 +27,34 @@ import {
   TelegramAdapter,
   DiscordAdapter,
   SlackAdapter,
-  WhatsAppAdapter,
+  WhatsAppBridgeAdapter,
+  WhatsAppCloudAdapter,
+  EmailAdapter,
+  SignalAdapter,
+  DingTalkAdapter,
+  FeishuAdapter,
+  WeComAdapter,
+  MattermostAdapter,
+  MatrixAdapter,
+  GenericWebhookAdapter,
+  BlueBubblesAdapter,
+  NtfyAdapter,
+  TeamsAdapter,
+  GoogleChatAdapter,
+  WeixinAdapter,
+  SmsAdapter,
+  IrcAdapter,
+  SimplexAdapter,
+  HomeAssistantAdapter,
   type ChannelAdapter,
 } from '../gateway/adapters.js';
+import { DeliveryLedger } from '../gateway/delivery.js';
 import { guardRbacAction } from './rbac-guard.js';
 
 export class GatewayCommand {
   create(): Command {
     const cmd = new Command('gateway')
-      .description('Multi-channel gateway — talk to the agent from Telegram/Discord/Slack/WhatsApp (J1)');
+      .description('Multi-channel gateway — talk to the agent from Telegram/Discord/Slack/WhatsApp/Email/Signal (J1)');
 
     cmd
       .command('status')
@@ -60,6 +79,12 @@ export class GatewayCommand {
       .action(async (a) => this.aliasRemove(a));
 
     cmd
+      .command('delivery')
+      .description('Show the delivery ledger (failed sends awaiting retry) and optionally drain it')
+      .option('--flush', 'Attempt every due pending entry now (uses configured adapters)')
+      .action(async (opts) => this.delivery(Boolean(opts.flush)));
+
+    cmd
       .command('start')
       .description('Run all configured adapters in the foreground (Ctrl-C to stop)')
       .option('--port <n>', 'Webhook inbound port for Discord/Slack/WhatsApp', '8787')
@@ -82,10 +107,20 @@ export class GatewayCommand {
     }
     console.log('');
     const configured = configuredPlatforms();
+    console.log(`  ${configured.length}/${adapters.length} platforms configured`);
+    console.log('');
     if (configured.length === 0) {
       console.log('No adapters configured. Set one of:');
       console.log('  BUFF_TELEGRAM_TOKEN · BUFF_DISCORD_BOT_TOKEN · BUFF_DISCORD_WEBHOOK_URL');
-      console.log('  BUFF_SLACK_BOT_TOKEN · BUFF_SLACK_WEBHOOK_URL · BUFF_WHATSAPP_TOKEN + PHONE_ID');
+      console.log('  BUFF_SLACK_BOT_TOKEN · BUFF_SLACK_WEBHOOK_URL · BUFF_WHATSAPP_SESSION_DIR (bridge) · BUFF_WHATSAPP_TOKEN + PHONE_ID (cloud)');
+      console.log('  BUFF_SMTP_HOST + BUFF_SMTP_USER (email) · BUFF_SIGNAL_ACCOUNT (signal)');
+      console.log('  I9 webhooks: BUFF_DINGTALK_WEBHOOK_URL · BUFF_FEISHU_WEBHOOK_URL · BUFF_WECOM_WEBHOOK_URL · BUFF_MATTERMOST_WEBHOOK_URL');
+      console.log('  BUFF_MATRIX_HOMESERVER + BUFF_MATRIX_ACCESS_TOKEN · BUFF_WEBHOOK_URL · BUFF_BLUEBUBBLES_URL + BUFF_BLUEBUBBLES_PASSWORD');
+      console.log('  I10 send: BUFF_NTFY_TOPIC (+BUFF_NTFY_URL/BUFF_NTFY_TOKEN) · BUFF_TEAMS_WEBHOOK_URL · BUFF_GOOGLE_CHAT_WEBHOOK_URL · BUFF_WEIXIN_TOKEN');
+      console.log('  I12 sms: TWILIO_ACCOUNT_SID + TWILIO_AUTH_TOKEN + TWILIO_PHONE_NUMBER (same creds as Hermes)');
+      console.log('  I13 irc: IRC_SERVER (+IRC_PORT/IRC_NICKNAME/IRC_CHANNEL/IRC_USE_TLS/IRC_NICKSERV_PASSWORD — same creds as Hermes)');
+      console.log('  I14 simplex: SIMPLEX_WS_URL (local simplex-chat daemon, ws://127.0.0.1:5225 — same creds as Hermes)');
+      console.log('  I15 homeassistant: HASS_TOKEN (+HASS_URL, defaults to http://homeassistant.local:8123 — same creds as Hermes)');
       console.log('');
     }
     const directory = new ChannelDirectory();
@@ -98,7 +133,7 @@ export class GatewayCommand {
       }
     } else {
       console.log('📇 No channel aliases registered yet. Add one:');
-      console.log('  buff gateway alias add <alias> <telegram|discord|slack|whatsapp> <channelId>');
+      console.log('  buff gateway alias add <alias> <telegram|discord|slack|whatsapp|whatsapp_cloud|email|signal|dingtalk|feishu|wecom|mattermost|matrix|webhook|bluebubbles|ntfy|teams|google_chat|weixin|sms|irc|simplex|homeassistant> <channelId>');
       console.log('  buff gateway send ops "nightly build done"');
     }
   }
@@ -122,6 +157,43 @@ export class GatewayCommand {
       return;
     }
     logger.success(`Sent to ${target} (${ref.platform}:${ref.channelId})`);
+  }
+
+  // ─── delivery (I2) ────────────────────────────────────────────────────────
+
+  private async delivery(flush: boolean): Promise<void> {
+    const ledger = new DeliveryLedger();
+    const entries = ledger.read();
+
+    if (flush && entries.some((e) => e.status === 'pending')) {
+      const registry = new GatewayRegistry({ streamEvents: false });
+      for (const adapter of createConfiguredAdapters()) registry.register(adapter);
+      const counts = await registry.drainDelivery();
+      logger.success(`Drained delivery queue — ${counts.sent} sent, ${counts.failed} failed, ${counts.processed} processed`);
+    } else if (flush) {
+      logger.info('Delivery queue empty — nothing to flush.');
+    }
+
+    const remaining = ledger.read();
+    const pending = remaining.filter((e) => e.status === 'pending');
+    const sent = remaining.filter((e) => e.status === 'sent');
+    const failed = remaining.filter((e) => e.status === 'failed');
+    console.log('📮 Delivery ledger (guaranteed delivery — Hermes delivery.py parity)');
+    console.log('');
+    if (remaining.length === 0) {
+      console.log('  (empty — no failed sends recorded)');
+      console.log('');
+      return;
+    }
+    for (const e of remaining.slice(0, 20)) {
+      const mark = e.status === 'sent' ? '✅' : e.status === 'failed' ? '❌' : '⏳';
+      const retry = e.status === 'pending' ? ` retry#${e.attempts} at ${new Date(e.nextAttemptAt).toLocaleTimeString()}` : '';
+      console.log(`  ${mark} ${e.platform}:${e.channelId} (${e.target}) — ${e.text.slice(0, 60)}${retry}${e.lastError ? ` — ${e.lastError.slice(0, 60)}` : ''}`);
+    }
+    if (remaining.length > 20) console.log(`  …and ${remaining.length - 20} more`);
+    console.log('');
+    console.log(`  total: ${pending.length} pending · ${sent.length} sent · ${failed.length} failed (of ${remaining.length} retained)`);
+    console.log('  Retries happen automatically while `buff gateway start` runs; `--flush` forces a drain now.');
   }
 
   // ─── alias ────────────────────────────────────────────────────────────────
@@ -156,7 +228,8 @@ export class GatewayCommand {
     for (const adapter of adapters) registry.register(adapter);
 
     if (!registry.hasConfiguredAdapter()) {
-      logger.warn('No adapters configured — set BUFF_TELEGRAM_TOKEN, BUFF_DISCORD_*, BUFF_SLACK_*, or BUFF_WHATSAPP_* env vars.');
+      logger.warn('No adapters configured — set BUFF_TELEGRAM_TOKEN, BUFF_DISCORD_*, BUFF_SLACK_*, BUFF_WHATSAPP_*,');
+      logger.warn('  BUFF_SMTP_HOST+BUFF_SMTP_USER (email), BUFF_SIGNAL_ACCOUNT (signal), or any I9 webhook URL env var.');
       logger.warn('Add aliases with: buff gateway alias add <alias> <platform> <channelId>');
     }
 
@@ -204,6 +277,24 @@ function statusAdapters(): ChannelAdapter[] {
   if (!seen.has('telegram')) list.push(new TelegramAdapter());
   if (!seen.has('discord')) list.push(new DiscordAdapter());
   if (!seen.has('slack')) list.push(new SlackAdapter());
-  if (!seen.has('whatsapp')) list.push(new WhatsAppAdapter());
+  if (!seen.has('whatsapp')) list.push(new WhatsAppBridgeAdapter());
+  if (!seen.has('whatsapp_cloud')) list.push(new WhatsAppCloudAdapter());
+  if (!seen.has('dingtalk')) list.push(new DingTalkAdapter());
+  if (!seen.has('feishu')) list.push(new FeishuAdapter());
+  if (!seen.has('wecom')) list.push(new WeComAdapter());
+  if (!seen.has('mattermost')) list.push(new MattermostAdapter());
+  if (!seen.has('matrix')) list.push(new MatrixAdapter());
+  if (!seen.has('webhook')) list.push(new GenericWebhookAdapter());
+  if (!seen.has('bluebubbles')) list.push(new BlueBubblesAdapter());
+  if (!seen.has('ntfy')) list.push(new NtfyAdapter());
+  if (!seen.has('teams')) list.push(new TeamsAdapter());
+  if (!seen.has('google_chat')) list.push(new GoogleChatAdapter());
+  if (!seen.has('weixin')) list.push(new WeixinAdapter());
+  if (!seen.has('sms')) list.push(new SmsAdapter());
+  if (!seen.has('irc')) list.push(new IrcAdapter());
+  if (!seen.has('simplex')) list.push(new SimplexAdapter());
+  if (!seen.has('homeassistant')) list.push(new HomeAssistantAdapter());
+  if (!seen.has('email')) list.push(new EmailAdapter());
+  if (!seen.has('signal')) list.push(new SignalAdapter());
   return list;
 }

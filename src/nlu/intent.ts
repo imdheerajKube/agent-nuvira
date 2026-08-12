@@ -90,9 +90,17 @@ export function matchContinueRule(text: string, referenceDate: Date = new Date()
   return null;
 }
 
-/** Fix/debug → execute ("fix the login bug", "debug the failing test"). */
+/**
+ * Fix/debug → execute ("fix the login bug", "debug the failing test").
+ *
+ * The keywords must be WHOLE words: a hyphen or underscore on either side means
+ * the token is part of an identifier (e.g. the project name `nuvira-fix-validation`
+ * or a branch `fix-123`) — a request mentioning it is not a fix request. \b
+ * alone is insufficient: it treats `-` and `_` as word boundaries, so
+ * "deploy the project nuvira-fix-validation" would false-positive into fix.
+ */
 export function matchFixRule(text: string): IntentResult | null {
-  if (/\b(?:fix|debug|repair|troubleshoot|resolve)\b/i.test(text)) {
+  if (/(?:^|[^\w-])(?:fix|debug|repair|troubleshoot|resolve)(?:$|[^\w-])/i.test(text)) {
     return { intent: 'fix', confidence: 0.85, modeHint: 'execute' };
   }
   return null;

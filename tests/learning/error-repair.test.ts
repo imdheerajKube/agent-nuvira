@@ -145,6 +145,16 @@ describe('ErrorRepair — selectStrategy()', () => {
     expect(selectStrategy('budget-exhausted', 1, baseOpts)).toBe('skip-step');
   });
 
+  it('selects adaptive strategies for process errors (never a blind identical retry)', () => {
+    // Gap-assessment fix: a failed command must not be re-run unchanged.
+    // Ladder: re-prompt (learn from output) → alternative-approach →
+    // switch-model (when fallbacks exist) → skip.
+    expect(selectStrategy('process-error', 1, baseOpts)).toBe('re-prompt');
+    expect(selectStrategy('process-error', 2, baseOpts)).toBe('alternative-approach');
+    expect(selectStrategy('process-error', 3, baseOpts)).toBe('alternative-approach');
+    expect(selectStrategy('process-error', 3, { ...baseOpts, fallbackModels: ['m2'] })).toBe('switch-model');
+  });
+
   it('selects alternative-approach before giving up for persistent failures', () => {
     // LLM errors: attempt 3 = alternative approach
     expect(selectStrategy('llm-error', 3, { ...baseOpts, fallbackModels: ['m2'] })).toBe('alternative-approach');
@@ -401,6 +411,37 @@ describe('ErrorRepair — ErrorRepairEngine', () => {
 
     expect(result.success).toBe(true);
     expect(engine.alternativeApproaches).toBe(1);
+  });
+
+  it('retry-tool carries the failure context so re-runs are informed, not identical', async () => {
+    const engine = new ErrorRepairEngine({ maxRepairs: 3, repairMode: 'auto', verbose: false });
+    let callCount = 0;
+    const mockExecute = vi.fn().mockImplementation(async (ctx: AgentContext) => {
+      callCount++;
+      if (callCount === 1) {
+        // First retry-tool attempt must already see the failure marker
+        expect(ctx.goal).toContain('[REPAIR ATTEMPT 1');
+        return { success: false, summary: 'Failed', error: 'Rate limit exceeded' };
+      }
+      if (callCount === 2) {
+        expect(ctx.goal).toContain('[REPAIR ATTEMPT 2');
+        return { success: false, summary: 'Failed again', error: 'Rate limit exceeded' };
+      }
+      // Third attempt (alternative-approach) recovers
+      return { success: true, summary: 'Recovered' };
+    });
+
+    // provider-error without fallbacks → attempts 1-2 are retry-tool
+    const result = await engine.repair(
+      'task-1',
+      createMockContext(),
+      vi.fn() as unknown as LLMCallFn,
+      'Rate limit exceeded for provider',
+      mockExecute,
+    );
+
+    expect(result.success).toBe(true);
+    expect(callCount).toBe(3);
   });
 
   it('uses fallback model on switch-model strategy', async () => {

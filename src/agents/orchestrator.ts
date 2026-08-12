@@ -803,6 +803,83 @@ export class Orchestrator {
     // `--auto-route` / autoRouteModels enables per-task AutoModelRouter
     // routing in executeSingleTask (no static map needed).
 
+    // ── 3c. Skill guidance (progressive disclosure, industry pattern) ──────
+    // Level 1 metadata lives in the skill store; when the goal matches a
+    // skill (findMatch), Level 2 (the methodology) is injected into the
+    // planner's context so deploy-style goals produce the correct steps
+    // automatically. Model-selected activation: the skill is a recommendation,
+    // the planner still owns the final plan. Best-effort — a skill-store
+    // failure must never break planning.
+    try {
+      const { getSkillStore } = await import('../learning/skill-store.js');
+      let matchedSkill = getSkillStore().findMatch(goal);
+      // P3 — skills.disabled[] gate: a dashboard/CLI-disabled skill is never
+      // injected, for COMPILED skills too. (The hub path already filters via
+      // listMatchableHubSkills; this closes the compiled gap so the Agent Hub
+      // toggle is never cosmetic.)
+      const { readDisabledSkills } = await import('../learning/hub-skill-catalog.js');
+      if (matchedSkill && new Set(readDisabledSkills()).has(matchedSkill.id)) matchedSkill = null;
+      // Activation gate (industry practice: model-selected activation).
+      // findMatch's threshold is intentionally low (score >= 1) for manual
+      // discovery; auto-injection must be tighter so a generic "deploy the
+      // API" goal does NOT get website-deployment methodology. For a
+      // website-deployment skill (bundled OR hub-installed), require
+      // hosting-specific intent words.
+      if (matchedSkill && matchedSkill.id === 'skill-website-deploy') {
+        const goalLower = goal.toLowerCase();
+        const HOSTING_INTENT = /cloudflare|netlify|vercel|github\s*pages|hosting|pages\.dev|web\s*site|website|static\s*site|landing\s*page/;
+        if (!HOSTING_INTENT.test(goalLower)) matchedSkill = null;
+      }
+      if (matchedSkill) {
+        vault.setMeta('skillGuidance', {
+          name: matchedSkill.name,
+          description: matchedSkill.description,
+          steps: matchedSkill.steps.map((s) => ({ agentType: s.agentType, description: s.description })),
+        });
+        this.eventBus.emit(EventNames.ORCHESTRATOR_AGENT_UPDATE, {
+          agentType: 'orchestrator',
+          stage: 'skill',
+          message: `🧠 Matched skill '${matchedSkill.name}' — injecting its methodology into the planner`, 
+        }, 'orchestrator');
+        if (options.verbose) {
+          logger.info(`   🧠 Matched skill '${matchedSkill.name}' — injecting its methodology into the planner`);
+        }
+      } else {
+        // I7 P0: no compiled skill matched — consult the HUB catalog (installed
+        // SKILL.md skills). These are first-class runtime capabilities too: a
+        // fresh `buff skills install` is matchable with zero recompilation.
+        // Same model-selected activation contract: the skill is a
+        // recommendation, the planner still owns the final plan.
+        const { findHubSkillMatch } = await import('../learning/hub-skill-catalog.js');
+        let hubMatch = findHubSkillMatch(goal);
+        // Same activation gate as the compiled website-deploy skill: a hub
+        // skill whose id/name is website-deploy-ish must NOT inject website
+        // methodology for an unrelated "deploy the API" goal.
+        if (hubMatch && /website[-_ ]?deploy/.test(`${hubMatch.id} ${hubMatch.name}`)) {
+          const goalLower = goal.toLowerCase();
+          const HOSTING_INTENT = /cloudflare|netlify|vercel|github\s*pages|hosting|pages\.dev|web\s*site|website|static\s*site|landing\s*page/;
+          if (!HOSTING_INTENT.test(goalLower)) hubMatch = null;
+        }
+        if (hubMatch) {
+          vault.setMeta('skillGuidance', {
+            name: hubMatch.name,
+            description: hubMatch.description,
+            body: hubMatch.body,
+          });
+          this.eventBus.emit(EventNames.ORCHESTRATOR_AGENT_UPDATE, {
+            agentType: 'orchestrator',
+            stage: 'skill',
+            message: `🧠 Matched hub skill '${hubMatch.name}' — injecting its SKILL.md methodology into the planner`,
+          }, 'orchestrator');
+          if (options.verbose) {
+            logger.info(`   🧠 Matched hub skill '${hubMatch.name}' — injecting its SKILL.md methodology into the planner`);
+          }
+        }
+      }
+    } catch {
+      // Best-effort — skill guidance must never break the pipeline.
+    }
+
     // ── 4. Planner (or pre-built plan from workflow template) ────────────
     // When resuming from a checkpoint the plan is already in the vault — skip
     // the planner entirely (no re-plan, no re-gather) and continue execution.
@@ -1945,7 +2022,20 @@ export class Orchestrator {
             logger.info(`      🔧 Agent failed — attempting auto-repair (mode: ${repairMode}, max: ${maxRepairs})`);
           }
 
-          const errorMessage = firstResult.error || firstResult.summary || 'Unknown error';
+          // The repair engine re-prompts with this as the failure context.
+          // For command-executing agents (runner/tester/debugger) prefer the
+          // rich `details` block (it embeds the exact command + exit code +
+          // captured stdout/stderr) so the repair actually SEES the failure
+          // output instead of a one-line summary — a runner repair without
+          // the command output just re-runs the same command blind. For
+          // other agents, `error` is the more diagnostic field (details is
+          // often the raw LLM response).
+          const executesCommands = ['runner', 'tester', 'debugger'].includes(task.agentType);
+          const errorMessage = (
+            executesCommands && firstResult.details && firstResult.details.trim().length > 0
+              ? firstResult.details
+              : firstResult.error || firstResult.summary || 'Unknown error'
+          ).slice(0, 4000);
           // MODEL ESCALATION on task failure (assessment P0, same principle as
           // the planner repair): when auto routing is active, hand the repair
           // engine a re-routed LLM at the NEXT complexity level so it picks a
@@ -2275,7 +2365,15 @@ export class Orchestrator {
   ): RoutingExecutionStrategy {
     const intent = routingContext?.taskProfile?.intent;
     const requiresVerification = routingContext?.taskProfile?.requiresVerification === true;
-    const writerLike = ['writer', 'tester', 'runner'].includes(task.agentType);
+    // Only the WRITER (file-producing agent) is remapped by intent. Runner and
+    // tester EXECUTE things — commands and tests — and must never be silently
+    // replaced by a code-writing debugger, a reviewer, or the security agent:
+    // the debugger requires `testResult` metadata that only a real tester run
+    // produces (a runner→debugger swap observed live: a "Run `wrangler pages
+    // project create`" step was remapped to the debugger, which refused with
+    // "No test results found" and never executed the command). Intent shapes
+    // WHICH code agent writes; execution agents stay as planned.
+    const writerLike = ['writer'].includes(task.agentType);
 
     let effectiveAgentType = task.agentType;
     let followUpAgentType: string | undefined;
@@ -2292,7 +2390,7 @@ export class Orchestrator {
         maxRepairs = 4;
         break;
       case 'debugging':
-        if (writerLike || task.agentType === 'runner') effectiveAgentType = 'debugger';
+        if (writerLike) effectiveAgentType = 'debugger';
         runSerially = true;
         useRepair = true;
         maxRepairs = 5;

@@ -257,6 +257,68 @@ describe('RunnerAgent', () => {
       expect(llmCallCount).toBe(1);
     });
 
+    // ── Repair-aware Command Re-selection ──────────────────────────────
+    //
+    // Gap-assessment fix: on a repair/alternative-approach attempt the runner
+    // must NOT blindly re-extract the same backticked command — it asks the
+    // LLM for a corrected command informed by the previous failure output.
+
+    it('asks the LLM for a corrected command on repair attempts', async () => {
+      const context = makeContext({
+        goal: [
+          'deploy the site',
+          '',
+          '[REPAIR ATTEMPT 1]',
+          'The previous attempt failed with:',
+          'Command: wrangler pages deploy . --project-name nuvira',
+          'Exit code: 1',
+          'stderr:',
+          'The Pages project "nuvira" does not exist.',
+        ].join('\n'),
+        taskPlan: [
+          { id: 'step-1', description: 'Run `wrangler pages deploy . --project-name nuvira` and verify', agentType: 'runner', dependsOn: [], status: 'running' },
+        ],
+        metadata: {
+          runResult: {
+            success: false,
+            command: 'wrangler pages deploy . --project-name nuvira',
+            exitCode: 1,
+            stdout: '',
+            stderr: 'The Pages project "nuvira" does not exist.',
+            duration: 100,
+          },
+        },
+      });
+
+      let llmPrompt = '';
+      const mockLLM: LLMCallFn = async (prompt: string) => {
+        llmCallCount++;
+        llmPrompt = String(prompt);
+        return 'wrangler pages project create nuvira --production-branch main';
+      };
+
+      const command = await determineCommand(context, mockLLM);
+      expect(command).toBe('wrangler pages project create nuvira --production-branch main');
+      expect(llmCallCount).toBe(1);
+      // The repair prompt must surface the previous failure output
+      expect(llmPrompt).toContain('does not exist');
+      expect(llmPrompt).toContain('Previous command');
+    });
+
+    it('falls back to the backticked command when the repair LLM is unavailable', async () => {
+      const context = makeContext({
+        goal: 'deploy the site\n\n[REPAIR ATTEMPT 1]\nThe previous attempt failed.',
+        taskPlan: [
+          { id: 'step-1', description: 'Run `wrangler pages deploy . --project-name nuvira`', agentType: 'runner', dependsOn: [], status: 'running' },
+        ],
+      });
+
+      const mockLLM: LLMCallFn = async () => { throw new Error('API error'); };
+      const command = await determineCommand(context, mockLLM);
+      // Better to re-run with the (now-informative) context than fail outright
+      expect(command).toBe('wrangler pages deploy . --project-name nuvira');
+    });
+
     // ── Goal Fallback ──────────────────────────────────────────────────
 
     it('should fall back to goal when no runner task is in plan', async () => {

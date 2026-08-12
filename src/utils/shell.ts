@@ -170,6 +170,15 @@ export async function runShell(command: string, options: RunShellOptions = {}): 
     timedOut,
     aborted,
     durationMs,
+    // Failure transparency: include the captured output (truncated) when the
+    // command FAILED so the pipeline board, NDJSON events, and the dashboard
+    // show WHY — previously only the exit code was visible (gap-assessment
+    // #3). Gated to failures to avoid noise and to keep potentially sensitive
+    // success output (auth flows echoing tokens) out of the event stream.
+    ...(!success ? {
+      stdout: stdout.slice(0, 2000),
+      stderr: stderr.slice(0, 2000),
+    } : {}),
   }, options);
 
   return { exitCode, stdout, stderr, success, timedOut, aborted, durationMs, command };
@@ -227,6 +236,11 @@ export function runShellSync(command: string, options: RunShellOptions = {}): Ru
     success,
     timedOut,
     durationMs,
+    // Failure transparency (see runShell above) — output only on failures.
+    ...(!success ? {
+      stdout: stdout.slice(0, 2000),
+      stderr: stderr.slice(0, 2000),
+    } : {}),
   }, options);
 
   return { exitCode, stdout, stderr, success, timedOut, aborted: false, durationMs, command };

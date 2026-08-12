@@ -65,7 +65,10 @@ describe('platform env map', () => {
 
   it('exposes the env vars per platform (Hermes config.py token map)', () => {
     expect(PLATFORM_ENV_VARS.telegram).toEqual(['BUFF_TELEGRAM_TOKEN']);
-    expect(PLATFORM_ENV_VARS.whatsapp).toEqual(['BUFF_WHATSAPP_TOKEN']);
+    // I8: `whatsapp` = personal Baileys bridge (session dir override),
+    // `whatsapp_cloud` = the paid Meta Business API.
+    expect(PLATFORM_ENV_VARS.whatsapp).toEqual(['BUFF_WHATSAPP_SESSION_DIR']);
+    expect(PLATFORM_ENV_VARS.whatsapp_cloud).toEqual(['BUFF_WHATSAPP_TOKEN']);
   });
 });
 
@@ -96,7 +99,9 @@ describe('alias persistence + resolve', () => {
     const dir = new ChannelDirectory();
     expect(dir.resolve('nope')).toBeNull();
     expect(dir.resolve('')).toBeNull();
-    expect(dir.resolve('matrix:foo')).toBeNull();
+    // 'matrix' is a real I9 platform — a genuinely unknown prefix is null.
+    expect(dir.resolve('matrix:foo')).toEqual({ platform: 'matrix', channelId: 'foo' });
+    expect(dir.resolve('unknown:foo')).toBeNull();
   });
 
   it('rejects registering an alias for an unconfigured platform', () => {
@@ -126,5 +131,56 @@ describe('alias persistence + resolve', () => {
     expect(first?.aliases.sort()).toEqual(['a', 'b']);
     expect(first?.reachable).toBe(true);
     expect(channels.length).toBe(2);
+  });
+});
+
+describe('I6 platforms (email / signal)', () => {
+  const envBackup: Record<string, string | undefined> = {};
+
+  afterEach(() => {
+    for (const k of Object.keys(envBackup)) {
+      if (envBackup[k] === undefined) delete process.env[k];
+      else process.env[k] = envBackup[k];
+    }
+    Object.keys(envBackup).forEach((k) => delete envBackup[k]);
+  });
+
+  it('resolves explicit email: and signal: targets', () => {
+    const dir = new ChannelDirectory();
+    expect(dir.resolve('email:ops@example.com')).toEqual({ platform: 'email', channelId: 'ops@example.com' });
+    expect(dir.resolve('signal:+15559876543')).toEqual({ platform: 'signal', channelId: '+15559876543' });
+  });
+
+  it('isPlatformConfigured reflects the SMTP / Signal env vars', () => {
+    envBackup.BUFF_SMTP_HOST = process.env.BUFF_SMTP_HOST;
+    envBackup.BUFF_SMTP_USER = process.env.BUFF_SMTP_USER;
+    envBackup.BUFF_SIGNAL_ACCOUNT = process.env.BUFF_SIGNAL_ACCOUNT;
+    delete process.env.BUFF_SMTP_HOST;
+    delete process.env.BUFF_SMTP_USER;
+    delete process.env.BUFF_SIGNAL_ACCOUNT;
+
+    expect(isPlatformConfigured('email')).toBe(false);
+    expect(isPlatformConfigured('signal')).toBe(false);
+    expect(configuredPlatforms()).not.toContain('email');
+    expect(configuredPlatforms()).not.toContain('signal');
+
+    process.env.BUFF_SMTP_HOST = 'smtp.example.com';
+    process.env.BUFF_SMTP_USER = 'bot';
+    process.env.BUFF_SIGNAL_ACCOUNT = '+15551234567';
+    expect(isPlatformConfigured('email')).toBe(true);
+    expect(isPlatformConfigured('signal')).toBe(true);
+    expect(PLATFORM_ENV_VARS.email).toEqual(['BUFF_SMTP_HOST', 'BUFF_SMTP_USER']);
+    expect(PLATFORM_ENV_VARS.signal).toEqual(['BUFF_SIGNAL_ACCOUNT']);
+  });
+
+  it('allows registering an email alias when SMTP is configured', () => {
+    envBackup.BUFF_SMTP_HOST = process.env.BUFF_SMTP_HOST;
+    envBackup.BUFF_SMTP_USER = process.env.BUFF_SMTP_USER;
+    process.env.BUFF_SMTP_HOST = 'smtp.example.com';
+    process.env.BUFF_SMTP_USER = 'bot';
+    const dir = new ChannelDirectory();
+    const entry = dir.setAlias('notify', 'email', 'ops@example.com');
+    expect(entry.platform).toBe('email');
+    expect(dir.resolve('notify')).toEqual({ platform: 'email', channelId: 'ops@example.com' });
   });
 });

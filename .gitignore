@@ -8,7 +8,7 @@ dist/
 *sopec*.md
 *scope*.md
 SCOPE.md
-
+ASSESSMENT_WEBSITE_DEPLOY.md
 # Generated addon builds (agent output during addon-creation tasks)
 addon/
 
@@ -18,6 +18,9 @@ issues/
 # Internal revamp plan + progress tracker (stays local, never published)
 AGENT_NUVIRA_MAJOR_REVAMP_PLAN.md
 REVAMP_PROGRESS.md
+
+# Internal reference docs (stays local, never published)
+ASSESSMENT_HERMES_ECOSYSTEM.md
 
 # macOS
 .DS_Store

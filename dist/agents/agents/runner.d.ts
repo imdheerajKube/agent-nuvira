@@ -167,6 +167,19 @@ export declare class RunnerAgent extends Agent {
     private installDependencies;
     private executeOnHost;
     /**
+     * True when this runner execution is a repair/alternative-approach attempt
+     * (the ErrorRepairEngine appends these markers to context.goal).
+     */
+    private isRepairAttempt;
+    /**
+     * Ask the LLM for the NEXT command after a previous command failed.
+     * This is what makes the repair loop ADAPT instead of re-running the same
+     * failing command: the LLM sees the task, the previous command, and its
+     * captured stdout/stderr, and proposes a corrected command (e.g. create the
+     * Cloudflare Pages project before deploying).
+     */
+    private askLLMForRepairCommand;
+    /**
      * Fallback: ask the LLM what command to run based on the project context.
      * Includes project's package.json metadata so the LLM can make an informed choice.
      */

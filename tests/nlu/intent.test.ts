@@ -174,7 +174,28 @@ describe('rule functions are pure', () => {
 
   it('matchFixRule', () => {
     expect(matchFixRule('fix the login bug')?.intent).toBe('fix');
+    expect(matchFixRule('debug the failing test')?.intent).toBe('fix');
     expect(matchFixRule('explain how caching works')).toBeNull();
+  });
+
+  it('does NOT treat hyphen/underscore identifiers as fix keywords (live bug: nuvira-fix-validation)', () => {
+    // A project/branch name containing the substring "fix" is NOT a fix request —
+    // the old \\b word-boundary regex matched inside the hyphenated token and
+    // misrouted a deploy goal into the debugging pipeline (runner → debugger).
+    expect(matchFixRule('Deploy this website to Cloudflare Pages using project nuvira-fix-validation')).toBeNull();
+    expect(matchFixRule('publish branch fix-123 to production')).toBeNull();
+    expect(matchFixRule('checkout the hotfix_2024 branch')).toBeNull();
+    // Real fix intent still matches.
+    expect(matchFixRule('fix the login bug')?.intent).toBe('fix');
+    expect(matchFixRule('please debug the failing test')?.intent).toBe('fix');
+  });
+
+  it('classifies a deploy goal as NOT fix (even with hyphenated project names)', () => {
+    const result = classifyIntent(
+      'Deploy this website to Cloudflare Pages. Use the project name nuvira-fix-validation. Verify the live URL with curl.',
+      REF,
+    );
+    expect(result.intent).not.toBe('fix');
   });
 
   it('matchConfigureRule', () => {

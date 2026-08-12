@@ -90,6 +90,10 @@ const DEFAULT_CONFIG: BuffConfig = {
     maxAttempts: 3,
     retryDelayMs: 1000,
   },
+  // I1 toolsets: empty by default = every toolset enabled (absent = enabled).
+  tools: {
+    toolsets: {},
+  },
 };
 
 export class ConfigManager {
@@ -215,6 +219,9 @@ export class ConfigManager {
     // Deep clone pricing defaults
     config.pricing = { ...(DEFAULT_CONFIG.pricing || {}) };
 
+    // Deep clone tools (toolsets) defaults
+    config.tools = { toolsets: { ...(DEFAULT_CONFIG.tools?.toolsets || {}) } };
+
     if (existsSync(this.configPath)) {
       try {
         const raw = readFileSync(this.configPath, 'utf-8');
@@ -267,6 +274,27 @@ export class ConfigManager {
             governance: { ...(config.routing?.governance || {}), ...(loadedRouting.governance || {}) },
             contextWindows: { ...(config.routing?.contextWindows || {}), ...(loadedRouting.contextWindows || {}) },
             nuviraSidecar: { ...(config.routing?.nuviraSidecar || {}), ...(loadedRouting.nuviraSidecar || {}) },
+          };
+        }
+
+        // Merge toolsets config (deep per toolset — separate toggles preserve
+        // each other; a missing entry means enabled).
+        if (userConfig.tools) {
+          config.tools = {
+            ...(config.tools || {}),
+            ...userConfig.tools,
+            toolsets: { ...(config.tools?.toolsets || {}), ...(userConfig.tools.toolsets || {}) },
+          };
+        }
+
+        // Merge I7 skills config (disabled[] + registries[]) — whole-array
+        // semantics: an empty array is meaningful ("nothing disabled") and
+        // must survive a load.
+        if (userConfig.skills) {
+          config.skills = {
+            ...(config.skills || {}),
+            ...(userConfig.skills.disabled !== undefined ? { disabled: userConfig.skills.disabled } : {}),
+            ...(userConfig.skills.registries !== undefined ? { registries: userConfig.skills.registries } : {}),
           };
         }
       } catch {
@@ -570,6 +598,25 @@ export class ConfigManager {
       this.config.routing = {
         ...(this.config.routing || {}),
         ...config.routing,
+      };
+    }
+
+    if (config.tools) {
+      this.config.tools = {
+        ...(this.config.tools || {}),
+        ...config.tools,
+        toolsets: { ...(this.config.tools?.toolsets || {}), ...(config.tools.toolsets || {}) },
+      };
+    }
+
+    if (config.skills) {
+      // I7 P0/P1: `skills.disabled` (exclusion list) + `skills.registries`
+      // (ordered multi-source list) — whole-array semantics, not per-key merge
+      // (an empty list is meaningful: "nothing disabled" / "use the default").
+      this.config.skills = {
+        ...(this.config.skills || {}),
+        ...(config.skills.disabled !== undefined ? { disabled: config.skills.disabled } : {}),
+        ...(config.skills.registries !== undefined ? { registries: config.skills.registries } : {}),
       };
     }
 

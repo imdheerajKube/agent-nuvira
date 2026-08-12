@@ -27,7 +27,14 @@ import {
   isValidSkillName,
   clearSkillsIndexCache,
 } from '../learning/skills-hub.js';
+import {
+  searchAllRegistries,
+  findEntryAcrossRegistries,
+  fetchSourceSkill,
+  detectSourceKind,
+} from '../learning/skills-registry.js';
 import { logger } from '../utils/logger.js';
+import { ConfigManager } from '../config/manager.js';
 
 export class SkillsCommand {
   create(): Command {
@@ -36,45 +43,65 @@ export class SkillsCommand {
 
     cmd
       .command('search <query>')
-      .description('Search the skills registry (DuckDuckGo-free: index from the configured registry)')
+      .description('Search all configured skill registries (I7 P1 multi-source)')
       .option('--refresh', 'Ignore the cached registry index and re-fetch', false)
+      .option('--source <kind>', 'Restrict to one source kind: github-raw | local-dir | browse-sh | git-repo')
       .action(async (query, opts) => {
         if (opts.refresh) clearSkillsIndexCache();
-        const spinner = ora({ text: 'Searching skills registry...', spinner: 'dots' }).start();
-        const results = await searchHubSkills(query);
+        const spinner = ora({ text: 'Searching skill registries...', spinner: 'dots' }).start();
+        let results: Array<{ name: string; version: string; source: string; sourceKind: string; description: string; tags: string[] }>;
+        try {
+          // Pass the live ConfigManager so buffconfig `skills.registries[]` is
+          // honored (not just BUFF_SKILLS_REGISTRY / the default).
+          results = await searchAllRegistries(query, { sourceKind: opts.source, cm: new ConfigManager() });
+        } catch {
+          results = (await searchHubSkills(query)).map((r) => ({ ...r, sourceKind: 'github-raw' }));
+        }
         spinner.stop();
         if (results.length === 0) {
           logger.info(`No skills found matching '${query}'.`);
-          logger.info('  Tip: check BUFF_SKILLS_REGISTRY or the default registry index.');
+          logger.info('  Tip: add registries to config (skills.registries) or set BUFF_SKILLS_REGISTRY.');
           return;
         }
         console.log(`\n🔎 ${results.length} skill(s) matching '${query}':\n`);
         for (const r of results) {
-          console.log(`  • ${r.name} v${r.version}  (${r.source})`);
+          console.log(`  • ${r.name} v${r.version}  (${r.sourceKind} · ${r.source})`);
           console.log(`    ${r.description}`);
           if (r.tags.length > 0) console.log(`    tags: ${r.tags.join(', ')}`);
           console.log('');
         }
-        console.log(`Install one with: buff skills install <name>`);
+        console.log(`Install one with: buff skills install <name> [--source <kind>]`);
       });
 
     cmd
       .command('install <name>')
-      .description('Install a skill from the registry into <project>/.agents/skills/ (sandboxed, checksummed)')
+      .description('Install a skill from the configured registries into <project>/.agents/skills/ (sandboxed, checksummed)')
       .option('--project <path>', 'Project root for .agents/skills/ (default: cwd)')
+      .option('--source <kind>', 'Restrict lookup to one source kind: github-raw | local-dir | browse-sh | git-repo')
       .action(async (name, opts) => {
         if (!isValidSkillName(name)) {
           logger.error(`Refused: skill name '${name}' is not in [a-z0-9-].`);
           return;
         }
         const spinner = ora({ text: `Installing '${name}'...`, spinner: 'dots' }).start();
-        const entry = await getHubSkillEntry(name);
+        // I7 P1: find the entry across ALL configured registries (priority
+        // order) — falling back to the legacy single-registry path.
+        // Pass the live ConfigManager so buffconfig `skills.registries[]` is
+        // honored (not just BUFF_SKILLS_REGISTRY / the default).
+        const found = await findEntryAcrossRegistries(name, { sourceKind: opts.source, cm: new ConfigManager() });
+        let entry = found?.value ?? null;
         if (!entry) {
-          spinner.fail(`Skill '${name}' not found in the registry.`);
+          entry = await getHubSkillEntry(name);
+        }
+        if (!entry) {
+          spinner.fail(`Skill '${name}' not found in any configured registry.`);
           logger.info('  Search available skills: buff skills search <query>');
           return;
         }
-        const result = await installHubSkill(entry, opts.project || process.cwd());
+        const result = await installHubSkill(entry, opts.project || process.cwd(), false, {
+          registry: found ? found.source.base : undefined,
+          fetchSkill: found ? (n) => fetchSourceSkill(found.source, n) : undefined,
+        });
         spinner.stop();
         if (result.ok) {
           if (result.reason === 'already up to date') {
@@ -98,6 +125,11 @@ export class SkillsCommand {
         // `buff skill gc` / `clear` (skill.remove), not a silent write.
         if (!guardRbacAction('skill.remove')) return;
         const spinner = ora({ text: 'Checking installed skills against the registry...', spinner: 'dots' }).start();
+        // Deliberate divergence: `update` checks the LEGACY provenance registry
+        // (env/default) rather than buffconfig skills.registries[] — installed
+        // skills carry their origin registry in provenance, so search/install
+        // honor config while update stays source-faithful. Revisit if a
+        // multi-source re-fetch is ever wanted.
         const { updated, current, failed } = await updateHubSkills(opts.project || process.cwd());
         spinner.stop();
         if (updated.length === 0 && current.length === 0 && failed.length === 0) {
@@ -144,3 +176,6 @@ export class SkillsCommand {
     return cmd;
   }
 }
+
+/** Kept for clarity in the command help (the source-kind vocabulary). */
+export const SKILL_SOURCE_KINDS = ['github-raw', 'local-dir', 'browse-sh', 'git-repo'] as const;

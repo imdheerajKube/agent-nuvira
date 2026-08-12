@@ -908,3 +908,98 @@ export interface DAGData {
   timestamp: number;
   active: boolean;
 }
+
+// ─── Agent Hub Types (I4 — Skills / Tools / Channels / Artifacts) ───────────
+
+/** One toolset (I1 capability group) with its enabled state. */
+export interface HubToolset {
+  name: string;
+  label: string;
+  description: string;
+  enabled: boolean;
+  tools: string[];
+  toolCount: number;
+}
+
+export interface HubChannelAlias {
+  alias: string;
+  platform: string;
+  channelId: string;
+  addedAt?: number;
+}
+
+/** One platform transport's config status (I6 — Email/Signal included). */
+export interface HubPlatformStatus {
+  platform: string;
+  label: string;
+  configured: boolean;
+  envVars: string[];
+}
+
+/** One entry in the gateway delivery ledger (I2). */
+export interface HubDeliveryEntry {
+  id: string;
+  target: string;
+  platform: string;
+  channelId: string;
+  text: string;
+  status: 'pending' | 'sent' | 'failed';
+  attempts: number;
+  nextAttemptAt: number;
+  createdAt: number;
+  lastError?: string;
+}
+
+export interface HubArtifactSummary {
+  sessionId: string;
+  count: number;
+  latestAt: number;
+  recent: Array<{ kind: string; title?: string; preview?: string }>;
+}
+
+export interface HubSkill {
+  id: string;
+  name: string;
+  description: string;
+  version?: string;
+  origin: 'compiled' | 'hub';
+  usageCount?: number;
+  /** P3 — derived from buffconfig `skills.disabled[]` (false when disabled). */
+  enabled: boolean;
+}
+
+export interface HubData {
+  toolsets: {
+    toolsets: HubToolset[];
+    enabled: number;
+    disabled: number;
+    totalTools: number;
+  };
+  channels: {
+    delivery: {
+      total: number;
+      pending: number;
+      sent: number;
+      failed: number;
+      recent: HubDeliveryEntry[];
+    };
+    aliases: HubChannelAlias[];
+    reachable: Array<{ platform: string; channelId: string; aliases: string[]; reachable: boolean }>;
+    platforms: HubPlatformStatus[];
+  };
+  artifacts: {
+    totalSessions: number;
+    totalArtifacts: number;
+    sessions: HubArtifactSummary[];
+  };
+  skills: {
+    compiled: HubSkill[];
+    hub: HubSkill[];
+    total: number;
+    /** P3 — enabled/disabled counts (mirror the toolsets summary cards). */
+    enabled: number;
+    disabled: number;
+  };
+  adminConfigured: boolean;
+  serverTime: number;
+}

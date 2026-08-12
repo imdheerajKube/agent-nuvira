@@ -294,6 +294,29 @@ describe('ConfigManager', () => {
       expect(savedConfig.providers.nim.temperature).toBe(0.7);
       expect(savedConfig.providers.local.runner).toBe('ollama');
     });
+
+    it('saves and reloads the I7 skills config (disabled[] + registries[]) without clobbering unrelated keys', () => {
+      const configDir = join(testDir, 'test-skills');
+      const manager = new ConfigManager(configDir);
+
+      manager.save({ skills: { disabled: ['website-deploy'], registries: ['file:///tmp/team-skills'] } });
+      manager.save({ defaultProvider: 'groq' });
+
+      const saved = JSON.parse(readFileSync(join(configDir, 'buffconfig.json'), 'utf-8'));
+      expect(saved.skills).toEqual({ disabled: ['website-deploy'], registries: ['file:///tmp/team-skills'] });
+      expect(saved.defaultProvider).toBe('groq');
+
+      // Whole-array semantics: saving only `disabled` must not resurrect a
+      // stale registries list, and vice-versa.
+      manager.save({ skills: { disabled: [] } });
+      const saved2 = JSON.parse(readFileSync(join(configDir, 'buffconfig.json'), 'utf-8'));
+      expect(saved2.skills.disabled).toEqual([]);
+      expect(saved2.skills.registries).toEqual(['file:///tmp/team-skills']);
+
+      const reloaded = new ConfigManager(configDir);
+      expect(reloaded.getAll().skills?.disabled).toEqual([]);
+      expect(reloaded.getAll().skills?.registries).toEqual(['file:///tmp/team-skills']);
+    });
   });
 
   describe('hasRequiredCredentials', () => {

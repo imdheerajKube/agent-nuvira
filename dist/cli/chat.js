@@ -29,6 +29,7 @@ import { resolveDispatch } from '../nlu/actions.js';
 import { runToolLoop, extractFallbackToolCalls } from '../tools/tool-loop.js';
 import { getTool, TOOL_CONTRACT_JSON } from '../tools/registry.js';
 import { runPipelineTool } from '../tools/pipeline-tool.js';
+import { ArtifactStore } from '../tools/artifact-store.js';
 import { getEventBus } from '../observability/event-bus.js';
 import { maybeRunBackgroundDuties } from './duties.js';
 import { deriveProjectId } from '../config/workspace.js';
@@ -578,12 +579,29 @@ export class ChatCommand extends BaseCommand {
             })),
             { role: 'user', content: message },
         ];
+        // I3: one artifact session per TURN (Hermes run.py parity) — every tool
+        // deliverable in this turn lands in the same store folder.
+        const artifactSessionId = `chat-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
         const toolContext = {
             configManager: this.configManager,
             cwd: process.cwd(),
             emit: (event, data, source) => getEventBus().emit(event, data, source),
             // C2 verify with the actual session model (verify_requirement tool).
             callLLM: (prompt, opts) => session.provider.generate(prompt, { ...opts, model: session.model }),
+            // I3: tools that return {artifact, result} deliverables are recorded to
+            // the per-turn artifact session. Best-effort — a persistence failure
+            // must never break the turn.
+            artifacts: {
+                push: (a) => {
+                    try {
+                        new ArtifactStore().append(artifactSessionId, a);
+                        logger.debug(`artifact: ${a.kind} '${a.title}' → ${a.path}`);
+                    }
+                    catch {
+                        // best-effort
+                    }
+                },
+            },
         };
         const callModel = this.buildToolCallModel(message, session, options, mode);
         let result;
