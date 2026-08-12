@@ -174,6 +174,21 @@ export class RunnerAgent extends Agent {
     );
     const description = runnerTask?.description || context.goal;
 
+    // REPAIR-AWARE (adaptive repair loop): when this execution is a repair or
+    // alternative-approach attempt (the repair engine appends [REPAIR ATTEMPT]
+    // / [ALTERNATIVE APPROACH] markers to context.goal), the previous command
+    // FAILED. Blindly re-extracting the same backticked command from the
+    // unchanged task description would re-run the identical failure until the
+    // budget dies — the exact bug observed with `wrangler pages deploy` (4
+    // identical runs). Instead, ask the LLM for the NEXT command informed by
+    // the previous attempt's captured output.
+    if (this.isRepairAttempt(context)) {
+      const repairCommand = await this.askLLMForRepairCommand(context, callLLM, description);
+      if (repairCommand) return repairCommand;
+      // LLM unavailable — fall through to the standard extraction strategies
+      // (better to re-run a possibly-fixed context than to fail outright).
+    }
+
     // Strategy 1: Extract command from backticks in the description
     // e.g., "Run `python hello.py` and verify output"
     const backtickMatch = description.match(/`([^`]+)`/);
@@ -1038,6 +1053,65 @@ export class RunnerAgent extends Agent {
       details: lines.join('\n'),
       error: execError && exitCode !== 0 ? execError : undefined,
     };
+  }
+
+  /**
+   * True when this runner execution is a repair/alternative-approach attempt
+   * (the ErrorRepairEngine appends these markers to context.goal).
+   */
+  private isRepairAttempt(context: AgentContext): boolean {
+    const goal = context.goal || '';
+    return goal.includes('[REPAIR ATTEMPT') || goal.includes('[ALTERNATIVE APPROACH');
+  }
+
+  /**
+   * Ask the LLM for the NEXT command after a previous command failed.
+   * This is what makes the repair loop ADAPT instead of re-running the same
+   * failing command: the LLM sees the task, the previous command, and its
+   * captured stdout/stderr, and proposes a corrected command (e.g. create the
+   * Cloudflare Pages project before deploying).
+   */
+  private async askLLMForRepairCommand(
+    context: AgentContext,
+    callLLM: LLMCallFn,
+    taskDescription: string,
+  ): Promise<string | null> {
+    const prev = context.metadata.runResult as RunResult | undefined;
+    const prevLines = prev
+      ? [
+          `Previous command: ${prev.command}`,
+          `Exit code: ${prev.exitCode}`,
+          prev.stdout ? `stdout:\n${prev.stdout.slice(0, 1500)}` : '',
+          prev.stderr ? `stderr:\n${prev.stderr.slice(0, 1500)}` : '',
+        ].filter(Boolean).join('\n')
+      : 'No previous run recorded.';
+
+    const prompt = [
+      'A command failed during execution. Propose the NEXT command to run.',
+      '',
+      `Task: ${taskDescription}`,
+      '',
+      'The previous attempt failed:',
+      prevLines,
+      '',
+      'Analyze the failure and propose a corrected command that addresses the error',
+      '(e.g. create a missing project/configuration first, use a different flag, or',
+      'skip a step that is already done). Do NOT repeat the failed command unchanged.',
+      '',
+      'Return ONLY the single shell command to run next, with no explanation or markdown.',
+    ].join('\n');
+
+    try {
+      const response = (await callLLM(prompt, { temperature: 0.2, maxTokens: 300 })).trim();
+      const cleaned = response.replace(/^```(?:bash|sh)?\s*|```\s*$/g, '').trim();
+      // Reject multi-line responses (a single command only), mirroring
+      // askLLMForCommand — a multi-line string would break runShell.
+      if (cleaned.length === 0 || cleaned.includes('\n')) return null;
+      return cleaned;
+    } catch {
+      // LLM unavailable — fall back to the standard determination path.
+      return null;
+    }
   }
 
   /**

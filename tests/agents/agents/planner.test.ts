@@ -441,6 +441,66 @@ describe('PlannerAgent', () => {
       expect(capturedPrompt).toContain('42 source files · 8 test files found');
     });
 
+    it('should inject matched-skill methodology when skillGuidance is present in metadata', async () => {
+      const context = {
+        goal: 'deploy this website to Cloudflare Pages',
+        workingDirectory: '/test',
+        taskPlan: [],
+        artifacts: [],
+        conversations: [],
+        fileChanges: [],
+        metadata: {
+          skillGuidance: {
+            name: 'website-deploy',
+            description: 'Deploy a static site to a hosting provider and verify the live URL.',
+            steps: [
+              { agentType: 'runner', description: 'Ensure the Cloudflare Pages project exists: Run `wrangler pages project create demo --production-branch main`' },
+              { agentType: 'runner', description: 'Deploy the site: Run `wrangler pages deploy . --project-name demo`' },
+            ],
+          },
+        },
+      } as any;
+
+      let capturedPrompt = '';
+      const mockLLM = async (prompt: string) => {
+        capturedPrompt = prompt;
+        return JSON.stringify([
+          { id: 's1', description: 'Deploy the website', agentType: 'runner', dependsOn: [] },
+        ]);
+      };
+
+      const result = await planner.execute(context, mockLLM as any);
+      expect(result.success).toBe(true);
+      expect(capturedPrompt).toContain('Skill Guidance');
+      expect(capturedPrompt).toContain('website-deploy');
+      expect(capturedPrompt).toContain('wrangler pages project create demo --production-branch main');
+      // Placeholder-resolution instruction guards against {{param}} leaks
+      expect(capturedPrompt).toContain('NEVER emit literal');
+    });
+
+    it('should not inject skill guidance when metadata is absent', async () => {
+      const context = {
+        goal: 'test',
+        workingDirectory: '/test',
+        taskPlan: [],
+        artifacts: [],
+        conversations: [],
+        fileChanges: [],
+        metadata: {},
+      } as any;
+
+      let capturedPrompt = '';
+      const mockLLM = async (prompt: string) => {
+        capturedPrompt = prompt;
+        return JSON.stringify([
+          { id: 's1', description: 'Write', agentType: 'writer', dependsOn: [] },
+        ]);
+      };
+
+      await planner.execute(context, mockLLM as any);
+      expect(capturedPrompt).not.toContain('Skill Guidance');
+    });
+
     it('should inject routing guidance into the prompt when verification intent is detected', async () => {
       const context = {
         goal: 'verify a bug fix',

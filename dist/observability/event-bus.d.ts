@@ -70,6 +70,7 @@ export declare const EventNames: {
     readonly MODEL_REGISTRY_UPDATED: "model-registry:updated";
     readonly EXEC_SHELL_START: "exec:shell-start";
     readonly EXEC_SHELL_END: "exec:shell-end";
+    readonly TOOL_CALLED: "tool:called";
     readonly DELEGATION_SPAWN: "delegation:spawn";
     readonly DELEGATION_RESULT: "delegation:result";
     readonly DELEGATION_ERROR: "delegation:error";

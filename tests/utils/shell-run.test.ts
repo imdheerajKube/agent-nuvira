@@ -151,6 +151,24 @@ describe('runShell', () => {
     }
   });
 
+  it('includes captured stdout/stderr in exec:shell-end events (failure transparency)', async () => {
+    const bus = getEventBus();
+    let endData: { command: string; exitCode: number; stdout?: string; stderr?: string } | null = null;
+    const off = bus.on(EventNames.EXEC_SHELL_END, (record) => {
+      endData = record.data as { command: string; exitCode: number; stdout?: string; stderr?: string };
+    });
+    try {
+      await runShell('node -e "console.log(\'visible-stdout\');console.error(\'visible-stderr\');process.exit(1)"');
+
+      expect(endData).not.toBeNull();
+      expect(endData!.exitCode).toBe(1);
+      expect(endData!.stdout).toContain('visible-stdout');
+      expect(endData!.stderr).toContain('visible-stderr');
+    } finally {
+      off();
+    }
+  });
+
   it('suppresses events when emitEvents is false', async () => {
     const events = collectShellEvents();
     try {

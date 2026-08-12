@@ -29,6 +29,7 @@ import { SessionCommand } from './session.js';
 import { SkillCommand } from './skill.js';
 import { SkillsCommand } from './skills.js';
 import { GatewayCommand } from './gateway.js';
+import { WhatsAppCommand } from './whatsapp.js';
 import { BenchmarkCommand } from './benchmark.js';
 import { EvalCommand } from './eval.js';
 import { SandboxCommand } from './sandbox.js';
@@ -96,6 +97,9 @@ export function createCLI(): Command {
 
   const workflowCmd = new WorkflowCommand();
   program.addCommand(workflowCmd.create());
+
+  const whatsappCmd = new WhatsAppCommand();
+  program.addCommand(whatsappCmd.create());
 
   const pluginsCmd = new PluginsCommand();
   program.addCommand(pluginsCmd.create());

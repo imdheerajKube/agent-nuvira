@@ -333,6 +333,34 @@ describe('SkillStore', () => {
     });
   });
 
+  describe('seedBundledSkills', () => {
+    it('seeds the bundled website-deploy skill into a fresh store', () => {
+      const fresh = new SkillStore();
+      const skill = fresh.get('skill-website-deploy');
+      expect(skill).not.toBeNull();
+      expect(skill!.name).toBe('website-deploy');
+      expect(skill!.version).toBe('1.0.0');
+      expect(skill!.steps.length).toBeGreaterThan(0);
+    });
+
+    it('is idempotent — does not overwrite a same-version bundled skill (preserves edits)', () => {
+      const fresh = new SkillStore();
+      const seeded = fresh.get('skill-website-deploy')!;
+      fresh.save({ ...seeded, description: 'EDITED BY USER' });
+
+      const seededCount = fresh.seedBundledSkills();
+      expect(seededCount).toBe(0);
+      expect(fresh.get('skill-website-deploy')!.description).toBe('EDITED BY USER');
+    });
+
+    it('findMatch returns the website-deploy skill for a deploy goal', () => {
+      const fresh = new SkillStore();
+      const match = fresh.findMatch('deploy this website to cloudflare pages and publish it');
+      expect(match).not.toBeNull();
+      expect(match!.name).toBe('website-deploy');
+    });
+  });
+
   describe('clear', () => {
     it('should remove all skills', () => {
       store.save(makeSkill({ id: 's1', name: 'Skill A' }));

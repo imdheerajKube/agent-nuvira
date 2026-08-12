@@ -22,6 +22,15 @@ export declare class SkillStore {
     private index;
     constructor();
     /**
+     * Install first-party bundled skills (src/skills/bundled-skills.ts) into the
+     * user skill store. Idempotent — a bundled skill whose version matches the
+     * on-disk version is NOT overwritten (preserves user edits and usage stats);
+     * a newer bundled version replaces the older one.
+     *
+     * @returns The number of skills seeded/updated.
+     */
+    seedBundledSkills(): number;
+    /**
      * Save a skill to disk. Creates both the individual file and updates the index.
      * If a skill with the same ID already exists, it's overwritten.
      */

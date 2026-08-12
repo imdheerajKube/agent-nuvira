@@ -168,6 +168,43 @@ describe('Orchestrator — execution strategy', () => {
     expect(strategy.useRepair).toBe(true);
     expect(strategy.followUpAgentType).toBe('reviewer');
   });
+
+  it('should NEVER remap a runner task off the runner (live bug: debugging intent → debugger)', () => {
+    // Live failure: the website-deploy skill planned a runner step "Run
+    // `wrangler pages project create ...`". The goal contained the project
+    // name nuvira-fix-validation → NLU intent 'debugging' → getExecutionStrategy
+    // remapped the runner to the debugger, which only consumes testResult
+    // metadata and returned "No test results found" — the command never ran.
+    const orchestrator = new Orchestrator();
+    const strategy = (orchestrator as any).getExecutionStrategy(
+      { agentType: 'runner', description: 'Run `wrangler pages project create nuvira-fix-validation --production-branch main`' },
+      {
+        taskProfile: {
+          intent: 'debugging',
+          requiresVerification: false,
+        },
+      },
+    );
+
+    // The runner executes shell commands; it must stay a runner regardless of
+    // the goal's intent. Only the writer (file-producing agent) is remapped.
+    expect(strategy.effectiveAgentType).toBe('runner');
+  });
+
+  it('should keep tester as tester under debugging intent (debugger needs testResult)', () => {
+    const orchestrator = new Orchestrator();
+    const strategy = (orchestrator as any).getExecutionStrategy(
+      { agentType: 'tester', description: 'run the test suite' },
+      {
+        taskProfile: {
+          intent: 'debugging',
+          requiresVerification: false,
+        },
+      },
+    );
+
+    expect(strategy.effectiveAgentType).toBe('tester');
+  });
 });
 
 describe('Orchestrator — routing hints on task plan', () => {

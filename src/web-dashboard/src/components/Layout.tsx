@@ -13,6 +13,7 @@ const NAV_ITEMS = [
   { path: '/models', label: 'Models', icon: '🧠' },
   { path: '/routing', label: 'Routing', icon: '🤖' },
   { path: '/requests', label: 'Requests', icon: '📨' },
+  { path: '/hub', label: 'Agent Hub', icon: '🧰' },
   { path: '/traces', label: 'Traces', icon: '🔍' },
   { path: '/costs', label: 'Costs', icon: '💰' },
   { path: '/history', label: 'History', icon: '📝' },

@@ -1,0 +1,190 @@
+/**
+ * I7 P0 — Hub skill catalog tests (`src/learning/hub-skill-catalog.ts`).
+ *
+ * The catalog scans `<project>/.agents/skills/<name>/SKILL.md` (hub install
+ * target) and `~/.buff/skills/<name>/SKILL.md` (user-level), filters
+ * `skills.disabled[]`, and matches goals for the orchestrator's guidance
+ * injection. All tests are hermetic: temp project + temp home.
+ */
+
+import { describe, it, expect, beforeEach, afterEach } from 'vitest';
+import { mkdtempSync, mkdirSync, writeFileSync, rmSync } from 'node:fs';
+import { join } from 'node:path';
+import { tmpdir } from 'node:os';
+
+import {
+  readHubCatalog,
+  readDisabledSkills,
+  listMatchableHubSkills,
+  findHubSkillMatch,
+  parseCatalogFrontmatter,
+  setSkillEnabled,
+} from '../../src/learning/hub-skill-catalog.js';
+import { ConfigManager } from '../../src/config/manager.js';
+import { resetSkillStore } from '../../src/learning/skill-store.js';
+
+function skillMd(name: string, description: string, extra = ''): string {
+  return `---\nname: ${name}\ndescription: ${description}\n---\n\n# ${name}\n\n${extra}Methodology steps for ${name}.\n`;
+}
+
+let projectDir = '';
+let homeDir = '';
+let configDir = '';
+
+beforeEach(() => {
+  projectDir = mkdtempSync(join(tmpdir(), 'buff-cat-proj-'));
+  homeDir = mkdtempSync(join(tmpdir(), 'buff-cat-home-'));
+  configDir = mkdtempSync(join(tmpdir(), 'buff-cat-cfg-'));
+});
+
+afterEach(() => {
+  rmSync(projectDir, { recursive: true, force: true });
+  rmSync(homeDir, { recursive: true, force: true });
+  rmSync(configDir, { recursive: true, force: true });
+});
+
+describe('parseCatalogFrontmatter', () => {
+  it('extracts name + description, stripping quotes', () => {
+    const fm = parseCatalogFrontmatter('---\nname: my-skill\ndescription: "Deploy things"\n---\nbody');
+    expect(fm).toEqual({ name: 'my-skill', description: 'Deploy things' });
+  });
+
+  it('returns empty for a file with no frontmatter', () => {
+    expect(parseCatalogFrontmatter('no frontmatter here')).toEqual({});
+  });
+});
+
+describe('readHubCatalog', () => {
+  it('scans the project .agents/skills root', () => {
+    const dir = join(projectDir, '.agents', 'skills', 'deployer');
+    mkdirSync(dir, { recursive: true });
+    writeFileSync(join(dir, 'SKILL.md'), skillMd('deployer', 'Deploy to cloudflare'), 'utf-8');
+
+    const skills = readHubCatalog(projectDir, homeDir);
+    expect(skills).toHaveLength(1);
+    expect(skills[0]).toMatchObject({ id: 'deployer', name: 'deployer', root: 'project' });
+    expect(skills[0].body).toContain('Methodology steps for deployer');
+  });
+
+  it('scans the home ~/.buff/skills root', () => {
+    const dir = join(homeDir, '.buff', 'skills', 'auditor');
+    mkdirSync(dir, { recursive: true });
+    writeFileSync(join(dir, 'SKILL.md'), skillMd('auditor', 'Audit dependencies'), 'utf-8');
+
+    const skills = readHubCatalog(projectDir, homeDir);
+    expect(skills).toHaveLength(1);
+    expect(skills[0]).toMatchObject({ id: 'auditor', root: 'home' });
+  });
+
+  it('project root wins over home on name collision', () => {
+    for (const root of [join(projectDir, '.agents', 'skills', 'dupe'), join(homeDir, '.buff', 'skills', 'dupe')]) {
+      mkdirSync(root, { recursive: true });
+      writeFileSync(join(root, 'SKILL.md'), skillMd('dupe', 'same skill'), 'utf-8');
+    }
+    const skills = readHubCatalog(projectDir, homeDir);
+    expect(skills).toHaveLength(1);
+    expect(skills[0].root).toBe('project');
+  });
+
+  it('ignores dirs whose names are not sandbox-safe (no traversal)', () => {
+    const evil = join(projectDir, '.agents', 'skills', '..', '..', 'evil');
+    mkdirSync(evil, { recursive: true });
+    writeFileSync(join(evil, 'SKILL.md'), skillMd('evil', 'should not be read'), 'utf-8');
+
+    expect(readHubCatalog(projectDir, homeDir)).toEqual([]);
+  });
+});
+
+describe('disabled filtering + matching', () => {
+  it('excludes skills listed in skills.disabled', () => {
+    const dir = join(projectDir, '.agents', 'skills', 'deployer');
+    mkdirSync(dir, { recursive: true });
+    writeFileSync(join(dir, 'SKILL.md'), skillMd('deployer', 'Deploy to cloudflare'), 'utf-8');
+
+    // No config → matchable.
+    expect(listMatchableHubSkills(undefined, projectDir, homeDir)).toHaveLength(1);
+
+    // Config with the skill disabled → excluded.
+    const cm = new ConfigManager(configDir);
+    cm.save({ skills: { disabled: ['deployer'] } });
+    expect(listMatchableHubSkills(cm, projectDir, homeDir)).toHaveLength(0);
+    expect(readDisabledSkills(cm)).toEqual(['deployer']);
+  });
+
+  it('findHubSkillMatch scores by goal keywords and returns the SKILL.md body', () => {
+    mkdirSync(join(projectDir, '.agents', 'skills', 'website-deploy'), { recursive: true });
+    writeFileSync(
+      join(projectDir, '.agents', 'skills', 'website-deploy', 'SKILL.md'),
+      skillMd('website-deploy', 'Publish a static website to cloudflare pages'),
+      'utf-8',
+    );
+
+    const match = findHubSkillMatch('publish my website to cloudflare', undefined, projectDir, homeDir);
+    expect(match).not.toBeNull();
+    expect(match!.id).toBe('website-deploy');
+    expect(match!.body).toContain('Methodology steps');
+  });
+
+  it('returns null when nothing scores and when the match is disabled', () => {
+    expect(findHubSkillMatch('unrelated goal about databases', undefined, projectDir, homeDir)).toBeNull();
+
+    mkdirSync(join(projectDir, '.agents', 'skills', 'website-deploy'), { recursive: true });
+    writeFileSync(
+      join(projectDir, '.agents', 'skills', 'website-deploy', 'SKILL.md'),
+      skillMd('website-deploy', 'Publish a static website to cloudflare pages'),
+      'utf-8',
+    );
+    const cm = new ConfigManager(configDir);
+    cm.save({ skills: { disabled: ['website-deploy'] } });
+    expect(findHubSkillMatch('publish my website to cloudflare', cm, projectDir, homeDir)).toBeNull();
+  });
+});
+
+describe('setSkillEnabled (P3 — Agent Hub Skills toggle writer)', () => {
+  // knownSkillIds() also consults the compiled SkillStore singleton, so pin
+  // BUFF_MEMORY_DIR to a temp dir + reset the singleton — otherwise the test
+  // would construct the store against the developer's real ~/.buff.
+  let memDir = '';
+  const envBackup: Record<string, string | undefined> = {};
+  beforeEach(() => {
+    envBackup.BUFF_MEMORY_DIR = process.env.BUFF_MEMORY_DIR;
+    memDir = mkdtempSync(join(tmpdir(), 'buff-cat-mem-'));
+    process.env.BUFF_MEMORY_DIR = memDir;
+    resetSkillStore();
+  });
+  afterEach(() => {
+    if (envBackup.BUFF_MEMORY_DIR === undefined) delete process.env.BUFF_MEMORY_DIR;
+    else process.env.BUFF_MEMORY_DIR = envBackup.BUFF_MEMORY_DIR;
+    rmSync(memDir, { recursive: true, force: true });
+  });
+
+  const installWebsiteDeploy = () => {
+    mkdirSync(join(projectDir, '.agents', 'skills', 'website-deploy'), { recursive: true });
+    writeFileSync(
+      join(projectDir, '.agents', 'skills', 'website-deploy', 'SKILL.md'),
+      skillMd('website-deploy', 'Publish a static website to cloudflare pages'),
+      'utf-8',
+    );
+  };
+
+  it('disables a known skill (disabled list grows) and re-enables it (shrinks) — other entries survive', () => {
+    installWebsiteDeploy();
+    const cm = new ConfigManager(configDir);
+    // Pre-existing entry must never be clobbered by a toggle of another skill.
+    cm.save({ skills: { disabled: ['release-bumper'] } });
+
+    setSkillEnabled('website-deploy', false, cm, projectDir, homeDir);
+    expect(readDisabledSkills(cm)).toEqual(['release-bumper', 'website-deploy']);
+    // The match gate honors the toggle immediately (no recompile, no restart).
+    expect(findHubSkillMatch('publish my website to cloudflare', cm, projectDir, homeDir)).toBeNull();
+
+    setSkillEnabled('website-deploy', true, cm, projectDir, homeDir);
+    expect(readDisabledSkills(cm)).toEqual(['release-bumper']);
+    expect(findHubSkillMatch('publish my website to cloudflare', cm, projectDir, homeDir)).not.toBeNull();
+  });
+
+  it('throws for an unknown skill id (typo-safe, mirrors setToolsetEnabled)', () => {
+    const cm = new ConfigManager(configDir);
+    expect(() => setSkillEnabled('does-not-exist', false, cm, projectDir, homeDir)).toThrow(/Unknown skill/);
+  });
+});

@@ -26,7 +26,11 @@ import {
   type Platform,
 } from './channel-directory.js';
 import type { ChannelAdapter, InboundMessage } from './adapters.js';
+import { DeliveryLedger, type DeliveryEntry } from './delivery.js';
 import { logger } from '../utils/logger.js';
+
+/** How often the running gateway drains due delivery entries (ms). */
+const DELIVERY_DRAIN_INTERVAL_MS = 30_000;
 
 // ─── Reply formatting ───────────────────────────────────────────────────────
 
@@ -62,6 +66,8 @@ export interface GatewayRegistryOptions {
   streamEvents?: boolean;
   /** Only reply for pipeline intents; all other messages get a help line (default false). */
   pipelineOnly?: boolean;
+  /** Config dir for the delivery ledger (tests pass a temp dir; default ~/.buff). */
+  deliveryConfigDir?: string;
   /**
    * Authorized channels allowed to trigger the pipeline ("platform:channelId"
    * entries, comma-separated in BUFF_GATEWAY_ALLOW_IDS). Empty = every channel
@@ -72,14 +78,21 @@ export interface GatewayRegistryOptions {
 
 export class GatewayRegistry {
   readonly directory: ChannelDirectory;
+  /** I2 — guaranteed-delivery ledger for failed sends (Hermes delivery.py parity). */
+  readonly delivery: DeliveryLedger;
   private adapters = new Map<Platform, ChannelAdapter>();
   private configManager: ConfigManager;
-  private options: Required<GatewayRegistryOptions>;
+  private options: Required<Omit<GatewayRegistryOptions, 'deliveryConfigDir'>>;
   private unsubscribe: (() => void) | null = null;
+  private deliveryTimer: NodeJS.Timeout | null = null;
   /** Channel the last inbound message came from (for event streaming). */
   private activeChannel: ChannelRef | null = null;
   /** Serializes inbound pipeline runs so board events stream to the RIGHT channel. */
   private runChain: Promise<unknown> = Promise.resolve();
+  /** Serializes delivery drains — concurrent timer/CLI/opportunistic drains
+   *  must never read the same pending entry twice (double-send + attempt
+   *  double-count would prematurely fail entries). */
+  private drainChain: Promise<unknown> = Promise.resolve();
   private started = false;
 
   constructor(options: GatewayRegistryOptions = {}, configManager?: ConfigManager) {
@@ -93,6 +106,7 @@ export class GatewayRegistry {
       allowIds: options.allowIds ?? allowFromEnv,
     };
     this.directory = new ChannelDirectory();
+    this.delivery = new DeliveryLedger(options.deliveryConfigDir);
     this.configManager = configManager ?? new ConfigManager();
   }
 
@@ -118,19 +132,69 @@ export class GatewayRegistry {
       logger.warn(`gateway: unknown channel target '${target}'`);
       return false;
     }
-    return this.sendToRef(ref, text);
+    return this.sendToRef(ref, text, target);
   }
 
-  /** Send to an explicit channel ref. */
-  async sendToRef(ref: ChannelRef, text: string): Promise<boolean> {
+  /** Send to an explicit channel ref. I2: a failed send is ledgered for retry. */
+  async sendToRef(ref: ChannelRef, text: string, target?: string): Promise<boolean> {
     const adapter = this.adapters.get(ref.platform);
     if (!adapter || !adapter.configured) {
       logger.warn(`gateway: adapter for '${ref.platform}' not configured`);
       return false;
     }
     const ok = await adapter.send(ref.channelId, text);
-    if (!ok) logger.warn(`gateway: send to ${ref.platform}:${ref.channelId} failed`);
-    return ok;
+    if (!ok) {
+      logger.warn(`gateway: send to ${ref.platform}:${ref.channelId} failed — enqueued for delivery retry`);
+      // Persist for retry (survives this process) — the next drain (or the
+      // next `gateway start`) delivers it. Keep the HUMAN target (alias)
+      // when the caller had one, for readable ledger lines.
+      this.delivery.enqueue({
+        target: target ?? `${ref.platform}:${ref.channelId}`,
+        ref,
+        text,
+      });
+      return false;
+    }
+    // Opportunistic flush: a successful send often means the network is back
+    // — drain any due pending entries for THIS platform right away (serialized
+    // on the drain chain so it never overlaps the timer/CLI drains; awaits so
+    // the caller's next send sees the ledger state settled). Never throws.
+    await this.drainForPlatform(ref.platform);
+    return true;
+  }
+
+  /**
+   * Attempt all due pending delivery entries through the registered adapters.
+   * Returns the counters (public so the CLI `buff gateway delivery --flush`
+   * and tests can drive it directly). Serialized on the drain chain.
+   */
+  async drainDelivery(): Promise<{ processed: number; sent: number; failed: number }> {
+    const run = this.drainChain.then(() => this.delivery.processDue((entry) => this.sendEntry(entry)));
+    this.drainChain = run.then(() => undefined, () => undefined);
+    return run;
+  }
+
+  /** One ledger entry send through the registered adapter (shared by drains). */
+  private async sendEntry(entry: DeliveryEntry): Promise<{ ok: boolean; error?: string }> {
+    const adapter = this.adapters.get(entry.platform);
+    if (!adapter || !adapter.configured) {
+      return { ok: false, error: `adapter for '${entry.platform}' not configured` };
+    }
+    const ok = await adapter.send(entry.channelId, entry.text);
+    return ok ? { ok: true } : { ok: false, error: 'send failed' };
+  }
+
+  /** Drain due entries for one platform only (opportunistic flush, serialized). */
+  private drainForPlatform(platform: Platform): Promise<void> {
+    const run = this.drainChain.then(async () => {
+      const due = this.delivery.pendingDue().filter((e) => e.platform === platform);
+      for (const entry of due) {
+        await this.delivery.recordAttempt(entry.id, await this.sendEntry(entry));
+      }
+      this.delivery.prune();
+    });
+    this.drainChain = run.then(() => undefined, () => undefined);
+    return run;
   }
 
   /**
@@ -226,14 +290,24 @@ export class GatewayRegistry {
         if (line) void this.sendToRef(this.activeChannel, line);
       });
     }
+
+    // I2: periodic drain of the delivery ledger (failed sends retry with
+    // backoff while the gateway runs).
+    this.deliveryTimer = setInterval(() => {
+      void this.drainDelivery().catch(() => undefined);
+    }, DELIVERY_DRAIN_INTERVAL_MS);
   }
 
-  /** Stop adapters + unsubscribe. Idempotent. */
+  /** Stop adapters + unsubscribe + stop the delivery drain. Idempotent. */
   async stop(): Promise<void> {
     if (!this.started) return;
     this.started = false;
     this.unsubscribe?.();
     this.unsubscribe = null;
+    if (this.deliveryTimer) {
+      clearInterval(this.deliveryTimer);
+      this.deliveryTimer = null;
+    }
     for (const adapter of this.adapters.values()) {
       try { await adapter.stop(); } catch { /* best-effort */ }
     }

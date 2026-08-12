@@ -2,6 +2,47 @@
 
 All notable changes to **Agent-Nuvira** are documented in this file.
 
+## v1.63.0 — Hermes messaging campaign: 22-platform multi-channel gateway
+
+- **Multi-channel gateway — 22 platforms (Hermes `gateway/` parity).** The
+  `buff gateway` surface now covers the full Hermes messaging ecosystem: the
+  original J1 platforms (Telegram long-poll, Discord/Slack webhooks, WhatsApp
+  Cloud API) plus **18 connectors with Hermes env-var parity** — DingTalk,
+  Feishu, WeCom, Mattermost, Matrix, generic Webhook, BlueBubbles (iMessage
+  bridge, macOS), ntfy, Microsoft Teams, Google Chat, Weixin (WeChat iLink bot
+  API), SMS (Twilio REST), IRC (RFC 1459 over node:net/tls, byte-aware ≤510-byte
+  message splitting + markdown strip), SimpleX (local daemon WebSocket), and
+  Home Assistant (REST notifications). Every adapter is opt-in via the SAME env
+  vars Hermes uses (`TWILIO_*`, `IRC_*`, `SIMPLEX_*`, `HASS_*`, `BUFF_*`) —
+  existing Hermes credentials work in agent-nuvira unchanged. Pure Node built-ins
+  throughout (fetch, node:net/tls, global WebSocket) — zero new SDK deps.
+- **WhatsApp personal bridge (Baileys).** `buff whatsapp pair` (QR) pairs your
+  own WhatsApp number — no paid API. Two-way: the gateway relays inbound
+  messages to the agent and replies back. `whatsapp_cloud` (Meta Cloud API)
+  remains the paid opt-in.
+- **Guaranteed delivery ledger.** Failed sends are persisted and retried
+  automatically while `buff gateway start` runs; `buff gateway delivery` shows
+  the queue and `--flush` forces a drain.
+- **SimpleX is two-way.** Persistent inbound WS listener — contact-request
+  auto-accept (`SIMPLEX_AUTO_ACCEPT`), echo filtering, contact/group
+  allowlists (`SIMPLEX_ALLOWED_USERS` / `SIMPLEX_GROUP_ALLOWED`), reconnect
+  with backoff — the agent listens AND replies on SimpleX.
+- **Dashboard channel send-test.** The Agent Hub Channels tab can send a test
+  message through the same gateway the CLI uses (`POST
+  /api/admin/hub/channels/send`, admin + `routing.operate` gate), with a 15s
+  send bound and env-var hints per platform. `buff gateway status` now shows a
+  `X/22 platforms configured` count line.
+- **Security hardening across connectors.** CRLF injection rejected pre-connect
+  (IRC, SimpleX), socket errors after send are failures (never silent loss),
+  Twilio/HA/Hermes credentials never logged (`describe()` shows only the
+  non-secret parts).
+- **Tests.** Full connector suites use in-process mock servers (SMTP, IRC,
+  fake WebSocket, fetch spies) — no network. Full suite: **4,269 tests across
+  180 files** (was 4,031).
+- **Docs.** `HERMES_ECOSYSTEM_INTEGRATION_PLAN.md` (I1–I16 pillars + deferred
+  heavy-bridge assessment), `HERMES_IMPORT_DESIGN.md`, `ASSESSMENT_WEBSITE_DEPLOY.md`;
+  User Manual gateway section updated; website updated to v1.63.0 / 4,269 tests.
+
 ## v1.62.5 — Reviewer rate-limit recovery: eval 429s are waited out, not fatal
 
 - **Root cause fixed (eval interference).** The reviewer's retry loop used a

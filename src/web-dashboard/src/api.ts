@@ -12,6 +12,7 @@ import type {
   AdminWriteResult,
   DashboardData,
   DAGData,
+  HubData,
   QuotaInsights,
   RoutingInsights,
   TraceEntry,
@@ -261,6 +262,18 @@ export class DashboardAPI {
     }
   }
 
+  /** I4: fetch the Agent Hub aggregate (toolsets, channels, artifacts, skills). */
+  async fetchHub(): Promise<HubData | null> {
+    try {
+      const res = await fetch(`${this.baseUrl}/api/hub`, { signal: AbortSignal.timeout(8000) });
+      const data = (await parseJsonOrNull(res)) as HubData | null;
+      if (!data || !Array.isArray(data.toolsets?.toolsets)) return null;
+      return data;
+    } catch {
+      return null;
+    }
+  }
+
   /** P0: fetch a single trace's full detail (steps + previews). */
   async fetchTraceDetail(id: string): Promise<TraceEntry | null> {
     try {
@@ -424,6 +437,62 @@ export class DashboardAPI {
     const d = r.data as AdminQuotaConfig | null;
     if (!d || !d.ok || typeof d.quota !== 'object') return null;
     return d;
+  }
+
+  /**
+   * I5: toggle a toolset's enabled state (authed — routing.operate). The
+   * server persists it to buffconfig; the I1 runtime gate (schema + execution)
+   * honors it immediately, so the dashboard toggle is never cosmetic.
+   */
+  async setToolsetEnabled(name: string, enabled: boolean): Promise<AdminWriteResult> {
+    const r = await this.sendAdminRequest(`/api/admin/hub/toolsets/${encodeURIComponent(name)}`, 'PUT', { enabled });
+    if (!r) return { ok: false, error: 'Could not reach the dashboard server.' };
+    const d = (r.data ?? {}) as AdminWriteResult;
+    if (r.status === 200 && d.ok) return d;
+    return {
+      ok: false,
+      error: d.error || 'Toggle failed.',
+      unauthorized: r.status === 401,
+      forbidden: r.status === 403,
+    };
+  }
+
+  /**
+   * P3: toggle a skill's enabled state (compiled OR hub). Admin-gated PUT
+   * that writes the SAME `skills.disabled[]` config the runtime match gate
+   * reads, so the toggle is never cosmetic.
+   */
+  async setSkillEnabled(name: string, enabled: boolean): Promise<AdminWriteResult> {
+    const r = await this.sendAdminRequest(`/api/admin/hub/skills/${encodeURIComponent(name)}`, 'PUT', { enabled });
+    if (!r) return { ok: false, error: 'Could not reach the dashboard server.' };
+    const d = (r.data ?? {}) as AdminWriteResult;
+    if (r.status === 200 && d.ok) return d;
+    return {
+      ok: false,
+      error: d.error || 'Toggle failed.',
+      unauthorized: r.status === 401,
+      forbidden: r.status === 403,
+    };
+  }
+
+  /**
+   * I11: send a test message through the gateway (authed — routing.operate).
+   * Mirrors `buff gateway send <target> <text>`; the server resolves the
+   * target (alias or platform:channelId) and sends through the SAME
+   * GatewayRegistry the CLI uses, so a Channels-tab test is identical to a
+   * CLI send.
+   */
+  async sendChannelMessage(target: string, text: string): Promise<AdminWriteResult & { platform?: string; channelId?: string }> {
+    const r = await this.sendAdminRequest('/api/admin/hub/channels/send', 'POST', { target, text });
+    if (!r) return { ok: false, error: 'Could not reach the dashboard server.' };
+    const d = (r.data ?? {}) as AdminWriteResult & { platform?: string; channelId?: string };
+    if (r.status === 200 && d.ok) return d;
+    return {
+      ok: false,
+      error: d.error || 'Send failed.',
+      unauthorized: r.status === 401,
+      forbidden: r.status === 403,
+    };
   }
 
   /**

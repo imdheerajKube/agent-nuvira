@@ -15,6 +15,7 @@ import RoutingInsightsPanel from './components/RoutingInsightsPanel';
 import RequestsPanel from './components/RequestsPanel';
 import TracePanel from './components/TracePanel';
 import AdminPanel from './components/AdminPanel';
+import AgentHub from './components/AgentHub';
 
 export default function App() {
   const [data, setData] = useState<DashboardData | null>(null);
@@ -61,6 +62,7 @@ export default function App() {
         <Route path="/routing" element={<RoutingInsightsPanel data={data} />} />
         <Route path="/requests" element={<RequestsPanel data={data} />} />
         <Route path="/traces" element={<TracePanel />} />
+        <Route path="/hub" element={<AgentHub />} />
         <Route path="/system" element={<HealthPanel data={data} />} />
         <Route path="/admin" element={<AdminPanel />} />
         <Route path="*" element={<Navigate to="/" replace />} />

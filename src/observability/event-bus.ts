@@ -99,6 +99,9 @@ export const EventNames = {
   EXEC_SHELL_START: 'exec:shell-start',
   EXEC_SHELL_END: 'exec:shell-end',
 
+  // I2 — tool-loop execution (drives the hooks registry's post_tool_call hook)
+  TOOL_CALLED: 'tool:called',
+
   // Delegation events (H2 — sub-agent spawning, Freebuff spawn_agents /
   // Hermes delegate_tool.py parity). Emitted by src/agents/tools/delegation.ts
   // so the E2 board renders live delegation lanes and the web dashboard DAG

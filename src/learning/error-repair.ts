@@ -249,9 +249,18 @@ export function selectStrategy(
       return 'skip-step';
 
     case 'process-error':
-      // Process error: retry twice, then try an alternative approach, then skip
-      if (attemptNumber <= 2) return 'retry-tool';
-      if (attemptNumber === 3) return 'alternative-approach';
+      // Process/command error: the previous execution FAILED — re-running the
+      // same agent blind (old retry-tool behavior) just repeats the identical
+      // failure until the budget dies (observed: 4 identical `wrangler pages
+      // deploy` runs on a project that needed `pages project create` first).
+      // The ladder must ADAPT: re-prompt with the failure output first (so the
+      // agent picks a different command/approach), then a fundamentally
+      // different approach, then escalate the model, then skip.
+      if (attemptNumber === 1) return 're-prompt';
+      if (attemptNumber === 2) return 'alternative-approach';
+      if (attemptNumber === 3) return options.fallbackModels && options.fallbackModels.length > 0
+        ? 'switch-model'
+        : 'alternative-approach';
       return 'skip-step';
 
     case 'unknown':
@@ -480,8 +489,23 @@ export class ErrorRepairEngine {
 
           case 'retry-tool': {
             if (this.options.verbose) {
-              logger.info(`   🔄 Repair attempt ${attemptNumber}: retrying`);
+              logger.info(`   🔄 Repair attempt ${attemptNumber}: retrying with failure context`);
             }
+            // Retry WITH the failure context appended — a blind identical
+            // re-run would otherwise repeat the same mistake (e.g. a runner
+            // task re-extracting the same failing command from its unchanged
+            // description). The error suffix is how the runner detects a
+            // repair attempt and re-selects its command.
+            context = {
+              ...context,
+              goal: context.goal + [
+                '',
+                `[REPAIR ATTEMPT ${attemptNumber}]`, // marker consumed by agents (e.g. RunnerAgent)
+                `The previous attempt failed with:`,
+                originalError.slice(0, 2000),
+                'Do not repeat the same failing approach — change your next action based on this error.',
+              ].join('\n'),
+            };
             result = await executeFn(context, callLLM);
             break;
           }

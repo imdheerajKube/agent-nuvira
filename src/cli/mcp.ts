@@ -18,6 +18,15 @@ import { BaseCommand } from './commands.js';
 import { MCPClient } from '../mcp/client.js';
 import { getMCPManager } from '../mcp/manager.js';
 import { type MCPServerConfig, MCP_CONFIG_DIR } from '../mcp/types.js';
+import {
+  MCP_CATALOG,
+  searchCatalog,
+  getCatalogEntry,
+  installCatalogServer,
+  uninstallCatalogServer,
+  isCatalogServerInstalled,
+  catalogConfigPath,
+} from '../mcp/catalog.js';
 import { logger } from '../utils/logger.js';
 
 export class MCPCommand extends BaseCommand {
@@ -82,6 +91,62 @@ Configured via JSON files in: ~/${MCP_CONFIG_DIR}/
       .description('Re-discover and reconnect to all MCP servers')
       .action(async () => {
         await this.refreshServers();
+      });
+
+    // ── catalog (I7 P2) ───────────────────────────────────────────────────
+    command
+      .command('catalog')
+      .description('List the curated MCP server catalog (vetted, exact-version pins)')
+      .option('--search <q>', 'Filter the catalog by keyword')
+      .action((opts?: { search?: string }) => {
+        const entries = opts?.search ? searchCatalog(opts.search) : MCP_CATALOG;
+        if (entries.length === 0) {
+          logger.info(`No catalog entries match '${opts?.search}'.`);
+          return;
+        }
+        console.log(`\n📦 ${entries.length} vetted MCP server(s) (${entries.length === MCP_CATALOG.length ? 'full catalog' : 'filtered'}):\n`);
+        for (const e of entries) {
+          const installed = isCatalogServerInstalled(e.name) ? '✅ installed' : '—';
+          console.log(`  • ${e.name}  [${installed}]`);
+          console.log(`    ${e.description}`);
+          console.log(`    ${e.transport}: ${e.command ? `${e.command} ${(e.args ?? []).join(' ')}` : e.url}`);
+          console.log(`    vetted by: ${e.vettedBy}`);
+          console.log('');
+        }
+        console.log('Install one with: buff mcp install <name>');
+      });
+
+    // ── install (I7 P2) ───────────────────────────────────────────────────
+    command
+      .command('install <name>')
+      .description('Install a vetted MCP server from the catalog (writes ~/.buff/mcp/<name>.json)')
+      .option('--env <key=value>', 'Provide a prompt-secret env var (repeatable: --env KEY=VAL)', collectEnv, {})
+      .action(async (name: string, opts?: { env?: Record<string, string> }) => {
+        const entry = getCatalogEntry(name);
+        if (!entry) {
+          logger.error(`'${name}' is not in the catalog. Run \`buff mcp catalog\` to see vetted servers.`);
+          return;
+        }
+        const result = installCatalogServer(entry, opts?.env ?? {});
+        if (!result.ok) {
+          logger.error(`❌ ${result.reason}`);
+          return;
+        }
+        logger.success(`✅ Installed '${name}' → ${result.path}`);
+        logger.info('  Connect with: buff mcp connect ' + name);
+      });
+
+    // ── uninstall (I7 P2) ─────────────────────────────────────────────────
+    command
+      .command('uninstall <name>')
+      .description('Remove an installed MCP server config')
+      .action((name: string) => {
+        const result = uninstallCatalogServer(name);
+        if (!result.ok) {
+          logger.error(`❌ ${result.reason}`);
+          return;
+        }
+        logger.success(`✅ Removed '${name}' (${catalogConfigPath(name)}).`);
       });
 
     // ── serve (F2 follow-up: expose agent tools as an MCP server) ─────────
@@ -398,4 +463,14 @@ Configured via JSON files in: ~/${MCP_CONFIG_DIR}/
       }
     }
   }
+}
+
+/** Collect repeatable `--env KEY=VAL` options into a map (I7 P2 secrets). */
+function collectEnv(value: string, previous: Record<string, string>): Record<string, string> {
+  const idx = value.indexOf('=');
+  if (idx <= 0) {
+    logger.warn(`Ignoring malformed --env '${value}' (expected KEY=value).`);
+    return previous;
+  }
+  return { ...previous, [value.slice(0, idx)]: value.slice(idx + 1) };
 }

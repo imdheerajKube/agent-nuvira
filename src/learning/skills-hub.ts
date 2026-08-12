@@ -90,6 +90,16 @@ const QUARANTINE_DIR = join(HUB_DIR, 'quarantine');
 const INDEX_CACHE_PATH = join(HUB_DIR, 'index-cache.json');
 const INDEX_CACHE_TTL = 60 * 60 * 1000;
 
+/**
+ * Per-source cache key: a sha256 of the registry base. I7 P1 multi-source
+ * search fetches SEVERAL registries; a single shared cache file would hand
+ * source B the stale index of source A. Keying by base keeps each source's
+ * index separate (1h TTL each).
+ */
+function indexCacheKeyFor(base: string): string {
+  return createHash('sha256').update(base).digest('hex').slice(0, 16);
+}
+
 /** Install root: `<project>/.agents/skills/` (Freebuff `npx skills` convention). */
 const SKILL_NAME_RE = /^[a-z0-9-]+$/;
 const MAX_INDEX_FETCH_MS = 10_000;
@@ -122,10 +132,14 @@ function registryBase(): string {
   return process.env.BUFF_SKILLS_REGISTRY || DEFAULT_REGISTRY_BASE;
 }
 
-/** Is the registry a local directory (offline mode)? */
-function isLocalRegistry(): boolean {
-  const base = registryBase();
+/** Is a registry base a local directory (offline mode)? */
+function isLocalRegistryBase(base: string): boolean {
   return base.startsWith('file://') || (!base.includes('://') && existsSync(base));
+}
+
+/** Back-compat helper: is the CURRENT registry a local directory? */
+function isLocalRegistry(): boolean {
+  return isLocalRegistryBase(registryBase());
 }
 
 // ─── Provenance store ───────────────────────────────────────────────────────
@@ -156,10 +170,11 @@ export function recordSkillProvenance(record: SkillProvenance): void {
 
 // ─── Index fetch (with TTL cache) ───────────────────────────────────────────
 
-function readIndexCache(): HubSkillEntry[] | null {
+function readIndexCache(base: string): HubSkillEntry[] | null {
   try {
-    if (!existsSync(INDEX_CACHE_PATH)) return null;
-    const raw = JSON.parse(readFileSync(INDEX_CACHE_PATH, 'utf-8')) as {
+    const cachePath = join(HUB_DIR, `index-cache-${indexCacheKeyFor(base)}.json`);
+    if (!existsSync(cachePath)) return null;
+    const raw = JSON.parse(readFileSync(cachePath, 'utf-8')) as {
       timestamp: number;
       skills: HubSkillEntry[];
     };
@@ -170,29 +185,32 @@ function readIndexCache(): HubSkillEntry[] | null {
   }
 }
 
-function writeIndexCache(skills: HubSkillEntry[]): void {
+function writeIndexCache(base: string, skills: HubSkillEntry[]): void {
   try {
     ensureDirs();
-    writeFileSync(INDEX_CACHE_PATH, JSON.stringify({ timestamp: Date.now(), skills }, null, 2), 'utf-8');
+    writeFileSync(join(HUB_DIR, `index-cache-${indexCacheKeyFor(base)}.json`), JSON.stringify({ timestamp: Date.now(), skills }, null, 2), 'utf-8');
   } catch { /* non-critical */ }
 }
 
 /**
- * Fetch the registry index (with TTL caching). Local-dir registries read the
- * index directly from disk; remote registries fetch over HTTP.
+ * Fetch a registry index (with TTL caching). `base` defaults to the legacy
+ * registry resolution (BUFF_SKILLS_REGISTRY env → built-in default); the I7
+ * P1 multi-source path passes an explicit base per source. Local-dir
+ * registries read the index directly from disk; remote ones fetch over HTTP.
  */
-export async function fetchHubIndex(): Promise<HubSkillEntry[]> {
-  const cached = readIndexCache();
+export async function fetchHubIndex(base?: string): Promise<HubSkillEntry[]> {
+  const registry = base ?? registryBase();
+  const cached = readIndexCache(registry);
   if (cached) return cached;
 
   try {
     let index: HubIndex;
-    if (isLocalRegistry()) {
-      const base = registryBase().replace(/^file:\/\//, '');
-      const raw = readFileSync(join(base, 'index.json'), 'utf-8');
+    if (isLocalRegistryBase(registry)) {
+      const local = registry.replace(/^file:\/\//, '');
+      const raw = readFileSync(join(local, 'index.json'), 'utf-8');
       index = JSON.parse(raw) as HubIndex;
     } else {
-      const res = await fetch(`${registryBase()}/index.json`, {
+      const res = await fetch(`${registry}/index.json`, {
         headers: { 'User-Agent': 'agent-nuvira/2.0', Accept: 'application/json' },
         signal: AbortSignal.timeout(MAX_INDEX_FETCH_MS),
       });
@@ -208,7 +226,7 @@ export async function fetchHubIndex(): Promise<HubSkillEntry[]> {
       return cached || [];
     }
 
-    writeIndexCache(index.skills);
+    writeIndexCache(registry, index.skills);
     return index.skills;
   } catch (err) {
     logger.debug(`Failed to fetch skills index: ${err}`);
@@ -237,8 +255,11 @@ export interface SkillInstallResult {
   reason?: string;
 }
 
-/** Read a skill file (SKILL.md) from a local-dir registry or via HTTP. */
-async function fetchSkillFile(registry: string, path: string): Promise<string | null> {
+/**
+ * Read a skill file (SKILL.md) from a registry base (local-dir or HTTP).
+ * Exported so the I7 P1 multi-source registry can fetch per-source.
+ */
+export async function fetchSkillFile(registry: string, path: string): Promise<string | null> {
   try {
     if (registry.startsWith('file://') || (!registry.includes('://') && existsSync(registry))) {
       const base = registry.replace(/^file:\/\//, '');
@@ -268,11 +289,14 @@ async function fetchSkillFile(registry: string, path: string): Promise<string | 
  * @param entry       The registry entry to install.
  * @param projectRoot Project root for the `.agents/skills/` target.
  * @param force       Overwrite an existing skill whose content changed.
+ * @param overrides   I7 P1 multi-source: an explicit fetch + registry label
+ *                    (the source adapter). Absent → legacy env/base path.
  */
 export async function installHubSkill(
   entry: HubSkillEntry,
   projectRoot = process.cwd(),
   force = false,
+  overrides?: { fetchSkill?: (name: string) => Promise<string | null>; registry?: string },
 ): Promise<SkillInstallResult> {
   const { name } = entry;
 
@@ -281,8 +305,10 @@ export async function installHubSkill(
     return { ok: false, name, reason: `Refused: skill name '${name}' is not in [a-z0-9-]` };
   }
 
-  const registry = registryBase();
-  const skillMarkdown = await fetchSkillFile(registry, `${name}/SKILL.md`);
+  const registry = overrides?.registry ?? registryBase();
+  const skillMarkdown = overrides?.fetchSkill
+    ? await overrides.fetchSkill(name)
+    : await fetchSkillFile(registry, `${name}/SKILL.md`);
   if (!skillMarkdown) {
     return { ok: false, name, reason: `SKILL.md not found in registry for '${name}'` };
   }
@@ -444,10 +470,14 @@ export function listHubSkills(
   return origin ? all.filter((s) => s.origin === origin) : all;
 }
 
-/** Clear the index cache (forces a re-fetch on the next search). */
+/** Clear ALL per-source index caches (forces a re-fetch on the next search). */
 export function clearSkillsIndexCache(): void {
   try {
-    if (existsSync(INDEX_CACHE_PATH)) writeFileSync(INDEX_CACHE_PATH, JSON.stringify({ timestamp: 0, skills: [] }), 'utf-8');
+    for (const file of readdirSync(HUB_DIR)) {
+      if (file.startsWith('index-cache-') && file.endsWith('.json')) {
+        try { renameSync(join(HUB_DIR, file), join(HUB_DIR, file + '.stale')); } catch { /* best-effort */ }
+      }
+    }
   } catch { /* non-critical */ }
 }
 

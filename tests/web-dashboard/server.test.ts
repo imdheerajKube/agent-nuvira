@@ -2005,3 +2005,202 @@ describe('Session 36 — user-declared daily budget (/api/admin/quota)', () => {
     expect(r.status).toBe(403);
   });
 });
+
+// Session 37 — Agent Hub skill toggles (/api/admin/hub/skills/<name>)
+// P3: the dashboard edits the SAME `skills.disabled[]` config the I7 match
+// gate reads (compiled findMatch + hub catalog), so the toggle is never
+// cosmetic — the admin-gated mirror of the toolsets route (I5).
+// ═══════════════════════════════════════════════════════════════════════
+
+describe('Session 37 — Agent Hub skill toggles (/api/admin/hub/skills/<name>)', () => {
+  const buffDir = join(testDir, '.buff');
+  const adminConfig = join(buffDir, 'buffconfig.json');
+  const rbacFile = join(buffDir, 'rbac.json');
+  let adminToken: string;
+
+  async function jsonReq(path: string, method: string, body?: unknown, token?: string) {
+    const res = await fetch(`${baseUrl}${path}`, {
+      method,
+      headers: {
+        'Content-Type': 'application/json',
+        ...(token ? { Authorization: `Bearer ${token}` } : {}),
+      },
+      body: body !== undefined ? JSON.stringify(body) : undefined,
+    });
+    const type = res.headers.get('content-type') || '';
+    const data = type.includes('json') ? await res.json() : null;
+    return { status: res.status, data: data as Record<string, unknown> };
+  }
+
+  const readConfig = () => JSON.parse(readFileSync(adminConfig, 'utf-8')) as {
+    skills?: { disabled?: string[] };
+  };
+
+  beforeAll(async () => {
+    mkdirSync(buffDir, { recursive: true });
+    // Session 36's setup persists the admin user (~/.buff/dashboard-admin.json)
+    // — clear it so THIS setup actually registers a fresh admin + token.
+    rmSync(join(buffDir, 'dashboard-admin.json'), { force: true });
+    rmSync(adminConfig, { force: true });
+    rmSync(rbacFile, { force: true });
+    const setup = await jsonReq('/api/admin/setup', 'POST', { user: 'admin', password: 'password123' });
+    adminToken = setup.data.token as string;
+    expect(typeof adminToken).toBe('string');
+  });
+
+  afterEach(() => {
+    rmSync(join(buffDir, 'dashboard-admin.json'), { force: true });
+    rmSync(adminConfig, { force: true });
+    rmSync(rbacFile, { force: true });
+  });
+
+  it('PUT without a token is rejected (401)', async () => {
+    const r = await jsonReq('/api/admin/hub/skills/skill-website-deploy', 'PUT', { enabled: false });
+    expect(r.status).toBe(401);
+  });
+
+  it('PUT with an admin token writes skills.disabled[] to the SAME config the CLI writes', async () => {
+    const r = await jsonReq('/api/admin/hub/skills/skill-website-deploy', 'PUT', { enabled: false }, adminToken);
+    expect(r.status).toBe(200);
+    const saved = readConfig();
+    expect(saved.skills?.disabled).toContain('skill-website-deploy');
+
+    // Re-enable clears the entry (whole-list semantics — empty is meaningful).
+    const r2 = await jsonReq('/api/admin/hub/skills/skill-website-deploy', 'PUT', { enabled: true }, adminToken);
+    expect(r2.status).toBe(200);
+    expect(readConfig().skills?.disabled ?? []).not.toContain('skill-website-deploy');
+  });
+
+  it('PUT with a malformed skill name is rejected before any write (400)', async () => {
+    const r = await jsonReq('/api/admin/hub/skills/..%2f..%2fetc', 'PUT', { enabled: false }, adminToken);
+    expect(r.status).toBe(400);
+  });
+
+  it('PUT with an unknown-but-well-formed id is rejected (400, typo-safe)', async () => {
+    const r = await jsonReq('/api/admin/hub/skills/definitely-not-installed', 'PUT', { enabled: false }, adminToken);
+    expect(r.status).toBe(400);
+  });
+
+  it('PUT with a viewer role is denied (403)', async () => {
+    writeFileSync(rbacFile, JSON.stringify({ version: 1, users: { viewer: { role: 'viewer', addedAt: Date.now(), via: 'local' } } }), 'utf-8');
+    await jsonReq('/api/admin/users', 'POST', { user: 'viewer', password: 'password123', role: 'viewer' }, adminToken);
+    const login = await jsonReq('/api/admin/login', 'POST', { user: 'viewer', password: 'password123' });
+    const viewerToken = login.data.token as string;
+    const r = await jsonReq('/api/admin/hub/skills/skill-website-deploy', 'PUT', { enabled: false }, viewerToken);
+    expect(r.status).toBe(403);
+  });
+});
+
+// Session 38 — Agent Hub channel send-test (/api/admin/hub/channels/send)
+// I11: the dashboard mirrors `buff gateway send <target> <text>` — the target
+// resolves through the SAME ChannelDirectory and sends through the SAME
+// GatewayRegistry + configured adapters the CLI uses. Gated by routing.operate
+// (admin or operator) exactly like the toolset/skill toggles.
+// ═══════════════════════════════════════════════════════════════════════
+
+describe('Session 38 — Agent Hub channel send-test (/api/admin/hub/channels/send)', () => {
+  const buffDir = join(testDir, '.buff');
+  const adminConfig = join(buffDir, 'buffconfig.json');
+  const rbacFile = join(buffDir, 'rbac.json');
+  let adminToken: string;
+
+  async function jsonReq(path: string, method: string, body?: unknown, token?: string) {
+    const res = await fetch(`${baseUrl}${path}`, {
+      method,
+      headers: {
+        'Content-Type': 'application/json',
+        ...(token ? { Authorization: `Bearer ${token}` } : {}),
+      },
+      body: body !== undefined ? JSON.stringify(body) : undefined,
+    });
+    const type = res.headers.get('content-type') || '';
+    const data = type.includes('json') ? await res.json() : null;
+    return { status: res.status, data: data as Record<string, unknown> };
+  }
+
+  beforeAll(async () => {
+    mkdirSync(buffDir, { recursive: true });
+    rmSync(join(buffDir, 'dashboard-admin.json'), { force: true });
+    rmSync(adminConfig, { force: true });
+    rmSync(rbacFile, { force: true });
+    const setup = await jsonReq('/api/admin/setup', 'POST', { user: 'admin', password: 'password123' });
+    adminToken = setup.data.token as string;
+    expect(typeof adminToken).toBe('string');
+  });
+
+  afterEach(() => {
+    rmSync(join(buffDir, 'dashboard-admin.json'), { force: true });
+    rmSync(adminConfig, { force: true });
+    rmSync(rbacFile, { force: true });
+    // Never leak a configured webhook into other tests in this worker.
+    delete process.env.BUFF_WEBHOOK_URL;
+  });
+
+  it('POST without a token is rejected (401)', async () => {
+    const r = await jsonReq('/api/admin/hub/channels/send', 'POST', { target: 'ops', text: 'hi' });
+    expect(r.status).toBe(401);
+  });
+
+  it('POST with invalid input is rejected before any send (400)', async () => {
+    const emptyTarget = await jsonReq('/api/admin/hub/channels/send', 'POST', { target: '', text: 'hi' }, adminToken);
+    expect(emptyTarget.status).toBe(400);
+    const emptyText = await jsonReq('/api/admin/hub/channels/send', 'POST', { target: 'ops', text: '' }, adminToken);
+    expect(emptyText.status).toBe(400);
+  });
+
+  it('POST with an unresolvable target is rejected (400)', async () => {
+    const r = await jsonReq('/api/admin/hub/channels/send', 'POST', { target: 'no-such-alias-or-platform', text: 'hi' }, adminToken);
+    expect(r.status).toBe(400);
+    expect(String(r.data.error)).toContain('Unknown channel target');
+  });
+
+  it('POST to a platform whose adapter is not configured fails cleanly (400)', async () => {
+    delete process.env.BUFF_WEBHOOK_URL;
+    const r = await jsonReq('/api/admin/hub/channels/send', 'POST', { target: 'webhook:any', text: 'hi' }, adminToken);
+    expect(r.status).toBe(400);
+    expect(String(r.data.error)).toContain('not configured');
+  });
+
+  it('POST with an admin token sends through the configured adapter (200)', async () => {
+    // A local capture server stands in for the webhook endpoint — the SAME
+    // GenericWebhookAdapter (`buff gateway send webhook:...`) the CLI uses.
+    const received: Array<{ url: string; body: unknown }> = [];
+    const capture = createServer((req, res) => {
+      let raw = '';
+      req.on('data', (c: Buffer) => (raw += c.toString()));
+      req.on('end', () => {
+        let body: unknown = null;
+        try { body = JSON.parse(raw || '{}'); } catch { body = raw; }
+        received.push({ url: req.url ?? '', body });
+        res.writeHead(200);
+        res.end('ok');
+      });
+    });
+    const addr = await new Promise<{ port: number }>((resolve) =>
+      capture.listen(0, '127.0.0.1', () => resolve(capture.address() as { port: number })),
+    );
+    process.env.BUFF_WEBHOOK_URL = `http://127.0.0.1:${addr.port}/ingest`;
+    try {
+      const r = await jsonReq('/api/admin/hub/channels/send', 'POST', { target: 'webhook:any', text: 'hello dashboard' }, adminToken);
+      expect(r.status).toBe(200);
+      expect((r.data as { ok?: boolean; platform?: string }).ok).toBe(true);
+      expect((r.data as { platform?: string }).platform).toBe('webhook');
+      // The adapter actually delivered the payload to the capture server.
+      expect(received).toHaveLength(1);
+      expect(received[0].url).toBe('/ingest');
+      expect(received[0].body).toEqual({ text: 'hello dashboard' });
+    } finally {
+      await new Promise<void>((resolve) => capture.close(() => resolve()));
+      delete process.env.BUFF_WEBHOOK_URL;
+    }
+  });
+
+  it('POST with a viewer role is denied (403)', async () => {
+    writeFileSync(rbacFile, JSON.stringify({ version: 1, users: { viewer: { role: 'viewer', addedAt: Date.now(), via: 'local' } } }), 'utf-8');
+    await jsonReq('/api/admin/users', 'POST', { user: 'viewer', password: 'password123', role: 'viewer' }, adminToken);
+    const login = await jsonReq('/api/admin/login', 'POST', { user: 'viewer', password: 'password123' });
+    const viewerToken = login.data.token as string;
+    const r = await jsonReq('/api/admin/hub/channels/send', 'POST', { target: 'webhook:any', text: 'hi' }, viewerToken);
+    expect(r.status).toBe(403);
+  });
+});

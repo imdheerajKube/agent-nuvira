@@ -137,6 +137,13 @@ export class PlannerAgent extends Agent {
       const fileTree = context.metadata.projectFileTree as string | undefined;
       const inspection = context.metadata.projectInspection as string | undefined;
       const memoryContext = context.metadata.memoryContext as string | undefined;
+      // Skill guidance (progressive-disclosure Level 2): when the orchestrator
+      // matched this goal to a skill (findMatch), the skill's methodology is
+      // injected here so the planner produces steps with the correct commands
+      // (e.g. the wrangler 4 'pages project create' + 'pages deploy' sequence).
+      const skillGuidance = context.metadata.skillGuidance as
+        | { name: string; description: string; steps: Array<{ agentType: string; description: string }>; body?: string }
+        | undefined;
 
       this.report(context, 'analyzing', 'Analyzing goal and current project structure…');
 
@@ -203,6 +210,32 @@ export class PlannerAgent extends Agent {
       // reworking it — e.g. don't add a test step when tests already exist.
       if (inspection) {
         promptParts.push('', '## Pre-flight Project Inspection', inspection);
+      }
+
+      // Inject the matched-skill methodology when present (industry pattern:
+      // model-selected activation — the skill is a recommendation, the planner
+      // still owns the final plan).
+      if (skillGuidance) {
+        const skillLines = [
+          '',
+          '## Skill Guidance — matched skill: ' + skillGuidance.name,
+          skillGuidance.description,
+          'The goal matches this skill. Use its methodology when planning your steps — adapt the commands to the goal\'s actual target provider and directory. Runner agent steps execute backtick-wrapped commands:',
+        ];
+        if (skillGuidance.body) {
+          // I7 P0: a HUB (SKILL.md) skill carries its full methodology as the
+          // body — inject it verbatim as the adaptation source. The steps are
+          // descriptive guidance, NOT literal commands to emit unchanged.
+          skillLines.push('', '### Skill methodology (SKILL.md)', skillGuidance.body);
+        }
+        for (const step of skillGuidance.steps ?? []) {
+          skillLines.push(`- [${step.agentType}] ${step.description}`);
+        }
+        skillLines.push(
+          'If a runner command fails, the repair loop will propose a corrected command automatically — do not plan around an assumed failure.',
+          'Resolve skill placeholders like {{provider}}, {{projectName}}, and {{outputDir}} to concrete values from the goal and the working directory — NEVER emit literal {{...}} tokens inside a command.',
+        );
+        promptParts.push(...skillLines);
       }
 
       // Append memory/few-shot examples if available

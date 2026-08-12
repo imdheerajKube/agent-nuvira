@@ -80,6 +80,12 @@ export interface ToolContext {
   emit?: (event: string, data: unknown, source?: string) => void;
   /** LLM call fn for C2 verify (resolved provider already chosen). */
   callLLM?: import('../agents/agent.js').LLMCallFn;
+  /**
+   * I3 — artifact sink: tools hand deliverables here (Hermes run.py parity).
+   * The tool loop parses `{artifact, result}` payloads, pushes the artifact
+   * to this sink, and feeds only `result` back to the model.
+   */
+  artifacts?: import('./artifact-types.js').ArtifactSink;
 }
 
 /** A Hermes-clarify-style choice. */

@@ -30,6 +30,29 @@
 ### v1.61.3 — Multi-channel gateway (J1)
 
 - **`buff gateway start / send / status / alias`** — run the agent from **Telegram, Discord, Slack, or WhatsApp** (Hermes `gateway/` parity). Every adapter is opt-in via an env bot token (`BUFF_TELEGRAM_TOKEN`, `BUFF_DISCORD_BOT_TOKEN`/`BUFF_DISCORD_WEBHOOK_URL`, `BUFF_SLACK_BOT_TOKEN`/`BUFF_SLACK_WEBHOOK_URL`, `BUFF_WHATSAPP_TOKEN` + `BUFF_WHATSAPP_PHONE_ID`) — set one, and `buff gateway start` picks it up. No SDK dependencies (pure fetch): Telegram uses long-polling (no public URL needed); Discord/Slack use incoming webhooks; WhatsApp uses Meta's Cloud API.
+
+### v1.63.0 — 22-platform gateway (Hermes messaging campaign)
+
+- **Full Hermes `gateway/` platform surface (22 total).** On top of the original
+  four, the gateway now speaks: **DingTalk, Feishu, WeCom, Mattermost, Matrix,
+  generic Webhook, BlueBubbles (iMessage bridge), ntfy, Microsoft Teams,
+  Google Chat, Weixin (WeChat iLink bot API), SMS (Twilio REST), IRC (direct
+  RFC 1459 over node:net/tls), SimpleX (local daemon WebSocket), and Home
+  Assistant (REST notifications)**. Every connector is opt-in via the SAME env
+  vars Hermes uses (`TWILIO_ACCOUNT_SID`/`TWILIO_AUTH_TOKEN`/`TWILIO_PHONE_NUMBER`,
+  `IRC_SERVER`/`IRC_NICKNAME`, `SIMPLEX_WS_URL`/`SIMPLEX_AUTO_ACCEPT`/`SIMPLEX_GROUP_ALLOWED`,
+  `HASS_URL`/`HASS_TOKEN`, `BUFF_*` webhook URLs) — existing Hermes credentials
+  work unchanged. Zero new SDK dependencies (Node built-ins: fetch, net/tls,
+  global WebSocket).
+- **WhatsApp personal bridge (Baileys)** — `buff whatsapp pair` pairs your own
+  number via QR (no paid API); the gateway relays inbound and replies.
+- **Guaranteed delivery ledger** — failed sends persist and auto-retry while
+  `buff gateway start` runs; `buff gateway delivery` shows/`--flush` drains.
+- **SimpleX is two-way** — persistent inbound listener with contact-request
+  auto-accept and contact/group allowlists.
+- **Dashboard Channels send-test** — the Agent Hub Channels tab sends test
+  messages through the same gateway the CLI uses; `buff gateway status` shows a
+  `X/22 platforms configured` line.
 - **Natural-language task dispatch** — send a channel message like "fix the failing test" and the gateway runs the SAME pipeline as `buff chat`/`buff execute`, replying with the result in the channel and streaming progress lines as it goes (plan ready, task started, shell commands, done/failed).
 - **Channel aliases** — `buff gateway alias add ops slack C0123` registers a friendly alias (persisted), so `buff gateway send ops "nightly done"` works across restarts; `platform:channelId` targets also work directly.
 - **Security defaults** — the webhook listener binds to 127.0.0.1 (use `--host 0.0.0.0` only with a tunnel); Slack and WhatsApp webhook signatures are verified when secrets are configured; and **only channels in `BUFF_GATEWAY_ALLOW_IDS` can trigger pipelines** (e.g. `telegram:123456,slack:C0123`) — everyone else gets a polite refusal.
