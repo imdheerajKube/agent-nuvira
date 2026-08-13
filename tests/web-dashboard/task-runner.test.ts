@@ -140,21 +140,28 @@ describe('TaskRunner', () => {
     expect(runner.start(['a'.repeat(513)]).ok).toBe(false);
   });
 
-  // Spawning 55 sequential children exceeds vitest's 5s default on a loaded
-  // Windows runner — budget for the slowest CI box (Windows-CI hardening).
+  // Spawning 55 children SEQUENTIALLY (awaiting each) blew both vitest's
+  // default and the per-task 15s wait on loaded Windows runners — spawn them
+  // all (they're instant-exit 'ok' fixtures), then wait for the whole batch
+  // with one generous deadline (Windows-CI hardening).
   it('list() returns newest first and caps history at 50', async () => {
     process.env.BUFF_TASK_FIXTURE_MODE = 'ok';
     const runner = makeRunner();
     const ids: string[] = [];
     for (let i = 0; i < 55; i++) {
-      const { task } = runner.start([`t${i}`], { timeoutMs: 10_000 });
+      const { task } = runner.start([`t${i}`], { timeoutMs: 30_000 });
       ids.push(task!.id);
     }
-    for (const id of ids) await waitForStatus(runner, id);
+    const deadline = Date.now() + 120_000;
+    while (Date.now() < deadline) {
+      if (runner.list().every((t) => t.status !== 'running')) break;
+      await new Promise((r) => setTimeout(r, 250));
+    }
     const list = runner.list();
+    expect(list.every((t) => t.status !== 'running')).toBe(true);
     expect(list.length).toBeLessThanOrEqual(50);
     expect(list[0].id).toBe(ids[ids.length - 1]); // newest first
-  }, 60_000);
+  }, 150_000);
 
   it('reports a missing CLI entry as a validation error', () => {
     const r = new TaskRunner({ execPath: process.execPath, cliEntry: join(dir, 'nope.cjs') });
