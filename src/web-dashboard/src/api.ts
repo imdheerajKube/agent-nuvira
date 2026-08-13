@@ -640,6 +640,61 @@ export class DashboardAPI {
     });
     return () => es.close();
   }
+
+  // ─── P3 — chat console (GUI parity with `buff chat "<prompt>"`) ─────────
+
+  /**
+   * Send one chat message. A turn runs the whole agent tool loop and can take
+   * minutes — the 15s admin-request budget would kill it, so this uses its
+   * own fetch with a 5-minute cap.
+   */
+  async chatSend(
+    sessionId: string,
+    message: string,
+    opts?: { provider?: string; model?: string },
+  ): Promise<
+    | { ok: true; content: string; followups: Array<{ prompt: string; label?: string }>; provider: string | null; model: string | null; generationFailed: boolean }
+    | { ok: false; error: string; unauthorized?: boolean; forbidden?: boolean }
+  > {
+    const token = getAdminToken();
+    try {
+      const res = await fetch(`${this.baseUrl}/api/chat`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', ...(token ? { Authorization: `Bearer ${token}` } : {}) },
+        body: JSON.stringify({ sessionId, message, provider: opts?.provider, model: opts?.model }),
+        signal: AbortSignal.timeout(300_000),
+      });
+      const d = (await res.json()) as Record<string, unknown>;
+      if (res.status === 200 && d.ok) {
+        return {
+          ok: true,
+          content: typeof d.content === 'string' ? d.content : '',
+          followups: Array.isArray(d.followups)
+            ? (d.followups as Array<{ prompt: string; label?: string }>)
+            : [],
+          provider: typeof d.provider === 'string' ? d.provider : null,
+          model: typeof d.model === 'string' ? d.model : null,
+          generationFailed: d.generationFailed === true,
+        };
+      }
+      return {
+        ok: false,
+        error: typeof d.error === 'string' ? d.error : 'The agent could not answer.',
+        unauthorized: res.status === 401,
+        forbidden: res.status === 403,
+      };
+    } catch {
+      return { ok: false, error: 'Could not reach the dashboard server, or the turn timed out.' };
+    }
+  }
+
+  /** Forget a chat session's conversation history. */
+  async chatReset(sessionId: string): Promise<{ ok: boolean; error?: string }> {
+    const r = await this.sendAdminRequest('/api/chat/reset', 'POST', { sessionId });
+    if (!r) return { ok: false, error: 'Could not reach the dashboard server.' };
+    const d = (r.data ?? {}) as { ok?: boolean; error?: string };
+    return r.status === 200 && d.ok ? { ok: true } : { ok: false, error: d.error || 'Reset failed.' };
+  }
 }
 
 export const dashboardAPI = new DashboardAPI();
