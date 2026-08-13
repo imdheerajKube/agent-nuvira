@@ -2,6 +2,35 @@
 
 All notable changes to **Agent-Nuvira** are documented in this file.
 
+## v1.64.0 — Dashboard command console (P1) + in-page WhatsApp pairing (P2)
+
+- **Dashboard Tasks tab — every CLI command runnable from the GUI (P1).** The
+  dashboard executes the REAL CLI (`node dist/index.js <args>`) as an isolated
+  child process, so command parity is guaranteed by construction. Run any
+  command (`eval run --task smoke`, `gateway status`, `skill list`, …) from a
+  `🚀 Tasks` tab with a live log console (SSE), cancel (SIGTERM), timeout
+  (SIGTERM→SIGKILL), and history (last 50, click to reopen). API:
+  `POST/GET /api/tasks`, `GET /api/tasks/:id`, `POST …/cancel`, `GET …/events`
+  — all admin/operator-gated. Verified end-to-end: the real CLI `--help` ran
+  through the API (`status: done, exit: 0`, logs streamed back).
+- **In-page WhatsApp pairing — QR + 8-char code live in the browser (P2).**
+  The Agent Hub → Channels tab now pairs the Baileys bridge without touching a
+  terminal: the QR renders as a scannable PNG `<img>` (auto-refreshing as
+  WhatsApp rotates it), the `--phone` 8-char code mode streams the code the
+  same way, and pair/cancel/unpair are admin/operator-gated
+  (`GET/POST /api/whatsapp`, `…/pair`, `…/cancel`, `…/unpair`, `…/events` SSE).
+  The bridge gained an AbortSignal path (dashboard cancel ends the socket) and
+  a PNG data-URL renderer alongside the terminal QR.
+- **Messaging hot-path tests + one real bug fixed.** Telegram long-poll
+  (send/inbound/offset), Discord & Slack Bot-token REST sends, and WhatsApp
+  Cloud send + inbound `X-Hub-Signature-256` verification (good/tampered/
+  challenge) are now covered. The audit surfaced a genuine bug:
+  `TelegramAdapter.send()` threw on network errors instead of returning
+  `false` like every other adapter — fixed.
+- **Project plan** `PROJECT_DASHBOARD_CLI_PARITY.md` tracks P3/P4 (chat
+  console, eval runner, skills/marketplace/team/federation surfaces, RBAC
+  audit). Suite: 4,331 root tests + 167 dashboard tests, typecheck clean.
+
 ## v1.63.1 — Fix: WhatsApp pairing renders a scannable QR again
 
 - **`buff whatsapp pair` prints a real scannable QR.** Baileys 7.0.0-rc14
