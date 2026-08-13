@@ -15,6 +15,9 @@ import type {
   HubData,
   QuotaInsights,
   RoutingInsights,
+  TaskLogLine,
+  TaskRecord,
+  TaskStatus,
   TraceEntry,
 } from './types';
 
@@ -505,6 +508,67 @@ export class DashboardAPI {
     const d = (r.data ?? {}) as AdminWriteResult;
     if (r.status === 200 && d.ok) return d;
     return { ok: false, error: d.error || 'Save failed.', unauthorized: r.status === 401 };
+  }
+
+  // ─── P1 task runner (command console) ─────────────────────────────────────
+
+  /** Recent task history, newest first (authed — running commands is a write action). */
+  async listTasks(): Promise<{ status: number; tasks: TaskRecord[] } | null> {
+    const r = await this.sendAdminRequest('/api/tasks', 'GET');
+    if (!r) return null;
+    const d = (r.data ?? {}) as { ok?: boolean; tasks?: TaskRecord[] };
+    return { status: r.status, tasks: Array.isArray(d.tasks) ? d.tasks : [] };
+  }
+
+  /** Start a CLI task: args = the command line split into argv (e.g. ['eval','run','--task','smoke']). */
+  async startTask(args: string[], timeoutMs?: number): Promise<AdminWriteResult & { task?: TaskRecord }> {
+    const r = await this.sendAdminRequest('/api/tasks', 'POST', { args, timeoutMs });
+    if (!r) return { ok: false, error: 'Could not reach the dashboard server.' };
+    const d = (r.data ?? {}) as AdminWriteResult & { task?: TaskRecord };
+    if (r.status === 200 && d.ok && d.task) return d;
+    return { ok: false, error: d.error || 'Start failed.', unauthorized: r.status === 401, forbidden: r.status === 403 };
+  }
+
+  /** Full task detail (logs included). */
+  async getTask(id: string): Promise<{ status: number; task: TaskRecord | null } | null> {
+    const r = await this.sendAdminRequest(`/api/tasks/${encodeURIComponent(id)}`, 'GET');
+    if (!r) return null;
+    const d = (r.data ?? {}) as { ok?: boolean; task?: TaskRecord };
+    return { status: r.status, task: d.task ?? null };
+  }
+
+  /** Cancel a running task (SIGTERM). */
+  async cancelTask(id: string): Promise<AdminWriteResult> {
+    const r = await this.sendAdminRequest(`/api/tasks/${encodeURIComponent(id)}/cancel`, 'POST');
+    if (!r) return { ok: false, error: 'Could not reach the dashboard server.' };
+    const d = (r.data ?? {}) as AdminWriteResult;
+    if (r.status === 200 && d.ok) return d;
+    return { ok: false, error: d.error || 'Cancel failed.', unauthorized: r.status === 401, forbidden: r.status === 403 };
+  }
+
+  /**
+   * Subscribe to a task's live log/status events over SSE. EventSource can't
+   * set Authorization headers, so the admin token rides the ?token= query.
+   * Returns an unsubscribe function.
+   */
+  subscribeTask(
+    id: string,
+    handlers: { onLog?: (line: TaskLogLine) => void; onStatus?: (status: TaskStatus) => void },
+  ): () => void {
+    const token = getAdminToken();
+    const es = new EventSource(`${this.baseUrl}/api/tasks/${encodeURIComponent(id)}/events?token=${encodeURIComponent(token ?? '')}`);
+    es.addEventListener('log', (event) => {
+      try {
+        handlers.onLog?.(JSON.parse((event as MessageEvent).data) as TaskLogLine);
+      } catch { /* ignore malformed */ }
+    });
+    es.addEventListener('status', (event) => {
+      try {
+        const payload = JSON.parse((event as MessageEvent).data) as { status?: TaskStatus };
+        if (payload.status) handlers.onStatus?.(payload.status);
+      } catch { /* ignore malformed */ }
+    });
+    return () => es.close();
   }
 }
 

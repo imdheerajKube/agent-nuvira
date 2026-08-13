@@ -156,12 +156,18 @@ export class TelegramAdapter implements ChannelAdapter {
 
   async send(channelId: string, text: string): Promise<boolean> {
     if (!this.configured) return false;
-    const res = await this.api('sendMessage', {
-      chat_id: Number(channelId),
-      text: sanitizeOutbound(text),
-      disable_web_page_preview: true,
-    });
-    return res.ok;
+    try {
+      const res = await this.api('sendMessage', {
+        chat_id: Number(channelId),
+        text: sanitizeOutbound(text),
+        disable_web_page_preview: true,
+      });
+      return res.ok;
+    } catch {
+      // send() must never throw — the delivery ledger / gateway callers rely
+      // on a boolean (matches every other adapter's contract).
+      return false;
+    }
   }
 }
 
