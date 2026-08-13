@@ -126,6 +126,10 @@ jobs:
             pkg.name = '@imdheerajKube/' + pkg.name;
             require('fs').writeFileSync('package.json', JSON.stringify(pkg, null, 2));
           "
+          # Map the scope to GH Packages — without this, npm publishes a
+          # scoped package to registry.npmjs.org by default, where the
+          # GITHUB_TOKEN is not valid (ENEEDAUTH).
+          echo "@imdheerajKube:registry=https://npm.pkg.github.com/" >> .npmrc
           npm publish
         env:
           NODE_AUTH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
