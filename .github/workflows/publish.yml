@@ -84,7 +84,21 @@ jobs:
       - name: Build project
         run: npm run build
 
+      # Idempotency guard: re-running a release (or re-tagging) must not fail
+      # because the version already exists on the registry. Skip if present.
+      - name: Check if version already published on npm
+        id: npm-version-check
+        run: |
+          VERSION=$(node -p "require('./package.json').version")
+          if npm view "agent-nuvira@${VERSION}" version >/dev/null 2>&1; then
+            echo "exists=true" >> "$GITHUB_OUTPUT"
+            echo "agent-nuvira@${VERSION} already published to npm — skipping publish."
+          else
+            echo "exists=false" >> "$GITHUB_OUTPUT"
+          fi
+
       - name: Publish to npm
+        if: steps.npm-version-check.outputs.exists != 'true'
         run: |
           echo "//registry.npmjs.org/:_authToken=${{ secrets.NPM_TOKEN }}" > .npmrc
           npm publish
@@ -118,7 +132,28 @@ jobs:
       - name: Build project
         run: npm run build
 
+      # Map the scope to GH Packages — without this, npm publishes a
+      # scoped package to registry.npmjs.org by default, where the
+      # GITHUB_TOKEN is not valid (ENEEDAUTH).
+      - name: Map scope to GitHub Packages registry
+        run: echo "@imdheerajKube:registry=https://npm.pkg.github.com/" >> .npmrc
+
+      # Idempotency guard (same rationale as the npm job).
+      - name: Check if version already published to GitHub Packages
+        id: gh-version-check
+        run: |
+          VERSION=$(node -p "require('./package.json').version")
+          if npm view "@imdheerajKube/agent-nuvira@${VERSION}" version >/dev/null 2>&1; then
+            echo "exists=true" >> "$GITHUB_OUTPUT"
+            echo "@imdheerajKube/agent-nuvira@${VERSION} already published — skipping publish."
+          else
+            echo "exists=false" >> "$GITHUB_OUTPUT"
+          fi
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
       - name: Publish to GitHub Packages
+        if: steps.gh-version-check.outputs.exists != 'true'
         run: |
           # Temporarily scope the package name for GitHub Packages
           node -e "
@@ -126,10 +161,6 @@ jobs:
             pkg.name = '@imdheerajKube/' + pkg.name;
             require('fs').writeFileSync('package.json', JSON.stringify(pkg, null, 2));
           "
-          # Map the scope to GH Packages — without this, npm publishes a
-          # scoped package to registry.npmjs.org by default, where the
-          # GITHUB_TOKEN is not valid (ENEEDAUTH).
-          echo "@imdheerajKube:registry=https://npm.pkg.github.com/" >> .npmrc
           npm publish
         env:
           NODE_AUTH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
