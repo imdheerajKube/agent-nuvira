@@ -234,6 +234,52 @@ export class ChatCommand extends BaseCommand {
      * failing into dead ends — the fire-and-forget keeps the first message fast.
      */
     coldStartProbeFired = false;
+    /**
+     * P3 — programmatic single-turn answer for the dashboard chat console.
+     *
+     * Runs one tool-loop turn — the EXACT engine behind `buff chat "<prompt>"` —
+     * and returns content + followups as data instead of printing. Non-TTY by
+     * construction: an injected ask_user renderer declines the clarification so
+     * the model proceeds on best judgment (inquirer would hang on the server's
+     * piped stdin), and no interactive prompts are ever reached. `history`
+     * carries prior turns so the dashboard threads a real conversation.
+     */
+    async answerOnce(message, opts = {}) {
+        const activeOpts = applyActiveModel({ provider: opts.provider, model: opts.model });
+        const mergedOpts = { ...opts, provider: activeOpts.provider, model: activeOpts.model };
+        let autoMode = isAutoModel(mergedOpts.model) || isAutoProvider(mergedOpts.provider);
+        let { type, provider } = autoMode
+            ? await this.getProvider({})
+            : await this.getProvider(mergedOpts);
+        let model = mergedOpts.model;
+        if (autoMode) {
+            const routed = await this.routeMessageAuto(message);
+            type = routed.type;
+            provider = routed.provider;
+            model = routed.model;
+        }
+        const parsed = parseRequestSync(message);
+        const dispatchDecision = resolvePipelineDispatch(parsed, { dev: opts.dev });
+        const answer = await this.runChatAnswer(message, opts.history ?? [], { type, provider, model }, { provider: mergedOpts.provider, model: mergedOpts.model, dev: mergedOpts.dev, cache: true }, true, { auto: autoMode }, false, parsed, opts.askUser ? { askUser: opts.askUser } : undefined);
+        // No-model fallback: the tool loop could not generate a single response
+        // AND the rules assessed a high-confidence pipeline intent — run the
+        // pipeline directly (rules decide only when the model is unavailable; the
+        // pipeline resolves its own working provider/model).
+        if (answer.generationFailed && dispatchDecision.dispatch && !dispatchDecision.needConfirm) {
+            const r = await runPipelineTool(message, this.configManager, { provider: type, model, board: false });
+            if (r.error) {
+                return { content: '', followups: [], generationFailed: true, provider: type, model };
+            }
+            return { content: r.result?.summary ?? '', followups: [], provider: type, model };
+        }
+        return {
+            content: answer.content,
+            followups: answer.followups ?? [],
+            generationFailed: answer.generationFailed,
+            provider: type,
+            model,
+        };
+    }
     create() {
         const command = new Command('chat')
             .description('Start an interactive chat session with AI')
@@ -523,7 +569,7 @@ export class ChatCommand extends BaseCommand {
      * Returns the final content + an optional follow-up prompt (interactive
      * mode renders numbered options; choosing one sends it as the next message).
      */
-    async runChatAnswer(message, history, session, options, cacheEnabled, mode, interactive, parsed) {
+    async runChatAnswer(message, history, session, options, cacheEnabled, mode, interactive, parsed, ctxOverrides) {
         // Cache check first (same as the legacy path).
         const cache = getCache();
         if (cacheEnabled) {
@@ -586,6 +632,10 @@ export class ChatCommand extends BaseCommand {
             configManager: this.configManager,
             cwd: process.cwd(),
             emit: (event, data, source) => getEventBus().emit(event, data, source),
+            // P3 — the dashboard chat console injects a NON-TTY ask_user renderer
+            // (inquirer would hang on the server's piped stdin); the CLI keeps the
+            // default interactive renderer.
+            ...(ctxOverrides?.askUser ? { askUser: ctxOverrides.askUser } : {}),
             // C2 verify with the actual session model (verify_requirement tool).
             callLLM: (prompt, opts) => session.provider.generate(prompt, { ...opts, model: session.model }),
             // I3: tools that return {artifact, result} deliverables are recorded to
@@ -656,7 +706,12 @@ export class ChatCommand extends BaseCommand {
             }
         }
         const followupPrompt = await this.renderFollowups(result.followups, interactive);
-        return { content: result.content, followupPrompt, generationFailed: result.generationFailed };
+        return {
+            content: result.content,
+            followupPrompt,
+            generationFailed: result.generationFailed,
+            followups: result.followups,
+        };
     }
     /**
      * E3b — the model-call step for the tool loop (Freebuff run-agent-step):
