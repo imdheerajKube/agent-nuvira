@@ -50,6 +50,10 @@
   `buff gateway start` runs; `buff gateway delivery` shows/`--flush` drains.
 - **SimpleX is two-way** — persistent inbound listener with contact-request
   auto-accept and contact/group allowlists.
+- **IRC is two-way too** — persistent RFC 1459 listener: PING/PONG
+  keepalives, nick-collision retry, channel addressing (the bot only answers
+  when addressed with `nick:`/`nick,`), `IRC_ALLOWED_USERS` allowlist, and
+  reconnect with backoff. See `IRC_PROTOCOL_DEEP_DIVE.md`.
 - **Dashboard Channels send-test** — the Agent Hub Channels tab sends test
   messages through the same gateway the CLI uses; `buff gateway status` shows a
   `X/22 platforms configured` line.

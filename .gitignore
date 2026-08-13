@@ -11,7 +11,7 @@ SCOPE.md
 ASSESSMENT_WEBSITE_DEPLOY.md
 # Generated addon builds (agent output during addon-creation tasks)
 addon/
-
+HERMES_IMPORT_DESIGN.md
 # Local issue tracking (not synced to the upstream repo)
 issues/
 

@@ -1007,6 +1007,16 @@ export interface IrcOptions {
    * a slow JOIN settle when the server never sends 366 (default 1500ms).
    */
   settleDelayMs?: number;
+  /** Reconnect delay after the server drops the listener (ms, default 5000). */
+  reconnectDelayMs?: number;
+  /**
+   * Case-insensitive allowlist of nicks that may talk to the bot. When unset
+   * (or empty), every nick is allowed — Hermes `allowed_users` parity (in
+   * Hermes, `allowed_users: []` means allow all). Configured via the
+   * IRC_ALLOWED_USERS env var (comma list) — our extension of the Hermes env
+   * surface (Hermes reads this from config.yaml instead).
+   */
+  allowedUsers?: string[];
 }
 
 /** Build the IRC options from the environment (IRC_* — Hermes env-var parity). */
@@ -1014,8 +1024,10 @@ export function ircOptionsFromEnv(): IrcOptions {
   const rawPort = process.env.IRC_PORT;
   const port = rawPort ? parseInt(rawPort, 10) || 6697 : 6697;
   const rawTls = process.env.IRC_USE_TLS;
+  const rawReconnect = process.env.IRC_RECONNECT_DELAY_MS;
   // TLS defaults ON for the standard TLS port (6697); explicit 0/false/no turns it off.
   const useTls = rawTls !== undefined ? ['1', 'true', 'yes'].includes(rawTls.toLowerCase()) : port === 6697;
+  const reconnectDelayMs = rawReconnect ? parseInt(rawReconnect, 10) || undefined : undefined;
   return {
     server: process.env.IRC_SERVER ?? '',
     port,
@@ -1024,6 +1036,13 @@ export function ircOptionsFromEnv(): IrcOptions {
     channel: process.env.IRC_CHANNEL || undefined,
     serverPassword: process.env.IRC_SERVER_PASSWORD || undefined,
     nickservPassword: process.env.IRC_NICKSERV_PASSWORD || undefined,
+    // IRC_ALLOWED_USERS is our env-var extension of Hermes' config.yaml
+    // `allowed_users` list (comma-separated nicks, case-insensitive).
+    allowedUsers: (process.env.IRC_ALLOWED_USERS ?? '')
+      .split(',')
+      .map((s) => s.trim())
+      .filter(Boolean),
+    reconnectDelayMs,
   };
 }
 
@@ -1090,6 +1109,41 @@ export function splitIrcMessage(text: string, target: string, maxLineBytes = 510
     if (para.trim()) lines.push(para);
   }
   return lines.length ? lines : [''];
+}
+
+/**
+ * Parse one raw IRC protocol line into components (Hermes
+ * `_parse_irc_message` parity): `:prefix COMMAND p1 p2 :trailing`.
+ */
+export function parseIrcLine(raw: string): { prefix: string; command: string; params: string[]; trailing: string } {
+  let line = raw.replace(/\r$/, '');
+  let prefix = '';
+  if (line.startsWith(':')) {
+    const sp = line.indexOf(' ');
+    if (sp === -1) {
+      prefix = line.slice(1);
+      line = '';
+    } else {
+      prefix = line.slice(1, sp);
+      line = line.slice(sp + 1);
+    }
+  }
+  let trailing = '';
+  const colon = line.indexOf(' :');
+  if (colon !== -1) {
+    trailing = line.slice(colon + 2);
+    line = line.slice(0, colon);
+  }
+  const parts = line.split(' ').filter(Boolean);
+  const command = parts.shift() ?? '';
+  const params = trailing !== '' ? [...parts, trailing] : parts;
+  return { prefix, command, params, trailing };
+}
+
+/** Extract the nickname from an IRC prefix (`nick!user@host` → `nick`). */
+export function extractIrcNick(prefix: string): string {
+  const bang = prefix.indexOf('!');
+  return bang === -1 ? prefix : prefix.slice(0, bang);
 }
 
 /**
@@ -1239,20 +1293,40 @@ export function ircSend(opts: IrcOptions, target: string, text: string, timeoutM
 }
 
 /**
- * IRC — send-only via a direct RFC 1459 connection (Hermes
+ * IRC — two-way via a persistent RFC 1459 connection (Hermes
  * `plugins/platforms/irc` parity: same env vars, same protocol). Channel id =
  * an IRC channel (#ops) or a nick for DMs; falls back to IRC_CHANNEL when
- * empty. Inbound (full-time relay + receive loop) is deferred — outbound only,
- * like Signal/Email/SMS.
+ * empty.
+ *
+ * INBOUND (start/stop): a full-time listener socket — registers (PASS → NICK
+ * → USER), waits for 001 RPL_WELCOME, IDENTIFYs with NickServ, JOINS
+ * IRC_CHANNEL, answers PING/PONG keepalives, retries nick collisions (433),
+ * and relays PRIVMSG. Channel messages are only relayed when the bot is
+ * addressed (`nick:`/`nick,`/`nick ` — Hermes parity); our own echoes are
+ * filtered; CTCP ACTION becomes `* nick text` while other CTCP is dropped;
+ * IRC_ALLOWED_USERS restricts who may talk to the bot. Reconnects with a
+ * backoff when the server drops the socket.
+ *
+ * OUTBOUND (send): prefers the live listener socket — one IRC identity, so a
+ * separate connect-per-send connection claiming the same nick would collide —
+ * rate-limited 0.3s between lines like Hermes. Falls back to connect-per-send
+ * `ircSend` when no listener is running.
  */
 export class IrcAdapter implements ChannelAdapter {
   readonly platform = 'irc' as const;
   readonly configured: boolean;
   private opts: IrcOptions;
+  private handler: MessageHandler | null = null;
+  private sock: Socket | TLSSocket | null = null;
+  private running = false;
+  private reconnectTimer: NodeJS.Timeout | null = null;
+  private currentNick = '';
+  private buffer = '';
 
   constructor(opts?: IrcOptions) {
     this.opts = opts ?? ircOptionsFromEnv();
     this.configured = Boolean(this.opts.server && this.opts.nickname);
+    this.currentNick = this.opts.nickname;
   }
 
   describe(): string {
@@ -1261,19 +1335,184 @@ export class IrcAdapter implements ChannelAdapter {
       : 'IRC (not configured — set IRC_SERVER)';
   }
 
-  async start(_onMessage: MessageHandler): Promise<void> {
-    // Outbound only — full-time relay + receive loop deferred.
+  /**
+   * Open the persistent inbound listener. Non-blocking: reconnects on drop.
+   * Idempotent (a second start while running is a no-op). Throws only when
+   * the transport is unconfigured.
+   */
+  async start(onMessage: MessageHandler): Promise<void> {
+    if (!this.configured) throw new Error('IRC adapter not configured (IRC_SERVER)');
+    // Guard against a second start() without stop() — never stack listeners.
+    if (this.running) return;
+    this.handler = onMessage;
+    this.running = true;
+    this.currentNick = this.opts.nickname;
+    this.connect();
   }
 
   async stop(): Promise<void> {
-    // No persistent resources.
+    this.running = false;
+    this.handler = null;
+    if (this.reconnectTimer) {
+      clearTimeout(this.reconnectTimer);
+      this.reconnectTimer = null;
+    }
+    const sock = this.sock;
+    this.sock = null;
+    if (sock && !sock.destroyed) {
+      try {
+        // end() flushes the QUIT before closing (destroy() may drop it).
+        sock.end('QUIT :Agent-Nuvira shutting down\r\n');
+      } catch {
+        /* ignore */
+      }
+    }
+  }
+
+  private connect(): void {
+    if (!this.running) return;
+    let sock: Socket | TLSSocket;
+    try {
+      sock = this.opts.useTls
+        ? tlsConnect({ host: this.opts.server, port: this.opts.port, rejectUnauthorized: false })
+        : netConnect({ host: this.opts.server, port: this.opts.port });
+    } catch {
+      this.scheduleReconnect();
+      return;
+    }
+    this.sock = sock;
+    sock.on('connect', () => this.register(sock));
+    sock.on('data', (chunk: Buffer) => this.onData(chunk));
+    sock.on('error', () => {
+      /* close follows — handled below */
+    });
+    sock.on('close', () => {
+      if (this.sock === sock) this.sock = null;
+      this.scheduleReconnect();
+    });
+  }
+
+  private register(sock: Socket | TLSSocket): void {
+    if (this.opts.serverPassword) sock.write(`PASS ${this.opts.serverPassword}\r\n`);
+    sock.write(`NICK ${this.currentNick}\r\n`);
+    sock.write(`USER ${this.opts.nickname} 0 * :Agent-Nuvira gateway\r\n`);
+  }
+
+  private scheduleReconnect(): void {
+    if (!this.running || this.reconnectTimer) return;
+    this.reconnectTimer = setTimeout(() => {
+      this.reconnectTimer = null;
+      this.connect();
+    }, this.opts.reconnectDelayMs ?? 5000);
+  }
+
+  private onData(chunk: Buffer): void {
+    this.buffer += chunk.toString('utf-8');
+    let idx: number;
+    while ((idx = this.buffer.indexOf('\r\n')) !== -1) {
+      const raw = this.buffer.slice(0, idx);
+      this.buffer = this.buffer.slice(idx + 2);
+      try {
+        this.handleLine(raw);
+      } catch {
+        // A malformed line must never take the listener down.
+      }
+    }
+  }
+
+  private handleLine(raw: string): void {
+    const msg = parseIrcLine(raw);
+    const { command, params } = msg;
+    // PING/PONG keepalive — answer or the server drops us.
+    if (command === 'PING') {
+      const payload = params[0] ?? '';
+      this.sock?.write(`PONG :${payload}\r\n`);
+      return;
+    }
+    // 001 RPL_WELCOME — registration complete; the server may confirm our nick.
+    if (command === '001') {
+      if (params[0]) this.currentNick = params[0];
+      if (this.opts.nickservPassword) {
+        this.sock?.write(`PRIVMSG NickServ :IDENTIFY ${this.opts.nickservPassword}\r\n`);
+      }
+      if (this.opts.channel) {
+        this.sock?.write(`JOIN ${this.opts.channel}\r\n`);
+      }
+      return;
+    }
+    // 433 ERR_NICKNAMEINUSE — retry with an incrementing suffix (Hermes parity:
+    // nick_, nick_1, nick_2…).
+    if (command === '433') {
+      const m = this.currentNick.match(/^(.+)_(\d+)$/);
+      if (m) this.currentNick = `${m[1]}_${parseInt(m[2], 10) + 1}`;
+      else if (this.currentNick === this.opts.nickname) this.currentNick = `${this.opts.nickname}_`;
+      else this.currentNick = `${this.opts.nickname}_1`;
+      this.sock?.write(`NICK ${this.currentNick}\r\n`);
+      return;
+    }
+    // PRIVMSG — incoming message (channel or DM).
+    if (command === 'PRIVMSG' && params.length >= 2) {
+      this.handlePrivmsg(extractIrcNick(msg.prefix), params[0], params[1]);
+      return;
+    }
+    // NICK — track our own nick changes.
+    if (command === 'NICK' && extractIrcNick(msg.prefix).toLowerCase() === this.currentNick.toLowerCase()) {
+      if (params[0]) this.currentNick = params[0];
+    }
+  }
+
+  private handlePrivmsg(sender: string, target: string, text: string): void {
+    if (!sender) return;
+    // Ignore our own echoes — the server relays our own PRIVMSGs back.
+    if (sender.toLowerCase() === this.currentNick.toLowerCase()) return;
+    // CTCP ACTION (/me) → `* nick text`; other CTCP is ignored (Hermes parity).
+    if (text.startsWith('\x01ACTION ') && text.endsWith('\x01')) {
+      text = `* ${sender} ${text.slice(8, -1)}`;
+    } else if (text.startsWith('\x01')) {
+      return;
+    }
+    const isChannel = target.startsWith('#') || target.startsWith('&');
+    const channelId = isChannel ? target : sender;
+    if (isChannel) {
+      // In channels the bot only reacts when addressed (nick:/nick,/nick ).
+      const nick = this.currentNick;
+      let addressed = false;
+      for (const prefix of [`${nick}:`, `${nick},`, `${nick} `]) {
+        if (text.toLowerCase().startsWith(prefix.toLowerCase())) {
+          text = text.slice(prefix.length).trim();
+          addressed = true;
+          break;
+        }
+      }
+      if (!addressed) return;
+    }
+    // Case-insensitive allowlist (IRC_ALLOWED_USERS); unset = allow all.
+    const allowed = this.opts.allowedUsers ?? [];
+    if (allowed.length > 0 && !allowed.some((u) => u.toLowerCase() === sender.toLowerCase())) return;
+    void this.handler?.({ platform: 'irc', channelId, text, from: sender });
   }
 
   async send(channelId: string, text: string): Promise<boolean> {
     if (!this.configured) return false;
     const target = channelId || this.opts.channel || '';
     if (!target) return false;
-    return ircSend(this.opts, target, sanitizeOutbound(text));
+    const content = sanitizeOutbound(text);
+    // Prefer the live listener socket — one IRC identity, so no nick
+    // collision between the listener and a separate send connection.
+    const sock = this.sock;
+    if (this.running && sock && !sock.destroyed) {
+      try {
+        for (const line of splitIrcMessage(content, target)) {
+          sock.write(`PRIVMSG ${target} :${line}\r\n`);
+          // Hermes' 0.3s flood guard between lines.
+          await new Promise((r) => setTimeout(r, 300));
+        }
+        return true;
+      } catch {
+        return false;
+      }
+    }
+    return ircSend(this.opts, target, content);
   }
 }
 

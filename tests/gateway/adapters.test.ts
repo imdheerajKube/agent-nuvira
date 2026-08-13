@@ -237,13 +237,23 @@ interface IrcCapture {
  */
 function startMockIrc(
   onPrivmsg?: (target: string, text: string, capture: IrcCapture) => string | null,
-): Promise<{ port: number; capture: IrcCapture; close: () => Promise<void> }> {
+): Promise<{
+  port: number;
+  capture: IrcCapture;
+  /** Push a server→client line at the current connection (inbound tests). */
+  push: (line: string) => void;
+  /** Drop the current connection (reconnect tests). */
+  drop: () => void;
+  close: () => Promise<void>;
+}> {
   return new Promise((resolve) => {
     const capture: IrcCapture = { connections: 0, lines: [], privmsg: [], joins: [] };
     let server: Server | null = null;
+    let currentSock: Socket | null = null;
 
     server = createServer((sock: Socket) => {
       capture.connections += 1;
+      currentSock = sock;
       let buf = '';
       let nick = 'agent-nuvira';
       const send = (line: string): void => sock.write(line + '\r\n');
@@ -290,6 +300,12 @@ function startMockIrc(
       resolve({
         port: typeof addr === 'object' && addr ? addr.port : 0,
         capture,
+        push: (line: string): void => {
+          if (currentSock && !currentSock.destroyed) currentSock.write(line + '\r\n');
+        },
+        drop: (): void => {
+          currentSock?.destroy();
+        },
         close: () => new Promise((r) => { try { server!.close(() => r()); } catch { r(); } }),
       });
     });
@@ -305,6 +321,15 @@ const IRC_OPTS = (port: number, over: Partial<IrcOptions> = {}): IrcOptions => (
   settleDelayMs: 80,
   ...over,
 });
+
+/** Poll until `cond` is true (real sockets — everything is async here). */
+async function until(cond: () => boolean, timeoutMs = 1500): Promise<void> {
+  const start = Date.now();
+  while (!cond()) {
+    if (Date.now() - start > timeoutMs) throw new Error('timeout waiting for IRC condition');
+    await new Promise((r) => setTimeout(r, 10));
+  }
+}
 
 describe('IrcAdapter / ircSend (RFC 1459, Hermes plugins/platforms/irc parity)', () => {
   afterEach(() => {
@@ -405,6 +430,208 @@ describe('IrcAdapter / ircSend (RFC 1459, Hermes plugins/platforms/irc parity)',
       const adapter = new IrcAdapter(IRC_OPTS(irc.port));
       expect(await adapter.send('#ops\r\nPRIVMSG #evil :x', 'hi')).toBe(false);
       expect(irc.capture.connections).toBe(0);
+    } finally {
+      await irc.close();
+    }
+  });
+});
+
+describe('IrcAdapter inbound relay (Hermes plugins/platforms/irc receive parity)', () => {
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  it('start() opens a persistent listener: registers and joins IRC_CHANNEL once', async () => {
+    const irc = await startMockIrc();
+    try {
+      const adapter = new IrcAdapter(IRC_OPTS(irc.port, { channel: '#ops', reconnectDelayMs: 20 }));
+      await adapter.start(() => {});
+      await until(() => irc.capture.joins.length === 1);
+      expect(irc.capture.connections).toBe(1);
+      expect(irc.capture.lines[0]).toBe('NICK agent-nuvira');
+      expect(irc.capture.lines[1]).toBe('USER agent-nuvira 0 * :Agent-Nuvira gateway');
+      expect(irc.capture.joins).toEqual(['#ops']);
+      await adapter.stop();
+    } finally {
+      await irc.close();
+    }
+  });
+
+  it('relays DMs to the bot (channelId = sender nick)', async () => {
+    const irc = await startMockIrc();
+    try {
+      const received: Array<{ channelId: string; text: string; from?: string }> = [];
+      const adapter = new IrcAdapter(IRC_OPTS(irc.port, { reconnectDelayMs: 20 }));
+      await adapter.start((m) => received.push(m));
+      await until(() => irc.capture.connections === 1);
+      irc.push(':alice!user@host PRIVMSG agent-nuvira :deploy the site');
+      await until(() => received.length === 1);
+      expect(received[0]).toEqual({ platform: 'irc', channelId: 'alice', text: 'deploy the site', from: 'alice' });
+      await adapter.stop();
+    } finally {
+      await irc.close();
+    }
+  });
+
+  it('relays channel messages only when the bot is addressed and strips the prefix', async () => {
+    const irc = await startMockIrc();
+    try {
+      const received: unknown[] = [];
+      const adapter = new IrcAdapter(IRC_OPTS(irc.port, { channel: '#ops', reconnectDelayMs: 20 }));
+      await adapter.start((m) => received.push(m));
+      await until(() => irc.capture.connections === 1);
+      irc.push(':alice!u@h PRIVMSG #ops :agent-nuvira: run the tests');
+      await until(() => received.length === 1);
+      expect(received[0]).toMatchObject({ platform: 'irc', channelId: '#ops', text: 'run the tests', from: 'alice' });
+      // Unaddressed channel chatter is ignored.
+      irc.push(':bob!u@h PRIVMSG #ops :anyone seen the logs?');
+      await new Promise((r) => setTimeout(r, 60));
+      expect(received.length).toBe(1);
+      await adapter.stop();
+    } finally {
+      await irc.close();
+    }
+  });
+
+  it('filters our own echoes and non-text CTCP', async () => {
+    const irc = await startMockIrc();
+    try {
+      const received: unknown[] = [];
+      const adapter = new IrcAdapter(IRC_OPTS(irc.port, { reconnectDelayMs: 20 }));
+      await adapter.start((m) => received.push(m));
+      await until(() => irc.capture.connections === 1);
+      irc.push(':agent-nuvira!u@h PRIVMSG #ops :hello myself');
+      irc.push(':mallory!u@h PRIVMSG agent-nuvira :\x01VERSION\x01');
+      await new Promise((r) => setTimeout(r, 60));
+      expect(received.length).toBe(0);
+      await adapter.stop();
+    } finally {
+      await irc.close();
+    }
+  });
+
+  it('converts CTCP ACTION (/me) to * nick text', async () => {
+    const irc = await startMockIrc();
+    try {
+      const received: unknown[] = [];
+      const adapter = new IrcAdapter(IRC_OPTS(irc.port, { reconnectDelayMs: 20 }));
+      await adapter.start((m) => received.push(m));
+      await until(() => irc.capture.connections === 1);
+      irc.push(':alice!u@h PRIVMSG agent-nuvira :\x01ACTION waves\x01');
+      await until(() => received.length === 1);
+      expect(received[0]).toMatchObject({ text: '* alice waves' });
+      await adapter.stop();
+    } finally {
+      await irc.close();
+    }
+  });
+
+  it('applies the IRC_ALLOWED_USERS allowlist case-insensitively', async () => {
+    const irc = await startMockIrc();
+    try {
+      const received: unknown[] = [];
+      const adapter = new IrcAdapter(IRC_OPTS(irc.port, { allowedUsers: ['Alice'], reconnectDelayMs: 20 }));
+      await adapter.start((m) => received.push(m));
+      await until(() => irc.capture.connections === 1);
+      irc.push(':ALICE!u@h PRIVMSG agent-nuvira :allowed');
+      await until(() => received.length === 1);
+      irc.push(':mallory!u@h PRIVMSG agent-nuvira :blocked');
+      await new Promise((r) => setTimeout(r, 60));
+      expect(received.length).toBe(1);
+      await adapter.stop();
+    } finally {
+      await irc.close();
+    }
+  });
+
+  it('answers PING with PONG to stay alive', async () => {
+    const irc = await startMockIrc();
+    try {
+      const adapter = new IrcAdapter(IRC_OPTS(irc.port, { reconnectDelayMs: 20 }));
+      await adapter.start(() => {});
+      await until(() => irc.capture.connections === 1);
+      irc.push('PING :keepalive-token');
+      await until(() => irc.capture.lines.includes('PONG :keepalive-token'));
+      await adapter.stop();
+    } finally {
+      await irc.close();
+    }
+  });
+
+  it('retries with an incremented nick on 433 ERR_NICKNAMEINUSE', async () => {
+    const irc = await startMockIrc();
+    try {
+      const adapter = new IrcAdapter(IRC_OPTS(irc.port, { reconnectDelayMs: 20 }));
+      await adapter.start(() => {});
+      await until(() => irc.capture.connections === 1);
+      irc.push(':mock 433 * agent-nuvira :Nickname is already in use');
+      await until(() => irc.capture.lines.some((l) => l.startsWith('NICK agent-nuvira_')));
+      expect(irc.capture.lines).toContain('NICK agent-nuvira_');
+      await adapter.stop();
+    } finally {
+      await irc.close();
+    }
+  });
+
+  it('E2E round-trip: server → listener → handler → send replies over the SAME connection', async () => {
+    const irc = await startMockIrc();
+    try {
+      let adapter!: IrcAdapter;
+      const received: unknown[] = [];
+      adapter = new IrcAdapter(IRC_OPTS(irc.port, { channel: '#ops', reconnectDelayMs: 20 }));
+      await adapter.start(async (m) => {
+        received.push(m);
+        // The gateway handler replies through the same adapter.
+        await adapter.send(m.channelId, `ack: ${m.text}`);
+      });
+      await until(() => irc.capture.connections === 1);
+      irc.push(':alice!u@h PRIVMSG #ops :agent-nuvira: status?');
+      await until(() => irc.capture.privmsg.some((p) => p.text.startsWith('ack:')));
+      expect(received.length).toBe(1);
+      expect(irc.capture.privmsg).toContainEqual({ target: '#ops', text: 'ack: status?' });
+      // One connection carried the whole round trip (listener + reply).
+      expect(irc.capture.connections).toBe(1);
+      await adapter.stop();
+    } finally {
+      await irc.close();
+    }
+  });
+
+  it('reconnects after a server drop and keeps delivering', async () => {
+    const irc = await startMockIrc();
+    try {
+      const received: unknown[] = [];
+      const adapter = new IrcAdapter(IRC_OPTS(irc.port, { reconnectDelayMs: 20 }));
+      await adapter.start((m) => received.push(m));
+      await until(() => irc.capture.connections === 1);
+      irc.drop();
+      await until(() => irc.capture.connections >= 2);
+      irc.push(':alice!u@h PRIVMSG agent-nuvira :back online?');
+      await until(() => received.length === 1);
+      expect(received[0]).toMatchObject({ text: 'back online?' });
+      await adapter.stop();
+    } finally {
+      await irc.close();
+    }
+  });
+
+  it('stop() sends QUIT, stops delivering, and does not reconnect', async () => {
+    const irc = await startMockIrc();
+    try {
+      const received: unknown[] = [];
+      const adapter = new IrcAdapter(IRC_OPTS(irc.port, { reconnectDelayMs: 20 }));
+      await adapter.start((m) => received.push(m));
+      await until(() => irc.capture.connections === 1);
+      await adapter.stop();
+      // end() flushes the QUIT — poll until the mock server has read it.
+      await until(() => irc.capture.lines.some((l) => l.startsWith('QUIT')));
+      irc.push(':alice!u@h PRIVMSG agent-nuvira :after stop');
+      await new Promise((r) => setTimeout(r, 60));
+      expect(received.length).toBe(0);
+      const before = irc.capture.connections;
+      await new Promise((r) => setTimeout(r, 60));
+      expect(irc.capture.connections).toBe(before);
+      await adapter.stop(); // idempotent
     } finally {
       await irc.close();
     }
