@@ -1029,3 +1029,22 @@ export interface TaskRecord {
   logs: TaskLogLine[];
   error?: string;
 }
+
+// ─── P2 in-page WhatsApp pairing (GUI parity with `buff whatsapp pair`) ─────
+
+export type WhatsAppPairState = 'idle' | 'pairing' | 'paired' | 'failed' | 'cancelled' | 'error';
+
+export interface WhatsAppPairStatus {
+  state: WhatsAppPairState;
+  paired: boolean;
+  sessionDir: string;
+  /** Browser-scannable QR (PNG data URL) — null until the first QR arrives. */
+  qr: string | null;
+  /** Raw Baileys QR payload (for external tools / debugging). */
+  qrRaw: string | null;
+  /** 8-char "link with phone number instead" code (phone mode only). */
+  pairingCode: string | null;
+  phone: string | null;
+  error: string | null;
+  startedAt: number | null;
+}

@@ -19,6 +19,7 @@ import type {
   TaskRecord,
   TaskStatus,
   TraceEntry,
+  WhatsAppPairStatus,
 } from './types';
 
 // ─── Admin session token persistence (Session 18) ────────────────────────────
@@ -566,6 +567,75 @@ export class DashboardAPI {
       try {
         const payload = JSON.parse((event as MessageEvent).data) as { status?: TaskStatus };
         if (payload.status) handlers.onStatus?.(payload.status);
+      } catch { /* ignore malformed */ }
+    });
+    return () => es.close();
+  }
+
+  // ─── P2 — in-page WhatsApp pairing (GUI parity with `buff whatsapp pair`) ──
+
+  /** Current pairing status (state, QR data URL, code, session dir). */
+  async getWhatsAppStatus(): Promise<WhatsAppPairStatus | null> {
+    const r = await this.sendAdminRequest('/api/whatsapp', 'GET');
+    if (!r) return null;
+    const d = (r.data ?? {}) as { ok?: boolean; status?: WhatsAppPairStatus };
+    return r.status === 200 && d.ok && d.status ? d.status : null;
+  }
+
+  /** Start pairing — QR mode, or phone mode when `phone` (intl, no +) is set. */
+  async startWhatsAppPair(phone?: string): Promise<AdminWriteResult> {
+    const r = await this.sendAdminRequest('/api/whatsapp/pair', 'POST', { phone: phone || undefined });
+    if (!r) return { ok: false, error: 'Could not reach the dashboard server.' };
+    const d = (r.data ?? {}) as AdminWriteResult;
+    if (r.status === 200 && d.ok) return d;
+    return { ok: false, error: d.error || 'Pairing failed to start.', unauthorized: r.status === 401, forbidden: r.status === 403 };
+  }
+
+  /** Abort the active pairing. */
+  async cancelWhatsAppPair(): Promise<AdminWriteResult> {
+    const r = await this.sendAdminRequest('/api/whatsapp/cancel', 'POST');
+    if (!r) return { ok: false, error: 'Could not reach the dashboard server.' };
+    const d = (r.data ?? {}) as AdminWriteResult;
+    if (r.status === 200 && d.ok) return d;
+    return { ok: false, error: d.error || 'Cancel failed.', unauthorized: r.status === 401, forbidden: r.status === 403 };
+  }
+
+  /** Remove the paired WhatsApp session from disk. */
+  async unpairWhatsApp(): Promise<AdminWriteResult> {
+    const r = await this.sendAdminRequest('/api/whatsapp/unpair', 'POST');
+    if (!r) return { ok: false, error: 'Could not reach the dashboard server.' };
+    const d = (r.data ?? {}) as AdminWriteResult;
+    if (r.status === 200 && d.ok) return d;
+    return { ok: false, error: d.error || 'Unpair failed.', unauthorized: r.status === 401, forbidden: r.status === 403 };
+  }
+
+  /**
+   * Subscribe to pairing events over SSE: qr (PNG data URL) / code (8-char)
+   * / status. EventSource can't set Authorization headers, so the admin
+   * token rides the ?token= query. Returns an unsubscribe function.
+   */
+  subscribeWhatsApp(handlers: {
+    onQr?: (qr: string) => void;
+    onCode?: (code: string) => void;
+    onStatus?: (status: WhatsAppPairStatus) => void;
+  }): () => void {
+    const token = getAdminToken();
+    const es = new EventSource(`${this.baseUrl}/api/whatsapp/events?token=${encodeURIComponent(token ?? '')}`);
+    es.addEventListener('qr', (event) => {
+      try {
+        const payload = JSON.parse((event as MessageEvent).data) as { qr?: string };
+        if (payload.qr) handlers.onQr?.(payload.qr);
+      } catch { /* ignore malformed */ }
+    });
+    es.addEventListener('code', (event) => {
+      try {
+        const payload = JSON.parse((event as MessageEvent).data) as { code?: string };
+        if (payload.code) handlers.onCode?.(payload.code);
+      } catch { /* ignore malformed */ }
+    });
+    es.addEventListener('status', (event) => {
+      try {
+        handlers.onStatus?.(JSON.parse((event as MessageEvent).data) as WhatsAppPairStatus);
       } catch { /* ignore malformed */ }
     });
     return () => es.close();

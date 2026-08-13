@@ -67,6 +67,20 @@ function mockReads(payload: HubData | null = HUB, auth: { configured: boolean; a
     user: auth.authenticated ? 'admin' : null,
     role: auth.authenticated ? (auth.role ?? 'admin') : null,
   });
+  // The Channels tab mounts WhatsAppPanel (P2), whose SSE subscription needs
+  // a browser EventSource — keep the hub tests hermetic.
+  vi.spyOn(dashboardAPI, 'subscribeWhatsApp').mockReturnValue(() => {});
+  vi.spyOn(dashboardAPI, 'getWhatsAppStatus').mockResolvedValue({
+    state: 'idle',
+    paired: false,
+    sessionDir: '/tmp/wa-session',
+    qr: null,
+    qrRaw: null,
+    pairingCode: null,
+    phone: null,
+    error: null,
+    startedAt: null,
+  });
 }
 
 afterEach(() => {

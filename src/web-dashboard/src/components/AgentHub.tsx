@@ -18,6 +18,7 @@
 import { useCallback, useEffect, useState } from 'react';
 import { dashboardAPI } from '../api';
 import type { HubData, HubToolset } from '../types';
+import WhatsAppPanel from './WhatsAppPanel';
 
 type HubTab = 'tools' | 'channels' | 'artifacts' | 'skills';
 
@@ -500,6 +501,9 @@ export default function AgentHub() {
             Sends through the same gateway the CLI uses — the dashboard process must have the
             platform's env token set (e.g. <code>BUFF_SMTP_HOST</code>). Requires admin or operator.
           </p>
+
+          <h3 className="section-subtitle">🟢 WhatsApp bridge (buff whatsapp pair)</h3>
+          <WhatsAppPanel authed={authed} canWrite={canWrite} sessionExpired={sessionExpired} />
         </div>
       ) : null}
 

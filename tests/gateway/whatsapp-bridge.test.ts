@@ -7,15 +7,54 @@
  * unpaired state (temp session dir, no creds.json).
  */
 
-import { describe, it, expect, beforeEach, afterEach } from 'vitest';
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 
 import { normalizeWhatsAppJid, type WhatsAppBridge } from '../../src/gateway/whatsapp/bridge.js';
 import { WhatsAppBridgeAdapter } from '../../src/gateway/adapters.js';
-import { BaileysBridge, normalizePairingPhone, renderQrToTerminal } from '../../src/gateway/whatsapp/baileys-bridge.js';
+import { BaileysBridge, normalizePairingPhone, renderQrToTerminal, renderQrToDataUrl } from '../../src/gateway/whatsapp/baileys-bridge.js';
 import { hasWhatsAppSession, whatsappSessionDir } from '../../src/gateway/whatsapp/session.js';
+
+// A controllable fake baileys module for the pair() AbortSignal test — the
+// mock is hoisted above every import, so ANY 'baileys' import in this file
+// (including the bridge's lazy `await import('baileys')`) gets the fake.
+const fakeBaileys = vi.hoisted(() => {
+  const sockets: Array<{ ev: unknown; ended: boolean }> = [];
+  return { sockets };
+});
+
+vi.mock('baileys', () => {
+  const makeEmitter = () => {
+    const listeners = new Map<string, Set<(...args: unknown[]) => void>>();
+    return {
+      on: (event: string, cb: (...args: unknown[]) => void) => {
+        if (!listeners.has(event)) listeners.set(event, new Set());
+        listeners.get(event)!.add(cb);
+      },
+      emit: (event: string, ...args: unknown[]) => {
+        for (const cb of [...(listeners.get(event) ?? [])]) cb(...args);
+      },
+    };
+  };
+  return {
+    makeWASocket: () => {
+      const sock = {
+        ev: makeEmitter(),
+        ended: false,
+        sendMessage: async () => undefined,
+        requestPairingCode: async () => '12345678',
+        end: () => {
+          sock.ended = true;
+        },
+      };
+      fakeBaileys.sockets.push(sock);
+      return sock;
+    },
+    useMultiFileAuthState: async () => ({ state: {}, saveCreds: async () => undefined }),
+  };
+});
 
 // ─── JID normalization (pure) ───────────────────────────────────────────────
 
@@ -63,6 +102,14 @@ describe('renderQrToTerminal', () => {
     const rendered = await renderQrToTerminal('2@test-payload-12345');
     expect(rendered).toContain('▄'); // qrcode block characters
     expect(rendered.length).toBeGreaterThan(50);
+  });
+});
+
+describe('renderQrToDataUrl', () => {
+  it('renders a browser-scannable PNG data URL for a payload', async () => {
+    const url = await renderQrToDataUrl('2@test-payload-12345');
+    expect(url).toMatch(/^data:image\/png;base64,/);
+    expect(url.length).toBeGreaterThan(100);
   });
 });
 
@@ -175,4 +222,61 @@ describe('BaileysBridge (unpaired)', () => {
   it('whatsappSessionDir honors BUFF_WHATSAPP_SESSION_DIR', () => {
     expect(whatsappSessionDir()).toBe(sessionDir);
   });
+});
+
+// ─── Real BaileysBridge — pair() with a fake baileys module (no network) ───
+
+describe('BaileysBridge.pair() (fake baileys)', () => {
+  let sessionDir = '';
+
+  beforeEach(() => {
+    sessionDir = mkdtempSync(join(tmpdir(), 'buff-wa-pair-'));
+    fakeBaileys.sockets.length = 0;
+  });
+
+  afterEach(() => {
+    rmSync(sessionDir, { recursive: true, force: true });
+  });
+
+  it('aborting the signal ends the socket and resolves { ok:false, reason: cancelled }', async () => {
+    const bridge = new BaileysBridge(sessionDir);
+    const controller = new AbortController();
+    const promise = bridge.pair({ signal: controller.signal, timeoutMs: 30_000 });
+    // Give the lazy baileys import + socket creation a beat.
+    await new Promise((r) => setTimeout(r, 50));
+    expect(fakeBaileys.sockets).toHaveLength(1);
+    controller.abort();
+    const result = await promise;
+    expect(result).toEqual({ ok: false, reason: 'cancelled' });
+    expect(fakeBaileys.sockets[0].ended).toBe(true);
+  });
+
+  it('phone mode requests a pairing code via requestPairingCode and surfaces it', async () => {
+    const bridge = new BaileysBridge(sessionDir);
+    let code = '';
+    const promise = bridge.pair({
+      phoneNumber: '918800663237',
+      timeoutMs: 30_000,
+      onPairingCode: (c) => {
+        code = c;
+      },
+    });
+    await new Promise((r) => setTimeout(r, 50));
+    expect(fakeBaileys.sockets).toHaveLength(1);
+    // The fake resolves requestPairingCode with '12345678' immediately.
+    await new Promise((r) => setTimeout(r, 20));
+    expect(code).toBe('12345678');
+    // A QR (8 digits) in connection.update also surfaces as the code.
+    (fakeBaileys.sockets[0].ev as { emit: (e: string, ...a: unknown[]) => void }).emit('connection.update', {
+      qr: '87654321',
+    });
+    await new Promise((r) => setTimeout(r, 20));
+    expect(code).toBe('87654321');
+    // Open the connection so the pending pair() promise resolves.
+    (fakeBaileys.sockets[0].ev as { emit: (e: string, ...a: unknown[]) => void }).emit('connection.update', {
+      connection: 'open',
+    });
+    const result = await promise;
+    expect(result).toEqual({ ok: true, reason: 'paired' });
+  }, 10_000);
 });
