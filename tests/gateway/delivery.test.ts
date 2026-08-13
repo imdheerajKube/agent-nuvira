@@ -146,20 +146,26 @@ describe('due-window processing + prune', () => {
     }
   });
 
-  it('prune enforces the entry cap and retention window', () => {
-    const dir = makeDir();
-    try {
-      const ledger = new DeliveryLedger(dir);
-      for (let i = 0; i < DELIVERY_MAX_ENTRIES + 50; i++) {
-        ledger.enqueue({ target: `mock:${i}`, ref: { platform: 'mock', channelId: String(i) }, text: `m${i}` });
+  // 550 enqueues each rewrite the JSON store — slow on loaded CI runners
+  // (timed out at vitest's 5s default on the Node 23 ubuntu runner).
+  it(
+    'prune enforces the entry cap and retention window',
+    () => {
+      const dir = makeDir();
+      try {
+        const ledger = new DeliveryLedger(dir);
+        for (let i = 0; i < DELIVERY_MAX_ENTRIES + 50; i++) {
+          ledger.enqueue({ target: `mock:${i}`, ref: { platform: 'mock', channelId: String(i) }, text: `m${i}` });
+        }
+        const pruned = ledger.prune();
+        expect(pruned).toBe(50);
+        expect(ledger.read()).toHaveLength(DELIVERY_MAX_ENTRIES);
+      } finally {
+        rmSync(dir, { recursive: true, force: true });
       }
-      const pruned = ledger.prune();
-      expect(pruned).toBe(50);
-      expect(ledger.read()).toHaveLength(DELIVERY_MAX_ENTRIES);
-    } finally {
-      rmSync(dir, { recursive: true, force: true });
-    }
-  });
+    },
+    20_000,
+  );
 });
 
 describe('GatewayRegistry integration', () => {
