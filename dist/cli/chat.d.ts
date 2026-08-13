@@ -1,6 +1,7 @@
 import { Command } from 'commander';
 import { BaseCommand } from './commands.js';
 import type { ParsedRequest } from '../nlu/parser.js';
+import { type ToolContext, type FollowupSuggestion } from '../tools/registry.js';
 /** E3a — the menu-free dispatch decision (rule-based, C1/C3 only). */
 export interface PipelineDispatchDecision {
     /** Whether the request runs the coding pipeline. */
@@ -71,6 +72,32 @@ export declare class ChatCommand extends BaseCommand {
      * failing into dead ends — the fire-and-forget keeps the first message fast.
      */
     private coldStartProbeFired;
+    /**
+     * P3 — programmatic single-turn answer for the dashboard chat console.
+     *
+     * Runs one tool-loop turn — the EXACT engine behind `buff chat "<prompt>"` —
+     * and returns content + followups as data instead of printing. Non-TTY by
+     * construction: an injected ask_user renderer declines the clarification so
+     * the model proceeds on best judgment (inquirer would hang on the server's
+     * piped stdin), and no interactive prompts are ever reached. `history`
+     * carries prior turns so the dashboard threads a real conversation.
+     */
+    answerOnce(message: string, opts?: {
+        provider?: string;
+        model?: string;
+        dev?: boolean;
+        history?: Array<{
+            role: string;
+            content: string;
+        }>;
+        askUser?: ToolContext['askUser'];
+    }): Promise<{
+        content: string;
+        followups: FollowupSuggestion[];
+        generationFailed?: boolean;
+        provider?: string;
+        model?: string;
+    }>;
     create(): Command;
     private execute;
     /**
