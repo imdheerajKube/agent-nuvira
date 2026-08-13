@@ -140,6 +140,8 @@ describe('TaskRunner', () => {
     expect(runner.start(['a'.repeat(513)]).ok).toBe(false);
   });
 
+  // Spawning 55 sequential children exceeds vitest's 5s default on a loaded
+  // Windows runner — budget for the slowest CI box (Windows-CI hardening).
   it('list() returns newest first and caps history at 50', async () => {
     process.env.BUFF_TASK_FIXTURE_MODE = 'ok';
     const runner = makeRunner();
@@ -152,7 +154,7 @@ describe('TaskRunner', () => {
     const list = runner.list();
     expect(list.length).toBeLessThanOrEqual(50);
     expect(list[0].id).toBe(ids[ids.length - 1]); // newest first
-  });
+  }, 60_000);
 
   it('reports a missing CLI entry as a validation error', () => {
     const r = new TaskRunner({ execPath: process.execPath, cliEntry: join(dir, 'nope.cjs') });
