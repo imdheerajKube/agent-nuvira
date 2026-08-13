@@ -2,6 +2,25 @@
 
 All notable changes to **Agent-Nuvira** are documented in this file.
 
+## v1.68.0 — WhatsApp bridge auto-reconnect (whatsmeow parity)
+
+- **Assessment vs Hermes' WhatsApp layer (tulir/whatsmeow)**: whatsmeow ships
+  first-class auto-reconnect (`EnableAutoReconnect`), while our Baileys bridge
+  only recreated a dead socket on the next send/connect — so the inbound
+  listener (agent tasks triggered from WhatsApp) could die silently
+  mid-session.
+- **The connected bridge now auto-reconnects**: when the socket dies (network
+  drop, Baileys 7's 515 restart, server cycling), it is recreated from the
+  persisted session with exponential backoff (2s → 30s cap), re-wiring the
+  message listener on the fresh socket. `disconnect()` and a server-side
+  logout (401 / device_removed) stop the watcher; a pairing flag keeps it
+  from racing an in-flight `pair()`.
+- So the full loop holds post-pairing: message in → agent pipeline runs
+  (allow-list gated) → reply out — and it stays up across socket drops.
+- Bridge tests: 26 (auto-reconnect + inbound on the new socket, 401 stops the
+  watcher, disconnect stops it, 515/post-code restarts, window bound, phone-
+  mode ordering, self-healing). Root suite: 4,359 tests green.
+
 ## v1.67.0 — WhatsApp pairing fix (Baileys 7 reconnects)
 
 - **🐛 Real-world pairing was failing with `Stream Errored (restart
