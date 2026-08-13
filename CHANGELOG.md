@@ -2,6 +2,30 @@
 
 All notable changes to **Agent-Nuvira** are documented in this file.
 
+## v1.67.0 — WhatsApp pairing fix (Baileys 7 reconnects)
+
+- **🐛 Real-world pairing was failing with `Stream Errored (restart
+  required)` / `Connection Terminated`.** Baileys 7.0 closes the connection
+  after a successful QR scan or pairing-code issuance — WhatsApp expects the
+  client to reconnect with the freshly-saved credentials to finish. The
+  bridge treated those closes as hard failures.
+- **pair() now handles restart-worthy closes**: the explicit 515
+  "restart required" and any server-initiated close after a QR/code was
+  issued (incl. the 428/401 reconnect closes) swap in a fresh socket that
+  reuses the in-memory auth state, bounded by the pairing window (the
+  window — not a restart cap — is the real bound, so the code stays alive
+  while you enter it on your phone).
+- **Phone-number pairing fixed**: the code request now waits for the
+  WebSocket handshake before calling `requestPairingCode` — the immediate
+  call raced the handshake and the request never reached WhatsApp.
+  Verified live: WhatsApp now issues a real 8-char code for the pairing
+  number.
+- **Self-healing sockets**: a bridge socket that dies (e.g. a 515 on an
+  established session) is dropped so the next send/connect recreates it from
+  the persisted session.
+- Bridge tests: 23 (515 restart, post-code 428/401 restarts, window bound,
+  phone-mode call ordering, self-healing). Root suite: 4,356 tests green.
+
 ## v1.66.0 — Live chat progress streaming + gateway ops in the GUI
 
 - **⚡ Live working steps in the Chat tab.** The agent's tool calls and
