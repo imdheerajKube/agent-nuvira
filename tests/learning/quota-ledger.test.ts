@@ -78,26 +78,34 @@ describe('QuotaLedger — usage recording', () => {
     expect(raw.entries['groq|llama-3.3-70b-versatile']).toBeDefined();
   });
 
-  it('auto-re-enables when the reset window rolls (calendar-aware, not a timer)', () => {
+  it('auto-re-enables when the reset window rolls (calendar-aware, not a timer)', async () => {
     const ledger = new QuotaLedger();
+    const windowMs = 50;
+    const recordedAt = Date.now();
     // Small window so tests don't wait: 50ms
-    ledger.recordUsage('gemini', 'default', 100, 0, 50);
+    ledger.recordUsage('gemini', 'default', 100, 0, windowMs);
 
     const statusBefore = ledger.getStatus().find((s) => s.provider === 'gemini')!;
     expect(statusBefore.tokensConsumed).toBe(100);
     expect(statusBefore.requests).toBe(1);
 
-    // Wait for the window to roll, then record again — counters reset first.
-    return new Promise<void>((resolve) => {
-      setTimeout(() => {
-        ledger.recordUsage('gemini', 'default', 10, 5, 50);
-        const statusAfter = ledger.getStatus().find((s) => s.provider === 'gemini')!;
-        expect(statusAfter.tokensConsumed).toBe(15); // fresh window, not 115
-        expect(statusAfter.requests).toBe(1);
-        resolve();
-      }, 70);
-    });
-  });
+    // Wait until the window has definitely rolled. The ledger is calendar-aware
+    // (wall-clock), not timer-driven — so poll until Date.now() passes the
+    // window. Polling (instead of one setTimeout) keeps a loaded CI runner from
+    // starving the wait past the test timeout, and leaves no dangling timer to
+    // fire after teardown.
+    const deadline = recordedAt + 30_000;
+    while (Date.now() - recordedAt < windowMs) {
+      if (Date.now() > deadline) throw new Error('reset window never rolled');
+      await new Promise((resolve) => setTimeout(resolve, 10));
+    }
+
+    // Record again — counters reset first (fresh window, not 115).
+    ledger.recordUsage('gemini', 'default', 10, 5, windowMs);
+    const statusAfter = ledger.getStatus().find((s) => s.provider === 'gemini')!;
+    expect(statusAfter.tokensConsumed).toBe(15); // fresh window, not 115
+    expect(statusAfter.requests).toBe(1);
+  }, 60_000);
 });
 
 describe('QuotaLedger — exhaustion & parking', () => {

@@ -129,7 +129,10 @@ describe('cron — run now', () => {
 
     const stored = listCronJobs().find((j) => j.name === 'quick') as CronJob;
     expect(stored.lastRunAt).toBeGreaterThan(0);
-  });
+    // 'build' is a real pipeline tool (cold ESM start loads the orchestrator
+    // + adapters) — Windows CI has measured ~7s, so budget well past vitest's
+    // 5s default to keep the release pipeline green.
+  }, 60_000);
 
   it('returns a clean error for an unknown tool (never throws)', async () => {
     const job: CronJob = {
@@ -164,5 +167,7 @@ describe('cron — run now', () => {
     const { ok } = await runJobNow(added.job);
     // The run itself succeeds; only the delivery warns (best-effort).
     expect(ok).toBe(true);
-  });
+    // Delivery builds the full adapter registry (baileys/twilio/irc/etc.) —
+    // budget past the 5s default for slow CI runners.
+  }, 60_000);
 });
