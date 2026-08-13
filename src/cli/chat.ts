@@ -334,16 +334,18 @@ export class ChatCommand extends BaseCommand {
       provider?: string;
       model?: string;
       dev?: boolean;
-      history?: Array<{ role: string; content: string }>;
-      askUser?: ToolContext['askUser'];
-    } = {},
-  ): Promise<{
-    content: string;
-    followups: FollowupSuggestion[];
-    generationFailed?: boolean;
-    provider?: string;
-    model?: string;
-  }> {
+    history?: Array<{ role: string; content: string }>;
+    askUser?: ToolContext['askUser'];
+    /** P3 — live progress lines for the dashboard chat console. */
+    onProgress?: (line: string) => void;
+  } = {},
+): Promise<{
+  content: string;
+  followups: FollowupSuggestion[];
+  generationFailed?: boolean;
+  provider?: string;
+  model?: string;
+}> {
     const activeOpts = applyActiveModel({ provider: opts.provider, model: opts.model });
     const mergedOpts = { ...opts, provider: activeOpts.provider, model: activeOpts.model };
     let autoMode = isAutoModel(mergedOpts.model) || isAutoProvider(mergedOpts.provider);
@@ -357,6 +359,8 @@ export class ChatCommand extends BaseCommand {
       provider = routed.provider;
       model = routed.model;
     }
+    // P3 — tell the GUI where the turn is headed before the tool loop runs.
+    opts.onProgress?.(`   🧠 routed to ${provider.name}${model ? ` / ${model}` : ''} — working…`);
 
     const parsed = parseRequestSync(message);
     const dispatchDecision = resolvePipelineDispatch(parsed, { dev: opts.dev });
@@ -369,7 +373,7 @@ export class ChatCommand extends BaseCommand {
       { auto: autoMode },
       false,
       parsed,
-      opts.askUser ? { askUser: opts.askUser } : undefined,
+      { askUser: opts.askUser, onProgress: opts.onProgress },
     );
 
     // No-model fallback: the tool loop could not generate a single response
@@ -744,7 +748,7 @@ export class ChatCommand extends BaseCommand {
     mode: { auto: boolean },
     interactive: boolean,
     parsed?: ParsedRequest,
-    ctxOverrides?: { askUser?: ToolContext['askUser'] },
+    ctxOverrides?: { askUser?: ToolContext['askUser']; onProgress?: (line: string) => void },
   ): Promise<{
     content: string;
     followupPrompt?: string;
@@ -858,7 +862,12 @@ export class ChatCommand extends BaseCommand {
             if (!tool) throw new Error(`Unknown tool: ${name}`);
             return tool.run(args, ctx);
           },
-          onEvent: (line) => logger.info(line),
+          onEvent: (line) => {
+            logger.info(line);
+            // P3 — live progress for the dashboard chat console (the CLI
+            // keeps logging to its own stdout).
+            ctxOverrides?.onProgress?.(line);
+          },
         },
       });
     } catch (err) {

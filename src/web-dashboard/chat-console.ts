@@ -31,6 +31,8 @@ export interface ChatEngine {
       dev?: boolean;
       history?: Array<{ role: string; content: string }>;
       askUser?: (question: string, choices: unknown[], multiSelect: boolean) => Promise<{ answer: unknown; index: number | number[]; custom?: string }>;
+      /** P3 — live working steps (tool calls / reasoning markers). */
+      onProgress?: (line: string) => void;
     },
   ): Promise<{
     content: string;
@@ -65,13 +67,35 @@ export interface ChatAnswerResult {
   error?: string;
 }
 
+/** A live event for one session (P3 progress streaming). */
+export type ChatConsoleEvent =
+  | { kind: 'progress'; line: string }
+  | { kind: 'status'; status: 'working' | 'done' | 'error' };
+
 export class ChatConsole {
   private sessions = new Map<string, ChatTurn[]>();
   private busy = new Set<string>();
   private engine: ChatEngine | null;
+  private listeners = new Set<(sessionId: string, event: ChatConsoleEvent) => void>();
 
   constructor(private readonly opts: ChatConsoleOptions = {}) {
     this.engine = opts.engine ?? null;
+  }
+
+  /** Subscribe to a session's live events (progress lines / status). Returns an unsubscribe fn. */
+  onEvent(cb: (sessionId: string, event: ChatConsoleEvent) => void): () => void {
+    this.listeners.add(cb);
+    return () => this.listeners.delete(cb);
+  }
+
+  private emit(sessionId: string, event: ChatConsoleEvent): void {
+    for (const cb of this.listeners) {
+      try {
+        cb(sessionId, event);
+      } catch {
+        /* a listener must never break the console */
+      }
+    }
   }
 
   /** Lazily load the real agent engine (ChatCommand) on first use. */
@@ -119,6 +143,7 @@ export class ChatConsole {
     const history = this.sessions.get(sessionId) ?? [];
     this.sessions.set(sessionId, history);
     this.busy.add(sessionId);
+    this.emit(sessionId, { kind: 'status', status: 'working' });
     try {
       const engine = await this.ensureEngine();
       const answer = await engine.answerOnce(clean, {
@@ -128,6 +153,9 @@ export class ChatConsole {
         // Non-TTY ask_user: decline the clarification so the model proceeds
         // on best judgment instead of blocking on the server's piped stdin.
         askUser: async () => ({ answer: [], index: -1 }),
+        // P3 — stream the agent's working steps to the GUI (tool calls, model
+        // reasoning markers) instead of a silent wait.
+        onProgress: (line) => this.emit(sessionId, { kind: 'progress', line }),
       });
       const turns: ChatTurn[] = [...history, { role: 'user', content: clean }];
       if (answer.content && answer.content.trim()) {
@@ -135,6 +163,7 @@ export class ChatConsole {
       }
       const maxTurns = this.opts.maxTurns ?? DEFAULT_MAX_TURNS;
       this.sessions.set(sessionId, turns.length > maxTurns ? turns.slice(turns.length - maxTurns) : turns);
+      this.emit(sessionId, { kind: 'status', status: 'done' });
       return {
         ok: true,
         content: answer.content,
@@ -144,6 +173,7 @@ export class ChatConsole {
         generationFailed: answer.generationFailed === true,
       };
     } catch (err) {
+      this.emit(sessionId, { kind: 'status', status: 'error' });
       return { ok: false, error: err instanceof Error ? err.message : String(err) };
     } finally {
       this.busy.delete(sessionId);

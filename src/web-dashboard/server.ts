@@ -3283,6 +3283,48 @@ function handleRequest(req: IncomingMessage, res: ServerResponse): void {
     return;
   }
 
+  // GET /api/chat/:sessionId/events — SSE stream of the session's LIVE
+  // progress (agent working steps) + status while a turn is in flight. The
+  // client subscribes FIRST, then POSTs the message; tool-call lines stream
+  // in during the turn and the POST resolves with the final answer. EventSource
+  // can't set Authorization headers, so the token rides ?token=.
+  const chatEventsMatch = /^\/api\/chat\/([^/]+)\/events$/.exec(pathname);
+  if (chatEventsMatch && req.method === 'GET') {
+    const token = bearerToken(req) ?? new URL(req.url ?? '/', 'http://localhost').searchParams.get('token');
+    const session = adminSessions.validate(token);
+    if (!session) {
+      res.writeHead(401, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({ ok: false, error: 'Not authenticated — log in first.' }));
+      return;
+    }
+    const sessionId = decodeURIComponent(chatEventsMatch[1]);
+    res.writeHead(200, {
+      'Content-Type': 'text/event-stream',
+      'Cache-Control': 'no-cache',
+      'Connection': 'keep-alive',
+      'X-Accel-Buffering': 'no',
+    });
+    res.write(`event: init\ndata: ${JSON.stringify({ sessionId })}\n\n`);
+    const heartbeat = setInterval(() => {
+      try { res.write(': heartbeat\n\n'); } catch { clearInterval(heartbeat); }
+    }, 30000);
+    const off = chatConsole.onEvent((sid, event) => {
+      if (sid !== sessionId) return;
+      try {
+        if (event.kind === 'progress') {
+          res.write(`event: progress\ndata: ${JSON.stringify({ line: event.line })}\n\n`);
+        } else if (event.kind === 'status') {
+          res.write(`event: status\ndata: ${JSON.stringify({ status: event.status })}\n\n`);
+        }
+      } catch { /* client gone */ }
+    });
+    req.on('close', () => {
+      clearInterval(heartbeat);
+      off();
+    });
+    return;
+  }
+
   // ── API: unknown /api/* paths must NEVER return the SPA HTML ────
   // A frontend fetching a newer endpoint from an older server (or a typo'd
   // path) previously fell through to the SPA fallback below and got

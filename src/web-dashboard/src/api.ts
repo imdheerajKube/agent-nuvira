@@ -695,6 +695,32 @@ export class DashboardAPI {
     const d = (r.data ?? {}) as { ok?: boolean; error?: string };
     return r.status === 200 && d.ok ? { ok: true } : { ok: false, error: d.error || 'Reset failed.' };
   }
+
+  /**
+   * Subscribe to a chat session's LIVE progress (agent working steps) and
+   * status over SSE. Subscribe BEFORE sending a message so no step is missed.
+   * Returns an unsubscribe function.
+   */
+  subscribeChat(
+    sessionId: string,
+    handlers: { onProgress?: (line: string) => void; onStatus?: (status: string) => void },
+  ): () => void {
+    const token = getAdminToken();
+    const es = new EventSource(`${this.baseUrl}/api/chat/${encodeURIComponent(sessionId)}/events?token=${encodeURIComponent(token ?? '')}`);
+    es.addEventListener('progress', (event) => {
+      try {
+        const payload = JSON.parse((event as MessageEvent).data) as { line?: string };
+        if (payload.line) handlers.onProgress?.(payload.line);
+      } catch { /* ignore malformed */ }
+    });
+    es.addEventListener('status', (event) => {
+      try {
+        const payload = JSON.parse((event as MessageEvent).data) as { status?: string };
+        if (payload.status) handlers.onStatus?.(payload.status);
+      } catch { /* ignore malformed */ }
+    });
+    return () => es.close();
+  }
 }
 
 export const dashboardAPI = new DashboardAPI();

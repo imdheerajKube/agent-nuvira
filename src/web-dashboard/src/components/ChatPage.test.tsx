@@ -20,6 +20,11 @@ function mockAuthed(role: 'admin' | 'operator' | 'viewer' = 'admin', authenticat
   });
 }
 
+/** The page subscribes to live progress via EventSource before each turn. */
+function mockChatStream() {
+  vi.spyOn(dashboardAPI, 'subscribeChat').mockReturnValue(() => {});
+}
+
 type ChatSendResult = Awaited<ReturnType<typeof dashboardAPI.chatSend>>;
 
 function mockChatSend(result: ChatSendResult) {
@@ -54,6 +59,7 @@ describe('ChatPage', () => {
 
   it('sends a message and renders the assistant reply with followup chips', async () => {
     mockAuthed('admin');
+    mockChatStream();
     const send = mockChatSend(OK_RESPONSE);
     render(<ChatPage />);
     await waitFor(() => expect(screen.getByPlaceholderText(/Message the agent/)).toBeTruthy());
@@ -71,6 +77,7 @@ describe('ChatPage', () => {
 
   it('clicking a followup chip sends its prompt as the next message', async () => {
     mockAuthed('admin');
+    mockChatStream();
     const send = mockChatSend(OK_RESPONSE);
     render(<ChatPage />);
     await waitFor(() => expect(screen.getByPlaceholderText(/Message the agent/)).toBeTruthy());
@@ -86,6 +93,7 @@ describe('ChatPage', () => {
 
   it('shows the error and drops the optimistic bubble on failure', async () => {
     mockAuthed('admin');
+    mockChatStream();
     const send = mockChatSend({ ok: false as const, error: 'The agent could not answer.' });
     render(<ChatPage />);
     await waitFor(() => expect(screen.getByPlaceholderText(/Message the agent/)).toBeTruthy());
@@ -98,6 +106,7 @@ describe('ChatPage', () => {
 
   it('new conversation resets the thread and the server session', async () => {
     mockAuthed('admin');
+    mockChatStream();
     mockChatSend(OK_RESPONSE);
     const reset = vi.spyOn(dashboardAPI, 'chatReset').mockResolvedValue({ ok: true });
     render(<ChatPage />);
@@ -114,6 +123,7 @@ describe('ChatPage', () => {
 
   it('disables the send button while a turn is in flight', async () => {
     mockAuthed('admin');
+    mockChatStream();
     let resolveSend: (v: typeof OK_RESPONSE) => void = () => {};
     vi.spyOn(dashboardAPI, 'chatSend').mockImplementation(
       () => new Promise((resolve) => { resolveSend = resolve; }) as Promise<typeof OK_RESPONSE>,
@@ -123,12 +133,45 @@ describe('ChatPage', () => {
 
     fireEvent.change(screen.getByPlaceholderText(/Message the agent/), { target: { value: 'hi' } });
     fireEvent.submit(screen.getByPlaceholderText(/Message the agent/).closest('form')!);
-    await waitFor(() => expect(screen.getByText(/working/)).toBeTruthy());
+    await waitFor(() => expect(screen.getByRole('button', { name: /Working/ })).toBeTruthy());
     // The send button shows the busy label while a turn is in flight.
     expect((screen.getByRole('button', { name: /Working/ }) as HTMLButtonElement).disabled).toBe(true);
     expect((screen.getByPlaceholderText(/Message the agent/) as HTMLInputElement).disabled).toBe(true);
 
     resolveSend(OK_RESPONSE);
     await waitFor(() => expect(screen.getByText('I checked the repo — the build is green.')).toBeTruthy());
+  });
+
+  it('streams the agent working steps live and snapshots them into the reply', async () => {
+    mockAuthed('admin');
+    let progressCb: ((line: string) => void) | null = null;
+    let unsub: (() => void) | null = null;
+    vi.spyOn(dashboardAPI, 'subscribeChat').mockImplementation((_sid, handlers) => {
+      progressCb = handlers.onProgress ?? null;
+      unsub = vi.fn();
+      return unsub;
+    });
+    let resolveSend: (v: typeof OK_RESPONSE) => void = () => {};
+    vi.spyOn(dashboardAPI, 'chatSend').mockImplementation(
+      () => new Promise((resolve) => { resolveSend = resolve; }) as Promise<typeof OK_RESPONSE>,
+    );
+    render(<ChatPage />);
+    await waitFor(() => expect(screen.getByPlaceholderText(/Message the agent/)).toBeTruthy());
+
+    fireEvent.change(screen.getByPlaceholderText(/Message the agent/), { target: { value: 'fix the test' } });
+    fireEvent.submit(screen.getByPlaceholderText(/Message the agent/).closest('form')!);
+    await waitFor(() => expect(progressCb).toBeTruthy());
+
+    // The engine's live working steps stream in while the turn is in flight.
+    progressCb!('→ calling tool: read_file');
+    progressCb!('→ running tests: npm test');
+    await waitFor(() => expect(screen.getByText('→ calling tool: read_file')).toBeTruthy());
+    expect(screen.getByText('→ running tests: npm test')).toBeTruthy();
+
+    // On completion, the steps snapshot into the assistant bubble's collapsible.
+    resolveSend(OK_RESPONSE);
+    await waitFor(() => expect(screen.getByText('I checked the repo — the build is green.')).toBeTruthy());
+    await waitFor(() => expect(screen.getByText(/2 steps/)).toBeTruthy());
+    expect(unsub).toHaveBeenCalled();
   });
 });

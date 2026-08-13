@@ -31,8 +31,12 @@ import type { ChatEngine } from '../../src/web-dashboard/chat-console.js';
 /** Fake engine: records calls, returns canned answers — no LLM, no tools. */
 class FakeEngine implements ChatEngine {
   calls: Array<{ message: string; opts?: unknown }> = [];
+  /** When set, the engine emits these lines via onProgress before answering. */
+  progressLines: string[] = [];
   async answerOnce(message: string, opts?: unknown): Promise<{ content: string; followups: unknown[]; provider?: string; model?: string }> {
     this.calls.push({ message, opts });
+    const o = opts as { onProgress?: (line: string) => void };
+    for (const line of this.progressLines) o.onProgress?.(line);
     return {
       content: `echo: ${message}`,
       followups: [{ prompt: 'What next?', label: 'Next' }],
@@ -152,5 +156,53 @@ describe('/api/chat', () => {
     const lastCall = engine.calls[engine.calls.length - 1];
     const opts = lastCall.opts as { history?: unknown[] };
     expect(opts.history ?? []).toHaveLength(0);
+  });
+
+  it('streams live progress over the SSE events endpoint during a turn', async () => {
+    engine.progressLines = ['→ calling tool: read_file', '→ tool result received'];
+    const sessionId = 'progress-session-1';
+    // Subscribe FIRST (as the GUI does) — the onEvent listener is registered
+    // synchronously in the handler, so once the fetch resolves the subscription
+    // is live. Then POST the message; the turn's progress lines stream back.
+    const res = await fetch(`${baseUrl}/api/chat/${sessionId}/events?token=${encodeURIComponent(token)}`, { method: 'GET' });
+    expect(res.status).toBe(200);
+    const reader = res.body!.getReader();
+    const decoder = new TextDecoder();
+    let buffer = '';
+    const received: string[] = [];
+    const postPromise = authedFetch('/api/chat', 'POST', { sessionId, message: 'analyze the repo' });
+    const deadline = Date.now() + 4000;
+    while (Date.now() < deadline && received.length < 2) {
+      const result = await Promise.race([
+        reader.read(),
+        new Promise<{ done: true }>((resolve) => setTimeout(() => resolve({ done: true }), 250)),
+      ]);
+      if (result.done) break;
+      buffer += decoder.decode(result.value, { stream: true });
+      // Parse complete `event: progress` frames out of the buffer.
+      let idx: number;
+      while ((idx = buffer.indexOf('event: progress')) !== -1) {
+        buffer = buffer.slice(idx);
+        const lineIdx = buffer.indexOf('data: ');
+        const frameEnd = buffer.indexOf('\n\n');
+        if (lineIdx === -1 || frameEnd === -1) break;
+        const data = buffer.slice(lineIdx + 6, frameEnd);
+        try {
+          const payload = JSON.parse(data) as { line?: string };
+          if (payload.line) received.push(payload.line);
+        } catch { /* partial frame */ }
+        buffer = buffer.slice(frameEnd + 2);
+      }
+    }
+    await reader.cancel();
+    const post = await postPromise;
+    engine.progressLines = [];
+    expect(post.status).toBe(200);
+    expect(received).toEqual(['→ calling tool: read_file', '→ tool result received']);
+  });
+
+  it('rejects the SSE events endpoint without a valid token', async () => {
+    const res = await fetch(`${baseUrl}/api/chat/no-such-session/events?token=bad`, { method: 'GET' });
+    expect(res.status).toBe(401);
   });
 });

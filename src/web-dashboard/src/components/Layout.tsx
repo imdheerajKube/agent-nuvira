@@ -13,6 +13,7 @@ const NAV_ITEMS = [
   { path: '/tasks', label: 'Tasks', icon: '🚀' },
   { path: '/chat', label: 'Chat', icon: '💬' },
   { path: '/evals', label: 'Evals', icon: '🏆' },
+  { path: '/gateway', label: 'Gateway', icon: '🌐' },
   { path: '/models', label: 'Models', icon: '🧠' },
   { path: '/routing', label: 'Routing', icon: '🤖' },
   { path: '/requests', label: 'Requests', icon: '📨' },
