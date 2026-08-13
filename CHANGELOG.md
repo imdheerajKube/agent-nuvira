@@ -2,6 +2,20 @@
 
 All notable changes to **Agent-Nuvira** are documented in this file.
 
+## v1.63.1 — Fix: WhatsApp pairing renders a scannable QR again
+
+- **`buff whatsapp pair` prints a real scannable QR.** Baileys 7.0.0-rc14
+  removed `qrcode-terminal` and deprecated `printQRInTerminal` (now a silent
+  no-op) — pairing previously showed only the raw payload string, so there was
+  nothing to scan. The QR is now rendered in the terminal (via `qrcode`) with
+  step-by-step instructions; the raw payload moved to `--debug`.
+- **New `buff whatsapp pair --phone <number>` — pair with an 8-char code.**
+  Uses Baileys `requestPairingCode`: enter the code under WhatsApp → Linked
+  devices → Link with phone number instead. Ideal for headless/remote hosts
+  where scanning is impossible. Warns when a 10-digit number looks like it's
+  missing its country code (e.g. use `918800663237`, not `8800663237`).
+- 3 new tests; suite at 4,283 passing.
+
 ## v1.63.0 — Hermes messaging campaign: 22-platform multi-channel gateway
 
 - **Multi-channel gateway — 22 platforms (Hermes `gateway/` parity).** The
