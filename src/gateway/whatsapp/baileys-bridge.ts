@@ -22,6 +22,8 @@ import { whatsappSessionDir } from './session.js';
 // hard-depends on the package's public surface.
 interface WASocketLike {
   sendMessage(jid: string, content: unknown): Promise<unknown>;
+  /** Baileys phone-number pairing: resolves the 8-char "link with number" code. */
+  requestPairingCode?(phoneNumber: string, customPairingCode?: string): Promise<string>;
   ev?: { on(event: string, cb: (...args: unknown[]) => void): unknown };
   end?(reason?: unknown): void;
 }
@@ -44,6 +46,48 @@ function sessionHasCreds(dir: string): boolean {
   } catch {
     return false;
   }
+}
+
+/** Options for {@link BaileysBridge.pair}. */
+export interface PairOptions {
+  /** Called with the raw QR payload (Baileys `connection.update.qr`). */
+  onQr?: (qr: string) => void;
+  /** Called with a pre-rendered, scannable terminal QR (qrcode blocks). */
+  onQrRendered?: (rendered: string) => void;
+  /** Called with the 8-char "link with phone number instead" pairing code. */
+  onPairingCode?: (code: string) => void;
+  /** Pairing window in ms (default 90s). */
+  timeoutMs?: number;
+  /**
+   * Pair via phone number (Baileys `requestPairingCode`) instead of a QR:
+   * the user enters the 8-char code under WhatsApp → Linked devices → Link
+   * with phone number instead. Full international format, no leading '+'.
+   */
+  phoneNumber?: string;
+}
+
+/**
+ * Render a QR payload to a scannable terminal QR (qrcode block characters).
+ * Best-effort: returns '' if `qrcode` can't be loaded. Lazily imported so the
+ * rest of the gateway never pays for it.
+ */
+export async function renderQrToTerminal(qr: string): Promise<string> {
+  try {
+    const mod = await import('qrcode');
+    return await mod.toString(qr, { type: 'terminal', small: true });
+  } catch {
+    return '';
+  }
+}
+
+/**
+ * Normalize a user-supplied phone for `requestPairingCode`: digits only, no
+ * leading '+', must include the country code (10–15 digits). Returns '' if
+ * invalid.
+ */
+export function normalizePairingPhone(phone: string): string {
+  const digits = (phone || '').replace(/\D+/g, '');
+  return /^\d{10,15}$/.test(digits) ? digits : '';
 }
 
 /** Silent pino-shaped logger so Baileys' internal noise never pollutes CLI output. */
@@ -121,17 +165,41 @@ export class BaileysBridge implements WhatsAppBridge {
   }
 
   /**
-   * Interactive QR pairing (the `buff whatsapp pair` flow). Prints the QR to
-   * the terminal (Baileys `printQRInTerminal`) and also surfaces the raw QR
-   * string via onQr for copy/paste. Resolves ok once the connection opens.
+   * Interactive pairing (the `buff whatsapp pair` flow).
+   *
+   * QR mode (default): surfaces the raw payload via `onQr` and a scannable
+   * terminal QR via `onQrRendered` (qrcode block characters). Baileys 7.x
+   * deprecated `printQRInTerminal` — it no longer prints anything — so the
+   * QR is rendered here from `connection.update.qr`.
+   *
+   * Phone mode (`phoneNumber` set): requests an 8-char pairing code via
+   * Baileys `requestPairingCode` and surfaces it via `onPairingCode` — the
+   * user enters it under WhatsApp → Linked devices → Link with phone number
+   * instead (handy on headless/remote hosts where scanning is impossible).
+   *
+   * Resolves ok once the connection opens.
    */
-  async pair(onQr?: (qr: string) => void, timeoutMs = 90_000): Promise<{ ok: boolean; reason: string }> {
+  async pair(opts: PairOptions = {}): Promise<{ ok: boolean; reason: string }> {
+    const timeoutMs = opts.timeoutMs ?? 90_000;
+    const phone = opts.phoneNumber ? normalizePairingPhone(opts.phoneNumber) : '';
+    if (opts.phoneNumber && !phone) {
+      return {
+        ok: false,
+        reason: `invalid phone number '${opts.phoneNumber}' — use full international format with country code, e.g. 918800663237`,
+      };
+    }
     try {
       const baileys = await loadBaileys();
       if (!baileys) return { ok: false, reason: 'cannot load the Baileys bridge (is `baileys` installed?)' };
       mkdirSync(this.sessionDir, { recursive: true, mode: 0o700 });
       const { state, saveCreds } = await baileys.useMultiFileAuthState(this.sessionDir);
-      const sock = baileys.makeWASocket({ auth: state, printQRInTerminal: true, logger: QUIET_LOGGER });
+      const sock = baileys.makeWASocket({
+        auth: state,
+        // printQRInTerminal is DEPRECATED and a no-op in baileys ≥6.7 — the QR
+        // only arrives via connection.update, and we render it ourselves.
+        printQRInTerminal: false,
+        logger: QUIET_LOGGER,
+      });
       sock.ev?.on('creds.update', () => void saveCreds());
 
       return await new Promise<{ ok: boolean; reason: string }>((resolve) => {
@@ -141,12 +209,22 @@ export class BaileysBridge implements WhatsAppBridge {
           } catch {
             /* best-effort */
           }
-          resolve({ ok: false, reason: 'pairing timed out — scan the QR within the window' });
+          resolve({ ok: false, reason: 'pairing timed out — scan the QR / enter the code within the window' });
         }, timeoutMs);
 
         sock.ev?.on('connection.update', (...args: unknown[]) => {
           const u = (args[0] ?? {}) as ConnectionUpdateLike;
-          if (u.qr) onQr?.(u.qr);
+          if (u.qr) {
+            opts.onQr?.(u.qr);
+            if (phone) {
+              // In phone mode the 8-char code can also arrive here.
+              if (/^\d{8}$/.test(u.qr)) opts.onPairingCode?.(u.qr);
+            } else {
+              void renderQrToTerminal(u.qr).then((rendered) => {
+                if (rendered) opts.onQrRendered?.(rendered);
+              });
+            }
+          }
           if (u.connection === 'open') {
             clearTimeout(timer);
             this.sock = sock;
@@ -161,6 +239,18 @@ export class BaileysBridge implements WhatsAppBridge {
             }
           }
         });
+
+        if (phone) {
+          // Request the 8-char pairing code; also arrives via connection.update.
+          void sock
+            .requestPairingCode?.(phone)
+            .then((code) => {
+              if (code) opts.onPairingCode?.(code);
+            })
+            .catch(() => {
+              /* best-effort — connection.update may still carry the code */
+            });
+        }
       });
     } catch (err) {
       return {

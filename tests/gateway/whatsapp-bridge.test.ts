@@ -14,7 +14,7 @@ import { tmpdir } from 'node:os';
 
 import { normalizeWhatsAppJid, type WhatsAppBridge } from '../../src/gateway/whatsapp/bridge.js';
 import { WhatsAppBridgeAdapter } from '../../src/gateway/adapters.js';
-import { BaileysBridge } from '../../src/gateway/whatsapp/baileys-bridge.js';
+import { BaileysBridge, normalizePairingPhone, renderQrToTerminal } from '../../src/gateway/whatsapp/baileys-bridge.js';
 import { hasWhatsAppSession, whatsappSessionDir } from '../../src/gateway/whatsapp/session.js';
 
 // ─── JID normalization (pure) ───────────────────────────────────────────────
@@ -37,6 +37,32 @@ describe('normalizeWhatsAppJid', () => {
   it('falls back to @s.whatsapp.net for arbitrary ids and empty input', () => {
     expect(normalizeWhatsAppJid('alice')).toBe('alice@s.whatsapp.net');
     expect(normalizeWhatsAppJid('  ')).toBe('');
+  });
+});
+
+// ─── Pairing helpers (pure / hermetic) ──────────────────────────────────────
+
+describe('normalizePairingPhone', () => {
+  it('keeps digits and drops +/spaces, 10-15 digits = valid', () => {
+    expect(normalizePairingPhone('+91 88006 63237')).toBe('918800663237');
+    expect(normalizePairingPhone('918800663237')).toBe('918800663237');
+    expect(normalizePairingPhone('1-555-123-4567')).toBe('15551234567');
+    expect(normalizePairingPhone('8800663237')).toBe('8800663237');
+  });
+
+  it('rejects junk and implausible lengths', () => {
+    expect(normalizePairingPhone('')).toBe('');
+    expect(normalizePairingPhone('abc')).toBe('');
+    expect(normalizePairingPhone('12345')).toBe(''); // too short
+    expect(normalizePairingPhone('1234567890123456')).toBe(''); // too long
+  });
+});
+
+describe('renderQrToTerminal', () => {
+  it('renders a scannable block QR for a payload', async () => {
+    const rendered = await renderQrToTerminal('2@test-payload-12345');
+    expect(rendered).toContain('▄'); // qrcode block characters
+    expect(rendered.length).toBeGreaterThan(50);
   });
 });
 
