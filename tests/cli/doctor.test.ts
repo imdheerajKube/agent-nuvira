@@ -287,8 +287,9 @@ describe('doctor --enterprise (P7 M7.1)', () => {
   });
 
   it('runSystemChecks includes the G1 Fact Memory check (best-effort, never throws)', async () => {
-    // 15s budget: the full check suite runs native-free here, but keep a
-    // generous window for slow CI runners.
+    // 60s budget: the full check suite runs native-free here, but Windows CI
+    // runners have measured ~20s for this single check — keep a generous
+    // window so a slow runner can't flake the release pipeline.
     const { ConfigManager } = await import('../../src/config/manager.js');
     const cm = new ConfigManager();
     const { system } = await runAllChecks(cm);
@@ -296,7 +297,7 @@ describe('doctor --enterprise (P7 M7.1)', () => {
     expect(factCheck).toBeDefined();
     expect(['pass', 'warn', 'fail']).toContain(factCheck!.status);
     expect(factCheck!.message).toMatch(/fact\(s\)/);
-  }, 15_000);
+  }, 60_000);
 
   it('runAllChecks (dashboard command-runner shared core) returns both system and enterprise arrays', async () => {
     // The dashboard's /api/admin/checks calls this SAME function as
