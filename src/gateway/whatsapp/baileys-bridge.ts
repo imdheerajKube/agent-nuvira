@@ -24,7 +24,12 @@ interface WASocketLike {
   sendMessage(jid: string, content: unknown): Promise<unknown>;
   /** Baileys phone-number pairing: resolves the 8-char "link with number" code. */
   requestPairingCode?(phoneNumber: string, customPairingCode?: string): Promise<string>;
-  ev?: { on(event: string, cb: (...args: unknown[]) => void): unknown };
+  /** Resolves once the underlying WebSocket handshake completes. */
+  waitForSocketOpen?(): Promise<void>;
+  ev?: {
+    on(event: string, cb: (...args: unknown[]) => void): unknown;
+    removeAllListeners?(event?: string): unknown;
+  };
   end?(reason?: unknown): void;
 }
 
@@ -212,17 +217,35 @@ export class BaileysBridge implements WhatsAppBridge {
       if (!baileys) return { ok: false, reason: 'cannot load the Baileys bridge (is `baileys` installed?)' };
       mkdirSync(this.sessionDir, { recursive: true, mode: 0o700 });
       const { state, saveCreds } = await baileys.useMultiFileAuthState(this.sessionDir);
-      const sock = baileys.makeWASocket({
-        auth: state,
-        // printQRInTerminal is DEPRECATED and a no-op in baileys ≥6.7 — the QR
-        // only arrives via connection.update, and we render it ourselves.
-        printQRInTerminal: false,
-        logger: QUIET_LOGGER,
-      });
-      sock.ev?.on('creds.update', () => void saveCreds());
+
+      // Baileys 7 quirk: after a SUCCESSFUL scan / pairing-code issuance,
+      // WhatsApp closes the connection (515 "Stream Errored (restart
+      // required)" after a scan; a plain 428 close right after a pairing code)
+      // — the creds are saved and the client must reconnect with them to
+      // finish. Treating those closes as failures (as earlier versions did)
+      // made real-world pairing report "pair failed: Stream Errored (restart
+      // required)" / "Connection Terminated". We recreate the socket with the
+      // same in-memory auth state (mutated in place + persisted via saveCreds);
+      // the pairing window (timeoutMs) is the REAL bound — the restart cap is
+      // only a defensive valve against a pathological server.
+      const MAX_PAIR_RESTARTS = 40;
+      const makeSocket = (): WASocketLike => {
+        const s = baileys.makeWASocket({
+          auth: state,
+          // printQRInTerminal is DEPRECATED and a no-op in baileys ≥6.7 — the QR
+          // only arrives via connection.update, and we render it ourselves.
+          printQRInTerminal: false,
+          logger: QUIET_LOGGER,
+        });
+        s.ev?.on('creds.update', () => void saveCreds());
+        return s;
+      };
+      let current = makeSocket();
 
       return await new Promise<{ ok: boolean; reason: string }>((resolve) => {
         let settled = false;
+        let restarts = 0;
+        let credentialIssued = false;
         // finish() only ever runs asynchronously (timer/event handlers), so
         // `timer`/`onAbort` are assigned before they can be read (no TDZ issue)
         // — same latch pattern as waitForOpen().
@@ -235,7 +258,7 @@ export class BaileysBridge implements WhatsAppBridge {
         };
         const onAbort = (): void => {
           try {
-            sock.end?.('pairing cancelled');
+            current.end?.('pairing cancelled');
           } catch {
             /* best-effort */
           }
@@ -243,7 +266,7 @@ export class BaileysBridge implements WhatsAppBridge {
         };
         const timer = setTimeout(() => {
           try {
-            sock.end?.(new Error('pair timeout'));
+            current.end?.(new Error('pair timeout'));
           } catch {
             /* best-effort */
           }
@@ -251,9 +274,11 @@ export class BaileysBridge implements WhatsAppBridge {
         }, timeoutMs);
         signal?.addEventListener('abort', onAbort, { once: true });
 
-        sock.ev?.on('connection.update', (...args: unknown[]) => {
+        const onConnectionUpdate = (...args: unknown[]): void => {
+          if (settled) return; // ignore events after we've finished (timeout/abort/cancel)
           const u = (args[0] ?? {}) as ConnectionUpdateLike;
           if (u.qr) {
+            credentialIssued = true;
             opts.onQr?.(u.qr);
             if (phone) {
               // In phone mode the 8-char code can also arrive here.
@@ -265,28 +290,79 @@ export class BaileysBridge implements WhatsAppBridge {
             }
           }
           if (u.connection === 'open') {
-            this.sock = sock;
+            this.sock = current;
             finish({ ok: true, reason: 'paired' });
             return;
           }
-          if (u.connection === 'close' && u.lastDisconnect?.error) {
-            const reason = u.lastDisconnect.error.message || 'connection closed';
-            if (!/loggedOut|timedOut/i.test(reason)) {
-              finish({ ok: false, reason: `pair failed: ${reason}` });
+          if (u.connection !== 'close' || !u.lastDisconnect?.error) return;
+          const err = u.lastDisconnect.error;
+          // Boom-shaped errors carry the disconnect code at output.statusCode;
+          // 515 = restartRequired ("Stream Errored (restart required)").
+          // eslint-disable-next-line @typescript-eslint/no-explicit-any
+          const statusCode = (err as any)?.output?.statusCode ?? (err as any)?.statusCode;
+          const message = err.message || 'connection closed';
+          // Restart-worthy closes: the explicit 515 "restart required", or a
+          // server-initiated close AFTER a QR/code was issued (WhatsApp
+          // terminates the connection right after issuing a pairing code and
+          // after a scan; an unregistered-with-code session also gets 401
+          // 'Connection Failure' on reconnect until the phone completes the
+          // pairing server-side). Each restart reuses the saved creds; the
+          // pairing window bounds the total attempt.
+          const isRestart = statusCode === 515 || /restart required/i.test(message);
+          const isPostCredentialClose =
+            credentialIssued && (statusCode === 428 || statusCode === 401 || /terminated|closed|failure/i.test(message));
+          if (isRestart || isPostCredentialClose) {
+            if (restarts >= MAX_PAIR_RESTARTS) {
+              finish({
+                ok: false,
+                reason: `pairing stalled — WhatsApp keeps restarting the connection (${MAX_PAIR_RESTARTS}+ times); try again in a minute`,
+              });
+              return;
             }
+            restarts += 1;
+            // Detach from the dying socket BEFORE ending it so its own close
+            // event can't race the restarted one, then swap in a fresh socket
+            // that reuses the (now-populated) auth state.
+            try {
+              current.ev?.removeAllListeners?.('connection.update');
+              current.ev?.removeAllListeners?.('creds.update');
+              current.end?.('restart after pairing');
+            } catch {
+              /* best-effort */
+            }
+            current = makeSocket();
+            current.ev?.on('connection.update', onConnectionUpdate);
+            return;
           }
-        });
+          if (!/loggedOut|timedOut/i.test(message)) {
+            finish({ ok: false, reason: `pair failed: ${message}` });
+          }
+        };
+        current.ev?.on('connection.update', onConnectionUpdate);
 
         if (phone) {
-          // Request the 8-char pairing code; also arrives via connection.update.
-          void sock
-            .requestPairingCode?.(phone)
-            .then((code) => {
-              if (code) opts.onPairingCode?.(code);
-            })
-            .catch(() => {
-              /* best-effort — connection.update may still carry the code */
-            });
+          void (async () => {
+            // Wait for the WebSocket handshake BEFORE requesting the pairing
+            // code: Baileys' sendRawMessage throws 'Connection Closed' when
+            // the socket isn't open yet, so an immediate call races the
+            // handshake and the request never reaches WhatsApp. Cap the wait
+            // so a dead network can't hang the pairing window.
+            await Promise.race([
+              (current.waitForSocketOpen?.().then(() => true).catch(() => false)) ?? Promise.resolve(true),
+              new Promise<boolean>((resolve) => setTimeout(() => resolve(false), 10_000)),
+            ]);
+            void current
+              .requestPairingCode?.(phone)
+              .then((code) => {
+                if (code) {
+                  credentialIssued = true;
+                  opts.onPairingCode?.(code);
+                }
+              })
+              .catch(() => {
+                /* best-effort — connection.update may still carry the code */
+              });
+          })();
         }
       });
     } catch (err) {
@@ -307,6 +383,16 @@ export class BaileysBridge implements WhatsAppBridge {
       const { state, saveCreds } = await baileys.useMultiFileAuthState(this.sessionDir);
       const sock = baileys.makeWASocket({ auth: state, printQRInTerminal: false, logger: QUIET_LOGGER });
       sock.ev?.on('creds.update', () => void saveCreds());
+      // Self-healing: a socket that dies (e.g. Baileys 7's 515 "Stream Errored
+      // (restart required)" close on an established session) is dropped so the
+      // NEXT send()/connect() recreates it from the persisted session instead
+      // of retrying against a dead socket forever.
+      sock.ev?.on('connection.update', (...args: unknown[]) => {
+        const u = (args[0] ?? {}) as ConnectionUpdateLike;
+        if (u.connection === 'close' && u.lastDisconnect?.error && this.sock === sock) {
+          this.sock = null;
+        }
+      });
       sock.ev?.on('messages.upsert', (...args: unknown[]) => {
         const upsert = (args[0] ?? {}) as { type?: string; messages?: unknown[] };
         if (upsert.type !== 'notify' && upsert.type !== 'append') return;

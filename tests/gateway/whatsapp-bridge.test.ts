@@ -43,8 +43,15 @@ vi.mock('baileys', () => {
       const sock = {
         ev: makeEmitter(),
         ended: false,
+        calls: [] as string[],
         sendMessage: async () => undefined,
-        requestPairingCode: async () => '12345678',
+        requestPairingCode: async () => {
+          sock.calls.push('requestPairingCode');
+          return '12345678';
+        },
+        waitForSocketOpen: async () => {
+          sock.calls.push('waitForSocketOpen');
+        },
         end: () => {
           sock.ended = true;
         },
@@ -263,6 +270,10 @@ describe('BaileysBridge.pair() (fake baileys)', () => {
     });
     await new Promise((r) => setTimeout(r, 50));
     expect(fakeBaileys.sockets).toHaveLength(1);
+    // The bridge waits for the WebSocket handshake BEFORE requesting the code
+    // (an immediate call would race the socket and never reach WhatsApp).
+    const calls = fakeBaileys.sockets[0].calls;
+    expect(calls).toEqual(['waitForSocketOpen', 'requestPairingCode']);
     // The fake resolves requestPairingCode with '12345678' immediately.
     await new Promise((r) => setTimeout(r, 20));
     expect(code).toBe('12345678');
@@ -278,5 +289,156 @@ describe('BaileysBridge.pair() (fake baileys)', () => {
     });
     const result = await promise;
     expect(result).toEqual({ ok: true, reason: 'paired' });
+  }, 10_000);
+
+  it('a 515 "Stream Errored (restart required)" close restarts the socket and still pairs', async () => {
+    const bridge = new BaileysBridge(sessionDir);
+    const promise = bridge.pair({ timeoutMs: 30_000 });
+    await new Promise((r) => setTimeout(r, 50));
+    expect(fakeBaileys.sockets).toHaveLength(1);
+    // WhatsApp's post-scan 515 restart-required close (Boom-shaped error).
+    const emit = (i: number, u: unknown) =>
+      (fakeBaileys.sockets[i].ev as { emit: (e: string, ...a: unknown[]) => void }).emit('connection.update', u);
+    emit(0, {
+      connection: 'close',
+      lastDisconnect: { error: { message: 'Stream Errored (restart required)', output: { statusCode: 515 } } },
+    });
+    await new Promise((r) => setTimeout(r, 20));
+    // The bridge must NOT treat this as a failure — it swaps in a fresh socket.
+    expect(fakeBaileys.sockets).toHaveLength(2);
+    expect(fakeBaileys.sockets[0].ended).toBe(true);
+    // The restarted socket reuses the saved creds and opens → pairing succeeds.
+    emit(1, { connection: 'open' });
+    const result = await promise;
+    expect(result).toEqual({ ok: true, reason: 'paired' });
+  }, 10_000);
+
+  it('a plain server close AFTER a pairing code is issued restarts and still pairs (phone mode)', async () => {
+    const bridge = new BaileysBridge(sessionDir);
+    let code = '';
+    const promise = bridge.pair({
+      phoneNumber: '91880060422',
+      timeoutMs: 30_000,
+      onPairingCode: (c) => {
+        code = c;
+      },
+    });
+    await new Promise((r) => setTimeout(r, 50));
+    expect(fakeBaileys.sockets).toHaveLength(1);
+    await new Promise((r) => setTimeout(r, 20));
+    expect(code).toBe('12345678');
+    const emit = (i: number, u: unknown) =>
+      (fakeBaileys.sockets[i].ev as { emit: (e: string, ...a: unknown[]) => void }).emit('connection.update', u);
+    // WhatsApp terminates the WS right after issuing the code — the bridge
+    // must NOT treat it as a failure; it swaps in a fresh socket.
+    emit(0, { connection: 'close', lastDisconnect: { error: new Error('Connection Terminated') } });
+    await new Promise((r) => setTimeout(r, 20));
+    expect(fakeBaileys.sockets).toHaveLength(2);
+    expect(fakeBaileys.sockets[0].ended).toBe(true);
+    emit(1, { connection: 'open' });
+    const result = await promise;
+    expect(result).toEqual({ ok: true, reason: 'paired' });
+  }, 10_000);
+
+  it('keeps restarting through repeated 515 closes instead of failing early', async () => {
+    const bridge = new BaileysBridge(sessionDir);
+    const promise = bridge.pair({ timeoutMs: 30_000 });
+    await new Promise((r) => setTimeout(r, 50));
+    const emit = (i: number, u: unknown) =>
+      (fakeBaileys.sockets[i].ev as { emit: (e: string, ...a: unknown[]) => void }).emit('connection.update', u);
+    const close515 = {
+      connection: 'close',
+      lastDisconnect: { error: { message: 'Stream Errored (restart required)', output: { statusCode: 515 } } },
+    };
+    // A server that cycles the connection many times must NOT fail the
+    // pairing — the bridge keeps swapping in fresh sockets until the window
+    // expires or the connection opens.
+    let pending = true;
+    promise.then(() => {
+      pending = false;
+    });
+    for (let i = 0; i < 10; i += 1) {
+      emit(i, close515);
+      await new Promise((r) => setTimeout(r, 10));
+      expect(pending).toBe(true); // still waiting — never gave up
+    }
+    expect(fakeBaileys.sockets).toHaveLength(11);
+    emit(10, { connection: 'open' });
+    const result = await promise;
+    expect(result).toEqual({ ok: true, reason: 'paired' });
+  }, 10_000);
+
+  it('the pairing window still bounds the whole attempt', async () => {
+    const bridge = new BaileysBridge(sessionDir);
+    // No QR, no code, no open — the window must fire.
+    const result = await bridge.pair({ timeoutMs: 200 });
+    expect(result.ok).toBe(false);
+    expect(result.reason).toContain('pairing timed out');
+  }, 10_000);
+
+  it('a 401 "Connection Failure" after a code is issued restarts and still pairs', async () => {
+    const bridge = new BaileysBridge(sessionDir);
+    let code = '';
+    const promise = bridge.pair({
+      phoneNumber: '91880060422',
+      timeoutMs: 30_000,
+      onPairingCode: (c) => {
+        code = c;
+      },
+    });
+    await new Promise((r) => setTimeout(r, 50));
+    await new Promise((r) => setTimeout(r, 20));
+    expect(code).toBe('12345678');
+    const emit = (i: number, u: unknown) =>
+      (fakeBaileys.sockets[i].ev as { emit: (e: string, ...a: unknown[]) => void }).emit('connection.update', u);
+    // Unregistered-with-code sessions get 401 "Connection Failure" on
+    // reconnect until the phone completes the pairing server-side.
+    emit(0, { connection: 'close', lastDisconnect: { error: { message: 'Connection Failure', output: { statusCode: 401 } } } });
+    await new Promise((r) => setTimeout(r, 20));
+    expect(fakeBaileys.sockets).toHaveLength(2);
+    emit(1, { connection: 'open' });
+    const result = await promise;
+    expect(result).toEqual({ ok: true, reason: 'paired' });
+  }, 10_000);
+
+  it('a non-restart close still fails the pairing', async () => {
+    const bridge = new BaileysBridge(sessionDir);
+    const promise = bridge.pair({ timeoutMs: 30_000 });
+    await new Promise((r) => setTimeout(r, 50));
+    const emit = (i: number, u: unknown) =>
+      (fakeBaileys.sockets[i].ev as { emit: (e: string, ...a: unknown[]) => void }).emit('connection.update', u);
+    emit(0, { connection: 'close', lastDisconnect: { error: new Error('boom: connection reset by peer') } });
+    const result = await promise;
+    expect(result).toEqual({ ok: false, reason: 'pair failed: boom: connection reset by peer' });
+    expect(fakeBaileys.sockets).toHaveLength(1);
+  }, 10_000);
+});
+
+describe('BaileysBridge.ensureSocket() self-healing (fake baileys)', () => {
+  let sessionDir = '';
+
+  beforeEach(() => {
+    sessionDir = mkdtempSync(join(tmpdir(), 'buff-wa-heal-'));
+    fakeBaileys.sockets.length = 0;
+  });
+
+  afterEach(() => {
+    rmSync(sessionDir, { recursive: true, force: true });
+  });
+
+  it('drops a socket that closed with an error so the next connect recreates it', async () => {
+    const bridge = new BaileysBridge(sessionDir);
+    await bridge.connect(() => {});
+    expect(fakeBaileys.sockets).toHaveLength(1);
+    // A dying socket (e.g. a 515 restart on an established session).
+    (fakeBaileys.sockets[0].ev as { emit: (e: string, ...a: unknown[]) => void }).emit('connection.update', {
+      connection: 'close',
+      lastDisconnect: { error: new Error('Stream Errored (restart required)') },
+    });
+    await new Promise((r) => setTimeout(r, 20));
+    // The dead socket is dropped — the next connect() builds a fresh one.
+    await bridge.connect(() => {});
+    expect(fakeBaileys.sockets).toHaveLength(2);
+    expect(fakeBaileys.sockets[1].ended).toBe(false);
   }, 10_000);
 });
