@@ -19,6 +19,7 @@ import AgentHub from './components/AgentHub';
 import TasksPage from './components/TasksPage';
 import ChatPage from './components/ChatPage';
 import EvalsPage from './components/EvalsPage';
+import GatewayPage from './components/GatewayPage';
 
 export default function App() {
   const [data, setData] = useState<DashboardData | null>(null);
@@ -69,6 +70,7 @@ export default function App() {
         <Route path="/tasks" element={<TasksPage />} />
         <Route path="/chat" element={<ChatPage />} />
         <Route path="/evals" element={<EvalsPage data={data} />} />
+        <Route path="/gateway" element={<GatewayPage />} />
         <Route path="/system" element={<HealthPanel data={data} />} />
         <Route path="/admin" element={<AdminPanel />} />
         <Route path="*" element={<Navigate to="/" replace />} />

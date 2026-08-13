@@ -3,7 +3,8 @@
  *
  * The console is driven with an injectable FAKE engine (no LLM, no tool
  * loop): history threading across turns, per-session caps, busy rejection,
- * reset, the injected non-TTY ask_user renderer, and error propagation.
+ * reset, the injected non-TTY ask_user renderer, live progress streaming,
+ * and error propagation.
  */
 
 import { describe, it, expect, beforeEach } from 'vitest';
@@ -19,12 +20,17 @@ class FakeEngine implements ChatEngine {
   calls: EngineCall[] = [];
   private resolver: ((r: { content: string; followups: unknown[]; provider?: string; model?: string; generationFailed?: boolean }) => void) | null = null;
   delayResolve = false;
+  /** When set, the engine emits these lines via onProgress before answering. */
+  progressLines: string[] = [];
 
   async answerOnce(
     message: string,
     opts: Parameters<ChatEngine['answerOnce']>[1] = {},
   ): Promise<{ content: string; followups: unknown[]; provider?: string; model?: string; generationFailed?: boolean }> {
     this.calls.push({ message, opts });
+    for (const line of this.progressLines) {
+      opts?.onProgress?.(line);
+    }
     const respond = () => ({
       content: `echo: ${message}`,
       followups: [{ prompt: 'What next?', label: 'Next' }],
@@ -137,5 +143,36 @@ describe('ChatConsole', () => {
     await console_.answer('s1', 'hi', { provider: 'gemini', model: 'gemini-2.5-flash' });
     expect(engine.calls[0].opts?.provider).toBe('gemini');
     expect(engine.calls[0].opts?.model).toBe('gemini-2.5-flash');
+  });
+
+  it('streams live progress lines to subscribers during a turn', async () => {
+    const events: Array<{ sessionId: string; kind: string; line?: string }> = [];
+    console_.onEvent((sessionId, event) => {
+      events.push({ sessionId, kind: event.kind, ...('line' in event ? { line: event.line } : {}) });
+    });
+    engine.progressLines = ['→ calling tool: read_file', '→ tool result received'];
+    const r = await console_.answer('s1', 'analyze');
+    expect(r.ok).toBe(true);
+    // status(working) → progress lines → status(done), in order.
+    expect(events.map((e) => e.kind)).toEqual(['status', 'progress', 'progress', 'status']);
+    expect(events[1].line).toBe('→ calling tool: read_file');
+    expect(events[2].line).toBe('→ tool result received');
+    expect(events[0].sessionId).toBe('s1');
+  });
+
+  it('emits status:error when the engine fails mid-turn', async () => {
+    const events: Array<{ kind: string; status?: string }> = [];
+    const failing: ChatEngine = {
+      async answerOnce(_m, opts) {
+        opts?.onProgress?.('→ tooling');
+        throw new Error('provider exploded');
+      },
+    };
+    const c = new ChatConsole({ engine: failing });
+    c.onEvent((_sid, event) => events.push({ kind: event.kind, ...('status' in event ? { status: event.status } : {}) }));
+    const r = await c.answer('s1', 'hi');
+    expect(r.ok).toBe(false);
+    expect(events.map((e) => e.kind)).toEqual(['status', 'progress', 'status']);
+    expect(events[2].status).toBe('error');
   });
 });

@@ -25,6 +25,8 @@ interface ChatMessage {
   content: string;
   error?: boolean;
   followups?: Array<{ prompt: string; label?: string }>;
+  /** The agent's live working steps that produced this answer (P3 streaming). */
+  steps?: string[];
 }
 
 function newSessionId(): string {
@@ -41,7 +43,12 @@ export default function ChatPage() {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
   const [meta, setMeta] = useState<string | null>(null);
+  const [liveSteps, setLiveSteps] = useState<string[]>([]);
+  // Mirrors liveSteps for the async send callback (state would be stale in the
+  // closure when the POST resolves) — the final message snapshots every step.
+  const liveStepsRef = useRef<string[]>([]);
   const sessionIdRef = useRef<string>(newSessionId());
+  const subRef = useRef<(() => void) | null>(null);
   const listRef = useRef<HTMLDivElement | null>(null);
 
   useEffect(() => {
@@ -61,7 +68,15 @@ export default function ChatPage() {
     } catch {
       /* jsdom / non-DOM environments */
     }
-  }, [messages, busy]);
+  }, [messages, busy, liveSteps]);
+
+  // Tear down the SSE subscription on unmount.
+  useEffect(() => {
+    return () => {
+      subRef.current?.();
+      subRef.current = null;
+    };
+  }, []);
 
   const canChat = auth?.authenticated === true && (auth.role === 'admin' || auth.role === 'operator');
 
@@ -71,10 +86,24 @@ export default function ChatPage() {
       if (!clean || busy) return;
       setError('');
       setMeta(null);
+      setLiveSteps([]);
+      liveStepsRef.current = [];
       setMessages((m) => [...m, { role: 'user', content: clean }]);
       setInput('');
       setBusy(true);
-      const r = await dashboardAPI.chatSend(sessionIdRef.current, clean);
+      const sessionId = sessionIdRef.current;
+      // Subscribe to LIVE progress BEFORE the turn starts so no step is missed
+      // (EventSource auto-reconnects; the final answer arrives via the POST).
+      subRef.current?.();
+      subRef.current = dashboardAPI.subscribeChat(sessionId, {
+        onProgress: (line) => {
+          liveStepsRef.current = [...liveStepsRef.current, line];
+          setLiveSteps(liveStepsRef.current);
+        },
+      });
+      const r = await dashboardAPI.chatSend(sessionId, clean);
+      subRef.current?.();
+      subRef.current = null;
       if (r.ok) {
         setMeta(r.generationFailed ? null : `${r.provider ?? 'provider'}${r.model ? ` / ${r.model}` : ' (auto-routed)'}`);
         setMessages((m) => [
@@ -84,6 +113,7 @@ export default function ChatPage() {
             content: r.content || '(the agent produced no text — try rephrasing)',
             error: r.generationFailed,
             followups: r.followups,
+            steps: liveStepsRef.current,
           },
         ]);
       } else {
@@ -102,9 +132,13 @@ export default function ChatPage() {
   );
 
   const resetConversation = useCallback(async () => {
+    subRef.current?.();
+    subRef.current = null;
     await dashboardAPI.chatReset(sessionIdRef.current).catch(() => {});
     sessionIdRef.current = newSessionId();
     setMessages([]);
+    setLiveSteps([]);
+    liveStepsRef.current = [];
     setError('');
     setMeta(null);
   }, []);
@@ -148,13 +182,29 @@ export default function ChatPage() {
                 <div key={i} className={`chat-bubble chat-${m.role}${m.error ? ' chat-error' : ''}`}>
                   <div className="chat-bubble-role">{m.role === 'user' ? 'You' : '🤖 Agent'}</div>
                   <div className="chat-bubble-text">{m.content}</div>
+                  {m.role === 'assistant' && m.steps && m.steps.length > 0 ? (
+                    <details className="chat-steps">
+                      <summary>{m.steps.length} step{m.steps.length === 1 ? '' : 's'}</summary>
+                      <div className="chat-step-line">
+                        {m.steps.map((l, j) => <div key={j}>{l.trim()}</div>)}
+                      </div>
+                    </details>
+                  ) : null}
                 </div>
               ))
             )}
             {busy ? (
               <div className="chat-bubble chat-assistant">
                 <div className="chat-bubble-role">🤖 Agent</div>
-                <div className="chat-working">💭 working… <span className="chat-dots" /></div>
+                <div className="chat-working">
+                  {liveSteps.length > 0 ? (
+                    <span className="chat-working-lines">
+                      {liveSteps.map((l, i) => <div key={i} className="chat-step-line">{l.trim()}</div>)}
+                    </span>
+                  ) : (
+                    <>💭 thinking… <span className="chat-dots" /></>
+                  )}
+                </div>
               </div>
             ) : null}
           </div>

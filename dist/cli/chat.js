@@ -258,9 +258,11 @@ export class ChatCommand extends BaseCommand {
             provider = routed.provider;
             model = routed.model;
         }
+        // P3 — tell the GUI where the turn is headed before the tool loop runs.
+        opts.onProgress?.(`   🧠 routed to ${provider.name}${model ? ` / ${model}` : ''} — working…`);
         const parsed = parseRequestSync(message);
         const dispatchDecision = resolvePipelineDispatch(parsed, { dev: opts.dev });
-        const answer = await this.runChatAnswer(message, opts.history ?? [], { type, provider, model }, { provider: mergedOpts.provider, model: mergedOpts.model, dev: mergedOpts.dev, cache: true }, true, { auto: autoMode }, false, parsed, opts.askUser ? { askUser: opts.askUser } : undefined);
+        const answer = await this.runChatAnswer(message, opts.history ?? [], { type, provider, model }, { provider: mergedOpts.provider, model: mergedOpts.model, dev: mergedOpts.dev, cache: true }, true, { auto: autoMode }, false, parsed, { askUser: opts.askUser, onProgress: opts.onProgress });
         // No-model fallback: the tool loop could not generate a single response
         // AND the rules assessed a high-confidence pipeline intent — run the
         // pipeline directly (rules decide only when the model is unavailable; the
@@ -668,7 +670,12 @@ export class ChatCommand extends BaseCommand {
                             throw new Error(`Unknown tool: ${name}`);
                         return tool.run(args, ctx);
                     },
-                    onEvent: (line) => logger.info(line),
+                    onEvent: (line) => {
+                        logger.info(line);
+                        // P3 — live progress for the dashboard chat console (the CLI
+                        // keeps logging to its own stdout).
+                        ctxOverrides?.onProgress?.(line);
+                    },
                 },
             });
         }

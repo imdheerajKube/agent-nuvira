@@ -1,9 +1,10 @@
 /**
  * P2 — EvalsPage tests (eval runner in the GUI).
  *
- * The page starts `buff eval run` through the mocked task API (preset + custom
- * args), streams the console via the mocked subscribeTask, and renders past
- * runs from the dashboard data feed.
+ * The page mounts the shared TaskConsole with the `buff eval run` presets and
+ * renders past runs from the dashboard data feed. Page-specific behavior is
+ * covered here; the console's run/stream/cancel mechanics live in
+ * TaskConsole.test.tsx.
  */
 
 import { describe, it, expect, vi, afterEach } from 'vitest';
@@ -57,6 +58,12 @@ function mockAuthed(authenticated = true, role = 'admin') {
   });
 }
 
+function mockRunApi() {
+  vi.spyOn(dashboardAPI, 'startTask').mockResolvedValue({ ok: true, task: TASK });
+  vi.spyOn(dashboardAPI, 'getTask').mockResolvedValue({ status: 200, task: TASK });
+  vi.spyOn(dashboardAPI, 'subscribeTask').mockReturnValue(() => {});
+}
+
 afterEach(() => {
   cleanup();
   vi.restoreAllMocks();
@@ -68,6 +75,7 @@ describe('EvalsPage', () => {
     mockAuthed(false);
     render(<EvalsPage data={DATA} />);
     await waitFor(() => expect(screen.getByText(/Log in \(admin or operator\)/)).toBeTruthy());
+    expect(screen.queryByRole('button', { name: /Quick smoke/ })).toBeNull();
   });
 
   it('renders past runs from the data feed', async () => {
@@ -79,35 +87,35 @@ describe('EvalsPage', () => {
     expect(screen.getByText('72%')).toBeTruthy();
   });
 
-  it('a preset button starts the right eval task', async () => {
+  it('a preset button starts the right eval task with the eval timeout', async () => {
     mockAuthed();
-    const start = vi.spyOn(dashboardAPI, 'startTask').mockResolvedValue({ ok: true, task: TASK });
-    vi.spyOn(dashboardAPI, 'getTask').mockResolvedValue({ status: 200, task: TASK });
-    vi.spyOn(dashboardAPI, 'subscribeTask').mockReturnValue(() => {});
+    mockRunApi();
+    const start = vi.mocked(dashboardAPI.startTask);
     render(<EvalsPage data={DATA} />);
     await waitFor(() => expect(screen.getByRole('button', { name: /Quick smoke/ })).toBeTruthy());
     fireEvent.click(screen.getByRole('button', { name: /Quick smoke/ }));
     await waitFor(() => expect(start).toHaveBeenCalledWith(['eval', 'run', '--tasks', 'quick', '--format', 'text'], 900_000));
   });
 
-  it('runs a custom task filter from the input', async () => {
+  it('the custom input runs a full eval command line', async () => {
     mockAuthed();
-    const start = vi.spyOn(dashboardAPI, 'startTask').mockResolvedValue({ ok: true, task: TASK });
-    vi.spyOn(dashboardAPI, 'getTask').mockResolvedValue({ status: 200, task: TASK });
-    vi.spyOn(dashboardAPI, 'subscribeTask').mockReturnValue(() => {});
+    mockRunApi();
+    const start = vi.mocked(dashboardAPI.startTask);
     render(<EvalsPage data={DATA} />);
-    await waitFor(() => expect(screen.getByPlaceholderText(/custom:/)).toBeTruthy());
-    fireEvent.change(screen.getByPlaceholderText(/custom:/), { target: { value: 'my-task-id' } });
-    fireEvent.click(screen.getByRole('button', { name: 'Run custom' }));
-    await waitFor(() => expect(start).toHaveBeenCalledWith(['eval', 'run', 'my-task-id', '--format', 'text'], 900_000));
+    await waitFor(() => expect(screen.getByPlaceholderText(/eval run/)).toBeTruthy());
+    fireEvent.change(screen.getByPlaceholderText(/eval run/), { target: { value: 'eval run --tasks my-task --format text' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Run' }));
+    await waitFor(() => expect(start).toHaveBeenCalledWith(['eval', 'run', '--tasks', 'my-task', '--format', 'text'], 900_000));
   });
 
   it('streams the live console and offers cancel while running', async () => {
     mockAuthed();
-    const start = vi.spyOn(dashboardAPI, 'startTask').mockResolvedValue({ ok: true, task: TASK });
-    vi.spyOn(dashboardAPI, 'getTask').mockResolvedValue({ status: 200, task: { ...TASK, logs: [{ stream: 'stdout', text: 'task 1/4 started', at: Date.now() }] } });
+    mockRunApi();
+    vi.spyOn(dashboardAPI, 'getTask').mockResolvedValue({
+      status: 200,
+      task: { ...TASK, logs: [{ stream: 'stdout', text: 'task 1/4 started', at: Date.now() }] },
+    });
     const cancel = vi.spyOn(dashboardAPI, 'cancelTask').mockResolvedValue({ ok: true });
-    vi.spyOn(dashboardAPI, 'subscribeTask').mockReturnValue(() => {});
     render(<EvalsPage data={DATA} />);
     await waitFor(() => expect(screen.getByRole('button', { name: /Quick smoke/ })).toBeTruthy());
     fireEvent.click(screen.getByRole('button', { name: /Quick smoke/ }));

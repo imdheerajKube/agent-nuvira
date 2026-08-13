@@ -2426,8 +2426,8 @@ body {
   background: rgba(0, 0, 0, 0.15);
 }
 
-/* P2 — Evals runner in the GUI (runs `buff eval run` via the task runner) */
-.eval-run-panel {
+/* P2/P3 — Ops consoles (Evals runner + Gateway ops; runs CLI via the task runner) */
+.ops-console {
   margin: 10px 0;
   padding: 14px;
   background: var(--bg-card);
@@ -2435,20 +2435,20 @@ body {
   border-radius: 10px;
 }
 
-.eval-presets {
+.ops-presets {
   display: flex;
   flex-wrap: wrap;
   gap: 8px;
   margin-bottom: 10px;
 }
 
-.eval-custom-row {
+.ops-custom-row {
   display: flex;
   gap: 8px;
   align-items: center;
 }
 
-.eval-custom-row input {
+.ops-custom-row input {
   flex: 1;
   background: rgba(0, 0, 0, 0.25);
   border: 1px solid var(--border);
@@ -2460,12 +2460,12 @@ body {
   transition: border-color 0.15s ease;
 }
 
-.eval-custom-row input:focus {
+.ops-custom-row input:focus {
   outline: none;
   border-color: var(--accent-blue);
 }
 
-.eval-console-box {
+.ops-console-box {
   margin: 12px 0;
   border: 1px solid var(--border);
   border-radius: 10px;
@@ -2473,7 +2473,7 @@ body {
   background: rgba(0, 0, 0, 0.3);
 }
 
-.eval-console-head {
+.ops-console-head {
   display: flex;
   align-items: center;
   justify-content: space-between;
@@ -2484,7 +2484,7 @@ body {
   color: var(--text-secondary);
 }
 
-.eval-console {
+.ops-console {
   max-height: 320px;
   overflow-y: auto;
   margin: 0;
@@ -2495,4 +2495,166 @@ body {
   color: var(--text-primary);
   white-space: pre-wrap;
   word-break: break-word;
+}
+
+/* P3 — Chat console (GUI parity with `buff chat "<prompt>"`) */
+.chat-head-actions {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.chat-thread {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  margin: 14px 0;
+  padding: 14px;
+  max-height: 60vh;
+  overflow-y: auto;
+  background: rgba(0, 0, 0, 0.18);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+}
+
+.chat-bubble {
+  max-width: 85%;
+  padding: 10px 12px;
+  border-radius: 10px;
+  border: 1px solid var(--border);
+  background: var(--bg-card);
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+.chat-user {
+  align-self: flex-end;
+  background: rgba(59, 130, 246, 0.18);
+  border-color: rgba(59, 130, 246, 0.4);
+}
+
+.chat-assistant {
+  align-self: flex-start;
+}
+
+.chat-error {
+  border-color: rgba(239, 68, 68, 0.5);
+}
+
+.chat-bubble-role {
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--text-secondary);
+  margin-bottom: 4px;
+}
+
+.chat-bubble-text {
+  font-size: 13px;
+  line-height: 1.5;
+  color: var(--text-primary);
+}
+
+.chat-working {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  color: var(--text-secondary);
+  font-size: 13px;
+}
+
+.chat-dots::after {
+  content: '…';
+  animation: chat-dots 1.2s infinite;
+}
+
+@keyframes chat-dots {
+  0% { content: ''; }
+  33% { content: '.'; }
+  66% { content: '..'; }
+  100% { content: '...'; }
+}
+
+.chat-followups {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  align-items: center;
+  margin-bottom: 10px;
+}
+
+.chat-chip {
+  background: rgba(59, 130, 246, 0.12);
+  border: 1px solid rgba(59, 130, 246, 0.45);
+  color: var(--text-primary);
+  border-radius: 999px;
+  padding: 5px 12px;
+  font-size: 12px;
+  cursor: pointer;
+  transition: background 0.15s ease;
+  max-width: 340px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.chat-chip:hover {
+  background: rgba(59, 130, 246, 0.28);
+}
+
+.chat-input-row {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+}
+
+.chat-input-row input {
+  flex: 1;
+  background: rgba(0, 0, 0, 0.25);
+  border: 1px solid var(--border);
+  color: var(--text-primary);
+  border-radius: 6px;
+  padding: 10px 12px;
+  font-size: 13px;
+  min-width: 0;
+  transition: border-color 0.15s ease;
+}
+
+.chat-input-row input:focus {
+  outline: none;
+  border-color: var(--accent-blue);
+}
+
+.chat-input-row input:disabled {
+  opacity: 0.55;
+}
+
+/* P3 — live chat progress streaming (agent working steps) */
+.chat-working-lines {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.chat-step-line {
+  font-family: var(--font-mono, ui-monospace, SFMono-Regular, Menlo, Consolas, monospace);
+  font-size: 11.5px;
+  color: var(--text-secondary);
+  line-height: 1.5;
+}
+
+.chat-steps {
+  margin-top: 8px;
+  padding-top: 8px;
+  border-top: 1px dashed var(--border);
+}
+
+.chat-steps summary {
+  cursor: pointer;
+  font-size: 11px;
+  color: var(--accent-blue, #3b82f6);
+  user-select: none;
+}
+
+.chat-steps > div {
+  margin-top: 6px;
 }

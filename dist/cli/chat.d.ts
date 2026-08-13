@@ -91,6 +91,8 @@ export declare class ChatCommand extends BaseCommand {
             content: string;
         }>;
         askUser?: ToolContext['askUser'];
+        /** P3 — live progress lines for the dashboard chat console. */
+        onProgress?: (line: string) => void;
     }): Promise<{
         content: string;
         followups: FollowupSuggestion[];
