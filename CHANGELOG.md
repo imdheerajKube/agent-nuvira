@@ -27,6 +27,15 @@ All notable changes to **Agent-Nuvira** are documented in this file.
   auto-accept (`SIMPLEX_AUTO_ACCEPT`), echo filtering, contact/group
   allowlists (`SIMPLEX_ALLOWED_USERS` / `SIMPLEX_GROUP_ALLOWED`), reconnect
   with backoff — the agent listens AND replies on SimpleX.
+- **IRC is two-way too (the heavy protocol).** `IrcAdapter.start()` now runs a
+  persistent RFC 1459 listener socket — registration (PASS → NICK → USER →
+  001), NickServ IDENTIFY + JOIN, PING/PONG keepalives, 433 nick-collision
+  retry, and PRIVMSG relay with Hermes' exact semantics: self-echo filter,
+  CTCP ACTION → `* nick text` (other CTCP dropped), channel messages only
+  when addressed (`nick:`/`nick,`/`nick `), `IRC_ALLOWED_USERS`
+  case-insensitive allowlist, reconnect with backoff. Send prefers the live
+  listener socket (one IRC identity, 0.3s flood guard) with connect-per-send
+  fallback. Wire-level walkthrough in `IRC_PROTOCOL_DEEP_DIVE.md`.
 - **Dashboard channel send-test.** The Agent Hub Channels tab can send a test
   message through the same gateway the CLI uses (`POST
   /api/admin/hub/channels/send`, admin + `routing.operate` gate), with a 15s
@@ -37,11 +46,11 @@ All notable changes to **Agent-Nuvira** are documented in this file.
   Twilio/HA/Hermes credentials never logged (`describe()` shows only the
   non-secret parts).
 - **Tests.** Full connector suites use in-process mock servers (SMTP, IRC,
-  fake WebSocket, fetch spies) — no network. Full suite: **4,269 tests across
+  fake WebSocket, fetch spies) — no network. Full suite: **4,280 tests across
   180 files** (was 4,031).
 - **Docs.** `HERMES_ECOSYSTEM_INTEGRATION_PLAN.md` (I1–I16 pillars + deferred
   heavy-bridge assessment), `HERMES_IMPORT_DESIGN.md`, `ASSESSMENT_WEBSITE_DEPLOY.md`;
-  User Manual gateway section updated; website updated to v1.63.0 / 4,269 tests.
+  User Manual gateway section updated; website updated to v1.63.0 / 4,280 tests.
 
 ## v1.62.5 — Reviewer rate-limit recovery: eval 429s are waited out, not fatal
 
