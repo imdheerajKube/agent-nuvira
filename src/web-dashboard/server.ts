@@ -38,6 +38,7 @@ import {
   MIN_ADMIN_PASSWORD_LENGTH,
 } from './src/admin-auth.js';
 import { TaskRunner } from './task-runner.js';
+import { WhatsAppPairingManager } from './whatsapp-pairing.js';
 import { isVaultRef } from '../enterprise/vault.js';
 import { ROLES, roleCan, type Role } from '../enterprise/rbac.js';
 import { clearModelListCache } from '../inference/model-validator.js';
@@ -2127,6 +2128,23 @@ const taskRunner = new TaskRunner({
 });
 
 /**
+ * P2 — In-page WhatsApp pairing: the dashboard twin of `buff whatsapp pair`.
+ * QR payloads stream to the browser as scannable PNG data URLs (the panel's
+ * `<img>`), the 8-char phone-pairing code streams the same way, and status
+ * events drive the panel's state. One manager per server process.
+ */
+let whatsappPairing = new WhatsAppPairingManager();
+
+/**
+ * Test hook: swap the pairing manager (e.g. for a fake-bridge manager) so
+ * /api/whatsapp integration tests never open a real WhatsApp connection.
+ * Routes read the module variable at request time, so this works anytime.
+ */
+export function setWhatsappPairingForTest(manager: WhatsAppPairingManager): void {
+  whatsappPairing = manager;
+}
+
+/**
  * Login brute-force throttle (the control layer's first hardening): per-IP
  * failed-attempt counter with a 1-minute window. After 10 failures the IP is
  * refused with 429 until the window rolls. A successful login clears the IP's
@@ -3037,6 +3055,135 @@ function handleRequest(req: IncomingMessage, res: ServerResponse): void {
           res.write(`event: log\ndata: ${JSON.stringify(payload.line)}\n\n`);
         } else if (payload.kind === 'status' && payload.status) {
           res.write(`event: status\ndata: ${JSON.stringify(payload.status)}\n\n`);
+        }
+      } catch { /* client gone */ }
+    });
+    req.on('close', () => {
+      clearInterval(heartbeat);
+      off();
+    });
+    return;
+  }
+
+  // ── P2 In-page WhatsApp pairing (GUI parity with `buff whatsapp pair`) ──
+  // Reads (status/events) need an admin session; writes (pair/cancel/unpair)
+  // additionally need routing.operate (admin or operator) — the same gate as
+  // the channel send-test and the CLI's own pairing RBAC guard. The manager
+  // runs the real BaileysBridge in this process; QRs and the 8-char code
+  // stream over SSE so the panel never polls.
+
+  // GET /api/whatsapp — pairing status (state, QR data URL, code, session dir).
+  if (pathname === '/api/whatsapp' && req.method === 'GET') {
+    const session = adminSessions.validate(bearerToken(req));
+    if (!session) {
+      writeJson(res, 401, { ok: false, error: 'Not authenticated — log in first.' });
+      return;
+    }
+    writeJson(res, 200, { ok: true, status: whatsappPairing.statusSnapshot() });
+    return;
+  }
+
+  // POST /api/whatsapp/pair — start pairing { phone?: string } (QR or code mode).
+  if (pathname === '/api/whatsapp/pair' && req.method === 'POST') {
+    void (async () => {
+      const session = adminSessions.validate(bearerToken(req));
+      if (!session) {
+        writeJson(res, 401, { ok: false, error: 'Not authenticated — log in first.' });
+        return;
+      }
+      if (!roleCan(session.role, 'routing.operate')) {
+        writeJson(res, 403, {
+          ok: false,
+          error: `Access denied — role '${session.role}' cannot pair WhatsApp (requires admin or operator).`,
+        });
+        return;
+      }
+      const body = await readJsonBody(req);
+      const phone = typeof body?.phone === 'string' ? body.phone.trim() : '';
+      const result = whatsappPairing.start({ phone: phone || undefined });
+      if (!result.ok) {
+        writeJson(res, 400, { ok: false, error: result.error || 'Could not start pairing.' });
+        return;
+      }
+      writeJson(res, 200, { ok: true, status: whatsappPairing.statusSnapshot() });
+    })();
+    return;
+  }
+
+  // POST /api/whatsapp/cancel — abort the active pairing.
+  if (pathname === '/api/whatsapp/cancel' && req.method === 'POST') {
+    const session = adminSessions.validate(bearerToken(req));
+    if (!session) {
+      writeJson(res, 401, { ok: false, error: 'Not authenticated — log in first.' });
+      return;
+    }
+    if (!roleCan(session.role, 'routing.operate')) {
+      writeJson(res, 403, {
+        ok: false,
+        error: `Access denied — role '${session.role}' cannot cancel WhatsApp pairing (requires admin or operator).`,
+      });
+      return;
+    }
+    const result = whatsappPairing.cancel();
+    if (!result.ok) {
+      writeJson(res, 400, { ok: false, error: result.error || 'Nothing to cancel.' });
+      return;
+    }
+    writeJson(res, 200, { ok: true, status: whatsappPairing.statusSnapshot() });
+    return;
+  }
+
+  // POST /api/whatsapp/unpair — remove the paired session from disk.
+  if (pathname === '/api/whatsapp/unpair' && req.method === 'POST') {
+    const session = adminSessions.validate(bearerToken(req));
+    if (!session) {
+      writeJson(res, 401, { ok: false, error: 'Not authenticated — log in first.' });
+      return;
+    }
+    if (!roleCan(session.role, 'routing.operate')) {
+      writeJson(res, 403, {
+        ok: false,
+        error: `Access denied — role '${session.role}' cannot unpair WhatsApp (requires admin or operator).`,
+      });
+      return;
+    }
+    const result = whatsappPairing.unpair();
+    if (!result.ok) {
+      writeJson(res, 400, { ok: false, error: result.error || 'Unpair failed.' });
+      return;
+    }
+    writeJson(res, 200, { ok: true, status: whatsappPairing.statusSnapshot() });
+    return;
+  }
+
+  // GET /api/whatsapp/events — SSE stream: qr (PNG data URL) / code / status.
+  // EventSource can't set Authorization headers, so the token rides ?token=.
+  if (pathname === '/api/whatsapp/events' && req.method === 'GET') {
+    const token = bearerToken(req) ?? new URL(req.url ?? '/', 'http://localhost').searchParams.get('token');
+    const session = adminSessions.validate(token);
+    if (!session) {
+      res.writeHead(401, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({ ok: false, error: 'Not authenticated — log in first.' }));
+      return;
+    }
+    res.writeHead(200, {
+      'Content-Type': 'text/event-stream',
+      'Cache-Control': 'no-cache',
+      'Connection': 'keep-alive',
+      'X-Accel-Buffering': 'no',
+    });
+    res.write(`event: init\ndata: ${JSON.stringify({ status: whatsappPairing.statusSnapshot() })}\n\n`);
+    const heartbeat = setInterval(() => {
+      try { res.write(': heartbeat\n\n'); } catch { clearInterval(heartbeat); }
+    }, 30000);
+    const off = whatsappPairing.onEvent((event) => {
+      try {
+        if (event.kind === 'qr') {
+          res.write(`event: qr\ndata: ${JSON.stringify({ qr: event.qr, raw: event.raw })}\n\n`);
+        } else if (event.kind === 'code') {
+          res.write(`event: code\ndata: ${JSON.stringify({ code: event.code })}\n\n`);
+        } else if (event.kind === 'status') {
+          res.write(`event: status\ndata: ${JSON.stringify(event.status)}\n\n`);
         }
       } catch { /* client gone */ }
     });

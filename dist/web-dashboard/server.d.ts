@@ -10,6 +10,7 @@
  * Opens at: http://localhost:3030
  */
 import { createServer } from 'node:http';
+import { WhatsAppPairingManager } from './whatsapp-pairing.js';
 /** Test hook: is the quota file watcher currently armed? */
 export declare function isQuotaWatcherArmed(): boolean;
 /** Test hook: override the always-on quota watcher flag (config re-read on next create). */
@@ -139,6 +140,12 @@ export declare function readTracesData(): {
 };
 /** Full trace detail (steps included) for the replay view. */
 export declare function readTraceDetail(id: string): DashboardTrace | null;
+/**
+ * Test hook: swap the pairing manager (e.g. for a fake-bridge manager) so
+ * /api/whatsapp integration tests never open a real WhatsApp connection.
+ * Routes read the module variable at request time, so this works anytime.
+ */
+export declare function setWhatsappPairingForTest(manager: WhatsAppPairingManager): void;
 export interface DashboardServerHandle {
     server: ReturnType<typeof createServer>;
     port: number;

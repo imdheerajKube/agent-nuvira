@@ -64,6 +64,11 @@ export interface PairOptions {
    * with phone number instead. Full international format, no leading '+'.
    */
   phoneNumber?: string;
+  /**
+   * Abort the pairing early: ends the socket and resolves
+   * `{ ok: false, reason: 'cancelled' }` (dashboard in-page cancel).
+   */
+  signal?: AbortSignal;
 }
 
 /**
@@ -75,6 +80,19 @@ export async function renderQrToTerminal(qr: string): Promise<string> {
   try {
     const mod = await import('qrcode');
     return await mod.toString(qr, { type: 'terminal', small: true });
+  } catch {
+    return '';
+  }
+}
+
+/**
+ * Render a QR payload to a browser-scannable PNG data URL (the in-page
+ * dashboard pairing). Best-effort: returns '' if `qrcode` can't be loaded.
+ */
+export async function renderQrToDataUrl(qr: string): Promise<string> {
+  try {
+    const mod = await import('qrcode');
+    return await mod.toDataURL(qr, { margin: 1, width: 320 });
   } catch {
     return '';
   }
@@ -181,6 +199,7 @@ export class BaileysBridge implements WhatsAppBridge {
    */
   async pair(opts: PairOptions = {}): Promise<{ ok: boolean; reason: string }> {
     const timeoutMs = opts.timeoutMs ?? 90_000;
+    const signal = opts.signal;
     const phone = opts.phoneNumber ? normalizePairingPhone(opts.phoneNumber) : '';
     if (opts.phoneNumber && !phone) {
       return {
@@ -203,14 +222,34 @@ export class BaileysBridge implements WhatsAppBridge {
       sock.ev?.on('creds.update', () => void saveCreds());
 
       return await new Promise<{ ok: boolean; reason: string }>((resolve) => {
+        let settled = false;
+        // finish() only ever runs asynchronously (timer/event handlers), so
+        // `timer`/`onAbort` are assigned before they can be read (no TDZ issue)
+        // — same latch pattern as waitForOpen().
+        const finish = (result: { ok: boolean; reason: string }): void => {
+          if (settled) return;
+          settled = true;
+          clearTimeout(timer);
+          signal?.removeEventListener('abort', onAbort);
+          resolve(result);
+        };
+        const onAbort = (): void => {
+          try {
+            sock.end?.('pairing cancelled');
+          } catch {
+            /* best-effort */
+          }
+          finish({ ok: false, reason: 'cancelled' });
+        };
         const timer = setTimeout(() => {
           try {
             sock.end?.(new Error('pair timeout'));
           } catch {
             /* best-effort */
           }
-          resolve({ ok: false, reason: 'pairing timed out — scan the QR / enter the code within the window' });
+          finish({ ok: false, reason: 'pairing timed out — scan the QR / enter the code within the window' });
         }, timeoutMs);
+        signal?.addEventListener('abort', onAbort, { once: true });
 
         sock.ev?.on('connection.update', (...args: unknown[]) => {
           const u = (args[0] ?? {}) as ConnectionUpdateLike;
@@ -226,16 +265,14 @@ export class BaileysBridge implements WhatsAppBridge {
             }
           }
           if (u.connection === 'open') {
-            clearTimeout(timer);
             this.sock = sock;
-            resolve({ ok: true, reason: 'paired' });
+            finish({ ok: true, reason: 'paired' });
             return;
           }
           if (u.connection === 'close' && u.lastDisconnect?.error) {
             const reason = u.lastDisconnect.error.message || 'connection closed';
             if (!/loggedOut|timedOut/i.test(reason)) {
-              clearTimeout(timer);
-              resolve({ ok: false, reason: `pair failed: ${reason}` });
+              finish({ ok: false, reason: `pair failed: ${reason}` });
             }
           }
         });
