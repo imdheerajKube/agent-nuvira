@@ -2,6 +2,26 @@
 
 All notable changes to **Agent-Nuvira** are documented in this file.
 
+## v1.65.0 — Dashboard chat console + eval runner in the GUI
+
+- **💬 Chat tab — chat with the agent from the GUI.** Each message runs ONE
+  tool-loop turn through the real agent engine in the dashboard process
+  (`ChatCommand.answerOnce` — the exact engine behind `buff chat "<prompt>"`),
+  with the conversation threaded server-side per session so the GUI holds a
+  real back-and-forth. The model's suggested follow-ups render as clickable
+  chips that send their prompt as the next message. API: `POST /api/chat`
+  (`{ sessionId?, message, provider?, model? }`) + `POST /api/chat/reset`,
+  admin/operator-gated. Non-TTY by construction: an injected `ask_user`
+  renderer declines clarifications instead of hanging on piped stdin.
+  Verified end-to-end against a real provider (content + followups returned).
+- **🏆 Evals tab — run `buff eval` from the GUI.** Preset buttons
+  (quick / medium / slow / M2B parity / full) plus a custom task filter, each
+  running the REAL `buff eval run` as an isolated process via the task runner
+  with a live SSE console and cancel; the results table auto-refreshes from
+  evals.json (tasks passed, completion, composite score, cost) as runs land.
+- 19 new tests (chat console unit + API, Chat page, Evals page); suite at
+  4,345 root + 178 dashboard, typecheck clean.
+
 ## v1.64.0 — Dashboard command console (P1) + in-page WhatsApp pairing (P2)
 
 - **Dashboard Tasks tab — every CLI command runnable from the GUI (P1).** The
