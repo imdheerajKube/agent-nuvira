@@ -10,6 +10,7 @@ interface LayoutProps {
 const NAV_ITEMS = [
   { path: '/', label: 'Overview', icon: '📊' },
   { path: '/dag', label: 'Execution', icon: '🔀' },
+  { path: '/tasks', label: 'Tasks', icon: '🚀' },
   { path: '/models', label: 'Models', icon: '🧠' },
   { path: '/routing', label: 'Routing', icon: '🤖' },
   { path: '/requests', label: 'Requests', icon: '📨' },

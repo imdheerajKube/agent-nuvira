@@ -37,6 +37,7 @@ import {
   writeAdminUser,
   MIN_ADMIN_PASSWORD_LENGTH,
 } from './src/admin-auth.js';
+import { TaskRunner } from './task-runner.js';
 import { isVaultRef } from '../enterprise/vault.js';
 import { ROLES, roleCan, type Role } from '../enterprise/rbac.js';
 import { clearModelListCache } from '../inference/model-validator.js';
@@ -2116,6 +2117,16 @@ async function runAdminChecks(): Promise<{
 const adminSessions = new AdminSessions();
 
 /**
+ * P1 — Task runner: the dashboard's command console executes the CLI
+ * (`dist/index.js`) as an isolated child process — the GUI is literally
+ * running the CLI, so command/UX parity is guaranteed by construction.
+ * BUFF_DASHBOARD_TASK_CLI_ENTRY overrides the entry (tests / custom builds).
+ */
+const taskRunner = new TaskRunner({
+  cliEntry: process.env.BUFF_DASHBOARD_TASK_CLI_ENTRY || undefined,
+});
+
+/**
  * Login brute-force throttle (the control layer's first hardening): per-IP
  * failed-attempt counter with a 1-minute window. After 10 failures the IP is
  * refused with 429 until the window rolls. A successful login clears the IP's
@@ -2903,6 +2914,136 @@ function handleRequest(req: IncomingMessage, res: ServerResponse): void {
       if (sseClients.length === 0 && !alwaysWatchQuota) disarmQuotaWatcher();
     });
 
+    return;
+  }
+
+  // ── P1 Task Runner API ───────────────────────────────────────────
+  // The dashboard's command console: run the CLI as an isolated child process,
+  // stream logs via SSE, cancel/timeout. Running commands is a write action,
+  // so every endpoint requires an admin session (like the other admin routes).
+
+  // GET /api/tasks — recent task history (newest first).
+  if (pathname === '/api/tasks' && req.method === 'GET') {
+    const session = adminSessions.validate(bearerToken(req));
+    if (!session) {
+      writeJson(res, 401, { ok: false, error: 'Not authenticated — log in first.' });
+      return;
+    }
+    writeJson(res, 200, { ok: true, tasks: taskRunner.list() });
+    return;
+  }
+
+  // POST /api/tasks — start a CLI task { args: string[], timeoutMs?, cwd? }.
+  if (pathname === '/api/tasks' && req.method === 'POST') {
+    void (async () => {
+      const session = adminSessions.validate(bearerToken(req));
+      if (!session) {
+        writeJson(res, 401, { ok: false, error: 'Not authenticated — log in first.' });
+        return;
+      }
+      if (!roleCan(session.role, 'routing.operate')) {
+        writeJson(res, 403, {
+          ok: false,
+          error: `Access denied — role '${session.role}' cannot run tasks (requires admin or operator).`,
+        });
+        return;
+      }
+      const body = await readJsonBody(req);
+      const rawArgs = Array.isArray(body?.args) ? (body.args as unknown[]) : null;
+      if (!rawArgs) {
+        writeJson(res, 400, { ok: false, error: 'Missing args — expected an array of CLI args (e.g. ["eval","run","--task","smoke"]).' });
+        return;
+      }
+      const timeoutMs = typeof body?.timeoutMs === 'number' ? body.timeoutMs : undefined;
+      const cwd = typeof body?.cwd === 'string' ? body.cwd : undefined;
+      const result = taskRunner.start(rawArgs.map((a) => String(a)), { timeoutMs, cwd });
+      if (!result.ok || !result.task) {
+        writeJson(res, 400, { ok: false, error: result.error || 'Invalid task.' });
+        return;
+      }
+      writeJson(res, 200, { ok: true, task: result.task });
+    })();
+    return;
+  }
+
+  // POST /api/tasks/:id/cancel — SIGTERM a running task.
+  const taskCancelMatch = /^\/api\/tasks\/([^/]+)\/cancel$/.exec(pathname);
+  if (taskCancelMatch && req.method === 'POST') {
+    const session = adminSessions.validate(bearerToken(req));
+    if (!session) {
+      writeJson(res, 401, { ok: false, error: 'Not authenticated — log in first.' });
+      return;
+    }
+    if (!roleCan(session.role, 'routing.operate')) {
+      writeJson(res, 403, { ok: false, error: `Access denied — role '${session.role}' cannot cancel tasks.` });
+      return;
+    }
+    const id = decodeURIComponent(taskCancelMatch[1]);
+    const cancelled = taskRunner.cancel(id);
+    writeJson(res, 200, { ok: cancelled, task: taskRunner.get(id) ?? null });
+    return;
+  }
+
+  // GET /api/tasks/:id — full detail (logs included).
+  const taskDetailMatch = /^\/api\/tasks\/([^/]+)$/.exec(pathname);
+  if (taskDetailMatch && req.method === 'GET') {
+    const session = adminSessions.validate(bearerToken(req));
+    if (!session) {
+      writeJson(res, 401, { ok: false, error: 'Not authenticated — log in first.' });
+      return;
+    }
+    const id = decodeURIComponent(taskDetailMatch[1]);
+    const task = taskRunner.get(id);
+    if (!task) {
+      writeJson(res, 404, { ok: false, error: `Task not found: ${id}` });
+      return;
+    }
+    writeJson(res, 200, { ok: true, task });
+    return;
+  }
+
+  // GET /api/tasks/:id/events — SSE stream of log + status events. EventSource
+  // can't set Authorization headers, so the token is accepted via ?token= too.
+  const taskEventsMatch = /^\/api\/tasks\/([^/]+)\/events$/.exec(pathname);
+  if (taskEventsMatch && req.method === 'GET') {
+    const token = bearerToken(req) ?? new URL(req.url ?? '/', 'http://localhost').searchParams.get('token');
+    const session = adminSessions.validate(token);
+    if (!session) {
+      res.writeHead(401, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({ ok: false, error: 'Not authenticated — log in first.' }));
+      return;
+    }
+    const id = decodeURIComponent(taskEventsMatch[1]);
+    const task = taskRunner.get(id);
+    if (!task) {
+      res.writeHead(404, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({ ok: false, error: `Task not found: ${id}` }));
+      return;
+    }
+    res.writeHead(200, {
+      'Content-Type': 'text/event-stream',
+      'Cache-Control': 'no-cache',
+      'Connection': 'keep-alive',
+      'X-Accel-Buffering': 'no',
+    });
+    res.write(`event: init\ndata: ${JSON.stringify(task)}\n\n`);
+    const heartbeat = setInterval(() => {
+      try { res.write(': heartbeat\n\n'); } catch { clearInterval(heartbeat); }
+    }, 30000);
+    const off = taskRunner.onEvent((eventId, payload) => {
+      if (eventId !== id) return;
+      try {
+        if (payload.kind === 'log' && payload.line) {
+          res.write(`event: log\ndata: ${JSON.stringify(payload.line)}\n\n`);
+        } else if (payload.kind === 'status' && payload.status) {
+          res.write(`event: status\ndata: ${JSON.stringify(payload.status)}\n\n`);
+        }
+      } catch { /* client gone */ }
+    });
+    req.on('close', () => {
+      clearInterval(heartbeat);
+      off();
+    });
     return;
   }
 

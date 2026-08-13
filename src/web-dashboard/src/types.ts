@@ -1003,3 +1003,29 @@ export interface HubData {
   adminConfigured: boolean;
   serverTime: number;
 }
+
+// ─── P1 task runner (dashboard command console) ─────────────────────────────
+
+export type TaskStatus = 'running' | 'done' | 'failed' | 'cancelled' | 'timeout' | 'error';
+
+export interface TaskLogLine {
+  stream: 'stdout' | 'stderr' | 'system';
+  text: string;
+  at: number;
+}
+
+export interface TaskRecord {
+  id: string;
+  /** Human display line: the args joined with spaces. */
+  command: string;
+  args: string[];
+  cwd: string;
+  status: TaskStatus;
+  exitCode: number | null;
+  startedAt: number;
+  finishedAt: number | null;
+  durationMs: number | null;
+  timeoutMs: number;
+  logs: TaskLogLine[];
+  error?: string;
+}
