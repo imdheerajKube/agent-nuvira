@@ -32,14 +32,17 @@ The dashboard command console: run any CLI command, stream output live, cancel.
 - **Acceptance:** ✅ run any non-interactive command from the GUI with live
   output, cancel, and history.
 
-### ⏭ P2 — High-value surfaces (next)
+### ⏭ P2 — High-value surfaces (chat + eval DONE; gateway ops pending)
 
-Chat console, **in-page WhatsApp pairing** (QR + 8-char code — the dashboard is
-the natural home for the QR the CLI renders), gateway status/start/stop +
-delivery ledger + cron editor, `buff eval` runner with live results.
+**Chat console** (✅ v1.65.0), **in-page WhatsApp pairing** (✅ v1.64.0 — QR +
+8-char code, the dashboard is the natural home for the QR the CLI renders),
+gateway status/start/stop + delivery ledger + cron editor (⏳ pending),
+**`buff eval` runner** (✅ v1.65.0 — preset + custom runs with a live console
+via the task runner, results auto-refresh).
 
-- **Acceptance:** pair WhatsApp from the GUI; start/stop the gateway and watch
-  the delivery ledger; run an eval task and see live progress in the GUI.
+- **Acceptance:** pair WhatsApp from the GUI (✅); start/stop the gateway and
+  watch the delivery ledger (⏳); run an eval task and see live progress in
+  the GUI (✅).
 
 ### ⏭ P3 — Breadth
 
@@ -62,6 +65,7 @@ tests in the release pipeline), adapter hot-path tests.
 ## Status tracking
 
 - [x] P1 — task-runner core (`/api/tasks` + SSE + Tasks console)
-- [ ] P2 — chat console, WhatsApp pairing UI, gateway ops, eval runner
+- [x] P2 — chat console (`/api/chat`, in-process agent), WhatsApp pairing UI, eval runner (`/api/tasks` presets)
+- [ ] P2 — gateway ops (status/start/stop + delivery ledger + cron editor)
 - [ ] P3 — skills/marketplace/workflow/team/federation/MCP/memory/trace actions
 - [ ] P4 — RBAC audit, task persistence, TTY pass-through, CI coverage

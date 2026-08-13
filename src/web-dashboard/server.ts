@@ -39,6 +39,7 @@ import {
 } from './src/admin-auth.js';
 import { TaskRunner } from './task-runner.js';
 import { WhatsAppPairingManager } from './whatsapp-pairing.js';
+import { ChatConsole, newChatSessionId } from './chat-console.js';
 import { isVaultRef } from '../enterprise/vault.js';
 import { ROLES, roleCan, type Role } from '../enterprise/rbac.js';
 import { clearModelListCache } from '../inference/model-validator.js';
@@ -2136,6 +2137,19 @@ const taskRunner = new TaskRunner({
 let whatsappPairing = new WhatsAppPairingManager();
 
 /**
+ * P3 — Dashboard chat console: in-process agent chat (GUI parity with
+ * `buff chat "<prompt>"`). The engine (ChatCommand) is loaded lazily on the
+ * first message, so server import stays light. One console per process.
+ */
+let chatConsole = new ChatConsole();
+
+/** Test hook: swap the chat console (e.g. a fake engine) — routes read the
+ * module variable at request time, so this works anytime. */
+export function setChatConsoleForTest(console: ChatConsole): void {
+  chatConsole = console;
+}
+
+/**
  * Test hook: swap the pairing manager (e.g. for a fake-bridge manager) so
  * /api/whatsapp integration tests never open a real WhatsApp connection.
  * Routes read the module variable at request time, so this works anytime.
@@ -3191,6 +3205,81 @@ function handleRequest(req: IncomingMessage, res: ServerResponse): void {
       clearInterval(heartbeat);
       off();
     });
+    return;
+  }
+
+  // ── P3 Chat console (GUI parity with `buff chat "<prompt>"`) ──────────
+  // One tool-loop turn per message, history threaded per session. Running the
+  // agent executes tools, so it rides the same admin + routing.operate gate
+  // as the task runner. The engine runs in-process (ChatCommand), so provider
+  // API keys must be configured in the dashboard process — the 400 tells the
+  // user exactly that when the turn fails.
+
+  // POST /api/chat — send one message { sessionId?, message, provider?, model? }.
+  if (pathname === '/api/chat' && req.method === 'POST') {
+    void (async () => {
+      const session = adminSessions.validate(bearerToken(req));
+      if (!session) {
+        writeJson(res, 401, { ok: false, error: 'Not authenticated — log in first.' });
+        return;
+      }
+      if (!roleCan(session.role, 'routing.operate')) {
+        writeJson(res, 403, {
+          ok: false,
+          error: `Access denied — role '${session.role}' cannot chat with the agent (requires admin or operator).`,
+        });
+        return;
+      }
+      const body = await readJsonBody(req);
+      const message = typeof body?.message === 'string' ? body.message.trim() : '';
+      if (!message) {
+        writeJson(res, 400, { ok: false, error: 'Missing message — expected { message: string }.' });
+        return;
+      }
+      const sessionId =
+        typeof body?.sessionId === 'string' && body.sessionId.length > 0 && body.sessionId.length <= 64
+          ? body.sessionId
+          : newChatSessionId();
+      const provider = typeof body?.provider === 'string' ? body.provider : undefined;
+      const model = typeof body?.model === 'string' ? body.model : undefined;
+      const result = await chatConsole.answer(sessionId, message, { provider, model });
+      if (!result.ok) {
+        writeJson(res, 400, {
+          ok: false,
+          error: result.error || 'The agent could not answer — check that a provider API key is configured in the dashboard process.',
+        });
+        return;
+      }
+      writeJson(res, 200, {
+        ok: true,
+        sessionId,
+        content: result.content ?? '',
+        followups: result.followups ?? [],
+        provider: result.provider ?? null,
+        model: result.model ?? null,
+        generationFailed: result.generationFailed === true,
+      });
+    })();
+    return;
+  }
+
+  // POST /api/chat/reset — forget a session's history { sessionId }.
+  if (pathname === '/api/chat/reset' && req.method === 'POST') {
+    void (async () => {
+      const session = adminSessions.validate(bearerToken(req));
+      if (!session) {
+        writeJson(res, 401, { ok: false, error: 'Not authenticated — log in first.' });
+        return;
+      }
+      if (!roleCan(session.role, 'routing.operate')) {
+        writeJson(res, 403, { ok: false, error: `Access denied — role '${session.role}' cannot reset chat sessions.` });
+        return;
+      }
+      const body = await readJsonBody(req);
+      const sessionId = typeof body?.sessionId === 'string' ? body.sessionId : '';
+      if (sessionId) chatConsole.reset(sessionId);
+      writeJson(res, 200, { ok: true });
+    })();
     return;
   }
 
