@@ -143,8 +143,17 @@ function messageText(message: any): string {
 export class BaileysBridge implements WhatsAppBridge {
   private sock: WASocketLike | null = null;
   private onMessage: ((fromJid: string, text: string) => void) | null = null;
+  /** Auto-reconnect watcher: while true (connected), a dead socket is recreated. */
+  private keepAlive = false;
+  /** Set when the session is logged out server-side (401) — reconnect would loop forever. */
+  private loggedOut = false;
+  /** Set while an explicit pair() is running so the watcher never races it. */
+  private pairing = false;
 
-  constructor(private readonly sessionDir: string = whatsappSessionDir()) {}
+  constructor(
+    private readonly sessionDir: string = whatsappSessionDir(),
+    private readonly opts: { reconnectDelayMs?: number } = {},
+  ) {}
 
   /** Live check — a bridge that paired THIS process reports true immediately. */
   get paired(): boolean {
@@ -160,10 +169,18 @@ export class BaileysBridge implements WhatsAppBridge {
 
   async connect(onMessage: (fromJid: string, text: string) => void): Promise<void> {
     this.onMessage = onMessage;
+    this.keepAlive = true;
+    this.loggedOut = false;
     await this.ensureSocket();
+    // whatsmeow-parity auto-reconnect: while the bridge is connected, a dead
+    // socket (network drop, Baileys 7's 515 restart, server cycling) is
+    // recreated from the persisted session so the inbound listener never
+    // silently dies. Stops on disconnect() or a server-side logout (401).
+    void this.watchReconnect();
   }
 
   async disconnect(): Promise<void> {
+    this.keepAlive = false;
     try {
       this.sock?.end?.('gateway stop');
     } catch {
@@ -171,6 +188,28 @@ export class BaileysBridge implements WhatsAppBridge {
     }
     this.sock = null;
     this.onMessage = null;
+    this.loggedOut = false;
+  }
+
+  /**
+   * Recreate a dead socket while connected, with exponential backoff. Polls
+   * `this.sock` (the close handler nulls it); the 10s waitForOpen cap and
+   * backoff growth bound how hot the loop can get.
+   */
+  private async watchReconnect(): Promise<void> {
+    const sleep = (ms: number): Promise<void> => new Promise((r) => setTimeout(r, ms));
+    let delay = this.opts.reconnectDelayMs ?? 2_000;
+    while (this.keepAlive) {
+      while (this.keepAlive && !this.loggedOut && !this.pairing && this.sock) {
+        await sleep(500);
+      }
+      if (!this.keepAlive || this.loggedOut) return;
+      await sleep(delay);
+      if (!this.keepAlive || this.loggedOut || this.pairing) return;
+      if (this.sock) continue; // recreated by a concurrent send() meanwhile
+      await this.ensureSocket();
+      delay = Math.min(delay * 2, 30_000);
+    }
   }
 
   async send(target: string, text: string): Promise<boolean> {
@@ -215,6 +254,7 @@ export class BaileysBridge implements WhatsAppBridge {
     try {
       const baileys = await loadBaileys();
       if (!baileys) return { ok: false, reason: 'cannot load the Baileys bridge (is `baileys` installed?)' };
+      this.pairing = true;
       mkdirSync(this.sessionDir, { recursive: true, mode: 0o700 });
       const { state, saveCreds } = await baileys.useMultiFileAuthState(this.sessionDir);
 
@@ -252,6 +292,7 @@ export class BaileysBridge implements WhatsAppBridge {
         const finish = (result: { ok: boolean; reason: string }): void => {
           if (settled) return;
           settled = true;
+          this.pairing = false;
           clearTimeout(timer);
           signal?.removeEventListener('abort', onAbort);
           resolve(result);
@@ -366,6 +407,7 @@ export class BaileysBridge implements WhatsAppBridge {
         }
       });
     } catch (err) {
+      this.pairing = false;
       return {
         ok: false,
         reason: `cannot load the Baileys bridge: ${err instanceof Error ? err.message : String(err)}`,
@@ -385,12 +427,19 @@ export class BaileysBridge implements WhatsAppBridge {
       sock.ev?.on('creds.update', () => void saveCreds());
       // Self-healing: a socket that dies (e.g. Baileys 7's 515 "Stream Errored
       // (restart required)" close on an established session) is dropped so the
-      // NEXT send()/connect() recreates it from the persisted session instead
-      // of retrying against a dead socket forever.
+      // next send()/connect()/watchReconnect() recreates it from the persisted
+      // session. A server-side logout (401/loggedOut/device_removed) is
+      // terminal — it stops the auto-reconnect watcher (re-pair required).
       sock.ev?.on('connection.update', (...args: unknown[]) => {
         const u = (args[0] ?? {}) as ConnectionUpdateLike;
-        if (u.connection === 'close' && u.lastDisconnect?.error && this.sock === sock) {
-          this.sock = null;
+        if (u.connection !== 'close' || !u.lastDisconnect?.error || this.sock !== sock) return;
+        this.sock = null;
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        const err = u.lastDisconnect.error as any;
+        const code = err?.output?.statusCode ?? err?.statusCode;
+        const msg = err?.message || '';
+        if (code === 401 || /logged\s?out|device_removed|conflict/i.test(msg)) {
+          this.loggedOut = true;
         }
       });
       sock.ev?.on('messages.upsert', (...args: unknown[]) => {

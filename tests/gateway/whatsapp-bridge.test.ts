@@ -441,4 +441,61 @@ describe('BaileysBridge.ensureSocket() self-healing (fake baileys)', () => {
     expect(fakeBaileys.sockets).toHaveLength(2);
     expect(fakeBaileys.sockets[1].ended).toBe(false);
   }, 10_000);
+
+  it('auto-reconnects after the socket dies while connected — inbound keeps flowing', async () => {
+    const waitFor = async (fn: () => boolean, timeoutMs = 3_000): Promise<void> => {
+      const start = Date.now();
+      while (!fn()) {
+        if (Date.now() - start > timeoutMs) throw new Error('waitFor timeout');
+        await new Promise((r) => setTimeout(r, 50));
+      }
+    };
+    const bridge = new BaileysBridge(sessionDir, { reconnectDelayMs: 20 });
+    const received: Array<{ from: string; text: string }> = [];
+    await bridge.connect((from, text) => received.push({ from, text }));
+    expect(fakeBaileys.sockets).toHaveLength(1);
+    // The socket dies mid-session (network drop / 515 restart)…
+    (fakeBaileys.sockets[0].ev as { emit: (e: string, ...a: unknown[]) => void }).emit('connection.update', {
+      connection: 'close',
+      lastDisconnect: { error: new Error('Stream Errored (restart required)') },
+    });
+    // …and the watcher recreates it automatically (no manual reconnect).
+    await waitFor(() => fakeBaileys.sockets.length >= 2);
+    expect(fakeBaileys.sockets[1].ended).toBe(false);
+    // Inbound messages flow on the NEW socket.
+    (fakeBaileys.sockets[1].ev as { emit: (e: string, ...a: unknown[]) => void }).emit('messages.upsert', {
+      type: 'notify',
+      messages: [{ key: { remoteJid: '15551234567@s.whatsapp.net' }, message: { conversation: 'fix the failing test' } }],
+    });
+    await waitFor(() => received.length === 1);
+    expect(received[0]).toEqual({ from: '15551234567@s.whatsapp.net', text: 'fix the failing test' });
+    await bridge.disconnect();
+  }, 10_000);
+
+  it('stops auto-reconnecting on a server-side logout (401)', async () => {
+    const bridge = new BaileysBridge(sessionDir, { reconnectDelayMs: 20 });
+    await bridge.connect(() => {});
+    expect(fakeBaileys.sockets).toHaveLength(1);
+    (fakeBaileys.sockets[0].ev as { emit: (e: string, ...a: unknown[]) => void }).emit('connection.update', {
+      connection: 'close',
+      lastDisconnect: { error: { message: 'Connection Failure', output: { statusCode: 401 } } },
+    });
+    // Give the watcher time to (wrongly) recreate — it must NOT.
+    await new Promise((r) => setTimeout(r, 400));
+    expect(fakeBaileys.sockets).toHaveLength(1);
+    await bridge.disconnect();
+  }, 10_000);
+
+  it('disconnect() stops the reconnect watcher', async () => {
+    const bridge = new BaileysBridge(sessionDir, { reconnectDelayMs: 20 });
+    await bridge.connect(() => {});
+    await bridge.disconnect();
+    // Simulate the ended socket's close arriving after disconnect.
+    (fakeBaileys.sockets[0].ev as { emit: (e: string, ...a: unknown[]) => void }).emit('connection.update', {
+      connection: 'close',
+      lastDisconnect: { error: new Error('Stream Errored (restart required)') },
+    });
+    await new Promise((r) => setTimeout(r, 400));
+    expect(fakeBaileys.sockets).toHaveLength(1);
+  }, 10_000);
 });
