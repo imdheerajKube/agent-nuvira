@@ -80,31 +80,31 @@ describe('QuotaLedger — usage recording', () => {
 
   it('auto-re-enables when the reset window rolls (calendar-aware, not a timer)', async () => {
     const ledger = new QuotaLedger();
-    const windowMs = 50;
-    const recordedAt = Date.now();
-    // Small window so tests don't wait: 50ms
+    // Window sized so even Windows' coarse ~15ms timer granularity can't
+    // straddle the boundary ambiguously (pre-existing Windows CI flake:
+    // `expected +0 to be 15`).
+    const windowMs = 250;
     ledger.recordUsage('gemini', 'default', 100, 0, windowMs);
 
     const statusBefore = ledger.getStatus().find((s) => s.provider === 'gemini')!;
     expect(statusBefore.tokensConsumed).toBe(100);
     expect(statusBefore.requests).toBe(1);
 
-    // Wait until the window has definitely rolled. The ledger is calendar-aware
-    // (wall-clock), not timer-driven — so poll until Date.now() passes the
-    // window. Polling (instead of one setTimeout) keeps a loaded CI runner from
-    // starving the wait past the test timeout, and leaves no dangling timer to
-    // fire after teardown.
-    const deadline = recordedAt + 30_000;
-    while (Date.now() - recordedAt < windowMs) {
-      if (Date.now() > deadline) throw new Error('reset window never rolled');
-      await new Promise((resolve) => setTimeout(resolve, 10));
-    }
+    // Wait until the ledger's OWN window has definitely rolled: anchor to the
+    // entry's windowStart (not an external clock) and add a margin. The ledger
+    // is calendar-aware (wall-clock), not timer-driven — the await is one-shot
+    // and leaves no dangling timer to fire after teardown.
+    const entryBefore = ledger.getState().entries['gemini|default']!;
+    const waitMs = Math.max(0, entryBefore.windowStart + entryBefore.windowLengthMs - Date.now()) + 100;
+    await new Promise((resolve) => setTimeout(resolve, waitMs));
 
     // Record again — counters reset first (fresh window, not 115).
     ledger.recordUsage('gemini', 'default', 10, 5, windowMs);
-    const statusAfter = ledger.getStatus().find((s) => s.provider === 'gemini')!;
-    expect(statusAfter.tokensConsumed).toBe(15); // fresh window, not 115
-    expect(statusAfter.requests).toBe(1);
+    // Read the RAW state (getState rotates nothing) so no read-path rotation
+    // can race the assertion — the write path is what's under test.
+    const after = ledger.getState().entries['gemini|default']!;
+    expect(after.tokensConsumed).toBe(15); // fresh window, not 115
+    expect(after.requests).toBe(1);
   }, 60_000);
 });
 
