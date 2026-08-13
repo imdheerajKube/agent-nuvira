@@ -2,6 +2,23 @@
 
 All notable changes to **Agent-Nuvira** are documented in this file.
 
+## v1.66.0 — Live chat progress streaming + gateway ops in the GUI
+
+- **⚡ Live working steps in the Chat tab.** The agent's tool calls and
+  reasoning markers now stream into the GUI in real time while a turn runs
+  (previously a static "thinking…" bubble). The tool loop's `onEvent` stream
+  is wired into `ChatCommand.answerOnce` via an `onProgress` hook, the chat
+  console emits per-session progress/status events, and a new SSE endpoint
+  `GET /api/chat/:sessionId/events` delivers them to the page (subscribed
+  BEFORE each turn so no step is missed). Completed answers keep a
+  collapsible step summary.
+- **🌐 Gateway ops tab.** Gateway status, delivery ledger, foreground start
+  (with live event stream + Cancel), and cron management now run the real
+  `buff gateway` / `buff admin cron` CLI from the GUI via a shared
+  `TaskConsole` component (preset buttons + custom command line, live SSE
+  console, cancel, timeout) — extracted from the Evals tab so both surfaces
+  reuse one console.
+
 ## v1.65.0 — Dashboard chat console + eval runner in the GUI
 
 - **💬 Chat tab — chat with the agent from the GUI.** Each message runs ONE
