@@ -106,6 +106,8 @@ export declare class ModelCommand extends BaseCommand {
     /** Render the quota failover timeline in the human CLI output. */
     private renderQuotaEvents;
     private showBandit;
+    /** Show the ML task-similarity router state (`buff model ml`). */
+    private showMl;
     /** Render the promotion gate (bandit-vs-heuristic A/B verdict). */
     private renderPromotionGate;
     /** Build a machine-readable bandit snapshot for scripting/CI. */

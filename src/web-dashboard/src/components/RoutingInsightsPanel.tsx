@@ -1,6 +1,6 @@
 import type { ReactNode } from 'react';
 import RoutingWalkthroughSection from './RoutingWalkthrough';
-import type { BanditInsights, DashboardData, GovernanceInsights, PromotionInsights, QuotaInsights, RbacInsights, RetrievalInsights, RoutingHistoryEntry, RoutingInsights, RoutingUsage } from '../types';
+import type { BanditInsights, DashboardData, GovernanceInsights, MlInsights, PromotionInsights, QuotaInsights, RbacInsights, RetrievalInsights, RoutingHistoryEntry, RoutingInsights, RoutingUsage } from '../types';
 
 // ─── Helpers ────────────────────────────────────────────────────────────────
 
@@ -593,6 +593,84 @@ function PromotionGateSection({ promotion }: { promotion: PromotionInsights }) {
   );
 }
 
+// ─── ML Task-Similarity Router (v1.71.0, ruflo neural-router analog) ────────
+
+function MlSection({ ml }: { ml: MlInsights }) {
+  if (!ml.enabled || ml.recordCount === 0) return null;
+
+  const trusted = ml.providers.filter((p) => p.trusted);
+  const learning = ml.providers.filter((p) => !p.trusted);
+
+  return (
+    <SectionCard
+      icon="🧠"
+      title="ML Router — learned from similar tasks"
+      subtitle="Task-feature kNN (ruflo neural-router analog): outcomes of the most similar PAST tasks nudge each provider's score. Win rate is similarity-weighted; factor = 1 + 0.5 × (winRate − 0.5), trusted only after 5 similar-task samples."
+    >
+      <div style={{ display: 'flex', gap: 20, flexWrap: 'wrap', marginBottom: 14 }}>
+        <div style={{ background: '#0d1117', border: '1px solid #21262d', borderRadius: 10, padding: '12px 18px', textAlign: 'center' }}>
+          <div style={{ fontSize: 22, fontWeight: 700, color: '#e6edf3', fontFamily: "'SFMono-Regular', Consolas, monospace" }}>
+            {ml.recordCount.toLocaleString()}
+          </div>
+          <div style={{ fontSize: 11, color: '#8b949e', marginTop: 2 }}>learned tasks</div>
+        </div>
+        <div style={{ background: '#0d1117', border: '1px solid #238636', borderRadius: 10, padding: '12px 18px', textAlign: 'center' }}>
+          <div style={{ fontSize: 22, fontWeight: 700, color: '#3fb950', fontFamily: "'SFMono-Regular', Consolas, monospace" }}>
+            {trusted.length}
+          </div>
+          <div style={{ fontSize: 11, color: '#8b949e', marginTop: 2 }}>trusted providers</div>
+        </div>
+        <div style={{ background: '#0d1117', border: '1px solid #d29922', borderRadius: 10, padding: '12px 18px', textAlign: 'center' }}>
+          <div style={{ fontSize: 22, fontWeight: 700, color: '#d29922', fontFamily: "'SFMono-Regular', Consolas, monospace" }}>
+            {learning.length}
+          </div>
+          <div style={{ fontSize: 11, color: '#8b949e', marginTop: 2 }}>still learning</div>
+        </div>
+      </div>
+
+      <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+        {ml.providers.map((p) => (
+          <div key={p.provider} style={{ background: '#0d1117', border: '1px solid #21262d', borderRadius: 10, padding: '10px 14px' }}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 6 }}>
+              <span>{providerIcon(p.provider)}</span>
+              <span style={{ fontSize: 13, fontWeight: 600, color: '#e6edf3' }}>{providerLabel(p.provider)}</span>
+              {p.trusted ? (
+                <span style={chipStyle('#3fb95026', '#238636', '#3fb950')}>trusted · {p.samples} samples</span>
+              ) : (
+                <span style={chipStyle('#d2992226', '#9e6a03', '#d29922')}>{p.samples}/5 samples</span>
+              )}
+              {p.model && (
+                <span style={{ fontSize: 11, color: '#6e7681', fontFamily: "'SFMono-Regular', Consolas, monospace", marginLeft: 'auto' }}>
+                  {p.model.length > 30 ? p.model.slice(0, 27) + '…' : p.model}
+                </span>
+              )}
+            </div>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
+              <div style={{ width: 70, fontSize: 11, color: '#8b949e' }}>
+                win {pct(p.winRate, 0)}
+              </div>
+              <ScoreBar
+                value={p.winRate}
+                color={p.winRate >= 0.5 ? '#3fb950' : '#f85149'}
+              />
+              <div style={{ width: 74, fontSize: 11, color: '#8b949e', textAlign: 'right' }}>
+                factor <span style={{ color: p.trusted && p.factor !== 1 ? '#58a6ff' : '#6e7681', fontFamily: "'SFMono-Regular', Consolas, monospace" }}>
+                  {p.factor.toFixed(2)}×
+                </span>
+              </div>
+            </div>
+          </div>
+        ))}
+      </div>
+
+      <div style={{ fontSize: 11, color: '#6e7681', marginTop: 12 }}>
+        Enabled with <code style={{ color: '#58a6ff' }}>buff config set routing.mlRouter true</code> — the factor only
+        adjusts scores when the provider has ≥ 5 similar-task wins (cold start is neutral).
+      </div>
+    </SectionCard>
+  );
+}
+
 // ─── Best Model per Agent ───────────────────────────────────────────────────
 
 function BestModelsSection({ routing }: { routing: RoutingInsights }) {
@@ -1049,6 +1127,7 @@ export default function RoutingInsightsPanel({ data }: { data: DashboardData | n
   const hasWalkthrough = !!routing && (routing.history?.length ?? 0) > 0 || !!routing?.preference?.length;
   const hasBandit = !!routing?.bandit?.enabled;
   const hasPromotion = !!routing?.promotion?.decisionCount;
+  const hasMl = !!routing?.ml?.enabled && (routing.ml.recordCount ?? 0) > 0;
   const hasQuota = !!routing?.quota?.enabled;
   const hasRetrieval = !!routing?.retrieval?.enabled || !!routing?.retrieval?.repoChunks;
   const hasGovernance = !!routing?.governance;
@@ -1063,7 +1142,7 @@ export default function RoutingInsightsPanel({ data }: { data: DashboardData | n
         <code>buff benchmark</code> and use Auto routing to build this up over time.
       </p>
 
-      {!hasAny && !hasUsage && !hasHistory && !hasBandit && !hasPromotion && !hasQuota && !hasRetrieval && !hasGovernance && !hasRbac ? (
+      {!hasAny && !hasUsage && !hasHistory && !hasBandit && !hasPromotion && !hasMl && !hasQuota && !hasRetrieval && !hasGovernance && !hasRbac ? (
         <EmptyNote />
       ) : (
         <>
@@ -1074,6 +1153,7 @@ export default function RoutingInsightsPanel({ data }: { data: DashboardData | n
           {hasHistory && <AuditTimelineSection history={routing!.history!} />}
           {hasBandit && <BanditSection bandit={routing!.bandit!} />}
           {hasPromotion && <PromotionGateSection promotion={routing!.promotion!} />}
+          {hasMl && routing!.ml && <MlSection ml={routing!.ml} />}
           {hasQuota && <QuotaSection quota={routing!.quota!} />}
           {hasRetrieval && <RetrievalSection retrieval={routing!.retrieval!} />}
           <PreferenceSection routing={routing!} />

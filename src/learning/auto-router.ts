@@ -42,7 +42,8 @@ import { getTaskType, type TaskType } from './model-router.js';
 import { getBenchmarkRuns } from './benchmark.js';
 import { getAgentStats } from './agent-stats.js';
 import { getRouterBandit, DEFAULT_MIN_SAMPLES, type BanditOutcome } from './router-bandit.js';
-import { getRouterPromotion, type ParallelPick } from './router-promotion.js';
+import { getRouterPromotion, type ParallelPick, DEFAULT_MIN_PROMOTION_DECISIONS } from './router-promotion.js';
+import { getMlRouter, DEFAULT_ML_K, DEFAULT_ML_MIN_SAMPLES, DEFAULT_ML_STRENGTH } from './ml-router.js';
 import { getModelRegistry } from './model-registry.js';
 import { estimateTokens } from './cost-tracker.js';
 import { preferredModelsFor, PROVIDER_CONTEXT_WINDOWS } from './model-selection.js';
@@ -184,6 +185,31 @@ export interface AutoRouterOptions {
    */
   useBandit?: boolean;
   /**
+   * Enable the ML task-similarity router (ruflo neural-router analog). Each
+   * candidate's score is multiplied by a learned factor derived from the
+   * k most similar PAST TASKS' outcomes (feature-hashed cosine similarity),
+   * generalizing across complexity buckets by text similarity — the capability
+   * the per-bucket bandit cannot express. Cold start = factor 1.0 (neutral);
+   * min-samples guarded; strength-clamped. Opt-in: `routing.mlRouter`.
+   */
+  useMlRouter?: boolean;
+  /** k nearest neighbors for the ML router (default DEFAULT_ML_K = 8). */
+  mlK?: number;
+  /** Min neighbor samples before a provider's ML factor counts (default 5). */
+  mlMinSamples?: number;
+  /** ML blend strength: factor = 1 + strength × (winRate − 0.5) (default 0.5). */
+  mlStrength?: number;
+  /**
+   * Promotion-gate enforcement (ruflo promotion discipline). When true and the
+   * gate has SUFFICIENT diverged A/B data and the bandit is NOT promoted, the
+   * bandit multiplier is skipped for selection (the deterministic heuristic
+   * ranking is used) — a learned layer must PROVE it beats the incumbent
+   * before it is allowed to change picks. Opt-in: `routing.promotionEnforce`.
+   */
+  enforcePromotion?: boolean;
+  /** Min diverged decisions before enforcement judges (default 20). */
+  promotionMinDecisions?: number;
+  /**
    * Minimum accumulated samples (α+β) before a provider's bandit prior counts
    * as "learned". When the bandit's winner has FEWER samples, routing escalates
    * to the next-ranked provider that HAS learned data (uncertainty-driven
@@ -263,8 +289,10 @@ export interface RoutingRule {
 /**
  * How a decision was produced — the router's auditability field.
  * Mirrors ruflo's `routedBy` (heuristic | hybrid | bandit-fallback).
+ * 'bandit-gated' = the bandit was learned but the promotion gate blocked it
+ * from changing picks (enforcement mode — the heuristic won).
  */
-export type RoutedBy = 'heuristic' | 'rule' | 'bandit';
+export type RoutedBy = 'heuristic' | 'rule' | 'bandit' | 'bandit-gated';
 
 /** Per-provider score breakdown. */
 export interface ScoredProvider {
@@ -1499,6 +1527,62 @@ export class AutoModelRouter {
           }
         }
       }
+
+      // ── Promotion-gate enforcement (ruflo promotion discipline) ──────────
+      // The bandit may LEARN and RECORD always, but when enforcement is on and
+      // the gate has enough diverged A/B data to judge, the bandit is only
+      // ALLOWED to change picks if it has PROVEN itself (promoted). A failing
+      // bandit falls back to the deterministic heuristic ranking — a learned
+      // layer must beat the incumbent before it can steer decisions. The
+      // trajectory keeps recording so a future promotion re-enables it.
+      if (options.enforcePromotion) {
+        const minDecisions = options.promotionMinDecisions ?? DEFAULT_MIN_PROMOTION_DECISIONS;
+        const gate = getRouterPromotion().evaluate(minDecisions);
+        if (gate.sufficient && !gate.promoted) {
+          scored = [...deterministicRanking];
+          routedBy = 'bandit-gated';
+          banditEscalation = false;
+          escalatedProvider = undefined;
+          if (options.verbose) {
+            logger.warn(
+              `  🚦 Promotion gate: bandit NOT promoted (quality Δ ${(gate.qualityDelta * 100).toFixed(1)}%, cost Δ ${(gate.costDelta * 100).toFixed(1)}%) — using the deterministic heuristic pick.`,
+            );
+          }
+        }
+      }
+    }
+
+    // ── ML task-similarity blend (ruflo neural-router analog) ──────────────
+    // The bandit learns per provider × complexity bucket; the ML router learns
+    // per TASK FEATURES — "tasks that LOOK like this one succeeded on provider
+    // X". The learned factor multiplies each candidate's (post-bandit) score;
+    // cold start (no similar tasks) is neutral 1.0, min-samples guarded, and
+    // strength-clamped so it can never overturn a large deterministic edge.
+    if (options.useMlRouter) {
+      const ml = getMlRouter();
+      const learned = ml.learnedScores(taskDescription, scored.map((s) => s.provider), {
+        k: options.mlK ?? DEFAULT_ML_K,
+        minSamples: options.mlMinSamples ?? DEFAULT_ML_MIN_SAMPLES,
+        strength: options.mlStrength ?? DEFAULT_ML_STRENGTH,
+        complexity,
+        intent: analyzedProfile.intent,
+      });
+      let mlAdjusted = false;
+      scored = scored.map((s) => {
+        const l = learned.get(s.provider);
+        if (l?.trusted && l.factor !== 1) {
+          mlAdjusted = true;
+          return { ...s, score: s.score * l.factor, reason: `${s.reason} | ml: ${(l.winRate * 100).toFixed(0)}% win (${l.samples} similar)` };
+        }
+        return s;
+      });
+      scored.sort((a, b) => {
+        if (a.inCooldown !== b.inCooldown) return a.inCooldown ? 1 : -1;
+        return b.score - a.score;
+      });
+      if (mlAdjusted && options.verbose) {
+        logger.info(`  🧠 ML router: adjusted scores from ${ml.size()} learned task(s)`);
+      }
     }
 
     // Pick the best candidate that is not in cooldown and not quota-parked
@@ -1732,6 +1816,26 @@ export class AutoModelRouter {
       getRouterPromotion().recordOutcome(agentType, taskDescription, outcome, outcomeData);
     } catch {
       // Best-effort — never break outcome recording on a promotion error.
+    }
+
+    // ML task-similarity router: record the same outcome as a feature vector
+    // so the kNN layer learns "tasks like THIS succeed on provider X". Same
+    // text-derived intent/complexity bucketing as the bandit for consistency.
+    try {
+      const intent = analyzeTaskProfile(taskDescription).intent;
+      const learnComplexity: ComplexityLevel = complexityHint ?? analyzeComplexity(taskDescription);
+      getMlRouter().record(
+        taskDescription,
+        provider,
+        model ?? 'default',
+        outcome,
+        costScore,
+        agentType,
+        learnComplexity,
+        intent,
+      );
+    } catch {
+      // Best-effort — ML recording must never break outcome handling.
     }
   }
 

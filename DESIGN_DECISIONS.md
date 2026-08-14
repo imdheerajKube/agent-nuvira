@@ -77,6 +77,8 @@ Each decision carries:
 32. The weak-model prompt — human-in-the-loop, opt-in (routing.promptOnWeakModel) (v1.69.0)
 33. The runner carries the project into the build — packaging-aware steps, reference docs, deterministic package fallback (v1.69.0)
 34. Missing system tools are installed with user consent — OS-appropriate recipes, approval prompt, then continue (v1.69.0)
+35. ML task-similarity routing + promotion-gate enforcement — closing the ruflo neural-router gap (v1.71.0)
+36. Quota awareness is a veto filter, not a selector — the single resolve pipeline (v1.71.0)
 
 ---
 
@@ -1182,3 +1184,162 @@ already auto-managed), `brew install`/`apt-get install` changes the system.
 Enterprise tooling must never do that without the user's explicit approval,
 and must always leave a clear manual path when it cannot complete the install
 itself.
+
+---
+
+## 35. ML task-similarity routing + promotion-gate enforcement — closing the ruflo neural-router gap (v1.71.0)
+
+**Observed (the honest gap):** the v1.68/v1.69 router upgrade mirrored ruflo's
+(omniroute) architecture on three axes — uncertainty escalation,
+Thompson-sampling bandit learning, and an A/B promotion gate — but the
+comparison left two edges open vs ruflo's design:
+
+1. **No task-similarity generalization.** The bandit learns per
+   provider × complexity-bucket. It cannot say "tasks that LOOK like this
+   task succeeded on provider X" — a capability ruflo gets from its
+   neural router (KNN/FastGRNN over task embeddings).
+2. **The promotion gate was advisory, not enforced.** `buff model bandit`
+   could report "the bandit has NOT proven itself" — but a failing bandit
+   could still change picks at runtime. ruflo refuses to promote without the
+   criteria passing; we never blocked steering.
+
+**Fix (v1.71.0) — two layers, both built on what already shipped:**
+
+1. **ML task-similarity router (`src/learning/ml-router.ts`)** — a pure-TS,
+   zero-dependency analog of ruflo's neural router that rides the SAME
+   `resolve()` pipeline and SAME `recordOutcome()` feed as the bandit:
+   - **Feature extraction:** task text is lowercased, tokenized, and hashed
+     (FNV-1a) into a 256-dim sparse binary vector; a 64-dim one-hot tail
+     hashes complexity + intent so the similarity signal carries the exact
+     same bucketing the bandit learns by (select-time and record-time buckets
+     always match — the same lesson as the bandit's intent-aware v3).
+   - **Learning:** every real outcome is persisted as a feature vector in
+     `~/.buff/memory/ml-router.jsonl` (honors `BUFF_MEMORY_DIR`, capped at
+     MAX_RECORDS=5000, oldest trimmed, best-effort writes).
+   - **Resolve-time blend:** cosine similarity to all records → top-k
+     neighbors (default k=8) → per-provider similarity-weighted win rate
+     ('escalated' counts as a half-win, same convention as the bandit) →
+     learned factor `1 + strength × (winRate − 0.5)` → the factor multiplies
+     each candidate's (post-bandit) score, then re-sorts. The reason string
+     gains an `ml:` tag so the audit trail explains the nudge.
+2. **Promotion-gate enforcement (`src/learning/auto-router.ts`)** — when
+   `routing.promotionEnforce` is on AND the gate has SUFFICIENT diverged A/B
+   data (≥ `promotionMinDecisions`, default 20) AND the bandit is NOT
+   promoted, the bandit's picks are replaced by the deterministic heuristic
+   ranking (`routedBy: 'bandit-gated'`), and escalation is cancelled. The
+   bandit KEEPS learning and recording while gated — the trajectory must keep
+   accumulating so a future promotion re-enables it. A learned layer must
+   prove itself before it steers.
+
+**Config surface (all opt-in, all default-off):**
+- `routing.mlRouter` (true/false) — enable the ML blend; `mlK` (default 8),
+  `mlMinSamples` (default 5), `mlStrength` (default 0.5)
+- `routing.promotionEnforce` (true/false) — enable the gate to block a
+  non-promoted bandit; `promotionMinDecisions` (default 20)
+- Config keys validated in `buff config set routing.*`; unknown keys rejected.
+
+**Observability:**
+- `buff model ml` — shows learned-record count, enabled state, and the
+  per-provider win rates/factors currently influencing picks (plus `--json`)
+- `buff model bandit` — shows the promotion gate status (the criteria deltas,
+  diverged sample count, promoted yes/no) so the enforcement decision is
+  always explainable
+
+**Design rules and WHY (the reasoning that shipped):**
+1. **Cold start is NEUTRAL (factor 1.0).** With zero records the ML router
+   must reproduce today's deterministic picks exactly — a learning feature
+   must never change behavior out of the box. It only engages after the user
+   opts in AND real outcomes accumulate.
+2. **Min-samples guard (5).** A provider needs ≥ 5 similar-task neighbors
+   before its win rate is trusted; below that the factor stays 1.0. A 1–2
+   sample win rate is noise, not signal.
+3. **Strength-clamped (±25% at default strength 0.5).** A raw win rate can
+   only nudge scores by `strength × (winRate − 0.5)`. The ML layer can never
+   overturn a large deterministic edge on its own — it refines, it doesn't
+   override. This is the same conservatism the bandit's cold-start
+   Beta(1,1) sampling already guarantees.
+4. **One learning pipeline, two views.** `recordOutcome()` feeds the bandit
+   AND the ML router from the same outcome — no extra plumbing, no divergent
+   attribution between the two learned layers, and both generalize in
+   complementary dimensions (per-bucket vs per-task-features).
+5. **Why pure hashing + cosine instead of real ML (FastGRNN/KNN)?** ruflo
+   needs a Python runtime for its neural router; this package is
+   zero-native-dependency by design (decision 12). FNV-1a hashing + cosine is
+   sub-ms at 5000 records, deterministic across runs, fully offline, and
+   needs no model download — it delivers the same "generalize across
+   complexity buckets by task similarity" capability without the runtime.
+6. **Why enforcement is opt-in, not default:** the bandit's per-bucket
+   learning is mature and already shipped default-on; flipping enforcement on
+   by default would change routing behavior for existing users overnight. The
+   gate's job is discipline when the operator wants it (ruflo parity), not
+   surprise.
+7. **Why the gate blocks but never deletes learning:** a gated bandit keeps
+   sampling and recording so the promotion criteria accumulate on real
+   trajectories — the moment it crosses the +2% quality / <+1% cost / <+5%
+   latency thresholds, enforcement lifts automatically.
+
+**Live verification:** 13 new tests — 8 unit tests on the ML router
+(deterministic hashing, similar-tasks-land-closer, complexity/intent tail,
+cold-start neutrality, min-samples trust, strength clamp, persistence across
+restart, reset) and 5 resolve-level integration tests (ML nudge changes the
+pick with an `ml:` reason, cold-start no-op, gate blocks a failing bandit with
+`routedBy: 'bandit-gated'`, gate allows with insufficient data, gate allows a
+promoted bandit). Full suite: 4467/4467 green, typecheck clean.
+
+---
+
+## 36. Quota awareness is a veto filter, not a selector — the single resolve pipeline (v1.71.0)
+
+**Observed (assessment question):** "we have an omni-route style quota-aware
+router that makes a final selection — is that right?" A third-party (Copilot)
+suggestion described a four-layer "Hybrid Dispatcher" — ML embeddings
+front-end, routing gateway, resilience layer (quota ledger / fallback /
+circuit breaker / context relay), analytics dashboard. Both prompted a code
+audit to pin down, precisely, what role quota awareness plays in selection.
+
+**Finding (verified against `src/learning/auto-router.ts`, `quota-ledger.ts`):**
+quota awareness is a genuine, deep part of routing — but it is a **veto filter,
+NOT a selection stage**. There is ONE integrated `resolve()` pipeline; the
+layers stack in order:
+
+1. Deterministic weighted scorer (cost/speed/quality/capability-fit/context-fit)
+   + hard governance constraints (`maxCostUsd`, `minSpeed`, `minReasoning`,
+   allow/deny lists)
+2. Circuit-breaker cooldowns → `inCooldown`
+3. Quota-ledger status (`getRouterQuotaStatus`) → exhausted providers
+   `quotaParked`
+4. Bandit learning (Thompson sampling, provider × complexity × intent)
+5. Escalation + promotion-gate enforcement (decision 35)
+6. ML task-similarity blend (decision 35)
+7. **Final pick:** `scored.find(s => !s.inCooldown && !s.quotaParked) || scored[0]`
+
+So quota EXCLUDES exhausted providers before the pick; the scorer/learning
+selects among the healthy remainder. If every provider is parked, the
+best-scored candidate is still chosen — degraded but functional, and the
+orchestrator's failover runner then handles the actual call failure.
+
+**Why filter-not-selector is the right design (reasoning):**
+1. **Selection is a quality/cost judgment; quota is a constraint.** A selector
+   must weigh quality vs cost vs latency — the scorer's job. Quota only says
+   "this candidate is unavailable right now"; conflating the two would let a
+   cheap-but-dead provider win on price alone, or let a parked one win by
+   ignoring constraints. Separation keeps each layer single-purpose.
+2. **Predictive, not reactive.** Because the ledger sinks parked providers
+   BEFORE a call is attempted, we never waste a request on a dead provider —
+   the omni-route philosophy. Reactive-only handling (try, fail, retry) is
+   what the circuit breaker + failover exist for as the SECOND line.
+3. **Calendar-aware, not arbitrary.** `rotateWindow` zeros counters exactly at
+   the provider's real reset boundary (daily/hourly free tiers), so a parked
+   provider auto re-enables the moment its quota returns — no fixed timers,
+   no manual intervention.
+4. **Multi-account rotation (M2.3)** is the escape hatch within the filter:
+   when one KEY of a provider is exhausted, the ledger's `AccountState` lets
+   failover rotate to another key of the SAME provider before switching
+   providers — preserving continuity and often the free tier.
+
+**External validation:** the Copilot "Hybrid Dispatcher" suggestion is
+essentially a description of the architecture already built (ML scoring,
+ledger + audit reasons, quota ledger + fallback + circuit breaker + context
+relay, cost/token dashboards). The audit confirmed each layer exists in code;
+the only open item is surfacing routing-accuracy + fallback-frequency metrics
+on the web dashboard. Recorded in full in ROUTER_COMPARISON.md §8.

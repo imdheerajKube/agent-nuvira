@@ -36,6 +36,18 @@ export function buildAutoResolveOptions(
     // set routing.bandit false`). Cold start is deterministic (Beta(1,1)
     // samples the mean), so this never randomizes an unlearned ranking.
     useBandit: routing.bandit !== false,
+    // ML task-similarity router — opt-in (`routing.mlRouter`). Off by default;
+    // when enabled it rides the SAME resolve options as every other feature so
+    // no action point gets a degraded experience.
+    useMlRouter: routing.mlRouter === true,
+    mlK: routing.mlK,
+    mlMinSamples: routing.mlMinSamples,
+    mlStrength: routing.mlStrength,
+    // Promotion-gate enforcement — opt-in (`routing.promotionEnforce`). A
+    // learned layer must prove itself (promotion criteria) before it can
+    // change picks.
+    enforcePromotion: routing.promotionEnforce === true,
+    promotionMinDecisions: routing.promotionMinDecisions,
     maxCostUsd: routing.maxCostUsd,
     minSpeed: routing.minSpeed,
     minReasoning: routing.minReasoning,

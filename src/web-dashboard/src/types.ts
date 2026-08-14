@@ -378,6 +378,12 @@ export interface RoutingInsights {
   bandit?: BanditInsights;
   /** Promotion-gate verdict — is the bandit actually better than the heuristic? */
   promotion?: PromotionInsights;
+  /**
+   * ML task-similarity router state (v1.71.0, ruflo neural-router analog) —
+   * learned per-provider win rates/factors from similar past tasks. Optional:
+   * absent when the server predates the feature.
+   */
+  ml?: MlInsights;
   /** Central quota-ledger status (tokens/requests per provider × model) */
   quota?: QuotaInsights;
   /**
@@ -567,6 +573,28 @@ export interface BanditInsights {
     reward: number;
     timestamp: string;
   }>;
+  updatedAt: number;
+}
+
+export interface MlProviderInsight {
+  provider: string;
+  /** Number of similar-task records for this provider. */
+  samples: number;
+  /** Empirical win rate among those records (0–1); escalated counts half. */
+  winRate: number;
+  /** Learned multiplier: 1 + strength × (winRate − 0.5); 1.0 = neutral. */
+  factor: number;
+  /** True when samples >= minSamples — the factor is trustworthy. */
+  trusted: boolean;
+  model?: string;
+}
+
+export interface MlInsights {
+  enabled: boolean;
+  /** Total learned records in ml-router.jsonl. */
+  recordCount: number;
+  /** Per-provider learned state, most-sampled first. */
+  providers: MlProviderInsight[];
   updatedAt: number;
 }
 

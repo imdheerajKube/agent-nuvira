@@ -10,7 +10,7 @@
 import { describe, it, expect } from 'vitest';
 import { render, screen } from '@testing-library/react';
 import RoutingInsightsPanel, { RbacSection } from './RoutingInsightsPanel';
-import type { DashboardData, GovernanceInsights, PromotionInsights, RbacInsights } from '../types';
+import type { DashboardData, GovernanceInsights, MlInsights, PromotionInsights, RbacInsights } from '../types';
 
 // ─── Helpers ────────────────────────────────────────────────────────────────
 
@@ -307,5 +307,54 @@ describe('RbacSection (P6 M6.1)', () => {
       updatedAt: Date.now(),
     })} />);
     expect(screen.getByText(/RBAC Identity/)).toBeTruthy();
+  });
+});
+
+// ─── v1.71.0 ML task-similarity router card ─────────────────────────────────
+
+describe('MlSection (via RoutingInsightsPanel)', () => {
+  function makeMlData(ml?: MlInsights): DashboardData {
+    return {
+      routing: {
+        providers: [],
+        bestModels: [],
+        preference: [],
+        ml,
+        updatedAt: Date.now(),
+      },
+    } as unknown as DashboardData;
+  }
+
+  it('renders learned state — record count, trusted vs learning providers, win rates', () => {
+    const ml: MlInsights = {
+      enabled: true,
+      recordCount: 42,
+      providers: [
+        { provider: 'groq', samples: 18, winRate: 0.85, factor: 1.175, trusted: true, model: 'llama-3.3-70b' },
+        { provider: 'gemini', samples: 3, winRate: 0.4, factor: 0.95, trusted: false, model: 'gemini-2.0-flash' },
+      ],
+      updatedAt: Date.now(),
+    };
+    render(<RoutingInsightsPanel data={makeMlData(ml)} />);
+
+    expect(screen.getByText('ML Router — learned from similar tasks')).toBeTruthy();
+    expect(screen.getByText('42')).toBeTruthy();
+    expect(screen.getByText('learned tasks')).toBeTruthy();
+    expect(screen.getByText('trusted providers')).toBeTruthy();
+    expect(screen.getByText('still learning')).toBeTruthy();
+    expect(screen.getByText(/trusted · 18 samples/)).toBeTruthy();
+    expect(screen.getByText(/3\/5 samples/)).toBeTruthy();
+    expect(screen.getByText(/85%/)).toBeTruthy();
+    expect(screen.getByText(/1\.1\d×/)).toBeTruthy(); // 0.85 winRate → factor 1.175 → "1.18×"
+  });
+
+  it('hides the ML card entirely when there are no learned records', () => {
+    render(<RoutingInsightsPanel data={makeMlData({ enabled: false, recordCount: 0, providers: [], updatedAt: Date.now() })} />);
+    expect(screen.queryByText('ML Router — learned from similar tasks')).toBeNull();
+  });
+
+  it('hides the ML card when the server predates the feature (no ml field)', () => {
+    render(<RoutingInsightsPanel data={makeData(undefined)} />);
+    expect(screen.queryByText('ML Router — learned from similar tasks')).toBeNull();
   });
 });

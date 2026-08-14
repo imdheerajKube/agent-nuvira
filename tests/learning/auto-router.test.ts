@@ -42,6 +42,7 @@ import {
 } from '../../src/learning/auto-router.js';
 import { resetRouterBandit, getRouterBandit, DEFAULT_MIN_SAMPLES } from '../../src/learning/router-bandit.js';
 import { resetRouterPromotion, getRouterPromotion } from '../../src/learning/router-promotion.js';
+import { resetMlRouter, getMlRouter } from '../../src/learning/ml-router.js';
 import { resetModelRegistry, getModelRegistry } from '../../src/learning/model-registry.js';
 import { PROVIDER_CONTEXT_WINDOWS } from '../../src/learning/model-selection.js';
 import { CATALOG_PROVIDER_IDS } from '../../src/inference/provider-catalog.js';
@@ -2063,12 +2064,171 @@ describe('singleton', () => {
 
   it('getAutoRouter returns the same instance on repeated calls', () => {
     expect(getAutoRouter()).toBe(getAutoRouter());
-  });
-
-  it('resetAutoRouter creates a new instance on next call', () => {
+  });  it('resetAutoRouter creates a new instance on next call', () => {
     const a = getAutoRouter();
     resetAutoRouter();
     const b = getAutoRouter();
     expect(a).not.toBe(b);
+  });
+
+});
+
+// ─── ML task-similarity router (ruflo neural-router analog) ───────────────
+
+describe('AutoModelRouter.resolve — ML task-similarity blend', () => {
+  let mlDir: string;
+
+  beforeEach(() => {
+    mlDir = mkdtempSync(join(tmpdir(), 'buff-autorouter-ml-'));
+    process.env.BUFF_MEMORY_DIR = mlDir;
+    resetMlRouter();
+  });
+
+  afterEach(() => {
+    delete process.env.BUFF_MEMORY_DIR;
+    resetMlRouter();
+    resetRouterBandit();
+    resetRouterPromotion();
+    rmSync(mlDir, { recursive: true, force: true });
+  });
+
+  function makeConfig(routing?: Record<string, unknown>, providers: Record<string, { model?: string }> = {}) {
+    return {
+      getAll: vi.fn(() => ({ pricing: {}, routing: routing || {}, providers })),
+      hasRequiredCredentials: vi.fn(() => true),
+      getProviderConfig: vi.fn((p: string) => ({ config: providers[p] || {} })),
+    } as any;
+  }
+
+  it('ML blend nudges a provider that succeeded on similar tasks', () => {
+    const router = new AutoModelRouter();
+    const ml = getMlRouter();
+    // Learn: groq wins on login-form-like tasks, gemini loses there.
+    for (let i = 0; i < 8; i++) {
+      ml.record('implement JWT authentication with refresh tokens', 'groq', 'llama-3.3-70b', 'success', 0.85, 'writer', 'moderate', 'coding');
+    }
+    for (let i = 0; i < 8; i++) {
+      ml.record('implement JWT authentication with refresh tokens', 'gemini', 'gemini-2.0-flash', 'failure', 0.4, 'writer', 'moderate', 'coding');
+    }
+
+    const decision = router.resolve('writer', 'implement JWT auth with refresh token rotation', {
+      allowedProviders: ['groq', 'gemini'],
+      useMlRouter: true,
+      mlMinSamples: 5,
+    }, makeConfig());
+
+    // groq's learned factor pushed it above any gemini edge on this family.
+    expect(decision.provider).toBe('groq');
+    // The reason reflects the ML adjustment.
+    const row = decision.ranked.find((r) => r.provider === 'groq')!;
+    expect(row.reason).toContain('ml:');
+  });
+
+  it('ML blend is a no-op on cold start (no learned data → neutral)', () => {
+    const router = new AutoModelRouter();
+    const decision = router.resolve('writer', 'implement JWT auth', {
+      allowedProviders: ['groq', 'gemini'],
+      useMlRouter: true,
+    }, makeConfig());
+    // No data → no ML reasons anywhere, picks are purely deterministic.
+    for (const r of decision.ranked) {
+      expect(r.reason).not.toContain('ml:');
+    }
+  });
+});
+
+// ─── Promotion-gate enforcement (ruflo promotion discipline) ───────────────
+
+describe('AutoModelRouter.resolve — promotion-gate enforcement', () => {
+  let promoDir: string;
+
+  beforeEach(() => {
+    promoDir = mkdtempSync(join(tmpdir(), 'buff-autorouter-promo-'));
+    process.env.BUFF_MEMORY_DIR = promoDir;
+    resetRouterBandit();
+    resetRouterPromotion();
+  });
+
+  afterEach(() => {
+    delete process.env.BUFF_MEMORY_DIR;
+    resetRouterBandit();
+    resetRouterPromotion();
+    rmSync(promoDir, { recursive: true, force: true });
+  });
+
+  function makeConfig(routing?: Record<string, unknown>, providers: Record<string, { model?: string }> = {}) {
+    return {
+      getAll: vi.fn(() => ({ pricing: {}, routing: routing || {}, providers })),
+      hasRequiredCredentials: vi.fn(() => true),
+      getProviderConfig: vi.fn((p: string) => ({ config: providers[p] || {} })),
+    } as any;
+  }
+
+  it('blocks the bandit from changing picks when the gate has sufficient data and the bandit FAILS', () => {
+    const router = new AutoModelRouter();
+    const gate = getRouterPromotion();
+
+    // Build a trajectory where the bandit DIVERGED and LOST (heuristic won more).
+    // Record diverged decisions: heuristic pick succeeded, bandit pick failed.
+    for (let i = 0; i < 25; i++) {
+      gate.noteParallelDecision(
+        'writer',
+        `task-${i}`,
+        { provider: 'groq', model: 'llama-3.3-70b', predictedQuality: 0.7, predictedCostUsd: 0.001, estimatedLatencyMs: 100 },
+        { provider: 'gemini', model: 'gemini-2.0-flash', predictedQuality: 0.9, predictedCostUsd: 0.05, estimatedLatencyMs: 400 },
+      );
+      gate.recordOutcome('writer', `task-${i}`, 'success', {});
+    }
+
+    const status = gate.evaluate(20);
+    expect(status.sufficient).toBe(true);
+    expect(status.promoted).toBe(false); // quality up but cost exploded → fail
+
+    const decision = router.resolve('writer', 'implement a login form', {
+      allowedProviders: ['groq', 'gemini'],
+      useBandit: true,
+      enforcePromotion: true,
+      promotionMinDecisions: 20,
+    }, makeConfig());
+
+    // Enforcement kicked in: the deterministic heuristic ranking was used.
+    expect(decision.routedBy).toBe('bandit-gated');
+  });
+
+  it('lets the bandit through when the gate has insufficient data (not yet judgeable)', () => {
+    const router = new AutoModelRouter();
+    const decision = router.resolve('writer', 'implement a login form', {
+      allowedProviders: ['groq', 'gemini'],
+      useBandit: true,
+      enforcePromotion: true,
+      promotionMinDecisions: 20,
+    }, makeConfig());
+    // No trajectory → not sufficient → bandit allowed.
+    expect(decision.routedBy).toBe('bandit');
+  });
+
+  it('lets the bandit through when the gate is sufficient AND the bandit is promoted', () => {
+    const router = new AutoModelRouter();
+    const gate = getRouterPromotion();
+    // Bandit diverged and WON every time (quality up, cost down).
+    for (let i = 0; i < 25; i++) {
+      gate.noteParallelDecision(
+        'writer',
+        `task-${i}`,
+        { provider: 'gemini', model: 'gemini-2.0-flash', predictedQuality: 0.7, predictedCostUsd: 0.05, estimatedLatencyMs: 400 },
+        { provider: 'groq', model: 'llama-3.3-70b', predictedQuality: 0.9, predictedCostUsd: 0.001, estimatedLatencyMs: 100 },
+      );
+      gate.recordOutcome('writer', `task-${i}`, 'success', {});
+    }
+    const status = gate.evaluate(20);
+    expect(status.promoted).toBe(true);
+
+    const decision = router.resolve('writer', 'implement a login form', {
+      allowedProviders: ['groq', 'gemini'],
+      useBandit: true,
+      enforcePromotion: true,
+      promotionMinDecisions: 20,
+    }, makeConfig());
+    expect(decision.routedBy).toBe('bandit');
   });
 });

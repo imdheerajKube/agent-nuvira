@@ -35,6 +35,7 @@ import { diffRoutingDecisions, formatDecisionDiff } from '../learning/decision-d
 import { getRouterBandit, COMPLEXITY_BUCKETS, } from '../learning/router-bandit.js';
 import { getQuotaLedger } from '../learning/quota-ledger.js';
 import { getRouterPromotion, DEFAULT_MIN_PROMOTION_DECISIONS, } from '../learning/router-promotion.js';
+import { getMlRouter } from '../learning/ml-router.js';
 import { logger } from '../utils/logger.js';
 const BUFF_DIR = join(homedir(), '.buff');
 const ACTIVE_MODEL_PATH = join(BUFF_DIR, 'active-model.json');
@@ -171,6 +172,11 @@ export class ModelCommand extends BaseCommand {
             .description('Show learning-router bandit state (Thompson-sampling priors per provider × complexity bucket). Action: reset')
             .option('-j, --json', 'Output as JSON (for scripting and CI)', false)
             .action((action, opts) => this.showBandit(action, opts));
+        cmd
+            .command('ml [action]')
+            .description('Show the ML task-similarity router state (learned outcomes per provider, kNN over task features). Action: reset')
+            .option('-j, --json', 'Output as JSON (for scripting and CI)', false)
+            .action((action, opts) => this.showMl(action, opts));
         cmd
             .command('quota [action] [provider]')
             .description('Show the central quota ledger (tokens/requests per provider × model, reset windows, parked state). Actions: reset | set <provider> | clear <provider>')
@@ -1260,6 +1266,74 @@ export class ModelCommand extends BaseCommand {
             console.log('');
         }
         logger.info('Reset: `buff model bandit reset` · JSON: `buff model bandit --json`');
+        console.log('');
+    }
+    /** Show the ML task-similarity router state (`buff model ml`). */
+    showMl(action, opts) {
+        if (action === 'reset') {
+            getMlRouter().reset();
+            console.log('');
+            logger.success('✅ ML router state reset — all learned task outcomes cleared');
+            console.log('');
+            return;
+        }
+        if (action && action !== 'reset') {
+            logger.error(`Unknown ml action: ${action}. Use \`buff model ml\` to view or \`buff model ml reset\` to reset.`);
+            return;
+        }
+        const ml = getMlRouter();
+        const records = ml.all();
+        const enabled = this.configManager.getAll().routing?.mlRouter === true;
+        const enforce = this.configManager.getAll().routing?.promotionEnforce === true;
+        if (opts.json) {
+            console.log(JSON.stringify({
+                enabled,
+                promotionEnforce: enforce,
+                recordCount: ml.size(),
+                records: records.slice(-50).map((r) => ({
+                    provider: r.provider,
+                    model: r.model,
+                    outcome: r.outcome,
+                    agentType: r.agentType,
+                    complexity: r.complexity,
+                    intent: r.intent,
+                    ts: r.ts,
+                })),
+            }, null, 2));
+            return;
+        }
+        console.log('');
+        logger.highlight('═══  ML Task-Similarity Router  ═══');
+        console.log('');
+        logger.info(`  Enabled: ${enabled ? '✅ yes (routing.mlRouter)' : '⏸ no (default — enable with \`buff config set routing.mlRouter true\`)'}`);
+        logger.info(`  Promotion enforcement: ${enforce ? '✅ on (routing.promotionEnforce)' : '⏸ off (bandit always allowed — default)'}`);
+        logger.info(`  Learned outcomes: ${ml.size()} task(s) recorded`);
+        console.log('');
+        if (records.length === 0) {
+            logger.info('  No ML learning data yet. Every auto-routed task outcome is recorded as a feature vector');
+            logger.info('  once enabled; the kNN layer then nudges routing toward providers that succeeded on similar tasks.');
+            console.log('');
+            return;
+        }
+        // Per-provider outcome summary (all time).
+        const byProvider = new Map();
+        for (const r of records) {
+            const cur = byProvider.get(r.provider) || { wins: 0, fails: 0, total: 0 };
+            cur.total += 1;
+            if (r.outcome === 'success')
+                cur.wins += 1;
+            else if (r.outcome === 'failure')
+                cur.fails += 1;
+            byProvider.set(r.provider, cur);
+        }
+        logger.highlight('  ── Learned outcomes by provider ──');
+        console.log('');
+        for (const [provider, s] of [...byProvider.entries()].sort((a, b) => b[1].total - a[1].total)) {
+            const pct = s.total > 0 ? ((s.wins / s.total) * 100).toFixed(0) : '0';
+            console.log(`   ${provider.padEnd(14)} ${s.total.toString().padStart(3)} outcomes · ✅ ${s.wins} · ❌ ${s.fails} · win ${pct}%`);
+        }
+        console.log('');
+        logger.info('Reset: `buff model ml reset` · JSON: `buff model ml --json`');
         console.log('');
     }
     /** Render the promotion gate (bandit-vs-heuristic A/B verdict). */
