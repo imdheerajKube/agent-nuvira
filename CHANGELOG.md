@@ -2,6 +2,12 @@
 
 All notable changes to **Agent-Nuvira** are documented in this file.
 
+## v1.70.1 — One-command setup for new users
+
+- **Platform setup scripts** — `scripts/setup/install-macos.sh`, `install-linux.sh` (apt/dnf/yum/pacman/apk auto-detect), `install-windows.ps1` (winget): check for required tools (Node, npm, Git, build tools, brew/winget), install anything missing with confirmation, install Agent-Nuvira (npm 11 allow-scripts handled), then offer optional native FAISS + local embeddings with plain-English yes/no prompts
+- **README** — new "One-command setup for new users" section with copy-paste one-liners per OS + a "Local embeddings" tier table (local → Python → LLM)
+- **4,452 tests passing across 193 files**
+
 ## v1.70.0 — Enterprise delivery: weak-model control, build-aware runner, consent-gated tool install
 
 - **Weak-model control** — `routing.promptOnWeakModel` (opt-in): when a task can only run on a weak model, the user chooses **continue / wait / abort** instead of silent degradation

@@ -180,6 +180,37 @@ npm run build
 npm link
 ```
 
+### One-command setup for new users (recommended)
+
+If you're setting up on a **fresh machine** (or just don't want to deal with
+installing Node.js, Git, build tools, etc. by hand), use the platform setup
+script. Each one **checks for the required tools, installs anything missing
+for you, installs Agent-Nuvira, and then asks whether you want the optional
+performance upgrades** (native FAISS + local embeddings) — with plain-English
+prompts the whole way.
+
+| OS | Run this |
+|---|---|
+| **macOS** | `bash <(curl -fsSL https://raw.githubusercontent.com/imdheerajKube/agent-nuvira/main/scripts/setup/install-macos.sh)` |
+| **Linux** (Ubuntu/Debian/Fedora/RHEL/Arch/Alpine) | `bash <(curl -fsSL https://raw.githubusercontent.com/imdheerajKube/agent-nuvira/main/scripts/setup/install-linux.sh)` |
+| **Windows** (PowerShell) | `Set-ExecutionPolicy -ExecutionPolicy Bypass -Scope Process -Force; irm https://raw.githubusercontent.com/imdheerajKube/agent-nuvira/main/scripts/setup/install-windows.ps1 | iex` |
+
+What each script does:
+
+1. **Detects what's missing** — Node.js, npm, Git, build tools (and Homebrew on
+   macOS / `winget` on Windows), and installs them automatically (with your
+   confirmation) using the right installer for your OS.
+2. **Installs Agent-Nuvira** — `npm install -g agent-nuvira` (with npm 11's
+   install-script security gate handled automatically so native components build).
+3. **Asks about optional upgrades** (recommended, each a yes/no):
+   - **Native FAISS** → faster semantic search / memory recall
+   - **Local embeddings** → free, offline, private embeddings (no cloud call)
+4. **Verifies** the install and prints next steps.
+
+> The scripts are safe to re-run — they skip tools that are already present.
+> Manual install instructions for every step are below for those who prefer
+> full control.
+
 ### Native FAISS acceleration (optional, recommended)
 
 Agent-Nuvira includes an optional native FAISS backend for faster semantic retrieval. The runtime prefers this backend automatically when the native addon can build successfully; if that path is unavailable, it falls back to the pure-JS IVF implementation and then the exact JSON backend so your workflow stays reliable.
@@ -236,6 +267,26 @@ identical to the JSON backend. Filter-aware probe expansion ensures that
 metadata filters don't miss results.
 
 If the native addon cannot be built on your machine, Agent-Nuvira will continue to work using the pure-JS fallback path.
+
+### Local embeddings (optional, recommended)
+
+Semantic search and memory recall use embeddings. Agent-Nuvira's embedder has a
+3-tier strategy and **always prefers the local tier when it works**:
+
+| Tier | Engine | Notes |
+|---|---|---|
+| **1 — Local** | `@huggingface/transformers` (`onnxruntime-node`) | Free, offline, private — `Xenova/all-MiniLM-L6-v2` (384-dim). **Default when available** |
+| **2 — Python** | `sentence-transformers` via subprocess | Used when Tier 1 is unavailable and Python is present |
+| **3 — LLM** | Any configured inference provider | Last-resort fallback; costs tokens |
+
+With `@huggingface/transformers` installed and its native binary present, no
+configuration is needed — local embeddings are used automatically, offline,
+with zero API cost. The one-command setup scripts above enable this for you.
+To verify which tier is active, run:
+
+```bash
+agent-nuvira memory backend --check
+```
 
 ### Verify
 
