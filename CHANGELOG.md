@@ -2,6 +2,11 @@
 
 All notable changes to **Agent-Nuvira** are documented in this file.
 
+## v1.70.2 — Weak-model prompt fix: the user can finally choose
+
+- **Weak-model decision prompt is now actually interactive** — the inquirer choices (continue / wait / abort) rendered but every keystroke was swallowed by the live pipeline board's raw-mode stdin handler, so the user could never select and the single-shot session exited on the weak-model outcome. The board is now paused before the prompt and resumed after (mirroring the rate-limit prompt's proven pattern)
+- **4,454 tests passing across 193 files**
+
 ## v1.70.1 — One-command setup for new users
 
 - **Platform setup scripts** — `scripts/setup/install-macos.sh`, `install-linux.sh` (apt/dnf/yum/pacman/apk auto-detect), `install-windows.ps1` (winget): check for required tools (Node, npm, Git, build tools, brew/winget), install anything missing with confirmation, install Agent-Nuvira (npm 11 allow-scripts handled), then offer optional native FAISS + local embeddings with plain-English yes/no prompts
