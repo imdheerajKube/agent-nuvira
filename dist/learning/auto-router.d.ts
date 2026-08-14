@@ -149,6 +149,31 @@ export interface AutoRouterOptions {
      */
     useBandit?: boolean;
     /**
+     * Enable the ML task-similarity router (ruflo neural-router analog). Each
+     * candidate's score is multiplied by a learned factor derived from the
+     * k most similar PAST TASKS' outcomes (feature-hashed cosine similarity),
+     * generalizing across complexity buckets by text similarity — the capability
+     * the per-bucket bandit cannot express. Cold start = factor 1.0 (neutral);
+     * min-samples guarded; strength-clamped. Opt-in: `routing.mlRouter`.
+     */
+    useMlRouter?: boolean;
+    /** k nearest neighbors for the ML router (default DEFAULT_ML_K = 8). */
+    mlK?: number;
+    /** Min neighbor samples before a provider's ML factor counts (default 5). */
+    mlMinSamples?: number;
+    /** ML blend strength: factor = 1 + strength × (winRate − 0.5) (default 0.5). */
+    mlStrength?: number;
+    /**
+     * Promotion-gate enforcement (ruflo promotion discipline). When true and the
+     * gate has SUFFICIENT diverged A/B data and the bandit is NOT promoted, the
+     * bandit multiplier is skipped for selection (the deterministic heuristic
+     * ranking is used) — a learned layer must PROVE it beats the incumbent
+     * before it is allowed to change picks. Opt-in: `routing.promotionEnforce`.
+     */
+    enforcePromotion?: boolean;
+    /** Min diverged decisions before enforcement judges (default 20). */
+    promotionMinDecisions?: number;
+    /**
      * Minimum accumulated samples (α+β) before a provider's bandit prior counts
      * as "learned". When the bandit's winner has FEWER samples, routing escalates
      * to the next-ranked provider that HAS learned data (uncertainty-driven
@@ -229,8 +254,10 @@ export interface RoutingRule {
 /**
  * How a decision was produced — the router's auditability field.
  * Mirrors ruflo's `routedBy` (heuristic | hybrid | bandit-fallback).
+ * 'bandit-gated' = the bandit was learned but the promotion gate blocked it
+ * from changing picks (enforcement mode — the heuristic won).
  */
-export type RoutedBy = 'heuristic' | 'rule' | 'bandit';
+export type RoutedBy = 'heuristic' | 'rule' | 'bandit' | 'bandit-gated';
 /** Per-provider score breakdown. */
 export interface ScoredProvider {
     provider: string;

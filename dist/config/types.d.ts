@@ -257,6 +257,28 @@ export interface RoutingConfig {
      */
     promotionMinDecisions?: number;
     /**
+     * Enable the ML task-similarity router (ruflo neural-router analog). The
+     * bandit learns per provider × complexity bucket; the ML layer learns per
+     * TASK FEATURES — "tasks that LOOK like this one succeeded on provider X" —
+     * via hashed-feature cosine similarity over real outcomes. Cold start is
+     * neutral, min-samples guarded, strength-clamped. Default: false (opt-in).
+     * Enable with `buff config set routing.mlRouter true`.
+     */
+    mlRouter?: boolean;
+    /** k nearest neighbors for the ML router. Default: 8. */
+    mlK?: number;
+    /** Min neighbor samples before a provider's ML factor counts. Default: 5. */
+    mlMinSamples?: number;
+    /** ML blend strength: factor = 1 + strength × (winRate − 0.5). Default: 0.5. */
+    mlStrength?: number;
+    /**
+     * Promotion-gate enforcement (ruflo promotion discipline). When true and the
+     * gate has SUFFICIENT diverged A/B data and the bandit is NOT promoted, the
+     * bandit is blocked from changing picks — the deterministic heuristic wins
+     * until the bandit proves itself. Default: false (bandit always allowed).
+     */
+    promotionEnforce?: boolean;
+    /**
      * Enable the M2.1 capability-fit soft signal in Auto routing scoring: a
      * task type's required model-catalog tags (plan → reasoning, quick edit →
      * code, …) are matched against each provider's offered tags, nudging

@@ -1741,6 +1741,8 @@ function readRoutingInsights(): Record<string, unknown> {
     history: readRoutingHistory(),
     bandit: readBanditData(),
     promotion: readPromotionData(),
+    // v1.71.0 ML task-similarity router state (ruflo neural-router analog).
+    ml: readMlData(),
     quota: readQuotaData(),
     retrieval: readRetrievalData(),
     // P6 M6.5: the admin governance policy the router enforces as hard
@@ -1948,6 +1950,81 @@ function readBanditData(): Record<string, unknown> {
     priors,
     learningHistory: (data.learningHistory || []).slice(-50),
     updatedAt: Date.now(),
+  };
+}
+
+/**
+ * Read the ML task-similarity router state (from ml-router.jsonl) — the
+ * ruflo neural-router analog: every recorded outcome is a feature vector, and
+ * at resolve time the k most similar past tasks yield a per-provider learned
+ * win rate / factor. The dashboard renders this as a learned-state card:
+ * record count, per-provider samples, win rate, and the clamped factor
+ * (1 + strength × (winRate − 0.5), default strength 0.5, minSamples 5).
+ */
+function readMlData(): Record<string, unknown> {
+  const records: Array<{
+    provider?: string;
+    model?: string;
+    outcome?: string;
+    costScore?: number;
+    agentType?: string;
+    complexity?: string;
+    intent?: string;
+    ts?: number;
+  }> = [];
+  try {
+    const p = join(MEMORY_DIR, 'ml-router.jsonl');
+    if (!existsSync(p)) return { enabled: false, recordCount: 0, providers: [], updatedAt: Date.now() };
+    for (const line of readFileSync(p, 'utf-8').split('\n')) {
+      const t = line.trim();
+      if (!t) continue;
+      try {
+        records.push(JSON.parse(t));
+      } catch {
+        // Skip malformed lines — the trajectory must never break the dashboard.
+      }
+    }
+  } catch {
+    return { enabled: false, recordCount: 0, providers: [], updatedAt: Date.now() };
+  }
+
+  // Aggregate per provider: samples, wins (escalated = half-win), win rate,
+  // and the clamped learned factor with the same defaults as ml-router.ts.
+  const byProvider = new Map<string, { samples: number; winSum: number; model?: string }>();
+  let lastTs = 0;
+  for (const r of records) {
+    const provider = r.provider || 'unknown';
+    const entry = byProvider.get(provider) || { samples: 0, winSum: 0 };
+    entry.samples++;
+    const w = r.outcome === 'success' ? 1 : r.outcome === 'escalated' ? 0.5 : 0;
+    entry.winSum += w;
+    if (r.model) entry.model = r.model;
+    if (r.ts && r.ts > lastTs) lastTs = r.ts;
+    byProvider.set(provider, entry);
+  }
+
+  const MIN_SAMPLES = 5;
+  const STRENGTH = 0.5;
+  const providers = [...byProvider.entries()]
+    .map(([provider, e]) => {
+      const winRate = e.samples > 0 ? e.winSum / e.samples : 0.5;
+      const factor = 1 + STRENGTH * (winRate - 0.5);
+      return {
+        provider,
+        samples: e.samples,
+        winRate: Math.round(winRate * 1000) / 1000,
+        factor: Math.round(factor * 1000) / 1000,
+        trusted: e.samples >= MIN_SAMPLES,
+        model: e.model,
+      };
+    })
+    .sort((a, b) => b.samples - a.samples);
+
+  return {
+    enabled: records.length > 0,
+    recordCount: records.length,
+    providers,
+    updatedAt: lastTs || Date.now(),
   };
 }
 

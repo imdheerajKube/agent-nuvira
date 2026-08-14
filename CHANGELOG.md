@@ -2,6 +2,15 @@
 
 All notable changes to **Agent-Nuvira** are documented in this file.
 
+## v1.71.0 — ML task-similarity routing + promotion-gate enforcement
+
+- **ML router (`routing.mlRouter`, opt-in)** — a ruflo neural-router analog, built zero-dependency: task text is feature-hashed (FNV-1a, 256-dim + intent/complexity tail), every real outcome is stored as a feature vector, and at resolve time the k most similar past tasks (cosine, k=8) yield per-provider win rates → a strength-clamped learned factor that nudges candidate scores. Cold start is neutral, min-samples guarded (5), never overrides a large deterministic edge
+- **Promotion-gate enforcement (`routing.promotionEnforce`, opt-in)** — the bandit may always learn, but with ≥ `promotionMinDecisions` (20) diverged A/B decisions it may only steer picks if it has PROVEN itself (quality > +2%, cost < +1%, latency < +5%). A failing bandit falls back to the deterministic ranking (`routedBy: 'bandit-gated'`); the trajectory keeps recording so a future promotion re-enables it
+- **Observability** — `buff model ml` shows learned state (records, per-provider win rate/factor); `buff model bandit` shows the gate verdict; dashboard Routing Insights gains an **ML Router card** (learned tasks, trusted vs still-learning providers, win-rate bars + factor chips)
+- **Dependency hygiene** — npm `overrides` lifts `global-agent` to v4.1.3, removing the deprecated `boolean@3.2.0` warning from installs
+- **Documentation** — DESIGN_DECISIONS #35 (ML routing + promotion enforcement) and #36 (quota as veto filter, not selector); ROUTER_COMPARISON §8 records the full assessment
+- **4,467 tests passing across 194 files**
+
 ## v1.70.2 — Weak-model prompt fix: the user can finally choose
 
 - **Weak-model decision prompt is now actually interactive** — the inquirer choices (continue / wait / abort) rendered but every keystroke was swallowed by the live pipeline board's raw-mode stdin handler, so the user could never select and the single-shot session exited on the weak-model outcome. The board is now paused before the prompt and resumed after (mirroring the rate-limit prompt's proven pattern)

@@ -412,6 +412,12 @@ export class ConfigCommand extends BaseCommand {
             const BOOLEAN_ROUTING_KEYS = new Set([
                 'bandit', 'allowPaid', 'capabilityFit', 'contextFit', 'partialFlakiness',
                 'promptOnWeakModel', 'promptOnFailover',
+                'mlRouter', 'promotionEnforce',
+            ]);
+            // Numeric routing keys (positive numbers; mlK/mlMinSamples are ints).
+            const NUMERIC_ROUTING_KEYS = new Set([
+                'maxCostUsd', 'minSpeed', 'minReasoning', 'mlK', 'mlMinSamples', 'mlStrength',
+                'promotionMinDecisions',
             ]);
             if (BOOLEAN_ROUTING_KEYS.has(field)) {
                 const lower = value.trim().toLowerCase();
@@ -428,7 +434,7 @@ export class ConfigCommand extends BaseCommand {
                 }
                 this.configManager.save({ routing: { [field]: typedValue } });
             }
-            else if (field === 'maxCostUsd' || field === 'minSpeed' || field === 'minReasoning') {
+            else if (NUMERIC_ROUTING_KEYS.has(field)) {
                 const num = Number(value);
                 if (isNaN(num) || num < 0) {
                     logger.error(`Invalid number for ${key}: "${value}". Must be a non-negative number.`);
@@ -437,7 +443,7 @@ export class ConfigCommand extends BaseCommand {
                 this.configManager.save({ routing: { [field]: num } });
             }
             else {
-                logger.error(`Unknown routing config key: ${field}. Valid keys: bandit, allowPaid, capabilityFit, contextFit, partialFlakiness, promptOnWeakModel, promptOnFailover, maxCostUsd, minSpeed, minReasoning`);
+                logger.error(`Unknown routing config key: ${field}. Valid keys: bandit, allowPaid, capabilityFit, contextFit, partialFlakiness, promptOnWeakModel, promptOnFailover, mlRouter, promotionEnforce, maxCostUsd, minSpeed, minReasoning, mlK, mlMinSamples, mlStrength, promotionMinDecisions`);
                 return;
             }
         }
