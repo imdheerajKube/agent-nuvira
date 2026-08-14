@@ -2,6 +2,20 @@
 
 All notable changes to **Agent-Nuvira** are documented in this file.
 
+## v1.69.0 — Gateway platform config + chat reliability
+
+- **Major revamp complete** — all 30 rows of the Freebuff/Hermes parity program are landed (AGENT_NUVIRA_MAJOR_REVAMP_PLAN)
+- **Reliability stack** — writer surfaces unparseable output instead of masking it (repair escalates the model), reviewer-blocked verdicts route through a writer fix pass, weak-local-model pre-flight warning before long runs
+- **New `buff code-map`** — project symbol map (functions/classes/methods) via the AST engine; closes the last revamp row; AST dedupe fix recovered silently-dropped top-level functions
+- **Scheduled jobs** — `buff admin cron add/list/remove/run` with schema-validated args, RBAC-gated writes, channel delivery
+- **Multi-channel gateway** — Telegram / Discord / Slack / WhatsApp via `buff gateway`
+- **Web tools + modality packs** — `web_search`/`read_page` (SSRF-guarded) plus browser / image / voice / vision tools
+- **Structured logging (K1) + runtime metrics (K2)** — JSON logs with correlation IDs; `buff doctor --enterprise` runtime metrics
+- **Session recall** — chat auto-recalls per-project sessions and facts
+- **4,031 tests passing across 167 files**
+
+
+
 ## v1.68.0 — WhatsApp bridge auto-reconnect (whatsmeow parity)
 
 - **Assessment vs Hermes' WhatsApp layer (tulir/whatsmeow)**: whatsmeow ships
@@ -2762,4 +2776,5 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 | **Phase 3: Major Upgrades** | v1.11.0 – v1.14.6 | Skills, pruner, VS Code, federation, dashboard, SDK |
 | **Phase 4: Industry Standards** | v1.15.0 – v1.16.0 | MCP, A2A, CI/CD, npm publishing, error-repair |
 | **Phase 5: Interactive UX** | v1.16.1 | Interactive dev mode, failure analysis, follow-up suggestions, /fix |
+
 
