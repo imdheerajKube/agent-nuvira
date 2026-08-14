@@ -319,6 +319,136 @@ describe('RunnerAgent', () => {
       expect(command).toBe('wrangler pages deploy . --project-name nuvira');
     });
 
+    // ── Deterministic Packaging Fallback (cannot-run-here → package it) ──
+    //
+    // Gap-assessment fix: when the written project is a known addon/package
+    // whose runtime is NOT this machine (NVDA addon = manifest.ini +
+    // globalPlugins/, needs the NVDA screen reader), running it can never
+    // succeed. The runner must deterministically return the PACKAGING command
+    // (zip into .nvda-addon) instead of asking a weak model to re-guess a run
+    // command (observed live: 3+ useless `python3 globalPlugins/addon_main.py`
+    // variants).
+
+    it('returns the .nvda-addon packaging command for NVDA-addon projects (no LLM)', async () => {
+      const tmpDir = mkdtempSync(join(tmpdir(), 'buff-runner-nvda-'));
+      try {
+        mkdirSync(join(tmpDir, 'globalPlugins'), { recursive: true });
+        writeFileSync(join(tmpDir, 'manifest.ini'), '[addon]\nname = helloDheeraj\n', 'utf-8');
+        writeFileSync(join(tmpDir, 'globalPlugins', 'addon_main.py'), 'import ui\n', 'utf-8');
+
+        const context = makeContext({
+          goal: 'develop an NVDA addon that says hello and build it in deployable format',
+          workingDirectory: tmpDir,
+          taskPlan: [
+            { id: 'step-1', description: 'Write the addon files', agentType: 'writer', dependsOn: [], status: 'completed' },
+            { id: 'step-2', description: 'Build the addon', agentType: 'runner', dependsOn: ['step-1'], status: 'running' },
+          ],
+          fileChanges: [
+            { path: 'manifest.ini', newContent: '[addon]\nname = helloDheeraj\n', status: 'created' },
+            { path: 'globalPlugins/addon_main.py', newContent: 'import ui\n', status: 'created' },
+          ],
+        });
+
+        const mockLLM: LLMCallFn = async () => { llmCallCount++; return 'python3 globalPlugins/addon_main.py'; };
+        const command = await determineCommand(context, mockLLM);
+        expect(command).toBe('zip -r helloDheeraj.nvda-addon manifest.ini globalPlugins');
+        expect(llmCallCount).toBe(0); // deterministic — never asks the weak model to guess
+      } finally {
+        rmSync(tmpDir, { recursive: true, force: true });
+      }
+    });
+
+    it('does NOT package when the goal is not an addon (manifest.ini alone is ambiguous)', async () => {
+      const tmpDir = mkdtempSync(join(tmpdir(), 'buff-runner-notnvda-'));
+      try {
+        mkdirSync(join(tmpDir, 'globalPlugins'), { recursive: true });
+        writeFileSync(join(tmpDir, 'manifest.ini'), '[app]\nname = something\n', 'utf-8');
+        writeFileSync(join(tmpDir, 'globalPlugins', 'x.py'), 'print(1)\n', 'utf-8');
+
+        const context = makeContext({
+          goal: 'create a python script and run it',
+          workingDirectory: tmpDir,
+          taskPlan: [
+            { id: 'step-1', description: 'Run the script', agentType: 'runner', dependsOn: [], status: 'running' },
+          ],
+        });
+
+        const mockLLM: LLMCallFn = async () => { llmCallCount++; return 'python3 x.py'; };
+        const command = await determineCommand(context, mockLLM);
+        expect(command).toBe('python3 x.py');
+        expect(llmCallCount).toBe(1); // fell through to the LLM
+      } finally {
+        rmSync(tmpDir, { recursive: true, force: true });
+      }
+    });
+
+    it('returns the packaging command on a REPAIR attempt too (never re-runs the failing addon)', async () => {
+      const tmpDir = mkdtempSync(join(tmpdir(), 'buff-runner-nvda-repair-'));
+      try {
+        mkdirSync(join(tmpDir, 'globalPlugins'), { recursive: true });
+        writeFileSync(join(tmpDir, 'manifest.ini'), '[addon]\nname = helloDheeraj\n', 'utf-8');
+        writeFileSync(join(tmpDir, 'globalPlugins', 'addon_main.py'), 'import ui\n', 'utf-8');
+
+        const context = makeContext({
+          goal: [
+            'develop an NVDA addon and build it in deployable format',
+            '',
+            '[REPAIR ATTEMPT 1]',
+            'The previous attempt failed with:',
+            'ModuleNotFoundError: No module named addonHandler',
+          ].join('\n'),
+          workingDirectory: tmpDir,
+          taskPlan: [
+            { id: 'step-1', description: 'Build the addon', agentType: 'runner', dependsOn: [], status: 'running' },
+          ],
+          metadata: {
+            runResult: {
+              success: false,
+              command: 'python3 globalPlugins/addon_main.py',
+              exitCode: 1,
+              stdout: '',
+              stderr: 'ModuleNotFoundError: No module named addonHandler',
+              duration: 72,
+            },
+          },
+        });
+
+        const mockLLM: LLMCallFn = async () => { llmCallCount++; return 'python3 -m globalPlugins.addon_main'; };
+        const command = await determineCommand(context, mockLLM);
+        expect(command).toBe('zip -r helloDheeraj.nvda-addon manifest.ini globalPlugins');
+        expect(llmCallCount).toBe(0); // deterministic fast-path — no weak-model re-guess
+      } finally {
+        rmSync(tmpDir, { recursive: true, force: true });
+      }
+    });
+
+    it('injects reference docs + file contents into the LLM fallback prompt', async () => {
+      const context = makeContext({
+        goal: 'develop an NVDA addon that says hello and build it in deployable format',
+        taskPlan: [
+          { id: 'step-1', description: 'Verify the addon', agentType: 'runner', dependsOn: [], status: 'running' },
+        ],
+        fileChanges: [
+          { path: 'globalPlugins/addon_main.py', newContent: 'import globalPluginHandler\n', status: 'created' },
+        ],
+      });
+
+      let llmPrompt = '';
+      const mockLLM: LLMCallFn = async (prompt: string) => {
+        llmCallCount++;
+        llmPrompt = String(prompt);
+        return 'python3 -m py_compile globalPlugins/addon_main.py';
+      };
+
+      const command = await determineCommand(context, mockLLM);
+      expect(command).toBe('python3 -m py_compile globalPlugins/addon_main.py');
+      expect(llmCallCount).toBe(1);
+      // The prompt now carries the curated NVDA reference doc and the written file
+      expect(llmPrompt).toContain('globalPluginHandler');
+      expect(llmPrompt).toContain('manifest.ini');
+      expect(llmPrompt).toContain('CANNOT run');
+    });
+
     // ── Goal Fallback ──────────────────────────────────────────────────
 
     it('should fall back to goal when no runner task is in plan', async () => {
@@ -1056,6 +1186,110 @@ describe('RunnerAgent', () => {
         expect(detect('echo hello')).toBeNull(); // no mapping
       } finally {
         spy.mockRestore();
+      }
+    });
+  });
+
+  // ─── Enterprise Missing-System-Tool Handling ───────────────────────────
+  //
+  // Parity with a human agent: when a command needs a system tool that is not
+  // installed (e.g. `zip` for packaging), the runner must detect it, recommend
+  // the OS-appropriate install, ask for approval (TTY) or surface manual steps
+  // (non-interactive), then continue on approval — never fail silently and
+  // never install OS software without consent.
+
+  describe('missing system tool', () => {
+    /** Access private detectMissingSystemTool via prototype */
+    function detectMissingSystemTool(command: string) {
+      return (runner as any).detectMissingSystemTool.call(runner, command);
+    }
+
+    /** Access private ensureSystemTool via prototype */
+    function ensureSystemTool(context: AgentContext, command: string) {
+      return (runner as any).ensureSystemTool.call(runner, context, command);
+    }
+
+    it('detects a missing known tool in a simple command', () => {
+      vi.spyOn(runner as any, 'commandExists').mockReturnValue(false);
+      expect(detectMissingSystemTool('zip -r addon.nvda-addon manifest.ini globalPlugins')).toBe('zip');
+    });
+
+    it('detects a missing tool inside a compound command', () => {
+      vi.spyOn(runner as any, 'commandExists').mockReturnValue(false);
+      expect(detectMissingSystemTool('cd addon && git init && zip -r out.nvda-addon .')).toBe('git');
+    });
+
+    it('returns null when the tool exists', () => {
+      vi.spyOn(runner as any, 'commandExists').mockReturnValue(true);
+      expect(detectMissingSystemTool('zip -r out.zip .')).toBeNull();
+    });
+
+    it('returns null for unknown commands (no recipe)', () => {
+      vi.spyOn(runner as any, 'commandExists').mockReturnValue(false);
+      expect(detectMissingSystemTool('python3 script.py')).toBeNull(); // interpreter, not a recipe tool
+      expect(detectMissingSystemTool('wrangler pages deploy')).toBeNull();
+    });
+
+    it('non-interactive: returns the manual steps without prompting', async () => {
+      const originalIsTTY = (process.stdin as { isTTY?: boolean }).isTTY;
+      (process.stdin as { isTTY?: boolean }).isTTY = false;
+      try {
+        vi.spyOn(runner as any, 'commandExists').mockReturnValue(false);
+        const context = makeContext({ goal: 'package the addon' });
+        const outcome = await ensureSystemTool(context, 'zip -r out.nvda-addon manifest.ini globalPlugins');
+        expect(outcome).not.toBeNull();
+        expect(outcome).toContain('zip');
+        expect(outcome).toContain('Install it manually');
+      } finally {
+        (process.stdin as { isTTY?: boolean }).isTTY = originalIsTTY;
+      }
+    });
+
+    it('interactive: install choice runs the recommended command and verifies', async () => {
+      const originalIsTTY = (process.stdin as { isTTY?: boolean }).isTTY;
+      (process.stdin as { isTTY?: boolean }).isTTY = true;
+      try {
+        vi.spyOn(runner as any, 'commandExists')
+          .mockReturnValueOnce(false)   // zip missing
+          .mockReturnValueOnce(true);   // verified after install
+        const runInstall = vi.spyOn(runner as any, 'runInstallCommand').mockReturnValue({ success: true, command: 'brew install zip' });
+
+        // Mock the prompt module via the runner's import — simplest: replace
+        // the module-level function reference through the spy below.
+        const context = makeContext({ goal: 'package the addon' });
+        // Stub promptToolInstall at the module import site. The runner imports
+        // it directly, so we patch the imported binding via dynamic import
+        // mock is overkill; instead verify the flow with a stubbed choice by
+        // patching the runner's prompt call through vi.spyOn on the module.
+        //
+        // Use vi.spyOn on the imported module object (ESM live binding):
+        const mod = await import('../../../src/cli/tool-install-prompt.js');
+        const promptSpy = vi.spyOn(mod, 'promptToolInstall').mockResolvedValue('install' as any);
+
+        const outcome = await ensureSystemTool(context, 'zip -r out.nvda-addon manifest.ini globalPlugins');
+        expect(outcome).toBeNull(); // installed → continue
+        expect(runInstall).toHaveBeenCalled();
+        expect(promptSpy).toHaveBeenCalledWith('zip', expect.stringContaining('brew install zip'));
+      } finally {
+        (process.stdin as { isTTY?: boolean }).isTTY = originalIsTTY;
+      }
+    });
+
+    it('interactive: manual choice returns the manual steps', async () => {
+      const originalIsTTY = (process.stdin as { isTTY?: boolean }).isTTY;
+      (process.stdin as { isTTY?: boolean }).isTTY = true;
+      try {
+        vi.spyOn(runner as any, 'commandExists').mockReturnValue(false);
+        const mod = await import('../../../src/cli/tool-install-prompt.js');
+        vi.spyOn(mod, 'promptToolInstall').mockResolvedValue('manual' as any);
+
+        const context = makeContext({ goal: 'package the addon' });
+        const outcome = await ensureSystemTool(context, 'zip -r out.nvda-addon manifest.ini globalPlugins');
+        expect(outcome).not.toBeNull();
+        expect(outcome).toContain('Install it manually');
+        expect(outcome).toContain('zip');
+      } finally {
+        (process.stdin as { isTTY?: boolean }).isTTY = originalIsTTY;
       }
     });
   });

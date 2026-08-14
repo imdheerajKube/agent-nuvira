@@ -213,6 +213,95 @@ describe('WriterAgent', () => {
     });
   });
 
+  describe('parseFileChangesLenient (no-op-escalation fallback)', () => {
+    const lenient = (response: string, ctx: any) =>
+      (writer as any).parseFileChangesLenient.call(writer, response, workingDir, ctx);
+
+    const nvdaContext = {
+      goal: "develop a NVDA addon which says 'Hello Dheeraj'",
+      taskPlan: [
+        { description: "Create the main addon file (e.g., hello_dheeraj_addon.py)" },
+        { description: 'Create manifest.ini for the addon' },
+      ],
+      metadata: {},
+    };
+
+    it('recovers plain ```python blocks by inferring the path from task + prose', () => {
+      const response = [
+        'Here are the files:',
+        '```python',
+        'import addonHandler',
+        'import globalPluginHandler',
+        'class GlobalPlugin(globalPluginHandler.GlobalPlugin):',
+        '    pass',
+        '```',
+      ].join('\n');
+      const changes = lenient(response, nvdaContext);
+      expect(changes).toHaveLength(1);
+      expect(changes[0].path).toBe('hello_dheeraj_addon.py');
+      expect(changes[0].newContent).toContain('import globalPluginHandler');
+    });
+
+    it('recovers manifest.ini from a plain ```ini block named in prose', () => {
+      const response = [
+        'Create `manifest.ini` at the addon root:',
+        '```ini',
+        '[addon]',
+        'name = Hello Dheeraj Addon',
+        'version = 1.0.0',
+        '```',
+      ].join('\n');
+      const changes = lenient(response, nvdaContext);
+      expect(changes).toHaveLength(1);
+      expect(changes[0].path).toBe('manifest.ini');
+      expect(changes[0].newContent).toContain('name = Hello Dheeraj Addon');
+    });
+
+    it('recovers both files from one response (python + ini)', () => {
+      const response = [
+        'We need `manifest.ini` and `globalPlugins/hello.py`:',
+        '```ini',
+        '[addon]',
+        'name = Hello',
+        '```',
+        '```python',
+        'import ui',
+        '```',
+      ].join('\n');
+      const changes = lenient(response, nvdaContext);
+      expect(changes).toHaveLength(2);
+      const paths = changes.map((c: any) => c.path);
+      expect(paths).toContain('manifest.ini');
+      expect(paths).toContain('globalPlugins/hello.py');
+    });
+
+    it('skips blocks with no inferable path (no mentions, no task names)', () => {
+      const response = [
+        '```python',
+        'print("hi")',
+        '```',
+      ].join('\n');
+      const changes = lenient(response, {
+        goal: 'do something vague',
+        taskPlan: [],
+        metadata: {},
+      });
+      expect(changes).toHaveLength(0);
+    });
+
+    it('never guesses for untagged blocks when multiple files are named', () => {
+      const response = [
+        'Files: manifest.ini and globalPlugins/a.py and globalPlugins/b.py',
+        '```',
+        'content without a language tag',
+        '```',
+      ].join('\n');
+      const changes = lenient(response, nvdaContext);
+      // Ambiguous (3 candidates, 1 untagged block) → conservative skip.
+      expect(changes).toHaveLength(0);
+    });
+  });
+
   describe('metadata', () => {
     it('should have correct name and description', () => {
       expect(writer.name).toBe('Writer');

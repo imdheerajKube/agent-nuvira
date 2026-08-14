@@ -227,6 +227,30 @@ export declare class Orchestrator {
      */
     private routedComplexities;
     /**
+     * The provider×model each task was actually ROUTED to (by task id),
+     * recorded when the auto-routed LLM is created. The repair path compares
+     * this against the ESCALATED decision to detect a no-op escalation (the
+     * "stronger model" resolves to the SAME provider×model — only a weak
+     * model is available) and degrade to lenient file-change parsing instead
+     * of re-prompting the same weak model until the repair budget dies.
+     */
+    private routedProviderModelByTask;
+    /**
+     * The provider×model each task's ESCALATED repair resolved to (by task
+     * id), recorded by createEscalatedLLM. Compared against the routed baseline
+     * in isNoOpEscalation so a repair that lands back on the same weak model is
+     * detected without re-resolving the decision (which has side effects).
+     */
+    private escalatedProviderModelByTask;
+    /**
+     * The user's weak-model decision for THIS pipeline, latched after the first
+     * prompt (routing.promptOnWeakModel) so a multi-task pipeline asks ONCE,
+     * not once per task. null = not asked yet; 'continue'/'wait'/'abort' = the
+     * user's choice. Silent mode never prompts — this stays null and the
+     * pipeline always takes the weak-model path.
+     */
+    private weakModelChoice;
+    /**
      * Latched one-shot cold-start registry probe: fired once per Orchestrator
      * instance when auto routing is active on an empty registry (see
      * maybeFireColdStartProbe). A long dev-mode session only pays for it once.
@@ -329,6 +353,29 @@ export declare class Orchestrator {
     private resolveAutoRoutingDecision;
     private createAutoRoutedLLM;
     /**
+     * Detect a NO-OP model escalation for a task: the "stronger model" the
+     * repair engine would escalate to resolves to the SAME provider×model as
+     * the one that just failed. This happens when every stronger candidate is
+     * unavailable/blocked (e.g. only a weak local model is configured) —
+     * re-prompting "a stronger model" then just repeats the identical failure
+     * until the repair budget dies. The caller degrades instead: lenient
+     * parsing for the writer, a clear warning, and a bounded repair budget.
+     *
+     * Returns true when escalation would be a no-op (or the routed baseline is
+     * unknown — treat as no-op to stay safe), false when a genuinely different
+     * provider×model exists for escalation.
+     */
+    private isNoOpEscalation;
+    /**
+     * Whether a stronger candidate is in a SHORT cooldown that will recover
+     * soon — the only honest basis for offering "wait and retry". Checks the
+     * session exclusions (rate-limit / transient cooldowns) and the shared
+     * circuit breaker for any provider other than the weak one with a recovery
+     * time within MAX_WEAK_WAIT_MS. Returns the wait ms (or null when no
+     * stronger candidate is coming back soon — 'wait' is then not offered).
+     */
+    private weakModelWaitAvailableMs;
+    /**
      * Build an ESCALATED planner LLM for repair attempts (assessment P0).
      *
      * The Auto router picks the cheapest ADEQUATE model per task. When that
@@ -349,7 +396,17 @@ export declare class Orchestrator {
      * dies. The escalation carries the stronger decision's routing snapshot
      * into the reasoning trace so repairs are fully auditable.
      */
+    /**
+     * Resolve the escalated (next-complexity) routing decision for a task.
+     * Extracted so the repair path can inspect the decision ONCE (detect a
+     * no-op escalation) and then build the escalated LLM from it — avoiding a
+     * double resolveAutoRoutingDecision (which has side effects: routing
+     * history + audit write-through).
+     */
+    private resolveEscalatedDecision;
     private createEscalatedLLM;
+    /** Next rung on the complexity ladder (critical is the top). */
+    private escalateComplexity;
     private createAutoRoutedLLMFromDecision;
     /**
      * One-shot background model-registry refresh for a COLD registry.

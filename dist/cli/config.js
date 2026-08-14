@@ -411,6 +411,7 @@ export class ConfigCommand extends BaseCommand {
             // context preflight, P4 M4.4 partial-flakiness) are all boolean.
             const BOOLEAN_ROUTING_KEYS = new Set([
                 'bandit', 'allowPaid', 'capabilityFit', 'contextFit', 'partialFlakiness',
+                'promptOnWeakModel', 'promptOnFailover',
             ]);
             if (BOOLEAN_ROUTING_KEYS.has(field)) {
                 const lower = value.trim().toLowerCase();
@@ -436,7 +437,7 @@ export class ConfigCommand extends BaseCommand {
                 this.configManager.save({ routing: { [field]: num } });
             }
             else {
-                logger.error(`Unknown routing config key: ${field}. Valid keys: bandit, allowPaid, capabilityFit, contextFit, partialFlakiness, maxCostUsd, minSpeed, minReasoning`);
+                logger.error(`Unknown routing config key: ${field}. Valid keys: bandit, allowPaid, capabilityFit, contextFit, partialFlakiness, promptOnWeakModel, promptOnFailover, maxCostUsd, minSpeed, minReasoning`);
                 return;
             }
         }

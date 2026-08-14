@@ -60,6 +60,83 @@ INCORRECT (do NOT use these):
 /** Maximum files to include in a single writer prompt */
 const MAX_CONTEXT_FILES = 10;
 
+/** Language tag → file extension for the lenient parse fallback. */
+const EXT_BY_LANG: Record<string, string> = {
+  python: '.py',
+  py: '.py',
+  ini: '.ini',
+  json: '.json',
+  javascript: '.js',
+  js: '.js',
+  typescript: '.ts',
+  ts: '.ts',
+  tsx: '.tsx',
+  jsx: '.jsx',
+  yaml: '.yml',
+  yml: '.yml',
+  bash: '.sh',
+  sh: '.sh',
+  shell: '.sh',
+  powershell: '.ps1',
+  html: '.html',
+  css: '.css',
+  markdown: '.md',
+  md: '.md',
+  text: '.txt',
+  txt: '.txt',
+  sql: '.sql',
+  go: '.go',
+  rust: '.rs',
+  java: '.java',
+  c: '.c',
+  cpp: '.cpp',
+  ruby: '.rb',
+  php: '.php',
+};
+
+/**
+ * Extract plain fenced code blocks (```lang\n...\n```) WITHOUT a
+ * `filepath:` prefix — the blocks the strict parser rejects but the lenient
+ * fallback recovers. Returns { lang, content } pairs.
+ */
+function extractPlainCodeBlocks(response: string): Array<{ lang: string; content: string }> {
+  const blocks: Array<{ lang: string; content: string }> = [];
+  const fenceRegex = /```([a-zA-Z0-9+#_-]*)\n([\s\S]*?)```/g;
+  let m: RegExpExecArray | null;
+  while ((m = fenceRegex.exec(response)) !== null) {
+    const lang = (m[1] || '').trim();
+    const content = m[2];
+    // Skip strict-format blocks (filepath:...) — those are already handled.
+    if (/^filepath\s*:/.test(content.trim())) continue;
+    blocks.push({ lang, content });
+  }
+  return blocks;
+}
+
+/**
+ * Extract plausible file-path mentions from free text: tokens ending in a
+ * known code extension, optionally prefixed by a directory (e.g.
+ * `manifest.ini`, `globalPlugins/hello.py`, `src/utils.ts`). Conservative —
+ * dedupes and drops quoted/backticked noise.
+ */
+function extractPathMentions(text: string): string[] {
+  if (!text) return [];
+  const seen = new Set<string>();
+  const out: string[] = [];
+  const pathRegex = /([A-Za-z0-9_./-]+\.(?:py|ini|json|js|ts|tsx|jsx|yml|yaml|sh|ps1|html|css|md|txt|sql|go|rs|java|c|cpp|rb|php))\b/g;
+  let m: RegExpExecArray | null;
+  while ((m = pathRegex.exec(text)) !== null) {
+    let p = m[1];
+    // Drop leading ./ and trailing punctuation/quotes.
+    p = p.replace(/^[\/.]*/, '').replace(/['"`,;:)]+$/, '').trim();
+    if (!p || !p.includes('.')) continue;
+    if (seen.has(p)) continue;
+    seen.add(p);
+    out.push(p);
+  }
+  return out;
+}
+
 /**
  * Maximum total characters across all files sent to the LLM.
  * 16,000 chars ≈ 4,000 tokens — leaves room for the rest of the prompt and response.
@@ -263,7 +340,27 @@ export class WriterAgent extends Agent {
     }
 
     // Extract file changes from the response
-    const fileChanges = this.parseFileChanges(response, context.workingDirectory);
+    let fileChanges = this.parseFileChanges(response, context.workingDirectory);
+
+    // LENIENT FALLBACK (no-op-escalation gate): when the orchestrator could
+    // not escalate to a stronger model (every stronger candidate is blocked —
+    // only a weak local model is available), a format-shy model that wraps
+    // real code in plain ```lang blocks (no `filepath:` prefix) previously
+    // failed the whole task: strict parse → 0 changes → repair → same weak
+    // model → same failure until the budget died. The strict contract is
+    // still tried FIRST; only when it finds nothing AND the orchestrator
+    // explicitly enabled lenient parsing (via metadata) do we recover the
+    // model's plain code blocks by inferring each block's path from the task
+    // description, reference docs, and the response's own prose.
+    if (fileChanges.length === 0 && context.metadata?.lenientFileParsing === true) {
+      const lenient = this.parseFileChangesLenient(response, context.workingDirectory, context);
+      if (lenient.length > 0) {
+        logger.warn(
+          `[Writer ${label}] Strict parse found 0 changes — recovered ${lenient.length} file(s) via lenient inference (no stronger model available)`,
+        );
+        fileChanges = lenient;
+      }
+    }
 
     logger.debug(`[Writer ${label}] Parsed ${fileChanges.length} file change(s)`);
     for (const fc of fileChanges) {
@@ -445,6 +542,78 @@ export class WriterAgent extends Agent {
       if (!filePath || !content) continue;
 
       this.addFileChange(changes, filePath, content, workingDir);
+    }
+
+    return changes;
+  }
+
+  /**
+   * Lenient file-change recovery — ONLY used when the orchestrator enables it
+   * (metadata.lenientFileParsing, set when model escalation is a NO-OP: no
+   * stronger model exists). Recovers plain fenced code blocks the model
+   * actually emitted (e.g. ```python / ```ini) by inferring each block's
+   * path from (1) explicit path mentions in the response's own prose, (2)
+   * path mentions in the task description / goal / reference docs, and (3)
+   * the block's language tag mapped to a file extension. Conservative: a
+   * block with no inferable path is SKIPPED, never guessed.
+   */
+  private parseFileChangesLenient(
+    response: string,
+    workingDir: string,
+    context: AgentContext,
+  ): FileChange[] {
+    const changes: FileChange[] = [];
+    const blocks = extractPlainCodeBlocks(response);
+    if (blocks.length === 0) return changes;
+
+    // ── Candidate paths, in priority order ───────────────────────────────
+    // 1. Explicit paths mentioned in the RESPONSE prose (the model usually
+    //    names the file it's writing: "Create manifest.ini" / "in
+    //    globalPlugins/hello.py").
+    const prosePaths = extractPathMentions(response);
+    // 2. Paths named by the task description + goal (e.g. "the addon file
+    //    (e.g., hello_dheeraj_addon.py)" / "manifest.ini").
+    const taskPaths = extractPathMentions(
+      `${context.goal} ${(context.taskPlan || []).map((s) => s.description).join(' ')}`,
+    );
+    // 3. Paths named by the reference-docs section (curated real API files:
+    //    manifest.ini, globalPlugins/your_addon.py, buildVars.py).
+    let refPaths: string[] = [];
+    try {
+      refPaths = extractPathMentions(referenceDocsFor(`${context.goal} ${(context.taskPlan || []).map((s) => s.description).join(' ')}`));
+    } catch {
+      // Best-effort — reference docs must never break the lenient parse.
+    }
+    const candidates = [...prosePaths, ...taskPaths, ...refPaths].filter(Boolean);
+
+    // ── Match blocks to paths ────────────────────────────────────────────
+    // For each plain block, find the FIRST candidate whose extension matches
+    // the block's language (python→.py, ini→.ini, json→.json, ...). Fall back
+    // to the first candidate when the block has no language tag. Dedupe so
+    // two blocks never claim the same file.
+    const claimed = new Set<string>();
+    for (const block of blocks) {
+      const ext = EXT_BY_LANG[block.lang.toLowerCase()];
+      let path: string | undefined;
+      // Prefer a candidate whose basename the block's prose introduces.
+      for (const cand of candidates) {
+        if (claimed.has(cand)) continue;
+        if (ext && cand.toLowerCase().endsWith(ext)) {
+          path = cand;
+          break;
+        }
+      }
+      if (!path && !ext) {
+        // Untagged block: take the first unclaimed candidate (only when the
+        // response names exactly one file — otherwise ambiguous → skip).
+        const unclaimed = candidates.filter((c) => !claimed.has(c));
+        if (unclaimed.length === 1) path = unclaimed[0];
+      }
+      if (!path) continue;
+      claimed.add(path);
+      const content = block.content.trim();
+      if (!content) continue;
+      this.addFileChange(changes, path, content, workingDir);
     }
 
     return changes;
