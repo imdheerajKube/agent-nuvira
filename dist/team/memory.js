@@ -111,7 +111,7 @@ export async function initTeamMemory(repoUrl, cwd) {
         writeFileSync(join(dir, 'patterns', '.gitkeep'), '');
         writeFileSync(join(dir, 'templates', '.gitkeep'), '');
         // Create a README for the team repo
-        writeFileSync(join(dir, 'README.md'), '# Agent-Baba-D Team Memory\n\n' +
+        writeFileSync(join(dir, 'README.md'), '# Agent-Nuvira Team Memory\n\n' +
             'This repository stores shared agent execution trajectories, coding patterns,\n' +
             'and workflow templates for the team.\n\n' +
             'Managed by the `buff team` CLI commands.\n');

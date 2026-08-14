@@ -1,5 +1,5 @@
 /* ═══════════════════════════════════════════════════
-   Agent-Baba-D Dashboard — Dark Theme Styles (React)
+   Agent-Nuvira Dashboard — Dark Theme Styles (React)
    ═══════════════════════════════════════════════════ */
 
 :root {
@@ -2657,4 +2657,69 @@ body {
 
 .chat-steps > div {
   margin-top: 6px;
+}
+
+/* ── Platform transport config (PlatformConfigSection) ─────────────────── */
+.platform-config {
+  margin-top: 10px;
+}
+
+.platform-config .hub-platform {
+  flex-direction: column;
+  align-items: stretch;
+  width: 100%;
+  gap: 6px;
+  padding: 8px 10px;
+}
+
+.platform-config .hub-platform-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.platform-config .hub-platform-head .admin-refresh-btn {
+  margin-left: auto;
+}
+
+.platform-config .hub-platform-env {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px 12px;
+}
+
+.platform-config-form {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding-top: 4px;
+  border-top: 1px dashed var(--border-light);
+}
+
+.platform-config-form .hub-send-target {
+  width: 100%;
+}
+
+.platform-config-form input {
+  width: 100%;
+  box-sizing: border-box;
+}
+
+.platform-config-actions {
+  display: flex;
+  gap: 8px;
+}
+
+.hub-remove-btn {
+  background: transparent;
+  border: 1px solid rgba(224, 49, 49, 0.5);
+  color: #e03131;
+  border-radius: 6px;
+  padding: 4px 10px;
+  font-size: 12px;
+  cursor: pointer;
+}
+
+.hub-remove-btn:hover {
+  background: rgba(224, 49, 49, 0.1);
 }

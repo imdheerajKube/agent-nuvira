@@ -37,7 +37,7 @@ export const COMPLEXITY_BUCKETS = [
 ];
 // ─── Storage ────────────────────────────────────────────────────────────────
 const DEFAULT_MEMORY_DIR = join(homedir(), '.buff', 'memory');
-const CURRENT_VERSION = 2; // v2 = adds per-modelId modelPriors (ADR-149 mirror)
+const CURRENT_VERSION = 3; // v2 = per-modelId modelPriors; v3 = task-INTENT-aware buckets
 const MAX_HISTORY = 200;
 function memoryDir() {
     return process.env.BUFF_MEMORY_DIR || DEFAULT_MEMORY_DIR;
@@ -151,9 +151,19 @@ export class RouterBandit {
             // Best-effort — never break routing on a failed write.
         }
     }
+    /**
+     * v3 — the learning bucket key. Learning is bucketed by task INTENT *and*
+     * complexity, so a provider's win-rate on coding sessions can never boost it
+     * for creative writing (the mis-routing that sent an essay to a 4-bit local
+     * model). Callers WITHOUT an intent (tests, legacy paths, persisted v2 data)
+     * keep the plain complexity key — fully backward compatible.
+     */
+    bucketKey(complexity, taskIntent) {
+        return taskIntent ? `${taskIntent}:${complexity}` : complexity;
+    }
     /** Get the Beta prior for a model in a complexity bucket (per-model learning). */
-    getModelPrior(model, complexity) {
-        return this.state.modelPriors[complexity]?.[model] ?? { alpha: 1, beta: 1 };
+    getModelPrior(model, complexity, taskIntent) {
+        return this.state.modelPriors[this.bucketKey(complexity, taskIntent)]?.[model] ?? { alpha: 1, beta: 1 };
     }
     /** Note the concrete model picked for an agent type (per-model outcome wiring). */
     noteModelDecision(agentType, model) {
@@ -168,14 +178,14 @@ export class RouterBandit {
      * per-model prior. Cold-start Beta(1,1) → uniform draw, so the model choice
      * behaves deterministically until per-model outcomes accumulate.
      */
-    sampleModelScore(model, complexity, score) {
-        const prior = this.getModelPrior(model, complexity);
+    sampleModelScore(model, complexity, score, taskIntent) {
+        const prior = this.getModelPrior(model, complexity, taskIntent);
         const theta = sampleBeta(prior.alpha, prior.beta);
         return score * theta;
     }
-    /** Get the Beta prior for a provider in a complexity bucket. */
-    getPrior(provider, complexity) {
-        return this.state.priors[complexity]?.[provider] ?? { alpha: 1, beta: 1 };
+    /** Get the Beta prior for a provider in a complexity bucket (intent-aware). */
+    getPrior(provider, complexity, taskIntent) {
+        return this.state.priors[this.bucketKey(complexity, taskIntent)]?.[provider] ?? { alpha: 1, beta: 1 };
     }
     /** Note the provider picked for an agent type (for recordOutcome wiring). */
     noteDecision(agentType, provider) {
@@ -240,9 +250,9 @@ export class RouterBandit {
      *                       the cost-adjusted success reward. Default 0.5.
      * @param outcomeData    Optional richer outcome telemetry for the reward model.
      */
-    recordOutcome(provider, taskDescription, outcome, costScore = 0.5, outcomeData) {
+    recordOutcome(provider, taskDescription, outcome, costScore = 0.5, outcomeData, taskIntent) {
         const complexity = analyzeComplexity(taskDescription);
-        this.recordOutcomeWithComplexity(provider, complexity, outcome, costScore, outcomeData);
+        this.recordOutcomeWithComplexity(provider, complexity, outcome, costScore, outcomeData, taskIntent);
     }
     /**
      * Update the bandit prior for a provider in an EXPLICIT complexity bucket.
@@ -250,13 +260,15 @@ export class RouterBandit {
      * what re-analyzing the description would return — keeps select-time and
      * record-time buckets identical for subtask-local routing.
      */
-    recordOutcomeWithComplexity(provider, complexity, outcome, costScore = 0.5, outcomeData) {
-        const bucket = this.state.priors[complexity] ?? (this.state.priors[complexity] = {});
+    recordOutcomeWithComplexity(provider, complexity, outcome, costScore = 0.5, outcomeData, taskIntent) {
+        const key = this.bucketKey(complexity, taskIntent);
+        const bucket = this.state.priors[key] ?? (this.state.priors[key] = {});
         const prior = bucket[provider] ?? (bucket[provider] = { alpha: 1, beta: 1 });
         const reward = this.applyReward(prior, outcome, costScore, outcomeData);
         this.state.learningHistory.push({
             provider,
             complexity,
+            taskIntent,
             outcome,
             reward,
             latencyMs: outcomeData?.latencyMs,
@@ -288,23 +300,25 @@ export class RouterBandit {
      * @param costScore      0–1 cost score of the model's provider (1 = cheapest).
      * @param outcomeData    Optional richer outcome telemetry for the reward model.
      */
-    recordModelOutcome(model, taskDescription, outcome, costScore = 0.5, outcomeData) {
+    recordModelOutcome(model, taskDescription, outcome, costScore = 0.5, outcomeData, taskIntent) {
         const complexity = analyzeComplexity(taskDescription);
-        this.recordModelOutcomeWithComplexity(model, complexity, outcome, costScore, outcomeData);
+        this.recordModelOutcomeWithComplexity(model, complexity, outcome, costScore, outcomeData, taskIntent);
     }
     /**
      * Update the PER-MODEL prior for a concrete model id in an EXPLICIT
      * complexity bucket. Mirrors recordOutcomeWithComplexity for per-model
      * learning (ADR-149) so subtask labels stay consistent.
      */
-    recordModelOutcomeWithComplexity(model, complexity, outcome, costScore = 0.5, outcomeData) {
-        const bucket = this.state.modelPriors[complexity] ?? (this.state.modelPriors[complexity] = {});
+    recordModelOutcomeWithComplexity(model, complexity, outcome, costScore = 0.5, outcomeData, taskIntent) {
+        const key = this.bucketKey(complexity, taskIntent);
+        const bucket = this.state.modelPriors[key] ?? (this.state.modelPriors[key] = {});
         const prior = bucket[model] ?? (bucket[model] = { alpha: 1, beta: 1 });
         const reward = this.applyReward(prior, outcome, costScore, outcomeData);
         this.state.learningHistory.push({
             provider: model, // model-id surface; provider field keeps CLI history rendering
             model,
             complexity,
+            taskIntent,
             outcome,
             reward,
             latencyMs: outcomeData?.latencyMs,
@@ -329,8 +343,8 @@ export class RouterBandit {
      * Cold-start Beta(1,1) → uniform draws, so expected behavior matches the
      * deterministic router; accumulated outcomes skew the sample up/down.
      */
-    sampleScore(provider, complexity, score) {
-        const prior = this.getPrior(provider, complexity);
+    sampleScore(provider, complexity, score, taskIntent) {
+        const prior = this.getPrior(provider, complexity, taskIntent);
         // ISSUE-002: an untouched Beta(1,1) prior (no outcomes accumulated) means
         // there is NO learned data — a random uniform draw would randomize the
         // ranking on a cold start (a 0.9 provider could lose to a 0.5 one purely

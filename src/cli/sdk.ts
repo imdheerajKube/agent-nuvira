@@ -1,5 +1,5 @@
 /**
- * SDK Command — Create and manage custom agents with the Agent-Baba-D SDK.
+ * SDK Command — Create and manage custom agents with the Agent-Nuvira SDK.
  *
  * Usage:
  *   buff sdk scaffold <outDir> <agentName> [description]  — Generate a new agent project
@@ -29,7 +29,7 @@ import { registerAgent, unregisterAgent } from '../agent-sdk/src/register.js';
 export class SDKCommand extends BaseCommand {
   create(): Command {
     const command = new Command('sdk')
-      .description('Create and manage custom agents with the Agent-Baba-D SDK');
+      .description('Create and manage custom agents with the Agent-Nuvira SDK');
 
     // ── scaffold subcommand ─────────────────────────────────────────────
     const scaffoldCmd = new Command('scaffold')
@@ -172,7 +172,7 @@ export class SDKCommand extends BaseCommand {
   private handleInfo(): void {
     logger.highlight('@agent-baba-d/sdk');
     console.log('');
-    console.log('   Build custom agents for the Agent-Baba-D multi-agent system.');
+    console.log('   Build custom agents for the Agent-Nuvira multi-agent system.');
     console.log('');
     console.log('   Subcommands:');
     console.log('     scaffold    Generate a new custom agent project');

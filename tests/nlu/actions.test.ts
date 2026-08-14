@@ -63,6 +63,7 @@ describe('action map — totals', () => {
       fix: 'goal',
       explain: 'question',
       configure: 'request',
+      write: 'prompt',
       unknown: 'question',
     };
     for (const intent of Object.keys(ACTION_BY_INTENT) as NluIntent[]) {
@@ -131,6 +132,31 @@ describe('cross-command parity (STANDING RULE)', () => {
     expect(resolveDispatch({ intent: 'explain', confidence: 0.8 }).taskIntentHint).toBeUndefined();
     expect(resolveDispatch({ intent: 'configure', confidence: 0.85 }).taskIntentHint).toBeUndefined();
     expect(resolveDispatch({ intent: 'fix', confidence: 0.85 }).taskIntentHint).toBe('debugging');
+  });
+
+  it('S4: a creative/writing request is a CHAT answer in every command (no coding pipeline)', () => {
+    // The observed failure: "write an essay" was classified create → the
+    // no-model fallback spun up the full multi-agent pipeline. Through the
+    // SHARED choke point, chat/execute/plan/edit all derive this exact
+    // dispatch — so the fix is inherited everywhere, not chat-only.
+    const parsed = parseRequestSync('Write an essay on the elephant in exactly 10 lines for a class 4 student.');
+    expect(parsed.intent).toBe('write');
+    const dispatch = resolveDispatch(parsed);
+    expect(dispatch.action).toBe('write');
+    expect(dispatch.mode).toBe('chat');
+    // run: 'chat' → the no-model fallback NEVER enters the pipeline (the
+    // `action.run !== 'pipeline'` gate in resolvePipelineDispatch).
+    expect(resolveAction(parsed.intent).run).toBe('chat');
+    // The router seed is the 'creative' task intent → the S5 reasoning floor.
+    expect(dispatch.taskIntentHint).toBe('creative');
+    expect(dispatch.autoDispatch).toBe(true);
+  });
+
+  it('S4: coding-style "write a test" still resolves to create (regression guard)', () => {
+    const parsed = parseRequestSync('write a test for the login function');
+    expect(parsed.intent).toBe('create');
+    expect(resolveDispatch(parsed).action).toBe('build');
+    expect(resolveAction(parsed.intent).run).toBe('pipeline');
   });
 
   it('guards the actual command wiring — every action command consumes the shared choke point', () => {

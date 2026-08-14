@@ -378,3 +378,72 @@ describe('COMPLEXITY_BUCKETS', () => {
     expect(COMPLEXITY_BUCKETS).toContain('critical');
   });
 });
+
+// ─── Intent-aware bucketing (v3) ───────────────────────────────────────────
+// Learning is bucketed by task INTENT *and* complexity so a provider's
+// coding-session wins can never boost it for creative writing (the mis-routing
+// that sent an essay to a 4-bit local model). Legacy callers WITHOUT an intent
+// keep the plain complexity key — fully backward compatible.
+
+describe('intent-aware bucketing (v3)', () => {
+  it('records and reads priors under the intent-scoped bucket key', () => {
+    const bandit = new RouterBandit();
+    bandit.recordOutcome('groq', 'implement a login form', 'success', 1.0, undefined, 'coding');
+    // Intent-scoped read finds the learned prior
+    expect(bandit.getPrior('groq', 'moderate', 'coding').alpha).toBeGreaterThan(1);
+    // The legacy (no-intent) bucket stays untouched — coding wins must never
+    // leak into the generic prior surface.
+    expect(bandit.getPrior('groq', 'moderate')).toEqual({ alpha: 1, beta: 1 });
+  });
+
+  it('isolates learning across task intents', () => {
+    const bandit = new RouterBandit();
+    // Successes on coding tasks for groq, failures on creative tasks for groq
+    for (let i = 0; i < 20; i++) {
+      bandit.recordOutcome('groq', 'implement a login form', 'success', 1.0, undefined, 'coding');
+    }
+    bandit.recordOutcome('groq', 'write an essay about elephants', 'failure', 1.0, undefined, 'creative');
+
+    const coding = bandit.getPrior('groq', 'moderate', 'coding');
+    const creative = bandit.getPrior('groq', 'moderate', 'creative');
+    // Coding wins made groq look great for coding (20 successes @ cost 1.0 →
+    // α = 1 + 20·0.9 = 19, β = 1 + 20·0.1 = 3 → win rate ≈ 0.86)…
+    expect(coding.alpha / (coding.alpha + coding.beta)).toBeGreaterThan(0.85);
+    // …but the creative bucket records ONLY the creative failure
+    expect(creative.beta).toBe(2);
+    expect(creative.alpha).toBe(1);
+  });
+
+  it('legacy no-intent callers still use the plain complexity key', () => {
+    const bandit = new RouterBandit();
+    bandit.recordOutcome('gemini', 'implement a login form', 'success', 1.0);
+    // No intent passed → plain key (backward compatible with v2 data/tests)
+    expect(bandit.getPrior('gemini', 'moderate').alpha).toBeGreaterThan(1);
+    expect(bandit.getPrior('gemini', 'moderate', 'coding')).toEqual({ alpha: 1, beta: 1 });
+  });
+
+  it('stamps taskIntent on learning history entries', () => {
+    const bandit = new RouterBandit();
+    bandit.recordOutcome('groq', 'write an essay', 'failure', 1.0, undefined, 'creative');
+    const entry = bandit.getState().learningHistory[0];
+    expect(entry.taskIntent).toBe('creative');
+    expect(entry.complexity).toBe('moderate'); // analyzeComplexity('write an essay')
+  });
+
+  it('per-model priors are intent-bucketed too', () => {
+    const bandit = new RouterBandit();
+    bandit.recordModelOutcome('llama-3.3-70b-versatile', 'implement a login form', 'success', 0.85, undefined, 'coding');
+    expect(bandit.getModelPrior('llama-3.3-70b-versatile', 'moderate', 'coding').alpha).toBeGreaterThan(1);
+    expect(bandit.getModelPrior('llama-3.3-70b-versatile', 'moderate')).toEqual({ alpha: 1, beta: 1 });
+  });
+
+  it('sampleScore uses the intent-scoped prior when provided', () => {
+    const bandit = new RouterBandit();
+    bandit.recordOutcome('groq', 'implement a login form', 'failure', 1.0, undefined, 'coding');
+    // Failure bumps β → mean below 0.5 → sampled score below the neutral 0.5
+    const prior = bandit.getPrior('groq', 'moderate', 'coding');
+    expect(prior.beta).toBeGreaterThan(1);
+    const sampled = bandit.sampleScore('groq', 'moderate', 1, 'coding');
+    expect(sampled).toBeLessThan(0.5);
+  });
+});

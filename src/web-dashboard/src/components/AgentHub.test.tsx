@@ -70,6 +70,8 @@ function mockReads(payload: HubData | null = HUB, auth: { configured: boolean; a
   // The Channels tab mounts WhatsAppPanel (P2), whose SSE subscription needs
   // a browser EventSource — keep the hub tests hermetic.
   vi.spyOn(dashboardAPI, 'subscribeWhatsApp').mockReturnValue(() => {});
+  // …and PlatformConfigSection (v1.69) fetches the transport list on mount.
+  vi.spyOn(dashboardAPI, 'getPlatformConfigs').mockResolvedValue([]);
   vi.spyOn(dashboardAPI, 'getWhatsAppStatus').mockResolvedValue({
     state: 'idle',
     paired: false,

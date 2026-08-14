@@ -1,5 +1,5 @@
 """
-Generate a professional 128x128 PNG icon for the Agent-Baba-D VS Code extension.
+Generate a professional 128x128 PNG icon for the Agent-Nuvira VS Code extension.
 
 The icon features:
 - Rounded square with gradient background (deep purple → vibrant blue)

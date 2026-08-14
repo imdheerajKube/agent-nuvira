@@ -99,7 +99,7 @@ export function isThinkOnlyResponse(content: string): boolean {
 export function extractFallbackToolCalls(content: string): { text: string; calls: StepResponse['toolCalls'] } {
   const calls: StepResponse['toolCalls'] = [];
   let cleaned = content;
-  let allParsed = true;
+  let strippedAny = false;
   const startsAt = /\(?\s*\{\s*"tool"\s*:/g;
   let m: RegExpExecArray | null;
   while ((m = startsAt.exec(cleaned)) !== null) {
@@ -109,6 +109,13 @@ export function extractFallbackToolCalls(content: string): { text: string; calls
       continue;
     }
     const block = cleaned.slice(m.index, end + 1);
+    // A matched block is ALWAYS removed from the answer text — a raw
+    // `{"tool":...}` block must never leak into the user-facing content,
+    // even when it fails to parse (a malformed followups block was the cause
+    // of the essay prompt's answer ending in raw JSON).
+    cleaned = cleaned.slice(0, m.index) + cleaned.slice(end + 1);
+    startsAt.lastIndex = m.index;
+    strippedAny = true;
     try {
       const parsed = JSON.parse(block) as { tool?: string; arguments?: Record<string, unknown> };
       if (parsed.tool && typeof parsed.tool === 'string') {
@@ -117,18 +124,32 @@ export function extractFallbackToolCalls(content: string): { text: string; calls
           name: parsed.tool,
           arguments: parsed.arguments && typeof parsed.arguments === 'object' ? parsed.arguments : {},
         });
-        cleaned = cleaned.slice(0, m.index) + cleaned.slice(end + 1);
-        startsAt.lastIndex = m.index;
-      } else {
-        allParsed = false;
-        startsAt.lastIndex = end + 1;
       }
     } catch {
-      allParsed = false;
-      startsAt.lastIndex = end + 1;
+      // Unparseable block — dropped from the answer, no tool call.
     }
   }
-  return { text: allParsed && calls.length > 0 ? cleaned.trim() : content, calls };
+  return { text: strippedAny ? cleaned.trim() : content, calls };
+}
+
+/**
+ * Whether content is a BARE acknowledgment — a short lead-in that agrees to
+ * help but does NOT yet contain the answer ("Sure, I can help with that!",
+ * "Let me write that for you."). The tool contract tells the model to deliver
+ * the answer FIRST and call suggest_followups only AFTER it — but a model
+ * that misorders them (followups in step 1 + a bare lead-in) must NOT end the
+ * turn with only the acknowledgment, otherwise the real answer never arrives
+ * (the user sees "Sure!" and no essay). When the loop sees a concluding
+ * suggest_followups step whose only content is such a lead-in, it continues
+ * so the model can deliver the actual answer.
+ */
+export function isBareAcknowledgment(content: string): boolean {
+  const trimmed = content.trim();
+  if (!trimmed) return false;
+  if (trimmed.length >= 80) return false; // a real answer is longer than a lead-in
+  if (/^[^.!?]*!$/.test(trimmed)) return true; // short exclamatory lead-in ("Sure!")
+  return /^(sure|ok(?:ay)?|alright|absolutely|certainly|of course|no problem|sounds good|happy to|glad to|let me|i['’]d|i['’]ll|i will|i can|i would|i'm on it|on it)/i.test(trimmed) ||
+    /(help with that|help you with|write (that|this|it) for|take a look|dive in|give it a shot)/i.test(trimmed);
 }
 
 /** Index of the brace matching the one at `start` (string-aware), or -1. */
@@ -179,6 +200,10 @@ export async function runToolLoop(opts: ToolLoopOptions): Promise<ToolLoopResult
 
   const thread: ToolMessage[] = [...messages];
   let steps = 0;
+  // The last SUBSTANTIVE answer text. JSON-only steps (a `{"tool":...}` block
+  // with no visible text, common after the model already answered) must NOT
+  // clobber it — otherwise the delivered answer is lost and the turn ends
+  // with an empty/bounded response (the "where is the essay?" bug).
   let lastContent = '';
   let bounded = false;
 
@@ -208,7 +233,14 @@ export async function runToolLoop(opts: ToolLoopOptions): Promise<ToolLoopResult
       };
     }
 
-    lastContent = response.content;
+    // S1: LONGEST-substantive wins. A trailing wrapper (a short closing
+    // paragraph written AFTER the real answer, common when the model repeats
+    // suggest_followups) must not clobber the full answer delivered in an
+    // earlier step — otherwise the turn ends with the wrapper instead of the
+    // essay (the "where is the essay?" bug).
+    if (response.content.trim() && response.content.length >= lastContent.length) {
+      lastContent = response.content;
+    }
     const { toolCalls } = response;
 
     if (toolCalls.length === 0) {
@@ -236,9 +268,15 @@ export async function runToolLoop(opts: ToolLoopOptions): Promise<ToolLoopResult
       toolCalls: toolCalls.map((tc) => ({ id: tc.id, name: tc.name, arguments: JSON.stringify(tc.arguments) })),
     });
 
+    let endedAfterConcluding = false;
     for (const call of toolCalls) {
       const tool = getTool(call.name);
       toolCallsRun.push(call.name);
+      if (call.name === 'suggest_followups') {
+        // The LAST suggest_followups call wins (a model that repeats it after
+        // already answering must not accumulate 15 stale suggestions).
+        followups.length = 0;
+      }
       let resultText: string;
       if (!tool) {
         // Unknown tool — the error is fed back so the model retries with a
@@ -266,6 +304,7 @@ export async function runToolLoop(opts: ToolLoopOptions): Promise<ToolLoopResult
             result: resultText,
             durationMs: Date.now() - startedAt,
           });
+          if (call.name === 'suggest_followups') endedAfterConcluding = true;
         } catch (err) {
           const message = err instanceof Error ? err.message : String(err);
           resultText = `Error: ${message}`;
@@ -278,6 +317,38 @@ export async function runToolLoop(opts: ToolLoopOptions): Promise<ToolLoopResult
         }
       }
       thread.push({ role: 'tool', toolCallId: call.id, content: resultText });
+    }
+
+    // End-of-response semantics (Freebuff contract: "END EVERY RESPONSE by
+    // calling suggest_followups"): when the model delivered its answer and
+    // ended with a SUCCESSFUL suggest_followups, the turn is complete — do NOT
+    // request another step. That previous behavior forced the model to keep
+    // emitting followups (repeating it 4–5×, sometimes malformed), and the
+    // repeats clobbered the delivered answer ("where is the essay?" / the
+    // answer ending in raw JSON).
+    //
+    // S1: deliver the MOST SUBSTANTIVE content seen, not necessarily this
+    // step's text — the concluding step often carries only a short trailing
+    // wrapper while the real answer (the essay) landed in an earlier step
+    // whose (invalid) followups call forced the loop to continue. Also covers
+    // a JSON-only concluding step (empty text, valid followups): return the
+    // substantive answer from earlier.
+    // Premature-followups guard: a concluding step whose content is only a
+    // bare acknowledgment ("Sure, I can help!") has NOT delivered the answer
+    // yet — ending here would hand the user a lead-in instead of the essay.
+    // Continue so the model writes the real answer (the S1 longest-substantive
+    // logic guarantees an earlier real answer, if any, still wins).
+    const hasRealAnswer = lastContent.trim() !== '' && !isBareAcknowledgment(lastContent);
+    const thisStepIsReal = response.content.trim() !== '' && !isBareAcknowledgment(response.content);
+    if (endedAfterConcluding && (thisStepIsReal || hasRealAnswer)) {
+      const content = response.content.length >= lastContent.length ? response.content : lastContent;
+      return {
+        content,
+        followups,
+        toolCalls: toolCallsRun,
+        steps,
+        bounded: false,
+      };
     }
   }
 

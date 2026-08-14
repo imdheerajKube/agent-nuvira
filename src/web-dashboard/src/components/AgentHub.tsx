@@ -19,6 +19,7 @@ import { useCallback, useEffect, useState } from 'react';
 import { dashboardAPI } from '../api';
 import type { HubData, HubToolset } from '../types';
 import WhatsAppPanel from './WhatsAppPanel';
+import { PlatformConfigSection } from './PlatformConfigSection';
 
 type HubTab = 'tools' | 'channels' | 'artifacts' | 'skills';
 
@@ -449,6 +450,7 @@ export default function AgentHub() {
               </div>
             ))}
           </div>
+          <PlatformConfigSection canWrite={canWrite} sessionExpired={sessionExpired} />
 
           <h3 className="section-subtitle">🔗 Channel aliases (buff gateway status)</h3>
           {data.channels.aliases.length > 0 ? (

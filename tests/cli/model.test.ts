@@ -347,8 +347,8 @@ describe('ModelCommand bandit', () => {
   it('JSON mode reports empty state when no learning data exists', () => {
     const output = runCommand(['bandit', '--json']);
     const parsed = JSON.parse(output) as Record<string, any>;
-    // v2 = per-modelId modelPriors (ruflo ADR-149 mirror)
-    expect(parsed.version).toBe(2);
+    // v3 = task-intent-aware buckets (v2 = per-modelId modelPriors)
+    expect(parsed.version).toBe(3);
     // `enabled` reflects the user's routing.bandit config — just verify the field exists
     expect(typeof parsed.enabled).toBe('boolean');
     expect(parsed.priors).toEqual({});

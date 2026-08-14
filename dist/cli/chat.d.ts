@@ -112,8 +112,9 @@ export declare class ChatCommand extends BaseCommand {
      * machinery forward: auto-mode failover + shared fallback chain inside
      * callModel, caching, memory recording, and registry telemetry.
      *
-     * Returns the final content + an optional follow-up prompt (interactive
-     * mode renders numbered options; choosing one sends it as the next message).
+     * Returns the final content + followups as DATA — the CALLER prints the
+     * content first, then renders the followup menu (answer-first ordering;
+     * interactive mode turns a chosen followup into the next message).
      */
     private runChatAnswer;
     /**

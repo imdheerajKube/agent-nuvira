@@ -28,6 +28,10 @@ import { recordMetricTime, getMetrics } from '../enterprise/metrics.js';
 import { resolveDispatch } from '../nlu/actions.js';
 import { runToolLoop, extractFallbackToolCalls } from '../tools/tool-loop.js';
 import { getTool, TOOL_CONTRACT_JSON } from '../tools/registry.js';
+// S2/S3 — the shared tool-call reliability helpers (salvage failed_generation,
+// compact fallback schemas). One copy for every tool-calling surface, not
+// chat-private (execute/plan/… inherit the fix).
+import { buildJsonFallbackPrompt, salvageFailedGeneration } from '../inference/tool-call-utils.js';
 import { runPipelineTool } from '../tools/pipeline-tool.js';
 import { ArtifactStore } from '../tools/artifact-store.js';
 import { getEventBus } from '../observability/event-bus.js';
@@ -191,8 +195,9 @@ Rule assessment (best-effort hint, NOT an order — verify against the actual re
 intent=${parsed.intent} (${Math.round(parsed.confidence * 100)}%), likely action=${parsed.action.name}.`
         : '';
     return [
-        "You are Buff, an expert coding agent working inside the user's project.",
+        "You are Nuvira, Agent-Nuvira's expert coding agent, working inside the user's project. You identify as Nuvira (never 'Buff').",
         'Be precise and honest. When a request is ambiguous or incomplete, clarify with ask_user instead of guessing.',
+        'Answer ordering: first briefly acknowledge the request in your own words, then deliver the full answer, and only then call suggest_followups — the followups must never appear before or instead of the answer.',
         ruleHint,
         '',
         TOOL_CONTRACT_JSON,
@@ -262,7 +267,7 @@ export class ChatCommand extends BaseCommand {
         opts.onProgress?.(`   🧠 routed to ${provider.name}${model ? ` / ${model}` : ''} — working…`);
         const parsed = parseRequestSync(message);
         const dispatchDecision = resolvePipelineDispatch(parsed, { dev: opts.dev });
-        const answer = await this.runChatAnswer(message, opts.history ?? [], { type, provider, model }, { provider: mergedOpts.provider, model: mergedOpts.model, dev: mergedOpts.dev, cache: true }, true, { auto: autoMode }, false, parsed, { askUser: opts.askUser, onProgress: opts.onProgress });
+        const answer = await this.runChatAnswer(message, opts.history ?? [], { type, provider, model }, { provider: mergedOpts.provider, model: mergedOpts.model, dev: mergedOpts.dev, cache: true }, true, { auto: autoMode }, parsed, { askUser: opts.askUser, onProgress: opts.onProgress });
         // No-model fallback: the tool loop could not generate a single response
         // AND the rules assessed a high-confidence pipeline intent — run the
         // pipeline directly (rules decide only when the model is unavailable; the
@@ -370,7 +375,7 @@ export class ChatCommand extends BaseCommand {
             // as a bypass.
             const parsed = parseRequestSync(prompt);
             const dispatchDecision = resolvePipelineDispatch(parsed, { dev: options?.dev });
-            const answer = await this.runChatAnswer(prompt, [], { type, provider, model }, options || {}, cacheEnabled, { auto: autoMode }, false, parsed);
+            const answer = await this.runChatAnswer(prompt, [], { type, provider, model }, options || {}, cacheEnabled, { auto: autoMode }, parsed);
             // No-model fallback: the tool loop could not generate a single response
             // AND the rules assessed a high-confidence pipeline intent — run the
             // pipeline directly (rules decide only when the model is unavailable;
@@ -379,9 +384,13 @@ export class ChatCommand extends BaseCommand {
                 await runDeveloperMode(prompt, this.configManager, { provider: type, model });
                 return;
             }
+            // Ordering: the ANSWER is always printed first, then followups — the
+            // user asked for the content, not a menu. renderFollowups returns the
+            // picked prompt in interactive mode; single-shot just prints the list.
             if (answer.content.trim()) {
                 console.log('\n' + answer.content + '\n');
             }
+            await this.renderFollowups(answer.followups ?? [], false);
             return;
         }
         logger.highlight(`\n🧠 Buff Chat — ${autoMode ? '🤖 Auto routing' : provider.name}`);
@@ -468,7 +477,7 @@ export class ChatCommand extends BaseCommand {
             const parsed = recordMetricTime('rule.parse.ms', () => parseRequestSync(message));
             const dispatchDecision = recordMetricTime('rule.dispatch.ms', () => resolvePipelineDispatch(parsed, { dev: this.devModeAuto }));
             const session = { type, provider, model: effectiveModel };
-            const answer = await withLogCorrelation({ sessionId: chatSessionId }, () => recordMetricTime('llm.answer.ms', () => this.runChatAnswer(message, history, session, options || {}, cacheEnabled, { auto: autoMode }, true, parsed)));
+            const answer = await withLogCorrelation({ sessionId: chatSessionId }, () => recordMetricTime('llm.answer.ms', () => this.runChatAnswer(message, history, session, options || {}, cacheEnabled, { auto: autoMode }, parsed)));
             // No-model fallback: the tool loop could not generate a single response
             // AND the rules assessed a high-confidence pipeline intent — run the
             // pipeline directly (rules decide only when the model is unavailable).
@@ -493,11 +502,15 @@ export class ChatCommand extends BaseCommand {
             effectiveModel = session.model;
             effectiveModelForHistory = session.model || effectiveModelForHistory;
             model = effectiveModel;
+            // Ordering: deliver the ANSWER first, then the follow-up menu (the
+            // followup pick becomes the next message). The user asked for the
+            // content — the menu must never print before it.
             if (answer.content.trim()) {
                 console.log('\n' + answer.content + '\n');
             }
-            if (answer.followupPrompt) {
-                pendingMessage = answer.followupPrompt;
+            const followupPrompt = await this.renderFollowups(answer.followups ?? [], true);
+            if (followupPrompt) {
+                pendingMessage = followupPrompt;
             }
             console.log('');
             continue;
@@ -568,17 +581,21 @@ export class ChatCommand extends BaseCommand {
      * machinery forward: auto-mode failover + shared fallback chain inside
      * callModel, caching, memory recording, and registry telemetry.
      *
-     * Returns the final content + an optional follow-up prompt (interactive
-     * mode renders numbered options; choosing one sends it as the next message).
+     * Returns the final content + followups as DATA — the CALLER prints the
+     * content first, then renders the followup menu (answer-first ordering;
+     * interactive mode turns a chosen followup into the next message).
      */
-    async runChatAnswer(message, history, session, options, cacheEnabled, mode, interactive, parsed, ctxOverrides) {
+    async runChatAnswer(message, history, session, options, cacheEnabled, mode, parsed, ctxOverrides) {
         // Cache check first (same as the legacy path).
         const cache = getCache();
         if (cacheEnabled) {
             try {
                 const cachedResult = await cache.get(message, session.model ?? 'default', session.type);
                 if (cachedResult) {
-                    console.log(`\n${cachedResult}\n`);
+                    // NOTE: the cached answer is NOT printed here — the caller prints
+                    // content AFTER runChatAnswer returns (answer-first ordering). A
+                    // print here would show the answer before the turn's own progress
+                    // lines AND double-print it.
                     history.push({ role: 'user', content: message });
                     history.push({ role: 'assistant', content: cachedResult });
                     this.memoryNoteTurn(message, cachedResult);
@@ -712,10 +729,10 @@ export class ChatCommand extends BaseCommand {
                 // Best-effort.
             }
         }
-        const followupPrompt = await this.renderFollowups(result.followups, interactive);
+        // Followups are rendered by the CALLER (after the answer is printed) so
+        // the menu never appears before the content. We return them as data.
         return {
             content: result.content,
-            followupPrompt,
             generationFailed: result.generationFailed,
             followups: result.followups,
         };
@@ -731,23 +748,32 @@ export class ChatCommand extends BaseCommand {
         return async (messages, schemas) => {
             const tryGenerate = async (prov, typ, mdl) => {
                 if (typeof prov.generateTools === 'function' && schemas.length > 0) {
-                    return prov.generateTools(messages, schemas, { ...options, model: mdl });
+                    try {
+                        return await prov.generateTools(messages, schemas, { ...options, model: mdl });
+                    }
+                    catch (err) {
+                        // S3: a tool-call 400 often carries the model's COMPLETE answer in
+                        // `failed_generation` (the API rejected only the CALL). Salvage it
+                        // instead of losing the turn to failover/error — the essay was
+                        // sitting in the error payload and was being thrown away.
+                        const salvaged = salvageFailedGeneration(err);
+                        if (salvaged) {
+                            logger.warn("   ⚠️ Tool call rejected (400) — salvaging the model's generated answer.");
+                            // Re-run the recovered suggest_followups through the normal tool
+                            // path so the followups land in the sink (and the loop's
+                            // end-of-response early return fires on the substantive content).
+                            const toolCalls = salvaged.followups?.length
+                                ? [{ id: 'call_salvage_1', name: 'suggest_followups', arguments: { followups: salvaged.followups } }]
+                                : [];
+                            return { content: salvaged.content, toolCalls };
+                        }
+                        throw err;
+                    }
                 }
-                // JSON fallback transport: flatten the thread into one prompt.
-                const prompt = messages
-                    .map((m) => {
-                    if (m.role === 'system')
-                        return `[System]\n${m.content}`;
-                    if (m.role === 'user')
-                        return `[User]\n${m.content}`;
-                    if (m.role === 'assistant')
-                        return m.content ? `[Assistant]\n${m.content}` : '';
-                    if (m.role === 'tool')
-                        return `[Tool result]\n${m.content}`;
-                    return '';
-                })
-                    .filter(Boolean)
-                    .join('\n\n');
+                // JSON fallback transport: flatten the thread into one prompt with
+                // the compact argument shapes appended (S2 — shared helper, so
+                // execute/plan-style loops that add tool calling get the same fix).
+                const prompt = buildJsonFallbackPrompt(messages, schemas);
                 let raw;
                 if (typeof prov.generateStream === 'function') {
                     const chunks = [];

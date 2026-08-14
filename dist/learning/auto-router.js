@@ -111,6 +111,14 @@ export class GovernancePolicyError extends Error {
  * 0.5) must never steal routing from a strong cold-start winner.
  */
 export const ESCALATION_WIN_RATE_FLOOR = 0.55;
+/**
+ * S5 — creative/writing tasks need QUALITY, not speed/cost. The static
+ * profile floor for `local` is reasoning 0.30 (a 4-bit quant), which is fine
+ * for quick edits but must never serve essays/poems/letters. Hard-eliminate
+ * sub-floor providers for creative tasks — groq (0.55), gemini (0.85), nim
+ * (0.72) and openrouter (0.95) all pass.
+ */
+export const CREATIVE_MIN_REASONING = 0.4;
 const DEFAULT_PROFILES = {
     local: { reasoning: 0.30, speed: 0.55, cost: 1.00, privacy: 1.00, reliability: 0.60 },
     groq: { reasoning: 0.55, speed: 1.00, cost: 0.85, privacy: 0.15, reliability: 0.85 },
@@ -402,6 +410,18 @@ export function analyzeTaskProfile(taskDescription) {
             notes: ['planning task detected'],
         };
     }
+    // S5: creative writing needs quality, not latency — a distinct intent so
+    // routing applies a reasoning floor (a 4-bit local model must not serve
+    // essays). An NLU taskIntentHint (e.g. 'write an essay' → 'creative')
+    // overrides this label; this text rule is the hint-less fallback path.
+    if (/\b(?:essay|poem|poetry|story|short story|letter|article|blog(?: post)?|paragraph|composition|novel|dialogue|speech|summary|caption|creative writing)\b/i.test(text) ||
+        /\bfor (?:kids|children|students?|class \d)/i.test(text)) {
+        return {
+            intent: 'creative',
+            requiresVerification: false,
+            notes: ['creative writing task detected'],
+        };
+    }
     return {
         intent: 'coding',
         requiresVerification: false,
@@ -573,6 +593,13 @@ export class AutoModelRouter {
         const taskProfile = options.taskIntentHint
             ? { ...analyzedProfile, intent: options.taskIntentHint }
             : analyzedProfile;
+        // S5: creative/writing tasks need QUALITY — enforce a reasoning floor so a
+        // 4-bit local model (reasoning 0.30) can never serve an essay/poem/letter.
+        // The floor is a hard elimination (like the per-call minReasoning option),
+        // but derived from the task intent rather than a manual config.
+        const effectiveMinReasoning = taskProfile.intent === 'creative'
+            ? Math.max(options.minReasoning ?? 0, CREATIVE_MIN_REASONING)
+            : options.minReasoning;
         const mode = options.preferenceMode || 'balanced';
         let weights = computeWeights(complexity, mode, options.weights);
         if (taskProfile.requiresVerification) {
@@ -877,7 +904,7 @@ export class AutoModelRouter {
         let governanceBlocked = [];
         if (options.maxCostUsd !== undefined ||
             options.minSpeed !== undefined ||
-            options.minReasoning !== undefined ||
+            effectiveMinReasoning !== undefined ||
             this.governanceActive(governance)) {
             // ── Pass 1: NON-PII constraints (two-pass so the PII hard-gate always
             // sees exactly the survivors of the other rules). ────────────────────
@@ -918,8 +945,8 @@ export class AutoModelRouter {
                     if (this.getCapabilities(s.provider).speed < options.minSpeed)
                         return false;
                 }
-                if (options.minReasoning !== undefined) {
-                    if (this.getCapabilities(s.provider).reasoning < options.minReasoning)
+                if (effectiveMinReasoning !== undefined) {
+                    if (this.getCapabilities(s.provider).reasoning < effectiveMinReasoning)
                         return false;
                 }
                 // ── M2.4 governance (non-PII rules) ─────────────────────────────
@@ -1018,9 +1045,14 @@ export class AutoModelRouter {
         let escalatedProvider;
         if (options.useBandit) {
             const bandit = getRouterBandit();
+            // v3 — the learning bucket is task-INTENT-aware. Derive the intent from
+            // the TEXT (analyzedProfile, NOT the hint-overridden taskProfile) so
+            // select-time and record-time buckets always match — and so a provider's
+            // coding-session wins can never boost it for creative writing.
+            const learnIntent = analyzedProfile.intent;
             scored = scored.map((s) => ({
                 ...s,
-                score: bandit.sampleScore(s.provider, complexity, s.score),
+                score: bandit.sampleScore(s.provider, complexity, s.score, learnIntent),
             }));
             scored.sort((a, b) => {
                 if (a.inCooldown !== b.inCooldown)
@@ -1040,14 +1072,23 @@ export class AutoModelRouter {
             // cold-start winner.
             const minSamples = options.escalationMinSamples ?? DEFAULT_MIN_SAMPLES;
             const winner = scored.find((s) => !s.inCooldown) || scored[0];
-            const winnerPrior = bandit.getPrior(winner.provider, complexity);
+            const winnerPrior = bandit.getPrior(winner.provider, complexity, analyzedProfile.intent);
             if (winnerPrior.alpha + winnerPrior.beta < minSamples) {
+                // S5: never escalate DOWNWARD in capability. The bandit's learned
+                // priors come from past sessions (often coding-heavy local usage), so
+                // "learned" ≠ "better for THIS task" — escalating from a strong
+                // cold-start winner (e.g. a frontier cloud model with no samples yet)
+                // to a weaker learned provider (e.g. a 4-bit local model) was exactly
+                // how an essay got routed to the weakest model. Only escalate to a
+                // learned provider that is AT LEAST as capable as the winner.
+                const winnerCaps = this.getCapabilities(winner.provider);
                 const learnedAlternative = scored.find((s) => s.provider !== winner.provider &&
                     !s.inCooldown &&
                     (() => {
-                        const p = bandit.getPrior(s.provider, complexity);
+                        const p = bandit.getPrior(s.provider, complexity, analyzedProfile.intent);
                         return (p.alpha + p.beta >= minSamples &&
-                            p.alpha / (p.alpha + p.beta) >= ESCALATION_WIN_RATE_FLOOR);
+                            p.alpha / (p.alpha + p.beta) >= ESCALATION_WIN_RATE_FLOOR &&
+                            this.getCapabilities(s.provider).reasoning >= winnerCaps.reasoning);
                     })());
                 if (learnedAlternative) {
                     banditEscalation = true;
@@ -1077,7 +1118,7 @@ export class AutoModelRouter {
             // (llama-3.3-70b-versatile ≠ openai/gpt-oss-20b on the SAME provider).
             // When any candidate model has learned data, prefer the best Thompson-
             // sampled one; cold start keeps the configured model (deterministic).
-            model = this.resolveModelWithLearning(provider, model, complexity, options.escalationMinSamples ?? DEFAULT_MIN_SAMPLES);
+            model = this.resolveModelWithLearning(provider, model, complexity, options.escalationMinSamples ?? DEFAULT_MIN_SAMPLES, analyzedProfile.intent);
             bandit.noteModelDecision(agentType, model);
             // ── Promotion gate A/B (ruflo router-parallel mirror) ─────────────────
             // Record both the deterministic pick and the bandit pick for this task.
@@ -1225,21 +1266,26 @@ export class AutoModelRouter {
         if (!provider)
             return;
         const costScore = computeCostScore(provider, this.getProviderPricing(provider, configManager));
+        // v3 — bucket the outcome under the SAME text-derived task intent the
+        // resolve() sampling used (analyzeTaskProfile, hint-independent), so a
+        // model's coding wins can't leak into its creative-win prior and vice
+        // versa. Mirrors the select-time derivation exactly.
+        const learnIntent = analyzeTaskProfile(taskDescription).intent;
         if (complexityHint) {
-            bandit.recordOutcomeWithComplexity(provider, complexityHint, outcome, costScore);
+            bandit.recordOutcomeWithComplexity(provider, complexityHint, outcome, costScore, undefined, learnIntent);
         }
         else {
-            bandit.recordOutcome(provider, taskDescription, outcome, costScore);
+            bandit.recordOutcome(provider, taskDescription, outcome, costScore, undefined, learnIntent);
         }
         // Per-modelId learning: attribute the same outcome to the concrete model
         // that served the task (ruflo ADR-149 mirror) so the model choice learns.
         const model = bandit.getLastModel(agentType);
         if (model) {
             if (complexityHint) {
-                bandit.recordModelOutcomeWithComplexity(model, complexityHint, outcome, costScore);
+                bandit.recordModelOutcomeWithComplexity(model, complexityHint, outcome, costScore, undefined, learnIntent);
             }
             else {
-                bandit.recordModelOutcome(model, taskDescription, outcome, costScore);
+                bandit.recordModelOutcome(model, taskDescription, outcome, costScore, undefined, learnIntent);
             }
         }
         // Promotion gate: finalize the parallel A/B decision with the real outcome
@@ -1261,7 +1307,7 @@ export class AutoModelRouter {
      * keeps the configured model — deterministic. Once outcomes accumulate,
      * the best Thompson-sampled LEARNED model wins, so the model choice learns.
      */
-    resolveModelWithLearning(provider, configuredModel, complexity, minSamples = DEFAULT_MIN_SAMPLES) {
+    resolveModelWithLearning(provider, configuredModel, complexity, minSamples = DEFAULT_MIN_SAMPLES, taskIntent) {
         const bandit = getRouterBandit();
         const candidates = [];
         if (configuredModel && configuredModel !== 'default')
@@ -1272,8 +1318,11 @@ export class AutoModelRouter {
         }
         if (candidates.length === 0)
             return configuredModel || 'default';
+        // v3 — per-model learning is intent-bucketed like provider learning: the
+        // SAME taskIntent the outcome was recorded under (recordModelOutcome)
+        // must be the bucket sampled here, or per-model data never surfaces.
         const learned = candidates.filter((m) => {
-            const p = bandit.getModelPrior(m, complexity);
+            const p = bandit.getModelPrior(m, complexity, taskIntent);
             return p.alpha + p.beta >= minSamples;
         });
         // Cold start: no per-model data → keep the configured model (deterministic).
@@ -1281,7 +1330,7 @@ export class AutoModelRouter {
             return candidates[0];
         // Learned: pick the candidate with the best Thompson-sampled per-model draw.
         const sampled = learned
-            .map((m) => ({ model: m, score: bandit.sampleModelScore(m, complexity, 1) }))
+            .map((m) => ({ model: m, score: bandit.sampleModelScore(m, complexity, 1, taskIntent) }))
             .sort((a, b) => b.score - a.score);
         return sampled[0].model;
     }

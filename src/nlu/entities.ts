@@ -58,6 +58,7 @@ export const MODE_HINT_BY_INTENT: Record<NluIntent, ModeHint | null> = {
   fix: 'execute',
   explain: 'chat',
   configure: 'config',
+  write: 'chat',
   unknown: null,
 };
 

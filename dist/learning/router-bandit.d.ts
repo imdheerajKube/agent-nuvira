@@ -63,6 +63,8 @@ export interface RouterBanditState {
         /** Concrete model id this outcome was attributed to (per-model learning). */
         model?: string;
         complexity: string;
+        /** v3 — task intent the outcome was bucketed under ('coding', 'creative', …). */
+        taskIntent?: string;
         outcome: string;
         reward: number;
         latencyMs?: number;
@@ -106,8 +108,16 @@ export declare class RouterBandit {
     /** Load persisted state (best-effort). */
     private load;
     private save;
+    /**
+     * v3 — the learning bucket key. Learning is bucketed by task INTENT *and*
+     * complexity, so a provider's win-rate on coding sessions can never boost it
+     * for creative writing (the mis-routing that sent an essay to a 4-bit local
+     * model). Callers WITHOUT an intent (tests, legacy paths, persisted v2 data)
+     * keep the plain complexity key — fully backward compatible.
+     */
+    private bucketKey;
     /** Get the Beta prior for a model in a complexity bucket (per-model learning). */
-    getModelPrior(model: string, complexity: ComplexityLevel): BetaPrior;
+    getModelPrior(model: string, complexity: ComplexityLevel, taskIntent?: string): BetaPrior;
     /** Note the concrete model picked for an agent type (per-model outcome wiring). */
     noteModelDecision(agentType: string, model: string): void;
     /** Concrete model picked last for an agent type, if any. */
@@ -117,9 +127,9 @@ export declare class RouterBandit {
      * per-model prior. Cold-start Beta(1,1) → uniform draw, so the model choice
      * behaves deterministically until per-model outcomes accumulate.
      */
-    sampleModelScore(model: string, complexity: ComplexityLevel, score: number): number;
-    /** Get the Beta prior for a provider in a complexity bucket. */
-    getPrior(provider: string, complexity: ComplexityLevel): BetaPrior;
+    sampleModelScore(model: string, complexity: ComplexityLevel, score: number, taskIntent?: string): number;
+    /** Get the Beta prior for a provider in a complexity bucket (intent-aware). */
+    getPrior(provider: string, complexity: ComplexityLevel, taskIntent?: string): BetaPrior;
     /** Note the provider picked for an agent type (for recordOutcome wiring). */
     noteDecision(agentType: string, provider: string): void;
     /** Provider picked last for an agent type, if any. */
@@ -141,14 +151,14 @@ export declare class RouterBandit {
      *                       the cost-adjusted success reward. Default 0.5.
      * @param outcomeData    Optional richer outcome telemetry for the reward model.
      */
-    recordOutcome(provider: string, taskDescription: string, outcome: BanditOutcome, costScore?: number, outcomeData?: Partial<BanditOutcomeData>): void;
+    recordOutcome(provider: string, taskDescription: string, outcome: BanditOutcome, costScore?: number, outcomeData?: Partial<BanditOutcomeData>, taskIntent?: string): void;
     /**
      * Update the bandit prior for a provider in an EXPLICIT complexity bucket.
      * Used when the plan's TaskStep.complexity (a subtask label) differs from
      * what re-analyzing the description would return — keeps select-time and
      * record-time buckets identical for subtask-local routing.
      */
-    recordOutcomeWithComplexity(provider: string, complexity: ComplexityLevel, outcome: BanditOutcome, costScore?: number, outcomeData?: Partial<BanditOutcomeData>): void;
+    recordOutcomeWithComplexity(provider: string, complexity: ComplexityLevel, outcome: BanditOutcome, costScore?: number, outcomeData?: Partial<BanditOutcomeData>, taskIntent?: string): void;
     /**
      * Update the bandit prior for a provider in the task's complexity bucket.
   
@@ -164,13 +174,13 @@ export declare class RouterBandit {
      * @param costScore      0–1 cost score of the model's provider (1 = cheapest).
      * @param outcomeData    Optional richer outcome telemetry for the reward model.
      */
-    recordModelOutcome(model: string, taskDescription: string, outcome: BanditOutcome, costScore?: number, outcomeData?: Partial<BanditOutcomeData>): void;
+    recordModelOutcome(model: string, taskDescription: string, outcome: BanditOutcome, costScore?: number, outcomeData?: Partial<BanditOutcomeData>, taskIntent?: string): void;
     /**
      * Update the PER-MODEL prior for a concrete model id in an EXPLICIT
      * complexity bucket. Mirrors recordOutcomeWithComplexity for per-model
      * learning (ADR-149) so subtask labels stay consistent.
      */
-    recordModelOutcomeWithComplexity(model: string, complexity: ComplexityLevel, outcome: BanditOutcome, costScore?: number, outcomeData?: Partial<BanditOutcomeData>): void;
+    recordModelOutcomeWithComplexity(model: string, complexity: ComplexityLevel, outcome: BanditOutcome, costScore?: number, outcomeData?: Partial<BanditOutcomeData>, taskIntent?: string): void;
     /**
      * Update the PER-MODEL prior for a concrete model id in the task's complexity
   
@@ -179,7 +189,7 @@ export declare class RouterBandit {
      * Cold-start Beta(1,1) → uniform draws, so expected behavior matches the
      * deterministic router; accumulated outcomes skew the sample up/down.
      */
-    sampleScore(provider: string, complexity: ComplexityLevel, score: number): number;
+    sampleScore(provider: string, complexity: ComplexityLevel, score: number, taskIntent?: string): number;
     /** Full state snapshot (for CLI display / tests). */
     getState(): RouterBanditState;
     /** Reset all state (used by tests and `buff model bandit reset`). */

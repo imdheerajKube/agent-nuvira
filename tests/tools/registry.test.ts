@@ -244,12 +244,20 @@ describe('registry — suggest_followups contract (Freebuff parity)', () => {
     expect(toFollowupSuggestions(raw).length).toBe(3);
   });
 
-  it('rejects invalid output (no array / >3 / empty prompts) with []', () => {
+  it('rejects invalid output (no array / empty prompts) with []', () => {
     expect(toFollowupSuggestions('no json here')).toEqual([]);
     expect(toFollowupSuggestions('[{"prompt":""}]')).toEqual([]);
-    // 4 followups violate the ≤3 contract.
+  });
+
+  it('parses 4+ followups (Freebuff parity: ~3 is prose guidance, not a schema cap)', () => {
+    // Freebuff's schema is .min(1) with NO max — a model emitting 4–5 valid
+    // followups must PARSE (a zod rejection feeds a tool error back and forces
+    // a wasteful retry loop). Callers trim to the top 3 for display.
     const four = Array.from({ length: 4 }, (_, i) => ({ prompt: `p${i}` }));
-    expect(suggestFollowupsSchema.safeParse({ followups: four }).success).toBe(false);
+    const parsed = suggestFollowupsSchema.safeParse({ followups: four });
+    expect(parsed.success).toBe(true);
+    expect(parsed.success && parsed.data.followups.length).toBe(4);
+    expect(toFollowupSuggestions(JSON.stringify(four)).length).toBe(4);
   });
 });
 

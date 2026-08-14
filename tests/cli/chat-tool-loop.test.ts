@@ -72,7 +72,6 @@ describe('ChatCommand — E3b tool-call turn', () => {
       {},
       false,
       { auto: false },
-      false,
     );
 
     expect(out.content).toBe('Here is the answer.');
@@ -107,7 +106,6 @@ describe('ChatCommand — E3b tool-call turn', () => {
       {},
       false,
       { auto: false },
-      false,
     );
 
     // The JSON tool block was stripped from the displayed content.
@@ -137,7 +135,6 @@ describe('ChatCommand — E3b tool-call turn', () => {
       {},
       false,
       { auto: false },
-      false,
     );
 
     // Bounded — the loop returns the step-limit message instead of spinning.

@@ -10,6 +10,7 @@ import { describe, it, expect, vi } from 'vitest';
 import {
   runToolLoop,
   isThinkOnlyResponse,
+  isBareAcknowledgment,
   extractFallbackToolCalls,
   type ToolLoopDeps,
   type StepResponse,
@@ -161,6 +162,67 @@ describe('tool loop — end-turn semantics', () => {
     expect(result.generationFailed).toBe(true);
   });
 
+  it('ends the turn after suggest_followups when the answer is in the SAME step (deliver → suggest)', async () => {
+    // The Freebuff contract: "END EVERY RESPONSE by calling suggest_followups".
+    // When the model delivers its answer text AND calls suggest_followups in
+    // one step, the turn is complete — the loop must NOT request another step
+    // (that forced models to repeat followups 4–5× and clobber the answer).
+    const script: StepResponse[] = [
+      {
+        content: 'The cow essay is complete. Cows give milk and are herbivores.',
+        toolCalls: [
+          { id: 'c1', name: 'suggest_followups', arguments: { followups: [{ prompt: 'Write about horses?' }] } },
+        ],
+      },
+      // A second model response would have been requested before the fix.
+      { content: 'STALE EXTRA STEP — must never be requested.', toolCalls: [] },
+    ];
+    const deps = mockDeps(script, realExecute);
+    const result = await runToolLoop({ messages: [{ role: 'user', content: 'essay on cow' }], context: ctx, deps });
+    expect(result.steps).toBe(1);
+    expect(result.content).toBe('The cow essay is complete. Cows give milk and are herbivores.');
+    expect(result.followups).toEqual([{ prompt: 'Write about horses?' }] as FollowupSuggestion[]);
+    expect(result.bounded).toBe(false);
+    expect(deps.callModel).toHaveBeenCalledTimes(1);
+  });
+
+  it('JSON-only suggest_followups after the answer ends the turn with the delivered answer (S1)', async () => {
+    // Pathological case: the model answered in step 1, then only emitted
+    // JSON-only suggest_followups blocks. The delivered answer must survive —
+    // and the turn must END at the first successful followups instead of
+    // looping to the bound (the old loop forced more steps whose trailing
+    // wrapper text clobbered the essay).
+    const script: StepResponse[] = [
+      { content: 'The essay. Cows are mammals.', toolCalls: [{ id: 'c1', name: 'code_search', arguments: { pattern: 'x' } }] },
+      { content: '', toolCalls: [{ id: 'c2', name: 'suggest_followups', arguments: { followups: [{ prompt: 'A' }] } }] },
+      { content: '', toolCalls: [{ id: 'c3', name: 'suggest_followups', arguments: { followups: [{ prompt: 'B' }] } }] },
+    ];
+    const deps = mockDeps(script, realExecute);
+    const result = await runToolLoop({
+      messages: [{ role: 'user', content: 'essay' }],
+      context: ctx,
+      deps,
+      maxSteps: 3,
+    });
+    // The turn ends at step 2 (successful followups + prior substantive answer).
+    expect(result.bounded).toBe(false);
+    expect(result.steps).toBe(2);
+    expect(result.content).toBe('The essay. Cows are mammals.'); // NOT clobbered by ''
+    expect(result.followups).toEqual([{ prompt: 'A' }] as FollowupSuggestion[]);
+  });
+
+  it('the LAST suggest_followups call wins (no accumulated stale suggestions)', async () => {
+    const script: StepResponse[] = [
+      { content: '', toolCalls: [{ id: 'c1', name: 'suggest_followups', arguments: { followups: [{ prompt: 'Stale A' }, { prompt: 'Stale B' }] } }] },
+      { content: '', toolCalls: [{ id: 'c2', name: 'suggest_followups', arguments: { followups: [{ prompt: 'Final' }] } }] },
+      { content: 'Done.', toolCalls: [] },
+    ];
+    const deps = mockDeps(script, realExecute);
+    const result = await runToolLoop({ messages: [{ role: 'user', content: 'q' }], context: ctx, deps });
+    expect(result.followups).toEqual([{ prompt: 'Final' }] as FollowupSuggestion[]);
+    expect(result.content).toBe('Done.');
+  });
+
   it('does NOT flag generationFailed when a tool already ran (never re-runs work)', async () => {
     // Step 1: the model calls `build` (tool executes). Step 2: generation dies.
     // The turn MADE PROGRESS — the caller must not fall back to re-running the
@@ -201,10 +263,53 @@ describe('tool loop — helpers', () => {
     expect((calls[0].arguments as { followups: unknown[] }).followups.length).toBe(1);
   });
 
-  it('extractFallbackToolCalls leaves malformed JSON in the text', () => {
+  it('extractFallbackToolCalls strips malformed JSON blocks instead of leaking them into the answer', () => {
+    // Brace-matched but unparseable (trailing comma in the followups array) —
+    // the block must NOT leak raw JSON into the user-facing answer.
+    const raw = 'The essay is complete. {"tool":"suggest_followups","arguments":{"followups":[{"prompt":"x"},]}}';
+    const { text, calls } = extractFallbackToolCalls(raw);
+    expect(calls.length).toBe(0);
+    expect(text).toBe('The essay is complete.');
+    expect(text).not.toContain('"tool"');
+  });
+
+  it('extractFallbackToolCalls leaves unterminated JSON (no closing brace) untouched', () => {
     const raw = 'Answer {"tool": broken';
     const { text, calls } = extractFallbackToolCalls(raw);
     expect(calls.length).toBe(0);
     expect(text).toContain('broken');
+  });
+
+  it('isBareAcknowledgment flags short lead-ins but not real answers', () => {
+    expect(isBareAcknowledgment('Sure, I can help with that!')).toBe(true);
+    expect(isBareAcknowledgment('Let me write that essay for you.')).toBe(true);
+    expect(isBareAcknowledgment('Sure!')).toBe(true);
+    expect(isBareAcknowledgment('Okay, let me take a look.')).toBe(true);
+    // Real answers (even short ones) are NOT acknowledgments
+    expect(isBareAcknowledgment('The essay is complete.')).toBe(false);
+    expect(isBareAcknowledgment('Done.')).toBe(false);
+    expect(isBareAcknowledgment('')).toBe(false);
+  });
+
+  it('a bare-acknowledgment + suggest_followups does NOT end the turn — the real answer must follow', async () => {
+    // Misordered model: step 1 emits ONLY a lead-in + valid followups (the
+    // contract violation the user reported). The loop must NOT deliver the
+    // lead-in as the answer — it continues so the essay arrives in step 2.
+    const script: StepResponse[] = [
+      {
+        content: 'Sure, I can help with that!',
+        toolCalls: [{ id: 'c1', name: 'suggest_followups', arguments: { followups: [{ prompt: 'Next?' }] } }],
+      },
+      {
+        content: 'The elephant essay: elephants are the largest land animals.',
+        toolCalls: [{ id: 'c2', name: 'suggest_followups', arguments: { followups: [{ prompt: 'More?' }] } }],
+      },
+    ];
+    const deps = mockDeps(script, realExecute);
+    const result = await runToolLoop({ messages: [{ role: 'user', content: 'essay' }], context: ctx, deps });
+    expect(result.content).toBe('The elephant essay: elephants are the largest land animals.');
+    expect(result.steps).toBe(2);
+    expect(result.followups).toEqual([{ prompt: 'More?' }] as FollowupSuggestion[]);
+    expect(result.bounded).toBe(false);
   });
 });

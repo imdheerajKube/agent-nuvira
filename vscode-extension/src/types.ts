@@ -1,5 +1,5 @@
 /**
- * Shared types for the Agent-Baba-D VS Code extension.
+ * Shared types for the Agent-Nuvira VS Code extension.
  */
 
 // ─── CLI Communication ──────────────────────────────────────────────────────

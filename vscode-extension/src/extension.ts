@@ -194,7 +194,7 @@ export function activate(context: vscode.ExtensionContext): void {
   );
 
   // Update status bar
-  updateStatusBar('$(robot) Agent-Baba-D Ready');
+  updateStatusBar('$(robot) Agent-Nuvira Ready');
 
   // Output activation info
   console.log('[agent-nuvira] Extension activated');

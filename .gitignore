@@ -5,22 +5,39 @@ dist/
 *.db
 .buffconfig.json
 .npmrc
-*sopec*.md
-*scope*.md
-SCOPE.md
-ASSESSMENT_WEBSITE_DEPLOY.md
 # Generated addon builds (agent output during addon-creation tasks)
 addon/
-HERMES_IMPORT_DESIGN.md
 # Local issue tracking (not synced to the upstream repo)
 issues/
 
-# Internal revamp plan + progress tracker (stays local, never published)
-AGENT_NUVIRA_MAJOR_REVAMP_PLAN.md
-REVAMP_PROGRESS.md
-
-# Internal reference docs (stays local, never published)
-ASSESSMENT_HERMES_ECOSYSTEM.md
+# ── Markdown docs ─────────────────────────────────────────────────────────
+# Only the docs PUBLISHED at the website (user-clickable links referring to
+# GitHub) are tracked. All other .md files stay local — what appears on
+# GitHub is decided per-file. The whitelist below is the published set:
+#   * README.md / CHANGELOG.md (repo + npm landing docs)
+#   * the 9 docs README.md links to (DESIGN_DECISIONS, ARCHITECTURE,
+#     ARCHITECTURE_DIAGRAMS, PRODUCT_STRATEGY, PITCH_DECK, CONTRIBUTING,
+#     UPGRADE_ROADMAP, MODELS_EXPLAIN_DEMO)
+#   * docs/benchmarks/* (benchmark reports linked from README)
+#   * packaging-required READMEs (sdk package, vscode extension + its changelog)
+*.md
+# Root-level published docs (anchored — a bare `!README.md` would also
+# un-ignore tests/README.md, examples/mcp/README.md, etc.)
+!/README.md
+!/CHANGELOG.md
+!/DESIGN_DECISIONS.md
+!/MODELS_EXPLAIN_DEMO.md
+!/ARCHITECTURE.md
+!/ARCHITECTURE_DIAGRAMS.md
+!/PRODUCT_STRATEGY.md
+!/PITCH_DECK.md
+!/CONTRIBUTING.md
+!/UPGRADE_ROADMAP.md
+!docs/benchmarks/INDEX.md
+!docs/benchmarks/m2b-*.md
+!packages/sdk/README.md
+!vscode-extension/README.md
+!vscode-extension/CHANGELOG.md
 
 # macOS
 .DS_Store

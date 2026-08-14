@@ -1,5 +1,5 @@
 /**
- * Integration tests for the Agent-Baba-D Dashboard Server.
+ * Integration tests for the Agent-Nuvira Dashboard Server.
  *
  * Tests the HTTP endpoints, data reader functions, SSE streaming,
  * and static file serving — all through real HTTP requests to a
