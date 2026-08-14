@@ -2121,6 +2121,16 @@ export class Orchestrator {
               // breaker + session exclusions for any non-weak provider that
               // will recover within a few minutes.
               const waitMs = this.weakModelWaitAvailableMs(task.id);
+              // ── Pause the live board BEFORE the interactive prompt ──────
+              // The live pipeline board is an ink TUI whose useInput holds
+              // stdin in RAW MODE with its own keypress listener. An inquirer
+              // prompt fired while the board is mounted RENDERS but every
+              // keystroke goes to the board — the user sees the choices yet
+              // cannot select one, and the session appears to die (single-shot
+              // then exits on the weak-model outcome). Mirrors the rate-limit
+              // prompt's spl.stop() before / spl.start() after.
+              const spl = options.spinner;
+              if (spl) spl.stop();
               try {
                 this.weakModelChoice = await promptWeakModelChoice(weakLabel, { waitAvailable: waitMs !== null });
               } catch {
@@ -2153,6 +2163,10 @@ export class Orchestrator {
                   }
                 }
               }
+              // Resume the live board unless the user aborted (pipeline is
+              // ending — nothing left to watch). 'continue' and 'wait' both
+              // proceed into repair, so the TUI comes back.
+              if (this.weakModelChoice !== 'abort' && spl) spl.start();
             }
           }
           // No-op escalation → cap this task's repair budget at 1 (lenient

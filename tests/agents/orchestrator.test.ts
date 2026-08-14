@@ -3035,4 +3035,112 @@ describe('Orchestrator — per-task repair model escalation', () => {
     expect(result.success).toBe(true);
     expect(result.tasksCompleted).toBe(2);
   });
+
+  it('pauses the live board while the weak-model prompt is up (ink stdin conflict)', async () => {
+    const cm = new ConfigManager();
+    const orch = new Orchestrator(cm);
+    vi.spyOn(orch as any, 'applyFileChanges').mockReturnValue(0);
+    Object.defineProperty(process.stdin, 'isTTY', { value: true, configurable: true });
+    mockShouldPromptWeakModel.mockReturnValue(true);
+    // Continue on the weak model — the pipeline should keep running.
+    mockPromptWeakModelChoice.mockResolvedValue('continue');
+    vi.spyOn(orch as any, 'resolveAutoRoutingDecision').mockReturnValue({
+      provider: 'local',
+      model: 'gemma4:e4b',
+      complexity: 'moderate',
+      score: 0.3,
+      ranked: [],
+      explanation: 'only local available',
+    } as any);
+    // Writer: fails once, then succeeds on the bounded (lenient) repair.
+    let writerCalls = 0;
+    mockWriterExecute.mockImplementation(async (context: any) => {
+      writerCalls += 1;
+      if (writerCalls === 1) {
+        return { success: false, error: 'Writer produced no parseable output' };
+      }
+      context.fileChanges.push({
+        path: 'manifest.ini',
+        originalContent: '',
+        newContent: '[addon]\nname = Hello\n',
+        status: 'created',
+      });
+      return { success: true, summary: 'Wrote manifest.ini' };
+    });
+    mockPlannerExecute.mockImplementation(async (context: any) => {
+      context.taskPlan.push(
+        { id: 'step-1', agentType: 'writer', description: 'Write file 1', dependsOn: [], status: 'pending' },
+      );
+      return { success: true, summary: 'Created 1 task step' };
+    });
+
+    // A spinner that records stop()/start() order like the live PipelineBoard.
+    const events: string[] = [];
+    const spinner = {
+      stop: () => events.push('stop'),
+      start: () => events.push('start'),
+    };
+
+    const result = await orch.execute('build a project', {
+      provider: 'auto',
+      model: 'auto',
+      spinner: spinner as any,
+    });
+
+    // The board must be PAUSED before the inquirer prompt (else ink's raw-mode
+    // useInput swallows every keystroke and the user can never select) and
+    // RESUMED after — the exact stop/start ordering the rate-limit prompt uses.
+    // (The pipeline itself calls spinner.start() at task boundaries, so we
+    // assert the LAST two events are the prompt's stop→resume pair.)
+    expect(mockPromptWeakModelChoice).toHaveBeenCalledTimes(1);
+    expect(events[events.length - 2]).toBe('stop');
+    expect(events[events.length - 1]).toBe('start');
+    // The pipeline still completed on the weak model.
+    expect(result.success).toBe(true);
+  });
+
+  it('does NOT resume the board after an ABORT (pipeline is ending)', async () => {
+    const cm = new ConfigManager();
+    const orch = new Orchestrator(cm);
+    vi.spyOn(orch as any, 'applyFileChanges').mockReturnValue(0);
+    Object.defineProperty(process.stdin, 'isTTY', { value: true, configurable: true });
+    mockShouldPromptWeakModel.mockReturnValue(true);
+    mockPromptWeakModelChoice.mockResolvedValue('abort');
+    vi.spyOn(orch as any, 'resolveAutoRoutingDecision').mockReturnValue({
+      provider: 'local',
+      model: 'gemma4:e4b',
+      complexity: 'moderate',
+      score: 0.3,
+      ranked: [],
+      explanation: 'only local available',
+    } as any);
+    mockWriterExecute.mockResolvedValue({
+      success: false,
+      error: 'Writer produced no parseable output',
+    });
+    mockPlannerExecute.mockImplementation(async (context: any) => {
+      context.taskPlan.push(
+        { id: 'step-1', agentType: 'writer', description: 'Write file 1', dependsOn: [], status: 'pending' },
+      );
+      return { success: true, summary: 'Created 1 task step' };
+    });
+
+    const events: string[] = [];
+    const spinner = {
+      stop: () => events.push('stop'),
+      start: () => events.push('start'),
+    };
+
+    const result = await orch.execute('build a project', {
+      provider: 'auto',
+      model: 'auto',
+      spinner: spinner as any,
+    });
+
+    // Board paused for the prompt, never resumed after (nothing left to watch
+    // — the pipeline is ending, so the final event must be the prompt's stop).
+    expect(mockPromptWeakModelChoice).toHaveBeenCalledTimes(1);
+    expect(events[events.length - 1]).toBe('stop');
+    expect(result.success).toBe(false);
+  });
 });
