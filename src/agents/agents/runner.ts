@@ -31,6 +31,14 @@ import { runShell, runShellSync } from '../../utils/shell.js';
 import { SandboxManager } from '../../sandbox/manager.js';
 import { detectProjectImage } from '../../sandbox/images.js';
 import { getSandboxConfig } from '../../sandbox/types.js';
+import { referenceDocsFor } from '../reference-docs.js';
+import {
+  isKnownSystemTool,
+  manualInstallSteps,
+  promptToolInstall,
+  toolInstallCommand,
+  type ToolInstallChoice,
+} from '../../cli/tool-install-prompt.js';
 
 /** Maximum stdout/stderr length to store in context metadata */
 const MAX_OUTPUT_LENGTH = 10_000;
@@ -132,6 +140,26 @@ export class RunnerAgent extends Agent {
       // fix — otherwise the exit-127 repair loop just re-runs the same broken
       // `python …` command until the budget is exhausted.
       command = this.normalizeInterpreter(command);
+
+      // ENTERPRISE TOOL HANDLING: if the command needs a system tool that is
+      // not installed (e.g. `zip` for packaging), detect it BEFORE running and
+      // ask the user to approve an OS-appropriate install (interactive TTY) or
+      // surface the manual steps (non-interactive) — never fail silently and
+      // never install OS software without consent. On approval the install
+      // runs, the tool is verified, and the original command proceeds.
+      const toolOutcome = await this.ensureSystemTool(context, command);
+      if (toolOutcome !== null) {
+        // Either the user declined/skipped (return its error) or the install
+        // failed — the command cannot run without the tool.
+        if (context.metadata.verboseLogging) {
+          logger.warn(`     🛠️  Missing system tool handling: ${toolOutcome}`);
+        }
+        return {
+          success: false,
+          summary: `Required tool not available: ${toolOutcome}`,
+          error: toolOutcome,
+        };
+      }
 
       this.report(context, 'running', `Executing \`${command}\` and capturing output…`);
 
@@ -971,28 +999,54 @@ export class RunnerAgent extends Agent {
     let depInstallSucceeded = false;
     let depInstallTool: string | undefined;
     let depInstallToolInstalled = false;
+    // Holds the actionable tool-install message when a missing system tool
+    // blocked the run (surfaced in the result error instead of the raw
+    // "command not found" so the user sees exactly what to do).
+    let toolBlockError: string | null = null;
     if (exitCode !== 0 && depRetries < MAX_DEP_INSTALL_RETRIES && this.looksLikeMissingDependency(command, stdout, stderr, execError)) {
-      if (context.metadata.verboseLogging) {
-        logger.info('     📦 Command failed — missing dependency detected, installing...');
-      }
-      // autoInstallTools defaults to true; set metadata.autoInstallTools=false
-      // to only run the install command without bootstrapping missing tools.
-      const autoInstallTools = context.metadata.autoInstallTools !== false;
-      const installResult = this.installDependencies(context.workingDirectory, autoInstallTools, command);
-      depInstallAttempted = true;
-      depInstallSucceeded = installResult.success;
-      depInstallTool = installResult.tool;
-      depInstallToolInstalled = installResult.toolInstalled === true;
-      if (context.metadata.verboseLogging) {
-        if (installResult.toolInstalled) {
-          logger.info(`     🛠️  Auto-installed missing tool '${installResult.tool}'`);
+      // ENTERPRISE TOOL PATH FIRST: a "command not found" for a KNOWN system
+      // tool (e.g. `zip`, `git`, `make`) is NOT a project-dependency problem —
+      // it needs an OS-level install with user consent. Handle it here too
+      // (covers tools invoked mid-command by scripts), then re-run.
+      const missingTool = this.detectMissingSystemTool(command);
+      if (missingTool) {
+        const toolOutcome = await this.ensureSystemTool(context, command);
+        if (toolOutcome === null) {
+          // Installed — retry the original command once.
+          return this.executeOnHost(context, command, fallbackAttempts, depRetries + 1);
         }
-        logger.info(`     📦 Dependency install ${installResult.success ? 'succeeded' : 'failed'}: ${installResult.command || installResult.message}`);
-      }
+        // User declined / install failed / non-interactive: fall through to
+        // record the failed run with the actionable message.
+        if (context.metadata.verboseLogging) {
+          logger.info(`     🛠️  Tool '${missingTool}' not available — ${toolOutcome}`);
+        }
+        depInstallAttempted = true;
+        depInstallSucceeded = false;
+        depInstallTool = missingTool;
+        toolBlockError = toolOutcome;
+      } else {
+        if (context.metadata.verboseLogging) {
+          logger.info('     📦 Command failed — missing dependency detected, installing...');
+        }
+        // autoInstallTools defaults to true; set metadata.autoInstallTools=false
+        // to only run the install command without bootstrapping missing tools.
+        const autoInstallTools = context.metadata.autoInstallTools !== false;
+        const installResult = this.installDependencies(context.workingDirectory, autoInstallTools, command);
+        depInstallAttempted = true;
+        depInstallSucceeded = installResult.success;
+        depInstallTool = installResult.tool;
+        depInstallToolInstalled = installResult.toolInstalled === true;
+        if (context.metadata.verboseLogging) {
+          if (installResult.toolInstalled) {
+            logger.info(`     🛠️  Auto-installed missing tool '${installResult.tool}'`);
+          }
+          logger.info(`     📦 Dependency install ${installResult.success ? 'succeeded' : 'failed'}: ${installResult.command || installResult.message}`);
+        }
 
-      if (installResult.success) {
-        // Retry the original command once after a successful install
-        return this.executeOnHost(context, command, fallbackAttempts, depRetries + 1);
+        if (installResult.success) {
+          // Retry the original command once after a successful install
+          return this.executeOnHost(context, command, fallbackAttempts, depRetries + 1);
+        }
       }
     }
 
@@ -1003,7 +1057,7 @@ export class RunnerAgent extends Agent {
       stdout: stdout.slice(0, MAX_OUTPUT_LENGTH),
       stderr: stderr.slice(0, MAX_OUTPUT_LENGTH),
       duration,
-      error: execError,
+      error: toolBlockError || execError,
       dependencyInstallAttempted: depInstallAttempted,
       dependencyInstallSucceeded: depInstallSucceeded,
       dependencyInstallTool: depInstallTool,
@@ -1018,7 +1072,7 @@ export class RunnerAgent extends Agent {
         depInstallSucceeded ? 'installed' : 'failed',
         depInstallSucceeded
           ? 'Installed missing dependencies — re-running the command'
-          : `Dependency install failed (${depInstallTool || 'unknown tool'})`,
+          : toolBlockError || `Dependency install failed (${depInstallTool || 'unknown tool'})`,
       );
     }
     context.metadata['dependencyInstallAttempted'] = depInstallAttempted;
@@ -1049,9 +1103,11 @@ export class RunnerAgent extends Agent {
       success: exitCode === 0,
       summary: exitCode === 0
         ? `✅ Command succeeded: ${command}`
-        : `❌ Command failed (exit ${exitCode}): ${command}`,
+        : toolBlockError
+          ? `❌ Required tool not available: ${command}`
+          : `❌ Command failed (exit ${exitCode}): ${command}`,
       details: lines.join('\n'),
-      error: execError && exitCode !== 0 ? execError : undefined,
+      error: (toolBlockError || execError) && exitCode !== 0 ? (toolBlockError || execError) : undefined,
     };
   }
 
@@ -1067,15 +1123,33 @@ export class RunnerAgent extends Agent {
   /**
    * Ask the LLM for the NEXT command after a previous command failed.
    * This is what makes the repair loop ADAPT instead of re-running the same
-   * failing command: the LLM sees the task, the previous command, and its
-   * captured stdout/stderr, and proposes a corrected command (e.g. create the
-   * Cloudflare Pages project before deploying).
+   * failing command: the LLM sees the task, the previous command, its captured
+   * stdout/stderr, AND the full project context (written files + reference
+   * docs), and proposes a corrected command (e.g. create the Cloudflare Pages
+   * project before deploying, or — when the deliverable CANNOT run in this
+   * environment — the PACKAGING command that produces the deployable artifact).
    */
   private async askLLMForRepairCommand(
     context: AgentContext,
     callLLM: LLMCallFn,
     taskDescription: string,
   ): Promise<string | null> {
+    // DETERMINISTIC FAST-PATH: when the project is a known addon/package that
+    // cannot execute in this environment (e.g. an NVDA addon needs NVDA, an
+    // iOS app needs Xcode), a previous RUN attempt can never succeed — the
+    // correct action is to PACKAGE it (zip the source tree into the deployable
+    // artifact). Detecting this deterministically avoids asking a weak model
+    // to re-guess a run command (the observed failure: 3+ useless `python3
+    // globalPlugins/addon_main.py` variants). Falls through to the LLM when no
+    // deterministic package target exists.
+    const packaging = this.detectPackagingCommand(context);
+    if (packaging) {
+      if (context.metadata.verboseLogging) {
+        logger.info(`     📦 Deliverable cannot run here — proposing packaging command: ${packaging}`);
+      }
+      return packaging;
+    }
+
     const prev = context.metadata.runResult as RunResult | undefined;
     const prevLines = prev
       ? [
@@ -1086,17 +1160,36 @@ export class RunnerAgent extends Agent {
         ].filter(Boolean).join('\n')
       : 'No previous run recorded.';
 
+    const filesChanged = context.fileChanges
+      .map((c) => {
+        const head = (c.newContent || '').slice(0, 400);
+        return `  - ${c.path} (${c.status})${head ? `:\n${head}${head.length >= 400 ? '…' : ''}` : ''}`;
+      })
+      .join('\n');
+    const referenceSection = referenceDocsFor(`${taskDescription} ${context.goal}`);
+
     const prompt = [
       'A command failed during execution. Propose the NEXT command to run.',
       '',
       `Task: ${taskDescription}`,
       '',
+      'Files that were just written for this task:',
+      filesChanged || '  (no files recorded)',
+      '',
+      referenceSection,
+      '',
       'The previous attempt failed:',
       prevLines,
       '',
-      'Analyze the failure and propose a corrected command that addresses the error',
-      '(e.g. create a missing project/configuration first, use a different flag, or',
-      'skip a step that is already done). Do NOT repeat the failed command unchanged.',
+      'Analyze the failure. IMPORTANT — decide what KIND of action is correct:',
+      '- If the deliverable CANNOT RUN in this environment (a plugin/addon that needs',
+      '  its host app, e.g. an NVDA addon needs NVDA; an iOS app needs Xcode), do NOT',
+      '  try to execute it. Instead propose the PACKAGING command that produces the',
+      '  deployable artifact (e.g. `zip -r myaddon.nvda-addon manifest.ini globalPlugins`)',
+      '  or a static verification (e.g. `python3 -m py_compile`).',
+      '- If it CAN run, address the error (create a missing project/config first,',
+      '  use a different flag, or skip a step that is already done).',
+      'Do NOT repeat the failed command unchanged.',
       '',
       'Return ONLY the single shell command to run next, with no explanation or markdown.',
     ].join('\n');
@@ -1116,11 +1209,30 @@ export class RunnerAgent extends Agent {
 
   /**
    * Fallback: ask the LLM what command to run based on the project context.
-   * Includes project's package.json metadata so the LLM can make an informed choice.
+   * Includes the written file contents, package.json metadata, and curated
+   * reference docs (referenceDocsFor) so the LLM can choose a CORRECT action —
+   * including recognizing when the deliverable CANNOT run in this environment
+   * (a plugin/addon that needs its host app) and proposing the PACKAGING
+   * command that produces the deployable artifact instead of a useless run.
    */
   private async askLLMForCommand(context: AgentContext, callLLM: LLMCallFn): Promise<string | null> {
+    // DETERMINISTIC FAST-PATH (same as the repair path): if the written project
+    // is a known addon/package that cannot execute here, return the packaging
+    // command directly — a weak model asked "what command runs this?" will
+    // otherwise guess `python3 globalPlugins/addon_main.py` (observed live).
+    const packaging = this.detectPackagingCommand(context);
+    if (packaging) {
+      if (context.metadata.verboseLogging) {
+        logger.info(`     📦 Deliverable cannot run here — proposing packaging command: ${packaging}`);
+      }
+      return packaging;
+    }
+
     const fileList = context.fileChanges
-      .map((c) => `  - ${c.path} (${c.status})`)
+      .map((c) => {
+        const head = (c.newContent || '').slice(0, 400);
+        return `  - ${c.path} (${c.status})${head ? `:\n${head}${head.length >= 400 ? '…' : ''}` : ''}`;
+      })
       .join('\n');
 
     const artifactList = context.artifacts
@@ -1145,22 +1257,35 @@ export class RunnerAgent extends Agent {
       // Ignore — scriptsInfo stays empty
     }
 
+    const referenceSection = referenceDocsFor(context.goal);
+
     const prompt = [
       'You are a build-and-run expert. Given the context below, what single shell command should be executed',
-      'to verify the work that was done?',
+      'to verify — or, when the deliverable cannot run here, to BUILD/PACKAGE — the work that was done?',
       '',
       'IMPORTANT: Check if "npm test" is available. Only suggest it if the project',
       'actually has a test script defined in package.json.',
       '',
       `Goal: ${context.goal}`,
       '',
-      'Files changed:',
+      'Files written:',
       fileList || '  (no files changed)',
       '',
       'Relevant project files:',
       artifactList || '  (empty project)',
       '',
       scriptsInfo || 'No npm scripts available.',
+      '',
+      referenceSection,
+      '',
+      'Decide what KIND of action is correct:',
+      '- If the deliverable is a plugin/addon that needs its host application (e.g. an NVDA',
+      '  addon needs NVDA; an iOS app needs Xcode), it CANNOT run in this environment.',
+      '  Do NOT try to execute it. Propose the PACKAGING command that produces the',
+      '  deployable artifact (e.g. `zip -r myaddon.nvda-addon manifest.ini globalPlugins`)',
+      '  or a static verification (e.g. `python3 -m py_compile`).',
+      '- Otherwise propose the command that runs/verifies the work (e.g. "python hello.py",',
+      '  "node index.js", "go run main.go").',
       '',
       'Return ONLY the command to run. Examples: "python hello.py" or "node index.js" or "go run main.go".',
       'Rules:',
@@ -1185,6 +1310,123 @@ export class RunnerAgent extends Agent {
       // LLM fallback failed — return null
     }
 
+    return null;
+  }
+
+  /**
+   * Deterministic "cannot run here → package it" detection.
+   *
+   * When the project written for this task is a known addon/package whose
+   * runtime is NOT this machine (NVDA addon = manifest.ini + globalPlugins/
+   * needs the NVDA screen reader), running it can never succeed — the correct
+   * build action is to PACKAGE the source tree into the deployable artifact.
+   * This returns that packaging command, or null when no deterministic target
+   * exists (falls through to the LLM).
+   *
+   * Currently supports: NVDA addons (manifest.ini + globalPlugins/ → zip into
+   * a .nvda-addon archive, the real distribution format per the reference doc).
+   */
+  private detectPackagingCommand(context: AgentContext): string | null {
+    const cwd = context.workingDirectory;
+    const hasManifest = existsSync(join(cwd, 'manifest.ini'));
+    const hasPlugins = existsSync(join(cwd, 'globalPlugins'));
+    if (!hasManifest || !hasPlugins) return null;
+
+    // Only trigger for NVDA-addon goals — manifest.ini alone is ambiguous.
+    const goalText = `${context.goal} ${(context.taskPlan || []).map((s) => s.description).join(' ')}`.toLowerCase();
+    if (!goalText.includes('nvda') && !goalText.includes('addon')) return null;
+
+    // Addon name: read from manifest.ini ([addon] name = X) or fall back to
+    // the working-directory basename — sanitized for a safe zip target.
+    let addonName = '';
+    try {
+      const manifest = readFileSync(join(cwd, 'manifest.ini'), 'utf-8');
+      const nameMatch = manifest.match(/^\s*name\s*=\s*(.+?)\s*$/m);
+      if (nameMatch) addonName = nameMatch[1].trim();
+    } catch {
+      // Fall through to dir basename below.
+    }
+    if (!addonName) addonName = cwd.split(/[\\/]/).pop() || 'addon';
+    const safe = addonName.replace(/[^a-zA-Z0-9._-]/g, '-').replace(/-+/g, '-');
+
+    return `zip -r ${safe}.nvda-addon manifest.ini globalPlugins`;
+  }
+
+  /**
+   * Detect a missing system tool referenced by a command (enterprise parity).
+   *
+   * Scans every token of the command (so compound commands like
+   * `cd addon && zip -r …` are covered), checks each against the known-tool
+   * recipes, and returns the FIRST missing tool name — or null when nothing
+   * is missing / unknown. Only the bare tool name is checked (paths like
+   * /usr/bin/zip are unwrapped to zip).
+   */
+  private detectMissingSystemTool(command: string): string | null {
+    if (!command) return null;
+    const tokens = command.split(/[\s;&|]+/).filter(Boolean);
+    for (const token of tokens) {
+      if (token.startsWith('-') || token.startsWith('--')) continue; // flags
+      const tool = token.split(/[\\/]/).pop() || token; // handle paths
+      if (!isKnownSystemTool(tool)) continue;
+      if (!this.commandExists(tool)) return tool;
+    }
+    return null;
+  }
+
+  /**
+   * Ensure every known system tool referenced by a command is installed.
+   *
+   * Enterprise flow (parity with a human agent):
+   * - Tool present → null (continue).
+   * - Tool missing + interactive TTY → ask the user with the OS-appropriate
+   *   install command. On 'install': execute it, verify, and continue. On
+   *   'manual'/'skip': return the manual steps as the error (the user takes
+   *   over the manual task — e.g. installing brew, generating a token).
+   * - Tool missing + non-interactive (piped/CI) → never block; return the
+   *   recommended install command as the error so the user can run it.
+   *
+   * Returns null to proceed, or an error string that fails the step.
+   */
+  private async ensureSystemTool(context: AgentContext, command: string): Promise<string | null> {
+    const tool = this.detectMissingSystemTool(command);
+    if (!tool) return null;
+
+    const installCmd = toolInstallCommand(tool, process.platform, (name) => this.commandExists(name));
+    const recommended = installCmd || `brew install ${tool}  # macOS  |  sudo apt-get install -y ${tool}  # Linux  |  winget install ${tool}  # Windows`;
+
+    if (context.metadata.verboseLogging) {
+      logger.warn(`     🛠️  Missing system tool: '${tool}' (recommended: ${recommended})`);
+    }
+
+    // Non-interactive — surface the manual steps, never block.
+    if (!process.stdin.isTTY) {
+      return manualInstallSteps(tool, recommended);
+    }
+
+    let choice: ToolInstallChoice;
+    try {
+      choice = await promptToolInstall(tool, recommended);
+    } catch {
+      // Prompt failed (no TTY after all) — treat as manual.
+      return manualInstallSteps(tool, recommended);
+    }
+
+    if (choice === 'manual' || choice === 'skip') {
+      return choice === 'manual'
+        ? manualInstallSteps(tool, recommended)
+        : `Skipped installing '${tool}' — the step was not run. Install it manually (${recommended}) and re-run the task.`;
+    }
+
+    // 'install' — execute the recommended command, verify, continue.
+    logger.info(`     🛠️  Installing '${tool}' via: ${recommended}`);
+    const installResult = this.runInstallCommand(recommended, context.workingDirectory);
+    if (!installResult.success) {
+      return `Failed to auto-install '${tool}' (${installResult.message || 'install command failed'}).\n${manualInstallSteps(tool, recommended)}`;
+    }
+    if (!this.commandExists(tool)) {
+      return `Installed '${tool}' but it is not on PATH for this process yet — open a new terminal and re-run, or: ${recommended}`;
+    }
+    logger.success(`     ✅ Installed '${tool}' — continuing.`);
     return null;
   }
 }

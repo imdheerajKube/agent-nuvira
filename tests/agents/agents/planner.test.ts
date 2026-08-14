@@ -660,6 +660,35 @@ describe('PlannerAgent', () => {
       expect(capturedPrompt).toContain('delegation');
       expect(capturedPrompt).toContain('fresh isolated contexts');
     });
+
+    it('should instruct the planner to plan a PACKAGING runner step for cannot-run-here deliverables (e.g. NVDA addons)', async () => {
+      const context = {
+        goal: 'develop an NVDA addon and build it in deployable format',
+        workingDirectory: '/test',
+        taskPlan: [],
+        artifacts: [],
+        conversations: [],
+        fileChanges: [],
+        metadata: {},
+      } as any;
+
+      let capturedPrompt = '';
+      const mockLLM = async (prompt: string) => {
+        capturedPrompt = prompt;
+        return JSON.stringify([
+          { id: 's1', description: 'Write', agentType: 'writer', dependsOn: [] },
+        ]);
+      };
+
+      await planner.execute(context, mockLLM as any);
+      // The system prompt must tell the planner: a deployable addon that needs
+      // its host app CANNOT run here — plan the packaging command (zip into
+      // .nvda-addon) instead of a run step.
+      expect(capturedPrompt).toContain('CANNOT RUN in this environment');
+      expect(capturedPrompt).toContain('.nvda-addon');
+      expect(capturedPrompt).toContain('manifest.ini globalPlugins');
+      expect(capturedPrompt).toContain('zip');
+    });
   });
 
   describe('metadata', () => {

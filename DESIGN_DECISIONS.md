@@ -65,6 +65,18 @@ Each decision carries:
 **G. Bridging actions (the experience-parity program)**
 21. User-declared daily token budget (advisory, never a product hard cap)
 22. Web research: free-first, availability-gated, SSRF-guarded
+23. Rate-limit failures PARK, they never demote a verified model
+24. Agent LLM calls fail over across providers (v1.62.1)
+25. Consecutive rate limits auto-switch providers mid-task (v1.62.1)
+26. Rate-limit recovery is fully automatic — no prompts, no grinding (v1.62.2)
+27. The interactive rate-limit prompt is opt-in — askOnRateLimit (v1.62.2)
+28. Where the pipeline loses to interactive execution — and the efficiency wins (v1.62.4)
+29. Transient quota blips must never fail a task — the reviewer rate-limit gap (v1.62.5)
+30. Strict file contracts, lenient recovery when NO stronger model exists (v1.69.0)
+31. No-op escalation is detected — weak-model repair is bounded, never a loop (v1.69.0)
+32. The weak-model prompt — human-in-the-loop, opt-in (routing.promptOnWeakModel) (v1.69.0)
+33. The runner carries the project into the build — packaging-aware steps, reference docs, deterministic package fallback (v1.69.0)
+34. Missing system tools are installed with user consent — OS-appropriate recipes, approval prompt, then continue (v1.69.0)
 
 ---
 
@@ -918,3 +930,255 @@ and tested.
 (rare now) are classified non-stuck by the eval framework and surfaced on the
 'Provider interference' line — the measurement never counts them as agent
 stuckness. A full eval re-run is the acceptance test for this decision.
+
+## 30. Strict file contracts, lenient recovery when NO stronger model exists (v1.69.0)
+
+**Observed:** the same NVDA add-on task ("build an addon that says 'Hello
+Dheeraj' on NVDA+alt+1, NVDA 2026.1-aligned, deployable") succeeded in chat
+mode but failed *brutally* in execute mode on a machine where every cloud
+provider was unavailable (rate-limited/quota-exhausted) and only a small local
+model was left. Chat produced correct NVDA code in plain ```python blocks and
+displayed it — no parsing required. Execute mode's Writer agent demands strict
+```filepath:<path> fences; the same model wrapped valid code in plain fences,
+the strict parser found ZERO changes, repair "escalated to a stronger model"
+(which resolved to the SAME weak local model), failed identically, and repeated
+— 3 repair cycles × 1–2 min each on 7–12 tok/s local generation = **10+
+minutes of spinning, then total failure**, even though the model knew the
+answer (it proved that in chat).
+
+**Root cause:** two independent gaps. (1) The writer's strict fence contract
+had no lenient fallback — any model that deviates from the exact format (small
+models commonly do) yields zero parseable changes, a total failure even when
+the content is correct. (2) Escalation "to a stronger model" silently resolved
+to the *same* model when none stronger existed, so repair was guaranteed to
+fail again — wasting minutes per cycle instead of failing fast.
+
+**Fix (v1.69.0):**
+1. **Lenient file-change recovery in the writer** (`src/agents/agents/writer.ts`):
+   strict ```filepath: parsing is still tried FIRST and never weakened for a
+   healthy pipeline. Only when strict parsing finds ZERO changes AND the
+   orchestrator explicitly set `metadata.lenientFileParsing` does the writer
+   run `parseFileChangesLenient` — recovering plain ```lang blocks by inferring
+   each block's path from the response's own prose → task description →
+   reference docs, in that order. Ambiguous blocks are skipped, never guessed.
+2. **The gate is "no better model available."** The lenient flag is set ONLY in
+   the no-op-escalation path (decision 31). A user with a strong cloud model —
+   the common case — never sees lenient parsing; strict format compliance is
+   preserved where it matters. This is the constraint you asked for: lenient
+   recovery happens only when escalating to a better model is impossible.
+3. **Deliverable preserved.** When lenient parsing recovers the writer's
+   changes, the files are written and the pipeline continues — the model's
+   correct work is saved instead of being discarded for a format miss.
+
+**Live verification:** the same NVDA task (auto/auto, local-only) went from
+"10+ min spin then total failure" to a complete run in ~2 min with both addon
+files written correctly (`manifest.ini`, `globalPlugins/hello_dheeraj.py` with
+`@scriptHandler.script(gesture="kb:NVDA+alt+1")` / `ui.message("Hello
+Dheeraj")`). A second, healthy task (Python CLI + unittest) ran with ZERO
+repairs — proving the lenient path never fires when the strict contract is met.
+
+---
+
+## 31. No-op escalation is detected — weak-model repair is bounded, never a loop (v1.69.0)
+
+**Observed (same incident as decision 30):** when the only available model was
+weak, the error-repair engine "escalated" at the next complexity tier
+(`moderate → complex`) but the model registry had every stronger candidate
+blocked — so escalation resolved to the same provider×model that just failed.
+The result was an identical-failure loop: each repair cycle re-ran the weak
+writer, produced the same format miss, burned 1–2 min, and repeated up to the
+full repair budget. The user saw 10+ minutes of grinding that could never
+succeed.
+
+**Root cause:** escalation was decided by complexity tier alone — nobody asked
+whether the escalated route actually landed on a *different, stronger* model.
+When the router is constrained to one provider (local-only, or a single
+degraded key), "escalation" is a no-op by construction.
+
+**Fix (v1.69.0):**
+1. **The orchestrator records every routed decision** (`src/agents/orchestrator.ts`):
+   `createAutoRoutedLLM` and `createEscalatedLLM` now record the provider×model
+   each task was routed to (`routedProviderModelByTask` /
+   `escalatedProviderModelByTask`).
+2. **`isNoOpEscalation(taskId, escalated)` compares them.** When the escalated
+   route equals the task's original route, it's a no-op — logged clearly
+   ("No stronger model available (escalation resolves to the same model)").
+3. **No-op ⇒ bounded + lenient.** The task's repair budget is capped at 1 and
+   the writer's lenient parsing (decision 30) is enabled, so the weak model
+   gets its single best shot — then the pipeline fails fast and surfaces the
+   model's real output instead of looping on the identical failure. A healthy
+   pipeline (a real stronger model available) keeps the full configured budget
+   and never touches either mechanism.
+
+**Live verification:** the NVDA task's runner step (which *cannot* run outside
+NVDA — `ModuleNotFoundError: addonHandler`) previously triggered the same
+escalation loop; after this fix it failed once, clearly, in ~1 min instead of
+spinning for 10+. The writer, reviewer, and planner steps completed normally
+with the correct deliverables.
+
+---
+
+## 32. The weak-model prompt — human-in-the-loop, opt-in (routing.promptOnWeakModel) (v1.69.0)
+
+**Observed:** after decisions 30–31, a user on a weak-only model gets silent,
+bounded degradation — the pipeline continues on the weak model (lenient
+parsing, repair budget 1) or fails fast. Both are *silent*: the user has no
+say. On a big deliverable, a user may prefer to WAIT for a stronger model (or
+fix their provider config) rather than accept a recommendations-only result —
+and should be told plainly that the available model is weak. This decision
+adds the missing human-in-the-loop layer on top of 30–31.
+
+**Design constraints (what makes it safe):**
+1. **Opt-in, default OFF** (`routing.promptOnWeakModel`, default `false`).
+   Silent auto-behavior stays the default for everyone; the prompt is a
+   control users enable deliberately (`buff config set routing.promptOnWeakModel
+   true`). Existing users see zero change. The option was added to the CLI
+   config whitelist so `buff config set` accepts it.
+2. **Asked at the DECISION point, once per pipeline.** The trigger is exactly
+   the no-op-escalation point from decision 31 — no new detection needed. A
+   latch (`weakModelChoice`) guarantees a multi-task pipeline asks once, never
+   re-prompts per task.
+3. **The 'wait' option is honest.** It is offered ONLY when a stronger
+   candidate is actually in a short cooldown (circuit-breaker or rate-limit
+   exclusion remaining ≤ 3 min, `MAX_WEAK_WAIT_MS`). Choosing it sleeps out
+   the cooldown, re-routes fresh, and — if a stronger model recovered — runs
+   with the NORMAL repair budget (the lenient flag is dropped). When every
+   stronger provider is quota-exhausted for hours, 'wait' is not offered; the
+   honest choices are continue or abort.
+4. **Non-interactive safety.** TTY-gated (`process.stdin.isTTY`): piped/CI
+   stdin falls through silently to the decision-30/31 weak path and NEVER
+   blocks. Verified live with piped stdin.
+
+**The prompt** (`src/cli/weak-model-prompt.ts`, mirrors `failover-prompt.ts`):
+
+    ⚠️ Only a weak model is available (local/gemma4:e4b) — it can give guidance
+       but may not reliably deliver this task.
+    ? Only a weak model is available — how would you like to proceed?
+      ▶  Continue on the weak model — use its best effort
+      ⏳  Wait and retry when a stronger model is back   ← only when honest
+      ⛔  Abort — I will fix the provider config
+
+**Outcomes:** 'continue' runs the decision-30/31 weak path unchanged (byte-for-
+byte today's behavior). 'wait' sleeps the short cooldown and re-routes (a
+recovered stronger model restores full capability). 'abort' skips repair,
+fails the task with an actionable message ("add a provider API key or wait for
+a stronger model, then re-run"), and stops the pipeline — never burning
+minutes on a model the user already declined.
+
+**Why it does NOT roll back decisions 30–31:** they remain the silent default
+and the 'continue' path. The prompt only adds a user decision BEFORE the
+weak-model path runs, and only when opted in.
+
+**Tests:** +16 across the three decisions (5 lenient-parser, 3 no-op
+escalation incl. budget cap, 7 weak-model prompt module incl. honest-wait
+gating + choice rendering, 2 orchestrator wiring incl. abort + once-per-
+pipeline latch). Full suite green (4426 passed), typecheck clean.
+
+## 33. The runner carries the project into the build — packaging-aware steps, reference docs, deterministic package fallback (v1.69.0)
+
+**Observed (live NVDA-addon run):** the same task that succeeded in chat mode
+failed brutally in execute mode — and the failure was NOT model capability. The
+chain, traced end-to-end from the pipeline log:
+
+1. **The planner lost the goal's build requirement.** The goal said "build the
+   addon in **deployable format**", but the planner emitted a runner step that
+   invented a nonexistent deliverable: *"Simulate loading and testing the addon
+   by running a test script that verifies the key handler registers…"* — there
+   was no test script. It never planned a packaging step at all.
+2. **The runner's command-selection prompt was starved of project context.** It
+   asked a weak model "what single command verifies this?" with only file
+   *paths* and npm scripts — no file contents, no curated reference docs (the
+   NVDA knowledge in `referenceDocsFor` was injected into the writer only,
+   never the runner). The model guessed `python3 globalPlugins/addon_main.py`.
+3. **The repair loop compounded it.** On failure it re-asked the same weak
+   model "propose the NEXT command" with only the failed command + stderr — it
+   re-guessed in the same useless family (`python3 -m …`) until the budget
+   died. The correct approach was never fetched with a clear task.
+
+The user's diagnosis was correct: **the agent did not carry the task as a
+project** — each stage re-derived its approach from a starved prompt instead of
+the artifacts the previous stage actually produced, so a model that *knew* the
+answer (it proved that in chat) failed in execute mode.
+
+**Root cause (architectural, not model):** the runner was a single-command
+verifier with context-blind prompts, and the planner had no guidance for
+packaging goals. A strong cloud model would also have been steered wrong by
+that starved prompt — it would just hallucinate more confidently.
+
+**Fix (v1.69.0):**
+1. **Planner is build-aware.** The system prompt now instructs: for
+   deployable-format goals, plan the runner step with the explicit PACKAGING
+   command in backticks (`zip -r <name>.nvda-addon manifest.ini globalPlugins`,
+   or a static check like `python3 -m py_compile`) — never a hallucinated
+   "simulate/run a test script" step.
+2. **The runner's LLM prompts now carry the project.** Both `askLLMForCommand`
+   and `askLLMForRepairCommand` inject the curated reference docs
+   (`referenceDocsFor`), the actual contents of the written files, and explicit
+   guidance: *"if the deliverable CANNOT RUN in this environment (an NVDA addon
+   needs NVDA; an iOS app needs Xcode), propose the PACKAGING command or a
+   static check — do NOT try to execute it."*
+3. **Deterministic packaging fallback** (`detectPackagingCommand`): when the
+   written project is a known cannot-run-here deliverable (NVDA addon =
+   `manifest.ini` + `globalPlugins/` + addon goal), the runner returns the real
+   build command `zip -r <name>.nvda-addon manifest.ini globalPlugins`
+   directly — no weak model re-guessing, on both the first attempt and repair.
+
+**Live verification:** the same NVDA task went from "3× `python3
+globalPlugins/addon_main.py` → `ModuleNotFoundError` → 10+ min spin" to:
+planner emits a packaging step → runner executes `zip -r
+Hello-Dheeraj-Addon.nvda-addon manifest.ini globalPlugins` → **exit 0, 11ms** →
+reviewer passes → a valid `.nvda-addon` archive with `manifest.ini` +
+`globalPlugins/hello_dheeraj.py` (correct NVDA 2026.1 APIs). A healthy task
+(Python CLI + unittest) still runs with ZERO repairs — the new context never
+interferes with a working pipeline.
+
+---
+
+## 34. Missing system tools are installed with user consent — OS-appropriate recipes, approval prompt, then continue (v1.69.0)
+
+**Observed:** when a build needs a system tool that is not installed (e.g.
+`zip` for packaging an NVDA addon), the old runner failed with a raw "command
+not found" and, when it tried to "fix" it, either mis-classified it as a
+project-dependency problem or silently skipped it. Enterprise parity demands
+the behavior of a human agent: detect the missing tool, recommend the
+OS-appropriate install, ASK for approval, execute the install if approved, and
+continue the task — and when the agent cannot do the manual part itself (sudo,
+tokens, brew bootstrap), hand the exact steps to the user instead of failing
+silently.
+
+**Fix (v1.69.0):**
+1. **Per-OS install recipes** (`src/cli/tool-install-prompt.ts`): a curated map
+   of build/infra tools → install commands per platform — Homebrew on macOS,
+   apt-get/dnf/yum/apk (auto-detected) on Linux, winget (choco fallback) on
+   Windows. Covers packaging tools (zip, unzip, 7z, tar), compilers (gcc,
+   g++, clang, make, cmake), language toolchains (go, cargo, java, mvn,
+   gradle, dotnet, flutter, php, ruby), cloud CLIs (aws, az, gcloud, gh,
+   glab), infra (docker, kubectl, terraform, helm, minikube, vault, packer),
+   and db clients (psql, redis, sqlite3, mongosh).
+2. **Detection before execution** (`detectMissingSystemTool`): the runner scans
+   every token of a command (so `cd addon && zip -r …` is covered, not just the
+   first word) for known tools missing from PATH — before running, and again on
+   the failure path.
+3. **Consent prompt (TTY):** `🛠️ Tool 'ffmpeg' is not installed — this task
+   needs it.` with three choices — **Install it now** (runs the recommended
+   command, verifies the tool, continues the original command), **Show me the
+   manual steps** (fails with actionable instructions), **Skip** (fails
+   clearly). Never installs OS software silently.
+4. **Non-interactive safety (CI/piped):** never blocks — prints the exact
+   manual install command and fails with actionable steps, exactly like handing
+   the user a step the agent cannot complete alone (generating a token,
+   entering sudo, bootstrapping brew).
+
+**Live verification:** with `ffmpeg` (genuinely absent on the test machine),
+the runner returns *"The tool 'ffmpeg' is required but not installed…
+Install it manually, e.g.: `brew install ffmpeg`… Then re-run the task."* —
+no silent failure, no blocking. With `zip` present, the packaging command runs
+unchanged (exit 0) — the consent flow only engages when a tool is actually
+missing.
+
+**Why consent is mandatory (not just nice):** installing OS-level software is
+a side effect on the user's machine — unlike `npm install` (project-local,
+already auto-managed), `brew install`/`apt-get install` changes the system.
+Enterprise tooling must never do that without the user's explicit approval,
+and must always leave a clear manual path when it cannot complete the install
+itself.

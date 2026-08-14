@@ -251,6 +251,19 @@ export interface RoutingConfig {
    */
   promptOnFailover?: boolean;
   /**
+   * Ask the user what to do when a task can only run on a WEAK model (model
+   * escalation is a no-op — every stronger candidate is unavailable/blocked,
+   * e.g. only a small local model is configured). Default: false (silent —
+   * the pipeline continues on the weak model with lenient parsing, exactly
+   * the non-interactive behavior). When true, the user chooses:
+   *   continue — proceed on the weak model (its best effort may be
+   *              recommendations rather than a reliable deliverable);
+   *   wait     — stop and retry when a stronger model is back (shown only
+   *              when a stronger candidate is in a short cooldown);
+   *   abort    — stop the pipeline so the user can fix provider config.
+   */
+  promptOnWeakModel?: boolean;
+  /**
    * Minimum diverged A/B decisions before the promotion gate (bandit-vs-
    * heuristic) evaluates as meaningful. Surfaced by `buff model bandit`.
    * Default: 20.

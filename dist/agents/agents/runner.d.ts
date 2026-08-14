@@ -174,15 +174,60 @@ export declare class RunnerAgent extends Agent {
     /**
      * Ask the LLM for the NEXT command after a previous command failed.
      * This is what makes the repair loop ADAPT instead of re-running the same
-     * failing command: the LLM sees the task, the previous command, and its
-     * captured stdout/stderr, and proposes a corrected command (e.g. create the
-     * Cloudflare Pages project before deploying).
+     * failing command: the LLM sees the task, the previous command, its captured
+     * stdout/stderr, AND the full project context (written files + reference
+     * docs), and proposes a corrected command (e.g. create the Cloudflare Pages
+     * project before deploying, or — when the deliverable CANNOT run in this
+     * environment — the PACKAGING command that produces the deployable artifact).
      */
     private askLLMForRepairCommand;
     /**
      * Fallback: ask the LLM what command to run based on the project context.
-     * Includes project's package.json metadata so the LLM can make an informed choice.
+     * Includes the written file contents, package.json metadata, and curated
+     * reference docs (referenceDocsFor) so the LLM can choose a CORRECT action —
+     * including recognizing when the deliverable CANNOT run in this environment
+     * (a plugin/addon that needs its host app) and proposing the PACKAGING
+     * command that produces the deployable artifact instead of a useless run.
      */
     private askLLMForCommand;
+    /**
+     * Deterministic "cannot run here → package it" detection.
+     *
+     * When the project written for this task is a known addon/package whose
+     * runtime is NOT this machine (NVDA addon = manifest.ini + globalPlugins/
+     * needs the NVDA screen reader), running it can never succeed — the correct
+     * build action is to PACKAGE the source tree into the deployable artifact.
+     * This returns that packaging command, or null when no deterministic target
+     * exists (falls through to the LLM).
+     *
+     * Currently supports: NVDA addons (manifest.ini + globalPlugins/ → zip into
+     * a .nvda-addon archive, the real distribution format per the reference doc).
+     */
+    private detectPackagingCommand;
+    /**
+     * Detect a missing system tool referenced by a command (enterprise parity).
+     *
+     * Scans every token of the command (so compound commands like
+     * `cd addon && zip -r …` are covered), checks each against the known-tool
+     * recipes, and returns the FIRST missing tool name — or null when nothing
+     * is missing / unknown. Only the bare tool name is checked (paths like
+     * /usr/bin/zip are unwrapped to zip).
+     */
+    private detectMissingSystemTool;
+    /**
+     * Ensure every known system tool referenced by a command is installed.
+     *
+     * Enterprise flow (parity with a human agent):
+     * - Tool present → null (continue).
+     * - Tool missing + interactive TTY → ask the user with the OS-appropriate
+     *   install command. On 'install': execute it, verify, and continue. On
+     *   'manual'/'skip': return the manual steps as the error (the user takes
+     *   over the manual task — e.g. installing brew, generating a token).
+     * - Tool missing + non-interactive (piped/CI) → never block; return the
+     *   recommended install command as the error so the user can run it.
+     *
+     * Returns null to proceed, or an error string that fails the step.
+     */
+    private ensureSystemTool;
 }
 //# sourceMappingURL=runner.d.ts.map

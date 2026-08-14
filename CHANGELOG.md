@@ -2,6 +2,14 @@
 
 All notable changes to **Agent-Nuvira** are documented in this file.
 
+## v1.70.0 — Enterprise delivery: weak-model control, build-aware runner, consent-gated tool install
+
+- **Weak-model control** — `routing.promptOnWeakModel` (opt-in): when a task can only run on a weak model, the user chooses **continue / wait / abort** instead of silent degradation
+- **Reliability for weak models** — writer recovers plain code blocks via lenient inference ONLY when no stronger model exists; no-op escalation is detected and repair is bounded (never a 10-min identical-failure loop)
+- **Build-aware runner** — planner plans packaging steps for deployable deliverables; runner prompts carry reference docs + written file contents; deterministic `.nvda-addon` packaging for cannot-run-here addons (live: NVDA addon builds in 11ms instead of failing 3×)
+- **Consent-gated tool install** — missing system tools (zip, git, make, cmake, docker, kubectl, terraform, aws, go, java, …) are detected, recommended with OS-appropriate commands (brew/apt/dnf/winget), and installed ONLY with user approval — manual steps in non-interactive mode, never silent failures
+- **4,452 tests passing across 193 files**
+
 ## v1.69.0 — Gateway platform config + chat reliability
 
 - **Major revamp complete** — all 30 rows of the Freebuff/Hermes parity program are landed (AGENT_NUVIRA_MAJOR_REVAMP_PLAN)

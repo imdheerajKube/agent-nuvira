@@ -111,6 +111,15 @@ vi.mock('../../src/agents/utils/file-tree.js', () => ({
   truncateTree: vi.fn().mockReturnValue(''),
 }));
 
+// Mock the weak-model prompt so tests control the user's choice (and confirm
+// the prompt is/ isn't invoked) without touching a real terminal.
+const mockPromptWeakModelChoice = vi.hoisted(() => vi.fn());
+const mockShouldPromptWeakModel = vi.hoisted(() => vi.fn());
+vi.mock('../../src/cli/weak-model-prompt.js', () => ({
+  shouldPromptWeakModel: mockShouldPromptWeakModel,
+  promptWeakModelChoice: mockPromptWeakModelChoice,
+}));
+
 // ─── Helpers ────────────────────────────────────────────────────────────────
 
 /** Create a sample rate-limit error info object */
@@ -2653,6 +2662,10 @@ describe('Orchestrator — per-task repair model escalation', () => {
     mockReviewerExecute.mockReset();
     mockCreateReviewFromResult.mockReset();
     mockCreateReviewFromResult.mockReturnValue(mockReviewBundle);
+    // Reset the weak-model prompt mocks + stdin TTY state (default: not a TTY).
+    mockPromptWeakModelChoice.mockReset();
+    mockShouldPromptWeakModel.mockReset();
+    Object.defineProperty(process.stdin, 'isTTY', { value: undefined, configurable: true });
     // Prevent writes to disk from the writer mock
     vi.spyOn(orchestrator as any, 'applyFileChanges').mockReturnValue(0);
     // Suppress logger output during tests
@@ -2844,5 +2857,182 @@ describe('Orchestrator — per-task repair model escalation', () => {
 
     // The routed (post-escalation) complexity is latched for step-4.
     expect((orch as any).routedComplexities.get('step-4')).toBe('complex');
+  });
+
+  it('records the escalated provider×model per task (for no-op escalation detection)', async () => {
+    const cm = new ConfigManager();
+    const orch = new Orchestrator(cm);
+
+    vi.spyOn(orch as any, 'resolveAutoRoutingDecision').mockReturnValue({
+      provider: 'local',
+      model: 'gemma4:e4b',
+      complexity: 'complex',
+      score: 0.3,
+    } as any);
+    vi.spyOn(orch as any, 'createAutoRoutedLLMFromDecision').mockReturnValue(
+      vi.fn().mockResolvedValue('ok'),
+    );
+
+    (orch as any).createEscalatedLLM('writer', 'Write code', {}, 'moderate', 'step-4');
+
+    // Escalation resolved back to the SAME provider×model — the no-op case.
+    expect((orch as any).escalatedProviderModelByTask.get('step-4')).toEqual({
+      provider: 'local',
+      model: 'gemma4:e4b',
+    });
+  });
+
+  it('isNoOpEscalation detects when escalation lands back on the same weak model', async () => {
+    const cm = new ConfigManager();
+    const orch = new Orchestrator(cm);
+
+    (orch as any).routedProviderModelByTask.set('step-4', { provider: 'local', model: 'gemma4:e4b' });
+
+    // Same provider×model → no-op (no stronger model available).
+    expect((orch as any).isNoOpEscalation('step-4', { provider: 'local', model: 'gemma4:e4b' })).toBe(true);
+    // Different model → real escalation.
+    expect((orch as any).isNoOpEscalation('step-4', { provider: 'groq', model: 'llama-3.3-70b-versatile' })).toBe(false);
+    // Unknown baseline → conservative no-op (degrade rather than spin).
+    expect((orch as any).isNoOpEscalation('step-99', { provider: 'groq', model: 'llama-3.3-70b-versatile' })).toBe(true);
+  });
+
+  it('enables lenient file parsing on the writer context when escalation is a no-op', async () => {
+    const cm = new ConfigManager();
+    const orch = new Orchestrator(cm);
+    // Never write the writer mock's file changes to the real repo.
+    vi.spyOn(orch as any, 'applyFileChanges').mockReturnValue(0);
+
+    // Both the original route AND the escalation land on the SAME weak local
+    // model — the exact "only a weak model is available" production case.
+    vi.spyOn(orch as any, 'resolveAutoRoutingDecision').mockReturnValue({
+      provider: 'local',
+      model: 'gemma4:e4b',
+      complexity: 'moderate',
+      score: 0.3,
+      ranked: [],
+      explanation: 'only local available',
+    } as any);
+
+    // Writer: first attempt fails with the format failure (no filepath:
+    // blocks). The bounded repair re-runs ONCE; with lenient parsing enabled
+    // the second attempt recovers the plain code block.
+    let writerCalls = 0;
+    mockWriterExecute.mockImplementation(async (context: any) => {
+      writerCalls += 1;
+      if (writerCalls === 1) {
+        return { success: false, error: 'Writer produced no parseable output' };
+      }
+      context.fileChanges.push({
+        path: 'manifest.ini',
+        originalContent: '',
+        newContent: '[addon]\nname = Hello Dheeraj\n',
+        status: 'created',
+      });
+      return { success: true, summary: 'Wrote manifest.ini' };
+    });
+
+    const result = await orch.execute('develop a NVDA addon', {
+      provider: 'auto',
+      model: 'auto',
+    });
+
+    // The repair re-ran with lenient parsing enabled (context flag set).
+    expect(mockWriterExecute).toHaveBeenCalledTimes(2);
+    // The metadata flag must have been set on the repair context.
+    const contextArg = mockWriterExecute.mock.calls[1][0] as any;
+    expect(contextArg.metadata.lenientFileParsing).toBe(true);
+    // The task completed despite the weak model + format failure.
+    expect(result.success).toBe(true);
+  });
+
+  it('asks the user (opt-in) and ABORTS the task when only a weak model is available', async () => {
+    const cm = new ConfigManager();
+    const orch = new Orchestrator(cm);
+    vi.spyOn(orch as any, 'applyFileChanges').mockReturnValue(0);
+    // Simulate an interactive terminal so the prompt path is reachable.
+    Object.defineProperty(process.stdin, 'isTTY', { value: true, configurable: true });
+    // The user opts into weak-model prompts.
+    mockShouldPromptWeakModel.mockReturnValue(true);
+    // The user chooses ABORT — fix the provider config.
+    mockPromptWeakModelChoice.mockResolvedValue('abort');
+    // No stronger model: both the route and the escalation land on local.
+    vi.spyOn(orch as any, 'resolveAutoRoutingDecision').mockReturnValue({
+      provider: 'local',
+      model: 'gemma4:e4b',
+      complexity: 'moderate',
+      score: 0.3,
+      ranked: [],
+      explanation: 'only local available',
+    } as any);
+
+    // Writer fails (format failure) — repair should be SKIPPED on abort.
+    mockWriterExecute.mockResolvedValue({
+      success: false,
+      error: 'Writer produced no parseable output',
+    });
+
+    const result = await orch.execute('develop a NVDA addon', {
+      provider: 'auto',
+      model: 'auto',
+    });
+
+    // The user was asked exactly once.
+    expect(mockPromptWeakModelChoice).toHaveBeenCalledTimes(1);
+    // The weak-model repair was NOT run (abort skips it).
+    expect(mockWriterExecute).toHaveBeenCalledTimes(1);
+    expect(result.success).toBe(false);
+  });
+
+  it('asks the user once per pipeline (latched) — subsequent weak tasks do not re-prompt', async () => {
+    const cm = new ConfigManager();
+    const orch = new Orchestrator(cm);
+    vi.spyOn(orch as any, 'applyFileChanges').mockReturnValue(0);
+    Object.defineProperty(process.stdin, 'isTTY', { value: true, configurable: true });
+    mockShouldPromptWeakModel.mockReturnValue(true);
+    mockPromptWeakModelChoice.mockResolvedValue('continue');
+    vi.spyOn(orch as any, 'resolveAutoRoutingDecision').mockReturnValue({
+      provider: 'local',
+      model: 'gemma4:e4b',
+      complexity: 'moderate',
+      score: 0.3,
+      ranked: [],
+      explanation: 'only local available',
+    } as any);
+
+    // Writer: fails once, then succeeds on the (bounded, lenient) repair.
+    let writerCalls = 0;
+    mockWriterExecute.mockImplementation(async (context: any) => {
+      writerCalls += 1;
+      if (writerCalls === 1) {
+        return { success: false, error: 'Writer produced no parseable output' };
+      }
+      context.fileChanges.push({
+        path: 'manifest.ini',
+        originalContent: '',
+        newContent: '[addon]\nname = Hello\n',
+        status: 'created',
+      });
+      return { success: true, summary: 'Wrote manifest.ini' };
+    });
+
+    // Plan with TWO writer tasks so a second weak-model task would re-prompt
+    // if the latch were missing.
+    mockPlannerExecute.mockImplementation(async (context: any) => {
+      context.taskPlan.push(
+        { id: 'step-1', agentType: 'writer', description: 'Write file 1', dependsOn: [], status: 'pending' },
+        { id: 'step-2', agentType: 'writer', description: 'Write file 2', dependsOn: ['step-1'], status: 'pending' },
+      );
+      return { success: true, summary: 'Created 2 task steps' };
+    });
+
+    const result = await orch.execute('build a project', {
+      provider: 'auto',
+      model: 'auto',
+    });
+
+    // Prompted exactly ONCE for the whole pipeline, not once per task.
+    expect(mockPromptWeakModelChoice).toHaveBeenCalledTimes(1);
+    expect(result.success).toBe(true);
+    expect(result.tasksCompleted).toBe(2);
   });
 });

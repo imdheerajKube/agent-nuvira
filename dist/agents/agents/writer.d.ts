@@ -56,6 +56,17 @@ export declare class WriterAgent extends Agent {
      */
     private parseFileChanges;
     /**
+     * Lenient file-change recovery — ONLY used when the orchestrator enables it
+     * (metadata.lenientFileParsing, set when model escalation is a NO-OP: no
+     * stronger model exists). Recovers plain fenced code blocks the model
+     * actually emitted (e.g. ```python / ```ini) by inferring each block's
+     * path from (1) explicit path mentions in the response's own prose, (2)
+     * path mentions in the task description / goal / reference docs, and (3)
+     * the block's language tag mapped to a file extension. Conservative: a
+     * block with no inferable path is SKIPPED, never guessed.
+     */
+    private parseFileChangesLenient;
+    /**
      * Select files within the given character budget.
      * Prioritizes smaller files first so the LLM sees as much complete context as possible.
      */

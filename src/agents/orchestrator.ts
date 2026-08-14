@@ -26,6 +26,7 @@ import { ProviderFactory } from '../inference/factory.js';
 import { ConfigManager } from '../config/manager.js';
 import type { ProviderType, InferenceOptions } from '../config/types.js';
 import { showModelPicker } from '../cli/model-picker.js';
+import { shouldPromptWeakModel, promptWeakModelChoice, type WeakModelChoice } from '../cli/weak-model-prompt.js';
 import { logger } from '../utils/logger.js';
 
 import { ContextVault } from './context-vault.js';
@@ -49,6 +50,10 @@ const AUTO_SWITCH_WAIT_THRESHOLD_MS = 60_000;
 // Strikes farther apart than this are NOT a "consecutive" storm — the provider
 // ran healthy in between (real successes take minutes), so the counter resets.
 const STORM_WINDOW_MS = 5 * 60_000;
+// Cap for the "wait and retry" weak-model option: a stronger provider only
+// qualifies for an honest wait if it recovers within this window (short
+// rate-limit/transient cooldowns). Longer outages → 'wait' is not offered.
+const MAX_WEAK_WAIT_MS = 3 * 60_000;
 import { getEventBus, EventNames } from '../observability/event-bus.js';
 import type { EventBus } from '../observability/event-bus.js';
 import { DefaultReportModule, type ReportModule, type ReportFormat } from './report-module.js';
@@ -69,7 +74,7 @@ import {
 import { analyzeComplexity, type ComplexityLevel } from '../learning/hybrid-router.js';
 import { getModelRegistry } from '../learning/model-registry.js';
 import { buildAutoResolveOptions } from '../learning/resolve-options.js';
-import { classifyFallbackError, recordRegistrySuccess } from '../learning/provider-fallback.js';
+import { classifyFallbackError, getProviderFallback, recordRegistrySuccess } from '../learning/provider-fallback.js';
 import { recordActionFailure, type FailureSessionState } from '../learning/failure-bookkeeping.js';
 import { resolveWorkingModel } from '../inference/model-validator.js';
 import { refreshModelRegistry } from '../inference/model-probe.js';
@@ -361,6 +366,30 @@ export class Orchestrator {
    * just failed (only re-rolling provider/model, not reasoning capacity).
    */
   private routedComplexities = new Map<string, string>();
+  /**
+   * The provider×model each task was actually ROUTED to (by task id),
+   * recorded when the auto-routed LLM is created. The repair path compares
+   * this against the ESCALATED decision to detect a no-op escalation (the
+   * "stronger model" resolves to the SAME provider×model — only a weak
+   * model is available) and degrade to lenient file-change parsing instead
+   * of re-prompting the same weak model until the repair budget dies.
+   */
+  private routedProviderModelByTask = new Map<string, { provider: string; model: string }>();
+  /**
+   * The provider×model each task's ESCALATED repair resolved to (by task
+   * id), recorded by createEscalatedLLM. Compared against the routed baseline
+   * in isNoOpEscalation so a repair that lands back on the same weak model is
+   * detected without re-resolving the decision (which has side effects).
+   */
+  private escalatedProviderModelByTask = new Map<string, { provider: string; model: string }>();
+  /**
+   * The user's weak-model decision for THIS pipeline, latched after the first
+   * prompt (routing.promptOnWeakModel) so a multi-task pipeline asks ONCE,
+   * not once per task. null = not asked yet; 'continue'/'wait'/'abort' = the
+   * user's choice. Silent mode never prompts — this stays null and the
+   * pipeline always takes the weak-model path.
+   */
+  private weakModelChoice: WeakModelChoice | null = null;
   /**
    * Latched one-shot cold-start registry probe: fired once per Orchestrator
    * instance when auto routing is active on an empty registry (see
@@ -2044,11 +2073,100 @@ export class Orchestrator {
           // the exact failure mode seen when a weak writer kept failing.
           // Non-auto paths keep the explicit model but honor
           // repairFallbackModels for the switch-model strategy.
-          const escalatedTaskLLM = autoRouting
+          //
+          // NO-OP ESCALATION GUARD: when the "stronger model" resolves to the
+          // SAME provider×model as the one that just failed (every stronger
+          // candidate is unavailable/blocked — e.g. only a weak local model is
+          // configured), escalation is a lie that just re-runs the same weak
+          // model until the budget dies (observed: writer format failures
+          // spinning 3×1-2 min on the same local model). Degrade instead:
+          //   - the writer gets LENIENT file-change parsing (recovers plain
+          //     ```lang code blocks the model actually emitted, so a format-
+          //     shy model's real work is saved instead of failing);
+          //   - the repair budget for this task is capped at 1 so we fail
+          //     fast and surface the model's output instead of looping.
+          let escalatedTaskLLM = autoRouting
             ? this.createEscalatedLLM(effectiveAgentType, task.description, options, task.complexity, task.id)
             : undefined;
+          let noOpEscalation = this.isNoOpEscalation(
+            task.id,
+            autoRouting ? this.escalatedProviderModelByTask.get(task.id!) : undefined,
+          );
+          if (noOpEscalation && autoRouting) {
+            if (options.verbose) {
+              logger.warn(
+                `      ⚠️ No stronger model available (escalation resolves to the same model) — enabling lenient parsing / bounded repair for ${effectiveAgentType}`,
+              );
+            }
+            // The writer's parseFileChangesLenient fallback is gated on this
+            // flag, so plain code blocks are only recovered when NO stronger
+            // model exists to escalate to (never for a healthy pipeline).
+            try {
+              vault.context.metadata.lenientFileParsing = true;
+            } catch {
+              // Best-effort — metadata must never break repair.
+            }
+
+            // ── USER DECISION (opt-in: routing.promptOnWeakModel) ───────
+            // The default stays SILENT: continue on the weak model. When the
+            // user opts in, ask ONCE per pipeline (latched) so a multi-task
+            // pipeline never re-prompts. Non-interactive (piped/CI) stdin
+            // falls through to the silent weak-model path — never blocks.
+            if (this.weakModelChoice === null && shouldPromptWeakModel(this.configManager.getAll()) && process.stdin.isTTY) {
+              const escalated = this.escalatedProviderModelByTask.get(task.id!);
+              const weakLabel = `${escalated?.provider ?? 'unknown'}/${escalated?.model ?? 'unknown'}`;
+              // 'wait' is only honest when a stronger candidate is actually
+              // in a SHORT cooldown (circuit breaker / rate-limit exclusion)
+              // — otherwise it would just sit forever. Check the circuit
+              // breaker + session exclusions for any non-weak provider that
+              // will recover within a few minutes.
+              const waitMs = this.weakModelWaitAvailableMs(task.id);
+              try {
+                this.weakModelChoice = await promptWeakModelChoice(weakLabel, { waitAvailable: waitMs !== null });
+              } catch {
+                this.weakModelChoice = 'continue'; // prompt failure → silent path
+              }
+
+              // ── 'wait': sleep out the short cooldown, then RE-ROUTE ─────
+              // A stronger provider that is in cooldown may be back once the
+              // exclusion expires. Re-create the escalated LLM fresh (the
+              // router re-ranks; the recovered provider is now eligible) and
+              // re-check the no-op — if a stronger model is back, the normal
+              // repair budget applies instead of the capped weak path.
+              if (this.weakModelChoice === 'wait' && waitMs !== null) {
+                logger.warn(`      ⏳ Waiting ${Math.ceil(waitMs / 1000)}s for a stronger model to recover…`);
+                await new Promise((r) => setTimeout(r, Math.min(waitMs, MAX_WEAK_WAIT_MS)));
+                escalatedTaskLLM = autoRouting
+                  ? this.createEscalatedLLM(effectiveAgentType, task.description, options, task.complexity, task.id)
+                  : escalatedTaskLLM;
+                noOpEscalation = this.isNoOpEscalation(
+                  task.id,
+                  autoRouting ? this.escalatedProviderModelByTask.get(task.id!) : undefined,
+                );
+                if (!noOpEscalation) {
+                  // A stronger model is back — drop the lenient flag (not
+                  // needed anymore) and use the normal repair budget.
+                  try {
+                    delete vault.context.metadata.lenientFileParsing;
+                  } catch {
+                    // Best-effort.
+                  }
+                }
+              }
+            }
+          }
+          // No-op escalation → cap this task's repair budget at 1 (lenient
+          // parsing already gives the weak writer its best shot; a second
+          // cycle on the same weak model only burns minutes re-running the
+          // identical failure). Healthy pipelines keep the configured budget.
+          //
+          // 'abort' skips repair entirely: the user chose to fix the provider
+          // config, so re-running the weak model is wasted work. The task is
+          // marked failed with an actionable message; the pipeline stops.
+          const userAborted = this.weakModelChoice === 'abort';
+          const effectiveMaxRepairs = noOpEscalation && autoRouting ? 1 : maxRepairs;
           const repairEngine = new ErrorRepairEngine({
-            maxRepairs,
+            maxRepairs: effectiveMaxRepairs,
             repairMode,
             verbose: options.verbose,
             fallbackModels: options.repairFallbackModels,
@@ -2114,15 +2232,30 @@ export class Orchestrator {
               : async (ctx, llm) =>
                   withLogCorrelation({ taskId: task.id }, () => agent.execute(ctx, llm));
 
-          result = await repairEngine.repair(
-            task.id,
-            vault.context,
-            escalatedTaskLLM ?? agentCallLLM,
-            errorMessage,
-            repairExecuteFn,
-          );
+          if (userAborted) {
+            // The user chose to fix the provider config — skip the weak-model
+            // repair entirely and surface an actionable failure.
+            result = {
+              success: false,
+              summary: 'Aborted by user — only a weak model is available',
+              error:
+                'Aborted by user: only a weak model is available for this task. ' +
+                'Add a provider API key or wait for a stronger model, then re-run.',
+            };
+            if (options.verbose) {
+              logger.warn(`      ⛔ Task aborted by user (weak model only) — fix provider config and re-run.`);
+            }
+          } else {
+            result = await repairEngine.repair(
+              task.id,
+              vault.context,
+              escalatedTaskLLM ?? agentCallLLM,
+              errorMessage,
+              repairExecuteFn,
+            );
+          }
 
-          if (options.verbose) {
+          if (options.verbose && !userAborted) {
             logger.info(`      🔧 ${result.success ? '✅ Repair succeeded' : '❌ Repair failed'} after ${repairEngine.budget.getAttempts(task.id)} attempt(s)`);
           }
 
@@ -2556,7 +2689,71 @@ export class Orchestrator {
     if (task.taskId && decision.complexity) {
       this.routedComplexities.set(task.taskId, decision.complexity);
     }
+    // Remember the ROUTED provider×model so the repair path can detect a
+    // no-op escalation (escalation landing back on the same model).
+    if (task.taskId) {
+      this.routedProviderModelByTask.set(task.taskId, { provider: decision.provider, model: decision.model });
+    }
     return this.createAutoRoutedLLMFromDecision(task, options, decision);
+  }
+
+  /**
+   * Detect a NO-OP model escalation for a task: the "stronger model" the
+   * repair engine would escalate to resolves to the SAME provider×model as
+   * the one that just failed. This happens when every stronger candidate is
+   * unavailable/blocked (e.g. only a weak local model is configured) —
+   * re-prompting "a stronger model" then just repeats the identical failure
+   * until the repair budget dies. The caller degrades instead: lenient
+   * parsing for the writer, a clear warning, and a bounded repair budget.
+   *
+   * Returns true when escalation would be a no-op (or the routed baseline is
+   * unknown — treat as no-op to stay safe), false when a genuinely different
+   * provider×model exists for escalation.
+   */
+  private isNoOpEscalation(taskId: string | undefined, escalated?: { provider: string; model: string }): boolean {
+    if (!taskId || !escalated) return true;
+    const routed = this.routedProviderModelByTask.get(taskId);
+    if (!routed) return true;
+    return routed.provider === escalated.provider && routed.model === escalated.model;
+  }
+
+  /**
+   * Whether a stronger candidate is in a SHORT cooldown that will recover
+   * soon — the only honest basis for offering "wait and retry". Checks the
+   * session exclusions (rate-limit / transient cooldowns) and the shared
+   * circuit breaker for any provider other than the weak one with a recovery
+   * time within MAX_WEAK_WAIT_MS. Returns the wait ms (or null when no
+   * stronger candidate is coming back soon — 'wait' is then not offered).
+   */
+  private weakModelWaitAvailableMs(taskId: string | undefined): number | null {
+    if (!taskId) return null;
+    const weak = this.routedProviderModelByTask.get(taskId);
+    const now = Date.now();
+    let best: number | null = null;
+
+    // 1. Session exclusions (auth = MAX_SAFE, rate-limit/transient = short).
+    for (const [provider, expiresAt] of this.failureSession.sessionFailedProviders) {
+      if (weak && provider === weak.provider) continue;
+      const remaining = expiresAt - now;
+      if (remaining > 0 && remaining <= MAX_WEAK_WAIT_MS) {
+        best = best === null ? remaining : Math.min(best, remaining);
+      }
+    }
+
+    // 2. Shared circuit breaker cooldowns (opened after repeated failures).
+    try {
+      const statuses = getProviderFallback(this.configManager).getCircuitBreakerStatus();
+      for (const s of statuses) {
+        if (weak && s.provider === weak.provider) continue;
+        if (s.cooldownRemaining > 0 && s.cooldownRemaining <= MAX_WEAK_WAIT_MS) {
+          best = best === null ? s.cooldownRemaining : Math.min(best, s.cooldownRemaining);
+        }
+      }
+    } catch {
+      // Best-effort — circuit breaker must never break the prompt.
+    }
+
+    return best;
   }
 
   /**
@@ -2584,13 +2781,20 @@ export class Orchestrator {
    * dies. The escalation carries the stronger decision's routing snapshot
    * into the reasoning trace so repairs are fully auditable.
    */
-  private createEscalatedLLM(
+  /**
+   * Resolve the escalated (next-complexity) routing decision for a task.
+   * Extracted so the repair path can inspect the decision ONCE (detect a
+   * no-op escalation) and then build the escalated LLM from it — avoiding a
+   * double resolveAutoRoutingDecision (which has side effects: routing
+   * history + audit write-through).
+   */
+  private resolveEscalatedDecision(
     agentType: string,
     description: string,
     options: OrchestratorOptions,
     baseComplexity?: string,
     taskId?: string,
-  ): LLMCallFn {
+  ): AutoRouteResult {
     // Prefer the ROUTED complexity (the tier that actually failed — the router
     // may have escalated the raw label) so the escalation is guaranteed to be
     // strictly above the failing tier. Fall back to the raw label / undefined
@@ -2611,11 +2815,46 @@ export class Orchestrator {
       // exactly which calls were model-escalated repairs (v1.60.4).
       escalated: true,
     };
-    const decision = this.resolveAutoRoutingDecision(escalatedTask, options);
+    return this.resolveAutoRoutingDecision(escalatedTask, options);
+  }
+
+  private createEscalatedLLM(
+    agentType: string,
+    description: string,
+    options: OrchestratorOptions,
+    baseComplexity?: string,
+    taskId?: string,
+  ): LLMCallFn {
+    const escalatedTask = {
+      agentType,
+      description,
+      complexity: taskId
+        ? ((this.routedComplexities.get(taskId) || baseComplexity) &&
+            this.escalateComplexity(this.routedComplexities.get(taskId) || baseComplexity))
+        : this.escalateComplexity(baseComplexity),
+      taskId,
+      escalated: true,
+    };
+    const decision = this.resolveEscalatedDecision(agentType, description, options, baseComplexity, taskId);
     if (options.verbose) {
-      logger.info(`      🚀 Escalating ${agentType} repair to a stronger model (${escalatedComplexity}): ${decision.provider}/${decision.model}`);
+      logger.info(`      🚀 Escalating ${agentType} repair to a stronger model (${escalatedTask.complexity}): ${decision.provider}/${decision.model}`);
+    }
+    // Record the escalated provider×model so the repair path can detect a
+    // no-op escalation (escalation landing back on the same weak model)
+    // without re-resolving the decision.
+    if (taskId) {
+      this.escalatedProviderModelByTask.set(taskId, { provider: decision.provider, model: decision.model });
     }
     return this.createAutoRoutedLLMFromDecision(escalatedTask, options, decision);
+  }
+
+  /** Next rung on the complexity ladder (critical is the top). */
+  private escalateComplexity(base: string | undefined): string {
+    const COMPLEXITY_LADDER = ['trivial', 'simple', 'moderate', 'complex', 'critical'] as const;
+    const currentIdx = COMPLEXITY_LADDER.indexOf(base as any);
+    return currentIdx >= 0 && currentIdx < COMPLEXITY_LADDER.length - 1
+      ? COMPLEXITY_LADDER[currentIdx + 1]
+      : 'critical';
   }
 
 
