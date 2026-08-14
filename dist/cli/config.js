@@ -1,4 +1,5 @@
 import { Command } from 'commander';
+import inquirer from 'inquirer';
 import { BaseCommand } from './commands.js';
 import { getPluginRegistry } from '../plugins/registry.js';
 import { logger } from '../utils/logger.js';
@@ -7,6 +8,8 @@ import { CATALOG_PROVIDER_IDS, getCatalogProvider, catalogEnvVar, isCatalogKeyle
 import { Vault } from '../enterprise/vault.js';
 import { guardRbacAction } from './rbac-guard.js';
 import { countKeyStates } from '../config/manager.js';
+import { PLATFORM_ENV_VARS, } from '../gateway/channel-directory.js';
+import { applyEnvToProcess, configurablePlatforms, envFilePath, envVarState, platformConfigStatus, platformEnvVarMeta, redactValue, writeEnvFile, } from '../gateway/platform-config.js';
 /**
  * Config command — manage buff configuration
  * buff config [set|get|list]
@@ -20,6 +23,7 @@ export class ConfigCommand extends BaseCommand {
             .addCommand(this.createListCommand())
             .addCommand(this.createInitCommand())
             .addCommand(this.createVaultCommand())
+            .addCommand(this.createGatewayCommand())
             .action(() => {
             // Show current config when no subcommand is given
             this.displayConfig();
@@ -688,6 +692,133 @@ export class ConfigCommand extends BaseCommand {
         logger.info('Set API keys via environment variables or the config file.');
         console.log('');
         this.displayConfig();
+    }
+    // ─── Gateway platform transports (`buff config gateway`) ─────────────────
+    createGatewayCommand() {
+        const collect = (value, previous) => previous.concat([value]);
+        const cmd = new Command('gateway')
+            .description('Manage gateway platform transports (tokens written to ~/.buff/.env)')
+            .addCommand(new Command('list')
+            .description('Show every platform transport and its env-var status')
+            .action(() => this.listPlatforms()))
+            .addCommand(new Command('set')
+            .description('Configure a platform transport (interactive wizard, or --set VAR=value)')
+            .argument('<platform>', 'Platform id (e.g. telegram, discord, matrix, sms)')
+            .option('--set <var=value>', 'Set a specific env var (repeatable; required in non-interactive mode)', collect, [])
+            .action((platform, opts) => void this.setPlatform(platform, opts)))
+            .addCommand(new Command('remove')
+            .description('Remove a platform transport from the env file')
+            .argument('<platform>', 'Platform id')
+            .option('--yes', 'Skip confirmation')
+            .action((platform, opts) => void this.removePlatform(platform, opts)));
+        return cmd;
+    }
+    listPlatforms() {
+        logger.info('Gateway platform transports (values live in ~/.buff/.env or env vars):');
+        for (const p of configurablePlatforms()) {
+            const st = platformConfigStatus(p);
+            console.log(`  ${st.configured ? '✅' : '❌'}  ${st.label} (${p})`);
+            for (const v of st.envVars) {
+                console.log(`       ${v.varName}=${v.set ? redactValue(v.value) : '<unset>'}`);
+            }
+        }
+        console.log('');
+        console.log('Configure one with: buff config gateway set <platform>');
+    }
+    async setPlatform(platform, opts) {
+        if (!(platform in PLATFORM_ENV_VARS)) {
+            logger.error(`Unknown platform '${platform}' — see \`buff config gateway list\`.`);
+            return;
+        }
+        if (platform === 'whatsapp' || platform === 'mock') {
+            logger.error(`'${platform}' is not env-configured — use \`buff whatsapp pair\` for the personal bridge.`);
+            return;
+        }
+        if (!guardRbacAction('gateway.manage'))
+            return;
+        const meta = platformEnvVarMeta(platform);
+        const current = platformConfigStatus(platform);
+        const provided = {};
+        for (const kv of opts.set ?? []) {
+            const eq = kv.indexOf('=');
+            if (eq === -1) {
+                logger.error(`--set expects VAR=value, got '${kv}'`);
+                return;
+            }
+            provided[kv.slice(0, eq).trim()] = kv.slice(eq + 1);
+        }
+        const values = {};
+        if (process.stdin.isTTY && Object.keys(provided).length === 0) {
+            const questions = meta.map((m) => {
+                const cur = current.envVars.find((v) => v.varName === m.varName);
+                return {
+                    type: m.secret ? 'password' : 'input',
+                    name: m.varName,
+                    message: `${m.prompt}${cur?.set ? ' (enter = keep current)' : ''}:`,
+                    ...(cur?.set ? { default: cur.value } : {}),
+                };
+            });
+            const answers = (await inquirer.prompt(questions));
+            for (const m of meta) {
+                const cur = current.envVars.find((v) => v.varName === m.varName);
+                const answer = answers[m.varName];
+                if (typeof answer === 'string' && answer.trim().length > 0)
+                    values[m.varName] = answer.trim();
+                else if (cur?.set)
+                    values[m.varName] = cur.value;
+            }
+        }
+        else {
+            for (const m of meta) {
+                const cur = current.envVars.find((v) => v.varName === m.varName);
+                if (provided[m.varName])
+                    values[m.varName] = provided[m.varName];
+                else if (cur?.set)
+                    values[m.varName] = cur.value;
+                else {
+                    logger.error(`Missing --set ${m.varName}=<value> (non-interactive mode).`);
+                    return;
+                }
+            }
+        }
+        if (Object.keys(values).length === 0) {
+            logger.info('No changes.');
+            return;
+        }
+        const { wrote } = writeEnvFile(values);
+        applyEnvToProcess(values);
+        logger.success(`Saved ${wrote.join(', ')} → ${envFilePath()}`);
+        logger.info('Restart the gateway/dashboard (or run `buff gateway start`) to use the new transport.');
+    }
+    async removePlatform(platform, opts) {
+        if (!(platform in PLATFORM_ENV_VARS)) {
+            logger.error(`Unknown platform '${platform}' — see \`buff config gateway list\`.`);
+            return;
+        }
+        if (!guardRbacAction('gateway.manage'))
+            return;
+        const keys = platformEnvVarMeta(platform).map((m) => m.varName);
+        if (!keys.some((k) => envVarState(k).set)) {
+            logger.info(`Nothing to remove — ${platform} has no configured values.`);
+            return;
+        }
+        if (!opts.yes && process.stdin.isTTY) {
+            const { confirm } = await inquirer.prompt([
+                {
+                    type: 'confirm',
+                    name: 'confirm',
+                    message: `Remove ${platform} config (${keys.join(', ')}) from ${envFilePath()}?`,
+                    default: false,
+                },
+            ]);
+            if (!confirm) {
+                logger.info('Aborted.');
+                return;
+            }
+        }
+        writeEnvFile({}, keys);
+        applyEnvToProcess({}, keys);
+        logger.success(`Removed ${platform} transport config.`);
     }
 }
 //# sourceMappingURL=config.js.map

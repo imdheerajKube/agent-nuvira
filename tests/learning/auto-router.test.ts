@@ -932,7 +932,10 @@ describe('AutoModelRouter.resolve with bandit learning', () => {
     const modelEntry = state.learningHistory.find((h) => h.model);
     expect(modelEntry?.outcome).toBe('failure');
     const model = modelEntry!.model!;
-    const modelPrior = getRouterBandit().getModelPrior(model, 'moderate');
+    // v3 — the outcome was recorded under the intent-aware bucket 'coding:moderate'
+    // ('implement a login form' → analyzeTaskProfile → 'coding'), so the prior
+    // must be read from the SAME bucket (the plain 'moderate' key would miss it).
+    const modelPrior = getRouterBandit().getModelPrior(model, 'moderate', 'coding');
     expect(modelPrior.beta).toBeGreaterThan(1);
   });
 
@@ -996,7 +999,10 @@ describe('AutoModelRouter.resolve with bandit learning', () => {
     getModelRegistry().markVerified('groq', 'openai/gpt-oss-20b', 'telemetry');
     const bandit = getRouterBandit();
     for (let i = 0; i < 20; i++) {
-      bandit.recordModelOutcome('openai/gpt-oss-20b', 'implement a login form', 'success', 1.0);
+      // v3 — seed the INTENT bucket ('implement a login form' → 'coding') that
+      // resolveModelWithLearning now samples; a legacy no-intent seed would
+      // never surface.
+      bandit.recordModelOutcome('openai/gpt-oss-20b', 'implement a login form', 'success', 1.0, undefined, 'coding');
     }
     const decision = router.resolve('writer', 'implement a login form', {
       allowedProviders: ['groq'],
@@ -1049,13 +1055,18 @@ describe('AutoModelRouter.resolve uncertainty escalation', () => {
     return { mockRestore: () => spy.mockRestore() };
   }
 
-  it('escalates to a learned provider when the winner is unlearned', () => {
+  it('escalates to a learned provider when the winner is unlearned (capability guard: never downgrade)', () => {
     const bandit = getRouterBandit();
-    // Seed groq with many successes so it is the ONLY learned provider in the
-    // moderate bucket. For 'implement a login form' the deterministic winner is
-    // gemini (free tier + strong reasoning), which stays unlearned (Beta(1,1)).
+    // Seed openrouter with many successes so it is the ONLY learned provider in
+    // the moderate bucket. For 'implement a login form' the deterministic
+    // winner is gemini (free tier + strong reasoning), which stays unlearned
+    // (Beta(1,1)). openrouter (reasoning 0.95) is at least as capable as gemini
+    // (0.85), so escalation to it is allowed by the S5 capability guard.
     for (let i = 0; i < 20; i++) {
-      bandit.recordOutcome('groq', 'implement a login form', 'success', 1.0);
+      // v3 — seed under the INTENT bucket resolve() samples ('implement a login
+      // form' → 'coding'); a legacy no-intent seed would never surface because
+      // select-time reads the intent-aware bucket.
+      bandit.recordOutcome('openrouter', 'implement a login form', 'success', 1.0, undefined, 'coding');
     }
     const sampling = deterministicSampling();
     try {
@@ -1063,10 +1074,34 @@ describe('AutoModelRouter.resolve uncertainty escalation', () => {
         allowedProviders: ['groq', 'gemini', 'openrouter'],
         useBandit: true,
       });
-      // gemini won deterministically but is unlearned → escalate to learned groq
-      expect(decision.provider).toBe('groq');
+      // gemini won deterministically but is unlearned → escalate to learned openrouter
+      expect(decision.provider).toBe('openrouter');
       expect(decision.banditEscalation).toBe(true);
       expect(decision.explanation).toContain('escalated: winner unlearned');
+    } finally {
+      sampling.mockRestore();
+    }
+  });
+
+  it('never escalates DOWNWARD to a weaker learned provider (S5)', () => {
+    const bandit = getRouterBandit();
+    // The ONLY learned provider is groq (reasoning 0.55) — weaker than the
+    // unlearned deterministic winner gemini (0.85). Escalating would swap a
+    // strong model for a weak one based on stale coding-session priors, which
+    // is exactly how an essay got routed to a 4-bit local model. The guard
+    // must block it and keep the (unlearned) winner.
+    for (let i = 0; i < 20; i++) {
+      bandit.recordOutcome('groq', 'implement a login form', 'success', 1.0, undefined, 'coding');
+    }
+    const sampling = deterministicSampling();
+    try {
+      const decision = new AutoModelRouter().resolve('writer', 'implement a login form', {
+        allowedProviders: ['groq', 'gemini', 'openrouter'],
+        useBandit: true,
+      });
+      expect(decision.provider).toBe('gemini');
+      expect(decision.banditEscalation).toBe(false);
+      expect(decision.explanation).not.toContain('escalated: winner unlearned');
     } finally {
       sampling.mockRestore();
     }
@@ -1076,7 +1111,7 @@ describe('AutoModelRouter.resolve uncertainty escalation', () => {
     const bandit = getRouterBandit();
     // Seed gemini so the deterministic winner IS learned
     for (let i = 0; i < 20; i++) {
-      bandit.recordOutcome('gemini', 'implement a login form', 'success', 1.0);
+      bandit.recordOutcome('gemini', 'implement a login form', 'success', 1.0, undefined, 'coding');
     }
     const sampling = deterministicSampling();
     try {

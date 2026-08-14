@@ -1358,9 +1358,19 @@ export class ModelCommand extends BaseCommand {
     this.renderPromotionGate();
     console.log('');
 
+    // v3 — bucket keys are either plain complexity ('moderate') for legacy
+    // data or intent-scoped ('coding:moderate') for intent-aware learning.
+    // Collect every key that actually holds data so intent buckets render.
+    const allBuckets = (): string[] => {
+      const keys = new Set<string>();
+      for (const b of COMPLEXITY_BUCKETS) keys.add(b);
+      for (const k of Object.keys(state.priors)) keys.add(k);
+      return [...keys];
+    };
+
     // Collect all providers that have any learning data
     const providers = new Set<string>();
-    for (const bucket of COMPLEXITY_BUCKETS) {
+    for (const bucket of allBuckets()) {
       for (const provider of Object.keys(state.priors[bucket] || {})) {
         providers.add(provider);
       }
@@ -1378,14 +1388,15 @@ export class ModelCommand extends BaseCommand {
 
     const sortedProviders = [...providers].sort();
 
-    // Table: rows = providers, columns = complexity buckets
-    const colWidth = 14;
-    const header = `  ${'Provider'.padEnd(12)}${COMPLEXITY_BUCKETS.map((b) => b.padStart(colWidth)).join('')}`;
+    // Table: rows = providers, columns = buckets (plain first, then intent)
+    const buckets = allBuckets();
+    const colWidth = 15;
+    const header = `  ${'Provider'.padEnd(12)}${buckets.map((b) => b.padStart(colWidth)).join('')}`;
     console.log(header);
     console.log(`  ${'-'.repeat(header.length - 2)}`);
 
     for (const provider of sortedProviders) {
-      const cells = COMPLEXITY_BUCKETS.map((bucket) => {
+      const cells = buckets.map((bucket) => {
         const prior = state.priors[bucket]?.[provider];
         if (!prior) return ''.padStart(colWidth);
         const mean = prior.alpha / (prior.alpha + prior.beta);
@@ -1396,14 +1407,20 @@ export class ModelCommand extends BaseCommand {
     }
 
     console.log('');
-    console.log('  Cell format: α/β (expected win %)  ·  α/β = Beta prior for that complexity bucket');
+    console.log('  Cell format: α/β (expected win %)  ·  columns are complexity buckets; intent-scoped buckets (e.g. coding:moderate) learn per task intent');
     console.log('  Higher α = more successful outcomes; higher β = more failures.');
     console.log('');
 
     // ── Per-modelId priors (ruflo ADR-149 mirror) ────────────────────────
     const modelPriors = state.modelPriors || {};
+    const modelBuckets = (): string[] => {
+      const keys = new Set<string>();
+      for (const b of COMPLEXITY_BUCKETS) keys.add(b);
+      for (const k of Object.keys(modelPriors)) keys.add(k);
+      return [...keys];
+    };
     const modelProviders = new Set<string>();
-    for (const bucket of COMPLEXITY_BUCKETS) {
+    for (const bucket of modelBuckets()) {
       for (const model of Object.keys(modelPriors[bucket] || {})) {
         modelProviders.add(model);
       }
@@ -1412,16 +1429,16 @@ export class ModelCommand extends BaseCommand {
       logger.highlight(`  ── Per-model priors (${modelProviders.size} learned model(s)) ──`);
       console.log('');
       for (const model of [...modelProviders].sort().slice(0, 12)) {
-        const cells = COMPLEXITY_BUCKETS.map((bucket) => {
+        const cells = modelBuckets().map((bucket) => {
           const prior = modelPriors[bucket]?.[model];
-          if (!prior) return ''.padStart(14);
+          if (!prior) return ''.padStart(colWidth);
           const mean = prior.alpha / (prior.alpha + prior.beta);
-          return `${prior.alpha}/${prior.beta} (${(mean * 100).toFixed(0)}%)`.padStart(14).slice(0, 14);
+          return `${prior.alpha}/${prior.beta} (${(mean * 100).toFixed(0)}%)`.padStart(colWidth).slice(0, colWidth);
         }).join('');
         console.log(`  ${model.padEnd(22).slice(0, 22)}${cells}`);
       }
       console.log('');
-      logger.info(`  Model cells: α/β (expected win %) per complexity bucket — higher α = more successful outcomes for that model.`);
+      logger.info(`  Model cells: α/β (expected win %) per bucket — higher α = more successful outcomes for that model.`);
       console.log('');
     }
 
@@ -1436,7 +1453,8 @@ export class ModelCommand extends BaseCommand {
         // the same string) — render just the model to avoid 'x (x)' noise.
         const label = h.model ?? h.provider;
         const ts = new Date(h.timestamp).toLocaleTimeString();
-        console.log(`   ${icon} ${label.padEnd(24).slice(0, 24)} ${h.complexity.padEnd(10)} reward ${h.reward.toFixed(2)}  ${ts}`);
+        const intentTag = h.taskIntent ? ` [${h.taskIntent}]` : '';
+        console.log(`   ${icon} ${label.padEnd(24).slice(0, 24)} ${h.complexity.padEnd(10)}${intentTag} reward ${h.reward.toFixed(2)}  ${ts}`);
       }
       console.log('');
     }
@@ -1479,8 +1497,16 @@ export class ModelCommand extends BaseCommand {
 
   /** Build a machine-readable bandit snapshot for scripting/CI. */
   private buildBanditJSON(state: RouterBanditState): Record<string, unknown> {
+    // v3 — include every bucket key (plain complexity + intent-scoped) so
+    // scripting consumers see intent-aware learning, not just the legacy grid.
+    const bucketKeys = (map: Record<string, Record<string, { alpha: number; beta: number }>>): string[] => {
+      const keys = new Set<string>(COMPLEXITY_BUCKETS);
+      for (const k of Object.keys(map)) keys.add(k);
+      return [...keys];
+    };
+
     const providers = new Set<string>();
-    for (const bucket of COMPLEXITY_BUCKETS) {
+    for (const bucket of bucketKeys(state.priors)) {
       for (const provider of Object.keys(state.priors[bucket] || {})) {
         providers.add(provider);
       }
@@ -1489,7 +1515,7 @@ export class ModelCommand extends BaseCommand {
     const priors: Record<string, Record<string, { alpha: number; beta: number; expectedWinRate: number }>> = {};
     for (const provider of providers) {
       priors[provider] = {};
-      for (const bucket of COMPLEXITY_BUCKETS) {
+      for (const bucket of bucketKeys(state.priors)) {
         const prior = state.priors[bucket]?.[provider];
         priors[provider][bucket] = prior
           ? {
@@ -1504,7 +1530,7 @@ export class ModelCommand extends BaseCommand {
     // Per-model priors (ruflo ADR-149 mirror)
     const modelPriorsMap = state.modelPriors || {};
     const modelPriors: Record<string, Record<string, { alpha: number; beta: number; expectedWinRate: number }>> = {};
-    for (const bucket of COMPLEXITY_BUCKETS) {
+    for (const bucket of bucketKeys(modelPriorsMap)) {
       const bucketPriors = modelPriorsMap[bucket] || {};
       for (const model of Object.keys(bucketPriors)) {
         modelPriors[model] ??= {};
@@ -1531,6 +1557,7 @@ export class ModelCommand extends BaseCommand {
         provider: h.provider,
         model: h.model,
         complexity: h.complexity,
+        taskIntent: h.taskIntent,
         outcome: h.outcome,
         reward: h.reward,
         timestamp: h.timestamp,

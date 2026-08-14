@@ -149,7 +149,7 @@ export async function initTeamMemory(repoUrl?: string, cwd?: string): Promise<vo
 
     // Create a README for the team repo
     writeFileSync(join(dir, 'README.md'),
-      '# Agent-Baba-D Team Memory\n\n' +
+      '# Agent-Nuvira Team Memory\n\n' +
       'This repository stores shared agent execution trajectories, coding patterns,\n' +
       'and workflow templates for the team.\n\n' +
       'Managed by the `buff team` CLI commands.\n',

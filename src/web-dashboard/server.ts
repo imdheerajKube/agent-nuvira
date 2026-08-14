@@ -57,6 +57,14 @@ import { setSkillEnabled } from '../learning/hub-skill-catalog.js';
 // hit the mocked readFileSync).
 import { createConfiguredAdapters } from '../gateway/adapters.js';
 import { ChannelDirectory, PLATFORM_ENV_VARS } from '../gateway/channel-directory.js';
+import {
+  applyEnvToProcess,
+  configurablePlatforms,
+  platformConfigStatus,
+  platformEnvVarMeta,
+  redactValue,
+  writeEnvFile,
+} from '../gateway/platform-config.js';
 
 // ─── Constants ──────────────────────────────────────────────────────────────
 
@@ -3205,6 +3213,113 @@ function handleRequest(req: IncomingMessage, res: ServerResponse): void {
       clearInterval(heartbeat);
       off();
     });
+    return;
+  }
+
+  // ── Platform transport config (GUI parity with `buff config gateway`) ──
+  // GET/POST/DELETE /api/config/platforms — read/write/remove a platform's
+  // env tokens in ~/.buff/.env (loaded by loadEnv() at startup + applied to
+  // this process on write, so the send-test picks it up immediately).
+
+  // GET /api/config/platforms — list every configurable platform with per-var
+  // status; full values only for admin/operator (viewers get redacted).
+  if (pathname === '/api/config/platforms' && req.method === 'GET') {
+    const session = adminSessions.validate(bearerToken(req));
+    if (!session) {
+      writeJson(res, 401, { ok: false, error: 'Not authenticated — log in first.' });
+      return;
+    }
+    const canWrite = roleCan(session.role, 'routing.operate');
+    const platforms = configurablePlatforms().map((p) => {
+      const st = platformConfigStatus(p);
+      const meta = platformEnvVarMeta(p);
+      return {
+        platform: p,
+        label: st.label,
+        configured: st.configured,
+        envVars: st.envVars.map((v) => {
+          const m = meta.find((x) => x.varName === v.varName);
+          return {
+            varName: v.varName,
+            set: v.set,
+            value: canWrite ? v.value : v.set ? redactValue(v.value) : '',
+            prompt: m?.prompt ?? v.varName,
+            secret: m?.secret ?? false,
+          };
+        }),
+      };
+    });
+    writeJson(res, 200, { ok: true, platforms });
+    return;
+  }
+
+  const platformConfigMatch = /^\/api\/config\/platforms\/([^/]+)$/.exec(pathname);
+
+  // POST /api/config/platforms/:platform — write the platform's env values.
+  if (platformConfigMatch && req.method === 'POST') {
+    void (async () => {
+      const session = adminSessions.validate(bearerToken(req));
+      if (!session) {
+        writeJson(res, 401, { ok: false, error: 'Not authenticated — log in first.' });
+        return;
+      }
+      if (!roleCan(session.role, 'routing.operate')) {
+        writeJson(res, 403, {
+          ok: false,
+          error: `Access denied — role '${session.role}' cannot configure platforms (requires admin or operator).`,
+        });
+        return;
+      }
+      const platform = platformConfigMatch[1];
+      if (!(platform in PLATFORM_ENV_VARS) || platform === 'whatsapp' || platform === 'mock') {
+        writeJson(res, 400, { ok: false, error: `Platform '${platform}' is not env-configurable.` });
+        return;
+      }
+      const body = await readJsonBody(req);
+      const values = (body?.values ?? {}) as Record<string, string>;
+      const allowed = new Set(PLATFORM_ENV_VARS[platform as keyof typeof PLATFORM_ENV_VARS]);
+      const clean: Record<string, string> = {};
+      for (const [key, value] of Object.entries(values)) {
+        if (!allowed.has(key)) {
+          writeJson(res, 400, { ok: false, error: `Unknown env var '${key}' for ${platform}.` });
+          return;
+        }
+        if (typeof value === 'string') clean[key] = value.trim();
+      }
+      if (Object.keys(clean).length === 0) {
+        writeJson(res, 400, { ok: false, error: 'Provide at least one value.' });
+        return;
+      }
+      const { wrote } = writeEnvFile(clean);
+      applyEnvToProcess(clean);
+      writeJson(res, 200, { ok: true, wrote, status: platformConfigStatus(platform as never) });
+    })();
+    return;
+  }
+
+  // DELETE /api/config/platforms/:platform — remove the platform's env values.
+  if (platformConfigMatch && req.method === 'DELETE') {
+    const session = adminSessions.validate(bearerToken(req));
+    if (!session) {
+      writeJson(res, 401, { ok: false, error: 'Not authenticated — log in first.' });
+      return;
+    }
+    if (!roleCan(session.role, 'routing.operate')) {
+      writeJson(res, 403, {
+        ok: false,
+        error: `Access denied — role '${session.role}' cannot configure platforms (requires admin or operator).`,
+      });
+      return;
+    }
+    const platform = platformConfigMatch[1];
+    if (!(platform in PLATFORM_ENV_VARS) || platform === 'whatsapp' || platform === 'mock') {
+      writeJson(res, 400, { ok: false, error: `Platform '${platform}' is not env-configurable.` });
+      return;
+    }
+    const keys = PLATFORM_ENV_VARS[platform as keyof typeof PLATFORM_ENV_VARS];
+    writeEnvFile({}, keys);
+    applyEnvToProcess({}, keys);
+    writeJson(res, 200, { ok: true, removed: keys, status: platformConfigStatus(platform as never) });
     return;
   }
 

@@ -936,6 +936,23 @@ export interface HubPlatformStatus {
   envVars: string[];
 }
 
+/** One env var of a platform transport (config surface — prompt/secret metadata). */
+export interface HubPlatformEnvVar {
+  varName: string;
+  set: boolean;
+  value: string;
+  prompt: string;
+  secret: boolean;
+}
+
+/** A platform transport as exposed by GET /api/config/platforms. */
+export interface PlatformConfigEntry {
+  platform: string;
+  label: string;
+  configured: boolean;
+  envVars: HubPlatformEnvVar[];
+}
+
 /** One entry in the gateway delivery ledger (I2). */
 export interface HubDeliveryEntry {
   id: string;

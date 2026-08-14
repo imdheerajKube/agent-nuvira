@@ -13,6 +13,7 @@ import type {
   DashboardData,
   DAGData,
   HubData,
+  PlatformConfigEntry,
   QuotaInsights,
   RoutingInsights,
   TaskLogLine,
@@ -494,6 +495,46 @@ export class DashboardAPI {
     return {
       ok: false,
       error: d.error || 'Send failed.',
+      unauthorized: r.status === 401,
+      forbidden: r.status === 403,
+    };
+  }
+
+  /**
+   * Platform transport config (GUI parity with `buff config gateway`): list
+   * every env-configurable platform with current per-var values (full values
+   * only for admin/operator). Authed.
+   */
+  async getPlatformConfigs(): Promise<PlatformConfigEntry[]> {
+    const r = await this.sendAdminRequest('/api/config/platforms', 'GET');
+    if (!r) return [];
+    const d = (r.data ?? {}) as { platforms?: PlatformConfigEntry[] };
+    return Array.isArray(d.platforms) ? d.platforms : [];
+  }
+
+  /** Write a platform's env values to ~/.buff/.env (authed — routing.operate). */
+  async setPlatformConfig(platform: string, values: Record<string, string>): Promise<AdminWriteResult> {
+    const r = await this.sendAdminRequest(`/api/config/platforms/${encodeURIComponent(platform)}`, 'POST', { values });
+    if (!r) return { ok: false, error: 'Could not reach the dashboard server.' };
+    const d = (r.data ?? {}) as AdminWriteResult;
+    if (r.status === 200 && d.ok) return d;
+    return {
+      ok: false,
+      error: d.error || 'Save failed.',
+      unauthorized: r.status === 401,
+      forbidden: r.status === 403,
+    };
+  }
+
+  /** Remove a platform's env values from ~/.buff/.env (authed — routing.operate). */
+  async removePlatformConfig(platform: string): Promise<AdminWriteResult> {
+    const r = await this.sendAdminRequest(`/api/config/platforms/${encodeURIComponent(platform)}`, 'DELETE');
+    if (!r) return { ok: false, error: 'Could not reach the dashboard server.' };
+    const d = (r.data ?? {}) as AdminWriteResult;
+    if (r.status === 200 && d.ok) return d;
+    return {
+      ok: false,
+      error: d.error || 'Remove failed.',
       unauthorized: r.status === 401,
       forbidden: r.status === 403,
     };

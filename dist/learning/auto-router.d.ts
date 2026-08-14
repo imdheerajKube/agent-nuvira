@@ -47,7 +47,7 @@ export declare const AUTO_PROVIDER = "auto";
 /** The five routing dimensions. */
 export type RoutingDimension = 'reasoning' | 'speed' | 'cost' | 'privacy' | 'reliability';
 /** High-level task intents the router can use to bias provider choice. */
-export type TaskIntent = 'planning' | 'coding' | 'verification' | 'security' | 'debugging' | 'architecture' | 'migration' | 'unknown';
+export type TaskIntent = 'planning' | 'coding' | 'verification' | 'security' | 'debugging' | 'architecture' | 'migration' | 'creative' | 'unknown';
 /** A lightweight task profile used to shape routing behavior. */
 export interface TaskProfile {
     intent: TaskIntent;
@@ -378,6 +378,14 @@ export interface AutoRouteResult {
  */
 export declare const ESCALATION_WIN_RATE_FLOOR = 0.55;
 /**
+ * S5 — creative/writing tasks need QUALITY, not speed/cost. The static
+ * profile floor for `local` is reasoning 0.30 (a 4-bit quant), which is fine
+ * for quick edits but must never serve essays/poems/letters. Hard-eliminate
+ * sub-floor providers for creative tasks — groq (0.55), gemini (0.85), nim
+ * (0.72) and openrouter (0.95) all pass.
+ */
+export declare const CREATIVE_MIN_REASONING = 0.4;
+/**
  * 0–1 fit between a task type's required capabilities and a provider's
  * offered tags: matched-required / total-required. 1 = the provider covers
  * every capability the task needs; 0 = none.
@@ -547,7 +555,7 @@ export declare class AutoModelRouter {
      * keeps the configured model — deterministic. Once outcomes accumulate,
      * the best Thompson-sampled LEARNED model wins, so the model choice learns.
      */
-    resolveModelWithLearning(provider: string, configuredModel: string, complexity: ComplexityLevel, minSamples?: number): string;
+    resolveModelWithLearning(provider: string, configuredModel: string, complexity: ComplexityLevel, minSamples?: number, taskIntent?: string): string;
     /**
      * Build a ParallelPick (promotion-gate A/B record) for a scored provider.
      * Used to log the deterministic pick vs the bandit pick for the same task.

@@ -251,7 +251,7 @@ describe('loadEnv — enhanced .env parsing', () => {
 
   it('should handle real-world API key file', () => {
     const content = [
-      '# Agent-Baba-D API Keys',
+      '# Agent-Nuvira API Keys',
       '',
       'GROQ_API_KEY=gsk_example_key',
       'export NVIDIA_NIM_API_KEY=nvapi-example',

@@ -1,5 +1,5 @@
 /**
- * SDK Command — Create and manage custom agents with the Agent-Baba-D SDK.
+ * SDK Command — Create and manage custom agents with the Agent-Nuvira SDK.
  *
  * Usage:
  *   buff sdk scaffold <outDir> <agentName> [description]  — Generate a new agent project

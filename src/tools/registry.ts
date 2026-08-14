@@ -237,9 +237,13 @@ export const suggestFollowupsSchema = z.object({
         label: z.string().optional().describe('Short display label (defaults to the prompt)'),
       }),
     )
+    // Freebuff parity: min 1, NO hard max — the model aims for ~3, but a
+    // model emitting 4–5 valid followups must still PARSE (a zod rejection
+    // here would feed a tool error back and force a wasteful retry loop, the
+    // exact failure class the essay diagnosis fixed). Callers render the
+    // top N for display; the loop's last-call-wins dedupes repeats.
     .min(1)
-    .max(3)
-    .describe('1–3 followups the user is likely to want next'),
+    .describe('Suggested followup prompts the user can click to send (aim for ~3)'),
 });
 
 // ─── Registry ───────────────────────────────────────────────────────────────
@@ -296,7 +300,8 @@ export const TOOL_CONTRACT = `You have tools available. Call them when appropria
 - If a subtask can be delegated to a specialized sub-agent (gather context, review, security scan, run tests), call \`delegate\` with the agent type, a focused prompt, and optional file paths.
 - To find code matching a pattern (context gathering, locating definitions/usages), call \`code_search\` with the pattern and optional globs.
 - END EVERY RESPONSE by calling \`suggest_followups\` with exactly 3 followups the user is likely to want next — natural next questions, deeper dives, or related directions that build on what you just said; specific to this conversation, not generic.
-- If you have nothing to add, answer directly and still end with suggest_followups.`;
+- If you have nothing to add, answer directly and still end with suggest_followups.
+- ORDERING (non-negotiable): deliver the user's answer FIRST, then suggest_followups. The followup call must come only AFTER the complete answer is written — never before it, never instead of it. A bare lead-in ("Sure, I can help!") is NOT an answer; write the full answer in the same step as the followup call.`;
 
 /** The JSON-fallback tool contract — for providers WITHOUT native tool-calling. */
 export const TOOL_CONTRACT_JSON = `${TOOL_CONTRACT}
@@ -403,7 +408,7 @@ registerTool({
 
 registerTool({
   name: 'suggest_followups',
-  description: 'End-of-response follow-up recommendations: 1–3 contextual prompts the user is likely to want next. MUST be called at the end of every response.',
+  description: 'Suggest clickable followup prompts the user can click to send. Use this tool AFTER completing the task — call it last, after your written answer (never before or instead of it). Aim for ~3 suggestions; skip only when there is no sensible next step (e.g. the user said goodbye).',
   category: 'experience',
   inputSchema: suggestFollowupsSchema,
   endsAgentStep: false,

@@ -189,4 +189,57 @@ describe('tool-loop auto failover — promptOnFailover confirmation', () => {
     // No ranked candidates remain → nothing to offer, so no prompt.
     expect(mockedPromptChoice).not.toHaveBeenCalled();
   });
+
+  it('S3: salvages the model answer from a tool-call 400 failed_generation (Groq-style)', async () => {
+    // The observed failure: Groq rejected the CALL because the model emitted
+    // an Anthropic-style <function=…> tag in its content — and the COMPLETE
+    // essay sat in the error's failed_generation field, thrown away. The
+    // salvage path must recover the content AND the followups.
+    const essayWire = 'The elephant is a very big animal. \\nIt has a long trunk.'; // JSON-escaped newline
+    const errorBody =
+      `{"error":{"message":"Failed to call a function.","type":"invalid_request_error","code":"tool_use_failed",` +
+      `"failed_generation":"${essayWire}\\n\\n<function=suggest_followups [{\\"prompt\\": \\"What do elephants eat?\\", \\"label\\": \\"Elephant Diet\\"}]</function>"}}`;
+    const generateTools = vi.fn().mockRejectedValue(new Error(`Tool-calling API error (400): ${errorBody}`));
+    const cmd = new ChatCommand() as any;
+    const session = {
+      type: 'groq',
+      provider: { name: 'Groq', generateTools, generate: vi.fn(), generateStream: vi.fn() },
+      model: 'llama-3.3-70b-versatile',
+    };
+    const callModel = (cmd as any).buildToolCallModel('essay', session, {}, { auto: false });
+    const result = await callModel(
+      [{ role: 'user', content: 'essay' }],
+      [{ name: 'suggest_followups', description: '', parameters: {} }],
+    );
+
+    // The essay is delivered (decoded), the tag is stripped, and the
+    // followups are recovered as a tool call for the loop to execute.
+    expect(result.content).toBe('The elephant is a very big animal. \nIt has a long trunk.');
+    expect(result.content).not.toContain('<function');
+    expect(result.toolCalls).toHaveLength(1);
+    expect(result.toolCalls[0].name).toBe('suggest_followups');
+    const args = result.toolCalls[0].arguments as { followups: Array<{ prompt: string; label?: string }> };
+    expect(args.followups[0].prompt).toBe('What do elephants eat?');
+    expect(args.followups[0].label).toBe('Elephant Diet');
+    expect(generateTools).toHaveBeenCalledTimes(1); // salvaged — no failover walk
+  });
+
+  it('S3: does NOT salvage a rejected REAL tool call (only suggest_followups)', async () => {
+    // A 400 whose intended call is a real pipeline tool (build) must surface
+    // the error — the prose around it is "I'll build…", not the deliverable.
+    const errorBody =
+      `{"error":{"code":"tool_use_failed","failed_generation":"I will implement the login form. <function=build [{\\"goal\\": \\"login\\"}]</function>"}}`;
+    const generateTools = vi.fn().mockRejectedValue(new Error(`Tool-calling API error (400): ${errorBody}`));
+    const cmd = new ChatCommand() as any;
+    const session = {
+      type: 'groq',
+      provider: { name: 'Groq', generateTools, generate: vi.fn(), generateStream: vi.fn() },
+      model: 'llama-3.3-70b-versatile',
+    };
+    const callModel = (cmd as any).buildToolCallModel('build login', session, {}, { auto: false });
+    await expect(
+      callModel([{ role: 'user', content: 'build login' }], [{ name: 'build', description: '', parameters: {} }]),
+    ).rejects.toThrow(/Tool-calling API error \(400\)/);
+    expect(generateTools).toHaveBeenCalledTimes(1);
+  });
 });

@@ -20,7 +20,7 @@ import { recognizeDateTime, Culture } from '@microsoft/recognizers-text-date-tim
 // ─── Types ──────────────────────────────────────────────────────────────────
 
 /** The intents C1 can resolve deterministically. */
-export type NluIntent = 'create' | 'continue' | 'fix' | 'explain' | 'configure' | 'unknown';
+export type NluIntent = 'create' | 'continue' | 'fix' | 'explain' | 'configure' | 'write' | 'unknown';
 
 /** The pipeline a resolved intent should run (C3 action-map key). */
 export type ModeHint = 'dev' | 'recall' | 'execute' | 'chat' | 'config';
@@ -123,6 +123,35 @@ export function matchConfigureRule(text: string): IntentResult | null {
 }
 
 /**
+ * Write/creative → chat (S4). "Write an essay/poem/story/letter/article/…" is
+ * a CONTENT request — a direct chat answer, NEVER the coding pipeline (the
+ * observed failure: "write an essay" was classified create → the no-model
+ * fallback spun up the full multi-agent pipeline for a zero-code task). The
+ * model still sees the build/analyze/… tools in the loop and can call them if
+ * the request actually needs code — the action only governs the no-model
+ * fallback + the routing hint. Runs BEFORE matchCreateRule so "write a test"
+ * (test is not a writing artifact) still resolves to create.
+ */
+export function matchWriteRule(text: string): IntentResult | null {
+  const writingObject =
+    /\b(?:essay|poem|poetry|story|short story|letter|article|blog(?: post)?|paragraph|composition|novel|dialogue|speech|caption|advertisement|review|summary|note|message|email|homework|assignment)\b/i;
+  // Verb + article + writing object: "write an essay on elephants for class 4".
+  if (
+    /^(?:please\s+)?(?:write|build|make|create|draft|compose|prepare)\s+(?:a|an|the|new|my|our)\s+/i.test(
+      text,
+    ) &&
+    writingObject.test(text)
+  ) {
+    return { intent: 'write', confidence: 0.85, modeHint: 'chat' };
+  }
+  // Writing verb + writing object anywhere: "please write a poem for my daughter".
+  if (/\b(?:write|draft|compose)\b/i.test(text) && writingObject.test(text)) {
+    return { intent: 'write', confidence: 0.8, modeHint: 'chat' };
+  }
+  return null;
+}
+
+/**
  * Create/build → dev. Requires a verb-initial command or a project-object noun
  * so "the build failed" (build as noun) and "make sure tests pass" never
  * false-positive into developer mode.
@@ -191,10 +220,12 @@ export function extractTimeRange(text: string, referenceDate: Date = new Date())
 /**
  * Classify a user request deterministically.
  *
- * Priority order: explain → continue → fix → configure → create. Interrogatives
- * win first so "explain how to build X" is a chat question, not a dev command;
- * "continue" wins over "build" so "continue building the app" resumes recall.
- * Unknown inputs return `{ intent: 'unknown', confidence: 0 }` — never a guess.
+ * Priority order: explain → continue → fix → configure → write → create.
+ * Interrogatives win first so "explain how to build X" is a chat question, not
+ * a dev command; "continue" wins over "build" so "continue building the app"
+ * resumes recall; writing artifacts (essay/poem/story/…) route to chat, never
+ * the coding pipeline (S4). Unknown inputs return `{ intent: 'unknown',
+ * confidence: 0 }` — never a guess.
  */
 export function classifyIntent(text: string, referenceDate: Date = new Date()): IntentResult {
   const trimmed = text.trim();
@@ -205,6 +236,7 @@ export function classifyIntent(text: string, referenceDate: Date = new Date()): 
     matchContinueRule(trimmed, referenceDate) ??
     matchFixRule(trimmed) ??
     matchConfigureRule(trimmed) ??
+    matchWriteRule(trimmed) ??
     matchCreateRule(trimmed) ??
     { intent: 'unknown', confidence: 0, modeHint: null }
   );

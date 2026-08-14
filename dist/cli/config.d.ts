@@ -22,5 +22,9 @@ export declare class ConfigCommand extends BaseCommand {
     private setValue;
     private listProviders;
     private initConfig;
+    private createGatewayCommand;
+    private listPlatforms;
+    private setPlatform;
+    private removePlatform;
 }
 //# sourceMappingURL=config.d.ts.map

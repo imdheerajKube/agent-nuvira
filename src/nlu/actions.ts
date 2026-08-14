@@ -80,6 +80,20 @@ const assessAction: ActionDescriptor = {
   inputSchema: z.object({ question: z.string() }),
 };
 
+// S4 — "write an essay/poem/story/…" is CONTENT, not code: a direct chat
+// answer (run: 'chat'), never the coding pipeline. The model still sees the
+// build/analyze tools in the loop and can call them for a request that
+// actually needs code; this only governs the no-model fallback + routing hint
+// (taskIntent 'creative' → the router's creative reasoning floor).
+const writeAction: ActionDescriptor = {
+  name: 'write',
+  description: 'Write creative or educational content (essay, poem, story, letter, article, summary) — a direct chat response, no file writes',
+  run: 'chat',
+  mode: 'chat',
+  taskIntent: 'creative',
+  inputSchema: z.object({ prompt: z.string() }),
+};
+
 const configureAction: ActionDescriptor = {
   name: 'configure',
   description: 'Set up API keys, switch providers/models, or change configuration',
@@ -105,6 +119,7 @@ export const ACTION_BY_INTENT: Record<NluIntent, ActionDescriptor> = {
   fix: repairAction,
   explain: assessAction,
   configure: configureAction,
+  write: writeAction,
   unknown: askAction,
 };
 

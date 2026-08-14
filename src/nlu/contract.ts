@@ -91,6 +91,9 @@ const CRITERIA_BY_INTENT: Record<NluIntent, string[]> = {
   explain: [
     'The answer is accurate and grounded in the project',
   ],
+  write: [
+    'The requested content is delivered as a direct answer',
+  ],
   configure: [
     'The configuration is valid and applied',
   ],
