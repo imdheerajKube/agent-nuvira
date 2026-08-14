@@ -439,8 +439,15 @@ describe('intent-aware bucketing (v3)', () => {
 
   it('sampleScore uses the intent-scoped prior when provided', () => {
     const bandit = new RouterBandit();
-    bandit.recordOutcome('groq', 'implement a login form', 'failure', 1.0, undefined, 'coding');
-    // Failure bumps β → mean below 0.5 → sampled score below the neutral 0.5
+    // Seed MANY failures (not one): a single Thompson draw from Beta(1,~2)
+    // exceeds 0.5 ~25% of the time — genuinely flaky. With 30 failures the
+    // prior is Beta(1, 31): P(draw > 0.5) = 0.5^31 ≈ 5e-10, effectively
+    // deterministic while still exercising the sampled path.
+    for (let i = 0; i < 30; i++) {
+      bandit.recordOutcome('groq', 'implement a login form', 'failure', 1.0, undefined, 'coding');
+    }
+    // Failures bumped β in the INTENT bucket → mean far below 0.5 → the
+    // intent-scoped sample must land below the neutral 0.5.
     const prior = bandit.getPrior('groq', 'moderate', 'coding');
     expect(prior.beta).toBeGreaterThan(1);
     const sampled = bandit.sampleScore('groq', 'moderate', 1, 'coding');
