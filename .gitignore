@@ -35,6 +35,7 @@ issues/
 !/UPGRADE_ROADMAP.md
 !docs/benchmarks/INDEX.md
 !docs/benchmarks/m2b-*.md
+!docs/GATEWAY.md
 !packages/sdk/README.md
 !vscode-extension/README.md
 !vscode-extension/CHANGELOG.md
