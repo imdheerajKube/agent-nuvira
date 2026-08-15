@@ -466,7 +466,15 @@ describe('IrcAdapter inbound relay (Hermes plugins/platforms/irc receive parity)
       await until(() => irc.capture.connections === 1);
       irc.push(':alice!user@host PRIVMSG agent-nuvira :deploy the site');
       await until(() => received.length === 1);
-      expect(received[0]).toEqual({ platform: 'irc', channelId: 'alice', text: 'deploy the site', from: 'alice' });
+      expect(received[0]).toEqual({
+        platform: 'irc',
+        channelId: 'alice',
+        text: 'deploy the site',
+        from: 'alice',
+        // senderId feeds the SHARED per-user policy gate (same as WhatsApp/etc).
+        senderId: 'alice',
+        isGroup: false,
+      });
       await adapter.stop();
     } finally {
       await irc.close();

@@ -33,6 +33,11 @@ export interface ChatEngine {
       askUser?: (question: string, choices: unknown[], multiSelect: boolean) => Promise<{ answer: unknown; index: number | number[]; custom?: string }>;
       /** P3 — live working steps (tool calls / reasoning markers). */
       onProgress?: (line: string) => void;
+      /** Live gateway for gateway_send (gateway-triggered chat answers reuse the connected bridge). */
+      gateway?: {
+        send(target: string, text: string): Promise<boolean>;
+        directory: { resolve(target: string): { platform: string; channelId: string } | null };
+      };
     },
   ): Promise<{
     content: string;

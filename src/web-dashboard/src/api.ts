@@ -12,6 +12,7 @@ import type {
   AdminWriteResult,
   DashboardData,
   DAGData,
+  HubChannelPolicy,
   HubData,
   PlatformConfigEntry,
   QuotaInsights,
@@ -498,6 +499,29 @@ export class DashboardAPI {
       unauthorized: r.status === 401,
       forbidden: r.status === 403,
     };
+  }
+
+  /**
+   * Gateway Permissions (validated senders): read the effective per-platform
+   * policies, or replace a per-platform policy (the running gateway re-reads
+   * config per inbound, so changes apply without a restart).
+   */
+  async gatewayPolicies(): Promise<{ ok: boolean; policies?: Record<string, HubChannelPolicy>; statusRecipients?: string[]; error?: string; unauthorized?: boolean; forbidden?: boolean }> {
+    const r = await this.sendAdminRequest('/api/admin/gateway/policies', 'GET');
+    if (!r) return { ok: false, error: 'Could not reach the dashboard server.' };
+    const d = (r.data ?? {}) as { ok?: boolean; policies?: Record<string, HubChannelPolicy>; statusRecipients?: string[]; error?: string };
+    if (r.status === 200 && d.ok) return { ok: true, policies: d.policies, statusRecipients: d.statusRecipients };
+    return { ok: false, error: d.error || 'Failed to read policies.', unauthorized: r.status === 401, forbidden: r.status === 403 };
+  }
+
+  async saveGatewayPolicies(policies: Record<string, HubChannelPolicy>, statusRecipients?: string[]): Promise<AdminWriteResult> {
+    const body: Record<string, unknown> = { policies };
+    if (Array.isArray(statusRecipients)) body.statusRecipients = statusRecipients;
+    const r = await this.sendAdminRequest('/api/admin/gateway/policies', 'PUT', body);
+    if (!r) return { ok: false, error: 'Could not reach the dashboard server.' };
+    const d = (r.data ?? {}) as AdminWriteResult;
+    if (r.status === 200 && d.ok) return d;
+    return { ok: false, error: d.error || 'Failed to save policies.', unauthorized: r.status === 401, forbidden: r.status === 403 };
   }
 
   /**

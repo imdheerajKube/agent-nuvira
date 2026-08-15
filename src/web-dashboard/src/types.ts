@@ -981,7 +981,29 @@ export interface PlatformConfigEntry {
   envVars: HubPlatformEnvVar[];
 }
 
+/** Per-platform inbound policy (who may trigger the agent) — Permissions page. */
+export interface HubChannelPolicy {
+  allowedUsers?: string[];
+  allowedGroups?: string[];
+  requireMention?: boolean;
+  disabled?: boolean;
+  silentDrop?: boolean;
+}
+
 /** One entry in the gateway delivery ledger (I2). */
+export interface HubInboxEntry {
+  id: string;
+  platform: string;
+  channelId: string;
+  text: string;
+  from?: string;
+  senderId?: string;
+  isGroup: boolean;
+  handled: 'pipeline' | 'chat' | 'help' | 'refused' | 'error';
+  reply?: string;
+  at: number;
+}
+
 export interface HubDeliveryEntry {
   id: string;
   target: string;
@@ -1031,6 +1053,17 @@ export interface HubData {
     aliases: HubChannelAlias[];
     reachable: Array<{ platform: string; channelId: string; aliases: string[]; reachable: boolean }>;
     platforms: HubPlatformStatus[];
+    policies: Record<string, HubChannelPolicy>;
+    /** Status recipients — always get pipeline completion summaries. */
+    statusRecipients: string[];
+    inbox: {
+      total: number;
+      pipeline: number;
+      chat: number;
+      help: number;
+      refused: number;
+      recent: HubInboxEntry[];
+    };
   };
   artifacts: {
     totalSessions: number;

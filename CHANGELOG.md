@@ -2,6 +2,19 @@
 
 All notable changes to **Agent-Nuvira** are documented in this file.
 
+## v1.72.0 — Gateway intelligence: chat answers, delivery tools, validated senders + status recipients
+
+- **Chat answers on the gateway** — `write`/`explain`/`ask` intents from any messaging channel now run a REAL chat answer through the same engine as the dashboard console (with origin context, live progress streamed to the channel, and a non-hanging askUser that forwards clarifications back to the channel). No more "I understood" stub for a poem request — the model actually writes the poem
+- **`gateway_send` tool in the agent loop** — the model can deliver to any channel/contact/group (`whatsapp:Daddy`, `email:…`, `slack:ops`…), so "write a poem and send it to Daddy" is written AND delivered in one turn. Delivery-ask detection routes pipeline intents that also ask to send (`create a report and send it to the team`) through the agent loop so build → deliver composes; pure pipeline tasks stay on the fast direct path
+- **Live-bridge reuse** — `gateway_send` inside the gateway reuses the RUNNING registry + already-connected adapters instead of building a fresh one (a second WhatsApp connection stalled deliveries for 60s+). Fixed the class-vs-instance bug that broke chat answers in the live gateway (`engine.answerOnce is not a function`) with a regression test
+- **Validated-sender Permissions (dashboard + API + CLI)** — per-platform `allowedUsers` / `allowedGroups` / `requireMention` / `disabled` / `silentDrop` managed from a new **Agent Hub → Channels → Permissions** page, `GET/PUT /api/admin/gateway/policies` (RBAC: admin/operator), and `buff config gateway allow/disallow/reply`. Changes apply to a RUNNING gateway immediately (policies re-read per inbound)
+- **Hard silent-drop policy** — unapproved senders get NO reply and NO processing by default (they never learn a bot exists); polite `⛔` refusals are an explicit opt-in (`silentDrop: false`). Applies to EVERY message including light/help intents, across all platforms
+- **Status recipients** — `gateway.statusRecipients` (CLI `buff config gateway notify add/remove/list`, dashboard **📊 Status recipients**) — chosen contacts/groups ALWAYS receive the pipeline completion summary regardless of who triggered it
+- **JID normalization** — allow-lists accept `+918800604222` and match the bridge's real JID (`918800604222:13@s.whatsapp.net` / `@lid`), so your own number can actually trigger the bot; non-WhatsApp ids (telegram/slack/email) pass through untouched
+- **Cross-platform parity** — IRC + SimpleX now populate `senderId`/`isGroup` so the shared per-user gate applies to them too; media sends extended to Telegram + Discord (`sendMedia`)
+- **Chat reliability fixes** — the delivered answer is no longer clobbered by JSON-only tool steps, malformed follow-up blocks never leak raw JSON, and repeated `suggest_followups` calls no longer accumulate stale suggestions
+- **4,531 tests passing across 195 files**
+
 ## v1.71.0 — ML task-similarity routing + promotion-gate enforcement
 
 - **ML router (`routing.mlRouter`, opt-in)** — a ruflo neural-router analog, built zero-dependency: task text is feature-hashed (FNV-1a, 256-dim + intent/complexity tail), every real outcome is stored as a feature vector, and at resolve time the k most similar past tasks (cosine, k=8) yield per-provider win rates → a strength-clamped learned factor that nudges candidate scores. Cold start is neutral, min-samples guarded (5), never overrides a large deterministic edge

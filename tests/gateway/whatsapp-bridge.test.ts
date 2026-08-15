@@ -14,7 +14,7 @@ import { tmpdir } from 'node:os';
 
 import { normalizeWhatsAppJid, type WhatsAppBridge } from '../../src/gateway/whatsapp/bridge.js';
 import { WhatsAppBridgeAdapter } from '../../src/gateway/adapters.js';
-import { BaileysBridge, normalizePairingPhone, renderQrToTerminal, renderQrToDataUrl } from '../../src/gateway/whatsapp/baileys-bridge.js';
+import { BaileysBridge, isSelfChatEnabled, normalizePairingPhone, renderQrToTerminal, renderQrToDataUrl } from '../../src/gateway/whatsapp/baileys-bridge.js';
 import { hasWhatsAppSession, whatsappSessionDir } from '../../src/gateway/whatsapp/session.js';
 
 // A controllable fake baileys module for the pair() AbortSignal test — the
@@ -44,7 +44,16 @@ vi.mock('baileys', () => {
         ev: makeEmitter(),
         ended: false,
         calls: [] as string[],
-        sendMessage: async () => undefined,
+        sentTo: [] as string[],
+        sentContent: [] as unknown[],
+        // Resolves with a message key id so the bridge's echo filter can
+        // record it (real Baileys sendMessage does the same).
+        sendMessage: async (jid: string, content: unknown) => {
+          sock.sentTo.push(jid);
+          sock.sentContent.push(content);
+          sock.calls.push('sendMessage');
+          return { key: { id: `SENT-${sock.sentTo.length}` } };
+        },
         requestPairingCode: async () => {
           sock.calls.push('requestPairingCode');
           return '12345678';
@@ -498,4 +507,184 @@ describe('BaileysBridge.ensureSocket() self-healing (fake baileys)', () => {
     await new Promise((r) => setTimeout(r, 400));
     expect(fakeBaileys.sockets).toHaveLength(1);
   }, 10_000);
+});
+
+// ─── I8b echo filter, self-chat mode + contact-name resolution ──────────────
+
+describe('BaileysBridge I8b — echo filter / self-chat / contacts (fake baileys)', () => {
+  let sessionDir = '';
+  const emit = (i: number, event: string, ...args: unknown[]): void =>
+    (fakeBaileys.sockets[i].ev as { emit: (e: string, ...a: unknown[]) => void }).emit(event, ...args);
+  const waitFor = async (fn: () => boolean, timeoutMs = 3_000): Promise<void> => {
+    const start = Date.now();
+    while (!fn()) {
+      if (Date.now() - start > timeoutMs) throw new Error('waitFor timeout');
+      await new Promise((r) => setTimeout(r, 20));
+    }
+  };
+
+  beforeEach(() => {
+    sessionDir = mkdtempSync(join(tmpdir(), 'buff-wa-i8b-'));
+    fakeBaileys.sockets.length = 0;
+    // Paired — send() must proceed past the paired gate and the socket's
+    // waitForOpen resolves on the fake 'open' we emit below.
+    writeFileSync(join(sessionDir, 'creds.json'), '{}', 'utf-8');
+  });
+
+  afterEach(() => {
+    rmSync(sessionDir, { recursive: true, force: true });
+  });
+
+  /** Connect (emit open so waitForOpen settles) and return the bridge. */
+  const openBridge = async (opts?: { selfChat?: boolean }): Promise<BaileysBridge> => {
+    const bridge = new BaileysBridge(sessionDir, opts);
+    const p = bridge.connect(() => {});
+    await waitFor(() => fakeBaileys.sockets.length >= 1);
+    emit(0, 'connection.update', { connection: 'open' });
+    await p;
+    return bridge;
+  };
+
+  it('drops its own outbound echo (fromMe + recentlySent id) and other fromMe messages in bot mode', async () => {
+    const received: Array<{ from: string; text: string }> = [];
+    const bridge = new BaileysBridge(sessionDir);
+    const p = bridge.connect((from, text) => received.push({ from, text }));
+    await waitFor(() => fakeBaileys.sockets.length >= 1);
+    emit(0, 'connection.update', { connection: 'open' });
+    await p;
+    // Send something — the fake returns key.id 'SENT-1' which the bridge records.
+    expect(await bridge.send('+15551234567', 'hello echo')).toBe(true);
+    // The outbound echo arrives back via upsert (fromMe, id matches).
+    emit(0, 'messages.upsert', {
+      type: 'notify',
+      messages: [{ key: { remoteJid: '15551234567@s.whatsapp.net', id: 'SENT-1', fromMe: true }, message: { conversation: 'hello echo' } }],
+    });
+    // A fromMe message with an UNKNOWN id (e.g. the paired number typing in a
+    // group) must also be dropped in bot mode (selfChat off).
+    emit(0, 'messages.upsert', {
+      type: 'notify',
+      messages: [{ key: { remoteJid: '15551234567@s.whatsapp.net', id: 'USER-TYPED-1', fromMe: true }, message: { conversation: 'please fix this' } }],
+    });
+    await new Promise((r) => setTimeout(r, 50));
+    expect(received).toHaveLength(0);
+    // A genuine inbound (fromMe false) still flows.
+    emit(0, 'messages.upsert', {
+      type: 'notify',
+      messages: [{ key: { remoteJid: '15551234567@s.whatsapp.net' }, message: { conversation: 'fix the failing test' } }],
+    });
+    await waitFor(() => received.length === 1);
+    expect(received[0]).toEqual({ from: '15551234567@s.whatsapp.net', text: 'fix the failing test' });
+    await bridge.disconnect();
+  }, 10_000);
+
+  it('self-chat mode forwards user-typed fromMe messages but still drops echoes', async () => {
+    const received: Array<{ from: string; text: string }> = [];
+    const bridge = new BaileysBridge(sessionDir, { selfChat: true });
+    const p = bridge.connect((from, text) => received.push({ from, text }));
+    await waitFor(() => fakeBaileys.sockets.length >= 1);
+    emit(0, 'connection.update', { connection: 'open' });
+    await p;
+    await bridge.send('+15551234567', 'agent reply'); // records SENT-1
+    // The user's own self-chat message (fromMe, unknown id) is forwarded.
+    emit(0, 'messages.upsert', {
+      type: 'notify',
+      messages: [{ key: { remoteJid: '15551234567@s.whatsapp.net', id: 'USER-SELF-1', fromMe: true }, message: { conversation: 'write a poem' } }],
+    });
+    await waitFor(() => received.length === 1);
+    expect(received[0]).toEqual({ from: '15551234567@s.whatsapp.net', text: 'write a poem' });
+    // The agent's own reply echo (fromMe + SENT-1) must still be dropped.
+    emit(0, 'messages.upsert', {
+      type: 'notify',
+      messages: [{ key: { remoteJid: '15551234567@s.whatsapp.net', id: 'SENT-1', fromMe: true }, message: { conversation: 'agent reply' } }],
+    });
+    await new Promise((r) => setTimeout(r, 50));
+    expect(received).toHaveLength(1);
+    await bridge.disconnect();
+  }, 10_000);
+
+  it('resolves a contact NAME to its JID from the address-book sync and sends there', async () => {
+    const bridge = await openBridge();
+    emit(0, 'contacts.upsert', [{ id: '919876543210@s.whatsapp.net', name: 'Daddy', notify: 'Daddy' }]);
+    expect(await bridge.send('Daddy', 'Charansoarsh - By Agent-Nuvira')).toBe(true);
+    expect(fakeBaileys.sockets[0].sentTo).toEqual(['919876543210@s.whatsapp.net']);
+    await bridge.disconnect();
+  }, 10_000);
+
+  it('learns contact names from inbound pushName and matches partial names', async () => {
+    const bridge = await openBridge();
+    emit(0, 'messages.upsert', {
+      type: 'notify',
+      messages: [{ key: { remoteJid: '12025550123@s.whatsapp.net' }, pushName: 'Mumma', message: { conversation: 'hi' } }],
+    });
+    // Exact + partial (prefix) resolution against the learned name.
+    expect(bridge.resolveContact('Mumma')).toBe('12025550123@s.whatsapp.net');
+    expect(bridge.resolveContact('mum')).toBe('12025550123@s.whatsapp.net');
+    expect(bridge.resolveContact('Nobody')).toBeNull();
+    expect(await bridge.send('Mumma', 'hi mum')).toBe(true);
+    expect(fakeBaileys.sockets[0].sentTo).toEqual(['12025550123@s.whatsapp.net']);
+    await bridge.disconnect();
+  }, 10_000);
+
+  it('keeps resolving a name while the address-book sync is still landing (one-shot send)', async () => {
+    const bridge = new BaileysBridge(sessionDir);
+    const p = bridge.send('Daddy', 'late sync test');
+    await waitFor(() => fakeBaileys.sockets.length >= 1);
+    emit(0, 'connection.update', { connection: 'open' });
+    // The sync arrives a beat AFTER the send started — resolveContactJid polls.
+    setTimeout(() => emit(0, 'contacts.upsert', [{ id: '919876543210@s.whatsapp.net', name: 'Daddy' }]), 120);
+    expect(await p).toBe(true);
+    expect(fakeBaileys.sockets[0].sentTo).toEqual(['919876543210@s.whatsapp.net']);
+    await bridge.disconnect();
+  }, 10_000);
+
+  it('isSelfChatEnabled reads BUFF_WHATSAPP_SELF_CHAT truthy values', () => {
+    expect(isSelfChatEnabled({ BUFF_WHATSAPP_SELF_CHAT: '1' })).toBe(true);
+    expect(isSelfChatEnabled({ BUFF_WHATSAPP_SELF_CHAT: 'true' })).toBe(true);
+    expect(isSelfChatEnabled({})).toBe(false);
+    expect(isSelfChatEnabled({ BUFF_WHATSAPP_SELF_CHAT: '0' })).toBe(false);
+  });
+
+  it('addContact persists to the mapping file and resolves by name WITHOUT a socket', async () => {
+    const bridge = new BaileysBridge(sessionDir);
+    expect(bridge.addContact('Daddy', '+91 98765 43210')).toBe(true);
+    // Resolves straight from the file (no connection needed).
+    expect(bridge.resolveContact('Daddy')).toBe('919876543210@s.whatsapp.net');
+    expect(bridge.resolveContact('daddy')).toBe('919876543210@s.whatsapp.net');
+    // A NEW bridge instance in the same dir re-seeds from the file.
+    const again = new BaileysBridge(sessionDir);
+    expect(again.resolveContact('Daddy')).toBe('919876543210@s.whatsapp.net');
+  });
+
+  it('removeContact deletes from the file and the live maps', async () => {
+    const bridge = new BaileysBridge(sessionDir);
+    bridge.addContact('Daddy', '9876543210');
+    expect(bridge.removeContact('Daddy')).toBe(true);
+    expect(bridge.resolveContact('Daddy')).toBeNull();
+    expect(bridge.removeContact('Daddy')).toBe(false);
+  });
+
+  it('addContact rejects empty names / invalid numbers', () => {
+    const bridge = new BaileysBridge(sessionDir);
+    expect(bridge.addContact('', '9876543210')).toBe(false);
+    expect(bridge.addContact('Daddy', 'abc')).toBe(false);
+  });
+
+  it('sendMedia sends image/video/audio/document to a resolved JID (P3)', async () => {
+    const bridge = await openBridge();
+    bridge.addContact('Daddy', '919876543210');
+    const img = new Uint8Array([1, 2, 3]);
+    expect(await bridge.sendMedia?.('Daddy', { type: 'image', data: img, caption: 'look' })).toBe(true);
+    expect(fakeBaileys.sockets[0].sentTo).toEqual(['919876543210@s.whatsapp.net']);
+    expect(fakeBaileys.sockets[0].sentContent[0]).toMatchObject({ image: img, caption: 'look' });
+    expect(await bridge.sendMedia?.('+15551234567', { type: 'document', data: img, filename: 'a.pdf' })).toBe(true);
+    expect(fakeBaileys.sockets[0].sentContent[1]).toMatchObject({ document: img, fileName: 'a.pdf' });
+    await bridge.disconnect();
+  }, 10_000);
+
+  it('sendMedia returns false when unpaired', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'buff-wa-media-unpaired-'));
+    const bridge = new BaileysBridge(dir);
+    expect(await bridge.sendMedia?.('Daddy', { type: 'image', data: new Uint8Array([1]) })).toBe(false);
+    rmSync(dir, { recursive: true, force: true });
+  });
 });

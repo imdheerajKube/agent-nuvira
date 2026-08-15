@@ -343,6 +343,8 @@ export class ChatCommand extends BaseCommand {
     askUser?: ToolContext['askUser'];
     /** P3 — live progress lines for the dashboard chat console. */
     onProgress?: (line: string) => void;
+    /** Live gateway for gateway_send (gateway-triggered chat answers reuse the connected bridge). */
+    gateway?: ToolContext['gateway'];
   } = {},
 ): Promise<{
   content: string;
@@ -377,7 +379,7 @@ export class ChatCommand extends BaseCommand {
       true,
       { auto: autoMode },
       parsed,
-      { askUser: opts.askUser, onProgress: opts.onProgress },
+      { askUser: opts.askUser, onProgress: opts.onProgress, gateway: opts.gateway },
     );
 
     // No-model fallback: the tool loop could not generate a single response
@@ -758,7 +760,12 @@ export class ChatCommand extends BaseCommand {
     cacheEnabled: boolean,
     mode: { auto: boolean },
     parsed?: ParsedRequest,
-    ctxOverrides?: { askUser?: ToolContext['askUser']; onProgress?: (line: string) => void },
+    ctxOverrides?: {
+      askUser?: ToolContext['askUser'];
+      onProgress?: (line: string) => void;
+      /** Live gateway for gateway_send (gateway-triggered chat answers reuse the connected bridge). */
+      gateway?: ToolContext['gateway'];
+    },
   ): Promise<{
     content: string;
     generationFailed?: boolean;
@@ -842,6 +849,7 @@ export class ChatCommand extends BaseCommand {
       // (inquirer would hang on the server's piped stdin); the CLI keeps the
       // default interactive renderer.
       ...(ctxOverrides?.askUser ? { askUser: ctxOverrides.askUser } : {}),
+      ...(ctxOverrides?.gateway ? { gateway: ctxOverrides.gateway } : {}),
       // C2 verify with the actual session model (verify_requirement tool).
       callLLM: (prompt, opts) =>
         session.provider.generate(prompt, { ...(opts as Record<string, unknown> | undefined), model: session.model }),

@@ -20,7 +20,7 @@ import { connect as tlsConnect, type TLSSocket } from 'node:tls';
 import type { Platform } from './channel-directory.js';
 import { isPlatformConfigured } from './channel-directory.js';
 import type { WhatsAppBridge } from './whatsapp/bridge.js';
-import { BaileysBridge } from './whatsapp/baileys-bridge.js';
+import { BaileysBridge, isSelfChatEnabled } from './whatsapp/baileys-bridge.js';
 import { hasWhatsAppSession } from './whatsapp/session.js';
 
 // ─── Inbound message shape ──────────────────────────────────────────────────
@@ -33,12 +33,28 @@ export interface InboundMessage {
   text: string;
   /** Human sender label (for the board/logs). */
   from?: string;
+  /**
+   * P1 — the real sender id (used by per-user policies). For DMs this is the
+   * channel's owner; inside a group it is the actual author (WhatsApp
+   * `key.participant`, Telegram `from.id`, Slack `event.user`, …).
+   */
+  senderId?: string;
+  /** P1 — true when the message came from a group/channel, not a DM. */
+  isGroup?: boolean;
 }
 
 /** The handler an adapter calls for every inbound message. */
 export type MessageHandler = (msg: InboundMessage) => void | Promise<void>;
 
 // ─── Adapter interface ──────────────────────────────────────────────────────
+
+/** P3 — media payload for `sendMedia` (image/video/audio/document upload). */
+export interface MediaPayload {
+  type: 'image' | 'video' | 'audio' | 'document';
+  data: Uint8Array;
+  caption?: string;
+  filename?: string;
+}
 
 export interface ChannelAdapter {
   readonly platform: Platform;
@@ -52,6 +68,12 @@ export interface ChannelAdapter {
   stop(): Promise<void>;
   /** Send a text message to a channel. Never throws — returns success. */
   send(channelId: string, text: string): Promise<boolean>;
+  /**
+   * P3 — optional media send. Adapters whose transport supports file uploads
+   * (WhatsApp, Telegram, Discord) implement it; the registry dispatches via
+   * `sendMediaToRef`. Never throws — returns success.
+   */
+  sendMedia?(channelId: string, media: MediaPayload): Promise<boolean>;
 }
 
 // ─── Helpers ────────────────────────────────────────────────────────────────
@@ -78,6 +100,26 @@ async function postJson(url: string, body: unknown, token?: string, extraHeaders
 export function sanitizeOutbound(text: string, max = 3500): string {
   // eslint-disable-next-line no-control-regex
   return text.replace(/[\u0000-\u0008\u000b\u000c\u000e-\u001f]/g, '').slice(0, max);
+}
+
+/** Default upload filename per media type (when the caller omits one). */
+export function defaultMediaFilename(type: MediaPayload['type']): string {
+  switch (type) {
+    case 'image': return 'image.png';
+    case 'video': return 'video.mp4';
+    case 'audio': return 'audio.mp3';
+    default: return 'file.bin';
+  }
+}
+
+/** Upload field name for a Telegram send* method (photo/video/audio/document). */
+function telegramMediaField(type: MediaPayload['type']): string {
+  switch (type) {
+    case 'image': return 'photo';
+    case 'video': return 'video';
+    case 'audio': return 'audio';
+    default: return 'document';
+  }
 }
 
 // ─── Telegram (long-poll) ───────────────────────────────────────────────────
@@ -128,17 +170,28 @@ export class TelegramAdapter implements ChannelAdapter {
         });
         if (res.ok) {
           const data = (await res.json()) as {
-            result?: Array<{ update_id: number; message?: { chat?: { id: number }; text?: string; from?: { first_name?: string } } }>;
+            result?: Array<{
+              update_id: number;
+              message?: {
+                chat?: { id: number; type?: string };
+                text?: string;
+                from?: { id?: number; first_name?: string };
+              };
+            }>;
           };
           for (const u of data.result ?? []) {
             this.offset = u.update_id + 1;
             const text = u.message?.text;
             if (!text || !u.message?.chat) continue;
+            const chat = u.message.chat;
             await this.handler?.({
               platform: 'telegram',
-              channelId: String(u.message.chat.id),
+              channelId: String(chat.id),
               text,
               from: u.message.from?.first_name ?? 'telegram-user',
+              // P1: real sender id + group detection (chat.type).
+              senderId: u.message.from?.id !== undefined ? String(u.message.from.id) : undefined,
+              isGroup: chat.type !== undefined && chat.type !== 'private',
             });
           }
         }
@@ -166,6 +219,27 @@ export class TelegramAdapter implements ChannelAdapter {
     } catch {
       // send() must never throw — the delivery ledger / gateway callers rely
       // on a boolean (matches every other adapter's contract).
+      return false;
+    }
+  }
+
+  /**
+   * P3 — media upload via the Bot API multipart endpoints
+   * (sendPhoto/sendVideo/sendAudio/sendDocument). FormData keeps the content
+   * type + boundary correct — no manual multipart encoding.
+   */
+  async sendMedia(channelId: string, media: MediaPayload): Promise<boolean> {
+    if (!this.configured) return false;
+    const method = media.type === 'image' ? 'sendPhoto' : media.type === 'video' ? 'sendVideo' : media.type === 'audio' ? 'sendAudio' : 'sendDocument';
+    try {
+      const form = new FormData();
+      form.append('chat_id', String(Number(channelId)));
+      // Telegram captions are capped at 1024 chars.
+      if (media.caption) form.append('caption', sanitizeOutbound(media.caption, 1024));
+      form.append(telegramMediaField(media.type), new Blob([media.data]), media.filename ?? defaultMediaFilename(media.type));
+      const res = await fetch(`https://api.telegram.org/bot${this.token}/${method}`, { method: 'POST', body: form });
+      return res.ok;
+    } catch {
       return false;
     }
   }
@@ -241,6 +315,30 @@ export class DiscordAdapter extends WebhookChannelAdapter {
 
   protected payloadFor(_channelId: string, text: string): unknown {
     return { content: text };
+  }
+
+  /**
+   * P3 — media upload. Discord accepts the same multipart shape on webhooks
+   * and the REST channel endpoint: a `payload_json` form field (message
+   * content, i.e. the caption) plus `files[n]` for the attachment. The webhook
+   * URL already carries its token; the REST path uses the Bearer bot token.
+   */
+  async sendMedia(channelId: string, media: MediaPayload): Promise<boolean> {
+    if (!this.configured) return false;
+    try {
+      const form = new FormData();
+      // Discord message content is capped at 2000 chars.
+      form.append('payload_json', JSON.stringify({ content: sanitizeOutbound(media.caption ?? '', 2000) }));
+      form.append('files[0]', new Blob([media.data]), media.filename ?? defaultMediaFilename(media.type));
+      const res = await fetch(this.sendUrl(channelId), {
+        method: 'POST',
+        headers: this.token ? { authorization: `Bearer ${this.token}` } : {},
+        body: form,
+      });
+      return res.ok;
+    } catch {
+      return false;
+    }
   }
 }
 
@@ -320,7 +418,11 @@ export class WhatsAppBridgeAdapter implements ChannelAdapter {
   readonly platform = 'whatsapp' as const;
   private handler: MessageHandler | null = null;
 
-  constructor(private readonly bridge: WhatsAppBridge = new BaileysBridge()) {}
+  constructor(
+    private readonly bridge: WhatsAppBridge = new BaileysBridge(undefined, {
+      selfChat: isSelfChatEnabled(),
+    }),
+  ) {}
 
   /** Paired session on disk → configured (the bridge is the transport). */
   get configured(): boolean {
@@ -333,12 +435,15 @@ export class WhatsAppBridgeAdapter implements ChannelAdapter {
 
   async start(onMessage: MessageHandler): Promise<void> {
     this.handler = onMessage;
-    await this.bridge.connect((fromJid, text) => {
+    await this.bridge.connect((fromJid, text, participant) => {
       void this.handler?.({
         platform: 'whatsapp',
         channelId: fromJid,
         text,
-        from: fromJid,
+        from: participant ?? fromJid,
+        // P1: the real author inside a group (participant) vs the chat itself.
+        senderId: participant ?? fromJid,
+        isGroup: fromJid.endsWith('@g.us'),
       });
     });
   }
@@ -352,6 +457,15 @@ export class WhatsAppBridgeAdapter implements ChannelAdapter {
   async send(channelId: string, text: string): Promise<boolean> {
     if (!this.configured) return false;
     return this.bridge.send(channelId, text);
+  }
+
+  /** P3 — media send passthrough (only the Baileys bridge implements it). */
+  async sendMedia?(
+    channelId: string,
+    media: { type: 'image' | 'video' | 'audio' | 'document'; data: Uint8Array; caption?: string; filename?: string },
+  ): Promise<boolean> {
+    if (!this.configured || !this.bridge.sendMedia) return false;
+    return this.bridge.sendMedia(channelId, media);
   }
 }
 
@@ -481,6 +595,11 @@ export class MatrixAdapter extends WebhookChannelAdapter {
   readonly tokenEnvVar = 'BUFF_MATRIX_ACCESS_TOKEN';
   readonly configured: boolean;
   private homeserver = '';
+  private handler: MessageHandler | null = null;
+  private running = false;
+  private timer: NodeJS.Timeout | null = null;
+  private since: string | null = null;
+  private ownUserId = '';
 
   constructor() {
     super();
@@ -490,7 +609,7 @@ export class MatrixAdapter extends WebhookChannelAdapter {
   }
 
   describe(): string {
-    return this.configured ? 'Matrix (homeserver API)' : 'Matrix (not configured)';
+    return this.configured ? 'Matrix (homeserver API, two-way sync)' : 'Matrix (not configured)';
   }
 
   protected sendUrl(channelId: string): string {
@@ -499,6 +618,70 @@ export class MatrixAdapter extends WebhookChannelAdapter {
 
   protected payloadFor(_channelId: string, text: string): unknown {
     return { msgtype: 'm.text', body: text };
+  }
+
+  /**
+   * P3 — inbound via the Client-Server /sync long-poll (no webhooks needed).
+   * Polls `next_batch`-anchored sync, relays m.text room messages, skips our
+   * own sends. A `since` token is kept in memory per gateway run.
+   */
+  async start(onMessage: MessageHandler): Promise<void> {
+    if (!this.configured) throw new Error('Matrix adapter not configured (BUFF_MATRIX_HOMESERVER + BUFF_MATRIX_ACCESS_TOKEN)');
+    if (this.running) return;
+    this.handler = onMessage;
+    this.running = true;
+    // Learn our own user id once so we never re-ingest our own sends.
+    try {
+      const res = await fetch(`${this.homeserver}/_matrix/client/v3/account/whoami`, {
+        headers: { authorization: `Bearer ${this.token}` },
+      });
+      if (res.ok) this.ownUserId = ((await res.json()) as { user_id?: string }).user_id ?? '';
+    } catch {
+      /* best-effort — own-message skip still works when it can't be learned */
+    }
+    void this.poll();
+  }
+
+  async stop(): Promise<void> {
+    this.running = false;
+    this.handler = null;
+    if (this.timer) clearTimeout(this.timer);
+    this.timer = null;
+  }
+
+  private async poll(): Promise<void> {
+    if (!this.running) return;
+    try {
+      const url = `${this.homeserver}/_matrix/client/v3/sync?timeout=30000${this.since ? `&since=${encodeURIComponent(this.since)}` : ''}`;
+      const res = await fetch(url, { headers: { authorization: `Bearer ${this.token}` } });
+      if (res.ok) {
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        const data = (await res.json()) as any;
+        this.since = (data?.next_batch as string | undefined) ?? this.since;
+        const joined = (data?.rooms?.join ?? {}) as Record<string, { timeline?: { events?: unknown[] } }>;
+        for (const [roomId, room] of Object.entries(joined)) {
+          for (const ev of room.timeline?.events ?? []) {
+            // eslint-disable-next-line @typescript-eslint/no-explicit-any
+            const e = ev as any;
+            if (e?.type !== 'm.room.message' || e?.sender === this.ownUserId) continue;
+            const body = e?.content?.body;
+            if (typeof body !== 'string' || !body.trim() || e?.content?.msgtype !== 'm.text') continue;
+            await this.handler?.({
+              platform: 'matrix',
+              channelId: roomId,
+              text: body,
+              from: e.sender ?? 'matrix-user',
+              senderId: e.sender,
+              // Matrix rooms are channels; DM-vs-group is not inferred here.
+              isGroup: true,
+            });
+          }
+        }
+      }
+    } catch {
+      /* transient network error — keep polling */
+    }
+    if (this.running) this.timer = setTimeout(() => void this.poll(), 1000);
   }
 }
 
@@ -1495,7 +1678,9 @@ export class IrcAdapter implements ChannelAdapter {
     // Case-insensitive allowlist (IRC_ALLOWED_USERS); unset = allow all.
     const allowed = this.opts.allowedUsers ?? [];
     if (allowed.length > 0 && !allowed.some((u) => u.toLowerCase() === sender.toLowerCase())) return;
-    void this.handler?.({ platform: 'irc', channelId, text, from: sender });
+    // senderId = the IRC nick, so the SHARED per-user policy gate (registry
+    // `allowedUsers`) applies to IRC too — same enforcement as WhatsApp/etc.
+    void this.handler?.({ platform: 'irc', channelId, text, from: sender, senderId: sender, isGroup: isChannel });
   }
 
   async send(channelId: string, text: string): Promise<boolean> {
@@ -1779,6 +1964,7 @@ export class SimplexAdapter implements ChannelAdapter {
     const chatType = chatInfo?.type;
     let channelId = '';
     let from = '';
+    let senderId: string | undefined;
     if (chatType === 'direct') {
       const contact = chatInfo?.contact ?? {};
       const id = String(contact?.contactId ?? '');
@@ -1786,6 +1972,8 @@ export class SimplexAdapter implements ChannelAdapter {
       if (!this.contactAllowed(id)) return;
       channelId = id;
       from = contact?.localDisplayName || contact?.profile?.displayName || 'simplex-contact';
+      // senderId = the contact id, so the SHARED per-user policy gate applies.
+      senderId = id;
     } else if (chatType === 'group') {
       const groupId = String(chatInfo?.groupInfo?.groupId ?? '');
       if (!groupId) return;
@@ -1793,10 +1981,14 @@ export class SimplexAdapter implements ChannelAdapter {
       channelId = `group:${groupId}`;
       const member = direction?.groupMember ?? {};
       from = member?.localDisplayName || member?.memberProfile?.displayName || 'simplex-group';
+      // The author's contact id (when the member is a contact) lets the shared
+      // per-user policy gate apply inside groups too.
+      const memberId = String(member?.contactId ?? member?.memberId ?? '');
+      senderId = memberId || undefined;
     } else {
       return;
     }
-    void this.handler?.({ platform: 'simplex', channelId, text, from });
+    void this.handler?.({ platform: 'simplex', channelId, text, from, senderId, isGroup: chatType === 'group' });
   }
 
   private contactAllowed(id: string): boolean {
@@ -1898,6 +2090,10 @@ export interface WebhookPayload {
   channelId: string;
   text: string;
   from?: string;
+  /** P1 — real sender id (author/user id) for per-user policies. */
+  senderId?: string;
+  /** P1 — true when the message came from a group/channel, not a DM. */
+  isGroup?: boolean;
 }
 
 /**
@@ -1910,7 +2106,13 @@ export function parseWebhookPayload(platform: Platform, body: any): WebhookPaylo
       const content = body?.content;
       const channelId = body?.channel_id;
       if (typeof content === 'string' && channelId) {
-        return { channelId, text: content, from: body?.author?.username ?? 'discord-user' };
+        return {
+          channelId,
+          text: content,
+          from: body?.author?.username ?? 'discord-user',
+          // P1: author id (webhooks can't tell DM vs guild channel).
+          senderId: body?.author?.id !== undefined ? String(body.author.id) : undefined,
+        };
       }
       return null;
     }
@@ -1920,7 +2122,14 @@ export function parseWebhookPayload(platform: Platform, body: any): WebhookPaylo
       if (body?.challenge) return null;
       const event = body?.event;
       if (event?.type === 'message' && typeof event.text === 'string' && event.channel) {
-        return { channelId: event.channel, text: event.text, from: event.user ?? 'slack-user' };
+        return {
+          channelId: event.channel,
+          text: event.text,
+          from: event.user ?? 'slack-user',
+          // P1: event.user IS the Slack user id; D-channels are DMs.
+          senderId: event.user ?? undefined,
+          isGroup: typeof event.channel === 'string' && !event.channel.startsWith('D'),
+        };
       }
       return null;
     }
@@ -1929,7 +2138,15 @@ export function parseWebhookPayload(platform: Platform, body: any): WebhookPaylo
       const change = entry?.changes?.[0]?.value;
       const msg = change?.messages?.[0];
       if (msg?.type === 'text' && msg?.text?.body) {
-        return { channelId: msg.from, text: msg.text.body, from: msg.from };
+        // P1: group messages carry context.group_id — reply to the GROUP.
+        const groupId = msg?.context?.group_id;
+        return {
+          channelId: groupId ?? msg.from,
+          text: msg.text.body,
+          from: groupId ? `${msg.from} (in ${groupId})` : msg.from,
+          senderId: msg.from,
+          isGroup: Boolean(groupId),
+        };
       }
       return null;
     }
@@ -1996,6 +2213,9 @@ export class WebhookReceiver {
           channelId: parsed.channelId,
           text: parsed.text,
           from: parsed.from,
+          // P1: real sender id + DM/group detection ride through the payload.
+          senderId: parsed.senderId,
+          isGroup: parsed.isGroup,
         });
       }
     });

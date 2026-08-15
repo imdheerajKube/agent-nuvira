@@ -18,12 +18,21 @@ export interface WhatsAppBridge {
   readonly paired: boolean;
   /** Human status line (session path / pairing state / missing dep). */
   describe(): string;
-  /** Connect + start listening. Calls onMessage for every inbound text. */
-  connect(onMessage: (fromJid: string, text: string) => void): Promise<void>;
+  /**
+   * Connect + start listening. Calls onMessage for every inbound text.
+   * `participant` is the real sender inside a group (`key.participant`),
+   * undefined for DMs (the sender IS the fromJid).
+   */
+  connect(onMessage: (fromJid: string, text: string, participant?: string) => void): Promise<void>;
   /** Stop listening + disconnect (idempotent). */
   disconnect(): Promise<void>;
   /** Send a text message to a WhatsApp target (JID or E.164 / plain number). */
   send(target: string, text: string): Promise<boolean>;
+  /**
+   * Send media (image/video/audio/document) to a WhatsApp target. Optional —
+   * only the Baileys bridge implements it; fakes return undefined.
+   */
+  sendMedia?(target: string, media: { type: 'image' | 'video' | 'audio' | 'document'; data: Uint8Array; caption?: string; filename?: string }): Promise<boolean>;
 }
 
 /**

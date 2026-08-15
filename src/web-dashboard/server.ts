@@ -2633,6 +2633,63 @@ function handleRequest(req: IncomingMessage, res: ServerResponse): void {
     return;
   }
 
+  // ── Gateway Permissions (validated senders) — admin-gated ────────────────
+  // GET  /api/admin/gateway/policies — effective per-platform policies
+  //       (env merged under config, mirroring the running gateway's gate).
+  // PUT  /api/admin/gateway/policies — replace per-platform policies (the
+  //       dashboard passes the FULL map it read; the running gateway re-reads
+  //       config per inbound, so changes apply without a restart).
+  // Rides on gateway.manage (admin + operator) like the alias CLI.
+  if (pathname === '/api/admin/gateway/policies') {
+    void (async () => {
+      const session = adminSessions.validate(bearerToken(req));
+      if (!session) {
+        writeJson(res, 401, { ok: false, error: 'Not authenticated — log in first.' });
+        return;
+      }
+      if (!roleCan(session.role, 'gateway.manage')) {
+        writeJson(res, 403, {
+          ok: false,
+          error: `Access denied — role '${session.role}' cannot manage gateway permissions (requires admin or operator).`,
+        });
+        return;
+      }
+      if (req.method === 'GET') {
+        // Effective policies the running gateway would apply (env < config).
+        const { envPolicies } = await import('../gateway/registry.js');
+        const configManager = new ConfigManager();
+        const all = configManager.getAll() as { gateway?: { policies?: Record<string, unknown>; statusRecipients?: string[] } };
+        const fromConfig = all.gateway?.policies ?? {};
+        const policies: Record<string, unknown> = {};
+        for (const p of Object.keys(PLATFORM_ENV_VARS)) {
+          policies[p] = { ...((envPolicies() as Record<string, unknown>)[p] as Record<string, unknown> | undefined ?? {}), ...((fromConfig[p] as Record<string, unknown> | undefined) ?? {}) };
+        }
+        writeJson(res, 200, { ok: true, policies, statusRecipients: all.gateway?.statusRecipients ?? [] });
+        return;
+      }
+      if (req.method === 'PUT') {
+        const body = await readJsonBody(req);
+        const incoming = (body?.policies ?? {}) as Record<string, Record<string, unknown>>;
+        const configManager = new ConfigManager();
+        const current = (configManager.getAll() as { gateway?: { policies?: Record<string, Record<string, unknown>> } }).gateway?.policies ?? {};
+        // Keep platforms not in the payload untouched (per-platform replace).
+        const merged: Record<string, Record<string, unknown>> = { ...current };
+        for (const [platform, pol] of Object.entries(incoming)) {
+          if (!(platform in PLATFORM_ENV_VARS)) continue;
+          merged[platform] = pol ?? {};
+        }
+        // Status recipients ride along on the same PUT (whole-array semantics).
+        const gatewayPatch: { policies: Record<string, Record<string, unknown>>; statusRecipients?: string[] } = { policies: merged };
+        if (Array.isArray(body?.statusRecipients)) gatewayPatch.statusRecipients = body.statusRecipients as string[];
+        configManager.save({ gateway: gatewayPatch });
+        writeJson(res, 200, { ok: true, policies: merged, statusRecipients: gatewayPatch.statusRecipients ?? [] });
+        return;
+      }
+      writeJson(res, 405, { ok: false, error: 'Method not allowed — use GET or PUT.' });
+    })();
+    return;
+  }
+
   // ── User management (Session 19 — RBAC on the dashboard control layer) ──
   // role.manage (admin) gates who may add/remove dashboard admin users.
   // rbac.json assignments override a credential's stored role (CLI parity),

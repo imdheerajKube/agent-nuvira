@@ -13,7 +13,7 @@
 
 import { Command } from 'commander';
 import { logger } from '../utils/logger.js';
-import { BaileysBridge, normalizePairingPhone } from '../gateway/whatsapp/baileys-bridge.js';
+import { BaileysBridge, isSelfChatEnabled, normalizePairingPhone } from '../gateway/whatsapp/baileys-bridge.js';
 import { whatsappSessionDir, hasWhatsAppSession } from '../gateway/whatsapp/session.js';
 import { guardRbacAction } from './rbac-guard.js';
 
@@ -89,7 +89,68 @@ export class WhatsAppCommand {
         logger.info(`  session: ${whatsappSessionDir()}`);
         logger.info(`  paired:  ${bridge.paired ? 'yes' : 'no — run `buff whatsapp pair` to scan a QR'}`);
         logger.info(`  ${bridge.describe()}`);
+        logger.info(`  self-chat: ${isSelfChatEnabled() ? 'on (BUFF_WHATSAPP_SELF_CHAT=1 — messages to yourself are processed)' : 'off (drop fromMe echoes; set BUFF_WHATSAPP_SELF_CHAT=1 to enable)'}`);
         logger.info('  cloud:   Meta Business API is a separate platform — `buff gateway status` shows it under whatsapp_cloud.');
+      });
+
+    cmd
+      .command('contacts')
+      .description('List resolvable contacts (mapping file + learned) — connects briefly to learn names from live traffic')
+      .option('--timeout <seconds>', 'How long to wait for live contact learning', '5')
+      .action(async (opts: { timeout?: string }) => {
+        const bridge = new BaileysBridge();
+        // File mappings resolve without a connection; live learning is best-effort.
+        if (bridge.paired) {
+          const waitMs = Math.max(1, parseInt(opts.timeout ?? '5', 10) || 5) * 1000;
+          await bridge.connect(() => {});
+          try {
+            const start = Date.now();
+            while (Date.now() - start < waitMs) {
+              if (bridge.contactCount > 0) break;
+              await new Promise((r) => setTimeout(r, 200));
+            }
+          } finally {
+            await bridge.disconnect();
+          }
+        }
+        const names = bridge.contactNames();
+        if (names.length === 0) {
+          logger.info('No resolvable contacts yet.');
+          logger.info('Map a contact once:  buff whatsapp contact add <Name> <number>  (e.g. Daddy 919876543210)');
+          logger.info('Then send by name:    buff gateway send whatsapp:Daddy "message"');
+          return;
+        }
+        logger.info(`${names.length} resolvable contact(s) — send by name: buff gateway send whatsapp:<Name> "message"`);
+        for (const c of names) console.log(`  ${c.name} → ${c.jid}`);
+        logger.info('Add more with: buff whatsapp contact add <Name> <number>');
+      });
+
+    const contact = cmd.command('contact').description('Manage the WhatsApp contact-name mapping (send by name: buff gateway send whatsapp:<Name> "message")');
+
+    contact
+      .command('add <name> <number>')
+      .description('Map a display name to a number (E.164, no +): buff whatsapp contact add Daddy 919876543210')
+      .action(async (name: string, number: string) => {
+        if (!guardRbacAction('skill.remove')) return;
+        const bridge = new BaileysBridge();
+        if (!bridge.addContact(name, number)) {
+          logger.error(`Could not add '${name}' — name and a valid number (digits) are required.`);
+          return;
+        }
+        logger.success(`Saved contact '${name}' → ${number.replace(/\D+/g, '')}. Send with: buff gateway send whatsapp:${name} "message"`);
+      });
+
+    contact
+      .command('remove <name>')
+      .description('Remove a mapped contact name')
+      .action(async (name: string) => {
+        if (!guardRbacAction('skill.remove')) return;
+        const bridge = new BaileysBridge();
+        if (bridge.removeContact(name)) {
+          logger.success(`Removed contact '${name}'.`);
+        } else {
+          logger.warn(`No mapped contact '${name}' found.`);
+        }
       });
 
     return cmd;

@@ -17,7 +17,7 @@
 
 import { useCallback, useEffect, useState } from 'react';
 import { dashboardAPI } from '../api';
-import type { HubData, HubToolset } from '../types';
+import type { HubChannelPolicy, HubData, HubToolset } from '../types';
 import WhatsAppPanel from './WhatsAppPanel';
 import { PlatformConfigSection } from './PlatformConfigSection';
 
@@ -66,11 +66,22 @@ export default function AgentHub() {
   const [sending, setSending] = useState(false);
   const [sendMsg, setSendMsg] = useState<{ kind: 'ok' | 'err'; text: string } | null>(null);
 
+  // P1 — Permissions (validated senders): per-platform policy drafts + saves.
+  const [policyDraft, setPolicyDraft] = useState<Record<string, HubChannelPolicy>>({});
+  const [policyBusy, setPolicyBusy] = useState(false);
+  const [policyMsg, setPolicyMsg] = useState<{ kind: 'ok' | 'err'; text: string } | null>(null);
+  const [policyUserInput, setPolicyUserInput] = useState<Record<string, string>>({});
+  const [policyGroupInput, setPolicyGroupInput] = useState<Record<string, string>>({});
+  // Status recipients — always get pipeline completion summaries.
+  const [statusRecipients, setStatusRecipients] = useState<string[]>([]);
+  const [statusRecipientInput, setStatusRecipientInput] = useState('');
+
   const refresh = useCallback(async () => {
     setRefreshing(true);
     setError(null);
     const d = await dashboardAPI.fetchHub();
     setData(d);
+    if (d?.channels?.statusRecipients) setStatusRecipients(d.channels.statusRecipients);
     if (!d) setError('Could not reach the dashboard server, or the server is older than this panel. Run `buff dashboard` to start it.');
     setLoading(false);
     setRefreshing(false);
@@ -210,6 +221,73 @@ export default function AgentHub() {
       setSendMsg({ kind: 'err', text: r.error || 'Send failed.' });
     }
     setSending(false);
+  };
+
+  /** P1 — add a user/group id to a platform's allowed list (draft only). */
+  const addPolicyId = (platform: string, kind: 'user' | 'group', value: string) => {
+    const id = value.trim();
+    if (!id) return;
+    setPolicyDraft((prev) => {
+      const pol = { ...(prev[platform] ?? {}) };
+      const key = kind === 'user' ? 'allowedUsers' : 'allowedGroups';
+      const list = [...(pol[key] ?? [])];
+      if (!list.includes(id)) list.push(id);
+      pol[key] = list;
+      return { ...prev, [platform]: pol };
+    });
+  };
+
+  /** P1 — remove a user/group id from a platform's allowed list (draft only). */
+  const removePolicyId = (platform: string, kind: 'user' | 'group', id: string) => {
+    setPolicyDraft((prev) => {
+      const pol = { ...(prev[platform] ?? {}) };
+      const key = kind === 'user' ? 'allowedUsers' : 'allowedGroups';
+      const list = (pol[key] ?? []).filter((x) => x !== id);
+      if (list.length > 0) pol[key] = list;
+      else delete pol[key];
+      return { ...prev, [platform]: pol };
+    });
+  };
+
+  /** P1 — toggle a boolean policy flag on a platform (draft only). */
+  const togglePolicyFlag = (platform: string, flag: 'silentDrop' | 'disabled' | 'requireMention') => {
+    setPolicyDraft((prev) => {
+      const pol = { ...(prev[platform] ?? {}) };
+      if (flag === 'silentDrop') {
+        // HARD POLICY: silent is the default — turning the toggle OFF must
+        // write `silentDrop: false` (polite opt-in), NOT delete the key
+        // (deleting would keep the silent default).
+        pol.silentDrop = pol.silentDrop === false ? true : false;
+      } else if (pol[flag]) delete pol[flag];
+      else pol[flag] = true;
+      return { ...prev, [platform]: pol };
+    });
+  };
+
+  /** P1 — save the draft policies to the gateway config (admin/operator only). */
+  const handleSavePolicies = async () => {
+    if (!authed) {
+      setPolicyMsg({ kind: 'err', text: '🔐 Log in (or set up admin access) to change permissions.' });
+      return;
+    }
+    if (!canWrite) {
+      setPolicyMsg({ kind: 'err', text: '🔒 Your role cannot change permissions — requires the admin or operator role.' });
+      return;
+    }
+    setPolicyBusy(true);
+    setPolicyMsg(null);
+    const r = await dashboardAPI.saveGatewayPolicies(policyDraft, statusRecipients);
+    if (r.ok) {
+      setPolicyMsg({ kind: 'ok', text: '✅ Permissions + status recipients saved — the running gateway applies them immediately.' });
+      setPolicyDraft({});
+      void refresh();
+    } else if (r.unauthorized) {
+      sessionExpired();
+      setPolicyMsg({ kind: 'err', text: r.error || 'Session expired — log in again.' });
+    } else {
+      setPolicyMsg({ kind: 'err', text: r.error || 'Failed to save permissions.' });
+    }
+    setPolicyBusy(false);
   };
 
   // ─── Loading / auth gate ─────────────────────────────────────────────────
@@ -437,6 +515,48 @@ export default function AgentHub() {
             <div className="empty-state">Delivery ledger is empty — every gateway send has gone through.</div>
           )}
 
+          <h3 className="section-subtitle">📥 Inbox (received messages)</h3>
+          {data.channels.inbox.recent.length > 0 ? (
+            <div className="admin-table-wrapper">
+              <table className="admin-table">
+                <thead>
+                  <tr>
+                    <th>Platform</th>
+                    <th>From</th>
+                    <th>Message</th>
+                    <th>Handled</th>
+                    <th>When</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {data.channels.inbox.recent.map((e) => (
+                    <tr key={e.id}>
+                      <td className="admin-provider-type">
+                        {e.platform}
+                        {e.isGroup ? <span className="hub-chip">group</span> : null}
+                      </td>
+                      <td>{e.from || e.senderId || e.channelId}</td>
+                      <td className="admin-hint">{(e.text || '').slice(0, 60)}</td>
+                      <td>
+                        <span className={`admin-check-badge admin-check-${e.handled === 'pipeline' ? 'pass' : e.handled === 'refused' ? 'fail' : 'warn'}`}>
+                          {e.handled}
+                        </span>
+                        {e.reply ? <div className="admin-hint">{e.reply.slice(0, 40)}</div> : null}
+                      </td>
+                      <td className="admin-hint">{new Date(e.at).toLocaleString()}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          ) : (
+            <div className="empty-state">Inbox is empty — messages the gateway receives will appear here.</div>
+          )}
+          <p className="admin-hint">
+            {data.channels.inbox.total} received · {data.channels.inbox.pipeline} triggered the pipeline ·{' '}
+            {data.channels.inbox.help} got the help line · {data.channels.inbox.refused} refused by policy.
+          </p>
+
           <h3 className="section-subtitle">🔌 Platform transports</h3>
           <div className="hub-platform-grid">
             {data.channels.platforms.map((p) => (
@@ -467,6 +587,139 @@ export default function AgentHub() {
               No aliases yet — register one with <code>buff gateway alias &lt;name&gt; &lt;platform&gt; &lt;channelId&gt;</code>.
             </div>
           )}
+
+          <h3 className="section-subtitle">🔐 Permissions (validated senders)</h3>
+          <p className="admin-hint">
+            Only approved senders may trigger the agent on each platform. When a platform has
+            allowed users/groups, everyone else is refused; <strong>silent</strong> refuses without
+            replying (best for a private number). Changes apply to the running gateway immediately.
+          </p>
+          <div className="hub-permissions">
+            {data.channels.platforms.map((p) => {
+              const pol = policyDraft[p.platform] ?? data.channels.policies[p.platform] ?? {};
+              const users = pol.allowedUsers ?? [];
+              const groups = pol.allowedGroups ?? [];
+              return (
+                <div className="hub-card" key={p.platform}>
+                  <div className="hub-card-top">
+                    <span className="hub-chip">{p.label}</span>
+                    <span className="hub-card-id">{p.platform}</span>
+                    {pol.disabled ? <span className="hub-chip">disabled</span> : null}
+                  </div>
+                  <div className="admin-hint" style={{ margin: '4px 0 8px' }}>Allowed users</div>
+                  <div className="hub-alias-list">
+                    {users.length === 0 ? <span className="admin-hint">(none — any sender may trigger)</span> : null}
+                    {users.map((u) => (
+                      <div className="hub-alias-row" key={`u-${u}`}>
+                        <span className="hub-chip">{u}</span>
+                        <button className="admin-refresh-btn" disabled={policyBusy} onClick={() => removePolicyId(p.platform, 'user', u)}>✕</button>
+                      </div>
+                    ))}
+                  </div>
+                  <div className="hub-send-form" style={{ margin: '6px 0 10px' }}>
+                    <input
+                      type="text"
+                      value={policyUserInput[p.platform] ?? ''}
+                      onChange={(e) => setPolicyUserInput((s) => ({ ...s, [p.platform]: e.target.value }))}
+                      placeholder="mobile number or sender id, e.g. 918178504516"
+                      disabled={policyBusy}
+                    />
+                    <button
+                      className="admin-refresh-btn"
+                      disabled={policyBusy || !(policyUserInput[p.platform] ?? '').trim()}
+                      onClick={() => { addPolicyId(p.platform, 'user', policyUserInput[p.platform] ?? ''); setPolicyUserInput((s) => ({ ...s, [p.platform]: '' })); }}
+                    >+ User</button>
+                  </div>
+                  <div className="admin-hint" style={{ margin: '4px 0 8px' }}>Allowed groups</div>
+                  <div className="hub-alias-list">
+                    {groups.length === 0 ? <span className="admin-hint">(none — any group may trigger)</span> : null}
+                    {groups.map((g) => (
+                      <div className="hub-alias-row" key={`g-${g}`}>
+                        <span className="hub-chip">{g}</span>
+                        <button className="admin-refresh-btn" disabled={policyBusy} onClick={() => removePolicyId(p.platform, 'group', g)}>✕</button>
+                      </div>
+                    ))}
+                  </div>
+                  <div className="hub-send-form" style={{ margin: '6px 0 10px' }}>
+                    <input
+                      type="text"
+                      value={policyGroupInput[p.platform] ?? ''}
+                      onChange={(e) => setPolicyGroupInput((s) => ({ ...s, [p.platform]: e.target.value }))}
+                      placeholder="group id, e.g. 1203630283471234@g.us"
+                      disabled={policyBusy}
+                    />
+                    <button
+                      className="admin-refresh-btn"
+                      disabled={policyBusy || !(policyGroupInput[p.platform] ?? '').trim()}
+                      onClick={() => { addPolicyId(p.platform, 'group', policyGroupInput[p.platform] ?? ''); setPolicyGroupInput((s) => ({ ...s, [p.platform]: '' })); }}
+                    >+ Group</button>
+                  </div>
+                  <div className="hub-send-form" style={{ margin: '6px 0 0' }}>
+                    <label style={{ display: 'inline-flex', alignItems: 'center', gap: 6, marginRight: 12 }}>
+                      <input type="checkbox" checked={pol.silentDrop !== false} disabled={policyBusy} onChange={() => togglePolicyFlag(p.platform, 'silentDrop')} />
+                      <span className="admin-hint">Silent (no reply to unapproved) — default</span>
+                    </label>
+                    <label style={{ display: 'inline-flex', alignItems: 'center', gap: 6, marginRight: 12 }}>
+                      <input type="checkbox" checked={Boolean(pol.requireMention)} disabled={policyBusy} onChange={() => togglePolicyFlag(p.platform, 'requireMention')} />
+                      <span className="admin-hint">Groups: mention only</span>
+                    </label>
+                    <label style={{ display: 'inline-flex', alignItems: 'center', gap: 6 }}>
+                      <input type="checkbox" checked={Boolean(pol.disabled)} disabled={policyBusy} onChange={() => togglePolicyFlag(p.platform, 'disabled')} />
+                      <span className="admin-hint">Disabled (off)</span>
+                    </label>
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+
+          <h3 className="section-subtitle" style={{ marginTop: 22 }}>📊 Status recipients</h3>
+          <p className="admin-hint">
+            Contacts/groups that ALWAYS receive the pipeline completion summary, whoever triggered it.
+            Use an alias or <code>platform:channelId</code> — e.g. <code>whatsapp:Daddy</code>,
+            <code> telegram:123456</code>, <code>slack:ops</code>.
+          </p>
+          {statusRecipients.length > 0 ? (
+            <div className="hub-alias-list">
+              {statusRecipients.map((t) => (
+                <div className="hub-alias-row" key={t}>
+                  <span className="hub-chip">📊</span>
+                  <span className="admin-hint">{t}</span>
+                  <button className="admin-refresh-btn" disabled={policyBusy} onClick={() => setStatusRecipients((s) => s.filter((x) => x !== t))}>✕</button>
+                </div>
+              ))}
+            </div>
+          ) : (
+            <div className="empty-state" style={{ padding: '14px' }}>No status recipients — add one below.</div>
+          )}
+          <div className="hub-send-form">
+            <input
+              type="text"
+              value={statusRecipientInput}
+              onChange={(e) => setStatusRecipientInput(e.target.value)}
+              placeholder="whatsapp:Daddy or telegram:123456"
+              disabled={policyBusy}
+              maxLength={128}
+            />
+            <button
+              className="admin-refresh-btn"
+              disabled={policyBusy || !statusRecipientInput.trim() || statusRecipients.includes(statusRecipientInput.trim())}
+              onClick={() => { setStatusRecipients((s) => [...s, statusRecipientInput.trim()]); setStatusRecipientInput(''); }}
+            >+ Add</button>
+          </div>
+          <div className="hub-send-form" style={{ marginTop: 10 }}>
+            <button className="admin-refresh-btn" type="button" disabled={policyBusy} onClick={() => void handleSavePolicies()}>
+              {policyBusy ? '⏳ Saving…' : '💾 Save permissions'}
+            </button>
+            {Object.keys(policyDraft).length > 0 ? (
+              <button className="admin-refresh-btn" type="button" disabled={policyBusy} onClick={() => setPolicyDraft({})}>
+                Discard draft
+              </button>
+            ) : null}
+          </div>
+          {policyMsg ? (
+            <div className={`admin-row-msg${policyMsg.kind === 'ok' ? '' : ' admin-row-msg-err'}`}>{policyMsg.text}</div>
+          ) : null}
 
           <h3 className="section-subtitle">📤 Test a channel (buff gateway send)</h3>
           <form className="hub-send-form" onSubmit={(e) => void handleSendMessage(e)}>

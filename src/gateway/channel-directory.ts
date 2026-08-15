@@ -40,6 +40,37 @@ export interface ChannelRef {
   channelId: string;
 }
 
+/**
+ * P1 — per-platform inbound policy (who may trigger the agent pipeline).
+ *
+ * Keeps "anyone who messages the bot" safe: an allowlist of users/groups,
+ * address-only mode for groups, or a hard off-switch. The global
+ * BUFF_GATEWAY_ALLOW_IDS (platform:channelId) still applies on top.
+ */
+export interface ChannelPolicy {
+  /** Sender ids allowed to trigger the pipeline (empty/absent = inherit global). */
+  allowedUsers?: string[];
+  /** Group/channel ids allowed to trigger (empty/absent = inherit global). */
+  allowedGroups?: string[];
+  /**
+   * Address-only mode: in groups, only messages that MENTION / address the
+   * bot (name-prefix "buff …", "agent …", or @-mention) trigger the pipeline.
+   */
+  requireMention?: boolean;
+  /** Hard off-switch for this platform's pipeline triggers. */
+  disabled?: boolean;
+  /**
+   * HARD POLICY: silent by DEFAULT — an unapproved sender/group gets NO reply
+   * and NO processing (the refusal is recorded in the inbox only), so unknown
+   * numbers never learn a bot exists. Set `silentDrop: false` to explicitly
+   * opt a platform back into the polite ⛔ refusal message.
+   */
+  silentDrop?: boolean;
+}
+
+/** Per-platform policies (keyed by Platform id). */
+export type PolicyMap = Partial<Record<Platform, ChannelPolicy>>;
+
 /** A channel directory entry — an alias pointing at a channel. */
 export interface ChannelAlias {
   alias: string;

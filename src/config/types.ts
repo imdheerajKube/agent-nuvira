@@ -459,6 +459,21 @@ export interface BuffConfig {
    * BUFF_SKILLS_REGISTRY env override when present (I7 P1 multi-source).
    */
   skills?: SkillsConfig;
+  /**
+   * Gateway per-platform inbound policies (who may trigger the agent). Managed
+   * via `buff config gateway allow/disallow/reply` or the dashboard Permissions
+   * page; merged over env in GatewayRegistry (env < config < explicit options).
+   */
+  gateway?: {
+    policies?: Partial<Record<string, { allowedUsers?: string[]; allowedGroups?: string[]; requireMention?: boolean; disabled?: boolean; silentDrop?: boolean }>>;
+    /**
+     * Channel targets (aliases or platform:channelId) that ALWAYS receive the
+     * pipeline completion summary, regardless of who triggered it — e.g.
+     * "whatsapp:Daddy", "telegram:123", "slack:ops". Managed via
+     * `buff config gateway notify add/remove` or the dashboard Permissions page.
+     */
+    statusRecipients?: string[];
+  };
 }
 
 /**
