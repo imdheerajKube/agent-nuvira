@@ -49,6 +49,12 @@ export interface PipelineToolOptions {
   board?: boolean;
   /** Extra understand-card note lines (tool name transparency). */
   notes?: string[];
+  /**
+   * P2 — origin context for gateway-triggered runs (e.g. "WhatsApp chat
+   * 9188…"): appended to the goal so the pipeline model knows who it's
+   * talking to and where replies/forwarding should go.
+   */
+  origin?: string;
 }
 
 /** The tool-callable pipeline result. */
@@ -73,6 +79,11 @@ export async function runPipelineTool(
   opts: PipelineToolOptions,
 ): Promise<PipelineToolResult> {
   const board = opts.board !== false;
+  // P2 — origin context: gateway-triggered runs carry WHO/WHERE the request
+  // came from, so the pipeline model replies/forwards to the right place.
+  if (opts.origin) {
+    goal = `${goal.trim()}\n\n[Origin: ${opts.origin} — this request arrived from this chat; reply to it and use gateway_send for any follow-ups to this contact.]`;
+  }
   // Resolve a REAL provider/model — never hand a literal 'auto' to the
   // orchestrator (mirrors runDeveloperMode).
   let provider = opts.provider;

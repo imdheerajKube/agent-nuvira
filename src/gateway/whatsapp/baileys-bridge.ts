@@ -9,6 +9,18 @@
  * fake bridge) never pay for it, and an unpaired bridge fails fast without
  * loading it. Session files (creds.json + peers/…) are written by Baileys'
  * `useMultiFileAuthState` — the same layout Hermes' bridge uses.
+ *
+ * Since I8b:
+ * - **Echo filtering (Hermes `recentlySentIds` parity):** every outbound send
+ *   records the returned message id; inbound `messages.upsert` drops messages
+ *   whose id matches (our own echoes), so the agent never re-ingests its own
+ *   replies. Any OTHER `fromMe` message is dropped too, UNLESS self-chat mode
+ *   is on (`BUFF_WHATSAPP_SELF_CHAT=1`) — then user-typed self-chat messages
+ *   (fromMe but NOT in recentlySent) are forwarded as inbound.
+ * - **Contact-name resolution (Hermes `allow_from`/contact UX parity):** the
+ *   bridge learns name → JID from `contacts.upsert`/`contacts.update` (the
+ *   phone's address book sync) and from every inbound message's `pushName`,
+ *   so `send("Daddy", …)` resolves the contact by name.
  */
 
 import { existsSync, mkdirSync } from 'node:fs';
@@ -16,6 +28,7 @@ import { join } from 'node:path';
 
 import { normalizeWhatsAppJid, type WhatsAppBridge } from './bridge.js';
 import { whatsappSessionDir } from './session.js';
+import { readContactsFile, writeContactsFile } from './contacts.js';
 
 // Minimal structural types — the real ones come from the lazy `baileys`
 // import (cast through `unknown`), so the rest of the codebase never
@@ -51,6 +64,18 @@ function sessionHasCreds(dir: string): boolean {
   } catch {
     return false;
   }
+}
+
+/**
+ * I8b — self-chat mode: the user messages THEMSELVES on the paired number;
+ * the bridge forwards their fromMe messages as inbound (and still drops the
+ * agent's own outbound echoes via recentlySent). Opt-in via
+ * `BUFF_WHATSAPP_SELF_CHAT=1`. Default (bot mode): every fromMe message is
+ * dropped — the agent never re-ingests its own sends.
+ */
+export function isSelfChatEnabled(env: NodeJS.ProcessEnv = process.env): boolean {
+  const v = (env.BUFF_WHATSAPP_SELF_CHAT ?? '').trim().toLowerCase();
+  return v === '1' || v === 'true' || v === 'yes' || v === 'on';
 }
 
 /** Options for {@link BaileysBridge.pair}. */
@@ -142,18 +167,32 @@ function messageText(message: any): string {
 
 export class BaileysBridge implements WhatsAppBridge {
   private sock: WASocketLike | null = null;
-  private onMessage: ((fromJid: string, text: string) => void) | null = null;
+  private onMessage: ((fromJid: string, text: string, participant?: string) => void) | null = null;
   /** Auto-reconnect watcher: while true (connected), a dead socket is recreated. */
   private keepAlive = false;
   /** Set when the session is logged out server-side (401) — reconnect would loop forever. */
   private loggedOut = false;
   /** Set while an explicit pair() is running so the watcher never races it. */
   private pairing = false;
+  /** I8b — ids of messages THIS bridge sent (echo filter; id → sent-at). */
+  private readonly recentlySent = new Map<string, number>();
+  /** I8b — contacts from the user's mapping file (`buff whatsapp contact add`). */
+  private readonly fileContacts = new Map<string, string>();
+  /** I8b — contacts learned at runtime (contacts sync / inbound pushName). */
+  private readonly learnedContacts = new Map<string, string>();
 
   constructor(
     private readonly sessionDir: string = whatsappSessionDir(),
-    private readonly opts: { reconnectDelayMs?: number } = {},
-  ) {}
+    private readonly opts: { reconnectDelayMs?: number; selfChat?: boolean } = {},
+  ) {
+    // Seed the address-book mappings from ~/.buff/whatsapp/contacts.json.
+    for (const [name, digits] of Object.entries(readContactsFile(this.sessionDir))) {
+      const key = (name || '').trim().toLowerCase();
+      if (!key || !digits) continue;
+      const jid = normalizeWhatsAppJid(digits);
+      if (jid) this.fileContacts.set(key, jid);
+    }
+  }
 
   /** Live check — a bridge that paired THIS process reports true immediately. */
   get paired(): boolean {
@@ -164,7 +203,102 @@ export class BaileysBridge implements WhatsAppBridge {
     if (!this.paired) {
       return `WhatsApp (Baileys bridge — not paired; run \`buff whatsapp pair\`, session: ${this.sessionDir})`;
     }
-    return `WhatsApp (Baileys bridge — paired, session: ${this.sessionDir})`;
+    const mode = this.opts.selfChat ? ', self-chat mode' : '';
+    return `WhatsApp (Baileys bridge — paired${mode}, session: ${this.sessionDir})`;
+  }
+
+  // ─── I8b contact learning / resolution ────────────────────────────────────
+
+  /** Learn a name → JID mapping at runtime (real pushName / contact sync). */
+  private learnContact(name: string, jid: string): void {
+    const key = (name || '').trim().toLowerCase();
+    if (!key || !jid) return;
+    this.learnedContacts.set(key, jid);
+  }
+
+  /**
+   * Resolve a contact NAME to a JID. Learned (real) names win over the file
+   * mapping; each list is checked exact-first, then prefix/contains. Returns
+   * null when unknown. Non-name targets (numbers / JIDs) are handled by the
+   * caller via normalizeWhatsAppJid.
+   */
+  resolveContact(name: string): string | null {
+    const key = (name || '').trim().toLowerCase();
+    if (!key) return null;
+    for (const map of [this.learnedContacts, this.fileContacts]) {
+      const exact = map.get(key);
+      if (exact) return exact;
+      for (const [k, jid] of map) {
+        if (k.includes(key) || key.includes(k)) return jid;
+      }
+    }
+    return null;
+  }
+
+  /** All resolvable contacts (name → JID), learned first, sorted by name. */
+  contactNames(): Array<{ name: string; jid: string }> {
+    const merged = new Map<string, string>();
+    for (const map of [this.learnedContacts, this.fileContacts]) {
+      for (const [name, jid] of map) merged.set(name, jid);
+    }
+    return [...merged.entries()]
+      .map(([name, jid]) => ({ name, jid }))
+      .sort((a, b) => a.name.localeCompare(b.name));
+  }
+
+  get contactCount(): number {
+    return this.fileContacts.size + this.learnedContacts.size;
+  }
+
+  /**
+   * Add a contact to the mapping file (`buff whatsapp contact add <name>
+   * <number>`) and to the live map. Number may be E.164 or plain digits.
+   */
+  addContact(name: string, number: string): boolean {
+    const key = (name || '').trim();
+    const digits = (number || '').replace(/\D+/g, '');
+    if (!key || !digits) return false;
+    const jid = normalizeWhatsAppJid(digits);
+    if (!jid) return false;
+    const contacts = readContactsFile(this.sessionDir);
+    contacts[key] = digits;
+    writeContactsFile(this.sessionDir, contacts);
+    this.fileContacts.set(key.toLowerCase(), jid);
+    return true;
+  }
+
+  /** Remove a contact from the mapping file + live maps. Returns true when it existed. */
+  removeContact(name: string): boolean {
+    const key = (name || '').trim().toLowerCase();
+    let removed = false;
+    const contacts = readContactsFile(this.sessionDir);
+    for (const existing of Object.keys(contacts)) {
+      if (existing.toLowerCase() === key) {
+        delete contacts[existing];
+        removed = true;
+      }
+    }
+    if (removed) writeContactsFile(this.sessionDir, contacts);
+    if (this.fileContacts.delete(key)) removed = true;
+    this.learnedContacts.delete(key);
+    return removed;
+  }
+
+  /**
+   * Resolve a non-numeric target by contact name, polling briefly — the
+   * address-book sync lands shortly after the socket opens, and a one-shot
+   * CLI send resolves names only after that sync arrives.
+   */
+  private async resolveContactJid(name: string, timeoutMs = 10_000): Promise<string | null> {
+    const hit = this.resolveContact(name);
+    if (hit) return hit;
+    const start = Date.now();
+    while (Date.now() - start < timeoutMs) {
+      await new Promise((r) => setTimeout(r, 250));
+      const found = this.resolveContact(name);
+      if (found) return found;
+    }
+    return null;
   }
 
   async connect(onMessage: (fromJid: string, text: string) => void): Promise<void> {
@@ -217,9 +351,60 @@ export class BaileysBridge implements WhatsAppBridge {
     try {
       const sock = await this.ensureSocket();
       if (!sock) return false;
-      const jid = normalizeWhatsAppJid(target);
+      // I8b — a non-numeric, non-JID target is a contact NAME: resolve it
+      // against the learned contact list (waits for the address-book sync).
+      let jid = '';
+      const t = (target || '').trim();
+      if (t.includes('@') || /^\+?\d[\d\s-]*$/.test(t)) {
+        jid = normalizeWhatsAppJid(t);
+      } else {
+        jid = (await this.resolveContactJid(t)) ?? normalizeWhatsAppJid(t);
+      }
       if (!jid) return false;
-      await sock.sendMessage(jid, { text });
+      const sent = (await sock.sendMessage(jid, { text })) as { key?: { id?: string } } | undefined;
+      // Record the outbound message id so its echo is filtered on upsert.
+      const id = sent?.key?.id;
+      if (typeof id === 'string' && id) {
+        this.recentlySent.set(id, Date.now());
+        // Cap the echo window at 10 minutes — ids never collide that late.
+        for (const [k, at] of this.recentlySent) {
+          if (Date.now() - at > 10 * 60_000) this.recentlySent.delete(k);
+        }
+      }
+      return true;
+    } catch {
+      return false;
+    }
+  }
+
+  /**
+   * Send media (image/video/audio/document). P3 — the Baileys message content
+   * is `{ [type]: data, caption?, mimetype?, fileName? }`; the target resolves
+   * like send() (number / JID / contact name). Never throws.
+   */
+  async sendMedia(
+    target: string,
+    media: { type: 'image' | 'video' | 'audio' | 'document'; data: Uint8Array; caption?: string; filename?: string },
+  ): Promise<boolean> {
+    if (!this.paired) return false;
+    try {
+      const sock = await this.ensureSocket();
+      if (!sock) return false;
+      let jid = '';
+      const t = (target || '').trim();
+      if (t.includes('@') || /^\+?\d[\d\s-]*$/.test(t)) {
+        jid = normalizeWhatsAppJid(t);
+      } else {
+        jid = (await this.resolveContactJid(t)) ?? normalizeWhatsAppJid(t);
+      }
+      if (!jid) return false;
+      const payload: Record<string, unknown> = { [media.type]: media.data };
+      if (media.caption) payload.caption = media.caption;
+      if (media.type === 'audio') payload.mimetype = 'audio/mp4';
+      if (media.type === 'document' && media.filename) payload.fileName = media.filename;
+      const sent = (await sock.sendMessage(jid, payload)) as { key?: { id?: string } } | undefined;
+      const id = sent?.key?.id;
+      if (typeof id === 'string' && id) this.recentlySent.set(id, Date.now());
       return true;
     } catch {
       return false;
@@ -442,6 +627,21 @@ export class BaileysBridge implements WhatsAppBridge {
           this.loggedOut = true;
         }
       });
+      // I8b — contact learning: the address-book sync (contacts.upsert on
+      // connect, contacts.update on edits) + every inbound pushName populate
+      // the name → JID map used for `send("Daddy", …)`.
+      const learnContacts = (...args: unknown[]): void => {
+        for (const c of (args[0] ?? []) as Array<Record<string, unknown>>) {
+          const jid = typeof c?.id === 'string' ? c.id : '';
+          if (!jid) continue;
+          for (const n of [c?.name, c?.notify, c?.verifiedName]) {
+            if (typeof n === 'string' && n.trim()) this.learnContact(n.trim(), jid);
+          }
+        }
+      };
+      sock.ev?.on('contacts.upsert', learnContacts);
+      sock.ev?.on('contacts.update', learnContacts);
+      sock.ev?.on('contacts.set', learnContacts);
       sock.ev?.on('messages.upsert', (...args: unknown[]) => {
         const upsert = (args[0] ?? {}) as { type?: string; messages?: unknown[] };
         if (upsert.type !== 'notify' && upsert.type !== 'append') return;
@@ -450,7 +650,24 @@ export class BaileysBridge implements WhatsAppBridge {
           const m = raw as any;
           const text = messageText(m);
           const fromJid = m?.key?.remoteJid as string | undefined;
-          if (text && fromJid) this.onMessage?.(fromJid, text);
+          if (!text || !fromJid) continue;
+          // Learn the sender's profile name (contact resolution by name).
+          if (typeof m?.pushName === 'string' && m.pushName.trim()) {
+            this.learnContact(m.pushName.trim(), fromJid);
+          }
+          // I8b echo/self-message filter (Hermes recentlySentIds parity):
+          //   - our OWN outbound sends echo back through upsert → drop.
+          //   - other fromMe messages (the paired number typing) are only
+          //     interesting in self-chat mode — the user messaging themselves.
+          const fromMe = m?.key?.fromMe === true;
+          if (fromMe) {
+            const keyId = typeof m?.key?.id === 'string' ? m.key.id : '';
+            if (keyId && this.recentlySent.has(keyId)) continue;
+            if (!this.opts.selfChat) continue;
+          }
+          // P1 — real sender inside a group: `key.participant` (absent in DMs).
+          const participant = typeof m?.key?.participant === 'string' ? m.key.participant : undefined;
+          this.onMessage?.(fromJid, text, participant);
         }
       });
       this.sock = sock;

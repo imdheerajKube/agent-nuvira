@@ -15,7 +15,8 @@ import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { createHmac } from 'node:crypto';
 import { request as httpRequest } from 'node:http';
 
-import { TelegramAdapter, DiscordAdapter, SlackAdapter, WhatsAppCloudAdapter, WebhookReceiver } from '../../src/gateway/adapters.js';
+import { TelegramAdapter, DiscordAdapter, SlackAdapter, WhatsAppCloudAdapter, WebhookReceiver, MatrixAdapter } from '../../src/gateway/adapters.js';
+import type { InboundMessage } from '../../src/gateway/adapters.js';
 
 // ─── Telegram (Bot API long-poll) ───────────────────────────────────────────
 
@@ -84,6 +85,47 @@ describe('TelegramAdapter (Bot API long-poll)', () => {
     const adapter = new TelegramAdapter('test-token');
     expect(await adapter.send('42', 'x')).toBe(false);
   });
+
+  it('sendMedia() POSTs multipart to sendPhoto with chat_id, caption and the file', async () => {
+    const fetchMock = vi.spyOn(globalThis, 'fetch').mockResolvedValue({ ok: true } as Response);
+    const adapter = new TelegramAdapter('test-token');
+    const ok = await adapter.sendMedia('42', {
+      type: 'image',
+      data: new Uint8Array([137, 80, 78, 71]),
+      caption: 'look at this',
+      filename: 'pic.png',
+    });
+    expect(ok).toBe(true);
+
+    const [url, init] = fetchMock.mock.calls[0];
+    expect(String(url)).toBe('https://api.telegram.org/bottest-token/sendPhoto');
+    expect(init?.method).toBe('POST');
+    const form = init?.body as FormData;
+    expect(form.get('chat_id')).toBe('42');
+    expect(form.get('caption')).toBe('look at this');
+    const file = form.get('photo') as File;
+    expect(file.name).toBe('pic.png');
+  });
+
+  it('sendMedia() maps document → sendDocument, fills a default filename, and caps the caption', async () => {
+    const fetchMock = vi.spyOn(globalThis, 'fetch').mockResolvedValue({ ok: true } as Response);
+    const adapter = new TelegramAdapter('test-token');
+    const longCaption = 'x'.repeat(5000);
+    expect(await adapter.sendMedia('42', { type: 'document', data: new Uint8Array([1]), caption: longCaption })).toBe(true);
+
+    const [url, init] = fetchMock.mock.calls[0];
+    expect(String(url)).toBe('https://api.telegram.org/bottest-token/sendDocument');
+    const form = init?.body as FormData;
+    expect(String(form.get('caption')).length).toBe(1024);
+    const file = form.get('document') as File;
+    expect(file.name).toBe('file.bin');
+  });
+
+  it('sendMedia() returns false without a network call when unconfigured', async () => {
+    const fetchMock = vi.spyOn(globalThis, 'fetch');
+    expect(await new TelegramAdapter('').sendMedia('42', { type: 'image', data: new Uint8Array([1]) })).toBe(false);
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
 });
 
 // ─── Discord / Slack Bot-token REST paths ───────────────────────────────────
@@ -117,6 +159,48 @@ describe('DiscordAdapter + SlackAdapter (Bot-token REST sends)', () => {
     expect(String(url)).toBe('https://discord.com/api/v10/channels/123456789/messages');
     expect((init?.headers as Record<string, string>).authorization).toBe('Bearer discord-bot-token');
     expect(JSON.parse(String(init?.body))).toEqual({ content: 'hi discord' });
+  });
+
+  it('Discord sendMedia() posts multipart payload_json + files[0] to the webhook URL', async () => {
+    process.env.BUFF_DISCORD_WEBHOOK_URL = 'https://discord.com/api/webhooks/111/abc';
+    const fetchMock = vi.spyOn(globalThis, 'fetch').mockResolvedValue({ ok: true } as Response);
+    const adapter = new DiscordAdapter();
+    expect(adapter.configured).toBe(true);
+    const ok = await adapter.sendMedia('123456789', {
+      type: 'video',
+      data: new Uint8Array([1, 2, 3]),
+      caption: 'clip!',
+      filename: 'clip.mp4',
+    });
+    expect(ok).toBe(true);
+
+    const [url, init] = fetchMock.mock.calls[0];
+    expect(String(url)).toBe('https://discord.com/api/webhooks/111/abc');
+    const form = init?.body as FormData;
+    expect(JSON.parse(String(form.get('payload_json')))).toEqual({ content: 'clip!' });
+    const file = form.get('files[0]') as File;
+    expect(file.name).toBe('clip.mp4');
+  });
+
+  it('Discord sendMedia() uses the REST channel endpoint with Bearer auth when no webhook URL is set', async () => {
+    process.env.BUFF_DISCORD_BOT_TOKEN = 'discord-bot-token';
+    const fetchMock = vi.spyOn(globalThis, 'fetch').mockResolvedValue({ ok: true } as Response);
+    const adapter = new DiscordAdapter();
+    expect(await adapter.sendMedia('123456789', { type: 'image', data: new Uint8Array([1]), filename: 'a.png' })).toBe(true);
+
+    const [url, init] = fetchMock.mock.calls[0];
+    expect(String(url)).toBe('https://discord.com/api/v10/channels/123456789/messages');
+    expect((init?.headers as Record<string, string>).authorization).toBe('Bearer discord-bot-token');
+    const form = init?.body as FormData;
+    expect(JSON.parse(String(form.get('payload_json')))).toEqual({ content: '' });
+    const file = form.get('files[0]') as File;
+    expect(file.name).toBe('a.png');
+  });
+
+  it('Discord sendMedia() returns false without a network call when unconfigured', async () => {
+    const fetchMock = vi.spyOn(globalThis, 'fetch');
+    expect(await new DiscordAdapter().sendMedia('1', { type: 'image', data: new Uint8Array([1]) })).toBe(false);
+    expect(fetchMock).not.toHaveBeenCalled();
   });
 
   it('Slack sends to chat.postMessage with a Bearer bot token and the channel in the payload', async () => {
@@ -270,5 +354,83 @@ describe('WebhookReceiver WhatsApp inbound (X-Hub-Signature-256)', () => {
       req.end();
     });
     expect(status).toBe(200);
+  });
+});
+
+// ─── Matrix inbound (/sync long-poll, P3) ───────────────────────────────────
+
+describe('MatrixAdapter inbound (P3)', () => {
+  const HOST = 'https://matrix.example.org';
+  const TOKEN = 'tok';
+  const oldHost = process.env.BUFF_MATRIX_HOMESERVER;
+  const oldToken = process.env.BUFF_MATRIX_ACCESS_TOKEN;
+
+  beforeEach(() => {
+    process.env.BUFF_MATRIX_HOMESERVER = HOST;
+    process.env.BUFF_MATRIX_ACCESS_TOKEN = TOKEN;
+  });
+
+  afterEach(() => {
+    if (oldHost === undefined) delete process.env.BUFF_MATRIX_HOMESERVER;
+    else process.env.BUFF_MATRIX_HOMESERVER = oldHost;
+    if (oldToken === undefined) delete process.env.BUFF_MATRIX_ACCESS_TOKEN;
+    else process.env.BUFF_MATRIX_ACCESS_TOKEN = oldToken;
+    vi.restoreAllMocks();
+  });
+
+  it('relays m.text room messages from the /sync long-poll and skips its own sends', async () => {
+    const fetchMock = vi.spyOn(globalThis, 'fetch').mockImplementation(async (url: string | URL | Request) => {
+      const u = String(url);
+      if (u.includes('/account/whoami')) {
+        return { ok: true, json: async () => ({ user_id: '@bot:example.org' }) } as Response;
+      }
+      if (u.includes('/sync')) {
+        return {
+          ok: true,
+          json: async () => ({
+            next_batch: 's2',
+            rooms: {
+              join: {
+                '!room:example.org': {
+                  timeline: {
+                    events: [
+                      { type: 'm.room.message', sender: '@alice:example.org', content: { msgtype: 'm.text', body: 'fix the failing test' } },
+                      // Our own reply — must be skipped (ownUserId learned).
+                      { type: 'm.room.message', sender: '@bot:example.org', content: { msgtype: 'm.text', body: 'done' } },
+                      // Non-text / non-message events — skipped.
+                      { type: 'm.room.member', sender: '@bob:example.org', content: {} },
+                    ],
+                  },
+                },
+              },
+            },
+          }),
+        } as Response;
+      }
+      return { ok: false } as Response;
+    });
+
+    const adapter = new MatrixAdapter();
+    const received: InboundMessage[] = [];
+    await adapter.start((m) => received.push(m));
+    await new Promise((r) => setTimeout(r, 60));
+    await adapter.stop();
+
+    expect(received).toHaveLength(1);
+    expect(received[0]).toMatchObject({
+      platform: 'matrix',
+      channelId: '!room:example.org',
+      text: 'fix the failing test',
+      senderId: '@alice:example.org',
+      isGroup: true,
+    });
+    // The sync URL carried the Bearer token.
+    expect(fetchMock.mock.calls.some(([url]) => String(url).includes('/sync'))).toBe(true);
+  });
+
+  it('start() throws when unconfigured', async () => {
+    delete process.env.BUFF_MATRIX_HOMESERVER;
+    const adapter = new MatrixAdapter();
+    await expect(adapter.start(() => {})).rejects.toThrow('not configured');
   });
 });

@@ -132,10 +132,10 @@ describe('scanHubSkills', () => {
 // ─── Aggregate payload ──────────────────────────────────────────────────────
 
 describe('readHubData', () => {
-  it('returns the full hub shape with all 8 toolsets enabled by default', () => {
+  it('returns the full hub shape with all 9 toolsets enabled by default', () => {
     const hub = readHubData();
-    expect(hub.toolsets.toolsets).toHaveLength(8);
-    expect(hub.toolsets.enabled).toBe(8);
+    expect(hub.toolsets.toolsets).toHaveLength(9);
+    expect(hub.toolsets.enabled).toBe(9);
     expect(hub.toolsets.disabled).toBe(0);
     for (const t of hub.toolsets.toolsets) {
       expect(t.enabled).toBe(true);
@@ -145,6 +145,12 @@ describe('readHubData', () => {
     expect(hub.channels.delivery.total).toBe(0);
     expect(hub.channels.delivery.recent).toEqual([]);
     expect(Array.isArray(hub.channels.aliases)).toBe(true);
+    // P2 — inbound inbox is part of the hub channels payload (empty by default).
+    expect(hub.channels.inbox).toEqual({ total: 0, pipeline: 0, chat: 0, help: 0, refused: 0, recent: [] });
+    // P1 — per-platform policies ride along (empty by default).
+    expect(hub.channels.policies.whatsapp).toEqual({});
+    expect(hub.channels.policies.email).toEqual({});
+    expect(hub.channels.statusRecipients).toEqual([]);
     // I6: every platform transport (incl. email + signal) is reported.
     expect(hub.channels.platforms.map((p) => p.platform).sort()).toEqual(
       [
@@ -167,7 +173,7 @@ describe('readHubData', () => {
     const web = hub.toolsets.toolsets.find((t) => t.name === 'web');
     expect(web?.enabled).toBe(false);
     expect(hub.toolsets.disabled).toBe(1);
-    expect(hub.toolsets.enabled).toBe(7);
+    expect(hub.toolsets.enabled).toBe(8);
   });
 
   it('reflects a disabled skill (persisted via setSkillEnabled) — the P3 toggle is real', () => {
@@ -204,6 +210,35 @@ describe('readHubData', () => {
     expect(hub.channels.aliases[0]).toMatchObject({ alias: 'ops', platform: 'mock', channelId: 'C1' });
   });
 
+  it('reflects gateway.statusRecipients from the config file', () => {
+    writeFileSync(
+      join(cfgDir, 'buffconfig.json'),
+      JSON.stringify({ gateway: { statusRecipients: ['whatsapp:Daddy', 'slack:ops'] } }),
+    );
+    const hub = readHubData();
+    expect(hub.channels.statusRecipients).toEqual(['whatsapp:Daddy', 'slack:ops']);
+  });
+
+  it('reflects gateway.policies from the config file (the Permissions page source)', () => {
+    // What `buff config gateway allow …` / the policies API write:
+    writeFileSync(
+      join(cfgDir, 'buffconfig.json'),
+      JSON.stringify({
+        gateway: {
+          policies: {
+            whatsapp: { allowedUsers: ['918178504516'], silentDrop: true },
+            telegram: { allowedGroups: ['g-family'], requireMention: true },
+          },
+        },
+      }),
+    );
+    const hub = readHubData();
+    expect(hub.channels.policies.whatsapp).toEqual({ allowedUsers: ['918178504516'], silentDrop: true });
+    expect(hub.channels.policies.telegram).toEqual({ allowedGroups: ['g-family'], requireMention: true });
+    // Platforms without a policy stay an empty object (so the UI can render).
+    expect(hub.channels.policies.discord).toEqual({});
+  });
+
   it('scans the cwd .agents/skills into the hub skills list', () => {
     const root = join(cwdDir, '.agents', 'skills');
     mkdirSync(join(root, 'demo-fix'), { recursive: true });
@@ -226,9 +261,9 @@ describe('readHubData', () => {
     // A DIRECTORY where buffconfig.json should be → readFileSync throws EISDIR.
     mkdirSync(join(cfgDir, 'buffconfig.json'), { recursive: true });
     const hub = readHubData();
-    expect(hub.toolsets.toolsets).toHaveLength(8);
+    expect(hub.toolsets.toolsets).toHaveLength(9);
     expect(hub.toolsets.disabled).toBe(0);
-    expect(hub.toolsets.enabled).toBe(8);
+    expect(hub.toolsets.enabled).toBe(9);
   });
 
   it('reflects SMTP env vars in the platform status (email configured)', () => {

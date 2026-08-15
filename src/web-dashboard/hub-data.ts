@@ -18,6 +18,8 @@ import { join } from 'node:path';
 import { homedir } from 'node:os';
 import { getToolsetStatus } from '../tools/toolsets.js';
 import { DeliveryLedger, type DeliveryEntry } from '../gateway/delivery.js';
+import { InboxLedger, type InboxEntry } from '../gateway/inbox.js';
+import type { HubChannelPolicy, HubInboxEntry } from './src/types.js';
 import {
   ChannelDirectory,
   PLATFORM_ENV_VARS,
@@ -122,6 +124,19 @@ export interface HubData {
     reachable: Array<{ platform: string; channelId: string; aliases: string[]; reachable: boolean }>;
     /** Every platform's transport status (I6 — Email/Signal included). */
     platforms: HubPlatformStatus[];
+    /** P1 — effective per-platform inbound policies (who may trigger). */
+    policies: Record<string, HubChannelPolicy>;
+    /** Status recipients — always get pipeline completion summaries. */
+    statusRecipients: string[];
+    /** P2 — inbound inbox (who messaged the bot, what happened). */
+    inbox: {
+      total: number;
+      pipeline: number;
+      chat: number;
+      help: number;
+      refused: number;
+      recent: HubInboxEntry[];
+    };
   };
   artifacts: {
     totalSessions: number;
@@ -177,6 +192,19 @@ function readChannelsData(): HubData['channels'] {
     createdAt: e.createdAt,
     lastError: e.lastError,
   }));
+  const inboxEntries = new InboxLedger().read();
+  const inboxRecent = inboxEntries.slice(0, 20).map((e: InboxEntry) => ({
+    id: e.id,
+    platform: e.platform,
+    channelId: e.channelId,
+    text: e.text,
+    from: e.from,
+    senderId: e.senderId,
+    isGroup: Boolean(e.isGroup),
+    handled: e.handled,
+    reply: e.reply,
+    at: e.at,
+  }));
   const dir = new ChannelDirectory();
   let reachable: ReachableChannel[] = [];
   try {
@@ -205,7 +233,35 @@ function readChannelsData(): HubData['channels'] {
       reachable: r.reachable,
     })),
     platforms,
+    // Effective per-platform policies (env < config — the same merge the
+    // running gateway applies; the dashboard also edits via PUT
+    // /api/admin/gateway/policies).
+    policies: readPoliciesData(),
+    statusRecipients: (() => {
+      const cfg = new ConfigManager().getAll() as { gateway?: { statusRecipients?: string[] } };
+      return cfg.gateway?.statusRecipients ?? [];
+    })(),
+    inbox: {
+      total: inboxEntries.length,
+      pipeline: inboxEntries.filter((e) => e.handled === 'pipeline').length,
+      chat: inboxEntries.filter((e) => e.handled === 'chat').length,
+      help: inboxEntries.filter((e) => e.handled === 'help').length,
+      refused: inboxEntries.filter((e) => e.handled === 'refused').length,
+      recent: inboxRecent,
+    },
   };
+}
+
+/** Effective per-platform gateway policies (env < config, no network). */
+function readPoliciesData(): Record<string, HubChannelPolicy> {
+  const out: Record<string, HubChannelPolicy> = {};
+  for (const p of Object.keys(PLATFORM_ENV_VARS) as Platform[]) {
+    if (p === 'mock') continue;
+    const cfg = new ConfigManager().getAll() as { gateway?: { policies?: Partial<Record<Platform, HubChannelPolicy>> } };
+    const fromConfig = cfg.gateway?.policies?.[p] ?? {};
+    out[p] = { ...fromConfig };
+  }
+  return out;
 }
 
 // ─── Artifacts (I3 store) ───────────────────────────────────────────────────

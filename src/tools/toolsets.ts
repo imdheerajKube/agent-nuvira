@@ -87,6 +87,12 @@ export const TOOLSETS: ToolsetDef[] = [
     tools: ['web_search', 'read_page'],
   },
   {
+    name: 'channels',
+    label: 'Channels',
+    description: 'Message delivery through the gateway (WhatsApp by contact name or number, Telegram, Slack, Discord, email, aliases).',
+    tools: ['gateway_send'],
+  },
+  {
     name: 'browser',
     label: 'Browser',
     description: 'Real-browser automation (optional playwright install).',

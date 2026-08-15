@@ -12,6 +12,8 @@
  * BUFF_WHATSAPP_TOKEN + BUFF_WHATSAPP_PHONE_ID. Mirrors Hermes `gateway/`.
  */
 
+import { readFileSync } from 'node:fs';
+import { extname } from 'node:path';
 import { Command } from 'commander';
 import { logger } from '../utils/logger.js';
 import { GatewayRegistry } from '../gateway/registry.js';
@@ -65,6 +67,12 @@ export class GatewayCommand {
       .command('send <target> <text>')
       .description('Send a message to a channel alias or platform:channelId')
       .action(async (target, text) => this.send(target, text));
+
+    cmd
+      .command('send-media <target> <file>')
+      .description('Send a media file (image/video/audio/document) — type from the file extension; WhatsApp/Telegram/Discord')
+      .option('--caption <text>', 'Optional caption for image/video')
+      .action(async (target, file, opts: { caption?: string }) => this.sendMedia(target, file, opts.caption));
 
     const alias = cmd.command('alias').description('Manage channel aliases');
 
@@ -142,7 +150,8 @@ export class GatewayCommand {
 
   private async send(target: string, text: string): Promise<void> {
     const registry = new GatewayRegistry({ streamEvents: false });
-    for (const adapter of createConfiguredAdapters()) registry.register(adapter);
+    const adapters = createConfiguredAdapters();
+    for (const adapter of adapters) registry.register(adapter);
 
     const ref = registry.directory.resolve(target);
     if (!ref) {
@@ -151,12 +160,76 @@ export class GatewayCommand {
       return;
     }
     const ok = await registry.sendToRef(ref, text);
+    // One-shot CLI send: disconnect the live transports (e.g. the WhatsApp
+    // Baileys socket) so the process exits promptly instead of hanging on the
+    // open socket. Idempotent + a no-op for webhook/poll adapters.
+    for (const adapter of adapters) {
+      try {
+        await adapter.stop();
+      } catch {
+        /* best-effort */
+      }
+    }
     if (!ok) {
       logger.error(`Send failed — adapter for '${ref.platform}' is not configured (set its env token)`);
       process.exitCode = 1;
       return;
     }
     logger.success(`Sent to ${target} (${ref.platform}:${ref.channelId})`);
+  }
+
+  // ─── send-media (P3) ─────────────────────────────────────────────────────
+
+  private async sendMedia(target: string, file: string, caption?: string): Promise<void> {
+    let data: Uint8Array;
+    try {
+      data = readFileSync(file);
+    } catch (err) {
+      logger.error(`Cannot read file '${file}': ${err instanceof Error ? err.message : String(err)}`);
+      process.exitCode = 1;
+      return;
+    }
+    if (data.length === 0) {
+      logger.error(`File '${file}' is empty.`);
+      process.exitCode = 1;
+      return;
+    }
+    const ext = extname(file).toLowerCase().replace('.', '');
+    const type: 'image' | 'video' | 'audio' | 'document' =
+      ['png', 'jpg', 'jpeg', 'gif', 'webp'].includes(ext) ? 'image'
+      : ['mp4', 'mov', 'mkv', 'webm'].includes(ext) ? 'video'
+      : ['mp3', 'm4a', 'ogg', 'wav'].includes(ext) ? 'audio'
+      : 'document';
+
+    const registry = new GatewayRegistry({ streamEvents: false });
+    const adapters = createConfiguredAdapters();
+    for (const adapter of adapters) registry.register(adapter);
+    const ref = registry.directory.resolve(target);
+    if (!ref) {
+      logger.error(`Unknown channel target '${target}' — use an alias or platform:channelId`);
+      process.exitCode = 1;
+      return;
+    }
+    const ok = await registry.sendMediaToRef(ref, {
+      type,
+      data,
+      caption,
+      filename: file.split('/').pop() ?? file,
+    });
+    // One-shot CLI send: disconnect live transports so the process exits.
+    for (const adapter of adapters) {
+      try {
+        await adapter.stop();
+      } catch {
+        /* best-effort */
+      }
+    }
+    if (!ok) {
+      logger.error(`Media send failed — '${ref.platform}' does not support send-media (WhatsApp/Telegram/Discord do) or is not configured.`);
+      process.exitCode = 1;
+      return;
+    }
+    logger.success(`Sent ${type} to ${target} (${ref.platform}:${ref.channelId})`);
   }
 
   // ─── delivery (I2) ────────────────────────────────────────────────────────
@@ -167,8 +240,18 @@ export class GatewayCommand {
 
     if (flush && entries.some((e) => e.status === 'pending')) {
       const registry = new GatewayRegistry({ streamEvents: false });
-      for (const adapter of createConfiguredAdapters()) registry.register(adapter);
+      const adapters = createConfiguredAdapters();
+      for (const adapter of adapters) registry.register(adapter);
       const counts = await registry.drainDelivery();
+      // One-shot flush: disconnect live transports (Baileys socket) so the
+      // process exits promptly.
+      for (const adapter of adapters) {
+        try {
+          await adapter.stop();
+        } catch {
+          /* best-effort */
+        }
+      }
       logger.success(`Drained delivery queue — ${counts.sent} sent, ${counts.failed} failed, ${counts.processed} processed`);
     } else if (flush) {
       logger.info('Delivery queue empty — nothing to flush.');

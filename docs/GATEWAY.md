@@ -332,6 +332,56 @@ agent-nuvira config gateway remove sms --yes  # skip the confirmation
 - After any change: restart the gateway or dashboard (`agent-nuvira gateway
   start` / `agent-nuvira dashboard`).
 
+### 5.1 Validated senders — who may trigger the agent
+
+By default **anyone** who reaches a configured channel can trigger the agent
+(and its model spend). For a public-facing number, restrict it to a
+**validated contact list** per platform — only those senders may run tasks,
+and (with `silent` mode) unknown senders get **no reply at all**:
+
+```bash
+# Allow a mobile number / user id / group id to trigger on a platform
+agent-nuvira config gateway allow whatsapp user 918178504516
+agent-nuvira config gateway allow telegram group g-family
+
+# Remove one (or several)
+agent-nuvira config gateway disallow whatsapp user 918178504516
+
+# How unapproved senders are handled: silent (no reply — DEFAULT, hard
+# policy) or polite (⛔ reply — explicit opt-in)
+agent-nuvira config gateway reply whatsapp silent
+agent-nuvira config gateway reply whatsapp polite
+```
+
+### 5.2 Status recipients — always get pipeline completion summaries
+
+Pipeline completions are normally only sent to whoever triggered them. A
+**status recipient** is a contact/group that ALWAYS receives the completion
+summary (`✅ Done — …` / `❌ Failed — …`), regardless of who ran the task:
+
+```bash
+agent-nuvira config gateway notify add whatsapp:Daddy
+agent-nuvira config gateway notify add telegram:123456 slack:ops
+agent-nuvira config gateway notify list
+agent-nuvira config gateway notify remove slack:ops
+```
+
+- Targets are **aliases or `platform:channelId`** — the same resolution as
+  `agent-nuvira gateway send` (aliases live in `~/.buff/gateway/aliases.json`).
+- Stored in `~/.buff/buffconfig.json` under `gateway.statusRecipients`;
+  applied to a running gateway **immediately** (re-read per pipeline).
+- Also editable in the dashboard: **Agent Hub → Channels → 📊 Status recipients**.
+- Best for an ops/team channel: "every build result lands in #ops even when
+  someone runs it from their DM".
+
+- Stored in `~/.buff/buffconfig.json` under `gateway.policies` — the same
+  data the dashboard **Agent Hub → Channels → Permissions** page edits.
+- **Applied immediately** to a running gateway (policies are re-read per
+  inbound message — no restart).
+- Equivalent env vars (useful for containers): `BUFF_GATEWAY_ALLOWED_USERS`,
+  `BUFF_GATEWAY_ALLOWED_USERS_WHATSAPP`, `BUFF_GATEWAY_ALLOWED_GROUPS[_<PLATFORM>]`,
+  `BUFF_GATEWAY_REQUIRE_MENTION[_<PLATFORM>]`.
+
 ---
 
 ## 6. Sending messages & aliases
@@ -409,8 +459,8 @@ gateway can trigger the pipeline. To restrict who can run tasks:
 BUFF_GATEWAY_ALLOW_IDS=telegram:123456789,slack:C0123
 ```
 
-Channels not on the list get a polite refusal instead of running anything.
-(Set it in `~/.buff/.env`.)
+Channels not on the list get **no reply at all** (silent, hard policy)
+instead of running anything. (Set it in `~/.buff/.env`.)
 
 ---
 
@@ -437,6 +487,24 @@ Then use the **Agent Hub → Channels** tab and the **Gateway** page:
   and QR events live.
 - **Platform transports** — the same `config gateway` wizard as a GUI: expand
   a platform, fill in the fields, save (writes `~/.buff/.env`).
+- **Permissions** — per-platform **validated-sender** controls (who may
+  trigger the agent, and how unapproved senders are handled). This is the
+  GUI for `buff config gateway allow/disallow/reply`:
+  - **Who can trigger** — add/remove **user IDs / mobile numbers** and
+    **group IDs** per platform (the `allowedUsers` / `allowedGroups` lists).
+    An empty list = everyone may trigger (the default).
+  - **Silent drop (default, hard policy)** — unapproved senders get **no
+    reply at all and no processing** (they never learn a bot exists). Polite
+    `⛔` refusals are an explicit opt-in (`silentDrop: false`).
+  - **Require mention** — in groups the agent only reacts when addressed
+    (`buff fix the tests`).
+  - **Disabled** — the platform cannot trigger the agent at all.
+  - Changes are written to `~/.buff/buffconfig.json` (`gateway.policies`)
+    and apply to the **running gateway immediately** — policies are re-read
+    per inbound message, so no restart is needed.
+  - **📊 Status recipients** — contacts/groups that ALWAYS receive the
+    pipeline completion summary, whoever triggered it (e.g. `whatsapp:Daddy`,
+    `slack:ops`). Same save button; stored under `gateway.statusRecipients`.
 
 > The dashboard process must have the same env tokens loaded (it reads
 > `~/.buff/.env` at startup). If you configured a platform from the CLI,
@@ -469,6 +537,9 @@ from the CLI: `agent-nuvira admin role add <user> <admin|operator|viewer>`,
 | Slack inbound spoofing | Set `BUFF_SLACK_SIGNING_SECRET` → HMAC `X-Slack-Signature` verified |
 | WhatsApp inbound spoofing | Set `BUFF_WHATSAPP_APP_SECRET` → `X-Hub-Signature-256` verified |
 | Who can trigger pipelines | `BUFF_GATEWAY_ALLOW_IDS=platform:channelId,…` — empty means anyone |
+| Who can trigger per platform | `allowedUsers` / `allowedGroups` via `buff config gateway allow <platform> <user|group> <id…>` (or env `BUFF_GATEWAY_ALLOWED_USERS[_<PLATFORM>]`); empty = anyone |
+| How refusals behave | **Silent by default (hard policy)** — unapproved senders get NO reply and NO processing. `buff config gateway reply <platform> polite` opts back into the `⛔` message |
+| Group chatter | `requireMention` — the agent only reacts when addressed in groups |
 | Token storage | Written to `~/.buff/.env` (mode-restricted); never logged; redacted in `config gateway list` |
 | SimpleX access | `SIMPLEX_ALLOWED_USERS` restricts who can talk to the agent |
 | IRC access | `IRC_NICKSERV_PASSWORD` + allow-listing via nick |

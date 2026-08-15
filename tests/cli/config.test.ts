@@ -289,3 +289,146 @@ describe('ConfigCommand set — M2.5 context preflight windows', () => {
     });
   });
 });
+
+describe('ConfigCommand gateway — validated-sender policies (allow/disallow/reply)', () => {
+  // Hermetic RBAC: an empty BUFF_CONFIG_DIR role file → legacy single-user
+  // mode → guardRbacAction('gateway.manage') is permissive, so the command
+  // writes go through without seeding an admin.
+  let rbacDir: string;
+  let originalConfigDir: string | undefined;
+  let originalActAs: string | undefined;
+
+  function setupRbacDir(): void {
+    rbacDir = mkdtempSync(join(tmpdir(), 'buff-gw-policy-rbac-'));
+    originalConfigDir = process.env.BUFF_CONFIG_DIR;
+    process.env.BUFF_CONFIG_DIR = rbacDir;
+    originalActAs = process.env.BUFF_ACT_AS;
+    delete process.env.BUFF_ACT_AS;
+  }
+
+  function teardownRbacDir(): void {
+    if (originalConfigDir === undefined) delete process.env.BUFF_CONFIG_DIR;
+    else process.env.BUFF_CONFIG_DIR = originalConfigDir;
+    if (originalActAs === undefined) delete process.env.BUFF_ACT_AS;
+    else process.env.BUFF_ACT_AS = originalActAs;
+    rmSync(rbacDir, { recursive: true, force: true });
+  }
+
+  let saved: Partial<BuffConfig> | null;
+  let configState: BuffConfig;
+
+  function makeCommand() {
+    const cmd = new ConfigCommand();
+    (cmd as any).configManager = {
+      getAll: vi.fn(() => configState),
+      save: vi.fn((patch: Partial<BuffConfig>) => {
+        saved = patch;
+        // Mirrors ConfigManager.save's shallow merge for the assertions.
+        configState = {
+          ...configState,
+          providers: { ...configState.providers, ...(patch.providers || {}) },
+          routing: { ...configState.routing, ...(patch.routing || {}) },
+          gateway: { ...(configState.gateway || {}), ...(patch.gateway || {}) },
+        } as BuffConfig;
+      }),
+    };
+    return cmd;
+  }
+
+  function runGateway(cmd: ReturnType<typeof makeCommand>, args: string[]): void {
+    const cli = new Command();
+    cli.addCommand(cmd.create());
+    cli.parse(['node', 'buff', 'config', 'gateway', ...args]);
+  }
+
+  beforeEach(() => {
+    saved = null;
+    configState = {
+      defaultProvider: 'local',
+      providers: {},
+      routing: {},
+    } as BuffConfig;
+    vi.spyOn(console, 'log').mockImplementation(() => {});
+    vi.spyOn(console, 'error').mockImplementation(() => {});
+    vi.spyOn(console, 'warn').mockImplementation(() => {});
+    setupRbacDir();
+  });
+
+  afterEach(() => {
+    vi.restoreAllMocks();
+    teardownRbacDir();
+  });
+
+  it('allow adds users to gateway.policies.<platform>.allowedUsers (deduped, merged)', () => {
+    const cmd = makeCommand();
+    runGateway(cmd, ['allow', 'whatsapp', 'user', '918178504516']);
+    expect(saved?.gateway?.policies?.whatsapp?.allowedUsers).toEqual(['918178504516']);
+
+    runGateway(cmd, ['allow', 'whatsapp', 'user', '918178504516', '919999999999']);
+    expect(saved?.gateway?.policies?.whatsapp?.allowedUsers).toEqual(['918178504516', '919999999999']);
+  });
+
+  it('allow adds groups to allowedGroups without touching sibling users', () => {
+    const cmd = makeCommand();
+    runGateway(cmd, ['allow', 'telegram', 'user', 'u-1']);
+    runGateway(cmd, ['allow', 'telegram', 'group', 'g-family']);
+    const pol = saved?.gateway?.policies?.telegram as { allowedUsers?: string[]; allowedGroups?: string[] };
+    expect(pol.allowedUsers).toEqual(['u-1']);
+    expect(pol.allowedGroups).toEqual(['g-family']);
+  });
+
+  it('disallow removes a user and drops the key when the list empties', () => {
+    const cmd = makeCommand();
+    runGateway(cmd, ['allow', 'discord', 'user', 'u-1', 'u-2']);
+    runGateway(cmd, ['disallow', 'discord', 'user', 'u-1']);
+    expect(saved?.gateway?.policies?.discord?.allowedUsers).toEqual(['u-2']);
+
+    runGateway(cmd, ['disallow', 'discord', 'user', 'u-2']);
+    const pol = saved?.gateway?.policies?.discord as { allowedUsers?: string[] };
+    expect(pol.allowedUsers).toBeUndefined();
+  });
+
+  it('reply silent sets silentDrop; reply polite writes silentDrop: false (explicit opt-in)', () => {
+    const cmd = makeCommand();
+    runGateway(cmd, ['reply', 'whatsapp', 'silent']);
+    expect(saved?.gateway?.policies?.whatsapp?.silentDrop).toBe(true);
+
+    // HARD POLICY: silent is the DEFAULT — `polite` must write `false`, NOT
+    // delete the key (deleting would keep the silent default).
+    runGateway(cmd, ['reply', 'whatsapp', 'polite']);
+    const pol = saved?.gateway?.policies?.whatsapp as { silentDrop?: boolean };
+    expect(pol.silentDrop).toBe(false);
+  });
+
+  it('notify add/remove/list manage gateway.statusRecipients', () => {
+    const cmd = makeCommand();
+    runGateway(cmd, ['notify', 'add', 'whatsapp:Daddy', 'telegram:123456']);
+    expect(saved?.gateway?.statusRecipients).toEqual(['whatsapp:Daddy', 'telegram:123456']);
+
+    runGateway(cmd, ['notify', 'add', 'whatsapp:Daddy', 'slack:ops']);
+    expect(saved?.gateway?.statusRecipients).toEqual(['whatsapp:Daddy', 'telegram:123456', 'slack:ops']);
+
+    runGateway(cmd, ['notify', 'remove', 'telegram:123456']);
+    expect(saved?.gateway?.statusRecipients).toEqual(['whatsapp:Daddy', 'slack:ops']);
+
+    // list is a no-op read — nothing saved.
+    runGateway(cmd, ['notify', 'list']);
+    expect(saved).not.toBeNull(); // last saved was the remove; list itself doesn't save
+  });
+
+  it('notify rejects an unknown action', () => {
+    const cmd = makeCommand();
+    runGateway(cmd, ['notify', 'bogus', 'x']);
+    expect(saved).toBeNull();
+  });
+
+  it('rejects unknown platforms, bad kinds, and bad reply modes', () => {
+    const cmd = makeCommand();
+    runGateway(cmd, ['allow', 'notreal', 'user', 'x']);
+    expect(saved).toBeNull();
+    runGateway(cmd, ['allow', 'whatsapp', 'admin', 'x']);
+    expect(saved).toBeNull();
+    runGateway(cmd, ['reply', 'whatsapp', 'loud']);
+    expect(saved).toBeNull();
+  });
+});
