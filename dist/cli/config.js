@@ -717,8 +717,128 @@ export class ConfigCommand extends BaseCommand {
             .description('Remove a platform transport from the env file')
             .argument('<platform>', 'Platform id')
             .option('--yes', 'Skip confirmation')
-            .action((platform, opts) => void this.removePlatform(platform, opts)));
+            .action((platform, opts) => void this.removePlatform(platform, opts)))
+            .addCommand(new Command('allow')
+            .description('Allow a user/group to trigger the agent on a platform (written to gateway.policies in config)')
+            .argument('<platform>', 'Platform id (e.g. whatsapp, telegram, discord)')
+            .argument('<kind>', 'user or group')
+            .argument('<id...>', 'Sender/group ids (mobile number, telegram user id, group jid, …)')
+            .action((platform, kind, ids) => this.allowDisallow(platform, kind, ids, true)))
+            .addCommand(new Command('disallow')
+            .description('Remove a user/group from the allowed list of a platform')
+            .argument('<platform>', 'Platform id')
+            .argument('<kind>', 'user or group')
+            .argument('<id...>', 'Sender/group ids to remove')
+            .action((platform, kind, ids) => this.allowDisallow(platform, kind, ids, false)))
+            .addCommand(new Command('reply')
+            .description("Set how unapproved senders are handled on a platform: polite (⛔ message) or silent (no reply)")
+            .argument('<platform>', 'Platform id')
+            .argument('<mode>', 'polite or silent')
+            .action((platform, mode) => this.setReplyMode(platform, mode)))
+            .addCommand(new Command('notify')
+            .description('Manage status recipients — contacts/groups that ALWAYS get pipeline completion summaries')
+            .argument('<action>', 'add, remove or list')
+            .argument('[target...]', 'Channel target(s): alias or platform:channelId (e.g. whatsapp:Daddy, telegram:123456)')
+            .action((action, targets) => this.manageStatusRecipients(action, targets)));
         return cmd;
+    }
+    /** `buff config gateway allow/disallow <platform> <user|group> <id...>` */
+    allowDisallow(platform, kind, ids, allow) {
+        if (!(platform in PLATFORM_ENV_VARS)) {
+            logger.error(`Unknown platform '${platform}' — see \`buff config gateway list\`.`);
+            return;
+        }
+        if (kind !== 'user' && kind !== 'group') {
+            logger.error(`Kind must be 'user' or 'group', got '${kind}'.`);
+            return;
+        }
+        if (ids.length === 0) {
+            logger.error(`Provide at least one id (mobile number, user id, group jid).`);
+            return;
+        }
+        if (!guardRbacAction('gateway.manage'))
+            return;
+        const cfg = this.configManager.getAll();
+        const policies = { ...(cfg.gateway?.policies ?? {}) };
+        const pol = { ...(policies[platform] ?? {}) };
+        const key = kind === 'user' ? 'allowedUsers' : 'allowedGroups';
+        const list = pol[key] ?? [];
+        if (allow) {
+            const added = ids.filter((id) => !list.includes(id));
+            pol[key] = [...list, ...added];
+            logger.success(`Allowed ${added.length} ${kind}(s) on ${platform}: ${added.join(', ') || '(all already allowed)'}`);
+        }
+        else {
+            const removed = ids.filter((id) => list.includes(id));
+            pol[key] = list.filter((id) => !ids.includes(id));
+            if (pol[key]?.length === 0)
+                delete pol[key];
+            logger.success(`Removed ${removed.length} ${kind}(s) from ${platform}: ${removed.join(', ') || '(none were allowed)'}`);
+        }
+        policies[platform] = pol; // write the (possibly mutated) platform policy back
+        this.configManager.save({ gateway: { policies } });
+        logger.info('Applied to the running gateway immediately (policies re-read per inbound).');
+    }
+    /** `buff config gateway reply <platform> <polite|silent>` */
+    setReplyMode(platform, mode) {
+        if (!(platform in PLATFORM_ENV_VARS)) {
+            logger.error(`Unknown platform '${platform}' — see \`buff config gateway list\`.`);
+            return;
+        }
+        if (mode !== 'polite' && mode !== 'silent') {
+            logger.error(`Mode must be 'polite' or 'silent', got '${mode}'.`);
+            return;
+        }
+        if (!guardRbacAction('gateway.manage'))
+            return;
+        const cfg = this.configManager.getAll();
+        const policies = { ...(cfg.gateway?.policies ?? {}) };
+        const pol = { ...(policies[platform] ?? {}) };
+        // HARD POLICY: silent is the DEFAULT. `polite` must write `silentDrop:
+        // false` EXPLICITLY (deleting the key would keep the silent default).
+        if (mode === 'silent')
+            pol.silentDrop = true;
+        else
+            pol.silentDrop = false;
+        policies[platform] = pol; // write the (possibly mutated) platform policy back
+        this.configManager.save({ gateway: { policies } });
+        logger.success(`Unapproved senders on ${platform} are now handled ${mode === 'silent' ? 'SILENTLY (no reply)' : 'with a polite refusal message'}.`);
+    }
+    /** `buff config gateway notify add|remove|list <target...>` */
+    manageStatusRecipients(action, targets) {
+        if (!['add', 'remove', 'list'].includes(action)) {
+            logger.error(`Action must be 'add', 'remove' or 'list', got '${action}'.`);
+            return;
+        }
+        if (!guardRbacAction('gateway.manage'))
+            return;
+        const cfg = this.configManager.getAll();
+        const recipients = [...(cfg.gateway?.statusRecipients ?? [])];
+        if (action === 'list') {
+            logger.info('Gateway status recipients (always get pipeline completion summaries):');
+            if (recipients.length === 0)
+                console.log('  (none — add one with: buff config gateway notify add whatsapp:Daddy)');
+            for (const t of recipients)
+                console.log(`  📊  ${t}`);
+            return;
+        }
+        if (targets.length === 0) {
+            logger.error(`Provide at least one target (alias or platform:channelId) for '${action}'.`);
+            return;
+        }
+        if (action === 'add') {
+            const added = targets.filter((t) => !recipients.includes(t));
+            const next = [...recipients, ...added];
+            this.configManager.save({ gateway: { statusRecipients: next } });
+            logger.success(`Added ${added.length} status recipient(s): ${added.join(', ') || '(all already present)'}`);
+        }
+        else {
+            const removed = targets.filter((t) => recipients.includes(t));
+            const next = recipients.filter((t) => !targets.includes(t));
+            this.configManager.save({ gateway: { statusRecipients: next } });
+            logger.success(`Removed ${removed.length} status recipient(s): ${removed.join(', ') || '(none were present)'}`);
+        }
+        logger.info('Applied to the running gateway immediately (recipients re-read per pipeline).');
     }
     listPlatforms() {
         logger.info('Gateway platform transports (values live in ~/.buff/.env or env vars):');

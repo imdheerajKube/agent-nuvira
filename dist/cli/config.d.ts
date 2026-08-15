@@ -23,6 +23,12 @@ export declare class ConfigCommand extends BaseCommand {
     private listProviders;
     private initConfig;
     private createGatewayCommand;
+    /** `buff config gateway allow/disallow <platform> <user|group> <id...>` */
+    private allowDisallow;
+    /** `buff config gateway reply <platform> <polite|silent>` */
+    private setReplyMode;
+    /** `buff config gateway notify add|remove|list <target...>` */
+    private manageStatusRecipients;
     private listPlatforms;
     private setPlatform;
     private removePlatform;

@@ -93,6 +93,8 @@ export declare class ChatCommand extends BaseCommand {
         askUser?: ToolContext['askUser'];
         /** P3 — live progress lines for the dashboard chat console. */
         onProgress?: (line: string) => void;
+        /** Live gateway for gateway_send (gateway-triggered chat answers reuse the connected bridge). */
+        gateway?: ToolContext['gateway'];
     }): Promise<{
         content: string;
         followups: FollowupSuggestion[];
