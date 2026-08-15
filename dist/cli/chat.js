@@ -267,7 +267,7 @@ export class ChatCommand extends BaseCommand {
         opts.onProgress?.(`   🧠 routed to ${provider.name}${model ? ` / ${model}` : ''} — working…`);
         const parsed = parseRequestSync(message);
         const dispatchDecision = resolvePipelineDispatch(parsed, { dev: opts.dev });
-        const answer = await this.runChatAnswer(message, opts.history ?? [], { type, provider, model }, { provider: mergedOpts.provider, model: mergedOpts.model, dev: mergedOpts.dev, cache: true }, true, { auto: autoMode }, parsed, { askUser: opts.askUser, onProgress: opts.onProgress });
+        const answer = await this.runChatAnswer(message, opts.history ?? [], { type, provider, model }, { provider: mergedOpts.provider, model: mergedOpts.model, dev: mergedOpts.dev, cache: true }, true, { auto: autoMode }, parsed, { askUser: opts.askUser, onProgress: opts.onProgress, gateway: opts.gateway });
         // No-model fallback: the tool loop could not generate a single response
         // AND the rules assessed a high-confidence pipeline intent — run the
         // pipeline directly (rules decide only when the model is unavailable; the
@@ -655,6 +655,7 @@ export class ChatCommand extends BaseCommand {
             // (inquirer would hang on the server's piped stdin); the CLI keeps the
             // default interactive renderer.
             ...(ctxOverrides?.askUser ? { askUser: ctxOverrides.askUser } : {}),
+            ...(ctxOverrides?.gateway ? { gateway: ctxOverrides.gateway } : {}),
             // C2 verify with the actual session model (verify_requirement tool).
             callLLM: (prompt, opts) => session.provider.generate(prompt, { ...opts, model: session.model }),
             // I3: tools that return {artifact, result} deliverables are recorded to

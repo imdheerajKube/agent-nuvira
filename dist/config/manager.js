@@ -279,6 +279,24 @@ export class ConfigManager {
                         ...(userConfig.skills.registries !== undefined ? { registries: userConfig.skills.registries } : {}),
                     };
                 }
+                // Merge gateway per-platform policies (deep per platform so allows for
+                // different platforms coexist; arrays are whole-value from the caller).
+                if (userConfig.gateway?.policies || userConfig.gateway?.statusRecipients) {
+                    config.gateway = {
+                        ...(config.gateway || {}),
+                        policies: {
+                            ...(config.gateway?.policies || {}),
+                            ...Object.fromEntries(Object.entries(userConfig.gateway?.policies ?? {}).map(([platform, pol]) => [
+                                platform,
+                                { ...(config.gateway?.policies?.[platform] || {}), ...(pol || {}) },
+                            ])),
+                        },
+                        // Whole-array semantics: an empty list is meaningful ("nobody").
+                        ...(userConfig.gateway?.statusRecipients !== undefined
+                            ? { statusRecipients: userConfig.gateway.statusRecipients }
+                            : {}),
+                    };
+                }
             }
             catch {
                 // If config is corrupted, fall back to defaults
@@ -581,6 +599,26 @@ export class ConfigManager {
                 ...(this.config.skills || {}),
                 ...(config.skills.disabled !== undefined ? { disabled: config.skills.disabled } : {}),
                 ...(config.skills.registries !== undefined ? { registries: config.skills.registries } : {}),
+            };
+        }
+        if (config.gateway) {
+            // Per-platform REPLACE semantics: the caller (CLI `buff config gateway
+            // allow/disallow/reply`, dashboard Permissions API) always passes the
+            // COMPLETE policy map it read from getAll() — so each platform's policy
+            // object replaces the stored one wholesale. A field-level merge would
+            // resurrect deleted keys (e.g. a removed allowedUsers entry) and make
+            // "remove a user" impossible. Platforms the caller did not include are
+            // preserved via the spread of existing.
+            this.config.gateway = {
+                ...(this.config.gateway || {}),
+                policies: {
+                    ...(this.config.gateway?.policies || {}),
+                    ...(config.gateway.policies || {}),
+                },
+                // Whole-array semantics (an empty list = "nobody").
+                ...(config.gateway.statusRecipients !== undefined
+                    ? { statusRecipients: config.gateway.statusRecipients }
+                    : {}),
             };
         }
         writeFileSync(this.configPath, JSON.stringify(this.config, null, 2), 'utf-8');
