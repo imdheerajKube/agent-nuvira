@@ -145,6 +145,11 @@ export declare function readTraceDetail(id: string): DashboardTrace | null;
  * module variable at request time, so this works anytime. */
 export declare function setChatConsoleForTest(console: ChatConsole): void;
 /**
+ * Run the dashboard shutdown action (test hook: swap to a no-op so API tests
+ * exercising /api/admin/shutdown never exit the test runner).
+ */
+export declare function setDashboardShutdownForTest(action: (() => void) | null): void;
+/**
  * Test hook: swap the pairing manager (e.g. for a fake-bridge manager) so
  * /api/whatsapp integration tests never open a real WhatsApp connection.
  * Routes read the module variable at request time, so this works anytime.

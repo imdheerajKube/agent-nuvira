@@ -346,6 +346,26 @@ export default function AgentHub() {
     });
   };
 
+  /**
+   * True when the Permissions section has UNSAVED changes (the draft holds
+   * edits, or contacts / status recipients differ from what was loaded). The
+   * whole reason this exists: "+ User" only edits the local draft — without
+   * a visible unsaved indicator, users add a contact, see the chip appear,
+   * and assume it's saved when it isn't (until "💾 Save permissions").
+   */
+  const hasUnsavedPolicyChanges =
+    Object.keys(policyDraft).length > 0 ||
+    (contacts.length !== (data?.channels?.contacts?.length ?? 0)) ||
+    contacts.some(
+      (c, i) =>
+        !data?.channels?.contacts?.[i] ||
+        c.platform !== data.channels.contacts[i].platform ||
+        c.id !== data.channels.contacts[i].id ||
+        c.name !== data.channels.contacts[i].name,
+    ) ||
+    (statusRecipients.length !== (data?.channels?.statusRecipients?.length ?? 0)) ||
+    statusRecipients.some((r, i) => r !== data?.channels?.statusRecipients?.[i]);
+
   /** P1 — save the draft policies to the gateway config (admin/operator only). */
   const handleSavePolicies = async () => {
     if (!authed) {
@@ -670,13 +690,33 @@ export default function AgentHub() {
             </div>
           )}
 
-          <h3 className="section-subtitle">🔐 Permissions (validated senders)</h3>
+          {hasUnsavedPolicyChanges ? (
+            <div className="hub-unsaved-banner" role="status">
+              <span>
+                ⚠️ <strong>Unsaved changes</strong> — what you see below is a <em>draft</em>. Press{' '}
+                <strong>💾 Save permissions</strong> to apply it to the gateway; leaving the page discards it.
+              </span>
+              <button className="admin-refresh-btn" type="button" disabled={policyBusy} onClick={() => void handleSavePolicies()}>
+                {policyBusy ? '⏳ Saving…' : '💾 Save permissions'}
+              </button>
+            </div>
+          ) : null}
+          <h3 className="section-subtitle">🔐 Permissions — who can TRIGGER the agent</h3>
           <p className="admin-hint">
-            Verified-list rule per platform: a listed sender/group is allowed; a <strong>blank</strong>
-            list means <strong>no one</strong> may trigger; add the token <code>Allow-All</code> to skip
-            the verifier and respond to everyone. <strong>Silent</strong> refuses without replying
-            (best for a private number). Changes apply to the running gateway immediately.
+            This list controls <strong>who may trigger the agent</strong> when they message you on each
+            platform (WhatsApp, Telegram, email, …). A sender on the list gets a reply; everyone else is
+            refused. Per platform: a listed sender/group is allowed; a <strong>blank</strong> list means{' '}
+            <strong>no one</strong> may trigger; the token <code>Allow-All</code> skips the verifier and
+            responds to everyone. <strong>Silent</strong> refuses without replying. Changes apply to the
+            running gateway immediately.
           </p>
+          <div className="admin-hint" style={{ marginBottom: 10 }}>
+            ⚠ <strong>Not the same as send-by-name contacts:</strong> a WhatsApp contact name (from{' '}
+            <code>buff whatsapp contact add</code>, shown in the WhatsApp bridge panel below) only lets{' '}
+            <em>you</em> send <em>to</em> it by name — it does <strong>not</strong> let that number trigger
+            the agent. Add the number here (or <code>buff config gateway allow &lt;platform&gt; user
+            &lt;id&gt;</code>) to grant inbound access.
+          </div>
           <div className="hub-permissions">
             {data.channels.platforms.map((p) => {
               // Merge the draft OVER the saved policy: a partial draft (e.g. a
@@ -692,14 +732,21 @@ export default function AgentHub() {
                     <span className="hub-card-id">{p.platform}</span>
                     {pol.disabled ? <span className="hub-chip">disabled</span> : null}
                   </div>
-                  <div className="admin-hint" style={{ margin: '4px 0 8px' }}>Allowed users (verified list)</div>
+                  <div className="admin-hint" style={{ margin: '4px 0 8px' }}>Allowed users — who may trigger the agent</div>
                   <div className="hub-alias-list">
                     {users.length === 0 ? <span className="admin-hint">(blank — no one may trigger; add <code>Allow-All</code> to allow everyone)</span> : null}
                     {users.map((u) => {
                       const nm = verifiedNameFor(p.platform, u);
+                      // A chip that only exists in the DRAFT (not yet saved) is
+                      // marked pending so adding a user can't be mistaken for
+                      // having saved it.
+                      const pending = (policyDraft[p.platform]?.allowedUsers ?? []).includes(u) &&
+                        !(data?.channels?.policies?.[p.platform]?.allowedUsers ?? []).includes(u);
                       return (
                         <div className="hub-alias-row" key={`u-${u}`}>
-                          <span className="hub-chip">{nm ? `${nm} (${u})` : u}</span>
+                          <span className={`hub-chip${pending ? ' hub-chip-pending' : ''}`} title={pending ? 'Not saved yet — press 💾 Save permissions' : undefined}>
+                            {nm ? `${nm} (${u})` : u}{pending ? ' · pending' : ''}
+                          </span>
                           <button className="admin-refresh-btn" disabled={policyBusy} onClick={() => removeVerifiedUser(p.platform, u)}>✕</button>
                         </div>
                       );
@@ -729,12 +776,18 @@ export default function AgentHub() {
                   <div className="admin-hint" style={{ margin: '4px 0 8px' }}>Allowed groups</div>
                   <div className="hub-alias-list">
                     {groups.length === 0 ? <span className="admin-hint">(none — any group may trigger)</span> : null}
-                    {groups.map((g) => (
-                      <div className="hub-alias-row" key={`g-${g}`}>
-                        <span className="hub-chip">{g}</span>
-                        <button className="admin-refresh-btn" disabled={policyBusy} onClick={() => removePolicyId(p.platform, 'group', g)}>✕</button>
-                      </div>
-                    ))}
+                    {groups.map((g) => {
+                      const pending = (policyDraft[p.platform]?.allowedGroups ?? []).includes(g) &&
+                        !(data?.channels?.policies?.[p.platform]?.allowedGroups ?? []).includes(g);
+                      return (
+                        <div className="hub-alias-row" key={`g-${g}`}>
+                          <span className={`hub-chip${pending ? ' hub-chip-pending' : ''}`} title={pending ? 'Not saved yet — press 💾 Save permissions' : undefined}>
+                            {g}{pending ? ' · pending' : ''}
+                          </span>
+                          <button className="admin-refresh-btn" disabled={policyBusy} onClick={() => removePolicyId(p.platform, 'group', g)}>✕</button>
+                        </div>
+                      );
+                    })}
                   </div>
                   <div className="hub-send-form" style={{ margin: '6px 0 10px' }}>
                     <input

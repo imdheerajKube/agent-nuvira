@@ -123,6 +123,10 @@ export class WhatsAppCommand {
         logger.info(`${names.length} resolvable contact(s) — send by name: buff gateway send whatsapp:<Name> "message"`);
         for (const c of names) console.log(`  ${c.name} → ${c.jid}`);
         logger.info('Add more with: buff whatsapp contact add <Name> <number>');
+        console.log('');
+        logger.info('⚠  These are SEND-BY-NAME mappings ONLY — they do NOT let these numbers');
+        logger.info('    trigger the agent. To let a number trigger the agent (inbound), add it to');
+        logger.info('    the verified list:  buff config gateway allow whatsapp user <number>');
       });
 
     const contact = cmd.command('contact').description('Manage the WhatsApp contact-name mapping (send by name: buff gateway send whatsapp:<Name> "message")');
@@ -137,7 +141,12 @@ export class WhatsAppCommand {
           logger.error(`Could not add '${name}' — name and a valid number (digits) are required.`);
           return;
         }
-        logger.success(`Saved contact '${name}' → ${number.replace(/\D+/g, '')}. Send with: buff gateway send whatsapp:${name} "message"`);
+        const digits = number.replace(/\D+/g, '');
+        logger.success(`Saved contact '${name}' → ${digits}. Send with: buff gateway send whatsapp:${name} "message"`);
+        console.log('');
+        logger.info('ℹ  This is a SEND-BY-NAME mapping only — it does NOT let this number trigger');
+        logger.info('    the agent when they message you. To grant inbound access (verified list):');
+        logger.info(`      buff config gateway allow whatsapp user ${digits}`);
       });
 
     contact

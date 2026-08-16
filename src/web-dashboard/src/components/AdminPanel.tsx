@@ -90,6 +90,10 @@ export default function AdminPanel() {
   const [busy, setBusy] = useState<string | null>(null);
   const [rowMsg, setRowMsg] = useState<Record<string, string>>({});
   const [newType, setNewType] = useState('');
+  // Shutdown controls (dashboard / gateway) — admin sees both, operator sees
+  // only the gateway stop (gateway.manage), viewer sees neither.
+  const [shutdownMsg, setShutdownMsg] = useState<string | null>(null);
+  const [shutdownBusy, setShutdownBusy] = useState<string | null>(null);
 
   const refresh = useCallback(async () => {
     setLoading(true);
@@ -205,6 +209,32 @@ export default function AdminPanel() {
     setDrafts({});
     setRowMsg({});
     setUsers([]);
+  };
+
+  /** Shut down the gateway (any terminal can restart it with `buff gateway start`). */
+  const stopGateway = async () => {
+    if (!window.confirm('Stop the running gateway? Channels will stop responding until you restart it with `buff gateway start`.')) return;
+    setShutdownBusy('gateway');
+    setShutdownMsg(null);
+    const r = await dashboardAPI.shutdown('gateway');
+    setShutdownBusy(null);
+    if (r.ok) {
+      setShutdownMsg(r.stopped ? '✅ Gateway stopped.' : `ℹ️ ${r.reason || 'No running gateway found — nothing to stop.'}`);
+    } else {
+      setShutdownMsg(`❌ ${r.error || 'Stop failed.'}`);
+      if (r.unauthorized) sessionExpired();
+    }
+  };
+
+  /** Shut down this dashboard server — the page will disconnect. */
+  const stopDashboard = async () => {
+    if (!window.confirm('Shut down the dashboard? This page will disconnect and the server will exit. Restart with `buff dashboard`.')) return;
+    setShutdownBusy('dashboard');
+    setShutdownMsg('🛑 Shutting down the dashboard — this page will disconnect…');
+    await dashboardAPI.shutdown('dashboard');
+    // The server exits on its own; if the request failed the page stays up.
+    setShutdownBusy(null);
+    setShutdownMsg('ℹ️ The dashboard server did not stop (see the server terminal). You can also stop it with `buff dashboard stop`.');
   };
 
   const addUser = async (e: React.FormEvent) => {
@@ -421,9 +451,30 @@ export default function AdminPanel() {
           >
             {loading ? '⏳ Running checks…' : '🔄 Refresh (run all commands)'}
           </button>
+          {isAdmin || role === 'operator' ? (
+            <button
+              className="admin-logout-btn"
+              onClick={() => void stopGateway()}
+              disabled={shutdownBusy !== null}
+              title="Stop the running gateway (buff gateway stop)"
+            >
+              {shutdownBusy === 'gateway' ? '⏳ Stopping…' : '⏻ Stop gateway'}
+            </button>
+          ) : null}
+          {isAdmin ? (
+            <button
+              className="admin-logout-btn"
+              onClick={() => void stopDashboard()}
+              disabled={shutdownBusy !== null}
+              title="Shut down this dashboard server (buff dashboard stop)"
+            >
+              {shutdownBusy === 'dashboard' ? '⏳ Stopping…' : '🛑 Stop dashboard'}
+            </button>
+          ) : null}
           <button className="admin-logout-btn" onClick={() => void handleLogout()}>🚪 Log out</button>
         </div>
       </div>
+      {shutdownMsg ? <div className="admin-error">{shutdownMsg}</div> : null}
       {!isAdmin ? (
         <div className="admin-readonly-note">
           🔒 Your role (<code>{role || 'viewer'}</code>) is read-only here — provider configuration

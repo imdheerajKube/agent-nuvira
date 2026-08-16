@@ -36,11 +36,10 @@ import {
   confirmStaleRestart,
 } from './dashboard-restart.js';
 import { createDashboardServer } from '../web-dashboard/server.js';
-import { logger } from '../utils/logger.js';
+import { guardRbacAction } from './rbac-guard.js';
+import { logger } from '../utils/logger.js';  // ─── DashboardCommand ───────────────────────────────────────────────────────
 
-// ─── DashboardCommand ───────────────────────────────────────────────────────
-
-export class DashboardCommand extends BaseCommand {
+  export class DashboardCommand extends BaseCommand {
   private server: ReturnType<typeof createDashboardServer> | null = null;
 
   create(): Command {
@@ -58,6 +57,14 @@ export class DashboardCommand extends BaseCommand {
       .option('--force', 'Detect a stale dashboard on the port (API/SSE mismatch) and offer to restart it')
       .action(async (options?: { port?: number; host?: string; open?: boolean; build?: boolean; force?: boolean }) => {
         await this.launchDashboard(options || {});
+      });
+
+    command
+      .command('stop')
+      .description('Stop a running dashboard gracefully (SIGTERM — from any terminal)')
+      .option('-p, --port <port>', 'Port the dashboard is bound to', (v: string) => parseInt(v, 10), 3030)
+      .action(async (options?: { port?: number }) => {
+        await this.stopDashboard(options?.port ?? 3030);
       });
 
     return command;
@@ -124,6 +131,24 @@ export class DashboardCommand extends BaseCommand {
       attempts++;
     }
     logger.error(`Could not start the dashboard on port ${port} after several restart attempts.`);
+  }
+
+  /**
+   * `dashboard stop` — locate a RUNNING dashboard and stop it gracefully
+   * (SIGTERM). Works from any terminal, not just the one that launched it:
+   * the dashboard's serve() handler shuts down cleanly on SIGTERM. RBAC:
+   * system.manage (admin) — stopping a whole server is a system action.
+   */
+  private async stopDashboard(port: number): Promise<void> {
+    if (!guardRbacAction('system.manage')) return;
+    const { stopDashboard } = await import('./process-control.js');
+    const result = await stopDashboard({ port });
+    if (result.stopped) {
+      logger.success(`Dashboard stopped (PID ${result.pid})`);
+    } else {
+      logger.error(`Could not stop the dashboard: ${result.reason ?? 'no running dashboard found'}`);
+      process.exitCode = 1;
+    }
   }
 
   /**

@@ -146,6 +146,25 @@ Then send a real task: `create a python script that prints hello world`
 
 🎉 That's the whole quick start. Everything below is power-user depth.
 
+### 3.3 Stopping the gateway & dashboard
+
+Both the gateway and the dashboard run in the **foreground** of whatever
+terminal launched them, so `Ctrl+C` there stops them. If they're running in
+another terminal (or a background/service process), stop them from anywhere:
+
+```bash
+agent-nuvira gateway stop     # gracefully stops the running `gateway start`
+agent-nuvira dashboard stop   # gracefully stops the running dashboard server
+```
+
+Each finds the live process (by its command line, falling back to the webhook
+receiver port / dashboard port), sends `SIGTERM`, waits for a graceful
+shutdown, then force-kills only if needed. Restart any time with
+`agent-nuvira gateway start` / `agent-nuvira dashboard`.
+
+> **GUI too:** logged-in admins can stop either from the dashboard — Admin
+> panel → **Shutdown** section → *Stop gateway* / *Shut down dashboard*.
+
 ---
 
 ## 4. Platform-by-platform setup (CLI)
@@ -199,6 +218,14 @@ agent-nuvira gateway start
 > Env var `BUFF_WHATSAPP_SESSION_DIR` overrides where the session is stored
 > (default `~/.buff/whatsapp/session`). No token needed — the session *is* the
 > credential.
+
+**Send by name (optional):** `agent-nuvira whatsapp contact add <Name> <number>`
+maps a name to a number so you can send with `agent-nuvira gateway send
+whatsapp:Daddy "…"`. ⚠️ **A mapped name does NOT let that number trigger the
+agent** — to grant inbound access add it to the verified list:
+`agent-nuvira config gateway allow whatsapp user <number>` (or the dashboard
+Permissions tab). The WhatsApp panel in the dashboard shows both lists side by
+side so the difference is always visible.
 
 **Option B — WhatsApp Business Cloud API (paid, official):** for businesses
 with a Meta Business account, WhatsApp Cloud API app, and a phone number.
@@ -503,12 +530,25 @@ Then use the **Agent Hub → Channels** tab and the **Gateway** page:
 - **Test a channel** — a send form (`target` + `text`) that goes through the
   *same* gateway the CLI uses: `ops` or `telegram:123456789`, then "Send".
 - **WhatsApp panel** — pair / unpair the personal bridge, watch pairing state
-  and QR events live.
+  and QR events live, and see the **send-by-name contacts** (the
+  `buff whatsapp contact add` mappings) — with a clear note that those names
+  are for *sending* by name only and do **not** grant trigger access.
 - **Platform transports** — the same `config gateway` wizard as a GUI: expand
   a platform, fill in the fields, save (writes `~/.buff/.env`).
 - **Permissions** — per-platform **validated-sender** controls (who may
   trigger the agent, and how unapproved senders are handled). This is the
   GUI for `buff config gateway allow/disallow/reply`:
+
+> ⚠️ **Two different "contacts" — don't mix them up.**
+> - **Send-by-name contacts** (`buff whatsapp contact add <Name> <number>`, the
+>   WhatsApp bridge panel) — let *you* send *to* someone by name
+>   (`buff gateway send whatsapp:Daddy "…"`). They do **NOT** let that number
+>   trigger the agent.
+> - **Verified list** (this Permissions tab, `buff config gateway allow
+>   <platform> user <id>`) — the only thing that decides **who may trigger
+>   the agent** inbound, on any platform (WhatsApp bridge, WhatsApp Cloud
+>   API, Telegram, email, …). A WhatsApp number in the bridge contacts file
+>   but NOT in the verified list will be refused when it messages you.
   - **Verified list rule** — a platform's **Allowed users** list has three
     states: present with entries = **only those senders** may trigger;
     present but **blank** = **no one** may trigger; the token `Allow-All`
@@ -551,6 +591,13 @@ any `gateway` or `admin` command (`gateway alias add ops slack C0123`…).
 Live output streams in; press **Cancel** to stop a foreground run.
 
 ### 9.3 Admin & RBAC
+
+The Admin panel also has a **Shutdown** section (admin only): *Stop gateway*
+and *Shut down dashboard* — the GUI twin of `agent-nuvira gateway stop` /
+`agent-nuvira dashboard stop`. Stopping the dashboard disconnects the page and
+exits the server (restart with `agent-nuvira dashboard`); stopping the gateway
+makes channels stop responding until you run `agent-nuvira gateway start`
+again.
 
 Dashboard actions (sending test messages, configuring platforms, pairing
 WhatsApp) require an **admin** role. On first run the dashboard shows a
@@ -603,6 +650,11 @@ while the gateway runs, or use `--flush`.
 
 **Q: The agent replied "This channel is not authorized…"**
 A: Add that channel to `BUFF_GATEWAY_ALLOW_IDS` (format `platform:channelId`).
+
+**Q: How do I stop the gateway / dashboard without closing their terminal?**
+A: `agent-nuvira gateway stop` and `agent-nuvira dashboard stop` from any
+terminal (or the Admin panel → Shutdown buttons). Both are also what `Ctrl+C`
+does in the foreground terminal.
 
 **Q: How do I know which models the gateway uses?**
 A: The gateway uses the same auto-routing and provider config as everything

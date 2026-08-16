@@ -38,6 +38,7 @@ interface Props {
 
 export default function WhatsAppPanel({ authed, canWrite, sessionExpired }: Props) {
   const [status, setStatus] = useState<WhatsAppPairStatus | null>(null);
+  const [contacts, setContacts] = useState<Record<string, string>>({});
   const [phone, setPhone] = useState('');
   const [busy, setBusy] = useState(false);
   const [msg, setMsg] = useState<{ kind: 'ok' | 'err'; text: string } | null>(null);
@@ -45,7 +46,10 @@ export default function WhatsAppPanel({ authed, canWrite, sessionExpired }: Prop
 
   const refresh = useCallback(async () => {
     const s = await dashboardAPI.getWhatsAppStatus();
-    if (s) setStatus(s);
+    if (s) {
+      setStatus(s.status);
+      setContacts(s.contacts ?? {});
+    }
   }, []);
 
   // Fetch once + subscribe to live events (QR data URLs, codes, status) via
@@ -229,6 +233,39 @@ export default function WhatsAppPanel({ authed, canWrite, sessionExpired }: Prop
           {msg ? <div className={`admin-row-msg${msg.kind === 'ok' ? '' : ' admin-row-msg-err'}`}>{msg.text}</div> : null}
         </div>
       )}
+
+      {/* Send-by-name contacts — the mapping behind `buff whatsapp contact add`.
+          These are for SENDING by name only; they do NOT grant inbound access.
+          The verified list (Permissions tab / `buff config gateway allow`) is
+          what decides who may TRIGGER the agent. */}
+      <div className="wa-contacts">
+        <div className="wa-contacts-head">
+          <span className="wa-panel-title">📇 Send-by-name contacts</span>
+          <span className="admin-hint">{Object.keys(contacts).length} mapped</span>
+        </div>
+        <p className="admin-hint">
+          These names are for <strong>sending messages by name</strong> (e.g.{' '}
+          <code>buff gateway send whatsapp:Daddy "…"</code>) — they do{' '}
+          <strong>NOT</strong> let these numbers trigger the agent.
+        </p>
+        <div className="hub-alias-list">
+          {Object.keys(contacts).length === 0 ? (
+            <span className="admin-hint">(none — add one with <code>buff whatsapp contact add &lt;Name&gt; &lt;number&gt;</code>)</span>
+          ) : (
+            Object.entries(contacts).map(([name, number]) => (
+              <div className="hub-alias-row" key={name}>
+                <span className="hub-chip">{name}</span>
+                <span className="admin-hint">→ {number}</span>
+              </div>
+            ))
+          )}
+        </div>
+        <p className="admin-hint" style={{ marginTop: 8 }}>
+          To let a number <strong>trigger the agent</strong> (respond to its messages), add it to the{' '}
+          <strong>verified list</strong> in the <strong>Permissions tab above</strong>, or run{' '}
+          <code>buff config gateway allow whatsapp user &lt;number&gt;</code>.
+        </p>
+      </div>
     </div>
   );
 }

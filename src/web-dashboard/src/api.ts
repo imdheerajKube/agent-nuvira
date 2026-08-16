@@ -407,6 +407,22 @@ export class DashboardAPI {
     setAdminToken(null);
   }
 
+  /**
+   * Shut down the gateway or the dashboard server itself (the GUI twin of
+   * `buff gateway stop` / `buff dashboard stop`). Admin-gated: dashboard
+   * requires system.manage (admin), gateway requires gateway.manage
+   * (admin + operator). Stopping the dashboard kills THIS page's server.
+   */
+  async shutdown(
+    target: 'dashboard' | 'gateway',
+  ): Promise<AdminWriteResult & { stopped?: boolean; reason?: string }> {
+    const r = await this.sendAdminRequest('/api/admin/shutdown', 'POST', { target });
+    if (!r) return { ok: false, error: 'Could not reach the dashboard server.' };
+    const d = (r.data ?? {}) as AdminWriteResult & { stopped?: boolean; reason?: string };
+    if (r.status === 200 && d.ok) return d;
+    return { ok: false, error: d.error || 'Shutdown failed.', unauthorized: r.status === 401, forbidden: r.status === 403 };
+  }
+
   /** Save/update a provider's key + config (authed). Mirrors `buff config set providers.*`. */
   async saveProvider(
     type: string,
@@ -643,11 +659,11 @@ export class DashboardAPI {
   // ─── P2 — in-page WhatsApp pairing (GUI parity with `buff whatsapp pair`) ──
 
   /** Current pairing status (state, QR data URL, code, session dir). */
-  async getWhatsAppStatus(): Promise<WhatsAppPairStatus | null> {
+  async getWhatsAppStatus(): Promise<{ status: WhatsAppPairStatus; contacts: Record<string, string> } | null> {
     const r = await this.sendAdminRequest('/api/whatsapp', 'GET');
     if (!r) return null;
-    const d = (r.data ?? {}) as { ok?: boolean; status?: WhatsAppPairStatus };
-    return r.status === 200 && d.ok && d.status ? d.status : null;
+    const d = (r.data ?? {}) as { ok?: boolean; status?: WhatsAppPairStatus; contacts?: Record<string, string> };
+    return r.status === 200 && d.ok && d.status ? { status: d.status, contacts: d.contacts ?? {} } : null;
   }
 
   /** Start pairing — QR mode, or phone mode when `phone` (intl, no +) is set. */
