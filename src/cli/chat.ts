@@ -521,12 +521,43 @@ export class ChatCommand extends BaseCommand {
       }
 
       // Ordering: the ANSWER is always printed first, then followups — the
-      // user asked for the content, not a menu. renderFollowups returns the
-      // picked prompt in interactive mode; single-shot just prints the list.
+      // user asked for the content, not a menu. On a real terminal the
+      // followups are SELECTABLE: picking a number runs that followup as the
+      // next turn (conversation threaded), pressing Enter ends the session.
+      // Non-TTY (scripts/CI/pipes) keeps the current print-and-exit behavior
+      // so automation is never blocked by a prompt.
       if (answer.content.trim()) {
         console.log('\n' + answer.content + '\n');
       }
-      await this.renderFollowups(answer.followups ?? [], false);
+      if (!process.stdin.isTTY) {
+        await this.renderFollowups(answer.followups ?? [], false);
+        return;
+      }
+      // Seed the continuation history with turn 1 so a picked followup has
+      // context (runChatAnswer pushes the user message itself).
+      const singleHistory: Array<{ role: string; content: string }> = [
+        { role: 'user', content: prompt },
+        ...(answer.content.trim() ? [{ role: 'assistant' as const, content: answer.content }] : []),
+      ];
+      let singleAnswer = answer;
+      while (true) {
+        const picked = await this.renderFollowups(singleAnswer.followups ?? [], true);
+        if (!picked) break;
+        const next = await this.runChatAnswer(
+          picked,
+          singleHistory,
+          { type, provider, model },
+          options || {},
+          cacheEnabled,
+          { auto: autoMode },
+          parseRequestSync(picked),
+        );
+        if (next.content.trim()) {
+          console.log('\n' + next.content + '\n');
+          singleHistory.push({ role: 'assistant', content: next.content });
+        }
+        singleAnswer = next;
+      }
       return;
     }
 
@@ -883,6 +914,11 @@ export class ChatCommand extends BaseCommand {
             return tool.run(args, ctx);
           },
           onEvent: (line) => {
+            // Clean output: the suggest_followups call is captured through the
+            // followups sink and rendered as the pickable menu — the raw tool
+            // JSON must never print as a progress line (v1.73 clean-messaging
+            // parity for the CLI + dashboard console).
+            if (line.includes('suggest_followups')) return;
             logger.info(line);
             // P3 — live progress for the dashboard chat console (the CLI
             // keeps logging to its own stdout).

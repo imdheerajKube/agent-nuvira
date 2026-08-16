@@ -789,6 +789,14 @@ export class ConfigCommand extends BaseCommand {
       const added = ids.filter((id) => !list.includes(id));
       pol[key] = [...list, ...added];
       logger.success(`Allowed ${added.length} ${kind}(s) on ${platform}: ${added.join(', ') || '(all already allowed)'}`);
+      if (kind === 'user') {
+        console.log('');
+        logger.info('ℹ  This is the VERIFIED list — these senders can now TRIGGER the agent');
+        logger.info('    when they message you on this platform (DMs and groups).');
+        if (platform === 'whatsapp') {
+          logger.info('    To also send TO them by name, add a mapping: buff whatsapp contact add <Name> <number>');
+        }
+      }
     } else {
       const removed = ids.filter((id) => list.includes(id));
       pol[key] = list.filter((id) => !ids.includes(id));

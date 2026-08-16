@@ -183,14 +183,21 @@ describe('/api/whatsapp', () => {
     expect(events.status).toBe(401);
   });
 
-  it('GET returns the pairing status (idle, not paired)', async () => {
+  it('GET returns the pairing status (idle, not paired) + send-by-name contacts', async () => {
     const res = await authedFetch('/api/whatsapp');
     expect(res.status).toBe(200);
-    const body = (await res.json()) as { ok: boolean; status: { state: string; paired: boolean; sessionDir: string } };
+    const body = (await res.json()) as {
+      ok: boolean;
+      status: { state: string; paired: boolean; sessionDir: string };
+      contacts?: Record<string, string>;
+    };
     expect(body.ok).toBe(true);
     expect(body.status.state).toBe('idle');
     expect(body.status.paired).toBe(false);
     expect(body.status.sessionDir).toBe(waSessionDir);
+    // The send-by-name mapping rides along (empty in a fresh temp session).
+    expect(body.contacts).toBeDefined();
+    expect(typeof body.contacts).toBe('object');
   });
 
   it('rejects writes from a viewer role (403)', async () => {

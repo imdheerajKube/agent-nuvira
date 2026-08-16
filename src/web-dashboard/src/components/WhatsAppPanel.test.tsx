@@ -34,8 +34,8 @@ const PAIRING_QR: WhatsAppPairStatus = {
   startedAt: Date.now(),
 };
 
-function mockStatus(status: WhatsAppPairStatus | null) {
-  vi.spyOn(dashboardAPI, 'getWhatsAppStatus').mockResolvedValue(status);
+function mockStatus(status: WhatsAppPairStatus | null, contacts: Record<string, string> = {}) {
+  vi.spyOn(dashboardAPI, 'getWhatsAppStatus').mockResolvedValue({ status, contacts });
   vi.spyOn(dashboardAPI, 'subscribeWhatsApp').mockReturnValue(() => {});
 }
 
@@ -110,5 +110,24 @@ describe('WhatsAppPanel', () => {
     await waitFor(() => expect(screen.getByRole('button', { name: /Unpair/ })).toBeTruthy());
     fireEvent.click(screen.getByRole('button', { name: /Unpair/ }));
     await waitFor(() => expect(unpair).toHaveBeenCalled());
+  });
+
+  it('lists send-by-name contacts and clarifies they do NOT grant trigger access', async () => {
+    mockStatus(PAIRED, { Daddy: '918178504516', Anuj: '918800425333' });
+    render(<WhatsAppPanel authed canWrite sessionExpired={() => {}} />);
+    await waitFor(() => expect(screen.getByText('📇 Send-by-name contacts')).toBeTruthy());
+    expect(screen.getByText('2 mapped')).toBeTruthy();
+    expect(screen.getByText('Daddy')).toBeTruthy();
+    expect(screen.getByText('Anuj')).toBeTruthy();
+    // The clarity note — send-by-name ≠ trigger access.
+    expect(screen.getByText(/let these numbers trigger the agent/)).toBeTruthy();
+    expect(screen.getByText(/verified list/)).toBeTruthy();
+    expect(screen.getByText(/buff config gateway allow whatsapp user/)).toBeTruthy();
+  });
+
+  it('shows an empty state when no contacts are mapped', async () => {
+    mockStatus(PAIRED, {});
+    render(<WhatsAppPanel authed canWrite sessionExpired={() => {}} />);
+    await waitFor(() => expect(screen.getByText(/none — add one with/)).toBeTruthy());
   });
 });

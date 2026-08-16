@@ -49,10 +49,11 @@ export type AdminAction =
   | 'sbom.write'         // `buff sbom --out <file>` (admin + operator)
   | 'skill.remove'       // `buff skill gc` real removal (admin)
   | 'cron.manage'        // `buff admin cron add/remove` (J2 — admin + operator)
-  | 'gateway.manage';    // `buff gateway alias add/remove` (J1 — admin + operator)
+  | 'gateway.manage'     // `buff gateway alias add/remove` + `buff gateway stop` (J1 — admin + operator)
+  | 'system.manage';     // `buff dashboard stop` / dashboard Shutdown buttons (admin — stopping a server is a system action)
 
 const PERMISSION_MATRIX: Record<Role, ReadonlySet<AdminAction>> = {
-  admin: new Set(['policy.read', 'policy.write', 'role.manage', 'credential.write', 'routing.operate', 'team.manage', 'sbom.write', 'skill.remove', 'cron.manage', 'gateway.manage']),
+  admin: new Set(['policy.read', 'policy.write', 'role.manage', 'credential.write', 'routing.operate', 'team.manage', 'sbom.write', 'skill.remove', 'cron.manage', 'gateway.manage', 'system.manage']),
   operator: new Set(['policy.read', 'routing.operate', 'team.manage', 'sbom.write', 'cron.manage', 'gateway.manage']),
   viewer: new Set(['policy.read']),
 };
@@ -68,6 +69,7 @@ const REQUIRED_ROLE_HINT: Record<AdminAction, string> = {
   'skill.remove': 'admin',
   'cron.manage': 'admin or operator',
   'gateway.manage': 'admin or operator',
+  'system.manage': 'admin',
 };
 
 /**

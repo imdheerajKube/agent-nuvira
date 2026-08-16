@@ -1837,6 +1837,27 @@ body {
   font-family: 'SF Mono', Menlo, Consolas, monospace;
 }
 
+.hub-chip-pending {
+  background: rgba(217, 119, 6, 0.14);
+  color: var(--accent-warn, #d97706);
+  border: 1px dashed rgba(217, 119, 6, 0.45);
+}
+
+.hub-unsaved-banner {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  flex-wrap: wrap;
+  margin: 4px 0 12px;
+  padding: 8px 12px;
+  border-radius: 6px;
+  border: 1px solid rgba(217, 119, 6, 0.45);
+  background: rgba(217, 119, 6, 0.08);
+  color: var(--text-primary);
+  font-size: 12px;
+}
+
 .hub-card-note {
   margin-top: 10px;
   font-size: 11px;

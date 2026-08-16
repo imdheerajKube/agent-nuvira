@@ -88,15 +88,18 @@ function mockReads(payload: HubData | null = HUB, auth: { configured: boolean; a
   // …and PlatformConfigSection (v1.69) fetches the transport list on mount.
   vi.spyOn(dashboardAPI, 'getPlatformConfigs').mockResolvedValue([]);
   vi.spyOn(dashboardAPI, 'getWhatsAppStatus').mockResolvedValue({
-    state: 'idle',
-    paired: false,
-    sessionDir: '/tmp/wa-session',
-    qr: null,
-    qrRaw: null,
-    pairingCode: null,
-    phone: null,
-    error: null,
-    startedAt: null,
+    status: {
+      state: 'idle',
+      paired: false,
+      sessionDir: '/tmp/wa-session',
+      qr: null,
+      qrRaw: null,
+      pairingCode: null,
+      phone: null,
+      error: null,
+      startedAt: null,
+    },
+    contacts: {},
   });
 }
 
@@ -231,12 +234,38 @@ describe('AgentHub', () => {
     fireEvent.click(within(card).getByRole('button', { name: /\+ User/ }));
 
     // Named chip on the verified list + a row in the Saved contacts table.
-    expect(within(card).getByText('Mom (+919818293808)')).toBeTruthy();
+    expect(within(card).getByText(/Mom \(\+919818293808\).*pending/)).toBeTruthy();
     expect(screen.getByText('Mom')).toBeTruthy();
     expect(screen.getByText('+919818293808')).toBeTruthy();
-    // The other saved users stay visible.
+    // The other saved users stay visible (saved ones have no pending marker).
     expect(within(card).getByText(/Daddy \(\+918178504516\)/)).toBeTruthy();
     expect(within(card).getByText('919999999999')).toBeTruthy();
+  });
+
+  it('Permissions: adding a user shows the UNSAVED banner until Save is pressed', async () => {
+    mockReads();
+    render(<AgentHub />);
+    await waitFor(() => expect(screen.getByRole('tab', { name: /Tools/ })).toBeTruthy());
+    fireEvent.click(screen.getByRole('tab', { name: /Channels/ }));
+    await waitFor(() => expect(screen.getByText(/Saved contacts \(validated list\)/)).toBeTruthy());
+
+    // No unsaved banner before any edit.
+    expect(screen.queryByText(/Unsaved changes/)).toBeNull();
+
+    const card = whatsappCard();
+    fireEvent.change(within(card).getByPlaceholderText('Name (e.g. Daddy) — optional'), { target: { value: 'Mom' } });
+    fireEvent.change(within(card).getByPlaceholderText('Contact no / sender id, or Allow-All'), { target: { value: '+919818293808' } });
+    fireEvent.click(within(card).getByRole('button', { name: /\+ User/ }));
+
+    // Draft edit → the banner appears, telling the user to press Save.
+    expect(screen.getByText(/Unsaved changes/)).toBeTruthy();
+
+    // Save persists and clears the banner (click the one INSIDE the banner).
+    const save = vi.spyOn(dashboardAPI, 'saveGatewayPolicies').mockResolvedValue({ ok: true });
+    const banner = screen.getByText(/Unsaved changes/).closest('.hub-unsaved-banner') as HTMLElement;
+    fireEvent.click(within(banner).getByRole('button', { name: /Save permissions/ }));
+    await waitFor(() => expect(save).toHaveBeenCalled());
+    await waitFor(() => expect(screen.queryByText(/Unsaved changes/)).toBeNull());
   });
 
   it('Permissions: removing ONE verified user keeps the rest of the saved list', async () => {

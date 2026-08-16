@@ -322,6 +322,7 @@ Commands:
   federation                    Remote agent federation
   team                          Team collaboration
   dashboard                     Launch web UI dashboard
+  dashboard stop                Gracefully stop a running dashboard server
   memory                        Memory compression and stats
   provider                      Provider list and health diagnostics
   security                      Security scan for PII, injections, and dangerous code

@@ -144,7 +144,91 @@ export class ExecuteCommand extends BaseCommand {
             logger.info('   🧪 Tests skipped (--skip-tests flag set)');
         }
         // ── Single-shot execution (goal was provided on command line) ──────────
-        await this.runSingleGoal(goal, mergedProvider, mergedModel, options);
+        // The run prints the orchestration report (including any suggested
+        // follow-up actions). On a real terminal the session does NOT dead-end
+        // there: the same "What next?" menu interactive dev mode shows appears
+        // after the result, so a picked followup runs as the next goal (or the
+        // user enters another goal / exits). Non-TTY (scripts/CI/pipes) keeps the
+        // current run-and-exit behavior so automation is never blocked by a
+        // prompt.
+        let singleResult = await this.runSingleGoal(goal, mergedProvider, mergedModel, options);
+        if (!process.stdin.isTTY)
+            return;
+        const sigintHandler = () => {
+            console.log('\n');
+            process.exit(0);
+        };
+        process.on('SIGINT', sigintHandler);
+        const singleHistory = [];
+        let singleLastFailed = null;
+        let singleGoal = goal;
+        // Continuation loop — mirrors the interactive dev-mode post-execution
+        // flow (menu → dispatch → next goal) so a single-shot run on a terminal
+        // offers its followups as selectable next steps instead of quitting.
+        while (true) {
+            // The menu (follow-ups after a success, failure analysis + recovery
+            // after a failure) appears after EVERY run, including the first.
+            const { action: nextAction, updatedLastFailed } = await this.handlePostExecution(singleGoal, singleResult, singleHistory, singleLastFailed, mergedProvider, mergedModel, options);
+            singleLastFailed = updatedLastFailed;
+            if (nextAction.type === 'exit')
+                break;
+            if (nextAction.type === 'switch-model') {
+                const picked = await showModelPicker(this.configManager);
+                if (picked) {
+                    if (picked.provider === 'auto' || isAutoModel(picked.model)) {
+                        mergedProvider = 'auto';
+                        mergedModel = 'auto';
+                    }
+                    else {
+                        if (picked.provider !== mergedProvider) {
+                            const resolved = resolveProvider(this.configManager, picked.provider);
+                            mergedProvider = resolved.type;
+                        }
+                        mergedModel = picked.model;
+                    }
+                    logger.success(`✅ Switched to ${mergedModel}\n`);
+                }
+            }
+            else if (nextAction.type === 'history') {
+                this.showSessionHistory(singleHistory);
+            }
+            else if (nextAction.type === 'retry-fix' && singleLastFailed) {
+                logger.highlight('═'.repeat(60));
+                logger.highlight('  🔧  Auto-fixing Last Failed Goal');
+                logger.highlight('═'.repeat(60));
+                console.log(`\n  Goal: ${singleLastFailed.goal}\n`);
+                const fixResult = await this.runSingleGoal(singleLastFailed.goal, mergedProvider, mergedModel, { ...options, verbose: true });
+                singleLastFailed = (await this.handlePostExecution(singleLastFailed.goal, fixResult, singleHistory, singleLastFailed, mergedProvider, mergedModel, options)).updatedLastFailed;
+            }
+            // A picked followup runs immediately (auto-continue, like interactive
+            // dev mode); everything else falls through to the next-goal prompt.
+            let nextGoalText;
+            if (nextAction.type === 'followup' && nextAction.goal) {
+                logger.highlight('═'.repeat(60));
+                logger.highlight('  💡  Executing Follow-up Goal');
+                logger.highlight('═'.repeat(60));
+                console.log(`\n  ${nextAction.goal}\n`);
+                nextGoalText = nextAction.goal;
+            }
+            const nextGoal = nextGoalText ?? (await this.readGoal());
+            if (!nextGoal)
+                continue;
+            if (nextGoal.startsWith('/')) {
+                if (nextGoal === '/exit' || nextGoal === '/quit')
+                    break;
+                continue;
+            }
+            singleGoal = nextGoal;
+            singleResult = await this.runSingleGoal(singleGoal, mergedProvider, mergedModel, options);
+            if (!singleResult.success && singleResult.orchestrationResult) {
+                singleLastFailed = { goal: singleGoal, orchestrationResult: singleResult.orchestrationResult };
+            }
+            else if (singleResult.success) {
+                singleLastFailed = null;
+            }
+        }
+        process.off('SIGINT', sigintHandler);
+        logger.success('\nDone. Happy coding! 🚀\n');
     }
     // ─── Interactive Development Mode ─────────────────────────────────────────
     /**

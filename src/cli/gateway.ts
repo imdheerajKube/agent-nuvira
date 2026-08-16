@@ -100,6 +100,12 @@ export class GatewayCommand {
       .option('--no-events', 'Do not stream board events to channels', false)
       .action(async (opts) => this.start(Number(opts.port), opts.host, opts.events));
 
+    cmd
+      .command('stop')
+      .description('Stop a running gateway gracefully (SIGTERM — from any terminal)')
+      .option('--port <n>', 'Webhook port the gateway is bound to (default 8787)', '8787')
+      .action(async (opts) => this.stop(Number(opts.port)));
+
     return cmd;
   }
 
@@ -300,6 +306,20 @@ export class GatewayCommand {
       logger.success(`Alias '${alias}' removed`);
     } else {
       logger.warn(`No alias '${alias}' found`);
+    }
+  }
+
+  // ─── stop ─────────────────────────────────────────────────────────────────
+
+  private async stop(port: number): Promise<void> {
+    if (!guardRbacAction('gateway.manage')) return;
+    const { stopGateway } = await import('./process-control.js');
+    const result = await stopGateway({ port });
+    if (result.stopped) {
+      logger.success(`Gateway stopped (PID ${result.pid})`);
+    } else {
+      logger.error(`Could not stop the gateway: ${result.reason ?? 'no running gateway found'}`);
+      process.exitCode = 1;
     }
   }
 

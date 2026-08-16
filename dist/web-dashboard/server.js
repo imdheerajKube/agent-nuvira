@@ -1851,6 +1851,44 @@ export function setChatConsoleForTest(console) {
     chatConsole = console;
 }
 /**
+ * The LIVE server handle, kept module-level so the Shutdown route can close
+ * the listeners (primary + IPv6 twin) before exiting — a dashboard stopped
+ * from its own UI must free the port immediately, not wait for the OS.
+ * Set by createDashboardServer on bind; cleared on shutdown.
+ */
+let activeServerHandle = null;
+/**
+ * Default shutdown action for POST /api/admin/shutdown { target: 'dashboard' }:
+ * close both listeners, then exit after a short tick so the HTTP 200 response
+ * flushes to the browser first (the page shows the result, then disconnects).
+ */
+let dashboardShutdownAction = () => {
+    setTimeout(() => {
+        try {
+            activeServerHandle?.server.close();
+        }
+        catch { /* best-effort */ }
+        if (activeServerHandle?.ipv6Twin) {
+            try {
+                activeServerHandle.ipv6Twin.close();
+            }
+            catch { /* best-effort */ }
+        }
+        process.exit(0);
+    }, 150);
+};
+/**
+ * Run the dashboard shutdown action (test hook: swap to a no-op so API tests
+ * exercising /api/admin/shutdown never exit the test runner).
+ */
+export function setDashboardShutdownForTest(action) {
+    dashboardShutdownAction = action ?? (() => { });
+}
+/** Invoke the current dashboard shutdown action (used by the shutdown route). */
+function runDashboardShutdown() {
+    dashboardShutdownAction();
+}
+/**
  * Test hook: swap the pairing manager (e.g. for a fake-bridge manager) so
  * /api/whatsapp integration tests never open a real WhatsApp connection.
  * Routes read the module variable at request time, so this works anytime.
@@ -2082,6 +2120,55 @@ function handleRequest(req, res) {
     if (pathname === '/api/admin/logout' && req.method === 'POST') {
         adminSessions.revoke(bearerToken(req));
         writeJson(res, 200, { ok: true });
+        return;
+    }
+    // ── Shutdown (dashboard / gateway) — the GUI twin of `buff dashboard stop`
+    // and `buff gateway stop`. POST /api/admin/shutdown with { target }:
+    //   target 'dashboard' → respond 200, then close the listeners + exit the
+    //       server process (the browser sees the page disconnect — expected).
+    //   target 'gateway'   → SIGTERM the running `gateway start` process (found
+    //       by port 8787 or by command-line match), respond with whether it was
+    //       found/stopped.
+    // RBAC: dashboard → system.manage (admin); gateway → gateway.manage
+    // (admin + operator — same as `buff gateway alias` / `buff gateway stop`).
+    // A test hook (setDashboardShutdownForTest) swaps the exit so API tests
+    // never kill the test runner.
+    if (pathname === '/api/admin/shutdown' && req.method === 'POST') {
+        void (async () => {
+            const session = adminSessions.validate(bearerToken(req));
+            if (!session) {
+                writeJson(res, 401, { ok: false, error: 'Not authenticated — log in first.' });
+                return;
+            }
+            const body = await readJsonBody(req);
+            const target = body?.target;
+            if (target !== 'dashboard' && target !== 'gateway') {
+                writeJson(res, 400, { ok: false, error: 'Invalid target — expected "dashboard" or "gateway".' });
+                return;
+            }
+            const required = target === 'dashboard' ? 'system.manage' : 'gateway.manage';
+            if (!roleCan(session.role, required)) {
+                writeJson(res, 403, {
+                    ok: false,
+                    error: `Access denied — role '${session.role}' cannot shut down the ${target} (requires ${required === 'system.manage' ? 'admin' : 'admin or operator'}).`,
+                });
+                return;
+            }
+            if (target === 'gateway') {
+                const { stopGateway } = await import('../cli/process-control.js');
+                const result = await stopGateway();
+                if (result.stopped) {
+                    writeJson(res, 200, { ok: true, target, stopped: true, pid: result.pid });
+                }
+                else {
+                    writeJson(res, 200, { ok: true, target, stopped: false, reason: result.reason ?? 'no running gateway found' });
+                }
+                return;
+            }
+            // Dashboard target: confirm, then stop this very server.
+            writeJson(res, 200, { ok: true, target });
+            runDashboardShutdown();
+        })();
         return;
     }
     // ── Agent Hub toggles (I5) — admin-gated writes honored by the I1 runtime
@@ -2857,14 +2944,23 @@ function handleRequest(req, res) {
     // the channel send-test and the CLI's own pairing RBAC guard. The manager
     // runs the real BaileysBridge in this process; QRs and the 8-char code
     // stream over SSE so the panel never polls.
-    // GET /api/whatsapp — pairing status (state, QR data URL, code, session dir).
+    // GET /api/whatsapp — pairing status (state, QR data URL, code, session dir)
+    // + the send-by-name contact mappings (bridge contacts file).
     if (pathname === '/api/whatsapp' && req.method === 'GET') {
-        const session = adminSessions.validate(bearerToken(req));
-        if (!session) {
-            writeJson(res, 401, { ok: false, error: 'Not authenticated — log in first.' });
-            return;
-        }
-        writeJson(res, 200, { ok: true, status: whatsappPairing.statusSnapshot() });
+        void (async () => {
+            const session = adminSessions.validate(bearerToken(req));
+            if (!session) {
+                writeJson(res, 401, { ok: false, error: 'Not authenticated — log in first.' });
+                return;
+            }
+            const { readContactsFile } = await import('../gateway/whatsapp/contacts.js');
+            const { whatsappSessionDir } = await import('../gateway/whatsapp/session.js');
+            writeJson(res, 200, {
+                ok: true,
+                status: whatsappPairing.statusSnapshot(),
+                contacts: readContactsFile(whatsappSessionDir()),
+            });
+        })();
         return;
     }
     // POST /api/whatsapp/pair — start pairing { phone?: string } (QR or code mode).
@@ -3349,6 +3445,7 @@ export function createDashboardServer(opts) {
     // family guess must adapt. If the twin hits EADDRINUSE, the primary took
     // that family; retry on the remaining loopback family instead of giving up.
     const handle = { server, port: bindPort, host: bindHost };
+    activeServerHandle = handle;
     const OTHER_LOOPBACK = { '127.0.0.1': '::1', '::1': '127.0.0.1' };
     const isLoopbackHost = bindHost === '127.0.0.1' || bindHost === 'localhost' || bindHost === '::1';
     const fmtUrl = (host, port) => host.includes(':') ? `http://[${host}]:${port}` : `http://${host}:${port}`;

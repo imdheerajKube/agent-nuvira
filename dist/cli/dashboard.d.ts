@@ -34,6 +34,13 @@ export declare class DashboardCommand extends BaseCommand {
     private closeAllListeners;
     private launchDashboard;
     /**
+     * `dashboard stop` — locate a RUNNING dashboard and stop it gracefully
+     * (SIGTERM). Works from any terminal, not just the one that launched it:
+     * the dashboard's serve() handler shuts down cleanly on SIGTERM. RBAC:
+     * system.manage (admin) — stopping a whole server is a system action.
+     */
+    private stopDashboard;
+    /**
      * Bind one server on the port and keep serving until shutdown.
      *
      * Returns:
