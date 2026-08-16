@@ -1056,6 +1056,8 @@ export interface HubData {
     policies: Record<string, HubChannelPolicy>;
     /** Status recipients — always get pipeline completion summaries. */
     statusRecipients: string[];
+    /** Friendly display labels for status recipients (resolved name → number). */
+    statusRecipientDisplay: Record<string, string>;
     inbox: {
       total: number;
       pipeline: number;

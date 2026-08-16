@@ -2,6 +2,15 @@
 
 All notable changes to **Agent-Nuvira** are documented in this file.
 
+## v1.73.0 — WhatsApp LID fix + clean messaging output + gateway hardening
+
+- **WhatsApp LID→phone-number resolution** — WhatsApp's privacy rollout delivers DMs as random `@lid` jids (NOT phone numbers), so verified senders and contacts silently failed the allow-list. The Baileys bridge now learns LID→PN pairs from `lid-mapping.update` events, contact sync (`lid`/`phoneNumber`) and the paired account's own `creds.me`, translates every inbound sender + group participant to its phone-number JID **before** the policy gate, and persists the mappings (`lid-mappings.json`) so restarts keep working
+- **Clean messaging output (gateway)** — messaging channels now receive ONLY the final natural-language answer plus the model's suggested followups rendered as a readable `Try next:` list. No internal progress, no "routed to…", no raw `⚙ suggest_followups({…})` JSON ever reaches a sender (a 4,000-char guard drops followups, never the answer). Progress visibility in **chat / execute / dashboard console is unchanged** — it stays in the live UI and the audit logs
+- **Permissions UX fixes** — removing ONE allowed contact no longer blanks the whole list (the dashboard draft now merges over the saved policy), and the policies API merges per-key so toggling a single flag (e.g. `silentDrop`) never wipes a platform's saved `allowedUsers`
+- **Status-recipient display** — the dashboard resolves each recipient to a friendly label (`whatsapp:Daddy → +918178504516` via the contacts file; numbers get the country-code `+`), so a user never sees a bare alias
+- **Gateway start from the dashboard never times out** — the "Start gateway" preset ran under the task console's 5-minute timeout and was silently SIGTERM'd; `timeoutMs: 0` (indefinite) is now supported end-to-end and the gateway keeps running across tab switches until you press Cancel
+- **4,539 tests passing across 195 files**
+
 ## v1.72.0 — Gateway intelligence: chat answers, delivery tools, validated senders + status recipients
 
 - **Chat answers on the gateway** — `write`/`explain`/`ask` intents from any messaging channel now run a REAL chat answer through the same engine as the dashboard console (with origin context, live progress streamed to the channel, and a non-hanging askUser that forwards clarifications back to the channel). No more "I understood" stub for a poem request — the model actually writes the poem

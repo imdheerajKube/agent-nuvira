@@ -242,9 +242,11 @@ export default function AgentHub() {
     setPolicyDraft((prev) => {
       const pol = { ...(prev[platform] ?? {}) };
       const key = kind === 'user' ? 'allowedUsers' : 'allowedGroups';
-      const list = (pol[key] ?? []).filter((x) => x !== id);
-      if (list.length > 0) pol[key] = list;
-      else delete pol[key];
+      // ALWAYS write the list back — even when empty — so the draft is an
+      // explicit "these are the allowed ids" statement (empty = none). The
+      // render below merges the draft OVER the saved policy, so removing ONE
+      // entry must keep the remaining saved ones visible.
+      pol[key] = (pol[key] ?? []).filter((x) => x !== id);
       return { ...prev, [platform]: pol };
     });
   };
@@ -596,7 +598,10 @@ export default function AgentHub() {
           </p>
           <div className="hub-permissions">
             {data.channels.platforms.map((p) => {
-              const pol = policyDraft[p.platform] ?? data.channels.policies[p.platform] ?? {};
+              // Merge the draft OVER the saved policy: a partial draft (e.g. a
+              // single removed user, or a flag toggle) must not blank the
+              // saved list — otherwise removing one contact hid all of them.
+              const pol = { ...(data.channels.policies[p.platform] ?? {}), ...(policyDraft[p.platform] ?? {}) };
               const users = pol.allowedUsers ?? [];
               const groups = pol.allowedGroups ?? [];
               return (
@@ -676,15 +681,16 @@ export default function AgentHub() {
           <h3 className="section-subtitle" style={{ marginTop: 22 }}>📊 Status recipients</h3>
           <p className="admin-hint">
             Contacts/groups that ALWAYS receive the pipeline completion summary, whoever triggered it.
-            Use an alias or <code>platform:channelId</code> — e.g. <code>whatsapp:Daddy</code>,
-            <code> telegram:123456</code>, <code>slack:ops</code>.
+            Use a contact name, number, or <code>platform:channelId</code> — e.g.{' '}
+            <code>whatsapp:Mom</code>, <code>whatsapp:+919818293808</code>, <code>telegram:123456</code>,{' '}
+            <code>slack:ops</code>.
           </p>
           {statusRecipients.length > 0 ? (
             <div className="hub-alias-list">
               {statusRecipients.map((t) => (
                 <div className="hub-alias-row" key={t}>
                   <span className="hub-chip">📊</span>
-                  <span className="admin-hint">{t}</span>
+                  <span className="admin-hint">{data?.channels?.statusRecipientDisplay?.[t] ?? t}</span>
                   <button className="admin-refresh-btn" disabled={policyBusy} onClick={() => setStatusRecipients((s) => s.filter((x) => x !== t))}>✕</button>
                 </div>
               ))}
@@ -697,7 +703,7 @@ export default function AgentHub() {
               type="text"
               value={statusRecipientInput}
               onChange={(e) => setStatusRecipientInput(e.target.value)}
-              placeholder="whatsapp:Daddy or telegram:123456"
+              placeholder="whatsapp:Mom or whatsapp:+919818293808"
               disabled={policyBusy}
               maxLength={128}
             />

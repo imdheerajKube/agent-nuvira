@@ -219,6 +219,38 @@ describe('readHubData', () => {
     expect(hub.channels.statusRecipients).toEqual(['whatsapp:Daddy', 'slack:ops']);
   });
 
+  it('resolves status-recipient display labels (name → number, country-code +)', () => {
+    // A contacts file next to the WhatsApp session lets the dashboard show
+    // what a recipient ALIAS actually maps to ("Daddy → +918178504516") — so a
+    // user never sees a bare personal name without its number.
+    const waDir = mkdtempSync(join(tmpdir(), 'buff-hub-wa-'));
+    const prev = process.env.BUFF_WHATSAPP_SESSION_DIR;
+    try {
+      process.env.BUFF_WHATSAPP_SESSION_DIR = waDir;
+      mkdirSync(waDir, { recursive: true });
+      writeFileSync(join(waDir, 'contacts.json'), JSON.stringify({ Daddy: '918178504516', Mom: '919818293808' }), 'utf-8');
+      writeFileSync(
+        join(cfgDir, 'buffconfig.json'),
+        JSON.stringify({
+          gateway: { statusRecipients: ['whatsapp:Daddy', 'whatsapp:+919818293808', 'whatsapp:Mom', 'slack:ops'] },
+        }),
+      );
+      const hub = readHubData();
+      expect(hub.channels.statusRecipients).toEqual(['whatsapp:Daddy', 'whatsapp:+919818293808', 'whatsapp:Mom', 'slack:ops']);
+      expect(hub.channels.statusRecipientDisplay).toEqual({
+        'whatsapp:Daddy': 'whatsapp:Daddy → +918178504516',
+        'whatsapp:+919818293808': 'whatsapp:+919818293808',
+        'whatsapp:Mom': 'whatsapp:Mom → +919818293808',
+      });
+      // slack:ops has no display entry — the panel falls back to the raw target.
+      expect(hub.channels.statusRecipientDisplay['slack:ops']).toBeUndefined();
+    } finally {
+      if (prev === undefined) delete process.env.BUFF_WHATSAPP_SESSION_DIR;
+      else process.env.BUFF_WHATSAPP_SESSION_DIR = prev;
+      try { rmSync(waDir, { recursive: true, force: true }); } catch { /* best-effort */ }
+    }
+  });
+
   it('reflects gateway.policies from the config file (the Permissions page source)', () => {
     // What `buff config gateway allow …` / the policies API write:
     writeFileSync(

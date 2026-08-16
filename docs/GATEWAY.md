@@ -7,6 +7,25 @@
 > runs the *same* agent pipeline as `agent-nuvira chat` / `agent-nuvira execute`
 > and replies in the channel — streaming live progress as it works.
 
+> **Updated (v1.73 round):**
+> - **Clean messaging output** — chat requests answered on a channel now send
+>   ONLY the final natural-language answer + the model's suggested followups
+>   (a readable `Try next:` list). Internal progress ("routed to…", raw tool
+>   calls like `⚙ suggest_followups({…})`) never reaches the sender — it stays
+>   in the audit logs. Live progress streaming still works in `chat` /
+>   `execute` / the dashboard console exactly as before.
+> - **WhatsApp LID fix** — WhatsApp's privacy rollout delivers DMs as random
+>   `@lid` ids, not phone numbers; the bridge now translates every sender +
+>   group participant to its phone-number JID (learned from Baileys
+>   `lid-mapping.update`, contact sync, and the paired account itself,
+>   persisted to `lid-mappings.json`), so verified senders and contacts match
+>   your allow-list by number.
+> - **Dashboard polish** — status recipients display resolved labels
+>   (`whatsapp:Daddy → +918178504516`); removing one allowed contact keeps the
+>   rest; toggling a single policy flag never wipes a platform's saved users;
+>   "Start gateway" runs with **no timeout** (it used to be killed after 5
+>   minutes) and keeps running while you switch tabs.
+
 This guide is written for someone who has never used Agent-Nuvira. If you
 follow it top to bottom, you'll have a working channel in about 10 minutes and
 full control over all 22 platforms by the end.

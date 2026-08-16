@@ -14,7 +14,16 @@ import { tmpdir } from 'node:os';
 
 import { normalizeWhatsAppJid, type WhatsAppBridge } from '../../src/gateway/whatsapp/bridge.js';
 import { WhatsAppBridgeAdapter } from '../../src/gateway/adapters.js';
-import { BaileysBridge, isSelfChatEnabled, normalizePairingPhone, renderQrToTerminal, renderQrToDataUrl } from '../../src/gateway/whatsapp/baileys-bridge.js';
+import {
+  BaileysBridge,
+  isSelfChatEnabled,
+  normalizePairingPhone,
+  renderQrToTerminal,
+  renderQrToDataUrl,
+  LidJidMapper,
+  readLidMappingsFile,
+  writeLidMappingsFile,
+} from '../../src/gateway/whatsapp/baileys-bridge.js';
 import { hasWhatsAppSession, whatsappSessionDir } from '../../src/gateway/whatsapp/session.js';
 
 // A controllable fake baileys module for the pair() AbortSignal test — the
@@ -198,6 +207,45 @@ describe('WhatsAppBridgeAdapter', () => {
     expect(received).toHaveLength(1);
     expect(received[0]).toMatchObject({ platform: 'whatsapp', channelId: '15551234567@s.whatsapp.net', text: 'hi there' });
     expect(fake.connected).toBe(false);
+  });
+});
+
+// ─── LidJidMapper — privacy-rollout LID→PN resolution ──────────────────────
+
+describe('LidJidMapper (privacy-rollout LID→PN resolution)', () => {
+  it('resolves a learned @lid jid to its phone-number jid and passes others through', () => {
+    const mapper = new LidJidMapper();
+    mapper.learn('123456789012345@lid', '918800663237@s.whatsapp.net');
+    expect(mapper.resolve('123456789012345@lid')).toBe('918800663237@s.whatsapp.net');
+    expect(mapper.resolve('918800663237@s.whatsapp.net')).toBe('918800663237@s.whatsapp.net'); // non-LID passthrough
+    expect(mapper.resolve('918800604222:13@s.whatsapp.net')).toBe('918800604222:13@s.whatsapp.net'); // device suffix untouched
+    expect(mapper.resolve('1203630283471234@g.us')).toBe('1203630283471234@g.us'); // groups untouched
+    expect(mapper.resolve(undefined)).toBeUndefined();
+    // Unknown LID passes through (mapping arrives shortly after).
+    expect(mapper.resolve('999999999999999@lid')).toBe('999999999999999@lid');
+  });
+
+  it('accepts bare digits and ignores invalid pairs', () => {
+    const mapper = new LidJidMapper();
+    mapper.learn('123456789012345', '918800663237');
+    expect(mapper.resolve('123456789012345@lid')).toBe('918800663237@s.whatsapp.net');
+    mapper.learn('', '918800663237'); // empty lid
+    mapper.learn('123456789012345', ''); // empty pn
+    expect(mapper.size).toBe(1);
+  });
+
+  it('persists learned pairs and reloads them', () => {
+    const dir = mkdtempSync(join(tmpdir(), 'buff-wa-lid-'));
+    try {
+      const mapper = new LidJidMapper(dir);
+      mapper.learn('123456789012345@lid', '918800663237@s.whatsapp.net');
+      writeLidMappingsFile(dir, mapper.pairs());
+      expect(readLidMappingsFile(dir)).toEqual([{ lid: '123456789012345@lid', pn: '918800663237@s.whatsapp.net' }]);
+      const reloaded = new LidJidMapper(dir);
+      expect(reloaded.resolve('123456789012345@lid')).toBe('918800663237@s.whatsapp.net');
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
   });
 });
 
@@ -478,6 +526,67 @@ describe('BaileysBridge.ensureSocket() self-healing (fake baileys)', () => {
     });
     await waitFor(() => received.length === 1);
     expect(received[0]).toEqual({ from: '15551234567@s.whatsapp.net', text: 'fix the failing test' });
+    await bridge.disconnect();
+  }, 10_000);
+
+  it('translates a privacy-rollout LID sender to its phone-number jid before delivering', async () => {
+    const waitFor = async (fn: () => boolean, timeoutMs = 3_000): Promise<void> => {
+      const start = Date.now();
+      while (!fn()) {
+        if (Date.now() - start > timeoutMs) throw new Error('waitFor timeout');
+        await new Promise((r) => setTimeout(r, 50));
+      }
+    };
+    const bridge = new BaileysBridge(sessionDir, { reconnectDelayMs: 20 });
+    const received: Array<{ from: string; text: string }> = [];
+    await bridge.connect((from, text) => received.push({ from, text }));
+    // Baileys learns the pair (linked-profile notification / contactAction
+    // sync) and emits lid-mapping.update — the bridge mirrors it.
+    (fakeBaileys.sockets[0].ev as { emit: (e: string, ...a: unknown[]) => void }).emit('lid-mapping.update', {
+      lid: '123456789012345@lid',
+      pn: '918800663237@s.whatsapp.net',
+    });
+    // The DM arrives with the sender's LID as remoteJid — NOT the number.
+    (fakeBaileys.sockets[0].ev as { emit: (e: string, ...a: unknown[]) => void }).emit('messages.upsert', {
+      type: 'notify',
+      messages: [{ key: { remoteJid: '123456789012345@lid' }, message: { conversation: 'send a good night message to Mother' } }],
+    });
+    await waitFor(() => received.length === 1);
+    // The policy gate compares digits — the bridge must hand it the PN jid.
+    expect(received[0].from).toBe('918800663237@s.whatsapp.net');
+    expect(received[0].text).toBe('send a good night message to Mother');
+    // The learned pair is persisted for the next process.
+    expect(readLidMappingsFile(sessionDir)).toEqual([{ lid: '123456789012345@lid', pn: '918800663237@s.whatsapp.net' }]);
+    await bridge.disconnect();
+  }, 10_000);
+
+  it('translates a group participant LID to its phone-number jid', async () => {
+    const waitFor = async (fn: () => boolean, timeoutMs = 3_000): Promise<void> => {
+      const start = Date.now();
+      while (!fn()) {
+        if (Date.now() - start > timeoutMs) throw new Error('waitFor timeout');
+        await new Promise((r) => setTimeout(r, 50));
+      }
+    };
+    const bridge = new BaileysBridge(sessionDir, { reconnectDelayMs: 20 });
+    const received: Array<{ from: string; text: string; participant?: string }> = [];
+    await bridge.connect((from, text, participant) => received.push({ from, text, participant }));
+    (fakeBaileys.sockets[0].ev as { emit: (e: string, ...a: unknown[]) => void }).emit('lid-mapping.update', {
+      lid: '987654321098765@lid',
+      pn: '918800425333@s.whatsapp.net',
+    });
+    (fakeBaileys.sockets[0].ev as { emit: (e: string, ...a: unknown[]) => void }).emit('messages.upsert', {
+      type: 'notify',
+      messages: [
+        {
+          key: { remoteJid: '1203630283471234@g.us', participant: '987654321098765@lid' },
+          message: { conversation: 'buff fix the tests' },
+        },
+      ],
+    });
+    await waitFor(() => received.length === 1);
+    expect(received[0].from).toBe('1203630283471234@g.us');
+    expect(received[0].participant).toBe('918800425333@s.whatsapp.net');
     await bridge.disconnect();
   }, 10_000);
 

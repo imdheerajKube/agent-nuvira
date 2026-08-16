@@ -170,7 +170,11 @@ export class TaskRunner {
       };
     }
 
-    const timeoutMs = Math.max(1_000, opts.timeoutMs ?? DEFAULT_TIMEOUT_MS);
+    // timeoutMs <= 0 means NO timeout (e.g. `gateway start` — a foreground
+    // server process must not be SIGTERM'd after a few minutes). undefined
+    // falls back to the default.
+    const timeoutMs =
+      opts.timeoutMs === undefined ? DEFAULT_TIMEOUT_MS : opts.timeoutMs <= 0 ? 0 : Math.max(1_000, opts.timeoutMs);
     const cwd = opts.cwd ?? this.opts.cwd ?? process.cwd();
     const id = randomUUID();
     const record: TaskRecord = {
@@ -233,21 +237,24 @@ export class TaskRunner {
       this.emit(id, { kind: 'status', status: { status, exitCode, durationMs: record.durationMs } });
     };
 
-    const timer = setTimeout(() => {
-      this.timedOut.add(id);
-      try {
-        child.kill('SIGTERM');
-      } catch {
-        /* best-effort */
-      }
-      killGrace = setTimeout(() => {
+    let timer: ReturnType<typeof setTimeout> | null = null;
+    if (timeoutMs > 0) {
+      timer = setTimeout(() => {
+        this.timedOut.add(id);
         try {
-          child.kill('SIGKILL');
+          child.kill('SIGTERM');
         } catch {
           /* best-effort */
         }
-      }, KILL_GRACE_MS);
-    }, timeoutMs);
+        killGrace = setTimeout(() => {
+          try {
+            child.kill('SIGKILL');
+          } catch {
+            /* best-effort */
+          }
+        }, KILL_GRACE_MS);
+      }, timeoutMs);
+    }
 
     child.stdout?.on('data', (chunk: Buffer) => this.appendLog(record, 'stdout', chunk.toString('utf-8')));
     child.stderr?.on('data', (chunk: Buffer) => this.appendLog(record, 'stderr', chunk.toString('utf-8')));
@@ -259,7 +266,7 @@ export class TaskRunner {
     });
 
     child.on('exit', (code) => {
-      clearTimeout(timer);
+      if (timer) clearTimeout(timer);
       if (this.cancelled.has(id)) {
         settle('cancelled', code ?? null);
         return;

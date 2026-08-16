@@ -132,6 +132,21 @@ describe('TaskRunner', () => {
     expect(status!.status).toBe('timeout');
   });
 
+  it('timeoutMs 0 means NO timeout — the task keeps running until cancelled', async () => {
+    // Regression: the dashboard's "Start gateway" preset used the default
+    // 5-minute task timeout, so a foreground gateway was SIGTERM'd while the
+    // user believed it was still running. timeoutMs 0 = run forever.
+    process.env.BUFF_TASK_FIXTURE_MODE = 'sleep';
+    const runner = makeRunner();
+    const { task } = runner.start(['sleep'], { timeoutMs: 0 });
+    // Well past the 300ms timeout of the test above: it must STILL be running.
+    await new Promise((r) => setTimeout(r, 1_500));
+    expect(runner.get(task!.id)!.status).toBe('running');
+    expect(runner.cancel(task!.id)).toBe(true);
+    const status = await waitForStatus(runner, task!.id);
+    expect(status!.status).toBe('cancelled');
+  }, 15_000);
+
   it('rejects empty args, non-string args, and oversized arg lists', () => {
     const runner = makeRunner();
     expect(runner.start([]).ok).toBe(false);
