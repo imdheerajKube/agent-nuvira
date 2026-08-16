@@ -269,6 +269,34 @@ describe('AgentHub', () => {
     await waitFor(() => expect(screen.queryByText(/Unsaved changes/)).toBeNull());
   });
 
+  it('privacy: sender ids are masked by default; the admin toggle reveals full ids', async () => {
+    mockReads();
+    render(<AgentHub />);
+    await waitFor(() => expect(screen.getByRole('tab', { name: /Tools/ })).toBeTruthy());
+    fireEvent.click(screen.getByRole('tab', { name: /Channels/ }));
+    await waitFor(() => expect(screen.getByText(/Delivery ledger/)).toBeTruthy());
+
+    // Masked by default — the full fixture number never appears.
+    expect(screen.queryByText('+919876543210')).toBeNull();
+    expect(screen.getAllByText(/\+91\*\*\*/).length).toBeGreaterThan(0);
+
+    // Flip the admin-only toggle → full ids render (both fixture ids show).
+    fireEvent.click(screen.getByRole('checkbox', { name: /Show full sender ids/ }));
+    expect(screen.getAllByText('+919876543210').length).toBeGreaterThan(0);
+    expect(screen.getAllByText('919999999999').length).toBeGreaterThan(0);
+  });
+
+  it('privacy: a viewer cannot toggle full sender ids', async () => {
+    mockReads(HUB, { configured: true, authenticated: true, role: 'viewer' });
+    render(<AgentHub />);
+    await waitFor(() => expect(screen.getByRole('tab', { name: /Tools/ })).toBeTruthy());
+    fireEvent.click(screen.getByRole('tab', { name: /Channels/ }));
+    await waitFor(() => expect(screen.getByText(/Delivery ledger/)).toBeTruthy());
+
+    const toggle = screen.getByRole('checkbox', { name: /Show full sender ids/ }) as HTMLInputElement;
+    expect(toggle.disabled).toBe(true);
+  });
+
   it('Permissions: removing ONE verified user keeps the rest of the saved list', async () => {
     // Regression: the draft is seeded from the SAVED list, so removing one
     // entry must not blank (and on save, silently delete) the others.

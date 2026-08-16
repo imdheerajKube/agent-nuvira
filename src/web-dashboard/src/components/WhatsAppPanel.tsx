@@ -35,9 +35,11 @@ interface Props {
   canWrite: boolean;
   /** Called when a write returns 401 (session expired). */
   sessionExpired: () => void;
+  /** Reveal full sender ids instead of masked ones (Agent Hub privacy toggle). */
+  reveal?: boolean;
 }
 
-export default function WhatsAppPanel({ authed, canWrite, sessionExpired }: Props) {
+export default function WhatsAppPanel({ authed, canWrite, sessionExpired, reveal = false }: Props) {
   const [status, setStatus] = useState<WhatsAppPairStatus | null>(null);
   const [contacts, setContacts] = useState<Record<string, string>>({});
   const [phone, setPhone] = useState('');
@@ -256,7 +258,7 @@ export default function WhatsAppPanel({ authed, canWrite, sessionExpired }: Prop
             Object.entries(contacts).map(([name, number]) => (
               <div className="hub-alias-row" key={name}>
                 <span className="hub-chip">{name}</span>
-                <span className="admin-hint">→ {maskSenderId(number)}</span>
+                <span className="admin-hint">→ {reveal ? number : maskSenderId(number)}</span>
               </div>
             ))
           )}

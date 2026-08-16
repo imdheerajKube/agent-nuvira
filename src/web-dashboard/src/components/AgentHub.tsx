@@ -73,12 +73,19 @@ export default function AgentHub() {
   const [policyMsg, setPolicyMsg] = useState<{ kind: 'ok' | 'err'; text: string } | null>(null);
   const [policyUserInput, setPolicyUserInput] = useState<Record<string, string>>({});
   const [policyGroupInput, setPolicyGroupInput] = useState<Record<string, string>>({});
+  // Privacy — sender ids are masked by default; admins/operators can reveal
+  // full ids while working (per-session, resets on reload).
+  const [revealIds, setRevealIds] = useState(false);
+
   // P1 — verified contacts (name + contact no): the validated list.
   const [contactNameInput, setContactNameInput] = useState<Record<string, string>>({});
   const [contacts, setContacts] = useState<HubContact[]>([]);
   // Status recipients — always get pipeline completion summaries.
   const [statusRecipients, setStatusRecipients] = useState<string[]>([]);
   const [statusRecipientInput, setStatusRecipientInput] = useState('');
+
+  /** Show the full id when the admin reveal toggle is on, else the masked form. */
+  const showId = (id: string): string => (revealIds ? String(id ?? '') : maskSenderId(id));
 
   const refresh = useCallback(async () => {
     setRefreshing(true);
@@ -217,7 +224,7 @@ export default function AgentHub() {
     setSendMsg(null);
     const r = await dashboardAPI.sendChannelMessage(sendTarget.trim(), sendText);
     if (r.ok) {
-      setSendMsg({ kind: 'ok', text: `✅ Sent to ${sendTarget.trim()} (${r.platform}:${r.channelId})` });
+      setSendMsg({ kind: 'ok', text: `✅ Sent to ${sendTarget.trim()} (${r.platform}:${showId(r.channelId)})` });
       setSendText('');
     } else if (r.unauthorized) {
       sessionExpired();
@@ -555,6 +562,18 @@ export default function AgentHub() {
       {/* ── Channels tab ─────────────────────────────────────────────────── */}
       {tab === 'channels' && data ? (
         <div role="tabpanel">
+          <div className="hub-reveal-row">
+            <label className="hub-reveal-toggle">
+              <input
+                type="checkbox"
+                checked={revealIds}
+                onChange={(e) => setRevealIds(e.target.checked)}
+                disabled={!canWrite}
+              />
+              Show full sender ids <span className="admin-hint">(masks phone numbers by default)</span>
+            </label>
+            {!canWrite ? <span className="admin-hint">— admins and operators only</span> : null}
+          </div>
           <div className="admin-summary-grid">
             <div className="admin-summary-card">
               <div className="admin-summary-value">{data.channels.delivery.pending}</div>
@@ -591,7 +610,7 @@ export default function AgentHub() {
                 <tbody>
                   {data.channels.delivery.recent.map((e) => (
                     <tr key={e.id}>
-                      <td className="admin-provider-type">{e.target}</td>
+                      <td className="admin-provider-type">{showId(e.target)}</td>
                       <td>{e.platform}</td>
                       <td>
                         <span className={`admin-check-badge admin-check-${e.status === 'sent' ? 'pass' : e.status === 'failed' ? 'fail' : 'warn'}`}>
@@ -634,7 +653,7 @@ export default function AgentHub() {
                         {e.platform}
                         {e.isGroup ? <span className="hub-chip">group</span> : null}
                       </td>
-                      <td>{e.from || e.senderId || e.channelId}</td>
+                      <td>{showId(e.from || e.senderId || e.channelId)}</td>
                       <td className="admin-hint">{(e.text || '').slice(0, 60)}</td>
                       <td>
                         <span className={`admin-check-badge admin-check-${e.handled === 'pipeline' ? 'pass' : e.handled === 'refused' ? 'fail' : 'warn'}`}>
@@ -677,7 +696,7 @@ export default function AgentHub() {
               {data.channels.aliases.map((a) => (
                 <div className="hub-alias-row" key={a.alias}>
                   <span className="hub-chip">{a.alias}</span>
-                  <span className="admin-hint">→ {a.platform}:{a.channelId}</span>
+                  <span className="admin-hint">→ {a.platform}:{showId(a.channelId)}</span>
                 </div>
               ))}
             </div>
@@ -741,7 +760,7 @@ export default function AgentHub() {
                       return (
                         <div className="hub-alias-row" key={`u-${u}`}>
                           <span className={`hub-chip${pending ? ' hub-chip-pending' : ''}`} title={pending ? 'Not saved yet — press 💾 Save permissions' : undefined}>
-                            {maskSenderId(u)}{pending ? ' · pending' : ''}
+                            {showId(u)}{pending ? ' · pending' : ''}
                           </span>
                           <button className="admin-refresh-btn" disabled={policyBusy} onClick={() => removeVerifiedUser(p.platform, u)}>✕</button>
                         </div>
@@ -847,7 +866,7 @@ export default function AgentHub() {
                             the owner's name. */}
                         <td>Name</td>
                         <td className="admin-provider-type">{c.platform}</td>
-                        <td>{maskSenderId(c.id)}</td>
+                        <td>{showId(c.id)}</td>
                         <td>
                           <span className={`admin-check-badge admin-check-${inAllowList ? 'pass' : 'warn'}`}>
                             {inAllowList ? '✅ verified' : '⚠ not in allow-list'}
@@ -954,7 +973,7 @@ export default function AgentHub() {
           </p>
 
           <h3 className="section-subtitle">🟢 WhatsApp bridge (buff whatsapp pair)</h3>
-          <WhatsAppPanel authed={authed} canWrite={canWrite} sessionExpired={sessionExpired} />
+          <WhatsAppPanel authed={authed} canWrite={canWrite} sessionExpired={sessionExpired} reveal={revealIds} />
         </div>
       ) : null}
 

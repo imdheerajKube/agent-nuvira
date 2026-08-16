@@ -51,6 +51,7 @@ import {
   type ChannelAdapter,
 } from '../gateway/adapters.js';
 import { DeliveryLedger } from '../gateway/delivery.js';
+import { maskSenderId } from '../utils/mask.js';
 import { guardRbacAction } from './rbac-guard.js';
 
 export class GatewayCommand {
@@ -143,7 +144,8 @@ export class GatewayCommand {
       console.log('📇 Reachable channels:');
       for (const ch of channels) {
         const mark = ch.reachable ? '✅' : '⬜';
-        console.log(`  ${mark} ${PLATFORM_LABELS[ch.platform]} ${ch.channelId} (${ch.aliases.join(', ')})`);
+        // Sender/channel ids are masked (privacy) — aliases stay readable.
+        console.log(`  ${mark} ${PLATFORM_LABELS[ch.platform]} ${maskSenderId(ch.channelId)} (${ch.aliases.join(', ')})`);
       }
     } else {
       console.log('📇 No channel aliases registered yet. Add one:');
@@ -181,7 +183,7 @@ export class GatewayCommand {
       process.exitCode = 1;
       return;
     }
-    logger.success(`Sent to ${target} (${ref.platform}:${ref.channelId})`);
+    logger.success(`Sent to ${target} (${ref.platform}:${maskSenderId(ref.channelId)})`);
   }
 
   // ─── send-media (P3) ─────────────────────────────────────────────────────
@@ -235,7 +237,7 @@ export class GatewayCommand {
       process.exitCode = 1;
       return;
     }
-    logger.success(`Sent ${type} to ${target} (${ref.platform}:${ref.channelId})`);
+    logger.success(`Sent ${type} to ${target} (${ref.platform}:${maskSenderId(ref.channelId)})`);
   }
 
   // ─── delivery (I2) ────────────────────────────────────────────────────────
@@ -277,7 +279,7 @@ export class GatewayCommand {
     for (const e of remaining.slice(0, 20)) {
       const mark = e.status === 'sent' ? '✅' : e.status === 'failed' ? '❌' : '⏳';
       const retry = e.status === 'pending' ? ` retry#${e.attempts} at ${new Date(e.nextAttemptAt).toLocaleTimeString()}` : '';
-      console.log(`  ${mark} ${e.platform}:${e.channelId} (${e.target}) — ${e.text.slice(0, 60)}${retry}${e.lastError ? ` — ${e.lastError.slice(0, 60)}` : ''}`);
+      console.log(`  ${mark} ${e.platform}:${maskSenderId(e.channelId)} (${e.target}) — ${e.text.slice(0, 60)}${retry}${e.lastError ? ` — ${e.lastError.slice(0, 60)}` : ''}`);
     }
     if (remaining.length > 20) console.log(`  …and ${remaining.length - 20} more`);
     console.log('');
@@ -292,7 +294,7 @@ export class GatewayCommand {
     const directory = new ChannelDirectory();
     try {
       const entry = directory.setAlias(alias, platform as any, channelId);
-      logger.success(`Alias '${entry.alias}' → ${PLATFORM_LABELS[entry.platform]} ${entry.channelId}`);
+      logger.success(`Alias '${entry.alias}' → ${PLATFORM_LABELS[entry.platform]} ${maskSenderId(entry.channelId)}`);
     } catch (err) {
       logger.error(err instanceof Error ? err.message : String(err));
       process.exitCode = 1;
