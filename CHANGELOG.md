@@ -2,6 +2,16 @@
 
 All notable changes to **Agent-Nuvira** are documented in this file.
 
+## v1.74.0 — Verified-contacts manager + hardened verified-list rule (gateway + dashboard)
+
+- **Verified-list rule enforced exactly as specified** — per platform, the **Allowed users** list now has three states: entries = **only those senders** may trigger (in DMs **and** groups); **blank** = **no one** may trigger; the token **`Allow-All`** (case-insensitive, `*` works too) = **skip the verifier**, anyone may trigger. A list that was never configured keeps the legacy open default
+- **Group senders now pass through the verifier** — the `allowedUsers` check previously lived in a DM-only branch, so any non-certified member of any group could trigger the agent (live incident: 8/9 group messages from random `@lid` senders got replies). The per-user allow-list now gates group authors too (group must be allowed AND sender certified, when each is configured)
+- **Verified contacts manager (dashboard + API)** — add a person as **Name + Contact No** (exactly like the CLI `buff whatsapp contact add <Name> <number>`): the number goes into the platform's allow-list, the name into a new cross-platform contacts store (`~/.buff/gateway/contacts.json`). Works for **every** channel — WhatsApp numbers, Telegram ids, email addresses, group jids
+- **📇 Saved contacts (validated list)** — the Permissions page now lists every saved contact (name, platform, contact) with a ✅ verified badge when its id is in the allow-list; ✕ removes it from both places. The same list is exposed by the API (`GET /api/admin/gateway/policies` → `contacts`, `PUT` persists them) and `/api/hub`
+- **Add/remove from the dashboard works properly** — the policy draft is now seeded from the SAVED list, so adding or removing ONE user no longer blanks the rest of the list (previously removing a single contact hid all of them, and saving silently deleted the others)
+- **Send-by-name parity** — a named WhatsApp contact added from the dashboard is also synced into the bridge contacts file, so `buff gateway send whatsapp:<Name> "…"` resolves it immediately
+- **7 new tests** (contacts store unit suite, policies API contacts round-trip + malformed-contact rejection, hub-data contacts surface, Permissions UI add/remove flows) — 4,556 root + 196 dashboard tests passing
+
 ## v1.73.1 — WhatsApp inbound hotfix: first-contact LID resolution + empty-participant gate bug
 
 - **Inbound senders now resolve through Baileys' OWN persisted LID→PN files** — the bridge only learned mappings from `lid-mapping.update` events, but Baileys stores the pairs it learns from message envelopes as `lid-mapping-<lid>_reverse.json` WITHOUT emitting an event, so a contact's FIRST message arrived as an unknown `@lid` and was silently refused by the allow-list. `LidJidMapper.resolve()` now falls back to those files (lazy, cached, persisted) — a verified contact's first message now passes the gate
