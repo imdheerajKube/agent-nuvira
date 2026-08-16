@@ -252,6 +252,24 @@ const codeSearchSchema = z.object({
 
 
 
+/** P0.2 — read_file tool args: open a file with line numbers (deny-first). */
+const readFileSchema = z.object({
+  path: z.string().describe('Path to the file to read, relative to the workspace root (e.g. "src/server.ts"). Absolute paths outside the workspace and ".." traversal are denied.'),
+  offset: z.number().int().min(1).default(1).describe('First line number to read (1-based). Continue a truncated read by passing the next line.'),
+  limit: z.number().int().min(1).max(2000).default(2000).describe('Max lines to read (default 2000).'),
+});
+
+/** P0.2 — list_dir tool args: list a directory (deny-first). */
+const listDirSchema = z.object({
+  path: z.string().optional().describe('Directory to list, relative to the workspace root (default "." — the workspace root itself).'),
+});
+
+/** P0.2 — glob tool args: find files by pattern (deny-first). */
+const globSchema = z.object({
+  pattern: z.string().describe('Glob pattern relative to the workspace root, e.g. "src/**\/*.ts", "tests/*.test.ts". Supports ** (any depth), * (within a segment) and ?. Absolute patterns and ".." escapes are denied.'),
+  max_results: z.number().int().min(1).max(500).default(200).describe('Max matches to return (default 200).'),
+});
+
 /** The C2 requirementState check as a reusable tool. */
 const verifyRequirementSchema = z.object({
   request: z.string().describe('The user request whose completeness should be verified'),
@@ -334,6 +352,7 @@ export const TOOL_CONTRACT = `You have tools available. Call them when appropria
 - If a request asks to manage the system/agent itself in plain English — start/stop the dashboard or gateway, check status, add/remove a verified sender, configure a platform (telegram/whatsapp), run evals, show stats — call \`run_cli\` with the plain-English ask. It resolves the exact \`buff\` command and runs it. If the tool reports AMBIGUOUS or asks for confirmation, call \`ask_user\` first, then retry run_cli with the user's answer.
 - If a subtask can be delegated to a specialized sub-agent (gather context, review, security scan, run tests), call \`delegate\` with the agent type, a focused prompt, and optional file paths.
 - To find code matching a pattern (context gathering, locating definitions/usages), call \`code_search\` with the pattern and optional globs.
+- To READ the project: call \`read_file\` to open a file (with line numbers), \`list_dir\` to see a directory's contents, or \`glob\` to find files by pattern. Always prefer reading the actual file over assuming its contents — a large file reports a line range, continue with offset/limit.
 - END EVERY RESPONSE by calling \`suggest_followups\` with exactly 3 followups the user is likely to want next — natural next questions, deeper dives, or related directions that build on what you just said; specific to this conversation, not generic.
 - If you have nothing to add, answer directly and still end with suggest_followups.
 - ORDERING (non-negotiable): deliver the user's answer FIRST, then suggest_followups. The followup call must come only AFTER the complete answer is written — never before it, never instead of it. A bare lead-in ("Sure, I can help!") is NOT an answer; write the full answer in the same step as the followup call.`;
@@ -487,6 +506,39 @@ registerTool({
     const truncated = result.truncated ? `\n(truncated — showing first ${lines.length} of more)` : '';
     return `[${result.engine}] ${result.matches.length} match${result.matches.length !== 1 ? 'es' : ''} for /${pattern}/${case_sensitive ? '' : 'i'}${truncated}\n${lines.join('\n')}`;
   },
+});
+
+// ─── P0.2 coding perception tools (read_file / list_dir / glob) ───────────
+// The interactive file-access layer: the agent can finally OPEN the files
+// code_search finds. Deny-first workspace gate (no escapes, no symlink
+// outs), size caps + truncation notes so a huge file never floods context.
+// Backed by `src/tools/coding-tools.ts` (pure fs — no new dependencies).
+
+registerTool({
+  name: 'read_file',
+  description: 'Read a file with line numbers (offset/limit for large files). Use to open the actual contents of a file code_search or glob located — never guess what a file contains.',
+  category: 'workflow',
+  inputSchema: readFileSchema,
+  endsAgentStep: false,
+  run: (args, ctx) => import('./coding-tools.js').then((m) => m.runReadFile(args as import('./coding-tools.js').ReadFileArgs, ctx)),
+});
+
+registerTool({
+  name: 'list_dir',
+  description: 'List a directory in the workspace (subdirectories first, sorted). Use to explore project structure — what is in this folder, where does this component live.',
+  category: 'workflow',
+  inputSchema: listDirSchema,
+  endsAgentStep: false,
+  run: (args, ctx) => import('./coding-tools.js').then((m) => m.runListDir(args as import('./coding-tools.js').ListDirArgs, ctx)),
+});
+
+registerTool({
+  name: 'glob',
+  description: 'Find files by glob pattern relative to the workspace (e.g. "src/**\/*.ts", "tests/*.test.ts"). Use to locate files by shape when code_search content search does not fit.',
+  category: 'workflow',
+  inputSchema: globSchema,
+  endsAgentStep: false,
+  run: (args, ctx) => import('./coding-tools.js').then((m) => m.runGlob(args as import('./coding-tools.js').GlobArgs, ctx)),
 });
 
 // ─── I1 web-research tools (web_search / read_page) ─────────────────────────
