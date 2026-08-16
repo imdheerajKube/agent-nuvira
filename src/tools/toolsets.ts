@@ -81,6 +81,12 @@ export const TOOLSETS: ToolsetDef[] = [
     tools: ['code_search', 'delegate'],
   },
   {
+    name: 'coding',
+    label: 'Coding',
+    description: 'Interactive file access for the agent loop: read files with line numbers, list directories, glob by pattern (deny-first, workspace-scoped).',
+    tools: ['read_file', 'list_dir', 'glob'],
+  },
+  {
     name: 'web',
     label: 'Web research',
     description: 'Web search + page reading (free backends: DuckDuckGo / SearXNG / Jina Reader).',

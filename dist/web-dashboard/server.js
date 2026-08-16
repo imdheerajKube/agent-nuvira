@@ -3279,6 +3279,39 @@ function handleRequest(req, res) {
         })();
         return;
     }
+    // POST /api/chat/:sessionId/respond — answer a pending ask_user question
+    // from the GUI (P0.1). The tool loop paused on the question; the answer
+    // feeds back and the turn resumes. index -1 / [] / skip = proceed on best
+    // judgment (the pre-P0.1 behavior).
+    const chatRespondMatch = /^\/api\/chat\/([^/]+)\/respond$/.exec(pathname);
+    if (chatRespondMatch && req.method === 'POST') {
+        void (async () => {
+            const session = adminSessions.validate(bearerToken(req));
+            if (!session) {
+                writeJson(res, 401, { ok: false, error: 'Not authenticated — log in first.' });
+                return;
+            }
+            const sessionId = decodeURIComponent(chatRespondMatch[1]);
+            const body = await readJsonBody(req);
+            const questionId = typeof body?.questionId === 'string' ? body.questionId : '';
+            if (!questionId) {
+                writeJson(res, 400, { ok: false, error: 'Missing questionId.' });
+                return;
+            }
+            const index = body?.index;
+            const custom = typeof body?.custom === 'string' ? body.custom : undefined;
+            const ok = chatConsole.respond(sessionId, questionId, {
+                index: typeof index === 'number' ? index : Array.isArray(index) ? index.map(Number) : undefined,
+                custom,
+            });
+            if (!ok) {
+                writeJson(res, 404, { ok: false, error: 'No pending question with that id (it may have been answered or the session reset).' });
+                return;
+            }
+            writeJson(res, 200, { ok: true });
+        })();
+        return;
+    }
     // GET /api/chat/:sessionId/events — SSE stream of the session's LIVE
     // progress (agent working steps) + status while a turn is in flight. The
     // client subscribes FIRST, then POSTs the message; tool-call lines stream
@@ -3318,6 +3351,14 @@ function handleRequest(req, res) {
                 }
                 else if (event.kind === 'status') {
                     res.write(`event: status\ndata: ${JSON.stringify({ status: event.status })}\n\n`);
+                }
+                else if (event.kind === 'question') {
+                    res.write(`event: question\ndata: ${JSON.stringify({
+                        questionId: event.questionId,
+                        question: event.question,
+                        choices: event.choices,
+                        multiSelect: event.multiSelect,
+                    })}\n\n`);
                 }
             }
             catch { /* client gone */ }
