@@ -73,11 +73,21 @@ export function writeLidMappingsFile(sessionDir: string, pairs: Array<{ lid: str
  * untouched; a `@lid` jid is translated to its PN jid ("@s.whatsapp.net")
  * when a mapping is known. Persists learned pairs so restarts keep working
  * before the first sync of a new session.
+ *
+ * Baileys itself persists the pairs IT learns (from message envelopes,
+ * linked-profile notifications, history sync) as `<session>/lid-mapping-<pn>.json`
+ * (= "<lid>") and `<session>/lid-mapping-<lid>_reverse.json` (= "<pn>") — but
+ * it NEVER emits `lid-mapping.update` for the envelope path, so an event-only
+ * bridge never learns contacts that message us. `resolve()` therefore falls
+ * back to those files on a cache miss (lazy, cheap, cached + persisted), which
+ * also makes a NEW contact's first message resolve correctly.
  */
 export class LidJidMapper {
   private readonly lidToPn = new Map<string, string>();
+  private readonly sessionDir: string | undefined;
 
   constructor(sessionDir?: string, seed?: Array<{ lid: string; pn: string }>) {
+    this.sessionDir = sessionDir;
     for (const { lid, pn } of seed ?? (sessionDir ? readLidMappingsFile(sessionDir) : [])) {
       this.learn(lid, pn);
     }
@@ -93,9 +103,36 @@ export class LidJidMapper {
     if (lidJid.endsWith('@lid') && pnJid.endsWith('@s.whatsapp.net')) this.lidToPn.set(lidJid, pnJid);
   }
 
-  /** Translate a `@lid` jid to its PN jid; every other jid passes through. */
+  /**
+   * Translate a `@lid` jid to its PN jid; every other jid passes through.
+   * On a cache miss for a `@lid` jid, consult Baileys' own persisted mapping
+   * file (`lid-mapping-<digits>_reverse.json`) — the pair may exist on disk
+   * even though no `lid-mapping.update` event ever reached us.
+   */
   resolve(jid: string): string {
+    const hit = this.lidToPn.get(jid);
+    if (hit) return hit;
+    if (!this.sessionDir || !jid.endsWith('@lid')) return jid;
+    const pn = this.readBaileysReverse(jid);
+    if (!pn) return jid;
+    this.learn(jid, pn);
     return this.lidToPn.get(jid) ?? jid;
+  }
+
+  /** Read `<session>/lid-mapping-<digits>_reverse.json` (a JSON string PN). */
+  private readBaileysReverse(jid: string): string | null {
+    try {
+      // Strip the device suffix ("220722781786162:1@lid" → "220722781786162").
+      const digits = jid.replace(/@lid$/i, '').replace(/:\d+$/, '');
+      if (!/^\d+$/.test(digits)) return null;
+      const file = join(this.sessionDir!, `lid-mapping-${digits}_reverse.json`);
+      if (!existsSync(file)) return null;
+      const parsed = JSON.parse(readFileSync(file, 'utf-8')) as string | number | null;
+      const pn = String(parsed ?? '').trim();
+      return /^\d+$/.test(pn) ? pn : null;
+    } catch {
+      return null;
+    }
   }
 
   /** Like {@link resolve} but returns the input unchanged when it is undefined. */
@@ -798,7 +835,13 @@ export class BaileysBridge implements WhatsAppBridge {
           }
           // P1 — real sender inside a group: `key.participant` (absent in
           // DMs). May also be a LID on privacy-rollout accounts — translate.
-          const rawParticipant = typeof m?.key?.participant === 'string' ? m.key.participant : undefined;
+          // NOTE: Baileys 7 delivers DMs with `key.participant: ''` (EMPTY
+          // string, not undefined) in some LID-mode sessions — an empty string
+          // is NOT nullish, so `participant ?? fromJid` in the adapter would
+          // blank the sender id and the policy gate would refuse everyone.
+          // Treat '' as absent here.
+          const rawParticipant =
+            typeof m?.key?.participant === 'string' && m.key.participant.length > 0 ? m.key.participant : undefined;
           const participant = this.lidMapper.resolveOr(rawParticipant);
           this.onMessage?.(fromJid, text, participant);
         }

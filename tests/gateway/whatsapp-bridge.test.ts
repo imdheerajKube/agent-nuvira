@@ -146,7 +146,7 @@ class FakeBridge implements WhatsAppBridge {
   sent: Array<{ jid: string; text: string }> = [];
   failSend = false;
   inbound: Array<{ from: string; text: string }> = [];
-  onMessage: ((from: string, text: string) => void) | null = null;
+  onMessage: ((from: string, text: string, participant?: string) => void) | null = null;
 
   constructor(paired = true) {
     this.paired = paired;
@@ -156,7 +156,7 @@ class FakeBridge implements WhatsAppBridge {
     return this.paired ? 'fake bridge paired' : 'fake bridge unpaired';
   }
 
-  async connect(onMessage: (from: string, text: string) => void): Promise<void> {
+  async connect(onMessage: (from: string, text: string, participant?: string) => void): Promise<void> {
     this.onMessage = onMessage;
     this.connected = true;
   }
@@ -171,8 +171,8 @@ class FakeBridge implements WhatsAppBridge {
     return true;
   }
 
-  emit(from: string, text: string): void {
-    this.onMessage?.(from, text);
+  emit(from: string, text: string, participant?: string): void {
+    this.onMessage?.(from, text, participant);
   }
 }
 
@@ -207,6 +207,30 @@ describe('WhatsAppBridgeAdapter', () => {
     expect(received).toHaveLength(1);
     expect(received[0]).toMatchObject({ platform: 'whatsapp', channelId: '15551234567@s.whatsapp.net', text: 'hi there' });
     expect(fake.connected).toBe(false);
+  });
+
+  it('an EMPTY-string participant never blanks the sender id (Baileys 7 DM quirk)', async () => {
+    // Regression: Baileys 7 can deliver DMs with `key.participant: ''` — an
+    // empty string is NOT nullish, so `participant ?? fromJid` would produce
+    // senderId '' and the policy gate would refuse every sender. The adapter
+    // must fall back to the chat jid.
+    const fake = new FakeBridge(true);
+    const adapter = new WhatsAppBridgeAdapter(fake);
+    const received: Array<{ senderId?: string; from?: string }> = [];
+    await adapter.start((m) => received.push(m));
+    fake.emit('220722781786162:1@lid', 'write a 2-line poem about Diwali', '');
+    await adapter.stop();
+    expect(received).toHaveLength(1);
+    expect(received[0].senderId).toBe('220722781786162:1@lid');
+    expect(received[0].from).toBe('220722781786162:1@lid');
+    // A REAL participant (group sender) still wins over the chat jid.
+    const fake2 = new FakeBridge(true);
+    const adapter2 = new WhatsAppBridgeAdapter(fake2);
+    const received2: Array<{ senderId?: string }> = [];
+    await adapter2.start((m) => received2.push(m));
+    fake2.emit('1203630283471234@g.us', 'buff fix the tests', '918800425333@s.whatsapp.net');
+    await adapter2.stop();
+    expect(received2[0].senderId).toBe('918800425333@s.whatsapp.net');
   });
 });
 
@@ -243,6 +267,29 @@ describe('LidJidMapper (privacy-rollout LID→PN resolution)', () => {
       expect(readLidMappingsFile(dir)).toEqual([{ lid: '123456789012345@lid', pn: '918800663237@s.whatsapp.net' }]);
       const reloaded = new LidJidMapper(dir);
       expect(reloaded.resolve('123456789012345@lid')).toBe('918800663237@s.whatsapp.net');
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it('resolves an unknown @lid from Baileys own persisted mapping files (the live fix)', () => {
+    // Regression (live WhatsApp test): Baileys persists the pairs it learns
+    // (from message envelopes / linked-profile notifications) as
+    // `lid-mapping-<pn>.json` + `lid-mapping-<lid>_reverse.json`, but never
+    // emits `lid-mapping.update` for the envelope path — so an event-only
+    // bridge refused Bibi's first message (silent drop, senderId unknown).
+    const dir = mkdtempSync(join(tmpdir(), 'buff-wa-lid-'));
+    try {
+      // What Baileys wrote when Bibi messaged us: LID 220722781786162 ↔ 918800663237.
+      writeFileSync(join(dir, 'lid-mapping-220722781786162_reverse.json'), JSON.stringify('918800663237'), 'utf-8');
+      const mapper = new LidJidMapper(dir);
+      // Device suffix stripped for the lookup, PN jid returned.
+      expect(mapper.resolve('220722781786162:1@lid')).toBe('918800663237@s.whatsapp.net');
+      expect(mapper.resolve('220722781786162@lid')).toBe('918800663237@s.whatsapp.net');
+      // Learned + cached now; a missing file passes the raw jid through.
+      expect(mapper.resolve('999999999999999@lid')).toBe('999999999999999@lid');
+      // Non-LID jids never consult the files.
+      expect(mapper.resolve('918800663237@s.whatsapp.net')).toBe('918800663237@s.whatsapp.net');
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }
@@ -587,6 +634,30 @@ describe('BaileysBridge.ensureSocket() self-healing (fake baileys)', () => {
     await waitFor(() => received.length === 1);
     expect(received[0].from).toBe('1203630283471234@g.us');
     expect(received[0].participant).toBe('918800425333@s.whatsapp.net');
+    await bridge.disconnect();
+  }, 10_000);
+
+  it('treats an empty-string key.participant as absent (Baileys 7 DM quirk)', async () => {
+    // Baileys 7 can deliver DMs with `key.participant: ''` — the bridge must
+    // pass undefined (not '') so the adapter's `participant || fromJid` keeps
+    // the sender id set to the chat jid.
+    const waitFor = async (fn: () => boolean, timeoutMs = 3_000): Promise<void> => {
+      const start = Date.now();
+      while (!fn()) {
+        if (Date.now() - start > timeoutMs) throw new Error('waitFor timeout');
+        await new Promise((r) => setTimeout(r, 50));
+      }
+    };
+    const bridge = new BaileysBridge(sessionDir, { reconnectDelayMs: 20 });
+    const received: Array<{ from: string; text: string; participant?: string }> = [];
+    await bridge.connect((from, text, participant) => received.push({ from, text, participant }));
+    (fakeBaileys.sockets[0].ev as { emit: (e: string, ...a: unknown[]) => void }).emit('messages.upsert', {
+      type: 'notify',
+      messages: [{ key: { remoteJid: '220722781786162:1@lid', participant: '' }, message: { conversation: 'hi' } }],
+    });
+    await waitFor(() => received.length === 1);
+    expect(received[0].from).toBe('220722781786162:1@lid');
+    expect(received[0].participant).toBeUndefined();
     await bridge.disconnect();
   }, 10_000);
 

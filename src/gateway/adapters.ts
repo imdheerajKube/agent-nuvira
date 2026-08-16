@@ -436,13 +436,17 @@ export class WhatsAppBridgeAdapter implements ChannelAdapter {
   async start(onMessage: MessageHandler): Promise<void> {
     this.handler = onMessage;
     await this.bridge.connect((fromJid, text, participant) => {
+      // `||` (not `??`): Baileys 7 can deliver participant as an EMPTY string
+      // for DMs — an empty string is not nullish, so `??` would blank the
+      // sender id and the policy gate would refuse every sender.
+      const sender = participant || fromJid;
       void this.handler?.({
         platform: 'whatsapp',
         channelId: fromJid,
         text,
-        from: participant ?? fromJid,
+        from: sender,
         // P1: the real author inside a group (participant) vs the chat itself.
-        senderId: participant ?? fromJid,
+        senderId: sender,
         isGroup: fromJid.endsWith('@g.us'),
       });
     });

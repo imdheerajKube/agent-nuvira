@@ -2,6 +2,13 @@
 
 All notable changes to **Agent-Nuvira** are documented in this file.
 
+## v1.73.1 — WhatsApp inbound hotfix: first-contact LID resolution + empty-participant gate bug
+
+- **Inbound senders now resolve through Baileys' OWN persisted LID→PN files** — the bridge only learned mappings from `lid-mapping.update` events, but Baileys stores the pairs it learns from message envelopes as `lid-mapping-<lid>_reverse.json` WITHOUT emitting an event, so a contact's FIRST message arrived as an unknown `@lid` and was silently refused by the allow-list. `LidJidMapper.resolve()` now falls back to those files (lazy, cached, persisted) — a verified contact's first message now passes the gate
+- **Empty-string `key.participant` no longer blanks the sender id** — Baileys 7 delivers DMs with `key.participant: ''` (empty string, not nullish), so the adapter's `participant ?? fromJid` produced an empty `senderId` and the policy gate refused EVERY sender (live symptom: verified WhatsApp senders got no reply at all). The bridge treats `''` as absent and the adapter uses `participant || fromJid`
+- **3 regression tests** — Baileys reverse-file resolution, empty-participant normalization at the bridge, and empty-participant handling at the adapter
+- **4,542 tests passing across 195 files**
+
 ## v1.73.0 — WhatsApp LID fix + clean messaging output + gateway hardening
 
 - **WhatsApp LID→phone-number resolution** — WhatsApp's privacy rollout delivers DMs as random `@lid` jids (NOT phone numbers), so verified senders and contacts silently failed the allow-list. The Baileys bridge now learns LID→PN pairs from `lid-mapping.update` events, contact sync (`lid`/`phoneNumber`) and the paired account's own `creds.me`, translates every inbound sender + group participant to its phone-number JID **before** the policy gate, and persists the mappings (`lid-mappings.json`) so restarts keep working
