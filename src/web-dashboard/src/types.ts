@@ -990,6 +990,19 @@ export interface HubChannelPolicy {
   silentDrop?: boolean;
 }
 
+/**
+ * A saved verified contact (name + contact no) — the Permissions page
+ * validated list. `id` is the same sender id stored in
+ * `policies.<platform>.allowedUsers`; `name` is the optional display label
+ * (CLI parity: `buff whatsapp contact add <Name> <number>`).
+ */
+export interface HubContact {
+  name: string;
+  platform: string;
+  id: string;
+  addedAt?: number;
+}
+
 /** One entry in the gateway delivery ledger (I2). */
 export interface HubInboxEntry {
   id: string;
@@ -1054,6 +1067,8 @@ export interface HubData {
     reachable: Array<{ platform: string; channelId: string; aliases: string[]; reachable: boolean }>;
     platforms: HubPlatformStatus[];
     policies: Record<string, HubChannelPolicy>;
+    /** Saved verified contacts (name + contact no) — the validated list. */
+    contacts: HubContact[];
     /** Status recipients — always get pipeline completion summaries. */
     statusRecipients: string[];
     /** Friendly display labels for status recipients (resolved name → number). */

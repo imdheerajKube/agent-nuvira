@@ -509,9 +509,22 @@ Then use the **Agent Hub → Channels** tab and the **Gateway** page:
 - **Permissions** — per-platform **validated-sender** controls (who may
   trigger the agent, and how unapproved senders are handled). This is the
   GUI for `buff config gateway allow/disallow/reply`:
-  - **Who can trigger** — add/remove **user IDs / mobile numbers** and
-    **group IDs** per platform (the `allowedUsers` / `allowedGroups` lists).
-    An empty list = everyone may trigger (the default).
+  - **Verified list rule** — a platform's **Allowed users** list has three
+    states: present with entries = **only those senders** may trigger;
+    present but **blank** = **no one** may trigger; the token `Allow-All`
+    (case-insensitive) = **skip the verifier**, anyone may trigger. A list
+    that was never configured stays the legacy open default.
+  - **Add a person as Name + Contact No** — same as the CLI
+    (`buff whatsapp contact add <Name> <number>`): type a Name and a Contact
+    No / sender id, hit **+ User**. Named contacts render as `Daddy
+    (+918178504516)` on the verified list and are saved across platforms
+    (WhatsApp numbers, Telegram ids, email addresses, …).
+  - **📇 Saved contacts (validated list)** — a table of every saved contact
+    (name, platform, contact) with a ✅ verified badge when its id is in the
+    platform's allow-list; ✕ removes it from both the list and the contacts
+    store. Removing ONE entry never blanks the rest of the saved list.
+  - **Allowed groups** — add/remove **group IDs** per platform (the
+    `allowedGroups` list).
   - **Silent drop (default, hard policy)** — unapproved senders get **no
     reply at all and no processing** (they never learn a bot exists). Polite
     `⛔` refusals are an explicit opt-in (`silentDrop: false`).
@@ -519,8 +532,9 @@ Then use the **Agent Hub → Channels** tab and the **Gateway** page:
     (`buff fix the tests`).
   - **Disabled** — the platform cannot trigger the agent at all.
   - Changes are written to `~/.buff/buffconfig.json` (`gateway.policies`)
-    and apply to the **running gateway immediately** — policies are re-read
-    per inbound message, so no restart is needed.
+    plus `~/.buff/gateway/contacts.json` (the name → id store) and apply to
+    the **running gateway immediately** — policies are re-read per inbound
+    message, so no restart is needed.
   - **📊 Status recipients** — contacts/groups that ALWAYS receive the
     pipeline completion summary, whoever triggered it (e.g. `whatsapp:Daddy`,
     `slack:ops`). Same save button; stored under `gateway.statusRecipients`.

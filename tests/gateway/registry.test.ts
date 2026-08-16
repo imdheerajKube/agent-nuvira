@@ -534,6 +534,89 @@ describe('GatewayRegistry P1 policies', () => {
     expect(allowed).not.toBe('refused');
   });
 
+  it('allowedUsers gates GROUP senders too — an unapproved member is refused even in an allowed group', async () => {
+    const { registry, adapter } = mockRegistry({
+      streamEvents: false,
+      policies: { mock: { allowedUsers: ['+918800604222'], allowedGroups: ['g-family'] } },
+    });
+    // A random LID sender (privacy-rollout jid, exactly what the live gateway
+    // saw) inside the ALLOWED group — previously triggered the agent because
+    // the group path never checked the sender against allowedUsers.
+    const refused = await registry.handleInbound({
+      platform: 'mock',
+      channelId: 'g-family',
+      text: 'fix the failing test',
+      isGroup: true,
+      senderId: '114602662703205@lid',
+    });
+    expect(refused).toBe('refused');
+    expect(adapter.sent).toHaveLength(0);
+
+    // The JID-normalized allow-listed member still triggers inside the group.
+    const allowed = await registry.handleInbound({
+      platform: 'mock',
+      channelId: 'g-family',
+      text: 'fix the failing test',
+      isGroup: true,
+      senderId: '918800604222:13@s.whatsapp.net',
+    });
+    expect(adapter.sent.some((s) => s.text.includes('running the'))).toBe(true);
+    expect(allowed).not.toBe('refused');
+  });
+
+  it('Allow-All wildcard in allowedUsers disables the verifier — a stranger triggers in DMs AND groups', async () => {
+    const { registry, adapter } = mockRegistry({
+      streamEvents: false,
+      policies: { mock: { allowedUsers: ['Allow-All'] } },
+    });
+    const dm = await registry.handleInbound({
+      platform: 'mock',
+      channelId: 'dm',
+      text: 'fix the failing test',
+      senderId: '114602662703205@lid',
+    });
+    expect(dm).not.toBe('refused');
+
+    const grp = await registry.handleInbound({
+      platform: 'mock',
+      channelId: 'g-any',
+      text: 'fix the failing test',
+      isGroup: true,
+      senderId: '114602662703205@lid',
+    });
+    expect(grp).not.toBe('refused');
+    expect(adapter.sent.some((s) => s.text.includes('running the'))).toBe(true);
+  });
+
+  it('a BLANK allowedUsers list ([]) denies EVERYONE — verified-list rule (no Allow-All = no one)', async () => {
+    const { registry, adapter } = mockRegistry({
+      streamEvents: false,
+      policies: { mock: { allowedUsers: [] } },
+    });
+    // DM from any sender → silent refusal.
+    const dm = await registry.handleInbound({
+      platform: 'mock',
+      channelId: 'blank-dm',
+      text: 'fix the failing test',
+      senderId: '918800604222',
+    });
+    expect(dm).toBe('refused');
+    // Group message from any sender → silent refusal too (group path now
+    // enforces the same verified list).
+    const grp = await registry.handleInbound({
+      platform: 'mock',
+      channelId: 'blank-grp',
+      text: 'fix the failing test',
+      isGroup: true,
+      senderId: '918800604222',
+    });
+    expect(grp).toBe('refused');
+    // NOTHING sent, nothing processed.
+    expect(adapter.sent).toHaveLength(0);
+    const entries = registry.inbox.read().filter((e) => ['blank-dm', 'blank-grp'].includes(e.channelId));
+    expect(entries.filter((e) => e.handled === 'refused').length).toBe(2);
+  });
+
   it('requireMention only triggers in groups when the bot is addressed', async () => {
     const { registry, adapter } = mockRegistry({
       streamEvents: false,

@@ -17,7 +17,7 @@
 
 import { useCallback, useEffect, useState } from 'react';
 import { dashboardAPI } from '../api';
-import type { HubChannelPolicy, HubData, HubToolset } from '../types';
+import type { HubChannelPolicy, HubContact, HubData, HubToolset } from '../types';
 import WhatsAppPanel from './WhatsAppPanel';
 import { PlatformConfigSection } from './PlatformConfigSection';
 
@@ -72,6 +72,9 @@ export default function AgentHub() {
   const [policyMsg, setPolicyMsg] = useState<{ kind: 'ok' | 'err'; text: string } | null>(null);
   const [policyUserInput, setPolicyUserInput] = useState<Record<string, string>>({});
   const [policyGroupInput, setPolicyGroupInput] = useState<Record<string, string>>({});
+  // P1 — verified contacts (name + contact no): the validated list.
+  const [contactNameInput, setContactNameInput] = useState<Record<string, string>>({});
+  const [contacts, setContacts] = useState<HubContact[]>([]);
   // Status recipients — always get pipeline completion summaries.
   const [statusRecipients, setStatusRecipients] = useState<string[]>([]);
   const [statusRecipientInput, setStatusRecipientInput] = useState('');
@@ -82,6 +85,7 @@ export default function AgentHub() {
     const d = await dashboardAPI.fetchHub();
     setData(d);
     if (d?.channels?.statusRecipients) setStatusRecipients(d.channels.statusRecipients);
+    if (d?.channels?.contacts) setContacts(d.channels.contacts);
     if (!d) setError('Could not reach the dashboard server, or the server is older than this panel. Run `buff dashboard` to start it.');
     setLoading(false);
     setRefreshing(false);
@@ -223,32 +227,108 @@ export default function AgentHub() {
     setSending(false);
   };
 
-  /** P1 — add a user/group id to a platform's allowed list (draft only). */
+  /** The SAVED policy id list for a key — what the draft edits ON TOP of. */
+  const savedPolicyIds = (platform: string, key: 'allowedUsers' | 'allowedGroups'): string[] => {
+    const saved = (data?.channels?.policies?.[platform] ?? {}) as HubChannelPolicy;
+    return saved[key] ?? [];
+  };
+
+  /**
+   * P1 — add a user/group id to a platform's allowed list (draft only). The
+   * draft is seeded from the SAVED list when it has no entry for the key, so
+   * adding ONE user never hides (and on save, never silently deletes) the
+   * rest of the saved list.
+   */
   const addPolicyId = (platform: string, kind: 'user' | 'group', value: string) => {
     const id = value.trim();
     if (!id) return;
     setPolicyDraft((prev) => {
       const pol = { ...(prev[platform] ?? {}) };
       const key = kind === 'user' ? 'allowedUsers' : 'allowedGroups';
-      const list = [...(pol[key] ?? [])];
+      const base = prev[platform]?.[key] ?? savedPolicyIds(platform, key);
+      const list = [...base];
       if (!list.includes(id)) list.push(id);
       pol[key] = list;
       return { ...prev, [platform]: pol };
     });
   };
 
-  /** P1 — remove a user/group id from a platform's allowed list (draft only). */
+  /**
+   * P1 — remove a user/group id from a platform's allowed list (draft only).
+   * Seeded from the SAVED list too, so removing ONE entry keeps the rest of
+   * the saved ones visible. Writing the list back — even when empty — keeps
+   * the explicit "these are the allowed ids" statement (empty = no one may
+   * trigger, per the verified-list rule). One guard: when nothing was saved
+   * for this platform AND nothing remains after the removal, the draft key is
+   * dropped so an OPEN platform stays open instead of flipping to "blank =
+   * none" from a stray ✕.
+   */
   const removePolicyId = (platform: string, kind: 'user' | 'group', id: string) => {
     setPolicyDraft((prev) => {
-      const pol = { ...(prev[platform] ?? {}) };
       const key = kind === 'user' ? 'allowedUsers' : 'allowedGroups';
-      // ALWAYS write the list back — even when empty — so the draft is an
-      // explicit "these are the allowed ids" statement (empty = none). The
-      // render below merges the draft OVER the saved policy, so removing ONE
-      // entry must keep the remaining saved ones visible.
-      pol[key] = (pol[key] ?? []).filter((x) => x !== id);
+      const saved = savedPolicyIds(platform, key);
+      const base = prev[platform]?.[key] ?? saved;
+      const next = base.filter((x) => x !== id);
+      if (next.length === 0 && saved.length === 0) {
+        // No saved list before and nothing left after — no change needed.
+        const pol = { ...(prev[platform] ?? {}) };
+        delete pol[key];
+        const updated = { ...prev };
+        if (Object.keys(pol).length === 0) delete updated[platform];
+        else updated[platform] = pol;
+        return updated;
+      }
+      const pol = { ...(prev[platform] ?? {}) };
+      pol[key] = next;
       return { ...prev, [platform]: pol };
     });
+  };
+
+  /** Digit/format-tolerant sender-id equality (mirrors the gateway's normalize). */
+  const sameVerifiedId = (a: string, b: string): boolean => {
+    const na = a.trim().toLowerCase();
+    const nb = b.trim().toLowerCase();
+    if (na === nb) return true;
+    const da = na.replace(/\D+/g, '');
+    const db = nb.replace(/\D+/g, '');
+    return da.length > 0 && da === db;
+  };
+
+  /** Display name for a saved verified id (chip renders `Daddy (+91…)`). */
+  const verifiedNameFor = (platform: string, id: string): string | undefined =>
+    contacts.find((c) => c.platform === platform && sameVerifiedId(c.id, id))?.name;
+
+  /**
+   * P1 — add a verified USER as <Name> <Contact No> (CLI parity): the number
+   * goes into the allowedUsers draft, the name into the saved-contacts list.
+   */
+  const addVerifiedUser = (platform: string) => {
+    const name = (contactNameInput[platform] ?? '').trim();
+    const id = (policyUserInput[platform] ?? '').trim();
+    if (!id) return;
+    addPolicyId(platform, 'user', id);
+    if (name) {
+      setContacts((prev) => {
+        const rest = prev.filter(
+          (c) => !(c.platform === platform && (sameVerifiedId(c.id, id) || c.name.toLowerCase() === name.toLowerCase())),
+        );
+        return [...rest, { name, platform, id, addedAt: Date.now() }];
+      });
+    }
+    setPolicyUserInput((s) => ({ ...s, [platform]: '' }));
+    setContactNameInput((s) => ({ ...s, [platform]: '' }));
+  };
+
+  /** P1 — remove a verified user: allowedUsers draft + its saved contact. */
+  const removeVerifiedUser = (platform: string, id: string) => {
+    removePolicyId(platform, 'user', id);
+    setContacts((prev) => prev.filter((c) => !(c.platform === platform && sameVerifiedId(c.id, id))));
+  };
+
+  /** P1 — remove a saved contact from the validated list (+ its allowedUsers). */
+  const removeContact = (c: HubContact) => {
+    setContacts((prev) => prev.filter((x) => !(x.platform === c.platform && sameVerifiedId(x.id, c.id))));
+    removePolicyId(c.platform, 'user', c.id);
   };
 
   /** P1 — toggle a boolean policy flag on a platform (draft only). */
@@ -278,9 +358,9 @@ export default function AgentHub() {
     }
     setPolicyBusy(true);
     setPolicyMsg(null);
-    const r = await dashboardAPI.saveGatewayPolicies(policyDraft, statusRecipients);
+    const r = await dashboardAPI.saveGatewayPolicies(policyDraft, statusRecipients, contacts);
     if (r.ok) {
-      setPolicyMsg({ kind: 'ok', text: '✅ Permissions + status recipients saved — the running gateway applies them immediately.' });
+      setPolicyMsg({ kind: 'ok', text: '✅ Permissions + saved contacts + status recipients saved — the running gateway applies them immediately.' });
       setPolicyDraft({});
       void refresh();
     } else if (r.unauthorized) {
@@ -592,9 +672,10 @@ export default function AgentHub() {
 
           <h3 className="section-subtitle">🔐 Permissions (validated senders)</h3>
           <p className="admin-hint">
-            Only approved senders may trigger the agent on each platform. When a platform has
-            allowed users/groups, everyone else is refused; <strong>silent</strong> refuses without
-            replying (best for a private number). Changes apply to the running gateway immediately.
+            Verified-list rule per platform: a listed sender/group is allowed; a <strong>blank</strong>
+            list means <strong>no one</strong> may trigger; add the token <code>Allow-All</code> to skip
+            the verifier and respond to everyone. <strong>Silent</strong> refuses without replying
+            (best for a private number). Changes apply to the running gateway immediately.
           </p>
           <div className="hub-permissions">
             {data.channels.platforms.map((p) => {
@@ -611,28 +692,38 @@ export default function AgentHub() {
                     <span className="hub-card-id">{p.platform}</span>
                     {pol.disabled ? <span className="hub-chip">disabled</span> : null}
                   </div>
-                  <div className="admin-hint" style={{ margin: '4px 0 8px' }}>Allowed users</div>
+                  <div className="admin-hint" style={{ margin: '4px 0 8px' }}>Allowed users (verified list)</div>
                   <div className="hub-alias-list">
-                    {users.length === 0 ? <span className="admin-hint">(none — any sender may trigger)</span> : null}
-                    {users.map((u) => (
-                      <div className="hub-alias-row" key={`u-${u}`}>
-                        <span className="hub-chip">{u}</span>
-                        <button className="admin-refresh-btn" disabled={policyBusy} onClick={() => removePolicyId(p.platform, 'user', u)}>✕</button>
-                      </div>
-                    ))}
+                    {users.length === 0 ? <span className="admin-hint">(blank — no one may trigger; add <code>Allow-All</code> to allow everyone)</span> : null}
+                    {users.map((u) => {
+                      const nm = verifiedNameFor(p.platform, u);
+                      return (
+                        <div className="hub-alias-row" key={`u-${u}`}>
+                          <span className="hub-chip">{nm ? `${nm} (${u})` : u}</span>
+                          <button className="admin-refresh-btn" disabled={policyBusy} onClick={() => removeVerifiedUser(p.platform, u)}>✕</button>
+                        </div>
+                      );
+                    })}
                   </div>
                   <div className="hub-send-form" style={{ margin: '6px 0 10px' }}>
                     <input
                       type="text"
+                      value={contactNameInput[p.platform] ?? ''}
+                      onChange={(e) => setContactNameInput((s) => ({ ...s, [p.platform]: e.target.value }))}
+                      placeholder="Name (e.g. Daddy) — optional"
+                      disabled={policyBusy}
+                    />
+                    <input
+                      type="text"
                       value={policyUserInput[p.platform] ?? ''}
                       onChange={(e) => setPolicyUserInput((s) => ({ ...s, [p.platform]: e.target.value }))}
-                      placeholder="mobile number or sender id, e.g. 918178504516"
+                      placeholder="Contact no / sender id, or Allow-All"
                       disabled={policyBusy}
                     />
                     <button
                       className="admin-refresh-btn"
                       disabled={policyBusy || !(policyUserInput[p.platform] ?? '').trim()}
-                      onClick={() => { addPolicyId(p.platform, 'user', policyUserInput[p.platform] ?? ''); setPolicyUserInput((s) => ({ ...s, [p.platform]: '' })); }}
+                      onClick={() => addVerifiedUser(p.platform)}
                     >+ User</button>
                   </div>
                   <div className="admin-hint" style={{ margin: '4px 0 8px' }}>Allowed groups</div>
@@ -677,6 +768,53 @@ export default function AgentHub() {
               );
             })}
           </div>
+
+          <h3 className="section-subtitle" style={{ marginTop: 22 }}>📇 Saved contacts (validated list)</h3>
+          <p className="admin-hint">
+            Every verified contact saved across platforms — <strong>Name + Contact No</strong>, exactly as the CLI
+            (<code>buff whatsapp contact add &lt;Name&gt; &lt;number&gt;</code>) stores them. A contact shows a{' '}
+            <strong>verified</strong> badge when its number is in the platform's allowed list; ✕ removes it from
+            both places. Changes apply when you press <strong>💾 Save permissions</strong>.
+          </p>
+          {contacts.length > 0 ? (
+            <div className="admin-table-wrapper">
+              <table className="admin-table">
+                <thead>
+                  <tr>
+                    <th>Name</th>
+                    <th>Platform</th>
+                    <th>Contact</th>
+                    <th>Status</th>
+                    <th />
+                  </tr>
+                </thead>
+                <tbody>
+                  {contacts.map((c) => {
+                    const inAllowList = (data?.channels?.policies?.[c.platform]?.allowedUsers ?? []).some((u) => sameVerifiedId(u, c.id));
+                    return (
+                      <tr key={`${c.platform}:${c.id}:${c.name}`}>
+                        <td>{c.name}</td>
+                        <td className="admin-provider-type">{c.platform}</td>
+                        <td>{c.id}</td>
+                        <td>
+                          <span className={`admin-check-badge admin-check-${inAllowList ? 'pass' : 'warn'}`}>
+                            {inAllowList ? '✅ verified' : '⚠ not in allow-list'}
+                          </span>
+                        </td>
+                        <td>
+                          <button className="admin-refresh-btn" disabled={policyBusy} onClick={() => removeContact(c)}>✕</button>
+                        </td>
+                      </tr>
+                    );
+                  })}
+                </tbody>
+              </table>
+            </div>
+          ) : (
+            <div className="empty-state" style={{ padding: '14px' }}>
+              No saved contacts yet — add one in a platform card above (Name + Contact No).
+            </div>
+          )}
 
           <h3 className="section-subtitle" style={{ marginTop: 22 }}>📊 Status recipients</h3>
           <p className="admin-hint">

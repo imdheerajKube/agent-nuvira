@@ -21,6 +21,10 @@ process.env.BUFF_DASHBOARD_PORT = '0';
 process.env.BUFF_DASHBOARD_HOST = '127.0.0.1';
 process.env.BUFF_MEMORY_DIR = memoryDir;
 process.env.BUFF_CONFIG_DIR = join(testDir, '.buff');
+// WhatsApp contact sync during PUT rides on the session dir — point it at the
+// temp dir so a named whatsapp contact in a test never touches the real
+// ~/.buff/whatsapp/contacts.json.
+process.env.BUFF_WHATSAPP_SESSION_DIR = join(testDir, '.buff', 'whatsapp', 'session');
 
 const { createDashboardServer } = await import('../../src/web-dashboard/server.js');
 
@@ -95,7 +99,7 @@ describe('/api/admin/gateway/policies', () => {
   it('GET returns the effective per-platform policies (empty by default)', async () => {
     const res = await authedFetch('/api/admin/gateway/policies');
     expect(res.status).toBe(200);
-    const body = (await res.json()) as { ok: boolean; policies: Record<string, unknown>; statusRecipients: string[] };
+    const body = (await res.json()) as { ok: boolean; policies: Record<string, unknown>; statusRecipients: string[]; contacts: unknown[] };
     expect(body.ok).toBe(true);
     expect(body.policies.whatsapp).toEqual({});
     expect(body.policies.telegram).toEqual({});
@@ -103,6 +107,8 @@ describe('/api/admin/gateway/policies', () => {
     expect(Object.keys(body.policies)).toContain('discord');
     expect(Object.keys(body.policies)).toContain('email');
     expect(body.statusRecipients).toEqual([]);
+    // The saved verified contacts (name + contact no) start empty.
+    expect(body.contacts).toEqual([]);
   });
 
   it('GET/PUT round-trips status recipients alongside policies', async () => {
@@ -199,6 +205,59 @@ describe('/api/admin/gateway/policies', () => {
     const get2 = await authedFetch('/api/admin/gateway/policies');
     const get2Body = (await get2.json()) as { policies: Record<string, { allowedUsers?: string[] }> };
     expect(get2Body.policies.whatsapp.allowedUsers).toEqual(['u-1']);
+  });
+
+  it('GET/PUT round-trips verified contacts (name + contact no) alongside policies', async () => {
+    const put = await authedFetch('/api/admin/gateway/policies', 'PUT', {
+      policies: { whatsapp: { allowedUsers: ['918178504516'] } },
+      contacts: [
+        { name: 'Daddy', platform: 'whatsapp', id: '+918178504516', addedAt: 123 },
+        { name: 'Ops', platform: 'telegram', id: '987654321' },
+      ],
+    });
+    expect(put.status).toBe(200);
+    const putBody = (await put.json()) as { ok: boolean; contacts: Array<{ name: string; platform: string; id: string; addedAt: number }> };
+    expect(putBody.ok).toBe(true);
+    expect(putBody.contacts).toHaveLength(2);
+    expect(putBody.contacts[0]).toEqual({ name: 'Daddy', platform: 'whatsapp', id: '+918178504516', addedAt: 123 });
+    expect(putBody.contacts[1]).toMatchObject({ name: 'Ops', platform: 'telegram', id: '987654321' });
+    expect(typeof putBody.contacts[1].addedAt).toBe('number');
+
+    const get = await authedFetch('/api/admin/gateway/policies');
+    const getBody = (await get.json()) as { contacts: Array<{ name: string; platform: string; id: string }> };
+    expect(getBody.contacts).toHaveLength(2);
+    expect(getBody.contacts[0]).toMatchObject({ name: 'Daddy', platform: 'whatsapp', id: '+918178504516' });
+    expect(getBody.contacts[1]).toMatchObject({ name: 'Ops', platform: 'telegram', id: '987654321' });
+
+    // Persisted to the gateway contacts file (next to aliases.json).
+    const contactsFile = join(testDir, '.buff', 'gateway', 'contacts.json');
+    const persisted = JSON.parse(readFileSync(contactsFile, 'utf-8'));
+    expect(persisted.contacts.map((c: { name: string }) => c.name)).toEqual(['Daddy', 'Ops']);
+
+    // Whole-array replace — removing a contact works.
+    await authedFetch('/api/admin/gateway/policies', 'PUT', {
+      policies: {},
+      contacts: [{ name: 'Daddy', platform: 'whatsapp', id: '+918178504516' }],
+    });
+    const get2 = await authedFetch('/api/admin/gateway/policies');
+    const get2Body = (await get2.json()) as { contacts: Array<{ name: string }> };
+    expect(get2Body.contacts.map((c) => c.name)).toEqual(['Daddy']);
+  });
+
+  it('PUT ignores malformed/unknown-platform contacts (never widens access)', async () => {
+    await authedFetch('/api/admin/gateway/policies', 'PUT', {
+      policies: {},
+      contacts: [
+        { name: '', platform: 'whatsapp', id: 'x' },      // blank name → dropped
+        { name: 'Bad', platform: 'whatsapp', id: '' },      // blank id → dropped
+        { name: 'Bad', platform: 'notreal', id: 'x' },      // unknown platform → dropped
+        { name: 'Ok', platform: 'email', id: 'a@b.com' },   // valid
+      ],
+    });
+    const get = await authedFetch('/api/admin/gateway/policies');
+    const body = (await get.json()) as { contacts: Array<{ name: string; platform: string; id: string }> };
+    expect(body.contacts).toHaveLength(1);
+    expect(body.contacts[0]).toMatchObject({ name: 'Ok', platform: 'email', id: 'a@b.com' });
   });
 
   it('rejects non-GET/PUT methods (405)', async () => {

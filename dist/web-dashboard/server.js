@@ -2233,10 +2233,13 @@ function handleRequest(req, res) {
     }
     // ── Gateway Permissions (validated senders) — admin-gated ────────────────
     // GET  /api/admin/gateway/policies — effective per-platform policies
-    //       (env merged under config, mirroring the running gateway's gate).
+    //       (env merged under config, mirroring the running gateway's gate)
+    //       plus the saved verified contacts (name + contact no).
     // PUT  /api/admin/gateway/policies — replace per-platform policies (the
     //       dashboard passes the FULL map it read; the running gateway re-reads
-    //       config per inbound, so changes apply without a restart).
+    //       config per inbound, so changes apply without a restart). Named
+    //       WhatsApp contacts are also synced into the bridge contacts file
+    //       (send-by-name parity with `buff whatsapp contact add`).
     // Rides on gateway.manage (admin + operator) like the alias CLI.
     if (pathname === '/api/admin/gateway/policies') {
         void (async () => {
@@ -2255,6 +2258,7 @@ function handleRequest(req, res) {
             if (req.method === 'GET') {
                 // Effective policies the running gateway would apply (env < config).
                 const { envPolicies } = await import('../gateway/registry.js');
+                const { readGatewayContacts } = await import('../gateway/contacts.js');
                 const configManager = new ConfigManager();
                 const all = configManager.getAll();
                 const fromConfig = all.gateway?.policies ?? {};
@@ -2262,7 +2266,7 @@ function handleRequest(req, res) {
                 for (const p of Object.keys(PLATFORM_ENV_VARS)) {
                     policies[p] = { ...(envPolicies()[p] ?? {}), ...(fromConfig[p] ?? {}) };
                 }
-                writeJson(res, 200, { ok: true, policies, statusRecipients: all.gateway?.statusRecipients ?? [] });
+                writeJson(res, 200, { ok: true, policies, statusRecipients: all.gateway?.statusRecipients ?? [], contacts: readGatewayContacts() });
                 return;
             }
             if (req.method === 'PUT') {
@@ -2286,7 +2290,36 @@ function handleRequest(req, res) {
                 if (Array.isArray(body?.statusRecipients))
                     gatewayPatch.statusRecipients = body.statusRecipients;
                 configManager.save({ gateway: gatewayPatch });
-                writeJson(res, 200, { ok: true, policies: merged, statusRecipients: gatewayPatch.statusRecipients ?? [] });
+                // Verified contacts ride along too (whole-array). Names are metadata
+                // for the Permissions page — the GATE still only reads allowedUsers,
+                // so a bad/missing contact write can never widen access. Named
+                // WhatsApp contacts are synced into the bridge contacts file for
+                // send-by-name parity with `buff whatsapp contact add <Name> <no>`.
+                let savedContacts;
+                if (Array.isArray(body?.contacts)) {
+                    const { writeGatewayContacts, syncWhatsAppContactName } = await import('../gateway/contacts.js');
+                    const valid = body.contacts
+                        .filter((c) => !!c && typeof c === 'object' &&
+                        typeof c.name === 'string' &&
+                        typeof c.platform === 'string' &&
+                        typeof c.id === 'string')
+                        .map((c) => ({
+                        name: (c.name ?? '').trim(),
+                        platform: c.platform,
+                        id: (c.id ?? '').trim(),
+                        addedAt: typeof c.addedAt === 'number' ? c.addedAt : Date.now(),
+                    }))
+                        .filter((c) => c.name && c.id && c.platform in PLATFORM_ENV_VARS);
+                    savedContacts = valid;
+                    writeGatewayContacts(savedContacts);
+                    // Send-by-name parity: named whatsapp contacts land in the bridge
+                    // contacts file (same file `buff whatsapp contact add` writes).
+                    for (const c of savedContacts) {
+                        if (c.platform === 'whatsapp')
+                            syncWhatsAppContactName(c.name, c.id);
+                    }
+                }
+                writeJson(res, 200, { ok: true, policies: merged, statusRecipients: gatewayPatch.statusRecipients ?? [], contacts: savedContacts });
                 return;
             }
             writeJson(res, 405, { ok: false, error: 'Method not allowed — use GET or PUT.' });
