@@ -71,6 +71,14 @@ export default function ChatPage() {
   const sessionIdRef = useRef<string>(newSessionId());
   const subRef = useRef<(() => void) | null>(null);
   const listRef = useRef<HTMLDivElement | null>(null);
+  // P0.1 — a pending ask_user question from the agent (choice card).
+  const [pendingQuestion, setPendingQuestion] = useState<{
+    questionId: string;
+    question: string;
+    choices: Array<{ label: string; description?: string }>;
+    multiSelect: boolean;
+  } | null>(null);
+  const [questionSel, setQuestionSel] = useState<Set<number>>(new Set());
 
   useEffect(() => {
     void dashboardAPI.fetchAdminAuthStatus().then((s) => {
@@ -139,6 +147,11 @@ export default function ChatPage() {
         onProgress: (line) => {
           liveStepsRef.current = [...liveStepsRef.current, line];
           setLiveSteps(liveStepsRef.current);
+        },
+        // P0.1 — the agent asked a clarifying question; show the choice card.
+        onQuestion: (q) => {
+          setPendingQuestion(q);
+          setQuestionSel(new Set());
         },
       });
       const r = await dashboardAPI.chatSend(sessionId, clean);
@@ -214,6 +227,52 @@ export default function ChatPage() {
     setPendingResolve(null);
     void send(ask);
   }, [send]);
+
+  /** P0.1 — submit the agent's clarifying-question answer; the turn resumes. */
+  const answerQuestion = useCallback(
+    async (selection: { index?: number | number[]; custom?: string }) => {
+      const q = pendingQuestion;
+      if (!q) return;
+      setPendingQuestion(null);
+      const r = await dashboardAPI.chatRespond(sessionIdRef.current, q.questionId, selection);
+      if (!r.ok) {
+        setError(r.error || 'The question could not be answered — try sending your message again.');
+      }
+    },
+    [pendingQuestion],
+  );
+
+  const submitQuestion = useCallback(() => {
+    if (!pendingQuestion) return;
+    const idx = pendingQuestion.multiSelect ? [...questionSel] : [...questionSel][0];
+    if (pendingQuestion.multiSelect) {
+      void answerQuestion({ index: [...questionSel] });
+    } else if (idx !== undefined) {
+      void answerQuestion({ index: idx });
+    } else {
+      // No selection — skip (agent proceeds on best judgment).
+      void answerQuestion({ index: -1 });
+    }
+  }, [pendingQuestion, questionSel, answerQuestion]);
+
+  const skipQuestion = useCallback(() => {
+    if (!pendingQuestion) return;
+    void answerQuestion({ index: -1 });
+  }, [pendingQuestion, answerQuestion]);
+
+  const toggleQuestionChoice = useCallback((i: number) => {
+    setQuestionSel((prev) => {
+      const next = new Set(prev);
+      if (pendingQuestion?.multiSelect) {
+        if (next.has(i)) next.delete(i);
+        else next.add(i);
+      } else {
+        next.clear();
+        next.add(i);
+      }
+      return next;
+    });
+  }, [pendingQuestion]);
 
   const resetConversation = useCallback(async () => {
     subRef.current?.();
@@ -332,6 +391,35 @@ export default function ChatPage() {
                   </div>
                 </>
               )}
+            </div>
+          ) : null}
+
+          {pendingQuestion ? (
+            <div className="chat-resolve-card chat-question-card">
+              <div className="chat-resolve-head">
+                <strong>🤔 {pendingQuestion.question}</strong>
+              </div>
+              <div className="chat-resolve-options">
+                {pendingQuestion.choices.map((c, i) => (
+                  <button
+                    key={`${c.label}-${i}`}
+                    type="button"
+                    className={`chat-chip${questionSel.has(i) ? ' chat-chip-selected' : ''}`}
+                    onClick={() => toggleQuestionChoice(i)}
+                  >
+                    {c.label}
+                    {c.description ? <span className="admin-hint"> — {c.description}</span> : null}
+                  </button>
+                ))}
+              </div>
+              <div className="chat-resolve-foot">
+                <button className="admin-refresh-btn" type="button" onClick={submitQuestion}>
+                  {pendingQuestion.multiSelect ? 'Submit' : 'Choose'}
+                </button>
+                <button className="admin-mini-btn" type="button" onClick={skipQuestion}>
+                  Skip — best judgment
+                </button>
+              </div>
             </div>
           ) : null}
 

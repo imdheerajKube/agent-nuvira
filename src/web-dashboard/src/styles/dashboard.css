@@ -2805,3 +2805,18 @@ body {
 .hub-remove-btn:hover {
   background: rgba(224, 49, 49, 0.1);
 }
+
+/* P0.1 — ask_user clarifying-question card */
+.chat-chip-selected {
+  background: rgba(59, 130, 246, 0.45) !important;
+  border-color: rgba(59, 130, 246, 0.9) !important;
+  box-shadow: 0 0 0 1px rgba(59, 130, 246, 0.5);
+}
+.chat-question-card {
+  border-color: rgba(234, 179, 8, 0.5);
+}
+.chat-question-card .chat-chip {
+  max-width: none;
+  white-space: normal;
+  text-align: left;
+}

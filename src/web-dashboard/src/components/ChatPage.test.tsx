@@ -174,4 +174,57 @@ describe('ChatPage', () => {
     await waitFor(() => expect(screen.getByText(/2 steps/)).toBeTruthy());
     expect(unsub).toHaveBeenCalled();
   });
+
+  it('P0.1 — renders the agent question card and answers it via chatRespond', async () => {
+    mockAuthed('admin');
+    let questionCb: ((q: { questionId: string; question: string; choices: Array<{ label: string }>; multiSelect: boolean }) => void) | null = null;
+    vi.spyOn(dashboardAPI, 'subscribeChat').mockImplementation((_sid, handlers) => {
+      questionCb = handlers.onQuestion ?? null;
+      return vi.fn();
+    });
+    vi.spyOn(dashboardAPI, 'chatResolve').mockResolvedValue({ ok: true, matches: [] });
+    vi.spyOn(dashboardAPI, 'chatSend').mockResolvedValue(OK_RESPONSE);
+    const respondSpy = vi.spyOn(dashboardAPI, 'chatRespond').mockResolvedValue({ ok: true });
+    render(<ChatPage />);
+    await waitFor(() => expect(screen.getByPlaceholderText(/Message the agent/)).toBeTruthy());
+
+    fireEvent.change(screen.getByPlaceholderText(/Message the agent/), { target: { value: 'fix the failing test' } });
+    fireEvent.submit(screen.getByPlaceholderText(/Message the agent/).closest('form')!);
+    await waitFor(() => expect(questionCb).toBeTruthy());
+
+    // The agent asks "Should I fix it?"; the card appears with both choices.
+    questionCb!({ questionId: 'q-1', question: 'Should I fix it?', choices: [{ label: 'Yes' }, { label: 'No' }], multiSelect: false });
+    await waitFor(() => expect(screen.getByText(/Should I fix it\?/)).toBeTruthy());
+    expect(screen.getByText('Yes')).toBeTruthy();
+    expect(screen.getByText('No')).toBeTruthy();
+
+    // Picking a choice + submit answers the question through the API.
+    fireEvent.click(screen.getByText('Yes'));
+    fireEvent.click(screen.getByText('Choose'));
+    await waitFor(() => expect(respondSpy).toHaveBeenCalledWith(expect.any(String), 'q-1', { index: 0 }));
+    await waitFor(() => expect(screen.queryByText(/Should I fix it\?/)).toBeNull());
+  });
+
+  it('P0.1 — skip lets the agent proceed on best judgment (index -1)', async () => {
+    mockAuthed('admin');
+    let questionCb: ((q: { questionId: string; question: string; choices: Array<{ label: string }>; multiSelect: boolean }) => void) | null = null;
+    vi.spyOn(dashboardAPI, 'subscribeChat').mockImplementation((_sid, handlers) => {
+      questionCb = handlers.onQuestion ?? null;
+      return vi.fn();
+    });
+    vi.spyOn(dashboardAPI, 'chatResolve').mockResolvedValue({ ok: true, matches: [] });
+    vi.spyOn(dashboardAPI, 'chatSend').mockResolvedValue(OK_RESPONSE);
+    const respondSpy = vi.spyOn(dashboardAPI, 'chatRespond').mockResolvedValue({ ok: true });
+    render(<ChatPage />);
+    await waitFor(() => expect(screen.getByPlaceholderText(/Message the agent/)).toBeTruthy());
+
+    fireEvent.change(screen.getByPlaceholderText(/Message the agent/), { target: { value: 'add rahul to whatsapp' } });
+    fireEvent.submit(screen.getByPlaceholderText(/Message the agent/).closest('form')!);
+    await waitFor(() => expect(questionCb).toBeTruthy());
+
+    questionCb!({ questionId: 'q-2', question: 'Verified list or send-by-name?', choices: [{ label: 'Verified list' }, { label: 'Send-by-name' }], multiSelect: false });
+    await waitFor(() => expect(screen.getByText(/Verified list or send-by-name\?/)).toBeTruthy());
+    fireEvent.click(screen.getByText(/Skip/));
+    await waitFor(() => expect(respondSpy).toHaveBeenCalledWith(expect.any(String), 'q-2', { index: -1 }));
+  });
 });

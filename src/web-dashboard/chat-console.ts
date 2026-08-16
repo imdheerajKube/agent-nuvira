@@ -75,13 +75,42 @@ export interface ChatAnswerResult {
 /** A live event for one session (P3 progress streaming). */
 export type ChatConsoleEvent =
   | { kind: 'progress'; line: string }
-  | { kind: 'status'; status: 'working' | 'done' | 'error' };
+  | { kind: 'status'; status: 'working' | 'done' | 'error' }
+  | {
+      kind: 'question';
+      /** Unique id the client echoes back in the respond call. */
+      questionId: string;
+      question: string;
+      /** Choice options (label + optional description) — serializable for the GUI. */
+      choices: Array<{ label: string; description?: string }>;
+      multiSelect: boolean;
+    };
+
+/** The selection shape the GUI sends back to answer a pending question. */
+export interface QuestionAnswer {
+  /** Selected option index (or indices for multiSelect). -1 / [] = skip (decline). */
+  index?: number | number[];
+  /** Free-text answer (the GUI's "Other" field). */
+  custom?: string;
+}
+
+/** The shape answerOnce's askUser expects. */
+interface AskUserResult {
+  answer: unknown;
+  index: number | number[];
+  custom?: string;
+}
 
 export class ChatConsole {
   private sessions = new Map<string, ChatTurn[]>();
   private busy = new Set<string>();
   private engine: ChatEngine | null;
   private listeners = new Set<(sessionId: string, event: ChatConsoleEvent) => void>();
+  /** Pending ask_user questions per session — resolved by the GUI's respond(). */
+  private pendingQuestions = new Map<
+    string,
+    { sessionId: string; resolve: (r: AskUserResult) => void }
+  >();
 
   constructor(private readonly opts: ChatConsoleOptions = {}) {
     this.engine = opts.engine ?? null;
@@ -155,9 +184,19 @@ export class ChatConsole {
         ...(opts.provider ? { provider: opts.provider } : {}),
         ...(opts.model ? { model: opts.model } : {}),
         history: history.map((h) => ({ role: h.role, content: h.content })),
-        // Non-TTY ask_user: decline the clarification so the model proceeds
-        // on best judgment instead of blocking on the server's piped stdin.
-        askUser: async () => ({ answer: [], index: -1 }),
+        // P0.1 — real ask_user round-trip: emit a `question` event, wait for
+        // the GUI's respond() (or a skip), then feed the selection back. The
+        // previous stub declined every clarification, so the GUI agent could
+        // never ask "should I fix it?" / "verified list or send-by-name?".
+        askUser: async (question, choices, multiSelect) => {
+          const questionId = randomUUID();
+          const opts2 = (choices ?? []) as Array<{ label?: string; description?: string }>;
+          return this.askQuestion(sessionId, questionId, {
+            question: String(question ?? ''),
+            choices: opts2.map((c) => ({ label: String(c?.label ?? ''), description: c?.description ? String(c.description) : undefined })),
+            multiSelect: multiSelect === true,
+          });
+        },
         // P3 — stream the agent's working steps to the GUI (tool calls, model
         // reasoning markers) instead of a silent wait.
         onProgress: (line) => this.emit(sessionId, { kind: 'progress', line }),
@@ -185,8 +224,53 @@ export class ChatConsole {
     }
   }
 
-  /** Forget a session's history (new conversation). */
+  /**
+   * Emit a question event and wait for the GUI's respond() (or skip).
+   * Returns the ask_user result the engine expects; `index: -1` means the
+   * user skipped, which preserves the pre-P0.1 "proceed on best judgment"
+   * behavior.
+   */
+  private askQuestion(
+    sessionId: string,
+    questionId: string,
+    payload: { question: string; choices: Array<{ label: string; description?: string }>; multiSelect: boolean },
+  ): Promise<AskUserResult> {
+    this.emit(sessionId, { kind: 'question', questionId, ...payload });
+    return new Promise((resolve) => {
+      // A stale turn could leave a question unanswered forever; the GUI's
+      // skip button resolves it, and reset() sweeps leftovers. The promise
+      // itself never rejects — worst case the model proceeds on best
+      // judgment (the pre-P0.1 behavior).
+      this.pendingQuestions.set(questionId, { sessionId, resolve });
+    });
+  }
+
+  /**
+   * Answer a pending question (from the GUI). Returns false when the
+   * questionId is unknown or belongs to another session.
+   */
+  respond(sessionId: string, questionId: string, answer: QuestionAnswer = {}): boolean {
+    const pending = this.pendingQuestions.get(questionId);
+    if (!pending || pending.sessionId !== sessionId) return false;
+    this.pendingQuestions.delete(questionId);
+    const index = answer.index ?? -1;
+    const resolved: AskUserResult = {
+      index,
+      answer: Array.isArray(index) ? index : index === -1 ? [] : index,
+      custom: answer.custom,
+    };
+    pending.resolve(resolved);
+    return true;
+  }
+
+  /** Forget a session's history (new conversation) + drop its pending questions. */
   reset(sessionId: string): void {
+    for (const [id, p] of this.pendingQuestions) {
+      if (p.sessionId === sessionId) {
+        this.pendingQuestions.delete(id);
+        p.resolve({ answer: [], index: -1 });
+      }
+    }
     this.sessions.delete(sessionId);
     this.busy.delete(sessionId);
   }
