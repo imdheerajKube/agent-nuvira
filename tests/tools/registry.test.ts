@@ -299,7 +299,7 @@ describe('registry — gateway_send tool (message delivery to channels)', () => 
     expect(props).toHaveProperty('text');
     // The schema documents the WhatsApp contact-by-name pattern.
     const target = props.target as { description?: string };
-    expect(target.description ?? '').toContain('whatsapp:Daddy');
+    expect(target.description ?? '').toContain('whatsapp:Alex');
   });
 
   it('reports an unknown target cleanly (no adapter needed — hermetic)', async () => {
@@ -309,7 +309,7 @@ describe('registry — gateway_send tool (message delivery to channels)', () => 
       { configManager: {} } as ToolContext,
     );
     expect(out).toContain('unknown channel target');
-    expect(out).toContain('whatsapp:Daddy'); // teaches the platform:channelId shape
+    expect(out).toContain('whatsapp:Alex'); // teaches the platform:channelId shape
   });
 
   it('rejects a missing text argument with a clear tool error', async () => {
@@ -326,24 +326,24 @@ describe('registry — gateway_send tool (message delivery to channels)', () => 
         sent.push({ target, text });
         return true;
       },
-      directory: { resolve: () => ({ platform: 'whatsapp', channelId: 'daddy' }) },
+      directory: { resolve: () => ({ platform: 'whatsapp', channelId: 'alex' }) },
     };
     const out = await tool.run(
-      { target: 'whatsapp:Daddy', text: 'hi daddy' },
+      { target: 'whatsapp:Alex', text: 'hi alex' },
       { configManager: {}, gateway: live } as ToolContext,
     );
-    expect(out).toContain('✅ sent to whatsapp:Daddy');
-    expect(sent).toEqual([{ target: 'whatsapp:Daddy', text: 'hi daddy' }]);
+    expect(out).toContain('✅ sent to whatsapp:Alex');
+    expect(sent).toEqual([{ target: 'whatsapp:Alex', text: 'hi alex' }]);
   });
 
   it('reports a failed send through the injected gateway without throwing', async () => {
     const tool = getTool('gateway_send')!;
     const live = {
       send: async () => false,
-      directory: { resolve: () => ({ platform: 'whatsapp', channelId: 'daddy' }) },
+      directory: { resolve: () => ({ platform: 'whatsapp', channelId: 'alex' }) },
     };
     const out = await tool.run(
-      { target: 'whatsapp:Daddy', text: 'hi' },
+      { target: 'whatsapp:Alex', text: 'hi' },
       { configManager: {}, gateway: live } as ToolContext,
     );
     expect(out).toContain('failed');

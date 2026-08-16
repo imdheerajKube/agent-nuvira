@@ -20,6 +20,7 @@ import { dashboardAPI } from '../api';
 import type { HubChannelPolicy, HubContact, HubData, HubToolset } from '../types';
 import WhatsAppPanel from './WhatsAppPanel';
 import { PlatformConfigSection } from './PlatformConfigSection';
+import { maskSenderId } from '../mask';
 
 type HubTab = 'tools' | 'channels' | 'artifacts' | 'skills';
 
@@ -293,10 +294,6 @@ export default function AgentHub() {
     const db = nb.replace(/\D+/g, '');
     return da.length > 0 && da === db;
   };
-
-  /** Display name for a saved verified id (chip renders `Daddy (+91…)`). */
-  const verifiedNameFor = (platform: string, id: string): string | undefined =>
-    contacts.find((c) => c.platform === platform && sameVerifiedId(c.id, id))?.name;
 
   /**
    * P1 — add a verified USER as <Name> <Contact No> (CLI parity): the number
@@ -736,7 +733,6 @@ export default function AgentHub() {
                   <div className="hub-alias-list">
                     {users.length === 0 ? <span className="admin-hint">(blank — no one may trigger; add <code>Allow-All</code> to allow everyone)</span> : null}
                     {users.map((u) => {
-                      const nm = verifiedNameFor(p.platform, u);
                       // A chip that only exists in the DRAFT (not yet saved) is
                       // marked pending so adding a user can't be mistaken for
                       // having saved it.
@@ -745,7 +741,7 @@ export default function AgentHub() {
                       return (
                         <div className="hub-alias-row" key={`u-${u}`}>
                           <span className={`hub-chip${pending ? ' hub-chip-pending' : ''}`} title={pending ? 'Not saved yet — press 💾 Save permissions' : undefined}>
-                            {nm ? `${nm} (${u})` : u}{pending ? ' · pending' : ''}
+                            {maskSenderId(u)}{pending ? ' · pending' : ''}
                           </span>
                           <button className="admin-refresh-btn" disabled={policyBusy} onClick={() => removeVerifiedUser(p.platform, u)}>✕</button>
                         </div>
@@ -757,7 +753,7 @@ export default function AgentHub() {
                       type="text"
                       value={contactNameInput[p.platform] ?? ''}
                       onChange={(e) => setContactNameInput((s) => ({ ...s, [p.platform]: e.target.value }))}
-                      placeholder="Name (e.g. Daddy) — optional"
+                      placeholder="Name (optional)"
                       disabled={policyBusy}
                     />
                     <input
@@ -845,10 +841,13 @@ export default function AgentHub() {
                   {contacts.map((c) => {
                     const inAllowList = (data?.channels?.policies?.[c.platform]?.allowedUsers ?? []).some((u) => sameVerifiedId(u, c.id));
                     return (
-                      <tr key={`${c.platform}:${c.id}:${c.name}`}>
-                        <td>{c.name}</td>
+                      <tr key={`${c.platform}:${c.id}`}>
+                        {/* Personal contact names are never shown — a generic
+                            reference keeps the row identifiable without leaking
+                            the owner's name. */}
+                        <td>Name</td>
                         <td className="admin-provider-type">{c.platform}</td>
-                        <td>{c.id}</td>
+                        <td>{maskSenderId(c.id)}</td>
                         <td>
                           <span className={`admin-check-badge admin-check-${inAllowList ? 'pass' : 'warn'}`}>
                             {inAllowList ? '✅ verified' : '⚠ not in allow-list'}
@@ -873,7 +872,7 @@ export default function AgentHub() {
           <p className="admin-hint">
             Contacts/groups that ALWAYS receive the pipeline completion summary, whoever triggered it.
             Use a contact name, number, or <code>platform:channelId</code> — e.g.{' '}
-            <code>whatsapp:Mom</code>, <code>whatsapp:+919818293808</code>, <code>telegram:123456</code>,{' '}
+            <code>whatsapp:Name</code>, <code>whatsapp:+91***</code>, <code>telegram:123456</code>,{' '}
             <code>slack:ops</code>.
           </p>
           {statusRecipients.length > 0 ? (
@@ -894,7 +893,7 @@ export default function AgentHub() {
               type="text"
               value={statusRecipientInput}
               onChange={(e) => setStatusRecipientInput(e.target.value)}
-              placeholder="whatsapp:Mom or whatsapp:+919818293808"
+              placeholder="whatsapp:Name or whatsapp:+91***"
               disabled={policyBusy}
               maxLength={128}
             />

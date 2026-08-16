@@ -125,7 +125,7 @@ export class WhatsAppPairingManager {
     if (opts.phone && !phone) {
       return {
         ok: false,
-        error: `Invalid phone number '${opts.phone}' — use full international format with country code (no + or spaces), e.g. 918800663237`,
+        error: `Invalid phone number '${opts.phone}' — use full international format with country code (no + or spaces), e.g. 919876543210`,
       };
     }
     const controller = new AbortController();

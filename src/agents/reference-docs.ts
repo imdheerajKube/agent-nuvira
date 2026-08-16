@@ -52,7 +52,7 @@ or more globalPlugins modules. Do NOT invent APIs like nvda.register_key_handler
                             description="Speak a message",
                             category="YourAddon")
       def script_sayHello(self, gesture):
-          ui.message("Hello Anuj Mote")
+          ui.message("Hello Ria Mote")
 
 Key facts:
 - Keyboard gestures use NVDA key names and the format "kb:..." (e.g. "kb:NVDA+alt+1",

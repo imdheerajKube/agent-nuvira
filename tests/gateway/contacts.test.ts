@@ -39,9 +39,9 @@ describe('gateway contacts store', () => {
     const { readGatewayContacts, writeGatewayContacts, gatewayContactsFile } = await import('../../src/gateway/contacts.js');
     expect(readGatewayContacts()).toEqual([]);
 
-    writeGatewayContacts([{ name: 'Daddy', platform: 'whatsapp', id: '+918178504516', addedAt: 1 }]);
+    writeGatewayContacts([{ name: 'Alex', platform: 'whatsapp', id: '+919876543210', addedAt: 1 }]);
     const saved = readGatewayContacts();
-    expect(saved).toEqual([{ name: 'Daddy', platform: 'whatsapp', id: '+918178504516', addedAt: 1 }]);
+    expect(saved).toEqual([{ name: 'Alex', platform: 'whatsapp', id: '+919876543210', addedAt: 1 }]);
     // Persisted next to the other gateway state, honoring BUFF_CONFIG_DIR.
     expect(existsSync(gatewayContactsFile())).toBe(true);
     const raw = JSON.parse(readFileSync(gatewayContactsFile(), 'utf-8'));
@@ -50,53 +50,53 @@ describe('gateway contacts store', () => {
 
   it('upsert replaces by (platform, id) — including phone-format-tolerant matches', async () => {
     const { upsertGatewayContact, readGatewayContacts } = await import('../../src/gateway/contacts.js');
-    upsertGatewayContact({ name: 'Daddy', platform: 'whatsapp', id: '+918178504516' });
+    upsertGatewayContact({ name: 'Alex', platform: 'whatsapp', id: '+919876543210' });
     // Same number, different formatting + new name → replaces, not duplicates.
-    const { contact, added } = upsertGatewayContact({ name: 'Dad', platform: 'whatsapp', id: '918178504516' });
+    const { contact, added } = upsertGatewayContact({ name: 'Dad', platform: 'whatsapp', id: '919876543210' });
     expect(added).toBe(false);
     expect(contact.name).toBe('Dad');
     const saved = readGatewayContacts();
     expect(saved).toHaveLength(1);
-    expect(saved[0]).toMatchObject({ name: 'Dad', id: '918178504516' });
+    expect(saved[0]).toMatchObject({ name: 'Dad', id: '919876543210' });
   });
 
   it('upsert replaces by (platform, name) — rename keeps one entry', async () => {
     const { upsertGatewayContact, readGatewayContacts } = await import('../../src/gateway/contacts.js');
-    upsertGatewayContact({ name: 'Mom', platform: 'whatsapp', id: '+919818293808' });
-    upsertGatewayContact({ name: 'Mom', platform: 'whatsapp', id: '+919811112222' });
+    upsertGatewayContact({ name: 'Sam', platform: 'whatsapp', id: '+919999999999' });
+    upsertGatewayContact({ name: 'Sam', platform: 'whatsapp', id: '+919811112222' });
     const saved = readGatewayContacts();
     expect(saved).toHaveLength(1);
-    expect(saved[0]).toMatchObject({ name: 'Mom', id: '+919811112222' });
+    expect(saved[0]).toMatchObject({ name: 'Sam', id: '+919811112222' });
   });
 
   it('keeps the same contact on DIFFERENT platforms separate', async () => {
     const { upsertGatewayContact, readGatewayContacts } = await import('../../src/gateway/contacts.js');
-    upsertGatewayContact({ name: 'Daddy', platform: 'whatsapp', id: '+918178504516' });
-    upsertGatewayContact({ name: 'Daddy', platform: 'telegram', id: '123456789' });
+    upsertGatewayContact({ name: 'Alex', platform: 'whatsapp', id: '+919876543210' });
+    upsertGatewayContact({ name: 'Alex', platform: 'telegram', id: '123456789' });
     const saved = readGatewayContacts();
     expect(saved).toHaveLength(2);
   });
 
   it('removeGatewayContact works by id and by name', async () => {
     const { upsertGatewayContact, removeGatewayContact, readGatewayContacts } = await import('../../src/gateway/contacts.js');
-    upsertGatewayContact({ name: 'Daddy', platform: 'whatsapp', id: '+918178504516' });
-    upsertGatewayContact({ name: 'Mom', platform: 'whatsapp', id: '+919818293808' });
+    upsertGatewayContact({ name: 'Alex', platform: 'whatsapp', id: '+919876543210' });
+    upsertGatewayContact({ name: 'Sam', platform: 'whatsapp', id: '+919999999999' });
 
-    expect(removeGatewayContact('whatsapp', '918178504516')).toBe(true); // id, format-tolerant
-    expect(readGatewayContacts().map((c) => c.name)).toEqual(['Mom']);
-    expect(removeGatewayContact('whatsapp', 'MOM')).toBe(true); // by name, case-insensitive
+    expect(removeGatewayContact('whatsapp', '919876543210')).toBe(true); // id, format-tolerant
+    expect(readGatewayContacts().map((c) => c.name)).toEqual(['Sam']);
+    expect(removeGatewayContact('whatsapp', 'SAM')).toBe(true); // by name, case-insensitive
     expect(readGatewayContacts()).toEqual([]);
     expect(removeGatewayContact('whatsapp', 'nobody')).toBe(false);
   });
 
   it('contactNameFor resolves a display name (format-tolerant)', async () => {
     const { upsertGatewayContact, contactNameFor, readGatewayContacts } = await import('../../src/gateway/contacts.js');
-    upsertGatewayContact({ name: 'Daddy', platform: 'whatsapp', id: '+918178504516' });
+    upsertGatewayContact({ name: 'Alex', platform: 'whatsapp', id: '+919876543210' });
     const contacts = readGatewayContacts();
-    expect(contactNameFor(contacts, 'whatsapp', '918178504516')).toBe('Daddy');
-    expect(contactNameFor(contacts, 'whatsapp', '+918178504516')).toBe('Daddy');
+    expect(contactNameFor(contacts, 'whatsapp', '919876543210')).toBe('Alex');
+    expect(contactNameFor(contacts, 'whatsapp', '+919876543210')).toBe('Alex');
     expect(contactNameFor(contacts, 'whatsapp', '+919999999999')).toBeUndefined();
-    expect(contactNameFor(contacts, 'telegram', '+918178504516')).toBeUndefined();
+    expect(contactNameFor(contacts, 'telegram', '+919876543210')).toBeUndefined();
   });
 
   it('reads a corrupt/missing file as empty (never throws)', async () => {
@@ -111,12 +111,12 @@ describe('gateway contacts store', () => {
   it('syncs a named WhatsApp contact into the bridge contacts file (CLI parity)', async () => {
     const { syncWhatsAppContactName } = await import('../../src/gateway/contacts.js');
     const { readContactsFile } = await import('../../src/gateway/whatsapp/contacts.js');
-    syncWhatsAppContactName('Daddy', '+918178504516');
+    syncWhatsAppContactName('Alex', '+919876543210');
     // Stored as E.164 digits without '+', exactly like `buff whatsapp contact add`.
-    expect(readContactsFile(waDir)).toEqual({ Daddy: '918178504516' });
+    expect(readContactsFile(waDir)).toEqual({ Alex: '919876543210' });
     // A nameless or number-less sync is a no-op.
-    syncWhatsAppContactName('', '918178504516');
+    syncWhatsAppContactName('', '919876543210');
     syncWhatsAppContactName('X', '');
-    expect(readContactsFile(waDir)).toEqual({ Daddy: '918178504516' });
+    expect(readContactsFile(waDir)).toEqual({ Alex: '919876543210' });
   });
 });

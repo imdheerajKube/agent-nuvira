@@ -738,7 +738,7 @@ export class ConfigCommand extends BaseCommand {
             .addCommand(new Command('notify')
             .description('Manage status recipients — contacts/groups that ALWAYS get pipeline completion summaries')
             .argument('<action>', 'add, remove or list')
-            .argument('[target...]', 'Channel target(s): alias or platform:channelId (e.g. whatsapp:Daddy, telegram:123456)')
+            .argument('[target...]', 'Channel target(s): alias or platform:channelId (e.g. whatsapp:Alex, telegram:123456)')
             .action((action, targets) => this.manageStatusRecipients(action, targets)));
         return cmd;
     }
@@ -825,7 +825,7 @@ export class ConfigCommand extends BaseCommand {
         if (action === 'list') {
             logger.info('Gateway status recipients (always get pipeline completion summaries):');
             if (recipients.length === 0)
-                console.log('  (none — add one with: buff config gateway notify add whatsapp:Daddy)');
+                console.log('  (none — add one with: buff config gateway notify add whatsapp:Alex)');
             for (const t of recipients)
                 console.log(`  📊  ${t}`);
             return;

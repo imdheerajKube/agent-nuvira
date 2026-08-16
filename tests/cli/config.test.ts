@@ -361,11 +361,11 @@ describe('ConfigCommand gateway — validated-sender policies (allow/disallow/re
 
   it('allow adds users to gateway.policies.<platform>.allowedUsers (deduped, merged)', () => {
     const cmd = makeCommand();
-    runGateway(cmd, ['allow', 'whatsapp', 'user', '918178504516']);
-    expect(saved?.gateway?.policies?.whatsapp?.allowedUsers).toEqual(['918178504516']);
+    runGateway(cmd, ['allow', 'whatsapp', 'user', '919876543210']);
+    expect(saved?.gateway?.policies?.whatsapp?.allowedUsers).toEqual(['919876543210']);
 
-    runGateway(cmd, ['allow', 'whatsapp', 'user', '918178504516', '919999999999']);
-    expect(saved?.gateway?.policies?.whatsapp?.allowedUsers).toEqual(['918178504516', '919999999999']);
+    runGateway(cmd, ['allow', 'whatsapp', 'user', '919876543210', '919999999999']);
+    expect(saved?.gateway?.policies?.whatsapp?.allowedUsers).toEqual(['919876543210', '919999999999']);
   });
 
   it('allow adds groups to allowedGroups without touching sibling users', () => {
@@ -402,14 +402,14 @@ describe('ConfigCommand gateway — validated-sender policies (allow/disallow/re
 
   it('notify add/remove/list manage gateway.statusRecipients', () => {
     const cmd = makeCommand();
-    runGateway(cmd, ['notify', 'add', 'whatsapp:Daddy', 'telegram:123456']);
-    expect(saved?.gateway?.statusRecipients).toEqual(['whatsapp:Daddy', 'telegram:123456']);
+    runGateway(cmd, ['notify', 'add', 'whatsapp:Alex', 'telegram:123456']);
+    expect(saved?.gateway?.statusRecipients).toEqual(['whatsapp:Alex', 'telegram:123456']);
 
-    runGateway(cmd, ['notify', 'add', 'whatsapp:Daddy', 'slack:ops']);
-    expect(saved?.gateway?.statusRecipients).toEqual(['whatsapp:Daddy', 'telegram:123456', 'slack:ops']);
+    runGateway(cmd, ['notify', 'add', 'whatsapp:Alex', 'slack:ops']);
+    expect(saved?.gateway?.statusRecipients).toEqual(['whatsapp:Alex', 'telegram:123456', 'slack:ops']);
 
     runGateway(cmd, ['notify', 'remove', 'telegram:123456']);
-    expect(saved?.gateway?.statusRecipients).toEqual(['whatsapp:Daddy', 'slack:ops']);
+    expect(saved?.gateway?.statusRecipients).toEqual(['whatsapp:Alex', 'slack:ops']);
 
     // list is a no-op read — nothing saved.
     runGateway(cmd, ['notify', 'list']);

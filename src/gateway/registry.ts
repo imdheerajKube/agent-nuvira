@@ -83,8 +83,8 @@ export function eventToStatusLine(event: string, data: any): string | null {
 
 /**
  * Normalize a WhatsApp sender id for allow-list comparison. The allow-list
- * may hold "918178504516" or "+918178504516", while the bridge delivers the
- * full JID — "918178504516@s.whatsapp.net" (DM) or "918800604222:13@s.whatsapp.net"
+ * may hold "919876543210" or "+919876543210", while the bridge delivers the
+ * full JID — "919876543210@s.whatsapp.net" (DM) or "918811122233:13@s.whatsapp.net"
  * (self-chat, with device suffix). Strip the leading "+" and, ONLY for
  * WhatsApp JIDs (@s.whatsapp.net / @lid), the @domain + ":<device>" suffix so
  * both sides compare as plain digits. Other platforms' ids (telegram user
@@ -122,8 +122,8 @@ function userGateEnabled(policy: ChannelPolicy | undefined): boolean {
 
 /**
  * Sender passes the verified list: "Allow-All" wildcard (anyone) or an exact
- * JID-normalized match (the bridge delivers "918800604222:13@s.whatsapp.net"
- * while the list holds "+918800604222" — both normalize to the same digits).
+ * JID-normalized match (the bridge delivers "918811122233:13@s.whatsapp.net"
+ * while the list holds "+918811122233" — both normalize to the same digits).
  */
 function isVerifiedSender(policy: ChannelPolicy | undefined, senderId: string | undefined): boolean {
   const list = policy?.allowedUsers;
@@ -446,7 +446,7 @@ export class GatewayRegistry {
       // allow-list configured. Enforce the same verified list here: the group
       // must be allowed AND the sender must be verified (or the list holds
       // the "Allow-All" wildcard). JID ids ("114602662703205@lid",
-      // "918800604222:13@s.whatsapp.net") normalize to digits like DM senders.
+      // "918811122233:13@s.whatsapp.net") normalize to digits like DM senders.
       if (userGateEnabled(policy) && !isVerifiedSender(policy, msg.senderId)) {
         return refuse('You are not authorized to trigger the agent.');
       }
@@ -458,9 +458,9 @@ export class GatewayRegistry {
         return line;
       }
     } else if (userGateEnabled(policy) && !isVerifiedSender(policy, msg.senderId)) {
-      // JID-normalized comparison: the bridge delivers "918800604222:13@s.whatsapp.net"
-      // while the list holds "+918800604222" — both normalize to the same
-      // digits. A sender who wrote "918800604222" without the + is the same
+      // JID-normalized comparison: the bridge delivers "918811122233:13@s.whatsapp.net"
+      // while the list holds "+918811122233" — both normalize to the same
+      // digits. A sender who wrote "918811122233" without the + is the same
       // person. A BLANK list ([]) is a real gate: NO ONE may trigger; the
       // "Allow-All" wildcard disables the verifier (everyone may trigger).
       return refuse('You are not authorized to trigger the agent.');
@@ -489,7 +489,7 @@ export class GatewayRegistry {
 
     // Chat intent (write/explain/ask → run: 'chat'): a REAL chat answer through
     // the same engine as the dashboard console (ChatCommand.answerOnce) — so
-    // "write a poem and send it to Daddy" on WhatsApp actually writes the poem,
+    // "write a poem and send it to Alex" on WhatsApp actually writes the poem,
     // and the model's toolset includes gateway_send to deliver it.
     if (parsed.action.run === 'chat') {
       const answer = await this.runInboundChat(msg);
@@ -558,7 +558,7 @@ export class GatewayRegistry {
   /**
    * Chat-intent answer (write/explain/ask): run ONE tool-loop turn through the
    * SAME engine the dashboard chat console uses (ChatCommand.answerOnce), so
-   * a WhatsApp request like "write a poem and send it to Daddy" is answered
+   * a WhatsApp request like "write a poem and send it to Alex" is answered
    * AND delivered (the model's toolset includes gateway_send). Lazy-imported
    * so a gateway that only ever runs pipelines never pays for the CLI router.
    * Never throws — a model failure falls back to the help line in handleInbound.

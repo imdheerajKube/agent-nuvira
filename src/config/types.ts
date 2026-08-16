@@ -469,7 +469,7 @@ export interface BuffConfig {
     /**
      * Channel targets (aliases or platform:channelId) that ALWAYS receive the
      * pipeline completion summary, regardless of who triggered it — e.g.
-     * "whatsapp:Daddy", "telegram:123", "slack:ops". Managed via
+     * "whatsapp:Alex", "telegram:123", "slack:ops". Managed via
      * `buff config gateway notify add/remove` or the dashboard Permissions page.
      */
     statusRecipients?: string[];

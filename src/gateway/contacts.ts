@@ -26,11 +26,11 @@ import { readContactsFile, writeContactsFile } from './whatsapp/contacts.js';
 
 /** One saved verified contact: a display name mapped to a platform sender id. */
 export interface GatewayContact {
-  /** Display name (CLI `<Name>`), e.g. "Daddy". */
+  /** Display name (CLI `<Name>`), e.g. "Alex". */
   name: string;
   /** The platform the id belongs to (whatsapp / telegram / email / …). */
   platform: Platform;
-  /** Contact number / sender id (CLI `<Contact No>`), e.g. "+918178504516". */
+  /** Contact number / sender id (CLI `<Contact No>`), e.g. "+919876543210". */
   id: string;
   /** When the contact was added (epoch ms). */
   addedAt: number;
@@ -83,7 +83,7 @@ export function normalizeContactId(id: string): string {
 /**
  * True when two sender ids refer to the same contact: exact match, or a
  * phone-style match where both sides reduce to the same digits
- * (`+918178504516` vs `918178504516` vs `91-8178-504516`).
+ * (`+919876543210` vs `919876543210` vs `91-9876-543210`).
  */
 export function sameContactId(a: string, b: string): boolean {
   const na = normalizeContactId(a);
@@ -140,7 +140,7 @@ export function removeGatewayContact(platform: Platform, idOrName: string): bool
 
 /**
  * Resolve a saved contact's display name for a (platform, id) pair — used by
- * the dashboard so a verified list chip renders `Daddy (+918178504516)`
+ * the dashboard so a verified list chip renders `Alex (+919876543210)`
  * instead of a bare number. Returns undefined when the id has no saved name.
  */
 export function contactNameFor(contacts: GatewayContact[], platform: Platform, id: string): string | undefined {

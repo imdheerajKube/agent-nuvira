@@ -21,7 +21,7 @@ import type { AgentContext } from '../../src/agents/agent.js';
 
 function makeContext(cwd: string): AgentContext {
   return {
-    goal: 'Implement the core logic in addon_handler.py: register the NVDA shortcut and speak "Hello Anuj Mote"',
+    goal: 'Implement the core logic in addon_handler.py: register the NVDA shortcut and speak "Hello Ria Mote"',
     workingDirectory: cwd,
     taskPlan: [
       {

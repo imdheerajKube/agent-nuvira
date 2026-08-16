@@ -152,7 +152,7 @@ describe('GatewayRegistry.handleInbound', () => {
     const reply = await registry.handleInbound({
       platform: 'mock',
       channelId: 'chan-1',
-      text: 'write a 2-line poem and send it to Daddy',
+      text: 'write a 2-line poem and send it to Alex',
     });
     // The reply IS the answer with the followups appended in natural language.
     expect(reply).toContain('Here is your 2-line poem 🌊');
@@ -338,7 +338,7 @@ describe('hasDeliveryAsk', () => {
     // "text <number>" has no to/for/pronoun recipient — it already parses as a
     // chat intent, so hasDeliveryAsk (which only redirects PIPELINE intents)
     // correctly leaves it alone.
-    expect(hasDeliveryAsk('text 918178504516 saying hi')).toBe(false);
+    expect(hasDeliveryAsk('text 919876543210 saying hi')).toBe(false);
   });
 });
 
@@ -403,13 +403,13 @@ describe('isBotAddressed (P1 mention gating)', () => {
 
 describe('normalizeSenderId (JID matching)', () => {
   it('matches the allow-list "+91…" against the bridge JID forms', () => {
-    // Allow-list holds "+918800604222"; the bridge delivers these forms.
-    expect(normalizeSenderId('918800604222@s.whatsapp.net')).toBe('918800604222');
-    expect(normalizeSenderId('918800604222:13@s.whatsapp.net')).toBe('918800604222'); // self-chat device suffix
-    expect(normalizeSenderId('+918800604222')).toBe('918800604222');
-    expect(normalizeSenderId('918800604222')).toBe('918800604222');
+    // Allow-list holds "+918811122233"; the bridge delivers these forms.
+    expect(normalizeSenderId('918811122233@s.whatsapp.net')).toBe('918811122233');
+    expect(normalizeSenderId('918811122233:13@s.whatsapp.net')).toBe('918811122233'); // self-chat device suffix
+    expect(normalizeSenderId('+918811122233')).toBe('918811122233');
+    expect(normalizeSenderId('918811122233')).toBe('918811122233');
     // LID form (WhatsApp's newer identity) normalizes too.
-    expect(normalizeSenderId('918800604222@lid')).toBe('918800604222');
+    expect(normalizeSenderId('918811122233@lid')).toBe('918811122233');
   });
 
   it('leaves non-WhatsApp ids untouched (email must keep its @domain)', () => {
@@ -423,7 +423,7 @@ describe('normalizeSenderId (JID matching)', () => {
   it('allowedUsers gate matches a JID sender against the +91 allow-list', async () => {
     const { registry, adapter } = mockRegistry({
       streamEvents: false,
-      policies: { mock: { allowedUsers: ['+918800604222'] } },
+      policies: { mock: { allowedUsers: ['+918811122233'] } },
     });
     // The bridge delivers the full JID — previously this was REFUSED (silent),
     // so the user's own number could not trigger anything.
@@ -431,7 +431,7 @@ describe('normalizeSenderId (JID matching)', () => {
       platform: 'mock',
       channelId: 'dm',
       text: 'fix the failing test',
-      senderId: '918800604222:13@s.whatsapp.net',
+      senderId: '918811122233:13@s.whatsapp.net',
     });
     expect(allowed).not.toBe('refused');
     expect(adapter.sent.some((s) => s.text.includes('running the'))).toBe(true);
@@ -537,7 +537,7 @@ describe('GatewayRegistry P1 policies', () => {
   it('allowedUsers gates GROUP senders too — an unapproved member is refused even in an allowed group', async () => {
     const { registry, adapter } = mockRegistry({
       streamEvents: false,
-      policies: { mock: { allowedUsers: ['+918800604222'], allowedGroups: ['g-family'] } },
+      policies: { mock: { allowedUsers: ['+918811122233'], allowedGroups: ['g-family'] } },
     });
     // A random LID sender (privacy-rollout jid, exactly what the live gateway
     // saw) inside the ALLOWED group — previously triggered the agent because
@@ -558,7 +558,7 @@ describe('GatewayRegistry P1 policies', () => {
       channelId: 'g-family',
       text: 'fix the failing test',
       isGroup: true,
-      senderId: '918800604222:13@s.whatsapp.net',
+      senderId: '918811122233:13@s.whatsapp.net',
     });
     expect(adapter.sent.some((s) => s.text.includes('running the'))).toBe(true);
     expect(allowed).not.toBe('refused');
@@ -598,7 +598,7 @@ describe('GatewayRegistry P1 policies', () => {
       platform: 'mock',
       channelId: 'blank-dm',
       text: 'fix the failing test',
-      senderId: '918800604222',
+      senderId: '918811122233',
     });
     expect(dm).toBe('refused');
     // Group message from any sender → silent refusal too (group path now
@@ -608,7 +608,7 @@ describe('GatewayRegistry P1 policies', () => {
       channelId: 'blank-grp',
       text: 'fix the failing test',
       isGroup: true,
-      senderId: '918800604222',
+      senderId: '918811122233',
     });
     expect(grp).toBe('refused');
     // NOTHING sent, nothing processed.
