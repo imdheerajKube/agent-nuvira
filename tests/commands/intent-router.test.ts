@@ -89,6 +89,27 @@ describe('intent-router — plain English → CLI', () => {
     expect(resolveBest('configure discord')?.intent).toBe('platform.setup');
   });
 
+  it('maps expanded manifest intents (cron, sbom, audit, history, memory, retrieval, skills)', () => {
+    expect(resolveBest('list cron jobs')?.intent).toBe('cron.list');
+    expect(resolveBest('schedule the nightly build')?.intent).toBe('cron.add');
+    expect(resolveBest('generate a sbom')?.intent).toBe('sbom.generate');
+    expect(resolveBest('export the audit log')?.intent).toBe('audit.export');
+    expect(resolveBest('is this prompt safe')?.intent).toBe('security.prompt');
+    expect(resolveBest('clear conversation history')?.intent).toBe('history.clear');
+    expect(resolveBest('prune memory')?.intent).toBe('memory.prune');
+    expect(resolveBest('index the repo for search')?.intent).toBe('retrieval.index');
+    expect(resolveBest('install the git-release skill')?.intent).toBe('skill.install');
+    expect(resolveBest('approve the review bundle')?.intent).toBe('team.review.approve');
+    expect(resolveBest('enable sandboxing')?.intent).toBe('sandbox.config');
+    expect(resolveBest('show phase progress')?.intent).toBe('phase.status');
+  });
+
+  it('does not false-positive on single shared words (enable → whatsapp pair)', () => {
+    expect(resolveBest('enable sandboxing')?.intent).toBe('sandbox.config');
+    // Generic one-word overlap no longer matches an unrelated intent.
+    expect(resolveBest('what is the meaning of life')).toBeNull();
+  });
+
   it('returns nothing close for gibberish', () => {
     expect(resolveBest('flurbity glorp wibble')).toBeNull();
   });

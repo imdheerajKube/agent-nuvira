@@ -1843,6 +1843,46 @@ body {
   border: 1px dashed rgba(217, 119, 6, 0.45);
 }
 
+.chat-resolve-card {
+  margin: 10px 0;
+  padding: 10px 14px;
+  border-radius: 8px;
+  border: 1px solid rgba(88, 166, 255, 0.45);
+  background: rgba(88, 166, 255, 0.06);
+  font-size: 13px;
+}
+
+.chat-resolve-head {
+  margin-bottom: 6px;
+  color: var(--text-primary);
+}
+
+.chat-resolve-cmd {
+  margin: 6px 0;
+  padding: 6px 10px;
+  background: var(--bg-tertiary);
+  border-radius: 6px;
+  overflow-x: auto;
+}
+
+.chat-resolve-options {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin: 8px 0;
+}
+
+.chat-resolve-options .chat-chip {
+  text-align: left;
+}
+
+.chat-resolve-foot {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-top: 8px;
+}
+
 .hub-reveal-row {
   display: flex;
   align-items: center;

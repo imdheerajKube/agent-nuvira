@@ -132,10 +132,10 @@ describe('scanHubSkills', () => {
 // ─── Aggregate payload ──────────────────────────────────────────────────────
 
 describe('readHubData', () => {
-  it('returns the full hub shape with all 9 toolsets enabled by default', () => {
+  it('returns the full hub shape with all 10 toolsets enabled by default', () => {
     const hub = readHubData();
-    expect(hub.toolsets.toolsets).toHaveLength(9);
-    expect(hub.toolsets.enabled).toBe(9);
+    expect(hub.toolsets.toolsets).toHaveLength(10);
+    expect(hub.toolsets.enabled).toBe(10);
     expect(hub.toolsets.disabled).toBe(0);
     for (const t of hub.toolsets.toolsets) {
       expect(t.enabled).toBe(true);
@@ -173,7 +173,7 @@ describe('readHubData', () => {
     const web = hub.toolsets.toolsets.find((t) => t.name === 'web');
     expect(web?.enabled).toBe(false);
     expect(hub.toolsets.disabled).toBe(1);
-    expect(hub.toolsets.enabled).toBe(8);
+    expect(hub.toolsets.enabled).toBe(9);
   });
 
   it('reflects a disabled skill (persisted via setSkillEnabled) — the P3 toggle is real', () => {
@@ -313,9 +313,9 @@ describe('readHubData', () => {
     // A DIRECTORY where buffconfig.json should be → readFileSync throws EISDIR.
     mkdirSync(join(cfgDir, 'buffconfig.json'), { recursive: true });
     const hub = readHubData();
-    expect(hub.toolsets.toolsets).toHaveLength(9);
+    expect(hub.toolsets.toolsets).toHaveLength(10);
     expect(hub.toolsets.disabled).toBe(0);
-    expect(hub.toolsets.enabled).toBe(9);
+    expect(hub.toolsets.enabled).toBe(10);
   });
 
   it('reflects SMTP env vars in the platform status (email configured)', () => {

@@ -3187,6 +3187,32 @@ function handleRequest(req, res) {
     // as the task runner. The engine runs in-process (ChatCommand), so provider
     // API keys must be configured in the dashboard process — the 400 tells the
     // user exactly that when the turn fails.
+    // POST /api/chat/resolve — resolve a plain-English ask into the CLI
+    // command(s) the intent router would run (the dashboard twin of
+    // `buff intent resolve`). The Chat UI calls this BEFORE sending to the
+    // agent: a confident, executable match short-circuits to a confirm card
+    // (no 20s model round-trip for "stop the dashboard"), an ambiguous ask
+    // shows its options as choices, and everything else falls through to the
+    // normal agent chat.
+    if (pathname === '/api/chat/resolve' && req.method === 'POST') {
+        void (async () => {
+            const session = adminSessions.validate(bearerToken(req));
+            if (!session) {
+                writeJson(res, 401, { ok: false, error: 'Not authenticated — log in first.' });
+                return;
+            }
+            const body = await readJsonBody(req);
+            const message = typeof body?.message === 'string' ? body.message.trim() : '';
+            if (!message) {
+                writeJson(res, 400, { ok: false, error: 'Missing message — expected { message: string }.' });
+                return;
+            }
+            const { resolveAsk } = await import('../commands/intent-router.js');
+            const matches = resolveAsk(message);
+            writeJson(res, 200, { ok: true, matches });
+        })();
+        return;
+    }
     // POST /api/chat — send one message { sessionId?, message, provider?, model? }.
     if (pathname === '/api/chat' && req.method === 'POST') {
         void (async () => {

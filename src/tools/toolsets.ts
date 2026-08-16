@@ -93,6 +93,12 @@ export const TOOLSETS: ToolsetDef[] = [
     tools: ['gateway_send'],
   },
   {
+    name: 'system',
+    label: 'System & tooling',
+    description: 'Plain-English system/tooling control: start/stop the dashboard or gateway, verified senders, platform setup, evals, stats (via the buff CLI — run_cli).',
+    tools: ['run_cli'],
+  },
+  {
     name: 'browser',
     label: 'Browser',
     description: 'Real-browser automation (optional playwright install).',

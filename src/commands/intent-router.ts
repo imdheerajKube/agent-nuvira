@@ -83,6 +83,30 @@ export interface MatchResult {
 
 const INTENTS = (manifest as unknown as { intents: ManifestIntent[] }).intents ?? [];
 
+/** English stop-words — common filler that would inflate alias scores (e.g.
+ * "what is allowed" matching "what is the meaning of life" on the two
+ * generic words alone). Distinctive words carry the match. */
+const STOP_WORDS = new Set([
+  'a', 'an', 'the', 'and', 'or', 'of', 'to', 'in', 'on', 'at', 'for', 'with', 'from',
+  'by', 'is', 'are', 'was', 'were', 'be', 'been', 'am', 'do', 'does', 'did', 'can',
+  'could', 'will', 'would', 'should', 'may', 'might', 'must', 'have', 'has', 'had',
+  'i', 'you', 'he', 'she', 'it', 'we', 'they', 'me', 'my', 'your', 'our', 'their',
+  'this', 'that', 'these', 'those', 'what', 'which', 'who', 'whom', 'how', 'why',
+  'when', 'where', 'not', 'no', 'yes', 'so', 'if', 'then', 'than', 'as', 'up', 'down',
+  'out', 'off', 'over', 'under', 'again', 'further', 'once', 'here', 'there', 'all',
+  'any', 'both', 'each', 'few', 'more', 'most', 'other', 'some', 'such', 'only',
+  'own', 'same', 'too', 'very', 'just', 'about', 'into', 'through', 'during', 'before',
+  'after', 'above', 'below', 'between', 'around', 'please', 'help', 'do', 'got', 'get',
+  'me', 'my', 'make', 'want', 'need', 'like', 'would', 'could', 'should', 'also', 'etc',
+]);
+
+/** Count the distinctive (non-stop-word, non-placeholder) words in an alias. */
+function distinctiveWordCount(alias: string): number {
+  return norm(alias)
+    .split(' ')
+    .filter((w) => w && !w.startsWith('<') && !STOP_WORDS.has(w)).length;
+}
+
 /** Escape regex metacharacters for safe word-boundary matching. */
 function escapeRegex(text: string): string {
   return text.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
@@ -147,18 +171,24 @@ export function resolveAsk(ask: string): MatchResult[] {
     let bestScore = 0;
     let matchedAlias = '';
     for (const alias of intent.aliases) {
-      const aliasWords = norm(alias).split(' ').filter((w) => w && !w.startsWith('<'));
-      // Word-boundary matching: "run the gateway" must NOT match
-      // "is the gateway running" (running ≠ run) — substring matching would
-      // inflate gateway.start over gateway.status.
+      // Only DISTINCTIVE words count: placeholders and stop-words are
+      // excluded so "what is allowed" can't match "what is the meaning of
+      // life" on the two generic words alone. Word-boundary matching also
+      // keeps "run the gateway" from matching "is the gateway running".
+      const aliasWords = norm(alias)
+        .split(' ')
+        .filter((w) => w && !w.startsWith('<') && !STOP_WORDS.has(w));
+      if (aliasWords.length === 0) continue;
       const hits = aliasWords.filter((w) => new RegExp(`\\b${escapeRegex(w)}\\b`).test(text));
-      const score = aliasWords.length === 0 ? 0 : hits.length / aliasWords.length;
+      const score = hits.length / aliasWords.length;
       if (score > bestScore) {
         bestScore = score;
         matchedAlias = alias;
       }
     }
-    if (bestScore < 0.5) continue; // needs at least half the alias to match
+    // Needs a real majority of the distinctive words (≥0.6) — a single shared
+    // word like "enable" must not match "enable sandboxing" → whatsapp.pair.
+    if (bestScore < 0.6) continue;
 
     const base: MatchResult = {
       intent: intent.intent,
@@ -192,10 +222,16 @@ export function resolveAsk(ask: string): MatchResult[] {
     }
   }
 
-  // Tie-break: prefer the UNambiguous match when scores are equal (a user who
-  // says "the verified list" gets the direct disallow, not a clarifying
-  // question — the ambiguity group is for vague asks like "remove Rahul").
-  return results.sort((a, b) => b.score - a.score || Number(!!a.ambiguous) - Number(!!b.ambiguous));
+  // Tie-break: higher score, then MORE distinctive words matched (a specific
+  // intent like "clear conversation history" beats a generic "chat" alias
+  // that shares one word), then the UNambiguous match (a user who says "the
+  // verified list" gets the direct disallow, not a clarifying question).
+  return results.sort(
+    (a, b) =>
+      b.score - a.score ||
+      distinctiveWordCount(b.matchedAlias ?? '') - distinctiveWordCount(a.matchedAlias ?? '') ||
+      Number(!!a.ambiguous) - Number(!!b.ambiguous),
+  );
 }
 
 /** Convenience: best single match, or null when nothing is close enough. */
