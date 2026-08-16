@@ -66,7 +66,7 @@
     {
       "intent": "gateway.status",
       "summary": "Show gateway status and reachable channels",
-      "aliases": ["gateway status", "is the gateway running", "what channels are connected", "gateway health", "status of the gateway", "is the bot online"],
+      "aliases": ["gateway status", "is the gateway running", "what channels are connected", "gateway health", "status of the gateway", "is the bot online", "check the gateway health", "is the gateway healthy"],
       "objective": "See which platforms are configured and which channels are reachable",
       "command": "buff gateway status",
       "example": "buff gateway status",
@@ -349,6 +349,66 @@
       "platforms": ["*"]
     },
     {
+      "intent": "health.check",
+      "summary": "Run a full system health check",
+      "aliases": ["check system health", "system health check", "is the system healthy", "overall system health", "run a health check", "check everything is ok"],
+      "objective": "Run buff doctor to verify all provider configs, system health, and surface any issues",
+      "command": "buff doctor",
+      "example": "buff doctor",
+      "args": [],
+      "rbac": "read",
+      "confirmation": false,
+      "platforms": ["*"]
+    },
+    {
+      "intent": "health.selfheal",
+      "summary": "Auto-fix common setup/system issues",
+      "aliases": ["fix my setup", "self heal", "repair the agent", "auto fix common issues", "make everything work again", "heal the agent", "doctor fix"],
+      "objective": "Run buff doctor --fix to automatically resolve common configuration and system issues",
+      "command": "buff doctor --fix",
+      "example": "buff doctor --fix",
+      "args": [],
+      "rbac": "execute",
+      "confirmation": true,
+      "platforms": ["*"]
+    },
+    {
+      "intent": "health.providers",
+      "summary": "Check inference provider health",
+      "aliases": ["check provider health", "are my providers working", "provider health check", "is my llm provider up", "which providers are healthy"],
+      "objective": "Run buff provider health to check every configured inference provider",
+      "command": "buff provider health",
+      "example": "buff provider health",
+      "args": [],
+      "rbac": "read",
+      "confirmation": false,
+      "platforms": ["*"]
+    },
+    {
+      "intent": "health.memory",
+      "summary": "Check memory store health and size",
+      "aliases": ["is my memory healthy", "check memory usage", "how big is my memory store", "memory health check", "is my memory getting full"],
+      "objective": "Inspect memory store statistics (size, counts, health) and, if flagged, suggest optimization",
+      "command": "buff memory stats",
+      "example": "buff memory stats",
+      "args": [],
+      "rbac": "read",
+      "confirmation": false,
+      "platforms": ["*"]
+    },
+    {
+      "intent": "health.vector",
+      "summary": "Check vector-search backend health",
+      "aliases": ["check the vector store", "is my vector search healthy", "why is search slow", "vector store health check", "is faiss working"],
+      "objective": "Inspect the active vector backend, corpus size, and native-FAISS availability",
+      "command": "buff memory backend --check",
+      "example": "buff memory backend --check",
+      "args": [],
+      "rbac": "read",
+      "confirmation": false,
+      "platforms": ["*"]
+    },
+    {
       "intent": "models.list",
       "summary": "List available models",
       "aliases": ["what models are available", "list models", "available models", "which models do i have"],
@@ -530,7 +590,7 @@
     {
       "intent": "memory.stats",
       "summary": "Memory store statistics",
-      "aliases": ["memory stats", "what does the agent remember", "memory status", "show memory"],
+      "aliases": ["memory stats", "what does the agent remember", "memory status", "show memory", "memory usage", "how much memory", "memory store stats"],
       "objective": "Show memory store statistics",
       "command": "buff memory stats",
       "example": "buff memory stats",
@@ -554,7 +614,7 @@
     {
       "intent": "memory.backend",
       "summary": "Show the vector backend (FAISS etc.)",
-      "aliases": ["what vector backend", "faiss", "memory backend", "which vector store"],
+      "aliases": ["what vector backend", "faiss", "memory backend", "which vector store", "vector backend status", "search backend"],
       "objective": "Show the active vector-search backend and why it was chosen",
       "command": "buff memory backend [--check]",
       "example": "buff memory backend --check",

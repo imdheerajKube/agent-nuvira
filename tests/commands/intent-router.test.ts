@@ -122,3 +122,39 @@ describe('intent-router — plain English → CLI', () => {
     expect(e.target).toContain('telegram:123456');
   });
 });
+
+describe('intent-router — health group (self-heal)', () => {
+  const cases: Array<[string, string]> = [
+    ['check system health', 'health.check'],
+    ['run a health check', 'health.check'],
+    ['is the system healthy', 'health.check'],
+    ['fix my setup', 'health.selfheal'],
+    ['self heal', 'health.selfheal'],
+    ['repair the agent', 'health.selfheal'],
+    ['check provider health', 'health.providers'],
+    ['is my llm provider up', 'health.providers'],
+    ['is my memory getting full', 'health.memory'],
+    ['how big is my memory store', 'health.memory'],
+    ['why is search slow', 'health.vector'],
+    ['is faiss working', 'health.vector'],
+    ['is the gateway healthy', 'gateway.status'],
+    ['check the gateway health', 'gateway.status'],
+  ];
+
+  it.each(cases)('resolves %j → %s', (ask, expected) => {
+    const matches = resolveAsk(ask);
+    expect(matches.length).toBeGreaterThan(0);
+    expect(matches[0].intent).toBe(expected);
+    expect(matches[0].ambiguous).toBeFalsy();
+  });
+
+  it('health.selfheal requires confirmation (state-changing)', () => {
+    expect(resolveBest('fix my setup')?.confirmation).toBe(true);
+  });
+
+  it('read-only health checks do not require confirmation', () => {
+    for (const ask of ['check system health', 'check provider health', 'why is search slow']) {
+      expect(resolveBest(ask)?.confirmation).toBeFalsy();
+    }
+  });
+});
