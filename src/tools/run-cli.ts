@@ -50,6 +50,19 @@ function cliEntry(): string {
   return join(repoRootDir(), 'dist', 'index.js');
 }
 
+/**
+ * Strip a leading CLI-bin alias (`buff`, `agent-nuvira`, `nuvira`) from argv.
+ * Manifest commands carry the human-facing `buff` prefix, but the spawn target
+ * is `node dist/index.js <subcommand>` — a stray prefix would make the CLI
+ * print root help instead of running the command.
+ */
+export function stripCliPrefix(argv: string[]): string[] {
+  if (argv[0] === 'buff' || argv[0] === 'agent-nuvira' || argv[0] === 'nuvira') {
+    return argv.slice(1);
+  }
+  return argv;
+}
+
 /** Split a command string into argv, honoring double/single quotes. */
 export function splitCommand(command: string): string[] {
   const args: string[] = [];
@@ -130,7 +143,7 @@ export async function runCliTool(args: unknown, ctx: ToolContext): Promise<strin
   if (!existsSync(entry)) {
     return `run_cli: CLI entry not found at ${entry} — build the project first (npm run build).`;
   }
-  const argv = splitCommand(command);
+  const argv = stripCliPrefix(splitCommand(command));
   if (argv.length === 0) return `run_cli: empty command resolved for intent "${top.intent}".`;
 
   return new Promise((resolve) => {

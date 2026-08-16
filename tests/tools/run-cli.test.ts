@@ -1,10 +1,16 @@
 import { describe, it, expect } from 'vitest';
-import { splitCommand } from '../../src/tools/run-cli.js';
+import { splitCommand, stripCliPrefix } from '../../src/tools/run-cli.js';
 import { resolveAsk } from '../../src/commands/intent-router.js';
 
 describe('run_cli — command splitting', () => {
   it('splits simple argv', () => {
     expect(splitCommand('buff gateway stop')).toEqual(['buff', 'gateway', 'stop']);
+  });
+
+  it('strips the buff/bin prefix so the spawn hits the real subcommand', () => {
+    expect(stripCliPrefix(['buff', 'gateway', 'stop'])).toEqual(['gateway', 'stop']);
+    expect(stripCliPrefix(['gateway', 'status'])).toEqual(['gateway', 'status']);
+    expect(stripCliPrefix(['agent-nuvira', 'doctor'])).toEqual(['doctor']);
   });
 
   it('honors double and single quotes (spaces inside quotes stay one arg)', () => {
