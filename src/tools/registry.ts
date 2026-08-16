@@ -286,6 +286,13 @@ const writeFileSchema = z.object({
   confirm: z.boolean().default(false).describe('Set true ONLY after the user explicitly confirmed this write via ask_user. State-changing — refused without it.'),
 });
 
+/** P0.4 — run_terminal tool args: verify commands + gated shell execution. */
+const runTerminalSchema = z.object({
+  command: z.string().min(1).describe('The shell command to run in the workspace — e.g. "npx vitest run tests/foo.test.ts", "npx tsc --noEmit", "npm run build", "git diff --stat". Read-only verify commands run directly; state-changing commands need confirm:true after the user approves via ask_user. Destructive/system commands are denied outright.'),
+  confirm: z.boolean().default(false).describe('Set true ONLY after the user explicitly confirmed this command via ask_user. Required for state-changing commands (installs, mutations, network, arbitrary code).'),
+  timeout_ms: z.number().int().min(1000).max(300000).optional().describe('Timeout in ms (default 120000).'),
+});
+
 /** The C2 requirementState check as a reusable tool. */
 const verifyRequirementSchema = z.object({
   request: z.string().describe('The user request whose completeness should be verified'),
@@ -370,6 +377,7 @@ export const TOOL_CONTRACT = `You have tools available. Call them when appropria
 - To find code matching a pattern (context gathering, locating definitions/usages), call \`code_search\` with the pattern and optional globs.
 - To READ the project: call \`read_file\` to open a file (with line numbers), \`list_dir\` to see a directory's contents, or \`glob\` to find files by pattern. Always prefer reading the actual file over assuming its contents — a large file reports a line range, continue with offset/limit.
 - To CHANGE code (after reading it): call \`edit_file\` for a surgical exact-text replacement, or \`write_file\` to create/replace a file. Both are state-changing and refuse without confirm — call \`ask_user\` to confirm the change with a one-line summary, then retry with confirm:true.
+- To VERIFY code by actual invocation: call \`run_terminal\` with the real command (\`npx vitest run tests/x.test.ts\`, \`npx tsc --noEmit\`, \`npm run build\`, \`git diff\`). Read-only verify commands run directly; state-changing ones need confirm:true after the user approves via ask_user. Never guess that a test passes — run it and read the output. Use run_cli (not run_terminal) for buff/agent-nuvira control commands.
 - END EVERY RESPONSE by calling \`suggest_followups\` with exactly 3 followups the user is likely to want next — natural next questions, deeper dives, or related directions that build on what you just said; specific to this conversation, not generic.
 - If you have nothing to add, answer directly and still end with suggest_followups.
 - ORDERING (non-negotiable): deliver the user's answer FIRST, then suggest_followups. The followup call must come only AFTER the complete answer is written — never before it, never instead of it. A bare lead-in ("Sure, I can help!") is NOT an answer; write the full answer in the same step as the followup call.`;
@@ -574,6 +582,15 @@ registerTool({
   inputSchema: writeFileSchema,
   endsAgentStep: false,
   run: (args, ctx) => import('./coding-tools.js').then((m) => m.runWriteFile(args as import('./coding-tools.js').WriteFileArgs, ctx)),
+});
+
+registerTool({
+  name: 'run_terminal',
+  description: 'Run a shell command in the workspace and see its REAL output — typecheck, a single test file, a build, git diff/status. Use to verify code by actual invocation: run, read the failure, edit, re-run. Verify-class commands (tests/typecheck/build/git-readonly) run directly; state-changing commands need confirm:true after the user approves via ask_user. Destructive/system commands (sudo, git push, rm -rf at dangerous targets, ...) are denied outright.',
+  category: 'workflow',
+  inputSchema: runTerminalSchema,
+  endsAgentStep: false,
+  run: (args, ctx) => import('./run-terminal.js').then((m) => m.runTerminalTool(args as import('./run-terminal.js').RunTerminalArgs, ctx)),
 });
 
 // ─── I1 web-research tools (web_search / read_page) ─────────────────────────
