@@ -206,3 +206,39 @@ describe('/api/chat', () => {
     expect(res.status).toBe(401);
   });
 });
+
+describe('/api/chat/resolve — plain-English → CLI short-circuit', () => {
+  it('rejects unauthenticated requests', async () => {
+    const res = await fetch(`${baseUrl}/api/chat/resolve`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ message: 'stop the dashboard' }) });
+    expect(res.status).toBe(401);
+  });
+
+  it('resolves "stop the dashboard" to the dashboard.stop command', async () => {
+    const res = await authedFetch('/api/chat/resolve', 'POST', { message: 'stop the dashboard' });
+    expect(res.status).toBe(200);
+    const body = (await res.json()) as { ok: boolean; matches: Array<{ intent: string; command?: string; confirmation?: boolean }> };
+    expect(body.ok).toBe(true);
+    const top = body.matches[0];
+    expect(top?.intent).toBe('dashboard.stop');
+    expect(top?.command).toBe('buff dashboard stop');
+    expect(top?.confirmation).toBe(true);
+  });
+
+  it('marks an add-contact ask as ambiguous with two resolution options', async () => {
+    const res = await authedFetch('/api/chat/resolve', 'POST', { message: 'add Rahul mobile +919958604222 to whatsapp' });
+    expect(res.status).toBe(200);
+    const body = (await res.json()) as { matches: Array<{ ambiguous?: boolean; options?: Array<{ command: string }> }> };
+    const top = body.matches[0];
+    expect(top?.ambiguous).toBe(true);
+    const commands = top?.options?.map((o) => o.command) ?? [];
+    expect(commands).toContain('buff config gateway allow whatsapp user 919958604222');
+    expect(commands).toContain('buff whatsapp contact add Rahul 919958604222');
+  });
+
+  it('returns no matches for an ordinary chat message (falls through to the agent)', async () => {
+    const res = await authedFetch('/api/chat/resolve', 'POST', { message: 'what is the meaning of life' });
+    expect(res.status).toBe(200);
+    const body = (await res.json()) as { matches: unknown[] };
+    expect(body.matches.length).toBe(0);
+  });
+});

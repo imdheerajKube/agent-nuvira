@@ -29,6 +29,24 @@ interface ChatMessage {
   steps?: string[];
 }
 
+/** A CLI command the intent router resolved for a chat message. */
+interface ResolvedCommand {
+  intent: string;
+  summary: string;
+  command?: string;
+  example?: string;
+  ambiguous?: boolean;
+  options?: Array<{ when: string; command: string; example: string; summary: string }>;
+  confirmation?: boolean;
+  score: number;
+}
+
+/** A plain-English ask that maps to CLI command(s) — shown as a confirm card. */
+interface PendingResolve {
+  ask: string;
+  top: ResolvedCommand | null;
+}
+
 function newSessionId(): string {
   try {
     if (typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function') return crypto.randomUUID();
@@ -44,6 +62,9 @@ export default function ChatPage() {
   const [error, setError] = useState('');
   const [meta, setMeta] = useState<string | null>(null);
   const [liveSteps, setLiveSteps] = useState<string[]>([]);
+  // Plain-English → CLI short-circuit: a confident command match shows a
+  // confirm card instead of burning a model turn; ambiguous asks show choices.
+  const [pendingResolve, setPendingResolve] = useState<PendingResolve | null>(null);
   // Mirrors liveSteps for the async send callback (state would be stale in the
   // closure when the POST resolves) — the final message snapshots every step.
   const liveStepsRef = useRef<string[]>([]);
@@ -91,6 +112,25 @@ export default function ChatPage() {
       setMessages((m) => [...m, { role: 'user', content: clean }]);
       setInput('');
       setBusy(true);
+
+      // Pre-resolve the ask against the command manifest. A confident match
+      // short-circuits to a confirm card (deterministic commands like "stop
+      // the dashboard" shouldn't need a model turn); ambiguous asks show
+      // their options as choices; everything else falls through to the agent.
+      const resolved = await dashboardAPI.chatResolve(clean);
+      const matches = (resolved.matches ?? []) as ResolvedCommand[];
+      const top = matches[0] ?? null;
+      if (top && top.command && !top.ambiguous && top.score >= 0.6) {
+        setPendingResolve({ ask: clean, top });
+        setBusy(false);
+        return;
+      }
+      if (top && top.ambiguous && !pendingResolve) {
+        setPendingResolve({ ask: clean, top });
+        setBusy(false);
+        return;
+      }
+
       const sessionId = sessionIdRef.current;
       // Subscribe to LIVE progress BEFORE the turn starts so no step is missed
       // (EventSource auto-reconnects; the final answer arrives via the POST).
@@ -130,6 +170,50 @@ export default function ChatPage() {
     },
     [busy],
   );
+
+  /** Run the resolved CLI command directly (the user confirmed the card). */
+  const runResolvedCommand = useCallback(async (ask: string) => {
+    const resolved = await dashboardAPI.chatResolve(ask);
+    const matches = (resolved.matches ?? []) as ResolvedCommand[];
+    const top = matches[0] ?? null;
+    if (!top?.command) {
+      setPendingResolve(null);
+      return;
+    }
+    setPendingResolve(null);
+    setBusy(true);
+    // Execute via the real CLI as a task (same runner as the Command Console)
+    // — deterministic, no model turn, RBAC-gated by the dashboard session.
+    const argv = top.command.split(/\s+/);
+    const started = await dashboardAPI.startTask(argv, 60_000);
+    if (!started.ok || !started.task) {
+      setError(started.error || 'The command could not be started.');
+      setBusy(false);
+      return;
+    }
+    const id = started.task.id;
+    const runLabel = `▶ Ran: \`${top.command}\``;
+    // Poll until the task settles (short commands finish fast).
+    let result = '';
+    for (let i = 0; i < 60; i += 1) {
+      const t = await dashboardAPI.getTask(id);
+      if (!t?.task) break;
+      if (t.task.status !== 'running') {
+        const logs = (t.task.logs ?? []).map((l: { text: string }) => l.text).join('\n');
+        result = `${runLabel}\n\`\`\`\n${logs.trim().slice(0, 3000) || '(no output)'}\n\`\`\`\n_exit ${t.task.exitCode ?? '?'}_`;
+        break;
+      }
+      await new Promise((r) => setTimeout(r, 500));
+    }
+    setMessages((m) => [...m, { role: 'assistant', content: result || `${runLabel} (still running — see the Command Console)` }]);
+    setBusy(false);
+  }, []);
+
+  /** User declined the command card — ask the agent normally instead. */
+  const declineResolvedCommand = useCallback((ask: string) => {
+    setPendingResolve(null);
+    void send(ask);
+  }, [send]);
 
   const resetConversation = useCallback(async () => {
     subRef.current?.();
@@ -210,6 +294,46 @@ export default function ChatPage() {
           </div>
 
           {error ? <div className="admin-row-msg admin-row-msg-err">{error}</div> : null}
+
+          {pendingResolve && !busy ? (
+            <div className="chat-resolve-card">
+              {pendingResolve.top?.ambiguous && pendingResolve.top.options?.length ? (
+                <>
+                  <div className="chat-resolve-head">
+                    <strong>🤔 Which do you mean?</strong> — "{pendingResolve.ask}" maps to more than one action.
+                  </div>
+                  <div className="chat-resolve-options">
+                    {pendingResolve.top.options.map((o) => (
+                      <button key={o.command} className="chat-chip" type="button" onClick={() => void send(o.command)}>
+                        {o.summary} — <code>{o.command}</code>
+                      </button>
+                    ))}
+                  </div>
+                  <div className="chat-resolve-foot">
+                    <button className="admin-mini-btn" type="button" onClick={() => { setPendingResolve(null); }}>✕ Not that — ask the agent</button>
+                  </div>
+                </>
+              ) : (
+                <>
+                  <div className="chat-resolve-head">
+                    <strong>⚡ Run this command?</strong> — "{pendingResolve.ask}"
+                  </div>
+                  <div className="chat-resolve-cmd"><code>{pendingResolve.top?.command}</code></div>
+                  {pendingResolve.top?.confirmation ? (
+                    <div className="admin-hint">⚠ This changes running services/state.</div>
+                  ) : null}
+                  <div className="chat-resolve-foot">
+                    <button className="admin-refresh-btn" type="button" onClick={() => void runResolvedCommand(pendingResolve.ask)}>
+                      ▶ Run
+                    </button>
+                    <button className="admin-mini-btn" type="button" onClick={() => declineResolvedCommand(pendingResolve.ask)}>
+                      ✕ No — ask the agent
+                    </button>
+                  </div>
+                </>
+              )}
+            </div>
+          ) : null}
 
           {latestFollowups.length > 0 && !busy ? (
             <div className="chat-followups">

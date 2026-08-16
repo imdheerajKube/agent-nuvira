@@ -728,6 +728,28 @@ export class DashboardAPI {
   // ─── P3 — chat console (GUI parity with `buff chat "<prompt>"`) ─────────
 
   /**
+   * Resolve a plain-English ask into the CLI command(s) the intent router
+   * would run — the Chat UI calls this BEFORE the agent so deterministic
+   * commands ("stop the dashboard") short-circuit to a confirm card.
+   */
+  async chatResolve(message: string): Promise<{ ok: boolean; matches: unknown[]; error?: string }> {
+    const token = getAdminToken();
+    try {
+      const res = await fetch(`${this.baseUrl}/api/chat/resolve`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', ...(token ? { Authorization: `Bearer ${token}` } : {}) },
+        body: JSON.stringify({ message }),
+        signal: AbortSignal.timeout(10_000),
+      });
+      const d = (await res.json()) as Record<string, unknown>;
+      if (res.status === 200 && d.ok && Array.isArray(d.matches)) return { ok: true, matches: d.matches };
+      return { ok: false, matches: [], error: typeof d.error === 'string' ? d.error : 'Resolve failed.' };
+    } catch {
+      return { ok: false, matches: [], error: 'Could not reach the dashboard server.' };
+    }
+  }
+
+  /**
    * Send one chat message. A turn runs the whole agent tool loop and can take
    * minutes — the 15s admin-request budget would kill it, so this uses its
    * own fetch with a 5-minute cap.

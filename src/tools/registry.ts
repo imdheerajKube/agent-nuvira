@@ -173,6 +173,19 @@ export const gatewaySendSchema = z.object({
   text: z.string().min(1).describe('The message text to send to the channel/contact'),
 });
 
+/** run_cli — plain-English → CLI execution via the command manifest. */
+export const runCliSchema = z.object({
+  ask: z
+    .string()
+    .min(1)
+    .describe('The plain-English request, e.g. "stop the dashboard", "add Rahul to whatsapp", "run the eval suite", "send a message to ops". The tool resolves it against the command manifest and executes the matching buff command.'),
+  confirm: z
+    .boolean()
+    .optional()
+    .default(false)
+    .describe('Set true ONLY after the user explicitly confirmed a destructive/system-level command (stop/shutdown/publish/clear/disallow). The tool refuses without it.'),
+});
+
 /** H2 — delegate tool args: a focused subtask for a specialized sub-agent. */
 const delegateSchema = z.object({
   agent_type: z.string().describe('The specialized sub-agent to run (e.g. context-gatherer, reviewer, security, tester)'),
@@ -318,6 +331,7 @@ export const TOOL_CONTRACT = `You have tools available. Call them when appropria
 - If a request asks to publish a release (npm/GitHub), call \`publish\`. It is irreversible — confirm the bump type and target with the user via \`ask_user\` first unless they already specified them.
 - If a request's completeness is uncertain, call \`verify_requirement\` first.
 - If a request asks to deliver a message or result to a contact/channel (WhatsApp, Telegram, Slack, email, …), call \`gateway_send\` with the target (e.g. \`whatsapp:Alex\`) and the text. If the target contact is not configured, tell the user what to set up.
+- If a request asks to manage the system/agent itself in plain English — start/stop the dashboard or gateway, check status, add/remove a verified sender, configure a platform (telegram/whatsapp), run evals, show stats — call \`run_cli\` with the plain-English ask. It resolves the exact \`buff\` command and runs it. If the tool reports AMBIGUOUS or asks for confirmation, call \`ask_user\` first, then retry run_cli with the user's answer.
 - If a subtask can be delegated to a specialized sub-agent (gather context, review, security scan, run tests), call \`delegate\` with the agent type, a focused prompt, and optional file paths.
 - To find code matching a pattern (context gathering, locating definitions/usages), call \`code_search\` with the pattern and optional globs.
 - END EVERY RESPONSE by calling \`suggest_followups\` with exactly 3 followups the user is likely to want next — natural next questions, deeper dives, or related directions that build on what you just said; specific to this conversation, not generic.
@@ -613,6 +627,15 @@ registerTool({
   inputSchema: gatewaySendSchema,
   endsAgentStep: false,
   run: (args, ctx) => import('./gateway-send.js').then((m) => m.runGatewaySendTool(args, ctx)),
+});
+
+registerTool({
+  name: 'run_cli',
+  description: 'Resolve a plain-English request into the exact buff CLI command and execute it (start/stop the dashboard or gateway, check status, add a verified sender or send-by-name contact, configure a platform like telegram/whatsapp, run evals, show stats, manage memory/cache, etc.). Use when the user describes a system/tooling task in plain English instead of typing the command — e.g. "stop the dashboard", "add Rahul to whatsapp", "enable telegram support", "run the eval suite". Ambiguous asks and destructive actions are gated: the tool returns what to confirm, then call ask_user and retry with confirm:true when the user agreed.',
+  category: 'workflow',
+  inputSchema: runCliSchema,
+  endsAgentStep: false,
+  run: (args, ctx) => import('./run-cli.js').then((m) => m.runCliTool(args, ctx)),
 });
 
 registerTool({
