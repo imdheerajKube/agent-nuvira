@@ -13,6 +13,7 @@ import type {
   DashboardData,
   DAGData,
   HubChannelPolicy,
+  HubContact,
   HubData,
   PlatformConfigEntry,
   QuotaInsights,
@@ -503,20 +504,22 @@ export class DashboardAPI {
 
   /**
    * Gateway Permissions (validated senders): read the effective per-platform
-   * policies, or replace a per-platform policy (the running gateway re-reads
-   * config per inbound, so changes apply without a restart).
+   * policies plus the saved verified contacts, or replace per-platform
+   * policies (the running gateway re-reads config per inbound, so changes
+   * apply without a restart).
    */
-  async gatewayPolicies(): Promise<{ ok: boolean; policies?: Record<string, HubChannelPolicy>; statusRecipients?: string[]; error?: string; unauthorized?: boolean; forbidden?: boolean }> {
+  async gatewayPolicies(): Promise<{ ok: boolean; policies?: Record<string, HubChannelPolicy>; statusRecipients?: string[]; contacts?: HubContact[]; error?: string; unauthorized?: boolean; forbidden?: boolean }> {
     const r = await this.sendAdminRequest('/api/admin/gateway/policies', 'GET');
     if (!r) return { ok: false, error: 'Could not reach the dashboard server.' };
-    const d = (r.data ?? {}) as { ok?: boolean; policies?: Record<string, HubChannelPolicy>; statusRecipients?: string[]; error?: string };
-    if (r.status === 200 && d.ok) return { ok: true, policies: d.policies, statusRecipients: d.statusRecipients };
+    const d = (r.data ?? {}) as { ok?: boolean; policies?: Record<string, HubChannelPolicy>; statusRecipients?: string[]; contacts?: HubContact[]; error?: string };
+    if (r.status === 200 && d.ok) return { ok: true, policies: d.policies, statusRecipients: d.statusRecipients, contacts: d.contacts };
     return { ok: false, error: d.error || 'Failed to read policies.', unauthorized: r.status === 401, forbidden: r.status === 403 };
   }
 
-  async saveGatewayPolicies(policies: Record<string, HubChannelPolicy>, statusRecipients?: string[]): Promise<AdminWriteResult> {
+  async saveGatewayPolicies(policies: Record<string, HubChannelPolicy>, statusRecipients?: string[], contacts?: HubContact[]): Promise<AdminWriteResult> {
     const body: Record<string, unknown> = { policies };
     if (Array.isArray(statusRecipients)) body.statusRecipients = statusRecipients;
+    if (Array.isArray(contacts)) body.contacts = contacts;
     const r = await this.sendAdminRequest('/api/admin/gateway/policies', 'PUT', body);
     if (!r) return { ok: false, error: 'Could not reach the dashboard server.' };
     const d = (r.data ?? {}) as AdminWriteResult;

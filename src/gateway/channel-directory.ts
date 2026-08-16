@@ -48,7 +48,12 @@ export interface ChannelRef {
  * BUFF_GATEWAY_ALLOW_IDS (platform:channelId) still applies on top.
  */
 export interface ChannelPolicy {
-  /** Sender ids allowed to trigger the pipeline (empty/absent = inherit global). */
+  /**
+   * Verified senders allowed to trigger the pipeline. Verified-list rule:
+   * present + entries = ONLY those senders; present + empty (blank) = NO ONE;
+   * the "Allow-All" wildcard token (case-insensitive) = skip the verifier,
+   * anyone may trigger. ABSENT = legacy open default (no per-user gate).
+   */
   allowedUsers?: string[];
   /** Group/channel ids allowed to trigger (empty/absent = inherit global). */
   allowedGroups?: string[];

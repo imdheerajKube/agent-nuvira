@@ -100,6 +100,39 @@ export function normalizeSenderId(id: string | undefined): string {
   return t.replace(/^\+/, '');
 }
 
+/**
+ * True for the special "Allow-All" wildcard token in a verified list
+ * (case-insensitive "Allow-All" / "allowall" / "allow all" / "*"): when
+ * present, the sender verifier is SKIPPED entirely and anyone may trigger.
+ */
+export function isAllowAllToken(value: string | undefined): boolean {
+  const v = (value ?? '').trim().toLowerCase().replace(/[\s_-]+/g, '');
+  return v === 'allowall' || v === '*';
+}
+
+/**
+ * True when the per-user verifier is ENABLED for a policy: an `allowedUsers`
+ * array is present AND it holds no "Allow-All" wildcard. An EMPTY array is a
+ * REAL gate (verified-list rule: blank = NO ONE may trigger); only an ABSENT
+ * list keeps the legacy open default (everyone allowed).
+ */
+function userGateEnabled(policy: ChannelPolicy | undefined): boolean {
+  return Array.isArray(policy?.allowedUsers) && !policy.allowedUsers.some(isAllowAllToken);
+}
+
+/**
+ * Sender passes the verified list: "Allow-All" wildcard (anyone) or an exact
+ * JID-normalized match (the bridge delivers "918800604222:13@s.whatsapp.net"
+ * while the list holds "+918800604222" — both normalize to the same digits).
+ */
+function isVerifiedSender(policy: ChannelPolicy | undefined, senderId: string | undefined): boolean {
+  const list = policy?.allowedUsers;
+  if (!Array.isArray(list)) return true;
+  if (list.some(isAllowAllToken)) return true;
+  const norm = normalizeSenderId(senderId);
+  return norm.length > 0 && list.some((u) => normalizeSenderId(u) === norm);
+}
+
 /** True when a group message addresses the bot (name-prefix or @-mention). */
 export function isBotAddressed(text: string): boolean {
   const t = (text || '').trim();
@@ -407,6 +440,16 @@ export class GatewayRegistry {
       if (policy?.allowedGroups && policy.allowedGroups.length > 0 && !policy.allowedGroups.includes(msg.channelId)) {
         return refuse('This group is not authorized to trigger the agent.');
       }
+      // Sender gate inside groups: a group message's author was previously
+      // NEVER checked against allowedUsers (the DM-only else-if below) — so an
+      // unapproved member in ANY group could trigger the agent, even with an
+      // allow-list configured. Enforce the same verified list here: the group
+      // must be allowed AND the sender must be verified (or the list holds
+      // the "Allow-All" wildcard). JID ids ("114602662703205@lid",
+      // "918800604222:13@s.whatsapp.net") normalize to digits like DM senders.
+      if (userGateEnabled(policy) && !isVerifiedSender(policy, msg.senderId)) {
+        return refuse('You are not authorized to trigger the agent.');
+      }
       // Address-only mode: a group message must mention/address the bot.
       if (policy?.requireMention && !isBotAddressed(msg.text)) {
         const line = `🤖 I'm here — mention me (e.g. "buff fix the tests") to trigger a task in this group.`;
@@ -414,16 +457,13 @@ export class GatewayRegistry {
         record('help', line);
         return line;
       }
-    } else if (policy?.allowedUsers && policy.allowedUsers.length > 0) {
+    } else if (userGateEnabled(policy) && !isVerifiedSender(policy, msg.senderId)) {
       // JID-normalized comparison: the bridge delivers "918800604222:13@s.whatsapp.net"
-      // while the allow-list holds "+918800604222" — both normalize to the
-      // same digits. A sender who wrote "918800604222" without the + is the
-      // same person.
-      const norm = normalizeSenderId(msg.senderId);
-      const allowed = norm.length > 0 && policy.allowedUsers.some((u) => normalizeSenderId(u) === norm);
-      if (!allowed) {
-        return refuse('You are not authorized to trigger the agent.');
-      }
+      // while the list holds "+918800604222" — both normalize to the same
+      // digits. A sender who wrote "918800604222" without the + is the same
+      // person. A BLANK list ([]) is a real gate: NO ONE may trigger; the
+      // "Allow-All" wildcard disables the verifier (everyone may trigger).
+      return refuse('You are not authorized to trigger the agent.');
     }
     if (!this.isAllowed(ref)) {
       return refuse('This channel is not authorized to trigger the agent. Add it to BUFF_GATEWAY_ALLOW_IDS (platform:channelId).');

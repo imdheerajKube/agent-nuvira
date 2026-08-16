@@ -36,6 +36,7 @@ import { isAdminConfigured } from './src/admin-auth.js';
 import { ConfigManager } from '../config/manager.js';
 import { whatsappSessionDir } from '../gateway/whatsapp/session.js';
 import { readContactsFile } from '../gateway/whatsapp/contacts.js';
+import { readGatewayContacts } from '../gateway/contacts.js';
 
 // ─── Types (the /api/hub contract — keep stable for the panel + tests) ──────
 
@@ -128,6 +129,12 @@ export interface HubData {
     platforms: HubPlatformStatus[];
     /** P1 — effective per-platform inbound policies (who may trigger). */
     policies: Record<string, HubChannelPolicy>;
+    /**
+     * Saved verified contacts (name + contact no) across platforms — the
+     * validated list the Permissions page edits. Names resolve the bare ids
+     * in `policies.*.allowedUsers` to human labels.
+     */
+    contacts: Array<{ name: string; platform: string; id: string; addedAt?: number }>;
     /** Status recipients — always get pipeline completion summaries. */
     statusRecipients: string[];
     /**
@@ -246,6 +253,13 @@ function readChannelsData(): HubData['channels'] {
     // running gateway applies; the dashboard also edits via PUT
     // /api/admin/gateway/policies).
     policies: readPoliciesData(),
+    // Saved verified contacts (name + contact no) — the validated list.
+    contacts: readGatewayContacts().map((c) => ({
+      name: c.name,
+      platform: c.platform,
+      id: c.id,
+      addedAt: c.addedAt,
+    })),
     statusRecipients: (() => {
       const cfg = new ConfigManager().getAll() as { gateway?: { statusRecipients?: string[] } };
       return cfg.gateway?.statusRecipients ?? [];

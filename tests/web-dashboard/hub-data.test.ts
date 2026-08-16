@@ -271,6 +271,26 @@ describe('readHubData', () => {
     expect(hub.channels.policies.discord).toEqual({});
   });
 
+  it('surfaces the saved verified contacts (name + contact no) on channels', () => {
+    // What the policies API PUT writes (~/.buff/gateway/contacts.json):
+    mkdirSync(join(cfgDir, 'gateway'), { recursive: true });
+    writeFileSync(
+      join(cfgDir, 'gateway', 'contacts.json'),
+      JSON.stringify({
+        version: 1,
+        contacts: [
+          { name: 'Daddy', platform: 'whatsapp', id: '+918178504516', addedAt: 1 },
+          { name: 'Ops', platform: 'telegram', id: '987654321', addedAt: 2 },
+        ],
+      }),
+    );
+    const hub = readHubData();
+    expect(hub.channels.contacts).toEqual([
+      { name: 'Daddy', platform: 'whatsapp', id: '+918178504516', addedAt: 1 },
+      { name: 'Ops', platform: 'telegram', id: '987654321', addedAt: 2 },
+    ]);
+  });
+
   it('scans the cwd .agents/skills into the hub skills list', () => {
     const root = join(cwdDir, '.agents', 'skills');
     mkdirSync(join(root, 'demo-fix'), { recursive: true });
