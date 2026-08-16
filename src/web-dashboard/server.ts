@@ -2672,11 +2672,15 @@ function handleRequest(req: IncomingMessage, res: ServerResponse): void {
         const incoming = (body?.policies ?? {}) as Record<string, Record<string, unknown>>;
         const configManager = new ConfigManager();
         const current = (configManager.getAll() as { gateway?: { policies?: Record<string, Record<string, unknown>> } }).gateway?.policies ?? {};
-        // Keep platforms not in the payload untouched (per-platform replace).
+        // Keep platforms not in the payload untouched, and merge each incoming
+        // policy PER-KEY over the saved one — a draft that only touches
+        // `silentDrop` must never wipe the platform's saved allowedUsers (the
+        // dashboard sends its draft, which is a partial diff). Whole keys in
+        // the draft (e.g. an edited allowedUsers list) still replace theirs.
         const merged: Record<string, Record<string, unknown>> = { ...current };
         for (const [platform, pol] of Object.entries(incoming)) {
           if (!(platform in PLATFORM_ENV_VARS)) continue;
-          merged[platform] = pol ?? {};
+          merged[platform] = { ...(merged[platform] ?? {}), ...(pol ?? {}) };
         }
         // Status recipients ride along on the same PUT (whole-array semantics).
         const gatewayPatch: { policies: Record<string, Record<string, unknown>>; statusRecipients?: string[] } = { policies: merged };

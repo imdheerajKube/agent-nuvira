@@ -132,7 +132,20 @@ describe('GatewayRegistry.handleInbound', () => {
         // A model may call askUser — the gateway must not hang on a TTY.
         const ask = opts?.askUser as (q: string, c: Array<{ label: string }>) => Promise<unknown>;
         expect(typeof ask).toBe('function');
-        return { content: 'Here is your 2-line poem 🌊', followups: [] };
+        // The engine's internal progress ("routed to …", "⚙ suggest_followups(…)")
+        // is NOT wired to the channel anymore — emitting it here must not leak.
+        const progress = opts?.onProgress as ((line: string) => void) | undefined;
+        progress?.('   🧠 routed to groq / llama — working…');
+        progress?.('⚙ suggest_followups({followups:[{"prompt":"…"}]})');
+        // The model's suggested followups ride along as DATA — the gateway
+        // renders them as natural-language text, never as tool-call JSON.
+        return {
+          content: 'Here is your 2-line poem 🌊',
+          followups: [
+            { prompt: 'Write a poem about the ocean' },
+            { prompt: 'Make the poem longer', label: 'Longer' },
+          ],
+        };
       },
     };
     const { registry, adapter } = mockRegistry({ streamEvents: false, chatEngine: engine });
@@ -141,10 +154,24 @@ describe('GatewayRegistry.handleInbound', () => {
       channelId: 'chan-1',
       text: 'write a 2-line poem and send it to Daddy',
     });
-    expect(reply).toBe('Here is your 2-line poem 🌊');
-    expect(adapter.sent.length).toBe(1);
+    // The reply IS the answer with the followups appended in natural language.
+    expect(reply).toContain('Here is your 2-line poem 🌊');
+    expect(reply).toContain('Try next:');
+    // ONE polite "working" line up front, then the clean answer + followups as
+    // readable text — no routing/tool-call noise ever reaches the sender.
+    expect(adapter.sent.length).toBe(2);
     expect(adapter.sent[0].channelId).toBe('chan-1');
-    expect(adapter.sent[0].text).toContain('poem');
+    expect(adapter.sent[0].text).toContain('Working on it');
+    const answer = adapter.sent[1].text;
+    expect(answer).toContain('Here is your 2-line poem 🌊');
+    expect(answer).toContain('Try next:');
+    expect(answer).toContain('1. Write a poem about the ocean');
+    expect(answer).toContain('2. Make the poem longer');
+    const all = adapter.sent.map((s) => s.text).join('\n');
+    expect(all).not.toContain('routed to');
+    expect(all).not.toContain('suggest_followups');
+    expect(all).not.toContain('⚙');
+    expect(all).not.toContain('{'); // no raw JSON anywhere
   });
 
   it('chat requests fall back to the understood line when no model answers', async () => {
@@ -158,7 +185,8 @@ describe('GatewayRegistry.handleInbound', () => {
       text: 'what is agent-nuvira?',
     });
     expect(reply).toContain('I understood');
-    expect(adapter.sent.length).toBe(1);
+    expect(adapter.sent.length).toBe(2); // working line + understood fallback
+    expect(adapter.sent[0].text).toContain('Working on it');
   });
 
   it('pipeline requests reply with the run result (fast-fail local model)', async () => {
@@ -252,10 +280,12 @@ describe('GatewayRegistry.handleInbound', () => {
       text: 'create a report and send it to the team on whatsapp',
     });
     // The loop's answer (which includes the delivery) is the reply — no bare
-    // orchestrator "Got it" ack, no direct pipeline run.
+    // orchestrator "Got it" ack, no direct pipeline run. One polite working
+    // line up front, then the answer.
     expect(reply).toContain('Report built and sent');
-    expect(adapter.sent).toHaveLength(1);
-    expect(adapter.sent[0].text).toContain('Report built and sent');
+    expect(adapter.sent).toHaveLength(2);
+    expect(adapter.sent[0].text).toContain('Working on it');
+    expect(adapter.sent[1].text).toContain('Report built and sent');
   });
 
   it('pure pipeline intents (no delivery ask) stay on the direct orchestrator', async () => {
@@ -285,7 +315,8 @@ describe('GatewayRegistry.handleInbound', () => {
     // The mocked ChatCommand instance answered (instance method exists).
     expect(reply).toContain('lazy-answer:');
     expect(chatInstances.length).toBe(before + 1);
-    expect(adapter.sent.length).toBe(1);
+    expect(adapter.sent.length).toBe(2); // working line + lazy answer
+    expect(adapter.sent[0].text).toContain('Working on it');
   });
 });
 

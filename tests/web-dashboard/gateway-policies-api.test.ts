@@ -163,7 +163,9 @@ describe('/api/admin/gateway/policies', () => {
     expect(put.status).toBe(200);
     const putBody = (await put.json()) as { policies: Record<string, Record<string, unknown>> };
     expect(putBody.policies.notreal).toBeUndefined();
-    expect(putBody.policies.whatsapp).toEqual({ allowedUsers: ['u-1'] });
+    // Per-key merge: allowedUsers is replaced by the draft; any OTHER key the
+    // earlier tests wrote (e.g. silentDrop) survives — that's the point.
+    expect(putBody.policies.whatsapp).toMatchObject({ allowedUsers: ['u-1'] });
 
     // A follow-up PUT for only telegram keeps whatsapp intact.
     await authedFetch('/api/admin/gateway/policies', 'PUT', {
@@ -171,8 +173,32 @@ describe('/api/admin/gateway/policies', () => {
     });
     const get = await authedFetch('/api/admin/gateway/policies');
     const getBody = (await get.json()) as { policies: Record<string, { allowedUsers?: string[]; silentDrop?: boolean }> };
-    expect(getBody.policies.whatsapp).toEqual({ allowedUsers: ['u-1'] });
-    expect(getBody.policies.telegram).toEqual({ silentDrop: true });
+    expect(getBody.policies.whatsapp).toMatchObject({ allowedUsers: ['u-1'] });
+    expect(getBody.policies.telegram).toMatchObject({ silentDrop: true });
+  });
+
+  it('PUT merges per-key — toggling ONE flag never wipes the saved allowedUsers', async () => {
+    // Regression: the dashboard sends its draft (a partial diff). A draft that
+    // only toggles silentDrop must NOT replace the platform policy wholesale
+    // and lose the saved allowed users — that made removed contacts look like
+    // they were gone and made others vanish on save.
+    await authedFetch('/api/admin/gateway/policies', 'PUT', {
+      policies: { whatsapp: { allowedUsers: ['u-1', 'u-2'], silentDrop: true } },
+    });
+    const put = await authedFetch('/api/admin/gateway/policies', 'PUT', {
+      policies: { whatsapp: { silentDrop: false } },
+    });
+    expect(put.status).toBe(200);
+    const get = await authedFetch('/api/admin/gateway/policies');
+    const getBody = (await get.json()) as { policies: Record<string, { allowedUsers?: string[]; silentDrop?: boolean }> };
+    expect(getBody.policies.whatsapp).toEqual({ allowedUsers: ['u-1', 'u-2'], silentDrop: false });
+    // An edited allowedUsers list still REPLACES the key (removal works).
+    await authedFetch('/api/admin/gateway/policies', 'PUT', {
+      policies: { whatsapp: { allowedUsers: ['u-1'] } },
+    });
+    const get2 = await authedFetch('/api/admin/gateway/policies');
+    const get2Body = (await get2.json()) as { policies: Record<string, { allowedUsers?: string[] }> };
+    expect(get2Body.policies.whatsapp.allowedUsers).toEqual(['u-1']);
   });
 
   it('rejects non-GET/PUT methods (405)', async () => {

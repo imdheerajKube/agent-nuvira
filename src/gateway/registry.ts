@@ -535,6 +535,11 @@ export class GatewayRegistry {
       // P2 — origin context: the chat model knows who it's talking to, so its
       // gateway_send calls target the right contact/channel.
       const prompt = `[Origin: ${origin} — reply to this chat]\n\n${msg.text}`;
+      // One polite "working" line up front, then ONLY the final answer. The
+      // engine's live progress ("routed to <provider>…", "⚙ tool(args)"
+      // including raw suggest_followups JSON) is INTERNAL — streaming it to a
+      // channel leaks routing internals and tool-call noise to the sender.
+      await this.sendToRef({ platform: msg.platform, channelId: msg.channelId }, '🤖 Working on it…');
       // askUser must never hang the gateway on a TTY: when the model needs a
       // clarification, reply to the channel with the question + choices and
       // pick the first as a best-effort default (the user can answer on the
@@ -552,13 +557,28 @@ export class GatewayRegistry {
           await this.sendToRef({ platform: msg.platform, channelId: msg.channelId }, `🤔 ${question}\n${list}`);
           return { answer: (choices as Array<{ label: string }>)[0]?.label ?? 'skip', index: 0 };
         },
-        // P3 — stream the agent's working steps back to the channel instead of
-        // a silent wait.
-        onProgress: (line) => {
-          void this.sendToRef({ platform: msg.platform, channelId: msg.channelId }, line);
-        },
+        // P3 note: the engine's onProgress is intentionally NOT wired here —
+        // internal progress lines (routed-to, raw tool calls) must never leak
+        // to the channel. Progress stays in the audit logs; the single
+        // "working" line + final answer is the whole conversation.
       });
-      return { content: answer.content, generationFailed: answer.generationFailed };
+      // Only the FINAL answer reaches the sender, in natural language — plus
+      // the model's suggested followups rendered as a readable numbered list
+      // (WhatsApp has no clickable chips; the sender replies with one of the
+      // lines). No technical jargon, no routing/tool-call noise.
+      let content = answer.content;
+      const fups = (answer.followups ?? [])
+        .map((f) => (f && typeof f.prompt === 'string' && f.prompt.trim() ? f.prompt.trim() : ''))
+        .filter(Boolean)
+        .slice(0, 3);
+      if (fups.length > 0) {
+        const suffix = `\n\nTry next:\n${fups.map((f, i) => `${i + 1}. ${f}`).join('\n')}`;
+        // WhatsApp truncates ~4096 chars — the ANSWER is the deliverable, so
+        // drop the followups (never the answer) when the message would exceed
+        // the cap.
+        if (content.length + suffix.length <= 4000) content += suffix;
+      }
+      return { content, generationFailed: answer.generationFailed };
     } catch (err) {
       logger.error(`gateway: inbound chat failed: ${err instanceof Error ? err.message : String(err)}`);
       return { content: '', generationFailed: true };

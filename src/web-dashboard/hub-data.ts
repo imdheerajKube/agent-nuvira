@@ -34,6 +34,8 @@ import { getSkillStore } from '../learning/skill-store.js';
 import { readDisabledSkills } from '../learning/hub-skill-catalog.js';
 import { isAdminConfigured } from './src/admin-auth.js';
 import { ConfigManager } from '../config/manager.js';
+import { whatsappSessionDir } from '../gateway/whatsapp/session.js';
+import { readContactsFile } from '../gateway/whatsapp/contacts.js';
 
 // ─── Types (the /api/hub contract — keep stable for the panel + tests) ──────
 
@@ -128,6 +130,13 @@ export interface HubData {
     policies: Record<string, HubChannelPolicy>;
     /** Status recipients — always get pipeline completion summaries. */
     statusRecipients: string[];
+    /**
+     * Friendly display labels for status recipients: `whatsapp:Daddy` shows as
+     * `whatsapp:Daddy → +918178504516` (resolved through the contacts file), a
+     * bare number gets the country-code `+` — so a user never sees a raw alias
+     * without knowing who/what it maps to.
+     */
+    statusRecipientDisplay: Record<string, string>;
     /** P2 — inbound inbox (who messaged the bot, what happened). */
     inbox: {
       total: number;
@@ -240,6 +249,34 @@ function readChannelsData(): HubData['channels'] {
     statusRecipients: (() => {
       const cfg = new ConfigManager().getAll() as { gateway?: { statusRecipients?: string[] } };
       return cfg.gateway?.statusRecipients ?? [];
+    })(),
+    statusRecipientDisplay: (() => {
+      const cfg = new ConfigManager().getAll() as { gateway?: { statusRecipients?: string[] } };
+      const targets = cfg.gateway?.statusRecipients ?? [];
+      if (targets.length === 0) return {};
+      const display: Record<string, string> = {};
+      // WhatsApp names resolve through the user's contacts file (name → digits);
+      // numbers get the country-code '+' for readability. Other platforms stay
+      // as-is. Never throws — resolution is best-effort.
+      try {
+        const contacts = readContactsFile(whatsappSessionDir());
+        for (const t of targets) {
+          const m = /^whatsapp:(.+)$/i.exec(t);
+          if (!m) continue;
+          const who = m[1].trim();
+          if (!who) continue;
+          const digitsOnly = /^\+?\d[\d\s-]*$/.test(who);
+          if (digitsOnly) {
+            display[t] = `whatsapp:+${who.replace(/\D+/g, '')}`;
+          } else {
+            const hit = contacts[who] ?? Object.entries(contacts).find(([k]) => k.toLowerCase() === who.toLowerCase())?.[1];
+            display[t] = hit ? `whatsapp:${who} → +${hit}` : t;
+          }
+        }
+      } catch {
+        // best-effort — fall back to the raw target
+      }
+      return display;
     })(),
     inbox: {
       total: inboxEntries.length,

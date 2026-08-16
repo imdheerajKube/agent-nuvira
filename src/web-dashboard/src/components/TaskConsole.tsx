@@ -26,6 +26,8 @@ const STATUS_LABEL: Record<TaskStatus, string> = {
 export interface TaskPreset {
   label: string;
   args: string[];
+  /** Optional per-preset timeout (ms). 0 = no timeout; falls back to the console-level timeoutMs prop. */
+  timeoutMs?: number;
 }
 
 interface Props {
@@ -72,12 +74,12 @@ export default function TaskConsole({ presets, customPlaceholder, timeoutMs = 30
   const canRun = auth?.authenticated === true && (auth.role === 'admin' || auth.role === 'operator');
 
   const start = useCallback(
-    async (args: string[]) => {
+    async (args: string[], presetTimeoutMs?: number) => {
       if (running) return;
       setRunning(true);
       setError('');
       setLogs([]);
-      const r = await dashboardAPI.startTask(args, timeoutMs);
+      const r = await dashboardAPI.startTask(args, presetTimeoutMs ?? timeoutMs);
       if (!r.ok || !r.task) {
         setError(r.error || 'Could not start the command.');
         setRunning(false);
@@ -116,7 +118,7 @@ export default function TaskConsole({ presets, customPlaceholder, timeoutMs = 30
         <>
           <div className="ops-presets">
             {presets.map((p) => (
-              <button key={p.label} className="admin-refresh-btn" type="button" onClick={() => void start(p.args)} disabled={running}>
+              <button key={p.label} className="admin-refresh-btn" type="button" onClick={() => void start(p.args, p.timeoutMs)} disabled={running}>
                 {p.label}
               </button>
             ))}

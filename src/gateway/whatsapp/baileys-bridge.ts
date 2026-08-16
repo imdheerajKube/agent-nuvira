@@ -23,12 +23,99 @@
  *   so `send("Daddy", …)` resolves the contact by name.
  */
 
-import { existsSync, mkdirSync } from 'node:fs';
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 
 import { normalizeWhatsAppJid, type WhatsAppBridge } from './bridge.js';
 import { whatsappSessionDir } from './session.js';
 import { readContactsFile, writeContactsFile } from './contacts.js';
+
+// ─── LID → phone-number mapping ────────────────────────────────────────────
+// WhatsApp's privacy rollout moved DMs to LID jids ("123456789012345@lid"):
+// the LID is a RANDOM id, NOT the contact's phone number, so an allow-list
+// entry like "+918800604222" can never match the raw sender jid. Baileys
+// learns the LID→PN pairs internally (linked-profile notifications,
+// contactAction sync, history sync, pnForLidChatAction) and emits them as
+// `lid-mapping.update` events — the bridge mirrors those into its own map so
+// inbound senders resolve to their phone-number jid BEFORE the policy gate
+// compares them against the allow-list.
+
+/** The LID↔PN mapping file next to a WhatsApp session dir. */
+function lidMappingsFile(sessionDir: string): string {
+  return join(sessionDir, 'lid-mappings.json');
+}
+
+/** Read persisted LID→PN pairs (missing/corrupt file → [] — never throws). */
+export function readLidMappingsFile(sessionDir: string): Array<{ lid: string; pn: string }> {
+  try {
+    const file = lidMappingsFile(sessionDir);
+    if (!existsSync(file)) return [];
+    const parsed = JSON.parse(readFileSync(file, 'utf-8')) as Array<{ lid: string; pn: string }>;
+    return Array.isArray(parsed) ? parsed.filter((p) => typeof p?.lid === 'string' && typeof p?.pn === 'string') : [];
+  } catch {
+    return [];
+  }
+}
+
+/** Persist LID→PN pairs (mkdir + atomic-ish write; never throws). */
+export function writeLidMappingsFile(sessionDir: string, pairs: Array<{ lid: string; pn: string }>): void {
+  try {
+    const file = lidMappingsFile(sessionDir);
+    mkdirSync(sessionDir, { recursive: true });
+    writeFileSync(file, JSON.stringify(pairs, null, 2), 'utf-8');
+  } catch {
+    /* best-effort — a failed write must never break a message */
+  }
+}
+
+/**
+ * Runtime LID → phone-number resolver. Jids that are NOT `@lid` pass through
+ * untouched; a `@lid` jid is translated to its PN jid ("@s.whatsapp.net")
+ * when a mapping is known. Persists learned pairs so restarts keep working
+ * before the first sync of a new session.
+ */
+export class LidJidMapper {
+  private readonly lidToPn = new Map<string, string>();
+
+  constructor(sessionDir?: string, seed?: Array<{ lid: string; pn: string }>) {
+    for (const { lid, pn } of seed ?? (sessionDir ? readLidMappingsFile(sessionDir) : [])) {
+      this.learn(lid, pn);
+    }
+  }
+
+  /** Store a LID→PN pair (accepts bare digits or full jids; normalizes both). */
+  learn(lid: string, pn: string): void {
+    const l = (lid || '').trim();
+    const p = (pn || '').trim();
+    if (!l || !p) return;
+    const lidJid = l.includes('@') ? l : `${l}@lid`;
+    const pnJid = p.includes('@') ? p : `${p}@s.whatsapp.net`;
+    if (lidJid.endsWith('@lid') && pnJid.endsWith('@s.whatsapp.net')) this.lidToPn.set(lidJid, pnJid);
+  }
+
+  /** Translate a `@lid` jid to its PN jid; every other jid passes through. */
+  resolve(jid: string): string {
+    return this.lidToPn.get(jid) ?? jid;
+  }
+
+  /** Like {@link resolve} but returns the input unchanged when it is undefined. */
+  resolveOr(jid: string | undefined): string | undefined {
+    return jid ? this.resolve(jid) : jid;
+  }
+
+  /** All learned pairs (for persistence). */
+  pairs(): Array<{ lid: string; pn: string }> {
+    return [...this.lidToPn.entries()].map(([lid, pn]) => ({ lid, pn }));
+  }
+
+  get size(): number {
+    return this.lidToPn.size;
+  }
+}
+
+function isLidJid(jid: string | undefined): boolean {
+  return typeof jid === 'string' && jid.endsWith('@lid');
+}
 
 // Minimal structural types — the real ones come from the lazy `baileys`
 // import (cast through `unknown`), so the rest of the codebase never
@@ -180,11 +267,14 @@ export class BaileysBridge implements WhatsAppBridge {
   private readonly fileContacts = new Map<string, string>();
   /** I8b — contacts learned at runtime (contacts sync / inbound pushName). */
   private readonly learnedContacts = new Map<string, string>();
+  /** LID → PN resolver (privacy-rollout DMs arrive as random `@lid` jids). */
+  private readonly lidMapper: LidJidMapper;
 
   constructor(
     private readonly sessionDir: string = whatsappSessionDir(),
     private readonly opts: { reconnectDelayMs?: number; selfChat?: boolean } = {},
   ) {
+    this.lidMapper = new LidJidMapper(sessionDir);
     // Seed the address-book mappings from ~/.buff/whatsapp/contacts.json.
     for (const [name, digits] of Object.entries(readContactsFile(this.sessionDir))) {
       const key = (name || '').trim().toLowerCase();
@@ -214,6 +304,14 @@ export class BaileysBridge implements WhatsAppBridge {
     const key = (name || '').trim().toLowerCase();
     if (!key || !jid) return;
     this.learnedContacts.set(key, jid);
+  }
+
+  /** Learn a LID→PN pair and persist it (new pairs only; never throws). */
+  private learnLidMapping(lid: string, pn: string): void {
+    const before = this.lidMapper.size;
+    this.lidMapper.learn(lid, pn);
+    if (this.lidMapper.size === before) return;
+    writeLidMappingsFile(this.sessionDir, this.lidMapper.pairs());
   }
 
   /**
@@ -610,6 +708,26 @@ export class BaileysBridge implements WhatsAppBridge {
       const { state, saveCreds } = await baileys.useMultiFileAuthState(this.sessionDir);
       const sock = baileys.makeWASocket({ auth: state, printQRInTerminal: false, logger: QUIET_LOGGER });
       sock.ev?.on('creds.update', () => void saveCreds());
+      // Learn OUR OWN LID→PN pair right away (self-chat inbound arrives as our
+      // own LID jid; creds.me carries both ids on LID-mode accounts).
+      try {
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        const me = (state as any)?.creds?.me as { id?: string; lid?: string; phoneNumber?: string } | undefined;
+        if (me?.id) {
+          if (isLidJid(me.id) && me.phoneNumber) this.learnLidMapping(me.id, me.phoneNumber);
+          else if (me.lid && !isLidJid(me.id)) this.learnLidMapping(me.lid, me.id);
+        }
+      } catch {
+        /* best-effort */
+      }
+      // Privacy-rollout: Baileys learns LID→PN pairs (linked-profile
+      // notifications, contactAction sync, pnForLidChatAction) and emits them
+      // here — mirror them into our resolver so inbound senders match the
+      // allow-list by phone number.
+      sock.ev?.on('lid-mapping.update', (...args: unknown[]) => {
+        const m = (args[0] ?? {}) as { lid?: string; pn?: string };
+        if (typeof m.lid === 'string' && typeof m.pn === 'string') this.learnLidMapping(m.lid, m.pn);
+      });
       // Self-healing: a socket that dies (e.g. Baileys 7's 515 "Stream Errored
       // (restart required)" close on an established session) is dropped so the
       // next send()/connect()/watchReconnect() recreates it from the persisted
@@ -634,6 +752,13 @@ export class BaileysBridge implements WhatsAppBridge {
         for (const c of (args[0] ?? []) as Array<Record<string, unknown>>) {
           const jid = typeof c?.id === 'string' ? c.id : '';
           if (!jid) continue;
+          // Contact sync in LID mode carries the pair explicitly (id may be
+          // the PN or the LID; lid/phoneNumber carry the other side).
+          const lid = typeof c?.lid === 'string' ? c.lid : '';
+          const phoneNumber = typeof c?.phoneNumber === 'string' ? c.phoneNumber : '';
+          if (lid && phoneNumber) this.learnLidMapping(lid, phoneNumber);
+          else if (lid && !isLidJid(jid) && !phoneNumber) this.learnLidMapping(lid, jid);
+          else if (!lid && phoneNumber && isLidJid(jid)) this.learnLidMapping(jid, phoneNumber);
           for (const n of [c?.name, c?.notify, c?.verifiedName]) {
             if (typeof n === 'string' && n.trim()) this.learnContact(n.trim(), jid);
           }
@@ -649,8 +774,14 @@ export class BaileysBridge implements WhatsAppBridge {
           // eslint-disable-next-line @typescript-eslint/no-explicit-any
           const m = raw as any;
           const text = messageText(m);
-          const fromJid = m?.key?.remoteJid as string | undefined;
-          if (!text || !fromJid) continue;
+          const rawFromJid = m?.key?.remoteJid as string | undefined;
+          if (!text || !rawFromJid) continue;
+          // Privacy-rollout: a DM's remoteJid may be the sender's random LID
+          // ("123456789012345@lid") — translate it to the phone-number jid so
+          // the policy gate's allow-list (digits) matches and replies route to
+          // the right chat. Unknown LIDs pass through (mapping arrives via
+          // lid-mapping.update shortly after).
+          const fromJid = this.lidMapper.resolve(rawFromJid);
           // Learn the sender's profile name (contact resolution by name).
           if (typeof m?.pushName === 'string' && m.pushName.trim()) {
             this.learnContact(m.pushName.trim(), fromJid);
@@ -665,8 +796,10 @@ export class BaileysBridge implements WhatsAppBridge {
             if (keyId && this.recentlySent.has(keyId)) continue;
             if (!this.opts.selfChat) continue;
           }
-          // P1 — real sender inside a group: `key.participant` (absent in DMs).
-          const participant = typeof m?.key?.participant === 'string' ? m.key.participant : undefined;
+          // P1 — real sender inside a group: `key.participant` (absent in
+          // DMs). May also be a LID on privacy-rollout accounts — translate.
+          const rawParticipant = typeof m?.key?.participant === 'string' ? m.key.participant : undefined;
+          const participant = this.lidMapper.resolveOr(rawParticipant);
           this.onMessage?.(fromJid, text, participant);
         }
       });
