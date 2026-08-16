@@ -198,7 +198,7 @@ describe('toolset gating — the coding toolset owns the perception tools', () =
     for (const name of ['read_file', 'list_dir', 'glob', 'edit_file', 'write_file']) {
       expect(toolsetForTool(name)?.name).toBe('coding');
     }
-    expect(TOOLSETS.find((t) => t.name === 'coding')?.tools).toEqual(['read_file', 'list_dir', 'glob', 'edit_file', 'write_file']);
+    expect(TOOLSETS.find((t) => t.name === 'coding')?.tools).toEqual(['read_file', 'list_dir', 'glob', 'edit_file', 'write_file', 'run_terminal']);
   });
 
   it('the coding toolset is disabled → the tools are gated out', () => {
