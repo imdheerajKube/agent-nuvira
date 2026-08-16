@@ -50,6 +50,7 @@ import { PhaseCommand } from './phase.js';
 import { RetrievalCommand } from './retrieval.js';
 import { TraceCommand } from './trace.js';
 import { NluCommand } from './nlu.js';
+import { IntentCommand } from './intent.js';
 import { CodeMapCommand } from './code-map.js';
 import { ToolsCommand } from './tools.js';
 import { logger } from '../utils/logger.js';
@@ -149,8 +150,9 @@ export function createCLI() {
     // Register Feedback command (from nextlevel roadmap §4.3)
     const feedbackCmd = new FeedbackCommand();
     program.addCommand(feedbackCmd.create());
-    // Register C3 NLU command
+    // Register C3 NLU command + the plain-English → CLI intent router
     program.addCommand(new NluCommand().create());
+    program.addCommand(new IntentCommand().create());
     program.addCommand(new CodeMapCommand().create());
     program.addCommand(new ToolsCommand().create());
     // Register G1 session command (D1 debug surface)
