@@ -1,0 +1,888 @@
+{
+  "$schema": "command-manifest.schema.json",
+  "description": "Agent-Nuvira command manifest — maps plain-English intents to CLI commands. Feed this file (or the docs/COMMANDS.md it mirrors) to the agent so it can execute any task by running the right 'buff' command.",
+  "version": "1.0.0",
+  "note": "Ambiguous asks are represented by entries sharing an 'ambiguityGroup'; the router must ask the user which group member they mean before executing.",
+  "intents": [
+    {
+      "intent": "dashboard.start",
+      "summary": "Start the web dashboard",
+      "aliases": ["start the dashboard", "open the dashboard", "launch the dashboard", "run the dashboard", "start the web ui", "open the web ui"],
+      "objective": "Launch the web UI (Agent Hub, Channels, Tasks, Chat, Gateway ops, Admin)",
+      "command": "buff dashboard",
+      "example": "buff dashboard",
+      "args": [
+        { "name": "port", "flag": "--port", "optional": true, "example": "--port 8080" },
+        { "name": "noOpen", "flag": "--no-open", "optional": true, "example": "--no-open" }
+      ],
+      "rbac": "dashboard.manage",
+      "confirmation": false,
+      "platforms": ["*"]
+    },
+    {
+      "intent": "dashboard.stop",
+      "summary": "Stop the web dashboard gracefully",
+      "aliases": ["stop the dashboard", "kill the dashboard", "bounce the dashboard", "shut down the dashboard", "shutdown dashboard", "stop the web ui", "turn off the dashboard"],
+      "objective": "Gracefully stop a running dashboard from any terminal",
+      "command": "buff dashboard stop",
+      "example": "buff dashboard stop",
+      "args": [
+        { "name": "port", "flag": "--port", "optional": true, "example": "--port 8080" }
+      ],
+      "rbac": "dashboard.manage",
+      "confirmation": true,
+      "platforms": ["*"]
+    },
+    {
+      "intent": "gateway.start",
+      "summary": "Start the multi-channel gateway",
+      "aliases": ["start the gateway", "run the gateway", "bring up the gateway", "start gateway", "start the bot", "start messaging"],
+      "objective": "Run all configured adapters so the agent answers on WhatsApp/Telegram/Discord/Slack/Email/Signal",
+      "command": "buff gateway start",
+      "example": "buff gateway start",
+      "args": [
+        { "name": "port", "flag": "--port", "optional": true, "example": "--port 9090" },
+        { "name": "host", "flag": "--host", "optional": true, "example": "--host 0.0.0.0" },
+        { "name": "noEvents", "flag": "--no-events", "optional": true, "example": "--no-events" }
+      ],
+      "rbac": "gateway.manage",
+      "confirmation": false,
+      "platforms": ["*"]
+    },
+    {
+      "intent": "gateway.stop",
+      "summary": "Stop the running gateway gracefully",
+      "aliases": ["stop the gateway", "kill the gateway", "shut down the gateway", "stop gateway", "stop the bot", "turn off the gateway"],
+      "objective": "Gracefully SIGTERM a running gateway from any terminal",
+      "command": "buff gateway stop",
+      "example": "buff gateway stop",
+      "args": [
+        { "name": "port", "flag": "--port", "optional": true, "example": "--port 9090" }
+      ],
+      "rbac": "gateway.manage",
+      "confirmation": true,
+      "platforms": ["*"]
+    },
+    {
+      "intent": "gateway.status",
+      "summary": "Show gateway status and reachable channels",
+      "aliases": ["gateway status", "is the gateway running", "what channels are connected", "gateway health", "status of the gateway", "is the bot online"],
+      "objective": "See which platforms are configured and which channels are reachable",
+      "command": "buff gateway status",
+      "example": "buff gateway status",
+      "args": [],
+      "rbac": "read",
+      "confirmation": false,
+      "platforms": ["*"]
+    },
+    {
+      "intent": "gateway.send",
+      "summary": "Send a message to a channel",
+      "aliases": ["send a message", "send to", "message the channel", "notify the channel", "post to", "send a whatsapp message", "send a telegram message", "send sms"],
+      "objective": "Send a one-shot message to an alias or platform:channelId",
+      "command": "buff gateway send <target> \"<text>\"",
+      "example": "buff gateway send ops \"nightly build done\"",
+      "args": [
+        { "name": "target", "flag": "<target>", "optional": false, "example": "ops | telegram:123456789 | whatsapp:Alex | whatsapp:+919876543210" },
+        { "name": "text", "flag": "\"<text>\"", "optional": false, "example": "\"your report is ready\"" }
+      ],
+      "rbac": "gateway.send",
+      "confirmation": false,
+      "platforms": ["*"],
+      "requires": ["target", "text"]
+    },
+    {
+      "intent": "gateway.send-media",
+      "summary": "Send a media file to a channel",
+      "aliases": ["send an image", "send a file", "send a photo", "send a document", "send a video", "send media"],
+      "objective": "Send an image/video/audio/document to a channel",
+      "command": "buff gateway send-media <target> <file> [--caption <text>]",
+      "example": "buff gateway send-media ops ./screenshot.png --caption \"new build\"",
+      "args": [
+        { "name": "target", "flag": "<target>", "optional": false, "example": "ops" },
+        { "name": "file", "flag": "<file>", "optional": false, "example": "./report.pdf" },
+        { "name": "caption", "flag": "--caption", "optional": true, "example": "--caption \"v2\"" }
+      ],
+      "rbac": "gateway.send",
+      "confirmation": false,
+      "platforms": ["whatsapp", "telegram", "discord"],
+      "requires": ["target", "file"]
+    },
+    {
+      "intent": "alias.add",
+      "summary": "Register a channel alias",
+      "aliases": ["add an alias", "create an alias", "name a channel", "register a channel alias"],
+      "objective": "Give a channel a friendly name so 'buff gateway send <alias>' works",
+      "command": "buff gateway alias add <alias> <platform> <channelId>",
+      "example": "buff gateway alias add ops slack C0123",
+      "args": [
+        { "name": "alias", "flag": "<alias>", "optional": false, "example": "ops" },
+        { "name": "platform", "flag": "<platform>", "optional": false, "example": "slack" },
+        { "name": "channelId", "flag": "<channelId>", "optional": false, "example": "C0123" }
+      ],
+      "rbac": "gateway.manage",
+      "confirmation": false,
+      "platforms": ["*"],
+      "requires": ["alias", "platform", "channelId"]
+    },
+    {
+      "intent": "alias.remove",
+      "summary": "Remove a channel alias",
+      "aliases": ["remove an alias", "delete an alias", "drop the alias"],
+      "objective": "Delete a registered channel alias",
+      "command": "buff gateway alias remove <alias>",
+      "example": "buff gateway alias remove ops",
+      "args": [{ "name": "alias", "flag": "<alias>", "optional": false, "example": "ops" }],
+      "rbac": "gateway.manage",
+      "confirmation": false,
+      "platforms": ["*"],
+      "requires": ["alias"]
+    },
+    {
+      "intent": "contacts.add",
+      "summary": "Add a person to a WhatsApp/sender contact list",
+      "aliases": ["add <name> to whatsapp", "add <name> contact", "add a contact", "save a contact", "add <name> mobile", "add <name> number", "add rahul to whatsapp"],
+      "objective": "AMBIGUOUS — two lists exist. The router MUST ask which one: (a) verified list = the number can TRIGGER the agent; (b) send-by-name mapping = you can send TO them by name.",
+      "ambiguityGroup": "contacts.add",
+      "resolutions": [
+        {
+          "when": "trigger / respond to / message the bot / verified list",
+          "command": "buff config gateway allow whatsapp user <number>",
+          "example": "buff config gateway allow whatsapp user 919958604222",
+          "summary": "Verified list — the number may trigger the agent",
+          "rbac": "gateway.manage",
+          "confirmation": false
+        },
+        {
+          "when": "send by name / send to them / send-by-name mapping",
+          "command": "buff whatsapp contact add <Name> <number>",
+          "example": "buff whatsapp contact add Rahul 919958604222",
+          "summary": "Send-by-name mapping — lets YOU send to them by name (does NOT grant trigger access)",
+          "rbac": "gateway.manage",
+          "confirmation": false
+        }
+      ]
+    },
+    {
+      "intent": "contacts.remove",
+      "summary": "Remove a person from a WhatsApp/sender contact list",
+      "aliases": ["remove <name> from whatsapp", "delete <name> contact", "block <name>", "remove a contact", "remove <name> from the verified list"],
+      "objective": "AMBIGUOUS — remove from the verified (trigger) list or the send-by-name mapping. Router must ask which.",
+      "ambiguityGroup": "contacts.remove",
+      "resolutions": [
+        {
+          "when": "block / stop them messaging / verified list",
+          "command": "buff config gateway disallow whatsapp user <number>",
+          "example": "buff config gateway disallow whatsapp user 919958604222",
+          "summary": "Remove from verified list — they can no longer trigger the agent",
+          "rbac": "gateway.manage",
+          "confirmation": true
+        },
+        {
+          "when": "send-by-name mapping",
+          "command": "buff whatsapp contact remove <Name>",
+          "example": "buff whatsapp contact remove Rahul",
+          "summary": "Remove the send-by-name mapping",
+          "rbac": "gateway.manage",
+          "confirmation": false
+        }
+      ]
+    },
+    {
+      "intent": "contacts.list",
+      "summary": "List saved sender contacts",
+      "aliases": ["what contacts do i have", "list contacts", "show contacts", "who is saved", "list saved contacts"],
+      "objective": "Show the resolvable send-by-name contacts (numbers masked on screen)",
+      "command": "buff whatsapp contacts",
+      "example": "buff whatsapp contacts",
+      "args": [],
+      "rbac": "read",
+      "confirmation": false,
+      "platforms": ["whatsapp"]
+    },
+    {
+      "intent": "permissions.allow",
+      "summary": "Allow a user/group to trigger the agent on a platform",
+      "aliases": ["let <name> message the bot", "allow <name> to trigger", "allow <number> on whatsapp", "add <name> to verified list", "allow a group", "approve <name>"],
+      "objective": "Add a sender to the verified (trigger) list on a platform. Blank list = no one may trigger; 'Allow-All' = everyone.",
+      "command": "buff config gateway allow <platform> user|group <id...>",
+      "example": "buff config gateway allow whatsapp user 919958604222",
+      "args": [
+        { "name": "platform", "flag": "<platform>", "optional": false, "example": "whatsapp | telegram | discord" },
+        { "name": "kind", "flag": "<user|group>", "optional": false, "example": "user" },
+        { "name": "ids", "flag": "<id...>", "optional": false, "example": "919958604222" }
+      ],
+      "rbac": "gateway.manage",
+      "confirmation": false,
+      "platforms": ["*"],
+      "requires": ["platform", "kind", "ids"]
+    },
+    {
+      "intent": "permissions.disallow",
+      "summary": "Remove a user/group from the allowed list",
+      "aliases": ["block <name>", "disallow <name>", "remove <name> from verified list", "ban <name>", "stop <name> triggering"],
+      "objective": "Remove a sender from the verified (trigger) list on a platform",
+      "command": "buff config gateway disallow <platform> user|group <id...>",
+      "example": "buff config gateway disallow whatsapp user 919958604222",
+      "args": [
+        { "name": "platform", "flag": "<platform>", "optional": false, "example": "whatsapp" },
+        { "name": "kind", "flag": "<user|group>", "optional": false, "example": "user" },
+        { "name": "ids", "flag": "<id...>", "optional": false, "example": "919958604222" }
+      ],
+      "rbac": "gateway.manage",
+      "confirmation": true,
+      "platforms": ["*"],
+      "requires": ["platform", "kind", "ids"]
+    },
+    {
+      "intent": "permissions.reply-mode",
+      "summary": "Set how unapproved senders are handled",
+      "aliases": ["reply mode", "polite mode", "silent mode", "how are unknown senders handled", "set silent drops"],
+      "objective": "polite = refusal message; silent = drop with no reply (default)",
+      "command": "buff config gateway reply <platform> <polite|silent>",
+      "example": "buff config gateway reply whatsapp silent",
+      "args": [
+        { "name": "platform", "flag": "<platform>", "optional": false, "example": "whatsapp" },
+        { "name": "mode", "flag": "<polite|silent>", "optional": false, "example": "silent" }
+      ],
+      "rbac": "gateway.manage",
+      "confirmation": false,
+      "platforms": ["*"],
+      "requires": ["platform", "mode"]
+    },
+    {
+      "intent": "permissions.status-recipients",
+      "summary": "Manage status recipients (always get completion summaries)",
+      "aliases": ["status recipients", "who gets the summary", "notify list", "add a status recipient"],
+      "objective": "Contacts/groups that ALWAYS receive pipeline completion summaries",
+      "command": "buff config gateway notify <add|remove|list> [target...]",
+      "example": "buff config gateway notify add whatsapp:Alex slack:ops",
+      "args": [
+        { "name": "action", "flag": "<add|remove|list>", "optional": false, "example": "add" },
+        { "name": "targets", "flag": "[target...]", "optional": true, "example": "whatsapp:Alex slack:ops" }
+      ],
+      "rbac": "gateway.manage",
+      "confirmation": false,
+      "platforms": ["*"]
+    },
+    {
+      "intent": "whatsapp.pair",
+      "summary": "Pair WhatsApp (QR or phone code)",
+      "aliases": ["pair whatsapp", "connect whatsapp", "link whatsapp", "scan the qr", "setup whatsapp bridge", "enable whatsapp", "enable whatsapp support", "activate whatsapp", "setup whatsapp", "turn on whatsapp", "start whatsapp support", "enable whatsapp bridge"],
+      "objective": "Pair your personal WhatsApp number so the gateway can read/write messages",
+      "command": "buff whatsapp pair [--phone <number>] [--timeout <seconds>]",
+      "example": "buff whatsapp pair --phone 919876543210",
+      "args": [
+        { "name": "phone", "flag": "--phone", "optional": true, "example": "--phone 919876543210" },
+        { "name": "timeout", "flag": "--timeout", "optional": true, "example": "--timeout 120" }
+      ],
+      "rbac": "gateway.manage",
+      "confirmation": false,
+      "platforms": ["whatsapp"]
+    },
+    {
+      "intent": "whatsapp.status",
+      "summary": "WhatsApp bridge status",
+      "aliases": ["whatsapp status", "is whatsapp connected", "bridge status", "whatsapp paired"],
+      "objective": "Check the bridge session path and pairing state",
+      "command": "buff whatsapp status",
+      "example": "buff whatsapp status",
+      "args": [],
+      "rbac": "read",
+      "confirmation": false,
+      "platforms": ["whatsapp"]
+    },
+    {
+      "intent": "platform.setup",
+      "summary": "Configure a platform transport (Telegram, Discord, Matrix, ...)",
+      "aliases": ["set up telegram", "enable telegram", "add telegram", "configure telegram", "setup telegram bot", "enable telegram support", "setup telegram", "turn on telegram", "enable telegram bot", "add discord", "configure discord", "enable discord", "enable discord support", "setup discord", "setup a channel", "enable matrix", "enable sms", "setup sms", "enable email channel"],
+      "objective": "Set the API token / env vars a platform needs (written to ~/.buff/.env). Interactive wizard by default; --set for non-interactive.",
+      "command": "buff config gateway set <platform> [--set VAR=value]",
+      "example": "buff config gateway set telegram --set BUFF_TELEGRAM_TOKEN=123456789:AAH...",
+      "args": [
+        { "name": "platform", "flag": "<platform>", "optional": false, "example": "telegram | discord | matrix | sms" },
+        { "name": "set", "flag": "--set", "optional": true, "example": "--set BUFF_TELEGRAM_TOKEN=123:ABC", "repeatable": true }
+      ],
+      "rbac": "gateway.manage",
+      "confirmation": false,
+      "platforms": ["*"],
+      "requires": ["platform"]
+    },
+    {
+      "intent": "platform.remove",
+      "summary": "Remove a platform transport",
+      "aliases": ["remove telegram", "delete telegram", "unconfigure telegram", "disable telegram"],
+      "objective": "Remove a platform transport from the env file",
+      "command": "buff config gateway remove <platform> [--yes]",
+      "example": "buff config gateway remove telegram --yes",
+      "args": [{ "name": "platform", "flag": "<platform>", "optional": false, "example": "telegram" }],
+      "rbac": "gateway.manage",
+      "confirmation": true,
+      "platforms": ["*"],
+      "requires": ["platform"]
+    },
+    {
+      "intent": "delivery.ledger",
+      "summary": "Show the delivery ledger",
+      "aliases": ["delivery ledger", "failed sends", "pending sends", "delivery status", "what failed to send"],
+      "objective": "See pending/sent/failed sends awaiting retry",
+      "command": "buff gateway delivery [--flush]",
+      "example": "buff gateway delivery",
+      "args": [{ "name": "flush", "flag": "--flush", "optional": true, "example": "--flush" }],
+      "rbac": "read",
+      "confirmation": false,
+      "platforms": ["*"]
+    },
+    {
+      "intent": "doctor",
+      "summary": "Diagnose the whole setup",
+      "aliases": ["check my setup", "run diagnostics", "why is nothing working", "doctor", "health check everything", "check configuration"],
+      "objective": "Run diagnostic checks on all provider configs and system health",
+      "command": "buff doctor [--fix] [-p <provider>]",
+      "example": "buff doctor --fix",
+      "args": [
+        { "name": "fix", "flag": "--fix", "optional": true, "example": "--fix" },
+        { "name": "provider", "flag": "-p", "optional": true, "example": "-p groq" }
+      ],
+      "rbac": "read",
+      "confirmation": false,
+      "platforms": ["*"]
+    },
+    {
+      "intent": "models.list",
+      "summary": "List available models",
+      "aliases": ["what models are available", "list models", "available models", "which models do i have"],
+      "objective": "List available models from inference providers",
+      "command": "buff models list [-p <provider>] [-s <search>]",
+      "example": "buff models list -p groq",
+      "args": [
+        { "name": "provider", "flag": "-p", "optional": true, "example": "-p groq" },
+        { "name": "search", "flag": "-s", "optional": true, "example": "-s llama" }
+      ],
+      "rbac": "read",
+      "confirmation": false,
+      "platforms": ["*"]
+    },
+    {
+      "intent": "models.switch",
+      "summary": "Switch the active model/provider",
+      "aliases": ["switch model", "use groq", "switch to <model>", "change the model", "use a different model", "set default model"],
+      "objective": "Change the active provider/model; 'auto' enables smart routing",
+      "command": "buff model switch [--provider <p>] [--model <m>]",
+      "example": "buff model switch --provider groq --model llama-3.3-70b",
+      "args": [
+        { "name": "provider", "flag": "--provider", "optional": false, "example": "--provider groq" },
+        { "name": "model", "flag": "--model", "optional": false, "example": "--model llama-3.3-70b" }
+      ],
+      "rbac": "model.manage",
+      "confirmation": false,
+      "platforms": ["*"],
+      "requires": ["provider"]
+    },
+    {
+      "intent": "config.get",
+      "summary": "Read a configuration value",
+      "aliases": ["what is my default provider", "show config", "get config", "config value"],
+      "objective": "Read a configuration value from ~/.buff/buffconfig.json",
+      "command": "buff config get <key>",
+      "example": "buff config get defaultProvider",
+      "args": [{ "name": "key", "flag": "<key>", "optional": false, "example": "defaultProvider" }],
+      "rbac": "read",
+      "confirmation": false,
+      "platforms": ["*"]
+    },
+    {
+      "intent": "config.set",
+      "summary": "Write a configuration value",
+      "aliases": ["set the default provider", "change config", "set config value"],
+      "objective": "Write a configuration value to ~/.buff/buffconfig.json",
+      "command": "buff config set <key> <value>",
+      "example": "buff config set defaultProvider groq",
+      "args": [
+        { "name": "key", "flag": "<key>", "optional": false, "example": "defaultProvider" },
+        { "name": "value", "flag": "<value>", "optional": false, "example": "groq" }
+      ],
+      "rbac": "config.manage",
+      "confirmation": false,
+      "platforms": ["*"],
+      "requires": ["key", "value"]
+    },
+    {
+      "intent": "vault.status",
+      "summary": "Secret vault status",
+      "aliases": ["vault status", "is my vault set up", "secret vault"],
+      "objective": "Show the active vault tier and migration state",
+      "command": "buff config vault status",
+      "example": "buff config vault status",
+      "args": [],
+      "rbac": "read",
+      "confirmation": false,
+      "platforms": ["*"]
+    },
+    {
+      "intent": "chat",
+      "summary": "Chat with the agent",
+      "aliases": ["chat", "ask the agent", "talk to the agent", "ask a question", "have a conversation"],
+      "objective": "Start an interactive chat session (or one-shot with followup selection)",
+      "command": "buff chat \"<prompt>\" [-p <provider>] [-m <model>]",
+      "example": "buff chat \"what's the state of this project?\"",
+      "args": [
+        { "name": "prompt", "flag": "\"<prompt>\"", "optional": false, "example": "\"fix the failing test\"" },
+        { "name": "provider", "flag": "-p", "optional": true, "example": "-p groq" },
+        { "name": "model", "flag": "-m", "optional": true, "example": "-m llama-3.3-70b" }
+      ],
+      "rbac": "chat",
+      "confirmation": false,
+      "platforms": ["*"]
+    },
+    {
+      "intent": "execute",
+      "summary": "Run a multi-agent pipeline on a goal",
+      "aliases": ["execute", "do this task", "accomplish this", "make it happen", "implement", "build this feature"],
+      "objective": "Run the full planner→gatherer→writer→reviewer pipeline on a goal",
+      "command": "buff execute \"<goal>\" [--dry-run] [--review] [--memory] [--checkpoint]",
+      "example": "buff execute \"add a login page to the API\" --review",
+      "args": [
+        { "name": "goal", "flag": "\"<goal>\"", "optional": false, "example": "\"add a login page\"" },
+        { "name": "dryRun", "flag": "--dry-run", "optional": true, "example": "--dry-run" },
+        { "name": "review", "flag": "--review", "optional": true, "example": "--review" },
+        { "name": "memory", "flag": "--memory", "optional": true, "example": "--memory" }
+      ],
+      "rbac": "execute",
+      "confirmation": false,
+      "platforms": ["*"],
+      "requires": ["goal"]
+    },
+    {
+      "intent": "edit",
+      "summary": "AI-assisted file edit",
+      "aliases": ["edit this file", "change the file", "modify src/server.ts", "fix the code in", "update the file"],
+      "objective": "Edit a file using AI assistance",
+      "command": "buff edit <file> -i \"<instruction>\" [--dry-run]",
+      "example": "buff edit src/server.ts -i \"add input validation\"",
+      "args": [
+        { "name": "file", "flag": "<file>", "optional": false, "example": "src/server.ts" },
+        { "name": "instruction", "flag": "-i", "optional": false, "example": "-i \"add input validation\"" },
+        { "name": "dryRun", "flag": "--dry-run", "optional": true, "example": "--dry-run" }
+      ],
+      "rbac": "execute",
+      "confirmation": false,
+      "platforms": ["*"],
+      "requires": ["file"]
+    },
+    {
+      "intent": "plan",
+      "summary": "Generate an implementation plan",
+      "aliases": ["make a plan", "plan this task", "how would you implement", "implementation plan"],
+      "objective": "Generate an implementation plan for a codebase task (no code changes)",
+      "command": "buff plan -t \"<task>\"",
+      "example": "buff plan -t \"add OAuth login\"",
+      "args": [{ "name": "task", "flag": "-t", "optional": false, "example": "-t \"add OAuth login\"" }],
+      "rbac": "read",
+      "confirmation": false,
+      "platforms": ["*"],
+      "requires": ["task"]
+    },
+    {
+      "intent": "run.shell",
+      "summary": "Run a shell command",
+      "aliases": ["run this command", "execute this shell command", "run npm test", "run the tests", "run build"],
+      "objective": "Execute a shell command and show output (lightweight)",
+      "command": "buff run \"<command>\" [-t <timeout>]",
+      "example": "buff run \"npm test\" -t 120",
+      "args": [
+        { "name": "command", "flag": "\"<command>\"", "optional": false, "example": "\"npm test\"" },
+        { "name": "timeout", "flag": "-t", "optional": true, "example": "-t 120" }
+      ],
+      "rbac": "execute",
+      "confirmation": false,
+      "platforms": ["*"],
+      "requires": ["command"]
+    },
+    {
+      "intent": "skill.run",
+      "summary": "Run a compiled skill",
+      "aliases": ["run the skill", "execute skill", "use skill"],
+      "objective": "Run a compiled skill — resolves parameters and invokes the pipeline",
+      "command": "buff skill run <name> [--params k=v] [--dry-run]",
+      "example": "buff skill run fix-lint --params \"file=src/server.ts\"",
+      "args": [
+        { "name": "name", "flag": "<name>", "optional": false, "example": "fix-lint" },
+        { "name": "params", "flag": "--params", "optional": true, "example": "--params \"file=src/server.ts\"" }
+      ],
+      "rbac": "execute",
+      "confirmation": false,
+      "platforms": ["*"],
+      "requires": ["name"]
+    },
+    {
+      "intent": "skill.list",
+      "summary": "List compiled skills",
+      "aliases": ["what skills exist", "list skills", "show skills"],
+      "objective": "List all compiled skills",
+      "command": "buff skill list [--quality]",
+      "example": "buff skill list",
+      "args": [],
+      "rbac": "read",
+      "confirmation": false,
+      "platforms": ["*"]
+    },
+    {
+      "intent": "memory.stats",
+      "summary": "Memory store statistics",
+      "aliases": ["memory stats", "what does the agent remember", "memory status", "show memory"],
+      "objective": "Show memory store statistics",
+      "command": "buff memory stats",
+      "example": "buff memory stats",
+      "args": [],
+      "rbac": "read",
+      "confirmation": false,
+      "platforms": ["*"]
+    },
+    {
+      "intent": "memory.optimize",
+      "summary": "Compress/prune memory",
+      "aliases": ["optimize memory", "clean up memory", "compress memory", "prune memory"],
+      "objective": "Run automatic memory compression and pruning",
+      "command": "buff memory optimize [--dry-run] [--aggressive]",
+      "example": "buff memory optimize --aggressive",
+      "args": [{ "name": "dryRun", "flag": "--dry-run", "optional": true, "example": "--dry-run" }],
+      "rbac": "memory.manage",
+      "confirmation": true,
+      "platforms": ["*"]
+    },
+    {
+      "intent": "memory.backend",
+      "summary": "Show the vector backend (FAISS etc.)",
+      "aliases": ["what vector backend", "faiss", "memory backend", "which vector store"],
+      "objective": "Show the active vector-search backend and why it was chosen",
+      "command": "buff memory backend [--check]",
+      "example": "buff memory backend --check",
+      "args": [],
+      "rbac": "read",
+      "confirmation": false,
+      "platforms": ["*"]
+    },
+    {
+      "intent": "eval.run",
+      "summary": "Run the evaluation suite",
+      "aliases": ["run evals", "run the eval suite", "evaluate the agent", "run eval"],
+      "objective": "Measure whether the agent is actually improving",
+      "command": "buff eval run [--tasks <t>] [--suite <s>] [-p <provider>] [--format <fmt>]",
+      "example": "buff eval run --tasks quick --format text",
+      "args": [
+        { "name": "tasks", "flag": "--tasks", "optional": true, "example": "--tasks quick" },
+        { "name": "suite", "flag": "--suite", "optional": true, "example": "--suite full" },
+        { "name": "provider", "flag": "-p", "optional": true, "example": "-p groq" }
+      ],
+      "rbac": "eval.manage",
+      "confirmation": false,
+      "platforms": ["*"]
+    },
+    {
+      "intent": "benchmark.run",
+      "summary": "Run model benchmarks",
+      "aliases": ["run benchmarks", "benchmark the model", "compare models"],
+      "objective": "Run standardized model benchmarks against coding tasks",
+      "command": "buff benchmark run [-p <provider>] [-m <model>] [--tasks <t>]",
+      "example": "buff benchmark run -p groq --tasks smoke",
+      "args": [
+        { "name": "provider", "flag": "-p", "optional": true, "example": "-p groq" },
+        { "name": "tasks", "flag": "--tasks", "optional": true, "example": "--tasks smoke" }
+      ],
+      "rbac": "eval.manage",
+      "confirmation": false,
+      "platforms": ["*"]
+    },
+    {
+      "intent": "security.scan",
+      "summary": "Scan for security issues",
+      "aliases": ["scan for pii", "security scan", "scan this file", "check for injection", "is this safe"],
+      "objective": "Scan code/prompts/files for PII, injection, or dangerous patterns",
+      "command": "buff security scan [-f <file>] [--stdin] [--prompt <text>] [--json]",
+      "example": "buff security scan -f src/server.ts --json",
+      "args": [
+        { "name": "file", "flag": "-f", "optional": false, "example": "-f src/server.ts" },
+        { "name": "json", "flag": "--json", "optional": true, "example": "--json" }
+      ],
+      "rbac": "read",
+      "confirmation": false,
+      "platforms": ["*"]
+    },
+    {
+      "intent": "admin.policy",
+      "summary": "Show governance policy",
+      "aliases": ["governance policy", "admin policy", "what is allowed", "cost cap", "show policy"],
+      "objective": "Show the current governance policy + enforcement status",
+      "command": "buff admin policy [--json]",
+      "example": "buff admin policy",
+      "args": [],
+      "rbac": "admin",
+      "confirmation": false,
+      "platforms": ["*"]
+    },
+    {
+      "intent": "admin.cron",
+      "summary": "Manage scheduled jobs",
+      "aliases": ["cron jobs", "scheduled jobs", "add a cron job", "schedule a task", "nightly build"],
+      "objective": "Scheduled tool invocations (e.g. nightly build)",
+      "command": "buff admin cron add <name> \"<schedule>\" <tool> [--channel <target>] · list · remove · run",
+      "example": "buff admin cron add nightly-build \"0 3 * * *\" build --channel slack:ops",
+      "args": [
+        { "name": "name", "flag": "<name>", "optional": false, "example": "nightly-build" },
+        { "name": "schedule", "flag": "\"<schedule>\"", "optional": false, "example": "\"0 3 * * *\"" },
+        { "name": "tool", "flag": "<tool>", "optional": false, "example": "build" },
+        { "name": "channel", "flag": "--channel", "optional": true, "example": "--channel slack:ops" }
+      ],
+      "rbac": "admin",
+      "confirmation": false,
+      "platforms": ["*"]
+    },
+    {
+      "intent": "team.init",
+      "summary": "Initialize team workspace",
+      "aliases": ["team setup", "init team", "set up team config", "create team workspace"],
+      "objective": "Initialize team configuration in the working directory",
+      "command": "buff team init [-r <repo>] [-b <branch>]",
+      "example": "buff team init -r git@github.com:acme/team-config.git",
+      "args": [{ "name": "repo", "flag": "-r", "optional": true, "example": "-r git@github.com:acme/team.git" }],
+      "rbac": "team.manage",
+      "confirmation": false,
+      "platforms": ["*"]
+    },
+    {
+      "intent": "team.sync",
+      "summary": "Sync team memory",
+      "aliases": ["sync team", "push team memory", "pull team updates"],
+      "objective": "Sync team memory with remote (pull latest + push local changes)",
+      "command": "buff team sync",
+      "example": "buff team sync",
+      "args": [],
+      "rbac": "team.manage",
+      "confirmation": false,
+      "platforms": ["*"]
+    },
+    {
+      "intent": "federation.status",
+      "summary": "Federation status",
+      "aliases": ["federation status", "remote agents", "are remote agents connected"],
+      "objective": "Show federation connection status and configuration",
+      "command": "buff federation status",
+      "example": "buff federation status",
+      "args": [],
+      "rbac": "read",
+      "confirmation": false,
+      "platforms": ["*"]
+    },
+    {
+      "intent": "federation.run",
+      "summary": "Run a task on a remote agent",
+      "aliases": ["run on remote", "delegate to remote agent", "run task on federation"],
+      "objective": "Run a task on the remote federation server",
+      "command": "buff federation run \"<task>\" [-a <agent>] [-m <model>]",
+      "example": "buff federation run \"run the test suite\" -a builder",
+      "args": [{ "name": "task", "flag": "\"<task>\"", "optional": false, "example": "\"run the tests\"" }],
+      "rbac": "federation.run",
+      "confirmation": false,
+      "platforms": ["*"]
+    },
+    {
+      "intent": "mcp.list",
+      "summary": "List MCP servers",
+      "aliases": ["mcp servers", "list mcp", "what mcp tools"],
+      "objective": "List all discovered MCP servers and their tools",
+      "command": "buff mcp list",
+      "example": "buff mcp list",
+      "args": [],
+      "rbac": "read",
+      "confirmation": false,
+      "platforms": ["*"]
+    },
+    {
+      "intent": "mcp.call",
+      "summary": "Call a tool on an MCP server",
+      "aliases": ["call mcp tool", "use the mcp tool", "invoke mcp"],
+      "objective": "Call a tool on an MCP server",
+      "command": "buff mcp call <tool> [-s <server>] [-a '<json>']",
+      "example": "buff mcp call fetch_webpage -s browser -a '{\"url\":\"https://example.com\"}'",
+      "args": [
+        { "name": "tool", "flag": "<tool>", "optional": false, "example": "fetch_webpage" },
+        { "name": "args", "flag": "-a", "optional": true, "example": "-a '{\"url\":\"https://example.com\"}'" }
+      ],
+      "rbac": "execute",
+      "confirmation": false,
+      "platforms": ["*"]
+    },
+    {
+      "intent": "mcp.serve",
+      "summary": "Expose agent tools as an MCP server",
+      "aliases": ["expose mcp", "serve mcp", "mcp server for claude", "connect to claude desktop"],
+      "objective": "Expose the agent's tools as an MCP server over stdio (Claude Desktop / IDEs / other agents)",
+      "command": "buff mcp serve [--with <tool>]",
+      "example": "buff mcp serve --with gateway_send",
+      "args": [{ "name": "with", "flag": "--with", "optional": true, "example": "--with gateway_send" }],
+      "rbac": "execute",
+      "confirmation": false,
+      "platforms": ["*"]
+    },
+    {
+      "intent": "ci.execute",
+      "summary": "Headless CI execution",
+      "aliases": ["ci execute", "run in ci", "headless run", "json result"],
+      "objective": "Execute a goal and emit JSON result (exit 0 = success, 1 = failure)",
+      "command": "buff ci execute \"<goal>\" [--github-annotations] [--timeout <s>]",
+      "example": "buff ci execute \"fix the failing build\" --github-annotations",
+      "args": [{ "name": "goal", "flag": "\"<goal>\"", "optional": false, "example": "\"fix the failing build\"" }],
+      "rbac": "execute",
+      "confirmation": false,
+      "platforms": ["*"]
+    },
+    {
+      "intent": "publish",
+      "summary": "Autonomous publish (npm + GitHub)",
+      "aliases": ["publish", "release", "release a version", "publish to npm", "bump version", "patch release"],
+      "objective": "Version, build, and publish to npm & GitHub",
+      "command": "buff publish [--patch|--minor|--major] [--dry-run]",
+      "example": "buff publish --patch",
+      "args": [
+        { "name": "version", "flag": "--patch|--minor|--major", "optional": false, "example": "--patch" },
+        { "name": "dryRun", "flag": "--dry-run", "optional": true, "example": "--dry-run" }
+      ],
+      "rbac": "publish.manage",
+      "confirmation": true,
+      "platforms": ["*"]
+    },
+    {
+      "intent": "history.list",
+      "summary": "Browse conversation history",
+      "aliases": ["conversation history", "past conversations", "show history", "what did we discuss"],
+      "objective": "Browse and search past conversations",
+      "command": "buff history list [-l <n>] · buff history search \"<q>\" [-s]",
+      "example": "buff history search \"deploy config\" --semantic",
+      "args": [{ "name": "limit", "flag": "-l", "optional": true, "example": "-l 20" }],
+      "rbac": "read",
+      "confirmation": false,
+      "platforms": ["*"]
+    },
+    {
+      "intent": "trace.list",
+      "summary": "Inspect reasoning traces",
+      "aliases": ["show traces", "traces", "what did the agent do", "replay trace"],
+      "objective": "Inspect and replay per-step reasoning traces",
+      "command": "buff trace list [-l <n>] · buff trace replay <id> [--full]",
+      "example": "buff trace list -l 10",
+      "args": [],
+      "rbac": "read",
+      "confirmation": false,
+      "platforms": ["*"]
+    },
+    {
+      "intent": "stats.cost",
+      "summary": "Usage and cost stats",
+      "aliases": ["how much have i spent", "cost stats", "usage stats", "api cost"],
+      "objective": "Usage statistics and API cost tracking",
+      "command": "buff stats cost",
+      "example": "buff stats cost",
+      "args": [],
+      "rbac": "read",
+      "confirmation": false,
+      "platforms": ["*"]
+    },
+    {
+      "intent": "cache.clear",
+      "summary": "Clear inference cache",
+      "aliases": ["clear cache", "clear the cache", "reset cache"],
+      "objective": "Clear all cached inference responses",
+      "command": "buff cache clear",
+      "example": "buff cache clear",
+      "args": [],
+      "rbac": "cache.manage",
+      "confirmation": true,
+      "platforms": ["*"]
+    },
+    {
+      "intent": "sandbox.status",
+      "summary": "Docker sandbox status",
+      "aliases": ["sandbox status", "is docker available", "sandbox running"],
+      "objective": "Check Docker availability and sandbox status",
+      "command": "buff sandbox status",
+      "example": "buff sandbox status",
+      "args": [],
+      "rbac": "read",
+      "confirmation": false,
+      "platforms": ["*"]
+    },
+    {
+      "intent": "sandbox.run",
+      "summary": "Run a command in a sandbox",
+      "aliases": ["run in sandbox", "isolated run", "sandbox run"],
+      "objective": "Run a command inside a new sandbox container",
+      "command": "buff sandbox run \"<cmd>\" [--image <img>] [--project <p>]",
+      "example": "buff sandbox run \"npm test\" --project my-app",
+      "args": [{ "name": "cmd", "flag": "\"<cmd>\"", "optional": false, "example": "\"npm test\"" }],
+      "rbac": "execute",
+      "confirmation": false,
+      "platforms": ["*"]
+    },
+    {
+      "intent": "retrieval.query",
+      "summary": "Semantic search over an indexed repo",
+      "aliases": ["search the code", "retrieval query", "semantic search", "how is x handled"],
+      "objective": "Semantic search over the indexed repo (top-k chunks)",
+      "command": "buff retrieval query \"<q>\" [-k <n>]",
+      "example": "buff retrieval query \"how is auth handled\" -k 5",
+      "args": [{ "name": "query", "flag": "\"<q>\"", "optional": false, "example": "\"how is auth handled\"" }],
+      "rbac": "read",
+      "confirmation": false,
+      "platforms": ["*"]
+    },
+    {
+      "intent": "tools.list",
+      "summary": "Inspect the agent tool registry",
+      "aliases": ["what tools does the agent have", "tool registry", "list tools"],
+      "objective": "List every registered tool (the H1 tool-calling surface)",
+      "command": "buff tools list",
+      "example": "buff tools list",
+      "args": [],
+      "rbac": "read",
+      "confirmation": false,
+      "platforms": ["*"]
+    },
+    {
+      "intent": "audit.verify",
+      "summary": "Verify the audit trail",
+      "aliases": ["audit verify", "verify audit trail", "tamper check"],
+      "objective": "Verify hash-chain integrity of audit stores (tamper detection)",
+      "command": "buff audit verify",
+      "example": "buff audit verify",
+      "args": [],
+      "rbac": "admin",
+      "confirmation": false,
+      "platforms": ["*"]
+    },
+    {
+      "intent": "sbom.generate",
+      "summary": "Generate the SBOM",
+      "aliases": ["generate sbom", "bill of materials", "sbom"],
+      "objective": "Generate the CycloneDX software bill of materials",
+      "command": "buff sbom -o <out> --json",
+      "example": "buff sbom -o sbom.json --json",
+      "args": [{ "name": "out", "flag": "-o", "optional": true, "example": "-o sbom.json" }],
+      "rbac": "read",
+      "confirmation": false,
+      "platforms": ["*"]
+    },
+    {
+      "intent": "init.project",
+      "summary": "Scaffold a new project",
+      "aliases": ["scaffold a project", "new project", "create a project from template", "init project"],
+      "objective": "Generate a project from a template",
+      "command": "buff init [-t <template>] [--list]",
+      "example": "buff init -t cli-app my-new-project",
+      "args": [{ "name": "template", "flag": "-t", "optional": true, "example": "-t cli-app" }],
+      "rbac": "execute",
+      "confirmation": false,
+      "platforms": ["*"]
+    }
+  ]
+}
