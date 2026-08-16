@@ -83,8 +83,8 @@ export const TOOLSETS: ToolsetDef[] = [
   {
     name: 'coding',
     label: 'Coding',
-    description: 'Interactive file access for the agent loop: read files with line numbers, list directories, glob by pattern (deny-first, workspace-scoped).',
-    tools: ['read_file', 'list_dir', 'glob'],
+    description: 'Interactive file access for the agent loop: read files with line numbers, list directories, glob by pattern, and edit/write files (deny-first, workspace-scoped; edits are confirmation-gated).',
+    tools: ['read_file', 'list_dir', 'glob', 'edit_file', 'write_file'],
   },
   {
     name: 'web',

@@ -11,11 +11,11 @@
  */
 
 import { describe, it, expect } from 'vitest';
-import { mkdtempSync, writeFileSync, mkdirSync, symlinkSync, rmSync } from 'node:fs';
+import { mkdtempSync, writeFileSync, mkdirSync, symlinkSync, rmSync, existsSync, readFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
-import { runReadFile, runListDir, runGlob } from '../../src/tools/coding-tools.js';
+import { runReadFile, runListDir, runGlob, runEditFile, runWriteFile } from '../../src/tools/coding-tools.js';
 import { getTool, listTools } from '../../src/tools/registry.js';
 import { toolsetForTool, filterToolsByToolsets, TOOLSETS } from '../../src/tools/toolsets.js';
 import type { ToolContext } from '../../src/tools/registry.js';
@@ -185,8 +185,8 @@ describe('glob — the agent finds files by shape', () => {
 });
 
 describe('toolset gating — the coding toolset owns the perception tools', () => {
-  it('registers read_file / list_dir / glob in the registry', () => {
-    for (const name of ['read_file', 'list_dir', 'glob']) {
+  it('registers the five coding tools in the registry', () => {
+    for (const name of ['read_file', 'list_dir', 'glob', 'edit_file', 'write_file']) {
       const tool = getTool(name);
       expect(tool, `${name} should be registered`).toBeDefined();
       expect(tool!.category).toBe('workflow');
@@ -195,10 +195,10 @@ describe('toolset gating — the coding toolset owns the perception tools', () =
   });
 
   it('assigns each tool to EXACTLY ONE toolset (the coding toolset)', () => {
-    for (const name of ['read_file', 'list_dir', 'glob']) {
+    for (const name of ['read_file', 'list_dir', 'glob', 'edit_file', 'write_file']) {
       expect(toolsetForTool(name)?.name).toBe('coding');
     }
-    expect(TOOLSETS.find((t) => t.name === 'coding')?.tools).toEqual(['read_file', 'list_dir', 'glob']);
+    expect(TOOLSETS.find((t) => t.name === 'coding')?.tools).toEqual(['read_file', 'list_dir', 'glob', 'edit_file', 'write_file']);
   });
 
   it('the coding toolset is disabled → the tools are gated out', () => {
@@ -206,6 +206,124 @@ describe('toolset gating — the coding toolset owns the perception tools', () =
     expect(names).not.toContain('read_file');
     expect(names).not.toContain('list_dir');
     expect(names).not.toContain('glob');
+    expect(names).not.toContain('edit_file');
+    expect(names).not.toContain('write_file');
     expect(names).toContain('code_search'); // untouched sibling toolset
+  });
+});
+
+describe('edit_file — surgical exact-text edits (confirmation-gated)', () => {
+  it('refuses to apply without confirm, telling the model to ask_user first', async () => {
+    const { ctx } = makeWorkspace();
+    const out = await runEditFile(
+      { path: 'src/index.ts', old_string: 'root = 1', new_string: 'root = 42' },
+      ctx,
+    );
+    expect(out).toContain('state-changing');
+    expect(out).toContain('ask_user');
+    expect(out).toContain('confirm:true');
+  });
+
+  it('applies a single exact match with confirm', async () => {
+    const { dir, ctx } = makeWorkspace();
+    const out = await runEditFile(
+      { path: 'src/index.ts', old_string: 'root = 1', new_string: 'root = 42', confirm: true },
+      ctx,
+    );
+    expect(out).toContain('applied to');
+    expect(out).toContain('lines 1');
+    const updated = await runReadFile({ path: 'src/index.ts' }, ctx);
+    expect(updated).toContain('root = 42');
+    expect(updated).not.toContain('root = 1');
+    expect(existsSync(join(dir, 'src', 'index.ts'))).toBe(true);
+  });
+
+  it('deletes text with an empty new_string', async () => {
+    const { dir, ctx } = makeWorkspace();
+    await runEditFile(
+      { path: 'src/index.ts', old_string: 'export const root2 = 2;\n', new_string: '', confirm: true },
+      ctx,
+    );
+    const updated = await runReadFile({ path: 'src/index.ts' }, ctx);
+    expect(updated).not.toContain('root2');
+  });
+
+  it('reports a not-found old_string distinctly (the model must re-read)', async () => {
+    const { ctx } = makeWorkspace();
+    const out = await runEditFile(
+      { path: 'src/index.ts', old_string: 'this text does not exist', new_string: 'x', confirm: true },
+      ctx,
+    );
+    expect(out).toContain('not found');
+    expect(out).toContain('Re-read');
+  });
+
+  it('refuses an ambiguous match (multiple occurrences) unless allow_multiple', async () => {
+    const { dir, ctx } = makeWorkspace();
+    writeFileSync(join(dir, 'dup.txt'), 'foo\nfoo\n');
+    const refused = await runEditFile(
+      { path: 'dup.txt', old_string: 'foo', new_string: 'bar', confirm: true },
+      ctx,
+    );
+    expect(refused).toContain('ambiguous');
+    expect(refused).toContain('allow_multiple');
+    // Nothing was changed by the refusal.
+    const untouched = await runReadFile({ path: 'dup.txt' }, ctx);
+    expect(untouched).toContain('foo');
+    expect(untouched).not.toContain('bar');
+
+    const applied = await runEditFile(
+      { path: 'dup.txt', old_string: 'foo', new_string: 'bar', allow_multiple: true, confirm: true },
+      ctx,
+    );
+    expect(applied).toContain('all 2 occurrences');
+    const updated = await runReadFile({ path: 'dup.txt' }, ctx);
+    expect(updated).toContain('1: bar');
+    expect(updated).toContain('2: bar');
+    expect(updated).not.toContain('foo');
+  });
+
+  it('deny-first: refuses .. traversal and absolute paths', async () => {
+    const { ctx } = makeWorkspace();
+    expect(await runEditFile({ path: '../outside.txt', old_string: 'a', new_string: 'b', confirm: true }, ctx)).toContain('denied');
+    expect(await runEditFile({ path: '/etc/hosts', old_string: 'a', new_string: 'b', confirm: true }, ctx)).toContain('denied');
+  });
+});
+
+describe('write_file — create / overwrite (confirmation-gated)', () => {
+  it('refuses to write without confirm', async () => {
+    const { ctx } = makeWorkspace();
+    const out = await runWriteFile({ path: 'new.txt', content: 'hello' }, ctx);
+    expect(out).toContain('state-changing');
+    expect(out).toContain('ask_user');
+  });
+
+  it('creates a new file (and its parent dirs) with confirm', async () => {
+    const { dir, ctx } = makeWorkspace();
+    const out = await runWriteFile(
+      { path: 'deep/nested/new-file.ts', content: 'export const x = 1;\n', confirm: true },
+      ctx,
+    );
+    expect(out).toContain("created 'deep/nested/new-file.ts'");
+    const content = await runReadFile({ path: 'deep/nested/new-file.ts' }, ctx);
+    expect(content).toContain('export const x = 1;');
+  });
+
+  it('overwrites an existing file', async () => {
+    const { dir, ctx } = makeWorkspace();
+    await runWriteFile({ path: 'README.md', content: '# replaced\n', confirm: true }, ctx);
+    const out = await runWriteFile({ path: 'README.md', content: '# twice\n', confirm: true }, ctx);
+    expect(out).toContain('overwrote');
+    expect(await runReadFile({ path: 'README.md' }, ctx)).toContain('# twice');
+  });
+
+  it('deny-first: refuses .. traversal, absolute paths, and symlinked parents', async () => {
+    const { dir, ctx } = makeWorkspace();
+    // A symlinked directory inside the workspace pointing outside.
+    const outside = mkdtempSync(join(tmpdir(), 'buff-coding-tools-outside-'));
+    symlinkSync(outside, join(dir, 'leakdir'));
+    expect(await runWriteFile({ path: '../escape.txt', content: 'x', confirm: true }, ctx)).toContain('denied');
+    expect(await runWriteFile({ path: '/tmp/abs.txt', content: 'x', confirm: true }, ctx)).toContain('denied');
+    expect(await runWriteFile({ path: 'leakdir/evil.txt', content: 'x', confirm: true }, ctx)).toContain('denied');
   });
 });

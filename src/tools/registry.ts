@@ -270,6 +270,22 @@ const globSchema = z.object({
   max_results: z.number().int().min(1).max(500).default(200).describe('Max matches to return (default 200).'),
 });
 
+/** P0.3 — edit_file tool args: surgical exact-text replacement (confirmed). */
+const editFileSchema = z.object({
+  path: z.string().describe('Path to the file to edit, relative to the workspace root (e.g. "src/server.ts"). Absolute paths outside the workspace and ".." traversal are denied.'),
+  old_string: z.string().min(1).describe('Exact text to find — literal match including whitespace. Refused when it occurs multiple times unless allow_multiple is set.'),
+  new_string: z.string().describe('Replacement text (empty string deletes the matched text).'),
+  allow_multiple: z.boolean().default(false).describe('Replace ALL occurrences of old_string (default false — an ambiguous match is refused).'),
+  confirm: z.boolean().default(false).describe('Set true ONLY after the user explicitly confirmed this edit via ask_user. State-changing — refused without it.'),
+});
+
+/** P0.3 — write_file tool args: create/overwrite a file (confirmed). */
+const writeFileSchema = z.object({
+  path: z.string().describe('Path to write, relative to the workspace root (parent directories are created as needed). Overwrites existing content.'),
+  content: z.string().describe('The FULL new file content (replaces any existing content).'),
+  confirm: z.boolean().default(false).describe('Set true ONLY after the user explicitly confirmed this write via ask_user. State-changing — refused without it.'),
+});
+
 /** The C2 requirementState check as a reusable tool. */
 const verifyRequirementSchema = z.object({
   request: z.string().describe('The user request whose completeness should be verified'),
@@ -353,6 +369,7 @@ export const TOOL_CONTRACT = `You have tools available. Call them when appropria
 - If a subtask can be delegated to a specialized sub-agent (gather context, review, security scan, run tests), call \`delegate\` with the agent type, a focused prompt, and optional file paths.
 - To find code matching a pattern (context gathering, locating definitions/usages), call \`code_search\` with the pattern and optional globs.
 - To READ the project: call \`read_file\` to open a file (with line numbers), \`list_dir\` to see a directory's contents, or \`glob\` to find files by pattern. Always prefer reading the actual file over assuming its contents — a large file reports a line range, continue with offset/limit.
+- To CHANGE code (after reading it): call \`edit_file\` for a surgical exact-text replacement, or \`write_file\` to create/replace a file. Both are state-changing and refuse without confirm — call \`ask_user\` to confirm the change with a one-line summary, then retry with confirm:true.
 - END EVERY RESPONSE by calling \`suggest_followups\` with exactly 3 followups the user is likely to want next — natural next questions, deeper dives, or related directions that build on what you just said; specific to this conversation, not generic.
 - If you have nothing to add, answer directly and still end with suggest_followups.
 - ORDERING (non-negotiable): deliver the user's answer FIRST, then suggest_followups. The followup call must come only AFTER the complete answer is written — never before it, never instead of it. A bare lead-in ("Sure, I can help!") is NOT an answer; write the full answer in the same step as the followup call.`;
@@ -539,6 +556,24 @@ registerTool({
   inputSchema: globSchema,
   endsAgentStep: false,
   run: (args, ctx) => import('./coding-tools.js').then((m) => m.runGlob(args as import('./coding-tools.js').GlobArgs, ctx)),
+});
+
+registerTool({
+  name: 'edit_file',
+  description: 'Make a surgical exact-text edit to a file (find old_string, replace with new_string — like str_replace). State-changing: confirm with the user via ask_user first, then retry with confirm:true. Use after read_file so the match is exact.',
+  category: 'workflow',
+  inputSchema: editFileSchema,
+  endsAgentStep: false,
+  run: (args, ctx) => import('./coding-tools.js').then((m) => m.runEditFile(args as import('./coding-tools.js').EditFileArgs, ctx)),
+});
+
+registerTool({
+  name: 'write_file',
+  description: 'Create a new file or overwrite one with full content (parent directories are created). State-changing: confirm with the user via ask_user first, then retry with confirm:true.',
+  category: 'workflow',
+  inputSchema: writeFileSchema,
+  endsAgentStep: false,
+  run: (args, ctx) => import('./coding-tools.js').then((m) => m.runWriteFile(args as import('./coding-tools.js').WriteFileArgs, ctx)),
 });
 
 // ─── I1 web-research tools (web_search / read_page) ─────────────────────────

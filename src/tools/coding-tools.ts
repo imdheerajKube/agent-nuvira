@@ -25,8 +25,9 @@
  * read was partial and can continue with offset/limit.
  */
 
-import { readFile, readdir, realpath, stat } from 'node:fs/promises';
-import { isAbsolute, join, relative, resolve, sep } from 'node:path';
+import { mkdir, readFile, readdir, realpath, stat, writeFile } from 'node:fs/promises';
+import { existsSync } from 'node:fs';
+import { dirname, isAbsolute, join, relative, resolve, sep } from 'node:path';
 import type { ToolContext } from './registry.js';
 
 /** Max characters returned by read_file (a 40MB file must not flood context). */
@@ -171,6 +172,150 @@ export async function runListDir(args: ListDirArgs, ctx: ToolContext): Promise<s
     `list_dir: ${display} — ${entries.length} entr${entries.length === 1 ? 'y' : 'ies'} (${dirs.length} dir, ${files.length} file${files.length === 1 ? '' : 's'}${hidden ? `, ${hidden} hidden` : ''}):`,
     ...rows,
   ].join('\n');
+}
+
+/** ─── edit_file (str_replace-style surgical edit, confirmation-gated) ──── */
+
+/**
+ * The confirmation-gate message every state-changing coding tool returns
+ * when `confirm` is not set — the model must call ask_user first, then
+ * retry with confirm:true (the run_cli precedent, applied to edits).
+ */
+function confirmFirst(tool: string, path: string, what: string): string {
+  return `${tool}: state-changing — NOT applied. Ask the user first via ask_user ("Apply ${what} to ${path}?" with a one-line summary), then retry ${tool} with confirm:true once they approve.`;
+}
+
+export interface EditFileArgs {
+  path: string;
+  old_string: string;
+  new_string: string;
+  allow_multiple?: boolean;
+  confirm?: boolean;
+}
+
+/**
+ * A surgical exact-text replacement — the same edit primitive a human
+ * coding agent uses: find the exact old text, replace with new. Refuses
+ * ambiguous matches (multiple occurrences without allow_multiple) and
+ * reports not-found distinctly so the model re-reads the file. Deny-first
+ * on the path (gateReal — file must exist inside the workspace).
+ */
+export async function runEditFile(args: EditFileArgs, ctx: ToolContext): Promise<string> {
+  if (!args.confirm) {
+    return confirmFirst('edit_file', args.path, `this edit: replace "${abbrev(args.old_string)}" with "${abbrev(args.new_string)}"`);
+  }
+  if (!args.old_string || args.old_string === '') {
+    return 'edit_file: old_string must not be empty (use write_file to replace the whole file).';
+  }
+
+  const gated = await gateReal(ctx.cwd, args.path);
+  if (!gated.ok) return `edit_file: ${gated.reason}`;
+
+  let content: string;
+  try {
+    content = await readFile(gated.abs, 'utf-8');
+  } catch (err) {
+    return `edit_file: cannot read '${gated.rel}': ${(err as Error).message}`;
+  }
+
+  const firstIdx = content.indexOf(args.old_string);
+  if (firstIdx === -1) {
+    return `edit_file: old_string not found in '${gated.rel}'. Re-read the file and retry with the exact text — the match is literal, including whitespace.`;
+  }
+
+  let occurrences = 0;
+  let idx = 0;
+  while ((idx = content.indexOf(args.old_string, idx)) !== -1) {
+    occurrences += 1;
+    idx += args.old_string.length;
+  }
+  if (occurrences > 1 && !args.allow_multiple) {
+    return `edit_file: '${args.old_string}' occurs ${occurrences} times in '${gated.rel}' — ambiguous. Set allow_multiple:true to replace all, or include more surrounding text to narrow the match.`;
+  }
+
+  const lineAt = (pos: number): number => content.slice(0, pos).split('\n').length;
+  const startLine = lineAt(firstIdx);
+  const endLine = lineAt(firstIdx + args.old_string.length);
+  const next = args.allow_multiple
+    ? content.split(args.old_string).join(args.new_string)
+    : content.slice(0, firstIdx) + args.new_string + content.slice(firstIdx + args.old_string.length);
+
+  try {
+    await writeFile(gated.abs, next, 'utf-8');
+  } catch (err) {
+    return `edit_file: write failed on '${gated.rel}': ${(err as Error).message}`;
+  }
+
+  const what = occurrences > 1 && args.allow_multiple
+    ? `all ${occurrences} occurrences`
+    : `lines ${startLine}${endLine !== startLine ? `–${endLine}` : ''}`;
+  return `edit_file: applied to '${gated.rel}' (${what}). Written ${args.new_string.length} chars. Re-read the file to verify the change.`;
+}
+
+/** ─── write_file (create / overwrite, confirmation-gated) ───────────────── */
+
+export interface WriteFileArgs {
+  path: string;
+  content: string;
+  confirm?: boolean;
+}
+
+/**
+ * Write the full content of a file (create or overwrite). Parent dirs are
+ * created. Deny-first on the path — the target may not exist yet, so the
+ * gate realpaths the nearest EXISTING ancestor (catches symlinked-parent
+ * escapes) instead of the target itself.
+ */
+export async function runWriteFile(args: WriteFileArgs, ctx: ToolContext): Promise<string> {
+  if (!args.confirm) {
+    return confirmFirst('write_file', args.path, `writing ${args.content.length} chars${abbrev(args.content) ? ` ("${abbrev(args.content)}")` : ''}`);
+  }
+  const gated = await gateWrite(ctx.cwd, args.path);
+  if (!gated.ok) return `write_file: ${gated.reason}`;
+
+  const existed = existsSync(gated.abs);
+  try {
+    await mkdir(dirname(gated.abs), { recursive: true });
+    await writeFile(gated.abs, args.content, 'utf-8');
+  } catch (err) {
+    return `write_file: write failed on '${gated.rel}': ${(err as Error).message}`;
+  }
+  return `write_file: ${existed ? 'overwrote' : 'created'} '${gated.rel}' (${args.content.length} chars).`;
+}
+
+/** A short preview of a value for confirmation messages (60 chars max). */
+function abbrev(s: string | undefined, max = 60): string {
+  if (!s) return '';
+  const one = s.replace(/\s+/g, ' ').trim();
+  return one.length > max ? `${one.slice(0, max)}…` : one;
+}
+
+/**
+ * Deny-first gate for WRITES: the target may not exist yet, so realpath the
+ * nearest existing ancestor (the target's parent or the first existing dir
+ * above it) and require it inside the workspace — a symlinked parent or
+ * `..` traversal is denied before any byte is written.
+ */
+async function gateWrite(root: string | undefined, p: string): Promise<GateResult> {
+  const lexical = gatePath(root, p);
+  if (!lexical.ok) return lexical;
+  try {
+    const base = root || process.cwd();
+    let probe = dirname(lexical.abs);
+    while (!existsSync(probe)) {
+      const up = dirname(probe);
+      if (up === probe) break;
+      probe = up;
+    }
+    const [realBase, realProbe] = await Promise.all([realpath(base), realpath(probe)]);
+    const rel = relative(realBase, realProbe);
+    if (rel === '..' || rel.startsWith(`..${sep}`) || isAbsolute(rel)) {
+      return { ok: false, reason: `path '${p}' resolves outside the workspace (${base}) — denied` };
+    }
+    return lexical;
+  } catch (err) {
+    return { ok: false, reason: `cannot access '${p}': ${(err as Error).message}` };
+  }
 }
 
 /** ─── glob ───────────────────────────────────────────────────────────────── */
