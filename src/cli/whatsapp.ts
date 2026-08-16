@@ -15,6 +15,7 @@ import { Command } from 'commander';
 import { logger } from '../utils/logger.js';
 import { BaileysBridge, isSelfChatEnabled, normalizePairingPhone } from '../gateway/whatsapp/baileys-bridge.js';
 import { whatsappSessionDir, hasWhatsAppSession } from '../gateway/whatsapp/session.js';
+import { maskSenderId } from '../utils/mask.js';
 import { guardRbacAction } from './rbac-guard.js';
 
 export class WhatsAppCommand {
@@ -121,7 +122,8 @@ export class WhatsAppCommand {
           return;
         }
         logger.info(`${names.length} resolvable contact(s) — send by name: buff gateway send whatsapp:<Name> "message"`);
-        for (const c of names) console.log(`  ${c.name} → ${c.jid}`);
+        // Numbers are masked (privacy) — the name identifies the contact.
+        for (const c of names) console.log(`  ${c.name} → ${maskSenderId(c.jid)}`);
         logger.info('Add more with: buff whatsapp contact add <Name> <number>');
         console.log('');
         logger.info('⚠  These are SEND-BY-NAME mappings ONLY — they do NOT let these numbers');

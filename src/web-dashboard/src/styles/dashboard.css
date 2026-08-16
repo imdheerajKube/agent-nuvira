@@ -1843,6 +1843,27 @@ body {
   border: 1px dashed rgba(217, 119, 6, 0.45);
 }
 
+.hub-reveal-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin: 0 0 14px;
+  font-size: 12px;
+}
+
+.hub-reveal-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  cursor: pointer;
+  font-weight: 500;
+}
+
+.hub-reveal-toggle input[type='checkbox'] {
+  accent-color: var(--accent-blue);
+  cursor: pointer;
+}
+
 .hub-unsaved-banner {
   display: flex;
   align-items: center;
