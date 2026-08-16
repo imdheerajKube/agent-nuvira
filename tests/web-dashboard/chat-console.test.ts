@@ -80,12 +80,82 @@ describe('ChatConsole', () => {
     ]);
   });
 
-  it('injects a non-TTY ask_user renderer (declines the clarification)', async () => {
-    await console_.answer('s1', 'hi');
+  /** Wait until the fake engine's answerOnce has been invoked. */
+  async function waitForEngineCall(): Promise<void> {
+    for (let i = 0; i < 20 && engine.calls.length === 0; i++) {
+      await new Promise((r) => setTimeout(r, 1));
+    }
+    expect(engine.calls.length).toBeGreaterThan(0);
+  }
+
+  it('P0.1 — emits a question event and resolves it via respond() (the round-trip)', async () => {
+    const events: Array<{ sessionId: string; event: unknown }> = [];
+    console_.onEvent((sessionId, event) => events.push({ sessionId, event }));
+
+    engine.delayResolve = true;
+    const answerPromise = console_.answer('s1', 'hi');
+    await waitForEngineCall();
     const askUser = engine.calls[0].opts?.askUser;
     expect(typeof askUser).toBe('function');
-    const answer = await askUser!('question?', [{ label: 'A' }], false);
+
+    // The engine asks a question; the console must emit it (not decline silently).
+    const questionPromise = askUser!('Should I fix it?', [{ label: 'Yes' }, { label: 'No' }], false);
+    const qEvent = events.find((e) => e.sessionId === 's1' && (e.event as { kind?: string }).kind === 'question');
+    expect(qEvent).toBeTruthy();
+    const q = (qEvent?.event ?? {}) as { kind: string; question: string; choices: Array<{ label: string }>; questionId: string };
+    expect(q.question).toBe('Should I fix it?');
+    expect(q.choices).toEqual([{ label: 'Yes' }, { label: 'No' }]);
+    expect(q.questionId).toBeTruthy();
+
+    // Unrelated questionId is refused.
+    expect(console_.respond('s1', 'nope', { index: 0 })).toBe(false);
+    // Wrong session is refused.
+    expect(console_.respond('other', q.questionId, { index: 0 })).toBe(false);
+
+    // The GUI answers → the engine receives the selection and the turn resumes.
+    expect(console_.respond('s1', q.questionId, { index: 0 })).toBe(true);
+    const answer = await questionPromise;
+    expect(answer).toEqual({ answer: 0, index: 0, custom: undefined });
+    engine.finish();
+    const r = await answerPromise;
+    expect(r.ok).toBe(true);
+    expect(r.content).toBe('late echo');
+  });
+
+  it('P0.1 — skipping a question returns index -1 (agent proceeds on best judgment)', async () => {
+    const events: Array<{ event: unknown }> = [];
+    console_.onEvent((_sid, event) => events.push({ event }));
+    engine.delayResolve = true;
+    const answerPromise = console_.answer('s1', 'hi');
+    await waitForEngineCall();
+    const askUser = engine.calls[0].opts?.askUser;
+    const questionPromise = askUser!('question?', [{ label: 'A' }], false);
+    const qEvent = events.find((e) => (e.event as { kind?: string }).kind === 'question');
+    const q = (qEvent?.event ?? {}) as { questionId: string };
+    expect(console_.respond('s1', q.questionId, { index: -1 })).toBe(true);
+    const answer = await questionPromise;
     expect(answer).toEqual({ answer: [], index: -1 });
+    engine.finish();
+    const r = await answerPromise;
+    expect(r.ok).toBe(true);
+  });
+
+  it('P0.1 — multiSelect questions pass arrays through', async () => {
+    const events: Array<{ event: unknown }> = [];
+    console_.onEvent((_sid, event) => events.push({ event }));
+    engine.delayResolve = true;
+    const answerPromise = console_.answer('s1', 'hi');
+    await waitForEngineCall();
+    const askUser = engine.calls[0].opts?.askUser;
+    const questionPromise = askUser!('pick', [{ label: 'A' }, { label: 'B' }], true);
+    const qEvent = events.find((e) => (e.event as { kind?: string }).kind === 'question');
+    const q = (qEvent?.event ?? {}) as { questionId: string; multiSelect: boolean };
+    expect(q.multiSelect).toBe(true);
+    expect(console_.respond('s1', q.questionId, { index: [0, 1] })).toBe(true);
+    const answer = await questionPromise;
+    expect(answer).toEqual({ answer: [0, 1], index: [0, 1], custom: undefined });
+    engine.finish();
+    await answerPromise;
   });
 
   it('caps turns per session (oldest dropped)', async () => {

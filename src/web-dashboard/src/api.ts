@@ -809,7 +809,11 @@ export class DashboardAPI {
    */
   subscribeChat(
     sessionId: string,
-    handlers: { onProgress?: (line: string) => void; onStatus?: (status: string) => void },
+    handlers: {
+      onProgress?: (line: string) => void;
+      onStatus?: (status: string) => void;
+      onQuestion?: (q: { questionId: string; question: string; choices: Array<{ label: string; description?: string }>; multiSelect: boolean }) => void;
+    },
   ): () => void {
     const token = getAdminToken();
     const es = new EventSource(`${this.baseUrl}/api/chat/${encodeURIComponent(sessionId)}/events?token=${encodeURIComponent(token ?? '')}`);
@@ -825,7 +829,48 @@ export class DashboardAPI {
         if (payload.status) handlers.onStatus?.(payload.status);
       } catch { /* ignore malformed */ }
     });
+    es.addEventListener('question', (event) => {
+      try {
+        const payload = JSON.parse((event as MessageEvent).data) as {
+          questionId?: string;
+          question?: string;
+          choices?: Array<{ label: string; description?: string }>;
+          multiSelect?: boolean;
+        };
+        if (payload.questionId && payload.question) {
+          handlers.onQuestion?.({
+            questionId: payload.questionId,
+            question: payload.question,
+            choices: payload.choices ?? [],
+            multiSelect: payload.multiSelect === true,
+          });
+        }
+      } catch { /* ignore malformed */ }
+    });
     return () => es.close();
+  }
+
+  /**
+   * Answer a pending ask_user question (P0.1). Sends the selected option
+   * index (or indices for multiSelect), or -1 to skip and let the agent
+   * proceed on best judgment.
+   */
+  async chatRespond(
+    sessionId: string,
+    questionId: string,
+    selection: { index?: number | number[]; custom?: string } = {},
+  ): Promise<{ ok: boolean; error?: string }> {
+    try {
+      const res = await fetch(`${this.baseUrl}/api/chat/${encodeURIComponent(sessionId)}/respond`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', ...this.authHeaders() },
+        body: JSON.stringify({ questionId, ...selection }),
+      });
+      const data = (await res.json()) as { ok?: boolean; error?: string };
+      return { ok: data.ok === true, error: data.error };
+    } catch (err) {
+      return { ok: false, error: err instanceof Error ? err.message : String(err) };
+    }
   }
 }
 
