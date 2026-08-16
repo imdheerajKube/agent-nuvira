@@ -223,7 +223,7 @@ describe('PlannerAgent', () => {
 
     it('should REJECT a plan that copies the example for an unrelated goal (NVDA addon case)', async () => {
       const context = {
-        goal: 'create an NVDA addon compatible with NVDA 2026.1 that says Hello Anuj when the user presses NVDA key+alt+1 and build it',
+        goal: 'create an NVDA addon compatible with NVDA 2026.1 that says Hello Ria when the user presses NVDA key+alt+1 and build it',
         workingDirectory: '/test',
         taskPlan: [],
         artifacts: [],
@@ -271,7 +271,7 @@ describe('PlannerAgent', () => {
 
     it('should ACCEPT a faithful plan that references the goal domain (NVDA addon case)', async () => {
       const context = {
-        goal: 'create an NVDA addon compatible with NVDA 2026.1 that says Hello Anuj when the user presses NVDA key+alt+1 and build it',
+        goal: 'create an NVDA addon compatible with NVDA 2026.1 that says Hello Ria when the user presses NVDA key+alt+1 and build it',
         workingDirectory: '/test',
         taskPlan: [],
         artifacts: [],
@@ -282,7 +282,7 @@ describe('PlannerAgent', () => {
 
       const mockLLM = async () => JSON.stringify([
         { id: 'step-01-create-manifest', description: 'Create manifest.ini declaring the NVDA addon metadata for NVDA 2026.1', agentType: 'writer', dependsOn: [] },
-        { id: 'step-02-create-addon-script', description: 'Create the addon Python script with a global plugin that speaks Hello Anuj when NVDA key+alt+1 is pressed', agentType: 'writer', dependsOn: ['step-01-create-manifest'] },
+        { id: 'step-02-create-addon-script', description: 'Create the addon Python script with a global plugin that speaks Hello Ria when NVDA key+alt+1 is pressed', agentType: 'writer', dependsOn: ['step-01-create-manifest'] },
         { id: 'step-03-review', description: 'Review the addon for NVDA 2026.1 compatibility', agentType: 'reviewer', dependsOn: ['step-02-create-addon-script'] },
       ]);
 

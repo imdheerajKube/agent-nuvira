@@ -109,10 +109,10 @@ describe('WhatsAppPairingManager', () => {
   it('phone mode normalizes the number and streams the 8-char code', () => {
     const events: WhatsAppPairEvent[] = [];
     manager.onEvent((e) => events.push(e));
-    const r = manager.start({ phone: '+91 88006 63237' });
+    const r = manager.start({ phone: '+91 88444 33322' });
     expect(r.ok).toBe(true);
-    expect(bridge.pairCalls[0].phoneNumber).toBe('918800663237');
-    expect(manager.statusSnapshot().phone).toBe('918800663237');
+    expect(bridge.pairCalls[0].phoneNumber).toBe('918844433322');
+    expect(manager.statusSnapshot().phone).toBe('918844433322');
 
     bridge.emitCode('12345678');
     const codeEvent = events.find((e) => e.kind === 'code');

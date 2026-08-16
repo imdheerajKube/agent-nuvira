@@ -51,7 +51,7 @@ describe('WhatsAppPanel', () => {
     render(<WhatsAppPanel authed canWrite sessionExpired={() => {}} />);
     await waitFor(() => expect(screen.getByText('Not paired')).toBeTruthy());
     expect(screen.getByRole('button', { name: /Pair with a QR/ })).toBeTruthy();
-    expect(screen.getByPlaceholderText(/918800663237/)).toBeTruthy();
+    expect(screen.getByPlaceholderText(/918844433322/)).toBeTruthy();
     // The pair-by-number button is disabled until a number is typed.
     expect(screen.getByRole('button', { name: 'Pair by number' })).toHaveProperty('disabled', true);
   });
@@ -94,12 +94,12 @@ describe('WhatsAppPanel', () => {
     mockStatus(IDLE);
     const start = vi.spyOn(dashboardAPI, 'startWhatsAppPair').mockResolvedValue({ ok: true });
     render(<WhatsAppPanel authed canWrite sessionExpired={() => {}} />);
-    await waitFor(() => expect(screen.getByPlaceholderText(/918800663237/)).toBeTruthy());
-    fireEvent.change(screen.getByPlaceholderText(/918800663237/), { target: { value: '918800663237' } });
+    await waitFor(() => expect(screen.getByPlaceholderText(/918844433322/)).toBeTruthy());
+    fireEvent.change(screen.getByPlaceholderText(/918844433322/), { target: { value: '918844433322' } });
     const btn = screen.getByRole('button', { name: 'Pair by number' }) as HTMLButtonElement;
     expect(btn.disabled).toBe(false);
     fireEvent.click(btn);
-    await waitFor(() => expect(start).toHaveBeenCalledWith('918800663237'));
+    await waitFor(() => expect(start).toHaveBeenCalledWith('918844433322'));
   });
 
   it('offers unpair when paired', async () => {
@@ -113,12 +113,12 @@ describe('WhatsAppPanel', () => {
   });
 
   it('lists send-by-name contacts and clarifies they do NOT grant trigger access', async () => {
-    mockStatus(PAIRED, { Daddy: '918178504516', Anuj: '918800425333' });
+    mockStatus(PAIRED, { Alex: '919876543210', Ria: '918877766655' });
     render(<WhatsAppPanel authed canWrite sessionExpired={() => {}} />);
     await waitFor(() => expect(screen.getByText('📇 Send-by-name contacts')).toBeTruthy());
     expect(screen.getByText('2 mapped')).toBeTruthy();
-    expect(screen.getByText('Daddy')).toBeTruthy();
-    expect(screen.getByText('Anuj')).toBeTruthy();
+    expect(screen.getByText('Alex')).toBeTruthy();
+    expect(screen.getByText('Ria')).toBeTruthy();
     // The clarity note — send-by-name ≠ trigger access.
     expect(screen.getByText(/let these numbers trigger the agent/)).toBeTruthy();
     expect(screen.getByText(/verified list/)).toBeTruthy();

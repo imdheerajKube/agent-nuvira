@@ -27,7 +27,7 @@ export class WhatsAppCommand {
       .description('Pair WhatsApp (personal number — no Meta Business account, no paid API)')
       .option(
         '--phone <number>',
-        'Pair via phone number instead of a QR: enter the 8-char code under WhatsApp → Linked devices → Link with phone number instead (full international format, no +, e.g. 918800663237)',
+        'Pair via phone number instead of a QR: enter the 8-char code under WhatsApp → Linked devices → Link with phone number instead (full international format, no +, e.g. 919876543210)',
       )
       .option('--timeout <seconds>', 'Pairing window in seconds', '90')
       .action(async (opts: { phone?: string; timeout?: string }) => {
@@ -39,7 +39,7 @@ export class WhatsAppCommand {
         const phone = opts.phone ? normalizePairingPhone(opts.phone) : '';
         if (opts.phone && !phone) {
           logger.error(
-            `Invalid phone number '${opts.phone}' — use full international format with country code (no + or spaces), e.g. 918800663237`,
+            `Invalid phone number '${opts.phone}' — use full international format with country code (no + or spaces), e.g. 919876543210`,
           );
           return;
         }
@@ -116,8 +116,8 @@ export class WhatsAppCommand {
         const names = bridge.contactNames();
         if (names.length === 0) {
           logger.info('No resolvable contacts yet.');
-          logger.info('Map a contact once:  buff whatsapp contact add <Name> <number>  (e.g. Daddy 919876543210)');
-          logger.info('Then send by name:    buff gateway send whatsapp:Daddy "message"');
+          logger.info('Map a contact once:  buff whatsapp contact add <Name> <number>  (e.g. Name 919876543210)');
+          logger.info('Then send by name:    buff gateway send whatsapp:Name "message"');
           return;
         }
         logger.info(`${names.length} resolvable contact(s) — send by name: buff gateway send whatsapp:<Name> "message"`);
@@ -133,7 +133,7 @@ export class WhatsAppCommand {
 
     contact
       .command('add <name> <number>')
-      .description('Map a display name to a number (E.164, no +): buff whatsapp contact add Daddy 919876543210')
+      .description('Map a display name to a number (E.164, no +): buff whatsapp contact add Name 919876543210')
       .action(async (name: string, number: string) => {
         if (!guardRbacAction('skill.remove')) return;
         const bridge = new BaileysBridge();

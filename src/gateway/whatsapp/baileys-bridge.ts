@@ -20,7 +20,7 @@
  * - **Contact-name resolution (Hermes `allow_from`/contact UX parity):** the
  *   bridge learns name → JID from `contacts.upsert`/`contacts.update` (the
  *   phone's address book sync) and from every inbound message's `pushName`,
- *   so `send("Daddy", …)` resolves the contact by name.
+ *   so `send("Alex", …)` resolves the contact by name.
  */
 
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
@@ -33,7 +33,7 @@ import { readContactsFile, writeContactsFile } from './contacts.js';
 // ─── LID → phone-number mapping ────────────────────────────────────────────
 // WhatsApp's privacy rollout moved DMs to LID jids ("123456789012345@lid"):
 // the LID is a RANDOM id, NOT the contact's phone number, so an allow-list
-// entry like "+918800604222" can never match the raw sender jid. Baileys
+// entry like "+918811122233" can never match the raw sender jid. Baileys
 // learns the LID→PN pairs internally (linked-profile notifications,
 // contactAction sync, history sync, pnForLidChatAction) and emits them as
 // `lid-mapping.update` events — the bridge mirrors those into its own map so
@@ -568,7 +568,7 @@ export class BaileysBridge implements WhatsAppBridge {
     if (opts.phoneNumber && !phone) {
       return {
         ok: false,
-        reason: `invalid phone number '${opts.phoneNumber}' — use full international format with country code, e.g. 918800663237`,
+        reason: `invalid phone number '${opts.phoneNumber}' — use full international format with country code, e.g. 918844433322`,
       };
     }
     try {
@@ -784,7 +784,7 @@ export class BaileysBridge implements WhatsAppBridge {
       });
       // I8b — contact learning: the address-book sync (contacts.upsert on
       // connect, contacts.update on edits) + every inbound pushName populate
-      // the name → JID map used for `send("Daddy", …)`.
+      // the name → JID map used for `send("Alex", …)`.
       const learnContacts = (...args: unknown[]): void => {
         for (const c of (args[0] ?? []) as Array<Record<string, unknown>>) {
           const jid = typeof c?.id === 'string' ? c.id : '';

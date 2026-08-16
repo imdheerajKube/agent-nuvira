@@ -108,10 +108,10 @@ describe('normalizeWhatsAppJid', () => {
 
 describe('normalizePairingPhone', () => {
   it('keeps digits and drops +/spaces, 10-15 digits = valid', () => {
-    expect(normalizePairingPhone('+91 88006 63237')).toBe('918800663237');
-    expect(normalizePairingPhone('918800663237')).toBe('918800663237');
+    expect(normalizePairingPhone('+91 88444 33322')).toBe('918844433322');
+    expect(normalizePairingPhone('918844433322')).toBe('918844433322');
     expect(normalizePairingPhone('1-555-123-4567')).toBe('15551234567');
-    expect(normalizePairingPhone('8800663237')).toBe('8800663237');
+    expect(normalizePairingPhone('8844332211')).toBe('8844332211');
   });
 
   it('rejects junk and implausible lengths', () => {
@@ -228,9 +228,9 @@ describe('WhatsAppBridgeAdapter', () => {
     const adapter2 = new WhatsAppBridgeAdapter(fake2);
     const received2: Array<{ senderId?: string }> = [];
     await adapter2.start((m) => received2.push(m));
-    fake2.emit('1203630283471234@g.us', 'buff fix the tests', '918800425333@s.whatsapp.net');
+    fake2.emit('1203630283471234@g.us', 'buff fix the tests', '918877766655@s.whatsapp.net');
     await adapter2.stop();
-    expect(received2[0].senderId).toBe('918800425333@s.whatsapp.net');
+    expect(received2[0].senderId).toBe('918877766655@s.whatsapp.net');
   });
 });
 
@@ -239,10 +239,10 @@ describe('WhatsAppBridgeAdapter', () => {
 describe('LidJidMapper (privacy-rollout LID→PN resolution)', () => {
   it('resolves a learned @lid jid to its phone-number jid and passes others through', () => {
     const mapper = new LidJidMapper();
-    mapper.learn('123456789012345@lid', '918800663237@s.whatsapp.net');
-    expect(mapper.resolve('123456789012345@lid')).toBe('918800663237@s.whatsapp.net');
-    expect(mapper.resolve('918800663237@s.whatsapp.net')).toBe('918800663237@s.whatsapp.net'); // non-LID passthrough
-    expect(mapper.resolve('918800604222:13@s.whatsapp.net')).toBe('918800604222:13@s.whatsapp.net'); // device suffix untouched
+    mapper.learn('123456789012345@lid', '918844433322@s.whatsapp.net');
+    expect(mapper.resolve('123456789012345@lid')).toBe('918844433322@s.whatsapp.net');
+    expect(mapper.resolve('918844433322@s.whatsapp.net')).toBe('918844433322@s.whatsapp.net'); // non-LID passthrough
+    expect(mapper.resolve('918811122233:13@s.whatsapp.net')).toBe('918811122233:13@s.whatsapp.net'); // device suffix untouched
     expect(mapper.resolve('1203630283471234@g.us')).toBe('1203630283471234@g.us'); // groups untouched
     expect(mapper.resolve(undefined)).toBeUndefined();
     // Unknown LID passes through (mapping arrives shortly after).
@@ -251,9 +251,9 @@ describe('LidJidMapper (privacy-rollout LID→PN resolution)', () => {
 
   it('accepts bare digits and ignores invalid pairs', () => {
     const mapper = new LidJidMapper();
-    mapper.learn('123456789012345', '918800663237');
-    expect(mapper.resolve('123456789012345@lid')).toBe('918800663237@s.whatsapp.net');
-    mapper.learn('', '918800663237'); // empty lid
+    mapper.learn('123456789012345', '918844433322');
+    expect(mapper.resolve('123456789012345@lid')).toBe('918844433322@s.whatsapp.net');
+    mapper.learn('', '918844433322'); // empty lid
     mapper.learn('123456789012345', ''); // empty pn
     expect(mapper.size).toBe(1);
   });
@@ -262,11 +262,11 @@ describe('LidJidMapper (privacy-rollout LID→PN resolution)', () => {
     const dir = mkdtempSync(join(tmpdir(), 'buff-wa-lid-'));
     try {
       const mapper = new LidJidMapper(dir);
-      mapper.learn('123456789012345@lid', '918800663237@s.whatsapp.net');
+      mapper.learn('123456789012345@lid', '918844433322@s.whatsapp.net');
       writeLidMappingsFile(dir, mapper.pairs());
-      expect(readLidMappingsFile(dir)).toEqual([{ lid: '123456789012345@lid', pn: '918800663237@s.whatsapp.net' }]);
+      expect(readLidMappingsFile(dir)).toEqual([{ lid: '123456789012345@lid', pn: '918844433322@s.whatsapp.net' }]);
       const reloaded = new LidJidMapper(dir);
-      expect(reloaded.resolve('123456789012345@lid')).toBe('918800663237@s.whatsapp.net');
+      expect(reloaded.resolve('123456789012345@lid')).toBe('918844433322@s.whatsapp.net');
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }
@@ -280,16 +280,16 @@ describe('LidJidMapper (privacy-rollout LID→PN resolution)', () => {
     // bridge refused Bibi's first message (silent drop, senderId unknown).
     const dir = mkdtempSync(join(tmpdir(), 'buff-wa-lid-'));
     try {
-      // What Baileys wrote when Bibi messaged us: LID 220722781786162 ↔ 918800663237.
-      writeFileSync(join(dir, 'lid-mapping-220722781786162_reverse.json'), JSON.stringify('918800663237'), 'utf-8');
+      // What Baileys wrote when Bibi messaged us: LID 220722781786162 ↔ 918844433322.
+      writeFileSync(join(dir, 'lid-mapping-220722781786162_reverse.json'), JSON.stringify('918844433322'), 'utf-8');
       const mapper = new LidJidMapper(dir);
       // Device suffix stripped for the lookup, PN jid returned.
-      expect(mapper.resolve('220722781786162:1@lid')).toBe('918800663237@s.whatsapp.net');
-      expect(mapper.resolve('220722781786162@lid')).toBe('918800663237@s.whatsapp.net');
+      expect(mapper.resolve('220722781786162:1@lid')).toBe('918844433322@s.whatsapp.net');
+      expect(mapper.resolve('220722781786162@lid')).toBe('918844433322@s.whatsapp.net');
       // Learned + cached now; a missing file passes the raw jid through.
       expect(mapper.resolve('999999999999999@lid')).toBe('999999999999999@lid');
       // Non-LID jids never consult the files.
-      expect(mapper.resolve('918800663237@s.whatsapp.net')).toBe('918800663237@s.whatsapp.net');
+      expect(mapper.resolve('918844433322@s.whatsapp.net')).toBe('918844433322@s.whatsapp.net');
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }
@@ -366,7 +366,7 @@ describe('BaileysBridge.pair() (fake baileys)', () => {
     const bridge = new BaileysBridge(sessionDir);
     let code = '';
     const promise = bridge.pair({
-      phoneNumber: '918800663237',
+      phoneNumber: '918844433322',
       timeoutMs: 30_000,
       onPairingCode: (c) => {
         code = c;
@@ -421,7 +421,7 @@ describe('BaileysBridge.pair() (fake baileys)', () => {
     const bridge = new BaileysBridge(sessionDir);
     let code = '';
     const promise = bridge.pair({
-      phoneNumber: '91880060422',
+      phoneNumber: '91112223344',
       timeoutMs: 30_000,
       onPairingCode: (c) => {
         code = c;
@@ -484,7 +484,7 @@ describe('BaileysBridge.pair() (fake baileys)', () => {
     const bridge = new BaileysBridge(sessionDir);
     let code = '';
     const promise = bridge.pair({
-      phoneNumber: '91880060422',
+      phoneNumber: '91112223344',
       timeoutMs: 30_000,
       onPairingCode: (c) => {
         code = c;
@@ -591,7 +591,7 @@ describe('BaileysBridge.ensureSocket() self-healing (fake baileys)', () => {
     // sync) and emits lid-mapping.update — the bridge mirrors it.
     (fakeBaileys.sockets[0].ev as { emit: (e: string, ...a: unknown[]) => void }).emit('lid-mapping.update', {
       lid: '123456789012345@lid',
-      pn: '918800663237@s.whatsapp.net',
+      pn: '918844433322@s.whatsapp.net',
     });
     // The DM arrives with the sender's LID as remoteJid — NOT the number.
     (fakeBaileys.sockets[0].ev as { emit: (e: string, ...a: unknown[]) => void }).emit('messages.upsert', {
@@ -600,10 +600,10 @@ describe('BaileysBridge.ensureSocket() self-healing (fake baileys)', () => {
     });
     await waitFor(() => received.length === 1);
     // The policy gate compares digits — the bridge must hand it the PN jid.
-    expect(received[0].from).toBe('918800663237@s.whatsapp.net');
+    expect(received[0].from).toBe('918844433322@s.whatsapp.net');
     expect(received[0].text).toBe('send a good night message to Mother');
     // The learned pair is persisted for the next process.
-    expect(readLidMappingsFile(sessionDir)).toEqual([{ lid: '123456789012345@lid', pn: '918800663237@s.whatsapp.net' }]);
+    expect(readLidMappingsFile(sessionDir)).toEqual([{ lid: '123456789012345@lid', pn: '918844433322@s.whatsapp.net' }]);
     await bridge.disconnect();
   }, 10_000);
 
@@ -620,7 +620,7 @@ describe('BaileysBridge.ensureSocket() self-healing (fake baileys)', () => {
     await bridge.connect((from, text, participant) => received.push({ from, text, participant }));
     (fakeBaileys.sockets[0].ev as { emit: (e: string, ...a: unknown[]) => void }).emit('lid-mapping.update', {
       lid: '987654321098765@lid',
-      pn: '918800425333@s.whatsapp.net',
+      pn: '918877766655@s.whatsapp.net',
     });
     (fakeBaileys.sockets[0].ev as { emit: (e: string, ...a: unknown[]) => void }).emit('messages.upsert', {
       type: 'notify',
@@ -633,7 +633,7 @@ describe('BaileysBridge.ensureSocket() self-healing (fake baileys)', () => {
     });
     await waitFor(() => received.length === 1);
     expect(received[0].from).toBe('1203630283471234@g.us');
-    expect(received[0].participant).toBe('918800425333@s.whatsapp.net');
+    expect(received[0].participant).toBe('918877766655@s.whatsapp.net');
     await bridge.disconnect();
   }, 10_000);
 
@@ -784,8 +784,8 @@ describe('BaileysBridge I8b — echo filter / self-chat / contacts (fake baileys
 
   it('resolves a contact NAME to its JID from the address-book sync and sends there', async () => {
     const bridge = await openBridge();
-    emit(0, 'contacts.upsert', [{ id: '919876543210@s.whatsapp.net', name: 'Daddy', notify: 'Daddy' }]);
-    expect(await bridge.send('Daddy', 'Charansoarsh - By Agent-Nuvira')).toBe(true);
+    emit(0, 'contacts.upsert', [{ id: '919876543210@s.whatsapp.net', name: 'Alex', notify: 'Alex' }]);
+    expect(await bridge.send('Alex', 'Charansoarsh - By Agent-Nuvira')).toBe(true);
     expect(fakeBaileys.sockets[0].sentTo).toEqual(['919876543210@s.whatsapp.net']);
     await bridge.disconnect();
   }, 10_000);
@@ -794,24 +794,24 @@ describe('BaileysBridge I8b — echo filter / self-chat / contacts (fake baileys
     const bridge = await openBridge();
     emit(0, 'messages.upsert', {
       type: 'notify',
-      messages: [{ key: { remoteJid: '12025550123@s.whatsapp.net' }, pushName: 'Mumma', message: { conversation: 'hi' } }],
+      messages: [{ key: { remoteJid: '12025550123@s.whatsapp.net' }, pushName: 'Sara', message: { conversation: 'hi' } }],
     });
     // Exact + partial (prefix) resolution against the learned name.
-    expect(bridge.resolveContact('Mumma')).toBe('12025550123@s.whatsapp.net');
-    expect(bridge.resolveContact('mum')).toBe('12025550123@s.whatsapp.net');
+    expect(bridge.resolveContact('Sara')).toBe('12025550123@s.whatsapp.net');
+    expect(bridge.resolveContact('Sar')).toBe('12025550123@s.whatsapp.net');
     expect(bridge.resolveContact('Nobody')).toBeNull();
-    expect(await bridge.send('Mumma', 'hi mum')).toBe(true);
+    expect(await bridge.send('Sara', 'hi there')).toBe(true);
     expect(fakeBaileys.sockets[0].sentTo).toEqual(['12025550123@s.whatsapp.net']);
     await bridge.disconnect();
   }, 10_000);
 
   it('keeps resolving a name while the address-book sync is still landing (one-shot send)', async () => {
     const bridge = new BaileysBridge(sessionDir);
-    const p = bridge.send('Daddy', 'late sync test');
+    const p = bridge.send('Alex', 'late sync test');
     await waitFor(() => fakeBaileys.sockets.length >= 1);
     emit(0, 'connection.update', { connection: 'open' });
     // The sync arrives a beat AFTER the send started — resolveContactJid polls.
-    setTimeout(() => emit(0, 'contacts.upsert', [{ id: '919876543210@s.whatsapp.net', name: 'Daddy' }]), 120);
+    setTimeout(() => emit(0, 'contacts.upsert', [{ id: '919876543210@s.whatsapp.net', name: 'Alex' }]), 120);
     expect(await p).toBe(true);
     expect(fakeBaileys.sockets[0].sentTo).toEqual(['919876543210@s.whatsapp.net']);
     await bridge.disconnect();
@@ -826,34 +826,34 @@ describe('BaileysBridge I8b — echo filter / self-chat / contacts (fake baileys
 
   it('addContact persists to the mapping file and resolves by name WITHOUT a socket', async () => {
     const bridge = new BaileysBridge(sessionDir);
-    expect(bridge.addContact('Daddy', '+91 98765 43210')).toBe(true);
+    expect(bridge.addContact('Alex', '+91 98765 43210')).toBe(true);
     // Resolves straight from the file (no connection needed).
-    expect(bridge.resolveContact('Daddy')).toBe('919876543210@s.whatsapp.net');
-    expect(bridge.resolveContact('daddy')).toBe('919876543210@s.whatsapp.net');
+    expect(bridge.resolveContact('Alex')).toBe('919876543210@s.whatsapp.net');
+    expect(bridge.resolveContact('alex')).toBe('919876543210@s.whatsapp.net');
     // A NEW bridge instance in the same dir re-seeds from the file.
     const again = new BaileysBridge(sessionDir);
-    expect(again.resolveContact('Daddy')).toBe('919876543210@s.whatsapp.net');
+    expect(again.resolveContact('Alex')).toBe('919876543210@s.whatsapp.net');
   });
 
   it('removeContact deletes from the file and the live maps', async () => {
     const bridge = new BaileysBridge(sessionDir);
-    bridge.addContact('Daddy', '9876543210');
-    expect(bridge.removeContact('Daddy')).toBe(true);
-    expect(bridge.resolveContact('Daddy')).toBeNull();
-    expect(bridge.removeContact('Daddy')).toBe(false);
+    bridge.addContact('Alex', '9876543210');
+    expect(bridge.removeContact('Alex')).toBe(true);
+    expect(bridge.resolveContact('Alex')).toBeNull();
+    expect(bridge.removeContact('Alex')).toBe(false);
   });
 
   it('addContact rejects empty names / invalid numbers', () => {
     const bridge = new BaileysBridge(sessionDir);
     expect(bridge.addContact('', '9876543210')).toBe(false);
-    expect(bridge.addContact('Daddy', 'abc')).toBe(false);
+    expect(bridge.addContact('Alex', 'abc')).toBe(false);
   });
 
   it('sendMedia sends image/video/audio/document to a resolved JID (P3)', async () => {
     const bridge = await openBridge();
-    bridge.addContact('Daddy', '919876543210');
+    bridge.addContact('Alex', '919876543210');
     const img = new Uint8Array([1, 2, 3]);
-    expect(await bridge.sendMedia?.('Daddy', { type: 'image', data: img, caption: 'look' })).toBe(true);
+    expect(await bridge.sendMedia?.('Alex', { type: 'image', data: img, caption: 'look' })).toBe(true);
     expect(fakeBaileys.sockets[0].sentTo).toEqual(['919876543210@s.whatsapp.net']);
     expect(fakeBaileys.sockets[0].sentContent[0]).toMatchObject({ image: img, caption: 'look' });
     expect(await bridge.sendMedia?.('+15551234567', { type: 'document', data: img, filename: 'a.pdf' })).toBe(true);
@@ -864,7 +864,7 @@ describe('BaileysBridge I8b — echo filter / self-chat / contacts (fake baileys
   it('sendMedia returns false when unpaired', async () => {
     const dir = mkdtempSync(join(tmpdir(), 'buff-wa-media-unpaired-'));
     const bridge = new BaileysBridge(dir);
-    expect(await bridge.sendMedia?.('Daddy', { type: 'image', data: new Uint8Array([1]) })).toBe(false);
+    expect(await bridge.sendMedia?.('Alex', { type: 'image', data: new Uint8Array([1]) })).toBe(false);
     rmSync(dir, { recursive: true, force: true });
   });
 });

@@ -17,6 +17,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { dashboardAPI } from '../api';
 import type { WhatsAppPairStatus } from '../types';
+import { maskSenderId } from '../mask';
 
 const STATE_LABEL: Record<WhatsAppPairStatus['state'], string> = {
   idle: 'Not paired',
@@ -160,7 +161,7 @@ export default function WhatsAppPanel({ authed, canWrite, sessionExpired }: Prop
           {status?.phone ? null : (
             <div className="admin-hint">
               Tip: on a phone, “Link with phone number instead” needs the number format{' '}
-              <code>918800663237</code> (country code included) — enter it below instead of scanning.
+              <code>918844433322</code> (country code included) — enter it below instead of scanning.
             </div>
           )}
           {status?.error ? <div className="admin-row-msg admin-row-msg-err">{status.error}</div> : null}
@@ -192,7 +193,7 @@ export default function WhatsAppPanel({ authed, canWrite, sessionExpired }: Prop
                     className="wa-phone-input"
                     value={phone}
                     onChange={(e) => setPhone(e.target.value)}
-                    placeholder="or pair with a number — e.g. 918800663237"
+                    placeholder="or pair with a number — e.g. 918844433322"
                     disabled={busy}
                     maxLength={16}
                   />
@@ -245,7 +246,7 @@ export default function WhatsAppPanel({ authed, canWrite, sessionExpired }: Prop
         </div>
         <p className="admin-hint">
           These names are for <strong>sending messages by name</strong> (e.g.{' '}
-          <code>buff gateway send whatsapp:Daddy "…"</code>) — they do{' '}
+          <code>buff gateway send whatsapp:Name "…"</code>) — they do{' '}
           <strong>NOT</strong> let these numbers trigger the agent.
         </p>
         <div className="hub-alias-list">
@@ -255,7 +256,7 @@ export default function WhatsAppPanel({ authed, canWrite, sessionExpired }: Prop
             Object.entries(contacts).map(([name, number]) => (
               <div className="hub-alias-row" key={name}>
                 <span className="hub-chip">{name}</span>
-                <span className="admin-hint">→ {number}</span>
+                <span className="admin-hint">→ {maskSenderId(number)}</span>
               </div>
             ))
           )}

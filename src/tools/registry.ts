@@ -169,7 +169,7 @@ export const gatewaySendSchema = z.object({
   target: z
     .string()
     .min(1)
-    .describe('Channel target — a registered alias (e.g. "ops") or platform:channelId (e.g. "whatsapp:Daddy", "whatsapp:+15551234567", "telegram:123456", "slack:C0123", "email:team@example.com"). WhatsApp accepts a contact NAME from the paired account\'s address book (e.g. "Daddy").'),
+    .describe('Channel target — a registered alias (e.g. "ops") or platform:channelId (e.g. "whatsapp:Alex", "whatsapp:+15551234567", "telegram:123456", "slack:C0123", "email:team@example.com"). WhatsApp accepts a contact NAME from the paired account\'s address book (e.g. "Alex").'),
   text: z.string().min(1).describe('The message text to send to the channel/contact'),
 });
 
@@ -317,7 +317,7 @@ export const TOOL_CONTRACT = `You have tools available. Call them when appropria
 - If a request needs documentation, a website, analysis of a project, or running tests, call \`document\`, \`website\`, \`analyze\`, or \`test\` with the goal.
 - If a request asks to publish a release (npm/GitHub), call \`publish\`. It is irreversible — confirm the bump type and target with the user via \`ask_user\` first unless they already specified them.
 - If a request's completeness is uncertain, call \`verify_requirement\` first.
-- If a request asks to deliver a message or result to a contact/channel (WhatsApp, Telegram, Slack, email, …), call \`gateway_send\` with the target (e.g. \`whatsapp:Daddy\`) and the text. If the target contact is not configured, tell the user what to set up.
+- If a request asks to deliver a message or result to a contact/channel (WhatsApp, Telegram, Slack, email, …), call \`gateway_send\` with the target (e.g. \`whatsapp:Alex\`) and the text. If the target contact is not configured, tell the user what to set up.
 - If a subtask can be delegated to a specialized sub-agent (gather context, review, security scan, run tests), call \`delegate\` with the agent type, a focused prompt, and optional file paths.
 - To find code matching a pattern (context gathering, locating definitions/usages), call \`code_search\` with the pattern and optional globs.
 - END EVERY RESPONSE by calling \`suggest_followups\` with exactly 3 followups the user is likely to want next — natural next questions, deeper dives, or related directions that build on what you just said; specific to this conversation, not generic.
@@ -608,7 +608,7 @@ registerTool({
 
 registerTool({
   name: 'gateway_send',
-  description: 'Send a message to a channel through the gateway (WhatsApp by contact name or number, Telegram, Slack, Discord, email, or any registered alias). Use when the user asks to deliver a result or message to a contact or channel — e.g. "send the poem to Daddy on whatsapp".',
+  description: 'Send a message to a channel through the gateway (WhatsApp by contact name or number, Telegram, Slack, Discord, email, or any registered alias). Use when the user asks to deliver a result or message to a contact or channel — e.g. "send the poem to Alex on whatsapp".',
   category: 'workflow',
   inputSchema: gatewaySendSchema,
   endsAgentStep: false,

@@ -581,7 +581,7 @@ const EVAL_TASKS = [
         title: 'Create an NVDA addon with a keyboard shortcut',
         category: 'feature',
         difficulty: 'hard',
-        goal: 'Create an NVDA addon compatible with NVDA 2026.1. When the user presses NVDA+Alt+1 the addon should speak "Hello Anuj Mote". The addon source tree must contain a manifest.ini at its root and a globalPlugins/ module. Use the real NVDA APIs (globalPluginHandler, scriptHandler, addonHandler, ui).',
+        goal: 'Create an NVDA addon compatible with NVDA 2026.1. When the user presses NVDA+Alt+1 the addon should speak "Hello Ria Mote". The addon source tree must contain a manifest.ini at its root and a globalPlugins/ module. Use the real NVDA APIs (globalPluginHandler, scriptHandler, addonHandler, ui).',
         setupFiles: [
             {
                 path: 'README.md',

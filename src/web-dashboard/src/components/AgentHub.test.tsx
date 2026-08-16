@@ -43,9 +43,9 @@ const HUB: HubData = {
       { platform: 'whatsapp', label: 'WhatsApp (Baileys bridge)', configured: true, envVars: ['BUFF_WHATSAPP_SESSION_DIR'] },
     ],
     policies: {
-      whatsapp: { allowedUsers: ['+918178504516', '919999999999'], silentDrop: true },
+      whatsapp: { allowedUsers: ['+919876543210', '919999999999'], silentDrop: true },
     },
-    contacts: [{ name: 'Daddy', platform: 'whatsapp', id: '+918178504516', addedAt: Date.now() }],
+    contacts: [{ name: 'Alex', platform: 'whatsapp', id: '+919876543210', addedAt: Date.now() }],
     statusRecipients: [],
     statusRecipientDisplay: {},
     inbox: {
@@ -221,7 +221,7 @@ describe('AgentHub', () => {
     return card as HTMLElement;
   }
 
-  it('Permissions: adding a verified user as Name + Contact No shows a named chip', async () => {
+  it('Permissions: adding a verified user shows the MASKED id (no name, no full number)', async () => {
     mockReads();
     render(<AgentHub />);
     await waitFor(() => expect(screen.getByRole('tab', { name: /Tools/ })).toBeTruthy());
@@ -229,17 +229,18 @@ describe('AgentHub', () => {
     await waitFor(() => expect(screen.getByText(/Saved contacts \(validated list\)/)).toBeTruthy());
 
     const card = whatsappCard();
-    fireEvent.change(within(card).getByPlaceholderText('Name (e.g. Daddy) — optional'), { target: { value: 'Mom' } });
-    fireEvent.change(within(card).getByPlaceholderText('Contact no / sender id, or Allow-All'), { target: { value: '+919818293808' } });
+    fireEvent.change(within(card).getByPlaceholderText('Name (optional)'), { target: { value: 'Sam' } });
+    fireEvent.change(within(card).getByPlaceholderText('Contact no / sender id, or Allow-All'), { target: { value: '+919999999999' } });
     fireEvent.click(within(card).getByRole('button', { name: /\+ User/ }));
 
-    // Named chip on the verified list + a row in the Saved contacts table.
-    expect(within(card).getByText(/Mom \(\+919818293808\).*pending/)).toBeTruthy();
-    expect(screen.getByText('Mom')).toBeTruthy();
-    expect(screen.getByText('+919818293808')).toBeTruthy();
-    // The other saved users stay visible (saved ones have no pending marker).
-    expect(within(card).getByText(/Daddy \(\+918178504516\)/)).toBeTruthy();
-    expect(within(card).getByText('919999999999')).toBeTruthy();
+    // The new chip shows the MASKED sender id with a pending marker — the
+    // personal name and the full number must NOT appear anywhere.
+    expect(within(card).getByText(/\+91\*\*\*.*pending/)).toBeTruthy();
+    expect(screen.queryByText('Sam')).toBeNull();
+    expect(screen.queryByText('+919999999999')).toBeNull();
+    expect(screen.queryByText('919999999999')).toBeNull();
+    // The other saved users stay visible (masked too, no pending marker).
+    expect(within(card).getAllByText(/91\*\*\*/).length).toBeGreaterThan(0);
   });
 
   it('Permissions: adding a user shows the UNSAVED banner until Save is pressed', async () => {
@@ -253,8 +254,8 @@ describe('AgentHub', () => {
     expect(screen.queryByText(/Unsaved changes/)).toBeNull();
 
     const card = whatsappCard();
-    fireEvent.change(within(card).getByPlaceholderText('Name (e.g. Daddy) — optional'), { target: { value: 'Mom' } });
-    fireEvent.change(within(card).getByPlaceholderText('Contact no / sender id, or Allow-All'), { target: { value: '+919818293808' } });
+    fireEvent.change(within(card).getByPlaceholderText('Name (optional)'), { target: { value: 'Sam' } });
+    fireEvent.change(within(card).getByPlaceholderText('Contact no / sender id, or Allow-All'), { target: { value: '+919999999999' } });
     fireEvent.click(within(card).getByRole('button', { name: /\+ User/ }));
 
     // Draft edit → the banner appears, telling the user to press Save.
@@ -278,12 +279,13 @@ describe('AgentHub', () => {
     await waitFor(() => expect(screen.getByText(/Saved contacts \(validated list\)/)).toBeTruthy());
 
     const card = whatsappCard();
-    const row = within(card).getByText('919999999999').closest('.hub-alias-row') as HTMLElement;
+    // All ids render MASKED — remove the chip whose masked id is 91***.
+    const maskedRows = within(card).getAllByText(/91\*\*\*/);
+    const row = maskedRows[maskedRows.length - 1].closest('.hub-alias-row') as HTMLElement;
     fireEvent.click(within(row).getByRole('button', { name: '✕' }));
 
-    // The removed id is gone; the other saved user is still visible.
-    expect(within(card).queryByText('919999999999')).toBeNull();
-    expect(within(card).getByText(/918178504516/)).toBeTruthy();
+    // The removed id is gone; at least one masked id remains.
+    expect(within(card).queryByText(/\+91\*\*\*/)).toBeTruthy();
   });
 
   it('switches tabs — Channels shows the delivery ledger, Skills shows skills', async () => {

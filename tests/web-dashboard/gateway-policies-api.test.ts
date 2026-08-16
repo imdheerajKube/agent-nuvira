@@ -114,19 +114,19 @@ describe('/api/admin/gateway/policies', () => {
   it('GET/PUT round-trips status recipients alongside policies', async () => {
     const put = await authedFetch('/api/admin/gateway/policies', 'PUT', {
       policies: { whatsapp: { allowedUsers: ['u-1'] } },
-      statusRecipients: ['whatsapp:Daddy', 'slack:ops'],
+      statusRecipients: ['whatsapp:Alex', 'slack:ops'],
     });
     expect(put.status).toBe(200);
     const putBody = (await put.json()) as { ok: boolean; statusRecipients: string[] };
-    expect(putBody.statusRecipients).toEqual(['whatsapp:Daddy', 'slack:ops']);
+    expect(putBody.statusRecipients).toEqual(['whatsapp:Alex', 'slack:ops']);
 
     const get = await authedFetch('/api/admin/gateway/policies');
     const getBody = (await get.json()) as { statusRecipients: string[] };
-    expect(getBody.statusRecipients).toEqual(['whatsapp:Daddy', 'slack:ops']);
+    expect(getBody.statusRecipients).toEqual(['whatsapp:Alex', 'slack:ops']);
 
     // Persisted to the config file.
     const config = JSON.parse(readFileSync(join(testDir, '.buff', 'buffconfig.json'), 'utf-8'));
-    expect(config.gateway.statusRecipients).toEqual(['whatsapp:Daddy', 'slack:ops']);
+    expect(config.gateway.statusRecipients).toEqual(['whatsapp:Alex', 'slack:ops']);
 
     // Removing works (whole-array replace).
     await authedFetch('/api/admin/gateway/policies', 'PUT', {
@@ -141,22 +141,22 @@ describe('/api/admin/gateway/policies', () => {
   it('PUT writes per-platform policies and GET reads them back', async () => {
     const put = await authedFetch('/api/admin/gateway/policies', 'PUT', {
       policies: {
-        whatsapp: { allowedUsers: ['918178504516'], silentDrop: true },
+        whatsapp: { allowedUsers: ['919876543210'], silentDrop: true },
         telegram: { allowedGroups: ['g-family'], requireMention: true },
       },
     });
     expect(put.status).toBe(200);
     const putBody = (await put.json()) as { ok: boolean; policies: Record<string, { allowedUsers?: string[]; silentDrop?: boolean }> };
     expect(putBody.ok).toBe(true);
-    expect(putBody.policies.whatsapp).toEqual({ allowedUsers: ['918178504516'], silentDrop: true });
+    expect(putBody.policies.whatsapp).toEqual({ allowedUsers: ['919876543210'], silentDrop: true });
 
     const get = await authedFetch('/api/admin/gateway/policies');
     const getBody = (await get.json()) as { policies: Record<string, Record<string, unknown>> };
-    expect(getBody.policies.whatsapp).toEqual({ allowedUsers: ['918178504516'], silentDrop: true });
+    expect(getBody.policies.whatsapp).toEqual({ allowedUsers: ['919876543210'], silentDrop: true });
     expect(getBody.policies.telegram).toEqual({ allowedGroups: ['g-family'], requireMention: true });
     // The write landed in the config file (persists across restarts).
     const config = JSON.parse(readFileSync(join(testDir, '.buff', 'buffconfig.json'), 'utf-8'));
-    expect(config.gateway.policies.whatsapp).toEqual({ allowedUsers: ['918178504516'], silentDrop: true });
+    expect(config.gateway.policies.whatsapp).toEqual({ allowedUsers: ['919876543210'], silentDrop: true });
   });
 
   it('PUT ignores unknown platforms and preserves unlisted ones', async () => {
@@ -209,9 +209,9 @@ describe('/api/admin/gateway/policies', () => {
 
   it('GET/PUT round-trips verified contacts (name + contact no) alongside policies', async () => {
     const put = await authedFetch('/api/admin/gateway/policies', 'PUT', {
-      policies: { whatsapp: { allowedUsers: ['918178504516'] } },
+      policies: { whatsapp: { allowedUsers: ['919876543210'] } },
       contacts: [
-        { name: 'Daddy', platform: 'whatsapp', id: '+918178504516', addedAt: 123 },
+        { name: 'Alex', platform: 'whatsapp', id: '+919876543210', addedAt: 123 },
         { name: 'Ops', platform: 'telegram', id: '987654321' },
       ],
     });
@@ -219,29 +219,29 @@ describe('/api/admin/gateway/policies', () => {
     const putBody = (await put.json()) as { ok: boolean; contacts: Array<{ name: string; platform: string; id: string; addedAt: number }> };
     expect(putBody.ok).toBe(true);
     expect(putBody.contacts).toHaveLength(2);
-    expect(putBody.contacts[0]).toEqual({ name: 'Daddy', platform: 'whatsapp', id: '+918178504516', addedAt: 123 });
+    expect(putBody.contacts[0]).toEqual({ name: 'Alex', platform: 'whatsapp', id: '+919876543210', addedAt: 123 });
     expect(putBody.contacts[1]).toMatchObject({ name: 'Ops', platform: 'telegram', id: '987654321' });
     expect(typeof putBody.contacts[1].addedAt).toBe('number');
 
     const get = await authedFetch('/api/admin/gateway/policies');
     const getBody = (await get.json()) as { contacts: Array<{ name: string; platform: string; id: string }> };
     expect(getBody.contacts).toHaveLength(2);
-    expect(getBody.contacts[0]).toMatchObject({ name: 'Daddy', platform: 'whatsapp', id: '+918178504516' });
+    expect(getBody.contacts[0]).toMatchObject({ name: 'Alex', platform: 'whatsapp', id: '+919876543210' });
     expect(getBody.contacts[1]).toMatchObject({ name: 'Ops', platform: 'telegram', id: '987654321' });
 
     // Persisted to the gateway contacts file (next to aliases.json).
     const contactsFile = join(testDir, '.buff', 'gateway', 'contacts.json');
     const persisted = JSON.parse(readFileSync(contactsFile, 'utf-8'));
-    expect(persisted.contacts.map((c: { name: string }) => c.name)).toEqual(['Daddy', 'Ops']);
+    expect(persisted.contacts.map((c: { name: string }) => c.name)).toEqual(['Alex', 'Ops']);
 
     // Whole-array replace — removing a contact works.
     await authedFetch('/api/admin/gateway/policies', 'PUT', {
       policies: {},
-      contacts: [{ name: 'Daddy', platform: 'whatsapp', id: '+918178504516' }],
+      contacts: [{ name: 'Alex', platform: 'whatsapp', id: '+919876543210' }],
     });
     const get2 = await authedFetch('/api/admin/gateway/policies');
     const get2Body = (await get2.json()) as { contacts: Array<{ name: string }> };
-    expect(get2Body.contacts.map((c) => c.name)).toEqual(['Daddy']);
+    expect(get2Body.contacts.map((c) => c.name)).toEqual(['Alex']);
   });
 
   it('PUT ignores malformed/unknown-platform contacts (never widens access)', async () => {

@@ -138,10 +138,10 @@ export interface HubData {
     /** Status recipients — always get pipeline completion summaries. */
     statusRecipients: string[];
     /**
-     * Friendly display labels for status recipients: `whatsapp:Daddy` shows as
-     * `whatsapp:Daddy → +918178504516` (resolved through the contacts file), a
-     * bare number gets the country-code `+` — so a user never sees a raw alias
-     * without knowing who/what it maps to.
+     * Friendly display labels for status recipients: `whatsapp:Name` shows as
+     * `whatsapp:Name → +91***` (resolved through the contacts file, number
+     * masked), a bare number gets the country-code `+` — so a user never sees
+     * a raw alias without knowing who/what it maps to.
      */
     statusRecipientDisplay: Record<string, string>;
     /** P2 — inbound inbox (who messaged the bot, what happened). */

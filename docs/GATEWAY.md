@@ -21,7 +21,7 @@
 >   persisted to `lid-mappings.json`), so verified senders and contacts match
 >   your allow-list by number.
 > - **Dashboard polish** — status recipients display resolved labels
->   (`whatsapp:Daddy → +918178504516`); removing one allowed contact keeps the
+>   (`whatsapp:Alex → +919876543210`); removing one allowed contact keeps the
 >   rest; toggling a single policy flag never wipes a platform's saved users;
 >   "Start gateway" runs with **no timeout** (it used to be killed after 5
 >   minutes) and keeps running while you switch tabs.
@@ -210,7 +210,7 @@ WhatsApp on your phone; the gateway sends **and receives**.
 ```bash
 agent-nuvira whatsapp pair          # scan the QR with your phone
 # or pair with a code instead of a QR:
-agent-nuvira whatsapp pair --phone 918800663237
+agent-nuvira whatsapp pair --phone 918844433322
 agent-nuvira whatsapp status        # confirm pairing
 agent-nuvira gateway start
 ```
@@ -221,7 +221,7 @@ agent-nuvira gateway start
 
 **Send by name (optional):** `agent-nuvira whatsapp contact add <Name> <number>`
 maps a name to a number so you can send with `agent-nuvira gateway send
-whatsapp:Daddy "…"`. ⚠️ **A mapped name does NOT let that number trigger the
+whatsapp:Alex "…"`. ⚠️ **A mapped name does NOT let that number trigger the
 agent** — to grant inbound access add it to the verified list:
 `agent-nuvira config gateway allow whatsapp user <number>` (or the dashboard
 Permissions tab). The WhatsApp panel in the dashboard shows both lists side by
@@ -387,11 +387,11 @@ and (with `silent` mode) unknown senders get **no reply at all**:
 
 ```bash
 # Allow a mobile number / user id / group id to trigger on a platform
-agent-nuvira config gateway allow whatsapp user 918178504516
+agent-nuvira config gateway allow whatsapp user 919876543210
 agent-nuvira config gateway allow telegram group g-family
 
 # Remove one (or several)
-agent-nuvira config gateway disallow whatsapp user 918178504516
+agent-nuvira config gateway disallow whatsapp user 919876543210
 
 # How unapproved senders are handled: silent (no reply — DEFAULT, hard
 # policy) or polite (⛔ reply — explicit opt-in)
@@ -406,7 +406,7 @@ Pipeline completions are normally only sent to whoever triggered them. A
 summary (`✅ Done — …` / `❌ Failed — …`), regardless of who ran the task:
 
 ```bash
-agent-nuvira config gateway notify add whatsapp:Daddy
+agent-nuvira config gateway notify add whatsapp:Alex
 agent-nuvira config gateway notify add telegram:123456 slack:ops
 agent-nuvira config gateway notify list
 agent-nuvira config gateway notify remove slack:ops
@@ -542,7 +542,7 @@ Then use the **Agent Hub → Channels** tab and the **Gateway** page:
 > ⚠️ **Two different "contacts" — don't mix them up.**
 > - **Send-by-name contacts** (`buff whatsapp contact add <Name> <number>`, the
 >   WhatsApp bridge panel) — let *you* send *to* someone by name
->   (`buff gateway send whatsapp:Daddy "…"`). They do **NOT** let that number
+>   (`buff gateway send whatsapp:Alex "…"`). They do **NOT** let that number
 >   trigger the agent.
 > - **Verified list** (this Permissions tab, `buff config gateway allow
 >   <platform> user <id>`) — the only thing that decides **who may trigger
@@ -556,8 +556,8 @@ Then use the **Agent Hub → Channels** tab and the **Gateway** page:
     that was never configured stays the legacy open default.
   - **Add a person as Name + Contact No** — same as the CLI
     (`buff whatsapp contact add <Name> <number>`): type a Name and a Contact
-    No / sender id, hit **+ User**. Named contacts render as `Daddy
-    (+918178504516)` on the verified list and are saved across platforms
+    No / sender id, hit **+ User**. Named contacts render as `Alex
+    (+919876543210)` on the verified list and are saved across platforms
     (WhatsApp numbers, Telegram ids, email addresses, …).
   - **📇 Saved contacts (validated list)** — a table of every saved contact
     (name, platform, contact) with a ✅ verified badge when its id is in the
@@ -576,7 +576,7 @@ Then use the **Agent Hub → Channels** tab and the **Gateway** page:
     the **running gateway immediately** — policies are re-read per inbound
     message, so no restart is needed.
   - **📊 Status recipients** — contacts/groups that ALWAYS receive the
-    pipeline completion summary, whoever triggered it (e.g. `whatsapp:Daddy`,
+    pipeline completion summary, whoever triggered it (e.g. `whatsapp:Alex`,
     `slack:ops`). Same save button; stored under `gateway.statusRecipients`.
 
 > The dashboard process must have the same env tokens loaded (it reads

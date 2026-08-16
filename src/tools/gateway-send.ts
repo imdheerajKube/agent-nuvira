@@ -4,9 +4,9 @@
  * Lets the agent (chat / execute / any model-driven loop) deliver a result to
  * ANY gateway channel — WhatsApp by contact name or number, Telegram, Slack,
  * Discord, email, an alias, etc. The user can ask "write a poem and send it
- * to Daddy on whatsapp" and the model calls:
+ * to Alex on whatsapp" and the model calls:
  *
- *   gateway_send({ target: "whatsapp:Daddy", text: "<the poem>" })
+ *   gateway_send({ target: "whatsapp:Alex", text: "<the poem>" })
  *
  * Rides the SAME GatewayRegistry + adapters as `buff gateway send` (one
  * delivery path, zero divergence). A failed send is persisted to the delivery
@@ -46,7 +46,7 @@ export async function runGatewaySendTool(args: unknown, ctx: ToolContext): Promi
     if (!ref) {
       return (
         `gateway_send: unknown channel target '${target}'. Use a registered alias ` +
-        `(e.g. 'ops') or platform:channelId — e.g. whatsapp:Daddy, ` +
+        `(e.g. 'ops') or platform:channelId — e.g. whatsapp:Alex, ` +
         `whatsapp:+15551234567, telegram:123456, slack:C0123, email:team@example.com.`
       );
     }
@@ -68,7 +68,7 @@ export async function runGatewaySendTool(args: unknown, ctx: ToolContext): Promi
   if (!ref) {
     return (
       `gateway_send: unknown channel target '${target}'. Use a registered alias ` +
-      `(e.g. 'ops') or platform:channelId — e.g. whatsapp:Daddy, ` +
+      `(e.g. 'ops') or platform:channelId — e.g. whatsapp:Alex, ` +
       `whatsapp:+15551234567, telegram:123456, slack:C0123, email:team@example.com.`
     );
   }

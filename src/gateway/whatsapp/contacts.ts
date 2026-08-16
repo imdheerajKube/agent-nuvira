@@ -4,10 +4,10 @@
  * WhatsApp does NOT sync the phone's address book to linked devices (verified
  * on Baileys 7: the socket opens but no contactAction sync arrives), and an
  * inbound `pushName` is the SENDER's own profile name — not how the user
- * saved the contact. So to send to "Daddy" by name, the user maps the name to
+ * saved the contact. So to send to "Alex" by name, the user maps the name to
  * a number once:
  *
- *   buff whatsapp contact add Daddy 919876543210
+ *   buff whatsapp contact add Alex 919876543210
  *
  * Stored at `~/.buff/whatsapp/contacts.json` (next to the session; the
  * BUFF_WHATSAPP_SESSION_DIR override applies). The bridge seeds its

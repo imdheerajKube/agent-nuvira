@@ -70,7 +70,7 @@ const PASS_REVIEW = 'Review passed. No issues found.';
 const WRITER_STEP = {
   id: 'step-1',
   agentType: 'writer',
-  description: 'Implement the core logic in addon_handler.py: register NVDA key + alt + 1 to speak "Hello Anuj Mote"',
+  description: 'Implement the core logic in addon_handler.py: register NVDA key + alt + 1 to speak "Hello Ria Mote"',
   dependsOn: [] as string[],
   status: 'pending' as const,
   complexity: 'moderate' as const,
