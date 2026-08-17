@@ -120,3 +120,70 @@ covered, and one is not covered at all. Verified below.**
 (rows 24–28) must each be demonstrable from the dashboard chat alone — with
 a visible plan checklist, a loaded skill, a demonstrated tool-switch on
 failure, a parallel sub-agent fan-out, and a structured roadmap artifact.
+
+---
+
+## Round 3 — skill DEPTH audit (verified 2026-08-17, code-level)
+
+User ask: *"a skill existing in agent-nuvira can't be treated as existing —
+there could be a huge gap in capability of a skill with the same name/intent
+vs what Freebuff/Claude Code/Hermes have. Have we compared existing skills in
+depth? Have we done the strengthening of existing skills / capabilities?"*
+
+**Honest answer: NO — the skill machinery exists but the content is nearly
+empty, and no depth comparison against reference agents has been done.**
+
+### Verified facts (code + disk + registry)
+
+| # | Check | Result |
+|---|---|---|
+| 29 | **How many bundled first-party skills ship?** | **EXACTLY ONE** — `src/skills/bundled-skills.ts` exports `BUNDLED_SKILLS = [websiteDeploySkill]` (website-deploy: 5 steps, 7 providers, params, quality 0.9). Nothing else ships. |
+| 30 | **Is the default skill registry populated?** | **NO** — the configured default (`https://raw.githubusercontent.com/imdheerajKube/agent-nuvira/main/.agents/skills`) returns **404** for `index.json`; the repo has no `.agents/skills/` dir. |
+| 31 | **User store content** | `~/.buff/skills/` contains only an empty `index.json` — zero installed skills. |
+| 32 | **Skills for the named agentic capabilities?** | **ZERO** — no code-assessment skill, no gap-analysis skill, no technical-roadmap skill, no plan-creation skill, no test-strategy skill. The only skill is deployment. |
+| 33 | **Depth comparison vs Claude Code / Freebuff / Hermes?** | **NOT DONE** — no doc, no audit, no row-by-row comparison of same-name skills. Claude Code ships ~15+ built-in skills (pdf/docx/pptx/xlsx, playwright, image-generation, brand-guidelines, url-fetcher, …) + a skill-authoring framework; agent-nuvira ships 1. |
+
+### What the machinery CAN already do (the good news)
+
+- `Skill` shape is solid: structured steps with `agentType` + `dependsOn` +
+  `promptTemplate`, typed parameters (string/file-path/code-snippet/choice),
+  goalPattern matching, tags, quality scoring, usage tracking, decay GC.
+- `SkillStore.seedBundledSkills()` proves first-party shipping works — a new
+  skill in `bundled-skills.ts` lands in every install, idempotently.
+- `SkillRunnerAgent` + `hub-skill-catalog` (SKILL.md progressive disclosure)
+  + `skill-compiler` (trajectory → skill learning) all exist and are tested.
+- The website-deploy skill itself is a good template: real methodology
+  (wrangler-4 project-create gotcha, provider-by-provider commands, live-URL
+  verification step) — the depth bar is set; it's just only applied to ONE
+  skill.
+
+### What closes this gap (additions to the plan)
+
+- **P5 — skill-depth audit + strengthening (rows 29–33)**: before/alongside
+  the P5 assessment playbook, do a first-party skill BATCH:
+  1. **Inventory the reference agents' skill catalogs** (Claude Code built-ins
+     + authoring docs, Hermes `skills_hub`/toolsets, Freebuff researcher
+     patterns) — a row-per-skill comparison table appended to this doc.
+  2. **Ship first-party skills for the named capabilities** in
+     `bundled-skills.ts`, each at the website-deploy depth bar:
+     - `code-assessment` — read → evaluate (correctness/security/perf/
+       architecture) → gap findings → prioritized recommendations
+     - `technical-roadmap` — current state → target state → phased roadmap
+       with dependencies + effort/risk
+     - `plan-create-track` — break goal into checkable steps, mark done,
+       surface blockers (feeds the P0.7 plan tool)
+     - `test-strategy` — unit/integration/e2e selection, edge cases,
+       property tests, mutation-style checks (feeds the P3 fallback chain)
+  3. **Verify the default registry** — either populate the repo
+     `.agents/skills/` with the bundled skills (so the configured default
+     stops 404ing) or point it at a populated hub.
+  4. **Acceptance**: `buff skills list` shows the full first-party batch;
+     each new skill is exercisable via `buff skill run <name>` AND matches
+     from the dashboard chat; the comparison table is in this doc.
+
+**The honest bottom line:** the skill SYSTEM is real (shape, store, seeding,
+runner, compiler, catalog — all tested), but agent-nuvira currently ships
+**one deployment skill and an empty registry** — a same-name/depth comparison
+with Claude Code / Hermes / Freebuff would find agent-nuvira missing ~all of
+the capability skills. The strengthening work has NOT been done yet; this row
+makes it an explicit, tracked deliverable.
