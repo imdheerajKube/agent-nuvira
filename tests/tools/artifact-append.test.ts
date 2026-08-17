@@ -1,5 +1,5 @@
 /**
- * I3 — Artifact-append tests (Hermes run.py "artifact payload" parity).
+ * I3 — Artifact-append tests.
  *
  * Covers: payload extraction (valid / prose-wrapped / invalid shapes), the
  * auto-append hook (sink receives the artifact, only `result` reaches the

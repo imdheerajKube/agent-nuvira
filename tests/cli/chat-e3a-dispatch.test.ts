@@ -4,7 +4,7 @@
  * The legacy `promptDeveloperMode` menu ("1. Chat mode / 2. Developer mode")
  * is DELETED (Session 7c re-scope, landed E3a). E3c (Session 16) demotes the
  * rules further: EVERY request runs as a tool-call turn and the MODEL decides
- * (Freebuff/Hermes parity). `resolvePipelineDispatch` is now the rule
+ * `resolvePipelineDispatch` is now the rule
  * assessment used as (a) a hint in the model context and (b) the no-model
  * fallback decision — it is NEVER a bypass that skips the model.
  *

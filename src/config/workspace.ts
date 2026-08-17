@@ -7,12 +7,12 @@
  * prefs, last_session_id, last_run_at, last_goal, run_summary)` — STRICT
  * tables, WAL journal.
  *
- * Design (mirrors Hermes `hermes_state.py` / `hermes_state_schema.py`):
+ * Design:
  * - **Tiered storage**: `node:sqlite` when available (Node ≥ 22.5), else a
  *   JSON-file fallback tier (`workspaces.json`). Both implement the SAME
  *   interface, so project continuity never depends on the runtime version.
  * - **Corruption tolerance**: a corrupt/unreadable DB (or JSON) file degrades
- *   to a FRESH workspace instead of crashing — the Hermes corruption-tolerance
+ *   to a FRESH workspace instead of crashing — corruption-tolerance
  *   pattern. All reads/writes are best-effort and never throw.
  * - **projectId derivation**: from the git remote slug (`owner/repo`) when the
  *   cwd is inside a git repo, else a stable hash of the resolved cwd — so the
@@ -265,7 +265,7 @@ export class WorkspaceStore {
     }
     if (this.backend === 'sqlite') {
       if (this.tryOpenSqlite()) return;
-      // Corrupt/unopenable DB → degrade to the JSON tier (Hermes corruption
+      // Corrupt/unopenable DB → degrade to the JSON tier (corruption
       // tolerance: a broken store never crashes the agent).
       this.backend = 'json';
       logger.warn('      ⚠️ workspaces.db unreadable — using JSON fallback tier');

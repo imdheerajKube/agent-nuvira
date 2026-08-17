@@ -1,8 +1,8 @@
 /**
- * I8 — WhatsApp bridge session location (Hermes parity).
+ * I8 — WhatsApp bridge session location.
  *
- * Hermes persists the Baileys/whatsapp-web.js session under
- * `~/.hermes/whatsapp/session/creds.json`; agent-nuvira uses the equivalent
+ * The session is persisted under
+ * a `creds.json` Baileys session persisted under the agent-nuvira data dir; the
  * `~/.buff/whatsapp/session/` (BUFF_WHATSAPP_SESSION_DIR overrides it so a
  * smoke/test can point anywhere without touching the user home). The files
  * are written by Baileys' `useMultiFileAuthState` — byte-compatible layout.

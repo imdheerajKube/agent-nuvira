@@ -5,7 +5,7 @@
  * orchestrator's skill-matching (which previously only consulted the compiled
  * SkillStore) now also consults this catalog, so a `buff skills install`
  * result is immediately matchable + injectable — no recompilation needed
- * (Hermes `skills_hub.py` bridge parity).
+ * (skills-hub bridge parity).
  *
  * Sources (both scanned, deduped by name — the project root wins):
  *   - `<project>/.agents/skills/<name>/SKILL.md`   (hub install target)

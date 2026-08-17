@@ -1,6 +1,6 @@
 /**
- * Agent Hub panel (I4 + I5) — the Hermes-style 4-tab management page the
- * user picked out: **Skills / Tools / Channels / Artifacts** on one screen.
+ * Agent Hub panel (I4 + I5) — a 4-tab management page the user picked out:
+ * **Skills / Tools / Channels / Artifacts** on one screen.
  *
  * - **Tools** — I1 toolsets with enable/disable switches. Writes are
  *   admin-gated (PUT /api/admin/hub/toolsets/<name>, routing.operate) and
@@ -430,8 +430,8 @@ export default function AgentHub() {
       </div>
 
       <p className="admin-subtitle">
-        Capabilities, messaging, artifacts and skills in one place — the same 4-view
-        concept as the Hermes web UI. Toggles persist to <code>buffconfig</code> and are
+        Capabilities, messaging, artifacts and skills in one place — a single 4-view
+        management page. Toggles persist to <code>buffconfig</code> and are
         honored by the runtime immediately (never cosmetic).
       </p>
 

@@ -1,7 +1,7 @@
 /**
  * I4 — Agent Hub read aggregation (`src/web-dashboard/hub-data.ts`).
  *
- * Hermes WebUI parity (SkillsPage / McpPage / ToolsetConfigDrawer): one read
+ * WebUI parity (SkillsPage / McpPage / ToolsetConfigDrawer): one read
  * surface that aggregates the four hub tabs the dashboard renders —
  * **Tools** (I1 toolsets), **Channels** (I2 gateway delivery + aliases),
  * **Artifacts** (I3 per-session store), and **Skills** (compiled SkillStore +

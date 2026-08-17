@@ -1,5 +1,5 @@
 /**
- * I9 — Webhook/REST messaging connectors (Hermes platform parity).
+ * I9 — Webhook/REST messaging connectors.
  *
  * DingTalk, Feishu, WeCom, Mattermost, Matrix, generic Webhook, BlueBubbles —
  * each is a thin outbound adapter (URL + payload), verified here with a fetch
@@ -233,7 +233,7 @@ describe('I9 webhook connectors — URL + payload shapes', () => {
     expect(calls[0].body).toMatchObject({ title: 'Agent-Nuvira', message: 'nightly done' });
   });
 
-  it('Home Assistant caps the message at the Hermes 4096-char limit', async () => {
+  it('Home Assistant caps the message at the 4096-char limit', async () => {
     setEnv({ HASS_TOKEN: 'ha-token' });
     const { calls } = spyFetchOk();
     const adapter = new HomeAssistantAdapter();

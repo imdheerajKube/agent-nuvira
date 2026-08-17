@@ -1,12 +1,12 @@
 /**
  * I2 — Hook registry (`src/gateway/hooks.ts`).
  *
- * Hermes `hooks.py` + `builtin_hooks/` parity: lifecycle hooks the agent
+ * Lifecycle hooks the agent
  * runtime fires at well-defined moments. Two events today (extensible):
  *
  * - `post_tool_call`  — after the tool loop executes a registry tool. Driven
  *   by the `tool:called` event-bus event emitted from `src/tools/tool-loop.ts`
- *   (Hermes `post_tool_call` hook parity). Handlers receive the tool name,
+ *   (the `post_tool_call` hook). Handlers receive the tool name,
  *   result, success flag and duration.
  * - `on_session_end`  — after a pipeline run finishes (execute:completed /
  *   execute:failed). Handlers receive the run's success + summary.
@@ -91,7 +91,7 @@ type HookContextFor<T extends HookEvent> = T extends 'post_tool_call'
   ? ToolCallHookContext
   : SessionEndHookContext;
 
-/** The singleton registry (Hermes `hooks` module parity). */
+/** The singleton registry. */
 export const hooks = new HookRegistry();
 
 // ─── Bus wiring ─────────────────────────────────────────────────────────────
@@ -144,7 +144,7 @@ export function installHooks(bus = getEventBus()): () => void {
 // ─── Built-in hooks ─────────────────────────────────────────────────────────
 
 /**
- * Default built-in: log pipeline session summaries (Hermes' "session end
+ * Default built-in: log pipeline session summaries ("session end
  * summary" builtin hook parity). Registered once at module load.
  */
 export function registerBuiltinHooks(): void {

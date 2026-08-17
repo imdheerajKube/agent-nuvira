@@ -1,7 +1,7 @@
 /**
  * MemoryManager — Orchestrates the active MemoryProvider (Phase B2).
  *
- * Mirrors Hermes `agent/memory_manager.py`: the manager injects the provider's
+ * The manager injects the provider's
  * context into prompts and calls the lifecycle hooks at the right points in the
  * chat/planner loop. The caller never touches the provider directly:
  *
@@ -56,7 +56,7 @@ export class MemoryManager {
   /**
    * Build the persistent-memory context block for a query (planner/chat prompt
    * injection). Trivial prompts (greetings, one-word acks) return an empty
-   * block with no store access — the Hermes is_trivial_prompt gate.
+   * block with no store access — the is_trivial_prompt gate.
    */
   async buildMemoryBlock(query: string, callLLM?: LLMCallFn): Promise<MemoryPrefetchResult> {
     const result = await this.provider.prefetch(query, this.sessionId ?? undefined, callLLM).catch((err) => {

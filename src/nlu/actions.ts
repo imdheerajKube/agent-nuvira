@@ -7,9 +7,9 @@
  * branch — so the STANDING cross-command parity rule is enforced structurally,
  * not by convention.
  *
- * Mirrors the Freebuff/Hermes methodology (mirrored in C1/C2): the action is a
+ * The action is a
  * tool descriptor `{ name, description, inputSchema, run }` in the same shape
- * Freebuff's tool definitions and Hermes' `tools/registry.py` entries use, so
+ * Tool definitions and `tools/registry.py` entries use, so
  * the orchestrator pipeline is invocable both from the chat loop (Phase E3
  * pipeline-as-tool) and from native tool-calling providers (H1) with zero
  * re-implementation. "Mode" is an internal pipeline pick, never a user menu:

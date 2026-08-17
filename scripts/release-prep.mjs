@@ -54,7 +54,7 @@ body = body
   .replace(/\n{3,}/g, '\n\n');
 
 const highlights = [
-  '- **Major revamp complete** — all 30 rows of the Freebuff/Hermes parity program are landed (AGENT_NUVIRA_MAJOR_REVAMP_PLAN)',
+  '- **Major revamp complete** — all 30 rows of the capability parity program are landed (AGENT_NUVIRA_MAJOR_REVAMP_PLAN)',
   '- **Reliability stack** — writer surfaces unparseable output instead of masking it (repair escalates the model), reviewer-blocked verdicts route through a writer fix pass, weak-local-model pre-flight warning before long runs',
   '- **New `buff code-map`** — project symbol map (functions/classes/methods) via the AST engine; closes the last revamp row; AST dedupe fix recovered silently-dropped top-level functions',
   '- **Scheduled jobs** — `buff admin cron add/list/remove/run` with schema-validated args, RBAC-gated writes, channel delivery',

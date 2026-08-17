@@ -1,7 +1,7 @@
 /**
  * I3 — Artifact types (`src/tools/artifact-types.ts`).
  *
- * Hermes artifact parity (`gateway/run.py` — "tools return their deliverable
+ * Artifact contract ("tools return their deliverable
  * artifact as a JSON payload"): a tool that produces a deliverable (a file, a
  * doc, a log, media, structured data, or a link) returns it as a typed
  * artifact, and the runtime records it on the session automatically.

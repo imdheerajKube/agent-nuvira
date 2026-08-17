@@ -1,11 +1,11 @@
 /**
  * J3 — Skills hub + sync (`src/learning/skills-hub.ts`).
  *
- * Mirrors Hermes `skills_hub.py` / `skills_sync_client.py` + Freebuff's
+ * A community-skill hub with
  * `.agents/skills` + `npx skills add` flow: discover, install, update, and
  * audit community skills from a configurable registry.
  *
- * Registry layout (same shape as the workflow registry + Freebuff skills):
+ * Registry layout (same shape as the workflow registry):
  *   .agents/skills/index.json          — master index (HubSkillEntry[])
  *   .agents/skills/<name>/SKILL.md     — the skill (markdown w/ frontmatter)
  *   .agents/skills/<name>/manifest.json — optional extra metadata (author, tags)
@@ -108,7 +108,7 @@ function indexCacheKeyFor(base: string): string {
   return createHash('sha256').update(base).digest('hex').slice(0, 16);
 }
 
-/** Install root: `<project>/.agents/skills/` (Freebuff `npx skills` convention). */
+/** Install root: `<project>/.agents/skills/` (the `npx skills` convention). */
 const SKILL_NAME_RE = /^[a-z0-9-]+$/;
 const MAX_INDEX_FETCH_MS = 10_000;
 const MAX_SKILL_FETCH_MS = 15_000;

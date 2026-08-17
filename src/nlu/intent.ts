@@ -5,7 +5,7 @@
  * zero network, zero model calls, <5ms typical. Unknown inputs return
  * `confidence: 0` (never a guess) so the C2 LLM-verify path takes over.
  *
- * Mirrors the Freebuff/Hermes methodology (single dispatch loop, no user-facing
+ * A single dispatch loop, no user-facing
  * mode picker): the intent + modeHint resolved here is the vocabulary the C3
  * action map and the orchestrator pipeline consume, so intent resolution and
  * tool dispatch share one source of truth.

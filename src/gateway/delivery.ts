@@ -1,7 +1,7 @@
 /**
  * I2 — Gateway delivery ledger (`src/gateway/delivery.ts`).
  *
- * Hermes `delivery.py` + `delivery_ledger.py` parity: a channel send is not
+ * A channel send is not
  * fire-and-forget. When `adapter.send()` fails (network blip, rate limit,
  * channel temporarily unreachable), the message is persisted to a delivery
  * ledger (`~/.buff/gateway/delivery.json`) and retried with exponential

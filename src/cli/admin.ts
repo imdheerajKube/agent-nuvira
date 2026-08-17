@@ -363,7 +363,7 @@ export class AdminCommand extends BaseCommand {
 
   private cronCommand(): Command {
     const cron = new Command('cron')
-      .description('Scheduled tool invocations (J2 — mirrors Hermes cron/jobs.py)');
+      .description('Scheduled tool invocations (J2 — cron/jobs.py)');
 
     cron
       .command('add <name> <schedule> <tool>')

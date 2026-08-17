@@ -48,13 +48,13 @@ export function salvageFailedGeneration(
     // The tag shape is `<function=name [args]</function>` — NO `>` between the
     // args and the close (a naive `<function=[^>]*>` would greedily swallow
     // through `</function>`'s `>` and strip nothing). Handle the space form
-    // (observed) AND the Claude angle form `<function=name>args</function>`.
+    // (observed) AND the Anthropic-style angle form `<function=name>args</function>`.
     const content = raw
       .replace(/<function=[^>\s]*\s*[\s\S]*?<\/function>/g, '')
       .replace(/<function=[^>]*>[\s\S]*?<\/function>/g, '')
       .trim();
     // Best-effort: recover the followups from the stripped tag so the turn
-    // still ends with the Freebuff contract (the model's suggestions were
+    // still ends with the contract (the model's suggestions were
     // also being thrown away with the rejected call).
     let followups: FollowupSuggestion[] | undefined;
     for (const [, name, body] of funcs) {

@@ -1,5 +1,5 @@
 /**
- * I2 — Delivery ledger tests (Hermes delivery.py / delivery_ledger.py parity).
+ * I2 — Delivery ledger tests (delivery ledger design).
  *
  * Covers: file-backed persistence across instances, exponential backoff
  * schedule, attempt accounting (sent / pending / failed), due-window

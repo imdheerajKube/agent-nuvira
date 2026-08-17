@@ -228,7 +228,7 @@ describe('registry — JSON schemas (native tool-calling)', () => {
   });
 });
 
-describe('registry — suggest_followups contract (Freebuff parity)', () => {
+describe('registry — suggest_followups contract', () => {
   it('validates the tool-shape output [{prompt,label?}]', () => {
     const raw = JSON.stringify([
       { prompt: 'Add unit tests for the new parser', label: 'Add tests' },
@@ -261,8 +261,8 @@ describe('registry — suggest_followups contract (Freebuff parity)', () => {
     expect(toFollowupSuggestions('[{"prompt":""}]')).toEqual([]);
   });
 
-  it('parses 4+ followups (Freebuff parity: ~3 is prose guidance, not a schema cap)', () => {
-    // Freebuff's schema is .min(1) with NO max — a model emitting 4–5 valid
+  it('parses 4+ followups (~3 is prose guidance, not a schema cap)', () => {
+    // The schema is .min(1) with NO max — a model emitting 4–5 valid
     // followups must PARSE (a zod rejection feeds a tool error back and forces
     // a wasteful retry loop). Callers trim to the top 3 for display.
     const four = Array.from({ length: 4 }, (_, i) => ({ prompt: `p${i}` }));

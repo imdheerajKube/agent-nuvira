@@ -759,8 +759,8 @@
     {
       "intent": "mcp.serve",
       "summary": "Expose agent tools as an MCP server",
-      "aliases": ["expose mcp", "serve mcp", "mcp server for claude", "connect to claude desktop"],
-      "objective": "Expose the agent's tools as an MCP server over stdio (Claude Desktop / IDEs / other agents)",
+      "aliases": ["expose mcp", "serve mcp", "mcp server"],
+      "objective": "Expose the agent's tools as an MCP server over stdio (MCP clients / IDEs / other agents)",
       "command": "buff mcp serve [--with <tool>]",
       "example": "buff mcp serve --with gateway_send",
       "args": [{ "name": "with", "flag": "--with", "optional": true, "example": "--with gateway_send" }],

@@ -1,5 +1,5 @@
 /**
- * J2 — Scheduled jobs (`src/gateway/cron.ts`) — mirrors Hermes `cron/jobs.py`.
+ * J2 — Scheduled jobs (`src/gateway/cron.ts`).
  *
  * Jobs are scheduled tool invocations (H1 registry tools — e.g. `build`,
  * `test`, `code_search`) with delivery to a channel (J1, not landed) or a CLI

@@ -1,7 +1,7 @@
 /**
  * I1 — Web research tools (`src/tools/web-research.ts`).
  *
- * Mirrors Freebuff `researcher-web.ts` / `researcher-docs.ts` + Hermes
+ * Research tools (web search + page reading) with an
  * `agent/web_search_registry.py`: the model can search the web and read a
  * page's text to ground its answers — the single biggest "understanding"
  * capability agent-nuvira was missing (capability gap #3, 🔴 MAJOR).
@@ -12,7 +12,7 @@
  * - **Jina Reader** (free tier) — page-to-markdown for `readWebPage`; falls
  *   back to a plain fetch + naive HTML→text strip when unconfigured.
  *
- * Availability gating (Hermes registry pattern): DDG needs no config so
+ * Availability gating: DDG needs no config so
  * `isWebSearchAvailable()` is true by default; SearXNG/Jina are opt-in via
  * env. Every fetch carries a timeout + a real browser UA (robots-aware);
  * results are cached in `context/cache.ts` (provider=`web`) so repeated

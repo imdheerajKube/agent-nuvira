@@ -18,7 +18,7 @@
 #   A. TTY board — runs `buff execute --provider auto --dry-run` under
 #      `script(1)` inside a tmux session, which allocates a REAL PTY so the
 #      board enters in-place-redraw mode. The recorded PTY log is grepped for
-#      the Freebuff-style markers: goal header, pre-flight inspection, per-task
+#      the agent-style markers: goal header, pre-flight inspection, per-task
 #      branches, accumulated 💭 thinking/routing trail, terminal state.
 #   B. Routing decisions — re-runs with `--json-events` (machine-readable
 #      NDJSON, no TTY needed) and asserts the stream contains `agent-update`

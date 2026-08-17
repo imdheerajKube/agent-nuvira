@@ -103,7 +103,7 @@ export class GovernancePolicyError extends Error {
 //   - groq       — fastest, cheap, good general coding
 //   - nim        — strong reasoning, reasonable cost
 //   - gemini     — strong reasoning + speed, good for complex work
-//   - openrouter — frontier reasoning (GPT/Claude tier), slower, pricier
+//   - openrouter — frontier reasoning models (GPT/Anthropic tier), slower, pricier
 //
 // Profiles can be overridden per-call via AutoRouterOptions (see weights).
 /**

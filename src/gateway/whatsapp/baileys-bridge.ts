@@ -1,23 +1,23 @@
 /**
  * I8 — Baileys bridge (agent-nuvira's WhatsApp messaging layer).
  *
- * The native counterpart of Hermes' `plugins/platforms/whatsapp/adapter.py`:
+ * The native WhatsApp bridge:
  * QR-pairs a personal number over the WhatsApp Web multi-device protocol and
  * sends/receives by JID — no Meta Business account, no paid API.
  *
  * `baileys` is imported LAZILY so the rest of the gateway (and tests using a
  * fake bridge) never pay for it, and an unpaired bridge fails fast without
  * loading it. Session files (creds.json + peers/…) are written by Baileys'
- * `useMultiFileAuthState` — the same layout Hermes' bridge uses.
+ * `useMultiFileAuthState` — a multi-file auth-state layout.
  *
  * Since I8b:
- * - **Echo filtering (Hermes `recentlySentIds` parity):** every outbound send
+ * - **Echo filtering (`recentlySentIds`):** every outbound send
  *   records the returned message id; inbound `messages.upsert` drops messages
  *   whose id matches (our own echoes), so the agent never re-ingests its own
  *   replies. Any OTHER `fromMe` message is dropped too, UNLESS self-chat mode
  *   is on (`BUFF_WHATSAPP_SELF_CHAT=1`) — then user-typed self-chat messages
  *   (fromMe but NOT in recentlySent) are forwarded as inbound.
- * - **Contact-name resolution (Hermes `allow_from`/contact UX parity):** the
+ * - **Contact-name resolution (`allow_from`/contact UX):** the
  *   bridge learns name → JID from `contacts.upsert`/`contacts.update` (the
  *   phone's address book sync) and from every inbound message's `pushName`,
  *   so `send("Alex", …)` resolves the contact by name.
@@ -823,7 +823,7 @@ export class BaileysBridge implements WhatsAppBridge {
           if (typeof m?.pushName === 'string' && m.pushName.trim()) {
             this.learnContact(m.pushName.trim(), fromJid);
           }
-          // I8b echo/self-message filter (Hermes recentlySentIds parity):
+          // I8b echo/self-message filter (recentlySentIds):
           //   - our OWN outbound sends echo back through upsert → drop.
           //   - other fromMe messages (the paired number typing) are only
           //     interesting in self-chat mode — the user messaging themselves.

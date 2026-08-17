@@ -1,6 +1,6 @@
 /**
- * SkillsCommand — J3 skills hub + sync (mirrors Hermes `skills_hub.py` +
- * Freebuff `npx skills add`).
+ * SkillsCommand — J3 skills hub + sync (`skills_hub.py` +
+ * `npx skills add`).
  *
  * Subcommands:
  *   buff skills search <query>                — Search the skills registry

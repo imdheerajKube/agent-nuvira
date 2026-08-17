@@ -331,7 +331,7 @@ async function until(cond: () => boolean, timeoutMs = 1500): Promise<void> {
   }
 }
 
-describe('IrcAdapter / ircSend (RFC 1459, Hermes plugins/platforms/irc parity)', () => {
+describe('IrcAdapter / ircSend (RFC 1459)', () => {
   afterEach(() => {
     vi.restoreAllMocks();
   });
@@ -436,7 +436,7 @@ describe('IrcAdapter / ircSend (RFC 1459, Hermes plugins/platforms/irc parity)',
   });
 });
 
-describe('IrcAdapter inbound relay (Hermes plugins/platforms/irc receive parity)', () => {
+describe('IrcAdapter inbound relay', () => {
   afterEach(() => {
     vi.restoreAllMocks();
   });
@@ -646,7 +646,7 @@ describe('IrcAdapter inbound relay (Hermes plugins/platforms/irc receive parity)
   });
 });
 
-describe('splitIrcMessage + stripIrcMarkdown (Hermes _split_message parity)', () => {
+describe('splitIrcMessage + stripIrcMarkdown', () => {
   it('strips markdown to plain text', () => {
     expect(stripIrcMarkdown('**bold** and `code` and [link](https://x.dev)')).toBe('bold and code and link (https://x.dev)');
   });
@@ -728,7 +728,7 @@ function installFakeWebSocket(): FakeWs {
   return fake;
 }
 
-describe('SimplexAdapter / simplexSend (local daemon WebSocket, Hermes plugins/platforms/simplex parity)', () => {
+describe('SimplexAdapter / simplexSend (local daemon WebSocket)', () => {
   afterEach(() => {
     vi.restoreAllMocks();
     delete (globalThis as any).WebSocket;
@@ -744,7 +744,7 @@ describe('SimplexAdapter / simplexSend (local daemon WebSocket, Hermes plugins/p
     expect(fake.url).toBe('ws://127.0.0.1:5225');
     const frame = JSON.parse(fake.sent[0]);
     expect(frame.cmd).toBe('@alice hello simplex');
-    expect(frame.corrId).toMatch(/^hermes-/);
+    expect(frame.corrId).toMatch(/^anv-/);
   });
 
   it('sends a group message via the structured /_send #<id> json form', async () => {
@@ -761,7 +761,7 @@ describe('SimplexAdapter / simplexSend (local daemon WebSocket, Hermes plugins/p
     const fake = installFakeWebSocket();
     const promise = simplexSend({ wsUrl: 'ws://127.0.0.1:5225', graceMs: 20 }, 'ghost', 'hi');
     fake.open();
-    fake.message(JSON.stringify({ corrId: 'hermes-1', resp: { type: 'chatCmdError', details: 'no such contact' } }));
+    fake.message(JSON.stringify({ corrId: 'anv-1', resp: { type: 'chatCmdError', details: 'no such contact' } }));
     expect(await promise).toBe(false);
   });
 
@@ -805,7 +805,7 @@ describe('SimplexAdapter / simplexSend (local daemon WebSocket, Hermes plugins/p
   });
 });
 
-describe('SimplexAdapter inbound (persistent WS listener — Hermes receive parity)', () => {
+describe('SimplexAdapter inbound (persistent WS listener)', () => {
   afterEach(() => {
     vi.restoreAllMocks();
     delete (globalThis as any).WebSocket;
@@ -844,13 +844,13 @@ describe('SimplexAdapter inbound (persistent WS listener — Hermes receive pari
     const received: string[] = [];
     const adapter = new SimplexAdapter({ wsUrl: 'ws://127.0.0.1:5225', autoAccept: false });
     await adapter.start((msg) => { received.push(msg.text); });
-    // Own echo (directSnd), a hermes- corrId echo, and a non-rcv content type.
+    // Own echo (directSnd), an anv- corrId echo, and a non-rcv content type.
     fake.message(JSON.stringify({
-      corrId: 'hermes-5-1',
+      corrId: 'anv-5-1',
       resp: { type: 'newChatItems', chatItems: [{ chatInfo: { type: 'direct', contact: { contactId: '9' } }, chatItem: { chatDir: { type: 'directSnd' }, content: { type: 'rcvMsgContent', msgContent: { type: 'text', text: 'mine' } } } }] },
     }));
     fake.message(JSON.stringify({
-      corrId: 'hermes-6-2',
+      corrId: 'anv-6-2',
       resp: { type: 'newChatItems', chatItems: [{ chatInfo: { type: 'direct', contact: { contactId: '9' } }, chatItem: { chatDir: { type: 'directRcv' }, content: { type: 'rcvMsgContent', msgContent: { type: 'text', text: 'x' } } } }] },
     }));
     fake.message(JSON.stringify({
@@ -1023,7 +1023,7 @@ describe('createConfiguredAdapters (I6 platforms)', () => {
     expect(platforms).toContain('signal');
   });
 
-  it('includes irc only when IRC_SERVER is present (Hermes env-var parity)', () => {
+  it('includes irc only when IRC_SERVER is present', () => {
     envBackup.IRC_SERVER = process.env.IRC_SERVER;
     delete process.env.IRC_SERVER;
     expect(createConfiguredAdapters().map((a) => a.platform)).not.toContain('irc');
@@ -1032,7 +1032,7 @@ describe('createConfiguredAdapters (I6 platforms)', () => {
     expect(createConfiguredAdapters().map((a) => a.platform)).toContain('irc');
   });
 
-  it('includes simplex only when SIMPLEX_WS_URL is present (Hermes env-var parity)', () => {
+  it('includes simplex only when SIMPLEX_WS_URL is present', () => {
     envBackup.SIMPLEX_WS_URL = process.env.SIMPLEX_WS_URL;
     delete process.env.SIMPLEX_WS_URL;
     expect(createConfiguredAdapters().map((a) => a.platform)).not.toContain('simplex');

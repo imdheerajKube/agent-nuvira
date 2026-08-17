@@ -1,7 +1,7 @@
 /**
  * Platform transport configuration — the `buff config gateway` surface.
  *
- * Gateway platform tokens live in env vars (the Hermes `config.py` map, see
+ * Gateway platform tokens live in env vars (the `config.py` map, see
  * channel-directory.ts). This module adds a GUIDED way to manage them: a
  * `~/.buff/.env` file (BUFF_ENV_FILE overrides it — same path `loadEnv()` in
  * src/utils/env.ts already reads at CLI + dashboard startup) that both the CLI

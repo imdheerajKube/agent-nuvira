@@ -31,7 +31,7 @@ import { ConfigManager } from '../config/manager.js';
 import { type OrchestrationResult } from '../agents/orchestrator.js';
 /**
  * M2b curated task IDs — the experience-parity benchmark suite that measures
- * agent-nuvira against Freebuff and Hermes on the axes users actually feel:
+ * agent-nuvira against the reference agents on the axes users actually feel:
  * completion rate, stuck states, rework turns, and time-to-done.
  *
  * Run with: `buff eval run --suite m2b`

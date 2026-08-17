@@ -1,11 +1,11 @@
 /**
- * I2 — Hook registry tests (Hermes hooks.py parity).
+ * I2 — Hook registry tests.
  *
  * Covers: register/run semantics (serially, best-effort), the event-bus
  * wiring (tool:called → post_tool_call; execute:completed/failed →
  * on_session_end), unsubscribe, and the built-in session logger.
  *
- * NOTE: the registry is a singleton (Hermes `hooks` module parity) without an
+ * NOTE: the registry is a singleton without an
  * unregister — each test registers its OWN distinct handler function and
  * asserts on that function only, so leftover registrations from earlier
  * tests can never flip an assertion.

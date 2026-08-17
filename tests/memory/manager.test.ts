@@ -86,7 +86,7 @@ const smartLLM: any = async (prompt: string) => {
   return '{}';
 };
 
-describe('isTrivialPrompt (Hermes is_trivial_prompt gate)', () => {
+describe('isTrivialPrompt (trivial-prompt gate)', () => {
   it('treats empty / whitespace-only input as trivial', () => {
     expect(isTrivialPrompt('')).toBe(true);
     expect(isTrivialPrompt('   ')).toBe(true);

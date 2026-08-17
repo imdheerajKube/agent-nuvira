@@ -17,7 +17,7 @@
  *       [j/k select · space toggle · e expand all · h collapse all · q freeze]
  * ```
  *
- * Built on **ink** (React for CLIs — the Claude Code / Gemini CLI standard;
+ * Built on **ink** (the React-for-CLI toolkit — the modern terminal-app standard;
  * plan E2 "Leverage" line). Behavior:
  * - **Parallel lanes** — every plan node is a lane; running agents animate a
  *   rotating "working" indicator and accumulate a per-step thought trail.

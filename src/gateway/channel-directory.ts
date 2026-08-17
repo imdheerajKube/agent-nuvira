@@ -1,5 +1,5 @@
 /**
- * J1 — Channel directory (mirrors Hermes `channel_directory.py`).
+ * J1 — Channel directory.
  *
  * Maintains a cached map of REACHABLE channels with human-friendly aliases:
  *   alias        → { platform, channelId }
@@ -8,7 +8,7 @@
  *
  * Aliases are persisted to `~/.buff/gateway/aliases.json` (via BUFF_CONFIG_DIR)
  * so `buff gateway send ops "nightly done"` works across restarts. Platform
- * tokens are read from env — the Hermes `config.py` env-var token map pattern.
+ * tokens are read from env — an env-var token map pattern.
  */
 
 import { mkdirSync, readFileSync, writeFileSync } from 'node:fs';
@@ -16,7 +16,7 @@ import { dirname, join } from 'node:path';
 import { resolveBuffConfigDir } from '../config/paths.js';
 import { hasWhatsAppSession } from './whatsapp/session.js';
 
-/** Supported platforms (Hermes Platform enum — I8 splits WhatsApp, I9 adds webhook connectors). */
+/** Supported platforms (I8 splits WhatsApp, I9 adds webhook connectors). */
 export type Platform =
   | 'telegram' | 'discord' | 'slack'
   | 'whatsapp' | 'whatsapp_cloud'
@@ -24,13 +24,13 @@ export type Platform =
   | 'dingtalk' | 'feishu' | 'wecom' | 'mattermost' | 'matrix' | 'webhook' | 'bluebubbles'
   // I10 — ntfy / Teams / Google Chat / Weixin (thin send adapters).
   | 'ntfy' | 'teams' | 'google_chat' | 'weixin'
-  // I12 — SMS (Twilio REST, Hermes plugins/platforms/sms parity).
+  // I12 — SMS (Twilio REST).
   | 'sms'
-  // I13 — IRC (RFC 1459 over node:net/tls, Hermes plugins/platforms/irc parity).
+  // I13 — IRC (RFC 1459 over node:net/tls).
   | 'irc'
-  // I14 — SimpleX (local daemon WebSocket, Hermes plugins/platforms/simplex parity).
+  // I14 — SimpleX (local daemon WebSocket).
   | 'simplex'
-  // I15 — Home Assistant (REST API, Hermes plugins/platforms/homeassistant parity).
+  // I15 — Home Assistant (REST API).
   | 'homeassistant'
   | 'mock';
 
@@ -94,7 +94,7 @@ export interface ReachableChannel {
   reachable: boolean;
 }
 
-// ─── Platform token map (Hermes `config.py` env-var map) ───────────────────
+// ─── Platform token map (env-var map) ──────────────────────────────────────
 
 export const PLATFORM_ENV_VARS: Record<Platform, string[]> = {
   telegram: ['BUFF_TELEGRAM_TOKEN'],
@@ -119,16 +119,16 @@ export const PLATFORM_ENV_VARS: Record<Platform, string[]> = {
   teams: ['BUFF_TEAMS_WEBHOOK_URL'],
   google_chat: ['BUFF_GOOGLE_CHAT_WEBHOOK_URL'],
   weixin: ['BUFF_WEIXIN_TOKEN'],
-  // I12 — SMS uses the SAME Twilio env vars as Hermes (`plugins/platforms/sms`),
+  // I12 — SMS uses the standard Twilio env vars (`plugins/platforms/sms`),
   // so the same creds work in both agents.
   sms: ['TWILIO_ACCOUNT_SID', 'TWILIO_AUTH_TOKEN', 'TWILIO_PHONE_NUMBER'],
-  // I13 — IRC uses the SAME env vars as Hermes (`plugins/platforms/irc`):
+  // I13 — IRC uses the standard env vars (`plugins/platforms/irc`):
   // IRC_SERVER is the transport gate; nickname/port/channel have defaults.
   irc: ['IRC_SERVER'],
-  // I14 — SimpleX uses the SAME env var as Hermes (`plugins/platforms/simplex`):
+  // I14 — SimpleX uses the standard env var (`plugins/platforms/simplex`):
   // the daemon's WebSocket URL is the transport gate.
   simplex: ['SIMPLEX_WS_URL'],
-  // I15 — Home Assistant uses the SAME env vars as Hermes
+  // I15 — Home Assistant uses the standard env vars
   // (`plugins/platforms/homeassistant`): HASS_TOKEN is the gate (HASS_URL
   // defaults to http://homeassistant.local:8123).
   homeassistant: ['HASS_TOKEN'],

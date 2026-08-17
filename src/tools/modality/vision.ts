@@ -1,5 +1,5 @@
 /**
- * I5 — Vision (mirrors Hermes `vision_tools.py`).
+ * I5 — Vision (describe an image via an optional local/Gemini backend).
  *
  * `describe_image(path, prompt?)` describes an image using:
  *   1. Local **llava / llama3.2-vision** via Ollama (the existing local

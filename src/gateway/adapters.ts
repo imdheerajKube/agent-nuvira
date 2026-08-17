@@ -1,5 +1,5 @@
 /**
- * J1 — Channel adapters (Hermes `gateway/` transport model).
+ * J1 — Channel adapters (a transport model shared across messaging platforms).
  *
  * All adapters are OPT-IN via env bot tokens (see channel-directory.ts). They
  * use Node's built-in fetch against the official bot APIs — deliberately NO
@@ -373,7 +373,7 @@ export class SlackAdapter extends WebhookChannelAdapter {
 /** WhatsApp — Meta Cloud API (BUFF_WHATSAPP_TOKEN + BUFF_WHATSAPP_PHONE_ID). */
 export class WhatsAppCloudAdapter extends WebhookChannelAdapter {
   // I8: the paid Meta Business API is the OPT-IN `whatsapp_cloud` platform —
-  // Hermes parity (platforms.py keeps `whatsapp` = personal bridge and
+  // The platform table keeps `whatsapp` = personal bridge and
   // `whatsapp_cloud` = Cloud API as separate entries).
   readonly platform = 'whatsapp_cloud' as const;
   readonly webhookEnvVar = 'BUFF_WHATSAPP_PHONE_ID';
@@ -410,7 +410,7 @@ export class WhatsAppCloudAdapter extends WebhookChannelAdapter {
 
 /**
  * I8 — the default `whatsapp` platform: a Baileys bridge over the WhatsApp
- * Web multi-device protocol (Hermes' own layer). Pair once with
+ * Web multi-device protocol. Pair once with
  * `buff whatsapp pair` (QR), then send to JIDs / E.164 numbers and receive
  * inbound messages. The bridge is injectable so tests never touch baileys.
  */
@@ -473,8 +473,8 @@ export class WhatsAppBridgeAdapter implements ChannelAdapter {
   }
 }
 
-// ─── I9 — Webhook/REST messaging connectors (Hermes platform parity) ───────
-// Thin outbound adapters mirroring Hermes' gateway platforms: DingTalk,
+// ─── I9 — Webhook/REST messaging connectors ────────────────────────────────
+// Thin outbound adapters for the REST/webhook platforms: DingTalk,
 // Feishu, WeCom, Mattermost, Matrix, a generic Webhook, and BlueBubbles
 // (iMessage bridge). All are send-only bot webhooks/REST — inbound for these
 // platforms would need their long-poll/bot SDKs (out of scope; the shared
@@ -831,7 +831,7 @@ export class GoogleChatAdapter extends WebhookChannelAdapter {
 
 /**
  * Weixin — thin send-only client for WeChat's official iLink bot API
- * (Hermes `gateway/platforms/weixin.py` parity). Sends one text message per
+ * (WeChat Work webhook protocol). Sends one text message per
  * POST; inbound requires the full iLink get_updates protocol (deferred).
  */
 export class WeixinAdapter extends WebhookChannelAdapter {
@@ -1118,11 +1118,11 @@ export class SignalAdapter implements ChannelAdapter {
   }
 }
 
-// ─── SMS (Twilio REST — Hermes plugins/platforms/sms parity) ───────────────
+// ─── SMS (Twilio REST) ─────────────────────────────────────────────────────
 
 /**
- * SMS — Twilio REST API outbound (Hermes `plugins/platforms/sms/adapter.py`
- * parity: same env vars, same endpoint, same auth). Sends a form-encoded
+ * SMS — Twilio REST API outbound (standard Twilio env vars, endpoint, and
+ * auth). Sends a form-encoded
  * Messages.json POST with Basic (Account SID : Auth Token) auth. Inbound
  * (Twilio webhook signature validation) is deferred — outbound only, like
  * Signal/Email. Channel id = the recipient's E.164 number.
@@ -1157,7 +1157,7 @@ export class SmsAdapter implements ChannelAdapter {
 
   async send(channelId: string, text: string): Promise<boolean> {
     if (!this.configured) return false;
-    // Twilio's hard per-message cap is 1600 chars (~10 SMS segments). Hermes
+    // Twilio's hard per-message cap is 1600 chars (~10 SMS segments).
     // truncates to this too (it then chunks into segment-sized sends); this
     // thin adapter caps at 1600 — one message, never a partial-SMS failure.
     const body = new URLSearchParams({
@@ -1181,9 +1181,9 @@ export class SmsAdapter implements ChannelAdapter {
   }
 }
 
-// ─── IRC (RFC 1459 over node:net/tls — Hermes plugins/platforms/irc parity) ─
+// ─── IRC (RFC 1459 over node:net/tls) ─────────────────────────────────────
 
-/** IRC connection settings (from IRC_* env vars — same names as Hermes). */
+/** IRC connection settings (from IRC_* env vars). */
 export interface IrcOptions {
   server: string;
   port: number;
@@ -1204,15 +1204,13 @@ export interface IrcOptions {
   reconnectDelayMs?: number;
   /**
    * Case-insensitive allowlist of nicks that may talk to the bot. When unset
-   * (or empty), every nick is allowed — Hermes `allowed_users` parity (in
-   * Hermes, `allowed_users: []` means allow all). Configured via the
-   * IRC_ALLOWED_USERS env var (comma list) — our extension of the Hermes env
-   * surface (Hermes reads this from config.yaml instead).
+   * (or empty), every nick is allowed — `allowed_users: []` means allow all.
+   * Configured via the IRC_ALLOWED_USERS env var (comma list).
    */
   allowedUsers?: string[];
 }
 
-/** Build the IRC options from the environment (IRC_* — Hermes env-var parity). */
+/** Build the IRC options from the environment (IRC_* env vars). */
 export function ircOptionsFromEnv(): IrcOptions {
   const rawPort = process.env.IRC_PORT;
   const port = rawPort ? parseInt(rawPort, 10) || 6697 : 6697;
@@ -1229,7 +1227,7 @@ export function ircOptionsFromEnv(): IrcOptions {
     channel: process.env.IRC_CHANNEL || undefined,
     serverPassword: process.env.IRC_SERVER_PASSWORD || undefined,
     nickservPassword: process.env.IRC_NICKSERV_PASSWORD || undefined,
-    // IRC_ALLOWED_USERS is our env-var extension of Hermes' config.yaml
+    // IRC_ALLOWED_USERS is an env-var option
     // `allowed_users` list (comma-separated nicks, case-insensitive).
     allowedUsers: (process.env.IRC_ALLOWED_USERS ?? '')
       .split(',')
@@ -1240,7 +1238,7 @@ export function ircOptionsFromEnv(): IrcOptions {
 }
 
 /**
- * Convert basic markdown to plain text for IRC (Hermes `_strip_markdown`
+ * Convert basic markdown to plain text for IRC (`_strip_markdown`
  * parity): bold/italic/code markers removed, images → url, links → text (url).
  */
 export function stripIrcMarkdown(text: string): string {
@@ -1263,7 +1261,7 @@ export function stripIrcMarkdown(text: string): string {
 }
 
 /**
- * Split a message into IRC-safe lines (Hermes `_split_message` parity).
+ * Split a message into IRC-safe lines (`_split_message` parity).
  * IRC has a ~510 byte wire-line limit; after accounting for the `PRIVMSG
  * <target> :` prefix (+\r\n) we split content into chunks, preferring word
  * boundaries and never splitting a multibyte UTF-8 sequence (binary search
@@ -1292,7 +1290,7 @@ export function splitIrcMessage(text: string, target: string, maxLineBytes = 510
         }
       }
       let splitAt = best;
-      // Prefer a space boundary (like Hermes: only when it's not near the start).
+      // Prefer a space boundary (only when it's not near the start).
       const space = para.lastIndexOf(' ', splitAt);
       if (space > splitAt / 3) splitAt = space;
       const piece = para.slice(0, splitAt).trimEnd();
@@ -1305,7 +1303,7 @@ export function splitIrcMessage(text: string, target: string, maxLineBytes = 510
 }
 
 /**
- * Parse one raw IRC protocol line into components (Hermes
+ * Parse one raw IRC protocol line into components (
  * `_parse_irc_message` parity): `:prefix COMMAND p1 p2 :trailing`.
  */
 export function parseIrcLine(raw: string): { prefix: string; command: string; params: string[]; trailing: string } {
@@ -1486,7 +1484,7 @@ export function ircSend(opts: IrcOptions, target: string, text: string, timeoutM
 }
 
 /**
- * IRC — two-way via a persistent RFC 1459 connection (Hermes
+ * IRC — two-way via a persistent RFC 1459 connection (
  * `plugins/platforms/irc` parity: same env vars, same protocol). Channel id =
  * an IRC channel (#ops) or a nick for DMs; falls back to IRC_CHANNEL when
  * empty.
@@ -1495,14 +1493,14 @@ export function ircSend(opts: IrcOptions, target: string, text: string, timeoutM
  * → USER), waits for 001 RPL_WELCOME, IDENTIFYs with NickServ, JOINS
  * IRC_CHANNEL, answers PING/PONG keepalives, retries nick collisions (433),
  * and relays PRIVMSG. Channel messages are only relayed when the bot is
- * addressed (`nick:`/`nick,`/`nick ` — Hermes parity); our own echoes are
+ * addressed (`nick:`/`nick,`/`nick `); our own echoes are
  * filtered; CTCP ACTION becomes `* nick text` while other CTCP is dropped;
  * IRC_ALLOWED_USERS restricts who may talk to the bot. Reconnects with a
  * backoff when the server drops the socket.
  *
  * OUTBOUND (send): prefers the live listener socket — one IRC identity, so a
  * separate connect-per-send connection claiming the same nick would collide —
- * rate-limited 0.3s between lines like Hermes. Falls back to connect-per-send
+ * rate-limited 0.3s between lines. Falls back to connect-per-send
  * `ircSend` when no listener is running.
  */
 export class IrcAdapter implements ChannelAdapter {
@@ -1633,7 +1631,7 @@ export class IrcAdapter implements ChannelAdapter {
       }
       return;
     }
-    // 433 ERR_NICKNAMEINUSE — retry with an incrementing suffix (Hermes parity:
+    // 433 ERR_NICKNAMEINUSE — retry with an incrementing suffix (
     // nick_, nick_1, nick_2…).
     if (command === '433') {
       const m = this.currentNick.match(/^(.+)_(\d+)$/);
@@ -1658,7 +1656,7 @@ export class IrcAdapter implements ChannelAdapter {
     if (!sender) return;
     // Ignore our own echoes — the server relays our own PRIVMSGs back.
     if (sender.toLowerCase() === this.currentNick.toLowerCase()) return;
-    // CTCP ACTION (/me) → `* nick text`; other CTCP is ignored (Hermes parity).
+    // CTCP ACTION (/me) → `* nick text`; other CTCP is ignored.
     if (text.startsWith('\x01ACTION ') && text.endsWith('\x01')) {
       text = `* ${sender} ${text.slice(8, -1)}`;
     } else if (text.startsWith('\x01')) {
@@ -1699,7 +1697,7 @@ export class IrcAdapter implements ChannelAdapter {
       try {
         for (const line of splitIrcMessage(content, target)) {
           sock.write(`PRIVMSG ${target} :${line}\r\n`);
-          // Hermes' 0.3s flood guard between lines.
+          // a 0.3s flood guard between lines.
           await new Promise((r) => setTimeout(r, 300));
         }
         return true;
@@ -1711,10 +1709,10 @@ export class IrcAdapter implements ChannelAdapter {
   }
 }
 
-// ─── SimpleX (local daemon WebSocket — Hermes plugins/platforms/simplex parity) ─
+// ─── SimpleX (local daemon WebSocket) ───────────────────────────────────────
 
 /**
- * SimpleX options (from SIMPLEX_* env vars — same names as Hermes).
+ * SimpleX options (from SIMPLEX_* env vars).
  */
 export interface SimplexOptions {
   /** WebSocket URL of the simplex-chat daemon (ws://127.0.0.1:5225). */
@@ -1730,7 +1728,7 @@ export interface SimplexOptions {
   allowedUsers?: string[];
   /**
    * Comma-separated group ids the bot participates in, or ['*'] for any.
-   * When unset, group messages are IGNORED (Hermes' safer default — a bot in
+   * When unset, group messages are IGNORED (a safer default — a bot in
    * a group otherwise processes every member's traffic).
    */
   groupAllowed?: string[];
@@ -1756,11 +1754,11 @@ export function simplexOptionsFromEnv(): SimplexOptions {
 
 /**
  * A minimal connect-per-send SimpleX client over the daemon's WebSocket API
- * (Hermes `plugins/platforms/simplex/adapter.py` parity). Sends a chat
+ * Sends a chat
  * command frame `{"corrId": ..., "cmd": ...}` — DMs use the simple `@<id>
  * text` form, groups use the structured `/_send #<id> json [...]` form (the
  * bracket `#[<id>] text` syntax is parsed by the daemon as a display-name
- * lookup and silently drops). Fire-and-forget like Hermes: the daemon doesn't
+ * lookup and silently drops). Fire-and-forget: the daemon doesn't
  * always reply to chat commands, so we watch a short grace window for a
  * `chatCmdError` response, then treat the send as accepted.
  */
@@ -1799,7 +1797,7 @@ export function simplexSend(opts: SimplexOptions, channelId: string, text: strin
     timer = setTimeout(() => finish(false), timeoutMs);
 
     ws.onopen = (): void => {
-      const corrId = `hermes-${Date.now()}-${Math.floor(Math.random() * 1e6)}`;
+      const corrId = `anv-${Date.now()}-${Math.floor(Math.random() * 1e6)}`;
       let cmd: string;
       if (channelId.startsWith('group:')) {
         // Structured form: addresses by numeric ID; JSON-escapes text properly.
@@ -1842,20 +1840,20 @@ export function simplexSend(opts: SimplexOptions, channelId: string, text: strin
 }
 
 /**
- * SimpleX — two-way via a local simplex-chat daemon's WebSocket API (Hermes
+ * SimpleX — two-way via a local simplex-chat daemon's WebSocket API (
  * `plugins/platforms/simplex` parity: same SIMPLEX_* env vars, same
  * chat-command protocol). Channel id = a contact id for DMs or `group:<id>`
  * for group messages. The daemon is started separately (`simplex-chat -p
  * 5225` or the official Docker image).
  *
  * INBOUND (start/stop): a persistent WS listener — auto-accepts contact
- * requests, filters our own command echoes (hermes- corrIds / directSnd /
+ * requests, filters our own command echoes (anv- corrIds / directSnd /
  * groupSnd chat directions), parses newChatItems/newChatItem events into
  * InboundMessages, applies the contact/group allowlists, and reconnects
  * with a backoff when the daemon drops the connection.
  *
  * ALLOWLIST DEFAULT (deliberate divergence): groups are ignored unless
- * SIMPLEX_GROUP_ALLOWED is set (Hermes' safer default — a bot in a group
+ * SIMPLEX_GROUP_ALLOWED is set (a safer default — a bot in a group
  * otherwise processes every member's traffic). CONTACTS are allowed by
  * default when SIMPLEX_ALLOWED_USERS is unset — a permissive posture for a
  * local CLI gateway (inbound pipeline triggers are further gated by
@@ -1935,7 +1933,7 @@ export class SimplexAdapter implements ChannelAdapter {
     const corrId = (event as any)?.corrId;
     // Echo filter: corrIds we minted for our own commands (fire-and-forget
     // sends / accepts) — never dispatch them as inbound.
-    if (typeof corrId === 'string' && corrId.startsWith('hermes-')) return;
+    if (typeof corrId === 'string' && corrId.startsWith('anv-')) return;
 
     const type = resp?.type ?? '';
     if (type === 'contactRequest' && this.opts.autoAccept !== false) {
@@ -2007,7 +2005,7 @@ export class SimplexAdapter implements ChannelAdapter {
 
   private fireAndForget(cmd: string): void {
     try {
-      this.ws?.send(JSON.stringify({ corrId: `hermes-${Date.now()}-${Math.floor(Math.random() * 1e6)}`, cmd }));
+      this.ws?.send(JSON.stringify({ corrId: `anv-${Date.now()}-${Math.floor(Math.random() * 1e6)}`, cmd }));
     } catch { /* daemon may be gone — reconnect loop handles it */ }
   }
 
@@ -2018,10 +2016,10 @@ export class SimplexAdapter implements ChannelAdapter {
   }
 }
 
-// ─── Home Assistant (REST API — Hermes plugins/platforms/homeassistant parity) ─
+// ─── Home Assistant (REST API) ─────────────────────────────────────────────
 
 /**
- * Home Assistant send options (HASS_URL + HASS_TOKEN — same env vars as Hermes).
+ * Home Assistant send options (HASS_URL + HASS_TOKEN).
  */
 export interface HassOptions {
   /** Base URL of the Home Assistant instance (default http://homeassistant.local:8123). */
@@ -2039,12 +2037,12 @@ export function hassOptionsFromEnv(): HassOptions {
 }
 
 /**
- * Home Assistant — send-only via the HA REST API (Hermes
+ * Home Assistant — send-only via the HA REST API (
  * `plugins/platforms/homeassistant/adapter.py` parity: same env vars, same
  * endpoints, Bearer auth). Channel id = the `notify.notify` target (a
  * notification service / device); when no target is given, the notification
- * falls back to the dashboard-wide `persistent_notification.create` (Hermes'
- * main send path). 4096-char cap matches Hermes' MAX_MESSAGE_LENGTH. Inbound
+ * falls back to the dashboard-wide `persistent_notification.create` (the
+ * main send path). 4096-char cap matches MAX_MESSAGE_LENGTH. Inbound
  * (WebSocket event-bus subscription with per-entity cooldowns) is deferred.
  */
 export class HomeAssistantAdapter implements ChannelAdapter {
@@ -2078,7 +2076,7 @@ export class HomeAssistantAdapter implements ChannelAdapter {
       // Target-aware: deliver to a specific notify service / device.
       return postJson(`${this.opts.url}/api/services/notify/notify`, { message, target: channelId }, this.opts.token);
     }
-    // Dashboard-wide persistent notification (Hermes' default send).
+    // Dashboard-wide persistent notification (default send).
     return postJson(
       `${this.opts.url}/api/services/persistent_notification/create`,
       { title: 'Agent-Nuvira', message },
@@ -2301,13 +2299,13 @@ export function createConfiguredAdapters(): ChannelAdapter[] {
   if (isPlatformConfigured('teams')) adapters.push(new TeamsAdapter());
   if (isPlatformConfigured('google_chat')) adapters.push(new GoogleChatAdapter());
   if (isPlatformConfigured('weixin')) adapters.push(new WeixinAdapter());
-  // I12 — SMS (Twilio REST, Hermes plugins/platforms/sms parity).
+  // I12 — SMS (Twilio REST).
   if (isPlatformConfigured('sms')) adapters.push(new SmsAdapter());
-  // I13 — IRC (RFC 1459 over node:net/tls, Hermes plugins/platforms/irc parity).
+  // I13 — IRC (RFC 1459 over node:net/tls).
   if (isPlatformConfigured('irc')) adapters.push(new IrcAdapter());
-  // I14 — SimpleX (local daemon WebSocket, Hermes plugins/platforms/simplex parity).
+  // I14 — SimpleX (local daemon WebSocket).
   if (isPlatformConfigured('simplex')) adapters.push(new SimplexAdapter());
-  // I15 — Home Assistant (REST API, Hermes plugins/platforms/homeassistant parity).
+  // I15 — Home Assistant (REST API).
   if (isPlatformConfigured('homeassistant')) adapters.push(new HomeAssistantAdapter());
   if (isPlatformConfigured('email')) adapters.push(new EmailAdapter());
   if (isPlatformConfigured('signal')) adapters.push(new SignalAdapter());

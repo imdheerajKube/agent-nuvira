@@ -1,10 +1,10 @@
 /**
  * I8 — WhatsApp bridge contract (agent-nuvira messaging platform).
  *
- * Hermes parity: in Hermes, `whatsapp` is a first-class messaging platform
- * (`hermes_cli/platforms.py`) implemented with its OWN bridge layer — a Node
+ * `whatsapp` is a first-class messaging platform
+ * (a Python CLI platform layer) implemented with its OWN bridge layer — a Node
  * subprocess running whatsapp-web.js or Baileys, QR-paired, with session creds
- * persisted at `~/.hermes/whatsapp/session/creds.json` — NOT the paid Meta
+ * persisted as a local `creds.json` session — NOT the paid Meta
  * Business API (that is the separate, opt-in `whatsapp_cloud` platform).
  *
  * agent-nuvira is Node, so it embeds the Baileys bridge natively (no

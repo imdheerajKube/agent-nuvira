@@ -226,7 +226,7 @@ export interface DispatchAssessmentOptions {
  *
  * The legacy `promptDeveloperMode` menu ("1. Chat mode / 2. Developer mode")
  * is DELETED (Session 7c re-scope, landed in E3a). E3c demotes the rules
- * further (model-decides, Freebuff/Hermes parity): EVERY request runs as a
+ * further (model-decides): EVERY request runs as a
  * tool-call turn and the MODEL decides what to do. This function computes
  * what the RULES would say, used for two things only:
  * - the rule hint injected into the model's context (buildToolSystemPrompt),
@@ -295,13 +295,13 @@ export async function runDeveloperMode(
 }
 
 /**
- * E3b — the tool-loop system prompt: base identity + the Freebuff/Hermes tool
+ * E3b — the tool-loop system prompt: base identity + the tool
  * contract (clarify via ask_user, end every response with suggest_followups).
  *
  * E3c — the rule assessment is a HINT, never a bypass: when the rules parsed
  * a confident intent, the model sees it as context ("rule assessment: … you
  * decide") so it can act faster — but the MODEL is the sole decision-maker
- * (Freebuff/Hermes parity; rules act only as the no-model fallback in the
+ * (rules act only as the no-model fallback in the
  * caller, never to skip the loop).
  */
 function buildToolSystemPrompt(parsed?: ParsedRequest): string {
@@ -568,7 +568,7 @@ export class ChatCommand extends BaseCommand {
 
       // E3c: model-decides — EVERY request runs as a TOOL-CALL TURN. The
       // rule assessment is a HINT in the model's context (buildToolSystemPrompt)
-      // — the model decides what to do (Freebuff/Hermes parity). Rules act
+      // — the model decides what to do. Rules act
       // ONLY as the no-model fallback below (generation failed entirely), never
       // as a bypass.
       const parsed = parseRequestSync(prompt);
@@ -714,7 +714,7 @@ export class ChatCommand extends BaseCommand {
       }
 
       // E3c: model-decides — EVERY message runs as a TOOL-CALL TURN; the model
-      // decides what to do (Freebuff/Hermes parity). The rule assessment is a
+      // decides what to do. The rule assessment is a
       // HINT in the model context — never a bypass. Rules act ONLY as the
       // no-model fallback below (generation failed entirely + high-confidence
       // pipeline intent), never to skip the loop. K1: the sessionId rides on
@@ -843,11 +843,11 @@ export class ChatCommand extends BaseCommand {
   }
 
   /**
-   * E3b — run one chat answer as a TOOL-CALL TURN (Freebuff/Hermes parity).
+   * E3b — run one chat answer as a TOOL-CALL TURN.
    *
    * The model may call ask_user (clarify), verify_requirement, the pipeline
    * tools (build/repair/resume), and must end with suggest_followups (3
-   * followups, Freebuff contract). Native tool-calling when the provider
+   * followups, the contract). Native tool-calling when the provider
    * supports it; JSON fallback otherwise. Carries the legacy generation
    * machinery forward: auto-mode failover + shared fallback chain inside
    * callModel, caching, memory recording, and registry telemetry.
@@ -922,7 +922,7 @@ export class ChatCommand extends BaseCommand {
 
     history.push({ role: 'user', content: message });
 
-    // System prompt: base identity + the Freebuff/Hermes tool contract — the
+    // System prompt: base identity + the tool contract — the
     // model clarifies with ask_user and ends every response with followups.
     // E3c: the rule assessment rides in as a hint when the rules parsed a
     // confident intent (model decides; hint only).
@@ -966,7 +966,7 @@ export class ChatCommand extends BaseCommand {
       { role: 'user', content: message },
     ];
 
-    // I3: one artifact session per TURN (Hermes run.py parity) — every tool
+    // I3: one artifact session per TURN — every tool
     // deliverable in this turn lands in the same store folder.
     const artifactSessionId = `chat-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
     const toolContext: ToolContext = {
@@ -1082,7 +1082,7 @@ export class ChatCommand extends BaseCommand {
   }
 
   /**
-   * E3b — the model-call step for the tool loop (Freebuff run-agent-step):
+   * E3b — the model-call step for the tool loop:
    * native generateTools when the provider supports it, JSON fallback
    * otherwise. Auto-mode failover + the shared fallback chain live here — a
    * broken provider never crashes the turn (it answers from the next working
@@ -1206,7 +1206,7 @@ export class ChatCommand extends BaseCommand {
   }
 
   /**
-   * E3b — render suggest_followups results (Freebuff parity). Interactive:
+   * E3b — render suggest_followups results. Interactive:
    * numbered options; choosing one sends its prompt as the next message.
    * Single-shot: printed after the answer.
    */

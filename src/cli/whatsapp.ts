@@ -1,5 +1,5 @@
 /**
- * WhatsAppCommand — I8 WhatsApp bridge CLI (Hermes `hermes whatsapp` parity).
+ * WhatsAppCommand — I8 WhatsApp bridge CLI.
  *
  *   buff whatsapp pair              — QR-pair a personal number (Baileys bridge, no paid API)
  *   buff whatsapp pair --phone 91…  — pair by entering an 8-char code on the phone instead
@@ -7,7 +7,7 @@
  *
  * The default `whatsapp` platform is the personal Baileys bridge; the paid
  * Meta Business API stays available as the separate `whatsapp_cloud` platform
- * (`buff gateway send whatsapp_cloud:+1555… …`), exactly like Hermes keeps
+ * (`buff gateway send whatsapp_cloud:+1555… …`), exactly as
  * `whatsapp` and `whatsapp_cloud` as distinct platform entries.
  */
 

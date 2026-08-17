@@ -132,7 +132,7 @@ Configured via JSON files in: ~/${MCP_CONFIG_DIR}/
         // ── serve (F2 follow-up: expose agent tools as an MCP server) ─────────
         command
             .command('serve')
-            .description('Expose the agent\'s H1 tools as an MCP server over stdio (Claude Desktop / IDEs / other agents can connect)')
+            .description('Expose the agent\'s H1 tools as an MCP server over stdio (MCP clients / IDEs / other agents can connect)')
             .option('--with <tools>', 'Comma-separated extra tools to expose beyond the safe surface (e.g. publish)', '')
             .action(async (options) => {
             await this.serveTools(options || {});
@@ -355,7 +355,7 @@ Configured via JSON files in: ~/${MCP_CONFIG_DIR}/
             const { serveStdio, AGENT_MCP_TOOL_NAMES } = await import('../mcp/server.js');
             const extraTools = (options.with || '').split(',').map((t) => t.trim()).filter(Boolean);
             // CRITICAL: the MCP stdio protocol owns stdout — every byte written
-            // there must be a protocol frame, or clients (Claude Desktop, IDEs)
+            // there must be a protocol frame, or clients (MCP hosts, IDEs)
             // fail their initialize handshake. Route ALL human output to stderr.
             const banner = (s) => { process.stderr.write(s + '\n'); };
             banner('═'.repeat(60));

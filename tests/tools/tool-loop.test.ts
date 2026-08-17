@@ -1,5 +1,5 @@
 /**
- * E3b — Tool loop tests (Freebuff run-agent-step parity, verified against the
+ * E3b — Tool loop tests (verified against the
  * clone): continues while the model emits tool calls, ends on a no-tools
  * response; think-only responses continue; tool errors force a retry step;
  * the step bound is never infinite. All driven with injected mocks — no
@@ -103,7 +103,7 @@ describe('tool loop — end-turn semantics', () => {
     expect(result.content).toBe('Fixing it now.');
   });
 
-  it('continues on think-only responses (Freebuff isThinkOnlyResponse parity)', async () => {
+  it('continues on think-only responses', async () => {
     const deps = mockDeps([
       { content: '<think>Let me consider the options carefully</think>', toolCalls: [] },
       { content: 'The real answer.', toolCalls: [] },
@@ -165,7 +165,7 @@ describe('tool loop — end-turn semantics', () => {
   });
 
   it('ends the turn after suggest_followups when the answer is in the SAME step (deliver → suggest)', async () => {
-    // The Freebuff contract: "END EVERY RESPONSE by calling suggest_followups".
+    // The contract: "END EVERY RESPONSE by calling suggest_followups".
     // When the model delivers its answer text AND calls suggest_followups in
     // one step, the turn is complete — the loop must NOT request another step
     // (that forced models to repeat followups 4–5× and clobber the answer).
