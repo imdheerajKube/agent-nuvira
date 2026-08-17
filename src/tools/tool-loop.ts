@@ -24,6 +24,93 @@ import { logger } from '../utils/logger.js';
 
 export { type ToolMessage };
 
+// ─── P3c — tool-fallback hints (switch tools when one fails) ────────────────
+// The ask: *"if one tool fails you switch to another and explore parallel
+// ways"* (round-2 row 25). Today the raw `Error: …` text is fed back and a
+// STRONG model retries with another tool — a weak model repeats the same
+// failing call. These deterministic per-tool alternatives (no LLM call) make
+// the fallback model-independent: on error/denial the hint is appended, on
+// success it never fires.
+
+/**
+ * Concrete alternative-tool hints per tool. Each names the exact delegate
+ * agent_type / syntax so a weak model can act without inventing one.
+ */
+const TOOL_FALLBACK_HINTS: Record<string, string> = {
+  run_terminal:
+    'Try delegate with agent_type "tester" for an isolated test/verify run, or retry run_terminal with a longer timeout_ms.',
+  read_file:
+    'Try code_search (pattern, cwd) to locate the relevant lines, or delegate to agent_type "context-gatherer" to map the file.',
+  glob: 'Try list_dir or code_search to explore the workspace instead.',
+  list_dir: 'Try glob (pattern) or code_search to find files by content/shape instead.',
+  code_search: 'Try glob or read_file — or delegate to agent_type "context-gatherer" for a broader scan.',
+  edit_file:
+    'Re-read the target with read_file first (the match must be exact), then retry edit_file.',
+  write_file: 'Check the parent directory with list_dir, then retry write_file.',
+  web_search: 'Try read_page directly on the likely URL, or delegate to agent_type "researcher" for a broader web pass.',
+  read_page: 'Try web_search to find the URL, or delegate to agent_type "researcher".',
+  plan_todo: 'The plan is best-effort — mark the step blocked and continue with the remaining steps.',
+  skill: 'Try listing available skills (skill tool with no name) — or delegate to the sub-agent that owns the capability.',
+  clone_repo: 'Verify the URL with web_search, then retry clone_repo — or delegate to agent_type "context-gatherer" to assess the repo.',
+  git: 'Try run_terminal with the read-only git command (git status / git diff), or delegate to agent_type "tester" to verify the change.',
+  delegate: 'A sub-agent failed — retry with a narrower prompt, or run the subtask yourself with the direct tools.',
+  gateway_send: 'Verify the target alias with the gateway directory, then retry gateway_send.',
+};
+
+/**
+ * The P3c fallback hint for a failed tool call — appended to the error text
+ * the model sees. Returns null when the tool has no hint (advisory only; the
+ * model still decides). Falls back ONLY on error/denial, never on success.
+ */
+export function fallbackHintForTool(tool: string, resultText: string): string | null {
+  if (!resultText || resultText.startsWith('Error:')) {
+    return TOOL_FALLBACK_HINTS[tool] ?? null;
+  }
+  return null;
+}
+
+// ─── P3d — parallel suggestion (explore parallel ways) ─────────────────────
+// The ask: *"explore parallel ways"* — independent subtasks should fan out,
+// not serialize. The loop is strictly sequential (one tool call per step),
+// but `delegate` → `spawnSubagents` (Promise.all, max 4) exists — the model
+// just never hears about it. After 2+ SUCCESSFUL independent gather steps in
+// a turn, inject an advisory delegate suggestion (exact syntax, bounded to
+// delegate's max 4, never on dependent/sequential steps).
+
+/** The gather-type tools whose calls are "independent" (fan-out candidates). */
+const INDEPENDENT_TOOLS = new Set(['read_file', 'list_dir', 'glob', 'code_search', 'web_search', 'read_page']);
+
+/**
+ * Should a parallel-delegate suggestion fire now? Tracks per-turn successful
+ * independent calls; fires once after the 2nd independent success (then stays
+ * quiet — one suggestion per turn is enough, the model decides whether to use
+ * it). Pure + deterministic (no LLM).
+ */
+export function makeParallelSuggester(initialCounts: Record<string, number> = {}) {
+  const counts: Record<string, number> = { ...initialCounts };
+  let fired = false;
+  return {
+    /** Record a successful independent tool call. Returns the suggestion or null. */
+    note(tool: string, ok: boolean): string | null {
+      if (!INDEPENDENT_TOOLS.has(tool) || !ok || fired) return null;
+      counts[tool] = (counts[tool] ?? 0) + 1;
+      if (counts[tool] >= 2) {
+        fired = true;
+        return (
+          `💡 Tip: you have gathered ${counts[tool]} independent items with ${tool} — if these are separate subtasks, ` +
+          `consider delegate (agent_type "context-gatherer" or "tester") to run up to 4 of them IN PARALLEL ` +
+          `instead of one at a time.`
+        );
+      }
+      return null;
+    },
+    /** Whether the suggestion already fired this turn. */
+    get hasFired(): boolean {
+      return fired;
+    },
+  };
+}
+
 /** A step response — either a native tool-call response or parsed fallback. */
 export interface StepResponse {
   content: string;
@@ -199,6 +286,9 @@ export async function runToolLoop(opts: ToolLoopOptions): Promise<ToolLoopResult
   const schemas: ToolJsonSchema[] = toolNames ? toolJsonSchemas(toolNames) : effectiveToolJsonSchemas(context.configManager);
 
   const thread: ToolMessage[] = [...messages];
+  // P3d — per-turn parallel suggester: after 2+ successful independent gather
+  // steps, one advisory delegate suggestion fires (bounded, deterministic).
+  const parallel = makeParallelSuggester();
   let steps = 0;
   // The last SUBSTANTIVE answer text. JSON-only steps (a `{"tool":...}` block
   // with no visible text, common after the model already answered) must NOT
@@ -326,6 +416,14 @@ export async function runToolLoop(opts: ToolLoopOptions): Promise<ToolLoopResult
           });
         }
       }
+      // P3c — on error/denial, append the deterministic fallback hint for
+      // this tool (advisory — the model still decides; never on success).
+      const hint = fallbackHintForTool(call.name, resultText);
+      if (hint) resultText = `${resultText}\n\n💡 ${hint}`;
+      // P3d — record successful independent gather steps; the suggestion
+      // fires once after the 2nd (bounded, deterministic, advisory).
+      const parallelTip = parallel.note(call.name, !resultText.startsWith('Error:'));
+      if (parallelTip) resultText = `${resultText}\n\n${parallelTip}`;
       thread.push({ role: 'tool', toolCallId: call.id, content: resultText });
     }
 
