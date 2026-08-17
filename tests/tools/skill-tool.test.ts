@@ -110,31 +110,32 @@ describe('skill tool', () => {
   });
 
   it('loads a hub SKILL.md skill (name + description + body)', async () => {
-    // Write a hub skill into the temp project's .agents/skills/.
-    const dir = join(testProject, '.agents', 'skills', 'test-strategy');
+    // Write a hub skill into the temp project's .agents/skills/. NOTE: the
+    // name must NOT collide with a bundled skill (compiled wins the lookup).
+    const dir = join(testProject, '.agents', 'skills', 'custom-analyzer');
     mkdirSync(dir, { recursive: true });
     writeFileSync(
       join(dir, 'SKILL.md'),
-      '---\nname: Test Strategy\n description: Plan and run a deep test strategy.\n---\n# Test Strategy\nBuild a matrix of unit/integration/e2e coverage first.\n',
+      '---\nname: Custom Analyzer\n description: Analyze custom metrics dashboards.\n---\n# Custom Analyzer\nBuild a matrix of metric queries first.\n',
       'utf-8',
     );
-    const out = await runSkillTool({ skill: 'test-strategy' }, { configManager: {} });
-    expect(out).toContain('Test Strategy');
-    expect(out).toContain('Build a matrix of unit/integration/e2e coverage first.');
+    const out = await runSkillTool({ skill: 'custom-analyzer' }, { configManager: {} });
+    expect(out).toContain('Custom Analyzer');
+    expect(out).toContain('Build a matrix of metric queries first.');
     expect(out).toContain('hub skill');
   });
 
   it('unknown skill lists every available skill (both sources)', async () => {
     const store = getSkillStore();
     store.save(makeSkill());
-    const dir = join(testProject, '.agents', 'skills', 'test-strategy');
+    const dir = join(testProject, '.agents', 'skills', 'custom-analyzer');
     mkdirSync(dir, { recursive: true });
-    writeFileSync(join(dir, 'SKILL.md'), '---\nname: Test Strategy\ndescription: Plan deep tests.\n---\n# Body\n', 'utf-8');
+    writeFileSync(join(dir, 'SKILL.md'), '---\nname: Custom Analyzer\ndescription: Analyze dashboards.\n---\n# Body\n', 'utf-8');
 
     const out = await runSkillTool({ skill: 'does-not-exist' }, { configManager: {} });
     expect(out).toContain("Skill not found: 'does-not-exist'");
     expect(out).toContain('Code Assessment');
-    expect(out).toContain('Test Strategy');
+    expect(out).toContain('Custom Analyzer');
   });
 
   it('refuses a disabled skill (skills.disabled match-gate parity)', async () => {
@@ -155,16 +156,23 @@ describe('skill tool', () => {
     expect(out).toContain('Code Assessment');
   });
 
-  it('bundled skills are loadable (the store seeds them on construction)', async () => {
+  it('P5 — every bundled skill is loadable and marked used (the batch at the depth bar)', async () => {
     // A fresh store seeds BUNDLED_SKILLS into the temp home.
     const store = getSkillStore();
-    if (BUNDLED_SKILLS.length > 0) {
-      const bundled = BUNDLED_SKILLS[0];
+    expect(BUNDLED_SKILLS.length).toBeGreaterThanOrEqual(5);
+    for (const bundled of BUNDLED_SKILLS) {
       const out = await runSkillTool({ skill: bundled.name }, { configManager: {} });
       expect(out).toContain(bundled.name);
+      expect(out).toContain('Steps'); // full methodology, not a stub
       expect(store.get(bundled.id)?.usageCount).toBe(1);
-    } else {
-      expect(BUNDLED_SKILLS.length).toBe(0); // keep the test honest
+    }
+  });
+
+  it('P5 — the capability skills match from chat goals (name resolution)', async () => {
+    for (const name of ['code-assessment', 'technical-roadmap', 'plan-create-track', 'test-strategy']) {
+      const out = await runSkillTool({ skill: name }, { configManager: {} });
+      expect(out).toContain(name);
+      expect(out).toContain('Steps');
     }
   });
 
