@@ -2,6 +2,19 @@
 
 All notable changes to **Agent-Nuvira** are documented in this file.
 
+## v1.74.1 — chat agentic core: dashboard chat = full agent loop
+
+- **Interactive chat loop (P0.1–P0.8)** — the dashboard chat is now the full agent loop: `ask_user` question cards, read/list/glob/code_search tools, confirmation-gated edit/write, gated `run_terminal` (deny-first, masked), a live plan checklist (`plan_todo`), step cards for tool calls, and a `skill` tool that loads reusable capability packs mid-conversation
+- **Assess any project (P3a)** — `clone_repo` clones into an ephemeral cache and scopes the whole turn to the clone (your workspace is deny-gated)
+- **Gated git (P3b)** — `git` tool with a per-file diff card (accept/reject), gated commit of only the accepted subset; push/reset/clean are structurally unexpressible + deny-guarded
+- **Tool-fallback chain + parallel suggestion (P3c/P3d)** — when a tool errors, the model sees a concrete alternative hint; after 2+ independent gathers, a delegate tip offers parallel subagents
+- **First-party skill batch (P5b)** — five bundled skills (website-deploy, code-assessment, technical-roadmap, plan-create-track, test-strategy), each at the website-deploy depth bar; row-per-skill comparison table in ASSESSMENT_CAPABILITY_GAPS.md
+- **Release-sync (P5a)** — after every successful publish, website/docs release markers are diffed against the new version and gaps surfaced (offer-to-fix, never a silent drift)
+- **Default skill registry resolves (P5c)** — the repo ships `.agents/skills/` (index.json + SKILL.md per bundled skill, sync-drift guard tested); a status-aware probe makes `buff skills search`/`install` surface an unreachable registry with status + fix hint instead of silently 404ing
+- **4,774 root + 208 dashboard tests passing**
+
+
+
 ## v1.74.0 — Verified-contacts manager + hardened verified-list rule (gateway + dashboard)
 
 - **Verified-list rule enforced exactly as specified** — per platform, the **Allowed users** list now has three states: entries = **only those senders** may trigger (in DMs **and** groups); **blank** = **no one** may trigger; the token **`Allow-All`** (case-insensitive, `*` works too) = **skip the verifier**, anyone may trigger. A list that was never configured keeps the legacy open default
@@ -80,8 +93,6 @@ All notable changes to **Agent-Nuvira** are documented in this file.
 - **Structured logging (K1) + runtime metrics (K2)** — JSON logs with correlation IDs; `buff doctor --enterprise` runtime metrics
 - **Session recall** — chat auto-recalls per-project sessions and facts
 - **4,031 tests passing across 167 files**
-
-
 
 ## v1.68.0 — WhatsApp bridge auto-reconnect (whatsmeow parity)
 
