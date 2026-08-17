@@ -1,0 +1,91 @@
+{
+  "version": 1,
+  "updatedAt": "2026-08-17T09:43:39.273Z",
+  "skills": [
+    {
+      "name": "website-deploy",
+      "description": "Deploy a static site or built web app to a hosting provider (Cloudflare Pages, Netlify, Vercel, GitHub Pages, AWS S3+CloudFront, Azure Static Web Apps, Firebase Hosting) and verify the live URL. Use when the goal asks to deploy, publish, host, or ship a website or web app to a hosting provider.",
+      "version": "1.0.0",
+      "author": "agent-nuvira",
+      "tags": [
+        "deploy",
+        "website",
+        "hosting",
+        "cloudflare",
+        "netlify",
+        "vercel",
+        "github-pages",
+        "aws",
+        "azure",
+        "firebase",
+        "publish"
+      ],
+      "source": "agent-nuvira/bundled",
+      "updatedAt": "2026-08-17T09:43:39.273Z"
+    },
+    {
+      "name": "code-assessment",
+      "description": "Perform a structured codebase assessment: read the project, evaluate it across correctness/security/performance/architecture/testability dimensions, produce a gap-findings list, and deliver prioritized recommendations with effort estimates. Use when the goal asks to assess, evaluate, review, audit, or analyze code quality.",
+      "version": "1.0.0",
+      "author": "agent-nuvira",
+      "tags": [
+        "assessment",
+        "code-review",
+        "audit",
+        "quality",
+        "gaps",
+        "recommendations"
+      ],
+      "source": "agent-nuvira/bundled",
+      "updatedAt": "2026-08-17T09:43:39.273Z"
+    },
+    {
+      "name": "technical-roadmap",
+      "description": "Build a phased technical roadmap from the current state to a target state: capture the current architecture, define the target, then produce ordered phases with dependencies, effort, risk, and success criteria. Use when the goal asks for a roadmap, migration plan, technical plan, or phased upgrade path.",
+      "version": "1.0.0",
+      "author": "agent-nuvira",
+      "tags": [
+        "roadmap",
+        "planning",
+        "migration",
+        "architecture",
+        "phases",
+        "strategy"
+      ],
+      "source": "agent-nuvira/bundled",
+      "updatedAt": "2026-08-17T09:43:39.273Z"
+    },
+    {
+      "name": "plan-create-track",
+      "description": "Plan and track a multi-step job: break the goal into ordered, verifiable steps, declare them with plan_todo, work through them updating status (running → done, or blocked with a note), and finish with a summary. Use for any job with 2+ steps where progress visibility matters.",
+      "version": "1.0.0",
+      "author": "agent-nuvira",
+      "tags": [
+        "plan",
+        "todo",
+        "tracking",
+        "checklist",
+        "progress",
+        "execution"
+      ],
+      "source": "agent-nuvira/bundled",
+      "updatedAt": "2026-08-17T09:43:39.273Z"
+    },
+    {
+      "name": "test-strategy",
+      "description": "Plan and run a deep test pass: map the test surface, choose the right matrix (unit / integration / e2e, focused runs for changed code), execute the real commands (npm test, vitest, pytest, etc.), and deliver a verdict with evidence. Use when the goal asks to test, verify, check for regressions, or prove a change is safe.",
+      "version": "1.0.0",
+      "author": "agent-nuvira",
+      "tags": [
+        "test",
+        "testing",
+        "verification",
+        "regression",
+        "coverage",
+        "quality"
+      ],
+      "source": "agent-nuvira/bundled",
+      "updatedAt": "2026-08-17T09:43:39.273Z"
+    }
+  ]
+}

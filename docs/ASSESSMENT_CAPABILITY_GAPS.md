@@ -186,9 +186,9 @@ is real (shape, store, seeding, runner, compiler, catalog — all tested), and
 agent-nuvira now ships **five first-party skills** (website-deploy +
 code-assessment + technical-roadmap + plan-create-track + test-strategy),
 each at the website-deploy depth bar (ordered dependsOn steps, parameters,
-verification). The comparison table below is the row-per-skill audit; the
-remaining P5c items are #3 (registry 404) and #4 (acceptance proof), tracked
-below.
+verification). The comparison table below is the row-per-skill audit; P5c #3
+(registry 404) is FIXED below (the repo now ships `.agents/skills/` + a
+status-aware probe — never a silent 404); #4 acceptance proof is verified.
 
 ## P5c #1 — Row-per-skill comparison table (reference catalogs vs agent-nuvira)
 
@@ -206,8 +206,21 @@ first-party bundled skills (each verified at the depth bar).
 | Test strategy | test skill (run the real suites) | Hermes tester agent | `test-strategy` (map surface → matrix focused→unit→integration→e2e + static gate → run real commands → verdict with evidence) | ✅ at bar (P5b, feeds P3 fallback) |
 | Authoring framework | ~15+ built-ins + skill authoring docs + SKILL.md hub | skills_hub, SKILL.md catalog | SKILL.md catalog read (hub-skill-catalog) + trajectory→skill compiler + skill store — the AUTHORING path exists, only 5 first-party skills ship | ⚠️ system present; catalog depth is 5 vs ~15+ |
 
-**P5c remaining after this row:** #3 default-registry 404 fix (populate the
-repo `.agents/skills/` or repoint config — the configured default still
-404s today), #4 acceptance proof (`buff skills list` shows the batch —
-verified; matches from dashboard chat — verified via the P0.8 skill tool and
-findMatch tests).
+**P5c after this row — #3 FIXED:** the default registry (`…/agent-nuvira/main/.agents/skills`) stopped silently 404ing:
+
+1. **Registry populated** — `scripts/sync-hub-skills.mjs` renders the five
+   bundled skills into the committed `.agents/skills/` (index.json + real
+   SKILL.md per skill with full methodology); a sync-drift guard test fails
+   if `bundled-skills.ts` changes without re-running the script. Once
+   pushed, `raw.githubusercontent.com/…/main/.agents/skills` RESOLVES.
+2. **Never silently 404** — `probeRegistries()` is status-aware (local-dir
+   index read, HTTP status for github-raw/browse-sh, clone result for
+   git-repo); `buff skills search`/`install` empty-result paths now surface
+   WHICH source failed and with what status + a fix hint
+   (`skills.registries[]` / `BUFF_SKILLS_REGISTRY`) instead of a bare
+   "no skills found". Verified live: the real default probes `HTTP 404`;
+   pointing the registry at `.agents/skills/` searches + installs the batch.
+
+**P5c #4 (acceptance proof):** `buff skills list` shows the five-skill batch
+(verified via `buff skill list` + `buff skills search`); each matches from
+dashboard chat (verified via the P0.8 skill tool and findMatch tests).

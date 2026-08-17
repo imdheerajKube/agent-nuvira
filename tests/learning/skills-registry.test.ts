@@ -33,6 +33,10 @@ vi.mock('node:child_process', async () => {
     execFileSync: (cmd: string, args: string[], _opts?: unknown): Buffer => {
       if (cmd === 'git') {
         const target = String((args as string[]).at(-1));
+        // Repos whose URL contains `missing-repo` fail to clone (clone-failed probe path).
+        if (String(args).includes('missing-repo')) {
+          throw new Error('fatal: repository not found');
+        }
         const { mkdirSync, writeFileSync } = require('node:fs') as typeof import('node:fs');
         const { join } = require('node:path') as typeof import('node:path');
         mkdirSync(target, { recursive: true });
@@ -57,6 +61,8 @@ import {
   searchAllRegistries,
   findEntryAcrossRegistries,
   installFromSource,
+  probeRegistries,
+  unreachableRegistryHint,
 } from '../../src/learning/skills-registry.js';
 import { ConfigManager } from '../../src/config/manager.js';
 import { readFileSync, existsSync } from 'node:fs';
@@ -150,6 +156,109 @@ describe('git-repo adapter (stubbed clone)', () => {
     const installed = join(projectDir, '.agents', 'skills', 'repo-skill', 'SKILL.md');
     expect(existsSync(installed)).toBe(true);
     expect(readFileSync(installed, 'utf-8')).toContain('# repo-skill');
+  });
+});
+
+describe('P5c #3 — registry health probe (never silently 404)', () => {
+  it('local-dir: reachable with entry count when index.json parses', async () => {
+    const probes = await probeRegistries();
+    expect(probes).toHaveLength(1);
+    expect(probes[0].source.kind).toBe('local-dir');
+    expect(probes[0].reachable).toBe(true);
+    expect(probes[0].entryCount).toBe(2);
+  });
+
+  it('local-dir: unreachable (missing-index) when index.json is absent', async () => {
+    const empty = mkdtempSync(join(tmpdir(), 'buff-reg-empty-'));
+    try {
+      const cm = new ConfigManager(configDir);
+      cm.save({ skills: { registries: [`file://${empty}`] } });
+      const probes = await probeRegistries(cm);
+      expect(probes).toHaveLength(1);
+      expect(probes[0].reachable).toBe(false);
+      expect(probes[0].reason).toBe('missing-index');
+    } finally {
+      rmSync(empty, { recursive: true, force: true });
+    }
+  });
+
+  it('github-raw: 404 is surfaced with its HTTP status (the default-registry case)', async () => {
+    const fetchMock = vi.fn(async () => ({ ok: false, status: 404 })) as unknown as typeof fetch;
+    vi.stubGlobal('fetch', fetchMock);
+    try {
+      const cm = new ConfigManager(configDir);
+      cm.save({ skills: { registries: ['https://raw.githubusercontent.com/acme/nope/main/.agents/skills'] } });
+      const probes = await probeRegistries(cm);
+      expect(probes).toHaveLength(1);
+      expect(probes[0].reachable).toBe(false);
+      expect(probes[0].status).toBe(404);
+      expect(probes[0].reason).toBe('http-error');
+      expect(fetchMock).toHaveBeenCalledWith(
+        'https://raw.githubusercontent.com/acme/nope/main/.agents/skills/index.json',
+        expect.objectContaining({ signal: expect.anything() }),
+      );
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+
+  it('github-raw: a 200 index reports reachable with its entry count', async () => {
+    const fetchMock = vi.fn(async () => ({
+      ok: true,
+      status: 200,
+      json: async () => ({ skills: [{ name: 'a' }, { name: 'b' }] }),
+    })) as unknown as typeof fetch;
+    vi.stubGlobal('fetch', fetchMock);
+    try {
+      const cm = new ConfigManager(configDir);
+      cm.save({ skills: { registries: ['https://raw.githubusercontent.com/acme/ok/main/.agents/skills'] } });
+      const probes = await probeRegistries(cm);
+      expect(probes[0].reachable).toBe(true);
+      expect(probes[0].status).toBe(200);
+      expect(probes[0].entryCount).toBe(2);
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+
+  it('git-repo: clone failure is surfaced as clone-failed', async () => {
+    const cm = new ConfigManager(configDir);
+    cm.save({ skills: { registries: ['git+https://github.com/acme/missing-repo'] } });
+    // The git stub throws for URLs containing `missing-repo` → clone fails.
+    const probes = await probeRegistries(cm);
+    expect(probes[0].source.kind).toBe('git-repo');
+    expect(probes[0].reachable).toBe(false);
+    expect(probes[0].reason).toBe('clone-failed');
+    expect(probes[0].entryCount).toBe(0);
+  });
+
+  it('git-repo: a clonable repo reports reachable with its entry count', async () => {
+    const cm = new ConfigManager(configDir);
+    cm.save({ skills: { registries: ['git+https://github.com/acme/ok-repo'] } });
+    const probes = await probeRegistries(cm);
+    expect(probes[0].source.kind).toBe('git-repo');
+    expect(probes[0].reachable).toBe(true);
+    expect(probes[0].entryCount).toBe(1); // the stubbed repo-skill
+  });
+
+  it('unreachableRegistryHint names each broken source with status + fix', () => {
+    const hint = unreachableRegistryHint([
+      {
+        source: { kind: 'github-raw', base: 'https://raw.githubusercontent.com/acme/nope/main/.agents/skills' },
+        reachable: false,
+        status: 404,
+        reason: 'http-error',
+        entryCount: 0,
+      },
+    ]);
+    expect(hint).toContain('HTTP 404');
+    expect(hint).toContain('https://raw.githubusercontent.com/acme/nope/main/.agents/skills');
+    expect(hint).toContain('skills.registries[]');
+    expect(hint).toContain('BUFF_SKILLS_REGISTRY');
+    // No broken sources → empty hint (callers fall back to the generic tip).
+    expect(
+      unreachableRegistryHint([{ source: { kind: 'local-dir', base: '/x' }, reachable: true, entryCount: 2 }]),
+    ).toBe('');
   });
 });
 
