@@ -234,6 +234,8 @@ export default function ChatPage() {
   const sessionIdRef = useRef<string>(newSessionId());
   // Phase 6 — the last sent message (↑ recalls it into the box).
   const lastSentRef = useRef<string>('');
+  // P4 — the session sidebar: past conversations, click to resume.
+  const [sessions, setSessions] = useState<Array<{ id: string; title: string; turnCount: number; updatedAt: number; preview: string }>>([]);
   const subRef = useRef<(() => void) | null>(null);
   const listRef = useRef<HTMLDivElement | null>(null);
   // P0.1 — a pending ask_user question from the agent (choice card).
@@ -272,7 +274,43 @@ export default function ChatPage() {
     };
   }, []);
 
+  /** P4 — resume a past session: load its transcript into the thread. */
+  const resumeSession = useCallback(async (id: string) => {
+    subRef.current?.();
+    subRef.current = null;
+    const rec = await dashboardAPI.getChatSession(id);
+    if (!rec) return;
+    sessionIdRef.current = id;
+    setMessages(
+      rec.turns.map((t) => ({
+        role: t.role,
+        content: t.content,
+        ...(t.role === 'assistant' ? { followups: [] } : {}),
+      })),
+    );
+    setLiveSteps([]);
+    liveStepsRef.current = [];
+    setLiveTools([]);
+    liveToolsRef.current = [];
+    setLivePlan(null);
+    livePlanRef.current = null;
+    setLiveDiff(null);
+    liveDiffRef.current = null;
+    setError('');
+    setMeta(null);
+    setPendingResolve(null);
+    setPendingQuestion(null);
+  }, []);
+
   const canChat = auth?.authenticated === true && (auth.role === 'admin' || auth.role === 'operator');
+
+  // P4 — load the session sidebar once authenticated (admin/operator only).
+  useEffect(() => {
+    if (!canChat) return;
+    void dashboardAPI.listChatSessions().then((s) => {
+      if (Array.isArray(s)) setSessions(s);
+    });
+  }, [canChat]);
 
   const send = useCallback(
     async (text: string) => {
@@ -475,9 +513,10 @@ export default function ChatPage() {
   }, [pendingQuestion]);
 
   const resetConversation = useCallback(async () => {
+    // P4 — "New conversation" starts a fresh id; the CURRENT thread stays
+    // persisted server-side and appears in the sidebar (resumable).
     subRef.current?.();
     subRef.current = null;
-    await dashboardAPI.chatReset(sessionIdRef.current).catch(() => {});
     sessionIdRef.current = newSessionId();
     setMessages([]);
     setLiveSteps([]);
@@ -490,6 +529,11 @@ export default function ChatPage() {
     liveDiffRef.current = null;
     setError('');
     setMeta(null);
+    setPendingResolve(null);
+    setPendingQuestion(null);
+    // Refresh the sidebar (the just-abandoned session is now in it).
+    const s = await dashboardAPI.listChatSessions();
+    if (Array.isArray(s)) setSessions(s);
   }, []);
 
   const latestFollowups = [...messages].reverse().find((m) => m.role === 'assistant' && !m.error && (m.followups?.length ?? 0) > 0)?.followups ?? [];
@@ -521,6 +565,34 @@ export default function ChatPage() {
         </div>
       ) : (
         <>
+          <div className="chat-layout">
+          <div className="chat-sidebar">
+            <div className="chat-sidebar-head">
+              <span>📁 Sessions</span>
+              <span className="admin-hint">{sessions.length}</span>
+            </div>
+            {sessions.length === 0 ? (
+              <div className="chat-sidebar-empty">No past conversations yet.</div>
+            ) : (
+              <div className="chat-sidebar-list">
+                {sessions.map((s) => (
+                  <button
+                    key={s.id}
+                    type="button"
+                    className={`chat-session-item${s.id === sessionIdRef.current ? ' chat-session-active' : ''}`}
+                    onClick={() => void resumeSession(s.id)}
+                    title={s.preview || s.title}
+                  >
+                    <span className="chat-session-title">{s.title}</span>
+                    <span className="chat-session-meta">
+                      {s.turnCount} msg{s.turnCount === 1 ? '' : 's'} · {new Date(s.updatedAt).toLocaleString()}
+                    </span>
+                  </button>
+                ))}
+              </div>
+            )}
+          </div>
+          <div className="chat-main">
           <div className="chat-thread" ref={listRef} role="log" aria-live="polite">
             {messages.length === 0 ? (
               <div className="empty-state">
@@ -712,6 +784,8 @@ export default function ChatPage() {
             process. Clarifications (<code>ask_user</code>) appear as a question card here — choose an answer or
             skip (best judgment).
           </p>
+          </div>
+          </div>
         </>
       )}
     </div>

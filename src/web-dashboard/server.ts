@@ -2227,7 +2227,9 @@ let whatsappPairing = new WhatsAppPairingManager();
  * `buff chat "<prompt>"`). The engine (ChatCommand) is loaded lazily on the
  * first message, so server import stays light. One console per process.
  */
-let chatConsole = new ChatConsole();
+// P4 — chat sessions persist through ~/.buff/memory/chat-sessions.json so the
+// sidebar can resume any past conversation after a dashboard restart.
+let chatConsole = new ChatConsole({ persistPath: join(MEMORY_DIR, 'chat-sessions.json') });
 
 /** Test hook: swap the chat console (e.g. a fake engine) — routes read the
  * module variable at request time, so this works anytime. */
@@ -3597,6 +3599,45 @@ function handleRequest(req: IncomingMessage, res: ServerResponse): void {
   // as the task runner. The engine runs in-process (ChatCommand), so provider
   // API keys must be configured in the dashboard process — the 400 tells the
   // user exactly that when the turn fails.
+
+  // GET /api/sessions — P4 session sidebar: past conversations (most recent
+  // first) with title/preview/turnCount. Same auth as /api/chat (the sidebar
+  // is part of the chat surface).
+  if (pathname === '/api/sessions' && req.method === 'GET') {
+    const session = adminSessions.validate(bearerToken(req));
+    if (!session) {
+      writeJson(res, 401, { ok: false, error: 'Not authenticated — log in first.' });
+      return;
+    }
+    if (!roleCan(session.role, 'routing.operate')) {
+      writeJson(res, 403, { ok: false, error: `Access denied — role '${session.role}' cannot view chat sessions.` });
+      return;
+    }
+    writeJson(res, 200, { ok: true, sessions: chatConsole.list() });
+    return;
+  }
+
+  // GET /api/sessions/:id — P4 full transcript for resume (loads the thread).
+  const sessionDetailMatch = /^\/api\/sessions\/([^/]+)$/.exec(pathname);
+  if (sessionDetailMatch && req.method === 'GET') {
+    const session = adminSessions.validate(bearerToken(req));
+    if (!session) {
+      writeJson(res, 401, { ok: false, error: 'Not authenticated — log in first.' });
+      return;
+    }
+    if (!roleCan(session.role, 'routing.operate')) {
+      writeJson(res, 403, { ok: false, error: `Access denied — role '${session.role}' cannot view chat sessions.` });
+      return;
+    }
+    const id = decodeURIComponent(sessionDetailMatch[1]);
+    const rec = chatConsole.get(id);
+    if (!rec) {
+      writeJson(res, 404, { ok: false, error: 'No such session.' });
+      return;
+    }
+    writeJson(res, 200, { ok: true, session: { id, ...rec } });
+    return;
+  }
 
   // POST /api/chat/resolve — resolve a plain-English ask into the CLI
   // command(s) the intent router would run (the dashboard twin of

@@ -391,3 +391,45 @@ describe('/api/chat/resolve — plain-English → CLI short-circuit', () => {
     expect(body.matches.length).toBe(0);
   });
 });
+
+describe('/api/sessions — P4 session sidebar', () => {
+  it('rejects unauthenticated and viewer requests', async () => {
+    expect((await fetch(`${baseUrl}/api/sessions`)).status).toBe(401);
+    expect((await authedFetch('/api/sessions', 'GET', undefined, viewerToken)).status).toBe(403);
+    expect((await authedFetch('/api/sessions/no-such-id', 'GET', undefined, viewerToken)).status).toBe(403);
+  });
+
+  it('lists sessions after turns and returns the full transcript', async () => {
+    // One turn in a fresh session → it appears in the sidebar.
+    const post = await authedFetch('/api/chat', 'POST', { sessionId: 'sidebar-sess-1', message: 'assess the repo' });
+    expect(post.status).toBe(200);
+
+    const listRes = await authedFetch('/api/sessions');
+    expect(listRes.status).toBe(200);
+    const list = (await listRes.json()) as {
+      ok: boolean;
+      sessions: Array<{ id: string; title: string; turnCount: number; preview: string }>;
+    };
+    expect(list.ok).toBe(true);
+    const found = list.sessions.find((s) => s.id === 'sidebar-sess-1');
+    expect(found).toBeTruthy();
+    expect(found?.title).toBe('assess the repo');
+    expect(found?.turnCount).toBe(2);
+    expect(found?.preview).toContain('echo: assess the repo');
+
+    // Full transcript for resume.
+    const detail = await authedFetch('/api/sessions/sidebar-sess-1');
+    expect(detail.status).toBe(200);
+    const d = (await detail.json()) as {
+      ok: boolean;
+      session: { id: string; turns: Array<{ role: string; content: string }>; title: string };
+    };
+    expect(d.session.id).toBe('sidebar-sess-1');
+    expect(d.session.turns.map((t) => t.role)).toEqual(['user', 'assistant']);
+    expect(d.session.turns[1].content).toBe('echo: assess the repo');
+    expect(d.session.title).toBe('assess the repo');
+
+    // Unknown session → 404.
+    expect((await authedFetch('/api/sessions/never-existed')).status).toBe(404);
+  });
+});

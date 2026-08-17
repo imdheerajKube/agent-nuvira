@@ -750,6 +750,42 @@ export class DashboardAPI {
   }
 
   /**
+   * P4 — session sidebar: list past conversations (title, preview, counts).
+   */
+  async listChatSessions(): Promise<Array<{ id: string; title: string; turnCount: number; createdAt: number; updatedAt: number; preview: string }>> {
+    const token = getAdminToken();
+    try {
+      const res = await fetch(`${this.baseUrl}/api/sessions`, {
+        headers: token ? { Authorization: `Bearer ${token}` } : {},
+        signal: AbortSignal.timeout(10_000),
+      });
+      const d = (await res.json()) as { ok?: boolean; sessions?: Array<{ id: string; title: string; turnCount: number; createdAt: number; updatedAt: number; preview: string }> };
+      if (res.status === 200 && d.ok && Array.isArray(d.sessions)) return d.sessions;
+      return [];
+    } catch {
+      return [];
+    }
+  }
+
+  /**
+   * P4 — load one past session's full transcript (resume in the thread).
+   */
+  async getChatSession(id: string): Promise<{ turns: Array<{ role: 'user' | 'assistant'; content: string }>; title: string; updatedAt: number } | null> {
+    const token = getAdminToken();
+    try {
+      const res = await fetch(`${this.baseUrl}/api/sessions/${encodeURIComponent(id)}`, {
+        headers: token ? { Authorization: `Bearer ${token}` } : {},
+        signal: AbortSignal.timeout(10_000),
+      });
+      const d = (await res.json()) as { ok?: boolean; session?: { turns: Array<{ role: 'user' | 'assistant'; content: string }>; title: string; updatedAt: number } };
+      if (res.status === 200 && d.ok && d.session) return d.session;
+      return null;
+    } catch {
+      return null;
+    }
+  }
+
+  /**
    * Send one chat message. A turn runs the whole agent tool loop and can take
    * minutes — the 15s admin-request budget would kill it, so this uses its
    * own fetch with a 5-minute cap.
