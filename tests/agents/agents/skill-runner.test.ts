@@ -365,4 +365,50 @@ describe('SkillRunnerAgent', () => {
       expect(result.error).toBeTruthy();
     });
   });
+
+  describe('P5 — the bundled capability skills run through the runner', () => {
+    const mockLLM: LLMCallFn = async () => {
+      throw new Error('Unexpected LLM call');
+    };
+
+    it('executes each P5 skill: steps injected into the task plan with correct agent types', async () => {
+      const store = getSkillStore();
+      store.clear();
+      store.seedBundledSkills();
+
+      const cases = [
+        { name: 'code-assessment', params: '--target=src', first: 'context-gatherer' },
+        { name: 'technical-roadmap', params: '--target=src', first: 'context-gatherer' },
+        { name: 'plan-create-track', params: '--goal="Fix the login bug"', first: 'planner' },
+        { name: 'test-strategy', params: '--scope=full', first: 'context-gatherer' },
+      ];
+
+      for (const c of cases) {
+        const context = makeContext({ goal: `Run skill: ${c.name} ${c.params}` });
+        const result = await runner.execute(context, mockLLM);
+        expect(result.success).toBe(true);
+        expect(result.summary).toContain(`'${c.name}'`);
+        // Every step injected, first step has the skill's starting agent type.
+        expect(context.taskPlan.length).toBeGreaterThanOrEqual(3);
+        expect(context.taskPlan[0].agentType).toBe(c.first);
+        expect(context.taskPlan[0].id).toBe('skill-step-0');
+        // Ordered dependencies preserved (step-1 depends on step-0).
+        expect(context.taskPlan[1].dependsOn).toEqual(['skill-step-0']);
+      }
+    });
+
+    it('requires the plan-create-track goal parameter (missing → failure, plan untouched)', async () => {
+      const store = getSkillStore();
+      store.clear();
+      store.seedBundledSkills();
+      const context = makeContext({
+        goal: 'Run skill: plan-create-track', // no --goal
+        taskPlan: [{ id: 'existing', description: 'x', agentType: 'writer', dependsOn: [], status: 'pending' }],
+      });
+      const result = await runner.execute(context, mockLLM);
+      expect(result.success).toBe(false);
+      expect(result.summary).toContain('Missing required parameters');
+      expect(context.taskPlan).toHaveLength(1); // unchanged
+    });
+  });
 });

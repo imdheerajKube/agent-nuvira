@@ -359,6 +359,51 @@ describe('SkillStore', () => {
       expect(match).not.toBeNull();
       expect(match!.name).toBe('website-deploy');
     });
+
+    it('P5 — seeds all five bundled skills (website-deploy + the four capability skills)', () => {
+      const fresh = new SkillStore();
+      const names = fresh.getAll().map((s) => s.name).sort();
+      expect(names).toEqual([
+        'code-assessment',
+        'plan-create-track',
+        'technical-roadmap',
+        'test-strategy',
+        'website-deploy',
+      ]);
+      // Each carries the depth bar: ordered steps + parameters.
+      for (const name of ['code-assessment', 'technical-roadmap', 'plan-create-track', 'test-strategy']) {
+        const skill = fresh.get(`skill-${name}`)!;
+        expect(skill.steps.length).toBeGreaterThanOrEqual(3);
+        expect(skill.parameters.length).toBeGreaterThanOrEqual(1);
+        expect(skill.steps[0].dependsOn).toEqual([]);
+      }
+    });
+
+    it('P5 — idempotent re-seed keeps all five (no duplicates, edits preserved)', () => {
+      const fresh = new SkillStore();
+      const before = fresh.getAll().length;
+      const seededCount = fresh.seedBundledSkills();
+      expect(seededCount).toBe(0); // same version → nothing re-seeded
+      expect(fresh.getAll().length).toBe(before);
+
+      // A user edit survives re-seeding for a capability skill too.
+      const assessed = fresh.get('skill-code-assessment')!;
+      fresh.save({ ...assessed, description: 'EDITED BY USER' });
+      expect(fresh.seedBundledSkills()).toBe(0);
+      expect(fresh.get('skill-code-assessment')!.description).toBe('EDITED BY USER');
+    });
+
+    it('P5 — findMatch matches representative goals to the capability skills', () => {
+      const fresh = new SkillStore();
+      const assess = fresh.findMatch('assess the code quality of this project and give recommendations');
+      expect(assess?.name).toBe('code-assessment');
+      const roadmap = fresh.findMatch('build a technical roadmap for the migration to typescript');
+      expect(roadmap?.name).toBe('technical-roadmap');
+      const plan = fresh.findMatch('create a plan and track the steps for this multi-step job');
+      expect(plan?.name).toBe('plan-create-track');
+      const test = fresh.findMatch('run a full test pass and verify no regressions');
+      expect(test?.name).toBe('test-strategy');
+    });
   });
 
   describe('clear', () => {
