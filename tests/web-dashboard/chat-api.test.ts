@@ -9,7 +9,7 @@
  */
 
 import { describe, it, expect, beforeAll, afterAll } from 'vitest';
-import { mkdtempSync, rmSync, mkdirSync } from 'node:fs';
+import { mkdtempSync, rmSync, mkdirSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 
 const TMP_BASE = process.env.TMPDIR || process.env.TMP || '/tmp';
@@ -431,5 +431,58 @@ describe('/api/sessions — P4 session sidebar', () => {
 
     // Unknown session → 404.
     expect((await authedFetch('/api/sessions/never-existed')).status).toBe(404);
+  });
+});
+
+describe('/api/projects — P3 project attach', () => {
+  it('rejects unauthenticated and viewer requests', async () => {
+    expect((await fetch(`${baseUrl}/api/projects`)).status).toBe(401);
+    expect((await authedFetch('/api/projects', 'GET', undefined, viewerToken)).status).toBe(403);
+    expect((await authedFetch('/api/projects/attach', 'POST', { path: '/tmp' }, viewerToken)).status).toBe(403);
+  });
+
+  it('lists the dashboard cwd and attaches a real project directory', async () => {
+    // The list always contains the dashboard's own cwd.
+    const list = await authedFetch('/api/projects');
+    expect(list.status).toBe(200);
+    const l = (await list.json()) as { ok: boolean; projects: Array<{ path: string; name: string; kind: string }> };
+    expect(l.ok).toBe(true);
+    expect(l.projects.some((p) => p.kind === 'cwd' && p.path === process.cwd())).toBe(true);
+
+    // Attach a real directory (the test fixture dir is a valid directory).
+    const attach = await authedFetch('/api/projects/attach', 'POST', { path: testDir });
+    expect(attach.status).toBe(200);
+    const a = (await attach.json()) as { ok: boolean; project: { path: string; name: string; fileCount: number } };
+    expect(a.ok).toBe(true);
+    expect(a.project.path).toBe(testDir);
+    expect(typeof a.project.fileCount).toBe('number');
+
+    // A bogus path is rejected with 400.
+    const bad = await authedFetch('/api/projects/attach', 'POST', { path: '/no/such/dir-xyz' });
+    expect(bad.status).toBe(400);
+  });
+
+  it('/api/chat with projectPath injects the project context into the turn', async () => {
+    // A tiny fixture project so the snapshot has content.
+    const fixture = join(testDir, 'proj');
+    mkdirSync(fixture, { recursive: true });
+    writeFileSync(join(fixture, 'lib.ts'), 'export function helper(): void {}\n');
+
+    const res = await authedFetch('/api/chat', 'POST', { sessionId: 'proj-sess', message: 'assess this project', projectPath: fixture });
+    expect(res.status).toBe(200);
+
+    const call = engine.calls.find((c) => c.message === 'assess this project');
+    expect(call).toBeTruthy();
+    const opts = call?.opts as { projectContext?: string };
+    expect(opts?.projectContext).toBeTruthy();
+    expect(opts?.projectContext).toContain('Project:');
+    expect(opts?.projectContext).toContain('lib.ts');
+    expect(opts?.projectContext).toContain('helper');
+
+    // Without projectPath, no context is injected.
+    const plain = await authedFetch('/api/chat', 'POST', { sessionId: 'proj-sess-2', message: 'hi' });
+    expect(plain.status).toBe(200);
+    const plainCall = engine.calls.find((c) => c.message === 'hi');
+    expect((plainCall?.opts as { projectContext?: string } | undefined)?.projectContext).toBeUndefined();
   });
 });

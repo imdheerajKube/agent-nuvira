@@ -389,6 +389,40 @@ describe('ChatPage', () => {
     expect(box.value).toBe('first ask');
   });
 
+  it('Phase 3 — the project bar attaches a directory and sends its path with the message', async () => {
+    mockAuthed('admin');
+    mockChatStream();
+    const send = mockChatSend(OK_RESPONSE);
+    vi.spyOn(dashboardAPI, 'listProjects').mockResolvedValue([
+      { path: '/tmp/my-app', name: 'my-app', kind: 'cwd' },
+    ]);
+    const attach = vi.spyOn(dashboardAPI, 'attachProject').mockResolvedValue({
+      ok: true,
+      project: { path: '/tmp/my-app', name: 'my-app', fileCount: 42, symbolCount: 120, truncated: false },
+    });
+    render(<ChatPage />);
+    await waitFor(() => expect(screen.getByPlaceholderText(/Message the agent/)).toBeTruthy());
+
+    // The bar offers the current dir as a one-click attach.
+    await waitFor(() => expect(screen.getByRole('button', { name: /current dir/ })).toBeTruthy());
+    fireEvent.click(screen.getByRole('button', { name: /current dir/ }));
+
+    // Attached state shows the project + its stats.
+    await waitFor(() => expect(attach).toHaveBeenCalledWith('/tmp/my-app'));
+    await waitFor(() => expect(screen.getByText('my-app')).toBeTruthy());
+    expect(screen.getByText(/42 files · 120 symbols/)).toBeTruthy();
+
+    // The message carries the attached path so the server injects context.
+    fireEvent.change(screen.getByPlaceholderText(/Message the agent/), { target: { value: 'assess this project' } });
+    fireEvent.submit(screen.getByPlaceholderText(/Message the agent/).closest('form')!);
+    await waitFor(() => expect(send).toHaveBeenCalled());
+    expect(send.mock.calls[0][2]?.projectPath).toBe('/tmp/my-app');
+
+    // Detaching clears the bar back to the picker.
+    fireEvent.click(screen.getByRole('button', { name: /detach/ }));
+    await waitFor(() => expect(screen.getByText(/Attach a project/)).toBeTruthy());
+  });
+
   it('Phase 4 — the session sidebar lists past conversations and resumes them', async () => {
     mockAuthed('admin');
     mockChatStream();

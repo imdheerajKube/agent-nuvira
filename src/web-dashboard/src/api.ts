@@ -750,6 +750,45 @@ export class DashboardAPI {
   }
 
   /**
+   * P3 — project picker: the dashboard's cwd + recently attached paths.
+   */
+  async listProjects(): Promise<Array<{ path: string; name: string; kind: 'cwd' | 'recent' }>> {
+    const token = getAdminToken();
+    try {
+      const res = await fetch(`${this.baseUrl}/api/projects`, {
+        headers: token ? { Authorization: `Bearer ${token}` } : {},
+        signal: AbortSignal.timeout(10_000),
+      });
+      const d = (await res.json()) as { ok?: boolean; projects?: Array<{ path: string; name: string; kind: 'cwd' | 'recent' }> };
+      if (res.status === 200 && d.ok && Array.isArray(d.projects)) return d.projects;
+      return [];
+    } catch {
+      return [];
+    }
+  }
+
+  /**
+   * P3 — attach a project directory (server builds the bounded context
+   * snapshot: code map + file tree, cached by path).
+   */
+  async attachProject(path: string): Promise<{ ok: boolean; project?: { path: string; name: string; fileCount: number; symbolCount: number; truncated: boolean }; error?: string }> {
+    const token = getAdminToken();
+    try {
+      const res = await fetch(`${this.baseUrl}/api/projects/attach`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', ...(token ? { Authorization: `Bearer ${token}` } : {}) },
+        body: JSON.stringify({ path }),
+        signal: AbortSignal.timeout(30_000),
+      });
+      const d = (await res.json()) as { ok?: boolean; project?: { path: string; name: string; fileCount: number; symbolCount: number; truncated: boolean }; error?: string };
+      if (res.status === 200 && d.ok && d.project) return { ok: true, project: d.project };
+      return { ok: false, error: typeof d.error === 'string' ? d.error : 'Attach failed.' };
+    } catch {
+      return { ok: false, error: 'Could not reach the dashboard server.' };
+    }
+  }
+
+  /**
    * P4 — session sidebar: list past conversations (title, preview, counts).
    */
   async listChatSessions(): Promise<Array<{ id: string; title: string; turnCount: number; createdAt: number; updatedAt: number; preview: string }>> {
@@ -793,7 +832,7 @@ export class DashboardAPI {
   async chatSend(
     sessionId: string,
     message: string,
-    opts?: { provider?: string; model?: string },
+    opts?: { provider?: string; model?: string; projectPath?: string },
   ): Promise<
     | { ok: true; content: string; followups: Array<{ prompt: string; label?: string }>; provider: string | null; model: string | null; generationFailed: boolean }
     | { ok: false; error: string; unauthorized?: boolean; forbidden?: boolean }
@@ -803,7 +842,7 @@ export class DashboardAPI {
       const res = await fetch(`${this.baseUrl}/api/chat`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json', ...(token ? { Authorization: `Bearer ${token}` } : {}) },
-        body: JSON.stringify({ sessionId, message, provider: opts?.provider, model: opts?.model }),
+        body: JSON.stringify({ sessionId, message, provider: opts?.provider, model: opts?.model, projectPath: opts?.projectPath }),
         signal: AbortSignal.timeout(300_000),
       });
       const d = (await res.json()) as Record<string, unknown>;

@@ -36,6 +36,8 @@ export interface ChatEngine {
       askUser?: (question: string, choices: unknown[], multiSelect: boolean) => Promise<{ answer: unknown; index: number | number[]; custom?: string }>;
       /** P3 — live working steps (tool calls / reasoning markers). */
       onProgress?: (line: string) => void;
+      /** P3 — bounded project snapshot injected as a `[Project context]` message. */
+      projectContext?: string;
       /** P0.6 — one tool-call lifecycle event (started → called with outcome). */
       onToolCall?: (phase: 'started' | 'called', info: { id?: string; tool: string; args?: Record<string, unknown>; ok?: boolean; result?: string; error?: string; durationMs?: number }) => void;
       /** P0.7 — a plan mutation (structured checklist for the GUI card). */
@@ -280,7 +282,7 @@ export class ChatConsole {
   async answer(
     sessionId: string,
     message: string,
-    opts: { provider?: string; model?: string } = {},
+    opts: { provider?: string; model?: string; projectContext?: string } = {},
   ): Promise<ChatAnswerResult> {
     const clean = (message || '').trim();
     if (!clean) return { ok: false, error: 'Empty message.' };
@@ -311,6 +313,9 @@ export class ChatConsole {
       const answer = await engine.answerOnce(clean, {
         ...(opts.provider ? { provider: opts.provider } : {}),
         ...(opts.model ? { model: opts.model } : {}),
+        // P3 — project context rides into the turn (the engine injects it as
+        // a `[Project context]` message in the thread).
+        ...(opts.projectContext ? { projectContext: opts.projectContext } : {}),
         history: history.map((h) => ({ role: h.role, content: h.content })),
         // P0.1 — real ask_user round-trip: emit a `question` event, wait for
         // the GUI's respond() (or a skip), then feed the selection back. The
