@@ -22,6 +22,17 @@ import { buildPublishPhases } from '../cli/publish.js';
 import { logger } from '../utils/logger.js';
 import type { ToolContext } from './registry.js';
 
+/** P5a — post-publish release-sync (website/docs kept at release level). */
+function currentPackageVersion(): string {
+  try {
+    const { readFileSync } = require('node:fs') as typeof import('node:fs');
+    const raw = readFileSync(require('node:path').join(process.cwd(), 'package.json'), 'utf-8');
+    return (JSON.parse(raw) as { version?: string }).version ?? '';
+  } catch {
+    return '';
+  }
+}
+
 /**
  * Run the publish workflow as a tool — returns model-feedable text.
  * The input schema lives in the registry (single source, never hand-kept) —
@@ -72,6 +83,9 @@ export async function runPublishTool(args: unknown, ctx: ToolContext): Promise<s
   const orchestrator = new Orchestrator(ctx.configManager);
   const lines: string[] = [];
   let hasFailure = false;
+  // P5a — capture the PRE-publish version so a post-publish sync check can
+  // diff the release markers against what was actually bumped.
+  const versionBeforePublish = currentPackageVersion();
 
   for (let i = 0; i < phases.length; i++) {
     const phase = phases[i];
@@ -97,10 +111,27 @@ export async function runPublishTool(args: unknown, ctx: ToolContext): Promise<s
 
   credStore.cleanup();
 
+  // P5a — after a SUCCESSFUL publish, run the release-sync check (best-effort:
+  // a sync failure must never mark the publish failed). The published version
+  // is the bumped package.json version (phase 2 bumped it); the pre-publish
+  // capture is kept for a future version-drift comparison.
+  let syncLine: string | null = null;
+  if (!hasFailure) {
+    try {
+      const { runReleaseSync } = await import('./release-sync.js');
+      const published = currentPackageVersion() || versionBeforePublish;
+      syncLine = runReleaseSync(published, ctx);
+      if (versionBeforePublish) lines.push(`   ℹ️ Pre-publish version: v${versionBeforePublish}`);
+    } catch {
+      syncLine = null; // best-effort — never breaks the publish result
+    }
+  }
+
   return [
     hasFailure
       ? `⚠️  Publish "${publishGoal}" completed with issues (${phases.length} phases)`
       : `🎉 Publish "${publishGoal}" complete (${phases.length} phases)`,
     ...lines,
+    ...(syncLine ? [syncLine] : []),
   ].join('\n');
 }
