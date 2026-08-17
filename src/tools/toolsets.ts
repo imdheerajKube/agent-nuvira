@@ -77,8 +77,8 @@ export const TOOLSETS: ToolsetDef[] = [
   {
     name: 'code',
     label: 'Code',
-    description: 'Project code search (ripgrep) and sub-agent delegation.',
-    tools: ['code_search', 'delegate'],
+    description: 'Project code search (ripgrep), sub-agent delegation, and assessing OTHER repositories (clone_repo — shallow clone into an ephemeral cache).',
+    tools: ['code_search', 'delegate', 'clone_repo'],
   },
   {
     name: 'coding',

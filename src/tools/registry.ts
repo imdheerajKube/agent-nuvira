@@ -194,6 +194,12 @@ export const runCliSchema = z.object({
     .describe('Set true ONLY after the user explicitly confirmed a destructive/system-level command (stop/shutdown/publish/clear/disallow). The tool refuses without it.'),
 });
 
+/** P3a — clone_repo args: a git URL to assess (depth-1 shallow only). */
+export const cloneRepoSchema = z.object({
+  url: z.string().min(1).describe('Git repository URL — http(s)://, git@host:path, or git:// only. Cloned depth-1 (shallow) into an ephemeral cache; the turn then operates on the clone.'),
+  ref: z.string().optional().describe('Optional branch/tag/commit to check out (default: the remote default branch)'),
+});
+
 /** P0.8 — skill tool args: load a reusable capability pack by name (+ params). */
 export const skillToolSchema = z.object({
   skill: z.string().optional().describe('Skill name or id to load, e.g. "website-deploy" or "code-assessment". Omit to list every available skill.'),
@@ -840,6 +846,22 @@ registerTool({
   inputSchema: skillToolSchema,
   endsAgentStep: false,
   run: (args, ctx) => import('./skill-tool.js').then((m) => m.runSkillTool(args as import('./skill-tool.js').SkillToolArgs, ctx)),
+});
+
+// ─── P3a clone_repo tool (assess other people's projects) ──────────────────
+// Copilot parity: "cloned the repo in a temp dir and did analysis". The agent
+// can now clone any git repo (depth-1, shallow) into an ephemeral hashed
+// cache and scope the WHOLE coding-tool family to it via ctx.cwd — the
+// user's own workspace is never touched. Deny-first URL validation + argv
+// exec (no shell) make injection structurally impossible.
+
+registerTool({
+  name: 'clone_repo',
+  description: 'Clone a git repository (depth-1 shallow) into an ephemeral cache and scope the conversation to it — read_file / list_dir / glob / code_search / run_terminal then operate on the CLONE, so you can assess another project without touching the user\'s workspace. Use when the ask is about a repo that is not the attached project.',
+  category: 'workflow',
+  inputSchema: cloneRepoSchema,
+  endsAgentStep: false,
+  run: (args, ctx) => import('./clone-repo.js').then((m) => m.runCloneRepo(args as import('./clone-repo.js').CloneRepoArgs, ctx)),
 });
 
 // ─── H2 delegation tool (sub-agent registry) ────────────────────────────────
