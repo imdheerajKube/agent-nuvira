@@ -26,6 +26,7 @@ import { parseRequestSync } from '../nlu/parser.js';
 import { withLogCorrelation } from '../enterprise/log.js';
 import { recordMetricTime, getMetrics } from '../enterprise/metrics.js';
 import { resolveDispatch } from '../nlu/actions.js';
+import { isConversationalQuestion, hasCodingAction } from '../nlu/conversation-gate.js';
 import { runToolLoop, extractFallbackToolCalls } from '../tools/tool-loop.js';
 import { getTool, TOOL_CONTRACT_JSON } from '../tools/registry.js';
 // S2/S3 — the shared tool-call reliability helpers (salvage failed_generation,
@@ -146,6 +147,23 @@ async function handleInferenceError(err, providerName, configManager) {
  * `dev` (the --dev flag / /dev toggle) forces the assessment to dispatch.
  */
 export function resolvePipelineDispatch(parsed, opts) {
+    // P0.5 — conversation-vs-pipeline gate (runs BEFORE the dev bypass and the
+    // action-map gate, so a question is never dispatched even with --dev, and
+    // a coding goal phrased as a question still dispatches):
+    // 1. QUESTION → never the pipeline (the observed failure: a question in
+    //    execute/dev mode spawned the pipeline and created a python program to
+    //    "answer" it).
+    // 2. CODING ACTION in command position → always the pipeline, even when the
+    //    NLU alone would misread it as chat ("how do I add JWT auth?" → explain
+    //    → chat, but the user wants the auth added).
+    if (opts?.text) {
+        if (isConversationalQuestion(opts.text)) {
+            return { dispatch: false, needConfirm: false };
+        }
+        if (hasCodingAction(opts.text)) {
+            return { dispatch: true, needConfirm: false };
+        }
+    }
     if (opts?.dev)
         return { dispatch: true, needConfirm: false };
     if (parsed.action.run !== 'pipeline')
@@ -266,7 +284,7 @@ export class ChatCommand extends BaseCommand {
         // P3 — tell the GUI where the turn is headed before the tool loop runs.
         opts.onProgress?.(`   🧠 routed to ${provider.name}${model ? ` / ${model}` : ''} — working…`);
         const parsed = parseRequestSync(message);
-        const dispatchDecision = resolvePipelineDispatch(parsed, { dev: opts.dev });
+        const dispatchDecision = resolvePipelineDispatch(parsed, { dev: opts.dev, text: message });
         const answer = await this.runChatAnswer(message, opts.history ?? [], { type, provider, model }, { provider: mergedOpts.provider, model: mergedOpts.model, dev: mergedOpts.dev, cache: true }, true, { auto: autoMode }, parsed, { askUser: opts.askUser, onProgress: opts.onProgress, gateway: opts.gateway });
         // No-model fallback: the tool loop could not generate a single response
         // AND the rules assessed a high-confidence pipeline intent — run the
@@ -374,7 +392,7 @@ export class ChatCommand extends BaseCommand {
             // ONLY as the no-model fallback below (generation failed entirely), never
             // as a bypass.
             const parsed = parseRequestSync(prompt);
-            const dispatchDecision = resolvePipelineDispatch(parsed, { dev: options?.dev });
+            const dispatchDecision = resolvePipelineDispatch(parsed, { dev: options?.dev, text: prompt });
             const answer = await this.runChatAnswer(prompt, [], { type, provider, model }, options || {}, cacheEnabled, { auto: autoMode }, parsed);
             // No-model fallback: the tool loop could not generate a single response
             // AND the rules assessed a high-confidence pipeline intent — run the
@@ -499,7 +517,7 @@ export class ChatCommand extends BaseCommand {
             // parse + dispatch assessment) and the model path (tool-loop answer)
             // separately so the budget is measurable.
             const parsed = recordMetricTime('rule.parse.ms', () => parseRequestSync(message));
-            const dispatchDecision = recordMetricTime('rule.dispatch.ms', () => resolvePipelineDispatch(parsed, { dev: this.devModeAuto }));
+            const dispatchDecision = recordMetricTime('rule.dispatch.ms', () => resolvePipelineDispatch(parsed, { dev: this.devModeAuto, text: message }));
             const session = { type, provider, model: effectiveModel };
             const answer = await withLogCorrelation({ sessionId: chatSessionId }, () => recordMetricTime('llm.answer.ms', () => this.runChatAnswer(message, history, session, options || {}, cacheEnabled, { auto: autoMode }, parsed)));
             // No-model fallback: the tool loop could not generate a single response

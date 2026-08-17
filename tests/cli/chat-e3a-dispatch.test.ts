@@ -48,7 +48,10 @@ describe('resolvePipelineDispatch — the rule assessment (hint + no-model fallb
   it('assesses every pipeline intent as a dispatch (the fallback signal)', () => {
     for (const c of CANONICAL_PROMPTS) {
       const parsed = parseRequestSync(c.prompt);
-      const decision = resolvePipelineDispatch(parsed);
+      // P0.5: pass the raw text so the conversation gate runs — the five
+      // canonical prompts must classify EXACTLY as before (question → chat,
+      // coding goal → pipeline) through the full gate.
+      const decision = resolvePipelineDispatch(parsed, { text: c.prompt });
       expect(
         decision.dispatch,
         `'${c.prompt}' should ${c.pipeline ? 'assess as dispatch' : 'NOT assess as dispatch'}`,
@@ -83,8 +86,10 @@ describe('resolvePipelineDispatch — the rule assessment (hint + no-model fallb
     }
   });
 
-  it('dev flag (/dev, --dev) forces dispatch for everything', () => {
-    expect(resolvePipelineDispatch(parseRequestSync('assess the project'), { dev: true })).toEqual({
+  it('dev flag (/dev, --dev) forces dispatch for CODING goals — never for a question (P0.5)', () => {
+    // A coding goal in dev mode still dispatches (dev only ever forces the
+    // pipeline for coding intents).
+    expect(resolvePipelineDispatch(parseRequestSync('create an API'), { dev: true, text: 'create an API' })).toEqual({
       dispatch: true,
       needConfirm: false,
     });
@@ -92,6 +97,31 @@ describe('resolvePipelineDispatch — the rule assessment (hint + no-model fallb
       dispatch: true,
       needConfirm: false,
     });
+    // P0.5: a QUESTION is never dispatched, not even with --dev — the
+    // observed failure: a question in dev mode spawned the pipeline and
+    // created a python program to "answer" it.
+    expect(resolvePipelineDispatch(parseRequestSync('assess the project'), { dev: true, text: 'assess the project' })).toEqual({
+      dispatch: false,
+      needConfirm: false,
+    });
+    expect(resolvePipelineDispatch(parseRequestSync('why is the test failing?'), { dev: true, text: 'why is the test failing?' })).toEqual({
+      dispatch: false,
+      needConfirm: false,
+    });
+  });
+
+  it('P0.5 — the conversation gate runs BEFORE the dev bypass and the action-map gate', () => {
+    // A question that the action map would otherwise dispatch (phrased as an
+    // interrogative that the explain rule mis-reads) is still never dispatched.
+    expect(
+      resolvePipelineDispatch(parseRequestSync('can you fix the login bug?'), { dev: true, text: 'can you fix the login bug?' }),
+    ).toEqual({ dispatch: true, needConfirm: false }); // coding verb in command position → task
+    expect(
+      resolvePipelineDispatch(parseRequestSync('how do I add JWT auth to the app?'), { text: 'how do I add JWT auth to the app?' }),
+    ).toEqual({ dispatch: true, needConfirm: false });
+    expect(
+      resolvePipelineDispatch(parseRequestSync('what is the fix for this error?'), { text: 'what is the fix for this error?' }),
+    ).toEqual({ dispatch: false, needConfirm: false }); // "fix" as noun → question
   });
 });
 

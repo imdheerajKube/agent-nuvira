@@ -128,6 +128,13 @@ export declare class ExecuteCommand extends BaseCommand {
      * Run the orchestrator for a single goal and display results.
      * Returns the outcome so the caller can record it in session history.
      */
+    /**
+     * P0.5 — conversation-vs-pipeline gate: a genuine QUESTION is ANSWERED
+     * directly (same chat engine as the dashboard), never run through the
+     * multi-agent pipeline. The observed failure this kills: "why is the test
+     * failing?" in execute mode spawned a python program to "answer" it.
+     */
+    private answerConversationDirectly;
     private runSingleGoal;
     /**
      * Show saved checkpoints (goal, completion, age) and how to resume them.
