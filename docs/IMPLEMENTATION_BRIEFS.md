@@ -50,6 +50,30 @@ criteria — no rework required):**
 - Full suites: typecheck clean · root **4,682 passed** (exact P0.5 baseline,
   zero regression) · dashboard **205 passed** · build clean ✅
 
+**Integration trace (2026-08-17, is-this-siloed check):** the dashboard chat
+path is NOT a separate engine — `chat-console.ts` runs ONE tool-loop turn
+through `ChatCommand.answerOnce` (chat.ts:361), the same engine the CLI
+uses. Verified chain: user message → `resolvePipelineDispatch` with the P0.5
+`text` gate → `runChatAnswer` → `runToolLoop` (tool-loop.ts) with
+`callModel` = `buildToolCallModel` (real providers, native `generateTools`
+when supported, JSON fallback, auto-mode failover) and `executeTool` =
+`getTool(name).run` — the REAL registry (read_file/edit_file/run_terminal/
+ask_user all reachable), schema-gated by `effectiveToolJsonSchemas`
+(toolset toggles). `onEvent` → `onProgress` → SSE `progress` lines →
+ChatPage; ask_user questions render as choice cards (P0.1); followups
+return as data → chips. The read→ask→edit→run→verify loop is ONE wired
+path used by CLI and dashboard alike.
+
+**Remaining depth gap vs Claude Code / Freebuff / Hermes (the honest
+part):** the ENGINE loop is integrated, but the USER-VISIBLE experience
+layer is still pending — that is exactly P0.6 (step cards: tool name/args/
+status/result as cards, not plain lines), P3b (diff preview + accept/reject
+per hunk — Claude Code's signature interaction), P0.7 (visible plan
+checklist before edits), P0.8 + P5 (skill loading + depth batch), P3a
+(clone_repo for other projects), P3c/P3d (deterministic fallback hints +
+parallel suggestion — today fallback is model-strength-dependent). The
+units work; the competitive UX depth is the unbuilt half.
+
 ---
 
 ## P0.6 — Step cards (structured tool-call rendering)
