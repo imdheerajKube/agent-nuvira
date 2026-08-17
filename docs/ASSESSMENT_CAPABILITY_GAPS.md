@@ -181,9 +181,33 @@ empty, and no depth comparison against reference agents has been done.**
      each new skill is exercisable via `buff skill run <name>` AND matches
      from the dashboard chat; the comparison table is in this doc.
 
-**The honest bottom line:** the skill SYSTEM is real (shape, store, seeding,
-runner, compiler, catalog — all tested), but agent-nuvira currently ships
-**one deployment skill and an empty registry** — a same-name/depth comparison
-with Claude Code / Hermes / Freebuff would find agent-nuvira missing ~all of
-the capability skills. The strengthening work has NOT been done yet; this row
-makes it an explicit, tracked deliverable.
+**The honest bottom line (updated 2026-08-17 after P5b):** the skill SYSTEM
+is real (shape, store, seeding, runner, compiler, catalog — all tested), and
+agent-nuvira now ships **five first-party skills** (website-deploy +
+code-assessment + technical-roadmap + plan-create-track + test-strategy),
+each at the website-deploy depth bar (ordered dependsOn steps, parameters,
+verification). The comparison table below is the row-per-skill audit; the
+remaining P5c items are #3 (registry 404) and #4 (acceptance proof), tracked
+below.
+
+## P5c #1 — Row-per-skill comparison table (reference catalogs vs agent-nuvira)
+
+Depth bar = real methodology (steps with agent types + dependencies),
+parameters, verification steps, and it runs both from `buff skill run` and
+from dashboard chat via the P0.8 skill tool. Agent-nuvira column = current
+first-party bundled skills (each verified at the depth bar).
+
+| Capability area | Claude Code built-ins | Hermes / Freebuff patterns | agent-nuvira bundled skill | Depth verdict |
+|---|---|---|---|---|
+| Website deploy | deploy skill (provider-by-provider) | — | `website-deploy` (5 steps: gather → ensure project → deploy per provider → curl 200 → review) | ✅ at bar (wrangler-4 gotcha baked in) |
+| Code assessment / review | code-review skill (files → findings → severity) | Freebuff researcher patterns (gather → judge → recommend) | `code-assessment` (map → evaluate 5 dimensions → gaps+severity → prioritized recs, cited evidence) | ✅ at bar (P5b) |
+| Roadmap / planning | roadmap skill (current → target → phases) | Hermes planner | `technical-roadmap` (current cited → measurable target → 3–5 phases w/ deps, effort, risk, out-of-scope + critical path) | ✅ at bar (P5b) |
+| Plan creation + tracking | todo/plan tracking (visible progress) | — | `plan-create-track` (declare via plan_todo → update running/done/blocked → never stall on one blocked step) | ✅ at bar (P5b, feeds P0.7 tool) |
+| Test strategy | test skill (run the real suites) | Hermes tester agent | `test-strategy` (map surface → matrix focused→unit→integration→e2e + static gate → run real commands → verdict with evidence) | ✅ at bar (P5b, feeds P3 fallback) |
+| Authoring framework | ~15+ built-ins + skill authoring docs + SKILL.md hub | skills_hub, SKILL.md catalog | SKILL.md catalog read (hub-skill-catalog) + trajectory→skill compiler + skill store — the AUTHORING path exists, only 5 first-party skills ship | ⚠️ system present; catalog depth is 5 vs ~15+ |
+
+**P5c remaining after this row:** #3 default-registry 404 fix (populate the
+repo `.agents/skills/` or repoint config — the configured default still
+404s today), #4 acceptance proof (`buff skills list` shows the batch —
+verified; matches from dashboard chat — verified via the P0.8 skill tool and
+findMatch tests).
