@@ -34,6 +34,8 @@ interface ChatMessage {
   plan?: PlanView | null;
   /** P3b — the git diff this turn produced (rendered as a diff card). */
   diff?: DiffView | null;
+  /** P6a — the skill draft this turn produced (rendered as the /learn preview card). */
+  draft?: SkillDraftView | null;
 }
 
 /** P0.7 — the plan checklist as rendered (goal + steps with statuses). */
@@ -47,6 +49,16 @@ interface PlanView {
 interface DiffView {
   files: Array<{ path: string; body: string }>;
   summary: string;
+}
+
+/** P6a — a skill draft as rendered (the /learn preview card). */
+interface SkillDraftView {
+  name: string;
+  description: string;
+  markdown: string;
+  updatedAt: number;
+  /** Local card state: 'pending' | 'saving' | 'saved' | 'rejected' | 'error'. */
+  status?: 'pending' | 'saving' | 'saved' | 'rejected' | 'error';
 }
 
 /** P0.6 — one tool-call lifecycle step, rendered as a card (started → called). */
@@ -124,6 +136,53 @@ interface PendingResolve {
             </details>
           ))}
         </div>
+      </div>
+    );
+  }
+
+  /**
+   * P6a — the /learn preview card: the agent drafted a skill; the user
+   * decides ✅ accept (saves it to the live stores), ✏️ edit (asks the agent
+   * to revise — a chat turn re-drafts), ↩ reject (discards the draft).
+   */
+  function SkillDraftCard({ draft, onAccept, onReject, onEdit }: {
+    draft: SkillDraftView;
+    onAccept: (name: string) => void;
+    onReject: (name: string) => void;
+    onEdit: (name: string) => void;
+  }) {
+    const status = draft.status ?? 'pending';
+    const lines = draft.markdown.split('\n');
+    const bodyStart = lines.findIndex((l) => l.startsWith('# ')) >= 0 ? lines.findIndex((l) => l.startsWith('# ')) : 0;
+    const preview = lines.slice(bodyStart, bodyStart + 14).join('\n');
+    return (
+      <div className={`chat-draft-card${status === 'saved' ? ' chat-draft-saved' : ''}${status === 'rejected' ? ' chat-draft-rejected' : ''}`}>
+        <div className="chat-draft-head">
+          <span className="chat-draft-icon">🧠</span>
+          <span className="chat-draft-title">New skill draft: {draft.name}</span>
+          <span className="chat-draft-meta">pending your review</span>
+        </div>
+        <p className="chat-draft-desc">{draft.description}</p>
+        <pre className="chat-draft-body">{preview}</pre>
+        {status === 'saving' ? (
+          <div className="admin-hint">Saving…</div>
+        ) : status === 'saved' ? (
+          <div className="admin-hint">✅ Saved — the skill is live: load it in chat or see it in the Agent Hub Skills tab.</div>
+        ) : status === 'rejected' ? (
+          <div className="admin-hint">🗑️ Rejected — the draft was discarded, nothing was saved.</div>
+        ) : (
+          <div className="chat-draft-actions">
+            <button className="admin-refresh-btn" type="button" onClick={() => onAccept(draft.name)}>
+              ✅ Accept
+            </button>
+            <button className="admin-mini-btn" type="button" onClick={() => onEdit(draft.name)}>
+              ✏️ Edit
+            </button>
+            <button className="admin-mini-btn" type="button" onClick={() => onReject(draft.name)}>
+              ↩ Reject
+            </button>
+          </div>
+        )}
       </div>
     );
   }
@@ -221,6 +280,8 @@ export default function ChatPage() {
   const [livePlan, setLivePlan] = useState<PlanView | null>(null);
   // P3b — the latest git diff payload (rendered as a diff card).
   const [liveDiff, setLiveDiff] = useState<DiffView | null>(null);
+  // P6a — the /learn preview card (skill_manage create/patch emits it).
+  const [liveDraft, setLiveDraft] = useState<SkillDraftView | null>(null);
   // Plain-English → CLI short-circuit: a confident command match shows a
   // confirm card instead of burning a model turn; ambiguous asks show choices.
   const [pendingResolve, setPendingResolve] = useState<PendingResolve | null>(null);
@@ -231,6 +292,7 @@ export default function ChatPage() {
   const liveToolsRef = useRef<ToolStep[]>([]);
   const livePlanRef = useRef<PlanView | null>(null);
   const liveDiffRef = useRef<DiffView | null>(null);
+  const liveDraftRef = useRef<SkillDraftView | null>(null);
   // P4 — the live answer typewriter: tokens stream in via SSE while the POST
   // is in flight. The POST response is AUTHORITATIVE (the engine's S1
   // longest-substantive logic may pick an earlier, longer answer) — the
@@ -313,6 +375,8 @@ export default function ChatPage() {
     livePlanRef.current = null;
     setLiveDiff(null);
     liveDiffRef.current = null;
+    setLiveDraft(null);
+    liveDraftRef.current = null;
     streamingRef.current = '';
     setStreamingText('');
     setRetryAsk(null);
@@ -366,6 +430,8 @@ export default function ChatPage() {
       livePlanRef.current = null;
       setLiveDiff(null);
       liveDiffRef.current = null;
+      setLiveDraft(null);
+      liveDraftRef.current = null;
       setMessages((m) => [...m, { role: 'user', content: clean }]);
       setInput('');
       lastSentRef.current = clean;
@@ -439,6 +505,13 @@ export default function ChatPage() {
           liveDiffRef.current = view;
           setLiveDiff(view);
         },
+        // P6a — skill_manage create/patch emitted a draft; render the /learn
+        // preview card (accept saves, edit re-drafts, reject discards).
+        onSkillDraft: (d) => {
+          const view: SkillDraftView = { name: d.name, description: d.description, markdown: d.markdown, updatedAt: d.updatedAt, status: 'pending' };
+          liveDraftRef.current = view;
+          setLiveDraft(view);
+        },
       });
       const r = await dashboardAPI.chatSend(sessionId, clean, { projectPath: attachedProject?.path }, controller.signal);
       abortRef.current = null;
@@ -463,6 +536,7 @@ export default function ChatPage() {
             tools: liveToolsRef.current,
             plan: livePlanRef.current,
             diff: liveDiffRef.current,
+            draft: liveDraftRef.current,
           },
         ]);
       } else {
@@ -491,6 +565,35 @@ export default function ChatPage() {
   const cancelTurn = useCallback(() => {
     abortRef.current?.abort();
   }, []);
+
+  /**
+   * P6a — the preview card's actions:
+   *   ✅ accept → POST /api/skills/drafts/<name>/accept (promotes to live).
+   *   ↩ reject → DELETE the draft (discarded, nothing saved).
+   *   ✏️ edit   → send a chat turn asking the agent to revise the draft (the
+   *               agent re-drafts via skill_manage create → a fresh card).
+   */
+  const acceptDraft = useCallback(async (name: string) => {
+    setLiveDraft((d) => (d ? { ...d, status: 'saving' } : d));
+    const r = await dashboardAPI.skillDraftAccept(name);
+    setLiveDraft((d) => (d ? { ...d, status: r.ok ? 'saved' : 'error' } : d));
+    if (!r.ok) setError(r.error || 'Could not accept the draft.');
+  }, []);
+
+  const rejectDraft = useCallback(async (name: string) => {
+    const r = await dashboardAPI.skillDraftReject(name);
+    if (r.ok) {
+      setLiveDraft((d) => (d ? { ...d, status: 'rejected' } : d));
+    } else {
+      setError(r.error || 'Could not reject the draft.');
+    }
+  }, []);
+
+  const editDraft = useCallback((name: string) => {
+    // Ask the agent to revise — the draft is still pending; the agent's next
+    // skill_manage create/patch emits an updated preview card.
+    void send(`Revise the skill draft "${name}" — improve it per your best judgment and present it again.`);
+  }, [send]);
 
   /** Run the resolved CLI command directly (the user confirmed the card). */
   const runResolvedCommand = useCallback(async (ask: string) => {
@@ -597,6 +700,8 @@ export default function ChatPage() {
     livePlanRef.current = null;
     setLiveDiff(null);
     liveDiffRef.current = null;
+    setLiveDraft(null);
+    liveDraftRef.current = null;
     streamingRef.current = '';
     setStreamingText('');
     setRetryAsk(null);
@@ -719,6 +824,14 @@ export default function ChatPage() {
                   <button type="button" className="chat-chip" onClick={() => void send('stop the gateway')}>
                     ⏹ stop the gateway
                   </button>
+                  {/* P6e — the shipable first-party batch is the entry point: a
+                      new user sees the skill suggestions in the empty state. */}
+                  <button type="button" className="chat-chip" onClick={() => void send('load the code-assessment skill and assess this project')}>
+                    🧠 load the code-assessment skill
+                  </button>
+                  <button type="button" className="chat-chip" onClick={() => void send('learn the workflow I just did as a skill')}>
+                    📚 learn a workflow as a skill
+                  </button>
                   <button type="button" className="chat-chip" onClick={() => void send('publish the current version')}>
                     🚀 publish the release
                   </button>
@@ -737,6 +850,12 @@ export default function ChatPage() {
                     <details className="chat-steps" open>
                       <summary>Changes: {m.diff.summary}</summary>
                       <DiffCard diff={m.diff} />
+                    </details>
+                  ) : null}
+                  {m.role === 'assistant' && m.draft ? (
+                    <details className="chat-steps" open>
+                      <summary>Skill draft: {m.draft.name}</summary>
+                      <SkillDraftCard draft={m.draft} onAccept={acceptDraft} onReject={rejectDraft} onEdit={editDraft} />
                     </details>
                   ) : null}
                   {m.role === 'assistant' && m.plan ? (
@@ -769,6 +888,7 @@ export default function ChatPage() {
                 <div className="chat-bubble-role">🤖 Agent</div>
                 {livePlan ? <PlanCard plan={livePlan} /> : null}
                 {liveDiff ? <DiffCard diff={liveDiff} /> : null}
+                {liveDraft ? <SkillDraftCard draft={liveDraft} onAccept={acceptDraft} onReject={rejectDraft} onEdit={editDraft} /> : null}
                 <ToolCards tools={liveTools} live />
                 {streamingText ? (
                   <div className="chat-bubble-text chat-streaming">

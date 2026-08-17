@@ -135,6 +135,8 @@ export declare class ChatCommand extends BaseCommand {
          * `diff` event so the GUI renders the 🔧 diff card.
          */
         onGitDiff?: (payload: import('../tools/git-tool.js').GitDiffPayload) => void;
+        /** P6a — /learn preview card: skill_manage create/patch emits the draft. */
+        onSkillDraft?: (payload: import('../tools/skill-tool.js').SkillDraftPayload) => void;
         /**
          * P0.7 — the session's plan store (the dashboard console injects one per
          * conversation so plans never leak across sessions).

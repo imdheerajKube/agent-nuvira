@@ -276,7 +276,7 @@ chat affordances ("Learn a skill" button → chat request, skills panel with
 install/uninstall), and (3) thin server endpoints to list/install/uninstall
 marketplace skills. The CLI engine stays exactly as it is.
 
-- [ ] **P6a — /learn-style skill authoring (the headliner).** In chat, the
+- [x] **P6a — /learn-style skill authoring (the headliner).** In chat, the
       user types "learn the workflow I just did" or "learn from
       https://docs.example.com/api/quickstart" — the agent gathers the source
       (transcript / URL / dir) with its existing tools, drafts a SKILL.md
@@ -301,7 +301,7 @@ marketplace skills. The CLI engine stays exactly as it is.
         integration (agent emits the skill_manage call → store contains the
         skill → `skill` tool loads it), dashboard preview-card test (accept
         saves, edit re-drafts, reject aborts).
-- [ ] **P6b — skill bundles (cross-skill composition).** A `bundle` action on
+- [x] **P6b — skill bundles (cross-skill composition).** A `bundle` action on
       the skill tool + a `buff skills bundle` CLI: group N skills under one
       id (`backend-dev` → code-review + tdd + pr-workflow), load all in one
       chat turn. **Background:** Hermes YAML bundles (`~/.hermes/skill-bundles/
@@ -314,7 +314,7 @@ marketplace skills. The CLI engine stays exactly as it is.
       - **Tests:** bundle-store unit (create/list/delete, missing skill
         skipped not fatal — Hermes parity), skill-tool bundle-load test,
         CLI `buff skills bundle` create→load round-trip.
-- [ ] **P6c — frontmatter depth in the hub catalog.** Parse + honor the
+- [x] **P6c — frontmatter depth in the hub catalog.** Parse + honor the
       Hermes-style fields agent-nuvira currently ignores: `platforms`
       (hide on incompatible OS — the user runs macOS/Windows/Linux),
       `requires_toolsets`/`fallback_for_toolsets` (conditional activation —
@@ -332,7 +332,7 @@ marketplace skills. The CLI engine stays exactly as it is.
         test (win32 hides macos-only skill), conditional-activation test
         (skill visible iff toolset present), env-var declaration surfaced in
         the skill tool result (value NEVER printed).
-- [ ] **P6d — marketplace import surface (the private-repo-safe path).** A
+- [x] **P6d — marketplace import surface (the private-repo-safe path).** A
       dashboard Skills panel + thin endpoints that list/install/uninstall
       skills from the EXISTING multi-source registry (browse.sh, any
       git-repo incl. `.claude/skills/`, github-raw URLs) — the user picks a
@@ -354,7 +354,7 @@ marketplace skills. The CLI engine stays exactly as it is.
         registry, install lands SKILL.md + provenance, uninstall removes
         both), dashboard Skills panel component test, end-to-end
         install→load-in-chat test (mirrors the P5c #4 acceptance pattern).
-- [ ] **P6e — shipable first-party skill batch (already built, include it).**
+- [x] **P6e — shipable first-party skill batch (already built, include it).**
       The five bundled skills (website-deploy, code-assessment,
       technical-roadmap, plan-create-track, test-strategy) are DONE + verified
       (P5b). Include them as first-class product content: the Skills panel

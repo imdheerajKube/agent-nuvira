@@ -18,7 +18,7 @@ async function until(fn: () => boolean, ms = 3000): Promise<void> {
     await new Promise((r) => setTimeout(r, 10));
   }
 }
-import { mkdtempSync, rmSync, mkdirSync, writeFileSync } from 'node:fs';
+import { mkdtempSync, rmSync, mkdirSync, writeFileSync, existsSync } from 'node:fs';
 import { join } from 'node:path';
 
 const TMP_BASE = process.env.TMPDIR || process.env.TMP || '/tmp';
@@ -32,6 +32,9 @@ process.env.BUFF_DASHBOARD_PORT = '0';
 process.env.BUFF_DASHBOARD_HOST = '127.0.0.1';
 process.env.BUFF_MEMORY_DIR = memoryDir;
 process.env.BUFF_CONFIG_DIR = join(testDir, '.buff');
+// HOME pin keeps homedir()-resolved stores (SkillStore, drafts) off the
+// developer's real ~/.buff — the P6a accept path writes both.
+process.env.HOME = testDir;
 
 const { createDashboardServer, setChatConsoleForTest } = await import('../../src/web-dashboard/server.js');
 const { ChatConsole } = await import('../../src/web-dashboard/chat-console.js');
@@ -531,5 +534,161 @@ describe('/api/projects — P3 project attach', () => {
     expect(plain.status).toBe(200);
     const plainCall = engine.calls.find((c) => c.message === 'hi');
     expect((plainCall?.opts as { projectContext?: string } | undefined)?.projectContext).toBeUndefined();
+  });
+
+  describe('P6d — /api/skills/marketplace (the private-repo-safe import surface)', () => {
+    // A LOCAL-DIR fixture registry (file:// base) — hermetic, no network.
+    // skills-registry honors BUFF_SKILLS_REGISTRY (single-value fallback).
+    let registryDir: string;
+    const envBackup: Record<string, string | undefined> = {};
+    const cwdBackup = process.cwd();
+    beforeEach(() => {
+      // The install target is the SERVER's cwd — point it at the temp test
+      // dir so installs never pollute the repo's committed .agents/skills.
+      process.chdir(testDir);
+      envBackup.BUFF_SKILLS_REGISTRY = process.env.BUFF_SKILLS_REGISTRY;
+      registryDir = join(testDir, 'registry');
+      // The registry layout: <root>/index.json + <root>/<name>/SKILL.md
+      // (the same shape as the committed .agents/skills dir).
+      mkdirSync(registryDir, { recursive: true });
+      writeFileSync(join(registryDir, 'index.json'), JSON.stringify({
+        version: 1,
+        updatedAt: new Date().toISOString(),
+        skills: [
+          { name: 'code-assist', description: 'Assist with code edits', version: '1.2.0', author: 'fixture', tags: ['code'], source: 'fixture', updatedAt: new Date().toISOString() },
+          { name: 'schema-validator', description: 'Validate schemas', version: '0.9.0', author: 'fixture', tags: ['schema'], source: 'fixture', updatedAt: new Date().toISOString() },
+        ],
+      }), 'utf-8');
+      mkdirSync(join(registryDir, 'code-assist'), { recursive: true });
+      writeFileSync(join(registryDir, 'code-assist', 'SKILL.md'), '---\nname: code-assist\ndescription: Assist with code edits\n---\n# Code Assist\nHelp with edits.\n', 'utf-8');
+      mkdirSync(join(registryDir, 'schema-validator'), { recursive: true });
+      writeFileSync(join(registryDir, 'schema-validator', 'SKILL.md'), '---\nname: schema-validator\ndescription: Validate schemas\n---\n# Schema Validator\nValidate.\n', 'utf-8');
+      process.env.BUFF_SKILLS_REGISTRY = `file://${registryDir}`;
+    });
+    afterEach(() => {
+      process.chdir(cwdBackup);
+      if (envBackup.BUFF_SKILLS_REGISTRY === undefined) delete process.env.BUFF_SKILLS_REGISTRY;
+      else process.env.BUFF_SKILLS_REGISTRY = envBackup.BUFF_SKILLS_REGISTRY;
+      // Remove any installed skill so the next test starts clean.
+      rmSync(join(testDir, '.agents'), { recursive: true, force: true });
+    });
+
+    it('searches the registry (GET /api/skills/marketplace?q=)', async () => {
+      const res = await authedFetch('/api/skills/marketplace?q=assist');
+      expect(res.status).toBe(200);
+      const d = (await res.json()) as { results: Array<{ name: string; version: string; sourceKind: string }> };
+      expect(d.results.some((r) => r.name === 'code-assist')).toBe(true);
+      expect(d.results[0].version).toBe('1.2.0');
+    });
+
+    it('installs a skill into <project>/.agents/skills/ (sandboxed + provenance)', async () => {
+      const res = await authedFetch('/api/skills/marketplace/install', 'POST', { name: 'code-assist' });
+      expect(res.status).toBe(200);
+      const d = (await res.json()) as { ok: boolean; skill?: { name: string; version: string } };
+      expect(d.ok).toBe(true);
+      expect(d.skill?.name).toBe('code-assist');
+      // The SKILL.md landed in the project's .agents/skills (cwd = testDir).
+      expect(existsSync(join(testDir, '.agents', 'skills', 'code-assist', 'SKILL.md'))).toBe(true);
+    });
+
+    it('unknown skill → 404; invalid name → 400', async () => {
+      const missing = await authedFetch('/api/skills/marketplace/install', 'POST', { name: 'no-such-skill' });
+      expect(missing.status).toBe(404);
+      const invalid = await authedFetch('/api/skills/marketplace/install', 'POST', { name: '../evil' });
+      expect(invalid.status).toBe(400);
+    });
+
+    it('uninstalls a skill (removes the dir)', async () => {
+      // Install first, then uninstall.
+      await authedFetch('/api/skills/marketplace/install', 'POST', { name: 'schema-validator' });
+      expect(existsSync(join(testDir, '.agents', 'skills', 'schema-validator', 'SKILL.md'))).toBe(true);
+      const res = await authedFetch('/api/skills/marketplace/uninstall', 'POST', { name: 'schema-validator' });
+      expect(res.status).toBe(200);
+      expect(((await res.json()) as { ok: boolean }).ok).toBe(true);
+      expect(existsSync(join(testDir, '.agents', 'skills', 'schema-validator'))).toBe(false);
+    });
+
+    it('gates install on role (viewer → 403)', async () => {
+      const viewer = await authedFetch('/api/skills/marketplace/install', 'POST', { name: 'code-assist' }, viewerToken);
+      expect(viewer.status).toBe(403);
+    });
+  });
+
+  describe('P6a — /api/skills/drafts (the /learn preview-card gate)', () => {
+    // The server reads the DEFAULT draft root — BUFF_MEMORY_DIR/skill-drafts
+    // (HOME is pinned above, so nothing touches the real ~/.buff).
+    const draftsRoot = join(memoryDir, 'skill-drafts');
+    const skillMd = (name: string): string => [
+      '---',
+      `name: ${name}`,
+      'description: Upload artifacts to S3.',
+      '---',
+      '',
+      '## Steps',
+      '',
+      '### Step 1 — [runner] Sync the directory',
+      'Run aws s3 sync with the output directory.',
+      '',
+      '### Step 2 — [reviewer] Verify the upload',
+      'Confirm the object exists in the bucket.',
+      '',
+    ].join('\n');
+
+    beforeEach(() => {
+      rmSync(draftsRoot, { recursive: true, force: true });
+    });
+
+    it('lists drafts, accepts one (promotes to hub + compiled), and the draft is gone', async () => {
+      const dir = join(draftsRoot, 's3-upload');
+      mkdirSync(dir, { recursive: true });
+      writeFileSync(join(dir, 'SKILL.md'), skillMd('s3-upload'), 'utf-8');
+
+      // 1. List shows the draft.
+      const list = await authedFetch('/api/skills/drafts');
+      expect(list.status).toBe(200);
+      const listed = (await list.json()) as { drafts: Array<{ name: string }> };
+      expect(listed.drafts.some((d) => d.name === 's3-upload')).toBe(true);
+
+      // 2. Accept promotes it.
+      const accept = await authedFetch('/api/skills/drafts/s3-upload/accept', 'POST');
+      expect(accept.status).toBe(200);
+      const accepted = (await accept.json()) as { ok: boolean; skill?: { name?: string } };
+      expect(accepted.ok).toBe(true);
+      expect(accepted.skill?.name).toBe('s3-upload');
+
+      // 3. The draft is gone (it is now live).
+      const after = await authedFetch('/api/skills/drafts');
+      const afterData = (await after.json()) as { drafts: Array<{ name: string }> };
+      expect(afterData.drafts.some((d) => d.name === 's3-upload')).toBe(false);
+    });
+
+    it('rejects (DELETE) a draft — discarded, nothing saved', async () => {
+      const dir = join(draftsRoot, 'schema-check');
+      mkdirSync(dir, { recursive: true });
+      writeFileSync(join(dir, 'SKILL.md'), skillMd('schema-check'), 'utf-8');
+
+      const del = await authedFetch('/api/skills/drafts/schema-check', 'DELETE');
+      expect(del.status).toBe(200);
+      expect(((await del.json()) as { ok: boolean }).ok).toBe(true);
+      expect(existsSync(join(draftsRoot, 'schema-check'))).toBe(false);
+    });
+
+    it('accept of a missing draft returns 400 (nothing to accept)', async () => {
+      const res = await authedFetch('/api/skills/drafts/ghost/accept', 'POST');
+      expect(res.status).toBe(400);
+      expect(((await res.json()) as { error?: string }).error).toContain('not found');
+    });
+
+    it('gates accept on role (viewer → 403, admin → 200)', async () => {
+      const dir = join(draftsRoot, 's3-upload');
+      mkdirSync(dir, { recursive: true });
+      writeFileSync(join(dir, 'SKILL.md'), skillMd('s3-upload'), 'utf-8');
+
+      const viewer = await authedFetch('/api/skills/drafts/s3-upload/accept', 'POST', undefined, viewerToken);
+      expect(viewer.status).toBe(403);
+
+      const admin = await authedFetch('/api/skills/drafts/s3-upload/accept', 'POST');
+      expect(admin.status).toBe(200);
+    });
   });
 });

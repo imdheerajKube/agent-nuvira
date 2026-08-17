@@ -39,8 +39,10 @@ const COMMITTED_REGISTRY = join(REPO_ROOT, '.agents', 'skills');
 
 let configDir = '';
 let projectDir = '';
+let memoryDir = '';
 let origConfigDir: string | undefined;
 let origRegistry: string | undefined;
+let origMemoryDir: string | undefined;
 
 /** Run the real `buff skills` command, returning captured console + logger output. */
 async function runSkills(args: string[]): Promise<string> {
@@ -63,10 +65,14 @@ async function runSkills(args: string[]): Promise<string> {
 beforeEach(() => {
   configDir = mkdtempSync(join(tmpdir(), 'buff-acc-cfg-'));
   projectDir = mkdtempSync(join(tmpdir(), 'buff-acc-proj-'));
+  memoryDir = mkdtempSync(join(tmpdir(), 'buff-acc-mem-'));
   origConfigDir = process.env.BUFF_CONFIG_DIR;
   origRegistry = process.env.BUFF_SKILLS_REGISTRY;
+  origMemoryDir = process.env.BUFF_MEMORY_DIR;
   process.env.BUFF_CONFIG_DIR = configDir; // hermetic — no user config/registries
   process.env.BUFF_SKILLS_REGISTRY = `file://${COMMITTED_REGISTRY}`;
+  // Bundle store + drafts honor BUFF_MEMORY_DIR — keep ~/.buff untouched.
+  process.env.BUFF_MEMORY_DIR = memoryDir;
 });
 
 afterEach(() => {
@@ -75,9 +81,12 @@ afterEach(() => {
   else process.env.BUFF_CONFIG_DIR = origConfigDir;
   if (origRegistry === undefined) delete process.env.BUFF_SKILLS_REGISTRY;
   else process.env.BUFF_SKILLS_REGISTRY = origRegistry;
+  if (origMemoryDir === undefined) delete process.env.BUFF_MEMORY_DIR;
+  else process.env.BUFF_MEMORY_DIR = origMemoryDir;
   vi.restoreAllMocks();
   rmSync(configDir, { recursive: true, force: true });
   rmSync(projectDir, { recursive: true, force: true });
+  rmSync(memoryDir, { recursive: true, force: true });
 });
 
 describe('P5c #4 — committed registry acceptance (search → install → catalog)', () => {
@@ -133,5 +142,35 @@ describe('P5c #4 — committed registry acceptance (search → install → catal
     expect(out).toContain('Search available skills: buff skills search');
     expect(out).toContain('missing-index');
     expect(out).toContain('BUFF_SKILLS_REGISTRY');
+  });
+
+  it('P6d — buff skills uninstall removes the dir and the skill is gone', async () => {
+    await runSkills(['install', 'test-strategy', '--project', projectDir]);
+    const installed = join(projectDir, '.agents', 'skills', 'test-strategy', 'SKILL.md');
+    expect(existsSync(installed)).toBe(true);
+
+    const out = await runSkills(['uninstall', 'test-strategy', '--project', projectDir]);
+    expect(out).toContain('Uninstalled test-strategy');
+    expect(existsSync(join(projectDir, '.agents', 'skills', 'test-strategy'))).toBe(false);
+    // A second uninstall reports nothing to remove (no crash).
+    const again = await runSkills(['uninstall', 'test-strategy', '--project', projectDir]);
+    expect(again).toContain('not installed');
+  });
+
+  it('P6b — buff skills bundle create → list → show round-trip (Hermes YAML parity)', async () => {
+    const out = await runSkills(['bundle', 'backend-dev', '--create', '--name', 'Backend Dev', '--description', 'Full workflow', '--skills', 'code-assessment,test-strategy']);
+    expect(out).toContain("Bundle 'backend-dev' created");
+    expect(out).toContain('code-assessment, test-strategy');
+
+    const list = await runSkills(['bundle']);
+    expect(list).toContain('backend-dev');
+    expect(list).toContain('Backend Dev');
+
+    const show = await runSkills(['bundle', 'backend-dev']);
+    expect(show).toContain('code-assessment, test-strategy');
+
+    const del = await runSkills(['bundle', 'backend-dev', '--delete']);
+    expect(del).toContain('Deleted bundle');
+    expect(await runSkills(['bundle'])).toContain('No bundles yet');
   });
 });

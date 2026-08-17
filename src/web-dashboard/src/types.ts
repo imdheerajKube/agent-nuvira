@@ -1046,6 +1046,8 @@ export interface HubSkill {
   usageCount?: number;
   /** P3 — derived from buffconfig `skills.disabled[]` (false when disabled). */
   enabled: boolean;
+  /** P6e — provenance: true for first-party bundled skills (🧠 badge). */
+  bundled?: boolean;
 }
 
 export interface HubData {

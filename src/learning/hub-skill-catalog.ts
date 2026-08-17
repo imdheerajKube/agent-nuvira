@@ -49,6 +49,16 @@ export interface HubCatalogSkill {
   body: string;
   /** Root the skill was found in: 'project' | 'home'. */
   root: 'project' | 'home';
+  /** P6c — `platforms:` — skill hidden on incompatible OS (e.g. [macos, linux]). */
+  platforms?: string[];
+  /** P6c — `requires_toolsets:` — skill visible only when ALL named toolsets exist. */
+  requiresToolsets?: string[];
+  /** P6c — `fallback_for_toolsets:` — skill visible only when the named toolset is ABSENT. */
+  fallbackForToolsets?: string[];
+  /** P6c — `config:` — declared buffconfig settings the skill expects. */
+  config?: Record<string, string>;
+  /** P6c — `required_environment_variables:` — env var NAMES (values never read/printed). */
+  requiredEnvVars?: string[];
 }
 
 /** The skill-guidance payload handed to the planner (Level 1 on match). */
@@ -66,16 +76,102 @@ const SKILL_NAME_RE = /^[a-z0-9-]+$/;
 
 // ─── Helpers ────────────────────────────────────────────────────────────────
 
-/** Parse `---` frontmatter: name + description (same grammar as the hub). */
-export function parseCatalogFrontmatter(markdown: string): { name?: string; description?: string } {
+/**
+ * Parsed frontmatter of a SKILL.md. The grammar is YAML-lite (same as the
+ * hub): `key: value` lines, plus P6c list/map values:
+ *   - inline arrays:  `platforms: [macos, linux]`
+ *   - block lists:    `requires_toolsets:` then indented `- item` lines
+ *   - config map:     `config:` then indented `key: value` lines
+ * Every read is best-effort: a malformed value simply contributes nothing.
+ */
+export interface CatalogFrontmatter {
+  name?: string;
+  description?: string;
+  platforms?: string[];
+  requiresToolsets?: string[];
+  fallbackForToolsets?: string[];
+  config?: Record<string, string>;
+  requiredEnvVars?: string[];
+}
+
+function unquote(v: string): string {
+  return v.trim().replace(/^["']|["']$/g, '');
+}
+
+/** Parse an inline array value: `[a, b, c]` → ['a', 'b', 'c'] (or []). */
+function parseInlineArray(value: string): string[] {
+  const inner = value.trim().replace(/^\[|\]$/g, '');
+  if (!inner.trim()) return [];
+  return inner.split(',').map((s) => unquote(s)).filter(Boolean);
+}
+
+/** Parse `---` frontmatter (P6c depth: platforms, toolsets, config, env vars). */
+export function parseCatalogFrontmatter(markdown: string): CatalogFrontmatter {
   const m = /^---\r?\n([\s\S]*?)\r?\n---/.exec(markdown);
   if (!m) return {};
-  const out: Record<string, string> = {};
-  for (const line of m[1].split(/\r?\n/)) {
+  const out: Record<string, string | string[] | Record<string, string>> = {};
+  const lines = m[1].split(/\r?\n/);
+  let listKey: string | null = null; // active block-list key
+  let configKey: string | null = null; // active config-map key
+  for (const line of lines) {
+    // Block-list continuation: indented `- item` lines belong to listKey.
+    if (listKey && /^\s+-\s+/.test(line)) {
+      const item = unquote(line.replace(/^\s+-\s+/, ''));
+      const arr = out[listKey] as string[];
+      if (item && !arr.includes(item)) arr.push(item);
+      continue;
+    }
+    listKey = null;
+    // Config-map continuation: indented `key: value` lines belong to configKey.
+    if (configKey && /^\s+[a-zA-Z0-9_.-]+:/.test(line)) {
+      const kv = /^\s*([a-zA-Z0-9_.-]+):\s*(.*)$/.exec(line);
+      if (kv) {
+        (out[configKey] as Record<string, string>)[kv[1]] = unquote(kv[2]);
+        continue;
+      }
+    }
+    configKey = null;
     const kv = /^([a-zA-Z0-9_.-]+):\s*(.*)$/.exec(line);
-    if (kv) out[kv[1]] = kv[2].trim().replace(/^["']|["']$/g, '');
+    if (!kv) continue;
+    const [, key, rawValue] = kv;
+    const value = rawValue.trim();
+    if (key === 'config') {
+      out[key] = {};
+      configKey = key;
+      continue;
+    }
+    if (!value) {
+      // Header with no value → block list follows.
+      out[key] = [];
+      listKey = key;
+      continue;
+    }
+    if (value.startsWith('[')) {
+      out[key] = parseInlineArray(value);
+      continue;
+    }
+    out[key] = unquote(value);
   }
-  return { name: out.name, description: out.description };
+  const pick = (k: string): string | undefined => {
+    const v = out[k];
+    return typeof v === 'string' ? v : undefined;
+  };
+  const pickList = (k: string): string[] | undefined => {
+    const v = out[k];
+    return Array.isArray(v) ? v : undefined;
+  };
+  return {
+    name: pick('name'),
+    description: pick('description'),
+    platforms: pickList('platforms'),
+    requiresToolsets: pickList('requires_toolsets'),
+    fallbackForToolsets: pickList('fallback_for_toolsets'),
+    config: (() => {
+      const v = out['config'];
+      return v && typeof v === 'object' && !Array.isArray(v) ? (v as Record<string, string>) : undefined;
+    })(),
+    requiredEnvVars: pickList('required_environment_variables'),
+  };
 }
 
 /** Strip the frontmatter block, returning just the markdown body. */
@@ -103,13 +199,20 @@ function scanRoot(root: 'project' | 'home', dir: string): HubCatalogSkill[] {
         statSync(skillPath);
         const markdown = readFileSync(skillPath, 'utf-8');
         const fm = parseCatalogFrontmatter(markdown);
-        out.push({
+        const skill: HubCatalogSkill = {
           id: entry.name,
           name: fm.name || entry.name,
           description: fm.description || 'No description in SKILL.md frontmatter.',
           body: stripFrontmatter(markdown),
           root,
-        });
+        };
+        // P6c — carry the depth fields when declared (undefined = no gate).
+        if (fm.platforms && fm.platforms.length > 0) skill.platforms = fm.platforms;
+        if (fm.requiresToolsets && fm.requiresToolsets.length > 0) skill.requiresToolsets = fm.requiresToolsets;
+        if (fm.fallbackForToolsets && fm.fallbackForToolsets.length > 0) skill.fallbackForToolsets = fm.fallbackForToolsets;
+        if (fm.config && Object.keys(fm.config).length > 0) skill.config = fm.config;
+        if (fm.requiredEnvVars && fm.requiredEnvVars.length > 0) skill.requiredEnvVars = fm.requiredEnvVars;
+        out.push(skill);
       } catch {
         // A corrupt SKILL.md is skipped — never breaks the catalog.
       }
@@ -201,13 +304,97 @@ export function setSkillEnabled(
   save({ skills: { disabled: next } });
 }
 
+/** P6c — normalize a process.platform value to the skill vocabulary. */
+export function normalizePlatform(platform: string): string {
+  switch (platform) {
+    case 'win32':
+      return 'windows';
+    case 'darwin':
+      return 'macos';
+    default:
+      return platform; // linux, freebsd, …
+  }
+}
+
 /**
- * The matchable catalog (disabled skills excluded). Reads the disabled list
- * fresh so a config toggle is honored on the very next match.
+ * P6c — platform gate: a skill declaring `platforms:` is hidden on an
+ * incompatible OS. Undeclared = visible everywhere. The declared list and the
+ * runtime platform are both normalized (`darwin`≡`macos`, `win32`≡`windows`).
  */
-export function listMatchableHubSkills(cm?: ConfigManager, projectRoot = process.cwd(), home = homedir()): HubCatalogSkill[] {
+export function platformAllows(skill: HubCatalogSkill, platform = process.platform): boolean {
+  if (!skill.platforms || skill.platforms.length === 0) return true;
+  const norm = normalizePlatform(platform);
+  return skill.platforms.map(normalizePlatform).includes(norm);
+}
+
+/**
+ * P6c — toolset gate (conditional activation):
+ *   - `requires_toolsets: [t]` → hidden unless EVERY named toolset is present.
+ *   - `fallback_for_toolsets: [t]` → visible ONLY when the named toolset is
+ *     ABSENT (the skill provides what that toolset would — e.g. a search
+ *     fallback shows only when the web toolset is off).
+ * `presentToolsets` defaults to every catalog toolset (the CLI/dashboard pass
+ * the ENABLED set so a disabled toolset hides its dependents).
+ */
+export function toolsetAllows(skill: HubCatalogSkill, presentToolsets?: Set<string>): boolean {
+  if ((!skill.requiresToolsets || skill.requiresToolsets.length === 0) &&
+      (!skill.fallbackForToolsets || skill.fallbackForToolsets.length === 0)) {
+    return true;
+  }
+  const present = presentToolsets ?? new Set(TOOLSET_NAMES);
+  if (skill.requiresToolsets && skill.requiresToolsets.length > 0) {
+    if (!skill.requiresToolsets.every((t) => present.has(t))) return false;
+  }
+  if (skill.fallbackForToolsets && skill.fallbackForToolsets.length > 0) {
+    // A fallback is only for when the real toolset is GONE — if any named
+    // toolset is present, the fallback is redundant and hidden.
+    if (skill.fallbackForToolsets.some((t) => present.has(t))) return false;
+  }
+  return true;
+}
+
+/** All catalog toolset names (the default "present" set when no config). */
+const TOOLSET_NAMES = [
+  'core', 'publish', 'experience', 'code', 'coding', 'web', 'channels', 'system', 'browser', 'media', 'mcp',
+];
+
+/**
+ * The matchable catalog (disabled + platform + toolset gates applied). Reads
+ * the disabled list fresh so a config toggle is honored on the very next
+ * match; the platform/toolset gates keep incompatible skills out of the
+ * model's sight (P6c — the same "never silently inject" rule as disabled).
+ *
+ * @param cm                ConfigManager (disabled list + enabled toolsets).
+ * @param projectRoot       Hub project root (default cwd).
+ * @param home              Hub home root (default homedir()).
+ * @param platform          Runtime platform for the platform gate (default process.platform).
+ * @param presentToolsets   Toolset names present; defaults to ALL catalog
+ *                          toolsets when omitted (never hides by accident).
+ */
+export function listMatchableHubSkills(
+  cm?: ConfigManager,
+  projectRoot = process.cwd(),
+  home = homedir(),
+  platform = process.platform,
+  presentToolsets?: Set<string>,
+): HubCatalogSkill[] {
   const disabled = new Set(readDisabledSkills(cm));
-  return readHubCatalog(projectRoot, home).filter((s) => !disabled.has(s.id));
+  const present = presentToolsets ?? enabledToolsetNames(cm);
+  return readHubCatalog(projectRoot, home).filter(
+    (s) => !disabled.has(s.id) && platformAllows(s, platform) && toolsetAllows(s, present),
+  );
+}
+
+/** Enabled toolset names (absent entry = enabled — the toolsets module rule). */
+function enabledToolsetNames(cm?: ConfigManager): Set<string> {
+  try {
+    const cfg = cm?.getAll?.();
+    const state = cfg?.tools?.toolsets;
+    if (!state || typeof state !== 'object') return new Set(TOOLSET_NAMES);
+    return new Set(TOOLSET_NAMES.filter((t) => state[t]?.enabled !== false));
+  } catch {
+    return new Set(TOOLSET_NAMES);
+  }
 }
 
 // ─── Matching ───────────────────────────────────────────────────────────────

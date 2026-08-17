@@ -29,6 +29,7 @@ import {
   mkdirSync,
   readdirSync,
   renameSync,
+  rmSync,
 } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { homedir } from 'node:os';
@@ -415,6 +416,49 @@ export async function installHubSkill(
 
   logger.success(`Installed skill: ${name} v${entry.version} (${entry.source}) → ${targetFile}`);
   return { ok: true, name, version: entry.version, source: entry.source };
+}
+
+// ─── Uninstall ───────────────────────────────────────────────────────────────
+
+/**
+ * Remove an installed skill: deletes `<project>/.agents/skills/<name>/` AND
+ * its provenance record (P6d — the dashboard marketplace's uninstall button
+ * and `buff skills uninstall`). Sandboxed like install: the name must match
+ * `^[a-z0-9-]+$` and the target is always inside the skills root.
+ *
+ * @returns { ok, reason? } — ok:false only when the skill is not installed
+ *          (nothing to remove) or a removal failed.
+ */
+export function uninstallHubSkill(
+  name: string,
+  projectRoot = process.cwd(),
+): { ok: boolean; name: string; reason?: string } {
+  if (!SKILL_NAME_RE.test(name) || name === '.' || name === '..') {
+    return { ok: false, name, reason: `Refused: skill name '${name}' is not in [a-z0-9-]` };
+  }
+  const target = skillDir(projectRoot, name);
+  let removed = false;
+  try {
+    if (existsSync(target)) {
+      rmSync(target, { recursive: true, force: true });
+      removed = true;
+    }
+  } catch (err) {
+    return { ok: false, name, reason: `Removal failed: ${err instanceof Error ? err.message : String(err)}` };
+  }
+  // Drop the provenance record regardless of on-disk state (a record-only
+  // skill is also "uninstalled").
+  const before = readProvenance();
+  const after = before.filter((r) => r.name !== name);
+  if (after.length !== before.length) {
+    writeProvenance(after);
+    removed = true;
+  }
+  if (!removed) {
+    return { ok: false, name, reason: `Skill '${name}' is not installed.` };
+  }
+  logger.success(`Uninstalled skill: ${name}`);
+  return { ok: true, name };
 }
 
 // ─── Update ─────────────────────────────────────────────────────────────────

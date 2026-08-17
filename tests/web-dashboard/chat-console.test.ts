@@ -38,6 +38,8 @@ class FakeEngine implements ChatEngine {
   planChanges: Array<{ goal: string; steps: Array<{ id: string; description: string; status: 'pending' | 'running' | 'done' | 'blocked' }>; revision: number }> = [];
   /** P3b — when set, the engine replays these git diffs via onGitDiff. */
   gitDiffs: Array<{ files: Array<{ path: string; body: string }>; summary: string }> = [];
+  /** P6a — when set, the engine replays these skill drafts via onSkillDraft. */
+  skillDrafts: Array<{ name: string; description: string; markdown: string; updatedAt: number }> = [];
   /** The planStore the console injected into the last engine call (if any). */
   lastPlanStore: unknown = undefined;
 
@@ -62,6 +64,9 @@ class FakeEngine implements ChatEngine {
     }
     for (const d of this.gitDiffs) {
       opts?.onGitDiff?.(d);
+    }
+    for (const s of this.skillDrafts) {
+      opts?.onSkillDraft?.(s);
     }
     // P4 — a turn that honors the cancel signal stays in flight until the
     // console aborts it (the engine's in-flight provider request aborting).
@@ -385,6 +390,26 @@ describe('ChatConsole', () => {
     expect(diffEvents).toHaveLength(1);
     expect(diffEvents[0]).toMatchObject({ kind: 'diff', summary: '1 file changed' });
     expect(diffEvents[0].files?.[0]).toMatchObject({ path: 'a.txt' });
+  });
+
+  it('P6a — forwards skill draft payloads as structured skill_draft events', async () => {
+    const events: Array<{ kind: string; name?: string; description?: string }> = [];
+    console_.onEvent((_sid, event) => {
+      events.push({ kind: event.kind, ...('name' in event ? { name: event.name, description: event.description } : {}) });
+    });
+    engine.skillDrafts = [
+      {
+        name: 's3-upload',
+        description: 'Upload artifacts to S3.',
+        markdown: '---\nname: s3-upload\ndescription: Upload artifacts to S3.\n---\n# Steps\n...',
+        updatedAt: 123,
+      },
+    ];
+    const r = await console_.answer('s1', 'learn the S3 flow');
+    expect(r.ok).toBe(true);
+    const draftEvents = events.filter((e) => e.kind === 'skill_draft');
+    expect(draftEvents).toHaveLength(1);
+    expect(draftEvents[0]).toMatchObject({ kind: 'skill_draft', name: 's3-upload', description: 'Upload artifacts to S3.' });
   });
 
   it('P0.7 — injects a per-session plan store into the engine (survives turns)', async () => {

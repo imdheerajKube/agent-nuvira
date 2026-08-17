@@ -58,6 +58,8 @@ export interface ChatEngine {
       onPlanChange?: (snapshot: PlanSnapshot) => void;
       /** P3b — a git diff payload (rendered as a diff card in the GUI). */
       onGitDiff?: (payload: import('../tools/git-tool.js').GitDiffPayload) => void;
+      /** P6a — a skill draft payload (rendered as the /learn preview card). */
+      onSkillDraft?: (payload: import('../tools/skill-tool.js').SkillDraftPayload) => void;
       /** P0.7 — the session's plan store (per-conversation, survives turns). */
       planStore?: PlanStoreLike;
       /** Live gateway for gateway_send (gateway-triggered chat answers reuse the connected bridge). */
@@ -157,6 +159,14 @@ export type ChatConsoleEvent =
       kind: 'diff';
       files: Array<{ path: string; body: string }>;
       summary: string;
+    }
+  | {
+      /** P6a — a skill draft (rendered as the /learn preview card: accept/edit/reject). */
+      kind: 'skill_draft';
+      name: string;
+      description: string;
+      markdown: string;
+      updatedAt: number;
     }
   | { kind: 'status'; status: 'working' | 'done' | 'error' }
   | {
@@ -413,6 +423,17 @@ export class ChatConsole {
         // tool's diff is rendered as a card, not a generic step card).
         onGitDiff: (payload) => {
           emitTurn({ kind: 'diff', files: payload.files, summary: payload.summary });
+        },
+        // P6a — forward skill draft payloads as a dedicated preview-card
+        // event (accept / edit / reject live in the GUI, not the thread).
+        onSkillDraft: (payload) => {
+          emitTurn({
+            kind: 'skill_draft',
+            name: payload.name,
+            description: payload.description,
+            markdown: payload.markdown,
+            updatedAt: payload.updatedAt,
+          });
         },
         planStore: this.planStoreFor(sessionId),
       });

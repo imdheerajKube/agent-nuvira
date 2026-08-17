@@ -213,6 +213,19 @@ export const cloneRepoSchema = z.object({
 export const skillToolSchema = z.object({
   skill: z.string().optional().describe('Skill name or id to load, e.g. "website-deploy" or "code-assessment". Omit to list every available skill.'),
   params: z.record(z.string(), z.string()).optional().describe('Optional --param=value overrides resolved into {{param}} placeholders in the skill steps'),
+  bundle: z.string().optional().describe('P6b — bundle slug to load, e.g. "backend-dev" loads EVERY member skill\'s methodology in one result (cross-skill composition). Use "list" to enumerate available bundles.'),
+  manage: z
+    .object({
+      action: z.enum(['create', 'patch', 'write_file', 'delete']).describe('create = write a DRAFT (preview card gate); patch = apply an old→new text replacement to a draft/skill; write_file = add a reference file to a draft; delete = remove a draft.'),
+      name: z.string().describe('Skill/draft name (^[a-z0-9-]+$ — the id it loads by).'),
+      markdown: z.string().optional().describe('Full SKILL.md (frontmatter + body) for action=create.'),
+      oldText: z.string().optional().describe('Exact text to replace (action=patch).'),
+      newText: z.string().optional().describe('Replacement text (action=patch).'),
+      file: z.string().optional().describe('Reference file path relative to the draft dir (action=write_file).'),
+      content: z.string().optional().describe('Reference file content (action=write_file).'),
+    })
+    .optional()
+    .describe('P6a — /learn-style authoring: manage a skill DRAFT (the preview card is the accept/edit/reject gate).'),
 });
 
 /** P0.7 — plan_todo args: declare ordered steps, then update their status. */
