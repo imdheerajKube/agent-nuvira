@@ -125,8 +125,17 @@ export interface ToolLoopDeps {
    * already prepended by the caller). `toolSchemas` are the available tools
    * (empty when the provider lacks native support — the contract text in the
    * system prompt handles the fallback transport).
+   *
+   * P4 — optional `onToken`: when provided, the caller streams content tokens
+   * of this step as they arrive (the dashboard answer typewriter). The loop
+   * passes ToolLoopOptions.onToken through; a provider without streaming
+   * support simply ignores it and returns the whole step at once.
    */
-  callModel(messages: ToolMessage[], toolSchemas: ToolJsonSchema[]): Promise<StepResponse>;
+  callModel(
+    messages: ToolMessage[],
+    toolSchemas: ToolJsonSchema[],
+    onToken?: (token: string) => void,
+  ): Promise<StepResponse>;
   /** Execute one tool call. Returns the tool-result text fed back to the model. */
   executeTool(name: string, args: Record<string, unknown>, ctx: ToolContext): Promise<string>;
   /** Whether a content-only response is a think-only block (continues, doesn't end). */
@@ -145,6 +154,13 @@ export interface ToolLoopOptions {
   /** ToolContext for executions (configManager, followups sink, board, ...). */
   context: ToolContext;
   deps: ToolLoopDeps;
+  /**
+   * P4 — stream content tokens as the model generates them (typewriter for
+   * the dashboard's final answer). Passed to every callModel; providers that
+   * stream deliver tokens live, others deliver the whole step at once.
+   * The loop never buffers or reorders — the caller's onToken is verbatim.
+   */
+  onToken?: (token: string) => void;
 }
 
 export interface ToolLoopResult {
@@ -301,7 +317,7 @@ export async function runToolLoop(opts: ToolLoopOptions): Promise<ToolLoopResult
     steps += 1;
     let response: StepResponse;
     try {
-      response = await deps.callModel(thread, schemas);
+      response = await deps.callModel(thread, schemas, opts.onToken);
     } catch (err) {
       // Generation failure — surface what we have rather than crash the turn.
       // generationFailed is TRUE only when NOTHING happened yet (no content, no

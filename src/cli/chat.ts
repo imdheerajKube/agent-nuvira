@@ -434,6 +434,13 @@ export class ChatCommand extends BaseCommand {
      * Fresh per turn — the snapshot is cached, the recall is not.
      */
     projectPath?: string;
+    /**
+     * P4 — stream content tokens of the answer as the model generates them
+     * (the dashboard's typewriter). Forwarded verbatim from the tool loop;
+     * providers that stream deliver tokens live, others deliver the whole
+     * step content at once. The CLI never passes it — pure dashboard opt-in.
+     */
+    onToken?: (token: string) => void;
   } = {},
 ): Promise<{
   content: string;
@@ -483,7 +490,7 @@ export class ChatCommand extends BaseCommand {
       true,
       { auto: autoMode },
       parsed,
-      { askUser: opts.askUser, onProgress: opts.onProgress, onToolCall: opts.onToolCall, onPlanChange: opts.onPlanChange, onGitDiff: opts.onGitDiff, planStore: opts.planStore ?? this.planStore, gateway: opts.gateway, projectContext: opts.projectContext, recallContext: recallBlock },
+      { askUser: opts.askUser, onProgress: opts.onProgress, onToolCall: opts.onToolCall, onPlanChange: opts.onPlanChange, onGitDiff: opts.onGitDiff, planStore: opts.planStore ?? this.planStore, gateway: opts.gateway, projectContext: opts.projectContext, recallContext: recallBlock, onToken: opts.onToken },
     );
 
     // No-model fallback: the tool loop could not generate a single response
@@ -936,6 +943,12 @@ export class ChatCommand extends BaseCommand {
        * project snapshot.
        */
       recallContext?: string;
+      /**
+       * P4 — stream answer tokens live to the GUI (dashboard opt-in; the CLI
+       * never passes it). Delivered verbatim from the tool loop — see
+       * ToolLoopOptions.onToken.
+       */
+      onToken?: (token: string) => void;
     },
   ): Promise<{
     content: string;
@@ -1065,7 +1078,7 @@ export class ChatCommand extends BaseCommand {
         },
       },
     };
-    const callModel = this.buildToolCallModel(message, session, options, mode);
+    const callModel = this.buildToolCallModel(message, session, options, mode, ctxOverrides?.onToken);
 
     let result: ToolLoopResult;
     try {
@@ -1073,6 +1086,7 @@ export class ChatCommand extends BaseCommand {
         messages: thread,
         context: toolContext,
         maxSteps: 8,
+        onToken: ctxOverrides?.onToken,
         deps: {
           callModel,
           executeTool: async (name, args, ctx) => {
@@ -1147,8 +1161,12 @@ export class ChatCommand extends BaseCommand {
     session: { type: string; provider: InferenceProvider; model: string | undefined },
     options: { file?: string; provider?: string; model?: string; cache?: boolean; dev?: boolean },
     mode: { auto: boolean },
+    onToken?: (token: string) => void,
   ): ToolLoopDeps['callModel'] {
-    return async (messages, schemas) => {
+    return async (messages, schemas, stepOnToken) => {
+      // The effective token sink: the caller's stream wins; when a step-level
+      // sink is also given (loop passthrough) they are the same channel.
+      const sink = stepOnToken ?? onToken;
       const tryGenerate = async (
         prov: InferenceProvider,
         typ: string,
@@ -1156,7 +1174,16 @@ export class ChatCommand extends BaseCommand {
       ): Promise<StepResponse> => {
         if (typeof prov.generateTools === 'function' && schemas.length > 0) {
           try {
-            return await prov.generateTools(messages, schemas, { ...options, model: mdl });
+            // P4 — stream when the provider supports it AND a sink is wired
+            // (the dashboard); otherwise the one-shot path with the whole
+            // content delivered as a single chunk so the typewriter channel
+            // still receives the answer (appears at once — today's behavior).
+            if (sink && typeof prov.generateToolsStream === 'function') {
+              return await prov.generateToolsStream(messages, schemas, { ...options, model: mdl }, sink);
+            }
+            const result = await prov.generateTools(messages, schemas, { ...options, model: mdl });
+            if (sink && result.content) sink(result.content);
+            return result;
           } catch (err) {
             // S3: a tool-call 400 often carries the model's COMPLETE answer in
             // `failed_generation` (the API rejected only the CALL). Salvage it

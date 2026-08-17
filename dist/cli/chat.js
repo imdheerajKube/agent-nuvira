@@ -309,7 +309,7 @@ export class ChatCommand extends BaseCommand {
         }
         const parsed = parseRequestSync(message);
         const dispatchDecision = resolvePipelineDispatch(parsed, { dev: opts.dev, text: message });
-        const answer = await this.runChatAnswer(message, opts.history ?? [], { type, provider, model }, { provider: mergedOpts.provider, model: mergedOpts.model, dev: mergedOpts.dev, cache: true }, true, { auto: autoMode }, parsed, { askUser: opts.askUser, onProgress: opts.onProgress, onToolCall: opts.onToolCall, onPlanChange: opts.onPlanChange, onGitDiff: opts.onGitDiff, planStore: opts.planStore ?? this.planStore, gateway: opts.gateway, projectContext: opts.projectContext, recallContext: recallBlock });
+        const answer = await this.runChatAnswer(message, opts.history ?? [], { type, provider, model }, { provider: mergedOpts.provider, model: mergedOpts.model, dev: mergedOpts.dev, cache: true }, true, { auto: autoMode }, parsed, { askUser: opts.askUser, onProgress: opts.onProgress, onToolCall: opts.onToolCall, onPlanChange: opts.onPlanChange, onGitDiff: opts.onGitDiff, planStore: opts.planStore ?? this.planStore, gateway: opts.gateway, projectContext: opts.projectContext, recallContext: recallBlock, onToken: opts.onToken });
         // No-model fallback: the tool loop could not generate a single response
         // AND the rules assessed a high-confidence pipeline intent — run the
         // pipeline directly (rules decide only when the model is unavailable; the
@@ -766,13 +766,14 @@ export class ChatCommand extends BaseCommand {
                 },
             },
         };
-        const callModel = this.buildToolCallModel(message, session, options, mode);
+        const callModel = this.buildToolCallModel(message, session, options, mode, ctxOverrides?.onToken);
         let result;
         try {
             result = await runToolLoop({
                 messages: thread,
                 context: toolContext,
                 maxSteps: 8,
+                onToken: ctxOverrides?.onToken,
                 deps: {
                     callModel,
                     executeTool: async (name, args, ctx) => {
@@ -844,12 +845,25 @@ export class ChatCommand extends BaseCommand {
      * broken provider never crashes the turn (it answers from the next working
      * candidate, exactly like the legacy generation block).
      */
-    buildToolCallModel(message, session, options, mode) {
-        return async (messages, schemas) => {
+    buildToolCallModel(message, session, options, mode, onToken) {
+        return async (messages, schemas, stepOnToken) => {
+            // The effective token sink: the caller's stream wins; when a step-level
+            // sink is also given (loop passthrough) they are the same channel.
+            const sink = stepOnToken ?? onToken;
             const tryGenerate = async (prov, typ, mdl) => {
                 if (typeof prov.generateTools === 'function' && schemas.length > 0) {
                     try {
-                        return await prov.generateTools(messages, schemas, { ...options, model: mdl });
+                        // P4 — stream when the provider supports it AND a sink is wired
+                        // (the dashboard); otherwise the one-shot path with the whole
+                        // content delivered as a single chunk so the typewriter channel
+                        // still receives the answer (appears at once — today's behavior).
+                        if (sink && typeof prov.generateToolsStream === 'function') {
+                            return await prov.generateToolsStream(messages, schemas, { ...options, model: mdl }, sink);
+                        }
+                        const result = await prov.generateTools(messages, schemas, { ...options, model: mdl });
+                        if (sink && result.content)
+                            sink(result.content);
+                        return result;
                     }
                     catch (err) {
                         // S3: a tool-call 400 often carries the model's COMPLETE answer in

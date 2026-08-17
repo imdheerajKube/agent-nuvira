@@ -27,7 +27,7 @@ import { InferenceProvider, ModelDescriptor, ToolCallResponse, ToolMessage, Tool
 import { InferenceOptions, ProviderConfig } from '../config/types.js';
 import { logger } from '../utils/logger.js';
 import { streamCompletion } from './sse.js';
-import { chatCompletionsWithTools } from './tools.js';
+import { chatCompletionsWithTools, chatCompletionsWithToolsStream } from './tools.js';
 import { attachHttpContext } from './http-error.js';
 import { getModelTags } from './model-catalog.js';
 import { getCostTracker, recordCallWithUsage } from '../learning/cost-tracker.js';
@@ -274,6 +274,47 @@ export class OpenAICompatAdapter implements InferenceProvider {
         }
       },
     });
+  }
+
+  /**
+   * P4 — streaming native tool-calling: same wire protocol as generateTools
+   * with `stream: true`; content tokens delivered to onToken as they arrive.
+   */
+  async generateToolsStream(
+    messages: ToolMessage[],
+    tools: ToolSchema[],
+    options: InferenceOptions | undefined,
+    onToken: (token: string) => void,
+  ): Promise<ToolCallResponse> {
+    const model = options?.model || this.config.model || 'default';
+    const headers: Record<string, string> = {
+      ...extraHeaders(this.config),
+      ...buildAuthHeaders(this.meta, this.config, options?.apiKey),
+    };
+    return chatCompletionsWithToolsStream(
+      {
+        // Azure deployments live at /openai/deployments/{model}/chat/completions
+        // (chatUrl handles the meta.azureDeployments shape).
+        baseUrl: this.baseUrl,
+        url: chatUrl(this.baseUrl, model, this.meta),
+        headers,
+        model,
+        messages,
+        tools,
+        temperature: options?.temperature ?? this.config.temperature ?? 0.7,
+        maxTokens: options?.maxTokens ?? this.config.maxTokens ?? 4096,
+        timeoutMs: this.config.timeoutMs ?? 30_000,
+        // Cost parity with generate(): tool-calling turns are metered.
+        onCost: (promptText, contentText) => {
+          try {
+            recordCallWithUsage(getCostTracker(), this.meta.providerId, model, promptText, contentText, undefined);
+          } catch {
+            // Non-critical.
+          }
+        },
+      },
+      onToken,
+    );
   }
 
   async generateStream(

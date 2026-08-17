@@ -2425,6 +2425,23 @@ body {
   color: var(--text-primary);
 }
 
+/* P4 — the live answer typewriter: a blinking cursor marks the stream in
+   progress (the POST response later replaces the streamed text). */
+.chat-streaming .chat-bubble-text {
+  margin: 0 0 6px;
+}
+
+.chat-streaming .chat-bubble-text > :last-child::after {
+  content: '▍';
+  color: var(--accent-blue, #4da3ff);
+  animation: chat-stream-cursor 0.9s step-end infinite;
+}
+
+@keyframes chat-stream-cursor {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0; }
+}
+
 .chat-working {
   display: flex;
   align-items: center;
@@ -3012,6 +3029,23 @@ body {
   font-size: 13px;
   line-height: 1.5;
   color: var(--text-primary);
+}
+
+/* P4 — the live answer typewriter: a blinking cursor marks the stream in
+   progress (the POST response later replaces the streamed text). */
+.chat-streaming .chat-bubble-text {
+  margin: 0 0 6px;
+}
+
+.chat-streaming .chat-bubble-text > :last-child::after {
+  content: '▍';
+  color: var(--accent-blue, #4da3ff);
+  animation: chat-stream-cursor 0.9s step-end infinite;
+}
+
+@keyframes chat-stream-cursor {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0; }
 }
 
 .chat-working {

@@ -11,6 +11,11 @@ export declare class NIMAdapter implements InferenceProvider {
     generate(prompt: string, options?: InferenceOptions): Promise<string>;
     /** H1 — native tool-calling via the OpenAI `tools` protocol. */
     generateTools(messages: ToolMessage[], tools: ToolSchema[], options?: InferenceOptions): Promise<ToolCallResponse>;
+    /**
+     * P4 — streaming native tool-calling: same wire protocol as generateTools
+     * with `stream: true`; content tokens delivered to onToken as they arrive.
+     */
+    generateToolsStream(messages: ToolMessage[], tools: ToolSchema[], options: InferenceOptions | undefined, onToken: (token: string) => void): Promise<ToolCallResponse>;
     generateStream(prompt: string, options: InferenceOptions | undefined, onToken: (token: string) => void): Promise<string>;
     isAvailable(): Promise<boolean>;
     getInfo(): string;

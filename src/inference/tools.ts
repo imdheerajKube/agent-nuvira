@@ -11,6 +11,7 @@
 
 import type { ToolCallResponse, ToolMessage, ToolSchema } from './interface.js';
 import { attachHttpContext } from './http-error.js';
+import { parseSSELine } from './sse.js';
 
 /** OpenAI wire form of a tool call (arguments as a JSON string). */
 interface WireToolCall {
@@ -90,9 +91,10 @@ export async function chatCompletionsWithTools(opts: {
    * Cost-recording hook (quota ledger / cost tracker parity with generate()):
    * invoked with the flattened prompt + response content after a successful
    * call so adapters record wire-metered (or estimated) cost exactly like
-   * their non-tool path. Absent → no recording.
+   * their non-tool path. Absent → no recording. The third arg carries the
+   * endpoint-reported usage when the streaming path captured it (M2.2).
    */
-  onCost?: (promptText: string, contentText: string) => void;
+  onCost?: (promptText: string, contentText: string, usage?: { promptTokens?: number; completionTokens?: number }) => void;
 }): Promise<ToolCallResponse> {
   const temperature = opts.temperature ?? 0.7;
   const maxTokens = opts.maxTokens ?? 4096;
@@ -133,4 +135,187 @@ export async function chatCompletionsWithTools(opts: {
     }
   }
   return result;
+}
+
+// ─── Streaming tool-calling (dashboard answer typewriter) ───────────────────
+// The same OpenAI `tools`/`tool_calls` protocol, streamed: assistant content
+// deltas are delivered to onToken as they arrive and tool_calls arrive as
+// per-index fragments (id/name on the first chunk, arguments split across
+// chunks) that must be accumulated before parsing.
+
+/** The wire shape of one streaming tool_calls delta (fragments per index). */
+interface WireStreamToolCallDelta {
+  index: number;
+  id?: string;
+  type?: string;
+  function?: { name?: string; arguments?: string };
+}
+
+interface WireStreamChunk {
+  choices?: Array<{
+    delta?: { content?: string | null; tool_calls?: WireStreamToolCallDelta[] };
+    finish_reason?: string | null;
+  }>;
+  usage?: { prompt_tokens?: number; completion_tokens?: number };
+}
+
+/** Accumulator for one streaming tool call (fragments joined per index). */
+interface AccumulatedToolCall {
+  id: string;
+  name: string;
+  argumentsRaw: string;
+}
+
+/**
+ * Parse the tool_calls delta from an SSE line, or null when the line carries
+ * none (non-data lines, [DONE], content-only chunks).
+ */
+function parseSSEToolCallDeltas(line: string): WireStreamToolCallDelta[] | null {
+  if (!line.startsWith('data: ')) return null;
+  const data = line.slice(6).trim();
+  if (data === '[DONE]') return null;
+  try {
+    const parsed = JSON.parse(data) as WireStreamChunk;
+    return parsed?.choices?.[0]?.delta?.tool_calls ?? null;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Streamed twin of chatCompletionsWithTools: POST with `stream: true` and
+ * deliver content tokens to onToken as they arrive. Returns the same
+ * ToolCallResponse shape as the non-streaming helper (tool_calls accumulated
+ * from per-index fragments, arguments JSON-parsed). Best-effort measured
+ * usage is captured from the final chunk (stream_options.include_usage).
+ */
+export async function chatCompletionsWithToolsStream(
+  opts: Parameters<typeof chatCompletionsWithTools>[0],
+  onToken: (token: string) => void,
+): Promise<ToolCallResponse> {
+  const temperature = opts.temperature ?? 0.7;
+  const maxTokens = opts.maxTokens ?? 4096;
+  const url = opts.url || `${opts.baseUrl.replace(/\/+$/, '')}/chat/completions`;
+
+  const response = await fetch(url, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', ...opts.headers },
+    body: JSON.stringify({
+      model: opts.model,
+      messages: buildWireMessages(opts.messages),
+      temperature,
+      max_tokens: maxTokens,
+      tools: opts.tools.map((t) => ({
+        type: 'function',
+        function: { name: t.name, description: t.description, parameters: t.parameters },
+      })),
+      stream: true,
+      // OpenAI convention for measured usage in the final chunk (Groq and
+      // OpenRouter support it; providers that ignore it just omit usage).
+      stream_options: { include_usage: true },
+    }),
+  });
+
+  if (!response.ok) {
+    const errorBody = await response.text();
+    // Same attachHttpContext treatment as the non-streaming helper so shared
+    // failover/classification (Retry-After / x-ratelimit-reset) works.
+    throw attachHttpContext(
+      new Error(`Tool-calling streaming API error (${response.status}): ${errorBody}`),
+      response.status,
+      response.headers,
+    );
+  }
+
+  const reader = response.body?.getReader();
+  if (!reader) throw new Error('Response body is not readable');
+
+  const decoder = new TextDecoder();
+  const contentParts: string[] = [];
+  const toolCalls: AccumulatedToolCall[] = [];
+  let buffer = '';
+  // M2.2: capture the endpoint-reported usage from the final chunk
+  // (stream_options.include_usage convention) so onCost records MEASURED cost
+  // instead of a length-based estimate — the generateStream parity pattern.
+  let streamUsage: { promptTokens?: number; completionTokens?: number } | undefined;
+
+  /** Process one complete SSE line (content delta → onToken; tool_calls → accumulate). */
+  const handleLine = (trimmed: string): void => {
+    const token = parseSSELine(trimmed);
+    if (token) {
+      contentParts.push(token);
+      onToken(token);
+    }
+    const deltas = parseSSEToolCallDeltas(trimmed);
+    if (deltas) {
+      for (const d of deltas) {
+        const acc = (toolCalls[d.index] ??= { id: '', name: '', argumentsRaw: '' });
+        if (d.id) acc.id = d.id;
+        if (d.function?.name) acc.name = d.function.name;
+        if (d.function?.arguments) acc.argumentsRaw += d.function.arguments;
+      }
+    }
+    if (trimmed.startsWith('data: ')) {
+      const data = trimmed.slice(6).trim();
+      if (data !== '[DONE]') {
+        try {
+          const parsed = JSON.parse(data) as WireStreamChunk;
+          if (
+            parsed?.usage &&
+            typeof parsed.usage.prompt_tokens === 'number' &&
+            typeof parsed.usage.completion_tokens === 'number'
+          ) {
+            streamUsage = {
+              promptTokens: parsed.usage.prompt_tokens,
+              completionTokens: parsed.usage.completion_tokens,
+            };
+          }
+        } catch {
+          // Non-JSON data lines are ignored.
+        }
+      }
+    }
+  };
+
+  try {
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      buffer += decoder.decode(value, { stream: true });
+      const lines = buffer.split('\n');
+      buffer = lines.pop() || '';
+      for (const line of lines) {
+        const trimmed = line.trim();
+        if (trimmed) handleLine(trimmed);
+      }
+    }
+    const remaining = buffer.trim();
+    if (remaining) handleLine(remaining);
+  } finally {
+    reader.releaseLock();
+  }
+
+  const parsedCalls: ToolCallResponse['toolCalls'] = [];
+  for (const acc of toolCalls) {
+    let args: Record<string, unknown> = {};
+    try {
+      args = JSON.parse(acc.argumentsRaw || '{}');
+    } catch {
+      args = {};
+    }
+    parsedCalls.push({ id: acc.id, name: acc.name, arguments: args });
+  }
+  const content = contentParts.join('');
+  if (opts.onCost) {
+    try {
+      opts.onCost(
+        opts.messages.map((m) => m.content).filter(Boolean).join('\n'),
+        content,
+        streamUsage,
+      );
+    } catch {
+      // Cost recording must never break the stream.
+    }
+  }
+  return { content, toolCalls: parsedCalls };
 }

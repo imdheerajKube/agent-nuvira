@@ -85,6 +85,13 @@ export interface InferenceProvider {
      */
     generateStream?(prompt: string, options: InferenceOptions | undefined, onToken: (token: string) => void): Promise<string>;
     /**
+     * P4 — streaming native tool-calling (optional). Same contract as
+     * generateTools, but assistant content tokens are delivered to onToken as
+     * they arrive (the dashboard answer typewriter). When absent, callers fall
+     * back to generateTools and deliver the whole response at once.
+     */
+    generateToolsStream?(messages: ToolMessage[], tools: ToolSchema[], options: InferenceOptions | undefined, onToken: (token: string) => void): Promise<ToolCallResponse>;
+    /**
      * Check if the provider is properly configured and available
      */
     isAvailable(): Promise<boolean>;

@@ -123,10 +123,24 @@ cosmetic until this is real.
 - [x] Code blocks with a language label + copy button (`⧉ Copy` → `✓ Copied`)
       + syntax highlighting (curated languages the agent emits: ts/js/json/bash/
       python/markdown/yaml/diff/sql/html/css)
-- [ ] Token streaming via SSE — LIVE progress already streams per-session
+- [x] Token streaming via SSE — LIVE progress already streams per-session
       (`/api/chat/:sessionId/events`: steps + tool cards + plan + diff); the final
       answer text still arrives at once via the POST (candidate: stream tokens of
-      the final reply server-side)
+      the final reply server-side). **Delivered**: a `token` SSE event typewriter.
+      Engine: new optional `InferenceProvider.generateToolsStream` (streaming
+      twin of generateTools) implemented by the four OpenAI-protocol adapters
+      (groq / openrouter / nim / openai-compat) via ONE shared helper
+      `chatCompletionsWithToolsStream` (SSE parse of `delta.content` +
+      per-index `tool_calls` fragments; measured usage forwarded to onCost —
+      M2.2 parity). The tool loop passes `onToken` into `callModel`;
+      `ChatCommand.answerOnce` gained an opt-in `onToken` (the plan's sanctioned
+      engine hook — the CLI never passes it, so `buff chat` is byte-identical).
+      GUI: ChatPage renders the stream in a live bubble with a blinking cursor
+      and REPLACES it with the authoritative POST content on resolve — required
+      because the engine's S1 longest-substantive logic may select an earlier,
+      longer answer than the last chunk. Providers without streaming degrade to
+      one-shot (whole content as one chunk — today's behavior); the non-streaming
+      POST stays the fallback per the risk table
 - [x] Render tool *steps* as structured blocks — done earlier (P0.6 tool cards,
       P0.7 plan checklist, P3b diff card; live + snapshotted into the reply)
 - [x] **Tests:** `Markdown.test.tsx` (12 cases: compliance incl. nested lists,

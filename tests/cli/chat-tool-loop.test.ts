@@ -272,3 +272,122 @@ describe('ChatCommand — P4 project auto-recall (dashboard chat)', () => {
     expect(thread.some((m) => m.content.includes('[Recalled project context]'))).toBe(false);
   });
 });
+
+describe('ChatCommand — P4 answer token streaming (dashboard typewriter)', () => {
+  // Same hermetic env as the P4 recall describe (BUFF_MEMORY_DIR +
+  // BUFF_CONFIG_DIR per test) — the engine must never touch the real ~/.buff.
+  let tempDir: string;
+  let origMemory: string | undefined;
+  let origConfig: string | undefined;
+
+  beforeEach(() => {
+    vi.spyOn(console, 'log').mockImplementation(() => {});
+    vi.spyOn(console, 'error').mockImplementation(() => {});
+    tempDir = mkdtempSync(join(tmpdir(), 'buff-chat-stream-'));
+    origMemory = process.env.BUFF_MEMORY_DIR;
+    origConfig = process.env.BUFF_CONFIG_DIR;
+    process.env.BUFF_MEMORY_DIR = join(tempDir, 'memory');
+    process.env.BUFF_CONFIG_DIR = join(tempDir, 'config');
+    resetModelRegistry();
+  });
+
+  afterEach(() => {
+    resetModelRegistry();
+    resetWorkspaceStore();
+    if (origMemory === undefined) delete process.env.BUFF_MEMORY_DIR;
+    else process.env.BUFF_MEMORY_DIR = origMemory;
+    if (origConfig === undefined) delete process.env.BUFF_CONFIG_DIR;
+    else process.env.BUFF_CONFIG_DIR = origConfig;
+    try {
+      rmSync(tempDir, { recursive: true, force: true });
+    } catch { /* noop */ }
+    vi.restoreAllMocks();
+  });
+
+  function stubGetProvider(provider: InferenceProvider) {
+    return vi
+      .spyOn(ChatCommand.prototype as unknown as { getProvider: (o?: unknown) => Promise<{ type: string; provider: InferenceProvider }> }, 'getProvider')
+      .mockResolvedValue({ type: 'groq', provider });
+  }
+
+  it('streams answer tokens live when the provider supports generateToolsStream', async () => {
+    const tokens: string[] = [];
+    const provider = {
+      name: 'Mock',
+      generateToolsStream: vi.fn(async (_m: unknown, _t: unknown, _o: unknown, onToken: (t: string) => void) => {
+        for (const t of ['Hello', ' there', '!']) onToken(t);
+        return { content: 'Hello there!', toolCalls: [] };
+      }),
+      generateTools: vi.fn().mockResolvedValue({ content: 'must not be used', toolCalls: [] }),
+      generate: vi.fn().mockResolvedValue('unused'),
+      isAvailable: vi.fn().mockResolvedValue(true),
+      getInfo: () => 'Mock',
+      listModels: vi.fn().mockResolvedValue([]),
+    } as unknown as InferenceProvider;
+    stubGetProvider(provider);
+
+    const cmd = new ChatCommand() as unknown as { answerOnce: Function };
+    const out = await cmd.answerOnce('hi', {
+      provider: 'groq',
+      model: 'mock-model',
+      onToken: (t) => tokens.push(t),
+    });
+
+    expect(out.content).toBe('Hello there!');
+    // Every token reached the sink, in order (the typewriter).
+    expect(tokens).toEqual(['Hello', ' there', '!']);
+    expect(provider.generateToolsStream).toHaveBeenCalledTimes(1);
+    // The streaming path is preferred over the one-shot.
+    expect(provider.generateTools).not.toHaveBeenCalled();
+  });
+
+  it('degrades to one-shot generateTools delivered as a single token chunk', async () => {
+    const tokens: string[] = [];
+    const provider = {
+      name: 'Mock',
+      // No generateToolsStream — the one-shot path must still deliver the
+      // whole content through the token channel so the GUI shows it (at once,
+      // today's behavior) instead of nothing.
+      generateTools: vi.fn().mockResolvedValue({ content: 'Whole answer at once.', toolCalls: [] }),
+      generate: vi.fn().mockResolvedValue('unused'),
+      isAvailable: vi.fn().mockResolvedValue(true),
+      getInfo: () => 'Mock',
+      listModels: vi.fn().mockResolvedValue([]),
+    } as unknown as InferenceProvider;
+    stubGetProvider(provider);
+
+    const cmd = new ChatCommand() as unknown as { answerOnce: Function };
+    const out = await cmd.answerOnce('hi again', {
+      provider: 'groq',
+      model: 'mock-model',
+      onToken: (t) => tokens.push(t),
+    });
+
+    expect(out.content).toBe('Whole answer at once.');
+    expect(tokens).toEqual(['Whole answer at once.']);
+  });
+
+  it('does NOT stream when no onToken sink is wired (CLI path unchanged)', async () => {
+    const provider = {
+      name: 'Mock',
+      generateToolsStream: vi.fn(async (_m: unknown, _t: unknown, _o: unknown, onToken: (t: string) => void) => {
+        onToken('leaked');
+        return { content: 'plain', toolCalls: [] };
+      }),
+      generateTools: vi.fn().mockResolvedValue({ content: 'plain', toolCalls: [] }),
+      generate: vi.fn().mockResolvedValue('unused'),
+      isAvailable: vi.fn().mockResolvedValue(true),
+      getInfo: () => 'Mock',
+      listModels: vi.fn().mockResolvedValue([]),
+    } as unknown as InferenceProvider;
+    stubGetProvider(provider);
+
+    const cmd = new ChatCommand() as unknown as { answerOnce: Function };
+    const out = await cmd.answerOnce('hi', { provider: 'groq', model: 'mock-model' });
+
+    expect(out.content).toBe('plain');
+    // Without a sink the engine takes the one-shot path (no stream involved).
+    expect(provider.generateToolsStream).not.toHaveBeenCalled();
+    expect(provider.generateTools).toHaveBeenCalledTimes(1);
+  });
+});
