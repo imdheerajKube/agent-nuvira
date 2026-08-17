@@ -150,6 +150,15 @@ export declare class ChatCommand extends BaseCommand {
          * project, cwd-aware).
          */
         projectContext?: string;
+        /**
+         * P4 — the attached project's directory. When set, the turn ALSO recalls
+         * that project's prior sessions + facts (`autoRecall`) and injects them
+         * as a `[Recalled project context]` message — the dashboard's twin of the
+         * CLI execute/plan auto-recall (which use process.cwd(); the dashboard
+         * runs in its own cwd, so the attached project is the recall key).
+         * Fresh per turn — the snapshot is cached, the recall is not.
+         */
+        projectPath?: string;
     }): Promise<{
         content: string;
         followups: FollowupSuggestion[];

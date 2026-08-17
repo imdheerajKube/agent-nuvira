@@ -174,9 +174,20 @@ about without being told how.
       `GET /api/sessions/:id` (transcript); ChatPage sidebar with title / msg
       count / recency, click → thread loads; "New conversation" starts a fresh
       id and the abandoned thread stays resumable in the sidebar
-- [ ] On new session, auto-recall memory/facts for the attached project
-      (rides Phase 3's project attach — the `session` + `memory` CLI commands
-      already exist; wire their output into the first turn's context)
+- [x] On new session, auto-recall memory/facts for the attached project
+      (rides Phase 3's project attach). `ChatCommand.answerOnce` gained
+      `projectPath`; each turn calls `maybeAutoRecall(projectPath, workspaceStore)`
+      FRESH (the snapshot is cached, the recall is not) and injects the
+      `[Recalled project context]` block (last goal / result / sessions /
+      facts / resume point) as a thread message after the system prompt — the
+      dashboard's twin of the CLI execute/plan auto-recall, which keys on
+      `process.cwd()` while the dashboard runs in its own cwd. Best-effort:
+      an empty recall injects nothing, a recall failure never breaks the turn.
+      Engine tests drive the REAL `answerOnce` with a captured mock provider
+      (recall block present with `projectPath`, absent without); `cache.ts`
+      now resolves lazily honoring `BUFF_MEMORY_DIR` (last file still
+      computing its path at module load — tests were leaking cache hits into
+      the real `~/.buff/cache.json`)
 - [x] **Tests:** ChatConsole persistence (restart resume, reset, corrupt store),
       `/api/sessions` integration (auth gates, list, transcript, 404), ChatPage
       sidebar render + resume

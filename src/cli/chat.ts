@@ -10,6 +10,7 @@ import { ContextParser } from '../context/parser.js';
 import { getCache } from '../context/cache.js';
 import { assembleContext, retrievalOptionsFromConfig, recordRetrievalStats } from '../learning/retrieval.js';
 import { getChatHistory } from '../context/history.js';
+import { maybeAutoRecall, recallContextBlock } from '../context/session-recall.js';
 import { getMemoryManager } from '../memory/manager.js';
 import { logger } from '../utils/logger.js';
 import { printOrchestrationResult } from './execute.js';
@@ -424,6 +425,15 @@ export class ChatCommand extends BaseCommand {
      * project, cwd-aware).
      */
     projectContext?: string;
+    /**
+     * P4 — the attached project's directory. When set, the turn ALSO recalls
+     * that project's prior sessions + facts (`autoRecall`) and injects them
+     * as a `[Recalled project context]` message — the dashboard's twin of the
+     * CLI execute/plan auto-recall (which use process.cwd(); the dashboard
+     * runs in its own cwd, so the attached project is the recall key).
+     * Fresh per turn — the snapshot is cached, the recall is not.
+     */
+    projectPath?: string;
   } = {},
 ): Promise<{
   content: string;
@@ -448,6 +458,21 @@ export class ChatCommand extends BaseCommand {
     // P3 — tell the GUI where the turn is headed before the tool loop runs.
     opts.onProgress?.(`   🧠 routed to ${provider.name}${model ? ` / ${model}` : ''} — working…`);
 
+    // P4 — when a project is attached, recall its prior sessions + facts
+    // FRESH per turn (the snapshot is cached, the recall is not — prior work
+    // may have landed since the last turn). Best-effort: empty recall injects
+    // nothing, a recall failure never breaks the turn (maybeAutoRecall never
+    // throws).
+    let recallBlock: string | undefined;
+    if (opts.projectPath) {
+      try {
+        const recall = await maybeAutoRecall(opts.projectPath, this.configManager.getWorkspaceStore());
+        if (recall) recallBlock = recallContextBlock(recall);
+      } catch {
+        recallBlock = undefined;
+      }
+    }
+
     const parsed = parseRequestSync(message);
     const dispatchDecision = resolvePipelineDispatch(parsed, { dev: opts.dev, text: message });
     const answer = await this.runChatAnswer(
@@ -458,7 +483,7 @@ export class ChatCommand extends BaseCommand {
       true,
       { auto: autoMode },
       parsed,
-      { askUser: opts.askUser, onProgress: opts.onProgress, onToolCall: opts.onToolCall, onPlanChange: opts.onPlanChange, onGitDiff: opts.onGitDiff, planStore: opts.planStore ?? this.planStore, gateway: opts.gateway, projectContext: opts.projectContext },
+      { askUser: opts.askUser, onProgress: opts.onProgress, onToolCall: opts.onToolCall, onPlanChange: opts.onPlanChange, onGitDiff: opts.onGitDiff, planStore: opts.planStore ?? this.planStore, gateway: opts.gateway, projectContext: opts.projectContext, recallContext: recallBlock },
     );
 
     // No-model fallback: the tool loop could not generate a single response
@@ -905,6 +930,12 @@ export class ChatCommand extends BaseCommand {
        * project; the CLI runs in one already).
        */
       projectContext?: string;
+      /**
+       * P4 — the recalled `[Recalled project context]` block (prior sessions
+       * + facts for the attached project), fresh per turn. Injected after the
+       * project snapshot.
+       */
+      recallContext?: string;
     },
   ): Promise<{
     content: string;
@@ -971,6 +1002,11 @@ export class ChatCommand extends BaseCommand {
       // context: the model knows what it is looking at without being told.
       ...(ctxOverrides?.projectContext
         ? [{ role: 'user' as const, content: `[Project context]\n${ctxOverrides.projectContext}` }]
+        : []),
+      // P4 — the recalled project context (prior sessions + facts) rides in
+      // next, so the model starts from what this project was last doing.
+      ...(ctxOverrides?.recallContext
+        ? [{ role: 'user' as const, content: ctxOverrides.recallContext }]
         : []),
       ...(fileContext
         ? [{ role: 'user' as const, content: `[File context]\n${fileContext}` }]
