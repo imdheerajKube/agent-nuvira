@@ -194,6 +194,12 @@ export const runCliSchema = z.object({
     .describe('Set true ONLY after the user explicitly confirmed a destructive/system-level command (stop/shutdown/publish/clear/disallow). The tool refuses without it.'),
 });
 
+/** P0.8 — skill tool args: load a reusable capability pack by name (+ params). */
+export const skillToolSchema = z.object({
+  skill: z.string().optional().describe('Skill name or id to load, e.g. "website-deploy" or "code-assessment". Omit to list every available skill.'),
+  params: z.record(z.string(), z.string()).optional().describe('Optional --param=value overrides resolved into {{param}} placeholders in the skill steps'),
+});
+
 /** P0.7 — plan_todo args: declare ordered steps, then update their status. */
 export const planTodoSchema = z.object({
   action: z.enum(['create', 'update']).describe('create = declare/replace the plan steps; update = mark one step\'s status'),
@@ -817,6 +823,23 @@ registerTool({
     const { request } = verifyRequirementSchema.parse(args);
     return verifyRequirement(request, ctx);
   },
+});
+
+// ─── P0.8 skill tool (load reusable capability packs in chat) ──────────────
+// The chat agent can finally SAY "load the code-assessment skill" — the skill
+// store existed but was unreachable from the chat loop (round-3 finding).
+// Backed by `src/tools/skill-tool.ts`: resolves from BOTH the compiled
+// SkillStore (buff skill list) and the hub catalog (buff skills install →
+// SKILL.md), returns the methodology (steps + parameters, placeholders
+// resolved), marks used, refuses disabled skills, lists on unknown.
+
+registerTool({
+  name: 'skill',
+  description: 'Load a reusable capability pack (skill) into the conversation — its methodology (ordered steps + parameters) comes back to guide the work. Use when a task matches a known skill: code assessment, technical roadmap, plan creation, test strategy, website deployment, etc. Omit the name to list every available skill.',
+  category: 'experience',
+  inputSchema: skillToolSchema,
+  endsAgentStep: false,
+  run: (args, ctx) => import('./skill-tool.js').then((m) => m.runSkillTool(args as import('./skill-tool.js').SkillToolArgs, ctx)),
 });
 
 // ─── H2 delegation tool (sub-agent registry) ────────────────────────────────

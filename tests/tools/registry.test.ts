@@ -36,6 +36,7 @@ import {
   suggestFollowupsSchema,
   type ToolContext,
 } from '../../src/tools/registry.js';
+import { toolsetForTool } from '../../src/tools/toolsets.js';
 import { z } from 'zod';
 
 describe('registry — registration', () => {
@@ -67,7 +68,7 @@ describe('registry — registration', () => {
     expect(props).toHaveProperty('skip_tests');
   });
 
-  it('registers the experience tools (ask_user / suggest_followups / verify_requirement)', () => {
+  it('registers the experience tools (ask_user / suggest_followups / verify_requirement / skill)', () => {
     const askUser = getTool('ask_user');
     expect(askUser).toBeDefined();
     expect(askUser!.category).toBe('experience');
@@ -75,6 +76,17 @@ describe('registry — registration', () => {
     expect(suggest).toBeDefined();
     expect(suggest!.endsAgentStep).toBe(false);
     expect(getTool('verify_requirement')).toBeDefined();
+    // P0.8 — the skill tool joins the experience toolset (DELIBERATE count
+    // update: the experience group now carries the capability-pack loader).
+    const skill = getTool('skill');
+    expect(skill).toBeDefined();
+    expect(skill!.category).toBe('experience');
+    expect(skill!.endsAgentStep).toBe(false);
+    const skillParams = (toolJsonSchemas(['skill'])[0].parameters as { properties: Record<string, unknown> }).properties;
+    expect(skillParams).toHaveProperty('skill');
+    expect(skillParams).toHaveProperty('params');
+    // One toolset owns it — never unassigned or duplicated.
+    expect(toolsetForTool('skill')?.name).toBe('experience');
   });
 
   it('listTools is sorted and stable', () => {

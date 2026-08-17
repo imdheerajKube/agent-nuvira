@@ -71,8 +71,8 @@ export const TOOLSETS: ToolsetDef[] = [
   {
     name: 'experience',
     label: 'Experience',
-    description: 'In-loop UX tools: clarification (ask_user), requirement verification, end-of-response follow-ups.',
-    tools: ['ask_user', 'suggest_followups', 'verify_requirement'],
+    description: 'In-loop UX tools: clarification (ask_user), requirement verification, end-of-response follow-ups, and loading reusable capability packs (skill).',
+    tools: ['ask_user', 'suggest_followups', 'verify_requirement', 'skill'],
   },
   {
     name: 'code',
