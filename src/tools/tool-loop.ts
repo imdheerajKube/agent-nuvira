@@ -287,10 +287,18 @@ export async function runToolLoop(opts: ToolLoopOptions): Promise<ToolLoopResult
         // the model hallucinated its name — the toggle is never cosmetic.
         resultText = `Error: tool "${call.name}" is disabled — its toolset is turned off. Enable it with \`buff tools toolsets\`.`;
       } else {
-        // I2: emit `tool:called` on the observability bus — drives the hooks
-        // registry's `post_tool_call` hook (Hermes hooks.py parity). Timing is
+        // I2: emit `tool:started` (before execution) + `tool:called` (after)
+        // on the observability bus — drives the hooks registry's
+        // `post_tool_call` hook (Hermes hooks.py parity) AND the dashboard's
+        // step cards (P0.6: the GUI renders each call as a live card —
+        // running → ok/error with duration + collapsible result). Timing is
         // wall-clock; `ok` mirrors the tool-result convention (Error: prefix).
         const startedAt = Date.now();
+        ctx.emit?.('tool:started', {
+          id: call.id,
+          tool: call.name,
+          args: call.arguments,
+        });
         try {
           deps.onEvent?.(`   ⚙ ${call.name}(${summarizeArgs(call.arguments)})`);
           resultText = await deps.executeTool(call.name, call.arguments, ctx);
@@ -299,6 +307,7 @@ export async function runToolLoop(opts: ToolLoopOptions): Promise<ToolLoopResult
           // is fed back to the model — the JSON payload is runtime metadata.
           resultText = appendToolArtifact(resultText, ctx.artifacts);
           ctx.emit?.('tool:called', {
+            id: call.id,
             tool: call.name,
             ok: !resultText.startsWith('Error:'),
             result: resultText,
@@ -309,6 +318,7 @@ export async function runToolLoop(opts: ToolLoopOptions): Promise<ToolLoopResult
           const message = err instanceof Error ? err.message : String(err);
           resultText = `Error: ${message}`;
           ctx.emit?.('tool:called', {
+            id: call.id,
             tool: call.name,
             ok: false,
             error: message,

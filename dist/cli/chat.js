@@ -285,7 +285,7 @@ export class ChatCommand extends BaseCommand {
         opts.onProgress?.(`   🧠 routed to ${provider.name}${model ? ` / ${model}` : ''} — working…`);
         const parsed = parseRequestSync(message);
         const dispatchDecision = resolvePipelineDispatch(parsed, { dev: opts.dev, text: message });
-        const answer = await this.runChatAnswer(message, opts.history ?? [], { type, provider, model }, { provider: mergedOpts.provider, model: mergedOpts.model, dev: mergedOpts.dev, cache: true }, true, { auto: autoMode }, parsed, { askUser: opts.askUser, onProgress: opts.onProgress, gateway: opts.gateway });
+        const answer = await this.runChatAnswer(message, opts.history ?? [], { type, provider, model }, { provider: mergedOpts.provider, model: mergedOpts.model, dev: mergedOpts.dev, cache: true }, true, { auto: autoMode }, parsed, { askUser: opts.askUser, onProgress: opts.onProgress, onToolCall: opts.onToolCall, gateway: opts.gateway });
         // No-model fallback: the tool loop could not generate a single response
         // AND the rules assessed a high-confidence pipeline intent — run the
         // pipeline directly (rules decide only when the model is unavailable; the
@@ -692,7 +692,15 @@ export class ChatCommand extends BaseCommand {
         const toolContext = {
             configManager: this.configManager,
             cwd: process.cwd(),
-            emit: (event, data, source) => getEventBus().emit(event, data, source),
+            emit: (event, data, source) => {
+                // P0.6 — forward tool-call lifecycle events to the GUI before they
+                // reach the bus (the bus drives hooks; the override drives the card
+                // stream). Other events keep flowing to the bus untouched.
+                if (ctxOverrides?.onToolCall && (event === 'tool:started' || event === 'tool:called')) {
+                    ctxOverrides.onToolCall(event === 'tool:started' ? 'started' : 'called', data);
+                }
+                getEventBus().emit(event, data, source);
+            },
             // P3 — the dashboard chat console injects a NON-TTY ask_user renderer
             // (inquirer would hang on the server's piped stdin); the CLI keeps the
             // default interactive renderer.

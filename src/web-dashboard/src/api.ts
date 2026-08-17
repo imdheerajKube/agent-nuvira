@@ -812,6 +812,8 @@ export class DashboardAPI {
     handlers: {
       onProgress?: (line: string) => void;
       onStatus?: (status: string) => void;
+      /** P0.6 — a tool-call lifecycle step (rendered as a card). */
+      onTool?: (t: { id: string; tool: string; phase: 'started' | 'called'; args?: string; ok?: boolean; result?: string; error?: string; durationMs?: number }) => void;
       onQuestion?: (q: { questionId: string; question: string; choices: Array<{ label: string; description?: string }>; multiSelect: boolean }) => void;
     },
   ): () => void {
@@ -827,6 +829,32 @@ export class DashboardAPI {
       try {
         const payload = JSON.parse((event as MessageEvent).data) as { status?: string };
         if (payload.status) handlers.onStatus?.(payload.status);
+      } catch { /* ignore malformed */ }
+    });
+    es.addEventListener('tool', (event) => {
+      try {
+        const payload = JSON.parse((event as MessageEvent).data) as {
+          id?: string;
+          tool?: string;
+          phase?: 'started' | 'called';
+          args?: string;
+          ok?: boolean;
+          result?: string;
+          error?: string;
+          durationMs?: number;
+        };
+        if (payload.tool && (payload.phase === 'started' || payload.phase === 'called')) {
+          handlers.onTool?.({
+            id: payload.id || `call_${Math.random().toString(36).slice(2, 8)}`,
+            tool: payload.tool,
+            phase: payload.phase,
+            args: payload.args,
+            ok: payload.ok,
+            result: payload.result,
+            error: payload.error,
+            durationMs: payload.durationMs,
+          });
+        }
       } catch { /* ignore malformed */ }
     });
     es.addEventListener('question', (event) => {

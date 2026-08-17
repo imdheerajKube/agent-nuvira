@@ -34,6 +34,22 @@ import type { ParsedRequest } from '../nlu/parser.js';
 import { resolveDispatch } from '../nlu/actions.js';
 import { isConversationalQuestion, hasCodingAction } from '../nlu/conversation-gate.js';
 import { runToolLoop, extractFallbackToolCalls } from '../tools/tool-loop.js';
+
+/**
+ * P0.6 — a tool-call lifecycle event forwarded to the GUI. `started` carries
+ * the call id + args (rendered as a running card); `called` carries the
+ * outcome (ok/error + duration + result preview). The dashboard chat console
+ * forwards these over SSE as `tool` events.
+ */
+export interface ToolCallInfo {
+  id?: string;
+  tool: string;
+  args?: Record<string, unknown>;
+  ok?: boolean;
+  result?: string;
+  error?: string;
+  durationMs?: number;
+}
 import type { ToolLoopDeps, StepResponse, ToolLoopResult } from '../tools/tool-loop.js';
 import { getTool, TOOL_CONTRACT_JSON, type ToolContext, type FollowupSuggestion } from '../tools/registry.js';
 // S2/S3 — the shared tool-call reliability helpers (salvage failed_generation,
@@ -368,6 +384,12 @@ export class ChatCommand extends BaseCommand {
     askUser?: ToolContext['askUser'];
     /** P3 — live progress lines for the dashboard chat console. */
     onProgress?: (line: string) => void;
+    /**
+     * P0.6 — live step cards: forward tool-call lifecycle events (started /
+     * called) so the GUI can render each call as a structured card. Passed
+     * through to runChatAnswer's ctxOverrides; see ToolCallInfo.
+     */
+    onToolCall?: (phase: 'started' | 'called', info: ToolCallInfo) => void;
     /** Live gateway for gateway_send (gateway-triggered chat answers reuse the connected bridge). */
     gateway?: ToolContext['gateway'];
   } = {},
@@ -404,7 +426,7 @@ export class ChatCommand extends BaseCommand {
       true,
       { auto: autoMode },
       parsed,
-      { askUser: opts.askUser, onProgress: opts.onProgress, gateway: opts.gateway },
+      { askUser: opts.askUser, onProgress: opts.onProgress, onToolCall: opts.onToolCall, gateway: opts.gateway },
     );
 
     // No-model fallback: the tool loop could not generate a single response
@@ -819,6 +841,14 @@ export class ChatCommand extends BaseCommand {
     ctxOverrides?: {
       askUser?: ToolContext['askUser'];
       onProgress?: (line: string) => void;
+      /**
+       * P0.6 — live step cards: called once per tool-call lifecycle.
+       * `started` fires BEFORE execution (with the call id + args), `called`
+       * after (ok/error + duration + result). The dashboard console forwards
+       * these as structured `tool` events so the GUI renders each tool call
+       * as a card, not just a progress line.
+       */
+      onToolCall?: (phase: 'started' | 'called', info: ToolCallInfo) => void;
       /** Live gateway for gateway_send (gateway-triggered chat answers reuse the connected bridge). */
       gateway?: ToolContext['gateway'];
     },
@@ -900,7 +930,15 @@ export class ChatCommand extends BaseCommand {
     const toolContext: ToolContext = {
       configManager: this.configManager,
       cwd: process.cwd(),
-      emit: (event, data, source) => getEventBus().emit(event as never, data, source),
+      emit: (event, data, source) => {
+        // P0.6 — forward tool-call lifecycle events to the GUI before they
+        // reach the bus (the bus drives hooks; the override drives the card
+        // stream). Other events keep flowing to the bus untouched.
+        if (ctxOverrides?.onToolCall && (event === 'tool:started' || event === 'tool:called')) {
+          ctxOverrides.onToolCall(event === 'tool:started' ? 'started' : 'called', data as ToolCallInfo);
+        }
+        getEventBus().emit(event as never, data, source);
+      },
       // P3 — the dashboard chat console injects a NON-TTY ask_user renderer
       // (inquirer would hang on the server's piped stdin); the CLI keeps the
       // default interactive renderer.

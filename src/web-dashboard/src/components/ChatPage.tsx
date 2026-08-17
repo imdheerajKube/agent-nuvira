@@ -27,6 +27,33 @@ interface ChatMessage {
   followups?: Array<{ prompt: string; label?: string }>;
   /** The agent's live working steps that produced this answer (P3 streaming). */
   steps?: string[];
+  /** P0.6 — the tool calls that produced this answer (rendered as cards). */
+  tools?: ToolStep[];
+}
+
+/** P0.6 — one tool-call lifecycle step, rendered as a card (started → called). */
+interface ToolStep {
+  /** Stable per-call id (e.g. `call_1`) — matches started→called. */
+  id: string;
+  tool: string;
+  phase: 'started' | 'called';
+  /** One-line args preview, e.g. `{path: 'src/foo.ts'}`. */
+  args?: string;
+  ok?: boolean;
+  result?: string;
+  error?: string;
+  durationMs?: number;
+}
+
+/** Small icon per tool family for the card header. */
+function toolIcon(tool: string): string {
+  if (tool === 'read_file' || tool === 'glob' || tool === 'list_dir') return '📖';
+  if (tool === 'edit_file' || tool === 'write_file') return '✏️';
+  if (tool === 'run_terminal' || tool === 'run_cli') return '⚙️';
+  if (tool === 'web_search' || tool === 'read_page') return '🌐';
+  if (tool === 'delegate' || tool === 'spawn_subagents') return '👥';
+  if (tool === 'ask_user') return '🤔';
+  return '🔧';
 }
 
 /** A CLI command the intent router resolved for a chat message. */
@@ -47,6 +74,43 @@ interface PendingResolve {
   top: ResolvedCommand | null;
 }
 
+/**
+ * P0.6 — render a tool-call as a card: icon + name + one-line args, a status
+ * badge (⏳ running / ✓ ok / ✗ error), duration when finished, and a
+ * collapsible result/error body. `live` renders the running state (phase
+ * 'started' still spinning); snapshotted message cards are always settled.
+ */
+function ToolCards({ tools, live }: { tools: ToolStep[]; live?: boolean }) {
+  if (!tools || tools.length === 0) return null;
+  return (
+    <div className={`chat-tool-cards${live ? ' chat-tool-cards-live' : ''}`}>
+      {tools.map((t) => {
+        const running = t.phase === 'started' || t.ok === undefined;
+        const failed = t.ok === false;
+        return (
+          <div key={t.id} className={`chat-tool-card${running ? ' chat-tool-running' : failed ? ' chat-tool-err' : ' chat-tool-ok'}`}>
+            <div className="chat-tool-head">
+              <span className="chat-tool-icon">{toolIcon(t.tool)}</span>
+              <span className="chat-tool-name">{t.tool}</span>
+              {t.args ? <code className="chat-tool-args">{t.args}</code> : null}
+              <span className="chat-tool-status" title={running ? 'running' : failed ? 'failed' : 'done'}>
+                {running ? '⏳' : failed ? '✗' : '✓'}
+              </span>
+              {t.durationMs !== undefined && !running ? <span className="chat-tool-dur">{t.durationMs}ms</span> : null}
+            </div>
+            {t.error || t.result ? (
+              <details className="chat-tool-detail">
+                <summary>{failed ? 'Error' : 'Result'}</summary>
+                <pre className="chat-tool-body">{t.error || t.result}</pre>
+              </details>
+            ) : null}
+          </div>
+        );
+      })}
+    </div>
+  );
+}
+
 function newSessionId(): string {
   try {
     if (typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function') return crypto.randomUUID();
@@ -62,12 +126,16 @@ export default function ChatPage() {
   const [error, setError] = useState('');
   const [meta, setMeta] = useState<string | null>(null);
   const [liveSteps, setLiveSteps] = useState<string[]>([]);
+  // P0.6 — live tool-call cards (upserted by id: started creates, called completes).
+  const [liveTools, setLiveTools] = useState<ToolStep[]>([]);
   // Plain-English → CLI short-circuit: a confident command match shows a
   // confirm card instead of burning a model turn; ambiguous asks show choices.
   const [pendingResolve, setPendingResolve] = useState<PendingResolve | null>(null);
-  // Mirrors liveSteps for the async send callback (state would be stale in the
-  // closure when the POST resolves) — the final message snapshots every step.
+  // Mirrors liveSteps/liveTools for the async send callback (state would be
+  // stale in the closure when the POST resolves) — the final message snapshots
+  // every step.
   const liveStepsRef = useRef<string[]>([]);
+  const liveToolsRef = useRef<ToolStep[]>([]);
   const sessionIdRef = useRef<string>(newSessionId());
   const subRef = useRef<(() => void) | null>(null);
   const listRef = useRef<HTMLDivElement | null>(null);
@@ -117,6 +185,8 @@ export default function ChatPage() {
       setMeta(null);
       setLiveSteps([]);
       liveStepsRef.current = [];
+      setLiveTools([]);
+      liveToolsRef.current = [];
       setMessages((m) => [...m, { role: 'user', content: clean }]);
       setInput('');
       setBusy(true);
@@ -153,6 +223,17 @@ export default function ChatPage() {
           setPendingQuestion(q);
           setQuestionSel(new Set());
         },
+        // P0.6 — live tool card: `started` creates/updates the card, `called`
+        // completes it with ok/error + duration. Keyed by the stable call id.
+        onTool: (t) => {
+          const next = [...liveToolsRef.current];
+          const idx = next.findIndex((c) => c.id === t.id);
+          const card: ToolStep = { id: t.id, tool: t.tool, phase: t.phase, args: t.args, ok: t.ok, result: t.result, error: t.error, durationMs: t.durationMs };
+          if (idx >= 0) next[idx] = card;
+          else next.push(card);
+          liveToolsRef.current = next;
+          setLiveTools(next);
+        },
       });
       const r = await dashboardAPI.chatSend(sessionId, clean);
       subRef.current?.();
@@ -167,6 +248,7 @@ export default function ChatPage() {
             error: r.generationFailed,
             followups: r.followups,
             steps: liveStepsRef.current,
+            tools: liveToolsRef.current,
           },
         ]);
       } else {
@@ -282,6 +364,8 @@ export default function ChatPage() {
     setMessages([]);
     setLiveSteps([]);
     liveStepsRef.current = [];
+    setLiveTools([]);
+    liveToolsRef.current = [];
     setError('');
     setMeta(null);
   }, []);
@@ -325,6 +409,14 @@ export default function ChatPage() {
                 <div key={i} className={`chat-bubble chat-${m.role}${m.error ? ' chat-error' : ''}`}>
                   <div className="chat-bubble-role">{m.role === 'user' ? 'You' : '🤖 Agent'}</div>
                   <div className="chat-bubble-text">{m.content}</div>
+                  {m.role === 'assistant' && m.tools && m.tools.length > 0 ? (
+                    <details className="chat-steps" open>
+                      <summary>
+                        {m.tools.length} tool call{m.tools.length === 1 ? '' : 's'}
+                      </summary>
+                      <ToolCards tools={m.tools} />
+                    </details>
+                  ) : null}
                   {m.role === 'assistant' && m.steps && m.steps.length > 0 ? (
                     <details className="chat-steps">
                       <summary>{m.steps.length} step{m.steps.length === 1 ? '' : 's'}</summary>
@@ -339,6 +431,7 @@ export default function ChatPage() {
             {busy ? (
               <div className="chat-bubble chat-assistant">
                 <div className="chat-bubble-role">🤖 Agent</div>
+                <ToolCards tools={liveTools} live />
                 <div className="chat-working">
                   {liveSteps.length > 0 ? (
                     <span className="chat-working-lines">

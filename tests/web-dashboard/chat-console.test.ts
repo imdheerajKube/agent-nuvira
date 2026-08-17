@@ -22,6 +22,8 @@ class FakeEngine implements ChatEngine {
   delayResolve = false;
   /** When set, the engine emits these lines via onProgress before answering. */
   progressLines: string[] = [];
+  /** P0.6 — when set, the engine replays these tool calls via onToolCall. */
+  toolCalls: Array<{ phase: 'started' | 'called'; tool: string; args?: Record<string, unknown>; ok?: boolean; result?: string; error?: string; durationMs?: number }> = [];
 
   async answerOnce(
     message: string,
@@ -30,6 +32,9 @@ class FakeEngine implements ChatEngine {
     this.calls.push({ message, opts });
     for (const line of this.progressLines) {
       opts?.onProgress?.(line);
+    }
+    for (const t of this.toolCalls) {
+      opts?.onToolCall?.(t.phase, { id: `call_${t.tool}`, tool: t.tool, args: t.args, ok: t.ok, result: t.result, error: t.error, durationMs: t.durationMs });
     }
     const respond = () => ({
       content: `echo: ${message}`,
@@ -213,6 +218,50 @@ describe('ChatConsole', () => {
     await console_.answer('s1', 'hi', { provider: 'gemini', model: 'gemini-2.5-flash' });
     expect(engine.calls[0].opts?.provider).toBe('gemini');
     expect(engine.calls[0].opts?.model).toBe('gemini-2.5-flash');
+  });
+
+  it('P0.6 — forwards tool-call lifecycle events as structured cards', async () => {
+    const events: Array<{ kind: string; tool?: string; phase?: string; id?: string; args?: string; ok?: boolean; durationMs?: number }> = [];
+    console_.onEvent((_sid, event) => {
+      events.push({
+        kind: event.kind,
+        ...('tool' in event ? { tool: event.tool, phase: event.phase, id: event.id, args: event.args, ok: event.ok, durationMs: event.durationMs } : {}),
+      });
+    });
+    engine.toolCalls = [
+      { phase: 'started', tool: 'read_file', args: { path: 'src/foo.ts' } },
+      { phase: 'called', tool: 'read_file', ok: true, result: '1 | export const x = 1;', durationMs: 12 },
+      { phase: 'started', tool: 'run_terminal', args: { command: 'npm test' } },
+      { phase: 'called', tool: 'run_terminal', ok: false, error: 'exit 1', durationMs: 300 },
+    ];
+    const r = await console_.answer('s1', 'inspect');
+    expect(r.ok).toBe(true);
+    const toolEvents = events.filter((e) => e.kind === 'tool');
+    expect(toolEvents).toHaveLength(4);
+    // started → called pairs carry the same id and the one-line args summary.
+    expect(toolEvents[0]).toMatchObject({ kind: 'tool', tool: 'read_file', phase: 'started', id: 'call_read_file', args: '{path: "src/foo.ts"}' });
+    expect(toolEvents[1]).toMatchObject({ kind: 'tool', tool: 'read_file', phase: 'called', id: 'call_read_file', ok: true, durationMs: 12 });
+    expect(toolEvents[2]).toMatchObject({ kind: 'tool', tool: 'run_terminal', phase: 'started', args: '{command: "npm test"}' });
+    expect(toolEvents[3]).toMatchObject({ kind: 'tool', tool: 'run_terminal', phase: 'called', ok: false, durationMs: 300 });
+  });
+
+  it('P0.6 — filters ask_user / suggest_followups out of the tool-card stream', async () => {
+    const events: Array<{ kind: string; tool?: string }> = [];
+    console_.onEvent((_sid, event) => {
+      events.push({ kind: event.kind, ...('tool' in event ? { tool: event.tool } : {}) });
+    });
+    engine.toolCalls = [
+      { phase: 'started', tool: 'ask_user', args: { question: 'really?' } },
+      { phase: 'called', tool: 'ask_user', ok: true, result: 'yes', durationMs: 1 },
+      { phase: 'started', tool: 'suggest_followups', args: { items: [{ prompt: 'x' }] } },
+      { phase: 'called', tool: 'suggest_followups', ok: true, durationMs: 1 },
+      { phase: 'started', tool: 'read_file', args: { path: 'a.ts' } },
+      { phase: 'called', tool: 'read_file', ok: true, result: 'x', durationMs: 2 },
+    ];
+    await console_.answer('s1', 'hi');
+    const toolEvents = events.filter((e) => e.kind === 'tool');
+    expect(toolEvents).toHaveLength(2);
+    expect(toolEvents.map((e) => e.tool)).toEqual(['read_file', 'read_file']);
   });
 
   it('streams live progress lines to subscribers during a turn', async () => {

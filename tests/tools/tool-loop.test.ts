@@ -291,6 +291,47 @@ describe('tool loop — helpers', () => {
     expect(isBareAcknowledgment('')).toBe(false);
   });
 
+  it('P0.6 — emits tool:started (before) and tool:called (after) with the call id + outcome', async () => {
+    const emits: Array<{ event: string; data: Record<string, unknown> }> = [];
+    const emitCtx: ToolContext = {
+      configManager: {},
+      emit: (event, data) => {
+        emits.push({ event: String(event), data: data as Record<string, unknown> });
+      },
+    };
+    const script: StepResponse[] = [
+      {
+        content: '',
+        toolCalls: [
+          { id: 'c1', name: 'verify_requirement', arguments: { request: 'build x' } },
+          { id: 'c2', name: 'verify_requirement', arguments: { request: 'broken' } },
+        ],
+      },
+      { content: 'Done.', toolCalls: [] },
+    ];
+    const deps = mockDeps(
+      script,
+      async (name: string, args: Record<string, unknown>) => {
+        // A thrown error exercises the catch branch: ok:false + `error` field.
+        if (args.request === 'broken') throw new Error('exploded');
+        return 'requirementState: complete';
+      },
+    );
+    const result = await runToolLoop({ messages: [{ role: 'user', content: 'go' }], context: emitCtx, deps });
+    expect(result.content).toBe('Done.');
+
+    const started = emits.filter((e) => e.event === 'tool:started');
+    const called = emits.filter((e) => e.event === 'tool:called');
+    expect(started).toHaveLength(2);
+    expect(called).toHaveLength(2);
+    // started carries the stable call id + args; called carries ok + duration.
+    expect(started[0].data).toMatchObject({ id: 'c1', tool: 'verify_requirement', args: { request: 'build x' } });
+    expect(called[0].data).toMatchObject({ id: 'c1', tool: 'verify_requirement', ok: true });
+    expect(typeof called[0].data.durationMs).toBe('number');
+    // The catch branch: ok:false + `error` field (not the Error: prefix path).
+    expect(called[1].data).toMatchObject({ id: 'c2', tool: 'verify_requirement', ok: false, error: 'exploded' });
+  });
+
   it('a bare-acknowledgment + suggest_followups does NOT end the turn — the real answer must follow', async () => {
     // Misordered model: step 1 emits ONLY a lead-in + valid followups (the
     // contract violation the user reported). The loop must NOT deliver the

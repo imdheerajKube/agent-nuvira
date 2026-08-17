@@ -3757,6 +3757,19 @@ function handleRequest(req: IncomingMessage, res: ServerResponse): void {
       try {
         if (event.kind === 'progress') {
           res.write(`event: progress\ndata: ${JSON.stringify({ line: event.line })}\n\n`);
+        } else if (event.kind === 'tool') {
+          // P0.6 — structured step card: tool name + lifecycle (started →
+          // called with ok/duration/result). The GUI renders it as a card.
+          res.write(`event: tool\ndata: ${JSON.stringify({
+            id: event.id,
+            tool: event.tool,
+            phase: event.phase,
+            args: event.args,
+            ok: event.ok,
+            result: event.result,
+            error: event.error,
+            durationMs: event.durationMs,
+          })}\n\n`);
         } else if (event.kind === 'status') {
           res.write(`event: status\ndata: ${JSON.stringify({ status: event.status })}\n\n`);
         } else if (event.kind === 'question') {
