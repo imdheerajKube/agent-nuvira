@@ -30,9 +30,10 @@ import {
   readdirSync,
   renameSync,
 } from 'node:fs';
-import { join } from 'node:path';
+import { dirname, join } from 'node:path';
 import { homedir } from 'node:os';
 import { createHash } from 'node:crypto';
+import { fileURLToPath } from 'node:url';
 
 import { logger } from '../utils/logger.js';
 import { compareVersions } from '../workflow/registry.js';
@@ -77,7 +78,14 @@ export interface SkillProvenance {
 
 // ─── Constants ──────────────────────────────────────────────────────────────
 
-/** Built-in default registry (GitHub raw — the agent-nuvira skills repo). */
+/**
+ * Built-in default registry. The PACKAGED local dir is preferred (see
+ * packagedRegistryDir): the `.agents/skills/` layout ships inside the npm
+ * package + the repo checkout, so the default resolves from the install
+ * itself — private-repo-independent, offline, and never a silent 404. The
+ * GitHub raw URL is the last-resort fallback for unusual installs that lack
+ * the packaged dir.
+ */
 const DEFAULT_REGISTRY_BASE = 'https://raw.githubusercontent.com/imdheerajKube/agent-nuvira/main/.agents/skills';
 
 /** Local store for provenance + quarantine. */
@@ -127,9 +135,29 @@ function sha256Of(content: string): string {
   return createHash('sha256').update(content).digest('hex');
 }
 
-/** Resolve the registry base: env override, or the built-in default. */
+/**
+ * The packaged `.agents/skills/` registry dir (npm-installed or repo
+ * checkout) — `file://` base when present, null when absent. Resolved from
+ * the module location: dev (tsx) src/learning → ../../ = repo root;
+ * compiled dist/learning → ../../ = package root. Both carry `.agents/skills`
+ * (committed in the repo, shipped in the npm tarball via package.json files).
+ */
+export function packagedRegistryDir(): string | null {
+  try {
+    const pkgRoot = join(dirname(fileURLToPath(import.meta.url)), '..', '..');
+    const dir = join(pkgRoot, '.agents', 'skills');
+    return existsSync(join(dir, 'index.json')) ? dir : null;
+  } catch {
+    return null;
+  }
+}
+
+/** Resolve the registry base: env override → packaged dir → built-in default. */
 function registryBase(): string {
-  return process.env.BUFF_SKILLS_REGISTRY || DEFAULT_REGISTRY_BASE;
+  if (process.env.BUFF_SKILLS_REGISTRY) return process.env.BUFF_SKILLS_REGISTRY;
+  const packaged = packagedRegistryDir();
+  if (packaged) return `file://${packaged}`;
+  return DEFAULT_REGISTRY_BASE;
 }
 
 /** Is a registry base a local directory (offline mode)? */

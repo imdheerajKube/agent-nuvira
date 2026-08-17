@@ -122,6 +122,28 @@ describe('source detection + config', () => {
     expect(configuredRegistries(cm)).toEqual(['git+https://github.com/acme/skills', `file://${registryDir}`]);
     expect(allSources(cm).map((s) => s.kind)).toEqual(['git-repo', 'local-dir']);
   });
+
+  it('P5c #3 — the default resolves to the PACKAGED .agents/skills dir (private-repo-independent)', () => {
+    // No config, no env override → the built-in default is the packaged
+    // `.agents/skills/` dir that ships in the npm package + repo checkout
+    // (local-dir), NOT the GitHub raw URL — so the registry resolves without
+    // any GitHub access and the repo can stay private.
+    const savedEnv = process.env.BUFF_SKILLS_REGISTRY;
+    delete process.env.BUFF_SKILLS_REGISTRY;
+    try {
+      const registries = configuredRegistries();
+      expect(registries).toHaveLength(1);
+      expect(registries[0]).toMatch(/^file:\/\//);
+      expect(registries[0]).toContain('.agents/skills');
+      expect(allSources()[0].kind).toBe('local-dir');
+      // The packaged dir actually resolves (index.json present) — the exact
+      // 404-vs-resolve regression: the default must never silently 404.
+      expect(probeRegistries()).resolves.toMatchObject([{ reachable: true }]);
+    } finally {
+      if (savedEnv === undefined) delete process.env.BUFF_SKILLS_REGISTRY;
+      else process.env.BUFF_SKILLS_REGISTRY = savedEnv;
+    }
+  });
 });
 
 describe('unified search (local-dir fixture, no network)', () => {

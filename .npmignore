@@ -22,6 +22,11 @@ node_modules/
 !README.md
 !LICENSE
 
+# Packaged skill registry (ships with the package — the default registry
+# source resolves from the install itself, private-repo-independent)
+!.agents/skills/**
+!.agents/skills/**/SKILL.md
+
 # Docker
 docker-compose.yml
 Dockerfile

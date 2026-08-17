@@ -31,6 +31,7 @@ import { createHash } from 'node:crypto';
 
 import { ConfigManager } from '../config/manager.js';
 import { logger } from '../utils/logger.js';
+import { packagedRegistryDir } from './skills-hub.js';
 import type { HubSkillEntry } from './skills-hub.js';
 
 // ─── Types ──────────────────────────────────────────────────────────────────
@@ -81,7 +82,10 @@ export function detectSourceKind(base: string): RegistrySource['kind'] {
 
 /**
  * The configured registry list: buffconfig `skills.registries[]` wins; else
- * the legacy BUFF_SKILLS_REGISTRY env override; else the built-in default.
+ * the legacy BUFF_SKILLS_REGISTRY env override; else the PACKAGED
+ * `.agents/skills/` dir (ships in the npm package + repo checkout — the
+ * default resolves from the install itself, private-repo-independent); else
+ * the GitHub raw URL as last-resort fallback.
  */
 export function configuredRegistries(cm?: ConfigManager): string[] {
   try {
@@ -93,6 +97,8 @@ export function configuredRegistries(cm?: ConfigManager): string[] {
   } catch { /* fall through to env/default */ }
   const env = process.env.BUFF_SKILLS_REGISTRY;
   if (env) return [env];
+  const packaged = packagedRegistryDir();
+  if (packaged) return [`file://${packaged}`];
   return ['https://raw.githubusercontent.com/imdheerajKube/agent-nuvira/main/.agents/skills'];
 }
 
