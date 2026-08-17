@@ -8,10 +8,11 @@ interface LayoutProps {
 }
 
 const NAV_ITEMS = [
-  { path: '/', label: 'Overview', icon: '📊' },
+  // Phase 5 — Chat is the front door (the lobby); the other rooms are panels.
+  { path: '/', label: 'Chat', icon: '💬' },
+  { path: '/overview', label: 'Overview', icon: '📊' },
   { path: '/dag', label: 'Execution', icon: '🔀' },
   { path: '/tasks', label: 'Tasks', icon: '🚀' },
-  { path: '/chat', label: 'Chat', icon: '💬' },
   { path: '/evals', label: 'Evals', icon: '🏆' },
   { path: '/gateway', label: 'Gateway', icon: '🌐' },
   { path: '/models', label: 'Models', icon: '🧠' },

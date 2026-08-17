@@ -56,7 +56,11 @@ export default function App() {
   return (
     <Layout connected={connected} lastUpdated={lastUpdated}>
       <Routes>
-        <Route path="/" element={<Overview data={data} />} />
+        {/* Phase 5 — Chat is the front door; Overview (and every other room)
+            stays reachable as a panel, never required. */}
+        <Route path="/" element={<ChatPage />} />
+        <Route path="/overview" element={<Overview data={data} />} />
+        <Route path="/chat" element={<Navigate to="/" replace />} />
         <Route path="/dag" element={<DAGView data={data} />} />
         <Route path="/history" element={<HistoryBrowser data={data} />} />
         <Route path="/costs" element={<CostDashboard data={data} />} />
