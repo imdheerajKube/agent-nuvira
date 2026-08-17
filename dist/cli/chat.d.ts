@@ -1,6 +1,21 @@
 import { Command } from 'commander';
 import { BaseCommand } from './commands.js';
 import type { ParsedRequest } from '../nlu/parser.js';
+/**
+ * P0.6 — a tool-call lifecycle event forwarded to the GUI. `started` carries
+ * the call id + args (rendered as a running card); `called` carries the
+ * outcome (ok/error + duration + result preview). The dashboard chat console
+ * forwards these over SSE as `tool` events.
+ */
+export interface ToolCallInfo {
+    id?: string;
+    tool: string;
+    args?: Record<string, unknown>;
+    ok?: boolean;
+    result?: string;
+    error?: string;
+    durationMs?: number;
+}
 import { type ToolContext, type FollowupSuggestion } from '../tools/registry.js';
 /** E3a — the menu-free dispatch decision (rule-based, C1/C3 only). */
 export interface PipelineDispatchDecision {
@@ -97,6 +112,12 @@ export declare class ChatCommand extends BaseCommand {
         askUser?: ToolContext['askUser'];
         /** P3 — live progress lines for the dashboard chat console. */
         onProgress?: (line: string) => void;
+        /**
+         * P0.6 — live step cards: forward tool-call lifecycle events (started /
+         * called) so the GUI can render each call as a structured card. Passed
+         * through to runChatAnswer's ctxOverrides; see ToolCallInfo.
+         */
+        onToolCall?: (phase: 'started' | 'called', info: ToolCallInfo) => void;
         /** Live gateway for gateway_send (gateway-triggered chat answers reuse the connected bridge). */
         gateway?: ToolContext['gateway'];
     }): Promise<{

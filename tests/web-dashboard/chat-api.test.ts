@@ -33,10 +33,15 @@ class FakeEngine implements ChatEngine {
   calls: Array<{ message: string; opts?: unknown }> = [];
   /** When set, the engine emits these lines via onProgress before answering. */
   progressLines: string[] = [];
+  /** P0.6 — when set, the engine emits these tool calls via onToolCall. */
+  toolCalls: Array<{ phase: 'started' | 'called'; tool: string; args?: Record<string, unknown>; ok?: boolean; result?: string; error?: string; durationMs?: number }> = [];
   async answerOnce(message: string, opts?: unknown): Promise<{ content: string; followups: unknown[]; provider?: string; model?: string }> {
     this.calls.push({ message, opts });
-    const o = opts as { onProgress?: (line: string) => void };
+    const o = opts as { onProgress?: (line: string) => void; onToolCall?: (phase: 'started' | 'called', info: { id?: string; tool: string; args?: Record<string, unknown>; ok?: boolean; result?: string; error?: string; durationMs?: number }) => void };
     for (const line of this.progressLines) o.onProgress?.(line);
+    for (const t of this.toolCalls) {
+      o.onToolCall?.(t.phase, { id: `call_${t.tool}`, tool: t.tool, args: t.args, ok: t.ok, result: t.result, error: t.error, durationMs: t.durationMs });
+    }
     return {
       content: `echo: ${message}`,
       followups: [{ prompt: 'What next?', label: 'Next' }],
@@ -199,6 +204,55 @@ describe('/api/chat', () => {
     engine.progressLines = [];
     expect(post.status).toBe(200);
     expect(received).toEqual(['→ calling tool: read_file', '→ tool result received']);
+  });
+
+  it('P0.6 — streams tool-call lifecycle events over SSE (id, phase, args, ok, duration)', async () => {
+    engine.toolCalls = [
+      { phase: 'started', tool: 'read_file', args: { path: 'src/foo.ts' } },
+      { phase: 'called', tool: 'read_file', ok: true, result: '1 | export const x = 1;', durationMs: 12 },
+      { phase: 'started', tool: 'run_terminal', args: { command: 'npm test' } },
+      { phase: 'called', tool: 'run_terminal', ok: false, error: 'exit 1', durationMs: 300 },
+    ];
+    const sessionId = 'tool-session-1';
+    const res = await fetch(`${baseUrl}/api/chat/${sessionId}/events?token=${encodeURIComponent(token)}`, { method: 'GET' });
+    expect(res.status).toBe(200);
+    const reader = res.body!.getReader();
+    const decoder = new TextDecoder();
+    let buffer = '';
+    const received: Array<Record<string, unknown>> = [];
+    const postPromise = authedFetch('/api/chat', 'POST', { sessionId, message: 'inspect' });
+    const deadline = Date.now() + 4000;
+    while (Date.now() < deadline && received.length < 4) {
+      const result = await Promise.race([
+        reader.read(),
+        new Promise<{ done: true }>((resolve) => setTimeout(() => resolve({ done: true }), 250)),
+      ]);
+      if (result.done) break;
+      buffer += decoder.decode(result.value, { stream: true });
+      let idx: number;
+      while ((idx = buffer.indexOf('event: tool')) !== -1) {
+        buffer = buffer.slice(idx);
+        const lineIdx = buffer.indexOf('data: ');
+        const frameEnd = buffer.indexOf('\n\n');
+        if (lineIdx === -1 || frameEnd === -1) break;
+        const data = buffer.slice(lineIdx + 6, frameEnd);
+        try {
+          const payload = JSON.parse(data) as Record<string, unknown>;
+          if (payload.tool) received.push(payload);
+        } catch { /* partial frame */ }
+        buffer = buffer.slice(frameEnd + 2);
+      }
+    }
+    await reader.cancel();
+    const post = await postPromise;
+    engine.toolCalls = [];
+    expect(post.status).toBe(200);
+    expect(received).toHaveLength(4);
+    // started→called pairs carry the same id; args summary + ok + duration ride along.
+    expect(received[0]).toMatchObject({ tool: 'read_file', phase: 'started', id: 'call_read_file', args: '{path: "src/foo.ts"}' });
+    expect(received[1]).toMatchObject({ tool: 'read_file', phase: 'called', id: 'call_read_file', ok: true, durationMs: 12 });
+    expect(received[2]).toMatchObject({ tool: 'run_terminal', phase: 'started', args: '{command: "npm test"}' });
+    expect(received[3]).toMatchObject({ tool: 'run_terminal', phase: 'called', ok: false, durationMs: 300 });
   });
 
   it('rejects the SSE events endpoint without a valid token', async () => {

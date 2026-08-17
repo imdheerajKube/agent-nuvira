@@ -2741,6 +2741,104 @@ body {
   margin-top: 6px;
 }
 
+/* P0.6 — tool-call step cards (structured rendering of the agent's work) */
+.chat-tool-cards {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin: 8px 0 2px;
+}
+
+.chat-tool-card {
+  border: 1px solid var(--border);
+  border-left: 3px solid var(--accent-blue, #3b82f6);
+  border-radius: 8px;
+  padding: 6px 8px;
+  background: color-mix(in srgb, var(--bg-secondary, #1b1f27) 55%, transparent);
+}
+
+.chat-tool-card.chat-tool-ok {
+  border-left-color: #22c55e;
+}
+
+.chat-tool-card.chat-tool-err {
+  border-left-color: #ef4444;
+}
+
+.chat-tool-card.chat-tool-running {
+  border-left-color: var(--accent-blue, #3b82f6);
+  opacity: 0.92;
+}
+
+.chat-tool-head {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+}
+
+.chat-tool-icon {
+  font-size: 12px;
+  flex: none;
+}
+
+.chat-tool-name {
+  font-family: var(--font-mono, ui-monospace, SFMono-Regular, Menlo, Consolas, monospace);
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--text-primary);
+  flex: none;
+}
+
+.chat-tool-args {
+  font-family: var(--font-mono, ui-monospace, SFMono-Regular, Menlo, Consolas, monospace);
+  font-size: 11px;
+  color: var(--text-secondary);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  min-width: 0;
+  flex: 1;
+}
+
+.chat-tool-status {
+  font-size: 12px;
+  flex: none;
+}
+
+.chat-tool-dur {
+  font-family: var(--font-mono, ui-monospace, SFMono-Regular, Menlo, Consolas, monospace);
+  font-size: 10.5px;
+  color: var(--text-secondary);
+  flex: none;
+}
+
+.chat-tool-detail {
+  margin-top: 5px;
+}
+
+.chat-tool-detail summary {
+  cursor: pointer;
+  font-size: 10.5px;
+  color: var(--accent-blue, #3b82f6);
+  user-select: none;
+}
+
+.chat-tool-body {
+  margin: 5px 0 0;
+  padding: 6px 8px;
+  font-family: var(--font-mono, ui-monospace, SFMono-Regular, Menlo, Consolas, monospace);
+  font-size: 11px;
+  line-height: 1.5;
+  white-space: pre-wrap;
+  word-break: break-word;
+  max-height: 180px;
+  overflow: auto;
+  background: color-mix(in srgb, var(--bg, #14171c) 70%, transparent);
+  border-radius: 6px;
+  color: var(--text-secondary);
+}
+
 /* ── Platform transport config (PlatformConfigSection) ─────────────────── */
 .platform-config {
   margin-top: 10px;

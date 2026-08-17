@@ -33,6 +33,8 @@ export interface ChatEngine {
       askUser?: (question: string, choices: unknown[], multiSelect: boolean) => Promise<{ answer: unknown; index: number | number[]; custom?: string }>;
       /** P3 — live working steps (tool calls / reasoning markers). */
       onProgress?: (line: string) => void;
+      /** P0.6 — one tool-call lifecycle event (started → called with outcome). */
+      onToolCall?: (phase: 'started' | 'called', info: { id?: string; tool: string; args?: Record<string, unknown>; ok?: boolean; result?: string; error?: string; durationMs?: number }) => void;
       /** Live gateway for gateway_send (gateway-triggered chat answers reuse the connected bridge). */
       gateway?: {
         send(target: string, text: string): Promise<boolean>;
@@ -75,6 +77,20 @@ export interface ChatAnswerResult {
 /** A live event for one session (P3 progress streaming). */
 export type ChatConsoleEvent =
   | { kind: 'progress'; line: string }
+  | {
+      /** P0.6 — one tool-call lifecycle step (rendered as a card in the GUI). */
+      kind: 'tool';
+      /** Stable per-call id (e.g. `call_1`) — the client matches started→called. */
+      id: string;
+      tool: string;
+      phase: 'started' | 'called';
+      /** One-line args preview, e.g. `{path: 'src/foo.ts'}` (60 chars). */
+      args?: string;
+      ok?: boolean;
+      result?: string;
+      error?: string;
+      durationMs?: number;
+    }
   | { kind: 'status'; status: 'working' | 'done' | 'error' }
   | {
       kind: 'question';
@@ -200,6 +216,23 @@ export class ChatConsole {
         // P3 — stream the agent's working steps to the GUI (tool calls, model
         // reasoning markers) instead of a silent wait.
         onProgress: (line) => this.emit(sessionId, { kind: 'progress', line }),
+        // P0.6 — structured step cards: forward each tool-call lifecycle
+        // event. suggest_followups has its own chips UI and ask_user its own
+        // question card — neither renders as a tool card.
+        onToolCall: (phase, info) => {
+          if (info.tool === 'suggest_followups' || info.tool === 'ask_user') return;
+          this.emit(sessionId, {
+            kind: 'tool',
+            id: info.id ?? `call_${Date.now().toString(36)}`,
+            tool: info.tool,
+            phase,
+            args: summarizeToolArgs(info.args),
+            ok: info.ok,
+            result: info.result,
+            error: info.error,
+            durationMs: info.durationMs,
+          });
+        },
       });
       const turns: ChatTurn[] = [...history, { role: 'user', content: clean }];
       if (answer.content && answer.content.trim()) {
@@ -274,6 +307,25 @@ export class ChatConsole {
     this.sessions.delete(sessionId);
     this.busy.delete(sessionId);
   }
+}
+
+/**
+ * P0.6 — one-line args preview for the tool card, e.g. `{path: 'src/foo.ts'}`.
+ * Compact (60 chars max); values are truncated, keys with empty/undefined
+ * values are dropped so the card never reads `{path: undefined}`.
+ */
+function summarizeToolArgs(args: Record<string, unknown> | undefined): string | undefined {
+  if (!args) return undefined;
+  const parts: string[] = [];
+  for (const [key, value] of Object.entries(args)) {
+    if (value === undefined || value === null || value === '') continue;
+    const shown = typeof value === 'string' ? JSON.stringify(value) : JSON.stringify(value);
+    const text = `${key}: ${shown}`;
+    parts.push(text.length > 34 ? `${text.slice(0, 31)}…` : text);
+  }
+  if (parts.length === 0) return undefined;
+  const joined = `{${parts.join(', ')}}`;
+  return joined.length > 60 ? `${joined.slice(0, 57)}…` : joined;
 }
 
 /** A fresh session id for the client to hold (or the server may generate one). */

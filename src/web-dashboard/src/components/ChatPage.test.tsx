@@ -175,6 +175,48 @@ describe('ChatPage', () => {
     expect(unsub).toHaveBeenCalled();
   });
 
+  it('P0.6 — renders live tool-call cards and snapshots them into the reply', async () => {
+    mockAuthed('admin');
+    let toolCb: ((t: { id: string; tool: string; phase: 'started' | 'called'; args?: string; ok?: boolean; result?: string; error?: string; durationMs?: number }) => void) | null = null;
+    let unsub: (() => void) | null = null;
+    vi.spyOn(dashboardAPI, 'subscribeChat').mockImplementation((_sid, handlers) => {
+      toolCb = handlers.onTool ?? null;
+      unsub = vi.fn();
+      return unsub;
+    });
+    vi.spyOn(dashboardAPI, 'chatResolve').mockResolvedValue({ ok: true, matches: [] });
+    let resolveSend: (v: typeof OK_RESPONSE) => void = () => {};
+    vi.spyOn(dashboardAPI, 'chatSend').mockImplementation(
+      () => new Promise((resolve) => { resolveSend = resolve; }) as Promise<typeof OK_RESPONSE>,
+    );
+    render(<ChatPage />);
+    await waitFor(() => expect(screen.getByPlaceholderText(/Message the agent/)).toBeTruthy());
+
+    fireEvent.change(screen.getByPlaceholderText(/Message the agent/), { target: { value: 'inspect the repo' } });
+    fireEvent.submit(screen.getByPlaceholderText(/Message the agent/).closest('form')!);
+    await waitFor(() => expect(toolCb).toBeTruthy());
+
+    // read_file starts (running card) and completes (ok + duration).
+    toolCb!({ id: 'call_1', tool: 'read_file', phase: 'started', args: "{path: 'src/foo.ts'}" });
+    await waitFor(() => expect(screen.getByText('read_file')).toBeTruthy());
+    expect(screen.getByText("{path: 'src/foo.ts'}")).toBeTruthy();
+    toolCb!({ id: 'call_1', tool: 'read_file', phase: 'called', ok: true, result: '1 | export const x = 1;', durationMs: 12 });
+    await waitFor(() => expect(screen.getByText('12ms')).toBeTruthy());
+
+    // run_terminal fails → the card shows the error body.
+    toolCb!({ id: 'call_2', tool: 'run_terminal', phase: 'started', args: "{command: 'npm test'}" });
+    toolCb!({ id: 'call_2', tool: 'run_terminal', phase: 'called', ok: false, error: 'exit 1', durationMs: 300 });
+    await waitFor(() => expect(screen.getByText('Error')).toBeTruthy());
+
+    // On completion the two cards snapshot into the assistant bubble.
+    resolveSend(OK_RESPONSE);
+    await waitFor(() => expect(screen.getByText('I checked the repo — the build is green.')).toBeTruthy());
+    await waitFor(() => expect(screen.getByText(/2 tool calls/)).toBeTruthy());
+    expect(screen.getByText('read_file')).toBeTruthy();
+    expect(screen.getByText('run_terminal')).toBeTruthy();
+    expect(unsub).toHaveBeenCalled();
+  });
+
   it('P0.1 — renders the agent question card and answers it via chatRespond', async () => {
     mockAuthed('admin');
     let questionCb: ((q: { questionId: string; question: string; choices: Array<{ label: string }>; multiSelect: boolean }) => void) | null = null;
