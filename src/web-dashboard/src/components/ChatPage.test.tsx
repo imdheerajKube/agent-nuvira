@@ -104,11 +104,14 @@ describe('ChatPage', () => {
     expect(screen.queryByText('You')).toBeNull();
   });
 
-  it('new conversation resets the thread and the server session', async () => {
+  it('new conversation starts a fresh thread (the old one stays persisted in the sidebar)', async () => {
     mockAuthed('admin');
     mockChatStream();
     mockChatSend(OK_RESPONSE);
-    const reset = vi.spyOn(dashboardAPI, 'chatReset').mockResolvedValue({ ok: true });
+    // P4 — the just-abandoned session now appears in the sidebar.
+    vi.spyOn(dashboardAPI, 'listChatSessions').mockResolvedValue([
+      { id: 'any-id', title: 'hi', turnCount: 2, createdAt: 1, updatedAt: 2, preview: 'I checked the repo' },
+    ]);
     render(<ChatPage />);
     await waitFor(() => expect(screen.getByPlaceholderText(/Message the agent/)).toBeTruthy());
 
@@ -117,8 +120,9 @@ describe('ChatPage', () => {
     await waitFor(() => expect(screen.getByText('I checked the repo — the build is green.')).toBeTruthy());
 
     fireEvent.click(screen.getByRole('button', { name: /New conversation/ }));
-    await waitFor(() => expect(reset).toHaveBeenCalled());
-    expect(screen.queryByText('I checked the repo — the build is green.')).toBeNull();
+    await waitFor(() => expect(screen.queryByText('I checked the repo — the build is green.')).toBeNull());
+    // The sidebar refreshes with the abandoned conversation.
+    await waitFor(() => expect(screen.getByText('hi')).toBeTruthy());
   });
 
   it('disables the send button while a turn is in flight', async () => {
@@ -382,6 +386,37 @@ describe('ChatPage', () => {
     fireEvent.change(box, { target: { value: '' } });
     fireEvent.keyDown(box, { key: 'ArrowUp' });
     expect(box.value).toBe('first ask');
+  });
+
+  it('Phase 4 — the session sidebar lists past conversations and resumes them', async () => {
+    mockAuthed('admin');
+    mockChatStream();
+    mockChatSend(OK_RESPONSE);
+    vi.spyOn(dashboardAPI, 'listChatSessions').mockResolvedValue([
+      { id: 'sess-1', title: 'assess the repo', turnCount: 4, createdAt: 1, updatedAt: 2, preview: 'the build is green' },
+      { id: 'sess-2', title: 'fix the failing test', turnCount: 2, createdAt: 1, updatedAt: 1, preview: 'fixed it' },
+    ]);
+    const getSession = vi.spyOn(dashboardAPI, 'getChatSession').mockResolvedValue({
+      title: 'assess the repo',
+      updatedAt: 2,
+      turns: [
+        { role: 'user' as const, content: 'assess the repo' },
+        { role: 'assistant' as const, content: '**all green**' },
+        { role: 'user' as const, content: 'what about tests?' },
+        { role: 'assistant' as const, content: '220 pass' },
+      ],
+    });
+    render(<ChatPage />);
+    await waitFor(() => expect(screen.getByText('assess the repo')).toBeTruthy());
+    expect(screen.getByText('fix the failing test')).toBeTruthy();
+    expect(screen.getByText(/4 msgs · /)).toBeTruthy();
+
+    // Click the session → its transcript loads into the thread (markdown-rendered).
+    fireEvent.click(screen.getByText('assess the repo'));
+    await waitFor(() => expect(getSession).toHaveBeenCalledWith('sess-1'));
+    await waitFor(() => expect(screen.getByText('all green')).toBeTruthy());
+    expect(screen.getByText('what about tests?')).toBeTruthy();
+    expect(screen.getByText('220 pass')).toBeTruthy();
   });
 
   it('P0.1 — skip lets the agent proceed on best judgment (index -1)', async () => {

@@ -133,11 +133,18 @@ about without being told how.
 ### Phase 4 — Sessions & memory: continuity (1–2 days)
 "Leverage every past session for quick start on new assessment" — the user's ask.
 
-- [ ] Session sidebar: list past sessions, click to resume (server persists
-      session transcripts; `/api/sessions` + resume endpoint)
+- [x] Session sidebar: list past sessions, click to resume — `ChatConsole`
+      persists through `~/.buff/memory/chat-sessions.json` (atomic temp+rename,
+      corrupt store degrades to empty); `GET /api/sessions` (list) +
+      `GET /api/sessions/:id` (transcript); ChatPage sidebar with title / msg
+      count / recency, click → thread loads; "New conversation" starts a fresh
+      id and the abandoned thread stays resumable in the sidebar
 - [ ] On new session, auto-recall memory/facts for the attached project
-      (the `session` + `memory` CLI commands already exist — wire their output in)
-- [ ] **Tests:** session persistence + resume + memory recall injection
+      (rides Phase 3's project attach — the `session` + `memory` CLI commands
+      already exist; wire their output into the first turn's context)
+- [x] **Tests:** ChatConsole persistence (restart resume, reset, corrupt store),
+      `/api/sessions` integration (auth gates, list, transcript, 404), ChatPage
+      sidebar render + resume
 
 ### Phase 5 — Chat as the front door (1–2 days)
 - [x] `/` is Chat (the front door); Overview moved to `/overview`; the other rooms

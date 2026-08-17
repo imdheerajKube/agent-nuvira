@@ -8,6 +8,9 @@
  */
 
 import { describe, it, expect, beforeEach } from 'vitest';
+import { join } from 'node:path';
+import { tmpdir } from 'node:os';
+import { writeFileSync, rmSync } from 'node:fs';
 import { ChatConsole, type ChatEngine } from '../../src/web-dashboard/chat-console.js';
 
 interface EngineCall {
@@ -363,5 +366,81 @@ describe('ChatConsole', () => {
     expect(r.ok).toBe(false);
     expect(events.map((e) => e.kind)).toEqual(['status', 'progress', 'status']);
     expect(events[2].status).toBe('error');
+  });
+
+  describe('P4 — persistence (session sidebar)', () => {
+    const tmp = join(tmpdir(), `chat-console-persist-${process.pid}-${Date.now()}`);
+    const storePath = join(tmp, 'sessions.json');
+    const engineFor = () => new FakeEngine();
+
+    // Each test starts from a clean store (the file persists across consoles).
+    beforeEach(() => {
+      try {
+        rmSync(storePath, { force: true });
+        rmSync(`${storePath}.tmp`, { force: true });
+      } catch {
+        /* already absent */
+      }
+    });
+
+    it('persists turns and metadata through the store file', async () => {
+      const c = new ChatConsole({ engine: engineFor(), persistPath: storePath });
+      await c.answer('s1', 'assess this project');
+      await c.answer('s1', 'now fix the top issue');
+
+      const summary = c.list();
+      expect(summary).toHaveLength(1);
+      expect(summary[0]).toMatchObject({ id: 's1', turnCount: 4, title: 'assess this project' });
+      expect(summary[0].preview).toContain('echo:');
+
+      const rec = c.get('s1');
+      expect(rec?.turns.map((t) => t.role)).toEqual(['user', 'assistant', 'user', 'assistant']);
+      expect(rec?.turns[1].content).toBe('echo: assess this project');
+    });
+
+    it('a NEW console with the same store path resumes the conversation (restart)', async () => {
+      const first = new ChatConsole({ engine: engineFor(), persistPath: storePath });
+      await first.answer('s1', 'assess this project');
+      // Ensure distinct updatedAt values so the recency sort is deterministic.
+      await new Promise((r) => setTimeout(r, 5));
+      await first.answer('s2', 'what is the memory panel?');
+
+      // Simulate a dashboard restart: fresh console, same store file.
+      const second = new ChatConsole({ engine: engineFor(), persistPath: storePath });
+      const list = second.list();
+      expect(list.map((s) => s.id).sort()).toEqual(['s1', 's2']);
+      // Most recent first.
+      expect(list[0].id).toBe('s2');
+      expect(second.history('s1')).toHaveLength(2);
+
+      // And the resumed session keeps answering with full history.
+      const r = await second.answer('s1', 'continue');
+      expect(r.ok).toBe(true);
+      expect(second.history('s1').map((t) => t.content)).toEqual([
+        'assess this project',
+        'echo: assess this project',
+        'continue',
+        'echo: continue',
+      ]);
+    });
+
+    it('reset removes the session from the store file', async () => {
+      const c = new ChatConsole({ engine: engineFor(), persistPath: storePath });
+      await c.answer('s1', 'hello');
+      expect(c.list()).toHaveLength(1);
+      c.reset('s1');
+      expect(c.list()).toHaveLength(0);
+
+      const reloaded = new ChatConsole({ engine: engineFor(), persistPath: storePath });
+      expect(reloaded.list()).toHaveLength(0);
+    });
+
+    it('a corrupt store degrades to empty instead of crashing', async () => {
+      writeFileSync(storePath, '{{{ not json', 'utf8');
+      const c = new ChatConsole({ engine: engineFor(), persistPath: storePath });
+      expect(c.list()).toHaveLength(0);
+      const r = await c.answer('s1', 'still works');
+      expect(r.ok).toBe(true);
+    });
   });
 });

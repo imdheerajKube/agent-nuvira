@@ -13,6 +13,8 @@
  */
 
 import { randomUUID } from 'node:crypto';
+import { mkdirSync, readFileSync, writeFileSync, existsSync, renameSync } from 'node:fs';
+import { dirname, join } from 'node:path';
 import type { FollowupSuggestion } from '../tools/registry.js';
 import { PlanStore, type PlanSnapshot, type PlanStoreLike } from '../tools/plan-store.js';
 
@@ -64,6 +66,12 @@ export interface ChatConsoleOptions {
   maxTurns?: number;
   /** Cap on in-memory sessions (oldest dropped). */
   maxSessions?: number;
+  /**
+   * P4 — JSON file the session store persists through (survives server
+   * restarts, so the dashboard's session sidebar can resume any past
+   * conversation). Absent = in-memory only (unit tests).
+   */
+  persistPath?: string;
 }
 
 /** Per-session per-message limits (the CLI has no hard cap; bound the server). */
@@ -79,6 +87,27 @@ export interface ChatAnswerResult {
   model?: string | null;
   generationFailed?: boolean;
   error?: string;
+}
+
+/** P4 — one persisted session record (turns + sidebar metadata). */
+export interface ChatSessionRecord {
+  /** The conversation turns (user/assistant). */
+  turns: ChatTurn[];
+  /** Sidebar title — the first user message, truncated. */
+  title: string;
+  createdAt: number;
+  updatedAt: number;
+}
+
+/** P4 — the sidebar summary shape for `GET /api/sessions`. */
+export interface ChatSessionSummary {
+  id: string;
+  title: string;
+  turnCount: number;
+  createdAt: number;
+  updatedAt: number;
+  /** The last assistant reply (truncated) — "what this conversation was about". */
+  preview: string;
 }
 
 /** A live event for one session (P3 progress streaming). */
@@ -138,7 +167,7 @@ interface AskUserResult {
 }
 
 export class ChatConsole {
-  private sessions = new Map<string, ChatTurn[]>();
+  private sessions = new Map<string, ChatSessionRecord>();
   private busy = new Set<string>();
   private engine: ChatEngine | null;
   private listeners = new Set<(sessionId: string, event: ChatConsoleEvent) => void>();
@@ -152,6 +181,20 @@ export class ChatConsole {
 
   constructor(private readonly opts: ChatConsoleOptions = {}) {
     this.engine = opts.engine ?? null;
+    // P4 — reload persisted sessions so the sidebar resumes past conversations
+    // after a server restart. Corrupt/unreadable stores degrade to empty.
+    if (opts.persistPath && existsSync(opts.persistPath)) {
+      try {
+        const raw = readFileSync(opts.persistPath, 'utf8');
+        const data = JSON.parse(raw) as { sessions?: Record<string, ChatSessionRecord> };
+        for (const [id, rec] of Object.entries(data?.sessions ?? {})) {
+          if (typeof id !== 'string' || !id || !rec || !Array.isArray(rec.turns)) continue;
+          this.sessions.set(id, { turns: rec.turns, title: String(rec.title ?? ''), createdAt: Number(rec.createdAt) || 0, updatedAt: Number(rec.updatedAt) || 0 });
+        }
+      } catch {
+        /* unreadable store — start empty rather than crash the dashboard */
+      }
+    }
   }
 
   /** Subscribe to a session's live events (progress lines / status). Returns an unsubscribe fn. */
@@ -180,7 +223,47 @@ export class ChatConsole {
 
   /** The stored turns for a session (empty when unknown). */
   history(sessionId: string): ChatTurn[] {
-    return this.sessions.get(sessionId) ?? [];
+    return this.sessions.get(sessionId)?.turns ?? [];
+  }
+
+  /**
+   * P4 — sidebar summaries, most recently updated first. The server exposes
+   * these via `GET /api/sessions`.
+   */
+  list(): ChatSessionSummary[] {
+    return [...this.sessions.entries()]
+      .map(([id, rec]) => ({
+        id,
+        title: rec.title || '(untitled conversation)',
+        turnCount: rec.turns.length,
+        createdAt: rec.createdAt,
+        updatedAt: rec.updatedAt,
+        preview: lastAssistantText(rec.turns),
+      }))
+      .sort((a, b) => b.updatedAt - a.updatedAt);
+  }
+
+  /**
+   * P4 — the full persisted record for one session (transcript for resume).
+   * Returns null when unknown.
+   */
+  get(sessionId: string): ChatSessionRecord | null {
+    return this.sessions.get(sessionId) ?? null;
+  }
+
+  /** P4 — write the session store through to disk (atomic-ish: temp + rename). */
+  private persist(): void {
+    const path = this.opts.persistPath;
+    if (!path) return;
+    try {
+      mkdirSync(dirname(path), { recursive: true });
+      const payload = JSON.stringify({ sessions: Object.fromEntries(this.sessions) });
+      const tmp = `${path}.tmp`;
+      writeFileSync(tmp, payload, 'utf8');
+      renameSync(tmp, path);
+    } catch {
+      /* persistence is best-effort — a failed write must never break chat */
+    }
   }
 
   /** True while a message is being answered in this session. */
@@ -212,8 +295,15 @@ export class ChatConsole {
       const oldest = this.sessions.keys().next().value as string | undefined;
       if (oldest) this.sessions.delete(oldest);
     }
-    const history = this.sessions.get(sessionId) ?? [];
-    this.sessions.set(sessionId, history);
+    const existing = this.sessions.get(sessionId);
+    const history = existing?.turns ?? [];
+    const now = Date.now();
+    this.sessions.set(sessionId, {
+      turns: history,
+      title: existing?.title ?? '',
+      createdAt: existing?.createdAt ?? now,
+      updatedAt: existing?.updatedAt ?? now,
+    });
     this.busy.add(sessionId);
     this.emit(sessionId, { kind: 'status', status: 'working' });
     try {
@@ -275,7 +365,16 @@ export class ChatConsole {
         turns.push({ role: 'assistant', content: answer.content });
       }
       const maxTurns = this.opts.maxTurns ?? DEFAULT_MAX_TURNS;
-      this.sessions.set(sessionId, turns.length > maxTurns ? turns.slice(turns.length - maxTurns) : turns);
+      const kept = turns.length > maxTurns ? turns.slice(turns.length - maxTurns) : turns;
+      // P4 — persist with sidebar metadata: title = first user message.
+      const firstUser = kept.find((t) => t.role === 'user')?.content ?? existing?.title ?? '';
+      this.sessions.set(sessionId, {
+        turns: kept,
+        title: existing?.title || firstUser.slice(0, 80),
+        createdAt: existing?.createdAt ?? now,
+        updatedAt: Date.now(),
+      });
+      this.persist();
       this.emit(sessionId, { kind: 'status', status: 'done' });
       return {
         ok: true,
@@ -353,7 +452,19 @@ export class ChatConsole {
     this.sessions.delete(sessionId);
     this.busy.delete(sessionId);
     this.planStores.delete(sessionId);
+    this.persist();
   }
+}
+
+/** P4 — the last assistant text (truncated) for the sidebar preview. */
+function lastAssistantText(turns: ChatTurn[]): string {
+  for (let i = turns.length - 1; i >= 0; i -= 1) {
+    if (turns[i].role === 'assistant' && turns[i].content.trim()) {
+      const text = turns[i].content.replace(/\s+/g, ' ').trim();
+      return text.length > 90 ? `${text.slice(0, 87)}…` : text;
+    }
+  }
+  return '';
 }
 
 /**
