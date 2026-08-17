@@ -211,16 +211,88 @@ first-party bundled skills (each verified at the depth bar).
 1. **Registry populated** — `scripts/sync-hub-skills.mjs` renders the five
    bundled skills into the committed `.agents/skills/` (index.json + real
    SKILL.md per skill with full methodology); a sync-drift guard test fails
-   if `bundled-skills.ts` changes without re-running the script. Once
-   pushed, `raw.githubusercontent.com/…/main/.agents/skills` RESOLVES.
+   if `bundled-skills.ts` changes without re-running the script. The
+   packaged `.agents/skills/` is ALSO shipped in the npm tarball
+   (package.json files + .npmignore) and the default registry resolution
+   prefers it (`file://` local-dir, resolves from the install itself) — so
+   the registry works even though the repo is PRIVATE (raw.githubusercontent
+   only serves public repos). Private-repo-independent by design.
 2. **Never silently 404** — `probeRegistries()` is status-aware (local-dir
    index read, HTTP status for github-raw/browse-sh, clone result for
    git-repo); `buff skills search`/`install` empty-result paths now surface
    WHICH source failed and with what status + a fix hint
    (`skills.registries[]` / `BUFF_SKILLS_REGISTRY`) instead of a bare
-   "no skills found". Verified live: the real default probes `HTTP 404`;
-   pointing the registry at `.agents/skills/` searches + installs the batch.
+   "no skills found". Verified live: with no config, the default probes
+   `reachable:true, entryCount:5` and searches resolve.
 
 **P5c #4 (acceptance proof):** `buff skills list` shows the five-skill batch
 (verified via `buff skill list` + `buff skills search`); each matches from
 dashboard chat (verified via the P0.8 skill tool and findMatch tests).
+
+## P5c #5 — Skill ONBOARDING: agent-nuvira vs Hermes Agent (third-party consumption)
+
+**Ask (user):** *"as per Copilot, Hermes can consume skills developed by
+other developers — can't we allow our users to do that in similar fashion
+and still keep our repo private?"*
+
+**Ground truth (verified 2026-08-17):** Hermes (NousResearch, official docs
+skills page + work-with-skills guide) vs agent-nuvira (code-verified this
+session). Copilot's summary was directionally right but omitted Hermes'
+concrete mechanisms (slash commands, /learn, bundles, external dirs,
+conditional activation) — the table below uses the REAL docs.
+
+### The short answer
+
+**agent-nuvira users can ALREADY consume third-party skills — and the
+private repo is irrelevant to it.** Third-party onboarding reads OTHER
+people's registries (browse.sh, any git repo, any github-raw URL), never
+agent-nuvira's own repo. The private repo only affected the FIRST-PARTY
+default registry, which is now shipped inside the npm package instead.
+
+### Row-by-row comparison (Hermes real docs vs agent-nuvira code)
+
+| Capability | Hermes (official docs) | agent-nuvira (code) | Verdict |
+|---|---|---|---|
+| **Third-party install** | `hermes skills install <name>`, URL installs (`install https://…/SKILL.md`), official optional skills (`official/research/arxiv`) | `buff skills install <name>` from 4 source kinds: github-raw, local-dir, browse-sh, **git-repo** (clones ANY repo, auto-detects skills/.claude/skills/.agents/skills roots) + URL sources | ✅ PARITY — agent-nuvira consumes the SAME community ecosystem (browse.sh) and any developer's repo; Hermes adds URL-single-file + official namespace |
+| **Discovery** | `hermes skills search` / `/skills search`, Skills Hub browse, skills.sh registry | `buff skills search <query>` across ALL configured registries (multi-source, deduped, priority-ordered) + probe with explicit unreachable-source hints | ✅ PARITY — multi-source is a superset of hub-only |
+| **Standardized interface** | SKILL.md frontmatter + agentskills.io open standard; rich fields (platforms, tags, category, config, conditional activation) | SKILL.md frontmatter (name/description/version, same open standard); install validates frontmatter, records checksum + provenance, quarantines mismatches | ⚠️ CORE PARITY — same file format; agent-nuvira's hub parser reads fewer frontmatter fields (platforms/config/conditional fields not yet consumed) |
+| **Dynamic loading** | Level 0 skills_list (~3k tokens) → Level 1 skill_view(name) → Level 2 reference file — loaded only when needed | P0.8 skill tool: hub catalog Level 0 (name+desc) → Level 1 (full methodology on match); skill-store findMatch; progressive disclosure | ✅ PARITY |
+| **Composition / chaining** | Slash-command stacking (up to 5 per message) + skill bundles (YAML grouping) | Skill steps with `dependsOn` + agent-type routing; multi-step ordered execution via SkillRunnerAgent | ⚠️ PARTIAL — within-skill step chains exist; no cross-skill bundle/chain primitive yet |
+| **Agent-authored skills** | `/learn` (point at docs/URLs/workflow → agent authors a SKILL.md following house standards) | trajectory→skill compiler (SkillCompiler distills high-scoring trajectories) + self-improver; skill-store GC | ⚠️ PARTIAL — compiler exists but requires trajectories; no interactive `/learn`-style path from user-provided material |
+| **Community contribution** | Developers publish skills to skills.sh / hub / registries; CONTRIBUTING.md for upstream | Users publish by pointing a registry at their repo (github-raw/git-repo) or sharing a local-dir; no first-party marketplace | ✅ CONSUMER PARITY — agent-nuvira consumes community skills; lacks a hosted marketplace of its own |
+| **Security on install** | quarantine + lock.json + audit.log + content hash; secure env-var setup | sandboxed name validation (^[a-z0-9-]+$), frontmatter sanity, checksum mismatch → quarantine, provenance ledger | ✅ PARITY |
+| **Private-repo independence** | n/a (open-source repo) | Default registry ships in the npm package; probe never silently 404s | ✅ agent-nuvira-specific win |
+
+### Honest gaps (where agent-nuvira is behind)
+
+1. **No `/learn`** — Hermes turns docs/URLs/workflows into a skill in one
+   interactive step; agent-nuvira's compiler needs stored trajectories.
+2. **No cross-skill bundles** — Hermes chains multiple skills under one
+   command; agent-nuvira chains steps WITHIN a skill only.
+3. **Thinner frontmatter consumption** — platforms, conditional activation
+   (requires/fallback toolsets), config settings, secure env-var setup are
+   Hermes fields agent-nuvira's hub parser doesn't yet read.
+4. **No hosted marketplace** — agent-nuvira is a full CONSUMER of the
+   community ecosystem but has no first-party "agent-nuvira skills hub" to
+   publish against.
+5. **No skill-creation offer loop** — Hermes offers to save a solved task as
+   a skill; agent-nuvira compiles automatically from trajectories but never
+   ASKS the user to confirm/publish one.
+
+### What would close them (NOW PLANNED — see DASHBOARD_FIRST_PLAN.md Phase 7 + IMPLEMENTATION_BRIEFS.md P6)
+
+- **P6a — `/learn`-style skill authoring**: point skill tool at a URL/dir/
+  transcript → agent drafts a SKILL.md following bundled-skill standards →
+  preview card (accept/edit/reject) → writes to the store under a
+  user-visible name (mirrors Hermes `build_learn_prompt` + `skill_manage`;
+  reuses the skill-compiler machinery + P0.8 skill tool).
+- **P6b — skill bundles**: a `bundle` action on the skill tool + a
+  `buff skills bundle` CLI that groups skills under one id (Hermes parity).
+- **P6c — frontmatter depth**: parse + honor `platforms`, conditional
+  activation fields, and declared config/env in hub-skill-catalog.
+- **P6d — marketplace import surface**: dashboard Skills panel + thin
+  endpoints over the EXISTING multi-source registry (browse.sh / git-repo /
+  github-raw) — the private-repo-safe consumer path, Hermes Skills-Hub
+  parity.
+- **P6e — shipable first-party batch**: the five P5b skills become
+  first-class product content (panel provenance, empty-state suggestions).

@@ -381,3 +381,157 @@ the new skills; registry-404 regression test (the configured default must
 resolve or explicitly fall back, never silently 404 in a user's face).
 
 **Matrix rows:** 29–33 (closes all).
+
+---
+
+## P6 — Skill onboarding: /learn, bundles, frontmatter depth, marketplace import
+
+**Ask (user, 2026-08-17):** *"as per Copilot, Hermes can consume skills
+developed by other developers — can't we allow our users to do that in
+similar fashion and still keep our repo private? Build /learn from missing
+and already-shipable skills, include them as part of the product, and make
+agent-nuvira equally capable of importing marketplace skills. Add these to
+DASHBOARD_FIRST_PLAN.md with full background, expected working, example, and
+tests."*
+
+**Ground truth — Hermes (cloned `NousResearch/hermes-agent` 2026-08-17):**
+
+- `/learn` is a PROMPT, not an engine: `hermes_cli/cli_commands_mixin.py`
+  `_handle_learn_command` builds `build_learn_prompt(user_request)`
+  (`agent/learn_prompt.py`, 237 lines) and injects it onto the agent's input
+  queue as a normal user turn. The live agent gathers the described sources
+  (dirs/URLs/"what we just did") with its existing tools and authors the
+  skill via `skill_manage`.
+- `skill_manage` (`tools/skill_manager_tool.py`, 1,849 lines) actions:
+  `create` / `edit` / `patch` / `delete` / `write_file` / `remove_file`;
+  creates are validated (content required, frontmatter sane); `patch` needs
+  `old_string`/`new_string`; reference files land under `references/`,
+  `scripts/`, `templates/`.
+- Skills Hub (`tools/skills_hub.py`, 4,621 lines): `SkillSource` ABC with
+  `search`/`fetch`/`inspect`/`source_id`/`trust_level_for`; GitHub tap model
+  (`GitHubSource.DEFAULT_TAPS`: openai/skills, anthropics/skills,
+  huggingface/skills, NVIDIA/skills, garrytan/gstack) + `skills.sh` +
+  agentskills.io open-standard compatibility; installs quarantine + write
+  `lock.json` + append `audit.log`; `_ssrf_safe_http_get` guards URLs.
+- Authoring standards live in the learn prompt: description ≤ 1 line, body
+  section order (When to Use → Procedure → Pitfalls → Verification),
+  copy-paste-exact commands, knowledge-base layout for large sources
+  (lean SKILL.md index + per-chapter `references/`).
+
+**Ground truth — agent-nuvira (code-verified 2026-08-17):**
+
+- P0.8 `skill` tool (`src/tools/skill-tool.ts`): resolve by name/id from the
+  compiled SkillStore OR the hub catalog (`<project>/.agents/skills/` +
+  `~/.buff/skills/`), unknown → lists both, disabled → refused. Load-only
+  today — no create/patch/write_file actions.
+- SkillStore (`src/learning/skill-store.ts`): `save`/`get`/`getAll`/
+  `search`/`findMatch`/`markUsed`/`delete` — the /learn write target exists;
+  bundled skills seed idempotently (`seedBundledSkills`, edits preserved).
+- Multi-source registry (`src/learning/skills-registry.ts`): github-raw /
+  local-dir / browse-sh / git-repo (clones ANY repo, auto-detects
+  `skills/`, `.claude/skills/`, `.agents/skills/` roots) — the marketplace
+  import machinery is DONE, CLI-only (`buff skills search/install`).
+- Install security (`src/learning/skills-hub.ts`): sandbox name validation,
+  frontmatter sanity, SHA-256 checksum + provenance, quarantine on mismatch.
+- Packaged default registry (P5c #3): ships `.agents/skills/` in the npm
+  tarball, resolves from the install — the private repo is irrelevant.
+
+**Acceptance (P6a–P6e, each independently shippable):**
+
+### P6a — /learn-style skill authoring (headliner)
+
+1. A `skill_manage` action on the P0.8 skill tool: `create` (full SKILL.md,
+   frontmatter + body validated), `patch` (old/new string), `write_file`
+   (reference file), `delete` (guarded, mirrors `buff skill gc` gating).
+2. A learn-prompt builder (`src/learning/learn-prompt.ts` mirroring
+   `agent/learn_prompt.py`): empty request → "the workflow we just went
+   through"; otherwise the open-ended request verbatim + authoring standards
+   (description ≤ 1 line, ordered steps w/ agent types + `dependsOn`,
+   parameters, verification step — the BUNDLED-SKILL depth bar, not Hermes'
+   prose bar).
+3. Chat integration: the agent, on a "learn …" ask, gathers with existing
+   tools, drafts, and calls `skill_manage` → the dashboard shows a preview
+   card (✅ accept / ✏️ edit / ↩ reject) BEFORE the store write; accept
+   persists via `SkillStore.save`, reject aborts (nothing written).
+
+**Expected working (example):** user: "learn the S3 upload flow we just did"
+→ step cards (gather transcript → draft) → preview card (`name: s3-upload`,
+4 ordered steps, 2 params) → ✅ → `buff skill list` shows `s3-upload` → next
+chat turn: "use the s3-upload skill" loads it via the P0.8 tool.
+
+**Tests:** skill_manage unit (create rejects missing content / bad frontmatter
+name; patch requires old_string; write_file path-validated to the skill dir),
+learn-prompt builder unit (empty → conversation default; URL+constraints both
+preserved), chat-loop integration (agent emits skill_manage → store contains
+skill → skill tool loads it), dashboard preview-card test (accept saves, edit
+re-drafts, reject writes nothing).
+
+### P6b — skill bundles (cross-skill composition)
+
+1. A bundle store (`~/.buff/skill-bundles/<slug>.yaml` — Hermes parity):
+   `create`/`list`/`show`/`delete`, missing skill skipped not fatal.
+2. A `bundle` action on the P0.8 skill tool (`load` returns every skill's
+   methodology in one result) + a `buff skills bundle` CLI subcommand.
+
+**Expected working (example):** "load my backend-dev bundle" → bundle
+`backend-dev` = code-review + tdd + pr-workflow → one tool result with all
+three methodologies → the agent runs the combined workflow.
+
+**Tests:** bundle-store unit (create/list/delete, missing-skill skip),
+skill-tool bundle-load test, CLI create→load round-trip.
+
+### P6c — frontmatter depth in the hub catalog
+
+Parse + honor Hermes-style fields the hub currently ignores: `platforms`
+(hide on incompatible OS), `requires_toolsets` / `fallback_for_toolsets`
+(conditional activation — reuse the P3c fallback-hint vocabulary),
+declared `config` settings, `required_environment_variables` (surfaced as
+"needs env X", value NEVER printed in chat).
+
+**Expected working (example):** a skill with `platforms: [macos, linux]` is
+absent from `skills_list` on win32; a skill with `requires_toolsets:
+[terminal]` appears only when run_terminal is in the toolset.
+
+**Tests:** catalog parser unit per field, platform-gate test (win32 hides
+macos-only), conditional-activation test (visible iff toolset present),
+env-var declaration surfaced without its value.
+
+### P6d — marketplace import surface (private-repo-safe)
+
+1. Thin server endpoints over the EXISTING multi-source registry:
+   `GET /api/skills/marketplace?q=` (searchAllRegistries), `POST
+   /api/skills/install` (installHubSkill → hub catalog), `POST
+   /api/skills/uninstall`.
+2. A dashboard Skills panel: bundled (🧠 provenance) + installed community
+   skills, install/uninstall buttons, search box.
+3. The repo stays PRIVATE — importing reads OTHER people's registries
+   (browse.sh, any git-repo incl. `.claude/skills/`, github-raw). The
+   packaged default registry (P5c #3) already serves first-party skills
+   without GitHub.
+
+**Expected working (example):** chat: "install the code-assist skill" →
+agent: `buff skills install code-assist --source git-repo` (already works) →
+result card "✅ installed v1.2.0 (quarantine checked)" → loads via the skill
+tool next turn.
+
+**Tests:** marketplace API tests (list from a local-dir fixture registry,
+install lands SKILL.md + provenance, uninstall removes both), Skills panel
+component test, end-to-end install→load-in-chat (mirrors the P5c #4
+acceptance pattern: real CLI, hermetic BUFF_CONFIG_DIR/BUFF_SKILLS_REGISTRY).
+
+### P6e — shipable first-party batch (include what's built)
+
+The five bundled skills (P5b) become first-class product content: Skills
+panel lists them with provenance, chat empty-state suggests them, /learn
+results land alongside in `buff skill list`.
+
+**Tests:** panel list test (5 bundled + community with badges), empty-state
+suggestion test.
+
+**Deep backward tests:** skills-hub / skills-registry / skill-tool suites
+stay green (P6a adds tool actions — existing load tests unchanged; P6c
+changes catalog parse — frontmatter tests extended, never weakened);
+sync-drift guard (P5c #4) still passes.
+
+**Matrix rows:** P5c #5 gaps 1–5 (learn, bundles, frontmatter depth,
+marketplace presence, offer loop — closes the onboarding comparison).

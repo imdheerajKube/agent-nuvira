@@ -38,6 +38,7 @@ issues/
 !docs/GATEWAY.md
 !docs/ASSESSMENT_CAPABILITY_GAPS.md
 !docs/IMPLEMENTATION_BRIEFS.md
+!docs/DASHBOARD_FIRST_PLAN.md
 # The default skill registry (.agents/skills/) — SKILL.md files are CODE
 # artifacts served by the registry, not user docs. Generated + committed via
 # scripts/sync-hub-skills.mjs so the configured default registry resolves.
