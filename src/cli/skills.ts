@@ -32,6 +32,8 @@ import {
   findEntryAcrossRegistries,
   fetchSourceSkill,
   detectSourceKind,
+  probeRegistries,
+  unreachableRegistryHint,
 } from '../learning/skills-registry.js';
 import { logger } from '../utils/logger.js';
 import { ConfigManager } from '../config/manager.js';
@@ -60,7 +62,14 @@ export class SkillsCommand {
         spinner.stop();
         if (results.length === 0) {
           logger.info(`No skills found matching '${query}'.`);
-          logger.info('  Tip: add registries to config (skills.registries) or set BUFF_SKILLS_REGISTRY.');
+          // P5c #3 — never silently 404: if a configured source is unreachable,
+          // say WHICH one and how to fix it.
+          const hint = unreachableRegistryHint(await probeRegistries(new ConfigManager()));
+          if (hint) {
+            logger.warn(hint);
+          } else {
+            logger.info('  Tip: add registries to config (skills.registries) or set BUFF_SKILLS_REGISTRY.');
+          }
           return;
         }
         console.log(`\n🔎 ${results.length} skill(s) matching '${query}':\n`);
@@ -96,6 +105,9 @@ export class SkillsCommand {
         if (!entry) {
           spinner.fail(`Skill '${name}' not found in any configured registry.`);
           logger.info('  Search available skills: buff skills search <query>');
+          // P5c #3 — never silently 404: surface unreachable sources with a fix hint.
+          const hint = unreachableRegistryHint(await probeRegistries(new ConfigManager()));
+          if (hint) logger.warn(hint);
           return;
         }
         const result = await installHubSkill(entry, opts.project || process.cwd(), false, {

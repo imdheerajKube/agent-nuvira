@@ -49,6 +49,24 @@ export interface RegistryResult<T> {
   value: T;
 }
 
+/**
+ * P5c #3 — per-source registry reachability. The configured default used to
+ * silently 404 ("No skills found") — the probe surfaces WHERE each source
+ * failed and with what HTTP status, so the CLI can say so instead of
+ * pretending the registry is empty.
+ */
+export interface RegistryProbe {
+  source: RegistrySource;
+  /** True when the source's index could be fetched/read and parsed. */
+  reachable: boolean;
+  /** HTTP status when a remote index fetch answered (404 = the default 404). */
+  status?: number;
+  /** 'http-error' | 'network' | 'missing-index' | 'invalid-index' | 'clone-failed' | 'no-skills-root'. */
+  reason?: string;
+  /** Number of skills the source's index exposes. */
+  entryCount: number;
+}
+
 const GIT_REPO_RE = /^git\+(.+)$/;
 
 // ─── Source resolution ──────────────────────────────────────────────────────
@@ -264,6 +282,99 @@ export async function fetchSourceSkill(source: RegistrySource, name: string): Pr
       return fetchSkillFile(source.base, `${name}/SKILL.md`);
     }
   }
+}
+
+// ─── Registry health probe (P5c #3 — never silently 404) ────────────────────
+
+/**
+ * Probe every configured registry's reachability (status-aware).
+ *
+ * - local-dir  → index.json present + parseable?
+ * - github-raw / browse-sh → HTTP fetch of index.json, recording res.status
+ * - git-repo   → clone succeeds AND a skills root is found?
+ *
+ * Used by the CLI's empty-result paths: when a source is unreachable the user
+ * is told WHICH source failed and how to fix it (configure skills.registries[]
+ * or BUFF_SKILLS_REGISTRY) — never a silent "no skills found".
+ */
+export async function probeRegistries(cm?: ConfigManager): Promise<RegistryProbe[]> {
+  const sources = allSources(cm);
+  const out: RegistryProbe[] = [];
+  for (const source of sources) {
+    switch (source.kind) {
+      case 'local-dir': {
+        const base = baseRoot(source);
+        try {
+          const raw = readFileSync(join(base, 'index.json'), 'utf-8');
+          const index = JSON.parse(raw) as { skills?: unknown };
+          const skills = Array.isArray(index.skills) ? index.skills : [];
+          out.push({ source, reachable: true, entryCount: skills.length });
+        } catch {
+          out.push({ source, reachable: false, reason: 'missing-index', entryCount: 0 });
+        }
+        break;
+      }
+      case 'github-raw':
+      case 'browse-sh': {
+        try {
+          const base = baseRoot(source).replace(/\/$/, '');
+          const res = await fetch(`${base}/index.json`, {
+            headers: { 'User-Agent': 'agent-nuvira/2.0', Accept: 'application/json' },
+            signal: AbortSignal.timeout(BROWSE_SH_TIMEOUT_MS),
+          });
+          if (!res.ok) {
+            out.push({ source, reachable: false, status: res.status, reason: 'http-error', entryCount: 0 });
+            break;
+          }
+          const data = (await res.json()) as { skills?: unknown; results?: unknown };
+          const raw = (data as Record<string, unknown>).skills ?? (data as Record<string, unknown>).results;
+          const skills = Array.isArray(raw) ? raw : [];
+          out.push({ source, reachable: true, status: res.status, entryCount: skills.length });
+        } catch (err) {
+          out.push({
+            source,
+            reachable: false,
+            reason: err instanceof TypeError ? 'network' : 'http-error',
+            entryCount: 0,
+          });
+        }
+        break;
+      }
+      case 'git-repo': {
+        const repoRoot = cloneRepo(baseRoot(source));
+        if (!repoRoot) {
+          out.push({ source, reachable: false, reason: 'clone-failed', entryCount: 0 });
+          break;
+        }
+        const root = findRepoSkillsRoot(repoRoot);
+        if (!root) {
+          out.push({ source, reachable: false, reason: 'no-skills-root', entryCount: 0 });
+          break;
+        }
+        const entries = indexGitRepo(source);
+        out.push({ source, reachable: true, entryCount: entries.length });
+        break;
+      }
+    }
+  }
+  return out;
+}
+
+/**
+ * Human-readable fix hint for unreachable registries — the CLI appends this
+ * to empty-result messages so a 404 is EXPLICIT, never silent.
+ */
+export function unreachableRegistryHint(probes: RegistryProbe[]): string {
+  const bad = probes.filter((p) => !p.reachable);
+  if (bad.length === 0) return '';
+  const lines = bad.map((p) => {
+    const status = p.status !== undefined ? ` (HTTP ${p.status})` : '';
+    return `  ⚠️  ${p.source.base} — ${p.reason}${status}`;
+  });
+  return (
+    `Unreachable registry source(s):\n${lines.join('\n')}\n` +
+    `  Fix: add a reachable registry to buffconfig skills.registries[] or set BUFF_SKILLS_REGISTRY.`
+  );
 }
 
 // ─── Unified search ─────────────────────────────────────────────────────────
