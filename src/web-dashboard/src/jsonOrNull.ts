@@ -20,7 +20,8 @@ export async function parseJsonOrNull(res: Response): Promise<unknown | null> {
     if (type.includes('text/html')) {
       console.warn(
         `[dashboard] GET ${res.url || '/api/*'} returned HTML (${res.status}) instead of JSON — ` +
-        'the dashboard server may be an older version. Restart it (pkill -f "agent-nuvira dashboard").',
+        'the dashboard server may be an older version. Stop it and start it again ' +
+        '(agent-nuvira dashboard stop, or Ctrl+C in its terminal).',
       );
     }
     return null;

@@ -393,6 +393,42 @@ describe('DashboardCommand', () => {
     expect((mockCreateDashboardServer.mock.results[0].value as any).server.close).toHaveBeenCalled();
   });
 
+  // ── Platform independence: the EADDRINUSE stop hint is OS-aware ────────
+
+  it('on win32 the EADDRINUSE stop hint uses taskkill, not pkill', async () => {
+    Object.defineProperty(process, 'platform', { value: 'win32', configurable: true });
+    let errorHandler: ((e: NodeJS.ErrnoException) => void) | null = null;
+    mockCreateDashboardServer.mockImplementationOnce(() => ({
+      server: {
+        listen: (_opts: unknown, cb: () => void) => {
+          cb();
+        },
+        once: (_ev: string, cb: (e: NodeJS.ErrnoException) => void) => {
+          errorHandler = cb;
+        },
+        close: vi.fn(),
+      },
+      ipv6Twin: null,
+      shutdown: vi.fn(),
+    }));
+
+    const launchPromise = (cmd as any).launchDashboard({});
+    await new Promise<void>((resolve) => setImmediate(resolve));
+    errorHandler!({ code: 'EADDRINUSE', message: 'listen EADDRINUSE: address already in use 127.0.0.1:3030' } as NodeJS.ErrnoException);
+    process.emit('SIGINT');
+    await launchPromise;
+
+    expect(mockLogger.info).toHaveBeenCalledWith(
+      expect.stringContaining('taskkill /F /IM node.exe'),
+    );
+    // No POSIX-only idiom in the Windows hint.
+    const allInfo = mockLogger.info.mock.calls.map((c) => String(c[0])).join(' ');
+    expect(allInfo).not.toContain('pkill');
+    expect(processExitSpy).toHaveBeenCalledWith(1);
+    // The server must be closed so the stale instance doesn't linger.
+    expect((mockCreateDashboardServer.mock.results[0].value as any).server.close).toHaveBeenCalled();
+  });
+
   // ── --force: stale-dashboard detection + restart ──────────────────────
 
   it('--force detects a stale dashboard, kills it, and re-binds a fresh server', async () => {
