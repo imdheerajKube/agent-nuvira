@@ -88,6 +88,12 @@ export function setAdminToken(token: string | null): void {
   writeAdminToken(token);
 }
 
+/** Authorization header for admin-gated endpoints (empty when unauthenticated). */
+export function authHeaders(): Record<string, string> {
+  const token = getAdminToken();
+  return token ? { Authorization: `Bearer ${token}` } : {};
+}
+
 export type DashboardListener = (data: DashboardData) => void;
 export type ConnectionListener = (connected: boolean) => void;
 export type DAGListener = (dag: DAGData) => void;
@@ -499,6 +505,64 @@ export class DashboardAPI {
   }
 
   /**
+   * P6d — search the marketplace (every configured skill registry). The
+   * repo stays private — this READS other people's registries.
+   */
+  async marketplaceSearch(query: string): Promise<Array<{
+    name: string;
+    version: string;
+    description: string;
+    author: string;
+    tags: string[];
+    source: string;
+    sourceKind: string;
+  }>> {
+    try {
+      const res = await fetch(`${this.baseUrl}/api/skills/marketplace?q=${encodeURIComponent(query)}`, {
+        headers: authHeaders(),
+      });
+      const d = (await res.json()) as { results?: Array<{
+        name: string; version: string; description: string; author: string; tags: string[]; source: string; sourceKind: string;
+      }> };
+      return Array.isArray(d.results) ? d.results : [];
+    } catch {
+      return [];
+    }
+  }
+
+  /** P6d — install a marketplace skill (sandboxed + checksum-verified). */
+  async marketplaceInstall(name: string): Promise<{ ok: boolean; error?: string; quarantined?: boolean }> {
+    try {
+      const res = await fetch(`${this.baseUrl}/api/skills/marketplace/install`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', ...authHeaders() },
+        body: JSON.stringify({ name }),
+      });
+      const d = (await res.json()) as { ok?: boolean; error?: string; quarantined?: boolean };
+      if (res.status === 200 && d.ok) return { ok: true };
+      return { ok: false, error: d.error || 'Install failed.', quarantined: d.quarantined === true };
+    } catch (err) {
+      return { ok: false, error: err instanceof Error ? err.message : String(err) };
+    }
+  }
+
+  /** P6d — uninstall a marketplace skill (removes dir + provenance). */
+  async marketplaceUninstall(name: string): Promise<{ ok: boolean; error?: string }> {
+    try {
+      const res = await fetch(`${this.baseUrl}/api/skills/marketplace/uninstall`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', ...authHeaders() },
+        body: JSON.stringify({ name }),
+      });
+      const d = (await res.json()) as { ok?: boolean; error?: string };
+      if (res.status === 200 && d.ok) return { ok: true };
+      return { ok: false, error: d.error || 'Uninstall failed.' };
+    } catch (err) {
+      return { ok: false, error: err instanceof Error ? err.message : String(err) };
+    }
+  }
+
+  /**
    * I11: send a test message through the gateway (authed — routing.operate).
    * Mirrors `buff gateway send <target> <text>`; the server resolves the
    * target (alias or platform:channelId) and sends through the SAME
@@ -903,6 +967,8 @@ export class DashboardAPI {
       /** P3b — a git diff payload (rendered as a 🔧 diff card). */
       onDiff?: (d: { files: Array<{ path: string; body: string }>; summary: string }) => void;
       onQuestion?: (q: { questionId: string; question: string; choices: Array<{ label: string; description?: string }>; multiSelect: boolean }) => void;
+      /** P6a — a skill draft (the /learn preview card: accept/edit/reject). */
+      onSkillDraft?: (d: { name: string; description: string; markdown: string; updatedAt: number }) => void;
     },
   ): () => void {
     const token = getAdminToken();
@@ -981,6 +1047,24 @@ export class DashboardAPI {
         }
       } catch { /* ignore malformed */ }
     });
+    es.addEventListener('skill_draft', (event) => {
+      try {
+        const payload = JSON.parse((event as MessageEvent).data) as {
+          name?: string;
+          description?: string;
+          markdown?: string;
+          updatedAt?: number;
+        };
+        if (payload.name && payload.markdown) {
+          handlers.onSkillDraft?.({
+            name: payload.name,
+            description: payload.description ?? '',
+            markdown: payload.markdown,
+            updatedAt: payload.updatedAt ?? 0,
+          });
+        }
+      } catch { /* ignore malformed */ }
+    });
     es.addEventListener('question', (event) => {
       try {
         const payload = JSON.parse((event as MessageEvent).data) as {
@@ -1015,8 +1099,36 @@ export class DashboardAPI {
     try {
       const res = await fetch(`${this.baseUrl}/api/chat/${encodeURIComponent(sessionId)}/respond`, {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json', ...this.authHeaders() },
+        headers: { 'Content-Type': 'application/json', ...authHeaders() },
         body: JSON.stringify({ questionId, ...selection }),
+      });
+      const data = (await res.json()) as { ok?: boolean; error?: string };
+      return { ok: data.ok === true, error: data.error };
+    } catch (err) {
+      return { ok: false, error: err instanceof Error ? err.message : String(err) };
+    }
+  }
+
+  /** P6a — accept a skill draft: promote it into the live stores (hub + compiled). */
+  async skillDraftAccept(name: string): Promise<{ ok: boolean; error?: string }> {
+    try {
+      const res = await fetch(`${this.baseUrl}/api/skills/drafts/${encodeURIComponent(name)}/accept`, {
+        method: 'POST',
+        headers: { ...authHeaders() },
+      });
+      const data = (await res.json()) as { ok?: boolean; error?: string };
+      return { ok: data.ok === true, error: data.error };
+    } catch (err) {
+      return { ok: false, error: err instanceof Error ? err.message : String(err) };
+    }
+  }
+
+  /** P6a — reject a skill draft: discard it (nothing is saved). */
+  async skillDraftReject(name: string): Promise<{ ok: boolean; error?: string }> {
+    try {
+      const res = await fetch(`${this.baseUrl}/api/skills/drafts/${encodeURIComponent(name)}`, {
+        method: 'DELETE',
+        headers: { ...authHeaders() },
       });
       const data = (await res.json()) as { ok?: boolean; error?: string };
       return { ok: data.ok === true, error: data.error };

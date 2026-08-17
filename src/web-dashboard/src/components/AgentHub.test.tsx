@@ -65,9 +65,12 @@ const HUB: HubData = {
     ],
   },
   skills: {
-    compiled: [{ id: 'skill-fix-lint', name: 'Fix lint', description: 'Fixes lint errors', version: '1.0.0', origin: 'compiled', usageCount: 3 }],
+    compiled: [
+      { id: 'skill-fix-lint', name: 'Fix lint', description: 'Fixes lint errors', version: '1.0.0', origin: 'compiled', usageCount: 3, bundled: true },
+      { id: 'skill-custom-x', name: 'Custom X', description: 'A user-added skill', version: '1.0.0', origin: 'compiled', usageCount: 0, bundled: false },
+    ],
     hub: [{ id: 'demo-fix', name: 'demo-fix', description: 'Fix a demo issue', origin: 'hub' }],
-    total: 2,
+    total: 3,
   },
   adminConfigured: true,
   serverTime: 123,
@@ -336,5 +339,52 @@ describe('AgentHub', () => {
     await waitFor(() => expect(screen.getByText('Fix lint')).toBeTruthy());
     // 'demo-fix' renders twice (skill name + id) — assert both are present.
     expect(screen.getAllByText('demo-fix')).toHaveLength(2);
+  });
+
+  it('P6e — provenance badges: bundled skills get 🧠, user-added get community', async () => {
+    mockReads();
+    render(<AgentHub />);
+    await waitFor(() => expect(screen.getByRole('tab', { name: /Skills/ })).toBeTruthy());
+    fireEvent.click(screen.getByRole('tab', { name: /Skills/ }));
+    await waitFor(() => expect(screen.getByText('🧠 bundled')).toBeTruthy());
+    // Fix lint (bundled) → 🧠 badge; Custom X (user-added) → community badge.
+    const bundledCards = screen.getAllByText('🧠 bundled');
+    expect(bundledCards.length).toBeGreaterThanOrEqual(1);
+    expect(screen.getByText('community')).toBeTruthy();
+  });
+
+  it('P6d — marketplace: searches, shows results, and installs a skill', async () => {
+    mockReads();
+    const searchSpy = vi.spyOn(dashboardAPI, 'marketplaceSearch').mockResolvedValue([
+      { name: 'code-assist', version: '1.2.0', description: 'Assist with code edits', author: 'nvidia', tags: ['code', 'assist'], source: 'git-repo:https://github.com/x/skills', sourceKind: 'git-repo' },
+    ]);
+    const installSpy = vi.spyOn(dashboardAPI, 'marketplaceInstall').mockResolvedValue({ ok: true });
+    render(<AgentHub />);
+    await waitFor(() => expect(screen.getByRole('tab', { name: /Skills/ })).toBeTruthy());
+    fireEvent.click(screen.getByRole('tab', { name: /Skills/ }));
+    await waitFor(() => expect(screen.getByPlaceholderText(/Search community skills/)).toBeTruthy());
+
+    fireEvent.change(screen.getByPlaceholderText(/Search community skills/), { target: { value: 'assist' } });
+    fireEvent.submit(screen.getByPlaceholderText(/Search community skills/).closest('form')!);
+    await waitFor(() => expect(searchSpy).toHaveBeenCalledWith('assist'));
+    await waitFor(() => expect(screen.getByText('code-assist')).toBeTruthy());
+    expect(screen.getByText(/v1\.2\.0 · git-repo/)).toBeTruthy();
+
+    fireEvent.click(screen.getByText('⬇ Install'));
+    await waitFor(() => expect(installSpy).toHaveBeenCalledWith('code-assist'));
+    await waitFor(() => expect(screen.getByText(/Installed code-assist/)).toBeTruthy());
+  });
+
+  it('P6d — uninstalls a hub skill from the Skills list', async () => {
+    mockReads();
+    const uninstallSpy = vi.spyOn(dashboardAPI, 'marketplaceUninstall').mockResolvedValue({ ok: true });
+    render(<AgentHub />);
+    await waitFor(() => expect(screen.getByRole('tab', { name: /Skills/ })).toBeTruthy());
+    fireEvent.click(screen.getByRole('tab', { name: /Skills/ }));
+    await waitFor(() => expect(screen.getAllByText('demo-fix').length).toBeGreaterThanOrEqual(2));
+
+    fireEvent.click(screen.getByText('🗑 Uninstall'));
+    await waitFor(() => expect(uninstallSpy).toHaveBeenCalledWith('demo-fix'));
+    await waitFor(() => expect(screen.getByText(/Uninstalled demo-fix/)).toBeTruthy());
   });
 });

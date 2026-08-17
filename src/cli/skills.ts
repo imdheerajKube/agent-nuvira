@@ -26,7 +26,9 @@ import {
   getHubSkillEntry,
   isValidSkillName,
   clearSkillsIndexCache,
+  uninstallHubSkill,
 } from '../learning/skills-hub.js';
+import { listBundles, getBundle, writeBundle, deleteBundle } from '../learning/skill-bundles.js';
 import {
   searchAllRegistries,
   findEntryAcrossRegistries,
@@ -129,6 +131,20 @@ export class SkillsCommand {
       });
 
     cmd
+      .command('uninstall <name>')
+      .description('Uninstall a skill: removes .agents/skills/<name> and its provenance record')
+      .option('--project <path>', 'Project root for .agents/skills/ (default: cwd)')
+      .action((name, opts) => {
+        if (!isValidSkillName(name)) {
+          logger.error(`Refused: skill name '${name}' is not in [a-z0-9-].`);
+          return;
+        }
+        const result = uninstallHubSkill(name, opts.project || process.cwd());
+        if (result.ok) logger.success(`🗑️  Uninstalled ${name}.`);
+        else logger.error(`❌ ${result.reason || 'uninstall failed'}`);
+      });
+
+    cmd
       .command('update')
       .description('Update installed skills to newer registry versions (checksum-verified)')
       .option('--project <path>', 'Project root for .agents/skills/ (default: cwd)')
@@ -157,6 +173,69 @@ export class SkillsCommand {
         if (failed.length > 0) {
           logger.warn(`Skipped: ${failed.join('; ')}`);
         }
+      });
+
+    cmd
+      .command('bundle')
+      .description('P6b — skill bundles: group skills under one id and load them together (Hermes parity)')
+      .argument('[slug]', 'Bundle slug to operate on (create/list/show/delete)')
+      .option('--create', 'Create a bundle from --skills')
+      .option('--name <name>', 'Display name for the bundle (default: the slug)')
+      .option('--description <text>', 'One-line bundle description')
+      .option('--skills <list>', 'Comma-separated member skill names/ids (required with --create)')
+      .option('--delete', 'Delete the bundle')
+      .action((slug, opts) => {
+        if (opts.delete) {
+          if (!slug) {
+            logger.error('bundle --delete needs a slug: buff skills bundle <slug> --delete');
+            return;
+          }
+          if (deleteBundle(slug)) logger.success(`🗑️  Deleted bundle '${slug}'.`);
+          else logger.warn(`No bundle '${slug}' to delete.`);
+          return;
+        }
+        if (opts.create) {
+          if (!slug) {
+            logger.error('bundle --create needs a slug: buff skills bundle <slug> --create --skills a,b,c');
+            return;
+          }
+          if (!opts.skills) {
+            logger.error('bundle --create needs --skills: buff skills bundle <slug> --create --skills code-review,tdd');
+            return;
+          }
+          const skills = String(opts.skills).split(',').map((s) => s.trim()).filter(Boolean);
+          const result = writeBundle({ slug, name: opts.name, description: opts.description, skills });
+          if (result.ok) {
+            logger.success(`✅ Bundle '${slug}' created with ${skills.length} skill(s): ${skills.join(', ')}.`);
+            logger.info('  Load it in chat with the skill tool (bundle: "<slug>") — or next turn, "load my ' + slug + ' bundle".');
+          } else {
+            logger.error(`❌ ${result.reason || 'create failed'}`);
+          }
+          return;
+        }
+        if (slug) {
+          const bundle = getBundle(slug);
+          if (!bundle) {
+            logger.error(`Bundle '${slug}' not found.`);
+            return;
+          }
+          console.log(`\n🧩 ${bundle.name} (${bundle.slug}) — ${bundle.description}`);
+          console.log(`   Members (${bundle.skills.length}): ${bundle.skills.join(', ')}\n`);
+          return;
+        }
+        // No slug → list all bundles.
+        const bundles = listBundles();
+        if (bundles.length === 0) {
+          logger.info('No bundles yet.');
+          logger.info('  Create one: buff skills bundle <slug> --create --skills a,b,c');
+          return;
+        }
+        console.log(`\n🧩 ${bundles.length} bundle(s):\n`);
+        for (const b of bundles) {
+          console.log(`  • ${b.name} (${b.slug}) — ${b.description}`);
+          console.log(`    skills: ${b.skills.join(', ')}\n`);
+        }
+        console.log('Load a bundle in chat: "load my <slug> bundle" — or show one: buff skills bundle <slug>');
       });
 
     cmd

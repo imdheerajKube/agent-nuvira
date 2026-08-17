@@ -309,7 +309,7 @@ export class ChatCommand extends BaseCommand {
         }
         const parsed = parseRequestSync(message);
         const dispatchDecision = resolvePipelineDispatch(parsed, { dev: opts.dev, text: message });
-        const answer = await this.runChatAnswer(message, opts.history ?? [], { type, provider, model }, { provider: mergedOpts.provider, model: mergedOpts.model, dev: mergedOpts.dev, cache: true }, true, { auto: autoMode }, parsed, { askUser: opts.askUser, onProgress: opts.onProgress, onToolCall: opts.onToolCall, onPlanChange: opts.onPlanChange, onGitDiff: opts.onGitDiff, planStore: opts.planStore ?? this.planStore, gateway: opts.gateway, projectContext: opts.projectContext, recallContext: recallBlock, onToken: opts.onToken, signal: opts.signal });
+        const answer = await this.runChatAnswer(message, opts.history ?? [], { type, provider, model }, { provider: mergedOpts.provider, model: mergedOpts.model, dev: mergedOpts.dev, cache: true }, true, { auto: autoMode }, parsed, { askUser: opts.askUser, onProgress: opts.onProgress, onToolCall: opts.onToolCall, onPlanChange: opts.onPlanChange, onGitDiff: opts.onGitDiff, onSkillDraft: opts.onSkillDraft, planStore: opts.planStore ?? this.planStore, gateway: opts.gateway, projectContext: opts.projectContext, recallContext: recallBlock, onToken: opts.onToken, signal: opts.signal });
         // No-model fallback: the tool loop could not generate a single response
         // AND the rules assessed a high-confidence pipeline intent — run the
         // pipeline directly (rules decide only when the model is unavailable; the
@@ -742,6 +742,11 @@ export class ChatCommand extends BaseCommand {
                 // P3b — forward git diff payloads to the GUI (the diff card).
                 if (ctxOverrides?.onGitDiff && event === 'git:diff') {
                     ctxOverrides.onGitDiff(data);
+                }
+                // P6a — forward skill draft payloads to the GUI (the /learn preview
+                // card with accept / edit / reject).
+                if (ctxOverrides?.onSkillDraft && event === 'skill:draft') {
+                    ctxOverrides.onSkillDraft(data);
                 }
                 getEventBus().emit(event, data, source);
             },

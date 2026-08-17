@@ -37,6 +37,10 @@ vi.mock('../../src/learning/hub-skill-catalog.js', async (importOriginal) => {
     ...actual,
     readHubCatalog: (projectRoot: string = holder.project, home: string = holder.home) =>
       actual.readHubCatalog(projectRoot, home),
+    // P6c — the tool now reads via the MATCHABLE catalog (gates applied);
+    // pin its roots to the temp project/home so hub skills resolve.
+    listMatchableHubSkills: (cm?: unknown, projectRoot: string = holder.project, home: string = holder.home) =>
+      actual.listMatchableHubSkills(cm as never, projectRoot, home),
   };
 });
 
@@ -123,6 +127,20 @@ describe('skill tool', () => {
     expect(out).toContain('Custom Analyzer');
     expect(out).toContain('Build a matrix of metric queries first.');
     expect(out).toContain('hub skill');
+  });
+
+  it('P6c — surfaces declared env-var NAMES as setup hints (values never printed)', async () => {
+    const dir = join(testProject, '.agents', 'skills', 'env-heavy');
+    mkdirSync(dir, { recursive: true });
+    writeFileSync(
+      join(dir, 'SKILL.md'),
+      '---\nname: env-heavy\nrequired_environment_variables: [DB_URL, API_TOKEN]\n---\n# Env Heavy\nConnect to the database and fetch rows.\n',
+      'utf-8',
+    );
+    const out = await runSkillTool({ skill: 'env-heavy' }, { configManager: {} });
+    expect(out).toContain('Requires env vars (set before running): DB_URL, API_TOKEN');
+    // The names appear; an actual VALUE never does (we never read process.env).
+    expect(out).not.toContain('secret-value');
   });
 
   it('unknown skill lists every available skill (both sources)', async () => {

@@ -441,7 +441,7 @@ export async function installFromSource(
   source: RegistrySource,
   projectRoot = process.cwd(),
   force = false,
-): Promise<{ ok: boolean; name: string; version?: string; quarantined?: boolean; reason?: string }> {
+): Promise<{ ok: boolean; name: string; version?: string; source?: string; quarantined?: boolean; reason?: string }> {
   const { installHubSkill } = await import('./skills-hub.js');
   return installHubSkill({ ...entry, source: source.base }, projectRoot, force, {
     registry: source.base,

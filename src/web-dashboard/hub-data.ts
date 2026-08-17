@@ -397,6 +397,10 @@ function readSkillsData(): HubSkillsData {
         origin: 'compiled' as const,
         usageCount: s.usageCount,
         enabled: true,
+        // P6e — provenance: bundled first-party skills get a 🧠 badge (a
+        // community/learned skill does not), so the panel separates what
+        // ships with the product from what the user added.
+        bundled: Array.isArray(s.sourceTrajectoryIds) && s.sourceTrajectoryIds.includes('bundled'),
       }));
   } catch {
     compiled = [];

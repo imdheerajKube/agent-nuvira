@@ -77,6 +77,16 @@ export default function AgentHub() {
   // full ids while working (per-session, resets on reload).
   const [revealIds, setRevealIds] = useState(false);
 
+  // P6d — marketplace import surface (search every configured registry).
+  const [marketQuery, setMarketQuery] = useState('');
+  const [marketResults, setMarketResults] = useState<Array<{
+    name: string; version: string; description: string; author: string; tags: string[]; source: string; sourceKind: string;
+  }>>([]);
+  const [marketSearched, setMarketSearched] = useState(false);
+  const [marketBusy, setMarketBusy] = useState(false);
+  const [marketMsg, setMarketMsg] = useState<{ kind: 'ok' | 'err'; text: string } | null>(null);
+  const [marketBusyName, setMarketBusyName] = useState<string | null>(null);
+
   // P1 — verified contacts (name + contact no): the validated list.
   const [contactNameInput, setContactNameInput] = useState<Record<string, string>>({});
   const [contacts, setContacts] = useState<HubContact[]>([]);
@@ -112,6 +122,66 @@ export default function AgentHub() {
 
   /** routing.operate — admin or operator may toggle capabilities. */
   const canWrite = authed && (role === 'admin' || role === 'operator');
+
+  /** P6d — search the marketplace (reads OTHER registries; the repo stays private). */
+  const searchMarket = async (e?: React.FormEvent) => {
+    e?.preventDefault();
+    const q = marketQuery.trim();
+    if (!q) return;
+    setMarketBusy(true);
+    setMarketMsg(null);
+    const results = await dashboardAPI.marketplaceSearch(q);
+    setMarketResults(results);
+    setMarketSearched(true);
+    setMarketBusy(false);
+  };
+
+  /** P6d — install a skill from the marketplace into <project>/.agents/skills/. */
+  const installMarketSkill = async (name: string) => {
+    if (!authed) {
+      setMarketMsg({ kind: 'err', text: '🔐 Log in (or set up admin access) to install skills.' });
+      return;
+    }
+    if (!canWrite) {
+      setMarketMsg({ kind: 'err', text: 'Your role cannot install skills — admin or operator only.' });
+      return;
+    }
+    setMarketBusyName(name);
+    setMarketMsg(null);
+    const r = await dashboardAPI.marketplaceInstall(name);
+    if (r.ok) {
+      setMarketMsg({ kind: 'ok', text: `✅ Installed ${name} (quarantine checked) — it appears in the Skills list and loads via the skill tool next turn.` });
+      void refresh();
+    } else {
+      setMarketMsg({
+        kind: 'err',
+        text: r.quarantined ? `⛔ ${r.error || 'checksum mismatch — quarantined'}` : `❌ ${r.error || 'Install failed.'}`,
+      });
+    }
+    setMarketBusyName(null);
+  };
+
+  /** P6d — uninstall a hub skill (removes the dir + provenance). */
+  const uninstallSkill = async (name: string) => {
+    if (!authed) {
+      setMarketMsg({ kind: 'err', text: '🔐 Log in (or set up admin access) to uninstall skills.' });
+      return;
+    }
+    if (!canWrite) {
+      setMarketMsg({ kind: 'err', text: 'Your role cannot uninstall skills — admin or operator only.' });
+      return;
+    }
+    setMarketBusyName(name);
+    setMarketMsg(null);
+    const r = await dashboardAPI.marketplaceUninstall(name);
+    if (r.ok) {
+      setMarketMsg({ kind: 'ok', text: `🗑️ Uninstalled ${name} — removed from .agents/skills/ and provenance.` });
+      void refresh();
+    } else {
+      setMarketMsg({ kind: 'err', text: `❌ ${r.error || 'Uninstall failed.'}` });
+    }
+    setMarketBusyName(null);
+  };
 
   const sessionExpired = () => {
     setAuthed(false);
@@ -1050,16 +1120,20 @@ export default function AgentHub() {
                       <span className="hub-card-name">{s.name}</span>
                       <span className="hub-card-id">{s.id}{s.version ? ` · v${s.version}` : ''}</span>
                     </div>
-                    <button
-                      role="switch"
-                      aria-checked={s.enabled}
-                      aria-label={`${s.enabled ? 'Disable' : 'Enable'} ${s.name}`}
-                      className={`hub-switch${s.enabled ? ' on' : ''}`}
-                      disabled={toggling === s.id || pendingToggle !== null || (authed && !canWrite)}
-                      onClick={() => toggleSkill(s.id, !s.enabled)}
-                    >
-                      <span className="hub-switch-knob" />
-                    </button>
+                    <div className="hub-card-actions">
+                      {/* P6e — provenance badge: bundled ships with the product. */}
+                      {s.bundled === true ? <span className="hub-chip hub-chip-bundled">🧠 bundled</span> : <span className="hub-chip">community</span>}
+                      <button
+                        role="switch"
+                        aria-checked={s.enabled}
+                        aria-label={`${s.enabled ? 'Disable' : 'Enable'} ${s.name}`}
+                        className={`hub-switch${s.enabled ? ' on' : ''}`}
+                        disabled={toggling === s.id || pendingToggle !== null || (authed && !canWrite)}
+                        onClick={() => toggleSkill(s.id, !s.enabled)}
+                      >
+                        <span className="hub-switch-knob" />
+                      </button>
+                    </div>
                   </div>
                   <p className="hub-card-desc">{s.description}</p>
                   <div className="hub-card-tools">
@@ -1088,16 +1162,26 @@ export default function AgentHub() {
                       <span className="hub-card-name">{s.name}</span>
                       <span className="hub-card-id">{s.id}</span>
                     </div>
-                    <button
-                      role="switch"
-                      aria-checked={s.enabled}
-                      aria-label={`${s.enabled ? 'Disable' : 'Enable'} ${s.name}`}
-                      className={`hub-switch${s.enabled ? ' on' : ''}`}
-                      disabled={toggling === s.id || pendingToggle !== null || (authed && !canWrite)}
-                      onClick={() => toggleSkill(s.id, !s.enabled)}
-                    >
-                      <span className="hub-switch-knob" />
-                    </button>
+                    <div className="hub-card-actions">
+                      <button
+                        type="button"
+                        className="hub-mini-btn"
+                        disabled={marketBusyName === s.id || (authed && !canWrite)}
+                        onClick={() => void uninstallSkill(s.id)}
+                      >
+                        🗑 Uninstall
+                      </button>
+                      <button
+                        role="switch"
+                        aria-checked={s.enabled}
+                        aria-label={`${s.enabled ? 'Disable' : 'Enable'} ${s.name}`}
+                        className={`hub-switch${s.enabled ? ' on' : ''}`}
+                        disabled={toggling === s.id || pendingToggle !== null || (authed && !canWrite)}
+                        onClick={() => toggleSkill(s.id, !s.enabled)}
+                      >
+                        <span className="hub-switch-knob" />
+                      </button>
+                    </div>
                   </div>
                   <p className="hub-card-desc">{s.description}</p>
                   <div className="hub-card-tools">
@@ -1111,9 +1195,59 @@ export default function AgentHub() {
             </div>
           ) : (
             <div className="empty-state">
-              No hub skills installed — run <code>buff skills install &lt;name&gt;</code> to add one from the registry.
+              No hub skills installed — search the marketplace below or run <code>buff skills install &lt;name&gt;</code>.
             </div>
           )}
+
+          {/* P6d — marketplace import surface: search every configured registry
+              and install into .agents/skills/ (sandboxed + checksum-verified).
+              The repo stays private — this READS other people's registries. */}
+          <h3 className="section-subtitle">🛒 Marketplace (community skills)</h3>
+          <form className="hub-market-search" onSubmit={searchMarket}>
+            <input
+              type="text"
+              value={marketQuery}
+              onChange={(e) => setMarketQuery(e.target.value)}
+              placeholder="Search community skills (e.g. code-assist, deploy, testing)…"
+            />
+            <button type="submit" className="admin-refresh-btn" disabled={marketBusy}>
+              {marketBusy ? 'Searching…' : '🔎 Search'}
+            </button>
+          </form>
+          {marketMsg ? <div className={`admin-row-msg${marketMsg.kind === 'err' ? ' admin-row-msg-err' : ''}`}>{marketMsg.text}</div> : null}
+          {marketSearched && !marketBusy ? (
+            marketResults.length > 0 ? (
+              <div className="hub-session-list">
+                {marketResults.map((r) => (
+                  <div className="hub-card" key={`m-${r.name}`}>
+                    <div className="hub-card-top">
+                      <div className="hub-card-title">
+                        <span className="hub-card-name">{r.name}</span>
+                        <span className="hub-card-id">v{r.version} · {r.sourceKind}</span>
+                      </div>
+                      <button
+                        type="button"
+                        className="admin-refresh-btn"
+                        disabled={marketBusyName === r.name || (authed && !canWrite)}
+                        onClick={() => void installMarketSkill(r.name)}
+                      >
+                        {marketBusyName === r.name ? 'Installing…' : '⬇ Install'}
+                      </button>
+                    </div>
+                    <p className="hub-card-desc">{r.description}</p>
+                    <div className="hub-card-tools">
+                      <span className="hub-chip">{r.author}</span>
+                      {r.tags.slice(0, 3).map((t) => <span className="hub-chip" key={t}>{t}</span>)}
+                    </div>
+                  </div>
+                ))}
+              </div>
+            ) : (
+              <div className="empty-state">
+                No skills match "{marketQuery}" — try a broader term, or add a registry to <code>skills.registries</code> in config.
+              </div>
+            )
+          ) : null}
         </div>
       ) : null}
     </>

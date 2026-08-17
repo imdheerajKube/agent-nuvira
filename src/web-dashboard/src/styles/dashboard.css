@@ -3466,6 +3466,78 @@ body {
   background: color-mix(in srgb, #3b82f6 10%, transparent);
 }
 
+/* P6a — /learn skill draft preview card (accept / edit / reject) */
+.chat-draft-card {
+  border: 1px solid var(--border);
+  border-left: 3px solid #bc8cff;
+  border-radius: 8px;
+  padding: 10px 12px;
+  margin: 8px 0 2px;
+  background: color-mix(in srgb, var(--bg-secondary, #1b1f27) 55%, transparent);
+}
+
+.chat-draft-card.chat-draft-saved {
+  border-left-color: #4ade80;
+}
+
+.chat-draft-card.chat-draft-rejected {
+  border-left-color: #6e7681;
+  opacity: 0.75;
+}
+
+.chat-draft-head {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.chat-draft-icon {
+  font-size: 12px;
+  flex: none;
+}
+
+.chat-draft-title {
+  font-family: var(--font-mono, ui-monospace, SFMono-Regular, Menlo, Consolas, monospace);
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--text-primary);
+}
+
+.chat-draft-meta {
+  font-family: var(--font-mono, ui-monospace, SFMono-Regular, Menlo, Consolas, monospace);
+  font-size: 11px;
+  color: var(--text-secondary);
+  margin-left: auto;
+}
+
+.chat-draft-desc {
+  margin: 6px 0 0;
+  font-size: 12.5px;
+  color: var(--text-secondary);
+}
+
+.chat-draft-body {
+  margin: 6px 0 0;
+  padding: 6px 8px;
+  font-family: var(--font-mono, ui-monospace, SFMono-Regular, Menlo, Consolas, monospace);
+  font-size: 11px;
+  line-height: 1.5;
+  white-space: pre-wrap;
+  word-break: break-word;
+  max-height: 200px;
+  overflow: auto;
+  background: color-mix(in srgb, var(--bg, #14171c) 70%, transparent);
+  border: 1px dashed var(--border);
+  border-radius: 6px;
+}
+
+.chat-draft-actions {
+  display: flex;
+  gap: 8px;
+  margin-top: 8px;
+  flex-wrap: wrap;
+}
+
 /* ── Platform transport config (PlatformConfigSection) ─────────────────── */
 .platform-config {
   margin-top: 10px;
@@ -3529,6 +3601,53 @@ body {
 
 .hub-remove-btn:hover {
   background: rgba(224, 49, 49, 0.1);
+}
+
+/* P6e — provenance chip (🧠 bundled ships with the product) */
+.hub-chip-bundled {
+  background: rgba(188, 140, 255, 0.18) !important;
+  color: var(--accent-purple, #bc8cff) !important;
+  border: 1px solid rgba(188, 140, 255, 0.4);
+}
+
+/* P6d — marketplace import surface (search + install/uninstall) */
+.hub-market-search {
+  display: flex;
+  gap: 8px;
+  margin: 0 0 10px;
+}
+
+.hub-market-search input {
+  flex: 1;
+  min-width: 0;
+}
+
+.hub-card-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.hub-mini-btn {
+  background: transparent;
+  border: 1px solid var(--border);
+  color: var(--text-secondary);
+  border-radius: 6px;
+  padding: 3px 10px;
+  font-size: 12px;
+  cursor: pointer;
+  transition: var(--transition);
+}
+
+.hub-mini-btn:hover {
+  border-color: rgba(224, 49, 49, 0.5);
+  color: #e03131;
+  background: rgba(224, 49, 49, 0.08);
+}
+
+.hub-mini-btn:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
 }
 
 /* P0.1 — ask_user clarifying-question card */

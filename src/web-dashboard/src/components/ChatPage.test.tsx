@@ -374,6 +374,75 @@ describe('ChatPage', () => {
     expect(unsub).toHaveBeenCalled();
   });
 
+  it('P6a — renders the skill draft preview card: accept saves, reject discards', async () => {
+    mockAuthed('admin');
+    let draftCb: ((d: { name: string; description: string; markdown: string; updatedAt: number }) => void) | null = null;
+    let unsub: (() => void) | null = null;
+    vi.spyOn(dashboardAPI, 'subscribeChat').mockImplementation((_sid, handlers) => {
+      draftCb = handlers.onSkillDraft ?? null;
+      unsub = vi.fn();
+      return unsub;
+    });
+    vi.spyOn(dashboardAPI, 'chatResolve').mockResolvedValue({ ok: true, matches: [] });
+    let resolveSend: (v: typeof OK_RESPONSE) => void = () => {};
+    vi.spyOn(dashboardAPI, 'chatSend').mockImplementation(
+      () => new Promise((resolve) => { resolveSend = resolve; }) as Promise<typeof OK_RESPONSE>,
+    );
+    const acceptSpy = vi.spyOn(dashboardAPI, 'skillDraftAccept').mockResolvedValue({ ok: true });
+    const rejectSpy = vi.spyOn(dashboardAPI, 'skillDraftReject').mockResolvedValue({ ok: true });
+    render(<ChatPage />);
+    await waitFor(() => expect(screen.getByPlaceholderText(/Message the agent/)).toBeTruthy());
+
+    fireEvent.change(screen.getByPlaceholderText(/Message the agent/), { target: { value: 'learn the S3 flow' } });
+    fireEvent.submit(screen.getByPlaceholderText(/Message the agent/).closest('form')!);
+    await waitFor(() => expect(draftCb).toBeTruthy());
+
+    // skill_manage create emitted the draft — the preview card appears.
+    draftCb!({ name: 's3-upload', description: 'Upload artifacts to S3.', markdown: '---\nname: s3-upload\ndescription: Upload artifacts to S3.\n---\n# Steps\n...', updatedAt: 123 });
+    await waitFor(() => expect(screen.getByText('New skill draft: s3-upload')).toBeTruthy());
+    expect(screen.getByText('Upload artifacts to S3.')).toBeTruthy();
+
+    // ✅ Accept calls the accept endpoint and marks the card saved.
+    fireEvent.click(screen.getByText('✅ Accept'));
+    await waitFor(() => expect(acceptSpy).toHaveBeenCalledWith('s3-upload'));
+    await waitFor(() => expect(screen.getByText(/Saved — the skill is live/)).toBeTruthy());
+    expect(rejectSpy).not.toHaveBeenCalled();
+
+    // On completion the draft snapshots into the assistant bubble.
+    resolveSend(OK_RESPONSE);
+    await waitFor(() => expect(screen.getByText('I checked the repo — the build is green.')).toBeTruthy());
+    expect(unsub).toHaveBeenCalled();
+  });
+
+  it('P6a — rejecting a draft calls the reject endpoint and marks the card discarded', async () => {
+    mockAuthed('admin');
+    let draftCb: ((d: { name: string; description: string; markdown: string; updatedAt: number }) => void) | null = null;
+    vi.spyOn(dashboardAPI, 'subscribeChat').mockImplementation((_sid, handlers) => {
+      draftCb = handlers.onSkillDraft ?? null;
+      return vi.fn();
+    });
+    vi.spyOn(dashboardAPI, 'chatResolve').mockResolvedValue({ ok: true, matches: [] });
+    let resolveSend: (v: typeof OK_RESPONSE) => void = () => {};
+    vi.spyOn(dashboardAPI, 'chatSend').mockImplementation(
+      () => new Promise((resolve) => { resolveSend = resolve; }) as Promise<typeof OK_RESPONSE>,
+    );
+    const rejectSpy = vi.spyOn(dashboardAPI, 'skillDraftReject').mockResolvedValue({ ok: true });
+    const acceptSpy = vi.spyOn(dashboardAPI, 'skillDraftAccept').mockResolvedValue({ ok: true });
+    render(<ChatPage />);
+    await waitFor(() => expect(screen.getByPlaceholderText(/Message the agent/)).toBeTruthy());
+
+    fireEvent.change(screen.getByPlaceholderText(/Message the agent/), { target: { value: 'learn the flow' } });
+    fireEvent.submit(screen.getByPlaceholderText(/Message the agent/).closest('form')!);
+    await waitFor(() => expect(draftCb).toBeTruthy());
+    draftCb!({ name: 'schema-check', description: 'Validate schema drift.', markdown: '---\nname: schema-check\ndescription: Validate schema drift.\n---\n# Steps\n...', updatedAt: 1 });
+    await waitFor(() => expect(screen.getByText('New skill draft: schema-check')).toBeTruthy());
+
+    fireEvent.click(screen.getByText('↩ Reject'));
+    await waitFor(() => expect(rejectSpy).toHaveBeenCalledWith('schema-check'));
+    await waitFor(() => expect(screen.getByText(/Rejected — the draft was discarded/)).toBeTruthy());
+    expect(acceptSpy).not.toHaveBeenCalled();
+  });
+
   it('P0.1 — renders the agent question card and answers it via chatRespond', async () => {
     mockAuthed('admin');
     let questionCb: ((q: { questionId: string; question: string; choices: Array<{ label: string }>; multiSelect: boolean }) => void) | null = null;
@@ -433,6 +502,13 @@ describe('ChatPage', () => {
     const send = mockChatSend(OK_RESPONSE);
     render(<ChatPage />);
     await waitFor(() => expect(screen.getByPlaceholderText(/Message the agent/)).toBeTruthy());
+
+    // P6e — the skill suggestions are part of the empty state (the shipable
+    // first-party batch is the onboarding entry point).
+    const skillChip = screen.getByRole('button', { name: /load the code-assessment skill/ });
+    expect(skillChip).toBeTruthy();
+    const learnChip = screen.getByRole('button', { name: /learn a workflow as a skill/ });
+    expect(learnChip).toBeTruthy();
 
     const chip = screen.getByRole('button', { name: /assess this project/ });
     expect(chip).toBeTruthy();

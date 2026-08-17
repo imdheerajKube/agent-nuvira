@@ -19,6 +19,9 @@ import {
   findHubSkillMatch,
   parseCatalogFrontmatter,
   setSkillEnabled,
+  platformAllows,
+  toolsetAllows,
+  normalizePlatform,
 } from '../../src/learning/hub-skill-catalog.js';
 import { ConfigManager } from '../../src/config/manager.js';
 import { resetSkillStore } from '../../src/learning/skill-store.js';
@@ -51,6 +54,106 @@ describe('parseCatalogFrontmatter', () => {
 
   it('returns empty for a file with no frontmatter', () => {
     expect(parseCatalogFrontmatter('no frontmatter here')).toEqual({});
+  });
+
+  it('P6c — parses inline arrays (platforms, env vars)', () => {
+    const fm = parseCatalogFrontmatter(
+      '---\nname: mac-tool\nplatforms: [macos, linux]\nrequired_environment_variables: [API_KEY, REGION]\n---\nbody',
+    );
+    expect(fm.platforms).toEqual(['macos', 'linux']);
+    expect(fm.requiredEnvVars).toEqual(['API_KEY', 'REGION']);
+  });
+
+  it('P6c — parses block lists (requires_toolsets, fallback_for_toolsets)', () => {
+    const fm = parseCatalogFrontmatter(
+      '---\nname: terminal-helper\nrequires_toolsets:\n  - coding\n  - terminal\nfallback_for_toolsets:\n  - web\n---\nbody',
+    );
+    expect(fm.requiresToolsets).toEqual(['coding', 'terminal']);
+    expect(fm.fallbackForToolsets).toEqual(['web']);
+  });
+
+  it('P6c — parses the config map (key: value lines)', () => {
+    const fm = parseCatalogFrontmatter(
+      '---\nname: cfg-skill\nconfig:\n  log_level: debug\n  retries: "3"\n---\nbody',
+    );
+    expect(fm.config).toEqual({ log_level: 'debug', retries: '3' });
+  });
+});
+
+describe('P6c — frontmatter depth gates', () => {
+  const skillWith = (extra: string) => ({
+    id: 'x',
+    name: 'x',
+    description: 'x',
+    body: 'x',
+    root: 'project' as const,
+    ...(extra ? (parseCatalogFrontmatter(`---\n${extra}---\nbody`) as object) : {}),
+  });
+
+  it('platformAllows: undeclared → everywhere; declared → normalized match', () => {
+    const any = skillWith('');
+    expect(platformAllows(any, 'darwin')).toBe(true);
+    expect(platformAllows(any, 'win32')).toBe(true);
+
+    const macOnly = { ...skillWith('platforms: [macos, linux]\n') } as ReturnType<typeof skillWith> & { platforms: string[] };
+    expect(platformAllows(macOnly, 'darwin')).toBe(true); // darwin ≡ macos
+    expect(platformAllows(macOnly, 'win32')).toBe(false); // windows hidden
+
+    const winOnly = { ...skillWith('platforms: [windows]\n') } as ReturnType<typeof skillWith> & { platforms: string[] };
+    expect(platformAllows(winOnly, 'win32')).toBe(true); // win32 ≡ windows
+    expect(platformAllows(winOnly, 'darwin')).toBe(false);
+  });
+
+  it('toolsetAllows: requires_toolsets needs every named toolset present', () => {
+    const needsCoding = { ...skillWith('requires_toolsets:\n  - coding\n') } as ReturnType<typeof skillWith> & { requiresToolsets: string[] };
+    expect(toolsetAllows(needsCoding, new Set(['coding', 'web']))).toBe(true);
+    expect(toolsetAllows(needsCoding, new Set(['web']))).toBe(false);
+    // Default (no set) = all catalog toolsets present.
+    expect(toolsetAllows(needsCoding)).toBe(true);
+  });
+
+  it('toolsetAllows: fallback_for_toolsets visible ONLY when the toolset is absent', () => {
+    const fallback = { ...skillWith('fallback_for_toolsets:\n  - web\n') } as ReturnType<typeof skillWith> & { fallbackForToolsets: string[] };
+    expect(toolsetAllows(fallback, new Set(['coding']))).toBe(true); // web absent → fallback active
+    expect(toolsetAllows(fallback, new Set(['web']))).toBe(false); // web present → fallback hidden
+  });
+
+  it('normalizePlatform maps darwin→macos and win32→windows', () => {
+    expect(normalizePlatform('darwin')).toBe('macos');
+    expect(normalizePlatform('win32')).toBe('windows');
+    expect(normalizePlatform('linux')).toBe('linux');
+  });
+
+  it('listMatchableHubSkills hides a macos-only skill on win32', () => {
+    const dir = join(projectDir, '.agents', 'skills', 'mac-tool');
+    mkdirSync(dir, { recursive: true });
+    writeFileSync(join(dir, 'SKILL.md'), '---\nname: mac-tool\nplatforms: [macos]\n---\n# body\n', 'utf-8');
+
+    expect(listMatchableHubSkills(undefined, projectDir, homeDir, 'darwin')).toHaveLength(1);
+    expect(listMatchableHubSkills(undefined, projectDir, homeDir, 'win32')).toHaveLength(0);
+  });
+
+  it('listMatchableHubSkills applies the toolset gate with an explicit present set', () => {
+    const dir = join(projectDir, '.agents', 'skills', 'term-helper');
+    mkdirSync(dir, { recursive: true });
+    writeFileSync(join(dir, 'SKILL.md'), '---\nname: term-helper\nrequires_toolsets:\n  - coding\n---\n# body\n', 'utf-8');
+
+    expect(listMatchableHubSkills(undefined, projectDir, homeDir, 'linux', new Set(['coding']))).toHaveLength(1);
+    expect(listMatchableHubSkills(undefined, projectDir, homeDir, 'linux', new Set(['web']))).toHaveLength(0);
+  });
+
+  it('readHubCatalog carries the depth fields (parser → catalog, no loss)', () => {
+    const dir = join(projectDir, '.agents', 'skills', 'env-heavy');
+    mkdirSync(dir, { recursive: true });
+    writeFileSync(
+      join(dir, 'SKILL.md'),
+      '---\nname: env-heavy\nplatforms: [linux]\nrequired_environment_variables: [DB_URL, API_TOKEN]\nconfig:\n  log_level: debug\n---\n# body\n',
+      'utf-8',
+    );
+    const skill = readHubCatalog(projectDir, homeDir)[0];
+    expect(skill.platforms).toEqual(['linux']);
+    expect(skill.requiredEnvVars).toEqual(['DB_URL', 'API_TOKEN']);
+    expect(skill.config).toEqual({ log_level: 'debug' });
   });
 });
 

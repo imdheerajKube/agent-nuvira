@@ -2684,6 +2684,214 @@ function handleRequest(req: IncomingMessage, res: ServerResponse): void {
     return;
   }
 
+  // ── P6a /learn skill drafts — the preview-card gate. skill_manage create
+  // writes a DRAFT (never a live skill); these endpoints are what the card's
+  // buttons call: accept (promote to hub SKILL.md + compiled SkillStore),
+  // reject (delete the draft). Reads are operator-visible; writes are
+  // gated on routing.operate like the skill toggle. This is the ONLY place a
+  // draft becomes a live skill — a bad draft is rejected, never saved.
+  if (pathname === '/api/skills/drafts' && req.method === 'GET') {
+    void (async () => {
+      const session = adminSessions.validate(bearerToken(req));
+      if (!session) {
+        writeJson(res, 401, { ok: false, error: 'Not authenticated — log in first.' });
+        return;
+      }
+      try {
+        const { listDrafts } = await import('../learning/skill-drafts.js');
+        writeJson(res, 200, {
+          drafts: listDrafts().map((d) => ({ name: d.name, description: d.description, updatedAt: d.updatedAt })),
+        });
+      } catch (err) {
+        writeJson(res, 500, { ok: false, error: err instanceof Error ? err.message : String(err) });
+      }
+    })();
+    return;
+  }
+  if (pathname.startsWith('/api/skills/drafts/')) {
+    const rest = pathname.slice('/api/skills/drafts/'.length);
+    const name = rest.split('/')[0];
+    if (!/^[a-z0-9-]+$/.test(name)) {
+      writeJson(res, 400, { ok: false, error: 'Invalid draft name.' });
+      return;
+    }
+    if (req.method === 'POST' && rest.endsWith('/accept')) {
+      void (async () => {
+        const session = adminSessions.validate(bearerToken(req));
+        if (!session) {
+          writeJson(res, 401, { ok: false, error: 'Not authenticated — log in first.' });
+          return;
+        }
+        if (!roleCan(session.role, 'routing.operate')) {
+          writeJson(res, 403, {
+            ok: false,
+            error: `Access denied — role '${session.role}' cannot accept skill drafts (requires admin or operator).`,
+          });
+          return;
+        }
+        try {
+          const { acceptDraft } = await import('../learning/skill-drafts.js');
+          const result = acceptDraft(name);
+          if (!result.ok) {
+            writeJson(res, 400, { ok: false, error: result.reason ?? 'accept failed' });
+            return;
+          }
+          writeJson(res, 200, {
+            ok: true,
+            skill: { id: result.skill?.id, name: result.skill?.name, description: result.skill?.description },
+          });
+        } catch (err) {
+          writeJson(res, 500, { ok: false, error: err instanceof Error ? err.message : String(err) });
+        }
+      })();
+      return;
+    }
+    if (req.method === 'DELETE') {
+      void (async () => {
+        const session = adminSessions.validate(bearerToken(req));
+        if (!session) {
+          writeJson(res, 401, { ok: false, error: 'Not authenticated — log in first.' });
+          return;
+        }
+        if (!roleCan(session.role, 'routing.operate')) {
+          writeJson(res, 403, {
+            ok: false,
+            error: `Access denied — role '${session.role}' cannot reject skill drafts (requires admin or operator).`,
+          });
+          return;
+        }
+        try {
+          const { deleteDraft } = await import('../learning/skill-drafts.js');
+          const removed = deleteDraft(name);
+          writeJson(res, 200, { ok: true, removed });
+        } catch (err) {
+          writeJson(res, 500, { ok: false, error: err instanceof Error ? err.message : String(err) });
+        }
+      })();
+      return;
+    }
+    writeJson(res, 404, { ok: false, error: 'Not found — expected POST <name>/accept or DELETE <name>.' });
+    return;
+  }
+
+  // ── P6d marketplace import surface (the private-repo-safe path). ────────
+  // Thin endpoints over the EXISTING multi-source registry (skills-registry.ts):
+  // search every configured source, install (sandboxed + checksummed), and
+  // uninstall. The repo stays private — importing reads OTHER people's
+  // registries. Reads are operator-visible; writes need routing.operate.
+  if (pathname === '/api/skills/marketplace' && req.method === 'GET') {
+    void (async () => {
+      const session = adminSessions.validate(bearerToken(req));
+      if (!session) {
+        writeJson(res, 401, { ok: false, error: 'Not authenticated — log in first.' });
+        return;
+      }
+      const url = new URL(req.url ?? '', 'http://localhost');
+      const q = (url.searchParams.get('q') ?? '').trim();
+      try {
+        const { searchAllRegistries } = await import('../learning/skills-registry.js');
+        const results = q
+          ? await searchAllRegistries(q, { cm: new ConfigManager() })
+          : [];
+        writeJson(res, 200, {
+          query: q,
+          results: results.map((r) => ({
+            name: r.name,
+            version: r.version,
+            description: r.description,
+            author: r.author,
+            tags: r.tags,
+            source: r.source,
+            sourceKind: r.sourceKind,
+          })),
+        });
+      } catch (err) {
+        writeJson(res, 500, { ok: false, error: err instanceof Error ? err.message : String(err) });
+      }
+    })();
+    return;
+  }
+  if (pathname === '/api/skills/marketplace/install' && req.method === 'POST') {
+    void (async () => {
+      const session = adminSessions.validate(bearerToken(req));
+      if (!session) {
+        writeJson(res, 401, { ok: false, error: 'Not authenticated — log in first.' });
+        return;
+      }
+      if (!roleCan(session.role, 'routing.operate')) {
+        writeJson(res, 403, {
+          ok: false,
+          error: `Access denied — role '${session.role}' cannot install skills (requires admin or operator).`,
+        });
+        return;
+      }
+      const body = await readJsonBody(req);
+      const name = typeof body?.name === 'string' ? body.name.trim() : '';
+      if (!/^[a-z0-9-]+$/.test(name)) {
+        writeJson(res, 400, { ok: false, error: 'Invalid skill name.' });
+        return;
+      }
+      try {
+        const { findEntryAcrossRegistries, fetchSourceSkill, installFromSource } = await import('../learning/skills-registry.js');
+        const found = await findEntryAcrossRegistries(name, { cm: new ConfigManager() });
+        if (!found) {
+          writeJson(res, 404, { ok: false, error: `Skill '${name}' not found in any configured registry.` });
+          return;
+        }
+        const result = await installFromSource(found.value, found.source, process.cwd(), false);
+        if (!result.ok) {
+          writeJson(res, 400, {
+            ok: false,
+            quarantined: result.quarantined === true,
+            error: result.reason ?? 'install failed',
+          });
+          return;
+        }
+        writeJson(res, 200, {
+          ok: true,
+          skill: { name: result.name, version: result.version, source: result.source },
+        });
+      } catch (err) {
+        writeJson(res, 500, { ok: false, error: err instanceof Error ? err.message : String(err) });
+      }
+    })();
+    return;
+  }
+  if (pathname === '/api/skills/marketplace/uninstall' && req.method === 'POST') {
+    void (async () => {
+      const session = adminSessions.validate(bearerToken(req));
+      if (!session) {
+        writeJson(res, 401, { ok: false, error: 'Not authenticated — log in first.' });
+        return;
+      }
+      if (!roleCan(session.role, 'routing.operate')) {
+        writeJson(res, 403, {
+          ok: false,
+          error: `Access denied — role '${session.role}' cannot uninstall skills (requires admin or operator).`,
+        });
+        return;
+      }
+      const body = await readJsonBody(req);
+      const name = typeof body?.name === 'string' ? body.name.trim() : '';
+      if (!/^[a-z0-9-]+$/.test(name)) {
+        writeJson(res, 400, { ok: false, error: 'Invalid skill name.' });
+        return;
+      }
+      try {
+        const { uninstallHubSkill } = await import('../learning/skills-hub.js');
+        const result = uninstallHubSkill(name, process.cwd());
+        if (!result.ok) {
+          writeJson(res, 400, { ok: false, error: result.reason ?? 'uninstall failed' });
+          return;
+        }
+        writeJson(res, 200, { ok: true, skill: result.name });
+      } catch (err) {
+        writeJson(res, 500, { ok: false, error: err instanceof Error ? err.message : String(err) });
+      }
+    })();
+    return;
+  }
+
   // ── Agent Hub channel send-test (I11) — admin-gated gateway send ────────
   // Mirrors `buff gateway send <target> <text>`: resolve the target (alias or
   // platform:channelId) through the SAME ChannelDirectory, then send through
@@ -3933,6 +4141,15 @@ function handleRequest(req: IncomingMessage, res: ServerResponse): void {
           res.write(`event: diff\ndata: ${JSON.stringify({
             files: event.files,
             summary: event.summary,
+          })}\n\n`);
+        } else if (event.kind === 'skill_draft') {
+          // P6a — /learn preview card: name + description + the draft markdown
+          // (the GUI renders accept / edit / reject).
+          res.write(`event: skill_draft\ndata: ${JSON.stringify({
+            name: event.name,
+            description: event.description,
+            markdown: event.markdown,
+            updatedAt: event.updatedAt,
           })}\n\n`);
         } else if (event.kind === 'status') {
           res.write(`event: status\ndata: ${JSON.stringify({ status: event.status })}\n\n`);

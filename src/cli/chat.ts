@@ -410,6 +410,8 @@ export class ChatCommand extends BaseCommand {
      * `diff` event so the GUI renders the 🔧 diff card.
      */
     onGitDiff?: (payload: import('../tools/git-tool.js').GitDiffPayload) => void;
+    /** P6a — /learn preview card: skill_manage create/patch emits the draft. */
+    onSkillDraft?: (payload: import('../tools/skill-tool.js').SkillDraftPayload) => void;
     /**
      * P0.7 — the session's plan store (the dashboard console injects one per
      * conversation so plans never leak across sessions).
@@ -499,7 +501,7 @@ export class ChatCommand extends BaseCommand {
       true,
       { auto: autoMode },
       parsed,
-      { askUser: opts.askUser, onProgress: opts.onProgress, onToolCall: opts.onToolCall, onPlanChange: opts.onPlanChange, onGitDiff: opts.onGitDiff, planStore: opts.planStore ?? this.planStore, gateway: opts.gateway, projectContext: opts.projectContext, recallContext: recallBlock, onToken: opts.onToken, signal: opts.signal },
+      { askUser: opts.askUser, onProgress: opts.onProgress, onToolCall: opts.onToolCall, onPlanChange: opts.onPlanChange, onGitDiff: opts.onGitDiff, onSkillDraft: opts.onSkillDraft, planStore: opts.planStore ?? this.planStore, gateway: opts.gateway, projectContext: opts.projectContext, recallContext: recallBlock, onToken: opts.onToken, signal: opts.signal },
     );
 
     // No-model fallback: the tool loop could not generate a single response
@@ -935,6 +937,12 @@ export class ChatCommand extends BaseCommand {
        */
       onGitDiff?: (payload: import('../tools/git-tool.js').GitDiffPayload) => void;
       /**
+       * P6a — skill draft card: called when skill_manage create/patch emits
+       * the structured draft payload (rendered as the /learn preview card
+       * with accept / edit / reject).
+       */
+      onSkillDraft?: (payload: import('../tools/skill-tool.js').SkillDraftPayload) => void;
+      /**
        * P0.7 — the session's plan store (per-session in the dashboard, one
        * per ChatCommand instance here as the default).
        */
@@ -1071,6 +1079,11 @@ export class ChatCommand extends BaseCommand {
         // P3b — forward git diff payloads to the GUI (the diff card).
         if (ctxOverrides?.onGitDiff && event === 'git:diff') {
           ctxOverrides.onGitDiff(data as import('../tools/git-tool.js').GitDiffPayload);
+        }
+        // P6a — forward skill draft payloads to the GUI (the /learn preview
+        // card with accept / edit / reject).
+        if (ctxOverrides?.onSkillDraft && event === 'skill:draft') {
+          ctxOverrides.onSkillDraft(data as import('../tools/skill-tool.js').SkillDraftPayload);
         }
         getEventBus().emit(event as never, data, source);
       },
