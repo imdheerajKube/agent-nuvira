@@ -416,8 +416,14 @@ export class ChatCommand extends BaseCommand {
     planStore?: import('../tools/plan-store.js').PlanStoreLike;
     /** Live gateway for gateway_send (gateway-triggered chat answers reuse the connected bridge). */
     gateway?: ToolContext['gateway'];
-
-
+    /**
+     * P3 — bounded project snapshot (path + file tree + symbol map) injected
+     * as a `[Project context]` message so "assess THIS project" works without
+     * the user describing the codebase. Built by the dashboard's
+     * project-context module; the CLI never sends it (it already runs IN the
+     * project, cwd-aware).
+     */
+    projectContext?: string;
   } = {},
 ): Promise<{
   content: string;
@@ -452,7 +458,7 @@ export class ChatCommand extends BaseCommand {
       true,
       { auto: autoMode },
       parsed,
-      { askUser: opts.askUser, onProgress: opts.onProgress, onToolCall: opts.onToolCall, onPlanChange: opts.onPlanChange, onGitDiff: opts.onGitDiff, planStore: opts.planStore ?? this.planStore, gateway: opts.gateway },
+      { askUser: opts.askUser, onProgress: opts.onProgress, onToolCall: opts.onToolCall, onPlanChange: opts.onPlanChange, onGitDiff: opts.onGitDiff, planStore: opts.planStore ?? this.planStore, gateway: opts.gateway, projectContext: opts.projectContext },
     );
 
     // No-model fallback: the tool loop could not generate a single response
@@ -893,6 +899,12 @@ export class ChatCommand extends BaseCommand {
       planStore?: import('../tools/plan-store.js').PlanStoreLike;
       /** Live gateway for gateway_send (gateway-triggered chat answers reuse the connected bridge). */
       gateway?: ToolContext['gateway'];
+      /**
+       * P3 — bounded project snapshot injected as a `[Project context]`
+       * message right after the system prompt (the dashboard attaches a
+       * project; the CLI runs in one already).
+       */
+      projectContext?: string;
     },
   ): Promise<{
     content: string;
@@ -954,6 +966,12 @@ export class ChatCommand extends BaseCommand {
 
     const thread: ToolMessage[] = [
       { role: 'system', content: systemText },
+      // P3 — the attached project's bounded snapshot (path + file tree +
+      // symbol map) rides in before the conversation, exactly like --file
+      // context: the model knows what it is looking at without being told.
+      ...(ctxOverrides?.projectContext
+        ? [{ role: 'user' as const, content: `[Project context]\n${ctxOverrides.projectContext}` }]
+        : []),
       ...(fileContext
         ? [{ role: 'user' as const, content: `[File context]\n${fileContext}` }]
         : []),

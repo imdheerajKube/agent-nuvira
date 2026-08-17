@@ -2723,6 +2723,84 @@ body {
   gap: 8px;
 }
 
+/* ─── Project attach bar (Phase 3) ────────────────────────────────────── */
+.chat-project-bar {
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: var(--bg-card);
+  padding: 8px 10px;
+  margin-bottom: 10px;
+}
+
+.chat-project-attached {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+  font-size: 12px;
+}
+
+.chat-project-icon {
+  font-size: 14px;
+}
+
+.chat-project-name {
+  font-weight: 700;
+}
+
+.chat-project-meta {
+  color: var(--text-secondary);
+}
+
+.chat-project-path {
+  color: var(--text-secondary);
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 11px;
+  max-width: 320px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.chat-project-pick {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+  font-size: 12px;
+}
+
+.chat-project-hint {
+  color: var(--text-secondary);
+}
+
+.chat-project-chips {
+  display: flex;
+  gap: 6px;
+  flex-wrap: wrap;
+}
+
+.chat-project-input {
+  flex: 1;
+  min-width: 180px;
+  background: rgba(0, 0, 0, 0.25);
+  border: 1px solid var(--border);
+  color: var(--text-primary);
+  border-radius: 6px;
+  padding: 6px 10px;
+  font-size: 12px;
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+}
+
+.chat-project-input:focus {
+  outline: none;
+  border-color: var(--accent-blue);
+}
+
+.chat-project-error {
+  color: #f87171;
+}
+
 /* ─── Session sidebar (Phase 4) ───────────────────────────────────────── */
 .chat-layout {
   display: flex;

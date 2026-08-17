@@ -40,6 +40,7 @@ import {
 import { TaskRunner } from './task-runner.js';
 import { WhatsAppPairingManager } from './whatsapp-pairing.js';
 import { ChatConsole, newChatSessionId } from './chat-console.js';
+import { buildProjectContext, formatProjectText, type ProjectContextBundle } from './project-context.js';
 import { isVaultRef } from '../enterprise/vault.js';
 import { ROLES, roleCan, type Role } from '../enterprise/rbac.js';
 import { clearModelListCache } from '../inference/model-validator.js';
@@ -2231,6 +2232,29 @@ let whatsappPairing = new WhatsAppPairingManager();
 // sidebar can resume any past conversation after a dashboard restart.
 let chatConsole = new ChatConsole({ persistPath: join(MEMORY_DIR, 'chat-sessions.json') });
 
+// P3 — project attach. The bundle is cached per path and rebuilt only when the
+// directory mtime changes, so repeat turns don't re-walk the tree. The
+// recent-projects list (the dashboard's own cwd + every attached path) feeds
+// the picker; both are in-memory (the workspace store records repo ids, not
+// local paths — this is the dashboard's own recency).
+const projectBundleCache = new Map<string, { mtimeMs: number; bundle: ProjectContextBundle }>();
+const recentProjects = new Set<string>([process.cwd()]);
+
+/** Get (or build) the cached bundle for a project path; null when invalid. */
+function getProjectBundle(path: string): ProjectContextBundle | null {
+  try {
+    const mtimeMs = statSync(path).mtimeMs;
+    const cached = projectBundleCache.get(path);
+    if (cached && cached.mtimeMs === mtimeMs) return cached.bundle;
+    const bundle = buildProjectContext(path);
+    if (!bundle) return null;
+    projectBundleCache.set(path, { mtimeMs, bundle });
+    return bundle;
+  } catch {
+    return null;
+  }
+}
+
 /** Test hook: swap the chat console (e.g. a fake engine) — routes read the
  * module variable at request time, so this works anytime. */
 export function setChatConsoleForTest(console: ChatConsole): void {
@@ -3600,6 +3624,66 @@ function handleRequest(req: IncomingMessage, res: ServerResponse): void {
   // API keys must be configured in the dashboard process — the 400 tells the
   // user exactly that when the turn fails.
 
+  // GET /api/projects — P3 project picker: the dashboard's own cwd + every
+  // path attached this session, validated to still exist. Same auth as chat.
+  if (pathname === '/api/projects' && req.method === 'GET') {
+    const session = adminSessions.validate(bearerToken(req));
+    if (!session) {
+      writeJson(res, 401, { ok: false, error: 'Not authenticated — log in first.' });
+      return;
+    }
+    if (!roleCan(session.role, 'routing.operate')) {
+      writeJson(res, 403, { ok: false, error: `Access denied — role '${session.role}' cannot view projects.` });
+      return;
+    }
+    const projects = [...recentProjects]
+      .map((p) => ({ path: p, name: basename(p) || p, kind: p === process.cwd() ? ('cwd' as const) : ('recent' as const) }))
+      .filter((p) => existsSync(p.path) && statSync(p.path).isDirectory());
+    writeJson(res, 200, { ok: true, projects });
+    return;
+  }
+
+  // POST /api/projects/attach — validate a directory and build (or reuse) its
+  // bounded context bundle. The bundle itself stays server-side; it is
+  // injected into chat turns that carry this projectPath.
+  if (pathname === '/api/projects/attach' && req.method === 'POST') {
+    void (async () => {
+      const session = adminSessions.validate(bearerToken(req));
+      if (!session) {
+        writeJson(res, 401, { ok: false, error: 'Not authenticated — log in first.' });
+        return;
+      }
+      if (!roleCan(session.role, 'routing.operate')) {
+        writeJson(res, 403, { ok: false, error: `Access denied — role '${session.role}' cannot attach projects.` });
+        return;
+      }
+      const body = await readJsonBody(req);
+      const path = typeof body?.path === 'string' ? body.path.trim() : '';
+      if (!path) {
+        writeJson(res, 400, { ok: false, error: 'Missing path — expected { path: string }.' });
+        return;
+      }
+      const bundle = getProjectBundle(path);
+      if (!bundle) {
+        writeJson(res, 400, { ok: false, error: `Not a readable directory: ${path}` });
+        return;
+      }
+      recentProjects.add(bundle.path);
+      writeJson(res, 200, {
+        ok: true,
+        project: {
+          path: bundle.path,
+          name: bundle.name,
+          fileCount: bundle.fileCount,
+          symbolCount: bundle.symbolCount,
+          truncated: bundle.truncated,
+          builtAt: bundle.builtAt,
+        },
+      });
+    })();
+    return;
+  }
+
   // GET /api/sessions — P4 session sidebar: past conversations (most recent
   // first) with title/preview/turnCount. Same auth as /api/chat (the sidebar
   // is part of the chat surface).
@@ -3693,7 +3777,15 @@ function handleRequest(req: IncomingMessage, res: ServerResponse): void {
           : newChatSessionId();
       const provider = typeof body?.provider === 'string' ? body.provider : undefined;
       const model = typeof body?.model === 'string' ? body.model : undefined;
-      const result = await chatConsole.answer(sessionId, message, { provider, model });
+      // P3 — an attached project's bounded snapshot rides into the turn as
+      // `[Project context]`, so "assess THIS project" works without the user
+      // describing the codebase. Cache misses rebuild automatically.
+      let projectContext: string | undefined;
+      if (typeof body?.projectPath === 'string' && body.projectPath.trim()) {
+        const bundle = getProjectBundle(body.projectPath.trim());
+        if (bundle) projectContext = formatProjectText(bundle);
+      }
+      const result = await chatConsole.answer(sessionId, message, { provider, model, projectContext });
       if (!result.ok) {
         writeJson(res, 400, {
           ok: false,

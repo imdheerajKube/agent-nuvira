@@ -236,6 +236,11 @@ export default function ChatPage() {
   const lastSentRef = useRef<string>('');
   // P4 — the session sidebar: past conversations, click to resume.
   const [sessions, setSessions] = useState<Array<{ id: string; title: string; turnCount: number; updatedAt: number; preview: string }>>([]);
+  // P3 — the attached project (its bounded context rides into every turn).
+  const [attachedProject, setAttachedProject] = useState<{ path: string; name: string; fileCount: number; symbolCount: number; truncated: boolean } | null>(null);
+  const [projectPick, setProjectPick] = useState<Array<{ path: string; name: string; kind: string }>>([]);
+  const [projectPathInput, setProjectPathInput] = useState('');
+  const [projectError, setProjectError] = useState('');
   const subRef = useRef<(() => void) | null>(null);
   const listRef = useRef<HTMLDivElement | null>(null);
   // P0.1 — a pending ask_user question from the agent (choice card).
@@ -310,7 +315,27 @@ export default function ChatPage() {
     void dashboardAPI.listChatSessions().then((s) => {
       if (Array.isArray(s)) setSessions(s);
     });
+    // P3 — load the project picker (dashboard cwd + recently attached).
+    void dashboardAPI.listProjects().then((p) => {
+      if (Array.isArray(p)) setProjectPick(p);
+    });
   }, [canChat]);
+
+  /** P3 — attach a project directory (its context rides into chat turns). */
+  const attachProject = useCallback(async (path: string) => {
+    const clean = path.trim();
+    if (!clean) return;
+    setProjectError('');
+    const r = await dashboardAPI.attachProject(clean);
+    if (r.ok && r.project) {
+      setAttachedProject(r.project);
+      setProjectPathInput('');
+      const p = await dashboardAPI.listProjects();
+      if (Array.isArray(p)) setProjectPick(p);
+    } else {
+      setProjectError(r.error || 'Could not attach that directory.');
+    }
+  }, []);
 
   const send = useCallback(
     async (text: string) => {
@@ -389,7 +414,7 @@ export default function ChatPage() {
           setLiveDiff(view);
         },
       });
-      const r = await dashboardAPI.chatSend(sessionId, clean);
+      const r = await dashboardAPI.chatSend(sessionId, clean, { projectPath: attachedProject?.path });
       subRef.current?.();
       subRef.current = null;
       if (r.ok) {
@@ -419,7 +444,7 @@ export default function ChatPage() {
       }
       setBusy(false);
     },
-    [busy],
+    [busy, attachedProject],
   );
 
   /** Run the resolved CLI command directly (the user confirmed the card). */
@@ -565,6 +590,45 @@ export default function ChatPage() {
         </div>
       ) : (
         <>
+          <div className="chat-project-bar">
+            {attachedProject ? (
+              <div className="chat-project-attached">
+                <span className="chat-project-icon">📁</span>
+                <span className="chat-project-name">{attachedProject.name}</span>
+                <span className="chat-project-meta">
+                  {attachedProject.fileCount} files · {attachedProject.symbolCount} symbols{attachedProject.truncated ? ' · truncated map' : ''}
+                </span>
+                <span className="chat-project-path" title={attachedProject.path}>{attachedProject.path}</span>
+                <button type="button" className="admin-mini-btn" onClick={() => setAttachedProject(null)}>✕ detach</button>
+              </div>
+            ) : (
+              <div className="chat-project-pick">
+                <span className="chat-project-icon">📁</span>
+                <span className="chat-project-hint">Attach a project so the agent can assess it:</span>
+                {projectPick.length > 0 ? (
+                  <span className="chat-project-chips">
+                    {projectPick.slice(0, 3).map((p) => (
+                      <button key={p.path} type="button" className="chat-chip" onClick={() => void attachProject(p.path)}>
+                        {p.kind === 'cwd' ? '📂 current dir' : p.name}
+                      </button>
+                    ))}
+                  </span>
+                ) : null}
+                <input
+                  className="chat-project-input"
+                  value={projectPathInput}
+                  onChange={(e) => setProjectPathInput(e.target.value)}
+                  onKeyDown={(e) => { if (e.key === 'Enter') { e.preventDefault(); void attachProject(projectPathInput); } }}
+                  placeholder="or type a path, e.g. ~/code/my-app"
+                  disabled={busy}
+                />
+                <button type="button" className="admin-refresh-btn" onClick={() => void attachProject(projectPathInput)} disabled={busy || !projectPathInput.trim()}>
+                  Attach
+                </button>
+                {projectError ? <span className="chat-project-error">{projectError}</span> : null}
+              </div>
+            )}
+          </div>
           <div className="chat-layout">
           <div className="chat-sidebar">
             <div className="chat-sidebar-head">

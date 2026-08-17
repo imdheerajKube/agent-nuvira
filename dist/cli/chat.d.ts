@@ -142,6 +142,14 @@ export declare class ChatCommand extends BaseCommand {
         planStore?: import('../tools/plan-store.js').PlanStoreLike;
         /** Live gateway for gateway_send (gateway-triggered chat answers reuse the connected bridge). */
         gateway?: ToolContext['gateway'];
+        /**
+         * P3 — bounded project snapshot (path + file tree + symbol map) injected
+         * as a `[Project context]` message so "assess THIS project" works without
+         * the user describing the codebase. Built by the dashboard's
+         * project-context module; the CLI never sends it (it already runs IN the
+         * project, cwd-aware).
+         */
+        projectContext?: string;
     }): Promise<{
         content: string;
         followups: FollowupSuggestion[];

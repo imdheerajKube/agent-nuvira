@@ -148,12 +148,22 @@ This is what makes it feel like Claude/Cursor rather than a terminal in a box.
 The killer use case: the agent should understand the project the user is talking
 about without being told how.
 
-- [ ] Project attach bar: pick the working directory (server scans cwd + recent
-      directories); the agent's system prompt gets the project path + file tree
-- [ ] On attach, auto-run `code-map` + `retrieval` once and store the context
-      (both already exist as CLI commands — the chat just calls them)
-- [ ] "Assess this project" / "what's the state here" works from day one
-- [ ] **Tests:** project attach flow + context injection
+- [x] Project attach bar: pick the working directory (dashboard cwd chip +
+      path input — the workspace store records repo ids, not local paths, so
+      the picker is the dashboard's own cwd + every path attached this
+      session); the turn's thread gets a `[Project context]` message (path +
+      file tree + symbol map) injected right after the system prompt — the
+      same mechanism the CLI's `--file` context uses
+- [x] On attach, auto-run `code-map` (the existing `buff code-map` AST engine —
+      pure, sync, dashboard-usable) once and cache the bounded snapshot per
+      path, rebuilt only when the directory mtime changes; retrieval is NOT
+      needed because the snapshot is a compact map, not a file dump
+- [x] "Assess this project" / "what's the state here" works from day one — the
+      agent reads the map + tree and drills in with read_file
+- [x] **Tests:** `project-context.test.ts` (5: content, determinism across OS
+      readdir order, caps + truncation footer, invalid paths), `/api/projects`
+      + attach + chat-injection integration (3), ChatPage project-bar test
+      (attach → send with projectPath → detach)
 
 ### Phase 4 — Sessions & memory: continuity (1–2 days)
 "Leverage every past session for quick start on new assessment" — the user's ask.

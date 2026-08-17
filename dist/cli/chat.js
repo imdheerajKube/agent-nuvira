@@ -292,7 +292,7 @@ export class ChatCommand extends BaseCommand {
         opts.onProgress?.(`   🧠 routed to ${provider.name}${model ? ` / ${model}` : ''} — working…`);
         const parsed = parseRequestSync(message);
         const dispatchDecision = resolvePipelineDispatch(parsed, { dev: opts.dev, text: message });
-        const answer = await this.runChatAnswer(message, opts.history ?? [], { type, provider, model }, { provider: mergedOpts.provider, model: mergedOpts.model, dev: mergedOpts.dev, cache: true }, true, { auto: autoMode }, parsed, { askUser: opts.askUser, onProgress: opts.onProgress, onToolCall: opts.onToolCall, onPlanChange: opts.onPlanChange, onGitDiff: opts.onGitDiff, planStore: opts.planStore ?? this.planStore, gateway: opts.gateway });
+        const answer = await this.runChatAnswer(message, opts.history ?? [], { type, provider, model }, { provider: mergedOpts.provider, model: mergedOpts.model, dev: mergedOpts.dev, cache: true }, true, { auto: autoMode }, parsed, { askUser: opts.askUser, onProgress: opts.onProgress, onToolCall: opts.onToolCall, onPlanChange: opts.onPlanChange, onGitDiff: opts.onGitDiff, planStore: opts.planStore ?? this.planStore, gateway: opts.gateway, projectContext: opts.projectContext });
         // No-model fallback: the tool loop could not generate a single response
         // AND the rules assessed a high-confidence pipeline intent — run the
         // pipeline directly (rules decide only when the model is unavailable; the
@@ -682,6 +682,12 @@ export class ChatCommand extends BaseCommand {
         }
         const thread = [
             { role: 'system', content: systemText },
+            // P3 — the attached project's bounded snapshot (path + file tree +
+            // symbol map) rides in before the conversation, exactly like --file
+            // context: the model knows what it is looking at without being told.
+            ...(ctxOverrides?.projectContext
+                ? [{ role: 'user', content: `[Project context]\n${ctxOverrides.projectContext}` }]
+                : []),
             ...(fileContext
                 ? [{ role: 'user', content: `[File context]\n${fileContext}` }]
                 : []),
