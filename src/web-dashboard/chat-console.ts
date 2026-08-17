@@ -38,6 +38,8 @@ export interface ChatEngine {
       onProgress?: (line: string) => void;
       /** P3 — bounded project snapshot injected as a `[Project context]` message. */
       projectContext?: string;
+      /** P4 — attached project dir; the engine recalls its sessions + facts. */
+      projectPath?: string;
       /** P0.6 — one tool-call lifecycle event (started → called with outcome). */
       onToolCall?: (phase: 'started' | 'called', info: { id?: string; tool: string; args?: Record<string, unknown>; ok?: boolean; result?: string; error?: string; durationMs?: number }) => void;
       /** P0.7 — a plan mutation (structured checklist for the GUI card). */
@@ -282,7 +284,7 @@ export class ChatConsole {
   async answer(
     sessionId: string,
     message: string,
-    opts: { provider?: string; model?: string; projectContext?: string } = {},
+    opts: { provider?: string; model?: string; projectContext?: string; projectPath?: string } = {},
   ): Promise<ChatAnswerResult> {
     const clean = (message || '').trim();
     if (!clean) return { ok: false, error: 'Empty message.' };
@@ -316,6 +318,9 @@ export class ChatConsole {
         // P3 — project context rides into the turn (the engine injects it as
         // a `[Project context]` message in the thread).
         ...(opts.projectContext ? { projectContext: opts.projectContext } : {}),
+        // P4 — the attached project dir triggers the engine's per-turn recall
+        // of that project's prior sessions + facts.
+        ...(opts.projectPath ? { projectPath: opts.projectPath } : {}),
         history: history.map((h) => ({ role: h.role, content: h.content })),
         // P0.1 — real ask_user round-trip: emit a `question` event, wait for
         // the GUI's respond() (or a skip), then feed the selection back. The

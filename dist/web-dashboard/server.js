@@ -3365,12 +3365,14 @@ function handleRequest(req, res) {
             // `[Project context]`, so "assess THIS project" works without the user
             // describing the codebase. Cache misses rebuild automatically.
             let projectContext;
+            let projectPath;
             if (typeof body?.projectPath === 'string' && body.projectPath.trim()) {
-                const bundle = getProjectBundle(body.projectPath.trim());
+                projectPath = body.projectPath.trim();
+                const bundle = getProjectBundle(projectPath);
                 if (bundle)
                     projectContext = formatProjectText(bundle);
             }
-            const result = await chatConsole.answer(sessionId, message, { provider, model, projectContext });
+            const result = await chatConsole.answer(sessionId, message, { provider, model, projectContext, projectPath });
             if (!result.ok) {
                 writeJson(res, 400, {
                     ok: false,

@@ -1,10 +1,22 @@
 import { readFileSync, writeFileSync, mkdirSync, existsSync } from 'node:fs';
-import { join } from 'node:path';
+import { join, dirname } from 'node:path';
 import { homedir } from 'node:os';
 import { createHash } from 'node:crypto';
 
-const CACHE_DIR = join(homedir(), '.buff');
-const CACHE_PATH = join(CACHE_DIR, 'cache.json');
+// Resolve lazily (not at module load) and honor BUFF_MEMORY_DIR — the same
+// convention every other memory file follows (ledger, registry, recall-hits,
+// artifact-store). Without this, tests writing through a temp BUFF_MEMORY_DIR
+// would still read/write the REAL ~/.buff/cache.json (cross-run cache hits
+// make suites order-dependent), and a hermetic run could never isolate its
+// cache. Production path is unchanged when the env var is unset.
+function cachePath(): string {
+  if (process.env.BUFF_MEMORY_DIR) return join(process.env.BUFF_MEMORY_DIR, 'cache.json');
+  return join(homedir(), '.buff', 'cache.json');
+}
+
+function cacheDir(): string {
+  return dirname(cachePath());
+}
 
 interface CacheEntry {
   response: string;
@@ -19,18 +31,18 @@ interface CacheData {
 }
 
 function ensureDir(): void {
-  if (!existsSync(CACHE_DIR)) {
-    mkdirSync(CACHE_DIR, { recursive: true });
+  if (!existsSync(cacheDir())) {
+    mkdirSync(cacheDir(), { recursive: true });
   }
 }
 
 function readCache(): CacheData {
   try {
     ensureDir();
-    if (!existsSync(CACHE_PATH)) {
+    if (!existsSync(cachePath())) {
       return { entries: {} };
     }
-    const raw = readFileSync(CACHE_PATH, 'utf-8');
+    const raw = readFileSync(cachePath(), 'utf-8');
     return JSON.parse(raw) as CacheData;
   } catch {
     return { entries: {} };
@@ -39,7 +51,7 @@ function readCache(): CacheData {
 
 function writeCache(data: CacheData): void {
   ensureDir();
-  writeFileSync(CACHE_PATH, JSON.stringify(data, null, 2), 'utf-8');
+  writeFileSync(cachePath(), JSON.stringify(data, null, 2), 'utf-8');
 }
 
 /**
