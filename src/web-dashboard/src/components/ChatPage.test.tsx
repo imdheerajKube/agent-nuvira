@@ -342,7 +342,8 @@ describe('ChatPage', () => {
     // Bold rendered as <strong>, code fence as a block with the lang label.
     expect(screen.getByText('fix').tagName).toBe('STRONG');
     expect(screen.getByText('ts')).toBeTruthy();
-    expect(screen.getByText('const x = 1;')).toBeTruthy();
+    // rehype-highlight tokenizes the body; the raw text is on the <code>.
+    expect(document.querySelector('.md-code-pre code')?.textContent?.trim()).toBe('const x = 1;');
     expect(screen.getByText('one')).toBeTruthy();
     expect(screen.getByText('two')).toBeTruthy();
   });

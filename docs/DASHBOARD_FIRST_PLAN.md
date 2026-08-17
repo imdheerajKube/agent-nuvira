@@ -94,19 +94,31 @@ The single highest-impact change: **the chat currently renders answers as raw
 text** (`chat-bubble-text` = plain `<div>{m.content}</div>`). Everything else is
 cosmetic until this is real.
 
-- [x] Markdown renderer — a small dependency-free custom renderer
-      (`src/web-dashboard/src/components/Markdown.tsx`, ~180 lines: headings, lists,
-      bold/italic, inline code, links with href allowlist, tables, blockquotes, hr)
-      — deliberately NO react-markdown (plan's risk table: "use a small renderer")
+- [x] Markdown renderer — **react-markdown v10 + remark-gfm + rehype-highlight**
+      (decision reviewed 2026-08-17 with the user). The first pass was a ~180-line
+      custom renderer; the user challenged it ("is your custom actually weak?") —
+      and it WAS: ~90% CommonMark, mangled nested lists / ***bold italic*** /
+      autolinks, and no highlighting. react-markdown is spec-complete + GFM
+      (tables, strikethrough, task lists, autolinks), same security model (React
+      elements, no dangerouslySetInnerHTML, defaultUrlTransform strips
+      javascript:/data:). Real measured cost: **+117 KB gzipped** (219 → 336 KB) —
+      +50 KB is the markdown/unified stack itself, +67 KB is highlight.js core
+      (grammar count barely matters: curated 20 langs = 336 KB vs all-37 = 322 KB).
+      The user chose to keep highlighting. The zero-dep custom renderer is
+      preserved as `MarkdownZeroDep.tsx` — one import swap in ChatPage for a
+      dependency-free build (accepted tradeoffs: ~90% coverage, no highlighting)
 - [x] Code blocks with a language label + copy button (`⧉ Copy` → `✓ Copied`)
+      + syntax highlighting (curated languages the agent emits: ts/js/json/bash/
+      python/markdown/yaml/diff/sql/html/css)
 - [ ] Token streaming via SSE — LIVE progress already streams per-session
       (`/api/chat/:sessionId/events`: steps + tool cards + plan + diff); the final
       answer text still arrives at once via the POST (candidate: stream tokens of
       the final reply server-side)
 - [x] Render tool *steps* as structured blocks — done earlier (P0.6 tool cards,
       P0.7 plan checklist, P3b diff card; live + snapshotted into the reply)
-- [x] **Tests:** `Markdown.test.tsx` (10 cases incl. XSS href guard) + ChatPage
-      markdown-rendering test
+- [x] **Tests:** `Markdown.test.tsx` (12 cases: compliance incl. nested lists,
+      GFM strikethrough/task lists/autolinks, XSS href guard, highlight tokens,
+      copy) + MarkdownZeroDep smoke tests + ChatPage markdown test
 
 ### Phase 2 — Artifacts: plans, diffs, and results as cards (2–3 days)
 This is what makes it feel like Claude/Cursor rather than a terminal in a box.
