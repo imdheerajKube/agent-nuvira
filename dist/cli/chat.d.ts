@@ -128,8 +128,13 @@ export declare class ChatCommand extends BaseCommand {
          * P0.7 — plan checklist: called on every plan_todo mutation with the
          * structured snapshot (goal + steps + revision) so the GUI's checklist
          * card updates in place.
+         */ onPlanChange?: (snapshot: import('../tools/plan-store.js').PlanSnapshot) => void;
+        /**
+         * P3b — git diff card: called when the git tool runs `git diff` with the
+         * structured per-file payload. The dashboard console forwards it as a
+         * `diff` event so the GUI renders the 🔧 diff card.
          */
-        onPlanChange?: (snapshot: import('../tools/plan-store.js').PlanSnapshot) => void;
+        onGitDiff?: (payload: import('../tools/git-tool.js').GitDiffPayload) => void;
         /**
          * P0.7 — the session's plan store (the dashboard console injects one per
          * conversation so plans never leak across sessions).

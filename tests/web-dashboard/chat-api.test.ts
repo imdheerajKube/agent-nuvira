@@ -37,14 +37,17 @@ class FakeEngine implements ChatEngine {
   toolCalls: Array<{ phase: 'started' | 'called'; tool: string; args?: Record<string, unknown>; ok?: boolean; result?: string; error?: string; durationMs?: number }> = [];
   /** P0.7 — when set, the engine emits these plan mutations via onPlanChange. */
   planChanges: Array<{ goal: string; steps: Array<{ id: string; description: string; status: string }>; revision: number }> = [];
+  /** P3b — when set, the engine emits these git diffs via onGitDiff. */
+  gitDiffs: Array<{ files: Array<{ path: string; body: string }>; summary: string }> = [];
   async answerOnce(message: string, opts?: unknown): Promise<{ content: string; followups: unknown[]; provider?: string; model?: string }> {
     this.calls.push({ message, opts });
-    const o = opts as { onProgress?: (line: string) => void; onToolCall?: (phase: 'started' | 'called', info: { id?: string; tool: string; args?: Record<string, unknown>; ok?: boolean; result?: string; error?: string; durationMs?: number }) => void; onPlanChange?: (p: { goal: string; steps: Array<{ id: string; description: string; status: string }>; revision: number }) => void };
+    const o = opts as { onProgress?: (line: string) => void; onToolCall?: (phase: 'started' | 'called', info: { id?: string; tool: string; args?: Record<string, unknown>; ok?: boolean; result?: string; error?: string; durationMs?: number }) => void; onPlanChange?: (p: { goal: string; steps: Array<{ id: string; description: string; status: string }>; revision: number }) => void; onGitDiff?: (d: { files: Array<{ path: string; body: string }>; summary: string }) => void };
     for (const line of this.progressLines) o.onProgress?.(line);
     for (const t of this.toolCalls) {
       o.onToolCall?.(t.phase, { id: `call_${t.tool}`, tool: t.tool, args: t.args, ok: t.ok, result: t.result, error: t.error, durationMs: t.durationMs });
     }
     for (const p of this.planChanges) o.onPlanChange?.(p);
+    for (const d of this.gitDiffs) o.onGitDiff?.(d);
     return {
       content: `echo: ${message}`,
       followups: [{ prompt: 'What next?', label: 'Next' }],
@@ -300,6 +303,51 @@ describe('/api/chat', () => {
     expect(received).toHaveLength(2);
     expect(received[0]).toMatchObject({ goal: 'Fix the failing test', revision: 1 });
     expect(received[1]).toMatchObject({ goal: 'Fix the failing test', revision: 2 });
+  });
+
+  it('P3b — streams git diff payloads over SSE (files + summary)', async () => {
+    engine.gitDiffs = [
+      {
+        files: [{ path: 'a.txt', body: 'diff --git a/a.txt b/a.txt\n+three' }],
+        summary: '1 file changed',
+      },
+    ];
+    const sessionId = 'diff-session-1';
+    const res = await fetch(`${baseUrl}/api/chat/${sessionId}/events?token=${encodeURIComponent(token)}`, { method: 'GET' });
+    expect(res.status).toBe(200);
+    const reader = res.body!.getReader();
+    const decoder = new TextDecoder();
+    let buffer = '';
+    const received: Array<Record<string, unknown>> = [];
+    const postPromise = authedFetch('/api/chat', 'POST', { sessionId, message: 'show the diff' });
+    const deadline = Date.now() + 4000;
+    while (Date.now() < deadline && received.length < 1) {
+      const result = await Promise.race([
+        reader.read(),
+        new Promise<{ done: true }>((resolve) => setTimeout(() => resolve({ done: true }), 250)),
+      ]);
+      if (result.done) break;
+      buffer += decoder.decode(result.value, { stream: true });
+      let idx: number;
+      while ((idx = buffer.indexOf('event: diff')) !== -1) {
+        buffer = buffer.slice(idx);
+        const lineIdx = buffer.indexOf('data: ');
+        const frameEnd = buffer.indexOf('\n\n');
+        if (lineIdx === -1 || frameEnd === -1) break;
+        const data = buffer.slice(lineIdx + 6, frameEnd);
+        try {
+          const payload = JSON.parse(data) as Record<string, unknown>;
+          if (Array.isArray(payload.files)) received.push(payload);
+        } catch { /* partial frame */ }
+        buffer = buffer.slice(frameEnd + 2);
+      }
+    }
+    await reader.cancel();
+    const post = await postPromise;
+    engine.gitDiffs = [];
+    expect(post.status).toBe(200);
+    expect(received).toHaveLength(1);
+    expect(received[0]).toMatchObject({ summary: '1 file changed' });
   });
 
   it('rejects the SSE events endpoint without a valid token', async () => {

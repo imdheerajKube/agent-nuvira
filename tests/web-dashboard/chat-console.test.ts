@@ -26,6 +26,8 @@ class FakeEngine implements ChatEngine {
   toolCalls: Array<{ phase: 'started' | 'called'; tool: string; args?: Record<string, unknown>; ok?: boolean; result?: string; error?: string; durationMs?: number }> = [];
   /** P0.7 — when set, the engine replays these plan mutations via onPlanChange. */
   planChanges: Array<{ goal: string; steps: Array<{ id: string; description: string; status: 'pending' | 'running' | 'done' | 'blocked' }>; revision: number }> = [];
+  /** P3b — when set, the engine replays these git diffs via onGitDiff. */
+  gitDiffs: Array<{ files: Array<{ path: string; body: string }>; summary: string }> = [];
   /** The planStore the console injected into the last engine call (if any). */
   lastPlanStore: unknown = undefined;
 
@@ -43,6 +45,9 @@ class FakeEngine implements ChatEngine {
     }
     for (const p of this.planChanges) {
       opts?.onPlanChange?.(p);
+    }
+    for (const d of this.gitDiffs) {
+      opts?.onGitDiff?.(d);
     }
     const respond = () => ({
       content: `echo: ${message}`,
@@ -291,6 +296,28 @@ describe('ChatConsole', () => {
     expect(planEvents[0]).toMatchObject({ kind: 'plan', goal: 'Fix the failing test', revision: 1 });
     expect(planEvents[1]).toMatchObject({ kind: 'plan', revision: 2 });
     expect(planEvents[1].steps?.[0]).toMatchObject({ id: 'reproduce' });
+  });
+
+  it('P3b — forwards git diff payloads as structured diff events', async () => {
+    const events: Array<{ kind: string; summary?: string; files?: Array<{ path: string }> }> = [];
+    console_.onEvent((_sid, event) => {
+      events.push({
+        kind: event.kind,
+        ...('summary' in event ? { summary: event.summary, files: event.files } : {}),
+      });
+    });
+    engine.gitDiffs = [
+      {
+        files: [{ path: 'a.txt', body: 'diff --git a/a.txt b/a.txt\n+three' }],
+        summary: '1 file changed',
+      },
+    ];
+    const r = await console_.answer('s1', 'show the diff');
+    expect(r.ok).toBe(true);
+    const diffEvents = events.filter((e) => e.kind === 'diff');
+    expect(diffEvents).toHaveLength(1);
+    expect(diffEvents[0]).toMatchObject({ kind: 'diff', summary: '1 file changed' });
+    expect(diffEvents[0].files?.[0]).toMatchObject({ path: 'a.txt' });
   });
 
   it('P0.7 — injects a per-session plan store into the engine (survives turns)', async () => {

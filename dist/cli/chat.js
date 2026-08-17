@@ -292,7 +292,7 @@ export class ChatCommand extends BaseCommand {
         opts.onProgress?.(`   🧠 routed to ${provider.name}${model ? ` / ${model}` : ''} — working…`);
         const parsed = parseRequestSync(message);
         const dispatchDecision = resolvePipelineDispatch(parsed, { dev: opts.dev, text: message });
-        const answer = await this.runChatAnswer(message, opts.history ?? [], { type, provider, model }, { provider: mergedOpts.provider, model: mergedOpts.model, dev: mergedOpts.dev, cache: true }, true, { auto: autoMode }, parsed, { askUser: opts.askUser, onProgress: opts.onProgress, onToolCall: opts.onToolCall, onPlanChange: opts.onPlanChange, planStore: opts.planStore ?? this.planStore, gateway: opts.gateway });
+        const answer = await this.runChatAnswer(message, opts.history ?? [], { type, provider, model }, { provider: mergedOpts.provider, model: mergedOpts.model, dev: mergedOpts.dev, cache: true }, true, { auto: autoMode }, parsed, { askUser: opts.askUser, onProgress: opts.onProgress, onToolCall: opts.onToolCall, onPlanChange: opts.onPlanChange, onGitDiff: opts.onGitDiff, planStore: opts.planStore ?? this.planStore, gateway: opts.gateway });
         // No-model fallback: the tool loop could not generate a single response
         // AND the rules assessed a high-confidence pipeline intent — run the
         // pipeline directly (rules decide only when the model is unavailable; the
@@ -709,6 +709,10 @@ export class ChatCommand extends BaseCommand {
                 // P0.7 — forward plan mutations to the GUI (structured checklist).
                 if (ctxOverrides?.onPlanChange && event === 'plan:changed') {
                     ctxOverrides.onPlanChange(data);
+                }
+                // P3b — forward git diff payloads to the GUI (the diff card).
+                if (ctxOverrides?.onGitDiff && event === 'git:diff') {
+                    ctxOverrides.onGitDiff(data);
                 }
                 getEventBus().emit(event, data, source);
             },

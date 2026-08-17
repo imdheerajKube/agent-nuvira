@@ -2924,6 +2924,95 @@ body {
   color: #ef4444;
 }
 
+/* P3b — git diff card (per-file +/− sections) */
+.chat-diff-card {
+  border: 1px solid var(--border);
+  border-left: 3px solid #f59e0b;
+  border-radius: 8px;
+  padding: 8px 10px;
+  margin: 8px 0 2px;
+  background: color-mix(in srgb, var(--bg-secondary, #1b1f27) 55%, transparent);
+}
+
+.chat-diff-head {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.chat-diff-icon {
+  font-size: 12px;
+  flex: none;
+}
+
+.chat-diff-title {
+  font-family: var(--font-mono, ui-monospace, SFMono-Regular, Menlo, Consolas, monospace);
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--text-primary);
+}
+
+.chat-diff-meta {
+  font-family: var(--font-mono, ui-monospace, SFMono-Regular, Menlo, Consolas, monospace);
+  font-size: 11px;
+  color: var(--text-secondary);
+  margin-left: auto;
+}
+
+.chat-diff-files {
+  margin-top: 6px;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.chat-diff-file {
+  border: 1px solid var(--border);
+  border-radius: 6px;
+}
+
+.chat-diff-file summary {
+  cursor: pointer;
+  padding: 4px 8px;
+  font-family: var(--font-mono, ui-monospace, SFMono-Regular, Menlo, Consolas, monospace);
+  font-size: 11.5px;
+  color: var(--accent-blue, #3b82f6);
+  user-select: none;
+}
+
+.chat-diff-body {
+  margin: 0;
+  padding: 6px 8px;
+  font-family: var(--font-mono, ui-monospace, SFMono-Regular, Menlo, Consolas, monospace);
+  font-size: 11px;
+  line-height: 1.5;
+  white-space: pre-wrap;
+  word-break: break-word;
+  max-height: 220px;
+  overflow: auto;
+  background: color-mix(in srgb, var(--bg, #14171c) 70%, transparent);
+  border-top: 1px dashed var(--border);
+}
+
+.chat-diff-line {
+  min-height: 1.5em;
+}
+
+.chat-diff-line.diff-add {
+  color: #4ade80;
+  background: color-mix(in srgb, #22c55e 12%, transparent);
+}
+
+.chat-diff-line.diff-del {
+  color: #f87171;
+  background: color-mix(in srgb, #ef4444 12%, transparent);
+}
+
+.chat-diff-line.diff-hunk {
+  color: var(--text-secondary);
+  background: color-mix(in srgb, #3b82f6 10%, transparent);
+}
+
 /* ── Platform transport config (PlatformConfigSection) ─────────────────── */
 .platform-config {
   margin-top: 10px;

@@ -152,7 +152,8 @@ describe('clone_repo tool', () => {
     expect(tool!.category).toBe('workflow');
     expect(tool!.endsAgentStep).toBe(false);
     expect(toolsetForTool('clone_repo')?.name).toBe('code');
-    expect(TOOLSETS.find((t) => t.name === 'code')?.tools).toEqual(['code_search', 'delegate', 'clone_repo']);
+    // DELIBERATE: P3b added the git tool to the code toolset.
+    expect(TOOLSETS.find((t) => t.name === 'code')?.tools).toEqual(['code_search', 'delegate', 'clone_repo', 'git']);
     // Disabling the code toolset gates it out.
     const names = filterToolsByToolsets(listTools(), ['code']).map((t) => t.name);
     expect(names).not.toContain('clone_repo');

@@ -31,6 +31,8 @@ interface ChatMessage {
   tools?: ToolStep[];
   /** P0.7 — the plan this turn worked through (rendered as a checklist card). */
   plan?: PlanView | null;
+  /** P3b — the git diff this turn produced (rendered as a diff card). */
+  diff?: DiffView | null;
 }
 
 /** P0.7 — the plan checklist as rendered (goal + steps with statuses). */
@@ -38,6 +40,12 @@ interface PlanView {
   goal: string;
   steps: Array<{ id: string; description: string; status: 'pending' | 'running' | 'done' | 'blocked' }>;
   revision: number;
+}
+
+/** P3b — a git diff payload as rendered (per-file +/− sections). */
+interface DiffView {
+  files: Array<{ path: string; body: string }>;
+  summary: string;
 }
 
 /** P0.6 — one tool-call lifecycle step, rendered as a card (started → called). */
@@ -81,10 +89,46 @@ interface ResolvedCommand {
 interface PendingResolve {
   ask: string;
   top: ResolvedCommand | null;
-}
+}  /**
+   * P3b — render a git diff card: per-file sections with +/− colored lines
+   * and a change-count summary. Snapshotted into the reply so the committed
+   * change stays visible.
+   */
+  function DiffCard({ diff }: { diff: DiffView }) {
+    const added = diff.files.reduce((s, f) => s + (f.body.match(/^\+/gm)?.length ?? 0), 0);
+    const removed = diff.files.reduce((s, f) => s + (f.body.match(/^-/gm)?.length ?? 0), 0);
+    return (
+      <div className="chat-diff-card">
+        <div className="chat-diff-head">
+          <span className="chat-diff-icon">🔧</span>
+          <span className="chat-diff-title">git diff</span>
+          <span className="chat-diff-meta">
+            {diff.files.length} file{diff.files.length === 1 ? '' : 's'} · +{added} −{removed}
+          </span>
+        </div>
+        <div className="chat-diff-files">
+          {diff.files.map((f) => (
+            <details key={f.path} className="chat-diff-file" open={diff.files.length === 1}>
+              <summary className="chat-diff-file-path">{f.path}</summary>
+              <pre className="chat-diff-body">
+                {f.body.split('\n').map((line, i) => {
+                  const cls = line.startsWith('+') ? 'diff-add' : line.startsWith('-') ? 'diff-del' : line.startsWith('@@') ? 'diff-hunk' : '';
+                  return (
+                    <div key={i} className={`chat-diff-line ${cls}`}>
+                      {line || ' '}
+                    </div>
+                  );
+                })}
+              </pre>
+            </details>
+          ))}
+        </div>
+      </div>
+    );
+  }
 
-/** P0.7 — status icon for one checklist step. */
-function planStepIcon(status: string): string {
+  /** P0.7 — status icon for one checklist step. */
+  function planStepIcon(status: string): string {
   if (status === 'done') return '✅';
   if (status === 'running') return '🔄';
   if (status === 'blocked') return '⛔';
@@ -174,6 +218,8 @@ export default function ChatPage() {
   const [liveTools, setLiveTools] = useState<ToolStep[]>([]);
   // P0.7 — the live plan checklist (updates in place on each plan:changed).
   const [livePlan, setLivePlan] = useState<PlanView | null>(null);
+  // P3b — the latest git diff payload (rendered as a diff card).
+  const [liveDiff, setLiveDiff] = useState<DiffView | null>(null);
   // Plain-English → CLI short-circuit: a confident command match shows a
   // confirm card instead of burning a model turn; ambiguous asks show choices.
   const [pendingResolve, setPendingResolve] = useState<PendingResolve | null>(null);
@@ -183,6 +229,7 @@ export default function ChatPage() {
   const liveStepsRef = useRef<string[]>([]);
   const liveToolsRef = useRef<ToolStep[]>([]);
   const livePlanRef = useRef<PlanView | null>(null);
+  const liveDiffRef = useRef<DiffView | null>(null);
   const sessionIdRef = useRef<string>(newSessionId());
   const subRef = useRef<(() => void) | null>(null);
   const listRef = useRef<HTMLDivElement | null>(null);
@@ -236,6 +283,8 @@ export default function ChatPage() {
       liveToolsRef.current = [];
       setLivePlan(null);
       livePlanRef.current = null;
+      setLiveDiff(null);
+      liveDiffRef.current = null;
       setMessages((m) => [...m, { role: 'user', content: clean }]);
       setInput('');
       setBusy(true);
@@ -290,6 +339,13 @@ export default function ChatPage() {
           livePlanRef.current = view;
           setLivePlan(view);
         },
+        // P3b — the git tool emitted a diff; render it as a card (latest wins
+        // — a turn may diff several times, each replaces the card).
+        onDiff: (d) => {
+          const view: DiffView = { files: d.files, summary: d.summary };
+          liveDiffRef.current = view;
+          setLiveDiff(view);
+        },
       });
       const r = await dashboardAPI.chatSend(sessionId, clean);
       subRef.current?.();
@@ -306,6 +362,7 @@ export default function ChatPage() {
             steps: liveStepsRef.current,
             tools: liveToolsRef.current,
             plan: livePlanRef.current,
+            diff: liveDiffRef.current,
           },
         ]);
       } else {
@@ -425,6 +482,8 @@ export default function ChatPage() {
     liveToolsRef.current = [];
     setLivePlan(null);
     livePlanRef.current = null;
+    setLiveDiff(null);
+    liveDiffRef.current = null;
     setError('');
     setMeta(null);
   }, []);
@@ -468,6 +527,12 @@ export default function ChatPage() {
                 <div key={i} className={`chat-bubble chat-${m.role}${m.error ? ' chat-error' : ''}`}>
                   <div className="chat-bubble-role">{m.role === 'user' ? 'You' : '🤖 Agent'}</div>
                   <div className="chat-bubble-text">{m.content}</div>
+                  {m.role === 'assistant' && m.diff ? (
+                    <details className="chat-steps" open>
+                      <summary>Changes: {m.diff.summary}</summary>
+                      <DiffCard diff={m.diff} />
+                    </details>
+                  ) : null}
                   {m.role === 'assistant' && m.plan ? (
                     <details className="chat-steps" open>
                       <summary>Plan: {m.plan.goal}</summary>
@@ -497,6 +562,7 @@ export default function ChatPage() {
               <div className="chat-bubble chat-assistant">
                 <div className="chat-bubble-role">🤖 Agent</div>
                 {livePlan ? <PlanCard plan={livePlan} /> : null}
+                {liveDiff ? <DiffCard diff={liveDiff} /> : null}
                 <ToolCards tools={liveTools} live />
                 <div className="chat-working">
                   {liveSteps.length > 0 ? (

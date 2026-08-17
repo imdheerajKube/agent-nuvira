@@ -3777,6 +3777,12 @@ function handleRequest(req: IncomingMessage, res: ServerResponse): void {
             steps: event.steps,
             revision: event.revision,
           })}\n\n`);
+        } else if (event.kind === 'diff') {
+          // P3b — git diff card: per-file bodies + summary.
+          res.write(`event: diff\ndata: ${JSON.stringify({
+            files: event.files,
+            summary: event.summary,
+          })}\n\n`);
         } else if (event.kind === 'status') {
           res.write(`event: status\ndata: ${JSON.stringify({ status: event.status })}\n\n`);
         } else if (event.kind === 'question') {
