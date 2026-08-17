@@ -36,6 +36,7 @@ import { resolveProvider } from './router.js';
 import { isAutoModel } from '../learning/auto-router.js';
 import { parseRequestSync } from '../nlu/parser.js';
 import { resolveDispatch } from '../nlu/actions.js';
+import { isConversationalQuestion } from '../nlu/conversation-gate.js';
 import { contractFromParsed, renderContractCard } from '../nlu/contract.js';
 import { maybeAutoRecall, recallCard, recallContextBlock } from '../context/session-recall.js';
 import { toFollowupSuggestions } from '../tools/registry.js';
@@ -1133,6 +1134,11 @@ export class ExecuteCommand extends BaseCommand {
       }
 
       actions.push({ name: '💬  Enter another goal', value: 'continue' });
+    } else if (result.success) {
+      // P0.5 — direct-answer success (a question was answered; no pipeline
+      // ran, so there are no pipeline followups to generate). Just the
+      // standard next-step actions.
+      actions.push({ name: '💬  Enter another goal', value: 'continue' });
     } else {
       // ── Failure: Show analysis + recovery options ───────────────────
       if (result.orchestrationResult) {
@@ -1529,12 +1535,64 @@ export class ExecuteCommand extends BaseCommand {
    * Run the orchestrator for a single goal and display results.
    * Returns the outcome so the caller can record it in session history.
    */
+  /**
+   * P0.5 — conversation-vs-pipeline gate: a genuine QUESTION is ANSWERED
+   * directly (same chat engine as the dashboard), never run through the
+   * multi-agent pipeline. The observed failure this kills: "why is the test
+   * failing?" in execute mode spawned a python program to "answer" it.
+   */
+  private async answerConversationDirectly(
+    goal: string,
+    provider: string | undefined,
+    model: string | undefined,
+    options: ExecuteOptions,
+  ): Promise<SingleGoalResult> {
+    try {
+      // Lazy import breaks the static execute↔chat cycle (chat.ts imports
+      // printOrchestrationResult from execute.ts); the chat engine IS the
+      // direct-answer path (tool loop + ask_user + followups).
+      const { ChatCommand } = await import('./chat.js');
+      const answer = await new ChatCommand().answerOnce(goal, {
+        ...(provider ? { provider } : {}),
+        ...(model ? { model } : {}),
+      });
+      const content = (answer.content ?? '').trim();
+      if (options.jsonEvents) {
+        process.stdout.write(JSON.stringify({
+          type: 'result',
+          success: true,
+          goal,
+          summary: content,
+          tasksCompleted: 1,
+          tasksTotal: 1,
+          agentResults: [],
+          fileChanges: '',
+          runOutput: '',
+          error: '',
+          ts: Date.now(),
+        }) + '\n');
+      } else if (content) {
+        console.log('\n' + content + '\n');
+      }
+      return { success: true };
+    } catch (err) {
+      logger.error(err instanceof Error ? err.message : String(err));
+      return { success: false };
+    }
+  }
+
   private async runSingleGoal(
     goal: string,
     provider: string | undefined,
     model: string | undefined,
     options: ExecuteOptions,
   ): Promise<SingleGoalResult> {
+    // P0.5 — conversation-vs-pipeline gate: a genuine question is answered
+    // directly (no orchestrator, no python program). Runs BEFORE the option
+    // echo, contract card and board so a question never looks like a pipeline.
+    if (isConversationalQuestion(goal)) {
+      return await this.answerConversationDirectly(goal, provider, model, options);
+    }
     if (!options.jsonEvents && (options.verbose || options.dryRun || options.review || options.sandbox)) {
       logger.info(`Goal: ${goal}`);
       if (options.dryRun) logger.info('Mode: Dry run (files will not be modified)');

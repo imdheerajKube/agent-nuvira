@@ -13,8 +13,10 @@ import { homedir, tmpdir } from 'node:os';
 import { ExecuteCommand, parseGoalLines, checkpointOptions } from '../../src/cli/execute.js';
 import { logger } from '../../src/utils/logger.js';
 import { ProviderFactory } from '../../src/inference/factory.js';
+import { Orchestrator } from '../../src/agents/orchestrator.js';
 import { saveCheckpoint, checkpointIdFor, loadCheckpoint } from '../../src/agents/checkpoint-store.js';
 import { getModelRegistry, resetModelRegistry } from '../../src/learning/model-registry.js';
+import * as duties from '../../src/cli/duties.js';
 import inquirer from 'inquirer';
 
 // ─── Test Constants ─────────────────────────────────────────────────────────
@@ -1092,6 +1094,97 @@ describe('ExecuteCommand — handlePostExecution', () => {
       'llama3',
       { verbose: true },
     );
+  });
+});
+
+// ─── P0.5: conversation-vs-pipeline gate in execute ─────────────────────────
+
+describe('ExecuteCommand — P0.5 conversation-vs-pipeline gate', () => {
+  let cmd: ExecuteCommand;
+  let memDir: string;
+
+  beforeEach(() => {
+    cmd = new ExecuteCommand();
+    memDir = mkdtempSync(join(tmpdir(), 'buff-exec-gate-'));
+    process.env.BUFF_MEMORY_DIR = memDir;
+    vi.spyOn(logger, 'info').mockImplementation(() => {});
+    vi.spyOn(logger, 'highlight').mockImplementation(() => {});
+    vi.spyOn(logger, 'success').mockImplementation(() => {});
+    vi.spyOn(logger, 'error').mockImplementation(() => {});
+    vi.spyOn(console, 'log').mockImplementation(() => {});
+    // Keep the session start duties / pipeline hermetically stubbed.
+    vi.spyOn(duties, 'maybeRunBackgroundDuties').mockResolvedValue();
+  });
+
+  afterEach(() => {
+    vi.restoreAllMocks();
+    delete process.env.BUFF_MEMORY_DIR;
+    try { rmSync(memDir, { recursive: true, force: true }); } catch { /* best-effort */ }
+  });
+
+  it('answers a genuine question directly — the orchestrator never runs', async () => {
+    const directSpy = vi
+      .spyOn(cmd as unknown as { answerConversationDirectly: Function }, 'answerConversationDirectly')
+      .mockResolvedValue({ success: true });
+    const orchestratorSpy = vi
+      .spyOn(Orchestrator.prototype, 'execute')
+      .mockResolvedValue({} as any);
+
+    const result = await (cmd as any).runSingleGoal('why is the test failing?', 'groq', 'llama3', {});
+
+    expect(directSpy).toHaveBeenCalledWith('why is the test failing?', 'groq', 'llama3', {});
+    expect(orchestratorSpy).not.toHaveBeenCalled();
+    expect(result.success).toBe(true);
+  });
+
+  it('a coding goal still runs the orchestrator (no direct-answer detour)', async () => {
+    const directSpy = vi
+      .spyOn(cmd as unknown as { answerConversationDirectly: Function }, 'answerConversationDirectly')
+      .mockResolvedValue({ success: true });
+    const orchestratorSpy = vi
+      .spyOn(Orchestrator.prototype, 'execute')
+      .mockResolvedValue({
+        goal: 'create an API',
+        success: true,
+        summary: 'Done',
+        error: '',
+        fileChanges: '',
+        runOutput: '',
+        agentResults: [],
+        tasksCompleted: 1,
+        tasksTotal: 1,
+        trajectoryId: '',
+      } as any);
+
+    await (cmd as any).runSingleGoal('create an API', 'groq', 'llama3', {});
+
+    expect(directSpy).not.toHaveBeenCalled();
+    expect(orchestratorSpy).toHaveBeenCalledTimes(1);
+  });
+
+  it('a question phrased as a task stays a task (coding verb in command position)', async () => {
+    const directSpy = vi
+      .spyOn(cmd as unknown as { answerConversationDirectly: Function }, 'answerConversationDirectly')
+      .mockResolvedValue({ success: true });
+    const orchestratorSpy = vi
+      .spyOn(Orchestrator.prototype, 'execute')
+      .mockResolvedValue({
+        goal: 'fix the login bug',
+        success: true,
+        summary: 'Done',
+        error: '',
+        fileChanges: '',
+        runOutput: '',
+        agentResults: [],
+        tasksCompleted: 1,
+        tasksTotal: 1,
+        trajectoryId: '',
+      } as any);
+
+    await (cmd as any).runSingleGoal('can you fix the login bug?', 'groq', 'llama3', {});
+
+    expect(directSpy).not.toHaveBeenCalled();
+    expect(orchestratorSpy).toHaveBeenCalledTimes(1);
   });
 });
 

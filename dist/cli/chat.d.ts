@@ -9,6 +9,12 @@ export interface PipelineDispatchDecision {
     /** Whether a single confirm is required first (ambiguous create only). */
     needConfirm: boolean;
 }
+/** Options for the rule assessment (P0.5 adds the raw ask text). */
+export interface DispatchAssessmentOptions {
+    dev?: boolean;
+    /** The raw user ask — lets the P0.5 conversation gate see the wording. */
+    text?: string;
+}
 /**
  * E3a/E3c — the rule assessment (hint + no-model fallback source).
  *
@@ -24,9 +30,7 @@ export interface PipelineDispatchDecision {
  *   never as a bypass.
  * `dev` (the --dev flag / /dev toggle) forces the assessment to dispatch.
  */
-export declare function resolvePipelineDispatch(parsed: ParsedRequest, opts?: {
-    dev?: boolean;
-}): PipelineDispatchDecision;
+export declare function resolvePipelineDispatch(parsed: ParsedRequest, opts?: DispatchAssessmentOptions): PipelineDispatchDecision;
 /**
  * Execute the multi-agent pipeline for a user's goal (H1/E3b refactor).
  *

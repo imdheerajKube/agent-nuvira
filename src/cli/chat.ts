@@ -32,6 +32,7 @@ import { withLogCorrelation } from '../enterprise/log.js';
 import { recordMetricTime, getMetrics } from '../enterprise/metrics.js';
 import type { ParsedRequest } from '../nlu/parser.js';
 import { resolveDispatch } from '../nlu/actions.js';
+import { isConversationalQuestion, hasCodingAction } from '../nlu/conversation-gate.js';
 import { runToolLoop, extractFallbackToolCalls } from '../tools/tool-loop.js';
 import type { ToolLoopDeps, StepResponse, ToolLoopResult } from '../tools/tool-loop.js';
 import { getTool, TOOL_CONTRACT_JSON, type ToolContext, type FollowupSuggestion } from '../tools/registry.js';
@@ -196,6 +197,13 @@ export interface PipelineDispatchDecision {
   needConfirm: boolean;
 }
 
+/** Options for the rule assessment (P0.5 adds the raw ask text). */
+export interface DispatchAssessmentOptions {
+  dev?: boolean;
+  /** The raw user ask — lets the P0.5 conversation gate see the wording. */
+  text?: string;
+}
+
 /**
  * E3a/E3c — the rule assessment (hint + no-model fallback source).
  *
@@ -213,8 +221,25 @@ export interface PipelineDispatchDecision {
  */
 export function resolvePipelineDispatch(
   parsed: ParsedRequest,
-  opts?: { dev?: boolean },
+  opts?: DispatchAssessmentOptions,
 ): PipelineDispatchDecision {
+  // P0.5 — conversation-vs-pipeline gate (runs BEFORE the dev bypass and the
+  // action-map gate, so a question is never dispatched even with --dev, and
+  // a coding goal phrased as a question still dispatches):
+  // 1. QUESTION → never the pipeline (the observed failure: a question in
+  //    execute/dev mode spawned the pipeline and created a python program to
+  //    "answer" it).
+  // 2. CODING ACTION in command position → always the pipeline, even when the
+  //    NLU alone would misread it as chat ("how do I add JWT auth?" → explain
+  //    → chat, but the user wants the auth added).
+  if (opts?.text) {
+    if (isConversationalQuestion(opts.text)) {
+      return { dispatch: false, needConfirm: false };
+    }
+    if (hasCodingAction(opts.text)) {
+      return { dispatch: true, needConfirm: false };
+    }
+  }
   if (opts?.dev) return { dispatch: true, needConfirm: false };
   if (parsed.action.run !== 'pipeline') return { dispatch: false, needConfirm: false };
   const d = resolveDispatch(parsed);
@@ -370,7 +395,7 @@ export class ChatCommand extends BaseCommand {
     opts.onProgress?.(`   🧠 routed to ${provider.name}${model ? ` / ${model}` : ''} — working…`);
 
     const parsed = parseRequestSync(message);
-    const dispatchDecision = resolvePipelineDispatch(parsed, { dev: opts.dev });
+    const dispatchDecision = resolvePipelineDispatch(parsed, { dev: opts.dev, text: message });
     const answer = await this.runChatAnswer(
       message,
       opts.history ?? [],
@@ -499,7 +524,7 @@ export class ChatCommand extends BaseCommand {
       // ONLY as the no-model fallback below (generation failed entirely), never
       // as a bypass.
       const parsed = parseRequestSync(prompt);
-      const dispatchDecision = resolvePipelineDispatch(parsed, { dev: options?.dev });
+      const dispatchDecision = resolvePipelineDispatch(parsed, { dev: options?.dev, text: prompt });
 
       const answer = await this.runChatAnswer(
         prompt,
@@ -651,7 +676,7 @@ export class ChatCommand extends BaseCommand {
       // separately so the budget is measurable.
       const parsed = recordMetricTime('rule.parse.ms', () => parseRequestSync(message));
       const dispatchDecision = recordMetricTime('rule.dispatch.ms', () =>
-        resolvePipelineDispatch(parsed, { dev: this.devModeAuto }),
+        resolvePipelineDispatch(parsed, { dev: this.devModeAuto, text: message }),
       );
       const session = { type, provider, model: effectiveModel };
       const answer = await withLogCorrelation({ sessionId: chatSessionId }, () =>
