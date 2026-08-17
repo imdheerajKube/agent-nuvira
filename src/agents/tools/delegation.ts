@@ -1,10 +1,10 @@
 /**
  * H2 — Sub-agent registry + live delegation (`src/agents/tools/delegation.ts`).
  *
- * The second half of the "missing Freebuff/Hermes core" (capability gap #2):
+ * The second half of the "missing core" (capability gap #2):
  * a parent task — or the chat model via the `delegate` tool — can spawn
  * specialized agents (context-gatherer, reviewer, security, tester, ...) as
- * sub-tasks, each with a FRESH, isolated context. Mirrors Hermes
+ * sub-tasks, each with a FRESH, isolated context.
  * `tools/delegate_tool.py`: the child gets a fresh conversation, isolated
  * context, its own task id, and a focused system prompt — the parent only ever
  * sees the delegation call + summary result, never the child's intermediate
@@ -97,7 +97,7 @@ function nextSubagentId(): string {
 /**
  * Run a task under a timeout + optional AbortSignal kill. Whichever guard fires
  * first wins; the underlying task keeps running but its result is discarded
- * (the parent already moved on — Hermes delegate_tool semantics).
+ * (the parent already moved on — delegate_tool semantics).
  */
 function runWithGuards<T>(fn: () => Promise<T>, timeoutMs: number, signal?: AbortSignal): Promise<T> {
   return new Promise<T>((resolve, reject) => {
@@ -317,7 +317,7 @@ export async function spawnSubagent(
 
 /**
  * Spawn N sub-agents in PARALLEL and aggregate their summary results
- * (Freebuff `spawn_agents` / orchestrator Promise.all pattern).
+ * (spawn_agents / orchestrator Promise.all pattern).
  *
  * Budget guard: requests beyond `maxSubagents` (default 4) are NOT spawned —
  * they resolve as `skipped` results so the caller/model sees the truncation.

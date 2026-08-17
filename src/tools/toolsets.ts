@@ -1,16 +1,16 @@
 /**
  * H1b — Toolsets (`src/tools/toolsets.ts`).
  *
- * Hermes capability-gating parity (Hermes `toolsets` + `toolset_validation.py`
+ * Capability-gating parity (`toolsets` + `toolset_validation.py`
  * + `web_routers/tools.py:get_toolsets`): the registry's tools are grouped
  * into named toolsets — the "capabilities" a user toggles. Each toolset can
  * be enabled/disabled via config (`tools.toolsets.<name>.enabled` in
  * `~/.buff/buffconfig.json`; absent = enabled).
  *
- * Two enforcement points (I1, mirroring Hermes' capability gate):
+ * Two enforcement points (I1, the capability gate):
  * 1. **Schema gating** — the tool JSON schema handed to native tool-calling
  *    providers is built from ENABLED toolsets only, so the model never sees a
- *    disabled tool (Hermes `test_mcp_capability_gating.py` behavior).
+ *    disabled tool (the capability-gating behavior).
  * 2. **Execution gate** — calling a disabled tool returns an explicit error
  *    instead of running it. This is the single runtime-honored enforcement
  *    point: a future dashboard toggle is never cosmetic (same rule as the
@@ -36,7 +36,7 @@ export interface ToolsetDef {
   description: string;
   /** Registry tool names in this group. */
   tools: string[];
-  /** Toolsets with no in-code tools (Hermes `_CONFIG_ONLY_TOOLSETS` parity). */
+  /** Toolsets with no in-code tools (config-only toolsets). */
   configOnly?: boolean;
   /** True when this toolset gates MCP-server tools (dynamic, no static names). */
   bindsMcpServers?: boolean;

@@ -1,5 +1,5 @@
 /**
- * J1 — Gateway registry (Hermes `channel_directory` + `gateway` bridge).
+ * J1 — Gateway registry (`channel_directory` + `gateway` bridge).
  *
  * `GatewayRegistry` is the single choke point that turns an inbound channel
  * message into an agent action and streams the pipeline's board events back to
@@ -203,7 +203,7 @@ export interface GatewayRegistryOptions {
 
 export class GatewayRegistry {
   readonly directory: ChannelDirectory;
-  /** I2 — guaranteed-delivery ledger for failed sends (Hermes delivery.py parity). */
+  /** I2 — guaranteed-delivery ledger for failed sends. */
   readonly delivery: DeliveryLedger;
   /** P2 — inbound message inbox (who messaged the bot, what happened). */
   readonly inbox: InboxLedger;

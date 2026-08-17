@@ -35,7 +35,7 @@ export interface DispatchAssessmentOptions {
  *
  * The legacy `promptDeveloperMode` menu ("1. Chat mode / 2. Developer mode")
  * is DELETED (Session 7c re-scope, landed in E3a). E3c demotes the rules
- * further (model-decides, Freebuff/Hermes parity): EVERY request runs as a
+ * further (model-decides): EVERY request runs as a
  * tool-call turn and the MODEL decides what to do. This function computes
  * what the RULES would say, used for two things only:
  * - the rule hint injected into the model's context (buildToolSystemPrompt),
@@ -152,11 +152,11 @@ export declare class ChatCommand extends BaseCommand {
     create(): Command;
     private execute;
     /**
-     * E3b — run one chat answer as a TOOL-CALL TURN (Freebuff/Hermes parity).
+     * E3b — run one chat answer as a TOOL-CALL TURN.
      *
      * The model may call ask_user (clarify), verify_requirement, the pipeline
      * tools (build/repair/resume), and must end with suggest_followups (3
-     * followups, Freebuff contract). Native tool-calling when the provider
+     * followups, the contract). Native tool-calling when the provider
      * supports it; JSON fallback otherwise. Carries the legacy generation
      * machinery forward: auto-mode failover + shared fallback chain inside
      * callModel, caching, memory recording, and registry telemetry.
@@ -167,7 +167,7 @@ export declare class ChatCommand extends BaseCommand {
      */
     private runChatAnswer;
     /**
-     * E3b — the model-call step for the tool loop (Freebuff run-agent-step):
+     * E3b — the model-call step for the tool loop:
      * native generateTools when the provider supports it, JSON fallback
      * otherwise. Auto-mode failover + the shared fallback chain live here — a
      * broken provider never crashes the turn (it answers from the next working
@@ -175,7 +175,7 @@ export declare class ChatCommand extends BaseCommand {
      */
     private buildToolCallModel;
     /**
-     * E3b — render suggest_followups results (Freebuff parity). Interactive:
+     * E3b — render suggest_followups results. Interactive:
      * numbered options; choosing one sends its prompt as the next message.
      * Single-shot: printed after the answer.
      */

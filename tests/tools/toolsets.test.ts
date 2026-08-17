@@ -1,5 +1,5 @@
 /**
- * H1b — Toolset tests (Hermes capability-gating parity, I1).
+ * H1b — Toolset tests (capability-gating, I1).
  *
  * Covers: catalog coverage integrity (every registered tool in exactly one
  * toolset), pure filtering, config round-trip via a hermetic ConfigManager,

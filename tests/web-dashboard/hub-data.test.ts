@@ -84,7 +84,7 @@ describe('parseSkillFrontmatter', () => {
       '---',
       'name: fix-lint',
       "description: 'Fix lint errors'",
-      'metadata.hermes.tags: [a, b]',
+      'metadata.custom.tags: [a, b]',
       'prerequisites.commands: ["git"]',
       '---',
       'body',

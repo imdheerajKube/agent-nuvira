@@ -1,7 +1,7 @@
 /**
- * E3b — `ask_user` renderer (Hermes `tools/clarify_tool.py` parity).
+ * E3b — `ask_user` renderer.
  *
- * Hermes' clarify tool shows a question + ≤4 choices and renders
+ * The clarify tool shows a question + ≤4 choices and renders
  * arrow-key/checkbox selection in the CLI. We mirror that exactly with
  * inquirer: single-select = arrow-key list, multi_select = checkbox.
  * Injectable via ToolContext.askUser so tests never touch a real TTY.
@@ -11,7 +11,7 @@ import inquirer from 'inquirer';
 import { logger } from '../utils/logger.js';
 import type { AskUserAnswer, AskUserChoice } from './registry.js';
 
-/** Render an in-loop clarification (Hermes clarify parity). */
+/** Render an in-loop clarification. */
 export async function renderAskUser(
   question: string,
   choices: AskUserChoice[],

@@ -1270,7 +1270,7 @@ export class ExecuteCommand extends BaseCommand {
 
       const model = activeModel || 'default';
 
-      // E3b parity: the Freebuff suggest_followups contract (one vocabulary
+      // E3b parity: the suggest_followups contract (one vocabulary
       // everywhere) — exactly 3 followups, specific to this conversation.
       const prompt = [
         'Given the following goal execution result, suggest exactly 3 follow-ups',

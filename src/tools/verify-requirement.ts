@@ -10,7 +10,7 @@
  *   model to call `ask_user` next (E3b acceptance: "no pipeline runs between
  *   the ask and the answer").
  *
- * Mirrors Freebuff's requirementState discipline — the agent never acts on a
+ * The requirement-state discipline — the agent never acts on a
  * half-understood request.
  */
 

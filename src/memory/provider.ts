@@ -1,7 +1,7 @@
 /**
  * MemoryProvider — Pluggable persistent-memory lifecycle (Phase B2).
  *
- * Mirrors Hermes `agent/memory_provider.py` exactly: a provider exposes
+ * A provider exposes
  *   name() / is_available() / initialize(session_id) / system_prompt_block() /
  *   prefetch(query) / sync_turn(user, asst) / on_session_end()
  * and the MemoryManager (manager.ts) calls those hooks at the same points in
@@ -12,7 +12,7 @@
  * fact-store via `retrieveMemoryContext`). Phase F1 later adds a Mem0 provider
  * implementing the SAME interface — no caller changes.
  *
- * The trivial-prompt gate (`isTrivialPrompt`) mirrors Hermes `is_trivial_prompt`
+ * The trivial-prompt gate (`isTrivialPrompt`)
  * (single source of truth, shared by every caller) so greetings / one-word
  * acknowledgements never burn a prefetch call.
  */
@@ -22,7 +22,7 @@ import type { Trajectory } from './trajectory-store.js';
 import { getFactStore } from './fact-store.js';
 import { logger } from '../utils/logger.js';
 
-// ─── Trivial-prompt gate (mirrors Hermes TRIVIAL_PROMPT_RE) ─────────────────
+// ─── Trivial-prompt gate (TRIVIAL_PROMPT_RE) ────────────────────────────────
 
 /**
  * Prompts that carry no semantic signal — bare greetings, acknowledgements,
@@ -66,7 +66,7 @@ export interface MemoryPrefetchResult {
 }
 
 /**
- * The lifecycle a memory backend implements (Hermes `MemoryProvider` ABC).
+ * The lifecycle a memory backend implements (`MemoryProvider` ABC).
  * All hooks are best-effort — a throwing provider must never break the agent.
  */
 export interface MemoryProvider {
@@ -151,7 +151,7 @@ export class LocalMemoryProvider implements MemoryProvider {
     _sessionId?: string,
     callLLM?: LLMCallFn,
   ): Promise<MemoryPrefetchResult> {
-    // Hermes is_trivial_prompt gate: greetings / one-word acks never prefetch.
+    // is_trivial_prompt gate: greetings / one-word acks never prefetch.
     if (isTrivialPrompt(query)) return emptyPrefetchResult();
 
     try {
@@ -165,7 +165,7 @@ export class LocalMemoryProvider implements MemoryProvider {
       ].filter((s) => s && s.trim().length > 0);
       // Compose the FULL persistent-memory block: the provider's static system
       // block FRAMES the per-field recall so `systemPromptBlock()` actually
-      // reaches the planner prompt (Hermes puts it in the system prompt; here
+      // reaches the planner prompt (it lives in the system prompt; here
       // it heads the injected block). Empty when there is nothing to recall.
       const block = parts.length > 0
         ? `\n---\n${this.systemPromptBlock()}\n\nPersistent memory for this project:\n${parts.join('\n')}\n---\n`

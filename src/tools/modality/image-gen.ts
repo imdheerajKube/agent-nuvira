@@ -1,5 +1,5 @@
 /**
- * I3 — Image generation (mirrors Hermes `image_generation_tool.py`).
+ * I3 — Image generation (generate an image from a prompt via an optional backend).
  *
  * Backends (free-first): Pollinations.ai free endpoint by default (no key,
  * pure fetch), or a local ComfyUI / Stable Diffusion API when

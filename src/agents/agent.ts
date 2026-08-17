@@ -15,8 +15,8 @@ export type TaskStatus = 'pending' | 'running' | 'completed' | 'failed';
 
 /**
  * H2 — one sub-agent delegation spec on a delegate task step. The agent runs
- * this sub-agent with a FRESH isolated context (Freebuff `spawn_agents` /
- * Hermes `delegate_tool.py` parity).
+ * this sub-agent with a FRESH isolated context (`spawn_agents` /
+ * `delegate_tool.py` parity).
  */
 export interface TaskDelegation {
   /** The specialized sub-agent type (registered in the ModuleRegistry). */

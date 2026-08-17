@@ -1,5 +1,5 @@
 /**
- * I4 — Voice pack (mirrors Hermes `tts_tool.py` / `transcription_registry.py`).
+ * I4 — Voice pack (text-to-speech + speech-to-text via optional backends).
  *
  *   speak(text)        → edge-tts (Microsoft free edge voices) or Piper TTS.
  *   transcribe(audio)  → whisper.cpp or faster-whisper (local, free).

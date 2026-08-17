@@ -1,5 +1,5 @@
 /**
- * I2 — Browser automation (mirrors Freebuff `browser-use` + Hermes
+ * I2 — Browser automation (a Playwright-driven browser tool)
  * `browser_tool.py`).
  *
  * Playwright is OPTIONAL: `isBrowserAvailable()` is false until the package

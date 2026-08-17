@@ -8,15 +8,15 @@
  *   STANDING RULE).
  * - The E3c model-decides task tools (publish/document/website/analyze/test) —
  *   the vocabulary that lets the MODEL decide what a request needs, exactly
- *   like Freebuff/Hermes (the model sees every request and calls the matching
+ *   (the model sees every request and calls the matching
  *   tool; rules are only hints + the no-model fallback, never a bypass).
- * - The first-class experience tools (Session 7c): `ask_user` (Hermes
+ * - The first-class experience tools (Session 7c): `ask_user` (
  *   `clarify_tool.py` parity — in-loop clarification, ≤4 choices +
- *   multi_select), `suggest_followups` (Freebuff `agents/base-chat.ts`
+ *   multi_select), `suggest_followups` (
  *   parity — end-of-response follow-up recommendations), and
  *   `verify_requirement` (the C2 requirementState check as a reusable tool).
  *
- * Mirrors Hermes `tools/registry.py` + Freebuff `tool-executor.ts`: one
+ * One
  * schema (zod), two transports (native tool_calls when the provider supports
  * it, JSON fallback otherwise — C3 acceptance b). The JSON Schema handed to
  * native tool-calling providers is DERIVED from the zod schema via
@@ -40,7 +40,7 @@ export interface ToolJsonSchema {
 
 /**
  * A declarative tool. `run` executes with validated args + context; the
- * returned string is fed back to the model as the tool result (Freebuff
+ * returned string is fed back to the model as the tool result (
  * tool-executor shape).
  */
 export interface Tool {
@@ -54,7 +54,7 @@ export interface Tool {
   /**
    * Whether executing this tool should continue the loop after it returns.
    * `false` (e.g. suggest_followups) lets the model end the turn right after
-   * (Freebuff `endsAgentStep` semantics).
+   * (endsAgentStep semantics).
    */
   endsAgentStep: boolean;
   /** What runs. Returns the tool-result text fed back to the model. */
@@ -81,7 +81,7 @@ export interface ToolContext {
   /** LLM call fn for C2 verify (resolved provider already chosen). */
   callLLM?: import('../agents/agent.js').LLMCallFn;
   /**
-   * I3 — artifact sink: tools hand deliverables here (Hermes run.py parity).
+   * I3 — artifact sink: tools hand deliverables here.
    * The tool loop parses `{artifact, result}` payloads, pushes the artifact
    * to this sink, and feeds only `result` back to the model.
    */
@@ -107,13 +107,13 @@ export interface ToolContext {
   planStore?: import('./plan-store.js').PlanStoreLike;
 }
 
-/** A Hermes-clarify-style choice. */
+/** A clarify-style choice. */
 export interface AskUserChoice {
   label: string;
   description?: string;
 }
 
-/** The ask_user result — mirrors Hermes clarify_tool's answer contract. */
+/** The ask_user result — a question + ≤4 choices + multi_select. */
 export interface AskUserAnswer {
   /** The chosen label(s) — a single label for single-select, an array for multi. */
   answer: string | string[];
@@ -123,7 +123,7 @@ export interface AskUserAnswer {
   custom?: string;
 }
 
-/** A Freebuff-style follow-up recommendation. */
+/** A follow-up recommendation. */
 export interface FollowupSuggestion {
   /** The full prompt sent as the next user message when clicked. */
   prompt: string;
@@ -145,7 +145,7 @@ const buildArgs: ZodType = ACTION_BY_INTENT.create.inputSchema;
 const resumeArgs: ZodType = ACTION_BY_INTENT.continue.inputSchema;
 const repairArgs: ZodType = ACTION_BY_INTENT.fix.inputSchema;
 
-/** Hermes clarify_tool.py parity: question + ≤4 choices + multi_select. */
+/** Clarify contract: question + ≤4 choices + multi_select. */
 const askUserSchema = z.object({
   question: z.string().describe('The clarifying question to ask the user'),
   choices: z
@@ -157,7 +157,7 @@ const askUserSchema = z.object({
     )
     .min(2)
     .max(4)
-    .describe('2–4 answer choices (Hermes clarify contract)'),
+    .describe('2–4 answer choices the user can pick from'),
   multi_select: z.boolean().default(false).describe('Allow multiple selections (checkbox)'),
 });
 
@@ -239,7 +239,7 @@ const delegateSchema = z.object({
   files: z.array(z.string()).optional().describe('Optional file paths the sub-agent should read as context'),
 });
 
-/** I1 — web_search tool args: free-tier web search (Freebuff researcher-web parity). */
+/** I1 — web_search tool args: free-tier web search. */
 const webSearchSchema = z.object({
   query: z.string().min(1).describe('The search query (plain words work best)'),
   max_results: z.number().int().min(1).max(20).default(5).describe('Max results to return (default 5)'),
@@ -357,7 +357,7 @@ export const suggestFollowupsSchema = z.object({
         label: z.string().optional().describe('Short display label (defaults to the prompt)'),
       }),
     )
-    // Freebuff parity: min 1, NO hard max — the model aims for ~3, but a
+    // min 1, NO hard max — the model aims for ~3, but a
     // model emitting 4–5 valid followups must still PARSE (a zod rejection
     // here would feed a tool error back and force a wasteful retry loop, the
     // exact failure class the essay diagnosis fixed). Callers render the
@@ -405,7 +405,7 @@ export function toolJsonSchemas(toolNames?: string[]): ToolJsonSchema[] {
 // ─── The tool contract (system-prompt text) ─────────────────────────────────
 
 /**
- * The Freebuff-parity tool contract embedded in the chat system prompt
+ * The tool contract embedded in the chat system prompt
  * (verified against `agents/base-chat.ts`): the model ends its response by
  * calling suggest_followups with exactly 3 followups, and clarifies ambiguous
  * requests via ask_user instead of guessing.
@@ -466,7 +466,7 @@ registerTool({
 });
 
 // ─── E3c model-decides task tools ───────────────────────────────────────────
-// The model-decides vocabulary (Freebuff/Hermes parity): the MODEL sees every
+// The model-decides vocabulary: the MODEL sees every
 // request and picks the matching tool. Rules (C1/C3) are demoted to hints +
 // the no-model fallback — they never bypass the loop. These tools wrap the
 // same pipeline core + the publish workflow, so any ask auto-runs.
@@ -547,7 +547,7 @@ registerTool({
 });
 
 // ─── F2 code-search tool (ripgrep-fast project search) ─────────────────────
-// Freebuff/Hermes both expose code search to the agent for context gathering.
+// Code search is exposed to the agent for context gathering.
 // Backed by `src/utils/code-search.ts` (bundled ripgrep + fs fallback); no
 // LLM needed — runs entirely on file system access.
 
@@ -680,7 +680,7 @@ registerTool({
 });
 
 // ─── I1 web-research tools (web_search / read_page) ─────────────────────────
-// Freebuff `researcher-web.ts` / `researcher-docs.ts` + Hermes
+// The research-tool pattern
 // `web_search_registry.py` parity: the model can search the web and read a
 // page's text to ground its answers (capability gap #3, 🔴 MAJOR). Free
 // backends only: DuckDuckGo HTML (no key) / SearXNG (self-host) for search,
@@ -890,7 +890,7 @@ registerTool({
 });
 
 // ─── H2 delegation tool (sub-agent registry) ────────────────────────────────
-// Freebuff `spawn_agents` / Hermes `delegate_tool.py` parity: the model can
+// The model can
 // spawn a specialized sub-agent with an isolated context. The tool reuses the
 // SAME ModuleRegistry the orchestrator uses — the registry is the only place
 // agents are declared (H2 acceptance: `buff tools list` shows delegation tools).

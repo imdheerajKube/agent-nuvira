@@ -447,13 +447,13 @@ export interface BuffConfig {
   /** Learning-router config (bandit sampling + hard constraints) */
   routing?: RoutingConfig;
   /**
-   * Toolsets config (Hermes capability-gating parity): per-toolset
+   * Toolsets config (capability-gating): per-toolset
    * enable/disable flags. Absent entry = enabled (default). The model's tool
    * schema is built from ENABLED toolsets only (src/tools/toolsets.ts).
    */
   tools?: ToolsConfig;
   /**
-   * Skills config (Hermes `skills_hub` parity): per-skill disable flags + the
+   * Skills config (skills-hub parity): per-skill disable flags + the
    * ordered multi-source registry list. The disabled list excludes skills from
    * runtime matching (I7 P0 bridge); registries[] wins over the legacy
    * BUFF_SKILLS_REGISTRY env override when present (I7 P1 multi-source).
@@ -479,7 +479,7 @@ export interface BuffConfig {
 /**
  * Skills configuration — hub-skill runtime gating + multi-source registries.
  *
- * I7 (Hermes `skills_hub.py` / `skills_sync_client.py` parity): installed
+ * I7 (skills-hub / skills-sync-client parity): installed
  * SKILL.md skills become first-class runtime capabilities, and discovery
  * spans multiple registries. `disabled[]` mirrors the toolsets rule — a
  * disabled skill is excluded at the match gate, never silently injected.
@@ -500,7 +500,7 @@ export interface SkillsConfig {
 /**
  * Toolsets configuration — one enable flag per named tool group.
  *
- * I1 (Hermes `toolsets` + `toolset_validation.py` parity): tools are grouped
+ * I1 (toolsets + `toolset_validation.py` parity): tools are grouped
  * into named toolsets; disabling a toolset removes its tools from the model's
  * tool-calling schema AND rejects their execution at runtime (a dashboard
  * toggle is never cosmetic — the runtime gate is the single enforcement

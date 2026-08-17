@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # ═══════════════════════════════════════════════════════════════════════════
 # release-pipeline.sh — build + test + (optionally) publish Agent-Nuvira
-# OUTSIDE the Freebuff session, writing a clean, timestamped, analyzable log
+# OUTSIDE the agent session, writing a clean, timestamped, analyzable log
 # you can paste back to the AI for diagnosis.
 #
 # Why this exists: running the full build/test/publish inside a chat session

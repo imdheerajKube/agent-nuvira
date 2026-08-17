@@ -13,7 +13,7 @@
  *    unknown → action.run 'chat' (answer directly); create/fix/continue →
  *    action.run 'pipeline'. The NLU already routes the obvious cases
  *    ("assess the project" → chat, "fix the failing test" → pipeline).
- * 2. `isTrivialPrompt` (Hermes parity): bare greetings / acknowledgements
+ * 2. `isTrivialPrompt`: bare greetings / acknowledgements
  *    ("hi", "thanks", "ok", "continue") are conversational — never a goal
  *    for the multi-agent pipeline.
  * 3. A coding-action override for the NLU's known blind spot: a TASK phrased

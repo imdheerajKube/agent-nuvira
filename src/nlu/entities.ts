@@ -7,7 +7,7 @@
  * extract entities — the deterministic fast-path stays zero-cost (the plan's
  * "deterministic fast-path first, LLM verify only on ambiguity").
  *
- * Mirrors Hermes tool-schema discipline:
+ * Tool-schema discipline:
  * - The extraction schema is declared ONCE in `src/nlu/schema.ts` (zod + JSON
  *   schema) and validated with safeParse — no per-prompt hack-parsing.
  * - Parse strategies mirror failure-lessons (`tryParseArray`): ```json code

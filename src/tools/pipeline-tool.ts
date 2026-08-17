@@ -1,7 +1,7 @@
 /**
  * H1/E3b — Pipeline tool (`src/tools/pipeline-tool.ts`).
  *
- * The orchestrator pipeline as a CALLABLE TOOL — the Freebuff/Hermes
+ * The orchestrator pipeline as a CALLABLE TOOL — a first-class
  * tool-call model ("a chat turn can invoke plan/execute/edit as a tool call",
  * H1 acceptance). Extracted from `runDeveloperMode` (chat.ts) so the same
  * pipeline core serves three entry points with zero divergence:

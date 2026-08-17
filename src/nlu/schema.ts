@@ -2,7 +2,7 @@
  * C2 — Declared-once NLU verify schema (zod + JSON schema).
  *
  * The JSON schema for the LLM extraction call is declared HERE — a single
- * source of truth (mirrors Hermes `tools/registry.py` tool-schema discipline:
+ * source of truth (the tool-schema discipline:
  * one schema, no per-prompt hack-parsing). The same schema can be handed to
  * any adapter that supports structured output (C3/H1), so intent resolution
  * and tool dispatch share one vocabulary.

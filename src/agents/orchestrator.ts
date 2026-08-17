@@ -1092,7 +1092,7 @@ export class Orchestrator {
 
       // Runner and sandbox agents need exclusive access (no parallel).
       // Conservative parallelism (recommended): independent tasks — gatherers,
-      // writers, reviewers — run in PARALLEL within a batch (Freebuff-style),
+      // writers, reviewers — run in PARALLEL within a batch,
       // while tester/debugger/runner (and any strategy-marked serial step) run
       // one at a time because they share files, commands, ports, and sandboxes.
       const exclusiveAgentTypes = ['tester', 'debugger', 'runner'];

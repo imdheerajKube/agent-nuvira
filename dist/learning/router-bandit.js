@@ -2,7 +2,7 @@
  * RouterBandit — bucketed Thompson-sampling bandit for Auto model routing.
  *
  * Inspired by ruflo's `model-router.ts` (Beta-Bernoulli Thompson sampling)
- * and generalized beyond 3 Claude tiers to agent-nuvira's full provider set.
+ * and generalized beyond the original 3-tier setup to agent-nuvira's full provider set.
  *
  * Mechanism:
  * - Each provider keeps a Beta(α, β) prior PER complexity bucket

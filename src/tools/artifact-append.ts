@@ -1,7 +1,7 @@
 /**
  * I3 — Tool-to-artifact auto-append (`src/tools/artifact-append.ts`).
  *
- * Hermes `gateway/run.py` parity: a tool may return its deliverable as a JSON
+ * A tool may return its deliverable as a JSON
  * payload and let the runtime do the bookkeeping —
  *
  *   {"artifact": {"kind": "file", "title": "deploy report", "path": "..."},
@@ -12,7 +12,7 @@
  * 2. pushes the artifact to the ToolContext sink (which persists it to the
  *    per-session ArtifactStore), and
  * 3. returns ONLY `result` — the JSON payload is for the runtime, never the
- *    model's context (Hermes' "return their deliverable artifact as a JSON
+ *    model's context (the "return their deliverable artifact as a JSON
  *    payload" contract).
  *
  * A non-payload tool result passes through untouched, so existing tools are
@@ -126,7 +126,7 @@ export function appendToolArtifact(text: string, sink?: ArtifactSink): string {
 export const ARTIFACT_PREVIEW_MAX_CHARS = 500;
 
 /**
- * Read the first `maxChars` of a file as a preview (Hermes
+ * Read the first `maxChars` of a file as a preview (
  * `read_preview_tool.py` parity). Reads ONLY the first N bytes via a bounded
  * read — never the whole file, so a multi-GB log previews in µs. Best-effort:
  * any read failure returns undefined (the artifact stays valid without one).

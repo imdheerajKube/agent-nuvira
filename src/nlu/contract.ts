@@ -1,6 +1,6 @@
 /**
  * Session 20 — RequestContract layer (DESIGN_DECISIONS Decision 3:
- * "understanding-first — neither Freebuff nor Hermes ever shows the user what
+ * "understanding-first — the user is never shown what
  * it understood; they just run").
  *
  * The contract makes understanding VISIBLE and VERIFIABLE:

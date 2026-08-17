@@ -1,7 +1,7 @@
 /**
  * H2 — Sub-agent delegation tests (`src/agents/tools/delegation.ts`).
  *
- * Covers the Freebuff `spawn_agents` / Hermes `delegate_tool.py` parity layer:
+ * Covers the agent-delegation layer:
  * single spawn, parallel fan-out with aggregation, delegation:spawn/result/error
  * event emission, budget guard (max sub-agents per turn), timeout kill, and
  * AbortSignal kill-switch. All tests are hermetic — a fake agent registered in
@@ -308,7 +308,7 @@ describe('delegation — context isolation + files', () => {
     writeFileSync(filePath, 'export const x = 1;', 'utf-8');
 
     // The sub-agent captures the context it was given so the test can assert
-    // the isolation contract directly (Hermes delegate_tool.py parity).
+    // the isolation contract directly.
     let captured: AgentContext | undefined;
     const registry = new ModuleRegistry();
     registry.register(

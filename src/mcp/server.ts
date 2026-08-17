@@ -2,9 +2,9 @@
  * F2 follow-up — Agent-Nuvira as an MCP SERVER (`src/mcp/server.ts`).
  *
  * Exposes the H1 tool registry over the Model Context Protocol so OTHER
- * clients (dashboard, gateway, IDEs, Claude Desktop, other agents) can invoke
- * the agent's tools without going through the CLI. Mirrors Hermes
- * `agent/transports/hermes_tools_mcp_server.py` + `mcp_serve.py` (the plan's
+ * clients (dashboard, gateway, IDEs, MCP hosts, other agents) can invoke
+ * the agent's tools without going through the CLI.
+ * a Python reference implementation of an MCP stdio server (the plan's
  * F2 "expose agent tools via MCP" outcome — the CONSUMING side landed in
  * Session 28 with the SDK-based client).
  *
@@ -150,7 +150,7 @@ function registerToolOnMcp(
 
 /**
  * Connect the server over stdio (the standard MCP server transport — how
- * Claude Desktop / IDEs / other agents launch MCP servers) and start it.
+ * MCP hosts / IDEs / other agents launch MCP servers) and start it.
  * Resolves once listening; the process stays alive until stdin closes.
  */
 export async function connectStdio(server: McpServer): Promise<void> {

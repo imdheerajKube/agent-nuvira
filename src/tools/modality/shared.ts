@@ -1,7 +1,7 @@
 /**
  * I2–I5 — shared helpers for the modality packs.
  *
- * Every pack follows the Hermes registry + availability-gating model: an
+ * Every pack follows a registry + availability-gating model: an
  * `isAvailable()` per backend, graceful degradation when unconfigured, and
  * artifacts written to a sandbox dir (env-overridable, never the project tree).
  */

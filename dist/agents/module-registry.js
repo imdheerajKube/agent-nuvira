@@ -275,7 +275,7 @@ export class ModuleRegistry {
             isBuiltin: true,
         });
         // H2 — delegate agent: fans out taskStep.delegation sub-agent specs in
-        // parallel (Freebuff spawn_agents / Hermes delegate_tool.py parity).
+        // parallel (spawn_agents / delegate_tool.py parity).
         registry.register('delegate', () => new DelegateAgent(), {
             name: 'Delegate',
             description: 'Fans out sub-agent delegation specs in parallel with fresh isolated contexts and aggregates their summary results',

@@ -1,7 +1,7 @@
 /**
  * E3b — The tool loop (`src/tools/tool-loop.ts`).
  *
- * Freebuff `run-agent-step.ts` parity, verified against the clone: the chat
+ * The chat
  * loop continues while the model emits tool calls and ends on a no-tools
  * response; think-only responses continue; tool-call errors force another
  * step so the model retries in-context with the error message.
@@ -166,13 +166,13 @@ export interface ToolLoopResult {
   generationFailed?: boolean;
 }
 
-/** Freebuff `isThinkOnlyResponse` parity: an orphan reasoning block or bare <think>. */
+/** An orphan reasoning block or bare <think> is a think-only response. */
 export function isThinkOnlyResponse(content: string): boolean {
   const trimmed = content.trim();
   if (!trimmed) return true;
   // Only a <think>…</think> block (no visible answer text).
   if (/^<think>[\s\S]*<\/think>\s*$/.test(trimmed)) return true;
-  // Only reasoning keywords with no substantive answer (Freebuff orphan reasoning).
+  // Only reasoning keywords with no substantive answer (orphan reasoning).
   if (/^(hmm|thinking|let me think|ok,? let'?s|considering)[.:\s]*$/i.test(trimmed.slice(0, 60))) return true;
   return false;
 }
@@ -263,7 +263,7 @@ function findMatchingBrace(text: string, start: number): number {
 }
 
 /**
- * Run one tool-call turn (Freebuff run-agent-step semantics):
+ * Run one tool-call turn:
  * generate → execute tools → feed results back → repeat until the model
  * returns a no-tools response (end turn), bounded by maxSteps.
  */
@@ -282,7 +282,7 @@ export async function runToolLoop(opts: ToolLoopOptions): Promise<ToolLoopResult
   // (derived from the registry's zod schemas, single source of truth).
   // I1 (toolsets): when the caller did not explicitly pick tools, gate the
   // schema to ENABLED toolsets only — the model never sees a disabled tool
-  // (Hermes capability-gating parity). Explicit toolNames win (caller intent).
+  // (Capability-gating). Explicit toolNames win (caller intent).
   const schemas: ToolJsonSchema[] = toolNames ? toolJsonSchemas(toolNames) : effectiveToolJsonSchemas(context.configManager);
 
   const thread: ToolMessage[] = [...messages];
@@ -334,7 +334,7 @@ export async function runToolLoop(opts: ToolLoopOptions): Promise<ToolLoopResult
     const { toolCalls } = response;
 
     if (toolCalls.length === 0) {
-      // No tools → end turn UNLESS the content is think-only (Freebuff
+      // No tools → end turn UNLESS the content is think-only (
       // isThinkOnlyResponse: continue instead of ending).
       if (deps.isThinkOnly ? deps.isThinkOnly(response.content) : isThinkOnlyResponse(response.content)) {
         // Feed an empty assistant step so the model continues in-context.
@@ -351,7 +351,7 @@ export async function runToolLoop(opts: ToolLoopOptions): Promise<ToolLoopResult
       };
     }
 
-    // ── Execute tool calls (Freebuff: results fed back, next step) ──────
+    // ── Execute tool calls (results fed back, next step) ──────────────
     thread.push({
       role: 'assistant',
       content: response.content,
@@ -370,7 +370,7 @@ export async function runToolLoop(opts: ToolLoopOptions): Promise<ToolLoopResult
       let resultText: string;
       if (!tool) {
         // Unknown tool — the error is fed back so the model retries with a
-        // known tool (Freebuff hadToolCallError parity).
+        // known tool (hadToolCallError handling).
         resultText = `Error: unknown tool "${call.name}". Available tools: ${schemas.map((s) => s.name).join(', ')}.`;
       } else if (!isToolEnabled(call.name, context.configManager)) {
         // I1 execution gate: a disabled tool is rejected at runtime even if
@@ -379,7 +379,7 @@ export async function runToolLoop(opts: ToolLoopOptions): Promise<ToolLoopResult
       } else {
         // I2: emit `tool:started` (before execution) + `tool:called` (after)
         // on the observability bus — drives the hooks registry's
-        // `post_tool_call` hook (Hermes hooks.py parity) AND the dashboard's
+        // the `post_tool_call` hook AND the dashboard's
         // step cards (P0.6: the GUI renders each call as a live card —
         // running → ok/error with duration + collapsible result). Timing is
         // wall-clock; `ok` mirrors the tool-result convention (Error: prefix).
@@ -393,7 +393,7 @@ export async function runToolLoop(opts: ToolLoopOptions): Promise<ToolLoopResult
           deps.onEvent?.(`   ⚙ ${call.name}(${summarizeArgs(call.arguments)})`);
           resultText = await deps.executeTool(call.name, call.arguments, ctx);
           // I3: a tool that returns {artifact, result} gets its deliverable
-          // recorded on the session (Hermes run.py parity) and only `result`
+          // recorded on the session and only `result`
           // is fed back to the model — the JSON payload is runtime metadata.
           resultText = appendToolArtifact(resultText, ctx.artifacts);
           ctx.emit?.('tool:called', {
@@ -427,7 +427,7 @@ export async function runToolLoop(opts: ToolLoopOptions): Promise<ToolLoopResult
       thread.push({ role: 'tool', toolCallId: call.id, content: resultText });
     }
 
-    // End-of-response semantics (Freebuff contract: "END EVERY RESPONSE by
+    // End-of-response semantics (the contract: "END EVERY RESPONSE by
     // calling suggest_followups"): when the model delivered its answer and
     // ended with a SUCCESSFUL suggest_followups, the turn is complete — do NOT
     // request another step. That previous behavior forced the model to keep

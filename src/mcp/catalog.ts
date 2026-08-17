@@ -1,7 +1,7 @@
 /**
  * I7 P2 — Curated MCP catalog (`src/mcp/catalog.ts`).
  *
- * Mirrors Hermes' `optional-mcps/<name>/manifest.yaml` policy: a vetted list
+ * A vetted list
  * of MCP servers with EXACT-VERSION pins (no floating tags), a "vetted by"
  * stamp, and `prompt-secret` env placeholders that are resolved at install
  * time (from the environment or an explicit value) and written into the

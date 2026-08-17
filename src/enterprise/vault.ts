@@ -2,7 +2,7 @@
  * vault.ts — Secret Vault (revamp Phase A1). OS-aware, platform-independent.
  *
  * The vault is a STACK of OS-native credential backends selected at open time
- * (mirrors Hermes `agent/credential_persistence.py` / `credential_sources/`
+ * (
  * where keychain, file, and env sources are swappable behind one persistence
  * layer). Priority, always leveraging the OS credential store rather than a
  * bespoke hardened format:
@@ -33,7 +33,7 @@
  *
  * Guarantees:
  * - `getPassword`/`setPassword`/`deletePassword` are the ONLY operations
- *   callers use — backend selection is internal (Hermes `CredentialSource`
+ *   callers use — backend selection is internal (`CredentialSource`
  *   shape). A sync read path exists for ConfigManager's read-time ref
  *   resolution (every runtime ConfigManager is a fresh instance).
  * - Testable without touching the real keychain: `Vault.open` accepts an
@@ -48,7 +48,7 @@
  * - `buff doctor` reports the active vault tier + platform backend.
  *
  * @see AGENT_NUVIRA_MAJOR_REVAMP_PLAN.md — Phase A1 (Implementation reference:
- *      Hermes `credential_persistence.py` + `credential_sources/`, provider-
+ *      `credential_persistence.py` + `credential_sources/`, provider-
  *      swappable storage). Cross-platform requirement: the agent must run
  *      identically on macOS / Windows / Linux / containers.
  */

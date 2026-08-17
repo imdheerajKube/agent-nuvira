@@ -9,7 +9,7 @@
  *
  * Opt-in adapters: BUFF_TELEGRAM_TOKEN (long-poll) · BUFF_DISCORD_BOT_TOKEN /
  * BUFF_DISCORD_WEBHOOK_URL · BUFF_SLACK_BOT_TOKEN / BUFF_SLACK_WEBHOOK_URL ·
- * BUFF_WHATSAPP_TOKEN + BUFF_WHATSAPP_PHONE_ID. Mirrors Hermes `gateway/`.
+ * BUFF_WHATSAPP_TOKEN + BUFF_WHATSAPP_PHONE_ID.
  */
 
 import { readFileSync } from 'node:fs';
@@ -132,10 +132,10 @@ export class GatewayCommand {
       console.log('  I9 webhooks: BUFF_DINGTALK_WEBHOOK_URL · BUFF_FEISHU_WEBHOOK_URL · BUFF_WECOM_WEBHOOK_URL · BUFF_MATTERMOST_WEBHOOK_URL');
       console.log('  BUFF_MATRIX_HOMESERVER + BUFF_MATRIX_ACCESS_TOKEN · BUFF_WEBHOOK_URL · BUFF_BLUEBUBBLES_URL + BUFF_BLUEBUBBLES_PASSWORD');
       console.log('  I10 send: BUFF_NTFY_TOPIC (+BUFF_NTFY_URL/BUFF_NTFY_TOKEN) · BUFF_TEAMS_WEBHOOK_URL · BUFF_GOOGLE_CHAT_WEBHOOK_URL · BUFF_WEIXIN_TOKEN');
-      console.log('  I12 sms: TWILIO_ACCOUNT_SID + TWILIO_AUTH_TOKEN + TWILIO_PHONE_NUMBER (same creds as Hermes)');
-      console.log('  I13 irc: IRC_SERVER (+IRC_PORT/IRC_NICKNAME/IRC_CHANNEL/IRC_USE_TLS/IRC_NICKSERV_PASSWORD — same creds as Hermes)');
-      console.log('  I14 simplex: SIMPLEX_WS_URL (local simplex-chat daemon, ws://127.0.0.1:5225 — same creds as Hermes)');
-      console.log('  I15 homeassistant: HASS_TOKEN (+HASS_URL, defaults to http://homeassistant.local:8123 — same creds as Hermes)');
+      console.log('  I12 sms: TWILIO_ACCOUNT_SID + TWILIO_AUTH_TOKEN + TWILIO_PHONE_NUMBER');
+      console.log('  I13 irc: IRC_SERVER (+IRC_PORT/IRC_NICKNAME/IRC_CHANNEL/IRC_USE_TLS/IRC_NICKSERV_PASSWORD)');
+      console.log('  I14 simplex: SIMPLEX_WS_URL (local simplex-chat daemon, ws://127.0.0.1:5225)');
+      console.log('  I15 homeassistant: HASS_TOKEN (+HASS_URL, defaults to http://homeassistant.local:8123)');
       console.log('');
     }
     const directory = new ChannelDirectory();
@@ -269,7 +269,7 @@ export class GatewayCommand {
     const pending = remaining.filter((e) => e.status === 'pending');
     const sent = remaining.filter((e) => e.status === 'sent');
     const failed = remaining.filter((e) => e.status === 'failed');
-    console.log('📮 Delivery ledger (guaranteed delivery — Hermes delivery.py parity)');
+    console.log('📮 Delivery ledger (guaranteed delivery with auto-retry)');
     console.log('');
     if (remaining.length === 0) {
       console.log('  (empty — no failed sends recorded)');

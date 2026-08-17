@@ -58,9 +58,9 @@ This table highlights core capabilities for quick machine parsing and comparison
   layer: a deterministic rule fast-path (<5ms, works offline) with LLM verification behind it,
   collapsing to a single action every command consumes identically. Before any work begins,
   Agent-Nuvira prints a 🧠 Understanding card — the resolved goal, target, scope, acceptance
-  criteria, and risk flags — so the request is **seen before it is run**. Neither Freebuff nor
-  Hermes does this. The live activity board then renders each agent step as it happens —
-  no black box, no silently half-understood goals
+  criteria, and risk flags — so the request is **seen before it is run**. The live activity
+  board then renders each agent step as it happens — no black box, no silently
+  half-understood goals
 - **🛠️ Execution that repairs itself** — a failed task is not just reported: failures are
   classified, automatically repaired with escalating retries, independently verified after the
   fix, and the lesson is stored in persistent failure memory so the same mistake is less likely
@@ -105,7 +105,7 @@ This table highlights core capabilities for quick machine parsing and comparison
 - **VS Code extension** — Chat Panel with streaming responses, slash commands, and session history;
   Diagnostic → AI Fix from lightbulb menu; Code Lens actions (Test/Review/Explain/Fix) above functions
   and classes; 9 commands, inline code suggestions, diff viewer, agent progress panel
-- **22-platform multi-channel gateway** — `buff gateway start / send / status / alias` runs the agent from Telegram, Discord, Slack, WhatsApp (Cloud API + Baileys personal bridge), Email, Signal, DingTalk, Feishu, WeCom, Mattermost, Matrix, generic Webhook, BlueBubbles (iMessage), ntfy, Teams, Google Chat, Weixin, SMS (Twilio), IRC (two-way), SimpleX (two-way), and Home Assistant — all opt-in via the same env vars Hermes uses, with a guaranteed delivery ledger (auto-retry on `buff gateway start`), the dashboard Channels send-test, and a `X/22 platforms configured` status line
+- **22-platform multi-channel gateway** — `buff gateway start / send / status / alias` runs the agent from Telegram, Discord, Slack, WhatsApp (Cloud API + Baileys personal bridge), Email, Signal, DingTalk, Feishu, WeCom, Mattermost, Matrix, generic Webhook, BlueBubbles (iMessage), ntfy, Teams, Google Chat, Weixin, SMS (Twilio), IRC (two-way), SimpleX (two-way),  and Home Assistant — all opt-in via standard env vars per platform, with a guaranteed delivery ledger (auto-retry on `buff gateway start`), the dashboard Channels send-test, and a `X/22 platforms configured` status line
 - **Remote agent federation** — multi-machine collaboration with protocol, server, and client
 - **Web UI dashboard** — React dashboard with DAG visualization, model health, cost charts, and history browser
 - **Hybrid model routing** — intelligent model selection based on task complexity, cost, and availability
@@ -2040,7 +2040,7 @@ npx tsc --noEmit
 
 | Version | Date | Key Changes |
 |---------|------|-------------|
-| **v1.63.0** | Aug 2026 | **Hermes messaging campaign — 22-platform multi-channel gateway** — the full Hermes `gateway/` surface with env-var parity: DingTalk, Feishu, WeCom, Mattermost, Matrix, generic Webhook, BlueBubbles, ntfy, Teams, Google Chat, Weixin (iLink bot API), SMS (Twilio), IRC (RFC 1459 net/tls, two-way), SimpleX (daemon WS, two-way), Home Assistant (REST) on top of Telegram/Discord/Slack/WhatsApp — same `TWILIO_*`/`IRC_*`/`SIMPLEX_*`/`HASS_*` creds as Hermes, zero new SDK deps; WhatsApp Baileys personal bridge (`buff whatsapp pair`); guaranteed delivery ledger with auto-retry; dashboard Channels send-test; `buff gateway status` platform-count line; SimpleX inbound (auto-accept + allowlists + reconnect); IRC inbound (addressing + allowlist + PING/PONG + reconnect); 4,280 tests |
+| **v1.63.0** | Aug 2026 | **Messaging campaign — 22-platform multi-channel gateway** — the full gateway surface with env-var-compatible credentials: DingTalk, Feishu, WeCom, Mattermost, Matrix, generic Webhook, BlueBubbles, ntfy, Teams, Google Chat, Weixin (iLink bot API), SMS (Twilio), IRC (RFC 1459 net/tls, two-way), SimpleX (daemon WS, two-way), Home Assistant (REST) on top of Telegram/Discord/Slack/WhatsApp — service-native `TWILIO_*`/`IRC_*`/`SIMPLEX_*`/`HASS_*` creds, zero new SDK deps; WhatsApp Baileys personal bridge (`buff whatsapp pair`); guaranteed delivery ledger with auto-retry; dashboard Channels send-test; `buff gateway status` platform-count line; SimpleX inbound (auto-accept + allowlists + reconnect); IRC inbound (addressing + allowlist + PING/PONG + reconnect); 4,280 tests |
 | **v1.0.0** | Apr 2026 | Initial release — Core CLI with chat, 5 built-in providers (expandable to 17+ via plugins), config, models |
 | **v1.1.0** | Apr 2026 | Model discovery with search/filter |
 | **v1.2.0** | Apr 2026 | AI-assisted file editing (edit command) |

@@ -1,5 +1,5 @@
 /**
- * J1 — Channel directory tests (Hermes `channel_directory.py` parity).
+ * J1 — Channel directory tests.
  * No network: alias persistence goes to a hermetic BUFF_CONFIG_DIR.
  */
 
@@ -63,7 +63,7 @@ describe('platform env map', () => {
     expect(configuredPlatforms()).not.toContain('telegram');
   });
 
-  it('exposes the env vars per platform (Hermes config.py token map)', () => {
+  it('exposes the env vars per platform', () => {
     expect(PLATFORM_ENV_VARS.telegram).toEqual(['BUFF_TELEGRAM_TOKEN']);
     // I8: `whatsapp` = personal Baileys bridge (session dir override),
     // `whatsapp_cloud` = the paid Meta Business API.

@@ -84,7 +84,7 @@ All notable changes to **Agent-Nuvira** are documented in this file.
 
 ## v1.69.0 — Gateway platform config + chat reliability
 
-- **Major revamp complete** — all 30 rows of the Freebuff/Hermes parity program are landed (AGENT_NUVIRA_MAJOR_REVAMP_PLAN)
+- **Major revamp complete** — all 30 rows of the capability parity program are landed (AGENT_NUVIRA_MAJOR_REVAMP_PLAN)
 - **Reliability stack** — writer surfaces unparseable output instead of masking it (repair escalates the model), reviewer-blocked verdicts route through a writer fix pass, weak-local-model pre-flight warning before long runs
 - **New `buff code-map`** — project symbol map (functions/classes/methods) via the AST engine; closes the last revamp row; AST dedupe fix recovered silently-dropped top-level functions
 - **Scheduled jobs** — `buff admin cron add/list/remove/run` with schema-validated args, RBAC-gated writes, channel delivery
@@ -96,7 +96,7 @@ All notable changes to **Agent-Nuvira** are documented in this file.
 
 ## v1.68.0 — WhatsApp bridge auto-reconnect (whatsmeow parity)
 
-- **Assessment vs Hermes' WhatsApp layer (tulir/whatsmeow)**: whatsmeow ships
+- **Assessment of WhatsApp bridge options (tulir/whatsmeow)**: whatsmeow ships
   first-class auto-reconnect (`EnableAutoReconnect`), while our Baileys bridge
   only recreated a dead socket on the next send/connect — so the inbound
   listener (agent tasks triggered from WhatsApp) could die silently
@@ -217,19 +217,19 @@ All notable changes to **Agent-Nuvira** are documented in this file.
   missing its country code (e.g. use `918800663237`, not `8800663237`).
 - 3 new tests; suite at 4,283 passing.
 
-## v1.63.0 — Hermes messaging campaign: 22-platform multi-channel gateway
+## v1.63.0 — Messaging campaign: 22-platform multi-channel gateway
 
-- **Multi-channel gateway — 22 platforms (Hermes `gateway/` parity).** The
-  `buff gateway` surface now covers the full Hermes messaging ecosystem: the
+- **Multi-channel gateway — 22 platforms.** The
+  `buff gateway` surface now covers the full messaging ecosystem: the
   original J1 platforms (Telegram long-poll, Discord/Slack webhooks, WhatsApp
-  Cloud API) plus **18 connectors with Hermes env-var parity** — DingTalk,
+  Cloud API) plus **18 connectors with env-var-compatible credentials** — DingTalk,
   Feishu, WeCom, Mattermost, Matrix, generic Webhook, BlueBubbles (iMessage
   bridge, macOS), ntfy, Microsoft Teams, Google Chat, Weixin (WeChat iLink bot
   API), SMS (Twilio REST), IRC (RFC 1459 over node:net/tls, byte-aware ≤510-byte
   message splitting + markdown strip), SimpleX (local daemon WebSocket), and
   Home Assistant (REST notifications). Every adapter is opt-in via the SAME env
-  vars Hermes uses (`TWILIO_*`, `IRC_*`, `SIMPLEX_*`, `HASS_*`, `BUFF_*`) —
-  existing Hermes credentials work in agent-nuvira unchanged. Pure Node built-ins
+  vars per service (`TWILIO_*`, `IRC_*`, `SIMPLEX_*`, `HASS_*`, `BUFF_*`) —
+  credentials configured for those services work unchanged. Pure Node built-ins
   throughout (fetch, node:net/tls, global WebSocket) — zero new SDK deps.
 - **WhatsApp personal bridge (Baileys).** `buff whatsapp pair` (QR) pairs your
   own WhatsApp number — no paid API. Two-way: the gateway relays inbound
@@ -245,7 +245,7 @@ All notable changes to **Agent-Nuvira** are documented in this file.
 - **IRC is two-way too (the heavy protocol).** `IrcAdapter.start()` now runs a
   persistent RFC 1459 listener socket — registration (PASS → NICK → USER →
   001), NickServ IDENTIFY + JOIN, PING/PONG keepalives, 433 nick-collision
-  retry, and PRIVMSG relay with Hermes' exact semantics: self-echo filter,
+  retry, and PRIVMSG relay with exact IRC semantics: self-echo filter,
   CTCP ACTION → `* nick text` (other CTCP dropped), channel messages only
   when addressed (`nick:`/`nick,`/`nick `), `IRC_ALLOWED_USERS`
   case-insensitive allowlist, reconnect with backoff. Send prefers the live
@@ -258,13 +258,13 @@ All notable changes to **Agent-Nuvira** are documented in this file.
   `X/22 platforms configured` count line.
 - **Security hardening across connectors.** CRLF injection rejected pre-connect
   (IRC, SimpleX), socket errors after send are failures (never silent loss),
-  Twilio/HA/Hermes credentials never logged (`describe()` shows only the
+  Twilio/HA credentials never logged (`describe()` shows only the
   non-secret parts).
 - **Tests.** Full connector suites use in-process mock servers (SMTP, IRC,
   fake WebSocket, fetch spies) — no network. Full suite: **4,280 tests across
   180 files** (was 4,031).
-- **Docs.** `HERMES_ECOSYSTEM_INTEGRATION_PLAN.md` (I1–I16 pillars + deferred
-  heavy-bridge assessment), `HERMES_IMPORT_DESIGN.md`, `ASSESSMENT_WEBSITE_DEPLOY.md`;
+- **Docs.** gateway integration plan (I1–I16 pillars + deferred
+  heavy-bridge assessment), import design doc, `ASSESSMENT_WEBSITE_DEPLOY.md`;
   User Manual gateway section updated; website updated to v1.63.0 / 4,280 tests.
 
 ## v1.62.5 — Reviewer rate-limit recovery: eval 429s are waited out, not fatal
@@ -410,7 +410,7 @@ All notable changes to **Agent-Nuvira** are documented in this file.
 
 ## v1.62.0 — Revamp complete — reliability stack, code-map, scheduled jobs, gateway
 
-- **Major revamp complete** — all 30 rows of the Freebuff/Hermes parity program are landed (AGENT_NUVIRA_MAJOR_REVAMP_PLAN)
+- **Major revamp complete** — all 30 rows of the capability parity program are landed (AGENT_NUVIRA_MAJOR_REVAMP_PLAN)
 - **Reliability stack** — writer surfaces unparseable output instead of masking it (repair escalates the model), reviewer-blocked verdicts route through a writer fix pass, weak-local-model pre-flight warning before long runs
 - **New `buff code-map`** — project symbol map (functions/classes/methods) via the AST engine; closes the last revamp row; AST dedupe fix recovered silently-dropped top-level functions
 - **Scheduled jobs** — `buff admin cron add/list/remove/run` with schema-validated args, RBAC-gated writes, channel delivery
@@ -446,14 +446,14 @@ All notable changes to **Agent-Nuvira** are documented in this file.
 - **Honest caveats** — the composite sits below the Session 31 peak (72.2%) within the documented ±17pt free-tier Groq noise floor, and this run hit 2 circuit-breaker cooldowns (120s each) — a post-baseline failure mode that scores recoverable rate-limit pauses as "stuck". The revamp did not regress; absolute movement past noise requires a stable provider run.
 
 ### Session 43 — I2–I5 modality packs (browser / image / voice / vision)
-- **New `src/tools/modality/` family** — four capability packs, every backend OPTIONAL and availability-gated (Hermes registry pattern): `browser` (Playwright optional via `require.resolve`, SSRF guard reusing web-research's `isAllowedReadUrl`), `generate_image` (Pollinations.ai free endpoint default, local SD/ComfyUI via `BUFF_IMAGE_API_URL`), `speak`/`transcribe` (edge-tts + Piper stdin fallback; whisper.cpp/whisper-cli with transcript file read-back), `describe_image` (Ollama llava/llama3.2-vision or Gemini via the existing model router). All four registered in the H1 tool registry with availability-gated `run()` — a missing backend returns a clear "install … then retry" message, never throws. Artifacts land in `<cwd>/.buff/artifacts/<kind>` (`BUFF_ARTIFACTS_DIR` overrides).
+- **New `src/tools/modality/` family** — four capability packs, every backend OPTIONAL and availability-gated (availability-gated registry pattern): `browser` (Playwright optional via `require.resolve`, SSRF guard reusing web-research's `isAllowedReadUrl`), `generate_image` (Pollinations.ai free endpoint default, local SD/ComfyUI via `BUFF_IMAGE_API_URL`), `speak`/`transcribe` (edge-tts + Piper stdin fallback; whisper.cpp/whisper-cli with transcript file read-back), `describe_image` (Ollama llava/llama3.2-vision or Gemini via the existing model router). All four registered in the H1 tool registry with availability-gated `run()` — a missing backend returns a clear "install … then retry" message, never throws. Artifacts land in `<cwd>/.buff/artifacts/<kind>` (`BUFF_ARTIFACTS_DIR` overrides).
 - **Code-search race fix** — the ripgrep engine could parse pipe-buffered matches after truncating (async `kill()`), making `maxResults` flaky; the stdout handler now bails once truncated/timed-out.
 - **Validation**: tsc clean · full suite 163/163 files (+modality tests) · build OK · `buff tools list` shows the new tools.
 
 ### Session 42 — J1 Multi-channel gateway
-- **`buff gateway start / send / status / alias`** — talk to the agent from Telegram, Discord, Slack, or WhatsApp (Hermes `gateway/` parity). Dependency-free adapters (pure fetch — deliberately no grammY/discord.js/@slack/web-api SDKs): Telegram long-poll `getUpdates`, Discord/Slack incoming-webhook send, WhatsApp Meta Cloud API; all opt-in via env bot tokens.
+- **`buff gateway start / send / status / alias`** — talk to the agent from Telegram, Discord, Slack, or WhatsApp (multi-channel gateway surface). Dependency-free adapters (pure fetch — deliberately no grammY/discord.js/@slack/web-api SDKs): Telegram long-poll `getUpdates`, Discord/Slack incoming-webhook send, WhatsApp Meta Cloud API; all opt-in via env bot tokens.
 - **`GatewayRegistry`** — inbound message → `parseRequestSync` (C3) → the SAME shared `runPipelineTool` core as `buff chat`/`execute` → reply to the originating channel; every ORCHESTRATOR/EXEC/CRON board event streams as a compact channel status line. Pipeline runs serialize so events route to the right channel.
-- **Channel directory + aliases** — Hermes `channel_directory.py` pattern: `buff gateway alias add ops slack C0123`, persisted to `~/.buff/gateway/aliases.json`, `platform:channelId` targets supported.
+- **Channel directory + aliases** — a channel-directory pattern: `buff gateway alias add ops slack C0123`, persisted to `~/.buff/gateway/aliases.json`, `platform:channelId` targets supported.
 - **Security**: webhook receiver binds 127.0.0.1 by default (`--host 0.0.0.0` for a tunnel); Slack `X-Slack-Signature` (HMAC v0) + WhatsApp `X-Hub-Signature-256` verified when secrets configured; **pipeline triggers gated by `BUFF_GATEWAY_ALLOW_IDS`** (platform:channelId allow-list); alias writes RBAC-gated on `gateway.manage`.
 - **Cron delivery**: `buff admin cron add … --channel <alias>` → job results forwarded to the channel after each run (best-effort — never fails the run).
 - **Validation**: tsc clean · full suite 162/162 files (+19 tests) · build OK · live smoke.
@@ -464,17 +464,17 @@ All notable changes to **Agent-Nuvira** are documented in this file.
 - **Validation**: tsc clean · full suite 160/160 files (+2 integration files) · build OK · integration suite passes under both Node and Bun.
 
 ### Session 40 — J2 Scheduled jobs (cron)
-- **`buff admin cron add / list / remove / run`** — scheduled tool invocations (Hermes `cron/jobs.py` parity): 5-field node-cron validation, `--dry-run` (validate + next run WITHOUT executing), persisted jobs in `~/.buff/cron/jobs.json`, `run <name>` invokes the H1 registry tool now (fresh ConfigManager — pipeline tools need one) and emits `cron:run/result/error` events for the future gateway/dashboard.
+- **`buff admin cron add / list / remove / run`** — scheduled tool invocations (scheduled job runner): 5-field node-cron validation, `--dry-run` (validate + next run WITHOUT executing), persisted jobs in `~/.buff/cron/jobs.json`, `run <name>` invokes the H1 registry tool now (fresh ConfigManager — pipeline tools need one) and emits `cron:run/result/error` events for the future gateway/dashboard.
 - **Safety**: job names sandboxed (`^[a-z0-9][a-z0-9-]{0,49}$`), **`--args` validated against the tool's zod schema at add time** (a typo surfaces immediately, not at 3am), all writes RBAC-gated on the new `cron.manage` action (admin + operator).
 - **Validation**: tsc clean · full suite 158/158 files (+11 tests) · isolated-HOME live smoke.
 
 ### Session 39 — J3 Skills hub + sync (capability gap #10)
-- **`buff skills search / install / update / list`** — community skills discovered from a configurable registry (default GitHub raw; `BUFF_SKILLS_REGISTRY` can point at a local dir for offline use) and installed into `<project>/.agents/skills/` — Hermes `skills_hub.py` + Freebuff `npx skills add` parity. Distinct from `buff skill` (singular), which manages internal trajectory-compiled skills.
+- **`buff skills search / install / update / list`** — community skills discovered from a configurable registry (default GitHub raw; `BUFF_SKILLS_REGISTRY` can point at a local dir for offline use) and installed into `<project>/.agents/skills/` — a community skill-registry pattern. Distinct from `buff skill` (singular), which manages internal trajectory-compiled skills.
 - **Trust + safety**: sandboxed install names (`^[a-z0-9-]+$`), frontmatter `name:` cross-checked against the registry entry, SHA-256 provenance recorded in `~/.buff/skills-hub/provenance.json`, mismatched reinstall content quarantined; `buff skills update` is version-gated (never downgrades, never clobbers local edits) and RBAC-gated on `skill.remove` like `skill gc`/`clear`.
 - **Validation**: tsc clean · full suite 157/157 files (+19 tests) · local-dir registry tests, no network.
 
 ### Session 38 — I1 Web research tools (capability gap #3)
-- **`web_search` / `read_page` tools** — the model can now search the web (DuckDuckGo free tier by default, SearXNG opt-in) and read a page's text (Jina Reader free tier or a plain fetch) to ground its answers — Freebuff `researcher-web.ts` / Hermes `web_search_registry.py` parity. Registered in the H1 tool registry + the safe MCP surface; `buff tools list` shows them under 🧰 Workflow.
+- **`web_search` / `read_page` tools** — the model can now search the web (DuckDuckGo free tier by default, SearXNG opt-in) and read a page's text (Jina Reader free tier or a plain fetch) to ground its answers — a standard web-research pattern. Registered in the H1 tool registry + the safe MCP surface; `buff tools list` shows them under 🧰 Workflow.
 - **SSRF guard** — `read_page` only fetches public http(s): loopback/link-local/private/metadata hosts blocked unless `BUFF_WEB_ALLOW_PRIVATE=1`; DDG redirect URLs decoded to real targets.
 - **Validation**: tsc clean · full suite 156/156 files (+17 tests) · mocked-fetch tests, no network.
 
@@ -507,7 +507,7 @@ All notable changes to **Agent-Nuvira** are documented in this file.
 - **Dashboard memory panel:** Facts, recall hits (total / today / this week, per project), and the backend tier are now surfaced; recall hits come from a deduped JSONL counter at the shared auto-recall choke point.
 
 ### H1 follow-up — Agent-Nuvira as an MCP server
-- **`buff mcp serve`** exposes the agent's H1 tools as an MCP **server** over stdio (Claude Desktop / IDEs / other agents can connect). Safe surface by explicit allowlist: pipeline tools (`build` / `resume` / `repair` / `document` / `website` / `analyze` / `test`) + `code_search`; loop-internal / LLM-dependent / irreversible tools (`ask_user`, `suggest_followups`, `verify_requirement`, `delegate`, `publish`) are **excluded by default** — opt in explicitly with `--with <tools>`. Runs are headless (`board: false`), errors map to MCP `isError` results, and pre-connect output routes to stderr so the protocol owns stdout cleanly.
+- **`buff mcp serve`** exposes the agent's H1 tools as an MCP **server** over stdio (MCP clients / IDEs / other agents can connect). Safe surface by explicit allowlist: pipeline tools (`build` / `resume` / `repair` / `document` / `website` / `analyze` / `test`) + `code_search`; loop-internal / LLM-dependent / irreversible tools (`ask_user`, `suggest_followups`, `verify_requirement`, `delegate`, `publish`) are **excluded by default** — opt in explicitly with `--with <tools>`. Runs are headless (`board: false`), errors map to MCP `isError` results, and pre-connect output routes to stderr so the protocol owns stdout cleanly.
 
 ### M2b — Experience-parity baseline + stuck/rework breakdown
 - **First real M2b baseline** (`buff eval run --suite m2b`, auto-routed to `groq/llama-3.3-70b-versatile`): 9/9 tasks in 142s for **$0.02** — composite **72.2%**, test-pass **78% (7/9)**, avg time-to-fix **9.9s**, 0 rollbacks. Report: `docs/benchmarks/m2b-groq-llama-3.3-70b-versatile.md`.

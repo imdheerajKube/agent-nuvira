@@ -102,8 +102,8 @@ export const EventNames = {
   // I2 — tool-loop execution (drives the hooks registry's post_tool_call hook)
   TOOL_CALLED: 'tool:called',
 
-  // Delegation events (H2 — sub-agent spawning, Freebuff spawn_agents /
-  // Hermes delegate_tool.py parity). Emitted by src/agents/tools/delegation.ts
+  // Delegation events (H2 — sub-agent spawning, `spawn_agents` /
+  // `delegate_tool.py` parity). Emitted by src/agents/tools/delegation.ts
   // so the E2 board renders live delegation lanes and the web dashboard DAG
   // can consume the same stream.
   DELEGATION_SPAWN: 'delegation:spawn',
