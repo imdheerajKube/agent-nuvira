@@ -23,6 +23,7 @@ import { recordRoutingDecision } from '../learning/routing-history.js';
 import { shouldConfirmFailover, promptFailoverChoice } from './failover-prompt.js';
 import { buildAutoResolveOptions } from '../learning/resolve-options.js';
 import { parseRequestSync } from '../nlu/parser.js';
+import { PlanStore } from '../tools/plan-store.js';
 import { withLogCorrelation } from '../enterprise/log.js';
 import { recordMetricTime, getMetrics } from '../enterprise/metrics.js';
 import { resolveDispatch } from '../nlu/actions.js';
@@ -251,6 +252,12 @@ export class ChatCommand extends BaseCommand {
      */
     sessionTransientFailedProviders = new Set();
     /**
+     * P0.7 — default plan store for this ChatCommand instance (the dashboard
+     * console injects a per-session store instead; this is the CLI/execute
+     * default so a plan survives across turns within one chat session).
+     */
+    planStore = new PlanStore();
+    /**
      * Whether the cold-start probe has fired this session. On a fresh registry
      * (no verified models yet) the FIRST auto pick fires a background
      * probe + spot-check so routing learns from real API data instead of
@@ -285,7 +292,7 @@ export class ChatCommand extends BaseCommand {
         opts.onProgress?.(`   🧠 routed to ${provider.name}${model ? ` / ${model}` : ''} — working…`);
         const parsed = parseRequestSync(message);
         const dispatchDecision = resolvePipelineDispatch(parsed, { dev: opts.dev, text: message });
-        const answer = await this.runChatAnswer(message, opts.history ?? [], { type, provider, model }, { provider: mergedOpts.provider, model: mergedOpts.model, dev: mergedOpts.dev, cache: true }, true, { auto: autoMode }, parsed, { askUser: opts.askUser, onProgress: opts.onProgress, onToolCall: opts.onToolCall, gateway: opts.gateway });
+        const answer = await this.runChatAnswer(message, opts.history ?? [], { type, provider, model }, { provider: mergedOpts.provider, model: mergedOpts.model, dev: mergedOpts.dev, cache: true }, true, { auto: autoMode }, parsed, { askUser: opts.askUser, onProgress: opts.onProgress, onToolCall: opts.onToolCall, onPlanChange: opts.onPlanChange, planStore: opts.planStore ?? this.planStore, gateway: opts.gateway });
         // No-model fallback: the tool loop could not generate a single response
         // AND the rules assessed a high-confidence pipeline intent — run the
         // pipeline directly (rules decide only when the model is unavailable; the
@@ -698,6 +705,10 @@ export class ChatCommand extends BaseCommand {
                 // stream). Other events keep flowing to the bus untouched.
                 if (ctxOverrides?.onToolCall && (event === 'tool:started' || event === 'tool:called')) {
                     ctxOverrides.onToolCall(event === 'tool:started' ? 'started' : 'called', data);
+                }
+                // P0.7 — forward plan mutations to the GUI (structured checklist).
+                if (ctxOverrides?.onPlanChange && event === 'plan:changed') {
+                    ctxOverrides.onPlanChange(data);
                 }
                 getEventBus().emit(event, data, source);
             },

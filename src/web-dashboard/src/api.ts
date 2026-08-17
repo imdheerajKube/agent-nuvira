@@ -814,6 +814,8 @@ export class DashboardAPI {
       onStatus?: (status: string) => void;
       /** P0.6 — a tool-call lifecycle step (rendered as a card). */
       onTool?: (t: { id: string; tool: string; phase: 'started' | 'called'; args?: string; ok?: boolean; result?: string; error?: string; durationMs?: number }) => void;
+      /** P0.7 — a plan mutation (rendered as a live checklist card). */
+      onPlan?: (p: { goal: string; steps: Array<{ id: string; description: string; status: string }>; revision: number }) => void;
       onQuestion?: (q: { questionId: string; question: string; choices: Array<{ label: string; description?: string }>; multiSelect: boolean }) => void;
     },
   ): () => void {
@@ -853,6 +855,22 @@ export class DashboardAPI {
             result: payload.result,
             error: payload.error,
             durationMs: payload.durationMs,
+          });
+        }
+      } catch { /* ignore malformed */ }
+    });
+    es.addEventListener('plan', (event) => {
+      try {
+        const payload = JSON.parse((event as MessageEvent).data) as {
+          goal?: string;
+          steps?: Array<{ id: string; description: string; status: string }>;
+          revision?: number;
+        };
+        if (payload.goal && Array.isArray(payload.steps)) {
+          handlers.onPlan?.({
+            goal: payload.goal,
+            steps: payload.steps,
+            revision: payload.revision ?? 0,
           });
         }
       } catch { /* ignore malformed */ }

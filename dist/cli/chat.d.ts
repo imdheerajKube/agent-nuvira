@@ -85,6 +85,12 @@ export declare class ChatCommand extends BaseCommand {
      */
     private sessionTransientFailedProviders;
     /**
+     * P0.7 — default plan store for this ChatCommand instance (the dashboard
+     * console injects a per-session store instead; this is the CLI/execute
+     * default so a plan survives across turns within one chat session).
+     */
+    private planStore;
+    /**
      * Whether the cold-start probe has fired this session. On a fresh registry
      * (no verified models yet) the FIRST auto pick fires a background
      * probe + spot-check so routing learns from real API data instead of
@@ -118,6 +124,17 @@ export declare class ChatCommand extends BaseCommand {
          * through to runChatAnswer's ctxOverrides; see ToolCallInfo.
          */
         onToolCall?: (phase: 'started' | 'called', info: ToolCallInfo) => void;
+        /**
+         * P0.7 — plan checklist: called on every plan_todo mutation with the
+         * structured snapshot (goal + steps + revision) so the GUI's checklist
+         * card updates in place.
+         */
+        onPlanChange?: (snapshot: import('../tools/plan-store.js').PlanSnapshot) => void;
+        /**
+         * P0.7 — the session's plan store (the dashboard console injects one per
+         * conversation so plans never leak across sessions).
+         */
+        planStore?: import('../tools/plan-store.js').PlanStoreLike;
         /** Live gateway for gateway_send (gateway-triggered chat answers reuse the connected bridge). */
         gateway?: ToolContext['gateway'];
     }): Promise<{

@@ -198,7 +198,11 @@ describe('toolset gating — the coding toolset owns the perception tools', () =
     for (const name of ['read_file', 'list_dir', 'glob', 'edit_file', 'write_file']) {
       expect(toolsetForTool(name)?.name).toBe('coding');
     }
-    expect(TOOLSETS.find((t) => t.name === 'coding')?.tools).toEqual(['read_file', 'list_dir', 'glob', 'edit_file', 'write_file', 'run_terminal']);
+    // DELIBERATE: P0.7 added plan_todo to the coding toolset (the plan
+    // checklist tracks multi-step coding work). Updated intentionally, not by
+    // accident — this is the count test the brief says must break on purpose.
+    expect(TOOLSETS.find((t) => t.name === 'coding')?.tools).toEqual(['read_file', 'list_dir', 'glob', 'edit_file', 'write_file', 'run_terminal', 'plan_todo']);
+    expect(toolsetForTool('plan_todo')?.name).toBe('coding');
   });
 
   it('the coding toolset is disabled → the tools are gated out', () => {
@@ -208,6 +212,7 @@ describe('toolset gating — the coding toolset owns the perception tools', () =
     expect(names).not.toContain('glob');
     expect(names).not.toContain('edit_file');
     expect(names).not.toContain('write_file');
+    expect(names).not.toContain('plan_todo');
     expect(names).toContain('code_search'); // untouched sibling toolset
   });
 });

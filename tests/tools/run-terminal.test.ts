@@ -172,10 +172,10 @@ describe('toolset gating — run_terminal joins the coding toolset', () => {
     expect(tool!.endsAgentStep).toBe(false);
   });
 
-  it('owns run_terminal in the coding toolset (six tools)', () => {
+  it('owns run_terminal in the coding toolset (seven tools — plan_todo joined in P0.7)', () => {
     expect(toolsetForTool('run_terminal')?.name).toBe('coding');
     expect(TOOLSETS.find((t) => t.name === 'coding')?.tools).toEqual([
-      'read_file', 'list_dir', 'glob', 'edit_file', 'write_file', 'run_terminal',
+      'read_file', 'list_dir', 'glob', 'edit_file', 'write_file', 'run_terminal', 'plan_todo',
     ]);
   });
 

@@ -35,13 +35,16 @@ class FakeEngine implements ChatEngine {
   progressLines: string[] = [];
   /** P0.6 — when set, the engine emits these tool calls via onToolCall. */
   toolCalls: Array<{ phase: 'started' | 'called'; tool: string; args?: Record<string, unknown>; ok?: boolean; result?: string; error?: string; durationMs?: number }> = [];
+  /** P0.7 — when set, the engine emits these plan mutations via onPlanChange. */
+  planChanges: Array<{ goal: string; steps: Array<{ id: string; description: string; status: string }>; revision: number }> = [];
   async answerOnce(message: string, opts?: unknown): Promise<{ content: string; followups: unknown[]; provider?: string; model?: string }> {
     this.calls.push({ message, opts });
-    const o = opts as { onProgress?: (line: string) => void; onToolCall?: (phase: 'started' | 'called', info: { id?: string; tool: string; args?: Record<string, unknown>; ok?: boolean; result?: string; error?: string; durationMs?: number }) => void };
+    const o = opts as { onProgress?: (line: string) => void; onToolCall?: (phase: 'started' | 'called', info: { id?: string; tool: string; args?: Record<string, unknown>; ok?: boolean; result?: string; error?: string; durationMs?: number }) => void; onPlanChange?: (p: { goal: string; steps: Array<{ id: string; description: string; status: string }>; revision: number }) => void };
     for (const line of this.progressLines) o.onProgress?.(line);
     for (const t of this.toolCalls) {
       o.onToolCall?.(t.phase, { id: `call_${t.tool}`, tool: t.tool, args: t.args, ok: t.ok, result: t.result, error: t.error, durationMs: t.durationMs });
     }
+    for (const p of this.planChanges) o.onPlanChange?.(p);
     return {
       content: `echo: ${message}`,
       followups: [{ prompt: 'What next?', label: 'Next' }],
@@ -253,6 +256,50 @@ describe('/api/chat', () => {
     expect(received[1]).toMatchObject({ tool: 'read_file', phase: 'called', id: 'call_read_file', ok: true, durationMs: 12 });
     expect(received[2]).toMatchObject({ tool: 'run_terminal', phase: 'started', args: '{command: "npm test"}' });
     expect(received[3]).toMatchObject({ tool: 'run_terminal', phase: 'called', ok: false, durationMs: 300 });
+  });
+
+  it('P0.7 — streams plan mutations over SSE (goal + steps + revision)', async () => {
+    engine.planChanges = [
+      { goal: 'Fix the failing test', steps: [{ id: 'reproduce', description: 'Reproduce', status: 'pending' }], revision: 1 },
+      { goal: 'Fix the failing test', steps: [{ id: 'reproduce', description: 'Reproduce', status: 'done' }], revision: 2 },
+    ];
+    const sessionId = 'plan-session-1';
+    const res = await fetch(`${baseUrl}/api/chat/${sessionId}/events?token=${encodeURIComponent(token)}`, { method: 'GET' });
+    expect(res.status).toBe(200);
+    const reader = res.body!.getReader();
+    const decoder = new TextDecoder();
+    let buffer = '';
+    const received: Array<Record<string, unknown>> = [];
+    const postPromise = authedFetch('/api/chat', 'POST', { sessionId, message: 'fix the test' });
+    const deadline = Date.now() + 4000;
+    while (Date.now() < deadline && received.length < 2) {
+      const result = await Promise.race([
+        reader.read(),
+        new Promise<{ done: true }>((resolve) => setTimeout(() => resolve({ done: true }), 250)),
+      ]);
+      if (result.done) break;
+      buffer += decoder.decode(result.value, { stream: true });
+      let idx: number;
+      while ((idx = buffer.indexOf('event: plan')) !== -1) {
+        buffer = buffer.slice(idx);
+        const lineIdx = buffer.indexOf('data: ');
+        const frameEnd = buffer.indexOf('\n\n');
+        if (lineIdx === -1 || frameEnd === -1) break;
+        const data = buffer.slice(lineIdx + 6, frameEnd);
+        try {
+          const payload = JSON.parse(data) as Record<string, unknown>;
+          if (payload.goal) received.push(payload);
+        } catch { /* partial frame */ }
+        buffer = buffer.slice(frameEnd + 2);
+      }
+    }
+    await reader.cancel();
+    const post = await postPromise;
+    engine.planChanges = [];
+    expect(post.status).toBe(200);
+    expect(received).toHaveLength(2);
+    expect(received[0]).toMatchObject({ goal: 'Fix the failing test', revision: 1 });
+    expect(received[1]).toMatchObject({ goal: 'Fix the failing test', revision: 2 });
   });
 
   it('rejects the SSE events endpoint without a valid token', async () => {

@@ -217,6 +217,44 @@ describe('ChatPage', () => {
     expect(unsub).toHaveBeenCalled();
   });
 
+  it('P0.7 — renders the live plan checklist and snapshots it into the reply', async () => {
+    mockAuthed('admin');
+    let planCb: ((p: { goal: string; steps: Array<{ id: string; description: string; status: string }>; revision: number }) => void) | null = null;
+    let unsub: (() => void) | null = null;
+    vi.spyOn(dashboardAPI, 'subscribeChat').mockImplementation((_sid, handlers) => {
+      planCb = handlers.onPlan ?? null;
+      unsub = vi.fn();
+      return unsub;
+    });
+    vi.spyOn(dashboardAPI, 'chatResolve').mockResolvedValue({ ok: true, matches: [] });
+    let resolveSend: (v: typeof OK_RESPONSE) => void = () => {};
+    vi.spyOn(dashboardAPI, 'chatSend').mockImplementation(
+      () => new Promise((resolve) => { resolveSend = resolve; }) as Promise<typeof OK_RESPONSE>,
+    );
+    render(<ChatPage />);
+    await waitFor(() => expect(screen.getByPlaceholderText(/Message the agent/)).toBeTruthy());
+
+    fireEvent.change(screen.getByPlaceholderText(/Message the agent/), { target: { value: 'fix the failing test' } });
+    fireEvent.submit(screen.getByPlaceholderText(/Message the agent/).closest('form')!);
+    await waitFor(() => expect(planCb).toBeTruthy());
+
+    // The plan is created — the checklist card appears live with the goal.
+    planCb!({ goal: 'Fix the failing test', steps: [{ id: 'reproduce', description: 'Reproduce the failure', status: 'pending' }], revision: 1 });
+    await waitFor(() => expect(screen.getByText('Fix the failing test')).toBeTruthy());
+    expect(screen.getByText('0/1 done')).toBeTruthy();
+    expect(screen.getByText('Reproduce the failure')).toBeTruthy();
+
+    // A later mutation updates the card IN PLACE (revision 2, status done).
+    planCb!({ goal: 'Fix the failing test', steps: [{ id: 'reproduce', description: 'Reproduce the failure', status: 'done' }], revision: 2 });
+    await waitFor(() => expect(screen.getByText('1/1 done')).toBeTruthy());
+
+    // On completion the plan snapshots into the assistant bubble.
+    resolveSend(OK_RESPONSE);
+    await waitFor(() => expect(screen.getByText('I checked the repo — the build is green.')).toBeTruthy());
+    await waitFor(() => expect(screen.getByText(/Plan: Fix the failing test/)).toBeTruthy());
+    expect(unsub).toHaveBeenCalled();
+  });
+
   it('P0.1 — renders the agent question card and answers it via chatRespond', async () => {
     mockAuthed('admin');
     let questionCb: ((q: { questionId: string; question: string; choices: Array<{ label: string }>; multiSelect: boolean }) => void) | null = null;
