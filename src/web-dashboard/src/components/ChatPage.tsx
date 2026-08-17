@@ -451,8 +451,8 @@ export default function ChatPage() {
           <p className="admin-hint">
             Each message runs the full agent loop in the dashboard process (same engine as{' '}
             <code>buff chat "&lt;prompt&gt;"</code>) — the provider API keys must be configured in the dashboard
-            process. Clarifications (<code>ask_user</code>) are declined in the GUI, so the agent proceeds on best
-            judgment.
+            process. Clarifications (<code>ask_user</code>) appear as a question card here — choose an answer or
+            skip (best judgment).
           </p>
         </>
       )}
