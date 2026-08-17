@@ -29,6 +29,15 @@ interface ChatMessage {
   steps?: string[];
   /** P0.6 — the tool calls that produced this answer (rendered as cards). */
   tools?: ToolStep[];
+  /** P0.7 — the plan this turn worked through (rendered as a checklist card). */
+  plan?: PlanView | null;
+}
+
+/** P0.7 — the plan checklist as rendered (goal + steps with statuses). */
+interface PlanView {
+  goal: string;
+  steps: Array<{ id: string; description: string; status: 'pending' | 'running' | 'done' | 'blocked' }>;
+  revision: number;
 }
 
 /** P0.6 — one tool-call lifecycle step, rendered as a card (started → called). */
@@ -72,6 +81,41 @@ interface ResolvedCommand {
 interface PendingResolve {
   ask: string;
   top: ResolvedCommand | null;
+}
+
+/** P0.7 — status icon for one checklist step. */
+function planStepIcon(status: string): string {
+  if (status === 'done') return '✅';
+  if (status === 'running') return '🔄';
+  if (status === 'blocked') return '⛔';
+  return '⬜';
+}
+
+/**
+ * P0.7 — render the plan checklist card: goal header + per-step status + a
+ * progress count ("3/5 done"). Updates in place as `plan` events arrive
+ * (each new revision replaces the card content).
+ */
+function PlanCard({ plan }: { plan: PlanView }) {
+  const done = plan.steps.filter((s) => s.status === 'done').length;
+  return (
+    <div className="chat-plan-card">
+      <div className="chat-plan-head">
+        <span className="chat-plan-icon">🗂️</span>
+        <span className="chat-plan-goal">{plan.goal}</span>
+        <span className="chat-plan-count">{done}/{plan.steps.length} done</span>
+      </div>
+      <div className="chat-plan-steps">
+        {plan.steps.map((s) => (
+          <div key={s.id} className={`chat-plan-step chat-plan-step-${s.status}`}>
+            <span className="chat-plan-step-icon">{planStepIcon(s.status)}</span>
+            <span className="chat-plan-step-text">{s.description}</span>
+            <span className="chat-plan-step-status">{s.status}</span>
+          </div>
+        ))}
+      </div>
+    </div>
+  );
 }
 
 /**
@@ -128,6 +172,8 @@ export default function ChatPage() {
   const [liveSteps, setLiveSteps] = useState<string[]>([]);
   // P0.6 — live tool-call cards (upserted by id: started creates, called completes).
   const [liveTools, setLiveTools] = useState<ToolStep[]>([]);
+  // P0.7 — the live plan checklist (updates in place on each plan:changed).
+  const [livePlan, setLivePlan] = useState<PlanView | null>(null);
   // Plain-English → CLI short-circuit: a confident command match shows a
   // confirm card instead of burning a model turn; ambiguous asks show choices.
   const [pendingResolve, setPendingResolve] = useState<PendingResolve | null>(null);
@@ -136,6 +182,7 @@ export default function ChatPage() {
   // every step.
   const liveStepsRef = useRef<string[]>([]);
   const liveToolsRef = useRef<ToolStep[]>([]);
+  const livePlanRef = useRef<PlanView | null>(null);
   const sessionIdRef = useRef<string>(newSessionId());
   const subRef = useRef<(() => void) | null>(null);
   const listRef = useRef<HTMLDivElement | null>(null);
@@ -187,6 +234,8 @@ export default function ChatPage() {
       liveStepsRef.current = [];
       setLiveTools([]);
       liveToolsRef.current = [];
+      setLivePlan(null);
+      livePlanRef.current = null;
       setMessages((m) => [...m, { role: 'user', content: clean }]);
       setInput('');
       setBusy(true);
@@ -234,6 +283,13 @@ export default function ChatPage() {
           liveToolsRef.current = next;
           setLiveTools(next);
         },
+        // P0.7 — live checklist: each plan_todo mutation replaces the card
+        // (revision-ordered, in place). Snapshot into the final message.
+        onPlan: (p) => {
+          const view: PlanView = { goal: p.goal, steps: p.steps, revision: p.revision };
+          livePlanRef.current = view;
+          setLivePlan(view);
+        },
       });
       const r = await dashboardAPI.chatSend(sessionId, clean);
       subRef.current?.();
@@ -249,6 +305,7 @@ export default function ChatPage() {
             followups: r.followups,
             steps: liveStepsRef.current,
             tools: liveToolsRef.current,
+            plan: livePlanRef.current,
           },
         ]);
       } else {
@@ -366,6 +423,8 @@ export default function ChatPage() {
     liveStepsRef.current = [];
     setLiveTools([]);
     liveToolsRef.current = [];
+    setLivePlan(null);
+    livePlanRef.current = null;
     setError('');
     setMeta(null);
   }, []);
@@ -409,6 +468,12 @@ export default function ChatPage() {
                 <div key={i} className={`chat-bubble chat-${m.role}${m.error ? ' chat-error' : ''}`}>
                   <div className="chat-bubble-role">{m.role === 'user' ? 'You' : '🤖 Agent'}</div>
                   <div className="chat-bubble-text">{m.content}</div>
+                  {m.role === 'assistant' && m.plan ? (
+                    <details className="chat-steps" open>
+                      <summary>Plan: {m.plan.goal}</summary>
+                      <PlanCard plan={m.plan} />
+                    </details>
+                  ) : null}
                   {m.role === 'assistant' && m.tools && m.tools.length > 0 ? (
                     <details className="chat-steps" open>
                       <summary>
@@ -431,6 +496,7 @@ export default function ChatPage() {
             {busy ? (
               <div className="chat-bubble chat-assistant">
                 <div className="chat-bubble-role">🤖 Agent</div>
+                {livePlan ? <PlanCard plan={livePlan} /> : null}
                 <ToolCards tools={liveTools} live />
                 <div className="chat-working">
                   {liveSteps.length > 0 ? (

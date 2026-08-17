@@ -14,6 +14,7 @@
 
 import { randomUUID } from 'node:crypto';
 import type { FollowupSuggestion } from '../tools/registry.js';
+import { PlanStore, type PlanSnapshot, type PlanStoreLike } from '../tools/plan-store.js';
 
 /** One stored turn in a chat session. */
 export interface ChatTurn {
@@ -35,6 +36,10 @@ export interface ChatEngine {
       onProgress?: (line: string) => void;
       /** P0.6 — one tool-call lifecycle event (started → called with outcome). */
       onToolCall?: (phase: 'started' | 'called', info: { id?: string; tool: string; args?: Record<string, unknown>; ok?: boolean; result?: string; error?: string; durationMs?: number }) => void;
+      /** P0.7 — a plan mutation (structured checklist for the GUI card). */
+      onPlanChange?: (snapshot: PlanSnapshot) => void;
+      /** P0.7 — the session's plan store (per-conversation, survives turns). */
+      planStore?: PlanStoreLike;
       /** Live gateway for gateway_send (gateway-triggered chat answers reuse the connected bridge). */
       gateway?: {
         send(target: string, text: string): Promise<boolean>;
@@ -91,6 +96,13 @@ export type ChatConsoleEvent =
       error?: string;
       durationMs?: number;
     }
+  | {
+      /** P0.7 — a plan mutation (rendered as a live checklist card in the GUI). */
+      kind: 'plan';
+      goal: string;
+      steps: Array<{ id: string; description: string; status: 'pending' | 'running' | 'done' | 'blocked' }>;
+      revision: number;
+    }
   | { kind: 'status'; status: 'working' | 'done' | 'error' }
   | {
       kind: 'question';
@@ -127,6 +139,8 @@ export class ChatConsole {
     string,
     { sessionId: string; resolve: (r: AskUserResult) => void }
   >();
+  /** P0.7 — per-session plan stores (plans never leak across conversations). */
+  private planStores = new Map<string, PlanStore>();
 
   constructor(private readonly opts: ChatConsoleOptions = {}) {
     this.engine = opts.engine ?? null;
@@ -220,7 +234,9 @@ export class ChatConsole {
         // event. suggest_followups has its own chips UI and ask_user its own
         // question card — neither renders as a tool card.
         onToolCall: (phase, info) => {
-          if (info.tool === 'suggest_followups' || info.tool === 'ask_user') return;
+          // ask_user/suggest_followups have their own cards; plan_todo is
+          // rendered as the dedicated checklist card (the `plan` event).
+          if (info.tool === 'suggest_followups' || info.tool === 'ask_user' || info.tool === 'plan_todo') return;
           this.emit(sessionId, {
             kind: 'tool',
             id: info.id ?? `call_${Date.now().toString(36)}`,
@@ -233,6 +249,13 @@ export class ChatConsole {
             durationMs: info.durationMs,
           });
         },
+        // P0.7 — forward plan mutations as a dedicated checklist event (the
+        // plan_todo tool itself is NOT a generic step card — the checklist
+        // card is its rendering).
+        onPlanChange: (snapshot) => {
+          this.emit(sessionId, { kind: 'plan', goal: snapshot.goal, steps: snapshot.steps, revision: snapshot.revision });
+        },
+        planStore: this.planStoreFor(sessionId),
       });
       const turns: ChatTurn[] = [...history, { role: 'user', content: clean }];
       if (answer.content && answer.content.trim()) {
@@ -296,6 +319,16 @@ export class ChatConsole {
     return true;
   }
 
+  /** The session's plan store — created on first use, dropped on reset. */
+  private planStoreFor(sessionId: string): PlanStore {
+    let store = this.planStores.get(sessionId);
+    if (!store) {
+      store = new PlanStore();
+      this.planStores.set(sessionId, store);
+    }
+    return store;
+  }
+
   /** Forget a session's history (new conversation) + drop its pending questions. */
   reset(sessionId: string): void {
     for (const [id, p] of this.pendingQuestions) {
@@ -306,6 +339,7 @@ export class ChatConsole {
     }
     this.sessions.delete(sessionId);
     this.busy.delete(sessionId);
+    this.planStores.delete(sessionId);
   }
 }
 

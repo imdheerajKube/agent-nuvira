@@ -24,17 +24,25 @@ class FakeEngine implements ChatEngine {
   progressLines: string[] = [];
   /** P0.6 — when set, the engine replays these tool calls via onToolCall. */
   toolCalls: Array<{ phase: 'started' | 'called'; tool: string; args?: Record<string, unknown>; ok?: boolean; result?: string; error?: string; durationMs?: number }> = [];
+  /** P0.7 — when set, the engine replays these plan mutations via onPlanChange. */
+  planChanges: Array<{ goal: string; steps: Array<{ id: string; description: string; status: 'pending' | 'running' | 'done' | 'blocked' }>; revision: number }> = [];
+  /** The planStore the console injected into the last engine call (if any). */
+  lastPlanStore: unknown = undefined;
 
   async answerOnce(
     message: string,
     opts: Parameters<ChatEngine['answerOnce']>[1] = {},
   ): Promise<{ content: string; followups: unknown[]; provider?: string; model?: string; generationFailed?: boolean }> {
     this.calls.push({ message, opts });
+    this.lastPlanStore = opts?.planStore;
     for (const line of this.progressLines) {
       opts?.onProgress?.(line);
     }
     for (const t of this.toolCalls) {
       opts?.onToolCall?.(t.phase, { id: `call_${t.tool}`, tool: t.tool, args: t.args, ok: t.ok, result: t.result, error: t.error, durationMs: t.durationMs });
+    }
+    for (const p of this.planChanges) {
+      opts?.onPlanChange?.(p);
     }
     const respond = () => ({
       content: `echo: ${message}`,
@@ -262,6 +270,41 @@ describe('ChatConsole', () => {
     const toolEvents = events.filter((e) => e.kind === 'tool');
     expect(toolEvents).toHaveLength(2);
     expect(toolEvents.map((e) => e.tool)).toEqual(['read_file', 'read_file']);
+  });
+
+  it('P0.7 — forwards plan mutations as structured plan events', async () => {
+    const events: Array<{ kind: string; goal?: string; revision?: number; steps?: Array<{ id: string }> }> = [];
+    console_.onEvent((_sid, event) => {
+      events.push({
+        kind: event.kind,
+        ...('goal' in event ? { goal: event.goal, revision: event.revision, steps: event.steps } : {}),
+      });
+    });
+    engine.planChanges = [
+      { goal: 'Fix the failing test', steps: [{ id: 'reproduce', description: 'Reproduce', status: 'pending' }], revision: 1 },
+      { goal: 'Fix the failing test', steps: [{ id: 'reproduce', description: 'Reproduce', status: 'done' }], revision: 2 },
+    ];
+    const r = await console_.answer('s1', 'fix the test');
+    expect(r.ok).toBe(true);
+    const planEvents = events.filter((e) => e.kind === 'plan');
+    expect(planEvents).toHaveLength(2);
+    expect(planEvents[0]).toMatchObject({ kind: 'plan', goal: 'Fix the failing test', revision: 1 });
+    expect(planEvents[1]).toMatchObject({ kind: 'plan', revision: 2 });
+    expect(planEvents[1].steps?.[0]).toMatchObject({ id: 'reproduce' });
+  });
+
+  it('P0.7 — injects a per-session plan store into the engine (survives turns)', async () => {
+    await console_.answer('s1', 'start a plan');
+    const store1 = engine.lastPlanStore;
+    await console_.answer('s1', 'continue the plan');
+    const store2 = engine.lastPlanStore;
+    // Same session → the SAME store instance across turns (plan persists).
+    expect(store1).toBeTruthy();
+    expect(store2).toBe(store1);
+
+    // A different session gets its OWN store (plans never leak across chats).
+    await console_.answer('s2', 'another conversation');
+    expect(engine.lastPlanStore).not.toBe(store1);
   });
 
   it('streams live progress lines to subscribers during a turn', async () => {

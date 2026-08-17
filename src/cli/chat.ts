@@ -28,6 +28,7 @@ import { shouldConfirmFailover, promptFailoverChoice } from './failover-prompt.j
 import { runSingleShotAuto } from './failover-runner.js';
 import { buildAutoResolveOptions } from '../learning/resolve-options.js';
 import { parseRequestSync } from '../nlu/parser.js';
+import { PlanStore } from '../tools/plan-store.js';
 import { withLogCorrelation } from '../enterprise/log.js';
 import { recordMetricTime, getMetrics } from '../enterprise/metrics.js';
 import type { ParsedRequest } from '../nlu/parser.js';
@@ -357,6 +358,13 @@ export class ChatCommand extends BaseCommand {
   private sessionTransientFailedProviders = new Set<string>();
 
   /**
+   * P0.7 — default plan store for this ChatCommand instance (the dashboard
+   * console injects a per-session store instead; this is the CLI/execute
+   * default so a plan survives across turns within one chat session).
+   */
+  private planStore: import('../tools/plan-store.js').PlanStoreLike = new PlanStore();
+
+  /**
    * Whether the cold-start probe has fired this session. On a fresh registry
    * (no verified models yet) the FIRST auto pick fires a background
    * probe + spot-check so routing learns from real API data instead of
@@ -390,6 +398,17 @@ export class ChatCommand extends BaseCommand {
      * through to runChatAnswer's ctxOverrides; see ToolCallInfo.
      */
     onToolCall?: (phase: 'started' | 'called', info: ToolCallInfo) => void;
+    /**
+     * P0.7 — plan checklist: called on every plan_todo mutation with the
+     * structured snapshot (goal + steps + revision) so the GUI's checklist
+     * card updates in place.
+     */
+    onPlanChange?: (snapshot: import('../tools/plan-store.js').PlanSnapshot) => void;
+    /**
+     * P0.7 — the session's plan store (the dashboard console injects one per
+     * conversation so plans never leak across sessions).
+     */
+    planStore?: import('../tools/plan-store.js').PlanStoreLike;
     /** Live gateway for gateway_send (gateway-triggered chat answers reuse the connected bridge). */
     gateway?: ToolContext['gateway'];
   } = {},
@@ -426,7 +445,7 @@ export class ChatCommand extends BaseCommand {
       true,
       { auto: autoMode },
       parsed,
-      { askUser: opts.askUser, onProgress: opts.onProgress, onToolCall: opts.onToolCall, gateway: opts.gateway },
+      { askUser: opts.askUser, onProgress: opts.onProgress, onToolCall: opts.onToolCall, onPlanChange: opts.onPlanChange, planStore: opts.planStore ?? this.planStore, gateway: opts.gateway },
     );
 
     // No-model fallback: the tool loop could not generate a single response
@@ -849,6 +868,17 @@ export class ChatCommand extends BaseCommand {
        * as a card, not just a progress line.
        */
       onToolCall?: (phase: 'started' | 'called', info: ToolCallInfo) => void;
+      /**
+       * P0.7 — plan checklist: called on every plan_todo mutation with the
+       * structured snapshot. The dashboard console forwards it as a `plan`
+       * event so the GUI's checklist card updates IN PLACE.
+       */
+      onPlanChange?: (snapshot: import('../tools/plan-store.js').PlanSnapshot) => void;
+      /**
+       * P0.7 — the session's plan store (per-session in the dashboard, one
+       * per ChatCommand instance here as the default).
+       */
+      planStore?: import('../tools/plan-store.js').PlanStoreLike;
       /** Live gateway for gateway_send (gateway-triggered chat answers reuse the connected bridge). */
       gateway?: ToolContext['gateway'];
     },
@@ -936,6 +966,10 @@ export class ChatCommand extends BaseCommand {
         // stream). Other events keep flowing to the bus untouched.
         if (ctxOverrides?.onToolCall && (event === 'tool:started' || event === 'tool:called')) {
           ctxOverrides.onToolCall(event === 'tool:started' ? 'started' : 'called', data as ToolCallInfo);
+        }
+        // P0.7 — forward plan mutations to the GUI (structured checklist).
+        if (ctxOverrides?.onPlanChange && event === 'plan:changed') {
+          ctxOverrides.onPlanChange(data as import('../tools/plan-store.js').PlanSnapshot);
         }
         getEventBus().emit(event as never, data, source);
       },

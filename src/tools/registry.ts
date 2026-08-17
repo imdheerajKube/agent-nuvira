@@ -97,6 +97,14 @@ export interface ToolContext {
     send(target: string, text: string): Promise<boolean>;
     directory: { resolve(target: string): { platform: string; channelId: string } | null };
   };
+  /**
+   * P0.7 — the session's plan store (plan_todo). The dashboard console
+   * injects a PER-SESSION store so plans never leak across conversations;
+   * chat.ts falls back to one per ChatCommand instance. Absent (bare test
+   * contexts) → plan_todo uses the shared module store (best-effort, never
+   * throws).
+   */
+  planStore?: import('./plan-store.js').PlanStoreLike;
 }
 
 /** A Hermes-clarify-style choice. */
@@ -184,6 +192,23 @@ export const runCliSchema = z.object({
     .optional()
     .default(false)
     .describe('Set true ONLY after the user explicitly confirmed a destructive/system-level command (stop/shutdown/publish/clear/disallow). The tool refuses without it.'),
+});
+
+/** P0.7 — plan_todo args: declare ordered steps, then update their status. */
+export const planTodoSchema = z.object({
+  action: z.enum(['create', 'update']).describe('create = declare/replace the plan steps; update = mark one step\'s status'),
+  goal: z.string().optional().describe('The plan goal (required for action=create)'),
+  steps: z
+    .array(
+      z.object({
+        id: z.string().describe('Short stable step id, e.g. "step-1" or "reproduce"'),
+        description: z.string().describe('What this step accomplishes, e.g. "Reproduce the failure with a minimal test"'),
+      }),
+    )
+    .optional()
+    .describe('Ordered steps (required for action=create)'),
+  id: z.string().optional().describe('The step id to update (required for action=update)'),
+  status: z.enum(['pending', 'running', 'done', 'blocked']).optional().describe('New status for the step (required for action=update)'),
 });
 
 /** H2 — delegate tool args: a focused subtask for a specialized sub-agent. */
@@ -591,6 +616,46 @@ registerTool({
   inputSchema: runTerminalSchema,
   endsAgentStep: false,
   run: (args, ctx) => import('./run-terminal.js').then((m) => m.runTerminalTool(args as import('./run-terminal.js').RunTerminalArgs, ctx)),
+});
+
+// ─── P0.7 plan/todo tool (creating AND tracking plans) ─────────────────────
+// The model declares ordered steps and updates their status as it works
+// (pending → running → done/blocked). State lives in the session's PlanStore
+// (survives the turn — a later turn can say "step 3 is done"). Each mutation
+// emits `plan:changed` on the context bus with a structured snapshot so the
+// dashboard chat renders a live checklist that updates IN PLACE (P0.6 step
+// cards show tool calls; this shows the plan itself).
+
+registerTool({
+  name: 'plan_todo',
+  description: 'Declare and track a multi-step plan: create ordered steps with descriptions, then mark each as running/done/blocked as you work through them. Use for any job with 2+ steps — the checklist persists across the whole conversation, so a later turn can reference "step N is done". Call create once at the start, then update per step as each completes.',
+  category: 'workflow',
+  inputSchema: planTodoSchema,
+  endsAgentStep: false,
+  run: async (args, ctx) => {
+    const { action, goal, steps, id, status } = planTodoSchema.parse(args);
+    const { defaultPlanStore } = await import('./plan-store.js');
+    const store: import('./plan-store.js').PlanStoreLike = ctx.planStore ?? defaultPlanStore();
+    if (action === 'create') {
+      if (!goal || !steps || steps.length === 0) {
+        return 'Error: plan_todo create needs goal + steps (id + description each).';
+      }
+      store.create(goal, steps);
+    } else if (id && status) {
+      store.update(id, status);
+    } else {
+      return 'Error: plan_todo update needs id + status (pending|running|done|blocked).';
+    }
+    // Structured snapshot for the GUI checklist card (best-effort — a missing
+    // emit must never break the tool).
+    if (store.toGUI) {
+      const snapshot = store.toGUI();
+      if (snapshot) {
+        ctx.emit?.('plan:changed', snapshot);
+      }
+    }
+    return store.toText ? store.toText() : `Plan updated (${action}).`;
+  },
 });
 
 // ─── I1 web-research tools (web_search / read_page) ─────────────────────────

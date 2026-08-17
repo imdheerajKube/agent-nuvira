@@ -83,8 +83,8 @@ export const TOOLSETS: ToolsetDef[] = [
   {
     name: 'coding',
     label: 'Coding',
-    description: 'Interactive file access + verification for the agent loop: read files, list directories, glob, edit/write files, and run terminal commands (tests/typecheck/build) — deny-first, workspace-scoped; state-changing actions are confirmation-gated.',
-    tools: ['read_file', 'list_dir', 'glob', 'edit_file', 'write_file', 'run_terminal'],
+    description: 'Interactive file access + verification for the agent loop: read files, list directories, glob, edit/write files, run terminal commands (tests/typecheck/build) — deny-first, workspace-scoped; state-changing actions are confirmation-gated — and the plan/todo checklist that tracks multi-step work.',
+    tools: ['read_file', 'list_dir', 'glob', 'edit_file', 'write_file', 'run_terminal', 'plan_todo'],
   },
   {
     name: 'web',

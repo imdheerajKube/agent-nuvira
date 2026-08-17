@@ -2839,6 +2839,91 @@ body {
   color: var(--text-secondary);
 }
 
+/* P0.7 — plan checklist card (live, updates in place) */
+.chat-plan-card {
+  border: 1px solid var(--border);
+  border-left: 3px solid #a78bfa;
+  border-radius: 8px;
+  padding: 8px 10px;
+  margin: 8px 0 2px;
+  background: color-mix(in srgb, var(--bg-secondary, #1b1f27) 55%, transparent);
+}
+
+.chat-plan-head {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.chat-plan-icon {
+  font-size: 12px;
+  flex: none;
+}
+
+.chat-plan-goal {
+  font-size: 12.5px;
+  font-weight: 600;
+  color: var(--text-primary);
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  flex: 1;
+}
+
+.chat-plan-count {
+  font-family: var(--font-mono, ui-monospace, SFMono-Regular, Menlo, Consolas, monospace);
+  font-size: 11px;
+  color: var(--text-secondary);
+  flex: none;
+}
+
+.chat-plan-steps {
+  margin-top: 7px;
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+}
+
+.chat-plan-step {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+}
+
+.chat-plan-step-icon {
+  font-size: 11px;
+  flex: none;
+}
+
+.chat-plan-step-text {
+  font-size: 12px;
+  color: var(--text-primary);
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  flex: 1;
+}
+
+.chat-plan-step-status {
+  font-family: var(--font-mono, ui-monospace, SFMono-Regular, Menlo, Consolas, monospace);
+  font-size: 10px;
+  color: var(--text-secondary);
+  flex: none;
+  text-transform: uppercase;
+}
+
+.chat-plan-step-done .chat-plan-step-text {
+  text-decoration: line-through;
+  opacity: 0.65;
+}
+
+.chat-plan-step-blocked .chat-plan-step-text {
+  color: #ef4444;
+}
+
 /* ── Platform transport config (PlatformConfigSection) ─────────────────── */
 .platform-config {
   margin-top: 10px;

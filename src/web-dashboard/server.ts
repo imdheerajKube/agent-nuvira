@@ -3770,6 +3770,13 @@ function handleRequest(req: IncomingMessage, res: ServerResponse): void {
             error: event.error,
             durationMs: event.durationMs,
           })}\n\n`);
+        } else if (event.kind === 'plan') {
+          // P0.7 — live checklist: goal + steps + revision (updates in place).
+          res.write(`event: plan\ndata: ${JSON.stringify({
+            goal: event.goal,
+            steps: event.steps,
+            revision: event.revision,
+          })}\n\n`);
         } else if (event.kind === 'status') {
           res.write(`event: status\ndata: ${JSON.stringify({ status: event.status })}\n\n`);
         } else if (event.kind === 'question') {

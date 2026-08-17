@@ -348,4 +348,75 @@ describe('registry — gateway_send tool (message delivery to channels)', () => 
     );
     expect(out).toContain('failed');
   });
+
+  it('P0.7 — registers plan_todo with create/update schema (workflow category)', () => {
+    const tool = getTool('plan_todo');
+    expect(tool).toBeDefined();
+    expect(tool!.category).toBe('workflow');
+    expect(tool!.endsAgentStep).toBe(false);
+    const params = (toolJsonSchemas(['plan_todo'])[0].parameters as { properties: Record<string, unknown> }).properties;
+    expect(params).toHaveProperty('action');
+    expect(params).toHaveProperty('goal');
+    expect(params).toHaveProperty('steps');
+    expect(params).toHaveProperty('id');
+    expect(params).toHaveProperty('status');
+    const status = params.status as { enum?: string[] };
+    expect(status.enum).toEqual(['pending', 'running', 'done', 'blocked']);
+  });
+
+  it('P0.7 — plan_todo create/update mutates the injected store and emits plan:changed', async () => {
+    const { PlanStore } = await import('../../src/tools/plan-store.js');
+    const store = new PlanStore();
+    const tool = getTool('plan_todo')!;
+    const events: Array<{ event: string; data: unknown }> = [];
+    const ctx = {
+      configManager: {},
+      planStore: store,
+      emit: (event: string, data: unknown) => events.push({ event, data }),
+    } as ToolContext;
+
+    const created = await tool.run(
+      {
+        action: 'create',
+        goal: 'Fix the failing test',
+        steps: [
+          { id: 'reproduce', description: 'Reproduce the failure' },
+          { id: 'verify', description: 'Verify with npm test' },
+        ],
+      },
+      ctx,
+    );
+    expect(created).toContain('0/2 done');
+    expect(store.snapshot()!.steps).toHaveLength(2);
+    expect(events[0]).toMatchObject({ event: 'plan:changed' });
+    const snapshot = events[0].data as { goal: string; steps: Array<{ id: string }> };
+    expect(snapshot.goal).toBe('Fix the failing test');
+    expect(snapshot.steps.map((s) => s.id)).toEqual(['reproduce', 'verify']);
+
+    const updated = await tool.run({ action: 'update', id: 'reproduce', status: 'done' }, ctx);
+    expect(updated).toContain('1/2 done');
+    expect(store.snapshot()!.steps[0].status).toBe('done');
+    expect(events).toHaveLength(2); // one plan:changed per mutation
+  });
+
+  it('P0.7 — plan_todo validates args (create needs steps, update needs id+status)', async () => {
+    const tool = getTool('plan_todo')!;
+    const ctx = { configManager: {} } as ToolContext;
+    const noSteps = await tool.run({ action: 'create', goal: 'Go' }, ctx);
+    expect(noSteps).toContain('Error:');
+    const noId = await tool.run({ action: 'update', status: 'done' }, ctx);
+    expect(noId).toContain('Error:');
+    // Missing status is also refused.
+    const noStatus = await tool.run({ action: 'update', id: 'x' }, ctx);
+    expect(noStatus).toContain('Error:');
+  });
+
+  it('P0.7 — plan_todo runs without an injected store (shared fallback, never throws)', async () => {
+    const tool = getTool('plan_todo')!;
+    const out = await tool.run(
+      { action: 'create', goal: 'Go', steps: [{ id: 'a', description: 'A' }] },
+      { configManager: {} } as ToolContext,
+    );
+    expect(out).toContain('0/1 done');
+  });
 });
