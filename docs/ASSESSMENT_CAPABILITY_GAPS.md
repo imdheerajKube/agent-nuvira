@@ -75,3 +75,48 @@ loop: read → edit → run → ask → verify, all as tools, all GUI-rendered.
 gets a row here before any code is written for it — the plan is the single
 source of truth, and the master plan (`UI_UPGRADE_MASTERPLAN.md`) was lost
 once; it must be recreated or this doc must be its row-level replacement.
+
+---
+
+## Round 2 — user-named agentic capabilities (verified 2026-08-17, code-level)
+
+User ask: *"are we certain post-upgrade there will be no gap in agentic
+capability vs Freebuff — code assessment, evaluating code and recommendations,
+tech roadmap, creating + tracking plans, finding new ways to test, switching
+tools when one fails, exploring parallel ways?"*
+
+**Honest answer: NO — four of the named capabilities are only partially
+covered, and one is not covered at all. Verified below.**
+
+| # | Named capability | What exists at code level | Verdict |
+|---|---|---|---|
+| 24 | **Creating plans AND tracking them** | The orchestrator has an internal planner agent (invisible), but the chat loop has **no `write_todos`-equivalent tool** — verified `MISSING write_todos` in the registry. No "3/5 steps done" surface. | 🔴 **NOT COVERED** |
+| 25 | **Switch tools when one fails** | The tool loop feeds a tool error back to the model and continues (maxSteps 8) — a STRONG model retries with another tool. But there is **no deterministic fallback chain** (e.g. `run_terminal` fails → try `delegate tester`); a weak model repeats the same failing call. | ⚠️ PARTIAL (model-dependent) |
+| 26 | **Explore parallel ways** | The chat loop is STRICTLY SEQUENTIAL — one tool call per step. Parallel fan-out exists in the orchestrator's pipeline lanes and in `delegate`/`spawnSubagents` (max 4, Promise.all), but the agent must *think* to use it; the loop itself never suggests parallelism. | ⚠️ PARTIAL (exists, not surfaced) |
+| 27 | **Load reusable capability packs (skills)** | `SkillRunnerAgent` exists in the module registry and skills-registry/hub in learning — but the **chat registry has no `skill` tool** (verified `MISSING skill`). A user can't say "load the code-assessment skill" in chat. | 🔴 **NOT COVERED (as a chat tool)** |
+| 28 | **Structured code assessment → gap recommendations → technical roadmap** | `analyze`/`document` pipeline tools exist but are BLACK BOXES (run the whole pipeline, return a summary). The interactive read→judge→recommend→roadmap loop is now *possible* (read_file/edit/run_terminal + a strong model) but there is no structured checklist/playbook deliverable, no assessment template, no roadmap artifact. | ⚠️ PARTIAL (possible, not structured) |
+
+### What closes these gaps (additions to the plan)
+
+- **P0.7 — plan/todo tool** (row 24): a `plan`/`todo` tool in the registry —
+  the model declares steps, updates status as tools complete, and the GUI
+  renders a live checklist. Closes "creating plans AND tracking them".
+- **P0.8 — skill tool** (row 27): expose the existing skill store as a
+  `skill` tool in the chat registry (load/apply a named skill mid-turn),
+  surfaced as a toolset toggle. Closes "load reusable capability packs".
+- **P3 — tool-fallback chain** (row 25): deterministic alternative-tool
+  hints in the loop — when a tool errors, inject a concrete alternative
+  ("run_terminal failed → delegate tester, or retry with a longer timeout")
+  instead of only the raw error. Removes the weak-model dependency.
+- **P3 — parallel suggestion** (row 26): after 2+ independent tool steps,
+  the loop may suggest a `delegate` fan-out for independent subtasks
+  (parallel ways become a first-class loop behavior, not model whimsy).
+- **P5 — assessment/roadmap playbook** (row 28): a bundled skill
+  (code-assessment checklist → gap findings → recommendations → technical
+  roadmap) delivered as a structured artifact card. Closes "code assessment
+  and roadmap as structured deliverables".
+
+**Acceptance:** after P0.7/P0.8/P3/P5, the five named agentic capabilities
+(rows 24–28) must each be demonstrable from the dashboard chat alone — with
+a visible plan checklist, a loaded skill, a demonstrated tool-switch on
+failure, a parallel sub-agent fan-out, and a structured roadmap artifact.
