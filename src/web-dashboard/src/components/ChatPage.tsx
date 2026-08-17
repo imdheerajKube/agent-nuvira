@@ -13,6 +13,7 @@
 
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { dashboardAPI } from '../api';
+import Markdown from './Markdown';
 
 interface AuthState {
   configured: boolean;
@@ -231,6 +232,8 @@ export default function ChatPage() {
   const livePlanRef = useRef<PlanView | null>(null);
   const liveDiffRef = useRef<DiffView | null>(null);
   const sessionIdRef = useRef<string>(newSessionId());
+  // Phase 6 — the last sent message (↑ recalls it into the box).
+  const lastSentRef = useRef<string>('');
   const subRef = useRef<(() => void) | null>(null);
   const listRef = useRef<HTMLDivElement | null>(null);
   // P0.1 — a pending ask_user question from the agent (choice card).
@@ -287,6 +290,7 @@ export default function ChatPage() {
       liveDiffRef.current = null;
       setMessages((m) => [...m, { role: 'user', content: clean }]);
       setInput('');
+      lastSentRef.current = clean;
       setBusy(true);
 
       // Pre-resolve the ask against the command manifest. A confident match
@@ -520,13 +524,31 @@ export default function ChatPage() {
           <div className="chat-thread" ref={listRef} role="log" aria-live="polite">
             {messages.length === 0 ? (
               <div className="empty-state">
-                Say anything — the agent decides what to do (answer, fix code, plan, run the pipeline). Try “what's the state of this project?” or “fix the failing test”.
+                <p className="empty-state-title">Say anything — the agent decides what to do (answer, fix code, plan, run the pipeline).</p>
+                <div className="empty-state-chips">
+                  <button type="button" className="chat-chip" onClick={() => void send("what's the state of this project?")}>
+                    📋 assess this project
+                  </button>
+                  <button type="button" className="chat-chip" onClick={() => void send('run the test suite')}>
+                    🧪 run the tests
+                  </button>
+                  <button type="button" className="chat-chip" onClick={() => void send('stop the gateway')}>
+                    ⏹ stop the gateway
+                  </button>
+                  <button type="button" className="chat-chip" onClick={() => void send('publish the current version')}>
+                    🚀 publish the release
+                  </button>
+                </div>
               </div>
             ) : (
               messages.map((m, i) => (
                 <div key={i} className={`chat-bubble chat-${m.role}${m.error ? ' chat-error' : ''}`}>
                   <div className="chat-bubble-role">{m.role === 'user' ? 'You' : '🤖 Agent'}</div>
-                  <div className="chat-bubble-text">{m.content}</div>
+                  {m.role === 'assistant' ? (
+                    <div className="chat-bubble-text"><Markdown text={m.content} /></div>
+                  ) : (
+                    <div className="chat-bubble-text">{m.content}</div>
+                  )}
                   {m.role === 'assistant' && m.diff ? (
                     <details className="chat-steps" open>
                       <summary>Changes: {m.diff.summary}</summary>
@@ -660,13 +682,24 @@ export default function ChatPage() {
           ) : null}
 
           <form className="chat-input-row" onSubmit={(e) => { e.preventDefault(); void send(input); }}>
-            <input
-              type="text"
+            <textarea
+              className="chat-input-box"
               value={input}
               onChange={(e) => setInput(e.target.value)}
-              placeholder="Message the agent… (Enter to send)"
+              onKeyDown={(e) => {
+                if (e.key === 'Enter' && !e.shiftKey) {
+                  e.preventDefault();
+                  void send(input);
+                } else if (e.key === 'ArrowUp' && input === '' && lastSentRef.current) {
+                  // ↑ on an empty box recalls the last sent message (Phase 6).
+                  e.preventDefault();
+                  setInput(lastSentRef.current);
+                }
+              }}
+              placeholder="Message the agent… (Enter to send · Shift+Enter for a new line · ↑ recalls last)"
               disabled={busy}
               maxLength={8000}
+              rows={1}
               autoFocus
             />
             <button className="admin-refresh-btn" type="submit" disabled={busy || !input.trim()}>

@@ -94,13 +94,19 @@ The single highest-impact change: **the chat currently renders answers as raw
 text** (`chat-bubble-text` = plain `<div>{m.content}</div>`). Everything else is
 cosmetic until this is real.
 
-- [ ] Markdown renderer (react-markdown or a small custom renderer — check what's
-      already in the bundle; avoid adding heavy deps if a light one exists)
-- [ ] Code blocks with syntax highlighting + copy button
-- [ ] Token streaming via SSE (`/api/chat/stream`) — typewriter feel, cancel button
-- [ ] Render tool *steps* as structured blocks (tool name, status ✓/✗) instead of
-      plain lines
-- [ ] **Tests:** ChatPage renderer tests for markdown/code/streaming
+- [x] Markdown renderer — a small dependency-free custom renderer
+      (`src/web-dashboard/src/components/Markdown.tsx`, ~180 lines: headings, lists,
+      bold/italic, inline code, links with href allowlist, tables, blockquotes, hr)
+      — deliberately NO react-markdown (plan's risk table: "use a small renderer")
+- [x] Code blocks with a language label + copy button (`⧉ Copy` → `✓ Copied`)
+- [ ] Token streaming via SSE — LIVE progress already streams per-session
+      (`/api/chat/:sessionId/events`: steps + tool cards + plan + diff); the final
+      answer text still arrives at once via the POST (candidate: stream tokens of
+      the final reply server-side)
+- [x] Render tool *steps* as structured blocks — done earlier (P0.6 tool cards,
+      P0.7 plan checklist, P3b diff card; live + snapshotted into the reply)
+- [x] **Tests:** `Markdown.test.tsx` (10 cases incl. XSS href guard) + ChatPage
+      markdown-rendering test
 
 ### Phase 2 — Artifacts: plans, diffs, and results as cards (2–3 days)
 This is what makes it feel like Claude/Cursor rather than a terminal in a box.
@@ -134,19 +140,20 @@ about without being told how.
 - [ ] **Tests:** session persistence + resume + memory recall injection
 
 ### Phase 5 — Chat as the front door (1–2 days)
-- [ ] `/` redirects to Chat; the 12 other rooms stay reachable but become
-      secondary — surfaced via inline cards ("open Memory panel") and a slim
-      secondary nav, never required
-- [ ] Empty-state onboarding: "Try: assess this project · stop the gateway ·
-      run the eval suite · publish v1.74.1" — every example resolves through the
-      intent router (already works)
-- [ ] **Tests:** navigation + onboarding flow
+- [x] `/` is Chat (the front door); Overview moved to `/overview`; the other rooms
+      stay reachable as panels, never required
+- [x] Empty-state onboarding chips: assess this project · run the tests · stop the
+      gateway · publish the release — each sends its prompt through the normal
+      flow (chatResolve → intent router → confirm card or agent)
+- [x] **Tests:** onboarding-chip test (click → chatSend with the prompt)
 
 ### Phase 6 — Polish & hardening (ongoing)
 - [ ] Streaming cancel, retry on failed turn, error surfaces (partial: exists)
 - [ ] Followup chips kept clickable (the earlier bug the user reported)
-- [ ] Keyboard: Enter to send, Shift+Enter newline, ↑ for last message
-- [ ] Full dashboard test suite green (203 today) + new chat tests
+- [x] Keyboard: Enter sends, Shift+Enter newline, ↑ recalls the last sent message
+      (input → auto-growing textarea)
+- [x] Full dashboard test suite green (**220** today, was 208) + new chat tests
+      (markdown, onboarding, keyboard)
 
 ### Phase 7 — Skills as a product capability: onboarding, /learn, and marketplace import (3–4 days)
 

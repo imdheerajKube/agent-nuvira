@@ -321,6 +321,69 @@ describe('ChatPage', () => {
     await waitFor(() => expect(screen.queryByText(/Should I fix it\?/)).toBeNull());
   });
 
+  it('Phase 1 — renders the assistant reply as markdown (headings, code, lists)', async () => {
+    mockAuthed('admin');
+    mockChatStream();
+    mockChatSend({
+      ...OK_RESPONSE,
+      content: '## Result\n\nHere is the **fix**:\n\n```ts\nconst x = 1;\n```\n\n- one\n- two',
+    });
+    render(<ChatPage />);
+    await waitFor(() => expect(screen.getByPlaceholderText(/Message the agent/)).toBeTruthy());
+
+    fireEvent.change(screen.getByPlaceholderText(/Message the agent/), { target: { value: 'fix it' } });
+    fireEvent.submit(screen.getByPlaceholderText(/Message the agent/).closest('form')!);
+
+    await waitFor(() => expect(screen.getByText('Result')).toBeTruthy());
+    // Bold rendered as <strong>, code fence as a block with the lang label.
+    expect(screen.getByText('fix').tagName).toBe('STRONG');
+    expect(screen.getByText('ts')).toBeTruthy();
+    expect(screen.getByText('const x = 1;')).toBeTruthy();
+    expect(screen.getByText('one')).toBeTruthy();
+    expect(screen.getByText('two')).toBeTruthy();
+  });
+
+  it('Phase 5 — empty-state onboarding chips send their prompt', async () => {
+    mockAuthed('admin');
+    mockChatStream();
+    const send = mockChatSend(OK_RESPONSE);
+    render(<ChatPage />);
+    await waitFor(() => expect(screen.getByPlaceholderText(/Message the agent/)).toBeTruthy());
+
+    const chip = screen.getByRole('button', { name: /assess this project/ });
+    expect(chip).toBeTruthy();
+    fireEvent.click(chip);
+
+    await waitFor(() => expect(send).toHaveBeenCalled());
+    expect(send.mock.calls[0][1]).toBe("what's the state of this project?");
+  });
+
+  it('Phase 6 — Enter sends, Shift+Enter does not, ↑ recalls the last message', async () => {
+    mockAuthed('admin');
+    mockChatStream();
+    const send = mockChatSend(OK_RESPONSE);
+    render(<ChatPage />);
+    await waitFor(() => expect(screen.getByPlaceholderText(/Message the agent/)).toBeTruthy());
+    const box = screen.getByPlaceholderText(/Message the agent/) as HTMLTextAreaElement;
+
+    // Send the first message with Enter.
+    fireEvent.change(box, { target: { value: 'first ask' } });
+    fireEvent.keyDown(box, { key: 'Enter' });
+    await waitFor(() => expect(send).toHaveBeenCalledTimes(1));
+    expect(send.mock.calls[0][1]).toBe('first ask');
+    await waitFor(() => expect(screen.getByText('I checked the repo — the build is green.')).toBeTruthy());
+
+    // Shift+Enter must NOT submit (newline in the box instead).
+    fireEvent.change(box, { target: { value: 'multi\nline' } });
+    fireEvent.keyDown(box, { key: 'Enter', shiftKey: true });
+    expect(send).toHaveBeenCalledTimes(1);
+
+    // Clear the box, press ↑ → the last sent message comes back.
+    fireEvent.change(box, { target: { value: '' } });
+    fireEvent.keyDown(box, { key: 'ArrowUp' });
+    expect(box.value).toBe('first ask');
+  });
+
   it('P0.1 — skip lets the agent proceed on best judgment (index -1)', async () => {
     mockAuthed('admin');
     let questionCb: ((q: { questionId: string; question: string; choices: Array<{ label: string }>; multiSelect: boolean }) => void) | null = null;

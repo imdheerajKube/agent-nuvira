@@ -2478,7 +2478,7 @@ body {
   align-items: center;
 }
 
-.chat-input-row input {
+.chat-input-row textarea.chat-input-box {
   flex: 1;
   background: rgba(0, 0, 0, 0.25);
   border: 1px solid var(--border);
@@ -2487,15 +2487,20 @@ body {
   padding: 10px 12px;
   font-size: 13px;
   min-width: 0;
+  resize: vertical;
+  min-height: 40px;
+  max-height: 160px;
+  font-family: inherit;
+  line-height: 1.4;
   transition: border-color 0.15s ease;
 }
 
-.chat-input-row input:focus {
+.chat-input-row textarea.chat-input-box:focus {
   outline: none;
   border-color: var(--accent-blue);
 }
 
-.chat-input-row input:disabled {
+.chat-input-row textarea.chat-input-box:disabled {
   opacity: 0.55;
 }
 
@@ -2506,6 +2511,155 @@ body {
   border-radius: 10px;
   color: var(--text-secondary);
   background: rgba(0, 0, 0, 0.15);
+}
+
+/* ─── Markdown renderer (Phase 1) ─────────────────────────────────────── */
+.md-root {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  font-size: 13px;
+  line-height: 1.55;
+}
+
+.md-root p.md-para {
+  margin: 0;
+}
+
+.md-blank {
+  height: 6px;
+}
+
+.md-heading {
+  margin: 4px 0 2px;
+  font-weight: 700;
+  color: var(--text-primary);
+}
+
+.md-h1 { font-size: 17px; }
+.md-h2 { font-size: 15px; }
+.md-h3 { font-size: 14px; }
+.md-h4, .md-h5, .md-h6 { font-size: 13px; }
+
+.md-list {
+  margin: 0;
+  padding-left: 20px;
+}
+
+.md-list li {
+  margin: 2px 0;
+}
+
+.md-quote {
+  margin: 0;
+  padding: 4px 10px;
+  border-left: 3px solid var(--accent-blue, #3b82f6);
+  color: var(--text-secondary);
+  background: rgba(59, 130, 246, 0.08);
+  border-radius: 0 6px 6px 0;
+}
+
+.md-hr {
+  border: none;
+  border-top: 1px solid var(--border);
+  margin: 4px 0;
+}
+
+.md-inline-code {
+  background: rgba(127, 127, 127, 0.2);
+  border: 1px solid rgba(127, 127, 127, 0.3);
+  border-radius: 4px;
+  padding: 1px 5px;
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 12px;
+}
+
+.md-root a {
+  color: var(--accent-blue, #60a5fa);
+  text-decoration: underline;
+}
+
+.md-code-block {
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  overflow: hidden;
+  background: rgba(0, 0, 0, 0.35);
+}
+
+.md-code-head {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 4px 10px;
+  background: rgba(127, 127, 127, 0.15);
+  border-bottom: 1px solid var(--border);
+}
+
+.md-code-lang {
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--text-secondary);
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+}
+
+.md-code-copy {
+  background: transparent;
+  border: 1px solid var(--border);
+  color: var(--text-secondary);
+  border-radius: 4px;
+  padding: 1px 8px;
+  font-size: 11px;
+  cursor: pointer;
+}
+
+.md-code-copy:hover {
+  color: var(--text-primary);
+  border-color: var(--accent-blue, #3b82f6);
+}
+
+.md-code-pre {
+  margin: 0;
+  padding: 10px 12px;
+  overflow-x: auto;
+}
+
+.md-code-pre code {
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 12px;
+  line-height: 1.5;
+  white-space: pre;
+  color: var(--text-primary);
+}
+
+.md-table {
+  border-collapse: collapse;
+  font-size: 12px;
+  margin: 2px 0;
+  width: 100%;
+}
+
+.md-table th, .md-table td {
+  border: 1px solid var(--border);
+  padding: 4px 8px;
+  text-align: left;
+}
+
+.md-table th {
+  background: rgba(127, 127, 127, 0.15);
+  font-weight: 600;
+}
+
+/* ─── Empty-state onboarding (Phase 5) ────────────────────────────────── */
+.empty-state-title {
+  margin: 0 0 10px;
+  color: var(--text-secondary);
+}
+
+.empty-state-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
 }
 
 /* P2/P3 — Ops consoles (Evals runner + Gateway ops; runs CLI via the task runner) */
@@ -2689,7 +2843,7 @@ body {
   align-items: center;
 }
 
-.chat-input-row input {
+.chat-input-row textarea.chat-input-box {
   flex: 1;
   background: rgba(0, 0, 0, 0.25);
   border: 1px solid var(--border);
@@ -2698,15 +2852,20 @@ body {
   padding: 10px 12px;
   font-size: 13px;
   min-width: 0;
+  resize: vertical;
+  min-height: 40px;
+  max-height: 160px;
+  font-family: inherit;
+  line-height: 1.4;
   transition: border-color 0.15s ease;
 }
 
-.chat-input-row input:focus {
+.chat-input-row textarea.chat-input-box:focus {
   outline: none;
   border-color: var(--accent-blue);
 }
 
-.chat-input-row input:disabled {
+.chat-input-row textarea.chat-input-box:disabled {
   opacity: 0.55;
 }
 
