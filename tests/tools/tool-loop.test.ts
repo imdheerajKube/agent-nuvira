@@ -12,6 +12,8 @@ import {
   isThinkOnlyResponse,
   isBareAcknowledgment,
   extractFallbackToolCalls,
+  fallbackHintForTool,
+  makeParallelSuggester,
   type ToolLoopDeps,
   type StepResponse,
 } from '../../src/tools/tool-loop.js';
@@ -330,6 +332,102 @@ describe('tool loop — helpers', () => {
     expect(typeof called[0].data.durationMs).toBe('number');
     // The catch branch: ok:false + `error` field (not the Error: prefix path).
     expect(called[1].data).toMatchObject({ id: 'c2', tool: 'verify_requirement', ok: false, error: 'exploded' });
+  });
+
+  it('P3c — a failed mapped tool gets the deterministic fallback hint (advisory)', async () => {
+    const script: StepResponse[] = [
+      {
+        content: '',
+        toolCalls: [{ id: 'c1', name: 'run_terminal', arguments: { command: 'npm test' } }],
+      },
+      { content: 'Done.', toolCalls: [] },
+    ];
+    const deps = mockDeps(script, async () => 'Error: exit 1');
+    const result = await runToolLoop({ messages: [{ role: 'user', content: 'go' }], context: ctx, deps });
+    // The tool result fed back to the model carries the hint.
+    const secondCall = deps.callModel.mock.calls[1][0] as Array<{ role: string; content: string }>;
+    const toolMsg = secondCall.find((m) => m.role === 'tool');
+    expect(toolMsg?.content).toContain('Error: exit 1');
+    expect(toolMsg?.content).toContain('delegate with agent_type "tester"');
+    expect(result.content).toBe('Done.');
+  });
+
+  it('P3c — fallbackHintForTool is pure: fires on error, NEVER on success', () => {
+    expect(fallbackHintForTool('run_terminal', 'Error: boom')).toContain('tester');
+    expect(fallbackHintForTool('read_file', 'Error: ENOENT')).toContain('code_search');
+    expect(fallbackHintForTool('run_terminal', '✅ succeeded')).toBeNull();
+    expect(fallbackHintForTool('unmapped_tool', 'Error: x')).toBeNull();
+  });
+
+  it('P3c — an unmapped tool error does NOT get a hint (no behavior change)', async () => {
+    const script: StepResponse[] = [
+      {
+        content: '',
+        toolCalls: [{ id: 'c1', name: 'verify_requirement', arguments: { request: 'x' } }],
+      },
+      { content: 'Done.', toolCalls: [] },
+    ];
+    const deps = mockDeps(script, async () => 'Error: nope');
+    await runToolLoop({ messages: [{ role: 'user', content: 'go' }], context: ctx, deps });
+    const secondCall = deps.callModel.mock.calls[1][0] as Array<{ role: string; content: string }>;
+    const toolMsg = secondCall.find((m) => m.role === 'tool');
+    expect(toolMsg?.content).toContain('Error: nope');
+    expect(toolMsg?.content).not.toContain('💡');
+  });
+
+  it('P3d — 2+ successful independent gather steps inject ONE parallel delegate suggestion', async () => {
+    const script: StepResponse[] = [
+      {
+        content: '',
+        toolCalls: [
+          { id: 'c1', name: 'read_file', arguments: { path: 'a.ts' } },
+          { id: 'c2', name: 'read_file', arguments: { path: 'b.ts' } },
+        ],
+      },
+      { content: 'Done.', toolCalls: [] },
+    ];
+    const deps = mockDeps(script, async () => '1 | line');
+    await runToolLoop({ messages: [{ role: 'user', content: 'go' }], context: ctx, deps });
+    const secondCall = deps.callModel.mock.calls[1][0] as Array<{ role: string; content: string }>;
+    const toolMsgs = secondCall.filter((m) => m.role === 'tool');
+    // The suggestion rides on the 2nd read_file's result — once only.
+    expect(toolMsgs[1].content).toContain('IN PARALLEL');
+    expect(toolMsgs[0].content).not.toContain('IN PARALLEL');
+    expect(toolMsgs[1].content).toContain('delegate');
+  });
+
+  it('P3d — makeParallelSuggester is deterministic: fires once, never on failure', () => {
+    const s = makeParallelSuggester();
+    expect(s.note('read_file', true)).toBeNull(); // 1st — quiet
+    const tip = s.note('read_file', true); // 2nd — fires
+    expect(tip).toContain('IN PARALLEL');
+    expect(tip).toContain('delegate');
+    expect(s.note('read_file', true)).toBeNull(); // already fired
+    // Failed calls never count.
+    const s2 = makeParallelSuggester();
+    expect(s2.note('web_search', false)).toBeNull();
+    expect(s2.note('web_search', false)).toBeNull();
+    expect(s2.hasFired).toBe(false);
+    // Non-independent tools never count.
+    const s3 = makeParallelSuggester();
+    expect(s3.note('run_terminal', true)).toBeNull();
+    expect(s3.note('run_terminal', true)).toBeNull();
+    expect(s3.hasFired).toBe(false);
+  });
+
+  it('P3d — no parallel suggestion on a single independent call or on failures', async () => {
+    const script: StepResponse[] = [
+      {
+        content: '',
+        toolCalls: [{ id: 'c1', name: 'read_file', arguments: { path: 'a.ts' } }],
+      },
+      { content: 'Done.', toolCalls: [] },
+    ];
+    const deps = mockDeps(script, async () => '1 | line');
+    await runToolLoop({ messages: [{ role: 'user', content: 'go' }], context: ctx, deps });
+    const secondCall = deps.callModel.mock.calls[1][0] as Array<{ role: string; content: string }>;
+    const toolMsg = secondCall.find((m) => m.role === 'tool');
+    expect(toolMsg?.content).not.toContain('IN PARALLEL');
   });
 
   it('a bare-acknowledgment + suggest_followups does NOT end the turn — the real answer must follow', async () => {
