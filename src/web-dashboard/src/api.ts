@@ -816,6 +816,8 @@ export class DashboardAPI {
       onTool?: (t: { id: string; tool: string; phase: 'started' | 'called'; args?: string; ok?: boolean; result?: string; error?: string; durationMs?: number }) => void;
       /** P0.7 — a plan mutation (rendered as a live checklist card). */
       onPlan?: (p: { goal: string; steps: Array<{ id: string; description: string; status: string }>; revision: number }) => void;
+      /** P3b — a git diff payload (rendered as a 🔧 diff card). */
+      onDiff?: (d: { files: Array<{ path: string; body: string }>; summary: string }) => void;
       onQuestion?: (q: { questionId: string; question: string; choices: Array<{ label: string; description?: string }>; multiSelect: boolean }) => void;
     },
   ): () => void {
@@ -871,6 +873,20 @@ export class DashboardAPI {
             goal: payload.goal,
             steps: payload.steps,
             revision: payload.revision ?? 0,
+          });
+        }
+      } catch { /* ignore malformed */ }
+    });
+    es.addEventListener('diff', (event) => {
+      try {
+        const payload = JSON.parse((event as MessageEvent).data) as {
+          files?: Array<{ path: string; body: string }>;
+          summary?: string;
+        };
+        if (Array.isArray(payload.files)) {
+          handlers.onDiff?.({
+            files: payload.files,
+            summary: payload.summary ?? '',
           });
         }
       } catch { /* ignore malformed */ }

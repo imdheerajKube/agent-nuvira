@@ -402,8 +402,13 @@ export class ChatCommand extends BaseCommand {
      * P0.7 — plan checklist: called on every plan_todo mutation with the
      * structured snapshot (goal + steps + revision) so the GUI's checklist
      * card updates in place.
+     */    onPlanChange?: (snapshot: import('../tools/plan-store.js').PlanSnapshot) => void;
+    /**
+     * P3b — git diff card: called when the git tool runs `git diff` with the
+     * structured per-file payload. The dashboard console forwards it as a
+     * `diff` event so the GUI renders the 🔧 diff card.
      */
-    onPlanChange?: (snapshot: import('../tools/plan-store.js').PlanSnapshot) => void;
+    onGitDiff?: (payload: import('../tools/git-tool.js').GitDiffPayload) => void;
     /**
      * P0.7 — the session's plan store (the dashboard console injects one per
      * conversation so plans never leak across sessions).
@@ -411,6 +416,8 @@ export class ChatCommand extends BaseCommand {
     planStore?: import('../tools/plan-store.js').PlanStoreLike;
     /** Live gateway for gateway_send (gateway-triggered chat answers reuse the connected bridge). */
     gateway?: ToolContext['gateway'];
+
+
   } = {},
 ): Promise<{
   content: string;
@@ -445,7 +452,7 @@ export class ChatCommand extends BaseCommand {
       true,
       { auto: autoMode },
       parsed,
-      { askUser: opts.askUser, onProgress: opts.onProgress, onToolCall: opts.onToolCall, onPlanChange: opts.onPlanChange, planStore: opts.planStore ?? this.planStore, gateway: opts.gateway },
+      { askUser: opts.askUser, onProgress: opts.onProgress, onToolCall: opts.onToolCall, onPlanChange: opts.onPlanChange, onGitDiff: opts.onGitDiff, planStore: opts.planStore ?? this.planStore, gateway: opts.gateway },
     );
 
     // No-model fallback: the tool loop could not generate a single response
@@ -875,6 +882,11 @@ export class ChatCommand extends BaseCommand {
        */
       onPlanChange?: (snapshot: import('../tools/plan-store.js').PlanSnapshot) => void;
       /**
+       * P3b — git diff card: called when the git tool runs `git diff` with
+       * the structured per-file payload (rendered as a diff card).
+       */
+      onGitDiff?: (payload: import('../tools/git-tool.js').GitDiffPayload) => void;
+      /**
        * P0.7 — the session's plan store (per-session in the dashboard, one
        * per ChatCommand instance here as the default).
        */
@@ -970,6 +982,10 @@ export class ChatCommand extends BaseCommand {
         // P0.7 — forward plan mutations to the GUI (structured checklist).
         if (ctxOverrides?.onPlanChange && event === 'plan:changed') {
           ctxOverrides.onPlanChange(data as import('../tools/plan-store.js').PlanSnapshot);
+        }
+        // P3b — forward git diff payloads to the GUI (the diff card).
+        if (ctxOverrides?.onGitDiff && event === 'git:diff') {
+          ctxOverrides.onGitDiff(data as import('../tools/git-tool.js').GitDiffPayload);
         }
         getEventBus().emit(event as never, data, source);
       },

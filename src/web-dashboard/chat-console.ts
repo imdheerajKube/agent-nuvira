@@ -38,6 +38,8 @@ export interface ChatEngine {
       onToolCall?: (phase: 'started' | 'called', info: { id?: string; tool: string; args?: Record<string, unknown>; ok?: boolean; result?: string; error?: string; durationMs?: number }) => void;
       /** P0.7 — a plan mutation (structured checklist for the GUI card). */
       onPlanChange?: (snapshot: PlanSnapshot) => void;
+      /** P3b — a git diff payload (rendered as a diff card in the GUI). */
+      onGitDiff?: (payload: import('../tools/git-tool.js').GitDiffPayload) => void;
       /** P0.7 — the session's plan store (per-conversation, survives turns). */
       planStore?: PlanStoreLike;
       /** Live gateway for gateway_send (gateway-triggered chat answers reuse the connected bridge). */
@@ -102,6 +104,12 @@ export type ChatConsoleEvent =
       goal: string;
       steps: Array<{ id: string; description: string; status: 'pending' | 'running' | 'done' | 'blocked' }>;
       revision: number;
+    }
+  | {
+      /** P3b — a git diff payload (rendered as a 🔧 diff card with +/− sections). */
+      kind: 'diff';
+      files: Array<{ path: string; body: string }>;
+      summary: string;
     }
   | { kind: 'status'; status: 'working' | 'done' | 'error' }
   | {
@@ -254,6 +262,11 @@ export class ChatConsole {
         // card is its rendering).
         onPlanChange: (snapshot) => {
           this.emit(sessionId, { kind: 'plan', goal: snapshot.goal, steps: snapshot.steps, revision: snapshot.revision });
+        },
+        // P3b — forward git diff payloads as a dedicated diff event (the git
+        // tool's diff is rendered as a card, not a generic step card).
+        onGitDiff: (payload) => {
+          this.emit(sessionId, { kind: 'diff', files: payload.files, summary: payload.summary });
         },
         planStore: this.planStoreFor(sessionId),
       });

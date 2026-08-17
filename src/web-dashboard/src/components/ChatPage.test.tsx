@@ -255,6 +255,42 @@ describe('ChatPage', () => {
     expect(unsub).toHaveBeenCalled();
   });
 
+  it('P3b — renders the git diff card live and snapshots it into the reply', async () => {
+    mockAuthed('admin');
+    let diffCb: ((d: { files: Array<{ path: string; body: string }>; summary: string }) => void) | null = null;
+    let unsub: (() => void) | null = null;
+    vi.spyOn(dashboardAPI, 'subscribeChat').mockImplementation((_sid, handlers) => {
+      diffCb = handlers.onDiff ?? null;
+      unsub = vi.fn();
+      return unsub;
+    });
+    vi.spyOn(dashboardAPI, 'chatResolve').mockResolvedValue({ ok: true, matches: [] });
+    let resolveSend: (v: typeof OK_RESPONSE) => void = () => {};
+    vi.spyOn(dashboardAPI, 'chatSend').mockImplementation(
+      () => new Promise((resolve) => { resolveSend = resolve; }) as Promise<typeof OK_RESPONSE>,
+    );
+    render(<ChatPage />);
+    await waitFor(() => expect(screen.getByPlaceholderText(/Message the agent/)).toBeTruthy());
+
+    fireEvent.change(screen.getByPlaceholderText(/Message the agent/), { target: { value: 'show my changes' } });
+    fireEvent.submit(screen.getByPlaceholderText(/Message the agent/).closest('form')!);
+    await waitFor(() => expect(diffCb).toBeTruthy());
+
+    // The git tool emitted a diff — the card appears live with +/− lines.
+    diffCb!({ files: [{ path: 'a.txt', body: 'diff --git a/a.txt b/a.txt\n+three\n-one' }], summary: '1 file changed' });
+    await waitFor(() => expect(screen.getByText('git diff')).toBeTruthy());
+    expect(screen.getByText(/1 file · \+1 −1/)).toBeTruthy();
+    expect(screen.getByText('a.txt')).toBeTruthy();
+    expect(screen.getByText('+three')).toBeTruthy();
+    expect(screen.getByText('-one')).toBeTruthy();
+
+    // On completion the diff snapshots into the assistant bubble.
+    resolveSend(OK_RESPONSE);
+    await waitFor(() => expect(screen.getByText('I checked the repo — the build is green.')).toBeTruthy());
+    await waitFor(() => expect(screen.getByText(/Changes: 1 file changed/)).toBeTruthy());
+    expect(unsub).toHaveBeenCalled();
+  });
+
   it('P0.1 — renders the agent question card and answers it via chatRespond', async () => {
     mockAuthed('admin');
     let questionCb: ((q: { questionId: string; question: string; choices: Array<{ label: string }>; multiSelect: boolean }) => void) | null = null;

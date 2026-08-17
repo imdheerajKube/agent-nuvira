@@ -194,6 +194,15 @@ export const runCliSchema = z.object({
     .describe('Set true ONLY after the user explicitly confirmed a destructive/system-level command (stop/shutdown/publish/clear/disallow). The tool refuses without it.'),
 });
 
+/** P3b — gated git args: structured status/log/diff/commit. */
+export const gitToolSchema = z.object({
+  action: z.enum(['status', 'log', 'diff', 'commit']).describe('What to do — status/log are read-only; diff returns a structured diff (rendered as a card); commit is GATED (confirm:true after ask_user)'),
+  message: z.string().optional().describe('Commit message (action=commit, required)'),
+  files: z.array(z.string()).optional().describe('Files to stage+commit — the ACCEPTED subset after the user reviewed the diff card (absent = all changes)'),
+  confirm: z.boolean().default(false).describe('Commit gate — true ONLY after the user approved via ask_user'),
+  limit: z.number().int().min(1).max(100).optional().describe('Log limit (action=log, default 20)'),
+});
+
 /** P3a — clone_repo args: a git URL to assess (depth-1 shallow only). */
 export const cloneRepoSchema = z.object({
   url: z.string().min(1).describe('Git repository URL — http(s)://, git@host:path, or git:// only. Cloned depth-1 (shallow) into an ephemeral cache; the turn then operates on the clone.'),
@@ -862,6 +871,22 @@ registerTool({
   inputSchema: cloneRepoSchema,
   endsAgentStep: false,
   run: (args, ctx) => import('./clone-repo.js').then((m) => m.runCloneRepo(args as import('./clone-repo.js').CloneRepoArgs, ctx)),
+});
+
+// ─── P3b gated git tool (diff/commit with accept-reject) ───────────────────
+// The agent can commit IN CONVERSATION, visibly: `git diff` emits a
+// structured event the dashboard renders as a 🔧 diff card (per-file +/−
+// sections); `git commit` is GATED (confirm:true after ask_user) and stages
+// only the ACCEPTED files subset. push/reset --hard/clean are structurally
+// unexpressible (the action enum) AND deny-guarded — parity with run_terminal.
+
+registerTool({
+  name: 'git',
+  description: 'Structured git operations: status/log (read-only), diff (unified output + a diff card in the GUI), and commit (GATED — confirm:true only after the user approved via ask_user; optional files = the accepted subset to stage+commit). Use for the whole commit flow: diff → ask_user (accept/reject files) → commit with confirm:true.',
+  category: 'workflow',
+  inputSchema: gitToolSchema,
+  endsAgentStep: false,
+  run: (args, ctx) => import('./git-tool.js').then((m) => m.runGitTool(args as import('./git-tool.js').GitToolArgs, ctx)),
 });
 
 // ─── H2 delegation tool (sub-agent registry) ────────────────────────────────
