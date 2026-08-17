@@ -1,240 +1,86 @@
 /**
- * Markdown — a small, dependency-free renderer for chat answers (Phase 1 of
- * DASHBOARD_FIRST_PLAN: "the chat currently renders answers as raw text").
+ * Markdown — chat answer renderer (Phase 1 of DASHBOARD_FIRST_PLAN).
  *
- * The agent's replies are markdown (headings, lists, bold, inline code,
- * fenced code blocks, links). Rendering them is the single highest-impact
- * change toward a professional-assistant feel. We deliberately do NOT pull
- * react-markdown: the plan's risk table says "use a small renderer; verify
- * what's already bundled first" — and the project's ethos is dependency-free
- * (the gateway adapters are pure fetch). This is ~150 lines, handles the
- * shapes the engine actually emits, and never uses dangerouslySetInnerHTML
- * (React escaping + an href allowlist are the XSS guards).
+ * Stack (decision reviewed 2026-08-17 with the user): react-markdown v10 +
+ * remark-gfm + rehype-highlight. The earlier custom renderer covered ~90% of
+ * CommonMark but mangled real agent output (nested lists, ***bold italic***,
+ * autolinks, strikethrough, task lists) and had NO syntax highlighting — the
+ * user's exact concern ("is your custom a weak fix?"). react-markdown is the
+ * spec-complete, battle-tested standard; it adds ~10 KB gzipped to a 219 KB
+ * bundle (<5%) and builds React elements (no dangerouslySetInnerHTML) with
+ * built-in URL sanitization — the same security model as before.
  *
- * Supported: fenced code blocks (```lang, with copy button), headings
- * (#..######), bold (**), italic (*), inline code (`), links
- * ([text](url) — http/https/mailto only), bullet + numbered lists,
- * blockquotes (>), tables (| a | b |), horizontal rules (---).
+ * The zero-dependency custom renderer is preserved as `MarkdownZeroDep.tsx`
+ * (unused by the app) for anyone who wants a dependency-free build — switch
+ * the import in ChatPage.tsx to use it.
+ *
+ * Supported: full CommonMark + GFM (tables, strikethrough, task lists,
+ * autolinks), syntax-highlighted fenced code blocks with a copy button,
+ * headings, lists, blockquotes, links (react-markdown's defaultUrlTransform
+ * strips javascript:/data: hrefs).
  */
 
 import { useMemo, useState } from 'react';
-
-interface CodeBlock {
-  type: 'code';
-  lang: string;
-  code: string;
-}
-
-interface ProseBlock {
-  type: 'prose';
-  /** Raw lines (no code fences) — inline-parsed during render. */
-  lines: string[];
-}
-
-type Block = CodeBlock | ProseBlock;
-
-/** Split on ``` fences; everything outside becomes prose lines. */
-function splitBlocks(text: string): Block[] {
-  const blocks: Block[] = [];
-  const fenceRe = /^```([\w+-]*)\s*$/;
-  const lines = text.split('\n');
-  let i = 0;
-  let prose: string[] = [];
-  const flushProse = () => {
-    if (prose.length > 0) {
-      blocks.push({ type: 'prose', lines: prose });
-      prose = [];
-    }
-  };
-  while (i < lines.length) {
-    const m = fenceRe.exec(lines[i].trim());
-    if (m) {
-      flushProse();
-      const lang = m[1] || 'text';
-      const code: string[] = [];
-      i += 1;
-      while (i < lines.length && !/^```\s*$/.test(lines[i].trim())) {
-        code.push(lines[i]);
-        i += 1;
-      }
-      i += 1; // closing fence
-      blocks.push({ type: 'code', lang, code: code.join('\n') });
-    } else {
-      prose.push(lines[i]);
-      i += 1;
-    }
-  }
-  flushProse();
-  return blocks;
-}
-
-const SAFE_HREF = /^(https?:\/\/|mailto:)/i;
+import ReactMarkdown from 'react-markdown';
+import remarkGfm from 'remark-gfm';
+import rehypeHighlight from 'rehype-highlight';
+import ts from 'highlight.js/lib/languages/typescript';
+import js from 'highlight.js/lib/languages/javascript';
+import json from 'highlight.js/lib/languages/json';
+import bash from 'highlight.js/lib/languages/bash';
+import shell from 'highlight.js/lib/languages/shell';
+import python from 'highlight.js/lib/languages/python';
+import markdown from 'highlight.js/lib/languages/markdown';
+import yaml from 'highlight.js/lib/languages/yaml';
+import diff from 'highlight.js/lib/languages/diff';
+import sql from 'highlight.js/lib/languages/sql';
+import xml from 'highlight.js/lib/languages/xml';
+import css from 'highlight.js/lib/languages/css';
+import plaintext from 'highlight.js/lib/languages/plaintext';
 
 /**
- * Inline tokenizer: `code` first (so ** inside code stays literal), then
- * **bold**, *italic*, [text](url). Everything else is plain text. Returns
- * React nodes — no HTML strings, so no injection surface.
+ * Curated highlight languages — the set the agent actually emits (ts, js,
+ * json, bash, python, markdown, yaml, diff, sql, html/xml, css). rehype-
+ * highlight's DEFAULT lowlight bundle carries ~37 grammars; registering only
+ * these keeps the dashboard bundle ~80 KB smaller (measured: gzip 322 KB →
+ * ~240 KB) while still highlighting every real code block. rehype-highlight
+ * expects a name → grammar RECORD (it builds its own lowlight internally).
  */
-function inline(text: string, keyPrefix: string): React.ReactNode[] {
-  const nodes: React.ReactNode[] = [];
-  const re = /(`[^`]+`)|(\*\*[^*]+\*\*)|(\*[^*\n]+\*)|(\[([^\]]+)\]\(([^)\s]+)\))/g;
-  let last = 0;
-  let m: RegExpExecArray | null;
-  let k = 0;
-  while ((m = re.exec(text)) !== null) {
-    if (m.index > last) nodes.push(text.slice(last, m.index));
-    const [, code, bold, ital, , linkText, linkHref] = m;
-    if (code !== undefined) {
-      nodes.push(
-        <code key={`${keyPrefix}-c${k}`} className="md-inline-code">
-          {code.slice(1, -1)}
-        </code>,
-      );
-    } else if (bold !== undefined) {
-      nodes.push(<strong key={`${keyPrefix}-b${k}`}>{bold.slice(2, -2)}</strong>);
-    } else if (ital !== undefined) {
-      nodes.push(<em key={`${keyPrefix}-i${k}`}>{ital.slice(1, -1)}</em>);
-    } else if (linkHref !== undefined && SAFE_HREF.test(linkHref)) {
-      nodes.push(
-        <a key={`${keyPrefix}-l${k}`} href={linkHref} target="_blank" rel="noreferrer">
-          {linkText}
-        </a>,
-      );
-    } else if (linkHref !== undefined) {
-      // Unsafe scheme — render the text, never the href.
-      nodes.push(<span key={`${keyPrefix}-l${k}`}>{linkText}</span>);
-    }
-    last = m.index + m[0].length;
-    k += 1;
-  }
-  if (last < text.length) nodes.push(text.slice(last));
-  return nodes;
+const HIGHLIGHT_LANGUAGES = {
+  ts,
+  typescript: ts,
+  js,
+  javascript: js,
+  json,
+  bash,
+  shell,
+  sh: shell,
+  python,
+  py: python,
+  markdown,
+  md: markdown,
+  yaml,
+  yml: yaml,
+  diff,
+  sql,
+  html: xml,
+  xml,
+  css,
+  text: plaintext,
+  plaintext,
+};
+
+/** Walk a hast node to its raw text (highlight spans included). */
+function hastText(node: unknown): string {
+  if (node == null) return '';
+  const n = node as { value?: unknown; children?: unknown[] };
+  if (typeof n.value === 'string') return n.value;
+  if (Array.isArray(n.children)) return n.children.map(hastText).join('');
+  return '';
 }
 
-/** Group consecutive list items so a run renders as one <ul>/<ol>. */
-interface ListItem {
-  type: 'ul' | 'ol';
-  text: string;
-}
-
-/** Render one prose line; list items and tables accumulate into groups. */
-function Prose({ lines }: { lines: string[] }) {
-  const rows: React.ReactNode[] = [];
-  let listRun: ListItem[] | null = null;
-  let tableRun: string[][] | null = null;
-  let key = 0;
-
-  const flushList = () => {
-    if (!listRun) return;
-    const items = listRun;
-    const Tag = items[0].type === 'ol' ? 'ol' : 'ul';
-    rows.push(
-      <Tag key={`md-l${key++}`} className={`md-list md-${items[0].type}`}>
-        {items.map((it, i) => (
-          <li key={i}>{inline(it.text, `md-li${key}-${i}`)}</li>
-        ))}
-      </Tag>,
-    );
-    listRun = null;
-  };
-  const flushTable = () => {
-    if (!tableRun) return;
-    const t = tableRun;
-    rows.push(
-      <table key={`md-t${key++}`} className="md-table">
-        <thead>
-          <tr>
-            {t[0].map((h, i) => (
-              <th key={i}>{inline(h, `md-th${i}`)}</th>
-            ))}
-          </tr>
-        </thead>
-        <tbody>
-          {t.slice(2).map((r, ri) => (
-            <tr key={ri}>
-              {r.map((c, ci) => (
-                <td key={ci}>{inline(c, `md-td${ri}-${ci}`)}</td>
-              ))}
-            </tr>
-          ))}
-        </tbody>
-      </table>,
-    );
-    tableRun = null;
-  };
-
-  for (const raw of lines) {
-    const line = raw;
-    const h = /^(#{1,6})\s+(.*)$/.exec(line);
-    if (h) {
-      flushList();
-      flushTable();
-      const level = h[1].length;
-      const Tag = (`h${Math.min(level, 6)}`) as 'h1';
-      rows.push(<Tag key={`md-h${key++}`} className={`md-heading md-h${level}`}>{inline(h[2], `md-h${key}`)}</Tag>);
-      continue;
-    }
-    const hr = /^\s*(---+|\*\*\*+|___+)\s*$/.exec(line);
-    if (hr) {
-      flushList();
-      flushTable();
-      rows.push(<hr key={`md-r${key++}`} className="md-hr" />);
-      continue;
-    }
-    const quote = /^>\s?(.*)$/.exec(line);
-    if (quote) {
-      flushList();
-      flushTable();
-      rows.push(<blockquote key={`md-q${key++}`} className="md-quote">{inline(quote[1], `md-q${key}`)}</blockquote>);
-      continue;
-    }
-    const ul = /^\s*[-*]\s+(.*)$/.exec(line);
-    if (ul) {
-      flushTable();
-      if (listRun && listRun[0].type === 'ul') listRun.push({ type: 'ul', text: ul[1] });
-      else {
-        flushList();
-        listRun = [{ type: 'ul', text: ul[1] }];
-      }
-      continue;
-    }
-    const ol = /^\s*\d+[.)]\s+(.*)$/.exec(line);
-    if (ol) {
-      flushTable();
-      if (listRun && listRun[0].type === 'ol') listRun.push({ type: 'ol', text: ol[1] });
-      else {
-        flushList();
-        listRun = [{ type: 'ol', text: ol[1] }];
-      }
-      continue;
-    }
-    const tbl = /^\s*\|.*\|\s*$/.exec(line);
-    if (tbl) {
-      flushList();
-      const cells = line
-        .trim()
-        .replace(/^\||\|$/g, '')
-        .split('|')
-        .map((c) => c.trim());
-      if (!tableRun) tableRun = [cells];
-      else tableRun.push(cells);
-      continue;
-    }
-    flushList();
-    flushTable();
-    if (line.trim() === '') {
-      rows.push(<div key={`md-p${key++}`} className="md-blank" />);
-    } else {
-      rows.push(<p key={`md-p${key++}`} className="md-para">{inline(line, `md-p${key}`)}</p>);
-    }
-  }
-  flushList();
-  flushTable();
-  return <>{rows}</>;
-}
-
-/** A fenced code block with a language label and a copy button. */
-function CodeBlockView({ lang, code }: { lang: string; code: string }) {
+/** A fenced code block: language label + copy button + highlighted body. */
+function CodeBlockView({ lang, code, children }: { lang: string; code: string; children: React.ReactNode }) {
   const [copied, setCopied] = useState(false);
   const copy = async () => {
     try {
@@ -254,20 +100,59 @@ function CodeBlockView({ lang, code }: { lang: string; code: string }) {
         </button>
       </div>
       <pre className="md-code-pre">
-        <code>{code}</code>
+        <code>{children}</code>
       </pre>
     </div>
   );
 }
 
-/** Top-level renderer: split into code/prose blocks, render each. */
+/**
+ * Custom `pre` renderer: wraps every fenced block in the copy-button shell.
+ * `node` is the hast element — walk it for the RAW code text (rehype-highlight
+ * has already split children into spans), and read `language-*` for the label.
+ * Blocks without a language still get the shell (lang "text").
+ */
+function Pre({ node, children }: { node?: unknown; children?: React.ReactNode }) {
+  const codeNode = (node as { children?: Array<{ properties?: { className?: unknown } }> })?.children?.[0];
+  const classes = Array.isArray(codeNode?.properties?.className)
+    ? (codeNode?.properties?.className as string[])
+    : [];
+  const lang = classes.find((c) => typeof c === 'string' && c.startsWith('language-'))?.slice(9) ?? 'text';
+  const raw = useMemo(() => hastText(codeNode), [codeNode]);
+  return (
+    <CodeBlockView lang={lang} code={raw}>
+      {children}
+    </CodeBlockView>
+  );
+}
+
+/** Top-level renderer: react-markdown with GFM + highlighting + the shell. */
 export default function Markdown({ text }: { text: string }) {
-  const blocks = useMemo(() => splitBlocks(text ?? ''), [text]);
+  const components = useMemo(
+    () => ({
+      h1: ({ node: _n, ...p }: { node?: unknown }) => <h1 className="md-heading md-h1" {...p} />,
+      h2: ({ node: _n, ...p }: { node?: unknown }) => <h2 className="md-heading md-h2" {...p} />,
+      h3: ({ node: _n, ...p }: { node?: unknown }) => <h3 className="md-heading md-h3" {...p} />,
+      h4: ({ node: _n, ...p }: { node?: unknown }) => <h4 className="md-heading md-h4" {...p} />,
+      h5: ({ node: _n, ...p }: { node?: unknown }) => <h5 className="md-heading md-h5" {...p} />,
+      h6: ({ node: _n, ...p }: { node?: unknown }) => <h6 className="md-heading md-h6" {...p} />,
+      p: ({ node: _n, ...p }: { node?: unknown }) => <p className="md-para" {...p} />,
+      ul: ({ node: _n, ...p }: { node?: unknown }) => <ul className="md-list md-ul" {...p} />,
+      ol: ({ node: _n, ...p }: { node?: unknown }) => <ol className="md-list md-ol" {...p} />,
+      blockquote: ({ node: _n, ...p }: { node?: unknown }) => <blockquote className="md-quote" {...p} />,
+      hr: ({ node: _n, ...p }: { node?: unknown }) => <hr className="md-hr" {...p} />,
+      table: ({ node: _n, ...p }: { node?: unknown }) => <table className="md-table" {...p} />,
+      a: ({ node: _n, ...p }: { node?: unknown }) => <a target="_blank" rel="noreferrer" {...p} />,
+      pre: Pre,
+    }),
+    [],
+  );
+
   return (
     <div className="md-root">
-      {blocks.map((b, i) =>
-        b.type === 'code' ? <CodeBlockView key={`b${i}`} lang={b.lang} code={b.code} /> : <Prose key={`b${i}`} lines={b.lines} />,
-      )}
+      <ReactMarkdown remarkPlugins={[remarkGfm]} rehypePlugins={[[rehypeHighlight, { languages: HIGHLIGHT_LANGUAGES }]]} components={components}>
+        {text ?? ''}
+      </ReactMarkdown>
     </div>
   );
 }

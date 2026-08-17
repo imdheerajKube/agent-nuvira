@@ -2565,13 +2565,74 @@ body {
   margin: 4px 0;
 }
 
-.md-inline-code {
+.md-inline-code,
+.md-root :not(pre) > code {
   background: rgba(127, 127, 127, 0.2);
   border: 1px solid rgba(127, 127, 127, 0.3);
   border-radius: 4px;
   padding: 1px 5px;
   font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
   font-size: 12px;
+}
+
+/* GFM task lists */
+.md-root ul:has(input[type="checkbox"]) {
+  list-style: none;
+  padding-left: 4px;
+}
+
+.md-root input[type="checkbox"] {
+  margin-right: 6px;
+  accent-color: var(--accent-blue, #3b82f6);
+}
+
+/* Syntax highlighting (rehype-highlight → hljs-* token classes) */
+.md-code-pre code .hljs-keyword,
+.md-code-pre code .hljs-selector-tag,
+.md-code-pre code .hljs-built_in {
+  color: #c678dd;
+}
+
+.md-code-pre code .hljs-string,
+.md-code-pre code .hljs-attr,
+.md-code-pre code .hljs-template-tag {
+  color: #98c379;
+}
+
+.md-code-pre code .hljs-number,
+.md-code-pre code .hljs-literal,
+.md-code-pre code .hljs-symbol {
+  color: #d19a66;
+}
+
+.md-code-pre code .hljs-comment,
+.md-code-pre code .hljs-quote {
+  color: #7f848e;
+  font-style: italic;
+}
+
+.md-code-pre code .hljs-function,
+.md-code-pre code .hljs-title,
+.md-code-pre code .hljs-title.function_ {
+  color: #61afef;
+}
+
+.md-code-pre code .hljs-variable,
+.md-code-pre code .hljs-params,
+.md-code-pre code .hljs-property {
+  color: #e06c75;
+}
+
+.md-code-pre code .hljs-meta {
+  color: #abb2bf;
+}
+
+.md-code-pre code .hljs-emphasis {
+  font-style: italic;
+}
+
+.md-code-pre code .hljs-strong {
+  font-weight: 700;
 }
 
 .md-root a {
