@@ -264,6 +264,8 @@ export class OpenAICompatAdapter implements InferenceProvider {
       temperature: options?.temperature ?? this.config.temperature ?? 0.7,
       maxTokens: options?.maxTokens ?? this.config.maxTokens ?? 4096,
       timeoutMs: this.config.timeoutMs ?? 30_000,
+      // P4 — external cancellation (the dashboard Cancel button).
+      signal: options?.signal,
       // Cost parity with generate(): tool-calling turns are metered so the
       // quota ledger enforces free-tier limits here too.
       onCost: (promptText, contentText) => {
@@ -304,6 +306,8 @@ export class OpenAICompatAdapter implements InferenceProvider {
         temperature: options?.temperature ?? this.config.temperature ?? 0.7,
         maxTokens: options?.maxTokens ?? this.config.maxTokens ?? 4096,
         timeoutMs: this.config.timeoutMs ?? 30_000,
+        // P4 — external cancellation (the dashboard Cancel button).
+        signal: options?.signal,
         // Cost parity with generate(): tool-calling turns are metered.
         onCost: (promptText, contentText) => {
           try {

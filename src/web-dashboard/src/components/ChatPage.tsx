@@ -237,6 +237,12 @@ export default function ChatPage() {
   // streamed text is replaced, not merged, when the turn resolves.
   const [streamingText, setStreamingText] = useState('');
   const streamingRef = useRef('');
+  // P4 — the in-flight turn's AbortController (the Cancel button aborts the
+  // POST fetch; the server then cancels the turn server-side).
+  const abortRef = useRef<AbortController | null>(null);
+  // P4 — the last message whose turn FAILED, for the Retry affordance (null
+  // when nothing to retry).
+  const [retryAsk, setRetryAsk] = useState<string | null>(null);
   const sessionIdRef = useRef<string>(newSessionId());
   // Phase 6 — the last sent message (↑ recalls it into the box).
   const lastSentRef = useRef<string>('');
@@ -309,6 +315,7 @@ export default function ChatPage() {
     liveDiffRef.current = null;
     streamingRef.current = '';
     setStreamingText('');
+    setRetryAsk(null);
     setError('');
     setMeta(null);
     setPendingResolve(null);
@@ -383,6 +390,11 @@ export default function ChatPage() {
       }
 
       const sessionId = sessionIdRef.current;
+      // P4 — arm the abort controller for this turn (the Cancel button fires
+      // it; the server cancels the turn when the aborted fetch closes).
+      const controller = new AbortController();
+      abortRef.current = controller;
+      setRetryAsk(null);
       // Subscribe to LIVE progress BEFORE the turn starts so no step is missed
       // (EventSource auto-reconnects; the final answer arrives via the POST).
       subRef.current?.();
@@ -428,7 +440,8 @@ export default function ChatPage() {
           setLiveDiff(view);
         },
       });
-      const r = await dashboardAPI.chatSend(sessionId, clean, { projectPath: attachedProject?.path });
+      const r = await dashboardAPI.chatSend(sessionId, clean, { projectPath: attachedProject?.path }, controller.signal);
+      abortRef.current = null;
       subRef.current?.();
       subRef.current = null;
       // P4 — the turn resolved: the streamed typewriter is replaced by the
@@ -437,6 +450,8 @@ export default function ChatPage() {
       setStreamingText('');
       if (r.ok) {
         setMeta(r.generationFailed ? null : `${r.provider ?? 'provider'}${r.model ? ` / ${r.model}` : ' (auto-routed)'}`);
+        // P4 — a failed generation (no usable answer) offers Retry too.
+        setRetryAsk(r.generationFailed ? clean : null);
         setMessages((m) => [
           ...m,
           {
@@ -451,19 +466,31 @@ export default function ChatPage() {
           },
         ]);
       } else {
-        if (r.unauthorized) {
+        if (controller.signal.aborted) {
+          // P4 — the user pressed Cancel: silent cleanup. The user bubble stays
+          // (the message was sent), no error banner, nothing persisted
+          // server-side (the console discards cancelled turns).
+          setError('');
+          setRetryAsk(null);
+        } else if (r.unauthorized) {
           setAuth((a) => (a ? { ...a, authenticated: false } : a));
           setError('Session expired — log in again to chat.');
         } else {
           setError(r.error || 'The agent could not answer — check that a provider API key is set for the dashboard process.');
+          // P4 — retry on failed turn: keep the user bubble and offer to
+          // re-send the same message (previous behavior dropped it).
+          setRetryAsk(clean);
         }
-        // Drop the optimistic user bubble so the thread reflects the server state.
-        setMessages((m) => m.slice(0, -1));
       }
       setBusy(false);
     },
     [busy, attachedProject],
   );
+
+  /** P4 — cancel the in-flight turn (aborts the POST; the server cancels it). */
+  const cancelTurn = useCallback(() => {
+    abortRef.current?.abort();
+  }, []);
 
   /** Run the resolved CLI command directly (the user confirmed the card). */
   const runResolvedCommand = useCallback(async (ask: string) => {
@@ -572,6 +599,7 @@ export default function ChatPage() {
     liveDiffRef.current = null;
     streamingRef.current = '';
     setStreamingText('');
+    setRetryAsk(null);
     setError('');
     setMeta(null);
     setPendingResolve(null);
@@ -762,6 +790,15 @@ export default function ChatPage() {
 
           {error ? <div className="admin-row-msg admin-row-msg-err">{error}</div> : null}
 
+          {retryAsk && !busy ? (
+            <div className="chat-retry-row">
+              <button className="admin-refresh-btn" type="button" onClick={() => void send(retryAsk)}>
+                ↻ Retry
+              </button>
+              <span className="admin-hint">Re-send the last message — the turn failed.</span>
+            </div>
+          ) : null}
+
           {pendingResolve && !busy ? (
             <div className="chat-resolve-card">
               {pendingResolve.top?.ambiguous && pendingResolve.top.options?.length ? (
@@ -863,6 +900,11 @@ export default function ChatPage() {
               rows={1}
               autoFocus
             />
+            {busy ? (
+              <button className="admin-mini-btn chat-cancel-btn" type="button" onClick={cancelTurn}>
+                ⏹ Cancel
+              </button>
+            ) : null}
             <button className="admin-refresh-btn" type="submit" disabled={busy || !input.trim()}>
               {busy ? '⏳ Working…' : '➤ Send'}
             </button>

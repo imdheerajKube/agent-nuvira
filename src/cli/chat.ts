@@ -441,11 +441,20 @@ export class ChatCommand extends BaseCommand {
      * step content at once. The CLI never passes it — pure dashboard opt-in.
      */
     onToken?: (token: string) => void;
+    /**
+     * P4 — external cancellation (the dashboard's Cancel button): the turn
+     * stops at the next loop boundary and any in-flight provider request
+     * aborts. A cancelled turn returns `cancelled: true` and is discarded
+     * (no cache/history/memory). The CLI never passes it.
+     */
+    signal?: AbortSignal;
   } = {},
 ): Promise<{
   content: string;
   followups: FollowupSuggestion[];
   generationFailed?: boolean;
+  /** P4 — true when the turn was cancelled via opts.signal (discarded). */
+  cancelled?: boolean;
   provider?: string;
   model?: string;
 }> {
@@ -490,7 +499,7 @@ export class ChatCommand extends BaseCommand {
       true,
       { auto: autoMode },
       parsed,
-      { askUser: opts.askUser, onProgress: opts.onProgress, onToolCall: opts.onToolCall, onPlanChange: opts.onPlanChange, onGitDiff: opts.onGitDiff, planStore: opts.planStore ?? this.planStore, gateway: opts.gateway, projectContext: opts.projectContext, recallContext: recallBlock, onToken: opts.onToken },
+      { askUser: opts.askUser, onProgress: opts.onProgress, onToolCall: opts.onToolCall, onPlanChange: opts.onPlanChange, onGitDiff: opts.onGitDiff, planStore: opts.planStore ?? this.planStore, gateway: opts.gateway, projectContext: opts.projectContext, recallContext: recallBlock, onToken: opts.onToken, signal: opts.signal },
     );
 
     // No-model fallback: the tool loop could not generate a single response
@@ -509,6 +518,7 @@ export class ChatCommand extends BaseCommand {
       content: answer.content,
       followups: answer.followups ?? [],
       generationFailed: answer.generationFailed,
+      cancelled: answer.cancelled,
       provider: type,
       model,
     };
@@ -949,10 +959,18 @@ export class ChatCommand extends BaseCommand {
        * ToolLoopOptions.onToken.
        */
       onToken?: (token: string) => void;
+      /**
+       * P4 — external cancellation (the dashboard Cancel button): passed to
+       * the tool loop so an in-flight provider request aborts and the turn
+       * stops at the next loop boundary.
+       */
+      signal?: AbortSignal;
     },
   ): Promise<{
     content: string;
     generationFailed?: boolean;
+    /** P4 — true when the turn was cancelled via the signal (discarded). */
+    cancelled?: boolean;
     /** P3 — followups as data (the dashboard chat console renders them as chips). */
     followups?: FollowupSuggestion[];
   }> {
@@ -1078,7 +1096,7 @@ export class ChatCommand extends BaseCommand {
         },
       },
     };
-    const callModel = this.buildToolCallModel(message, session, options, mode, ctxOverrides?.onToken);
+    const callModel = this.buildToolCallModel(message, session, options, mode, ctxOverrides?.onToken, ctxOverrides?.signal);
 
     let result: ToolLoopResult;
     try {
@@ -1087,6 +1105,7 @@ export class ChatCommand extends BaseCommand {
         context: toolContext,
         maxSteps: 8,
         onToken: ctxOverrides?.onToken,
+        signal: ctxOverrides?.signal,
         deps: {
           callModel,
           executeTool: async (name, args, ctx) => {
@@ -1123,7 +1142,9 @@ export class ChatCommand extends BaseCommand {
     // E3c: a generationFailed turn is NOT cached/persisted — the caller may
     // fall back to the rule decision, and the failure text must not pollute
     // history or the cache.
-    if (result.content.trim() && !result.generationFailed) {
+    // P4: a CANCELLED turn is likewise discarded entirely — no cache write,
+    // no history/memory, no registry telemetry (the caller dropped it).
+    if (result.content.trim() && !result.generationFailed && !result.cancelled) {
       if (cacheEnabled) {
         try {
           await cache.set(message, result.content, session.model ?? 'default', session.type);
@@ -1145,6 +1166,7 @@ export class ChatCommand extends BaseCommand {
     return {
       content: result.content,
       generationFailed: result.generationFailed,
+      cancelled: result.cancelled,
       followups: result.followups,
     };
   }
@@ -1162,11 +1184,13 @@ export class ChatCommand extends BaseCommand {
     options: { file?: string; provider?: string; model?: string; cache?: boolean; dev?: boolean },
     mode: { auto: boolean },
     onToken?: (token: string) => void,
+    signal?: AbortSignal,
   ): ToolLoopDeps['callModel'] {
-    return async (messages, schemas, stepOnToken) => {
+    return async (messages, schemas, stepOnToken, stepSignal) => {
       // The effective token sink: the caller's stream wins; when a step-level
       // sink is also given (loop passthrough) they are the same channel.
       const sink = stepOnToken ?? onToken;
+      const abort = stepSignal ?? signal;
       const tryGenerate = async (
         prov: InferenceProvider,
         typ: string,
@@ -1179,9 +1203,9 @@ export class ChatCommand extends BaseCommand {
             // content delivered as a single chunk so the typewriter channel
             // still receives the answer (appears at once — today's behavior).
             if (sink && typeof prov.generateToolsStream === 'function') {
-              return await prov.generateToolsStream(messages, schemas, { ...options, model: mdl }, sink);
+              return await prov.generateToolsStream(messages, schemas, { ...options, model: mdl, signal: abort }, sink);
             }
-            const result = await prov.generateTools(messages, schemas, { ...options, model: mdl });
+            const result = await prov.generateTools(messages, schemas, { ...options, model: mdl, signal: abort });
             if (sink && result.content) sink(result.content);
             return result;
           } catch (err) {
@@ -1210,10 +1234,10 @@ export class ChatCommand extends BaseCommand {
         let raw: string;
         if (typeof prov.generateStream === 'function') {
           const chunks: string[] = [];
-          await prov.generateStream(prompt, { ...options, model: mdl }, (t) => chunks.push(t));
+          await prov.generateStream(prompt, { ...options, model: mdl, signal: abort }, (t) => chunks.push(t));
           raw = chunks.join('');
         } else {
-          raw = await prov.generate(prompt, { ...options, model: mdl });
+          raw = await prov.generate(prompt, { ...options, model: mdl, signal: abort });
         }
         const { text, calls } = extractFallbackToolCalls(raw);
         return { content: text, toolCalls: calls };

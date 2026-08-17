@@ -833,6 +833,7 @@ export class DashboardAPI {
     sessionId: string,
     message: string,
     opts?: { provider?: string; model?: string; projectPath?: string },
+    signal?: AbortSignal,
   ): Promise<
     | { ok: true; content: string; followups: Array<{ prompt: string; label?: string }>; provider: string | null; model: string | null; generationFailed: boolean }
     | { ok: false; error: string; unauthorized?: boolean; forbidden?: boolean }
@@ -843,7 +844,9 @@ export class DashboardAPI {
         method: 'POST',
         headers: { 'Content-Type': 'application/json', ...(token ? { Authorization: `Bearer ${token}` } : {}) },
         body: JSON.stringify({ sessionId, message, provider: opts?.provider, model: opts?.model, projectPath: opts?.projectPath }),
-        signal: AbortSignal.timeout(300_000),
+        // P4 — the Cancel button aborts the POST; the 5-minute ceiling still
+        // applies alongside the caller's signal.
+        signal: signal ? AbortSignal.any([AbortSignal.timeout(300_000), signal]) : AbortSignal.timeout(300_000),
       });
       const d = (await res.json()) as Record<string, unknown>;
       if (res.status === 200 && d.ok) {

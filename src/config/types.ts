@@ -542,4 +542,10 @@ export interface InferenceOptions {
    * reasoning accept the retry. Additive: absent → no behavior change.
    */
   reasoningContext?: string;
+  /**
+   * P4 — external cancellation (the dashboard's Cancel button): when present,
+   * the adapter aborts the in-flight request on abort. Absent → the adapter's
+   * own timeout applies (unchanged behavior). Additive: never set by the CLI.
+   */
+  signal?: AbortSignal;
 }

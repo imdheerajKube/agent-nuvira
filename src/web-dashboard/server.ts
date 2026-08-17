@@ -3787,7 +3787,23 @@ function handleRequest(req: IncomingMessage, res: ServerResponse): void {
         const bundle = getProjectBundle(projectPath);
         if (bundle) projectContext = formatProjectText(bundle);
       }
+      // P4 — the dashboard's Cancel button aborts the POST fetch: the server
+      // sees the request close and cancels the in-flight turn (the engine
+      // aborts the provider request — quota is not spent on a cancelled turn).
+      // Guarded: after the response is written (writableEnded) this never
+      // fires, and chatConsole.abort is a no-op once the turn finished.
+      // The client-disconnect signal is res 'close' (fires when the response
+      // stream closes): for an ABORTED fetch the response never completes, so
+      // writableEnded stays false and the turn is cancelled; after a normal
+      // completion writableEnded is true and this is a no-op.
+      const onResClose = () => {
+        if (!res.writableEnded) chatConsole.abort(sessionId);
+      };
+      res.on('close', onResClose);
       const result = await chatConsole.answer(sessionId, message, { provider, model, projectContext, projectPath });
+      // The response is written below — remove the disconnect listener so a
+      // post-completion close can never touch the console again.
+      res.off('close', onResClose);
       if (!result.ok) {
         writeJson(res, 400, {
           ok: false,

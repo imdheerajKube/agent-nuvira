@@ -215,8 +215,23 @@ about without being told how.
 - [x] **Tests:** onboarding-chip test (click → chatSend with the prompt)
 
 ### Phase 6 — Polish & hardening (ongoing)
-- [ ] Streaming cancel, retry on failed turn, error surfaces (partial: exists)
-- [ ] Followup chips kept clickable (the earlier bug the user reported)
+- [x] Streaming cancel, retry on failed turn, error surfaces (partial: exists).
+      **Cancel**: ChatPage's ⏹ Cancel button aborts the POST fetch
+      (AbortController → `chatSend(signal)`); the server sees the response
+      stream close (`res.on('close')` + `writableEnded` guard — `req` 'close'
+      never fires on an undici abort, discovered in testing) and calls
+      `chatConsole.abort(sessionId)`, which fires the turn's AbortController.
+      The engine threads the signal end-to-end (new additive
+      `InferenceOptions.signal` — same pattern as apiKey/continuation): the
+      tool loop checks it before every step + after tool execution, and the
+      four OpenAI-protocol adapters abort the in-flight fetch
+      (`chatCompletionsWithTools(Stream)` accept the signal), so quota/tokens
+      are not spent on a cancelled turn. The console DISCARDS the cancelled
+      turn (no persist, no events — a stale turn can never leak into the next
+      one via the per-turn emit guard) and releases busy immediately.
+      **Retry**: a failed turn keeps the user bubble (was: dropped) and shows
+      a ↻ Retry button that re-sends the same message; a generationFailed
+      turn offers Retry too. Followup chips stay clickable (existing)
 - [x] Keyboard: Enter sends, Shift+Enter newline, ↑ recalls the last sent message
       (input → auto-growing textarea)
 - [x] Full dashboard test suite green (**220** today, was 208) + new chat tests

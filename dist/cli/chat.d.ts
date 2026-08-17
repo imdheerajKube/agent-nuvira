@@ -166,10 +166,19 @@ export declare class ChatCommand extends BaseCommand {
          * step content at once. The CLI never passes it — pure dashboard opt-in.
          */
         onToken?: (token: string) => void;
+        /**
+         * P4 — external cancellation (the dashboard's Cancel button): the turn
+         * stops at the next loop boundary and any in-flight provider request
+         * aborts. A cancelled turn returns `cancelled: true` and is discarded
+         * (no cache/history/memory). The CLI never passes it.
+         */
+        signal?: AbortSignal;
     }): Promise<{
         content: string;
         followups: FollowupSuggestion[];
         generationFailed?: boolean;
+        /** P4 — true when the turn was cancelled via opts.signal (discarded). */
+        cancelled?: boolean;
         provider?: string;
         model?: string;
     }>;

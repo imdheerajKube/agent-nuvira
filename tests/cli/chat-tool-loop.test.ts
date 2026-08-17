@@ -390,4 +390,58 @@ describe('ChatCommand — P4 answer token streaming (dashboard typewriter)', () 
     expect(provider.generateToolsStream).not.toHaveBeenCalled();
     expect(provider.generateTools).toHaveBeenCalledTimes(1);
   });
+
+  it('never spends a model call when the signal is already aborted', async () => {
+    const controller = new AbortController();
+    controller.abort();
+    const provider = {
+      name: 'Mock',
+      generateTools: vi.fn().mockResolvedValue({ content: 'must not run', toolCalls: [] }),
+      generate: vi.fn().mockResolvedValue('unused'),
+      isAvailable: vi.fn().mockResolvedValue(true),
+      getInfo: () => 'Mock',
+      listModels: vi.fn().mockResolvedValue([]),
+    } as unknown as InferenceProvider;
+    stubGetProvider(provider);
+
+    const cmd = new ChatCommand() as unknown as { answerOnce: Function };
+    const out = await cmd.answerOnce('hi', {
+      provider: 'groq',
+      model: 'mock-model',
+      signal: controller.signal,
+    });
+
+    expect(out.cancelled).toBe(true);
+    // The loop's pre-step check fired before ANY model call.
+    expect(provider.generateTools).not.toHaveBeenCalled();
+  });
+
+  it('stops at the next loop boundary when the signal aborts mid-turn', async () => {
+    const controller = new AbortController();
+    const provider = {
+      name: 'Mock',
+      generateTools: vi.fn(async () => {
+        // The user hit Cancel during the first model call: the in-flight
+        // request aborts and the loop must NOT request another step.
+        controller.abort();
+        return { content: '', toolCalls: [{ id: 'c1', name: 'read_file', arguments: { path: 'zz-no-such-file.ts' } }] };
+      }),
+      generate: vi.fn().mockResolvedValue('unused'),
+      isAvailable: vi.fn().mockResolvedValue(true),
+      getInfo: () => 'Mock',
+      listModels: vi.fn().mockResolvedValue([]),
+    } as unknown as InferenceProvider;
+    stubGetProvider(provider);
+
+    const cmd = new ChatCommand() as unknown as { answerOnce: Function };
+    const out = await cmd.answerOnce('stop me', {
+      provider: 'groq',
+      model: 'mock-model',
+      signal: controller.signal,
+    });
+
+    expect(out.cancelled).toBe(true);
+    // One model call only — the boundary check stopped the second.
+    expect(provider.generateTools).toHaveBeenCalledTimes(1);
+  });
 });

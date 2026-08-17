@@ -9,6 +9,15 @@
  */
 
 import { describe, it, expect, beforeAll, afterAll } from 'vitest';
+
+/** Poll until a condition holds (real-HTTP tests have no testing-library). */
+async function until(fn: () => boolean, ms = 3000): Promise<void> {
+  const start = Date.now();
+  while (!fn()) {
+    if (Date.now() - start > ms) throw new Error('until() timed out');
+    await new Promise((r) => setTimeout(r, 10));
+  }
+}
 import { mkdtempSync, rmSync, mkdirSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 
@@ -33,6 +42,11 @@ class FakeEngine implements ChatEngine {
   calls: Array<{ message: string; opts?: unknown }> = [];
   /** When set, the engine emits these lines via onProgress before answering. */
   progressLines: string[] = [];
+  /**
+   * P4 — when true, answerOnce waits for the injected signal to abort, then
+   * resolves (simulates the engine stopping on the Cancel button).
+   */
+  honorSignal = false;
   /** P0.6 — when set, the engine emits these tool calls via onToolCall. */
   toolCalls: Array<{ phase: 'started' | 'called'; tool: string; args?: Record<string, unknown>; ok?: boolean; result?: string; error?: string; durationMs?: number }> = [];
   /** P0.7 — when set, the engine emits these plan mutations via onPlanChange. */
@@ -48,6 +62,16 @@ class FakeEngine implements ChatEngine {
     }
     for (const p of this.planChanges) o.onPlanChange?.(p);
     for (const d of this.gitDiffs) o.onGitDiff?.(d);
+    // P4 — a turn that honors the cancel signal stays in flight until the
+    // server's abort (client disconnect) fires the injected signal.
+    if (this.honorSignal) {
+      const sig = (opts as { signal?: AbortSignal } | undefined)?.signal;
+      if (sig) {
+        return new Promise((resolve) => {
+          sig.addEventListener('abort', () => resolve({ content: 'late answer after abort', followups: [] }));
+        });
+      }
+    }
     return {
       content: `echo: ${message}`,
       followups: [{ prompt: 'What next?', label: 'Next' }],
@@ -62,6 +86,7 @@ let server: ReturnType<typeof createDashboardServer>;
 let token = '';
 let viewerToken = '';
 let engine: FakeEngine;
+let console_: ChatConsole;
 
 function authedFetch(path: string, method = 'GET', body?: unknown, tok = token): Promise<Response> {
   return fetch(`${baseUrl}${path}`, {
@@ -102,7 +127,8 @@ beforeAll(async () => {
   viewerToken = vData.token as string;
 
   engine = new FakeEngine();
-  setChatConsoleForTest(new ChatConsole({ engine }));
+  console_ = new ChatConsole({ engine });
+  setChatConsoleForTest(console_);
 });
 
 afterAll(() => {
@@ -142,6 +168,27 @@ describe('/api/chat', () => {
     expect(body.sessionId.length).toBeGreaterThan(0);
     expect(engine.calls).toHaveLength(1);
     expect(engine.calls[0].message).toBe('hello agent');
+  });
+
+  it('P4 — cancels the in-flight turn when the client disconnects (abort)', async () => {
+    engine.honorSignal = true;
+    const controller = new AbortController();
+    const pending = fetch(`${baseUrl}/api/chat`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
+      body: JSON.stringify({ sessionId: 'cancel-session', message: 'long task' }),
+      signal: controller.signal,
+    });
+    // The turn started server-side (the engine is in flight, honoring the signal).
+    await until(() => console_.isBusy('cancel-session'));
+    // The client hits Cancel → the POST aborts → the server sees the response
+    // stream close (never written) and cancels the turn (busy released).
+    controller.abort();
+    await pending.catch(() => {}); // the aborted fetch rejects client-side
+    await until(() => !console_.isBusy('cancel-session'));
+    // The cancelled turn was discarded: nothing persisted for the session.
+    expect(console_.history('cancel-session')).toHaveLength(0);
+    engine.honorSignal = false;
   });
 
   it('threads conversation history across messages in the same session', async () => {

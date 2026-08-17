@@ -130,11 +130,14 @@ export interface ToolLoopDeps {
    * of this step as they arrive (the dashboard answer typewriter). The loop
    * passes ToolLoopOptions.onToken through; a provider without streaming
    * support simply ignores it and returns the whole step at once.
+   * Optional `signal`: forwarded from ToolLoopOptions so an in-flight
+   * provider request can abort (the dashboard Cancel button).
    */
   callModel(
     messages: ToolMessage[],
     toolSchemas: ToolJsonSchema[],
     onToken?: (token: string) => void,
+    signal?: AbortSignal,
   ): Promise<StepResponse>;
   /** Execute one tool call. Returns the tool-result text fed back to the model. */
   executeTool(name: string, args: Record<string, unknown>, ctx: ToolContext): Promise<string>;
@@ -161,6 +164,14 @@ export interface ToolLoopOptions {
    * The loop never buffers or reorders — the caller's onToken is verbatim.
    */
   onToken?: (token: string) => void;
+  /**
+   * P4 — external cancellation (the dashboard's Cancel button). The loop
+   * checks the signal before every step and after every tool execution and
+   * passes it into callModel so an in-flight provider request aborts (the
+   * fetch itself stops — quota/tokens are not spent on a cancelled turn).
+   * An aborted turn returns a `cancelled: true` result the caller discards.
+   */
+  signal?: AbortSignal;
 }
 
 export interface ToolLoopResult {
@@ -180,6 +191,13 @@ export interface ToolLoopResult {
    * (rules act only when the model is unavailable, never as a bypass).
    */
   generationFailed?: boolean;
+  /**
+   * P4 — true when the turn was cancelled via ToolLoopOptions.signal (the
+   * dashboard's Cancel button). The caller DISCARDS the turn: no cache write,
+   * no history/memory recording, no followups — a cancelled turn must not
+   * leave a half-answer in the session.
+   */
+  cancelled?: boolean;
 }
 
 /** An orphan reasoning block or bare <think> is a think-only response. */
@@ -314,11 +332,22 @@ export async function runToolLoop(opts: ToolLoopOptions): Promise<ToolLoopResult
   let bounded = false;
 
   while (steps < maxSteps) {
+    // P4 — check cancellation BEFORE each step (a pre-aborted signal never
+    // spends a model call) and after tool executions (below).
+    if (opts.signal?.aborted) {
+      return { content: '', followups, toolCalls: toolCallsRun, steps, bounded: false, cancelled: true };
+    }
     steps += 1;
     let response: StepResponse;
     try {
-      response = await deps.callModel(thread, schemas, opts.onToken);
+      response = await deps.callModel(thread, schemas, opts.onToken, opts.signal);
     } catch (err) {
+      // P4 — an abort (the dashboard Cancel button) is a clean stop, NOT a
+      // generation failure: the caller discards the turn. No error text, no
+      // fallback — the fetch itself aborted on the caller's signal.
+      if (opts.signal?.aborted) {
+        return { content: '', followups, toolCalls: toolCallsRun, steps, bounded: false, cancelled: true };
+      }
       // Generation failure — surface what we have rather than crash the turn.
       // generationFailed is TRUE only when NOTHING happened yet (no content, no
       // tools ran): the caller may then fall back to the rule decision (E3c
@@ -441,6 +470,12 @@ export async function runToolLoop(opts: ToolLoopOptions): Promise<ToolLoopResult
       const parallelTip = parallel.note(call.name, !resultText.startsWith('Error:'));
       if (parallelTip) resultText = `${resultText}\n\n${parallelTip}`;
       thread.push({ role: 'tool', toolCallId: call.id, content: resultText });
+    }
+
+    // P4 — cancellation during/after tool execution: do NOT request another
+    // model step on a cancelled turn (the user already walked away).
+    if (opts.signal?.aborted) {
+      return { content: '', followups, toolCalls: toolCallsRun, steps, bounded: false, cancelled: true };
     }
 
     // End-of-response semantics (the contract: "END EVERY RESPONSE by
