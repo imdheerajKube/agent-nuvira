@@ -3514,6 +3514,13 @@ function handleRequest(req, res) {
                 else if (event.kind === 'status') {
                     res.write(`event: status\ndata: ${JSON.stringify({ status: event.status })}\n\n`);
                 }
+                else if (event.kind === 'token') {
+                    // P4 — one content token of the answer as it streams (the GUI's
+                    // typewriter bubble). The POST response stays authoritative: the
+                    // client renders the stream live and replaces it with the final
+                    // content when the turn resolves.
+                    res.write(`event: token\ndata: ${JSON.stringify({ text: event.text })}\n\n`);
+                }
                 else if (event.kind === 'question') {
                     res.write(`event: question\ndata: ${JSON.stringify({
                         questionId: event.questionId,

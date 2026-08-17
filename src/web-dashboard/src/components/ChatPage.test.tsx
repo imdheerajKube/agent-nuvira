@@ -179,6 +179,39 @@ describe('ChatPage', () => {
     expect(unsub).toHaveBeenCalled();
   });
 
+  it('P4 — streams answer tokens into a live bubble, then the POST response replaces them', async () => {
+    mockAuthed('admin');
+    vi.spyOn(dashboardAPI, 'chatResolve').mockResolvedValue({ ok: true, matches: [] });
+    let tokenCb: ((text: string) => void) | null = null;
+    vi.spyOn(dashboardAPI, 'subscribeChat').mockImplementation((_sid, handlers) => {
+      tokenCb = handlers.onToken ?? null;
+      return vi.fn();
+    });
+    let resolveSend: (v: typeof OK_RESPONSE) => void = () => {};
+    vi.spyOn(dashboardAPI, 'chatSend').mockImplementation(
+      () => new Promise((resolve) => { resolveSend = resolve; }) as Promise<typeof OK_RESPONSE>,
+    );
+    render(<ChatPage />);
+    await waitFor(() => expect(screen.getByPlaceholderText(/Message the agent/)).toBeTruthy());
+
+    fireEvent.change(screen.getByPlaceholderText(/Message the agent/), { target: { value: 'write it' } });
+    fireEvent.submit(screen.getByPlaceholderText(/Message the agent/).closest('form')!);
+    await waitFor(() => expect(tokenCb).toBeTruthy());
+
+    // Tokens typewrite into the LIVE assistant bubble while the POST is in flight.
+    tokenCb!('Here');
+    tokenCb!(' is ');
+    tokenCb!('the answer.');
+    await waitFor(() => expect(screen.getByText('Here is the answer.')).toBeTruthy());
+
+    // The POST response is AUTHORITATIVE — the final message renders it and
+    // the streamed preview is replaced (not merged), exactly like the engine's
+    // S1 longest-substantive selection.
+    resolveSend(OK_RESPONSE);
+    await waitFor(() => expect(screen.getByText('I checked the repo — the build is green.')).toBeTruthy());
+    await waitFor(() => expect(screen.queryByText('Here is the answer.')).toBeNull());
+  });
+
   it('P0.6 — renders live tool-call cards and snapshots them into the reply', async () => {
     mockAuthed('admin');
     let toolCb: ((t: { id: string; tool: string; phase: 'started' | 'called'; args?: string; ok?: boolean; result?: string; error?: string; durationMs?: number }) => void) | null = null;

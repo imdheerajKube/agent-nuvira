@@ -231,6 +231,12 @@ export default function ChatPage() {
   const liveToolsRef = useRef<ToolStep[]>([]);
   const livePlanRef = useRef<PlanView | null>(null);
   const liveDiffRef = useRef<DiffView | null>(null);
+  // P4 — the live answer typewriter: tokens stream in via SSE while the POST
+  // is in flight. The POST response is AUTHORITATIVE (the engine's S1
+  // longest-substantive logic may pick an earlier, longer answer) — the
+  // streamed text is replaced, not merged, when the turn resolves.
+  const [streamingText, setStreamingText] = useState('');
+  const streamingRef = useRef('');
   const sessionIdRef = useRef<string>(newSessionId());
   // Phase 6 — the last sent message (↑ recalls it into the box).
   const lastSentRef = useRef<string>('');
@@ -301,6 +307,8 @@ export default function ChatPage() {
     livePlanRef.current = null;
     setLiveDiff(null);
     liveDiffRef.current = null;
+    streamingRef.current = '';
+    setStreamingText('');
     setError('');
     setMeta(null);
     setPendingResolve(null);
@@ -379,6 +387,12 @@ export default function ChatPage() {
       // (EventSource auto-reconnects; the final answer arrives via the POST).
       subRef.current?.();
       subRef.current = dashboardAPI.subscribeChat(sessionId, {
+        // P4 — answer tokens typewrite into the live bubble; the POST response
+        // replaces them with the authoritative final content.
+        onToken: (text) => {
+          streamingRef.current += text;
+          setStreamingText(streamingRef.current);
+        },
         onProgress: (line) => {
           liveStepsRef.current = [...liveStepsRef.current, line];
           setLiveSteps(liveStepsRef.current);
@@ -417,6 +431,10 @@ export default function ChatPage() {
       const r = await dashboardAPI.chatSend(sessionId, clean, { projectPath: attachedProject?.path });
       subRef.current?.();
       subRef.current = null;
+      // P4 — the turn resolved: the streamed typewriter is replaced by the
+      // authoritative content (which the final message below renders).
+      streamingRef.current = '';
+      setStreamingText('');
       if (r.ok) {
         setMeta(r.generationFailed ? null : `${r.provider ?? 'provider'}${r.model ? ` / ${r.model}` : ' (auto-routed)'}`);
         setMessages((m) => [
@@ -552,6 +570,8 @@ export default function ChatPage() {
     livePlanRef.current = null;
     setLiveDiff(null);
     liveDiffRef.current = null;
+    streamingRef.current = '';
+    setStreamingText('');
     setError('');
     setMeta(null);
     setPendingResolve(null);
@@ -722,6 +742,11 @@ export default function ChatPage() {
                 {livePlan ? <PlanCard plan={livePlan} /> : null}
                 {liveDiff ? <DiffCard diff={liveDiff} /> : null}
                 <ToolCards tools={liveTools} live />
+                {streamingText ? (
+                  <div className="chat-bubble-text chat-streaming">
+                    <Markdown text={streamingText} />
+                  </div>
+                ) : null}
                 <div className="chat-working">
                   {liveSteps.length > 0 ? (
                     <span className="chat-working-lines">

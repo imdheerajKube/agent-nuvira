@@ -887,6 +887,12 @@ export class DashboardAPI {
     handlers: {
       onProgress?: (line: string) => void;
       onStatus?: (status: string) => void;
+      /**
+       * P4 — one content token of the answer as it streams (the typewriter).
+       * The POST response remains authoritative — replace the streamed text
+       * with its content when the turn resolves.
+       */
+      onToken?: (text: string) => void;
       /** P0.6 — a tool-call lifecycle step (rendered as a card). */
       onTool?: (t: { id: string; tool: string; phase: 'started' | 'called'; args?: string; ok?: boolean; result?: string; error?: string; durationMs?: number }) => void;
       /** P0.7 — a plan mutation (rendered as a live checklist card). */
@@ -908,6 +914,12 @@ export class DashboardAPI {
       try {
         const payload = JSON.parse((event as MessageEvent).data) as { status?: string };
         if (payload.status) handlers.onStatus?.(payload.status);
+      } catch { /* ignore malformed */ }
+    });
+    es.addEventListener('token', (event) => {
+      try {
+        const payload = JSON.parse((event as MessageEvent).data) as { text?: string };
+        if (typeof payload.text === 'string' && payload.text.length > 0) handlers.onToken?.(payload.text);
       } catch { /* ignore malformed */ }
     });
     es.addEventListener('tool', (event) => {

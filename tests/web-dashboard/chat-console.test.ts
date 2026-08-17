@@ -27,6 +27,8 @@ class FakeEngine implements ChatEngine {
   progressLines: string[] = [];
   /** P0.6 — when set, the engine replays these tool calls via onToolCall. */
   toolCalls: Array<{ phase: 'started' | 'called'; tool: string; args?: Record<string, unknown>; ok?: boolean; result?: string; error?: string; durationMs?: number }> = [];
+  /** P4 — when set, the engine streams these answer tokens via onToken. */
+  tokens: string[] = [];
   /** P0.7 — when set, the engine replays these plan mutations via onPlanChange. */
   planChanges: Array<{ goal: string; steps: Array<{ id: string; description: string; status: 'pending' | 'running' | 'done' | 'blocked' }>; revision: number }> = [];
   /** P3b — when set, the engine replays these git diffs via onGitDiff. */
@@ -40,6 +42,10 @@ class FakeEngine implements ChatEngine {
   ): Promise<{ content: string; followups: unknown[]; provider?: string; model?: string; generationFailed?: boolean }> {
     this.calls.push({ message, opts });
     this.lastPlanStore = opts?.planStore;
+    // P4 — stream answer tokens before answering (the typewriter).
+    for (const t of this.tokens) {
+      opts?.onToken?.(t);
+    }
     for (const line of this.progressLines) {
       opts?.onProgress?.(line);
     }
@@ -299,6 +305,21 @@ describe('ChatConsole', () => {
     expect(planEvents[0]).toMatchObject({ kind: 'plan', goal: 'Fix the failing test', revision: 1 });
     expect(planEvents[1]).toMatchObject({ kind: 'plan', revision: 2 });
     expect(planEvents[1].steps?.[0]).toMatchObject({ id: 'reproduce' });
+  });
+
+  it('P4 — forwards streamed answer tokens as token events (the typewriter)', async () => {
+    const events: Array<{ kind: string; text?: string }> = [];
+    console_.onEvent((_sid, event) => {
+      events.push({ kind: event.kind, ...('text' in event ? { text: event.text } : {}) });
+    });
+    engine.tokens = ['Hello', ' there', ' — this', ' is', ' the', ' answer.'];
+    const r = await console_.answer('s1', 'write it');
+    expect(r.ok).toBe(true);
+    const tokenEvents = events.filter((e) => e.kind === 'token');
+    expect(tokenEvents.map((e) => e.text)).toEqual(['Hello', ' there', ' — this', ' is', ' the', ' answer.']);
+    // The engine's full answer still arrives through the POST response — the
+    // stream is a live preview, the response is authoritative.
+    expect(r.content).toBe('echo: write it');
   });
 
   it('P3b — forwards git diff payloads as structured diff events', async () => {

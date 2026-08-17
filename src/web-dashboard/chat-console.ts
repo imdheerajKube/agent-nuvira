@@ -40,6 +40,12 @@ export interface ChatEngine {
       projectContext?: string;
       /** P4 — attached project dir; the engine recalls its sessions + facts. */
       projectPath?: string;
+      /**
+       * P4 — stream answer tokens live (the typewriter). Called with each
+       * content token as the model generates it; non-streaming providers
+       * deliver the whole step content at once.
+       */
+      onToken?: (token: string) => void;
       /** P0.6 — one tool-call lifecycle event (started → called with outcome). */
       onToolCall?: (phase: 'started' | 'called', info: { id?: string; tool: string; args?: Record<string, unknown>; ok?: boolean; result?: string; error?: string; durationMs?: number }) => void;
       /** P0.7 — a plan mutation (structured checklist for the GUI card). */
@@ -145,6 +151,17 @@ export type ChatConsoleEvent =
       summary: string;
     }
   | { kind: 'status'; status: 'working' | 'done' | 'error' }
+  | {
+      /**
+       * P4 — one content token of the answer as it streams (the typewriter).
+       * The POST response remains authoritative: the GUI renders the stream
+       * live and REPLACES it with the final content when the turn resolves
+       * (the engine's S1 longest-substantive logic may select an earlier,
+       * longer answer than the last chunk).
+       */
+      kind: 'token';
+      text: string;
+    }
   | {
       kind: 'question';
       /** Unique id the client echoes back in the respond call. */
@@ -321,6 +338,8 @@ export class ChatConsole {
         // P4 — the attached project dir triggers the engine's per-turn recall
         // of that project's prior sessions + facts.
         ...(opts.projectPath ? { projectPath: opts.projectPath } : {}),
+        // P4 — stream answer tokens to the GUI (the typewriter bubble).
+        onToken: (text) => this.emit(sessionId, { kind: 'token', text }),
         history: history.map((h) => ({ role: h.role, content: h.content })),
         // P0.1 — real ask_user round-trip: emit a `question` event, wait for
         // the GUI's respond() (or a skip), then feed the selection back. The

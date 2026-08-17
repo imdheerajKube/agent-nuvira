@@ -159,6 +159,13 @@ export declare class ChatCommand extends BaseCommand {
          * Fresh per turn — the snapshot is cached, the recall is not.
          */
         projectPath?: string;
+        /**
+         * P4 — stream content tokens of the answer as the model generates them
+         * (the dashboard's typewriter). Forwarded verbatim from the tool loop;
+         * providers that stream deliver tokens live, others deliver the whole
+         * step content at once. The CLI never passes it — pure dashboard opt-in.
+         */
+        onToken?: (token: string) => void;
     }): Promise<{
         content: string;
         followups: FollowupSuggestion[];
