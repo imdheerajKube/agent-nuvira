@@ -91,7 +91,7 @@ describe('ChatPage', () => {
     expect(send.mock.calls[1][1]).toBe('Run the full test suite');
   });
 
-  it('shows the error and drops the optimistic bubble on failure', async () => {
+  it('shows the error, KEEPS the user bubble, and offers Retry on failure', async () => {
     mockAuthed('admin');
     mockChatStream();
     const send = mockChatSend({ ok: false as const, error: 'The agent could not answer.' });
@@ -101,7 +101,19 @@ describe('ChatPage', () => {
     fireEvent.change(screen.getByPlaceholderText(/Message the agent/), { target: { value: 'boom' } });
     fireEvent.submit(screen.getByPlaceholderText(/Message the agent/).closest('form')!);
     await waitFor(() => expect(screen.getByText(/The agent could not answer/)).toBeTruthy());
-    expect(screen.queryByText('You')).toBeNull();
+    // P4 — the optimistic user bubble stays (the message was sent) so the
+    // Retry affordance can re-send it.
+    expect(screen.getByText('You')).toBeTruthy();
+    expect(screen.getByText('boom')).toBeTruthy();
+    expect(screen.getByRole('button', { name: /Retry/ })).toBeTruthy();
+
+    // Clicking Retry re-sends the SAME message through the normal flow.
+    send.mockResolvedValueOnce(OK_RESPONSE);
+    fireEvent.click(screen.getByRole('button', { name: /Retry/ }));
+    await waitFor(() => expect(send.mock.calls[1][1]).toBe('boom'));
+    await waitFor(() => expect(screen.getByText('I checked the repo — the build is green.')).toBeTruthy());
+    // The Retry affordance cleared once the retry succeeded.
+    await waitFor(() => expect(screen.queryByRole('button', { name: /Retry/ })).toBeNull());
   });
 
   it('new conversation starts a fresh thread (the old one stays persisted in the sidebar)', async () => {
@@ -144,6 +156,40 @@ describe('ChatPage', () => {
 
     resolveSend(OK_RESPONSE);
     await waitFor(() => expect(screen.getByText('I checked the repo — the build is green.')).toBeTruthy());
+  });
+
+  it('P4 — Cancel aborts the in-flight turn and keeps the user bubble', async () => {
+    mockAuthed('admin');
+    mockChatStream();
+    let signal: AbortSignal | null = null;
+    // Mirror the real chatSend: an aborted fetch resolves ok:false (the
+    // internal catch) rather than rejecting — the page then recognizes the
+    // user-initiated cancel via the controller's signal.
+    vi.spyOn(dashboardAPI, 'chatSend').mockImplementation(
+      (_sid, _msg, _opts, sig?: AbortSignal) =>
+        new Promise((resolve) => {
+          signal = sig ?? null;
+          sig?.addEventListener('abort', () => resolve({ ok: false as const, error: 'Could not reach the dashboard server.' }));
+        }) as Promise<typeof OK_RESPONSE>,
+    );
+    render(<ChatPage />);
+    await waitFor(() => expect(screen.getByPlaceholderText(/Message the agent/)).toBeTruthy());
+
+    fireEvent.change(screen.getByPlaceholderText(/Message the agent/), { target: { value: 'long task' } });
+    fireEvent.submit(screen.getByPlaceholderText(/Message the agent/).closest('form')!);
+    await waitFor(() => expect(screen.getByRole('button', { name: /Cancel/ })).toBeTruthy());
+    // The turn's abort signal reaches chatSend (busy shows first, so wait).
+    await waitFor(() => expect(signal).toBeTruthy());
+
+    fireEvent.click(screen.getByRole('button', { name: /Cancel/ }));
+    await waitFor(() => expect(signal!.aborted).toBe(true));
+    // The user bubble stays (the message was sent) and the input re-enables
+    // (busy cleared) — the turn was abandoned, not failed.
+    await waitFor(() => expect(screen.getByText('long task')).toBeTruthy());
+    await waitFor(() => expect((screen.getByPlaceholderText(/Message the agent/) as HTMLInputElement).disabled).toBe(false));
+    // No error banner and no Retry on a user-initiated cancel.
+    expect(screen.queryByText(/could not answer|could not reach/i)).toBeNull();
+    expect(screen.queryByRole('button', { name: /Retry/ })).toBeNull();
   });
 
   it('streams the agent working steps live and snapshots them into the reply', async () => {

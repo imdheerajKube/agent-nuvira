@@ -88,6 +88,11 @@ export async function chatCompletionsWithTools(opts: {
   maxTokens?: number;
   timeoutMs?: number;
   /**
+   * P4 — external cancellation: when present, the request aborts on signal
+   * (the dashboard's Cancel button). Absent → AbortSignal.timeout applies.
+   */
+  signal?: AbortSignal;
+  /**
    * Cost-recording hook (quota ledger / cost tracker parity with generate()):
    * invoked with the flattened prompt + response content after a successful
    * call so adapters record wire-metered (or estimated) cost exactly like
@@ -113,7 +118,7 @@ export async function chatCompletionsWithTools(opts: {
         function: { name: t.name, description: t.description, parameters: t.parameters },
       })),
     }),
-    signal: AbortSignal.timeout(opts.timeoutMs ?? 30_000),
+    signal: opts.signal ?? AbortSignal.timeout(opts.timeoutMs ?? 30_000),
   });
 
   if (!response.ok) {
@@ -214,6 +219,10 @@ export async function chatCompletionsWithToolsStream(
       // OpenRouter support it; providers that ignore it just omit usage).
       stream_options: { include_usage: true },
     }),
+    // P4 — external cancellation (the dashboard Cancel button). The streaming
+    // path historically had no timeout; an explicit signal is the ONLY way to
+    // stop it mid-stream.
+    signal: opts.signal,
   });
 
   if (!response.ok) {

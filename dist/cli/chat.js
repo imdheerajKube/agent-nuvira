@@ -309,7 +309,7 @@ export class ChatCommand extends BaseCommand {
         }
         const parsed = parseRequestSync(message);
         const dispatchDecision = resolvePipelineDispatch(parsed, { dev: opts.dev, text: message });
-        const answer = await this.runChatAnswer(message, opts.history ?? [], { type, provider, model }, { provider: mergedOpts.provider, model: mergedOpts.model, dev: mergedOpts.dev, cache: true }, true, { auto: autoMode }, parsed, { askUser: opts.askUser, onProgress: opts.onProgress, onToolCall: opts.onToolCall, onPlanChange: opts.onPlanChange, onGitDiff: opts.onGitDiff, planStore: opts.planStore ?? this.planStore, gateway: opts.gateway, projectContext: opts.projectContext, recallContext: recallBlock, onToken: opts.onToken });
+        const answer = await this.runChatAnswer(message, opts.history ?? [], { type, provider, model }, { provider: mergedOpts.provider, model: mergedOpts.model, dev: mergedOpts.dev, cache: true }, true, { auto: autoMode }, parsed, { askUser: opts.askUser, onProgress: opts.onProgress, onToolCall: opts.onToolCall, onPlanChange: opts.onPlanChange, onGitDiff: opts.onGitDiff, planStore: opts.planStore ?? this.planStore, gateway: opts.gateway, projectContext: opts.projectContext, recallContext: recallBlock, onToken: opts.onToken, signal: opts.signal });
         // No-model fallback: the tool loop could not generate a single response
         // AND the rules assessed a high-confidence pipeline intent — run the
         // pipeline directly (rules decide only when the model is unavailable; the
@@ -325,6 +325,7 @@ export class ChatCommand extends BaseCommand {
             content: answer.content,
             followups: answer.followups ?? [],
             generationFailed: answer.generationFailed,
+            cancelled: answer.cancelled,
             provider: type,
             model,
         };
@@ -766,7 +767,7 @@ export class ChatCommand extends BaseCommand {
                 },
             },
         };
-        const callModel = this.buildToolCallModel(message, session, options, mode, ctxOverrides?.onToken);
+        const callModel = this.buildToolCallModel(message, session, options, mode, ctxOverrides?.onToken, ctxOverrides?.signal);
         let result;
         try {
             result = await runToolLoop({
@@ -774,6 +775,7 @@ export class ChatCommand extends BaseCommand {
                 context: toolContext,
                 maxSteps: 8,
                 onToken: ctxOverrides?.onToken,
+                signal: ctxOverrides?.signal,
                 deps: {
                     callModel,
                     executeTool: async (name, args, ctx) => {
@@ -812,7 +814,9 @@ export class ChatCommand extends BaseCommand {
         // E3c: a generationFailed turn is NOT cached/persisted — the caller may
         // fall back to the rule decision, and the failure text must not pollute
         // history or the cache.
-        if (result.content.trim() && !result.generationFailed) {
+        // P4: a CANCELLED turn is likewise discarded entirely — no cache write,
+        // no history/memory, no registry telemetry (the caller dropped it).
+        if (result.content.trim() && !result.generationFailed && !result.cancelled) {
             if (cacheEnabled) {
                 try {
                     await cache.set(message, result.content, session.model ?? 'default', session.type);
@@ -835,6 +839,7 @@ export class ChatCommand extends BaseCommand {
         return {
             content: result.content,
             generationFailed: result.generationFailed,
+            cancelled: result.cancelled,
             followups: result.followups,
         };
     }
@@ -845,11 +850,12 @@ export class ChatCommand extends BaseCommand {
      * broken provider never crashes the turn (it answers from the next working
      * candidate, exactly like the legacy generation block).
      */
-    buildToolCallModel(message, session, options, mode, onToken) {
-        return async (messages, schemas, stepOnToken) => {
+    buildToolCallModel(message, session, options, mode, onToken, signal) {
+        return async (messages, schemas, stepOnToken, stepSignal) => {
             // The effective token sink: the caller's stream wins; when a step-level
             // sink is also given (loop passthrough) they are the same channel.
             const sink = stepOnToken ?? onToken;
+            const abort = stepSignal ?? signal;
             const tryGenerate = async (prov, typ, mdl) => {
                 if (typeof prov.generateTools === 'function' && schemas.length > 0) {
                     try {
@@ -858,9 +864,9 @@ export class ChatCommand extends BaseCommand {
                         // content delivered as a single chunk so the typewriter channel
                         // still receives the answer (appears at once — today's behavior).
                         if (sink && typeof prov.generateToolsStream === 'function') {
-                            return await prov.generateToolsStream(messages, schemas, { ...options, model: mdl }, sink);
+                            return await prov.generateToolsStream(messages, schemas, { ...options, model: mdl, signal: abort }, sink);
                         }
-                        const result = await prov.generateTools(messages, schemas, { ...options, model: mdl });
+                        const result = await prov.generateTools(messages, schemas, { ...options, model: mdl, signal: abort });
                         if (sink && result.content)
                             sink(result.content);
                         return result;
@@ -891,11 +897,11 @@ export class ChatCommand extends BaseCommand {
                 let raw;
                 if (typeof prov.generateStream === 'function') {
                     const chunks = [];
-                    await prov.generateStream(prompt, { ...options, model: mdl }, (t) => chunks.push(t));
+                    await prov.generateStream(prompt, { ...options, model: mdl, signal: abort }, (t) => chunks.push(t));
                     raw = chunks.join('');
                 }
                 else {
-                    raw = await prov.generate(prompt, { ...options, model: mdl });
+                    raw = await prov.generate(prompt, { ...options, model: mdl, signal: abort });
                 }
                 const { text, calls } = extractFallbackToolCalls(raw);
                 return { content: text, toolCalls: calls };

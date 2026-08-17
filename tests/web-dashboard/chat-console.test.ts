@@ -29,6 +29,11 @@ class FakeEngine implements ChatEngine {
   toolCalls: Array<{ phase: 'started' | 'called'; tool: string; args?: Record<string, unknown>; ok?: boolean; result?: string; error?: string; durationMs?: number }> = [];
   /** P4 — when set, the engine streams these answer tokens via onToken. */
   tokens: string[] = [];
+  /**
+   * P4 — when true, answerOnce waits for the injected signal to abort, then
+   * resolves (simulates the engine stopping on the Cancel button).
+   */
+  honorSignal = false;
   /** P0.7 — when set, the engine replays these plan mutations via onPlanChange. */
   planChanges: Array<{ goal: string; steps: Array<{ id: string; description: string; status: 'pending' | 'running' | 'done' | 'blocked' }>; revision: number }> = [];
   /** P3b — when set, the engine replays these git diffs via onGitDiff. */
@@ -57,6 +62,16 @@ class FakeEngine implements ChatEngine {
     }
     for (const d of this.gitDiffs) {
       opts?.onGitDiff?.(d);
+    }
+    // P4 — a turn that honors the cancel signal stays in flight until the
+    // console aborts it (the engine's in-flight provider request aborting).
+    if (this.honorSignal) {
+      const sig = (opts as { signal?: AbortSignal } | undefined)?.signal;
+      if (sig) {
+        return new Promise((resolve) => {
+          sig.addEventListener('abort', () => resolve({ content: 'late answer after abort', followups: [] }));
+        });
+      }
     }
     const respond = () => ({
       content: `echo: ${message}`,
@@ -305,6 +320,34 @@ describe('ChatConsole', () => {
     expect(planEvents[0]).toMatchObject({ kind: 'plan', goal: 'Fix the failing test', revision: 1 });
     expect(planEvents[1]).toMatchObject({ kind: 'plan', revision: 2 });
     expect(planEvents[1].steps?.[0]).toMatchObject({ id: 'reproduce' });
+  });
+
+  it('P4 — abort() cancels the in-flight turn: busy released, nothing persisted', async () => {
+    const events: Array<{ kind: string }> = [];
+    console_.onEvent((_sid, event) => events.push({ kind: event.kind }));
+    engine.honorSignal = true;
+    const p = console_.answer('s1', 'long task');
+    // Let the microtasks run so the engine call starts (ensureEngine is async).
+    await new Promise((r) => setTimeout(r, 0));
+    expect(engine.calls.length).toBe(1);
+    expect(console_.isBusy('s1')).toBe(true);
+
+    const aborted = console_.abort('s1');
+    expect(aborted).toBe(true);
+    // Busy released IMMEDIATELY so a new message can start.
+    expect(console_.isBusy('s1')).toBe(false);
+
+    const r = await p;
+    expect(r.ok).toBe(false);
+    expect(r.cancelled).toBe(true);
+    // The cancelled turn was DISCARDED — no turns persisted (the user message
+    // exists only client-side as the optimistic bubble).
+    expect(console_.history('s1')).toHaveLength(0);
+    // The stale engine's late answer emitted nothing after the abort (no
+    // token/progress events, no done/error status — the turn was discarded).
+    expect(events.filter((e) => e.kind === 'token' || e.kind === 'progress' || e.kind === 'done' || e.kind === 'error')).toHaveLength(0);
+    // abort() on a session with no in-flight turn is a no-op.
+    expect(console_.abort('s1')).toBe(false);
   });
 
   it('P4 — forwards streamed answer tokens as token events (the typewriter)', async () => {

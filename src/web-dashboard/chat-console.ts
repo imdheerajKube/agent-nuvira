@@ -46,6 +46,12 @@ export interface ChatEngine {
        * deliver the whole step content at once.
        */
       onToken?: (token: string) => void;
+      /**
+       * P4 — external cancellation (the dashboard Cancel button): the engine
+       * stops the turn at the next loop boundary and aborts any in-flight
+       * provider request. The console discards the cancelled turn entirely.
+       */
+      signal?: AbortSignal;
       /** P0.6 — one tool-call lifecycle event (started → called with outcome). */
       onToolCall?: (phase: 'started' | 'called', info: { id?: string; tool: string; args?: Record<string, unknown>; ok?: boolean; result?: string; error?: string; durationMs?: number }) => void;
       /** P0.7 — a plan mutation (structured checklist for the GUI card). */
@@ -96,6 +102,8 @@ export interface ChatAnswerResult {
   provider?: string | null;
   model?: string | null;
   generationFailed?: boolean;
+  /** P4 — true when the turn was cancelled via abort() (discarded, no state). */
+  cancelled?: boolean;
   error?: string;
 }
 
@@ -199,6 +207,12 @@ export class ChatConsole {
   >();
   /** P0.7 — per-session plan stores (plans never leak across conversations). */
   private planStores = new Map<string, PlanStore>();
+  /**
+   * P4 — the in-flight turn's AbortController per session (set while a turn
+   * runs, deleted in finally). abort(sessionId) fires it: the engine stops at
+   * the next loop boundary + aborts the in-flight provider request.
+   */
+  private activeAborts = new Map<string, AbortController>();
 
   constructor(private readonly opts: ChatConsoleOptions = {}) {
     this.engine = opts.engine ?? null;
@@ -326,10 +340,23 @@ export class ChatConsole {
       updatedAt: existing?.updatedAt ?? now,
     });
     this.busy.add(sessionId);
+    // P4 — one AbortController per turn: abort(sessionId) fires it, the
+    // engine stops at the next loop boundary (and aborts the in-flight
+    // provider request), and the turn is DISCARDED (no persist, no events).
+    const controller = new AbortController();
+    this.activeAborts.set(sessionId, controller);
+    // Stale-turn guard: after a cancel, a new turn may start while the old
+    // engine unwinds — its callbacks must never emit into the new turn.
+    const emitTurn = (event: ChatConsoleEvent): void => {
+      if (controller.signal.aborted) return;
+      this.emit(sessionId, event);
+    };
     this.emit(sessionId, { kind: 'status', status: 'working' });
     try {
       const engine = await this.ensureEngine();
       const answer = await engine.answerOnce(clean, {
+        // P4 — the cancel signal rides into the turn.
+        signal: controller.signal,
         ...(opts.provider ? { provider: opts.provider } : {}),
         ...(opts.model ? { model: opts.model } : {}),
         // P3 — project context rides into the turn (the engine injects it as
@@ -339,7 +366,7 @@ export class ChatConsole {
         // of that project's prior sessions + facts.
         ...(opts.projectPath ? { projectPath: opts.projectPath } : {}),
         // P4 — stream answer tokens to the GUI (the typewriter bubble).
-        onToken: (text) => this.emit(sessionId, { kind: 'token', text }),
+        onToken: (text) => emitTurn({ kind: 'token', text }),
         history: history.map((h) => ({ role: h.role, content: h.content })),
         // P0.1 — real ask_user round-trip: emit a `question` event, wait for
         // the GUI's respond() (or a skip), then feed the selection back. The
@@ -356,7 +383,7 @@ export class ChatConsole {
         },
         // P3 — stream the agent's working steps to the GUI (tool calls, model
         // reasoning markers) instead of a silent wait.
-        onProgress: (line) => this.emit(sessionId, { kind: 'progress', line }),
+        onProgress: (line) => emitTurn({ kind: 'progress', line }),
         // P0.6 — structured step cards: forward each tool-call lifecycle
         // event. suggest_followups has its own chips UI and ask_user its own
         // question card — neither renders as a tool card.
@@ -364,7 +391,7 @@ export class ChatConsole {
           // ask_user/suggest_followups have their own cards; plan_todo is
           // rendered as the dedicated checklist card (the `plan` event).
           if (info.tool === 'suggest_followups' || info.tool === 'ask_user' || info.tool === 'plan_todo') return;
-          this.emit(sessionId, {
+          emitTurn({
             kind: 'tool',
             id: info.id ?? `call_${Date.now().toString(36)}`,
             tool: info.tool,
@@ -380,15 +407,21 @@ export class ChatConsole {
         // plan_todo tool itself is NOT a generic step card — the checklist
         // card is its rendering).
         onPlanChange: (snapshot) => {
-          this.emit(sessionId, { kind: 'plan', goal: snapshot.goal, steps: snapshot.steps, revision: snapshot.revision });
+          emitTurn({ kind: 'plan', goal: snapshot.goal, steps: snapshot.steps, revision: snapshot.revision });
         },
         // P3b — forward git diff payloads as a dedicated diff event (the git
         // tool's diff is rendered as a card, not a generic step card).
         onGitDiff: (payload) => {
-          this.emit(sessionId, { kind: 'diff', files: payload.files, summary: payload.summary });
+          emitTurn({ kind: 'diff', files: payload.files, summary: payload.summary });
         },
         planStore: this.planStoreFor(sessionId),
       });
+      // P4 — a cancelled turn is DISCARDED entirely: no session write, no
+      // persist, no status:done, no events (the client already walked away
+      // and may have started a new turn). abort() released busy immediately.
+      if (controller.signal.aborted) {
+        return { ok: false, error: 'The turn was cancelled.', cancelled: true };
+      }
       const turns: ChatTurn[] = [...history, { role: 'user', content: clean }];
       if (answer.content && answer.content.trim()) {
         turns.push({ role: 'assistant', content: answer.content });
@@ -414,11 +447,40 @@ export class ChatConsole {
         generationFailed: answer.generationFailed === true,
       };
     } catch (err) {
+      // A cancel racing the engine's unwinding must not surface as an error
+      // (the engine may throw AbortError before the loop returns cleanly).
+      if (controller.signal.aborted) {
+        return { ok: false, error: 'The turn was cancelled.', cancelled: true };
+      }
       this.emit(sessionId, { kind: 'status', status: 'error' });
       return { ok: false, error: err instanceof Error ? err.message : String(err) };
     } finally {
       this.busy.delete(sessionId);
+      this.activeAborts.delete(sessionId);
     }
+  }
+
+  /**
+   * P4 — cancel the in-flight turn for a session (the dashboard's Cancel
+   * button; also fired when the client disconnects mid-turn). Returns false
+   * when no turn is running. Busy is released IMMEDIATELY so a new message
+   * can start while the old engine unwinds — the stale turn's events are
+   * blocked by its controller guard and its result is discarded.
+   */
+  abort(sessionId: string): boolean {
+    const controller = this.activeAborts.get(sessionId);
+    if (!controller) return false;
+    // Resolve any pending ask_user question as a skip so the engine unwinds
+    // (the loop's next boundary check stops it on the cancelled signal).
+    for (const [id, p] of this.pendingQuestions) {
+      if (p.sessionId === sessionId) {
+        this.pendingQuestions.delete(id);
+        p.resolve({ answer: [], index: -1 });
+      }
+    }
+    controller.abort();
+    this.busy.delete(sessionId);
+    return true;
   }
 
   /**

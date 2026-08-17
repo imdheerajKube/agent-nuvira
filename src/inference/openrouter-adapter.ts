@@ -92,6 +92,8 @@ export class OpenRouterAdapter implements InferenceProvider {
       temperature: options?.temperature ?? this.config.temperature ?? 0.7,
       maxTokens: options?.maxTokens ?? this.config.maxTokens ?? 4096,
       timeoutMs: this.config.timeoutMs ?? 30_000,
+      // P4 — external cancellation (the dashboard Cancel button).
+      signal: options?.signal,
       // Cost parity with generate(): meter tool-calling turns too.
       onCost: (promptText, contentText) => {
         try {
@@ -130,6 +132,8 @@ export class OpenRouterAdapter implements InferenceProvider {
         temperature: options?.temperature ?? this.config.temperature ?? 0.7,
         maxTokens: options?.maxTokens ?? this.config.maxTokens ?? 4096,
         timeoutMs: this.config.timeoutMs ?? 30_000,
+        // P4 — external cancellation (the dashboard Cancel button).
+        signal: options?.signal,
         // Cost parity with generate(): meter tool-calling turns too.
         onCost: (promptText, contentText) => {
           try {
