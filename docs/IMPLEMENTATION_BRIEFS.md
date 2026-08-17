@@ -22,6 +22,34 @@ P0.3 edit/write (confirm-gated), P0.4 run_terminal
 (`src/nlu/conversation-gate.ts`, wired into `resolvePipelineDispatch` +
 `execute.runSingleGoal`).
 
+**Verification pass (2026-08-17, code-level re-analysis against acceptance
+criteria — no rework required):**
+- P0.1: `chat-console.ts` `askQuestion`(233)/`respond`(252) + server
+  `POST /api/chat/:sessionId/respond`(server.ts:3700) + ChatPage question
+  card (lines 74–77, 151, 231–249, 398) + round-trip test
+  (`chat-console.test.ts:91`) ✅
+- P0.2: `read_file`/`list_dir`/`glob` registered (registry.ts:543/552/561),
+  deny-first `gateReal` symlink-escape refusal, binary sniff, 60KB/2000-line
+  caps with truncation note, line numbering, `coding` toolset
+  (toolsets.ts:84), TOOL_CONTRACT line 378 ✅
+- P0.3: `edit_file`/`write_file` (registry.ts:570/579), confirm gate,
+  ambiguity refusal, distinct not-found, `gateWrite` symlinked-parent
+  escape guard, TOOL_CONTRACT line 379 ✅
+- P0.4: `run_terminal` (registry.ts:588), three-class deny-first classifier
+  (whole-string deny regexes incl. `$()` injection, positive verify
+  allowlist, confirm default), sender-id masking, 6KB output cap,
+  buff-command routing to run_cli, TOOL_CONTRACT line 380 ✅
+- P0.5: gate wired BEFORE the dev bypass (chat.ts:236/239 — a question
+  never dispatches, a coding ask in command position still does) and at the
+  top of `runSingleGoal` (execute.ts:1593 — question → direct answer, the
+  orchestrator never starts) + execute tests (1125/1140/1165) + dispatch
+  tests (89/113) ✅
+- P0.6–P0.8: confirmed genuinely PENDING (no step-card rendering anywhere;
+  registry has no plan/todo/skill tool) — matches the briefs' status, no
+  half-built work ✅
+- Full suites: typecheck clean · root **4,682 passed** (exact P0.5 baseline,
+  zero regression) · dashboard **205 passed** · build clean ✅
+
 ---
 
 ## P0.6 — Step cards (structured tool-call rendering)
