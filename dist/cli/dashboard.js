@@ -29,7 +29,18 @@ import { BaseCommand } from './commands.js';
 import { probeDashboardPortState, findPidOnPort, killPid, waitForPortFree, confirmStaleRestart, } from './dashboard-restart.js';
 import { createDashboardServer } from '../web-dashboard/server.js';
 import { guardRbacAction } from './rbac-guard.js';
-import { logger } from '../utils/logger.js'; // ─── DashboardCommand ───────────────────────────────────────────────────────
+import { logger } from '../utils/logger.js';
+/**
+ * The platform-appropriate "stop the running dashboard" hint for error
+ * output — pkill is POSIX-only, so Windows users get the PowerShell/console
+ * equivalent instead (platform independence is a hard product constraint).
+ */
+function stopProcessHint() {
+    return process.platform === 'win32'
+        ? `taskkill /F /IM node.exe   (or Ctrl+C in the terminal that runs it)`
+        : `pkill -f 'agent-nuvira dashboard'`;
+}
+// ─── DashboardCommand ───────────────────────────────────────────────────────
 export class DashboardCommand extends BaseCommand {
     server = null;
     create() {
@@ -299,7 +310,7 @@ export class DashboardCommand extends BaseCommand {
     }
     logEADDRINUSE(port) {
         logger.error(`Port ${port} is already in use — another dashboard instance is running (possibly an older version).`);
-        logger.info(`Stop it first, e.g.:  pkill -f 'agent-nuvira dashboard'`);
+        logger.info(`Stop it first, e.g.:  ${stopProcessHint()}`);
         logger.info(`Or use another port:   agent-nuvira dashboard --port ${Number(port) + 1}`);
         logger.info(`Tip: re-run with --force to detect and restart a stale dashboard automatically.`);
     }

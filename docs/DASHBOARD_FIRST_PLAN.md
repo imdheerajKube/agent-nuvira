@@ -14,6 +14,19 @@
 > a few thin server endpoints. The engine is already capable of everything
 > the chat needs to *invoke* — the gap is presentation, streaming, artifacts,
 > project context, and session continuity.
+>
+> **The quality principle (2026-08-17, user directive):** capability beats
+> dependency-avoidance. "Avoid heavy deps" is NOT a product constraint — if a
+> well-maintained framework offers materially better quality or UX (the
+> react-markdown decision: +117 KB gzipped for spec-complete markdown +
+> syntax highlighting was accepted), we invest in it. This is an enterprise
+> product; strong technical foundations are the point, not bundle frugality.
+> The ONE hard constraint that replaces it: **platform independence** — the
+> product must run seamlessly on Windows, macOS and Linux. Every new
+> dependency and every new line of code is checked against that (no
+> POSIX-only shell, no hardcoded `/usr/` paths, `join()`/`homedir()` for
+> paths, no `process.platform` branches — verified: the dashboard chat +
+> persistence stack uses none of these).
 
 ---
 
@@ -332,7 +345,8 @@ CLI surface stay exactly as they are — consistent with the plan's north star.
 | Risk | Mitigation |
 |---|---|
 | Streaming adds server complexity | SSE is thin; keep the non-streaming POST as fallback |
-| Markdown lib adds bundle weight | Use a small renderer; verify what's already bundled first |
+| ~~Markdown lib adds bundle weight~~ | **Superseded by the 2026-08-17 quality principle** — resolved with react-markdown + remark-gfm + rehype-highlight (+117 KB gzipped, accepted). Bundle weight is a tradeoff to measure and justify, never a veto on capability |
+| Dependency introduces platform breakage | Every dep is checked for cross-platform support (Windows/macOS/Linux) before adoption; paths via `join()`/`homedir()`, no shell-out idioms, no `process.platform` branches (audited: none in the dashboard stack) |
 | "12 rooms" become dead weight | Keep them as linked panels; chat surfaces them contextually |
 | Chat quality depends on model | Same engine as CLI — no regression; confirm cards make commands deterministic |
 | Session persistence privacy | Store transcripts in the existing `~/.buff` memory dir, same as CLI history |
