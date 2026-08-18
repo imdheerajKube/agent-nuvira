@@ -853,16 +853,38 @@ export class DashboardAPI {
   }
 
   /**
+   * Browse directories for the project picker folder browser.
+   * Returns subdirectories of the given path (or home dir if empty).
+   */
+  async browseDirectories(path?: string): Promise<{ ok: boolean; path: string; entries: Array<{ name: string; path: string }>; parent: string | null; isProject: boolean; error?: string }> {
+    const token = getAdminToken();
+    try {
+      const query = path ? `?path=${encodeURIComponent(path)}` : '';
+      const res = await fetch(`${this.baseUrl}/api/browse${query}`, {
+        headers: token ? { Authorization: `Bearer ${token}` } : {},
+        signal: AbortSignal.timeout(10_000),
+      });
+      const d = (await res.json()) as { ok?: boolean; path?: string; entries?: Array<{ name: string; path: string }>; parent?: string | null; isProject?: boolean; error?: string };
+      if (res.status === 200 && d.ok && Array.isArray(d.entries)) {
+        return { ok: true, path: d.path ?? '', entries: d.entries, parent: d.parent ?? null, isProject: d.isProject ?? false };
+      }
+      return { ok: false, path: '', entries: [], parent: null, isProject: false, error: typeof d.error === 'string' ? d.error : 'Browse failed.' };
+    } catch {
+      return { ok: false, path: '', entries: [], parent: null, isProject: false, error: 'Could not reach the dashboard server.' };
+    }
+  }
+
+  /**
    * P4 — session sidebar: list past conversations (title, preview, counts).
    */
-  async listChatSessions(): Promise<Array<{ id: string; title: string; turnCount: number; createdAt: number; updatedAt: number; preview: string; firstUser: string }>> {
+  async listChatSessions(): Promise<Array<{ id: string; title: string; turnCount: number; createdAt: number; updatedAt: number; preview: string; firstUser: string; projectPath?: string }>> {
     const token = getAdminToken();
     try {
       const res = await fetch(`${this.baseUrl}/api/sessions`, {
         headers: token ? { Authorization: `Bearer ${token}` } : {},
         signal: AbortSignal.timeout(10_000),
       });
-      const d = (await res.json()) as { ok?: boolean; sessions?: Array<{ id: string; title: string; turnCount: number; createdAt: number; updatedAt: number; preview: string; firstUser: string }> };
+      const d = (await res.json()) as { ok?: boolean; sessions?: Array<{ id: string; title: string; turnCount: number; createdAt: number; updatedAt: number; preview: string; firstUser: string; projectPath?: string }> };
       if (res.status === 200 && d.ok && Array.isArray(d.sessions)) return d.sessions;
       return [];
     } catch {
@@ -912,14 +934,14 @@ export class DashboardAPI {
   /**
    * P4 — load one past session's full transcript (resume in the thread).
    */
-  async getChatSession(id: string): Promise<{ turns: Array<{ role: 'user' | 'assistant'; content: string }>; title: string; updatedAt: number } | null> {
+  async getChatSession(id: string): Promise<{ turns: Array<{ role: 'user' | 'assistant'; content: string }>; title: string; updatedAt: number; projectPath?: string } | null> {
     const token = getAdminToken();
     try {
       const res = await fetch(`${this.baseUrl}/api/sessions/${encodeURIComponent(id)}`, {
         headers: token ? { Authorization: `Bearer ${token}` } : {},
         signal: AbortSignal.timeout(10_000),
       });
-      const d = (await res.json()) as { ok?: boolean; session?: { turns: Array<{ role: 'user' | 'assistant'; content: string }>; title: string; updatedAt: number } };
+      const d = (await res.json()) as { ok?: boolean; session?: { turns: Array<{ role: 'user' | 'assistant'; content: string }>; title: string; updatedAt: number; projectPath?: string } };
       if (res.status === 200 && d.ok && d.session) return d.session;
       return null;
     } catch {

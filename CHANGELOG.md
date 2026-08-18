@@ -2,6 +2,15 @@
 
 All notable changes to **Agent-Nuvira** are documented in this file.
 
+## v1.75.0 — session resume + project-aware chat (--cwd, browse, context scoping)
+
+- **`--cwd` option for `agent-nuvira dashboard`** — override the working directory at launch so the "📂 current dir" chip points to your project (`agent-nuvira dashboard --cwd ~/my-app`), eliminating the mismatch when launching from a different directory
+- **Attached project scopes the agent's working directory** — `toolContext.cwd` now resolves to the attached project path (not `process.cwd()`), so file tools (`read_files`, `write_file`, `str_replace`) and terminal commands run in the project root, making "assess THIS project" a full working context, not just a context hint
+- **Folder browser for project attach** — 🗂️ Browse button in the chat project picker opens a server-side directory navigator (`GET /api/browse`) to drill into subdirectories and select the project root, instead of typing the path manually
+- **Session resume restores project context** — when you click a past conversation in the sidebar, the stored `projectPath` is auto-attached (server rebuilds the context bundle), so the agent immediately has file access in the right project directory
+- **Project mismatch banner** — if a resumed session's project doesn't match the currently attached folder, a banner shows the stored path with a one-click "Attach it" / "Switch to it" button
+- **Sidebar shows project per conversation** — session items display the project folder name (e.g. `📁 my-app · 5 msgs · today`) so you can identify which project each conversation belongs to at a glance
+
 ## v1.74.2 — dashboard-first: chat is the front door (Phases 1–8 delivered)
 
 - **Chat is now the product's front door** — `/` lands on Chat (Overview moved to `/overview`); every capability (gateway, memory, models, publish, skills) is a tool the agent calls from the same window, never a new room. The CLI engine stayed byte-identical — `buff chat/execute/plan` unchanged; the dashboard calls the same engine through `/api/chat` and the same CLI through `/api/tasks`

@@ -592,7 +592,7 @@ export default function ChatPage() {
   // Phase 6 — the last sent message (↑ recalls it into the box).
   const lastSentRef = useRef<string>('');
   // P4 — the session sidebar: past conversations, click to resume.
-  const [sessions, setSessions] = useState<Array<{ id: string; title: string; turnCount: number; createdAt: number; updatedAt: number; preview: string; firstUser: string }>>([]);
+  const [sessions, setSessions] = useState<Array<{ id: string; title: string; turnCount: number; createdAt: number; updatedAt: number; preview: string; firstUser: string; projectPath?: string }>>([]);
   // P8 — smart rail: the sidebar collapses to a rail while the agent works and
   // returns when the turn finishes (results own the full window mid-task).
   const [railOpen, setRailOpen] = useState(true);
@@ -609,9 +609,17 @@ export default function ChatPage() {
   const pastePosRef = useRef<{ start: number; end: number } | null>(null);
   // P3 — the attached project (its bounded context rides into every turn).
   const [attachedProject, setAttachedProject] = useState<{ path: string; name: string; fileCount: number; symbolCount: number; truncated: boolean } | null>(null);
+  // P4b — the project path from a resumed session (used to show a mismatch banner).
+  const [sessionProjectPath, setSessionProjectPath] = useState<string | null>(null);
   const [projectPick, setProjectPick] = useState<Array<{ path: string; name: string; kind: string }>>([]);
   const [projectPathInput, setProjectPathInput] = useState('');
   const [projectError, setProjectError] = useState('');
+  // Folder browser popover for the project picker.
+  const [browseOpen, setBrowseOpen] = useState(false);
+  const [browsePath, setBrowsePath] = useState('');
+  const [browseEntries, setBrowseEntries] = useState<Array<{ name: string; path: string }>>([]);
+  const [browseParent, setBrowseParent] = useState<string | null>(null);
+  const [browseLoading, setBrowseLoading] = useState(false);
   const subRef = useRef<(() => void) | null>(null);
   const listRef = useRef<HTMLDivElement | null>(null);
   // P0.1 — a pending ask_user question from the agent (choice card).
@@ -682,13 +690,25 @@ export default function ChatPage() {
     setPendingResolve(null);
     setPendingQuestion(null);
     setRailOpen(true);
-  }, []);
+    // P4b — auto-restore the attached project from the session's stored path.
+    const storedPath = rec.projectPath;
+    if (storedPath) {
+      setSessionProjectPath(storedPath);
+      // If the project is already attached and matches, no action needed.
+      if (attachedProject?.path === storedPath) return;
+      // Try to re-attach: the server will build the context bundle if the dir exists.
+      void attachProject(storedPath);
+    } else {
+      setSessionProjectPath(null);
+    }
+  }, [attachedProject, attachProject]);
 
   /** P8 — start a fresh session (sidebar + New chat button). */
   const newChat = useCallback(() => {
     subRef.current?.();
     subRef.current = null;
     sessionIdRef.current = newSessionId();
+    setSessionProjectPath(null);
     setMessages([]);
     setLiveSteps([]);
     liveStepsRef.current = [];
@@ -817,6 +837,30 @@ export default function ChatPage() {
     } else {
       setProjectError(r.error || 'Could not attach that directory.');
     }
+  }, []);
+
+  /** Browse directories for the folder picker. */
+  const openBrowse = useCallback(async (startPath?: string) => {
+    setBrowseOpen(true);
+    setBrowseLoading(true);
+    const r = await dashboardAPI.browseDirectories(startPath);
+    if (r.ok) {
+      setBrowsePath(r.path);
+      setBrowseEntries(r.entries);
+      setBrowseParent(r.parent);
+    }
+    setBrowseLoading(false);
+  }, []);
+
+  const browseTo = useCallback(async (dirPath: string) => {
+    setBrowseLoading(true);
+    const r = await dashboardAPI.browseDirectories(dirPath);
+    if (r.ok) {
+      setBrowsePath(r.path);
+      setBrowseEntries(r.entries);
+      setBrowseParent(r.parent);
+    }
+    setBrowseLoading(false);
   }, []);
 
   const send = useCallback(
@@ -1260,10 +1304,57 @@ export default function ChatPage() {
                 <button type="button" className="admin-refresh-btn" onClick={() => void attachProject(projectPathInput)} disabled={busy || !projectPathInput.trim()}>
                   Attach
                 </button>
+                <button type="button" className="admin-mini-btn" onClick={() => void openBrowse()} title="Browse folders">
+                  🗂️ Browse
+                </button>
                 {projectError ? <span className="chat-project-error">{projectError}</span> : null}
+                {browseOpen ? (
+                  <div className="chat-browse-popover">
+                    <div className="chat-browse-head">
+                      <button type="button" className="admin-mini-btn" onClick={() => setBrowseOpen(false)}>✕</button>
+                      <span className="chat-browse-path" title={browsePath}>{browsePath || '/'}</span>
+                      {browseParent ? (
+                        <button type="button" className="admin-mini-btn" onClick={() => void browseTo(browseParent)}>⬆️</button>
+                      ) : null}
+                    </div>
+                    <div className="chat-browse-list">
+                      {browseLoading ? (
+                        <span className="admin-hint">Loading…</span>
+                      ) : browseEntries.length === 0 ? (
+                        <span className="admin-hint">No subdirectories</span>
+                      ) : (
+                        browseEntries.map((e) => (
+                          <button key={e.path} type="button" className="chat-browse-entry" onClick={() => void browseTo(e.path)}>
+                            📁 {e.name}
+                          </button>
+                        ))
+                      )}
+                    </div>
+                    <div className="chat-browse-foot">
+                      <button type="button" className="admin-refresh-btn" onClick={() => { setBrowseOpen(false); void attachProject(browsePath); }} disabled={!browsePath}>
+                        📁 Select this folder
+                      </button>
+                    </div>
+                  </div>
+                ) : null}
               </div>
             )}
           </div>
+          {/* P4b — show a banner when the resumed session's project doesn't match the attached project. */}
+          {sessionProjectPath && (!attachedProject || attachedProject.path !== sessionProjectPath) ? (
+            <div className="chat-session-project-banner">
+              <span>⚠️ This conversation was working in <code>{sessionProjectPath}</code></span>
+              {!attachedProject ? (
+                <button type="button" className="admin-refresh-btn" onClick={() => void attachProject(sessionProjectPath)}>
+                  📁 Attach it
+                </button>
+              ) : (
+                <button type="button" className="admin-refresh-btn" onClick={() => void attachProject(sessionProjectPath)}>
+                  📁 Switch to it
+                </button>
+              )}
+            </div>
+          ) : null}
           <div className="chat-layout">
           {!railOpen ? (
             <div className="chat-rail">
@@ -1320,7 +1411,7 @@ export default function ChatPage() {
                               <span className="chat-session-title">{s.title}</span>
                               <span className="chat-session-preview">{s.firstUser || s.preview}</span>
                               <span className="chat-session-meta">
-                                {s.turnCount} msg{s.turnCount === 1 ? '' : 's'} · {new Date(s.updatedAt).toLocaleString()}
+                                {s.projectPath ? `📁 ${s.projectPath.split('/').pop()} · ` : ''}{s.turnCount} msg{s.turnCount === 1 ? '' : 's'} · {new Date(s.updatedAt).toLocaleString()}
                               </span>
                             </button>
                             <span className="chat-session-actions">

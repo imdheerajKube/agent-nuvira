@@ -501,7 +501,7 @@ export class ChatCommand extends BaseCommand {
       true,
       { auto: autoMode },
       parsed,
-      { askUser: opts.askUser, onProgress: opts.onProgress, onToolCall: opts.onToolCall, onPlanChange: opts.onPlanChange, onGitDiff: opts.onGitDiff, onSkillDraft: opts.onSkillDraft, planStore: opts.planStore ?? this.planStore, gateway: opts.gateway, projectContext: opts.projectContext, recallContext: recallBlock, onToken: opts.onToken, signal: opts.signal },
+      { askUser: opts.askUser, onProgress: opts.onProgress, onToolCall: opts.onToolCall, onPlanChange: opts.onPlanChange, onGitDiff: opts.onGitDiff, onSkillDraft: opts.onSkillDraft, planStore: opts.planStore ?? this.planStore, gateway: opts.gateway, projectContext: opts.projectContext, recallContext: recallBlock, projectPath: opts.projectPath, onToken: opts.onToken, signal: opts.signal },
     );
 
     // No-model fallback: the tool loop could not generate a single response
@@ -962,6 +962,14 @@ export class ChatCommand extends BaseCommand {
        */
       recallContext?: string;
       /**
+       * P4 — the attached project's directory path. When set, the tool
+       * context's cwd is scoped to this directory so file tools (read_files,
+       * write_file, str_replace, etc.) and terminal commands resolve
+       * relative to the project root — the dashboard's equivalent of the
+       * CLI running inside the project.
+       */
+      projectPath?: string;
+      /**
        * P4 — stream answer tokens live to the GUI (dashboard opt-in; the CLI
        * never passes it). Delivered verbatim from the tool loop — see
        * ToolLoopOptions.onToken.
@@ -1064,7 +1072,9 @@ export class ChatCommand extends BaseCommand {
     const artifactSessionId = `chat-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
     const toolContext: ToolContext = {
       configManager: this.configManager,
-      cwd: process.cwd(),
+      // P4 — when a project is attached, scope tools to its root so the
+      // agent operates inside the project (not the dashboard server's cwd).
+      cwd: ctxOverrides?.projectPath || process.cwd(),
       emit: (event, data, source) => {
         // P0.6 — forward tool-call lifecycle events to the GUI before they
         // reach the bus (the bus drives hooks; the override drives the card

@@ -117,6 +117,8 @@ export interface ChatSessionRecord {
   title: string;
   createdAt: number;
   updatedAt: number;
+  /** P4b — the attached project dir at the time of the conversation (used to restore on resume). */
+  projectPath?: string;
 }
 
 /** P4 — the sidebar summary shape for `GET /api/sessions`. */
@@ -130,6 +132,8 @@ export interface ChatSessionSummary {
   preview: string;
   /** The FIRST user message (truncated) — powers search + the preview line. */
   firstUser: string;
+  /** P4b — the attached project dir (so the sidebar can show which project each conversation belongs to). */
+  projectPath?: string;
 }
 
 /**
@@ -251,7 +255,7 @@ export class ChatConsole {
         const data = JSON.parse(raw) as { sessions?: Record<string, ChatSessionRecord> };
         for (const [id, rec] of Object.entries(data?.sessions ?? {})) {
           if (typeof id !== 'string' || !id || !rec || !Array.isArray(rec.turns)) continue;
-          this.sessions.set(id, { turns: rec.turns, title: String(rec.title ?? ''), createdAt: Number(rec.createdAt) || 0, updatedAt: Number(rec.updatedAt) || 0 });
+          this.sessions.set(id, { turns: rec.turns, title: String(rec.title ?? ''), createdAt: Number(rec.createdAt) || 0, updatedAt: Number(rec.updatedAt) || 0, ...(typeof rec.projectPath === 'string' && rec.projectPath ? { projectPath: rec.projectPath } : {}) });
         }
       } catch {
         /* unreadable store — start empty rather than crash the dashboard */
@@ -302,6 +306,7 @@ export class ChatConsole {
         updatedAt: rec.updatedAt,
         preview: lastAssistantText(rec.turns),
         firstUser: firstUserText(rec.turns),
+        ...(rec.projectPath ? { projectPath: rec.projectPath } : {}),
       }))
       .sort((a, b) => b.updatedAt - a.updatedAt);
   }
@@ -392,6 +397,7 @@ export class ChatConsole {
       title: existing?.title ?? '',
       createdAt: existing?.createdAt ?? now,
       updatedAt: existing?.updatedAt ?? now,
+      ...(opts.projectPath ? { projectPath: opts.projectPath } : (existing?.projectPath ? { projectPath: existing.projectPath } : {})),
     });
     this.busy.add(sessionId);
     // P4 — one AbortController per turn: abort(sessionId) fires it, the
@@ -503,6 +509,8 @@ export class ChatConsole {
         title: existing?.title || firstUser.slice(0, 80),
         createdAt: existing?.createdAt ?? now,
         updatedAt: Date.now(),
+        // P4b — persist the project path so it can be restored on resume.
+        ...(opts.projectPath ? { projectPath: opts.projectPath } : (existing?.projectPath ? { projectPath: existing.projectPath } : {})),
       });
       this.persist();
       this.emit(sessionId, { kind: 'status', status: 'done' });

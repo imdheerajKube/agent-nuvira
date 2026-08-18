@@ -11,8 +11,8 @@
  */
 
 import { createServer, IncomingMessage, ServerResponse } from 'node:http';
-import { createReadStream, readFileSync, existsSync, statSync, watch, mkdirSync, writeFileSync } from 'node:fs';
-import { join, extname, dirname, basename } from 'node:path';
+import { createReadStream, readFileSync, existsSync, statSync, watch, mkdirSync, writeFileSync, readdirSync } from 'node:fs';
+import { join, extname, dirname, basename, resolve, isAbsolute } from 'node:path';
 import { fileURLToPath } from 'node:url';import { homedir } from 'node:os';
 import { parseRbacUsers } from '../enterprise/rbac.js';
 import { resolveBuffConfigDir, resolveBuffConfigPath } from '../config/paths.js';
@@ -3922,6 +3922,56 @@ function handleRequest(req: IncomingMessage, res: ServerResponse): void {
         },
       });
     })();
+    return;
+  }
+
+  // GET /api/browse?path=<dir> — list subdirectories of a path for the
+  // frontend folder browser (project picker). Returns directories + a flag
+  // indicating whether the path itself can be attached as a project.
+  if (pathname === '/api/browse' && req.method === 'GET') {
+    const session = adminSessions.validate(bearerToken(req));
+    if (!session) {
+      writeJson(res, 401, { ok: false, error: 'Not authenticated — log in first.' });
+      return;
+    }
+    if (!roleCan(session.role, 'routing.operate')) {
+      writeJson(res, 403, { ok: false, error: `Access denied — role '${session.role}' cannot browse directories.` });
+      return;
+    }
+    // Extract ?path= from the URL query string.
+    const urlObj = new URL(req.url || '/', `http://${req.headers.host || 'localhost'}`);
+    const rawPath = urlObj.searchParams.get('path') || '';
+    const dirPath = rawPath.trim();
+    if (!dirPath) {
+      // No path given — start from the user's home directory.
+      const homeDir = homedir();
+      try {
+        const entries = readdirSync(homeDir, { withFileTypes: true })
+          .filter((e) => e.isDirectory())
+          .map((e) => ({ name: e.name, path: join(homeDir, e.name) }))
+          .slice(0, 50);
+        writeJson(res, 200, { ok: true, path: homeDir, entries, parent: null, isProject: existsSync(homeDir) && statSync(homeDir).isDirectory() });
+      } catch {
+        writeJson(res, 200, { ok: true, path: homeDir, entries: [], parent: null, isProject: false });
+      }
+      return;
+    }
+    const target = isAbsolute(dirPath) ? dirPath : resolve(dirPath);
+    if (!existsSync(target) || !statSync(target).isDirectory()) {
+      writeJson(res, 400, { ok: false, error: `Not a directory: ${target}` });
+      return;
+    }
+    try {
+      const entries = readdirSync(target, { withFileTypes: true })
+        .filter((e) => e.isDirectory() && !e.name.startsWith('.'))
+        .map((e) => ({ name: e.name, path: join(target, e.name) }))
+        .sort((a, b) => a.name.localeCompare(b.name))
+        .slice(0, 100);
+      const parent = dirname(target);
+      writeJson(res, 200, { ok: true, path: target, entries, parent: parent !== target ? parent : null, isProject: true });
+    } catch {
+      writeJson(res, 200, { ok: true, path: target, entries: [], parent: dirname(target), isProject: true });
+    }
     return;
   }
 
