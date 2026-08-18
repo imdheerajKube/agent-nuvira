@@ -128,6 +128,23 @@ export interface ChatSessionSummary {
   updatedAt: number;
   /** The last assistant reply (truncated) — "what this conversation was about". */
   preview: string;
+  /** The FIRST user message (truncated) — powers search + the preview line. */
+  firstUser: string;
+}
+
+/**
+ * An attachment that rides into a turn as `[Attachment: <name>]` context — a
+ * file picked in the composer or a large pasted text block (the dashboard
+ * twin of `buff chat -f <file>`). Content travels inline (client reads the
+ * file, server injects it into the same answerOnce context).
+ */
+export interface ChatAttachment {
+  /** Display name, e.g. `requirements.md` or `pasted-text.txt`. */
+  name: string;
+  /** The raw content (text only — binary files are rejected client-side). */
+  content: string;
+  /** Source for the chip: 'file' | 'paste' | 'drop'. */
+  kind?: 'file' | 'paste' | 'drop';
 }
 
 /** A live event for one session (P3 progress streaming). */
@@ -284,8 +301,35 @@ export class ChatConsole {
         createdAt: rec.createdAt,
         updatedAt: rec.updatedAt,
         preview: lastAssistantText(rec.turns),
+        firstUser: firstUserText(rec.turns),
       }))
       .sort((a, b) => b.updatedAt - a.updatedAt);
+  }
+
+  /**
+   * Delete a session (sidebar ✕). Busy sessions refuse (an in-flight turn
+   * owns the record); otherwise the store + disk are updated.
+   */
+  remove(sessionId: string): { ok: boolean; error?: string } {
+    if (this.busy.has(sessionId)) {
+      return { ok: false, error: 'A message is being answered in this session — wait for it to finish.' };
+    }
+    const existed = this.sessions.delete(sessionId);
+    this.activeAborts.delete(sessionId);
+    this.pendingQuestions.delete(sessionId);
+    this.persist();
+    return { ok: existed };
+  }
+
+  /** Rename a session (sidebar ✏️). Empty titles reset to the first message. */
+  rename(sessionId: string, title: string): { ok: boolean; error?: string } {
+    const rec = this.sessions.get(sessionId);
+    if (!rec) return { ok: false, error: 'No such session.' };
+    const clean = title.trim();
+    rec.title = clean.length > 0 ? clean.slice(0, 120) : '';
+    rec.updatedAt = Date.now();
+    this.persist();
+    return { ok: true };
   }
 
   /**
@@ -325,7 +369,7 @@ export class ChatConsole {
   async answer(
     sessionId: string,
     message: string,
-    opts: { provider?: string; model?: string; projectContext?: string; projectPath?: string } = {},
+    opts: { provider?: string; model?: string; projectContext?: string; projectPath?: string; attachments?: ChatAttachment[] } = {},
   ): Promise<ChatAnswerResult> {
     const clean = (message || '').trim();
     if (!clean) return { ok: false, error: 'Empty message.' };
@@ -370,8 +414,11 @@ export class ChatConsole {
         ...(opts.provider ? { provider: opts.provider } : {}),
         ...(opts.model ? { model: opts.model } : {}),
         // P3 — project context rides into the turn (the engine injects it as
-        // a `[Project context]` message in the thread).
-        ...(opts.projectContext ? { projectContext: opts.projectContext } : {}),
+        // a `[Project context]` message in the thread). Attachments join the
+        // same context block (the dashboard twin of `buff chat -f <file>`).
+        ...(opts.projectContext || (opts.attachments && opts.attachments.length > 0)
+          ? { projectContext: formatTurnContext(opts.projectContext, opts.attachments) }
+          : {}),
         // P4 — the attached project dir triggers the engine's per-turn recall
         // of that project's prior sessions + facts.
         ...(opts.projectPath ? { projectPath: opts.projectPath } : {}),
@@ -574,6 +621,32 @@ function lastAssistantText(turns: ChatTurn[]): string {
     if (turns[i].role === 'assistant' && turns[i].content.trim()) {
       const text = turns[i].content.replace(/\s+/g, ' ').trim();
       return text.length > 90 ? `${text.slice(0, 87)}…` : text;
+    }
+  }
+  return '';
+}
+
+/**
+ * P8 — combine the project snapshot and turn attachments into the single
+ * context block the engine injects before the message. Project context stays
+ * first; each attachment is a `[Attachment: <name>]` section with the raw
+ * content, so "read this file" works exactly like `buff chat -f`.
+ */
+function formatTurnContext(projectContext: string | undefined, attachments: ChatAttachment[] | undefined): string {
+  const parts: string[] = [];
+  if (projectContext) parts.push(projectContext);
+  for (const a of attachments ?? []) {
+    parts.push(`[Attachment: ${a.name}]\n${a.content}`);
+  }
+  return parts.join('\n\n');
+}
+
+/** P4 — the FIRST user text (truncated) for the sidebar search + preview. */
+function firstUserText(turns: ChatTurn[]): string {
+  for (const t of turns) {
+    if (t.role === 'user' && t.content.trim()) {
+      const text = t.content.replace(/\s+/g, ' ').trim();
+      return text.length > 120 ? `${text.slice(0, 117)}…` : text;
     }
   }
   return '';

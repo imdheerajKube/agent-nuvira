@@ -691,4 +691,83 @@ describe('/api/projects — P3 project attach', () => {
       expect(admin.status).toBe(200);
     });
   });
+
+  describe('P8 — chat attachments + session management', () => {
+    it('sends attachments with the turn (server injects [Attachment: name] context)', async () => {
+      const res = await authedFetch('/api/chat', 'POST', {
+        sessionId: 'attach-sess',
+        message: 'review this doc',
+        attachments: [{ name: 'spec.md', content: 'the spec body\nsecond line', kind: 'file' }],
+      });
+      expect(res.status).toBe(200);
+      const call = engine.calls.find((c) => c.message === 'review this doc');
+      expect(call).toBeDefined();
+      const ctx = call?.opts?.projectContext ?? '';
+      expect(ctx).toContain('[Attachment: spec.md]');
+      expect(ctx).toContain('the spec body');
+    });
+
+    it('caps attachment count at the server boundary (10 max)', async () => {
+      const res = await authedFetch('/api/chat', 'POST', {
+        sessionId: 'attach-cap-count',
+        message: 'check',
+        attachments: Array.from({ length: 12 }, (_, i) => ({ name: `f${i}.txt`, content: `body ${i}`, kind: 'file' })),
+      });
+      expect(res.status).toBe(200);
+      const call = engine.calls.find((c) => c.message === 'check');
+      const ctx = call?.opts?.projectContext ?? '';
+      expect(ctx.split('[Attachment: f').length - 1).toBe(10);
+    });
+
+    it('truncates oversized attachment content to 300k chars', async () => {
+      const res = await authedFetch('/api/chat', 'POST', {
+        sessionId: 'attach-cap-size',
+        message: 'big',
+        attachments: [{ name: 'huge.txt', content: 'x'.repeat(310_000), kind: 'file' }],
+      });
+      expect(res.status).toBe(200);
+      const call = engine.calls.find((c) => c.message === 'big');
+      const ctx = call?.opts?.projectContext ?? '';
+      expect(ctx).toContain('[Attachment: huge.txt]');
+      expect(ctx.length).toBeLessThan(300_100);
+    });
+
+    it('rejects attachments without auth (401)', async () => {
+      const res = await fetch(`${baseUrl}/api/chat`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ sessionId: 'x', message: 'hi', attachments: [{ name: 'a.txt', content: 'aa' }] }),
+      });
+      expect(res.status).toBe(401);
+    });
+
+    it('DELETE /api/sessions/:id removes the session and persists', async () => {
+      await authedFetch('/api/chat', 'POST', { sessionId: 'del-sess', message: 'create me' });
+      const listBefore = await authedFetch('/api/sessions');
+      expect(((await listBefore.json()) as { sessions: Array<{ id: string }> }).sessions.some((s) => s.id === 'del-sess')).toBe(true);
+
+      const del = await authedFetch('/api/sessions/del-sess', 'DELETE');
+      expect(del.status).toBe(200);
+
+      const listAfter = await authedFetch('/api/sessions');
+      expect(((await listAfter.json()) as { sessions: Array<{ id: string }> }).sessions.some((s) => s.id === 'del-sess')).toBe(false);
+    });
+
+    it('POST /api/sessions/:id/rename retitles the session', async () => {
+      await authedFetch('/api/chat', 'POST', { sessionId: 'ren-sess', message: 'fix the build' });
+      const ren = await authedFetch('/api/sessions/ren-sess/rename', 'POST', { title: 'CI is red' });
+      expect(ren.status).toBe(200);
+      const list = await authedFetch('/api/sessions');
+      const rec = ((await list.json()) as { sessions: Array<{ id: string; title: string }> }).sessions.find((s) => s.id === 'ren-sess');
+      expect(rec?.title).toBe('CI is red');
+    });
+
+    it('gates session delete/rename on role (viewer → 403)', async () => {
+      await authedFetch('/api/chat', 'POST', { sessionId: 'gated-sess', message: 'hi' });
+      const del = await authedFetch('/api/sessions/gated-sess', 'DELETE', undefined, viewerToken);
+      expect(del.status).toBe(403);
+      const ren = await authedFetch('/api/sessions/gated-sess/rename', 'POST', { title: 'x' }, viewerToken);
+      expect(ren.status).toBe(403);
+    });
+  });
 });
