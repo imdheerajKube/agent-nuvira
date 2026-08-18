@@ -158,8 +158,11 @@ This is what makes it feel like Claude/Cursor rather than a terminal in a box.
       context URLs → 🚀 card with a link. Runs on the FINAL answer text (the
       live plan/diff events already cover the mid-turn path; this covers blocks
       the model wrote directly, incl. resumed transcripts). Extracted diffs
-      render read-only (text ≠ working tree), while the git-tool diff snapshot
-      is the selectable one — no false commit affordance on prose.
+      render read-only without an attached project (🔒 hint — prose can't
+      trigger a commit); with a project attached they become selectable and the
+      "Commit accepted" turn names the attached project's working tree, while
+      the git-tool diff snapshot is always the selectable one. No false commit
+      affordance on prose.
 - [x] Diff card with per-file accept/reject — the snapshotted git diff card
       gains ✓/✗ per-file toggles (all accepted by default) + a "Commit accepted
       (N)" action that sends the accepted subset back as a chat turn; the
@@ -176,7 +179,7 @@ This is what makes it feel like Claude/Cursor rather than a terminal in a box.
       pass/fail verdicts, deploy extraction + dedupe, combined answer, empty
       prose) + ChatPage tests (artifact cards render from answer text, diff
       accept/reject commits the subset, ⚡ Run renders the live execution card
-      with logs + exit code). Dashboard suite **254** green.
+      with logs + exit code). Dashboard suite **263** green.
 
 ### Phase 3 — Project context: "assess THIS project" (2–3 days)
 The killer use case: the agent should understand the project the user is talking
@@ -459,9 +462,10 @@ CLI surface stay exactly as they are — consistent with the plan's north star.
 | /learn drafts vary with model quality | The preview card (accept/edit/reject) is the gate — a bad draft is rejected, never saved silently; authoring standards in the prompt (Hermes parity) narrow variance |
 | Community skills could be hostile | Already mitigated: installs are sandboxed (name ^[a-z0-9-]+$), checksum-verified, quarantined on mismatch (`skills-hub.ts`); marketplace skills load through the same hub catalog |
 
-## 7. The north-star check
+## 7. The north-star check — MET (all phases delivered, verified 2026-08-18)
 
-After Phases 1–5 (+ Phase 7), this must be true:
+This check was written before Phases 1–8 as the definition of done. Every
+clause below is now delivered and verified:
 
 > A new user opens the dashboard and does everything in ONE window — attach the
 > project, ask for an assessment, watch the agent plan, review diffs inline,
@@ -469,3 +473,28 @@ After Phases 1–5 (+ Phase 7), this must be true:
 > and install a community skill from the marketplace — without ever touching
 > the CLI, without choosing a mode, without knowing a single `buff` command.
 > The CLI remains for scripting and CI, exactly like `gh` is to the GitHub web UI.
+
+Clause-by-clause, where each lands:
+
+| North-star clause | Delivered by |
+|---|---|
+| Attach the project | Phase 3 project bar — code-map snapshot rides every turn |
+| Ask for an assessment | Phase 3 "assess THIS project" — bounded context, no describing the codebase |
+| Watch the agent plan | Phase 1 — live plan checklist + tool cards + token typewriter |
+| Review diffs inline | Phase 2 — diff cards from the live git-tool snapshot AND `diff`-fenced blocks in the answer text |
+| Confirm the fixes | Phase 2 — per-file accept/reject + "Commit accepted" (accepted subset via the engine's git-tool contract, gated on an attached project so prose can't trigger a commit) |
+| See tests pass | Phase 2 — result cards + inline command-run execution cards (ANSI-stripped, stream-separated logs, exit code + duration) |
+| Get followups | Followup chips on every answer (Phase 1) |
+| Learn a workflow as a skill | Phase 7 P6a — /learn preview card (✅ accept / ✏️ edit / ↩ reject → SkillStore) |
+| Install a community skill | Phase 7 P6d — marketplace panel (quarantine + checksum-verified installs) |
+| One window, no CLI / mode / buff commands | Phases 5 (chat = `/`, the front door) + 8 (smart-rail sidebar, session resume + search, composer with attachments) |
+
+**Verification (2026-08-18):** dashboard suite **263** green; root suite
+**4,864** green (217 files); root tsc clean; dashboard build clean; zero new
+dashboard tsc errors (31 = 31 baseline); and a real-HTTP E2E test drives the
+full artifact-card flow — chat → diff extraction from the answer text →
+accept/reject → commit turn naming the attached project — against the running
+server with the exact modules the GUI uses.
+
+The CLI stays byte-identical for scripting/CI — nothing in Phases 1–8 changed
+`buff chat/execute/plan`, per the plan's one hard rule.

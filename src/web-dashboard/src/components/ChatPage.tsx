@@ -28,6 +28,7 @@ import Markdown from './Markdown';
 // P2 — structured artifacts extracted from the answer TEXT (```diff blocks,
 // test/build output, deploy URLs) rendered as cards, not raw markdown.
 import { extractArtifacts, type ExtractedArtifacts } from '../artifacts';
+import { stripAnsi } from '../ansi';
 import type { TaskLogLine, TaskStatus } from '../types';
 
 interface AuthState {
@@ -166,15 +167,22 @@ const TASK_STATUS_LABEL: Record<TaskStatus, string> = {
  * implements the accepted-subset contract (commit with files=[...]) — this
  * card surfaces the selection and sends it back as a chat turn; it does NOT
  * re-implement diff application.
+ *
+ * P2 — `lockedHint` renders when the card is deliberately NOT selectable
+ * (extracted text diffs without an attached project): the diff is prose, not
+ * a known working tree, so there is nothing safe to commit against — the hint
+ * tells the user why the accept/reject affordance is absent.
  */
 function DiffCard({
   diff,
   selectable = false,
   onCommitAccepted,
+  lockedHint,
 }: {
   diff: DiffView;
   selectable?: boolean;
   onCommitAccepted?: (paths: string[]) => void;
+  lockedHint?: string;
 }) {
   // P2 — per-file accept/reject is CARD-LOCAL (all accepted by default). The
   // caller only learns the final selection via onCommitAccepted.
@@ -241,8 +249,33 @@ function DiffCard({
           </button>
           <span className="admin-hint">Only accepted files are committed — the agent re-confirms with a question card.</span>
         </div>
+      ) : lockedHint ? (
+        <div className="chat-diff-actions">
+          <span className="admin-hint chat-diff-locked">🔒 {lockedHint}</span>
+        </div>
       ) : null}
     </div>
+  );
+}
+
+/** P2 — copy-to-clipboard button (⧉ Copy → ✓ Copied), same pattern as the
+ *  markdown code blocks. Clipboard may be unavailable (non-secure context /
+ *  jsdom) — the button no-ops instead of throwing. */
+function CopyButton({ text, label }: { text: string; label: string }) {
+  const [copied, setCopied] = useState(false);
+  const copy = async () => {
+    try {
+      await navigator.clipboard?.writeText(text);
+      setCopied(true);
+      setTimeout(() => setCopied(false), 1500);
+    } catch {
+      /* clipboard unavailable — button no-ops */
+    }
+  };
+  return (
+    <button type="button" className="chat-card-copy" title={`Copy ${label}`} onClick={() => void copy()}>
+      {copied ? '✓ Copied' : '⧉ Copy'}
+    </button>
   );
 }
 
@@ -255,6 +288,7 @@ function ResultCard({ result }: { result: { verdict: 'pass' | 'fail' | 'unknown'
         <span className="chat-result-icon">{icon}</span>
         <span className="chat-result-title">{result.title}</span>
         <span className="chat-result-meta">{result.verdict}</span>
+        <CopyButton text={result.body} label="result output" />
       </div>
       <pre className="chat-result-body">{result.body}</pre>
     </div>
@@ -268,10 +302,43 @@ function DeployCard({ deploy }: { deploy: { url: string; title: string } }) {
       <div className="chat-deploy-head">
         <span className="chat-deploy-icon">🚀</span>
         <span className="chat-deploy-title">{deploy.title || 'Deployment'}</span>
+        <CopyButton text={deploy.url} label="deployment URL" />
       </div>
       <a className="chat-deploy-url" href={deploy.url} target="_blank" rel="noopener noreferrer">
         {deploy.url}
       </a>
+    </div>
+  );
+}
+
+/**
+ * P2 — roving-focus keyboard navigation for the artifact card stack. Cards
+ * inside carry `data-artifact-card`; ↑/↓ move focus between them (wrapping at
+ * the ends), Home/End jump to the first/last. Native Tab still reaches each
+ * card's controls (copy button, toggles, links) — this adds list navigation
+ * on top, so a keyboard user can scan every artifact without tabbing through
+ * every control.
+ */
+function ArtifactNav({ children }: { children: React.ReactNode }) {
+  const ref = useRef<HTMLDivElement | null>(null);
+  const onKeyDown = (e: React.KeyboardEvent<HTMLDivElement>) => {
+    if (!ref.current) return;
+    const cards = Array.from(ref.current.querySelectorAll<HTMLElement>('[data-artifact-card]'));
+    if (cards.length === 0) return;
+    const current = cards.indexOf(document.activeElement as HTMLElement);
+    let next = -1;
+    if (e.key === 'ArrowDown') next = current + 1 >= cards.length ? 0 : current + 1;
+    else if (e.key === 'ArrowUp') next = current - 1 < 0 ? cards.length - 1 : current - 1;
+    else if (e.key === 'Home') next = 0;
+    else if (e.key === 'End') next = cards.length - 1;
+    if (next >= 0 && next !== current) {
+      e.preventDefault();
+      cards[next].focus();
+    }
+  };
+  return (
+    <div className="chat-artifacts" ref={ref} role="group" aria-label="Artifacts" onKeyDown={onKeyDown}>
+      {children}
     </div>
   );
 }
@@ -284,6 +351,9 @@ function DeployCard({ deploy }: { deploy: { url: string; title: string } }) {
  */
 function TaskRunCard({ task, onCancel }: { task: TaskRunView; onCancel?: () => void }) {
   const running = task.status === 'running';
+  // P2 — the copy button captures the FULL output, ANSI-stripped, so what
+  // lands on the clipboard is the clean text the user sees (no color codes).
+  const outputText = task.logs.map((l) => stripAnsi(l.text)).join('\n');
   return (
     <div className={`chat-task-card${running ? ' chat-task-running' : task.status === 'done' ? ' chat-task-ok' : ' chat-task-err'}`}>
       <div className="chat-task-head">
@@ -292,15 +362,32 @@ function TaskRunCard({ task, onCancel }: { task: TaskRunView; onCancel?: () => v
         <span className="chat-task-status" title={task.status}>{TASK_STATUS_LABEL[task.status]}</span>
         {!running && task.exitCode !== null ? <span className="chat-task-exit">exit {task.exitCode}</span> : null}
         {!running && task.durationMs !== null ? <span className="chat-task-dur">{task.durationMs}ms</span> : null}
+        {outputText ? <CopyButton text={outputText} label="task output" /> : null}
         {running && onCancel ? (
           <button className="admin-mini-btn" type="button" onClick={onCancel}>⏹ Cancel</button>
         ) : null}
       </div>
       <pre className="chat-task-logs" role="log">
         {task.logs.length > 0 ? (
-          task.logs.map((l, i) => (
-            <div key={i} className={l.stream === 'stderr' ? 'chat-task-log-err' : undefined}>{l.text}</div>
-          ))
+          task.logs.map((l, i) => {
+            // Stream separation: a divider marks where the output switched
+            // streams (stdout → stderr → system), and each line is styled by
+            // its stream. ANSI escapes (chalk colors, progress-bar cursor
+            // control) are stripped so the card shows clean text.
+            const prev = task.logs[i - 1];
+            const switched = prev && prev.stream !== l.stream;
+            const text = stripAnsi(l.text) || ' ';
+            return (
+              <div key={i}>
+                {switched ? (
+                  <div className={`chat-task-log-sep chat-task-log-sep-${l.stream}`} aria-hidden="true">
+                    {l.stream}
+                  </div>
+                ) : null}
+                <div className={`chat-task-log chat-task-log-${l.stream}`}>{text}</div>
+              </div>
+            );
+          })
         ) : (
           <div className="admin-hint">{running ? 'Waiting for output…' : '(no output)'}</div>
         )}
@@ -1017,12 +1104,16 @@ export default function ChatPage() {
   const commitAcceptedDiff = useCallback(
     (paths: string[]) => {
       if (paths.length === 0) return;
+      // P2 — extracted text diffs are only selectable with an attached
+      // project; name that project so the agent commits in ITS working tree
+      // (not the dashboard's cwd). The engine's git tool runs in ctx.cwd.
+      const where = attachedProject ? ` in the attached project ${attachedProject.path}` : '';
       void send(
-        `Commit exactly these files that I accepted on the diff card (and nothing else): ${paths.join(', ')}. ` +
+        `Commit exactly these files that I accepted on the diff card (and nothing else)${where}: ${paths.join(', ')}. ` +
         `Show me a short confirmation before finishing.`,
       );
     },
-    [send],
+    [send, attachedProject],
   );
 
   /** P2 — cancel a running inline command-run card. */
@@ -1307,17 +1398,34 @@ export default function ChatPage() {
                     </details>
                   ) : null}
                   {m.role === 'assistant' && m.artifacts && (m.artifacts.diffs.length > 0 || m.artifacts.results.length > 0 || m.artifacts.deploys.length > 0) ? (
-                    <div className="chat-artifacts">
+                    // P2 — the artifact stack is a keyboard-navigable list:
+                    // ↑/↓ moves between cards, Home/End jumps to the ends.
+                    <ArtifactNav>
                       {m.artifacts.diffs.map((d, di) => (
-                        <DiffCard key={`diff-${di}`} diff={d} />
+                        <div key={`diff-${di}`} data-artifact-card tabIndex={0} role="group" aria-label={`Diff: ${d.summary}`} className="chat-artifact-item">
+                          {/* P2 — extracted TEXT diffs are selectable only with
+                              an attached project: the diff plausibly refers to
+                              that working tree. Without one, the diff is prose
+                              with no known repo — read-only + a hint, so a
+                              stray ```diff block can never trigger a commit. */}
+                          {attachedProject ? (
+                            <DiffCard diff={d} selectable onCommitAccepted={commitAcceptedDiff} />
+                          ) : (
+                            <DiffCard diff={d} lockedHint="Attach a project to review and commit these changes." />
+                          )}
+                        </div>
                       ))}
                       {m.artifacts.results.map((r, ri) => (
-                        <ResultCard key={`result-${ri}`} result={r} />
+                        <div key={`result-${ri}`} data-artifact-card tabIndex={0} role="group" aria-label={`Result: ${r.title}`} className="chat-artifact-item">
+                          <ResultCard result={r} />
+                        </div>
                       ))}
                       {m.artifacts.deploys.map((d, di) => (
-                        <DeployCard key={`deploy-${di}`} deploy={d} />
+                        <div key={`deploy-${di}`} data-artifact-card tabIndex={0} role="group" aria-label={`Deployment: ${d.url}`} className="chat-artifact-item">
+                          <DeployCard deploy={d} />
+                        </div>
                       ))}
-                    </div>
+                    </ArtifactNav>
                   ) : null}
                   {m.role === 'assistant' && m.task ? (
                     <TaskRunCard task={m.task} onCancel={m.task.status === 'running' ? () => void cancelTaskRun(m.task!.id) : undefined} />

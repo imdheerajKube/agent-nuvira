@@ -47,7 +47,7 @@ This table highlights core capabilities for quick machine parsing and comparison
 | Security guardrails | Privacy-focused; PII detection; prompt-injection defenses; security scan CLI |
 | Publishing | Standalone eject & npm publishing (`npx agent-nuvira`) |
 | **Routing strategy** | **Thompson-sampling bandit + uncertainty escalation + per-model learning + promotion gate A/B + routing rules + hard constraints** |
-| **Test suite** | **3,806 tests across 149 files — 100% passing** |
+| **Test suite** | **4,864 tests across 217 files — 100% passing** |
 | **Vector backend** | **Native FAISS (automatic), pure-JS IVF fallback, exact JSON fallback** |
 
 
@@ -2040,6 +2040,7 @@ npx tsc --noEmit
 
 | Version | Date | Key Changes |
 |---------|------|-------------|
+| **v1.74.2** | Aug 2026 | **Dashboard-first — chat is the front door (Phases 1–8 delivered)** — token-streaming typewriter, spec-complete markdown + syntax highlight, artifact cards (diff per-file accept/reject + commit-accepted, result, deploy — copy buttons + keyboard nav), inline command-run execution cards, project attach with code-map context, persisted sessions with smart-rail resume/search/rename/delete, composer attachments (file/paste/drag), /learn skill authoring + marketplace install, streaming cancel + retry; 4,864 root + 263 dashboard tests; CLI engine unchanged |
 | **v1.63.0** | Aug 2026 | **Messaging campaign — 22-platform multi-channel gateway** — the full gateway surface with env-var-compatible credentials: DingTalk, Feishu, WeCom, Mattermost, Matrix, generic Webhook, BlueBubbles, ntfy, Teams, Google Chat, Weixin (iLink bot API), SMS (Twilio), IRC (RFC 1459 net/tls, two-way), SimpleX (daemon WS, two-way), Home Assistant (REST) on top of Telegram/Discord/Slack/WhatsApp — service-native `TWILIO_*`/`IRC_*`/`SIMPLEX_*`/`HASS_*` creds, zero new SDK deps; WhatsApp Baileys personal bridge (`buff whatsapp pair`); guaranteed delivery ledger with auto-retry; dashboard Channels send-test; `buff gateway status` platform-count line; SimpleX inbound (auto-accept + allowlists + reconnect); IRC inbound (addressing + allowlist + PING/PONG + reconnect); 4,280 tests |
 | **v1.0.0** | Apr 2026 | Initial release — Core CLI with chat, 5 built-in providers (expandable to 17+ via plugins), config, models |
 | **v1.1.0** | Apr 2026 | Model discovery with search/filter |

@@ -56,6 +56,9 @@ class FakeEngine implements ChatEngine {
   planChanges: Array<{ goal: string; steps: Array<{ id: string; description: string; status: string }>; revision: number }> = [];
   /** P3b — when set, the engine emits these git diffs via onGitDiff. */
   gitDiffs: Array<{ files: Array<{ path: string; body: string }>; summary: string }> = [];
+  /** E2E — when set, the engine answers with this exact content (the model
+   *  "wrote" a ```diff block directly in its answer — the artifact-card path). */
+  answerContent: string | null = null;
   async answerOnce(message: string, opts?: unknown): Promise<{ content: string; followups: unknown[]; provider?: string; model?: string }> {
     this.calls.push({ message, opts });
     const o = opts as { onProgress?: (line: string) => void; onToolCall?: (phase: 'started' | 'called', info: { id?: string; tool: string; args?: Record<string, unknown>; ok?: boolean; result?: string; error?: string; durationMs?: number }) => void; onPlanChange?: (p: { goal: string; steps: Array<{ id: string; description: string; status: string }>; revision: number }) => void; onGitDiff?: (d: { files: Array<{ path: string; body: string }>; summary: string }) => void };
@@ -76,7 +79,7 @@ class FakeEngine implements ChatEngine {
       }
     }
     return {
-      content: `echo: ${message}`,
+      content: this.answerContent ?? `echo: ${message}`,
       followups: [{ prompt: 'What next?', label: 'Next' }],
       provider: 'groq',
       model: 'llama-3.3-70b',
@@ -689,6 +692,110 @@ describe('/api/projects — P3 project attach', () => {
 
       const admin = await authedFetch('/api/skills/drafts/s3-upload/accept', 'POST');
       expect(admin.status).toBe(200);
+    });
+  });
+
+  describe('E2E — artifact cards (chat → diff extraction → accept/reject → commit)', () => {
+    it('extracts a diff from the model answer and the accepted-subset commit turn names the attached project', async () => {
+      // A fixture project the diff refers to (attached to the turn).
+      const fixture = join(testDir, 'proj-e2e');
+      mkdirSync(fixture, { recursive: true });
+      writeFileSync(join(fixture, 'lib.ts'), 'export function helper(): void {}\n', 'utf-8');
+      writeFileSync(join(fixture, 'README.md'), 'old readme\n', 'utf-8');
+
+      // The model's answer embeds a unified diff it wants committed (written
+      // DIRECTLY into the answer text — the artifact-card extraction path,
+      // not a live git:diff SSE event).
+      engine.answerContent = [
+        'I fixed the helper and the README. Here is the diff:',
+        '```diff',
+        'diff --git a/lib.ts b/lib.ts',
+        'index 111..222 100644',
+        '--- a/lib.ts',
+        '+++ b/lib.ts',
+        '@@ -1,3 +1,3 @@',
+        '-export function helper(): void {}',
+        "+export function helper(): string { return 'ok'; }",
+        'diff --git a/README.md b/README.md',
+        'index 333..444 100644',
+        '--- a/README.md',
+        '+++ b/README.md',
+        '@@ -1 +1 @@',
+        '-old readme',
+        '+new readme',
+        '```',
+        'Which files should I commit?',
+      ].join('\n');
+
+      try {
+        // 1. CHAT — the turn runs against the REAL server with the project
+        // attached (the same request ChatPage sends).
+        const post = await authedFetch('/api/chat', 'POST', {
+          sessionId: 'artifact-e2e-sess',
+          message: 'fix the helper and show the diff',
+          projectPath: fixture,
+        });
+        expect(post.status).toBe(200);
+        const body = (await post.json()) as { ok: boolean; content: string };
+        expect(body.ok).toBe(true);
+
+        // 2. DIFF EXTRACTION — the EXACT module ChatPage runs on the answer
+        // text (extractArtifacts → per-file diff sections for the card).
+        const { extractArtifacts } = await import('../../src/web-dashboard/src/artifacts.js');
+        const arts = extractArtifacts(body.content);
+        expect(arts.diffs).toHaveLength(1);
+        expect(arts.diffs[0].files.map((f) => f.path)).toEqual(['lib.ts', 'README.md']);
+        expect(arts.diffs[0].summary).toBe('2 files changed');
+
+        // 3. ACCEPT / REJECT — the user accepts lib.ts and rejects README.md;
+        // the card sends exactly the accepted subset (never the whole diff).
+        const accepted = ['lib.ts'];
+
+        // 4. COMMIT — the exact message commitAcceptedDiff builds (the
+        // attached project is named so the agent commits in ITS working tree).
+        const commitTurn =
+          `Commit exactly these files that I accepted on the diff card (and nothing else) ` +
+          `in the attached project ${fixture}: ${accepted.join(', ')}. ` +
+          `Show me a short confirmation before finishing.`;
+        const commit = await authedFetch('/api/chat', 'POST', { sessionId: 'artifact-e2e-sess', message: commitTurn, projectPath: fixture });
+        expect(commit.status).toBe(200);
+
+        // The engine received the commit request…
+        const call = engine.calls.find((c) => c.message === commitTurn);
+        expect(call).toBeTruthy();
+        // …and the turn threaded the diff answer as context (the agent knows
+        // exactly which diff it is committing).
+        const opts = call?.opts as { history?: Array<{ role: string; content: string }> };
+        expect(opts.history?.map((h) => h.role)).toEqual(['user', 'assistant']);
+        expect(opts.history?.[1].content).toContain('diff --git a/lib.ts b/lib.ts');
+        // The project context rode into BOTH turns.
+        expect((call?.opts as { projectContext?: string }).projectContext).toContain('Project:');
+      } finally {
+        engine.answerContent = null;
+      }
+    });
+
+    it('serves the built dashboard bundle containing the artifact-card code (smoke)', async () => {
+      // The running dashboard serves the SPA + its hashed assets over HTTP.
+      const index = await fetch(`${baseUrl}/`);
+      expect(index.status).toBe(200);
+      expect(index.headers.get('content-type') ?? '').toContain('text/html');
+      const html = await index.text();
+      const assets = [...html.matchAll(/(?:src|href)="(\/assets\/[^"]+)"/g)].map((m) => m[1]);
+      expect(assets.length).toBeGreaterThan(0);
+      for (const a of assets) {
+        const res = await fetch(`${baseUrl}${a}`);
+        expect(res.status).toBe(200);
+      }
+      // The JS bundle carries the Phase-2 artifact-card code (rendered markers
+      // survive minification): diff card + accept/reject, the artifact nav
+      // stack, and the task-run stream separation.
+      const jsAsset = assets.find((a) => a.endsWith('.js'));
+      expect(jsAsset).toBeTruthy();
+      const js = await (await fetch(`${baseUrl}${jsAsset}`)).text();
+      expect(js).toContain('Commit accepted');
+      expect(js).toContain('chat-artifacts');
+      expect(js).toContain('chat-task-log-sep');
     });
   });
 
