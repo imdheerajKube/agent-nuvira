@@ -152,7 +152,11 @@ async function embedWithXenova(text, model) {
     if (_xenovaAvailable === false)
         return null;
     try {
-        // Dynamic import — the package is optional (user may not have it installed)
+        // Dynamic import — the package is optional (user may not have it installed).
+        // The `as string` keeps tsc from failing to resolve the specifier when the
+        // optional dep is absent (CI npm ci skips it when its platform binaries
+        // fail to install) — the emitted code is unchanged and the runtime guard
+        // below handles the missing package.
         const { pipeline } = await import('@huggingface/transformers');
         // Use 'feature-extraction' pipeline with the requested model (default
         // all-MiniLM-L6-v2 for memory/history; bge-small-en-v1.5 for retrieval).
@@ -376,7 +380,8 @@ export async function isXenovaAvailable() {
     if (_xenovaAvailable !== null)
         return _xenovaAvailable;
     try {
-        // Try to resolve the package without loading it
+        // Try to resolve the package without loading it (specifier cast: see
+        // embedWithXenova — keeps tsc happy when the optional dep is absent).
         await import('@huggingface/transformers');
         _xenovaAvailable = true;
         return true;
