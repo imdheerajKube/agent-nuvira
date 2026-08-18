@@ -237,6 +237,42 @@ about without being told how.
 - [x] Full dashboard test suite green (**220** today, was 208) + new chat tests
       (markdown, onboarding, keyboard)
 
+### Phase 8 — Smart-rail history + real composer (2026-08-17, delivered)
+
+User ask: *"a smarter window — one side panel with all past conversations /
+handled tasks so any past engagement can be continued, the full window for
+results, and the lower section for user input with attachments (paste a large
+document as an attachment like I do with you)"* — benchmarked against the
+assistant/copilot GUI patterns. Decision (asked + confirmed): **smart rail** —
+sidebar visible when idle, collapses to a 📁 rail while the agent works,
+returns when the turn finishes (results own the full window mid-task).
+
+- [x] **Composer with attachments** — 📎 file picker (client-side `File.text()`
+      read, 300 KB / 10-attachment caps) + **paste-as-attachment** (pasted text
+      ≥ 2,000 chars offers "Attach as text" — becomes a `pasted-text.txt` chip
+      and is stripped from the box) + drag-and-drop onto the composer. Chips
+      render above the input with ✕ remove; attachments ride the turn as
+      `[Attachment: <name>]` context (the dashboard twin of `buff chat -f`),
+      merged with project context into one block by `ChatConsole.answer`.
+- [x] **Server**: `/api/chat` gained a dedicated larger body reader (1.5 MB —
+      the global 256 KB admin cap would reject attached docs; all other routes
+      keep the strict cap) + attachment validation (name ≤ 120, content
+      truncated to 300 KB, max 10). `DELETE /api/sessions/:id` and
+      `POST /api/sessions/:id/rename` (RBAC routing.operate; busy sessions
+      refuse delete). Session list enriched with `firstUser` for search.
+- [x] **Smart-rail sidebar** — collapsible rail, 🔍 search (title/preview/first
+      message), date grouping (Today / Yesterday / This week / Older), two-line
+      preview (first user message + last reply), ＋ New chat, hover ✏️ rename /
+      🗑 delete, session-type chips (💬 chat / 🛠 task) derived from the preview.
+- [x] Attachment chips render inline in the user's message bubbles (expandable
+      `<details>` with the raw content).
+- [x] Tests: console (attachment context merge, remove/rename persist,
+      firstUser), real-HTTP server (attachments inject + caps + auth gate,
+      session delete/rename + viewer-403), ChatPage (paste-offer → chip,
+      smart-rail collapse/return, search + date groups, rename/delete, New
+      chat). Dashboard suite **238** green; root suite green; tsc zero new
+      errors; both builds clean.
+
 ### Phase 7 — Skills as a product capability: onboarding, /learn, and marketplace import (3–4 days)
 
 > **Why this phase exists (user ask, 2026-08-17):** *"Hermes can consume

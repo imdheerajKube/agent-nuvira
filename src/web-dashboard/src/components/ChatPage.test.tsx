@@ -122,7 +122,7 @@ describe('ChatPage', () => {
     mockChatSend(OK_RESPONSE);
     // P4 — the just-abandoned session now appears in the sidebar.
     vi.spyOn(dashboardAPI, 'listChatSessions').mockResolvedValue([
-      { id: 'any-id', title: 'hi', turnCount: 2, createdAt: 1, updatedAt: 2, preview: 'I checked the repo' },
+      { id: 'any-id', title: 'hi', turnCount: 2, createdAt: 1, updatedAt: 2, preview: 'I checked the repo', firstUser: 'hi' },
     ]);
     render(<ChatPage />);
     await waitFor(() => expect(screen.getByPlaceholderText(/Message the agent/)).toBeTruthy());
@@ -134,7 +134,7 @@ describe('ChatPage', () => {
     fireEvent.click(screen.getByRole('button', { name: /New conversation/ }));
     await waitFor(() => expect(screen.queryByText('I checked the repo — the build is green.')).toBeNull());
     // The sidebar refreshes with the abandoned conversation.
-    await waitFor(() => expect(screen.getByText('hi')).toBeTruthy());
+    await waitFor(() => expect(screen.getAllByText('hi').length).toBeGreaterThan(0));
   });
 
   it('disables the send button while a turn is in flight', async () => {
@@ -583,8 +583,8 @@ describe('ChatPage', () => {
     mockChatStream();
     mockChatSend(OK_RESPONSE);
     vi.spyOn(dashboardAPI, 'listChatSessions').mockResolvedValue([
-      { id: 'sess-1', title: 'assess the repo', turnCount: 4, createdAt: 1, updatedAt: 2, preview: 'the build is green' },
-      { id: 'sess-2', title: 'fix the failing test', turnCount: 2, createdAt: 1, updatedAt: 1, preview: 'fixed it' },
+      { id: 'sess-1', title: 'assess the repo', turnCount: 4, createdAt: 1, updatedAt: 2, preview: 'the build is green', firstUser: 'assess the repo' },
+      { id: 'sess-2', title: 'fix the failing test', turnCount: 2, createdAt: 1, updatedAt: 1, preview: 'fixed it', firstUser: 'fix the failing test' },
     ]);
     const getSession = vi.spyOn(dashboardAPI, 'getChatSession').mockResolvedValue({
       title: 'assess the repo',
@@ -597,12 +597,12 @@ describe('ChatPage', () => {
       ],
     });
     render(<ChatPage />);
-    await waitFor(() => expect(screen.getByText('assess the repo')).toBeTruthy());
-    expect(screen.getByText('fix the failing test')).toBeTruthy();
+    await waitFor(() => expect(screen.getAllByText('assess the repo').length).toBeGreaterThan(0));
+    expect(screen.getAllByText('fix the failing test').length).toBeGreaterThan(0);
     expect(screen.getByText(/4 msgs · /)).toBeTruthy();
 
     // Click the session → its transcript loads into the thread (markdown-rendered).
-    fireEvent.click(screen.getByText('assess the repo'));
+    fireEvent.click(screen.getAllByText('assess the repo')[0]);
     await waitFor(() => expect(getSession).toHaveBeenCalledWith('sess-1'));
     await waitFor(() => expect(screen.getByText('all green')).toBeTruthy());
     expect(screen.getByText('what about tests?')).toBeTruthy();
@@ -630,5 +630,107 @@ describe('ChatPage', () => {
     await waitFor(() => expect(screen.getByText(/Verified list or send-by-name\?/)).toBeTruthy());
     fireEvent.click(screen.getByText(/Skip/));
     await waitFor(() => expect(respondSpy).toHaveBeenCalledWith(expect.any(String), 'q-2', { index: -1 }));
+  });
+
+  it('P8 — large pasted text is offered as an attachment and becomes a chip', async () => {
+    mockAuthed('admin');
+    mockChatStream();
+    vi.spyOn(dashboardAPI, 'chatResolve').mockResolvedValue({ ok: true, matches: [] });
+    mockChatSend(OK_RESPONSE);
+    render(<ChatPage />);
+    await waitFor(() => expect(screen.getByPlaceholderText(/Message the agent/)).toBeTruthy());
+
+    const longText = 'x'.repeat(2500);
+    fireEvent.paste(screen.getByPlaceholderText(/Message the agent/), {
+      clipboardData: { getData: () => longText },
+    } as unknown as React.ClipboardEvent<HTMLTextAreaElement>);
+
+    await waitFor(() => expect(screen.getByText(/2,500 characters/)).toBeTruthy());
+    fireEvent.click(screen.getByText(/Attach as text/));
+    await waitFor(() => expect(screen.getByText(/pasted-text.txt/)).toBeTruthy());
+  });
+
+  it('P8 — smart rail: sidebar collapses while working and returns when done', async () => {
+    mockAuthed('admin');
+    mockChatStream();
+    vi.spyOn(dashboardAPI, 'chatResolve').mockResolvedValue({ ok: true, matches: [] });
+    let resolveTurn: (r: ChatSendResult) => void = () => {};
+    vi.spyOn(dashboardAPI, 'chatSend').mockImplementation(
+      () => new Promise<ChatSendResult>((resolve) => { resolveTurn = resolve; }),
+    );
+    render(<ChatPage />);
+    await waitFor(() => expect(screen.getByText('📁 Sessions')).toBeTruthy());
+
+    fireEvent.change(screen.getByPlaceholderText(/Message the agent/), { target: { value: 'analyze' } });
+    fireEvent.submit(screen.getByPlaceholderText(/Message the agent/).closest('form')!);
+
+    // While the turn is in flight the sidebar collapses to the rail.
+    await waitFor(() => expect(screen.queryByText('📁 Sessions')).toBeNull());
+    expect(screen.getByTitle('Show history')).toBeTruthy();
+
+    resolveTurn(OK_RESPONSE);
+    await waitFor(() => expect(screen.getByText('📁 Sessions')).toBeTruthy());
+  });
+
+  it('P8 — sidebar search filters sessions and date groups render', async () => {
+    mockAuthed('admin');
+    mockChatStream();
+    vi.spyOn(dashboardAPI, 'listChatSessions').mockResolvedValue([
+      { id: 's-a', title: 'assess the repo', turnCount: 4, createdAt: Date.now(), updatedAt: Date.now(), preview: 'the build is green', firstUser: 'assess the repo' },
+      { id: 's-b', title: 'deploy the site', turnCount: 2, createdAt: Date.now() - 86_400_000, updatedAt: Date.now() - 86_400_000, preview: 'deployed', firstUser: 'deploy the site' },
+    ]);
+    render(<ChatPage />);
+    await waitFor(() => expect(screen.getAllByText('assess the repo').length).toBeGreaterThan(0));
+
+    // Date groups: Today + Yesterday.
+    expect(screen.getByText('Today')).toBeTruthy();
+    expect(screen.getByText('Yesterday')).toBeTruthy();
+
+    // Search narrows the list.
+    fireEvent.change(screen.getByPlaceholderText(/Search conversations/), { target: { value: 'deploy' } });
+    await waitFor(() => expect(screen.queryByText('assess the repo')).toBeNull());
+    expect(screen.getAllByText('deploy the site').length).toBeGreaterThan(0);
+  });
+
+  it('P8 — sidebar rename and delete manage the session list', async () => {
+    mockAuthed('admin');
+    mockChatStream();
+    vi.spyOn(dashboardAPI, 'listChatSessions').mockResolvedValue([
+      { id: 's-1', title: 'old title', turnCount: 1, createdAt: 1, updatedAt: 2, preview: 'x', firstUser: 'old title' },
+    ]);
+    const delSpy = vi.spyOn(dashboardAPI, 'deleteChatSession').mockResolvedValue({ ok: true });
+    const renSpy = vi.spyOn(dashboardAPI, 'renameChatSession').mockResolvedValue({ ok: true });
+    render(<ChatPage />);
+    await waitFor(() => expect(screen.getAllByText('old title').length).toBeGreaterThan(0));
+
+    // Rename: pencil → inline input → Enter commits.
+    fireEvent.click(screen.getByTitle('Rename'));
+    const renameInput = await screen.findByPlaceholderText('Session title');
+    fireEvent.change(renameInput, { target: { value: 'new title' } });
+    fireEvent.keyDown(renameInput, { key: 'Enter' });
+    await waitFor(() => expect(renSpy).toHaveBeenCalledWith('s-1', 'new title'));
+    await waitFor(() => expect(screen.getAllByText('new title').length).toBeGreaterThan(0));
+
+    // Delete: trash → API called + session removed from the list.
+    fireEvent.click(screen.getByTitle('Delete'));
+    await waitFor(() => expect(delSpy).toHaveBeenCalledWith('s-1'));
+    await waitFor(() => expect(screen.queryByText('new title')).toBeNull());
+  });
+
+  it('P8 — New chat button resets the thread', async () => {
+    mockAuthed('admin');
+    mockChatStream();
+    vi.spyOn(dashboardAPI, 'chatResolve').mockResolvedValue({ ok: true, matches: [] });
+    mockChatSend(OK_RESPONSE);
+    render(<ChatPage />);
+    await waitFor(() => expect(screen.getByPlaceholderText(/Message the agent/)).toBeTruthy());
+
+    fireEvent.change(screen.getByPlaceholderText(/Message the agent/), { target: { value: 'hello' } });
+    fireEvent.submit(screen.getByPlaceholderText(/Message the agent/).closest('form')!);
+    await waitFor(() => expect(screen.getByText('You')).toBeTruthy());
+
+    fireEvent.click(screen.getByText('＋ New'));
+    await waitFor(() => expect(screen.queryByText('You')).toBeNull());
+    expect(screen.getByText(/Say anything/)).toBeTruthy();
   });
 });

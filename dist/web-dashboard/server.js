@@ -1989,6 +1989,38 @@ function readJsonBody(req) {
         req.on('error', () => resolve(null));
     });
 }
+/**
+ * P8 — a larger JSON reader for /api/chat ONLY. Attachments travel inline
+ * (the GUI reads the file client-side and sends the text), so the global
+ * 256 KB admin-body cap would reject a real attached document. Everything
+ * else keeps the strict 256 KB limit.
+ */
+const CHAT_BODY_LIMIT = 1_500_000; // ~1.4 MB — message + up to 10 attachments
+function readLargeJsonBody(req) {
+    return new Promise((resolve) => {
+        const chunks = [];
+        let size = 0;
+        req.on('data', (chunk) => {
+            size += chunk.length;
+            if (size > CHAT_BODY_LIMIT) {
+                resolve(null);
+                req.destroy();
+                return;
+            }
+            chunks.push(chunk);
+        });
+        req.on('end', () => {
+            try {
+                const parsed = JSON.parse(Buffer.concat(chunks).toString('utf-8') || '{}');
+                resolve(typeof parsed === 'object' && parsed !== null ? parsed : null);
+            }
+            catch {
+                resolve(null);
+            }
+        });
+        req.on('error', () => resolve(null));
+    });
+}
 /** Send a JSON response (the admin routes' single writer). */
 function writeJson(res, status, data) {
     res.writeHead(status, { 'Content-Type': 'application/json' });
@@ -3562,7 +3594,9 @@ function handleRequest(req, res) {
                 });
                 return;
             }
-            const body = await readJsonBody(req);
+            // P8 — attachments travel inline, so /api/chat uses the larger body
+            // reader (the global 256 KB admin cap would reject attached docs).
+            const body = await readLargeJsonBody(req);
             const message = typeof body?.message === 'string' ? body.message.trim() : '';
             if (!message) {
                 writeJson(res, 400, { ok: false, error: 'Missing message — expected { message: string }.' });
@@ -3573,6 +3607,14 @@ function handleRequest(req, res) {
                 : newChatSessionId();
             const provider = typeof body?.provider === 'string' ? body.provider : undefined;
             const model = typeof body?.model === 'string' ? body.model : undefined;
+            // P8 — turn attachments (file picker / paste-as-attachment / drag-drop).
+            // The GUI reads files client-side and sends the text inline; the server
+            // injects them into the SAME answerOnce context as [Attachment: name].
+            const rawAttachments = Array.isArray(body?.attachments) ? body.attachments : [];
+            const attachments = rawAttachments
+                .filter((a) => !!a && typeof a.name === 'string' && typeof a.content === 'string' && a.name.trim().length > 0)
+                .map((a) => ({ name: a.name.trim().slice(0, 120), content: a.content.slice(0, 300_000) }))
+                .slice(0, 10);
             // P3 — an attached project's bounded snapshot rides into the turn as
             // `[Project context]`, so "assess THIS project" works without the user
             // describing the codebase. Cache misses rebuild automatically.
@@ -3598,7 +3640,7 @@ function handleRequest(req, res) {
                     chatConsole.abort(sessionId);
             };
             res.on('close', onResClose);
-            const result = await chatConsole.answer(sessionId, message, { provider, model, projectContext, projectPath });
+            const result = await chatConsole.answer(sessionId, message, { provider, model, projectContext, projectPath, attachments });
             // The response is written below — remove the disconnect listener so a
             // post-completion close can never touch the console again.
             res.off('close', onResClose);
@@ -3637,6 +3679,55 @@ function handleRequest(req, res) {
             const sessionId = typeof body?.sessionId === 'string' ? body.sessionId : '';
             if (sessionId)
                 chatConsole.reset(sessionId);
+            writeJson(res, 200, { ok: true });
+        })();
+        return;
+    }
+    // DELETE /api/sessions/:id — remove a past conversation from the sidebar.
+    // POST /api/sessions/:id/rename — retitle it. Both ride the same auth as
+    // the session list (admin/operator).
+    const sessionDeleteMatch = /^\/api\/sessions\/([^/]+)$/.exec(pathname);
+    if (sessionDeleteMatch && req.method === 'DELETE') {
+        void (async () => {
+            const session = adminSessions.validate(bearerToken(req));
+            if (!session) {
+                writeJson(res, 401, { ok: false, error: 'Not authenticated — log in first.' });
+                return;
+            }
+            if (!roleCan(session.role, 'routing.operate')) {
+                writeJson(res, 403, { ok: false, error: `Access denied — role '${session.role}' cannot delete chat sessions.` });
+                return;
+            }
+            const id = decodeURIComponent(sessionDeleteMatch[1]);
+            const r = chatConsole.remove(id);
+            if (!r.ok && r.error) {
+                writeJson(res, 409, { ok: false, error: r.error });
+                return;
+            }
+            writeJson(res, 200, { ok: true });
+        })();
+        return;
+    }
+    const sessionRenameMatch = /^\/api\/sessions\/([^/]+)\/rename$/.exec(pathname);
+    if (sessionRenameMatch && req.method === 'POST') {
+        void (async () => {
+            const session = adminSessions.validate(bearerToken(req));
+            if (!session) {
+                writeJson(res, 401, { ok: false, error: 'Not authenticated — log in first.' });
+                return;
+            }
+            if (!roleCan(session.role, 'routing.operate')) {
+                writeJson(res, 403, { ok: false, error: `Access denied — role '${session.role}' cannot rename chat sessions.` });
+                return;
+            }
+            const id = decodeURIComponent(sessionRenameMatch[1]);
+            const body = await readJsonBody(req);
+            const title = typeof body?.title === 'string' ? body.title : '';
+            const r = chatConsole.rename(id, title);
+            if (!r.ok) {
+                writeJson(res, 404, { ok: false, error: r.error || 'No such session.' });
+                return;
+            }
             writeJson(res, 200, { ok: true });
         })();
         return;

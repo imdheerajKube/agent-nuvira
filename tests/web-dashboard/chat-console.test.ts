@@ -513,6 +513,71 @@ describe('ChatConsole', () => {
       ]);
     });
 
+    it('P8 — attachments ride into the turn as [Attachment: name] context', async () => {
+      const r = await console_.answer('s1', 'read this', {
+        attachments: [{ name: 'requirements.md', content: 'line one\nline two', kind: 'file' }],
+      });
+      expect(r.ok).toBe(true);
+      const ctx = engine.calls[0].opts?.projectContext;
+      expect(ctx).toContain('[Attachment: requirements.md]');
+      expect(ctx).toContain('line one\nline two');
+    });
+
+    it('P8 — attachments merge with project context into one block', async () => {
+      await console_.answer('s1', 'go', {
+        projectContext: '[Project context]\nfiles: 12',
+        attachments: [{ name: 'a.txt', content: 'AAA', kind: 'paste' }, { name: 'b.txt', content: 'BBB', kind: 'drop' }],
+      });
+      const ctx = engine.calls[0].opts?.projectContext;
+      expect(ctx).toContain('[Project context]\nfiles: 12');
+      expect(ctx).toContain('[Attachment: a.txt]\nAAA');
+      expect(ctx).toContain('[Attachment: b.txt]\nBBB');
+      // Project context comes first.
+      expect(ctx!.indexOf('[Project context]')).toBeLessThan(ctx!.indexOf('[Attachment: a.txt]'));
+    });
+
+    it('P8 — remove deletes a session and persists; busy sessions refuse', async () => {
+      const c = new ChatConsole({ engine: engineFor(), persistPath: storePath });
+      await c.answer('s1', 'hello');
+      await c.answer('s2', 'world');
+      expect(c.list()).toHaveLength(2);
+
+      const r = c.remove('s1');
+      expect(r.ok).toBe(true);
+      expect(c.list().map((s) => s.id)).toEqual(['s2']);
+
+      // Persisted: a fresh console does not see the removed session.
+      const reloaded = new ChatConsole({ engine: engineFor(), persistPath: storePath });
+      expect(reloaded.list().map((s) => s.id)).toEqual(['s2']);
+
+      // Unknown id -> ok:false (the API 409s on busy, 200 otherwise).
+      expect(c.remove('nope').ok).toBe(false);
+    });
+
+    it('P8 — rename retitles a session; empty resets to untitled', async () => {
+      const c = new ChatConsole({ engine: engineFor(), persistPath: storePath });
+      await c.answer('s1', 'fix the build');
+      const r = c.rename('s1', 'CI is red');
+      expect(r.ok).toBe(true);
+      expect(c.list()[0].title).toBe('CI is red');
+      // Persists.
+      const reloaded = new ChatConsole({ engine: engineFor(), persistPath: storePath });
+      expect(reloaded.list()[0].title).toBe('CI is red');
+      // Empty title resets (the sidebar shows the first message instead).
+      c.rename('s1', '   ');
+      expect(c.list()[0].title).toBe('(untitled conversation)');
+      expect(c.rename('ghost', 'x').ok).toBe(false);
+    });
+
+    it('P8 — list() carries firstUser for the sidebar search + preview', async () => {
+      const c = new ChatConsole({ engine: engineFor() });
+      await c.answer('s1', 'assess the repo');
+      await c.answer('s1', 'and fix the tests');
+      const list = c.list();
+      expect(list[0].firstUser).toBe('assess the repo');
+      expect(list[0].preview).toBe('echo: and fix the tests');
+    });
+
     it('reset removes the session from the store file', async () => {
       const c = new ChatConsole({ engine: engineFor(), persistPath: storePath });
       await c.answer('s1', 'hello');

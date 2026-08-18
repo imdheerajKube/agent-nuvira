@@ -9,7 +9,18 @@
  *
  * Chat executes the agent, so the page is gated behind the same admin session
  * + routing.operate as the other action surfaces.
+ *
+ * P8 — smart-rail history + real composer: the sessions sidebar collapses to
+ * a rail while the agent works (results own the full window), and the
+ * composer accepts file / paste / drag-drop attachments that ride into the
+ * turn as [Attachment: <name>] context.
  */
+
+// P8 — attachment caps (composer). Files are read client-side and travel
+// inline; pasted text beyond the threshold is offered as an attachment so the
+// input box stays a message box, not a document.
+const MAX_ATTACHMENT_BYTES = 300_000; // ~300 KB per attachment, 10 max
+const PASTE_ATTACH_THRESHOLD = 2_000; // chars — larger pastes are offered as a chip
 
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { dashboardAPI } from '../api';
@@ -36,6 +47,15 @@ interface ChatMessage {
   diff?: DiffView | null;
   /** P6a — the skill draft this turn produced (rendered as the /learn preview card). */
   draft?: SkillDraftView | null;
+  /** P8 — attachments that rode into this turn (rendered as expandable chips). */
+  attachments?: AttachmentChip[];
+}
+
+/** P8 — one composer attachment (file / paste / drop). */
+interface AttachmentChip {
+  name: string;
+  content: string;
+  kind: 'file' | 'paste' | 'drop';
 }
 
 /** P0.7 — the plan checklist as rendered (goal + steps with statuses). */
@@ -266,6 +286,33 @@ function newSessionId(): string {
   return `chat-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
 }
 
+/** P8 — group sessions by recency (Today / Yesterday / This week / Older)
+ *  and filter by the sidebar search box (title / preview / first message). */
+function groupSessions(
+  sessions: Array<{ id: string; title: string; turnCount: number; createdAt: number; updatedAt: number; preview: string; firstUser: string }>,
+  query: string,
+): Array<{ label: string; items: Array<{ id: string; title: string; turnCount: number; createdAt: number; updatedAt: number; preview: string; firstUser: string }> }> {
+  const q = query.trim().toLowerCase();
+  const filtered = q
+    ? sessions.filter((s) => `${s.title} ${s.preview} ${s.firstUser}`.toLowerCase().includes(q))
+    : sessions;
+  const groups: Array<{ label: string; items: typeof filtered }> = [];
+  const now = new Date();
+  const startOfToday = new Date(now.getFullYear(), now.getMonth(), now.getDate()).getTime();
+  const dayMs = 86_400_000;
+  const buckets: Array<{ label: string; match: (t: number) => boolean }> = [
+    { label: 'Today', match: (t) => t >= startOfToday },
+    { label: 'Yesterday', match: (t) => t >= startOfToday - dayMs && t < startOfToday },
+    { label: 'This week', match: (t) => t >= startOfToday - 7 * dayMs && t < startOfToday - dayMs },
+    { label: 'Older', match: () => true },
+  ];
+  for (const b of buckets) {
+    const items = filtered.filter((s) => b.match(s.updatedAt));
+    if (items.length > 0) groups.push({ label: b.label, items });
+  }
+  return groups;
+}
+
 export default function ChatPage() {
   const [auth, setAuth] = useState<AuthState | null>(null);
   const [messages, setMessages] = useState<ChatMessage[]>([]);
@@ -309,7 +356,21 @@ export default function ChatPage() {
   // Phase 6 — the last sent message (↑ recalls it into the box).
   const lastSentRef = useRef<string>('');
   // P4 — the session sidebar: past conversations, click to resume.
-  const [sessions, setSessions] = useState<Array<{ id: string; title: string; turnCount: number; updatedAt: number; preview: string }>>([]);
+  const [sessions, setSessions] = useState<Array<{ id: string; title: string; turnCount: number; createdAt: number; updatedAt: number; preview: string; firstUser: string }>>([]);
+  // P8 — smart rail: the sidebar collapses to a rail while the agent works and
+  // returns when the turn finishes (results own the full window mid-task).
+  const [railOpen, setRailOpen] = useState(true);
+  // P8 — sidebar search filter (title / preview / first message).
+  const [sessionQuery, setSessionQuery] = useState('');
+  // P8 — the session being renamed (inline input in the sidebar).
+  const [renamingId, setRenamingId] = useState<string | null>(null);
+  const [renameValue, setRenameValue] = useState('');
+  // P8 — composer attachments (file picker / paste-as-attachment / drag-drop).
+  const [attachments, setAttachments] = useState<AttachmentChip[]>([]);
+  const [pasteOffer, setPasteOffer] = useState<{ text: string } | null>(null);
+  const [dragOver, setDragOver] = useState(false);
+  const fileInputRef = useRef<HTMLInputElement | null>(null);
+  const pastePosRef = useRef<{ start: number; end: number } | null>(null);
   // P3 — the attached project (its bounded context rides into every turn).
   const [attachedProject, setAttachedProject] = useState<{ path: string; name: string; fileCount: number; symbolCount: number; truncated: boolean } | null>(null);
   const [projectPick, setProjectPick] = useState<Array<{ path: string; name: string; kind: string }>>([]);
@@ -384,7 +445,113 @@ export default function ChatPage() {
     setMeta(null);
     setPendingResolve(null);
     setPendingQuestion(null);
+    setRailOpen(true);
   }, []);
+
+  /** P8 — start a fresh session (sidebar + New chat button). */
+  const newChat = useCallback(() => {
+    subRef.current?.();
+    subRef.current = null;
+    sessionIdRef.current = newSessionId();
+    setMessages([]);
+    setLiveSteps([]);
+    liveStepsRef.current = [];
+    setLiveTools([]);
+    liveToolsRef.current = [];
+    setLivePlan(null);
+    livePlanRef.current = null;
+    setLiveDiff(null);
+    liveDiffRef.current = null;
+    setLiveDraft(null);
+    liveDraftRef.current = null;
+    streamingRef.current = '';
+    setStreamingText('');
+    setRetryAsk(null);
+    setError('');
+    setMeta(null);
+    setPendingResolve(null);
+    setPendingQuestion(null);
+    setAttachments([]);
+    setPasteOffer(null);
+    setInput('');
+    setRailOpen(true);
+  }, []);
+
+  /** P8 — add an attachment chip (file picker / drag-drop / paste-as-text). */
+  const addAttachment = useCallback((chip: AttachmentChip) => {
+    setAttachments((a) => [...a, chip].slice(-10));
+  }, []);
+
+  const removeAttachment = useCallback((index: number) => {
+    setAttachments((a) => a.filter((_, i) => i !== index));
+  }, []);
+
+  /** P8 — file picker: read the file as text and chip it. */
+  const pickFile = useCallback(async (file: File) => {
+    if (!file) return;
+    if (file.size > MAX_ATTACHMENT_BYTES) {
+      setError(`Attachment "${file.name}" is too large (max ${Math.round(MAX_ATTACHMENT_BYTES / 1024)} KB).`);
+      return;
+    }
+    const text = await file.text();
+    addAttachment({ name: file.name, content: text, kind: 'file' });
+  }, [addAttachment]);
+
+  /** P8 — the textarea's paste handler: remember the cursor so the offer can
+   *  strip exactly the pasted text when accepted. */
+  const handlePaste = useCallback((e: React.ClipboardEvent<HTMLTextAreaElement>) => {
+    const el = e.currentTarget;
+    const pasted = e.clipboardData.getData('text') || '';
+    if (pasted.length >= PASTE_ATTACH_THRESHOLD) {
+      pastePosRef.current = { start: el.selectionStart, end: el.selectionEnd };
+      setPasteOffer({ text: pasted });
+    }
+  }, []);
+
+  /** P8 — accept the paste offer: strip the pasted text out of the box and
+   *  turn it into an attachment chip. */
+  const acceptPasteOffer = useCallback(() => {
+    const offer = pasteOffer;
+    if (!offer) return;
+    const pos = pastePosRef.current;
+    setInput((prev) => {
+      if (!pos) return prev;
+      return prev.slice(0, pos.start) + prev.slice(pos.end);
+    });
+    addAttachment({ name: `pasted-text.txt`, content: offer.text, kind: 'paste' });
+    setPasteOffer(null);
+    pastePosRef.current = null;
+  }, [pasteOffer, addAttachment]);
+
+  /** P8 — rename a session (sidebar pencil). */
+  const startRename = useCallback((s: { id: string; title: string }) => {
+    setRenamingId(s.id);
+    setRenameValue(s.title === '(untitled conversation)' ? '' : s.title);
+  }, []);
+
+  const commitRename = useCallback(async (id: string) => {
+    const r = await dashboardAPI.renameChatSession(id, renameValue);
+    if (r.ok) {
+      setSessions((list) =>
+        list.map((s) => (s.id === id ? { ...s, title: renameValue.trim() || s.title } : s)),
+      );
+    } else {
+      setError(r.error || 'Could not rename the session.');
+    }
+    setRenamingId(null);
+    setRenameValue('');
+  }, [renameValue]);
+
+  /** P8 — delete a session (sidebar trash). */
+  const deleteSession = useCallback(async (id: string) => {
+    const r = await dashboardAPI.deleteChatSession(id);
+    if (r.ok) {
+      setSessions((list) => list.filter((s) => s.id !== id));
+      if (sessionIdRef.current === id) newChat();
+    } else {
+      setError(r.error || 'Could not delete the session.');
+    }
+  }, [newChat]);
 
   const canChat = auth?.authenticated === true && (auth.role === 'admin' || auth.role === 'operator');
 
@@ -417,9 +584,10 @@ export default function ChatPage() {
   }, []);
 
   const send = useCallback(
-    async (text: string) => {
+    async (text: string, withAttachments?: AttachmentChip[]) => {
       const clean = text.trim();
-      if (!clean || busy) return;
+      const chipList = withAttachments ?? attachments;
+      if ((!clean && chipList.length === 0) || busy) return;
       setError('');
       setMeta(null);
       setLiveSteps([]);
@@ -432,10 +600,14 @@ export default function ChatPage() {
       liveDiffRef.current = null;
       setLiveDraft(null);
       liveDraftRef.current = null;
-      setMessages((m) => [...m, { role: 'user', content: clean }]);
+      setMessages((m) => [...m, { role: 'user', content: clean, attachments: chipList.length > 0 ? chipList : undefined }]);
       setInput('');
-      lastSentRef.current = clean;
+      setAttachments([]);
+      setPasteOffer(null);
+      lastSentRef.current = clean || `[${chipList.length} attachment(s)]`;
       setBusy(true);
+      // P8 — smart rail: while the agent works, the results own the window.
+      setRailOpen(false);
 
       // Pre-resolve the ask against the command manifest. A confident match
       // short-circuits to a confirm card (deterministic commands like "stop
@@ -513,7 +685,15 @@ export default function ChatPage() {
           setLiveDraft(view);
         },
       });
-      const r = await dashboardAPI.chatSend(sessionId, clean, { projectPath: attachedProject?.path }, controller.signal);
+      const r = await dashboardAPI.chatSend(
+        sessionId,
+        clean || `(see ${chipList.length} attachment${chipList.length === 1 ? '' : 's'})`,
+        {
+          projectPath: attachedProject?.path,
+          attachments: chipList.map((c) => ({ name: c.name, content: c.content, kind: c.kind })),
+        },
+        controller.signal,
+      );
       abortRef.current = null;
       subRef.current?.();
       subRef.current = null;
@@ -557,8 +737,10 @@ export default function ChatPage() {
         }
       }
       setBusy(false);
+      // P8 — the turn resolved: bring the history rail back.
+      setRailOpen(true);
     },
-    [busy, attachedProject],
+    [busy, attachedProject, attachments],
   );
 
   /** P4 — cancel the in-flight turn (aborts the POST; the server cancels it). */
@@ -783,32 +965,78 @@ export default function ChatPage() {
             )}
           </div>
           <div className="chat-layout">
+          {!railOpen ? (
+            <div className="chat-rail">
+              <button type="button" className="chat-rail-btn" onClick={() => setRailOpen(true)} title="Show history">
+                📁
+              </button>
+            </div>
+          ) : (
           <div className="chat-sidebar">
             <div className="chat-sidebar-head">
               <span>📁 Sessions</span>
-              <span className="admin-hint">{sessions.length}</span>
+              <div className="chat-sidebar-head-actions">
+                <button type="button" className="chat-mini-action" title="New chat" onClick={newChat}>＋ New</button>
+                <button type="button" className="chat-mini-action" title="Collapse history" onClick={() => setRailOpen(false)}>▸</button>
+              </div>
             </div>
+            <input
+              className="chat-session-search"
+              placeholder="Search conversations…"
+              value={sessionQuery}
+              onChange={(e) => setSessionQuery(e.target.value)}
+            />
             {sessions.length === 0 ? (
               <div className="chat-sidebar-empty">No past conversations yet.</div>
             ) : (
               <div className="chat-sidebar-list">
-                {sessions.map((s) => (
-                  <button
-                    key={s.id}
-                    type="button"
-                    className={`chat-session-item${s.id === sessionIdRef.current ? ' chat-session-active' : ''}`}
-                    onClick={() => void resumeSession(s.id)}
-                    title={s.preview || s.title}
-                  >
-                    <span className="chat-session-title">{s.title}</span>
-                    <span className="chat-session-meta">
-                      {s.turnCount} msg{s.turnCount === 1 ? '' : 's'} · {new Date(s.updatedAt).toLocaleString()}
-                    </span>
-                  </button>
+                {groupSessions(sessions, sessionQuery).map(({ label, items }) => (
+                  <div key={label} className="chat-session-group">
+                    <div className="chat-session-group-label">{label}</div>
+                    {items.map((s) => (
+                      <div key={s.id} className={`chat-session-item${s.id === sessionIdRef.current ? ' chat-session-active' : ''}`}>
+                        {renamingId === s.id ? (
+                          <div className="chat-session-rename">
+                            <input
+                              autoFocus
+                              value={renameValue}
+                              onChange={(e) => setRenameValue(e.target.value)}
+                              onKeyDown={(e) => {
+                                if (e.key === 'Enter') void commitRename(s.id);
+                                if (e.key === 'Escape') setRenamingId(null);
+                              }}
+                              placeholder="Session title"
+                            />
+                            <button type="button" className="chat-mini-action" onClick={() => void commitRename(s.id)}>✓</button>
+                          </div>
+                        ) : (
+                          <>
+                            <button
+                              type="button"
+                              className="chat-session-main"
+                              onClick={() => void resumeSession(s.id)}
+                              title={s.preview || s.title}
+                            >
+                              <span className="chat-session-title">{s.title}</span>
+                              <span className="chat-session-preview">{s.firstUser || s.preview}</span>
+                              <span className="chat-session-meta">
+                                {s.turnCount} msg{s.turnCount === 1 ? '' : 's'} · {new Date(s.updatedAt).toLocaleString()}
+                              </span>
+                            </button>
+                            <span className="chat-session-actions">
+                              <button type="button" className="chat-mini-action" title="Rename" onClick={() => startRename(s)}>✏️</button>
+                              <button type="button" className="chat-mini-action" title="Delete" onClick={() => void deleteSession(s.id)}>🗑</button>
+                            </span>
+                          </>
+                        )}
+                      </div>
+                    ))}
+                  </div>
                 ))}
               </div>
             )}
           </div>
+          )}
           <div className="chat-main">
           <div className="chat-thread" ref={listRef} role="log" aria-live="polite">
             {messages.length === 0 ? (
@@ -846,6 +1074,20 @@ export default function ChatPage() {
                   ) : (
                     <div className="chat-bubble-text">{m.content}</div>
                   )}
+                  {m.role === 'user' && m.attachments && m.attachments.length > 0 ? (
+                    <details className="chat-steps" open={m.attachments.length === 1}>
+                      <summary>
+                        📎 {m.attachments.length} attachment{m.attachments.length === 1 ? '' : 's'}:{' '}
+                        {m.attachments.map((a) => a.name).join(', ')}
+                      </summary>
+                      {m.attachments.map((a, ai) => (
+                        <div key={ai} className="chat-attach-content">
+                          <div className="admin-hint">{a.name} — {a.content.length.toLocaleString()} chars</div>
+                          <pre>{a.content}</pre>
+                        </div>
+                      ))}
+                    </details>
+                  ) : null}
                   {m.role === 'assistant' && m.diff ? (
                     <details className="chat-steps" open>
                       <summary>Changes: {m.diff.summary}</summary>
@@ -999,35 +1241,88 @@ export default function ChatPage() {
             </div>
           ) : null}
 
-          <form className="chat-input-row" onSubmit={(e) => { e.preventDefault(); void send(input); }}>
-            <textarea
-              className="chat-input-box"
-              value={input}
-              onChange={(e) => setInput(e.target.value)}
-              onKeyDown={(e) => {
-                if (e.key === 'Enter' && !e.shiftKey) {
-                  e.preventDefault();
-                  void send(input);
-                } else if (e.key === 'ArrowUp' && input === '' && lastSentRef.current) {
-                  // ↑ on an empty box recalls the last sent message (Phase 6).
-                  e.preventDefault();
-                  setInput(lastSentRef.current);
-                }
-              }}
-              placeholder="Message the agent… (Enter to send · Shift+Enter for a new line · ↑ recalls last)"
-              disabled={busy}
-              maxLength={8000}
-              rows={1}
-              autoFocus
-            />
-            {busy ? (
-              <button className="admin-mini-btn chat-cancel-btn" type="button" onClick={cancelTurn}>
-                ⏹ Cancel
-              </button>
+          <form
+            className={`chat-composer${dragOver ? ' chat-composer-drag' : ''}`}
+            onSubmit={(e) => { e.preventDefault(); void send(input); }}
+            onDragOver={(e) => { e.preventDefault(); setDragOver(true); }}
+            onDragLeave={() => setDragOver(false)}
+            onDrop={(e) => {
+              e.preventDefault();
+              setDragOver(false);
+              const files = Array.from(e.dataTransfer?.files ?? []);
+              for (const f of files.slice(0, 10)) void pickFile(f);
+            }}
+          >
+            {pasteOffer ? (
+              <div className="chat-paste-offer">
+                <span className="admin-hint">
+                  📄 You pasted {pasteOffer.text.length.toLocaleString()} characters. Attach it as a file instead?
+                </span>
+                <button type="button" className="chat-chip" onClick={acceptPasteOffer}>Attach as text</button>
+                <button type="button" className="chat-mini-action" onClick={() => { setPasteOffer(null); pastePosRef.current = null; }}>Keep inline</button>
+              </div>
             ) : null}
-            <button className="admin-refresh-btn" type="submit" disabled={busy || !input.trim()}>
-              {busy ? '⏳ Working…' : '➤ Send'}
-            </button>
+            {attachments.length > 0 ? (
+              <div className="chat-attach-row">
+                {attachments.map((a, i) => (
+                  <span key={`${a.name}-${i}`} className="chat-attach-chip" title={`${a.name} (${a.content.length.toLocaleString()} chars)`}>
+                    📎 {a.name}
+                    <span className="admin-hint"> {a.content.length.toLocaleString()}c</span>
+                    <button type="button" className="chat-mini-action" onClick={() => removeAttachment(i)}>✕</button>
+                  </span>
+                ))}
+              </div>
+            ) : null}
+            <div className="chat-input-row">
+              <input
+                ref={fileInputRef}
+                type="file"
+                style={{ display: 'none' }}
+                onChange={(e) => {
+                  const f = e.target.files?.[0];
+                  if (f) void pickFile(f);
+                  e.target.value = '';
+                }}
+              />
+              <button
+                type="button"
+                className="chat-attach-btn"
+                title="Attach a file (up to 300 KB, text only)"
+                disabled={busy || attachments.length >= 10}
+                onClick={() => fileInputRef.current?.click()}
+              >
+                📎
+              </button>
+              <textarea
+                className="chat-input-box"
+                value={input}
+                onChange={(e) => setInput(e.target.value)}
+                onPaste={handlePaste}
+                onKeyDown={(e) => {
+                  if (e.key === 'Enter' && !e.shiftKey) {
+                    e.preventDefault();
+                    void send(input);
+                  } else if (e.key === 'ArrowUp' && input === '' && lastSentRef.current) {
+                    // ↑ on an empty box recalls the last sent message (Phase 6).
+                    e.preventDefault();
+                    setInput(lastSentRef.current);
+                  }
+                }}
+                placeholder="Message the agent… (Enter to send · Shift+Enter for a new line · ↑ recalls last · 📎 attach a file or paste a large document)"
+                disabled={busy}
+                maxLength={8000}
+                rows={1}
+                autoFocus
+              />
+              {busy ? (
+                <button className="admin-mini-btn chat-cancel-btn" type="button" onClick={cancelTurn}>
+                  ⏹ Cancel
+                </button>
+              ) : null}
+              <button className="admin-refresh-btn" type="submit" disabled={busy || (!input.trim() && attachments.length === 0)}>
+                {busy ? '⏳ Working…' : '➤ Send'}
+              </button>
+            </div>
           </form>
           <p className="admin-hint">
             Each message runs the full agent loop in the dashboard process (same engine as{' '}

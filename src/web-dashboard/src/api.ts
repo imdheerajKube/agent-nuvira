@@ -855,18 +855,57 @@ export class DashboardAPI {
   /**
    * P4 — session sidebar: list past conversations (title, preview, counts).
    */
-  async listChatSessions(): Promise<Array<{ id: string; title: string; turnCount: number; createdAt: number; updatedAt: number; preview: string }>> {
+  async listChatSessions(): Promise<Array<{ id: string; title: string; turnCount: number; createdAt: number; updatedAt: number; preview: string; firstUser: string }>> {
     const token = getAdminToken();
     try {
       const res = await fetch(`${this.baseUrl}/api/sessions`, {
         headers: token ? { Authorization: `Bearer ${token}` } : {},
         signal: AbortSignal.timeout(10_000),
       });
-      const d = (await res.json()) as { ok?: boolean; sessions?: Array<{ id: string; title: string; turnCount: number; createdAt: number; updatedAt: number; preview: string }> };
+      const d = (await res.json()) as { ok?: boolean; sessions?: Array<{ id: string; title: string; turnCount: number; createdAt: number; updatedAt: number; preview: string; firstUser: string }> };
       if (res.status === 200 && d.ok && Array.isArray(d.sessions)) return d.sessions;
       return [];
     } catch {
       return [];
+    }
+  }
+
+  /**
+   * P8 — delete a past session (sidebar ✕).
+   */
+  async deleteChatSession(id: string): Promise<{ ok: boolean; error?: string }> {
+    const token = getAdminToken();
+    try {
+      const res = await fetch(`${this.baseUrl}/api/sessions/${encodeURIComponent(id)}`, {
+        method: 'DELETE',
+        headers: token ? { Authorization: `Bearer ${token}` } : {},
+        signal: AbortSignal.timeout(10_000),
+      });
+      const d = (await res.json()) as { ok?: boolean; error?: string };
+      if (res.status === 200 && d.ok) return { ok: true };
+      return { ok: false, error: d.error || 'Could not delete the session.' };
+    } catch {
+      return { ok: false, error: 'Network error — could not delete the session.' };
+    }
+  }
+
+  /**
+   * P8 — rename a past session (sidebar ✏️).
+   */
+  async renameChatSession(id: string, title: string): Promise<{ ok: boolean; error?: string }> {
+    const token = getAdminToken();
+    try {
+      const res = await fetch(`${this.baseUrl}/api/sessions/${encodeURIComponent(id)}/rename`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', ...(token ? { Authorization: `Bearer ${token}` } : {}) },
+        body: JSON.stringify({ title }),
+        signal: AbortSignal.timeout(10_000),
+      });
+      const d = (await res.json()) as { ok?: boolean; error?: string };
+      if (res.status === 200 && d.ok) return { ok: true };
+      return { ok: false, error: d.error || 'Could not rename the session.' };
+    } catch {
+      return { ok: false, error: 'Network error — could not rename the session.' };
     }
   }
 
@@ -896,7 +935,7 @@ export class DashboardAPI {
   async chatSend(
     sessionId: string,
     message: string,
-    opts?: { provider?: string; model?: string; projectPath?: string },
+    opts?: { provider?: string; model?: string; projectPath?: string; attachments?: Array<{ name: string; content: string; kind?: string }> },
     signal?: AbortSignal,
   ): Promise<
     | { ok: true; content: string; followups: Array<{ prompt: string; label?: string }>; provider: string | null; model: string | null; generationFailed: boolean }
@@ -907,7 +946,7 @@ export class DashboardAPI {
       const res = await fetch(`${this.baseUrl}/api/chat`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json', ...(token ? { Authorization: `Bearer ${token}` } : {}) },
-        body: JSON.stringify({ sessionId, message, provider: opts?.provider, model: opts?.model, projectPath: opts?.projectPath }),
+        body: JSON.stringify({ sessionId, message, provider: opts?.provider, model: opts?.model, projectPath: opts?.projectPath, attachments: opts?.attachments }),
         // P4 — the Cancel button aborts the POST; the 5-minute ceiling still
         // applies alongside the caller's signal.
         signal: signal ? AbortSignal.any([AbortSignal.timeout(300_000), signal]) : AbortSignal.timeout(300_000),
