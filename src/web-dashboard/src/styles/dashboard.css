@@ -3781,6 +3781,244 @@ body {
   background: color-mix(in srgb, #3b82f6 10%, transparent);
 }
 
+/* P2 — diff card per-file accept/reject (✓/✗ toggles + commit action) */
+.chat-diff-file-path {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.chat-diff-toggle {
+  flex: none;
+  width: 18px;
+  height: 18px;
+  border-radius: 4px;
+  border: 1px solid var(--border);
+  background: transparent;
+  color: var(--text-secondary);
+  font-size: 11px;
+  line-height: 1;
+  cursor: pointer;
+  padding: 0;
+}
+
+.chat-diff-toggle-on {
+  background: color-mix(in srgb, #22c55e 22%, transparent);
+  border-color: #22c55e;
+  color: #4ade80;
+}
+
+.chat-diff-file-rejected {
+  opacity: 0.55;
+}
+
+.chat-diff-file-rejected .chat-diff-toggle {
+  background: color-mix(in srgb, #ef4444 18%, transparent);
+  border-color: #ef4444;
+  color: #f87171;
+}
+
+.chat-diff-actions {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-top: 8px;
+  flex-wrap: wrap;
+}
+
+/* P2 — artifact cards extracted from the answer text */
+.chat-artifacts {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin: 8px 0 2px;
+}
+
+.chat-result-card {
+  border: 1px solid var(--border);
+  border-left: 3px solid #6e7681;
+  border-radius: 8px;
+  padding: 8px 10px;
+  background: color-mix(in srgb, var(--bg-secondary, #1b1f27) 55%, transparent);
+}
+
+.chat-result-pass {
+  border-left-color: #22c55e;
+}
+
+.chat-result-fail {
+  border-left-color: #ef4444;
+}
+
+.chat-result-head {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.chat-result-icon {
+  font-size: 12px;
+  flex: none;
+}
+
+.chat-result-title {
+  font-size: 12.5px;
+  font-weight: 600;
+  color: var(--text-primary);
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  flex: 1;
+}
+
+.chat-result-meta {
+  font-family: var(--font-mono, ui-monospace, SFMono-Regular, Menlo, Consolas, monospace);
+  font-size: 10.5px;
+  color: var(--text-secondary);
+  flex: none;
+  text-transform: uppercase;
+}
+
+.chat-result-body {
+  margin: 6px 0 0;
+  padding: 6px 8px;
+  font-family: var(--font-mono, ui-monospace, SFMono-Regular, Menlo, Consolas, monospace);
+  font-size: 11px;
+  line-height: 1.5;
+  white-space: pre-wrap;
+  word-break: break-word;
+  max-height: 220px;
+  overflow: auto;
+  background: color-mix(in srgb, var(--bg, #14171c) 70%, transparent);
+  border-radius: 6px;
+  color: var(--text-secondary);
+}
+
+.chat-deploy-card {
+  border: 1px solid var(--border);
+  border-left: 3px solid #22d3ee;
+  border-radius: 8px;
+  padding: 8px 10px;
+  background: color-mix(in srgb, var(--bg-secondary, #1b1f27) 55%, transparent);
+}
+
+.chat-deploy-head {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.chat-deploy-icon {
+  font-size: 12px;
+  flex: none;
+}
+
+.chat-deploy-title {
+  font-size: 12.5px;
+  font-weight: 600;
+  color: var(--text-primary);
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  flex: 1;
+}
+
+.chat-deploy-url {
+  display: block;
+  margin-top: 6px;
+  font-family: var(--font-mono, ui-monospace, SFMono-Regular, Menlo, Consolas, monospace);
+  font-size: 11.5px;
+  color: var(--accent-blue, #3b82f6);
+  word-break: break-all;
+}
+
+/* P2 — inline command-run execution card (the ⚡ Run path) */
+.chat-task-card {
+  border: 1px solid var(--border);
+  border-left: 3px solid var(--accent-blue, #3b82f6);
+  border-radius: 8px;
+  padding: 8px 10px;
+  margin: 8px 0 2px;
+  background: color-mix(in srgb, var(--bg-secondary, #1b1f27) 55%, transparent);
+}
+
+.chat-task-running {
+  border-left-color: var(--accent-blue, #3b82f6);
+}
+
+.chat-task-ok {
+  border-left-color: #22c55e;
+}
+
+.chat-task-err {
+  border-left-color: #ef4444;
+}
+
+.chat-task-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+}
+
+.chat-task-icon {
+  font-size: 12px;
+  flex: none;
+}
+
+.chat-task-cmd {
+  font-family: var(--font-mono, ui-monospace, SFMono-Regular, Menlo, Consolas, monospace);
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--text-primary);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  min-width: 0;
+  flex: 1;
+}
+
+.chat-task-status {
+  font-size: 11.5px;
+  color: var(--text-secondary);
+  flex: none;
+}
+
+.chat-task-exit {
+  font-family: var(--font-mono, ui-monospace, SFMono-Regular, Menlo, Consolas, monospace);
+  font-size: 10.5px;
+  color: var(--text-secondary);
+  flex: none;
+}
+
+.chat-task-dur {
+  font-family: var(--font-mono, ui-monospace, SFMono-Regular, Menlo, Consolas, monospace);
+  font-size: 10.5px;
+  color: var(--text-secondary);
+  flex: none;
+}
+
+.chat-task-logs {
+  margin: 6px 0 0;
+  padding: 6px 8px;
+  font-family: var(--font-mono, ui-monospace, SFMono-Regular, Menlo, Consolas, monospace);
+  font-size: 11px;
+  line-height: 1.5;
+  white-space: pre-wrap;
+  word-break: break-word;
+  max-height: 240px;
+  overflow: auto;
+  background: color-mix(in srgb, var(--bg, #14171c) 70%, transparent);
+  border-radius: 6px;
+  color: var(--text-secondary);
+}
+
+.chat-task-log-err {
+  color: #f87171;
+}
+
 /* P6a — /learn skill draft preview card (accept / edit / reject) */
 .chat-draft-card {
   border: 1px solid var(--border);

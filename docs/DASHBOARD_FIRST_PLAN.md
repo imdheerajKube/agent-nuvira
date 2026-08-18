@@ -150,13 +150,33 @@ cosmetic until this is real.
 ### Phase 2 — Artifacts: plans, diffs, and results as cards (2–3 days)
 This is what makes it feel like Claude/Cursor rather than a terminal in a box.
 
-- [ ] Detect structured blocks in the agent answer (plan → 📋 card, code change →
-      diff card, build/test → result card, deploy → 🚀 card with URL)
-- [ ] Diff card with per-file accept/reject (reuse the engine's edit module output —
-      the CLI already produces structured edit results; surface them, don't re-implement)
-- [ ] Inline command-run cards: the existing ⚡ Run-this-command card becomes a
-      full execution card (command, live logs, exit code, output) in the thread
-- [ ] **Tests:** artifact extraction + diff card interactions
+- [x] Detect structured blocks in the agent answer (plan → 📋 card, code change →
+      diff card, build/test → result card, deploy → 🚀 card with URL). Pure
+      `artifacts.ts` extraction (`extractArtifacts`): ```diff fenced blocks →
+      per-file diff card (parseDiffSections mirrors git-tool), output blocks
+      with PASS/FAIL/✅/❌ markers → ✅/❌ result card with verdict, deploy-
+      context URLs → 🚀 card with a link. Runs on the FINAL answer text (the
+      live plan/diff events already cover the mid-turn path; this covers blocks
+      the model wrote directly, incl. resumed transcripts). Extracted diffs
+      render read-only (text ≠ working tree), while the git-tool diff snapshot
+      is the selectable one — no false commit affordance on prose.
+- [x] Diff card with per-file accept/reject — the snapshotted git diff card
+      gains ✓/✗ per-file toggles (all accepted by default) + a "Commit accepted
+      (N)" action that sends the accepted subset back as a chat turn; the
+      agent commits exactly those files via the engine's git tool accepted-
+      subset contract (commit with files=[...], re-confirmed by ask_user). The
+      dashboard surfaces the selection, it does NOT re-implement diff
+      application (no engine changes).
+- [x] Inline command-run cards: the ⚡ Run-this-command confirm card now runs
+      through a full execution card in the thread — command, live status badge,
+      SSE-streamed logs (same P1 task runner + subscribeTask as TaskConsole),
+      exit code + duration on settle, ⏹ Cancel while running. Replaces the old
+      poll-then-append-plain-text path.
+- [x] **Tests:** `artifacts.test.ts` (13: diff sections incl. b-side paths,
+      pass/fail verdicts, deploy extraction + dedupe, combined answer, empty
+      prose) + ChatPage tests (artifact cards render from answer text, diff
+      accept/reject commits the subset, ⚡ Run renders the live execution card
+      with logs + exit code). Dashboard suite **254** green.
 
 ### Phase 3 — Project context: "assess THIS project" (2–3 days)
 The killer use case: the agent should understand the project the user is talking
