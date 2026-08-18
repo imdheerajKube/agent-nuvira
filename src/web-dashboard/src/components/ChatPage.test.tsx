@@ -777,6 +777,64 @@ describe('ChatPage', () => {
     expect(deployLink.getAttribute('href')).toBe('https://preview.example.com');
   });
 
+  it('P2 — extracted text diffs stay READ-ONLY without an attached project (prose cannot trigger commits)', async () => {
+    mockAuthed('admin');
+    mockChatStream();
+    vi.spyOn(dashboardAPI, 'chatResolve').mockResolvedValue({ ok: true, matches: [] });
+    mockChatSend({
+      ...OK_RESPONSE,
+      content: ['```diff', 'diff --git a/src/prose.ts b/src/prose.ts', '--- a/src/prose.ts', '+++ b/src/prose.ts', '@@ -1 +1 @@', '-x', '+y', '```'].join('\n'),
+    });
+    render(<ChatPage />);
+    await waitFor(() => expect(screen.getByPlaceholderText(/Message the agent/)).toBeTruthy());
+
+    fireEvent.change(screen.getByPlaceholderText(/Message the agent/), { target: { value: 'show a diff' } });
+    fireEvent.submit(screen.getByPlaceholderText(/Message the agent/).closest('form')!);
+    await waitFor(() => expect(screen.getByText('git diff')).toBeTruthy());
+
+    // No attached project → no accept/reject toggles, no commit button, and
+    // a hint explains why.
+    expect(document.querySelectorAll('.chat-diff-toggle')).toHaveLength(0);
+    expect(screen.queryByText(/Commit accepted/)).toBeNull();
+    expect(screen.getByText(/Attach a project to review and commit these changes/)).toBeTruthy();
+  });
+
+  it('P2 — extracted text diffs become selectable WITH an attached project and commit there', async () => {
+    mockAuthed('admin');
+    mockChatStream();
+    vi.spyOn(dashboardAPI, 'chatResolve').mockResolvedValue({ ok: true, matches: [] });
+    vi.spyOn(dashboardAPI, 'listProjects').mockResolvedValue([{ path: '/tmp/my-app', name: 'my-app', kind: 'cwd' }]);
+    vi.spyOn(dashboardAPI, 'attachProject').mockResolvedValue({
+      ok: true,
+      project: { path: '/tmp/my-app', name: 'my-app', fileCount: 10, symbolCount: 20, truncated: false },
+    });
+    render(<ChatPage />);
+    await waitFor(() => expect(screen.getByRole('button', { name: /current dir/ })).toBeTruthy());
+    fireEvent.click(screen.getByRole('button', { name: /current dir/ }));
+    await waitFor(() => expect(screen.getByText('my-app')).toBeTruthy());
+
+    // Now send a message whose answer contains a ```diff block.
+    const send = mockChatSend({
+      ...OK_RESPONSE,
+      content: ['```diff', 'diff --git a/src/a.ts b/src/a.ts', '--- a/src/a.ts', '+++ b/src/a.ts', '@@ -1 +1 @@', '-old', '+new', '```'].join('\n'),
+    });
+    fireEvent.change(screen.getByPlaceholderText(/Message the agent/), { target: { value: 'make the change' } });
+    fireEvent.submit(screen.getByPlaceholderText(/Message the agent/).closest('form')!);
+    await waitFor(() => expect(screen.getByText('git diff')).toBeTruthy());
+
+    // With the project attached the extracted diff IS selectable.
+    const toggles = screen.getAllByTitle(/Accepted — click to reject/);
+    expect(toggles.length).toBe(1);
+
+    // Commit accepted → the message names the ATTACHED PROJECT path so the
+    // agent commits in that working tree, and only the accepted file.
+    fireEvent.click(screen.getByText(/Commit accepted \(1\)/));
+    await waitFor(() => expect(send).toHaveBeenCalledTimes(2));
+    const commitMsg = send.mock.calls[1][1] as string;
+    expect(commitMsg).toContain('/tmp/my-app');
+    expect(commitMsg).toContain('src/a.ts');
+  });
+
   it('P2 — the snapshotted diff card accepts/rejects files and commits the subset', async () => {
     mockAuthed('admin');
     let diffCb: ((d: { files: Array<{ path: string; body: string }>; summary: string }) => void) | null = null;
@@ -872,6 +930,27 @@ describe('ChatPage', () => {
     logCb!({ stream: 'stdout', text: '1 test passed', at: 1 });
     await waitFor(() => expect(screen.getByText('1 test passed')).toBeTruthy());
 
+    // ANSI escapes are stripped, and a stream switch (stdout → stderr) shows
+    // a separator + the error line is marked by stream.
+    logCb!({ stream: 'stdout', text: '\u001b[32mstarting\u001b[0m', at: 2 });
+    await waitFor(() => expect(screen.getByText('starting')).toBeTruthy());
+    expect(screen.queryByText('\u001b[32mstarting\u001b[0m')).toBeNull();
+    logCb!({ stream: 'stderr', text: '\u001b[31mboom\u001b[0m', at: 3 });
+    await waitFor(() => expect(screen.getByText('boom')).toBeTruthy());
+    expect(screen.getByText('stderr')).toBeTruthy();
+    expect(document.querySelector('.chat-task-log-stderr')?.textContent).toBe('boom');
+
+    // The copy button copies the FULL output, ANSI-stripped (clean text, no
+    // color codes — matching what the card renders).
+    const writeText = vi.fn().mockResolvedValue(undefined);
+    Object.defineProperty(navigator, 'clipboard', { value: { writeText }, configurable: true });
+    const copyBtn = document.querySelector('.chat-task-card .chat-card-copy') as HTMLButtonElement;
+    expect(copyBtn).toBeTruthy();
+    fireEvent.click(copyBtn);
+    await waitFor(() =>
+      expect(writeText).toHaveBeenCalledWith(['1 test passed', 'starting', 'boom'].join('\n')),
+    );
+
     // Cancel is available while running (scope to the TASK card — the busy
     // composer also renders a ⏹ Cancel for the agent turn).
     const taskCancel = document.querySelector('.chat-task-card .admin-mini-btn') as HTMLButtonElement;
@@ -885,5 +964,86 @@ describe('ChatPage', () => {
     statusCb!('done');
     await waitFor(() => expect(screen.getByText(/exit 0/)).toBeTruthy());
     expect(unsub).toHaveBeenCalled();
+  });
+
+  it('P2 — result and deploy cards have copy buttons that copy their content', async () => {
+    mockAuthed('admin');
+    mockChatStream();
+    vi.spyOn(dashboardAPI, 'chatResolve').mockResolvedValue({ ok: true, matches: [] });
+    const writeText = vi.fn().mockResolvedValue(undefined);
+    Object.defineProperty(navigator, 'clipboard', { value: { writeText }, configurable: true });
+    mockChatSend({
+      ...OK_RESPONSE,
+      content: [
+        '```',
+        'PASS src/a.test.ts',
+        '```',
+        '🚀 Preview: https://preview.example.com',
+      ].join('\n'),
+    });
+    render(<ChatPage />);
+    await waitFor(() => expect(screen.getByPlaceholderText(/Message the agent/)).toBeTruthy());
+
+    fireEvent.change(screen.getByPlaceholderText(/Message the agent/), { target: { value: 'run it' } });
+    fireEvent.submit(screen.getByPlaceholderText(/Message the agent/).closest('form')!);
+    await waitFor(() => expect(document.querySelectorAll('.chat-card-copy').length).toBe(2));
+
+    // The result card's copy button copies the OUTPUT body; the deploy card's
+    // copies the URL.
+    const resultCard = document.querySelector('.chat-result-card') as HTMLElement;
+    const resultCopy = resultCard.querySelector('.chat-card-copy') as HTMLButtonElement;
+    fireEvent.click(resultCopy);
+    await waitFor(() => expect(writeText).toHaveBeenCalledWith('PASS src/a.test.ts\n'));
+
+    const deployCopy = document.querySelector('.chat-deploy-card .chat-card-copy') as HTMLButtonElement;
+    fireEvent.click(deployCopy);
+    await waitFor(() => expect(writeText).toHaveBeenCalledWith('https://preview.example.com'));
+    await waitFor(() => expect(screen.getAllByText(/Copied/).length).toBeGreaterThan(0));
+  });
+
+  it('P2 — artifact cards are keyboard-navigable: ↑/↓ moves focus between them', async () => {
+    mockAuthed('admin');
+    mockChatStream();
+    vi.spyOn(dashboardAPI, 'chatResolve').mockResolvedValue({ ok: true, matches: [] });
+    mockChatSend({
+      ...OK_RESPONSE,
+      content: [
+        '```diff',
+        'diff --git a/a.ts b/a.ts',
+        '--- a/a.ts',
+        '+++ b/a.ts',
+        '@@ -1 +1 @@',
+        '-x',
+        '+y',
+        '```',
+        '```',
+        'PASS src/a.test.ts',
+        '```',
+        '🚀 Preview: https://preview.example.com',
+      ].join('\n'),
+    });
+    render(<ChatPage />);
+    await waitFor(() => expect(screen.getByPlaceholderText(/Message the agent/)).toBeTruthy());
+
+    fireEvent.change(screen.getByPlaceholderText(/Message the agent/), { target: { value: 'summarize' } });
+    fireEvent.submit(screen.getByPlaceholderText(/Message the agent/).closest('form')!);
+    await waitFor(() => expect(document.querySelectorAll('[data-artifact-card]').length).toBe(3));
+
+    // Focus the first card, then ↓ moves to the second, ↑ back to the first,
+    // and End jumps to the last.
+    const cards = document.querySelectorAll<HTMLElement>('[data-artifact-card]');
+    cards[0].focus();
+    expect(document.activeElement).toBe(cards[0]);
+
+    fireEvent.keyDown(cards[0], { key: 'ArrowDown' });
+    expect(document.activeElement).toBe(cards[1]);
+    fireEvent.keyDown(cards[1], { key: 'ArrowDown' });
+    expect(document.activeElement).toBe(cards[2]);
+    fireEvent.keyDown(cards[2], { key: 'ArrowUp' });
+    expect(document.activeElement).toBe(cards[1]);
+    fireEvent.keyDown(cards[1], { key: 'Home' });
+    expect(document.activeElement).toBe(cards[0]);
+    fireEvent.keyDown(cards[0], { key: 'End' });
+    expect(document.activeElement).toBe(cards[2]);
   });
 });

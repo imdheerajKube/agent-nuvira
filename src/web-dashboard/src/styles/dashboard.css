@@ -3826,12 +3826,44 @@ body {
   flex-wrap: wrap;
 }
 
+.chat-diff-locked {
+  font-style: italic;
+}
+
 /* P2 — artifact cards extracted from the answer text */
 .chat-artifacts {
   display: flex;
   flex-direction: column;
   gap: 6px;
   margin: 8px 0 2px;
+}
+
+/* P2 — one keyboard-navigable artifact (roving focus: ↑/↓ between cards) */
+.chat-artifact-item {
+  border-radius: 8px;
+}
+
+.chat-artifact-item:focus {
+  outline: 2px solid var(--accent-blue, #3b82f6);
+  outline-offset: 2px;
+}
+
+/* P2 — copy button on result/deploy cards (mirrors md-code-copy) */
+.chat-card-copy {
+  background: transparent;
+  border: 1px solid var(--border);
+  color: var(--text-secondary);
+  border-radius: 4px;
+  padding: 1px 8px;
+  font-size: 11px;
+  cursor: pointer;
+  flex: none;
+  margin-left: 6px;
+}
+
+.chat-card-copy:hover {
+  color: var(--text-primary);
+  border-color: var(--accent-blue, #3b82f6);
 }
 
 .chat-result-card {
@@ -4015,8 +4047,46 @@ body {
   color: var(--text-secondary);
 }
 
-.chat-task-log-err {
+/* P2 — task-run log lines: styled by their source stream, with a divider
+   where the output switched streams (stdout → stderr → system). ANSI escapes
+   are stripped before render, so these classes only color real text. */
+.chat-task-log {
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+.chat-task-log-stdout {
+  color: var(--text-secondary);
+}
+
+.chat-task-log-stderr {
   color: #f87171;
+}
+
+.chat-task-log-system {
+  color: var(--text-secondary);
+  font-style: italic;
+  opacity: 0.85;
+}
+
+.chat-task-log-sep {
+  margin: 4px 0 2px;
+  padding: 1px 6px;
+  border-top: 1px dashed var(--border);
+  font-family: var(--font-mono, ui-monospace, SFMono-Regular, Menlo, Consolas, monospace);
+  font-size: 9.5px;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  color: var(--text-secondary);
+  user-select: none;
+}
+
+.chat-task-log-sep-stderr {
+  color: #f87171;
+}
+
+.chat-task-log-sep-system {
+  color: var(--text-secondary);
 }
 
 /* P6a — /learn skill draft preview card (accept / edit / reject) */

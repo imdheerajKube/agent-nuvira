@@ -4,13 +4,13 @@
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>Agent-Nuvira — Multi-Agent AI Coding Assistant</title>
-  <meta name="description" content="Agent-Nuvira is an open-source, multi-agent AI coding assistant that runs from your terminal. 17+ agents, 4,280 tests, a 22-platform messaging gateway, GitLab + GitHub PR review built-in. Plan, write, review, test, and publish code — from a single command." />          <meta name="keywords" content="AI coding assistant, multi-agent AI, terminal AI tool, open source, 17+ providers, Groq, NVIDIA NIM, Google Gemini, OpenRouter, Ollama, OpenAI, Anthropic, Mistral, Azure, vLLM, LM Studio, FAISS vector store, auto model routing, quota ledger, team collaboration, MCP, GitLab, PR review, GitHub, Thompson-sampling bandit, routing strategy, per-model learning, promotion gate, capability-aware scoring, wire-token measured cost, governance constraints, multi-account key rotation, context-length preflight, RBAC, role-based access control, tamper-evident audit chain, OIDC gateway, enterprise security, P0-P7 program complete" />
+  <meta name="description" content="Agent-Nuvira is an open-source, multi-agent AI coding assistant with a one-window dashboard (plan, diff accept/reject, run, ship from chat) and a terminal CLI. 17+ agents, 4,864 tests, a 22-platform messaging gateway, GitLab + GitHub PR review built-in. Plan, write, review, test, and publish code — from a single command." />          <meta name="keywords" content="AI coding assistant, multi-agent AI, terminal AI tool, open source, 17+ providers, Groq, NVIDIA NIM, Google Gemini, OpenRouter, Ollama, OpenAI, Anthropic, Mistral, Azure, vLLM, LM Studio, FAISS vector store, auto model routing, quota ledger, team collaboration, MCP, GitLab, PR review, GitHub, Thompson-sampling bandit, routing strategy, per-model learning, promotion gate, capability-aware scoring, wire-token measured cost, governance constraints, multi-account key rotation, context-length preflight, RBAC, role-based access control, tamper-evident audit chain, OIDC gateway, enterprise security, P0-P7 program complete" />
   <link rel="icon" type="image/png" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='8' fill='%236363f2'/%3E%3Ctext x='16' y='22' text-anchor='middle' fill='white' font-size='18' font-weight='bold' font-family='system-ui'%3EN%3C/text%3E%3C/svg%3E" />
-  <meta property="og:title" content="Agent-Nuvira — Multi-Agent AI Coding Assistant" />          <meta property="og:description" content="The open-source multi-agent AI coding assistant. Plan, write, review, test, verify, and publish code from your terminal. 17+ providers. 17+ agents. 4,280 tests. 22-platform messaging gateway. GitLab + GitHub PR review built-in. RBAC, tamper-evident audit, OIDC gateway. No subscriptions. No telemetry." />
+  <meta property="og:title" content="Agent-Nuvira — Multi-Agent AI Coding Assistant" />          <meta property="og:description" content="The open-source multi-agent AI coding assistant. Plan, write, review, test, verify, and publish code from one dashboard window or your terminal. 17+ providers. 17+ agents. 4,864 tests. 22-platform messaging gateway. GitLab + GitHub PR review built-in. RBAC, tamper-evident audit, OIDC gateway. No subscriptions. No telemetry." />
   <meta property="og:image" content="https://www.agent-nuvira.com/assets/hero.png" />
   <meta property="og:url" content="https://www.agent-nuvira.com" />
   <meta name="twitter:card" content="summary_large_image" />
-  <meta name="twitter:title" content="Agent-Nuvira — Multi-Agent AI Coding Assistant" />          <meta name="twitter:description" content="The open-source multi-agent AI coding assistant. 17+ providers. 17+ agents. 4,280 tests. 22-platform messaging gateway. GitLab + GitHub PR review. Enterprise hardening (RBAC, audit, OIDC). From your terminal." />
+  <meta name="twitter:title" content="Agent-Nuvira — Multi-Agent AI Coding Assistant" />          <meta name="twitter:description" content="The open-source multi-agent AI coding assistant. One window: chat, plan, review diffs, run, ship. 17+ providers. 17+ agents. 4,864 tests. 22-platform messaging gateway. GitLab + GitHub PR review. Enterprise hardening (RBAC, audit, OIDC). From your terminal." />
   <link rel="preconnect" href="https://fonts.googleapis.com" />
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
   <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800;900&family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet" />
@@ -125,7 +125,7 @@
               <span class="log info">📁 Context Gatherer scanning codebase...</span>
               <span class="log success">✅ Writer implemented auth middleware</span>
               <span class="log info">👀 Reviewer validating changes...</span>
-              <span class="log success">✅ All 4,280 tests passed</span>
+              <span class="log success">✅ All 4,864 tests passed</span>
               <span class="log info">🔒 VerifyModule running security scan...</span>
               <span class="log success">✅ No security issues found</span>
               <span class="log success">🚀 Changes committed to feature/auth</span>
@@ -1053,9 +1053,9 @@
             <span class="arch-tier-arrow">→</span>
             <span class="arch-tier">40 milestones</span>
             <span class="arch-tier-arrow">→</span>
-            <span class="arch-tier">v1.74.0 · 4,556 tests</span>
+            <span class="arch-tier">v1.74.2 · 4,864 tests</span>
           </div>
-          <p class="arch-tier-note">Program complete — the tracking matrix in <code>NUVIRA_ROUTER_ROADMAP.md</code> is 100% ✅ across P0–P7. Current release <strong>v1.74.0</strong> — the <strong>verified-contacts wave</strong>: a hardened verified-list rule (entries = only those senders, blank = no one, <code>Allow-All</code> = everyone) enforced for group senders too, a cross-platform <strong>verified-contacts manager</strong> (add a person as Name + Contact No from the dashboard, view every saved contact in the 📇 validated list, remove from both places — same as the CLI, for WhatsApp, Telegram, email and every other channel), send-by-name parity for WhatsApp, and the <strong>gateway intelligence stack</strong> underneath: chat answers + delivery tools on all 22 messaging channels, validated-sender Permissions with a hard silent-drop default, status recipients, the Baileys personal bridge with LID→phone-number resolution, and 4,556 passing tests.</p>
+          <p class="arch-tier-note">Program complete — the tracking matrix in <code>NUVIRA_ROUTER_ROADMAP.md</code> is 100% ✅ across P0–P7, and the <strong>dashboard-first program</strong> (Phases 1–8) is fully delivered. Current release <strong>v1.74.2</strong> — the <strong>one-window wave</strong>: the dashboard chat is the product's front door. Attach a project, watch the agent plan and stream tokens, review <strong>diff cards with per-file accept/reject</strong>, run commands and see tests pass in inline execution cards, resume any past session from the smart rail, learn a workflow as a skill, install community skills from the marketplace, and attach files to the composer — all in one window, no CLI required. The CLI stays byte-identical for scripting and CI. <strong>4,864</strong> root + <strong>263</strong> dashboard tests passing.</p>
         </div>
       </div>
     </div>

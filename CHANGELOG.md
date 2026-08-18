@@ -2,6 +2,18 @@
 
 All notable changes to **Agent-Nuvira** are documented in this file.
 
+## v1.74.2 — dashboard-first: chat is the front door (Phases 1–8 delivered)
+
+- **Chat is now the product's front door** — `/` lands on Chat (Overview moved to `/overview`); every capability (gateway, memory, models, publish, skills) is a tool the agent calls from the same window, never a new room. The CLI engine stayed byte-identical — `buff chat/execute/plan` unchanged; the dashboard calls the same engine through `/api/chat` and the same CLI through `/api/tasks`
+- **Spec-complete markdown** — react-markdown + remark-gfm + rehype-highlight (tables, task lists, autolinks, syntax highlighting), code blocks with a language label + copy button, XSS-safe
+- **Token streaming typewriter** — SSE `token` events stream the final answer with a blinking cursor (new opt-in `generateToolsStream` across groq / openrouter / nim / openai-compat via one shared helper; non-streaming POST stays the fallback); the live plan checklist, tool cards, and git-diff cards stream mid-turn and snapshot into the reply
+- **Artifact cards (P2)** — ```` ```diff ```` blocks, test/build output, and deploy URLs written directly into the answer text render as cards (diff / ✅❌ result / 🚀 deploy, each with a copy button + roving-focus keyboard nav); the git-tool diff card gained per-file ✓/✗ accept/reject + **"Commit accepted (N)"** (the accepted subset rides the engine's accepted-subset commit contract — gated on an attached project so prose can't trigger a commit); the ⚡ Run-this-command confirm path now runs a live inline execution card (ANSI-stripped, stream-separated stdout/stderr, exit code + duration, cancel, copy-output)
+- **Project context (P3)** — attach any directory: a bounded code-map snapshot (path + tree + symbol map) rides every turn, so "assess THIS project" works without describing the codebase; per-session memory auto-recall (P4)
+- **Persisted sessions (P4/P8)** — smart-rail sidebar (resume any past conversation, 🔍 search, date groups, ✏️ rename / 🗑 delete), transcript resume across restarts, streaming cancel + retry on failed turns
+- **Real composer (P8)** — file picker / paste-as-attachment / drag-drop (300 KB × 10 caps); attachments ride the turn as `[Attachment: name]` context; `/api/chat` gained a 1.5 MB body reader so attached documents pass the admin cap
+- **Skills as a product surface (P7)** — /learn preview cards (✅ accept / ✏️ edit / ↩ reject → SkillStore), cross-skill bundles, hub-catalog frontmatter depth (platforms / toolsets / env-var gates), marketplace install/uninstall panel (quarantine + checksum-verified) — plus the bundled **docx** skill (create / read / edit Word documents)
+- **Verified end-to-end** — real-HTTP E2E tests drive chat → diff extraction → accept/reject → commit against the running server with the exact modules the GUI uses; dashboard suite **263** green, root suite **4,864** green (217 files)
+
 ## v1.74.1 — chat agentic core: dashboard chat = full agent loop
 
 - **Interactive chat loop (P0.1–P0.8)** — the dashboard chat is now the full agent loop: `ask_user` question cards, read/list/glob/code_search tools, confirmation-gated edit/write, gated `run_terminal` (deny-first, masked), a live plan checklist (`plan_todo`), step cards for tool calls, and a `skill` tool that loads reusable capability packs mid-conversation
