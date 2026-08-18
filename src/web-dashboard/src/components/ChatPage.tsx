@@ -25,6 +25,10 @@ const PASTE_ATTACH_THRESHOLD = 2_000; // chars — larger pastes are offered as 
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { dashboardAPI } from '../api';
 import Markdown from './Markdown';
+// P2 — structured artifacts extracted from the answer TEXT (```diff blocks,
+// test/build output, deploy URLs) rendered as cards, not raw markdown.
+import { extractArtifacts, type ExtractedArtifacts } from '../artifacts';
+import type { TaskLogLine, TaskStatus } from '../types';
 
 interface AuthState {
   configured: boolean;
@@ -49,6 +53,24 @@ interface ChatMessage {
   draft?: SkillDraftView | null;
   /** P8 — attachments that rode into this turn (rendered as expandable chips). */
   attachments?: AttachmentChip[];
+  /**
+   * P2 — artifacts extracted from the answer TEXT (diff/result/deploy cards).
+   * Distinct from the live `diff`/`plan`/`tool` events, which are snapshotted
+   * into their own fields; this covers blocks the model wrote directly.
+   */
+  artifacts?: ExtractedArtifacts;
+  /** P2 — a CLI command run as an inline execution card (the ⚡ Run path). */
+  task?: TaskRunView;
+}
+
+/** P2 — a running CLI task rendered as a live execution card in the thread. */
+interface TaskRunView {
+  id: string;
+  command: string;
+  status: TaskStatus;
+  exitCode: number | null;
+  durationMs: number | null;
+  logs: TaskLogLine[];
 }
 
 /** P8 — one composer attachment (file / paste / drop). */
@@ -122,27 +144,77 @@ interface ResolvedCommand {
 interface PendingResolve {
   ask: string;
   top: ResolvedCommand | null;
-}  /**
-   * P3b — render a git diff card: per-file sections with +/− colored lines
-   * and a change-count summary. Snapshotted into the reply so the committed
-   * change stays visible.
-   */
-  function DiffCard({ diff }: { diff: DiffView }) {
-    const added = diff.files.reduce((s, f) => s + (f.body.match(/^\+/gm)?.length ?? 0), 0);
-    const removed = diff.files.reduce((s, f) => s + (f.body.match(/^-/gm)?.length ?? 0), 0);
-    return (
-      <div className="chat-diff-card">
-        <div className="chat-diff-head">
-          <span className="chat-diff-icon">🔧</span>
-          <span className="chat-diff-title">git diff</span>
-          <span className="chat-diff-meta">
-            {diff.files.length} file{diff.files.length === 1 ? '' : 's'} · +{added} −{removed}
-          </span>
-        </div>
-        <div className="chat-diff-files">
-          {diff.files.map((f) => (
-            <details key={f.path} className="chat-diff-file" open={diff.files.length === 1}>
-              <summary className="chat-diff-file-path">{f.path}</summary>
+}
+
+/** P2 — status label for one inline command-run card. */
+const TASK_STATUS_LABEL: Record<TaskStatus, string> = {
+  running: '⏳ running',
+  done: '✅ done',
+  failed: '❌ failed',
+  cancelled: '⏹ cancelled',
+  timeout: '⏰ timed out',
+  error: '💥 error',
+};
+
+/**
+ * P3b — render a git diff card: per-file sections with +/− colored lines
+ * and a change-count summary. Snapshotted into the reply so the committed
+ * change stays visible.
+ *
+ * P2 — `selectable` adds per-file accept/reject (✓/✗ toggles, all accepted
+ * by default) + a "Commit accepted" action. The engine's git tool already
+ * implements the accepted-subset contract (commit with files=[...]) — this
+ * card surfaces the selection and sends it back as a chat turn; it does NOT
+ * re-implement diff application.
+ */
+function DiffCard({
+  diff,
+  selectable = false,
+  onCommitAccepted,
+}: {
+  diff: DiffView;
+  selectable?: boolean;
+  onCommitAccepted?: (paths: string[]) => void;
+}) {
+  // P2 — per-file accept/reject is CARD-LOCAL (all accepted by default). The
+  // caller only learns the final selection via onCommitAccepted.
+  const [accepted, setAccepted] = useState<string[] | null>(null);
+  const acceptedSet = new Set(accepted ?? diff.files.map((f) => f.path));
+  const toggleFile = (path: string) => {
+    setAccepted((prev) => {
+      const base = prev ?? diff.files.map((f) => f.path);
+      return base.includes(path) ? base.filter((p) => p !== path) : [...base, path];
+    });
+  };
+  const added = diff.files.reduce((s, f) => s + (f.body.match(/^\+/gm)?.length ?? 0), 0);
+  const removed = diff.files.reduce((s, f) => s + (f.body.match(/^-/gm)?.length ?? 0), 0);
+  return (
+    <div className="chat-diff-card">
+      <div className="chat-diff-head">
+        <span className="chat-diff-icon">🔧</span>
+        <span className="chat-diff-title">git diff</span>
+        <span className="chat-diff-meta">
+          {diff.files.length} file{diff.files.length === 1 ? '' : 's'} · +{added} −{removed}
+        </span>
+      </div>
+      <div className="chat-diff-files">
+        {diff.files.map((f) => {
+          const isAccepted = acceptedSet.has(f.path);
+          return (
+            <details key={f.path} className={`chat-diff-file${!isAccepted ? ' chat-diff-file-rejected' : ''}`} open={diff.files.length === 1}>
+              <summary className="chat-diff-file-path">
+                {selectable ? (
+                  <button
+                    type="button"
+                    className={`chat-diff-toggle${isAccepted ? ' chat-diff-toggle-on' : ''}`}
+                    title={isAccepted ? 'Accepted — click to reject' : 'Rejected — click to accept'}
+                    onClick={(e) => { e.preventDefault(); e.stopPropagation(); toggleFile(f.path); }}
+                  >
+                    {isAccepted ? '✓' : '✗'}
+                  </button>
+                ) : null}
+                {f.path}
+              </summary>
               <pre className="chat-diff-body">
                 {f.body.split('\n').map((line, i) => {
                   const cls = line.startsWith('+') ? 'diff-add' : line.startsWith('-') ? 'diff-del' : line.startsWith('@@') ? 'diff-hunk' : '';
@@ -154,11 +226,88 @@ interface PendingResolve {
                 })}
               </pre>
             </details>
-          ))}
-        </div>
+          );
+        })}
       </div>
-    );
-  }
+      {selectable && onCommitAccepted ? (
+        <div className="chat-diff-actions">
+          <button
+            className="admin-refresh-btn"
+            type="button"
+            disabled={acceptedSet.size === 0}
+            onClick={() => onCommitAccepted([...acceptedSet])}
+          >
+            Commit accepted ({acceptedSet.size})
+          </button>
+          <span className="admin-hint">Only accepted files are committed — the agent re-confirms with a question card.</span>
+        </div>
+      ) : null}
+    </div>
+  );
+}
+
+/** P2 — a test/build result extracted from the answer text (✅ / ❌ card). */
+function ResultCard({ result }: { result: { verdict: 'pass' | 'fail' | 'unknown'; title: string; body: string } }) {
+  const icon = result.verdict === 'pass' ? '✅' : result.verdict === 'fail' ? '❌' : '📋';
+  return (
+    <div className={`chat-result-card chat-result-${result.verdict}`}>
+      <div className="chat-result-head">
+        <span className="chat-result-icon">{icon}</span>
+        <span className="chat-result-title">{result.title}</span>
+        <span className="chat-result-meta">{result.verdict}</span>
+      </div>
+      <pre className="chat-result-body">{result.body}</pre>
+    </div>
+  );
+}
+
+/** P2 — a deploy URL extracted from the answer text (🚀 card with a link). */
+function DeployCard({ deploy }: { deploy: { url: string; title: string } }) {
+  return (
+    <div className="chat-deploy-card">
+      <div className="chat-deploy-head">
+        <span className="chat-deploy-icon">🚀</span>
+        <span className="chat-deploy-title">{deploy.title || 'Deployment'}</span>
+      </div>
+      <a className="chat-deploy-url" href={deploy.url} target="_blank" rel="noopener noreferrer">
+        {deploy.url}
+      </a>
+    </div>
+  );
+}
+
+/**
+ * P2 — an inline command-run execution card (the ⚡ Run path). Shows the
+ * command, a live status badge, streamed logs, exit code + duration when
+ * settled, and a Cancel button while running. Reuses the P1 task runner
+ * (the REAL CLI as a child process) exactly like TaskConsole.
+ */
+function TaskRunCard({ task, onCancel }: { task: TaskRunView; onCancel?: () => void }) {
+  const running = task.status === 'running';
+  return (
+    <div className={`chat-task-card${running ? ' chat-task-running' : task.status === 'done' ? ' chat-task-ok' : ' chat-task-err'}`}>
+      <div className="chat-task-head">
+        <span className="chat-task-icon">⚙️</span>
+        <code className="chat-task-cmd">{task.command}</code>
+        <span className="chat-task-status" title={task.status}>{TASK_STATUS_LABEL[task.status]}</span>
+        {!running && task.exitCode !== null ? <span className="chat-task-exit">exit {task.exitCode}</span> : null}
+        {!running && task.durationMs !== null ? <span className="chat-task-dur">{task.durationMs}ms</span> : null}
+        {running && onCancel ? (
+          <button className="admin-mini-btn" type="button" onClick={onCancel}>⏹ Cancel</button>
+        ) : null}
+      </div>
+      <pre className="chat-task-logs" role="log">
+        {task.logs.length > 0 ? (
+          task.logs.map((l, i) => (
+            <div key={i} className={l.stream === 'stderr' ? 'chat-task-log-err' : undefined}>{l.text}</div>
+          ))
+        ) : (
+          <div className="admin-hint">{running ? 'Waiting for output…' : '(no output)'}</div>
+        )}
+      </pre>
+    </div>
+  );
+}
 
   /**
    * P6a — the /learn preview card: the agent drafted a skill; the user
@@ -425,7 +574,7 @@ export default function ChatPage() {
       rec.turns.map((t) => ({
         role: t.role,
         content: t.content,
-        ...(t.role === 'assistant' ? { followups: [] } : {}),
+        ...(t.role === 'assistant' ? { followups: [], artifacts: extractArtifacts(t.content) } : {}),
       })),
     );
     setLiveSteps([]);
@@ -705,11 +854,12 @@ export default function ChatPage() {
         setMeta(r.generationFailed ? null : `${r.provider ?? 'provider'}${r.model ? ` / ${r.model}` : ' (auto-routed)'}`);
         // P4 — a failed generation (no usable answer) offers Retry too.
         setRetryAsk(r.generationFailed ? clean : null);
+        const replyContent = r.content || '(the agent produced no text — try rephrasing)';
         setMessages((m) => [
           ...m,
           {
             role: 'assistant',
-            content: r.content || '(the agent produced no text — try rephrasing)',
+            content: replyContent,
             error: r.generationFailed,
             followups: r.followups,
             steps: liveStepsRef.current,
@@ -717,6 +867,9 @@ export default function ChatPage() {
             plan: livePlanRef.current,
             diff: liveDiffRef.current,
             draft: liveDraftRef.current,
+            // P2 — extract artifact cards from the answer TEXT (diff/result/
+            // deploy blocks the model wrote directly, beyond the live events).
+            artifacts: extractArtifacts(replyContent),
           },
         ]);
       } else {
@@ -777,7 +930,12 @@ export default function ChatPage() {
     void send(`Revise the skill draft "${name}" — improve it per your best judgment and present it again.`);
   }, [send]);
 
-  /** Run the resolved CLI command directly (the user confirmed the card). */
+  /**
+   * Run the resolved CLI command directly (the user confirmed the card).
+   * P2 — instead of polling then appending plain text, this renders a LIVE
+   * execution card in the thread (command, streamed logs, status, exit code,
+   * cancel) via the same P1 task runner + SSE the Command Console uses.
+   */
   const runResolvedCommand = useCallback(async (ask: string) => {
     const resolved = await dashboardAPI.chatResolve(ask);
     const matches = (resolved.matches ?? []) as ResolvedCommand[];
@@ -798,21 +956,50 @@ export default function ChatPage() {
       return;
     }
     const id = started.task.id;
-    const runLabel = `▶ Ran: \`${top.command}\``;
-    // Poll until the task settles (short commands finish fast).
-    let result = '';
-    for (let i = 0; i < 60; i += 1) {
-      const t = await dashboardAPI.getTask(id);
-      if (!t?.task) break;
-      if (t.task.status !== 'running') {
-        const logs = (t.task.logs ?? []).map((l: { text: string }) => l.text).join('\n');
-        result = `${runLabel}\n\`\`\`\n${logs.trim().slice(0, 3000) || '(no output)'}\n\`\`\`\n_exit ${t.task.exitCode ?? '?'}_`;
-        break;
-      }
-      await new Promise((r) => setTimeout(r, 500));
+    const initial: TaskRunView = {
+      id,
+      command: top.command,
+      status: started.task.status,
+      exitCode: started.task.exitCode,
+      durationMs: started.task.durationMs,
+      logs: started.task.logs ?? [],
+    };
+    // Insert the execution card into the thread; it updates in place as
+    // log/status events stream in (patched by matching task id).
+    setMessages((m) => [...m, { role: 'assistant', content: '', task: initial }]);
+    const patch = (p: Partial<TaskRunView>) =>
+      setMessages((m) => m.map((msg) => (msg.task && msg.task.id === id ? { ...msg, task: { ...msg.task, ...p } } : msg)));
+    let unsub: (() => void) | null = null;
+    unsub = dashboardAPI.subscribeTask(id, {
+      onLog: (line) =>
+        setMessages((m) =>
+          m.map((msg) => (msg.task && msg.task.id === id ? { ...msg, task: { ...msg.task, logs: [...msg.task.logs, line] } } : msg)),
+        ),
+      onStatus: (status) => {
+        patch({ status });
+        if (status !== 'running') {
+          // The status event carries no exit code/duration — grab one final
+          // snapshot so the settled card shows them.
+          void dashboardAPI.getTask(id).then((t) => {
+            if (t?.task) patch({ exitCode: t.task.exitCode, durationMs: t.task.durationMs, logs: t.task.logs ?? [] });
+          });
+          unsub?.();
+          setBusy(false);
+        }
+      },
+    });
+    // Seed with the full log snapshot (the start response may lag the run).
+    const init = await dashboardAPI.getTask(id);
+    if (init?.task) {
+      patch({ status: init.task.status, exitCode: init.task.exitCode, durationMs: init.task.durationMs, logs: init.task.logs ?? [] });
     }
-    setMessages((m) => [...m, { role: 'assistant', content: result || `${runLabel} (still running — see the Command Console)` }]);
-    setBusy(false);
+    // The task may already have settled (short command) — close the stream.
+    const settled = await dashboardAPI.getTask(id);
+    if (settled?.task && settled.task.status !== 'running') {
+      unsub?.();
+      patch({ status: settled.task.status, exitCode: settled.task.exitCode, durationMs: settled.task.durationMs, logs: settled.task.logs ?? [] });
+      setBusy(false);
+    }
   }, []);
 
   /** User declined the command card — ask the agent normally instead. */
@@ -820,6 +1007,28 @@ export default function ChatPage() {
     setPendingResolve(null);
     void send(ask);
   }, [send]);
+
+  /**
+   * P2 — the diff card's "Commit accepted" action. Sends the accepted file
+   * subset back as a chat turn; the agent commits exactly those files via the
+   * git tool's accepted-subset contract (commit with files=[...], re-confirmed
+   * through ask_user) — the dashboard never re-implements diff application.
+   */
+  const commitAcceptedDiff = useCallback(
+    (paths: string[]) => {
+      if (paths.length === 0) return;
+      void send(
+        `Commit exactly these files that I accepted on the diff card (and nothing else): ${paths.join(', ')}. ` +
+        `Show me a short confirmation before finishing.`,
+      );
+    },
+    [send],
+  );
+
+  /** P2 — cancel a running inline command-run card. */
+  const cancelTaskRun = useCallback(async (id: string) => {
+    await dashboardAPI.cancelTask(id);
+  }, []);
 
   /** P0.1 — submit the agent's clarifying-question answer; the turn resumes. */
   const answerQuestion = useCallback(
@@ -1091,8 +1300,27 @@ export default function ChatPage() {
                   {m.role === 'assistant' && m.diff ? (
                     <details className="chat-steps" open>
                       <summary>Changes: {m.diff.summary}</summary>
-                      <DiffCard diff={m.diff} />
+                      {/* P2 — the snapshotted git diff is SELECTABLE: per-file
+                          accept/reject + "Commit accepted" (the engine commits
+                          only the accepted subset). */}
+                      <DiffCard diff={m.diff} selectable onCommitAccepted={commitAcceptedDiff} />
                     </details>
+                  ) : null}
+                  {m.role === 'assistant' && m.artifacts && (m.artifacts.diffs.length > 0 || m.artifacts.results.length > 0 || m.artifacts.deploys.length > 0) ? (
+                    <div className="chat-artifacts">
+                      {m.artifacts.diffs.map((d, di) => (
+                        <DiffCard key={`diff-${di}`} diff={d} />
+                      ))}
+                      {m.artifacts.results.map((r, ri) => (
+                        <ResultCard key={`result-${ri}`} result={r} />
+                      ))}
+                      {m.artifacts.deploys.map((d, di) => (
+                        <DeployCard key={`deploy-${di}`} deploy={d} />
+                      ))}
+                    </div>
+                  ) : null}
+                  {m.role === 'assistant' && m.task ? (
+                    <TaskRunCard task={m.task} onCancel={m.task.status === 'running' ? () => void cancelTaskRun(m.task!.id) : undefined} />
                   ) : null}
                   {m.role === 'assistant' && m.draft ? (
                     <details className="chat-steps" open>

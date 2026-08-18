@@ -10,6 +10,7 @@ import { describe, it, expect, vi, afterEach } from 'vitest';
 import { render, screen, fireEvent, cleanup, waitFor } from '@testing-library/react';
 import ChatPage from './ChatPage';
 import { dashboardAPI, setAdminToken } from '../api';
+import type { TaskLogLine, TaskStatus } from '../types';
 
 function mockAuthed(role: 'admin' | 'operator' | 'viewer' = 'admin', authenticated = true) {
   vi.spyOn(dashboardAPI, 'fetchAdminAuthStatus').mockResolvedValue({
@@ -732,5 +733,157 @@ describe('ChatPage', () => {
     fireEvent.click(screen.getByText('＋ New'));
     await waitFor(() => expect(screen.queryByText('You')).toBeNull());
     expect(screen.getByText(/Say anything/)).toBeTruthy();
+  });
+
+  it('P2 — extracts artifact cards (diff/result/deploy) from the answer text', async () => {
+    mockAuthed('admin');
+    mockChatStream();
+    vi.spyOn(dashboardAPI, 'chatResolve').mockResolvedValue({ ok: true, matches: [] });
+    mockChatSend({
+      ...OK_RESPONSE,
+      content: [
+        'I fixed the bug:',
+        '```diff',
+        'diff --git a/src/fix.ts b/src/fix.ts',
+        '--- a/src/fix.ts',
+        '+++ b/src/fix.ts',
+        '@@ -1 +1 @@',
+        '-broken',
+        '+fixed',
+        '```',
+        '```',
+        'PASS src/fix.test.ts',
+        '```',
+        '🚀 Preview: https://preview.example.com',
+      ].join('\n'),
+    });
+    render(<ChatPage />);
+    await waitFor(() => expect(screen.getByPlaceholderText(/Message the agent/)).toBeTruthy());
+
+    fireEvent.change(screen.getByPlaceholderText(/Message the agent/), { target: { value: 'fix the bug' } });
+    fireEvent.submit(screen.getByPlaceholderText(/Message the agent/).closest('form')!);
+
+    // The ```diff block becomes a diff card, the test output a result card,
+    // and the deploy line a 🚀 card — NOT just raw markdown.
+    await waitFor(() => expect(screen.getByText('git diff')).toBeTruthy());
+    expect(screen.getByText('src/fix.ts')).toBeTruthy();
+    // The result card's verdict badge (the same block also renders as a
+    // markdown code fence — both are expected, scope to the card's meta).
+    await waitFor(() => expect(document.querySelector('.chat-result-meta')?.textContent).toBe('pass'));
+    // The card link (the same URL also autolinks in the markdown text —
+    // scope to the deploy card's dedicated anchor).
+    const deployLink = document.querySelector('.chat-deploy-url') as HTMLAnchorElement;
+    expect(deployLink).toBeTruthy();
+    expect(deployLink.getAttribute('href')).toBe('https://preview.example.com');
+  });
+
+  it('P2 — the snapshotted diff card accepts/rejects files and commits the subset', async () => {
+    mockAuthed('admin');
+    let diffCb: ((d: { files: Array<{ path: string; body: string }>; summary: string }) => void) | null = null;
+    vi.spyOn(dashboardAPI, 'subscribeChat').mockImplementation((_sid, handlers) => {
+      diffCb = handlers.onDiff ?? null;
+      return vi.fn();
+    });
+    vi.spyOn(dashboardAPI, 'chatResolve').mockResolvedValue({ ok: true, matches: [] });
+    let resolveSend: (v: typeof OK_RESPONSE) => void = () => {};
+    const sendSpy = vi.spyOn(dashboardAPI, 'chatSend').mockImplementation(
+      () => new Promise((resolve) => { resolveSend = resolve; }) as Promise<typeof OK_RESPONSE>,
+    );
+    render(<ChatPage />);
+    await waitFor(() => expect(screen.getByPlaceholderText(/Message the agent/)).toBeTruthy());
+
+    fireEvent.change(screen.getByPlaceholderText(/Message the agent/), { target: { value: 'show my changes' } });
+    fireEvent.submit(screen.getByPlaceholderText(/Message the agent/).closest('form')!);
+    await waitFor(() => expect(diffCb).toBeTruthy());
+    diffCb!({ files: [{ path: 'a.ts', body: 'diff --git a/a.ts b/a.ts\n+new-a' }, { path: 'b.ts', body: 'diff --git a/b.ts b/b.ts\n+new-b' }], summary: '2 files changed' });
+    resolveSend(OK_RESPONSE);
+
+    // The snapshotted card shows per-file toggles, all accepted by default.
+    await waitFor(() => expect(screen.getByText(/Commit accepted \(2\)/)).toBeTruthy());
+    const toggles = screen.getAllByTitle(/Accepted — click to reject/);
+    expect(toggles.length).toBe(2);
+
+    // Reject b.ts → only a.ts remains accepted.
+    fireEvent.click(toggles[1]);
+    await waitFor(() => expect(screen.getByText(/Commit accepted \(1\)/)).toBeTruthy());
+
+    // Committing sends a chat turn naming ONLY the accepted file.
+    fireEvent.click(screen.getByText(/Commit accepted \(1\)/));
+    await waitFor(() => expect(sendSpy.mock.calls.length).toBeGreaterThan(1));
+    const commitMsg = sendSpy.mock.calls[sendSpy.mock.calls.length - 1][1] as string;
+    expect(commitMsg).toContain('a.ts');
+    expect(commitMsg).not.toContain('b.ts');
+  });
+
+  it('P2 — the ⚡ Run path renders a live execution card with logs and exit code', async () => {
+    mockAuthed('admin');
+    mockChatStream();
+    vi.spyOn(dashboardAPI, 'chatResolve').mockResolvedValue({
+      ok: true,
+      matches: [{ intent: 'run tests', summary: 'Run the test suite', command: 'test run', score: 0.9 }],
+    });
+    let statusCb: ((s: TaskStatus) => void) | null = null;
+    let logCb: ((l: TaskLogLine) => void) | null = null;
+    const taskBase = {
+      id: 'task-1',
+      command: 'test run',
+      args: ['test', 'run'],
+      cwd: '.',
+      startedAt: 1,
+      finishedAt: null,
+      timeoutMs: 60000,
+      logs: [] as Array<{ stream: 'stdout' | 'stderr' | 'system'; text: string; at: number }>,
+    };
+    const unsub = vi.fn();
+    vi.spyOn(dashboardAPI, 'subscribeTask').mockImplementation((_id, handlers) => {
+      statusCb = handlers.onStatus ?? null;
+      logCb = handlers.onLog ?? null;
+      return unsub;
+    });
+    void statusCb;
+    void logCb;
+    // The task runs then SETTLES: the mock stays running until the test flips
+    // `settled` (before firing onStatus('done')), after which snapshots carry
+    // the exit code + final logs — exactly what the real server returns.
+    let settled = false;
+    const runningTask = { ...taskBase, status: 'running' as TaskStatus, exitCode: null, durationMs: null };
+    vi.spyOn(dashboardAPI, 'getTask').mockImplementation(async () => ({
+      status: 200,
+      task: settled
+        ? { ...taskBase, status: 'done' as TaskStatus, exitCode: 0, finishedAt: 2, durationMs: 100, logs: [{ stream: 'stdout', text: '1 test passed', at: 1 }] }
+        : runningTask,
+    }));
+    vi.spyOn(dashboardAPI, 'startTask').mockResolvedValue({ ok: true, task: runningTask });
+    const cancelSpy = vi.spyOn(dashboardAPI, 'cancelTask').mockResolvedValue({ ok: true });
+    render(<ChatPage />);
+    await waitFor(() => expect(screen.getByPlaceholderText(/Message the agent/)).toBeTruthy());
+
+    // A confident command match shows the ⚡ confirm card.
+    fireEvent.change(screen.getByPlaceholderText(/Message the agent/), { target: { value: 'run the tests' } });
+    fireEvent.submit(screen.getByPlaceholderText(/Message the agent/).closest('form')!);
+    await waitFor(() => expect(screen.getByText(/Run this command/)).toBeTruthy());
+
+    // ▶ Run starts the task and inserts a LIVE execution card.
+    fireEvent.click(screen.getByText('▶ Run'));
+    await waitFor(() => expect(screen.getByText('test run')).toBeTruthy());
+    expect(screen.getByText(/⏳ running/)).toBeTruthy();
+
+    // Streamed logs land in the card.
+    logCb!({ stream: 'stdout', text: '1 test passed', at: 1 });
+    await waitFor(() => expect(screen.getByText('1 test passed')).toBeTruthy());
+
+    // Cancel is available while running (scope to the TASK card — the busy
+    // composer also renders a ⏹ Cancel for the agent turn).
+    const taskCancel = document.querySelector('.chat-task-card .admin-mini-btn') as HTMLButtonElement;
+    expect(taskCancel).toBeTruthy();
+    fireEvent.click(taskCancel);
+    await waitFor(() => expect(cancelSpy).toHaveBeenCalledWith('task-1'));
+
+    // Settling the status shows the exit code and releases busy (the status
+    // event itself carries no exit code — the final snapshot provides it).
+    settled = true;
+    statusCb!('done');
+    await waitFor(() => expect(screen.getByText(/exit 0/)).toBeTruthy());
+    expect(unsub).toHaveBeenCalled();
   });
 });
