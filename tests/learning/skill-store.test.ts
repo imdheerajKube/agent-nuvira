@@ -360,26 +360,31 @@ describe('SkillStore', () => {
       expect(match!.name).toBe('website-deploy');
     });
 
-    it('P5 — seeds all five bundled skills (website-deploy + the four capability skills)', () => {
+    it('P5 — seeds all six bundled skills (website-deploy + the four capability skills + docx)', () => {
       const fresh = new SkillStore();
       const names = fresh.getAll().map((s) => s.name).sort();
       expect(names).toEqual([
         'code-assessment',
+        'docx',
         'plan-create-track',
         'technical-roadmap',
         'test-strategy',
         'website-deploy',
       ]);
-      // Each carries the depth bar: ordered steps + parameters.
+      // Each carries the depth bar: ordered steps + parameters (docx is a
+      // methodology skill — steps yes, no parameters by design).
       for (const name of ['code-assessment', 'technical-roadmap', 'plan-create-track', 'test-strategy']) {
         const skill = fresh.get(`skill-${name}`)!;
         expect(skill.steps.length).toBeGreaterThanOrEqual(3);
         expect(skill.parameters.length).toBeGreaterThanOrEqual(1);
         expect(skill.steps[0].dependsOn).toEqual([]);
       }
+      const docx = fresh.get('skill-docx')!;
+      expect(docx.steps.length).toBeGreaterThanOrEqual(3);
+      expect(docx.steps[0].dependsOn).toEqual([]);
     });
 
-    it('P5 — idempotent re-seed keeps all five (no duplicates, edits preserved)', () => {
+    it('P5 — idempotent re-seed keeps all six (no duplicates, edits preserved)', () => {
       const fresh = new SkillStore();
       const before = fresh.getAll().length;
       const seededCount = fresh.seedBundledSkills();
