@@ -2928,6 +2928,101 @@ body {
   color: #f87171;
 }
 
+/* ─── Folder browser popover (project picker) ───────────────────────── */
+.chat-project-pick {
+  position: relative;
+}
+
+.chat-browse-popover {
+  position: absolute;
+  top: 100%;
+  left: 0;
+  z-index: 100;
+  width: 380px;
+  max-height: 360px;
+  background: var(--bg-card);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.3);
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  margin-top: 4px;
+}
+
+.chat-browse-head {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 8px 10px;
+  border-bottom: 1px solid var(--border);
+  font-size: 11px;
+}
+
+.chat-browse-path {
+  flex: 1;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  color: var(--text-secondary);
+}
+
+.chat-browse-list {
+  flex: 1;
+  overflow-y: auto;
+  padding: 4px;
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+}
+
+.chat-browse-entry {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  width: 100%;
+  padding: 6px 8px;
+  border: none;
+  background: transparent;
+  color: var(--text-primary);
+  font-size: 12px;
+  border-radius: 6px;
+  cursor: pointer;
+  text-align: left;
+}
+
+.chat-browse-entry:hover {
+  background: rgba(255, 255, 255, 0.06);
+}
+
+.chat-browse-foot {
+  padding: 8px 10px;
+  border-top: 1px solid var(--border);
+}
+
+/* P4b — resumed-session project-mismatch banner. */
+.chat-session-project-banner {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 8px 14px;
+  background: var(--bg-tertiary);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  margin: 0 14px 8px;
+  font-size: 13px;
+  color: var(--text-secondary);
+}
+.chat-session-project-banner code {
+  background: var(--bg-primary);
+  padding: 2px 6px;
+  border-radius: 4px;
+  font-size: 12px;
+  color: var(--text-primary);
+  word-break: break-all;
+}
+
 /* ─── Session sidebar (Phase 4) ───────────────────────────────────────── */
 .chat-layout {
   display: flex;
