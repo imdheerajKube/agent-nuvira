@@ -55,6 +55,7 @@ export class DashboardCommand extends BaseCommand {
             .option('--no-open', 'Do not auto-open the browser')
             .option('--build', 'Build the dashboard (npm run build:dashboard) before starting')
             .option('--force', 'Detect a stale dashboard on the port (API/SSE mismatch) and offer to restart it')
+            .option('--cwd <dir>', 'Working directory for the dashboard (default: process.cwd())')
             .action(async (options) => {
             await this.launchDashboard(options || {});
         });
@@ -87,6 +88,20 @@ export class DashboardCommand extends BaseCommand {
         }
     }
     async launchDashboard(options) {
+        // --cwd overrides the dashboard's working directory: the 'current dir'
+        // chip in the chat picker reflects process.cwd(), so changing it early
+        // makes the dashboard behave as if launched from that directory.
+        if (options.cwd) {
+            const { resolve } = await import('node:path');
+            const target = resolve(options.cwd);
+            try {
+                process.chdir(target);
+            }
+            catch (err) {
+                logger.error(`Cannot chdir to --cwd ${target}: ${err instanceof Error ? err.message : String(err)}`);
+                return;
+            }
+        }
         const port = options.port || 3030;
         const host = options.host || '127.0.0.1';
         const shouldOpen = options.open !== false;

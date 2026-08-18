@@ -622,6 +622,8 @@ export default function ChatPage() {
   const [browseLoading, setBrowseLoading] = useState(false);
   const subRef = useRef<(() => void) | null>(null);
   const listRef = useRef<HTMLDivElement | null>(null);
+  // P4b — ref to break the circular dependency between resumeSession and attachProject.
+  const attachProjectRef = useRef<((path: string) => Promise<void>) | null>(null);
   // P0.1 — a pending ask_user question from the agent (choice card).
   const [pendingQuestion, setPendingQuestion] = useState<{
     questionId: string;
@@ -697,11 +699,11 @@ export default function ChatPage() {
       // If the project is already attached and matches, no action needed.
       if (attachedProject?.path === storedPath) return;
       // Try to re-attach: the server will build the context bundle if the dir exists.
-      void attachProject(storedPath);
+      void attachProjectRef.current?.(storedPath);
     } else {
       setSessionProjectPath(null);
     }
-  }, [attachedProject, attachProject]);
+  }, [attachedProject]);
 
   /** P8 — start a fresh session (sidebar + New chat button). */
   const newChat = useCallback(() => {
@@ -838,6 +840,8 @@ export default function ChatPage() {
       setProjectError(r.error || 'Could not attach that directory.');
     }
   }, []);
+  // P4b — keep the ref in sync so resumeSession can call attachProject without a direct dependency.
+  attachProjectRef.current = attachProject;
 
   /** Browse directories for the folder picker. */
   const openBrowse = useCallback(async (startPath?: string) => {
