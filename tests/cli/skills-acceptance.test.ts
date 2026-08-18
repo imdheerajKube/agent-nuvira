@@ -7,7 +7,7 @@
  * points `BUFF_SKILLS_REGISTRY` at the COMMITTED files (exactly what GitHub
  * will serve after push — same layout, same frontmatter) and proves the
  * three surfaces agree:
- *   1. `buff skills search` finds each of the five bundled skills
+ *   1. `buff skills search` finds each of the six bundled skills
  *   2. `buff skills install` lands the real SKILL.md in a project
  *   3. the hub catalog reads that installed skill and matches a goal to it
  *
