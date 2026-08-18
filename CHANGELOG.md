@@ -2,6 +2,10 @@
 
 All notable changes to **Agent-Nuvira** are documented in this file.
 
+## v1.75.1 — hotfix: dashboard blank page on load (resumeSession temporal dead zone)
+
+- **Fixed: dashboard blank page** — `resumeSession` referenced `attachProject` in its dependency array, but `attachProject` was defined after `resumeSession` in the component. This caused a `ReferenceError` at render time (temporal dead zone for `const`), crashing React and showing a black blank page. Fix: use an `attachProjectRef` to break the circular dependency.
+
 ## v1.75.0 — session resume + project-aware chat (--cwd, browse, context scoping)
 
 - **`--cwd` option for `agent-nuvira dashboard`** — override the working directory at launch so the "📂 current dir" chip points to your project (`agent-nuvira dashboard --cwd ~/my-app`), eliminating the mismatch when launching from a different directory
