@@ -320,9 +320,10 @@ export function formatModelName(modelId: string): string {
  * Get a recommendation badge / description for a model.
  * Some well-known models get a short blurb about what they excel at.
  */
+import { generateDynamicBadge } from './dynamic-catalog.js';
+
 export function getModelBadge(modelId: string): string | undefined {
   // Dynamic badge generation — pattern-based, no hardcoded model names.
   // This ensures the system adapts when providers add/remove models.
-  const { generateDynamicBadge } = require('./dynamic-catalog.js');
   return generateDynamicBadge(modelId);
 }

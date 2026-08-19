@@ -44,11 +44,8 @@ const BUILTIN_TEMPLATES = [
                 dependsOn: ['step-3'],
             },
         ],
-        recommendedModels: {
-            'context-gatherer': 'groq/llama-3.1-8b-instant',
-            writer: 'groq/llama-3.1-8b-instant',
-            reviewer: 'groq/llama-3.1-8b-instant',
-        },
+        // Models auto-selected by the router based on task complexity
+        recommendedModels: {},
     },
     {
         id: 'create-and-run',
@@ -71,9 +68,7 @@ const BUILTIN_TEMPLATES = [
                 dependsOn: ['step-1'],
             },
         ],
-        recommendedModels: {
-            writer: 'groq/llama-3.1-8b-instant',
-        },
+        recommendedModels: {},
     },
     {
         id: 'feature-implement',
@@ -116,13 +111,7 @@ const BUILTIN_TEMPLATES = [
                 dependsOn: ['step-5'],
             },
         ],
-        recommendedModels: {
-            planner: 'groq/llama-3.1-8b-instant',
-            'context-gatherer': 'groq/llama-3.1-8b-instant',
-            writer: 'groq/llama-3.1-8b-instant',
-            tester: 'groq/llama-3.1-8b-instant',
-            reviewer: 'groq/llama-3.1-8b-instant',
-        },
+        recommendedModels: {},
         useMemory: true,
     },
     {
@@ -166,10 +155,7 @@ const BUILTIN_TEMPLATES = [
                 dependsOn: ['step-5'],
             },
         ],
-        recommendedModels: {
-            writer: 'groq/llama-3.1-8b-instant',
-            reviewer: 'groq/llama-3.1-8b-instant',
-        },
+        recommendedModels: {},
         useMemory: false,
         tags: ['release', 'publish', 'devops'],
     },
@@ -209,12 +195,7 @@ const BUILTIN_TEMPLATES = [
                 dependsOn: ['step-4'],
             },
         ],
-        recommendedModels: {
-            planner: 'groq/llama-3.1-8b-instant',
-            'context-gatherer': 'groq/llama-3.1-8b-instant',
-            writer: 'groq/llama-3.1-8b-instant',
-            reviewer: 'groq/llama-3.1-8b-instant',
-        },
+        recommendedModels: {},
         useMemory: true,
         tags: ['api', 'scaffold', 'rest', 'backend'],
     },
@@ -245,11 +226,7 @@ const BUILTIN_TEMPLATES = [
                 dependsOn: ['step-2'],
             },
         ],
-        recommendedModels: {
-            'context-gatherer': 'groq/llama-3.1-8b-instant',
-            writer: 'groq/llama-3.1-8b-instant',
-            reviewer: 'openrouter/meta-llama/llama-3.1-8b-instruct',
-        },
+        recommendedModels: {},
         useMemory: false,
         tags: ['security', 'audit', 'scan'],
     },
@@ -292,8 +269,6 @@ const BUILTIN_TEMPLATES = [
         recommendedModels: {
             // 'default' = the agent resolves a verified working model at runtime
             planner: 'default',
-            writer: 'groq/llama-3.1-8b-instant',
-            reviewer: 'groq/llama-3.1-8b-instant',
         },
         useMemory: true,
         tags: ['refactor', 'cleanup', 'optimize'],
@@ -324,11 +299,7 @@ const BUILTIN_TEMPLATES = [
                 dependsOn: ['step-2'],
             },
         ],
-        recommendedModels: {
-            'context-gatherer': 'groq/llama-3.1-8b-instant',
-            reviewer: 'openrouter/meta-llama/llama-3.1-8b-instruct',
-            writer: 'groq/llama-3.1-8b-instant',
-        },
+        recommendedModels: {},
         useMemory: false,
         tags: ['review', 'code-quality', 'git'],
     },
@@ -368,11 +339,7 @@ const BUILTIN_TEMPLATES = [
                 dependsOn: ['step-4'],
             },
         ],
-        recommendedModels: {
-            planner: 'groq/llama-3.1-8b-instant',
-            writer: 'groq/llama-3.1-8b-instant',
-            debugger: 'groq/llama-3.1-8b-instant',
-        },
+        recommendedModels: {},
         useMemory: true,
         tags: ['debug', 'fix', 'bug'],
     },
@@ -407,11 +374,8 @@ const BUILTIN_TEMPLATES = [
                 dependsOn: ['step-3'],
             },
         ],
-        recommendedModels: {
-            'context-gatherer': 'groq/llama-3.1-8b-instant',
-            writer: 'groq/llama-3.1-8b-instant',
-            reviewer: 'groq/llama-3.1-8b-instant',
-        },
+        // Models auto-selected by the router based on task complexity
+        recommendedModels: {},
         useMemory: false,
         tags: ['test', 'coverage', 'qa'],
     },

@@ -45,9 +45,5 @@ export declare function getModelTags(modelId: string, _owner?: string): string[]
  * Example: "meta-llama/llama-3.3-70b-instruct" → "Llama 3.3 70B Instruct"
  */
 export declare function formatModelName(modelId: string): string;
-/**
- * Get a recommendation badge / description for a model.
- * Some well-known models get a short blurb about what they excel at.
- */
 export declare function getModelBadge(modelId: string): string | undefined;
 //# sourceMappingURL=model-catalog.d.ts.map

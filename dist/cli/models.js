@@ -207,6 +207,92 @@ export class ModelsCommand extends BaseCommand {
             console.log('');
             console.log(await registry.formatStatus());
         });
+        // ── Subcommand: models staleness — show model freshness status ────────
+        command
+            .command('staleness')
+            .description('Show model staleness: last probe time, days since verification, and removal risk')
+            .option('-j, --json', 'Output as JSON', false)
+            .action(async (opts) => {
+            const registry = getModelRegistry();
+            const now = Date.now();
+            const rawEntries = registry.data?.entries ?? {};
+            const entries = Object.values(rawEntries);
+            if (opts?.json) {
+                const jsonEntries = entries.map((e) => ({
+                    provider: e.provider,
+                    model: e.model,
+                    status: e.status,
+                    lastVerifiedAt: e.lastVerifiedAt,
+                    lastProbedAt: e.lastProbedAt,
+                    lastUsedAt: e.lastUsedAt,
+                    errorRate: e.errorRate,
+                    daysSinceVerified: e.lastVerifiedAt ? Math.floor((now - e.lastVerifiedAt) / 86400000) : null,
+                    daysSinceProbed: e.lastProbedAt ? Math.floor((now - e.lastProbedAt) / 86400000) : null,
+                    stale: e.lastProbedAt ? (now - e.lastProbedAt) > 7 * 86400000 : false,
+                    probablyRemoved: e.lastProbedAt ? ((now - e.lastProbedAt) > 30 * 86400000 && e.errorRate > 0.5) : false,
+                }));
+                console.log(JSON.stringify(jsonEntries, null, 2));
+                return;
+            }
+            console.log('');
+            console.log('🔍 Model Staleness Report');
+            console.log('─'.repeat(80));
+            // Group by provider
+            const byProvider = new Map();
+            for (const e of entries) {
+                if (!byProvider.has(e.provider))
+                    byProvider.set(e.provider, []);
+                byProvider.get(e.provider).push(e);
+            }
+            const STALE_DAYS = 7;
+            const REMOVED_DAYS = 30;
+            let totalStale = 0;
+            let totalRemoved = 0;
+            let totalFresh = 0;
+            for (const [provider, models] of byProvider) {
+                models.sort((a, b) => (b.lastProbedAt || 0) - (a.lastProbedAt || 0));
+                const staleModels = models.filter((m) => m.lastProbedAt && (now - m.lastProbedAt) > STALE_DAYS * 86400000);
+                const removedModels = models.filter((m) => m.lastProbedAt && (now - m.lastProbedAt) > REMOVED_DAYS * 86400000 && m.errorRate > 0.5);
+                const freshModels = models.filter((m) => !m.lastProbedAt || (now - m.lastProbedAt) <= STALE_DAYS * 86400000);
+                totalStale += staleModels.length;
+                totalRemoved += removedModels.length;
+                totalFresh += freshModels.length;
+                const hasIssues = staleModels.length > 0 || removedModels.length > 0;
+                const icon = hasIssues ? '⚠️' : '✅';
+                console.log(`\n${icon} ${provider} (${models.length} models, ${freshModels.length} fresh, ${staleModels.length} stale, ${removedModels.length} likely removed)`);
+                // Show stale/removed models first
+                for (const m of removedModels) {
+                    const daysSince = m.lastProbedAt ? Math.floor((now - m.lastProbedAt) / 86400000) : '?';
+                    console.log(`   🔴 ${m.model} — LIKELY REMOVED (${daysSince} days since probe, ${(m.errorRate * 100).toFixed(0)}% error rate)`);
+                }
+                for (const m of staleModels) {
+                    if (removedModels.includes(m))
+                        continue;
+                    const daysSince = m.lastProbedAt ? Math.floor((now - m.lastProbedAt) / 86400000) : '?';
+                    console.log(`   🟡 ${m.model} — STALE (${daysSince} days since probe)`);
+                }
+                // Show fresh models (abbreviated)
+                if (freshModels.length > 0 && freshModels.length <= 5) {
+                    for (const m of freshModels) {
+                        const daysSince = m.lastProbedAt ? Math.floor((now - m.lastProbedAt) / 86400000) : '?';
+                        const verified = m.status === 'verified' ? '✅' : '⬜';
+                        console.log(`   ${verified} ${m.model} — fresh (${daysSince}d ago)`);
+                    }
+                }
+                else if (freshModels.length > 5) {
+                    console.log(`   ✅ ${freshModels.length} models fresh (< ${STALE_DAYS} days)`);
+                }
+            }
+            console.log('');
+            console.log('─'.repeat(80));
+            console.log(`📊 Summary: ${totalFresh} fresh · ${totalStale} stale · ${totalRemoved} likely removed`);
+            if (totalStale > 0 || totalRemoved > 0) {
+                console.log('');
+                console.log('💡 Run `buff models refresh` to re-probe all providers and update staleness data.');
+                console.log('   Run `buff models watch` to keep the registry fresh automatically.');
+            }
+            console.log('');
+        });
         // ── Subcommand: models watch — background maintenance daemon ──────────
         command
             .command('watch')

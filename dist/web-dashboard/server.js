@@ -540,6 +540,7 @@ async function readModelsHealth() {
         checkLMStudioProvider(),
         checkAnyscaleProvider(),
         checkVLLMProvider(),
+        checkBedrockProvider(),
     ]);
     const providers = results.filter(Boolean);
     const totalModels = providers.reduce((sum, p) => sum + p.models.length, 0);
@@ -4633,6 +4634,42 @@ async function checkVLLMProvider() {
     }
     else {
         result.models = [{ id: '(offline)', name: 'vLLM/TGI not running', status: 'unavailable', statusReason: `Start server at ${baseUrl}` }];
+    }
+    return result;
+}
+/** Check Amazon Bedrock provider — uses Bearer token auth */
+async function checkBedrockProvider() {
+    const apiKey = process.env.AWS_BEARER_TOKEN_BEDROCK;
+    const result = {
+        provider: 'bedrock', providerLabel: 'Amazon Bedrock', icon: '🟠',
+        apiConfigured: !!apiKey, apiAccessible: false, canGenerate: false,
+        overallStatus: 'unavailable', models: [],
+        notes: 'Amazon Bedrock — AWS managed AI models',
+        freeTierInfo: 'Pay-per-use pricing',
+    };
+    if (!apiKey) {
+        result.models = [{ id: '(no key)', name: 'AWS_BEARER_TOKEN_BEDROCK not set', status: 'unavailable', statusReason: 'Set AWS_BEARER_TOKEN_BEDROCK in ~/.buff/.env' }];
+        return result;
+    }
+    // Test with a lightweight invoke call to Amazon Nova Micro
+    const testModels = ['amazon.nova-micro-v1:0', 'anthropic.claude-3-haiku-20240307-v1:0'];
+    for (const modelId of testModels) {
+        const url = `https://bedrock-runtime.us-east-1.amazonaws.com/model/${modelId}/invoke`;
+        const check = await fetchWithTimeout(url, {
+            method: 'POST',
+            headers: { 'Authorization': `Bearer ${apiKey}`, 'Content-Type': 'application/json' },
+            body: JSON.stringify({ messages: [{ role: 'user', content: [{ text: 'Hi' }] }], maxTokens: 10 }),
+        });
+        if (check.ok && check.data?.output) {
+            result.apiAccessible = true;
+            result.canGenerate = true;
+            result.overallStatus = 'available';
+            result.models = [{ id: modelId, name: modelId, status: 'available', statusReason: 'Verified via Bedrock API' }];
+            break;
+        }
+    }
+    if (!result.apiAccessible) {
+        result.models = [{ id: '(offline)', name: 'Bedrock API unreachable', status: 'unavailable', statusReason: 'Check API key and permissions' }];
     }
     return result;
 }
