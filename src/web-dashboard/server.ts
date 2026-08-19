@@ -3363,6 +3363,70 @@ function handleRequest(req: IncomingMessage, res: ServerResponse): void {
     return;
   }
 
+  // Model Discovery Timeline endpoint
+  if (pathname === '/api/model-timeline') {
+    try {
+      const registryData = readJSON<{ entries: Record<string, {
+        provider: string;
+        model: string;
+        status: string;
+        lastVerifiedAt?: number;
+        lastProbedAt?: number;
+        lastUsedAt?: number;
+        errorRate?: number;
+        latencyMs?: number;
+        contextWindowTokens?: number;
+        firstSeenAt?: number;
+      }> }>(join(MEMORY_DIR, 'model-registry.json'));
+      const now = Date.now();
+      const entries = Object.values(registryData?.entries ?? {});
+      
+      const STALE_DAYS = 7;
+      const REMOVED_DAYS = 30;
+      
+      let freshCount = 0;
+      let staleCount = 0;
+      let removedCount = 0;
+      
+      const timelineEntries = entries.map((e: any) => {
+        const daysSinceProbe = e.lastProbedAt ? (now - e.lastProbedAt) / (24 * 60 * 60 * 1000) : Infinity;
+        const isStale = daysSinceProbe > STALE_DAYS;
+        const isRemoved = daysSinceProbe > REMOVED_DAYS && e.errorRate > 0.5;
+        
+        if (isRemoved) removedCount++;
+        else if (isStale) staleCount++;
+        else freshCount++;
+        
+        return {
+          provider: e.provider,
+          model: e.model,
+          status: e.status,
+          lastVerifiedAt: e.lastVerifiedAt || 0,
+          lastProbedAt: e.lastProbedAt || 0,
+          lastUsedAt: e.lastUsedAt || 0,
+          errorRate: e.errorRate || 0,
+          latencyMs: e.latencyMs,
+          contextWindowTokens: e.contextWindowTokens,
+          firstSeenAt: e.firstSeenAt || e.lastProbedAt || 0,
+        };
+      });
+      
+      res.writeHead(200, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({
+        entries: timelineEntries,
+        lastUpdated: now,
+        totalModels: entries.length,
+        freshCount,
+        staleCount,
+        removedCount,
+      }));
+    } catch (err) {
+      res.writeHead(500, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({ error: 'Failed to load timeline data' }));
+    }
+    return;
+  }
+
   if (pathname === '/api/requests') {
     res.writeHead(200, { 'Content-Type': 'application/json' });
     res.end(JSON.stringify(readRequestsData()));

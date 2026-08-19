@@ -17,6 +17,7 @@ const NAV_ITEMS = [
   { path: '/platforms', label: 'Platforms', icon: '🌐' },
   { path: '/gateway', label: 'Gateway', icon: '📡' },
   { path: '/models', label: 'Models', icon: '🧠' },
+  { path: '/models/timeline', label: 'Timeline', icon: '📅' },
   { path: '/routing', label: 'Routing', icon: '🤖' },
   { path: '/requests', label: 'Requests', icon: '📨' },
   { path: '/hub', label: 'Agent Hub', icon: '🧰' },
