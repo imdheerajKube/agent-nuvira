@@ -4835,3 +4835,36 @@ body {
   white-space: normal;
   text-align: left;
 }
+
+/* ═══ Model Discovery Timeline ═══ */
+.timeline-bar-container {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 120px;
+  max-width: 200px;
+}
+.timeline-bar {
+  height: 6px;
+  background: #21262d;
+  border-radius: 3px;
+  overflow: hidden;
+  width: 100%;
+}
+.timeline-bar.small {
+  height: 3px;
+}
+.timeline-bar-fill {
+  height: 100%;
+  border-radius: 3px;
+  transition: width 0.3s ease;
+}
+.timeline-bar-fill.probe {
+  background: #58a6ff;
+}
+.timeline-bar-fill.verify {
+  background: #3fb950;
+}
+.timeline-bar-fill.use {
+  background: #d29922;
+}

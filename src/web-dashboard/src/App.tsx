@@ -21,6 +21,7 @@ import ChatPage from './components/ChatPage';
 import EvalsPage from './components/EvalsPage';
 import GatewayPage from './components/GatewayPage';
 import PlatformsPage from './components/PlatformsPage';
+import ModelTimeline from './components/ModelTimeline';
 
 export default function App() {
   const [data, setData] = useState<DashboardData | null>(null);
@@ -68,6 +69,7 @@ export default function App() {
         <Route path="/benchmarks" element={<BenchmarkCharts data={data} />} />
         <Route path="/memory" element={<MemoryPanel data={data} />} />
         <Route path="/models" element={<ModelsPanel />} />
+        <Route path="/models/timeline" element={<ModelTimeline />} />
         <Route path="/routing" element={<RoutingInsightsPanel data={data} />} />
         <Route path="/requests" element={<RequestsPanel data={data} />} />
         <Route path="/traces" element={<TracePanel />} />
