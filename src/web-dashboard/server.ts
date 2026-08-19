@@ -3967,9 +3967,8 @@ function handleRequest(req: IncomingMessage, res: ServerResponse): void {
     return;
   }
 
-  // GET /api/browse?path=<dir> — list subdirectories of a path for the
-  // frontend folder browser (project picker). Returns directories + a flag
-  // indicating whether the path itself can be attached as a project.
+  // GET /api/browse?path=<dir>&showDrives=1 — list subdirectories for the
+  // frontend folder browser (project picker). showDrives=1 returns drive roots.
   if (pathname === '/api/browse' && req.method === 'GET') {
     const session = adminSessions.validate(bearerToken(req));
     if (!session) {
@@ -3980,24 +3979,63 @@ function handleRequest(req: IncomingMessage, res: ServerResponse): void {
       writeJson(res, 403, { ok: false, error: `Access denied — role '${session.role}' cannot browse directories.` });
       return;
     }
-    // Extract ?path= from the URL query string.
     const urlObj = new URL(req.url || '/', `http://${req.headers.host || 'localhost'}`);
     const rawPath = urlObj.searchParams.get('path') || '';
+    const showDrives = urlObj.searchParams.get('showDrives') === '1';
     const dirPath = rawPath.trim();
+
+    // Collect drive roots for the platform.
+    const homeDir = homedir();
+    const collectDrives = (): Array<{ name: string; path: string; type: string }> => {
+      const drives: Array<{ name: string; path: string; type: string }> = [];
+      const plat = process.platform;
+      if (plat === 'win32') {
+        drives.push({ name: '🏠 Home', path: homeDir, type: 'home' });
+        for (const ch of 'CDEFGH'.split('')) {
+          const dp = `${ch}:\\`;
+          try { if (existsSync(dp)) drives.push({ name: `${ch}:`, path: dp, type: 'drive' }); } catch { /* skip */ }
+        }
+      } else if (plat === 'darwin') {
+        drives.push({ name: '🏠 Home', path: homeDir, type: 'home' });
+        try {
+          const vols = readdirSync('/Volumes', { withFileTypes: true })
+            .filter((e) => e.isDirectory())
+            .map((e) => ({ name: `💾 ${e.name}`, path: `/Volumes/${e.name}`, type: 'drive' }));
+          drives.push(...vols);
+        } catch { /* /Volumes may not exist */ }
+        drives.push({ name: ' Root /', path: '/', type: 'system' });
+      } else {
+        drives.push({ name: '🏠 Home', path: homeDir, type: 'home' });
+        drives.push({ name: ' Root /', path: '/', type: 'system' });
+      }
+      return drives;
+    };
+
+    // No path → show home directory contents + drive bar.
     if (!dirPath) {
-      // No path given — start from the user's home directory.
-      const homeDir = homedir();
       try {
         const entries = readdirSync(homeDir, { withFileTypes: true })
-          .filter((e) => e.isDirectory())
-          .map((e) => ({ name: e.name, path: join(homeDir, e.name) }))
-          .slice(0, 50);
-        writeJson(res, 200, { ok: true, path: homeDir, entries, parent: null, isProject: existsSync(homeDir) && statSync(homeDir).isDirectory() });
+          .filter((e) => e.isDirectory() && !e.name.startsWith('.'))
+          .map((e) => {
+            const fp = join(homeDir, e.name);
+            let modified = 0;
+            try { modified = statSync(fp).mtimeMs; } catch { /* skip */ }
+            return { name: e.name, path: fp, isDir: true, modified };
+          })
+          .sort((a, b) => a.name.localeCompare(b.name))
+          .slice(0, 100);
+        writeJson(res, 200, {
+          ok: true, path: homeDir, entries, parent: null,
+          isProject: existsSync(homeDir) && statSync(homeDir).isDirectory(),
+          drives: collectDrives(),
+          breadcrumbs: [{ name: 'Home', path: homeDir }],
+        });
       } catch {
-        writeJson(res, 200, { ok: true, path: homeDir, entries: [], parent: null, isProject: false });
+        writeJson(res, 200, { ok: true, path: homeDir, entries: [], parent: null, isProject: false, drives: collectDrives(), breadcrumbs: [] });
       }
       return;
     }
+
     const target = isAbsolute(dirPath) ? dirPath : resolve(dirPath);
     if (!existsSync(target) || !statSync(target).isDirectory()) {
       writeJson(res, 400, { ok: false, error: `Not a directory: ${target}` });
@@ -4006,13 +4044,29 @@ function handleRequest(req: IncomingMessage, res: ServerResponse): void {
     try {
       const entries = readdirSync(target, { withFileTypes: true })
         .filter((e) => e.isDirectory() && !e.name.startsWith('.'))
-        .map((e) => ({ name: e.name, path: join(target, e.name) }))
+        .map((e) => {
+          const fp = join(target, e.name);
+          let modified = 0;
+          try { modified = statSync(fp).mtimeMs; } catch { /* skip */ }
+          return { name: e.name, path: fp, isDir: true, modified };
+        })
         .sort((a, b) => a.name.localeCompare(b.name))
         .slice(0, 100);
       const parent = dirname(target);
-      writeJson(res, 200, { ok: true, path: target, entries, parent: parent !== target ? parent : null, isProject: true });
+      const parts = target.split(/[\/]/).filter(Boolean);
+      const breadcrumbs: Array<{ name: string; path: string }> = [];
+      let cum = target.startsWith('/') ? '/' : '';
+      for (const part of parts) {
+        cum = cum === '/' ? `/${part}` : `${cum}/${part}`;
+        breadcrumbs.push({ name: part, path: cum });
+      }
+      writeJson(res, 200, {
+        ok: true, path: target, entries,
+        parent: parent !== target ? parent : null,
+        isProject: true, breadcrumbs,
+      });
     } catch {
-      writeJson(res, 200, { ok: true, path: target, entries: [], parent: dirname(target), isProject: true });
+      writeJson(res, 200, { ok: true, path: target, entries: [], parent: dirname(target), isProject: true, breadcrumbs: [] });
     }
     return;
   }

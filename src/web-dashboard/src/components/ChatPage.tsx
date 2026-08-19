@@ -617,9 +617,13 @@ export default function ChatPage() {
   // Folder browser popover for the project picker.
   const [browseOpen, setBrowseOpen] = useState(false);
   const [browsePath, setBrowsePath] = useState('');
-  const [browseEntries, setBrowseEntries] = useState<Array<{ name: string; path: string }>>([]);
+  const [browseEntries, setBrowseEntries] = useState<Array<{ name: string; path: string; isDir?: boolean; modified?: number }>>([]);
   const [browseParent, setBrowseParent] = useState<string | null>(null);
   const [browseLoading, setBrowseLoading] = useState(false);
+  const [browseDrives, setBrowseDrives] = useState<Array<{ name: string; path: string; type: string }>>([]);
+  const [browseBreadcrumbs, setBrowseBreadcrumbs] = useState<Array<{ name: string; path: string }>>([]);
+  const [browseFilter, setBrowseFilter] = useState('');
+  const browseRefreshRef = useRef<NodeJS.Timeout | null>(null);
   const subRef = useRef<(() => void) | null>(null);
   const listRef = useRef<HTMLDivElement | null>(null);
   // P4b — ref to break the circular dependency between resumeSession and attachProject.
@@ -847,25 +851,49 @@ export default function ChatPage() {
   const openBrowse = useCallback(async (startPath?: string) => {
     setBrowseOpen(true);
     setBrowseLoading(true);
-    const r = await dashboardAPI.browseDirectories(startPath);
+    setBrowseFilter('');
+    const r = await dashboardAPI.browseDirectories(startPath, { showDrives: !startPath });
     if (r.ok) {
       setBrowsePath(r.path);
       setBrowseEntries(r.entries);
       setBrowseParent(r.parent);
+      if (r.drives) setBrowseDrives(r.drives);
+      if (r.breadcrumbs) setBrowseBreadcrumbs(r.breadcrumbs);
     }
     setBrowseLoading(false);
   }, []);
 
   const browseTo = useCallback(async (dirPath: string) => {
     setBrowseLoading(true);
+    setBrowseFilter('');
     const r = await dashboardAPI.browseDirectories(dirPath);
     if (r.ok) {
       setBrowsePath(r.path);
       setBrowseEntries(r.entries);
       setBrowseParent(r.parent);
+      if (r.breadcrumbs) setBrowseBreadcrumbs(r.breadcrumbs);
     }
     setBrowseLoading(false);
   }, []);
+
+  /** Refresh the current browse directory (auto-refresh or manual). */
+  const refreshBrowse = useCallback(async () => {
+    if (!browsePath) return;
+    const r = await dashboardAPI.browseDirectories(browsePath);
+    if (r.ok) {
+      setBrowseEntries(r.entries);
+    }
+  }, [browsePath]);
+
+  /** Auto-refresh browse every 5 seconds when open. */
+  useEffect(() => {
+    if (browseOpen && browsePath) {
+      browseRefreshRef.current = setInterval(() => { void refreshBrowse(); }, 5000);
+    }
+    return () => {
+      if (browseRefreshRef.current) clearInterval(browseRefreshRef.current);
+    };
+  }, [browseOpen, browsePath, refreshBrowse]);
 
   const send = useCallback(
     async (text: string, withAttachments?: AttachmentChip[] | { skipResolve: boolean }) => {
@@ -1321,26 +1349,73 @@ export default function ChatPage() {
                 {browseOpen ? (
                   <div className="chat-browse-popover">
                     <div className="chat-browse-head">
-                      <button type="button" className="admin-mini-btn" onClick={() => setBrowseOpen(false)}>✕</button>
-                      <span className="chat-browse-path" title={browsePath}>{browsePath || '/'}</span>
-                      {browseParent ? (
-                        <button type="button" className="admin-mini-btn" onClick={() => void browseTo(browseParent)}>⬆️</button>
-                      ) : null}
+                      <button type="button" className="admin-mini-btn" onClick={() => setBrowseOpen(false)} title="Close">✕</button>
+                      {/* Breadcrumbs */}
+                      <div className="chat-browse-breadcrumbs">
+                        {browseDrives.length > 0 && !browsePath ? (
+                          <span className="admin-hint">Select a drive or home folder:</span>
+                        ) : (
+                          <>
+                            <button type="button" className="chat-breadcrumb" onClick={() => void openBrowse()}>🏠</button>
+                            {browseBreadcrumbs.map((b, i) => (
+                              <span key={b.path}>
+                                <span className="chat-breadcrumb-sep">/</span>
+                                <button type="button" className="chat-breadcrumb" onClick={() => void browseTo(b.path)}>{b.name}</button>
+                              </span>
+                            ))}
+                          </>
+                        )}
+                      </div>
                     </div>
+                    {/* Drive bar (Windows / Mac) */}
+                    {browseDrives.length > 0 && !browsePath ? (
+                      <div className="chat-browse-drives">
+                        {browseDrives.map((d) => (
+                          <button key={d.path} type="button" className="chat-browse-drive" onClick={() => void browseTo(d.path)}>
+                            {d.name}
+                          </button>
+                        ))}
+                      </div>
+                    ) : null}
+                    {/* Search filter */}
+                    {browseEntries.length > 5 ? (
+                      <div className="chat-browse-search">
+                        <input
+                          type="text"
+                          className="chat-browse-filter"
+                          placeholder="🔍 Filter folders…"
+                          value={browseFilter}
+                          onChange={(e) => setBrowseFilter(e.target.value)}
+                          autoFocus
+                        />
+                      </div>
+                    ) : null}
+                    {/* Folder list */}
                     <div className="chat-browse-list">
                       {browseLoading ? (
                         <span className="admin-hint">Loading…</span>
                       ) : browseEntries.length === 0 ? (
-                        <span className="admin-hint">No subdirectories</span>
+                        <span className="admin-hint">No subdirectories found</span>
                       ) : (
-                        browseEntries.map((e) => (
-                          <button key={e.path} type="button" className="chat-browse-entry" onClick={() => void browseTo(e.path)}>
-                            📁 {e.name}
-                          </button>
-                        ))
+                        browseEntries
+                          .filter((e) => !browseFilter || e.name.toLowerCase().includes(browseFilter.toLowerCase()))
+                          .map((e) => (
+                            <button key={e.path} type="button" className="chat-browse-entry" onClick={() => void browseTo(e.path)}>
+                              <span className="chat-browse-entry-icon">📁</span>
+                              <span className="chat-browse-entry-name">{e.name}</span>
+                              {e.modified ? (
+                                <span className="chat-browse-entry-date">
+                                  {new Date(e.modified).toLocaleDateString()}
+                                </span>
+                              ) : null}
+                            </button>
+                          ))
                       )}
                     </div>
                     <div className="chat-browse-foot">
+                      <button type="button" className="admin-mini-btn" onClick={() => void refreshBrowse()} title="Refresh folder list">
+                        🔄
+                      </button>
                       <button type="button" className="admin-refresh-btn" onClick={() => { setBrowseOpen(false); void attachProject(browsePath); }} disabled={!browsePath}>
                         📁 Select this folder
                       </button>
