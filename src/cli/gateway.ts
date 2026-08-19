@@ -179,15 +179,18 @@ export class GatewayCommand {
     // One-shot CLI send: disconnect the live transports (e.g. the WhatsApp
     // Baileys socket) so the process exits promptly instead of hanging on the
     // open socket. Idempotent + a no-op for webhook/poll adapters.
-    for (const adapter of adapters) {
+    for (const a of adapters) {
       try {
-        await adapter.stop();
+        await a.stop();
       } catch {
         /* best-effort */
       }
     }
     if (!ok) {
-      logger.error(`Send failed — adapter for '${ref.platform}' is not configured (set its env token)`);
+      logger.error(`Send to ${ref.platform}:${maskSenderId(ref.channelId)} failed.`);
+      logger.info(`  → Check that the platform token is set in ~/.buff/.env and the chat ID is valid.`);
+      logger.info(`  → Run 'buff gateway status' to verify the adapter is configured.`);
+      logger.info(`  → The message has been queued for retry (buff gateway delivery).`);
       process.exitCode = 1;
       return;
     }

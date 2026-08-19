@@ -1854,7 +1854,7 @@ let chatConsole = new ChatConsole({ persistPath: join(MEMORY_DIR, 'chat-sessions
 // the picker; both are in-memory (the workspace store records repo ids, not
 // local paths — this is the dashboard's own recency).
 const projectBundleCache = new Map();
-const recentProjects = new Set([process.cwd()]);
+const recentProjects = new Set();
 /** Get (or build) the cached bundle for a project path; null when invalid. */
 function getProjectBundle(path) {
     try {
@@ -3362,9 +3362,34 @@ function handleRequest(req, res) {
             return;
         }
         const canWrite = roleCan(session.role, 'routing.operate');
+        // Per-platform setup documentation links and one-line hints.
+        const SETUP_META = {
+            telegram: { url: 'https://core.telegram.org/bots#how-do-i-create-a-bot', hint: 'Create a bot via @BotFather on Telegram, copy the token, paste it here, then run `buff gateway start`.' },
+            discord: { url: 'https://discord.com/developers/applications', hint: 'Create an application + bot in the Discord Developer Portal, copy the bot token, paste it here, then run `buff gateway start`.' },
+            slack: { url: 'https://api.slack.com/apps', hint: 'Create a Slack app with Bot Token Scopes, install to workspace, copy the Bot Token, paste it here, then run `buff gateway start`.' },
+            whatsapp_cloud: { url: 'https://developers.facebook.com/docs/whatsapp/cloud-api/get-started', hint: 'Set up a Meta Cloud API phone number, paste the token + Phone ID here, then run `buff gateway start`.' },
+            email: { url: '', hint: 'Enter your SMTP relay host and auth credentials. The agent replies to incoming emails.' },
+            signal: { url: 'https://bbernhard.github.io/signal-cli-rest-api/', hint: 'Run signal-cli-rest-api, register an account, paste the account number here, then run `buff gateway start`.' },
+            dingtalk: { url: 'https://open.dingtalk.com/', hint: 'Create a custom robot in a DingTalk group, copy the webhook URL, paste it here, then run `buff gateway start`.' },
+            feishu: { url: 'https://open.feishu.cn/', hint: 'Create a bot in Feishu, copy the webhook URL, paste it here, then run `buff gateway start`.' },
+            wecom: { url: 'https://open.work.weixin.qq.com/', hint: 'Create a group bot in WeCom, copy the webhook URL, paste it here, then run `buff gateway start`.' },
+            mattermost: { url: 'https://developers.mattermost.com/', hint: 'Create an incoming webhook in Mattermost, copy the URL, paste it here, then run `buff gateway start`.' },
+            matrix: { url: 'https://spec.matrix.org/', hint: 'Enter your Matrix homeserver URL and an access token (from a bot user), then run `buff gateway start`.' },
+            webhook: { url: '', hint: 'Enter a generic webhook URL. The agent sends outbound webhooks to this URL.' },
+            bluebubbles: { url: 'https://docs.bluebubbles.io/', hint: 'Set up BlueBubbles server, paste the URL + password here, then run `buff gateway start`.' },
+            ntfy: { url: 'https://ntfy.sh/', hint: 'Enter an ntfy topic. The agent publishes to this topic (default server: ntfy.sh).' },
+            teams: { url: 'https://learn.microsoft.com/en-us/microsoftteams/platform/webhooks-and-connectors/how-to/add-incoming-webhook', hint: 'Create an incoming webhook in Microsoft Teams, paste the URL here, then run `buff gateway start`.' },
+            google_chat: { url: 'https://developers.google.com/workspace/chat/quickstart/webhooks', hint: 'Create a webhook in a Google Chat space, paste the URL here, then run `buff gateway start`.' },
+            weixin: { url: '', hint: 'Enter your Weixin iLink bot token, then run `buff gateway start`.' },
+            sms: { url: 'https://www.twilio.com/docs/messaging/quickstart/node', hint: 'Enter your Twilio Account SID, Auth Token, and sender phone number, then run `buff gateway start`.' },
+            irc: { url: '', hint: 'Enter the IRC server host and optional port/nickname/channel settings, then run `buff gateway start`.' },
+            simplex: { url: '', hint: 'Run the local simplex-chat daemon (ws://127.0.0.1:5225), paste the WebSocket URL here, then run `buff gateway start`.' },
+            homeassistant: { url: 'https://developers.home-assistant.io/docs/auth_api/', hint: 'Create a long-lived access token in Home Assistant, paste it here, then run `buff gateway start`.' },
+        };
         const platforms = configurablePlatforms().map((p) => {
             const st = platformConfigStatus(p);
             const meta = platformEnvVarMeta(p);
+            const setup = SETUP_META[p];
             return {
                 platform: p,
                 label: st.label,
@@ -3379,6 +3404,7 @@ function handleRequest(req, res) {
                         secret: m?.secret ?? false,
                     };
                 }),
+                ...(setup ? { setupUrl: setup.url, setupHint: setup.hint } : {}),
             };
         });
         writeJson(res, 200, { ok: true, platforms });
@@ -3471,7 +3497,7 @@ function handleRequest(req, res) {
             return;
         }
         const projects = [...recentProjects]
-            .map((p) => ({ path: p, name: basename(p) || p, kind: p === process.cwd() ? 'cwd' : 'recent' }))
+            .map((p) => ({ path: p, name: basename(p) || p, kind: 'recent' }))
             .filter((p) => existsSync(p.path) && statSync(p.path).isDirectory());
         writeJson(res, 200, { ok: true, projects });
         return;
