@@ -377,45 +377,26 @@ describe('getModelTags', () => {
 // ─── getModelBadge ─────────────────────────────────────────────────────────
 
 describe('getModelBadge', () => {
-  it('should return badge for known Groq models', () => {
-    expect(getModelBadge('llama-3.3-70b-versatile')).toBeTruthy();
-    expect(getModelBadge('llama-3.3-70b-versatile')).toContain('all-rounder');
-    expect(getModelBadge('llama-3.1-8b-instant')).toContain('Fast');
-    expect(getModelBadge('mixtral-8x7b-32768')).toContain('long context');
-    expect(getModelBadge('gemma2-9b-it')).toContain('Lightning');
-  });
-
-  it('should return badge for known Gemini models', () => {
-    // Current-gen (2026) aliases — the 2.x line is retired for new accounts.
-    expect(getModelBadge('gemini-flash-latest')).toContain('Latest Gemini Flash');
-    expect(getModelBadge('gemini-pro-latest')).toContain('Latest Gemini Pro');
-    expect(getModelBadge('gemini-3-flash-preview')).toContain('current-gen');
-    expect(getModelBadge('gemini-2.0-flash')).toContain('balances');
-    expect(getModelBadge('gemini-1.5-flash')).toContain('Quick');
-    expect(getModelBadge('gemini-1.5-pro')).toContain('Best quality');
-    expect(getModelBadge('gemini-2.0-flash-exp')).toContain('DEPRECATED');
-  });
-
-  it('should return badge for known OpenRouter models', () => {
-    expect(getModelBadge('openai/gpt-4o')).toContain('Top-tier');
-    expect(getModelBadge('openai/gpt-4o-mini')).toContain('Affordable');
-    expect(getModelBadge('anthropic/claude-sonnet-4-20250514')).toContain('agentic');
-    expect(getModelBadge('meta-llama/llama-3.3-70b-instruct')).toContain('versatile');
-  });
-
-  it('should return badge for known speech/audio models', () => {
-    expect(getModelBadge('whisper-large-v3')).toContain('transcription');
-    expect(getModelBadge('distil-whisper-large-v3-en')).toContain('STT');
+  it('should return badge for models based on patterns (dynamic catalog)', () => {
+    // Large models (70b, 120b)
+    expect(getModelBadge('llama-3.3-70b-versatile')).toContain('Large');
+    expect(getModelBadge('openai/gpt-oss-120b')).toContain('Large');
+    // Small models (7b, 8b)
+    expect(getModelBadge('llama-3.1-8b-instant')).toContain('Small');
+    expect(getModelBadge('gemma2-9b-it')).toContain('Small');
+    // Fast models (flash, lite, mini)
+    expect(getModelBadge('gemini-flash-latest')).toContain('Fast');
+    // Pro models (premium quality)
+    expect(getModelBadge('gemini-pro-latest')).toContain('Premium');
+    // Speech models
+    expect(getModelBadge('whisper-large-v3')).toContain('Speech');
     expect(getModelBadge('canopylabs/orpheus-v1-english')).toContain('speech');
   });
 
-  it('should return badge for known local/Ollama models', () => {
-    expect(getModelBadge('llama2')).toContain('offline');
-    expect(getModelBadge('llama3')).toContain('Modern');
-    expect(getModelBadge('deepseek-coder')).toContain('code');
-    expect(getModelBadge('codellama')).toContain('Code-focused');
-    expect(getModelBadge('mistral')).toContain('general-purpose');
-    expect(getModelBadge('phi')).toContain('Ultra-lightweight');
+  it('should return undefined for unknown models without matching patterns', () => {
+    expect(getModelBadge('completely-unknown-model')).toBeUndefined();
+    expect(getModelBadge('')).toBeUndefined();
+    expect(getModelBadge('gpt-5-unknown')).toBeUndefined();
   });
 
   it('should return undefined for unknown models', () => {

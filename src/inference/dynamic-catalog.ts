@@ -35,15 +35,16 @@ const BADGE_PATTERNS: Array<{
   { pattern: /32b/i, badge: () => 'Medium model — balanced', priority: 90 },
   { pattern: /27b/i, badge: () => 'Medium model — balanced', priority: 90 },
   { pattern: /20b/i, badge: () => 'Medium model — fast', priority: 90 },
+  { pattern: /9b/i, badge: () => 'Small model — fast, lightweight', priority: 90 },
   { pattern: /8b/i, badge: () => 'Small model — fast, lightweight', priority: 90 },
   { pattern: /7b/i, badge: () => 'Small model — fast, lightweight', priority: 90 },
 
-  // Speed indicators
-  { pattern: /flash/i, badge: () => 'Fast model — optimized for speed', priority: 80 },
-  { pattern: /lite/i, badge: () => 'Lightweight — fastest, lowest cost', priority: 80 },
-  { pattern: /mini/i, badge: () => 'Compact — fast and efficient', priority: 80 },
-  { pattern: /instant/i, badge: () => 'Ultra-fast — low latency', priority: 80 },
-  { pattern: /turbo/i, badge: () => 'Turbo — optimized for speed', priority: 80 },
+  // Speed indicators (word-boundary aware to avoid false positives like 'gemini' matching 'mini')
+  { pattern: /\bflash\b/i, badge: () => 'Fast model — optimized for speed', priority: 80 },
+  { pattern: /\blite\b/i, badge: () => 'Lightweight — fastest, lowest cost', priority: 80 },
+  { pattern: /\bmini\b/i, badge: () => 'Compact — fast and efficient', priority: 80 },
+  { pattern: /\binstant\b/i, badge: () => 'Ultra-fast — low latency', priority: 80 },
+  { pattern: /\bturbo\b/i, badge: () => 'Turbo — optimized for speed', priority: 80 },
 
   // Capability indicators
   { pattern: /pro/i, badge: () => 'Premium — best quality', priority: 70 },
