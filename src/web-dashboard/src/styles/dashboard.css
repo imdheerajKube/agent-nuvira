@@ -4345,6 +4345,91 @@ body {
   line-height: 1.4;
 }
 
+/* Getting Started wizard */
+.wizard-start-btn {
+  background: rgba(56, 189, 148, 0.15);
+  border: 1px solid rgba(56, 189, 148, 0.4);
+  color: #38bd94;
+  border-radius: 6px;
+  padding: 2px 8px;
+  font-size: 11px;
+  cursor: pointer;
+  white-space: nowrap;
+}
+
+.wizard-start-btn:hover {
+  background: rgba(56, 189, 148, 0.25);
+}
+
+.wizard-overlay {
+  position: fixed;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.6);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 1000;
+}
+
+.wizard-modal {
+  background: var(--bg-secondary, #161b22);
+  border: 1px solid var(--border-light, #30363d);
+  border-radius: 12px;
+  width: 520px;
+  max-width: 90vw;
+  max-height: 80vh;
+  overflow-y: auto;
+  box-shadow: 0 16px 48px rgba(0, 0, 0, 0.5);
+}
+
+.wizard-header {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 16px 20px;
+  border-bottom: 1px solid var(--border-light, #30363d);
+}
+
+.wizard-icon {
+  font-size: 20px;
+}
+
+.wizard-title {
+  font-size: 16px;
+  font-weight: 600;
+  color: var(--text-primary, #e6edf3);
+  flex: 1;
+}
+
+.wizard-body {
+  padding: 20px;
+}
+
+.wizard-section-title {
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--text-primary, #e6edf3);
+  margin: 0 0 12px;
+}
+
+.wizard-steps {
+  margin: 0 0 16px;
+  padding-left: 20px;
+  color: var(--text-secondary, #8b949e);
+  font-size: 13px;
+  line-height: 1.8;
+}
+
+.wizard-steps li {
+  margin-bottom: 4px;
+}
+
+.wizard-nav {
+  display: flex;
+  gap: 8px;
+  margin-top: 16px;
+}
+
 /* P6e — provenance chip (🧠 bundled ships with the product) */
 .hub-chip-bundled {
   background: rgba(188, 140, 255, 0.18) !important;

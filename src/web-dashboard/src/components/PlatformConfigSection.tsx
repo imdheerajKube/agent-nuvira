@@ -20,6 +20,12 @@ export function PlatformConfigSection({ canWrite, sessionExpired }: Props) {
   const [expanded, setExpanded] = useState<string | null>(null);
   const [busy, setBusy] = useState<string | null>(null);
   const [msg, setMsg] = useState<{ kind: 'ok' | 'err'; text: string } | null>(null);
+  // Getting Started wizard state.
+  const [wizardPlatform, setWizardPlatform] = useState<PlatformConfigEntry | null>(null);
+  const [wizardStep, setWizardStep] = useState(0);
+  const [wizardValues, setWizardValues] = useState<Record<string, string>>({});
+  const [wizardSaving, setWizardSaving] = useState(false);
+  const [wizardResult, setWizardResult] = useState<{ kind: 'ok' | 'err'; text: string } | null>(null);
   const mounted = useRef(true);
 
   const refresh = useCallback(async () => {
@@ -70,11 +76,164 @@ export function PlatformConfigSection({ canWrite, sessionExpired }: Props) {
     if (result.ok) void refresh();
   };
 
+  // Getting Started wizard guides per platform.
+  const WIZARD_GUIDES: Record<string, { steps: string[]; postSetup: string[] }> = {
+    telegram: {
+      steps: [
+        'Open Telegram and search for @BotFather',
+        'Send /newbot to BotFather and follow the prompts',
+        'Give your bot a name (e.g. "My Agent Bot")',
+        'Give your bot a username (must end with "bot", e.g. "my_agent_bot")',
+        'BotFather will give you a token — paste it in the field below',
+        'Open your bot in Telegram and send it a message (e.g. /start)',
+      ],
+      postSetup: [
+        'Start the gateway: buff gateway start (or from the Gateway tab)',
+        'Open your bot in Telegram and send a message — the agent replies!',
+      ],
+    },
+    discord: {
+      steps: [
+        'Go to https://discord.com/developers/applications',
+        'Click "New Application" → give it a name → Create',
+        'Go to "Bot" in the left sidebar → click "Add Bot"',
+        'Under "Token", click "Copy" to copy the bot token',
+        'Enable "Message Content Intent" under Privileged Gateway Intents',
+        'Invite the bot to your server with the OAuth2 URL generator',
+      ],
+      postSetup: [
+        'Start the gateway: buff gateway start',
+        'Mention the bot in a Discord channel or send it a DM',
+        'The agent will reply automatically!',
+      ],
+    },
+    slack: {
+      steps: [
+        'Go to https://api.slack.com/apps',
+        'Click "Create New App" → "From scratch"',
+        'Add Bot Token Scopes: chat:write, im:read, im:write',
+        'Install the app to your workspace',
+        'Copy the Bot User OAuth Token (starts with xoxb-)',
+      ],
+      postSetup: [
+        'Start the gateway: buff gateway start',
+        'DM the bot or mention it in a channel',
+        'The agent will reply automatically!',
+      ],
+    },
+    email: {
+      steps: [
+        'You need an SMTP relay (Gmail, SendGrid, Mailgun, etc.)',
+        'For Gmail: use smtp.gmail.com:587 with an App Password',
+        'For SendGrid/Mailgun: get SMTP credentials from their dashboard',
+      ],
+      postSetup: [
+        'Start the gateway: buff gateway start',
+        'Send an email to the configured address',
+        'The agent will reply via email!',
+      ],
+    },
+  };
+
+  const startWizard = (entry: PlatformConfigEntry): void => {
+    setWizardPlatform(entry);
+    setWizardStep(0);
+    setWizardValues(Object.fromEntries(entry.envVars.map((v) => [v.varName, v.value])));
+    setWizardResult(null);
+  };
+
+  const saveWizard = async (): Promise<void> => {
+    if (!wizardPlatform) return;
+    setWizardSaving(true);
+    setWizardResult(null);
+    const result = await dashboardAPI.setPlatformConfig(wizardPlatform.platform, wizardValues);
+    setWizardSaving(false);
+    if (result.unauthorized || result.forbidden) {
+      sessionExpired(result.error);
+      return;
+    }
+    if (result.ok) {
+      setWizardResult({ kind: 'ok', text: '✅ Token saved! The transport is now active.' });
+      void refresh();
+    } else {
+      setWizardResult({ kind: 'err', text: result.error || 'Save failed.' });
+    }
+  };
+
   if (configs === null) {
     return <div className="empty-state">Loading platform transports…</div>;
   }
 
+  const guide = wizardPlatform ? WIZARD_GUIDES[wizardPlatform.platform] : null;
+
   return (
+    <>
+    {wizardPlatform && guide ? (
+      <div className="wizard-overlay" onClick={() => setWizardPlatform(null)}>
+        <div className="wizard-modal" onClick={(e) => e.stopPropagation()}>
+          <div className="wizard-header">
+            <span className="wizard-icon">🚀</span>
+            <span className="wizard-title">Getting Started: {wizardPlatform.label}</span>
+            <button type="button" className="admin-mini-btn" onClick={() => setWizardPlatform(null)}>✕</button>
+          </div>
+          <div className="wizard-body">
+            {wizardStep === 0 ? (
+              <>
+                <p className="wizard-section-title">📋 Steps to create your bot:</p>
+                <ol className="wizard-steps">
+                  {guide.steps.map((s, i) => <li key={i}>{s}</li>)}
+                </ol>
+                <div className="wizard-nav">
+                  <button type="button" className="admin-refresh-btn" onClick={() => setWizardStep(1)}>
+                    I have my token →
+                  </button>
+                  {wizardPlatform.setupUrl ? (
+                    <a href={wizardPlatform.setupUrl} target="_blank" rel="noopener noreferrer" className="admin-mini-btn platform-docs-link">
+                      📖 Open docs in new tab
+                    </a>
+                  ) : null}
+                </div>
+              </>
+            ) : (
+              <>
+                <p className="wizard-section-title">🔑 Paste your token:</p>
+                {wizardPlatform.envVars.map((v) => (
+                  <label className="hub-send-target" key={v.varName}>
+                    <span className="admin-hint">{v.prompt}</span>
+                    <input
+                      type={v.secret ? 'password' : 'text'}
+                      value={wizardValues[v.varName] ?? ''}
+                      onChange={(e) => setWizardValues((prev) => ({ ...prev, [v.varName]: e.target.value }))}
+                      placeholder={v.secret ? '••••••••' : 'value'}
+                      autoComplete="off"
+                      spellCheck={false}
+                      autoFocus
+                    />
+                  </label>
+                ))}
+                {wizardResult ? (
+                  <div className={`admin-row-msg${wizardResult.kind === 'ok' ? '' : ' admin-row-msg-err'}`}>{wizardResult.text}</div>
+                ) : null}
+                <div className="wizard-nav">
+                  <button type="button" className="admin-mini-btn" onClick={() => setWizardStep(0)}>← Back</button>
+                  <button type="button" className="admin-refresh-btn" onClick={() => void saveWizard()} disabled={wizardSaving}>
+                    {wizardSaving ? '⏳ Saving…' : '💾 Save token'}
+                  </button>
+                </div>
+                {wizardResult?.kind === 'ok' ? (
+                  <>
+                    <p className="wizard-section-title">📋 Next steps:</p>
+                    <ol className="wizard-steps">
+                      {guide.postSetup.map((s, i) => <li key={i}>{s}</li>)}
+                    </ol>
+                  </>
+                ) : null}
+              </>
+            )}
+          </div>
+        </div>
+      </div>
+    ) : null}
     <div className="platform-config">
       <h3 className="section-subtitle">⚙️ Platform transports (buff config gateway)</h3>
       {msg ? (
@@ -91,6 +250,7 @@ export function PlatformConfigSection({ canWrite, sessionExpired }: Props) {
             onToggle={() => setExpanded(expanded === p.platform ? null : p.platform)}
             onSave={(values) => void save(p.platform, values)}
             onRemove={() => void remove(p.platform)}
+            onStartWizard={() => startWizard(p)}
           />
         ))}
       </div>
@@ -100,6 +260,7 @@ export function PlatformConfigSection({ canWrite, sessionExpired }: Props) {
         above via QR/code pairing.
       </p>
     </div>
+    </>
   );
 }
 
@@ -111,8 +272,9 @@ function PlatformConfigCard(props: {
   onToggle: () => void;
   onSave: (values: Record<string, string>) => void;
   onRemove: () => void;
+  onStartWizard: () => void;
 }) {
-  const { entry, canWrite, busy, expanded, onToggle, onSave, onRemove } = props;
+  const { entry, canWrite, busy, expanded, onToggle, onSave, onRemove, onStartWizard } = props;
   const [values, setValues] = useState<Record<string, string>>(() =>
     Object.fromEntries(entry.envVars.map((v) => [v.varName, v.value])),
   );
@@ -127,6 +289,11 @@ function PlatformConfigCard(props: {
         <span className={`status-dot ${entry.configured ? 'connected' : 'reconnecting'}`} />
         <span className="hub-platform-label">{entry.label}</span>
         <span className="hub-card-id">{entry.platform}</span>
+        {!entry.configured ? (
+          <button type="button" className="wizard-start-btn" onClick={onStartWizard} title="Step-by-step setup wizard">
+            🚀 Getting Started
+          </button>
+        ) : null}
         {entry.setupUrl ? (
           <a href={entry.setupUrl} target="_blank" rel="noopener noreferrer" className="admin-mini-btn platform-docs-link" title="Setup documentation">
             📖 Docs
