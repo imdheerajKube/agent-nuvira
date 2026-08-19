@@ -4321,6 +4321,30 @@ body {
   background: rgba(224, 49, 49, 0.1);
 }
 
+/* Platform setup docs link + hint */
+.platform-docs-link {
+  text-decoration: none;
+  font-size: 11px;
+  padding: 2px 6px;
+  border-radius: 4px;
+  color: var(--accent-blue, #58a6ff);
+  border: 1px solid rgba(88, 166, 255, 0.3);
+}
+
+.platform-docs-link:hover {
+  background: rgba(88, 166, 255, 0.1);
+}
+
+.platform-setup-hint {
+  font-size: 12px;
+  color: var(--text-secondary, #8b949e);
+  padding: 4px 8px;
+  background: rgba(88, 166, 255, 0.06);
+  border-radius: 4px;
+  border-left: 2px solid rgba(88, 166, 255, 0.3);
+  line-height: 1.4;
+}
+
 /* P6e — provenance chip (🧠 bundled ships with the product) */
 .hub-chip-bundled {
   background: rgba(188, 140, 255, 0.18) !important;

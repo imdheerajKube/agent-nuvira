@@ -81,11 +81,11 @@ describe('ChatCommand single-shot — selectable followups', () => {
     rmSync(tempDir, { recursive: true, force: true });
   });
 
-  it('runs a picked followup as the next turn, then ends on Enter', async () => {
+  it('runs a picked followup as the next turn, then falls through to interactive mode on Enter', async () => {
     setTTY(true);
 
     // The chat answer is stubbed: turn 1 answers with 2 followups, the picked
-    // followup answers with no more followups (Enter ends the session).
+    // followup answers with no more followups (Enter falls through to interactive).
     const runChatAnswer = vi
       .spyOn(cmd as unknown as { runChatAnswer: Function }, 'runChatAnswer')
       .mockResolvedValueOnce({
@@ -100,8 +100,14 @@ describe('ChatCommand single-shot — selectable followups', () => {
         followups: [],
       });
 
-    // User picks followup #1, then presses Enter (ends).
+    // User picks followup #1, then presses Enter (falls through to interactive),
+    // then types /exit to quit the interactive loop.
     const inquirerPrompt = vi.spyOn(inquirer, 'prompt').mockResolvedValueOnce({ n: '1' } as any);
+    // Mock readMultiLineInput to return /exit so the interactive loop exits.
+    vi.spyOn(cmd as unknown as { readMultiLineInput: Function }, 'readMultiLineInput')
+      .mockResolvedValue('/exit');
+    // Mock process.exit to prevent vitest from failing.
+    const exitSpy = vi.spyOn(process, 'exit').mockImplementation(() => undefined as never);
 
     await (cmd as unknown as { execute: Function }).execute('my first prompt', {
       provider: 'mock',
@@ -123,6 +129,9 @@ describe('ChatCommand single-shot — selectable followups', () => {
     // The followup answer was printed, and the menu ended on Enter.
     expect(console.log).toHaveBeenCalledWith(expect.stringContaining('Followup answer.'));
     expect(inquirerPrompt).toHaveBeenCalledTimes(1);
+    // process.exit was called (interactive loop ended via /exit).
+    expect(exitSpy).toHaveBeenCalledWith(0);
+    exitSpy.mockRestore();
   });
 
   it('prints the followup list and exits without prompting on a non-TTY', async () => {

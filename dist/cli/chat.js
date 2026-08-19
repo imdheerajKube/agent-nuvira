@@ -290,7 +290,11 @@ export class ChatCommand extends BaseCommand {
             model = routed.model;
         }
         // P3 — tell the GUI where the turn is headed before the tool loop runs.
-        opts.onProgress?.(`   🧠 routed to ${provider.name}${model ? ` / ${model}` : ''} — working…`);
+        const isLocalFallback = autoMode && type === 'local';
+        const localWarning = isLocalFallback
+            ? ' ⚠️ local model only — run `buff models` or `buff provider set` to add a cloud provider'
+            : '';
+        opts.onProgress?.(`   🧠 routed to ${provider.name}${model ? ` / ${model}` : ''} — working…${localWarning}`);
         // P4 — when a project is attached, recall its prior sessions + facts
         // FRESH per turn (the snapshot is cached, the recall is not — prior work
         // may have landed since the last turn). Best-effort: empty recall injects
@@ -780,7 +784,7 @@ export class ChatCommand extends BaseCommand {
             result = await runToolLoop({
                 messages: thread,
                 context: toolContext,
-                maxSteps: 8,
+                maxSteps: 16,
                 onToken: ctxOverrides?.onToken,
                 signal: ctxOverrides?.signal,
                 deps: {

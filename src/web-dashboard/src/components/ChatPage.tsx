@@ -1293,12 +1293,12 @@ export default function ChatPage() {
             ) : (
               <div className="chat-project-pick">
                 <span className="chat-project-icon">📁</span>
-                <span className="chat-project-hint">Attach a project so the agent can assess it:</span>
+                <span className="chat-project-hint">Select Project Folder</span>
                 {projectPick.length > 0 ? (
                   <span className="chat-project-chips">
-                    {projectPick.slice(0, 3).map((p) => (
+                    {projectPick.filter((p) => p.kind !== 'cwd').slice(0, 3).map((p) => (
                       <button key={p.path} type="button" className="chat-chip" onClick={() => void attachProject(p.path)}>
-                        {p.kind === 'cwd' ? '📂 current dir' : p.name}
+                        {p.name}
                       </button>
                     ))}
                   </span>

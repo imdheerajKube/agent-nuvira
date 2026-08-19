@@ -611,6 +611,25 @@ export class ChatCommand extends BaseCommand {
 
     const cacheEnabled = options?.cache !== false;
 
+    // Shared state for both single-shot + interactive paths.
+    const history: Array<{ role: string; content: string }> = [];
+    let effectiveModelForHistory = model || this.configManager.getProviderConfig(type as ProviderType).config.model || 'default';
+    let effectiveModel = effectiveModelForHistory;
+    this.devModeAuto = false;
+
+    // K1: one chat session = one sessionId — created once, threaded through
+    // the memory session AND every log line emitted by this session's turns.
+    const chatSessionId = `chat-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+
+    // Phase B2: begin the persistent-memory session (provider.initialize).
+    // The chat loop records each completed turn; endSession on exit distills
+    // the buffered turns into project facts. Best-effort, fire-and-forget.
+    try {
+      await getMemoryManager().startSession(chatSessionId);
+    } catch {
+      // Best-effort — memory must never break chat startup.
+    }
+
     if (prompt) {
       // ── Auto routing for single-shot prompts ────────────────────────────
       if (autoMode) {
@@ -650,7 +669,7 @@ export class ChatCommand extends BaseCommand {
       // Ordering: the ANSWER is always printed first, then followups — the
       // user asked for the content, not a menu. On a real terminal the
       // followups are SELECTABLE: picking a number runs that followup as the
-      // next turn (conversation threaded), pressing Enter ends the session.
+      // next turn (conversation threaded), pressing Enter continues interactively.
       // Non-TTY (scripts/CI/pipes) keeps the current print-and-exit behavior
       // so automation is never blocked by a prompt.
       if (answer.content.trim()) {
@@ -662,17 +681,17 @@ export class ChatCommand extends BaseCommand {
       }
       // Seed the continuation history with turn 1 so a picked followup has
       // context (runChatAnswer pushes the user message itself).
-      const singleHistory: Array<{ role: string; content: string }> = [
+      history.push(
         { role: 'user', content: prompt },
         ...(answer.content.trim() ? [{ role: 'assistant' as const, content: answer.content }] : []),
-      ];
+      );
       let singleAnswer = answer;
       while (true) {
         const picked = await this.renderFollowups(singleAnswer.followups ?? [], true);
         if (!picked) break;
         const next = await this.runChatAnswer(
           picked,
-          singleHistory,
+          history,
           { type, provider, model },
           options || {},
           cacheEnabled,
@@ -681,11 +700,12 @@ export class ChatCommand extends BaseCommand {
         );
         if (next.content.trim()) {
           console.log('\n' + next.content + '\n');
-          singleHistory.push({ role: 'assistant', content: next.content });
+          history.push({ role: 'assistant', content: next.content });
         }
         singleAnswer = next;
       }
-      return;
+      // Fall through to interactive mode — the user can keep chatting.
+      logger.info('');
     }
 
     logger.highlight(`\n🧠 Buff Chat — ${autoMode ? '🤖 Auto routing' : provider.name}`);
@@ -699,24 +719,8 @@ export class ChatCommand extends BaseCommand {
 
     // D2: agent-driven background duties — one-line health + models status at
     // session start (throttled, best-effort). The agent does them, not the user.
-    await maybeRunBackgroundDuties(this.configManager).catch(() => { /* best-effort */ });
-
-    const history: Array<{ role: string; content: string }> = [];
-    let effectiveModelForHistory = model || this.configManager.getProviderConfig(type as ProviderType).config.model || 'default';
-    let effectiveModel = effectiveModelForHistory;
-    this.devModeAuto = false;
-
-    // K1: one chat session = one sessionId — created once, threaded through
-    // the memory session AND every log line emitted by this session's turns.
-    const chatSessionId = `chat-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
-
-    // Phase B2: begin the persistent-memory session (provider.initialize).
-    // The chat loop records each completed turn; endSession on exit distills
-    // the buffered turns into project facts. Best-effort, fire-and-forget.
-    try {
-      await getMemoryManager().startSession(chatSessionId);
-    } catch {
-      // Best-effort — memory must never break chat startup.
+    if (!prompt) {
+      await maybeRunBackgroundDuties(this.configManager).catch(() => { /* best-effort */ });
     }
 
     let pendingMessage: string | undefined;

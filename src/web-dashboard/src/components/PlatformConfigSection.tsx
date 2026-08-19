@@ -127,6 +127,11 @@ function PlatformConfigCard(props: {
         <span className={`status-dot ${entry.configured ? 'connected' : 'reconnecting'}`} />
         <span className="hub-platform-label">{entry.label}</span>
         <span className="hub-card-id">{entry.platform}</span>
+        {entry.setupUrl ? (
+          <a href={entry.setupUrl} target="_blank" rel="noopener noreferrer" className="admin-mini-btn platform-docs-link" title="Setup documentation">
+            📖 Docs
+          </a>
+        ) : null}
         <button
           type="button"
           className="admin-refresh-btn"
@@ -136,6 +141,9 @@ function PlatformConfigCard(props: {
           {expanded ? '▴ Collapse' : entry.configured ? '✎ Edit' : '⚙ Configure'}
         </button>
       </div>
+      {!expanded && entry.setupHint && !entry.configured ? (
+        <div className="platform-setup-hint">{entry.setupHint}</div>
+      ) : null}
       {!expanded ? (
         <div className="hub-platform-env">
           {entry.envVars.map((v) => (
@@ -146,6 +154,9 @@ function PlatformConfigCard(props: {
         </div>
       ) : (
         <div className="platform-config-form">
+          {entry.setupHint ? (
+            <div className="platform-setup-hint">{entry.setupHint}</div>
+          ) : null}
           {entry.envVars.map((v) => (
             <label className="hub-send-target" key={v.varName}>
               <span className="admin-hint">{v.prompt}</span>
