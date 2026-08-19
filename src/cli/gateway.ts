@@ -99,13 +99,16 @@ export class GatewayCommand {
       .option('--port <n>', 'Webhook inbound port for Discord/Slack/WhatsApp', '8787')
       .option('--host <ip>', 'Webhook bind address (default 127.0.0.1 — use 0.0.0.0 for a public tunnel)', '127.0.0.1')
       .option('--no-events', 'Do not stream board events to channels', false)
-      .action(async (opts) => this.start(Number(opts.port), opts.host, opts.events));
-
-    cmd
+      .action(async (opts) => this.start(Number(opts.port), opts.host, opts.events));    cmd
       .command('stop')
       .description('Stop a running gateway gracefully (SIGTERM — from any terminal)')
       .option('--port <n>', 'Webhook port the gateway is bound to (default 8787)', '8787')
       .action(async (opts) => this.stop(Number(opts.port)));
+
+    cmd
+      .command('setup [platform]')
+      .description('Interactive setup wizard for a messaging platform (e.g. buff gateway setup telegram)')
+      .action(async (platform) => this.setup(platform));
 
     return cmd;
   }
@@ -334,6 +337,186 @@ export class GatewayCommand {
       logger.error(`Could not stop the gateway: ${result.reason ?? 'no running gateway found'}`);
       process.exitCode = 1;
     }
+  }
+
+  // ─── setup (Getting Started wizard) ──────────────────────────────────────
+
+  private async setup(platformArg: string | undefined): Promise<void> {
+    if (!guardRbacAction('gateway.manage')) return;
+    const inquirer = (await import('inquirer')).default;
+    const { writeEnvFile, applyEnvToProcess, platformEnvVarMeta } = await import('../gateway/platform-config.js');
+    const { PLATFORM_LABELS } = await import('../gateway/channel-directory.js');
+
+    // Platform-specific setup guides.
+    const GUIDES: Record<string, {
+      name: string;
+      steps: string[];
+      vars: Array<{ varName: string; prompt: string; secret: boolean }>;
+      verify?: (values: Record<string, string>) => Promise<{ ok: boolean; error?: string }>;
+      postSetup: string[];
+    }> = {
+      telegram: {
+        name: 'Telegram',
+        steps: [
+          'Open Telegram and search for @BotFather',
+          'Send /newbot to BotFather and follow the prompts',
+          'Give your bot a name (e.g. "My Agent Bot")',
+          'Give your bot a username (must end with "bot", e.g. "my_agent_bot")',
+          'BotFather will give you a token — copy it below',
+          'Open your bot in Telegram and send it a message (e.g. /start)',
+        ],
+        vars: platformEnvVarMeta('telegram'),
+        verify: async (values) => {
+          const token = values.BUFF_TELEGRAM_TOKEN;
+          if (!token) return { ok: false, error: 'No token provided.' };
+          try {
+            const res = await fetch(`https://api.telegram.org/bot${token}/getMe`, { signal: AbortSignal.timeout(10_000) });
+            const data = await res.json() as { ok?: boolean; result?: { username?: string } };
+            if (data.ok && data.result?.username) {
+              return { ok: true };
+            }
+            return { ok: false, error: `Telegram API rejected the token. Response: ${JSON.stringify(data)}` };
+          } catch (err) {
+            return { ok: false, error: `Could not reach Telegram API: ${err instanceof Error ? err.message : String(err)}` };
+          }
+        },
+        postSetup: [
+          'Start the gateway:  buff gateway start',
+          'Open your bot in Telegram and send a message',
+          'The agent will reply automatically!',
+          'Optional: add an alias:  buff gateway alias add support telegram <your-chat-id>',
+        ],
+      },
+      discord: {
+        name: 'Discord',
+        steps: [
+          'Go to https://discord.com/developers/applications',
+          'Click "New Application" → give it a name → Create',
+          'Go to "Bot" in the left sidebar → click "Add Bot"',
+          'Under "Token", click "Copy" to copy the bot token',
+          'Enable "Message Content Intent" under Privileged Gateway Intents',
+          'Invite the bot to your server with the OAuth2 URL generator (bot scope + Send Messages permission)',
+        ],
+        vars: platformEnvVarMeta('discord'),
+        postSetup: [
+          'Start the gateway:  buff gateway start',
+          'Mention the bot in a Discord channel or send it a DM',
+          'The agent will reply automatically!',
+        ],
+      },
+      slack: {
+        name: 'Slack',
+        steps: [
+          'Go to https://api.slack.com/apps',
+          'Click "Create New App" → "From scratch"',
+          'Add Bot Token Scopes: chat:write, im:read, im:write, channels:history, groups:history',
+          'Install the app to your workspace',
+          'Copy the Bot User OAuth Token (starts with xoxb-)',
+        ],
+        vars: platformEnvVarMeta('slack'),
+        postSetup: [
+          'Start the gateway:  buff gateway start',
+          'DM the bot or mention it in a channel',
+          'The agent will reply automatically!',
+        ],
+      },
+      email: {
+        name: 'Email (SMTP)',
+        steps: [
+          'You need an SMTP relay (Gmail, SendGrid, Mailgun, etc.)',
+          'For Gmail: use smtp.gmail.com:587 with an App Password (not your regular password)',
+          'For SendGrid/Mailgun: get SMTP credentials from their dashboard',
+        ],
+        vars: platformEnvVarMeta('email'),
+        postSetup: [
+          'Start the gateway:  buff gateway start',
+          'Send an email to the configured address',
+          'The agent will reply via email!',
+        ],
+      },
+    };
+
+    // If no platform specified, show a picker.
+    let platform = platformArg?.toLowerCase();
+    if (!platform || !GUIDES[platform]) {
+      const choices = Object.entries(GUIDES).map(([key, g]) => ({
+        name: `${g.name}${isPlatformConfigured(key as any) ? ' ✅ (already configured)' : ''}`,
+        value: key,
+      }));
+      const { picked } = await inquirer.prompt<{ picked: string }>([{
+        type: 'list',
+        name: 'picked',
+        message: 'Which platform do you want to set up?',
+        choices,
+      }]);
+      platform = picked;
+    }
+
+    const guide = GUIDES[platform!];
+    if (!guide) {
+      logger.error(`Unknown platform '${platform}'. Supported: ${Object.keys(GUIDES).join(', ')}`);
+      process.exitCode = 1;
+      return;
+    }
+
+    console.log('');
+    logger.highlight(`🚀 Getting Started: ${guide.name}`);
+    console.log('');
+
+    // Show steps.
+    for (let i = 0; i < guide.steps.length; i++) {
+      console.log(`  ${i + 1}. ${guide.steps[i]}`);
+    }
+    console.log('');
+
+    // Prompt for each env var.
+    const values: Record<string, string> = {};
+    for (const v of guide.vars) {
+      const existing = process.env[v.varName] ?? '';
+      const { value } = await inquirer.prompt<{ value: string }>([{
+        type: v.secret ? 'password' : 'input',
+        name: 'value',
+        message: `${v.prompt}:`,
+        default: existing || undefined,
+        mask: v.secret ? '*' : undefined,
+      }]);
+      if (value.trim()) {
+        values[v.varName] = value.trim();
+      }
+    }
+
+    if (Object.keys(values).length === 0) {
+      logger.info('No values entered — nothing was saved.');
+      return;
+    }
+
+    // Save to ~/.buff/.env.
+    const { wrote } = writeEnvFile(values);
+    applyEnvToProcess(values);
+    console.log('');
+    logger.success(`Saved to ~/.buff/.env: ${wrote.join(', ')}`);
+
+    // Verify if the guide has a verify step.
+    if (guide.verify) {
+      console.log('');
+      logger.info('Verifying connection...');
+      const result = await guide.verify(values);
+      if (result.ok) {
+        logger.success('✅ Connection verified — the token is valid!');
+      } else {
+        logger.warn(`⚠️  Verification failed: ${result.error}`);
+        logger.info('You can still proceed — the token may work once the gateway starts.');
+      }
+    }
+
+    // Show next steps.
+    console.log('');
+    logger.highlight('📋 Next steps:');
+    console.log('');
+    for (const step of guide.postSetup) {
+      console.log(`  → ${step}`);
+    }
+    console.log('');
   }
 
   // ─── start ────────────────────────────────────────────────────────────────
