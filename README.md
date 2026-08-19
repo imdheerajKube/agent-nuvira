@@ -2040,6 +2040,7 @@ npx tsc --noEmit
 
 | Version | Date | Key Changes |
 |---------|------|-------------|
+| **v1.76.0** | Aug 2026 | **Improved folder browser + Telegram auto-learning + Getting Started wizards** — Browse button redesigned with drive roots, breadcrumbs, search/filter, auto-refresh; Telegram contacts auto-learn real chat IDs; Platforms page with 22-platform grid; `buff gateway setup [platform]` interactive wizard |
 | **v1.75.3** | Aug 2026 | **Project picker fix + Telegram setup docs + CLI interactive mode** — removed broken "current dir" button, renamed label to "Select Project Folder", dashboard Channels tab shows 📖 Docs links and setup hints for every platform, `buff gateway start` shows platform-specific setup instructions, CLI chat no longer exits after the initial task |
 | **v1.75.2** | Aug 2026 | **Chat resolve loop fix + tool-loop step limit** — dashboard "No — ask the agent" button no longer loops back to the same command card, auto-routing shows a clear hint when falling back to local models, tool-loop step limit increased from 8 to 16 for complex tasks |
 | **v1.75.0** | Aug 2026 | **Session resume + project-aware chat** — `--cwd` option for `agent-nuvira dashboard`, attached project scopes the agent's working directory (`toolContext.cwd`), 🗂️ folder browser for project attach, session resume auto-restores project context, project mismatch banner, sidebar shows project name per conversation; 4,864 root + 263 dashboard tests |
