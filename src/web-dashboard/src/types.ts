@@ -804,6 +804,8 @@ export interface AdminWriteResult {
   envVar?: string;
   provider?: AdminProviderSummary;
   unauthorized?: boolean;
+  /** Validation errors for contacts that were rejected (e.g. phone number for Telegram). */
+  contactErrors?: string[];
 }
 
 /** Provider test-connection response (model list on success). */
