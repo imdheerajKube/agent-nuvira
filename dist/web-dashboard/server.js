@@ -2654,8 +2654,10 @@ function handleRequest(req, res) {
                 // WhatsApp contacts are synced into the bridge contacts file for
                 // send-by-name parity with `buff whatsapp contact add <Name> <no>`.
                 let savedContacts;
+                const contactErrors = [];
                 if (Array.isArray(body?.contacts)) {
                     const { writeGatewayContacts, syncWhatsAppContactName } = await import('../gateway/contacts.js');
+                    const { validateContactId } = await import('../gateway/contacts.js');
                     const valid = body.contacts
                         .filter((c) => !!c && typeof c === 'object' &&
                         typeof c.name === 'string' &&
@@ -2667,7 +2669,16 @@ function handleRequest(req, res) {
                         id: (c.id ?? '').trim(),
                         addedAt: typeof c.addedAt === 'number' ? c.addedAt : Date.now(),
                     }))
-                        .filter((c) => c.name && c.id && c.platform in PLATFORM_ENV_VARS);
+                        .filter((c) => {
+                        if (!c.name || !c.id || !(c.platform in PLATFORM_ENV_VARS))
+                            return false;
+                        const err = validateContactId(c.platform, c.id);
+                        if (err) {
+                            contactErrors.push(`${c.name || c.id} (${c.platform}): ${err}`);
+                            return false;
+                        }
+                        return true;
+                    });
                     savedContacts = valid;
                     writeGatewayContacts(savedContacts);
                     // Send-by-name parity: named whatsapp contacts land in the bridge
@@ -2677,7 +2688,13 @@ function handleRequest(req, res) {
                             syncWhatsAppContactName(c.name, c.id);
                     }
                 }
-                writeJson(res, 200, { ok: true, policies: merged, statusRecipients: gatewayPatch.statusRecipients ?? [], contacts: savedContacts });
+                writeJson(res, 200, {
+                    ok: true,
+                    policies: merged,
+                    statusRecipients: gatewayPatch.statusRecipients ?? [],
+                    contacts: savedContacts,
+                    ...(contactErrors.length > 0 ? { contactErrors } : {}),
+                });
                 return;
             }
             writeJson(res, 405, { ok: false, error: 'Method not allowed — use GET or PUT.' });
@@ -3364,7 +3381,7 @@ function handleRequest(req, res) {
         const canWrite = roleCan(session.role, 'routing.operate');
         // Per-platform setup documentation links and one-line hints.
         const SETUP_META = {
-            telegram: { url: 'https://core.telegram.org/bots#how-do-i-create-a-bot', hint: 'Create a bot via @BotFather on Telegram, copy the token, paste it here, then run `buff gateway start`.' },
+            telegram: { url: 'https://core.telegram.org/bots#how-do-i-create-a-bot', hint: 'Create a bot via @BotFather on Telegram, copy the token, paste it here, then run `buff gateway start`. Note: contacts need the Telegram chat ID (numeric), not a phone number — message the bot first to get the ID.' },
             discord: { url: 'https://discord.com/developers/applications', hint: 'Create an application + bot in the Discord Developer Portal, copy the bot token, paste it here, then run `buff gateway start`.' },
             slack: { url: 'https://api.slack.com/apps', hint: 'Create a Slack app with Bot Token Scopes, install to workspace, copy the Bot Token, paste it here, then run `buff gateway start`.' },
             whatsapp_cloud: { url: 'https://developers.facebook.com/docs/whatsapp/cloud-api/get-started', hint: 'Set up a Meta Cloud API phone number, paste the token + Phone ID here, then run `buff gateway start`.' },
@@ -3542,9 +3559,8 @@ function handleRequest(req, res) {
         })();
         return;
     }
-    // GET /api/browse?path=<dir> — list subdirectories of a path for the
-    // frontend folder browser (project picker). Returns directories + a flag
-    // indicating whether the path itself can be attached as a project.
+    // GET /api/browse?path=<dir>&showDrives=1 — list subdirectories for the
+    // frontend folder browser (project picker). showDrives=1 returns drive roots.
     if (pathname === '/api/browse' && req.method === 'GET') {
         const session = adminSessions.validate(bearerToken(req));
         if (!session) {
@@ -3555,22 +3571,68 @@ function handleRequest(req, res) {
             writeJson(res, 403, { ok: false, error: `Access denied — role '${session.role}' cannot browse directories.` });
             return;
         }
-        // Extract ?path= from the URL query string.
         const urlObj = new URL(req.url || '/', `http://${req.headers.host || 'localhost'}`);
         const rawPath = urlObj.searchParams.get('path') || '';
+        const showDrives = urlObj.searchParams.get('showDrives') === '1';
         const dirPath = rawPath.trim();
+        // Collect drive roots for the platform.
+        const homeDir = homedir();
+        const collectDrives = () => {
+            const drives = [];
+            const plat = process.platform;
+            if (plat === 'win32') {
+                drives.push({ name: '🏠 Home', path: homeDir, type: 'home' });
+                for (const ch of 'CDEFGH'.split('')) {
+                    const dp = `${ch}:\\`;
+                    try {
+                        if (existsSync(dp))
+                            drives.push({ name: `${ch}:`, path: dp, type: 'drive' });
+                    }
+                    catch { /* skip */ }
+                }
+            }
+            else if (plat === 'darwin') {
+                drives.push({ name: '🏠 Home', path: homeDir, type: 'home' });
+                try {
+                    const vols = readdirSync('/Volumes', { withFileTypes: true })
+                        .filter((e) => e.isDirectory())
+                        .map((e) => ({ name: `💾 ${e.name}`, path: `/Volumes/${e.name}`, type: 'drive' }));
+                    drives.push(...vols);
+                }
+                catch { /* /Volumes may not exist */ }
+                drives.push({ name: ' Root /', path: '/', type: 'system' });
+            }
+            else {
+                drives.push({ name: '🏠 Home', path: homeDir, type: 'home' });
+                drives.push({ name: ' Root /', path: '/', type: 'system' });
+            }
+            return drives;
+        };
+        // No path → show home directory contents + drive bar.
         if (!dirPath) {
-            // No path given — start from the user's home directory.
-            const homeDir = homedir();
             try {
                 const entries = readdirSync(homeDir, { withFileTypes: true })
-                    .filter((e) => e.isDirectory())
-                    .map((e) => ({ name: e.name, path: join(homeDir, e.name) }))
-                    .slice(0, 50);
-                writeJson(res, 200, { ok: true, path: homeDir, entries, parent: null, isProject: existsSync(homeDir) && statSync(homeDir).isDirectory() });
+                    .filter((e) => e.isDirectory() && !e.name.startsWith('.'))
+                    .map((e) => {
+                    const fp = join(homeDir, e.name);
+                    let modified = 0;
+                    try {
+                        modified = statSync(fp).mtimeMs;
+                    }
+                    catch { /* skip */ }
+                    return { name: e.name, path: fp, isDir: true, modified };
+                })
+                    .sort((a, b) => a.name.localeCompare(b.name))
+                    .slice(0, 100);
+                writeJson(res, 200, {
+                    ok: true, path: homeDir, entries, parent: null,
+                    isProject: existsSync(homeDir) && statSync(homeDir).isDirectory(),
+                    drives: collectDrives(),
+                    breadcrumbs: [{ name: 'Home', path: homeDir }],
+                });
             }
             catch {
-                writeJson(res, 200, { ok: true, path: homeDir, entries: [], parent: null, isProject: false });
+                writeJson(res, 200, { ok: true, path: homeDir, entries: [], parent: null, isProject: false, drives: collectDrives(), breadcrumbs: [] });
             }
             return;
         }
@@ -3582,15 +3644,94 @@ function handleRequest(req, res) {
         try {
             const entries = readdirSync(target, { withFileTypes: true })
                 .filter((e) => e.isDirectory() && !e.name.startsWith('.'))
-                .map((e) => ({ name: e.name, path: join(target, e.name) }))
+                .map((e) => {
+                const fp = join(target, e.name);
+                let modified = 0;
+                try {
+                    modified = statSync(fp).mtimeMs;
+                }
+                catch { /* skip */ }
+                return { name: e.name, path: fp, isDir: true, modified };
+            })
                 .sort((a, b) => a.name.localeCompare(b.name))
                 .slice(0, 100);
             const parent = dirname(target);
-            writeJson(res, 200, { ok: true, path: target, entries, parent: parent !== target ? parent : null, isProject: true });
+            const parts = target.split(/[\/]/).filter(Boolean);
+            const breadcrumbs = [];
+            let cum = target.startsWith('/') ? '/' : '';
+            for (const part of parts) {
+                cum = cum === '/' ? `/${part}` : `${cum}/${part}`;
+                breadcrumbs.push({ name: part, path: cum });
+            }
+            writeJson(res, 200, {
+                ok: true, path: target, entries,
+                parent: parent !== target ? parent : null,
+                isProject: true, breadcrumbs,
+            });
         }
         catch {
-            writeJson(res, 200, { ok: true, path: target, entries: [], parent: dirname(target), isProject: true });
+            writeJson(res, 200, { ok: true, path: target, entries: [], parent: dirname(target), isProject: true, breadcrumbs: [] });
         }
+        return;
+    }
+    // POST /api/config/platforms/:platform/verify — verify a platform's token
+    // by calling the platform's API (e.g. Telegram getMe, Discord /users/@me).
+    const verifyMatch = /^\/api\/config\/platforms\/([^/]+)\/verify$/.exec(pathname);
+    if (verifyMatch && req.method === 'POST') {
+        void (async () => {
+            const session = adminSessions.validate(bearerToken(req));
+            if (!session) {
+                writeJson(res, 401, { ok: false, error: 'Not authenticated — log in first.' });
+                return;
+            }
+            if (!roleCan(session.role, 'routing.operate')) {
+                writeJson(res, 403, { ok: false, error: 'Access denied.' });
+                return;
+            }
+            const platform = verifyMatch[1];
+            const body = await readJsonBody(req);
+            const values = (body?.values ?? {});
+            try {
+                let result;
+                if (platform === 'telegram') {
+                    const token = values.BUFF_TELEGRAM_TOKEN ?? '';
+                    if (!token) {
+                        writeJson(res, 400, { ok: false, error: 'No token provided.' });
+                        return;
+                    }
+                    const r = await fetch(`https://api.telegram.org/bot${token}/getMe`, { signal: AbortSignal.timeout(10_000) });
+                    const d = await r.json();
+                    result = d.ok && d.result ? { ok: true, info: `@${d.result.username} (${d.result.first_name})` } : { ok: false, error: `Telegram rejected the token: ${JSON.stringify(d)}` };
+                }
+                else if (platform === 'discord') {
+                    const token = values.BUFF_DISCORD_BOT_TOKEN ?? '';
+                    if (!token) {
+                        writeJson(res, 400, { ok: false, error: 'No token provided.' });
+                        return;
+                    }
+                    const r = await fetch('https://discord.com/api/v10/users/@me', { headers: { Authorization: `Bot ${token}` }, signal: AbortSignal.timeout(10_000) });
+                    const d = await r.json();
+                    result = d.username ? { ok: true, info: `@${d.username} (${d.id})` } : { ok: false, error: `Discord rejected the token: ${JSON.stringify(d)}` };
+                }
+                else if (platform === 'slack') {
+                    const token = values.BUFF_SLACK_BOT_TOKEN ?? '';
+                    if (!token) {
+                        writeJson(res, 400, { ok: false, error: 'No token provided.' });
+                        return;
+                    }
+                    const r = await fetch('https://slack.com/api/auth.test', { method: 'POST', headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' }, signal: AbortSignal.timeout(10_000) });
+                    const d = await r.json();
+                    result = d.ok ? { ok: true, info: `${d.user} @ ${d.team}` } : { ok: false, error: `Slack rejected the token: ${JSON.stringify(d)}` };
+                }
+                else {
+                    result = { ok: false, error: `Verification not available for '${platform}' — save the token and test via the Gateway tab.` };
+                }
+                writeJson(res, 200, result);
+            }
+            catch (err) {
+                writeJson(res, 200, { ok: false, error: `Verification failed: ${err instanceof Error ? err.message : String(err)}` });
+            }
+        })();
         return;
     }
     // GET /api/sessions — P4 session sidebar: past conversations (most recent

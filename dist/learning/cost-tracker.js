@@ -73,9 +73,9 @@ export function calculateCost(provider, model, inputTokens, outputTokens) {
     const pricing = DEFAULT_PRICING[provider] || { inputPer1K: 0.00010, outputPer1K: 0.00010 };
     // Model-specific pricing overrides for known expensive models
     const expensiveModels = {
-        'llama-3.3-70b-versatile': { inputPer1K: 0.00059, outputPer1K: 0.00079 },
-        'llama-3.1-405b-reasoning': { inputPer1K: 0.00279, outputPer1K: 0.00279 },
-        'mixtral-8x7b-32768': { inputPer1K: 0.00024, outputPer1K: 0.00024 },
+        'openai/gpt-oss-120b': { inputPer1K: 0.00015, outputPer1K: 0.00060 },
+        'openai/gpt-oss-20b': { inputPer1K: 0.000075, outputPer1K: 0.00030 },
+        'qwen/qwen3.6-27b': { inputPer1K: 0.00060, outputPer1K: 0.00300 },
     };
     const modelPricing = expensiveModels[model];
     const p = modelPricing || pricing;

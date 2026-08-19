@@ -268,15 +268,12 @@ export function formatModelName(modelId) {
  */
 export function getModelBadge(modelId) {
     const badges = {
-        // Groq
-        'llama-3.3-70b-versatile': 'Best all-rounder — strong at chat, code, and reasoning',
-        'llama-3.1-8b-instant': 'Fast & capable — great for quick iterations',
-        'mixtral-8x7b-32768': 'Excellent for long context (32K tokens)',
-        'gemma2-9b-it': 'Lightning fast — ideal for simple tasks',
-        'qwen-2.5-32b': 'Excellent reasoning and multilingual support',
-        'qwen-qwen-2.5-32b': 'Excellent reasoning and multilingual support',
-        'deepseek-r1-distill-llama-70b': 'Strong reasoning with distilled efficiency',
-        'deepseek-r1-distill-qwen-32b': 'Excellent reasoning in a compact package',
+        // Groq (updated Aug 2026 — llama/mixtral/gemma models retired)
+        'openai/gpt-oss-120b': 'Best Groq model — strong at chat, code, and reasoning',
+        'openai/gpt-oss-20b': 'Fast & capable — great for quick iterations',
+        'qwen/qwen3.6-27b': 'Excellent reasoning and multilingual support',
+        'groq/compound': 'Compound model with tool use',
+        'groq/compound-mini': 'Lightweight compound model',
         // Gemini — the 2.x line (2.0-flash-exp / 2.5-flash / 2.5-pro) is RETIRED
         // for new accounts (404 "no longer available to new users"); the stable
         // -latest aliases and 3.x previews are what a 2026 account can actually use.

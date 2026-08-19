@@ -319,6 +319,17 @@ export const PROVIDER_CATALOG: Record<string, CatalogProviderEntry> = {
     pricing: { inputPer1K: 0.00040, outputPer1K: 0.00160 },
     contextWindow: 8_192,
   },
+  bedrock: {
+    id: 'bedrock',
+    label: 'Amazon Bedrock',
+    icon: '🟠',
+    envVar: 'AWS_BEARER_TOKEN_BEDROCK',
+    openAICompat: true,
+    baseUrl: 'https://bedrock-runtime.us-east-1.amazonaws.com',
+    capabilities: { reasoning: 0.88, speed: 0.70, cost: 0.45, privacy: 0.40, reliability: 0.90 },
+    pricing: { inputPer1K: 0.00080, outputPer1K: 0.00320 },
+    contextWindow: 200_000,
+  },
 };
 
 /** Every catalog provider id (the full 17+ set). */
