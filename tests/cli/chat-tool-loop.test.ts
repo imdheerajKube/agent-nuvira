@@ -148,7 +148,7 @@ describe('ChatCommand — E3b tool-call turn', () => {
 
     // Bounded — the loop returns the step-limit message instead of spinning.
     expect(out.content.length).toBeGreaterThan(0);
-    expect((provider.generateTools as ReturnType<typeof vi.fn>).mock.calls.length).toBeLessThanOrEqual(8);
+    expect((provider.generateTools as ReturnType<typeof vi.fn>).mock.calls.length).toBeLessThanOrEqual(16);
   });
 });
 

@@ -2,6 +2,12 @@
 
 All notable changes to **Agent-Nuvira** are documented in this file.
 
+## v1.75.2 — fix: chat resolve loop, local fallback UX, and tool-loop step limit
+
+- **Fixed: "No — ask the agent" button loops back to the same resolve card** — when the dashboard's intent resolver matches a user's message to a CLI command (e.g. `buff trace list`), declining the command card re-sent the same message to `chatResolve`, which found the same match and re-showed the card in an infinite loop. Fix: added a `skipResolve` flag to the send function so declined messages bypass re-resolution and go straight to the agent.
+- **Improved: auto-routing local fallback UX** — when all cloud providers are blocked/unavailable and routing falls back to a local Ollama model, the progress message now includes a hint (`⚠️ local model only — run buff models or buff provider set to add a cloud provider`) so the user knows why only local is available.
+- **Increased: tool-loop step limit from 8 to 16** — the chat tool loop's `maxSteps` was hardcoded to 8, which was too low for complex tasks like "assess this project and create a code map" (reading multiple files + searching patterns + writing a document easily exceeds 8 tool calls). Increased to 16 to accommodate multi-step tasks while still preventing infinite loops.
+
 ## v1.75.1 — hotfix: dashboard blank page on load (resumeSession temporal dead zone)
 
 - **Fixed: dashboard blank page** — `resumeSession` referenced `attachProject` in its dependency array, but `attachProject` was defined after `resumeSession` in the component. This caused a `ReferenceError` at render time (temporal dead zone for `const`), crashing React and showing a black blank page. Fix: use an `attachProjectRef` to break the circular dependency.
