@@ -391,6 +391,12 @@ export class GatewayRegistry {
    * Every message is recorded in the inbox (P2) with its disposition.
    */
   async handleInbound(msg: InboundMessage): Promise<string> {
+    // Auto-learn Telegram chat IDs: when a message arrives from a Telegram
+    // user, update any contact/alias that used a phone number format.
+    if (msg.platform === 'telegram' && msg.senderId) {
+      void this.learnTelegramChatId(msg.senderId, msg.channelId).catch(() => {});
+    }
+
     const ref: ChannelRef = { platform: msg.platform, channelId: msg.channelId };
     const replyTo = async (text: string): Promise<void> => {
       await this.sendToRef(ref, text);
@@ -671,6 +677,48 @@ export class GatewayRegistry {
     this.deliveryTimer = setInterval(() => {
       void this.drainDelivery().catch(() => undefined);
     }, DELIVERY_DRAIN_INTERVAL_MS);
+  }
+
+  /**
+   * Auto-learn Telegram chat IDs: when a message arrives from a Telegram user,
+   * update any contact/alias that used a phone number format with the real
+   * numeric chat ID. This fixes the common mistake of storing +91XXXXXXXXXX
+   * instead of the Telegram-assigned chat ID.
+   */
+  private async learnTelegramChatId(senderId: string, channelId: string): Promise<void> {
+    try {
+      const { readGatewayContacts, upsertGatewayContact } = await import('../gateway/contacts.js');
+      const { readAliases, writeAliases } = await import('./channel-directory.js');
+      const contacts = readGatewayContacts();
+      let updated = false;
+
+      // Update contacts that use phone number format for Telegram
+      for (const c of contacts) {
+        if (c.platform === 'telegram' && /^\+?\d{10,15}$/.test(c.id) && c.id !== channelId) {
+          upsertGatewayContact({ ...c, id: channelId });
+          logger.info(`gateway: auto-learned Telegram chat ID for ${c.name}: ${c.id} → ${channelId}`);
+          updated = true;
+        }
+      }
+
+      // Update aliases that use phone number format for Telegram
+      const aliases = readAliases();
+      let aliasUpdated = false;
+      for (const a of aliases) {
+        if (a.platform === 'telegram' && /^\+?\d{10,15}$/.test(a.channelId) && a.channelId !== channelId) {
+          a.channelId = channelId;
+          aliasUpdated = true;
+          logger.info(`gateway: auto-learned Telegram chat ID for alias '${a.alias}': ${a.channelId} → ${channelId}`);
+        }
+      }
+      if (aliasUpdated) writeAliases(aliases);
+
+      if (updated || aliasUpdated) {
+        logger.info(`gateway: Telegram chat ID learned from incoming message: ${channelId}`);
+      }
+    } catch {
+      /* best-effort — never break the pipeline */
+    }
   }
 
   /** Stop adapters + unsubscribe + stop the delivery drain. Idempotent. */

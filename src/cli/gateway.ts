@@ -305,6 +305,13 @@ export class GatewayCommand {
 
   private async aliasAdd(alias: string, platform: string, channelId: string): Promise<void> {
     if (!guardRbacAction('gateway.manage')) return;
+    const { validateContactId } = await import('../gateway/contacts.js');
+    const err = validateContactId(platform as any, channelId);
+    if (err) {
+      logger.error(err);
+      process.exitCode = 1;
+      return;
+    }
     const directory = new ChannelDirectory();
     try {
       const entry = directory.setAlias(alias, platform as any, channelId);
@@ -384,6 +391,7 @@ export class GatewayCommand {
           'Start the gateway:  buff gateway start',
           'Open your bot in Telegram and send a message',
           'The agent will reply automatically!',
+          'The gateway auto-learns your chat ID from the first message',
           'Optional: add an alias:  buff gateway alias add support telegram <your-chat-id>',
         ],
       },

@@ -3051,6 +3051,7 @@ function handleRequest(req: IncomingMessage, res: ServerResponse): void {
         let savedContacts: GatewayContact[] | undefined;
         if (Array.isArray(body?.contacts)) {
           const { writeGatewayContacts, syncWhatsAppContactName } = await import('../gateway/contacts.js');
+          const { validateContactId } = await import('../gateway/contacts.js');
           const valid = (body.contacts as unknown[])
             .filter(
               (c): c is { name: string; platform: string; id: string; addedAt?: number } =>
@@ -3065,7 +3066,12 @@ function handleRequest(req: IncomingMessage, res: ServerResponse): void {
               id: (c.id ?? '').trim(),
               addedAt: typeof c.addedAt === 'number' ? c.addedAt : Date.now(),
             }))
-            .filter((c) => c.name && c.id && c.platform in PLATFORM_ENV_VARS);
+            .filter((c) => {
+              if (!c.name || !c.id || !(c.platform in PLATFORM_ENV_VARS)) return false;
+              const err = validateContactId(c.platform as any, c.id);
+              if (err) { console.warn(`contacts: skipping ${c.name} (${c.platform}): ${err}`); return false; }
+              return true;
+            });
           savedContacts = valid as GatewayContact[];
           writeGatewayContacts(savedContacts);
           // Send-by-name parity: named whatsapp contacts land in the bridge
@@ -3767,7 +3773,7 @@ function handleRequest(req: IncomingMessage, res: ServerResponse): void {
     const canWrite = roleCan(session.role, 'routing.operate');
     // Per-platform setup documentation links and one-line hints.
     const SETUP_META: Record<string, { url: string; hint: string }> = {
-      telegram: { url: 'https://core.telegram.org/bots#how-do-i-create-a-bot', hint: 'Create a bot via @BotFather on Telegram, copy the token, paste it here, then run `buff gateway start`.' },
+      telegram: { url: 'https://core.telegram.org/bots#how-do-i-create-a-bot', hint: 'Create a bot via @BotFather on Telegram, copy the token, paste it here, then run `buff gateway start`. Note: contacts need the Telegram chat ID (numeric), not a phone number — message the bot first to get the ID.' },
       discord: { url: 'https://discord.com/developers/applications', hint: 'Create an application + bot in the Discord Developer Portal, copy the bot token, paste it here, then run `buff gateway start`.' },
       slack: { url: 'https://api.slack.com/apps', hint: 'Create a Slack app with Bot Token Scopes, install to workspace, copy the Bot Token, paste it here, then run `buff gateway start`.' },
       whatsapp_cloud: { url: 'https://developers.facebook.com/docs/whatsapp/cloud-api/get-started', hint: 'Set up a Meta Cloud API phone number, paste the token + Phone ID here, then run `buff gateway start`.' },

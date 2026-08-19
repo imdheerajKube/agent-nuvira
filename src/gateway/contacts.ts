@@ -105,6 +105,24 @@ export function sameContactName(a: string, b: string): boolean {
  * or the same (platform, name) — is replaced in place. Returns the saved
  * contact and whether it was a new entry.
  */
+/**
+ * Validate a contact ID for a given platform. Returns an error message if
+ * invalid, or null if valid. Telegram requires a numeric chat ID (not a
+ * phone number) — the ID is assigned by Telegram when a user first messages
+ * the bot.
+ */
+export function validateContactId(platform: Platform, id: string): string | null {
+  const trimmed = (id || '').trim();
+  if (!trimmed) return 'Contact ID is required.';
+  if (platform === 'telegram') {
+    // Telegram chat IDs are numeric (positive for DMs, negative for groups)
+    if (!/^-?\d+$/.test(trimmed)) {
+      return 'Telegram contact ID must be a numeric chat ID (e.g. 5123456789), not a phone number. Message the bot first to get the chat ID.';
+    }
+  }
+  return null;
+}
+
 export function upsertGatewayContact(
   contact: Omit<GatewayContact, 'addedAt'> & { addedAt?: number },
 ): { contact: GatewayContact; added: boolean } {
