@@ -103,11 +103,8 @@ const BUILTIN_TEMPLATES: WorkflowTemplate[] = [
         dependsOn: ['step-3'],
       },
     ],
-    recommendedModels: {
-      'context-gatherer': 'groq/llama-3.1-8b-instant',
-      writer: 'groq/llama-3.1-8b-instant',
-      reviewer: 'groq/llama-3.1-8b-instant',
-    },
+    // Models auto-selected by the router based on task complexity
+    recommendedModels: {},
   },
   {
     id: 'create-and-run',
@@ -131,7 +128,6 @@ const BUILTIN_TEMPLATES: WorkflowTemplate[] = [
       },
     ],
     recommendedModels: {
-      writer: 'groq/llama-3.1-8b-instant',
     },
   },
   {
@@ -176,11 +172,6 @@ const BUILTIN_TEMPLATES: WorkflowTemplate[] = [
       },
     ],
     recommendedModels: {
-      planner: 'groq/llama-3.1-8b-instant',
-      'context-gatherer': 'groq/llama-3.1-8b-instant',
-      writer: 'groq/llama-3.1-8b-instant',
-      tester: 'groq/llama-3.1-8b-instant',
-      reviewer: 'groq/llama-3.1-8b-instant',
     },
     useMemory: true,
   },
@@ -226,8 +217,6 @@ const BUILTIN_TEMPLATES: WorkflowTemplate[] = [
       },
     ],
     recommendedModels: {
-      writer: 'groq/llama-3.1-8b-instant',
-      reviewer: 'groq/llama-3.1-8b-instant',
     },
     useMemory: false,
     tags: ['release', 'publish', 'devops'],
@@ -269,10 +258,6 @@ const BUILTIN_TEMPLATES: WorkflowTemplate[] = [
       },
     ],
     recommendedModels: {
-      planner: 'groq/llama-3.1-8b-instant',
-      'context-gatherer': 'groq/llama-3.1-8b-instant',
-      writer: 'groq/llama-3.1-8b-instant',
-      reviewer: 'groq/llama-3.1-8b-instant',
     },
     useMemory: true,
     tags: ['api', 'scaffold', 'rest', 'backend'],
@@ -305,9 +290,6 @@ const BUILTIN_TEMPLATES: WorkflowTemplate[] = [
       },
     ],
     recommendedModels: {
-      'context-gatherer': 'groq/llama-3.1-8b-instant',
-      writer: 'groq/llama-3.1-8b-instant',
-      reviewer: 'openrouter/meta-llama/llama-3.1-8b-instruct',
     },
     useMemory: false,
     tags: ['security', 'audit', 'scan'],
@@ -351,8 +333,6 @@ const BUILTIN_TEMPLATES: WorkflowTemplate[] = [
     recommendedModels: {
       // 'default' = the agent resolves a verified working model at runtime
       planner: 'default',
-      writer: 'groq/llama-3.1-8b-instant',
-      reviewer: 'groq/llama-3.1-8b-instant',
     },
     useMemory: true,
     tags: ['refactor', 'cleanup', 'optimize'],
@@ -384,9 +364,6 @@ const BUILTIN_TEMPLATES: WorkflowTemplate[] = [
       },
     ],
     recommendedModels: {
-      'context-gatherer': 'groq/llama-3.1-8b-instant',
-      reviewer: 'openrouter/meta-llama/llama-3.1-8b-instruct',
-      writer: 'groq/llama-3.1-8b-instant',
     },
     useMemory: false,
     tags: ['review', 'code-quality', 'git'],
@@ -428,9 +405,6 @@ const BUILTIN_TEMPLATES: WorkflowTemplate[] = [
       },
     ],
     recommendedModels: {
-      planner: 'groq/llama-3.1-8b-instant',
-      writer: 'groq/llama-3.1-8b-instant',
-      debugger: 'groq/llama-3.1-8b-instant',
     },
     useMemory: true,
     tags: ['debug', 'fix', 'bug'],
@@ -466,11 +440,8 @@ const BUILTIN_TEMPLATES: WorkflowTemplate[] = [
         dependsOn: ['step-3'],
       },
     ],
-    recommendedModels: {
-      'context-gatherer': 'groq/llama-3.1-8b-instant',
-      writer: 'groq/llama-3.1-8b-instant',
-      reviewer: 'groq/llama-3.1-8b-instant',
-    },
+    // Models auto-selected by the router based on task complexity
+    recommendedModels: {},
     useMemory: false,
     tags: ['test', 'coverage', 'qa'],
   },
