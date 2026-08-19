@@ -454,7 +454,8 @@ export default function AgentHub() {
     setPolicyMsg(null);
     const r = await dashboardAPI.saveGatewayPolicies(policyDraft, statusRecipients, contacts);
     if (r.ok) {
-      setPolicyMsg({ kind: 'ok', text: '✅ Permissions + saved contacts + status recipients saved — the running gateway applies them immediately.' });
+      const warnMsg = r.contactErrors?.length ? `\n⚠️ Some contacts were rejected: ${r.contactErrors.join('; ')}` : '';
+      setPolicyMsg({ kind: warnMsg ? 'warn' : 'ok', text: `✅ Permissions + saved contacts + status recipients saved — the running gateway applies them immediately.${warnMsg}` });
       setPolicyDraft({});
       void refresh();
     } else if (r.unauthorized) {

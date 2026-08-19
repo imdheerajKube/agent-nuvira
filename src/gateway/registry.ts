@@ -701,6 +701,15 @@ export class GatewayRegistry {
         }
       }
 
+      // Auto-create contact for NEW Telegram users (if not already known)
+      const existingContact = contacts.find((c) => c.platform === 'telegram' && c.id === channelId);
+      if (!existingContact) {
+        const autoName = `telegram-user-${channelId.slice(-4)}`;
+        upsertGatewayContact({ name: autoName, platform: 'telegram', id: channelId });
+        logger.info(`gateway: auto-created Telegram contact '${autoName}' for chat ID ${channelId}`);
+        updated = true;
+      }
+
       // Update aliases that use phone number format for Telegram
       const aliases = readAliases();
       let aliasUpdated = false;

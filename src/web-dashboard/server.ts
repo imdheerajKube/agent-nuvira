@@ -3049,6 +3049,7 @@ function handleRequest(req: IncomingMessage, res: ServerResponse): void {
         // WhatsApp contacts are synced into the bridge contacts file for
         // send-by-name parity with `buff whatsapp contact add <Name> <no>`.
         let savedContacts: GatewayContact[] | undefined;
+        const contactErrors: string[] = [];
         if (Array.isArray(body?.contacts)) {
           const { writeGatewayContacts, syncWhatsAppContactName } = await import('../gateway/contacts.js');
           const { validateContactId } = await import('../gateway/contacts.js');
@@ -3069,7 +3070,10 @@ function handleRequest(req: IncomingMessage, res: ServerResponse): void {
             .filter((c) => {
               if (!c.name || !c.id || !(c.platform in PLATFORM_ENV_VARS)) return false;
               const err = validateContactId(c.platform as any, c.id);
-              if (err) { console.warn(`contacts: skipping ${c.name} (${c.platform}): ${err}`); return false; }
+              if (err) {
+                contactErrors.push(`${c.name || c.id} (${c.platform}): ${err}`);
+                return false;
+              }
               return true;
             });
           savedContacts = valid as GatewayContact[];
@@ -3080,7 +3084,13 @@ function handleRequest(req: IncomingMessage, res: ServerResponse): void {
             if (c.platform === 'whatsapp') syncWhatsAppContactName(c.name, c.id);
           }
         }
-        writeJson(res, 200, { ok: true, policies: merged, statusRecipients: gatewayPatch.statusRecipients ?? [], contacts: savedContacts });
+        writeJson(res, 200, {
+          ok: true,
+          policies: merged,
+          statusRecipients: gatewayPatch.statusRecipients ?? [],
+          contacts: savedContacts,
+          ...(contactErrors.length > 0 ? { contactErrors } : {}),
+        });
         return;
       }
       writeJson(res, 405, { ok: false, error: 'Method not allowed — use GET or PUT.' });
