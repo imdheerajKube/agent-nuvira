@@ -863,18 +863,31 @@ export class DashboardAPI {
   /**
    * Browse directories for the project picker folder browser.
    * Returns subdirectories of the given path (or home dir if empty).
+   * showDrives=true returns drive roots (Windows drives, Mac /Volumes).
    */
-  async browseDirectories(path?: string): Promise<{ ok: boolean; path: string; entries: Array<{ name: string; path: string }>; parent: string | null; isProject: boolean; error?: string }> {
+  async browseDirectories(path?: string, opts?: { showDrives?: boolean }): Promise<{
+    ok: boolean; path: string;
+    entries: Array<{ name: string; path: string; isDir?: boolean; modified?: number }>;
+    parent: string | null; isProject: boolean; error?: string;
+    drives?: Array<{ name: string; path: string; type: string }>;
+    breadcrumbs?: Array<{ name: string; path: string }>;
+  }> {
     const token = getAdminToken();
     try {
-      const query = path ? `?path=${encodeURIComponent(path)}` : '';
+      const params = new URLSearchParams();
+      if (path) params.set('path', path);
+      if (opts?.showDrives) params.set('showDrives', '1');
+      const query = params.toString() ? `?${params.toString()}` : '';
       const res = await fetch(`${this.baseUrl}/api/browse${query}`, {
         headers: token ? { Authorization: `Bearer ${token}` } : {},
         signal: AbortSignal.timeout(10_000),
       });
-      const d = (await res.json()) as { ok?: boolean; path?: string; entries?: Array<{ name: string; path: string }>; parent?: string | null; isProject?: boolean; error?: string };
+      const d = (await res.json()) as any;
       if (res.status === 200 && d.ok && Array.isArray(d.entries)) {
-        return { ok: true, path: d.path ?? '', entries: d.entries, parent: d.parent ?? null, isProject: d.isProject ?? false };
+        return {
+          ok: true, path: d.path ?? '', entries: d.entries, parent: d.parent ?? null,
+          isProject: d.isProject ?? false, drives: d.drives, breadcrumbs: d.breadcrumbs,
+        };
       }
       return { ok: false, path: '', entries: [], parent: null, isProject: false, error: typeof d.error === 'string' ? d.error : 'Browse failed.' };
     } catch {

@@ -2997,8 +2997,103 @@ body {
 }
 
 .chat-browse-foot {
+  display: flex;
+  align-items: center;
+  gap: 6px;
   padding: 8px 10px;
   border-top: 1px solid var(--border);
+}
+
+/* Breadcrumbs */
+.chat-browse-breadcrumbs {
+  flex: 1;
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  overflow-x: auto;
+  white-space: nowrap;
+  font-size: 11px;
+}
+
+.chat-breadcrumb {
+  background: none;
+  border: none;
+  color: var(--accent);
+  cursor: pointer;
+  padding: 2px 4px;
+  border-radius: 4px;
+  font-size: 11px;
+}
+
+.chat-breadcrumb:hover {
+  background: rgba(255, 255, 255, 0.1);
+}
+
+.chat-breadcrumb-sep {
+  color: var(--text-secondary);
+  font-size: 10px;
+}
+
+/* Drive bar */
+.chat-browse-drives {
+  display: flex;
+  gap: 6px;
+  padding: 8px 10px;
+  border-bottom: 1px solid var(--border);
+  flex-wrap: wrap;
+}
+
+.chat-browse-drive {
+  padding: 4px 10px;
+  border: 1px solid var(--border);
+  background: var(--bg-secondary);
+  color: var(--text-primary);
+  border-radius: 6px;
+  cursor: pointer;
+  font-size: 11px;
+}
+
+.chat-browse-drive:hover {
+  background: rgba(255, 255, 255, 0.08);
+  border-color: var(--accent);
+}
+
+/* Search filter */
+.chat-browse-search {
+  padding: 6px 10px;
+  border-bottom: 1px solid var(--border);
+}
+
+.chat-browse-filter {
+  width: 100%;
+  padding: 4px 8px;
+  border: 1px solid var(--border);
+  background: var(--bg-secondary);
+  color: var(--text-primary);
+  border-radius: 6px;
+  font-size: 12px;
+  outline: none;
+}
+
+.chat-browse-filter:focus {
+  border-color: var(--accent);
+}
+
+/* Entry improvements */
+.chat-browse-entry-icon {
+  font-size: 14px;
+}
+
+.chat-browse-entry-name {
+  flex: 1;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.chat-browse-entry-date {
+  font-size: 10px;
+  color: var(--text-secondary);
 }
 
 /* P4b — resumed-session project-mismatch banner. */
