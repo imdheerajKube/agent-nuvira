@@ -2,6 +2,12 @@
 
 All notable changes to **Agent-Nuvira** are documented in this file.
 
+## v1.76.1 — feat: Model Discovery Timeline panel
+
+- **Added: Model Discovery Timeline** — a new `/models/timeline` dashboard panel that shows every known model's freshness status (fresh / stale / likely removed), last probed time, last verified time, last used time, error rate, and latency. Summary cards show total / fresh / stale / removed counts. Filterable by status and sortable by provider / last-seen / status. Auto-refreshes every 30 seconds.
+- **Added: `/api/model-timeline` endpoint** — reads the model-registry.json mirror and returns per-model timeline data with staleness classification (<7d fresh, 7-30d stale, >30d+>50% error rate likely removed).
+- **Fixed: timeline endpoint uses sync disk read** — replaced async `await import()` with synchronous `readJSON()` to avoid TypeScript errors in the non-async HTTP handler.
+
 ## v1.76.0 — feat: improved folder browser, Telegram auto-learning, and Getting Started wizards
 
 - **Improved: folder browser redesigned** — the Browse button now shows drive roots (Windows C:/D:, Mac /Volumes), breadcrumb navigation, search/filter, auto-refresh every 5 seconds, and modified dates. No more "lame" folder picker — it now works like a proper file explorer.
