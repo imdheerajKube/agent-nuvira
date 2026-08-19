@@ -494,13 +494,12 @@ describe('/api/projects — P3 project attach', () => {
     expect((await authedFetch('/api/projects/attach', 'POST', { path: '/tmp' }, viewerToken)).status).toBe(403);
   });
 
-  it('lists the dashboard cwd and attaches a real project directory', async () => {
-    // The list always contains the dashboard's own cwd.
+  it('lists recent projects and attaches a real project directory', async () => {
+    // Initially the list may be empty (no cwd pre-populated since v1.75.3).
     const list = await authedFetch('/api/projects');
     expect(list.status).toBe(200);
     const l = (await list.json()) as { ok: boolean; projects: Array<{ path: string; name: string; kind: string }> };
     expect(l.ok).toBe(true);
-    expect(l.projects.some((p) => p.kind === 'cwd' && p.path === process.cwd())).toBe(true);
 
     // Attach a real directory (the test fixture dir is a valid directory).
     const attach = await authedFetch('/api/projects/attach', 'POST', { path: testDir });
@@ -509,6 +508,11 @@ describe('/api/projects — P3 project attach', () => {
     expect(a.ok).toBe(true);
     expect(a.project.path).toBe(testDir);
     expect(typeof a.project.fileCount).toBe('number');
+
+    // After attaching, the project should appear in the list.
+    const listAfter = await authedFetch('/api/projects');
+    const lAfter = (await listAfter.json()) as { ok: boolean; projects: Array<{ path: string; name: string; kind: string }> };
+    expect(lAfter.projects.some((p) => p.path === testDir)).toBe(true);
 
     // A bogus path is rejected with 400.
     const bad = await authedFetch('/api/projects/attach', 'POST', { path: '/no/such/dir-xyz' });

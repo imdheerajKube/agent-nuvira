@@ -550,7 +550,7 @@ describe('ChatPage', () => {
     mockChatStream();
     const send = mockChatSend(OK_RESPONSE);
     vi.spyOn(dashboardAPI, 'listProjects').mockResolvedValue([
-      { path: '/tmp/my-app', name: 'my-app', kind: 'cwd' },
+      { path: '/tmp/my-app', name: 'my-app', kind: 'recent' },
     ]);
     const attach = vi.spyOn(dashboardAPI, 'attachProject').mockResolvedValue({
       ok: true,
@@ -559,9 +559,9 @@ describe('ChatPage', () => {
     render(<ChatPage />);
     await waitFor(() => expect(screen.getByPlaceholderText(/Message the agent/)).toBeTruthy());
 
-    // The bar offers the current dir as a one-click attach.
-    await waitFor(() => expect(screen.getByRole('button', { name: /current dir/ })).toBeTruthy());
-    fireEvent.click(screen.getByRole('button', { name: /current dir/ }));
+    // The bar offers recent projects as one-click attach chips.
+    await waitFor(() => expect(screen.getByRole('button', { name: /my-app/ })).toBeTruthy());
+    fireEvent.click(screen.getByRole('button', { name: /my-app/ }));
 
     // Attached state shows the project + its stats.
     await waitFor(() => expect(attach).toHaveBeenCalledWith('/tmp/my-app'));
@@ -576,7 +576,7 @@ describe('ChatPage', () => {
 
     // Detaching clears the bar back to the picker.
     fireEvent.click(screen.getByRole('button', { name: /detach/ }));
-    await waitFor(() => expect(screen.getByText(/Attach a project/)).toBeTruthy());
+    await waitFor(() => expect(screen.getByText(/Select Project Folder/)).toBeTruthy());
   });
 
   it('Phase 4 — the session sidebar lists past conversations and resumes them', async () => {
@@ -803,14 +803,14 @@ describe('ChatPage', () => {
     mockAuthed('admin');
     mockChatStream();
     vi.spyOn(dashboardAPI, 'chatResolve').mockResolvedValue({ ok: true, matches: [] });
-    vi.spyOn(dashboardAPI, 'listProjects').mockResolvedValue([{ path: '/tmp/my-app', name: 'my-app', kind: 'cwd' }]);
+    vi.spyOn(dashboardAPI, 'listProjects').mockResolvedValue([{ path: '/tmp/my-app', name: 'my-app', kind: 'recent' }]);
     vi.spyOn(dashboardAPI, 'attachProject').mockResolvedValue({
       ok: true,
       project: { path: '/tmp/my-app', name: 'my-app', fileCount: 10, symbolCount: 20, truncated: false },
     });
     render(<ChatPage />);
-    await waitFor(() => expect(screen.getByRole('button', { name: /current dir/ })).toBeTruthy());
-    fireEvent.click(screen.getByRole('button', { name: /current dir/ }));
+    await waitFor(() => expect(screen.getByRole('button', { name: /my-app/ })).toBeTruthy());
+    fireEvent.click(screen.getByRole('button', { name: /my-app/ }));
     await waitFor(() => expect(screen.getByText('my-app')).toBeTruthy());
 
     // Now send a message whose answer contains a ```diff block.

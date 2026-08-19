@@ -2,6 +2,13 @@
 
 All notable changes to **Agent-Nuvira** are documented in this file.
 
+## v1.75.3 — fix: dashboard project picker, Telegram setup docs, and CLI interactive mode
+
+- **Fixed: "current dir" button shows error** — the dashboard's project picker showed a "current dir" chip that pointed to the server's `process.cwd()` (typically the npm global install path, not the user's project). Clicking it timed out trying to scan thousands of files. Fix: removed the unreliable cwd chip and renamed the label to "Select Project Folder".
+- **Added: Telegram/Discord/Slack setup docs and hints** — the dashboard Channels tab now shows a 📖 Docs link per platform (linking to the platform's developer portal) and a one-line setup hint explaining exactly what to do (e.g. "Create a bot via @BotFather, paste the token, then run `buff gateway start`"). The CLI `buff gateway status` command now also shows a "Next steps" section when adapters are configured.
+- **Improved: `buff gateway start` shows setup instructions** — when no adapters are configured, the gateway start command now shows platform-specific setup commands (Telegram token, Discord token, Slack token, etc.) instead of just a generic env var list.
+- **Fixed: CLI chat exits after initial task** — `buff chat "do something"` showed followups but exited when the user pressed Enter without picking one. Now it falls through to an interactive chat loop where the user can keep typing messages (or type `/exit` to quit).
+
 ## v1.75.2 — fix: chat resolve loop, local fallback UX, and tool-loop step limit
 
 - **Fixed: "No — ask the agent" button loops back to the same resolve card** — when the dashboard's intent resolver matches a user's message to a CLI command (e.g. `buff trace list`), declining the command card re-sent the same message to `chatResolve`, which found the same match and re-showed the card in an infinite loop. Fix: added a `skipResolve` flag to the send function so declined messages bypass re-resolution and go straight to the agent.

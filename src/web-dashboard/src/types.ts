@@ -979,6 +979,10 @@ export interface PlatformConfigEntry {
   label: string;
   configured: boolean;
   envVars: HubPlatformEnvVar[];
+  /** Link to the platform's setup documentation (BotFather, developer console, etc.). */
+  setupUrl?: string;
+  /** One-line setup hint (e.g. 'Create a bot via @BotFather, then paste the token here.'). */
+  setupHint?: string;
 }
 
 /** Per-platform inbound policy (who may trigger the agent) — Permissions page. */

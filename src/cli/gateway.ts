@@ -152,6 +152,14 @@ export class GatewayCommand {
       console.log('  buff gateway alias add <alias> <telegram|discord|slack|whatsapp|whatsapp_cloud|email|signal|dingtalk|feishu|wecom|mattermost|matrix|webhook|bluebubbles|ntfy|teams|google_chat|weixin|sms|irc|simplex|homeassistant> <channelId>');
       console.log('  buff gateway send ops "nightly build done"');
     }
+    console.log('');
+    if (configured.length > 0) {
+      console.log('🚀 Next steps:');
+      console.log('  1. Start the gateway:  buff gateway start');
+      console.log('  2. Send a test message: buff gateway send <platform>:<chatId> "Hello from agent-nuvira!"');
+      console.log('  3. Or set up an alias:  buff gateway alias add myteam ' + configured[0] + ' <your-chat-id>');
+      console.log('');
+    }
   }
 
   // ─── send ─────────────────────────────────────────────────────────────────
@@ -333,9 +341,18 @@ export class GatewayCommand {
     for (const adapter of adapters) registry.register(adapter);
 
     if (!registry.hasConfiguredAdapter()) {
-      logger.warn('No adapters configured — set BUFF_TELEGRAM_TOKEN, BUFF_DISCORD_*, BUFF_SLACK_*, BUFF_WHATSAPP_*,');
-      logger.warn('  BUFF_SMTP_HOST+BUFF_SMTP_USER (email), BUFF_SIGNAL_ACCOUNT (signal), or any I9 webhook URL env var.');
-      logger.warn('Add aliases with: buff gateway alias add <alias> <platform> <channelId>');
+      logger.warn('No adapters configured — set one or more platform tokens:');
+      console.log('');
+      console.log('  Telegram:   BUFF_TELEGRAM_TOKEN=your-token   (get from @BotFather on Telegram)');
+      console.log('  Discord:    BUFF_DISCORD_BOT_TOKEN=your-token  (from Discord Developer Portal)');
+      console.log('  Slack:      BUFF_SLACK_BOT_TOKEN=your-token    (from Slack API → Your Apps)');
+      console.log('  WhatsApp:   buff whatsapp pair                  (scan QR code)');
+      console.log('  Email:      BUFF_SMTP_HOST + BUFF_SMTP_USER     (any SMTP relay)');
+      console.log('  Signal:     BUFF_SIGNAL_ACCOUNT=your-number     (via signal-cli-rest-api)');
+      console.log('');
+      console.log('  Tokens are saved to ~/.buff/.env — use the dashboard Channels tab or:');
+      console.log('    buff config gateway <platform>                  (interactive wizard)');
+      console.log('');
     }
 
     // Webhook receiver for Discord/Slack/WhatsApp inbound.
