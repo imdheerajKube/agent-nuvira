@@ -302,7 +302,7 @@ function findMatchingBrace(text: string, start: number): number {
  * returns a no-tools response (end turn), bounded by maxSteps.
  */
 export async function runToolLoop(opts: ToolLoopOptions): Promise<ToolLoopResult> {
-  const { messages, tools: toolNames, maxSteps = 8, context, deps } = opts;
+  const { messages, tools: toolNames, maxSteps = 16, context, deps } = opts;
 
   const followups: FollowupSuggestion[] = [];
   const toolCallsRun: string[] = [];

@@ -868,9 +868,10 @@ export default function ChatPage() {
   }, []);
 
   const send = useCallback(
-    async (text: string, withAttachments?: AttachmentChip[]) => {
+    async (text: string, withAttachments?: AttachmentChip[] | { skipResolve: boolean }) => {
       const clean = text.trim();
-      const chipList = withAttachments ?? attachments;
+      const chipList = Array.isArray(withAttachments) ? withAttachments : attachments;
+      const skipResolve = !Array.isArray(withAttachments) && withAttachments?.skipResolve === true;
       if ((!clean && chipList.length === 0) || busy) return;
       setError('');
       setMeta(null);
@@ -897,18 +898,23 @@ export default function ChatPage() {
       // short-circuits to a confirm card (deterministic commands like "stop
       // the dashboard" shouldn't need a model turn); ambiguous asks show
       // their options as choices; everything else falls through to the agent.
-      const resolved = await dashboardAPI.chatResolve(clean);
-      const matches = (resolved.matches ?? []) as ResolvedCommand[];
-      const top = matches[0] ?? null;
-      if (top && top.command && !top.ambiguous && top.score >= 0.6) {
-        setPendingResolve({ ask: clean, top });
-        setBusy(false);
-        return;
-      }
-      if (top && top.ambiguous && !pendingResolve) {
-        setPendingResolve({ ask: clean, top });
-        setBusy(false);
-        return;
+      // skipResolve: when the user already declined a resolved command
+      // ("No — ask the agent"), skip re-resolution and go straight to the
+      // agent — prevents the loop where declining re-shows the same card.
+      if (!skipResolve) {
+        const resolved = await dashboardAPI.chatResolve(clean);
+        const matches = (resolved.matches ?? []) as ResolvedCommand[];
+        const top = matches[0] ?? null;
+        if (top && top.command && !top.ambiguous && top.score >= 0.6) {
+          setPendingResolve({ ask: clean, top });
+          setBusy(false);
+          return;
+        }
+        if (top && top.ambiguous && !pendingResolve) {
+          setPendingResolve({ ask: clean, top });
+          setBusy(false);
+          return;
+        }
       }
 
       const sessionId = sessionIdRef.current;
@@ -1140,7 +1146,7 @@ export default function ChatPage() {
   /** User declined the command card — ask the agent normally instead. */
   const declineResolvedCommand = useCallback((ask: string) => {
     setPendingResolve(null);
-    void send(ask);
+    void send(ask, { skipResolve: true });
   }, [send]);
 
   /**
