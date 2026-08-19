@@ -4001,6 +4001,54 @@ function handleRequest(req: IncomingMessage, res: ServerResponse): void {
     return;
   }
 
+  // POST /api/config/platforms/:platform/verify — verify a platform's token
+  // by calling the platform's API (e.g. Telegram getMe, Discord /users/@me).
+  const verifyMatch = /^\/api\/config\/platforms\/([^/]+)\/verify$/.exec(pathname);
+  if (verifyMatch && req.method === 'POST') {
+    void (async () => {
+      const session = adminSessions.validate(bearerToken(req));
+      if (!session) {
+        writeJson(res, 401, { ok: false, error: 'Not authenticated — log in first.' });
+        return;
+      }
+      if (!roleCan(session.role, 'routing.operate')) {
+        writeJson(res, 403, { ok: false, error: 'Access denied.' });
+        return;
+      }
+      const platform = verifyMatch[1];
+      const body = await readJsonBody(req);
+      const values = (body?.values ?? {}) as Record<string, string>;
+      try {
+        let result: { ok: boolean; info?: string; error?: string };
+        if (platform === 'telegram') {
+          const token = values.BUFF_TELEGRAM_TOKEN ?? '';
+          if (!token) { writeJson(res, 400, { ok: false, error: 'No token provided.' }); return; }
+          const r = await fetch(`https://api.telegram.org/bot${token}/getMe`, { signal: AbortSignal.timeout(10_000) });
+          const d = await r.json() as { ok?: boolean; result?: { username?: string; first_name?: string } };
+          result = d.ok && d.result ? { ok: true, info: `@${d.result.username} (${d.result.first_name})` } : { ok: false, error: `Telegram rejected the token: ${JSON.stringify(d)}` };
+        } else if (platform === 'discord') {
+          const token = values.BUFF_DISCORD_BOT_TOKEN ?? '';
+          if (!token) { writeJson(res, 400, { ok: false, error: 'No token provided.' }); return; }
+          const r = await fetch('https://discord.com/api/v10/users/@me', { headers: { Authorization: `Bot ${token}` }, signal: AbortSignal.timeout(10_000) });
+          const d = await r.json() as { username?: string; id?: string };
+          result = d.username ? { ok: true, info: `@${d.username} (${d.id})` } : { ok: false, error: `Discord rejected the token: ${JSON.stringify(d)}` };
+        } else if (platform === 'slack') {
+          const token = values.BUFF_SLACK_BOT_TOKEN ?? '';
+          if (!token) { writeJson(res, 400, { ok: false, error: 'No token provided.' }); return; }
+          const r = await fetch('https://slack.com/api/auth.test', { method: 'POST', headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' }, signal: AbortSignal.timeout(10_000) });
+          const d = await r.json() as { ok?: boolean; team?: string; user?: string };
+          result = d.ok ? { ok: true, info: `${d.user} @ ${d.team}` } : { ok: false, error: `Slack rejected the token: ${JSON.stringify(d)}` };
+        } else {
+          result = { ok: false, error: `Verification not available for '${platform}' — save the token and test via the Gateway tab.` };
+        }
+        writeJson(res, 200, result);
+      } catch (err) {
+        writeJson(res, 200, { ok: false, error: `Verification failed: ${err instanceof Error ? err.message : String(err)}` });
+      }
+    })();
+    return;
+  }
+
   // GET /api/sessions — P4 session sidebar: past conversations (most recent
   // first) with title/preview/turnCount. Same auth as /api/chat (the sidebar
   // is part of the chat surface).

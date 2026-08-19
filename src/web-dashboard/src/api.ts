@@ -647,6 +647,14 @@ export class DashboardAPI {
     };
   }
 
+  /** Verify a platform's token by calling the platform's API (e.g. Telegram getMe). */
+  async verifyPlatformConfig(platform: string, values: Record<string, string>): Promise<{ ok: boolean; info?: string; error?: string }> {
+    const r = await this.sendAdminRequest(`/api/config/platforms/${encodeURIComponent(platform)}/verify`, 'POST', { values });
+    if (!r) return { ok: false, error: 'Could not reach the dashboard server.' };
+    const d = (r.data ?? {}) as { ok?: boolean; info?: string; error?: string };
+    return { ok: d.ok ?? false, info: d.info, error: d.error };
+  }
+
   /**
    * Save the user-declared budget (authed). Quota fields are gated by
    * routing.operate (admin + operator); the cost cap by policy.write (admin).
