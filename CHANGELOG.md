@@ -2,6 +2,14 @@
 
 All notable changes to **Agent-Nuvira** are documented in this file.
 
+## v1.76.0 — feat: improved folder browser, Telegram auto-learning, and Getting Started wizards
+
+- **Improved: folder browser redesigned** — the Browse button now shows drive roots (Windows C:/D:, Mac /Volumes), breadcrumb navigation, search/filter, auto-refresh every 5 seconds, and modified dates. No more "lame" folder picker — it now works like a proper file explorer.
+- **Fixed: Telegram contact IDs** — users added phone numbers (+91XXXXXXXXXX) for Telegram contacts, but Telegram requires numeric chat IDs. Added validation that rejects phone numbers and shows a clear error message. The gateway now auto-learns the real chat ID from incoming messages and auto-creates contacts.
+- **Added: Getting Started wizards** — `buff gateway setup [platform]` provides an interactive step-by-step wizard for Telegram, Discord, Slack, and Email. The dashboard Platforms page shows a 🚀 Getting Started button on unconfigured platforms with a 3-step wizard: Instructions → Token → Verify & Test.
+- **Added: Platforms onboarding page** — a dedicated `/platforms` page shows all 22 messaging platforms with setup status, env var indicators, and direct links to developer portals.
+- **Added: Telegram setup docs** — the dashboard Channels tab and Platforms page now show 📖 Docs links to each platform's developer portal and one-line setup hints.
+
 ## v1.75.3 — fix: dashboard project picker, Telegram setup docs, and CLI interactive mode
 
 - **Fixed: "current dir" button shows error** — the dashboard's project picker showed a "current dir" chip that pointed to the server's `process.cwd()` (typically the npm global install path, not the user's project). Clicking it timed out trying to scan thousands of files. Fix: removed the unreliable cwd chip and renamed the label to "Select Project Folder".
