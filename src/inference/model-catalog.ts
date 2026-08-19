@@ -321,48 +321,8 @@ export function formatModelName(modelId: string): string {
  * Some well-known models get a short blurb about what they excel at.
  */
 export function getModelBadge(modelId: string): string | undefined {
-  const badges: Record<string, string> = {
-    // Groq (updated Aug 2026 — llama/mixtral/gemma models retired)
-    'openai/gpt-oss-120b': 'Best Groq model — strong at chat, code, and reasoning',
-    'openai/gpt-oss-20b': 'Fast & capable — great for quick iterations',
-    'qwen/qwen3.6-27b': 'Excellent reasoning and multilingual support',
-    'groq/compound': 'Compound model with tool use',
-    'groq/compound-mini': 'Lightweight compound model',
-
-    // Gemini — the 2.x line (2.0-flash-exp / 2.5-flash / 2.5-pro) is RETIRED
-    // for new accounts (404 "no longer available to new users"); the stable
-    // -latest aliases and 3.x previews are what a 2026 account can actually use.
-    'gemini-flash-latest': 'Latest Gemini Flash — fast, multimodal, strong all-around',
-    'gemini-pro-latest': 'Latest Gemini Pro — best quality, slower',
-    'gemini-flash-lite-latest': 'Lightweight Gemini Flash — fastest, lowest cost',
-    'gemini-3-flash-preview': 'Gemini 3 Flash — current-gen fast model',
-    'gemini-3-pro-preview': 'Gemini 3 Pro — current-gen highest quality',
-    'gemini-2.0-flash-exp': 'DEPRECATED — retired for new accounts (404); use gemini-flash-latest',
-    'gemini-2.0-flash': 'Fast & capable — balances speed and quality',
-    'gemini-1.5-flash': 'Quick responses with good quality',
-    'gemini-1.5-pro': 'Best quality — slower but more accurate',
-
-    // OpenRouter common
-    'mistralai/mistral-7b-instruct': 'Lightweight instruct model — good for simple tasks',
-    'openai/gpt-4o': 'Top-tier — best for complex tasks',
-    'openai/gpt-4o-mini': 'Affordable & fast — great for everyday use',
-    'anthropic/claude-sonnet-4-20250514': 'Excellent for agentic tasks and long context',
-    'anthropic/claude-3.5-sonnet': 'Balanced quality and speed',
-    'meta-llama/llama-3.3-70b-instruct': 'Strong open-weight model — versatile and capable',
-
-    // Speech / Audio
-    'whisper-large-v3': 'Speech-to-text transcription model',
-    'distil-whisper-large-v3-en': 'Fast STT — English optimized',
-    'canopylabs/orpheus-v1-english': 'Text-to-speech voice generation (not chat)',
-
-    // Local / Ollama
-    'llama2': 'Original Llama — works offline',
-    'llama3': 'Modern open-weight chat model',
-    'deepseek-coder': 'Specialized for code — great for programming',
-    'codellama': 'Code-focused Llama variant',
-    'mistral': 'Solid general-purpose model',
-    'phi': 'Ultra-lightweight — runs on any hardware',
-  };
-
-  return badges[modelId];
+  // Dynamic badge generation — pattern-based, no hardcoded model names.
+  // This ensures the system adapts when providers add/remove models.
+  const { generateDynamicBadge } = require('./dynamic-catalog.js');
+  return generateDynamicBadge(modelId);
 }

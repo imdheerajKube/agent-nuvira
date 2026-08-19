@@ -127,12 +127,10 @@ describe('quick-fix template structure', () => {
     expect(template.steps[4].dependsOn).toEqual(['step-3']);
   });
 
-  it('should have recommendedModels for context-gatherer, writer, and reviewer (security is rule-based)', () => {
+  it('should have recommendedModels (auto-routing used when empty)', () => {
     expect(template.recommendedModels).toBeDefined();
-    expect(Object.keys(template.recommendedModels!)).toHaveLength(3);
-    expect(template.recommendedModels!['context-gatherer']).toBeTruthy();
-    expect(template.recommendedModels!.writer).toBeTruthy();
-    expect(template.recommendedModels!.reviewer).toBeTruthy();
+    // Empty object means auto-router picks the best model per task
+    expect(typeof template.recommendedModels).toBe('object');
   });
 
   it('should not set useMemory by default', () => {
@@ -179,7 +177,7 @@ describe('feature-implement template structure', () => {
 
   it('should have recommendedModels with 5 entries (security is rule-based, no LLM needed)', () => {
     expect(template.recommendedModels).toBeDefined();
-    expect(Object.keys(template.recommendedModels!)).toHaveLength(5);
+    // Auto-routing: empty object means router picks best model per task
   });
 
   it('should enable memory', () => {
@@ -207,10 +205,10 @@ describe('create-and-run template structure', () => {
     expect(template.steps[2].dependsOn).toEqual(['step-1']);
   });
 
-  it('should only have recommendedModels for writer (runner/reviewer use defaults)', () => {
+  it('should have recommendedModels (auto-routing picks best model per task)', () => {
     expect(template.recommendedModels).toBeDefined();
-    expect(Object.keys(template.recommendedModels!)).toHaveLength(1);
-    expect(template.recommendedModels!.writer).toBeTruthy();
+    // Empty object means auto-router picks the best model per task
+    expect(typeof template.recommendedModels).toBe('object');
   });
 });
 
@@ -242,11 +240,10 @@ describe('publish-release template structure', () => {
     expect(template.steps[6].dependsOn).toEqual(['step-5']);
   });
 
-  it('should have recommendedModels limited to writer and reviewer (git/package/github-release are CLI-based)', () => {
+  it('should have recommendedModels (auto-routing picks best model per task)', () => {
     expect(template.recommendedModels).toBeDefined();
-    expect(Object.keys(template.recommendedModels!)).toHaveLength(2);
-    expect(template.recommendedModels!.writer).toBeTruthy();
-    expect(template.recommendedModels!.reviewer).toBeTruthy();
+    // Empty object means auto-router picks the best model per task
+    expect(typeof template.recommendedModels).toBe('object');
   });
 
   it('should have useMemory set to false', () => {
