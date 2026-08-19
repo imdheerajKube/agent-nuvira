@@ -72,6 +72,7 @@ const DEFAULT_CONFIG: BuffConfig = {
     gemini: { model: 'default', temperature: 0.7, maxTokens: 8192 },
     openrouter: { model: 'default', temperature: 0.7, maxTokens: 4096 },
     groq: { model: 'default', temperature: 0.7, maxTokens: 4096 },
+    bedrock: { model: 'default', temperature: 0.7, maxTokens: 4096 },
     local: { runner: 'ollama', model: 'default', temperature: 0.7, maxTokens: 4096 },
   },
   history: {
