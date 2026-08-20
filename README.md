@@ -19,9 +19,9 @@ features:
   - "plugin marketplace"
 ---
 
-# Buff CLI — `agent-nuvira`
+# Agent-Nuvira — `agent-nuvira`
 
-**Flexible AI inference tool** — run large language models locally (Ollama) or route to cloud APIs (Groq, NVIDIA NIM, Google Gemini, OpenRouter) through a unified CLI. Discover available models, chat interactively, edit files with AI, and plan codebase changes — all from the terminal.
+**Multi-agent AI coding assistant** with a **visual dashboard** and **powerful CLI**. Run models locally (Ollama) or route across 22+ cloud providers (Groq, Gemini, OpenRouter, Bedrock, Azure, Anthropic, OpenAI, and more). Specialized agents plan, write, review, test, and ship code — learning from every run.
 
 ```bash
 # Quick examples
