@@ -2,6 +2,14 @@
 
 All notable changes to **Agent-Nuvira** are documented in this file.
 
+## v1.77.0 — feat: dynamic model catalog, Bedrock provider, website refresh
+
+- **Fixed: 22 catalog providers now route correctly** — the capability-fit scoring was hardcoded for 5 built-in providers, causing 0% fit penalty for Bedrock, OpenAI, Anthropic, DeepSeek, xAI, and others. Now derives chat/code tags dynamically from provider capability profiles.
+- **Added: Amazon Bedrock provider** — 121 foundation models (Claude, Llama, DeepSeek, Qwen, GPT-OSS, etc.) via Bearer token auth. Configured via `AWS_BEARER_TOKEN_BEDROCK` in `~/.buff/.env`. Dashboard health check uses the foundation-models listing API.
+- **Improved: dynamic model catalog** — pattern-based badge generation replaces 40+ hardcoded model names. When a provider retires a model, the system adapts automatically — no code changes needed.
+- **Added: `buff models staleness` command** — shows per-model freshness status (<7d fresh, 7-30d stale, >30d+>50% error = likely removed).
+- **Improved: website refresh** — removed internal "Phase 1→11" and "Architecture" sections that were developer-facing. Updated hero to show Dashboard + CLI. Fixed test count (4,864+). Added Enterprise section with RBAC, audit chain, governance, and 22-platform gateway.
+
 ## v1.76.1 — feat: Model Discovery Timeline panel
 
 - **Added: Model Discovery Timeline** — a new `/models/timeline` dashboard panel that shows every known model's freshness status (fresh / stale / likely removed), last probed time, last verified time, last used time, error rate, and latency. Summary cards show total / fresh / stale / removed counts. Filterable by status and sortable by provider / last-seen / status. Auto-refreshes every 30 seconds.
