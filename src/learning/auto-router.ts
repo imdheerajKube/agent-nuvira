@@ -508,20 +508,30 @@ const PROVIDER_CAPABILITY_TAGS: Record<string, string[]> = {
  * the capability profile (so custom/gateway providers are scored by their
  * REAL profile, not a hardcoded map — a custom strong-reasoning provider gets
  * a 'reasoning' tag even though no static entry lists it).
+ *
+ * DERIVATION RULES:
+ * - reasoning >= 0.65 → 'reasoning'
+ * - speed >= 0.85    → 'fast'
+ * - Any provider with reasonable reasoning (>= 0.4) and speed (>= 0.4) gets
+ *   'chat' and 'code' — these are the UNIVERSAL capabilities: every LLM
+ *   provider can chat and generate code. Only truly specialized providers
+ *   (pure-embedding, pure-image-gen) lack these.
+ * - 'cheap'/'reliable' are DELIBERATELY not derived. No current task type
+ *   requires them, so deriving them would only add tags NO task ever matches.
  */
 function providerOfferedTags(provider: string, caps?: ProviderCapabilities): string[] {
   const staticTags = PROVIDER_CAPABILITY_TAGS[provider] || [];
   const derived: string[] = [];
   if (caps) {
-    if (caps.reasoning >= 0.75) derived.push('reasoning');
-    if (caps.speed >= 0.9) derived.push('fast');
-    // NOTE: 'cheap'/'reliable' are DELIBERATELY not derived. No current task
-    // type requires them, so deriving them would only add tags NO task ever
-    // matches — making every derived tag a guaranteed capability-fit MISS
-    // (fit = matched/required = 0 → a 0.9× penalty) for any provider that
-    // derives them (e.g. a zero-cost gateway like the nuvira sidecar, whose
-    // pricing-adjusted cost is 1.0). A provider is only penalized by the
-    // soft fit signal for capabilities a task ACTUALLY needs.
+    // Universal LLM capabilities: every general-purpose provider can chat
+    // and code. The threshold is deliberately low (0.4) — even a small local
+    // model (reasoning 0.30) can chat and do basic code; the fit signal only
+    // needs to distinguish LLMs from non-LLM services.
+    if (caps.reasoning >= 0.4 || caps.speed >= 0.4) {
+      derived.push('chat', 'code');
+    }
+    if (caps.reasoning >= 0.65) derived.push('reasoning');
+    if (caps.speed >= 0.85) derived.push('fast');
   }
   return [...new Set([...staticTags, ...derived])];
 }

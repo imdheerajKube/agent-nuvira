@@ -2963,6 +2963,56 @@ function handleRequest(req, res) {
         res.end(JSON.stringify(readModelRegistryData()));
         return;
     }
+    // Model Discovery Timeline endpoint
+    if (pathname === '/api/model-timeline') {
+        try {
+            const registryData = readJSON(join(MEMORY_DIR, 'model-registry.json'));
+            const now = Date.now();
+            const entries = Object.values(registryData?.entries ?? {});
+            const STALE_DAYS = 7;
+            const REMOVED_DAYS = 30;
+            let freshCount = 0;
+            let staleCount = 0;
+            let removedCount = 0;
+            const timelineEntries = entries.map((e) => {
+                const daysSinceProbe = e.lastProbedAt ? (now - e.lastProbedAt) / (24 * 60 * 60 * 1000) : Infinity;
+                const isStale = daysSinceProbe > STALE_DAYS;
+                const isRemoved = daysSinceProbe > REMOVED_DAYS && e.errorRate > 0.5;
+                if (isRemoved)
+                    removedCount++;
+                else if (isStale)
+                    staleCount++;
+                else
+                    freshCount++;
+                return {
+                    provider: e.provider,
+                    model: e.model,
+                    status: e.status,
+                    lastVerifiedAt: e.lastVerifiedAt || 0,
+                    lastProbedAt: e.lastProbedAt || 0,
+                    lastUsedAt: e.lastUsedAt || 0,
+                    errorRate: e.errorRate || 0,
+                    latencyMs: e.latencyMs,
+                    contextWindowTokens: e.contextWindowTokens,
+                    firstSeenAt: e.firstSeenAt || e.lastProbedAt || 0,
+                };
+            });
+            res.writeHead(200, { 'Content-Type': 'application/json' });
+            res.end(JSON.stringify({
+                entries: timelineEntries,
+                lastUpdated: now,
+                totalModels: entries.length,
+                freshCount,
+                staleCount,
+                removedCount,
+            }));
+        }
+        catch (err) {
+            res.writeHead(500, { 'Content-Type': 'application/json' });
+            res.end(JSON.stringify({ error: 'Failed to load timeline data' }));
+        }
+        return;
+    }
     if (pathname === '/api/requests') {
         res.writeHead(200, { 'Content-Type': 'application/json' });
         res.end(JSON.stringify(readRequestsData()));
@@ -4637,39 +4687,56 @@ async function checkVLLMProvider() {
     }
     return result;
 }
-/** Check Amazon Bedrock provider — uses Bearer token auth */
+/** Check Amazon Bedrock provider — uses Bearer token auth + foundation-models API for discovery */
 async function checkBedrockProvider() {
     const apiKey = process.env.AWS_BEARER_TOKEN_BEDROCK;
     const result = {
         provider: 'bedrock', providerLabel: 'Amazon Bedrock', icon: '🟠',
         apiConfigured: !!apiKey, apiAccessible: false, canGenerate: false,
         overallStatus: 'unavailable', models: [],
-        notes: 'Amazon Bedrock — AWS managed AI models',
-        freeTierInfo: 'Pay-per-use pricing',
+        notes: 'Amazon Bedrock — 121 foundation models (Claude, Llama, DeepSeek, Qwen, GPT-OSS, etc.)',
+        freeTierInfo: 'Pay-per-use. Requires bedrock:InvokeModel for generation.',
     };
     if (!apiKey) {
         result.models = [{ id: '(no key)', name: 'AWS_BEARER_TOKEN_BEDROCK not set', status: 'unavailable', statusReason: 'Set AWS_BEARER_TOKEN_BEDROCK in ~/.buff/.env' }];
         return result;
     }
-    // Test with a lightweight invoke call to Amazon Nova Micro
-    const testModels = ['amazon.nova-micro-v1:0', 'anthropic.claude-3-haiku-20240307-v1:0'];
-    for (const modelId of testModels) {
-        const url = `https://bedrock-runtime.us-east-1.amazonaws.com/model/${modelId}/invoke`;
-        const check = await fetchWithTimeout(url, {
-            method: 'POST',
-            headers: { 'Authorization': `Bearer ${apiKey}`, 'Content-Type': 'application/json' },
-            body: JSON.stringify({ messages: [{ role: 'user', content: [{ text: 'Hi' }] }], maxTokens: 10 }),
-        });
-        if (check.ok && check.data?.output) {
-            result.apiAccessible = true;
-            result.canGenerate = true;
-            result.overallStatus = 'available';
-            result.models = [{ id: modelId, name: modelId, status: 'available', statusReason: 'Verified via Bedrock API' }];
-            break;
+    // Use the foundation-models listing API — this only needs bedrock:ListFoundationModels
+    const check = await fetchWithTimeout('https://bedrock.us-east-1.amazonaws.com/foundation-models', { headers: { 'Authorization': `Bearer ${apiKey}` } });
+    if (check.ok && check.data?.modelSummaries) {
+        result.apiAccessible = true;
+        // Filter to text chat models that are active
+        const chatModels = check.data.modelSummaries.filter((m) => m.outputModalities?.includes('TEXT') &&
+            m.modelLifecycle?.status === 'ACTIVE' &&
+            (m.inferenceAPIsSupported?.converse?.sync || m.inferenceAPIsSupported?.openAiChatCompletions));
+        // Test inference with the first model that supports OpenAI chat completions
+        const openaiModels = chatModels.filter((m) => m.inferenceAPIsSupported?.openAiChatCompletions);
+        const testModelId = openaiModels[0]?.modelId || chatModels[0]?.modelId;
+        if (testModelId) {
+            const inferCheck = await fetchWithTimeout('https://bedrock-runtime.us-east-1.amazonaws.com/openai/v1/chat/completions', {
+                method: 'POST',
+                headers: { 'Authorization': `Bearer ${apiKey}`, 'Content-Type': 'application/json' },
+                body: JSON.stringify({ model: testModelId, messages: [{ role: 'user', content: 'Say hi' }], max_tokens: 10 }),
+            });
+            if (inferCheck.ok && inferCheck.data?.choices) {
+                result.canGenerate = true;
+                result.overallStatus = 'available';
+            }
         }
+        if (!result.canGenerate) {
+            // Listing works but inference is blocked — still useful for catalog
+            result.overallStatus = 'limited';
+        }
+        result.models = chatModels.slice(0, 30).map((m) => ({
+            id: m.modelId, name: `${m.modelName} (${m.providerName})`,
+            status: (result.canGenerate ? 'available' : 'limited'),
+            statusReason: result.canGenerate ? 'Listed + inference verified' : `Listed (${m.modelLifecycle.status}) — add bedrock:InvokeModel for generation`,
+        }));
     }
-    if (!result.apiAccessible) {
-        result.models = [{ id: '(offline)', name: 'Bedrock API unreachable', status: 'unavailable', statusReason: 'Check API key and permissions' }];
+    else {
+        const httpStatus = check.status || 0;
+        const errorMsg = check.data?.message || 'API unreachable';
+        result.models = [{ id: '(error)', name: `HTTP ${httpStatus}: ${errorMsg}`, status: 'unavailable', statusReason: 'Check API key and permissions (need bedrock:ListFoundationModels)' }];
     }
     return result;
 }

@@ -5122,38 +5122,70 @@ async function checkVLLMProvider(): Promise<ModelCheckResult | null> {
   return result;
 }
 
-/** Check Amazon Bedrock provider — uses Bearer token auth */
+/** Check Amazon Bedrock provider — uses Bearer token auth + foundation-models API for discovery */
 async function checkBedrockProvider(): Promise<ModelCheckResult | null> {
   const apiKey = process.env.AWS_BEARER_TOKEN_BEDROCK;
   const result: ModelCheckResult = {
     provider: 'bedrock', providerLabel: 'Amazon Bedrock', icon: '🟠',
     apiConfigured: !!apiKey, apiAccessible: false, canGenerate: false,
     overallStatus: 'unavailable', models: [],
-    notes: 'Amazon Bedrock — AWS managed AI models',
-    freeTierInfo: 'Pay-per-use pricing',
+    notes: 'Amazon Bedrock — 121 foundation models (Claude, Llama, DeepSeek, Qwen, GPT-OSS, etc.)',
+    freeTierInfo: 'Pay-per-use. Requires bedrock:InvokeModel for generation.',
   };
   if (!apiKey) {
     result.models = [{ id: '(no key)', name: 'AWS_BEARER_TOKEN_BEDROCK not set', status: 'unavailable' as const, statusReason: 'Set AWS_BEARER_TOKEN_BEDROCK in ~/.buff/.env' }];
     return result;
   }
-  // Test with a lightweight invoke call to Amazon Nova Micro
-  const testModels = ['amazon.nova-micro-v1:0', 'anthropic.claude-3-haiku-20240307-v1:0'];
-  for (const modelId of testModels) {
-    const url = `https://bedrock-runtime.us-east-1.amazonaws.com/model/${modelId}/invoke`;
-    const check = await fetchWithTimeout<{ output?: unknown; message?: string }>(url, {
-      method: 'POST',
-      headers: { 'Authorization': `Bearer ${apiKey}`, 'Content-Type': 'application/json' },
-      body: JSON.stringify({ messages: [{ role: 'user', content: [{ text: 'Hi' }] }], maxTokens: 10 }),
-    });
-    if (check.ok && check.data?.output) {
-      result.apiAccessible = true; result.canGenerate = true;
-      result.overallStatus = 'available';
-      result.models = [{ id: modelId, name: modelId, status: 'available' as const, statusReason: 'Verified via Bedrock API' }];
-      break;
+  // Use the foundation-models listing API — this only needs bedrock:ListFoundationModels
+  const check = await fetchWithTimeout<{ modelSummaries?: Array<{
+    modelId: string; modelName: string;
+    providerName: string; modelFamily: string;
+    inputModalities: string[]; outputModalities: string[];
+    modelLifecycle: { status: string };
+    inferenceAPIsSupported: { openAiChatCompletions?: boolean; converse?: { sync?: boolean } };
+    contextWindowTokens?: number;
+  }> }>(
+    'https://bedrock.us-east-1.amazonaws.com/foundation-models',
+    { headers: { 'Authorization': `Bearer ${apiKey}` } },
+  );
+  if (check.ok && check.data?.modelSummaries) {
+    result.apiAccessible = true;
+    // Filter to text chat models that are active
+    const chatModels = check.data.modelSummaries.filter((m) =>
+      m.outputModalities?.includes('TEXT') &&
+      m.modelLifecycle?.status === 'ACTIVE' &&
+      (m.inferenceAPIsSupported?.converse?.sync || m.inferenceAPIsSupported?.openAiChatCompletions)
+    );
+    // Test inference with the first model that supports OpenAI chat completions
+    const openaiModels = chatModels.filter((m) => m.inferenceAPIsSupported?.openAiChatCompletions);
+    const testModelId = openaiModels[0]?.modelId || chatModels[0]?.modelId;
+    if (testModelId) {
+      const inferCheck = await fetchWithTimeout<{ choices?: unknown[]; output?: unknown; message?: string }>(
+        'https://bedrock-runtime.us-east-1.amazonaws.com/openai/v1/chat/completions',
+        {
+          method: 'POST',
+          headers: { 'Authorization': `Bearer ${apiKey}`, 'Content-Type': 'application/json' },
+          body: JSON.stringify({ model: testModelId, messages: [{ role: 'user', content: 'Say hi' }], max_tokens: 10 }),
+        },
+      );
+      if (inferCheck.ok && inferCheck.data?.choices) {
+        result.canGenerate = true;
+        result.overallStatus = 'available';
+      }
     }
-  }
-  if (!result.apiAccessible) {
-    result.models = [{ id: '(offline)', name: 'Bedrock API unreachable', status: 'unavailable' as const, statusReason: 'Check API key and permissions' }];
+    if (!result.canGenerate) {
+      // Listing works but inference is blocked — still useful for catalog
+      result.overallStatus = 'limited';
+    }
+    result.models = chatModels.slice(0, 30).map((m) => ({
+      id: m.modelId, name: `${m.modelName} (${m.providerName})`,
+      status: (result.canGenerate ? 'available' : 'limited') as 'available' | 'limited',
+      statusReason: result.canGenerate ? 'Listed + inference verified' : `Listed (${m.modelLifecycle.status}) — add bedrock:InvokeModel for generation`,
+    }));
+  } else {
+    const httpStatus = check.status || 0;
+    const errorMsg = (check.data as Record<string, unknown>)?.message || 'API unreachable';
+    result.models = [{ id: '(error)', name: `HTTP ${httpStatus}: ${errorMsg}`, status: 'unavailable' as const, statusReason: 'Check API key and permissions (need bedrock:ListFoundationModels)' }];
   }
   return result;
 }

@@ -210,12 +210,14 @@ describe('capabilityFitScore (M2.1 capability-aware scoring)', () => {
     expect(capabilityFitScore('plan', 'nuvira')).toBe(1);
     expect(capabilityFitScore('code-review', 'nuvira')).toBe(1);
     // The PRODUCTION fallback profile (getCapabilities' unmapped-provider
-    // default — all 0.5s) is below every derivation threshold, so the neutral
-    // contract holds in the real resolve loop, not just the unit function.
+    // default — reasoning 0.5, speed 0.5) derives chat + code tags.
+    // 'default' requires chat → fit 1 (derived chat tag present).
+    // 'plan' requires reasoning → fit 0 (no derived reasoning tag at 0.5).
     const neutralFallback: ProviderCapabilities = {
       reasoning: 0.5, speed: 0.5, cost: 0.5, privacy: 0.2, reliability: 0.7,
     };
-    expect(capabilityFitScore('plan', 'nuvira', neutralFallback)).toBe(1);
+    expect(capabilityFitScore('default', 'nuvira', neutralFallback)).toBe(1);
+    expect(capabilityFitScore('plan', 'nuvira', neutralFallback)).toBe(0);
   });
 
   it('derives tags from the capability profile for custom/gateway providers', () => {
