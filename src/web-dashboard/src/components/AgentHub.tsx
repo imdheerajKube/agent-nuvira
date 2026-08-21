@@ -748,19 +748,7 @@ export default function AgentHub() {
           </p>
 
           <h3 className="section-subtitle">🔌 Platform transports</h3>
-          <div className="hub-platform-grid">
-            {data.channels.platforms.map((p) => (
-              <div className={`hub-platform${p.configured ? ' configured' : ''}`} key={p.platform}>
-                <span className={`status-dot ${p.configured ? 'connected' : 'reconnecting'}`} />
-                <span className="hub-platform-label">{p.label}</span>
-                <span className="hub-card-id">{p.platform}</span>
-                {!p.configured ? (
-                  <span className="hub-platform-env">set {p.envVars.join(', ')}</span>
-                ) : null}
-              </div>
-            ))}
-          </div>
-          <PlatformConfigSection canWrite={canWrite} sessionExpired={sessionExpired} />
+          <PlatformConfigSection canWrite={canWrite} sessionExpired={sessionExpired} mode="table" />
 
           <h3 className="section-subtitle">🔗 Channel aliases (buff gateway status)</h3>
           {data.channels.aliases.length > 0 ? (
