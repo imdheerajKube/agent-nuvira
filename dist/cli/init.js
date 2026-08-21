@@ -14,10 +14,10 @@
 import { Command } from 'commander';
 import { existsSync, mkdirSync, writeFileSync, readFileSync, readdirSync } from 'node:fs';
 import { join } from 'node:path';
-import { homedir } from 'node:os';
 import inquirer from 'inquirer';
 import { BaseCommand } from './commands.js';
 import { logger } from '../utils/logger.js';
+import { resolveNuviraHome } from '../config/paths.js';
 import { showModelPicker } from './model-picker.js';
 const BUILTIN_TEMPLATES = [
     {
@@ -184,7 +184,7 @@ const BUILTIN_TEMPLATES = [
     },
 ];
 // ─── Paths ──────────────────────────────────────────────────────────────────
-const BUFF_DIR = join(homedir(), '.buff');
+const BUFF_DIR = resolveNuviraHome();
 const TEMPLATES_DIR = join(BUFF_DIR, 'templates');
 function ensureTemplateDir() {
     if (!existsSync(TEMPLATES_DIR)) {

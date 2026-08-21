@@ -14,7 +14,7 @@
  */
 
 import { Command } from 'commander';
-import { BaseCommand } from './commands.js';
+import { BaseCommand, getCliName } from './commands.js';
 import { MCPClient } from '../mcp/client.js';
 import { getMCPManager } from '../mcp/manager.js';
 import { type MCPServerConfig, MCP_CONFIG_DIR } from '../mcp/types.js';
@@ -124,7 +124,7 @@ Configured via JSON files in: ~/${MCP_CONFIG_DIR}/
       .action(async (name: string, opts?: { env?: Record<string, string> }) => {
         const entry = getCatalogEntry(name);
         if (!entry) {
-          logger.error(`'${name}' is not in the catalog. Run \`buff mcp catalog\` to see vetted servers.`);
+          logger.error(`'${name}' is not in the catalog. Run \`${getCliName()} mcp catalog\` to see vetted servers.`);
           return;
         }
         const result = installCatalogServer(entry, opts?.env ?? {});
@@ -220,7 +220,7 @@ Configured via JSON files in: ~/${MCP_CONFIG_DIR}/
         console.log('');
       }
 
-      logger.info('Run `buff mcp call <tool-name>` to invoke a tool.');
+      logger.info('Run `${getCliName()} mcp call <tool-name>` to invoke a tool.');
     }
 
     console.log('');
@@ -318,7 +318,7 @@ Configured via JSON files in: ~/${MCP_CONFIG_DIR}/
       const result = await manager.callTool(toolName, args);
       if (!result) {
         logger.error(`Tool '${toolName}' not found on any connected server.`);
-        logger.info('Use `buff mcp list` to see available tools.');
+        logger.info('Use `${getCliName()} mcp list` to see available tools.');
         console.log('');
         return;
       }

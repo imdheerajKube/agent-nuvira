@@ -16,7 +16,7 @@
 import { Command } from 'commander';
 import ora from 'ora';
 
-import { BaseCommand } from './commands.js';
+import { BaseCommand, getCliName } from './commands.js';
 import { getWorkflowTemplates } from '../workflow/templates.js';
 import {
   searchRegistry,
@@ -215,7 +215,7 @@ export class MarketplaceCommand extends BaseCommand {
       console.log('');
     }
 
-    logger.info('Run `buff marketplace info <name>` for details or `buff marketplace install <name>` to install.');
+    logger.info('Run `${getCliName()} marketplace info <name>` for details or `${getCliName()} marketplace install <name>` to install.');
     console.log('');
   }
 
@@ -227,7 +227,7 @@ export class MarketplaceCommand extends BaseCommand {
 
       if (!template) {
         spinner.fail(`Template '${name}' not found in registry.`);
-        logger.info('Try `buff marketplace search ' + name + '` to find it.');
+        logger.info('Try `${getCliName()} marketplace search ' + name + '` to find it.');
         return;
       }
 

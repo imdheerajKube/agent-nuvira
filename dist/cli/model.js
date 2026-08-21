@@ -20,8 +20,8 @@
 import { Command } from 'commander';
 import { existsSync, readFileSync, writeFileSync, mkdirSync } from 'node:fs';
 import { join } from 'node:path';
-import { homedir } from 'node:os';
 import inquirer from 'inquirer';
+import { resolveNuviraHome } from '../config/paths.js';
 import { BaseCommand } from './commands.js';
 import { showModelPicker } from './model-picker.js';
 import { getPluginRegistry } from '../plugins/registry.js';
@@ -37,7 +37,7 @@ import { getQuotaLedger } from '../learning/quota-ledger.js';
 import { getRouterPromotion, DEFAULT_MIN_PROMOTION_DECISIONS, } from '../learning/router-promotion.js';
 import { getMlRouter } from '../learning/ml-router.js';
 import { logger } from '../utils/logger.js';
-const BUFF_DIR = join(homedir(), '.buff');
+const BUFF_DIR = resolveNuviraHome();
 const ACTIVE_MODEL_PATH = join(BUFF_DIR, 'active-model.json');
 function ensureBuffDir() {
     if (!existsSync(BUFF_DIR)) {

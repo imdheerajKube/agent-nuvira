@@ -19,7 +19,7 @@ import { Command } from 'commander';
 import { join } from 'node:path';
 import { existsSync } from 'node:fs';
 
-import { BaseCommand } from './commands.js';
+import { BaseCommand, getCliName } from './commands.js';
 import { logger } from '../utils/logger.js';
 import { scaffold, listTemplates } from '../agent-sdk/src/scaffold.js';
 import { registerAgent, unregisterAgent } from '../agent-sdk/src/register.js';

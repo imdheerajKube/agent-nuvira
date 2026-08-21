@@ -24,7 +24,7 @@
 
 import { Command } from 'commander';
 import ora from 'ora';
-import { BaseCommand } from './commands.js';
+import { BaseCommand, getCliName } from './commands.js';
 import { guardRbacAction } from './rbac-guard.js';
 import { logger } from '../utils/logger.js';
 import { RbacManager, RbacError, ROLES } from '../enterprise/rbac.js';

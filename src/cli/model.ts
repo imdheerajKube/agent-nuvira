@@ -25,7 +25,7 @@ import { homedir } from 'node:os';
 import inquirer from 'inquirer';
 import { resolveNuviraHome } from '../config/paths.js';
 
-import { BaseCommand } from './commands.js';
+import { BaseCommand, getCliName } from './commands.js';
 import { showModelPicker } from './model-picker.js';
 import { ProviderFactory } from '../inference/factory.js';
 import { getPluginRegistry } from '../plugins/registry.js';

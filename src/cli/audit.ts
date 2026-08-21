@@ -19,7 +19,7 @@
 
 import { existsSync, readFileSync, writeFileSync } from 'node:fs';
 import { Command } from 'commander';
-import { BaseCommand } from './commands.js';
+import { BaseCommand, getCliName } from './commands.js';
 import { logger } from '../utils/logger.js';
 import {
   verifyAuditFile,

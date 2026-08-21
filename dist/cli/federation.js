@@ -19,10 +19,11 @@
  *   buff federation a2a run <url> <goal>  — Delegate task to A2A agent
  */
 import { Command } from 'commander';
-import { homedir, hostname } from 'node:os';
+import { hostname } from 'node:os';
 import { existsSync, writeFileSync, readFileSync, mkdirSync } from 'node:fs';
 import { join } from 'node:path';
 import inquirer from 'inquirer';
+import { resolveNuviraHome } from '../config/paths.js';
 import { BaseCommand } from './commands.js';
 import { logger } from '../utils/logger.js';
 import { startFederationServer } from '../federation/server.js';
@@ -33,7 +34,7 @@ import { A2A_DEFAULT_PORT, A2A_DEFAULT_HOST } from '../federation/a2a-types.js';
 import { discoverAgent, delegateAndWait, checkA2AHealth } from '../federation/a2a-client.js';
 import { JwtOidcAdapter } from '../federation/oidc-adapter.js';
 // ─── Constants ──────────────────────────────────────────────────────────────
-const FEDERATION_CONFIG_PATH = join(homedir(), '.buff', 'federation.json');
+const FEDERATION_CONFIG_PATH = join(resolveNuviraHome(), 'federation.json');
 // The A2A config is stored alongside federation config for simplicity.
 // ─── Helpers ────────────────────────────────────────────────────────────────
 function loadConfig() {
@@ -50,7 +51,7 @@ function loadConfig() {
 }
 function saveConfig(config) {
     try {
-        const dir = join(homedir(), '.buff');
+        const dir = resolveNuviraHome();
         if (!existsSync(dir))
             mkdirSync(dir, { recursive: true });
         writeFileSync(FEDERATION_CONFIG_PATH, JSON.stringify(config, null, 2), 'utf-8');

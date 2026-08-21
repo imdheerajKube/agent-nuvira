@@ -26,7 +26,7 @@ import { join } from 'node:path';
 import inquirer from 'inquirer';
 import { resolveNuviraHome } from '../config/paths.js';
 
-import { BaseCommand } from './commands.js';
+import { BaseCommand, getCliName } from './commands.js';
 import { logger } from '../utils/logger.js';
 import { startFederationServer } from '../federation/server.js';
 import { FederationClient } from '../federation/client.js';

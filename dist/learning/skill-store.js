@@ -13,12 +13,12 @@
  */
 import { readFileSync, writeFileSync, existsSync, mkdirSync, unlinkSync } from 'node:fs';
 import { join } from 'node:path';
-import { homedir } from 'node:os';
+import { resolveNuviraHome } from '../config/paths.js';
 import { MAX_SKILLS } from './skill-types.js';
 import { BUNDLED_SKILLS } from '../skills/bundled-skills.js';
 import { logger } from '../utils/logger.js';
 // ─── Constants ──────────────────────────────────────────────────────────────
-const SKILLS_DIR = join(homedir(), '.buff', 'skills');
+const SKILLS_DIR = join(resolveNuviraHome(), 'skills');
 const INDEX_PATH = join(SKILLS_DIR, 'index.json');
 // Skill decay: skills lose relevance over time
 const SKILL_TTL_DAYS = 120; // Expire after 120 days without use

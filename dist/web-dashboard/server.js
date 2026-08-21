@@ -15,7 +15,7 @@ import { join, extname, dirname, basename, resolve, isAbsolute } from 'node:path
 import { fileURLToPath } from 'node:url';
 import { homedir } from 'node:os';
 import { parseRbacUsers } from '../enterprise/rbac.js';
-import { resolveBuffConfigDir, resolveBuffConfigPath } from '../config/paths.js';
+import { resolveBuffConfigDir, resolveBuffConfigPath, resolveNuviraHome } from '../config/paths.js';
 import { loadEnv } from '../utils/env.js';
 import { ConfigManager } from '../config/manager.js';
 import { runAllChecks } from '../cli/doctor.js';
@@ -60,7 +60,7 @@ const POSSIBLE_PUBLIC_DIRS = [
 const PUBLIC_DIR = POSSIBLE_PUBLIC_DIRS.find((p) => existsSync(p)) || POSSIBLE_PUBLIC_DIRS[0];
 // Honor BUFF_MEMORY_DIR (same as the CLI and the learning router) so the bandit
 // card and the promotion-gate card always read from the SAME memory directory.
-const MEMORY_DIR = process.env.BUFF_MEMORY_DIR || join(homedir(), '.buff', 'memory');
+const MEMORY_DIR = process.env.BUFF_MEMORY_DIR || join(resolveNuviraHome(), 'memory');
 const MIME_TYPES = {
     '.html': 'text/html; charset=utf-8',
     '.css': 'text/css; charset=utf-8',

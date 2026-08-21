@@ -16,7 +16,7 @@
  */
 import { readFileSync, existsSync } from 'node:fs';
 import { join, resolve } from 'node:path';
-import { homedir } from 'node:os';
+import { resolveNuviraHome } from '../config/paths.js';
 import { ConfigManager } from '../config/manager.js';
 // ─── Constants ──────────────────────────────────────────────────────────────
 /** Default team config values */
@@ -103,6 +103,6 @@ export function getTeamDataDir(cwd) {
     if (teamConfig.localPath)
         return resolve(teamConfig.localPath);
     // Default: ~/.buff/team/
-    return join(homedir(), '.buff', 'team');
+    return join(resolveNuviraHome(), 'team');
 }
 //# sourceMappingURL=config.js.map
