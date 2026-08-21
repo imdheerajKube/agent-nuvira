@@ -520,8 +520,13 @@ export class ChatCommand extends BaseCommand {
       return { content: r.result?.summary ?? '', followups: [], provider: type, model };
     }
 
+    // E3b: strip raw suggest_followups JSON embedded in content by the model
+    const cleanContent = (answer.content || '')
+      .replace(/\n?\*?\s*\{\s*"tool"\s*:\s*"suggest_followups"[\s\S]*$/, '')
+      .replace(/\n?\*?\s*<function=suggest_followups[\s\S]*<\/function>/g, '')
+      .trim();
     return {
-      content: answer.content,
+      content: cleanContent,
       followups: answer.followups ?? [],
       generationFailed: answer.generationFailed,
       cancelled: answer.cancelled,

@@ -514,9 +514,14 @@ export class ChatConsole {
       });
       this.persist();
       this.emit(sessionId, { kind: 'status', status: 'done' });
+      // E3b: strip raw suggest_followups JSON embedded in content
+      const cleanContent = (answer.content || '')
+        .replace(/\n?\*?\s*\{\s*"tool"\s*:\s*"suggest_followups"[\s\S]*$/, '')
+        .replace(/\n?\*?\s*<function=suggest_followups[\s\S]*<\/function>/g, '')
+        .trim();
       return {
         ok: true,
-        content: answer.content,
+        content: cleanContent,
         followups: answer.followups ?? [],
         provider: answer.provider ?? null,
         model: answer.model ?? null,
