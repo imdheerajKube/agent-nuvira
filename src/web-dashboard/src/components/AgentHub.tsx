@@ -918,17 +918,15 @@ export default function AgentHub() {
                 </thead>
                 <tbody>
                   {contacts.map((c) => {
-                    const status = (c as Record<string, unknown>).status as string | undefined;
+                    const status = c.status;
                     const statusClass = status === 'approved' ? 'pass' : status === 'pending' ? 'warn' : status === 'rejected' ? 'fail' : 'warn';
                     const statusLabel = status === 'approved' ? '✅ approved' : status === 'pending' ? '⏳ pending' : status === 'rejected' ? '🚫 rejected' : '⚠ not in allow-list';
+                    const phone = c.phone ? ` (📱 ${c.phone})` : '';
                     return (
                       <tr key={`${c.platform}:${c.id}`}>
-                        {/* Personal contact names are never shown — a generic
-                            reference keeps the row identifiable without leaking
-                            the owner's name. */}
-                        <td>Name</td>
+                        <td className="contact-name">{c.name}</td>
                         <td className="admin-provider-type">{c.platform}</td>
-                        <td>{showId(c.id)}</td>
+                        <td><code>{c.id}</code>{phone}</td>
                         <td>
                           <span className={`admin-check-badge admin-check-${statusClass}`}>
                             {statusLabel}

@@ -258,6 +258,9 @@ function readChannelsData(): HubData['channels'] {
       name: c.name,
       platform: c.platform,
       id: c.id,
+      phone: c.phone,
+      status: c.status,
+      registeredAt: c.registeredAt,
       addedAt: c.addedAt,
     })),
     statusRecipients: (() => {

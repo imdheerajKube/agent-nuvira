@@ -1006,6 +1006,9 @@ export interface HubContact {
   name: string;
   platform: string;
   id: string;
+  phone?: string;
+  status?: 'approved' | 'pending' | 'rejected';
+  registeredAt?: number;
   addedAt?: number;
 }
 
