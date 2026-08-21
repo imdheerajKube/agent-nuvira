@@ -613,7 +613,13 @@ export class GatewayRegistry {
       // the model's suggested followups rendered as a readable numbered list
       // (WhatsApp has no clickable chips; the sender replies with one of the
       // lines). No technical jargon, no routing/tool-call noise.
-      let content = answer.content;
+      // E3b: strip any raw suggest_followups JSON the model embedded in the text
+      // instead of making a proper tool call — this leaks internal tool-call
+      // noise to the channel sender.
+      let content = (answer.content || '')
+        .replace(/\n?\*?\s*\{\s*"tool"\s*:\s*"suggest_followups"[\s\S]*$/, '')
+        .replace(/\n?\*?\s*<function=suggest_followups[\s\S]*<\/function>/g, '')
+        .trim();
       const fups = (answer.followups ?? [])
         .map((f) => (f && typeof f.prompt === 'string' && f.prompt.trim() ? f.prompt.trim() : ''))
         .filter(Boolean)
