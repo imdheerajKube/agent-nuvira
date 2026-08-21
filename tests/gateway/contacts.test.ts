@@ -39,9 +39,9 @@ describe('gateway contacts store', () => {
     const { readGatewayContacts, writeGatewayContacts, gatewayContactsFile } = await import('../../src/gateway/contacts.js');
     expect(readGatewayContacts()).toEqual([]);
 
-    writeGatewayContacts([{ name: 'Alex', platform: 'whatsapp', id: '+919876543210', addedAt: 1 }]);
+    writeGatewayContacts([{ name: 'Alex', platform: 'whatsapp', id: '+919876543210', status: 'approved', registeredAt: 0, addedAt: 1 }]);
     const saved = readGatewayContacts();
-    expect(saved).toEqual([{ name: 'Alex', platform: 'whatsapp', id: '+919876543210', addedAt: 1 }]);
+    expect(saved).toEqual([{ name: 'Alex', platform: 'whatsapp', id: '+919876543210', status: 'approved', registeredAt: 0, addedAt: 1 }]);
     // Persisted next to the other gateway state, honoring BUFF_CONFIG_DIR.
     expect(existsSync(gatewayContactsFile())).toBe(true);
     const raw = JSON.parse(readFileSync(gatewayContactsFile(), 'utf-8'));

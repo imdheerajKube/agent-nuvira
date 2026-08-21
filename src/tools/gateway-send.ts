@@ -18,6 +18,36 @@
  */
 
 import type { ToolContext } from './registry.js';
+import { readGatewayContacts, resolveContact } from '../gateway/contacts.js';
+
+/**
+ * Check if a target matches a pending or rejected contact and return a
+ * specific error message. Returns the generic "unknown target" message
+ * if the target is not a known contact.
+ */
+function unknownTargetMessage(target: string): string {
+  try {
+    const contacts = readGatewayContacts();
+    for (const platform of ['telegram', 'whatsapp', 'whatsapp_cloud', 'email', 'slack', 'discord']) {
+      const hit = resolveContact(contacts, platform as never, target);
+      if (hit) {
+        if (hit.status === 'pending') {
+          return `gateway_send: ⏳ '${hit.name}' (${platform}:${hit.id}) is registered but pending admin approval. Ask the admin to approve them from the dashboard Contacts tab or run 'buff gateway contact approve ${hit.name}'`;
+        }
+        if (hit.status === 'rejected') {
+          return `gateway_send: 🚫 '${hit.name}' (${platform}:${hit.id}) was rejected by the administrator. Contact the admin to request access.`;
+        }
+      }
+    }
+  } catch {
+    /* contacts module unavailable — fall through */
+  }
+  return (
+    `gateway_send: unknown channel target '${target}'. Use a registered alias ` +
+    `(e.g. 'ops') or platform:channelId — e.g. whatsapp:Alex, ` +
+    `whatsapp:+15551234567, telegram:123456, slack:C0123, email:team@example.com.`
+  );
+}
 
 /**
  * Run the gateway send tool — returns model-feedable text (never throws).
@@ -44,11 +74,7 @@ export async function runGatewaySendTool(args: unknown, ctx: ToolContext): Promi
   if (registry) {
     const ref = registry.directory.resolve(target);
     if (!ref) {
-      return (
-        `gateway_send: unknown channel target '${target}'. Use a registered alias ` +
-        `(e.g. 'ops') or platform:channelId — e.g. whatsapp:Alex, ` +
-        `whatsapp:+15551234567, telegram:123456, slack:C0123, email:team@example.com.`
-      );
+      return unknownTargetMessage(target);
     }
     const ok = await registry.send(target, text);
     return ok
@@ -66,11 +92,7 @@ export async function runGatewaySendTool(args: unknown, ctx: ToolContext): Promi
 
   const ref = fresh.directory.resolve(target);
   if (!ref) {
-    return (
-      `gateway_send: unknown channel target '${target}'. Use a registered alias ` +
-      `(e.g. 'ops') or platform:channelId — e.g. whatsapp:Alex, ` +
-      `whatsapp:+15551234567, telegram:123456, slack:C0123, email:team@example.com.`
-    );
+    return unknownTargetMessage(target);
   }
 
   const ok = await fresh.sendToRef(ref, text, target);

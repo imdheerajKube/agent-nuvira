@@ -87,6 +87,40 @@ export class GatewayCommand {
       .description('Remove an alias')
       .action(async (a) => this.aliasRemove(a));
 
+    // ── contact subcommands (name-centric outbound contacts) ──
+    const contact = cmd.command('contact').description('Manage contacts for outbound messaging (name → platform:id resolution)');
+
+    contact
+      .command('list')
+      .description('List all contacts with status, platform, and ID')
+      .option('--pending', 'Show only pending contacts')
+      .option('--platform <platform>', 'Filter by platform (telegram, whatsapp, etc.)')
+      .action(async (opts) => this.contactList(opts));
+
+    contact
+      .command('approve <nameOrId>')
+      .description('Approve a contact for outbound messaging')
+      .option('--platform <platform>', 'Platform to approve on (auto-detected if omitted)')
+      .action(async (nameOrId, opts) => this.contactApprove(nameOrId, opts));
+
+    contact
+      .command('reject <nameOrId>')
+      .description('Reject a contact (block outbound messages)')
+      .option('--platform <platform>', 'Platform to reject on (auto-detected if omitted)')
+      .action(async (nameOrId, opts) => this.contactReject(nameOrId, opts));
+
+    contact
+      .command('delete <nameOrId>')
+      .description('Delete a contact permanently')
+      .option('--platform <platform>', 'Platform to delete from (auto-detected if omitted)')
+      .action(async (nameOrId, opts) => this.contactDelete(nameOrId, opts));
+
+    contact
+      .command('add <name> <platform> <id>')
+      .description('Manually add a contact (e.g. buff gateway contact add Anuj telegram 616825477)')
+      .option('--phone <number>', 'Optional phone number for flexible lookup')
+      .action(async (name, platform, id, opts) => this.contactAdd(name, platform, id, opts));
+
     cmd
       .command('delivery')
       .description('Show the delivery ledger (failed sends awaiting retry) and optionally drain it')
@@ -329,6 +363,92 @@ export class GatewayCommand {
       logger.success(`Alias '${alias}' removed`);
     } else {
       logger.warn(`No alias '${alias}' found`);
+    }
+  }
+
+  // ─── contact ───────────────────────────────────────────────────────────────
+
+  private async contactList(opts: { pending?: boolean; platform?: string }): Promise<void> {
+    if (!guardRbacAction('routing.operate')) return;
+    const { readGatewayContacts } = await import('../gateway/contacts.js');
+    const contacts = readGatewayContacts();
+    const filtered = contacts.filter((c) => {
+      if (opts.pending && c.status !== 'pending') return false;
+      if (opts.platform && c.platform !== opts.platform) return false;
+      return true;
+    });
+    if (filtered.length === 0) {
+      logger.info('No contacts found.');
+      return;
+    }
+    console.log(`📇 Contacts (${filtered.length}):`);
+    console.log('');
+    for (const c of filtered) {
+      const status = c.status === 'approved' ? '✅' : c.status === 'pending' ? '⏳' : '🚫';
+      const phone = c.phone ? ` · 📱 ${c.phone}` : '';
+      const registered = c.registeredAt ? ` · since ${new Date(c.registeredAt).toLocaleDateString()}` : '';
+      console.log(`  ${status} ${c.name} — ${c.platform}:${c.id}${phone}${registered}`);
+    }
+    console.log('');
+    const pending = contacts.filter((c) => c.status === 'pending').length;
+    if (pending > 0) console.log(`  ${pending} contact(s) pending approval — run 'buff gateway contact approve <name>'`);
+  }
+
+  private async contactApprove(nameOrId: string, opts: { platform?: string }): Promise<void> {
+    if (!guardRbacAction('routing.operate')) return;
+    const { readGatewayContacts, setContactStatus } = await import('../gateway/contacts.js');
+    if (opts.platform) {
+      const ok = setContactStatus(opts.platform as never, nameOrId, 'approved');
+      if (ok) { logger.success(`✅ Contact '${nameOrId}' approved on ${opts.platform}`); } else { logger.error(`Contact '${nameOrId}' not found on ${opts.platform}`); process.exitCode = 1; }
+      return;
+    }
+    // Auto-detect: find the contact across all platforms
+    const contacts = readGatewayContacts();
+    const hits = contacts.filter((c) => c.name.toLowerCase() === nameOrId.toLowerCase() || c.id === nameOrId);
+    if (hits.length === 0) { logger.error(`Contact '${nameOrId}' not found.`); process.exitCode = 1; return; }
+    for (const c of hits) { setContactStatus(c.platform, c.name, 'approved'); }
+    logger.success(`✅ Contact '${hits[0].name}' approved on ${hits.map((c) => c.platform).join(', ')}`);
+  }
+
+  private async contactReject(nameOrId: string, opts: { platform?: string }): Promise<void> {
+    if (!guardRbacAction('routing.operate')) return;
+    const { readGatewayContacts, setContactStatus } = await import('../gateway/contacts.js');
+    if (opts.platform) {
+      const ok = setContactStatus(opts.platform as never, nameOrId, 'rejected');
+      if (ok) { logger.success(`🚫 Contact '${nameOrId}' rejected on ${opts.platform}`); } else { logger.error(`Contact '${nameOrId}' not found on ${opts.platform}`); process.exitCode = 1; }
+      return;
+    }
+    const contacts = readGatewayContacts();
+    const hits = contacts.filter((c) => c.name.toLowerCase() === nameOrId.toLowerCase() || c.id === nameOrId);
+    if (hits.length === 0) { logger.error(`Contact '${nameOrId}' not found.`); process.exitCode = 1; return; }
+    for (const c of hits) { setContactStatus(c.platform, c.name, 'rejected'); }
+    logger.success(`🚫 Contact '${hits[0].name}' rejected on ${hits.map((c) => c.platform).join(', ')}`);
+  }
+
+  private async contactDelete(nameOrId: string, opts: { platform?: string }): Promise<void> {
+    if (!guardRbacAction('routing.operate')) return;
+    const { removeGatewayContact } = await import('../gateway/contacts.js');
+    if (opts.platform) {
+      const ok = removeGatewayContact(opts.platform as never, nameOrId);
+      if (ok) { logger.success(`🗑️ Contact '${nameOrId}' deleted from ${opts.platform}`); } else { logger.error(`Contact '${nameOrId}' not found on ${opts.platform}`); process.exitCode = 1; }
+      return;
+    }
+    // Delete across all platforms
+    let deleted = false;
+    for (const p of ['telegram', 'whatsapp', 'whatsapp_cloud', 'email', 'slack', 'discord']) {
+      if (removeGatewayContact(p as never, nameOrId)) deleted = true;
+    }
+    if (deleted) { logger.success(`🗑️ Contact '${nameOrId}' deleted.`); } else { logger.error(`Contact '${nameOrId}' not found.`); process.exitCode = 1; }
+  }
+
+  private async contactAdd(name: string, platform: string, id: string, opts: { phone?: string }): Promise<void> {
+    if (!guardRbacAction('routing.operate')) return;
+    const { upsertGatewayContact } = await import('../gateway/contacts.js');
+    const { contact, added } = upsertGatewayContact({ name, platform: platform as never, id, phone: opts.phone, status: 'approved', registeredAt: Date.now() });
+    if (added) {
+      logger.success(`📇 Contact '${contact.name}' added: ${contact.platform}:${contact.id}${contact.phone ? ' (📱 ' + contact.phone + ')' : ''}`);
+    } else {
+      logger.info(`📇 Contact '${contact.name}' updated: ${contact.platform}:${contact.id}`);
     }
   }
 

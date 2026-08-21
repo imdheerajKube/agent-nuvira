@@ -15,6 +15,8 @@ const NAV_ITEMS = [
   { path: '/tasks', label: 'Tasks', icon: '🚀' },
   { path: '/evals', label: 'Evals', icon: '🏆' },
   { path: '/platforms', label: 'Platforms', icon: '🌐' },
+  { path: '/bedrock', label: 'AWS Bedrock', icon: '🟠' },
+  { path: '/contacts', label: 'Contacts', icon: '📇' },
   { path: '/gateway', label: 'Gateway', icon: '📡' },
   { path: '/models', label: 'Models', icon: '🧠' },
   { path: '/models/timeline', label: 'Timeline', icon: '📅' },
