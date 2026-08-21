@@ -60,6 +60,8 @@ export interface ChatEngine {
       onGitDiff?: (payload: import('../tools/git-tool.js').GitDiffPayload) => void;
       /** P6a — a skill draft payload (rendered as the /learn preview card). */
       onSkillDraft?: (payload: import('../tools/skill-tool.js').SkillDraftPayload) => void;
+      /** PA4 — a skill loaded but needs env vars (non-blocking notification). */
+      onSecretRequest?: (payload: { skillName: string; missing: string[]; persisted: Record<string, boolean> }) => void;
       /** P0.7 — the session's plan store (per-conversation, survives turns). */
       planStore?: PlanStoreLike;
       /** Live gateway for gateway_send (gateway-triggered chat answers reuse the connected bridge). */
@@ -188,6 +190,13 @@ export type ChatConsoleEvent =
       description: string;
       markdown: string;
       updatedAt: number;
+    }
+  | {
+      /** PA4 — a skill loaded but needs env vars (non-blocking notification card). */
+      kind: 'secret_request';
+      skillName: string;
+      missing: string[];
+      persisted: Record<string, boolean>;
     }
   | { kind: 'status'; status: 'working' | 'done' | 'error' }
   | {
@@ -486,6 +495,15 @@ export class ChatConsole {
             description: payload.description,
             markdown: payload.markdown,
             updatedAt: payload.updatedAt,
+          });
+        },
+        // PA4 — forward skill secret-request events as a notification card.
+        onSecretRequest: (payload) => {
+          emitTurn({
+            kind: 'secret_request',
+            skillName: payload.skillName,
+            missing: payload.missing,
+            persisted: payload.persisted,
           });
         },
         planStore: this.planStoreFor(sessionId),

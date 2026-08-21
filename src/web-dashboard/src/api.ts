@@ -1123,6 +1123,8 @@ export class DashboardAPI {
       onQuestion?: (q: { questionId: string; question: string; choices: Array<{ label: string; description?: string }>; multiSelect: boolean }) => void;
       /** P6a — a skill draft (the /learn preview card: accept/edit/reject). */
       onSkillDraft?: (d: { name: string; description: string; markdown: string; updatedAt: number }) => void;
+      /** PA4 — a skill loaded but needs env vars (notification card with save). */
+      onSecretRequest?: (d: { skillName: string; missing: string[]; persisted: Record<string, boolean> }) => void;
     },
   ): () => void {
     const token = getAdminToken();
@@ -1219,6 +1221,22 @@ export class DashboardAPI {
         }
       } catch { /* ignore malformed */ }
     });
+    es.addEventListener('secret_request', (event) => {
+      try {
+        const payload = JSON.parse((event as MessageEvent).data) as {
+          skillName?: string;
+          missing?: string[];
+          persisted?: Record<string, boolean>;
+        };
+        if (payload.skillName && Array.isArray(payload.missing)) {
+          handlers.onSecretRequest?.({
+            skillName: payload.skillName,
+            missing: payload.missing,
+            persisted: payload.persisted ?? {},
+          });
+        }
+      } catch { /* ignore malformed */ }
+    });
     es.addEventListener('question', (event) => {
       try {
         const payload = JSON.parse((event as MessageEvent).data) as {
@@ -1286,6 +1304,21 @@ export class DashboardAPI {
       });
       const data = (await res.json()) as { ok?: boolean; error?: string };
       return { ok: data.ok === true, error: data.error };
+    } catch (err) {
+      return { ok: false, error: err instanceof Error ? err.message : String(err) };
+    }
+  }
+
+  /** PA4 — save a skill's env vars (writes to ~/.buff/.env or ~/.nuvira/.env). */
+  async saveSecrets(vars: Record<string, string>): Promise<{ ok: boolean; error?: string; saved?: string[] }> {
+    try {
+      const res = await fetch(`${this.baseUrl}/api/skills/secrets`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', ...authHeaders() },
+        body: JSON.stringify({ vars }),
+      });
+      const data = (await res.json()) as { ok?: boolean; error?: string; saved?: string[] };
+      return { ok: data.ok === true, error: data.error, saved: data.saved };
     } catch (err) {
       return { ok: false, error: err instanceof Error ? err.message : String(err) };
     }

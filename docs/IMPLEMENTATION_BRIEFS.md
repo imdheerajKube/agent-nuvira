@@ -22,6 +22,30 @@ P0.3 edit/write (confirm-gated), P0.4 run_terminal
 (`src/nlu/conversation-gate.ts`, wired into `resolvePipelineDispatch` +
 `execute.runSingleGoal`).
 
+**CORRECTION (2026-08-21):** Several items previously listed as PENDING are
+now SHIPPED. See `CORRECTED_GAP_PLAN_2026.md` for the verified status. The
+following items are CONFIRMED SHIPPED:
+- P0.7 plan_todo → ✅ SHIPPED (`src/tools/plan-store.ts` + registry.ts:664)
+- P0.8 skill tool → ✅ SHIPPED (`src/tools/skill-tool.ts` + registry.ts:865)
+- P3a clone_repo → ✅ SHIPPED (`src/tools/clone-repo.ts` + registry.ts:881)
+- P3b git tool → ✅ SHIPPED (`src/tools/git-tool.ts` + registry.ts:897)
+- P3c tool fallback hints → ✅ SHIPPED (`src/tools/tool-loop.ts:TOOL_FALLBACK_HINTS`)
+- P3d parallel suggestion → ✅ SHIPPED (`src/tools/tool-loop.ts:makeParallelSuggester`)
+- suggest_followups → ✅ SHIPPED (registry.ts:548)
+- delegate → ✅ SHIPPED (registry.ts:912, 18 agents)
+- artifact system → ✅ SHIPPED (`src/tools/artifact-types.ts`, `artifact-store.ts`)
+- delivery ledger → ✅ SHIPPED (`src/gateway/delivery.ts`)
+
+**ALL 6 GAPS ARE NOW SHIPPED (verified 2026-08-21):**
+1. ~~P0.6 — Dashboard Step Cards~~ ✅ SHIPPED (ToolCards component + live/snapshotted + CSS + test)
+2. ~~Hosted Skills Marketplace (P6d)~~ ✅ SHIPPED (server endpoints + AgentHub panel + CLI + tests)
+3. ~~Skill Depth~~ ✅ SHIPPED (33 bundled skills, was 5)
+4. ~~P6a /learn Skill Authoring~~ ✅ SHIPPED (learn action + buildLearnPrompt + draft system + preview card)
+5. ~~Cross-Skill Bundles (P6b)~~ ✅ SHIPPED (bundle store + CLI + skill tool + tests)
+6. ~~Toolset Enable/Disable UI~~ ✅ SHIPPED (AgentHub toolset grid + toggle switches + tests)
+
+All gaps closed. See `UNIFIED_IMPROVEMENT_PLAN.md` for the full roadmap.
+
 **Verification pass (2026-08-17, code-level re-analysis against acceptance
 criteria — no rework required):**
 - P0.1: `chat-console.ts` `askQuestion`(233)/`respond`(252) + server
@@ -44,9 +68,13 @@ criteria — no rework required):**
   top of `runSingleGoal` (execute.ts:1593 — question → direct answer, the
   orchestrator never starts) + execute tests (1125/1140/1165) + dispatch
   tests (89/113) ✅
-- P0.6–P0.8: confirmed genuinely PENDING (no step-card rendering anywhere;
-  registry has no plan/todo/skill tool) — matches the briefs' status, no
-  half-built work ✅
+- P0.6: ✅ SHIPPED — ToolCards component (ChatPage.tsx:487) + live/snapshotted rendering + CSS (dashboard.css:3702) + test (verified 2026-08-21)
+- P0.7: ✅ SHIPPED — plan-store.ts + registry.ts:664 (verified 2026-08-21)
+- P0.8: ✅ SHIPPED — skill-tool.ts + registry.ts:865 (verified 2026-08-21)
+- P3a: ✅ SHIPPED — clone-repo.ts + registry.ts:881 (verified 2026-08-21)
+- P3b: ✅ SHIPPED — git-tool.ts + registry.ts:897 (verified 2026-08-21)
+- P3c: ✅ SHIPPED — tool-loop.ts:TOOL_FALLBACK_HINTS (verified 2026-08-21)
+- P3d: ✅ SHIPPED — tool-loop.ts:makeParallelSuggester (verified 2026-08-21)
 - Full suites: typecheck clean · root **4,682 passed** (exact P0.5 baseline,
   zero regression) · dashboard **205 passed** · build clean ✅
 
