@@ -23,6 +23,7 @@ import { existsSync, readFileSync, writeFileSync, mkdirSync } from 'node:fs';
 import { join } from 'node:path';
 import { homedir } from 'node:os';
 import inquirer from 'inquirer';
+import { resolveNuviraHome } from '../config/paths.js';
 
 import { BaseCommand } from './commands.js';
 import { showModelPicker } from './model-picker.js';
@@ -80,7 +81,7 @@ export interface ActiveModelState {
   providerLabel?: string;
 }
 
-const BUFF_DIR = join(homedir(), '.buff');
+const BUFF_DIR = resolveNuviraHome();
 const ACTIVE_MODEL_PATH = join(BUFF_DIR, 'active-model.json');
 
 function ensureBuffDir(): void {

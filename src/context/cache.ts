@@ -2,16 +2,17 @@ import { readFileSync, writeFileSync, mkdirSync, existsSync } from 'node:fs';
 import { join, dirname } from 'node:path';
 import { homedir } from 'node:os';
 import { createHash } from 'node:crypto';
+import { resolveNuviraHome } from '../config/paths.js';
 
 // Resolve lazily (not at module load) and honor BUFF_MEMORY_DIR — the same
 // convention every other memory file follows (ledger, registry, recall-hits,
 // artifact-store). Without this, tests writing through a temp BUFF_MEMORY_DIR
-// would still read/write the REAL ~/.buff/cache.json (cross-run cache hits
+// would still read/write the REAL ~/.nuvira/cache.json (cross-run cache hits
 // make suites order-dependent), and a hermetic run could never isolate its
 // cache. Production path is unchanged when the env var is unset.
 function cachePath(): string {
   if (process.env.BUFF_MEMORY_DIR) return join(process.env.BUFF_MEMORY_DIR, 'cache.json');
-  return join(homedir(), '.buff', 'cache.json');
+  return join(resolveNuviraHome(), 'cache.json');
 }
 
 function cacheDir(): string {

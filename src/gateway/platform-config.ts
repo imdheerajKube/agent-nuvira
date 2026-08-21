@@ -78,8 +78,13 @@ export function configurablePlatforms(): Platform[] {
 // ─── ~/.buff/.env read/write (line-preserving merge) ────────────────────────
 
 export function envFilePath(): string {
+  if (process.env.NUVIRA_ENV_FILE && process.env.NUVIRA_ENV_FILE.trim().length > 0)
+    return process.env.NUVIRA_ENV_FILE;
   const override = process.env.BUFF_ENV_FILE;
-  return override && override.trim().length > 0 ? override : join(homedir(), '.buff', '.env');
+  if (override && override.trim().length > 0) return override;
+  const nuviraEnv = join(homedir(), '.nuvira', '.env');
+  if (existsSync(nuviraEnv)) return nuviraEnv;
+  return join(homedir(), '.buff', '.env');
 }
 
 export interface EnvVarState {

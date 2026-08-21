@@ -22,6 +22,7 @@ import { readFileSync, writeFileSync, existsSync, mkdirSync } from 'node:fs';
 import { join } from 'node:path';
 import { homedir } from 'node:os';
 import cron from 'node-cron';
+import { resolveNuviraHome } from '../config/paths.js';
 
 import { getTool, listTools } from '../tools/registry.js';
 import { getEventBus, EventNames } from '../observability/event-bus.js';
@@ -57,7 +58,7 @@ export interface CronJob {
 
 // ─── Constants ──────────────────────────────────────────────────────────────
 
-const CRON_DIR = join(homedir(), '.buff', 'cron');
+const CRON_DIR = join(resolveNuviraHome(), 'cron');
 const JOBS_PATH = join(CRON_DIR, 'jobs.json');
 
 // ─── Store ──────────────────────────────────────────────────────────────────

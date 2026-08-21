@@ -30,6 +30,7 @@ import {
 import { VAULT_AUDIT_FILENAME } from '../enterprise/vault-audit.js';
 import { join, basename } from 'node:path';
 import { homedir } from 'node:os';
+import { resolveNuviraHome } from '../config/paths.js';
 
 // NOTE: ids carry the .jsonl EXTENSION — resolvePath(undefined, builtin) treats
 // the builtin as a FILENAME (join(memoryDir(), builtin)). Previously the ids
@@ -42,7 +43,7 @@ const BUILTIN_CHAINS: Array<{ id: string; label: string }> = [
 ];
 
 function memoryDir(): string {
-  return process.env.BUFF_MEMORY_DIR || join(homedir(), '.buff', 'memory');
+  return process.env.BUFF_MEMORY_DIR || join(resolveNuviraHome(), 'memory');
 }
 
 /** Resolve a --file path or fall back to a builtin store id. */

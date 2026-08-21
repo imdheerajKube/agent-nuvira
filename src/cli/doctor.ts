@@ -24,6 +24,7 @@ import { execSync } from 'node:child_process';
 import { existsSync, mkdirSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { homedir } from 'node:os';
+import { resolveNuviraHome } from '../config/paths.js';
 
 import { BaseCommand } from './commands.js';
 import { ProviderFactory } from '../inference/factory.js';
@@ -728,17 +729,17 @@ export async function runSystemChecks(configManager: ConfigManager): Promise<Che
   const checks: CheckResult[] = [];
 
   // 1. Config directory
-  const buffDir = join(homedir(), '.buff');
+  const nuviraDir = resolveNuviraHome();
   checks.push({
     name: 'Config Directory',
-    status: existsSync(buffDir) ? 'pass' : 'warn',
-    message: existsSync(buffDir)
-      ? `~/.buff/ exists`
-      : `~/.buff/ not found`,
-    detail: existsSync(buffDir)
-      ? `Path: ${buffDir}`
-      : `Run 'buff config' or create ~/.buff/ manually`,
-    fix: !existsSync(buffDir) ? 'Run `buff doctor --fix` to create required directories' : undefined,
+    status: existsSync(nuviraDir) ? 'pass' : 'warn',
+    message: existsSync(nuviraDir)
+      ? `${nuviraDir} exists`
+      : `Nuvira home not found`,
+    detail: existsSync(nuviraDir)
+      ? `Path: ${nuviraDir}`
+      : `Run 'nuvira config' or create ${nuviraDir} manually`,
+    fix: !existsSync(nuviraDir) ? 'Run `nuvira doctor --fix` to create required directories' : undefined,
   });
 
   // 1b. Secret vault tier (Phase A1) — OS keychain when available, else the
@@ -775,7 +776,7 @@ export async function runSystemChecks(configManager: ConfigManager): Promise<Che
         name: 'Secret Vault',
         status: 'pass',
         message: 'AES-256-GCM encrypted file active (Tier 2 fallback)',
-        detail: `No OS keyring/CLI store available — using ${buffDir}/vault.enc (0600). ${vaultRefs} vault ref(s) in config${plaintextNote}.`,
+        detail: `No OS keyring/CLI store available — using ${nuviraDir}/vault.enc (0600). ${vaultRefs} vault ref(s) in config${plaintextNote}.`,
         fix: fixMigrate,
       });
     } else {
@@ -792,7 +793,7 @@ export async function runSystemChecks(configManager: ConfigManager): Promise<Che
   }
 
   // 2. Memory directory
-  const memoryDir = join(buffDir, 'memory');
+  const memoryDir = join(nuviraDir, 'memory');
   const memoryExists = existsSync(memoryDir);
   checks.push({
     name: 'Memory Directory',
@@ -890,9 +891,9 @@ export async function runSystemChecks(configManager: ConfigManager): Promise<Che
   }
 
   // 4. Plugin directories
-  const pluginDir = join(buffDir, 'plugins');
-  const agentDir = join(buffDir, 'agents');
-  const workflowDir = join(buffDir, 'workflows');
+  const pluginDir = join(nuviraDir, 'plugins');
+  const agentDir = join(nuviraDir, 'agents');
+  const workflowDir = join(nuviraDir, 'workflows');
 
   checks.push({
     name: 'Plugin Directories',
@@ -957,7 +958,7 @@ export async function runEnterpriseChecks(configManager: ConfigManager): Promise
   } catch {
     // Best-effort — a probe failure is reported as a fail check below.
   }
-  const memoryDir = join(homedir(), '.buff', 'memory');
+  const memoryDir = join(resolveNuviraHome(), 'memory');
   const auditFiles = [
     { name: 'quota-events.jsonl', path: join(memoryDir, 'quota-events.jsonl') },
     { name: 'model-registry-actions.jsonl', path: join(memoryDir, 'model-registry-actions.jsonl') },
@@ -1564,13 +1565,13 @@ export class DoctorCommand extends BaseCommand {
     let fixesApplied = 0;
 
     // 1. Create ~/.buff/ directories if missing
-    const buffDir = join(homedir(), '.buff');
+    const nuviraDir = resolveNuviraHome();
     const dirsToCreate = [
-      buffDir,
-      join(buffDir, 'memory'),
-      join(buffDir, 'plugins'),
-      join(buffDir, 'agents'),
-      join(buffDir, 'workflows'),
+      nuviraDir,
+      join(nuviraDir, 'memory'),
+      join(nuviraDir, 'plugins'),
+      join(nuviraDir, 'agents'),
+      join(nuviraDir, 'workflows'),
     ];
 
     for (const dir of dirsToCreate) {

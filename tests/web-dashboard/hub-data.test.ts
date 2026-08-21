@@ -279,15 +279,15 @@ describe('readHubData', () => {
       JSON.stringify({
         version: 1,
         contacts: [
-          { name: 'Alex', platform: 'whatsapp', id: '+919876543210', addedAt: 1 },
-          { name: 'Ops', platform: 'telegram', id: '987654321', addedAt: 2 },
+          { name: 'Alex', platform: 'whatsapp', id: '+919876543210', addedAt: 1, status: 'approved', registeredAt: 0 },
+          { name: 'Ops', platform: 'telegram', id: '987654321', addedAt: 2, status: 'approved', registeredAt: 0 },
         ],
       }),
     );
     const hub = readHubData();
     expect(hub.channels.contacts).toEqual([
-      { name: 'Alex', platform: 'whatsapp', id: '+919876543210', addedAt: 1 },
-      { name: 'Ops', platform: 'telegram', id: '987654321', addedAt: 2 },
+      { name: 'Alex', platform: 'whatsapp', id: '+919876543210', addedAt: 1, phone: undefined, status: 'approved', registeredAt: 0 },
+      { name: 'Ops', platform: 'telegram', id: '987654321', addedAt: 2, phone: undefined, status: 'approved', registeredAt: 0 },
     ]);
   });
 

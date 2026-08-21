@@ -35,6 +35,7 @@ import { dirname, join } from 'node:path';
 import { homedir } from 'node:os';
 import { createHash } from 'node:crypto';
 import { fileURLToPath } from 'node:url';
+import { resolveNuviraHome } from '../config/paths.js';
 
 import { logger } from '../utils/logger.js';
 import { compareVersions } from '../workflow/registry.js';
@@ -90,7 +91,7 @@ export interface SkillProvenance {
 const DEFAULT_REGISTRY_BASE = 'https://raw.githubusercontent.com/imdheerajKube/agent-nuvira/main/.agents/skills';
 
 /** Local store for provenance + quarantine. */
-const BUFF_DIR = join(homedir(), '.buff');
+const BUFF_DIR = resolveNuviraHome();
 const HUB_DIR = join(BUFF_DIR, 'skills-hub');
 const PROVENANCE_PATH = join(HUB_DIR, 'provenance.json');
 const QUARANTINE_DIR = join(HUB_DIR, 'quarantine');
