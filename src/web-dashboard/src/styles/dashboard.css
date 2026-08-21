@@ -4868,3 +4868,439 @@ body {
 .timeline-bar-fill.use {
   background: #d29922;
 }
+
+/* ═══════════════════════════════════════════════════════════════════════════
+   Bedrock Onboarding Panel
+   ════════════════════════════════════════════════════════════════════════ */
+
+.bedrock-onboarding {
+  max-width: 900px;
+}
+
+.bedrock-status-bar {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  padding: 12px 16px;
+  background: var(--bg-secondary, #161b22);
+  border: 1px solid var(--border-light, #30363d);
+  border-radius: 8px;
+  margin-bottom: 20px;
+  flex-wrap: wrap;
+}
+
+.bedrock-status-item {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 13px;
+  color: var(--text-secondary, #8b949e);
+}
+
+.bedrock-status-label {
+  color: var(--text-secondary, #8b949e);
+  font-size: 12px;
+}
+
+.bedrock-status-actions {
+  margin-left: auto;
+  display: flex;
+  gap: 8px;
+}
+
+.bedrock-setup-wizard {
+  background: var(--bg-secondary, #161b22);
+  border: 1px solid var(--border-light, #30363d);
+  border-radius: 8px;
+  padding: 20px;
+  margin-top: 16px;
+}
+
+.bedrock-wizard-step {
+  margin-bottom: 24px;
+}
+
+.bedrock-wizard-step h4 {
+  font-size: 15px;
+  font-weight: 600;
+  color: var(--text-primary, #e6edf3);
+  margin-bottom: 10px;
+}
+
+.bedrock-auth-options {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin-bottom: 16px;
+}
+
+.bedrock-auth-option {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  padding: 12px;
+  background: var(--bg-tertiary, #1c2333);
+  border: 1px solid var(--border-light, #30363d);
+  border-radius: 8px;
+  cursor: pointer;
+  transition: border-color 0.15s;
+}
+
+.bedrock-auth-option:hover {
+  border-color: var(--accent-blue, #58a6ff);
+}
+
+.bedrock-auth-option.selected {
+  border-color: var(--accent-blue, #58a6ff);
+  background: rgba(88, 166, 255, 0.08);
+}
+
+.bedrock-auth-option strong {
+  display: block;
+  color: var(--text-primary, #e6edf3);
+  font-size: 14px;
+}
+
+.bedrock-auth-option span {
+  display: block;
+  color: var(--text-secondary, #8b949e);
+  font-size: 12px;
+  margin-top: 2px;
+}
+
+.bedrock-auth-option input[type="radio"] {
+  margin-top: 2px;
+  accent-color: var(--accent-blue, #58a6ff);
+}
+
+.bedrock-wizard-fields {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.bedrock-setup-hint {
+  padding: 10px 12px;
+  background: var(--bg-tertiary, #1c2333);
+  border: 1px solid var(--border-light, #30363d);
+  border-radius: 6px;
+  font-size: 13px;
+  color: var(--text-secondary, #8b949e);
+  margin-bottom: 10px;
+}
+
+.bedrock-setup-hint strong {
+  color: var(--text-primary, #e6edf3);
+  display: block;
+  margin-bottom: 4px;
+}
+
+.bedrock-setup-hint ol {
+  margin: 4px 0 0 18px;
+  padding: 0;
+}
+
+.bedrock-setup-hint li {
+  margin-bottom: 2px;
+}
+
+.bedrock-region-select {
+  width: 100%;
+  max-width: 400px;
+  padding: 8px 12px;
+  background: var(--bg-tertiary, #1c2333);
+  color: var(--text-primary, #e6edf3);
+  border: 1px solid var(--border-light, #30363d);
+  border-radius: 6px;
+  font-size: 14px;
+}
+
+.bedrock-model-access-hint {
+  margin-bottom: 12px;
+}
+
+.bedrock-family-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(200px, 1fr));
+  gap: 8px;
+}
+
+.bedrock-family-card {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 10px 12px;
+  background: var(--bg-tertiary, #1c2333);
+  border: 1px solid var(--border-light, #30363d);
+  border-radius: 6px;
+  cursor: pointer;
+  transition: border-color 0.15s;
+}
+
+.bedrock-family-card:hover {
+  border-color: var(--accent-blue, #58a6ff);
+}
+
+.bedrock-family-card.selected {
+  border-color: var(--accent-blue, #58a6ff);
+  background: rgba(88, 166, 255, 0.08);
+}
+
+.bedrock-family-card input[type="checkbox"] {
+  accent-color: var(--accent-blue, #58a6ff);
+}
+
+.bedrock-family-card strong {
+  display: block;
+  font-size: 13px;
+  color: var(--text-primary, #e6edf3);
+}
+
+.bedrock-family-card span {
+  display: block;
+  font-size: 11px;
+  color: var(--text-secondary, #8b949e);
+}
+
+.bedrock-wizard-actions {
+  display: flex;
+  gap: 10px;
+  margin-top: 16px;
+}
+
+.bedrock-getting-started {
+  margin-top: 20px;
+}
+
+.bedrock-steps {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  margin-top: 12px;
+}
+
+.bedrock-step {
+  display: flex;
+  align-items: flex-start;
+  gap: 12px;
+  padding: 12px;
+  background: var(--bg-secondary, #161b22);
+  border: 1px solid var(--border-light, #30363d);
+  border-radius: 8px;
+}
+
+.bedrock-step-num {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 28px;
+  height: 28px;
+  background: var(--accent-blue, #58a6ff);
+  color: #fff;
+  border-radius: 50%;
+  font-weight: 700;
+  font-size: 14px;
+  flex-shrink: 0;
+}
+
+.bedrock-step strong {
+  display: block;
+  color: var(--text-primary, #e6edf3);
+  font-size: 14px;
+}
+
+.bedrock-step span {
+  display: block;
+  color: var(--text-secondary, #8b949e);
+  font-size: 12px;
+  margin-top: 2px;
+}
+
+.bedrock-quick-status {
+  margin-top: 16px;
+}
+
+.bedrock-probe-results {
+  margin-top: 16px;
+}
+
+.bedrock-probe-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));
+  gap: 8px;
+  margin-top: 12px;
+}
+
+.bedrock-probe-card {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 12px;
+  background: var(--bg-secondary, #161b22);
+  border: 1px solid var(--border-light, #30363d);
+  border-radius: 6px;
+  font-size: 12px;
+}
+
+.bedrock-probe-card.bedrock-probe-accessible {
+  border-color: rgba(56, 189, 148, 0.3);
+}
+
+.bedrock-probe-card.bedrock-probe-permission-denied {
+  border-color: rgba(210, 153, 34, 0.3);
+}
+
+.bedrock-probe-id {
+  flex: 1;
+  color: var(--text-primary, #e6edf3);
+  font-family: monospace;
+  font-size: 11px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.bedrock-probe-status {
+  color: var(--text-secondary, #8b949e);
+  font-size: 11px;
+  white-space: nowrap;
+}
+
+.bedrock-probe-action {
+  margin-top: 16px;
+  padding: 12px;
+  background: rgba(210, 153, 34, 0.08);
+  border: 1px solid rgba(210, 153, 34, 0.3);
+  border-radius: 6px;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+.bedrock-probe-action p {
+  margin: 0;
+  color: var(--text-primary, #e6edf3);
+  font-size: 13px;
+}
+
+/* ═══════════════════════════════════════════════════════════════════════════
+   Contacts Page
+   ════════════════════════════════════════════════════════════════════════ */
+
+.contacts-page {
+  max-width: 1200px;
+}
+
+.contacts-filters {
+  display: flex;
+  gap: 8px;
+  margin-bottom: 16px;
+  flex-wrap: wrap;
+  align-items: center;
+}
+
+.contacts-filters .admin-refresh-btn {
+  margin-left: auto;
+}
+
+.contacts-table-wrapper {
+  overflow-x: auto;
+}
+
+.contacts-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 13px;
+}
+
+.contacts-table th {
+  text-align: left;
+  padding: 8px 10px;
+  background: var(--bg-secondary, #161b22);
+  border-bottom: 1px solid var(--border-light, #30363d);
+  color: var(--text-secondary, #8b949e);
+  font-size: 12px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+}
+
+.contacts-table td {
+  padding: 8px 10px;
+  border-bottom: 1px solid var(--border-light, #30363d);
+  color: var(--text-primary, #e6edf3);
+}
+
+.contact-row:hover {
+  background: rgba(88, 166, 255, 0.04);
+}
+
+.contact-row.status-pending {
+  background: rgba(210, 153, 34, 0.04);
+}
+
+.contact-row.status-rejected {
+  background: rgba(218, 54, 51, 0.04);
+}
+
+.contact-name {
+  font-weight: 600;
+}
+
+.contact-id code {
+  background: var(--bg-tertiary, #1c2333);
+  padding: 2px 6px;
+  border-radius: 4px;
+  font-size: 12px;
+  color: var(--text-secondary, #8b949e);
+}
+
+.contact-phone {
+  color: var(--text-secondary, #8b949e);
+}
+
+.contact-date {
+  color: var(--text-secondary, #8b949e);
+  font-size: 12px;
+}
+
+.contact-actions {
+  display: flex;
+  gap: 4px;
+  flex-wrap: nowrap;
+}
+
+.contact-status-badge {
+  display: inline-block;
+  padding: 2px 8px;
+  border-radius: 12px;
+  font-size: 12px;
+  font-weight: 500;
+}
+
+.contact-status-badge.approved {
+  background: rgba(56, 189, 148, 0.15);
+  color: #38bd94;
+}
+
+.contact-status-badge.pending {
+  background: rgba(210, 153, 34, 0.15);
+  color: #d29922;
+}
+
+.contact-status-badge.rejected {
+  background: rgba(218, 54, 51, 0.15);
+  color: #da3633;
+}
+
+.contact-approve-btn {
+  color: #38bd94;
+}
+
+.contact-reject-btn {
+  color: #d29922;
+}
+
+.contact-delete-btn {
+  color: #da3633;
+}

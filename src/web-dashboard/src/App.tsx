@@ -21,6 +21,8 @@ import ChatPage from './components/ChatPage';
 import EvalsPage from './components/EvalsPage';
 import GatewayPage from './components/GatewayPage';
 import PlatformsPage from './components/PlatformsPage';
+import BedrockOnboarding from './components/BedrockOnboarding';
+import ContactsPage from './components/ContactsPage';
 import ModelTimeline from './components/ModelTimeline';
 
 export default function App() {
@@ -78,6 +80,8 @@ export default function App() {
         <Route path="/chat" element={<ChatPage />} />
         <Route path="/evals" element={<EvalsPage data={data} />} />
         <Route path="/platforms" element={<PlatformsPage />} />
+        <Route path="/bedrock" element={<BedrockOnboarding canWrite={true} sessionExpired={(msg) => console.error(msg)} />} />
+        <Route path="/contacts" element={<ContactsPage />} />
         <Route path="/gateway" element={<GatewayPage />} />
         <Route path="/system" element={<HealthPanel data={data} />} />
         <Route path="/admin" element={<AdminPanel />} />

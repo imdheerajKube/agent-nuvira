@@ -11,6 +11,11 @@
  * saved. It is metadata only — the gate never reads it, and removing a
  * contact here never widens access.
  *
+ * Contact statuses:
+ *  - `approved`  — outbound messages allowed (gateway_send resolves this name)
+ *  - `pending`   — auto-registered from first inbound message, awaiting admin review
+ *  - `rejected`  — admin rejected; name resolves but send is blocked
+ *
  * Stored at `~/.buff/gateway/contacts.json` (BUFF_CONFIG_DIR honored, next to
  * aliases.json / inbox.json / delivery.json). Works for every platform: a
  * WhatsApp phone number, a Telegram user id, an email address, a group jid —
@@ -32,9 +37,18 @@ export interface GatewayContact {
   platform: Platform;
   /** Contact number / sender id (CLI `<Contact No>`), e.g. "+919876543210". */
   id: string;
-  /** When the contact was added (epoch ms). */
+  /** Optional phone number (for cross-platform lookup and display). */
+  phone?: string;
+  /** Registration status — approved contacts can be sent TO via gateway_send. */
+  status: ContactStatus;
+  /** When the user first messaged the bot (epoch ms). 0 = pre-registration. */
+  registeredAt: number;
+  /** When the contact was added / last modified (epoch ms). */
   addedAt: number;
 }
+
+/** Contact registration status. */
+export type ContactStatus = 'approved' | 'pending' | 'rejected';
 
 /** The contacts file path (BUFF_CONFIG_DIR honored — same dir as aliases.json). */
 export function gatewayContactsFile(): string {
@@ -57,11 +71,18 @@ export function readGatewayContacts(): GatewayContact[] {
       name: c.name.trim(),
       platform: c.platform as Platform,
       id: c.id.trim(),
+      phone: typeof c.phone === 'string' && c.phone.trim() ? c.phone.trim() : undefined,
+      status: isValidContactStatus(c.status) ? c.status : 'approved',
+      registeredAt: typeof c.registeredAt === 'number' ? c.registeredAt : 0,
       addedAt: typeof c.addedAt === 'number' ? c.addedAt : Date.now(),
     }));
   } catch {
     return [];
   }
+}
+
+function isValidContactStatus(v: unknown): v is ContactStatus {
+  return v === 'approved' || v === 'pending' || v === 'rejected';
 }
 
 /** Persist contacts (small file — single write; never throws). */
@@ -101,11 +122,6 @@ export function sameContactName(a: string, b: string): boolean {
 }
 
 /**
- * Add or update a contact. An existing contact with the same (platform, id) —
- * or the same (platform, name) — is replaced in place. Returns the saved
- * contact and whether it was a new entry.
- */
-/**
  * Validate a contact ID for a given platform. Returns an error message if
  * invalid, or null if valid. Telegram requires a numeric chat ID (not a
  * phone number) — the ID is assigned by Telegram when a user first messages
@@ -123,13 +139,41 @@ export function validateContactId(platform: Platform, id: string): string | null
   return null;
 }
 
+/** Normalize a phone number to digits-only for flexible comparison.
+ * Handles: +918800604222, 918800604222, 08800604222, 8800604222
+ * Strips country codes (0, +91, 91) and non-digit characters. */
+export function normalizePhone(phone: string): string {
+  let digits = (phone || '').replace(/\D+/g, '');
+  // Strip leading 0 (local format: 08800604222 → 8800604222)
+  if (digits.startsWith('0') && digits.length > 10) digits = digits.slice(1);
+  return digits;
+}
+
+/** True when two phone numbers refer to the same person (digits-only comparison). */
+export function samePhone(a: string, b: string): boolean {
+  const da = normalizePhone(a);
+  const db = normalizePhone(b);
+  return da.length > 0 && da === db;
+}
+
+/**
+ * Add or update a contact. An existing contact with the same (platform, id) —
+ * or the same (platform, name) — is replaced in place. Returns the saved
+ * contact and whether it was a new entry.
+ */
 export function upsertGatewayContact(
   contact: Omit<GatewayContact, 'addedAt'> & { addedAt?: number },
 ): { contact: GatewayContact; added: boolean } {
   const name = (contact.name || '').trim();
   const id = (contact.id || '').trim();
   const platform = contact.platform as Platform;
-  const entry: GatewayContact = { name, platform, id, addedAt: contact.addedAt ?? Date.now() };
+  const entry: GatewayContact = {
+    name, platform, id,
+    phone: contact.phone?.trim() || undefined,
+    status: contact.status ?? 'approved',
+    registeredAt: contact.registeredAt ?? 0,
+    addedAt: contact.addedAt ?? Date.now(),
+  };
   const current = readGatewayContacts();
   const rest = current.filter(
     (c) =>
@@ -164,6 +208,71 @@ export function removeGatewayContact(platform: Platform, idOrName: string): bool
 export function contactNameFor(contacts: GatewayContact[], platform: Platform, id: string): string | undefined {
   const hit = contacts.find((c) => c.platform === platform && sameContactId(c.id, id));
   return hit?.name;
+}
+
+/**
+ * Resolve a target string to a contact on a platform. Matches by:
+ *  1. Exact name (case-insensitive)
+ *  2. Phone number (flexible: +91..., 0..., digits-only)
+ *  3. Platform ID (exact)
+ * Returns the matching contact, or undefined.
+ */
+export function resolveContact(
+  contacts: GatewayContact[],
+  platform: Platform,
+  target: string,
+): GatewayContact | undefined {
+  const t = (target || '').trim();
+  if (!t) return undefined;
+  const platformContacts = contacts.filter((c) => c.platform === platform);
+  // 1. Exact name match (case-insensitive)
+  const byName = platformContacts.find((c) => sameContactName(c.name, t));
+  if (byName) return byName;
+  // 2. Phone number match (flexible)
+  if (/^\+?\d/.test(t)) {
+    const byPhone = platformContacts.find((c) => c.phone && samePhone(c.phone, t));
+    if (byPhone) return byPhone;
+  }
+  // 3. Platform ID match
+  const byId = platformContacts.find((c) => sameContactId(c.id, t));
+  if (byId) return byId;
+  return undefined;
+}
+
+/**
+ * Set a contact's approval status. Returns true when the contact was found
+ * and updated.
+ */
+export function setContactStatus(
+  platform: Platform,
+  nameOrId: string,
+  status: ContactStatus,
+): boolean {
+  const contacts = readGatewayContacts();
+  const target = contacts.find(
+    (c) => c.platform === platform &&
+      (sameContactName(c.name, nameOrId) || sameContactId(c.id, nameOrId)),
+  );
+  if (!target) return false;
+  target.status = status;
+  target.addedAt = Date.now();
+  writeGatewayContacts(contacts);
+  return true;
+}
+
+/**
+ * Remove a contact by name or ID across all platforms. Returns true when
+ * an entry was removed.
+ */
+export function removeContactByNameOrId(nameOrId: string): boolean {
+  const target = normalizeContactId(nameOrId);
+  const current = readGatewayContacts();
+  const next = current.filter(
+    (c) => !(sameContactName(c.name, target) || sameContactId(c.id, target)),
+  );
+  if (next.length === current.length) return false;
+  writeGatewayContacts(next);
+  return true;
 }
 
 /**

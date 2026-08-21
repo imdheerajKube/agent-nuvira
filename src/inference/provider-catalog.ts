@@ -323,9 +323,9 @@ export const PROVIDER_CATALOG: Record<string, CatalogProviderEntry> = {
     id: 'bedrock',
     label: 'Amazon Bedrock',
     icon: '🟠',
-    envVar: 'AWS_BEARER_TOKEN_BEDROCK',
+    envVar: 'AWS_BEARER_TOKEN',
     openAICompat: true,
-    baseUrl: 'https://bedrock-runtime.us-east-1.amazonaws.com',
+    baseUrl: 'https://bedrock-runtime.us-east-1.amazonaws.com/openai/v1',
     capabilities: { reasoning: 0.88, speed: 0.70, cost: 0.45, privacy: 0.40, reliability: 0.90 },
     pricing: { inputPer1K: 0.00080, outputPer1K: 0.00320 },
     contextWindow: 200_000,
@@ -344,9 +344,18 @@ export const CATALOG_OPENAI_COMPAT_IDS: string[] = CATALOG_PROVIDER_IDS.filter((
 /** Providers served by a native (non-OpenAI-compatible) adapter. */
 export const CATALOG_NATIVE_IDS: string[] = CATALOG_PROVIDER_IDS.filter((id) => PROVIDER_CATALOG[id]?.nativeAdapter);
 
-/** Look up a catalog entry (undefined for unknown/plugin providers). */
+/**
+ * Look up a catalog entry (undefined for unknown/plugin providers).
+ * For Bedrock, the baseUrl is resolved dynamically from BEDROCK_REGION
+ * (defaults to us-east-1) so the runtime always targets the correct region.
+ */
 export function getCatalogProvider(id: string): CatalogProviderEntry | undefined {
-  return PROVIDER_CATALOG[id];
+  const entry = PROVIDER_CATALOG[id];
+  if (id === 'bedrock' && entry) {
+    const region = process.env.BEDROCK_REGION || 'us-east-1';
+    return { ...entry, baseUrl: `https://bedrock-runtime.${region}.amazonaws.com/openai/v1` };
+  }
+  return entry;
 }
 
 /** The standard env var for a provider's API key (undefined when keyless). */

@@ -607,6 +607,49 @@ export class DashboardAPI {
     return { ok: false, error: d.error || 'Failed to save policies.', unauthorized: r.status === 401, forbidden: r.status === 403 };
   }
 
+  // ─── Contacts management (name-centric outbound contacts) ────────────────
+
+  /** List all contacts (name, platform, id, phone, status). */
+  async getContacts(): Promise<{ ok: boolean; contacts?: Array<{ name: string; platform: string; id: string; phone?: string; status: string; registeredAt: number; addedAt: number }>; error?: string }> {
+    const r = await this.sendAdminRequest('/api/admin/contacts', 'GET');
+    if (!r) return { ok: false, error: 'Could not reach the dashboard server.' };
+    const d = (r.data ?? {}) as { ok?: boolean; contacts?: unknown[]; error?: string };
+    if (r.status === 200 && d.ok) return { ok: true, contacts: d.contacts as never[] };
+    return { ok: false, error: d.error || 'Failed to read contacts.' };
+  }
+
+  /** Approve a contact by platform + name or ID. */
+  async approveContact(platform: string, nameOrId: string): Promise<AdminWriteResult> {
+    return this.contactAction('approve', platform, nameOrId);
+  }
+
+  /** Reject a contact by platform + name or ID. */
+  async rejectContact(platform: string, nameOrId: string): Promise<AdminWriteResult> {
+    return this.contactAction('reject', platform, nameOrId);
+  }
+
+  /** Delete a contact by platform + name or ID. */
+  async deleteContact(platform: string, nameOrId: string): Promise<AdminWriteResult> {
+    return this.contactAction('delete', platform, nameOrId);
+  }
+
+  /** Update a contact's name, phone, or status. */
+  async updateContact(platform: string, id: string, fields: { name?: string; phone?: string; status?: string }): Promise<AdminWriteResult> {
+    const r = await this.sendAdminRequest('/api/admin/contacts', 'PUT', { action: 'update', platform, id, ...fields });
+    if (!r) return { ok: false, error: 'Could not reach the dashboard server.' };
+    const d = (r.data ?? {}) as AdminWriteResult;
+    if (r.status === 200 && d.ok) return d;
+    return { ok: false, error: d.error || 'Update failed.' };
+  }
+
+  private async contactAction(action: string, platform: string, nameOrId: string): Promise<AdminWriteResult> {
+    const r = await this.sendAdminRequest('/api/admin/contacts', 'PUT', { action, platform, nameOrId });
+    if (!r) return { ok: false, error: 'Could not reach the dashboard server.' };
+    const d = (r.data ?? {}) as AdminWriteResult;
+    if (r.status === 200 && d.ok) return d;
+    return { ok: false, error: d.error || `${action} failed.` };
+  }
+
   /**
    * Platform transport config (GUI parity with `buff config gateway`): list
    * every env-configurable platform with current per-var values (full values
@@ -665,6 +708,35 @@ export class DashboardAPI {
     const d = (r.data ?? {}) as AdminWriteResult;
     if (r.status === 200 && d.ok) return d;
     return { ok: false, error: d.error || 'Save failed.', unauthorized: r.status === 401 };
+  }
+
+  // ─── Bedrock onboarding ───────────────────────────────────────────────────
+
+  /** Get current Bedrock configuration status. */
+  async getBedrockStatus(): Promise<{ configured: boolean; region: string; authMethod: string; apiKeySet: boolean; iamKeySet: boolean }> {
+    const r = await this.sendAdminRequest('/api/bedrock/status', 'GET');
+    if (!r || r.status !== 200) {
+      return { configured: false, region: 'us-east-1', authMethod: 'none', apiKeySet: false, iamKeySet: false };
+    }
+    return (r.data ?? {}) as { configured: boolean; region: string; authMethod: string; apiKeySet: boolean; iamKeySet: boolean };
+  }
+
+  /** Save Bedrock env vars (credentials + region) to ~/.buff/.env. */
+  async setupBedrock(envVars: Record<string, string>): Promise<{ ok: boolean; error?: string; envVarsWritten?: string[] }> {
+    const r = await this.sendAdminRequest('/api/bedrock/setup', 'POST', { envVars });
+    if (!r) return { ok: false, error: 'Could not reach the dashboard server.' };
+    const d = (r.data ?? {}) as { ok?: boolean; error?: string; envVarsWritten?: string[] };
+    if (r.status === 200 && d.ok) return { ok: true, envVarsWritten: d.envVarsWritten };
+    return { ok: false, error: d.error || 'Save failed.' };
+  }
+
+  /** Probe Bedrock models in a region — returns accessibility status for each. */
+  async probeBedrock(region: string): Promise<{ ok: boolean; models?: Array<{ modelId: string; status: string; httpStatus?: number }>; error?: string }> {
+    const r = await this.sendAdminRequest('/api/bedrock/probe', 'POST', { region });
+    if (!r) return { ok: false, error: 'Could not reach the dashboard server.' };
+    const d = (r.data ?? {}) as { ok?: boolean; models?: Array<{ modelId: string; status: string; httpStatus?: number }>; error?: string };
+    if (r.status === 200 && d.ok) return { ok: true, models: d.models };
+    return { ok: false, error: d.error || 'Probe failed.' };
   }
 
   // ─── P1 task runner (command console) ─────────────────────────────────────
