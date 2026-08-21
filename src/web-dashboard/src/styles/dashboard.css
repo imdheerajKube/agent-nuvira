@@ -5304,3 +5304,101 @@ body {
 .contact-delete-btn {
   color: #da3633;
 }
+
+/* ═══════════════════════════════════════════════════════════════════════════
+   Platform Config Table (consolidated row layout)
+   ════════════════════════════════════════════════════════════════════════ */
+
+.platform-config-table-wrapper {
+  overflow-x: auto;
+}
+
+.platform-config-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 13px;
+}
+
+.platform-config-table th {
+  text-align: left;
+  padding: 8px 10px;
+  background: var(--bg-secondary, #161b22);
+  border-bottom: 1px solid var(--border-light, #30363d);
+  color: var(--text-secondary, #8b949e);
+  font-size: 12px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+}
+
+.platform-config-table td {
+  padding: 8px 10px;
+  border-bottom: 1px solid var(--border-light, #30363d);
+  color: var(--text-primary, #e6edf3);
+  vertical-align: middle;
+}
+
+.platform-config-row:hover {
+  background: rgba(88, 166, 255, 0.04);
+}
+
+.platform-config-row.configured {
+  background: rgba(56, 189, 148, 0.03);
+}
+
+.platform-config-name {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.platform-config-name .hub-card-id {
+  font-size: 11px;
+  color: var(--text-secondary, #8b949e);
+}
+
+.platform-config-status-text {
+  margin-left: 6px;
+  font-size: 12px;
+}
+
+.platform-config-actions {
+  display: flex;
+  gap: 6px;
+  align-items: center;
+  flex-wrap: wrap;
+}
+
+.platform-config-cli {
+  font-size: 12px;
+}
+
+.platform-config-cli code {
+  background: var(--bg-tertiary, #1c2333);
+  padding: 2px 6px;
+  border-radius: 4px;
+  font-size: 11px;
+  color: var(--text-secondary, #8b949e);
+}
+
+.platform-config-expanded td {
+  background: var(--bg-secondary, #161b22);
+  padding: 16px;
+}
+
+.platform-config-form {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  max-width: 500px;
+}
+
+.platform-config-readonly {
+  background: var(--bg-tertiary, #1c2333);
+  border: 1px solid var(--border-light, #30363d);
+  border-radius: 6px;
+  padding: 8px 12px;
+  color: var(--text-secondary, #8b949e);
+  font-size: 13px;
+  width: 100%;
+}

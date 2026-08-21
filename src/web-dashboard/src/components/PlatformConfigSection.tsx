@@ -1,10 +1,12 @@
-import { useCallback, useEffect, useRef, useState } from 'react';
+import React, { useCallback, useEffect, useRef, useState } from 'react';
 import { dashboardAPI } from '../api';
 import type { PlatformConfigEntry } from '../types';
 
 interface Props {
   canWrite: boolean;
   sessionExpired: (msg?: string) => void;
+  /** 'grid' = current card layout (default), 'table' = consolidated row layout */
+  mode?: 'grid' | 'table';
 }
 
 /**
@@ -15,7 +17,7 @@ interface Props {
  * the server applies the values to its own process.env so the send-test picks
  * them up immediately.
  */
-export function PlatformConfigSection({ canWrite, sessionExpired }: Props) {
+export function PlatformConfigSection({ canWrite, sessionExpired, mode = 'grid' }: Props) {
   const [configs, setConfigs] = useState<PlatformConfigEntry[] | null>(null);
   const [expanded, setExpanded] = useState<string | null>(null);
   const [busy, setBusy] = useState<string | null>(null);
@@ -166,6 +168,119 @@ export function PlatformConfigSection({ canWrite, sessionExpired }: Props) {
 
   const guide = wizardPlatform ? WIZARD_GUIDES[wizardPlatform.platform] : null;
 
+  // ── Table mode: consolidated row layout ──
+  if (mode === 'table') {
+    return (
+      <>
+      {wizardPlatform && guide ? (
+        <div className="wizard-overlay" onClick={() => setWizardPlatform(null)}>
+          <div className="wizard-modal" onClick={(e) => e.stopPropagation()}>
+            <div className="wizard-header">
+              <span className="wizard-icon">🚀</span>
+              <span className="wizard-title">Getting Started: {wizardPlatform.label}</span>
+              <button type="button" className="admin-mini-btn" onClick={() => setWizardPlatform(null)}>✕</button>
+            </div>
+            <div className="wizard-body">
+              {wizardStep === 0 ? (
+                <>
+                  <p className="wizard-section-title">📋 Steps to create your bot:</p>
+                  <ol className="wizard-steps">
+                    {guide.steps.map((s, i) => <li key={i}>{s}</li>)}
+                  </ol>
+                  <div className="wizard-nav">
+                    <button type="button" className="admin-refresh-btn" onClick={() => setWizardStep(1)}>I have my token →</button>
+                    {wizardPlatform.setupUrl ? (
+                      <a href={wizardPlatform.setupUrl} target="_blank" rel="noopener noreferrer" className="admin-mini-btn platform-docs-link">📖 Docs</a>
+                    ) : null}
+                  </div>
+                </>
+              ) : (
+                <>
+                  <p className="wizard-section-title">🔑 Paste your token:</p>
+                  {wizardPlatform.envVars.map((v) => (
+                    <label className="hub-send-target" key={v.varName}>
+                      <span className="admin-hint">{v.prompt}</span>
+                      <input type={v.secret ? 'password' : 'text'} value={wizardValues[v.varName] ?? ''} onChange={(e) => setWizardValues((prev) => ({ ...prev, [v.varName]: e.target.value }))} placeholder={v.secret ? '••••••••' : 'value'} autoComplete="off" spellCheck={false} autoFocus />
+                    </label>
+                  ))}
+                  {wizardResult ? (<div className={`admin-row-msg${wizardResult.kind === 'ok' ? '' : ' admin-row-msg-err'}`}>{wizardResult.text}</div>) : null}
+                  <div className="wizard-nav">
+                    <button type="button" className="admin-mini-btn" onClick={() => setWizardStep(0)}>← Back</button>
+                    <button type="button" className="admin-refresh-btn" onClick={() => void saveWizard()} disabled={wizardSaving}>{wizardSaving ? '⏳ Saving…' : '💾 Save token'}</button>
+                  </div>
+                  {wizardResult?.kind === 'ok' ? (<><p className="wizard-section-title">📋 Next steps:</p><ol className="wizard-steps">{guide.postSetup.map((s, i) => <li key={i}>{s}</li>)}</ol></>) : null}
+                </>
+              )}
+            </div>
+          </div>
+        </div>
+      ) : null}
+      {msg ? (<div className={`admin-row-msg${msg.kind === 'ok' ? '' : ' admin-row-msg-err'}`}>{msg.text}</div>) : null}
+      <div className="platform-config-table-wrapper">
+        <table className="platform-config-table">
+          <thead>
+            <tr>
+              <th>Platform</th>
+              <th>Status</th>
+              <th>Configuration</th>
+              <th>CLI Command</th>
+            </tr>
+          </thead>
+          <tbody>
+            {configs.map((p) => (
+              <React.Fragment key={p.platform}>
+                <tr className={`platform-config-row ${p.configured ? 'configured' : ''}`}>
+                  <td className="platform-config-name">
+                    <span className="hub-platform-label">{p.label}</span>
+                    <span className="hub-card-id">{p.platform}</span>
+                  </td>
+                  <td>
+                    <span className={`status-dot ${p.configured ? 'connected' : 'reconnecting'}`} />
+                    <span className="platform-config-status-text">{p.configured ? 'Active' : 'Not configured'}</span>
+                  </td>
+                  <td className="platform-config-actions">
+                    {!p.configured ? (
+                      <button type="button" className="wizard-start-btn" onClick={() => startWizard(p)}>🚀 Getting Started</button>
+                    ) : null}
+                    {p.setupUrl ? (
+                      <a href={p.setupUrl} target="_blank" rel="noopener noreferrer" className="admin-mini-btn platform-docs-link">📖 Docs</a>
+                    ) : null}
+                    <button type="button" className="admin-refresh-btn" onClick={() => setExpanded(expanded === p.platform ? null : p.platform)} disabled={!canWrite}>
+                      {expanded === p.platform ? '▴ Close' : p.configured ? '✎ Edit' : '⚙ Configure'}
+                    </button>
+                    {p.configured ? (
+                      <button type="button" className="admin-mini-btn contact-delete-btn" onClick={() => void remove(p.platform)} disabled={!canWrite}>🗑️</button>
+                    ) : null}
+                  </td>
+                  <td className="platform-config-cli">
+                    <code>buff gateway setup {p.platform}</code>
+                  </td>
+                </tr>
+                {expanded === p.platform ? (
+                  <tr className="platform-config-expanded">
+                    <td colSpan={4}>
+                      <div className="platform-config-form">
+                        {p.envVars.map((v) => (
+                          <label className="hub-send-target" key={v.varName}>
+                            <span className="admin-hint">{v.prompt}</span>
+                            <input type={v.secret ? 'password' : 'text'} value={v.value} readOnly className="platform-config-readonly" placeholder={v.secret ? '••••••••' : 'value'} />
+                          </label>
+                        ))}
+                        <p className="admin-hint">Tokens are in <code>~/.buff/.env</code> — edit there or use the wizard above.</p>
+                      </div>
+                    </td>
+                  </tr>
+                ) : null}
+              </React.Fragment>
+            ))}
+          </tbody>
+        </table>
+      </div>
+      </>
+    );
+  }
+
+  // ── Grid mode: current card layout ──
   return (
     <>
     {wizardPlatform && guide ? (
