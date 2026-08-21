@@ -2,6 +2,17 @@
 
 All notable changes to **Agent-Nuvira** are documented in this file.
 
+## v1.78.0 — feat: contact-centric gateway messaging, Bedrock onboarding, Telegram auto-registration
+
+- **Added: Contact-centric outbound messaging** — the contacts store now uses friendly names (Anuj, Divya) instead of cryptic IDs. Outbound resolution supports name, phone number (flexible format: +91..., 0..., digits-only), or platform ID. `gateway_send("Anuj", "...")` resolves via contacts store.
+- **Added: Contact registration system** — new Telegram users auto-register with `status: pending` on first message. Admins approve/reject via dashboard Contacts tab or CLI (`buff gateway contact approve Anuj`). Only approved contacts can receive outbound messages.
+- **Added: Dashboard Contacts tab** — full CRUD management UI with status filters (all/approved/pending/rejected), approve/reject/edit/delete actions, and edit modal for name + phone.
+- **Added: CLI contact commands** — `buff gateway contact list`, `approve`, `reject`, `delete`, `add`. Supports `--pending` and `--platform` filters. Auto-detects platform when omitted.
+- **Added: Bedrock onboarding** — CLI setup wizard (`buff bedrock setup`), dashboard onboarding panel (`/bedrock`), and 3 API endpoints (status/setup/probe). Dynamic region resolution via `BEDROCK_REGION` env var.
+- **Fixed: Bedrock inference URL** — `baseUrl` now includes `/openai/v1` so the OpenAI-compatible adapter routes correctly to `bedrock-runtime.{region}.amazonaws.com/openai/v1/chat/completions`.
+- **Fixed: Telegram inbound policy** — changed from `allowedUsers: ["+918800425333"]` (phone number that never matches Telegram IDs) to `allowedUsers: ["*"]` (open inbound, contacts-gated outbound).
+- **Fixed: smart error messages in gateway_send** — pending contacts get "⏳ pending admin approval" message; rejected contacts get "🚫 rejected" message instead of generic "unknown target".
+
 ## v1.77.0 — feat: dynamic model catalog, Bedrock provider, website refresh
 
 - **Fixed: 22 catalog providers now route correctly** — the capability-fit scoring was hardcoded for 5 built-in providers, causing 0% fit penalty for Bedrock, OpenAI, Anthropic, DeepSeek, xAI, and others. Now derives chat/code tags dynamically from provider capability profiles.
