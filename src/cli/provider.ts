@@ -12,7 +12,7 @@
 import { Command } from 'commander';
 import chalk from 'chalk';
 
-import { BaseCommand } from './commands.js';
+import { BaseCommand, getCliName } from './commands.js';
 import { resolveProvider } from './router.js';
 import { getPluginRegistry } from '../plugins/registry.js';
 import { ProviderType } from '../config/types.js';
@@ -200,8 +200,8 @@ export class ProviderCommand extends BaseCommand {
     console.log(`  ${chalk.yellow('⚠️  Unreachable')} — Provider is configured but endpoint not reachable`);
     console.log(`  ${chalk.red('❌ Not configured')} — No API key found`);
     console.log('');
-    console.log(`  ${chalk.dim('Tip:')} Run ${chalk.cyan('buff provider health')} for detailed diagnostics`);
-    console.log(`  ${chalk.dim('Tip:')} Run ${chalk.cyan('buff doctor')} for full system health check`);
+    console.log(`  ${chalk.dim('Tip:')} Run ${chalk.cyan('${getCliName()} provider health')} for detailed diagnostics`);
+    console.log(`  ${chalk.dim('Tip:')} Run ${chalk.cyan('${getCliName()} doctor')} for full system health check`);
     console.log('');
   }
 
@@ -312,7 +312,7 @@ export class ProviderCommand extends BaseCommand {
     if (allPassed) {
       console.log(`  ${chalk.green('✅ All providers healthy')}`);
     } else {
-      console.log(`  ${chalk.yellow('⚠️  Some providers have issues. Use')} ${chalk.cyan('buff doctor')} ${chalk.yellow('for full diagnostics.')}`);
+      console.log(`  ${chalk.yellow('⚠️  Some providers have issues. Use')} ${chalk.cyan('${getCliName()} doctor')} ${chalk.yellow('for full diagnostics.')}`);
     }
     console.log('');
   }

@@ -64,7 +64,7 @@ export class PluginsCommand extends BaseCommand {
                 }
             }
             catch {
-                console.log('    (run `buff plugins scan` to reload)');
+                console.log('    (run `${getCliName()} plugins scan` to reload)');
             }
         }
         else {
@@ -80,7 +80,7 @@ export class PluginsCommand extends BaseCommand {
                 }
             }
             catch {
-                console.log('    (run `buff plugins scan` to reload)');
+                console.log('    (run `${getCliName()} plugins scan` to reload)');
             }
         }
         else {

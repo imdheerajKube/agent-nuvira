@@ -1,6 +1,6 @@
 import { Command } from 'commander';
 import inquirer from 'inquirer';
-import { BaseCommand } from './commands.js';
+import { BaseCommand, getCliName } from './commands.js';
 import { getPluginRegistry } from '../plugins/registry.js';
 import { logger } from '../utils/logger.js';
 import { clearModelListCache } from '../inference/model-validator.js';
@@ -67,7 +67,7 @@ export class ConfigCommand extends BaseCommand {
         });
     }
     /**
-     * Phase A1 secret vault: `buff config vault status|migrate-keys`.
+     * Phase A1 secret vault: `${getCliName()} config vault status|migrate-keys`.
      * Vault stores provider API keys in the OS keychain (or an AES-256-GCM
      * encrypted file fallback) so `buffconfig.json` holds `vault:` refs instead
      * of plaintext secrets.
@@ -97,7 +97,7 @@ export class ConfigCommand extends BaseCommand {
                 console.log(`  Encrypted-file entries: ${st.fileEntryCount}`);
             console.log(`  Provider keys in config: ${refCount} vault ref(s), ${plaintextCount} plaintext`);
             if (plaintextCount > 0) {
-                console.log(`\n  Run 'buff config vault migrate-keys' to move ${plaintextCount} plaintext key(s) into the vault.`);
+                console.log(`\n  Run '${getCliName()} config vault migrate-keys' to move ${plaintextCount} plaintext key(s) into the vault.`);
             }
             console.log('');
         });
@@ -625,7 +625,7 @@ export class ConfigCommand extends BaseCommand {
             // routing.gatewayTelemetry.healthFlags (boolean). OPT-IN, privacy-
             // preserving: enabling never captures prompt content — it only reports
             // aggregate gateway usage/health numbers (requests, tokens, error
-            // rates) via `buff doctor --enterprise`.
+            // rates) via `${getCliName()} doctor --enterprise`.
             const field = parts[2];
             const existing = config.routing?.gatewayTelemetry || {};
             if (field !== 'enabled' && field !== 'healthFlags') {
@@ -700,7 +700,7 @@ export class ConfigCommand extends BaseCommand {
         console.log('');
         this.displayConfig();
     }
-    // ─── Gateway platform transports (`buff config gateway`) ─────────────────
+    // ─── Gateway platform transports (`${getCliName()} config gateway`) ─────────────────
     createGatewayCommand() {
         const collect = (value, previous) => previous.concat([value]);
         const cmd = new Command('gateway')
@@ -742,10 +742,10 @@ export class ConfigCommand extends BaseCommand {
             .action((action, targets) => this.manageStatusRecipients(action, targets)));
         return cmd;
     }
-    /** `buff config gateway allow/disallow <platform> <user|group> <id...>` */
+    /** `${getCliName()} config gateway allow/disallow <platform> <user|group> <id...>` */
     allowDisallow(platform, kind, ids, allow) {
         if (!(platform in PLATFORM_ENV_VARS)) {
-            logger.error(`Unknown platform '${platform}' — see \`buff config gateway list\`.`);
+            logger.error(`Unknown platform '${platform}' — see \`${getCliName()} config gateway list\`.`);
             return;
         }
         if (kind !== 'user' && kind !== 'group') {
@@ -787,10 +787,10 @@ export class ConfigCommand extends BaseCommand {
         this.configManager.save({ gateway: { policies } });
         logger.info('Applied to the running gateway immediately (policies re-read per inbound).');
     }
-    /** `buff config gateway reply <platform> <polite|silent>` */
+    /** `${getCliName()} config gateway reply <platform> <polite|silent>` */
     setReplyMode(platform, mode) {
         if (!(platform in PLATFORM_ENV_VARS)) {
-            logger.error(`Unknown platform '${platform}' — see \`buff config gateway list\`.`);
+            logger.error(`Unknown platform '${platform}' — see \`${getCliName()} config gateway list\`.`);
             return;
         }
         if (mode !== 'polite' && mode !== 'silent') {
@@ -812,7 +812,7 @@ export class ConfigCommand extends BaseCommand {
         this.configManager.save({ gateway: { policies } });
         logger.success(`Unapproved senders on ${platform} are now handled ${mode === 'silent' ? 'SILENTLY (no reply)' : 'with a polite refusal message'}.`);
     }
-    /** `buff config gateway notify add|remove|list <target...>` */
+    /** `${getCliName()} config gateway notify add|remove|list <target...>` */
     manageStatusRecipients(action, targets) {
         if (!['add', 'remove', 'list'].includes(action)) {
             logger.error(`Action must be 'add', 'remove' or 'list', got '${action}'.`);
@@ -862,11 +862,11 @@ export class ConfigCommand extends BaseCommand {
     }
     async setPlatform(platform, opts) {
         if (!(platform in PLATFORM_ENV_VARS)) {
-            logger.error(`Unknown platform '${platform}' — see \`buff config gateway list\`.`);
+            logger.error(`Unknown platform '${platform}' — see \`${getCliName()} config gateway list\`.`);
             return;
         }
         if (platform === 'whatsapp' || platform === 'mock') {
-            logger.error(`'${platform}' is not env-configured — use \`buff whatsapp pair\` for the personal bridge.`);
+            logger.error(`'${platform}' is not env-configured — use \`${getCliName()} whatsapp pair\` for the personal bridge.`);
             return;
         }
         if (!guardRbacAction('gateway.manage'))
@@ -923,11 +923,11 @@ export class ConfigCommand extends BaseCommand {
         const { wrote } = writeEnvFile(values);
         applyEnvToProcess(values);
         logger.success(`Saved ${wrote.join(', ')} → ${envFilePath()}`);
-        logger.info('Restart the gateway/dashboard (or run `buff gateway start`) to use the new transport.');
+        logger.info('Restart the gateway/dashboard (or run `${getCliName()} gateway start`) to use the new transport.');
     }
     async removePlatform(platform, opts) {
         if (!(platform in PLATFORM_ENV_VARS)) {
-            logger.error(`Unknown platform '${platform}' — see \`buff config gateway list\`.`);
+            logger.error(`Unknown platform '${platform}' — see \`${getCliName()} config gateway list\`.`);
             return;
         }
         if (!guardRbacAction('gateway.manage'))

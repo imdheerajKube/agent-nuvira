@@ -11,7 +11,8 @@
   },
   "bin": {
     "agent-nuvira": "dist/index.js",
-    "buff": "dist/index.js"
+    "buff": "dist/index.js",
+    "nuvira": "dist/index.js"
   },
   "publishConfig": {
     "access": "public"

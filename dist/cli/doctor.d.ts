@@ -44,7 +44,7 @@ export interface DoctorReport {
     durationMs: number;
 }
 /**
- * Result of the P5 M5.1 sidecar probe (`buff doctor --nuvira`).
+ * Result of the P5 M5.1 sidecar probe (`${getCliName()} doctor --nuvira`).
  *
  * The probe checks an external OpenAI-compatible gateway the way a gateway
  * consumer should: GET {base}/models (reachability + model list), then a
@@ -221,7 +221,7 @@ export declare function buildEnterpriseChecks(inputs: {
 }): CheckResult[];
 export declare function runSystemChecks(configManager: ConfigManager): Promise<CheckResult[]>;
 /**
- * The shared all-checks composition (dashboard command-runner + `buff doctor
+ * The shared all-checks composition (dashboard command-runner + `${getCliName()} doctor
  * --enterprise`): system checks + the enterprise self-check. One source — the
  * dashboard's /api/admin/checks and the CLI render the SAME checks.
  */

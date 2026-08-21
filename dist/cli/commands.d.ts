@@ -1,6 +1,11 @@
 import { Command } from 'commander';
 import { ConfigManager } from '../config/manager.js';
 /**
+ * Detect the CLI invocation name from process.argv.
+ * Supports 'nuvira', 'agent-nuvira', or 'buff'.
+ */
+export declare function getCliName(): string;
+/**
  * Base class for all CLI commands
  */
 export declare abstract class BaseCommand {
