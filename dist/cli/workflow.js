@@ -11,7 +11,7 @@
  */
 import { Command } from 'commander';
 import ora from 'ora';
-import { BaseCommand } from './commands.js';
+import { BaseCommand, getCliName } from './commands.js';
 import { PipelineBoard } from './pipeline-board.js';
 import { Orchestrator } from '../agents/orchestrator.js';
 import { getWorkflowTemplates, getWorkflowTemplate, buildTaskPlanFromTemplate, buildWorkflowOptions } from '../workflow/templates.js';
@@ -58,7 +58,7 @@ export class WorkflowCommand extends BaseCommand {
         command
             .command('install')
             .description('Install a workflow template from the GitHub registry')
-            .argument('<template>', 'Template name from the registry (use `buff workflow search` to find templates)')
+            .argument('<template>', 'Template name from the registry (use `${getCliName()} workflow search` to find templates)')
             .action(async (template) => {
             await this.installTemplate(template);
         });
@@ -110,8 +110,8 @@ export class WorkflowCommand extends BaseCommand {
                 console.log(`    ${t.id.padEnd(22)} ${t.description.slice(0, 50)}...${ver}${author}`);
             }
         }
-        console.log(`\n  💡 Use 'buff workflow search <query>' to find templates in the registry.`);
-        console.log(`     Use 'buff workflow install <name>' to install from the registry.`);
+        console.log(`\n  💡 Use '${getCliName()} workflow search <query>' to find templates in the registry.`);
+        console.log(`     Use '${getCliName()} workflow install <name>' to install from the registry.`);
         console.log('');
     }
     async runWorkflow(templateId, goal, options) {

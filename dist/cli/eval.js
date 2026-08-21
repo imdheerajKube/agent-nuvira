@@ -18,7 +18,7 @@
  *   buff eval clear                    — Clear all eval data
  */
 import { Command } from 'commander';
-import { BaseCommand } from './commands.js';
+import { BaseCommand, getCliName } from './commands.js';
 import { PipelineBoard } from './pipeline-board.js';
 import { getEventBus, EventNames } from '../observability/event-bus.js';
 import { resolveProvider } from './router.js';
@@ -173,7 +173,7 @@ export class EvalCommand extends BaseCommand {
             }
             const available = await resolved.provider.isAvailable();
             if (!available) {
-                logger.warn(`  ⚠️  ${key} is not available — skipping (configure it with \`buff model switch <provider>\`).`);
+                logger.warn(`  ⚠️  ${key} is not available — skipping (configure it with \`${getCliName()} model switch <provider>\`).`);
                 continue;
             }
             logger.highlight(`  ── Evaluating router pick: ${key} ──`);
@@ -198,7 +198,7 @@ export class EvalCommand extends BaseCommand {
                     ? resolvePaceBudget(this.configManager, resolved.type)
                     : { paceTokens: undefined, usedBefore: 0 };
                 if (options.pace && pace.paceTokens === undefined) {
-                    logger.warn(`--pace: no declared daily budget for ${resolved.type} — running unpaced. Declare one with \`buff model quota set ${resolved.type} --tokens N\`.`);
+                    logger.warn(`--pace: no declared daily budget for ${resolved.type} — running unpaced. Declare one with \`${getCliName()} model quota set ${resolved.type} --tokens N\`.`);
                 }
                 const run = await runEvalSuite(resolved.provider, resolved.type, pick.model, {
                     taskIds,
@@ -237,7 +237,7 @@ export class EvalCommand extends BaseCommand {
         console.log('');
         const best = sorted[0];
         logger.success(`  🏆 Best router pick: ${best.provider}/${best.model} (composite ${(best.summary.avgCompositeScore * 100).toFixed(1)}%)`);
-        logger.info('  These results feed the Auto router\'s runtime stats — rerun `buff model explain` to see adjusted scores.');
+        logger.info('  These results feed the Auto router\'s runtime stats — rerun `${getCliName()} model explain` to see adjusted scores.');
         console.log('');
     }
     async runEval(options) {
@@ -325,7 +325,7 @@ export class EvalCommand extends BaseCommand {
                 paceTokens = pace.paceTokens;
                 paceUsedBefore = pace.usedBefore;
                 if (paceTokens === undefined) {
-                    logger.warn(`--pace: no declared daily budget for ${providerName} — running unpaced. Declare one with \`buff model quota set ${providerName} --tokens N\`.`);
+                    logger.warn(`--pace: no declared daily budget for ${providerName} — running unpaced. Declare one with \`${getCliName()} model quota set ${providerName} --tokens N\`.`);
                 }
                 else {
                     logger.info(`⏱  Pacing under the declared daily budget: ${paceTokens.toLocaleString()} tokens (${paceUsedBefore.toLocaleString()} used today).`);
@@ -412,7 +412,7 @@ export class EvalCommand extends BaseCommand {
     async showResults(options) {
         const runs = getEvalRuns();
         if (runs.length === 0) {
-            logger.info('No eval results found. Run `buff eval run` first.');
+            logger.info('No eval results found. Run `${getCliName()} eval run` first.');
             return;
         }
         if (options.compare) {
@@ -421,7 +421,7 @@ export class EvalCommand extends BaseCommand {
             // metric movement is never confounded by a model/provider switch.
             const pair = selectCompareRuns(runs);
             if (!pair) {
-                logger.error('Need at least two eval runs to compare. Run `buff eval run --suite m2b` again.');
+                logger.error('Need at least two eval runs to compare. Run `${getCliName()} eval run --suite m2b` again.');
                 console.log('');
                 return;
             }

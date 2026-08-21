@@ -178,7 +178,7 @@ export class MarketplaceCommand extends BaseCommand {
             }
             console.log('');
         }
-        logger.info('Run `buff marketplace info <name>` for details or `buff marketplace install <name>` to install.');
+        logger.info('Run `${getCliName()} marketplace info <name>` for details or `${getCliName()} marketplace install <name>` to install.');
         console.log('');
     }
     async install(name) {
@@ -187,7 +187,7 @@ export class MarketplaceCommand extends BaseCommand {
             const template = await installTemplate(name);
             if (!template) {
                 spinner.fail(`Template '${name}' not found in registry.`);
-                logger.info('Try `buff marketplace search ' + name + '` to find it.');
+                logger.info('Try `${getCliName()} marketplace search ' + name + '` to find it.');
                 return;
             }
             spinner.stop();

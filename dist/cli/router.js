@@ -60,9 +60,20 @@ import { logger } from '../utils/logger.js';
  */
 export function createCLI() {
     const program = new Command();
+    // Detect invocation name: supports 'nuvira', 'agent-nuvira', or 'buff'
+    const invoker = (() => {
+        const arg0 = process.argv[1] || '';
+        if (/nuvira/i.test(arg0))
+            return 'nuvira';
+        if (/agent-nuvira/i.test(arg0))
+            return 'agent-nuvira';
+        return 'buff';
+    })();
+    // Expose detected name so all CLI commands can use it in help text
+    process.env.NUVIRA_CLI_NAME = invoker;
     program
-        .name('buff')
-        .description('Flexible AI inference CLI tool — local models & cloud APIs')
+        .name(invoker)
+        .description('Nuvira — multi-agent AI coding CLI (local models & cloud APIs)')
         .version(pkg.version);
     // Global options
     program

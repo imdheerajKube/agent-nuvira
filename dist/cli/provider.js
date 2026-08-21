@@ -177,8 +177,8 @@ export class ProviderCommand extends BaseCommand {
         console.log(`  ${chalk.yellow('⚠️  Unreachable')} — Provider is configured but endpoint not reachable`);
         console.log(`  ${chalk.red('❌ Not configured')} — No API key found`);
         console.log('');
-        console.log(`  ${chalk.dim('Tip:')} Run ${chalk.cyan('buff provider health')} for detailed diagnostics`);
-        console.log(`  ${chalk.dim('Tip:')} Run ${chalk.cyan('buff doctor')} for full system health check`);
+        console.log(`  ${chalk.dim('Tip:')} Run ${chalk.cyan('${getCliName()} provider health')} for detailed diagnostics`);
+        console.log(`  ${chalk.dim('Tip:')} Run ${chalk.cyan('${getCliName()} doctor')} for full system health check`);
         console.log('');
     }
     // ── Health Check ─────────────────────────────────────────────────────────
@@ -278,7 +278,7 @@ export class ProviderCommand extends BaseCommand {
             console.log(`  ${chalk.green('✅ All providers healthy')}`);
         }
         else {
-            console.log(`  ${chalk.yellow('⚠️  Some providers have issues. Use')} ${chalk.cyan('buff doctor')} ${chalk.yellow('for full diagnostics.')}`);
+            console.log(`  ${chalk.yellow('⚠️  Some providers have issues. Use')} ${chalk.cyan('${getCliName()} doctor')} ${chalk.yellow('for full diagnostics.')}`);
         }
         console.log('');
     }

@@ -11,7 +11,7 @@ export declare class ConfigCommand extends BaseCommand {
     private createListCommand;
     private createInitCommand;
     /**
-     * Phase A1 secret vault: `buff config vault status|migrate-keys`.
+     * Phase A1 secret vault: `${getCliName()} config vault status|migrate-keys`.
      * Vault stores provider API keys in the OS keychain (or an AES-256-GCM
      * encrypted file fallback) so `buffconfig.json` holds `vault:` refs instead
      * of plaintext secrets.
@@ -23,11 +23,11 @@ export declare class ConfigCommand extends BaseCommand {
     private listProviders;
     private initConfig;
     private createGatewayCommand;
-    /** `buff config gateway allow/disallow <platform> <user|group> <id...>` */
+    /** `${getCliName()} config gateway allow/disallow <platform> <user|group> <id...>` */
     private allowDisallow;
-    /** `buff config gateway reply <platform> <polite|silent>` */
+    /** `${getCliName()} config gateway reply <platform> <polite|silent>` */
     private setReplyMode;
-    /** `buff config gateway notify add|remove|list <target...>` */
+    /** `${getCliName()} config gateway notify add|remove|list <target...>` */
     private manageStatusRecipients;
     private listPlatforms;
     private setPlatform;
