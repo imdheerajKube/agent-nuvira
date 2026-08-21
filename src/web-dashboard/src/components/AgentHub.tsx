@@ -366,6 +366,7 @@ export default function AgentHub() {
   const sameVerifiedId = (a: string, b: string): boolean => {
     const na = a.trim().toLowerCase();
     const nb = b.trim().toLowerCase();
+    if (na === '*' || nb === '*') return true; // Allow-All wildcard
     if (na === nb) return true;
     const da = na.replace(/\D+/g, '');
     const db = nb.replace(/\D+/g, '');
