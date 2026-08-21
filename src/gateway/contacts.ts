@@ -140,12 +140,17 @@ export function validateContactId(platform: Platform, id: string): string | null
 }
 
 /** Normalize a phone number to digits-only for flexible comparison.
- * Handles: +918800604222, 918800604222, 08800604222, 8800604222
- * Strips country codes (0, +91, 91) and non-digit characters. */
+ * Handles: +918800604222, 918800604222, 08800604222, 8800604222, 8800604222
+ * Strips non-digit characters, leading 0, and country codes until 10 digits. */
 export function normalizePhone(phone: string): string {
   let digits = (phone || '').replace(/\D+/g, '');
   // Strip leading 0 (local format: 08800604222 → 8800604222)
   if (digits.startsWith('0') && digits.length > 10) digits = digits.slice(1);
+  // Strip country codes until we reach a 10-digit local number
+  // (e.g. 918800604222 → 8800604222, 15551234567 stays as-is)
+  while (digits.length > 10 && !digits.startsWith('0')) {
+    digits = digits.slice(1);
+  }
   return digits;
 }
 
