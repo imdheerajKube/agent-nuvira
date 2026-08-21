@@ -24,6 +24,7 @@ import { homedir, hostname } from 'node:os';
 import { existsSync, writeFileSync, readFileSync, mkdirSync } from 'node:fs';
 import { join } from 'node:path';
 import inquirer from 'inquirer';
+import { resolveNuviraHome } from '../config/paths.js';
 
 import { BaseCommand } from './commands.js';
 import { logger } from '../utils/logger.js';
@@ -41,7 +42,7 @@ import { JwtOidcAdapter } from '../federation/oidc-adapter.js';
 
 // ─── Constants ──────────────────────────────────────────────────────────────
 
-const FEDERATION_CONFIG_PATH = join(homedir(), '.buff', 'federation.json');
+const FEDERATION_CONFIG_PATH = join(resolveNuviraHome(), 'federation.json');
 
 // The A2A config is stored alongside federation config for simplicity.
 
@@ -61,7 +62,7 @@ function loadConfig(): FederationConfig {
 
 function saveConfig(config: FederationConfig): void {
   try {
-    const dir = join(homedir(), '.buff');
+    const dir = resolveNuviraHome();
     if (!existsSync(dir)) mkdirSync(dir, { recursive: true });
     writeFileSync(FEDERATION_CONFIG_PATH, JSON.stringify(config, null, 2), 'utf-8');
   } catch {

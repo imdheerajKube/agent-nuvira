@@ -20,6 +20,7 @@
 import { readFileSync, writeFileSync, existsSync, mkdirSync, readdirSync, unlinkSync } from 'node:fs';
 import { join, resolve, relative } from 'node:path';
 import { homedir } from 'node:os';
+import { resolveNuviraHome } from '../config/paths.js';
 
 import { logger } from '../utils/logger.js';
 
@@ -74,7 +75,7 @@ export interface ReviewBundle {
 
 // ─── Constants ──────────────────────────────────────────────────────────────
 
-const REVIEWS_DIR = join(homedir(), '.buff', 'team', 'reviews');
+const REVIEWS_DIR = join(resolveNuviraHome(), 'team', 'reviews');
 const REVIEWS_INDEX_PATH = join(REVIEWS_DIR, 'index.json');
 
 interface ReviewsIndex {

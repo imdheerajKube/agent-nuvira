@@ -26,6 +26,7 @@ import { execSync } from 'node:child_process';
 import { readFileSync, writeFileSync, existsSync, mkdirSync, readdirSync, copyFileSync } from 'node:fs';
 import { join, basename, extname } from 'node:path';
 import { homedir } from 'node:os';
+import { resolveNuviraHome } from '../config/paths.js';
 
 import { logger } from '../utils/logger.js';
 import { getTeamConfig, getTeamDataDir } from './config.js';
@@ -60,7 +61,7 @@ export interface SyncResult {
 
 function getTeamDir(cwd?: string): string {
   const config = getTeamConfig(cwd);
-  const baseDir = config.localPath || join(homedir(), '.buff', 'team');
+  const baseDir = config.localPath || join(resolveNuviraHome(), 'team');
   return baseDir;
 }
 
@@ -244,7 +245,7 @@ export async function shareTrajectories(cwd?: string): Promise<number> {
   ensureDir(trajectoriesDir);
 
   // Read local trajectories
-  const localTrajDir = join(homedir(), '.buff', 'memory');
+  const localTrajDir = join(resolveNuviraHome(), 'memory');
   if (!existsSync(localTrajDir)) {
     logger.info('No local trajectories found to share.');
     return 0;

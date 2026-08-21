@@ -49,6 +49,7 @@ import { PublishCommand } from './publish.js';
 import { PhaseCommand } from './phase.js';
 import { RetrievalCommand } from './retrieval.js';
 import { TraceCommand } from './trace.js';
+import { BedrockCommand } from './bedrock.js';
 import { NluCommand } from './nlu.js';
 import { IntentCommand } from './intent.js';
 import { CodeMapCommand } from './code-map.js';
@@ -169,6 +170,9 @@ export function createCLI() {
     // Register Publish command (Autonomous publish workflow)
     const publishCmd = new PublishCommand();
     program.addCommand(publishCmd.create());
+    // Register Bedrock command (dedicated AWS Bedrock onboarding)
+    const bedrockCmd = new BedrockCommand();
+    program.addCommand(bedrockCmd.create());
     // Register Phase command (Phase-wise scope execution)
     const phaseCmd = new PhaseCommand();
     program.addCommand(phaseCmd.create());

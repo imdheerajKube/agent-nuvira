@@ -16,11 +16,11 @@
  *
  * Cross-command parity (STANDING RULE): chat / execute / plan / run all call
  * `maybeRunBackgroundDuties` from their session-start path.
- */
-
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
+ */import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { homedir } from 'node:os';
+import { resolveNuviraHome } from '../config/paths.js';
+
 
 import type { ConfigManager } from '../config/manager.js';
 import { resolveBuffConfigDir } from '../config/paths.js';
@@ -55,7 +55,7 @@ function shouldRun(throttleMs: number): boolean {
 
 function markRun(): void {
   try {
-    const dir = join(homedir(), '.buff');
+    const dir = resolveNuviraHome();
     if (!existsSync(dir)) mkdirSync(dir, { recursive: true });
     writeFileSync(statePath(), JSON.stringify({ lastRunAt: Date.now() } as DutiesState), 'utf-8');
   } catch { /* best-effort */ }
