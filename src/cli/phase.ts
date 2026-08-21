@@ -16,7 +16,7 @@
 import { Command } from 'commander';
 import inquirer from 'inquirer';
 
-import { BaseCommand } from './commands.js';
+import { BaseCommand, getCliName } from './commands.js';
 import { Orchestrator } from '../agents/orchestrator.js';
 import { PhaseExecutionEngine, type PhaseDefinition } from '../agents/phase-engine.js';
 import { logger } from '../utils/logger.js';

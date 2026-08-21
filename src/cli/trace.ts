@@ -64,7 +64,7 @@ export class TraceCommand {
     console.log('');
 
     if (traces.length === 0) {
-      console.log('   No traces yet. Run `buff execute` (or auto-routed chat) — every LLM call is recorded.');
+      console.log('   No traces yet. Run `${getCliName()} execute` (or auto-routed chat) — every LLM call is recorded.');
       console.log('   Trace file: ~/.buff/memory/reasoning-traces.json');
       return;
     }
@@ -81,14 +81,14 @@ export class TraceCommand {
       console.log('');
     }
 
-    console.log('   Run `buff trace replay <id>` to step through a trace.');
+    console.log('   Run `${getCliName()} trace replay <id>` to step through a trace.');
   }
 
   private showTrace(id: string): void {
     const trace = getTrace(id);
     if (!trace) {
       console.log(`❌ Trace not found: ${id}`);
-      console.log('   Run `buff trace list` to see available traces.');
+      console.log('   Run `${getCliName()} trace list` to see available traces.');
       return;
     }
 
@@ -126,14 +126,14 @@ export class TraceCommand {
       if (step.error) console.log(`       ⚠️ ${step.error.slice(0, 120)}`);
     }
     console.log('');
-    console.log('   Run `buff trace replay <id>` for the full step-by-step reasoning replay.');
+    console.log('   Run `${getCliName()} trace replay <id>` for the full step-by-step reasoning replay.');
   }
 
   private replayTrace(id: string, full: boolean): void {
     const trace = getTrace(id);
     if (!trace) {
       console.log(`❌ Trace not found: ${id}`);
-      console.log('   Run `buff trace list` to see available traces.');
+      console.log('   Run `${getCliName()} trace list` to see available traces.');
       return;
     }
 

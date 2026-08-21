@@ -2,7 +2,7 @@ import { createInterface } from 'node:readline';
 
 import { Command } from 'commander';
 import inquirer from 'inquirer';
-import { BaseCommand } from './commands.js';
+import { BaseCommand, getCliName } from './commands.js';
 import { resolveProvider } from './router.js';
 import { resolveWorkingModel } from '../inference/model-validator.js';
 import { showModelPicker } from './model-picker.js';

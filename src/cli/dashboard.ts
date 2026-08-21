@@ -27,7 +27,7 @@ import { spawn, execSync } from 'node:child_process';
 import { join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
-import { BaseCommand } from './commands.js';
+import { BaseCommand, getCliName } from './commands.js';
 import {
   probeDashboardPortState,
   findPidOnPort,

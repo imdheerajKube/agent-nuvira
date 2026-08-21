@@ -8,7 +8,7 @@
 
 import { Command } from 'commander';
 
-import { BaseCommand } from './commands.js';
+import { BaseCommand, getCliName } from './commands.js';
 import { getPluginStats, discoverProviderPlugins, discoverAgentPlugins, discoverWorkflowPlugins, runAutoDiscovery } from '../plugins/agent-plugin.js';
 import { getPluginRegistry } from '../plugins/registry.js';
 import { logger } from '../utils/logger.js';
@@ -73,7 +73,7 @@ export class PluginsCommand extends BaseCommand {
           console.log(`    📦 ${type}: ${plugin.metadata.name} v${plugin.metadata.version}`);
         }
       } catch {
-        console.log('    (run `buff plugins scan` to reload)');
+        console.log('    (run `${getCliName()} plugins scan` to reload)');
       }
     } else {
       console.log('    (no agent plugins found in ~/.buff/agents/)');
@@ -88,7 +88,7 @@ export class PluginsCommand extends BaseCommand {
           console.log(`    📄 ${w.id}: ${w.name} (${w.steps.length} steps)`);
         }
       } catch {
-        console.log('    (run `buff plugins scan` to reload)');
+        console.log('    (run `${getCliName()} plugins scan` to reload)');
       }
     } else {
       console.log('    (no workflow plugins found in ~/.buff/workflows/)');

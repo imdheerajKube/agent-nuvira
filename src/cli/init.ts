@@ -18,7 +18,7 @@ import { join, basename, extname } from 'node:path';
 import { homedir } from 'node:os';
 import inquirer from 'inquirer';
 
-import { BaseCommand } from './commands.js';
+import { BaseCommand, getCliName } from './commands.js';
 import { logger } from '../utils/logger.js';
 import { resolveNuviraHome } from '../config/paths.js';
 import { showModelPicker } from './model-picker.js';

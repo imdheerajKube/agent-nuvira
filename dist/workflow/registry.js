@@ -19,7 +19,7 @@
  */
 import { readFileSync, writeFileSync, existsSync, mkdirSync, readdirSync } from 'node:fs';
 import { join } from 'node:path';
-import { homedir } from 'node:os';
+import { resolveNuviraHome } from '../config/paths.js';
 import { getWorkflowTemplate, isValidWorkflowTemplate, } from './templates.js';
 import { logger } from '../utils/logger.js';
 // ─── Constants ──────────────────────────────────────────────────────────────
@@ -28,7 +28,7 @@ const REGISTRY_RAW_BASE = 'https://raw.githubusercontent.com/imdheerajKube/agent
 /** GitHub API URL for the registry */
 const REGISTRY_API_BASE = 'https://api.github.com/repos/imdheerajKube/agent-nuvira';
 /** Local storage for installed registry templates */
-const BUFF_DIR = join(homedir(), '.buff');
+const BUFF_DIR = resolveNuviraHome();
 const INSTALLED_REGISTRY_DIR = join(BUFF_DIR, 'workflows', 'registry');
 /** Cache file for the registry index */
 const REGISTRY_CACHE_PATH = join(BUFF_DIR, 'workflows', 'registry-cache.json');

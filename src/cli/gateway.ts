@@ -53,6 +53,7 @@ import {
 import { DeliveryLedger } from '../gateway/delivery.js';
 import { maskSenderId } from '../utils/mask.js';
 import { guardRbacAction } from './rbac-guard.js';
+import { getCliName } from './commands.js';
 
 export class GatewayCommand {
   create(): Command {
@@ -226,7 +227,7 @@ export class GatewayCommand {
     if (!ok) {
       logger.error(`Send to ${ref.platform}:${maskSenderId(ref.channelId)} failed.`);
       logger.info(`  → Check that the platform token is set in ~/.buff/.env and the chat ID is valid.`);
-      logger.info(`  → Run 'buff gateway status' to verify the adapter is configured.`);
+      logger.info(`  → Run '${getCliName()} gateway status' to verify the adapter is configured.`);
       logger.info(`  → The message has been queued for retry (buff gateway delivery).`);
       process.exitCode = 1;
       return;
@@ -332,7 +333,7 @@ export class GatewayCommand {
     if (remaining.length > 20) console.log(`  …and ${remaining.length - 20} more`);
     console.log('');
     console.log(`  total: ${pending.length} pending · ${sent.length} sent · ${failed.length} failed (of ${remaining.length} retained)`);
-    console.log('  Retries happen automatically while `buff gateway start` runs; `--flush` forces a drain now.');
+    console.log('  Retries happen automatically while `${getCliName()} gateway start` runs; `--flush` forces a drain now.');
   }
 
   // ─── alias ────────────────────────────────────────────────────────────────
@@ -391,7 +392,7 @@ export class GatewayCommand {
     }
     console.log('');
     const pending = contacts.filter((c) => c.status === 'pending').length;
-    if (pending > 0) console.log(`  ${pending} contact(s) pending approval — run 'buff gateway contact approve <name>'`);
+    if (pending > 0) console.log(`  ${pending} contact(s) pending approval — run '${getCliName()} gateway contact approve <name>'`);
   }
 
   private async contactApprove(nameOrId: string, opts: { platform?: string }): Promise<void> {

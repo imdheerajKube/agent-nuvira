@@ -18,10 +18,10 @@
  */
 import { readFileSync, writeFileSync, existsSync, mkdirSync, unlinkSync } from 'node:fs';
 import { join, resolve } from 'node:path';
-import { homedir } from 'node:os';
+import { resolveNuviraHome } from '../config/paths.js';
 import { logger } from '../utils/logger.js';
 // ─── Constants ──────────────────────────────────────────────────────────────
-const REVIEWS_DIR = join(homedir(), '.buff', 'team', 'reviews');
+const REVIEWS_DIR = join(resolveNuviraHome(), 'team', 'reviews');
 const REVIEWS_INDEX_PATH = join(REVIEWS_DIR, 'index.json');
 // ─── Helpers ────────────────────────────────────────────────────────────────
 function ensureDir() {

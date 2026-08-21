@@ -18,12 +18,12 @@
  */
 import { readdirSync, existsSync, mkdirSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
-import { homedir } from 'node:os';
+import { resolveNuviraHome } from '../config/paths.js';
 import { isValidWorkflowTemplate } from '../workflow/templates.js';
 import { getPluginRegistry } from './registry.js';
 import { logger } from '../utils/logger.js';
 // ─── Paths ──────────────────────────────────────────────────────────────────
-const BUFF_DIR = join(homedir(), '.buff');
+const BUFF_DIR = resolveNuviraHome();
 const PLUGINS_DIR = join(BUFF_DIR, 'plugins');
 const AGENTS_DIR = join(BUFF_DIR, 'agents');
 const WORKFLOWS_DIR = join(BUFF_DIR, 'workflows');

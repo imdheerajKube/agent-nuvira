@@ -16,7 +16,7 @@
 
 import { Command } from 'commander';
 import inquirer from 'inquirer';
-import { BaseCommand } from './commands.js';
+import { BaseCommand, getCliName } from './commands.js';
 import { logger } from '../utils/logger.js';
 
 /** Well-known Bedrock regions where models are widely available. */
@@ -272,8 +272,8 @@ export class BedrockCommand extends BaseCommand {
     logger.highlight('\n📋 Next Steps\n');
     console.log('  1. If you haven\'t already, request model access in the AWS Console:');
     console.log(`     https://console.aws.amazon.com/bedrock/home?region=${region}#/modelaccess`);
-    console.log('  2. Run `buff bedrock status` to check connectivity');
-    console.log('  3. Run `buff bedrock test` to probe and test models');
+    console.log('  2. Run `${getCliName()} bedrock status` to check connectivity');
+    console.log('  3. Run `${getCliName()} bedrock test` to probe and test models');
     console.log('  4. Bedrock models will now appear in the dashboard Models panel\n');
   }
 
@@ -302,7 +302,7 @@ export class BedrockCommand extends BaseCommand {
     console.log(`    Runtime:       https://bedrock-runtime.${region}.amazonaws.com`);
 
     if (!apiKey && !accessKey) {
-      console.log('\n  ❌ No credentials configured. Run `buff bedrock setup` to get started.\n');
+      console.log('\n  ❌ No credentials configured. Run `${getCliName()} bedrock setup` to get started.\n');
       return;
     }
 
@@ -326,7 +326,7 @@ export class BedrockCommand extends BaseCommand {
     const accessKey = process.env.AWS_ACCESS_KEY_ID;
 
     if (!apiKey && !accessKey) {
-      logger.error('No Bedrock credentials configured. Run `buff bedrock setup` first.');
+      logger.error('No Bedrock credentials configured. Run `${getCliName()} bedrock setup` first.');
       return;
     }
 
