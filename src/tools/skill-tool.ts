@@ -39,13 +39,15 @@ export interface SkillToolArgs {
   bundle?: string;
   /** P6a — /learn-style authoring: manage a skill DRAFT. */
   manage?: {
-    action: 'create' | 'patch' | 'write_file' | 'delete';
+    action: 'create' | 'patch' | 'write_file' | 'delete' | 'learn';
     name: string;
     markdown?: string;
     oldText?: string;
     newText?: string;
     file?: string;
     content?: string;
+    /** P6a — learn action: sources to learn from (URLs, file paths, or description text). */
+    sources?: string[];
   };
 }
 
@@ -231,6 +233,9 @@ function compiledMethodology(skill: Skill, params: Record<string, string>): stri
  * The methodology the model sees for a hub (SKILL.md) skill. P6c — declared
  * env vars / config / toolset deps are surfaced as SETUP HINTS (names only,
  * values are never read or printed — secure setup on load).
+ *
+ * Phase A2: env vars are now PROMPTED on load (not just hinted). The
+ * secret-capture module handles interactive prompting + persistence.
  */
 function hubMethodology(resolved: ResolvedSkill): string {
   const hints: string[] = [];
@@ -409,6 +414,20 @@ async function runSkillManage(manage: NonNullable<SkillToolArgs['manage']>, ctx:
     const result = writeDraftFile(name, file, manage.content ?? '');
     if (!result.ok) return `Error: ${result.reason}`;
     return `✅ Added reference file '${file}' to draft '${name}'.`;
+  }
+
+  if (action === 'learn') {
+    const { buildLearnPrompt } = await import('../learning/learn-prompt.js');
+    const sources = manage.sources && manage.sources.length > 0 ? manage.sources : undefined;
+    const request = sources && sources.length > 0 ? sources.join(' ') : undefined;
+    const prompt = buildLearnPrompt(request);
+    return [
+      '📚 Learn mode — here is the authoring guide for this workflow:',
+      '',
+      prompt,
+      '',
+      'Follow the guide above: gather the source, draft the SKILL.md, then call the skill tool with action: create (passing the name and the complete markdown). The user will see a preview card to accept/edit/reject.',
+    ].join('\n');
   }
 
   // action === 'delete' (the preview card's reject, or an explicit abort).

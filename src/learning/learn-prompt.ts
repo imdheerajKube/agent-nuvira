@@ -23,10 +23,14 @@
 export const AUTHORING_STANDARDS = [
   'Author a single SKILL.md for the workflow. Follow the bundled-skill standards EXACTLY:',
   '1. Frontmatter: `name` (lowercase, hyphens only, ^[a-z0-9-]+$ — this is the id the skill tool loads by), `description` (ONE line: what the skill does + when to use it), optional `tags`.',
+  '   - If the skill requires API keys or environment variables, add `required_environment_variables:` (YAML list of env var names).',
+  '   - Example: `required_environment_variables: [OPENAI_API_KEY, STABILITY_API_KEY]`',
+  '   - This enables automatic prompting: when the skill loads, the system prompts for missing vars and saves them to ~/.buff/.env.',
   '2. Body: a `## Steps` section with 3-7 ordered steps. Each step: `### Step N — [agentType] short title` then a paragraph describing what to DO (agentType from: context-gatherer, planner, runner, writer, reviewer, tester, security, debugger). Steps must list dependencies (`depends on: step N`) when order matters.',
   '3. A `## Parameters` section: each parameter with name, description, required (yes/no), type (string | file-path | choice).',
-  '4. END with a verification step: how to know the workflow ran correctly.',
-  '5. Keep the methodology generic enough to reuse (no hardcoded names/paths from the source), but concrete enough to execute without asking.',
+  '4. A `## Environment Variables` section (if the skill needs API keys or tokens): for each var, list its name, purpose, where to get it (URL), and whether required/optional. Then add the var names to `required_environment_variables` in frontmatter.',
+  '5. END with a verification step: how to know the workflow ran correctly.',
+  '6. Keep the methodology generic enough to reuse (no hardcoded names/paths from the source), but concrete enough to execute without asking.',
 ].join('\n');
 
 /** Build a learn request from the user's words (default: this conversation). */

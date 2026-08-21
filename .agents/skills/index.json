@@ -1,6 +1,6 @@
 {
   "version": 1,
-  "updatedAt": "2026-08-18T08:39:06.004Z",
+  "updatedAt": "2026-08-21T17:47:34.314Z",
   "skills": [
     {
       "name": "website-deploy",
@@ -21,7 +21,7 @@
         "publish"
       ],
       "source": "agent-nuvira/bundled",
-      "updatedAt": "2026-08-18T08:39:06.004Z"
+      "updatedAt": "2026-08-21T17:47:34.314Z"
     },
     {
       "name": "code-assessment",
@@ -37,7 +37,7 @@
         "recommendations"
       ],
       "source": "agent-nuvira/bundled",
-      "updatedAt": "2026-08-18T08:39:06.004Z"
+      "updatedAt": "2026-08-21T17:47:34.314Z"
     },
     {
       "name": "technical-roadmap",
@@ -53,7 +53,7 @@
         "strategy"
       ],
       "source": "agent-nuvira/bundled",
-      "updatedAt": "2026-08-18T08:39:06.004Z"
+      "updatedAt": "2026-08-21T17:47:34.314Z"
     },
     {
       "name": "plan-create-track",
@@ -69,7 +69,7 @@
         "execution"
       ],
       "source": "agent-nuvira/bundled",
-      "updatedAt": "2026-08-18T08:39:06.004Z"
+      "updatedAt": "2026-08-21T17:47:34.314Z"
     },
     {
       "name": "test-strategy",
@@ -85,7 +85,7 @@
         "quality"
       ],
       "source": "agent-nuvira/bundled",
-      "updatedAt": "2026-08-18T08:39:06.004Z"
+      "updatedAt": "2026-08-21T17:47:34.314Z"
     },
     {
       "name": "docx",
@@ -99,7 +99,456 @@
         "office"
       ],
       "source": "agent-nuvira/bundled",
-      "updatedAt": "2026-08-18T08:39:06.004Z"
+      "updatedAt": "2026-08-21T17:47:34.314Z"
+    },
+    {
+      "name": "security-audit",
+      "description": "Perform a security audit: scan the codebase for vulnerabilities (injection, secrets, unsafe deserialization, SSRF, path traversal, XSS), classify by severity, produce a prioritized fix plan, and verify fixes. Use when the goal asks to audit security, find vulnerabilities, harden the app, or review for OWASP Top 10.",
+      "version": "1.0.0",
+      "author": "agent-nuvira",
+      "tags": [
+        "security",
+        "audit",
+        "vulnerability",
+        "OWASP",
+        "injection",
+        "secrets",
+        "harden"
+      ],
+      "source": "agent-nuvira/bundled",
+      "updatedAt": "2026-08-21T17:47:34.314Z"
+    },
+    {
+      "name": "api-design",
+      "description": "Design and implement a REST API: gather requirements, design endpoints with proper HTTP methods/status codes, produce an OpenAPI spec, implement routes, and write integration tests. Use when the goal asks to create an API, design endpoints, build a REST service, or scaffold an HTTP backend.",
+      "version": "1.0.0",
+      "author": "agent-nuvira",
+      "tags": [
+        "api",
+        "rest",
+        "openapi",
+        "swagger",
+        "http",
+        "backend",
+        "endpoints"
+      ],
+      "source": "agent-nuvira/bundled",
+      "updatedAt": "2026-08-21T17:47:34.314Z"
+    },
+    {
+      "name": "db-migration",
+      "description": "Design and implement a database migration: analyze the current schema, design the migration (what changes, in what order), write the migration SQL/scripts, test backward compatibility, and document the change. Use when the goal asks to migrate a database, add/modify columns, change schema, or restructure tables.",
+      "version": "1.0.0",
+      "author": "agent-nuvira",
+      "tags": [
+        "database",
+        "migration",
+        "schema",
+        "SQL",
+        "backward-compatible",
+        "postgreSQL",
+        "mysql"
+      ],
+      "source": "agent-nuvira/bundled",
+      "updatedAt": "2026-08-21T17:47:34.314Z"
+    },
+    {
+      "name": "perf-profile",
+      "description": "Profile and optimize performance: identify hotspots with real measurements, instrument the code, analyze bottlenecks, apply targeted optimizations, and verify improvement. Use when the goal asks to profile, optimize, speed up, reduce latency, fix slow queries, or improve throughput.",
+      "version": "1.0.0",
+      "author": "agent-nuvira",
+      "tags": [
+        "performance",
+        "profiling",
+        "optimization",
+        "latency",
+        "throughput",
+        "bottleneck",
+        "flame-graph"
+      ],
+      "source": "agent-nuvira/bundled",
+      "updatedAt": "2026-08-21T17:47:34.314Z"
+    },
+    {
+      "name": "doc-gen",
+      "description": "Generate documentation from code: scan for public APIs, extract signatures and docstrings, generate structured docs (API reference + guides), validate links, and produce publishable output. Use when the goal asks to document, generate docs, write API reference, create a README, or produce developer documentation.",
+      "version": "1.0.0",
+      "author": "agent-nuvira",
+      "tags": [
+        "documentation",
+        "API-reference",
+        "README",
+        "JSDoc",
+        "docstring",
+        "developer-docs"
+      ],
+      "source": "agent-nuvira/bundled",
+      "updatedAt": "2026-08-21T17:47:34.314Z"
+    },
+    {
+      "name": "ci-cd-setup",
+      "description": "Set up CI/CD: detect the platform and project stack, write the workflow/pipeline file, configure secrets, trigger a test run, and verify the pipeline passes. Use when the goal asks to set up CI/CD, add GitHub Actions, configure pipelines, automate tests, or set up continuous integration.",
+      "version": "1.0.0",
+      "author": "agent-nuvira",
+      "tags": [
+        "CI",
+        "CD",
+        "GitHub-Actions",
+        "GitLab-CI",
+        "pipeline",
+        "workflow",
+        "automation"
+      ],
+      "source": "agent-nuvira/bundled",
+      "updatedAt": "2026-08-21T17:47:34.314Z"
+    },
+    {
+      "name": "docker-config",
+      "description": "Configure Docker for a project: analyze dependencies, write a multi-stage Dockerfile, optimize layer caching, test the build, and optionally add docker-compose. Use when the goal asks to containerize, add Docker, create a Dockerfile, or set up docker-compose for local development.",
+      "version": "1.0.0",
+      "author": "agent-nuvira",
+      "tags": [
+        "Docker",
+        "Dockerfile",
+        "containerize",
+        "docker-compose",
+        "multi-stage",
+        "image"
+      ],
+      "source": "agent-nuvira/bundled",
+      "updatedAt": "2026-08-21T17:47:34.314Z"
+    },
+    {
+      "name": "dep-update",
+      "description": "Update dependencies safely: audit for outdated versions and vulnerabilities, select update targets, update, run tests, fix breakages, and document changes. Use when the goal asks to update deps, upgrade packages, fix vulnerabilities, or modernize dependencies.",
+      "version": "1.0.0",
+      "author": "agent-nuvira",
+      "tags": [
+        "dependency",
+        "update",
+        "upgrade",
+        "outdated",
+        "vulnerability",
+        "npm",
+        "pip",
+        "go-mod"
+      ],
+      "source": "agent-nuvira/bundled",
+      "updatedAt": "2026-08-21T17:47:34.314Z"
+    },
+    {
+      "name": "code-refactor",
+      "description": "Refactor code safely: analyze the target, identify patterns to improve, plan the changes, apply the refactoring surgically, and verify with tests. Use when the goal asks to refactor, restructure, extract, inline, rename, clean up, or improve code organization.",
+      "version": "1.0.0",
+      "author": "agent-nuvira",
+      "tags": [
+        "refactor",
+        "restructure",
+        "extract",
+        "inline",
+        "rename",
+        "DRY",
+        "SOLID",
+        "clean-code"
+      ],
+      "source": "agent-nuvira/bundled",
+      "updatedAt": "2026-08-21T17:47:34.314Z"
+    },
+    {
+      "name": "env-setup",
+      "description": "Set up a development environment: detect the stack, install dependencies, configure services, verify everything works, and document the setup. Use when the goal asks to set up the environment, configure dev tools, bootstrap a project, or get the project running locally.",
+      "version": "1.0.0",
+      "author": "agent-nuvira",
+      "tags": [
+        "environment",
+        "setup",
+        "bootstrap",
+        "dependencies",
+        "configure",
+        "local-dev"
+      ],
+      "source": "agent-nuvira/bundled",
+      "updatedAt": "2026-08-21T17:47:34.314Z"
+    },
+    {
+      "name": "data-analysis",
+      "description": "Analyze datasets, identify trends, generate insights, and produce visualizations (charts, summaries, dashboards). Use when the goal asks to explore, analyze, summarize, or visualize data from CSV, JSON, databases, or APIs.",
+      "version": "1.0.0",
+      "author": "agent-nuvira",
+      "tags": [
+        "data",
+        "analysis",
+        "visualization",
+        "charts",
+        "insights",
+        "statistics"
+      ],
+      "source": "agent-nuvira/bundled",
+      "updatedAt": "2026-08-21T17:47:34.314Z"
+    },
+    {
+      "name": "api-testing",
+      "description": "Test REST and GraphQL APIs: write automated tests for endpoints, validate status codes, response schemas, auth flows, and edge cases. Use when the goal asks to test, validate, or verify an API.",
+      "version": "1.0.0",
+      "author": "agent-nuvira",
+      "tags": [
+        "api",
+        "testing",
+        "rest",
+        "graphql",
+        "http",
+        "validation",
+        "endpoints"
+      ],
+      "source": "agent-nuvira/bundled",
+      "updatedAt": "2026-08-21T17:47:34.314Z"
+    },
+    {
+      "name": "perf-test",
+      "description": "Load test and benchmark web applications or APIs: measure throughput, latency percentiles (p50/p95/p99), and error rates under concurrent load. Use when the goal asks to load test, stress test, or benchmark performance.",
+      "version": "1.0.0",
+      "author": "agent-nuvira",
+      "tags": [
+        "performance",
+        "load-test",
+        "stress-test",
+        "benchmark",
+        "throughput",
+        "latency"
+      ],
+      "source": "agent-nuvira/bundled",
+      "updatedAt": "2026-08-21T17:47:34.314Z"
+    },
+    {
+      "name": "a11y-audit",
+      "description": "Audit web applications for accessibility (WCAG 2.1 AA compliance): check color contrast, keyboard navigation, screen-reader compatibility, ARIA attributes, and semantic HTML. Use when the goal asks to audit, fix, or improve accessibility.",
+      "version": "1.0.0",
+      "author": "agent-nuvira",
+      "tags": [
+        "accessibility",
+        "a11y",
+        "wcag",
+        "screen-reader",
+        "keyboard",
+        "aria",
+        "compliance"
+      ],
+      "source": "agent-nuvira/bundled",
+      "updatedAt": "2026-08-21T17:47:34.314Z"
+    },
+    {
+      "name": "search-setup",
+      "description": "Set up full-text search for a web application using Algolia, Meilisearch, Typesense, or Elasticsearch. Includes indexing pipeline, query optimization, and autocomplete. Use when the goal asks to add search, indexing, or autocomplete to an app.",
+      "version": "1.0.0",
+      "author": "agent-nuvira",
+      "tags": [
+        "search",
+        "indexing",
+        "autocomplete",
+        "full-text",
+        "algolia",
+        "meilisearch"
+      ],
+      "source": "agent-nuvira/bundled",
+      "updatedAt": "2026-08-21T17:47:34.314Z"
+    },
+    {
+      "name": "email-setup",
+      "description": "Set up transactional email: design responsive HTML templates, configure SMTP/API delivery (SendGrid, Resend, Mailgun, Postmark), and build email sending functions. Use when the goal asks to send emails, build email templates, or configure email delivery.",
+      "version": "1.0.0",
+      "author": "agent-nuvira",
+      "tags": [
+        "email",
+        "smtp",
+        "template",
+        "transactional",
+        "sendgrid",
+        "resend",
+        "delivery"
+      ],
+      "source": "agent-nuvira/bundled",
+      "updatedAt": "2026-08-21T17:47:34.314Z"
+    },
+    {
+      "name": "payment-setup",
+      "description": "Integrate payment processing with Stripe: implement checkout, subscriptions, webhooks, and invoice handling. Use when the goal asks to add payments, billing, subscriptions, or checkout to an app.",
+      "version": "1.0.0",
+      "author": "agent-nuvira",
+      "tags": [
+        "payment",
+        "stripe",
+        "checkout",
+        "subscription",
+        "billing",
+        "webhooks"
+      ],
+      "source": "agent-nuvira/bundled",
+      "updatedAt": "2026-08-21T17:47:34.314Z"
+    },
+    {
+      "name": "auth-setup",
+      "description": "Implement authentication and authorization: OAuth2 (Google, GitHub), magic links, JWT sessions, role-based access control. Use when the goal asks to add login, signup, auth, SSO, or RBAC to an app.",
+      "version": "1.0.0",
+      "author": "agent-nuvira",
+      "tags": [
+        "auth",
+        "login",
+        "oauth",
+        "jwt",
+        "session",
+        "rbac",
+        "security"
+      ],
+      "source": "agent-nuvira/bundled",
+      "updatedAt": "2026-08-21T17:47:34.314Z"
+    },
+    {
+      "name": "monitoring-setup",
+      "description": "Set up application monitoring: structured logging, metrics collection, alerting rules, and health checks. Use when the goal asks to add logging, monitoring, observability, or alerting.",
+      "version": "1.0.0",
+      "author": "agent-nuvira",
+      "tags": [
+        "monitoring",
+        "logging",
+        "metrics",
+        "alerting",
+        "observability",
+        "health-check"
+      ],
+      "source": "agent-nuvira/bundled",
+      "updatedAt": "2026-08-21T17:47:34.314Z"
+    },
+    {
+      "name": "backup-recovery",
+      "description": "Design and implement backup and disaster recovery: automated database backups, point-in-time recovery, S3 snapshots, and runbook documentation. Use when the goal asks to set up backups, recovery, or disaster resilience.",
+      "version": "1.0.0",
+      "author": "agent-nuvira",
+      "tags": [
+        "backup",
+        "recovery",
+        "disaster-recovery",
+        "resilience",
+        "runbook",
+        "rpo",
+        "rto"
+      ],
+      "source": "agent-nuvira/bundled",
+      "updatedAt": "2026-08-21T17:47:34.314Z"
+    },
+    {
+      "name": "schema-design",
+      "description": "Design database schemas and data models: entities, relationships, indexes, constraints, and normalization. Use when the goal asks to design, model, or restructure a database schema.",
+      "version": "1.0.0",
+      "author": "agent-nuvira",
+      "tags": [
+        "schema",
+        "database",
+        "model",
+        "erd",
+        "normalization",
+        "indexing",
+        "sql"
+      ],
+      "source": "agent-nuvira/bundled",
+      "updatedAt": "2026-08-21T17:47:34.314Z"
+    },
+    {
+      "name": "i18n-setup",
+      "description": "Set up internationalization (i18n): extract translatable strings, configure a translation framework, and add RTL support. Use when the goal asks to add multi-language support, translations, or localization.",
+      "version": "1.0.0",
+      "author": "agent-nuvira",
+      "tags": [
+        "i18n",
+        "localization",
+        "translation",
+        "multilingual",
+        "rtl",
+        "locale"
+      ],
+      "source": "agent-nuvira/bundled",
+      "updatedAt": "2026-08-21T17:47:34.314Z"
+    },
+    {
+      "name": "graphql-api",
+      "description": "Design and implement GraphQL APIs: schema definition, resolvers, subscriptions, N+1 prevention, and query complexity limiting. Use when the goal asks to build a GraphQL API or migrate from REST to GraphQL.",
+      "version": "1.0.0",
+      "author": "agent-nuvira",
+      "tags": [
+        "graphql",
+        "schema",
+        "resolver",
+        "subscription",
+        "dataloader",
+        "codegen"
+      ],
+      "source": "agent-nuvira/bundled",
+      "updatedAt": "2026-08-21T17:47:34.314Z"
+    },
+    {
+      "name": "git-release",
+      "description": "Manage git releases: changelog generation, semantic versioning, release branches, tagging, and publishing to package registries. Use when the goal asks to cut a release, create a changelog, or publish a package.",
+      "version": "1.0.0",
+      "author": "agent-nuvira",
+      "tags": [
+        "release",
+        "changelog",
+        "semver",
+        "tag",
+        "publish",
+        "git",
+        "github"
+      ],
+      "source": "agent-nuvira/bundled",
+      "updatedAt": "2026-08-21T17:47:34.314Z"
+    },
+    {
+      "name": "design-system",
+      "description": "Build a component library / design system: tokens, base components, composition patterns, documentation, and testing. Use when the goal asks to create a design system, component library, or shared UI kit.",
+      "version": "1.0.0",
+      "author": "agent-nuvira",
+      "tags": [
+        "design-system",
+        "components",
+        "tokens",
+        "storybook",
+        "ui-kit",
+        "library"
+      ],
+      "source": "agent-nuvira/bundled",
+      "updatedAt": "2026-08-21T17:47:34.314Z"
+    },
+    {
+      "name": "legal-compliance",
+      "description": "Add legal compliance: privacy policy, terms of service, cookie consent, GDPR/CCPA data handling, and cookie banners. Use when the goal asks to add legal pages, privacy policy, cookie consent, or compliance with privacy regulations.",
+      "version": "1.0.0",
+      "author": "agent-nuvira",
+      "tags": [
+        "legal",
+        "compliance",
+        "gdpr",
+        "ccpa",
+        "privacy",
+        "cookies",
+        "consent"
+      ],
+      "source": "agent-nuvira/bundled",
+      "updatedAt": "2026-08-21T17:47:34.314Z"
+    },
+    {
+      "name": "cron-setup",
+      "description": "Set up scheduled tasks and cron jobs: periodic reports, cleanup jobs, data sync, and monitoring probes. Use when the goal asks to schedule tasks, set up cron jobs, or automate periodic work.",
+      "version": "1.0.0",
+      "author": "agent-nuvira",
+      "tags": [
+        "cron",
+        "schedule",
+        "automation",
+        "periodic",
+        "timer",
+        "jobs"
+      ],
+      "source": "agent-nuvira/bundled",
+      "updatedAt": "2026-08-21T17:47:34.314Z"
     }
   ]
 }

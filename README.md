@@ -1295,6 +1295,110 @@ agent-nuvira skill gc
 
 ---
 
+### `agent-nuvira skills` — Community Skills Marketplace
+
+Search, install, update, and manage community skills from the multi-source registry. Distinct from `buff skill` (singular), which manages internal trajectory-compiled skills.
+
+```bash
+# Search the registry for skills matching a query
+agent-nuvira skills search "deploy"
+agent-nuvira skills search "security audit"
+
+# Install a skill from the registry (into <project>/.agents/skills/)
+agent-nuvira skills install code-assessment
+agent-nuvira skills install website-deploy
+
+# Install from a specific source kind
+agent-nuvira skills install my-skill --source git-repo
+agent-nuvira skills install my-skill --source local-dir
+
+# List installed skills with provenance
+agent-nuvira skills list
+agent-nuvira skills list --origin registry
+agent-nuvira skills list --origin local
+
+# Update installed skills to newer versions
+agent-nuvira skills update
+
+# Uninstall a skill
+agent-nuvira skills uninstall code-assessment
+
+# Create a cross-skill bundle (Hermes parity)
+agent-nuvira skills bundle backend-dev --create --name "Backend Dev" --description "Full workflow" --skills code-assessment,test-strategy
+
+# List bundles
+agent-nuvira skills bundle --list
+
+# Show bundle contents
+agent-nuvira skills bundle backend-dev --show
+```
+
+**33 bundled first-party skills** ship with the product:
+
+| Skill | Description |
+|---|---|
+| `website-deploy` | Deploy to Cloudflare Pages, Netlify, Vercel, GitHub Pages, AWS S3, Azure, Firebase |
+| `code-assessment` | Structured codebase evaluation across 5 dimensions |
+| `technical-roadmap` | Current state → target state → phased roadmap |
+| `plan-create-track` | Multi-step job planning with visible progress |
+| `test-strategy` | Deep test pass with matrix selection |
+| `docx` | Create, read, edit Word documents |
+| `security-audit` | Scan for vulnerabilities, classify, fix plan |
+| `api-design` | REST API design → OpenAPI → implement → test |
+| `db-migration` | Schema analysis → backward-compatible migration |
+| `perf-profile` | Profile hotspots → optimize → verify |
+| `doc-gen` | Generate documentation from code |
+| `ci-cd-setup` | CI/CD pipeline setup for GitHub/GitLab |
+| `docker-config` | Multi-stage Dockerfile + docker-compose |
+| `dep-update` | Safe dependency updates with test verification |
+| `code-refactor` | Safe refactoring with test verification |
+| `env-setup` | Development environment bootstrap |
+| `data-analysis` | Analyze datasets, generate insights and visualizations |
+| `api-testing` | Automated API testing (REST/GraphQL) |
+| `perf-test` | Load testing and performance benchmarking |
+| `a11y-audit` | WCAG 2.1 accessibility auditing and fixes |
+| `search-setup` | Full-text search (Algolia, Meilisearch, Elasticsearch) |
+| `email-setup` | Transactional email templates and delivery |
+| `payment-setup` | Stripe checkout, subscriptions, webhooks |
+| `auth-setup` | OAuth2, JWT, RBAC authentication |
+| `monitoring-setup` | Logging, metrics, alerting, health checks |
+| `backup-recovery` | Backup strategy, disaster recovery runbooks |
+| `schema-design` | Database schema design, ER diagrams, normalization |
+| `i18n-setup` | Internationalization and localization |
+| `graphql-api` | GraphQL API design, resolvers, subscriptions |
+| `git-release` | Changelog, semver, tagging, publishing |
+| `design-system` | Component library, tokens, Storybook |
+| `legal-compliance` | GDPR/CCPA, privacy policy, cookie consent |
+| `cron-setup` | Scheduled tasks and cron jobs |
+
+**Trust & safety:** sandboxed install names (`^[a-z0-9-]+$`), SHA-256 provenance, quarantine on mismatch, frontmatter cross-check.
+
+---
+
+### `agent-nuvira marketplace` — Unified Marketplace
+
+Browse, search, and install workflow templates and plugins from the unified marketplace.
+
+```bash
+# Browse all available items
+agent-nuvira marketplace browse
+
+# Browse only workflows or plugins
+agent-nuvira marketplace browse --type workflows
+agent-nuvira marketplace browse --type plugins
+
+# Search across all sources
+agent-nuvira marketplace search "deploy"
+
+# Install a workflow template
+agent-nuvira marketplace install security-audit
+
+# Show details for a marketplace item
+agent-nuvira marketplace info quick-fix
+```
+
+---
+
 ### `agent-nuvira init` — Project Scaffolding
 
 Scaffold new projects from built-in templates with interactive prompts and provider selection. Supports custom template directories.

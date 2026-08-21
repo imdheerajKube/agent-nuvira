@@ -1219,6 +1219,108 @@
       "rbac": "execute",
       "confirmation": false,
       "platforms": ["*"]
+    },
+    {
+      "intent": "skills.search",
+      "summary": "Search the skills marketplace",
+      "aliases": ["search skills", "find skills", "look for a skill", "search the skill registry"],
+      "objective": "Search across all configured skill registries for skills matching a query",
+      "command": "buff skills search <query>",
+      "example": "buff skills search deploy",
+      "args": [{ "name": "query", "flag": "<query>", "optional": false, "example": "deploy" }],
+      "rbac": "read",
+      "confirmation": false,
+      "platforms": ["*"]
+    },
+    {
+      "intent": "skills.list",
+      "summary": "List installed community skills",
+      "aliases": ["list installed skills", "show installed skills", "what skills are installed"],
+      "objective": "List all installed community skills with provenance",
+      "command": "buff skills list [--origin registry|local]",
+      "example": "buff skills list",
+      "args": [],
+      "rbac": "read",
+      "confirmation": false,
+      "platforms": ["*"]
+    },
+    {
+      "intent": "skills.uninstall",
+      "summary": "Uninstall a community skill",
+      "aliases": ["uninstall skill", "remove a skill", "delete a skill"],
+      "objective": "Remove an installed community skill from .agents/skills/",
+      "command": "buff skills uninstall <name>",
+      "example": "buff skills uninstall code-assessment",
+      "args": [{ "name": "name", "flag": "<name>", "optional": false, "example": "code-assessment" }],
+      "rbac": "execute",
+      "confirmation": true,
+      "platforms": ["*"]
+    },
+    {
+      "intent": "skills.bundle",
+      "summary": "Manage cross-skill bundles",
+      "aliases": ["create a bundle", "group skills", "bundle skills together", "list bundles"],
+      "objective": "Create, list, show, or delete cross-skill bundles (Hermes parity)",
+      "command": "buff skills bundle <slug> --create --name <name> --description <desc> --skills <list>",
+      "example": "buff skills bundle backend-dev --create --name \"Backend Dev\" --skills code-assessment,test-strategy",
+      "args": [
+        { "name": "slug", "flag": "<slug>", "optional": false, "example": "backend-dev" },
+        { "name": "create", "flag": "--create", "optional": true, "example": "--create" },
+        { "name": "list", "flag": "--list", "optional": true, "example": "--list" },
+        { "name": "show", "flag": "--show", "optional": true, "example": "--show" },
+        { "name": "skills", "flag": "--skills", "optional": true, "example": "--skills code-assessment,test-strategy" }
+      ],
+      "rbac": "execute",
+      "confirmation": false,
+      "platforms": ["*"]
+    },
+    {
+      "intent": "marketplace.browse",
+      "summary": "Browse the unified marketplace",
+      "aliases": ["browse marketplace", "show marketplace", "what's in the marketplace"],
+      "objective": "Browse all available workflow templates and plugins in the unified marketplace",
+      "command": "buff marketplace browse [--type workflows|plugins]",
+      "example": "buff marketplace browse",
+      "args": [],
+      "rbac": "read",
+      "confirmation": false,
+      "platforms": ["*"]
+    },
+    {
+      "intent": "marketplace.search",
+      "summary": "Search the unified marketplace",
+      "aliases": ["search marketplace", "find in marketplace", "search templates"],
+      "objective": "Search across plugins and templates in the unified marketplace",
+      "command": "buff marketplace search <query>",
+      "example": "buff marketplace search deploy",
+      "args": [{ "name": "query", "flag": "<query>", "optional": false, "example": "deploy" }],
+      "rbac": "read",
+      "confirmation": false,
+      "platforms": ["*"]
+    },
+    {
+      "intent": "marketplace.install",
+      "summary": "Install from the unified marketplace",
+      "aliases": ["install from marketplace", "get marketplace item", "install template"],
+      "objective": "Install a workflow template from the unified marketplace",
+      "command": "buff marketplace install <name>",
+      "example": "buff marketplace install security-audit",
+      "args": [{ "name": "name", "flag": "<name>", "optional": false, "example": "security-audit" }],
+      "rbac": "execute",
+      "confirmation": false,
+      "platforms": ["*"]
+    },
+    {
+      "intent": "marketplace.info",
+      "summary": "Show marketplace item details",
+      "aliases": ["marketplace info", "show marketplace item", "details for marketplace item"],
+      "objective": "Show detailed information for a marketplace item",
+      "command": "buff marketplace info <name>",
+      "example": "buff marketplace info quick-fix",
+      "args": [{ "name": "name", "flag": "<name>", "optional": false, "example": "quick-fix" }],
+      "rbac": "read",
+      "confirmation": false,
+      "platforms": ["*"]
     }
   ]
 }

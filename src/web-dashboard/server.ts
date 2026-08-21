@@ -2925,6 +2925,43 @@ function handleRequest(req: IncomingMessage, res: ServerResponse): void {
     })();
     return;
   }
+  // ── PA4 — save skill env vars to ~/.buff/.env (dashboard secret capture) ──
+  if (pathname === '/api/skills/secrets' && req.method === 'POST') {
+    void (async () => {
+      const session = adminSessions.validate(bearerToken(req));
+      if (!session) {
+        writeJson(res, 401, { ok: false, error: 'Not authenticated — log in first.' });
+        return;
+      }
+      if (!roleCan(session.role, 'routing.operate')) {
+        writeJson(res, 403, {
+          ok: false,
+          error: `Access denied — role '${session.role}' cannot save secrets (requires admin or operator).`,
+        });
+        return;
+      }
+      const body = await readJsonBody(req);
+      const vars = body?.vars;
+      if (!vars || typeof vars !== 'object' || Array.isArray(vars)) {
+        writeJson(res, 400, { ok: false, error: 'Missing or invalid vars object.' });
+        return;
+      }
+      const saved: string[] = [];
+      try {
+        const { saveEnvValue } = await import('../skills/secret-capture.js');
+        for (const [key, value] of Object.entries(vars)) {
+          if (typeof key !== 'string' || typeof value !== 'string') continue;
+          if (!/^[A-Z][A-Z0-9_]+$/.test(key)) continue;
+          const result = saveEnvValue(key, value);
+          if (result.success) saved.push(key);
+        }
+        writeJson(res, 200, { ok: true, saved });
+      } catch (err) {
+        writeJson(res, 500, { ok: false, error: err instanceof Error ? err.message : String(err) });
+      }
+    })();
+    return;
+  }
 
   // ── Agent Hub channel send-test (I11) — admin-gated gateway send ────────
   // Mirrors `buff gateway send <target> <text>`: resolve the target (alias or

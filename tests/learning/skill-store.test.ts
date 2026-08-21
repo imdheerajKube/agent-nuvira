@@ -360,20 +360,29 @@ describe('SkillStore', () => {
       expect(match!.name).toBe('website-deploy');
     });
 
-    it('P5 — seeds all six bundled skills (website-deploy + the four capability skills + docx)', () => {
+    it('P5 — seeds all 35 bundled skills (website-deploy + capability skills + docx + 29 new skills)', () => {
       const fresh = new SkillStore();
       const names = fresh.getAll().map((s) => s.name).sort();
       expect(names).toEqual([
-        'code-assessment',
-        'docx',
-        'plan-create-track',
-        'technical-roadmap',
-        'test-strategy',
+        'a11y-audit', 'api-design', 'api-testing', 'auth-setup',
+        'backup-recovery', 'ci-cd-setup', 'code-assessment', 'code-refactor',
+        'cron-setup', 'data-analysis', 'db-migration', 'dep-update',
+        'design-system', 'doc-gen', 'docker-config', 'docx',
+        'email-setup', 'env-setup', 'git-release', 'graphql-api',
+        'i18n-setup', 'legal-compliance', 'monitoring-setup', 'payment-setup',
+        'perf-profile', 'perf-test', 'plan-create-track', 'schema-design',
+        'search-setup', 'security-audit', 'technical-roadmap', 'test-strategy',
         'website-deploy',
       ]);
       // Each carries the depth bar: ordered steps + parameters (docx is a
       // methodology skill — steps yes, no parameters by design).
-      for (const name of ['code-assessment', 'technical-roadmap', 'plan-create-track', 'test-strategy']) {
+      for (const name of ['code-assessment', 'technical-roadmap', 'plan-create-track', 'test-strategy',
+        'security-audit', 'api-design', 'db-migration', 'perf-profile', 'doc-gen',
+        'ci-cd-setup', 'docker-config', 'dep-update', 'code-refactor', 'env-setup',
+        'data-analysis', 'api-testing', 'perf-test', 'a11y-audit', 'search-setup',
+        'email-setup', 'payment-setup', 'auth-setup', 'monitoring-setup', 'backup-recovery',
+        'schema-design', 'i18n-setup', 'graphql-api', 'git-release', 'design-system',
+        'legal-compliance', 'cron-setup']) {
         const skill = fresh.get(`skill-${name}`)!;
         expect(skill.steps.length).toBeGreaterThanOrEqual(3);
         expect(skill.parameters.length).toBeGreaterThanOrEqual(1);

@@ -443,6 +443,65 @@ function TaskRunCard({ task, onCancel }: { task: TaskRunView; onCancel?: () => v
     );
   }
 
+  /**
+   * PA4 — notification card for skill env-var requirements.
+   * Non-blocking: shows which env vars a loaded skill needs and whether
+   * they are already persisted. Each var gets an input field so the user
+   * can set them directly from the dashboard.
+   */
+  function SecretRequestCard({ request, onSave }: {
+    request: { skillName: string; missing: string[]; persisted: Record<string, boolean> };
+    onSave: (vars: Record<string, string>) => void;
+  }) {
+    const [values, setValues] = useState<Record<string, string>>({});
+    const [saved, setSaved] = useState(false);
+    const allSet = request.missing.every((k) => values[k]?.trim());
+    const alreadyPersisted = request.missing.filter((k) => request.persisted[k]);
+    const stillNeeded = request.missing.filter((k) => !request.persisted[k]);
+    return (
+      <div className="chat-secret-card">
+        <div className="chat-secret-head">
+          <span className="chat-secret-icon">🔐</span>
+          <span className="chat-secret-title">{request.skillName} needs environment variables</span>
+        </div>
+        {alreadyPersisted.length > 0 ? (
+          <div className="chat-secret-persisted">
+            Already configured: {alreadyPersisted.map((k) => <code key={k}>{k}</code>).join(', ')}
+          </div>
+        ) : null}
+        {stillNeeded.length > 0 && !saved ? (
+          <div className="chat-secret-fields">
+            {stillNeeded.map((k) => (
+              <div key={k} className="chat-secret-row">
+                <label className="chat-secret-label" htmlFor={`secret-${k}`}>{k}:</label>
+                <input
+                  id={`secret-${k}`}
+                  className="chat-secret-input"
+                  type="password"
+                  placeholder={`Enter ${k} value…`}
+                  value={values[k] ?? ''}
+                  onChange={(e) => setValues((v) => ({ ...v, [k]: e.target.value }))}
+                />
+              </div>
+            ))}
+            <button
+              className="admin-refresh-btn"
+              type="button"
+              disabled={!allSet}
+              onClick={() => { onSave(values); setSaved(true); }}
+            >
+              💾 Save to ~/.buff/.env
+            </button>
+          </div>
+        ) : saved ? (
+          <div className="admin-hint">✅ Saved — the skill will pick up these values on next load.</div>
+        ) : (
+          <div className="admin-hint">All required env vars are already configured.</div>
+        )}
+      </div>
+    );
+  }
+
   /** P0.7 — status icon for one checklist step. */
   function planStepIcon(status: string): string {
   if (status === 'done') return '✅';
@@ -565,6 +624,8 @@ export default function ChatPage() {
   const [liveDiff, setLiveDiff] = useState<DiffView | null>(null);
   // P6a — the /learn preview card (skill_manage create/patch emits it).
   const [liveDraft, setLiveDraft] = useState<SkillDraftView | null>(null);
+  // PA4 — skill env-var notification card (non-blocking: shows missing vars).
+  const [secretRequests, setSecretRequests] = useState<Array<{ skillName: string; missing: string[]; persisted: Record<string, boolean> }>>([]);
   // Plain-English → CLI short-circuit: a confident command match shows a
   // confirm card instead of burning a model turn; ambiguous asks show choices.
   const [pendingResolve, setPendingResolve] = useState<PendingResolve | null>(null);
@@ -1002,6 +1063,18 @@ export default function ChatPage() {
           liveDraftRef.current = view;
           setLiveDraft(view);
         },
+        // PA4 — a skill loaded but needs env vars; show notification card.
+        onSecretRequest: (d) => {
+          setSecretRequests((prev) => {
+            const idx = prev.findIndex((r) => r.skillName === d.skillName);
+            if (idx >= 0) {
+              const next = [...prev];
+              next[idx] = d;
+              return next;
+            }
+            return [...prev, d];
+          });
+        },
       });
       const r = await dashboardAPI.chatSend(
         sessionId,
@@ -1098,6 +1171,12 @@ export default function ChatPage() {
     // skill_manage create/patch emits an updated preview card.
     void send(`Revise the skill draft "${name}" — improve it per your best judgment and present it again.`);
   }, [send]);
+
+  /** PA4 — save skill env vars from the secret request card. */
+  const saveSecrets = useCallback(async (vars: Record<string, string>) => {
+    const r = await dashboardAPI.saveSecrets(vars);
+    if (!r.ok) setError(r.error || 'Could not save secrets.');
+  }, []);
 
   /**
    * Run the resolved CLI command directly (the user confirmed the card).
@@ -1643,6 +1722,9 @@ export default function ChatPage() {
                 {livePlan ? <PlanCard plan={livePlan} /> : null}
                 {liveDiff ? <DiffCard diff={liveDiff} /> : null}
                 {liveDraft ? <SkillDraftCard draft={liveDraft} onAccept={acceptDraft} onReject={rejectDraft} onEdit={editDraft} /> : null}
+                {secretRequests.map((sr) => (
+                  <SecretRequestCard key={sr.skillName} request={sr} onSave={saveSecrets} />
+                ))}
                 <ToolCards tools={liveTools} live />
                 {streamingText ? (
                   <div className="chat-bubble-text chat-streaming">
