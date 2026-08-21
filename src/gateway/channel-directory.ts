@@ -15,6 +15,7 @@ import { mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { resolveBuffConfigDir } from '../config/paths.js';
 import { hasWhatsAppSession } from './whatsapp/session.js';
+import { readGatewayContacts, resolveContact } from './contacts.js';
 
 /** Supported platforms (I8 splits WhatsApp, I9 adds webhook connectors). */
 export type Platform =
@@ -266,16 +267,31 @@ export class ChannelDirectory {
   /**
    * Resolve a target string to a ChannelRef.
    *   "ops"            → alias lookup
+   *   "Anuj"           → contacts lookup by name
+   *   "+918800425333"   → contacts lookup by phone (flexible)
    *   "telegram:12345" → explicit platform:channelId
    * Returns null when unresolvable.
    */
   resolve(target: string): ChannelRef | null {
     const t = (target || '').trim();
     if (!t) return null;
+    // 1. Alias lookup
     const alias = this.aliases.find((a) => a.alias === t);
     if (alias) return { platform: alias.platform, channelId: alias.channelId };
+    // 2. Explicit platform:channelId
     const explicit = t.match(/^(telegram|discord|slack|whatsapp|whatsapp_cloud|email|signal|dingtalk|feishu|wecom|mattermost|matrix|webhook|bluebubbles|ntfy|teams|google_chat|weixin|sms|irc|simplex|homeassistant|mock):(.+)$/);
     if (explicit) return { platform: explicit[1] as Platform, channelId: explicit[2] };
+    // 3. Contacts lookup by name or phone (flexible resolution)
+    try {
+      const contacts = readGatewayContacts();
+      // Search across all platforms
+      for (const platform of ['telegram', 'whatsapp', 'whatsapp_cloud', 'email', 'slack', 'discord'] as Platform[]) {
+        const hit = resolveContact(contacts, platform, t);
+        if (hit && hit.status === 'approved') return { platform, channelId: hit.id };
+      }
+    } catch {
+      /* contacts module unavailable — skip */
+    }
     return null;
   }
 

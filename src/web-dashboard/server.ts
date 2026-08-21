@@ -3099,6 +3099,67 @@ function handleRequest(req: IncomingMessage, res: ServerResponse): void {
     return;
   }
 
+  // ── Contacts management (name-centric contact store for outbound messaging) ──
+  // GET  /api/admin/contacts — list all contacts (with name, platform, id, phone, status)
+  // PUT  /api/admin/contacts — update a contact (approve/reject/edit/delete)
+  if (pathname === '/api/admin/contacts') {
+    void (async () => {
+      const session = adminSessions.validate(bearerToken(req));
+      if (!session) {
+        writeJson(res, 401, { ok: false, error: 'Not authenticated — log in first.' });
+        return;
+      }
+      if (!roleCan(session.role, 'routing.operate')) {
+        writeJson(res, 403, { ok: false, error: `Access denied — role '${session.role}' cannot manage contacts (requires admin or operator).` });
+        return;
+      }
+      if (req.method === 'GET') {
+        const { readGatewayContacts } = await import('../gateway/contacts.js');
+        const contacts = readGatewayContacts();
+        writeJson(res, 200, { ok: true, contacts });
+        return;
+      }
+      if (req.method === 'PUT') {
+        const body = await readJsonBody(req);
+        const action = body?.action as string;
+        const { readGatewayContacts, upsertGatewayContact, setContactStatus, removeGatewayContact, removeContactByNameOrId } = await import('../gateway/contacts.js');
+        if (action === 'approve') {
+          const { platform, nameOrId } = body as { platform?: string; nameOrId?: string };
+          if (!platform || !nameOrId) { writeJson(res, 400, { ok: false, error: 'Missing platform or nameOrId.' }); return; }
+          const { setContactStatus: setStatus } = await import('../gateway/contacts.js');
+          const ok = setStatus(platform as never, nameOrId, 'approved');
+          writeJson(res, ok ? 200 : 404, { ok, error: ok ? undefined : 'Contact not found.' });
+          return;
+        }
+        if (action === 'reject') {
+          const { platform, nameOrId } = body as { platform?: string; nameOrId?: string };
+          if (!platform || !nameOrId) { writeJson(res, 400, { ok: false, error: 'Missing platform or nameOrId.' }); return; }
+          const ok = setContactStatus(platform as never, nameOrId, 'rejected');
+          writeJson(res, ok ? 200 : 404, { ok, error: ok ? undefined : 'Contact not found.' });
+          return;
+        }
+        if (action === 'delete') {
+          const { platform, nameOrId } = body as { platform?: string; nameOrId?: string };
+          if (!platform || !nameOrId) { writeJson(res, 400, { ok: false, error: 'Missing platform or nameOrId.' }); return; }
+          const ok = removeGatewayContact(platform as never, nameOrId);
+          writeJson(res, ok ? 200 : 404, { ok, error: ok ? undefined : 'Contact not found.' });
+          return;
+        }
+        if (action === 'update') {
+          const { name, platform, id, phone, status } = body as { name?: string; platform?: string; id?: string; phone?: string; status?: string };
+          if (!platform || !id || !name) { writeJson(res, 400, { ok: false, error: 'Missing platform, id, or name.' }); return; }
+          upsertGatewayContact({ name, platform: platform as never, id, phone, status: (status as 'approved' | 'pending' | 'rejected') ?? 'approved', registeredAt: Date.now() });
+          writeJson(res, 200, { ok: true });
+          return;
+        }
+        writeJson(res, 400, { ok: false, error: 'Unknown action. Use: approve, reject, delete, update.' });
+        return;
+      }
+      writeJson(res, 405, { ok: false, error: 'Method not allowed — use GET or PUT.' });
+    })();
+    return;
+  }
+
   // ── User management (Session 19 — RBAC on the dashboard control layer) ──
   // role.manage (admin) gates who may add/remove dashboard admin users.
   // rbac.json assignments override a credential's stored role (CLI parity),
@@ -3962,6 +4023,119 @@ function handleRequest(req: IncomingMessage, res: ServerResponse): void {
     writeEnvFile({}, keys);
     applyEnvToProcess({}, keys);
     writeJson(res, 200, { ok: true, removed: keys, status: platformConfigStatus(platform as never) });
+    return;
+  }
+
+  // ── Bedrock onboarding endpoints ────────────────────────────────────────
+  // GET /api/bedrock/status — current Bedrock config status
+  if (pathname === '/api/bedrock/status' && req.method === 'GET') {
+    const session = adminSessions.validate(bearerToken(req));
+    if (!session) {
+      writeJson(res, 401, { ok: false, error: 'Not authenticated.' });
+      return;
+    }
+    const region = process.env.BEDROCK_REGION || 'us-east-1';
+    const apiKey = process.env.AWS_BEARER_TOKEN;
+    const accessKey = process.env.AWS_ACCESS_KEY_ID;
+    writeJson(res, 200, {
+      configured: !!(apiKey || accessKey),
+      region,
+      authMethod: apiKey ? 'bearer' : accessKey ? 'iam' : 'none',
+      apiKeySet: !!apiKey,
+      iamKeySet: !!accessKey,
+    });
+    return;
+  }
+
+  // POST /api/bedrock/setup — save Bedrock env vars to ~/.buff/.env
+  if (pathname === '/api/bedrock/setup' && req.method === 'POST') {
+    void (async () => {
+      const session = adminSessions.validate(bearerToken(req));
+      if (!session) {
+        writeJson(res, 401, { ok: false, error: 'Not authenticated.' });
+        return;
+      }
+      if (!roleCan(session.role, 'routing.operate')) {
+        writeJson(res, 403, { ok: false, error: 'Access denied — admin or operator role required.' });
+        return;
+      }
+      const body = await readJsonBody(req);
+      const envVars = body?.envVars;
+      if (!envVars || typeof envVars !== 'object' || Array.isArray(envVars)) {
+        writeJson(res, 400, { ok: false, error: 'Missing envVars object in request body.' });
+        return;
+      }
+      // Validate env var keys
+      const allowedKeys = ['BEDROCK_REGION', 'AWS_BEARER_TOKEN', 'AWS_ACCESS_KEY_ID', 'AWS_SECRET_ACCESS_KEY', 'AWS_SESSION_TOKEN'];
+      const clean: Record<string, string> = {};
+      for (const [k, v] of Object.entries(envVars)) {
+        if (allowedKeys.includes(k) && typeof v === 'string') {
+          clean[k] = v;
+        }
+      }
+      const { wrote } = writeEnvFile(clean);
+      applyEnvToProcess(clean);
+      writeJson(res, 200, { ok: true, envVarsWritten: wrote });
+    })();
+    return;
+  }
+
+  // POST /api/bedrock/probe — probe Bedrock models in a region
+  if (pathname === '/api/bedrock/probe' && req.method === 'POST') {
+    void (async () => {
+      const session = adminSessions.validate(bearerToken(req));
+      if (!session) {
+        writeJson(res, 401, { ok: false, error: 'Not authenticated.' });
+        return;
+      }
+      const body = await readJsonBody(req);
+      const region = (typeof body?.region === 'string' && body.region) || process.env.BEDROCK_REGION || 'us-east-1';
+      const apiKey = process.env.AWS_BEARER_TOKEN;
+      if (!apiKey) {
+        writeJson(res, 400, { ok: false, error: 'AWS_BEARER_TOKEN not configured. Run Bedrock setup first.' });
+        return;
+      }
+      const runtimeBase = `https://bedrock-runtime.${region}.amazonaws.com`;
+      const probeModels = [
+        'anthropic.claude-haiku-4-5-20251001-v1:0',
+        'anthropic.claude-sonnet-4-6',
+        'anthropic.claude-fable-5',
+        'meta.llama3-1-8b-instruct-v1:0',
+        'meta.llama3-3-70b-instruct-v1:0',
+        'meta.llama4-scout-17b-instruct-v1:0',
+        'deepseek.v3.2',
+        'mistral.mistral-large-3-675b-instruct',
+        'amazon.nova-pro-v1:0',
+        'openai.gpt-5.6-terra',
+        'qwen.qwen3-coder-next',
+        'xai.grok-4.6',
+        'google.gemma-3-12b-it',
+      ];
+      const models = await Promise.all(probeModels.map(async (modelId) => {
+        try {
+          const controller = new AbortController();
+          const timeout = setTimeout(() => controller.abort(), 5000);
+          const probe = await fetch(`${runtimeBase}/openai/v1/chat/completions`, {
+            method: 'POST',
+            headers: { 'Authorization': `Bearer ${apiKey}`, 'Content-Type': 'application/json' },
+            body: JSON.stringify({ model: modelId, messages: [{ role: 'user', content: 'hi' }], max_tokens: 1 }),
+            signal: controller.signal,
+          });
+          clearTimeout(timeout);
+          return {
+            modelId,
+            status: probe.ok ? 'accessible' as const
+              : probe.status === 403 ? 'permission-denied' as const
+              : probe.status === 404 ? 'not-found' as const
+              : 'error' as const,
+            httpStatus: probe.status || undefined,
+          };
+        } catch {
+          return { modelId, status: 'error' as const };
+        }
+      }));
+      writeJson(res, 200, { ok: true, region, models });
+    })();
     return;
   }
 
@@ -5122,33 +5296,92 @@ async function checkVLLMProvider(): Promise<ModelCheckResult | null> {
   return result;
 }
 
-/** Check Amazon Bedrock provider — uses Bearer token auth + foundation-models API for discovery */
+/** Well-known Bedrock model IDs to probe when the control-plane listing fails.
+ * Organized by provider; covers the most commonly enabled models.
+ */
+const BEDROCK_PROBE_MODELS = [
+  // Anthropic Claude (current catalog)
+  'anthropic.claude-haiku-4-5-20251001-v1:0',
+  'anthropic.claude-sonnet-4-6',
+  'anthropic.claude-fable-5',
+  'anthropic.claude-opus-4-6-v1',
+  'anthropic.claude-sonnet-4-5-20250929-v1:0',
+  // Meta Llama (current catalog)
+  'meta.llama3-1-8b-instruct-v1:0',
+  'meta.llama3-1-70b-instruct-v1:0',
+  'meta.llama3-3-70b-instruct-v1:0',
+  'meta.llama4-scout-17b-instruct-v1:0',
+  'meta.llama4-maverick-17b-instruct-v1:0',
+  // Mistral (current catalog)
+  'mistral.mistral-large-3-675b-instruct',
+  'mistral.devstral-2-123b',
+  'mistral.ministral-3-14b-instruct',
+  // DeepSeek
+  'deepseek.v3.2',
+  'deepseek.r1-v1:0',
+  // Amazon Nova
+  'amazon.nova-pro-v1:0',
+  'amazon.nova-lite-v1:0',
+  // OpenAI on Bedrock
+  'openai.gpt-5.6-terra',
+  'openai.gpt-oss-120b-1:0',
+  // Qwen
+  'qwen.qwen3-coder-next',
+  'qwen.qwen3-32b-v1:0',
+  // Google Gemma
+  'google.gemma-3-12b-it',
+  // xAI
+  'xai.grok-4.6',
+];
+
+/** Resolve the Bedrock region from env (BEDROCK_REGION) or default to us-east-1.
+ * Do NOT default to eu-north-1 — models are not widely available there. */
+function getBedrockRegion(): string {
+  return process.env.BEDROCK_REGION || 'us-east-1';
+}
+
+/** Check Amazon Bedrock provider — uses Bearer token auth + runtime endpoint for discovery.
+ *
+ * Strategy:
+ * 1. Try the control-plane `foundation-models` listing (needs bedrock:ListFoundationModels).
+ * 2. If that returns 0 models or fails, fall back to probing well-known model IDs
+ *    through the `bedrock-runtime` OpenAI-compatible endpoint.
+ * 3. Log detailed diagnostics for common failure modes (region, permissions, model access).
+ */
 async function checkBedrockProvider(): Promise<ModelCheckResult | null> {
-  const apiKey = process.env.AWS_BEARER_TOKEN_BEDROCK;
+  const apiKey = process.env.AWS_BEARER_TOKEN;
+  const region = getBedrockRegion();
+  const runtimeBase = `https://bedrock-runtime.${region}.amazonaws.com`;
+  const controlBase = `https://bedrock.${region}.amazonaws.com`;
+
   const result: ModelCheckResult = {
     provider: 'bedrock', providerLabel: 'Amazon Bedrock', icon: '🟠',
     apiConfigured: !!apiKey, apiAccessible: false, canGenerate: false,
     overallStatus: 'unavailable', models: [],
-    notes: 'Amazon Bedrock — 121 foundation models (Claude, Llama, DeepSeek, Qwen, GPT-OSS, etc.)',
-    freeTierInfo: 'Pay-per-use. Requires bedrock:InvokeModel for generation.',
+    notes: `Amazon Bedrock (${region}) — Claude, Llama, Mistral, DeepSeek, Qwen, etc.`,
+    freeTierInfo: 'Pay-per-use. Requires bedrock:InvokeModel + bedrock:ListFoundationModels.',
   };
   if (!apiKey) {
-    result.models = [{ id: '(no key)', name: 'AWS_BEARER_TOKEN_BEDROCK not set', status: 'unavailable' as const, statusReason: 'Set AWS_BEARER_TOKEN_BEDROCK in ~/.buff/.env' }];
+    result.models = [{ id: '(no key)', name: 'AWS_BEARER_TOKEN not set', status: 'unavailable' as const, statusReason: 'Set AWS_BEARER_TOKEN in ~/.buff/.env' }];
     return result;
   }
-  // Use the foundation-models listing API — this only needs bedrock:ListFoundationModels
+
+  // ── Step 1: Try the control-plane foundation-models listing ──────────────
+  // This endpoint requires IAM/SigV4 auth. Bearer tokens may not work here;
+  // if they do, great — if not, we fall back to runtime probing (Step 2).
   const check = await fetchWithTimeout<{ modelSummaries?: Array<{
     modelId: string; modelName: string;
     providerName: string; modelFamily: string;
     inputModalities: string[]; outputModalities: string[];
     modelLifecycle: { status: string };
-    inferenceAPIsSupported: { openAiChatCompletions?: boolean; converse?: { sync?: boolean } };
+    inferenceAPIsSupported?: { openAiChatCompletions?: boolean; converse?: { sync?: boolean } };
     contextWindowTokens?: number;
   }> }>(
-    'https://bedrock.us-east-1.amazonaws.com/foundation-models',
+    `${controlBase}/foundation-models`,
     { headers: { 'Authorization': `Bearer ${apiKey}` } },
   );
-  if (check.ok && check.data?.modelSummaries) {
+
+  if (check.ok && check.data?.modelSummaries && check.data.modelSummaries.length > 0) {
     result.apiAccessible = true;
     // Filter to text chat models that are active
     const chatModels = check.data.modelSummaries.filter((m) =>
@@ -5161,7 +5394,7 @@ async function checkBedrockProvider(): Promise<ModelCheckResult | null> {
     const testModelId = openaiModels[0]?.modelId || chatModels[0]?.modelId;
     if (testModelId) {
       const inferCheck = await fetchWithTimeout<{ choices?: unknown[]; output?: unknown; message?: string }>(
-        'https://bedrock-runtime.us-east-1.amazonaws.com/openai/v1/chat/completions',
+        `${runtimeBase}/openai/v1/chat/completions`,
         {
           method: 'POST',
           headers: { 'Authorization': `Bearer ${apiKey}`, 'Content-Type': 'application/json' },
@@ -5174,7 +5407,6 @@ async function checkBedrockProvider(): Promise<ModelCheckResult | null> {
       }
     }
     if (!result.canGenerate) {
-      // Listing works but inference is blocked — still useful for catalog
       result.overallStatus = 'limited';
     }
     result.models = chatModels.slice(0, 30).map((m) => ({
@@ -5182,11 +5414,94 @@ async function checkBedrockProvider(): Promise<ModelCheckResult | null> {
       status: (result.canGenerate ? 'available' : 'limited') as 'available' | 'limited',
       statusReason: result.canGenerate ? 'Listed + inference verified' : `Listed (${m.modelLifecycle.status}) — add bedrock:InvokeModel for generation`,
     }));
-  } else {
-    const httpStatus = check.status || 0;
-    const errorMsg = (check.data as Record<string, unknown>)?.message || 'API unreachable';
-    result.models = [{ id: '(error)', name: `HTTP ${httpStatus}: ${errorMsg}`, status: 'unavailable' as const, statusReason: 'Check API key and permissions (need bedrock:ListFoundationModels)' }];
+    return result;
   }
+
+  // ── Step 2: Control-plane listing returned 0 models or failed — probe via runtime ──
+  // The bedrock-runtime OpenAI-compatible endpoint accepts Bearer token auth.
+  // We probe well-known model IDs to discover which ones are enabled + accessible.
+  console.log(`[Bedrock] Control-plane listing returned 0 models (HTTP ${check.status}). Probing runtime endpoint…`);
+  const discoveredModels: Array<{ id: string; name: string; provider: string }> = [];
+  const probePromises = BEDROCK_PROBE_MODELS.map(async (modelId) => {
+    try {
+      const probe = await fetchWithTimeout<unknown>(
+        `${runtimeBase}/openai/v1/chat/completions`,
+        {
+          method: 'POST',
+          headers: { 'Authorization': `Bearer ${apiKey}`, 'Content-Type': 'application/json' },
+          body: JSON.stringify({ model: modelId, messages: [{ role: 'user', content: 'hi' }], max_tokens: 1 }),
+        },
+      );
+      if (probe.ok) {
+        // Extract provider from model ID (e.g., "anthropic.claude-…" → "Anthropic")
+        const prefix = modelId.split('.')[0];
+        const providerLabels: Record<string, string> = {
+          anthropic: 'Anthropic', meta: 'Meta', mistral: 'Mistral',
+          cohere: 'Cohere', deepseek: 'DeepSeek', amazon: 'Amazon', ai21: 'AI21 Labs',
+        };
+        discoveredModels.push({
+          id: modelId,
+          name: `${modelId} (${providerLabels[prefix] || prefix})`,
+          provider: providerLabels[prefix] || prefix,
+        });
+      } else if (probe.status === 403) {
+        // Model exists in region but not enabled — helpful diagnostic
+        console.log(`[Bedrock] Model ${modelId}: 403 Forbidden — model exists in ${region} but access not approved. Request access at https://console.aws.amazon.com/bedrock/home?region=${region}#/modelaccess`);
+      } else if (probe.status === 404) {
+        // Model doesn't exist in this region
+        // Silent — expected for most probe IDs in any given region
+      } else {
+        console.log(`[Bedrock] Model ${modelId}: HTTP ${probe.status} — ${probe.statusText}`);
+      }
+    } catch {
+      // Connection failure — likely region or network issue
+    }
+  });
+  await Promise.all(probePromises);
+
+  if (discoveredModels.length > 0) {
+    result.apiAccessible = true;
+    result.canGenerate = true;
+    result.overallStatus = 'available';
+    result.models = discoveredModels.slice(0, 30).map((m) => ({
+      id: m.id, name: m.name,
+      status: 'available' as const,
+      statusReason: 'Verified via runtime probe — model enabled and accessible',
+    }));
+    console.log(`[Bedrock] ✓ Discovered ${discoveredModels.length} accessible model(s) in ${region} via runtime probing.`);
+  } else {
+    // ── Step 3: Diagnose why 0 models were found ────────────────────────
+    result.models = [];
+    let diagnosis = '';
+
+    // Diagnose: check if it's a permissions error from the control-plane call
+    if (check.status === 401 || check.status === 403) {
+      diagnosis = `Permissions error (HTTP ${check.status}). Ensure your API key / IAM role has: ` +
+        `bedrock:ListFoundationModels + bedrock:InvokeModel. ` +
+        `For Bearer token auth, ensure the key is from Bedrock → Settings → API keys. ` +
+        `For IAM auth, set AWS_ACCESS_KEY_ID + AWS_SECRET_ACCESS_KEY.`;
+    } else if (check.status === 0) {
+      diagnosis = `Cannot reach Bedrock in region ${region}. ` +
+        `Verify the region is correct (set BEDROCK_REGION env var). ` +
+        `Supported regions: us-east-1, us-west-2, eu-west-1, ap-southeast-1, etc. ` +
+        `Note: do NOT use eu-north-1 unless models are explicitly enabled there.`;
+    } else {
+      diagnosis = `Control-plane listing returned HTTP ${check.status} with no models. ` +
+        `Most likely cause: no model access approved in ${region}. ` +
+        `→ Open https://console.aws.amazon.com/bedrock/home?region=${region}#/modelaccess ` +
+        `→ Click "Manage model access" → Select Claude, Llama, Mistral, DeepSeek, etc. → Submit. ` +
+        `Approval is usually instant for Anthropic/Meta models.`;
+    }
+
+    console.log(`[Bedrock] ✗ No accessible models in ${region}. Diagnosis: ${diagnosis}`);
+    result.models = [{
+      id: '(no-models)',
+      name: `No models accessible in ${region}`,
+      status: 'unavailable' as const,
+      statusReason: diagnosis,
+    }];
+  }
+
   return result;
 }
 

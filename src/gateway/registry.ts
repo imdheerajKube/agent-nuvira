@@ -393,8 +393,9 @@ export class GatewayRegistry {
   async handleInbound(msg: InboundMessage): Promise<string> {
     // Auto-learn Telegram chat IDs: when a message arrives from a Telegram
     // user, update any contact/alias that used a phone number format.
+    // Also auto-registers new users with status: 'pending' for admin approval.
     if (msg.platform === 'telegram' && msg.senderId) {
-      void this.learnTelegramChatId(msg.senderId, msg.channelId).catch(() => {});
+      void this.learnTelegramChatId(msg.senderId, msg.channelId, msg.from).catch(() => {});
     }
 
     const ref: ChannelRef = { platform: msg.platform, channelId: msg.channelId };
@@ -682,10 +683,11 @@ export class GatewayRegistry {
   /**
    * Auto-learn Telegram chat IDs: when a message arrives from a Telegram user,
    * update any contact/alias that used a phone number format with the real
-   * numeric chat ID. This fixes the common mistake of storing +91XXXXXXXXXX
-   * instead of the Telegram-assigned chat ID.
+   * numeric chat ID. Also auto-registers new users with status: 'pending'
+   * for admin approval. Uses the sender's Telegram first_name as the
+   * display name.
    */
-  private async learnTelegramChatId(senderId: string, channelId: string): Promise<void> {
+  private async learnTelegramChatId(senderId: string, channelId: string, senderName?: string): Promise<void> {
     try {
       const { readGatewayContacts, upsertGatewayContact } = await import('../gateway/contacts.js');
       const { readAliases, writeAliases } = await import('./channel-directory.js');
@@ -695,18 +697,24 @@ export class GatewayRegistry {
       // Update contacts that use phone number format for Telegram
       for (const c of contacts) {
         if (c.platform === 'telegram' && /^\+?\d{10,15}$/.test(c.id) && c.id !== channelId) {
-          upsertGatewayContact({ ...c, id: channelId });
+          upsertGatewayContact({ ...c, id: channelId, status: c.status ?? 'approved' });
           logger.info(`gateway: auto-learned Telegram chat ID for ${c.name}: ${c.id} → ${channelId}`);
           updated = true;
         }
       }
 
-      // Auto-create contact for NEW Telegram users (if not already known)
+      // Auto-register NEW Telegram users with status: 'pending'
       const existingContact = contacts.find((c) => c.platform === 'telegram' && c.id === channelId);
       if (!existingContact) {
-        const autoName = `telegram-user-${channelId.slice(-4)}`;
-        upsertGatewayContact({ name: autoName, platform: 'telegram', id: channelId });
-        logger.info(`gateway: auto-created Telegram contact '${autoName}' for chat ID ${channelId}`);
+        const name = (senderName || '').trim() || `telegram-user-${channelId.slice(-4)}`;
+        upsertGatewayContact({
+          name,
+          platform: 'telegram',
+          id: channelId,
+          status: 'pending',
+          registeredAt: Date.now(),
+        });
+        logger.info(`gateway: 🆕 new Telegram user registered: '${name}' (ID: ${channelId}) — pending admin approval`);
         updated = true;
       }
 

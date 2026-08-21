@@ -101,4 +101,44 @@ describe('provider catalog (Issue 001 — all 17+ providers)', () => {
     expect(azure?.apiKeyHeader).toBe('api-key');
     expect(azure?.apiVersionQuery).toContain('api-version=');
   });
+
+  describe('bedrock region resolution', () => {
+    const origRegion = process.env.BEDROCK_REGION;
+
+    afterEach(() => {
+      if (origRegion === undefined) {
+        delete process.env.BEDROCK_REGION;
+      } else {
+        process.env.BEDROCK_REGION = origRegion;
+      }
+    });
+
+    it('defaults to us-east-1 when BEDROCK_REGION is not set', () => {
+      delete process.env.BEDROCK_REGION;
+      const bedrock = getCatalogProvider('bedrock');
+      expect(bedrock?.baseUrl).toBe('https://bedrock-runtime.us-east-1.amazonaws.com/openai/v1');
+    });
+
+    it('uses BEDROCK_REGION env var when set', () => {
+      process.env.BEDROCK_REGION = 'us-west-2';
+      const bedrock = getCatalogProvider('bedrock');
+      expect(bedrock?.baseUrl).toBe('https://bedrock-runtime.us-west-2.amazonaws.com/openai/v1');
+    });
+
+    it('does not default to eu-north-1 (limited model availability)', () => {
+      delete process.env.BEDROCK_REGION;
+      const bedrock = getCatalogProvider('bedrock');
+      expect(bedrock?.baseUrl).not.toContain('eu-north-1');
+    });
+
+    it('bedrock entry has required fields', () => {
+      const bedrock = getCatalogProvider('bedrock');
+      expect(bedrock).toBeDefined();
+      expect(bedrock?.id).toBe('bedrock');
+      expect(bedrock?.envVar).toBe('AWS_BEARER_TOKEN');
+      expect(bedrock?.openAICompat).toBe(true);
+      expect(bedrock?.capabilities).toBeDefined();
+      expect(bedrock?.contextWindow).toBe(200_000);
+    });
+  });
 });
