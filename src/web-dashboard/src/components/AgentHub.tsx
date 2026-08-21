@@ -930,7 +930,9 @@ export default function AgentHub() {
                 </thead>
                 <tbody>
                   {contacts.map((c) => {
-                    const inAllowList = (data?.channels?.policies?.[c.platform]?.allowedUsers ?? []).some((u) => sameVerifiedId(u, c.id));
+                    const status = (c as Record<string, unknown>).status as string | undefined;
+                    const statusClass = status === 'approved' ? 'pass' : status === 'pending' ? 'warn' : status === 'rejected' ? 'fail' : 'warn';
+                    const statusLabel = status === 'approved' ? '✅ approved' : status === 'pending' ? '⏳ pending' : status === 'rejected' ? '🚫 rejected' : '⚠ not in allow-list';
                     return (
                       <tr key={`${c.platform}:${c.id}`}>
                         {/* Personal contact names are never shown — a generic
@@ -940,8 +942,8 @@ export default function AgentHub() {
                         <td className="admin-provider-type">{c.platform}</td>
                         <td>{showId(c.id)}</td>
                         <td>
-                          <span className={`admin-check-badge admin-check-${inAllowList ? 'pass' : 'warn'}`}>
-                            {inAllowList ? '✅ verified' : '⚠ not in allow-list'}
+                          <span className={`admin-check-badge admin-check-${statusClass}`}>
+                            {statusLabel}
                           </span>
                         </td>
                         <td>
