@@ -897,55 +897,41 @@ export default function AgentHub() {
             })}
           </div>
 
-          <h3 className="section-subtitle" style={{ marginTop: 22 }}>📇 Saved contacts (validated list)</h3>
-          <p className="admin-hint">
-            Every verified contact saved across platforms — <strong>Name + Contact No</strong>, exactly as the CLI
-            (<code>buff whatsapp contact add &lt;Name&gt; &lt;number&gt;</code>) stores them. A contact shows a{' '}
-            <strong>verified</strong> badge when its number is in the platform's allowed list; ✕ removes it from
-            both places. Changes apply when you press <strong>💾 Save permissions</strong>.
-          </p>
-          {contacts.length > 0 ? (
-            <div className="admin-table-wrapper">
-              <table className="admin-table">
-                <thead>
-                  <tr>
-                    <th>Name</th>
-                    <th>Platform</th>
-                    <th>Contact</th>
-                    <th>Status</th>
-                    <th />
-                  </tr>
-                </thead>
-                <tbody>
-                  {contacts.map((c) => {
-                    const status = c.status;
-                    const statusClass = status === 'approved' ? 'pass' : status === 'pending' ? 'warn' : status === 'rejected' ? 'fail' : 'warn';
-                    const statusLabel = status === 'approved' ? '✅ approved' : status === 'pending' ? '⏳ pending' : status === 'rejected' ? '🚫 rejected' : '⚠ not in allow-list';
-                    const phone = c.phone ? ` (📱 ${c.phone})` : '';
-                    return (
-                      <tr key={`${c.platform}:${c.id}`}>
-                        <td className="contact-name">{c.name}</td>
-                        <td className="admin-provider-type">{c.platform}</td>
-                        <td><code>{c.id}</code>{phone}</td>
-                        <td>
-                          <span className={`admin-check-badge admin-check-${statusClass}`}>
-                            {statusLabel}
-                          </span>
-                        </td>
-                        <td>
-                          <button className="admin-refresh-btn" disabled={policyBusy} onClick={() => removeContact(c)}>✕</button>
-                        </td>
-                      </tr>
-                    );
-                  })}
-                </tbody>
-              </table>
+          <h3 className="section-subtitle" style={{ marginTop: 22 }}>📇 Telegram User Onboarding</h3>
+          <div className="onboarding-summary">
+            <p className="admin-hint" style={{ marginBottom: 12 }}>
+              Users who message your bot are auto-registered here. Approve them to enable outbound messaging.
+            </p>
+            {(() => {
+              const pending = contacts.filter((c) => c.status === 'pending').length;
+              const approved = contacts.filter((c) => c.status === 'approved').length;
+              const rejected = contacts.filter((c) => c.status === 'rejected').length;
+              return (
+                <div className="onboarding-stats">
+                  <span className="onboarding-stat pending">⏳ {pending} pending</span>
+                  <span className="onboarding-stat approved">✅ {approved} approved</span>
+                  <span className="onboarding-stat rejected">🚫 {rejected} rejected</span>
+                </div>
+              );
+            })()}
+            <div className="onboarding-steps">
+              <div className="onboarding-step">
+                <span className="onboarding-step-num">1</span>
+                <span>User sends any message to <code>@agent_nuvira_bot</code></span>
+              </div>
+              <div className="onboarding-step">
+                <span className="onboarding-step-num">2</span>
+                <span>Bot auto-registers them as <strong>⏳ pending</strong></span>
+              </div>
+              <div className="onboarding-step">
+                <span className="onboarding-step-num">3</span>
+                <span>Admin approves → they can receive outbound messages</span>
+              </div>
             </div>
-          ) : (
-            <div className="empty-state" style={{ padding: '14px' }}>
-              No saved contacts yet — add one in a platform card above (Name + Contact No).
-            </div>
-          )}
+            <a href="/contacts" className="admin-refresh-btn" style={{ marginTop: 12, display: 'inline-block', textDecoration: 'none' }}>
+              📋 Go to Contacts tab to manage →
+            </a>
+          </div>
 
           <h3 className="section-subtitle" style={{ marginTop: 22 }}>📊 Status recipients</h3>
           <p className="admin-hint">

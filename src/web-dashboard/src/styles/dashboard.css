@@ -5402,3 +5402,82 @@ body {
   font-size: 13px;
   width: 100%;
 }
+
+/* ═══════════════════════════════════════════════════════════════════════════
+   Onboarding Summary
+   ════════════════════════════════════════════════════════════════════════ */
+
+.onboarding-summary {
+  background: var(--bg-secondary, #161b22);
+  border: 1px solid var(--border-light, #30363d);
+  border-radius: 8px;
+  padding: 16px;
+}
+
+.onboarding-stats {
+  display: flex;
+  gap: 16px;
+  margin-bottom: 16px;
+  flex-wrap: wrap;
+}
+
+.onboarding-stat {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 12px;
+  border-radius: 6px;
+  font-size: 13px;
+  font-weight: 500;
+}
+
+.onboarding-stat.pending {
+  background: rgba(210, 153, 34, 0.15);
+  color: #d29922;
+}
+
+.onboarding-stat.approved {
+  background: rgba(56, 189, 148, 0.15);
+  color: #38bd94;
+}
+
+.onboarding-stat.rejected {
+  background: rgba(218, 54, 51, 0.15);
+  color: #da3633;
+}
+
+.onboarding-steps {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.onboarding-step {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  font-size: 13px;
+  color: var(--text-primary, #e6edf3);
+}
+
+.onboarding-step-num {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 24px;
+  height: 24px;
+  background: var(--accent-blue, #58a6ff);
+  color: #fff;
+  border-radius: 50%;
+  font-weight: 700;
+  font-size: 12px;
+  flex-shrink: 0;
+}
+
+.onboarding-step code {
+  background: var(--bg-tertiary, #1c2333);
+  padding: 2px 6px;
+  border-radius: 4px;
+  font-size: 12px;
+  color: var(--accent-blue, #58a6ff);
+}
