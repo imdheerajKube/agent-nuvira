@@ -23,6 +23,7 @@
  * `z.toJSONSchema` — never hand-kept.
  */
 
+import { join } from 'path';
 import { z, toJSONSchema, type ZodType } from 'zod';
 import { ACTION_BY_INTENT } from '../nlu/actions.js';
 
@@ -2248,6 +2249,139 @@ registerTool({
     switch (action) {
       case 'send': return target && text ? mgr.send({ platform, target, text, threadId }).then((r: any) => JSON.stringify(r)) : 'target and text required';
       case 'list-targets': return mgr.listTargets(platform).then((r: any) => JSON.stringify(r));
+      default: return 'Unknown action';
+    }
+  }),
+});
+
+// ─── Skills Ecosystem Tools ───────────────────────────────────────────────
+
+// Skills Hub tool
+registerTool({
+  name: 'skills_hub',
+  description: 'Skill marketplace: install, uninstall, list skills from GitHub, local, or hub sources.',
+  category: 'workflow',
+  inputSchema: z.object({
+    action: z.enum(['install', 'uninstall', 'list-installed', 'list-available', 'info']).describe('Action'),
+    source: z.string().optional().describe('Source name (github, local)'),
+    skillName: z.string().optional().describe('Skill name'),
+    targetDir: z.string().optional().describe('Target directory'),
+  }),
+  endsAgentStep: false,
+  run: (args) => import('./skills-hub.js').then((m) => {
+    const { action, source, skillName, targetDir } = args as any;
+    const mgr = m.getSkillsHubManager();
+    const target = targetDir || join(process.env.HOME || '~', '.buff', 'skills');
+    switch (action) {
+      case 'install': return source && skillName ? mgr.install(source, skillName, target).then((r: any) => JSON.stringify(r)) : 'source and skillName required';
+      case 'uninstall': return skillName ? mgr.uninstall(skillName, target).then((r: any) => JSON.stringify({ removed: r })) : 'skillName required';
+      case 'list-installed': return mgr.listInstalled(target).then((r: any) => JSON.stringify(r));
+      case 'list-available': return mgr.listAvailable().then((r: any) => JSON.stringify(r));
+      case 'info': return skillName ? mgr.getInfo(skillName, target).then((r: any) => JSON.stringify(r)) : 'skillName required';
+      default: return 'Unknown action';
+    }
+  }),
+});
+
+// Skills Sync tool
+registerTool({
+  name: 'skills_sync',
+  description: 'Sync bundled skills from repo to user directory with manifest tracking.',
+  category: 'workflow',
+  inputSchema: z.object({
+    action: z.enum(['sync', 'status', 'force-sync']).describe('Action'),
+    skillName: z.string().optional().describe('Skill name for force-sync'),
+    bundledDir: z.string().optional().describe('Bundled skills directory'),
+    targetDir: z.string().optional().describe('Target directory'),
+  }),
+  endsAgentStep: false,
+  run: (args) => import('./skills-sync.js').then((m) => {
+    const { action, skillName, bundledDir, targetDir } = args as any;
+    const mgr = m.getSkillsSyncManager({ bundledDir, targetDir });
+    switch (action) {
+      case 'sync': return mgr.sync().then((r: any) => JSON.stringify(r));
+      case 'status': return JSON.stringify(mgr.getStatus());
+      case 'force-sync': return skillName ? mgr.forceSync(skillName).then((r: any) => JSON.stringify({ synced: r })) : 'skillName required';
+      default: return 'Unknown action';
+    }
+  }),
+});
+
+// Skills Sync Client tool
+registerTool({
+  name: 'skills_sync_client',
+  description: 'Low-level sync: push/pull skills to remote sync plane.',
+  category: 'workflow',
+  inputSchema: z.object({
+    action: z.enum(['commit', 'push', 'pull', 'status']).describe('Action'),
+    skillsDir: z.string().optional().describe('Skills directory'),
+    message: z.string().optional().describe('Commit message'),
+    remoteUrl: z.string().optional().describe('Remote sync URL'),
+  }),
+  endsAgentStep: false,
+  run: (args) => import('./skills-sync-client.js').then((m) => {
+    const { action, skillsDir, message, remoteUrl } = args as any;
+    const client = m.getSkillsSyncClient({ remoteUrl });
+    const dir = skillsDir || join(process.env.HOME || '~', '.buff', 'skills');
+    switch (action) {
+      case 'commit': return message ? JSON.stringify({ hash: client.commit(dir, message) }) : 'message required';
+      case 'push': return client.push().then((r: any) => JSON.stringify(r));
+      case 'pull': return client.pull().then((r: any) => JSON.stringify(r));
+      case 'status': return JSON.stringify(client.getStatus());
+      default: return 'Unknown action';
+    }
+  }),
+});
+
+// Skill Usage tool
+registerTool({
+  name: 'skill_usage',
+  description: 'Track skill usage: record, get stats, most used, recently used.',
+  category: 'workflow',
+  inputSchema: z.object({
+    action: z.enum(['record', 'get', 'most-used', 'recently-used', 'stats']).describe('Action'),
+    skillName: z.string().optional().describe('Skill name'),
+    context: z.string().optional().describe('Usage context'),
+    tokens: z.number().optional().describe('Tokens used'),
+  }),
+  endsAgentStep: false,
+  run: (args) => import('./skill-metadata.js').then((m) => {
+    const { action, skillName, context, tokens } = args as any;
+    const tracker = m.getSkillUsageTracker();
+    switch (action) {
+      case 'record': return skillName ? (tracker.record(skillName, context, tokens), JSON.stringify({ recorded: true })) : 'skillName required';
+      case 'get': return skillName ? JSON.stringify(tracker.get(skillName)) : 'skillName required';
+      case 'most-used': return JSON.stringify(tracker.getMostUsed());
+      case 'recently-used': return JSON.stringify(tracker.getRecentlyUsed());
+      case 'stats': return JSON.stringify(tracker.getStats());
+      default: return 'Unknown action';
+    }
+  }),
+});
+
+// Skill Provenance tool
+registerTool({
+  name: 'skill_provenance',
+  description: 'Track skill provenance: origin, author, version, verification.',
+  category: 'workflow',
+  inputSchema: z.object({
+    action: z.enum(['record', 'get', 'verify', 'list', 'remove']).describe('Action'),
+    skillName: z.string().optional().describe('Skill name'),
+    source: z.enum(['bundled', 'hub', 'local', 'git']).optional().describe('Source type'),
+    sourceUrl: z.string().optional().describe('Source URL'),
+    author: z.string().optional().describe('Author'),
+    version: z.string().optional().describe('Version'),
+  }),
+  endsAgentStep: false,
+  run: (args) => import('./skill-metadata.js').then((m) => {
+    const { action, skillName, source, sourceUrl, author, version } = args as any;
+    const mgr = m.getSkillProvenanceManager();
+    switch (action) {
+      case 'record': return skillName && source ? (mgr.record({ name: skillName, source, sourceUrl, author, version, installedAt: Date.now(), verified: true }), JSON.stringify({ recorded: true })) : 'skillName and source required';
+      case 'get': return skillName ? JSON.stringify(mgr.get(skillName)) : 'skillName required';
+      case 'verify': return skillName ? JSON.stringify(mgr.verify(skillName, '')) : 'skillName required';
+      case 'list': return JSON.stringify(mgr.getAll());
+      case 'remove': return skillName ? (mgr.remove(skillName), JSON.stringify({ removed: true })) : 'skillName required';
       default: return 'Unknown action';
     }
   }),
