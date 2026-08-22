@@ -20,7 +20,7 @@ import { randomBytes } from 'node:crypto';
 
 // ─── Types ───────────────────────────────────────────────────────────────
 
-export type SkillRuntime = 'python' | 'node' | 'shell' | 'auto';
+export type SkillRuntime = 'python' | 'node' | 'shell' | 'ruby' | 'go' | 'rust' | 'auto';
 
 export interface SkillExecutionResult {
   success: boolean;
@@ -70,6 +70,9 @@ export function detectRuntime(
     if (ext === '.py') return 'python';
     if (ext === '.js' || ext === '.mjs' || ext === '.cjs') return 'node';
     if (ext === '.ts' || ext === '.mts' || ext === '.cts') return 'node';
+    if (ext === '.rb') return 'ruby';
+    if (ext === '.go') return 'go';
+    if (ext === '.rs') return 'rust';
     if (ext === '.sh' || ext === '.bash') return 'shell';
   }
 
@@ -80,6 +83,15 @@ export function detectRuntime(
   if (skillContent.includes('#!/usr/bin/env node') || skillContent.includes('#!/usr/bin/env tsx') || skillContent.includes('#!/usr/bin/env ts-node')) {
     return 'node';
   }
+  if (skillContent.includes('#!/usr/bin/env ruby') || skillContent.includes('#!/usr/bin/ruby')) {
+    return 'ruby';
+  }
+  if (skillContent.includes('#!/usr/bin/env go') || skillContent.includes('package main')) {
+    return 'go';
+  }
+  if (skillContent.includes('fn main()') || skillContent.includes('use std::')) {
+    return 'rust';
+  }
   if (skillContent.includes('#!/bin/bash') || skillContent.includes('#!/usr/bin/env bash')) {
     return 'shell';
   }
@@ -88,6 +100,15 @@ export function detectRuntime(
   }
   if (skillContent.includes('console.log') || skillContent.includes('const ') || skillContent.includes('require(') || skillContent.includes('process.argv')) {
     return 'node';
+  }
+  if (skillContent.includes('puts ') || skillContent.includes('end')) {
+    return 'ruby';
+  }
+  if (skillContent.includes('func ') && skillContent.includes('return')) {
+    return 'go';
+  }
+  if (skillContent.includes('fn ') && skillContent.includes('let ')) {
+    return 'rust';
   }
 
   // 4. Default to shell (most portable)
@@ -170,7 +191,15 @@ export async function executeSkill(
   const tmpDir = join(tmpdir(), 'skill-exec', randomBytes(8).toString('hex'));
   await mkdir(tmpDir, { recursive: true });
 
-  const ext = runtime === 'python' ? '.py' : runtime === 'node' ? '.js' : '.sh';
+  const extMap: Record<string, string> = {
+    python: '.py',
+    node: '.js',
+    shell: '.sh',
+    ruby: '.rb',
+    go: '.go',
+    rust: '.rs',
+  };
+  const ext = extMap[runtime] ?? '.sh';
   const scriptPath = join(tmpDir, `skill${ext}`);
   await writeFile(scriptPath, scriptContent, 'utf-8');
 
@@ -221,6 +250,16 @@ function getRuntimeCommand(
       return { command: 'node', args: [scriptPath] };
     case 'shell':
       return { command: 'bash', args: [scriptPath] };
+    case 'ruby':
+      return { command: 'ruby', args: [scriptPath] };
+    case 'go':
+      // Go scripts need to be run with 'go run'
+      return { command: 'go', args: ['run', scriptPath] };
+    case 'rust':
+      // Rust scripts need to be compiled and run, or use rust-script
+      // For simplicity, we'll use 'rustc' to compile and then run
+      const binaryPath = scriptPath.replace(/\.rs$/, '');
+      return { command: 'bash', args: ['-c', `rustc ${scriptPath} -o ${binaryPath} && ${binaryPath}`] };
     default:
       return { command: 'bash', args: [scriptPath] };
   }

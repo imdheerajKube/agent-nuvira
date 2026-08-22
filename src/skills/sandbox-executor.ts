@@ -283,6 +283,12 @@ function getRuntimeFromPath(filePath: string): string {
     case 'mts':
     case 'cts':
       return 'node';
+    case 'rb':
+      return 'ruby';
+    case 'go':
+      return 'go';
+    case 'rs':
+      return 'rust';
     case 'sh':
     case 'bash':
       return 'shell';
@@ -302,6 +308,13 @@ function getRuntimeCommand(runtime: string): string[] {
       return ['node'];
     case 'shell':
       return ['bash'];
+    case 'ruby':
+      return ['ruby'];
+    case 'go':
+      return ['go', 'run'];
+    case 'rust':
+      // Rust needs compilation, handled specially in buildDockerArgs
+      return ['bash', '-c'];
     default:
       return ['bash'];
   }
