@@ -2499,3 +2499,144 @@ registerTool({
     }
   }),
 });
+
+// MCP Tool — Dynamic MCP server connection and tool invocation
+registerTool({
+  name: 'mcp_tool',
+  description: 'Connect to external MCP servers and invoke their tools — stdio, HTTP, or SSE transport.',
+  category: 'workflow',
+  inputSchema: z.object({
+    action: z.enum(['connect', 'disconnect', 'list-servers', 'list-tools', 'call', 'health']).describe('Action'),
+    server: z.string().optional().describe('Server name'),
+    tool: z.string().optional().describe('Tool name for call action'),
+    args: z.record(z.string(), z.any()).optional().describe('Tool arguments for call action'),
+    timeout: z.number().optional().describe('Timeout in ms for tool calls'),
+  }),
+  endsAgentStep: false,
+  run: (args) => import('./mcp-client-tool.js').then((m) => {
+    const { action, server, tool, args: toolArgs, timeout } = args as any;
+    const mgr = m.getMCPToolManager();
+    switch (action) {
+      case 'connect': return server ? mgr.connect(server).then((r: any) => JSON.stringify(r)) : 'server required';
+      case 'disconnect': return server ? mgr.disconnect(server).then((r: any) => JSON.stringify(r)) : 'server required';
+      case 'list-servers': return JSON.stringify(mgr.listServers());
+      case 'list-tools': return JSON.stringify(mgr.listTools());
+      case 'call': return server && tool ? mgr.callTool(server, tool, toolArgs || {}, timeout).then((r: any) => JSON.stringify(r)) : 'server and tool required';
+      case 'health': return mgr.checkHealth().then((r: any) => JSON.stringify(r));
+      default: return 'Unknown action';
+    }
+  }),
+});
+
+// Computer Use — Desktop automation via cua-driver
+registerTool({
+  name: 'computer_use',
+  description: 'Desktop control via cua-driver — screenshots, mouse, keyboard, scroll without stealing focus.',
+  category: 'workflow',
+  inputSchema: z.object({
+    action: z.enum(['capture', 'click', 'double_click', 'right_click', 'middle_click',
+      'drag', 'scroll', 'type', 'key', 'set_value', 'wait',
+      'list_apps', 'list_windows', 'focus_app', 'health']).describe('Action'),
+    x: z.number().optional().describe('X coordinate for click/drag'),
+    y: z.number().optional().describe('Y coordinate for click/drag'),
+    element: z.number().optional().describe('Element index for SOM click'),
+    text: z.string().optional().describe('Text to type'),
+    keys: z.string().optional().describe('Key combination'),
+    mode: z.enum(['screenshot', 'som']).optional().describe('Capture mode'),
+    app: z.string().optional().describe('App name for focus_app'),
+  }),
+  endsAgentStep: false,
+  run: (args) => import('./computer-use-tool.js').then((m) => {
+    const tool = m.getComputerUseTool();
+    return tool.execute((args as any).action, args as any).then((r: any) => JSON.stringify(r));
+  }),
+});
+
+// Async Delegation — Background child agent execution
+registerTool({
+  name: 'async_delegation',
+  description: 'Run child agents in background without blocking parent — parallel task execution.',
+  category: 'workflow',
+  inputSchema: z.object({
+    action: z.enum(['dispatch', 'status', 'list', 'cancel', 'drain', 'stats']).describe('Action'),
+    id: z.string().optional().describe('Task ID for status/cancel'),
+    goal: z.string().optional().describe('Task goal for dispatch'),
+    context: z.string().optional().describe('Task context for dispatch'),
+  }),
+  endsAgentStep: false,
+  run: (args) => import('./async-delegation.js').then((m) => {
+    const mgr = m.getAsyncDelegationManager();
+    const { action, id, goal, context } = args as any;
+    switch (action) {
+      case 'dispatch': return goal ? JSON.stringify(mgr.dispatch({ goal, context })) : 'goal required';
+      case 'status': return id ? JSON.stringify(mgr.getStatus(id)) : 'id required';
+      case 'list': return JSON.stringify(mgr.listTasks());
+      case 'cancel': return id ? JSON.stringify({ cancelled: mgr.cancel(id) }) : 'id required';
+      case 'drain': return JSON.stringify(mgr.drainCompletionQueue());
+      case 'stats': return JSON.stringify(mgr.getStats());
+      default: return 'Unknown action';
+    }
+  }),
+});
+
+// Delegation Live Log — Real-time monitoring of delegated tasks
+registerTool({
+  name: 'delegation_live_log',
+  description: 'Live tail-able transcripts for delegated subagents — real-time monitoring.',
+  category: 'workflow',
+  inputSchema: z.object({
+    action: z.enum(['create', 'log', 'update-status', 'prune']).describe('Action'),
+    delegationId: z.string().optional().describe('Delegation ID'),
+    taskIndex: z.number().optional().describe('Task index'),
+    role: z.string().optional().describe('Log entry role'),
+    content: z.string().optional().describe('Log entry content'),
+    status: z.string().optional().describe('Task status for update'),
+  }),
+  endsAgentStep: false,
+  run: (args) => import('./delegation-live-log.js').then((m) => {
+    const mgr = m.getDelegationLiveLogManager();
+    const { action, delegationId, taskIndex, role, content, status } = args as any;
+    switch (action) {
+      case 'create': {
+        const tasks = [{ goal: content || 'Background task' }];
+        return JSON.stringify(mgr.createTranscripts(tasks, delegationId));
+      }
+      case 'log': {
+        const writer = mgr.getWriter(delegationId, taskIndex || 0);
+        if (writer) { writer.event(role || 'system', content || ''); return JSON.stringify({ logged: true }); }
+        return JSON.stringify({ error: 'Transcript not found' });
+      }
+      case 'update-status': {
+        mgr.updateStatus(delegationId, [{ taskIndex: taskIndex || 0, status: status || 'completed' }]);
+        return JSON.stringify({ updated: true });
+      }
+      case 'prune': return JSON.stringify({ pruned: mgr.pruneStale() });
+      default: return 'Unknown action';
+    }
+  }),
+});
+
+// OpenRouter Client — Multi-LLM routing
+registerTool({
+  name: 'openrouter_client',
+  description: 'Route LLM calls to multiple providers via OpenRouter — cost optimization and fallback.',
+  category: 'workflow',
+  inputSchema: z.object({
+    action: z.enum(['chat', 'models', 'stats']).describe('Action'),
+    model: z.string().optional().describe('Model ID'),
+    messages: z.array(z.object({ role: z.enum(['system', 'user', 'assistant']), content: z.string() })).optional().describe('Chat messages'),
+    maxTokens: z.number().optional().describe('Max tokens'),
+    temperature: z.number().optional().describe('Temperature'),
+  }),
+  endsAgentStep: false,
+  run: (args) => import('./openrouter-client.js').then((m) => {
+    const client = m.getOpenRouterClient();
+    const { action, model, messages, maxTokens, temperature } = args as any;
+    switch (action) {
+      case 'chat': return messages ? client.chat(messages, { model, maxTokens, temperature }).then((r: any) => JSON.stringify(r)) : 'messages required';
+      case 'models': return client.listModels().then((r: any) => JSON.stringify(r));
+      case 'stats': return JSON.stringify(client.getStats());
+      default: return 'Unknown action';
+    }
+  }),
+});

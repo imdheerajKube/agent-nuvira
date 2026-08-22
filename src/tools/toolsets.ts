@@ -101,8 +101,8 @@ export const TOOLSETS: ToolsetDef[] = [
   {
     name: 'system',
     label: 'System & tooling',
-    description: 'Plain-English system/tooling control: start/stop the dashboard or gateway, verified senders, platform setup, evals, stats (via the buff CLI — run_cli).',
-    tools: ['run_cli'],
+    description: 'Plain-English system/tooling control: start/stop the dashboard or gateway, verified senders, platform setup, evals, stats, multi-LLM routing (via the buff CLI — run_cli).',
+    tools: ['run_cli', 'openrouter_client'],
   },
   {
     name: 'browser',
@@ -113,8 +113,8 @@ export const TOOLSETS: ToolsetDef[] = [
   {
     name: 'media',
     label: 'Media & modality',
-    description: 'Image generation, speech synthesis, transcription, vision, video generation, voice mode.',
-    tools: ['generate_image', 'speak', 'transcribe', 'describe_image', 'vision', 'video_generate', 'voice_mode', 'wake_word', 'neutts_synth'],
+    description: 'Image generation, speech synthesis, transcription, vision, video generation, voice mode, desktop automation.',
+    tools: ['generate_image', 'speak', 'transcribe', 'describe_image', 'vision', 'video_generate', 'voice_mode', 'wake_word', 'neutts_synth', 'computer_use'],
   },
   {
     name: 'mcp-tools',
@@ -149,8 +149,8 @@ export const TOOLSETS: ToolsetDef[] = [
   {
     name: 'delegation',
     label: 'Delegation',
-    description: 'Subagent spawning, delegation system, managed gateway.',
-    tools: ['delegate_system', 'subagent', 'managed_gateway', 'messaging'],
+    description: 'Subagent spawning, delegation system, managed gateway, async execution, live logs.',
+    tools: ['delegate_system', 'subagent', 'managed_gateway', 'messaging', 'async_delegation', 'delegation_live_log'],
   },
   {
     name: 'platforms',
@@ -161,8 +161,8 @@ export const TOOLSETS: ToolsetDef[] = [
   {
     name: 'mcp',
     label: 'MCP servers',
-    description: 'Tools exposed by configured MCP servers. Disabling removes MCP tools from the model schema.',
-    tools: [],
+    description: 'MCP server connection, tool discovery, and invocation. Disabling removes MCP tools from the model schema.',
+    tools: ['mcp_tool'],
     bindsMcpServers: true,
   },
   {
