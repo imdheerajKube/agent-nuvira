@@ -136,7 +136,7 @@ export class SubagentManager extends EventEmitter {
 
     try {
       // Spawn child process
-      const child = fork(join(import.meta.dirname, 'subagent-worker.js'), [], {
+      const child = fork(join(import.meta.dirname, 'child-agent-entry.js'), [], {
         cwd: config.cwd || process.cwd(),
         env: {
           ...process.env,
