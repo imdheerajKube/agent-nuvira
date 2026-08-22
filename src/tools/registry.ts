@@ -2065,3 +2065,108 @@ registerTool({
     }
   }),
 });
+
+// ─── Batch 4: Media Tools ─────────────────────────────────────────────────
+
+// Video generation tool
+registerTool({
+  name: 'video_generate',
+  description: 'Generate videos from text prompts or images. Supports FAL/BFL providers.',
+  category: 'workflow',
+  inputSchema: z.object({
+    action: z.enum(['generate', 'status', 'providers']).describe('Action'),
+    prompt: z.string().optional().describe('Text prompt'),
+    imageUrl: z.string().optional().describe('Input image URL'),
+    duration: z.number().optional().describe('Duration in seconds'),
+    aspectRatio: z.string().optional().describe('Aspect ratio (16:9, 9:16, 1:1)'),
+    resolution: z.string().optional().describe('Resolution (480p, 720p, 1080p)'),
+    jobId: z.string().optional().describe('Job ID for status check'),
+  }),
+  endsAgentStep: false,
+  run: (args) => import('./video-generation.js').then((m) => {
+    const { action, prompt, imageUrl, duration, aspectRatio, resolution, jobId } = args as any;
+    const mgr = m.getVideoGenManager();
+    switch (action) {
+      case 'generate': return prompt ? mgr.generate({ prompt, imageUrl, duration, aspectRatio, resolution }).then((r: any) => JSON.stringify(r)) : 'prompt required';
+      case 'status': return jobId ? mgr.status(jobId).then((r: any) => JSON.stringify(r)) : 'jobId required';
+      case 'providers': return JSON.stringify({ providers: mgr.listProviders() });
+      default: return 'Unknown action';
+    }
+  }),
+});
+
+// Voice mode tool
+registerTool({
+  name: 'voice_mode',
+  description: 'Voice interaction: record audio, play audio, convert formats.',
+  category: 'workflow',
+  inputSchema: z.object({
+    action: z.enum(['start-record', 'stop-record', 'play', 'convert', 'status', 'check']).describe('Action'),
+    audioPath: z.string().optional().describe('Audio file path'),
+    outputPath: z.string().optional().describe('Output file path'),
+    duration: z.number().optional().describe('Recording duration'),
+  }),
+  endsAgentStep: false,
+  run: (args) => import('./voice-mode.js').then((m) => {
+    const { action, audioPath, outputPath, duration } = args as any;
+    const mgr = m.getVoiceManager();
+    switch (action) {
+      case 'start-record': return mgr.startRecording({ duration }).then((r: any) => JSON.stringify(r));
+      case 'stop-record': return mgr.stopRecording().then((r: any) => JSON.stringify(r));
+      case 'play': return audioPath ? mgr.play(audioPath).then((r: any) => JSON.stringify({ success: r })) : 'audioPath required';
+      case 'convert': return audioPath && outputPath ? mgr.convert(audioPath, outputPath).then((r: any) => JSON.stringify({ success: r })) : 'audioPath and outputPath required';
+      case 'status': return JSON.stringify(mgr.getState());
+      case 'check': return mgr.isAvailable().then((r: any) => JSON.stringify(r));
+      default: return 'Unknown action';
+    }
+  }),
+});
+
+// Wake word tool
+registerTool({
+  name: 'wake_word',
+  description: 'Wake word detection: start/stop listening, configure words, simulate detection.',
+  category: 'workflow',
+  inputSchema: z.object({
+    action: z.enum(['start', 'stop', 'status', 'add-word', 'remove-word', 'simulate']).describe('Action'),
+    word: z.string().optional().describe('Wake word'),
+    sensitivity: z.number().optional().describe('Sensitivity (0-1)'),
+  }),
+  endsAgentStep: false,
+  run: (args) => import('./wake-word.js').then((m) => {
+    const { action, word, sensitivity } = args as any;
+    const detector = m.getWakeWordDetector();
+    switch (action) {
+      case 'start': return detector.start().then((r: any) => JSON.stringify({ started: r }));
+      case 'stop': return (detector.stop(), JSON.stringify({ stopped: true }));
+      case 'status': return JSON.stringify({ listening: detector.isListening(), words: detector.getWakeWords() });
+      case 'add-word': return word ? (detector.addWakeWord(word), JSON.stringify({ added: word })) : 'word required';
+      case 'remove-word': return word ? (detector.removeWakeWord(word), JSON.stringify({ removed: word })) : 'word required';
+      case 'simulate': return word ? (detector.simulateDetection(word), JSON.stringify({ simulated: word })) : 'word required';
+      default: return 'Unknown action';
+    }
+  }),
+});
+
+// NeuTTS synthesis tool
+registerTool({
+  name: 'neutts_synth',
+  description: 'High-quality text-to-speech synthesis via NeuTTS.',
+  category: 'workflow',
+  inputSchema: z.object({
+    action: z.enum(['synthesize', 'voices']).describe('Action'),
+    text: z.string().optional().describe('Text to synthesize'),
+    voice: z.string().optional().describe('Voice ID'),
+    speed: z.number().optional().describe('Speech speed'),
+  }),
+  endsAgentStep: false,
+  run: (args) => import('./neutts-synth.js').then((m) => {
+    const { action, text, voice, speed } = args as any;
+    const synth = m.getNeuTTSSynthesizer();
+    switch (action) {
+      case 'synthesize': return text ? synth.synthesize(text, { voice, speed }).then((r: any) => JSON.stringify(r)) : 'text required';
+      case 'voices': return synth.listVoices().then((r: any) => JSON.stringify(r));
+      default: return 'Unknown action';
+    }
+  }),
+});
