@@ -114,6 +114,58 @@ export async function executeSkill(
   const timeoutMs = context.timeoutMs ?? 30_000;
   const maxOutputBytes = context.maxOutputBytes ?? 1_024 * 1024;
 
+  // Filter env vars: blocklist prevents automatic passthrough from process.env,
+  // but explicit caller-provided env vars are always allowed (caller knows what they're doing).
+  const filteredEnv: Record<string, string> = {};
+  
+  // First, add process.env vars that are NOT in the blocklist
+  for (const [key, value] of Object.entries(process.env)) {
+    if (value !== undefined && !PROVIDER_ENV_BLOCKLIST.has(key)) {
+      filteredEnv[key] = value;
+    }
+  }
+  
+  // Then, overlay caller-provided env vars (always allowed, even if in blocklist)
+  if (context.env) {
+    for (const [key, value] of Object.entries(context.env)) {
+      filteredEnv[key] = value;
+    }
+  }
+
+  // Check if sandboxed execution is requested
+  if (context.sandboxed) {
+    // Use Docker sandbox for untrusted skills
+    const { executeInSandbox, checkDockerAvailable } = await import('./sandbox-executor.js');
+    
+    const dockerStatus = await checkDockerAvailable();
+    if (!dockerStatus.available) {
+      // Fall back to local execution if Docker is not available
+      console.warn('Docker not available, falling back to local execution');
+    } else {
+      // Execute in Docker sandbox
+      const result = await executeInSandbox(
+        scriptContent,
+        filePath ?? 'skill.sh',
+        filteredEnv,
+        context.args,
+        {
+          timeoutMs,
+          networkMode: 'none',
+        }
+      );
+
+      return {
+        success: result.success,
+        stdout: result.stdout,
+        stderr: result.stderr,
+        exitCode: result.exitCode,
+        runtime,
+        durationMs: result.durationMs,
+      };
+    }
+  }
+
+  // Local execution (default)
   // Create a temporary file for the script
   const tmpDir = join(tmpdir(), 'skill-exec', randomBytes(8).toString('hex'));
   await mkdir(tmpDir, { recursive: true });
@@ -128,24 +180,6 @@ export async function executeSkill(
 
     // Append user-provided arguments
     const allArgs = [...runtimeArgs, ...(context.args ?? [])];
-
-    // Filter env vars: blocklist prevents automatic passthrough from process.env,
-    // but explicit caller-provided env vars are always allowed (caller knows what they're doing).
-    const filteredEnv: Record<string, string> = {};
-    
-    // First, add process.env vars that are NOT in the blocklist
-    for (const [key, value] of Object.entries(process.env)) {
-      if (value !== undefined && !PROVIDER_ENV_BLOCKLIST.has(key)) {
-        filteredEnv[key] = value;
-      }
-    }
-    
-    // Then, overlay caller-provided env vars (always allowed, even if in blocklist)
-    if (context.env) {
-      for (const [key, value] of Object.entries(context.env)) {
-        filteredEnv[key] = value;
-      }
-    }
 
     // Spawn the process
     const result = await spawnProcess(command, allArgs, {
