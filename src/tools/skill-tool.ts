@@ -109,10 +109,15 @@ export async function resolveSkill(name: string): Promise<ResolvedSkill | null> 
   let store = getSkillStore();
   let compiled: Skill | null = null;
   try {
-    compiled = store.get(name) ?? null;
+    compiled = store.get(name) ?? store.get(`skill-${name}`) ?? null;
     if (!compiled) {
-      const matches = store.search(name);
-      if (matches.length > 0) compiled = matches[0];
+      // Exact name match first, then fuzzy
+      const all = store.getAll();
+      compiled = all.find((s) => s.name === name) ?? null;
+      if (!compiled) {
+        const matches = store.search(name);
+        if (matches.length > 0) compiled = matches[0];
+      }
     }
   } catch {
     compiled = null;
