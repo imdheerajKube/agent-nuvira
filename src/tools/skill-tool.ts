@@ -533,6 +533,62 @@ async function runSkillExecute(
     }
   }
 
+  // Check execution approval for untrusted skills
+  const { shouldApproveExecution, recordApprovalDecision, createApprovalRequest } = await import('../skills/execution-approval.js');
+  // Use a session-like identifier (hash of skill name + timestamp for uniqueness)
+  const sessionId = `skill-exec-${Date.now()}`;
+  
+  // Determine skill source
+  let skillSource: 'bundled' | 'marketplace' | 'local' = 'local';
+  if (skillPath!.includes('.agents/skills')) {
+    skillSource = 'bundled';
+  } else if (skillPath!.includes('marketplace')) {
+    skillSource = 'marketplace';
+  }
+  
+  const skillMetadata = {
+    name: skillName,
+    description: skillContent!.match(/^description:\s*(.+)/m)?.[1]?.trim() ?? '',
+    source: skillSource,
+    runtime: execute.runtime ?? detectRuntime(skillContent!, skillPath!),
+    requiredEnvVars,
+  };
+  
+  const approvalResult = shouldApproveExecution(skillMetadata, sessionId);
+  
+  if (!approvalResult.approved) {
+    // Emit approval request event
+    const request = createApprovalRequest(skillMetadata, `execute ${skillName}`);
+    try {
+      ctx.emit?.('execution:approval_request', {
+        requestId: request.id,
+        skill: skillMetadata,
+        command: request.command,
+        message: approvalResult.reason,
+      });
+    } catch {
+      /* best-effort */
+    }
+    
+    return [
+      `🔐 Skill '${skillName}' requires approval before execution.`,
+      `\nReason: ${approvalResult.reason}`,
+      `\nSkill: ${skillMetadata.name}`,
+      `Description: ${skillMetadata.description}`,
+      `Runtime: ${skillMetadata.runtime}`,
+      `Source: ${skillMetadata.source}`,
+      `\nTo approve, reply with: "approve ${skillName}" or "execute ${skillName} --approved"`,
+    ].join('\n');
+  }
+  
+  // Record approval decision
+  recordApprovalDecision(skillName, sessionId, {
+    approved: true,
+    timestamp: Date.now(),
+    sessionId,
+    note: 'Auto-approved or user-approved',
+  });
+
   // Detect runtime
   const runtime = execute.runtime ?? detectRuntime(skillContent!, skillPath!);
 

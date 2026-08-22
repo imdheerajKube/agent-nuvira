@@ -4687,6 +4687,193 @@ body {
   font-family: 'SF Mono', 'Fira Code', monospace;
 }
 
+/* ── Execution History ─────────────────────────────────────────────────── */
+.execution-history {
+  padding: 12px;
+  background: var(--bg-secondary, #1b1f27);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+}
+
+.execution-history-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 12px;
+}
+
+.execution-history-title {
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--text-primary);
+  margin: 0;
+}
+
+.execution-history-actions {
+  display: flex;
+  gap: 6px;
+}
+
+.execution-history-stats {
+  display: flex;
+  gap: 16px;
+  margin-bottom: 12px;
+  padding: 8px;
+  background: var(--bg-primary, #0d1117);
+  border-radius: 6px;
+}
+
+.stat-item {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 2px;
+}
+
+.stat-value {
+  font-size: 16px;
+  font-weight: 600;
+  color: var(--text-primary);
+}
+
+.stat-label {
+  font-size: 10px;
+  color: var(--text-secondary, #8b949e);
+  text-transform: uppercase;
+}
+
+.stat-success .stat-value {
+  color: var(--accent-green, #3fb950);
+}
+
+.stat-failure .stat-value {
+  color: var(--accent-red, #f85149);
+}
+
+.execution-history-filters {
+  display: flex;
+  gap: 8px;
+  margin-bottom: 12px;
+}
+
+.execution-history-filters .env-var-input {
+  flex: 1;
+}
+
+.execution-history-list {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  max-height: 400px;
+  overflow-y: auto;
+}
+
+.execution-history-empty {
+  text-align: center;
+  padding: 20px;
+  color: var(--text-secondary, #8b949e);
+  font-size: 12px;
+}
+
+.execution-history-entry {
+  padding: 8px 10px;
+  background: var(--bg-primary, #0d1117);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  cursor: pointer;
+  transition: background 0.15s;
+}
+
+.execution-history-entry:hover {
+  background: var(--bg-secondary, #1b1f27);
+}
+
+.execution-history-entry.success {
+  border-left: 3px solid var(--accent-green, #3fb950);
+}
+
+.execution-history-entry.failure {
+  border-left: 3px solid var(--accent-red, #f85149);
+}
+
+.execution-history-entry.timeout {
+  border-left: 3px solid var(--accent-yellow, #d29922);
+}
+
+.entry-header {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.entry-icon {
+  font-size: 12px;
+  flex: none;
+}
+
+.entry-skill {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--text-primary);
+}
+
+.entry-runtime {
+  font-size: 11px;
+  color: var(--text-secondary, #8b949e);
+}
+
+.entry-duration {
+  font-size: 11px;
+  color: var(--text-secondary, #8b949e);
+  margin-left: auto;
+}
+
+.entry-time {
+  font-size: 10px;
+  color: var(--text-secondary, #8b949e);
+}
+
+.entry-expand {
+  font-size: 10px;
+  color: var(--text-secondary, #8b949e);
+  flex: none;
+}
+
+.entry-details {
+  margin-top: 8px;
+  padding-top: 8px;
+  border-top: 1px solid var(--border);
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.entry-detail-row {
+  display: flex;
+  gap: 8px;
+  font-size: 11px;
+}
+
+.detail-label {
+  color: var(--text-secondary, #8b949e);
+  min-width: 80px;
+}
+
+.detail-value {
+  color: var(--text-primary);
+}
+
+.detail-value.entry-error {
+  color: var(--accent-red, #f85149);
+}
+
+.detail-value code {
+  background: var(--bg-secondary, #1b1f27);
+  padding: 1px 4px;
+  border-radius: 3px;
+  font-family: 'SF Mono', 'Fira Code', monospace;
+}
+
 /* ── Platform transport config (PlatformConfigSection) ─────────────────── */
 .platform-config {
   margin-top: 10px;
