@@ -2613,6 +2613,408 @@ export const notificationSetupSkill: Skill = {
   qualityScore: 0.9, usageCount: 0, createdAt: BUNDLED_CREATED_AT, lastUsedAt: BUNDLED_CREATED_AT,
 };
 
+// ── Phase 2: 20 additional skills ─────────────────────────────────────
+
+export const webScrapingSkill: Skill = {
+  id: 'skill-web-scraping',
+  name: 'web-scraping',
+  description: 'Build web scrapers using BeautifulSoup, Playwright, or Puppeteer. Use when the goal asks to scrape, crawl, or extract data from websites.',
+  version: '1.0.0',
+  goalPattern: 'scrape crawl extract data website html parse',
+  steps: [
+    { agentType: 'analyst', dependsOn: [], description: 'Identify target URLs and data to extract. Choose scraping tool (BeautifulSoup for simple HTML, Playwright/Puppeteer for dynamic sites).' },
+    { agentType: 'analyst', dependsOn: ['step-0'], description: 'Implement HTTP fetching with rate limiting, retry logic, and user-agent rotation.' },
+    { agentType: 'analyst', dependsOn: ['step-1'], description: 'Parse HTML and extract data using CSS selectors or XPath. Handle pagination and nested content.' },
+    { agentType: 'analyst', dependsOn: ['step-2'], description: 'Store extracted data (JSON, CSV, database). Add deduplication and data validation.' },
+  ],
+  parameters: [
+    { name: 'tool', description: 'Scraping tool', type: 'choice', required: false, options: ['beautifulsoup', 'playwright', 'puppeteer'], defaultValue: 'beautifulsoup' },
+  ],
+  tags: ['scraping', 'crawl', 'web', 'data-extraction', 'html'],
+  sourceTrajectoryIds: ['bundled'],
+  qualityScore: 0.9, usageCount: 0, createdAt: BUNDLED_CREATED_AT, lastUsedAt: BUNDLED_CREATED_AT,
+};
+
+export const dataProcessingSkill: Skill = {
+  id: 'skill-data-processing',
+  name: 'data-processing',
+  description: 'Process and transform data using Pandas, NumPy, or Polars. Use when the goal asks to clean, transform, aggregate, or analyze datasets.',
+  version: '1.0.0',
+  goalPattern: 'data process transform clean aggregate analyze pandas numpy',
+  steps: [
+    { agentType: 'analyst', dependsOn: [], description: 'Load data from source (CSV, JSON, database). Inspect schema, missing values, and data types.' },
+    { agentType: 'analyst', dependsOn: ['step-0'], description: 'Clean data: handle missing values, remove duplicates, fix data types, normalize formats.' },
+    { agentType: 'analyst', dependsOn: ['step-1'], description: 'Transform data: filter rows, add computed columns, merge datasets, pivot/aggregate.' },
+    { agentType: 'analyst', dependsOn: ['step-2'], description: 'Output results: save to file, generate reports, create visualizations.' },
+  ],
+  parameters: [
+    { name: 'library', description: 'Data processing library', type: 'choice', required: false, options: ['pandas', 'polars', 'numpy'], defaultValue: 'pandas' },
+  ],
+  tags: ['data', 'pandas', 'numpy', 'transform', 'clean', 'aggregate'],
+  sourceTrajectoryIds: ['bundled'],
+  qualityScore: 0.9, usageCount: 0, createdAt: BUNDLED_CREATED_AT, lastUsedAt: BUNDLED_CREATED_AT,
+};
+
+export const mlModelSkill: Skill = {
+  id: 'skill-ml-model',
+  name: 'ml-model',
+  description: 'Build and train ML models using scikit-learn, TensorFlow, or PyTorch. Use when the goal asks to train, evaluate, or deploy machine learning models.',
+  version: '1.0.0',
+  goalPattern: 'machine learning model train predict classify regress ml ai',
+  steps: [
+    { agentType: 'analyst', dependsOn: [], description: 'Load and explore dataset. Perform feature engineering and selection.' },
+    { agentType: 'analyst', dependsOn: ['step-0'], description: 'Split data into train/test sets. Choose model architecture and hyperparameters.' },
+    { agentType: 'analyst', dependsOn: ['step-1'], description: 'Train model with cross-validation. Evaluate metrics (accuracy, precision, recall, F1).' },
+    { agentType: 'analyst', dependsOn: ['step-2'], description: 'Save model, create inference pipeline, document results.' },
+  ],
+  parameters: [
+    { name: 'framework', description: 'ML framework', type: 'choice', required: false, options: ['scikit-learn', 'tensorflow', 'pytorch'], defaultValue: 'scikit-learn' },
+  ],
+  tags: ['ml', 'machine-learning', 'train', 'predict', 'classify', 'regress'],
+  sourceTrajectoryIds: ['bundled'],
+  qualityScore: 0.9, usageCount: 0, createdAt: BUNDLED_CREATED_AT, lastUsedAt: BUNDLED_CREATED_AT,
+};
+
+export const cloudDeploySkill: Skill = {
+  id: 'skill-cloud-deploy',
+  name: 'cloud-deploy',
+  description: 'Deploy applications to AWS, GCP, or Azure. Use when the goal asks to deploy, host, or infrastructure-as-code for cloud platforms.',
+  version: '1.0.0',
+  goalPattern: 'deploy cloud aws gcp azure serverless lambda ec2',
+  steps: [
+    { agentType: 'analyst', dependsOn: [], description: 'Choose cloud provider and deployment strategy (serverless, containers, VMs).' },
+    { agentType: 'analyst', dependsOn: ['step-0'], description: 'Configure IAM roles, VPCs, security groups, and networking.' },
+    { agentType: 'analyst', dependsOn: ['step-1'], description: 'Set up CI/CD pipeline for automated deployments with rollback support.' },
+    { agentType: 'analyst', dependsOn: ['step-2'], description: 'Configure monitoring, logging, and alerting for the deployed application.' },
+  ],
+  parameters: [
+    { name: 'provider', description: 'Cloud provider', type: 'choice', required: false, options: ['aws', 'gcp', 'azure'], defaultValue: 'aws' },
+  ],
+  tags: ['cloud', 'deploy', 'aws', 'gcp', 'azure', 'serverless', 'infrastructure'],
+  sourceTrajectoryIds: ['bundled'],
+  qualityScore: 0.9, usageCount: 0, createdAt: BUNDLED_CREATED_AT, lastUsedAt: BUNDLED_CREATED_AT,
+};
+
+export const kubernetesSkill: Skill = {
+  id: 'skill-kubernetes',
+  name: 'kubernetes',
+  description: 'Configure and manage Kubernetes clusters. Use when the goal asks to deploy, scale, or manage containerized applications on Kubernetes.',
+  version: '1.0.0',
+  goalPattern: 'kubernetes k8s cluster pod deployment service ingress helm',
+  steps: [
+    { agentType: 'analyst', dependsOn: [], description: 'Create Kubernetes manifests: Deployment, Service, ConfigMap, Secret, Ingress.' },
+    { agentType: 'analyst', dependsOn: ['step-0'], description: 'Configure resource limits, health checks (liveness/readiness probes), and autoscaling (HPA).' },
+    { agentType: 'analyst', dependsOn: ['step-1'], description: 'Set up Helm charts for templated deployments with environment-specific values.' },
+    { agentType: 'analyst', dependsOn: ['step-2'], description: 'Configure RBAC, network policies, and monitoring (Prometheus/Grafana).' },
+  ],
+  parameters: [
+    { name: 'tool', description: 'K8s management tool', type: 'choice', required: false, options: ['kubectl', 'helm', 'kustomize'], defaultValue: 'kubectl' },
+  ],
+  tags: ['kubernetes', 'k8s', 'containers', 'orchestration', 'helm', 'deploy'],
+  sourceTrajectoryIds: ['bundled'],
+  qualityScore: 0.9, usageCount: 0, createdAt: BUNDLED_CREATED_AT, lastUsedAt: BUNDLED_CREATED_AT,
+};
+
+export const githubActionsSkill: Skill = {
+  id: 'skill-github-actions',
+  name: 'github-actions',
+  description: 'Set up GitHub Actions CI/CD workflows. Use when the goal asks to automate testing, building, or deployment via GitHub Actions.',
+  version: '1.0.0',
+  goalPattern: 'github actions ci cd workflow pipeline automate test build deploy',
+  steps: [
+    { agentType: 'analyst', dependsOn: [], description: 'Define workflow triggers (push, PR, schedule) and job matrix (OS, language versions).' },
+    { agentType: 'analyst', dependsOn: ['step-0'], description: 'Add steps: checkout, setup, install, lint, test, build, deploy. Use caching for dependencies.' },
+    { agentType: 'analyst', dependsOn: ['step-1'], description: 'Add secrets management, artifact uploads, and environment-specific deployments.' },
+    { agentType: 'analyst', dependsOn: ['step-2'], description: 'Add status checks, branch protection, and deployment gates.' },
+  ],
+  parameters: [
+    { name: 'language', description: 'Primary language', type: 'choice', required: false, options: ['typescript', 'python', 'go', 'rust'], defaultValue: 'typescript' },
+  ],
+  tags: ['github', 'actions', 'ci-cd', 'workflow', 'pipeline', 'automate'],
+  sourceTrajectoryIds: ['bundled'],
+  qualityScore: 0.9, usageCount: 0, createdAt: BUNDLED_CREATED_AT, lastUsedAt: BUNDLED_CREATED_AT,
+};
+
+export const prometheusSkill: Skill = {
+  id: 'skill-prometheus',
+  name: 'prometheus',
+  description: 'Set up Prometheus monitoring and alerting. Use when the goal asks to add metrics collection, dashboards, or alerting rules.',
+  version: '1.0.0',
+  goalPattern: 'prometheus monitoring metrics alert grafana dashboard promql',
+  steps: [
+    { agentType: 'analyst', dependsOn: [], description: 'Define key metrics: request rate, error rate, latency percentiles, resource utilization.' },
+    { agentType: 'analyst', dependsOn: ['step-0'], description: 'Instrument application with Prometheus client library (counters, histograms, gauges).' },
+    { agentType: 'analyst', dependsOn: ['step-1'], description: 'Configure Prometheus scrape targets, retention, and storage.' },
+    { agentType: 'analyst', dependsOn: ['step-2'], description: 'Create Grafana dashboards and alerting rules ( PagerDuty, Slack, email).' },
+  ],
+  parameters: [
+    { name: 'alertChannel', description: 'Alert notification channel', type: 'choice', required: false, options: ['slack', 'email', 'pagerduty'], defaultValue: 'slack' },
+  ],
+  tags: ['prometheus', 'monitoring', 'metrics', 'alerting', 'grafana', 'observability'],
+  sourceTrajectoryIds: ['bundled'],
+  qualityScore: 0.9, usageCount: 0, createdAt: BUNDLED_CREATED_AT, lastUsedAt: BUNDLED_CREATED_AT,
+};
+
+export const structuredLoggingSkill: Skill = {
+  id: 'skill-structured-logging',
+  name: 'structured-logging',
+  description: 'Implement structured logging with JSON output. Use when the goal asks to add logging, log aggregation, or log-based debugging.',
+  version: '1.0.0',
+  goalPattern: 'logging structured json log aggregation elk loki Winston pino',
+  steps: [
+    { agentType: 'analyst', dependsOn: [], description: 'Choose logging library (Winston, Pino, bunyan). Define log levels and structured fields.' },
+    { agentType: 'analyst', dependsOn: ['step-0'], description: 'Implement request context logging (request ID, user ID, trace ID) for correlation.' },
+    { agentType: 'analyst', dependsOn: ['step-1'], description: 'Add log transport: stdout for dev, file/ELK/Loki for production.' },
+    { agentType: 'analyst', dependsOn: ['step-2'], description: 'Add log-based alerting and debugging dashboards.' },
+  ],
+  parameters: [
+    { name: 'library', description: 'Logging library', type: 'choice', required: false, options: ['winston', 'pino', 'bunyan'], defaultValue: 'pino' },
+  ],
+  tags: ['logging', 'structured', 'json', 'elk', 'loki', 'observability'],
+  sourceTrajectoryIds: ['bundled'],
+  qualityScore: 0.9, usageCount: 0, createdAt: BUNDLED_CREATED_AT, lastUsedAt: BUNDLED_CREATED_AT,
+};
+
+export const redisCacheSkill: Skill = {
+  id: 'skill-redis-cache',
+  name: 'redis-cache',
+  description: 'Set up Redis caching layer. Use when the goal asks to add caching, session storage, or rate limiting with Redis.',
+  version: '1.0.0',
+  goalPattern: 'redis cache session store rate limit pub sub queue',
+  steps: [
+    { agentType: 'analyst', dependsOn: [], description: 'Choose caching strategy: cache-aside, write-through, write-behind. Define cache keys and TTLs.' },
+    { agentType: 'analyst', dependsOn: ['step-0'], description: 'Implement Redis connection with pooling, retry logic, and cluster support.' },
+    { agentType: 'analyst', dependsOn: ['step-1'], description: 'Add cache invalidation: TTL-based, event-based, manual invalidation.' },
+    { agentType: 'analyst', dependsOn: ['step-2'], description: 'Monitor cache hit rate, memory usage, and evictions. Add warming strategies.' },
+  ],
+  parameters: [
+    { name: 'strategy', description: 'Caching strategy', type: 'choice', required: false, options: ['cache-aside', 'write-through', 'write-behind'], defaultValue: 'cache-aside' },
+  ],
+  tags: ['redis', 'cache', 'session', 'rate-limit', 'pub-sub'],
+  sourceTrajectoryIds: ['bundled'],
+  qualityScore: 0.9, usageCount: 0, createdAt: BUNDLED_CREATED_AT, lastUsedAt: BUNDLED_CREATED_AT,
+};
+
+export const kafkaQueueSkill: Skill = {
+  id: 'skill-kafka-queue',
+  name: 'kafka-queue',
+  description: 'Set up Kafka message queues. Use when the goal asks to add event streaming, message queues, or async processing with Kafka.',
+  version: '1.0.0',
+  goalPattern: 'kafka message queue event streaming async processing producer consumer',
+  steps: [
+    { agentType: 'analyst', dependsOn: [], description: 'Design topic schema and partition strategy. Define producer and consumer groups.' },
+    { agentType: 'analyst', dependsOn: ['step-0'], description: 'Implement producers with batching, compression, and idempotent writes.' },
+    { agentType: 'analyst', dependsOn: ['step-1'], description: 'Implement consumers with offset management, dead-letter queues, and retry logic.' },
+    { agentType: 'analyst', dependsOn: ['step-2'], description: 'Monitor consumer lag, throughput, and set up alerts.' },
+  ],
+  parameters: [
+    { name: 'serialization', description: 'Message format', type: 'choice', required: false, options: ['json', 'avro', 'protobuf'], defaultValue: 'json' },
+  ],
+  tags: ['kafka', 'queue', 'event-streaming', 'async', 'message'],
+  sourceTrajectoryIds: ['bundled'],
+  qualityScore: 0.9, usageCount: 0, createdAt: BUNDLED_CREATED_AT, lastUsedAt: BUNDLED_CREATED_AT,
+};
+
+export const terraformSkill: Skill = {
+  id: 'skill-terraform',
+  name: 'terraform',
+  description: 'Write Terraform infrastructure-as-code. Use when the goal asks to provision, manage, or version cloud infrastructure.',
+  version: '1.0.0',
+  goalPattern: 'terraform infrastructure iac provision cloud resource module state',
+  steps: [
+    { agentType: 'analyst', dependsOn: [], description: 'Define infrastructure resources, data sources, and variables. Choose state backend (S3, GCS, TF Cloud).' },
+    { agentType: 'analyst', dependsOn: ['step-0'], description: 'Write resource configurations with proper tagging, encryption, and networking.' },
+    { agentType: 'analyst', dependsOn: ['step-1'], description: 'Add modules for reusable components. Implement workspace isolation.' },
+    { agentType: 'analyst', dependsOn: ['step-2'], description: 'Set up plan/apply pipeline with approval gates. Add drift detection.' },
+  ],
+  parameters: [
+    { name: 'provider', description: 'Cloud provider', type: 'choice', required: false, options: ['aws', 'gcp', 'azure', 'multi'], defaultValue: 'aws' },
+  ],
+  tags: ['terraform', 'iac', 'infrastructure', 'cloud', 'provision'],
+  sourceTrajectoryIds: ['bundled'],
+  qualityScore: 0.9, usageCount: 0, createdAt: BUNDLED_CREATED_AT, lastUsedAt: BUNDLED_CREATED_AT,
+};
+
+export const nginxConfigSkill: Skill = {
+  id: 'skill-nginx-config',
+  name: 'nginx-config',
+  description: 'Configure Nginx as reverse proxy, load balancer, or web server. Use when the goal asks to set up Nginx, configure SSL, or optimize web serving.',
+  version: '1.0.0',
+  goalPattern: 'nginx reverse proxy load balancer web server ssl tls',
+  steps: [
+    { agentType: 'analyst', dependsOn: [], description: 'Define server blocks, upstream pools, and location routing rules.' },
+    { agentType: 'analyst', dependsOn: ['step-0'], description: 'Configure SSL/TLS with certificates, OCSP stapling, and HSTS.' },
+    { agentType: 'analyst', dependsOn: ['step-1'], description: 'Add rate limiting, request buffering, and gzip compression.' },
+    { agentType: 'analyst', dependsOn: ['step-2'], description: 'Set up health checks, graceful shutdown, and log rotation.' },
+  ],
+  parameters: [
+    { name: 'role', description: 'Nginx role', type: 'choice', required: false, options: ['reverse-proxy', 'load-balancer', 'web-server'], defaultValue: 'reverse-proxy' },
+  ],
+  tags: ['nginx', 'reverse-proxy', 'load-balancer', 'ssl', 'web-server'],
+  sourceTrajectoryIds: ['bundled'],
+  qualityScore: 0.9, usageCount: 0, createdAt: BUNDLED_CREATED_AT, lastUsedAt: BUNDLED_CREATED_AT,
+};
+
+export const sslCertSkill: Skill = {
+  id: 'skill-ssl-cert',
+  name: 'ssl-cert',
+  description: 'Manage SSL/TLS certificates with Let Encrypt or commercial CAs. Use when the goal asks to set up HTTPS, renew certificates, or fix SSL issues.',
+  version: '1.0.0',
+  goalPattern: 'ssl tls certificate letsencrypt https renew acme',
+  steps: [
+    { agentType: 'analyst', dependsOn: [], description: 'Choose certificate provider (Let Encrypt, commercial CA). Generate CSR and private key.' },
+    { agentType: 'analyst', dependsOn: ['step-0'], description: 'Complete domain validation (HTTP-01, DNS-01 challenge). Install certificate.' },
+    { agentType: 'analyst', dependsOn: ['step-1'], description: 'Configure auto-renewal with certbot or acme.sh. Set up renewal hooks.' },
+    { agentType: 'analyst', dependsOn: ['step-2'], description: 'Test SSL configuration with SSL Labs. Fix any vulnerabilities.' },
+  ],
+  parameters: [
+    { name: 'provider', description: 'Certificate provider', type: 'choice', required: false, options: ['letsencrypt', 'commercial', 'self-signed'], defaultValue: 'letsencrypt' },
+  ],
+  tags: ['ssl', 'tls', 'certificate', 'https', 'letsencrypt', 'security'],
+  sourceTrajectoryIds: ['bundled'],
+  qualityScore: 0.9, usageCount: 0, createdAt: BUNDLED_CREATED_AT, lastUsedAt: BUNDLED_CREATED_AT,
+};
+
+export const dnsSetupSkill: Skill = {
+  id: 'skill-dns-setup',
+  name: 'dns-setup',
+  description: 'Configure DNS records and domains. Use when the goal asks to set up DNS, configure domains, or manage DNS records.',
+  version: '1.0.0',
+  goalPattern: 'dns domain records aaaaaa cname mx txt spf dkim',
+  steps: [
+    { agentType: 'analyst', dependsOn: [], description: 'Choose DNS provider (Cloudflare, Route53, Google DNS). Transfer or register domain.' },
+    { agentType: 'analyst', dependsOn: ['step-0'], description: 'Configure A/AAAA, CNAME, MX, TXT records. Set up SPF, DKIM, DMARC for email.' },
+    { agentType: 'analyst', dependsOn: ['step-1'], description: 'Add CDN configuration, DNS caching, and geo-routing.' },
+    { agentType: 'analyst', dependsOn: ['step-2'], description: 'Monitor DNS propagation, uptime, and set up alerts for DNS failures.' },
+  ],
+  parameters: [
+    { name: 'provider', description: 'DNS provider', type: 'choice', required: false, options: ['cloudflare', 'route53', 'google-dns'], defaultValue: 'cloudflare' },
+  ],
+  tags: ['dns', 'domain', 'records', 'cloudflare', 'route53'],
+  sourceTrajectoryIds: ['bundled'],
+  qualityScore: 0.9, usageCount: 0, createdAt: BUNDLED_CREATED_AT, lastUsedAt: BUNDLED_CREATED_AT,
+};
+
+export const cronJobSkill: Skill = {
+  id: 'skill-cron-job',
+  name: 'cron-job',
+  description: 'Set up scheduled tasks and cron jobs. Use when the goal asks to automate recurring tasks, schedule jobs, or set up crons.',
+  version: '1.0.0',
+  goalPattern: 'cron schedule job recurring task automated periodic timer',
+  steps: [
+    { agentType: 'analyst', dependsOn: [], description: 'Define task schedule (cron expression, interval). Identify task dependencies and retry logic.' },
+    { agentType: 'analyst', dependsOn: ['step-0'], description: 'Implement task with idempotency, timeout handling, and distributed locking.' },
+    { agentType: 'analyst', dependsOn: ['step-1'], description: 'Add logging, metrics, and alerting for job failures.' },
+    { agentType: 'analyst', dependsOn: ['step-2'], description: 'Set up monitoring dashboard showing job history, success rate, and duration.' },
+  ],
+  parameters: [
+    { name: 'scheduler', description: 'Scheduling tool', type: 'choice', required: false, options: ['cron', 'node-cron', 'bull'], defaultValue: 'cron' },
+  ],
+  tags: ['cron', 'schedule', 'job', 'automate', 'timer'],
+  sourceTrajectoryIds: ['bundled'],
+  qualityScore: 0.9, usageCount: 0, createdAt: BUNDLED_CREATED_AT, lastUsedAt: BUNDLED_CREATED_AT,
+};
+
+export const backupStrategySkill: Skill = {
+  id: 'skill-backup-strategy',
+  name: 'backup-strategy',
+  description: 'Design and implement backup strategies. Use when the goal asks to set up backups, disaster recovery, or data protection.',
+  version: '1.0.0',
+  goalPattern: 'backup disaster recovery retention snapshot restore data protection',
+  steps: [
+    { agentType: 'analyst', dependsOn: [], description: 'Define RPO (Recovery Point Objective) and RTO (Recovery Time Objective). Identify critical data.' },
+    { agentType: 'analyst', dependsOn: ['step-0'], description: 'Implement backup strategy: full, incremental, differential. Choose storage (S3, GCS, tape).' },
+    { agentType: 'analyst', dependsOn: ['step-1'], description: 'Add encryption, compression, and versioning. Implement retention policies.' },
+    { agentType: 'analyst', dependsOn: ['step-2'], description: 'Test restore procedures regularly. Document runbooks and verify backups.' },
+  ],
+  parameters: [
+    { name: 'strategy', description: 'Backup strategy', type: 'choice', required: false, options: ['full', 'incremental', 'differential'], defaultValue: 'incremental' },
+  ],
+  tags: ['backup', 'disaster-recovery', 'retention', 'snapshot', 'restore'],
+  sourceTrajectoryIds: ['bundled'],
+  qualityScore: 0.9, usageCount: 0, createdAt: BUNDLED_CREATED_AT, lastUsedAt: BUNDLED_CREATED_AT,
+};
+
+export const logRotationSkill: Skill = {
+  id: 'skill-log-rotation',
+  name: 'log-rotation',
+  description: 'Set up log rotation and management. Use when the goal asks to configure log rotation, manage log files, or prevent disk filling.',
+  version: '1.0.0',
+  goalPattern: 'log rotation compress archive truncate syslog journald',
+  steps: [
+    { agentType: 'analyst', dependsOn: [], description: 'Identify log sources and estimate daily volume. Choose rotation strategy (size, time, count).' },
+    { agentType: 'analyst', dependsOn: ['step-0'], description: 'Configure logrotate for system logs, application logs, and access logs.' },
+    { agentType: 'analyst', dependsOn: ['step-1'], description: 'Set up compression, archival, and deletion policies. Configure remote shipping.' },
+    { agentType: 'analyst', dependsOn: ['step-2'], description: 'Monitor disk usage and set up alerts for unusual log volume.' },
+  ],
+  parameters: [
+    { name: 'strategy', description: 'Rotation strategy', type: 'choice', required: false, options: ['size', 'time', 'count'], defaultValue: 'time' },
+  ],
+  tags: ['log', 'rotation', 'compress', 'archive', 'disk'],
+  sourceTrajectoryIds: ['bundled'],
+  qualityScore: 0.9, usageCount: 0, createdAt: BUNDLED_CREATED_AT, lastUsedAt: BUNDLED_CREATED_AT,
+};
+
+export const secretsManagerSkill: Skill = {
+  id: 'skill-secrets-manager',
+  name: 'secrets-manager',
+  description: 'Set up secrets management with Vault, AWS Secrets Manager, or similar. Use when the goal asks to manage secrets, rotate credentials, or secure sensitive data.',
+  version: '1.0.0',
+  goalPattern: 'secrets manager vault credentials rotate sensitive password key',
+  steps: [
+    { agentType: 'analyst', dependsOn: [], description: 'Choose secrets manager (HashiCorp Vault, AWS Secrets Manager, Azure Key Vault).' },
+    { agentType: 'analyst', dependsOn: ['step-0'], description: 'Define secret structure, access policies, and rotation schedules.' },
+    { agentType: 'analyst', dependsOn: ['step-1'], description: 'Implement secret injection into applications (env vars, mounted files, API calls).' },
+    { agentType: 'analyst', dependsOn: ['step-2'], description: 'Set up audit logging, access reviews, and emergency revocation procedures.' },
+  ],
+  parameters: [
+    { name: 'provider', description: 'Secrets manager', type: 'choice', required: false, options: ['vault', 'aws-secrets-manager', 'azure-keyvault'], defaultValue: 'vault' },
+  ],
+  tags: ['secrets', 'vault', 'credentials', 'rotate', 'security'],
+  sourceTrajectoryIds: ['bundled'],
+  qualityScore: 0.9, usageCount: 0, createdAt: BUNDLED_CREATED_AT, lastUsedAt: BUNDLED_CREATED_AT,
+};
+
+export const loadBalancerSkill: Skill = {
+  id: 'skill-load-balancer',
+  name: 'load-balancer',
+  description: 'Configure load balancing with Nginx, HAProxy, or cloud LBs. Use when the goal asks to distribute traffic, set up health checks, or configure failover.',
+  version: '1.0.0',
+  goalPattern: 'load balancer nginx haproxy traffic distribute health check failover',
+  steps: [
+    { agentType: 'analyst', dependsOn: [], description: 'Choose load balancer (Nginx, HAProxy, ALB/NLB). Define backend pools and routing rules.' },
+    { agentType: 'analyst', dependsOn: ['step-0'], description: 'Configure health checks, session affinity, and connection draining.' },
+    { agentType: 'analyst', dependsOn: ['step-1'], description: 'Add SSL termination, rate limiting, and DDoS protection.' },
+    { agentType: 'analyst', dependsOn: ['step-2'], description: 'Monitor traffic distribution, latency, and error rates. Set up alerts.' },
+  ],
+  parameters: [
+    { name: 'provider', description: 'Load balancer type', type: 'choice', required: false, options: ['nginx', 'haproxy', 'cloud-alb'], defaultValue: 'nginx' },
+  ],
+  tags: ['load-balancer', 'nginx', 'haproxy', 'traffic', 'health-check'],
+  sourceTrajectoryIds: ['bundled'],
+  qualityScore: 0.9, usageCount: 0, createdAt: BUNDLED_CREATED_AT, lastUsedAt: BUNDLED_CREATED_AT,
+};
+
+export const cdnSetupSkill: Skill = {
+  id: 'skill-cdn-setup',
+  name: 'cdn-setup',
+  description: 'Configure CDN for static assets. Use when the goal asks to set up CDN, optimize asset delivery, or reduce latency.',
+  version: '1.0.0',
+  goalPattern: 'cdn cloudflare cloudfront fastly cache static assets edge',
+  steps: [
+    { agentType: 'analyst', dependsOn: [], description: 'Choose CDN provider (Cloudflare, CloudFront, Fastly). Configure custom domain and SSL.' },
+    { agentType: 'analyst', dependsOn: ['step-0'], description: 'Set up cache rules: TTLs, purge strategies, and cache-by-header.' },
+    { agentType: 'analyst', dependsOn: ['step-1'], description: 'Configure origin shielding, mid-tier caching, and failover origins.' },
+    { agentType: 'analyst', dependsOn: ['step-2'], description: 'Monitor cache hit ratio, bandwidth savings, and latency improvements.' },
+  ],
+  parameters: [
+    { name: 'provider', description: 'CDN provider', type: 'choice', required: false, options: ['cloudflare', 'cloudfront', 'fastly'], defaultValue: 'cloudflare' },
+  ],
+  tags: ['cdn', 'cache', 'static-assets', 'cloudflare', 'cloudfront'],
+  sourceTrajectoryIds: ['bundled'],
+  qualityScore: 0.9, usageCount: 0, createdAt: BUNDLED_CREATED_AT, lastUsedAt: BUNDLED_CREATED_AT,
+};
+
 /** All bundled skills (new first-party skills append here). */
 export const BUNDLED_SKILLS: Skill[] = [
   websiteDeploySkill,
@@ -2665,4 +3067,26 @@ export const BUNDLED_SKILLS: Skill[] = [
   multiTenancySkill,
   blobStorageSkill,
   notificationSetupSkill,
+
+  // ── Phase 2: 20 additional skills ─────────────────────────────────────
+  webScrapingSkill,
+  dataProcessingSkill,
+  mlModelSkill,
+  cloudDeploySkill,
+  kubernetesSkill,
+  githubActionsSkill,
+  prometheusSkill,
+  structuredLoggingSkill,
+  redisCacheSkill,
+  kafkaQueueSkill,
+  terraformSkill,
+  nginxConfigSkill,
+  sslCertSkill,
+  dnsSetupSkill,
+  cronJobSkill,
+  backupStrategySkill,
+  logRotationSkill,
+  secretsManagerSkill,
+  loadBalancerSkill,
+  cdnSetupSkill,
 ];
