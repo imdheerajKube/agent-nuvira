@@ -84,7 +84,7 @@ export const TOOLSETS: ToolsetDef[] = [
     name: 'coding',
     label: 'Coding',
     description: 'Interactive file access + verification for the agent loop: read files, list directories, glob, edit/write files, run terminal commands (tests/typecheck/build) — deny-first, workspace-scoped; state-changing actions are confirmation-gated — and the plan/todo checklist that tracks multi-step work.',
-    tools: ['read_file', 'list_dir', 'glob', 'edit_file', 'write_file', 'run_terminal', 'plan_todo'],
+    tools: ['read_file', 'list_dir', 'glob', 'edit_file', 'write_file', 'run_terminal', 'plan_todo', 'terminal'],
   },
   {
     name: 'web',
@@ -96,7 +96,7 @@ export const TOOLSETS: ToolsetDef[] = [
     name: 'channels',
     label: 'Channels',
     description: 'Message delivery through the gateway (WhatsApp by contact name or number, Telegram, Slack, Discord, email, aliases).',
-    tools: ['gateway_send'],
+    tools: ['gateway_send', 'send_message'],
   },
   {
     name: 'system',
@@ -131,8 +131,8 @@ export const TOOLSETS: ToolsetDef[] = [
   {
     name: 'productivity',
     label: 'Productivity',
-    description: 'Kanban boards, cronjobs, todos, and session management.',
-    tools: ['kanban', 'cronjob', 'todo', 'session'],
+    description: 'Kanban boards, cronjobs, todos, session management, and persistent memory.',
+    tools: ['kanban', 'cronjob', 'todo', 'session', 'memory'],
   },
   {
     name: 'security',
