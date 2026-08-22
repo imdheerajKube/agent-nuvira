@@ -195,6 +195,12 @@ export const TOOLSETS: ToolsetDef[] = [
     description: 'Skill marketplace, sync, usage tracking, and provenance.',
     tools: ['skills_hub', 'skills_sync', 'skills_sync_client', 'skill_usage', 'skill_provenance'],
   },
+  {
+    name: 'memory',
+    label: 'Memory',
+    description: 'Persistent memory management — add, search, delete, replace memories.',
+    tools: ['add_memory', 'search_memory', 'delete_memory', 'replace_memory', 'list_memories', 'memory_stats'],
+  },
 ];
 
 /** Find the toolset that owns a tool name (undefined → tool is always-enabled). */
