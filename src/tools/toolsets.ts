@@ -159,6 +159,30 @@ export const TOOLSETS: ToolsetDef[] = [
     tools: [],
     bindsMcpServers: true,
   },
+  {
+    name: 'infrastructure',
+    label: 'Infrastructure',
+    description: 'Critical infrastructure: interrupts, daemons, process registry, code execution, checkpoints.',
+    tools: ['interrupt', 'daemon_pool', 'process_registry', 'code_execution', 'checkpoint'],
+  },
+  {
+    name: 'security-deep',
+    label: 'Deep Security',
+    description: 'Advanced security: AST audit, threat patterns, URL safety, path security, scoring.',
+    tools: ['ast_audit', 'threat_patterns', 'url_safety', 'path_security', 'security_score'],
+  },
+  {
+    name: 'infra-utility',
+    label: 'Infrastructure Utility',
+    description: 'Tool search, budget config, fuzzy matching.',
+    tools: ['tool_search', 'budget_config', 'fuzzy_match'],
+  },
+  {
+    name: 'utility',
+    label: 'Utility',
+    description: 'Small utilities: ANSI strip, OSV check, patch parser, image source.',
+    tools: ['ansi_strip', 'osv_check', 'patch_parser', 'image_source'],
+  },
 ];
 
 /** Find the toolset that owns a tool name (undefined → tool is always-enabled). */
