@@ -2386,3 +2386,116 @@ registerTool({
     }
   }),
 });
+
+// Lazy Deps tool
+registerTool({
+  name: 'lazy_deps',
+  description: 'Lazy dependency loading — only imports heavy modules when invoked, reducing startup time.',
+  category: 'workflow',
+  inputSchema: z.object({
+    action: z.enum(['status', 'preload', 'stats', 'history', 'reset']).describe('Action'),
+    modules: z.array(z.string()).optional().describe('Module names to preload'),
+  }),
+  endsAgentStep: false,
+  run: (args) => import('./lazy-deps.js').then((m) => {
+    const { action, modules } = args as any;
+    const mgr = m.getLazyDepsManager();
+    switch (action) {
+      case 'status': return JSON.stringify(mgr.getStatus());
+      case 'preload': return modules ? mgr.preload(modules).then(() => JSON.stringify({ preloaded: modules })) : 'modules required';
+      case 'stats': return JSON.stringify(mgr.getStats());
+      case 'history': return JSON.stringify(mgr.getHistory());
+      case 'reset': return mgr.reset(), JSON.stringify({ reset: true });
+      default: return 'Unknown action';
+    }
+  }),
+});
+
+// Tool Backend Helpers tool
+registerTool({
+  name: 'tool_backend',
+  description: 'Backend selection and load balancing for tool calls — routes to best available backend.',
+  category: 'workflow',
+  inputSchema: z.object({
+    action: z.enum(['select', 'health', 'stats', 'log']).describe('Action'),
+    toolName: z.string().optional().describe('Tool name for backend selection'),
+    limit: z.number().optional().describe('Limit for log results'),
+  }),
+  endsAgentStep: false,
+  run: (args) => import('./tool-backend-helpers.js').then((m) => {
+    const { action, toolName, limit } = args as any;
+    const mgr = m.getToolBackendManager();
+    switch (action) {
+      case 'select': return toolName ? JSON.stringify({ backend: mgr.selectBackend(toolName) }) : 'toolName required';
+      case 'health': return mgr.checkHealth().then((r: any) => JSON.stringify(r));
+      case 'stats': return JSON.stringify(mgr.getStats());
+      case 'log': return JSON.stringify(mgr.getCallLog(limit));
+      default: return 'Unknown action';
+    }
+  }),
+});
+
+// Tool Output Limits tool
+registerTool({
+  name: 'tool_output_limits',
+  description: 'Manage output size limits for tool calls — truncate, summarize, or paginate large outputs.',
+  category: 'workflow',
+  inputSchema: z.object({
+    action: z.enum(['truncate', 'config', 'stats']).describe('Action'),
+    content: z.string().optional().describe('Content to truncate'),
+    toolName: z.string().optional().describe('Tool name for per-tool config'),
+    maxChars: z.number().optional().describe('Max characters'),
+    maxLines: z.number().optional().describe('Max lines'),
+    strategy: z.enum(['tail', 'head', 'middle', 'summarize']).optional().describe('Truncation strategy'),
+  }),
+  endsAgentStep: false,
+  run: (args) => import('./tool-output-limits.js').then((m) => {
+    const { action, content, toolName, maxChars, maxLines, strategy } = args as any;
+    const mgr = m.getToolOutputLimiter();
+    switch (action) {
+      case 'truncate': return content ? JSON.stringify(mgr.truncate(content, toolName)) : 'content required';
+      case 'config': {
+        if (maxChars || maxLines || strategy || toolName) {
+          if (toolName) {
+            mgr.setToolConfig(toolName, { maxChars, maxLines, truncateStrategy: strategy });
+          } else {
+            mgr.setGlobalConfig({ maxChars, maxLines, truncateStrategy: strategy });
+          }
+        }
+        return JSON.stringify(mgr.getConfig(toolName));
+      }
+      case 'stats': return JSON.stringify(mgr.getStats());
+      default: return 'Unknown action';
+    }
+  }),
+});
+
+// Tool Result Storage tool
+registerTool({
+  name: 'tool_result_storage',
+  description: 'Persist tool call results across sessions — store, search, and retrieve past results.',
+  category: 'workflow',
+  inputSchema: z.object({
+    action: z.enum(['store', 'get', 'search', 'stats', 'clear']).describe('Action'),
+    id: z.string().optional().describe('Result ID for get/delete'),
+    tool: z.string().optional().describe('Tool name for search'),
+    result: z.string().optional().describe('Result content to store'),
+    success: z.boolean().optional().describe('Whether the call succeeded'),
+    sessionId: z.string().optional().describe('Session ID'),
+    ttl_ms: z.number().optional().describe('Time-to-live in ms'),
+    limit: z.number().optional().describe('Search limit'),
+  }),
+  endsAgentStep: false,
+  run: (args) => import('./tool-result-storage.js').then((m) => {
+    const { action, id, tool, result, success, sessionId, ttl_ms, limit } = args as any;
+    const storage = m.getToolResultStorage();
+    switch (action) {
+      case 'store': return tool && result ? JSON.stringify({ id: storage.store({ tool, args: {}, result, success: success !== false, session_id: sessionId, ttl_ms }) }) : 'tool and result required';
+      case 'get': return id ? JSON.stringify(storage.get(id)) : 'id required';
+      case 'search': return tool ? JSON.stringify(storage.searchByTool(tool, limit)) : 'tool required';
+      case 'stats': return JSON.stringify(storage.getStats());
+      case 'clear': return storage.clearExpired(), JSON.stringify({ cleared: true });
+      default: return 'Unknown action';
+    }
+  }),
+});
