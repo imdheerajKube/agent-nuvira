@@ -363,12 +363,14 @@ describe('SkillStore', () => {
     it('P5 — seeds all 133 bundled skills (Phase 3 complete)', () => {
       const fresh = new SkillStore();
       const names = fresh.getAll().map((s) => s.name).sort();
-      expect(names.length).toBe(133);
+      expect(names.length).toBe(135);
       expect(names).toContain('website-deploy');
       expect(names).toContain('solidity');
       expect(names).toContain('powershell-automation');
       expect(names).toContain('mcp-server');
       expect(names).toContain('penetration-test');
+      expect(names).toContain('docker-management');
+      expect(names).toContain('container-supervision');
       // Spot-check a few skills from each phase have proper structure.
       for (const name of ['website-deploy', 'code-assessment', 'kubernetes', 'solidity', 'mcp-server', 'powershell-automation']) {
         const skill = fresh.get(`skill-${name}`)!;
