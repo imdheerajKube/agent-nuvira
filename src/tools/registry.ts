@@ -2761,3 +2761,106 @@ registerTool({
     }
   }),
 });
+
+// Memory Tools — Dedicated memory management
+registerTool({
+  name: 'add_memory',
+  description: 'Add a new memory entry (fact, preference, lesson, observation, pattern).',
+  category: 'workflow',
+  inputSchema: z.object({
+    content: z.string().describe('Memory content'),
+    type: z.enum(['fact', 'preference', 'lesson', 'observation', 'pattern']).describe('Memory type'),
+    tags: z.array(z.string()).optional().describe('Tags for categorization'),
+    source: z.string().optional().describe('Source context'),
+  }),
+  endsAgentStep: false,
+  run: (args) => import('./memory-tools.js').then((m) => {
+    const store = m.getMemoryStore();
+    const { content, type, tags, source } = args as any;
+    const entry = store.add({ content, type, tags, source });
+    return JSON.stringify({ success: true, id: entry.id, type: entry.type });
+  }),
+});
+
+registerTool({
+  name: 'search_memory',
+  description: 'Search memories by content, type, or tags.',
+  category: 'workflow',
+  inputSchema: z.object({
+    query: z.string().optional().describe('Search query'),
+    type: z.enum(['fact', 'preference', 'lesson', 'observation', 'pattern']).optional().describe('Type filter'),
+    tags: z.array(z.string()).optional().describe('Tag filter'),
+    limit: z.number().optional().describe('Max results (default: 10)'),
+  }),
+  endsAgentStep: false,
+  run: (args) => import('./memory-tools.js').then((m) => {
+    const store = m.getMemoryStore();
+    const { query, type, tags, limit } = args as any;
+    const results = store.search({ query, type, tags, limit });
+    return JSON.stringify({ count: results.length, results: results.map(r => ({ id: r.entry.id, content: r.entry.content, type: r.entry.type, score: r.score })) });
+  }),
+});
+
+registerTool({
+  name: 'delete_memory',
+  description: 'Delete a memory by ID.',
+  category: 'workflow',
+  inputSchema: z.object({
+    id: z.string().describe('Memory ID to delete'),
+  }),
+  endsAgentStep: false,
+  run: (args) => import('./memory-tools.js').then((m) => {
+    const store = m.getMemoryStore();
+    const { id } = args as any;
+    const deleted = store.delete(id);
+    return JSON.stringify({ success: deleted, id });
+  }),
+});
+
+registerTool({
+  name: 'replace_memory',
+  description: 'Replace an existing memory with updated content.',
+  category: 'workflow',
+  inputSchema: z.object({
+    id: z.string().describe('Memory ID to replace'),
+    content: z.string().optional().describe('New content'),
+    type: z.enum(['fact', 'preference', 'lesson', 'observation', 'pattern']).optional().describe('New type'),
+    tags: z.array(z.string()).optional().describe('New tags'),
+  }),
+  endsAgentStep: false,
+  run: (args) => import('./memory-tools.js').then((m) => {
+    const store = m.getMemoryStore();
+    const { id, content, type, tags } = args as any;
+    const entry = store.update(id, { content, type, tags });
+    return entry ? JSON.stringify({ success: true, id: entry.id }) : JSON.stringify({ success: false, error: 'Memory not found' });
+  }),
+});
+
+registerTool({
+  name: 'list_memories',
+  description: 'List all memory entries with optional filters.',
+  category: 'workflow',
+  inputSchema: z.object({
+    type: z.enum(['fact', 'preference', 'lesson', 'observation', 'pattern']).optional().describe('Type filter'),
+    limit: z.number().optional().describe('Max results'),
+  }),
+  endsAgentStep: false,
+  run: (args) => import('./memory-tools.js').then((m) => {
+    const store = m.getMemoryStore();
+    const { type, limit } = args as any;
+    const entries = store.list({ type, limit });
+    return JSON.stringify({ count: entries.length, entries: entries.map(e => ({ id: e.id, content: e.content, type: e.type, tags: e.tags })) });
+  }),
+});
+
+registerTool({
+  name: 'memory_stats',
+  description: 'Get memory statistics.',
+  category: 'workflow',
+  inputSchema: z.object({}),
+  endsAgentStep: false,
+  run: () => import('./memory-tools.js').then((m) => {
+    const store = m.getMemoryStore();
+    return JSON.stringify(store.getStats());
+  }),
+});
