@@ -4429,6 +4429,264 @@ body {
   border-color: var(--accent-blue);
 }
 
+/* ── Execution Result Card ─────────────────────────────────────────────── */
+.chat-exec-card {
+  border: 1px solid var(--border);
+  border-left: 3px solid var(--accent-green, #3fb950);
+  border-radius: 8px;
+  padding: 10px 12px;
+  margin: 8px 0 2px;
+  background: color-mix(in srgb, var(--bg-secondary, #1b1f27) 55%, transparent);
+}
+
+.chat-exec-card.chat-exec-failure {
+  border-left-color: var(--accent-red, #f85149);
+}
+
+.chat-exec-head {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-wrap: wrap;
+}
+
+.chat-exec-icon {
+  font-size: 12px;
+  flex: none;
+}
+
+.chat-exec-title {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--text-primary);
+}
+
+.chat-exec-status {
+  font-size: 11px;
+  color: var(--accent-green);
+}
+
+.chat-exec-card.chat-exec-failure .chat-exec-status {
+  color: var(--accent-red);
+}
+
+.chat-exec-meta {
+  font-size: 11px;
+  color: var(--text-secondary, #8b949e);
+  margin-left: auto;
+}
+
+.chat-exec-expand {
+  font-size: 10px;
+  color: var(--text-secondary, #8b949e);
+  flex: none;
+}
+
+.chat-exec-body {
+  margin-top: 8px;
+  border-top: 1px solid var(--border);
+  padding-top: 8px;
+}
+
+.chat-exec-section {
+  margin-bottom: 8px;
+}
+
+.chat-exec-section-title {
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--text-secondary, #8b949e);
+  margin-bottom: 4px;
+  text-transform: uppercase;
+}
+
+.chat-exec-output {
+  font-family: 'SF Mono', 'Fira Code', monospace;
+  font-size: 11px;
+  line-height: 1.4;
+  background: var(--bg-primary, #0d1117);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  padding: 8px;
+  overflow-x: auto;
+  white-space: pre-wrap;
+  word-break: break-word;
+  max-height: 200px;
+  overflow-y: auto;
+  color: var(--text-primary);
+}
+
+.chat-exec-section.chat-exec-stderr .chat-exec-output {
+  border-color: var(--accent-red, #f85149);
+  color: var(--accent-red, #f85149);
+}
+
+.chat-exec-details {
+  display: flex;
+  gap: 12px;
+  font-size: 11px;
+  color: var(--text-secondary, #8b949e);
+}
+
+/* ── Environment Variable Editor ───────────────────────────────────────── */
+.env-var-editor {
+  padding: 12px;
+  background: var(--bg-secondary, #1b1f27);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+}
+
+.env-var-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 12px;
+}
+
+.env-var-title {
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--text-primary);
+  margin: 0;
+}
+
+.env-var-add-form {
+  display: flex;
+  gap: 8px;
+  margin-bottom: 12px;
+  padding: 8px;
+  background: var(--bg-primary, #0d1117);
+  border-radius: 6px;
+}
+
+.env-var-input {
+  flex: 1;
+  padding: 6px 8px;
+  font-size: 12px;
+  background: var(--bg-secondary, #1b1f27);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  color: var(--text-primary);
+}
+
+.env-var-input:focus {
+  outline: none;
+  border-color: var(--accent-blue);
+}
+
+.env-var-list {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.env-var-empty {
+  font-size: 12px;
+  color: var(--text-secondary, #8b949e);
+  text-align: center;
+  padding: 20px;
+}
+
+.env-var-row {
+  padding: 8px 10px;
+  background: var(--bg-primary, #0d1117);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+}
+
+.env-var-row.env-var-set {
+  border-left: 3px solid var(--accent-green, #3fb950);
+}
+
+.env-var-row.env-var-missing {
+  border-left: 3px solid var(--accent-red, #f85149);
+}
+
+.env-var-row.env-var-blocked {
+  border-left: 3px solid var(--accent-yellow, #d29922);
+  opacity: 0.7;
+}
+
+.env-var-row-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.env-var-name {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--text-primary);
+  font-family: 'SF Mono', 'Fira Code', monospace;
+}
+
+.env-var-required-badge {
+  font-size: 10px;
+  font-weight: 400;
+  color: var(--accent-yellow, #d29922);
+  margin-left: 6px;
+}
+
+.env-var-blocked-badge {
+  font-size: 10px;
+  font-weight: 400;
+  color: var(--accent-yellow, #d29922);
+  margin-left: 6px;
+}
+
+.env-var-status {
+  font-size: 11px;
+  color: var(--text-secondary, #8b949e);
+}
+
+.env-var-description {
+  font-size: 11px;
+  color: var(--text-secondary, #8b949e);
+  margin: 4px 0;
+}
+
+.env-var-edit {
+  display: flex;
+  gap: 6px;
+  margin-top: 6px;
+}
+
+.env-var-actions {
+  display: flex;
+  gap: 6px;
+  margin-top: 6px;
+}
+
+.env-var-test-result {
+  font-size: 11px;
+  margin-left: auto;
+}
+
+.env-var-test-pass {
+  color: var(--accent-green, #3fb950);
+}
+
+.env-var-test-fail {
+  color: var(--accent-red, #f85149);
+}
+
+.env-var-help {
+  margin-top: 12px;
+  padding: 8px;
+  background: var(--bg-primary, #0d1117);
+  border-radius: 4px;
+  font-size: 11px;
+  color: var(--text-secondary, #8b949e);
+}
+
+.env-var-help code {
+  background: var(--bg-secondary, #1b1f27);
+  padding: 1px 4px;
+  border-radius: 3px;
+  font-family: 'SF Mono', 'Fira Code', monospace;
+}
+
 /* ── Platform transport config (PlatformConfigSection) ─────────────────── */
 .platform-config {
   margin-top: 10px;

@@ -198,6 +198,18 @@ export type ChatConsoleEvent =
       missing: string[];
       persisted: Record<string, boolean>;
     }
+  | {
+      /** Execution result from skill execution engine. */
+      kind: 'execution_result';
+      skillName: string;
+      runtime: string;
+      success: boolean;
+      durationMs: number;
+      exitCode: number;
+      stdout: string;
+      stderr: string;
+      timestamp: number;
+    }
   | { kind: 'status'; status: 'working' | 'done' | 'error' }
   | {
       /**

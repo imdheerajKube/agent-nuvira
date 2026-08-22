@@ -1125,6 +1125,8 @@ export class DashboardAPI {
       onSkillDraft?: (d: { name: string; description: string; markdown: string; updatedAt: number }) => void;
       /** PA4 — a skill loaded but needs env vars (notification card with save). */
       onSecretRequest?: (d: { skillName: string; missing: string[]; persisted: Record<string, boolean> }) => void;
+      /** Execution result from skill execution engine. */
+      onExecutionResult?: (d: { skillName: string; runtime: string; success: boolean; durationMs: number; exitCode: number; stdout: string; stderr: string; timestamp: number }) => void;
     },
   ): () => void {
     const token = getAdminToken();
@@ -1233,6 +1235,32 @@ export class DashboardAPI {
             skillName: payload.skillName,
             missing: payload.missing,
             persisted: payload.persisted ?? {},
+          });
+        }
+      } catch { /* ignore malformed */ }
+    });
+    es.addEventListener('execution_result', (event) => {
+      try {
+        const payload = JSON.parse((event as MessageEvent).data) as {
+          skillName?: string;
+          runtime?: string;
+          success?: boolean;
+          durationMs?: number;
+          exitCode?: number;
+          stdout?: string;
+          stderr?: string;
+          timestamp?: number;
+        };
+        if (payload.skillName && payload.runtime !== undefined) {
+          handlers.onExecutionResult?.({
+            skillName: payload.skillName,
+            runtime: payload.runtime,
+            success: payload.success ?? false,
+            durationMs: payload.durationMs ?? 0,
+            exitCode: payload.exitCode ?? 0,
+            stdout: payload.stdout ?? '',
+            stderr: payload.stderr ?? '',
+            timestamp: payload.timestamp ?? Date.now(),
           });
         }
       } catch { /* ignore malformed */ }
