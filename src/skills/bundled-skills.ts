@@ -2239,6 +2239,380 @@ export const cronSetupSkill: Skill = {
   lastUsedAt: BUNDLED_CREATED_AT,
 };
 
+/** ─── image-optimize ─── */
+export const imageOptimizeSkill: Skill = {
+  id: 'skill-image-optimize',
+  name: 'image-optimize',
+  description: 'Optimize images for web: compress, resize, convert formats (WebP, AVIF), generate thumbnails, and set up responsive images. Use when the goal asks to optimize images, reduce image size, or add responsive images.',
+  version: '1.0.0',
+  goalPattern: 'image optimize compress resize webp avif thumbnail responsive image optimization',
+  steps: [
+    { agentType: 'analyst', dependsOn: [], description: 'Audit current images: identify formats, sizes, and dimensions. Find oversized or unoptimized assets.' },
+    { agentType: 'analyst', dependsOn: ['step-0'], description: 'Choose optimization strategy: lossy vs lossless, target formats (WebP/AVIF), max dimensions, and quality settings.' },
+    { agentType: 'analyst', dependsOn: ['step-1'], description: 'Implement optimization pipeline: use sharp, imagemin, or squoosh to batch-compress images. Generate responsive variants (1x, 2x, 3x).' },
+    { agentType: 'analyst', dependsOn: ['step-2'], description: 'Set up lazy loading: add loading=lazy attributes, intersection observer fallback, and placeholder blur-up images.' },
+    { agentType: 'analyst', dependsOn: ['step-3'], description: 'Verify: compare file sizes before/after, check visual quality, test on slow connections, and document the pipeline.' },
+  ],
+  parameters: [
+    { name: 'format', description: 'Target format', type: 'choice', required: false, options: ['webp', 'avif', 'auto'], defaultValue: 'auto' },
+  ],
+  tags: ['image', 'optimize', 'compress', 'webp', 'avif', 'responsive', 'performance'],
+  sourceTrajectoryIds: ['bundled'],
+  qualityScore: 0.9, usageCount: 0, createdAt: BUNDLED_CREATED_AT, lastUsedAt: BUNDLED_CREATED_AT,
+};
+
+/** ─── pdf-generate ─── */
+export const pdfGenerateSkill: Skill = {
+  id: 'skill-pdf-generate',
+  name: 'pdf-generate',
+  description: 'Generate PDFs from HTML, Markdown, or data: invoices, reports, certificates, and documents. Use when the goal asks to create, generate, or export PDF files.',
+  version: '1.0.0',
+  goalPattern: 'pdf generate create export invoice report document print html markdown',
+  steps: [
+    { agentType: 'analyst', dependsOn: [], description: 'Identify the PDF type: invoice, report, certificate, receipt. Choose the generation library (puppeteer, pdfkit, jspdf).' },
+    { agentType: 'analyst', dependsOn: ['step-0'], description: 'Design the layout: create an HTML template or programmatic layout with headers, footers, tables, and page breaks.' },
+    { agentType: 'analyst', dependsOn: ['step-1'], description: 'Implement generation: wrap the library with a typed generatePdf() function that accepts data and returns a Buffer.' },
+    { agentType: 'analyst', dependsOn: ['step-2'], description: 'Add styling: CSS for print media, page margins, fonts, and colors. Test with different data sizes.' },
+    { agentType: 'analyst', dependsOn: ['step-3'], description: 'Test and verify: generate sample PDFs, check file size, validate content, and test edge cases (empty data, long text).' },
+  ],
+  parameters: [
+    { name: 'library', description: 'PDF library', type: 'choice', required: false, options: ['puppeteer', 'pdfkit', 'jspdf', 'auto'], defaultValue: 'auto' },
+  ],
+  tags: ['pdf', 'generate', 'export', 'invoice', 'report', 'document'],
+  sourceTrajectoryIds: ['bundled'],
+  qualityScore: 0.9, usageCount: 0, createdAt: BUNDLED_CREATED_AT, lastUsedAt: BUNDLED_CREATED_AT,
+};
+
+/** ─── cache-setup ─── */
+export const cacheSetupSkill: Skill = {
+  id: 'skill-cache-setup',
+  name: 'cache-setup',
+  description: 'Set up caching: Redis, Memcached, or in-memory caching for API responses, sessions, and expensive computations. Use when the goal asks to add caching, improve response times, or reduce database load.',
+  version: '1.0.0',
+  goalPattern: 'cache redis memcached caching performance speed up response time',
+  steps: [
+    { agentType: 'analyst', dependsOn: [], description: 'Identify cache targets: expensive queries, API responses, session data, and computed results. Choose the cache backend.' },
+    { agentType: 'analyst', dependsOn: ['step-0'], description: 'Set up the cache client: install Redis/Memcached driver, configure connection, add health checks.' },
+    { agentType: 'analyst', dependsOn: ['step-1'], description: 'Implement caching patterns: cache-aside, write-through, or write-behind. Define TTLs and invalidation strategies.' },
+    { agentType: 'analyst', dependsOn: ['step-2'], description: 'Add cache warming: pre-populate hot keys on startup. Add cache stampede protection (locks/lease).' },
+    { agentType: 'analyst', dependsOn: ['step-3'], description: 'Monitor and tune: add hit/miss metrics, measure latency improvement, and tune TTLs based on access patterns.' },
+  ],
+  parameters: [
+    { name: 'backend', description: 'Cache backend', type: 'choice', required: false, options: ['redis', 'memcached', 'memory', 'auto'], defaultValue: 'auto' },
+  ],
+  tags: ['cache', 'redis', 'memcached', 'performance', 'caching', 'speed'],
+  sourceTrajectoryIds: ['bundled'],
+  qualityScore: 0.9, usageCount: 0, createdAt: BUNDLED_CREATED_AT, lastUsedAt: BUNDLED_CREATED_AT,
+};
+
+/** ─── queue-setup ─── */
+export const queueSetupSkill: Skill = {
+  id: 'skill-queue-setup',
+  name: 'queue-setup',
+  description: 'Set up message queues: BullMQ, RabbitMQ, or SQS for background jobs, task processing, and event-driven architecture. Use when the goal asks to add background jobs, task queues, or async processing.',
+  version: '1.0.0',
+  goalPattern: 'queue job background worker bullmq rabbitmq sqs async processing task',
+  steps: [
+    { agentType: 'analyst', dependsOn: [], description: 'Identify job types: email sending, image processing, data sync, report generation. Choose the queue backend.' },
+    { agentType: 'analyst', dependsOn: ['step-0'], description: 'Set up the queue: install the library, configure Redis/connection, define job schemas with TypeScript types.' },
+    { agentType: 'analyst', dependsOn: ['step-1'], description: 'Implement producers: add enqueue functions with retry logic, priority, delays, and deduplication.' },
+    { agentType: 'analyst', dependsOn: ['step-2'], description: 'Implement consumers: write worker processors with concurrency limits, error handling, and dead-letter queues.' },
+    { agentType: 'analyst', dependsOn: ['step-3'], description: 'Add monitoring: dashboard for queue depth, processing times, failures. Set up alerts for stuck jobs.' },
+  ],
+  parameters: [
+    { name: 'backend', description: 'Queue backend', type: 'choice', required: false, options: ['bullmq', 'rabbitmq', 'sqs', 'auto'], defaultValue: 'auto' },
+  ],
+  tags: ['queue', 'job', 'background', 'worker', 'async', 'bullmq', 'rabbitmq'],
+  sourceTrajectoryIds: ['bundled'],
+  qualityScore: 0.9, usageCount: 0, createdAt: BUNDLED_CREATED_AT, lastUsedAt: BUNDLED_CREATED_AT,
+};
+
+/** ─── rate-limit ─── */
+export const rateLimitSkill: Skill = {
+  id: 'skill-rate-limit',
+  name: 'rate-limit',
+  description: 'Implement rate limiting: per-IP, per-user, or per-API-key limits with sliding window, token bucket, or fixed window algorithms. Use when the goal asks to add rate limiting, throttle requests, or prevent abuse.',
+  version: '1.0.0',
+  goalPattern: 'rate limit throttle abuse prevention api protection sliding window token bucket',
+  steps: [
+    { agentType: 'analyst', dependsOn: [], description: 'Define rate limit policies: limits per endpoint, per user/IP, window size, and response headers (X-RateLimit-*).' },
+    { agentType: 'analyst', dependsOn: ['step-0'], description: 'Choose the algorithm: sliding window (Redis), token bucket, or fixed window. Pick the storage backend.' },
+    { agentType: 'analyst', dependsOn: ['step-1'], description: 'Implement middleware: Express/Fastify middleware that checks limits, increments counters, and returns 429 with Retry-After.' },
+    { agentType: 'analyst', dependsOn: ['step-2'], description: 'Add bypass rules: whitelist admin IPs, exempt health checks, and support dynamic limits per tier.' },
+    { agentType: 'analyst', dependsOn: ['step-3'], description: 'Test: verify limits trigger correctly, check 429 responses, measure overhead, and test distributed scenarios.' },
+  ],
+  parameters: [
+    { name: 'algorithm', description: 'Algorithm', type: 'choice', required: false, options: ['sliding-window', 'token-bucket', 'fixed-window', 'auto'], defaultValue: 'auto' },
+  ],
+  tags: ['rate-limit', 'throttle', 'abuse', 'protection', 'api', 'middleware'],
+  sourceTrajectoryIds: ['bundled'],
+  qualityScore: 0.9, usageCount: 0, createdAt: BUNDLED_CREATED_AT, lastUsedAt: BUNDLED_CREATED_AT,
+};
+
+/** ─── cors-setup ─── */
+export const corsSetupSkill: Skill = {
+  id: 'skill-cors-setup',
+  name: 'cors-setup',
+  description: 'Configure CORS: cross-origin resource sharing for APIs, web apps, and embedded content. Use when the goal asks to fix CORS errors, configure cross-origin access, or set up CORS headers.',
+  version: '1.0.0',
+  goalPattern: 'cors cross-origin access origin header preflight error fix configuration',
+  steps: [
+    { agentType: 'analyst', dependsOn: [], description: 'Audit current CORS setup: check which origins are allowed, what headers are exposed, and identify any CORS errors in the browser.' },
+    { agentType: 'analyst', dependsOn: ['step-0'], description: 'Define the CORS policy: allowed origins, methods, headers, credentials, max-age, and preflight behavior.' },
+    { agentType: 'analyst', dependsOn: ['step-1'], description: 'Implement CORS middleware: use the cors package or custom middleware. Handle preflight OPTIONS requests.' },
+    { agentType: 'analyst', dependsOn: ['step-2'], description: 'Test cross-origin requests: verify preflight works, credentials are sent, and headers are exposed correctly.' },
+    { agentType: 'analyst', dependsOn: ['step-3'], description: 'Harden: restrict origins in production, add Vary: Origin header, and document the CORS policy.' },
+  ],
+  parameters: [
+    { name: 'framework', description: 'Framework', type: 'choice', required: false, options: ['express', 'fastify', 'nextjs', 'auto'], defaultValue: 'auto' },
+  ],
+  tags: ['cors', 'cross-origin', 'api', 'security', 'headers', 'preflight'],
+  sourceTrajectoryIds: ['bundled'],
+  qualityScore: 0.9, usageCount: 0, createdAt: BUNDLED_CREATED_AT, lastUsedAt: BUNDLED_CREATED_AT,
+};
+
+/** ─── error-tracking ─── */
+export const errorTrackingSkill: Skill = {
+  id: 'skill-error-tracking',
+  name: 'error-tracking',
+  description: 'Set up error tracking: Sentry, Bugsnag, or Rollbar for frontend and backend error monitoring. Use when the goal asks to add error tracking, exception monitoring, or crash reporting.',
+  version: '1.0.0',
+  goalPattern: 'error tracking sentry bugsnag rollbar crash monitoring exception reporting',
+  steps: [
+    { agentType: 'analyst', dependsOn: [], description: 'Choose the error tracking service: Sentry (most popular), Bugsnag, or Rollbar. Create an account and get the DSN.' },
+    { agentType: 'analyst', dependsOn: ['step-0'], description: 'Install and configure the SDK: add to both frontend and backend. Configure source maps, release tracking, and environment.' },
+    { agentType: 'analyst', dependsOn: ['step-1'], description: 'Add context: user info, breadcrumbs, tags, and extra data. Set up error grouping rules.' },
+    { agentType: 'analyst', dependsOn: ['step-2'], description: 'Configure alerts: email/Slack alerts for new errors, regression detection, and volume spikes.' },
+    { agentType: 'analyst', dependsOn: ['step-3'], description: 'Test: throw test errors in dev, verify they appear in the dashboard, and check source maps work.' },
+  ],
+  parameters: [
+    { name: 'service', description: 'Error tracking service', type: 'choice', required: false, options: ['sentry', 'bugsnag', 'rollbar', 'auto'], defaultValue: 'auto' },
+  ],
+  tags: ['error', 'tracking', 'sentry', 'monitoring', 'crash', 'exception'],
+  sourceTrajectoryIds: ['bundled'],
+  qualityScore: 0.9, usageCount: 0, createdAt: BUNDLED_CREATED_AT, lastUsedAt: BUNDLED_CREATED_AT,
+};
+
+/** ─── feature-flags ─── */
+export const featureFlagsSkill: Skill = {
+  id: 'skill-feature-flags',
+  name: 'feature-flags',
+  description: 'Implement feature flags: LaunchDarkly, Unleash, or custom flags for gradual rollouts, A/B testing, and kill switches. Use when the goal asks to add feature flags, gradual rollouts, or toggle features.',
+  version: '1.0.0',
+  goalPattern: 'feature flag toggle rollout ab testing kill switch launchdarkly unleash',
+  steps: [
+    { agentType: 'analyst', dependsOn: [], description: 'Choose the feature flag system: LaunchDarkly, Unleash, Flipt, or a custom in-memory store. Install and configure.' },
+    { agentType: 'analyst', dependsOn: ['step-0'], description: 'Define flags: create flag definitions with types (boolean, string, number), default values, and targeting rules.' },
+    { agentType: 'analyst', dependsOn: ['step-1'], description: 'Integrate in code: wrap feature checks in flag evaluation functions. Add server-side and client-side SDKs.' },
+    { agentType: 'analyst', dependsOn: ['step-2'], description: 'Set up gradual rollout: percentage-based rollouts, user segmentation, and environment-specific overrides.' },
+    { agentType: 'analyst', dependsOn: ['step-3'], description: 'Monitor and clean up: track flag usage, remove stale flags, and document the flag lifecycle process.' },
+  ],
+  parameters: [
+    { name: 'provider', description: 'Feature flag provider', type: 'choice', required: false, options: ['launchdarkly', 'unleash', 'flipt', 'custom', 'auto'], defaultValue: 'auto' },
+  ],
+  tags: ['feature-flags', 'toggle', 'rollout', 'ab-testing', 'gradual', 'kill-switch'],
+  sourceTrajectoryIds: ['bundled'],
+  qualityScore: 0.9, usageCount: 0, createdAt: BUNDLED_CREATED_AT, lastUsedAt: BUNDLED_CREATED_AT,
+};
+
+/** ─── webhook-setup ─── */
+export const webhookSetupSkill: Skill = {
+  id: 'skill-webhook-setup',
+  name: 'webhook-setup',
+  description: 'Set up webhooks: receive and verify incoming webhooks from third-party services (Stripe, GitHub, Twilio). Use when the goal asks to handle webhooks, verify webhook signatures, or process webhook events.',
+  version: '1.0.0',
+  goalPattern: 'webhook receive verify signature stripe github twilio event callback',
+  steps: [
+    { agentType: 'analyst', dependsOn: [], description: 'Identify webhook sources: list the third-party services sending webhooks and their event types.' },
+    { agentType: 'analyst', dependsOn: ['step-0'], description: 'Implement the endpoint: create a POST handler that receives raw body, verifies the signature, and parses the event.' },
+    { agentType: 'analyst', dependsOn: ['step-1'], description: 'Add signature verification: implement HMAC-SHA256 verification for each provider. Handle timestamp tolerance.' },
+    { agentType: 'analyst', dependsOn: ['step-2'], description: 'Process events: route events to handlers, implement idempotency (dedup by event ID), and acknowledge quickly.' },
+    { agentType: 'analyst', dependsOn: ['step-3'], description: 'Add resilience: retry logic for failed processing, dead-letter queue for poison events, and monitoring.' },
+  ],
+  parameters: [
+    { name: 'provider', description: 'Webhook source', type: 'choice', required: false, options: ['stripe', 'github', 'twilio', 'generic', 'auto'], defaultValue: 'auto' },
+  ],
+  tags: ['webhook', 'signature', 'verify', 'event', 'callback', 'integration'],
+  sourceTrajectoryIds: ['bundled'],
+  qualityScore: 0.9, usageCount: 0, createdAt: BUNDLED_CREATED_AT, lastUsedAt: BUNDLED_CREATED_AT,
+};
+
+/** ─── form-builder ─── */
+export const formBuilderSkill: Skill = {
+  id: 'skill-form-builder',
+  name: 'form-builder',
+  description: 'Build dynamic forms: validation, conditional fields, multi-step wizards, and file uploads. Use when the goal asks to create forms, add form validation, or build multi-step forms.',
+  version: '1.0.0',
+  goalPattern: 'form builder validation wizard multi-step file upload input dynamic fields',
+  steps: [
+    { agentType: 'analyst', dependsOn: [], description: 'Define the form schema: fields, types, validation rules, conditional visibility, and default values.' },
+    { agentType: 'analyst', dependsOn: ['step-0'], description: 'Choose the form library: react-hook-form, formik, zod validation, or HTML5 native. Install and configure.' },
+    { agentType: 'analyst', dependsOn: ['step-1'], description: 'Implement the form: build field components, add validation, handle multi-step navigation, and manage state.' },
+    { agentType: 'analyst', dependsOn: ['step-2'], description: 'Add file uploads: implement drag-and-drop, preview, progress bars, and server-side storage.' },
+    { agentType: 'analyst', dependsOn: ['step-3'], description: 'Test and polish: verify validation messages, test edge cases, add loading states, and ensure accessibility.' },
+  ],
+  parameters: [
+    { name: 'framework', description: 'UI framework', type: 'choice', required: false, options: ['react', 'vue', 'svelte', 'auto'], defaultValue: 'auto' },
+  ],
+  tags: ['form', 'validation', 'wizard', 'multi-step', 'upload', 'input'],
+  sourceTrajectoryIds: ['bundled'],
+  qualityScore: 0.9, usageCount: 0, createdAt: BUNDLED_CREATED_AT, lastUsedAt: BUNDLED_CREATED_AT,
+};
+
+/** ─── data-sync ─── */
+export const dataSyncSkill: Skill = {
+  id: 'skill-data-sync',
+  name: 'data-sync',
+  description: 'Set up data synchronization between systems: ETL pipelines, API sync, database replication, and real-time streaming. Use when the goal asks to sync data, build ETL pipelines, or connect data sources.',
+  version: '1.0.0',
+  goalPattern: 'data sync etl pipeline replicate stream transform migrate connect sources',
+  steps: [
+    { agentType: 'analyst', dependsOn: [], description: 'Map data sources: identify source and destination systems, data formats, sync frequency, and conflict resolution strategy.' },
+    { agentType: 'analyst', dependsOn: ['step-0'], description: 'Choose the sync approach: batch ETL, CDC (change data capture), API polling, or real-time streaming (WebSocket/SSE).' },
+    { agentType: 'analyst', dependsOn: ['step-1'], description: 'Implement the pipeline: write extract/transform/load functions with error handling, idempotency, and logging.' },
+    { agentType: 'analyst', dependsOn: ['step-2'], description: 'Add scheduling: cron-based runs, event-driven triggers, or manual invocation. Handle partial failures and retries.' },
+    { agentType: 'analyst', dependsOn: ['step-3'], description: 'Monitor: track sync status, record metrics (rows synced, duration, errors), and set up alerts for failures.' },
+  ],
+  parameters: [
+    { name: 'approach', description: 'Sync approach', type: 'choice', required: false, options: ['batch-etl', 'cdc', 'api-polling', 'streaming', 'auto'], defaultValue: 'auto' },
+  ],
+  tags: ['data', 'sync', 'etl', 'pipeline', 'replicate', 'stream', 'transform'],
+  sourceTrajectoryIds: ['bundled'],
+  qualityScore: 0.9, usageCount: 0, createdAt: BUNDLED_CREATED_AT, lastUsedAt: BUNDLED_CREATED_AT,
+};
+
+/** ─── state-machine ─── */
+export const stateMachineSkill: Skill = {
+  id: 'skill-state-machine',
+  name: 'state-machine',
+  description: 'Design and implement state machines: order lifecycle, approval workflows, and complex business logic. Use when the goal asks to add state management, workflow automation, or business process logic.',
+  version: '1.0.0',
+  goalPattern: 'state machine workflow lifecycle order approval process automation transition',
+  steps: [
+    { agentType: 'analyst', dependsOn: [], description: 'Define states and transitions: map all possible states, events that trigger transitions, and guard conditions.' },
+    { agentType: 'analyst', dependsOn: ['step-0'], description: 'Choose the library: xstate, robot, or a custom implementation. Define the statechart with context and actions.' },
+    { agentType: 'analyst', dependsOn: ['step-1'], description: 'Implement the machine: create states, transitions, actions, and guards. Add side effects for entry/exit.' },
+    { agentType: 'analyst', dependsOn: ['step-2'], description: 'Integrate with the app: connect the machine to UI components, API calls, and database state.' },
+    { agentType: 'analyst', dependsOn: ['step-3'], description: 'Test: verify all transitions, test guard conditions, check side effects, and handle error states.' },
+  ],
+  parameters: [
+    { name: 'library', description: 'State machine library', type: 'choice', required: false, options: ['xstate', 'robot', 'custom', 'auto'], defaultValue: 'auto' },
+  ],
+  tags: ['state-machine', 'workflow', 'lifecycle', 'process', 'automation', 'transition'],
+  sourceTrajectoryIds: ['bundled'],
+  qualityScore: 0.9, usageCount: 0, createdAt: BUNDLED_CREATED_AT, lastUsedAt: BUNDLED_CREATED_AT,
+};
+
+/** ─── websocket-setup ─── */
+export const websocketSetupSkill: Skill = {
+  id: 'skill-websocket-setup',
+  name: 'websocket-setup',
+  description: 'Set up WebSocket connections: real-time chat, notifications, live updates, and collaboration features. Use when the goal asks to add real-time features, WebSocket connections, or live data.',
+  version: '1.0.0',
+  goalPattern: 'websocket realtime live chat notification collaboration socket real-time update',
+  steps: [
+    { agentType: 'analyst', dependsOn: [], description: 'Choose the WebSocket library: ws, Socket.IO, or native WebSocket. Consider scaling needs (sticky sessions, Redis adapter).' },
+    { agentType: 'analyst', dependsOn: ['step-0'], description: 'Implement the server: create WebSocket server with connection handling, rooms/channels, and message routing.' },
+    { agentType: 'analyst', dependsOn: ['step-1'], description: 'Implement the client: connect, handle reconnection, send/receive messages, and manage connection state.' },
+    { agentType: 'analyst', dependsOn: ['step-2'], description: 'Add authentication: verify tokens on connection, implement per-room permissions, and handle disconnections.' },
+    { agentType: 'analyst', dependsOn: ['step-3'], description: 'Scale and monitor: add Redis adapter for multi-instance, track connections, and monitor message throughput.' },
+  ],
+  parameters: [
+    { name: 'library', description: 'WebSocket library', type: 'choice', required: false, options: ['ws', 'socket-io', 'native', 'auto'], defaultValue: 'auto' },
+  ],
+  tags: ['websocket', 'realtime', 'chat', 'notification', 'live', 'collaboration'],
+  sourceTrajectoryIds: ['bundled'],
+  qualityScore: 0.9, usageCount: 0, createdAt: BUNDLED_CREATED_AT, lastUsedAt: BUNDLED_CREATED_AT,
+};
+
+/** ─── api-versioning ─── */
+export const apiVersioningSkill: Skill = {
+  id: 'skill-api-versioning',
+  name: 'api-versioning',
+  description: 'Implement API versioning: URL path, header, or content-type versioning with deprecation notices and migration guides. Use when the goal asks to version an API, handle breaking changes, or add deprecation notices.',
+  version: '1.0.0',
+  goalPattern: 'api version versioning deprecation breaking change migration url header',
+  steps: [
+    { agentType: 'analyst', dependsOn: [], description: 'Choose versioning strategy: URL path (/v1/), header (API-Version), or content-type negotiation. Define version lifecycle.' },
+    { agentType: 'analyst', dependsOn: ['step-0'], description: 'Restructure routes: move existing endpoints under a version prefix. Set up version-aware middleware.' },
+    { agentType: 'analyst', dependsOn: ['step-1'], description: 'Add deprecation support: implement Sunset header, deprecation warnings in responses, and version negotiation.' },
+    { agentType: 'analyst', dependsOn: ['step-2'], description: 'Write migration guides: document breaking changes between versions, provide code examples for upgrades.' },
+    { agentType: 'analyst', dependsOn: ['step-3'], description: 'Test version coexistence: verify v1 and v2 endpoints work simultaneously, check deprecation headers appear.' },
+  ],
+  parameters: [
+    { name: 'strategy', description: 'Versioning strategy', type: 'choice', required: false, options: ['url-path', 'header', 'content-type', 'auto'], defaultValue: 'auto' },
+  ],
+  tags: ['api', 'versioning', 'deprecation', 'migration', 'breaking-change', 'rest'],
+  sourceTrajectoryIds: ['bundled'],
+  qualityScore: 0.9, usageCount: 0, createdAt: BUNDLED_CREATED_AT, lastUsedAt: BUNDLED_CREATED_AT,
+};
+
+/** ─── multi-tenancy ─── */
+export const multiTenancySkill: Skill = {
+  id: 'skill-multi-tenancy',
+  name: 'multi-tenancy',
+  description: 'Implement multi-tenancy: tenant isolation, shared databases with row-level security, or separate schemas. Use when the goal asks to add multi-tenancy, tenant isolation, or SaaS data separation.',
+  version: '1.0.0',
+  goalPattern: 'multi-tenancy tenant isolation saas data separation row-level security shared database',
+  steps: [
+    { agentType: 'analyst', dependsOn: [], description: 'Choose the tenancy model: shared database (row-level), schema-per-tenant, or database-per-tenant. Assess isolation requirements.' },
+    { agentType: 'analyst', dependsOn: ['step-0'], description: 'Implement tenant context: add tenant ID to all requests via middleware, JWT claims, or subdomain routing.' },
+    { agentType: 'analyst', dependsOn: ['step-1'], description: 'Enforce isolation: add row-level security policies, schema switching, or database routing based on tenant context.' },
+    { agentType: 'analyst', dependsOn: ['step-2'], description: 'Handle tenant lifecycle: implement tenant creation, suspension, deletion, and data migration between tiers.' },
+    { agentType: 'analyst', dependsOn: ['step-3'], description: 'Test isolation: verify tenant A cannot access tenant B data, test cross-tenant queries fail, and audit the security.' },
+  ],
+  parameters: [
+    { name: 'model', description: 'Tenancy model', type: 'choice', required: false, options: ['shared-db', 'schema-per-tenant', 'db-per-tenant', 'auto'], defaultValue: 'auto' },
+  ],
+  tags: ['multi-tenancy', 'tenant', 'isolation', 'saas', 'security', 'data-separation'],
+  sourceTrajectoryIds: ['bundled'],
+  qualityScore: 0.9, usageCount: 0, createdAt: BUNDLED_CREATED_AT, lastUsedAt: BUNDLED_CREATED_AT,
+};
+
+/** ─── blob-storage ─── */
+export const blobStorageSkill: Skill = {
+  id: 'skill-blob-storage',
+  name: 'blob-storage',
+  description: 'Set up blob/file storage: S3, Cloudflare R2, or Azure Blob for uploads, assets, and backups. Use when the goal asks to add file uploads, cloud storage, or asset hosting.',
+  version: '1.0.0',
+  goalPattern: 'blob storage s3 cloudflare r2 azure upload file asset hosting bucket',
+  steps: [
+    { agentType: 'analyst', dependsOn: [], description: 'Choose the storage provider: S3, R2, Azure Blob, or MinIO. Set up the bucket/container with appropriate permissions.' },
+    { agentType: 'analyst', dependsOn: ['step-0'], description: 'Implement upload: create presigned URLs for client-side upload, or server-side upload with streaming.' },
+    { agentType: 'analyst', dependsOn: ['step-1'], description: 'Add access control: implement signed URLs for read, bucket policies for public assets, and ACL for private files.' },
+    { agentType: 'analyst', dependsOn: ['step-2'], description: 'Handle processing: add image resizing on upload, virus scanning, and metadata extraction.' },
+    { agentType: 'analyst', dependsOn: ['step-3'], description: 'Test and optimize: verify uploads work, test file serving, add CDN caching, and monitor storage costs.' },
+  ],
+  parameters: [
+    { name: 'provider', description: 'Storage provider', type: 'choice', required: false, options: ['s3', 'r2', 'azure', 'minio', 'auto'], defaultValue: 'auto' },
+  ],
+  tags: ['blob', 'storage', 's3', 'upload', 'file', 'asset', 'cdn'],
+  sourceTrajectoryIds: ['bundled'],
+  qualityScore: 0.9, usageCount: 0, createdAt: BUNDLED_CREATED_AT, lastUsedAt: BUNDLED_CREATED_AT,
+};
+
+/** ─── notification-setup ─── */
+export const notificationSetupSkill: Skill = {
+  id: 'skill-notification-setup',
+  name: 'notification-setup',
+  description: 'Build a notification system: push notifications, in-app alerts, email digests, and preference management. Use when the goal asks to add notifications, alerts, or user notification preferences.',
+  version: '1.0.0',
+  goalPattern: 'notification push alert in-app email digest preference bell notification center',
+  steps: [
+    { agentType: 'analyst', dependsOn: [], description: 'Define notification types: in-app, email, push, SMS. Map events to notification templates and delivery channels.' },
+    { agentType: 'analyst', dependsOn: ['step-0'], description: 'Build the notification store: create the schema for notifications (user_id, type, title, body, read, created_at).' },
+    { agentType: 'analyst', dependsOn: ['step-1'], description: 'Implement delivery: send in-app notifications via API, queue email/SMS for async delivery, register push tokens.' },
+    { agentType: 'analyst', dependsOn: ['step-2'], description: 'Add preference management: let users toggle notification types, set quiet hours, and choose channels.' },
+    { agentType: 'analyst', dependsOn: ['step-3'], description: 'Build the UI: notification bell with unread count, notification center with filters, and mark-as-read.' },
+  ],
+  parameters: [
+    { name: 'channels', description: 'Notification channels', type: 'choice', required: false, options: ['in-app', 'email', 'push', 'all'], defaultValue: 'all' },
+  ],
+  tags: ['notification', 'alert', 'push', 'email', 'in-app', 'preferences'],
+  sourceTrajectoryIds: ['bundled'],
+  qualityScore: 0.9, usageCount: 0, createdAt: BUNDLED_CREATED_AT, lastUsedAt: BUNDLED_CREATED_AT,
+};
+
 /** All bundled skills (new first-party skills append here). */
 export const BUNDLED_SKILLS: Skill[] = [
   websiteDeploySkill,
@@ -2274,4 +2648,21 @@ export const BUNDLED_SKILLS: Skill[] = [
   designSystemSkill,
   legalComplianceSkill,
   cronSetupSkill,
+  imageOptimizeSkill,
+  pdfGenerateSkill,
+  cacheSetupSkill,
+  queueSetupSkill,
+  rateLimitSkill,
+  corsSetupSkill,
+  errorTrackingSkill,
+  featureFlagsSkill,
+  webhookSetupSkill,
+  formBuilderSkill,
+  dataSyncSkill,
+  stateMachineSkill,
+  websocketSetupSkill,
+  apiVersioningSkill,
+  multiTenancySkill,
+  blobStorageSkill,
+  notificationSetupSkill,
 ];
