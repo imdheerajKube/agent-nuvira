@@ -21,6 +21,8 @@ features:
 
 # Agent-Nuvira — `agent-nuvira`
 
+> **Developed by Dheeraj Sharma <imdheeraj@gmail.com>**
+
 **Multi-agent AI coding assistant** with a **visual dashboard** and **powerful CLI**. Run models locally (Ollama) or route across 22+ cloud providers (Groq, Gemini, OpenRouter, Bedrock, Azure, Anthropic, OpenAI, and more). Specialized agents plan, write, review, test, and ship code — learning from every run.
 
 ```bash
@@ -1332,6 +1334,33 @@ agent-nuvira skills bundle --list
 # Show bundle contents
 agent-nuvira skills bundle backend-dev --show
 ```
+
+### Skill Execution — Language-Agnostic Marketplace Skills
+
+Execute skills from the marketplace in any language (Python, Node.js, Shell, TypeScript) without the agent needing to understand the language.
+
+```bash
+# Execute a Python skill (e.g., image generation)
+agent-nuvira skill execute image-gen --prompt "A sunset over mountains"
+
+# Execute a Node.js skill (e.g., API call)
+agent-nuvira skill execute api-call --endpoint /users --method GET
+
+# Execute a Shell skill (e.g., system check)
+agent-nuvira skill execute system-check --check disk
+
+# The skill tool also supports execution via the agent
+# Agent calls: skill tool → execute: { skill: "image-gen", args: { prompt: "..." } }
+```
+
+**How it works:**
+1. Skill declares `runtime: python` (or node/shell/auto) in frontmatter
+2. Executor auto-detects language from frontmatter, file extension, or shebang
+3. API keys are injected via environment variables (provider credentials blocked for security)
+4. Script is executed in a subprocess with timeout and output capture
+5. Returns structured result (stdout, stderr, exit code, duration)
+
+**Security:** Provider credentials (ANTHROPIC_API_KEY, OPENAI_API_KEY, etc.) are automatically blocked from skill execution. Only skill-declared `required_environment_variables` are injected.
 
 **50 bundled first-party skills** ship with the product:
 

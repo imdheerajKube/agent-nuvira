@@ -46,6 +46,24 @@ following items are CONFIRMED SHIPPED:
 
 All gaps closed. See `UNIFIED_IMPROVEMENT_PLAN.md` for the full roadmap.
 
+**CAPABILITY PARITY WITH HERMES (verified 2026-08-22):**
+
+The real gap between agent-nuvira and Hermes was NOT the number of skills — it was the CAPABILITY to execute skills from the marketplace in any language. This is now SHIPPED:
+
+- ✅ **Skill Execution Engine** (`src/skills/skill-executor.ts`) — Execute skills as scripts (Python, JS, shell)
+- ✅ **Language Detection** — Auto-detect runtime from frontmatter, file extension, or heuristics
+- ✅ **Env Passthrough** — API keys injected into skill execution with provider credential blocking
+- ✅ **Skill Execute Action** (`src/tools/skill-tool.ts`) — `execute` action on the skill tool
+- ✅ **Timeout & Output Capture** — Configurable timeout, max output size, stdout/stderr capture
+
+**How it works:**
+1. Skill declares `runtime: python` (or node/shell/auto) in frontmatter
+2. Agent calls `skill tool → execute: { skill: "nanobanana", args: [...] }`
+3. Executor detects runtime, creates temp script, spawns process with API keys injected
+4. Returns structured result (stdout, stderr, exit code, duration)
+
+**vs Hermes:** Same capability — Hermes uses `execute_code` sandbox + `env_passthrough`. We use `skill-executor.ts` + `registerEnvPassthrough`. Both achieve language-agnostic skill execution.
+
 **Verification pass (2026-08-17, code-level re-analysis against acceptance
 criteria — no rework required):**
 - P0.1: `chat-console.ts` `askQuestion`(233)/`respond`(252) + server
