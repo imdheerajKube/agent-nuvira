@@ -51,7 +51,7 @@
     "model-context-protocol"
   ],
   "license": "MIT",
-  "author": "Dheeraj Sharma",
+  "author": "Dheeraj Sharma <imdheeraj@gmail.com>",
   "repository": {
     "type": "git",
     "url": "git+https://github.com/imdheerajKube/agent-nuvira.git"

@@ -49,6 +49,19 @@ export interface SkillToolArgs {
     /** P6a — learn action: sources to learn from (URLs, file paths, or description text). */
     sources?: string[];
   };
+  /** Execute a skill as a script (Python, JS, shell) — language-agnostic marketplace execution. */
+  execute?: {
+    /** Skill name or path to execute */
+    skill: string;
+    /** Runtime override (python, node, shell, auto) */
+    runtime?: 'python' | 'node' | 'shell' | 'auto';
+    /** Arguments to pass to the script */
+    args?: string[];
+    /** Additional env vars to inject */
+    env?: Record<string, string>;
+    /** Timeout in milliseconds (default: 30000) */
+    timeoutMs?: number;
+  };
 }
 
 /**
@@ -437,6 +450,125 @@ async function runSkillManage(manage: NonNullable<SkillToolArgs['manage']>, ctx:
     : `No draft '${name}' found — nothing to delete.`;
 }
 
+/**
+ * Execute a skill as a script (Python, JS, shell) — language-agnostic marketplace execution.
+ * This is the key capability that matches Hermes: skills from the marketplace
+ * can be executed in any language without the agent needing to understand the language.
+ */
+async function runSkillExecute(
+  execute: NonNullable<SkillToolArgs['execute']>,
+  ctx: ToolContext
+): Promise<string> {
+  const { executeSkill, detectRuntime, registerEnvPassthrough } = await import('../skills/skill-executor.js');
+  const { readFile } = await import('node:fs/promises');
+  const { join } = await import('node:path');
+
+  const skillName = (execute.skill ?? '').trim();
+  if (!skillName) {
+    return 'Error: execute needs a skill name or path.';
+  }
+
+  // Resolve the skill file
+  let skillPath: string;
+  let skillContent: string;
+
+  // Try multiple locations
+  const candidates = [
+    skillName, // Direct path
+    join(process.cwd(), '.agents', 'skills', skillName, 'SKILL.md'),
+    join(process.env.HOME ?? '~', '.nuvira', 'skills', skillName, 'SKILL.md'),
+    join(process.env.HOME ?? '~', '.buff', 'skills', skillName, 'SKILL.md'),
+  ];
+
+  let found = false;
+  for (const candidate of candidates) {
+    try {
+      skillContent = await readFile(candidate, 'utf-8');
+      skillPath = candidate;
+      found = true;
+      break;
+    } catch {
+      // Try next candidate
+    }
+  }
+
+  if (!found) {
+    // Try as a compiled skill from the store
+    try {
+      const { getSkillStore } = await import('../learning/skill-store.js');
+      const store = getSkillStore();
+      const skill = store.get(skillName) ?? store.get(`skill-${skillName}`);
+      if (skill) {
+        return `Skill '${skillName}' is a compiled methodology skill (not an executable script). Use the skill tool with skill: "${skillName}" to load its methodology instead.`;
+      }
+    } catch {
+      // Ignore store errors
+    }
+
+    return `Error: skill '${skillName}' not found. Available locations checked:\n${candidates.map(c => `  • ${c}`).join('\n')}`;
+  }
+
+  // Parse required_environment_variables from frontmatter
+  const envVarMatch = skillContent!.match(
+    /^required_environment_variables:\s*\[([^\]]*)\]/m
+  );
+  const requiredEnvVars = envVarMatch
+    ? envVarMatch[1].split(',').map((v) => v.trim().replace(/['"]/g, ''))
+    : [];
+
+  // Register env vars for passthrough
+  if (requiredEnvVars.length > 0) {
+    registerEnvPassthrough(requiredEnvVars);
+
+    // Check which vars are missing
+    const missing = requiredEnvVars.filter((v) => !process.env[v]);
+    if (missing.length > 0) {
+      return [
+        `⚠️ Skill '${skillName}' requires environment variables that are not set:`,
+        missing.map((v) => `  • ${v}`).join('\n'),
+        '',
+        'Set them in your environment or ~/.nuvira/.env before executing this skill.',
+        'You can also use the secret capture prompt to set them interactively.',
+      ].join('\n');
+    }
+  }
+
+  // Detect runtime
+  const runtime = execute.runtime ?? detectRuntime(skillContent!, skillPath!);
+
+  // Build execution context
+  const env: Record<string, string> = { ...execute.env };
+  for (const varName of requiredEnvVars) {
+    if (process.env[varName]) {
+      env[varName] = process.env[varName]!;
+    }
+  }
+
+  // Execute the skill
+  try {
+    const result = await executeSkill(skillContent!, {
+      cwd: process.cwd(),
+      env,
+      timeoutMs: execute.timeoutMs ?? 30_000,
+    }, skillPath!);
+
+    const output = [
+      `📜 Skill '${skillName}' executed (${runtime}, ${result.durationMs}ms)`,
+      result.success ? '✅ Success' : `❌ Failed (exit code ${result.exitCode})`,
+      '',
+      '--- stdout ---',
+      result.stdout || '(no output)',
+      '',
+      '--- stderr ---',
+      result.stderr || '(no errors)',
+    ].join('\n');
+
+    return output;
+  } catch (err) {
+    return `Error executing skill '${skillName}': ${err instanceof Error ? err.message : String(err)}`;
+  }
+}
+
 export async function runSkillTool(args: SkillToolArgs, ctx: ToolContext): Promise<string> {
   const name = (args?.skill ?? '').trim();
   const params = args?.params && typeof args.params === 'object' ? args.params : {};
@@ -445,6 +577,11 @@ export async function runSkillTool(args: SkillToolArgs, ctx: ToolContext): Promi
   // loading — the model cannot accidentally load while managing).
   if (args?.manage) {
     return runSkillManage(args.manage, ctx);
+  }
+
+  // Skill execution — run a skill as a script (Python, JS, shell).
+  if (args?.execute) {
+    return runSkillExecute(args.execute, ctx);
   }
 
   // P6b — bundle load takes precedence: one call, every member methodology.
