@@ -363,7 +363,7 @@ describe('SkillStore', () => {
     it('P5 — seeds all 133 bundled skills (Phase 3 complete)', () => {
       const fresh = new SkillStore();
       const names = fresh.getAll().map((s) => s.name).sort();
-      expect(names.length).toBe(135);
+      expect(names.length).toBe(149);
       expect(names).toContain('website-deploy');
       expect(names).toContain('solidity');
       expect(names).toContain('powershell-automation');
