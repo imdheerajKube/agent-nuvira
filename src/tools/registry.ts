@@ -1573,3 +1573,331 @@ registerTool({
     }
   }),
 });
+
+// ─── Batch 1: Critical Infrastructure ─────────────────────────────────────
+
+// Interrupt tool
+registerTool({
+  name: 'interrupt',
+  description: 'Global interrupt: stop all running operations or interrupt a specific task.',
+  category: 'workflow',
+  inputSchema: z.object({
+    action: z.enum(['global', 'task', 'check', 'clear']).describe('Action'),
+    taskId: z.string().optional().describe('Task ID for task interrupt'),
+    reason: z.string().optional().describe('Interrupt reason'),
+  }),
+  endsAgentStep: false,
+  run: (args) => import('./interrupt-tool.js').then((m) => {
+    const { action, taskId, reason } = args as any;
+    const mgr = m.getInterruptManager();
+    switch (action) {
+      case 'global': return JSON.stringify(mgr.interruptGlobal(reason || 'User requested', 'tool'));
+      case 'task': return taskId ? JSON.stringify(mgr.interruptTask(taskId, reason || 'User requested', 'tool')) : 'taskId required';
+      case 'check': return JSON.stringify({ interrupted: mgr.isInterrupted(taskId) });
+      case 'clear': return taskId ? (mgr.clearTaskInterrupt(taskId), 'Cleared') : (mgr.clearGlobal(), 'Global cleared');
+      default: return 'Unknown action';
+    }
+  }),
+});
+
+// Daemon pool tool
+registerTool({
+  name: 'daemon_pool',
+  description: 'Background daemon process management: register, start, stop, monitor health.',
+  category: 'workflow',
+  inputSchema: z.object({
+    action: z.enum(['register', 'start', 'stop', 'list', 'stats']).describe('Action'),
+    id: z.string().optional().describe('Daemon ID'),
+    name: z.string().optional().describe('Daemon name'),
+    command: z.string().optional().describe('Command to run'),
+  }),
+  endsAgentStep: false,
+  run: (args) => import('./daemon-pool.js').then((m) => {
+    const { action, id, name, command } = args as any;
+    const pool = m.getDaemonPool();
+    switch (action) {
+      case 'register': return name && command ? JSON.stringify(pool.register({ name, command })) : 'name and command required';
+      case 'start': return id ? JSON.stringify(pool.start(id)) : 'id required';
+      case 'stop': return id ? (pool.stop(id) ? 'Stopped' : 'Not found') : 'id required';
+      case 'list': return JSON.stringify(pool.list());
+      case 'stats': return JSON.stringify({ total: pool.list().length, running: pool.list().filter((d: any) => d.status === 'running').length });
+      default: return 'Unknown action';
+    }
+  }),
+});
+
+// Process registry tool
+registerTool({
+  name: 'process_registry',
+  description: 'Track all running processes with metadata and cleanup.',
+  category: 'workflow',
+  inputSchema: z.object({
+    action: z.enum(['register', 'list', 'stats', 'kill', 'cleanup']).describe('Action'),
+    id: z.string().optional().describe('Process ID'),
+    pid: z.number().optional().describe('OS PID'),
+    command: z.string().optional().describe('Command name'),
+  }),
+  endsAgentStep: false,
+  run: (args) => import('./process-registry.js').then((m) => {
+    const { action, id, pid, command } = args as any;
+    const reg = m.getProcessRegistry();
+    switch (action) {
+      case 'register': return pid && command ? JSON.stringify(reg.register(pid, command)) : 'pid and command required';
+      case 'list': return JSON.stringify(reg.list());
+      case 'stats': return JSON.stringify(reg.getStats());
+      case 'kill': return id ? (reg.kill(id) ? 'Killed' : 'Not found') : 'id required';
+      case 'cleanup': return JSON.stringify({ cleaned: reg.cleanup() });
+      default: return 'Unknown action';
+    }
+  }),
+});
+
+// Code execution tool
+registerTool({
+  name: 'code_execution',
+  description: 'Execute code in sandboxed environment with timeout and resource limits.',
+  category: 'workflow',
+  inputSchema: z.object({
+    language: z.enum(['javascript', 'typescript', 'python', 'bash', 'powershell']).describe('Language'),
+    code: z.string().describe('Code to execute'),
+    timeoutMs: z.number().optional().describe('Timeout in ms'),
+  }),
+  endsAgentStep: false,
+  run: (args) => import('./code-execution.js').then((m) => {
+    const { language, code, timeoutMs } = args as any;
+    return m.getCodeExecutor().execute({ language, code, timeoutMs }).then((r: any) => JSON.stringify(r));
+  }),
+});
+
+// Checkpoint manager tool
+registerTool({
+  name: 'checkpoint',
+  description: 'Save and restore execution state for rollback.',
+  category: 'workflow',
+  inputSchema: z.object({
+    action: z.enum(['create', 'restore', 'list', 'delete', 'diff']).describe('Action'),
+    id: z.string().optional().describe('Checkpoint ID'),
+    name: z.string().optional().describe('Checkpoint name'),
+    state: z.record(z.string(), z.unknown()).optional().describe('State to save'),
+    id2: z.string().optional().describe('Second checkpoint for diff'),
+  }),
+  endsAgentStep: false,
+  run: (args) => import('./checkpoint-manager.js').then((m) => {
+    const { action, id, name, state, id2 } = args as any;
+    const mgr = m.getCheckpointManager();
+    switch (action) {
+      case 'create': return name && state ? JSON.stringify(mgr.create(name, state)) : 'name and state required';
+      case 'restore': return id ? JSON.stringify(mgr.restore(id)) : 'id required';
+      case 'list': return JSON.stringify(mgr.list());
+      case 'delete': return id ? (mgr.delete(id) ? 'Deleted' : 'Not found') : 'id required';
+      case 'diff': return id && id2 ? JSON.stringify(mgr.diff(id, id2)) : 'id and id2 required';
+      default: return 'Unknown action';
+    }
+  }),
+});
+
+// ─── Batch 2: Security Deep ───────────────────────────────────────────────
+
+// AST audit tool
+registerTool({
+  name: 'ast_audit',
+  description: 'AST-based code audit: detect eval(), hardcoded secrets, SQL injection patterns.',
+  category: 'workflow',
+  inputSchema: z.object({
+    filePath: z.string().describe('File to audit'),
+  }),
+  endsAgentStep: false,
+  run: (args) => import('./security-deep.js').then((m) => {
+    const { filePath } = args as any;
+    return JSON.stringify(m.getASTAuditor().audit(filePath));
+  }),
+});
+
+// Threat patterns tool
+registerTool({
+  name: 'threat_patterns',
+  description: 'Detect threat patterns: shell execution, external HTTP, obfuscation.',
+  category: 'workflow',
+  inputSchema: z.object({
+    filePath: z.string().describe('File to scan'),
+  }),
+  endsAgentStep: false,
+  run: (args) => import('./security-deep.js').then((m) => {
+    const { filePath } = args as any;
+    return JSON.stringify(m.getThreatDetector().detect(filePath));
+  }),
+});
+
+// URL safety tool
+registerTool({
+  name: 'url_safety',
+  description: 'Check URL safety: suspicious TLDs, patterns, length.',
+  category: 'workflow',
+  inputSchema: z.object({
+    url: z.string().describe('URL to check'),
+  }),
+  endsAgentStep: false,
+  run: (args) => import('./security-deep.js').then((m) => {
+    const { url } = args as any;
+    return JSON.stringify(m.getURLSafetyChecker().check(url));
+  }),
+});
+
+// Path security tool
+registerTool({
+  name: 'path_security',
+  description: 'Check path security: traversal, null bytes, directory escape.',
+  category: 'workflow',
+  inputSchema: z.object({
+    path: z.string().describe('Path to check'),
+    allowedDir: z.string().optional().describe('Allowed directory'),
+  }),
+  endsAgentStep: false,
+  run: (args) => import('./security-deep.js').then((m) => {
+    const { path, allowedDir } = args as any;
+    return JSON.stringify(m.getPathSecurityChecker().checkPath(path, allowedDir));
+  }),
+});
+
+// Security score tool
+registerTool({
+  name: 'security_score',
+  description: 'Calculate security score for a file: code injection, secrets, threats.',
+  category: 'workflow',
+  inputSchema: z.object({
+    filePath: z.string().describe('File to score'),
+  }),
+  endsAgentStep: false,
+  run: (args) => import('./security-deep.js').then((m) => {
+    const { filePath } = args as any;
+    return JSON.stringify(m.getSecurityScorer().score(filePath));
+  }),
+});
+
+// ─── Batch 5: Infrastructure ──────────────────────────────────────────────
+
+// Tool search tool
+registerTool({
+  name: 'tool_search',
+  description: 'Search tools by query with fuzzy matching.',
+  category: 'workflow',
+  inputSchema: z.object({
+    query: z.string().describe('Search query'),
+    limit: z.number().optional().describe('Max results'),
+  }),
+  endsAgentStep: false,
+  run: (args) => import('./infra-tools.js').then((m) => {
+    const { query, limit } = args as any;
+    const engine = m.getToolSearchEngine();
+    // Index from registry
+    const { listTools } = require('./registry.js');
+    engine.index(listTools().map((t: any) => ({ name: t.name, description: t.description })));
+    return JSON.stringify(engine.search(query, limit || 10));
+  }),
+});
+
+// Budget config tool
+registerTool({
+  name: 'budget_config',
+  description: 'Budget management: check limits, record usage, reset daily.',
+  category: 'workflow',
+  inputSchema: z.object({
+    action: z.enum(['check', 'record', 'reset', 'status']).describe('Action'),
+    tokens: z.number().optional().describe('Tokens to record'),
+    cost: z.number().optional().describe('Cost to record'),
+  }),
+  endsAgentStep: false,
+  run: (args) => import('./infra-tools.js').then((m) => {
+    const { action, tokens, cost } = args as any;
+    const mgr = m.getBudgetManager();
+    switch (action) {
+      case 'check': return JSON.stringify(mgr.canSpend(tokens || 0, cost || 0));
+      case 'record': return tokens ? (mgr.record(tokens, cost || 0), 'Recorded') : 'tokens required';
+      case 'reset': return (mgr.resetDaily(), 'Reset');
+      case 'status': return JSON.stringify(mgr.getConfig());
+      default: return 'Unknown action';
+    }
+  }),
+});
+
+// Fuzzy match tool
+registerTool({
+  name: 'fuzzy_match',
+  description: 'Fuzzy string matching with Levenshtein distance.',
+  category: 'workflow',
+  inputSchema: z.object({
+    query: z.string().describe('Query string'),
+    items: z.array(z.string()).describe('Items to match against'),
+    limit: z.number().optional().describe('Max results'),
+  }),
+  endsAgentStep: false,
+  run: (args) => import('./infra-tools.js').then((m) => {
+    const { query, items, limit } = args as any;
+    const matcher = m.getFuzzyMatcher();
+    const results = matcher.match(query, items, (i: string) => i, limit || 5);
+    return JSON.stringify(results);
+  }),
+});
+
+// ─── Batch 6: Utility ────────────────────────────────────────────────────
+
+// ANSI strip tool
+registerTool({
+  name: 'ansi_strip',
+  description: 'Strip ANSI escape codes from text.',
+  category: 'workflow',
+  inputSchema: z.object({
+    text: z.string().describe('Text to strip'),
+  }),
+  endsAgentStep: false,
+  run: (args) => import('./utility-tools.js').then((m) => {
+    const { text } = args as any;
+    return m.getANSIStripper().strip(text);
+  }),
+});
+
+// OSV check tool
+registerTool({
+  name: 'osv_check',
+  description: 'Check for known vulnerabilities in npm packages via OSV API.',
+  category: 'workflow',
+  inputSchema: z.object({
+    package: z.string().describe('Package name'),
+    version: z.string().describe('Package version'),
+  }),
+  endsAgentStep: false,
+  run: (args) => import('./utility-tools.js').then((m) => {
+    const { package: pkg, version } = args as any;
+    return m.getOSVChecker().check(pkg, version).then((r: any) => JSON.stringify(r));
+  }),
+});
+
+// Patch parser tool
+registerTool({
+  name: 'patch_parser',
+  description: 'Parse unified diff patches into structured format.',
+  category: 'workflow',
+  inputSchema: z.object({
+    patch: z.string().describe('Patch content'),
+  }),
+  endsAgentStep: false,
+  run: (args) => import('./utility-tools.js').then((m) => {
+    const { patch } = args as any;
+    return JSON.stringify(m.getPatchParser().parse(patch));
+  }),
+});
+
+// Image source tool
+registerTool({
+  name: 'image_source',
+  description: 'Detect image source: format, size, is screenshot.',
+  category: 'workflow',
+  inputSchema: z.object({
+    path: z.string().describe('Image path'),
+  }),
+  endsAgentStep: false,
+  run: (args) => import('./utility-tools.js').then((m) => {
+    const { path } = args as any;
+    return JSON.stringify(m.getImageSourceDetector().detect(path));
+  }),
+});
