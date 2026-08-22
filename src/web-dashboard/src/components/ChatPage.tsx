@@ -502,6 +502,61 @@ function TaskRunCard({ task, onCancel }: { task: TaskRunView; onCancel?: () => v
     );
   }
 
+  /**
+   * Execution Result Card — shows the outcome of a skill execution.
+   * Displays runtime, duration, exit code, stdout/stderr, and status.
+   */
+  function ExecutionResultCard({ result }: {
+    result: {
+      skillName: string;
+      runtime: string;
+      success: boolean;
+      durationMs: number;
+      exitCode: number;
+      stdout: string;
+      stderr: string;
+      timestamp: number;
+    };
+  }) {
+    const [expanded, setExpanded] = useState(false);
+    const statusIcon = result.success ? '✅' : '❌';
+    const statusText = result.success ? 'Success' : `Failed (exit ${result.exitCode})`;
+    const statusClass = result.success ? 'chat-exec-success' : 'chat-exec-failure';
+    const timeStr = new Date(result.timestamp).toLocaleTimeString();
+    return (
+      <div className={`chat-exec-card ${statusClass}`}>
+        <div className="chat-exec-head" onClick={() => setExpanded(!expanded)} style={{ cursor: 'pointer' }}>
+          <span className="chat-exec-icon">📜</span>
+          <span className="chat-exec-title">{result.skillName}</span>
+          <span className="chat-exec-status">{statusIcon} {statusText}</span>
+          <span className="chat-exec-meta">{result.runtime} · {result.durationMs}ms · {timeStr}</span>
+          <span className="chat-exec-expand">{expanded ? '▼' : '▶'}</span>
+        </div>
+        {expanded && (
+          <div className="chat-exec-body">
+            {result.stdout && (
+              <div className="chat-exec-section">
+                <div className="chat-exec-section-title">stdout</div>
+                <pre className="chat-exec-output">{result.stdout}</pre>
+              </div>
+            )}
+            {result.stderr && (
+              <div className="chat-exec-section chat-exec-stderr">
+                <div className="chat-exec-section-title">stderr</div>
+                <pre className="chat-exec-output">{result.stderr}</pre>
+              </div>
+            )}
+            <div className="chat-exec-details">
+              <span>Runtime: {result.runtime}</span>
+              <span>Exit code: {result.exitCode}</span>
+              <span>Duration: {result.durationMs}ms</span>
+            </div>
+          </div>
+        )}
+      </div>
+    );
+  }
+
   /** P0.7 — status icon for one checklist step. */
   function planStepIcon(status: string): string {
   if (status === 'done') return '✅';
@@ -626,6 +681,7 @@ export default function ChatPage() {
   const [liveDraft, setLiveDraft] = useState<SkillDraftView | null>(null);
   // PA4 — skill env-var notification card (non-blocking: shows missing vars).
   const [secretRequests, setSecretRequests] = useState<Array<{ skillName: string; missing: string[]; persisted: Record<string, boolean> }>>([]);
+  const [executionResults, setExecutionResults] = useState<Array<{ skillName: string; runtime: string; success: boolean; durationMs: number; exitCode: number; stdout: string; stderr: string; timestamp: number }>>([]);
   // Plain-English → CLI short-circuit: a confident command match shows a
   // confirm card instead of burning a model turn; ambiguous asks show choices.
   const [pendingResolve, setPendingResolve] = useState<PendingResolve | null>(null);
@@ -1074,6 +1130,10 @@ export default function ChatPage() {
             }
             return [...prev, d];
           });
+        },
+        // Execution result from skill execution engine.
+        onExecutionResult: (d) => {
+          setExecutionResults((prev) => [...prev, d]);
         },
       });
       const r = await dashboardAPI.chatSend(
@@ -1724,6 +1784,9 @@ export default function ChatPage() {
                 {liveDraft ? <SkillDraftCard draft={liveDraft} onAccept={acceptDraft} onReject={rejectDraft} onEdit={editDraft} /> : null}
                 {secretRequests.map((sr) => (
                   <SecretRequestCard key={sr.skillName} request={sr} onSave={saveSecrets} />
+                ))}
+                {executionResults.map((er, idx) => (
+                  <ExecutionResultCard key={`${er.skillName}-${idx}`} result={er} />
                 ))}
                 <ToolCards tools={liveTools} live />
                 {streamingText ? (
