@@ -189,6 +189,12 @@ export const TOOLSETS: ToolsetDef[] = [
     description: 'Small utilities: ANSI strip, OSV check, patch parser, image source.',
     tools: ['ansi_strip', 'osv_check', 'patch_parser', 'image_source'],
   },
+  {
+    name: 'skills-ecosystem',
+    label: 'Skills Ecosystem',
+    description: 'Skill marketplace, sync, usage tracking, and provenance.',
+    tools: ['skills_hub', 'skills_sync', 'skills_sync_client', 'skill_usage', 'skill_provenance'],
+  },
 ];
 
 /** Find the toolset that owns a tool name (undefined → tool is always-enabled). */
