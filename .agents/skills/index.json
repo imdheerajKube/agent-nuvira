@@ -1,6 +1,6 @@
 {
   "version": 1,
-  "updatedAt": "2026-08-22T10:40:21.624Z",
+  "updatedAt": "2026-08-22T12:34:15.311Z",
   "skills": [
     {
       "name": "website-deploy",
@@ -21,7 +21,7 @@
         "publish"
       ],
       "source": "agent-nuvira/bundled",
-      "updatedAt": "2026-08-22T10:40:21.624Z"
+      "updatedAt": "2026-08-22T12:34:15.311Z"
     },
     {
       "name": "code-assessment",
@@ -37,7 +37,7 @@
         "recommendations"
       ],
       "source": "agent-nuvira/bundled",
-      "updatedAt": "2026-08-22T10:40:21.624Z"
+      "updatedAt": "2026-08-22T12:34:15.311Z"
     },
     {
       "name": "technical-roadmap",
@@ -53,7 +53,7 @@
         "strategy"
       ],
       "source": "agent-nuvira/bundled",
-      "updatedAt": "2026-08-22T10:40:21.624Z"
+      "updatedAt": "2026-08-22T12:34:15.311Z"
     },
     {
       "name": "plan-create-track",
@@ -69,7 +69,7 @@
         "execution"
       ],
       "source": "agent-nuvira/bundled",
-      "updatedAt": "2026-08-22T10:40:21.624Z"
+      "updatedAt": "2026-08-22T12:34:15.311Z"
     },
     {
       "name": "test-strategy",
@@ -85,7 +85,7 @@
         "quality"
       ],
       "source": "agent-nuvira/bundled",
-      "updatedAt": "2026-08-22T10:40:21.624Z"
+      "updatedAt": "2026-08-22T12:34:15.311Z"
     },
     {
       "name": "docx",
@@ -99,7 +99,7 @@
         "office"
       ],
       "source": "agent-nuvira/bundled",
-      "updatedAt": "2026-08-22T10:40:21.624Z"
+      "updatedAt": "2026-08-22T12:34:15.311Z"
     },
     {
       "name": "security-audit",
@@ -116,7 +116,7 @@
         "harden"
       ],
       "source": "agent-nuvira/bundled",
-      "updatedAt": "2026-08-22T10:40:21.624Z"
+      "updatedAt": "2026-08-22T12:34:15.311Z"
     },
     {
       "name": "api-design",
@@ -133,7 +133,7 @@
         "endpoints"
       ],
       "source": "agent-nuvira/bundled",
-      "updatedAt": "2026-08-22T10:40:21.624Z"
+      "updatedAt": "2026-08-22T12:34:15.311Z"
     },
     {
       "name": "db-migration",
@@ -150,7 +150,7 @@
         "mysql"
       ],
       "source": "agent-nuvira/bundled",
-      "updatedAt": "2026-08-22T10:40:21.624Z"
+      "updatedAt": "2026-08-22T12:34:15.311Z"
     },
     {
       "name": "perf-profile",
@@ -167,7 +167,7 @@
         "flame-graph"
       ],
       "source": "agent-nuvira/bundled",
-      "updatedAt": "2026-08-22T10:40:21.624Z"
+      "updatedAt": "2026-08-22T12:34:15.311Z"
     },
     {
       "name": "doc-gen",
@@ -183,7 +183,7 @@
         "developer-docs"
       ],
       "source": "agent-nuvira/bundled",
-      "updatedAt": "2026-08-22T10:40:21.624Z"
+      "updatedAt": "2026-08-22T12:34:15.311Z"
     },
     {
       "name": "ci-cd-setup",
@@ -200,7 +200,7 @@
         "automation"
       ],
       "source": "agent-nuvira/bundled",
-      "updatedAt": "2026-08-22T10:40:21.624Z"
+      "updatedAt": "2026-08-22T12:34:15.311Z"
     },
     {
       "name": "docker-config",
@@ -216,7 +216,7 @@
         "image"
       ],
       "source": "agent-nuvira/bundled",
-      "updatedAt": "2026-08-22T10:40:21.624Z"
+      "updatedAt": "2026-08-22T12:34:15.311Z"
     },
     {
       "name": "dep-update",
@@ -234,7 +234,7 @@
         "go-mod"
       ],
       "source": "agent-nuvira/bundled",
-      "updatedAt": "2026-08-22T10:40:21.624Z"
+      "updatedAt": "2026-08-22T12:34:15.311Z"
     },
     {
       "name": "code-refactor",
@@ -252,7 +252,7 @@
         "clean-code"
       ],
       "source": "agent-nuvira/bundled",
-      "updatedAt": "2026-08-22T10:40:21.624Z"
+      "updatedAt": "2026-08-22T12:34:15.311Z"
     },
     {
       "name": "env-setup",
@@ -268,7 +268,7 @@
         "local-dev"
       ],
       "source": "agent-nuvira/bundled",
-      "updatedAt": "2026-08-22T10:40:21.624Z"
+      "updatedAt": "2026-08-22T12:34:15.311Z"
     },
     {
       "name": "data-analysis",
@@ -284,7 +284,7 @@
         "statistics"
       ],
       "source": "agent-nuvira/bundled",
-      "updatedAt": "2026-08-22T10:40:21.624Z"
+      "updatedAt": "2026-08-22T12:34:15.311Z"
     },
     {
       "name": "api-testing",
@@ -301,7 +301,7 @@
         "endpoints"
       ],
       "source": "agent-nuvira/bundled",
-      "updatedAt": "2026-08-22T10:40:21.624Z"
+      "updatedAt": "2026-08-22T12:34:15.311Z"
     },
     {
       "name": "perf-test",
@@ -317,7 +317,7 @@
         "latency"
       ],
       "source": "agent-nuvira/bundled",
-      "updatedAt": "2026-08-22T10:40:21.624Z"
+      "updatedAt": "2026-08-22T12:34:15.311Z"
     },
     {
       "name": "a11y-audit",
@@ -334,7 +334,7 @@
         "compliance"
       ],
       "source": "agent-nuvira/bundled",
-      "updatedAt": "2026-08-22T10:40:21.624Z"
+      "updatedAt": "2026-08-22T12:34:15.311Z"
     },
     {
       "name": "search-setup",
@@ -350,7 +350,7 @@
         "meilisearch"
       ],
       "source": "agent-nuvira/bundled",
-      "updatedAt": "2026-08-22T10:40:21.624Z"
+      "updatedAt": "2026-08-22T12:34:15.311Z"
     },
     {
       "name": "email-setup",
@@ -367,7 +367,7 @@
         "delivery"
       ],
       "source": "agent-nuvira/bundled",
-      "updatedAt": "2026-08-22T10:40:21.624Z"
+      "updatedAt": "2026-08-22T12:34:15.311Z"
     },
     {
       "name": "payment-setup",
@@ -383,7 +383,7 @@
         "webhooks"
       ],
       "source": "agent-nuvira/bundled",
-      "updatedAt": "2026-08-22T10:40:21.624Z"
+      "updatedAt": "2026-08-22T12:34:15.311Z"
     },
     {
       "name": "auth-setup",
@@ -400,7 +400,7 @@
         "security"
       ],
       "source": "agent-nuvira/bundled",
-      "updatedAt": "2026-08-22T10:40:21.624Z"
+      "updatedAt": "2026-08-22T12:34:15.311Z"
     },
     {
       "name": "monitoring-setup",
@@ -416,7 +416,7 @@
         "health-check"
       ],
       "source": "agent-nuvira/bundled",
-      "updatedAt": "2026-08-22T10:40:21.624Z"
+      "updatedAt": "2026-08-22T12:34:15.311Z"
     },
     {
       "name": "backup-recovery",
@@ -433,7 +433,7 @@
         "rto"
       ],
       "source": "agent-nuvira/bundled",
-      "updatedAt": "2026-08-22T10:40:21.624Z"
+      "updatedAt": "2026-08-22T12:34:15.311Z"
     },
     {
       "name": "schema-design",
@@ -450,7 +450,7 @@
         "sql"
       ],
       "source": "agent-nuvira/bundled",
-      "updatedAt": "2026-08-22T10:40:21.624Z"
+      "updatedAt": "2026-08-22T12:34:15.311Z"
     },
     {
       "name": "i18n-setup",
@@ -466,7 +466,7 @@
         "locale"
       ],
       "source": "agent-nuvira/bundled",
-      "updatedAt": "2026-08-22T10:40:21.624Z"
+      "updatedAt": "2026-08-22T12:34:15.311Z"
     },
     {
       "name": "graphql-api",
@@ -482,7 +482,7 @@
         "codegen"
       ],
       "source": "agent-nuvira/bundled",
-      "updatedAt": "2026-08-22T10:40:21.624Z"
+      "updatedAt": "2026-08-22T12:34:15.311Z"
     },
     {
       "name": "git-release",
@@ -499,7 +499,7 @@
         "github"
       ],
       "source": "agent-nuvira/bundled",
-      "updatedAt": "2026-08-22T10:40:21.624Z"
+      "updatedAt": "2026-08-22T12:34:15.311Z"
     },
     {
       "name": "design-system",
@@ -515,7 +515,7 @@
         "library"
       ],
       "source": "agent-nuvira/bundled",
-      "updatedAt": "2026-08-22T10:40:21.624Z"
+      "updatedAt": "2026-08-22T12:34:15.311Z"
     },
     {
       "name": "legal-compliance",
@@ -532,7 +532,7 @@
         "consent"
       ],
       "source": "agent-nuvira/bundled",
-      "updatedAt": "2026-08-22T10:40:21.624Z"
+      "updatedAt": "2026-08-22T12:34:15.311Z"
     },
     {
       "name": "cron-setup",
@@ -548,7 +548,7 @@
         "jobs"
       ],
       "source": "agent-nuvira/bundled",
-      "updatedAt": "2026-08-22T10:40:21.624Z"
+      "updatedAt": "2026-08-22T12:34:15.311Z"
     },
     {
       "name": "image-optimize",
@@ -565,7 +565,7 @@
         "performance"
       ],
       "source": "agent-nuvira/bundled",
-      "updatedAt": "2026-08-22T10:40:21.624Z"
+      "updatedAt": "2026-08-22T12:34:15.311Z"
     },
     {
       "name": "pdf-generate",
@@ -581,7 +581,7 @@
         "document"
       ],
       "source": "agent-nuvira/bundled",
-      "updatedAt": "2026-08-22T10:40:21.624Z"
+      "updatedAt": "2026-08-22T12:34:15.311Z"
     },
     {
       "name": "cache-setup",
@@ -597,7 +597,7 @@
         "speed"
       ],
       "source": "agent-nuvira/bundled",
-      "updatedAt": "2026-08-22T10:40:21.624Z"
+      "updatedAt": "2026-08-22T12:34:15.311Z"
     },
     {
       "name": "queue-setup",
@@ -614,7 +614,7 @@
         "rabbitmq"
       ],
       "source": "agent-nuvira/bundled",
-      "updatedAt": "2026-08-22T10:40:21.624Z"
+      "updatedAt": "2026-08-22T12:34:15.311Z"
     },
     {
       "name": "rate-limit",
@@ -630,7 +630,7 @@
         "middleware"
       ],
       "source": "agent-nuvira/bundled",
-      "updatedAt": "2026-08-22T10:40:21.624Z"
+      "updatedAt": "2026-08-22T12:34:15.311Z"
     },
     {
       "name": "cors-setup",
@@ -646,7 +646,7 @@
         "preflight"
       ],
       "source": "agent-nuvira/bundled",
-      "updatedAt": "2026-08-22T10:40:21.624Z"
+      "updatedAt": "2026-08-22T12:34:15.311Z"
     },
     {
       "name": "error-tracking",
@@ -662,7 +662,7 @@
         "exception"
       ],
       "source": "agent-nuvira/bundled",
-      "updatedAt": "2026-08-22T10:40:21.624Z"
+      "updatedAt": "2026-08-22T12:34:15.311Z"
     },
     {
       "name": "feature-flags",
@@ -678,7 +678,7 @@
         "kill-switch"
       ],
       "source": "agent-nuvira/bundled",
-      "updatedAt": "2026-08-22T10:40:21.624Z"
+      "updatedAt": "2026-08-22T12:34:15.311Z"
     },
     {
       "name": "webhook-setup",
@@ -694,7 +694,7 @@
         "integration"
       ],
       "source": "agent-nuvira/bundled",
-      "updatedAt": "2026-08-22T10:40:21.624Z"
+      "updatedAt": "2026-08-22T12:34:15.311Z"
     },
     {
       "name": "form-builder",
@@ -710,7 +710,7 @@
         "input"
       ],
       "source": "agent-nuvira/bundled",
-      "updatedAt": "2026-08-22T10:40:21.624Z"
+      "updatedAt": "2026-08-22T12:34:15.311Z"
     },
     {
       "name": "data-sync",
@@ -727,7 +727,7 @@
         "transform"
       ],
       "source": "agent-nuvira/bundled",
-      "updatedAt": "2026-08-22T10:40:21.624Z"
+      "updatedAt": "2026-08-22T12:34:15.311Z"
     },
     {
       "name": "state-machine",
@@ -743,7 +743,7 @@
         "transition"
       ],
       "source": "agent-nuvira/bundled",
-      "updatedAt": "2026-08-22T10:40:21.624Z"
+      "updatedAt": "2026-08-22T12:34:15.311Z"
     },
     {
       "name": "websocket-setup",
@@ -759,7 +759,7 @@
         "collaboration"
       ],
       "source": "agent-nuvira/bundled",
-      "updatedAt": "2026-08-22T10:40:21.624Z"
+      "updatedAt": "2026-08-22T12:34:15.311Z"
     },
     {
       "name": "api-versioning",
@@ -775,7 +775,7 @@
         "rest"
       ],
       "source": "agent-nuvira/bundled",
-      "updatedAt": "2026-08-22T10:40:21.624Z"
+      "updatedAt": "2026-08-22T12:34:15.311Z"
     },
     {
       "name": "multi-tenancy",
@@ -791,7 +791,7 @@
         "data-separation"
       ],
       "source": "agent-nuvira/bundled",
-      "updatedAt": "2026-08-22T10:40:21.624Z"
+      "updatedAt": "2026-08-22T12:34:15.311Z"
     },
     {
       "name": "blob-storage",
@@ -808,7 +808,7 @@
         "cdn"
       ],
       "source": "agent-nuvira/bundled",
-      "updatedAt": "2026-08-22T10:40:21.624Z"
+      "updatedAt": "2026-08-22T12:34:15.311Z"
     },
     {
       "name": "notification-setup",
@@ -824,7 +824,316 @@
         "preferences"
       ],
       "source": "agent-nuvira/bundled",
-      "updatedAt": "2026-08-22T10:40:21.624Z"
+      "updatedAt": "2026-08-22T12:34:15.311Z"
+    },
+    {
+      "name": "web-scraping",
+      "description": "Build web scrapers using BeautifulSoup, Playwright, or Puppeteer. Use when the goal asks to scrape, crawl, or extract data from websites.",
+      "version": "1.0.0",
+      "author": "agent-nuvira",
+      "tags": [
+        "scraping",
+        "crawl",
+        "web",
+        "data-extraction",
+        "html"
+      ],
+      "source": "agent-nuvira/bundled",
+      "updatedAt": "2026-08-22T12:34:15.311Z"
+    },
+    {
+      "name": "data-processing",
+      "description": "Process and transform data using Pandas, NumPy, or Polars. Use when the goal asks to clean, transform, aggregate, or analyze datasets.",
+      "version": "1.0.0",
+      "author": "agent-nuvira",
+      "tags": [
+        "data",
+        "pandas",
+        "numpy",
+        "transform",
+        "clean",
+        "aggregate"
+      ],
+      "source": "agent-nuvira/bundled",
+      "updatedAt": "2026-08-22T12:34:15.311Z"
+    },
+    {
+      "name": "ml-model",
+      "description": "Build and train ML models using scikit-learn, TensorFlow, or PyTorch. Use when the goal asks to train, evaluate, or deploy machine learning models.",
+      "version": "1.0.0",
+      "author": "agent-nuvira",
+      "tags": [
+        "ml",
+        "machine-learning",
+        "train",
+        "predict",
+        "classify",
+        "regress"
+      ],
+      "source": "agent-nuvira/bundled",
+      "updatedAt": "2026-08-22T12:34:15.311Z"
+    },
+    {
+      "name": "cloud-deploy",
+      "description": "Deploy applications to AWS, GCP, or Azure. Use when the goal asks to deploy, host, or infrastructure-as-code for cloud platforms.",
+      "version": "1.0.0",
+      "author": "agent-nuvira",
+      "tags": [
+        "cloud",
+        "deploy",
+        "aws",
+        "gcp",
+        "azure",
+        "serverless",
+        "infrastructure"
+      ],
+      "source": "agent-nuvira/bundled",
+      "updatedAt": "2026-08-22T12:34:15.311Z"
+    },
+    {
+      "name": "kubernetes",
+      "description": "Configure and manage Kubernetes clusters. Use when the goal asks to deploy, scale, or manage containerized applications on Kubernetes.",
+      "version": "1.0.0",
+      "author": "agent-nuvira",
+      "tags": [
+        "kubernetes",
+        "k8s",
+        "containers",
+        "orchestration",
+        "helm",
+        "deploy"
+      ],
+      "source": "agent-nuvira/bundled",
+      "updatedAt": "2026-08-22T12:34:15.311Z"
+    },
+    {
+      "name": "github-actions",
+      "description": "Set up GitHub Actions CI/CD workflows. Use when the goal asks to automate testing, building, or deployment via GitHub Actions.",
+      "version": "1.0.0",
+      "author": "agent-nuvira",
+      "tags": [
+        "github",
+        "actions",
+        "ci-cd",
+        "workflow",
+        "pipeline",
+        "automate"
+      ],
+      "source": "agent-nuvira/bundled",
+      "updatedAt": "2026-08-22T12:34:15.311Z"
+    },
+    {
+      "name": "prometheus",
+      "description": "Set up Prometheus monitoring and alerting. Use when the goal asks to add metrics collection, dashboards, or alerting rules.",
+      "version": "1.0.0",
+      "author": "agent-nuvira",
+      "tags": [
+        "prometheus",
+        "monitoring",
+        "metrics",
+        "alerting",
+        "grafana",
+        "observability"
+      ],
+      "source": "agent-nuvira/bundled",
+      "updatedAt": "2026-08-22T12:34:15.311Z"
+    },
+    {
+      "name": "structured-logging",
+      "description": "Implement structured logging with JSON output. Use when the goal asks to add logging, log aggregation, or log-based debugging.",
+      "version": "1.0.0",
+      "author": "agent-nuvira",
+      "tags": [
+        "logging",
+        "structured",
+        "json",
+        "elk",
+        "loki",
+        "observability"
+      ],
+      "source": "agent-nuvira/bundled",
+      "updatedAt": "2026-08-22T12:34:15.311Z"
+    },
+    {
+      "name": "redis-cache",
+      "description": "Set up Redis caching layer. Use when the goal asks to add caching, session storage, or rate limiting with Redis.",
+      "version": "1.0.0",
+      "author": "agent-nuvira",
+      "tags": [
+        "redis",
+        "cache",
+        "session",
+        "rate-limit",
+        "pub-sub"
+      ],
+      "source": "agent-nuvira/bundled",
+      "updatedAt": "2026-08-22T12:34:15.311Z"
+    },
+    {
+      "name": "kafka-queue",
+      "description": "Set up Kafka message queues. Use when the goal asks to add event streaming, message queues, or async processing with Kafka.",
+      "version": "1.0.0",
+      "author": "agent-nuvira",
+      "tags": [
+        "kafka",
+        "queue",
+        "event-streaming",
+        "async",
+        "message"
+      ],
+      "source": "agent-nuvira/bundled",
+      "updatedAt": "2026-08-22T12:34:15.311Z"
+    },
+    {
+      "name": "terraform",
+      "description": "Write Terraform infrastructure-as-code. Use when the goal asks to provision, manage, or version cloud infrastructure.",
+      "version": "1.0.0",
+      "author": "agent-nuvira",
+      "tags": [
+        "terraform",
+        "iac",
+        "infrastructure",
+        "cloud",
+        "provision"
+      ],
+      "source": "agent-nuvira/bundled",
+      "updatedAt": "2026-08-22T12:34:15.311Z"
+    },
+    {
+      "name": "nginx-config",
+      "description": "Configure Nginx as reverse proxy, load balancer, or web server. Use when the goal asks to set up Nginx, configure SSL, or optimize web serving.",
+      "version": "1.0.0",
+      "author": "agent-nuvira",
+      "tags": [
+        "nginx",
+        "reverse-proxy",
+        "load-balancer",
+        "ssl",
+        "web-server"
+      ],
+      "source": "agent-nuvira/bundled",
+      "updatedAt": "2026-08-22T12:34:15.311Z"
+    },
+    {
+      "name": "ssl-cert",
+      "description": "Manage SSL/TLS certificates with Let Encrypt or commercial CAs. Use when the goal asks to set up HTTPS, renew certificates, or fix SSL issues.",
+      "version": "1.0.0",
+      "author": "agent-nuvira",
+      "tags": [
+        "ssl",
+        "tls",
+        "certificate",
+        "https",
+        "letsencrypt",
+        "security"
+      ],
+      "source": "agent-nuvira/bundled",
+      "updatedAt": "2026-08-22T12:34:15.311Z"
+    },
+    {
+      "name": "dns-setup",
+      "description": "Configure DNS records and domains. Use when the goal asks to set up DNS, configure domains, or manage DNS records.",
+      "version": "1.0.0",
+      "author": "agent-nuvira",
+      "tags": [
+        "dns",
+        "domain",
+        "records",
+        "cloudflare",
+        "route53"
+      ],
+      "source": "agent-nuvira/bundled",
+      "updatedAt": "2026-08-22T12:34:15.311Z"
+    },
+    {
+      "name": "cron-job",
+      "description": "Set up scheduled tasks and cron jobs. Use when the goal asks to automate recurring tasks, schedule jobs, or set up crons.",
+      "version": "1.0.0",
+      "author": "agent-nuvira",
+      "tags": [
+        "cron",
+        "schedule",
+        "job",
+        "automate",
+        "timer"
+      ],
+      "source": "agent-nuvira/bundled",
+      "updatedAt": "2026-08-22T12:34:15.311Z"
+    },
+    {
+      "name": "backup-strategy",
+      "description": "Design and implement backup strategies. Use when the goal asks to set up backups, disaster recovery, or data protection.",
+      "version": "1.0.0",
+      "author": "agent-nuvira",
+      "tags": [
+        "backup",
+        "disaster-recovery",
+        "retention",
+        "snapshot",
+        "restore"
+      ],
+      "source": "agent-nuvira/bundled",
+      "updatedAt": "2026-08-22T12:34:15.311Z"
+    },
+    {
+      "name": "log-rotation",
+      "description": "Set up log rotation and management. Use when the goal asks to configure log rotation, manage log files, or prevent disk filling.",
+      "version": "1.0.0",
+      "author": "agent-nuvira",
+      "tags": [
+        "log",
+        "rotation",
+        "compress",
+        "archive",
+        "disk"
+      ],
+      "source": "agent-nuvira/bundled",
+      "updatedAt": "2026-08-22T12:34:15.311Z"
+    },
+    {
+      "name": "secrets-manager",
+      "description": "Set up secrets management with Vault, AWS Secrets Manager, or similar. Use when the goal asks to manage secrets, rotate credentials, or secure sensitive data.",
+      "version": "1.0.0",
+      "author": "agent-nuvira",
+      "tags": [
+        "secrets",
+        "vault",
+        "credentials",
+        "rotate",
+        "security"
+      ],
+      "source": "agent-nuvira/bundled",
+      "updatedAt": "2026-08-22T12:34:15.311Z"
+    },
+    {
+      "name": "load-balancer",
+      "description": "Configure load balancing with Nginx, HAProxy, or cloud LBs. Use when the goal asks to distribute traffic, set up health checks, or configure failover.",
+      "version": "1.0.0",
+      "author": "agent-nuvira",
+      "tags": [
+        "load-balancer",
+        "nginx",
+        "haproxy",
+        "traffic",
+        "health-check"
+      ],
+      "source": "agent-nuvira/bundled",
+      "updatedAt": "2026-08-22T12:34:15.311Z"
+    },
+    {
+      "name": "cdn-setup",
+      "description": "Configure CDN for static assets. Use when the goal asks to set up CDN, optimize asset delivery, or reduce latency.",
+      "version": "1.0.0",
+      "author": "agent-nuvira",
+      "tags": [
+        "cdn",
+        "cache",
+        "static-assets",
+        "cloudflare",
+        "cloudfront"
+      ],
+      "source": "agent-nuvira/bundled",
+      "updatedAt": "2026-08-22T12:34:15.311Z"
     }
   ]
 }

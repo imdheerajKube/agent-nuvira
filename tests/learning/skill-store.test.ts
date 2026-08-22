@@ -360,22 +360,27 @@ describe('SkillStore', () => {
       expect(match!.name).toBe('website-deploy');
     });
 
-    it('P5 — seeds all 50 bundled skills (website-deploy + capability skills + docx + 44 new skills)', () => {
+    it('P5 — seeds all 71 bundled skills (matching Hermes parity)', () => {
       const fresh = new SkillStore();
       const names = fresh.getAll().map((s) => s.name).sort();
       expect(names).toEqual([
         'a11y-audit', 'api-design', 'api-testing', 'api-versioning',
-        'auth-setup', 'backup-recovery', 'blob-storage', 'cache-setup',
-        'ci-cd-setup', 'code-assessment', 'code-refactor', 'cors-setup',
-        'cron-setup', 'data-analysis', 'data-sync', 'db-migration',
-        'dep-update', 'design-system', 'doc-gen', 'docker-config',
-        'docx', 'email-setup', 'env-setup', 'error-tracking',
-        'feature-flags', 'form-builder', 'git-release', 'graphql-api',
-        'i18n-setup', 'image-optimize', 'legal-compliance', 'monitoring-setup',
-        'multi-tenancy', 'notification-setup', 'payment-setup', 'pdf-generate',
-        'perf-profile', 'perf-test', 'plan-create-track', 'queue-setup',
-        'rate-limit', 'schema-design', 'search-setup', 'security-audit',
-        'state-machine', 'technical-roadmap', 'test-strategy', 'webhook-setup',
+        'auth-setup', 'backup-recovery', 'backup-strategy', 'blob-storage',
+        'cache-setup', 'cdn-setup', 'ci-cd-setup', 'cloud-deploy',
+        'code-assessment', 'code-refactor', 'cors-setup', 'cron-job',
+        'cron-setup', 'data-analysis', 'data-processing', 'data-sync',
+        'db-migration', 'dep-update', 'design-system', 'dns-setup',
+        'doc-gen', 'docker-config', 'docx', 'email-setup',
+        'env-setup', 'error-tracking', 'feature-flags', 'form-builder',
+        'git-release', 'github-actions', 'graphql-api', 'i18n-setup',
+        'image-optimize', 'kafka-queue', 'kubernetes', 'legal-compliance',
+        'load-balancer', 'log-rotation', 'ml-model', 'monitoring-setup',
+        'multi-tenancy', 'nginx-config', 'notification-setup', 'payment-setup',
+        'pdf-generate', 'perf-profile', 'perf-test', 'plan-create-track',
+        'prometheus', 'queue-setup', 'rate-limit', 'redis-cache',
+        'schema-design', 'search-setup', 'secrets-manager', 'security-audit',
+        'ssl-cert', 'state-machine', 'structured-logging', 'technical-roadmap',
+        'terraform', 'test-strategy', 'web-scraping', 'webhook-setup',
         'website-deploy', 'websocket-setup',
       ]);
       // Each carries the depth bar: ordered steps + parameters (docx is a
