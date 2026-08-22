@@ -987,3 +987,561 @@ function runPublishTool(args: unknown, ctx: ToolContext): Promise<string> {
 function verifyRequirement(request: string, ctx: ToolContext): Promise<string> {
   return import('./verify-requirement.js').then((m) => m.verifyRequirementTool(request, ctx));
 }
+
+// ─── NEW TOOLS: MCP, Browser, Schema, Binary, Working Diff ─────────────────
+
+// MCP OAuth tool
+registerTool({
+  name: 'mcp_oauth',
+  description: 'MCP OAuth2 authentication: authorize MCP servers via auth code, client credentials, or PKCE flows.',
+  category: 'workflow',
+  inputSchema: z.object({
+    action: z.enum(['authorize', 'refresh', 'revoke', 'status', 'callback']).describe('OAuth action'),
+    serverId: z.string().optional().describe('MCP server ID'),
+    code: z.string().optional().describe('Authorization code'),
+    state: z.string().optional().describe('OAuth state'),
+  }),
+  endsAgentStep: false,
+  run: (args) => import('../mcp/mcp-oauth.js').then((m) => {
+    const { action, serverId, code, state } = args as any;
+    const mgr = m.getMCPOAuthManager();
+    switch (action) {
+      case 'status': return JSON.stringify({ servers: Array.from((mgr as any).states?.keys() || []) });
+      case 'authorize': return serverId ? mgr.startAuthorizationCodeFlow(serverId, { authorizationUrl: '', tokenEndpoint: '' } as any).then((r: any) => JSON.stringify(r)) : 'serverId required';
+      case 'callback': return code && state ? mgr.exchangeCode(serverId || 'default', code, state).then((r: any) => JSON.stringify(r)) : 'code, state, and serverId required';
+      case 'refresh': return serverId ? mgr.refreshToken(serverId).then((r: any) => JSON.stringify(r)) : 'serverId required';
+      case 'revoke': return serverId ? (mgr.clearTokens(serverId), 'Cleared') : 'serverId required';
+      default: return 'Unknown action';
+    }
+  }),
+});
+
+// MCP Schema Cache tool
+registerTool({
+  name: 'mcp_schema_cache',
+  description: 'MCP schema cache: cache tool schemas for faster discovery, invalidate cache.',
+  category: 'workflow',
+  inputSchema: z.object({
+    action: z.enum(['get', 'invalidate', 'stats']).describe('Cache action'),
+    serverId: z.string().optional().describe('MCP server ID'),
+    configHash: z.string().optional().describe('Config hash'),
+  }),
+  endsAgentStep: false,
+  run: (args) => import('../mcp/mcp-schema-cache.js').then((m) => {
+    const { action, serverId, configHash } = args as any;
+    const cache = m.getMCPSchemaCache();
+    switch (action) {
+      case 'get': return serverId && configHash ? JSON.stringify(cache.get(serverId, configHash)) : 'serverId and configHash required';
+      case 'invalidate': return serverId ? (cache.invalidate(serverId), 'Invalidated') : 'serverId required';
+      case 'stats': return JSON.stringify(cache.getStats());
+      default: return 'Unknown action';
+    }
+  }),
+});
+
+// MCP Watchdog tool
+registerTool({
+  name: 'mcp_watchdog',
+  description: 'MCP stdio watchdog: monitor MCP server process health, auto-restart crashed servers.',
+  category: 'workflow',
+  inputSchema: z.object({
+    action: z.enum(['status', 'health']).describe('Watchdog action'),
+    serverId: z.string().optional().describe('MCP server ID'),
+  }),
+  endsAgentStep: false,
+  run: (args) => import('../mcp/mcp-watchdog.js').then((m) => {
+    const { action } = args as any;
+    const watchdog = m.getMCPWatchdog();
+    switch (action) {
+      case 'status': return JSON.stringify(watchdog.getHealth());
+      case 'health': return JSON.stringify(watchdog.getHealth());
+      default: return 'Unknown action';
+    }
+  }),
+});
+
+// Browser Supervisor tool
+registerTool({
+  name: 'browser_supervisor',
+  description: 'Browser CDP supervisor: monitor health, detect dialogs, track frames.',
+  category: 'workflow',
+  inputSchema: z.object({
+    action: z.enum(['status', 'health', 'destroy']).describe('Supervisor action'),
+    taskId: z.string().optional().describe('Task ID'),
+    cdpUrl: z.string().optional().describe('CDP WebSocket URL'),
+  }),
+  endsAgentStep: false,
+  run: (args) => import('./browser-supervisor.js').then((m) => {
+    const { action, taskId, cdpUrl } = args as any;
+    switch (action) {
+      case 'status': return taskId ? JSON.stringify(m.getSupervisor(taskId, '').getSnapshot()) : 'taskId required';
+      case 'health': return JSON.stringify(m.getActiveSupervisors().map((s: any) => s.getSnapshot()));
+      case 'destroy': return taskId ? (m.removeSupervisor(taskId), 'Destroyed') : 'taskId required';
+      default: return 'Unknown action';
+    }
+  }),
+});
+
+// Browser Dialog tool
+registerTool({
+  name: 'browser_dialog',
+  description: 'Handle native browser dialogs: accept, dismiss, or enter values.',
+  category: 'workflow',
+  inputSchema: z.object({
+    action: z.enum(['accept', 'dismiss', 'status', 'accept-all', 'dismiss-all']).describe('Dialog action'),
+    taskId: z.string().optional().describe('Task ID'),
+    index: z.number().optional().describe('Dialog index'),
+    value: z.string().optional().describe('Value for prompts'),
+  }),
+  endsAgentStep: false,
+  run: (args) => import('./browser-dialog.js').then((m) => {
+    const { action, taskId, index, value } = args as any;
+    const mgr = m.getBrowserDialogManager();
+    if (!taskId) return 'taskId required';
+    switch (action) {
+      case 'accept': return mgr.respond(taskId, index || 0, 'accept', value).then((r: any) => JSON.stringify(r));
+      case 'dismiss': return mgr.respond(taskId, index || 0, 'dismiss').then((r: any) => JSON.stringify(r));
+      case 'status': return JSON.stringify(mgr.getStatus(taskId));
+      case 'accept-all': return mgr.acceptAll(taskId).then((r: any) => JSON.stringify(r));
+      case 'dismiss-all': return mgr.dismissAll(taskId).then((r: any) => JSON.stringify(r));
+      default: return 'Unknown action';
+    }
+  }),
+});
+
+// Camofox tool
+registerTool({
+  name: 'camofox',
+  description: 'Camofox anti-detection browser: open pages, screenshots, interact via a11y refs.',
+  category: 'workflow',
+  inputSchema: z.object({
+    action: z.enum(['open', 'snapshot', 'click', 'type', 'screenshot', 'navigate', 'close']).describe('Camofox action'),
+    url: z.string().optional().describe('URL'),
+    ref: z.string().optional().describe('Element ref'),
+    text: z.string().optional().describe('Text to type'),
+  }),
+  endsAgentStep: false,
+  run: (args) => import('./browser-camofox.js').then((m) => {
+    const { action, url, ref, text } = args as any;
+    const client = m.getCamofoxClient();
+    switch (action) {
+      case 'open': return url ? client.openPage(url).then((r: any) => JSON.stringify(r)) : 'url required';
+      case 'snapshot': return client.snapshot().then((r: any) => r.text);
+      case 'click': return ref ? client.click(ref).then(() => 'Clicked') : 'ref required';
+      case 'type': return ref && text ? client.type(ref, text).then(() => 'Typed') : 'ref and text required';
+      case 'screenshot': return client.screenshot().then((r: any) => r.data.slice(0, 100) + '...');
+      case 'navigate': return url ? client.navigate(url).then(() => 'Navigated') : 'url required';
+      case 'close': return client.closePage().then(() => 'Closed');
+      default: return 'Unknown action';
+    }
+  }),
+});
+
+// Docker tool
+registerTool({
+  name: 'docker',
+  description: 'Docker management: containers, images, compose, volumes, networks.',
+  category: 'workflow',
+  inputSchema: z.object({
+    action: z.enum(['list-containers', 'start', 'stop', 'exec', 'logs', 'images', 'compose-up', 'compose-down']).describe('Docker action'),
+    name: z.string().optional().describe('Container name'),
+    command: z.string().optional().describe('Command for exec'),
+    composePath: z.string().optional().describe('Compose file path'),
+    lines: z.number().optional().describe('Log lines'),
+  }),
+  endsAgentStep: false,
+  run: (args) => import('./docker-tool.js').then((m) => {
+    const { action, name, command, composePath, lines } = args as any;
+    const docker = m.getDockerTool();
+    switch (action) {
+      case 'list-containers': return docker.listContainers().then((r: any) => JSON.stringify(r));
+      case 'start': return name ? docker.startContainer(name).then(() => 'Started') : 'name required';
+      case 'stop': return name ? docker.stopContainer(name).then(() => 'Stopped') : 'name required';
+      case 'exec': return name && command ? docker.exec(name, command).then((r: any) => JSON.stringify(r)) : 'name and command required';
+      case 'logs': return name ? docker.logs(name).then((r: any) => JSON.stringify(r)) : 'name required';
+      case 'images': return docker.listImages().then((r: any) => JSON.stringify(r));
+      case 'compose-up': return composePath ? docker.composeUp(composePath).then((r: any) => JSON.stringify(r)) : 'composePath required';
+      case 'compose-down': return composePath ? docker.composeDown(composePath).then(() => 'Stopped') : 'composePath required';
+      default: return 'Unknown action';
+    }
+  }),
+});
+
+// Session management tool
+registerTool({
+  name: 'session',
+  description: 'Session search and thread context management.',
+  category: 'workflow',
+  inputSchema: z.object({
+    action: z.enum(['create-session', 'search', 'create-thread']).describe('Session action'),
+    query: z.string().optional().describe('Search query'),
+    sessionId: z.string().optional().describe('Session ID'),
+  }),
+  endsAgentStep: false,
+  run: (args) => import('./session-tools.js').then((m) => {
+    const { action, query } = args as any;
+    switch (action) {
+      case 'create-session': return JSON.stringify(m.getSessionStore().create(query || 'New session'));
+      case 'search': return JSON.stringify(m.getSessionStore().search(query || ''));
+      case 'create-thread': return JSON.stringify(m.getThreadContextManager().create(query || 'New thread'));
+      default: return 'Action not implemented';
+    }
+  }),
+});
+
+// Schema sanitizer tool
+registerTool({
+  name: 'sanitize',
+  description: 'Sanitize content to prevent XSS, SQL injection, path traversal.',
+  category: 'workflow',
+  inputSchema: z.object({
+    action: z.enum(['sanitize', 'validate']).describe('Action'),
+    content: z.string().describe('Content'),
+    schema: z.record(z.string(), z.string()).optional().describe('Validation schema'),
+  }),
+  endsAgentStep: false,
+  run: (args) => import('./schema-binary-tools.js').then((m) => {
+    const { action, content, schema } = args as any;
+    const sanitizer = new m.SchemaSanitizer();
+    if (action === 'sanitize') return JSON.stringify(sanitizer.sanitize(content));
+    if (action === 'validate' && schema) return JSON.stringify(sanitizer.validate(JSON.parse(content), schema));
+    return 'Invalid action';
+  }),
+});
+
+// Binary extensions tool
+registerTool({
+  name: 'binary_extensions',
+  description: 'Detect binary file extensions, check MIME types.',
+  category: 'workflow',
+  inputSchema: z.object({
+    action: z.enum(['is-binary', 'mime']).describe('Extension action'),
+    extension: z.string().optional().describe('File extension'),
+  }),
+  endsAgentStep: false,
+  run: (args) => import('./schema-binary-tools.js').then((m) => {
+    const { action, extension } = args as any;
+    switch (action) {
+      case 'is-binary': return extension ? JSON.stringify({ isBinary: (m.SchemaSanitizer as any).isBinary(extension) }) : 'extension required';
+      case 'mime': return extension ? (m.SchemaSanitizer as any).getMimeType(extension) : 'extension required';
+      default: return 'Unknown action';
+    }
+  }),
+});
+
+// Working diff tool
+registerTool({
+  name: 'working_diff',
+  description: 'Track working diffs: record changes, list unapplied diffs, mark as applied.',
+  category: 'workflow',
+  inputSchema: z.object({
+    action: z.enum(['record', 'unapplied', 'file-diffs', 'mark-applied']).describe('Diff action'),
+    filePath: z.string().optional().describe('File path'),
+    diff: z.string().optional().describe('Diff content'),
+    diffId: z.string().optional().describe('Diff ID'),
+  }),
+  endsAgentStep: false,
+  run: (args) => import('./project-tools.js').then((m) => {
+    const { action, filePath, diff, diffId } = args as any;
+    const tracker = m.getWorkingDiffTracker();
+    switch (action) {
+      case 'record': return filePath && diff ? JSON.stringify(tracker.record(filePath, diff)) : 'filePath and diff required';
+      case 'unapplied': return JSON.stringify(tracker.getUnappliedDiffs());
+      case 'file-diffs': return filePath ? JSON.stringify(tracker.getFileDiffs(filePath)) : 'filePath required';
+      case 'mark-applied': return diffId ? (tracker.markApplied(diffId) ? 'Marked' : 'Not found') : 'diffId required';
+      default: return 'Unknown action';
+    }
+  }),
+});
+
+// Kanban tool
+registerTool({
+  name: 'kanban',
+  description: 'Kanban board: create boards, manage cards, track priorities.',
+  category: 'workflow',
+  inputSchema: z.object({
+    action: z.enum(['create-board', 'add-card', 'move-card', 'list-cards', 'stats']).describe('Action'),
+    board: z.string().optional().describe('Board name'),
+    card: z.string().optional().describe('Card title'),
+    column: z.string().optional().describe('Column name'),
+    priority: z.enum(['low', 'medium', 'high', 'critical']).optional().describe('Priority'),
+  }),
+  endsAgentStep: false,
+  run: (args) => import('./kanban-tools.js').then((m) => {
+    const { action, board, card, column, priority } = args as any;
+    const mgr = m.getKanbanManager();
+    switch (action) {
+      case 'create-board': return board ? JSON.stringify(mgr.createBoard(board)) : 'board required';
+      case 'add-card': return board && card ? JSON.stringify(mgr.addCard(board, 'Todo', card, { priority })) : 'board and card required';
+      case 'move-card': return board && card && column ? JSON.stringify(mgr.moveCard(board, card, column)) : 'board, card, column required';
+      case 'list-cards': return board ? JSON.stringify(mgr.getBoard(board)?.columns) : 'board required';
+      case 'stats': return board ? JSON.stringify(mgr.getStats(board)) : 'board required';
+      default: return 'Unknown action';
+    }
+  }),
+});
+
+// Cronjob tool
+registerTool({
+  name: 'cronjob',
+  description: 'Cronjob management: create, list, enable, pause, delete jobs.',
+  category: 'workflow',
+  inputSchema: z.object({
+    action: z.enum(['create', 'list', 'enable', 'pause', 'delete', 'run-now', 'stats']).describe('Action'),
+    name: z.string().optional().describe('Job name'),
+    schedule: z.string().optional().describe('Cron expression'),
+    command: z.string().optional().describe('Command'),
+    jobId: z.string().optional().describe('Job ID'),
+  }),
+  endsAgentStep: false,
+  run: (args) => import('./cronjob-tools.js').then((m) => {
+    const { action, name, schedule, command, jobId } = args as any;
+    const mgr = m.getCronJobManager();
+    switch (action) {
+      case 'create': return name && schedule && command ? JSON.stringify(mgr.create(name, schedule, command)) : 'name, schedule, command required';
+      case 'list': return JSON.stringify(mgr.getAllJobs());
+      case 'enable': return jobId ? (mgr.enableJob(jobId) ? 'Enabled' : 'Not found') : 'jobId required';
+      case 'pause': return jobId ? (mgr.pauseJob(jobId) ? 'Paused' : 'Not found') : 'jobId required';
+      case 'delete': return jobId ? (mgr.deleteJob(jobId) ? 'Deleted' : 'Not found') : 'jobId required';
+      case 'run-now': return jobId ? mgr.runJob(jobId).then((r: any) => JSON.stringify(r)) : 'jobId required';
+      case 'stats': return JSON.stringify(mgr.getStats());
+      default: return 'Unknown action';
+    }
+  }),
+});
+
+// Todo tool
+registerTool({
+  name: 'todo',
+  description: 'Simple todo list: add, complete, list tasks.',
+  category: 'workflow',
+  inputSchema: z.object({
+    action: z.enum(['add', 'complete', 'list']).describe('Action'),
+    task: z.string().optional().describe('Task description'),
+    id: z.string().optional().describe('Task ID'),
+  }),
+  endsAgentStep: false,
+  run: (args) => import('./todo-tool.js').then((m) => {
+    const { action, task, id } = args as any;
+    const mgr = m.getTodoStore();
+    switch (action) {
+      case 'add': return task ? JSON.stringify(mgr.add(task)) : 'task required';
+      case 'complete': return id ? JSON.stringify(mgr.update(id, { status: 'completed' })) : 'id required';
+      case 'list': return JSON.stringify(mgr.getAll());
+      default: return 'Unknown action';
+    }
+  }),
+});
+
+// Approval tool
+registerTool({
+  name: 'approval',
+  description: 'Request approval before dangerous operations.',
+  category: 'workflow',
+  inputSchema: z.object({
+    action: z.enum(['request', 'decide', 'get-pending']).describe('Action'),
+    requestId: z.string().optional().describe('Request ID'),
+    description: z.string().optional().describe('Description'),
+    approved: z.boolean().optional().describe('Approved'),
+  }),
+  endsAgentStep: false,
+  run: (args) => import('./approval-tools.js').then((m) => {
+    const { action, requestId, description, approved } = args as any;
+    switch (action) {
+      case 'request': return JSON.stringify(m.getApprovalManager().request({ description: description || 'Unknown', targets: [], requester: 'agent' }));
+      case 'decide': return requestId ? (m.getApprovalManager().decide(requestId, approved ?? false) ? 'Decided' : 'Not found') : 'Request ID required';
+      case 'get-pending': return JSON.stringify(m.getApprovalManager().getPending());
+      default: return 'Unknown action';
+    }
+  }),
+});
+
+// Env probe tool
+registerTool({
+  name: 'env_probe',
+  description: 'Probe environment variables and credential files.',
+  category: 'workflow',
+  inputSchema: z.object({
+    action: z.enum(['probe', 'probe-pattern', 'check-file']).describe('Action'),
+    name: z.string().describe('Env var name or file path'),
+  }),
+  endsAgentStep: false,
+  run: (args) => import('./credential-env-tools.js').then((m) => {
+    const { action, name } = args as any;
+    switch (action) {
+      case 'probe': return JSON.stringify(m.getEnvProbe().probe(name));
+      case 'probe-pattern': return JSON.stringify(m.getEnvProbe().probePattern(name));
+      case 'check-file': return JSON.stringify(m.getCredentialFileManager().checkFile(name));
+      default: return 'Unknown action';
+    }
+  }),
+});
+
+// Blueprint tool
+registerTool({
+  name: 'blueprint',
+  description: 'Project blueprints: create project templates with file structure.',
+  category: 'workflow',
+  inputSchema: z.object({
+    action: z.enum(['create', 'list']).describe('Action'),
+    name: z.string().optional().describe('Blueprint name'),
+    template: z.string().optional().describe('Template type'),
+  }),
+  endsAgentStep: false,
+  run: (args) => import('./project-tools.js').then((m) => {
+    const { action, name, template } = args as any;
+    const mgr = m.getBlueprintManager();
+    switch (action) {
+      case 'create': return name && template ? JSON.stringify(mgr.create({ name, description: template, category: 'user', files: [], variables: [] })) : 'name and template required';
+      case 'list': return JSON.stringify(mgr.getAll());
+      default: return 'Unknown action';
+    }
+  }),
+});
+
+// File ops tool
+registerTool({
+  name: 'file_ops',
+  description: 'Advanced file operations: state tracking, safe writes, extraction, preview.',
+  category: 'workflow',
+  inputSchema: z.object({
+    action: z.enum(['state', 'extract', 'preview', 'safe-write']).describe('Action'),
+    path: z.string().describe('File path'),
+    content: z.string().optional().describe('Content'),
+  }),
+  endsAgentStep: false,
+  run: (args) => import('./file-operations.js').then((m) => {
+    const { action, path, content } = args as any;
+    switch (action) {
+      case 'state': return JSON.stringify(m.getFileStateManager().getStates().get(path));
+      case 'extract': return m.getContentExtractor().extract(path).then((r: any) => JSON.stringify(r));
+      case 'preview': return m.getFilePreviewer().preview(path).then((r: any) => JSON.stringify(r));
+      case 'safe-write': return content ? m.getSafeFileOps().safeWrite(path, content).then(() => 'Written') : 'content required';
+      default: return 'Unknown action';
+    }
+  }),
+});
+
+// Debug tool
+registerTool({
+  name: 'debug',
+  description: 'Debug helpers: analyze errors, capture hook output.',
+  category: 'workflow',
+  inputSchema: z.object({
+    action: z.enum(['analyze', 'hint', 'capture', 'history']).describe('Action'),
+    error: z.string().optional().describe('Error message'),
+    hookName: z.string().optional().describe('Hook name'),
+    output: z.string().optional().describe('Output'),
+    exitCode: z.number().optional().describe('Exit code'),
+    durationMs: z.number().optional().describe('Duration'),
+  }),
+  endsAgentStep: false,
+  run: (args) => import('./debug-helpers.js').then((m) => {
+    const { action, error, hookName, output, exitCode, durationMs } = args as any;
+    switch (action) {
+      case 'analyze': return error ? JSON.stringify(m.getErrorAnalyzer().analyze(error)) : 'error required';
+      case 'hint': return error ? (m.getTerminalHints().getHint(error)?.suggestion || 'No hints') : 'error required';
+      case 'capture': return hookName && output ? JSON.stringify(m.getHookOutputHandler().capture(hookName, output, exitCode || 0, durationMs || 0)) : 'hookName and output required';
+      case 'history': return hookName ? JSON.stringify(m.getHookOutputHandler().getOutputsForHook(hookName)) : 'hookName required';
+      default: return 'Unknown action';
+    }
+  }),
+});
+
+// Delegate system tool
+registerTool({
+  name: 'delegate_system',
+  description: 'Full delegation: spawn subagents, batch execute.',
+  category: 'workflow',
+  inputSchema: z.object({
+    action: z.enum(['delegate', 'batch', 'status', 'cancel']).describe('Action'),
+    goal: z.string().optional().describe('Task goal'),
+    id: z.string().optional().describe('Task ID'),
+    goals: z.array(z.string()).optional().describe('Batch goals'),
+  }),
+  endsAgentStep: false,
+  run: (args) => import('./delegation-system.js').then((m) => {
+    const { action, goal, id, goals } = args as any;
+    const mgr = m.getDelegationManager();
+    switch (action) {
+      case 'delegate': return goal ? mgr.delegate(goal).then((r: any) => JSON.stringify(r)) : 'goal required';
+      case 'batch': return goals ? mgr.delegateBatch(goals).then((r: any) => JSON.stringify(r)) : 'goals required';
+      case 'status': return id ? JSON.stringify(mgr.getTask(id)) : 'id required';
+      case 'cancel': return id ? (mgr.cancel(id) ? 'Cancelled' : 'Not found') : 'id required';
+      default: return 'Unknown action';
+    }
+  }),
+});
+
+// Subagent tool
+registerTool({
+  name: 'subagent',
+  description: 'Spawn real subagents that make their own LLM calls and use tools.',
+  category: 'workflow',
+  inputSchema: z.object({
+    action: z.enum(['spawn', 'status', 'wait', 'kill', 'log']).describe('Action'),
+    goal: z.string().optional().describe('Task goal'),
+    id: z.string().optional().describe('Subagent ID'),
+    timeout: z.number().optional().describe('Timeout'),
+  }),
+  endsAgentStep: false,
+  run: (args) => import('./subagent-spawner.js').then((m) => {
+    const { action, goal, id, timeout } = args as any;
+    const mgr = m.getSubagentManager();
+    switch (action) {
+      case 'spawn': return goal ? mgr.spawn({ goal }).then((s: any) => JSON.stringify(s)) : 'goal required';
+      case 'status': return id ? JSON.stringify(mgr.getState(id)) : 'id required';
+      case 'wait': return id ? mgr.waitForCompletion(id, timeout || 300_000).then((r: any) => JSON.stringify(r)) : 'id required';
+      case 'kill': return id ? (mgr.kill(id) ? 'Killed' : 'Not found') : 'id required';
+      case 'log': return id ? mgr.getLog(id).join('\n') : 'id required';
+      default: return 'Unknown action';
+    }
+  }),
+});
+
+// Managed gateway tool
+registerTool({
+  name: 'managed_gateway',
+  description: 'Managed tool gateway: call vendor APIs through proxy.',
+  category: 'workflow',
+  inputSchema: z.object({
+    action: z.enum(['call', 'stats', 'list']).describe('Action'),
+    gateway: z.string().optional().describe('Gateway name'),
+    tool: z.string().optional().describe('Tool to call'),
+    payload: z.record(z.string(), z.unknown()).optional().describe('Payload'),
+  }),
+  endsAgentStep: false,
+  run: (args) => import('./managed-gateway.js').then((m) => {
+    const { action, gateway, tool, payload } = args as any;
+    switch (action) {
+      case 'call': return gateway && tool ? m.getGateway(gateway)?.call(tool, payload || {}).then((r: any) => JSON.stringify(r)) || 'Gateway not found' : 'gateway and tool required';
+      case 'stats': return gateway ? JSON.stringify(m.getGateway(gateway)?.getStats()) : JSON.stringify(m.listGateways().map((g: any) => g.getStats()));
+      case 'list': return JSON.stringify(m.listGateways().map((g: any) => ({ name: g['config'].name, endpoint: g['config'].endpoint })));
+      default: return 'Unknown action';
+    }
+  }),
+});
+
+// Messaging tool
+registerTool({
+  name: 'messaging',
+  description: 'Send messages to Discord, Slack, Telegram, Feishu.',
+  category: 'workflow',
+  inputSchema: z.object({
+    action: z.enum(['send', 'react']).describe('Action'),
+    service: z.enum(['discord', 'slack', 'telegram', 'feishu']).describe('Service'),
+    channel: z.string().optional().describe('Channel'),
+    message: z.string().optional().describe('Message'),
+    emoji: z.string().optional().describe('Emoji'),
+  }),
+  endsAgentStep: false,
+  run: (args) => import('./messaging-tools.js').then((m) => {
+    const { action, service, channel, message, emoji } = args as any;
+    const mgr = m.getMessagingManager();
+    switch (action) {
+      case 'send': return channel && message ? mgr.sendMessage({ platform: service, channelId: channel } as any, { content: message } as any).then((r: any) => JSON.stringify(r)) : 'channel and message required';
+      case 'react': return channel && emoji ? mgr.reactToMessage(service, channel, 'latest', emoji).then(() => 'Reacted') : 'channel and emoji required';
+      default: return 'Unknown action';
+    }
+  }),
+});
