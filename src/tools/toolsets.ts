@@ -153,6 +153,12 @@ export const TOOLSETS: ToolsetDef[] = [
     tools: ['delegate_system', 'subagent', 'managed_gateway', 'messaging'],
   },
   {
+    name: 'platforms',
+    label: 'Platform Integrations',
+    description: 'Discord, Home Assistant, Microsoft Graph, Feishu.',
+    tools: ['discord', 'homeassistant', 'microsoft_graph', 'feishu_doc', 'feishu_drive'],
+  },
+  {
     name: 'mcp',
     label: 'MCP servers',
     description: 'Tools exposed by configured MCP servers. Disabling removes MCP tools from the model schema.',
