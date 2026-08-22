@@ -18,6 +18,7 @@
 import type { Skill } from '../learning/skill-types.js';
 import { PHASE3_SKILLS } from './bundled-skills-phase3.js';
 import { DOCKER_SKILLS } from './bundled-skills-docker.js';
+import { EXTENDED_SKILLS } from './bundled-skills-extended.js';
 
 /** Fixed timestamp so bundled skills never decay (re-seeded identical). */
 const BUNDLED_CREATED_AT = 1_752_000_000_000;
@@ -3101,5 +3102,6 @@ export const ALL_BUNDLED_SKILLS: Skill[] = [
   ...BUNDLED_SKILLS,
   ...PHASE3_SKILLS,
   ...DOCKER_SKILLS,
+  ...EXTENDED_SKILLS,
 ];
 
