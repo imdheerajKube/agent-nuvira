@@ -16,6 +16,8 @@ import { BackgroundSyncManager } from './background-sync.js';
 import { SessionExtractionManager } from './session-extraction.js';
 import { DriftDetector } from './drift-detector.js';
 import { getMemoryStore } from '../tools/memory-tools.js';
+import { getSQLiteStore, type SQLiteStore } from './sqlite-store.js';
+import { getCrossSessionPersistence, type CrossSessionPersistence } from './cross-session.js';
 import { logger } from '../utils/logger.js';
 
 // ─── Types ──────────────────────────────────────────────────────────────────
@@ -24,6 +26,7 @@ interface EnhancedMemoryConfig {
   enableBackgroundSync: boolean;
   enableDriftDetection: boolean;
   enableSessionExtraction: boolean;
+  enableSQLite: boolean;
   syncConcurrency: number;
   drainTimeoutMs: number;
 }
@@ -46,6 +49,8 @@ export class EnhancedMemoryManager extends EventEmitter {
   private config: EnhancedMemoryConfig;
   private metrics: MemoryMetrics;
   private sessionId: string | null = null;
+  private sqliteStore: SQLiteStore | null = null;
+  private crossSession: CrossSessionPersistence | null = null;
 
   constructor(config?: Partial<EnhancedMemoryConfig>) {
     super();
@@ -53,6 +58,7 @@ export class EnhancedMemoryManager extends EventEmitter {
       enableBackgroundSync: config?.enableBackgroundSync ?? true,
       enableDriftDetection: config?.enableDriftDetection ?? true,
       enableSessionExtraction: config?.enableSessionExtraction ?? true,
+      enableSQLite: config?.enableSQLite ?? true,
       syncConcurrency: config?.syncConcurrency ?? 3,
       drainTimeoutMs: config?.drainTimeoutMs ?? 5000,
     };
@@ -64,6 +70,12 @@ export class EnhancedMemoryManager extends EventEmitter {
     });
     this.sessionExtraction = new SessionExtractionManager();
     this.driftDetector = new DriftDetector();
+
+    // Initialize SQLite if enabled
+    if (this.config.enableSQLite) {
+      this.sqliteStore = getSQLiteStore();
+      this.crossSession = getCrossSessionPersistence();
+    }
 
     this.metrics = {
       turnsBuffered: 0,
@@ -101,7 +113,14 @@ export class EnhancedMemoryManager extends EventEmitter {
   async startSession(sessionId: string): Promise<void> {
     this.sessionId = sessionId;
     await this.baseManager.startSession(sessionId);
-    this.emit('session:started', { sessionId });
+
+    // Load cross-session context if SQLite is enabled
+    if (this.crossSession) {
+      const context = await this.crossSession.loadSessionContext(sessionId);
+      this.emit('session:started', { sessionId, contextLoaded: true });
+    } else {
+      this.emit('session:started', { sessionId, contextLoaded: false });
+    }
   }
 
   /**
@@ -119,6 +138,17 @@ export class EnhancedMemoryManager extends EventEmitter {
     if (this.config.enableSessionExtraction) {
       this.sessionExtraction.bufferTurn(userText, assistantText);
       this.metrics.turnsBuffered++;
+    }
+
+    // Save to SQLite if enabled
+    if (this.sqliteStore && this.sessionId) {
+      const trajectoryId = `traj_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
+      this.sqliteStore.addTrajectory({
+        id: trajectoryId,
+        sessionId: this.sessionId,
+        userText,
+        assistantText,
+      });
     }
 
     // Queue background sync
@@ -146,6 +176,42 @@ export class EnhancedMemoryManager extends EventEmitter {
     if (this.config.enableSessionExtraction) {
       const result = await this.sessionExtraction.extractAtSessionEnd();
       this.metrics.factsExtracted += result.statistics.factsExtracted;
+
+      // Save extracted facts to SQLite
+      if (this.sqliteStore) {
+        for (const fact of result.facts) {
+          this.sqliteStore.addMemory({
+            id: `mem_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`,
+            content: fact.content,
+            type: fact.type,
+            tags: fact.tags,
+            source: fact.source,
+            confidence: fact.confidence,
+            sessionId: sid,
+          });
+        }
+
+        // Save extracted patterns
+        for (const pattern of result.patterns) {
+          this.sqliteStore.upsertPattern({
+            id: `pat_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`,
+            pattern,
+            examples: [],
+            confidence: 0.5,
+          });
+        }
+
+        // Save extracted lessons
+        for (const lesson of result.lessons) {
+          this.sqliteStore.addLesson({
+            id: `les_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`,
+            lesson,
+            context: 'session-extraction',
+            severity: 'medium',
+          });
+        }
+      }
+
       this.emit('session:extracted', result);
     }
 
@@ -227,11 +293,26 @@ export class EnhancedMemoryManager extends EventEmitter {
   /**
    * Get metrics.
    */
-  getMetrics(): MemoryMetrics & { backgroundSync: any } {
+  getMetrics(): MemoryMetrics & { backgroundSync: any; sqlite?: any } {
     return {
       ...this.metrics,
       backgroundSync: this.backgroundSync.getMetrics(),
+      sqlite: this.sqliteStore?.getStats(),
     };
+  }
+
+  /**
+   * Get SQLite store.
+   */
+  getSQLiteStore(): SQLiteStore | null {
+    return this.sqliteStore;
+  }
+
+  /**
+   * Get cross-session persistence.
+   */
+  getCrossSession(): CrossSessionPersistence | null {
+    return this.crossSession;
   }
 
   /**
