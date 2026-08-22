@@ -2640,3 +2640,124 @@ registerTool({
     }
   }),
 });
+
+// TTS Streaming — Provider-agnostic streaming TTS
+registerTool({
+  name: 'tts_streaming',
+  description: 'Convert text to speech using various providers — streaming and batch modes.',
+  category: 'workflow',
+  inputSchema: z.object({
+    action: z.enum(['synthesize', 'stream', 'providers']).describe('Action'),
+    text: z.string().optional().describe('Text to synthesize'),
+    provider: z.enum(['elevenlabs', 'openai', 'azure', 'google', 'edge-tts']).optional().describe('TTS provider'),
+    voice: z.string().optional().describe('Voice ID'),
+    speed: z.number().optional().describe('Speed (0.5-2.0)'),
+    format: z.enum(['pcm', 'mp3', 'wav']).optional().describe('Audio format'),
+  }),
+  endsAgentStep: false,
+  run: (args) => import('./tts-streaming.js').then((m) => {
+    const mgr = m.getTTSStreamingManager();
+    const { action, text, provider, voice, speed, format } = args as any;
+    switch (action) {
+      case 'synthesize': return text ? mgr.synthesize(text, { provider, voice, speed, format }).then((r: any) => JSON.stringify({ success: true, format: r.format, provider: r.provider })) : 'text required';
+      case 'stream': return text ? mgr.stream(text, { provider, voice, speed }).then(() => JSON.stringify({ streaming: true })) : 'text required';
+      case 'providers': return JSON.stringify({ providers: mgr.listProviders() });
+      default: return 'Unknown action';
+    }
+  }),
+});
+
+// TTS Text Normalize — Normalize text for speech synthesis
+registerTool({
+  name: 'tts_text_normalize',
+  description: 'Normalize text for TTS — remove markdown, expand abbreviations, handle code blocks.',
+  category: 'workflow',
+  inputSchema: z.object({
+    text: z.string().describe('Text to normalize'),
+    removeMarkdown: z.boolean().optional().describe('Remove markdown formatting'),
+    expandAbbreviations: z.boolean().optional().describe('Expand abbreviations'),
+    normalizeNumbers: z.boolean().optional().describe('Normalize numbers'),
+    removeUrls: z.boolean().optional().describe('Remove URLs'),
+  }),
+  endsAgentStep: false,
+  run: (args) => import('./tts-text-normalize.js').then((m) => {
+    const normalizer = m.getTTSTextNormalizer();
+    const { text, removeMarkdown, expandAbbreviations, normalizeNumbers, removeUrls } = args as any;
+    const result = normalizer.normalize(text, { removeMarkdown, expandAbbreviations, normalizeNumbers, removeUrls });
+    return JSON.stringify({ original: text.length, normalized: result.length, text: result });
+  }),
+});
+
+// Write Approval — Write-approval gate for memory/skill writes
+registerTool({
+  name: 'write_approval',
+  description: 'Approval gate for memory and skill modifications — safety mechanism.',
+  category: 'workflow',
+  inputSchema: z.object({
+    action: z.enum(['request', 'approve', 'deny', 'complete', 'pending', 'audit']).describe('Action'),
+    id: z.string().optional().describe('Write ID'),
+    writeAction: z.string().optional().describe('Write action type'),
+    target: z.string().optional().describe('Write target'),
+    reason: z.string().optional().describe('Approval/denial reason'),
+  }),
+  endsAgentStep: false,
+  run: (args) => import('./write-approval.js').then((m) => {
+    const mgr = m.getWriteApprovalManager();
+    const { action, id, writeAction, target, reason } = args as any;
+    switch (action) {
+      case 'request': return writeAction && target ? JSON.stringify(mgr.requestApproval({ action: writeAction, target, data: {} })) : 'writeAction and target required';
+      case 'approve': return id ? JSON.stringify({ approved: mgr.approve(id, reason) }) : 'id required';
+      case 'deny': return id ? JSON.stringify({ denied: mgr.deny(id, reason) }) : 'id required';
+      case 'complete': return id ? JSON.stringify({ completed: mgr.complete(id) }) : 'id required';
+      case 'pending': return JSON.stringify(mgr.getPending());
+      case 'audit': return JSON.stringify(mgr.getAuditLog());
+      default: return 'Unknown action';
+    }
+  }),
+});
+
+// Read Extract — Document-to-text extraction
+registerTool({
+  name: 'read_extract',
+  description: 'Extract text from documents — PDF, DOCX, XLSX, PPTX, HTML, CSV, JSON.',
+  category: 'workflow',
+  inputSchema: z.object({
+    filePath: z.string().describe('File path to extract text from'),
+  }),
+  endsAgentStep: false,
+  run: (args) => import('./read-extract.js').then((m) => {
+    const mgr = m.getReadExtractManager();
+    const { filePath } = args as any;
+    return mgr.extract(filePath).then((r: any) => JSON.stringify(r));
+  }),
+});
+
+// Credential Files — Credential file management
+registerTool({
+  name: 'credential_files',
+  description: 'Manage credential files for remote terminal backends — Docker, SSH, Modal.',
+  category: 'workflow',
+  inputSchema: z.object({
+    action: z.enum(['register', 'get', 'read', 'list', 'remove', 'redact', 'validate']).describe('Action'),
+    id: z.string().optional().describe('Credential ID'),
+    name: z.string().optional().describe('Credential name'),
+    type: z.enum(['ssh-key', 'api-key', 'token', 'certificate', 'env-file', 'generic']).optional().describe('Credential type'),
+    credPath: z.string().optional().describe('Credential file path'),
+    text: z.string().optional().describe('Text to redact'),
+  }),
+  endsAgentStep: false,
+  run: (args) => import('./credential-files.js').then((m) => {
+    const mgr = m.getCredentialFilesManager();
+    const { action, id, name, type, credPath, text } = args as any;
+    switch (action) {
+      case 'register': return name && type && credPath ? JSON.stringify({ id: mgr.register({ name, type, path: credPath }) }) : 'name, type, and credPath required';
+      case 'get': return id ? JSON.stringify(mgr.get(id)) : 'id required';
+      case 'read': return id ? JSON.stringify({ content: mgr.read(id) }) : 'id required';
+      case 'list': return JSON.stringify(mgr.list());
+      case 'remove': return id ? JSON.stringify({ removed: mgr.remove(id) }) : 'id required';
+      case 'redact': return text ? JSON.stringify({ redacted: mgr.redact(text) }) : 'text required';
+      case 'validate': return JSON.stringify(mgr.validate());
+      default: return 'Unknown action';
+    }
+  }),
+});

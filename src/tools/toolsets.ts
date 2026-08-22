@@ -77,8 +77,8 @@ export const TOOLSETS: ToolsetDef[] = [
   {
     name: 'code',
     label: 'Code',
-    description: 'Project code search (ripgrep), sub-agent delegation, assessing OTHER repositories (clone_repo — shallow clone into an ephemeral cache), and structured git (diff card + gated commit).',
-    tools: ['code_search', 'delegate', 'clone_repo', 'git'],
+    description: 'Project code search (ripgrep), sub-agent delegation, assessing OTHER repositories (clone_repo — shallow clone into an ephemeral cache), structured git (diff card + gated commit), document extraction, credential management.',
+    tools: ['code_search', 'delegate', 'clone_repo', 'git', 'read_extract', 'credential_files'],
   },
   {
     name: 'coding',
@@ -113,8 +113,8 @@ export const TOOLSETS: ToolsetDef[] = [
   {
     name: 'media',
     label: 'Media & modality',
-    description: 'Image generation, speech synthesis, transcription, vision, video generation, voice mode, desktop automation.',
-    tools: ['generate_image', 'speak', 'transcribe', 'describe_image', 'vision', 'video_generate', 'voice_mode', 'wake_word', 'neutts_synth', 'computer_use'],
+    description: 'Image generation, speech synthesis, transcription, vision, video generation, voice mode, desktop automation, TTS streaming.',
+    tools: ['generate_image', 'speak', 'transcribe', 'describe_image', 'vision', 'video_generate', 'voice_mode', 'wake_word', 'neutts_synth', 'computer_use', 'tts_streaming', 'tts_text_normalize'],
   },
   {
     name: 'mcp-tools',
@@ -137,8 +137,8 @@ export const TOOLSETS: ToolsetDef[] = [
   {
     name: 'security',
     label: 'Security',
-    description: 'Schema sanitization, binary detection, approvals, env probing.',
-    tools: ['sanitize', 'binary_extensions', 'approval', 'env_probe'],
+    description: 'Schema sanitization, binary detection, approvals, env probing, write approval.',
+    tools: ['sanitize', 'binary_extensions', 'approval', 'env_probe', 'write_approval'],
   },
   {
     name: 'project',
