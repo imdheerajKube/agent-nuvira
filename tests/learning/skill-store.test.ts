@@ -360,19 +360,23 @@ describe('SkillStore', () => {
       expect(match!.name).toBe('website-deploy');
     });
 
-    it('P5 — seeds all 35 bundled skills (website-deploy + capability skills + docx + 29 new skills)', () => {
+    it('P5 — seeds all 50 bundled skills (website-deploy + capability skills + docx + 44 new skills)', () => {
       const fresh = new SkillStore();
       const names = fresh.getAll().map((s) => s.name).sort();
       expect(names).toEqual([
-        'a11y-audit', 'api-design', 'api-testing', 'auth-setup',
-        'backup-recovery', 'ci-cd-setup', 'code-assessment', 'code-refactor',
-        'cron-setup', 'data-analysis', 'db-migration', 'dep-update',
-        'design-system', 'doc-gen', 'docker-config', 'docx',
-        'email-setup', 'env-setup', 'git-release', 'graphql-api',
-        'i18n-setup', 'legal-compliance', 'monitoring-setup', 'payment-setup',
-        'perf-profile', 'perf-test', 'plan-create-track', 'schema-design',
-        'search-setup', 'security-audit', 'technical-roadmap', 'test-strategy',
-        'website-deploy',
+        'a11y-audit', 'api-design', 'api-testing', 'api-versioning',
+        'auth-setup', 'backup-recovery', 'blob-storage', 'cache-setup',
+        'ci-cd-setup', 'code-assessment', 'code-refactor', 'cors-setup',
+        'cron-setup', 'data-analysis', 'data-sync', 'db-migration',
+        'dep-update', 'design-system', 'doc-gen', 'docker-config',
+        'docx', 'email-setup', 'env-setup', 'error-tracking',
+        'feature-flags', 'form-builder', 'git-release', 'graphql-api',
+        'i18n-setup', 'image-optimize', 'legal-compliance', 'monitoring-setup',
+        'multi-tenancy', 'notification-setup', 'payment-setup', 'pdf-generate',
+        'perf-profile', 'perf-test', 'plan-create-track', 'queue-setup',
+        'rate-limit', 'schema-design', 'search-setup', 'security-audit',
+        'state-machine', 'technical-roadmap', 'test-strategy', 'webhook-setup',
+        'website-deploy', 'websocket-setup',
       ]);
       // Each carries the depth bar: ordered steps + parameters (docx is a
       // methodology skill — steps yes, no parameters by design).
@@ -382,7 +386,11 @@ describe('SkillStore', () => {
         'data-analysis', 'api-testing', 'perf-test', 'a11y-audit', 'search-setup',
         'email-setup', 'payment-setup', 'auth-setup', 'monitoring-setup', 'backup-recovery',
         'schema-design', 'i18n-setup', 'graphql-api', 'git-release', 'design-system',
-        'legal-compliance', 'cron-setup']) {
+        'legal-compliance', 'cron-setup', 'image-optimize', 'pdf-generate',
+        'cache-setup', 'queue-setup', 'rate-limit', 'cors-setup', 'error-tracking',
+        'feature-flags', 'webhook-setup', 'form-builder', 'data-sync',
+        'state-machine', 'websocket-setup', 'api-versioning', 'multi-tenancy',
+        'blob-storage', 'notification-setup']) {
         const skill = fresh.get(`skill-${name}`)!;
         expect(skill.steps.length).toBeGreaterThanOrEqual(3);
         expect(skill.parameters.length).toBeGreaterThanOrEqual(1);

@@ -39,7 +39,7 @@ following items are CONFIRMED SHIPPED:
 **ALL 6 GAPS ARE NOW SHIPPED (verified 2026-08-21):**
 1. ~~P0.6 — Dashboard Step Cards~~ ✅ SHIPPED (ToolCards component + live/snapshotted + CSS + test)
 2. ~~Hosted Skills Marketplace (P6d)~~ ✅ SHIPPED (server endpoints + AgentHub panel + CLI + tests)
-3. ~~Skill Depth~~ ✅ SHIPPED (33 bundled skills, was 5)
+3. ~~Skill Depth~~ ✅ SHIPPED (50 bundled skills, was 5)
 4. ~~P6a /learn Skill Authoring~~ ✅ SHIPPED (learn action + buildLearnPrompt + draft system + preview card)
 5. ~~Cross-Skill Bundles (P6b)~~ ✅ SHIPPED (bundle store + CLI + skill tool + tests)
 6. ~~Toolset Enable/Disable UI~~ ✅ SHIPPED (AgentHub toolset grid + toggle switches + tests)

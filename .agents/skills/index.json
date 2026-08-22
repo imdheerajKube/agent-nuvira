@@ -1,6 +1,6 @@
 {
   "version": 1,
-  "updatedAt": "2026-08-21T17:47:34.314Z",
+  "updatedAt": "2026-08-22T10:40:21.624Z",
   "skills": [
     {
       "name": "website-deploy",
@@ -21,7 +21,7 @@
         "publish"
       ],
       "source": "agent-nuvira/bundled",
-      "updatedAt": "2026-08-21T17:47:34.314Z"
+      "updatedAt": "2026-08-22T10:40:21.624Z"
     },
     {
       "name": "code-assessment",
@@ -37,7 +37,7 @@
         "recommendations"
       ],
       "source": "agent-nuvira/bundled",
-      "updatedAt": "2026-08-21T17:47:34.314Z"
+      "updatedAt": "2026-08-22T10:40:21.624Z"
     },
     {
       "name": "technical-roadmap",
@@ -53,7 +53,7 @@
         "strategy"
       ],
       "source": "agent-nuvira/bundled",
-      "updatedAt": "2026-08-21T17:47:34.314Z"
+      "updatedAt": "2026-08-22T10:40:21.624Z"
     },
     {
       "name": "plan-create-track",
@@ -69,7 +69,7 @@
         "execution"
       ],
       "source": "agent-nuvira/bundled",
-      "updatedAt": "2026-08-21T17:47:34.314Z"
+      "updatedAt": "2026-08-22T10:40:21.624Z"
     },
     {
       "name": "test-strategy",
@@ -85,7 +85,7 @@
         "quality"
       ],
       "source": "agent-nuvira/bundled",
-      "updatedAt": "2026-08-21T17:47:34.314Z"
+      "updatedAt": "2026-08-22T10:40:21.624Z"
     },
     {
       "name": "docx",
@@ -99,7 +99,7 @@
         "office"
       ],
       "source": "agent-nuvira/bundled",
-      "updatedAt": "2026-08-21T17:47:34.314Z"
+      "updatedAt": "2026-08-22T10:40:21.624Z"
     },
     {
       "name": "security-audit",
@@ -116,7 +116,7 @@
         "harden"
       ],
       "source": "agent-nuvira/bundled",
-      "updatedAt": "2026-08-21T17:47:34.314Z"
+      "updatedAt": "2026-08-22T10:40:21.624Z"
     },
     {
       "name": "api-design",
@@ -133,7 +133,7 @@
         "endpoints"
       ],
       "source": "agent-nuvira/bundled",
-      "updatedAt": "2026-08-21T17:47:34.314Z"
+      "updatedAt": "2026-08-22T10:40:21.624Z"
     },
     {
       "name": "db-migration",
@@ -150,7 +150,7 @@
         "mysql"
       ],
       "source": "agent-nuvira/bundled",
-      "updatedAt": "2026-08-21T17:47:34.314Z"
+      "updatedAt": "2026-08-22T10:40:21.624Z"
     },
     {
       "name": "perf-profile",
@@ -167,7 +167,7 @@
         "flame-graph"
       ],
       "source": "agent-nuvira/bundled",
-      "updatedAt": "2026-08-21T17:47:34.314Z"
+      "updatedAt": "2026-08-22T10:40:21.624Z"
     },
     {
       "name": "doc-gen",
@@ -183,7 +183,7 @@
         "developer-docs"
       ],
       "source": "agent-nuvira/bundled",
-      "updatedAt": "2026-08-21T17:47:34.314Z"
+      "updatedAt": "2026-08-22T10:40:21.624Z"
     },
     {
       "name": "ci-cd-setup",
@@ -200,7 +200,7 @@
         "automation"
       ],
       "source": "agent-nuvira/bundled",
-      "updatedAt": "2026-08-21T17:47:34.314Z"
+      "updatedAt": "2026-08-22T10:40:21.624Z"
     },
     {
       "name": "docker-config",
@@ -216,7 +216,7 @@
         "image"
       ],
       "source": "agent-nuvira/bundled",
-      "updatedAt": "2026-08-21T17:47:34.314Z"
+      "updatedAt": "2026-08-22T10:40:21.624Z"
     },
     {
       "name": "dep-update",
@@ -234,7 +234,7 @@
         "go-mod"
       ],
       "source": "agent-nuvira/bundled",
-      "updatedAt": "2026-08-21T17:47:34.314Z"
+      "updatedAt": "2026-08-22T10:40:21.624Z"
     },
     {
       "name": "code-refactor",
@@ -252,7 +252,7 @@
         "clean-code"
       ],
       "source": "agent-nuvira/bundled",
-      "updatedAt": "2026-08-21T17:47:34.314Z"
+      "updatedAt": "2026-08-22T10:40:21.624Z"
     },
     {
       "name": "env-setup",
@@ -268,7 +268,7 @@
         "local-dev"
       ],
       "source": "agent-nuvira/bundled",
-      "updatedAt": "2026-08-21T17:47:34.314Z"
+      "updatedAt": "2026-08-22T10:40:21.624Z"
     },
     {
       "name": "data-analysis",
@@ -284,7 +284,7 @@
         "statistics"
       ],
       "source": "agent-nuvira/bundled",
-      "updatedAt": "2026-08-21T17:47:34.314Z"
+      "updatedAt": "2026-08-22T10:40:21.624Z"
     },
     {
       "name": "api-testing",
@@ -301,7 +301,7 @@
         "endpoints"
       ],
       "source": "agent-nuvira/bundled",
-      "updatedAt": "2026-08-21T17:47:34.314Z"
+      "updatedAt": "2026-08-22T10:40:21.624Z"
     },
     {
       "name": "perf-test",
@@ -317,7 +317,7 @@
         "latency"
       ],
       "source": "agent-nuvira/bundled",
-      "updatedAt": "2026-08-21T17:47:34.314Z"
+      "updatedAt": "2026-08-22T10:40:21.624Z"
     },
     {
       "name": "a11y-audit",
@@ -334,7 +334,7 @@
         "compliance"
       ],
       "source": "agent-nuvira/bundled",
-      "updatedAt": "2026-08-21T17:47:34.314Z"
+      "updatedAt": "2026-08-22T10:40:21.624Z"
     },
     {
       "name": "search-setup",
@@ -350,7 +350,7 @@
         "meilisearch"
       ],
       "source": "agent-nuvira/bundled",
-      "updatedAt": "2026-08-21T17:47:34.314Z"
+      "updatedAt": "2026-08-22T10:40:21.624Z"
     },
     {
       "name": "email-setup",
@@ -367,7 +367,7 @@
         "delivery"
       ],
       "source": "agent-nuvira/bundled",
-      "updatedAt": "2026-08-21T17:47:34.314Z"
+      "updatedAt": "2026-08-22T10:40:21.624Z"
     },
     {
       "name": "payment-setup",
@@ -383,7 +383,7 @@
         "webhooks"
       ],
       "source": "agent-nuvira/bundled",
-      "updatedAt": "2026-08-21T17:47:34.314Z"
+      "updatedAt": "2026-08-22T10:40:21.624Z"
     },
     {
       "name": "auth-setup",
@@ -400,7 +400,7 @@
         "security"
       ],
       "source": "agent-nuvira/bundled",
-      "updatedAt": "2026-08-21T17:47:34.314Z"
+      "updatedAt": "2026-08-22T10:40:21.624Z"
     },
     {
       "name": "monitoring-setup",
@@ -416,7 +416,7 @@
         "health-check"
       ],
       "source": "agent-nuvira/bundled",
-      "updatedAt": "2026-08-21T17:47:34.314Z"
+      "updatedAt": "2026-08-22T10:40:21.624Z"
     },
     {
       "name": "backup-recovery",
@@ -433,7 +433,7 @@
         "rto"
       ],
       "source": "agent-nuvira/bundled",
-      "updatedAt": "2026-08-21T17:47:34.314Z"
+      "updatedAt": "2026-08-22T10:40:21.624Z"
     },
     {
       "name": "schema-design",
@@ -450,7 +450,7 @@
         "sql"
       ],
       "source": "agent-nuvira/bundled",
-      "updatedAt": "2026-08-21T17:47:34.314Z"
+      "updatedAt": "2026-08-22T10:40:21.624Z"
     },
     {
       "name": "i18n-setup",
@@ -466,7 +466,7 @@
         "locale"
       ],
       "source": "agent-nuvira/bundled",
-      "updatedAt": "2026-08-21T17:47:34.314Z"
+      "updatedAt": "2026-08-22T10:40:21.624Z"
     },
     {
       "name": "graphql-api",
@@ -482,7 +482,7 @@
         "codegen"
       ],
       "source": "agent-nuvira/bundled",
-      "updatedAt": "2026-08-21T17:47:34.314Z"
+      "updatedAt": "2026-08-22T10:40:21.624Z"
     },
     {
       "name": "git-release",
@@ -499,7 +499,7 @@
         "github"
       ],
       "source": "agent-nuvira/bundled",
-      "updatedAt": "2026-08-21T17:47:34.314Z"
+      "updatedAt": "2026-08-22T10:40:21.624Z"
     },
     {
       "name": "design-system",
@@ -515,7 +515,7 @@
         "library"
       ],
       "source": "agent-nuvira/bundled",
-      "updatedAt": "2026-08-21T17:47:34.314Z"
+      "updatedAt": "2026-08-22T10:40:21.624Z"
     },
     {
       "name": "legal-compliance",
@@ -532,7 +532,7 @@
         "consent"
       ],
       "source": "agent-nuvira/bundled",
-      "updatedAt": "2026-08-21T17:47:34.314Z"
+      "updatedAt": "2026-08-22T10:40:21.624Z"
     },
     {
       "name": "cron-setup",
@@ -548,7 +548,283 @@
         "jobs"
       ],
       "source": "agent-nuvira/bundled",
-      "updatedAt": "2026-08-21T17:47:34.314Z"
+      "updatedAt": "2026-08-22T10:40:21.624Z"
+    },
+    {
+      "name": "image-optimize",
+      "description": "Optimize images for web: compress, resize, convert formats (WebP, AVIF), generate thumbnails, and set up responsive images. Use when the goal asks to optimize images, reduce image size, or add responsive images.",
+      "version": "1.0.0",
+      "author": "agent-nuvira",
+      "tags": [
+        "image",
+        "optimize",
+        "compress",
+        "webp",
+        "avif",
+        "responsive",
+        "performance"
+      ],
+      "source": "agent-nuvira/bundled",
+      "updatedAt": "2026-08-22T10:40:21.624Z"
+    },
+    {
+      "name": "pdf-generate",
+      "description": "Generate PDFs from HTML, Markdown, or data: invoices, reports, certificates, and documents. Use when the goal asks to create, generate, or export PDF files.",
+      "version": "1.0.0",
+      "author": "agent-nuvira",
+      "tags": [
+        "pdf",
+        "generate",
+        "export",
+        "invoice",
+        "report",
+        "document"
+      ],
+      "source": "agent-nuvira/bundled",
+      "updatedAt": "2026-08-22T10:40:21.624Z"
+    },
+    {
+      "name": "cache-setup",
+      "description": "Set up caching: Redis, Memcached, or in-memory caching for API responses, sessions, and expensive computations. Use when the goal asks to add caching, improve response times, or reduce database load.",
+      "version": "1.0.0",
+      "author": "agent-nuvira",
+      "tags": [
+        "cache",
+        "redis",
+        "memcached",
+        "performance",
+        "caching",
+        "speed"
+      ],
+      "source": "agent-nuvira/bundled",
+      "updatedAt": "2026-08-22T10:40:21.624Z"
+    },
+    {
+      "name": "queue-setup",
+      "description": "Set up message queues: BullMQ, RabbitMQ, or SQS for background jobs, task processing, and event-driven architecture. Use when the goal asks to add background jobs, task queues, or async processing.",
+      "version": "1.0.0",
+      "author": "agent-nuvira",
+      "tags": [
+        "queue",
+        "job",
+        "background",
+        "worker",
+        "async",
+        "bullmq",
+        "rabbitmq"
+      ],
+      "source": "agent-nuvira/bundled",
+      "updatedAt": "2026-08-22T10:40:21.624Z"
+    },
+    {
+      "name": "rate-limit",
+      "description": "Implement rate limiting: per-IP, per-user, or per-API-key limits with sliding window, token bucket, or fixed window algorithms. Use when the goal asks to add rate limiting, throttle requests, or prevent abuse.",
+      "version": "1.0.0",
+      "author": "agent-nuvira",
+      "tags": [
+        "rate-limit",
+        "throttle",
+        "abuse",
+        "protection",
+        "api",
+        "middleware"
+      ],
+      "source": "agent-nuvira/bundled",
+      "updatedAt": "2026-08-22T10:40:21.624Z"
+    },
+    {
+      "name": "cors-setup",
+      "description": "Configure CORS: cross-origin resource sharing for APIs, web apps, and embedded content. Use when the goal asks to fix CORS errors, configure cross-origin access, or set up CORS headers.",
+      "version": "1.0.0",
+      "author": "agent-nuvira",
+      "tags": [
+        "cors",
+        "cross-origin",
+        "api",
+        "security",
+        "headers",
+        "preflight"
+      ],
+      "source": "agent-nuvira/bundled",
+      "updatedAt": "2026-08-22T10:40:21.624Z"
+    },
+    {
+      "name": "error-tracking",
+      "description": "Set up error tracking: Sentry, Bugsnag, or Rollbar for frontend and backend error monitoring. Use when the goal asks to add error tracking, exception monitoring, or crash reporting.",
+      "version": "1.0.0",
+      "author": "agent-nuvira",
+      "tags": [
+        "error",
+        "tracking",
+        "sentry",
+        "monitoring",
+        "crash",
+        "exception"
+      ],
+      "source": "agent-nuvira/bundled",
+      "updatedAt": "2026-08-22T10:40:21.624Z"
+    },
+    {
+      "name": "feature-flags",
+      "description": "Implement feature flags: LaunchDarkly, Unleash, or custom flags for gradual rollouts, A/B testing, and kill switches. Use when the goal asks to add feature flags, gradual rollouts, or toggle features.",
+      "version": "1.0.0",
+      "author": "agent-nuvira",
+      "tags": [
+        "feature-flags",
+        "toggle",
+        "rollout",
+        "ab-testing",
+        "gradual",
+        "kill-switch"
+      ],
+      "source": "agent-nuvira/bundled",
+      "updatedAt": "2026-08-22T10:40:21.624Z"
+    },
+    {
+      "name": "webhook-setup",
+      "description": "Set up webhooks: receive and verify incoming webhooks from third-party services (Stripe, GitHub, Twilio). Use when the goal asks to handle webhooks, verify webhook signatures, or process webhook events.",
+      "version": "1.0.0",
+      "author": "agent-nuvira",
+      "tags": [
+        "webhook",
+        "signature",
+        "verify",
+        "event",
+        "callback",
+        "integration"
+      ],
+      "source": "agent-nuvira/bundled",
+      "updatedAt": "2026-08-22T10:40:21.624Z"
+    },
+    {
+      "name": "form-builder",
+      "description": "Build dynamic forms: validation, conditional fields, multi-step wizards, and file uploads. Use when the goal asks to create forms, add form validation, or build multi-step forms.",
+      "version": "1.0.0",
+      "author": "agent-nuvira",
+      "tags": [
+        "form",
+        "validation",
+        "wizard",
+        "multi-step",
+        "upload",
+        "input"
+      ],
+      "source": "agent-nuvira/bundled",
+      "updatedAt": "2026-08-22T10:40:21.624Z"
+    },
+    {
+      "name": "data-sync",
+      "description": "Set up data synchronization between systems: ETL pipelines, API sync, database replication, and real-time streaming. Use when the goal asks to sync data, build ETL pipelines, or connect data sources.",
+      "version": "1.0.0",
+      "author": "agent-nuvira",
+      "tags": [
+        "data",
+        "sync",
+        "etl",
+        "pipeline",
+        "replicate",
+        "stream",
+        "transform"
+      ],
+      "source": "agent-nuvira/bundled",
+      "updatedAt": "2026-08-22T10:40:21.624Z"
+    },
+    {
+      "name": "state-machine",
+      "description": "Design and implement state machines: order lifecycle, approval workflows, and complex business logic. Use when the goal asks to add state management, workflow automation, or business process logic.",
+      "version": "1.0.0",
+      "author": "agent-nuvira",
+      "tags": [
+        "state-machine",
+        "workflow",
+        "lifecycle",
+        "process",
+        "automation",
+        "transition"
+      ],
+      "source": "agent-nuvira/bundled",
+      "updatedAt": "2026-08-22T10:40:21.624Z"
+    },
+    {
+      "name": "websocket-setup",
+      "description": "Set up WebSocket connections: real-time chat, notifications, live updates, and collaboration features. Use when the goal asks to add real-time features, WebSocket connections, or live data.",
+      "version": "1.0.0",
+      "author": "agent-nuvira",
+      "tags": [
+        "websocket",
+        "realtime",
+        "chat",
+        "notification",
+        "live",
+        "collaboration"
+      ],
+      "source": "agent-nuvira/bundled",
+      "updatedAt": "2026-08-22T10:40:21.624Z"
+    },
+    {
+      "name": "api-versioning",
+      "description": "Implement API versioning: URL path, header, or content-type versioning with deprecation notices and migration guides. Use when the goal asks to version an API, handle breaking changes, or add deprecation notices.",
+      "version": "1.0.0",
+      "author": "agent-nuvira",
+      "tags": [
+        "api",
+        "versioning",
+        "deprecation",
+        "migration",
+        "breaking-change",
+        "rest"
+      ],
+      "source": "agent-nuvira/bundled",
+      "updatedAt": "2026-08-22T10:40:21.624Z"
+    },
+    {
+      "name": "multi-tenancy",
+      "description": "Implement multi-tenancy: tenant isolation, shared databases with row-level security, or separate schemas. Use when the goal asks to add multi-tenancy, tenant isolation, or SaaS data separation.",
+      "version": "1.0.0",
+      "author": "agent-nuvira",
+      "tags": [
+        "multi-tenancy",
+        "tenant",
+        "isolation",
+        "saas",
+        "security",
+        "data-separation"
+      ],
+      "source": "agent-nuvira/bundled",
+      "updatedAt": "2026-08-22T10:40:21.624Z"
+    },
+    {
+      "name": "blob-storage",
+      "description": "Set up blob/file storage: S3, Cloudflare R2, or Azure Blob for uploads, assets, and backups. Use when the goal asks to add file uploads, cloud storage, or asset hosting.",
+      "version": "1.0.0",
+      "author": "agent-nuvira",
+      "tags": [
+        "blob",
+        "storage",
+        "s3",
+        "upload",
+        "file",
+        "asset",
+        "cdn"
+      ],
+      "source": "agent-nuvira/bundled",
+      "updatedAt": "2026-08-22T10:40:21.624Z"
+    },
+    {
+      "name": "notification-setup",
+      "description": "Build a notification system: push notifications, in-app alerts, email digests, and preference management. Use when the goal asks to add notifications, alerts, or user notification preferences.",
+      "version": "1.0.0",
+      "author": "agent-nuvira",
+      "tags": [
+        "notification",
+        "alert",
+        "push",
+        "email",
+        "in-app",
+        "preferences"
+      ],
+      "source": "agent-nuvira/bundled",
+      "updatedAt": "2026-08-22T10:40:21.624Z"
     }
   ]
 }

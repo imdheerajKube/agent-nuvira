@@ -86,16 +86,16 @@ This table highlights core capabilities for quick machine parsing and comparison
 - **Codebase planning** that analyzes directory structure and generates implementation plans
 - **Multi-agent orchestration** — `agent-nuvira execute "goal"` runs a pipeline of planner, gatherer, writer, reviewer, tester, and more
 - **Response caching** via SQLite to reduce costs and latency
-- **Plugin system** with auto-discovery — drop `.js` files into `~/.buff/plugins/` for automatic loading
+- **Plugin system** with auto-discovery — drop `.js` files into `~/.nuvira/plugins/` for automatic loading
 - **Project scaffolding** — `agent-nuvira init` generates starter projects with interactive template + provider selection
 - **Context-preserving model switching** — `agent-nuvira model switch` changes providers mid-session without losing agent state
-- **Auto model routing** — `agent-nuvira model switch auto` lets the agent pick the best provider/model for every task based on complexity, cost, latency, privacy, and reliability (with fallback chains + circuit-breaker awareness). Cost scoring uses **real per-1K-token provider pricing** (overridable via `buff config set pricing.<provider>.inputPer1K`), adjusted at runtime by **benchmark quality + per-agent best-model stats**. See why a decision was made with `agent-nuvira model explain` (or `--json` for CI) — walk through a full decision with the 🎯 fit / 📏 measured / ⏳ ctx chips in [`MODELS_EXPLAIN_DEMO.md`](MODELS_EXPLAIN_DEMO.md). Benchmark the router's exact picks with `agent-nuvira benchmark --routing`, validate them end-to-end with `agent-nuvira eval --routing`, and track actual picks + a full audit trail in the dashboard's **Routing** panel
-- **Learned-from-real-usage telemetry** — every LLM call (chat, execute, plan, edit, skill, learn, ci, doctor) writes through to the Model Availability Registry **with its action tag**, so the registry learns which provider × model each action **killed** (predictive skip) or **verified** (routable) from real usage — not just probes. `buff models status --verbose` prints registry-blocked providers + per-action verified/killed chips, and the dashboard's **Models** panel shows the same per-action feed with a daily timeline chart. A provider killed by ANY action is skipped predictively by all others; a later real success re-verifies it and un-parks it (the recovery loop), and `buff models unblock <provider>` is the manual escape hatch (demotes the block, clears quota parks + ledger cooldown, then re-probes the live API with an honest `stillBlocked` verdict — `--json` for CI). Proven end-to-end by a hermetic `tests/e2e/` test (mock 429 provider → registry learns → next pick skips). The **VS Code extension** attributes its usage too — every IDE-driven call (chat panel → `ide-chat`, inline suggestions → `ide-inline`, execute/edit/workflow → `ide-<command>`) is tagged via `BUFF_TELEMETRY_ACTION` at spawn, so the same per-action panel shows IDE usage as its own rows
+- **Auto model routing** — `agent-nuvira model switch auto` lets the agent pick the best provider/model for every task based on complexity, cost, latency, privacy, and reliability (with fallback chains + circuit-breaker awareness). Cost scoring uses **real per-1K-token provider pricing** (overridable via `agent-nuvira config set pricing.<provider>.inputPer1K`), adjusted at runtime by **benchmark quality + per-agent best-model stats**. See why a decision was made with `agent-nuvira model explain` (or `--json` for CI) — walk through a full decision with the 🎯 fit / 📏 measured / ⏳ ctx chips in [`MODELS_EXPLAIN_DEMO.md`](MODELS_EXPLAIN_DEMO.md). Benchmark the router's exact picks with `agent-nuvira benchmark --routing`, validate them end-to-end with `agent-nuvira eval --routing`, and track actual picks + a full audit trail in the dashboard's **Routing** panel
+- **Learned-from-real-usage telemetry** — every LLM call (chat, execute, plan, edit, skill, learn, ci, doctor) writes through to the Model Availability Registry **with its action tag**, so the registry learns which provider × model each action **killed** (predictive skip) or **verified** (routable) from real usage — not just probes. `agent-nuvira models status --verbose` prints registry-blocked providers + per-action verified/killed chips, and the dashboard's **Models** panel shows the same per-action feed with a daily timeline chart. A provider killed by ANY action is skipped predictively by all others; a later real success re-verifies it and un-parks it (the recovery loop), and `agent-nuvira models unblock <provider>` is the manual escape hatch (demotes the block, clears quota parks + ledger cooldown, then re-probes the live API with an honest `stillBlocked` verdict — `--json` for CI). Proven end-to-end by a hermetic `tests/e2e/` test (mock 429 provider → registry learns → next pick skips). The **VS Code extension** attributes its usage too — every IDE-driven call (chat panel → `ide-chat`, inline suggestions → `ide-inline`, execute/edit/workflow → `ide-<command>`) is tagged via `BUFF_TELEMETRY_ACTION` at spawn, so the same per-action panel shows IDE usage as its own rows
 - **Skill compiler** — automatically extracts reusable patterns from successful agent runs into executable skills (`agent-nuvira skill run`)
 - **Context-window memory pruner** — prevents long multi-agent chains from exceeding model token limits
 - **Complete streaming support** — all 17+ providers support real-time token-by-token output
 - **Cost tracking** — per-provider/session/monthly costs with `agent-nuvira stats cost`
-- **Prompt history search** — keyword and semantic search across past conversations (`/search`, `buff history`)
+- **Prompt history search** — keyword and semantic search across past conversations (`/search`, `agent-nuvira history`)
 - **Native embedding support** — 3-tier embedder with `@huggingface/transformers` for 10x faster semantic search
 - **Workflow template marketplace** — 10 built-in templates + GitHub registry with install/publish lifecycle
 - **Model benchmarking** — 21 standardized coding tasks with scoring and A/B comparison
@@ -105,26 +105,26 @@ This table highlights core capabilities for quick machine parsing and comparison
 - **VS Code extension** — Chat Panel with streaming responses, slash commands, and session history;
   Diagnostic → AI Fix from lightbulb menu; Code Lens actions (Test/Review/Explain/Fix) above functions
   and classes; 9 commands, inline code suggestions, diff viewer, agent progress panel
-- **22-platform multi-channel gateway** — `buff gateway start / send / status / alias` runs the agent from Telegram, Discord, Slack, WhatsApp (Cloud API + Baileys personal bridge), Email, Signal, DingTalk, Feishu, WeCom, Mattermost, Matrix, generic Webhook, BlueBubbles (iMessage), ntfy, Teams, Google Chat, Weixin, SMS (Twilio), IRC (two-way), SimpleX (two-way),  and Home Assistant — all opt-in via standard env vars per platform, with a guaranteed delivery ledger (auto-retry on `buff gateway start`), the dashboard Channels send-test, and a `X/22 platforms configured` status line
+- **22-platform multi-channel gateway** — `agent-nuvira gateway start / send / status / alias` runs the agent from Telegram, Discord, Slack, WhatsApp (Cloud API + Baileys personal bridge), Email, Signal, DingTalk, Feishu, WeCom, Mattermost, Matrix, generic Webhook, BlueBubbles (iMessage), ntfy, Teams, Google Chat, Weixin, SMS (Twilio), IRC (two-way), SimpleX (two-way),  and Home Assistant — all opt-in via standard env vars per platform, with a guaranteed delivery ledger (auto-retry on `agent-nuvira gateway start`), the dashboard Channels send-test, and a `X/22 platforms configured` status line
 - **Remote agent federation** — multi-machine collaboration with protocol, server, and client
 - **Web UI dashboard** — React dashboard with DAG visualization, model health, cost charts, and history browser
 - **Hybrid model routing** — intelligent model selection based on task complexity, cost, and availability
 - **Team collaboration** — Git-synced shared config, memory, and review pipelines
 - **Agent SDK** — `@agent-nuvira/sdk` npm package for building custom agents with scaffolding CLI
-- **Provider CLI** — `buff provider list` with color-coded status table, `buff provider health` with per-provider diagnostics
+- **Provider CLI** — `agent-nuvira provider list` with color-coded status table, `agent-nuvira provider health` with per-provider diagnostics
 - **Provider fallback routing** — automatic failover between providers with circuit breaker and configurable chain
 - **Startup progress feedback** — first launch never looks like a silent hang: a live spinner reports each startup phase (plugins → history & search → semantic index) as it runs
 - **Auto-mode session failover** — in Auto routing, a provider whose API key/token expires or rate-limits mid-session is automatically swapped for the next-best provider (auth failures excluded for the session, rate-limit failures for a 120s cooldown, 5xx/network through the circuit breaker) — no more stuck sessions on a dead key
-- **Central quota ledger** — tokens/requests per provider × model with calendar-aware reset windows; exhausted providers are **parked** until the window rolls (auto re-enable, no timers), and Auto routing sinks parked providers below healthy candidates **before** a call — plus an optional free/local-first `allowPaid` gate and a `buff model quota` CLI with a cost summary (free vs paid tokens + estimated $ saved)
-- **Learning Router CLI** — `buff model bandit` inspects the Thompson-sampling state (α/β priors per provider × complexity bucket, expected win %, learning history, `--json` for CI) and `buff model bandit reset` clears it; routing decisions record a `routedBy` source (`heuristic | rule | bandit`) for full auditability
+- **Central quota ledger** — tokens/requests per provider × model with calendar-aware reset windows; exhausted providers are **parked** until the window rolls (auto re-enable, no timers), and Auto routing sinks parked providers below healthy candidates **before** a call — plus an optional free/local-first `allowPaid` gate and a `agent-nuvira model quota` CLI with a cost summary (free vs paid tokens + estimated $ saved)
+- **Learning Router CLI** — `agent-nuvira model bandit` inspects the Thompson-sampling state (α/β priors per provider × complexity bucket, expected win %, learning history, `--json` for CI) and `agent-nuvira model bandit reset` clears it; routing decisions record a `routedBy` source (`heuristic | rule | bandit`) for full auditability
 - **Routing rules & hard constraints** — regex/string task-pattern rules force a provider/model before scoring (first match wins); per-call filters (`routing.maxCostUsd`, `routing.minSpeed`, `routing.minReasoning`) *eliminate* violating providers with a safe fallback when constraints would remove everything
 - **Deterministic Tier-0 routing** — mechanical edits short-circuit the LLM entirely (strip `console.*` lines, word-boundary symbol renames, import dedupes) with AST validation and graceful fallthrough to the LLM when a goal isn't mechanical — `$0` and `<1ms` per edit
-- **Native FAISS vector backend** — `buff memory backend` shows the active backend (`faiss-native` / `faiss-ivf` / `json`) and why it was chosen; `--check` runs a native-FAISS availability probe with install guidance, and `@faiss-node/native` is used automatically whenever it builds
-- **Vector retrieval (token-efficient context)** — large gathered contexts are chunked, embedded locally (`bge-small-en-v1.5` via @huggingface/transformers, zero new deps) and reduced to the top-k semantically-relevant chunks before the LLM call — saving tokens so free quotas stretch further. Complements the quota ledger: **retrieval saves tokens, the ledger manages quotas**. Small contexts pass through untouched (zero overhead); any retrieval failure fails over to full context. `buff retrieval index/query/stats/clear` + a dashboard Retrieval card show the savings
-- **Checkpoint / resume** — `buff execute "<goal>" --checkpoint` saves a resume-able snapshot after every task batch; `--resume [id]` rehydrates the plan and continues from the first pending step (a crash / quota kill / token expiry mid-pipeline no longer restarts the whole plan); `--checkpoint-list` shows saved pipelines
-- **Security scan CLI** — `buff security scan` detects PII, prompt injections, and dangerous code patterns
-- **Feedback & rating system** — `buff feedback record/list/stats/clear` drives self-improvement scoring
-- **Marketplace unified CLI** — `buff marketplace browse/search/install/info` for workflow templates + plugins
+- **Native FAISS vector backend** — `agent-nuvira memory backend` shows the active backend (`faiss-native` / `faiss-ivf` / `json`) and why it was chosen; `--check` runs a native-FAISS availability probe with install guidance, and `@faiss-node/native` is used automatically whenever it builds
+- **Vector retrieval (token-efficient context)** — large gathered contexts are chunked, embedded locally (`bge-small-en-v1.5` via @huggingface/transformers, zero new deps) and reduced to the top-k semantically-relevant chunks before the LLM call — saving tokens so free quotas stretch further. Complements the quota ledger: **retrieval saves tokens, the ledger manages quotas**. Small contexts pass through untouched (zero overhead); any retrieval failure fails over to full context. `agent-nuvira retrieval index/query/stats/clear` + a dashboard Retrieval card show the savings
+- **Checkpoint / resume** — `agent-nuvira execute "<goal>" --checkpoint` saves a resume-able snapshot after every task batch; `--resume [id]` rehydrates the plan and continues from the first pending step (a crash / quota kill / token expiry mid-pipeline no longer restarts the whole plan); `--checkpoint-list` shows saved pipelines
+- **Security scan CLI** — `agent-nuvira security scan` detects PII, prompt injections, and dangerous code patterns
+- **Feedback & rating system** — `agent-nuvira feedback record/list/stats/clear` drives self-improvement scoring
+- **Marketplace unified CLI** — `agent-nuvira marketplace browse/search/install/info` for workflow templates + plugins
 - **MCP (Model Context Protocol) integration** — connect to databases, APIs, and file systems via MCP servers with SSE transport support
 - **AST-aware code editing** — structural analysis engine understands functions, classes, methods across JS/TS/Python/Go/Rust
 - **Auto error-repair engine** — automatic diagnosis and repair of test failures with configurable retry budgets
@@ -133,15 +133,15 @@ This table highlights core capabilities for quick machine parsing and comparison
   on failed commands, and bootstrap-installs missing package managers (npm, pip, bundler, cargo, go, composer,
   dart, Homebrew) via brew/apt/dnf/yum/winget/choco/rustup — no manual setup required
 - **A2A (Agent-to-Agent) Protocol** — inter-agent communication standard for multi-machine collaboration
-- **CI/CD headless mode** — `buff ci` for automated pipelines with GitHub Actions integration
+- **CI/CD headless mode** — `agent-nuvira ci` for automated pipelines with GitHub Actions integration
 - **npm publishing & one-line install** — `npx agent-nuvira` and `npx buff` for zero-setup onboarding
 - **Marketing website** — `website/` directory with a full landing page, SEO meta tags, and Netlify-ready deployment config
-- **Branch Automation Hooks (Pillar A4)** — `buff execute "install branch hooks" --auto-branch` installs
+- **Branch Automation Hooks (Pillar A4)** — `agent-nuvira execute "install branch hooks" --auto-branch` installs
   git post-checkout and pre-commit hooks for automated branch workflows; issue-driven branch creation
   (`feat/PROJ-123-description`), PR label-triggered updates, file-watch auto-commit with conventional
   commit messages, and CI failure detection with LLM diagnosis
 - **Issue Triage Engine (Pillar A3)** — Automated issue classification, prioritization, and labeling
-  across GitHub and GitLab via `buff execute "triage issues"` with LLM-powered analysis
+  across GitHub and GitLab via `agent-nuvira execute "triage issues"` with LLM-powered analysis
 - **GitHub PR Review Agent (Pillar A2)** — Automatic inline code review on open PRs; reads diffs,
   runs security/quality verification, and posts inline review comments via GitHub API
 - **GitLab API Integration (Pillar A1)** — Full GitLab agent for merge request management, issue
@@ -150,7 +150,7 @@ This table highlights core capabilities for quick machine parsing and comparison
   inline in chat messages for slash commands, showing agent nodes with real-time status updates
 - **Real-Time Token Streaming in AgentPanel (Pillar B2)** — Live typewriter-effect token streaming
   with blinking cursor and animated progress indicator in the agent progress panel
-- **Interactive development mode** — `buff execute` without a goal launches a guided interactive loop with session save/resume, follow-up suggestions, and failure analysis
+- **Interactive development mode** — `agent-nuvira execute` without a goal launches a guided interactive loop with session save/resume, follow-up suggestions, and failure analysis
 - **Session persistence** — save and resume development sessions across CLI restarts with full history
 - **Failure analysis** — automatic diagnosis of agent failures with specific recovery options per agent type
 - **Follow-up suggestions** — LLM-powered contextual next-step recommendations after goal completion
@@ -174,7 +174,7 @@ npm install -g agent-nuvira
 
 # Or clone and build from source
 git clone https://github.com/imdheerajKube/agent-nuvira.git buff
-cd buff
+cd agent-nuvira
 npm install
 npm run build
 npm link
@@ -396,10 +396,10 @@ MCP servers extend your agent's capabilities by connecting to external tools and
 
 ### Configuration Files
 
-MCP server configs are JSON files placed in '~/.buff/mcp/'. Each file defines one server connection. Files are auto-discovered at startup.
+MCP server configs are JSON files placed in '~/.nuvira/mcp/'. Each file defines one server connection. Files are auto-discovered at startup.
 
 ```bash
-mkdir -p ~/.buff/mcp
+mkdir -p ~/.nuvira/mcp
 ```
 
 ### Configuration Fields
@@ -464,8 +464,8 @@ Read/write files and directories on your local machine.
 ```
 
 ```bash
-buff mcp connect filesystem
-buff mcp call read_file --server filesystem --args '{"path":"/path/to/file.txt"}'
+agent-nuvira mcp connect filesystem
+agent-nuvira mcp call read_file --server filesystem --args '{"path":"/path/to/file.txt"}'
 ```
 
 #### 2. GitHub Server
@@ -476,7 +476,7 @@ Search repositories, issues, PRs, and code on GitHub. Requires a GitHub Personal
 1. Build the binary: `git clone https://github.com/github/github-mcp-server.git && cd github-mcp-server && go build -o github-mcp-server ./cmd/github-mcp-server/`
 2. Move it to your PATH: `mv github-mcp-server /usr/local/bin/`
 3. Create a GitHub PAT at https://github.com/settings/tokens
-4. Add the config below to '~/.buff/mcp/github.json'
+4. Add the config below to '~/.nuvira/mcp/github.json'
 
 ```json
 {
@@ -492,10 +492,10 @@ Search repositories, issues, PRs, and code on GitHub. Requires a GitHub Personal
 ```
 
 ```bash
-buff mcp connect github
-buff mcp list
+agent-nuvira mcp connect github
+agent-nuvira mcp list
 # Tools include: search_repositories, search_issues, search_code, search_pull_requests, etc.
-buff mcp call search_repositories --server github --args '{"query":"react","limit":5}'
+agent-nuvira mcp call search_repositories --server github --args '{"query":"react","limit":5}'
 ```
 
 #### 3. Exa WebSets Server (SSE with Bearer Auth)
@@ -504,7 +504,7 @@ Search and enrich web entities (companies, people, research papers) using Exa's 
 
 **Setup:**
 1. Get your Exa API key at https://dashboard.exa.ai
-2. Add the config below to '~/.buff/mcp/exa.json'
+2. Add the config below to '~/.nuvira/mcp/exa.json'
 
 ```json
 {
@@ -519,8 +519,8 @@ Search and enrich web entities (companies, people, research papers) using Exa's 
 ```
 
 ```bash
-buff mcp connect exa
-buff mcp list
+agent-nuvira mcp connect exa
+agent-nuvira mcp list
 # Tools include: create_webset, create_search, create_enrichment, list_websets, etc.
 ```
 
@@ -528,18 +528,18 @@ buff mcp list
 
 | Command | Description |
 |---------|-------------|
-| `buff mcp list` | List all discovered MCP servers and their tools |
-| `buff mcp connect <name>` | Connect to a specific MCP server |
-| `buff mcp connect --all` | Connect to all discovered MCP servers |
-| `buff mcp call <tool> --server <name> --args '{"key":"val"}'` | Call a tool on a connected server |
-| `buff mcp info <name>` | Show detailed information for an MCP server |
-| `buff mcp refresh` | Re-discover and reconnect to all MCP servers |
+| `agent-nuvira mcp list` | List all discovered MCP servers and their tools |
+| `agent-nuvira mcp connect <name>` | Connect to a specific MCP server |
+| `agent-nuvira mcp connect --all` | Connect to all discovered MCP servers |
+| `agent-nuvira mcp call <tool> --server <name> --args '{"key":"val"}'` | Call a tool on a connected server |
+| `agent-nuvira mcp info <name>` | Show detailed information for an MCP server |
+| `agent-nuvira mcp refresh` | Re-discover and reconnect to all MCP servers |
 
 ### Auto-Discovery with the Orchestrator
 
-When you run `buff execute`, the orchestrator automatically:
+When you run `agent-nuvira execute`, the orchestrator automatically:
 
-1. Scans '~/.buff/mcp/' for JSON config files
+1. Scans '~/.nuvira/mcp/' for JSON config files
 2. Connects to all enabled MCP servers
 3. Injects tool descriptions into the agent's context
 4. The planner can schedule MCP tool calls as pipeline steps
@@ -565,7 +565,7 @@ Browse the official MCP server directory at **[modelcontextprotocol.io/servers](
 
 ### Config File
 
-Configuration lives at `~/.buff/buffconfig.json`. It is created with sensible defaults on first use.
+Configuration lives at `~/.nuvira/nuvirarc.json`. It is created with sensible defaults on first use.
 
 You can inspect and modify it through the CLI:
 
@@ -630,10 +630,10 @@ API keys can be set via environment variables instead of the config file. They t
 | `GEMINI_API_KEY` | Google Gemini | Yes, unless using local | [aistudio.google.com/apikey](https://aistudio.google.com/apikey) |
 | `OPENROUTER_API_KEY` | OpenRouter | Yes, unless using local | [openrouter.ai/keys](https://openrouter.ai/keys) |
 
-You can place a `.env` file in the project root or at `~/.buff/.env`:
+You can place a `.env` file in the project root or at `~/.nuvira/.env`:
 
 ```env
-# ~/.buff/.env
+# ~/.nuvira/.env
 GROQ_API_KEY=gsk_xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx
 NVIDIA_NIM_API_KEY=nvapi-xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx
 GEMINI_API_KEY=AIzaSyxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx
@@ -835,7 +835,7 @@ agent-nuvira config init
 
 ### `agent-nuvira cache` — Cache Management
 
-Inference responses are cached in a local SQLite database (`~/.buff/cache.db`) with a default TTL of 1 hour.
+Inference responses are cached in a local SQLite database (`~/.nuvira/cache.db`) with a default TTL of 1 hour.
 
 ```bash
 # Show cache statistics
@@ -902,7 +902,7 @@ agent-nuvira eval --routing
 agent-nuvira model health
 ```
 
-**Priority chain:** CLI `--provider`/`--model` flags → `buff model switch` active state → default config file — the most specific wins.
+**Priority chain:** CLI `--provider`/`--model` flags → `agent-nuvira model switch` active state → default config file — the most specific wins.
 
 #### Learning Router — Thompson-sampling bandit + hard constraints (v1.51.0 Enhanced)
 
@@ -924,7 +924,7 @@ agent-nuvira config set routing.minReasoning 0.6
 
 #### How the routing engine works (v1.51.0)
 
-**5 scoring dimensions:** Every provider has a static capability profile (0–1) for reasoning, speed, cost, privacy, reliability. The cost dimension is computed from **real per-1K-token pricing** (free tiers = $0) — configurable via `buff config set pricing.<provider>.inputPer1K`.
+**5 scoring dimensions:** Every provider has a static capability profile (0–1) for reasoning, speed, cost, privacy, reliability. The cost dimension is computed from **real per-1K-token pricing** (free tiers = $0) — configurable via `agent-nuvira config set pricing.<provider>.inputPer1K`.
 
 **5 complexity levels:** The task description is analyzed for keywords to determine complexity (trivial → critical). Each level has a distinct weight matrix that shifts dominance:
 - **Trivial/simple:** cost + speed dominate (fast small model)
@@ -933,13 +933,13 @@ agent-nuvira config set routing.minReasoning 0.6
 
 **4 preference modes:** `balanced`, `performance-first`, `cost-first`, `privacy-first` — each applies additive weight adjustments that shift the routing decision predictably.
 
-**1. Thompson-sampling bandit** — Each provider keeps a **Beta(α, β) prior per complexity bucket** so learning is task-type-local. Final score = `deterministicScore × θ` where `θ ~ Beta(α, β)`. Cold start `Beta(1,1)` behaves like the plain heuristic router until outcomes accumulate. The orchestrator **records every auto-routed task's outcome** (success/failure) into the bandit. Success rewards are **cost-adjusted** — a cheap provider's success is worth the most. State persists to `~/.buff/memory/router-bandit.json`.
+**1. Thompson-sampling bandit** — Each provider keeps a **Beta(α, β) prior per complexity bucket** so learning is task-type-local. Final score = `deterministicScore × θ` where `θ ~ Beta(α, β)`. Cold start `Beta(1,1)` behaves like the plain heuristic router until outcomes accumulate. The orchestrator **records every auto-routed task's outcome** (success/failure) into the bandit. Success rewards are **cost-adjusted** — a cheap provider's success is worth the most. State persists to `~/.nuvira/memory/router-bandit.json`.
 
 **2. Uncertainty-driven escalation** — When the bandit's winner has no learned data (α+β < default 8 samples), routing escalates to the next-ranked provider that HAS learned data with a ≥55% win-rate floor. This prevents a cold-start winner from committing to a coin flip.
 
 **3. Per-modelId learning** — Both provider-level and model-level Beta priors track which concrete model won (e.g., `llama-3.3-70b-versatile` ≠ `openai/gpt-oss-20b` on the same provider). Cold start keeps the configured pin; learned models prefer the best Thompson-sampled one.
 
-**4. Promotion gate A/B** — Every auto-routed task records both the deterministic heuristic pick and the bandit pick for the same task. The `buff model bandit` command evaluates 3 criteria (quality improvement >2%, cost regression ≤1%, p95 latency regression ≤5%) before promoting the bandit over the heuristic.
+**4. Promotion gate A/B** — Every auto-routed task records both the deterministic heuristic pick and the bandit pick for the same task. The `agent-nuvira model bandit` command evaluates 3 criteria (quality improvement >2%, cost regression ≤1%, p95 latency regression ≤5%) before promoting the bandit over the heuristic.
 
 **5. Routing rules** — Regex/string task-pattern rules force a specific provider/model before scoring (first match wins). Rules also note the forced provider for correct bandit outcome attribution.
 
@@ -973,7 +973,7 @@ The dashboard's 🤖 **Routing** panel shows the same bandit live — an α/β h
 **Routing rules** — force a specific provider/model for task patterns (regex/string, evaluated before scoring, first match wins):
 
 ```jsonc
-// ~/.buff/buffconfig.json
+// ~/.nuvira/nuvirarc.json
 {
   "routing": {
     "bandit": true,
@@ -1030,7 +1030,7 @@ Every Auto-routed call is write-through recorded into a **central quota ledger**
 1. **Calendar-aware reset windows** — daily/hourly free-tier limits with automatic re-enable exactly when the window rolls (no arbitrary timers).
 2. **Predictive parking** — a provider that exhausts its window is **parked** and sinks below healthy candidates **before** the next call, not after a reactive failure.
 3. **Free/local-first gate** — `routing.allowPaid: false` keeps paid providers out of trivial/simple/moderate tasks; complex/critical tasks may still use paid high-capacity models.
-4. **Cost transparency** — `buff model quota` shows free vs paid tokens and an **estimated $ saved** figure (what the free-tier usage would have cost at a typical paid rate).
+4. **Cost transparency** — `agent-nuvira model quota` shows free vs paid tokens and an **estimated $ saved** figure (what the free-tier usage would have cost at a typical paid rate).
 
 ```bash
 # Set per-provider quota limits (requests per reset window)
@@ -1055,7 +1055,7 @@ agent-nuvira model quota reset
 
 The dashboard's 📒 **Quota Ledger** card shows the same data live — per-entry status plus a free/local-first cost split (free tokens = savings, paid tokens = actual spend) with an estimated $ saved badge.
 
-**Failover timeline (transparency: when failover occurred).** Every park, window-reset re-enable, manual release, and mid-session failover is appended to `~/.buff/memory/quota-events.jsonl` (capped at 200). The dashboard's Quota card renders it as a **Failover Timeline**, and `buff model quota` prints the last 20 events:
+**Failover timeline (transparency: when failover occurred).** Every park, window-reset re-enable, manual release, and mid-session failover is appended to `~/.nuvira/memory/quota-events.jsonl` (capped at 200). The dashboard's Quota card renders it as a **Failover Timeline**, and `agent-nuvira model quota` prints the last 20 events:
 
 ```bash
 agent-nuvira model quota
@@ -1090,10 +1090,10 @@ saves tokens (stretching free quotas), while the quota ledger manages limits:
 |---|---|
 | **Chunking** | Large files split into ~512-token chunks (64-token overlap, paragraph-aware) |
 | **Embedding** | `bge-small-en-v1.5` (384-dim) via @huggingface/transformers — local, free, offline, cached |
-| **Vector store** | Pure-JS cosine-similarity index in `~/.buff/memory/vectors-repo.json` (honors `BUFF_MEMORY_DIR`), isolated from memory/history vectors |
+| **Vector store** | Pure-JS cosine-similarity index in `~/.nuvira/memory/vectors-repo.json` (honors `BUFF_MEMORY_DIR`), isolated from memory/history vectors |
 | **Retrieval** | Goal/subtask embedded → top-k chunks (default 5) → reduced context |
 | **Router policy** | Context ≤ threshold (12k tokens) → **direct call, zero overhead**; larger → embed + retrieve; any failure → **failover to full context** (never breaks the LLM call) |
-| **Transparency** | `🧠 Retrieved 5 chunks — reduced context 20k → 3k tokens` + `buff retrieval stats` + dashboard Retrieval card |
+| **Transparency** | `🧠 Retrieved 5 chunks — reduced context 20k → 3k tokens` + `agent-nuvira retrieval stats` + dashboard Retrieval card |
 
 ```bash
 # Pre-index a repo so Auto runs are instant (first run downloads the ~130MB
@@ -1111,9 +1111,9 @@ agent-nuvira retrieval clear
 ```
 
 Where retrieval applies (honest split):
-- **`buff chat --file <large-file>`** — the file is chunked, embedded, and
+- **`agent-nuvira chat --file <large-file>`** — the file is chunked, embedded, and
   reduced to the top-k relevant chunks before the LLM call (big token savings).
-- **`buff execute` pipelines** — after the context-gatherer collects files, the
+- **`agent-nuvira execute` pipelines** — after the context-gatherer collects files, the
   orchestrator indexes them and produces a **semantic file ranking** for the
   writer (relevance over size when selecting which files fit the token budget),
   and records the retrieval into the token-savings stats.
@@ -1181,17 +1181,17 @@ With this on, a failed provider shows the next-ranked candidate and lets you
 choose "switch (recommended)" or "pick a provider myself" — so every swap is
 an informed decision, not a silent surprise.
 
-This also applies to **single-shot Auto prompts** (`buff chat "ask something"`
+This also applies to **single-shot Auto prompts** (`agent-nuvira chat "ask something"`
 with `-m auto`): before Auto mode silently hops to the next candidate, the CLI
 asks; picking "manual" surfaces the original provider error instead of
 switching behind your back.
 
 #### Checkpoint / resume — crash-proof multi-agent pipelines
 
-Long `buff execute` pipelines can be killed by a crash, quota exhaustion, or a token expiry mid-run. Checkpoints serialize the pipeline state so work is never lost:
+Long `agent-nuvira execute` pipelines can be killed by a crash, quota exhaustion, or a token expiry mid-run. Checkpoints serialize the pipeline state so work is never lost:
 
 ```bash
-# Save a resume-able checkpoint after every task batch (in ~/.buff/memory/checkpoints/)
+# Save a resume-able checkpoint after every task batch (in ~/.nuvira/memory/checkpoints/)
 agent-nuvira execute "build the API" --checkpoint
 
 # Resume the latest checkpoint for this goal + cwd (skips completed steps + the planner)
@@ -1218,22 +1218,22 @@ Automate your entire git workflow with trigger-based hooks. Install once, then l
 
 ```bash
 # Step 1: Install branch automation hooks
-buff execute "install branch hooks" --auto-branch
+agent-nuvira execute "install branch hooks" --auto-branch
 
 # Step 2: Check automation status
-buff execute "check branch status" --auto-branch
+agent-nuvira execute "check branch status" --auto-branch
 
 # Step 3: Auto-create a branch from an issue
-buff execute "auto-create branch from issue PROJ-123" --auto-branch
+agent-nuvira execute "auto-create branch from issue PROJ-123" --auto-branch
 
 # Step 4: Auto-commit changes with a conventional message
-buff execute "auto-commit changes" --auto-branch
+agent-nuvira execute "auto-commit changes" --auto-branch
 
 # Step 5: Start file-watch mode (auto-commits on file changes)
-buff execute "start file watch" --auto-branch
+agent-nuvira execute "start file watch" --auto-branch
 
 # Step 6: Diagnose CI failures
-buff execute "check CI for PR #42" --auto-branch
+agent-nuvira execute "check CI for PR #42" --auto-branch
 ```
 
 **Trigger Sources:**
@@ -1266,7 +1266,7 @@ Scope: module/area affected (auto-detected from changed files)
 
 ### `agent-nuvira skill` — Skill Compiler System
 
-Automatically convert successful agent execution trajectories into reusable, parameterized skill scripts. Skills are extracted by an LLM from high-scoring runs, saved to `~/.buff/skills/`, and invoked directly via the orchestrator.
+Automatically convert successful agent execution trajectories into reusable, parameterized skill scripts. Skills are extracted by an LLM from high-scoring runs, saved to `~/.nuvira/skills/`, and invoked directly via the orchestrator.
 
 ```bash
 # List all compiled skills
@@ -1297,7 +1297,7 @@ agent-nuvira skill gc
 
 ### `agent-nuvira skills` — Community Skills Marketplace
 
-Search, install, update, and manage community skills from the multi-source registry. Distinct from `buff skill` (singular), which manages internal trajectory-compiled skills.
+Search, install, update, and manage community skills from the multi-source registry. Distinct from `agent-nuvira skill` (singular), which manages internal trajectory-compiled skills.
 
 ```bash
 # Search the registry for skills matching a query
@@ -1333,7 +1333,7 @@ agent-nuvira skills bundle --list
 agent-nuvira skills bundle backend-dev --show
 ```
 
-**33 bundled first-party skills** ship with the product:
+**50 bundled first-party skills** ship with the product:
 
 | Skill | Description |
 |---|---|
@@ -1370,6 +1370,23 @@ agent-nuvira skills bundle backend-dev --show
 | `design-system` | Component library, tokens, Storybook |
 | `legal-compliance` | GDPR/CCPA, privacy policy, cookie consent |
 | `cron-setup` | Scheduled tasks and cron jobs |
+| `image-optimize` | Image compression, format conversion, responsive images |
+| `pdf-generate` | PDF generation from HTML/markdown with templates |
+| `cache-setup` | Redis/Memcached caching layers |
+| `queue-setup` | Message queue (RabbitMQ, SQS, Bull) setup |
+| `rate-limit` | API rate limiting and throttling |
+| `cors-setup` | CORS policy configuration |
+| `error-tracking` | Error monitoring (Sentry, Bugsnag) |
+| `feature-flags` | Feature flag system (LaunchDarkly, Unleash) |
+| `webhook-setup` | Webhook endpoints and verification |
+| `form-builder` | Form validation and submission handling |
+| `data-sync` | Data synchronization across systems |
+| `state-machine` | Finite state machine implementation |
+| `websocket-setup` | WebSocket real-time communication |
+| `api-versioning` | API versioning strategies (URL, header, query) |
+| `multi-tenancy` | Multi-tenant architecture patterns |
+| `blob-storage` | Blob storage (S3, GCS, Azure Blob) |
+| `notification-setup` | Push notification infrastructure |
 
 **Trust & safety:** sandboxed install names (`^[a-z0-9-]+$`), SHA-256 provenance, quarantine on mismatch, frontmatter cross-check.
 
@@ -1430,7 +1447,7 @@ agent-nuvira init my-app --template custom --template-dir ~/my-templates
 | `python-cli` | Python CLI app with Click + Poetry |
 | `minimal` | Minimal TypeScript project (1 file) |
 
-The command also generates a `.buffconfig.json` with your chosen provider and model, ready to use immediately.
+The command also generates a `.nuvirarc.json` with your chosen provider and model, ready to use immediately.
 
 ---
 
@@ -1654,7 +1671,7 @@ The pipeline runs these agents in dependency-aware order with parallelization:
 
 **Parallel execution:** Independent agents (e.g., Reviewer + Tester) run concurrently via `Promise.all()`. Exclusive agents (Runner, Debugger) get dedicated access. Results are merged with conflict resolution.
 
-**Interactive development mode:** `buff execute` without a goal launches an interactive loop with:
+**Interactive development mode:** `agent-nuvira execute` without a goal launches an interactive loop with:
 - **Model picker** — Choose your provider/model interactively
 - **Session tracking** — Full history of goals executed in the session
 - **Failure analysis** — Per-agent-type diagnosis with recovery actions
@@ -1728,9 +1745,9 @@ Adapter Adapter Adapter   Adapter      Adapter
          │                              │
          │  ┌────────────────────────┐  │
          │  │   CLI Layer            │  │
-         │  │  ├─ buff init          │  │
-         │  │  ├─ buff model         │  │
-         │  │  └─ buff skill         │  │
+         │  │  ├─ agent-nuvira init       │  │
+         │  │  ├─ agent-nuvira model         │  │
+         │  │  └─ agent-nuvira skill         │  │
          │  └────────────────────────┘  │
          │                              │
          │  ┌────────────────────────┐  │
@@ -1926,7 +1943,7 @@ registry.register(AnthropicPlugin);
 
 ### Step 4: Configure and Use
 
-Add the provider to your `buffconfig.json`:
+Add the provider to your `nuvirarc.json`:
 
 ```json
 {
@@ -1948,7 +1965,7 @@ Then use it:
 agent-nuvira chat --provider anthropic
 ```
 
-> **Note:** Plugins placed in `~/.buff/plugins/` are **auto-discovered** at CLI startup — no manual registration required. Programmatic registration via the Plugin Registry API is also supported for advanced use cases.
+> **Note:** Plugins placed in `~/.nuvira/plugins/` are **auto-discovered** at CLI startup — no manual registration required. Programmatic registration via the Plugin Registry API is also supported for advanced use cases.
 
 ---
 
@@ -1958,7 +1975,7 @@ agent-nuvira chat --provider anthropic
 
 ```bash
 git clone https://github.com/imdheerajKube/agent-nuvira.git
-cd buff
+cd agent-nuvira
 npm install
 ```
 
@@ -2072,10 +2089,10 @@ npx tsc --noEmit
 | Phase | Feature | Status |
 |---|---|---|
 | **Phase 1: Quick Wins** | | |
-| 1.1 | Auto-discovery plugin loader — drop `.js` into `~/.buff/plugins/` | ✅ Complete |
+| 1.1 | Auto-discovery plugin loader — drop `.js` into `~/.nuvira/plugins/` | ✅ Complete |
 | 1.2 | Complete streaming support — all 17+ providers | ✅ Complete |
 | 1.3 | Cost tracking — per-provider/session/monthly | ✅ Complete |
-| 1.4 | `buff init` — interactive project scaffolding | ✅ Complete |
+| 1.4 | `agent-nuvira init` — interactive project scaffolding | ✅ Complete |
 | 1.5 | Prompt history search — keyword + semantic | ✅ Complete |
 | 1.6 | Skill compiler — auto-extract reusable patterns from trajectories | ✅ Complete |
 | 1.7 | Context-window memory pruner — prevent OOM in long chains | ✅ Complete |
@@ -2085,7 +2102,7 @@ npx tsc --noEmit
 | 2.2 | Workflow template marketplace — 10 templates + registry | ✅ Complete |
 | 2.3 | Model benchmarking — 21 tasks, scoring, A/B comparison | ✅ Complete |
 | 2.4 | Docker sandbox isolation — resource limits, network isolation, 8 images | ✅ Complete |
-| 2.5 | Provider health dashboard — `buff doctor` | ✅ Complete |
+| 2.5 | Provider health dashboard — `agent-nuvira doctor` | ✅ Complete |
 | 2.6 | Memory compression & pruning — trajectory summarization | ✅ Complete |
 | **Phase 3: Major Upgrades** | | |
 | 3.1 | VS Code extension — 9 commands, inline suggestions, diff viewer, agent progress panel | ✅ Complete |
@@ -2097,17 +2114,17 @@ npx tsc --noEmit
 | 3.4 | Hybrid model routing — complexity-based model selection | ✅ Complete |
 | 3.5 | Team collaboration — shared config, memory, and review pipelines | ✅ Complete |
 | 3.6 | Agent SDK — `@agent-nuvira/sdk` npm package + scaffolding | ✅ Complete |
-| 3.7 | Provider CLI (`buff provider list/health`) | ✅ Complete |
+| 3.7 | Provider CLI (`agent-nuvira provider list/health`) | ✅ Complete |
 | 3.8 | Provider fallback routing — auto-failover with circuit breaker | ✅ Complete |
-| 3.9 | Security scan CLI (`buff security scan`) | ✅ Complete |
-| 3.10 | Feedback & rating system (`buff feedback`) | ✅ Complete |
-| 3.11 | Marketplace unified CLI (`buff marketplace browse/search/install`) | ✅ Complete |
+| 3.9 | Security scan CLI (`agent-nuvira security scan`) | ✅ Complete |
+| 3.10 | Feedback & rating system (`agent-nuvira feedback`) | ✅ Complete |
+| 3.11 | Marketplace unified CLI (`agent-nuvira marketplace browse/search/install`) | ✅ Complete |
 | **Phase 4: Industry Standards** | | |
 | 4.1 | MCP (Model Context Protocol) — client/manager/CLI with SSE transport + Firecrawl | ✅ Complete |
 | 4.2 | AST-aware code editing — structural analysis engine (JS/TS/Python/Go/Rust) | ✅ Complete |
 | 4.3 | Auto error-repair engine — diagnosis & retry budgets for test failures | ✅ Complete |
 | 4.4 | A2A (Agent-to-Agent) Protocol — inter-agent communication standard | ✅ Complete |
-| 4.5 | CI/CD headless mode — `buff ci` with GitHub Actions integration | ✅ Complete |
+| 4.5 | CI/CD headless mode — `agent-nuvira ci` with GitHub Actions integration | ✅ Complete |
 | 4.6 | npm publishing & one-line install — `npx agent-nuvira` / `npx buff` | ✅ Complete |
 | **Phase 5: Interactive UX** | | |
 | 5.1 | Interactive dev mode — guided loop with model picker, session save/resume | ✅ Complete |
@@ -2130,8 +2147,8 @@ npx tsc --noEmit
 | **Phase 10: Autonomous Publish** | | |
 | 10.1 | CredentialStore — interactive Git/npm credential collection, GIT_ASKPASS, SSH agent, .npmrc injection | ✅ Complete (v1.29.0) |
 | 10.2 | PhaseExecutionEngine — multi-goal project scopes with save/resume across restarts | ✅ Complete (v1.29.0) |
-| 10.3 | `buff publish` — 5-phase pipeline: tests → version → git → npm → GitHub release | ✅ Complete (v1.29.0) |
-| 10.4 | `buff phase` — create/execute/resume/status/list scopes with credential management | ✅ Complete (v1.29.0) |
+| 10.3 | `agent-nuvira publish` — 5-phase pipeline: tests → version → git → npm → GitHub release | ✅ Complete (v1.29.0) |
+| 10.4 | `agent-nuvira phase` — create/execute/resume/status/list scopes with credential management | ✅ Complete (v1.29.0) |
 | **Phase 11: TS Compiler API-Aware Structural Editing** | | |
 | 11.1 | TS Compiler API Wrapper (`ts-adapter.ts`) — parse, find nodes, validate syntax via real TS parser | ✅ Complete (v1.31.0) |
 | 11.2 | Structural Transformations (`transform.ts`) — rename, extract, inline, add param, change signature | ✅ Complete (v1.31.0) |
@@ -2145,12 +2162,12 @@ npx tsc --noEmit
 | Version | Date | Key Changes |
 |---------|------|-------------|
 | **v1.76.1** | Aug 2026 | **Model Discovery Timeline** — new `/models/timeline` panel shows every model's freshness status, last-seen times, error rate, staleness classification; `/api/model-timeline` endpoint; auto-refreshes every 30s |
-| **v1.76.0** | Aug 2026 | **Improved folder browser + Telegram auto-learning + Getting Started wizards** — Browse button redesigned with drive roots, breadcrumbs, search/filter, auto-refresh; Telegram contacts auto-learn real chat IDs; Platforms page with 22-platform grid; `buff gateway setup [platform]` interactive wizard |
-| **v1.75.3** | Aug 2026 | **Project picker fix + Telegram setup docs + CLI interactive mode** — removed broken "current dir" button, renamed label to "Select Project Folder", dashboard Channels tab shows 📖 Docs links and setup hints for every platform, `buff gateway start` shows platform-specific setup instructions, CLI chat no longer exits after the initial task |
+| **v1.76.0** | Aug 2026 | **Improved folder browser + Telegram auto-learning + Getting Started wizards** — Browse button redesigned with drive roots, breadcrumbs, search/filter, auto-refresh; Telegram contacts auto-learn real chat IDs; Platforms page with 22-platform grid; `agent-nuvira gateway setup [platform]` interactive wizard |
+| **v1.75.3** | Aug 2026 | **Project picker fix + Telegram setup docs + CLI interactive mode** — removed broken "current dir" button, renamed label to "Select Project Folder", dashboard Channels tab shows 📖 Docs links and setup hints for every platform, `agent-nuvira gateway start` shows platform-specific setup instructions, CLI chat no longer exits after the initial task |
 | **v1.75.2** | Aug 2026 | **Chat resolve loop fix + tool-loop step limit** — dashboard "No — ask the agent" button no longer loops back to the same command card, auto-routing shows a clear hint when falling back to local models, tool-loop step limit increased from 8 to 16 for complex tasks |
 | **v1.75.0** | Aug 2026 | **Session resume + project-aware chat** — `--cwd` option for `agent-nuvira dashboard`, attached project scopes the agent's working directory (`toolContext.cwd`), 🗂️ folder browser for project attach, session resume auto-restores project context, project mismatch banner, sidebar shows project name per conversation; 4,864 root + 263 dashboard tests |
 | **v1.74.2** | Aug 2026 | **Dashboard-first — chat is the front door (Phases 1–8 delivered)** — token-streaming typewriter, spec-complete markdown + syntax highlight, artifact cards (diff per-file accept/reject + commit-accepted, result, deploy — copy buttons + keyboard nav), inline command-run execution cards, project attach with code-map context, persisted sessions with smart-rail resume/search/rename/delete, composer attachments (file/paste/drag), /learn skill authoring + marketplace install, streaming cancel + retry; 4,864 root + 263 dashboard tests; CLI engine unchanged |
-| **v1.63.0** | Aug 2026 | **Messaging campaign — 22-platform multi-channel gateway** — the full gateway surface with env-var-compatible credentials: DingTalk, Feishu, WeCom, Mattermost, Matrix, generic Webhook, BlueBubbles, ntfy, Teams, Google Chat, Weixin (iLink bot API), SMS (Twilio), IRC (RFC 1459 net/tls, two-way), SimpleX (daemon WS, two-way), Home Assistant (REST) on top of Telegram/Discord/Slack/WhatsApp — service-native `TWILIO_*`/`IRC_*`/`SIMPLEX_*`/`HASS_*` creds, zero new SDK deps; WhatsApp Baileys personal bridge (`buff whatsapp pair`); guaranteed delivery ledger with auto-retry; dashboard Channels send-test; `buff gateway status` platform-count line; SimpleX inbound (auto-accept + allowlists + reconnect); IRC inbound (addressing + allowlist + PING/PONG + reconnect); 4,280 tests |
+| **v1.63.0** | Aug 2026 | **Messaging campaign — 22-platform multi-channel gateway** — the full gateway surface with env-var-compatible credentials: DingTalk, Feishu, WeCom, Mattermost, Matrix, generic Webhook, BlueBubbles, ntfy, Teams, Google Chat, Weixin (iLink bot API), SMS (Twilio), IRC (RFC 1459 net/tls, two-way), SimpleX (daemon WS, two-way), Home Assistant (REST) on top of Telegram/Discord/Slack/WhatsApp — service-native `TWILIO_*`/`IRC_*`/`SIMPLEX_*`/`HASS_*` creds, zero new SDK deps; WhatsApp Baileys personal bridge (`agent-nuvira whatsapp pair`); guaranteed delivery ledger with auto-retry; dashboard Channels send-test; `agent-nuvira gateway status` platform-count line; SimpleX inbound (auto-accept + allowlists + reconnect); IRC inbound (addressing + allowlist + PING/PONG + reconnect); 4,280 tests |
 | **v1.0.0** | Apr 2026 | Initial release — Core CLI with chat, 5 built-in providers (expandable to 17+ via plugins), config, models |
 | **v1.1.0** | Apr 2026 | Model discovery with search/filter |
 | **v1.2.0** | Apr 2026 | AI-assisted file editing (edit command) |
@@ -2178,7 +2195,7 @@ npx tsc --noEmit
 | **v1.16.1** | Aug 2026 | Interactive dev mode enhancements — failure analysis, follow-up suggestions, /fix command, 35 new unit tests |
 | **v1.26.0** | Aug 2026 | Phase 9 — SafeExecutionLayer module (file validation, Docker sandbox, safe LLM calls) + 32 new tests (23 SafeExec + 9 Verify Bus) |
 | **v1.27.0** | Aug 2026 | Website + SVG — Phase 9 SafeExecutionLayer, phase progress 9/9, 2,207 tests |
-| **v1.29.0** | Sep 2026 | Phase 10 — Autonomous publish + phase-wise execution (CredentialStore, PhaseEngine, `buff publish`, `buff phase`, git push, npm auth) + 86 new tests |
+| **v1.29.0** | Sep 2026 | Phase 10 — Autonomous publish + phase-wise execution (CredentialStore, PhaseEngine, `agent-nuvira publish`, `agent-nuvira phase`, git push, npm auth) + 86 new tests |
 | **v1.30.0** | Sep 2026 | Phase 10 tests + docs — 80 unit tests (CredentialStore + PhaseExecutionEngine), README/Product_Guide/website updated with Phase 10 progress |
 | **v1.31.0** | Sep 2026 | Phase 11 — TS Compiler API-Aware Structural Editing (ts-adapter.ts, transform.ts, edit.ts rewrite, 66 new tests), proper parser-level accuracy for TS/JS edits |
 | **v1.32.0** | Oct 2026 | Pillar A — GitLab Agent (MRs, issues, pipelines) + PR Review Agent (inline review, security scans) + website Git & PR section |
@@ -2193,42 +2210,42 @@ npx tsc --noEmit
 | **v1.47.0** | Aug 2026 | Vector retrieval — token-efficient context via local embeddings + pure-JS vector store |
 | **v1.48.0** | Aug 2026 | FAISS-style vector search backend — pluggable `VectorStore` (pure-JS IVF-flat ANN + optional native tier) |
 | **v1.49.0** | Aug 2026 | Hermetic memory tests, IVF-vs-exact recall/latency benchmark, cross-session backend transparency |
-| **v1.49.1** | Aug 2026 | Native FAISS tier actually activates — rewritten for the real `@faiss-node/native` v0.1.11 API; `buff memory backend --check` |
-| **v1.50.0** | Aug 2026 | `buff memory backend --check` diagnostics — active backend, why it was chosen, native-FAISS availability probe + install guidance |
+| **v1.49.1** | Aug 2026 | Native FAISS tier actually activates — rewritten for the real `@faiss-node/native` v0.1.11 API; `agent-nuvira memory backend --check` |
+| **v1.50.0** | Aug 2026 | `agent-nuvira memory backend --check` diagnostics — active backend, why it was chosen, native-FAISS availability probe + install guidance |
 | **v1.51.0** | Aug 2026 | Routing strategy super-enhancement — Thompson-sampling bandit, uncertainty escalation, per-model learning, promotion gate A/B, routing rules, hard constraints, credential-aware filtering, quota-ledger integration, runtime stats blending, verification escalation, free/local-first gate; 2,934 tests |
 | **v1.51.1** | Aug 2026 | Docs patch — completed the published README version-history table (added v1.50.0 + v1.51.0 rows) |
 | **v1.52.0** | Aug 2026 | Predictive model-availability routing (registry drives every pick — dead/unkeyed providers skipped before scoring, no more wasted first calls); web dashboard: scrubbable pipeline phase timeline + narrated "why did the router pick this?" walkthrough; 2,990 tests |
 | **v1.53.0** | Aug 2026 | Per-action "learned from real usage" telemetry everywhere (chat/execute/plan/edit/skill/learn/ci/doctor all write the registry; dashboard panel + `models status --verbose` show who killed/verified what); daily timeline chart in the dashboard; recovery loop (a later real success un-parks + re-verifies a recovered provider); hermetic E2E failover test (`tests/e2e/`) proving "registry learns the block, next pick skips it"; 2,996 tests |
 | **v1.54.0** | Aug 2026 | VS Code extension telemetry attribution — the extension tags every IDE-driven LLM call with `BUFF_TELEMETRY_ACTION` (`ide-chat` / `ide-inline` / `ide-<command>`) so IDE usage gets its own rows in the per-action "learned from real usage" registry log + dashboard panel; 3,002 tests |
-| **v1.55.0** | Aug 2026 | `buff models unblock <provider>` escape hatch — manually release a registry-blocked provider (demote unavailable→unverified, clear quota parks + ledger cooldown, live re-probe with honest `stillBlocked`); also fixed the pre-existing `models status --json` / `refresh --json` flag-shadowing bug; 3,011 tests |
+| **v1.55.0** | Aug 2026 | `agent-nuvira models unblock <provider>` escape hatch — manually release a registry-blocked provider (demote unavailable→unverified, clear quota parks + ledger cooldown, live re-probe with honest `stillBlocked`); also fixed the pre-existing `models status --json` / `refresh --json` flag-shadowing bug; 3,011 tests |
 | **v1.60.0** | Aug 2026 | **No hardcoded model defaults — fully dynamic selection** — `defaultProvider` is now `'auto'`, resolved at runtime to the best *available* provider for your keys + learned registry (verified → configured-with-key → zero-config local); every provider's model pin is the `'default'` sentinel, resolved at call time to a registry-verified working model (explicit pins still win, health-checked). New `src/learning/model-selection.ts` is the single selection authority (`rankAvailableProviders` / `resolveDefaultProvider` / `requireAdapterModel`); fallback chains are built from what you actually configured — never a fixed list; `'auto'` can never reach an adapter factory (onboarding guidance instead); 3,395 tests |
 | **v1.60.1** | Aug 2026 | **Live per-model context windows feed the router's context preflight** — the model probe records each provider-advertised context window into the Model Availability Registry (Ollama `/api/tags` `general.context_length`, OpenRouter `/models` `context_length`); `resolveContextWindow` precedence: user override → **live registry descriptor** → provider-level estimate → generous default; `ModelDescriptor`/`ModelRegistryEntry` gain `contextWindowTokens`; 3,398 tests |
 | **v1.60.2** | Aug 2026 | **Live context windows for every provider that exposes one** — Ollama multi-source parsing (`details.context_length` on 0.32.x, `general`/`llama`/family-keyed `model_info`) + bounded `/api/show` fallback (max 8 lookups — live-verified `gemma4:e4b` → 131,072); Gemini `inputTokenLimit` (gated on `generateContent`); NIM `max_model_len` (vLLM-backed); Groq documented as not exposing one; 3,404 tests |
-| **v1.60.3** | Aug 2026 | **Reasoning traces + failure-lesson memory + goal-fidelity planning** — P0 per-step reasoning-trace capture (`buff trace list/show/replay/clear` + dashboard 🔍 Reasoning Traces panel: agent × model × prompt digest × tokens × latency × routing snapshot); P1 self-improver distills negative trajectories into episodic failure-lesson memory injected into future planning prompts; **planner goal-fidelity guard** rejects off-topic / few-shot-regurgitated plans (the NVDA-addon failure mode) with an actionable error; **planner-repair model escalation** re-routes a failed planner through the Auto router at the next complexity level; 3,447 tests |
+| **v1.60.3** | Aug 2026 | **Reasoning traces + failure-lesson memory + goal-fidelity planning** — P0 per-step reasoning-trace capture (`agent-nuvira trace list/show/replay/clear` + dashboard 🔍 Reasoning Traces panel: agent × model × prompt digest × tokens × latency × routing snapshot); P1 self-improver distills negative trajectories into episodic failure-lesson memory injected into future planning prompts; **planner goal-fidelity guard** rejects off-topic / few-shot-regurgitated plans (the NVDA-addon failure mode) with an actionable error; **planner-repair model escalation** re-routes a failed planner through the Auto router at the next complexity level; 3,447 tests |
 | **v1.60.4** | Aug 2026 | **Per-task repair model escalation for ALL agents** — the stronger-model escalation that fixed planner failures now applies to writer/debugger/security/tester/reviewer: a failing task's repair is handed a re-routed LLM at the next complexity level, climbing from the ROUTED complexity (latched per task id) so repair is always strictly above the tier that failed; `createEscalatedLLM` is the single shared escalation primitive; 3,452 tests |
-| **v1.61.0** | Aug 2026 | **Routing + config-hygiene program (Issues 001–004)** — (1) **ALL 17+ configured providers join routing** via a dynamic `provider-catalog.ts` single source of truth (21 providers: env var, base URL, OpenAI-compat, keyless, capabilities, pricing, context window) + a generic `OpenAICompatAdapter`; nothing is hardcoded — whatever the user keys up is what the router scores; (2) **the router now leverages the data it already gathers** — registry pre-filters degrade dead providers (0 verified + ≥3 unavailable), the Thompson-sampling bandit is ON by default, context-window sources are transparent, and decision explanations cite the registry counts that excluded a provider; (3) **router tech fires at ALL action points** — `buff plan` / `eval --routing` / `benchmark` / `model explain` / `edit --auto-route` now resolve through the shared `buildAutoResolveOptions()` full feature set (bandit, quota-ledger, runtime stats, cost/speed/reasoning floors, escalation, paid gate, context preflight) instead of degraded paths; (4) **invalid API keys are auto-cleared + stale local models purged** — a provider with 3 consecutive 401/403s has its dead key removed from config (or told which env var to fix) with a clear error, and `buff models refresh` prunes local models that were deleted (`ollama rm`) — verified entries are demoted (telemetry preserved) rather than hard-deleted; 3,510 tests |
-| **v1.59.4** | Aug 2026 | P6 M6.6 Software Bill of Materials: `buff sbom` (CycloneDX 1.5 from lockfile, `--reproducible` pins), `sbom verify` (drift/tamper), `sbom licenses` (copyleft/unknown audit), `doctor --enterprise` Supply Chain check; 3,313 tests |
+| **v1.61.0** | Aug 2026 | **Routing + config-hygiene program (Issues 001–004)** — (1) **ALL 17+ configured providers join routing** via a dynamic `provider-catalog.ts` single source of truth (21 providers: env var, base URL, OpenAI-compat, keyless, capabilities, pricing, context window) + a generic `OpenAICompatAdapter`; nothing is hardcoded — whatever the user keys up is what the router scores; (2) **the router now leverages the data it already gathers** — registry pre-filters degrade dead providers (0 verified + ≥3 unavailable), the Thompson-sampling bandit is ON by default, context-window sources are transparent, and decision explanations cite the registry counts that excluded a provider; (3) **router tech fires at ALL action points** — `agent-nuvira plan` / `eval --routing` / `benchmark` / `model explain` / `edit --auto-route` now resolve through the shared `buildAutoResolveOptions()` full feature set (bandit, quota-ledger, runtime stats, cost/speed/reasoning floors, escalation, paid gate, context preflight) instead of degraded paths; (4) **invalid API keys are auto-cleared + stale local models purged** — a provider with 3 consecutive 401/403s has its dead key removed from config (or told which env var to fix) with a clear error, and `agent-nuvira models refresh` prunes local models that were deleted (`ollama rm`) — verified entries are demoted (telemetry preserved) rather than hard-deleted; 3,510 tests |
+| **v1.59.4** | Aug 2026 | P6 M6.6 Software Bill of Materials: `agent-nuvira sbom` (CycloneDX 1.5 from lockfile, `--reproducible` pins), `sbom verify` (drift/tamper), `sbom licenses` (copyleft/unknown audit), `doctor --enterprise` Supply Chain check; 3,313 tests |
 | **v1.59.5** | Aug 2026 | Dashboard surfaces mid-stream flakiness end-to-end: violet `⏸ flaky N%` chips on registry rows (mirroring the CLI's `model explain` chip), `⏸ N flaky` provider badges, and a **Flaky mid-stream** stats card — the exact signal `routing.partialFlakiness` uses to deprioritize providers; 3,313 root tests |
-| **v1.59.9** | Aug 2026 | **Config-path consistency** — `BUFF_CONFIG_DIR` is now honored by the config manager, dashboard server readers, and vector-store backend picker via one shared resolver (explicit dir > `$BUFF_CONFIG_DIR` > `~/.buff`); hermetic/alternate-config runs can never leak into the real `~/.buff/buffconfig.json`; 3,367 root tests |
+| **v1.59.9** | Aug 2026 | **Config-path consistency** — `BUFF_CONFIG_DIR` is now honored by the config manager, dashboard server readers, and vector-store backend picker via one shared resolver (explicit dir > `$BUFF_CONFIG_DIR` > `~/.buff`); hermetic/alternate-config runs can never leak into the real `~/.nuvira/nuvirarc.json`; 3,367 root tests |
 | **v1.59.8** | Aug 2026 | P6 M6.4 **Nuvira Gateway (minimal slice)** — federation handshake becomes token-verified (`--auth oidc` + `JwtOidcAdapter`, dependency-free RS256 JWT check; PEM path persists for daemon restart) + dashboard **RBAC identity card** (whoami mirror) + **secrets hardening** (`doctor --enterprise` flags plaintext `apiKeys` arrays) + admin guard-coverage parity test; 3,363 root tests |
-| **v1.59.7** | Aug 2026 | P6 M6.1 **RBAC** — `buff admin role add/remove/list` + `whoami` (admin/operator/viewer permission matrix over the admin surface; OIDC adapter interface; legacy single-user stays permissive until roles assigned) + dashboard **governance policy card** (live `routing.governance.*`) + CLI **flakiness trend tags** (`healing`/`worsening` in `models status`); 3,348 root tests |
-| **v1.59.6** | Aug 2026 | P6 M6.5 **Admin governance API** (`buff admin policy/allow/deny/allow-model/deny-model/max-cost/pii-min/unblock/clear` over the M2.4 policy) + dashboard **flakiness healing sparklines** (per-entry `partialHistory` trajectory, never hard-wiped) + Requests panel `⏸ N` partial chips (partials excluded from error rate); 3,328 root tests |
+| **v1.59.7** | Aug 2026 | P6 M6.1 **RBAC** — `agent-nuvira admin role add/remove/list` + `whoami` (admin/operator/viewer permission matrix over the admin surface; OIDC adapter interface; legacy single-user stays permissive until roles assigned) + dashboard **governance policy card** (live `routing.governance.*`) + CLI **flakiness trend tags** (`healing`/`worsening` in `models status`); 3,348 root tests |
+| **v1.59.6** | Aug 2026 | P6 M6.5 **Admin governance API** (`agent-nuvira admin policy/allow/deny/allow-model/deny-model/max-cost/pii-min/unblock/clear` over the M2.4 policy) + dashboard **flakiness healing sparklines** (per-entry `partialHistory` trajectory, never hard-wiped) + Requests panel `⏸ N` partial chips (partials excluded from error rate); 3,328 root tests |
 | **v1.59.3** | Aug 2026 | `config set routing.<gate>` now accepts the boolean soft-signal keys (`capabilityFit`, `contextFit`, `partialFlakiness`); 3,286 tests |
 | **v1.59.2** | Aug 2026 | P4 M4.4 partial flakiness now feeds the ROUTER: registry `partialRate` EMA (bumped by mid-stream interruptions, healed by clean successes, never flips status) → reliability penalty (capped 40%) gated by `routing.partialFlakiness` (default ON) + transparent `⏸ flaky` chip in `models explain`; 3,284 tests |
 | **v1.59.1** | Aug 2026 | Dashboard: P4 M4.4 partial mid-stream interruption chips surface end-to-end (violet `⏸` timeline segment, day chips with streamed-chunk tooltip, per-action Partial section + stat); 3,276 tests |
-| **v1.59.0** | Aug 2026 | P6 Enterprise Hardening begins: M6.2 secret-redaction scrubber (every log + audit line scrubbed; `BUFF_NO_REDACT` debug escape) + M6.3 tamper-evident SHA-256 hash-chained audit (`buff audit verify/export`, sidecar head state, legacy-compat) — `doctor --enterprise` audit checks now detect tampering with the exact line; 3,275 tests |
+| **v1.59.0** | Aug 2026 | P6 Enterprise Hardening begins: M6.2 secret-redaction scrubber (every log + audit line scrubbed; `BUFF_NO_REDACT` debug escape) + M6.3 tamper-evident SHA-256 hash-chained audit (`agent-nuvira audit verify/export`, sidecar head state, legacy-compat) — `doctor --enterprise` audit checks now detect tampering with the exact line; 3,275 tests |
 | **v1.58.9** | Aug 2026 | P7 M7.4 opt-in gateway telemetry/usage-health flags (`routing.gatewayTelemetry.enabled` + `healthFlags`, OFF by default, privacy-safe — aggregates only, never prompt content) surfaced via `doctor --enterprise`; 3,232 tests |
 | **v1.58.8** | Aug 2026 | **Permanent fix for the persistent dashboard "server unreachable / Failed to fetch" issue** — server now binds BOTH IPv4 + IPv6 loopback (macOS resolves `localhost` → ::1 first), CLI opens deterministic 127.0.0.1 |
-| **v1.58.7** | Aug 2026 | M4.4 conservative compression (lossless-for-code, off by default) + `partial` mid-stream telemetry + `buff doctor --enterprise` self-check (gateway, secrets, audit, RBAC) + upgrade guide (P7 M7.2) |
-| **v1.58.6** | Aug 2026 | Fixed `routing.*` config never surviving a reload — `loadConfig` now merges the routing section (bandit/quota/governance/contextWindows/nuviraSidecar), so `buff config set routing.*` persists across restarts (regression test) |
-| **v1.58.5** | Aug 2026 | P5 config-key support — `buff config set routing.nuviraSidecar.enabled\|image` (additive M5.4 keys; 2 new config tests) |
-| **v1.58.4** | Aug 2026 | Nuvira-Router **P5 sidecar** (docker-compose.nuvira.yml profile + `buff doctor --nuvira` probe; nuvira joins the auto-router provider universe with a neutral profile; keyless gateways supported) + **P4 resilience core** (mid-stream continuation retry — buffered tokens + bounded continue-note on chat auto-failover, reasoning-replay cache with SSE `reasoning_content` capture, context-relay summaries); 3,300+ tests |
+| **v1.58.7** | Aug 2026 | M4.4 conservative compression (lossless-for-code, off by default) + `partial` mid-stream telemetry + `agent-nuvira doctor --enterprise` self-check (gateway, secrets, audit, RBAC) + upgrade guide (P7 M7.2) |
+| **v1.58.6** | Aug 2026 | Fixed `routing.*` config never surviving a reload — `loadConfig` now merges the routing section (bandit/quota/governance/contextWindows/nuviraSidecar), so `agent-nuvira config set routing.*` persists across restarts (regression test) |
+| **v1.58.5** | Aug 2026 | P5 config-key support — `agent-nuvira config set routing.nuviraSidecar.enabled\|image` (additive M5.4 keys; 2 new config tests) |
+| **v1.58.4** | Aug 2026 | Nuvira-Router **P5 sidecar** (docker-compose.nuvira.yml profile + `agent-nuvira doctor --nuvira` probe; nuvira joins the auto-router provider universe with a neutral profile; keyless gateways supported) + **P4 resilience core** (mid-stream continuation retry — buffered tokens + bounded continue-note on chat auto-failover, reasoning-replay cache with SSE `reasoning_content` capture, context-relay summaries); 3,300+ tests |
 | **v1.58.3** | Aug 2026 | Nuvira-Router P3: dashboard **Requests panel** (per provider×model×action request stats — failures, avg/p50/p95/p99 latency, measured spend from the cost ledger) + **`models explain --since <ref>` decision diff** (before→after candidate score changes, winner changes); 3,161+ tests + 54 dashboard component tests |
 | **v1.58.2** | Aug 2026 | Models dashboard "Failed to fetch" repeat fix — the panel fetch is now resilient: per-fetch timeouts, independent health/registry fetches (one failing never hides the other), auto-retry with backoff on transient network failures, and fast self-healing re-poll after a failure (no more stuck error banner); 3,161 tests + 48 dashboard component tests |
 | **v1.58.1** | Aug 2026 | Dashboard mirrors the CLI `model explain` guarantees — the Auto Router panel renders the M2.x chips (🎯 fit / 📏 measured·📐 estimated / ⏳ ctx) on every provider row, served by `/api/routing` + `/api/all`; docs sync (`MODELS_EXPLAIN_DEMO.md` dashboard section); 3,161 tests + 45 dashboard component tests |
 | **v1.58.0** | Aug 2026 | Nuvira-Router P2: capability-aware scoring (`routing.capabilityFit` gate), wire-token measured-cost inputs (real `usage` tokens beat the 2,000/500 estimate; `models explain` shows 📏 measured vs 📐 estimated), multi-account key rotation (multiple `apiKeys` per provider, dead accounts parked + skipped, `tests/e2e/key-rotation`), governance constraints (`routing.governance` — provider/model allow-allow & deny lists, admin per-call max-cost cap, PII-domain block; hard policy violations refuse to serve with `PIIPolicyError`/`GovernancePolicyError`), context-length preflight (`routing.contextFit` — nominal window vs estimated payload, `⏳ ctx N%` chip in `models explain`); also ships the dashboard `--force` + `--port` fixes previously staged as v1.57.0 (never published); 3,159 tests + 42 dashboard component tests |
-| **v1.57.0** | Aug 2026 | `buff dashboard --force` — detect a STALE dashboard on the port (API/SSE mismatch: /api/model-registry answers SPA HTML instead of JSON) and offer to restart it: probe classifies port state (current dashboards and non-dashboard processes are never touched), confirms, finds the PID, kills it, waits for the port to free, and re-binds a fresh server; also fixed the pre-existing `--port` bug — the server bound the import-time 3030 default, now it resolves the bind at call time from explicit overrides; 3,032 tests + 42 dashboard component tests |
-| **v1.56.1** | Aug 2026 | Dashboard Models-panel crash fix — "Failed to execute 'json' on 'Response': Unexpected token '<'" when a stale dashboard server returns SPA HTML for an unknown /api/* route: unknown /api/* now returns a JSON 404, all /api/* responses parse through a shared defensive helper (Content-Type check + try/catch, optional sections degrade to hidden), and `buff dashboard` logs a clear EADDRINUSE message instead of crashing; 3,011 tests + 42 dashboard component tests |
+| **v1.57.0** | Aug 2026 | `agent-nuvira dashboard --force` — detect a STALE dashboard on the port (API/SSE mismatch: /api/model-registry answers SPA HTML instead of JSON) and offer to restart it: probe classifies port state (current dashboards and non-dashboard processes are never touched), confirms, finds the PID, kills it, waits for the port to free, and re-binds a fresh server; also fixed the pre-existing `--port` bug — the server bound the import-time 3030 default, now it resolves the bind at call time from explicit overrides; 3,032 tests + 42 dashboard component tests |
+| **v1.56.1** | Aug 2026 | Dashboard Models-panel crash fix — "Failed to execute 'json' on 'Response': Unexpected token '<'" when a stale dashboard server returns SPA HTML for an unknown /api/* route: unknown /api/* now returns a JSON 404, all /api/* responses parse through a shared defensive helper (Content-Type check + try/catch, optional sections degrade to hidden), and `agent-nuvira dashboard` logs a clear EADDRINUSE message instead of crashing; 3,011 tests + 42 dashboard component tests |
 | **v1.56.0** | Aug 2026 | Dashboard per-action telemetry timeline is now scrubbable — drag across days, click a day, or use the range slider to see that day's exact verified/killed chips (which provider × model each action killed or verified), with ▶ play/pause day-by-day sweep; timeline day buckets carry deduped raw events end-to-end; 3,011 tests + 39 dashboard component tests |
 
 ---
@@ -2250,9 +2267,9 @@ npx tsc --noEmit
 ### Phase 1: Quick Wins — Developer Experience
 | Feature | Description |
 |---------|-------------|
-| **Plugin System** | Programmatic API + auto-discovery from `~/.buff/plugins/` |
-| **Project Scaffolding** | `buff init` with 5 built-in templates + interactive provider wizard |
-| **Model Discovery** | `buff models` with search/filter across all providers |
+| **Plugin System** | Programmatic API + auto-discovery from `~/.nuvira/plugins/` |
+| **Project Scaffolding** | `agent-nuvira init` with 5 built-in templates + interactive provider wizard |
+| **Model Discovery** | `agent-nuvira models` with search/filter across all providers |
 | **Model Switching** | Context-preserving provider/model switch mid-session |
 | **Cost Tracking** | Per-provider, per-session, and monthly cost dashboards |
 | **History Search** | Keyword + semantic search across past conversations |
@@ -2268,7 +2285,7 @@ npx tsc --noEmit
 | **Workflow Marketplace** | 10 built-in templates + GitHub registry with install/publish |
 | **Model Benchmarking** | 21 standardized coding tasks with scoring and A/B comparison |
 | **Docker Sandbox** | 8 base images, resource limits, network-isolated execution |
-| **Provider Health** | `buff doctor` with color-coded status, watch mode, auto-fix |
+| **Provider Health** | `agent-nuvira doctor` with color-coded status, watch mode, auto-fix |
 | **Memory Compression** | Automatic trajectory summarization with configurable retention |
 
 ### Phase 3: Major Upgrades — Advanced Agent Systems
@@ -2280,11 +2297,11 @@ npx tsc --noEmit
 | **Hybrid Model Routing** | Complexity-based model selection with cost optimization |
 | **Team Collaboration** | Git-synced shared config, memory, and review pipelines |
 | **Agent SDK** | `@agent-nuvira/sdk` npm package with scaffolding CLI |
-| **Provider CLI** | `buff provider list/health` with per-provider diagnostics |
+| **Provider CLI** | `agent-nuvira provider list/health` with per-provider diagnostics |
 | **Provider Fallback** | Auto-failover with circuit breaker and configurable chain |
 | **Security Scanner** | Detects PII, prompt injections, and dangerous code patterns |
-| **Feedback System** | `buff feedback record/list/stats/clear` drives self-improvement |
-| **Marketplace CLI** | Unified `buff marketplace browse/search/install/info` |
+| **Feedback System** | `agent-nuvira feedback record/list/stats/clear` drives self-improvement |
+| **Marketplace CLI** | Unified `agent-nuvira marketplace browse/search/install/info` |
 
 ### Phase 4: Industry Standards — Protocol & Integration
 | Feature | Description |
@@ -2293,7 +2310,7 @@ npx tsc --noEmit
 | **AST Editing Engine** | Structural code analysis for JS/TS/Python/Go/Rust |
 | **Auto Error-Repair** | Automatic diagnosis and repair with configurable retry budgets |
 | **A2A Protocol** | Agent-to-Agent communication standard for federation |
-| **CI/CD Headless** | `buff ci` for automated pipelines with GitHub Actions |
+| **CI/CD Headless** | `agent-nuvira ci` for automated pipelines with GitHub Actions |
 | **npm Publishing** | `npx agent-nuvira` / `npx buff` for zero-setup onboarding |
 
 ### Phase 5: Interactive UX — Developer Experience
@@ -2313,7 +2330,7 @@ npx tsc --noEmit
 | **ModuleRegistry (Phase 2)** | Plugin-based agent loading — 14 built-in agent modules, `register()` / `load()` / `unload()` lifecycle, EventBus integration |
 | **EventBus (Phase 3)** | Structured observability — 37+ typed events, 4 built-in consumers (Logger, Metrics, Audit, MetricsBuffer), typed event schema |
 | **ReportModule (Phase 4)** | 4 output formats (markdown, JSON, summary, verbose) — extractable from buildResult() |
-| **InspectModule (Phase 5)** | Keyword scanning + LLM-based file classification — ContextGatherer wrapper with depth-limited walk, .buffignore support |
+| **InspectModule (Phase 5)** | Keyword scanning + LLM-based file classification — ContextGatherer wrapper with depth-limited walk, .nuviraignore support |
 | **VerifyModule (Phase 6)** | 4 check types (security, goal-alignment, tests, code-quality) — configurable strictness (low/medium/high), pass/fail scoring |
 | **PlanModule (Phase 7)** | Goal decomposition — 3 JSON parsing strategies, step normalization, fallback plan, EventBus events |
 | **EditModule (Phase 7)** | File change generation — AST syntax validation, token-budget-aware file selection, 2-attempt retry loop, model-switch support |
@@ -2322,8 +2339,8 @@ npx tsc --noEmit
 | **SafeExecutionLayer (Phase 9)** | 3-domain safety system — file validation (size, gitignore, syntax, security scan), Docker sandbox (resource limits, container lifecycle), safe LLM calls (injection guardrail, prompt/response truncation, exponential backoff with circuit breaker) |
 | **CredentialStore (Phase 10)** | Interactive Git/npm credential collection — auto-detection from env vars (GITHUB_TOKEN, GH_TOKEN, NPM_TOKEN), GIT_ASKPASS setup for HTTPS auth, SSH agent integration with passphrase support, .npmrc token injection |
 | **PhaseExecutionEngine (Phase 10)** | Multi-goal project scope execution — sequential phase execution with save/resume across restarts, credential management, progress tracking |
-| **`buff publish` (Phase 10)** | Autonomous 5-phase publish pipeline — test verification → version bump → git commit/tag/push → npm build/publish → GitHub release |
-| **`buff phase` (Phase 10)** | Phase-wise project execution CLI — create/execute/resume/status/list/delete scopes with interactive pauses and credential collection |
+| **`agent-nuvira publish` (Phase 10)** | Autonomous 5-phase publish pipeline — test verification → version bump → git commit/tag/push → npm build/publish → GitHub release |
+| **`agent-nuvira phase` (Phase 10)** | Phase-wise project execution CLI — create/execute/resume/status/list/delete scopes with interactive pauses and credential collection |
 | **TS Compiler API Wrapper (Phase 11)** | Proper TypeScript Compiler API integration — parser-level accuracy with parseSourceFile, findStructuralNodes, validateTSSyntax, replaceNodeText, and insertAt |
 | **Structural Transformations (Phase 11)** | Real code transformations — renameSymbol, extractFunction, inlineFunction, addParameter, changeSignature with NLP-based detection |
 | **Two-Tier Editing Engine (Phase 11)** | All 7 edit operations try TS Compiler API first (for TS/JS), fall back to regex (for Python/Go/Rust) — AST-aware `tryFindNodeTS()` helper |
