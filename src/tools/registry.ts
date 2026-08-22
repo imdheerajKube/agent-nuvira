@@ -1901,3 +1901,167 @@ registerTool({
     return JSON.stringify(m.getImageSourceDetector().detect(path));
   }),
 });
+
+// ─── Batch 3: Platform Integrations ───────────────────────────────────────
+
+// Discord tool
+registerTool({
+  name: 'discord',
+  description: 'Discord server management: list servers, channels, members, messages, roles. Send messages.',
+  category: 'workflow',
+  inputSchema: z.object({
+    action: z.enum(['list-guilds', 'list-channels', 'list-members', 'fetch-messages', 'send-message', 'list-roles']).describe('Action'),
+    guildId: z.string().optional().describe('Guild ID'),
+    channelId: z.string().optional().describe('Channel ID'),
+    message: z.string().optional().describe('Message content'),
+    limit: z.number().optional().describe('Max results'),
+  }),
+  endsAgentStep: false,
+  run: (args) => import('./discord-tool.js').then((m) => {
+    const { action, guildId, channelId, message, limit } = args as any;
+    const client = m.getDiscordClient();
+    switch (action) {
+      case 'list-guilds': return client.listGuilds().then((r: any) => JSON.stringify(r));
+      case 'list-channels': return guildId ? client.listChannels(guildId).then((r: any) => JSON.stringify(r)) : 'guildId required';
+      case 'list-members': return guildId ? client.listMembers(guildId, limit).then((r: any) => JSON.stringify(r)) : 'guildId required';
+      case 'fetch-messages': return channelId ? client.fetchMessages(channelId, limit).then((r: any) => JSON.stringify(r)) : 'channelId required';
+      case 'send-message': return channelId && message ? client.sendMessage(channelId, message).then((r: any) => JSON.stringify(r)) : 'channelId and message required';
+      case 'list-roles': return guildId ? client.listRoles(guildId).then((r: any) => JSON.stringify(r)) : 'guildId required';
+      default: return 'Unknown action';
+    }
+  }),
+});
+
+// Home Assistant tool
+registerTool({
+  name: 'homeassistant',
+  description: 'Home Assistant smart home: list entities, get state, call services (turn_on/off, set_temperature).',
+  category: 'workflow',
+  inputSchema: z.object({
+    action: z.enum(['list-entities', 'get-state', 'list-services', 'call-service', 'turn-on', 'turn-off', 'toggle']).describe('Action'),
+    entityId: z.string().optional().describe('Entity ID (light.living_room)'),
+    domain: z.string().optional().describe('Service domain'),
+    service: z.string().optional().describe('Service name'),
+    data: z.record(z.string(), z.unknown()).optional().describe('Service data'),
+  }),
+  endsAgentStep: false,
+  run: (args) => import('./homeassistant-tool.js').then((m) => {
+    const { action, entityId, domain, service, data } = args as any;
+    const client = m.getHomeAssistantClient();
+    switch (action) {
+      case 'list-entities': return client.listEntities(domain).then((r: any) => JSON.stringify(r));
+      case 'get-state': return entityId ? client.getState(entityId).then((r: any) => JSON.stringify(r)) : 'entityId required';
+      case 'list-services': return client.listServices().then((r: any) => JSON.stringify(r));
+      case 'call-service': return domain && service && entityId ? client.callService(domain, service, entityId, data).then(() => 'Called') : 'domain, service, entityId required';
+      case 'turn-on': return entityId ? client.turnOn(entityId, data).then(() => 'Turned on') : 'entityId required';
+      case 'turn-off': return entityId ? client.turnOff(entityId).then(() => 'Turned off') : 'entityId required';
+      case 'toggle': return entityId ? client.toggle(entityId).then(() => 'Toggled') : 'entityId required';
+      default: return 'Unknown action';
+    }
+  }),
+});
+
+// Microsoft Graph tool
+registerTool({
+  name: 'microsoft_graph',
+  description: 'Microsoft Graph API: email, calendar, OneDrive, contacts.',
+  category: 'workflow',
+  inputSchema: z.object({
+    service: z.enum(['email', 'calendar', 'onedrive', 'contacts']).describe('Service'),
+    action: z.enum(['list', 'get', 'send', 'create', 'delete', 'search']).describe('Action'),
+    id: z.string().optional().describe('Item ID'),
+    subject: z.string().optional().describe('Email subject'),
+    body: z.string().optional().describe('Email body'),
+    to: z.array(z.string()).optional().describe('Recipients'),
+    query: z.string().optional().describe('Search query'),
+  }),
+  endsAgentStep: false,
+  run: (args) => import('./microsoft-graph.js').then((m) => {
+    const { service, action, id, subject, body, to, query } = args as any;
+    const client = m.getMicrosoftGraphClient();
+    switch (service) {
+      case 'email':
+        switch (action) {
+          case 'list': return client.listEmails({ filter: query }).then((r: any) => JSON.stringify(r));
+          case 'get': return id ? client.getEmail(id).then((r: any) => JSON.stringify(r)) : 'id required';
+          case 'send': return to && subject && body ? client.sendEmail({ to, subject, body }).then(() => 'Sent') : 'to, subject, body required';
+          case 'delete': return id ? client.deleteEmail(id).then(() => 'Deleted') : 'id required';
+          default: return 'Unknown action';
+        }
+      case 'calendar':
+        switch (action) {
+          case 'list': return client.listEvents({ filter: query }).then((r: any) => JSON.stringify(r));
+          case 'create': return subject ? client.createEvent({ subject, start: new Date().toISOString(), end: new Date(Date.now() + 3600000).toISOString(), body }).then((r: any) => JSON.stringify(r)) : 'subject required';
+          case 'delete': return id ? client.deleteEvent(id).then(() => 'Deleted') : 'id required';
+          default: return 'Unknown action';
+        }
+      case 'onedrive':
+        switch (action) {
+          case 'list': return client.listFiles(query || '/').then((r: any) => JSON.stringify(r));
+          case 'get': return id ? client.downloadFile(id).then((r: any) => JSON.stringify({ content: r.slice(0, 1000) })) : 'id required';
+          case 'delete': return id ? client.deleteFile(id).then(() => 'Deleted') : 'id required';
+          default: return 'Unknown action';
+        }
+      case 'contacts':
+        switch (action) {
+          case 'list': return client.listContacts().then((r: any) => JSON.stringify(r));
+          default: return 'Unknown action';
+        }
+      default: return 'Unknown service';
+    }
+  }),
+});
+
+// Feishu document tool
+registerTool({
+  name: 'feishu_doc',
+  description: 'Feishu document management: create, read, update, delete documents.',
+  category: 'workflow',
+  inputSchema: z.object({
+    action: z.enum(['create', 'get', 'content', 'update-title', 'delete']).describe('Action'),
+    documentId: z.string().optional().describe('Document ID'),
+    title: z.string().optional().describe('Document title'),
+  }),
+  endsAgentStep: false,
+  run: (args) => import('./feishu-tools.js').then((m) => {
+    const { action, documentId, title } = args as any;
+    const client = m.getFeishuClient();
+    switch (action) {
+      case 'create': return title ? client.createDocument(title).then((r: any) => JSON.stringify(r)) : 'title required';
+      case 'get': return documentId ? client.getDocument(documentId).then((r: any) => JSON.stringify(r)) : 'documentId required';
+      case 'content': return documentId ? client.getDocumentContent(documentId).then((r: any) => JSON.stringify({ content: r })) : 'documentId required';
+      case 'update-title': return documentId && title ? client.updateDocumentTitle(documentId, title).then(() => 'Updated') : 'documentId and title required';
+      case 'delete': return documentId ? client.deleteDocument(documentId).then(() => 'Deleted') : 'documentId required';
+      default: return 'Unknown action';
+    }
+  }),
+});
+
+// Feishu drive tool
+registerTool({
+  name: 'feishu_drive',
+  description: 'Feishu drive management: list files, create folders, move, copy, search.',
+  category: 'workflow',
+  inputSchema: z.object({
+    action: z.enum(['list', 'get', 'create-folder', 'delete', 'move', 'copy', 'search']).describe('Action'),
+    fileToken: z.string().optional().describe('File token'),
+    folderToken: z.string().optional().describe('Folder token'),
+    name: z.string().optional().describe('Folder name'),
+    query: z.string().optional().describe('Search query'),
+  }),
+  endsAgentStep: false,
+  run: (args) => import('./feishu-tools.js').then((m) => {
+    const { action, fileToken, folderToken, name, query } = args as any;
+    const client = m.getFeishuClient();
+    switch (action) {
+      case 'list': return client.listFiles(folderToken).then((r: any) => JSON.stringify(r));
+      case 'get': return fileToken ? client.getFileInfo(fileToken).then((r: any) => JSON.stringify(r)) : 'fileToken required';
+      case 'create-folder': return name ? client.createFolder(name, folderToken).then((r: any) => JSON.stringify(r)) : 'name required';
+      case 'delete': return fileToken ? client.deleteFile(fileToken).then(() => 'Deleted') : 'fileToken required';
+      case 'move': return fileToken && folderToken ? client.moveFile(fileToken, folderToken).then(() => 'Moved') : 'fileToken and folderToken required';
+      case 'copy': return fileToken && folderToken ? client.copyFile(fileToken, folderToken).then((r: any) => JSON.stringify(r)) : 'fileToken and folderToken required';
+      case 'search': return query ? client.searchFiles(query).then((r: any) => JSON.stringify(r)) : 'query required';
+      default: return 'Unknown action';
+    }
+  }),
+});
