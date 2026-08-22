@@ -16,6 +16,7 @@
  */
 
 import type { Skill } from '../learning/skill-types.js';
+import { PHASE3_SKILLS } from './bundled-skills-phase3.js';
 
 /** Fixed timestamp so bundled skills never decay (re-seeded identical). */
 const BUNDLED_CREATED_AT = 1_752_000_000_000;
@@ -3090,3 +3091,13 @@ export const BUNDLED_SKILLS: Skill[] = [
   loadBalancerSkill,
   cdnSetupSkill,
 ];
+
+// ── Phase 3: 55 additional skills (Hermes parity + Windows + MCP) ──────────
+export { PHASE3_SKILLS } from './bundled-skills-phase3.js';
+
+/** Combined list of all bundled skills. */
+export const ALL_BUNDLED_SKILLS: Skill[] = [
+  ...BUNDLED_SKILLS,
+  ...PHASE3_SKILLS,
+];
+
