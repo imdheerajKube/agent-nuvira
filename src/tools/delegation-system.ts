@@ -88,17 +88,168 @@ const DELEGATION_DIR = join(homedir(), '.buff', 'cache', 'delegation');
 const LIVE_LOG_DIR = join(DELEGATION_DIR, 'live');
 const COMPLETION_QUEUE_DIR = join(DELEGATION_DIR, 'completions');
 
+/** Configuration for delegation behavior. */
+export interface DelegationConfig {
+  /** Maximum concurrent child agents (default: 3). */
+  maxConcurrentChildren: number;
+  /** Maximum spawn depth — 1 means parent->child only (default: 1). */
+  maxSpawnDepth: number;
+  /** Stall timeout — if a child produces no output for this long, it's marked stalled (default: 120s). */
+  stallTimeoutMs: number;
+  /** Global kill switch — when true, no new children can be spawned. */
+  killSwitch: boolean;
+  /** Inherit parent toolsets to children (default: true). */
+  inheritToolsets: boolean;
+  /** Inherit MCP toolsets to children (default: true). */
+  inheritMcpToolsets: boolean;
+}
+
+const DEFAULT_CONFIG: DelegationConfig = {
+  maxConcurrentChildren: 3,
+  maxSpawnDepth: 1,
+  stallTimeoutMs: 120_000,
+  killSwitch: false,
+  inheritToolsets: true,
+  inheritMcpToolsets: true,
+};
+
 export class DelegationManager extends EventEmitter {
   private tasks: Map<string, DelegationTask> = new Map();
   private delegations: Map<string, DelegationTask[]> = new Map();
   private completionQueue: DelegationResult[] = [];
   private logStreams: Map<string, NodeJS.WriteStream> = new Map();
+  private config: DelegationConfig = { ...DEFAULT_CONFIG };
+  private activeChildren: Set<string> = new Set();
+  private stallTimers: Map<string, NodeJS.Timeout> = new Map();
 
   constructor() {
     super();
     this.ensureDirectories();
     this.loadPendingTasks();
+    this.startStallMonitor();
     this.recoverCompletionQueue();
+  }
+
+  // ─── Configuration ──────────────────────────────────────────────
+
+  /** Update delegation configuration. */
+  configure(config: Partial<DelegationConfig>): void {
+    Object.assign(this.config, config);
+    logger.info(`DelegationManager: Config updated — maxConcurrent=${this.config.maxConcurrentChildren}, maxDepth=${this.config.maxSpawnDepth}`);
+    this.emit('config-updated', this.config);
+  }
+
+  /** Get current configuration. */
+  getConfig(): DelegationConfig {
+    return { ...this.config };
+  }
+
+  /** Toggle the global kill switch. */
+  toggleKillSwitch(enabled: boolean): void {
+    this.config.killSwitch = enabled;
+    logger.info(`DelegationManager: Kill switch ${enabled ? 'ENABLED' : 'DISABLED'}`);
+    this.emit('kill-switch', enabled);
+    if (enabled) {
+      // Cancel all pending tasks
+      for (const [id, task] of this.tasks) {
+        if (task.status === 'pending') {
+          task.status = 'cancelled';
+          this.logEntry(id, 'lifecycle', 'Cancelled by kill switch');
+        }
+      }
+    }
+  }
+
+  /** Check if a task can be spawned (respects kill switch, depth, concurrency). */
+  canSpawn(parentTaskId?: string): { allowed: boolean; reason?: string } {
+    // Kill switch check
+    if (this.config.killSwitch) {
+      return { allowed: false, reason: 'Kill switch is enabled' };
+    }
+    // Concurrency check
+    if (this.activeChildren.size >= this.config.maxConcurrentChildren) {
+      return { allowed: false, reason: `Max concurrent children (${this.config.maxConcurrentChildren}) reached` };
+    }
+    // Depth check
+    if (parentTaskId) {
+      const depth = this.getSpawnDepth(parentTaskId);
+      if (depth >= this.config.maxSpawnDepth) {
+        return { allowed: false, reason: `Max spawn depth (${this.config.maxSpawnDepth}) reached at depth ${depth}` };
+      }
+    }
+    return { allowed: true };
+  }
+
+  /** Calculate spawn depth for a task. */
+  private getSpawnDepth(taskId: string): number {
+    let depth = 0;
+    let current = taskId;
+    while (current) {
+      const task = this.tasks.get(current);
+      if (!task?.context.parentTaskId) break;
+      current = task.context.parentTaskId;
+      depth++;
+    }
+    return depth;
+  }
+
+  /** Interrupt a running subagent gracefully. */
+  interrupt(taskId: string): boolean {
+    const task = this.tasks.get(taskId);
+    if (!task || (task.status !== 'running' && task.status !== 'pending')) {
+      return false;
+    }
+    // Set interrupt flag — the child checks this periodically
+    task.context.metadata['interrupted'] = true;
+    this.logEntry(taskId, 'lifecycle', 'Interrupt requested — will stop after current operation');
+    this.emit('interrupt', taskId);
+    return true;
+  }
+
+  /** Check if a task has been interrupted. */
+  isInterrupted(taskId: string): boolean {
+    const task = this.tasks.get(taskId);
+    return !!task?.context.metadata['interrupted'];
+  }
+
+  // ─── Stall Monitoring ────────────────────────────────────────────
+
+  private startStallMonitor(): void {
+    // Check for stalled children every 30s
+    setInterval(() => {
+      const now = Date.now();
+      for (const [id, task] of this.tasks) {
+        if (task.status !== 'running') continue;
+        const lastActivity = task.completedAt || task.startedAt || task.createdAt;
+        if (now - lastActivity > this.config.stallTimeoutMs) {
+          task.status = 'timeout';
+          task.error = `Stalled for ${(now - lastActivity) / 1000}s — no activity`;
+          this.logEntry(id, 'lifecycle', task.error);
+          this.activeChildren.delete(id);
+          this.emit('stalled', id, task.error);
+        }
+      }
+    }, 30_000);
+  }
+
+  /** Get the number of active children. */
+  getActiveChildCount(): number {
+    return this.activeChildren.size;
+  }
+
+  /** Get spawn tree for a task (shows parent-child chain). */
+  getSpawnTree(taskId: string): Array<{ id: string; goal: string; depth: number }> {
+    const tree: Array<{ id: string; goal: string; depth: number }> = [];
+    let current = taskId;
+    let depth = 0;
+    while (current) {
+      const task = this.tasks.get(current);
+      if (!task) break;
+      tree.unshift({ id: task.id, goal: task.goal, depth });
+      current = task.context.parentTaskId || '';
+      depth++;
+    }
+    return tree;
   }
 
   // ─── Core Delegation ──────────────────────────────────────────────
@@ -120,6 +271,12 @@ export class DelegationManager extends EventEmitter {
       maxRetries?: number;
     } = {},
   ): Promise<DelegationTask> {
+    // Check spawn permissions (kill switch, depth, concurrency)
+    const spawnCheck = this.canSpawn(options.parentTaskId);
+    if (!spawnCheck.allowed) {
+      throw new Error(`Cannot spawn: ${spawnCheck.reason}`);
+    }
+
     const delegationId = randomUUID();
     const taskId = randomUUID();
 
@@ -414,6 +571,7 @@ export class DelegationManager extends EventEmitter {
 
     task.status = 'running';
     task.startedAt = Date.now();
+    this.activeChildren.add(taskId);
     this.logEntry(taskId, 'lifecycle', 'Task started');
 
     try {
@@ -423,6 +581,16 @@ export class DelegationManager extends EventEmitter {
       // Execute with retry
       let lastError: string | undefined;
       for (let attempt = 0; attempt <= task.maxRetries; attempt++) {
+        // Check for interrupt before each attempt
+        if (this.isInterrupted(taskId)) {
+          task.status = 'cancelled';
+          task.error = 'Interrupted by parent';
+          task.completedAt = Date.now();
+          this.activeChildren.delete(taskId);
+          this.logEntry(taskId, 'lifecycle', 'Task interrupted by parent');
+          this.emit(`completed:${taskId}`, this.buildResult(task));
+          return;
+        }
         try {
           // Simulate task execution (in real implementation, this would call the LLM)
           this.logEntry(taskId, 'thinking', `Executing goal: ${task.goal}`);
@@ -432,6 +600,7 @@ export class DelegationManager extends EventEmitter {
           task.result = `Task completed: ${task.goal}`;
           task.completedAt = Date.now();
           task.durationMs = task.completedAt - (task.startedAt || task.createdAt);
+          this.activeChildren.delete(taskId);
 
           this.logEntry(taskId, 'lifecycle', 'Task completed');
           this.emit(`completed:${taskId}`, this.buildResult(task));
@@ -455,6 +624,7 @@ export class DelegationManager extends EventEmitter {
       task.status = 'failed';
       task.error = `Failed after ${task.maxRetries} retries: ${lastError}`;
       task.completedAt = Date.now();
+      this.activeChildren.delete(taskId);
       this.logEntry(taskId, 'lifecycle', `Task failed: ${task.error}`);
       this.emit(`completed:${taskId}`, this.buildResult(task));
 
@@ -462,6 +632,7 @@ export class DelegationManager extends EventEmitter {
       task.status = 'failed';
       task.error = String(err);
       task.completedAt = Date.now();
+      this.activeChildren.delete(taskId);
       this.logEntry(taskId, 'error', `Fatal error: ${err}`);
       this.emit(`completed:${taskId}`, this.buildResult(task));
     }
