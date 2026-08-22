@@ -188,7 +188,7 @@ describe('git tool', () => {
     expect(tool).toBeDefined();
     expect(tool!.category).toBe('workflow');
     expect(toolsetForTool('git')?.name).toBe('code');
-    expect(TOOLSETS.find((t) => t.name === 'code')?.tools).toEqual(['code_search', 'delegate', 'clone_repo', 'git']);
+    expect(TOOLSETS.find((t) => t.name === 'code')?.tools).toEqual(['code_search', 'delegate', 'clone_repo', 'git', 'read_extract', 'credential_files']);
     const names = filterToolsByToolsets(listTools(), ['code']).map((t) => t.name);
     expect(names).not.toContain('git');
   });
