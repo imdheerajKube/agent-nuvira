@@ -19,7 +19,7 @@ import { resolveNuviraHome } from '../config/paths.js';
 
 import type { Skill, SkillSummary, SkillParameter } from './skill-types.js';
 import { MAX_SKILLS } from './skill-types.js';
-import { BUNDLED_SKILLS } from '../skills/bundled-skills.js';
+import { ALL_BUNDLED_SKILLS as BUNDLED_SKILLS } from '../skills/bundled-skills.js';
 import { logger } from '../utils/logger.js';
 
 // ─── Constants ──────────────────────────────────────────────────────────────
