@@ -2170,3 +2170,85 @@ registerTool({
     }
   }),
 });
+
+// ─── Critical Tools ───────────────────────────────────────────────────────
+
+// Terminal tool — multi-environment execution
+registerTool({
+  name: 'terminal',
+  description: 'Execute commands in local, Docker, Modal, SSH environments with background support.',
+  category: 'workflow',
+  inputSchema: z.object({
+    action: z.enum(['exec', 'kill', 'list', 'status']).describe('Action'),
+    command: z.string().optional().describe('Command to execute'),
+    env: z.enum(['local', 'docker', 'modal', 'ssh']).optional().describe('Environment'),
+    cwd: z.string().optional().describe('Working directory'),
+    timeoutMs: z.number().optional().describe('Timeout in ms'),
+    taskId: z.string().optional().describe('Task ID for kill/status'),
+    dockerImage: z.string().optional().describe('Docker image'),
+    sshHost: z.string().optional().describe('SSH host'),
+  }),
+  endsAgentStep: false,
+  run: (args) => import('./terminal-tool.js').then((m) => {
+    const { action, command, env, cwd, timeoutMs, taskId, dockerImage, sshHost } = args as any;
+    const mgr = m.getTerminalManager();
+    switch (action) {
+      case 'exec': return command ? mgr.execute(command, { env, cwd, timeoutMs, dockerImage, sshHost }).then((r: any) => JSON.stringify(r)) : 'command required';
+      case 'kill': return taskId ? (mgr.kill(taskId) ? 'Killed' : 'Not found') : 'taskId required';
+      case 'list': return JSON.stringify(mgr.listTasks());
+      case 'status': return taskId ? JSON.stringify(mgr.getTask(taskId)) : 'taskId required';
+      default: return 'Unknown action';
+    }
+  }),
+});
+
+// Memory tool — persistent curated memory
+registerTool({
+  name: 'memory',
+  description: 'Persistent memory: add/replace/remove entries in MEMORY.md (agent notes) or USER.md (user profile).',
+  category: 'workflow',
+  inputSchema: z.object({
+    action: z.enum(['add', 'replace', 'remove', 'snapshot', 'stats', 'clear']).describe('Action'),
+    store: z.enum(['memory', 'user']).describe('Memory store'),
+    content: z.string().optional().describe('Content to add/replace'),
+    oldSubstring: z.string().optional().describe('Substring to match for replace/remove'),
+  }),
+  endsAgentStep: false,
+  run: (args) => import('./memory-tool.js').then((m) => {
+    const { action, store, content, oldSubstring } = args as any;
+    const mgr = m.getMemoryManager();
+    switch (action) {
+      case 'add': return content ? JSON.stringify(mgr.add(store, content)) : 'content required';
+      case 'replace': return oldSubstring && content ? JSON.stringify(mgr.replace(store, oldSubstring, content)) : 'oldSubstring and content required';
+      case 'remove': return oldSubstring ? JSON.stringify(mgr.remove(store, oldSubstring)) : 'oldSubstring required';
+      case 'snapshot': return JSON.stringify({ snapshot: mgr.getSnapshot(store) });
+      case 'stats': return JSON.stringify(mgr.getStats(store));
+      case 'clear': return (mgr.clear(store), JSON.stringify({ cleared: true }));
+      default: return 'Unknown action';
+    }
+  }),
+});
+
+// Send message tool — cross-channel messaging
+registerTool({
+  name: 'send_message',
+  description: 'Send messages to Telegram, Discord, Slack, WhatsApp, Email.',
+  category: 'workflow',
+  inputSchema: z.object({
+    action: z.enum(['send', 'list-targets']).describe('Action'),
+    platform: z.enum(['telegram', 'discord', 'slack', 'whatsapp', 'email']).describe('Platform'),
+    target: z.string().optional().describe('Target (channel ID, username, email)'),
+    text: z.string().optional().describe('Message text'),
+    threadId: z.string().optional().describe('Thread ID'),
+  }),
+  endsAgentStep: false,
+  run: (args) => import('./send-message-tool.js').then((m) => {
+    const { action, platform, target, text, threadId } = args as any;
+    const mgr = m.getSendMessageManager();
+    switch (action) {
+      case 'send': return target && text ? mgr.send({ platform, target, text, threadId }).then((r: any) => JSON.stringify(r)) : 'target and text required';
+      case 'list-targets': return mgr.listTargets(platform).then((r: any) => JSON.stringify(r));
+      default: return 'Unknown action';
+    }
+  }),
+});
