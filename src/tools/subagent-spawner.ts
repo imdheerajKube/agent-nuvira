@@ -109,6 +109,9 @@ const RESULT_DIR = join(SUBAGENT_DIR, 'results');
 export class SubagentManager extends EventEmitter {
   private subagents: Map<string, SubagentState> = new Map();
   private processes: Map<string, ChildProcess> = new Map();
+  private maxConcurrent: number = 3;
+  private maxDepth: number = 1;
+  private killSwitch: boolean = false;
 
   constructor() {
     super();
@@ -116,10 +119,29 @@ export class SubagentManager extends EventEmitter {
     this.recoverState();
   }
 
+  /** Configure spawn limits. */
+  configure(options: { maxConcurrent?: number; maxDepth?: number; killSwitch?: boolean }): void {
+    if (options.maxConcurrent !== undefined) this.maxConcurrent = options.maxConcurrent;
+    if (options.maxDepth !== undefined) this.maxDepth = options.maxDepth;
+    if (options.killSwitch !== undefined) this.killSwitch = options.killSwitch;
+  }
+
+  /** Check if spawning is allowed. */
+  canSpawn(): { allowed: boolean; reason?: string } {
+    if (this.killSwitch) return { allowed: false, reason: 'Kill switch enabled' };
+    const running = Array.from(this.subagents.values()).filter((s) => s.status === 'running' || s.status === 'spawning');
+    if (running.length >= this.maxConcurrent) return { allowed: false, reason: `Max concurrent (${this.maxConcurrent}) reached` };
+    return { allowed: true };
+  }
+
   /**
    * Spawn a subagent.
    */
   async spawn(config: SubagentConfig): Promise<SubagentState> {
+    // Check spawn permissions
+    const check = this.canSpawn();
+    if (!check.allowed) throw new Error(check.reason);
+
     const id = randomUUID();
     const state: SubagentState = {
       id,
