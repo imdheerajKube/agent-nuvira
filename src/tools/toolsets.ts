@@ -180,8 +180,8 @@ export const TOOLSETS: ToolsetDef[] = [
   {
     name: 'infra-utility',
     label: 'Infrastructure Utility',
-    description: 'Tool search, budget config, fuzzy matching.',
-    tools: ['tool_search', 'budget_config', 'fuzzy_match'],
+    description: 'Tool search, budget config, fuzzy matching, lazy deps, backend helpers, output limits, result storage.',
+    tools: ['tool_search', 'budget_config', 'fuzzy_match', 'lazy_deps', 'tool_backend', 'tool_output_limits', 'tool_result_storage'],
   },
   {
     name: 'utility',
