@@ -1545,3 +1545,31 @@ registerTool({
     }
   }),
 });
+
+// Vision tool — comprehensive image analysis, OCR, UI element detection
+registerTool({
+  name: 'vision',
+  description: 'Vision tools: analyze images, extract text via OCR, detect UI elements, compare screenshots. Use when the user provides an image or asks about visual content.',
+  category: 'workflow',
+  inputSchema: z.object({
+    action: z.enum(['analyze', 'ocr', 'detect-elements', 'compare', 'find-element', 'extract-text']).describe('Vision action'),
+    imagePath: z.string().describe('Path to image file'),
+    prompt: z.string().optional().describe('Specific analysis prompt'),
+    imagePath2: z.string().optional().describe('Second image for comparison'),
+    searchText: z.string().optional().describe('Text to search for in UI elements'),
+  }),
+  endsAgentStep: false,
+  run: (args) => import('./vision-tools.js').then((m) => {
+    const { action, imagePath, prompt, imagePath2, searchText } = args as any;
+    const analyzer = m.getVisionAnalyzer();
+    switch (action) {
+      case 'analyze': return analyzer.analyze(imagePath).then((r: any) => JSON.stringify(r));
+      case 'ocr': return analyzer.ocr(imagePath).then((r: any) => JSON.stringify(r));
+      case 'detect-elements': return analyzer.detectUIElements(imagePath).then((r: any) => JSON.stringify(r));
+      case 'compare': return imagePath2 ? analyzer.compare(imagePath, imagePath2).then((r: any) => JSON.stringify(r)) : 'imagePath2 required for comparison';
+      case 'find-element': return searchText ? analyzer.findElementByText(imagePath, searchText).then((r: any) => JSON.stringify(r)) : 'searchText required';
+      case 'extract-text': return analyzer.extractText(imagePath).then((r: any) => JSON.stringify({ text: r }));
+      default: return 'Unknown action';
+    }
+  }),
+});
