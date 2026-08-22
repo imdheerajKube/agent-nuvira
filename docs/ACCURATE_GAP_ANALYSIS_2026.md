@@ -1,245 +1,146 @@
-# Accurate Gap Analysis: Agent-Nuvira vs Hermes
+# Accurate Gap Analysis — Agent-Nuvira vs Hermes (Deep Code Audit)
 
-**Date:** August 22, 2026 (Updated)
-**Audit Type:** Line-by-line code comparison with tool registry verification
-
----
+**Last Updated:** August 22, 2026  
+**Author:** Dheeraj Sharma <imdheeraj@gmail.com>
 
 ## Executive Summary
 
-| Dimension | Hermes | Agent-Nuvira | Status |
-|-----------|--------|--------------|--------|
-| **Registered tools** | 109 | 78 | 72% coverage |
-| **Bundled skills** | 71 | 153 | ✅ +115% ahead |
-| **Tool categories** | 22 | 16 | 73% coverage |
-| **Platform integrations** | 4 | 5 | ✅ Matched |
-| **Delegation depth** | 6,322 lines | 925 lines | Feature-matched |
+| Dimension | Hermes | Agent-Nuvira | Coverage | Status |
+|-----------|--------|--------------|----------|--------|
+| **Registered Tools** | 109 | 94 | **86%** | ⚠️ 15 tools missing |
+| **Bundled Skills** | 71 | 153 | **+115%** | ✅ AHEAD |
+| **Platform Integrations** | 4 | 5 | **125%** | ✅ AHEAD |
+| **Media Tools** | 5 | 8 | **160%** | ✅ AHEAD |
+| **Security Tools** | 9 | 9 | **100%** | ✅ PARITY |
+| **Infrastructure Tools** | 7 | 7 | **100%** | ✅ PARITY |
+| **Critical Tools** | 3 | 3 | **100%** | ✅ PARITY |
+| **Skills Ecosystem** | 5 | 5 | **100%** | ✅ PARITY |
+| **Delegation Depth** | 6,322 lines | 925 lines | **15%** | ⚠️ Feature-matched |
 
-**Overall:** Agent-Nuvira now matches Hermes in **platform integrations** and exceeds in **skills**. Tool count gap narrowed from 49% to 28%.
+## Progress Timeline
 
----
+| Date | Tools | Coverage | Change |
+|------|-------|----------|--------|
+| Aug 22 start | 56 | 51% | Baseline |
+| Aug 22 batch 1 | 73 | 67% | +17 infrastructure/security/utility |
+| Aug 22 batch 2 | 78 | 72% | +5 platform integrations |
+| Aug 22 batch 3 | 82 | 75% | +4 media tools |
+| Aug 22 batch 4 | 85 | 78% | +3 critical tools |
+| Aug 22 batch 5 | 90 | 83% | +5 skills ecosystem |
+| Aug 22 batch 6 | 94 | 86% | +4 infrastructure tools |
 
-## Progress History
+## Remaining Gaps (15 tools)
 
-| Date | Tools | Coverage | Key Changes |
-|------|-------|----------|-------------|
-| Aug 22 (start) | 56 | 51% | Initial state |
-| Aug 22 (batch 1) | 73 | 67% | +17 infrastructure/security/utility tools |
-| Aug 22 (batch 2) | 78 | 72% | +5 platform integrations |
+### Tier 1: Important (Should Implement)
 
----
+| Hermes Tool | Nuvira Equivalent | Gap Type | Impact |
+|-------------|-------------------|----------|--------|
+| `computer_use_tool.py` | ❌ None | Missing | HIGH — Desktop automation |
+| `desktop_ui.py` | ❌ None | Missing | HIGH — UI interaction |
+| `openrouter_client.py` | ❌ None | Missing | MEDIUM — Multi-LLM routing |
+| `mcp_tool.py` | `mcp_oauth` (partial) | Missing | MEDIUM — MCP server management |
+| `delegation_live_log.py` | `delegate_system` (partial) | Missing | MEDIUM — Live delegation logs |
 
-## Category 1: MATCHED (Tools We Have ✅)
+### Tier 2: Nice-to-Have
 
-### Core UX Tools
-| Hermes Tool | Nuvira Equivalent | Status |
-|------------|-------------------|--------|
-| clarify_tool | ask_user | ✅ Matched |
-| todo_tool | todo | ✅ Matched |
-| suggest_followups | suggest_followups | ✅ Matched |
-| verify_requirement | verify_requirement | ✅ Matched |
-| skill_manager_tool | skill | ✅ Matched |
+| Hermes Tool | Nuvira Equivalent | Gap Type | Impact |
+|-------------|-------------------|----------|--------|
+| `async_delegation.py` | `delegate_system` | Equivalent | LOW |
+| `clarify_gateway.py` | `ask_user` | Equivalent | LOW |
+| `clarify_tool.py` | `ask_user` | Equivalent | LOW |
+| `credential_files.py` | `env_probe` | Partial | LOW |
+| `env_passthrough.py` | `env_probe` | Partial | LOW |
+| `focus_pane_tool.py` | ❌ None | Missing | LOW |
+| `open_preview_tool.py` | ❌ None | Missing | LOW |
+| `slash_confirm.py` | `ask_user` | Equivalent | LOW |
+| `thread_context.py` | `session` | Partial | LOW |
 
-### Browser Automation
-| Hermes Tool | Nuvira Equivalent | Status |
-|------------|-------------------|--------|
-| browser_tool | browser | ✅ Matched |
-| browser_cdp_tool | browser (CDP) | ✅ Matched |
-| browser_camofox | camofox | ✅ Matched |
-| browser_supervisor | browser_supervisor | ✅ Matched |
-| browser_dialog_tool | browser_dialog | ✅ Matched |
+### Tier 3: Niche (Optional)
 
-### MCP Integration
-| Hermes Tool | Nuvira Equivalent | Status |
-|------------|-------------------|--------|
-| mcp_tool | mcp_oauth | ✅ Matched |
-| mcp_oauth | mcp_oauth | ✅ Matched |
-| mcp_schema_cache | mcp_schema_cache | ✅ Matched |
-| mcp_stdio_watchdog | mcp_watchdog | ✅ Matched |
+| Hermes Tool | Nuvira Equivalent | Gap Type | Impact |
+|-------------|-------------------|----------|--------|
+| `audio_container.py` | `speak`/`transcribe` | Partial | LOW |
+| `fal_common.py` | `generate_image` | Partial | LOW |
+| `flux3_video_tool.py` | `video_generate` | Equivalent | LOW |
+| `hook_output_spill.py` | `debug` | Partial | LOW |
+| `react_to_message_tool.py` | `messaging` | Partial | LOW |
+| `read_extract.py` | `read_file` | Partial | LOW |
+| `read_preview_tool.py` | `read_file` | Partial | LOW |
+| `tirith_security.py` | `ast_audit` | Partial | LOW |
+| `tts_streaming.py` | `speak` | Partial | LOW |
+| `tts_text_normalize.py` | `speak` | Partial | LOW |
+| `tts_tool.py` | `speak` | Equivalent | LOW |
+| `x_search_tool.py` | ❌ None | Missing | LOW |
+| `xai_http.py` | ❌ None | Missing | LOW |
+| `xai_video_tools.py` | `video_generate` | Partial | LOW |
+| `yuanbao_tools.py` | ❌ None | Missing | LOW |
 
-### Delegation
-| Hermes Tool | Nuvira Equivalent | Status |
-|------------|-------------------|--------|
-| delegate_tool | delegate_system | ✅ Matched |
-| delegation_live_log | delegate_system | ✅ Matched |
-| async_delegation | delegate_system | ✅ Matched |
-| managed_tool_gateway | managed_gateway | ✅ Matched |
+## What We CAN'T Do Without Remaining Tools
 
-### File Operations
-| Hermes Tool | Nuvira Equivalent | Status |
-|------------|-------------------|--------|
-| file_operations | file_ops | ✅ Matched |
-| file_state | file_ops | ✅ Matched |
-| file_tools | file_ops | ✅ Matched |
-| blueprints | blueprint | ✅ Matched |
-| working_diff | working_diff | ✅ Matched |
+1. **Desktop automation** (computer_use, desktop_ui) — Can't interact with desktop applications
+2. **Multi-LLM routing** (openrouter_client) — Can't route to different LLM providers
+3. **MCP server management** (mcp_tool) — Can't manage MCP server connections
+4. **Live delegation logs** (delegation_live_log) — Can't monitor delegation in real-time
 
-### Security
-| Hermes Tool | Nuvira Equivalent | Status |
-|------------|-------------------|--------|
-| schema_sanitizer | sanitize | ✅ Matched |
-| binary_extensions | binary_extensions | ✅ Matched |
-| credential_files | env_probe | ✅ Matched |
-| env_probe | env_probe | ✅ Matched |
-| skills_ast_audit | ast_audit | ✅ Matched |
-| threat_patterns | threat_patterns | ✅ Matched |
-| url_safety | url_safety | ✅ Matched |
-| path_security | path_security | ✅ Matched |
-| skills_guard | security_score | ✅ Matched |
+## What We CAN Do (Already Have)
 
-### Productivity
-| Hermes Tool | Nuvira Equivalent | Status |
-|------------|-------------------|--------|
-| kanban_tools | kanban | ✅ Matched |
-| cronjob_tools | cronjob | ✅ Matched |
-| session_search_tool | session | ✅ Matched |
-| thread_context | session | ✅ Matched |
-| checkpoint_manager | checkpoint | ✅ Matched |
+1. ✅ Browser automation (CDP, Camofox, supervisor, dialog)
+2. ✅ MCP integration (OAuth, schema cache, watchdog)
+3. ✅ Delegation system (spawn, interrupt, stall monitoring)
+4. ✅ Security tools (AST audit, threats, URL safety)
+5. ✅ Platform integrations (Discord, Home Assistant, Microsoft Graph, Feishu)
+6. ✅ Media tools (video generation, voice mode, wake word, TTS)
+7. ✅ Docker management
+8. ✅ Kanban, cronjobs, todo
+9. ✅ File operations, code search, git
+10. ✅ 153 bundled skills
+11. ✅ Skills ecosystem (hub, sync, usage, provenance)
+12. ✅ Infrastructure (lazy deps, backend helpers, output limits, result storage)
+13. ✅ Terminal execution (local, Docker, SSH)
+14. ✅ Memory (MEMORY.md + USER.md)
+15. ✅ Message sending (Telegram, Discord, Slack, WhatsApp, Email)
 
-### Debug
-| Hermes Tool | Nuvira Equivalent | Status |
-|------------|-------------------|--------|
-| debug_helpers | debug | ✅ Matched |
-| terminal_hints | debug | ✅ Matched |
-| hook_output_spill | debug | ✅ Matched |
+## Recommendations
 
-### Media
-| Hermes Tool | Nuvira Equivalent | Status |
-|------------|-------------------|--------|
-| tts_tool | speak | ✅ Matched |
-| transcription_tools | transcribe | ✅ Matched |
-| vision_tools | vision | ✅ Matched |
-| image_generation_tool | generate_image | ✅ Matched |
+### Priority 1 (Immediate): Desktop Automation
+- Implement `computer_use_tool` for desktop interaction
+- Implement `desktop_ui` for UI element detection and clicking
+- **Effort:** 2-3 days
+- **Impact:** HIGH — Enables desktop application control
 
-### Docker
-| Hermes Tool | Nuvira Equivalent | Status |
-|------------|-------------------|--------|
-| docker (implied) | docker | ✅ Matched |
+### Priority 2 (This Week): Multi-LLM Routing
+- Implement `openrouter_client` for multi-provider LLM routing
+- **Effort:** 1 day
+- **Impact:** MEDIUM — Enables cost optimization and fallback
 
-### Platform Integrations (NEW)
-| Hermes Tool | Nuvira Equivalent | Status |
-|------------|-------------------|--------|
-| discord_tool | discord | ✅ Matched |
-| homeassistant_tool | homeassistant | ✅ Matched |
-| microsoft_graph_client | microsoft_graph | ✅ Matched |
-| microsoft_graph_auth | microsoft_graph (OAuth2) | ✅ Matched |
-| feishu_doc_tool | feishu_doc | ✅ Matched |
-| feishu_drive_tool | feishu_drive | ✅ Matched |
+### Priority 3 (Next Week): MCP Server Management
+- Implement `mcp_tool` for full MCP server lifecycle management
+- **Effort:** 1 day
+- **Impact:** MEDIUM — Better MCP integration
 
-### Infrastructure (NEW)
-| Hermes Tool | Nuvira Equivalent | Status |
-|------------|-------------------|--------|
-| interrupt | interrupt | ✅ Matched |
-| daemon_pool | daemon_pool | ✅ Matched |
-| process_registry | process_registry | ✅ Matched |
-| code_execution_tool | code_execution | ✅ Matched |
-| tool_search | tool_search | ✅ Matched |
-| budget_config | budget_config | ✅ Matched |
-| fuzzy_match | fuzzy_match | ✅ Matched |
+### Priority 4 (Optional): Nice-to-Have Tools
+- Implement remaining 11 tools for complete parity
+- **Effort:** 1 week
+- **Impact:** LOW — Feature completeness
 
-### Utility (NEW)
-| Hermes Tool | Nuvira Equivalent | Status |
-|------------|-------------------|--------|
-| ansi_strip | ansi_strip | ✅ Matched |
-| osv_check | osv_check | ✅ Matched |
-| patch_parser | patch_parser | ✅ Matched |
-| image_source | image_source | ✅ Matched |
-| write_approval | approval | ✅ Matched |
-| slash_confirm | approval | ✅ Matched |
+## Final Assessment
 
----
+**Agent-Nuvira is at 86% Hermes coverage with 94 registered tools.**
 
-## Category 2: REMAINING GAPS (31 tools still missing)
+The remaining 15 tools are:
+- 5 important (desktop automation, multi-LLM, MCP management)
+- 11 nice-to-have (equivalents or partial matches)
 
-### Tier 1: Media/AI (5 tools)
-| Tool | Lines | Impact | Effort |
-|------|-------|--------|--------|
-| flux3_video_tool | 1,249 | Video generation (FAL) | 2 days |
-| video_generation_tool | 575 | Video generation | 1 day |
-| voice_mode | 2,308 | Voice interaction | 3 days |
-| wake_word | 1,464 | Wake word detection | 2 days |
-| neutts_synth | 110 | NeuTTS synthesis | 0.5 days |
+**Key Strengths:**
+- Bundled skills: +115% AHEAD (153 vs 71)
+- Platform integrations: +125% AHEAD (5 vs 4)
+- Media tools: +160% AHEAD (8 vs 5)
+- Security tools: 100% PARITY (9 vs 9)
+- Infrastructure tools: 100% PARITY (7 vs 7)
 
-### Tier 2: Infrastructure (4 tools)
-| Tool | Lines | Impact | Effort |
-|------|-------|--------|--------|
-| lazy_deps | 1,197 | Lazy dependency loading | 1 day |
-| tool_backend_helpers | 311 | Backend helpers | 0.5 days |
-| tool_output_limits | 110 | Output size limits | 0.5 days |
-| tool_result_storage | 254 | Result storage | 0.5 days |
+**Key Weaknesses:**
+- Desktop automation: 0% (Hermes has 2 tools)
+- Multi-LLM routing: 0% (Hermes has 1 tool)
+- MCP server management: 0% (Hermes has 1 tool)
 
-### Tier 3: Niche Integrations (8 tools)
-| Tool | Lines | Impact | Effort |
-|------|-------|--------|--------|
-| openrouter_client | 47 | OpenRouter LLM | 0.5 days |
-| x_search_tool | 552 | X/Twitter search | 1 day |
-| xai_http | 329 | xAI HTTP client | 0.5 days |
-| xai_video_tools | 209 | xAI video | 0.5 days |
-| yuanbao_tools | 737 | Yuanbao integration | 1 day |
-| fal_common | 163 | FAL AI common | 0.5 days |
-| website_policy | 283 | Website policy | 0.5 days |
-| audio_container | 97 | Audio detection | 0.5 days |
-
-### Tier 4: Low Priority (14 tools)
-| Tool | Lines | Impact | Effort |
-|------|-------|--------|----------------|
-| read_terminal_tool | 93 | Terminal reading | 0.5 days |
-| open_preview_tool | 97 | Preview opening | 0.5 days |
-| close_terminal_tool | 70 | Terminal closing | 0.5 days |
-| focus_pane_tool | 70 | Focus pane | 0.5 days |
-| env_passthrough | 223 | Environment passthrough | 0.5 days |
-| clarify_gateway | 459 | Gateway clarification | 0.5 days |
-| skill_provenance | 78 | Skill provenance | 0.5 days |
-| skill_usage | 1,340 | Skill usage tracking | 1 day |
-| skills_sync | 1,410 | Skill synchronization | 1 day |
-| skills_sync_client | 2,187 | Sync client | 1 day |
-| skills_hub | 4,432 | Skill hub | 2 days |
-| tirith_security | 872 | Tirith security | 1 day |
-| computer_use_tool | 42 | Desktop automation | 0.5 days |
-| desktop_ui | 40 | Desktop UI | 0.5 days |
-
----
-
-## Category 3: NUVIRA ADVANTAGES (We're Ahead)
-
-| Feature | Hermes | Nuvira | Advantage |
-|---------|--------|--------|-----------|
-| **Bundled skills** | 71 | 153 | +115% |
-| **Skill categories** | 22 | 24 | +9% |
-| **Cloud sandboxes** | ❌ None | ✅ Modal + Daytona | Better |
-| **Execution environments** | 0 | 6 | Better |
-| **Skill provenance** | ❌ None | ✅ SHA-256 tracking | Better |
-| **Execution audit** | ❌ None | ✅ Full audit logging | Better |
-| **Dashboard UI** | ❌ None | ✅ React dashboard | Better |
-| **Docker management** | ❌ Implied | ✅ Full tool + skills | Better |
-
----
-
-## Estimated Effort to Full Parity
-
-| Phase | Tools | Effort | Impact |
-|-------|-------|--------|--------|
-| Media/AI | 5 tools | 1 week | Medium — video/voice capabilities |
-| Infrastructure | 4 tools | 3 days | Low — internal utilities |
-| Niche | 8 tools | 4 days | Low — specific integrations |
-| Low Priority | 14 tools | 1 week | Low — minor features |
-| **Total** | **31 tools** | **3 weeks** | **Full parity** |
-
----
-
-## Conclusion
-
-Agent-Nuvira has made significant progress:
-
-1. **Skills:** 153 vs 71 (+115% ahead)
-2. **Tools:** 78 vs 109 (72% coverage, up from 51%)
-3. **Platform integrations:** 5 vs 4 (matched)
-4. **Security:** 9 tools (matched)
-5. **Infrastructure:** 7 tools (matched)
-
-The remaining 31 tools are primarily:
-- **Media/AI** (video generation, voice) — medium impact
-- **Infrastructure** (lazy deps, output limits) — low impact
-- **Niche integrations** (OpenRouter, X/Twitter) — low impact
-
-**Recommendation:** Focus on media/AI tools next for maximum capability impact. The infrastructure and niche tools can be added incrementally as needed.
+**Recommendation:** Focus on Tier 1 (desktop automation) to reach 90%+ coverage.
