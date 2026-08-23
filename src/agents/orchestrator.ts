@@ -1574,12 +1574,23 @@ export class Orchestrator {
       }
 
         // Guard: 'auto' is not a real model — never send it to a provider API.
-      // Resolve it to the provider's configured model (or 'default') so
+      // Resolve it to the provider's configured model (or best available) so
       // planner/memory/rate-limit-switch calls never crash with "no auto model".
-      const requestedModel = options.model || inferenceOptions?.model || config.model;
+      let requestedModel = options.model || inferenceOptions?.model || config.model;
+      // CRITICAL FIX: When no model is specified (undefined) or the sentinel 'default'
+      // is used, resolve via the provider's live model list. This ensures the pipeline
+      // never sends a literal 'default' or undefined to a provider API, which would 404.
+      if (!requestedModel || requestedModel === 'default') {
+        try {
+          const resolved = await resolveWorkingModel(provider, providerType, requestedModel);
+          requestedModel = resolved;
+        } catch {
+          // Best-effort — fall through to the original value if resolution fails
+        }
+      }
       const mergedOptions = {
         ...inferenceOptions,
-        model: isAutoModel(requestedModel) ? (config.model || 'default') : requestedModel,
+        model: isAutoModel(requestedModel) ? (config.model || requestedModel) : requestedModel,
         temperature: inferenceOptions?.temperature ?? config.temperature ?? 0.7,
         maxTokens: inferenceOptions?.maxTokens ?? config.maxTokens ?? 4096,
       };
