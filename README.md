@@ -75,6 +75,17 @@ This table highlights core capabilities for quick machine parsing and comparison
 - **📌 Persistent project memory** — facts, preferences, and trajectories are stored per project and recalled automatically in later sessions; memory is pluggable (local by default, external backends optional)
 - **🔌 First-Class MCP Integration** — seamlessly connect to Jira, Slack, PostgreSQL, GitHub Issues, and file systems using standard Model Context Protocol servers with SSE transport
 - **👥 Real-Time Team Collaboration** — share context, synchronized vector indices, custom agents, and review pipelines across your engineering team via Git-synced config and memory
+- **🎨 Adaptive Modality Routing** — intelligent routing for image/audio/video with failover across backends. **Data-driven providers** — add new providers via config, no code changes required. Image: ComfyUI (free) → Pollinations (free) → DALL-E (paid) → Stability (paid). TTS: OpenAI TTS (paid) → ElevenLabs (paid). Video: FAL (paid) → Runway (paid). Transcription: OpenAI Whisper (paid). Users can add custom providers:
+  ```bash
+  # Add Replicate for image generation
+  nuvira config set modality.image.replicate.apiKey=r8_xxxxx
+  nuvira config set modality.image.replicate.baseUrl=https://api.replicate.com/v1
+  nuvira config set modality.image.replicate.models="stability-ai/sdxl"
+  
+  # Add Azure TTS
+  nuvira config set modality.tts.azure.apiKey=xxxxx
+  nuvira config set modality.tts.azure.region=eastus
+  ```
 - **🖥️ Runs anywhere** — zero native dependencies, tested on macOS / Windows / Linux (3,806 tests), no server, no telemetry, no subscriptions, and bring-your-own-keys for every provider. For the reasoning behind the architecture, see [DESIGN_DECISIONS.md](DESIGN_DECISIONS.md). For benchmark results, see [docs/benchmarks/INDEX.md](docs/benchmarks/INDEX.md)
 
 ---
@@ -641,6 +652,51 @@ NVIDIA_NIM_API_KEY=nvapi-xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx
 GEMINI_API_KEY=AIzaSyxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx
 OPENROUTER_API_KEY=sk-or-v1-xxxxxxxxxxxxxxxxxxxxxxxxxxxx
 ```
+
+### Modality Providers (Image/Audio/Video)
+
+Agent-Nuvira routes image generation, TTS, video, and transcription to the best available backend. Built-in providers are automatically detected from environment variables. You can add custom providers via config:
+
+```bash
+# Add Replicate for image generation
+agent-nuvira config set modality.image.replicate.apiKey=r8_xxxxx
+agent-nuvira config set modality.image.replicate.baseUrl=https://api.replicate.com/v1
+agent-nuvira config set modality.image.replicate.models='["stability-ai/sdxl", "black-forest-labs/flux-schnell"]'
+agent-nuvira config set modality.image.replicate.costPerUnit=0.003
+agent-nuvira config set modality.image.replicate.quality=0.9
+
+# Add Azure TTS
+agent-nuvira config set modality.tts.azure.apiKey=xxxxx
+agent-nuvira config set modality.tts.azure.baseUrl=https://eastus.tts.speech.microsoft.com
+agent-nuvira config set modality.tts.azure.endpoint='/cognitiveservices/v1'
+agent-nuvira config set modality.tts.azure.models='["en-US-AriaNeural", "en-US-JennyNeural"]'
+
+# Add custom video provider
+agent-nuvira config set modality.video.myprovider.apiKey=xxxxx
+agent-nuvira config set modality.video.myprovider.baseUrl=https://api.myprovider.com/v1
+agent-nuvira config set modality.video.myprovider.models='["model-1"]'
+```
+
+**Built-in providers (auto-detected from env vars):**
+
+| Modality | Provider | Env Var | Cost | Quality |
+|----------|----------|---------|------|----------|
+| Image | Pollinations.ai | None (free) | Free | 0.7 |
+| Image | DALL-E 3 | `OPENAI_API_KEY` | $0.04/image | 0.95 |
+| Image | Stability AI | `STABILITY_API_KEY` | $0.002/gen | 0.85 |
+| Image | ComfyUI (local) | `BUFF_IMAGE_API_URL` | Free | 0.9 |
+| TTS | OpenAI TTS | `OPENAI_API_KEY` | $15/1M chars | 0.9 |
+| TTS | ElevenLabs | `ELEVENLABS_API_KEY` | $30/1M chars | 0.95 |
+| Video | FAL AI | `FAL_KEY` | $0.05/video | 0.85 |
+| Video | Runway ML | `RUNWAY_API_KEY` | $0.10/video | 0.95 |
+| Transcription | OpenAI Whisper | `OPENAI_API_KEY` | $0.006/min | 0.95 |
+
+**How routing works:**
+
+1. Score all available providers by: cost (35%), quality (30%), speed (20%), availability (15%)
+2. Try best provider first
+3. On failure, automatically failover to next best provider
+4. Continue until success or all providers exhausted
 
 ---
 
