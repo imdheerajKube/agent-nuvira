@@ -418,3 +418,168 @@ export function buildFailoverChain(
 
   return chain;
 }
+
+/**
+ * Capability tiers for tiered failover.
+ * When a model fails, we escalate through tiers:
+ *   suitable -> higher -> cheaper -> local -> neural response
+ */
+export type CapabilityTier = 'high' | 'medium' | 'low' | 'local';
+
+/**
+ * Classify a model into a capability tier.
+ */
+export function classifyTier(candidate: ModelCandidate): CapabilityTier {
+  if (candidate.provider === 'local' || candidate.provider === 'lmstudio' || candidate.provider === 'vllm') {
+    return 'local';
+  }
+  if (candidate.dimensions.capabilityFit >= 0.8) return 'high';
+  if (candidate.dimensions.capabilityFit >= 0.5) return 'medium';
+  return 'low';
+}
+
+/**
+ * Check if a model candidate has available quota (not parked, not blocked).
+ */
+export function isCandidateAvailable(candidate: ModelCandidate): boolean {
+  // Check quota parking from registry entry
+  if (candidate.entry) {
+    if (candidate.entry.quotaParkedUntil > Date.now()) return false;
+    if (candidate.entry.status === 'unavailable') return false;
+  }
+  // Check if model is a non-chat model (filtered in scoring but double-check)
+  if (candidate.dimensions.capabilityFit === 0 && candidate.dimensions.health === 0) return false;
+  return true;
+}
+
+/**
+ * Build a TIERED failover chain with quota pre-check.
+ *
+ * Strategy (Dheeraj's design):
+ *   1. PRIMARY: Best scored model
+ *   2. SAME-TIER: Same capability tier, different provider (pre-check quota)
+ *   3. ESCALATE: Next higher tier (pre-check quota)
+ *   4. DE-ESCALATE: Lower tier, cheaper models (pre-check quota)
+ *   5. LOCAL: Local model (always available)
+ *   6. NEURAL: Graceful "all exhausted" (no error)
+ *
+ * Each phase skips quota-parked models to avoid unnecessary API failures.
+ */
+export function buildTieredFailoverChain(
+  bestCandidate: ModelCandidate,
+  allCandidates: ModelCandidate[],
+): FailoverTier[] {
+  const bestTier = classifyTier(bestCandidate);
+  const tried = new Set<string>();
+  tried.add(`${bestCandidate.provider}:${bestCandidate.model}`);
+
+  const tiers: FailoverTier[] = [];
+
+  // Phase 1: Same model on different providers (fastest transition)
+  const sameModelDifferentProvider = allCandidates.filter(
+    c => c.model === bestCandidate.model
+      && c.provider !== bestCandidate.provider
+      && !tried.has(`${c.provider}:${c.model}`)
+      && isCandidateAvailable(c)
+  );
+  if (sameModelDifferentProvider.length > 0) {
+    tiers.push({
+      phase: 'same-model',
+      description: `Same model (${bestCandidate.model}) on different provider`,
+      candidates: sameModelDifferentProvider,
+    });
+    sameModelDifferentProvider.forEach(c => tried.add(`${c.provider}:${c.model}`));
+  }
+
+  // Phase 2: Same capability tier, different models (pre-check quota)
+  const sameTier = allCandidates.filter(
+    c => classifyTier(c) === bestTier
+      && c.model !== bestCandidate.model
+      && !tried.has(`${c.provider}:${c.model}`)
+      && isCandidateAvailable(c)
+  );
+  if (sameTier.length > 0) {
+    tiers.push({
+      phase: 'same-tier',
+      description: `Same capability tier (${bestTier}), different models`,
+      candidates: sameTier,
+    });
+    sameTier.forEach(c => tried.add(`${c.provider}:${c.model}`));
+  }
+
+  // Phase 3: Escalate to higher tier (pre-check quota)
+  const higherTiers: CapabilityTier[] = bestTier === 'low' ? ['medium', 'high']
+    : bestTier === 'medium' ? ['high']
+    : [];
+  for (const tier of higherTiers) {
+    const escalation = allCandidates.filter(
+      c => classifyTier(c) === tier
+        && !tried.has(`${c.provider}:${c.model}`)
+        && isCandidateAvailable(c)
+    );
+    if (escalation.length > 0) {
+      tiers.push({
+        phase: 'escalate',
+        description: `Escalate to ${tier} tier`,
+        candidates: escalation,
+      });
+      escalation.forEach(c => tried.add(`${c.provider}:${c.model}`));
+    }
+  }
+
+  // Phase 4: De-escalate to lower tier, cheaper models (pre-check quota)
+  const lowerTiers: CapabilityTier[] = bestTier === 'high' ? ['medium', 'low']
+    : bestTier === 'medium' ? ['low']
+    : [];
+  for (const tier of lowerTiers) {
+    const deescalation = allCandidates.filter(
+      c => classifyTier(c) === tier
+        && !tried.has(`${c.provider}:${c.model}`)
+        && isCandidateAvailable(c)
+    );
+    if (deescalation.length > 0) {
+      tiers.push({
+        phase: 'de-escalate',
+        description: `De-escalate to ${tier} tier (cheaper)`,
+        candidates: deescalation,
+      });
+      deescalation.forEach(c => tried.add(`${c.provider}:${c.model}`));
+    }
+  }
+
+  // Phase 5: Local models (always available, last resort before neural)
+  const localModels = allCandidates.filter(
+    c => classifyTier(c) === 'local'
+      && !tried.has(`${c.provider}:${c.model}`)
+  );
+  if (localModels.length > 0) {
+    tiers.push({
+      phase: 'local',
+      description: 'Local model (always available)',
+      candidates: localModels,
+    });
+    localModels.forEach(c => tried.add(`${c.provider}:${c.model}`));
+  }
+
+  // Phase 6: Any remaining available models (last resort)
+  const remaining = allCandidates.filter(
+    c => !tried.has(`${c.provider}:${c.model}`)
+      && isCandidateAvailable(c)
+  );
+  if (remaining.length > 0) {
+    tiers.push({
+      phase: 'remaining',
+      description: 'Any remaining available models',
+      candidates: remaining,
+    });
+  }
+
+  return tiers;
+}
+
+/** A tier in the failover chain. */
+export interface FailoverTier {
+  phase: 'same-model' | 'same-tier' | 'escalate' | 'de-escalate' | 'local' | 'remaining';
+  description: string;
+  candidates: ModelCandidate[];
+}

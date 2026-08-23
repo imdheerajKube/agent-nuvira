@@ -505,34 +505,41 @@ function buildCandidateList(
     score: decision.score,
   });
 
-  // ── MODEL-FIRST FAILOVER: same model on different providers first ──────
-  // When a model fails on one provider, try the SAME model on a different
-  // provider before switching to a different model. This ensures the user
-  // gets the model they expect (e.g., Llama 3.3) even if one provider is down.
+  // ── TIERED FAILOVER: capability-based with quota pre-check ────────────
+  // Strategy (Dheeraj's design):
+  //   1. Same model, different provider (fastest transition)
+  //   2. Same capability tier, different models (pre-check quota)
+  //   3. Escalate to higher tier (pre-check quota)
+  //   4. De-escalate to lower tier, cheaper models (pre-check quota)
+  //   5. Local model (always available, last resort)
+  //   6. Any remaining (last resort before neural response)
   try {
-    const { buildModelCandidates, buildFailoverChain } = require('./model-first-router.js');
+    const { buildModelCandidates, buildTieredFailoverChain } = require('./model-first-router.js');
     if (taskDescription && complexity) {
       const modelCandidates = buildModelCandidates(taskDescription, complexity, configManager);
-      const failoverChain = buildFailoverChain(
-        { model: decision.model, provider: decision.provider } as any,
+      const tieredChain = buildTieredFailoverChain(
+        { model: decision.model, provider: decision.provider, dimensions: { capabilityFit: 0.5 } } as any,
         modelCandidates,
       );
-      for (const fc of failoverChain) {
-        if (fc.provider === decision.provider && fc.model === decision.model) continue;
-        const key = `${fc.provider}:${fc.model}`;
-        if (candidates.some(c => `${c.provider}:${c.model}` === key)) continue;
-        candidates.push({
-          provider: fc.provider,
-          model: fc.model,
-          score: fc.score,
-        });
+      // Flatten tiers into candidate list, maintaining tier order
+      for (const tier of tieredChain) {
+        for (const fc of tier.candidates) {
+          if (fc.provider === decision.provider && fc.model === decision.model) continue;
+          const key = `${fc.provider}:${fc.model}`;
+          if (candidates.some(c => `${c.provider}:${c.model}` === key)) continue;
+          candidates.push({
+            provider: fc.provider,
+            model: fc.model,
+            score: fc.score,
+          });
+        }
       }
     }
   } catch {
-    // Best-effort — model-first must never break routing
+    // Best-effort — tiered failover must never break routing
   }
 
-  // All ranked candidates (NO cap) — supplement model-first with provider-ranked
+  // All ranked candidates (NO cap) — supplement with provider-ranked
   for (const ranked of decision.ranked) {
     if (ranked.provider === decision.provider) continue;
     const key = `${ranked.provider}:default`;
