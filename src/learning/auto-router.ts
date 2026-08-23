@@ -47,7 +47,7 @@ import { getMlRouter, DEFAULT_ML_K, DEFAULT_ML_MIN_SAMPLES, DEFAULT_ML_STRENGTH 
 import { getModelRegistry } from './model-registry.js';
 import { estimateTokens } from './cost-tracker.js';
 import { preferredModelsFor, PROVIDER_CONTEXT_WINDOWS } from './model-selection.js';
-import { CATALOG_PROVIDER_IDS, getCatalogProvider, isCatalogKeyless } from '../inference/provider-catalog.js';
+import { CATALOG_PROVIDER_IDS, getCatalogProvider, getDefaultModel, isCatalogKeyless } from '../inference/provider-catalog.js';
 import type { ConfigManager } from '../config/manager.js';
 import type { ProviderPricing, GovernanceConfig } from '../config/types.js';
 import { logger } from '../utils/logger.js';
@@ -2121,7 +2121,10 @@ export class AutoModelRouter {
     // Fallback: use preferred models from registry (health-ranked)
     const preferred = preferredModelsFor(provider);
     if (preferred.length > 0) return preferred[0];
-    return 'default';
+    // LAST RESORT: use the catalog's curated default model for this provider.
+    // This ensures resolveModel() NEVER returns 'default' — every provider
+    // always resolves to a real, known-working model name.
+    return getDefaultModel(provider);
   }
 
   /**
@@ -2137,7 +2140,7 @@ export class AutoModelRouter {
     const configured = this.resolveModel(provider, 'default', configManager);
     if (configured !== 'default') return configured;
     const usable = models.find((m) => !(m.tags || []).includes('speech'));
-    return usable?.id || 'default';
+    return usable?.id || getDefaultModel(provider);
   }
 
   /**

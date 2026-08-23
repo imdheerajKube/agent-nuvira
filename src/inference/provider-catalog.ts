@@ -72,6 +72,12 @@ export interface CatalogProviderEntry {
   pricing: { inputPer1K: number; outputPer1K: number };
   /** Nominal input context window (tokens), provider-level estimate. */
   contextWindow: number;
+  /**
+   * Curated default model for this provider — used when no model is pinned
+   * and the registry has no verified models yet (cold start). This ensures
+   * the auto-router NEVER sends 'default' as a model name to an API.
+   */
+  defaultModel: string;
 }
 
 /**
@@ -89,6 +95,7 @@ export const PROVIDER_CATALOG: Record<string, CatalogProviderEntry> = {
   // ── Built-in providers ──────────────────────────────────────────────────
   local: {
     id: 'local',
+    defaultModel: 'llama3',
     label: 'Local (Ollama)',
     icon: '💻',
     keyless: true,
@@ -98,6 +105,7 @@ export const PROVIDER_CATALOG: Record<string, CatalogProviderEntry> = {
   },
   groq: {
     id: 'groq',
+    defaultModel: 'llama-3.3-70b-versatile',
     label: 'Groq',
     icon: '⚡',
     envVar: 'GROQ_API_KEY',
@@ -108,6 +116,7 @@ export const PROVIDER_CATALOG: Record<string, CatalogProviderEntry> = {
   },
   nim: {
     id: 'nim',
+    defaultModel: 'meta/llama-3.1-8b-instruct',
     label: 'NVIDIA NIM',
     icon: '🎮',
     envVar: 'NVIDIA_NIM_API_KEY',
@@ -119,6 +128,7 @@ export const PROVIDER_CATALOG: Record<string, CatalogProviderEntry> = {
   },
   gemini: {
     id: 'gemini',
+    defaultModel: 'gemini-2.0-flash',
     label: 'Google Gemini',
     icon: '🌀',
     envVar: 'GEMINI_API_KEY',
@@ -128,6 +138,7 @@ export const PROVIDER_CATALOG: Record<string, CatalogProviderEntry> = {
   },
   openrouter: {
     id: 'openrouter',
+    defaultModel: 'meta-llama/llama-3.1-8b-instruct',
     label: 'OpenRouter',
     icon: '🌐',
     envVar: 'OPENROUTER_API_KEY',
@@ -139,6 +150,7 @@ export const PROVIDER_CATALOG: Record<string, CatalogProviderEntry> = {
   },
   nuvira: {
     id: 'nuvira',
+    defaultModel: 'default',
     label: 'Nuvira Gateway',
     icon: '🧭',
     keyless: true,
@@ -152,6 +164,7 @@ export const PROVIDER_CATALOG: Record<string, CatalogProviderEntry> = {
   // ── Extended OpenAI-compatible providers (Issue 001: 17+ in routing) ────
   openai: {
     id: 'openai',
+    defaultModel: 'gpt-4o-mini',
     label: 'OpenAI',
     icon: '🤖',
     envVar: 'OPENAI_API_KEY',
@@ -163,6 +176,7 @@ export const PROVIDER_CATALOG: Record<string, CatalogProviderEntry> = {
   },
   anthropic: {
     id: 'anthropic',
+    defaultModel: 'claude-3-5-haiku-20241022',
     label: 'Anthropic',
     icon: '🔮',
     envVar: 'ANTHROPIC_API_KEY',
@@ -173,6 +187,7 @@ export const PROVIDER_CATALOG: Record<string, CatalogProviderEntry> = {
   },
   mistral: {
     id: 'mistral',
+    defaultModel: 'mistral-small-latest',
     label: 'Mistral AI',
     icon: '🌀',
     envVar: 'MISTRAL_API_KEY',
@@ -184,6 +199,7 @@ export const PROVIDER_CATALOG: Record<string, CatalogProviderEntry> = {
   },
   cohere: {
     id: 'cohere',
+    defaultModel: 'command-r',
     label: 'Cohere',
     icon: '🧠',
     envVar: 'COHERE_API_KEY',
@@ -195,6 +211,7 @@ export const PROVIDER_CATALOG: Record<string, CatalogProviderEntry> = {
   },
   together: {
     id: 'together',
+    defaultModel: 'meta-llama/llama-3.1-8b-instruct',
     label: 'Together AI',
     icon: '🟢',
     envVar: 'TOGETHER_API_KEY',
@@ -206,6 +223,7 @@ export const PROVIDER_CATALOG: Record<string, CatalogProviderEntry> = {
   },
   deepinfra: {
     id: 'deepinfra',
+    defaultModel: 'meta-llama/llama-3.1-8b-instruct',
     label: 'DeepInfra',
     icon: '🌐',
     envVar: 'DEEPINFRA_TOKEN',
@@ -217,6 +235,7 @@ export const PROVIDER_CATALOG: Record<string, CatalogProviderEntry> = {
   },
   fireworks: {
     id: 'fireworks',
+    defaultModel: 'accounts/fireworks/models/llama-v3p1-8b-instruct',
     label: 'Fireworks AI',
     icon: '🎆',
     envVar: 'FIREWORKS_API_KEY',
@@ -228,6 +247,7 @@ export const PROVIDER_CATALOG: Record<string, CatalogProviderEntry> = {
   },
   perplexity: {
     id: 'perplexity',
+    defaultModel: 'llama-3.1-sonar-small-128k-online',
     label: 'Perplexity',
     icon: '❓',
     envVar: 'PERPLEXITY_API_KEY',
@@ -239,6 +259,7 @@ export const PROVIDER_CATALOG: Record<string, CatalogProviderEntry> = {
   },
   azure: {
     id: 'azure',
+    defaultModel: 'gpt-4o-mini',
     label: 'Azure OpenAI',
     icon: '🔵',
     envVar: 'AZURE_OPENAI_API_KEY',
@@ -255,6 +276,7 @@ export const PROVIDER_CATALOG: Record<string, CatalogProviderEntry> = {
   },
   lmstudio: {
     id: 'lmstudio',
+    defaultModel: 'default',
     label: 'LM Studio',
     icon: '🎨',
     keyless: true,
@@ -266,6 +288,7 @@ export const PROVIDER_CATALOG: Record<string, CatalogProviderEntry> = {
   },
   anyscale: {
     id: 'anyscale',
+    defaultModel: 'meta-llama/llama-3.1-8b-instruct',
     label: 'Anyscale',
     icon: '🔷',
     envVar: 'ANYSCALE_API_KEY',
@@ -277,6 +300,7 @@ export const PROVIDER_CATALOG: Record<string, CatalogProviderEntry> = {
   },
   vllm: {
     id: 'vllm',
+    defaultModel: 'default',
     label: 'vLLM / TGI',
     icon: '⚡',
     keyless: true,
@@ -288,6 +312,7 @@ export const PROVIDER_CATALOG: Record<string, CatalogProviderEntry> = {
   },
   deepseek: {
     id: 'deepseek',
+    defaultModel: 'deepseek-chat',
     label: 'DeepSeek',
     icon: '🐳',
     envVar: 'DEEPSEEK_API_KEY',
@@ -299,6 +324,7 @@ export const PROVIDER_CATALOG: Record<string, CatalogProviderEntry> = {
   },
   xai: {
     id: 'xai',
+    defaultModel: 'grok-2',
     label: 'xAI (Grok)',
     icon: '🕶️',
     envVar: 'XAI_API_KEY',
@@ -310,6 +336,7 @@ export const PROVIDER_CATALOG: Record<string, CatalogProviderEntry> = {
   },
   replicate: {
     id: 'replicate',
+    defaultModel: 'meta/llama-3.1-8b-instruct',
     label: 'Replicate',
     icon: '🔁',
     envVar: 'REPLICATE_API_TOKEN',
@@ -321,6 +348,7 @@ export const PROVIDER_CATALOG: Record<string, CatalogProviderEntry> = {
   },
   bedrock: {
     id: 'bedrock',
+    defaultModel: 'anthropic.claude-3-5-sonnet-20241022-v1:0',
     label: 'Amazon Bedrock',
     icon: '🟠',
     envVar: 'AWS_BEARER_TOKEN',
@@ -343,6 +371,16 @@ export const CATALOG_OPENAI_COMPAT_IDS: string[] = CATALOG_PROVIDER_IDS.filter((
 
 /** Providers served by a native (non-OpenAI-compatible) adapter. */
 export const CATALOG_NATIVE_IDS: string[] = CATALOG_PROVIDER_IDS.filter((id) => PROVIDER_CATALOG[id]?.nativeAdapter);
+
+/**
+ * Get the curated default model for a provider. Used by resolveModel() to
+ * ensure it NEVER returns 'default' — every provider always resolves to a
+ * real, known-working model name.
+ */
+export function getDefaultModel(providerId: string): string {
+  const entry = PROVIDER_CATALOG[providerId];
+  return entry?.defaultModel || 'default';
+}
 
 /**
  * Look up a catalog entry (undefined for unknown/plugin providers).
