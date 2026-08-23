@@ -1236,7 +1236,7 @@ export class AutoModelRouter {
       // an acceptable soft-estimate divergence (bandit is on by default, but
       // cold start stays deterministic until outcomes accumulate).
       const resolvedWindow = qp === undefined && contextFitEnabled
-        ? this.resolveContextWindow(provider, this.resolveModel(provider, agentType, configManager), configManager)
+        ? this.resolveContextWindow(provider, this.resolveModel(provider, agentType, configManager, taskDescription), configManager)
         : undefined;
       const contextWindowTokens = resolvedWindow?.window;
       const contextWindowSource = resolvedWindow?.source;
@@ -1602,7 +1602,7 @@ export class AutoModelRouter {
       ? scored.find((s) => s.provider === escalatedProvider)!
       : scored.find((s) => !s.inCooldown && !s.quotaParked) || scored[0];
     const provider = selected.provider;
-    let model = this.resolveModel(provider, agentType, configManager);
+    let model = this.resolveModel(provider, agentType, configManager, taskDescription);
 
     // Note the decision so outcome recording (recordOutcome) can reward the
     // provider that actually served the task.
@@ -1622,6 +1622,7 @@ export class AutoModelRouter {
         complexity,
         options.escalationMinSamples ?? DEFAULT_MIN_SAMPLES,
         analyzedProfile.intent,
+        taskDescription,
       );
       bandit.noteModelDecision(agentType, model);
 
@@ -1642,7 +1643,7 @@ export class AutoModelRouter {
       .filter((s) => s.provider !== provider)
       .map((s) => ({
         provider: s.provider,
-        model: this.resolveModel(s.provider, agentType, configManager),
+        model: this.resolveModel(s.provider, agentType, configManager, taskDescription),
         estimatedCost: 0,
         qualityScore: s.score,
         contextWindowTokens: s.contextWindowTokens,
@@ -1686,7 +1687,7 @@ export class AutoModelRouter {
           providers: scored.map((s) => {
             const w = s.contextWindowTokens !== undefined
               ? { window: s.contextWindowTokens, source: s.contextWindowSource }
-              : this.resolveContextWindow(s.provider, this.resolveModel(s.provider, agentType, configManager), configManager);
+              : this.resolveContextWindow(s.provider, this.resolveModel(s.provider, agentType, configManager, taskDescription), configManager);
             return {
               provider: s.provider,
               contextWindowTokens: w.window,
@@ -1864,10 +1865,25 @@ export class AutoModelRouter {
     complexity: ComplexityLevel,
     minSamples: number = DEFAULT_MIN_SAMPLES,
     taskIntent?: string,
+    taskDescription?: string,
   ): string {
     const bandit = getRouterBandit();
     const candidates: string[] = [];
     if (configuredModel && configuredModel !== 'default') candidates.push(configuredModel);
+    // MODEL-LEVEL ROUTING: use model scoring to rank candidates by task fitness.
+    // This ensures the bandit learns from the BEST models, not just verified ones.
+    if (taskDescription) {
+      try {
+        const { topModelCandidates } = require('./model-scoring.js');
+        const scored = topModelCandidates(provider, taskDescription, 10, complexity);
+        for (const s of scored) {
+          if (!candidates.includes(s.model)) candidates.push(s.model);
+        }
+      } catch {
+        // Fall through to preferred models
+      }
+    }
+    // Supplement with preferred models (health-ranked verified models)
     for (const m of preferredModelsFor(provider)) {
       if (!candidates.includes(m)) candidates.push(m);
     }
@@ -1880,7 +1896,7 @@ export class AutoModelRouter {
       const p = bandit.getModelPrior(m, complexity, taskIntent);
       return p.alpha + p.beta >= minSamples;
     });
-    // Cold start: no per-model data → keep the configured model (deterministic).
+    // Cold start: no per-model data → keep the best-scored candidate (deterministic).
     if (learned.length === 0) return candidates[0];
 
     // Learned: pick the candidate with the best Thompson-sampled per-model draw.
@@ -2032,11 +2048,11 @@ export class AutoModelRouter {
    * the live-list validator repairs it (once) and telemetry then verifies the
    * replacement, so the registry learns before the next message.
    */
-  resolveModel(provider: string, agentType: string, configManager?: ConfigManager): string {
+  resolveModel(provider: string, agentType: string, configManager?: ConfigManager, taskDescription?: string): string {
     if (configManager) {
       try {
         const { config } = configManager.getProviderConfig(provider);
-        if (config?.model) {
+        if (config?.model && config.model !== 'default') {
           // Best-effort registry consult — never let it break model resolution.
           try {
             const registry = getModelRegistry();
@@ -2055,6 +2071,24 @@ export class AutoModelRouter {
         // Fall through to default
       }
     }
+    // MODEL-LEVEL ROUTING: when no specific model is configured, use the
+    // model scoring module to pick the BEST model from the provider's
+    // available models based on task requirements. This is the key fix that
+    // makes the auto-router leverage ALL discovered models (300+ on OpenRouter,
+    // multiple on Groq/Gemini/NIM, etc.) instead of falling back to a single
+    // hardcoded default.
+    if (taskDescription) {
+      try {
+        const { pickBestModel } = require('./model-scoring.js');
+        const bestModel = pickBestModel(provider, taskDescription);
+        if (bestModel) return bestModel;
+      } catch {
+        // Fall through to preferred models
+      }
+    }
+    // Fallback: use preferred models from registry (health-ranked)
+    const preferred = preferredModelsFor(provider);
+    if (preferred.length > 0) return preferred[0];
     return 'default';
   }
 

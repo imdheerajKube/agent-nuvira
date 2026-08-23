@@ -472,6 +472,15 @@ export class ModelRegistry {
       .map((e) => e.model);
   }
 
+  /**
+   * ALL tracked models for a provider (verified + unverified + unavailable).
+   * Returns full ModelRegistryEntry objects so callers can inspect context
+   * windows, latency, error rates, etc. Sync.
+   */
+  getAllModelsForProvider(provider: string): ModelRegistryEntry[] {
+    return Object.values(this.data.entries).filter((e) => e.provider === provider);
+  }
+
   /** Providers that currently have at least one verified, usable model. Sync. */
   getUsableProviders(now: number = Date.now()): string[] {
     const providers = new Set<string>();

@@ -190,8 +190,9 @@ function resolveDesiredModel(
   providerType: string,
   agentType: string,
   configManager: ConfigManager,
+  taskDescription?: string,
 ): string {
-  return autoRouter.resolveModel(providerType, agentType, configManager);
+  return autoRouter.resolveModel(providerType, agentType, configManager, taskDescription);
 }
 
 // ─── Main Factory ───────────────────────────────────────────────────────────
@@ -304,7 +305,7 @@ export function createResilientCallLLM(
       try {
         // Resolve the model at call time (ScoredProvider doesn't carry model)
         const resolvedModel = candidate.model === 'default'
-          ? resolveDesiredModel(autoRouter, candidate.provider, options.task.agentType, configManager)
+          ? resolveDesiredModel(autoRouter, candidate.provider, options.task.agentType, configManager, options.task.description)
           : candidate.model;
         const mergedOptions: InferenceOptions = {
           ...inferenceOptions,
@@ -459,7 +460,7 @@ function resolveWithExclusions(
     if (firstAvailable && firstAvailable !== decision.provider) {
       // Sink to the first available
       const rankedEntry = decision.ranked.find(r => r.provider === firstAvailable);
-      const model = resolveDesiredModel(autoRouter, firstAvailable, task.agentType, configManager);
+      const model = resolveDesiredModel(autoRouter, firstAvailable, task.agentType, configManager, task.description);
       return {
         ...decision,
         provider: firstAvailable,
