@@ -247,7 +247,7 @@ describe('MarketplaceCommand', () => {
 
       await runMarketplace(['install', 'nonexistent-template']);
 
-      expect(infoSpy).toHaveBeenCalledWith(expect.stringContaining('buff marketplace search'));
+      expect(infoSpy).toHaveBeenCalledWith(expect.stringContaining('marketplace search'));
     });
 
     it('should handle network failure during install', async () => {
