@@ -26,6 +26,8 @@
 
 import { Command } from 'commander';
 
+import * as fs from 'fs';
+import * as path from 'path';
 import { BaseCommand } from './commands.js';
 import { getTrajectoryStore } from '../memory/trajectory-store.js';
 import { getMemoryStats, clearMemory } from '../memory/memory-integration.js';
@@ -33,6 +35,7 @@ import { getPatternStore } from '../learning/pattern-extractor.js';
 import { getVectorStore } from '../memory/vector-store.js';
 import { getFeedbackStore } from '../learning/feedback.js';
 import { getFactStore } from '../memory/fact-store.js';
+import { getMemoryStore } from '../tools/memory-tools.js';
 import { logger } from '../utils/logger.js';
 
 export class MemoryCommand extends BaseCommand {
@@ -101,6 +104,66 @@ export class MemoryCommand extends BaseCommand {
         await this.showBackend(options || {});
       });
     command.addCommand(backendCmd);
+
+    // ── list — List all memories ────────────────────────────────────────
+    const listCmd = new Command('list')
+      .description('List all memory entries (facts, preferences, lessons, observations)')
+      .option('--type <type>', 'Filter by type: fact, preference, lesson, observation, pattern')
+      .option('--limit <n>', 'Max entries to show', parseInt)
+      .action(async (options?: { type?: string; limit?: number }) => {
+        await this.listMemories(options || {});
+      });
+    command.addCommand(listCmd);
+
+    // ── search — Search memories ─────────────────────────────────────────
+    const searchCmd = new Command('search')
+      .description('Search memory entries by content')
+      .argument('<query>', 'Search query')
+      .option('--type <type>', 'Filter by type: fact, preference, lesson, observation, pattern')
+      .option('--limit <n>', 'Max results', parseInt)
+      .action(async (query: string, options?: { type?: string; limit?: number }) => {
+        await this.searchMemories(query, options || {});
+      });
+    command.addCommand(searchCmd);
+
+    // ── add — Add a memory entry ─────────────────────────────────────────
+    const addCmd = new Command('add')
+      .description('Add a memory entry')
+      .argument('<content>', 'Memory content')
+      .option('--type <type>', 'Memory type: fact, preference, lesson, observation, pattern', 'fact')
+      .option('--tags <tags>', 'Comma-separated tags')
+      .action(async (content: string, options?: { type?: string; tags?: string }) => {
+        await this.addMemory(content, options || {});
+      });
+    command.addCommand(addCmd);
+
+    // ── delete — Delete a memory entry ───────────────────────────────────
+    const deleteCmd = new Command('delete')
+      .description('Delete a memory entry by ID')
+      .argument('<id>', 'Memory entry ID')
+      .action(async (id: string) => {
+        await this.deleteMemory(id);
+      });
+    command.addCommand(deleteCmd);
+
+    // ── export — Export memories to file ──────────────────────────────────
+    const exportCmd = new Command('export')
+      .description('Export all memories to a JSON file')
+      .option('--output <file>', 'Output file path (default: nuvira-memories-YYYY-MM-DD.json)')
+      .action(async (options?: { output?: string }) => {
+        await this.exportMemories(options || {});
+      });
+    command.addCommand(exportCmd);
+
+    // ── import — Import memories from file ────────────────────────────────
+    const importCmd = new Command('import')
+      .description('Import memories from a JSON file')
+      .argument('<file>', 'JSON file to import')
+      .option('--merge', 'Merge with existing memories (default: replace)', false)
+      .action(async (file: string, options?: { merge?: boolean }) => {
+        await this.importMemories(file, options || {});
+      });
+    command.addCommand(importCmd);
 
     // ── facts (Phase B1: fact & preference memory) ────────────────────────
     const factsCmd = new Command('facts')
@@ -454,6 +517,171 @@ export class MemoryCommand extends BaseCommand {
       }
     } catch (err) {
       logger.error(`Failed to store fact: ${err instanceof Error ? err.message : String(err)}`);
+    }
+  }
+
+  // ── Memory Phase 4: list, search, add, delete, export, import ─────────
+
+  private async listMemories(options: { type?: string; limit?: number }): Promise<void> {
+    try {
+      const store = getMemoryStore();
+      const type = options.type as any;
+      const limit = options.limit || 50;
+      const entries = store.list({ type, limit });
+
+      logger.highlight('═'.repeat(60));
+      logger.highlight('  🧠  Memory Entries');
+      logger.highlight('═'.repeat(60));
+
+      if (entries.length === 0) {
+        console.log('\n  No memories stored yet.');
+        console.log('  Add one: nuvira memory add "<content>" --type fact');
+        console.log('');
+        return;
+      }
+
+      console.log(`\n  Showing ${entries.length} entr${entries.length === 1 ? 'y' : 'ies'}${type ? ` (type: ${type})` : ''}:
+`);
+      for (const e of entries) {
+        const ageDays = Math.floor((Date.now() - e.createdAt) / (24 * 60 * 60 * 1000));
+        const age = ageDays > 0 ? `${ageDays}d ago` : 'just now';
+        const tags = e.tags.length ? ` [${e.tags.join(', ')}]` : '';
+        const accessed = e.accessCount > 0 ? ` (accessed ${e.accessCount}x)` : '';
+        console.log(`  ${e.id}`);
+        console.log(`    ${e.content.slice(0, 120)}${e.content.length > 120 ? '...' : ''}`);
+        console.log(`    type: ${e.type} · ${age}${tags}${accessed}`);
+        console.log('');
+      }
+    } catch (err) {
+      logger.error(`Failed to list memories: ${err instanceof Error ? err.message : String(err)}`);
+    }
+  }
+
+  private async searchMemories(query: string, options: { type?: string; limit?: number }): Promise<void> {
+    try {
+      const store = getMemoryStore();
+      const type = options.type as any;
+      const limit = options.limit || 10;
+      const results = store.search({ query, type, limit });
+
+      logger.highlight('═'.repeat(60));
+      logger.highlight(`  🔍  Search: "${query}"`);
+      logger.highlight('═'.repeat(60));
+
+      if (results.length === 0) {
+        console.log('\n  No matching memories found.');
+        console.log('');
+        return;
+      }
+
+      console.log(`\n  ${results.length} result${results.length === 1 ? '' : 's'}:
+`);
+      for (const r of results) {
+        const score = (r.score * 100).toFixed(0);
+        console.log(`  [${score}%] ${r.entry.id} (${r.matchType})`);
+        console.log(`    ${r.entry.content.slice(0, 120)}${r.entry.content.length > 120 ? '...' : ''}`);
+        console.log(`    type: ${r.entry.type} · tags: ${r.entry.tags.join(', ') || 'none'}`);
+        console.log('');
+      }
+    } catch (err) {
+      logger.error(`Failed to search memories: ${err instanceof Error ? err.message : String(err)}`);
+    }
+  }
+
+  private async addMemory(content: string, options: { type?: string; tags?: string }): Promise<void> {
+    try {
+      const store = getMemoryStore();
+      const type = (options.type || 'fact') as any;
+      const tags = options.tags ? options.tags.split(',').map(t => t.trim()).filter(Boolean) : [];
+
+      const entry = store.add({ content, type, tags, source: 'cli' });
+      logger.success(`✅ Memory added: ${entry.id}`);
+      console.log(`   type: ${entry.type}`);
+      if (tags.length) console.log(`   tags: ${tags.join(', ')}`);
+      console.log('');
+    } catch (err) {
+      logger.error(`Failed to add memory: ${err instanceof Error ? err.message : String(err)}`);
+    }
+  }
+
+  private async deleteMemory(id: string): Promise<void> {
+    try {
+      const store = getMemoryStore();
+      const deleted = store.delete(id);
+      if (deleted) {
+        logger.success(`✅ Memory deleted: ${id}`);
+      } else {
+        logger.warn(`Memory not found: ${id}`);
+      }
+      console.log('');
+    } catch (err) {
+      logger.error(`Failed to delete memory: ${err instanceof Error ? err.message : String(err)}`);
+    }
+  }
+
+  private async exportMemories(options: { output?: string }): Promise<void> {
+    try {
+      const store = getMemoryStore();
+      const entries = store.list();
+      const stats = store.getStats();
+
+      const outputFile = options.output || `nuvira-memories-${new Date().toISOString().slice(0, 10)}.json`;
+      const data = {
+        version: 1,
+        exportedAt: Date.now(),
+        stats,
+        entries,
+      };
+
+      fs.writeFileSync(outputFile, JSON.stringify(data, null, 2), 'utf-8');
+      logger.success(`✅ Exported ${entries.length} memories to ${outputFile}`);
+      console.log('');
+    } catch (err) {
+      logger.error(`Failed to export memories: ${err instanceof Error ? err.message : String(err)}`);
+    }
+  }
+
+  private async importMemories(file: string, options: { merge?: boolean }): Promise<void> {
+    try {
+      if (!fs.existsSync(file)) {
+        logger.error(`File not found: ${file}`);
+        return;
+      }
+
+      const raw = JSON.parse(fs.readFileSync(file, 'utf-8'));
+      if (!raw.entries || !Array.isArray(raw.entries)) {
+        logger.error('Invalid memory file format — expected { entries: [...] }');
+        return;
+      }
+
+      const store = getMemoryStore();
+      let imported = 0;
+      let skipped = 0;
+
+      for (const entry of raw.entries) {
+        if (!entry.content || !entry.type) {
+          skipped++;
+          continue;
+        }
+
+        if (!options.merge) {
+          // Replace mode: delete existing, then add
+          store.delete(entry.id);
+        }
+
+        store.add({
+          content: entry.content,
+          type: entry.type,
+          tags: entry.tags || [],
+          source: entry.source || 'import',
+        });
+        imported++;
+      }
+
+      logger.success(`✅ Imported ${imported} memories from ${file}${skipped > 0 ? ` (${skipped} skipped)` : ''}`);
+      console.log('');
+    } catch (err) {
+      logger.error(`Failed to import memories: ${err instanceof Error ? err.message : String(err)}`);
     }
   }
 
