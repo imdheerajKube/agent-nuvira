@@ -44,6 +44,7 @@ import { getAgentStats } from './agent-stats.js';
 import { getRouterBandit, DEFAULT_MIN_SAMPLES, type BanditOutcome } from './router-bandit.js';
 import { getRouterPromotion, type ParallelPick, DEFAULT_MIN_PROMOTION_DECISIONS } from './router-promotion.js';
 import { getMlRouter, DEFAULT_ML_K, DEFAULT_ML_MIN_SAMPLES, DEFAULT_ML_STRENGTH } from './ml-router.js';
+import { buildModelCandidates, pickBestModelCandidate, buildFailoverChain, type ModelCandidate as ModelFirstCandidate } from './model-first-router.js';
 import { getModelRegistry } from './model-registry.js';
 import { estimateTokens } from './cost-tracker.js';
 import { preferredModelsFor, PROVIDER_CONTEXT_WINDOWS } from './model-selection.js';
@@ -244,6 +245,13 @@ export interface AutoRouterOptions {
    * `routing.quota` limits + explicit cooldowns.
    */
   quotaStatus?: Array<{ provider: string; cooldownRemaining: number }>;
+  /**
+   * MODEL-FIRST ROUTING: score individual models across ALL providers
+   * instead of scoring providers first. This ensures cost-per-million-token,
+   * quota availability, and capability fit are evaluated at the MODEL level.
+   * Default: true when registry has real data, false on cold start.
+   */
+  useModelFirst?: boolean;
   /**
    * Per-task complexity label from the plan (TaskStep.complexity). When set,
    * routing uses it INSTEAD of re-analyzing the description, so a planner that
@@ -1633,8 +1641,56 @@ export class AutoModelRouter {
     const selected = escalatedProvider
       ? scored.find((s) => s.provider === escalatedProvider)!
       : scored.find((s) => !s.inCooldown && !s.quotaParked) || scored[0];
-    const provider = selected.provider;
+    let provider = selected.provider;
     let model = this.resolveModel(provider, agentType, configManager, taskDescription);
+
+    // ── MODEL-FIRST ROUTING: override provider pick with model-level scoring ──
+    // Instead of picking a provider then a model, score ALL models across ALL
+    // providers and pick the BEST model. This ensures cost-per-million-token,
+    // quota availability, and capability fit are evaluated at the MODEL level,
+    // not the provider level. The provider is derived FROM the model pick.
+    //
+    // MODEL-FIRST ROUTING: score individual models across ALL providers.
+    // Only activates when:
+    //   1. Registry has real model data (verified models from probes)
+    //   2. No explicit model pin (user hasn't configured a specific model)
+    //   3. useModelFirst option is not explicitly false
+    // When a user has pinned a specific model, we respect that choice.
+    try {
+      const registry = getModelRegistry();
+      const hasRealData = registry.getUsableProviders().length > 0;
+      const userHasPinnedModel = !!(configManager && (() => {
+        try {
+          const { config } = configManager.getProviderConfig(provider);
+          return config?.model && config.model !== 'default';
+        } catch { return false; }
+      })());
+      // Don't override when bandit escalation has fired — the bandit has
+      // learned data and should be respected.
+      const modelFirstEnabled = options.useModelFirst ?? (hasRealData && !userHasPinnedModel && !escalatedProvider);
+      if (modelFirstEnabled && taskDescription) {
+        const modelCandidates = buildModelCandidates(
+          taskDescription,
+          complexity,
+          configManager,
+          allowed,
+        );
+        if (modelCandidates.length > 0) {
+          const bestModel = modelCandidates[0];
+          // Only override if the model-first pick is significantly better
+          // (at least 10% higher score) to avoid thrashing on marginal gains
+          if (bestModel.score > selected.score * 1.1 || selected.score < 0.3) {
+            provider = bestModel.provider;
+            model = bestModel.model;
+            if (options.verbose) {
+              logger.info(`  🎯 Model-first override: ${provider}/${model} (score ${bestModel.score.toFixed(3)} vs provider ${selected.score.toFixed(3)})`);
+            }
+          }
+        }
+      }
+    } catch {
+      // Best-effort — model-first must never break routing
+    }
 
     // Note the decision so outcome recording (recordOutcome) can reward the
     // provider that actually served the task.

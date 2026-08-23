@@ -27,6 +27,7 @@
  */
 
 import { getAutoRouter, type AutoRouteResult, type ScoredProvider } from './auto-router.js';
+import { analyzeComplexity, type ComplexityLevel } from './hybrid-router.js';
 import { buildAutoResolveOptions } from './resolve-options.js';
 import { getModelRegistry } from './model-registry.js';
 import { recordActionFailure, type FailureSessionState } from './failure-bookkeeping.js';
@@ -239,7 +240,15 @@ export function createResilientCallLLM(
   }
 
   // Build the ranked candidate list (all candidates, no cap)
-  const allCandidates = buildCandidateList(initialDecision, state.sessionFailed, persistedFailures);
+  // Pass task description + complexity for model-first failover
+  const allCandidates = buildCandidateList(
+    initialDecision,
+    state.sessionFailed,
+    persistedFailures,
+    options.task.description,
+    options.task.complexity ? analyzeComplexity(options.task.description) : undefined,
+    configManager,
+  );
 
   // The resilient callLLM
   const callLLM: LLMCallFn = async (prompt: string, inferenceOptions?: InferenceOptions): Promise<string> => {
@@ -480,6 +489,9 @@ function buildCandidateList(
   decision: AutoRouteResult | null,
   sessionFailed: Map<string, { expiresAt: number; kind: FailureKind }>,
   persistedFailures: PersistedFailures,
+  taskDescription?: string,
+  complexity?: ComplexityLevel,
+  configManager?: ConfigManager,
 ): FailoverCandidate[] {
   if (!decision) return [];
 
@@ -493,10 +505,38 @@ function buildCandidateList(
     score: decision.score,
   });
 
-  // All ranked candidates (NO cap)
-  // Note: ScoredProvider doesn't have 'model' — resolve it separately
+  // ── MODEL-FIRST FAILOVER: same model on different providers first ──────
+  // When a model fails on one provider, try the SAME model on a different
+  // provider before switching to a different model. This ensures the user
+  // gets the model they expect (e.g., Llama 3.3) even if one provider is down.
+  try {
+    const { buildModelCandidates, buildFailoverChain } = require('./model-first-router.js');
+    if (taskDescription && complexity) {
+      const modelCandidates = buildModelCandidates(taskDescription, complexity, configManager);
+      const failoverChain = buildFailoverChain(
+        { model: decision.model, provider: decision.provider } as any,
+        modelCandidates,
+      );
+      for (const fc of failoverChain) {
+        if (fc.provider === decision.provider && fc.model === decision.model) continue;
+        const key = `${fc.provider}:${fc.model}`;
+        if (candidates.some(c => `${c.provider}:${c.model}` === key)) continue;
+        candidates.push({
+          provider: fc.provider,
+          model: fc.model,
+          score: fc.score,
+        });
+      }
+    }
+  } catch {
+    // Best-effort — model-first must never break routing
+  }
+
+  // All ranked candidates (NO cap) — supplement model-first with provider-ranked
   for (const ranked of decision.ranked) {
     if (ranked.provider === decision.provider) continue;
+    const key = `${ranked.provider}:default`;
+    if (candidates.some(c => c.provider === ranked.provider)) continue;
     candidates.push({
       provider: ranked.provider,
       model: 'default', // Will be resolved at call time
@@ -505,8 +545,6 @@ function buildCandidateList(
   }
 
   // Add fallback chain candidates (from the config's fallback.providers)
-  // These are providers that might not be in the auto-router's ranking
-  // but are configured as fallbacks
   try {
     const fallbackChain = getProviderFallback({} as any).getFallbackChain(decision.provider);
     for (const fb of fallbackChain) {
