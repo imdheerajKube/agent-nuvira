@@ -64,6 +64,7 @@ import { refreshModelRegistry } from '../inference/model-probe.js';
 import { recordRoutingDecision } from '../learning/routing-history.js';
 import { getQuotaLedger } from '../learning/quota-ledger.js';
 import { withTraceCapture, beginTrace, endTrace } from '../learning/reasoning-trace.js';
+import { createResilientCallLLM } from '../learning/resilient-call.js';
 import { createReviewFromResult } from '../team/review.js';
 import { indexFiles, retrieve, recordRetrievalStats, retrievalOptionsFromConfig, estimateTokens as retrievalEstimateTokens } from '../learning/retrieval.js';
 // ─── DAG Integration (optional — dashboard may not be built) ─────────────────
@@ -1601,19 +1602,25 @@ export class Orchestrator {
             const effectiveAgentType = strategy.effectiveAgentType || task.agentType;
             const agentModel = options.model || options.agentModels?.[effectiveAgentType] || options.agentModels?.[task.agentType];
             let taskBoundProvider;
+            const useResilient = autoRouting && (options.resilientRouting !== false);
             const agentCallLLM = autoRouting
-                ? this.createAutoRoutedLLM({
-                    agentType: effectiveAgentType,
-                    description: task.description,
-                    complexity: task.complexity,
-                    taskId: task.id,
-                    // M2.5: real payload estimate (goal + task + workspace context
-                    // files) so long-context pipelines route toward big-window
-                    // providers, not the tiny task-description estimate alone.
-                    contextHintTokens: this.estimateTaskPayloadTokens(vault, task.description, contextFiles),
-                }, options, (provider) => {
-                    taskBoundProvider = provider;
-                })
+                ? (useResilient
+                    ? this.createResilientAutoRoutedLLM({
+                        agentType: effectiveAgentType,
+                        description: task.description,
+                        complexity: task.complexity,
+                        taskId: task.id,
+                        contextHintTokens: this.estimateTaskPayloadTokens(vault, task.description, contextFiles),
+                    }, options)
+                    : this.createAutoRoutedLLM({
+                        agentType: effectiveAgentType,
+                        description: task.description,
+                        complexity: task.complexity,
+                        taskId: task.id,
+                        contextHintTokens: this.estimateTaskPayloadTokens(vault, task.description, contextFiles),
+                    }, options, (provider) => {
+                        taskBoundProvider = provider;
+                    }))
                 : withTraceCapture(agentModel
                     ? this.createLLMProvider({ ...options, model: agentModel })
                     : defaultCallLLM, {
@@ -2567,6 +2574,33 @@ export class Orchestrator {
                 complexity: decision.complexity,
                 explanation: decision.explanation,
             },
+        });
+    }
+    /**
+     * Create a RESILIENT auto-routed callLLM that auto-routes on ANY failure.
+     *
+     * Unlike createAutoRoutedLLM (which binds to ONE provider and only failovers
+     * on rate-limit), this proxy:
+     * 1. Routes to the auto-router's best candidate initially
+     * 2. On ANY failure (not just rate-limit), re-routes to the next candidate
+     * 3. Tries ALL ranked candidates (no 3-candidate cap)
+     * 4. Tracks failures across the entire session AND persists to disk
+     * 5. Tools/sub-agents use it transparently
+     *
+     * Use this when you want maximum resilience — the caller never sees errors
+     * unless ALL providers are exhausted.
+     */
+    createResilientAutoRoutedLLM(task, options) {
+        return createResilientCallLLM(this.configManager, {
+            task: {
+                agentType: task.agentType,
+                description: task.description,
+                complexity: task.complexity,
+                taskId: task.taskId,
+                contextHintTokens: task.contextHintTokens,
+            },
+            verbose: options.verbose,
+            crossPipelineMemory: true,
         });
     }
     /**

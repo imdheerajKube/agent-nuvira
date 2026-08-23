@@ -81,6 +81,7 @@ import { refreshModelRegistry } from '../inference/model-probe.js';
 import { recordRoutingDecision } from '../learning/routing-history.js';
 import { getQuotaLedger } from '../learning/quota-ledger.js';
 import { withTraceCapture, beginTrace, endTrace } from '../learning/reasoning-trace.js';
+import { createResilientCallLLM, type ResilientCallOptions } from '../learning/resilient-call.js';
 import { createReviewFromResult } from '../team/review.js';
 import { indexFiles, retrieve, recordRetrievalStats, retrievalOptionsFromConfig, estimateTokens as retrievalEstimateTokens } from '../learning/retrieval.js';
 
@@ -253,6 +254,13 @@ export interface OrchestratorOptions {
    * id (e.g. a reworded goal) instead of silently starting a fresh pipeline.
    */
   resumeRequested?: boolean;
+  /**
+   * Enable resilient auto-routing: every LLM call auto-routes on ANY failure
+   * (not just rate-limit), tries ALL ranked candidates (no 3-candidate cap),
+   * and tracks failures across the session AND across pipelines (persisted to
+   * disk). Default: true when auto-routing is active.
+   */
+  resilientRouting?: boolean;
 }
 
 /** The final result of an orchestration session */
@@ -1947,23 +1955,32 @@ export class Orchestrator {
       const effectiveAgentType = strategy.effectiveAgentType || task.agentType;
       const agentModel = options.model || options.agentModels?.[effectiveAgentType] || options.agentModels?.[task.agentType];
       let taskBoundProvider: string | undefined;
+      const useResilient = autoRouting && (options.resilientRouting !== false);
       const agentCallLLM = autoRouting
-        ? this.createAutoRoutedLLM(
-            {
-              agentType: effectiveAgentType,
-              description: task.description,
-              complexity: task.complexity,
-              taskId: task.id,
-              // M2.5: real payload estimate (goal + task + workspace context
-              // files) so long-context pipelines route toward big-window
-              // providers, not the tiny task-description estimate alone.
-              contextHintTokens: this.estimateTaskPayloadTokens(vault, task.description, contextFiles),
-            },
-            options,
-            (provider) => {
-              taskBoundProvider = provider;
-            },
-          )
+        ? (useResilient
+            ? this.createResilientAutoRoutedLLM(
+                {
+                  agentType: effectiveAgentType,
+                  description: task.description,
+                  complexity: task.complexity,
+                  taskId: task.id,
+                  contextHintTokens: this.estimateTaskPayloadTokens(vault, task.description, contextFiles),
+                },
+                options,
+              )
+            : this.createAutoRoutedLLM(
+                {
+                  agentType: effectiveAgentType,
+                  description: task.description,
+                  complexity: task.complexity,
+                  taskId: task.id,
+                  contextHintTokens: this.estimateTaskPayloadTokens(vault, task.description, contextFiles),
+                },
+                options,
+                (provider) => {
+                  taskBoundProvider = provider;
+                },
+              ))
         : withTraceCapture(
             agentModel
               ? this.createLLMProvider({ ...options, model: agentModel })
@@ -3015,6 +3032,37 @@ export class Orchestrator {
         },
       },
     );
+  }
+
+  /**
+   * Create a RESILIENT auto-routed callLLM that auto-routes on ANY failure.
+   *
+   * Unlike createAutoRoutedLLM (which binds to ONE provider and only failovers
+   * on rate-limit), this proxy:
+   * 1. Routes to the auto-router's best candidate initially
+   * 2. On ANY failure (not just rate-limit), re-routes to the next candidate
+   * 3. Tries ALL ranked candidates (no 3-candidate cap)
+   * 4. Tracks failures across the entire session AND persists to disk
+   * 5. Tools/sub-agents use it transparently
+   *
+   * Use this when you want maximum resilience — the caller never sees errors
+   * unless ALL providers are exhausted.
+   */
+  private createResilientAutoRoutedLLM(
+    task: { agentType: string; description: string; complexity?: string; taskId?: string; contextHintTokens?: number },
+    options: OrchestratorOptions,
+  ): LLMCallFn {
+    return createResilientCallLLM(this.configManager, {
+      task: {
+        agentType: task.agentType,
+        description: task.description,
+        complexity: task.complexity,
+        taskId: task.taskId,
+        contextHintTokens: task.contextHintTokens,
+      },
+      verbose: options.verbose,
+      crossPipelineMemory: true,
+    });
   }
 
   /**
