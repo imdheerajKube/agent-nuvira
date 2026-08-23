@@ -147,6 +147,13 @@ export interface OrchestratorOptions {
      * id (e.g. a reworded goal) instead of silently starting a fresh pipeline.
      */
     resumeRequested?: boolean;
+    /**
+     * Enable resilient auto-routing: every LLM call auto-routes on ANY failure
+     * (not just rate-limit), tries ALL ranked candidates (no 3-candidate cap),
+     * and tracks failures across the session AND across pipelines (persisted to
+     * disk). Default: true when auto-routing is active.
+     */
+    resilientRouting?: boolean;
 }
 /** The final result of an orchestration session */
 export interface OrchestrationResult {
@@ -408,6 +415,21 @@ export declare class Orchestrator {
     /** Next rung on the complexity ladder (critical is the top). */
     private escalateComplexity;
     private createAutoRoutedLLMFromDecision;
+    /**
+     * Create a RESILIENT auto-routed callLLM that auto-routes on ANY failure.
+     *
+     * Unlike createAutoRoutedLLM (which binds to ONE provider and only failovers
+     * on rate-limit), this proxy:
+     * 1. Routes to the auto-router's best candidate initially
+     * 2. On ANY failure (not just rate-limit), re-routes to the next candidate
+     * 3. Tries ALL ranked candidates (no 3-candidate cap)
+     * 4. Tracks failures across the entire session AND persists to disk
+     * 5. Tools/sub-agents use it transparently
+     *
+     * Use this when you want maximum resilience — the caller never sees errors
+     * unless ALL providers are exhausted.
+     */
+    private createResilientAutoRoutedLLM;
     /**
      * One-shot background model-registry refresh for a COLD registry.
      *

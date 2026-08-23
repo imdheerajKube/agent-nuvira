@@ -935,7 +935,10 @@ export class ChatCommand extends BaseCommand {
                     // success log per landed candidate.
                     logger.warn(`   ⚠️ ${session.provider.name} failed — trying the next auto candidate...`);
                     const failed = new Set([session.type]);
-                    for (let i = 0; i < 3; i++) {
+                    // Try ALL ranked candidates (no 3-candidate cap) — bounded by
+                    // the number of known providers to prevent infinite loops.
+                    const maxAttempts = 10;
+                    for (let i = 0; i < maxAttempts; i++) {
                         let next = null;
                         try {
                             next = await this.routeMessageAuto(message, [...failed]);
