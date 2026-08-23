@@ -41,6 +41,10 @@ remaining open rows at the end are the honest current gaps.
 | 21 | deliver messages to channels | `gateway_send` + `run_cli` | ✅ present before |
 | 22 | browser automation | `browser` (optional playwright) | ✅ present before |
 | 23 | image / voice / vision | `generate_image`, `speak`, `transcribe`, `describe_image` | ✅ present before |
+| 24 | Model-first routing (score models across providers) | `model-first-router.ts` — 6-dimension scoring, 22 providers, 300+ models | ✅ CLOSED — v1.80.0 |
+| 25 | Tiered failover (same-model → same-tier → escalate → de-escalate → local) | `model-first-router.ts` — `buildTieredFailoverChain()` with quota pre-check | ✅ CLOSED — v1.80.0 |
+| 26 | 1-token warmup (keep models hot) | `model-warmup.ts` — background daemon, priority scoring, 60s interval | ✅ CLOSED — v1.80.0 |
+| 27 | Tool-level modality routing (image/audio/video with failover) | `tool-router.ts` — intelligent backend selection with failover | ✅ CLOSED — v1.80.0 |
 
 ---
 
