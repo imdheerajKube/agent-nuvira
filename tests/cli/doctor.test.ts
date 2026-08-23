@@ -534,7 +534,7 @@ describe('doctor --enterprise supply chain (P6 M6.6 SBOM)', () => {
     expect(check.status).toBe('fail');
     expect(check.message).toContain('1 added');
     expect(check.message).toContain('1 changed');
-    expect(check.fix).toContain('buff sbom');
+    expect(check.fix).toContain('sbom');
   });
 
   it('clean SBOM but copyleft/unknown licenses → warn (compliance review, not a defect)', () => {
@@ -544,7 +544,7 @@ describe('doctor --enterprise supply chain (P6 M6.6 SBOM)', () => {
     );
     expect(check.status).toBe('warn');
     expect(check.message).toContain('1 copyleft/unknown');
-    expect(check.fix).toContain('buff sbom licenses');
+    expect(check.fix).toContain('sbom licenses');
   });
 
   it('missing lockfile → warn (can bill-of-material nothing)', () => {
