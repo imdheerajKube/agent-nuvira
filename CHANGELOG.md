@@ -2,6 +2,20 @@
 
 All notable changes to **Agent-Nuvira** are documented in this file.
 
+## v1.80.0 — feat: Model-first routing, tiered failover, 1-token warmup, tool-level modality routing
+
+- **Added: Model-first routing** — auto-router now scores INDIVIDUAL MODELS across ALL 22 providers (not provider-first). Each model scored on 6 dimensions: cost per million tokens, capability fit, health, quota availability, provider speed, verification status. Picks the BEST MODEL for the task, then finds which provider serves it cheapest.
+- **Added: Per-model pricing** — 20+ model families with accurate per-million-token pricing (GPT-4o, Claude Sonnet, Gemini Flash, Llama 3.3, etc.). Replaces provider-level estimates with model-level accuracy.
+- **Added: Tiered failover chain** — capability-based with quota pre-check: same model → same tier → escalate → de-escalate → local → neural response. Quota pre-check skips parked models BEFORE API call (no wasted latency).
+- **Added: 1-token warmup daemon** — background service keeps frequently-used models warm. Priority scoring: recency (35%) + frequency (25%) + verification (20%) + latency (20%). Runs every 60s, throttled to 5-minute cooldown per model.
+- **Added: Tool-level modality routing** — intelligent routing for image/audio/video with failover across backends. Image: ComfyUI (free) → Pollinations (free) → DALL-E (paid) → Stability (paid). TTS: NeuTTS (free) → OpenAI TTS (paid) → ElevenLabs (paid). Video: FAL (paid) → Runway (paid) → BFL (paid).
+- **Added: Non-chat model filtering** — image, audio, video, research models filtered from LLM routing candidates. Only chat-capable models considered for text tasks.
+- **Improved: All 22 catalog providers participate in auto-routing** — was limited to 6 built-in providers. Now includes OpenAI, Anthropic, Mistral, Cohere, Together, DeepInfra, Fireworks, Perplexity, Azure, LM Studio, Anyscale, vLLM, DeepSeek, xAI, Replicate, Bedrock.
+- **Improved: resolveModel() never returns 'default'** — every provider resolves to a real curated model name (e.g., Groq → llama-3.3-70b-versatile, OpenAI → gpt-4o-mini).
+- **Fixed: Model selection for complex tasks** — small models now capped at 0.20 capability fit for complex/critical tasks. Large models get 1.0. Previously all models scored equally.
+- **Fixed: Dashboard quota reset time** — ModelsPanel now shows 'Resets in 2h 15m' for parked models.
+- **Test suite: 5,000+ tests across 220+ files — 100% passing**
+
 ## v1.78.0 — feat: contact-centric gateway messaging, Bedrock onboarding, Telegram auto-registration
 
 - **Added: Contact-centric outbound messaging** — the contacts store now uses friendly names (Anuj, Divya) instead of cryptic IDs. Outbound resolution supports name, phone number (flexible format: +91..., 0..., digits-only), or platform ID. `gateway_send("Anuj", "...")` resolves via contacts store.

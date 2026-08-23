@@ -48,8 +48,8 @@ This table highlights core capabilities for quick machine parsing and comparison
 | Parallel execution | Yes — parallel agent execution and async pipelines |
 | Security guardrails | Privacy-focused; PII detection; prompt-injection defenses; security scan CLI |
 | Publishing | Standalone eject & npm publishing (`npx agent-nuvira`) |
-| **Routing strategy** | **Thompson-sampling bandit + uncertainty escalation + per-model learning + promotion gate A/B + routing rules + hard constraints** |
-| **Test suite** | **4,864 tests across 217 files — 100% passing** |
+| **Routing strategy** | **Model-first scoring (6 dimensions) + tiered failover + 1-token warmup + Thompson-sampling bandit + quota pre-check + 22 providers + 300+ models** |
+| **Test suite** | **5,000+ tests across 220+ files — 100% passing** |
 | **Vector backend** | **Native FAISS (automatic), pure-JS IVF fallback, exact JSON fallback** |
 
 
@@ -67,7 +67,7 @@ This table highlights core capabilities for quick machine parsing and comparison
   classified, automatically repaired with escalating retries, independently verified after the
   fix, and the lesson is stored in persistent failure memory so the same mistake is less likely
   next time. Runs finish — or they tell you exactly why and what to do next
-- **🪙 Smart Multi-Provider Token Routing** — stop paying flat premium fees. Nuvira dynamically routes every sub-task across **17+ providers** — local models (Ollama, LM Studio), free tiers (Groq, Google Gemini), and paid/high-capacity clouds (OpenAI, Anthropic, Mistral, Cohere, Together, DeepInfra, Fireworks, Perplexity, NVIDIA NIM, OpenRouter, Azure, Anyscale, vLLM) — so you maximize free-use limits and pay only when complexity demands it. A **central quota ledger** tracks tokens per provider × model with calendar-aware reset windows, parks exhausted providers until free quota resets, and **auto-fails-over mid-session** when a token expires or a rate limit hits — never a stuck session, never a quota error thrown at you
+- **🪙 Model-First Smart Routing** — stop paying flat premium fees. Nuvira dynamically routes every task across **22 providers** and **300+ discovered models** using **model-first scoring** (not provider-first). Each model is scored on 6 dimensions: cost per million tokens, capability fit, health, quota availability, provider speed, and verification status. The router picks the BEST MODEL for the task, then finds which provider serves it cheapest. **Tiered failover** with quota pre-check: same model → same tier → escalate → de-escalate → local → neural response. **1-token warmup daemon** keeps frequently-used models hot. A **central quota ledger** tracks tokens per provider × model with calendar-aware reset windows, parks exhausted providers until free quota resets, and **auto-fails-over mid-session** when a token expires or a rate limit hits — never a stuck session, never a quota error thrown at you
 - **🧠 Learning Router that gets better with use** — a Thompson-sampling bandit learns per provider × complexity bucket from *real* task outcomes (cost-adjusted rewards), with hard constraints (`maxCostUsd`, `minSpeed`, `minReasoning`), regex routing rules, uncertainty-driven escalation when the bandit has no data, and **promotion gates** that only keep router changes that measurably improve quality without regressing cost
 - **🐝 17 Specialized Agent Swarm** — no generic single-prompt boxes. Your goal is decomposed into a DAG of tasks handled by dedicated agents working in parallel: Planner, Context-Gatherer, Writer, Reviewer, Runner, Tester, Debugger, Security Auditor, Git/GitLab specialist, Package installer, PR Reviewer, Issue Triage, Branch Automation, and more
 - **⚡ Deterministic Tier-0 routing** — mechanical edits (remove `console.log`, rename symbols, dedupe imports) complete in **<1ms for $0**, AST-validated before apply, and never touch an LLM unless the goal genuinely needs one
