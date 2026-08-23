@@ -455,7 +455,12 @@ export const ESCALATION_WIN_RATE_FLOOR = 0.55;
  */
 export const CREATIVE_MIN_REASONING = 0.4;
 
-const DEFAULT_PROFILES: Record<string, ProviderCapabilities> = {
+// ── DEFAULT_PROFILES: built-in overrides + catalog-sourced defaults ─────────
+// The 6 built-in profiles have fine-tuned values. ALL other catalog providers
+// get their profiles DYNAMICALLY from the catalog's capability metadata, so
+// every provider the user has a key for participates in routing with real
+// scores — not a neutral guess.
+const BUILTIN_PROFILES: Record<string, ProviderCapabilities> = {
   local: { reasoning: 0.30, speed: 0.55, cost: 1.00, privacy: 1.00, reliability: 0.60 },
   groq: { reasoning: 0.55, speed: 1.00, cost: 0.85, privacy: 0.15, reliability: 0.85 },
   nim: { reasoning: 0.72, speed: 0.70, cost: 0.55, privacy: 0.15, reliability: 0.82 },
@@ -469,6 +474,28 @@ const DEFAULT_PROFILES: Record<string, ProviderCapabilities> = {
   // measured usage / runtime stats over time.
   nuvira: { reasoning: 0.50, speed: 0.50, cost: 0.50, privacy: 0.50, reliability: 0.70 },
 };
+
+// Generate DEFAULT_PROFILES from catalog: built-in overrides win, extended
+// providers get catalog-sourced capability scores. This ensures ALL 22+
+// catalog providers participate in auto-routing with real metadata.
+const DEFAULT_PROFILES: Record<string, ProviderCapabilities> = { ...BUILTIN_PROFILES };
+for (const id of CATALOG_PROVIDER_IDS) {
+  if (DEFAULT_PROFILES[id]) continue; // Built-in already has a tuned profile
+  try {
+    const catalog = getCatalogProvider(id);
+    if (catalog) {
+      DEFAULT_PROFILES[id] = {
+        reasoning: catalog.capabilities.reasoning,
+        speed: catalog.capabilities.speed,
+        cost: catalog.capabilities.cost,
+        privacy: catalog.capabilities.privacy,
+        reliability: catalog.capabilities.reliability,
+      };
+    }
+  } catch {
+    // Best-effort — catalog read must never break routing
+  }
+}
 
 // ─── Capability-aware scoring (Nuvira-Router P2 M2.1) ───────────────────────
 //
@@ -565,8 +592,13 @@ export function applyCapabilityFit(score: number, fit: number): number {
   return Math.min(1, score * (0.9 + 0.2 * fit));
 }
 
-/** Built-in provider ids considered by default. */
-export const DEFAULT_AUTO_PROVIDERS = Object.keys(DEFAULT_PROFILES);
+/**
+ * All provider ids considered by default: ALL catalog providers participate
+ * in auto-routing. The 6 built-ins have tuned profiles; the other 16+
+ * get catalog-sourced profiles. Users who add API keys for openai, anthropic,
+ * mistral, etc. automatically get those providers in the routing candidate pool.
+ */
+export const DEFAULT_AUTO_PROVIDERS = [...CATALOG_PROVIDER_IDS];
 
 // ─── Real Provider Pricing ──────────────────────────────────────────────────
 //
