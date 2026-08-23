@@ -9,6 +9,10 @@ export interface TestedModel {
   statusReason: string;
   rateLimitRemaining?: number;
   rateLimitTotal?: number;
+  /** True when the model is quota-parked (excluded until the window resets). */
+  parked?: boolean;
+  /** Ms until the current quota window resets (0 = no window tracked). */
+  resetsInMs?: number;
 }
 
 export interface ProviderHealth {

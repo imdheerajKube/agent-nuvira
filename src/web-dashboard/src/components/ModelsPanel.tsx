@@ -1446,6 +1446,17 @@ function ModelCell({ model, provider }: { model: TestedModel; provider: string }
             {model.statusReason.length > 45 ? model.statusReason.slice(0, 42) + '…' : model.statusReason}
           </div>
         )}
+
+        {/* Quota reset time when parked */}
+        {model.parked && model.resetsInMs !== undefined && model.resetsInMs > 0 && (
+          <div style={{
+            fontSize: 10, color: '#d29922', lineHeight: 1.3, marginTop: 4,
+            padding: '3px 6px', borderRadius: 4,
+            background: '#2d2200', border: '1px solid #d2992244',
+          }}>
+            ⏳ Resets in {fmtDuration(model.resetsInMs)}
+          </div>
+        )}
       </div>
     </td>
   );
