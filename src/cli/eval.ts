@@ -45,6 +45,8 @@ import {
 } from '../learning/eval-framework.js';
 import type { EvalRun, EvalTask } from '../learning/eval-framework.js';
 import type { InferenceProvider } from '../inference/interface.js';
+import { resolveDefaultModel } from '../inference/default-model-resolver.js';
+import { ProviderFactory } from '../inference/factory.js';
 
 export class EvalCommand extends BaseCommand {
   create(): Command {
@@ -307,7 +309,11 @@ export class EvalCommand extends BaseCommand {
     const provider = resolved.provider;
     const providerName = resolved.type;
     const resolvedConfig = this.configManager.getProviderConfig(providerName as any).config as { apiKey?: string; model?: string };
-    const model = options.model || resolvedConfig.model || 'default';
+    let model = options.model || resolvedConfig.model || 'default';
+    // Resolve 'default' to a real model via the provider's live catalog
+    if (!model || model === 'default') {
+      try { const prov = ProviderFactory.createProvider(providerName as any, resolvedConfig); model = await resolveDefaultModel(prov, providerName, model); } catch { /* best-effort */ }
+    }
 
     // ISSUE-004 guard: refuse to evaluate a provider whose configured key is a
     // placeholder/sentinel (e.g. the literal "openrouter-env-key"). Running

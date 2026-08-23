@@ -21,6 +21,7 @@ import { PipelineBoard } from './pipeline-board.js';
 import { getEventBus, EventNames } from '../observability/event-bus.js';
 import { resolveProvider } from './router.js';
 import { resolveWorkingModel } from '../inference/model-validator.js';
+import { resolveDefaultModel } from '../inference/default-model-resolver.js';
 import { getAutoRouter } from '../learning/auto-router.js';
 import { buildAutoResolveOptions } from '../learning/resolve-options.js';
 import { recordRoutingDecision } from '../learning/routing-history.js';
@@ -112,7 +113,11 @@ export class BenchmarkCommand extends BaseCommand {
     const providerName = resolved.type;
 
     // Resolve model
-    const model = options.model || this.configManager.getProviderConfig(providerName as any).config.model || 'default';
+    let model = options.model || this.configManager.getProviderConfig(providerName as any).config.model || 'default';
+    // Resolve 'default' to a real model via the provider's live catalog
+    if (!model || model === 'default') {
+      try { model = await resolveDefaultModel(provider, providerName, model); } catch { /* best-effort */ }
+    }
 
     const available = await provider.isAvailable();
     if (!available) {
