@@ -128,32 +128,93 @@ function scoreModelOnProvider(
   requirements: TaskRequirements,
   providerSpeedBonus: number,
 ): ModelCandidate['dimensions'] {
-  // 1. Cost per million tokens
-  const costPerMToken = catalog
+  // 1. Cost per million tokens — use per-model pricing when available
+  //    Fallback to catalog provider-level pricing
+  const modelLower = model.toLowerCase();
+  let costPerMToken = catalog
     ? ((catalog.pricing.inputPer1K + catalog.pricing.outputPer1K) / 2) * 1000
-    : 0.001; // Default cheap
+    : 0.001;
 
-  // Cost score: $0 = 1.0, $0.01 = 0.5, $0.02 = 0.0
+  // Override with known per-model pricing (more accurate than provider averages)
+  if (modelLower.includes('gpt-4o-mini') || modelLower.includes('gpt-4o-nano')) costPerMToken = 0.0003;
+  else if (modelLower.includes('gpt-4o') && !modelLower.includes('mini')) costPerMToken = 0.005;
+  else if (modelLower.includes('claude-3-5-haiku') || modelLower.includes('claude-3-haiku')) costPerMToken = 0.0004;
+  else if (modelLower.includes('claude-3-5-sonnet') || modelLower.includes('claude-sonnet')) costPerMToken = 0.003;
+  else if (modelLower.includes('claude-opus')) costPerMToken = 0.015;
+  else if (modelLower.includes('gemini-flash') || modelLower.includes('gemini-2.0-flash')) costPerMToken = 0.0001;
+  else if (modelLower.includes('gemini-pro') && !modelLower.includes('lite')) costPerMToken = 0.00125;
+  else if (modelLower.includes('mistral-small')) costPerMToken = 0.0002;
+  else if (modelLower.includes('mistral-large') || modelLower.includes('mistral-medium')) costPerMToken = 0.002;
+  else if (modelLower.includes('llama-3.3-70b') || modelLower.includes('llama3.3-70b')) costPerMToken = 0.0007;
+  else if (modelLower.includes('llama-3.1-8b') || modelLower.includes('llama3.1-8b') || modelLower.includes('llama-3-8b')) costPerMToken = 0.0001;
+  else if (modelLower.includes('deepseek-coder')) costPerMToken = 0.0002;
+  else if (modelLower.includes('command-r-plus')) costPerMToken = 0.003;
+  else if (modelLower.includes('command-r') && !modelLower.includes('plus')) costPerMToken = 0.0005;
+  else if (modelLower.includes('o1-') || modelLower.includes('o3-') || modelLower.includes('o4-')) costPerMToken = 0.01;
+  else if (modelLower.includes('davinci') || modelLower.includes('codex')) costPerMToken = 0.01;
+  // Local models are always free
+  else if (provider === 'local' || provider === 'lmstudio' || provider === 'vllm') costPerMToken = 0;
+
+  // Cost score: $0 = 1.0, $0.01 = 0.5, $0.02+ = 0.0
   const costScore = Math.max(0, Math.min(1, 1 - (costPerMToken / 0.02)));
 
-  // 2. Capability fit
+  // Filter out non-chat models (safety, embedding, guard, image, audio, video, research)
+  const isNonChat = modelLower.includes('guard') || modelLower.includes('safeguard')
+    || modelLower.includes('embed') || modelLower.includes('safety')
+    || modelLower.includes('moderation') || modelLower.includes('classifier')
+    || modelLower.includes('whisper') || modelLower.includes('tts') || modelLower.includes('speech')
+    || modelLower.includes('-image') || modelLower.includes('banana') || modelLower.includes('lyria')
+    || modelLower.includes('imagen') || modelLower.includes('veo') || modelLower.includes('video')
+    || modelLower.includes('prompt-guard') || modelLower.includes('safety-rating')
+    || modelLower.includes('deep-research') || modelLower.includes('text-to-speech')
+    || modelLower.includes('grounding') || modelLower.includes('audio') || modelLower.includes('caption');
+  if (isNonChat) return { costPerMToken: 0, costScore: 0, capabilityFit: 0, health: 0, quotaAvailability: 0, providerSpeed: 0, verification: 0 };
+
+  // 2. Capability fit — score by model SIZE relative to task complexity
   let capabilityFit = 0.5;
-  const modelLower = model.toLowerCase();
+  // Detect model size from name (b = billion parameters)
+  const sizeMatch = modelLower.match(/(\d+\.?\d*)b/);
+  const sizeB = sizeMatch ? parseFloat(sizeMatch[1]) : 0;
+
+  // Per-model pricing that depends on size detection
+  if (modelLower.includes('qwen') && sizeB >= 70) costPerMToken = 0.0009;
+  else if (modelLower.includes('qwen') && sizeB > 0) costPerMToken = 0.0001;
+
+  // Known large models (70B+ params or known high-capability closed models)
+  const isLargeModel = sizeB >= 70
+    || modelLower.includes('gpt-4o') && !modelLower.includes('mini')
+    || modelLower.includes('claude-3') && !modelLower.includes('haiku')
+    || modelLower.includes('sonnet') || modelLower.includes('opus')
+    || modelLower.includes('o1') || modelLower.includes('o3') || modelLower.includes('o4')
+    || (modelLower.includes('gemini') && (modelLower.includes('pro') && !modelLower.includes('nano')));
+
+  // Known medium models (8B-70B or known mid-tier closed models)
+  const isMediumModel = (sizeB >= 8 && sizeB < 70)
+    || modelLower.includes('gpt-4o-mini') || modelLower.includes('gpt-4o-nano')
+    || modelLower.includes('haiku') || modelLower.includes('flash')
+    || (modelLower.includes('gemini') && (modelLower.includes('flash') || modelLower.includes('lite')))
+    || modelLower.includes('mistral-small') || modelLower.includes('mistral-medium')
+    || modelLower.includes('command-r') && !modelLower.includes('plus');
+
+  // Known small models (<8B or known lightweight)
+  const isSmallModel = (sizeB > 0 && sizeB < 8)
+    || modelLower.includes('nano') || modelLower.includes('0.5b') || modelLower.includes('micro')
+    || modelLower.includes('turbo') && !modelLower.includes('gpt')
+    || modelLower.includes('lite') || modelLower.includes('tiny') || modelLower.includes('mini') && sizeB > 0;
+
   if (requirements.reasoningNeed === 'high') {
-    if (modelLower.includes('70b') || modelLower.includes('gpt-4') || modelLower.includes('claude-3')
-      || modelLower.includes('sonnet') || modelLower.includes('opus') || modelLower.includes('pro')) {
-      capabilityFit = 1.0;
-    } else if (modelLower.includes('8b') || modelLower.includes('small') || modelLower.includes('mini')
-      || modelLower.includes('haiku') || modelLower.includes('flash')) {
-      capabilityFit = 0.3;
-    }
-  } else if (requirements.reasoningNeed === 'low') {
-    if (modelLower.includes('8b') || modelLower.includes('small') || modelLower.includes('mini')
-      || modelLower.includes('haiku') || modelLower.includes('flash') || modelLower.includes('nano')) {
-      capabilityFit = 1.0;
-    } else if (modelLower.includes('70b') || modelLower.includes('gpt-4') || modelLower.includes('opus')) {
-      capabilityFit = 0.4;
-    }
+    if (isLargeModel) capabilityFit = 1.0;
+    else if (isMediumModel) capabilityFit = 0.6;
+    else if (isSmallModel) capabilityFit = 0.2;
+  } else if (requirements.reasoningNeed === 'medium') {
+    if (isLargeModel) capabilityFit = 0.8;
+    else if (isMediumModel) capabilityFit = 1.0;
+    else if (isSmallModel) capabilityFit = 0.4;
+  } else {
+    // low reasoning — prefer small/fast models
+    if (isSmallModel) capabilityFit = 1.0;
+    else if (isMediumModel) capabilityFit = 0.8;
+    else if (isLargeModel) capabilityFit = 0.5; // Overkill
   }
 
   // 3. Health (latency + error rate)
@@ -236,9 +297,13 @@ export function buildModelCandidates(
     }
 
     for (const modelEntry of allModels) {
-      // Skip speech/audio models
+      // Skip speech/audio/video/image/research models early
       const modelLower = modelEntry.model.toLowerCase();
-      if (modelLower.includes('whisper') || modelLower.includes('tts') || modelLower.includes('speech')) {
+      if (modelLower.includes('whisper') || modelLower.includes('tts') || modelLower.includes('speech')
+        || modelLower.includes('-image') || modelLower.includes('banana') || modelLower.includes('lyria')
+        || modelLower.includes('imagen') || modelLower.includes('veo') || modelLower.includes('video')
+        || modelLower.includes('deep-research') || modelLower.includes('grounding')
+        || modelLower.includes('audio') || modelLower.includes('caption')) {
         continue;
       }
 
@@ -251,10 +316,14 @@ export function buildModelCandidates(
         providerSpeed,
       );
 
-      // Weighted score
+      // Weighted score — weights shift by complexity:
+      // Critical/complex tasks: capabilityFit dominates (0.40), cost shrinks (0.10)
+      // Simple/trivial tasks: cost dominates (0.30), capabilityFit relaxes (0.15)
+      const isHighStakes = requirements.reasoningNeed === 'high';
+      const isLowStakes = requirements.reasoningNeed === 'low';
       const weights = {
-        cost: requirements.costPriority ? 0.25 : 0.15,
-        capabilityFit: 0.25,
+        cost: isHighStakes ? 0.10 : isLowStakes ? 0.30 : requirements.costPriority ? 0.25 : 0.15,
+        capabilityFit: isHighStakes ? 0.40 : isLowStakes ? 0.15 : 0.25,
         health: 0.20,
         quotaAvailability: 0.15,
         providerSpeed: requirements.speedPriority ? 0.10 : 0.05,
