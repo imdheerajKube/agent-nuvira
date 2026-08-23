@@ -3085,6 +3085,13 @@ export class Orchestrator {
         logger.info(
           `   🌱 Cold-start registry probe: ${result.providersProbed.length} provider(s), ${result.verified} verified, ${result.unavailable} unavailable`,
         );
+        // Start warmup daemon to keep frequently-used models warm
+        try {
+          const { startWarmupDaemon } = require('../learning/model-warmup.js');
+          startWarmupDaemon(this.configManager);
+        } catch {
+          // Best-effort — warmup must never break routing
+        }
       }).catch(() => {
         // Best-effort — a failed probe must never break the pipeline.
       });

@@ -337,6 +337,14 @@ export function createResilientCallLLM(
           // Best-effort.
         }
 
+        // Record usage for warmup daemon
+        try {
+          const { recordModelUsage } = require('./model-warmup.js');
+          recordModelUsage(candidate.provider, resolvedModel);
+        } catch {
+          // Best-effort — warmup must never break routing
+        }
+
         // Record routing decision for audit
         recordRoutingDecision({
           source: 'orchestrator',
