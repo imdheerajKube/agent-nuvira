@@ -8,6 +8,27 @@ import { getCostTracker } from '../learning/cost-tracker.js';
 
 const OPENROUTER_BASE_URL = 'https://openrouter.ai/api/v1';
 
+/**
+ * Common small models on OpenRouter that have low max_tokens.
+ * OpenRouter exposes hundreds of models; for safety, we only cap known
+ * small ones (≤2B params) and leave the default (4096) for larger models.
+ */
+const OPENROUTER_LOW_OUTPUT_MODELS: RegExp[] = [
+  /gemma-?2-?[12]b/i,
+  /gemma-?3-?1b/i,
+  /llama-?3[._-]?2-?[12]b/i,
+  /phi-?3-mini/i,
+  /qwen-?2-?0.5b/i,
+  /tinyllama/i,
+  /starcoderbase/i,
+];
+
+/** Cap max_tokens for known small models on OpenRouter. */
+function openRouterModelMaxTokens(model: string): number {
+  if (OPENROUTER_LOW_OUTPUT_MODELS.some((rx) => rx.test(model))) return 1024;
+  return 4096;
+}
+
 interface OpenRouterResponse {
   choices: Array<{
     message: { content: string };
@@ -34,7 +55,10 @@ export class OpenRouterAdapter implements InferenceProvider {
 
     const model = options?.model || this.config.model || 'mistralai/mistral-7b-instruct';
     const temperature = options?.temperature ?? this.config.temperature ?? 0.7;
-    const maxTokens = options?.maxTokens ?? this.config.maxTokens ?? 4096;
+    const maxTokens = Math.min(
+      options?.maxTokens ?? this.config.maxTokens ?? 4096,
+      openRouterModelMaxTokens(model),
+    );
 
     logger.debug(`OpenRouter: Generating with model=${model}, temperature=${temperature}, maxTokens=${maxTokens}`);
 
@@ -90,7 +114,7 @@ export class OpenRouterAdapter implements InferenceProvider {
       messages,
       tools,
       temperature: options?.temperature ?? this.config.temperature ?? 0.7,
-      maxTokens: options?.maxTokens ?? this.config.maxTokens ?? 4096,
+      maxTokens: Math.min(options?.maxTokens ?? this.config.maxTokens ?? 4096, openRouterModelMaxTokens(model)),
       timeoutMs: this.config.timeoutMs ?? 30_000,
       // P4 — external cancellation (the dashboard Cancel button).
       signal: options?.signal,
@@ -130,7 +154,7 @@ export class OpenRouterAdapter implements InferenceProvider {
         messages,
         tools,
         temperature: options?.temperature ?? this.config.temperature ?? 0.7,
-        maxTokens: options?.maxTokens ?? this.config.maxTokens ?? 4096,
+        maxTokens: Math.min(options?.maxTokens ?? this.config.maxTokens ?? 4096, openRouterModelMaxTokens(model)),
         timeoutMs: this.config.timeoutMs ?? 30_000,
         // P4 — external cancellation (the dashboard Cancel button).
         signal: options?.signal,
@@ -159,7 +183,10 @@ export class OpenRouterAdapter implements InferenceProvider {
 
     const model = options?.model || this.config.model || 'mistralai/mistral-7b-instruct';
     const temperature = options?.temperature ?? this.config.temperature ?? 0.7;
-    const maxTokens = options?.maxTokens ?? this.config.maxTokens ?? 4096;
+    const maxTokens = Math.min(
+      options?.maxTokens ?? this.config.maxTokens ?? 4096,
+      openRouterModelMaxTokens(model),
+    );
 
     logger.debug(`OpenRouter: Streaming with model=${model}, temperature=${temperature}, maxTokens=${maxTokens}`);
 

@@ -10,6 +10,59 @@ import { requireAdapterModel } from '../learning/model-selection.js';
 
 const GROQ_BASE_URL = 'https://api.groq.com/openai/v1';
 
+/**
+ * Per-model max output tokens (max_tokens).
+ * Groq enforces strict per-model limits — exceeding them returns 400.
+ * Fallback default (4096) applies only to models NOT listed here.
+ * Source: https://console.groq.com/docs/models
+ */
+const GROQ_MODEL_MAX_TOKENS: Record<string, number> = {
+  // Gemma 2 — small context, small output
+  'gemma2-9b-it': 512,
+  'gemma2-2b-it': 512,
+  // Gemma 3
+  'gemma3-1b-it': 512,
+  'gemma3-4b-it': 8192,
+  'gemma3-12b-it': 8192,
+  'gemma3-27b-it': 8192,
+  // Llama 3.3 — 70B is the workhorse, generous output
+  'llama-3.3-70b-versatile': 32768,
+  // Llama 3.1
+  'llama-3.1-8b-instant': 8192,
+  'llama-3.1-70b-versatile': 8192,
+  // Llama 3.2
+  'llama-3.2-1b-preview': 8192,
+  'llama-3.2-3b-preview': 8192,
+  'llama-3.2-11b-vision-preview': 8192,
+  'llama-3.2-90b-vision-preview': 8192,
+  // Llama 3
+  'llama3-8b-8192': 8192,
+  'llama3-70b-8192': 8192,
+  'llama3-8b-instruct': 8192,
+  'llama3-70b-instruct': 8192,
+  'llama3-8b-instruct-8192': 8192,
+  'llama3-70b-instruct-8192': 8192,
+  // Mixtral
+  'mixtral-8x7b-32768': 32768,
+  'mixtral-8x32b-32768': 32768,
+  // Qwen
+  'qwen-qwq-32b': 32768,
+  // DeepSeek
+  'deepseek-r1-distill-llama-70b': 32768,
+  // Gemma 4
+  'gemma4-1b-it': 8192,
+  'gemma4-12b-it': 8192,
+  'gemma4-27b-it': 8192,
+  // Command R
+  'command-r': 4096,
+  'command-r-plus': 4096,
+};
+
+/** Resolve max_tokens for a Groq model with safe fallback. */
+function groqModelMaxTokens(model: string): number {
+  return GROQ_MODEL_MAX_TOKENS[model] ?? 4096;
+}
+
 interface GroqResponse {
   choices: Array<{
     message: { content: string };
@@ -37,7 +90,10 @@ export class GroqAdapter implements InferenceProvider {
 
     const model = options?.model || requireAdapterModel('groq', this.config.model);
     const temperature = options?.temperature ?? this.config.temperature ?? 0.7;
-    const maxTokens = options?.maxTokens ?? this.config.maxTokens ?? 4096;
+    const maxTokens = Math.min(
+      options?.maxTokens ?? this.config.maxTokens ?? 4096,
+      groqModelMaxTokens(model),
+    );
 
     logger.debug(`Groq: Generating with model=${model}, temperature=${temperature}, maxTokens=${maxTokens}`);
 
@@ -97,8 +153,7 @@ export class GroqAdapter implements InferenceProvider {
       model,
       messages,
       tools,
-      temperature: options?.temperature ?? this.config.temperature ?? 0.7,
-      maxTokens: options?.maxTokens ?? this.config.maxTokens ?? 4096,
+      temperature: options?.temperature ?? this.config.temperature ?? 0.7,      maxTokens: Math.min(options?.maxTokens ?? this.config.maxTokens ?? 4096, groqModelMaxTokens(model)),
       timeoutMs: this.config.timeoutMs ?? 30_000,
       // P4 — external cancellation (the dashboard Cancel button).
       signal: options?.signal,
@@ -126,6 +181,7 @@ export class GroqAdapter implements InferenceProvider {
     const apiKey = options?.apiKey || this.config.apiKey;
     if (!apiKey) throw new Error('Groq API key is not configured. Set GROQ_API_KEY env var.');
     const model = options?.model || requireAdapterModel('groq', this.config.model);
+
     return chatCompletionsWithToolsStream(
       {
         baseUrl: GROQ_BASE_URL,
@@ -134,7 +190,7 @@ export class GroqAdapter implements InferenceProvider {
         messages,
         tools,
         temperature: options?.temperature ?? this.config.temperature ?? 0.7,
-        maxTokens: options?.maxTokens ?? this.config.maxTokens ?? 4096,
+        maxTokens: Math.min(options?.maxTokens ?? this.config.maxTokens ?? 4096, groqModelMaxTokens(model)),
         timeoutMs: this.config.timeoutMs ?? 30_000,
         // P4 — external cancellation (the dashboard Cancel button).
         signal: options?.signal,
@@ -164,7 +220,10 @@ export class GroqAdapter implements InferenceProvider {
 
     const model = options?.model || requireAdapterModel('groq', this.config.model);
     const temperature = options?.temperature ?? this.config.temperature ?? 0.7;
-    const maxTokens = options?.maxTokens ?? this.config.maxTokens ?? 4096;
+    const maxTokens = Math.min(
+      options?.maxTokens ?? this.config.maxTokens ?? 4096,
+      groqModelMaxTokens(model),
+    );
 
     logger.debug(`Groq: Streaming with model=${model}, temperature=${temperature}, maxTokens=${maxTokens}`);
 
