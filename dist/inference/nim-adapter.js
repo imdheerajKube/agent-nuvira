@@ -7,6 +7,25 @@ import { getCostTracker, recordCallWithUsage } from '../learning/cost-tracker.js
 import { requireAdapterModel } from '../learning/model-selection.js';
 const DEFAULT_NIM_BASE_URL = 'https://integrate.api.nvidia.com/v1';
 /**
+ * Per-model max output tokens for NIM (NVIDIA restricts smaller models).
+ * Fallback default (4096) applies to unlisted models.
+ */
+const NIM_MODEL_MAX_TOKENS = {
+    'meta/llama-3.1-8b-instruct': 4096,
+    'meta/llama-3.1-70b-instruct': 4096,
+    'meta/llama-3.3-70b-instruct': 4096,
+    'nvidia/llama-3.1-nemotron-70b-instruct': 4096,
+    'meta/llama-3.2-1b-instruct': 2048,
+    'meta/llama-3.2-3b-instruct': 2048,
+    'google/gemma-2-2b-it': 512,
+    'google/gemma-2-9b-it': 512,
+    'mistralai/mistral-7b-instruct-v0.3': 4096,
+    'mistralai/mixtral-8x7b-instruct-v0.1': 4096,
+};
+function nimModelMaxTokens(model) {
+    return NIM_MODEL_MAX_TOKENS[model] ?? 4096;
+}
+/**
  * NVIDIA NIM Adapter
  * Connects to NVIDIA NIM OpenAI-compatible API
  */
@@ -24,7 +43,7 @@ export class NIMAdapter {
         }
         const model = options?.model || requireAdapterModel('nim', this.config.model);
         const temperature = options?.temperature ?? this.config.temperature ?? 0.7;
-        const maxTokens = options?.maxTokens ?? this.config.maxTokens ?? 4096;
+        const maxTokens = Math.min(options?.maxTokens ?? this.config.maxTokens ?? 4096, nimModelMaxTokens(model));
         logger.debug(`NIM: Generating with model=${model}, temperature=${temperature}, maxTokens=${maxTokens}`);
         const baseUrl = this.config.baseUrl || DEFAULT_NIM_BASE_URL;
         const url = `${baseUrl}/chat/completions`;
@@ -72,7 +91,7 @@ export class NIMAdapter {
             messages,
             tools,
             temperature: options?.temperature ?? this.config.temperature ?? 0.7,
-            maxTokens: options?.maxTokens ?? this.config.maxTokens ?? 4096,
+            maxTokens: Math.min(options?.maxTokens ?? this.config.maxTokens ?? 4096, nimModelMaxTokens(model)),
             timeoutMs: this.config.timeoutMs ?? 30_000,
             // P4 — external cancellation (the dashboard Cancel button).
             signal: options?.signal,
@@ -103,7 +122,7 @@ export class NIMAdapter {
             messages,
             tools,
             temperature: options?.temperature ?? this.config.temperature ?? 0.7,
-            maxTokens: options?.maxTokens ?? this.config.maxTokens ?? 4096,
+            maxTokens: Math.min(options?.maxTokens ?? this.config.maxTokens ?? 4096, nimModelMaxTokens(model)),
             timeoutMs: this.config.timeoutMs ?? 30_000,
             // P4 — external cancellation (the dashboard Cancel button).
             signal: options?.signal,
@@ -126,7 +145,7 @@ export class NIMAdapter {
         }
         const model = options?.model || requireAdapterModel('nim', this.config.model);
         const temperature = options?.temperature ?? this.config.temperature ?? 0.7;
-        const maxTokens = options?.maxTokens ?? this.config.maxTokens ?? 4096;
+        const maxTokens = Math.min(options?.maxTokens ?? this.config.maxTokens ?? 4096, nimModelMaxTokens(model));
         logger.debug(`NIM: Streaming with model=${model}, temperature=${temperature}, maxTokens=${maxTokens}`);
         const baseUrl = this.config.baseUrl || DEFAULT_NIM_BASE_URL;
         // M2.2: capture the endpoint-reported usage from the final SSE chunk

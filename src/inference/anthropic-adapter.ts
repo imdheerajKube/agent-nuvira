@@ -26,6 +26,16 @@ import { attachHttpContext } from './http-error.js';
 const ANTHROPIC_BASE_URL = 'https://api.anthropic.com';
 const ANTHROPIC_VERSION = '2023-06-01';
 
+/**
+ * Per-model max_tokens for Anthropic. Claude 3 Haiku has a 8192 limit;
+ * Claude 3.5 Sonnet/Opus support higher. Fallback 4096.
+ */
+function anthropicModelMaxTokens(model: string): number {
+  if (/haiku/i.test(model)) return 8192;
+  if (/sonnet|opus/i.test(model)) return 8192;
+  return 4096;
+}
+
 interface AnthropicMessageResponse {
   content?: Array<{ type?: string; text?: string }>;
   usage?: { input_tokens?: number; output_tokens?: number };
@@ -85,7 +95,10 @@ export class AnthropicAdapter implements InferenceProvider {
 
   async generate(prompt: string, options?: InferenceOptions): Promise<string> {
     const model = options?.model || this.config.model || 'default';
-    const maxTokens = options?.maxTokens ?? this.config.maxTokens ?? 4096;
+    const maxTokens = Math.min(
+      options?.maxTokens ?? this.config.maxTokens ?? 4096,
+      anthropicModelMaxTokens(model),
+    );
     const temperature = options?.temperature ?? this.config.temperature ?? 0.7;
 
     logger.debug(`Anthropic: Generating with model=${model} via ${this.baseUrl}`);
@@ -140,7 +153,10 @@ export class AnthropicAdapter implements InferenceProvider {
     onToken: (token: string) => void,
   ): Promise<string> {
     const model = options?.model || this.config.model || 'default';
-    const maxTokens = options?.maxTokens ?? this.config.maxTokens ?? 4096;
+    const maxTokens = Math.min(
+      options?.maxTokens ?? this.config.maxTokens ?? 4096,
+      anthropicModelMaxTokens(model),
+    );
     const temperature = options?.temperature ?? this.config.temperature ?? 0.7;
 
     logger.debug(`Anthropic: Streaming with model=${model} via ${this.baseUrl}`);

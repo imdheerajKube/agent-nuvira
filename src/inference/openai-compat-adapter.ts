@@ -158,6 +158,27 @@ function modelsUrl(baseUrl: string, meta: OpenAICompatMeta): string {
   return meta.azureDeployments ? `${baseUrl}/openai/models${q}` : `${baseUrl}/models${q}`;
 }
 
+/**
+ * Universal small-model detector: catches models with low max_output_tokens
+ * across ALL OpenAI-compatible providers. Only models ≤2B params (known to
+ * have max_tokens ≤1024) are matched — larger models safely get 4096.
+ */
+const SMALL_MODEL_PATTERNS: RegExp[] = [
+  /gemma-?2-?[12]b/i,
+  /gemma-?3-?1b/i,
+  /llama-?3[._-]?2-?[12]b/i,
+  /phi-?3-mini/i,
+  /qwen-?2-?0.5b/i,
+  /tinyllama/i,
+];
+
+/** Cap max_tokens for known small models on generic OpenAI-compat providers. */
+function compatMaxTokens(model: string, configured?: number, providerDefault?: number): number {
+  const base = configured ?? providerDefault ?? 4096;
+  if (SMALL_MODEL_PATTERNS.some((rx) => rx.test(model))) return Math.min(base, 1024);
+  return base;
+}
+
 export class OpenAICompatAdapter implements InferenceProvider {
   readonly name: string;
   private config: ProviderConfig;
@@ -177,7 +198,7 @@ export class OpenAICompatAdapter implements InferenceProvider {
   async generate(prompt: string, options?: InferenceOptions): Promise<string> {
     const model = options?.model || this.config.model || 'default';
     const temperature = options?.temperature ?? this.config.temperature ?? 0.7;
-    const maxTokens = options?.maxTokens ?? this.config.maxTokens ?? 4096;
+    const maxTokens = compatMaxTokens(model, options?.maxTokens, this.config.maxTokens);
 
     logger.debug(`${this.meta.label}: Generating with model=${model} via ${this.baseUrl}`);
 
@@ -262,7 +283,7 @@ export class OpenAICompatAdapter implements InferenceProvider {
       messages,
       tools,
       temperature: options?.temperature ?? this.config.temperature ?? 0.7,
-      maxTokens: options?.maxTokens ?? this.config.maxTokens ?? 4096,
+      maxTokens: compatMaxTokens(model, options?.maxTokens, this.config.maxTokens),
       timeoutMs: this.config.timeoutMs ?? 30_000,
       // P4 — external cancellation (the dashboard Cancel button).
       signal: options?.signal,
@@ -303,7 +324,7 @@ export class OpenAICompatAdapter implements InferenceProvider {
         messages,
         tools,
         temperature: options?.temperature ?? this.config.temperature ?? 0.7,
-        maxTokens: options?.maxTokens ?? this.config.maxTokens ?? 4096,
+        maxTokens: compatMaxTokens(model, options?.maxTokens, this.config.maxTokens),
         timeoutMs: this.config.timeoutMs ?? 30_000,
         // P4 — external cancellation (the dashboard Cancel button).
         signal: options?.signal,
@@ -327,7 +348,7 @@ export class OpenAICompatAdapter implements InferenceProvider {
   ): Promise<string> {
     const model = options?.model || this.config.model || 'default';
     const temperature = options?.temperature ?? this.config.temperature ?? 0.7;
-    const maxTokens = options?.maxTokens ?? this.config.maxTokens ?? 4096;
+    const maxTokens = compatMaxTokens(model, options?.maxTokens, this.config.maxTokens);
 
     logger.debug(`${this.meta.label}: Streaming with model=${model} via ${this.baseUrl}`);
 
