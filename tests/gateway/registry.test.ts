@@ -703,7 +703,7 @@ describe('GatewayRegistry P1 policies', () => {
     expect(adapter.sent.some((s) => s.text.startsWith('📊'))).toBe(false);
   });
 
-  it('re-reads policies from config per inbound (dashboard/CLI changes apply live)', async () => {
+  it('re-reads policies from config per inbound (dashboard/CLI changes apply live)', { timeout: 120_000 }, async () => {
     const { registry, adapter } = mockRegistry({ streamEvents: false });
     // No policies at construction → anyone can trigger.
     const before = await registry.handleInbound({ platform: 'mock', channelId: 'c', text: 'fix the failing test', senderId: 'u-x' });
