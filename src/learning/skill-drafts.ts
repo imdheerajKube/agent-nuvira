@@ -21,7 +21,7 @@
  */
 
 import { readFileSync, writeFileSync, existsSync, mkdirSync, readdirSync, unlinkSync, statSync, rmdirSync } from 'node:fs';
-import { join, normalize, relative, dirname } from 'node:path';
+import { join, normalize, relative, dirname, sep } from 'node:path';
 import { homedir } from 'node:os';
 
 import { parseCatalogFrontmatter } from './hub-skill-catalog.js';
@@ -189,7 +189,7 @@ export function writeDraftFile(
     const dir = draftDir(root, name);
     mkdirSync(dir, { recursive: true });
     const target = join(dir, rel);
-    const dirNorm = normalize(dir) + '/'; // files may NOT escape the draft dir
+    const dirNorm = normalize(dir) + sep; // files may NOT escape the draft dir
     if (!normalize(target).startsWith(dirNorm)) {
       return { ok: false, name, reason: `Refused: reference file '${file}' escapes the draft dir.` };
     }

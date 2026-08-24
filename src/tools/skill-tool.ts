@@ -28,6 +28,7 @@
 import type { ToolContext } from './registry.js';
 import type { Skill, SkillParameter } from '../learning/skill-types.js';
 import { SkillCompiler } from '../learning/skill-compiler.js';
+import { getCliName } from '../cli/commands.js';
 
 /** The tool's args (zod-validated in the registry). */
 export interface SkillToolArgs {
@@ -290,7 +291,7 @@ async function runBundleLoad(bundleSlug: string): Promise<string> {
   if (bundleSlug === 'list') {
     const bundles = listBundles();
     if (bundles.length === 0) {
-      return 'No bundles yet. Create one with `buff skills bundle create <slug> --skills a,b,c` (or ask the agent to compose one).';
+      return `No bundles yet. Create one with \`${getCliName()} skills bundle create <slug> --skills a,b,c\` (or ask the agent to compose one).`;
     }
     const list = bundles
       .map((b) => `  • ${b.name} (${b.slug}) — ${b.description}\n      skills: ${b.skills.join(', ')}`)
@@ -303,7 +304,7 @@ async function runBundleLoad(bundleSlug: string): Promise<string> {
     const { listBundles: listAll } = await import('../learning/skill-bundles.js');
     const bundles = listAll();
     if (bundles.length === 0) {
-      return `Bundle '${bundleSlug}' not found and no bundles exist. Create one with \`buff skills bundle create <slug> --skills a,b,c\`.`;
+      return `Bundle '${bundleSlug}' not found and no bundles exist. Create one with \`${getCliName()} skills bundle create <slug> --skills a,b,c\`.`;
     }
     const list = bundles.map((b) => `  • ${b.name} (${b.slug})`).join('\n');
     return `Bundle '${bundleSlug}' not found. Available bundles:\n${list}`;
@@ -337,7 +338,7 @@ async function runBundleLoad(bundleSlug: string): Promise<string> {
   const header = `🧩 Bundle: ${bundle.name} (${bundle.slug}) — ${bundle.description}\n`;
   const missingNote =
     missing.length > 0
-      ? `\n⚠️ Skipped (not installed): ${missing.join(', ')} — install them with \`buff skills install <name>\` to include them.`
+      ? `\n⚠️ Skipped (not installed): ${missing.join(', ')} — install them with \`${getCliName()} skills install <name>\` to include them.`
       : '';
   return `${header}${parts.join('\n\n')}${missingNote}`;
 }
@@ -657,7 +658,7 @@ export async function runSkillTool(args: SkillToolArgs, ctx: ToolContext): Promi
     if (!resolved) {
       const available = await listAllSkills();
       if (available.length === 0) {
-        return 'No skills found. Install one with `buff skills install <name>` — or ask the agent to run tasks with memory to compile one.';
+        return `No skills found. Install one with \`${getCliName()} skills install <name>\` — or ask the agent to run tasks with memory to compile one.`;
       }
       const list = available
         .map((s) => `  • ${s.name} (${s.id}) — ${s.description}`)
@@ -686,7 +687,7 @@ export async function runSkillTool(args: SkillToolArgs, ctx: ToolContext): Promi
   // No name → list everything (both sources), so the model learns the catalog.
   const available = await listAllSkills();
   if (available.length === 0) {
-    return 'No skills available. Install one with `buff skills install <name>` (hub), or run tasks with memory to compile one.';
+    return `No skills available. Install one with \`${getCliName()} skills install <name>\` (hub), or run tasks with memory to compile one.`;
   }
   const list = available
     .map((s) => `  • ${s.name} (${s.id}) — ${s.description}`)

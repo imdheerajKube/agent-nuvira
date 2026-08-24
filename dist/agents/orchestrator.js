@@ -1272,12 +1272,24 @@ export class Orchestrator {
                 throw new Error(`Injection guardrail blocked LLM call:\n${report}`);
             }
             // Guard: 'auto' is not a real model — never send it to a provider API.
-            // Resolve it to the provider's configured model (or 'default') so
+            // Resolve it to the provider's configured model (or best available) so
             // planner/memory/rate-limit-switch calls never crash with "no auto model".
-            const requestedModel = options.model || inferenceOptions?.model || config.model;
+            let requestedModel = options.model || inferenceOptions?.model || config.model;
+            // CRITICAL FIX: When no model is specified (undefined) or the sentinel 'default'
+            // is used, resolve via the provider's live model list. This ensures the pipeline
+            // never sends a literal 'default' or undefined to a provider API, which would 404.
+            if (!requestedModel || requestedModel === 'default') {
+                try {
+                    const resolved = await resolveWorkingModel(provider, providerType, requestedModel);
+                    requestedModel = resolved;
+                }
+                catch {
+                    // Best-effort — fall through to the original value if resolution fails
+                }
+            }
             const mergedOptions = {
                 ...inferenceOptions,
-                model: isAutoModel(requestedModel) ? (config.model || 'default') : requestedModel,
+                model: isAutoModel(requestedModel) ? (config.model || requestedModel) : requestedModel,
                 temperature: inferenceOptions?.temperature ?? config.temperature ?? 0.7,
                 maxTokens: inferenceOptions?.maxTokens ?? config.maxTokens ?? 4096,
             };
@@ -2623,6 +2635,14 @@ export class Orchestrator {
             this.coldStartProbeFired = true;
             void refreshModelRegistry(this.configManager, { spotCheck: true }).then((result) => {
                 logger.info(`   🌱 Cold-start registry probe: ${result.providersProbed.length} provider(s), ${result.verified} verified, ${result.unavailable} unavailable`);
+                // Start warmup daemon to keep frequently-used models warm
+                try {
+                    const { startWarmupDaemon } = require('../learning/model-warmup.js');
+                    startWarmupDaemon(this.configManager);
+                }
+                catch {
+                    // Best-effort — warmup must never break routing
+                }
             }).catch(() => {
                 // Best-effort — a failed probe must never break the pipeline.
             });

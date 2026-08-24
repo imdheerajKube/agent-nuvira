@@ -134,7 +134,7 @@ describe('source detection + config', () => {
       const registries = configuredRegistries();
       expect(registries).toHaveLength(1);
       expect(registries[0]).toMatch(/^file:\/\//);
-      expect(registries[0]).toContain('.agents/skills');
+      expect(registries[0]).toMatch(/\.agents[/\\]skills/);
       expect(allSources()[0].kind).toBe('local-dir');
       // The packaged dir actually resolves (index.json present) — the exact
       // 404-vs-resolve regression: the default must never silently 404.

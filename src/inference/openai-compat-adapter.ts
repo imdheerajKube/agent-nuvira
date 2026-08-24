@@ -287,14 +287,13 @@ export class OpenAICompatAdapter implements InferenceProvider {
     tools: ToolSchema[],
     options: InferenceOptions | undefined,
     onToken: (token: string) => void,
-  ): Promise<ToolCallResponse> {
-    const model = options?.model || this.config.model || 'default';
+  ): Promise<ToolCallResponse> {    const model = options?.model || this.config.model || 'default';
     const headers: Record<string, string> = {
       ...extraHeaders(this.config),
       ...buildAuthHeaders(this.meta, this.config, options?.apiKey),
     };
-    return chatCompletionsWithToolsStream(
-      {
+
+    return chatCompletionsWithToolsStream({
         // Azure deployments live at /openai/deployments/{model}/chat/completions
         // (chatUrl handles the meta.azureDeployments shape).
         baseUrl: this.baseUrl,

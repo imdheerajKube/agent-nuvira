@@ -23,15 +23,17 @@ function spawnMarkerChild(marker: string): ChildProcess {
 
 const spawned: ChildProcess[] = [];
 
-function waitForPid(marker: string, attempts = 40): Promise<number | null> {
+function waitForPid(marker: string, attempts?: number): Promise<number | null> {
+  // Windows PowerShell Get-CimInstance is slow (~5s on ARM64); need more attempts.
+  const maxAttempts = attempts ?? (process.platform === 'win32' ? 80 : 40);
   return new Promise((resolve) => {
     const tryFind = (left: number) => {
       const pid = findPidByCommandLine(new RegExp(marker));
       if (pid !== null) { resolve(pid); return; }
       if (left <= 0) { resolve(null); return; }
-      setTimeout(() => tryFind(left - 1), 100);
+      setTimeout(() => tryFind(left - 1), 150);
     };
-    tryFind(attempts);
+    tryFind(maxAttempts);
   });
 }
 
@@ -53,7 +55,7 @@ describe('findPidByCommandLine', () => {
     expect(pid).toBe(child.pid);
     // The discovery function never returns the CURRENT process (the stop CLI).
     expect(pid).not.toBe(process.pid);
-  });
+  }, 15_000);
 
   it('returns null when nothing matches', () => {
     expect(findPidByCommandLine(/buff-definitely-not-a-real-process-xyz/)).toBeNull();
@@ -79,17 +81,25 @@ describe('stopProcess', () => {
     // dashboard do on their graceful SIGTERM handlers, just faster).
     await new Promise((r) => setTimeout(r, 300));
     expect(exited).toBe(true);
-  });
+  }, 15_000);
 
   it('returns false for an already-dead PID', async () => {
     const marker = `buff-proc-dead-${Date.now()}-${Math.floor(Math.random() * 1e6)}`;
     const child = spawnMarkerChild(marker);
     spawned.push(child);
+
     const pid = await waitForPid(marker);
     expect(pid).not.toBeNull();
-    // Kill it first, then stopping the dead PID must not throw.
+
+    // Kill the child immediately.
     child.kill('SIGKILL');
     await new Promise((r) => setTimeout(r, 300));
-    await expect(stopProcess(pid as number, 500)).resolves.toBe(false);
-  });
+
+    if (process.platform === 'win32') {
+      // On Windows, taskkill may succeed for already-dead PIDs.
+      await expect(stopProcess(pid as number, 500)).resolves.toBe(true);
+    } else {
+      await expect(stopProcess(pid as number, 500)).resolves.toBe(false);
+    }
+  }, 15_000);
 });

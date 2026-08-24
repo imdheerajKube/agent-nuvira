@@ -130,9 +130,10 @@ describe('cron — run now', () => {
     const stored = listCronJobs().find((j) => j.name === 'quick') as CronJob;
     expect(stored.lastRunAt).toBeGreaterThan(0);
     // 'build' is a real pipeline tool (cold ESM start loads the orchestrator
-    // + adapters) — Windows CI has measured ~7s, so budget well past vitest's
-    // 5s default to keep the release pipeline green.
-  }, 60_000);
+    // + adapters) — runs planner + writer + reviewer, each with retries.
+    // When ollama is unavailable, each call times out (10s) × 3 retries ×
+    // 3 agents + backoff = up to 150s. Budget generously.
+  }, 180_000);
 
   it('returns a clean error for an unknown tool (never throws)', async () => {
     const job: CronJob = {
@@ -168,6 +169,6 @@ describe('cron — run now', () => {
     // The run itself succeeds; only the delivery warns (best-effort).
     expect(ok).toBe(true);
     // Delivery builds the full adapter registry (baileys/twilio/irc/etc.) —
-    // budget past the 5s default for slow CI runners.
-  }, 60_000);
+    // budget generously for slow CI runners + LLM timeouts.
+  }, 180_000);
 });

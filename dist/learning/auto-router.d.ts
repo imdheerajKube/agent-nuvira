@@ -212,6 +212,13 @@ export interface AutoRouterOptions {
         cooldownRemaining: number;
     }>;
     /**
+     * MODEL-FIRST ROUTING: score individual models across ALL providers
+     * instead of scoring providers first. This ensures cost-per-million-token,
+     * quota availability, and capability fit are evaluated at the MODEL level.
+     * Default: true when registry has real data, false on cold start.
+     */
+    useModelFirst?: boolean;
+    /**
      * Per-task complexity label from the plan (TaskStep.complexity). When set,
      * routing uses it INSTEAD of re-analyzing the description, so a planner that
      * decomposes a goal into labeled subtasks gets subtask-local routing
@@ -428,7 +435,12 @@ export declare function capabilityFitScore(taskType: string, provider: string, c
  * no-fit ≈ 0.85×, perfect-fit ≈ 1.10× (then clamped).
  */
 export declare function applyCapabilityFit(score: number, fit: number): number;
-/** Built-in provider ids considered by default. */
+/**
+ * All provider ids considered by default: ALL catalog providers participate
+ * in auto-routing. The 6 built-ins have tuned profiles; the other 16+
+ * get catalog-sourced profiles. Users who add API keys for openai, anthropic,
+ * mistral, etc. automatically get those providers in the routing candidate pool.
+ */
 export declare const DEFAULT_AUTO_PROVIDERS: string[];
 /** Real per-1K-token pricing (USD) — input/output per 1K tokens. */
 export declare const PROVIDER_PRICING_PER_1K: Record<string, {
@@ -582,7 +594,7 @@ export declare class AutoModelRouter {
      * keeps the configured model — deterministic. Once outcomes accumulate,
      * the best Thompson-sampled LEARNED model wins, so the model choice learns.
      */
-    resolveModelWithLearning(provider: string, configuredModel: string, complexity: ComplexityLevel, minSamples?: number, taskIntent?: string): string;
+    resolveModelWithLearning(provider: string, configuredModel: string, complexity: ComplexityLevel, minSamples?: number, taskIntent?: string, taskDescription?: string): string;
     /**
      * Build a ParallelPick (promotion-gate A/B record) for a scored provider.
      * Used to log the deterministic pick vs the bandit pick for the same task.
@@ -646,7 +658,7 @@ export declare class AutoModelRouter {
      * the live-list validator repairs it (once) and telemetry then verifies the
      * replacement, so the registry learns before the next message.
      */
-    resolveModel(provider: string, agentType: string, configManager?: ConfigManager): string;
+    resolveModel(provider: string, agentType: string, configManager?: ConfigManager, taskDescription?: string): string;
     /**
      * Pick the best model within the selected provider, given a list of model
      * descriptors (e.g., from provider.listModels()). Keeps the configured model

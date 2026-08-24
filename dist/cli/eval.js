@@ -28,6 +28,8 @@ import { buildAutoResolveOptions } from '../learning/resolve-options.js';
 import { recordRoutingDecision } from '../learning/routing-history.js';
 import { logger } from '../utils/logger.js';
 import { runEvalSuite, getEvalTasks, getM2bTasks, getEvalRuns, formatEvalReport, formatEvalMarkdown, formatEvalScoreRules, resolvePaceBudget, writeBenchmarkReport, compareEvalRuns, selectCompareRuns, clearEvals, } from '../learning/eval-framework.js';
+import { resolveDefaultModel } from '../inference/default-model-resolver.js';
+import { ProviderFactory } from '../inference/factory.js';
 export class EvalCommand extends BaseCommand {
     create() {
         const command = new Command('eval')
@@ -245,7 +247,15 @@ export class EvalCommand extends BaseCommand {
         const provider = resolved.provider;
         const providerName = resolved.type;
         const resolvedConfig = this.configManager.getProviderConfig(providerName).config;
-        const model = options.model || resolvedConfig.model || 'default';
+        let model = options.model || resolvedConfig.model || 'default';
+        // Resolve 'default' to a real model via the provider's live catalog
+        if (!model || model === 'default') {
+            try {
+                const prov = ProviderFactory.createProvider(providerName, resolvedConfig);
+                model = await resolveDefaultModel(prov, providerName, model);
+            }
+            catch { /* best-effort */ }
+        }
         // ISSUE-004 guard: refuse to evaluate a provider whose configured key is a
         // placeholder/sentinel (e.g. the literal "openrouter-env-key"). Running
         // eval on it just burns minutes producing auth-dead scores (0% completion,

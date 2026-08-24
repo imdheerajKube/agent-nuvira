@@ -98,7 +98,7 @@ describe('P5c #4 — committed registry acceptance (search → install → catal
     expect(index.skills.map((s) => s.name).sort()).toEqual(BUNDLED_SKILLS.map((s) => s.name).sort());
   });
 
-  it('buff skills search finds each bundled skill by a representative query', async () => {
+  it('skills search finds each bundled skill by a representative query', async () => {
     for (const skill of BUNDLED_SKILLS) {
       // A 3+ char word from the skill name (the search is substring-based).
       const query = skill.name.replace(/[-]/g, ' ').split(' ').find((w) => w.length > 3) ?? skill.name;
@@ -107,7 +107,7 @@ describe('P5c #4 — committed registry acceptance (search → install → catal
     }
   });
 
-  it('buff skills install lands the real SKILL.md with valid frontmatter', async () => {
+  it('skills install lands the real SKILL.md with valid frontmatter', async () => {
     const out = await runSkills(['install', 'code-assessment', '--project', projectDir]);
     expect(out).toContain('Installed code-assessment');
     const installed = join(projectDir, '.agents', 'skills', 'code-assessment', 'SKILL.md');
@@ -139,12 +139,12 @@ describe('P5c #4 — committed registry acceptance (search → install → catal
     const out = await runSkills(['install', 'nope-skill', '--project', projectDir]);
     // The spinner.fail text goes to the mocked ora; the EXPLICIT part is the
     // logger surfaces: search tip + the unreachable-source hint with the fix.
-    expect(out).toContain('Search available skills: buff skills search');
+    expect(out).toMatch(/Search available skills: \S+ skills search/);
     expect(out).toContain('missing-index');
     expect(out).toContain('BUFF_SKILLS_REGISTRY');
   });
 
-  it('P6d — buff skills uninstall removes the dir and the skill is gone', async () => {
+  it('P6d — skills uninstall removes the dir and the skill is gone', async () => {
     await runSkills(['install', 'test-strategy', '--project', projectDir]);
     const installed = join(projectDir, '.agents', 'skills', 'test-strategy', 'SKILL.md');
     expect(existsSync(installed)).toBe(true);

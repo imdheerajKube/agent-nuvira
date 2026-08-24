@@ -23,20 +23,41 @@
  * with a grace window before SIGKILL so a slow socket close isn't cut short.
  */
 
-import { execSync } from 'node:child_process';
+import { execSync, execFileSync } from 'node:child_process';
 
 // ─── PID discovery ──────────────────────────────────────────────────────────
 
 /** Find the PID of a process whose command line matches `pattern`, or null.
- *  Never matches the current process. Cross-platform (ps / wmic). */
+ *  Never matches the current process. Cross-platform (ps / wmic / PowerShell). */
 export function findPidByCommandLine(pattern: RegExp): number | null {
   try {
     let lines: string[];
     if (process.platform === 'win32') {
+      // Use execFileSync to avoid cmd.exe mangling PowerShell $() syntax.
+      try {
+        const out = execFileSync(
+          'powershell',
+          ['-NoProfile', '-Command', 'Get-CimInstance Win32_Process | Select-Object ProcessId,CommandLine | ForEach-Object { "$($_.ProcessId)|$($_.CommandLine)" }'],
+          { encoding: 'utf8', timeout: 10_000 }
+        );
+        lines = out.split(/\r?\n/);
+        for (const line of lines) {
+          const pipeIdx = line.indexOf('|');
+          if (pipeIdx === -1) continue;
+          const pid = Number.parseInt(line.slice(0, pipeIdx), 10);
+          const cmd = line.slice(pipeIdx + 1);
+          if (isNaN(pid) || pid === process.pid) continue;
+          if (pattern.test(cmd)) return pid;
+        }
+        return null;
+      } catch {
+        // Fall back to wmic
+      }
       const out = execSync('wmic process get processid,commandline /format:csv', { encoding: 'utf8' });
       lines = out.split(/\r?\n/);
       for (const line of lines) {
         // wmic CSV: "Node,<host>,<pid>,<commandline>"
+        // Command lines can contain commas, so split only on first 3 commas
         const parts = line.split(',');
         if (parts.length < 4) continue;
         const pid = Number.parseInt(parts[2], 10);
@@ -66,7 +87,25 @@ export function findPidByCommandLine(pattern: RegExp): number | null {
 export async function stopProcess(pid: number, graceMs = 3000): Promise<boolean> {
   try {
     if (process.platform === 'win32') {
-      execSync(`taskkill /PID ${pid} /F`, { stdio: 'ignore' });
+      // Try graceful first (WM_CLOSE), then force if still alive
+      try {
+        execSync(`taskkill /PID ${pid}`, { stdio: 'ignore', timeout: 2000 });
+      } catch { /* may already be gone */ }
+      // Wait up to graceMs for the process to exit
+      const deadline = Date.now() + graceMs;
+      while (Date.now() < deadline) {
+        try {
+          execSync(`tasklist /FI "PID eq ${pid}" /NH`, { encoding: 'utf8', timeout: 2000 });
+          // Process still running — force kill
+          await new Promise((r) => setTimeout(r, 200));
+        } catch {
+          return true; // Process gone
+        }
+      }
+      // Force kill
+      try {
+        execSync(`taskkill /PID ${pid} /F`, { stdio: 'ignore', timeout: 5000 });
+      } catch { /* already gone */ }
       return true;
     }
     process.kill(pid, 'SIGTERM');

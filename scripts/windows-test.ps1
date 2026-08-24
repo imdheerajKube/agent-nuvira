@@ -1,7 +1,6 @@
-# ═══════════════════════════════════════════════════════════════
 # Agent-Nuvira Windows Test Execution Script
 # Run this on the remote Windows machine via PowerShell
-# ═══════════════════════════════════════════════════════════════
+# Usage: .\windows-test.ps1 -NuviraPath C:\agent-nuvira -Verbose
 
 param(
     [string]$NuviraPath = "C:\agent-nuvira",
@@ -10,67 +9,80 @@ param(
 )
 
 $ErrorActionPreference = "Continue"
-$pass = 0
-$fail = 0
-$skip = 0
+$script:pass = 0
+$script:fail = 0
+$script:skip = 0
 
 function Write-Status {
-    param([string]$Message, [string]$Status)
-    switch ($Status) {
-        "PASS" { Write-Host "  ✅ $Message" -ForegroundColor Green }
-        "FAIL" { Write-Host "  ❌ $Message" -ForegroundColor Red }
-        "SKIP" { Write-Host "  ⏭️  $Message" -ForegroundColor Yellow }
-        "INFO" { Write-Host "  ℹ️  $Message" -ForegroundColor Cyan }
+    param(
+        [string]$Message,
+        [string]$Status
+    )
+    if ($Status -eq "PASS") {
+        Write-Host "  [PASS] $Message" -ForegroundColor Green
+    }
+    elseif ($Status -eq "FAIL") {
+        Write-Host "  [FAIL] $Message" -ForegroundColor Red
+    }
+    elseif ($Status -eq "SKIP") {
+        Write-Host "  [SKIP] $Message" -ForegroundColor Yellow
+    }
+    elseif ($Status -eq "INFO") {
+        Write-Host "  [INFO] $Message" -ForegroundColor Cyan
     }
 }
 
 function Test-Command {
-    param([string]$Name, [scriptblock]$Test, [switch]$Critical)
-    Write-Host "`n▶ $Name" -ForegroundColor Yellow
+    param(
+        [string]$Name,
+        [scriptblock]$Test
+    )
+    Write-Host ""
+    Write-Host ">> $Name" -ForegroundColor Yellow
     try {
         $result = & $Test
         if ($result) {
-            Write-Status "$Name" "PASS"
+            Write-Status $Name "PASS"
             $script:pass++
-        } else {
-            Write-Status "$Name" "FAIL"
+        }
+        else {
+            Write-Status $Name "FAIL"
             $script:fail++
         }
-    } catch {
-        Write-Status "$Name — $_" "FAIL"
+    }
+    catch {
+        $errMsg = $_.Exception.Message
+        Write-Status "$Name -- $errMsg" "FAIL"
         $script:fail++
     }
 }
 
-# ═══════════════════════════════════════════════════════════════
-# Header
-# ═══════════════════════════════════════════════════════════════
-Write-Host "`n═══════════════════════════════════════════════════════════" -ForegroundColor Cyan
+Write-Host ""
+Write-Host "==========================================================" -ForegroundColor Cyan
 Write-Host "  Agent-Nuvira Windows Test Suite" -ForegroundColor Cyan
 Write-Host "  $(Get-Date -Format 'yyyy-MM-dd HH:mm:ss')" -ForegroundColor Gray
-Write-Host "═══════════════════════════════════════════════════════════`n" -ForegroundColor Cyan
+Write-Host "==========================================================" -ForegroundColor Cyan
+Write-Host ""
 
-# ═══════════════════════════════════════════════════════════════
 # Phase 1: Environment Checks
-# ═══════════════════════════════════════════════════════════════
-Write-Host "═══ Phase 1: Environment Checks ═══" -ForegroundColor Magenta
+Write-Host "=== Phase 1: Environment Checks ===" -ForegroundColor Magenta
 
 Test-Command "Node.js available" {
     $v = node --version 2>&1
     Write-Host "    Version: $v"
-    $v -match "v\d+\.\d+"
+    "$v" -match "v\d+\.\d+"
 }
 
 Test-Command "npm available" {
     $v = npm --version 2>&1
     Write-Host "    Version: $v"
-    $v -match "\d+\.\d+"
+    "$v" -match "\d+\.\d+"
 }
 
 Test-Command "Git available" {
     $v = git --version 2>&1
     Write-Host "    $v"
-    $v -match "git version"
+    "$v" -match "git version"
 }
 
 Test-Command "PowerShell version" {
@@ -84,16 +96,16 @@ Test-Command "OpenSSH Server running" {
     if ($svc) {
         Write-Host "    Status: $($svc.Status)"
         $svc.Status -eq "Running"
-    } else {
+    }
+    else {
         Write-Host "    sshd service not found"
         $false
     }
 }
 
-# ═══════════════════════════════════════════════════════════════
 # Phase 2: File System Checks
-# ═══════════════════════════════════════════════════════════════
-Write-Host "`n═══ Phase 2: File System Checks ═══" -ForegroundColor Magenta
+Write-Host ""
+Write-Host "=== Phase 2: File System Checks ===" -ForegroundColor Magenta
 
 Test-Command "Windows paths accessible" {
     $paths = @("C:\Users", "C:\Windows", "C:\")
@@ -123,20 +135,19 @@ Test-Command "Can create and read temp file" {
     $content.Trim() -eq "Hello from Windows"
 }
 
-# ═══════════════════════════════════════════════════════════════
 # Phase 3: agent-nuvira Setup
-# ═══════════════════════════════════════════════════════════════
-Write-Host "`n═══ Phase 3: agent-nuvira Setup ═══" -ForegroundColor Magenta
+Write-Host ""
+Write-Host "=== Phase 3: agent-nuvira Setup ===" -ForegroundColor Magenta
 
 Test-Command "agent-nuvira directory exists" {
     if (Test-Path $NuviraPath) {
         Write-Host "    Found at: $NuviraPath"
         $true
-    } else {
+    }
+    else {
         Write-Host "    Not found at: $NuviraPath"
-        Write-Host "    Cloning..."
-        git clone https://github.com/your-repo/agent-nuvira.git $NuviraPath 2>&1
-        Test-Path $NuviraPath
+        Write-Host "    Please clone or copy agent-nuvira to $NuviraPath first"
+        $false
     }
 }
 
@@ -162,23 +173,22 @@ Test-Command "npm run build succeeds" {
     $result
 }
 
-# ═══════════════════════════════════════════════════════════════
 # Phase 4: agent-nuvira Commands
-# ═══════════════════════════════════════════════════════════════
-Write-Host "`n═══ Phase 4: agent-nuvira Commands ═══" -ForegroundColor Magenta
+Write-Host ""
+Write-Host "=== Phase 4: agent-nuvira Commands ===" -ForegroundColor Magenta
 
 Test-Command "nuvira --version works" {
     Push-Location $NuviraPath
     $output = node dist/index.js --version 2>&1
     Pop-Location
-    $output -match "\d+\.\d+"
+    "$output" -match "\d+\.\d+"
 }
 
 Test-Command "nuvira memory stats works" {
     Push-Location $NuviraPath
     $output = node dist/index.js memory stats 2>&1
     Pop-Location
-    $output -match "Memory|memory|stats"
+    "$output" -match "Memory|memory|stats"
 }
 
 Test-Command "nuvira model list works" {
@@ -188,11 +198,10 @@ Test-Command "nuvira model list works" {
     $LASTEXITCODE -eq 0
 }
 
-# ═══════════════════════════════════════════════════════════════
 # Phase 5: Test Suite (optional)
-# ═══════════════════════════════════════════════════════════════
 if (-not $SkipTests) {
-    Write-Host "`n═══ Phase 5: Test Suite ═══" -ForegroundColor Magenta
+    Write-Host ""
+    Write-Host "=== Phase 5: Test Suite ===" -ForegroundColor Magenta
 
     Test-Command "npm test passes" {
         Push-Location $NuviraPath
@@ -207,22 +216,29 @@ if (-not $SkipTests) {
     }
 }
 
-# ═══════════════════════════════════════════════════════════════
 # Summary
-# ═══════════════════════════════════════════════════════════════
-Write-Host "`n═══════════════════════════════════════════════════════════" -ForegroundColor Cyan
-Write-Host "  Test Results" -ForegroundColor Cyan
-Write-Host "═══════════════════════════════════════════════════════════" -ForegroundColor Cyan
 Write-Host ""
-Write-Host "  Passed:  $pass" -ForegroundColor Green
-Write-Host "  Failed:  $fail" -ForegroundColor $(if ($fail -eq 0) { "Green" } else { "Red" })
-Write-Host "  Skipped: $skip" -ForegroundColor Yellow
+Write-Host "==========================================================" -ForegroundColor Cyan
+Write-Host "  Test Results" -ForegroundColor Cyan
+Write-Host "==========================================================" -ForegroundColor Cyan
+Write-Host ""
+Write-Host "  Passed:  $script:pass" -ForegroundColor Green
+if ($script:fail -eq 0) {
+    Write-Host "  Failed:  $script:fail" -ForegroundColor Green
+}
+else {
+    Write-Host "  Failed:  $script:fail" -ForegroundColor Red
+}
+Write-Host "  Skipped: $script:skip" -ForegroundColor Yellow
 Write-Host ""
 
-if ($fail -eq 0) {
-    Write-Host "  ✅ All tests passed!" -ForegroundColor Green
-} else {
-    Write-Host "  ⚠️  Some tests failed. Check output above." -ForegroundColor Yellow
+if ($script:fail -eq 0) {
+    Write-Host "  All tests passed!" -ForegroundColor Green
+}
+else {
+    Write-Host "  Some tests failed. Check output above." -ForegroundColor Yellow
 }
 
-Write-Host "`n═══════════════════════════════════════════════════════════`n" -ForegroundColor Cyan
+Write-Host ""
+Write-Host "=========================================================="
+Write-Host ""

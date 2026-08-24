@@ -14,6 +14,7 @@
 
 import { spawn, SpawnOptions } from 'node:child_process';
 import { readFile, writeFile, unlink, mkdir } from 'node:fs/promises';
+import { existsSync } from 'node:fs';
 import { join, dirname, extname } from 'node:path';
 import { tmpdir } from 'node:os';
 import { randomBytes } from 'node:crypto';
@@ -243,25 +244,41 @@ function getRuntimeCommand(
   runtime: SkillRuntime,
   scriptPath: string
 ): { command: string; args: string[] } {
+  const isWin = process.platform === 'win32';
   switch (runtime) {
     case 'python':
-      return { command: 'python3', args: [scriptPath] };
+      // Windows: 'python' (not python3)
+      return { command: isWin ? 'python' : 'python3', args: [scriptPath] };
     case 'node':
       return { command: 'node', args: [scriptPath] };
     case 'shell':
+      // Windows: use Git Bash if available (handles bash syntax), else PowerShell
+      if (isWin) {
+        const gitBash = 'C:\\Program Files\\Git\\bin\\bash.exe';
+        if (existsSync(gitBash)) {
+          return { command: gitBash, args: [scriptPath] };
+        }
+        // Fallback: try 'bash' in PATH (Git Bash or WSL)
+        return { command: 'bash', args: [scriptPath] };
+      }
       return { command: 'bash', args: [scriptPath] };
     case 'ruby':
       return { command: 'ruby', args: [scriptPath] };
     case 'go':
-      // Go scripts need to be run with 'go run'
       return { command: 'go', args: ['run', scriptPath] };
-    case 'rust':
-      // Rust scripts need to be compiled and run, or use rust-script
-      // For simplicity, we'll use 'rustc' to compile and then run
+    case 'rust': {
+      if (isWin) {
+        // On Windows, use 'cmd.exe /c rustc && run'
+        const binaryPath = scriptPath.replace(/\.rs$/, '.exe');
+        return { command: 'cmd.exe', args: ['/c', `rustc "${scriptPath}" -o "${binaryPath}" && "${binaryPath}"`] };
+      }
       const binaryPath = scriptPath.replace(/\.rs$/, '');
       return { command: 'bash', args: ['-c', `rustc ${scriptPath} -o ${binaryPath} && ${binaryPath}`] };
+    }
     default:
-      return { command: 'bash', args: [scriptPath] };
+      return isWin
+        ? { command: 'cmd.exe', args: ['/c', scriptPath] }
+        : { command: 'bash', args: [scriptPath] };
   }
 }
 
