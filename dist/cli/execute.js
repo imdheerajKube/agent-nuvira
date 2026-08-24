@@ -22,6 +22,7 @@ import { Command } from 'commander';
 import inquirer from 'inquirer';
 import { BaseCommand } from './commands.js';
 import { ProviderFactory } from '../inference/factory.js';
+import { resolveDefaultModel } from '../inference/default-model-resolver.js';
 import { Orchestrator } from '../agents/orchestrator.js';
 import { applyActiveModel } from './model.js';
 import { showModelPicker } from './model-picker.js';
@@ -953,7 +954,14 @@ export class ExecuteCommand extends BaseCommand {
             // provider, so the adapter factory never sees a literal 'auto'.
             const { type: resolvedType, config: providerConfig } = this.configManager.getProviderConfig(type);
             const provider = ProviderFactory.createProvider(resolvedType, providerConfig);
-            const model = activeModel || 'default';
+            // Resolve 'default' to a real model via the provider's live catalog
+            let model = activeModel || 'default';
+            if (!model || model === 'default') {
+                try {
+                    model = await resolveDefaultModel(provider, resolvedType, model);
+                }
+                catch { /* best-effort */ }
+            }
             // E3b parity: the suggest_followups contract (one vocabulary
             // everywhere) — exactly 3 followups, specific to this conversation.
             const prompt = [

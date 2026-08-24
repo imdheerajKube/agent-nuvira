@@ -15,7 +15,7 @@ import { readFileSync, writeFileSync, existsSync, mkdirSync, unlinkSync } from '
 import { join } from 'node:path';
 import { resolveNuviraHome } from '../config/paths.js';
 import { MAX_SKILLS } from './skill-types.js';
-import { BUNDLED_SKILLS } from '../skills/bundled-skills.js';
+import { ALL_BUNDLED_SKILLS as BUNDLED_SKILLS } from '../skills/bundled-skills.js';
 import { logger } from '../utils/logger.js';
 // ─── Constants ──────────────────────────────────────────────────────────────
 const SKILLS_DIR = join(resolveNuviraHome(), 'skills');

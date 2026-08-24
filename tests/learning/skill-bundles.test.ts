@@ -243,7 +243,7 @@ describe('P6b — skill tool bundle action', () => {
   it('no bundles yet → helpful create hint', async () => {
     const out = await runSkillTool({ bundle: 'anything' }, { configManager: {} });
     expect(out).toContain('no bundles exist');
-    expect(out).toContain('buff skills bundle create');
+    expect(out).toMatch(/skills bundle create/);
   });
 
   it('a bundle whose members are all missing reports loadable members = 0', async () => {

@@ -49,3 +49,9 @@ issues/
 
 # macOS
 .DS_Store
+src/file.ts
+src/example.ts
+src/fresh.ts
+src/forwarded.ts
+src/a.ts
+src/b.ts

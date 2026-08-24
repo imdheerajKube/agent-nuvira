@@ -43,10 +43,11 @@ import { getAgentStats } from './agent-stats.js';
 import { getRouterBandit, DEFAULT_MIN_SAMPLES } from './router-bandit.js';
 import { getRouterPromotion, DEFAULT_MIN_PROMOTION_DECISIONS } from './router-promotion.js';
 import { getMlRouter, DEFAULT_ML_K, DEFAULT_ML_MIN_SAMPLES, DEFAULT_ML_STRENGTH } from './ml-router.js';
+import { buildModelCandidates } from './model-first-router.js';
 import { getModelRegistry } from './model-registry.js';
 import { estimateTokens } from './cost-tracker.js';
 import { preferredModelsFor, PROVIDER_CONTEXT_WINDOWS } from './model-selection.js';
-import { CATALOG_PROVIDER_IDS, getCatalogProvider, isCatalogKeyless } from '../inference/provider-catalog.js';
+import { CATALOG_PROVIDER_IDS, getCatalogProvider, getDefaultModel, isCatalogKeyless } from '../inference/provider-catalog.js';
 import { logger } from '../utils/logger.js';
 // ─── Constants ──────────────────────────────────────────────────────────────
 /** The special model value that triggers automatic per-task routing. */
@@ -120,7 +121,12 @@ export const ESCALATION_WIN_RATE_FLOOR = 0.55;
  * (0.72) and openrouter (0.95) all pass.
  */
 export const CREATIVE_MIN_REASONING = 0.4;
-const DEFAULT_PROFILES = {
+// ── DEFAULT_PROFILES: built-in overrides + catalog-sourced defaults ─────────
+// The 6 built-in profiles have fine-tuned values. ALL other catalog providers
+// get their profiles DYNAMICALLY from the catalog's capability metadata, so
+// every provider the user has a key for participates in routing with real
+// scores — not a neutral guess.
+const BUILTIN_PROFILES = {
     local: { reasoning: 0.30, speed: 0.55, cost: 1.00, privacy: 1.00, reliability: 0.60 },
     groq: { reasoning: 0.55, speed: 1.00, cost: 0.85, privacy: 0.15, reliability: 0.85 },
     nim: { reasoning: 0.72, speed: 0.70, cost: 0.55, privacy: 0.15, reliability: 0.82 },
@@ -134,6 +140,29 @@ const DEFAULT_PROFILES = {
     // measured usage / runtime stats over time.
     nuvira: { reasoning: 0.50, speed: 0.50, cost: 0.50, privacy: 0.50, reliability: 0.70 },
 };
+// Generate DEFAULT_PROFILES from catalog: built-in overrides win, extended
+// providers get catalog-sourced capability scores. This ensures ALL 22+
+// catalog providers participate in auto-routing with real metadata.
+const DEFAULT_PROFILES = { ...BUILTIN_PROFILES };
+for (const id of CATALOG_PROVIDER_IDS) {
+    if (DEFAULT_PROFILES[id])
+        continue; // Built-in already has a tuned profile
+    try {
+        const catalog = getCatalogProvider(id);
+        if (catalog) {
+            DEFAULT_PROFILES[id] = {
+                reasoning: catalog.capabilities.reasoning,
+                speed: catalog.capabilities.speed,
+                cost: catalog.capabilities.cost,
+                privacy: catalog.capabilities.privacy,
+                reliability: catalog.capabilities.reliability,
+            };
+        }
+    }
+    catch {
+        // Best-effort — catalog read must never break routing
+    }
+}
 // ─── Capability-aware scoring (Nuvira-Router P2 M2.1) ───────────────────────
 //
 // A SOFT signal on top of the five weighted dimensions: which capabilities a
@@ -227,8 +256,13 @@ export function capabilityFitScore(taskType, provider, caps) {
 export function applyCapabilityFit(score, fit) {
     return Math.min(1, score * (0.9 + 0.2 * fit));
 }
-/** Built-in provider ids considered by default. */
-export const DEFAULT_AUTO_PROVIDERS = Object.keys(DEFAULT_PROFILES);
+/**
+ * All provider ids considered by default: ALL catalog providers participate
+ * in auto-routing. The 6 built-ins have tuned profiles; the other 16+
+ * get catalog-sourced profiles. Users who add API keys for openai, anthropic,
+ * mistral, etc. automatically get those providers in the routing candidate pool.
+ */
+export const DEFAULT_AUTO_PROVIDERS = [...CATALOG_PROVIDER_IDS];
 // ─── Real Provider Pricing ──────────────────────────────────────────────────
 //
 // Actual per-1K-token list pricing (USD, input/output) used to derive the cost
@@ -824,7 +858,7 @@ export class AutoModelRouter {
             // an acceptable soft-estimate divergence (bandit is on by default, but
             // cold start stays deterministic until outcomes accumulate).
             const resolvedWindow = qp === undefined && contextFitEnabled
-                ? this.resolveContextWindow(provider, this.resolveModel(provider, agentType, configManager), configManager)
+                ? this.resolveContextWindow(provider, this.resolveModel(provider, agentType, configManager, taskDescription), configManager)
                 : undefined;
             const contextWindowTokens = resolvedWindow?.window;
             const contextWindowSource = resolvedWindow?.source;
@@ -1169,8 +1203,54 @@ export class AutoModelRouter {
         const selected = escalatedProvider
             ? scored.find((s) => s.provider === escalatedProvider)
             : scored.find((s) => !s.inCooldown && !s.quotaParked) || scored[0];
-        const provider = selected.provider;
-        let model = this.resolveModel(provider, agentType, configManager);
+        let provider = selected.provider;
+        let model = this.resolveModel(provider, agentType, configManager, taskDescription);
+        // ── MODEL-FIRST ROUTING: override provider pick with model-level scoring ──
+        // Instead of picking a provider then a model, score ALL models across ALL
+        // providers and pick the BEST model. This ensures cost-per-million-token,
+        // quota availability, and capability fit are evaluated at the MODEL level,
+        // not the provider level. The provider is derived FROM the model pick.
+        //
+        // MODEL-FIRST ROUTING: score individual models across ALL providers.
+        // Only activates when:
+        //   1. Registry has real model data (verified models from probes)
+        //   2. No explicit model pin (user hasn't configured a specific model)
+        //   3. useModelFirst option is not explicitly false
+        // When a user has pinned a specific model, we respect that choice.
+        try {
+            const registry = getModelRegistry();
+            const hasRealData = registry.getUsableProviders().length > 0;
+            const userHasPinnedModel = !!(configManager && (() => {
+                try {
+                    const { config } = configManager.getProviderConfig(provider);
+                    return config?.model && config.model !== 'default';
+                }
+                catch {
+                    return false;
+                }
+            })());
+            // Don't override when bandit escalation has fired — the bandit has
+            // learned data and should be respected.
+            const modelFirstEnabled = options.useModelFirst ?? (hasRealData && !userHasPinnedModel && !escalatedProvider);
+            if (modelFirstEnabled && taskDescription) {
+                const modelCandidates = buildModelCandidates(taskDescription, complexity, configManager, allowed);
+                if (modelCandidates.length > 0) {
+                    const bestModel = modelCandidates[0];
+                    // Only override if the model-first pick is significantly better
+                    // (at least 10% higher score) to avoid thrashing on marginal gains
+                    if (bestModel.score > selected.score * 1.1 || selected.score < 0.3) {
+                        provider = bestModel.provider;
+                        model = bestModel.model;
+                        if (options.verbose) {
+                            logger.info(`  🎯 Model-first override: ${provider}/${model} (score ${bestModel.score.toFixed(3)} vs provider ${selected.score.toFixed(3)})`);
+                        }
+                    }
+                }
+            }
+        }
+        catch {
+            // Best-effort — model-first must never break routing
+        }
         // Note the decision so outcome recording (recordOutcome) can reward the
         // provider that actually served the task.
         if (options.useBandit) {
@@ -1182,7 +1262,7 @@ export class AutoModelRouter {
             // (llama-3.3-70b-versatile ≠ openai/gpt-oss-20b on the SAME provider).
             // When any candidate model has learned data, prefer the best Thompson-
             // sampled one; cold start keeps the configured model (deterministic).
-            model = this.resolveModelWithLearning(provider, model, complexity, options.escalationMinSamples ?? DEFAULT_MIN_SAMPLES, analyzedProfile.intent);
+            model = this.resolveModelWithLearning(provider, model, complexity, options.escalationMinSamples ?? DEFAULT_MIN_SAMPLES, analyzedProfile.intent, taskDescription);
             bandit.noteModelDecision(agentType, model);
             // ── Promotion gate A/B (ruflo router-parallel mirror) ─────────────────
             // Record both the deterministic pick and the bandit pick for this task.
@@ -1195,7 +1275,7 @@ export class AutoModelRouter {
             .filter((s) => s.provider !== provider)
             .map((s) => ({
             provider: s.provider,
-            model: this.resolveModel(s.provider, agentType, configManager),
+            model: this.resolveModel(s.provider, agentType, configManager, taskDescription),
             estimatedCost: 0,
             qualityScore: s.score,
             contextWindowTokens: s.contextWindowTokens,
@@ -1227,7 +1307,7 @@ export class AutoModelRouter {
                 providers: scored.map((s) => {
                     const w = s.contextWindowTokens !== undefined
                         ? { window: s.contextWindowTokens, source: s.contextWindowSource }
-                        : this.resolveContextWindow(s.provider, this.resolveModel(s.provider, agentType, configManager), configManager);
+                        : this.resolveContextWindow(s.provider, this.resolveModel(s.provider, agentType, configManager, taskDescription), configManager);
                     return {
                         provider: s.provider,
                         contextWindowTokens: w.window,
@@ -1382,11 +1462,27 @@ export class AutoModelRouter {
      * keeps the configured model — deterministic. Once outcomes accumulate,
      * the best Thompson-sampled LEARNED model wins, so the model choice learns.
      */
-    resolveModelWithLearning(provider, configuredModel, complexity, minSamples = DEFAULT_MIN_SAMPLES, taskIntent) {
+    resolveModelWithLearning(provider, configuredModel, complexity, minSamples = DEFAULT_MIN_SAMPLES, taskIntent, taskDescription) {
         const bandit = getRouterBandit();
         const candidates = [];
         if (configuredModel && configuredModel !== 'default')
             candidates.push(configuredModel);
+        // MODEL-LEVEL ROUTING: use model scoring to rank candidates by task fitness.
+        // This ensures the bandit learns from the BEST models, not just verified ones.
+        if (taskDescription) {
+            try {
+                const { topModelCandidates } = require('./model-scoring.js');
+                const scored = topModelCandidates(provider, taskDescription, 10, complexity);
+                for (const s of scored) {
+                    if (!candidates.includes(s.model))
+                        candidates.push(s.model);
+                }
+            }
+            catch {
+                // Fall through to preferred models
+            }
+        }
+        // Supplement with preferred models (health-ranked verified models)
         for (const m of preferredModelsFor(provider)) {
             if (!candidates.includes(m))
                 candidates.push(m);
@@ -1400,7 +1496,7 @@ export class AutoModelRouter {
             const p = bandit.getModelPrior(m, complexity, taskIntent);
             return p.alpha + p.beta >= minSamples;
         });
-        // Cold start: no per-model data → keep the configured model (deterministic).
+        // Cold start: no per-model data → keep the best-scored candidate (deterministic).
         if (learned.length === 0)
             return candidates[0];
         // Learned: pick the candidate with the best Thompson-sampled per-model draw.
@@ -1529,11 +1625,11 @@ export class AutoModelRouter {
      * the live-list validator repairs it (once) and telemetry then verifies the
      * replacement, so the registry learns before the next message.
      */
-    resolveModel(provider, agentType, configManager) {
+    resolveModel(provider, agentType, configManager, taskDescription) {
         if (configManager) {
             try {
                 const { config } = configManager.getProviderConfig(provider);
-                if (config?.model) {
+                if (config?.model && config.model !== 'default') {
                     // Best-effort registry consult — never let it break model resolution.
                     try {
                         const registry = getModelRegistry();
@@ -1555,7 +1651,31 @@ export class AutoModelRouter {
                 // Fall through to default
             }
         }
-        return 'default';
+        // MODEL-LEVEL ROUTING: when no specific model is configured, use the
+        // model scoring module to pick the BEST model from the provider's
+        // available models based on task requirements. This is the key fix that
+        // makes the auto-router leverage ALL discovered models (300+ on OpenRouter,
+        // multiple on Groq/Gemini/NIM, etc.) instead of falling back to a single
+        // hardcoded default.
+        if (taskDescription) {
+            try {
+                const { pickBestModel } = require('./model-scoring.js');
+                const bestModel = pickBestModel(provider, taskDescription);
+                if (bestModel)
+                    return bestModel;
+            }
+            catch {
+                // Fall through to preferred models
+            }
+        }
+        // Fallback: use preferred models from registry (health-ranked)
+        const preferred = preferredModelsFor(provider);
+        if (preferred.length > 0)
+            return preferred[0];
+        // LAST RESORT: use the catalog's curated default model for this provider.
+        // This ensures resolveModel() NEVER returns 'default' — every provider
+        // always resolves to a real, known-working model name.
+        return getDefaultModel(provider);
     }
     /**
      * Pick the best model within the selected provider, given a list of model
@@ -1567,7 +1687,7 @@ export class AutoModelRouter {
         if (configured !== 'default')
             return configured;
         const usable = models.find((m) => !(m.tags || []).includes('speech'));
-        return usable?.id || 'default';
+        return usable?.id || getDefaultModel(provider);
     }
     /**
      * Load runtime performance data: per-provider benchmark quality and the

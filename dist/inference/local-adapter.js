@@ -6,6 +6,25 @@ import { getCostTracker } from '../learning/cost-tracker.js';
 import { requireAdapterModel } from '../learning/model-selection.js';
 import { attachHttpContext } from './http-error.js';
 const OLLAMA_API_BASE = 'http://localhost:11434';
+/** Ollama fetch timeout (ms) — prevents hanging when ollama is not running. */
+const OLLAMA_TIMEOUT_MS = 10_000;
+/** Fetch with timeout — fast-fails when ollama is not running. */
+async function fetchWithTimeout(url, init, timeoutMs = OLLAMA_TIMEOUT_MS) {
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), timeoutMs);
+    try {
+        return await fetch(url, { ...init, signal: controller.signal });
+    }
+    catch (err) {
+        if (err?.name === 'AbortError') {
+            throw new Error(`Ollama connection timed out after ${timeoutMs}ms — ensure Ollama is running: ollama serve`);
+        }
+        throw err;
+    }
+    finally {
+        clearTimeout(timer);
+    }
+}
 /** Cap on /api/show fallback fetches per listModels call — bounds the N+1 cost
  *  on machines with large local model libraries. */
 const MAX_SHOW_FALLBACKS = 8;
@@ -61,7 +80,7 @@ export class LocalAdapter {
         const model = options?.model || requireAdapterModel('local', this.config.model);
         const temperature = options?.temperature ?? this.config.temperature ?? 0.7;
         logger.debug(`Ollama: Generating with model=${model}, temperature=${temperature}`);
-        const response = await fetch(`${OLLAMA_API_BASE}/api/generate`, {
+        const response = await fetchWithTimeout(`${OLLAMA_API_BASE}/api/generate`, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({
@@ -92,7 +111,7 @@ export class LocalAdapter {
      * Ollama's streaming format returns one JSON object per line with a `response` field.
      */
     async generateOllamaStream(prompt, model, temperature, onToken) {
-        const response = await fetch(`${OLLAMA_API_BASE}/api/generate`, {
+        const response = await fetchWithTimeout(`${OLLAMA_API_BASE}/api/generate`, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({
@@ -300,7 +319,7 @@ except Exception as e:
         const runner = this.config.runner || 'ollama';
         if (runner === 'ollama') {
             try {
-                const response = await fetch(`${OLLAMA_API_BASE}/api/tags`);
+                const response = await fetchWithTimeout(`${OLLAMA_API_BASE}/api/tags`, {});
                 return response.ok;
             }
             catch {
@@ -319,7 +338,7 @@ except Exception as e:
         if (runner !== 'ollama')
             return [];
         try {
-            const response = await fetch(`${OLLAMA_API_BASE}/api/tags`);
+            const response = await fetchWithTimeout(`${OLLAMA_API_BASE}/api/tags`, {});
             if (!response.ok)
                 return [];
             // Ollama exposes each model's context length in DIFFERENT places by
@@ -353,7 +372,7 @@ except Exception as e:
     /** POST /api/show for one model and read its advertised context window. */
     async fetchContextWindow(model) {
         try {
-            const response = await fetch(`${OLLAMA_API_BASE}/api/show`, {
+            const response = await fetchWithTimeout(`${OLLAMA_API_BASE}/api/show`, {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({ model }),

@@ -34,6 +34,12 @@ export declare class MemoryCommand extends BaseCommand {
     private showInfo;
     private listFacts;
     private addFact;
+    private listMemories;
+    private searchMemories;
+    private addMemory;
+    private deleteMemory;
+    private exportMemories;
+    private importMemories;
     private showBackend;
     private clearMemory;
     private formatBytes;

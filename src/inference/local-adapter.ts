@@ -10,6 +10,25 @@ import { attachHttpContext } from './http-error.js';
 
 const OLLAMA_API_BASE = 'http://localhost:11434';
 
+/** Ollama fetch timeout (ms) — prevents hanging when ollama is not running. */
+const OLLAMA_TIMEOUT_MS = 10_000;
+
+/** Fetch with timeout — fast-fails when ollama is not running. */
+async function fetchWithTimeout(url: string, init: RequestInit, timeoutMs = OLLAMA_TIMEOUT_MS): Promise<Response> {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), timeoutMs);
+  try {
+    return await fetch(url, { ...init, signal: controller.signal });
+  } catch (err: any) {
+    if (err?.name === 'AbortError') {
+      throw new Error(`Ollama connection timed out after ${timeoutMs}ms — ensure Ollama is running: ollama serve`);
+    }
+    throw err;
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
 /** Cap on /api/show fallback fetches per listModels call — bounds the N+1 cost
  *  on machines with large local model libraries. */
 const MAX_SHOW_FALLBACKS = 8;
@@ -75,7 +94,7 @@ export class LocalAdapter implements InferenceProvider {
 
     logger.debug(`Ollama: Generating with model=${model}, temperature=${temperature}`);
 
-    const response = await fetch(`${OLLAMA_API_BASE}/api/generate`, {
+    const response = await fetchWithTimeout(`${OLLAMA_API_BASE}/api/generate`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
@@ -121,7 +140,7 @@ export class LocalAdapter implements InferenceProvider {
     temperature: number,
     onToken: (token: string) => void,
   ): Promise<string> {
-    const response = await fetch(`${OLLAMA_API_BASE}/api/generate`, {
+    const response = await fetchWithTimeout(`${OLLAMA_API_BASE}/api/generate`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
@@ -368,7 +387,7 @@ except Exception as e:
 
     if (runner === 'ollama') {
       try {
-        const response = await fetch(`${OLLAMA_API_BASE}/api/tags`);
+        const response = await fetchWithTimeout(`${OLLAMA_API_BASE}/api/tags`, {});
         return response.ok;
       } catch {
         return false;
@@ -389,7 +408,7 @@ except Exception as e:
     if (runner !== 'ollama') return [];
 
     try {
-      const response = await fetch(`${OLLAMA_API_BASE}/api/tags`);
+      const response = await fetchWithTimeout(`${OLLAMA_API_BASE}/api/tags`, {});
       if (!response.ok) return [];
       // Ollama exposes each model's context length in DIFFERENT places by
       // version: `details.context_length` (0.32.x+), `model_info["general.context_length"]`
@@ -434,7 +453,7 @@ except Exception as e:
   /** POST /api/show for one model and read its advertised context window. */
   private async fetchContextWindow(model: string): Promise<number | undefined> {
     try {
-      const response = await fetch(`${OLLAMA_API_BASE}/api/show`, {
+      const response = await fetchWithTimeout(`${OLLAMA_API_BASE}/api/show`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ model }),

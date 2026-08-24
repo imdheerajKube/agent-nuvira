@@ -3,13 +3,13 @@
  * `npx skills add`).
  *
  * Subcommands:
- *   buff skills search <query>                — Search the skills registry
- *   buff skills install <name>                — Install a skill from the registry
- *   buff skills update                        — Update installed skills to newer versions
- *   buff skills list [--origin registry|local] — List installed skills with provenance
+ *   nuvira skills search <query>                — Search the skills registry
+ *   nuvira skills install <name>                — Install a skill from the registry
+ *   nuvira skills update                        — Update installed skills to newer versions
+ *   nuvira skills list [--origin registry|local] — List installed skills with provenance
  *
- * Distinct from `buff skill` (singular): that manages INTERNAL skills compiled
- * from trajectories; `buff skills` manages EXTERNAL community skills installed
+ * Distinct from `nuvira skill` (singular): that manages INTERNAL skills compiled
+ * from trajectories; `nuvira skills` manages EXTERNAL community skills installed
  * into `<project>/.agents/skills/` (sandboxed, provenance + checksum recorded).
  */
 
@@ -39,6 +39,7 @@ import {
 } from '../learning/skills-registry.js';
 import { logger } from '../utils/logger.js';
 import { ConfigManager } from '../config/manager.js';
+import { getCliName } from './commands.js';
 
 export class SkillsCommand {
   create(): Command {
@@ -81,7 +82,7 @@ export class SkillsCommand {
           if (r.tags.length > 0) console.log(`    tags: ${r.tags.join(', ')}`);
           console.log('');
         }
-        console.log(`Install one with: buff skills install <name> [--source <kind>]`);
+        console.log(`Install one with: ${getCliName()} skills install <name> [--source <kind>]`);
       });
 
     cmd
@@ -106,7 +107,7 @@ export class SkillsCommand {
         }
         if (!entry) {
           spinner.fail(`Skill '${name}' not found in any configured registry.`);
-          logger.info('  Search available skills: buff skills search <query>');
+          logger.info(`  Search available skills: ${getCliName()} skills search <query>`);
           // P5c #3 — never silently 404: surface unreachable sources with a fix hint.
           const hint = unreachableRegistryHint(await probeRegistries(new ConfigManager()));
           if (hint) logger.warn(hint);
@@ -161,7 +162,7 @@ export class SkillsCommand {
         const { updated, current, failed } = await updateHubSkills(opts.project || process.cwd());
         spinner.stop();
         if (updated.length === 0 && current.length === 0 && failed.length === 0) {
-          logger.info('No skills installed yet — install one with `buff skills install <name>`.');
+          logger.info(`No skills installed yet — install one with \`${getCliName()} skills install <name>\`.`);
           return;
         }
         if (updated.length > 0) {
@@ -187,7 +188,7 @@ export class SkillsCommand {
       .action((slug, opts) => {
         if (opts.delete) {
           if (!slug) {
-            logger.error('bundle --delete needs a slug: buff skills bundle <slug> --delete');
+            logger.error(`bundle --delete needs a slug: ${getCliName()} skills bundle <slug> --delete`);
             return;
           }
           if (deleteBundle(slug)) logger.success(`🗑️  Deleted bundle '${slug}'.`);
@@ -196,11 +197,11 @@ export class SkillsCommand {
         }
         if (opts.create) {
           if (!slug) {
-            logger.error('bundle --create needs a slug: buff skills bundle <slug> --create --skills a,b,c');
+            logger.error(`bundle --create needs a slug: ${getCliName()} skills bundle <slug> --create --skills a,b,c`);
             return;
           }
           if (!opts.skills) {
-            logger.error('bundle --create needs --skills: buff skills bundle <slug> --create --skills code-review,tdd');
+            logger.error(`bundle --create needs --skills: ${getCliName()} skills bundle <slug> --create --skills code-review,tdd`);
             return;
           }
           const skills = String(opts.skills).split(',').map((s) => s.trim()).filter(Boolean);
@@ -227,7 +228,7 @@ export class SkillsCommand {
         const bundles = listBundles();
         if (bundles.length === 0) {
           logger.info('No bundles yet.');
-          logger.info('  Create one: buff skills bundle <slug> --create --skills a,b,c');
+          logger.info(`  Create one: ${getCliName()} skills bundle <slug> --create --skills a,b,c`);
           return;
         }
         console.log(`\n🧩 ${bundles.length} bundle(s):\n`);
@@ -235,7 +236,7 @@ export class SkillsCommand {
           console.log(`  • ${b.name} (${b.slug}) — ${b.description}`);
           console.log(`    skills: ${b.skills.join(', ')}\n`);
         }
-        console.log('Load a bundle in chat: "load my <slug> bundle" — or show one: buff skills bundle <slug>');
+        console.log(`Load a bundle in chat: "load my <slug> bundle" — or show one: ${getCliName()} skills bundle <slug>`);
       });
 
     cmd
@@ -251,7 +252,7 @@ export class SkillsCommand {
         const items = listHubSkills(origin, opts.project || process.cwd());
         if (items.length === 0) {
           logger.info('No skills installed.');
-          logger.info('  Search available skills: buff skills search <query>');
+          logger.info(`  Search available skills: ${getCliName()} skills search <query>`);
           return;
         }
         console.log(`\n🧠 ${items.length} installed skill(s):\n`);

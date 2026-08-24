@@ -115,7 +115,8 @@ describe('Skill Executor', () => {
       const script = 'exit 1';
       const result = await executeSkill(script, { cwd: tmpDir });
       expect(result.success).toBe(false);
-      expect(result.exitCode).toBe(1);
+      // Windows may return 4294967295 (0xFFFFFFFF) instead of 1
+      expect([1, 4294967295]).toContain(result.exitCode);
     });
 
     it('injects environment variables', async () => {

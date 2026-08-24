@@ -214,7 +214,7 @@ describe('LocalAdapter', () => {
       expect(models[1]).toEqual({ id: 'mistral:latest', name: 'mistral:latest', provider: 'local', tags: expect.arrayContaining([expect.any(String)]) });
       expect(models[2]).toEqual({ id: 'codellama:latest', name: 'codellama:latest', provider: 'local', tags: expect.arrayContaining([expect.any(String)]) });
 
-      expect(mockFetch).toHaveBeenCalledWith('http://localhost:11434/api/tags');
+      expect(mockFetch).toHaveBeenCalledWith('http://localhost:11434/api/tags', expect.objectContaining({ signal: expect.any(AbortSignal) }));
     });
 
     it('should record the advertised context window wherever Ollama exposes it (details.* / general.* / llama.*)', async () => {

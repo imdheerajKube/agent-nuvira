@@ -29,6 +29,7 @@ import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { createHash } from 'node:crypto';
 import { dirname, join } from 'node:path';
 import { homedir } from 'node:os';
+import { fileURLToPath } from 'node:url';
 
 import { embed } from '../memory/embedder.js';
 import { cosineSimilarity } from '../memory/vector-store.js';
@@ -72,7 +73,8 @@ export interface SemanticResolveOptions {
 
 /** Load the manifest path relative to this module (works in src/ and dist/). */
 function manifestPath(): string {
-  return new URL('../resources/command-manifest.json', import.meta.url).pathname;
+  const __dirname = dirname(fileURLToPath(import.meta.url));
+  return join(__dirname, '..', 'resources', 'command-manifest.json');
 }
 
 let aliasCorpus: AliasEntry[] | null = null;
