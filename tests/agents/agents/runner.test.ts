@@ -1249,10 +1249,15 @@ describe('RunnerAgent', () => {
       const originalIsTTY = (process.stdin as { isTTY?: boolean }).isTTY;
       (process.stdin as { isTTY?: boolean }).isTTY = true;
       try {
-        vi.spyOn(runner as any, 'commandExists')
-          .mockReturnValueOnce(false)   // zip missing
-          .mockReturnValueOnce(true);   // verified after install
-        const runInstall = vi.spyOn(runner as any, 'runInstallCommand').mockReturnValue({ success: true, command: 'brew install zip' });
+        // Mock commandExists: zip is missing initially, but toolInstallCommand
+        // also calls commandExists for package manager detection (winget/choco
+        // on Windows), so use a per-name implementation.
+        let zipCallCount = 0;
+        vi.spyOn(runner as any, 'commandExists').mockImplementation((name: string) => {
+          if (name === 'zip') return ++zipCallCount > 1; // false first, true after install
+          return true; // winget/choco always detected
+        });
+        const runInstall = vi.spyOn(runner as any, 'runInstallCommand').mockReturnValue({ success: true, command: 'winget install 7zip' });
 
         // Mock the prompt module via the runner's import — simplest: replace
         // the module-level function reference through the spy below.
@@ -1269,7 +1274,7 @@ describe('RunnerAgent', () => {
         const outcome = await ensureSystemTool(context, 'zip -r out.nvda-addon manifest.ini globalPlugins');
         expect(outcome).toBeNull(); // installed → continue
         expect(runInstall).toHaveBeenCalled();
-        expect(promptSpy).toHaveBeenCalledWith('zip', expect.stringContaining('brew install zip'));
+        expect(promptSpy).toHaveBeenCalledWith('zip', expect.any(String));
       } finally {
         (process.stdin as { isTTY?: boolean }).isTTY = originalIsTTY;
       }

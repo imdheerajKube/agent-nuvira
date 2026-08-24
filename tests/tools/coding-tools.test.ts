@@ -115,11 +115,12 @@ describe('list_dir — the agent explores structure', () => {
   it('lists directories first (sorted), then files (sorted)', async () => {
     const { ctx } = makeWorkspace();
     const out = await runListDir({}, ctx);
-    expect(out).toContain(`📁 src${sep}`);
-    expect(out).toContain(`📁 tests${sep}`);
+    // list_dir always uses '/' for directory entries (cross-platform).
+    expect(out).toContain('📁 src/');
+    expect(out).toContain('📁 tests/');
     expect(out).toContain('📄 README.md');
     // Directories precede files in the output.
-    expect(out.indexOf(`📁 src${sep}`)).toBeLessThan(out.indexOf('📄 README.md'));
+    expect(out.indexOf('📁 src/')).toBeLessThan(out.indexOf('📄 README.md'));
   });
 
   it('lists a subdirectory by relative path', async () => {

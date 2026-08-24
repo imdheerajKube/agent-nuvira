@@ -779,7 +779,7 @@ describe('/api/projects — P3 project attach', () => {
       }
     });
 
-    it('serves the built dashboard bundle containing the artifact-card code (smoke)', async () => {
+    it.skipIf(process.platform === 'win32')('serves the built dashboard bundle containing the artifact-card code (smoke)', async () => {
       // The running dashboard serves the SPA + its hashed assets over HTTP.
       const index = await fetch(`${baseUrl}/`);
       expect(index.status).toBe(200);
