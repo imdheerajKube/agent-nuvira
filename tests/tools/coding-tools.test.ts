@@ -11,6 +11,7 @@
  */
 
 import { describe, it, expect } from 'vitest';
+import { sep } from 'node:path';
 import { mkdtempSync, writeFileSync, mkdirSync, symlinkSync, rmSync, existsSync, readFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -46,7 +47,7 @@ describe('read_file — the agent opens a file', () => {
   it('returns numbered lines for a relative path', async () => {
     const { ctx } = makeWorkspace();
     const out = await runReadFile({ path: 'src/index.ts' }, ctx);
-    expect(out).toContain('src/index.ts (2 lines');
+    expect(out).toContain(`src${sep}index.ts (2 lines`);
     expect(out).toContain('1: export const root = 1;');
     expect(out).toContain('2: export const root2 = 2;');
   });
@@ -114,11 +115,11 @@ describe('list_dir — the agent explores structure', () => {
   it('lists directories first (sorted), then files (sorted)', async () => {
     const { ctx } = makeWorkspace();
     const out = await runListDir({}, ctx);
-    expect(out).toContain('📁 src/');
-    expect(out).toContain('📁 tests/');
+    expect(out).toContain(`📁 src${sep}`);
+    expect(out).toContain(`📁 tests${sep}`);
     expect(out).toContain('📄 README.md');
     // Directories precede files in the output.
-    expect(out.indexOf('📁 src/')).toBeLessThan(out.indexOf('📄 README.md'));
+    expect(out.indexOf(`📁 src${sep}`)).toBeLessThan(out.indexOf('📄 README.md'));
   });
 
   it('lists a subdirectory by relative path', async () => {
@@ -145,21 +146,21 @@ describe('glob — the agent finds files by shape', () => {
   it('matches ** across depths', async () => {
     const { ctx } = makeWorkspace();
     const out = await runGlob({ pattern: 'src/**/*.ts' }, ctx);
-    expect(out).toContain('src/index.ts');
-    expect(out).toContain('src/many-lines.ts');
+    expect(out).toContain(`src${sep}index.ts`);
+    expect(out).toContain(`src${sep}many-lines.ts`);
   });
 
   it('matches a single-segment pattern', async () => {
     const { ctx } = makeWorkspace();
     const out = await runGlob({ pattern: 'tests/*.test.ts' }, ctx);
-    expect(out).toContain('tests/index.test.ts');
+    expect(out).toContain(`tests${sep}index.test.ts`);
   });
 
   it('matches at the workspace root with **/ zero-depth semantics', async () => {
     const { ctx } = makeWorkspace();
     const out = await runGlob({ pattern: '**/*.ts' }, ctx);
-    expect(out).toContain('src/index.ts');
-    expect(out).toContain('tests/index.test.ts');
+    expect(out).toContain(`src${sep}index.ts`);
+    expect(out).toContain(`tests${sep}index.test.ts`);
   });
 
   it('reports no matches cleanly', async () => {
@@ -309,7 +310,7 @@ describe('write_file — create / overwrite (confirmation-gated)', () => {
       { path: 'deep/nested/new-file.ts', content: 'export const x = 1;\n', confirm: true },
       ctx,
     );
-    expect(out).toContain("created 'deep/nested/new-file.ts'");
+    expect(out).toContain(`created 'deep${sep}nested${sep}new-file.ts'`);
     const content = await runReadFile({ path: 'deep/nested/new-file.ts' }, ctx);
     expect(content).toContain('export const x = 1;');
   });

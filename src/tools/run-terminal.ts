@@ -32,6 +32,7 @@
  */
 
 import { spawn } from 'node:child_process';
+import { existsSync } from 'node:fs';
 import type { ToolContext } from './registry.js';
 import { maskSenderId } from '../utils/mask.js';
 
@@ -162,13 +163,21 @@ export async function runTerminalTool(args: RunTerminalArgs, ctx: ToolContext): 
 /** Spawn the command (shell-interpreted — pipes, &&, substitutions work). */
 function execCommand(command: string, cwd: string | undefined, timeoutMs: number): Promise<string> {
   return new Promise((resolve) => {
-    const child = spawn(command, {
+    // On Windows, use Git Bash for cross-platform shell commands (pwd, touch, etc.)
+    const shellOptions: Record<string, unknown> = {
       cwd: cwd || process.cwd(),
       shell: true,
       env: { ...process.env, FORCE_COLOR: '0', NO_COLOR: '1', CI: '1' },
       stdio: ['ignore', 'pipe', 'pipe'],
       windowsHide: true,
-    });
+    };
+    if (process.platform === 'win32') {
+      const gitBash = 'C:\\Program Files\\Git\\bin\\bash.exe';
+      if (existsSync(gitBash)) {
+        shellOptions.shell = gitBash;
+      }
+    }
+    const child = spawn(command, shellOptions as any);
     let out = '';
     let err = '';
     const timer = setTimeout(() => {
