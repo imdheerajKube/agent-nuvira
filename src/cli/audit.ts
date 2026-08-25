@@ -2,14 +2,14 @@
  * Audit command — P6 M6.3 tamper-evident audit trail.
  *
  * Usage:
- *   buff audit verify                      — Verify the hash chain of the built-in
+ *   nuvira audit verify                      — Verify the hash chain of the built-in
  *                                            audit stores (quota-events + model-
- *                                            registry-actions) in ~/.buff/memory
- *   buff audit verify --file <path>        — Verify a specific JSONL audit file
- *   buff audit verify --json               — Machine-readable verdict (exit 0/1/2)
- *   buff audit export [--file <path>]      — SIEM-friendly CEF export of a store
+ *                                            registry-actions) in ~/.nuvira/memory
+ *   nuvira audit verify --file <path>        — Verify a specific JSONL audit file
+ *   nuvira audit verify --json               — Machine-readable verdict (exit 0/1/2)
+ *   nuvira audit export [--file <path>]      — SIEM-friendly CEF export of a store
  *                                            (defaults to quota-events)
- *   buff audit export --out <path>         — Write export to a file
+ *   nuvira audit export --out <path>         — Write export to a file
  *
  * The stores are hash-chained (SHA-256) and secret-scrubbed: every record's
  * `chain.hash = sha256(prevHash ‖ canonical(record))`, and the chain head is
@@ -18,6 +18,7 @@
  */
 
 import { existsSync, readFileSync, writeFileSync } from 'node:fs';
+import { envBuff } from '../config/paths';
 import { Command } from 'commander';
 import { BaseCommand, getCliName } from './commands.js';
 import { logger } from '../utils/logger.js';
@@ -43,7 +44,7 @@ const BUILTIN_CHAINS: Array<{ id: string; label: string }> = [
 ];
 
 function memoryDir(): string {
-  return process.env.BUFF_MEMORY_DIR || join(resolveNuviraHome(), 'memory');
+  return envBuff('MEMORY_DIR') || join(resolveNuviraHome(), 'memory');
 }
 
 /** Resolve a --file path or fall back to a builtin store id. */

@@ -508,7 +508,7 @@ export class DefaultReportModule implements ReportModule {
       }
       actions.push('Re-run with --verbose for detailed logs');
       if (meta?.trajectoryId) {
-        actions.push(`Review memory trajectory: buff memory show ${meta.trajectoryId}`);
+        actions.push(`Review memory trajectory: nuvira memory show ${meta.trajectoryId}`);
       }
     }
 
@@ -521,7 +521,7 @@ export class DefaultReportModule implements ReportModule {
     }
 
     if (meta?.reviewId) {
-      actions.push(`Approve and merge review bundle: buff team review approve ${meta.reviewId}`);
+      actions.push(`Approve and merge review bundle: nuvira team review approve ${meta.reviewId}`);
     }
 
     return actions.length > 0

@@ -1,5 +1,5 @@
 /**
- * SecurityCommand — Unit tests for buff security scan.
+ * SecurityCommand — Unit tests for nuvira security scan.
  *
  * Covers:
  * 1. Scan inline text for PII
@@ -202,7 +202,7 @@ describe('SecurityCommand', () => {
       // Actually the command won't have an argument at all since 'scan' subcommand needs an arg.
       // Without args, Commander won't invoke the action. So we call without the scan subcommand.
       // Wait no -- we need to provide the scan subcommand. Let me re-read the args...
-      // The scan subcommand has an optional [input] argument. So `node buff scan` with no arg
+      // The scan subcommand has an optional [input] argument. So `node nuvira scan` with no arg
       // should call the action with input=undefined.
       await runSecurity(['scan']);
 

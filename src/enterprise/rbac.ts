@@ -3,10 +3,10 @@
  * surface.
  *
  * Minimal first milestone, deliberately:
- * - A local role file (`~/.buff/rbac.json`, or BUFF_CONFIG_DIR override) maps
+ * - A local role file (`~/.nuvira/rbac.json`, or NUVIRA_CONFIG_DIR override) maps
  *   OS user → role. **Legacy single-user mode**: when the file has no users,
  *   everything stays allowed — enabling RBAC can never lock you out.
- * - A permission matrix (admin / operator / viewer) gates the `buff admin`
+ * - A permission matrix (admin / operator / viewer) gates the `nuvira admin`
  *   surface: policy *writes* and role management require `admin`; policy
  *   *reads* are open to every role; `operator` may run routing/models.
  * - An **OIDC adapter interface** is the seam for token-backed identity: a
@@ -18,6 +18,7 @@
  */
 
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { envBuff } from '../config/paths';
 import { resolveBuffConfigDir } from '../config/paths.js';
 import { join } from 'node:path';
 import { logger } from '../utils/logger.js';
@@ -46,11 +47,11 @@ export type AdminAction =
   | 'routing.operate'    // run routing/model commands (admin + operator)
   // K4 — enforcement extended beyond the admin surface to sensitive commands:
   | 'team.manage'        // team init/join/sync/share/review approve/reject/merge (admin + operator)
-  | 'sbom.write'         // `buff sbom --out <file>` (admin + operator)
-  | 'skill.remove'       // `buff skill gc` real removal (admin)
-  | 'cron.manage'        // `buff admin cron add/remove` (J2 — admin + operator)
-  | 'gateway.manage'     // `buff gateway alias add/remove` + `buff gateway stop` (J1 — admin + operator)
-  | 'system.manage';     // `buff dashboard stop` / dashboard Shutdown buttons (admin — stopping a server is a system action)
+  | 'sbom.write'         // `nuvira sbom --out <file>` (admin + operator)
+  | 'skill.remove'       // `nuvira skill gc` real removal (admin)
+  | 'cron.manage'        // `nuvira admin cron add/remove` (J2 — admin + operator)
+  | 'gateway.manage'     // `nuvira gateway alias add/remove` + `nuvira gateway stop` (J1 — admin + operator)
+  | 'system.manage';     // `nuvira dashboard stop` / dashboard Shutdown buttons (admin — stopping a server is a system action)
 
 const PERMISSION_MATRIX: Record<Role, ReadonlySet<AdminAction>> = {
   admin: new Set(['policy.read', 'policy.write', 'role.manage', 'credential.write', 'routing.operate', 'team.manage', 'sbom.write', 'skill.remove', 'cron.manage', 'gateway.manage', 'system.manage']),
@@ -133,8 +134,8 @@ export function parseRbacUsers(raw: string): Record<string, RbacUser> {
 // ─── Manager ────────────────────────────────────────────────────────────────
 
 function rbacPath(): string {
-  // Same BUFF_CONFIG_DIR-aware resolution as every other ~/.buff reader — one
-  // source of truth for the precedence (explicit > BUFF_CONFIG_DIR > ~/.buff).
+  // Same NUVIRA_CONFIG_DIR-aware resolution as every other ~/.nuvira reader — one
+  // source of truth for the precedence (explicit > NUVIRA_CONFIG_DIR > ~/.nuvira).
   return join(resolveBuffConfigDir(), 'rbac.json');
 }
 
@@ -149,7 +150,7 @@ export class RbacManager {
 
   /** The acting identity — OS user, overridable via BUFF_ACT_AS (CI/tests). */
   static currentIdentity(): string {
-    return process.env.BUFF_ACT_AS || process.env.USER || 'local';
+    return envBuff('ACT_AS') || process.env.USER || 'local';
   }
 
   /** Single-user legacy mode: no role file / no users → fully permissive. */

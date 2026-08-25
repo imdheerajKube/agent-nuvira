@@ -1,5 +1,5 @@
 /**
- * Stale-dashboard detection + restart helpers for `buff dashboard --force`.
+ * Stale-dashboard detection + restart helpers for `nuvira dashboard --force`.
  *
  * The stale scenario (v1.56.1 fix): an older dashboard server still running on
  * the port answers newer /api/* routes with the SPA index.html (HTTP 200,

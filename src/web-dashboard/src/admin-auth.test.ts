@@ -11,6 +11,7 @@
  */
 
 import { describe, it, expect, afterEach, beforeEach, vi } from 'vitest';
+import { envBuff } from '../../config/paths';
 import { mkdtempSync, rmSync, existsSync, readFileSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -152,9 +153,9 @@ describe('roleForUser — rbac.json wins over the stored role (CLI parity)', () 
 
 describe('env override (with role)', () => {
   const OLD = {
-    user: process.env.BUFF_DASHBOARD_ADMIN_USER,
-    pass: process.env.BUFF_DASHBOARD_ADMIN_PASSWORD,
-    role: process.env.BUFF_DASHBOARD_ADMIN_ROLE,
+    user: envBuff('DASHBOARD_ADMIN_USER'),
+    pass: envBuff('DASHBOARD_ADMIN_PASSWORD'),
+    role: envBuff('DASHBOARD_ADMIN_ROLE'),
   };
 
   afterEach(() => {
@@ -165,9 +166,9 @@ describe('env override (with role)', () => {
   });
 
   it('password-only defaults to the admin user + admin role; env wins over the file', () => {
-    delete process.env.BUFF_DASHBOARD_ADMIN_USER;
-    delete process.env.BUFF_DASHBOARD_ADMIN_ROLE;
-    process.env.BUFF_DASHBOARD_ADMIN_PASSWORD = 'env-pass';
+    delete envBuff('DASHBOARD_ADMIN_USER');
+    delete envBuff('DASHBOARD_ADMIN_ROLE');
+    envBuff('DASHBOARD_ADMIN_PASSWORD') = 'env-pass';
     expect(envAdminOverride()).toEqual({ user: 'admin', password: 'env-pass', role: 'admin' });
     expect(isAdminConfigured()).toBe(true);
     expect(verifyAdmin('admin', 'env-pass')).toBe(true);
@@ -175,18 +176,18 @@ describe('env override (with role)', () => {
   });
 
   it('honors BUFF_DASHBOARD_ADMIN_ROLE and rejects an invalid one (falls back to admin)', () => {
-    delete process.env.BUFF_DASHBOARD_ADMIN_USER;
-    process.env.BUFF_DASHBOARD_ADMIN_PASSWORD = 'env-pass';
-    process.env.BUFF_DASHBOARD_ADMIN_ROLE = 'operator';
+    delete envBuff('DASHBOARD_ADMIN_USER');
+    envBuff('DASHBOARD_ADMIN_PASSWORD') = 'env-pass';
+    envBuff('DASHBOARD_ADMIN_ROLE') = 'operator';
     expect(envAdminOverride()?.role).toBe('operator');
-    process.env.BUFF_DASHBOARD_ADMIN_ROLE = 'superuser';
+    envBuff('DASHBOARD_ADMIN_ROLE') = 'superuser';
     expect(envAdminOverride()?.role).toBe('admin');
   });
 
   it('roleForUser honors the env override role even with NO credential file (regression — env admins are not viewers)', () => {
-    delete process.env.BUFF_DASHBOARD_ADMIN_USER;
-    process.env.BUFF_DASHBOARD_ADMIN_ROLE = 'admin';
-    process.env.BUFF_DASHBOARD_ADMIN_PASSWORD = 'env-pass';
+    delete envBuff('DASHBOARD_ADMIN_USER');
+    envBuff('DASHBOARD_ADMIN_ROLE') = 'admin';
+    envBuff('DASHBOARD_ADMIN_PASSWORD') = 'env-pass';
     // No dashboard-admin.json exists anywhere — the env role must still apply.
     expect(roleForUser('admin')).toBe('admin');
     expect(roleForUser('someone-else')).toBe('viewer');

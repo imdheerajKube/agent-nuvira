@@ -123,8 +123,8 @@ function makeConfigManager(): ConfigManager {
 
 beforeAll(async () => {
   tempDir = mkdtempSync(join(tmpdir(), 'buff-keyrot-e2e-'));
-  originalMemoryDir = process.env.BUFF_MEMORY_DIR;
-  process.env.BUFF_MEMORY_DIR = tempDir;
+  originalMemoryDir = process.env.NUVIRA_MEMORY_DIR;
+  process.env.NUVIRA_MEMORY_DIR = tempDir;
   resetQuotaLedger();
   resetModelRegistry();
   resetAutoRouter();
@@ -145,9 +145,9 @@ afterAll(async () => {
   resetQuotaLedger();
   resetModelRegistry();
   if (originalMemoryDir === undefined) {
-    delete process.env.BUFF_MEMORY_DIR;
+    delete process.env.NUVIRA_MEMORY_DIR;
   } else {
-    process.env.BUFF_MEMORY_DIR = originalMemoryDir;
+    process.env.NUVIRA_MEMORY_DIR = originalMemoryDir;
   }
   rmSync(tempDir, { recursive: true, force: true });
 });

@@ -20,7 +20,7 @@
  *   surfaced).
  *
  * File location: facts live in the vector index namespace `facts`
- * (`~/.buff/memory/vectors-facts.json`).
+ * (`~/.nuvira/memory/vectors-facts.json`).
  */
 
 import { homedir } from 'node:os';
@@ -335,7 +335,7 @@ export class FactStore {
     );
   }
 
-  /** Basic stats (for `buff memory facts` / doctor). */
+  /** Basic stats (for `nuvira memory facts` / doctor). */
   async stats(): Promise<{ total: number; byProject: Record<string, number> }> {
     const facts = await this.listFacts();
     const byProject: Record<string, number> = {};

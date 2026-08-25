@@ -16,7 +16,7 @@
  *   estimatedLatencyMs) for the same task.
  * - When the orchestrator records the real outcome, `recordOutcome()` finalizes
  *   the pending decision into a JSONL trajectory file
- *   (`~/.buff/memory/router-promotion.jsonl`, honors BUFF_MEMORY_DIR) with the
+ *   (`~/.nuvira/memory/router-promotion.jsonl`, honors NUVIRA_MEMORY_DIR) with the
  *   ACTUAL outcome (success/failure, latencyMs, costUsd, qualityScore).
  * - `evaluate(minDecisions)` computes the three criteria over the DIVERGED
  *   decisions (where the bandit pick differs from the heuristic pick — a pick
@@ -24,10 +24,11 @@
  *
  * The gate does not forcibly disable the bandit at runtime; it answers the
  * question \"is the bandit actually better than the heuristic?\" and is surfaced
- * via `buff model bandit`. All writes are best-effort.
+ * via `nuvira model bandit`. All writes are best-effort.
  */
 
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
+import {envBuff, resolveNuviraHome} from '../config/paths';
 import { dirname, join } from 'node:path';
 import { homedir } from 'node:os';
 
@@ -89,7 +90,7 @@ export interface PromotionStatus {
 
 // ─── Constants ──────────────────────────────────────────────────────────────
 
-const DEFAULT_MEMORY_DIR = join(homedir(), '.buff', 'memory');
+const DEFAULT_MEMORY_DIR = join(resolveNuviraHome(), 'memory');
 /** Default minimum diverged decisions before the gate evaluates. */
 export const DEFAULT_MIN_PROMOTION_DECISIONS = 20;
 /**
@@ -110,7 +111,7 @@ const COST_THRESHOLD = 0.01;
 const LATENCY_THRESHOLD = 0.05;
 
 function trajectoryPath(): string {
-  return join(process.env.BUFF_MEMORY_DIR || DEFAULT_MEMORY_DIR, 'router-promotion.jsonl');
+  return join(envBuff('MEMORY_DIR') || DEFAULT_MEMORY_DIR, 'router-promotion.jsonl');
 }
 
 // ─── Stats helpers ──────────────────────────────────────────────────────────
@@ -282,7 +283,7 @@ export class RouterPromotion {
     };
   }
 
-  /** Clear the trajectory (used by `buff model bandit reset`). */
+  /** Clear the trajectory (used by `nuvira model bandit reset`). */
   reset(): void {
     this.pending.clear();
     try {

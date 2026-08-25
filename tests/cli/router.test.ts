@@ -50,17 +50,17 @@ describe('resolveProvider with provider "auto"', () => {
 
   beforeEach(() => {
     memDir = mkdtempSync(join(tmpdir(), 'buff-router-'));
-    originalMemoryDir = process.env.BUFF_MEMORY_DIR;
-    process.env.BUFF_MEMORY_DIR = memDir;
+    originalMemoryDir = process.env.NUVIRA_MEMORY_DIR;
+    process.env.NUVIRA_MEMORY_DIR = memDir;
     resetModelRegistry();
   });
 
   afterEach(() => {
     resetModelRegistry();
     if (originalMemoryDir === undefined) {
-      delete process.env.BUFF_MEMORY_DIR;
+      delete process.env.NUVIRA_MEMORY_DIR;
     } else {
-      process.env.BUFF_MEMORY_DIR = originalMemoryDir;
+      process.env.NUVIRA_MEMORY_DIR = originalMemoryDir;
     }
     rmSync(memDir, { recursive: true, force: true });
   });

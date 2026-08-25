@@ -13,6 +13,7 @@
  */
 
 import { existsSync, readFileSync, writeFileSync, mkdirSync } from 'node:fs';
+import { resolveNuviraHome } from '../config/paths';
 import { join } from 'node:path';
 import { homedir } from 'node:os';
 import { logger } from '../utils/logger.js';
@@ -47,7 +48,7 @@ export class SkillUsageTracker {
   private usage: Map<string, SkillUsage> = new Map();
 
   constructor() {
-    const dir = join(homedir(), '.buff', 'skills', '.usage');
+    const dir = join(resolveNuviraHome(), 'skills', '.usage');
     if (!existsSync(dir)) mkdirSync(dir, { recursive: true });
     this.usageFile = join(dir, 'usage.json');
     this.load();
@@ -155,7 +156,7 @@ export class SkillProvenanceManager {
   private provenance: Map<string, SkillProvenance> = new Map();
 
   constructor() {
-    const dir = join(homedir(), '.buff', 'skills', '.provenance');
+    const dir = join(resolveNuviraHome(), 'skills', '.provenance');
     if (!existsSync(dir)) mkdirSync(dir, { recursive: true });
     this.provenanceFile = join(dir, 'provenance.json');
     this.load();

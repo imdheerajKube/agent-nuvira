@@ -1,13 +1,13 @@
 /**
  * WhatsAppCommand — I8 WhatsApp bridge CLI.
  *
- *   buff whatsapp pair              — QR-pair a personal number (Baileys bridge, no paid API)
- *   buff whatsapp pair --phone 91…  — pair by entering an 8-char code on the phone instead
- *   buff whatsapp status            — show the bridge session + pairing state
+ *   nuvira whatsapp pair              — QR-pair a personal number (Baileys bridge, no paid API)
+ *   nuvira whatsapp pair --phone 91…  — pair by entering an 8-char code on the phone instead
+ *   nuvira whatsapp status            — show the bridge session + pairing state
  *
  * The default `whatsapp` platform is the personal Baileys bridge; the paid
  * Meta Business API stays available as the separate `whatsapp_cloud` platform
- * (`buff gateway send whatsapp_cloud:+1555… …`), exactly as
+ * (`nuvira gateway send whatsapp_cloud:+1555… …`), exactly as
  * `whatsapp` and `whatsapp_cloud` as distinct platform entries.
  */
 
@@ -32,7 +32,7 @@ export class WhatsAppCommand {
       )
       .option('--timeout <seconds>', 'Pairing window in seconds', '90')
       .action(async (opts: { phone?: string; timeout?: string }) => {
-        // Pairing writes a session under ~/.buff/whatsapp/session — treat it
+        // Pairing writes a session under ~/.nuvira/whatsapp/session — treat it
         // like other secret-material writes (skill.remove-class gate).
         if (!guardRbacAction('skill.remove')) return;
         const dir = whatsappSessionDir();
@@ -75,7 +75,7 @@ export class WhatsAppCommand {
           onPairingCode: (code) => console.log(`\n🔑 Pairing code: ${code}\n`),
         });
         if (result.ok) {
-          logger.success('Paired — the WhatsApp bridge is ready. Run `buff whatsapp status` to confirm.');
+          logger.success('Paired — the WhatsApp bridge is ready. Run `nuvira whatsapp status` to confirm.');
         } else {
           logger.error(result.reason);
         }
@@ -88,10 +88,10 @@ export class WhatsAppCommand {
         const bridge = new BaileysBridge();
         logger.info('WhatsApp bridge (Baileys, personal number — I8)');
         logger.info(`  session: ${whatsappSessionDir()}`);
-        logger.info(`  paired:  ${bridge.paired ? 'yes' : 'no — run `buff whatsapp pair` to scan a QR'}`);
+        logger.info(`  paired:  ${bridge.paired ? 'yes' : 'no — run `nuvira whatsapp pair` to scan a QR'}`);
         logger.info(`  ${bridge.describe()}`);
         logger.info(`  self-chat: ${isSelfChatEnabled() ? 'on (BUFF_WHATSAPP_SELF_CHAT=1 — messages to yourself are processed)' : 'off (drop fromMe echoes; set BUFF_WHATSAPP_SELF_CHAT=1 to enable)'}`);
-        logger.info('  cloud:   Meta Business API is a separate platform — `buff gateway status` shows it under whatsapp_cloud.');
+        logger.info('  cloud:   Meta Business API is a separate platform — `nuvira gateway status` shows it under whatsapp_cloud.');
       });
 
     cmd
@@ -117,25 +117,25 @@ export class WhatsAppCommand {
         const names = bridge.contactNames();
         if (names.length === 0) {
           logger.info('No resolvable contacts yet.');
-          logger.info('Map a contact once:  buff whatsapp contact add <Name> <number>  (e.g. Name 919876543210)');
-          logger.info('Then send by name:    buff gateway send whatsapp:Name "message"');
+          logger.info('Map a contact once:  nuvira whatsapp contact add <Name> <number>  (e.g. Name 919876543210)');
+          logger.info('Then send by name:    nuvira gateway send whatsapp:Name "message"');
           return;
         }
-        logger.info(`${names.length} resolvable contact(s) — send by name: buff gateway send whatsapp:<Name> "message"`);
+        logger.info(`${names.length} resolvable contact(s) — send by name: nuvira gateway send whatsapp:<Name> "message"`);
         // Numbers are masked (privacy) — the name identifies the contact.
         for (const c of names) console.log(`  ${c.name} → ${maskSenderId(c.jid)}`);
-        logger.info('Add more with: buff whatsapp contact add <Name> <number>');
+        logger.info('Add more with: nuvira whatsapp contact add <Name> <number>');
         console.log('');
         logger.info('⚠  These are SEND-BY-NAME mappings ONLY — they do NOT let these numbers');
         logger.info('    trigger the agent. To let a number trigger the agent (inbound), add it to');
-        logger.info('    the verified list:  buff config gateway allow whatsapp user <number>');
+        logger.info('    the verified list:  nuvira config gateway allow whatsapp user <number>');
       });
 
-    const contact = cmd.command('contact').description('Manage the WhatsApp contact-name mapping (send by name: buff gateway send whatsapp:<Name> "message")');
+    const contact = cmd.command('contact').description('Manage the WhatsApp contact-name mapping (send by name: nuvira gateway send whatsapp:<Name> "message")');
 
     contact
       .command('add <name> <number>')
-      .description('Map a display name to a number (E.164, no +): buff whatsapp contact add Name 919876543210')
+      .description('Map a display name to a number (E.164, no +): nuvira whatsapp contact add Name 919876543210')
       .action(async (name: string, number: string) => {
         if (!guardRbacAction('skill.remove')) return;
         const bridge = new BaileysBridge();
@@ -144,11 +144,11 @@ export class WhatsAppCommand {
           return;
         }
         const digits = number.replace(/\D+/g, '');
-        logger.success(`Saved contact '${name}' → ${digits}. Send with: buff gateway send whatsapp:${name} "message"`);
+        logger.success(`Saved contact '${name}' → ${digits}. Send with: nuvira gateway send whatsapp:${name} "message"`);
         console.log('');
         logger.info('ℹ  This is a SEND-BY-NAME mapping only — it does NOT let this number trigger');
         logger.info('    the agent when they message you. To grant inbound access (verified list):');
-        logger.info(`      buff config gateway allow whatsapp user ${digits}`);
+        logger.info(`      nuvira config gateway allow whatsapp user ${digits}`);
       });
 
     contact

@@ -1,5 +1,5 @@
 /**
- * RetrievalCommand — `buff retrieval` — inspect and drive the vector retrieval layer.
+ * RetrievalCommand — `nuvira retrieval` — inspect and drive the vector retrieval layer.
  *
  * The retrieval engine (src/learning/retrieval.ts) turns large code/doc context
  * into token-efficient, semantically-relevant context using a local embedding
@@ -7,10 +7,10 @@
  * quota ledger: retrieval SAVES tokens, the ledger MANAGES quotas.
  *
  * Subcommands:
- *   buff retrieval stats           — token-savings transparency (dashboard data)
- *   buff retrieval index <dir|file> — pre-index a repo (so first auto-run is instant)
- *   buff retrieval query <text>    — semantic search over the indexed repo
- *   buff retrieval clear           — wipe the index + stats
+ *   nuvira retrieval stats           — token-savings transparency (dashboard data)
+ *   nuvira retrieval index <dir|file> — pre-index a repo (so first auto-run is instant)
+ *   nuvira retrieval query <text>    — semantic search over the indexed repo
+ *   nuvira retrieval clear           — wipe the index + stats
  */
 
 import { readdirSync, existsSync, statSync } from 'node:fs';
@@ -99,7 +99,7 @@ export class RetrievalCommand extends BaseCommand {
           }
         }
         console.log('');
-        logger.info('Reduce token usage with: `buff retrieval index <dir>` then Auto mode uses the semantic ranking automatically.');
+        logger.info('Reduce token usage with: `nuvira retrieval index <dir>` then Auto mode uses the semantic ranking automatically.');
       });
 
     cmd.command('index [path]')
@@ -122,7 +122,7 @@ export class RetrievalCommand extends BaseCommand {
         const { chunks } = await indexFiles(files, opts);
         const idx = getVectorStore(REPO_NAMESPACE).stats();
         logger.success(`   Indexed ${chunks} chunk(s) across ${files.length} file(s)`);
-        logger.info(`   Repo index now holds ${idx.totalEntries} chunk(s) — run \`buff retrieval query "<question>"\` to test.`);
+        logger.info(`   Repo index now holds ${idx.totalEntries} chunk(s) — run \`nuvira retrieval query "<question>"\` to test.`);
       });
 
     cmd.command('query <text>')
@@ -132,7 +132,7 @@ export class RetrievalCommand extends BaseCommand {
         logger.info(`🔍 Searching repo for: ${text.slice(0, 120)}`);
         const hits = await retrieve(text, opts);
         if (hits.length === 0) {
-          logger.warn('No matches — index a repo first with `buff retrieval index <dir>`.');
+          logger.warn('No matches — index a repo first with `nuvira retrieval index <dir>`.');
           return;
         }
         hits.forEach((h, i) => {

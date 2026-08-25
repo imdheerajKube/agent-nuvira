@@ -11,7 +11,7 @@ import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { mkdtempSync, rmSync, mkdirSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 
-// Temp HOME so clones land in a sandbox, never the real ~/.buff.
+// Temp HOME so clones land in a sandbox, never the real ~/.nuvira.
 const holder = vi.hoisted(() => {
   const { mkdtempSync } = require('node:fs') as typeof import('node:fs');
   const { join } = require('node:path') as typeof import('node:path');
@@ -40,7 +40,7 @@ import type { ToolContext } from '../../src/tools/registry.js';
 function fakeClone(url: string): string {
   const { createHash } = require('node:crypto') as typeof import('node:crypto');
   const hash = createHash('sha256').update(url).digest('hex').slice(0, 16);
-  const dir = join(holder.home, '.buff', 'clones', hash);
+  const dir = join(holder.home, '.nuvira', 'clones', hash);
   mkdirSync(dir, { recursive: true });
   writeFileSync(join(dir, '.git-marker'), 'fake');
   writeFileSync(join(dir, 'README.md'), '# Cloned repo\n');
@@ -66,7 +66,7 @@ describe('clone_repo tool', () => {
   });
 
   afterEach(() => {
-    rmSync(join(holder.home, '.buff', 'clones'), { recursive: true, force: true });
+    rmSync(join(holder.home, '.nuvira', 'clones'), { recursive: true, force: true });
   });
 
   it('clones an http(s) URL shallow (depth 1, --quiet) into the hashed cache and scopes cwd', async () => {
@@ -75,7 +75,7 @@ describe('clone_repo tool', () => {
     expect(out).toContain('✅ Cloned https://github.com/example/repo.git');
     expect(out).toContain('Workspace is now scoped to the clone');
     // The clone went to the hashed cache, NOT the user workspace.
-    expect(String(ctx.cwd)).toContain(join(holder.home, '.buff', 'clones'));
+    expect(String(ctx.cwd)).toContain(join(holder.home, '.nuvira', 'clones'));
     expect(String(ctx.cwd)).not.toContain('/original/workspace');
     // Depth-1 shallow, quiet, argv-array (no shell).
     const call = mockExecFileSync.mock.calls[0] as [string, string[]];
@@ -116,7 +116,7 @@ describe('clone_repo tool', () => {
     // Pre-create the clone dir with a .git marker — the tool must reuse it.
     const url = 'https://github.com/example/repo.git';
     fakeClone(url);
-    mkdirSync(join(join(holder.home, '.buff', 'clones', require('node:crypto').createHash('sha256').update(url).digest('hex').slice(0, 16)), '.git'), { recursive: true });
+    mkdirSync(join(join(holder.home, '.nuvira', 'clones', require('node:crypto').createHash('sha256').update(url).digest('hex').slice(0, 16)), '.git'), { recursive: true });
     mockExecFileSync.mockClear();
     const ctx: ToolContext = { configManager: {} };
     const out = await runCloneRepo({ url }, ctx);

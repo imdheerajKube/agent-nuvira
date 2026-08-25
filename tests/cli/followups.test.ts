@@ -2,7 +2,7 @@
  * Followup selection — single-shot chat/execute flows.
  *
  * Regression tests for the "followups are printed but the process quits"
- * bug: `buff chat "<prompt>"` and `buff execute "<goal>"` on a real terminal
+ * bug: `nuvira chat "<prompt>"` and `nuvira execute "<goal>"` on a real terminal
  * printed the suggested followups and then exited, so nothing was selectable.
  *
  * Covered here:
@@ -62,8 +62,8 @@ describe('ChatCommand single-shot — selectable followups', () => {
     vi.spyOn(logger, 'info').mockImplementation(() => {});
     vi.spyOn(logger, 'highlight').mockImplementation(() => {});
     tempDir = mkdtempSync(join(tmpdir(), 'buff-followups-chat-'));
-    originalMemoryDir = process.env.BUFF_MEMORY_DIR;
-    process.env.BUFF_MEMORY_DIR = tempDir;
+    originalMemoryDir = process.env.NUVIRA_MEMORY_DIR;
+    process.env.NUVIRA_MEMORY_DIR = tempDir;
     resetModelRegistry();
     cmd = new ChatCommand();
     vi.spyOn(cmd as unknown as { getProvider: Function }, 'getProvider').mockResolvedValue({
@@ -76,8 +76,8 @@ describe('ChatCommand single-shot — selectable followups', () => {
     vi.restoreAllMocks();
     restoreTTY();
     resetModelRegistry();
-    if (originalMemoryDir === undefined) delete process.env.BUFF_MEMORY_DIR;
-    else process.env.BUFF_MEMORY_DIR = originalMemoryDir;
+    if (originalMemoryDir === undefined) delete process.env.NUVIRA_MEMORY_DIR;
+    else process.env.NUVIRA_MEMORY_DIR = originalMemoryDir;
     rmSync(tempDir, { recursive: true, force: true });
   });
 
@@ -174,8 +174,8 @@ describe('ExecuteCommand single-shot — followup runs as next goal', () => {
     vi.spyOn(logger, 'success').mockImplementation(() => {});
     vi.spyOn(logger, 'error').mockImplementation(() => {});
     tempDir = mkdtempSync(join(tmpdir(), 'buff-followups-exec-'));
-    originalMemoryDir = process.env.BUFF_MEMORY_DIR;
-    process.env.BUFF_MEMORY_DIR = tempDir;
+    originalMemoryDir = process.env.NUVIRA_MEMORY_DIR;
+    process.env.NUVIRA_MEMORY_DIR = tempDir;
     resetModelRegistry();
     cmd = new ExecuteCommand();
   });
@@ -184,8 +184,8 @@ describe('ExecuteCommand single-shot — followup runs as next goal', () => {
     vi.restoreAllMocks();
     restoreTTY();
     resetModelRegistry();
-    if (originalMemoryDir === undefined) delete process.env.BUFF_MEMORY_DIR;
-    else process.env.BUFF_MEMORY_DIR = originalMemoryDir;
+    if (originalMemoryDir === undefined) delete process.env.NUVIRA_MEMORY_DIR;
+    else process.env.NUVIRA_MEMORY_DIR = originalMemoryDir;
     rmSync(tempDir, { recursive: true, force: true });
   });
 

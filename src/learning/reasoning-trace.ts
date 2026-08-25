@@ -11,16 +11,17 @@
  *   - input/output token estimates + latency
  *   - the Auto-router routing snapshot at decision time (when auto-routed)
  *
- * Persisted to ~/.buff/memory/reasoning-traces.json (respects BUFF_MEMORY_DIR
+ * Persisted to ~/.nuvira/memory/reasoning-traces.json (respects NUVIRA_MEMORY_DIR
  * for tests). Writes are best-effort — a trace write must NEVER break an LLM
  * call or the pipeline.
  *
  * Consumers:
- *   - `buff trace list|show|replay|clear` (CLI)
+ *   - `nuvira trace list|show|replay|clear` (CLI)
  *   - Dashboard /api/traces endpoints (TracePanel)
  */
 
 import { createHash } from 'node:crypto';
+import {envBuff, resolveNuviraHome} from '../config/paths';
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { homedir } from 'node:os';
@@ -142,7 +143,7 @@ interface TraceFile {
 
 // ─── Storage ────────────────────────────────────────────────────────────────
 
-const DEFAULT_MEMORY_DIR = join(homedir(), '.buff', 'memory');
+const DEFAULT_MEMORY_DIR = join(resolveNuviraHome(), 'memory');
 const CURRENT_VERSION = 1;
 /** Keep the most recent 20 traces. */
 const MAX_TRACES = 20;
@@ -153,7 +154,7 @@ const PROMPT_PREVIEW_CHARS = 300;
 const RESPONSE_PREVIEW_CHARS = 1000;
 
 function memoryDir(): string {
-  return process.env.BUFF_MEMORY_DIR || DEFAULT_MEMORY_DIR;
+  return envBuff('MEMORY_DIR') || DEFAULT_MEMORY_DIR;
 }
 
 function tracesPath(): string {

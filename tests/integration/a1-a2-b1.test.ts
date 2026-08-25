@@ -9,7 +9,7 @@
  *   Memory:     addFact → listFacts, surviving a fresh FactStore.
  *
  * Everything runs in ONE hermetic BUFF_CONFIG_DIR + BUFF_MEMORY_DIR under a
- * temp dir — no network, no real ~/.buff, no native model downloads.
+ * temp dir — no network, no real ~/.nuvira, no native model downloads.
  */
 
 import { describe, it, expect, beforeAll, afterAll, beforeEach } from 'vitest';
@@ -24,15 +24,15 @@ import { clearEmbeddingCache, setForceLLM, EMBEDDING_DIM } from '../../src/memor
 
 // ─── One hermetic harness for all three systems ────────────────────────────
 const root = mkdtempSync(join(tmpdir(), 'buff-integration-a1a2b1-'));
-const cfgDir = join(root, '.buff');
-const memDir = join(root, '.buff', 'memory');
-const ORIG_CONFIG_DIR = process.env.BUFF_CONFIG_DIR;
-const ORIG_MEMORY_DIR = process.env.BUFF_MEMORY_DIR;
+const cfgDir = join(root, '.nuvira');
+const memDir = join(root, '.nuvira', 'memory');
+const ORIG_CONFIG_DIR = process.env.NUVIRA_CONFIG_DIR;
+const ORIG_MEMORY_DIR = process.env.NUVIRA_MEMORY_DIR;
 
 beforeAll(() => {
   mkdirSync(cfgDir, { recursive: true });
-  process.env.BUFF_CONFIG_DIR = cfgDir;
-  process.env.BUFF_MEMORY_DIR = memDir;
+  process.env.NUVIRA_CONFIG_DIR = cfgDir;
+  process.env.NUVIRA_MEMORY_DIR = memDir;
   // Deterministic embeddings: no native model, no LLM — embed() returns the
   // zero-vector fallback. Facts still store/list via their metadata.
   resetVectorBackendSelection();
@@ -43,10 +43,10 @@ afterAll(() => {
   setForceLLM(false);
   resetFactStore();
   resetWorkspaceStore();
-  if (ORIG_CONFIG_DIR === undefined) delete process.env.BUFF_CONFIG_DIR;
-  else process.env.BUFF_CONFIG_DIR = ORIG_CONFIG_DIR;
-  if (ORIG_MEMORY_DIR === undefined) delete process.env.BUFF_MEMORY_DIR;
-  else process.env.BUFF_MEMORY_DIR = ORIG_MEMORY_DIR;
+  if (ORIG_CONFIG_DIR === undefined) delete process.env.NUVIRA_CONFIG_DIR;
+  else process.env.NUVIRA_CONFIG_DIR = ORIG_CONFIG_DIR;
+  if (ORIG_MEMORY_DIR === undefined) delete process.env.NUVIRA_MEMORY_DIR;
+  else process.env.NUVIRA_MEMORY_DIR = ORIG_MEMORY_DIR;
   rmSync(root, { recursive: true, force: true });
 });
 

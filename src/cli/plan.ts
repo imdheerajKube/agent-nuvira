@@ -23,7 +23,7 @@ import { maybeRunBackgroundDuties } from './duties.js';
 
 /**
  * Plan command — generate implementation plans for code changes
- * buff plan <directory> [--provider openrouter] [--task "add user auth"]
+ * nuvira plan <directory> [--provider openrouter] [--task "add user auth"]
  */
 export class PlanCommand extends BaseCommand {
   create(): Command {

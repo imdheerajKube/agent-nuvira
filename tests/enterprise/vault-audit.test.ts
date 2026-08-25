@@ -31,12 +31,12 @@ let memoryDir: string;
 beforeAll(() => {
   const base = process.env.TMPDIR || process.env.TEMP || '/tmp';
   memoryDir = mkdtempSync(join(base, 'buff-vault-audit-'));
-  process.env.BUFF_MEMORY_DIR = memoryDir;
+  process.env.NUVIRA_MEMORY_DIR = memoryDir;
 });
 
 afterAll(() => {
   try { rmSync(memoryDir, { recursive: true, force: true }); } catch { /* best-effort */ }
-  delete process.env.BUFF_MEMORY_DIR;
+  delete process.env.NUVIRA_MEMORY_DIR;
 });
 
 beforeEach(() => {

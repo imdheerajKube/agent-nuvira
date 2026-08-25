@@ -7,7 +7,7 @@
  * behavior is observable and regression-guarded.
  *
  * - Deterministic (mulberry32 PRNG) — reproducible across runs/CI.
- * - Hermetic: writes to a temp BUFF_MEMORY_DIR, never the real ~/.buff/memory.
+ * - Hermetic: writes to a temp BUFF_MEMORY_DIR, never the real ~/.nuvira/memory.
  * - Recall thresholds are generous (≥0.9@5, ≥0.8@1) to avoid flakiness while
  *   still catching a broken IVF implementation.
  * - Latency is logged, not asserted (timing assertions flake on CI).
@@ -24,16 +24,16 @@ import { JsonBackend, resetVectorBackendSelection } from '../../src/memory/vecto
 // ─── Hermetic memory dir ────────────────────────────────────────────────────
 
 let memDir: string;
-const ORIGINAL_MEMORY_DIR = process.env.BUFF_MEMORY_DIR;
+const ORIGINAL_MEMORY_DIR = process.env.NUVIRA_MEMORY_DIR;
 
 beforeAll(() => {
   memDir = mkdtempSync(join(tmpdir(), 'faiss-benchmark-'));
-  process.env.BUFF_MEMORY_DIR = memDir;
+  process.env.NUVIRA_MEMORY_DIR = memDir;
 });
 
 afterAll(() => {
-  if (ORIGINAL_MEMORY_DIR === undefined) delete process.env.BUFF_MEMORY_DIR;
-  else process.env.BUFF_MEMORY_DIR = ORIGINAL_MEMORY_DIR;
+  if (ORIGINAL_MEMORY_DIR === undefined) delete process.env.NUVIRA_MEMORY_DIR;
+  else process.env.NUVIRA_MEMORY_DIR = ORIGINAL_MEMORY_DIR;
   rmSync(memDir, { recursive: true, force: true });
 });
 

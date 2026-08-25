@@ -12,6 +12,7 @@
  */
 
 import { existsSync, readFileSync, writeFileSync, mkdirSync } from 'node:fs';
+import { resolveNuviraHome } from '../config/paths';
 import { join } from 'node:path';
 import { homedir } from 'node:os';
 import { logger } from '../utils/logger.js';
@@ -155,7 +156,7 @@ export class ToolResultStorage {
   private maxResults: number = 1000;
 
   constructor() {
-    this.storageDir = join(homedir(), '.buff', 'cache', 'tool-results');
+    this.storageDir = join(resolveNuviraHome(), 'cache', 'tool-results');
     if (!existsSync(this.storageDir)) {
       mkdirSync(this.storageDir, { recursive: true });
     }

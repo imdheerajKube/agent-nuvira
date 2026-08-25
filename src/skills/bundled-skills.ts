@@ -8,8 +8,8 @@
  *   and are injected into the planner prompt ONLY when a goal matches the
  *   skill (model-selected activation — the agent decides, never blind auto-run).
  *
- * Bundled skills are seeded into ~/.buff/skills/ by SkillStore.seedBundledSkills()
- * so they also work with `buff skill run <name>` and the skill-runner agent.
+ * Bundled skills are seeded into ~/.nuvira/skills/ by SkillStore.seedBundledSkills()
+ * so they also work with `nuvira skill run <name>` and the skill-runner agent.
  *
  * To add a provider to the website-deploy skill, add a section to the
  * relevant step description — no code change required.

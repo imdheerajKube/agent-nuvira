@@ -14,6 +14,7 @@
  */
 
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
+import {envBuff, resolveNuviraHome} from '../config/paths';
 import { join } from 'node:path';
 import { homedir } from 'node:os';
 
@@ -23,7 +24,7 @@ import { logger } from '../utils/logger.js';
 /** Consecutive auth (401/403) failures before the key is auto-cleared. */
 export const AUTH_CLEAR_THRESHOLD = 3;
 
-const DEFAULT_MEMORY_DIR = join(homedir(), '.buff', 'memory');
+const DEFAULT_MEMORY_DIR = join(resolveNuviraHome(), 'memory');
 const STORE_FILENAME = 'key-hygiene.json';
 
 interface KeyHygieneData {
@@ -46,7 +47,7 @@ export interface AuthFailureOutcome {
 }
 
 function memoryDir(): string {
-  return process.env.BUFF_MEMORY_DIR || DEFAULT_MEMORY_DIR;
+  return envBuff('MEMORY_DIR') || DEFAULT_MEMORY_DIR;
 }
 
 function storePath(): string {
@@ -116,7 +117,7 @@ export class KeyHygiene {
       // hot path — the actionable "clear it" guidance lands at the threshold.
       logger.debug(
         `${provider}: ${consecutive}/${AUTH_CLEAR_THRESHOLD} consecutive auth failures (key may be invalid — ` +
-        `buff config set providers.${provider}.apiKey <real-key>)`,
+        `nuvira config set providers.${provider}.apiKey <real-key>)`,
       );
       return { consecutive, threshold: AUTH_CLEAR_THRESHOLD, cleared: false, envSourced: false };
     }
@@ -140,7 +141,7 @@ export class KeyHygiene {
         logger.error(
           `   🚫 ${provider} returned ${consecutive} consecutive auth errors (401/403) — the invalid API key ` +
           `has been CLEARED from your config. Set a valid key to re-enable it: ` +
-          `buff config set providers.${provider}.apiKey <real-key>`,
+          `nuvira config set providers.${provider}.apiKey <real-key>`,
         );
       } else if (envSourced) {
         logger.error(
@@ -154,7 +155,7 @@ export class KeyHygiene {
         // counter was reset above — nothing left to clear, no further noise.
         logger.warn(
           `   ⚠️ ${provider} returned ${consecutive} consecutive auth errors (401/403) — no configured key ` +
-          `to clear. Add a valid one to re-enable it: buff config set providers.${provider}.apiKey <real-key>`,
+          `to clear. Add a valid one to re-enable it: nuvira config set providers.${provider}.apiKey <real-key>`,
         );
       }
     } catch {
@@ -162,7 +163,7 @@ export class KeyHygiene {
       // was NOT reset, so the next auth failure retries the clear.
       logger.warn(
         `   ⚠️ ${provider} returned ${consecutive} consecutive auth errors (401/403) — its key could not be ` +
-        `cleared automatically. Run: buff config set providers.${provider}.apiKey <real-key>`,
+        `cleared automatically. Run: nuvira config set providers.${provider}.apiKey <real-key>`,
       );
     }
     return { consecutive, threshold: AUTH_CLEAR_THRESHOLD, cleared, envSourced, envVar };

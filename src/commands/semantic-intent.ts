@@ -21,11 +21,12 @@
  * This module is deliberately a RECALL tier: it does NOT replace entity
  * extraction, ambiguity handling, or the confirmation/RBAC flags — those stay
  * in the deterministic matcher. The CLI surfaces both side-by-side
- * (`buff intent resolve --semantic`) so the semantic tier can be measured
+ * (`nuvira intent resolve --semantic`) so the semantic tier can be measured
  * against the deterministic one before it ever gates execution.
  */
 
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
+import {envBuff, resolveNuviraHome} from '../config/paths';
 import { createHash } from 'node:crypto';
 import { dirname, join } from 'node:path';
 import { homedir } from 'node:os';
@@ -123,18 +124,18 @@ async function vectorFor(
 /**
  * The alias corpus is ~400 entries; embedding ALL of them costs ~30-40s per
  * fresh process (the model load is fast, the per-alias forward passes are
- * not). To keep `buff intent resolve --semantic` fast on every invocation we
+ * not). To keep `nuvira intent resolve --semantic` fast on every invocation we
  * precompute alias vectors ONCE and persist them as JSON (the same
  * JSON-file philosophy as the VectorStore — no FAISS, no native deps), then
  * only embed the ASK at resolve time.
  *
  * Keyed by a hash of the manifest content so the cache invalidates exactly
- * when aliases change. Persisted to `~/.buff/memory/intent-alias-vectors.json`
- * (honors BUFF_MEMORY_DIR for hermetic tests).
+ * when aliases change. Persisted to `~/.nuvira/memory/intent-alias-vectors.json`
+ * (honors NUVIRA_MEMORY_DIR for hermetic tests).
  */
 
 function memoryDir(): string {
-  return process.env.BUFF_MEMORY_DIR || join(homedir(), '.buff', 'memory');
+  return envBuff('MEMORY_DIR') || join(resolveNuviraHome(), 'memory');
 }
 
 function aliasVectorsPath(): string {

@@ -13,9 +13,9 @@ import { mkdtempSync, writeFileSync, rmSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 
-// Isolate the context cache from the real ~/.buff store: the I1 web_search run
+// Isolate the context cache from the real ~/.nuvira store: the I1 web_search run
 // tests call searchWeb → getCache().set(), which would otherwise write to and
-// wipe the user's real ~/.buff/cache.json (same pattern as web-research.test.ts
+// wipe the user's real ~/.nuvira/cache.json (same pattern as web-research.test.ts
 // and eval-framework.test.ts).
 const testDirHolder = vi.hoisted(() => {
   const { mkdtempSync } = require('node:fs');

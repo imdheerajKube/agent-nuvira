@@ -11,6 +11,7 @@
  */
 
 import { readFileSync } from 'node:fs';
+import { envBuff } from '../../config/paths';
 import { fileExists } from './shared.js';
 
 const OLLAMA_API_BASE = 'http://localhost:11434';
@@ -27,7 +28,7 @@ export interface VisionOptions {
 
 /** True when Ollama serves a vision model OR a Gemini key is present. */
 export async function isVisionAvailable(opts: VisionOptions = {}): Promise<boolean> {
-  if (process.env.BUFF_GEMINI_API_KEY) return true;
+  if (envBuff('GEMINI_API_KEY')) return true;
   return (opts.probe ?? defaultProbe)(opts);
 }
 
@@ -60,11 +61,11 @@ export async function describeImage(
   }
   try {
     // Gemini free tier first when a key is present.
-    if (process.env.BUFF_GEMINI_API_KEY) {
+    if (envBuff('GEMINI_API_KEY')) {
       const base64 = readFileSync(imagePath).toString('base64');
       const mime = imagePath.toLowerCase().endsWith('.png') ? 'image/png' : 'image/jpeg';
       const res = await fetch(
-        `https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key=${process.env.BUFF_GEMINI_API_KEY}`,
+        `https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key=${envBuff('GEMINI_API_KEY')}`,
         {
           method: 'POST',
           headers: { 'content-type': 'application/json' },

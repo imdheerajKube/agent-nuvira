@@ -32,7 +32,7 @@ export function buildAutoResolveOptions(
   return {
     verbose: extra.verbose,
     useRuntimeStats: true,
-    // ISSUE-002: bandit learning is ON by default (opt-out via `buff config
+    // ISSUE-002: bandit learning is ON by default (opt-out via `nuvira config
     // set routing.bandit false`). Cold start is deterministic (Beta(1,1)
     // samples the mean), so this never randomizes an unlearned ranking.
     useBandit: routing.bandit !== false,

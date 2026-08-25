@@ -3,18 +3,19 @@
  *
  * The session is persisted under
  * a `creds.json` Baileys session persisted under the agent-nuvira data dir; the
- * `~/.buff/whatsapp/session/` (BUFF_WHATSAPP_SESSION_DIR overrides it so a
+ * `~/.nuvira/whatsapp/session/` (NUVIRA_WHATSAPP_SESSION_DIR overrides it so a
  * smoke/test can point anywhere without touching the user home). The files
  * are written by Baileys' `useMultiFileAuthState` — byte-compatible layout.
  */
 
 import { existsSync } from 'node:fs';
+import { envBuff , resolveNuviraHome } from '../../config/paths';
 import { join } from 'node:path';
 import { homedir } from 'node:os';
 
 /** The multi-file auth-state directory for the WhatsApp bridge. */
 export function whatsappSessionDir(): string {
-  return process.env.BUFF_WHATSAPP_SESSION_DIR || join(homedir(), '.buff', 'whatsapp', 'session');
+  return envBuff('WHATSAPP_SESSION_DIR') || join(resolveNuviraHome(), 'whatsapp', 'session');
 }
 
 /** True when a paired Baileys session (creds.json) exists on disk. */

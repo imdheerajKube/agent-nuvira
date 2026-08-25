@@ -72,16 +72,16 @@ beforeEach(() => {
   resetVectorBackendSelection();
   setForceLLM(true); // Force the deterministic LLM tier everywhere in tests
   tempDir = mkdtempSync(join(tmpdir(), 'buff-retrieval-'));
-  prevMemoryDir = process.env.BUFF_MEMORY_DIR;
-  process.env.BUFF_MEMORY_DIR = join(tempDir, 'memory');
-  mkdirSync(process.env.BUFF_MEMORY_DIR, { recursive: true });
+  prevMemoryDir = process.env.NUVIRA_MEMORY_DIR;
+  process.env.NUVIRA_MEMORY_DIR = join(tempDir, 'memory');
+  mkdirSync(process.env.NUVIRA_MEMORY_DIR, { recursive: true });
 });
 
 afterEach(async () => {
   setForceLLM(false);
   await clearRetrievalState();
-  if (prevMemoryDir === undefined) delete process.env.BUFF_MEMORY_DIR;
-  else process.env.BUFF_MEMORY_DIR = prevMemoryDir;
+  if (prevMemoryDir === undefined) delete process.env.NUVIRA_MEMORY_DIR;
+  else process.env.NUVIRA_MEMORY_DIR = prevMemoryDir;
   rmSync(tempDir, { recursive: true, force: true });
 });
 

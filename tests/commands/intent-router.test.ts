@@ -2,26 +2,26 @@ import { describe, it, expect } from 'vitest';
 import { resolveAsk, resolveBest, extractEntities } from '../../src/commands/intent-router.js';
 
 describe('intent-router — plain English → CLI', () => {
-  it('maps "stop the dashboard" (and variants) to buff dashboard stop', () => {
+  it('maps "stop the dashboard" (and variants) to nuvira dashboard stop', () => {
     for (const ask of ['stop the dashboard', 'kill dashboard', 'bounce the dashboard', 'shut down the dashboard']) {
       const best = resolveBest(ask);
       expect(best, ask).not.toBeNull();
       expect(best?.intent, ask).toBe('dashboard.stop');
-      expect(best?.command).toBe('buff dashboard stop');
+      expect(best?.command).toBe('nuvira dashboard stop');
       expect(best?.confirmation).toBe(true);
     }
   });
 
   it('maps "start the gateway" / "stop the gateway" to the gateway lifecycle commands', () => {
-    expect(resolveBest('start the gateway')?.command).toBe('buff gateway start');
-    expect(resolveBest('stop the gateway')?.command).toBe('buff gateway stop');
+    expect(resolveBest('start the gateway')?.command).toBe('nuvira gateway start');
+    expect(resolveBest('stop the gateway')?.command).toBe('nuvira gateway stop');
     expect(resolveBest('is the gateway running?')?.intent).toBe('gateway.status');
   });
 
-  it('maps "start the dashboard" to buff dashboard', () => {
+  it('maps "start the dashboard" to nuvira dashboard', () => {
     const best = resolveBest('open the dashboard');
     expect(best?.intent).toBe('dashboard.start');
-    expect(best?.command).toBe('buff dashboard');
+    expect(best?.command).toBe('nuvira dashboard');
   });
 
   it('flags "add Rahul mobile +919958604222 to whatsapp" as AMBIGUOUS and offers both lists', () => {
@@ -35,8 +35,8 @@ describe('intent-router — plain English → CLI', () => {
     // Both resolutions must be present, with placeholders filled from the ask
     // (E.164, no leading +) — the router never guesses between the two.
     const commands = top?.options?.map((o) => o.command) ?? [];
-    expect(commands).toContain('buff config gateway allow whatsapp user 919958604222');
-    expect(commands).toContain('buff whatsapp contact add Rahul 919958604222');
+    expect(commands).toContain('nuvira config gateway allow whatsapp user 919958604222');
+    expect(commands).toContain('nuvira whatsapp contact add Rahul 919958604222');
     // Entities extracted from the ask.
     expect(top?.entities?.phone).toContain('+919958604222');
     expect(top?.entities?.name).toContain('Rahul');
@@ -46,7 +46,7 @@ describe('intent-router — plain English → CLI', () => {
     const top = resolveBest('remove Rahul from the verified list');
     expect(top?.ambiguous).toBeFalsy();
     expect(top?.intent).toBe('permissions.disallow');
-    expect(top?.command).toBe('buff config gateway disallow <platform> user|group <id...>');
+    expect(top?.command).toBe('nuvira config gateway disallow <platform> user|group <id...>');
   });
 
   it('flags the VAGUE "remove Rahul from whatsapp" as ambiguous (disallow vs mapping)', () => {
@@ -54,8 +54,8 @@ describe('intent-router — plain English → CLI', () => {
     expect(top?.ambiguous).toBe(true);
     expect(top?.ambiguityGroup).toBe('contacts.remove');
     const commands = top?.options?.map((o) => o.command) ?? [];
-    expect(commands).toContain('buff config gateway disallow whatsapp user <number>');
-    expect(commands).toContain('buff whatsapp contact remove Rahul');
+    expect(commands).toContain('nuvira config gateway disallow whatsapp user <number>');
+    expect(commands).toContain('nuvira whatsapp contact remove Rahul');
   });
 
   it('maps explicit trigger-language to the verified list without ambiguity', () => {
@@ -67,7 +67,7 @@ describe('intent-router — plain English → CLI', () => {
     expect(best?.intent).toBe('permissions.allow');
     // The kind (user|group) stays a placeholder — only the router's caller
     // (the agent) resolves it; the number and platform are filled.
-    expect(best?.command).toBe('buff config gateway allow whatsapp user|group 919958604222');
+    expect(best?.command).toBe('nuvira config gateway allow whatsapp user|group 919958604222');
   });
 
   it('maps "send a message to ops" to gateway.send with target entity', () => {

@@ -4,15 +4,16 @@
  * Persists tool artifacts per session under the memory dir so the dashboard
  * (I4) can browse them:
  *
- *   ~/.buff/memory/artifacts/<sessionId>/artifacts.json   — the session index
+ *   ~/.nuvira/memory/artifacts/<sessionId>/artifacts.json   — the session index
  *
- * Honors BUFF_MEMORY_DIR (same as the ledger/quota/bandit reads). Writes are
+ * Honors NUVIRA_MEMORY_DIR (same as the ledger/quota/bandit reads). Writes are
  * best-effort — a failed artifact write must never break the tool loop that
  * produced it. Session ids are sanitized (no path traversal); a sanitized id
  * collision is accepted (worst case: two sessions share a folder).
  */
 
 import { existsSync, mkdirSync, readdirSync, readFileSync, writeFileSync } from 'node:fs';
+import {envBuff, resolveNuviraHome} from '../config/paths';
 import { join } from 'node:path';
 import { homedir } from 'node:os';
 import { ARTIFACT_PREVIEW_MAX_CHARS, readArtifactPreview } from './artifact-append.js';
@@ -24,7 +25,7 @@ const UNSAFE_ID = 'unsafe';
 
 /** The default artifacts root — `<memory>/artifacts`. */
 export function defaultArtifactsRoot(): string {
-  const memory = process.env.BUFF_MEMORY_DIR || join(homedir(), '.buff', 'memory');
+  const memory = envBuff('MEMORY_DIR') || join(resolveNuviraHome(), 'memory');
   return join(memory, 'artifacts');
 }
 

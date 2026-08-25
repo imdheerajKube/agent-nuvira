@@ -2,9 +2,9 @@
  * Bedrock command — Dedicated AWS Bedrock onboarding and management.
  *
  * Usage:
- *   buff bedrock setup    — Interactive wizard to configure Bedrock credentials + region + model access
- *   buff bedrock status   — Show current Bedrock configuration and connectivity
- *   buff bedrock test     — Probe models and test inference
+ *   nuvira bedrock setup    — Interactive wizard to configure Bedrock credentials + region + model access
+ *   nuvira bedrock status   — Show current Bedrock configuration and connectivity
+ *   nuvira bedrock test     — Probe models and test inference
  *
  * Bedrock is different from other providers because it requires:
  *   1. AWS credentials (Bearer token or IAM access key + secret key)
@@ -102,7 +102,7 @@ export class BedrockCommand extends BaseCommand {
     return command;
   }
 
-  // ── buff bedrock setup ────────────────────────────────────────────────────
+  // ── nuvira bedrock setup ────────────────────────────────────────────────────
   private createSetupCommand(): Command {
     return new Command('setup')
       .description('Interactive wizard to configure AWS Bedrock (credentials, region, model access)')
@@ -241,7 +241,7 @@ export class BedrockCommand extends BaseCommand {
     const { confirm } = await inquirer.prompt([{
       type: 'confirm',
       name: 'confirm',
-      message: 'Save this configuration to ~/.buff/.env?',
+      message: 'Save this configuration to ~/.nuvira/.env?',
       default: true,
     }]);
 
@@ -249,7 +249,7 @@ export class BedrockCommand extends BaseCommand {
       const { writeEnvFile, applyEnvToProcess } = await import('../gateway/platform-config.js');
       const { wrote } = writeEnvFile(envUpdates);
       applyEnvToProcess(envUpdates);
-      console.log(`\n  ✅ Saved ${wrote.length} env var(s) to ~/.buff/.env:`);
+      console.log(`\n  ✅ Saved ${wrote.length} env var(s) to ~/.nuvira/.env:`);
       for (const key of wrote) {
         const val = envUpdates[key];
         const display = key.includes('SECRET') || key.includes('KEY') || key.includes('TOKEN')
@@ -277,7 +277,7 @@ export class BedrockCommand extends BaseCommand {
     console.log('  4. Bedrock models will now appear in the dashboard Models panel\n');
   }
 
-  // ── buff bedrock status ───────────────────────────────────────────────────
+  // ── nuvira bedrock status ───────────────────────────────────────────────────
   private createStatusCommand(): Command {
     return new Command('status')
       .description('Show current Bedrock configuration and connectivity status')
@@ -310,7 +310,7 @@ export class BedrockCommand extends BaseCommand {
     await this.testBedrock(region);
   }
 
-  // ── buff bedrock test ─────────────────────────────────────────────────────
+  // ── nuvira bedrock test ─────────────────────────────────────────────────────
   private createTestCommand(): Command {
     return new Command('test')
       .description('Probe Bedrock models and test inference')
@@ -430,7 +430,7 @@ export class BedrockCommand extends BaseCommand {
       console.log('  ⚠️  No models accessible. Possible causes:');
       console.log(`     • Region ${region} may not have Bedrock models enabled`);
       console.log('     • API key may be invalid');
-      console.log('     • Try: buff bedrock setup\n');
+      console.log('     • Try: nuvira bedrock setup\n');
     }
   }
 }

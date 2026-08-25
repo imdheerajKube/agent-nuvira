@@ -7,20 +7,21 @@
  * stores (hub SKILL.md + compiled SkillStore), so a bad draft is rejected,
  * never saved silently (the plan's quality gate for model-drafted skills).
  *
- * Storage: `~/.buff/skill-drafts/<name>/SKILL.md` (+ optional reference files
+ * Storage: `~/.nuvira/skill-drafts/<name>/SKILL.md` (+ optional reference files
  * written via `skill_manage write_file`). Drafts are sandboxed like installs
  * (`^[a-z0-9-]+$` names) and best-effort by construction — a corrupt draft
  * contributes nothing and can never throw out of a read.
  *
  * Promotion (accept) writes BOTH live representations:
- *   - `~/.buff/skills/<name>/SKILL.md` — the hub catalog (skill tool loads it
+ *   - `~/.nuvira/skills/<name>/SKILL.md` — the hub catalog (skill tool loads it
  *     next turn, orchestrator matches it).
- *   - a COMPILED Skill in the SkillStore — `buff skill list` shows it, the
+ *   - a COMPILED Skill in the SkillStore — `nuvira skill list` shows it, the
  *     orchestrator's findMatch sees it (the plan's expected working: after ✅
- *     the skill appears in `buff skill list` and loads via the skill tool).
+ *     the skill appears in `nuvira skill list` and loads via the skill tool).
  */
 
 import { readFileSync, writeFileSync, existsSync, mkdirSync, readdirSync, unlinkSync, statSync, rmdirSync } from 'node:fs';
+import {envBuff, resolveNuviraHome} from '../config/paths';
 import { join, normalize, relative, dirname, sep } from 'node:path';
 import { homedir } from 'node:os';
 
@@ -54,21 +55,21 @@ export interface DraftWriteResult {
 const NAME_RE = /^[a-z0-9-]+$/;
 
 /**
- * Default drafts root: BUFF_MEMORY_DIR (when set) → ~/.buff/skill-drafts.
+ * Default drafts root: NUVIRA_MEMORY_DIR (when set) → ~/.nuvira/skill-drafts.
  * Resolved LAZILY so tests can set the env before the first read (the same
  * pattern cache.ts uses) — production is byte-identical when unset.
  */
 export function defaultDraftsRoot(): string {
-  return process.env.BUFF_MEMORY_DIR
-    ? join(process.env.BUFF_MEMORY_DIR, 'skill-drafts')
-    : join(homedir(), '.buff', 'skill-drafts');
+  const d = envBuff('MEMORY_DIR');
+  return d ? join(d, 'skill-drafts')
+    : join(resolveNuviraHome(), 'skill-drafts');
 }
 
-/** Default hub-skills root for promotion (BUFF_MEMORY_DIR → ~/.buff/skills). */
+/** Default hub-skills root for promotion (NUVIRA_MEMORY_DIR → ~/.nuvira/skills). */
 export function defaultSkillsRoot(): string {
-  return process.env.BUFF_MEMORY_DIR
-    ? join(process.env.BUFF_MEMORY_DIR, 'skills')
-    : join(homedir(), '.buff', 'skills');
+  const d = envBuff('MEMORY_DIR');
+  return d ? join(d, 'skills')
+    : join(resolveNuviraHome(), 'skills');
 }
 
 // ─── Path helpers (dirs injectable for hermetic tests) ──────────────────────
@@ -230,7 +231,7 @@ function rmDirRecursive(dir: string): void {
 // ─── Promotion (accept) ─────────────────────────────────────────────────────
 
 /**
- * Parse an authored SKILL.md into a compiled Skill (the `buff skill list`
+ * Parse an authored SKILL.md into a compiled Skill (the `nuvira skill list`
  * representation). Steps come from `### Step N — [agentType] title` sections
  * in the body; parameters from the `## Parameters` section (bulleted
  * `name — description (required: yes/no, type: string|file-path|choice)`).
@@ -327,7 +328,7 @@ export function compileAuthoredSkill(
 
 /**
  * ACCEPT a draft: promote it into the live stores — hub SKILL.md
- * (`~/.buff/skills/<name>/SKILL.md`, root injectable) + a compiled Skill in
+ * (`~/.nuvira/skills/<name>/SKILL.md`, root injectable) + a compiled Skill in
  * the SkillStore — then delete the draft. Returns { ok, skill? }.
  */
 export function acceptDraft(
@@ -346,7 +347,7 @@ export function acceptDraft(
     const hubDir = join(skillsRoot, name);
     mkdirSync(hubDir, { recursive: true });
     writeFileSync(join(hubDir, 'SKILL.md'), draft.markdown, 'utf-8');
-    // 2. Compiled SkillStore (`buff skill list` shows it, findMatch sees it).
+    // 2. Compiled SkillStore (`nuvira skill list` shows it, findMatch sees it).
     const skill = compileAuthoredSkill(name, draft.markdown);
     getSkillStore().save(skill);
     // 3. Draft gone — it is now live.

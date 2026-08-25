@@ -2,20 +2,21 @@
  * Execute command — Run a multi-agent pipeline to accomplish a goal.
  *
  * Single-shot mode:
- *   buff execute "add JWT authentication to the Express app"
- *   buff execute "create a CLI tool" --provider gemini --dry-run
- *   buff execute "add tests" --verbose --memory
- *   buff execute "fix bug" --memory --memory-stats
- *   buff execute "run tests" --sandbox
+ *   nuvira execute "add JWT authentication to the Express app"
+ *   nuvira execute "create a CLI tool" --provider gemini --dry-run
+ *   nuvira execute "add tests" --verbose --memory
+ *   nuvira execute "fix bug" --memory --memory-stats
+ *   nuvira execute "run tests" --sandbox
  *
  * Interactive development mode (no goal argument):
- *   buff execute
+ *   nuvira execute
  *     → Model picker (if no --model flag)
  *     → Interactive loop: goal → orchestrator → results → next goal
  *     → Type /exit to quit
  */
 
 import { createInterface } from 'node:readline';
+import { resolveNuviraHome } from '../config/paths';
 import { readFileSync, writeFileSync, existsSync, mkdirSync, readdirSync } from 'node:fs';
 import { join } from 'node:path';
 import { homedir } from 'node:os';
@@ -218,7 +219,7 @@ export class ExecuteCommand extends BaseCommand {
       .option('--memory-clear', 'Clear all stored memory trajectories', false)
       .option('--context-limit <tokens>', 'Max context tokens before pruning (default: 128000). Set higher for Gemini (1000000)', parseInt)
       .option('--context-prune <mode>', 'Pruning aggressiveness: soft | medium | aggressive (default: soft)')
-      .option('--review', 'Create a review bundle capturing proposed changes (view with `buff team review show <id>`)', false)
+      .option('--review', 'Create a review bundle capturing proposed changes (view with `nuvira team review show <id>`)', false)
       .option('--sandbox', 'Execute runner commands and tests inside a Docker sandbox', false)
       .option('--skip-tests', 'Skip tester and debugger steps (code generation only)', false)
       .option('--auto-branch', 'Enable branch automation hooks (install, commit, PR update, file watch)', false)
@@ -226,7 +227,7 @@ export class ExecuteCommand extends BaseCommand {
       .option('--repair-mode <mode>', 'Repair mode: auto | prompt | off (default: auto)')
       .option('--repair-fallback-models <models>', 'Comma-separated fallback models for repair (e.g., groq/llama3,nim/mistral)')
       .option('--auto-route', 'Route each agent to the best provider/model automatically (Auto model)', false)
-      .option('--checkpoint', 'Save a resume-able checkpoint after every task batch (in ~/.buff/memory/checkpoints/)', false)
+      .option('--checkpoint', 'Save a resume-able checkpoint after every task batch (in ~/.nuvira/memory/checkpoints/)', false)
       .option('--resume [id]', 'Resume a saved checkpoint (defaults to the auto id for this goal + cwd). Completed steps are skipped', false)
       .option('--checkpoint-list', 'List saved checkpoints and exit', false)
       .option('--json-events', 'Emit machine-readable NDJSON pipeline events on stdout (no human board)', false)
@@ -282,7 +283,7 @@ export class ExecuteCommand extends BaseCommand {
       return;
     }
 
-    // ── Apply active model from `buff model switch` as defaults ────────────
+    // ── Apply active model from `nuvira model switch` as defaults ────────────
     const activeOpts = applyActiveModel({ provider: options.provider, model: options.model });
     let mergedProvider = activeOpts.provider;
     let mergedModel = activeOpts.model;
@@ -849,7 +850,7 @@ export class ExecuteCommand extends BaseCommand {
       return;
     }
 
-    const sessionsDir = join(homedir(), '.buff', 'sessions');
+    const sessionsDir = join(resolveNuviraHome(), 'sessions');
     if (!existsSync(sessionsDir)) {
       mkdirSync(sessionsDir, { recursive: true });
     }
@@ -891,7 +892,7 @@ export class ExecuteCommand extends BaseCommand {
       return null;
     }
 
-    const sessionsDir = join(homedir(), '.buff', 'sessions');
+    const sessionsDir = join(resolveNuviraHome(), 'sessions');
     const safeName = name.replace(/[^a-zA-Z0-9_-]/g, '');
     if (!safeName) {
       logger.error('Invalid session name. Use only letters, numbers, hyphens, and underscores.');
@@ -1749,12 +1750,12 @@ export class ExecuteCommand extends BaseCommand {
       console.log('');
       logger.info('  No checkpoints found.');
       logger.info('  Run a goal with --checkpoint to save a resume-able pipeline:');
-      logger.info('    buff execute "my goal" --checkpoint');
+      logger.info('    nuvira execute "my goal" --checkpoint');
       console.log('');
       return;
     }
 
-    logger.highlight('📒 Checkpoints (resume with `buff execute "<goal>" --resume <id>`)');
+    logger.highlight('📒 Checkpoints (resume with `nuvira execute "<goal>" --resume <id>`)');
     console.log('');
     for (const cp of checkpoints) {
       const date = new Date(cp.savedAt).toLocaleString();

@@ -23,16 +23,16 @@ import { resetWorkspaceStore } from '../../src/config/workspace.js';
 
 // ─── Hermetic memory + config dirs ──────────────────────────────────────────
 // execute() begins a reasoning trace (P0) on every run — pin BUFF_MEMORY_DIR
-// to a temp dir so trace writes never leak into the real ~/.buff. BUFF_CONFIG_DIR
+// to a temp dir so trace writes never leak into the real ~/.nuvira. BUFF_CONFIG_DIR
 // is ALSO pinned: the pass-through tests call the real local provider, and the
 // machine's live model would actually generate (slow → timeout). A temp config
 // pinning local to a NONEXISTENT model fails fast (the model-not-found path),
 // keeping these tests hermetic regardless of which models are installed.
 const traceDir = mkdtempSync(join(tmpdir(), 'buff-injection-guardrail-'));
-process.env.BUFF_MEMORY_DIR = join(traceDir, '.buff', 'memory');
+process.env.NUVIRA_MEMORY_DIR = join(traceDir, '.nuvira', 'memory');
 const cfgDir = mkdtempSync(join(tmpdir(), 'buff-injection-guardrail-cfg-'));
-const origConfigDir = process.env.BUFF_CONFIG_DIR;
-process.env.BUFF_CONFIG_DIR = cfgDir;
+const origConfigDir = process.env.NUVIRA_CONFIG_DIR;
+process.env.NUVIRA_CONFIG_DIR = cfgDir;
 mkdirSync(cfgDir, { recursive: true });
 writeFileSync(
   join(cfgDir, 'buffconfig.json'),
@@ -165,8 +165,8 @@ afterAll(() => {
   // workspaces.db makes rmSync fail on Windows (EBUSY).
   resetWorkspaceStore();
   rmSync(cfgDir, { recursive: true, force: true });
-  if (origConfigDir === undefined) delete process.env.BUFF_CONFIG_DIR;
-  else process.env.BUFF_CONFIG_DIR = origConfigDir;
+  if (origConfigDir === undefined) delete process.env.NUVIRA_CONFIG_DIR;
+  else process.env.NUVIRA_CONFIG_DIR = origConfigDir;
 });
 
 describe('injection guardrail integration with executeSingleTask', () => {

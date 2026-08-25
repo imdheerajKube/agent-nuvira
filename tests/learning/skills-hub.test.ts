@@ -86,7 +86,7 @@ function skillMarkdown(name: string): string {
 // Temp project root for .agents/skills installs.
 let registryDir = '';
 let projectDir = '';
-const realRegistry = process.env.BUFF_SKILLS_REGISTRY;
+const realRegistry = process.env.NUVIRA_SKILLS_REGISTRY;
 
 beforeEach(() => {
   registryDir = mkdtempSync(join(tmpdir(), 'buff-skills-reg-'));
@@ -100,15 +100,15 @@ beforeEach(() => {
   // Fresh provenance + index cache + quarantine per test (the mocked homedir
   // is shared across tests in this file — without this, install records and
   // the TTL index cache leak between tests and update/list see stale state).
-  rmSync(join(homeHolder.value, '.buff', 'skills-hub'), { recursive: true, force: true });
-  process.env.BUFF_SKILLS_REGISTRY = `file://${registryDir}`;
+  rmSync(join(homeHolder.value, '.nuvira', 'skills-hub'), { recursive: true, force: true });
+  process.env.NUVIRA_SKILLS_REGISTRY = `file://${registryDir}`;
 });
 
 afterEach(() => {
   rmSync(registryDir, { recursive: true, force: true });
   rmSync(projectDir, { recursive: true, force: true });
-  if (realRegistry === undefined) delete process.env.BUFF_SKILLS_REGISTRY;
-  else process.env.BUFF_SKILLS_REGISTRY = realRegistry;
+  if (realRegistry === undefined) delete process.env.NUVIRA_SKILLS_REGISTRY;
+  else process.env.NUVIRA_SKILLS_REGISTRY = realRegistry;
   vi.restoreAllMocks();
 });
 
@@ -205,7 +205,7 @@ describe('skills-hub — install (sandbox + provenance + checksum)', () => {
     // Installed copy untouched.
     expect(readFileSync(target, 'utf-8')).toBe(original);
     // Quarantine file written.
-    const quarantineDir = join(homeHolder.value, '.buff', 'skills-hub', 'quarantine');
+    const quarantineDir = join(homeHolder.value, '.nuvira', 'skills-hub', 'quarantine');
     expect(readdirSync(quarantineDir).length).toBeGreaterThan(0);
   });
 });

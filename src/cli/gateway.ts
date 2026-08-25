@@ -1,11 +1,11 @@
 /**
  * GatewayCommand — J1 multi-channel gateway CLI.
  *
- *   buff gateway status           — show configured adapters + reachable channels
- *   buff gateway send <target> <text> — send a message to an alias or platform:channelId
- *   buff gateway alias add <alias> <platform> <channelId>   — register an alias
- *   buff gateway alias remove <alias>                      — remove an alias
- *   buff gateway start [--port N] [--no-events]            — run adapters in the foreground
+ *   nuvira gateway status           — show configured adapters + reachable channels
+ *   nuvira gateway send <target> <text> — send a message to an alias or platform:channelId
+ *   nuvira gateway alias add <alias> <platform> <channelId>   — register an alias
+ *   nuvira gateway alias remove <alias>                      — remove an alias
+ *   nuvira gateway start [--port N] [--no-events]            — run adapters in the foreground
  *
  * Opt-in adapters: BUFF_TELEGRAM_TOKEN (long-poll) · BUFF_DISCORD_BOT_TOKEN /
  * BUFF_DISCORD_WEBHOOK_URL · BUFF_SLACK_BOT_TOKEN / BUFF_SLACK_WEBHOOK_URL ·
@@ -80,7 +80,7 @@ export class GatewayCommand {
 
     alias
       .command('add <alias> <platform> <channelId>')
-      .description('Register an alias: buff gateway alias add ops slack C0123')
+      .description('Register an alias: nuvira gateway alias add ops slack C0123')
       .action(async (a, p, c) => this.aliasAdd(a, p, c));
 
     alias
@@ -118,7 +118,7 @@ export class GatewayCommand {
 
     contact
       .command('add <name> <platform> <id>')
-      .description('Manually add a contact (e.g. buff gateway contact add Anuj telegram 616825477)')
+      .description('Manually add a contact (e.g. nuvira gateway contact add Anuj telegram 616825477)')
       .option('--phone <number>', 'Optional phone number for flexible lookup')
       .action(async (name, platform, id, opts) => this.contactAdd(name, platform, id, opts));
 
@@ -142,7 +142,7 @@ export class GatewayCommand {
 
     cmd
       .command('setup [platform]')
-      .description('Interactive setup wizard for a messaging platform (e.g. buff gateway setup telegram)')
+      .description('Interactive setup wizard for a messaging platform (e.g. nuvira gateway setup telegram)')
       .action(async (platform) => this.setup(platform));
 
     return cmd;
@@ -165,7 +165,7 @@ export class GatewayCommand {
     if (configured.length === 0) {
       console.log('No adapters configured. Set one of:');
       console.log('  BUFF_TELEGRAM_TOKEN · BUFF_DISCORD_BOT_TOKEN · BUFF_DISCORD_WEBHOOK_URL');
-      console.log('  BUFF_SLACK_BOT_TOKEN · BUFF_SLACK_WEBHOOK_URL · BUFF_WHATSAPP_SESSION_DIR (bridge) · BUFF_WHATSAPP_TOKEN + PHONE_ID (cloud)');
+      console.log('  BUFF_SLACK_BOT_TOKEN · BUFF_SLACK_WEBHOOK_URL · NUVIRA_WHATSAPP_SESSION_DIR (bridge) · BUFF_WHATSAPP_TOKEN + PHONE_ID (cloud)');
       console.log('  BUFF_SMTP_HOST + BUFF_SMTP_USER (email) · BUFF_SIGNAL_ACCOUNT (signal)');
       console.log('  I9 webhooks: BUFF_DINGTALK_WEBHOOK_URL · BUFF_FEISHU_WEBHOOK_URL · BUFF_WECOM_WEBHOOK_URL · BUFF_MATTERMOST_WEBHOOK_URL');
       console.log('  BUFF_MATRIX_HOMESERVER + BUFF_MATRIX_ACCESS_TOKEN · BUFF_WEBHOOK_URL · BUFF_BLUEBUBBLES_URL + BUFF_BLUEBUBBLES_PASSWORD');
@@ -187,15 +187,15 @@ export class GatewayCommand {
       }
     } else {
       console.log('📇 No channel aliases registered yet. Add one:');
-      console.log('  buff gateway alias add <alias> <telegram|discord|slack|whatsapp|whatsapp_cloud|email|signal|dingtalk|feishu|wecom|mattermost|matrix|webhook|bluebubbles|ntfy|teams|google_chat|weixin|sms|irc|simplex|homeassistant> <channelId>');
-      console.log('  buff gateway send ops "nightly build done"');
+      console.log('  nuvira gateway alias add <alias> <telegram|discord|slack|whatsapp|whatsapp_cloud|email|signal|dingtalk|feishu|wecom|mattermost|matrix|webhook|bluebubbles|ntfy|teams|google_chat|weixin|sms|irc|simplex|homeassistant> <channelId>');
+      console.log('  nuvira gateway send ops "nightly build done"');
     }
     console.log('');
     if (configured.length > 0) {
       console.log('🚀 Next steps:');
-      console.log('  1. Start the gateway:  buff gateway start');
-      console.log('  2. Send a test message: buff gateway send <platform>:<chatId> "Hello from agent-nuvira!"');
-      console.log('  3. Or set up an alias:  buff gateway alias add myteam ' + configured[0] + ' <your-chat-id>');
+      console.log('  1. Start the gateway:  nuvira gateway start');
+      console.log('  2. Send a test message: nuvira gateway send <platform>:<chatId> "Hello from agent-nuvira!"');
+      console.log('  3. Or set up an alias:  nuvira gateway alias add myteam ' + configured[0] + ' <your-chat-id>');
       console.log('');
     }
   }
@@ -226,9 +226,9 @@ export class GatewayCommand {
     }
     if (!ok) {
       logger.error(`Send to ${ref.platform}:${maskSenderId(ref.channelId)} failed.`);
-      logger.info(`  → Check that the platform token is set in ~/.buff/.env and the chat ID is valid.`);
+      logger.info(`  → Check that the platform token is set in ~/.nuvira/.env and the chat ID is valid.`);
       logger.info(`  → Run '${getCliName()} gateway status' to verify the adapter is configured.`);
-      logger.info(`  → The message has been queued for retry (buff gateway delivery).`);
+      logger.info(`  → The message has been queued for retry (nuvira gateway delivery).`);
       process.exitCode = 1;
       return;
     }
@@ -509,11 +509,11 @@ export class GatewayCommand {
           }
         },
         postSetup: [
-          'Start the gateway:  buff gateway start',
+          'Start the gateway:  nuvira gateway start',
           'Open your bot in Telegram and send a message',
           'The agent will reply automatically!',
           'The gateway auto-learns your chat ID from the first message',
-          'Optional: add an alias:  buff gateway alias add support telegram <your-chat-id>',
+          'Optional: add an alias:  nuvira gateway alias add support telegram <your-chat-id>',
         ],
       },
       discord: {
@@ -528,7 +528,7 @@ export class GatewayCommand {
         ],
         vars: platformEnvVarMeta('discord'),
         postSetup: [
-          'Start the gateway:  buff gateway start',
+          'Start the gateway:  nuvira gateway start',
           'Mention the bot in a Discord channel or send it a DM',
           'The agent will reply automatically!',
         ],
@@ -544,7 +544,7 @@ export class GatewayCommand {
         ],
         vars: platformEnvVarMeta('slack'),
         postSetup: [
-          'Start the gateway:  buff gateway start',
+          'Start the gateway:  nuvira gateway start',
           'DM the bot or mention it in a channel',
           'The agent will reply automatically!',
         ],
@@ -558,7 +558,7 @@ export class GatewayCommand {
         ],
         vars: platformEnvVarMeta('email'),
         postSetup: [
-          'Start the gateway:  buff gateway start',
+          'Start the gateway:  nuvira gateway start',
           'Send an email to the configured address',
           'The agent will reply via email!',
         ],
@@ -619,11 +619,11 @@ export class GatewayCommand {
       return;
     }
 
-    // Save to ~/.buff/.env.
+    // Save to ~/.nuvira/.env.
     const { wrote } = writeEnvFile(values);
     applyEnvToProcess(values);
     console.log('');
-    logger.success(`Saved to ~/.buff/.env: ${wrote.join(', ')}`);
+    logger.success(`Saved to ~/.nuvira/.env: ${wrote.join(', ')}`);
 
     // Verify if the guide has a verify step.
     if (guide.verify) {
@@ -661,12 +661,12 @@ export class GatewayCommand {
       console.log('  Telegram:   BUFF_TELEGRAM_TOKEN=your-token   (get from @BotFather on Telegram)');
       console.log('  Discord:    BUFF_DISCORD_BOT_TOKEN=your-token  (from Discord Developer Portal)');
       console.log('  Slack:      BUFF_SLACK_BOT_TOKEN=your-token    (from Slack API → Your Apps)');
-      console.log('  WhatsApp:   buff whatsapp pair                  (scan QR code)');
+      console.log('  WhatsApp:   nuvira whatsapp pair                  (scan QR code)');
       console.log('  Email:      BUFF_SMTP_HOST + BUFF_SMTP_USER     (any SMTP relay)');
       console.log('  Signal:     BUFF_SIGNAL_ACCOUNT=your-number     (via signal-cli-rest-api)');
       console.log('');
-      console.log('  Tokens are saved to ~/.buff/.env — use the dashboard Channels tab or:');
-      console.log('    buff config gateway <platform>                  (interactive wizard)');
+      console.log('  Tokens are saved to ~/.nuvira/.env — use the dashboard Channels tab or:');
+      console.log('    nuvira config gateway <platform>                  (interactive wizard)');
       console.log('');
     }
 

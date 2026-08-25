@@ -9,7 +9,7 @@
  * - LocalMemoryProvider.syncTurn() updates profile after each turn
  * - Orchestrator includes profile in vault metadata
  *
- * Storage: ~/.buff/USER.md (bounded, auto-consolidated)
+ * Storage: ~/.nuvira/USER.md (bounded, auto-consolidated)
  */
 
 import { readFileSync, writeFileSync, existsSync, mkdirSync } from 'node:fs';

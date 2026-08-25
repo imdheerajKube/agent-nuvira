@@ -14,6 +14,8 @@
  */
 
 import * as fs from 'fs';
+import { join } from 'node:path';
+import {resolveNuviraHome} from '../config/paths';
 import * as path from 'path';
 import { homedir } from 'os';
 
@@ -208,7 +210,7 @@ export class SQLiteStore {
 
   constructor(config?: Partial<SQLiteConfig>) {
     this.config = {
-      dbPath: config?.dbPath || path.join(homedir(), '.buff', 'memory', 'memory.db'),
+      dbPath: config?.dbPath || join(resolveNuviraHome(), 'memory', 'memory.db'),
       walMode: config?.walMode ?? true,
       busyTimeout: config?.busyTimeout ?? 5000,
       journalSizeLimit: config?.journalSizeLimit ?? 67108864, // 64MB

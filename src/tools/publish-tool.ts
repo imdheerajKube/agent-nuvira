@@ -2,7 +2,7 @@
  * E3c — Publish workflow as a TOOL (`src/tools/publish-tool.ts`).
  *
  * The model-decides vocabulary: a chat turn can run the SAME publish pipeline
- * as `buff publish` by calling the `publish` tool — no mode selection, no
+ * as `nuvira publish` by calling the `publish` tool — no mode selection, no
  * command the user must type. The CLI command (src/cli/publish.ts) and this
  * tool share `buildPublishPhases` (one phase list, zero divergence).
  *

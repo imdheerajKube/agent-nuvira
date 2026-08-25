@@ -16,6 +16,7 @@
  */
 
 import { randomUUID } from 'node:crypto';
+import { resolveNuviraHome } from '../config/paths';
 import { existsSync, readFileSync, writeFileSync, mkdirSync, appendFileSync, readdirSync } from 'node:fs';
 import { join } from 'node:path';
 import { homedir } from 'node:os';
@@ -84,7 +85,7 @@ export interface ManagedToolConfig {
 
 // ─── Delegation Manager ───────────────────────────────────────────────────
 
-const DELEGATION_DIR = join(homedir(), '.buff', 'cache', 'delegation');
+const DELEGATION_DIR = join(resolveNuviraHome(), 'cache', 'delegation');
 const LIVE_LOG_DIR = join(DELEGATION_DIR, 'live');
 const COMPLETION_QUEUE_DIR = join(DELEGATION_DIR, 'completions');
 

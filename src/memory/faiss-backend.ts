@@ -33,6 +33,7 @@
  */
 
 import { writeFileSync, existsSync, mkdirSync } from 'node:fs';
+import {envBuff, resolveNuviraHome} from '../config/paths';
 import { join } from 'node:path';
 import { homedir } from 'node:os';
 
@@ -41,9 +42,9 @@ import { cosineSimilarity, indexPathFor, readNamespaceEntries } from './vector-s
 
 // ─── Constants ──────────────────────────────────────────────────────────────
 
-/** Resolve the memory dir lazily so test hermeticity via BUFF_MEMORY_DIR works. */
+/** Resolve the memory dir lazily so test hermeticity via NUVIRA_MEMORY_DIR works. */
 function memoryDir(): string {
-  return process.env.BUFF_MEMORY_DIR || join(homedir(), '.buff', 'memory');
+  return envBuff('MEMORY_DIR') || join(resolveNuviraHome(), 'memory');
 }
 
 /** Default number of inverted lists (centroids) for IVF-flat. */
@@ -208,7 +209,7 @@ export class FaissIvfBackend implements VectorStoreBackend {
     this.seed = opts.seed ?? 42;
   }
 
-  /** Resolve the index path per operation so `BUFF_MEMORY_DIR` changes (tests) take effect. */
+  /** Resolve the index path per operation so `NUVIRA_MEMORY_DIR` changes (tests) take effect. */
   private get indexPath(): string {
     return indexPathFor(this.namespace);
   }
@@ -582,7 +583,7 @@ export interface NativeFaissCheck {
 
 /**
  * Check whether native FAISS is actually usable on this machine.
- * Used by `buff memory backend --check` for diagnostics.
+ * Used by `nuvira memory backend --check` for diagnostics.
  */
 export async function checkNativeFaiss(): Promise<NativeFaissCheck> {
   try {

@@ -11,6 +11,8 @@
  */
 
 import * as fs from 'fs';
+import { join } from 'node:path';
+import {resolveNuviraHome} from '../config/paths';
 import * as path from 'path';
 import { homedir } from 'os';
 
@@ -44,7 +46,7 @@ class MemoryStore {
   private memoryDir: string;
 
   constructor(memoryDir?: string) {
-    this.memoryDir = memoryDir || path.join(homedir(), '.buff', 'memory');
+    this.memoryDir = memoryDir || join(resolveNuviraHome(), 'memory');
     this.indexPath = path.join(this.memoryDir, 'memory-index.json');
     this.loadIndex();
   }

@@ -7,7 +7,7 @@
  *
  * On UPGRADES (registry already has data), the gate is a no-op — zero delay.
  *
- * Detection mechanism: a flag file `~/.buff/.registry-initialized` is created
+ * Detection mechanism: a flag file `~/.nuvira/.registry-initialized` is created
  * after the first successful probe. If it exists, the gate is skipped.
  */
 

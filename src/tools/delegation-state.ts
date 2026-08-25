@@ -8,6 +8,7 @@
  */
 
 import { existsSync, mkdirSync } from 'node:fs';
+import { resolveNuviraHome } from '../config/paths';
 import { join } from 'node:path';
 import { homedir } from 'node:os';
 import { randomUUID } from 'node:crypto';
@@ -43,7 +44,7 @@ export interface CompletionRecord {
 
 // ─── SQLite State Store ───────────────────────────────────────────────────
 
-const STATE_DIR = join(homedir(), '.buff', 'cache', 'delegation');
+const STATE_DIR = join(resolveNuviraHome(), 'cache', 'delegation');
 const DB_PATH = join(STATE_DIR, 'delegation.db');
 
 export class DelegationStateStore {

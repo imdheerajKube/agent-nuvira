@@ -1,5 +1,5 @@
 /**
- * `buff code-map` (revamp row 11) — symbol-map builder tests.
+ * `nuvira code-map` (revamp row 11) — symbol-map builder tests.
  *
  * Exercises buildCodeMap + formatCodeMap against a hermetic temp project:
  *   - finds symbols (functions, classes, methods) with line numbers

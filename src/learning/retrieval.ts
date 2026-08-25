@@ -3,7 +3,7 @@
  *
  * Turns large code/doc context into token-efficient, semantically-relevant
  * context using a local embedding model + the pure-JS VectorStore (cosine
- * similarity, JSON-persisted, honors BUFF_MEMORY_DIR). This complements the
+ * similarity, JSON-persisted, honors NUVIRA_MEMORY_DIR). This complements the
  * quota ledger: retrieval SAVES tokens (so free quotas stretch further),
  * the ledger MANAGES quotas.
  *
@@ -19,10 +19,11 @@
  *                   context fallback when retrieval fails.
  *
  * Every reduction is logged ("Retrieved 5 chunks — context 20k → 3k tokens")
- * and persisted to retrieval-stats.json for the dashboard + `buff retrieval`.
+ * and persisted to retrieval-stats.json for the dashboard + `nuvira retrieval`.
  */
 
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
+import {envBuff, resolveNuviraHome} from '../config/paths';
 import { join } from 'node:path';
 import { homedir } from 'node:os';
 
@@ -58,7 +59,7 @@ export const REPO_NAMESPACE = 'repo';
 export const RETRIEVAL_STATS_FILE = 'retrieval-stats.json';
 
 function memoryDir(): string {
-  return process.env.BUFF_MEMORY_DIR || join(homedir(), '.buff', 'memory');
+  return envBuff('MEMORY_DIR') || join(resolveNuviraHome(), 'memory');
 }
 
 function statsPath(): string {
@@ -485,7 +486,7 @@ function emptyAggregate(): RetrievalAggregateStats {
 }
 
 /**
- * Clear retrieval stats + the repo index (used by `buff retrieval clear`).
+ * Clear retrieval stats + the repo index (used by `nuvira retrieval clear`).
  * ASYNC: the VectorStore facade lazily resolves its backend, so the clear must
  * be awaited to guarantee the on-disk index is wiped before callers check it.
  */

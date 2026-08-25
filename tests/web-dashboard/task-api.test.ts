@@ -15,18 +15,18 @@ import { join } from 'node:path';
 
 const TMP_BASE = process.env.TMPDIR || process.env.TMP || '/tmp';
 const testDir = mkdtempSync(join(TMP_BASE, 'buff-task-api-'));
-const memoryDir = join(testDir, '.buff', 'memory');
+const memoryDir = join(testDir, '.nuvira', 'memory');
 mkdirSync(memoryDir, { recursive: true });
 
 // Env MUST be set before importing the server (values are read at import time).
-process.env.BUFF_DASHBOARD_PORT = '0';
-process.env.BUFF_DASHBOARD_HOST = '127.0.0.1';
-process.env.BUFF_MEMORY_DIR = memoryDir;
-process.env.BUFF_DASHBOARD_ADMIN_PASSWORD = 'test-password-123';
-process.env.BUFF_DASHBOARD_ADMIN_USER = 'admin';
+process.env.NUVIRA_DASHBOARD_PORT = '0';
+process.env.NUVIRA_DASHBOARD_HOST = '127.0.0.1';
+process.env.NUVIRA_MEMORY_DIR = memoryDir;
+process.env.NUVIRA_DASHBOARD_ADMIN_PASSWORD = 'test-password-123';
+process.env.NUVIRA_DASHBOARD_ADMIN_USER = 'admin';
 
 const FIXTURE = `
-const mode = process.env.BUFF_TASK_FIXTURE_MODE || 'ok';
+const mode = process.env.NUVIRA_TASK_FIXTURE_MODE || 'ok';
 if (mode === 'ok') {
   console.log('fixture-ok');
   console.error('fixture-err');
@@ -37,7 +37,7 @@ if (mode === 'ok') {
 `;
 const entryPath = join(testDir, 'fixture.cjs');
 writeFileSync(entryPath, FIXTURE, 'utf-8');
-process.env.BUFF_DASHBOARD_TASK_CLI_ENTRY = entryPath;
+process.env.NUVIRA_DASHBOARD_TASK_CLI_ENTRY = entryPath;
 
 vi.mock('node:os', () => ({
   homedir: () => testDir,
@@ -150,7 +150,7 @@ afterAll(() => {
 });
 
 afterEach(() => {
-  delete process.env.BUFF_TASK_FIXTURE_MODE;
+  delete process.env.NUVIRA_TASK_FIXTURE_MODE;
 });
 
 describe('/api/tasks', () => {
@@ -170,7 +170,7 @@ describe('/api/tasks', () => {
   });
 
   it('starts a task, streams it to done, and lists history', async () => {
-    process.env.BUFF_TASK_FIXTURE_MODE = 'ok';
+    process.env.NUVIRA_TASK_FIXTURE_MODE = 'ok';
     const start = await authedFetch('/api/tasks', 'POST', { args: ['fixture'], timeoutMs: 10_000 });
     expect(start.status).toBe(200);
     const startBody = (await start.json()) as { ok: boolean; task: { id: string; status: string } };
@@ -189,7 +189,7 @@ describe('/api/tasks', () => {
   });
 
   it('cancel() terminates a running task (status cancelled)', async () => {
-    process.env.BUFF_TASK_FIXTURE_MODE = 'sleep';
+    process.env.NUVIRA_TASK_FIXTURE_MODE = 'sleep';
     const start = await authedFetch('/api/tasks', 'POST', { args: ['fixture'], timeoutMs: 60_000 });
     const startBody = (await start.json()) as { ok: boolean; task: { id: string } };
     expect(startBody.ok).toBe(true);
@@ -204,7 +204,7 @@ describe('/api/tasks', () => {
   });
 
   it('streams log + status events over SSE (?token= auth)', async () => {
-    process.env.BUFF_TASK_FIXTURE_MODE = 'ok';
+    process.env.NUVIRA_TASK_FIXTURE_MODE = 'ok';
     const start = await authedFetch('/api/tasks', 'POST', { args: ['fixture'], timeoutMs: 10_000 });
     const startBody = (await start.json()) as { ok: boolean; task: { id: string } };
 

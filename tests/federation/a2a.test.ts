@@ -24,8 +24,8 @@ import { resetWorkspaceStore } from '../../src/config/workspace.js';
 // NONEXISTENT local model makes the pipeline fail fast (model-not-found), the
 // behavior these tests were written against.
 const a2aCfgDir = mkdtempSync(join(tmpdir(), 'buff-a2a-cfg-'));
-const origA2aConfigDir = process.env.BUFF_CONFIG_DIR;
-process.env.BUFF_CONFIG_DIR = a2aCfgDir;
+const origA2aConfigDir = process.env.NUVIRA_CONFIG_DIR;
+process.env.NUVIRA_CONFIG_DIR = a2aCfgDir;
 mkdirSync(a2aCfgDir, { recursive: true });
 writeFileSync(
   join(a2aCfgDir, 'buffconfig.json'),
@@ -63,8 +63,8 @@ afterAll(() => {
   // workspaces.db makes rmSync fail on Windows (EBUSY).
   resetWorkspaceStore();
   rmSync(a2aCfgDir, { recursive: true, force: true });
-  if (origA2aConfigDir === undefined) delete process.env.BUFF_CONFIG_DIR;
-  else process.env.BUFF_CONFIG_DIR = origA2aConfigDir;
+  if (origA2aConfigDir === undefined) delete process.env.NUVIRA_CONFIG_DIR;
+  else process.env.NUVIRA_CONFIG_DIR = origA2aConfigDir;
 });
 
 // ─── Tests: Types & Constants ───────────────────────────────────────────────

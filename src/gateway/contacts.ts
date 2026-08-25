@@ -6,7 +6,7 @@
  * The verified list per platform (`gateway.policies.<platform>.allowedUsers`)
  * holds RAW sender ids — the exact strings the policy gate compares against.
  * This module stores the optional display NAME for each verified contact
- * (CLI parity: `buff whatsapp contact add <Name> <number>`), so the dashboard
+ * (CLI parity: `nuvira whatsapp contact add <Name> <number>`), so the dashboard
  * can add a person as **Name + Contact No** and later show what contacts are
  * saved. It is metadata only — the gate never reads it, and removing a
  * contact here never widens access.
@@ -16,7 +16,7 @@
  *  - `pending`   — auto-registered from first inbound message, awaiting admin review
  *  - `rejected`  — admin rejected; name resolves but send is blocked
  *
- * Stored at `~/.buff/gateway/contacts.json` (BUFF_CONFIG_DIR honored, next to
+ * Stored at `~/.nuvira/gateway/contacts.json` (NUVIRA_CONFIG_DIR honored, next to
  * aliases.json / inbox.json / delivery.json). Works for every platform: a
  * WhatsApp phone number, a Telegram user id, an email address, a group jid —
  * whatever the platform's allowedUsers entries use.
@@ -50,7 +50,7 @@ export interface GatewayContact {
 /** Contact registration status. */
 export type ContactStatus = 'approved' | 'pending' | 'rejected';
 
-/** The contacts file path (BUFF_CONFIG_DIR honored — same dir as aliases.json). */
+/** The contacts file path (NUVIRA_CONFIG_DIR honored — same dir as aliases.json). */
 export function gatewayContactsFile(): string {
   return join(resolveBuffConfigDir(), 'gateway', 'contacts.json');
 }
@@ -282,8 +282,8 @@ export function removeContactByNameOrId(nameOrId: string): boolean {
 
 /**
  * Sync a named WhatsApp contact into the bridge's contacts file — the exact
- * file `buff whatsapp contact add <Name> <number>` writes — so a contact added
- * from the dashboard is also sendable by name (`buff gateway send
+ * file `nuvira whatsapp contact add <Name> <number>` writes — so a contact added
+ * from the dashboard is also sendable by name (`nuvira gateway send
  * whatsapp:<Name> "…"`). Best-effort, never throws; numbers are stored as
  * E.164 digits without the '+' like the CLI does.
  */

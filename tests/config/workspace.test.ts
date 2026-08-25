@@ -202,7 +202,7 @@ describe('ConfigManager wiring (A2)', () => {
     expect(store).toBeInstanceOf(WorkspaceStore);
     // The singleton is per-dir: a second manager for the same dir shares it.
     expect(cm.getWorkspaceStore()).toBe(store);
-    // Workspace file lives in the config dir, not the default ~/.buff.
+    // Workspace file lives in the config dir, not the default ~/.nuvira.
     expect(store.status().dbPath.startsWith(testDir)).toBe(true);
   });
 

@@ -45,17 +45,17 @@ function fakeEmbed(text: string): Promise<number[]> {
   return Promise.resolve(v.map((x) => x / norm));
 }
 
-/** Hermetic memory dir so the persisted alias-vector cache never touches ~/.buff. */
+/** Hermetic memory dir so the persisted alias-vector cache never touches ~/.nuvira. */
 let memDir = '';
 
 beforeEach(() => {
   memDir = mkdtempSync(join(tmpdir(), 'intent-eval-'));
-  process.env.BUFF_MEMORY_DIR = memDir;
+  process.env.NUVIRA_MEMORY_DIR = memDir;
 });
 
 afterEach(() => {
   rmSync(memDir, { recursive: true, force: true });
-  delete process.env.BUFF_MEMORY_DIR;
+  delete process.env.NUVIRA_MEMORY_DIR;
 });
 
 describe('semantic-intent — corpus', () => {

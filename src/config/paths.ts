@@ -5,16 +5,11 @@
  * the ConfigManager, the dashboard server readers, and the vector store's
  * backend picker so every reader agrees on the SAME file.
  *
- * Phase 1 (current): supports both `~/.nuvira` and `~/.buff` for backward
- * compatibility. If `~/.nuvira` exists it takes priority; otherwise `~/.buff`
- * is used.
- *
  * Precedence (highest first):
  *   1. An explicitly passed directory (caller-provided, e.g. tests).
- *   2. `$NUVIRA_CONFIG_DIR` — the new override.
+ *   2. `$NUVIRA_CONFIG_DIR` — the override.
  *   3. `$BUFF_CONFIG_DIR` — legacy override (backward compat).
- *   4. `~/.nuvira` if it exists on disk.
- *   5. `~/.buff` (the legacy default).
+ *   4. `~/.nuvira` (the canonical default).
  */
 import { join } from 'node:path';
 import { homedir } from 'node:os';
@@ -32,11 +27,8 @@ export function resolveNuviraConfigDir(explicitDir?: string): string {
   // Explicit env var overrides
   if (process.env.NUVIRA_CONFIG_DIR) return process.env.NUVIRA_CONFIG_DIR;
   if (process.env.BUFF_CONFIG_DIR) return process.env.BUFF_CONFIG_DIR;
-  // Check if ~/.nuvira exists → use it; otherwise fall back to ~/.buff
-  const nuviraHome = join(homedir(), NUVRIRA_HOME);
-  const buffHome = join(homedir(), LEGACY_HOME);
-  if (existsSync(nuviraHome)) return nuviraHome;
-  return buffHome;
+  // Use the same data-aware resolution as resolveNuviraHome
+  return resolveNuviraHome();
 }
 
 /** Resolve the config dir. Named `resolveBuffConfigDir` for backward compat. */
@@ -56,12 +48,21 @@ export function resolveNuviraConfigPath(explicitDir?: string): string {
 export const resolveBuffConfigPath = resolveNuviraConfigPath;
 
 /**
- * Resolve the Nuvira home directory (~/.nuvira preferred, ~/.buff legacy).
- * Use this everywhere instead of hardcoded `join(homedir(), '.buff')`.
+ * Resolve the Nuvira home directory.
+ *
+ * Always returns `~/.nuvira`. The `LEGACY_HOME` constant exists solely
+ * for migration tooling — runtime code never reads from `~/.buff`.
  */
 export function resolveNuviraHome(): string {
-  const nuviraHome = join(homedir(), NUVRIRA_HOME);
-  const buffHome = join(homedir(), LEGACY_HOME);
-  if (existsSync(nuviraHome)) return nuviraHome;
-  return buffHome;
+  return join(homedir(), NUVRIRA_HOME);
+}
+
+/**
+ * Dual-read env var helper.
+ *
+ * Reads `NUVIRA_<name>` first; if unset, falls back to legacy `BUFF_<name>`
+ * for backward compatibility. Returns `undefined` if neither is set.
+ */
+export function envBuff(name: string): string | undefined {
+  return process.env[`NUVIRA_${name}`] ?? process.env[`BUFF_${name}`];
 }

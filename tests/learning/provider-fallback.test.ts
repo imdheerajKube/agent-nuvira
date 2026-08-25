@@ -45,29 +45,29 @@ let originalTelemetryAction: string | undefined;
 
 beforeEach(() => {
   tempDir = mkdtempSync(join(tmpdir(), 'buff-fallback-'));
-  originalMemoryDir = process.env.BUFF_MEMORY_DIR;
-  process.env.BUFF_MEMORY_DIR = tempDir;
+  originalMemoryDir = process.env.NUVIRA_MEMORY_DIR;
+  process.env.NUVIRA_MEMORY_DIR = tempDir;
   // Telemetry-action isolation: the BUFF_TELEMETRY_ACTION env override (set
   // by the VS Code extension spawns) re-tags every registry write in this
   // process, so the whole suite must run with it cleared — otherwise a
   // developer's shell exporting it would silently re-tag every action-log
   // assertion below. The dedicated override tests set it themselves.
-  originalTelemetryAction = process.env.BUFF_TELEMETRY_ACTION;
-  delete process.env.BUFF_TELEMETRY_ACTION;
+  originalTelemetryAction = process.env.NUVIRA_TELEMETRY_ACTION;
+  delete process.env.NUVIRA_TELEMETRY_ACTION;
   resetModelRegistry();
 });
 
 afterEach(() => {
   resetModelRegistry();
   if (originalMemoryDir === undefined) {
-    delete process.env.BUFF_MEMORY_DIR;
+    delete process.env.NUVIRA_MEMORY_DIR;
   } else {
-    process.env.BUFF_MEMORY_DIR = originalMemoryDir;
+    process.env.NUVIRA_MEMORY_DIR = originalMemoryDir;
   }
   if (originalTelemetryAction === undefined) {
-    delete process.env.BUFF_TELEMETRY_ACTION;
+    delete process.env.NUVIRA_TELEMETRY_ACTION;
   } else {
-    process.env.BUFF_TELEMETRY_ACTION = originalTelemetryAction;
+    process.env.NUVIRA_TELEMETRY_ACTION = originalTelemetryAction;
   }
   rmSync(tempDir, { recursive: true, force: true });
 });
@@ -655,24 +655,24 @@ describe('ProviderFallback', () => {
 
   // ── BUFF_TELEMETRY_ACTION env override (VS Code extension spawns) ─────────
 
-  describe('BUFF_TELEMETRY_ACTION env override', () => {
+  describe('NUVIRA_TELEMETRY_ACTION env override', () => {
     it('resolveTelemetryAction returns the caller tag when env is unset', () => {
       expect(resolveTelemetryAction('chat')).toBe('chat');
       expect(resolveTelemetryAction()).toBeUndefined();
     });
 
     it('resolveTelemetryAction honors the env override and trims it', () => {
-      process.env.BUFF_TELEMETRY_ACTION = '  ide-chat  ';
+      process.env.NUVIRA_TELEMETRY_ACTION = '  ide-chat  ';
       expect(resolveTelemetryAction('chat')).toBe('ide-chat');
     });
 
     it('resolveTelemetryAction ignores a blank override (falls back to caller tag)', () => {
-      process.env.BUFF_TELEMETRY_ACTION = '   ';
+      process.env.NUVIRA_TELEMETRY_ACTION = '   ';
       expect(resolveTelemetryAction('chat')).toBe('chat');
     });
 
     it('recordRegistryFailure writes the action log under the IDE tag', () => {
-      process.env.BUFF_TELEMETRY_ACTION = 'ide-execute';
+      process.env.NUVIRA_TELEMETRY_ACTION = 'ide-execute';
       recordRegistryFailure('gemini', 'gemini-2.0-flash-exp', new Error('403 permission denied'), 'auth', 'execute');
 
       const actions = getModelRegistry().getActionTelemetry().actions;
@@ -685,7 +685,7 @@ describe('ProviderFallback', () => {
     });
 
     it('recordRegistrySuccess writes the action log under the IDE tag', () => {
-      process.env.BUFF_TELEMETRY_ACTION = 'ide-inline';
+      process.env.NUVIRA_TELEMETRY_ACTION = 'ide-inline';
       recordRegistrySuccess('groq', 'llama-3.3-70b-versatile', 'chat');
 
       const actions = getModelRegistry().getActionTelemetry().actions;

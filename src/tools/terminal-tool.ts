@@ -13,6 +13,7 @@
  */
 
 import { spawn, execSync, type ChildProcess } from 'node:child_process';
+import { resolveNuviraHome } from '../config/paths';
 import { randomUUID } from 'node:crypto';
 import { existsSync, readFileSync, writeFileSync, mkdirSync } from 'node:fs';
 import { join } from 'node:path';
@@ -76,7 +77,7 @@ export class TerminalManager extends EventEmitter {
     super();
     this.defaultEnv = config.defaultEnv || (process.env.TERMINAL_ENV as TerminalEnv) || 'local';
     this.maxConcurrent = config.maxConcurrent || 5;
-    this.taskDir = join(homedir(), '.buff', 'cache', 'terminal');
+    this.taskDir = join(resolveNuviraHome(), 'cache', 'terminal');
     this.ensureDir();
     this.startCleanupTimer();
   }

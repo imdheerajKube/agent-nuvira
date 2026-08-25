@@ -3,7 +3,7 @@
  *
  * Generates a CycloneDX 1.5 SBOM from the package-lock.json (deterministic:
  * npm records the exact resolved version, license and integrity hash for every
- * installed package), so `buff sbom` produces a procurement-ready inventory
+ * installed package), so `nuvira sbom` produces a procurement-ready inventory
  * without a network round-trip. `verifySbom` re-reads the lockfile and
  * compares it against a stored SBOM — detecting drift (deps changed since the
  * BOM was written) and tampering (a hand-edited SBOM). The license audit

@@ -25,17 +25,17 @@ function rbacPath(): string {
 describe('RbacManager — legacy mode', () => {
   beforeEach(() => {
     tempDir = mkdtempSync(join(tmpdir(), 'buff-rbac-'));
-    originalConfigDir = process.env.BUFF_CONFIG_DIR;
-    process.env.BUFF_CONFIG_DIR = tempDir;
-    originalActAs = process.env.BUFF_ACT_AS;
-    delete process.env.BUFF_ACT_AS;
+    originalConfigDir = process.env.NUVIRA_CONFIG_DIR;
+    process.env.NUVIRA_CONFIG_DIR = tempDir;
+    originalActAs = process.env.NUVIRA_ACT_AS;
+    delete process.env.NUVIRA_ACT_AS;
   });
 
   afterEach(() => {
-    if (originalConfigDir === undefined) delete process.env.BUFF_CONFIG_DIR;
-    else process.env.BUFF_CONFIG_DIR = originalConfigDir;
-    if (originalActAs === undefined) delete process.env.BUFF_ACT_AS;
-    else process.env.BUFF_ACT_AS = originalActAs;
+    if (originalConfigDir === undefined) delete process.env.NUVIRA_CONFIG_DIR;
+    else process.env.NUVIRA_CONFIG_DIR = originalConfigDir;
+    if (originalActAs === undefined) delete process.env.NUVIRA_ACT_AS;
+    else process.env.NUVIRA_ACT_AS = originalActAs;
     rmSync(tempDir, { recursive: true, force: true });
   });
 
@@ -47,7 +47,7 @@ describe('RbacManager — legacy mode', () => {
   });
 
   it('resolves the current identity from BUFF_ACT_AS', () => {
-    process.env.BUFF_ACT_AS = 'ci-bot';
+    process.env.NUVIRA_ACT_AS = 'ci-bot';
     expect(RbacManager.currentIdentity()).toBe('ci-bot');
   });
 });
@@ -55,17 +55,17 @@ describe('RbacManager — legacy mode', () => {
 describe('RbacManager — role matrix + enforcement', () => {
   beforeEach(() => {
     tempDir = mkdtempSync(join(tmpdir(), 'buff-rbac-'));
-    originalConfigDir = process.env.BUFF_CONFIG_DIR;
-    process.env.BUFF_CONFIG_DIR = tempDir;
-    originalActAs = process.env.BUFF_ACT_AS;
-    delete process.env.BUFF_ACT_AS;
+    originalConfigDir = process.env.NUVIRA_CONFIG_DIR;
+    process.env.NUVIRA_CONFIG_DIR = tempDir;
+    originalActAs = process.env.NUVIRA_ACT_AS;
+    delete process.env.NUVIRA_ACT_AS;
   });
 
   afterEach(() => {
-    if (originalConfigDir === undefined) delete process.env.BUFF_CONFIG_DIR;
-    else process.env.BUFF_CONFIG_DIR = originalConfigDir;
-    if (originalActAs === undefined) delete process.env.BUFF_ACT_AS;
-    else process.env.BUFF_ACT_AS = originalActAs;
+    if (originalConfigDir === undefined) delete process.env.NUVIRA_CONFIG_DIR;
+    else process.env.NUVIRA_CONFIG_DIR = originalConfigDir;
+    if (originalActAs === undefined) delete process.env.NUVIRA_ACT_AS;
+    else process.env.NUVIRA_ACT_AS = originalActAs;
     rmSync(tempDir, { recursive: true, force: true });
   });
 

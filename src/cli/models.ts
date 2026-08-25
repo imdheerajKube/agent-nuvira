@@ -15,10 +15,10 @@ import { CATALOG_PROVIDER_IDS, isCatalogKeyless } from '../inference/provider-ca
  * agent-baba-d models [--provider nim]
  *
  * Subcommands:
- *   buff models refresh [provider]  — probe + spot-check, update the registry
- *   buff models status [--json]     — show the Model Availability Registry
- *   buff models unblock <provider>  — manual escape hatch: release a blocked provider + re-probe
- *   buff models watch [--interval N]— background daemon keeping the registry fresh
+ *   nuvira models refresh [provider]  — probe + spot-check, update the registry
+ *   nuvira models status [--json]     — show the Model Availability Registry
+ *   nuvira models unblock <provider>  — manual escape hatch: release a blocked provider + re-probe
+ *   nuvira models watch [--interval N]— background daemon keeping the registry fresh
  */
 export class ModelsCommand extends BaseCommand {
   create(): Command {
@@ -85,8 +85,8 @@ export class ModelsCommand extends BaseCommand {
           await this.printVerboseStatus();
         }
         console.log('');
-        logger.info('  Registry updates automatically from real usage. Run `buff models refresh` to probe now,');
-        logger.info('  `buff models watch` for a background daemon, or `buff models unblock <provider>` to');
+        logger.info('  Registry updates automatically from real usage. Run `nuvira models refresh` to probe now,');
+        logger.info('  `nuvira models watch` for a background daemon, or `nuvira models unblock <provider>` to');
         logger.info('  manually release a provider that was learned blocked (escape hatch + re-probe).');
       });
 
@@ -120,7 +120,7 @@ export class ModelsCommand extends BaseCommand {
             console.log(JSON.stringify({ provider, refused: true, reason: 'routing.governance.allowUnblock is false — admin-hard block' }, null, 2));
           } else {
             logger.error(`⛔ Cannot unblock ${provider} — admin policy (routing.governance.allowUnblock: false) makes registry blocks admin-hard.`);
-            logger.info('   Override in .buffconfig.json (set routing.governance.allowUnblock true) if this was intentional.');
+            logger.info('   Override in .nuviraconfig.json (set routing.governance.allowUnblock true) if this was intentional.');
           }
           return;
         }
@@ -154,7 +154,7 @@ export class ModelsCommand extends BaseCommand {
         const { demoted, unparked } = registry.unblockProvider(provider);
         if (governanceListed && !this.isJsonMode(opts, cmd)) {
           logger.warn(
-            `   ⚠️ ${provider} is on an admin governance deny list (routing.governance.denyProviders/denyModels) — routing will STILL eliminate it even after this unblock. Edit routing.governance in .buffconfig.json to fully restore it.`,
+            `   ⚠️ ${provider} is on an admin governance deny list (routing.governance.denyProviders/denyModels) — routing will STILL eliminate it even after this unblock. Edit routing.governance in .nuviraconfig.json to fully restore it.`,
           );
         }
         // Clear the CENTRAL ledger cooldown too — otherwise syncQuota() would
@@ -312,8 +312,8 @@ export class ModelsCommand extends BaseCommand {
         console.log(`📊 Summary: ${totalFresh} fresh · ${totalStale} stale · ${totalRemoved} likely removed`);
         if (totalStale > 0 || totalRemoved > 0) {
           console.log('');
-          console.log('💡 Run `buff models refresh` to re-probe all providers and update staleness data.');
-          console.log('   Run `buff models watch` to keep the registry fresh automatically.');
+          console.log('💡 Run `nuvira models refresh` to re-probe all providers and update staleness data.');
+          console.log('   Run `nuvira models watch` to keep the registry fresh automatically.');
         }
         console.log('');
       });
@@ -470,7 +470,7 @@ export class ModelsCommand extends BaseCommand {
 
     for (const providerType of providersToCheck) {
       // Fast-skip unconfigured providers (no key, not keyless): a dead endpoint
-      // probe on 16 unused providers would make `buff models` noticeably slow
+      // probe on 16 unused providers would make `nuvira models` noticeably slow
       // (Issue 001 review feedback). Keyless local runners ARE probed. When no
       // credential check is available (mocks/plugins), never skip — probe as
       // before.
@@ -498,7 +498,7 @@ export class ModelsCommand extends BaseCommand {
       }
 
       // E2: live board for the fetch when not in --json mode (standing rule).
-      // Stderr stream: `buff models` output is user-facing/pipeable — the board
+      // Stderr stream: `nuvira models` output is user-facing/pipeable — the board
       // must never pollute stdout (non-TTY would print orphaned completion
       // lines into the model list).
       const board = options?.json ? null : new PipelineBoard({ stream: process.stderr });

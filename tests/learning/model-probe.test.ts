@@ -81,8 +81,8 @@ function mockFactory(providerFactory: (type: string) => any): void {
 describe('ModelProbe — provider resolution', () => {
   beforeEach(() => {
     tempDir = mkdtempSync(join(tmpdir(), 'buff-probe-'));
-    originalMemoryDir = process.env.BUFF_MEMORY_DIR;
-    process.env.BUFF_MEMORY_DIR = tempDir;
+    originalMemoryDir = process.env.NUVIRA_MEMORY_DIR;
+    process.env.NUVIRA_MEMORY_DIR = tempDir;
     setVectorBackendOverride('json');
     resetModelRegistry();
   });
@@ -92,9 +92,9 @@ describe('ModelProbe — provider resolution', () => {
     resetVectorBackendSelection();
     vi.restoreAllMocks();
     if (originalMemoryDir === undefined) {
-      delete process.env.BUFF_MEMORY_DIR;
+      delete process.env.NUVIRA_MEMORY_DIR;
     } else {
-      process.env.BUFF_MEMORY_DIR = originalMemoryDir;
+      process.env.NUVIRA_MEMORY_DIR = originalMemoryDir;
     }
     rmSync(tempDir, { recursive: true, force: true });
   });
@@ -115,8 +115,8 @@ describe('ModelProbe — provider resolution', () => {
 describe('ModelProbe — listModels probe', () => {
   beforeEach(() => {
     tempDir = mkdtempSync(join(tmpdir(), 'buff-probe-'));
-    originalMemoryDir = process.env.BUFF_MEMORY_DIR;
-    process.env.BUFF_MEMORY_DIR = tempDir;
+    originalMemoryDir = process.env.NUVIRA_MEMORY_DIR;
+    process.env.NUVIRA_MEMORY_DIR = tempDir;
     setVectorBackendOverride('json');
     resetModelRegistry();
     mockFactory(() => makeProvider({ models: [{ id: 'a-model' }, { id: 'b-model' }] }));
@@ -127,9 +127,9 @@ describe('ModelProbe — listModels probe', () => {
     resetVectorBackendSelection();
     vi.restoreAllMocks();
     if (originalMemoryDir === undefined) {
-      delete process.env.BUFF_MEMORY_DIR;
+      delete process.env.NUVIRA_MEMORY_DIR;
     } else {
-      process.env.BUFF_MEMORY_DIR = originalMemoryDir;
+      process.env.NUVIRA_MEMORY_DIR = originalMemoryDir;
     }
     rmSync(tempDir, { recursive: true, force: true });
   });
@@ -171,8 +171,8 @@ describe('ModelProbe — listModels probe', () => {
 describe('ModelProbe — spot-checks', () => {
   beforeEach(() => {
     tempDir = mkdtempSync(join(tmpdir(), 'buff-probe-'));
-    originalMemoryDir = process.env.BUFF_MEMORY_DIR;
-    process.env.BUFF_MEMORY_DIR = tempDir;
+    originalMemoryDir = process.env.NUVIRA_MEMORY_DIR;
+    process.env.NUVIRA_MEMORY_DIR = tempDir;
     setVectorBackendOverride('json');
     resetModelRegistry();
   });
@@ -182,9 +182,9 @@ describe('ModelProbe — spot-checks', () => {
     resetVectorBackendSelection();
     vi.restoreAllMocks();
     if (originalMemoryDir === undefined) {
-      delete process.env.BUFF_MEMORY_DIR;
+      delete process.env.NUVIRA_MEMORY_DIR;
     } else {
-      process.env.BUFF_MEMORY_DIR = originalMemoryDir;
+      process.env.NUVIRA_MEMORY_DIR = originalMemoryDir;
     }
     rmSync(tempDir, { recursive: true, force: true });
   });
@@ -267,8 +267,8 @@ describe('ModelProbe — spot-checks', () => {
 describe('ModelProbe — refresh orchestration', () => {
   beforeEach(() => {
     tempDir = mkdtempSync(join(tmpdir(), 'buff-probe-'));
-    originalMemoryDir = process.env.BUFF_MEMORY_DIR;
-    process.env.BUFF_MEMORY_DIR = tempDir;
+    originalMemoryDir = process.env.NUVIRA_MEMORY_DIR;
+    process.env.NUVIRA_MEMORY_DIR = tempDir;
     setVectorBackendOverride('json');
     resetModelRegistry();
     // Default factory: gemini lists curated + one extra model, all working.
@@ -282,9 +282,9 @@ describe('ModelProbe — refresh orchestration', () => {
     resetVectorBackendSelection();
     vi.restoreAllMocks();
     if (originalMemoryDir === undefined) {
-      delete process.env.BUFF_MEMORY_DIR;
+      delete process.env.NUVIRA_MEMORY_DIR;
     } else {
-      process.env.BUFF_MEMORY_DIR = originalMemoryDir;
+      process.env.NUVIRA_MEMORY_DIR = originalMemoryDir;
     }
     rmSync(tempDir, { recursive: true, force: true });
   });
@@ -359,8 +359,8 @@ describe('ModelProbe — refresh orchestration', () => {
 describe('ModelProbe — event-driven wakeup (watch daemon reacts to mid-session changes)', () => {
   beforeEach(() => {
     tempDir = mkdtempSync(join(tmpdir(), 'buff-probe-'));
-    originalMemoryDir = process.env.BUFF_MEMORY_DIR;
-    process.env.BUFF_MEMORY_DIR = tempDir;
+    originalMemoryDir = process.env.NUVIRA_MEMORY_DIR;
+    process.env.NUVIRA_MEMORY_DIR = tempDir;
     setVectorBackendOverride('json');
     resetModelRegistry();
     resetEventBus();
@@ -372,9 +372,9 @@ describe('ModelProbe — event-driven wakeup (watch daemon reacts to mid-session
     resetEventBus();
     vi.restoreAllMocks();
     if (originalMemoryDir === undefined) {
-      delete process.env.BUFF_MEMORY_DIR;
+      delete process.env.NUVIRA_MEMORY_DIR;
     } else {
-      process.env.BUFF_MEMORY_DIR = originalMemoryDir;
+      process.env.NUVIRA_MEMORY_DIR = originalMemoryDir;
     }
     rmSync(tempDir, { recursive: true, force: true });
   });

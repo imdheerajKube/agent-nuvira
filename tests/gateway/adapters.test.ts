@@ -1004,20 +1004,20 @@ describe('createConfiguredAdapters (I6 platforms)', () => {
   });
 
   it('includes email + signal only when their env vars are present', () => {
-    envBackup.BUFF_SMTP_HOST = process.env.BUFF_SMTP_HOST;
-    envBackup.BUFF_SMTP_USER = process.env.BUFF_SMTP_USER;
-    envBackup.BUFF_SIGNAL_ACCOUNT = process.env.BUFF_SIGNAL_ACCOUNT;
-    delete process.env.BUFF_SMTP_HOST;
-    delete process.env.BUFF_SMTP_USER;
-    delete process.env.BUFF_SIGNAL_ACCOUNT;
+    envBackup.NUVIRA_SMTP_HOST = process.env.NUVIRA_SMTP_HOST;
+    envBackup.NUVIRA_SMTP_USER = process.env.NUVIRA_SMTP_USER;
+    envBackup.NUVIRA_SIGNAL_ACCOUNT = process.env.NUVIRA_SIGNAL_ACCOUNT;
+    delete process.env.NUVIRA_SMTP_HOST;
+    delete process.env.NUVIRA_SMTP_USER;
+    delete process.env.NUVIRA_SIGNAL_ACCOUNT;
 
     let platforms = createConfiguredAdapters().map((a) => a.platform);
     expect(platforms).not.toContain('email');
     expect(platforms).not.toContain('signal');
 
-    process.env.BUFF_SMTP_HOST = 'smtp.example.com';
-    process.env.BUFF_SMTP_USER = 'bot';
-    process.env.BUFF_SIGNAL_ACCOUNT = '+15551234567';
+    process.env.NUVIRA_SMTP_HOST = 'smtp.example.com';
+    process.env.NUVIRA_SMTP_USER = 'bot';
+    process.env.NUVIRA_SIGNAL_ACCOUNT = '+15551234567';
     platforms = createConfiguredAdapters().map((a) => a.platform);
     expect(platforms).toContain('email');
     expect(platforms).toContain('signal');

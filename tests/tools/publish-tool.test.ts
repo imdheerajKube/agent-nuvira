@@ -4,7 +4,7 @@
  * The `publish` tool is the credentialed, irreversible E3c task tool: it must
  * NEVER prompt interactively (creds from env/detected config only), report
  * missing credentials back so the model can ask_user for tokens, and run the
- * SAME phase list as `buff publish` (buildPublishPhases — one source).
+ * SAME phase list as `nuvira publish` (buildPublishPhases — one source).
  */
 
 import { describe, it, expect, vi, beforeEach } from 'vitest';

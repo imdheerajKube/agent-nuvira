@@ -15,6 +15,7 @@
  */
 
 import { fork, type ChildProcess } from 'node:child_process';
+import { resolveNuviraHome } from '../config/paths';
 import { randomUUID } from 'node:crypto';
 import { existsSync, readFileSync, writeFileSync, mkdirSync, appendFileSync, readdirSync, unlinkSync } from 'node:fs';
 import { join } from 'node:path';
@@ -101,7 +102,7 @@ export interface SubagentResult {
 
 // ─── Subagent Manager ─────────────────────────────────────────────────────
 
-const SUBAGENT_DIR = join(homedir(), '.buff', 'cache', 'subagents');
+const SUBAGENT_DIR = join(resolveNuviraHome(), 'cache', 'subagents');
 const STATE_DIR = join(SUBAGENT_DIR, 'state');
 const LOG_DIR = join(SUBAGENT_DIR, 'logs');
 const RESULT_DIR = join(SUBAGENT_DIR, 'results');

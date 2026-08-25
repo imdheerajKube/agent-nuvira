@@ -10,7 +10,7 @@ import { mkdtempSync, rmSync, readFileSync, existsSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 
-// Isolate the cron store from the real ~/.buff/cron/jobs.json.
+// Isolate the cron store from the real ~/.nuvira/cron/jobs.json.
 const homeHolder = vi.hoisted(() => {
   const { mkdtempSync } = require('node:fs');
   const { join } = require('node:path');
@@ -34,11 +34,11 @@ import {
 } from '../../src/gateway/cron.js';
 
 beforeEach(() => {
-  rmSync(join(homeHolder.value, '.buff', 'cron'), { recursive: true, force: true });
+  rmSync(join(homeHolder.value, '.nuvira', 'cron'), { recursive: true, force: true });
 });
 
 afterEach(() => {
-  rmSync(join(homeHolder.value, '.buff', 'cron'), { recursive: true, force: true });
+  rmSync(join(homeHolder.value, '.nuvira', 'cron'), { recursive: true, force: true });
   vi.restoreAllMocks();
 });
 
@@ -81,14 +81,14 @@ describe('cron — schedule validation + dry-run', () => {
 });
 
 describe('cron — persistence', () => {
-  it('adds a job and persists it to ~/.buff/cron/jobs.json', () => {
+  it('adds a job and persists it to ~/.nuvira/cron/jobs.json', () => {
     const result = addCronJob('nightly-build', '0 3 * * *', 'build', { goal: 'build all' });
     expect(result.ok).toBe(true);
     if (!result.ok) return;
     expect(result.job.enabled).toBe(true);
     expect(result.job.lastRunAt).toBe(0);
 
-    const path = join(homeHolder.value, '.buff', 'cron', 'jobs.json');
+    const path = join(homeHolder.value, '.nuvira', 'cron', 'jobs.json');
     expect(existsSync(path)).toBe(true);
     const data = JSON.parse(readFileSync(path, 'utf-8'));
     expect(data.jobs).toHaveLength(1);

@@ -12,11 +12,11 @@ import { clearEmbeddingCache } from '../../src/memory/embedder.js';
 // ─── Hermetic memory dir ────────────────────────────────────────────────────
 
 let memDir: string;
-const ORIGINAL_MEMORY_DIR = process.env.BUFF_MEMORY_DIR;
+const ORIGINAL_MEMORY_DIR = process.env.NUVIRA_MEMORY_DIR;
 
 beforeAll(async () => {
   memDir = mkdtempSync(join(tmpdir(), 'trajectory-store-test-'));
-  process.env.BUFF_MEMORY_DIR = memDir;
+  process.env.NUVIRA_MEMORY_DIR = memDir;
   // Warm up the FAISS-style backend ONCE so the first test doesn't pay the
   // full cold-start (dynamic import of the FAISS module + native tier probe)
   // inside vitest's default 5s per-test timeout on a fresh CI runner.
@@ -27,8 +27,8 @@ beforeAll(async () => {
 });
 
 afterAll(() => {
-  if (ORIGINAL_MEMORY_DIR === undefined) delete process.env.BUFF_MEMORY_DIR;
-  else process.env.BUFF_MEMORY_DIR = ORIGINAL_MEMORY_DIR;
+  if (ORIGINAL_MEMORY_DIR === undefined) delete process.env.NUVIRA_MEMORY_DIR;
+  else process.env.NUVIRA_MEMORY_DIR = ORIGINAL_MEMORY_DIR;
   rmSync(memDir, { recursive: true, force: true });
 });
 

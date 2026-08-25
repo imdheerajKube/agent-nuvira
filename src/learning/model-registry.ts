@@ -8,7 +8,7 @@
  * "which provider × model combos are VERIFIED to work right now" — fast.
  *
  * Design (enterprise-grade, zero hard dependencies):
- * - A **canonical JSON mirror** (`~/.buff/memory/model-registry.json`) is the
+ * - A **canonical JSON mirror** (`~/.nuvira/memory/model-registry.json`) is the
  *   source of truth for READS: loaded synchronously into memory once, so every
  *   `isUsable()` / `getVerifiedModels()` is a sub-ms map lookup — model
  *   selection never blocks on I/O or the network.
@@ -36,6 +36,7 @@
  */
 
 import { existsSync, mkdirSync, readFileSync, writeFileSync, appendFileSync } from 'node:fs';
+import {envBuff, resolveNuviraHome} from '../config/paths';
 import { join } from 'node:path';
 import { homedir } from 'node:os';
 
@@ -249,7 +250,7 @@ export interface ActionTelemetryInsights {
 
 // ─── Storage ────────────────────────────────────────────────────────────────
 
-const DEFAULT_MEMORY_DIR = join(homedir(), '.buff', 'memory');
+const DEFAULT_MEMORY_DIR = join(resolveNuviraHome(), 'memory');
 const CURRENT_VERSION = 1;
 /** Action-telemetry JSONL log — which action killed/verified which provider × model. */
 export const ACTION_LOG_FILENAME = 'model-registry-actions.jsonl';
@@ -273,7 +274,7 @@ export const DEFAULT_STALE_MS = 7 * 24 * 60 * 60 * 1000; // 7 days
 export const DEGRADED_UNAVAILABLE_THRESHOLD = 3;
 
 function memoryDir(): string {
-  return process.env.BUFF_MEMORY_DIR || DEFAULT_MEMORY_DIR;
+  return envBuff('MEMORY_DIR') || DEFAULT_MEMORY_DIR;
 }
 
 function mirrorPath(): string {
@@ -876,7 +877,7 @@ export class ModelRegistry {
   }
 
   /**
-   * Manual escape hatch — `buff models unblock <provider>`.
+   * Manual escape hatch — `nuvira models unblock <provider>`.
    *
    * Releases a provider that routing has predictively blocked (`getBlockedProviders()`):
    * demotes every `unavailable` entry back to `unverified` and clears all quota
@@ -1380,8 +1381,8 @@ export class ModelRegistry {
    * pure-JS IVF, native FAISS) reads via `readNamespaceEntries`. This is
    * deliberately SYNCHRONOUS and pinned to the persist-time dir: an async
    * fire-and-forget write resolves its path lazily after awaits, so a dangling
-   * promise from an earlier test would write to whatever BUFF_MEMORY_DIR is at
-   * that later moment (the real ~/.buff/memory) and leak test data. A sync
+   * promise from an earlier test would write to whatever NUVIRA_MEMORY_DIR is at
+   * that later moment (the real ~/.nuvira/memory) and leak test data. A sync
    * write has no such race and is equally best-effort (never throws).
    */
   private mirrorToVector(dir: string): void {

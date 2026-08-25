@@ -5,6 +5,7 @@
  */
 
 import { existsSync, readFileSync, writeFileSync, mkdirSync, chmodSync } from 'node:fs';
+import { resolveNuviraHome } from '../config/paths';
 import { join } from 'node:path';
 import { homedir } from 'node:os';
 import { createHash } from 'node:crypto';
@@ -42,7 +43,7 @@ export interface EnvProbeResult {
 
 // ─── Credential File Manager ──────────────────────────────────────────────
 
-const CREDENTIAL_DIR = join(homedir(), '.buff', 'credentials');
+const CREDENTIAL_DIR = join(resolveNuviraHome(), 'credentials');
 
 const SENSITIVE_PATTERNS = [
   /key/i, /secret/i, /token/i, /password/i, /passwd/i,

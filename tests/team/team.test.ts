@@ -703,7 +703,7 @@ describe('Team Review', () => {
       // Path-aware existsSync: .buff paths don't exist (reviews dir), other paths exist (the file on disk)
       vi.mocked(fs.existsSync).mockImplementation((path: string | Buffer) => {
         const p = typeof path === 'string' ? path : String(path);
-        return !p.includes('.buff');
+        return !p.includes('.nuvira');
       });
 
       vi.mocked(fs.readFileSync).mockImplementation((path: string | Buffer | URL) => {

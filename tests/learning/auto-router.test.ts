@@ -53,12 +53,12 @@ let banditTempDir: string;
 
 function isolateBandit() {
   banditTempDir = mkdtempSync(join(tmpdir(), 'buff-autorouter-bandit-'));
-  process.env.BUFF_MEMORY_DIR = banditTempDir;
+  process.env.NUVIRA_MEMORY_DIR = banditTempDir;
   resetRouterBandit();
 }
 
 function cleanupBandit() {
-  delete process.env.BUFF_MEMORY_DIR;
+  delete process.env.NUVIRA_MEMORY_DIR;
   resetRouterBandit();
   resetRouterPromotion();
   if (banditTempDir) {
@@ -371,17 +371,17 @@ describe('AutoModelRouter.resolve', () => {
     // (getBlockedProviders + M2.2 getMeasuredUsage for measured-cost scoring),
     // so isolate it — ambient real-user data must never flip a deterministic
     // ranking (the trivial-task gemini-vs-groq test is measured-cost sensitive).
-    resolveOrigDir = process.env.BUFF_MEMORY_DIR;
+    resolveOrigDir = process.env.NUVIRA_MEMORY_DIR;
     resolveTempDir = mkdtempSync(join(tmpdir(), 'buff-autorouter-resolve-'));
-    process.env.BUFF_MEMORY_DIR = resolveTempDir;
+    process.env.NUVIRA_MEMORY_DIR = resolveTempDir;
     resetModelRegistry();
   });
 
   afterEach(() => {
     if (resolveOrigDir === undefined) {
-      delete process.env.BUFF_MEMORY_DIR;
+      delete process.env.NUVIRA_MEMORY_DIR;
     } else {
-      process.env.BUFF_MEMORY_DIR = resolveOrigDir;
+      process.env.NUVIRA_MEMORY_DIR = resolveOrigDir;
     }
     resetModelRegistry();
     rmSync(resolveTempDir, { recursive: true, force: true });
@@ -557,17 +557,17 @@ describe('AutoModelRouter.resolve — P4 M4.4 partial-flakiness penalty', () => 
 
   beforeEach(() => {
     router = new AutoModelRouter();
-    flakyOrigDir = process.env.BUFF_MEMORY_DIR;
+    flakyOrigDir = process.env.NUVIRA_MEMORY_DIR;
     flakyTempDir = mkdtempSync(join(tmpdir(), 'buff-autorouter-flaky-'));
-    process.env.BUFF_MEMORY_DIR = flakyTempDir;
+    process.env.NUVIRA_MEMORY_DIR = flakyTempDir;
     resetModelRegistry();
   });
 
   afterEach(() => {
     if (flakyOrigDir === undefined) {
-      delete process.env.BUFF_MEMORY_DIR;
+      delete process.env.NUVIRA_MEMORY_DIR;
     } else {
-      process.env.BUFF_MEMORY_DIR = flakyOrigDir;
+      process.env.NUVIRA_MEMORY_DIR = flakyOrigDir;
     }
     resetModelRegistry();
     rmSync(flakyTempDir, { recursive: true, force: true });
@@ -693,12 +693,12 @@ describe('M2.2 measured wire-token cost inputs', () => {
 
   beforeEach(() => {
     measuredTempDir = mkdtempSync(join(tmpdir(), 'buff-autorouter-measured-'));
-    process.env.BUFF_MEMORY_DIR = measuredTempDir;
+    process.env.NUVIRA_MEMORY_DIR = measuredTempDir;
     resetModelRegistry();
   });
 
   afterEach(() => {
-    delete process.env.BUFF_MEMORY_DIR;
+    delete process.env.NUVIRA_MEMORY_DIR;
     resetModelRegistry();
     if (measuredTempDir) {
       rmSync(measuredTempDir, { recursive: true, force: true });
@@ -1160,17 +1160,17 @@ describe('AutoModelRouter.resolve credential filtering', () => {
 
   beforeEach(() => {
     registryTempDir = mkdtempSync(join(tmpdir(), 'buff-autorouter-registry-'));
-    originalMemoryDir = process.env.BUFF_MEMORY_DIR;
-    process.env.BUFF_MEMORY_DIR = registryTempDir;
+    originalMemoryDir = process.env.NUVIRA_MEMORY_DIR;
+    process.env.NUVIRA_MEMORY_DIR = registryTempDir;
     resetModelRegistry();
   });
 
   afterEach(() => {
     resetModelRegistry();
     if (originalMemoryDir === undefined) {
-      delete process.env.BUFF_MEMORY_DIR;
+      delete process.env.NUVIRA_MEMORY_DIR;
     } else {
-      process.env.BUFF_MEMORY_DIR = originalMemoryDir;
+      process.env.NUVIRA_MEMORY_DIR = originalMemoryDir;
     }
     rmSync(registryTempDir, { recursive: true, force: true });
   });
@@ -1353,7 +1353,7 @@ describe('AutoModelRouter.resolve hard constraints', () => {
 
 describe('AutoModelRouter.resolve routing rules', () => {
   // The rule+bandit regression test writes bandit state, so isolate the whole
-  // describe to avoid polluting the developer's real ~/.buff/memory and to
+  // describe to avoid polluting the developer's real ~/.nuvira/memory and to
   // keep the singleton clean between tests.
   beforeEach(() => {
     isolateBandit();
@@ -1443,17 +1443,17 @@ describe('resolveModel / pickModelFromCatalog', () => {
   let resolveModelOrigDir: string | undefined;
 
   beforeEach(() => {
-    resolveModelOrigDir = process.env.BUFF_MEMORY_DIR;
+    resolveModelOrigDir = process.env.NUVIRA_MEMORY_DIR;
     resolveModelTempDir = mkdtempSync(join(tmpdir(), 'buff-autorouter-resolvemodel-'));
-    process.env.BUFF_MEMORY_DIR = resolveModelTempDir;
+    process.env.NUVIRA_MEMORY_DIR = resolveModelTempDir;
     resetModelRegistry();
   });
 
   afterEach(() => {
     if (resolveModelOrigDir === undefined) {
-      delete process.env.BUFF_MEMORY_DIR;
+      delete process.env.NUVIRA_MEMORY_DIR;
     } else {
-      process.env.BUFF_MEMORY_DIR = resolveModelOrigDir;
+      process.env.NUVIRA_MEMORY_DIR = resolveModelOrigDir;
     }
     resetModelRegistry();
     rmSync(resolveModelTempDir, { recursive: true, force: true });
@@ -1524,17 +1524,17 @@ describe('resolveModel — registry-aware pin preference', () => {
 
   beforeEach(() => {
     registryTempDir = mkdtempSync(join(tmpdir(), 'buff-autorouter-pin-'));
-    originalMemoryDir = process.env.BUFF_MEMORY_DIR;
-    process.env.BUFF_MEMORY_DIR = registryTempDir;
+    originalMemoryDir = process.env.NUVIRA_MEMORY_DIR;
+    process.env.NUVIRA_MEMORY_DIR = registryTempDir;
     resetModelRegistry();
   });
 
   afterEach(() => {
     resetModelRegistry();
     if (originalMemoryDir === undefined) {
-      delete process.env.BUFF_MEMORY_DIR;
+      delete process.env.NUVIRA_MEMORY_DIR;
     } else {
-      process.env.BUFF_MEMORY_DIR = originalMemoryDir;
+      process.env.NUVIRA_MEMORY_DIR = originalMemoryDir;
     }
     rmSync(registryTempDir, { recursive: true, force: true });
   });
@@ -1574,7 +1574,7 @@ describe('resolveModel — registry-aware pin preference', () => {
 
 describe('AutoModelRouter.resolve governance (M2.4 admin policy)', () => {
   // Isolate the registry like the credential-filtering describe: the
-  // registry fast-path (getUsableProviders) would leak the real ~/.buff
+  // registry fast-path (getUsableProviders) would leak the real ~/.nuvira
   // registry into the candidate set and pre-filter providers before the
   // governance slot even runs.
   let registryTempDir: string;
@@ -1582,17 +1582,17 @@ describe('AutoModelRouter.resolve governance (M2.4 admin policy)', () => {
 
   beforeEach(() => {
     registryTempDir = mkdtempSync(join(tmpdir(), 'buff-autorouter-gov-'));
-    originalMemoryDir = process.env.BUFF_MEMORY_DIR;
-    process.env.BUFF_MEMORY_DIR = registryTempDir;
+    originalMemoryDir = process.env.NUVIRA_MEMORY_DIR;
+    process.env.NUVIRA_MEMORY_DIR = registryTempDir;
     resetModelRegistry();
   });
 
   afterEach(() => {
     resetModelRegistry();
     if (originalMemoryDir === undefined) {
-      delete process.env.BUFF_MEMORY_DIR;
+      delete process.env.NUVIRA_MEMORY_DIR;
     } else {
-      process.env.BUFF_MEMORY_DIR = originalMemoryDir;
+      process.env.NUVIRA_MEMORY_DIR = originalMemoryDir;
     }
     rmSync(registryTempDir, { recursive: true, force: true });
   });
@@ -1827,17 +1827,17 @@ describe('M2.5 context preflight', () => {
 
   beforeEach(() => {
     registryTempDir = mkdtempSync(join(tmpdir(), 'buff-autorouter-ctx-'));
-    originalMemoryDir = process.env.BUFF_MEMORY_DIR;
-    process.env.BUFF_MEMORY_DIR = registryTempDir;
+    originalMemoryDir = process.env.NUVIRA_MEMORY_DIR;
+    process.env.NUVIRA_MEMORY_DIR = registryTempDir;
     resetModelRegistry();
   });
 
   afterEach(() => {
     resetModelRegistry();
     if (originalMemoryDir === undefined) {
-      delete process.env.BUFF_MEMORY_DIR;
+      delete process.env.NUVIRA_MEMORY_DIR;
     } else {
-      process.env.BUFF_MEMORY_DIR = originalMemoryDir;
+      process.env.NUVIRA_MEMORY_DIR = originalMemoryDir;
     }
     rmSync(registryTempDir, { recursive: true, force: true });
   });
@@ -2092,12 +2092,12 @@ describe('AutoModelRouter.resolve — ML task-similarity blend', () => {
 
   beforeEach(() => {
     mlDir = mkdtempSync(join(tmpdir(), 'buff-autorouter-ml-'));
-    process.env.BUFF_MEMORY_DIR = mlDir;
+    process.env.NUVIRA_MEMORY_DIR = mlDir;
     resetMlRouter();
   });
 
   afterEach(() => {
-    delete process.env.BUFF_MEMORY_DIR;
+    delete process.env.NUVIRA_MEMORY_DIR;
     resetMlRouter();
     resetRouterBandit();
     resetRouterPromotion();
@@ -2156,13 +2156,13 @@ describe('AutoModelRouter.resolve — promotion-gate enforcement', () => {
 
   beforeEach(() => {
     promoDir = mkdtempSync(join(tmpdir(), 'buff-autorouter-promo-'));
-    process.env.BUFF_MEMORY_DIR = promoDir;
+    process.env.NUVIRA_MEMORY_DIR = promoDir;
     resetRouterBandit();
     resetRouterPromotion();
   });
 
   afterEach(() => {
-    delete process.env.BUFF_MEMORY_DIR;
+    delete process.env.NUVIRA_MEMORY_DIR;
     resetRouterBandit();
     resetRouterPromotion();
     rmSync(promoDir, { recursive: true, force: true });

@@ -1,5 +1,5 @@
 /**
- * `buff code-map` — project symbol map (revamp row 11).
+ * `nuvira code-map` — project symbol map (revamp row 11).
  *
  * Walks the source tree and parses every file through the AST engine
  * (`editing/ast.ts`) to produce a map of the project's structure:

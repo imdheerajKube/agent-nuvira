@@ -3,17 +3,18 @@
  *
  * Phase K3 closes the gap that the vault has ZERO access logging: every
  * get/set/delete on the Vault primitives appends a hash-chained, secret-
- * scrubbed record to `~/.buff/memory/vault-access.jsonl` (SHA-256 chain via
+ * scrubbed record to `~/.nuvira/memory/vault-access.jsonl` (SHA-256 chain via
  * the shared audit-chain core — the SAME tamper-evidence as quota-events /
  * model-registry-actions).
  *
  * NEVER logs secret VALUES — only the operation, the ACCOUNT NAME (a config
  * key name like `openai.apiKey`, never its value), the outcome, the active
- * tier, and the access path (sync/async). Surfaced via `buff config vault
- * log`, verified via `buff audit verify` and `buff doctor --enterprise`.
+ * tier, and the access path (sync/async). Surfaced via `nuvira config vault
+ * log`, verified via `nuvira audit verify` and `nuvira doctor --enterprise`.
  */
 
 import { existsSync, readFileSync, writeFileSync } from 'node:fs';
+import {envBuff, resolveNuviraHome} from '../config/paths';
 import { join } from 'node:path';
 import { homedir } from 'node:os';
 
@@ -57,7 +58,7 @@ export const VAULT_AUDIT_FILENAME = 'vault-access.jsonl';
 export const MAX_VAULT_AUDIT_ENTRIES = 5000;
 
 function memoryDir(): string {
-  return process.env.BUFF_MEMORY_DIR || join(homedir(), '.buff', 'memory');
+  return envBuff('MEMORY_DIR') || join(resolveNuviraHome(), 'memory');
 }
 
 /** Absolute path of the vault access store. */

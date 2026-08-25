@@ -11,6 +11,7 @@
  */
 
 import { execFileSync } from 'node:child_process';
+import { envBuff } from '../../config/paths';
 import { readFileSync, existsSync } from 'node:fs';
 import { join } from 'node:path';
 import { writeArtifact, safeArtifactName, binaryOnPath, fileExists, cleanupTemp } from './shared.js';
@@ -110,7 +111,7 @@ export async function speak(
     if (!usePiper()) {
       return { ok: false, error: 'voice: piper needs BUFF_PIPER_MODEL (path to a .onnx voice)' };
     }
-    const model = opts.piperModel || process.env.BUFF_PIPER_MODEL;
+    const model = opts.piperModel || envBuff('PIPER_MODEL');
     if (!model) return { ok: false, error: 'voice: piper needs BUFF_PIPER_MODEL (path to a .onnx voice)' };
     const out = join(process.env.TMPDIR || '/tmp', `${safeArtifactName('tts', '.wav')}`);
     exec('piper', ['-m', model, '--output_file', out], { timeout: 60000, input: text });

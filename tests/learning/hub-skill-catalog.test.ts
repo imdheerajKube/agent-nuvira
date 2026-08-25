@@ -2,7 +2,7 @@
  * I7 P0 — Hub skill catalog tests (`src/learning/hub-skill-catalog.ts`).
  *
  * The catalog scans `<project>/.agents/skills/<name>/SKILL.md` (hub install
- * target) and `~/.buff/skills/<name>/SKILL.md` (user-level), filters
+ * target) and `~/.nuvira/skills/<name>/SKILL.md` (user-level), filters
  * `skills.disabled[]`, and matches goals for the orchestrator's guidance
  * injection. All tests are hermetic: temp project + temp home.
  */
@@ -169,8 +169,8 @@ describe('readHubCatalog', () => {
     expect(skills[0].body).toContain('Methodology steps for deployer');
   });
 
-  it('scans the home ~/.buff/skills root', () => {
-    const dir = join(homeDir, '.buff', 'skills', 'auditor');
+  it('scans the home ~/.nuvira/skills root', () => {
+    const dir = join(homeDir, '.nuvira', 'skills', 'auditor');
     mkdirSync(dir, { recursive: true });
     writeFileSync(join(dir, 'SKILL.md'), skillMd('auditor', 'Audit dependencies'), 'utf-8');
 
@@ -180,7 +180,7 @@ describe('readHubCatalog', () => {
   });
 
   it('project root wins over home on name collision', () => {
-    for (const root of [join(projectDir, '.agents', 'skills', 'dupe'), join(homeDir, '.buff', 'skills', 'dupe')]) {
+    for (const root of [join(projectDir, '.agents', 'skills', 'dupe'), join(homeDir, '.nuvira', 'skills', 'dupe')]) {
       mkdirSync(root, { recursive: true });
       writeFileSync(join(root, 'SKILL.md'), skillMd('dupe', 'same skill'), 'utf-8');
     }
@@ -246,18 +246,18 @@ describe('disabled filtering + matching', () => {
 describe('setSkillEnabled (P3 — Agent Hub Skills toggle writer)', () => {
   // knownSkillIds() also consults the compiled SkillStore singleton, so pin
   // BUFF_MEMORY_DIR to a temp dir + reset the singleton — otherwise the test
-  // would construct the store against the developer's real ~/.buff.
+  // would construct the store against the developer's real ~/.nuvira.
   let memDir = '';
   const envBackup: Record<string, string | undefined> = {};
   beforeEach(() => {
-    envBackup.BUFF_MEMORY_DIR = process.env.BUFF_MEMORY_DIR;
+    envBackup.NUVIRA_MEMORY_DIR = process.env.NUVIRA_MEMORY_DIR;
     memDir = mkdtempSync(join(tmpdir(), 'buff-cat-mem-'));
-    process.env.BUFF_MEMORY_DIR = memDir;
+    process.env.NUVIRA_MEMORY_DIR = memDir;
     resetSkillStore();
   });
   afterEach(() => {
-    if (envBackup.BUFF_MEMORY_DIR === undefined) delete process.env.BUFF_MEMORY_DIR;
-    else process.env.BUFF_MEMORY_DIR = envBackup.BUFF_MEMORY_DIR;
+    if (envBackup.NUVIRA_MEMORY_DIR === undefined) delete process.env.NUVIRA_MEMORY_DIR;
+    else process.env.NUVIRA_MEMORY_DIR = envBackup.NUVIRA_MEMORY_DIR;
     rmSync(memDir, { recursive: true, force: true });
   });
 

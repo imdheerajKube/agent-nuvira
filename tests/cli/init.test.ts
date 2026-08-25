@@ -5,7 +5,7 @@
  * 1. Listing templates (--list flag)
  * 2. Project creation from all 5 built-in templates
  * 3. Variable substitution ({{name}}, {{NAME}})
- * 4. .buffconfig.json generation with provider selection
+ * 4. .nuviraconfig.json generation with provider selection
  * 5. Error handling (existing dir, invalid template)
  * 6. Interactive mode (mocked inquirer prompts)
  * 7. Project structure consistency checks
@@ -110,7 +110,7 @@ describe('InitCommand', () => {
 
     it('should include usage instructions', async () => {
       await runInit(['--list']);
-      expect(console.log).toHaveBeenCalledWith(expect.stringContaining('buff init <project-name> --template'));
+      expect(console.log).toHaveBeenCalledWith(expect.stringContaining('nuvira init <project-name> --template'));
     });
 
     it('should not create any project directory', async () => {
@@ -144,9 +144,9 @@ describe('InitCommand', () => {
       expect(readdirSync(join(testDir, 'test-project'))).toEqual(expect.arrayContaining(['README.md', '.gitignore']));
     });
 
-    it('should not generate .buffconfig.json when provider declined', async () => {
+    it('should not generate .nuviraconfig.json when provider declined', async () => {
       await runInit(['test-project', '--template', 'minimal']);
-      expect(existsSync(join(testDir, 'test-project', '.buffconfig.json'))).toBe(false);
+      expect(existsSync(join(testDir, 'test-project', '.nuviraconfig.json'))).toBe(false);
     });
   });
 
@@ -264,32 +264,32 @@ describe('InitCommand', () => {
     });
   });
 
-  // ── .buffconfig.json generation ─────────────────────────────────────────
+  // ── .nuviraconfig.json generation ─────────────────────────────────────────
 
-  describe('.buffconfig.json generation', () => {
+  describe('.nuviraconfig.json generation', () => {
     it('should generate config with --provider and --model', async () => {
       await runInit(['cfg-app', '--template', 'minimal', '--provider', 'groq', '--model', 'llama-3.3-70b-versatile']);
-      const config = JSON.parse(readFileSync(join(testDir, 'cfg-app', '.buffconfig.json'), 'utf-8'));
+      const config = JSON.parse(readFileSync(join(testDir, 'cfg-app', '.nuviraconfig.json'), 'utf-8'));
       expect(config.defaultProvider).toBe('groq');
       expect(config.providers.groq.model).toBe('llama-3.3-70b-versatile');
     });
 
     it('should include default temperature and maxTokens', async () => {
       await runInit(['cfg-app', '--template', 'minimal', '--provider', 'gemini', '--model', 'gemini-2.0-flash-exp']);
-      const config = JSON.parse(readFileSync(join(testDir, 'cfg-app', '.buffconfig.json'), 'utf-8'));
+      const config = JSON.parse(readFileSync(join(testDir, 'cfg-app', '.nuviraconfig.json'), 'utf-8'));
       expect(config.providers.gemini.temperature).toBe(0.7);
       expect(config.providers.gemini.maxTokens).toBe(4096);
     });
 
     it('should use "default" as model when --model is omitted', async () => {
       await runInit(['cfg-app', '--template', 'minimal', '--provider', 'openrouter']);
-      const config = JSON.parse(readFileSync(join(testDir, 'cfg-app', '.buffconfig.json'), 'utf-8'));
+      const config = JSON.parse(readFileSync(join(testDir, 'cfg-app', '.nuviraconfig.json'), 'utf-8'));
       expect(config.providers.openrouter.model).toBe('default');
     });
 
     it('should generate valid JSON matching BuffConfig structure', async () => {
       await runInit(['cfg-app', '--template', 'minimal', '--provider', 'nim', '--model', 'meta/llama-3.1-8b-instruct']);
-      const config = JSON.parse(readFileSync(join(testDir, 'cfg-app', '.buffconfig.json'), 'utf-8'));
+      const config = JSON.parse(readFileSync(join(testDir, 'cfg-app', '.nuviraconfig.json'), 'utf-8'));
       expect(config).toHaveProperty('defaultProvider');
       expect(config.providers.nim).toHaveProperty('model');
       expect(config.providers.nim).toHaveProperty('temperature');
@@ -355,7 +355,7 @@ describe('InitCommand', () => {
         .mockResolvedValueOnce({ wantsProvider: true });
 
       await runInit(['with-provider', '--template', 'minimal']);
-      const config = JSON.parse(readFileSync(join(testDir, 'with-provider', '.buffconfig.json'), 'utf-8'));
+      const config = JSON.parse(readFileSync(join(testDir, 'with-provider', '.nuviraconfig.json'), 'utf-8'));
       expect(config.defaultProvider).toBe('groq');
     });
 
@@ -365,7 +365,7 @@ describe('InitCommand', () => {
         .mockResolvedValueOnce({ wantsProvider: false });
 
       await runInit(['skip-provider', '--template', 'minimal']);
-      expect(existsSync(join(testDir, 'skip-provider', '.buffconfig.json'))).toBe(false);
+      expect(existsSync(join(testDir, 'skip-provider', '.nuviraconfig.json'))).toBe(false);
     });
 
     it('should handle full interactive flow for minimal template', async () => {

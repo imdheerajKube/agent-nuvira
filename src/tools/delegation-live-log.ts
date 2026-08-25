@@ -13,6 +13,8 @@
  */
 
 import * as fs from 'fs';
+import { join } from 'node:path';
+import {resolveNuviraHome} from '../config/paths';
 import * as path from 'path';
 import { homedir } from 'os';
 
@@ -55,7 +57,7 @@ class LiveTranscriptWriter {
     private goal: string,
     private rootDir?: string,
   ) {
-    const root = rootDir || path.join(homedir(), '.buff', 'cache', 'delegation', 'live');
+    const root = rootDir || join(resolveNuviraHome(), 'cache', 'delegation', 'live');
     const dir = path.join(root, delegationId);
 
     try {
@@ -177,7 +179,7 @@ class DelegationLiveLogManager {
   private rootDir: string;
 
   constructor(rootDir?: string) {
-    this.rootDir = rootDir || path.join(homedir(), '.buff', 'cache', 'delegation', 'live');
+    this.rootDir = rootDir || join(resolveNuviraHome(), 'cache', 'delegation', 'live');
     fs.mkdirSync(this.rootDir, { recursive: true });
   }
 

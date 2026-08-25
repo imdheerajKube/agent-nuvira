@@ -6,8 +6,8 @@
  *   "support"    → { platform: 'telegram', channelId: 123456 }
  *   "ops"        → { platform: 'slack', channelId: 'C0123' }
  *
- * Aliases are persisted to `~/.buff/gateway/aliases.json` (via BUFF_CONFIG_DIR)
- * so `buff gateway send ops "nightly done"` works across restarts. Platform
+ * Aliases are persisted to `~/.nuvira/gateway/aliases.json` (via NUVIRA_CONFIG_DIR)
+ * so `nuvira gateway send ops "nightly done"` works across restarts. Platform
  * tokens are read from env — an env-var token map pattern.
  */
 
@@ -60,7 +60,7 @@ export interface ChannelPolicy {
   allowedGroups?: string[];
   /**
    * Address-only mode: in groups, only messages that MENTION / address the
-   * bot (name-prefix "buff …", "agent …", or @-mention) trigger the pipeline.
+   * bot (name-prefix "nuvira …", "agent …", or @-mention) trigger the pipeline.
    */
   requireMention?: boolean;
   /** Hard off-switch for this platform's pipeline triggers. */
@@ -86,7 +86,7 @@ export interface ChannelAlias {
   addedAt: number;
 }
 
-/** A short, user-facing identity of a channel (for `buff gateway status`). */
+/** A short, user-facing identity of a channel (for `nuvira gateway status`). */
 export interface ReachableChannel {
   platform: Platform;
   channelId: string;
@@ -98,28 +98,28 @@ export interface ReachableChannel {
 // ─── Platform token map (env-var map) ──────────────────────────────────────
 
 export const PLATFORM_ENV_VARS: Record<Platform, string[]> = {
-  telegram: ['BUFF_TELEGRAM_TOKEN'],
-  discord: ['BUFF_DISCORD_BOT_TOKEN'],
-  slack: ['BUFF_SLACK_BOT_TOKEN'],
+  telegram: ['NUVIRA_TELEGRAM_TOKEN'],
+  discord: ['NUVIRA_DISCORD_BOT_TOKEN'],
+  slack: ['NUVIRA_SLACK_BOT_TOKEN'],
   // I8: `whatsapp` = personal Baileys bridge (paired session dir override),
   // `whatsapp_cloud` = paid Meta Business API (token + phone id).
-  whatsapp: ['BUFF_WHATSAPP_SESSION_DIR'],
-  whatsapp_cloud: ['BUFF_WHATSAPP_TOKEN'],
+  whatsapp: ['NUVIRA_WHATSAPP_SESSION_DIR'],
+  whatsapp_cloud: ['NUVIRA_WHATSAPP_TOKEN'],
   // I9 — webhook/REST connectors (send-only bot webhooks).
-  dingtalk: ['BUFF_DINGTALK_WEBHOOK_URL'],
-  feishu: ['BUFF_FEISHU_WEBHOOK_URL'],
-  wecom: ['BUFF_WECOM_WEBHOOK_URL'],
-  mattermost: ['BUFF_MATTERMOST_WEBHOOK_URL'],
-  matrix: ['BUFF_MATRIX_HOMESERVER', 'BUFF_MATRIX_ACCESS_TOKEN'],
-  webhook: ['BUFF_WEBHOOK_URL'],
-  bluebubbles: ['BUFF_BLUEBUBBLES_URL', 'BUFF_BLUEBUBBLES_PASSWORD'],
-  // I10 — thin send connectors. ntfy needs only the topic (BUFF_NTFY_URL
+  dingtalk: ['NUVIRA_DINGTALK_WEBHOOK_URL'],
+  feishu: ['NUVIRA_FEISHU_WEBHOOK_URL'],
+  wecom: ['NUVIRA_WECOM_WEBHOOK_URL'],
+  mattermost: ['NUVIRA_MATTERMOST_WEBHOOK_URL'],
+  matrix: ['NUVIRA_MATRIX_HOMESERVER', 'NUVIRA_MATRIX_ACCESS_TOKEN'],
+  webhook: ['NUVIRA_WEBHOOK_URL'],
+  bluebubbles: ['NUVIRA_BLUEBUBBLES_URL', 'NUVIRA_BLUEBUBBLES_PASSWORD'],
+  // I10 — thin send connectors. ntfy needs only the topic (NUVIRA_NTFY_URL
   // defaults to ntfy.sh); weixin needs only the iLink bot token (base URL
   // defaults to the official iLink endpoint).
-  ntfy: ['BUFF_NTFY_TOPIC'],
-  teams: ['BUFF_TEAMS_WEBHOOK_URL'],
-  google_chat: ['BUFF_GOOGLE_CHAT_WEBHOOK_URL'],
-  weixin: ['BUFF_WEIXIN_TOKEN'],
+  ntfy: ['NUVIRA_NTFY_TOPIC'],
+  teams: ['NUVIRA_TEAMS_WEBHOOK_URL'],
+  google_chat: ['NUVIRA_GOOGLE_CHAT_WEBHOOK_URL'],
+  weixin: ['NUVIRA_WEIXIN_TOKEN'],
   // I12 — SMS uses the standard Twilio env vars (`plugins/platforms/sms`),
   // so the same creds work in both agents.
   sms: ['TWILIO_ACCOUNT_SID', 'TWILIO_AUTH_TOKEN', 'TWILIO_PHONE_NUMBER'],
@@ -134,11 +134,11 @@ export const PLATFORM_ENV_VARS: Record<Platform, string[]> = {
   // defaults to http://homeassistant.local:8123).
   homeassistant: ['HASS_TOKEN'],
   // Email transport = an SMTP relay the gateway can reach (host + auth user;
-  // BUFF_SMTP_PASS may be absent for local/trusted relays).
-  email: ['BUFF_SMTP_HOST', 'BUFF_SMTP_USER'],
+  // NUVIRA_SMTP_PASS may be absent for local/trusted relays).
+  email: ['NUVIRA_SMTP_HOST', 'NUVIRA_SMTP_USER'],
   // Signal = the registered account number (the REST endpoint defaults to a
   // local signal-cli-rest-api and is not itself an opt-in signal).
-  signal: ['BUFF_SIGNAL_ACCOUNT'],
+  signal: ['NUVIRA_SIGNAL_ACCOUNT'],
   mock: [],
 };
 
@@ -173,14 +173,19 @@ export const PLATFORM_LABELS: Record<Platform, string> = {
  * Whether the platform's transport is configured.
  *
  * Env-token based for every platform except I8's `whatsapp` bridge: its
- * transport is a PAIRED SESSION on disk (default `~/.buff/whatsapp/session`),
- * so the env override (`BUFF_WHATSAPP_SESSION_DIR`) alone would lie about a
+ * transport is a PAIRED SESSION on disk (default `~/.nuvira/whatsapp/session`),
+ * so the env override (`NUVIRA_WHATSAPP_SESSION_DIR`) alone would lie about a
  * default-path session. hasWhatsAppSession() is the authoritative check
  * (session.ts imports only node builtins — no cycle).
  */
 export function isPlatformConfigured(platform: Platform): boolean {
   if (platform === 'whatsapp') return hasWhatsAppSession();
-  return PLATFORM_ENV_VARS[platform].every((envVar) => Boolean(process.env[envVar]));
+  return PLATFORM_ENV_VARS[platform].every((envVar) => {
+    // Check NUVIRA_* first, then legacy BUFF_* fallback
+    if (process.env[envVar]) return true;
+    const legacyName = envVar.replace(/^NUVIRA_/, 'BUFF_');
+    return Boolean(process.env[legacyName]);
+  });
 }
 
 /** All platforms whose env tokens are present (opt-in adapters). */
@@ -295,7 +300,7 @@ export class ChannelDirectory {
     return null;
   }
 
-  /** Reachable channels (aliases grouped by target) for `buff gateway status`. */
+  /** Reachable channels (aliases grouped by target) for `nuvira gateway status`. */
   reachableChannels(): ReachableChannel[] {
     const byKey = new Map<string, ReachableChannel>();
     for (const a of this.aliases) {

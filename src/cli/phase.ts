@@ -6,11 +6,11 @@
  * resume, status, and list operations.
  *
  * Usage:
- *   buff phase create "v2.0 Release" "Add auth" "Add API" "Publish"
- *   buff phase execute "v2.0 Release"
- *   buff phase resume "v2.0 Release"
- *   buff phase status "v2.0 Release"
- *   buff phase list
+ *   nuvira phase create "v2.0 Release" "Add auth" "Add API" "Publish"
+ *   nuvira phase execute "v2.0 Release"
+ *   nuvira phase resume "v2.0 Release"
+ *   nuvira phase status "v2.0 Release"
+ *   nuvira phase list
  */
 
 import { Command } from 'commander';
@@ -133,7 +133,7 @@ export class PhaseCommand extends BaseCommand {
 
     console.log('');
     logger.info('  Save scope and execute:');
-    logger.info(`    buff phase execute "${name}"`);
+    logger.info(`    nuvira phase execute "${name}"`);
     console.log('');
 
     // Save to disk for later execution
@@ -141,7 +141,7 @@ export class PhaseCommand extends BaseCommand {
     const scope = engine.createScope({ name, phases });
     engine.saveScope(scope);
 
-    logger.success(`  Scope saved to ~/.buff/phases/`);
+    logger.success(`  Scope saved to ~/.nuvira/phases/`);
 
     // Ask if user wants to execute now
     const { execute } = await inquirer.prompt<{ execute: boolean }>([
@@ -176,7 +176,7 @@ export class PhaseCommand extends BaseCommand {
 
     if (!scope) {
       logger.error(`No phase scope found: "${name}"`);
-      logger.info('Create one: buff phase create <name> <goal1> <goal2> ...');
+      logger.info('Create one: nuvira phase create <name> <goal1> <goal2> ...');
       return;
     }
 
@@ -294,7 +294,7 @@ export class PhaseCommand extends BaseCommand {
       const scopes = engine.listSavedScopes();
       if (scopes.length === 0) {
         logger.info('No saved phase scopes found.');
-        logger.info('Create one: buff phase create <name> <goal1> <goal2> ...');
+        logger.info('Create one: nuvira phase create <name> <goal1> <goal2> ...');
         return;
       }
 

@@ -32,12 +32,12 @@ import { getEventBus, EventNames } from '../../src/observability/event-bus.js';
 import { resetWorkspaceStore } from '../../src/config/workspace.js';
 
 const cfgDir = mkdtempSync(join(tmpdir(), 'buff-gw-reg-'));
-const ORIG_CONFIG_DIR = process.env.BUFF_CONFIG_DIR;
-const ORIG_MEMORY_DIR = process.env.BUFF_MEMORY_DIR;
+const ORIG_CONFIG_DIR = process.env.NUVIRA_CONFIG_DIR;
+const ORIG_MEMORY_DIR = process.env.NUVIRA_MEMORY_DIR;
 
 beforeAll(() => {
-  process.env.BUFF_CONFIG_DIR = cfgDir;
-  process.env.BUFF_MEMORY_DIR = join(cfgDir, 'memory');
+  process.env.NUVIRA_CONFIG_DIR = cfgDir;
+  process.env.NUVIRA_MEMORY_DIR = join(cfgDir, 'memory');
   // Fast-fail local model so the real runPipelineTool resolves without network.
   writeFileSync(
     join(cfgDir, 'buffconfig.json'),
@@ -54,10 +54,10 @@ afterAll(() => {
   // Close the SQLite workspace handle BEFORE removing the dir — an open
   // workspaces.db makes rmSync fail on Windows (EBUSY).
   resetWorkspaceStore();
-  if (ORIG_CONFIG_DIR === undefined) delete process.env.BUFF_CONFIG_DIR;
-  else process.env.BUFF_CONFIG_DIR = ORIG_CONFIG_DIR;
-  if (ORIG_MEMORY_DIR === undefined) delete process.env.BUFF_MEMORY_DIR;
-  else process.env.BUFF_MEMORY_DIR = ORIG_MEMORY_DIR;
+  if (ORIG_CONFIG_DIR === undefined) delete process.env.NUVIRA_CONFIG_DIR;
+  else process.env.NUVIRA_CONFIG_DIR = ORIG_CONFIG_DIR;
+  if (ORIG_MEMORY_DIR === undefined) delete process.env.NUVIRA_MEMORY_DIR;
+  else process.env.NUVIRA_MEMORY_DIR = ORIG_MEMORY_DIR;
   rmSync(cfgDir, { recursive: true, force: true });
 });
 
@@ -673,7 +673,7 @@ describe('GatewayRegistry P1 policies', () => {
 
   it('forwards the pipeline completion summary to every status recipient', async () => {
     const { registry, adapter } = mockRegistry({ streamEvents: false });
-    // Configure status recipients in the config file (what `buff config
+    // Configure status recipients in the config file (what `nuvira config
     // gateway notify add` writes) — live re-read, no restart.
     const cfg = join(cfgDir, 'buffconfig.json');
     const current = JSON.parse(readFileSync(cfg, 'utf-8'));
@@ -709,7 +709,7 @@ describe('GatewayRegistry P1 policies', () => {
     const before = await registry.handleInbound({ platform: 'mock', channelId: 'c', text: 'fix the failing test', senderId: 'u-x' });
     expect(before).not.toContain('not authorized');
 
-    // Write a policy to the config file (what `buff config gateway allow` does)
+    // Write a policy to the config file (what `nuvira config gateway allow` does)
     // and the RUNNING registry picks it up without a restart.
     const cfg = join(cfgDir, 'buffconfig.json');
     const current = JSON.parse(readFileSync(cfg, 'utf-8'));

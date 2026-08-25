@@ -5,6 +5,7 @@
  */
 
 import { randomUUID } from 'node:crypto';
+import { resolveNuviraHome } from '../config/paths';
 import { existsSync, readFileSync, writeFileSync, mkdirSync } from 'node:fs';
 import { join } from 'node:path';
 import { homedir } from 'node:os';
@@ -40,7 +41,7 @@ export interface TodoStats {
 
 // ─── Todo Store ───────────────────────────────────────────────────────────
 
-const TODO_DIR = join(homedir(), '.buff', 'memory');
+const TODO_DIR = join(resolveNuviraHome(), 'memory');
 const TODO_FILE = join(TODO_DIR, 'todos.json');
 
 export class TodoStore {

@@ -31,12 +31,12 @@ let tempDir: string;
 
 beforeEach(() => {
   tempDir = mkdtempSync(join(tmpdir(), 'buff-bandit-test-'));
-  process.env.BUFF_MEMORY_DIR = tempDir;
+  process.env.NUVIRA_MEMORY_DIR = tempDir;
   resetRouterBandit();
 });
 
 afterEach(() => {
-  delete process.env.BUFF_MEMORY_DIR;
+  delete process.env.NUVIRA_MEMORY_DIR;
   resetRouterBandit();
   rmSync(tempDir, { recursive: true, force: true });
 });

@@ -91,9 +91,9 @@ describe('SingleShotAutoRunner — runSingleShotAuto', () => {
     }));
     // Isolate the quota ledger (the runner reads/park accounts since M2.3) so
     // rotation tests never touch the real user ledger.
-    runnerOrigDir = process.env.BUFF_MEMORY_DIR;
+    runnerOrigDir = process.env.NUVIRA_MEMORY_DIR;
     runnerTempDir = mkdtempSync(join(tmpdir(), 'buff-failover-runner-'));
-    process.env.BUFF_MEMORY_DIR = runnerTempDir;
+    process.env.NUVIRA_MEMORY_DIR = runnerTempDir;
     resetQuotaLedger();
   });
 
@@ -347,9 +347,9 @@ describe('SingleShotAutoRunner — runSingleShotAuto', () => {
     Object.defineProperty(process.stdin, 'isTTY', { value: false, configurable: true });
     resetQuotaLedger();
     if (runnerOrigDir === undefined) {
-      delete process.env.BUFF_MEMORY_DIR;
+      delete process.env.NUVIRA_MEMORY_DIR;
     } else {
-      process.env.BUFF_MEMORY_DIR = runnerOrigDir;
+      process.env.NUVIRA_MEMORY_DIR = runnerOrigDir;
     }
     rmSync(runnerTempDir, { recursive: true, force: true });
   });

@@ -7,8 +7,8 @@
  * measures exactly that, over a LABELED corpus of asks with ground-truth
  * intent ids:
  *
- *   buff intent eval              — run deterministic vs semantic, print scores
- *   buff intent eval --json       — machine-readable results
+ *   nuvira intent eval              — run deterministic vs semantic, print scores
+ *   nuvira intent eval --json       — machine-readable results
  *
  * Metrics per matcher:
  *   - top-1 accuracy   — ground-truth intent is the #1 ranked match

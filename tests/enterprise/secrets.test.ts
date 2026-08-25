@@ -33,7 +33,7 @@ const GSK_HEAD = GK.slice(0, 4);   // 'gsk_'
 const GSK_TAIL = GK.slice(-4);     // 'S9ak'
 
 afterEach(() => {
-  delete process.env.BUFF_NO_REDACT;
+  delete process.env.NUVIRA_NO_REDACT;
 });
 
 describe('maskSecret', () => {
@@ -104,7 +104,7 @@ describe('redactValue / safeLine / applyRedaction', () => {
   it('applyRedaction is a no-op passthrough when disabled', () => {
     expect(redactionDisabled()).toBe(false);
     expect(applyRedaction(GK)).toContain('…');
-    process.env.BUFF_NO_REDACT = '1';
+    process.env.NUVIRA_NO_REDACT = '1';
     expect(redactionDisabled()).toBe(true);
     expect(applyRedaction(GK)).toBe(GK);
   });

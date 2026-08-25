@@ -47,8 +47,8 @@ function makeConfigManager(quota?: Record<string, unknown>) {
 describe('ModelRegistry — probe / spot-check lifecycle', () => {
   beforeEach(() => {
     tempDir = mkdtempSync(join(tmpdir(), 'buff-registry-'));
-    originalMemoryDir = process.env.BUFF_MEMORY_DIR;
-    process.env.BUFF_MEMORY_DIR = tempDir;
+    originalMemoryDir = process.env.NUVIRA_MEMORY_DIR;
+    process.env.NUVIRA_MEMORY_DIR = tempDir;
     setVectorBackendOverride('json'); // hermetic: force the JSON backend
     resetModelRegistry();
     resetQuotaLedger();
@@ -59,9 +59,9 @@ describe('ModelRegistry — probe / spot-check lifecycle', () => {
     resetQuotaLedger();
     resetVectorBackendSelection();
     if (originalMemoryDir === undefined) {
-      delete process.env.BUFF_MEMORY_DIR;
+      delete process.env.NUVIRA_MEMORY_DIR;
     } else {
-      process.env.BUFF_MEMORY_DIR = originalMemoryDir;
+      process.env.NUVIRA_MEMORY_DIR = originalMemoryDir;
     }
     rmSync(tempDir, { recursive: true, force: true });
   });
@@ -244,8 +244,8 @@ describe('ModelRegistry — probe / spot-check lifecycle', () => {
 describe('ModelRegistry — quota parking & telemetry', () => {
   beforeEach(() => {
     tempDir = mkdtempSync(join(tmpdir(), 'buff-registry-'));
-    originalMemoryDir = process.env.BUFF_MEMORY_DIR;
-    process.env.BUFF_MEMORY_DIR = tempDir;
+    originalMemoryDir = process.env.NUVIRA_MEMORY_DIR;
+    process.env.NUVIRA_MEMORY_DIR = tempDir;
     setVectorBackendOverride('json');
     resetModelRegistry();
     resetQuotaLedger();
@@ -257,9 +257,9 @@ describe('ModelRegistry — quota parking & telemetry', () => {
     resetVectorBackendSelection();
     resetEventBus();
     if (originalMemoryDir === undefined) {
-      delete process.env.BUFF_MEMORY_DIR;
+      delete process.env.NUVIRA_MEMORY_DIR;
     } else {
-      process.env.BUFF_MEMORY_DIR = originalMemoryDir;
+      process.env.NUVIRA_MEMORY_DIR = originalMemoryDir;
     }
     rmSync(tempDir, { recursive: true, force: true });
   });
@@ -631,8 +631,8 @@ describe('ModelRegistry — quota parking & telemetry', () => {
 describe('ModelRegistry — per-action "learned from real usage" telemetry', () => {
   beforeEach(() => {
     tempDir = mkdtempSync(join(tmpdir(), 'buff-registry-'));
-    originalMemoryDir = process.env.BUFF_MEMORY_DIR;
-    process.env.BUFF_MEMORY_DIR = tempDir;
+    originalMemoryDir = process.env.NUVIRA_MEMORY_DIR;
+    process.env.NUVIRA_MEMORY_DIR = tempDir;
     setVectorBackendOverride('json');
     resetModelRegistry();
     resetQuotaLedger();
@@ -643,9 +643,9 @@ describe('ModelRegistry — per-action "learned from real usage" telemetry', () 
     resetQuotaLedger();
     resetVectorBackendSelection();
     if (originalMemoryDir === undefined) {
-      delete process.env.BUFF_MEMORY_DIR;
+      delete process.env.NUVIRA_MEMORY_DIR;
     } else {
-      process.env.BUFF_MEMORY_DIR = originalMemoryDir;
+      process.env.NUVIRA_MEMORY_DIR = originalMemoryDir;
     }
     rmSync(tempDir, { recursive: true, force: true });
   });
@@ -905,8 +905,8 @@ describe('ModelRegistry — per-action "learned from real usage" telemetry', () 
 describe('ModelRegistry — partialRate history (healing sparkline data)', () => {
   beforeEach(() => {
     tempDir = mkdtempSync(join(tmpdir(), 'buff-registry-hist-'));
-    originalMemoryDir = process.env.BUFF_MEMORY_DIR;
-    process.env.BUFF_MEMORY_DIR = tempDir;
+    originalMemoryDir = process.env.NUVIRA_MEMORY_DIR;
+    process.env.NUVIRA_MEMORY_DIR = tempDir;
     setVectorBackendOverride('json'); // hermetic: force the JSON backend
     resetModelRegistry();
     resetQuotaLedger();
@@ -916,8 +916,8 @@ describe('ModelRegistry — partialRate history (healing sparkline data)', () =>
     resetModelRegistry();
     resetQuotaLedger();
     resetVectorBackendSelection();
-    if (originalMemoryDir === undefined) delete process.env.BUFF_MEMORY_DIR;
-    else process.env.BUFF_MEMORY_DIR = originalMemoryDir;
+    if (originalMemoryDir === undefined) delete process.env.NUVIRA_MEMORY_DIR;
+    else process.env.NUVIRA_MEMORY_DIR = originalMemoryDir;
     rmSync(tempDir, { recursive: true, force: true });
   });
 
@@ -1024,8 +1024,8 @@ describe('ModelRegistry — partialRate history (healing sparkline data)', () =>
 describe('ModelRegistry — persistence (JSON mirror + vector auto-tier)', () => {
   beforeEach(() => {
     tempDir = mkdtempSync(join(tmpdir(), 'buff-registry-'));
-    originalMemoryDir = process.env.BUFF_MEMORY_DIR;
-    process.env.BUFF_MEMORY_DIR = tempDir;
+    originalMemoryDir = process.env.NUVIRA_MEMORY_DIR;
+    process.env.NUVIRA_MEMORY_DIR = tempDir;
     resetModelRegistry();
     resetQuotaLedger();
   });
@@ -1035,9 +1035,9 @@ describe('ModelRegistry — persistence (JSON mirror + vector auto-tier)', () =>
     resetQuotaLedger();
     resetVectorBackendSelection();
     if (originalMemoryDir === undefined) {
-      delete process.env.BUFF_MEMORY_DIR;
+      delete process.env.NUVIRA_MEMORY_DIR;
     } else {
-      process.env.BUFF_MEMORY_DIR = originalMemoryDir;
+      process.env.NUVIRA_MEMORY_DIR = originalMemoryDir;
     }
     rmSync(tempDir, { recursive: true, force: true });
   });
@@ -1127,17 +1127,17 @@ describe('ModelRegistry — M2.2 wire-token metering (measured cost inputs)', ()
 
   beforeEach(() => {
     measuredTempDir = mkdtempSync(join(tmpdir(), 'buff-registry-measured-'));
-    measuredOrigDir = process.env.BUFF_MEMORY_DIR;
-    process.env.BUFF_MEMORY_DIR = measuredTempDir;
+    measuredOrigDir = process.env.NUVIRA_MEMORY_DIR;
+    process.env.NUVIRA_MEMORY_DIR = measuredTempDir;
     resetModelRegistry();
   });
 
   afterEach(() => {
     resetModelRegistry();
     if (measuredOrigDir === undefined) {
-      delete process.env.BUFF_MEMORY_DIR;
+      delete process.env.NUVIRA_MEMORY_DIR;
     } else {
-      process.env.BUFF_MEMORY_DIR = measuredOrigDir;
+      process.env.NUVIRA_MEMORY_DIR = measuredOrigDir;
     }
     rmSync(measuredTempDir, { recursive: true, force: true });
   });

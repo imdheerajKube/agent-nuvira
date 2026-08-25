@@ -547,7 +547,7 @@ describe('ChatHistory', () => {
     it('should persist data file on disk', () => {
       storeTestSession(history);
       storeTestSession(history, { content: 'second' });
-      expect(existsSync(join(testDirHolder.value, '.buff', 'memory', 'history.json'))).toBe(true);
+      expect(existsSync(join(testDirHolder.value, '.nuvira', 'memory', 'history.json'))).toBe(true);
     });
   });
 
@@ -694,8 +694,8 @@ describe('ChatHistory', () => {
         'llama',
         false,
       );
-      const raw = existsSync(join(testDirHolder.value, '.buff', 'memory', 'history.json'))
-        ? JSON.parse(require('node:fs').readFileSync(join(testDirHolder.value, '.buff', 'memory', 'history.json'), 'utf-8'))
+      const raw = existsSync(join(testDirHolder.value, '.nuvira', 'memory', 'history.json'))
+        ? JSON.parse(require('node:fs').readFileSync(join(testDirHolder.value, '.nuvira', 'memory', 'history.json'), 'utf-8'))
         : null;
       const serialized = JSON.stringify(raw);
       expect(serialized).not.toContain('sk-abcdefghijklmnopqrstuvwxyz1234567890');

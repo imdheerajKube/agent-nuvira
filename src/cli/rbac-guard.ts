@@ -2,7 +2,7 @@
  * rbac-guard.ts — K4: shared RBAC enforcement for sensitive CLI commands.
  *
  * The RBAC engine (enterprise/rbac.ts) has always been able to DENY — but only
- * `buff admin` wired it. K4 extends enforcement to every sensitive surface:
+ * `nuvira admin` wired it. K4 extends enforcement to every sensitive surface:
  * config vault migrate, team writes, sbom file writes, and skill gc.
  *
  * Semantics (identical across every guarded command):
@@ -31,7 +31,7 @@ export function guardRbacAction(action: AdminAction, rbac: RbacManager = new Rba
   } catch (err) {
     if (err instanceof RbacError) {
       logger.error(`⛔ ${err.message}`);
-      logger.error('   Run `buff admin role add <you> admin` once as the initial admin.');
+      logger.error('   Run `nuvira admin role add <you> admin` once as the initial admin.');
     }
     process.exitCode = 3;
     return false;

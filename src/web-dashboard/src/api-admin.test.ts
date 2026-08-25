@@ -24,7 +24,7 @@ const htmlResponse = (): Response =>
   });
 
 const VALID_PAYLOAD = {
-  system: [{ name: 'Config Directory', status: 'pass', message: '~/.buff/ exists' }],
+  system: [{ name: 'Config Directory', status: 'pass', message: '~/.nuvira/ exists' }],
   enterprise: [{ name: 'Secrets Backend', status: 'warn', message: 'keys in config' }],
   providers: [{ type: 'groq', configured: true, keySource: 'env', keyMasked: 'gsk_…abcd' }],
   serverTime: 123,

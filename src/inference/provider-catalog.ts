@@ -24,7 +24,7 @@
  *   - contextWindow    — nominal input context window (tokens), provider-level
  *
  * Prices are approximate list prices and ALWAYS overridable via
- * `buff config set pricing.<provider>.*`. Measured wire-token cost replaces the
+ * `nuvira config set pricing.<provider>.*`. Measured wire-token cost replaces the
  * estimate once the provider reports real usage (M2.2).
  */
 

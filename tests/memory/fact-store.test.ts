@@ -14,11 +14,11 @@ import { clearEmbeddingCache, setForceLLM, EMBEDDING_DIM } from '../../src/memor
 // ─── Hermetic memory dir ────────────────────────────────────────────────────
 
 let memDir: string;
-const ORIGINAL_MEMORY_DIR = process.env.BUFF_MEMORY_DIR;
+const ORIGINAL_MEMORY_DIR = process.env.NUVIRA_MEMORY_DIR;
 
 beforeAll(async () => {
   memDir = mkdtempSync(join(tmpdir(), 'fact-store-test-'));
-  process.env.BUFF_MEMORY_DIR = memDir;
+  process.env.NUVIRA_MEMORY_DIR = memDir;
   resetVectorBackendSelection();
   await getVectorStore('facts').count();
   // Force the LLM embedding tier so tests are deterministic (no native model
@@ -28,8 +28,8 @@ beforeAll(async () => {
 
 afterAll(() => {
   setForceLLM(false);
-  if (ORIGINAL_MEMORY_DIR === undefined) delete process.env.BUFF_MEMORY_DIR;
-  else process.env.BUFF_MEMORY_DIR = ORIGINAL_MEMORY_DIR;
+  if (ORIGINAL_MEMORY_DIR === undefined) delete process.env.NUVIRA_MEMORY_DIR;
+  else process.env.NUVIRA_MEMORY_DIR = ORIGINAL_MEMORY_DIR;
   rmSync(memDir, { recursive: true, force: true });
 });
 

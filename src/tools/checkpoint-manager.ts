@@ -10,6 +10,7 @@
  */
 
 import { randomUUID } from 'node:crypto';
+import { resolveNuviraHome } from '../config/paths';
 import { existsSync, readFileSync, writeFileSync, mkdirSync, readdirSync, unlinkSync } from 'node:fs';
 import { join } from 'node:path';
 import { homedir } from 'node:os';
@@ -37,7 +38,7 @@ export class CheckpointManager extends EventEmitter {
 
   constructor() {
     super();
-    this.checkpointDir = join(homedir(), '.buff', 'cache', 'checkpoints');
+    this.checkpointDir = join(resolveNuviraHome(), 'cache', 'checkpoints');
     this.ensureDir();
     this.loadCheckpoints();
   }

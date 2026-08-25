@@ -25,6 +25,7 @@
  */
 
 import { createHash } from 'node:crypto';
+import {envBuff, resolveNuviraHome} from '../config/paths';
 import { appendFileSync, existsSync, readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { homedir } from 'node:os';
@@ -357,7 +358,7 @@ export function appendChainedRecord(
     try {
       const tamper = verifyChain(lines, chainId, null);
       if (tamper.tamperLine > 0) {
-        console.warn(`[enterprise-audit] WARNING: ${chainId} audit chain was TAMPERED (first break at line ${tamper.tamperLine}) before this append — run 'buff audit verify' and restore from backup.`);
+        console.warn(`[enterprise-audit] WARNING: ${chainId} audit chain was TAMPERED (first break at line ${tamper.tamperLine}) before this append — run 'nuvira audit verify' and restore from backup.`);
       }
     } catch {
       // Best-effort guard — never block the append.
@@ -468,8 +469,8 @@ export function verifyAuditFile(filePath: string, chainId: string): ChainVerifyR
   }
 }
 
-/** Convenience: default memory dir join (honors BUFF_MEMORY_DIR like the rest). */
+/** Convenience: default memory dir join (honors NUVIRA_MEMORY_DIR like the rest). */
 export function auditFilePath(chainId: string): string {
-  const dir = process.env.BUFF_MEMORY_DIR || join(homedir(), '.buff', 'memory');
+  const dir = envBuff('MEMORY_DIR') || join(resolveNuviraHome(), 'memory');
   return join(dir, chainId.endsWith('.jsonl') ? chainId : `${chainId}.jsonl`);
 }

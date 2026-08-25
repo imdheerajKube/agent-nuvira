@@ -1,8 +1,8 @@
 /**
  * Audit command CLI tests — P6 M6.3.
  *
- * Exercises `buff audit verify` exit codes (0 ok / 1 tampered|corrupt /
- * 2 legacy) and `buff audit export` output through the production command
+ * Exercises `nuvira audit verify` exit codes (0 ok / 1 tampered|corrupt /
+ * 2 legacy) and `nuvira audit export` output through the production command
  * wiring (commander parse, real temp files).
  */
 
@@ -62,7 +62,7 @@ afterEach(() => {
   rmSync(dir, { recursive: true, force: true });
 });
 
-describe('buff audit verify', () => {
+describe('nuvira audit verify', () => {
   it('intact chained store → exit 0 with intact message', () => {
     appendChainedRecord(file, chainId, { type: 'parked', provider: 'groq' });
     appendChainedRecord(file, chainId, { type: 're-enabled', provider: 'gemini' });
@@ -115,7 +115,7 @@ describe('buff audit verify', () => {
   });
 });
 
-describe('buff audit export', () => {
+describe('nuvira audit export', () => {
   it('exports chained records as CEF lines', () => {
     appendChainedRecord(file, chainId, { type: 'parked', provider: 'groq' });
     const cli = makeCli();

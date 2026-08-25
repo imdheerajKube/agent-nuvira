@@ -12,6 +12,7 @@
  */
 
 import { existsSync, readFileSync, writeFileSync, mkdirSync } from 'node:fs';
+import { resolveNuviraHome } from '../config/paths';
 import { join } from 'node:path';
 import { homedir } from 'node:os';
 import { createHash, randomBytes } from 'node:crypto';
@@ -68,7 +69,7 @@ export interface OAuthState {
 
 // ─── OAuth Manager ────────────────────────────────────────────────────────
 
-const OAUTH_DIR = join(homedir(), '.buff', 'mcp', 'oauth');
+const OAUTH_DIR = join(resolveNuviraHome(), 'mcp', 'oauth');
 const OAUTH_STATE_FILE = join(OAUTH_DIR, 'oauth-state.json');
 
 export class MCPOAuthManager {

@@ -6,7 +6,7 @@
  *   https://raw.githubusercontent.com/imdheerajKube/agent-nuvira/main/.agents/skills
  * which 404s today because the repo has no `.agents/skills/` dir. Shipping
  * the bundled skills in that layout makes the default registry RESOLVE —
- * `buff skills search` / `buff skills install` then find the first-party
+ * `nuvira skills search` / `nuvira skills install` then find the first-party
  * batch from the same sources the store seeds.
  *
  * The generation is deliberately pure (fixture-testable): `hubIndexFor`

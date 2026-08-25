@@ -5,6 +5,7 @@
  */
 
 import { randomUUID } from 'node:crypto';
+import { resolveNuviraHome } from '../config/paths';
 import { existsSync, readFileSync, writeFileSync, mkdirSync } from 'node:fs';
 import { join } from 'node:path';
 import { homedir } from 'node:os';
@@ -34,7 +35,7 @@ export interface KanbanBoard {
   updatedAt: number;
 }
 
-const KANBAN_DIR = join(homedir(), '.buff', 'memory', 'kanban');
+const KANBAN_DIR = join(resolveNuviraHome(), 'memory', 'kanban');
 
 export class KanbanManager {
   private boards: Map<string, KanbanBoard> = new Map();
@@ -147,7 +148,7 @@ export interface CronJob {
   createdAt: number;
 }
 
-const CRON_DIR = join(homedir(), '.buff', 'memory', 'cronjobs');
+const CRON_DIR = join(resolveNuviraHome(), 'memory', 'cronjobs');
 
 export class CronJobManager {
   private jobs: Map<string, CronJob> = new Map();

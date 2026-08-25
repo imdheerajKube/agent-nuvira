@@ -85,17 +85,17 @@ describe('EditCommand — auto-route adoption', () => {
     tempDir = mkdtempSync(join(tmpdir(), 'buff-edit-adopt-'));
     filePath = join(tempDir, 'sample.ts');
     writeFileSync(filePath, 'const x = 1;\n', 'utf-8');
-    originalMemoryDir = process.env.BUFF_MEMORY_DIR;
-    process.env.BUFF_MEMORY_DIR = join(tempDir, '.buff', 'memory');
+    originalMemoryDir = process.env.NUVIRA_MEMORY_DIR;
+    process.env.NUVIRA_MEMORY_DIR = join(tempDir, '.nuvira', 'memory');
     resetModelRegistry();
   });
 
   afterEach(() => {
     resetModelRegistry();
     if (originalMemoryDir === undefined) {
-      delete process.env.BUFF_MEMORY_DIR;
+      delete process.env.NUVIRA_MEMORY_DIR;
     } else {
-      process.env.BUFF_MEMORY_DIR = originalMemoryDir;
+      process.env.NUVIRA_MEMORY_DIR = originalMemoryDir;
     }
     rmSync(tempDir, { recursive: true, force: true });
     vi.restoreAllMocks();

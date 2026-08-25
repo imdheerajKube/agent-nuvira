@@ -19,7 +19,7 @@
  *                Linux   → secret-tool        (Secret Service via libsecret)
  *                Windows → PowerShell CredWrite/CredRead/CredDelete
  *                          (Credential Manager P/Invoke)
- *   Tier 2   — AES-256-GCM encrypted file (`~/.buff/vault.enc`, 0600) as the
+ *   Tier 2   — AES-256-GCM encrypted file (`~/.nuvira/vault.enc`, 0600) as the
  *              last-resort fallback when NO OS store is available at all
  *              (minimal containers). Key derived via scrypt from a master
  *              passphrase (injected / env `BUFF_VAULT_PASSPHRASE`); Node
@@ -44,8 +44,8 @@
  *
  * Integration points:
  * - `ConfigManager` routes key read/write through `Vault` (Phase A1 wiring).
- * - `buff config migrate-keys` moves plaintext keys from `buffconfig.json`.
- * - `buff doctor` reports the active vault tier + platform backend.
+ * - `nuvira config migrate-keys` moves plaintext keys from `buffconfig.json`.
+ * - `nuvira doctor` reports the active vault tier + platform backend.
  *
  * @see AGENT_NUVIRA_MAJOR_REVAMP_PLAN.md — Phase A1 (Implementation reference:
  *      `credential_persistence.py` + `credential_sources/`, provider-
@@ -72,7 +72,7 @@ export const VAULT_SERVICE = 'agent-nuvira';
 /** Env var that supplies the Tier-2 master passphrase (no file needed when set). */
 export const VAULT_PASSPHRASE_ENV = 'BUFF_VAULT_PASSPHRASE';
 
-/** Tier-2 encrypted vault file name (inside the buff config dir). */
+/** Tier-2 encrypted vault file name (inside the nuvira config dir). */
 const VAULT_FILE = 'vault.enc';
 
 /** Salt length for scrypt key derivation (Tier 2). */
@@ -91,7 +91,7 @@ export type VaultTier = 'keyring' | 'os-cli' | 'aes-file' | 'none';
 
 /** Options for opening a vault (mostly test injection). */
 export interface VaultOptions {
-  /** Config dir override (defaults to the standard buff config dir). */
+  /** Config dir override (defaults to the standard nuvira config dir). */
   configDir?: string;
   /** Force a specific tier (default: auto-detect with OS-awareness). */
   tier?: VaultTier;
@@ -101,7 +101,7 @@ export interface VaultOptions {
   platform?: NodeJS.Platform;
 }
 
-/** Status snapshot surfaced by `buff doctor` / `buff config vault status`. */
+/** Status snapshot surfaced by `nuvira doctor` / `nuvira config vault status`. */
 export interface VaultStatus {
   tier: VaultTier;
   /** Detected platform (darwin / win32 / linux / ...). */
@@ -811,7 +811,7 @@ export class Vault {
     return new Vault(opts);
   }
 
-  /** The active tier — surfaced by `buff doctor` and `buff config vault status`. */
+  /** The active tier — surfaced by `nuvira doctor` and `nuvira config vault status`. */
   get activeTier(): VaultTier {
     return this.active?.kind ?? 'none';
   }

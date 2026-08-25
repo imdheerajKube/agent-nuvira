@@ -23,17 +23,17 @@ import { join } from 'node:path';
 
 const TMP_BASE = process.env.TMPDIR || process.env.TMP || '/tmp';
 const testDir = mkdtempSync(join(TMP_BASE, 'buff-chat-api-'));
-const memoryDir = join(testDir, '.buff', 'memory');
+const memoryDir = join(testDir, '.nuvira', 'memory');
 mkdirSync(memoryDir, { recursive: true });
 
 // Env MUST be set before importing the server (values are read at import time).
-// BUFF_CONFIG_DIR keeps admin.json / rbac.json hermetic (never the real ~/.buff).
-process.env.BUFF_DASHBOARD_PORT = '0';
-process.env.BUFF_DASHBOARD_HOST = '127.0.0.1';
-process.env.BUFF_MEMORY_DIR = memoryDir;
-process.env.BUFF_CONFIG_DIR = join(testDir, '.buff');
+// BUFF_CONFIG_DIR keeps admin.json / rbac.json hermetic (never the real ~/.nuvira).
+process.env.NUVIRA_DASHBOARD_PORT = '0';
+process.env.NUVIRA_DASHBOARD_HOST = '127.0.0.1';
+process.env.NUVIRA_MEMORY_DIR = memoryDir;
+process.env.NUVIRA_CONFIG_DIR = join(testDir, '.nuvira');
 // HOME pin keeps homedir()-resolved stores (SkillStore, drafts) off the
-// developer's real ~/.buff — the P6a accept path writes both.
+// developer's real ~/.nuvira — the P6a accept path writes both.
 process.env.HOME = testDir;
 
 const { createDashboardServer, setChatConsoleForTest } = await import('../../src/web-dashboard/server.js');
@@ -422,7 +422,7 @@ describe('/api/chat/resolve — plain-English → CLI short-circuit', () => {
     expect(body.ok).toBe(true);
     const top = body.matches[0];
     expect(top?.intent).toBe('dashboard.stop');
-    expect(top?.command).toBe('buff dashboard stop');
+    expect(top?.command).toBe('nuvira dashboard stop');
     expect(top?.confirmation).toBe(true);
   });
 
@@ -433,8 +433,8 @@ describe('/api/chat/resolve — plain-English → CLI short-circuit', () => {
     const top = body.matches[0];
     expect(top?.ambiguous).toBe(true);
     const commands = top?.options?.map((o) => o.command) ?? [];
-    expect(commands).toContain('buff config gateway allow whatsapp user 919958604222');
-    expect(commands).toContain('buff whatsapp contact add Rahul 919958604222');
+    expect(commands).toContain('nuvira config gateway allow whatsapp user 919958604222');
+    expect(commands).toContain('nuvira whatsapp contact add Rahul 919958604222');
   });
 
   it('returns no matches for an ordinary chat message (falls through to the agent)', async () => {
@@ -553,7 +553,7 @@ describe('/api/projects — P3 project attach', () => {
       // The install target is the SERVER's cwd — point it at the temp test
       // dir so installs never pollute the repo's committed .agents/skills.
       process.chdir(testDir);
-      envBackup.BUFF_SKILLS_REGISTRY = process.env.BUFF_SKILLS_REGISTRY;
+      envBackup.NUVIRA_SKILLS_REGISTRY = process.env.NUVIRA_SKILLS_REGISTRY;
       registryDir = join(testDir, 'registry');
       // The registry layout: <root>/index.json + <root>/<name>/SKILL.md
       // (the same shape as the committed .agents/skills dir).
@@ -570,12 +570,12 @@ describe('/api/projects — P3 project attach', () => {
       writeFileSync(join(registryDir, 'code-assist', 'SKILL.md'), '---\nname: code-assist\ndescription: Assist with code edits\n---\n# Code Assist\nHelp with edits.\n', 'utf-8');
       mkdirSync(join(registryDir, 'schema-validator'), { recursive: true });
       writeFileSync(join(registryDir, 'schema-validator', 'SKILL.md'), '---\nname: schema-validator\ndescription: Validate schemas\n---\n# Schema Validator\nValidate.\n', 'utf-8');
-      process.env.BUFF_SKILLS_REGISTRY = `file://${registryDir}`;
+      process.env.NUVIRA_SKILLS_REGISTRY = `file://${registryDir}`;
     });
     afterEach(() => {
       process.chdir(cwdBackup);
-      if (envBackup.BUFF_SKILLS_REGISTRY === undefined) delete process.env.BUFF_SKILLS_REGISTRY;
-      else process.env.BUFF_SKILLS_REGISTRY = envBackup.BUFF_SKILLS_REGISTRY;
+      if (envBackup.NUVIRA_SKILLS_REGISTRY === undefined) delete process.env.NUVIRA_SKILLS_REGISTRY;
+      else process.env.NUVIRA_SKILLS_REGISTRY = envBackup.NUVIRA_SKILLS_REGISTRY;
       // Remove any installed skill so the next test starts clean.
       rmSync(join(testDir, '.agents'), { recursive: true, force: true });
     });
@@ -623,7 +623,7 @@ describe('/api/projects — P3 project attach', () => {
 
   describe('P6a — /api/skills/drafts (the /learn preview-card gate)', () => {
     // The server reads the DEFAULT draft root — BUFF_MEMORY_DIR/skill-drafts
-    // (HOME is pinned above, so nothing touches the real ~/.buff).
+    // (HOME is pinned above, so nothing touches the real ~/.nuvira).
     const draftsRoot = join(memoryDir, 'skill-drafts');
     const skillMd = (name: string): string => [
       '---',

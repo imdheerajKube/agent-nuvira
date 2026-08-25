@@ -1,6 +1,6 @@
 /**
  * P2 — In-page WhatsApp pairing manager (dashboard GUI parity with
- * `buff whatsapp pair`).
+ * `nuvira whatsapp pair`).
  *
  * Wraps the BaileysBridge in a background pairing session: QR payloads are
  * rendered to browser-scannable PNG data URLs and pushed over SSE, the

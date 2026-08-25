@@ -13,6 +13,7 @@
  */
 
 import { existsSync, readFileSync, writeFileSync, mkdirSync, rmSync, readdirSync, cpSync } from 'node:fs';
+import { resolveNuviraHome } from '../config/paths';
 import { join, dirname } from 'node:path';
 import { homedir } from 'node:os';
 import { randomUUID } from 'node:crypto';
@@ -201,7 +202,7 @@ export class SkillsHubManager {
   private sources: Map<string, SkillSource> = new Map();
 
   constructor() {
-    this.hubDir = join(homedir(), '.buff', 'skills', '.hub');
+    this.hubDir = join(resolveNuviraHome(), 'skills', '.hub');
     this.lockFile = join(this.hubDir, 'lock.json');
     this.quarantineDir = join(this.hubDir, 'quarantine');
     this.auditLog = join(this.hubDir, 'audit.log');

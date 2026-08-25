@@ -7,10 +7,10 @@
  * saved the contact. So to send to "Alex" by name, the user maps the name to
  * a number once:
  *
- *   buff whatsapp contact add Alex 919876543210
+ *   nuvira whatsapp contact add Alex 919876543210
  *
- * Stored at `~/.buff/whatsapp/contacts.json` (next to the session; the
- * BUFF_WHATSAPP_SESSION_DIR override applies). The bridge seeds its
+ * Stored at `~/.nuvira/whatsapp/contacts.json` (next to the session; the
+ * NUVIRA_WHATSAPP_SESSION_DIR override applies). The bridge seeds its
  * name → JID map from this file and merges anything it learns at runtime
  * (contacts sync / pushName) on top.
  */

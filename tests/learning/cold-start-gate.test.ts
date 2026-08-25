@@ -5,6 +5,7 @@ import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { existsSync, writeFileSync, mkdirSync, rmSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
+import { resolveNuviraHome, envBuff } from '../../src/config/paths.js';
 
 // Mock the config paths to use a temp directory
 vi.mock('../../src/config/paths.js', () => ({

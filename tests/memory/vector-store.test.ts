@@ -7,19 +7,19 @@ import type { VectorEntry } from '../../src/memory/vector-store.js';
 
 // ─── Hermetic memory dir ────────────────────────────────────────────────────
 // The vector store reads BUFF_MEMORY_DIR per operation, so a fresh temp dir
-// per file keeps these tests from touching the developer's real ~/.buff/memory.
+// per file keeps these tests from touching the developer's real ~/.nuvira/memory.
 
 let memDir: string;
-const ORIGINAL_MEMORY_DIR = process.env.BUFF_MEMORY_DIR;
+const ORIGINAL_MEMORY_DIR = process.env.NUVIRA_MEMORY_DIR;
 
 beforeAll(() => {
   memDir = mkdtempSync(join(tmpdir(), 'vector-store-test-'));
-  process.env.BUFF_MEMORY_DIR = memDir;
+  process.env.NUVIRA_MEMORY_DIR = memDir;
 });
 
 afterAll(() => {
-  if (ORIGINAL_MEMORY_DIR === undefined) delete process.env.BUFF_MEMORY_DIR;
-  else process.env.BUFF_MEMORY_DIR = ORIGINAL_MEMORY_DIR;
+  if (ORIGINAL_MEMORY_DIR === undefined) delete process.env.NUVIRA_MEMORY_DIR;
+  else process.env.NUVIRA_MEMORY_DIR = ORIGINAL_MEMORY_DIR;
   rmSync(memDir, { recursive: true, force: true });
 });
 

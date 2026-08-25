@@ -107,7 +107,7 @@ export async function runCliTool(args: unknown, ctx: ToolContext): Promise<strin
   if (!top) {
     return (
       `run_cli: could not map "${ask}" to a known intent. Tell the user no matching ` +
-      `capability was found and suggest checking 'buff doctor' or docs/COMMANDS.md.`
+      `capability was found and suggest checking 'nuvira doctor' or docs/COMMANDS.md.`
     );
   }
 

@@ -7,12 +7,13 @@
  * (provider, model, conversation-key) so a retry to the SAME provider can
  * re-inject it instead of failing.
  *
- * Persisted to `~/.buff/memory/reasoning-cache.json` (honors BUFF_MEMORY_DIR)
+ * Persisted to `~/.nuvira/memory/reasoning-cache.json` (honors NUVIRA_MEMORY_DIR)
  * like other registry state, best-effort writes. Keys are FNV-1a fingerprints
  * of the conversation prefix — no raw conversation content is ever persisted.
  */
 
 import { join } from 'node:path';
+import {envBuff, resolveNuviraHome} from '../config/paths';
 import { homedir } from 'node:os';
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 
@@ -36,7 +37,7 @@ const MAX_REASONING_CHARS = 32_000;
 // ─── Storage ────────────────────────────────────────────────────────────────
 
 function memoryDir(): string {
-  return process.env.BUFF_MEMORY_DIR || join(homedir(), '.buff', 'memory');
+  return envBuff('MEMORY_DIR') || join(resolveNuviraHome(), 'memory');
 }
 
 function cachePath(): string {

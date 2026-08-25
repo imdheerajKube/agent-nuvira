@@ -9,10 +9,11 @@
  * When a new goal arrives, the Orchestrator queries past trajectories
  * and injects similar ones as few-shot examples into agent prompts.
  *
- * File location: ~/.buff/memory/trajectories.json
+ * File location: ~/.nuvira/memory/trajectories.json
  */
 
 import { readFileSync, writeFileSync, existsSync, mkdirSync } from 'node:fs';
+import {envBuff, resolveNuviraHome} from '../config/paths';
 import { join } from 'node:path';
 import { homedir } from 'node:os';
 
@@ -66,12 +67,12 @@ interface TrajectoryData {
 
 /**
  * Resolve the memory dir lazily (per call) so tests that set
- * `BUFF_MEMORY_DIR` in beforeAll are genuinely hermetic — a module-import-
- * time capture would silently keep writing to the real ~/.buff/memory
+ * `NUVIRA_MEMORY_DIR` in beforeAll are genuinely hermetic — a module-import-
+ * time capture would silently keep writing to the real ~/.nuvira/memory
  * (same fix as vector-store.ts).
  */
 function memoryDir(): string {
-  return process.env.BUFF_MEMORY_DIR || join(homedir(), '.buff', 'memory');
+  return envBuff('MEMORY_DIR') || join(resolveNuviraHome(), 'memory');
 }
 
 function trajectoriesPath(): string {

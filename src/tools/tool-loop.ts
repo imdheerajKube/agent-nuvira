@@ -420,7 +420,7 @@ export async function runToolLoop(opts: ToolLoopOptions): Promise<ToolLoopResult
       } else if (!isToolEnabled(call.name, context.configManager)) {
         // I1 execution gate: a disabled tool is rejected at runtime even if
         // the model hallucinated its name — the toggle is never cosmetic.
-        resultText = `Error: tool "${call.name}" is disabled — its toolset is turned off. Enable it with \`buff tools toolsets\`.`;
+        resultText = `Error: tool "${call.name}" is disabled — its toolset is turned off. Enable it with \`nuvira tools toolsets\`.`;
       } else {
         // I2: emit `tool:started` (before execution) + `tool:called` (after)
         // on the observability bus — drives the hooks registry's

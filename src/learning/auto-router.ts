@@ -23,7 +23,7 @@
  * (or excluded) so reliability is honored at runtime.
  *
  * Integration:
- * - `buff model switch auto` — select Auto as the active model
+ * - `nuvira model switch auto` — select Auto as the active model
  * - Model picker shows "Auto — Agent decides" as the first option
  * - `chat` routes every message when the active model is `auto`
  * - Orchestrator routes each agent task when `--model auto` or `--auto-route` is set
@@ -686,7 +686,7 @@ export interface MeasuredCost {
 
 /**
  * Estimate the USD cost of a typical call for a provider.
- * An optional pricing override (e.g., from `buff config set pricing.*`)
+ * An optional pricing override (e.g., from `nuvira config set pricing.*`)
  * takes precedence over the built-in table.
  *
  * M2.2: when `measured` (real wire tokens from provider-reported usage) is
@@ -1717,7 +1717,7 @@ export class AutoModelRouter {
       // ── Promotion gate A/B (ruflo router-parallel mirror) ─────────────────
       // Record both the deterministic pick and the bandit pick for this task.
       // The orchestrator's recordOutcome() finalizes it with the real outcome,
-      // and `buff model bandit` evaluates the three promotion criteria.
+      // and `nuvira model bandit` evaluates the three promotion criteria.
       getRouterPromotion().noteParallelDecision(
         agentType,
         taskDescription,
@@ -1826,7 +1826,7 @@ export class AutoModelRouter {
     try {
       const overrides = configManager?.getAll?.()?.routing?.contextWindows;
       if (overrides) {
-        // Coerce string values (e.g. `buff config set routing.contextWindows.local
+        // Coerce string values (e.g. `nuvira config set routing.contextWindows.local
         // 16384` stores "16384") to numbers so utilization math never relies on
         // JS coercion; invalid/non-positive values fall through.
         const fromOverride = (key: string): number | undefined => {
@@ -1909,7 +1909,7 @@ export class AutoModelRouter {
     }
 
     // Promotion gate: finalize the parallel A/B decision with the real outcome
-    // so `buff model bandit` can judge bandit-vs-heuristic on real trajectories.
+    // so `nuvira model bandit` can judge bandit-vs-heuristic on real trajectories.
     // Keyed by agentType+task so parallel tasks never misattribute outcomes.
     try {
       getRouterPromotion().recordOutcome(agentType, taskDescription, outcome, outcomeData);
@@ -2023,7 +2023,7 @@ export class AutoModelRouter {
 
   /**
    * Resolve the effective per-1K-token pricing for a provider.
-   * Config overrides (`buff config set pricing.<provider>...`) win over the
+   * Config overrides (`nuvira config set pricing.<provider>...`) win over the
    * built-in pricing table; unknown providers fall back to a cheap default.
    */
   getProviderPricing(

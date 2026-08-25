@@ -40,15 +40,15 @@ import { getChatHistory } from '../../src/context/history.js';
 import { resetFactStore } from '../../src/memory/fact-store.js';
 import { resetWorkspaceStore } from '../../src/config/workspace.js';
 
-const ORIGINAL_MEMORY_DIR = process.env.BUFF_MEMORY_DIR;
+const ORIGINAL_MEMORY_DIR = process.env.NUVIRA_MEMORY_DIR;
 
 beforeAll(() => {
-  process.env.BUFF_MEMORY_DIR = join(testDirHolder.value, 'memory');
+  process.env.NUVIRA_MEMORY_DIR = join(testDirHolder.value, 'memory');
 });
 
 afterAll(() => {
-  if (ORIGINAL_MEMORY_DIR === undefined) delete process.env.BUFF_MEMORY_DIR;
-  else process.env.BUFF_MEMORY_DIR = ORIGINAL_MEMORY_DIR;
+  if (ORIGINAL_MEMORY_DIR === undefined) delete process.env.NUVIRA_MEMORY_DIR;
+  else process.env.NUVIRA_MEMORY_DIR = ORIGINAL_MEMORY_DIR;
   rmSync(testDirHolder.value, { recursive: true, force: true });
 });
 

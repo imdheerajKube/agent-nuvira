@@ -2,13 +2,13 @@
  * History command — Browse and search conversation history.
  *
  * Usage:
- *   buff history                    — Show recent conversations
- *   buff history list               — Show all saved conversations
- *   buff history search <q>         — Search conversations by keyword
- *   buff history show <id>          — Show a specific conversation
- *   buff history clear              — Clear all history
- *   buff history prune              — Remove conversations older than retention period
- *   buff history reindex            — Rebuild semantic search index
+ *   nuvira history                    — Show recent conversations
+ *   nuvira history list               — Show all saved conversations
+ *   nuvira history search <q>         — Search conversations by keyword
+ *   nuvira history show <id>          — Show a specific conversation
+ *   nuvira history clear              — Clear all history
+ *   nuvira history prune              — Remove conversations older than retention period
+ *   nuvira history reindex            — Rebuild semantic search index
  */
 
 import { Command } from 'commander';
@@ -103,7 +103,7 @@ export class HistoryCommand extends BaseCommand {
     for (const session of sessions) {
       console.log(history.formatSessionSummary(session));
     }
-    console.log(`\n  Show a conversation: buff history show <session-id>`);
+    console.log(`\n  Show a conversation: nuvira history show <session-id>`);
     console.log('');
   }
 
@@ -142,7 +142,7 @@ export class HistoryCommand extends BaseCommand {
 
     if (!match) {
       logger.error(`Session not found: ${id}`);
-      logger.info('Use `buff history list` to see available sessions.');
+      logger.info('Use `nuvira history list` to see available sessions.');
       return;
     }
 
@@ -160,7 +160,7 @@ export class HistoryCommand extends BaseCommand {
     for (const msg of match.messages) {
       const prefix = msg.role === 'user' ? '👤 You:' : '🤖 AI:';
       const content = msg.content.length > 500
-        ? msg.content.slice(0, 500) + '...\n  (truncated, use buff history show <id> to see full)'
+        ? msg.content.slice(0, 500) + '...\n  (truncated, use nuvira history show <id> to see full)'
         : msg.content;
       console.log(`  ${prefix}`);
       console.log(`  ${content}`);
@@ -202,7 +202,7 @@ export class HistoryCommand extends BaseCommand {
       if (indexed < count) {
         logger.warn(`⚠️  ${count - indexed} session(s) could not be indexed (embedding may have failed).`);
       }
-      logger.info('   Use `buff history search --semantic <query>` to search with the new index.');
+      logger.info('   Use `nuvira history search --semantic <query>` to search with the new index.');
     } catch (err) {
       logger.error(`Failed to reindex: ${err instanceof Error ? err.message : String(err)}`);
     }

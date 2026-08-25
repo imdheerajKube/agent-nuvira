@@ -18,7 +18,7 @@ import type { OrchestratorOptions } from '../agents/orchestrator.js';
 // ─── Types ──────────────────────────────────────────────────────────────────
 
 export interface WorkflowTemplate {
-  /** Template identifier (used in CLI: `buff workflow run quick-fix`) */
+  /** Template identifier (used in CLI: `nuvira workflow run quick-fix`) */
   id: string;
   /** Human-readable name */
   name: string;

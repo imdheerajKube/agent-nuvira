@@ -19,6 +19,7 @@
  */
 
 import { AsyncLocalStorage } from 'node:async_hooks';
+import { envBuff } from '../config/paths';
 
 /** Correlation identifiers threaded through a run's log lines. */
 export interface LogCorrelation {
@@ -47,7 +48,7 @@ export function getLogCorrelation(): LogCorrelation {
 
 /** True when BUFF_LOG_JSON=1 (JSON line mode for dashboard/CI). */
 export function isJsonLogMode(): boolean {
-  const v = process.env.BUFF_LOG_JSON;
+  const v = envBuff('LOG_JSON');
   return v === '1' || v === 'true';
 }
 

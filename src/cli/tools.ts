@@ -1,5 +1,5 @@
 /**
- * H1 — `buff tools` command.
+ * H1 — `nuvira tools` command.
  *
  * The H1 acceptance surface: every registered tool is visible here, and the
  * registry is consumed by every action command (chat/execute/plan/run/ci/
@@ -67,7 +67,7 @@ export class ToolsCommand extends BaseCommand {
     }
 
     // Read/write through ONE ConfigManager so the status line always reflects
-    // the real ~/.buff/buffconfig.json (a fresh instance would re-read anyway,
+    // the real ~/.nuvira/buffconfig.json (a fresh instance would re-read anyway,
     // but sharing keeps this invocation consistent after a toggle).
     const status = getToolsetStatus(cm);
     logger.highlight('\n🧩 Toolsets (capability gating — the model schema is built from enabled groups only)');
@@ -76,7 +76,7 @@ export class ToolsCommand extends BaseCommand {
       console.log(`  ${s.enabled ? '🟢' : '⛔'} ${s.name.padEnd(12)} ${s.label.padEnd(22)} ${String(s.toolCount).padEnd(4)} ${s.description}`);
     }
     console.log('');
-    logger.info('Enable/disable: `buff tools toolsets --enable <name>` | `--disable <name>` (persists to ~/.buff/buffconfig.json).');
+    logger.info('Enable/disable: `nuvira tools toolsets --enable <name>` | `--disable <name>` (persists to ~/.nuvira/buffconfig.json).');
   }
 
   private listTools(): void {
@@ -104,14 +104,14 @@ export class ToolsCommand extends BaseCommand {
       }
       console.log('');
     }
-    logger.info('Run `buff tools show <name>` to see a tool\'s input schema.');
+    logger.info('Run `nuvira tools show <name>` to see a tool\'s input schema.');
   }
 
   private showTool(name: string): void {
     const tool = getTool(name);
     if (!tool) {
       logger.error(`Unknown tool: ${name}`);
-      logger.info(`Run \`buff tools list\` to see all ${listTools().length} registered tools.`);
+      logger.info(`Run \`nuvira tools list\` to see all ${listTools().length} registered tools.`);
       return;
     }
     const schema = toolJsonSchemas([name])[0];

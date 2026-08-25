@@ -5,13 +5,13 @@
  * of MCP servers with EXACT-VERSION pins (no floating tags), a "vetted by"
  * stamp, and `prompt-secret` env placeholders that are resolved at install
  * time (from the environment or an explicit value) and written into the
- * standard MCP config file (~/.buff/mcp/<name>.json) — never into
+ * standard MCP config file (~/.nuvira/mcp/<name>.json) — never into
  * buffconfig.json, and never echoed to the terminal.
  *
  * CLI surface (src/cli/mcp.ts):
- *   buff mcp catalog [--search <q>]   — list vetted servers (+ installed badge)
- *   buff mcp install <name>           — resolve pins → write config → ready
- *   buff mcp uninstall <name>         — remove the config file
+ *   nuvira mcp catalog [--search <q>]   — list vetted servers (+ installed badge)
+ *   nuvira mcp install <name>           — resolve pins → write config → ready
+ *   nuvira mcp uninstall <name>         — remove the config file
  */
 
 import { existsSync, writeFileSync, mkdirSync, unlinkSync } from 'node:fs';

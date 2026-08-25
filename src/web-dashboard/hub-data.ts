@@ -5,8 +5,8 @@
  * surface that aggregates the four hub tabs the dashboard renders —
  * **Tools** (I1 toolsets), **Channels** (I2 gateway delivery + aliases),
  * **Artifacts** (I3 per-session store), and **Skills** (compiled SkillStore +
- * hub-installed SKILL.md). Pure reads, never throws, honors BUFF_MEMORY_DIR /
- * BUFF_CONFIG_DIR so the panel and CLI always agree.
+ * hub-installed SKILL.md). Pure reads, never throws, honors NUVIRA_MEMORY_DIR /
+ * NUVIRA_CONFIG_DIR so the panel and CLI always agree.
  *
  * The WRITE side (toolset toggles) stays in server.ts (admin-gated) and calls
  * `setToolsetEnabled` directly — this module is the read-only source of truth
@@ -14,6 +14,7 @@
  */
 
 import { existsSync, readFileSync, readdirSync } from 'node:fs';
+import { resolveNuviraHome } from '../config/paths';
 import { join } from 'node:path';
 import { homedir } from 'node:os';
 import { getToolsetStatus } from '../tools/toolsets.js';
@@ -410,7 +411,7 @@ function readSkillsData(): HubSkillsData {
   }
   const hub = [
     ...scanHubSkills(join(process.cwd(), '.agents', 'skills')),
-    ...scanHubSkills(join(homedir(), '.buff', 'skills')),
+    ...scanHubSkills(join(resolveNuviraHome(), 'skills')),
   ];
   // Dedupe by id — the user root wins over the project root when both exist.
   const seen = new Set<string>();

@@ -1,8 +1,8 @@
 /**
- * H1 — `buff tools` command tests.
+ * H1 — `nuvira tools` command tests.
  *
  * The H1 acceptance surface: every registered tool is visible via
- * `buff tools list`, a tool's schema via `buff tools show <name>`, and an
+ * `nuvira tools list`, a tool's schema via `nuvira tools show <name>`, and an
  * unknown tool name gets a clear error.
  */
 
@@ -10,7 +10,7 @@ import { describe, it, expect, afterEach, vi } from 'vitest';
 import { ToolsCommand } from '../../src/cli/tools.js';
 import { logger } from '../../src/utils/logger.js';
 
-describe('buff tools', () => {
+describe('nuvira tools', () => {
   afterEach(() => {
     vi.restoreAllMocks();
   });

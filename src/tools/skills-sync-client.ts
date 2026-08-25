@@ -12,6 +12,7 @@
  */
 
 import { existsSync, readFileSync, writeFileSync, mkdirSync } from 'node:fs';
+import { resolveNuviraHome } from '../config/paths';
 import { join } from 'node:path';
 import { homedir } from 'node:os';
 import { createHash } from 'node:crypto';
@@ -122,7 +123,7 @@ export class SkillsSyncClient {
   private accessToken?: string;
 
   constructor(options: { syncDir?: string; remoteUrl?: string; accessToken?: string } = {}) {
-    this.syncDir = options.syncDir || join(homedir(), '.buff', 'skills', '.sync');
+    this.syncDir = options.syncDir || join(resolveNuviraHome(), 'skills', '.sync');
     this.remoteUrl = options.remoteUrl;
     this.accessToken = options.accessToken;
     this.store = new ContentAddressedStore(join(this.syncDir, 'objects'));

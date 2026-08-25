@@ -10,7 +10,7 @@ describe('secret-capture', () => {
 
   beforeEach(() => {
     testDir = mkdtempSync(join(tmpdir(), 'secret-capture-test-'));
-    origEnvFile = process.env.BUFF_ENV_FILE;
+    origEnvFile = process.env.NUVIRA_ENV_FILE;
     origEnvVars = {};
     // Save and clear relevant env vars
     for (const key of ['TEST_API_KEY', 'TEST_TOKEN', 'DB_URL']) {
@@ -22,9 +22,9 @@ describe('secret-capture', () => {
   afterEach(() => {
     // Restore env file path
     if (origEnvFile === undefined) {
-      delete process.env.BUFF_ENV_FILE;
+      delete process.env.NUVIRA_ENV_FILE;
     } else {
-      process.env.BUFF_ENV_FILE = origEnvFile;
+      process.env.NUVIRA_ENV_FILE = origEnvFile;
     }
     // Restore env vars
     for (const [key, value] of Object.entries(origEnvVars)) {
@@ -40,7 +40,7 @@ describe('secret-capture', () => {
   it('loadEnvFile reads .env correctly', async () => {
     const envPath = join(testDir, '.env');
     writeFileSync(envPath, 'TEST_API_KEY=sk-test-123\nDB_URL=postgres://localhost/mydb\n# comment\nTEST_TOKEN=tok-abc\n', 'utf-8');
-    process.env.BUFF_ENV_FILE = envPath;
+    process.env.NUVIRA_ENV_FILE = envPath;
 
     const { loadEnvFile } = await import('../../src/skills/secret-capture.js');
     const vars = loadEnvFile();
@@ -52,7 +52,7 @@ describe('secret-capture', () => {
   it('loadEnvFile handles quoted values', async () => {
     const envPath = join(testDir, '.env');
     writeFileSync(envPath, 'TEST_API_KEY="sk-test-123"\nDB_URL=\'postgres://localhost/mydb\'\n', 'utf-8');
-    process.env.BUFF_ENV_FILE = envPath;
+    process.env.NUVIRA_ENV_FILE = envPath;
 
     const { loadEnvFile } = await import('../../src/skills/secret-capture.js');
     const vars = loadEnvFile();
@@ -63,7 +63,7 @@ describe('secret-capture', () => {
   it('isEnvVarPersisted returns true for set vars', async () => {
     const envPath = join(testDir, '.env');
     writeFileSync(envPath, 'TEST_API_KEY=sk-test-123\n', 'utf-8');
-    process.env.BUFF_ENV_FILE = envPath;
+    process.env.NUVIRA_ENV_FILE = envPath;
 
     const { isEnvVarPersisted } = await import('../../src/skills/secret-capture.js');
     expect(isEnvVarPersisted('TEST_API_KEY')).toBe(true);
@@ -73,7 +73,7 @@ describe('secret-capture', () => {
   it('isEnvVarPersisted checks process.env fallback', async () => {
     const envPath = join(testDir, '.env');
     writeFileSync(envPath, '', 'utf-8');
-    process.env.BUFF_ENV_FILE = envPath;
+    process.env.NUVIRA_ENV_FILE = envPath;
     process.env.TEST_API_KEY = 'from-process-env';
 
     const { isEnvVarPersisted } = await import('../../src/skills/secret-capture.js');
@@ -83,7 +83,7 @@ describe('secret-capture', () => {
   it('saveEnvValue writes to .env without overwriting other vars', async () => {
     const envPath = join(testDir, '.env');
     writeFileSync(envPath, 'EXISTING=value1\n', 'utf-8');
-    process.env.BUFF_ENV_FILE = envPath;
+    process.env.NUVIRA_ENV_FILE = envPath;
 
     const { saveEnvValue } = await import('../../src/skills/secret-capture.js');
     const result = saveEnvValue('NEW_KEY', 'new-value');
@@ -97,7 +97,7 @@ describe('secret-capture', () => {
   it('saveEnvValue updates existing key', async () => {
     const envPath = join(testDir, '.env');
     writeFileSync(envPath, 'TEST_API_KEY=old-value\n', 'utf-8');
-    process.env.BUFF_ENV_FILE = envPath;
+    process.env.NUVIRA_ENV_FILE = envPath;
 
     const { saveEnvValue } = await import('../../src/skills/secret-capture.js');
     saveEnvValue('TEST_API_KEY', 'new-value');
@@ -109,7 +109,7 @@ describe('secret-capture', () => {
 
   it('saveEnvValue creates directory if needed', async () => {
     const nestedEnv = join(testDir, 'nested', '.env');
-    process.env.BUFF_ENV_FILE = nestedEnv;
+    process.env.NUVIRA_ENV_FILE = nestedEnv;
 
     const { saveEnvValue } = await import('../../src/skills/secret-capture.js');
     const result = saveEnvValue('TEST_API_KEY', 'value');
@@ -122,7 +122,7 @@ describe('secret-capture', () => {
   it('findMissingEnvVars returns entries for unset vars', async () => {
     const envPath = join(testDir, '.env');
     writeFileSync(envPath, 'TEST_API_KEY=sk-test-123\n', 'utf-8');
-    process.env.BUFF_ENV_FILE = envPath;
+    process.env.NUVIRA_ENV_FILE = envPath;
 
     const { findMissingEnvVars } = await import('../../src/skills/secret-capture.js');
     const missing = findMissingEnvVars(['TEST_API_KEY', 'DB_URL', 'TEST_TOKEN']);
@@ -134,7 +134,7 @@ describe('secret-capture', () => {
   it('findMissingEnvVars handles object format', async () => {
     const envPath = join(testDir, '.env');
     writeFileSync(envPath, '', 'utf-8');
-    process.env.BUFF_ENV_FILE = envPath;
+    process.env.NUVIRA_ENV_FILE = envPath;
 
     const { findMissingEnvVars } = await import('../../src/skills/secret-capture.js');
     const missing = findMissingEnvVars([
@@ -149,7 +149,7 @@ describe('secret-capture', () => {
   it('getEnvVarStatus returns correct status', async () => {
     const envPath = join(testDir, '.env');
     writeFileSync(envPath, 'TEST_API_KEY=sk-test-123\n', 'utf-8');
-    process.env.BUFF_ENV_FILE = envPath;
+    process.env.NUVIRA_ENV_FILE = envPath;
 
     const { getEnvVarStatus } = await import('../../src/skills/secret-capture.js');
     const status = getEnvVarStatus(['TEST_API_KEY', 'DB_URL']);

@@ -139,8 +139,8 @@ describe('E2E: registry learns the block, next pick skips it', () => {
 
   beforeEach(() => {
     tempDir = mkdtempSync(join(tmpdir(), 'buff-e2e-failover-'));
-    originalMemoryDir = process.env.BUFF_MEMORY_DIR;
-    process.env.BUFF_MEMORY_DIR = tempDir;
+    originalMemoryDir = process.env.NUVIRA_MEMORY_DIR;
+    process.env.NUVIRA_MEMORY_DIR = tempDir;
     failMode = 'rate-limit';
     resetModelRegistry();
     resetProviderFallback();
@@ -155,8 +155,8 @@ describe('E2E: registry learns the block, next pick skips it', () => {
     resetAutoRouter();
     resetRouterBandit();
     resetRouterPromotion();
-    if (originalMemoryDir === undefined) delete process.env.BUFF_MEMORY_DIR;
-    else process.env.BUFF_MEMORY_DIR = originalMemoryDir;
+    if (originalMemoryDir === undefined) delete process.env.NUVIRA_MEMORY_DIR;
+    else process.env.NUVIRA_MEMORY_DIR = originalMemoryDir;
     rmSync(tempDir, { recursive: true, force: true });
   });
 

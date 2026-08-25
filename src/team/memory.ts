@@ -1,7 +1,7 @@
 /**
  * Team Memory — Git-synced shared memory for team collaboration.
  *
- * The team memory is stored in a git repository at `~/.buff/team/` (or a
+ * The team memory is stored in a git repository at `~/.nuvira/team/` (or a
  * configurable path). It contains:
  *
  *   trajectories/  — Shared agent execution trajectories (JSON)
@@ -9,9 +9,9 @@
  *   templates/     — Team workflow templates (JSON)
  *
  * Commands:
- *   buff team join <repo-url>  — Clone the team repo
- *   buff team sync             — Pull latest + push local changes
- *   buff team share            — Share local trajectories with team
+ *   nuvira team join <repo-url>  — Clone the team repo
+ *   nuvira team sync             — Pull latest + push local changes
+ *   nuvira team share            — Share local trajectories with team
  *
  * The sync operation:
  *   1. Pull latest from remote
@@ -113,7 +113,7 @@ function isGitRepo(cwd?: string): boolean {
 
 /**
  * Initialize the team memory directory as a git repository.
- * Called by `buff team join` or `buff team init`.
+ * Called by `nuvira team join` or `nuvira team init`.
  */
 export async function initTeamMemory(repoUrl?: string, cwd?: string): Promise<void> {
   const dir = getTeamDir(cwd);
@@ -132,7 +132,7 @@ export async function initTeamMemory(repoUrl?: string, cwd?: string): Promise<vo
     } catch (err) {
       const error = err as { stderr?: string; message?: string };
       if (error.stderr?.includes('already exists') || error.message?.includes('already exists')) {
-        logger.info('Team directory already exists. Run `buff team sync` to update.');
+        logger.info('Team directory already exists. Run `nuvira team sync` to update.');
       } else {
         throw new Error(`Failed to clone team repo: ${error.stderr?.slice(0, 300) || error.message}`);
       }
@@ -153,7 +153,7 @@ export async function initTeamMemory(repoUrl?: string, cwd?: string): Promise<vo
       '# Agent-Nuvira Team Memory\n\n' +
       'This repository stores shared agent execution trajectories, coding patterns,\n' +
       'and workflow templates for the team.\n\n' +
-      'Managed by the `buff team` CLI commands.\n',
+      'Managed by the `nuvira team` CLI commands.\n',
     );
 
     // Initialize git
@@ -174,7 +174,7 @@ export async function syncTeamMemory(cwd?: string): Promise<SyncResult> {
   const result: SyncResult = { pulled: 0, pushed: 0, conflicts: [], errors: [] };
 
   if (!isGitRepo(cwd)) {
-    throw new Error('Team memory is not a git repository. Run `buff team init` or `buff team join <repo>`.');
+    throw new Error('Team memory is not a git repository. Run `nuvira team init` or `nuvira team join <repo>`.');
   }
 
   // Check for uncommitted changes
@@ -287,7 +287,7 @@ export async function shareTrajectories(cwd?: string): Promise<number> {
   }
 
   if (shared > 0) {
-    logger.success(`Shared ${shared} file(s) with team memory. Run \`buff team sync\` to publish.`);
+    logger.success(`Shared ${shared} file(s) with team memory. Run \`nuvira team sync\` to publish.`);
   } else {
     logger.info('All local trajectories already in sync with team memory.');
   }

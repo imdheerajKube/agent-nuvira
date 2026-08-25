@@ -1,19 +1,20 @@
 /**
- * Platform transport configuration — the `buff config gateway` surface.
+ * Platform transport configuration — the `nuvira config gateway` surface.
  *
  * Gateway platform tokens live in env vars (the `config.py` map, see
  * channel-directory.ts). This module adds a GUIDED way to manage them: a
- * `~/.buff/.env` file (BUFF_ENV_FILE overrides it — same path `loadEnv()` in
+ * `~/.nuvira/.env` file (NUVIRA_ENV_FILE overrides it — same path `loadEnv()` in
  * src/utils/env.ts already reads at CLI + dashboard startup) that both the CLI
  * wizard and the dashboard Channels tab write to, with a line-preserving merge
  * so comments and unrelated keys survive.
  *
  * `whatsapp` (the personal Baileys bridge) is deliberately excluded: its
- * transport is a PAIRED SESSION on disk, configured through `buff whatsapp
+ * transport is a PAIRED SESSION on disk, configured through `nuvira whatsapp
  * pair` / the WhatsApp panel — not an env token.
  */
 
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
+import {envBuff, resolveNuviraHome} from '../config/paths';
 import { join } from 'node:path';
 import { homedir } from 'node:os';
 
@@ -31,33 +32,33 @@ export interface PlatformEnvVarMeta {
 const SECRET_HINT = /TOKEN|PASSWORD|PASS|SECRET|KEY|AUTH|CRED/i;
 
 const PROMPTS: Record<string, string> = {
-  BUFF_TELEGRAM_TOKEN: 'Telegram bot token (from @BotFather)',
-  BUFF_DISCORD_BOT_TOKEN: 'Discord bot token',
-  BUFF_SLACK_BOT_TOKEN: 'Slack bot token',
-  BUFF_WHATSAPP_SESSION_DIR: 'WhatsApp session dir (leave default unless moved)',
-  BUFF_WHATSAPP_TOKEN: 'Meta Cloud API token',
-  BUFF_DINGTALK_WEBHOOK_URL: 'DingTalk robot webhook URL',
-  BUFF_FEISHU_WEBHOOK_URL: 'Feishu bot webhook URL',
-  BUFF_WECOM_WEBHOOK_URL: 'WeCom group-bot webhook URL',
-  BUFF_MATTERMOST_WEBHOOK_URL: 'Mattermost incoming-webhook URL',
-  BUFF_MATRIX_HOMESERVER: 'Matrix homeserver base URL (e.g. https://matrix.org)',
-  BUFF_MATRIX_ACCESS_TOKEN: 'Matrix access token',
-  BUFF_WEBHOOK_URL: 'Generic webhook URL',
-  BUFF_BLUEBUBBLES_URL: 'BlueBubbles server URL',
-  BUFF_BLUEBUBBLES_PASSWORD: 'BlueBubbles password',
-  BUFF_NTFY_TOPIC: 'ntfy topic (defaults to https://ntfy.sh)',
-  BUFF_TEAMS_WEBHOOK_URL: 'Teams incoming-webhook URL',
-  BUFF_GOOGLE_CHAT_WEBHOOK_URL: 'Google Chat space webhook URL',
-  BUFF_WEIXIN_TOKEN: 'Weixin iLink bot token',
+  NUVIRA_TELEGRAM_TOKEN: 'Telegram bot token (from @BotFather)',
+  NUVIRA_DISCORD_BOT_TOKEN: 'Discord bot token',
+  NUVIRA_SLACK_BOT_TOKEN: 'Slack bot token',
+  NUVIRA_WHATSAPP_SESSION_DIR: 'WhatsApp session dir (leave default unless moved)',
+  NUVIRA_WHATSAPP_TOKEN: 'Meta Cloud API token',
+  NUVIRA_DINGTALK_WEBHOOK_URL: 'DingTalk robot webhook URL',
+  NUVIRA_FEISHU_WEBHOOK_URL: 'Feishu bot webhook URL',
+  NUVIRA_WECOM_WEBHOOK_URL: 'WeCom group-bot webhook URL',
+  NUVIRA_MATTERMOST_WEBHOOK_URL: 'Mattermost incoming-webhook URL',
+  NUVIRA_MATRIX_HOMESERVER: 'Matrix homeserver base URL (e.g. https://matrix.org)',
+  NUVIRA_MATRIX_ACCESS_TOKEN: 'Matrix access token',
+  NUVIRA_WEBHOOK_URL: 'Generic webhook URL',
+  NUVIRA_BLUEBUBBLES_URL: 'BlueBubbles server URL',
+  NUVIRA_BLUEBUBBLES_PASSWORD: 'BlueBubbles password',
+  NUVIRA_NTFY_TOPIC: 'ntfy topic (defaults to https://ntfy.sh)',
+  NUVIRA_TEAMS_WEBHOOK_URL: 'Teams incoming-webhook URL',
+  NUVIRA_GOOGLE_CHAT_WEBHOOK_URL: 'Google Chat space webhook URL',
+  NUVIRA_WEIXIN_TOKEN: 'Weixin iLink bot token',
   TWILIO_ACCOUNT_SID: 'Twilio account SID',
   TWILIO_AUTH_TOKEN: 'Twilio auth token',
   TWILIO_PHONE_NUMBER: 'Twilio sender phone number (E.164)',
   IRC_SERVER: 'IRC server host (e.g. irc.libera.chat)',
   SIMPLEX_WS_URL: 'SimpleX daemon WebSocket URL (ws://127.0.0.1:5225)',
   HASS_TOKEN: 'Home Assistant long-lived access token',
-  BUFF_SMTP_HOST: 'SMTP relay host (e.g. smtp.gmail.com:587)',
-  BUFF_SMTP_USER: 'SMTP auth user',
-  BUFF_SIGNAL_ACCOUNT: 'Signal account number (registered with signal-cli-rest-api)',
+  NUVIRA_SMTP_HOST: 'SMTP relay host (e.g. smtp.gmail.com:587)',
+  NUVIRA_SMTP_USER: 'SMTP auth user',
+  NUVIRA_SIGNAL_ACCOUNT: 'Signal account number (registered with signal-cli-rest-api)',
 };
 
 export function platformEnvVarMeta(platform: Platform): PlatformEnvVarMeta[] {
@@ -75,16 +76,16 @@ export function configurablePlatforms(): Platform[] {
   );
 }
 
-// ─── ~/.buff/.env read/write (line-preserving merge) ────────────────────────
+// ─── ~/.nuvira/.env read/write (line-preserving merge) ────────────────────────
 
 export function envFilePath(): string {
   if (process.env.NUVIRA_ENV_FILE && process.env.NUVIRA_ENV_FILE.trim().length > 0)
     return process.env.NUVIRA_ENV_FILE;
-  const override = process.env.BUFF_ENV_FILE;
+  const override = envBuff('ENV_FILE');
   if (override && override.trim().length > 0) return override;
   const nuviraEnv = join(homedir(), '.nuvira', '.env');
   if (existsSync(nuviraEnv)) return nuviraEnv;
-  return join(homedir(), '.buff', '.env');
+  return join(resolveNuviraHome(), '.env');
 }
 
 export interface EnvVarState {
@@ -116,7 +117,7 @@ export function platformConfigStatus(platform: Platform): PlatformConfigStatus {
     platform,
     label: PLATFORM_LABELS[platform],
     // The env FILE counts as effective too (loadEnv() merges it at startup) —
-    // so a token written to ~/.buff/.env shows as configured even before the
+    // so a token written to ~/.nuvira/.env shows as configured even before the
     // next process restart.
     configured: envVars.every((v) => v.set),
     envVars,

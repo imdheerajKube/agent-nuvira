@@ -29,22 +29,22 @@ beforeEach(() => {
   cfgDir = mkdtempSync(join(tmpdir(), 'buff-hub-cfg-'));
   memDir = mkdtempSync(join(tmpdir(), 'buff-hub-mem-'));
   cwdDir = mkdtempSync(join(tmpdir(), 'buff-hub-cwd-'));
-  envBackup.BUFF_CONFIG_DIR = process.env.BUFF_CONFIG_DIR;
-  envBackup.BUFF_MEMORY_DIR = process.env.BUFF_MEMORY_DIR;
-  process.env.BUFF_CONFIG_DIR = cfgDir;
-  process.env.BUFF_MEMORY_DIR = memDir;
+  envBackup.NUVIRA_CONFIG_DIR = process.env.NUVIRA_CONFIG_DIR;
+  envBackup.NUVIRA_MEMORY_DIR = process.env.NUVIRA_MEMORY_DIR;
+  process.env.NUVIRA_CONFIG_DIR = cfgDir;
+  process.env.NUVIRA_MEMORY_DIR = memDir;
   process.chdir(cwdDir);
 });
 
 afterEach(() => {
-  // The SkillStore singleton is homedir-backed (~/.buff/skills) — reset it so
+  // The SkillStore singleton is homedir-backed (~/.nuvira/skills) — reset it so
   // no seeded-bundled-skill state leaks between tests in this worker.
   resetSkillStore();
   process.chdir(tmpdir());
-  if (envBackup.BUFF_CONFIG_DIR === undefined) delete process.env.BUFF_CONFIG_DIR;
-  else process.env.BUFF_CONFIG_DIR = envBackup.BUFF_CONFIG_DIR;
-  if (envBackup.BUFF_MEMORY_DIR === undefined) delete process.env.BUFF_MEMORY_DIR;
-  else process.env.BUFF_MEMORY_DIR = envBackup.BUFF_MEMORY_DIR;
+  if (envBackup.NUVIRA_CONFIG_DIR === undefined) delete process.env.NUVIRA_CONFIG_DIR;
+  else process.env.NUVIRA_CONFIG_DIR = envBackup.NUVIRA_CONFIG_DIR;
+  if (envBackup.NUVIRA_MEMORY_DIR === undefined) delete process.env.NUVIRA_MEMORY_DIR;
+  else process.env.NUVIRA_MEMORY_DIR = envBackup.NUVIRA_MEMORY_DIR;
   for (const d of [cfgDir, memDir, cwdDir]) {
     try { rmSync(d, { recursive: true, force: true }); } catch { /* best-effort */ }
   }
@@ -224,9 +224,9 @@ describe('readHubData', () => {
     // what a recipient ALIAS actually maps to ("Alex → +919876543210") — so a
     // user never sees a bare personal name without its number.
     const waDir = mkdtempSync(join(tmpdir(), 'buff-hub-wa-'));
-    const prev = process.env.BUFF_WHATSAPP_SESSION_DIR;
+    const prev = process.env.NUVIRA_WHATSAPP_SESSION_DIR;
     try {
-      process.env.BUFF_WHATSAPP_SESSION_DIR = waDir;
+      process.env.NUVIRA_WHATSAPP_SESSION_DIR = waDir;
       mkdirSync(waDir, { recursive: true });
       writeFileSync(join(waDir, 'contacts.json'), JSON.stringify({ Alex: '919876543210', Sam: '919999999999' }), 'utf-8');
       writeFileSync(
@@ -245,14 +245,14 @@ describe('readHubData', () => {
       // slack:ops has no display entry — the panel falls back to the raw target.
       expect(hub.channels.statusRecipientDisplay['slack:ops']).toBeUndefined();
     } finally {
-      if (prev === undefined) delete process.env.BUFF_WHATSAPP_SESSION_DIR;
-      else process.env.BUFF_WHATSAPP_SESSION_DIR = prev;
+      if (prev === undefined) delete process.env.NUVIRA_WHATSAPP_SESSION_DIR;
+      else process.env.NUVIRA_WHATSAPP_SESSION_DIR = prev;
       try { rmSync(waDir, { recursive: true, force: true }); } catch { /* best-effort */ }
     }
   });
 
   it('reflects gateway.policies from the config file (the Permissions page source)', () => {
-    // What `buff config gateway allow …` / the policies API write:
+    // What `nuvira config gateway allow …` / the policies API write:
     writeFileSync(
       join(cfgDir, 'buffconfig.json'),
       JSON.stringify({
@@ -272,7 +272,7 @@ describe('readHubData', () => {
   });
 
   it('surfaces the saved verified contacts (name + contact no) on channels', () => {
-    // What the policies API PUT writes (~/.buff/gateway/contacts.json):
+    // What the policies API PUT writes (~/.nuvira/gateway/contacts.json):
     mkdirSync(join(cfgDir, 'gateway'), { recursive: true });
     writeFileSync(
       join(cfgDir, 'gateway', 'contacts.json'),
@@ -319,18 +319,18 @@ describe('readHubData', () => {
   });
 
   it('reflects SMTP env vars in the platform status (email configured)', () => {
-    const saved = { host: process.env.BUFF_SMTP_HOST, user: process.env.BUFF_SMTP_USER };
-    process.env.BUFF_SMTP_HOST = 'smtp.example.com';
-    process.env.BUFF_SMTP_USER = 'bot';
+    const saved = { host: process.env.NUVIRA_SMTP_HOST, user: process.env.NUVIRA_SMTP_USER };
+    process.env.NUVIRA_SMTP_HOST = 'smtp.example.com';
+    process.env.NUVIRA_SMTP_USER = 'bot';
     try {
       const hub = readHubData();
       const email = hub.channels.platforms.find((p) => p.platform === 'email');
       expect(email?.configured).toBe(true);
     } finally {
-      if (saved.host === undefined) delete process.env.BUFF_SMTP_HOST;
-      else process.env.BUFF_SMTP_HOST = saved.host;
-      if (saved.user === undefined) delete process.env.BUFF_SMTP_USER;
-      else process.env.BUFF_SMTP_USER = saved.user;
+      if (saved.host === undefined) delete process.env.NUVIRA_SMTP_HOST;
+      else process.env.NUVIRA_SMTP_HOST = saved.host;
+      if (saved.user === undefined) delete process.env.NUVIRA_SMTP_USER;
+      else process.env.NUVIRA_SMTP_USER = saved.user;
     }
   });
 

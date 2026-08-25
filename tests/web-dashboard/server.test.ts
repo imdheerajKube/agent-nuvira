@@ -6,7 +6,7 @@
  * server started on a random port.
  *
  * Fixture data is written to a temp directory (via mocked homedir)
- * so tests work without a real ~/.buff/memory/ directory.
+ * so tests work without a real ~/.nuvira/memory/ directory.
  */
 
 import { describe, it, expect, beforeAll, afterAll, vi } from 'vitest';
@@ -18,7 +18,7 @@ import { join } from 'node:path';
 
 const TMP_BASE = process.env.TMPDIR || process.env.TMP || '/tmp';
 const testDir = mkdtempSync(join(TMP_BASE, 'buff-dashboard-test-'));
-const memoryDir = join(testDir, '.buff', 'memory');
+const memoryDir = join(testDir, '.nuvira', 'memory');
 
 // Create the memory directory structure
 mkdirSync(memoryDir, { recursive: true });
@@ -27,9 +27,9 @@ mkdirSync(memoryDir, { recursive: true });
 // read at import time). Pinning BUFF_MEMORY_DIR keeps the suite hermetic even
 // for developers who export it in their shell — otherwise the server would read
 // fixtures from the real memory dir while the tests write to the temp one.
-process.env.BUFF_DASHBOARD_PORT = '0';
-process.env.BUFF_DASHBOARD_HOST = '127.0.0.1';
-process.env.BUFF_MEMORY_DIR = memoryDir;
+process.env.NUVIRA_DASHBOARD_PORT = '0';
+process.env.NUVIRA_DASHBOARD_HOST = '127.0.0.1';
+process.env.NUVIRA_MEMORY_DIR = memoryDir;
 
 // Mock node:os so the server reads from our temp directory
 // NOTE: vi.mock is hoisted above imports, so importing from node:os in this
@@ -458,7 +458,7 @@ describe('Dashboard Server', () => {
       expect(body.vectors).toBe(0);
       expect(body.agentStats).toBeNull();
       // Normalize Windows backslashes before the substring check
-      expect(String(body.memoryDir).replace(/\\/g, '/')).toContain('.buff/memory');
+      expect(String(body.memoryDir).replace(/\\/g, '/')).toContain('.nuvira/memory');
     });
 
     it('GET /api/all returns combined empty data', async () => {
@@ -1099,8 +1099,8 @@ describe('Dashboard Server', () => {
 
     it('GET /api/routing surfaces the admin governance policy (P6 M6.5)', async () => {
       // readGovernanceData reads routing.governance from the mocked homedir's
-      // buffconfig.json — the SAME file `buff admin` writes.
-      const configPath = join(testDir, '.buff', 'buffconfig.json');
+      // buffconfig.json — the SAME file `nuvira admin` writes.
+      const configPath = join(testDir, '.nuvira', 'buffconfig.json');
       try {
         writeFileSync(configPath, JSON.stringify({
           defaultProvider: 'local',
@@ -1131,7 +1131,7 @@ describe('Dashboard Server', () => {
     });
 
     it('GET /api/routing reports a fully permissive governance policy when unset', async () => {
-      const configPath = join(testDir, '.buff', 'buffconfig.json');
+      const configPath = join(testDir, '.nuvira', 'buffconfig.json');
       try { rmSync(configPath, { force: true }); } catch { /* ignore */ }
       const res = await httpGet(`${baseUrl}/api/routing`);
       const body = JSON.parse(res.body);
@@ -1142,12 +1142,12 @@ describe('Dashboard Server', () => {
     it('GET /api/routing honors BUFF_CONFIG_DIR over the homedir config', async () => {
       // The server's governance reader resolves the config via the shared
       // BUFF_CONFIG_DIR-aware path helper — a hermetic/alt config dir must win
-      // over the mocked homedir's ~/.buff/buffconfig.json.
+      // over the mocked homedir's ~/.nuvira/nuviraconfig.json.
       const altDir = mkdtempSync(join(TMP_BASE, 'buff-alt-config-'));
       const altConfigPath = join(altDir, 'buffconfig.json');
-      const prevConfigDir = process.env.BUFF_CONFIG_DIR;
+      const prevConfigDir = process.env.NUVIRA_CONFIG_DIR;
       // Make sure the mocked-homedir config is NOT the source of this policy.
-      const homedirConfigPath = join(testDir, '.buff', 'buffconfig.json');
+      const homedirConfigPath = join(testDir, '.nuvira', 'buffconfig.json');
       try {
         writeFileSync(altConfigPath, JSON.stringify({
           routing: { governance: { allowProviders: ['openrouter'], maxCostUsd: 0.5 } },
@@ -1155,7 +1155,7 @@ describe('Dashboard Server', () => {
         writeFileSync(homedirConfigPath, JSON.stringify({
           routing: { governance: { allowProviders: ['gemini'], maxCostUsd: 9.9 } },
         }), 'utf-8');
-        process.env.BUFF_CONFIG_DIR = altDir;
+        process.env.NUVIRA_CONFIG_DIR = altDir;
 
         const res = await httpGet(`${baseUrl}/api/routing`);
         const body = JSON.parse(res.body);
@@ -1163,18 +1163,18 @@ describe('Dashboard Server', () => {
         expect(body.governance.allowProviders).toEqual(['openrouter']);
         expect(body.governance.maxCostUsd).toBe(0.5);
       } finally {
-        if (prevConfigDir === undefined) delete process.env.BUFF_CONFIG_DIR;
-        else process.env.BUFF_CONFIG_DIR = prevConfigDir;
+        if (prevConfigDir === undefined) delete process.env.NUVIRA_CONFIG_DIR;
+        else process.env.NUVIRA_CONFIG_DIR = prevConfigDir;
         try { rmSync(altDir, { recursive: true, force: true }); } catch { /* ignore */ }
         try { rmSync(homedirConfigPath, { force: true }); } catch { /* ignore */ }
       }
     });
 
     it('GET /api/routing surfaces the RBAC role file (P6 M6.1)', async () => {
-      // readRbacData reads ~/.buff/rbac.json (mocked homedir) — the SAME file
-      // `buff admin role add` writes.
-      const rbacPath = join(testDir, '.buff', 'rbac.json');
-      const prevActAs = process.env.BUFF_ACT_AS;
+      // readRbacData reads ~/.nuvira/rbac.json (mocked homedir) — the SAME file
+      // `nuvira admin role add` writes.
+      const rbacPath = join(testDir, '.nuvira', 'rbac.json');
+      const prevActAs = process.env.NUVIRA_ACT_AS;
       try {
         writeFileSync(rbacPath, JSON.stringify({
           version: 1,
@@ -1183,7 +1183,7 @@ describe('Dashboard Server', () => {
             bob: { role: 'viewer', addedAt: Date.now(), via: 'local' },
           },
         }), 'utf-8');
-        process.env.BUFF_ACT_AS = 'alice';
+        process.env.NUVIRA_ACT_AS = 'alice';
 
         const res = await httpGet(`${baseUrl}/api/routing`);
         expect(res.statusCode).toBe(200);
@@ -1196,14 +1196,14 @@ describe('Dashboard Server', () => {
         expect(body.rbac.users[0].user).toBe('alice');
         expect(typeof body.rbac.updatedAt).toBe('number');
       } finally {
-        if (prevActAs === undefined) delete process.env.BUFF_ACT_AS;
-        else process.env.BUFF_ACT_AS = prevActAs;
+        if (prevActAs === undefined) delete process.env.NUVIRA_ACT_AS;
+        else process.env.NUVIRA_ACT_AS = prevActAs;
         try { rmSync(rbacPath, { force: true }); } catch { /* ignore */ }
       }
     });
 
     it('GET /api/routing reports legacy RBAC mode when no role file exists', async () => {
-      const rbacPath = join(testDir, '.buff', 'rbac.json');
+      const rbacPath = join(testDir, '.nuvira', 'rbac.json');
       try { rmSync(rbacPath, { force: true }); } catch { /* ignore */ }
       const res = await httpGet(`${baseUrl}/api/routing`);
       const body = JSON.parse(res.body);
@@ -1772,7 +1772,7 @@ describe('Dashboard Server', () => {
       // start a fresh server: with routing.alwaysWatchQuota=true the watcher
       // arms AT STARTUP (before any SSE client) and is NEVER disarmed by the
       // client count — so quota state stays warm between dashboard sessions.
-      const configPath = join(testDir, '.buff', 'buffconfig.json');
+      const configPath = join(testDir, '.nuvira', 'buffconfig.json');
       writeFileSync(configPath, JSON.stringify({ routing: { alwaysWatchQuota: true } }));
       const srv2 = createDashboardServer();
       try {
@@ -1912,7 +1912,7 @@ describe('Dashboard Server', () => {
 // ═══════════════════════════════════════════════════════════════════════
 
 describe('Session 36 — user-declared daily budget (/api/admin/quota)', () => {
-  const buffDir = join(testDir, '.buff');
+  const buffDir = join(testDir, '.nuvira');
   const adminConfig = join(buffDir, 'buffconfig.json');
   const rbacFile = join(buffDir, 'rbac.json');
   let adminToken: string;
@@ -2013,7 +2013,7 @@ describe('Session 36 — user-declared daily budget (/api/admin/quota)', () => {
 // ═══════════════════════════════════════════════════════════════════════
 
 describe('Session 37 — Agent Hub skill toggles (/api/admin/hub/skills/<name>)', () => {
-  const buffDir = join(testDir, '.buff');
+  const buffDir = join(testDir, '.nuvira');
   const adminConfig = join(buffDir, 'buffconfig.json');
   const rbacFile = join(buffDir, 'rbac.json');
   let adminToken: string;
@@ -2038,7 +2038,7 @@ describe('Session 37 — Agent Hub skill toggles (/api/admin/hub/skills/<name>)'
 
   beforeAll(async () => {
     mkdirSync(buffDir, { recursive: true });
-    // Session 36's setup persists the admin user (~/.buff/dashboard-admin.json)
+    // Session 36's setup persists the admin user (~/.nuvira/dashboard-admin.json)
     // — clear it so THIS setup actually registers a fresh admin + token.
     rmSync(join(buffDir, 'dashboard-admin.json'), { force: true });
     rmSync(adminConfig, { force: true });
@@ -2092,14 +2092,14 @@ describe('Session 37 — Agent Hub skill toggles (/api/admin/hub/skills/<name>)'
 });
 
 // Session 38 — Agent Hub channel send-test (/api/admin/hub/channels/send)
-// I11: the dashboard mirrors `buff gateway send <target> <text>` — the target
+// I11: the dashboard mirrors `nuvira gateway send <target> <text>` — the target
 // resolves through the SAME ChannelDirectory and sends through the SAME
 // GatewayRegistry + configured adapters the CLI uses. Gated by routing.operate
 // (admin or operator) exactly like the toolset/skill toggles.
 // ═══════════════════════════════════════════════════════════════════════
 
 describe('Session 38 — Agent Hub channel send-test (/api/admin/hub/channels/send)', () => {
-  const buffDir = join(testDir, '.buff');
+  const buffDir = join(testDir, '.nuvira');
   const adminConfig = join(buffDir, 'buffconfig.json');
   const rbacFile = join(buffDir, 'rbac.json');
   let adminToken: string;
@@ -2133,7 +2133,7 @@ describe('Session 38 — Agent Hub channel send-test (/api/admin/hub/channels/se
     rmSync(adminConfig, { force: true });
     rmSync(rbacFile, { force: true });
     // Never leak a configured webhook into other tests in this worker.
-    delete process.env.BUFF_WEBHOOK_URL;
+    delete process.env.NUVIRA_WEBHOOK_URL;
   });
 
   it('POST without a token is rejected (401)', async () => {
@@ -2155,7 +2155,7 @@ describe('Session 38 — Agent Hub channel send-test (/api/admin/hub/channels/se
   });
 
   it('POST to a platform whose adapter is not configured fails cleanly (400)', async () => {
-    delete process.env.BUFF_WEBHOOK_URL;
+    delete process.env.NUVIRA_WEBHOOK_URL;
     const r = await jsonReq('/api/admin/hub/channels/send', 'POST', { target: 'webhook:any', text: 'hi' }, adminToken);
     expect(r.status).toBe(400);
     expect(String(r.data.error)).toContain('not configured');
@@ -2163,7 +2163,7 @@ describe('Session 38 — Agent Hub channel send-test (/api/admin/hub/channels/se
 
   it('POST with an admin token sends through the configured adapter (200)', async () => {
     // A local capture server stands in for the webhook endpoint — the SAME
-    // GenericWebhookAdapter (`buff gateway send webhook:...`) the CLI uses.
+    // GenericWebhookAdapter (`nuvira gateway send webhook:...`) the CLI uses.
     const received: Array<{ url: string; body: unknown }> = [];
     const capture = createServer((req, res) => {
       let raw = '';
@@ -2179,7 +2179,7 @@ describe('Session 38 — Agent Hub channel send-test (/api/admin/hub/channels/se
     const addr = await new Promise<{ port: number }>((resolve) =>
       capture.listen(0, '127.0.0.1', () => resolve(capture.address() as { port: number })),
     );
-    process.env.BUFF_WEBHOOK_URL = `http://127.0.0.1:${addr.port}/ingest`;
+    process.env.NUVIRA_WEBHOOK_URL = `http://127.0.0.1:${addr.port}/ingest`;
     try {
       const r = await jsonReq('/api/admin/hub/channels/send', 'POST', { target: 'webhook:any', text: 'hello dashboard' }, adminToken);
       expect(r.status).toBe(200);
@@ -2191,7 +2191,7 @@ describe('Session 38 — Agent Hub channel send-test (/api/admin/hub/channels/se
       expect(received[0].body).toEqual({ text: 'hello dashboard' });
     } finally {
       await new Promise<void>((resolve) => capture.close(() => resolve()));
-      delete process.env.BUFF_WEBHOOK_URL;
+      delete process.env.NUVIRA_WEBHOOK_URL;
     }
   });
 

@@ -14,7 +14,7 @@ import { tmpdir } from 'node:os';
 import { TaskRunner, type TaskEventPayload } from '../../src/web-dashboard/task-runner.js';
 
 const FIXTURE = `
-const mode = process.env.BUFF_TASK_FIXTURE_MODE || 'ok';
+const mode = process.env.NUVIRA_TASK_FIXTURE_MODE || 'ok';
 if (mode === 'ok') {
   console.log('fixture-ok');
   console.error('fixture-err');
@@ -44,7 +44,7 @@ afterAll(() => {
 });
 
 afterEach(() => {
-  delete process.env.BUFF_TASK_FIXTURE_MODE;
+  delete process.env.NUVIRA_TASK_FIXTURE_MODE;
 });
 
 function makeRunner(): TaskRunner {
@@ -76,7 +76,7 @@ function waitForStatus(
 
 describe('TaskRunner', () => {
   it('captures stdout+stderr and settles done on exit 0', async () => {
-    process.env.BUFF_TASK_FIXTURE_MODE = 'ok';
+    process.env.NUVIRA_TASK_FIXTURE_MODE = 'ok';
     const runner = makeRunner();
     const { ok, task } = runner.start(['--whatever'], { timeoutMs: 10_000 });
     expect(ok).toBe(true);
@@ -95,7 +95,7 @@ describe('TaskRunner', () => {
   });
 
   it('marks failed with the exit code on non-zero exit', async () => {
-    process.env.BUFF_TASK_FIXTURE_MODE = 'fail';
+    process.env.NUVIRA_TASK_FIXTURE_MODE = 'fail';
     const runner = makeRunner();
     const { task } = runner.start(['x'], { timeoutMs: 10_000 });
     const status = await waitForStatus(runner, task!.id);
@@ -104,7 +104,7 @@ describe('TaskRunner', () => {
   });
 
   it('passes args through to the CLI entry', async () => {
-    process.env.BUFF_TASK_FIXTURE_MODE = 'echo';
+    process.env.NUVIRA_TASK_FIXTURE_MODE = 'echo';
     const runner = makeRunner();
     const { task } = runner.start(['eval', 'run', '--task', 'smoke-test'], { timeoutMs: 10_000 });
     const status = await waitForStatus(runner, task!.id);
@@ -114,7 +114,7 @@ describe('TaskRunner', () => {
   });
 
   it('cancel() terminates a long-running task → cancelled', async () => {
-    process.env.BUFF_TASK_FIXTURE_MODE = 'sleep';
+    process.env.NUVIRA_TASK_FIXTURE_MODE = 'sleep';
     const runner = makeRunner();
     const { task } = runner.start(['sleep'], { timeoutMs: 60_000 });
     // Give the child a tick to spawn before SIGTERM.
@@ -125,7 +125,7 @@ describe('TaskRunner', () => {
   });
 
   it('timeout kills a long-running task → timeout', async () => {
-    process.env.BUFF_TASK_FIXTURE_MODE = 'sleep';
+    process.env.NUVIRA_TASK_FIXTURE_MODE = 'sleep';
     const runner = makeRunner();
     const { task } = runner.start(['sleep'], { timeoutMs: 300 });
     const status = await waitForStatus(runner, task!.id);
@@ -136,7 +136,7 @@ describe('TaskRunner', () => {
     // Regression: the dashboard's "Start gateway" preset used the default
     // 5-minute task timeout, so a foreground gateway was SIGTERM'd while the
     // user believed it was still running. timeoutMs 0 = run forever.
-    process.env.BUFF_TASK_FIXTURE_MODE = 'sleep';
+    process.env.NUVIRA_TASK_FIXTURE_MODE = 'sleep';
     const runner = makeRunner();
     const { task } = runner.start(['sleep'], { timeoutMs: 0 });
     // Well past the 300ms timeout of the test above: it must STILL be running.
@@ -160,7 +160,7 @@ describe('TaskRunner', () => {
   // all (they're instant-exit 'ok' fixtures), then wait for the whole batch
   // with one generous deadline (Windows-CI hardening).
   it('list() returns newest first and caps history at 50', async () => {
-    process.env.BUFF_TASK_FIXTURE_MODE = 'ok';
+    process.env.NUVIRA_TASK_FIXTURE_MODE = 'ok';
     const runner = makeRunner();
     const ids: string[] = [];
     for (let i = 0; i < 55; i++) {

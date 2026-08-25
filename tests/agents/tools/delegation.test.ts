@@ -407,7 +407,7 @@ describe('delegation — context isolation + files', () => {
 });
 
 describe('delegation — registry integration', () => {
-  it('registers the delegate tool so `buff tools list` shows delegation', () => {
+  it('registers the delegate tool so `nuvira tools list` shows delegation', () => {
     const tool = getTool('delegate');
     expect(tool).toBeDefined();
     expect(tool!.category).toBe('workflow');

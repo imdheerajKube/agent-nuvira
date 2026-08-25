@@ -38,7 +38,7 @@ export class SkillsSyncManager {
 
   constructor(options: { bundledDir?: string; targetDir?: string } = {}) {
     this.bundledDir = options.bundledDir || join(process.cwd(), 'skills');
-    this.targetDir = options.targetDir || join(process.env.HOME || '~', '.buff', 'skills');
+    this.targetDir = options.targetDir || join(process.env.HOME || '~', '.nuvira', 'skills');
     this.manifestFile = join(this.targetDir, '.bundled_manifest');
   }
 

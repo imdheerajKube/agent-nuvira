@@ -16,7 +16,7 @@ import type { TaskStep } from '../../src/agents/agent.js';
 
 /** Create an in-memory ConfigManager that won't touch disk */
 function createTestConfigManager(): ConfigManager {
-  // ConfigManager's constructor reads ~/.buff/config.json, but we test
+  // ConfigManager's constructor reads ~/.nuvira/config.json, but we test
   // the command structure, not execution, so a real instance is fine.
   return new ConfigManager();
 }

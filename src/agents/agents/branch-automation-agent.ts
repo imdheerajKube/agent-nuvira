@@ -8,13 +8,14 @@
  * 4. CI Status → Fix: When CI fails on a PR, detect failure, fix it, push
  *
  * Usage:
- * - `buff execute "install branch hooks" --auto-branch`
- * - `buff execute "auto-create branch from issue PROJ-123" --auto-branch`
- * - `buff execute "auto-commit changes" --auto-branch`
- * - `buff execute "fix CI for PR #42" --auto-branch`
+ * - `nuvira execute "install branch hooks" --auto-branch`
+ * - `nuvira execute "auto-create branch from issue PROJ-123" --auto-branch`
+ * - `nuvira execute "auto-commit changes" --auto-branch`
+ * - `nuvira execute "fix CI for PR #42" --auto-branch`
  */
 
 import { existsSync, readFileSync, writeFileSync, mkdirSync, openSync } from 'node:fs';
+import { resolveNuviraHome } from '../../config/paths';
 import { join } from 'node:path';
 import { homedir, tmpdir } from 'node:os';
 import { execSync, spawn } from 'node:child_process';
@@ -170,10 +171,10 @@ export class BranchAutomationAgent extends Agent {
           '✅ file-watch script — auto-commit on file changes',
           '',
           `Hooks installed in: ${join(repoPath, '.git', 'hooks')}`,
-          `File-watch script: ${join(homedir(), '.buff', 'hooks', 'file-watch.sh')}`,
+          `File-watch script: ${join(resolveNuviraHome(), 'hooks', 'file-watch.sh')}`,
           '',
-          'To start file-watch: buff execute "start file watch" --auto-branch',
-          'To remove hooks: buff execute "remove branch hooks" --auto-branch',
+          'To start file-watch: nuvira execute "start file watch" --auto-branch',
+          'To remove hooks: nuvira execute "remove branch hooks" --auto-branch',
         ].join('\n'),
       };
     }
@@ -365,7 +366,7 @@ export class BranchAutomationAgent extends Agent {
   // ─── File Watch → Commit ──────────────────────────────────────────────────
 
   private async handleFileWatch(repoPath: string): Promise<AgentResult> {
-    const hooksPath = join(homedir(), '.buff', 'hooks');
+    const hooksPath = join(resolveNuviraHome(), 'hooks');
     const watchScript = join(hooksPath, 'file-watch.sh');
 
     if (!existsSync(watchScript)) {
@@ -388,10 +389,10 @@ export class BranchAutomationAgent extends Agent {
     // the watcher's output is appended to a tmpdir log file on both.
     try {
       const isWindows = process.platform === 'win32';
-      const scriptPath = join(homedir(), '.buff', 'hooks', 'file-watch.sh');
+      const scriptPath = join(resolveNuviraHome(), 'hooks', 'file-watch.sh');
       const wrapperPath = join(
         homedir(),
-        '.buff',
+        '.nuvira',
         'hooks',
         isWindows ? 'file-watch.cmd' : 'file-watch.sh',
       );
@@ -440,7 +441,7 @@ export class BranchAutomationAgent extends Agent {
           `Log: ${logPath}`,
           '',
           'Auto-commits will be triggered when file changes are detected.',
-          'To stop: buff execute "stop file watch" --auto-branch',
+          'To stop: nuvira execute "stop file watch" --auto-branch',
         ].join('\n'),
       };
     } catch (err) {
@@ -577,10 +578,10 @@ Return your analysis and the specific fix needed.`;
         '---',
         '',
         'To apply the fix automatically:',
-        `  buff execute "Fix CI issues on ${branch}" --auto-branch`,
+        `  nuvira execute "Fix CI issues on ${branch}" --auto-branch`,
         '',
         'To run tests locally:',
-        '  buff execute "Run tests and fix failures"',
+        '  nuvira execute "Run tests and fix failures"',
         '',
         prNumber ? `PR: #${prNumber} on branch '${branch}'` : `Branch: ${branch}`,
       ].join('\n'),
@@ -612,11 +613,11 @@ Return your analysis and the specific fix needed.`;
     if (changedFiles.length > 0) {
       diagnostics.push('');
       diagnostics.push('💡 Suggested actions:');
-      diagnostics.push('  1. Auto-commit: buff execute "auto-commit changes" --auto-branch');
+      diagnostics.push('  1. Auto-commit: nuvira execute "auto-commit changes" --auto-branch');
 
       if (!hasHooks) {
-        diagnostics.push('  2. Install hooks: buff execute "install branch hooks" --auto-branch');
-        diagnostics.push('  3. Start file watch: buff execute "start file watch" --auto-branch');
+        diagnostics.push('  2. Install hooks: nuvira execute "install branch hooks" --auto-branch');
+        diagnostics.push('  3. Start file watch: nuvira execute "start file watch" --auto-branch');
       }
     } else if (issueInfo) {
       diagnostics.push('');
@@ -625,7 +626,7 @@ Return your analysis and the specific fix needed.`;
     } else if (!hasHooks) {
       diagnostics.push('');
       diagnostics.push('💡 Branch automation not configured.');
-      diagnostics.push('  Install hooks: buff execute "install branch hooks" --auto-branch');
+      diagnostics.push('  Install hooks: nuvira execute "install branch hooks" --auto-branch');
     }
 
     return {

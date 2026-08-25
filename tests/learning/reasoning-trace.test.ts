@@ -1,6 +1,6 @@
 /**
  * Tests for the reasoning-trace store (assessment P0) — per-step LLM capture
- * for `buff trace replay` and the dashboard TracePanel.
+ * for `nuvira trace replay` and the dashboard TracePanel.
  */
 
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
@@ -11,7 +11,7 @@ import { join } from 'node:path';
 // ─── Hermetic memory dir (set BEFORE importing the module) ─────────────────
 
 const testDir = mkdtempSync(join(tmpdir(), 'buff-trace-test-'));
-process.env.BUFF_MEMORY_DIR = join(testDir, '.buff', 'memory');
+process.env.NUVIRA_MEMORY_DIR = join(testDir, '.nuvira', 'memory');
 
 const {
   beginTrace,

@@ -496,7 +496,7 @@ export function analyzeStructure(
   // nodes with DIFFERENT starts but the SAME end — without the same-end
   // exclusion, each would look "nested" inside the other and BOTH would be
   // dropped (a pre-existing bug that silently removed top-level functions
-  // from the structure map; surfaced by `buff code-map`, Session 47).
+  // from the structure map; surfaced by `nuvira code-map`, Session 47).
   const topLevel: StructuralNode[] = [];
   for (const node of sorted) {
     const isNested = sorted.some(

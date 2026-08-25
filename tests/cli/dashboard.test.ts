@@ -164,8 +164,8 @@ describe('DashboardCommand', () => {
 
     vi.restoreAllMocks();
     Object.defineProperty(process, 'platform', { value: originalPlatform!, configurable: true });
-    delete process.env.BUFF_DASHBOARD_PORT;
-    delete process.env.BUFF_DASHBOARD_HOST;
+    delete process.env.NUVIRA_DASHBOARD_PORT;
+    delete process.env.NUVIRA_DASHBOARD_HOST;
   });
 
   // ── Default behavior ───────────────────────────────────────────────────
@@ -173,8 +173,8 @@ describe('DashboardCommand', () => {
   it('should use default port 3030 and host 127.0.0.1 when no options provided', async () => {
     await runDashboard(cmd, {});
 
-    expect(process.env.BUFF_DASHBOARD_PORT).toBe('3030');
-    expect(process.env.BUFF_DASHBOARD_HOST).toBe('127.0.0.1');
+    expect(process.env.NUVIRA_DASHBOARD_PORT).toBe('3030');
+    expect(process.env.NUVIRA_DASHBOARD_HOST).toBe('127.0.0.1');
     // The override must reach createDashboardServer explicitly — the server
     // reads it at call time (env alone is ignored due to import-time binding).
     expect(mockCreateDashboardServer).toHaveBeenCalledWith({ port: 3030, host: '127.0.0.1' });
@@ -232,8 +232,8 @@ describe('DashboardCommand', () => {
 
     expect(mockLogger.error).toHaveBeenCalledWith(expect.stringContaining('npm ERR! build failed'));
     expect(mockCreateDashboardServer).not.toHaveBeenCalled();
-    expect(process.env.BUFF_DASHBOARD_PORT).toBeUndefined();
-    expect(process.env.BUFF_DASHBOARD_HOST).toBeUndefined();
+    expect(process.env.NUVIRA_DASHBOARD_PORT).toBeUndefined();
+    expect(process.env.NUVIRA_DASHBOARD_HOST).toBeUndefined();
   });
 
   // ── --port flag ───────────────────────────────────────────────────────
@@ -241,7 +241,7 @@ describe('DashboardCommand', () => {
   it('should use custom port when --port is provided', async () => {
     await runDashboard(cmd, { port: 8080 });
 
-    expect(process.env.BUFF_DASHBOARD_PORT).toBe('8080');
+    expect(process.env.NUVIRA_DASHBOARD_PORT).toBe('8080');
     // Regression: the explicit port must be handed to createDashboardServer —
     // otherwise the server binds the import-time default (3030), silently
     // ignoring --port.
@@ -254,13 +254,13 @@ describe('DashboardCommand', () => {
   it('should use custom host when --host is provided', async () => {
     await runDashboard(cmd, { host: '0.0.0.0' });
 
-    expect(process.env.BUFF_DASHBOARD_HOST).toBe('0.0.0.0');
+    expect(process.env.NUVIRA_DASHBOARD_HOST).toBe('0.0.0.0');
   });
 
   it('should fall back to 127.0.0.1 when host is empty string', async () => {
     await runDashboard(cmd, { host: '' });
 
-    expect(process.env.BUFF_DASHBOARD_HOST).toBe('127.0.0.1');
+    expect(process.env.NUVIRA_DASHBOARD_HOST).toBe('127.0.0.1');
   });
 
   // ── --no-open flag ────────────────────────────────────────────────────
@@ -288,8 +288,8 @@ describe('DashboardCommand', () => {
     });
 
     expect(mockExecSync).toHaveBeenCalledWith('npm run build:dashboard', expect.any(Object));
-    expect(process.env.BUFF_DASHBOARD_PORT).toBe('9090');
-    expect(process.env.BUFF_DASHBOARD_HOST).toBe('0.0.0.0');
+    expect(process.env.NUVIRA_DASHBOARD_PORT).toBe('9090');
+    expect(process.env.NUVIRA_DASHBOARD_HOST).toBe('0.0.0.0');
     expect(mockSpawn).not.toHaveBeenCalled();
     expect(mockCreateDashboardServer).toHaveBeenCalledOnce();
   });

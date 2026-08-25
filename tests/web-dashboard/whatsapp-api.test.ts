@@ -15,7 +15,7 @@ import { join } from 'node:path';
 
 const TMP_BASE = process.env.TMPDIR || process.env.TMP || '/tmp';
 const testDir = mkdtempSync(join(TMP_BASE, 'buff-wa-api-'));
-const memoryDir = join(testDir, '.buff', 'memory');
+const memoryDir = join(testDir, '.nuvira', 'memory');
 mkdirSync(memoryDir, { recursive: true });
 const waSessionDir = join(testDir, 'wa-session');
 mkdirSync(waSessionDir, { recursive: true });
@@ -24,11 +24,11 @@ mkdirSync(waSessionDir, { recursive: true });
 // NOTE: no BUFF_DASHBOARD_ADMIN_PASSWORD — file-based auth, because the env
 // override is single-user (only the env user can log in) and this suite needs
 // a second, viewer-role user to exercise the RBAC gate on /api/whatsapp.
-// BUFF_CONFIG_DIR keeps admin.json / rbac.json hermetic (never the real ~/.buff).
-process.env.BUFF_DASHBOARD_PORT = '0';
-process.env.BUFF_DASHBOARD_HOST = '127.0.0.1';
-process.env.BUFF_MEMORY_DIR = memoryDir;
-process.env.BUFF_CONFIG_DIR = join(testDir, '.buff');
+// BUFF_CONFIG_DIR keeps admin.json / rbac.json hermetic (never the real ~/.nuvira).
+process.env.NUVIRA_DASHBOARD_PORT = '0';
+process.env.NUVIRA_DASHBOARD_HOST = '127.0.0.1';
+process.env.NUVIRA_MEMORY_DIR = memoryDir;
+process.env.NUVIRA_CONFIG_DIR = join(testDir, '.nuvira');
 
 const { createDashboardServer, setWhatsappPairingForTest } = await import('../../src/web-dashboard/server.js');
 const { WhatsAppPairingManager } = await import('../../src/web-dashboard/whatsapp-pairing.js');

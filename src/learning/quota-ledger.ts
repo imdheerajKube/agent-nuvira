@@ -17,11 +17,12 @@
  *   chat, and the orchestrator so exhausted providers sink below healthy ones
  *   BEFORE a call is made (predictive, not reactive).
  *
- * Persisted to ~/.buff/memory/quota-ledger.json (honors BUFF_MEMORY_DIR).
+ * Persisted to ~/.nuvira/memory/quota-ledger.json (honors NUVIRA_MEMORY_DIR).
  * All writes are best-effort — a failed write must never break routing.
  */
 
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
+import {envBuff, resolveNuviraHome} from '../config/paths';
 import { join } from 'node:path';
 import { homedir } from 'node:os';
 
@@ -106,12 +107,12 @@ export interface QuotaEvent {
 
 // ─── Storage ────────────────────────────────────────────────────────────────
 
-const DEFAULT_MEMORY_DIR = join(homedir(), '.buff', 'memory');
+const DEFAULT_MEMORY_DIR = join(resolveNuviraHome(), 'memory');
 const CURRENT_VERSION = 1;
 const DEFAULT_WINDOW_MS = 24 * 60 * 60 * 1000; // 24h default reset window
 
 function memoryDir(): string {
-  return process.env.BUFF_MEMORY_DIR || DEFAULT_MEMORY_DIR;
+  return envBuff('MEMORY_DIR') || DEFAULT_MEMORY_DIR;
 }
 
 function ledgerPath(): string {
@@ -403,7 +404,7 @@ export class QuotaLedger {
     }
   }
 
-  /** Clear the persisted timeline (used by `buff model quota reset`). */
+  /** Clear the persisted timeline (used by `nuvira model quota reset`). */
   clearEvents(): void {
     try {
       writeFileSync(eventsPath(), '', 'utf-8');
@@ -604,7 +605,7 @@ export class QuotaLedger {
     };
   }
 
-  /** Clear all entries (used by tests and `buff model quota reset`). */
+  /** Clear all entries (used by tests and `nuvira model quota reset`). */
   reset(): void {
     this.state = emptyState();
     this.save();
@@ -638,7 +639,7 @@ export class QuotaLedger {
         `resets in ${formatDuration(s.resetsInMs)}  ${state}`,
       );
     }
-    lines.push('', 'Reset: `buff model quota reset` · JSON: `buff model quota --json`');
+    lines.push('', 'Reset: `nuvira model quota reset` · JSON: `nuvira model quota --json`');
     return lines.join('\n');
   }
 }

@@ -29,12 +29,12 @@ let tempDir: string;
 
 beforeEach(() => {
   tempDir = mkdtempSync(join(tmpdir(), 'buff-promotion-test-'));
-  process.env.BUFF_MEMORY_DIR = tempDir;
+  process.env.NUVIRA_MEMORY_DIR = tempDir;
   resetRouterPromotion();
 });
 
 afterEach(() => {
-  delete process.env.BUFF_MEMORY_DIR;
+  delete process.env.NUVIRA_MEMORY_DIR;
   resetRouterPromotion();
   rmSync(tempDir, { recursive: true, force: true });
 });

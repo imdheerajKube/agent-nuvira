@@ -9,6 +9,7 @@
  */
 
 import { existsSync, readFileSync, writeFileSync, mkdirSync } from 'node:fs';
+import { resolveNuviraHome } from '../config/paths';
 import { join } from 'node:path';
 import { homedir } from 'node:os';
 import { createHash } from 'node:crypto';
@@ -45,7 +46,7 @@ export interface SchemaCacheConfig {
 
 // ─── Schema Cache ─────────────────────────────────────────────────────────
 
-const DEFAULT_CACHE_DIR = join(homedir(), '.buff', 'mcp', 'cache');
+const DEFAULT_CACHE_DIR = join(resolveNuviraHome(), 'mcp', 'cache');
 const DEFAULT_TTL_MS = 3600_000; // 1 hour
 const DEFAULT_MAX_SIZE = 10 * 1024 * 1024; // 10MB
 const CACHE_FILE = 'schemas.json';

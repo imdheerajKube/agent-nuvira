@@ -213,12 +213,12 @@ describe('exportCefLines / cefEscape', () => {
 describe('auditFilePath convenience', () => {
   it('resolves jsonl path honoring BUFF_MEMORY_DIR', async () => {
     const mod = await import('../../src/enterprise/audit-chain.js');
-    process.env.BUFF_MEMORY_DIR = join(tmpdir(), 'buff-audit-mem');
+    process.env.NUVIRA_MEMORY_DIR = join(tmpdir(), 'buff-audit-mem');
     try {
       expect(mod.auditFilePath('quota-events')).toContain('quota-events.jsonl');
       expect(existsSync(mod.auditFilePath('x'))).toBe(false);
     } finally {
-      delete process.env.BUFF_MEMORY_DIR;
+      delete process.env.NUVIRA_MEMORY_DIR;
     }
   });
 });

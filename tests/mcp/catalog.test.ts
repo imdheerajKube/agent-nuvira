@@ -1,7 +1,7 @@
 /**
  * I7 P2 — Curated MCP catalog tests (`src/mcp/catalog.ts`).
  *
- * Hermetic: installs/uninstalls write to a TEMP config dir (never ~/.buff/mcp),
+ * Hermetic: installs/uninstalls write to a TEMP config dir (never ~/.nuvira/mcp),
  * secrets resolve from the environment or explicit values, and nothing ever
  * touches the network.
  */

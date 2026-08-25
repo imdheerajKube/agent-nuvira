@@ -14,11 +14,12 @@
  *      alongside trajectory few-shots and coding patterns, so the planner
  *      avoids repeating past mistakes instead of rediscovering them.
  *
- * Persisted to ~/.buff/memory/failure-lessons.json (honors BUFF_MEMORY_DIR).
+ * Persisted to ~/.nuvira/memory/failure-lessons.json (honors NUVIRA_MEMORY_DIR).
  * The store is best-effort — a corrupt/missing file must never crash a run.
  */
 
 import { readFileSync, writeFileSync, existsSync, mkdirSync } from 'node:fs';
+import {envBuff, resolveNuviraHome} from '../config/paths';
 import { join } from 'node:path';
 import { homedir } from 'node:os';
 
@@ -95,11 +96,11 @@ const LESSONS_PER_EXTRACTION = 3;
 const MIN_FAILED_AGENTS = 1;
 
 /**
- * Resolve the memory dir lazily (per call) so tests that set `BUFF_MEMORY_DIR`
+ * Resolve the memory dir lazily (per call) so tests that set `NUVIRA_MEMORY_DIR`
  * are genuinely hermetic — same fix as trajectory-store.ts / pattern-extractor.ts.
  */
 function memoryDir(): string {
-  return process.env.BUFF_MEMORY_DIR || join(homedir(), '.buff', 'memory');
+  return envBuff('MEMORY_DIR') || join(resolveNuviraHome(), 'memory');
 }
 
 function failureLessonsPath(): string {
@@ -383,7 +384,7 @@ export class FailureLessonStore {
     return readData().lessons;
   }
 
-  /** Stats for the `buff learn status` / `learn lessons` surfaces. */
+  /** Stats for the `nuvira learn status` / `learn lessons` surfaces. */
   getStats(): {
     totalFailures: number;
     totalLessons: number;

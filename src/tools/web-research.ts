@@ -21,6 +21,7 @@
  */
 
 import { getCache } from '../context/cache.js';
+import { envBuff } from '../config/paths';
 
 // ─── Types ──────────────────────────────────────────────────────────────────
 
@@ -268,7 +269,7 @@ export function isAllowedReadUrl(url: string): boolean {
     return false;
   }
   if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') return false;
-  if (process.env.BUFF_WEB_ALLOW_PRIVATE === '1') return true;
+  if (envBuff('WEB_ALLOW_PRIVATE') === '1') return true;
   const host = parsed.hostname.toLowerCase();
   if (host === 'localhost' || host === '::1' || host.endsWith('.localhost')) return false;
   // IPv4: loopback 127/8, link-local 169.254/16, private 10/8, 172.16/12,

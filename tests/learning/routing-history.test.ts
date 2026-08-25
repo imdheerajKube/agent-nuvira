@@ -9,7 +9,7 @@
  * - Cap at MAX_ENTRIES (500) — keeps the most recent entries
  * - Resilience — missing/malformed files return empty state without throwing
  *
- * Uses BUFF_MEMORY_DIR pointed at a temp dir so tests never touch ~/.buff.
+ * Uses BUFF_MEMORY_DIR pointed at a temp dir so tests never touch ~/.nuvira.
  */
 
 import { describe, it, expect, beforeAll, afterAll, vi } from 'vitest';
@@ -20,14 +20,14 @@ import { join } from 'node:path';
 
 const TMP_BASE = process.env.TMPDIR || process.env.TMP || '/tmp';
 const testDir = mkdtempSync(join(TMP_BASE, 'buff-routing-history-test-'));
-process.env.BUFF_MEMORY_DIR = join(testDir, '.buff', 'memory');
+process.env.NUVIRA_MEMORY_DIR = join(testDir, '.nuvira', 'memory');
 
 // Import AFTER setting BUFF_MEMORY_DIR so the store writes to the temp dir
 const { recordRoutingDecision, getRoutingHistory, getRoutingUsageStats, clearRoutingHistory } =
   await import('../../src/learning/routing-history.js');
 
 afterAll(() => {
-  delete process.env.BUFF_MEMORY_DIR;
+  delete process.env.NUVIRA_MEMORY_DIR;
   rmSync(testDir, { recursive: true, force: true });
 });
 
@@ -151,7 +151,7 @@ describe('getRoutingUsageStats', () => {
     // The store always stamps now; inject an old timestamp directly via the file
     const { readFileSync, writeFileSync } = require('node:fs') as typeof import('node:fs');
     const { join: pathJoin } = require('node:path') as typeof import('node:path');
-    const file = pathJoin(testDir, '.buff', 'memory', 'routing-history.json');
+    const file = pathJoin(testDir, '.nuvira', 'memory', 'routing-history.json');
     const data = JSON.parse(readFileSync(file, 'utf-8'));
     data.entries[1].timestamp = Date.now() - 25 * 60 * 60 * 1000; // 25h ago
     writeFileSync(file, JSON.stringify(data, null, 2));
@@ -181,7 +181,7 @@ describe('resilience', () => {
   it('handles a corrupt store file without throwing', () => {
     const { writeFileSync } = require('node:fs') as typeof import('node:fs');
     const { join: pathJoin } = require('node:path') as typeof import('node:path');
-    const file = pathJoin(testDir, '.buff', 'memory', 'routing-history.json');
+    const file = pathJoin(testDir, '.nuvira', 'memory', 'routing-history.json');
     writeFileSync(file, '{broken json', 'utf-8');
     expect(() => getRoutingHistory()).not.toThrow();
     expect(getRoutingHistory()).toEqual([]);

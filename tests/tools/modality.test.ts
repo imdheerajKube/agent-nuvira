@@ -14,11 +14,11 @@ import { join } from 'node:path';
 const artDir = mkdtempSync(join(tmpdir(), 'buff-modality-art-'));
 
 beforeAll(() => {
-  process.env.BUFF_ARTIFACTS_DIR = artDir;
+  process.env.NUVIRA_ARTIFACTS_DIR = artDir;
 });
 
 afterAll(() => {
-  delete process.env.BUFF_ARTIFACTS_DIR;
+  delete process.env.NUVIRA_ARTIFACTS_DIR;
   rmSync(artDir, { recursive: true, force: true });
 });
 
@@ -70,8 +70,8 @@ describe('I2 browser', () => {
 
   it('open blocks private/loopback/metadata URLs (SSRF guard)', async () => {
     const page = fakePage();
-    const orig = process.env.BUFF_WEB_ALLOW_PRIVATE;
-    delete process.env.BUFF_WEB_ALLOW_PRIVATE;
+    const orig = process.env.NUVIRA_WEB_ALLOW_PRIVATE;
+    delete process.env.NUVIRA_WEB_ALLOW_PRIVATE;
     try {
       const blocked = await executeBrowserAction(page, 'open', { url: 'http://169.254.169.254/latest/meta-data' });
       expect(blocked.text).toContain('blocked');
@@ -79,8 +79,8 @@ describe('I2 browser', () => {
       const allowed = await executeBrowserAction(page, 'open', { url: 'https://example.com' });
       expect(allowed.text).not.toContain('blocked');
     } finally {
-      if (orig === undefined) delete process.env.BUFF_WEB_ALLOW_PRIVATE;
-      else process.env.BUFF_WEB_ALLOW_PRIVATE = orig;
+      if (orig === undefined) delete process.env.NUVIRA_WEB_ALLOW_PRIVATE;
+      else process.env.NUVIRA_WEB_ALLOW_PRIVATE = orig;
     }
   });
 
@@ -262,9 +262,9 @@ import { describeImage, isVisionAvailable } from '../../src/tools/modality/visio
 
 describe('I5 vision', () => {
   it('is available when a Gemini key is present', async () => {
-    process.env.BUFF_GEMINI_API_KEY = 'test-key';
+    process.env.NUVIRA_GEMINI_API_KEY = 'test-key';
     expect(await isVisionAvailable()).toBe(true);
-    delete process.env.BUFF_GEMINI_API_KEY;
+    delete process.env.NUVIRA_GEMINI_API_KEY;
   });
 
   it('is unavailable when Ollama is down and no Gemini key', async () => {
@@ -291,7 +291,7 @@ describe('I5 vision', () => {
   });
 
   it('describes via free Gemini vision when a key is set (mocked)', async () => {
-    process.env.BUFF_GEMINI_API_KEY = 'test-key';
+    process.env.NUVIRA_GEMINI_API_KEY = 'test-key';
     vi.stubGlobal(
       'fetch',
       vi.fn(async () => ({ ok: true, json: async () => ({ candidates: [{ content: { parts: [{ text: 'A diagram of the architecture.' }] } }] }) } as unknown as Response)),
@@ -301,6 +301,6 @@ describe('I5 vision', () => {
     const result = await describeImage(img);
     expect(result.ok).toBe(true);
     expect(result.description).toContain('diagram');
-    delete process.env.BUFF_GEMINI_API_KEY;
+    delete process.env.NUVIRA_GEMINI_API_KEY;
   });
 });
