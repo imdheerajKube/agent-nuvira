@@ -9,10 +9,11 @@
  * These patterns are injected alongside trajectory few-shot examples
  * when the PlannerAgent decomposes a new goal.
  *
- * Patterns are stored in ~/.buff/memory/patterns.json
+ * Patterns are stored in ~/.nuvira/memory/patterns.json
  */
 
 import { readFileSync, writeFileSync, existsSync, mkdirSync } from 'node:fs';
+import {envBuff, resolveNuviraHome} from '../config/paths';
 import { join } from 'node:path';
 import { homedir } from 'node:os';
 
@@ -58,12 +59,12 @@ interface PatternData {
 
 /**
  * Resolve the memory dir lazily (per call) so tests that set
- * `BUFF_MEMORY_DIR` are genuinely hermetic — a module-import-time capture
- * would silently keep reading/writing the real ~/.buff/memory (same fix as
+ * `NUVIRA_MEMORY_DIR` are genuinely hermetic — a module-import-time capture
+ * would silently keep reading/writing the real ~/.nuvira/memory (same fix as
  * vector-store.ts / trajectory-store.ts).
  */
 function memoryDir(): string {
-  return process.env.BUFF_MEMORY_DIR || join(homedir(), '.buff', 'memory');
+  return envBuff('MEMORY_DIR') || join(resolveNuviraHome(), 'memory');
 }
 
 function patternsPath(): string {

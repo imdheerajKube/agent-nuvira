@@ -14,6 +14,7 @@
  */
 
 import { createServer, type Server } from 'node:http';
+import { envBuff } from '../config/paths';
 import { createHmac, randomUUID, timingSafeEqual } from 'node:crypto';
 import { connect as netConnect, type Socket } from 'node:net';
 import { connect as tlsConnect, type TLSSocket } from 'node:tls';
@@ -60,7 +61,7 @@ export interface ChannelAdapter {
   readonly platform: Platform;
   /** True when the transport token/env is present (opt-in). */
   readonly configured: boolean;
-  /** Human description for `buff gateway status`. */
+  /** Human description for `nuvira gateway status`. */
   describe(): string;
   /** Start receiving inbound messages (long-poll or webhook server). */
   start(onMessage: MessageHandler): Promise<void>;
@@ -139,7 +140,7 @@ export class TelegramAdapter implements ChannelAdapter {
   private readonly pollIntervalMs: number;
 
   constructor(token?: string, pollIntervalMs = 1500) {
-    this.token = token ?? process.env.BUFF_TELEGRAM_TOKEN ?? '';
+    this.token = token ?? envBuff('TELEGRAM_TOKEN') ?? '';
     this.configured = Boolean(this.token);
     this.pollIntervalMs = pollIntervalMs;
   }
@@ -296,8 +297,8 @@ export class DiscordAdapter extends WebhookChannelAdapter {
 
   constructor() {
     super();
-    this.webhookUrl = process.env.BUFF_DISCORD_WEBHOOK_URL ?? '';
-    this.token = process.env.BUFF_DISCORD_BOT_TOKEN ?? '';
+    this.webhookUrl = envBuff('DISCORD_WEBHOOK_URL') ?? '';
+    this.token = envBuff('DISCORD_BOT_TOKEN') ?? '';
     this.configured = Boolean(this.webhookUrl || this.token);
   }
 
@@ -351,8 +352,8 @@ export class SlackAdapter extends WebhookChannelAdapter {
 
   constructor() {
     super();
-    this.webhookUrl = process.env.BUFF_SLACK_WEBHOOK_URL ?? '';
-    this.token = process.env.BUFF_SLACK_BOT_TOKEN ?? '';
+    this.webhookUrl = envBuff('SLACK_WEBHOOK_URL') ?? '';
+    this.token = envBuff('SLACK_BOT_TOKEN') ?? '';
     this.configured = Boolean(this.webhookUrl || this.token);
   }
 
@@ -383,8 +384,8 @@ export class WhatsAppCloudAdapter extends WebhookChannelAdapter {
 
   constructor() {
     super();
-    this.phoneId = process.env.BUFF_WHATSAPP_PHONE_ID ?? '';
-    this.token = process.env.BUFF_WHATSAPP_TOKEN ?? '';
+    this.phoneId = envBuff('WHATSAPP_PHONE_ID') ?? '';
+    this.token = envBuff('WHATSAPP_TOKEN') ?? '';
     this.configured = Boolean(this.phoneId && this.token);
   }
 
@@ -411,7 +412,7 @@ export class WhatsAppCloudAdapter extends WebhookChannelAdapter {
 /**
  * I8 — the default `whatsapp` platform: a Baileys bridge over the WhatsApp
  * Web multi-device protocol. Pair once with
- * `buff whatsapp pair` (QR), then send to JIDs / E.164 numbers and receive
+ * `nuvira whatsapp pair` (QR), then send to JIDs / E.164 numbers and receive
  * inbound messages. The bridge is injectable so tests never touch baileys.
  */
 export class WhatsAppBridgeAdapter implements ChannelAdapter {
@@ -497,7 +498,7 @@ export class DingTalkAdapter extends WebhookChannelAdapter {
 
   constructor() {
     super();
-    this.webhookUrl = process.env.BUFF_DINGTALK_WEBHOOK_URL ?? '';
+    this.webhookUrl = envBuff('DINGTALK_WEBHOOK_URL') ?? '';
     this.configured = Boolean(this.webhookUrl);
   }
 
@@ -523,7 +524,7 @@ export class FeishuAdapter extends WebhookChannelAdapter {
 
   constructor() {
     super();
-    this.webhookUrl = process.env.BUFF_FEISHU_WEBHOOK_URL ?? '';
+    this.webhookUrl = envBuff('FEISHU_WEBHOOK_URL') ?? '';
     this.configured = Boolean(this.webhookUrl);
   }
 
@@ -549,7 +550,7 @@ export class WeComAdapter extends WebhookChannelAdapter {
 
   constructor() {
     super();
-    this.webhookUrl = process.env.BUFF_WECOM_WEBHOOK_URL ?? '';
+    this.webhookUrl = envBuff('WECOM_WEBHOOK_URL') ?? '';
     this.configured = Boolean(this.webhookUrl);
   }
 
@@ -575,7 +576,7 @@ export class MattermostAdapter extends WebhookChannelAdapter {
 
   constructor() {
     super();
-    this.webhookUrl = process.env.BUFF_MATTERMOST_WEBHOOK_URL ?? '';
+    this.webhookUrl = envBuff('MATTERMOST_WEBHOOK_URL') ?? '';
     this.configured = Boolean(this.webhookUrl);
   }
 
@@ -607,8 +608,8 @@ export class MatrixAdapter extends WebhookChannelAdapter {
 
   constructor() {
     super();
-    this.homeserver = (process.env.BUFF_MATRIX_HOMESERVER ?? '').replace(/\/$/, '');
-    this.token = process.env.BUFF_MATRIX_ACCESS_TOKEN ?? '';
+    this.homeserver = (envBuff('MATRIX_HOMESERVER') ?? '').replace(/\/$/, '');
+    this.token = envBuff('MATRIX_ACCESS_TOKEN') ?? '';
     this.configured = Boolean(this.homeserver && this.token);
   }
 
@@ -698,7 +699,7 @@ export class GenericWebhookAdapter extends WebhookChannelAdapter {
 
   constructor() {
     super();
-    this.webhookUrl = process.env.BUFF_WEBHOOK_URL ?? '';
+    this.webhookUrl = envBuff('WEBHOOK_URL') ?? '';
     this.configured = Boolean(this.webhookUrl);
   }
 
@@ -725,8 +726,8 @@ export class BlueBubblesAdapter extends WebhookChannelAdapter {
 
   constructor() {
     super();
-    this.serverUrl = (process.env.BUFF_BLUEBUBBLES_URL ?? '').replace(/\/$/, '');
-    this.token = process.env.BUFF_BLUEBUBBLES_PASSWORD ?? '';
+    this.serverUrl = (envBuff('BLUEBUBBLES_URL') ?? '').replace(/\/$/, '');
+    this.token = envBuff('BLUEBUBBLES_PASSWORD') ?? '';
     this.configured = Boolean(this.serverUrl && this.token);
   }
 
@@ -756,9 +757,9 @@ export class NtfyAdapter extends WebhookChannelAdapter {
 
   constructor() {
     super();
-    this.baseUrl = (process.env.BUFF_NTFY_URL || 'https://ntfy.sh').replace(/\/$/, '');
-    this.topic = process.env.BUFF_NTFY_TOPIC ?? '';
-    this.token = process.env.BUFF_NTFY_TOKEN ?? '';
+    this.baseUrl = (envBuff('NTFY_URL') || 'https://ntfy.sh').replace(/\/$/, '');
+    this.topic = envBuff('NTFY_TOPIC') ?? '';
+    this.token = envBuff('NTFY_TOKEN') ?? '';
     this.configured = Boolean(this.topic);
   }
 
@@ -786,7 +787,7 @@ export class TeamsAdapter extends WebhookChannelAdapter {
 
   constructor() {
     super();
-    this.webhookUrl = process.env.BUFF_TEAMS_WEBHOOK_URL ?? '';
+    this.webhookUrl = envBuff('TEAMS_WEBHOOK_URL') ?? '';
     this.configured = Boolean(this.webhookUrl);
   }
 
@@ -812,7 +813,7 @@ export class GoogleChatAdapter extends WebhookChannelAdapter {
 
   constructor() {
     super();
-    this.webhookUrl = process.env.BUFF_GOOGLE_CHAT_WEBHOOK_URL ?? '';
+    this.webhookUrl = envBuff('GOOGLE_CHAT_WEBHOOK_URL') ?? '';
     this.configured = Boolean(this.webhookUrl);
   }
 
@@ -843,8 +844,8 @@ export class WeixinAdapter extends WebhookChannelAdapter {
 
   constructor() {
     super();
-    this.baseUrl = (process.env.BUFF_WEIXIN_BASE_URL || 'https://ilinkai.weixin.qq.com').replace(/\/$/, '');
-    this.token = process.env.BUFF_WEIXIN_TOKEN ?? '';
+    this.baseUrl = (envBuff('WEIXIN_BASE_URL') || 'https://ilinkai.weixin.qq.com').replace(/\/$/, '');
+    this.token = envBuff('WEIXIN_TOKEN') ?? '';
     this.configured = Boolean(this.token);
   }
 
@@ -891,16 +892,16 @@ export interface SmtpOptions {
 
 /** Build the SMTP options from the environment (BUFF_SMTP_*). */
 export function smtpOptionsFromEnv(): SmtpOptions {
-  const host = process.env.BUFF_SMTP_HOST ?? '';
-  const rawPort = process.env.BUFF_SMTP_PORT;
-  const secure = process.env.BUFF_SMTP_SECURE === 'true' || rawPort === '465';
+  const host = envBuff('SMTP_HOST') ?? '';
+  const rawPort = envBuff('SMTP_PORT');
+  const secure = envBuff('SMTP_SECURE') === 'true' || rawPort === '465';
   return {
     host,
     port: rawPort ? parseInt(rawPort, 10) || (secure ? 465 : 587) : secure ? 465 : 587,
     secure,
-    user: process.env.BUFF_SMTP_USER ?? undefined,
-    pass: process.env.BUFF_SMTP_PASS ?? undefined,
-    from: process.env.BUFF_SMTP_FROM ?? process.env.BUFF_SMTP_USER ?? '',
+    user: envBuff('SMTP_USER') ?? undefined,
+    pass: envBuff('SMTP_PASS') ?? undefined,
+    from: envBuff('SMTP_FROM') ?? envBuff('SMTP_USER') ?? '',
   };
 }
 
@@ -1089,8 +1090,8 @@ export class SignalAdapter implements ChannelAdapter {
   private account: string;
 
   constructor(baseUrl?: string, account?: string) {
-    this.baseUrl = (baseUrl ?? process.env.BUFF_SIGNAL_REST_URL ?? 'http://127.0.0.1:8080').replace(/\/+$/, '');
-    this.account = account ?? process.env.BUFF_SIGNAL_ACCOUNT ?? '';
+    this.baseUrl = (baseUrl ?? envBuff('SIGNAL_REST_URL') ?? 'http://127.0.0.1:8080').replace(/\/+$/, '');
+    this.account = account ?? envBuff('SIGNAL_ACCOUNT') ?? '';
     this.configured = Boolean(this.account);
   }
 
@@ -2178,7 +2179,7 @@ export class WebhookReceiver {
         // WhatsApp hub.challenge verification.
         const url = new URL(req.url ?? '/', 'http://localhost');
         const mode = url.searchParams.get('hub.mode');
-        if (mode === 'subscribe' && url.searchParams.get('hub.verify_token') === process.env.BUFF_WHATSAPP_VERIFY_TOKEN) {
+        if (mode === 'subscribe' && url.searchParams.get('hub.verify_token') === envBuff('WHATSAPP_VERIFY_TOKEN')) {
           res.writeHead(200, { 'content-type': 'text/plain' });
           res.end(url.searchParams.get('hub.challenge') ?? 'ok');
           return;
@@ -2235,14 +2236,14 @@ export class WebhookReceiver {
     const header = req.headers['x-slack-signature'] as string | undefined;
     const timestamp = req.headers['x-slack-request-timestamp'] as string | undefined;
     if (platform === 'slack' && (header || timestamp)) {
-      const secret = process.env.BUFF_SLACK_SIGNING_SECRET ?? '';
+      const secret = envBuff('SLACK_SIGNING_SECRET') ?? '';
       if (!secret) return false; // signed request but no secret configured → reject
       const base = `v0:${timestamp}:${raw}`;
       const expected = `v0=${createHmac('sha256', secret).update(base).digest('hex')}`;
       return safeEqual(expected, header ?? '');
     }
     if (platform === 'whatsapp') {
-      const secret = process.env.BUFF_WHATSAPP_APP_SECRET ?? '';
+      const secret = envBuff('WHATSAPP_APP_SECRET') ?? '';
       if (!secret) return true; // no secret configured → accept (local setup)
       const signature = req.headers['x-hub-signature-256'] as string | undefined;
       if (!signature) return false;
@@ -2280,12 +2281,12 @@ function safeEqual(a: string, b: string): boolean {
 /** Build all adapters whose env tokens are present. */
 export function createConfiguredAdapters(): ChannelAdapter[] {
   const adapters: ChannelAdapter[] = [new TelegramAdapter()];
-  if (process.env.BUFF_DISCORD_BOT_TOKEN || process.env.BUFF_DISCORD_WEBHOOK_URL) adapters.push(new DiscordAdapter());
-  if (process.env.BUFF_SLACK_BOT_TOKEN || process.env.BUFF_SLACK_WEBHOOK_URL) adapters.push(new SlackAdapter());
+  if (envBuff('DISCORD_BOT_TOKEN') || envBuff('DISCORD_WEBHOOK_URL')) adapters.push(new DiscordAdapter());
+  if (envBuff('SLACK_BOT_TOKEN') || envBuff('SLACK_WEBHOOK_URL')) adapters.push(new SlackAdapter());
   // I8: `whatsapp` = personal Baileys bridge (paired session), `whatsapp_cloud`
   // = the paid Meta Business API (explicit token + phone id).
   if (hasWhatsAppSession()) adapters.push(new WhatsAppBridgeAdapter());
-  if (process.env.BUFF_WHATSAPP_TOKEN && process.env.BUFF_WHATSAPP_PHONE_ID) adapters.push(new WhatsAppCloudAdapter());
+  if (envBuff('WHATSAPP_TOKEN') && envBuff('WHATSAPP_PHONE_ID')) adapters.push(new WhatsAppCloudAdapter());
   // I9: webhook/REST connectors — opt-in via their env tokens.
   if (isPlatformConfigured('dingtalk')) adapters.push(new DingTalkAdapter());
   if (isPlatformConfigured('feishu')) adapters.push(new FeishuAdapter());

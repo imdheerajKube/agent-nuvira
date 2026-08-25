@@ -7,12 +7,12 @@
  * optional params), it loads the methodology from EITHER source the CLI
  * surfaces and hands it to the model:
  *
- *   - COMPILED skills (SkillStore, `buff skill list`) — returns the full
+ *   - COMPILED skills (SkillStore, `nuvira skill list`) — returns the full
  *     methodology (parameters + ordered steps with agent types), resolves
  *     {{param}} placeholders in step prompts (SkillRunnerAgent parity), and
  *     marks the skill used.
- *   - HUB skills (`buff skills install` → SKILL.md under .agents/skills/ or
- *     ~/.buff/skills/) — returns name + description + the SKILL.md body
+ *   - HUB skills (`nuvira skills install` → SKILL.md under .agents/skills/ or
+ *     ~/.nuvira/skills/) — returns name + description + the SKILL.md body
  *     (progressive disclosure Level 1: methodology to adapt, never literal
  *     commands).
  *
@@ -133,7 +133,7 @@ export async function resolveSkill(name: string): Promise<ResolvedSkill | null> 
     };
   }
 
-  // 2. Hub catalog: SKILL.md under <project>/.agents/skills/ or ~/.buff/skills/.
+  // 2. Hub catalog: SKILL.md under <project>/.agents/skills/ or ~/.nuvira/skills/.
   //    P6c — the MATCHABLE catalog applies the platform + toolset gates, so a
   //    skill for another OS (or one whose required toolset is off) is never
   //    injected. The env-var/config declarations ride along for setup hints.
@@ -483,7 +483,7 @@ async function runSkillExecute(
     skillName, // Direct path
     join(process.cwd(), '.agents', 'skills', skillName, 'SKILL.md'),
     join(process.env.HOME ?? '~', '.nuvira', 'skills', skillName, 'SKILL.md'),
-    join(process.env.HOME ?? '~', '.buff', 'skills', skillName, 'SKILL.md'),
+    join(process.env.HOME ?? '~', '.nuvira', 'skills', skillName, 'SKILL.md'),
   ];
 
   let found = false;

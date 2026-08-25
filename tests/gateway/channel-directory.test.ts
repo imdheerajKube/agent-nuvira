@@ -17,24 +17,24 @@ import {
   readAliases,
 } from '../../src/gateway/channel-directory.js';
 
-const ORIG_CONFIG_DIR = process.env.BUFF_CONFIG_DIR;
+const ORIG_CONFIG_DIR = process.env.NUVIRA_CONFIG_DIR;
 const cfgDir = mkdtempSync(join(tmpdir(), 'buff-gw-dir-'));
 
 beforeAll(() => {
-  process.env.BUFF_CONFIG_DIR = cfgDir;
+  process.env.NUVIRA_CONFIG_DIR = cfgDir;
 });
 
 afterAll(() => {
-  if (ORIG_CONFIG_DIR === undefined) delete process.env.BUFF_CONFIG_DIR;
-  else process.env.BUFF_CONFIG_DIR = ORIG_CONFIG_DIR;
+  if (ORIG_CONFIG_DIR === undefined) delete process.env.NUVIRA_CONFIG_DIR;
+  else process.env.NUVIRA_CONFIG_DIR = ORIG_CONFIG_DIR;
   rmSync(cfgDir, { recursive: true, force: true });
 });
 
 beforeEach(() => {
-  delete process.env.BUFF_TELEGRAM_TOKEN;
-  delete process.env.BUFF_SLACK_BOT_TOKEN;
-  delete process.env.BUFF_DISCORD_BOT_TOKEN;
-  delete process.env.BUFF_DISCORD_WEBHOOK_URL;
+  delete process.env.NUVIRA_TELEGRAM_TOKEN;
+  delete process.env.NUVIRA_SLACK_BOT_TOKEN;
+  delete process.env.NUVIRA_DISCORD_BOT_TOKEN;
+  delete process.env.NUVIRA_DISCORD_WEBHOOK_URL;
   // Shared cfgDir persists aliases between tests — start each test clean.
   writeAliases([]);
 });
@@ -55,27 +55,27 @@ describe('alias validation', () => {
 
 describe('platform env map', () => {
   it('flags configured platforms only when their tokens are present', () => {
-    process.env.BUFF_TELEGRAM_TOKEN = '123:abc';
+    process.env.NUVIRA_TELEGRAM_TOKEN = '123:abc';
     expect(isPlatformConfigured('telegram')).toBe(true);
     expect(configuredPlatforms()).toContain('telegram');
-    delete process.env.BUFF_TELEGRAM_TOKEN;
+    delete process.env.NUVIRA_TELEGRAM_TOKEN;
     expect(isPlatformConfigured('telegram')).toBe(false);
     expect(configuredPlatforms()).not.toContain('telegram');
   });
 
   it('exposes the env vars per platform', () => {
-    expect(PLATFORM_ENV_VARS.telegram).toEqual(['BUFF_TELEGRAM_TOKEN']);
+    expect(PLATFORM_ENV_VARS.telegram).toEqual(['NUVIRA_TELEGRAM_TOKEN']);
     // I8: `whatsapp` = personal Baileys bridge (session dir override),
     // `whatsapp_cloud` = the paid Meta Business API.
-    expect(PLATFORM_ENV_VARS.whatsapp).toEqual(['BUFF_WHATSAPP_SESSION_DIR']);
-    expect(PLATFORM_ENV_VARS.whatsapp_cloud).toEqual(['BUFF_WHATSAPP_TOKEN']);
+    expect(PLATFORM_ENV_VARS.whatsapp).toEqual(['NUVIRA_WHATSAPP_SESSION_DIR']);
+    expect(PLATFORM_ENV_VARS.whatsapp_cloud).toEqual(['NUVIRA_WHATSAPP_TOKEN']);
   });
 });
 
 describe('alias persistence + resolve', () => {
   it('setAlias → resolve round-trips and persists to disk', () => {
-    process.env.BUFF_TELEGRAM_TOKEN = 'tok';
-    process.env.BUFF_SLACK_BOT_TOKEN = 'xoxb-tok';
+    process.env.NUVIRA_TELEGRAM_TOKEN = 'tok';
+    process.env.NUVIRA_SLACK_BOT_TOKEN = 'xoxb-tok';
     const dir = new ChannelDirectory();
     dir.setAlias('ops', 'telegram', '12345');
     dir.setAlias('nightly', 'slack', 'C0123');
@@ -105,14 +105,14 @@ describe('alias persistence + resolve', () => {
   });
 
   it('rejects registering an alias for an unconfigured platform', () => {
-    delete process.env.BUFF_DISCORD_BOT_TOKEN;
-    delete process.env.BUFF_DISCORD_WEBHOOK_URL;
+    delete process.env.NUVIRA_DISCORD_BOT_TOKEN;
+    delete process.env.NUVIRA_DISCORD_WEBHOOK_URL;
     const dir = new ChannelDirectory();
     expect(() => dir.setAlias('chan', 'discord', '123')).toThrow(/not configured/);
   });
 
   it('removeAlias deletes and persists', () => {
-    process.env.BUFF_TELEGRAM_TOKEN = 'tok';
+    process.env.NUVIRA_TELEGRAM_TOKEN = 'tok';
     const dir = new ChannelDirectory();
     dir.setAlias('temp', 'telegram', '1');
     expect(dir.removeAlias('temp')).toBe(true);
@@ -121,7 +121,7 @@ describe('alias persistence + resolve', () => {
   });
 
   it('reachableChannels groups aliases per target with reachability', () => {
-    process.env.BUFF_TELEGRAM_TOKEN = 'tok';
+    process.env.NUVIRA_TELEGRAM_TOKEN = 'tok';
     const dir = new ChannelDirectory();
     dir.setAlias('a', 'telegram', '1');
     dir.setAlias('b', 'telegram', '1');
@@ -152,32 +152,32 @@ describe('I6 platforms (email / signal)', () => {
   });
 
   it('isPlatformConfigured reflects the SMTP / Signal env vars', () => {
-    envBackup.BUFF_SMTP_HOST = process.env.BUFF_SMTP_HOST;
-    envBackup.BUFF_SMTP_USER = process.env.BUFF_SMTP_USER;
-    envBackup.BUFF_SIGNAL_ACCOUNT = process.env.BUFF_SIGNAL_ACCOUNT;
-    delete process.env.BUFF_SMTP_HOST;
-    delete process.env.BUFF_SMTP_USER;
-    delete process.env.BUFF_SIGNAL_ACCOUNT;
+    envBackup.NUVIRA_SMTP_HOST = process.env.NUVIRA_SMTP_HOST;
+    envBackup.NUVIRA_SMTP_USER = process.env.NUVIRA_SMTP_USER;
+    envBackup.NUVIRA_SIGNAL_ACCOUNT = process.env.NUVIRA_SIGNAL_ACCOUNT;
+    delete process.env.NUVIRA_SMTP_HOST;
+    delete process.env.NUVIRA_SMTP_USER;
+    delete process.env.NUVIRA_SIGNAL_ACCOUNT;
 
     expect(isPlatformConfigured('email')).toBe(false);
     expect(isPlatformConfigured('signal')).toBe(false);
     expect(configuredPlatforms()).not.toContain('email');
     expect(configuredPlatforms()).not.toContain('signal');
 
-    process.env.BUFF_SMTP_HOST = 'smtp.example.com';
-    process.env.BUFF_SMTP_USER = 'bot';
-    process.env.BUFF_SIGNAL_ACCOUNT = '+15551234567';
+    process.env.NUVIRA_SMTP_HOST = 'smtp.example.com';
+    process.env.NUVIRA_SMTP_USER = 'bot';
+    process.env.NUVIRA_SIGNAL_ACCOUNT = '+15551234567';
     expect(isPlatformConfigured('email')).toBe(true);
     expect(isPlatformConfigured('signal')).toBe(true);
-    expect(PLATFORM_ENV_VARS.email).toEqual(['BUFF_SMTP_HOST', 'BUFF_SMTP_USER']);
-    expect(PLATFORM_ENV_VARS.signal).toEqual(['BUFF_SIGNAL_ACCOUNT']);
+    expect(PLATFORM_ENV_VARS.email).toEqual(['NUVIRA_SMTP_HOST', 'NUVIRA_SMTP_USER']);
+    expect(PLATFORM_ENV_VARS.signal).toEqual(['NUVIRA_SIGNAL_ACCOUNT']);
   });
 
   it('allows registering an email alias when SMTP is configured', () => {
-    envBackup.BUFF_SMTP_HOST = process.env.BUFF_SMTP_HOST;
-    envBackup.BUFF_SMTP_USER = process.env.BUFF_SMTP_USER;
-    process.env.BUFF_SMTP_HOST = 'smtp.example.com';
-    process.env.BUFF_SMTP_USER = 'bot';
+    envBackup.NUVIRA_SMTP_HOST = process.env.NUVIRA_SMTP_HOST;
+    envBackup.NUVIRA_SMTP_USER = process.env.NUVIRA_SMTP_USER;
+    process.env.NUVIRA_SMTP_HOST = 'smtp.example.com';
+    process.env.NUVIRA_SMTP_USER = 'bot';
     const dir = new ChannelDirectory();
     const entry = dir.setAlias('notify', 'email', 'ops@example.com');
     expect(entry.platform).toBe('email');

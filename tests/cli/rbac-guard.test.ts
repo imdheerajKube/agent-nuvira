@@ -28,17 +28,17 @@ let originalActAs: string | undefined;
 
 function setupRbacDir(): void {
   rbacDir = mkdtempSync(join(tmpdir(), 'buff-guard-rbac-'));
-  originalConfigDir = process.env.BUFF_CONFIG_DIR;
-  process.env.BUFF_CONFIG_DIR = rbacDir;
-  originalActAs = process.env.BUFF_ACT_AS;
-  delete process.env.BUFF_ACT_AS; // legacy mode by default
+  originalConfigDir = process.env.NUVIRA_CONFIG_DIR;
+  process.env.NUVIRA_CONFIG_DIR = rbacDir;
+  originalActAs = process.env.NUVIRA_ACT_AS;
+  delete process.env.NUVIRA_ACT_AS; // legacy mode by default
 }
 
 function teardownRbacDir(): void {
-  if (originalConfigDir === undefined) delete process.env.BUFF_CONFIG_DIR;
-  else process.env.BUFF_CONFIG_DIR = originalConfigDir;
-  if (originalActAs === undefined) delete process.env.BUFF_ACT_AS;
-  else process.env.BUFF_ACT_AS = originalActAs;
+  if (originalConfigDir === undefined) delete process.env.NUVIRA_CONFIG_DIR;
+  else process.env.NUVIRA_CONFIG_DIR = originalConfigDir;
+  if (originalActAs === undefined) delete process.env.NUVIRA_ACT_AS;
+  else process.env.NUVIRA_ACT_AS = originalActAs;
   rmSync(rbacDir, { recursive: true, force: true });
 }
 
@@ -51,7 +51,7 @@ function seedRole(user: string, role: string): void {
 }
 
 function actAs(user: string): void {
-  process.env.BUFF_ACT_AS = user;
+  process.env.NUVIRA_ACT_AS = user;
 }
 
 // ─── guardRbacAction semantics ──────────────────────────────────────────────

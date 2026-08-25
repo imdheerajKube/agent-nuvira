@@ -1,7 +1,7 @@
 /**
  * MCP Manager — Manages multiple MCP server connections.
  *
- * Discovers MCP server configurations from ~/.buff/mcp/ directory and
+ * Discovers MCP server configurations from ~/.nuvira/mcp/ directory and
  * provides a unified interface for tool discovery and invocation across
  * all connected servers.
  */
@@ -36,7 +36,7 @@ export class MCPManager {
 
   /**
    * Discover MCP server configurations from the config directory.
-   * Looks for *.json files in ~/.buff/mcp/ and subdirectories.
+   * Looks for *.json files in ~/.nuvira/mcp/ and subdirectories.
    */
   discoverConfigs(): MCPServerConfig[] {
     const configs: MCPServerConfig[] = [];

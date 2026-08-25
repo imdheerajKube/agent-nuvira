@@ -41,7 +41,7 @@ export class DriftDetector {
   private memoryDir: string;
 
   constructor(memoryDir?: string) {
-    this.memoryDir = memoryDir || path.join(process.env.HOME || '~', '.buff', 'memory');
+    this.memoryDir = memoryDir || path.join(process.env.HOME || '~', '.nuvira', 'memory');
   }
 
   /**

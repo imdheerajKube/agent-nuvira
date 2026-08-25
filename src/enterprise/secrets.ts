@@ -13,6 +13,7 @@
  *
  * @see NUVIRA_ROUTER_ROADMAP.md §P6 M6.2
  */
+import { envBuff } from '../config/paths';
 
 // ─── Masking ────────────────────────────────────────────────────────────────
 
@@ -158,7 +159,7 @@ export function safeLine(record: unknown): string {
 
 /** Whether redaction is disabled (BUFF_NO_REDACT=1) — for debugging only. */
 export function redactionDisabled(): boolean {
-  return process.env.BUFF_NO_REDACT === '1' || process.env.BUFF_NO_REDACT === 'true';
+  return envBuff('NO_REDACT') === '1' || envBuff('NO_REDACT') === 'true';
 }
 
 /**

@@ -1,7 +1,7 @@
 /**
  * SkillStore — Persists and manages compiled skills on disk.
  *
- * Skills are stored as individual JSON files in ~/.buff/skills/
+ * Skills are stored as individual JSON files in ~/.nuvira/skills/
  * Each skill gets its own file for easy inspection and manual editing.
  * An index.json file tracks the full list for fast enumeration.
  *
@@ -132,7 +132,7 @@ export class SkillStore {
       // a copy so the module-level BUNDLED_SKILLS singletons are never
       // mutated (shared state across store instances). First-time seeds get a
       // FRESH timestamp so decay/quality reports treat them as new (a fixed
-      // 2025 timestamp would make `buff skill gc` prune a freshly-seeded
+      // 2025 timestamp would make `nuvira skill gc` prune a freshly-seeded
       // first-party skill as 120+ days old).
       const now = Date.now();
       const toSave: Skill = {

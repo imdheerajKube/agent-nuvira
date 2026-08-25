@@ -1,4 +1,5 @@
 import { createInterface } from 'node:readline';
+import { envBuff } from '../config/paths';
 
 import { Command } from 'commander';
 import inquirer from 'inquirer';
@@ -273,7 +274,7 @@ export function resolvePipelineDispatch(
  *
  * Thin wrapper over the shared `runPipelineTool` (src/tools/pipeline-tool.ts)
  * — the SAME pipeline core the tool registry's build/resume/repair tools use,
- * so `buff chat` pre-dispatch and in-loop pipeline tool calls can never
+ * so `nuvira chat` pre-dispatch and in-loop pipeline tool calls can never
  * diverge (STANDING RULE). Prints the orchestration result; the tool path
  * returns the summary text instead.
  */
@@ -376,7 +377,7 @@ export class ChatCommand extends BaseCommand {
   /**
    * P3 — programmatic single-turn answer for the dashboard chat console.
    *
-   * Runs one tool-loop turn — the EXACT engine behind `buff chat "<prompt>"` —
+   * Runs one tool-loop turn — the EXACT engine behind `nuvira chat "<prompt>"` —
    * and returns content + followups as data instead of printing. Non-TTY by
    * construction: an injected ask_user renderer declines the clarification so
    * the model proceeds on best judgment (inquirer would hang on the server's
@@ -476,7 +477,7 @@ export class ChatCommand extends BaseCommand {
     // P3 — tell the GUI where the turn is headed before the tool loop runs.
     const isLocalFallback = autoMode && type === 'local';
     const localWarning = isLocalFallback
-      ? ' ⚠️ local model only — run `buff models` or `buff provider set` to add a cloud provider'
+      ? ' ⚠️ local model only — run `nuvira models` or `nuvira provider set` to add a cloud provider'
       : '';
     opts.onProgress?.(`   🧠 routed to ${provider.name}${model ? ` / ${model}` : ''} — working…${localWarning}`);
 
@@ -552,7 +553,7 @@ export class ChatCommand extends BaseCommand {
   }
 
   private async execute(prompt?: string, options?: { file?: string; provider?: string; model?: string; cache?: boolean; dev?: boolean }): Promise<void> {
-    // Apply the active model state from `buff model switch` as defaults
+    // Apply the active model state from `nuvira model switch` as defaults
     const activeOpts = applyActiveModel({ provider: options?.provider, model: options?.model });
     const mergedOpts = { ...options, provider: activeOpts.provider, model: activeOpts.model };
 
@@ -880,7 +881,7 @@ export class ChatCommand extends BaseCommand {
         logger.debug(`Chat session stored: ${sessionId}`);
         // Phase A2: workspace continuity — record the session in the project
         // registry (the last user goal + last assistant summary + session id)
-        // so `buff doctor` and the D1 auto-recall can show what this project
+        // so `nuvira doctor` and the D1 auto-recall can show what this project
         // was last working on. Best-effort — a workspace write must never
         // affect the chat exit path.
         try {
@@ -1490,7 +1491,7 @@ export class ChatCommand extends BaseCommand {
       message,
       {
         ...buildAutoResolveOptions(this.configManager, {
-          verbose: process.env.BUFF_DEBUG === 'true',
+          verbose: envBuff('DEBUG') === 'true',
           contextHintTokens: opts?.contextHintTokens,
         }),
         circuitBreakerStatus,
@@ -1838,7 +1839,7 @@ Commands:
             console.log(chatHistory.formatSessionSummary(session));
           }
           console.log('');
-          logger.info('Use `buff history show <session-id>` to view a full conversation.');
+          logger.info('Use `nuvira history show <session-id>` to view a full conversation.');
         }
         return { exit: false };
       }

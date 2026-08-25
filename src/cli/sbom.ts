@@ -2,14 +2,14 @@
  * SBOM command — P6 M6.6 software bill of materials (supply chain).
  *
  * Usage:
- *   buff sbom                       — Print the CycloneDX 1.5 SBOM (stdout)
- *   buff sbom --out <path>          — Write the SBOM to a file
- *   buff sbom --reproducible        — Pin the serial (SHA-256 of lockfile) +
+ *   nuvira sbom                       — Print the CycloneDX 1.5 SBOM (stdout)
+ *   nuvira sbom --out <path>          — Write the SBOM to a file
+ *   nuvira sbom --reproducible        — Pin the serial (SHA-256 of lockfile) +
  *                                     timestamp for byte-identical rebuilds
- *   buff sbom verify [--sbom <p>]   — Compare a stored SBOM against the current
+ *   nuvira sbom verify [--sbom <p>]   — Compare a stored SBOM against the current
  *                                     package-lock.json: drift + tamper + license
  *                                     audit (exit 0 = clean, 1 = drift/tamper)
- *   buff sbom licenses              — License audit table (copyleft/unknown)
+ *   nuvira sbom licenses              — License audit table (copyleft/unknown)
  *
  * The SBOM is generated from package-lock.json — the deterministic source of
  * truth for exactly-what-is-installed (resolved versions + integrity hashes) —
@@ -104,7 +104,7 @@ export class SbomCommand extends BaseCommand {
         if (options?.verify || options?.sbom) {
           const sbomPath = options?.sbom || resolve(root, 'sbom.json');
           if (!existsSync(sbomPath)) {
-            logger.error(`SBOM file not found: ${sbomPath} — run \`buff sbom --out sbom.json\` first.`);
+            logger.error(`SBOM file not found: ${sbomPath} — run \`nuvira sbom --out sbom.json\` first.`);
             process.exitCode = 1;
             return;
           }
@@ -142,7 +142,7 @@ export class SbomCommand extends BaseCommand {
         // supply-chain posture is visible without a separate command.
         const flags = verifySbom(bom.components, lock, { flagLicenses: true }).flaggedLicenses;
         if (flags.length > 0) {
-          console.log(`\n⚠️  ${flags.length} copyleft/unknown license(s) — run \`buff sbom licenses\` for details.`);
+          console.log(`\n⚠️  ${flags.length} copyleft/unknown license(s) — run \`nuvira sbom licenses\` for details.`);
         }
       });
   }

@@ -9,6 +9,7 @@ import { tmpdir, homedir } from 'node:os';
 
 import { PhaseExecutionEngine } from '../../src/agents/phase-engine.js';
 import type { PhaseDefinition, PhaseScopeState, PhaseState, PhaseStatus } from '../../src/agents/phase-engine.js';
+import { resolveNuviraHome } from '../../src/config/paths.js';
 
 // ─── Helpers ────────────────────────────────────────────────────────────────
 
@@ -51,7 +52,7 @@ describe('PhaseExecutionEngine', () => {
   beforeEach(() => {
     engine = new PhaseExecutionEngine();
     // Override homedir location for test isolation
-    buffPhasesDir = join(homedir(), '.buff', 'phases');
+    buffPhasesDir = join(resolveNuviraHome(), 'phases');
     try { mkdirSync(buffPhasesDir, { recursive: true }); } catch { /* ignore */ }
   });
 

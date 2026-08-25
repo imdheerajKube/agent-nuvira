@@ -23,6 +23,7 @@
  */
 
 import { Command } from 'commander';
+import { envBuff } from '../config/paths';
 import { spawn, execSync } from 'node:child_process';
 import { join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -194,8 +195,8 @@ function stopProcessHint(): string {
     shouldOpen: boolean,
     force: boolean,
   ): Promise<'running' | 'restart' | 'failed'> {
-    process.env.BUFF_DASHBOARD_PORT = String(port);
-    process.env.BUFF_DASHBOARD_HOST = host;
+    process.env.NUVIRA_DASHBOARD_PORT = String(port);
+    process.env.NUVIRA_DASHBOARD_HOST = host;
 
     return new Promise((resolve) => {
       let started = false;

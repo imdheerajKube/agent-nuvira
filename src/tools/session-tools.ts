@@ -12,6 +12,7 @@
  */
 
 import { existsSync, readFileSync, writeFileSync, mkdirSync, readdirSync } from 'node:fs';
+import { resolveNuviraHome } from '../config/paths';
 import { join } from 'node:path';
 import { homedir } from 'node:os';
 import { randomUUID } from 'node:crypto';
@@ -100,8 +101,8 @@ export interface SearchResult {
 
 // ─── Session Store ────────────────────────────────────────────────────────
 
-const SESSION_DIR = join(homedir(), '.buff', 'memory', 'sessions');
-const THREAD_DIR = join(homedir(), '.buff', 'memory', 'threads');
+const SESSION_DIR = join(resolveNuviraHome(), 'memory', 'sessions');
+const THREAD_DIR = join(resolveNuviraHome(), 'memory', 'threads');
 
 export class SessionStore {
   private sessions: Map<string, SessionEntry> = new Map();

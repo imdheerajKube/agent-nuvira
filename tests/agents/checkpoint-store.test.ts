@@ -49,15 +49,15 @@ function makeContext(goal: string, doneSteps: number): AgentContext {
 describe('CheckpointStore', () => {
   beforeEach(() => {
     tempDir = mkdtempSync(join(tmpdir(), 'buff-cp-'));
-    originalMemoryDir = process.env.BUFF_MEMORY_DIR;
-    process.env.BUFF_MEMORY_DIR = tempDir;
+    originalMemoryDir = process.env.NUVIRA_MEMORY_DIR;
+    process.env.NUVIRA_MEMORY_DIR = tempDir;
   });
 
   afterEach(() => {
     if (originalMemoryDir === undefined) {
-      delete process.env.BUFF_MEMORY_DIR;
+      delete process.env.NUVIRA_MEMORY_DIR;
     } else {
-      process.env.BUFF_MEMORY_DIR = originalMemoryDir;
+      process.env.NUVIRA_MEMORY_DIR = originalMemoryDir;
     }
     rmSync(tempDir, { recursive: true, force: true });
   });

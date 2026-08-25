@@ -16,6 +16,7 @@
  */
 
 import { randomUUID } from 'node:crypto';
+import { resolveNuviraHome } from '../config/paths';
 import { existsSync, readFileSync, writeFileSync, mkdirSync, readdirSync } from 'node:fs';
 import { join } from 'node:path';
 import { homedir } from 'node:os';
@@ -77,7 +78,7 @@ export interface BoardStats {
 
 // ─── Kanban Manager ───────────────────────────────────────────────────────
 
-const KANBAN_DIR = join(homedir(), '.buff', 'memory', 'kanban');
+const KANBAN_DIR = join(resolveNuviraHome(), 'memory', 'kanban');
 
 export class KanbanManager {
   private boards: Map<string, KanbanBoard> = new Map();

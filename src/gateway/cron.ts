@@ -7,7 +7,7 @@
  * schedule validation (node-cron), next-run computation, and dry-run.
  *
  * Design (matches the project's J-series rules):
- * - Jobs persist to `~/.buff/cron/jobs.json` — readable, inspectable JSON.
+ * - Jobs persist to `~/.nuvira/cron/jobs.json` — readable, inspectable JSON.
  * - Schedule validation uses **node-cron** (MIT, pure JS — decision 12-safe).
  * - `runJobNow(job)` invokes the registered H1 tool via the tool registry and
  *   emits `cron:run/result/error` events on the EventBus, so a future gateway
@@ -15,7 +15,7 @@
  *   E2/H2.
  * - `dryRunJob(job)` validates the schedule + tool WITHOUT executing anything.
  *
- * CLI surface lives in `src/cli/admin.ts` (`buff admin cron add/list/remove`).
+ * CLI surface lives in `src/cli/admin.ts` (`nuvira admin cron add/list/remove`).
  */
 
 import { readFileSync, writeFileSync, existsSync, mkdirSync } from 'node:fs';
@@ -118,7 +118,7 @@ export function addCronJob(
     return { ok: false, error: `Unknown tool '${tool}'. Available: ${available.join(', ')}` };
   }
   // Validate explicitly-provided args against the tool's zod schema AT ADD
-  // TIME — a typo surfaces in `buff admin cron add`, not silently at 3am
+  // TIME — a typo surfaces in `nuvira admin cron add`, not silently at 3am
   // (in-tool .parse() already prevents crashes). Empty args are allowed: the
   // tool's defaults apply, and the plan's canonical example (`add nightly
   // "0 3 * * *" test`) passes none.
@@ -207,7 +207,7 @@ export function dryRunCronJob(
 
 /**
  * Compute the next run time for a job WITHOUT scheduling it. Pure helper for
- * `buff admin cron list` and tests. (node-cron v4's getNextRun() is always
+ * `nuvira admin cron list` and tests. (node-cron v4's getNextRun() is always
  * relative to now, so no `from` parameter is exposed.)
  */
 export function nextRunAt(schedule: string): Date | null {
@@ -273,7 +273,7 @@ async function deliverToChannel(job: CronJob, output: string): Promise<void> {
   for (const adapter of createConfiguredAdapters()) registry.register(adapter);
   const ref = registry.directory.resolve(job.deliverTo!);
   if (!ref) {
-    logger.warn(`cron '${job.name}': unknown delivery channel '${job.deliverTo}' — add it with \`buff gateway alias add\``);
+    logger.warn(`cron '${job.name}': unknown delivery channel '${job.deliverTo}' — add it with \`nuvira gateway alias add\``);
     return;
   }
   const ok = await registry.sendToRef(ref, `⏰ cron '${job.name}' → ${String(output).slice(0, 500)}`);

@@ -1,6 +1,6 @@
 /**
  * Gateway Permissions API — /api/admin/gateway/policies (GUI parity with
- * `buff config gateway allow/disallow/reply`).
+ * `nuvira config gateway allow/disallow/reply`).
  *
  * Real HTTP against a server on a random port, file-based admin auth (admin +
  * viewer for the RBAC gate), and a temp BUFF_CONFIG_DIR so policy writes stay
@@ -13,18 +13,18 @@ import { join } from 'node:path';
 
 const TMP_BASE = process.env.TMPDIR || process.env.TMP || '/tmp';
 const testDir = mkdtempSync(join(TMP_BASE, 'buff-gwpol-api-'));
-const memoryDir = join(testDir, '.buff', 'memory');
+const memoryDir = join(testDir, '.nuvira', 'memory');
 mkdirSync(memoryDir, { recursive: true });
 
 // Env MUST be set before importing the server (values are read at import time).
-process.env.BUFF_DASHBOARD_PORT = '0';
-process.env.BUFF_DASHBOARD_HOST = '127.0.0.1';
-process.env.BUFF_MEMORY_DIR = memoryDir;
-process.env.BUFF_CONFIG_DIR = join(testDir, '.buff');
+process.env.NUVIRA_DASHBOARD_PORT = '0';
+process.env.NUVIRA_DASHBOARD_HOST = '127.0.0.1';
+process.env.NUVIRA_MEMORY_DIR = memoryDir;
+process.env.NUVIRA_CONFIG_DIR = join(testDir, '.nuvira');
 // WhatsApp contact sync during PUT rides on the session dir — point it at the
 // temp dir so a named whatsapp contact in a test never touches the real
-// ~/.buff/whatsapp/contacts.json.
-process.env.BUFF_WHATSAPP_SESSION_DIR = join(testDir, '.buff', 'whatsapp', 'session');
+// ~/.nuvira/whatsapp/contacts.json.
+process.env.NUVIRA_WHATSAPP_SESSION_DIR = join(testDir, '.nuvira', 'whatsapp', 'session');
 
 const { createDashboardServer } = await import('../../src/web-dashboard/server.js');
 
@@ -125,7 +125,7 @@ describe('/api/admin/gateway/policies', () => {
     expect(getBody.statusRecipients).toEqual(['whatsapp:Alex', 'slack:ops']);
 
     // Persisted to the config file.
-    const config = JSON.parse(readFileSync(join(testDir, '.buff', 'buffconfig.json'), 'utf-8'));
+    const config = JSON.parse(readFileSync(join(testDir, '.nuvira', 'buffconfig.json'), 'utf-8'));
     expect(config.gateway.statusRecipients).toEqual(['whatsapp:Alex', 'slack:ops']);
 
     // Removing works (whole-array replace).
@@ -155,7 +155,7 @@ describe('/api/admin/gateway/policies', () => {
     expect(getBody.policies.whatsapp).toEqual({ allowedUsers: ['919876543210'], silentDrop: true });
     expect(getBody.policies.telegram).toEqual({ allowedGroups: ['g-family'], requireMention: true });
     // The write landed in the config file (persists across restarts).
-    const config = JSON.parse(readFileSync(join(testDir, '.buff', 'buffconfig.json'), 'utf-8'));
+    const config = JSON.parse(readFileSync(join(testDir, '.nuvira', 'buffconfig.json'), 'utf-8'));
     expect(config.gateway.policies.whatsapp).toEqual({ allowedUsers: ['919876543210'], silentDrop: true });
   });
 
@@ -230,7 +230,7 @@ describe('/api/admin/gateway/policies', () => {
     expect(getBody.contacts[1]).toMatchObject({ name: 'Ops', platform: 'telegram', id: '987654321' });
 
     // Persisted to the gateway contacts file (next to aliases.json).
-    const contactsFile = join(testDir, '.buff', 'gateway', 'contacts.json');
+    const contactsFile = join(testDir, '.nuvira', 'gateway', 'contacts.json');
     const persisted = JSON.parse(readFileSync(contactsFile, 'utf-8'));
     expect(persisted.contacts.map((c: { name: string }) => c.name)).toEqual(['Alex', 'Ops']);
 

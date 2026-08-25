@@ -7,11 +7,12 @@
  * - Average task duration (optional, for future use)
  * - Total runs count
  *
- * Data is stored as JSON at ~/.buff/memory/agent-stats.json
+ * Data is stored as JSON at ~/.nuvira/memory/agent-stats.json
  * and updated after each orchestration run.
  */
 
 import { readFileSync, writeFileSync, existsSync, mkdirSync } from 'node:fs';
+import {envBuff, resolveNuviraHome} from '../config/paths';
 import { join } from 'node:path';
 import { homedir } from 'node:os';
 
@@ -50,13 +51,13 @@ export interface AgentStatsData {
 const CURRENT_VERSION = 1;
 
 /**
- * Resolve the memory dir lazily (per call) so tests that set `BUFF_MEMORY_DIR`
+ * Resolve the memory dir lazily (per call) so tests that set `NUVIRA_MEMORY_DIR`
  * are genuinely hermetic — a module-import-time capture would silently keep
- * writing to the real ~/.buff/memory (same fix as trajectory-store.ts /
+ * writing to the real ~/.nuvira/memory (same fix as trajectory-store.ts /
  * pattern-extractor.ts / failure-lessons.ts).
  */
 function memoryDir(): string {
-  return process.env.BUFF_MEMORY_DIR || join(homedir(), '.buff', 'memory');
+  return envBuff('MEMORY_DIR') || join(resolveNuviraHome(), 'memory');
 }
 
 function statsPath(): string {

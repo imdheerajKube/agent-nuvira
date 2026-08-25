@@ -83,7 +83,7 @@ function skillMd(name: string): string {
 let registryDir = '';
 let projectDir = '';
 let configDir = '';
-const realRegistry = process.env.BUFF_SKILLS_REGISTRY;
+const realRegistry = process.env.NUVIRA_SKILLS_REGISTRY;
 
 beforeEach(() => {
   registryDir = mkdtempSync(join(tmpdir(), 'buff-reg-reg-'));
@@ -95,16 +95,16 @@ beforeEach(() => {
     mkdirSync(dir, { recursive: true });
     writeFileSync(join(dir, 'SKILL.md'), skillMd(s.name), 'utf-8');
   }
-  rmSync(join(homeHolder.value, '.buff', 'skills-hub'), { recursive: true, force: true });
-  process.env.BUFF_SKILLS_REGISTRY = `file://${registryDir}`;
+  rmSync(join(homeHolder.value, '.nuvira', 'skills-hub'), { recursive: true, force: true });
+  process.env.NUVIRA_SKILLS_REGISTRY = `file://${registryDir}`;
 });
 
 afterEach(() => {
   rmSync(registryDir, { recursive: true, force: true });
   rmSync(projectDir, { recursive: true, force: true });
   rmSync(configDir, { recursive: true, force: true });
-  if (realRegistry === undefined) delete process.env.BUFF_SKILLS_REGISTRY;
-  else process.env.BUFF_SKILLS_REGISTRY = realRegistry;
+  if (realRegistry === undefined) delete process.env.NUVIRA_SKILLS_REGISTRY;
+  else process.env.NUVIRA_SKILLS_REGISTRY = realRegistry;
   vi.restoreAllMocks();
 });
 
@@ -128,8 +128,8 @@ describe('source detection + config', () => {
     // `.agents/skills/` dir that ships in the npm package + repo checkout
     // (local-dir), NOT the GitHub raw URL — so the registry resolves without
     // any GitHub access and the repo can stay private.
-    const savedEnv = process.env.BUFF_SKILLS_REGISTRY;
-    delete process.env.BUFF_SKILLS_REGISTRY;
+    const savedEnv = process.env.NUVIRA_SKILLS_REGISTRY;
+    delete process.env.NUVIRA_SKILLS_REGISTRY;
     try {
       const registries = configuredRegistries();
       expect(registries).toHaveLength(1);
@@ -140,8 +140,8 @@ describe('source detection + config', () => {
       // 404-vs-resolve regression: the default must never silently 404.
       expect(probeRegistries()).resolves.toMatchObject([{ reachable: true }]);
     } finally {
-      if (savedEnv === undefined) delete process.env.BUFF_SKILLS_REGISTRY;
-      else process.env.BUFF_SKILLS_REGISTRY = savedEnv;
+      if (savedEnv === undefined) delete process.env.NUVIRA_SKILLS_REGISTRY;
+      else process.env.NUVIRA_SKILLS_REGISTRY = savedEnv;
     }
   });
 });
@@ -276,7 +276,7 @@ describe('P5c #3 — registry health probe (never silently 404)', () => {
     expect(hint).toContain('HTTP 404');
     expect(hint).toContain('https://raw.githubusercontent.com/acme/nope/main/.agents/skills');
     expect(hint).toContain('skills.registries[]');
-    expect(hint).toContain('BUFF_SKILLS_REGISTRY');
+    expect(hint).toContain('NUVIRA_SKILLS_REGISTRY');
     // No broken sources → empty hint (callers fall back to the generic tip).
     expect(
       unreachableRegistryHint([{ source: { kind: 'local-dir', base: '/x' }, reachable: true, entryCount: 2 }]),

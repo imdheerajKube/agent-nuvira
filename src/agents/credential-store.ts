@@ -18,6 +18,7 @@
  */
 
 import { existsSync, readFileSync, writeFileSync, mkdtempSync, unlinkSync } from 'node:fs';
+import { envBuff } from '../config/paths';
 import { homedir, tmpdir } from 'node:os';
 import { join } from 'node:path';
 import inquirer from 'inquirer';
@@ -437,8 +438,8 @@ export class CredentialStore {
       writeFileSync(askPassPath, askPassContent, 'utf-8');
 
       // Values ride in env so the script text stays literal and safe.
-      process.env.BUFF_GIT_USERNAME = username;
-      process.env.BUFF_GIT_TOKEN = token;
+      process.env.NUVIRA_GIT_USERNAME = username;
+      process.env.NUVIRA_GIT_TOKEN = token;
 
       try {
         if (!isWindows) {
@@ -495,8 +496,8 @@ export class CredentialStore {
       try { unlinkSync(process.env.GIT_ASKPASS); } catch { /* best-effort */ }
       delete process.env.GIT_ASKPASS;
     }
-    delete process.env.BUFF_GIT_USERNAME;
-    delete process.env.BUFF_GIT_TOKEN;
+    delete process.env.NUVIRA_GIT_USERNAME;
+    delete process.env.NUVIRA_GIT_TOKEN;
 
     // Remove SSH_ASKPASS script if we created one
     // (already cleaned up in setupGitCredentials)

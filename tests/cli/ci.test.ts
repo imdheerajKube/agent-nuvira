@@ -1,5 +1,5 @@
 /**
- * Tests for the CI/CD Headless Mode (buff ci) implementation.
+ * Tests for the CI/CD Headless Mode (nuvira ci) implementation.
  *
  * Covers:
  *   - CIExecuteResult, CIReviewResult, CICheckResult type shape

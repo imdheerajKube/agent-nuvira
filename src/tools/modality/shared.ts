@@ -7,6 +7,7 @@
  */
 
 import { mkdirSync, writeFileSync, existsSync, rmSync } from 'node:fs';
+import { envBuff } from '../../config/paths';
 import { execFileSync } from 'node:child_process';
 import { join, resolve } from 'node:path';
 
@@ -14,12 +15,13 @@ import { join, resolve } from 'node:path';
 
 /**
  * Resolve the artifact dir for a modality ("images" | "screenshots" | "audio").
- * BUFF_ARTIFACTS_DIR overrides the base; default `<cwd>/.buff/artifacts`.
+ * NUVIRA_ARTIFACTS_DIR overrides the base; default `<cwd>/.nuvira/artifacts`.
  */
 export function artifactsDir(kind: string, cwd?: string): string {
-  const base = process.env.BUFF_ARTIFACTS_DIR
-    ? resolve(process.env.BUFF_ARTIFACTS_DIR)
-    : join(resolve(cwd ?? process.cwd()), '.buff', 'artifacts');
+  const artifactsEnv = envBuff('ARTIFACTS_DIR');
+  const base = artifactsEnv
+    ? resolve(artifactsEnv)
+    : join(resolve(cwd ?? process.cwd()), '.nuvira', 'artifacts');
   const dir = join(base, kind);
   mkdirSync(dir, { recursive: true });
   return dir;

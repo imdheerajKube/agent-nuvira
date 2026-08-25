@@ -202,8 +202,8 @@ describe('CredentialStore', () => {
       (store as any)._collected = true;
 
       store.setupGitCredentials();
-      expect(process.env.BUFF_GIT_TOKEN).toBe('super_secret_token_123');
-      expect(process.env.BUFF_GIT_USERNAME).toBeTruthy();
+      expect(process.env.NUVIRA_GIT_TOKEN).toBe('super_secret_token_123');
+      expect(process.env.NUVIRA_GIT_USERNAME).toBeTruthy();
 
       const askPassPath = process.env.GIT_ASKPASS!;
       const scriptContent = readFileSync(askPassPath, 'utf-8');
@@ -304,13 +304,13 @@ describe('CredentialStore', () => {
       (store as any)._collected = true;
 
       store.setupGitCredentials();
-      expect(process.env.BUFF_GIT_TOKEN).toBeTruthy();
-      expect(process.env.BUFF_GIT_USERNAME).toBeTruthy();
+      expect(process.env.NUVIRA_GIT_TOKEN).toBeTruthy();
+      expect(process.env.NUVIRA_GIT_USERNAME).toBeTruthy();
       store.cleanup();
 
       expect(process.env.GIT_ASKPASS).toBeUndefined();
-      expect(process.env.BUFF_GIT_TOKEN).toBeUndefined();
-      expect(process.env.BUFF_GIT_USERNAME).toBeUndefined();
+      expect(process.env.NUVIRA_GIT_TOKEN).toBeUndefined();
+      expect(process.env.NUVIRA_GIT_USERNAME).toBeUndefined();
       expect(process.env.GIT_TERMINAL_PROMPT).toBeUndefined();
     });
 

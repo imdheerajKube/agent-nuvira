@@ -60,20 +60,20 @@ let originalTelemetryAction: string | undefined;
 
 beforeEach(() => {
   tempDir = mkdtempSync(join(tmpdir(), 'buff-failure-bookkeeping-'));
-  originalMemoryDir = process.env.BUFF_MEMORY_DIR;
-  process.env.BUFF_MEMORY_DIR = tempDir;
-  originalTelemetryAction = process.env.BUFF_TELEMETRY_ACTION;
-  delete process.env.BUFF_TELEMETRY_ACTION;
+  originalMemoryDir = process.env.NUVIRA_MEMORY_DIR;
+  process.env.NUVIRA_MEMORY_DIR = tempDir;
+  originalTelemetryAction = process.env.NUVIRA_TELEMETRY_ACTION;
+  delete process.env.NUVIRA_TELEMETRY_ACTION;
   resetModelRegistry();
   vi.clearAllMocks();
 });
 
 afterEach(() => {
   resetModelRegistry();
-  if (originalMemoryDir === undefined) delete process.env.BUFF_MEMORY_DIR;
-  else process.env.BUFF_MEMORY_DIR = originalMemoryDir;
-  if (originalTelemetryAction === undefined) delete process.env.BUFF_TELEMETRY_ACTION;
-  else process.env.BUFF_TELEMETRY_ACTION = originalTelemetryAction;
+  if (originalMemoryDir === undefined) delete process.env.NUVIRA_MEMORY_DIR;
+  else process.env.NUVIRA_MEMORY_DIR = originalMemoryDir;
+  if (originalTelemetryAction === undefined) delete process.env.NUVIRA_TELEMETRY_ACTION;
+  else process.env.NUVIRA_TELEMETRY_ACTION = originalTelemetryAction;
   rmSync(tempDir, { recursive: true, force: true });
 });
 
@@ -224,9 +224,9 @@ describe('FailureBookkeeping — recordActionFailure', () => {
     expect(entries.some((e) => e.provider === 'groq' && e.model === 'llama-3.3-70b-versatile' && e.action === 'execute')).toBe(true);
   });
 
-  it('BUFF_TELEMETRY_ACTION env override re-tags the registry write (VS Code spawns)', () => {
+  it('NUVIRA_TELEMETRY_ACTION env override re-tags the registry write (VS Code spawns)', () => {
     const session = makeSession();
-    process.env.BUFF_TELEMETRY_ACTION = 'ide-chat';
+    process.env.NUVIRA_TELEMETRY_ACTION = 'ide-chat';
 
     recordActionFailure(session, 'groq', new Error('401 Unauthorized'), makeConfig(), {
       model: 'llama-3.3-70b-versatile',

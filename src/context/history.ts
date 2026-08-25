@@ -1,7 +1,7 @@
 /**
  * ChatHistory — Stores and retrieves chat conversation history.
  *
- * History is stored in a JSON file at ~/.buff/memory/history.json
+ * History is stored in a JSON file at ~/.nuvira/memory/history.json
  * and supports keyword search for retrieving past conversations.
  *
  * Features:
@@ -12,6 +12,7 @@
  */
 
 import { readFileSync, writeFileSync, existsSync, mkdirSync } from 'node:fs';
+import { resolveNuviraHome } from '../config/paths';
 import { join } from 'node:path';
 import { homedir } from 'node:os';
 
@@ -58,7 +59,7 @@ interface HistoryData {
 
 // ─── Constants ──────────────────────────────────────────────────────────────
 
-const MEMORY_DIR = join(homedir(), '.buff', 'memory');
+const MEMORY_DIR = join(resolveNuviraHome(), 'memory');
 const HISTORY_PATH = join(MEMORY_DIR, 'history.json');
 const CURRENT_VERSION = 1;
 

@@ -9,6 +9,8 @@
  */
 
 import * as fs from 'fs';
+import { join } from 'node:path';
+import {resolveNuviraHome} from '../config/paths';
 import * as path from 'path';
 import { homedir } from 'os';
 
@@ -41,7 +43,7 @@ class CredentialFilesManager {
   private manifest: CredentialManifest;
 
   constructor(configDir?: string) {
-    const dir = configDir || path.join(homedir(), '.buff', 'credentials');
+    const dir = configDir || join(resolveNuviraHome(), 'credentials');
     this.manifestPath = path.join(dir, 'manifest.json');
     this.manifest = this.loadManifest();
   }

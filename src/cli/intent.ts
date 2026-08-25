@@ -1,5 +1,5 @@
 /**
- * `buff intent resolve "<ask>"` — plain-English → CLI routing.
+ * `nuvira intent resolve "<ask>"` — plain-English → CLI routing.
  *
  * The user-facing half of the intent router (src/commands/intent-router.ts):
  * type "stop the dashboard", "add Rahul's mobile +919958604222 to whatsapp",

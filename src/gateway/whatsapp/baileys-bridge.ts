@@ -300,7 +300,7 @@ export class BaileysBridge implements WhatsAppBridge {
   private pairing = false;
   /** I8b — ids of messages THIS bridge sent (echo filter; id → sent-at). */
   private readonly recentlySent = new Map<string, number>();
-  /** I8b — contacts from the user's mapping file (`buff whatsapp contact add`). */
+  /** I8b — contacts from the user's mapping file (`nuvira whatsapp contact add`). */
   private readonly fileContacts = new Map<string, string>();
   /** I8b — contacts learned at runtime (contacts sync / inbound pushName). */
   private readonly learnedContacts = new Map<string, string>();
@@ -312,7 +312,7 @@ export class BaileysBridge implements WhatsAppBridge {
     private readonly opts: { reconnectDelayMs?: number; selfChat?: boolean } = {},
   ) {
     this.lidMapper = new LidJidMapper(sessionDir);
-    // Seed the address-book mappings from ~/.buff/whatsapp/contacts.json.
+    // Seed the address-book mappings from ~/.nuvira/whatsapp/contacts.json.
     for (const [name, digits] of Object.entries(readContactsFile(this.sessionDir))) {
       const key = (name || '').trim().toLowerCase();
       if (!key || !digits) continue;
@@ -328,7 +328,7 @@ export class BaileysBridge implements WhatsAppBridge {
 
   describe(): string {
     if (!this.paired) {
-      return `WhatsApp (Baileys bridge — not paired; run \`buff whatsapp pair\`, session: ${this.sessionDir})`;
+      return `WhatsApp (Baileys bridge — not paired; run \`nuvira whatsapp pair\`, session: ${this.sessionDir})`;
     }
     const mode = this.opts.selfChat ? ', self-chat mode' : '';
     return `WhatsApp (Baileys bridge — paired${mode}, session: ${this.sessionDir})`;
@@ -386,7 +386,7 @@ export class BaileysBridge implements WhatsAppBridge {
   }
 
   /**
-   * Add a contact to the mapping file (`buff whatsapp contact add <name>
+   * Add a contact to the mapping file (`nuvira whatsapp contact add <name>
    * <number>`) and to the live map. Number may be E.164 or plain digits.
    */
   addContact(name: string, number: string): boolean {
@@ -547,7 +547,7 @@ export class BaileysBridge implements WhatsAppBridge {
   }
 
   /**
-   * Interactive pairing (the `buff whatsapp pair` flow).
+   * Interactive pairing (the `nuvira whatsapp pair` flow).
    *
    * QR mode (default): surfaces the raw payload via `onQr` and a scannable
    * terminal QR via `onQrRendered` (qrcode block characters). Baileys 7.x

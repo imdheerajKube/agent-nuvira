@@ -13,6 +13,7 @@
  */
 
 import { randomUUID } from 'node:crypto';
+import { resolveNuviraHome } from '../config/paths';
 import { existsSync, readFileSync, writeFileSync, mkdirSync, readdirSync } from 'node:fs';
 import { join } from 'node:path';
 import { homedir } from 'node:os';
@@ -137,7 +138,7 @@ export class CronParser {
 
 // ─── Cronjob Manager ──────────────────────────────────────────────────────
 
-const CRON_DIR = join(homedir(), '.buff', 'memory', 'cronjobs');
+const CRON_DIR = join(resolveNuviraHome(), 'memory', 'cronjobs');
 const HEARTBEAT_INTERVAL = 10_000; // 10 seconds
 const HEARTBEAT_CEILING = 6 * 3600_000; // 6 hours
 

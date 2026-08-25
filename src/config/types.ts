@@ -23,7 +23,7 @@ export interface ProviderConfig {
    * (the primary stays in `apiKey`). When the failover runner hits a
    * rate-limit/auth failure, it rotates to the next non-parked key of the
    * SAME provider before switching providers. Set directly in
-   * .buffconfig.json (`providers.<type>.apiKeys: ["...", "..."]`); raw keys
+   * .nuviraconfig.json (`providers.<type>.apiKeys: ["...", "..."]`); raw keys
    * are never stored in the quota ledger — only a stable fingerprint.
    */
   apiKeys?: string[];
@@ -87,7 +87,7 @@ export interface ProviderPricing {
 
 /**
  * Pricing override map keyed by provider type.
- * Set via `buff config set pricing.<provider>.inputPer1K <usd>`.
+ * Set via `nuvira config set pricing.<provider>.inputPer1K <usd>`.
  */
 export type PricingConfigMap = Record<string, ProviderPricing>;
 
@@ -107,7 +107,7 @@ export interface HistoryConfig {
 
 /**
  * Memory / vector-store configuration.
- * Set via `buff config set memory.<key> <value>` or directly in .buffconfig.json.
+ * Set via `nuvira config set memory.<key> <value>` or directly in .nuviraconfig.json.
  */
 export interface MemoryConfig {
   /**
@@ -124,8 +124,8 @@ export interface MemoryConfig {
 
 /**
  * Per-provider quota limits for the central quota ledger.
- * Set via `buff config set routing.quota.<provider>.<field> <value>` or directly
- * in .buffconfig.json. The ledger parks a provider once it exhausts its current
+ * Set via `nuvira config set routing.quota.<provider>.<field> <value>` or directly
+ * in .nuviraconfig.json. The ledger parks a provider once it exhausts its current
  * reset window and AUTO RE-ENABLES it when the window rolls (calendar-aware).
  */
 export interface QuotaLimit {
@@ -141,8 +141,8 @@ export interface QuotaLimit {
  * Admin governance policy for Auto model routing (Nuvira-Router M2.4).
  * All fields optional + additive — an empty/unset policy is fully permissive,
  * so existing configurations behave exactly as before. Set via
- * `buff config set routing.governance.<key> ...` or directly in
- * .buffconfig.json.
+ * `nuvira config set routing.governance.<key> ...` or directly in
+ * .nuviraconfig.json.
  *
  * Enforcement happens inside the auto-router's existing hard-constraint slot
  * (violating providers are ELIMINATED, never just scored lower), and
@@ -182,7 +182,7 @@ export interface GovernanceConfig {
    */
   minPrivacyForPii?: number;
   /**
-   * Whether `buff models unblock` may override REGISTRY-learned blocks
+   * Whether `nuvira models unblock` may override REGISTRY-learned blocks
    * (default: true — the escape hatch works). Set false to make registry
    * blocks admin-hard: unblock refuses and the provider stays skipped.
    * Governance allow/deny lists are ALWAYS admin-hard regardless of this.
@@ -192,7 +192,7 @@ export interface GovernanceConfig {
 
 /**
  * Learning-router configuration (Thompson-sampling bandit + hard constraints).
- * Set via `buff config set routing.<key> <value>` or directly in .buffconfig.json.
+ * Set via `nuvira config set routing.<key> <value>` or directly in .nuviraconfig.json.
  */
 export interface RoutingConfig {
   /**
@@ -265,7 +265,7 @@ export interface RoutingConfig {
   promptOnWeakModel?: boolean;
   /**
    * Minimum diverged A/B decisions before the promotion gate (bandit-vs-
-   * heuristic) evaluates as meaningful. Surfaced by `buff model bandit`.
+   * heuristic) evaluates as meaningful. Surfaced by `nuvira model bandit`.
    * Default: 20.
    */
   promotionMinDecisions?: number;
@@ -275,7 +275,7 @@ export interface RoutingConfig {
    * TASK FEATURES — "tasks that LOOK like this one succeeded on provider X" —
    * via hashed-feature cosine similarity over real outcomes. Cold start is
    * neutral, min-samples guarded, strength-clamped. Default: false (opt-in).
-   * Enable with `buff config set routing.mlRouter true`.
+   * Enable with `nuvira config set routing.mlRouter true`.
    */
   mlRouter?: boolean;
   /** k nearest neighbors for the ML router. Default: 8. */
@@ -328,7 +328,7 @@ export interface RoutingConfig {
    * Nominal input context window overrides (tokens) for the M2.5 context
    * preflight. Keyed by model id (exact match) or by provider id (provider-
    * level default for every model under that provider). Values replace the
-   * built-in table. Example: `buff config set routing.contextWindows.local 16384`
+   * built-in table. Example: `nuvira config set routing.contextWindows.local 16384`
    */
   contextWindows?: Record<string, number>;
   /**
@@ -371,11 +371,11 @@ export interface RoutingConfig {
    * Nuvira sidecar mode (Nuvira-Router P5). The `nuvira` provider is ALWAYS
    * usable as a plain OpenAI-compatible provider (providers.nuvira.baseUrl,
    * default http://127.0.0.1:20128/v1); this flag only gates sidecar-SPECIFIC
-   * integration helpers (the `buff doctor --nuvira` probe is run explicitly,
+   * integration helpers (the `nuvira doctor --nuvira` probe is run explicitly,
    * independent of this switch). Default: false (fully disabled — no new
    * runtime behavior when a gateway isn't in use). Set via
-   * `buff config set routing.nuviraSidecar.enabled true` or directly in
-   * .buffconfig.json.
+   * `nuvira config set routing.nuviraSidecar.enabled true` or directly in
+   * .nuviraconfig.json.
    */
   nuviraSidecar?: {
     /** Master switch for sidecar-specific integration helpers. Default: false. */
@@ -406,10 +406,10 @@ export interface RoutingConfig {
    * privacy-preserving by construction: enabling these NEVER captures prompt
    * content; it only reports aggregate usage/health numbers (request counts,
    * token totals, error rates) already tracked by the quota ledger and cost
-   * tracker, and surfaces them via `buff doctor --enterprise`.
+   * tracker, and surfaces them via `nuvira doctor --enterprise`.
    *
-   * Set via `buff config set routing.gatewayTelemetry.enabled true` or
-   * directly in .buffconfig.json.
+   * Set via `nuvira config set routing.gatewayTelemetry.enabled true` or
+   * directly in .nuviraconfig.json.
    */
   gatewayTelemetry?: {
     /**
@@ -429,7 +429,7 @@ export interface RoutingConfig {
 }
 
 /**
- * Full configuration schema for .buffconfig.json
+ * Full configuration schema for .nuviraconfig.json
  */
 export interface BuffConfig {
   defaultProvider: ProviderType;
@@ -461,7 +461,7 @@ export interface BuffConfig {
   skills?: SkillsConfig;
   /**
    * Gateway per-platform inbound policies (who may trigger the agent). Managed
-   * via `buff config gateway allow/disallow/reply` or the dashboard Permissions
+   * via `nuvira config gateway allow/disallow/reply` or the dashboard Permissions
    * page; merged over env in GatewayRegistry (env < config < explicit options).
    */
   gateway?: {
@@ -470,7 +470,7 @@ export interface BuffConfig {
      * Channel targets (aliases or platform:channelId) that ALWAYS receive the
      * pipeline completion summary, regardless of who triggered it — e.g.
      * "whatsapp:Alex", "telegram:123", "slack:ops". Managed via
-     * `buff config gateway notify add/remove` or the dashboard Permissions page.
+     * `nuvira config gateway notify add/remove` or the dashboard Permissions page.
      */
     statusRecipients?: string[];
   };

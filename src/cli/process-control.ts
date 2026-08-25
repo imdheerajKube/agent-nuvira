@@ -1,12 +1,12 @@
 /**
  * process-control.ts — find + gracefully stop a running gateway/dashboard.
  *
- * Both `buff gateway start` and `buff dashboard` run in the FOREGROUND of
+ * Both `nuvira gateway start` and `nuvira dashboard` run in the FOREGROUND of
  * whatever terminal launched them — so "how do I stop it?" used to mean
  * Ctrl+C there, or `pkill -f`. These helpers give a proper answer:
  *
- *   buff gateway stop      → SIGTERM the running `gateway start` process
- *   buff dashboard stop    → SIGTERM the running `dashboard` process
+ *   nuvira gateway stop      → SIGTERM the running `gateway start` process
+ *   nuvira dashboard stop    → SIGTERM the running `dashboard` process
  *
  * and back the dashboard's own Shutdown buttons (POST /api/admin/shutdown).
  *

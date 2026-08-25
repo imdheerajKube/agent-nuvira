@@ -20,16 +20,16 @@ import type { TaskStep } from '../../src/agents/agent.js';
 // ─── Hermetic memory dir ────────────────────────────────────────────────────
 
 let memDir: string;
-const ORIGINAL_MEMORY_DIR = process.env.BUFF_MEMORY_DIR;
+const ORIGINAL_MEMORY_DIR = process.env.NUVIRA_MEMORY_DIR;
 
 beforeAll(() => {
   memDir = mkdtempSync(join(tmpdir(), 'failure-lessons-test-'));
-  process.env.BUFF_MEMORY_DIR = memDir;
+  process.env.NUVIRA_MEMORY_DIR = memDir;
 });
 
 afterAll(() => {
-  if (ORIGINAL_MEMORY_DIR === undefined) delete process.env.BUFF_MEMORY_DIR;
-  else process.env.BUFF_MEMORY_DIR = ORIGINAL_MEMORY_DIR;
+  if (ORIGINAL_MEMORY_DIR === undefined) delete process.env.NUVIRA_MEMORY_DIR;
+  else process.env.NUVIRA_MEMORY_DIR = ORIGINAL_MEMORY_DIR;
   rmSync(memDir, { recursive: true, force: true });
 });
 

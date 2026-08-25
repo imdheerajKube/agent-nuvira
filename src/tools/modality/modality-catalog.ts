@@ -18,6 +18,7 @@
  */
 
 import { logger } from '../../utils/logger.js';
+import { envBuff } from '../../config/paths';
 
 // ─── Types ──────────────────────────────────────────────────────────────────
 
@@ -176,12 +177,12 @@ const IMAGE_PROVIDERS: ModalityProvider[] = [
     name: 'Local ComfyUI / Stable Diffusion',
     modality: 'image',
     apiType: 'local',
-    baseUrl: process.env.BUFF_IMAGE_API_URL || 'http://localhost:7860',
+    baseUrl: envBuff('IMAGE_API_URL') || 'http://localhost:7860',
     costPerUnit: 0,
     quality: 0.9,
     speed: 0.8,
     models: ['local'],
-    available: !!process.env.BUFF_IMAGE_API_URL,
+    available: !!envBuff('IMAGE_API_URL'),
     timeoutMs: 30000,
     requestBuilder: (prompt, opts) => ({
       prompt,

@@ -13,6 +13,7 @@ import type { BenchmarkTask, BenchmarkRun } from '../../src/learning/benchmark.j
 import { existsSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { homedir } from 'node:os';
+import { resolveNuviraHome } from '../../src/config/paths.js';
 
 // ─── Helpers ────────────────────────────────────────────────────────────────
 
@@ -334,7 +335,7 @@ describe('clearBenchmarks', () => {
     // Should not throw
     expect(() => clearBenchmarks()).not.toThrow();
     // The data file should now contain an empty runs array
-    const memDir = join(homedir(), '.buff', 'memory');
+    const memDir = join(resolveNuviraHome(), 'memory');
     const benchPath = join(memDir, 'benchmarks.json');
     if (existsSync(benchPath)) {
       const data = JSON.parse(readFileSync(benchPath, 'utf-8'));

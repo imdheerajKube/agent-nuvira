@@ -18,10 +18,11 @@
  *   Option 2: Docker
  *     docker run -p 9377:9377 -e CAMOFOX_PORT=9377 jo-inc/camofox-browser
  *
- * Then set CAMOFOX_URL=http://localhost:9377 in ~/.buff/.env
+ * Then set CAMOFOX_URL=http://localhost:9377 in ~/.nuvira/.env
  */
 
 import { existsSync, readFileSync, writeFileSync, mkdirSync } from 'node:fs';
+import { resolveNuviraHome } from '../config/paths';
 import { join } from 'node:path';
 import { homedir } from 'node:os';
 import { randomUUID } from 'node:crypto';
@@ -98,7 +99,7 @@ export interface CamofoxScreenshot {
 
 // ─── Camofox State Manager ────────────────────────────────────────────────
 
-const CAMOFOX_STATE_DIR = join(homedir(), '.buff', 'browser_auth', 'camofox');
+const CAMOFOX_STATE_DIR = join(resolveNuviraHome(), 'browser_auth', 'camofox');
 
 export class CamofoxStateManager {
   /**

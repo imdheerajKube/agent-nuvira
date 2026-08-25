@@ -1,13 +1,13 @@
 /**
- * Team CLI Integration Tests — End-to-end testing of `buff team` commands.
+ * Team CLI Integration Tests — End-to-end testing of `nuvira team` commands.
  *
  * Covers:
- *   1. `buff team init` — creates .buffconfig.json with team settings
- *   2. `buff team init --repo` — init with repo URL (mocked git)
- *   3. `buff team join <url>` — clone and configure (mocked git)
- *   4. `buff team sync` — pull + push via git
- *   5. `buff team status` — displays config, memory, and reviews
- *   6. `buff team review` — full lifecycle: create, list, show, approve, merge
+ *   1. `nuvira team init` — creates .buffconfig.json with team settings
+ *   2. `nuvira team init --repo` — init with repo URL (mocked git)
+ *   3. `nuvira team join <url>` — clone and configure (mocked git)
+ *   4. `nuvira team sync` — pull + push via git
+ *   5. `nuvira team status` — displays config, memory, and reviews
+ *   6. `nuvira team review` — full lifecycle: create, list, show, approve, merge
  *   7. Error handling — existing config, no repo, invalid review
  *
  * Uses tmpdir for isolation and mocks git exec to avoid real git operations.
@@ -28,7 +28,7 @@ vi.mock('node:child_process', () => ({
   }),
 }));
 
-// Mock homedir to use a temp path so review tests don't pollute real ~/.buff/
+// Mock homedir to use a temp path so review tests don't pollute real ~/.nuvira/
 vi.mock('node:os', async (importOriginal) => {
   const actual = await importOriginal<typeof import('node:os')>();
   const { join: pJoin } = await import('node:path');
@@ -46,6 +46,7 @@ import { execSync } from 'node:child_process';
 import { TeamCommand } from '../../src/cli/team.js';
 import { Command } from 'commander';
 import { homedir } from 'node:os';
+import { resolveNuviraHome } from '../../src/config/paths.js';
 
 // ─── Helpers ────────────────────────────────────────────────────────────────
 
@@ -127,9 +128,9 @@ describe('Team CLI Integration', () => {
     cleanupTempDir(testDir);
   });
 
-  // ── buff team init ───────────────────────────────────────────────────────
+  // ── nuvira team init ───────────────────────────────────────────────────────
 
-  describe('buff team init', () => {
+  describe('nuvira team init', () => {
     it('creates a .buffconfig.json with default team settings', async () => {
       await runTeam(['init']);
 
@@ -213,9 +214,9 @@ describe('Team CLI Integration', () => {
     });
   });
 
-  // ── buff team join ───────────────────────────────────────────────────────
+  // ── nuvira team join ───────────────────────────────────────────────────────
 
-  describe('buff team join <repo-url>', () => {
+  describe('nuvira team join <repo-url>', () => {
     const repoUrl = 'https://github.com/existing/team.git';
 
     it('calls git clone with the provided URL', async () => {
@@ -264,9 +265,9 @@ describe('Team CLI Integration', () => {
     });
   });
 
-  // ── buff team sync ───────────────────────────────────────────────────────
+  // ── nuvira team sync ───────────────────────────────────────────────────────
 
-  describe('buff team sync', () => {
+  describe('nuvira team sync', () => {
     it('shows error when team memory is not a git repo', async () => {
       createBuffConfig(testDir);
 
@@ -353,9 +354,9 @@ describe('Team CLI Integration', () => {
     });
   });
 
-  // ── buff team review lifecycle ──────────────────────────────────────────
+  // ── nuvira team review lifecycle ──────────────────────────────────────────
 
-  describe('buff team review lifecycle', () => {
+  describe('nuvira team review lifecycle', () => {
 
     it('create: creates a review bundle from specified files', async () => {
       // Create a test file to include in the review
@@ -370,7 +371,7 @@ describe('Team CLI Integration', () => {
       await runTeam(['review', 'create', 'Add greeting', 'Add hello world', '--files', 'src/main.ts']);
 
       // Check that a review was created
-      const rDir = join(homedir(), '.buff', 'team', 'reviews');
+      const rDir = join(resolveNuviraHome(), 'team', 'reviews');
       expect(existsSync(rDir)).toBe(true);
       const files = readdirSync(rDir).filter(f => f.endsWith('.json') && f !== 'index.json');
       expect(files.length).toBeGreaterThan(0);
@@ -418,7 +419,7 @@ describe('Team CLI Integration', () => {
       await runTeam(['review', 'create', 'Test reject', 'Testing reject', '--files', 'src/app.ts']);
 
       // Find the created review ID
-      const rDir = join(homedir(), '.buff', 'team', 'reviews');
+      const rDir = join(resolveNuviraHome(), 'team', 'reviews');
       const reviewFiles = readdirSync(rDir).filter(f => f.endsWith('.json') && f !== 'index.json');
       const reviewId = reviewFiles[0].replace('.json', '');
 
@@ -430,9 +431,9 @@ describe('Team CLI Integration', () => {
     });
   });
 
-  // ── buff team status ─────────────────────────────────────────────────────
+  // ── nuvira team status ─────────────────────────────────────────────────────
 
-  describe('buff team status', () => {
+  describe('nuvira team status', () => {
     it('shows no team config message when unconfigured', async () => {
       await runTeam(['status']);
 

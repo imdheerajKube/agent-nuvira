@@ -5,7 +5,7 @@
  * schedule, attempt accounting (sent / pending / failed), due-window
  * processing, prune (cap + retention), and the GatewayRegistry integration
  * (failed send → enqueue; successful drain → sent). All hermetic — a temp
- * config dir, never the real ~/.buff.
+ * config dir, never the real ~/.nuvira.
  */
 
 import { describe, it, expect, vi } from 'vitest';

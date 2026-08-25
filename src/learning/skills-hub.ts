@@ -14,9 +14,9 @@
  * - **Sandboxed install**: skill names are validated (`^[a-z0-9-]+$`) and the
  *   target path is always `<project>/.agents/skills/<name>/` — no traversal.
  * - **Provenance + checksum**: every install records `{source, version,
- *   installedAt, sha256, origin}` in `~/.buff/skills-hub/provenance.json`; the
+ *   installedAt, sha256, origin}` in `~/.nuvira/skills-hub/provenance.json`; the
  *   checksum is re-verified on update and a mismatch quarantines the skill
- *   (moved to `~/.buff/skills-hub/quarantine/`) instead of overwriting.
+ *   (moved to `~/.nuvira/skills-hub/quarantine/`) instead of overwriting.
  * - **Availability-gated**: unset registry → the built-in default (GitHub raw);
  *   `BUFF_SKILLS_REGISTRY` overrides (can point at a local dir for offline use).
  * - Registry index cached with a 1h TTL (same as workflow registry).
@@ -39,6 +39,7 @@ import { resolveNuviraHome } from '../config/paths.js';
 
 import { logger } from '../utils/logger.js';
 import { compareVersions } from '../workflow/registry.js';
+import { envBuff } from '../config/paths';
 
 // ─── Types ──────────────────────────────────────────────────────────────────
 
@@ -91,8 +92,8 @@ export interface SkillProvenance {
 const DEFAULT_REGISTRY_BASE = 'https://raw.githubusercontent.com/imdheerajKube/agent-nuvira/main/.agents/skills';
 
 /** Local store for provenance + quarantine. */
-const BUFF_DIR = resolveNuviraHome();
-const HUB_DIR = join(BUFF_DIR, 'skills-hub');
+const NUVIRA_DIR = resolveNuviraHome();
+const HUB_DIR = join(NUVIRA_DIR, 'skills-hub');
 const PROVENANCE_PATH = join(HUB_DIR, 'provenance.json');
 const QUARANTINE_DIR = join(HUB_DIR, 'quarantine');
 
@@ -156,7 +157,8 @@ export function packagedRegistryDir(): string | null {
 
 /** Resolve the registry base: env override → packaged dir → built-in default. */
 function registryBase(): string {
-  if (process.env.BUFF_SKILLS_REGISTRY) return process.env.BUFF_SKILLS_REGISTRY;
+  const reg = envBuff('SKILLS_REGISTRY');
+  if (reg) return reg;
   const packaged = packagedRegistryDir();
   if (packaged) return `file://${packaged}`;
   return DEFAULT_REGISTRY_BASE;
@@ -312,7 +314,7 @@ export async function fetchSkillFile(registry: string, path: string): Promise<st
  * Install a skill into `<project>/.agents/skills/<name>/` (sandboxed: the name
  * must match `^[a-z0-9-]+$`). Records provenance + checksum; a checksum
  * mismatch on REINSTALL quarantines the incoming copy instead of overwriting.
- * Pass `force: true` (the explicit `buff skills update` path) to overwrite
+ * Pass `force: true` (the explicit `nuvira skills update` path) to overwrite
  * instead of quarantine — an explicit update is the user saying "bring this
  * skill to the registry's latest".
  *
@@ -424,7 +426,7 @@ export async function installHubSkill(
 /**
  * Remove an installed skill: deletes `<project>/.agents/skills/<name>/` AND
  * its provenance record (P6d — the dashboard marketplace's uninstall button
- * and `buff skills uninstall`). Sandboxed like install: the name must match
+ * and `nuvira skills uninstall`). Sandboxed like install: the name must match
  * `^[a-z0-9-]+$` and the target is always inside the skills root.
  *
  * @returns { ok, reason? } — ok:false only when the skill is not installed

@@ -152,7 +152,7 @@ export interface OrchestratorOptions {
    * Default: false — rate limits are handled fully automatically (silent wait
    * for transient hints, silent auto-switch to another provider when the
    * current one is exhausted). Also settable via `routing.askOnRateLimit` in
-   * .buffconfig.json.
+   * .nuviraconfig.json.
    */
   askOnRateLimit?: boolean;
   /**
@@ -237,7 +237,7 @@ export interface OrchestratorOptions {
   /**
    * Save a checkpoint after every task batch so the pipeline can be resumed
    * later with `--resume` (or a fresh run of the same goal). Checkpoints live
-   * in ~/.buff/memory/checkpoints/ and let a crash / quota kill / token expiry
+   * in ~/.nuvira/memory/checkpoints/ and let a crash / quota kill / token expiry
    * mid-pipeline continue from the first pending step instead of restarting.
    * Default: false. Implied true when resumeCheckpointId is set.
    */
@@ -407,7 +407,7 @@ export class Orchestrator {
   /**
    * P0 reasoning trace: the id of the trace for the CURRENT pipeline (set in
    * execute(), ended in its finally). All LLM calls made while this is set are
-   * recorded as steps so `buff trace replay <id>` and the dashboard can show
+   * recorded as steps so `nuvira trace replay <id>` and the dashboard can show
    * exactly which agent × model × prompt produced each result.
    */
   private activeTraceId: string | null = null;
@@ -465,7 +465,7 @@ export class Orchestrator {
   /** The actual pipeline body — wrapped by execute() with a K1 runId. */
   private async executeCorrelated(goal: string, options: OrchestratorOptions = {}): Promise<OrchestrationResult> {
     // P0 reasoning trace: begin the per-pipeline trace so every planner,
-    // memory, and task LLM call lands in ~/.buff/memory/reasoning-traces.json
+    // memory, and task LLM call lands in ~/.nuvira/memory/reasoning-traces.json
     // (best-effort — a trace failure must never break the pipeline).
     this.activeTraceId = beginTrace({
       goal,
@@ -478,7 +478,7 @@ export class Orchestrator {
       result = await this.executePipeline(goal, options);
       // Phase A2: workspace continuity — record this run in the project
       // registry so the current project's last goal / outcome / session are
-      // persisted for `buff doctor` and the D1 auto-recall. Best-effort — a
+      // persisted for `nuvira doctor` and the D1 auto-recall. Best-effort — a
       // workspace write must never break the result delivery.
       try {
         this.configManager.getWorkspaceStore().recordRun({
@@ -499,7 +499,7 @@ export class Orchestrator {
       }
       this.activeTraceId = null;
       // K2: persist runtime metrics (memory hits/misses, rule/LLM latency)
-      // at the end of every pipeline run so buff doctor / the dashboard see
+      // at the end of every pipeline run so nuvira doctor / the dashboard see
       // them in a fresh process.
       try {
         getMetrics().save();
@@ -592,7 +592,7 @@ export class Orchestrator {
       dependencyInstallSucceeded: false,
       rollbackCount: 0,
     };
-    // Auto routing: when the user selected auto (`-m auto` / `buff model switch auto`
+    // Auto routing: when the user selected auto (`-m auto` / `nuvira model switch auto`
     // / `--auto-route`), the planner/memory LLM must ALSO be routed through the
     // AutoModelRouter so no call ever sends a literal 'auto' model to a real API.
     // Matches executeSingleTask's rule: an explicit --model always wins.
@@ -739,7 +739,7 @@ export class Orchestrator {
           logger.info('   No MCP servers could be connected');
         }
       } else if (options.verbose) {
-        logger.info('   No MCP server configs found (see ~/.buff/mcp/)');
+        logger.info('   No MCP server configs found (see ~/.nuvira/mcp/)');
       }
     } catch (err) {
       logger.debug(`MCP auto-connect failed (non-critical): ${err}`);
@@ -884,7 +884,7 @@ export class Orchestrator {
       } else {
         // I7 P0: no compiled skill matched — consult the HUB catalog (installed
         // SKILL.md skills). These are first-class runtime capabilities too: a
-        // fresh `buff skills install` is matchable with zero recompilation.
+        // fresh `nuvira skills install` is matchable with zero recompilation.
         // Same model-selected activation contract: the skill is a
         // recommendation, the planner still owns the final plan.
         const { findHubSkillMatch } = await import('../learning/hub-skill-catalog.js');
@@ -1213,8 +1213,8 @@ export class Orchestrator {
 
       if (options.verbose) {
         logger.highlight(`\n📋 Created review bundle: ${review.id}`);
-        logger.info(`   Run \`buff team review show ${review.id}\` to view`);
-        logger.info(`   Run \`buff team review approve ${review.id}\` then \`buff team review merge ${review.id}\` to apply`);
+        logger.info(`   Run \`nuvira team review show ${review.id}\` to view`);
+        logger.info(`   Run \`nuvira team review approve ${review.id}\` then \`nuvira team review merge ${review.id}\` to apply`);
       }
     }
 
@@ -1305,7 +1305,7 @@ export class Orchestrator {
           );
 
           if (options.verbose && trajectoryId) {
-            logger.info('   Self-improvement stats saved. Run `buff learn optimize` to see recommendations.');
+            logger.info('   Self-improvement stats saved. Run `nuvira learn optimize` to see recommendations.');
           }
         } catch (err) {
           logger.debug(`Self-improvement loop failed: ${err}`);
@@ -1383,7 +1383,7 @@ export class Orchestrator {
     ) {
       logger.warn(
         `   ⚠️  Auto-routing found only a weak LOCAL model (${decision.model}, score ${decision.score.toFixed(2)}/1.0) — no verified cloud model is available. ` +
-        `Complex tasks may run slowly or fail. Add a real API key (buff provider set) or run with an explicit --model for reliable results.`,
+        `Complex tasks may run slowly or fail. Add a real API key (nuvira provider set) or run with an explicit --model for reliable results.`,
       );
       this.eventBus.emit(EventNames.ORCHESTRATOR_AGENT_UPDATE, {
         agentType: 'orchestrator',
@@ -1654,7 +1654,7 @@ export class Orchestrator {
    * rate-limiting repeatedly — the user is never interrupted, and the build
    * continues on whichever provider is healthy. The interactive prompt
    * (wait / switch / skip / abort) is opt-in via `routing.askOnRateLimit: true`
-   * in .buffconfig.json and only ever appears on a real TTY.
+   * in .nuviraconfig.json and only ever appears on a real TTY.
    *
    * Returns undefined only for dry-run (no LLM calls happen anyway), so even
    * non-interactive runs (CI, pipes) get silent auto-switch instead of grinding
@@ -1956,7 +1956,7 @@ export class Orchestrator {
 
     try {
       // ── Auto routing: use the right model for the right task ───────────
-      // When the user selected Auto (`-m auto` / `buff model switch auto`) or
+      // When the user selected Auto (`-m auto` / `nuvira model switch auto`) or
       // passed `--auto-route` without an explicit --model, route each task
       // independently via the AutoModelRouter so e.g. the planner gets a fast
       // cheap model while complex tasks get a stronger one. An explicit
@@ -2481,7 +2481,7 @@ export class Orchestrator {
                 })));
               }
               // Token-savings transparency (Step 5): record the retrieval into
-              // retrieval-stats.json so `buff retrieval stats` and the dashboard
+              // retrieval-stats.json so `nuvira retrieval stats` and the dashboard
               // Retrieval card reflect pipeline retrieval too (not just chat).
               try {
                 const originalTokens = contextFiles.reduce((sum, f) => {
@@ -3082,7 +3082,7 @@ export class Orchestrator {
    * Fired when auto routing is active and the registry has no verified
    * providers: probes listModels + spot-checks the configured providers so the
    * pipeline's later tasks route on REAL health data (the dedicated model-
-   * health agent's job, started on demand instead of waiting for `buff models
+   * health agent's job, started on demand instead of waiting for `nuvira models
    * watch`). Latched per instance — a long dev-mode session only pays once.
    * Fire-and-forget: never awaited, never blocks, never throws.
    */

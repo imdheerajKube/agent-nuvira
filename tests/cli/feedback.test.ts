@@ -1,5 +1,5 @@
 /**
- * FeedbackCommand — Unit tests for buff feedback record/list/stats/clear.
+ * FeedbackCommand — Unit tests for nuvira feedback record/list/stats/clear.
  *
  * Covers:
  * 1. Record feedback with CLI flags (--positive, --negative, --neutral)

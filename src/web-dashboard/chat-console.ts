@@ -1,7 +1,7 @@
 /**
  * P3 — Dashboard chat console.
  *
- * In-process agent chat (GUI parity with `buff chat "<prompt>"`): each message
+ * In-process agent chat (GUI parity with `nuvira chat "<prompt>"`): each message
  * runs ONE tool-loop turn through ChatCommand.answerOnce — the exact engine
  * behind the CLI's single-shot chat — with the conversation history threaded
  * across turns so the GUI holds a real session, not isolated prompts.
@@ -141,7 +141,7 @@ export interface ChatSessionSummary {
 /**
  * An attachment that rides into a turn as `[Attachment: <name>]` context — a
  * file picked in the composer or a large pasted text block (the dashboard
- * twin of `buff chat -f <file>`). Content travels inline (client reads the
+ * twin of `nuvira chat -f <file>`). Content travels inline (client reads the
  * file, server injects it into the same answerOnce context).
  */
 export interface ChatAttachment {
@@ -442,7 +442,7 @@ export class ChatConsole {
         ...(opts.model ? { model: opts.model } : {}),
         // P3 — project context rides into the turn (the engine injects it as
         // a `[Project context]` message in the thread). Attachments join the
-        // same context block (the dashboard twin of `buff chat -f <file>`).
+        // same context block (the dashboard twin of `nuvira chat -f <file>`).
         ...(opts.projectContext || (opts.attachments && opts.attachments.length > 0)
           ? { projectContext: formatTurnContext(opts.projectContext, opts.attachments) }
           : {}),
@@ -673,7 +673,7 @@ function lastAssistantText(turns: ChatTurn[]): string {
  * P8 — combine the project snapshot and turn attachments into the single
  * context block the engine injects before the message. Project context stays
  * first; each attachment is a `[Attachment: <name>]` section with the raw
- * content, so "read this file" works exactly like `buff chat -f`.
+ * content, so "read this file" works exactly like `nuvira chat -f`.
  */
 function formatTurnContext(projectContext: string | undefined, attachments: ChatAttachment[] | undefined): string {
   const parts: string[] = [];

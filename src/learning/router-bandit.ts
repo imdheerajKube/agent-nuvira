@@ -14,11 +14,12 @@
  *   providers get the highest α bump on success (a cheap successful call is
  *   the most cost-efficient outcome), failures always β++.
  *
- * Persisted to ~/.buff/memory/router-bandit.json (respects BUFF_MEMORY_DIR).
+ * Persisted to ~/.nuvira/memory/router-bandit.json (respects NUVIRA_MEMORY_DIR).
  * All writes are best-effort — a failed write must never break routing.
  */
 
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
+import {envBuff, resolveNuviraHome} from '../config/paths';
 import { join } from 'node:path';
 import { homedir } from 'node:os';
 
@@ -99,12 +100,12 @@ export interface RouterBanditState {
 
 // ─── Storage ────────────────────────────────────────────────────────────────
 
-const DEFAULT_MEMORY_DIR = join(homedir(), '.buff', 'memory');
+const DEFAULT_MEMORY_DIR = join(resolveNuviraHome(), 'memory');
 const CURRENT_VERSION = 3; // v2 = per-modelId modelPriors; v3 = task-INTENT-aware buckets
 const MAX_HISTORY = 200;
 
 function memoryDir(): string {
-  return process.env.BUFF_MEMORY_DIR || DEFAULT_MEMORY_DIR;
+  return envBuff('MEMORY_DIR') || DEFAULT_MEMORY_DIR;
 }
 
 function statePath(): string {
@@ -478,7 +479,7 @@ export class RouterBandit {
     };
   }
 
-  /** Reset all state (used by tests and `buff model bandit reset`). */
+  /** Reset all state (used by tests and `nuvira model bandit reset`). */
   reset(): void {
     this.state = emptyState();
     this.lastProviderByAgent = {};

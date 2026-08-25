@@ -1,5 +1,5 @@
 /**
- * C3 — `buff nlu debug "<query>"`.
+ * C3 — `nuvira nlu debug "<query>"`.
  *
  * Explainability surface for the NLU layer: shows the deterministic rule path
  * (intent, confidence, mode, action, entities, temporal refs, router

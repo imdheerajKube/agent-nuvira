@@ -20,18 +20,18 @@ describe('ConfigManager', () => {
     delete process.env.MISTRAL_API_KEY;
     delete process.env.DEEPINFRA_TOKEN;
     delete process.env.REPLICATE_API_TOKEN;
-    // Isolate from the real ~/.buff/.env (may hold real keys after the M7.4
+    // Isolate from the real ~/.nuvira/.env (may hold real keys after the M7.4
     // secrets migration): point the home .env lookup at a non-existent path.
-    delete process.env.BUFF_ENV_FILE;
-    process.env.BUFF_ENV_FILE = join(testDir, 'home-env-does-not-exist.env');
+    delete process.env.NUVIRA_ENV_FILE;
+    process.env.NUVIRA_ENV_FILE = join(testDir, 'home-env-does-not-exist.env');
     // Isolate from any BUFF_CONFIG_DIR a developer may export in their shell —
-    // the ConfigManager must never read/write the real ~/.buff config in tests.
-    delete process.env.BUFF_CONFIG_DIR;
+    // the ConfigManager must never read/write the real ~/.nuvira config in tests.
+    delete process.env.NUVIRA_CONFIG_DIR;
   });
 
   afterEach(() => {
-    delete process.env.BUFF_ENV_FILE;
-    delete process.env.BUFF_CONFIG_DIR;
+    delete process.env.NUVIRA_ENV_FILE;
+    delete process.env.NUVIRA_CONFIG_DIR;
     if (testDir) {
       rmSync(testDir, { recursive: true, force: true });
     }
@@ -124,11 +124,11 @@ describe('ConfigManager', () => {
     });
   });
 
-  describe('BUFF_CONFIG_DIR override', () => {
+  describe('NUVIRA_CONFIG_DIR override', () => {
     it('honors BUFF_CONFIG_DIR when no explicit dir is passed (reads there)', () => {
       // The RBAC role file / credential store already honor BUFF_CONFIG_DIR; the
       // config manager must too, so a hermetic run pointed at BUFF_CONFIG_DIR
-      // can never read or write the real ~/.buff/buffconfig.json.
+      // can never read or write the real ~/.nuvira/nuviraconfig.json.
       const altDir = join(testDir, 'alt-config');
       mkdirSync(altDir, { recursive: true });
       writeFileSync(
@@ -136,7 +136,7 @@ describe('ConfigManager', () => {
         JSON.stringify({ defaultProvider: 'groq', providers: { groq: { model: 'alt-model' } } }),
         'utf-8',
       );
-      process.env.BUFF_CONFIG_DIR = altDir;
+      process.env.NUVIRA_CONFIG_DIR = altDir;
 
       const manager = new ConfigManager(); // no explicit dir
       const config = manager.getAll();
@@ -144,10 +144,10 @@ describe('ConfigManager', () => {
       expect(config.providers.groq.model).toBe('alt-model');
     });
 
-    it('writes to the BUFF_CONFIG_DIR path on save (no leakage into ~/.buff)', () => {
+    it('writes to the BUFF_CONFIG_DIR path on save (no leakage into ~/.nuvira)', () => {
       const altDir = join(testDir, 'alt-config-save');
       mkdirSync(altDir, { recursive: true });
-      process.env.BUFF_CONFIG_DIR = altDir;
+      process.env.NUVIRA_CONFIG_DIR = altDir;
 
       const manager = new ConfigManager();
       manager.save({ defaultProvider: 'openrouter' });
@@ -155,7 +155,7 @@ describe('ConfigManager', () => {
       const saved = JSON.parse(readFileSync(join(altDir, 'buffconfig.json'), 'utf-8'));
       expect(saved.defaultProvider).toBe('openrouter');
       // The write landed inside the override dir — that's the proof the env
-      // was honored (a fallback would have targeted the real ~/.buff, which
+      // was honored (a fallback would have targeted the real ~/.nuvira, which
       // tests must never touch).
     });
 
@@ -169,7 +169,7 @@ describe('ConfigManager', () => {
       );
       const explicitDir = join(testDir, 'explicit-dir');
       mkdirSync(explicitDir, { recursive: true });
-      process.env.BUFF_CONFIG_DIR = altDir;
+      process.env.NUVIRA_CONFIG_DIR = altDir;
 
       const manager = new ConfigManager(explicitDir);
       expect(manager.getAll().defaultProvider).toBe('auto'); // explicit dir has no file → defaults
@@ -427,7 +427,7 @@ describe('ConfigManager', () => {
       const manager = new ConfigManager(configDir);
       expect(manager.getAll().routing?.quota?.groq?.tokensPerWindow).toBe(1000);
 
-      // External change — e.g. `buff model quota set groq --tokens 9000` or the
+      // External change — e.g. `nuvira model quota set groq --tokens 9000` or the
       // dashboard's Daily Budget panel — while THIS instance is alive:
       await new Promise((r) => setTimeout(r, 15)); // ensure a distinct mtime tick
       writeFileSync(
@@ -451,7 +451,7 @@ describe('ConfigManager', () => {
       await new Promise((r) => setTimeout(r, 15));
       writeFileSync(cfgPath, JSON.stringify({ routing: { quota: { groq: { tokensPerWindow: 9000 } } } }), 'utf-8');
 
-      // Our save mirrors `buff model quota set gemini` — a full merged map built
+      // Our save mirrors `nuvira model quota set gemini` — a full merged map built
       // from a refreshed getAll(). It must NOT clobber the external change.
       const all = manager.getAll(); // refreshes → sees the 9000
       const quota = { ...(all.routing?.quota || {}) };
@@ -608,8 +608,8 @@ describe('ConfigManager', () => {
     });
 
     it('should preserve per-field pricing overrides across sequential saves', () => {
-      // Mirrors `buff config set pricing.groq.inputPer1K X` then
-      // `buff config set pricing.groq.outputPer1K Y` — both fields must survive.
+      // Mirrors `nuvira config set pricing.groq.inputPer1K X` then
+      // `nuvira config set pricing.groq.outputPer1K Y` — both fields must survive.
       const configDir = join(testDir, 'test-pricing-sequential');
       const manager = new ConfigManager(configDir);
 

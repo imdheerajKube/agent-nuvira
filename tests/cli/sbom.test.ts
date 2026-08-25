@@ -1,13 +1,13 @@
 /**
- * SbomCommand — unit tests for `buff sbom` (P6 M6.6).
+ * SbomCommand — unit tests for `nuvira sbom` (P6 M6.6).
  *
  * Runs the real Commander command against a hermetic temp project with a
  * synthetic package-lock.json, capturing stdout via console spies:
- * 1. `buff sbom` prints a valid CycloneDX document to stdout
- * 2. `buff sbom --out <path>` writes a file
- * 3. `buff sbom --out` then `--verify` passes for an unchanged lockfile
+ * 1. `nuvira sbom` prints a valid CycloneDX document to stdout
+ * 2. `nuvira sbom --out <path>` writes a file
+ * 3. `nuvira sbom --out` then `--verify` passes for an unchanged lockfile
  * 4. `--verify` fails (exit 1) when a dependency is added after the SBOM
- * 5. `buff sbom --licenses` flags copyleft/unknown licenses
+ * 5. `nuvira sbom --licenses` flags copyleft/unknown licenses
  * 6. `--verify` with a missing sbom.json errors with exit 1
  */
 

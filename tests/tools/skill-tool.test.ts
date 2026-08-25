@@ -3,7 +3,7 @@
  *
  * The chat agent can load a reusable capability pack by name: compiled skills
  * (SkillStore) and hub skills (SKILL.md under .agents/skills/). Hermetic — a
- * temp HOME isolates the real ~/.buff store, and a temp project root provides
+ * temp HOME isolates the real ~/.nuvira store, and a temp project root provides
  * the hub catalog.
  */
 

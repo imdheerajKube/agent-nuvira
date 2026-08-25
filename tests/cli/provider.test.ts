@@ -1,5 +1,5 @@
 /**
- * ProviderCommand — Unit tests for buff provider list/health.
+ * ProviderCommand — Unit tests for nuvira provider list/health.
  *
  * Covers:
  * 1. provider list — all providers available

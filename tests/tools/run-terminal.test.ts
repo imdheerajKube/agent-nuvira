@@ -144,7 +144,7 @@ describe('runTerminalTool — the verify loop', () => {
 
   it('routes buff/agent-nuvira commands to run_cli (one execution path)', async () => {
     const { ctx } = makeWorkspace();
-    const out = await runTerminalTool({ command: 'buff doctor' }, ctx);
+    const out = await runTerminalTool({ command: 'nuvira doctor' }, ctx);
     expect(out).toContain('run_cli');
     expect(out).toContain('command manifest');
   });

@@ -17,10 +17,10 @@ import { describe, it, expect, beforeAll, afterAll, beforeEach, afterEach, vi } 
 import { existsSync, readFileSync, readdirSync, rmSync } from 'node:fs';
 import { join } from 'node:path';
 
-// Isolate persistence from the real ~/.buff store: eval-framework's EVAL_PATH
+// Isolate persistence from the real ~/.nuvira store: eval-framework's EVAL_PATH
 // is computed at module load, so homedir is mocked at hoist time (same pattern
 // as session-recall.test.ts). Without this, runEvalSuite/clearEvals in tests
-// WROTE TO AND WIPED the user's real ~/.buff/memory/evals.json.
+// WROTE TO AND WIPED the user's real ~/.nuvira/memory/evals.json.
 const testDirHolder = vi.hoisted(() => {
   const { mkdtempSync } = require('node:fs');
   const { join } = require('node:path');
@@ -587,7 +587,7 @@ describe('runEvalSuite', () => {
     expect(runs.length).toBeGreaterThanOrEqual(1);
     expect(runs[0].provider).toBe('test-provider');
     // Verify persisted to disk
-    const evalPath = join(testDirHolder.value, '.buff', 'memory', 'evals.json');
+    const evalPath = join(testDirHolder.value, '.nuvira', 'memory', 'evals.json');
     expect(existsSync(evalPath)).toBe(true);
     const data = JSON.parse(readFileSync(evalPath, 'utf-8'));
     expect(data.runs.length).toBeGreaterThanOrEqual(1);
@@ -983,7 +983,7 @@ describe('formatEvalScoreRules', () => {
 describe('clearEvals', () => {
   it('clears persisted eval data without throwing', () => {
     expect(() => clearEvals()).not.toThrow();
-    const evalPath = join(testDirHolder.value, '.buff', 'memory', 'evals.json');
+    const evalPath = join(testDirHolder.value, '.nuvira', 'memory', 'evals.json');
     if (existsSync(evalPath)) {
       const data = JSON.parse(readFileSync(evalPath, 'utf-8'));
       expect(data.runs).toEqual([]);

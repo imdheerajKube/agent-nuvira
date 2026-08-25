@@ -2,7 +2,7 @@
  * VectorStore — pluggable vector index for semantic search.
  *
  * Stores embeddings as `{ id, vector, metadata }` entries in a JSON file
- * (~/.buff/memory/vectors.json, or vectors-<namespace>.json). No hard native
+ * (~/.nuvira/memory/vectors.json, or vectors-<namespace>.json). No hard native
  * dependencies — uses only Node.js built-in fs and crypto.
  *
  * Backends (selected by `memory.vectorBackend` in config):
@@ -18,6 +18,7 @@
  */
 
 import { readFileSync, writeFileSync, existsSync, mkdirSync } from 'node:fs';
+import {envBuff, resolveNuviraHome} from '../config/paths';
 import { join } from 'node:path';
 import { homedir } from 'node:os';
 import { resolveBuffConfigPath } from '../config/paths.js';
@@ -74,11 +75,11 @@ export interface VectorStoreBackend {
 
 /**
  * Resolve the memory dir lazily (per call) so tests that set
- * `BUFF_MEMORY_DIR` in beforeAll are genuinely hermetic — a module-import-
- * time capture would silently keep writing to the real ~/.buff/memory.
+ * `NUVIRA_MEMORY_DIR` in beforeAll are genuinely hermetic — a module-import-
+ * time capture would silently keep writing to the real ~/.nuvira/memory.
  */
 function memoryDir(): string {
-  return process.env.BUFF_MEMORY_DIR || join(homedir(), '.buff', 'memory');
+  return envBuff('MEMORY_DIR') || join(resolveNuviraHome(), 'memory');
 }
 
 /**
@@ -193,7 +194,7 @@ export class JsonBackend implements VectorStoreBackend {
     this.namespace = namespace;
   }
 
-  /** Resolve the index path per operation so `BUFF_MEMORY_DIR` changes (tests) take effect. */
+  /** Resolve the index path per operation so `NUVIRA_MEMORY_DIR` changes (tests) take effect. */
   private get indexPath(): string {
     return indexPathFor(this.namespace);
   }
@@ -274,7 +275,7 @@ let configBackend: VectorBackendType | null = null;
 let configBackendLoaded = false;
 
 /**
- * Read `memory.vectorBackend` from the buff config (lazy, cached).
+ * Read `memory.vectorBackend` from the nuvira config (lazy, cached).
  * Read directly (not via ConfigManager) to avoid a heavyweight dependency in
  * the hot vector path; env/override still win over config.
  */
@@ -300,7 +301,7 @@ function readConfigBackendType(): VectorBackendType | null {
  * back to the exact JSON backend when the FAISS stack is unavailable.
  */
 function resolvePreferredBackendType(): VectorBackendType {
-  const env = process.env.BUFF_VECTOR_BACKEND as VectorBackendType | undefined;
+  const env = envBuff('VECTOR_BACKEND') as VectorBackendType | undefined;
   if (env === 'json') return 'json';
   if (env === 'faiss' || env === 'auto') return 'faiss';
   if (backendOverride === 'json') return 'json';

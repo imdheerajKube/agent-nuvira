@@ -2,12 +2,12 @@
  * Workflow command — Lists, runs, and manages workflow templates.
  *
  * Usage:
- *   buff workflow list                    — Show available workflow templates
- *   buff workflow run quick-fix "goal"    — Run the quick-fix workflow
- *   buff workflow search <query>          — Search the GitHub workflow registry
- *   buff workflow install <template>      — Install template from the registry
- *   buff workflow publish <template-id>   — Prepare a local template for publishing
- *   buff workflow info <template>         — Show registry template details
+ *   nuvira workflow list                    — Show available workflow templates
+ *   nuvira workflow run quick-fix "goal"    — Run the quick-fix workflow
+ *   nuvira workflow search <query>          — Search the GitHub workflow registry
+ *   nuvira workflow install <template>      — Install template from the registry
+ *   nuvira workflow publish <template-id>   — Prepare a local template for publishing
+ *   nuvira workflow info <template>         — Show registry template details
  */
 
 import { Command } from 'commander';
@@ -90,7 +90,7 @@ export class WorkflowCommand extends BaseCommand {
     command
       .command('publish')
       .description('Prepare a local workflow template for publishing to the registry')
-      .argument('<template-id>', 'The ID of the local template to publish (must exist in ~/.buff/workflows/)')
+      .argument('<template-id>', 'The ID of the local template to publish (must exist in ~/.nuvira/workflows/)')
       .action(async (templateId: string) => {
         await this.preparePublish(templateId);
       });
@@ -170,8 +170,8 @@ export class WorkflowCommand extends BaseCommand {
     // If still not found, offer to install from registry
     if (!template) {
       logger.error(`Unknown workflow template: '${templateId}'`);
-      console.log(`\n  💡 Search the registry: buff workflow search ${templateId}`);
-      console.log(`     Install from registry: buff workflow install ${templateId}`);
+      console.log(`\n  💡 Search the registry: nuvira workflow search ${templateId}`);
+      console.log(`     Install from registry: nuvira workflow install ${templateId}`);
       console.log(`     Available built-in: ${getWorkflowTemplates().map((t) => t.id).join(', ')}`);
       return;
     }
@@ -250,7 +250,7 @@ export class WorkflowCommand extends BaseCommand {
         }
       }
 
-      console.log(`\n  Install: buff workflow install <template-id>`);
+      console.log(`\n  Install: nuvira workflow install <template-id>`);
       console.log('');
 
     } catch (err) {
@@ -272,8 +272,8 @@ export class WorkflowCommand extends BaseCommand {
         logger.success(`Successfully installed '${template.id}'`);
         console.log(`  Name: ${template.name}`);
         console.log(`  Steps: ${stepCount}`);
-        console.log(`  Location: ~/.buff/workflows/registry/${template.id}.json`);
-        console.log(`\n  Run it: buff workflow run ${template.id} "your goal"`);
+        console.log(`  Location: ~/.nuvira/workflows/registry/${template.id}.json`);
+        console.log(`\n  Run it: nuvira workflow run ${template.id} "your goal"`);
       }
     } catch (err) {
       spinner.fail('Installation failed');
@@ -357,7 +357,7 @@ export class WorkflowCommand extends BaseCommand {
         console.log(`    Latest:  v${upgrade.latestVersion}`);
       }
 
-      console.log(`\n  To upgrade a template: buff workflow install <template-id>`);
+      console.log(`\n  To upgrade a template: nuvira workflow install <template-id>`);
       console.log('  (This will overwrite the local version with the latest from the registry)');
       console.log('');
     } catch (err) {
@@ -397,7 +397,7 @@ export class WorkflowCommand extends BaseCommand {
         }
 
         logger.error(`Template '${templateId}' not found in registry or built-in templates.`);
-        logger.info(`Search: buff workflow search ${templateId}`);
+        logger.info(`Search: nuvira workflow search ${templateId}`);
         return;
       }
 
@@ -412,7 +412,7 @@ export class WorkflowCommand extends BaseCommand {
         console.log(`  Tags: ${entry.tags.join(', ')}`);
       }
       console.log(`  Updated: ${entry.updatedAt}`);
-      console.log(`  \n  Install: buff workflow install ${entry.id}`);
+      console.log(`  \n  Install: nuvira workflow install ${entry.id}`);
       console.log('');
 
     } catch (err) {

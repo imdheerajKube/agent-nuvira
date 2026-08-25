@@ -17,7 +17,7 @@ import { CATALOG_ENV_VARS } from '../../src/inference/provider-catalog.js';
 
 /**
  * Isolate the config manager from the developer's real environment: shell
- * env vars AND the real ~/.buff/.env (which may hold real keys after the
+ * env vars AND the real ~/.nuvira/.env (which may hold real keys after the
  * M7.4 secrets migration). BUFF_ENV_FILE is pointed at a nonexistent path so
  * loadEnv() finds nothing.
  */
@@ -26,9 +26,9 @@ function isolateEnvVars(testDir: string): void {
     if (envVar) delete process.env[envVar];
   }
   delete process.env.AZURE_OPENAI_ENDPOINT;
-  delete process.env.BUFF_CONFIG_DIR;
-  delete process.env.BUFF_ENV_FILE;
-  process.env.BUFF_ENV_FILE = join(testDir, 'home-env-does-not-exist.env');
+  delete process.env.NUVIRA_CONFIG_DIR;
+  delete process.env.NUVIRA_ENV_FILE;
+  process.env.NUVIRA_ENV_FILE = join(testDir, 'home-env-does-not-exist.env');
 }
 
 describe('Vault (Phase A1)', () => {
@@ -36,14 +36,14 @@ describe('Vault (Phase A1)', () => {
 
   beforeEach(() => {
     testDir = mkdtempSync(join(tmpdir(), 'buff-vault-test-'));
-    delete process.env.BUFF_VAULT_PASSPHRASE;
+    delete process.env.NUVIRA_VAULT_PASSPHRASE;
     isolateEnvVars(testDir);
   });
 
   afterEach(() => {
-    delete process.env.BUFF_VAULT_PASSPHRASE;
-    delete process.env.BUFF_CONFIG_DIR;
-    delete process.env.BUFF_ENV_FILE;
+    delete process.env.NUVIRA_VAULT_PASSPHRASE;
+    delete process.env.NUVIRA_CONFIG_DIR;
+    delete process.env.NUVIRA_ENV_FILE;
     if (testDir) {
       rmSync(testDir, { recursive: true, force: true });
     }
@@ -114,7 +114,7 @@ describe('Vault (Phase A1)', () => {
     });
 
     it('forced none stays none even when a passphrase is present', () => {
-      process.env.BUFF_VAULT_PASSPHRASE = 'env-passphrase-should-be-ignored';
+      process.env.NUVIRA_VAULT_PASSPHRASE = 'env-passphrase-should-be-ignored';
       const vault = Vault.open({ configDir: testDir, tier: 'none' });
       expect(vault.activeTier).toBe('none');
       expect(vault.status().tier).toBe('none');
@@ -225,7 +225,7 @@ describe('Vault (Phase A1)', () => {
       // keychain entries; the config file holds refs exactly like a migration
       // leaves them.
       const configDir = join(testDir, 'cfg-runtime');
-      process.env.BUFF_VAULT_PASSPHRASE = 'ci-pass'; // AES tier on keyring-less CI
+      process.env.NUVIRA_VAULT_PASSPHRASE = 'ci-pass'; // AES tier on keyring-less CI
       const writer = Vault.open({ configDir });
       // With the passphrase set, the tier is always keyring or aes-file — never
       // 'none' — so the resolution contract is always exercised.
@@ -256,10 +256,10 @@ describe('Vault (Phase A1)', () => {
 
     it('save() after a resolved read still writes vault refs, never resolved plaintext', async () => {
       // THE clone guarantee: getProviderConfig resolves refs on a copy — so a
-      // subsequent save() (e.g. `buff config set routing.bandit true` mid-run)
+      // subsequent save() (e.g. `nuvira config set routing.bandit true` mid-run)
       // must persist `vault:` refs, NOT the resolved secret it once saw.
       const configDir = join(testDir, 'cfg-writeback');
-      process.env.BUFF_VAULT_PASSPHRASE = 'wb-pass';
+      process.env.NUVIRA_VAULT_PASSPHRASE = 'wb-pass';
       const writer = Vault.open({ configDir });
       const ACC = 'writeback-test-groq';
       await writer.setPassword(ACC, 'gsk_should-never-hit-disk');

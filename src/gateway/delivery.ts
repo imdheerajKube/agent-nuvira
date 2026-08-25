@@ -4,14 +4,14 @@
  * A channel send is not
  * fire-and-forget. When `adapter.send()` fails (network blip, rate limit,
  * channel temporarily unreachable), the message is persisted to a delivery
- * ledger (`~/.buff/gateway/delivery.json`) and retried with exponential
- * backoff while the gateway runs — so a one-shot `buff gateway send` that
- * fails is NOT lost: the next `buff gateway start` drains it.
+ * ledger (`~/.nuvira/gateway/delivery.json`) and retried with exponential
+ * backoff while the gateway runs — so a one-shot `nuvira gateway send` that
+ * fails is NOT lost: the next `nuvira gateway start` drains it.
  *
  * Design:
- * - **Ledger survives processes** (file-backed, BUFF_CONFIG_DIR aware).
+ * - **Ledger survives processes** (file-backed, NUVIRA_CONFIG_DIR aware).
  * - **Backoff**: base 15s doubling, capped at 10 min; max 5 attempts, then
- *   the entry is marked `failed` (visible in `buff gateway delivery`).
+ *   the entry is marked `failed` (visible in `nuvira gateway delivery`).
  * - **Cap + prune**: keep the most recent 500 entries; `sent`/`failed` older
  *   than 24h are dropped so the file never grows unbounded.
  * - **Opportunistic flush**: a successful send drains any due pending entries

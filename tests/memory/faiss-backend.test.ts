@@ -23,16 +23,16 @@ import {
 // ─── Hermetic memory dir ────────────────────────────────────────────────────
 
 let memDir: string;
-const ORIGINAL_MEMORY_DIR = process.env.BUFF_MEMORY_DIR;
+const ORIGINAL_MEMORY_DIR = process.env.NUVIRA_MEMORY_DIR;
 
 beforeAll(() => {
   memDir = mkdtempSync(join(tmpdir(), 'faiss-test-'));
-  process.env.BUFF_MEMORY_DIR = memDir;
+  process.env.NUVIRA_MEMORY_DIR = memDir;
 });
 
 afterAll(() => {
-  if (ORIGINAL_MEMORY_DIR === undefined) delete process.env.BUFF_MEMORY_DIR;
-  else process.env.BUFF_MEMORY_DIR = ORIGINAL_MEMORY_DIR;
+  if (ORIGINAL_MEMORY_DIR === undefined) delete process.env.NUVIRA_MEMORY_DIR;
+  else process.env.NUVIRA_MEMORY_DIR = ORIGINAL_MEMORY_DIR;
   rmSync(memDir, { recursive: true, force: true });
 });
 
@@ -308,7 +308,7 @@ describe('NativeFaissBackend', () => {
 
 describe('getVectorStore backend selection', () => {
   it('defaults to a FAISS-style backend under auto when JSON is not forced', async () => {
-    // Explicitly request 'auto' so a developer's real ~/.buff/buffconfig.json
+    // Explicitly request 'auto' so a developer's real ~/.nuvira/nuviraconfig.json
     // (e.g. memory.vectorBackend: "json") can't change the outcome.
     setVectorBackendOverride('auto');
     const store = getVectorStore('cfg-ns');
@@ -324,15 +324,15 @@ describe('getVectorStore backend selection', () => {
   });
 
   it('honors the BUFF_VECTOR_BACKEND env var over config', async () => {
-    const prev = process.env.BUFF_VECTOR_BACKEND;
-    process.env.BUFF_VECTOR_BACKEND = 'json';
+    const prev = process.env.NUVIRA_VECTOR_BACKEND;
+    process.env.NUVIRA_VECTOR_BACKEND = 'json';
     resetVectorBackendSelection();
     try {
       const store = getVectorStore('cfg-ns-env');
       expect(await store.backendName()).toBe('json');
     } finally {
-      if (prev === undefined) delete process.env.BUFF_VECTOR_BACKEND;
-      else process.env.BUFF_VECTOR_BACKEND = prev;
+      if (prev === undefined) delete process.env.NUVIRA_VECTOR_BACKEND;
+      else process.env.NUVIRA_VECTOR_BACKEND = prev;
       resetVectorBackendSelection();
     }
   });

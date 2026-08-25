@@ -5,11 +5,11 @@
  * loads several methodologies in ONE turn (Hermes YAML-bundle parity). Two
  * layers:
  *   1. The bundle store (skill-bundles.ts) — create/list/show/delete against
- *      `~/.buff/skill-bundles/<slug>.yaml`, missing members skipped not fatal.
+ *      `~/.nuvira/skill-bundles/<slug>.yaml`, missing members skipped not fatal.
  *   2. The skill tool's bundle action — one call loads every member skill's
  *      methodology; unknown bundles list the catalog.
  *
- * Hermetic: the temp HOME (os.homedir mock) isolates the real ~/.buff, and
+ * Hermetic: the temp HOME (os.homedir mock) isolates the real ~/.nuvira, and
  * the store's dir is injectable per call for extra isolation.
  */
 
@@ -135,8 +135,8 @@ describe('P6b — skill bundle store', () => {
       lastUsedAt: Date.now(),
     });
     // 'queue-worker' does not exist — the bundle load must still deliver s3-upload.
-    // The tool reads the default root (~/.buff/skill-bundles under the mocked home).
-    writeBundle({ slug: 'dev', skills: ['s3-upload', 'queue-worker'] }, join(testHome, '.buff', 'skill-bundles'));
+    // The tool reads the default root (~/.nuvira/skill-bundles under the mocked home).
+    writeBundle({ slug: 'dev', skills: ['s3-upload', 'queue-worker'] }, join(testHome, '.nuvira', 'skill-bundles'));
 
     const out = await runSkillTool({ bundle: 'dev' }, { configManager: {} });
     expect(out).toContain('s3-upload');
@@ -173,16 +173,16 @@ describe('P6b — skill tool bundle action', () => {
     resetSkillStore();
     // Bundles persist on disk under the shared mocked home — a fresh dir per
     // test keeps the "no bundles yet" path honest.
-    rmSync(join(testHome, '.buff', 'skill-bundles'), { recursive: true, force: true });
+    rmSync(join(testHome, '.nuvira', 'skill-bundles'), { recursive: true, force: true });
   });
 
   afterEach(() => {
     resetSkillStore();
   });
 
-  /** The tool reads the DEFAULT store root (~/.buff/skill-bundles — the mocked home). */
+  /** The tool reads the DEFAULT store root (~/.nuvira/skill-bundles — the mocked home). */
   function defaultBundlesDir(): string {
-    return join(testHome, '.buff', 'skill-bundles');
+    return join(testHome, '.nuvira', 'skill-bundles');
   }
 
   it('bundle:list enumerates bundles; bundle:"<slug>" loads every member', async () => {

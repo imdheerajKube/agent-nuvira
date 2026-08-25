@@ -1,5 +1,5 @@
 /**
- * EvalCommand — Unit tests for `buff eval --routing`.
+ * EvalCommand — Unit tests for `nuvira eval --routing`.
  *
  * The routing mode asks the Auto router which provider/model it would pick for
  * each eval task, dedupes the picks, then runs the eval suite per pick. These
@@ -30,9 +30,9 @@ const tmpConfigDir = mkdtempSync(join(TMP_BASE, 'buff-eval-cfg-'));
 let originalConfigDir: string | undefined;
 
 beforeAll(() => {
-  process.env.BUFF_MEMORY_DIR = join(tmpMemoryDir, '.buff', 'memory');
-  originalConfigDir = process.env.BUFF_CONFIG_DIR;
-  process.env.BUFF_CONFIG_DIR = tmpConfigDir;
+  process.env.NUVIRA_MEMORY_DIR = join(tmpMemoryDir, '.nuvira', 'memory');
+  originalConfigDir = process.env.NUVIRA_CONFIG_DIR;
+  process.env.NUVIRA_CONFIG_DIR = tmpConfigDir;
   mkdirSync(tmpConfigDir, { recursive: true });
   // A provider pinned with a placeholder key (the "openrouter-env-key" class).
   writeFileSync(
@@ -50,9 +50,9 @@ beforeAll(() => {
 });
 
 afterAll(() => {
-  delete process.env.BUFF_MEMORY_DIR;
-  if (originalConfigDir === undefined) delete process.env.BUFF_CONFIG_DIR;
-  else process.env.BUFF_CONFIG_DIR = originalConfigDir;
+  delete process.env.NUVIRA_MEMORY_DIR;
+  if (originalConfigDir === undefined) delete process.env.NUVIRA_CONFIG_DIR;
+  else process.env.NUVIRA_CONFIG_DIR = originalConfigDir;
   rmSync(tmpMemoryDir, { recursive: true, force: true });
   rmSync(tmpConfigDir, { recursive: true, force: true });
 });
@@ -215,7 +215,7 @@ describe('EvalCommand --routing', () => {
     expect(runEvalSuite).not.toHaveBeenCalled();
     expect(output).toContain('placeholder API key');
     expect(output).toContain('openrouter-env-key');
-    expect(output).toContain('Set a real key: buff config set providers.openrouter.apiKey <real-key>');
+    expect(output).toContain('Set a real key: nuvira config set providers.openrouter.apiKey <real-key>');
   });
 
   it('ISSUE-004 guard: warns (not refuses) when an explicit --model is passed with a placeholder-keyed provider', async () => {

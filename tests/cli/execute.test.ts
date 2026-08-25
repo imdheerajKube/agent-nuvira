@@ -18,10 +18,11 @@ import { saveCheckpoint, checkpointIdFor, loadCheckpoint } from '../../src/agent
 import { getModelRegistry, resetModelRegistry } from '../../src/learning/model-registry.js';
 import * as duties from '../../src/cli/duties.js';
 import inquirer from 'inquirer';
+import { resolveNuviraHome } from '../../src/config/paths.js';
 
 // ─── Test Constants ─────────────────────────────────────────────────────────
 
-const SESSIONS_DIR = join(homedir(), '.buff', 'sessions');
+const SESSIONS_DIR = join(resolveNuviraHome(), 'sessions');
 
 // ─── Tests: parseGoalLines (pure function, no mocking needed) ───────────────
 
@@ -275,7 +276,7 @@ describe('ExecuteCommand — checkpoint list (--checkpoint / --resume / --checkp
   beforeEach(() => {
     cmd = new ExecuteCommand();
     memDir = mkdtempSync(join(tmpdir(), 'buff-exec-cp-'));
-    process.env.BUFF_MEMORY_DIR = memDir;
+    process.env.NUVIRA_MEMORY_DIR = memDir;
     vi.spyOn(logger, 'info').mockImplementation(() => {});
     vi.spyOn(logger, 'highlight').mockImplementation(() => {});
     vi.spyOn(logger, 'success').mockImplementation(() => {});
@@ -285,7 +286,7 @@ describe('ExecuteCommand — checkpoint list (--checkpoint / --resume / --checkp
 
   afterEach(() => {
     vi.restoreAllMocks();
-    delete process.env.BUFF_MEMORY_DIR;
+    delete process.env.NUVIRA_MEMORY_DIR;
     try { rmSync(memDir, { recursive: true, force: true }); } catch { /* best-effort */ }
   });
 
@@ -597,7 +598,7 @@ describe('ExecuteCommand — generateFollowUpSuggestions (fallback)', () => {
     // (recordRegistryFailure), and without BUFF_MEMORY_DIR it would hit the
     // REAL user registry.
     memDir = mkdtempSync(join(tmpdir(), 'buff-exec-fu-'));
-    process.env.BUFF_MEMORY_DIR = memDir;
+    process.env.NUVIRA_MEMORY_DIR = memDir;
     resetModelRegistry();
     vi.spyOn(logger, 'info').mockImplementation(() => {});
     vi.spyOn(logger, 'highlight').mockImplementation(() => {});
@@ -614,7 +615,7 @@ describe('ExecuteCommand — generateFollowUpSuggestions (fallback)', () => {
   afterEach(() => {
     vi.restoreAllMocks();
     resetModelRegistry();
-    delete process.env.BUFF_MEMORY_DIR;
+    delete process.env.NUVIRA_MEMORY_DIR;
     try { rmSync(memDir, { recursive: true, force: true }); } catch { /* best-effort */ }
   });
 
@@ -1106,7 +1107,7 @@ describe('ExecuteCommand — P0.5 conversation-vs-pipeline gate', () => {
   beforeEach(() => {
     cmd = new ExecuteCommand();
     memDir = mkdtempSync(join(tmpdir(), 'buff-exec-gate-'));
-    process.env.BUFF_MEMORY_DIR = memDir;
+    process.env.NUVIRA_MEMORY_DIR = memDir;
     vi.spyOn(logger, 'info').mockImplementation(() => {});
     vi.spyOn(logger, 'highlight').mockImplementation(() => {});
     vi.spyOn(logger, 'success').mockImplementation(() => {});
@@ -1118,7 +1119,7 @@ describe('ExecuteCommand — P0.5 conversation-vs-pipeline gate', () => {
 
   afterEach(() => {
     vi.restoreAllMocks();
-    delete process.env.BUFF_MEMORY_DIR;
+    delete process.env.NUVIRA_MEMORY_DIR;
     try { rmSync(memDir, { recursive: true, force: true }); } catch { /* best-effort */ }
   });
 

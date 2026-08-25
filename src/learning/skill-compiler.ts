@@ -292,7 +292,7 @@ export class SkillCompiler {
 
     lines.push('   └──────────────────────────────────┴────────────┴────────┴───────┘');
     lines.push('');
-    lines.push('Run `buff skill show <name>` for details, or `buff skill run <name>` to execute.');
+    lines.push('Run `nuvira skill show <name>` for details, or `nuvira skill run <name>` to execute.');
 
     return lines.join('\n');
   }

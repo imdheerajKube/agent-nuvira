@@ -7,8 +7,8 @@
  * points `BUFF_SKILLS_REGISTRY` at the COMMITTED files (exactly what GitHub
  * will serve after push — same layout, same frontmatter) and proves the
  * three surfaces agree:
- *   1. `buff skills search` finds each of the six bundled skills
- *   2. `buff skills install` lands the real SKILL.md in a project
+ *   1. `nuvira skills search` finds each of the six bundled skills
+ *   2. `nuvira skills install` lands the real SKILL.md in a project
  *   3. the hub catalog reads that installed skill and matches a goal to it
  *
  * Hermetic: BUFF_CONFIG_DIR → temp (no user registries/config), project +
@@ -44,7 +44,7 @@ let origConfigDir: string | undefined;
 let origRegistry: string | undefined;
 let origMemoryDir: string | undefined;
 
-/** Run the real `buff skills` command, returning captured console + logger output. */
+/** Run the real `nuvira skills` command, returning captured console + logger output. */
 async function runSkills(args: string[]): Promise<string> {
   const { SkillsCommand } = await import('../../src/cli/skills.js');
   const logs: string[] = [];
@@ -66,23 +66,23 @@ beforeEach(() => {
   configDir = mkdtempSync(join(tmpdir(), 'buff-acc-cfg-'));
   projectDir = mkdtempSync(join(tmpdir(), 'buff-acc-proj-'));
   memoryDir = mkdtempSync(join(tmpdir(), 'buff-acc-mem-'));
-  origConfigDir = process.env.BUFF_CONFIG_DIR;
-  origRegistry = process.env.BUFF_SKILLS_REGISTRY;
-  origMemoryDir = process.env.BUFF_MEMORY_DIR;
-  process.env.BUFF_CONFIG_DIR = configDir; // hermetic — no user config/registries
-  process.env.BUFF_SKILLS_REGISTRY = `file://${COMMITTED_REGISTRY}`;
-  // Bundle store + drafts honor BUFF_MEMORY_DIR — keep ~/.buff untouched.
-  process.env.BUFF_MEMORY_DIR = memoryDir;
+  origConfigDir = process.env.NUVIRA_CONFIG_DIR;
+  origRegistry = process.env.NUVIRA_SKILLS_REGISTRY;
+  origMemoryDir = process.env.NUVIRA_MEMORY_DIR;
+  process.env.NUVIRA_CONFIG_DIR = configDir; // hermetic — no user config/registries
+  process.env.NUVIRA_SKILLS_REGISTRY = `file://${COMMITTED_REGISTRY}`;
+  // Bundle store + drafts honor BUFF_MEMORY_DIR — keep ~/.nuvira untouched.
+  process.env.NUVIRA_MEMORY_DIR = memoryDir;
 });
 
 afterEach(() => {
   process.chdir(REPO_ROOT);
-  if (origConfigDir === undefined) delete process.env.BUFF_CONFIG_DIR;
-  else process.env.BUFF_CONFIG_DIR = origConfigDir;
-  if (origRegistry === undefined) delete process.env.BUFF_SKILLS_REGISTRY;
-  else process.env.BUFF_SKILLS_REGISTRY = origRegistry;
-  if (origMemoryDir === undefined) delete process.env.BUFF_MEMORY_DIR;
-  else process.env.BUFF_MEMORY_DIR = origMemoryDir;
+  if (origConfigDir === undefined) delete process.env.NUVIRA_CONFIG_DIR;
+  else process.env.NUVIRA_CONFIG_DIR = origConfigDir;
+  if (origRegistry === undefined) delete process.env.NUVIRA_SKILLS_REGISTRY;
+  else process.env.NUVIRA_SKILLS_REGISTRY = origRegistry;
+  if (origMemoryDir === undefined) delete process.env.NUVIRA_MEMORY_DIR;
+  else process.env.NUVIRA_MEMORY_DIR = origMemoryDir;
   vi.restoreAllMocks();
   rmSync(configDir, { recursive: true, force: true });
   rmSync(projectDir, { recursive: true, force: true });
@@ -135,13 +135,13 @@ describe('P5c #4 — committed registry acceptance (search → install → catal
   });
 
   it('an unreachable registry is EXPLICIT: install fails with a source hint, not a silent 404', async () => {
-    process.env.BUFF_SKILLS_REGISTRY = 'file:///tmp/definitely-missing-registry';
+    process.env.NUVIRA_SKILLS_REGISTRY = 'file:///tmp/definitely-missing-registry';
     const out = await runSkills(['install', 'nope-skill', '--project', projectDir]);
     // The spinner.fail text goes to the mocked ora; the EXPLICIT part is the
     // logger surfaces: search tip + the unreachable-source hint with the fix.
     expect(out).toMatch(/Search available skills: \S+ skills search/);
     expect(out).toContain('missing-index');
-    expect(out).toContain('BUFF_SKILLS_REGISTRY');
+    expect(out).toContain('NUVIRA_SKILLS_REGISTRY');
   });
 
   it('P6d — skills uninstall removes the dir and the skill is gone', async () => {
@@ -157,7 +157,7 @@ describe('P5c #4 — committed registry acceptance (search → install → catal
     expect(again).toContain('not installed');
   });
 
-  it('P6b — buff skills bundle create → list → show round-trip (Hermes YAML parity)', async () => {
+  it('P6b — nuvira skills bundle create → list → show round-trip (Hermes YAML parity)', async () => {
     const out = await runSkills(['bundle', 'backend-dev', '--create', '--name', 'Backend Dev', '--description', 'Full workflow', '--skills', 'code-assessment,test-strategy']);
     expect(out).toContain("Bundle 'backend-dev' created");
     expect(out).toContain('code-assessment, test-strategy');

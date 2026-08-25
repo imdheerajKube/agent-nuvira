@@ -1,5 +1,5 @@
 /**
- * MarketplaceCommand — Unit tests for buff marketplace browse/search/info.
+ * MarketplaceCommand — Unit tests for nuvira marketplace browse/search/info.
  *
  * Covers:
  * 1. Browse — shows built-in workflow templates

@@ -12,10 +12,10 @@
 
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 
-// Isolate the context cache from the real ~/.buff store: cache.ts computes its
+// Isolate the context cache from the real ~/.nuvira store: cache.ts computes its
 // CACHE_DIR at module load, so homedir is mocked at hoist time (same pattern
 // as eval-framework.test.ts). Without this, the cache-hit tests would write to
-// and wipe the user's real ~/.buff/cache.json.
+// and wipe the user's real ~/.nuvira/cache.json.
 const testDirHolder = vi.hoisted(() => {
   const { mkdtempSync } = require('node:fs');
   const { join } = require('node:path');
@@ -248,13 +248,13 @@ describe('web-research — readWebPage (mocked fetch)', () => {
   });
 
   it('honors BUFF_WEB_ALLOW_PRIVATE=1 as an explicit escape hatch', async () => {
-    const prev = process.env.BUFF_WEB_ALLOW_PRIVATE;
-    process.env.BUFF_WEB_ALLOW_PRIVATE = '1';
+    const prev = process.env.NUVIRA_WEB_ALLOW_PRIVATE;
+    process.env.NUVIRA_WEB_ALLOW_PRIVATE = '1';
     try {
       expect(isAllowedReadUrl('http://localhost:3000')).toBe(true);
     } finally {
-      if (prev === undefined) delete process.env.BUFF_WEB_ALLOW_PRIVATE;
-      else process.env.BUFF_WEB_ALLOW_PRIVATE = prev;
+      if (prev === undefined) delete process.env.NUVIRA_WEB_ALLOW_PRIVATE;
+      else process.env.NUVIRA_WEB_ALLOW_PRIVATE = prev;
     }
   });
 

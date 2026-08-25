@@ -74,7 +74,7 @@ export class ProviderFactory {
           `Unknown provider type: '${type}'. Available built-in: nim, gemini, openrouter, groq, local, nuvira, anthropic. ` +
           `Available catalog (OpenAI-compatible): openai, mistral, cohere, together, deepinfra, fireworks, ` +
           `perplexity, azure, lmstudio, anyscale, vllm, deepseek, xai, replicate and more. ` +
-          `Check ~/.buff/plugins/ for auto-discovered plugins.`,
+          `Check ~/.nuvira/plugins/ for auto-discovered plugins.`,
         );
       }
     }

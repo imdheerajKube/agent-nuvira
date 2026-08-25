@@ -262,7 +262,7 @@ export class DashboardAPI {
   /**
    * E3c follow-up: run ALL state commands (doctor/system/enterprise checks)
    * on demand — the dashboard command-runner. The server executes the checks
-   * (one source with `buff doctor`) and returns masked provider status.
+   * (one source with `nuvira doctor`) and returns masked provider status.
    */
   async fetchAdminChecks(): Promise<AdminChecksData | null> {
     try {
@@ -415,7 +415,7 @@ export class DashboardAPI {
 
   /**
    * Shut down the gateway or the dashboard server itself (the GUI twin of
-   * `buff gateway stop` / `buff dashboard stop`). Admin-gated: dashboard
+   * `nuvira gateway stop` / `nuvira dashboard stop`). Admin-gated: dashboard
    * requires system.manage (admin), gateway requires gateway.manage
    * (admin + operator). Stopping the dashboard kills THIS page's server.
    */
@@ -429,7 +429,7 @@ export class DashboardAPI {
     return { ok: false, error: d.error || 'Shutdown failed.', unauthorized: r.status === 401, forbidden: r.status === 403 };
   }
 
-  /** Save/update a provider's key + config (authed). Mirrors `buff config set providers.*`. */
+  /** Save/update a provider's key + config (authed). Mirrors `nuvira config set providers.*`. */
   async saveProvider(
     type: string,
     fields: { apiKey?: string; baseUrl?: string; model?: string; runner?: string },
@@ -564,7 +564,7 @@ export class DashboardAPI {
 
   /**
    * I11: send a test message through the gateway (authed — routing.operate).
-   * Mirrors `buff gateway send <target> <text>`; the server resolves the
+   * Mirrors `nuvira gateway send <target> <text>`; the server resolves the
    * target (alias or platform:channelId) and sends through the SAME
    * GatewayRegistry the CLI uses, so a Channels-tab test is identical to a
    * CLI send.
@@ -651,7 +651,7 @@ export class DashboardAPI {
   }
 
   /**
-   * Platform transport config (GUI parity with `buff config gateway`): list
+   * Platform transport config (GUI parity with `nuvira config gateway`): list
    * every env-configurable platform with current per-var values (full values
    * only for admin/operator). Authed.
    */
@@ -662,7 +662,7 @@ export class DashboardAPI {
     return Array.isArray(d.platforms) ? d.platforms : [];
   }
 
-  /** Write a platform's env values to ~/.buff/.env (authed — routing.operate). */
+  /** Write a platform's env values to ~/.nuvira/.env (authed — routing.operate). */
   async setPlatformConfig(platform: string, values: Record<string, string>): Promise<AdminWriteResult> {
     const r = await this.sendAdminRequest(`/api/config/platforms/${encodeURIComponent(platform)}`, 'POST', { values });
     if (!r) return { ok: false, error: 'Could not reach the dashboard server.' };
@@ -676,7 +676,7 @@ export class DashboardAPI {
     };
   }
 
-  /** Remove a platform's env values from ~/.buff/.env (authed — routing.operate). */
+  /** Remove a platform's env values from ~/.nuvira/.env (authed — routing.operate). */
   async removePlatformConfig(platform: string): Promise<AdminWriteResult> {
     const r = await this.sendAdminRequest(`/api/config/platforms/${encodeURIComponent(platform)}`, 'DELETE');
     if (!r) return { ok: false, error: 'Could not reach the dashboard server.' };
@@ -721,7 +721,7 @@ export class DashboardAPI {
     return (r.data ?? {}) as { configured: boolean; region: string; authMethod: string; apiKeySet: boolean; iamKeySet: boolean };
   }
 
-  /** Save Bedrock env vars (credentials + region) to ~/.buff/.env. */
+  /** Save Bedrock env vars (credentials + region) to ~/.nuvira/.env. */
   async setupBedrock(envVars: Record<string, string>): Promise<{ ok: boolean; error?: string; envVarsWritten?: string[] }> {
     const r = await this.sendAdminRequest('/api/bedrock/setup', 'POST', { envVars });
     if (!r) return { ok: false, error: 'Could not reach the dashboard server.' };
@@ -800,7 +800,7 @@ export class DashboardAPI {
     return () => es.close();
   }
 
-  // ─── P2 — in-page WhatsApp pairing (GUI parity with `buff whatsapp pair`) ──
+  // ─── P2 — in-page WhatsApp pairing (GUI parity with `nuvira whatsapp pair`) ──
 
   /** Current pairing status (state, QR data URL, code, session dir). */
   async getWhatsAppStatus(): Promise<{ status: WhatsAppPairStatus; contacts: Record<string, string> } | null> {
@@ -869,7 +869,7 @@ export class DashboardAPI {
     return () => es.close();
   }
 
-  // ─── P3 — chat console (GUI parity with `buff chat "<prompt>"`) ─────────
+  // ─── P3 — chat console (GUI parity with `nuvira chat "<prompt>"`) ─────────
 
   /**
    * Resolve a plain-English ask into the CLI command(s) the intent router
@@ -1337,7 +1337,7 @@ export class DashboardAPI {
     }
   }
 
-  /** PA4 — save a skill's env vars (writes to ~/.buff/.env or ~/.nuvira/.env). */
+  /** PA4 — save a skill's env vars (writes to ~/.nuvira/.env or ~/.nuvira/.env). */
   async saveSecrets(vars: Record<string, string>): Promise<{ ok: boolean; error?: string; saved?: string[] }> {
     try {
       const res = await fetch(`${this.baseUrl}/api/skills/secrets`, {

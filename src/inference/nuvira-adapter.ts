@@ -2,7 +2,7 @@
  * Nuvira Gateway Adapter — OpenAI-compatible provider (Nuvira-Router P1 M1.1).
  *
  * Talks to ANY OpenAI-compatible /v1 endpoint — an enterprise gateway, a
- * self-hosted router, vLLM, LM Studio, LiteLLM, or a future `buff nuvira
+ * self-hosted router, vLLM, LM Studio, LiteLLM, or a future `nuvira nuvira
  * serve` central mode (M6.4). Implemented as a thin specialization of the
  * generic OpenAICompatAdapter (Issue 001): the gateway is just the `nuvira`
  * entry of the provider catalog, so it shares the exact same adapter code —

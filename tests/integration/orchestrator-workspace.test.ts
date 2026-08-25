@@ -20,15 +20,15 @@ import { ConfigManager } from '../../src/config/manager.js';
 import { getWorkspaceStore, resetWorkspaceStore } from '../../src/config/workspace.js';
 
 const root = mkdtempSync(join(tmpdir(), 'buff-integration-orch-'));
-const cfgDir = join(root, '.buff');
-const memDir = join(root, '.buff', 'memory');
-const ORIG_CONFIG_DIR = process.env.BUFF_CONFIG_DIR;
-const ORIG_MEMORY_DIR = process.env.BUFF_MEMORY_DIR;
+const cfgDir = join(root, '.nuvira');
+const memDir = join(root, '.nuvira', 'memory');
+const ORIG_CONFIG_DIR = process.env.NUVIRA_CONFIG_DIR;
+const ORIG_MEMORY_DIR = process.env.NUVIRA_MEMORY_DIR;
 
 beforeAll(() => {
   mkdirSync(cfgDir, { recursive: true });
-  process.env.BUFF_CONFIG_DIR = cfgDir;
-  process.env.BUFF_MEMORY_DIR = memDir;
+  process.env.NUVIRA_CONFIG_DIR = cfgDir;
+  process.env.NUVIRA_MEMORY_DIR = memDir;
   // Local → nonexistent model: the planner call fails fast (model-not-found),
   // so the whole pipeline resolves a FAILED result without touching the network.
   writeFileSync(
@@ -44,10 +44,10 @@ beforeAll(() => {
 
 afterAll(() => {
   resetWorkspaceStore();
-  if (ORIG_CONFIG_DIR === undefined) delete process.env.BUFF_CONFIG_DIR;
-  else process.env.BUFF_CONFIG_DIR = ORIG_CONFIG_DIR;
-  if (ORIG_MEMORY_DIR === undefined) delete process.env.BUFF_MEMORY_DIR;
-  else process.env.BUFF_MEMORY_DIR = ORIG_MEMORY_DIR;
+  if (ORIG_CONFIG_DIR === undefined) delete process.env.NUVIRA_CONFIG_DIR;
+  else process.env.NUVIRA_CONFIG_DIR = ORIG_CONFIG_DIR;
+  if (ORIG_MEMORY_DIR === undefined) delete process.env.NUVIRA_MEMORY_DIR;
+  else process.env.NUVIRA_MEMORY_DIR = ORIG_MEMORY_DIR;
   rmSync(root, { recursive: true, force: true });
 });
 

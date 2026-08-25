@@ -3,12 +3,12 @@
  *
  * Every multi-agent pipeline records each LLM call (agent × model × prompt
  * digest × response × tokens × latency × routing snapshot) into
- * ~/.buff/memory/reasoning-traces.json. This command lets you:
+ * ~/.nuvira/memory/reasoning-traces.json. This command lets you:
  *
- *   buff trace list               — Show recent traces
- *   buff trace show <id>          — Show one trace (steps summary)
- *   buff trace replay <id>        — Step-by-step replay of a trace
- *   buff trace clear              — Delete all traces
+ *   nuvira trace list               — Show recent traces
+ *   nuvira trace show <id>          — Show one trace (steps summary)
+ *   nuvira trace replay <id>        — Step-by-step replay of a trace
+ *   nuvira trace clear              — Delete all traces
  *
  * The `replay` command is the debugging centerpiece: it walks every LLM call
  * in execution order with the prompt digest, the model that handled it, token
@@ -65,7 +65,7 @@ export class TraceCommand {
 
     if (traces.length === 0) {
       console.log('   No traces yet. Run `${getCliName()} execute` (or auto-routed chat) — every LLM call is recorded.');
-      console.log('   Trace file: ~/.buff/memory/reasoning-traces.json');
+      console.log('   Trace file: ~/.nuvira/memory/reasoning-traces.json');
       return;
     }
 

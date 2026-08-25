@@ -4,13 +4,13 @@
  * Lightweight, dependency-free counters and timers for the operational
  * surfaces the plan scoped: latency budgets (rule-vs-LLM), memory
  * hits/misses, and vault access. Persisted as `metrics.json` in the memory
- * dir (`BUFF_MEMORY_DIR` override honored for test hermeticity) and surfaced
- * by `buff doctor` (and the dashboard via the same file).
+ * dir (`NUVIRA_MEMORY_DIR` override honored for test hermeticity) and surfaced
+ * by `nuvira doctor` (and the dashboard via the same file).
  *
  * Design:
  * - No new dependency (the plan explicitly says "counters/timers (no new dep)").
  * - Writes are batched/lazy: increments update an in-memory map; `save()` is
- *   called explicitly (end of a run, or `buff doctor`) so hot loops never
+ *   called explicitly (end of a run, or `nuvira doctor`) so hot loops never
  *   touch disk.
  * - Never throws: a failed write degrades to an in-memory-only session.
  * - Concurrency note: `metrics.json` is a snapshot file (last-writer-wins).
@@ -20,6 +20,7 @@
  */
 
 import { readFileSync, writeFileSync, mkdirSync, existsSync } from 'node:fs';
+import {envBuff, resolveNuviraHome} from '../config/paths';
 import { join } from 'node:path';
 import { homedir } from 'node:os';
 
@@ -41,9 +42,9 @@ export interface MetricsSnapshot {
 
 // ─── Storage ────────────────────────────────────────────────────────────────
 
-/** Resolve the memory dir lazily so BUFF_MEMORY_DIR hermeticity works. */
+/** Resolve the memory dir lazily so NUVIRA_MEMORY_DIR hermeticity works. */
 function memoryDir(): string {
-  return process.env.BUFF_MEMORY_DIR || join(homedir(), '.buff', 'memory');
+  return envBuff('MEMORY_DIR') || join(resolveNuviraHome(), 'memory');
 }
 
 function metricsPath(): string {

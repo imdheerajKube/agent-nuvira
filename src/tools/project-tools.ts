@@ -9,6 +9,7 @@
  */
 
 import { randomUUID } from 'node:crypto';
+import { resolveNuviraHome } from '../config/paths';
 import { existsSync, readFileSync, writeFileSync, mkdirSync } from 'node:fs';
 import { join } from 'node:path';
 import { homedir } from 'node:os';
@@ -68,7 +69,7 @@ export interface WorkingDiff {
 
 // ─── Blueprint Manager ────────────────────────────────────────────────────
 
-const BLUEPRINT_DIR = join(homedir(), '.buff', 'memory', 'blueprints');
+const BLUEPRINT_DIR = join(resolveNuviraHome(), 'memory', 'blueprints');
 
 export class BlueprintManager {
   private blueprints: Map<string, Blueprint> = new Map();
@@ -277,7 +278,7 @@ export class BlueprintManager {
 
 // ─── Working Diff Tracker ─────────────────────────────────────────────────
 
-const DIFF_DIR = join(homedir(), '.buff', 'memory', 'diffs');
+const DIFF_DIR = join(resolveNuviraHome(), 'memory', 'diffs');
 
 export class WorkingDiffTracker {
   private diffs: Map<string, WorkingDiff> = new Map();

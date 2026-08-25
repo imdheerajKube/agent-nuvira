@@ -2,16 +2,16 @@
  * Team Config — Project-level configuration with config priority chain.
  *
  * Config priority (highest to lowest):
- *   1. Project-level `.buffconfig.json` in working directory
- *   2. User-level config at `~/.buff/buffconfig.json`
+ *   1. Project-level `.nuviraconfig.json` in working directory
+ *   2. User-level config at `~/.nuvira/buffconfig.json`
  *   3. Built-in defaults
  *
- * This enables teams to commit a `.buffconfig.json` to their repo that
+ * This enables teams to commit a `.nuviraconfig.json` to their repo that
  * defines shared provider defaults, team repository URL, and other
  * project-wide settings while allowing individual overrides.
  *
  * The project-level config is read-only by default — CLI commands write
- * to the user-level config. The `buff config init` command can generate
+ * to the user-level config. The `nuvira config init` command can generate
  * a project-level config.
  */
 
@@ -34,15 +34,15 @@ export const DEFAULT_TEAM_CONFIG: TeamConfig = {
 
 /** Priority config search paths (relative to working directory) */
 const PROJECT_CONFIG_FILENAMES = [
-  '.buffconfig.json',
+  '.nuviraconfig.json',
   'buffconfig.json',
-  '.buff/config.json',
+  '.nuvira/config.json',
 ];
 
 // ─── Config Priority Chain ──────────────────────────────────────────────────
 
 /**
- * Find and load the project-level `.buffconfig.json`.
+ * Find and load the project-level `.nuviraconfig.json`.
  * Searches from the working directory upward for common filenames.
  *
  * @param cwd — Working directory to search from (default: process.cwd())
@@ -97,7 +97,7 @@ export function getTeamConfig(cwd?: string): TeamConfig {
 }
 
 /**
- * Check if a project-level `.buffconfig.json` exists.
+ * Check if a project-level `.nuviraconfig.json` exists.
  */
 export function hasProjectConfig(cwd?: string): boolean {
   return findProjectConfig(cwd) !== null;
@@ -105,7 +105,7 @@ export function hasProjectConfig(cwd?: string): boolean {
 
 /**
  * Get the path to the team data directory.
- * Uses project-level config path, falling back to ~/.buff/team/.
+ * Uses project-level config path, falling back to ~/.nuvira/team/.
  *
  * The team directory is a git repository that contains:
  *   - trajectories/ — Shared agent execution trajectories
@@ -116,6 +116,6 @@ export function getTeamDataDir(cwd?: string): string {
   const teamConfig = getTeamConfig(cwd);
   if (teamConfig.localPath) return resolve(teamConfig.localPath);
 
-  // Default: ~/.buff/team/
+  // Default: ~/.nuvira/team/
   return join(resolveNuviraHome(), 'team');
 }

@@ -1,5 +1,5 @@
 /**
- * ModelsCommand — Unit tests for `buff models --json`.
+ * ModelsCommand — Unit tests for `nuvira models --json`.
  *
  * The command lists models from providers and renders a human table by
  * default. These tests mock the provider layer (resolveProvider + plugin
@@ -98,7 +98,7 @@ function muteConsole(): void {
   vi.spyOn(console, 'error').mockImplementation(() => {});
 }
 
-/** Run `buff models ...` and return everything written to stdout via console.log. */
+/** Run `nuvira models ...` and return everything written to stdout via console.log. */
 async function runModels(args: string[]): Promise<string> {
   const { ModelsCommand } = await import('../../src/cli/models.js');
   const cmd = new ModelsCommand();
@@ -242,8 +242,8 @@ describe('ModelsCommand status --verbose', () => {
     // Hermetic registry storage — the verbose status reads/writes the
     // ModelRegistry singleton, which persists to BUFF_MEMORY_DIR.
     verboseTempDir = mkdtempSync(join(tmpdir(), 'buff-models-verbose-'));
-    originalMemoryDir = process.env.BUFF_MEMORY_DIR;
-    process.env.BUFF_MEMORY_DIR = verboseTempDir;
+    originalMemoryDir = process.env.NUVIRA_MEMORY_DIR;
+    process.env.NUVIRA_MEMORY_DIR = verboseTempDir;
     const { resetModelRegistry } = await import('../../src/learning/model-registry.js');
     resetModelRegistry();
   });
@@ -251,8 +251,8 @@ describe('ModelsCommand status --verbose', () => {
   afterEach(async () => {
     const { resetModelRegistry } = await import('../../src/learning/model-registry.js');
     resetModelRegistry();
-    if (originalMemoryDir === undefined) delete process.env.BUFF_MEMORY_DIR;
-    else process.env.BUFF_MEMORY_DIR = originalMemoryDir;
+    if (originalMemoryDir === undefined) delete process.env.NUVIRA_MEMORY_DIR;
+    else process.env.NUVIRA_MEMORY_DIR = originalMemoryDir;
     rmSync(verboseTempDir, { recursive: true, force: true });
     vi.restoreAllMocks();
   });
@@ -302,8 +302,8 @@ describe('ModelsCommand unblock — manual escape hatch', () => {
     muteConsole();
     // Hermetic registry + ledger storage.
     unblockTempDir = mkdtempSync(join(tmpdir(), 'buff-models-unblock-'));
-    originalMemoryDir = process.env.BUFF_MEMORY_DIR;
-    process.env.BUFF_MEMORY_DIR = unblockTempDir;
+    originalMemoryDir = process.env.NUVIRA_MEMORY_DIR;
+    process.env.NUVIRA_MEMORY_DIR = unblockTempDir;
     const { resetModelRegistry } = await import('../../src/learning/model-registry.js');
     const { resetQuotaLedger } = await import('../../src/learning/quota-ledger.js');
     resetModelRegistry();
@@ -325,8 +325,8 @@ describe('ModelsCommand unblock — manual escape hatch', () => {
     const { resetQuotaLedger } = await import('../../src/learning/quota-ledger.js');
     resetModelRegistry();
     resetQuotaLedger();
-    if (originalMemoryDir === undefined) delete process.env.BUFF_MEMORY_DIR;
-    else process.env.BUFF_MEMORY_DIR = originalMemoryDir;
+    if (originalMemoryDir === undefined) delete process.env.NUVIRA_MEMORY_DIR;
+    else process.env.NUVIRA_MEMORY_DIR = originalMemoryDir;
     rmSync(unblockTempDir, { recursive: true, force: true });
     vi.restoreAllMocks();
   });

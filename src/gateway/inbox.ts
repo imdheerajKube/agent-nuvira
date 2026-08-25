@@ -5,7 +5,7 @@
  * the delivery ledger (which tracks outbound). The dashboard's Channels tab
  * shows the inbox so users can see who messaged the bot, what it triggered
  * (pipeline / help / refused), and the outcome. File-backed at
- * `~/.buff/gateway/inbox.json` (BUFF_CONFIG_DIR aware), capped + pruned like
+ * `~/.nuvira/gateway/inbox.json` (NUVIRA_CONFIG_DIR aware), capped + pruned like
  * the delivery ledger.
  */
 

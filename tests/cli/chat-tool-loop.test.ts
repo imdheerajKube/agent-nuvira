@@ -31,20 +31,20 @@ describe('ChatCommand — E3b tool-call turn', () => {
     tempDir = mkdtempSync(join(tmpdir(), 'buff-chat-tool-loop-'));
     // Hermetic on BOTH env vars: BUFF_MEMORY_DIR (registry/cache) and
     // BUFF_CONFIG_DIR (workspace store) — the P4 recall tests seed prior work
-    // through the store and must never touch the real ~/.buff registry.
-    original = process.env.BUFF_MEMORY_DIR;
-    originalConfigDir = process.env.BUFF_CONFIG_DIR;
-    process.env.BUFF_MEMORY_DIR = tempDir;
-    process.env.BUFF_CONFIG_DIR = join(tempDir, 'config');
+    // through the store and must never touch the real ~/.nuvira registry.
+    original = process.env.NUVIRA_MEMORY_DIR;
+    originalConfigDir = process.env.NUVIRA_CONFIG_DIR;
+    process.env.NUVIRA_MEMORY_DIR = tempDir;
+    process.env.NUVIRA_CONFIG_DIR = join(tempDir, 'config');
     resetModelRegistry();
   });
 
   afterEach(() => {
     resetModelRegistry();
-    if (original === undefined) delete process.env.BUFF_MEMORY_DIR;
-    else process.env.BUFF_MEMORY_DIR = original;
-    if (originalConfigDir === undefined) delete process.env.BUFF_CONFIG_DIR;
-    else process.env.BUFF_CONFIG_DIR = originalConfigDir;
+    if (original === undefined) delete process.env.NUVIRA_MEMORY_DIR;
+    else process.env.NUVIRA_MEMORY_DIR = original;
+    if (originalConfigDir === undefined) delete process.env.NUVIRA_CONFIG_DIR;
+    else process.env.NUVIRA_CONFIG_DIR = originalConfigDir;
     rmSync(tempDir, { recursive: true, force: true });
     vi.restoreAllMocks();
   });
@@ -71,7 +71,7 @@ describe('ChatCommand — E3b tool-call turn', () => {
 
     const cmd = new ChatCommand() as unknown as { runChatAnswer: Function };
     const history: Array<{ role: string; content: string }> = [];
-    // cacheEnabled: false — the disk cache (~/.buff/cache.json) is NOT the
+    // cacheEnabled: false — the disk cache (~/.nuvira/cache.json) is NOT the
     // subject of this test and would leak across runs (a persisted hit would
     // skip generateTools entirely).
     const out = await cmd.runChatAnswer(
@@ -155,7 +155,7 @@ describe('ChatCommand — E3b tool-call turn', () => {
 describe('ChatCommand — P4 project auto-recall (dashboard chat)', () => {
   // The first describe's beforeEach is scoped to ITS describe — this describe
   // needs its own hermetic env (fresh BUFF_MEMORY_DIR + BUFF_CONFIG_DIR per
-  // test) so recall seeding never touches the real ~/.buff store/cache.
+  // test) so recall seeding never touches the real ~/.nuvira store/cache.
   let tempDir: string;
   let projDir: string;
   let origMemory: string | undefined;
@@ -165,10 +165,10 @@ describe('ChatCommand — P4 project auto-recall (dashboard chat)', () => {
     vi.spyOn(console, 'log').mockImplementation(() => {});
     vi.spyOn(console, 'error').mockImplementation(() => {});
     tempDir = mkdtempSync(join(tmpdir(), 'buff-chat-recall-'));
-    origMemory = process.env.BUFF_MEMORY_DIR;
-    origConfig = process.env.BUFF_CONFIG_DIR;
-    process.env.BUFF_MEMORY_DIR = join(tempDir, 'memory');
-    process.env.BUFF_CONFIG_DIR = join(tempDir, 'config');
+    origMemory = process.env.NUVIRA_MEMORY_DIR;
+    origConfig = process.env.NUVIRA_CONFIG_DIR;
+    process.env.NUVIRA_MEMORY_DIR = join(tempDir, 'memory');
+    process.env.NUVIRA_CONFIG_DIR = join(tempDir, 'config');
     resetModelRegistry();
     projDir = join(tempDir, 'proj');
     mkdirSync(projDir, { recursive: true });
@@ -177,10 +177,10 @@ describe('ChatCommand — P4 project auto-recall (dashboard chat)', () => {
   afterEach(() => {
     resetModelRegistry();
     resetWorkspaceStore();
-    if (origMemory === undefined) delete process.env.BUFF_MEMORY_DIR;
-    else process.env.BUFF_MEMORY_DIR = origMemory;
-    if (origConfig === undefined) delete process.env.BUFF_CONFIG_DIR;
-    else process.env.BUFF_CONFIG_DIR = origConfig;
+    if (origMemory === undefined) delete process.env.NUVIRA_MEMORY_DIR;
+    else process.env.NUVIRA_MEMORY_DIR = origMemory;
+    if (origConfig === undefined) delete process.env.NUVIRA_CONFIG_DIR;
+    else process.env.NUVIRA_CONFIG_DIR = origConfig;
     try {
       rmSync(tempDir, { recursive: true, force: true });
     } catch { /* noop */ }
@@ -275,7 +275,7 @@ describe('ChatCommand — P4 project auto-recall (dashboard chat)', () => {
 
 describe('ChatCommand — P4 answer token streaming (dashboard typewriter)', () => {
   // Same hermetic env as the P4 recall describe (BUFF_MEMORY_DIR +
-  // BUFF_CONFIG_DIR per test) — the engine must never touch the real ~/.buff.
+  // BUFF_CONFIG_DIR per test) — the engine must never touch the real ~/.nuvira.
   let tempDir: string;
   let origMemory: string | undefined;
   let origConfig: string | undefined;
@@ -284,20 +284,20 @@ describe('ChatCommand — P4 answer token streaming (dashboard typewriter)', () 
     vi.spyOn(console, 'log').mockImplementation(() => {});
     vi.spyOn(console, 'error').mockImplementation(() => {});
     tempDir = mkdtempSync(join(tmpdir(), 'buff-chat-stream-'));
-    origMemory = process.env.BUFF_MEMORY_DIR;
-    origConfig = process.env.BUFF_CONFIG_DIR;
-    process.env.BUFF_MEMORY_DIR = join(tempDir, 'memory');
-    process.env.BUFF_CONFIG_DIR = join(tempDir, 'config');
+    origMemory = process.env.NUVIRA_MEMORY_DIR;
+    origConfig = process.env.NUVIRA_CONFIG_DIR;
+    process.env.NUVIRA_MEMORY_DIR = join(tempDir, 'memory');
+    process.env.NUVIRA_CONFIG_DIR = join(tempDir, 'config');
     resetModelRegistry();
   });
 
   afterEach(() => {
     resetModelRegistry();
     resetWorkspaceStore();
-    if (origMemory === undefined) delete process.env.BUFF_MEMORY_DIR;
-    else process.env.BUFF_MEMORY_DIR = origMemory;
-    if (origConfig === undefined) delete process.env.BUFF_CONFIG_DIR;
-    else process.env.BUFF_CONFIG_DIR = origConfig;
+    if (origMemory === undefined) delete process.env.NUVIRA_MEMORY_DIR;
+    else process.env.NUVIRA_MEMORY_DIR = origMemory;
+    if (origConfig === undefined) delete process.env.NUVIRA_CONFIG_DIR;
+    else process.env.NUVIRA_CONFIG_DIR = origConfig;
     try {
       rmSync(tempDir, { recursive: true, force: true });
     } catch { /* noop */ }

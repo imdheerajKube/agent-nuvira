@@ -1,9 +1,9 @@
 /**
  * Platform transport config API — /api/config/platforms (GUI parity with
- * `buff config gateway`).
+ * `nuvira config gateway`).
  *
  * Real HTTP against a server on a random port, file-based admin auth (admin +
- * viewer for the RBAC gate), and BUFF_ENV_FILE pointing at a temp file so
+ * viewer for the RBAC gate), and NUVIRA_ENV_FILE pointing at a temp file so
  * token writes stay hermetic.
  */
 
@@ -13,16 +13,16 @@ import { join } from 'node:path';
 
 const TMP_BASE = process.env.TMPDIR || process.env.TMP || '/tmp';
 const testDir = mkdtempSync(join(TMP_BASE, 'buff-platcfg-api-'));
-const memoryDir = join(testDir, '.buff', 'memory');
+const memoryDir = join(testDir, '.nuvira', 'memory');
 mkdirSync(memoryDir, { recursive: true });
 const envFile = join(testDir, 'env', 'test.env');
 
 // Env MUST be set before importing the server (values are read at import time).
-process.env.BUFF_DASHBOARD_PORT = '0';
-process.env.BUFF_DASHBOARD_HOST = '127.0.0.1';
-process.env.BUFF_MEMORY_DIR = memoryDir;
-process.env.BUFF_CONFIG_DIR = join(testDir, '.buff');
-process.env.BUFF_ENV_FILE = envFile;
+process.env.NUVIRA_DASHBOARD_PORT = '0';
+process.env.NUVIRA_DASHBOARD_HOST = '127.0.0.1';
+process.env.NUVIRA_MEMORY_DIR = memoryDir;
+process.env.NUVIRA_CONFIG_DIR = join(testDir, '.nuvira');
+process.env.NUVIRA_ENV_FILE = envFile;
 
 const { createDashboardServer } = await import('../../src/web-dashboard/server.js');
 
@@ -94,24 +94,24 @@ describe('/api/config/platforms', () => {
     expect(ids).not.toContain('whatsapp');
     expect(ids).not.toContain('mock');
     const matrix = body.platforms.find((p) => p.platform === 'matrix')!;
-    expect(matrix.envVars.map((v) => v.varName)).toEqual(['BUFF_MATRIX_HOMESERVER', 'BUFF_MATRIX_ACCESS_TOKEN']);
+    expect(matrix.envVars.map((v) => v.varName)).toEqual(['NUVIRA_MATRIX_HOMESERVER', 'NUVIRA_MATRIX_ACCESS_TOKEN']);
     expect(matrix.configured).toBe(false);
     // Secret metadata rides along for the form.
-    const accessToken = matrix.envVars.find((v) => v.varName === 'BUFF_MATRIX_ACCESS_TOKEN')!;
+    const accessToken = matrix.envVars.find((v) => v.varName === 'NUVIRA_MATRIX_ACCESS_TOKEN')!;
     expect(accessToken.secret).toBe(true);
   });
 
   it('writes a platform config to the env file and reports configured', async () => {
     const res = await authedFetch('/api/config/platforms/telegram', 'POST', {
-      values: { BUFF_TELEGRAM_TOKEN: '123:ABC-secret' },
+      values: { NUVIRA_TELEGRAM_TOKEN: '123:ABC-secret' },
     });
     expect(res.status).toBe(200);
     const body = (await res.json()) as { ok: boolean; wrote: string[]; status: { configured: boolean; envVars: Array<{ varName: string; value: string }> } };
     expect(body.ok).toBe(true);
-    expect(body.wrote).toEqual(['BUFF_TELEGRAM_TOKEN']);
+    expect(body.wrote).toEqual(['NUVIRA_TELEGRAM_TOKEN']);
     expect(body.status.configured).toBe(true);
     expect(body.status.envVars[0].value).toBe('123:ABC-secret');
-    expect(readFileSync(envFile, 'utf-8')).toContain('BUFF_TELEGRAM_TOKEN=123:ABC-secret');
+    expect(readFileSync(envFile, 'utf-8')).toContain('NUVIRA_TELEGRAM_TOKEN=123:ABC-secret');
 
     // The GET list now shows it configured with the full value (admin).
     const list = await authedFetch('/api/config/platforms');
@@ -122,7 +122,7 @@ describe('/api/config/platforms', () => {
   });
 
   it('viewer cannot write (403) and sees redacted values', async () => {
-    const post = await authedFetch('/api/config/platforms/slack', 'POST', { values: { BUFF_SLACK_BOT_TOKEN: 'xoxb-123' } }, viewerToken);
+    const post = await authedFetch('/api/config/platforms/slack', 'POST', { values: { NUVIRA_SLACK_BOT_TOKEN: 'xoxb-123' } }, viewerToken);
     expect(post.status).toBe(403);
     const list = await authedFetch('/api/config/platforms', 'GET', undefined, viewerToken);
     const body = (await list.json()) as { platforms: Array<{ envVars: Array<{ set: boolean; value: string }> }> };
@@ -136,7 +136,7 @@ describe('/api/config/platforms', () => {
     expect(badVar.status).toBe(400);
     const badPlatform = await authedFetch('/api/config/platforms/notreal', 'POST', { values: { X: 'y' } });
     expect(badPlatform.status).toBe(400);
-    const whatsapp = await authedFetch('/api/config/platforms/whatsapp', 'POST', { values: { BUFF_WHATSAPP_SESSION_DIR: '/tmp/x' } });
+    const whatsapp = await authedFetch('/api/config/platforms/whatsapp', 'POST', { values: { NUVIRA_WHATSAPP_SESSION_DIR: '/tmp/x' } });
     expect(whatsapp.status).toBe(400);
   });
 
@@ -145,8 +145,8 @@ describe('/api/config/platforms', () => {
     expect(res.status).toBe(200);
     const body = (await res.json()) as { ok: boolean; removed: string[]; status: { configured: boolean } };
     expect(body.ok).toBe(true);
-    expect(body.removed).toEqual(['BUFF_TELEGRAM_TOKEN']);
+    expect(body.removed).toEqual(['NUVIRA_TELEGRAM_TOKEN']);
     expect(body.status.configured).toBe(false);
-    expect(readFileSync(envFile, 'utf-8')).not.toContain('BUFF_TELEGRAM_TOKEN');
+    expect(readFileSync(envFile, 'utf-8')).not.toContain('NUVIRA_TELEGRAM_TOKEN');
   });
 });

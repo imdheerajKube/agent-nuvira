@@ -12,11 +12,12 @@
  *     → every ORCHESTRATOR / EXEC / CRON board event also streams as a
  *       compact status line (E2 JSON-events → channel).
  *
- * Reuses the SAME pipeline core as `buff chat` / `buff execute` — no parallel
+ * Reuses the SAME pipeline core as `nuvira chat` / `nuvira execute` — no parallel
  * agent path. All adapters opt-in via env tokens (channel-directory.ts).
  */
 
 import { runPipelineTool } from '../tools/pipeline-tool.js';
+import { envBuff } from '../config/paths';
 import { parseRequestSync } from '../nlu/parser.js';
 import { getEventBus, EventNames } from '../observability/event-bus.js';
 import { ConfigManager } from '../config/manager.js';
@@ -152,10 +153,10 @@ export function isBotAddressed(text: string): boolean {
 export function envPolicies(): PolicyMap {
   const truthy = (v: string | undefined): boolean => ['1', 'true', 'yes', 'on'].includes((v ?? '').trim().toLowerCase());
   const split = (v: string | undefined): string[] => (v ?? '').split(',').map((s) => s.trim()).filter(Boolean);
-  const globalUsers = split(process.env.BUFF_GATEWAY_ALLOWED_USERS);
-  const globalGroups = split(process.env.BUFF_GATEWAY_ALLOWED_GROUPS);
-  const globalMention = truthy(process.env.BUFF_GATEWAY_REQUIRE_MENTION);
-  const disabled = split(process.env.BUFF_GATEWAY_DISABLED_PLATFORMS);
+  const globalUsers = split(envBuff('GATEWAY_ALLOWED_USERS'));
+  const globalGroups = split(envBuff('GATEWAY_ALLOWED_GROUPS'));
+  const globalMention = truthy(envBuff('GATEWAY_REQUIRE_MENTION'));
+  const disabled = split(envBuff('GATEWAY_DISABLED_PLATFORMS'));
   const out: PolicyMap = {};
   for (const p of Object.keys(PLATFORM_ENV_VARS) as Platform[]) {
     const key = p.toUpperCase();
@@ -178,7 +179,7 @@ export interface GatewayRegistryOptions {
   streamEvents?: boolean;
   /** Only reply for pipeline intents; all other messages get a help line (default false). */
   pipelineOnly?: boolean;
-  /** Config dir for the delivery ledger + inbox (tests pass a temp dir; default ~/.buff). */
+  /** Config dir for the delivery ledger + inbox (tests pass a temp dir; default ~/.nuvira). */
   deliveryConfigDir?: string;
   /**
    * Authorized channels allowed to trigger the pipeline ("platform:channelId"
@@ -229,7 +230,7 @@ export class GatewayRegistry {
   private chatEngine: GatewayRegistryOptions['chatEngine'] | null;
 
   constructor(options: GatewayRegistryOptions = {}, configManager?: ConfigManager) {
-    const allowFromEnv = (process.env.BUFF_GATEWAY_ALLOW_IDS ?? '')
+    const allowFromEnv = (envBuff('GATEWAY_ALLOW_IDS') ?? '')
       .split(',')
       .map((s) => s.trim())
       .filter(Boolean);
@@ -350,7 +351,7 @@ export class GatewayRegistry {
 
   /**
    * Attempt all due pending delivery entries through the registered adapters.
-   * Returns the counters (public so the CLI `buff gateway delivery --flush`
+   * Returns the counters (public so the CLI `nuvira gateway delivery --flush`
    * and tests can drive it directly). Serialized on the drain chain.
    */
   async drainDelivery(): Promise<{ processed: number; sent: number; failed: number }> {
@@ -422,7 +423,7 @@ export class GatewayRegistry {
     // processing (no help line, no chat answer, no pipeline) — they must not
     // even learn a bot exists. Polite ⛔ refusals are an explicit opt-in
     // (`silentDrop: false`); the default is silent.
-    // Live re-read: policies changed via `buff config gateway allow/…` or the
+    // Live re-read: policies changed via `nuvira config gateway allow/…` or the
     // dashboard Permissions page apply to the RUNNING gateway immediately
     // (ConfigManager's statSync re-read is µs; the JSON parse only on change).
     this.policies = this.readPolicies();
@@ -459,7 +460,7 @@ export class GatewayRegistry {
       }
       // Address-only mode: a group message must mention/address the bot.
       if (policy?.requireMention && !isBotAddressed(msg.text)) {
-        const line = `🤖 I'm here — mention me (e.g. "buff fix the tests") to trigger a task in this group.`;
+        const line = `🤖 I'm here — mention me (e.g. "nuvira fix the tests") to trigger a task in this group.`;
         await replyTo(line);
         record('help', line);
         return line;
@@ -488,7 +489,7 @@ export class GatewayRegistry {
     // work, no model. Only reached by AUTHORIZED senders (the gate above
     // silently dropped unapproved ones).
     if (parsed.action.run !== 'pipeline' && parsed.action.run !== 'chat') {
-      const line = `🤖 I understood: **${parsed.intent}** (${(parsed.confidence * 100).toFixed(0)}% confidence)\nTry a task like "fix the failing test" or "explain this repo" — or run \`buff gateway status\` for help.`;
+      const line = `🤖 I understood: **${parsed.intent}** (${(parsed.confidence * 100).toFixed(0)}% confidence)\nTry a task like "fix the failing test" or "explain this repo" — or run \`nuvira gateway status\` for help.`;
       await replyTo(line);
       record('help', line);
       return line;
@@ -503,7 +504,7 @@ export class GatewayRegistry {
       const line =
         answer && answer.content.trim() && !answer.generationFailed
           ? answer.content
-          : `🤖 I understood: **${parsed.intent}** (${(parsed.confidence * 100).toFixed(0)}% confidence)\nNo model is available right now — try a task like "fix the failing test" or "explain this repo", or run \`buff gateway status\` for help.`;
+          : `🤖 I understood: **${parsed.intent}** (${(parsed.confidence * 100).toFixed(0)}% confidence)\nNo model is available right now — try a task like "fix the failing test" or "explain this repo", or run \`nuvira gateway status\` for help.`;
       await replyTo(line);
       record('chat', line);
       return line;
@@ -520,7 +521,7 @@ export class GatewayRegistry {
       const line =
         answer && answer.content.trim() && !answer.generationFailed
           ? answer.content
-          : `🤖 I understood: **${parsed.intent}** (${(parsed.confidence * 100).toFixed(0)}% confidence)\nNo model is available right now — try a task like "fix the failing test" or "explain this repo", or run \`buff gateway status\` for help.`;
+          : `🤖 I understood: **${parsed.intent}** (${(parsed.confidence * 100).toFixed(0)}% confidence)\nNo model is available right now — try a task like "fix the failing test" or "explain this repo", or run \`nuvira gateway status\` for help.`;
       await replyTo(line);
       record('pipeline', line);
       // Status recipients: a pipeline task (even one routed through the loop

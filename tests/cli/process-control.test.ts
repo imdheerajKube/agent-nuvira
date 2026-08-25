@@ -1,6 +1,6 @@
 /**
- * process-control tests — the shared stop helpers behind `buff gateway stop`,
- * `buff dashboard stop`, and the dashboard's Shutdown buttons.
+ * process-control tests — the shared stop helpers behind `nuvira gateway stop`,
+ * `nuvira dashboard stop`, and the dashboard's Shutdown buttons.
  *
  * Spawns REAL child processes with distinctive command lines to verify
  * discovery + graceful SIGTERM — hermetic (unique markers, always cleaned up).

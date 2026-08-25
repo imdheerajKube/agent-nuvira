@@ -35,17 +35,17 @@ function makeConfigManager(quota?: Record<string, unknown>) {
 describe('QuotaLedger — usage recording', () => {
   beforeEach(() => {
     tempDir = mkdtempSync(join(tmpdir(), 'buff-quota-'));
-    originalMemoryDir = process.env.BUFF_MEMORY_DIR;
-    process.env.BUFF_MEMORY_DIR = tempDir;
+    originalMemoryDir = process.env.NUVIRA_MEMORY_DIR;
+    process.env.NUVIRA_MEMORY_DIR = tempDir;
     resetQuotaLedger();
   });
 
   afterEach(() => {
     resetQuotaLedger();
     if (originalMemoryDir === undefined) {
-      delete process.env.BUFF_MEMORY_DIR;
+      delete process.env.NUVIRA_MEMORY_DIR;
     } else {
-      process.env.BUFF_MEMORY_DIR = originalMemoryDir;
+      process.env.NUVIRA_MEMORY_DIR = originalMemoryDir;
     }
     rmSync(tempDir, { recursive: true, force: true });
   });
@@ -111,17 +111,17 @@ describe('QuotaLedger — usage recording', () => {
 describe('QuotaLedger — exhaustion & parking', () => {
   beforeEach(() => {
     tempDir = mkdtempSync(join(tmpdir(), 'buff-quota-'));
-    originalMemoryDir = process.env.BUFF_MEMORY_DIR;
-    process.env.BUFF_MEMORY_DIR = tempDir;
+    originalMemoryDir = process.env.NUVIRA_MEMORY_DIR;
+    process.env.NUVIRA_MEMORY_DIR = tempDir;
     resetQuotaLedger();
   });
 
   afterEach(() => {
     resetQuotaLedger();
     if (originalMemoryDir === undefined) {
-      delete process.env.BUFF_MEMORY_DIR;
+      delete process.env.NUVIRA_MEMORY_DIR;
     } else {
-      process.env.BUFF_MEMORY_DIR = originalMemoryDir;
+      process.env.NUVIRA_MEMORY_DIR = originalMemoryDir;
     }
     rmSync(tempDir, { recursive: true, force: true });
   });
@@ -213,17 +213,17 @@ describe('QuotaLedger — exhaustion & parking', () => {
 describe('QuotaLedger — cost summary (tokens saved / paid usage)', () => {
   beforeEach(() => {
     tempDir = mkdtempSync(join(tmpdir(), 'buff-quota-'));
-    originalMemoryDir = process.env.BUFF_MEMORY_DIR;
-    process.env.BUFF_MEMORY_DIR = tempDir;
+    originalMemoryDir = process.env.NUVIRA_MEMORY_DIR;
+    process.env.NUVIRA_MEMORY_DIR = tempDir;
     resetQuotaLedger();
   });
 
   afterEach(() => {
     resetQuotaLedger();
     if (originalMemoryDir === undefined) {
-      delete process.env.BUFF_MEMORY_DIR;
+      delete process.env.NUVIRA_MEMORY_DIR;
     } else {
-      process.env.BUFF_MEMORY_DIR = originalMemoryDir;
+      process.env.NUVIRA_MEMORY_DIR = originalMemoryDir;
     }
     rmSync(tempDir, { recursive: true, force: true });
   });
@@ -270,17 +270,17 @@ describe('QuotaLedger — cost summary (tokens saved / paid usage)', () => {
 describe('QuotaLedger — failover timeline (quota-events.jsonl)', () => {
   beforeEach(() => {
     tempDir = mkdtempSync(join(tmpdir(), 'buff-quota-'));
-    originalMemoryDir = process.env.BUFF_MEMORY_DIR;
-    process.env.BUFF_MEMORY_DIR = tempDir;
+    originalMemoryDir = process.env.NUVIRA_MEMORY_DIR;
+    process.env.NUVIRA_MEMORY_DIR = tempDir;
     resetQuotaLedger();
   });
 
   afterEach(() => {
     resetQuotaLedger();
     if (originalMemoryDir === undefined) {
-      delete process.env.BUFF_MEMORY_DIR;
+      delete process.env.NUVIRA_MEMORY_DIR;
     } else {
-      process.env.BUFF_MEMORY_DIR = originalMemoryDir;
+      process.env.NUVIRA_MEMORY_DIR = originalMemoryDir;
     }
     rmSync(tempDir, { recursive: true, force: true });
   });
@@ -382,17 +382,17 @@ describe('QuotaLedger — failover timeline (quota-events.jsonl)', () => {
 describe('QuotaLedger — M2.3 multi-account key state', () => {
   beforeEach(() => {
     tempDir = mkdtempSync(join(tmpdir(), 'buff-quota-m23-'));
-    originalMemoryDir = process.env.BUFF_MEMORY_DIR;
-    process.env.BUFF_MEMORY_DIR = tempDir;
+    originalMemoryDir = process.env.NUVIRA_MEMORY_DIR;
+    process.env.NUVIRA_MEMORY_DIR = tempDir;
     resetQuotaLedger();
   });
 
   afterEach(() => {
     resetQuotaLedger();
     if (originalMemoryDir === undefined) {
-      delete process.env.BUFF_MEMORY_DIR;
+      delete process.env.NUVIRA_MEMORY_DIR;
     } else {
-      process.env.BUFF_MEMORY_DIR = originalMemoryDir;
+      process.env.NUVIRA_MEMORY_DIR = originalMemoryDir;
     }
     rmSync(tempDir, { recursive: true, force: true });
   });

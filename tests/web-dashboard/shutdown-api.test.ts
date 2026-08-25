@@ -1,6 +1,6 @@
 /**
- * Shutdown API — POST /api/admin/shutdown (the GUI twin of `buff gateway stop`
- * / `buff dashboard stop`).
+ * Shutdown API — POST /api/admin/shutdown (the GUI twin of `nuvira gateway stop`
+ * / `nuvira dashboard stop`).
  *
  * Real HTTP against a server on a random port, file-based admin auth (admin +
  * operator + viewer for the RBAC gates), and a temp BUFF_CONFIG_DIR. The
@@ -16,15 +16,15 @@ import { join } from 'node:path';
 
 const TMP_BASE = process.env.TMPDIR || process.env.TMP || '/tmp';
 const testDir = mkdtempSync(join(TMP_BASE, 'buff-shutdown-api-'));
-const memoryDir = join(testDir, '.buff', 'memory');
+const memoryDir = join(testDir, '.nuvira', 'memory');
 mkdirSync(memoryDir, { recursive: true });
 
 // Env MUST be set before importing the server (values are read at import time).
-process.env.BUFF_DASHBOARD_PORT = '0';
-process.env.BUFF_DASHBOARD_HOST = '127.0.0.1';
-process.env.BUFF_MEMORY_DIR = memoryDir;
-process.env.BUFF_CONFIG_DIR = join(testDir, '.buff');
-process.env.BUFF_WHATSAPP_SESSION_DIR = join(testDir, '.buff', 'whatsapp', 'session');
+process.env.NUVIRA_DASHBOARD_PORT = '0';
+process.env.NUVIRA_DASHBOARD_HOST = '127.0.0.1';
+process.env.NUVIRA_MEMORY_DIR = memoryDir;
+process.env.NUVIRA_CONFIG_DIR = join(testDir, '.nuvira');
+process.env.NUVIRA_WHATSAPP_SESSION_DIR = join(testDir, '.nuvira', 'whatsapp', 'session');
 
 const { createDashboardServer, setDashboardShutdownForTest } = await import('../../src/web-dashboard/server.js');
 

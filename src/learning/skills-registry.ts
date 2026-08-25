@@ -11,7 +11,7 @@
  *   - browse-sh  — the browse.sh API (external browse-hub; mapped to the
  *     HubSkillEntry shape).
  *   - git-repo   — a git repository (any layout) cloned shallowly into
- *     `~/.buff/skills-hub/repos/<hash>/`; the skills root is auto-detected
+ *     `~/.nuvira/skills-hub/repos/<hash>/`; the skills root is auto-detected
  *     (repo root / `skills/` / `.claude/skills/` / `.agents/skills/`).
  *
  * Configuration (buffconfig `skills.registries[]`, ordered = priority):
@@ -24,6 +24,7 @@
  */
 
 import { existsSync, mkdirSync, readFileSync, readdirSync } from 'node:fs';
+import {envBuff, resolveNuviraHome} from '../config/paths';
 import { join } from 'node:path';
 import { homedir } from 'node:os';
 import { execFileSync } from 'node:child_process';
@@ -95,7 +96,7 @@ export function configuredRegistries(cm?: ConfigManager): string[] {
       return registries.filter((r): r is string => typeof r === 'string' && r.length > 0);
     }
   } catch { /* fall through to env/default */ }
-  const env = process.env.BUFF_SKILLS_REGISTRY;
+  const env = envBuff('SKILLS_REGISTRY');
   if (env) return [env];
   const packaged = packagedRegistryDir();
   if (packaged) return [`file://${packaged}`];
@@ -178,7 +179,7 @@ async function fetchBrowseShSkill(source: RegistrySource, name: string): Promise
 
 // ─── git-repo adapter ───────────────────────────────────────────────────────
 
-const REPOS_DIR = join(homedir(), '.buff', 'skills-hub', 'repos');
+const REPOS_DIR = join(resolveNuviraHome(), 'skills-hub', 'repos');
 
 /** Candidate skills roots inside a cloned repo (probed in order). */
 const REPO_SKILL_ROOTS = ['skills', '.claude/skills', '.agents/skills', '.'];
@@ -379,7 +380,7 @@ export function unreachableRegistryHint(probes: RegistryProbe[]): string {
   });
   return (
     `Unreachable registry source(s):\n${lines.join('\n')}\n` +
-    `  Fix: add a reachable registry to buffconfig skills.registries[] or set BUFF_SKILLS_REGISTRY.`
+    `  Fix: add a reachable registry to nuviraconfig skills.registries[] or set NUVIRA_SKILLS_REGISTRY.`
   );
 }
 

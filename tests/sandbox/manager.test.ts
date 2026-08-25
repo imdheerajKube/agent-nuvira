@@ -17,6 +17,7 @@ import {
   DEFAULT_RESOURCE_LIMITS,
 } from '../../src/sandbox/types.js';
 import type { SandboxConfig, ResourceLimits } from '../../src/sandbox/types.js';
+import { resolveNuviraHome } from '../../src/config/paths.js';
 import {
   BUILTIN_SANDBOX_IMAGES,
   resolveSandboxImage,
@@ -176,7 +177,7 @@ describe('SandboxManager', () => {
       // Reset cached config and delete any persisted config file
       // to ensure tests start from clean defaults
       resetSandboxConfigCache();
-      const configPath = join(homedir(), '.buff', 'sandbox-config.json');
+      const configPath = join(resolveNuviraHome(), 'sandbox-config.json');
       if (existsSync(configPath)) {
         rmSync(configPath, { force: true });
       }

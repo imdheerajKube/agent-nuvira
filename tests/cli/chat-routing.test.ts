@@ -111,8 +111,8 @@ describe('ChatCommand — cold-start probe (unified registry learning)', () => {
 
   beforeEach(() => {
     tempDir = mkdtempSync(join(tmpdir(), 'buff-chat-route-'));
-    originalMemoryDir = process.env.BUFF_MEMORY_DIR;
-    process.env.BUFF_MEMORY_DIR = tempDir;
+    originalMemoryDir = process.env.NUVIRA_MEMORY_DIR;
+    process.env.NUVIRA_MEMORY_DIR = tempDir;
     setVectorBackendOverride('json');
     resetModelRegistry();
     resetQuotaLedger();
@@ -135,9 +135,9 @@ describe('ChatCommand — cold-start probe (unified registry learning)', () => {
     resetQuotaLedger();
     resetVectorBackendSelection();
     if (originalMemoryDir === undefined) {
-      delete process.env.BUFF_MEMORY_DIR;
+      delete process.env.NUVIRA_MEMORY_DIR;
     } else {
-      process.env.BUFF_MEMORY_DIR = originalMemoryDir;
+      process.env.NUVIRA_MEMORY_DIR = originalMemoryDir;
     }
     rmSync(tempDir, { recursive: true, force: true });
     vi.restoreAllMocks();
@@ -172,8 +172,8 @@ describe('ChatCommand — re-verify before re-admit (expired transient exclusion
 
   beforeEach(() => {
     tempDir = mkdtempSync(join(tmpdir(), 'buff-chat-route-'));
-    originalMemoryDir = process.env.BUFF_MEMORY_DIR;
-    process.env.BUFF_MEMORY_DIR = tempDir;
+    originalMemoryDir = process.env.NUVIRA_MEMORY_DIR;
+    process.env.NUVIRA_MEMORY_DIR = tempDir;
     setVectorBackendOverride('json');
     resetModelRegistry();
     resetQuotaLedger();
@@ -195,9 +195,9 @@ describe('ChatCommand — re-verify before re-admit (expired transient exclusion
     resetQuotaLedger();
     resetVectorBackendSelection();
     if (originalMemoryDir === undefined) {
-      delete process.env.BUFF_MEMORY_DIR;
+      delete process.env.NUVIRA_MEMORY_DIR;
     } else {
-      process.env.BUFF_MEMORY_DIR = originalMemoryDir;
+      process.env.NUVIRA_MEMORY_DIR = originalMemoryDir;
     }
     rmSync(tempDir, { recursive: true, force: true });
     vi.restoreAllMocks();

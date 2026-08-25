@@ -27,10 +27,10 @@ import inquirer from 'inquirer';
 // ─── Hermetic memory dir ────────────────────────────────────────────────────
 // execute() begins a reasoning trace (P0) on every run — pin BUFF_MEMORY_DIR
 // to a temp dir so trace writes (and any other memory store writes) never
-// leak into the real ~/.buff during tests. Individual describes that manage
+// leak into the real ~/.nuvira during tests. Individual describes that manage
 // their own temp dir save/restore this value correctly.
 const orchidTestDir = mkdtempSync(join(tmpdir(), 'buff-orch-test-'));
-process.env.BUFF_MEMORY_DIR = join(orchidTestDir, '.buff', 'memory');
+process.env.NUVIRA_MEMORY_DIR = join(orchidTestDir, '.nuvira', 'memory');
 
 import { Orchestrator } from '../../src/agents/orchestrator.js';
 import type { OrchestratorOptions } from '../../src/agents/orchestrator.js';
@@ -1206,8 +1206,8 @@ describe('Orchestrator — checkpoint resume', () => {
     tempDir = (require('node:fs') as typeof import('node:fs')).mkdtempSync(
       (require('node:os') as typeof import('node:os')).tmpdir() + '/buff-orch-cp-',
     );
-    originalMemoryDir = process.env.BUFF_MEMORY_DIR;
-    process.env.BUFF_MEMORY_DIR = tempDir;
+    originalMemoryDir = process.env.NUVIRA_MEMORY_DIR;
+    process.env.NUVIRA_MEMORY_DIR = tempDir;
 
     // Reset mock implementations and call history — mockReset clears both.
     // Using mockReset (not mockClear) prevents cross-test interference where
@@ -1230,9 +1230,9 @@ describe('Orchestrator — checkpoint resume', () => {
   afterEach(() => {
     vi.restoreAllMocks();
     if (originalMemoryDir === undefined) {
-      delete process.env.BUFF_MEMORY_DIR;
+      delete process.env.NUVIRA_MEMORY_DIR;
     } else {
-      process.env.BUFF_MEMORY_DIR = originalMemoryDir;
+      process.env.NUVIRA_MEMORY_DIR = originalMemoryDir;
     }
     (require('node:fs') as typeof import('node:fs')).rmSync(tempDir, { recursive: true, force: true });
   });
@@ -1721,7 +1721,7 @@ describe('Orchestrator — review mode integration', () => {
 
 // ─── Auto model resolution ──────────────────────────────────────────────────
 // Regression tests for the "no auto model" error: when the user selects Auto
-// (`-m auto` / `buff model switch auto` / `--auto-route`), a literal 'auto'
+// (`-m auto` / `nuvira model switch auto` / `--auto-route`), a literal 'auto'
 // must NEVER reach a real provider API. The orchestrator resolves it via the
 // AutoModelRouter (per-task) or the provider's configured model (fallback).
 
@@ -1888,8 +1888,8 @@ describe('Orchestrator — auto-routed failure telemetry', () => {
 
   beforeEach(() => {
     tempDir = mkdtempSync(join(tmpdir(), 'buff-orch-tele-'));
-    originalMemoryDir = process.env.BUFF_MEMORY_DIR;
-    process.env.BUFF_MEMORY_DIR = tempDir;
+    originalMemoryDir = process.env.NUVIRA_MEMORY_DIR;
+    process.env.NUVIRA_MEMORY_DIR = tempDir;
     resetModelRegistry();
     resetQuotaLedger();
   });
@@ -1898,9 +1898,9 @@ describe('Orchestrator — auto-routed failure telemetry', () => {
     resetModelRegistry();
     resetQuotaLedger();
     if (originalMemoryDir === undefined) {
-      delete process.env.BUFF_MEMORY_DIR;
+      delete process.env.NUVIRA_MEMORY_DIR;
     } else {
-      process.env.BUFF_MEMORY_DIR = originalMemoryDir;
+      process.env.NUVIRA_MEMORY_DIR = originalMemoryDir;
     }
     rmSync(tempDir, { recursive: true, force: true });
     vi.restoreAllMocks();
@@ -2394,7 +2394,7 @@ describe('Orchestrator — auto-routed failure telemetry', () => {
   });
 
   it('writes NON-auto (createLLMProvider) failures through to the registry', async () => {
-    // `buff execute --provider gemini` (no auto routing) uses createLLMProvider
+    // `nuvira execute --provider gemini` (no auto routing) uses createLLMProvider
     // — a failed call there must learn the same way the auto path does.
     const cm = new ConfigManager();
     const orch = new Orchestrator(cm);
@@ -2403,7 +2403,7 @@ describe('Orchestrator — auto-routed failure telemetry', () => {
 
     // Model passed EXPLICITLY — createLLMProvider resolves a missing model from
     // the machine config, which makes the registry key environment-dependent
-    // (fails in CI where no ~/.buff config exists). Pin it for hermeticity.
+    // (fails in CI where no ~/.nuvira config exists). Pin it for hermeticity.
     const callLLM = (orch as any).createLLMProvider({ provider: 'gemini', model: 'gemini-2.0-flash-exp' });
     await expect(callLLM('hello')).rejects.toThrow('403');
 

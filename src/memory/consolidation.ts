@@ -14,7 +14,7 @@
  * Called by:
  * - LocalMemoryProvider.onSessionEnd() — end-of-session consolidation
  * - Background timer — periodic consolidation
- * - CLI: `buff memory consolidate` — on-demand
+ * - CLI: `nuvira memory consolidate` — on-demand
  */
 
 import { logger } from '../utils/logger.js';
@@ -85,7 +85,7 @@ export class MemoryConsolidation {
 
   /**
    * Run consolidation now (on demand).
-   * Called by CLI: `buff memory consolidate`
+   * Called by CLI: `nuvira memory consolidate`
    */
   async consolidateNow(): Promise<ConsolidationResult> {
     return this.consolidate();

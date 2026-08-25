@@ -3,7 +3,7 @@
  *
  * The preview-card gate: skill_manage create writes a DRAFT (never a live
  * skill); accept promotes it into the live stores (hub SKILL.md + compiled
- * SkillStore so `buff skill list` shows it); reject discards it. The learn
+ * SkillStore so `nuvira skill list` shows it); reject discards it. The learn
  * prompt is the standards-guided authoring instruction (a prompt, not a
  * pipeline — the plan's phase-7 principle).
  *
@@ -16,7 +16,7 @@
  *   3. Learn-prompt builder (learn-prompt.ts) — empty request → "this
  *      conversation" default; URL + constraints both kept; standards present.
  *
- * Hermetic: temp HOME (os.homedir mock) isolates ~/.buff; the store's dirs
+ * Hermetic: temp HOME (os.homedir mock) isolates ~/.nuvira; the store's dirs
  * are injectable per call where the API allows.
  */
 
@@ -101,16 +101,16 @@ describe('P6a — draft store (skill-drafts.ts)', () => {
     testProject = holder.project;
     resetSkillStore();
     // Fresh slate under the SHARED mocked home (accept tests write the store).
-    rmSync(join(testHome, '.buff', 'skill-drafts'), { recursive: true, force: true });
-    rmSync(join(testHome, '.buff', 'skills'), { recursive: true, force: true });
+    rmSync(join(testHome, '.nuvira', 'skill-drafts'), { recursive: true, force: true });
+    rmSync(join(testHome, '.nuvira', 'skills'), { recursive: true, force: true });
   });
 
   afterEach(() => {
     resetSkillStore();
   });
 
-  const draftsRoot = () => join(testHome, '.buff', 'skill-drafts');
-  const skillsRoot = () => join(testHome, '.buff', 'skills');
+  const draftsRoot = () => join(testHome, '.nuvira', 'skill-drafts');
+  const skillsRoot = () => join(testHome, '.nuvira', 'skills');
 
   it('create validates frontmatter + name (the sandbox rule)', () => {
     // Bad name → refused before any write.
@@ -132,10 +132,10 @@ describe('P6a — draft store (skill-drafts.ts)', () => {
     expect(r.ok).toBe(true);
     const result = acceptDraft('s3-upload', { draftsRoot: draftsRoot(), skillsRoot: skillsRoot() });
     expect(result.ok).toBe(true);
-    // 1. Hub SKILL.md under ~/.buff/skills/<name>/ (the skill tool loads it).
+    // 1. Hub SKILL.md under ~/.nuvira/skills/<name>/ (the skill tool loads it).
     expect(existsSync(join(skillsRoot(), 's3-upload', 'SKILL.md'))).toBe(true);
     expect(readFileSync(join(skillsRoot(), 's3-upload', 'SKILL.md'), 'utf-8')).toContain('name: s3-upload');
-    // 2. Compiled Skill in the SkillStore (`buff skill list` shows it).
+    // 2. Compiled Skill in the SkillStore (`nuvira skill list` shows it).
     const compiled = getSkillStore().get(result.skill!.id);
     expect(compiled).not.toBeNull();
     expect(compiled?.name).toBe('s3-upload');
@@ -188,8 +188,8 @@ describe('P6a — skill tool skill_manage actions', () => {
     resetSkillStore();
     // The compiled store + drafts live under the SHARED mocked home — a fresh
     // slate per test keeps accept/promote assertions honest.
-    rmSync(join(testHome, '.buff', 'skill-drafts'), { recursive: true, force: true });
-    rmSync(join(testHome, '.buff', 'skills'), { recursive: true, force: true });
+    rmSync(join(testHome, '.nuvira', 'skill-drafts'), { recursive: true, force: true });
+    rmSync(join(testHome, '.nuvira', 'skills'), { recursive: true, force: true });
   });
 
   afterEach(() => {
@@ -206,7 +206,7 @@ describe('P6a — skill tool skill_manage actions', () => {
     expect(out).toContain('PENDING');
     expect(out).toContain('accept');
     // The draft exists but is NOT a live skill yet.
-    expect(getDraft('s3-upload', join(testHome, '.buff', 'skill-drafts'))).not.toBeNull();
+    expect(getDraft('s3-upload', join(testHome, '.nuvira', 'skill-drafts'))).not.toBeNull();
     expect(getSkillStore().getAll().some((s) => s.name === 's3-upload')).toBe(false);
     // Structured payload emitted for the GUI preview card.
     expect(emitted).toHaveLength(1);
@@ -224,7 +224,7 @@ describe('P6a — skill tool skill_manage actions', () => {
       ctx as never,
     );
     expect(out).toContain('Patched');
-    expect(getDraft('s3-upload', join(testHome, '.buff', 'skill-drafts'))?.markdown).toContain('Map the DIST build output');
+    expect(getDraft('s3-upload', join(testHome, '.nuvira', 'skill-drafts'))?.markdown).toContain('Map the DIST build output');
     expect(emitted).toHaveLength(2);
   });
 
@@ -233,7 +233,7 @@ describe('P6a — skill tool skill_manage actions', () => {
     await runSkillTool({ manage: { action: 'create', name: 's3-upload', markdown: validSkillMd() } }, ctx as never);
     const out = await runSkillTool({ manage: { action: 'delete', name: 's3-upload' } }, ctx as never);
     expect(out).toContain('Deleted');
-    expect(getDraft('s3-upload', join(testHome, '.buff', 'skill-drafts'))).toBeNull();
+    expect(getDraft('s3-upload', join(testHome, '.nuvira', 'skill-drafts'))).toBeNull();
   });
 
   it('create validates and returns a helpful error string (never throws)', async () => {
@@ -250,8 +250,8 @@ describe('P6a — skill tool skill_manage actions', () => {
     const ctx = { configManager: {}, emit: () => {} };
     await runSkillTool({ manage: { action: 'create', name: 's3-upload', markdown: validSkillMd() } }, ctx as never);
     const result = acceptDraft('s3-upload', {
-      draftsRoot: join(testHome, '.buff', 'skill-drafts'),
-      skillsRoot: join(testHome, '.buff', 'skills'),
+      draftsRoot: join(testHome, '.nuvira', 'skill-drafts'),
+      skillsRoot: join(testHome, '.nuvira', 'skills'),
     });
     expect(result.ok).toBe(true);
     // The skill tool loads the accepted skill next turn (hub catalog).

@@ -5,7 +5,7 @@
  * provider configuration) are gated by a user-id + password. This module is
  * deliberately self-contained and pure so it is unit-testable without a server:
  *
- * - Credentials live in `~/.buff/dashboard-admin.json` (or BUFF_CONFIG_DIR
+ * - Credentials live in `~/.nuvira/dashboard-admin.json` (or NUVIRA_CONFIG_DIR
  *   override — the same dir the RBAC role file uses). Only a scrypt hash is
  *   stored, never the password.
  * - `BUFF_DASHBOARD_ADMIN_USER` / `BUFF_DASHBOARD_ADMIN_PASSWORD` env override
@@ -15,10 +15,11 @@
  *   invalidates sessions (acceptable: the surface is local-first).
  *
  * The CLI is NEVER deprecated: this gate only guards the dashboard's GUI write
- * paths; `buff config set` keeps working exactly as before (GUI parallel).
+ * paths; `nuvira config set` keeps working exactly as before (GUI parallel).
  */
 
 import { scryptSync, randomBytes, randomUUID, timingSafeEqual } from 'node:crypto';
+import { envBuff } from '../../config/paths';
 import { existsSync, readFileSync, writeFileSync, mkdirSync } from 'node:fs';
 import { join } from 'node:path';
 import { resolveBuffConfigDir } from '../../config/paths.js';
@@ -167,11 +168,11 @@ export function countAdminRoleUsers(configDir?: string): number {
  * the file — explicit automation override. Single-user by design.
  */
 export function envAdminOverride(): { user: string; password: string; role: Role } | null {
-  const password = process.env.BUFF_DASHBOARD_ADMIN_PASSWORD;
+  const password = envBuff('DASHBOARD_ADMIN_PASSWORD');
   if (!password) return null;
-  const role = (process.env.BUFF_DASHBOARD_ADMIN_ROLE as Role | undefined) || ENV_DEFAULT_ROLE;
+  const role = (envBuff('DASHBOARD_ADMIN_ROLE') as Role | undefined) || ENV_DEFAULT_ROLE;
   return {
-    user: process.env.BUFF_DASHBOARD_ADMIN_USER?.trim() || 'admin',
+    user: envBuff('DASHBOARD_ADMIN_USER')?.trim() || 'admin',
     password,
     role: ROLES.includes(role) ? role : ENV_DEFAULT_ROLE,
   };

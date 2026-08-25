@@ -6,19 +6,19 @@
  * ELIMINATED, never just scored lower. This command promotes that raw config
  * surface into a first-class admin API:
  *
- *   buff admin                        — Show the current policy (alias for `policy`)
- *   buff admin policy [--json]        — Current allow/deny policy + enforcement status
- *   buff admin allow <provider...>    — Add providers to governance.allowProviders
- *   buff admin deny <provider...>     — Add providers to governance.denyProviders
- *   buff admin allow-model <m...>     — Add models to governance.allowModels
- *   buff admin deny-model <m...>      — Add models to governance.denyModels
- *   buff admin max-cost <usd>         — Admin hard max cost per call (joins routing.maxCostUsd)
- *   buff admin pii-min <0..1>         — Min privacy score for PII-matching tasks (default 1.0)
- *   buff admin unblock on|off         — May `buff models unblock` override registry blocks?
- *   buff admin clear <field>          — Remove one governance field (policy becomes permissive on it)
+ *   nuvira admin                        — Show the current policy (alias for `policy`)
+ *   nuvira admin policy [--json]        — Current allow/deny policy + enforcement status
+ *   nuvira admin allow <provider...>    — Add providers to governance.allowProviders
+ *   nuvira admin deny <provider...>     — Add providers to governance.denyProviders
+ *   nuvira admin allow-model <m...>     — Add models to governance.allowModels
+ *   nuvira admin deny-model <m...>      — Add models to governance.denyModels
+ *   nuvira admin max-cost <usd>         — Admin hard max cost per call (joins routing.maxCostUsd)
+ *   nuvira admin pii-min <0..1>         — Min privacy score for PII-matching tasks (default 1.0)
+ *   nuvira admin unblock on|off         — May `nuvira models unblock` override registry blocks?
+ *   nuvira admin clear <field>          — Remove one governance field (policy becomes permissive on it)
  *
  * All writes go through ConfigManager.save() — the same file/path the config
- * CLI writes — so `buff config get routing.governance.<key>` agrees with the
+ * CLI writes — so `nuvira config get routing.governance.<key>` agrees with the
  * admin surface. Everything is additive: an empty policy is fully permissive.
  */
 
@@ -39,7 +39,7 @@ import {
   runJobNow,
 } from '../gateway/cron.js';
 
-/** The governance fields `buff admin clear` accepts. */
+/** The governance fields `nuvira admin clear` accepts. */
 const GOVERNANCE_FIELDS: ReadonlyArray<keyof GovernanceConfig> = [
   'allowProviders', 'denyProviders', 'allowModels', 'denyModels',
   'maxCostUsd', 'minPrivacyForPii', 'piiPatterns', 'allowUnblock',
@@ -107,8 +107,8 @@ export class AdminCommand extends BaseCommand {
     logger.highlight('\n  ── Admin Governance Policy (P6 M6.5) ──\n');
     if (!hasAny) {
       console.log('  ⚖️  Policy is EMPTY — fully permissive. Auto routing may use any provider × model.');
-      console.log('      Add rules with:  buff admin allow <provider> · buff admin deny <provider>');
-      console.log('                      buff admin allow-model <model> · buff admin max-cost <usd>');
+      console.log('      Add rules with:  nuvira admin allow <provider> · nuvira admin deny <provider>');
+      console.log('                      nuvira admin allow-model <model> · nuvira admin max-cost <usd>');
     } else {
       const row = (label: string, value: unknown): void => {
         const rendered = Array.isArray(value)
@@ -253,7 +253,7 @@ export class AdminCommand extends BaseCommand {
 
   private unblockCommand(): Command {
     return new Command('unblock')
-      .description('Control whether `buff models unblock` may override REGISTRY-learned blocks (false = admin-hard)')
+      .description('Control whether `nuvira models unblock` may override REGISTRY-learned blocks (false = admin-hard)')
       .argument('<on|off>', 'on (escape hatch open, default) or off (admin-hard)')
       .action((mode: string) => {
         if (!this.guard('policy.write')) return;
@@ -305,7 +305,7 @@ export class AdminCommand extends BaseCommand {
           try {
             const r = this.rbac.assignRole(user, role as Role, 'local');
             logger.success(`${user} → ${r.role}`);
-            logger.info('Policy writes now require the admin role. Run `buff admin whoami` to confirm yours.');
+            logger.info('Policy writes now require the admin role. Run `nuvira admin whoami` to confirm yours.');
           } catch (err) {
             if (err instanceof RbacError) logger.error(`⛔ ${err.message}`);
             else throw err;
@@ -367,7 +367,7 @@ export class AdminCommand extends BaseCommand {
 
     cron
       .command('add <name> <schedule> <tool>')
-      .description('Add a cron job: buff admin cron add nightly-build "0 3 * * *" build')
+      .description('Add a cron job: nuvira admin cron add nightly-build "0 3 * * *" build')
       .option('--args <json>', 'Tool arguments as JSON (e.g. {"goal":"build"})')
       .option('--channel <alias>', 'Deliver the result to a gateway channel alias (J1)')
       .option('--dry-run', 'Validate the schedule + tool WITHOUT saving', false)
@@ -438,7 +438,7 @@ export class AdminCommand extends BaseCommand {
     const jobs = listCronJobs();
     if (jobs.length === 0) {
       logger.info('No cron jobs defined.');
-      logger.info('  Add one: buff admin cron add <name> "0 3 * * *" <tool> [--args <json>]');
+      logger.info('  Add one: nuvira admin cron add <name> "0 3 * * *" <tool> [--args <json>]');
       return;
     }
     console.log(`\n⏱  ${jobs.length} cron job(s):\n`);

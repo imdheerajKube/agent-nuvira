@@ -11,7 +11,7 @@
  *   repeats (the recursion that made auto routing look broken).
  *
  * Driven through the REAL ChatCommand.execute() single-shot path (exactly what
- * `buff chat "<prompt>" --provider auto --model auto` runs): real
+ * `nuvira chat "<prompt>" --provider auto --model auto` runs): real
  * routeMessageAuto, real runSingleShotAuto (failover walk), real
  * resolveWorkingModel (repair + registry teaching + silent fast-path), real
  * generateWithContext, real failure bookkeeping, and the real Model
@@ -150,10 +150,10 @@ describe('ChatCommand E2E — stale pin → silent repair → gemini failure →
     // break the exact call-count assertions. An empty config dir → defaults.
     tempDir = mkdtempSync(join(tmpdir(), 'buff-chat-e2e-'));
     configTempDir = mkdtempSync(join(tmpdir(), 'buff-chat-e2e-cfg-'));
-    originalMemoryDir = process.env.BUFF_MEMORY_DIR;
-    originalConfigDir = process.env.BUFF_CONFIG_DIR;
-    process.env.BUFF_MEMORY_DIR = tempDir;
-    process.env.BUFF_CONFIG_DIR = configTempDir;
+    originalMemoryDir = process.env.NUVIRA_MEMORY_DIR;
+    originalConfigDir = process.env.NUVIRA_CONFIG_DIR;
+    process.env.NUVIRA_MEMORY_DIR = tempDir;
+    process.env.NUVIRA_CONFIG_DIR = configTempDir;
     setVectorBackendOverride('json');
     resetModelRegistry();
     resetQuotaLedger();
@@ -186,14 +186,14 @@ describe('ChatCommand E2E — stale pin → silent repair → gemini failure →
     resetQuotaLedger();
     resetVectorBackendSelection();
     if (originalMemoryDir === undefined) {
-      delete process.env.BUFF_MEMORY_DIR;
+      delete process.env.NUVIRA_MEMORY_DIR;
     } else {
-      process.env.BUFF_MEMORY_DIR = originalMemoryDir;
+      process.env.NUVIRA_MEMORY_DIR = originalMemoryDir;
     }
     if (originalConfigDir === undefined) {
-      delete process.env.BUFF_CONFIG_DIR;
+      delete process.env.NUVIRA_CONFIG_DIR;
     } else {
-      process.env.BUFF_CONFIG_DIR = originalConfigDir;
+      process.env.NUVIRA_CONFIG_DIR = originalConfigDir;
     }
     rmSync(tempDir, { recursive: true, force: true });
     rmSync(configTempDir, { recursive: true, force: true });
@@ -202,7 +202,7 @@ describe('ChatCommand E2E — stale pin → silent repair → gemini failure →
 
   /**
    * Run one single-shot auto message through the REAL CLI entry point —
-   * `buff chat "<prompt>" --provider auto --model auto`. Returns the response
+   * `nuvira chat "<prompt>" --provider auto --model auto`. Returns the response
    * the CLI would print (captured from its console.log for THIS message).
    *
    * NOTE: execute() registers a process SIGINT handler (with process.exit(0))

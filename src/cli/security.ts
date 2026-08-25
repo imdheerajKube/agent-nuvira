@@ -2,15 +2,15 @@
  * Security command — Scan code, prompts, or files for security issues.
  *
  * Usage:
- *   buff security scan <text>        — Scan inline text for issues
- *   buff security scan --file <path> — Scan a file for issues
- *   buff security scan --stdin       — Read input from stdin (pipe)
- *   buff security scan --prompt      — Only check for prompt injection
- *   buff security scan --code        — Only check for dangerous code patterns
- *   buff security scan --pii         — Only check for PII
- *   buff security scan --generated   — Mark input as AI-generated (lower severity)
- *   buff security scan --json        — Output results as JSON
- *   buff security scan --strict      — Fail on medium+ severity (default: high+)
+ *   nuvira security scan <text>        — Scan inline text for issues
+ *   nuvira security scan --file <path> — Scan a file for issues
+ *   nuvira security scan --stdin       — Read input from stdin (pipe)
+ *   nuvira security scan --prompt      — Only check for prompt injection
+ *   nuvira security scan --code        — Only check for dangerous code patterns
+ *   nuvira security scan --pii         — Only check for PII
+ *   nuvira security scan --generated   — Mark input as AI-generated (lower severity)
+ *   nuvira security scan --json        — Output results as JSON
+ *   nuvira security scan --strict      — Fail on medium+ severity (default: high+)
  *
  * The scanner detects:
  * - PII (emails, API keys, tokens, SSNs, credit cards, phones)
@@ -103,10 +103,10 @@ export class SecurityCommand extends BaseCommand {
       // No input provided — show usage hint instead of hanging on stdin
       logger.error('No input provided. Use one of these:');
       console.log('');
-      console.log('  buff security scan "check this code for secrets"');
-      console.log('  buff security scan --file ./script.js');
-      console.log('  cat payload.txt | buff security scan --stdin');
-      console.log('  buff security scan --prompt');
+      console.log('  nuvira security scan "check this code for secrets"');
+      console.log('  nuvira security scan --file ./script.js');
+      console.log('  cat payload.txt | nuvira security scan --stdin');
+      console.log('  nuvira security scan --prompt');
       console.log('');
       return;
     }
@@ -115,9 +115,9 @@ export class SecurityCommand extends BaseCommand {
       logger.error('No input provided. Use --file, --stdin, or provide text as an argument.');
       console.log('');
       console.log('  Examples:');
-      console.log('    buff security scan "Check this code"');
-      console.log('    buff security scan --file ./script.js');
-      console.log('    cat payload.txt | buff security scan --stdin');
+      console.log('    nuvira security scan "Check this code"');
+      console.log('    nuvira security scan --file ./script.js');
+      console.log('    cat payload.txt | nuvira security scan --stdin');
       console.log('');
       return;
     }

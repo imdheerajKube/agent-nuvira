@@ -323,7 +323,7 @@ export interface HealthData {
 
 /**
  * P6 M6.1 RBAC snapshot — the acting identity, their role, and the full
- * user→role map from ~/.buff/rbac.json (mirrors `buff admin whoami` / `role
+ * user→role map from ~/.nuvira/rbac.json (mirrors `nuvira admin whoami` / `role
  * list`). `legacy: true` = no roles assigned → fully permissive single-user.
  */
 export interface RbacInsights {
@@ -398,13 +398,13 @@ export interface RoutingInsights {
   retrieval?: RetrievalInsights;
   /**
    * Admin governance policy (P6 M6.5) — the allow/deny + cap rules the Auto
-   * router enforces as hard constraints (mirrors `buff admin policy`).
+   * router enforces as hard constraints (mirrors `nuvira admin policy`).
    * Optional: an older server won't send it, so the panel hides the card.
    */
   governance?: GovernanceInsights;
   /**
-   * P6 M6.1 RBAC identity + role assignments (mirrors `buff admin whoami` /
-   * `buff admin role list`). Optional: an older server won't send it, so the
+   * P6 M6.1 RBAC identity + role assignments (mirrors `nuvira admin whoami` /
+   * `nuvira admin role list`). Optional: an older server won't send it, so the
    * panel hides the card when absent.
    */
   rbac?: RbacInsights;
@@ -414,7 +414,7 @@ export interface RoutingInsights {
 /**
  * Admin governance policy (P6 M6.5) — the exact `routing.governance` the
  * auto-router enforces as hard constraints on every pick (violating providers
- * are ELIMINATED, never just scored lower). Mirrors `buff admin policy`.
+ * are ELIMINATED, never just scored lower). Mirrors `nuvira admin policy`.
  */
 export interface GovernanceInsights {
   /** True when any rule is active; false = fully permissive. */
@@ -428,7 +428,7 @@ export interface GovernanceInsights {
   /** Min privacy score (0-1) required when a PII pattern matches (default 1.0). */
   minPrivacyForPii?: number;
   piiPatterns?: string[];
-  /** Whether `buff models unblock` may override REGISTRY-learned blocks. */
+  /** Whether `nuvira models unblock` may override REGISTRY-learned blocks. */
   allowUnblock?: boolean;
   updatedAt: number;
 }
@@ -1004,7 +1004,7 @@ export interface HubChannelPolicy {
  * A saved verified contact (name + contact no) — the Permissions page
  * validated list. `id` is the same sender id stored in
  * `policies.<platform>.allowedUsers`; `name` is the optional display label
- * (CLI parity: `buff whatsapp contact add <Name> <number>`).
+ * (CLI parity: `nuvira whatsapp contact add <Name> <number>`).
  */
 export interface HubContact {
   name: string;
@@ -1140,7 +1140,7 @@ export interface TaskRecord {
   error?: string;
 }
 
-// ─── P2 in-page WhatsApp pairing (GUI parity with `buff whatsapp pair`) ─────
+// ─── P2 in-page WhatsApp pairing (GUI parity with `nuvira whatsapp pair`) ─────
 
 export type WhatsAppPairState = 'idle' | 'pairing' | 'paired' | 'failed' | 'cancelled' | 'error';
 

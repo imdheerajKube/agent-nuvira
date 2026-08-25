@@ -5,12 +5,12 @@
  * asking the user to: config + vault + workspace health, and a one-line model
  * status (registry + quota state — sub-ms in-memory reads, no live probing).
  * Results are one-liners via logger; the full interactive report stays behind
- * `buff doctor`. NOTE (scoped): `buff eval` is NOT auto-run here — a full eval
+ * `nuvira doctor`. NOTE (scoped): `nuvira eval` is NOT auto-run here — a full eval
  * suite at session start would be heavy and burn quota; eval surfaces via its
  * own commands and later E2 board lanes. Only the cheap local checks run.
  *
  * Throttled (default: once per 12h per machine, tracked in
- * `~/.buff/duties-last-run.json`) so single-shot commands never spam; silent
+ * `~/.nuvira/duties-last-run.json`) so single-shot commands never spam; silent
  * in `--json-events` mode so stdout stays pure NDJSON. Best-effort — a
  * failure never breaks session start.
  *
@@ -36,7 +36,7 @@ interface DutiesState {
 }
 
 function statePath(): string {
-  // Scoped to the ACTIVE config dir (honors BUFF_CONFIG_DIR) so separate
+  // Scoped to the ACTIVE config dir (honors NUVIRA_CONFIG_DIR) so separate
   // config dirs / CI runs never share one throttle state file.
   return join(resolveBuffConfigDir(), 'duties-last-run.json');
 }

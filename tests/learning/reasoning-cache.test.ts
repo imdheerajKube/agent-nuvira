@@ -25,13 +25,13 @@ let originalMemoryDir: string | undefined;
 describe('reasoning-replay cache (M4.2)', () => {
   beforeEach(() => {
     tempDir = mkdtempSync(join(tmpdir(), 'buff-reasoning-cache-'));
-    originalMemoryDir = process.env.BUFF_MEMORY_DIR;
-    process.env.BUFF_MEMORY_DIR = tempDir;
+    originalMemoryDir = process.env.NUVIRA_MEMORY_DIR;
+    process.env.NUVIRA_MEMORY_DIR = tempDir;
   });
 
   afterEach(() => {
-    if (originalMemoryDir === undefined) delete process.env.BUFF_MEMORY_DIR;
-    else process.env.BUFF_MEMORY_DIR = originalMemoryDir;
+    if (originalMemoryDir === undefined) delete process.env.NUVIRA_MEMORY_DIR;
+    else process.env.NUVIRA_MEMORY_DIR = originalMemoryDir;
     rmSync(tempDir, { recursive: true, force: true });
   });
 

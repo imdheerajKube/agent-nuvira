@@ -14,7 +14,7 @@
  *   3. `refreshModelRegistry()` — orchestrates probes + spot-checks across all
  *      configured providers and writes the registry (JSON mirror + vector
  *      mirror). `watchModelRegistry()` runs it on a schedule as the standalone
- *      maintenance daemon (`buff models watch`).
+ *      maintenance daemon (`nuvira models watch`).
  *
  * All providers are resolved through ProviderFactory with the user's configured
  * credentials; a missing key simply skips the provider (never throws).
@@ -359,7 +359,7 @@ function getConfiguredModel(configManager: ConfigManager, providerType: string):
 
 /**
  * Run a maintenance pass immediately, then every `intervalMs`. Used by
- * `buff models watch` as the dedicated background agent that keeps the
+ * `nuvira models watch` as the dedicated background agent that keeps the
  * registry fresh even when the CLI isn't running a pipeline.
  *
  * Returns a stop function that also cleans up signal handlers — designed for

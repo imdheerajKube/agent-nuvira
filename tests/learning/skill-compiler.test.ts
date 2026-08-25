@@ -442,8 +442,8 @@ describe('SkillCompiler', () => {
       expect(formatted).toContain('Skill Two');
       expect(formatted).toContain('90%');
       expect(formatted).toContain('70%');
-      expect(formatted).toContain('buff skill show');
-      expect(formatted).toContain('buff skill run');
+      expect(formatted).toContain('nuvira skill show');
+      expect(formatted).toContain('nuvira skill run');
     });
 
     it('should return empty message when list is empty', () => {

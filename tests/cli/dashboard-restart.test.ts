@@ -1,5 +1,5 @@
 /**
- * Unit tests for `buff dashboard --force` helpers (src/cli/dashboard-restart.ts).
+ * Unit tests for `nuvira dashboard --force` helpers (src/cli/dashboard-restart.ts).
  *
  * Covers the port probe that classifies a running server (stale / current /
  * not-a-dashboard / unreachable / unknown), cross-platform PID discovery and

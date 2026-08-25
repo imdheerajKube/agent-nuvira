@@ -134,7 +134,7 @@ describe('DiscordAdapter + SlackAdapter (Bot-token REST sends)', () => {
   const envBackup: Record<string, string | undefined> = {};
 
   beforeEach(() => {
-    for (const k of ['BUFF_DISCORD_WEBHOOK_URL', 'BUFF_DISCORD_BOT_TOKEN', 'BUFF_SLACK_WEBHOOK_URL', 'BUFF_SLACK_BOT_TOKEN']) {
+    for (const k of ['NUVIRA_DISCORD_WEBHOOK_URL', 'NUVIRA_DISCORD_BOT_TOKEN', 'NUVIRA_SLACK_WEBHOOK_URL', 'NUVIRA_SLACK_BOT_TOKEN']) {
       envBackup[k] = process.env[k];
       delete process.env[k];
     }
@@ -149,7 +149,7 @@ describe('DiscordAdapter + SlackAdapter (Bot-token REST sends)', () => {
   });
 
   it('Discord sends to the REST channel endpoint with a Bearer bot token when no webhook URL is set', async () => {
-    process.env.BUFF_DISCORD_BOT_TOKEN = 'discord-bot-token';
+    process.env.NUVIRA_DISCORD_BOT_TOKEN = 'discord-bot-token';
     const fetchMock = vi.spyOn(globalThis, 'fetch').mockResolvedValue({ ok: true } as Response);
     const adapter = new DiscordAdapter();
     expect(adapter.configured).toBe(true);
@@ -162,7 +162,7 @@ describe('DiscordAdapter + SlackAdapter (Bot-token REST sends)', () => {
   });
 
   it('Discord sendMedia() posts multipart payload_json + files[0] to the webhook URL', async () => {
-    process.env.BUFF_DISCORD_WEBHOOK_URL = 'https://discord.com/api/webhooks/111/abc';
+    process.env.NUVIRA_DISCORD_WEBHOOK_URL = 'https://discord.com/api/webhooks/111/abc';
     const fetchMock = vi.spyOn(globalThis, 'fetch').mockResolvedValue({ ok: true } as Response);
     const adapter = new DiscordAdapter();
     expect(adapter.configured).toBe(true);
@@ -183,7 +183,7 @@ describe('DiscordAdapter + SlackAdapter (Bot-token REST sends)', () => {
   });
 
   it('Discord sendMedia() uses the REST channel endpoint with Bearer auth when no webhook URL is set', async () => {
-    process.env.BUFF_DISCORD_BOT_TOKEN = 'discord-bot-token';
+    process.env.NUVIRA_DISCORD_BOT_TOKEN = 'discord-bot-token';
     const fetchMock = vi.spyOn(globalThis, 'fetch').mockResolvedValue({ ok: true } as Response);
     const adapter = new DiscordAdapter();
     expect(await adapter.sendMedia('123456789', { type: 'image', data: new Uint8Array([1]), filename: 'a.png' })).toBe(true);
@@ -204,7 +204,7 @@ describe('DiscordAdapter + SlackAdapter (Bot-token REST sends)', () => {
   });
 
   it('Slack sends to chat.postMessage with a Bearer bot token and the channel in the payload', async () => {
-    process.env.BUFF_SLACK_BOT_TOKEN = 'slack-bot-token';
+    process.env.NUVIRA_SLACK_BOT_TOKEN = 'slack-bot-token';
     const fetchMock = vi.spyOn(globalThis, 'fetch').mockResolvedValue({ ok: true } as Response);
     const adapter = new SlackAdapter();
     expect(adapter.configured).toBe(true);
@@ -230,7 +230,7 @@ describe('WhatsAppCloudAdapter (Meta Cloud API)', () => {
   const envBackup: Record<string, string | undefined> = {};
 
   beforeEach(() => {
-    for (const k of ['BUFF_WHATSAPP_TOKEN', 'BUFF_WHATSAPP_PHONE_ID']) {
+    for (const k of ['NUVIRA_WHATSAPP_TOKEN', 'NUVIRA_WHATSAPP_PHONE_ID']) {
       envBackup[k] = process.env[k];
       delete process.env[k];
     }
@@ -245,8 +245,8 @@ describe('WhatsAppCloudAdapter (Meta Cloud API)', () => {
   });
 
   it('send() POSTs the messaging_product payload to the Graph API with a Bearer token', async () => {
-    process.env.BUFF_WHATSAPP_TOKEN = 'wa-token';
-    process.env.BUFF_WHATSAPP_PHONE_ID = 'phone-123';
+    process.env.NUVIRA_WHATSAPP_TOKEN = 'wa-token';
+    process.env.NUVIRA_WHATSAPP_PHONE_ID = 'phone-123';
     const fetchMock = vi.spyOn(globalThis, 'fetch').mockResolvedValue({ ok: true } as Response);
     const adapter = new WhatsAppCloudAdapter();
     expect(adapter.configured).toBe(true);
@@ -282,10 +282,10 @@ describe('WebhookReceiver WhatsApp inbound (X-Hub-Signature-256)', () => {
 
   beforeEach(() => {
     PORT = portSeq++;
-    envBackup.BUFF_WHATSAPP_APP_SECRET = process.env.BUFF_WHATSAPP_APP_SECRET;
-    envBackup.BUFF_WHATSAPP_VERIFY_TOKEN = process.env.BUFF_WHATSAPP_VERIFY_TOKEN;
-    process.env.BUFF_WHATSAPP_APP_SECRET = 'wa-app-secret';
-    process.env.BUFF_WHATSAPP_VERIFY_TOKEN = 'verify-me';
+    envBackup.NUVIRA_WHATSAPP_APP_SECRET = process.env.NUVIRA_WHATSAPP_APP_SECRET;
+    envBackup.NUVIRA_WHATSAPP_VERIFY_TOKEN = process.env.NUVIRA_WHATSAPP_VERIFY_TOKEN;
+    process.env.NUVIRA_WHATSAPP_APP_SECRET = 'wa-app-secret';
+    process.env.NUVIRA_WHATSAPP_VERIFY_TOKEN = 'verify-me';
   });
 
   afterEach(async () => {
@@ -362,19 +362,19 @@ describe('WebhookReceiver WhatsApp inbound (X-Hub-Signature-256)', () => {
 describe('MatrixAdapter inbound (P3)', () => {
   const HOST = 'https://matrix.example.org';
   const TOKEN = 'tok';
-  const oldHost = process.env.BUFF_MATRIX_HOMESERVER;
-  const oldToken = process.env.BUFF_MATRIX_ACCESS_TOKEN;
+  const oldHost = process.env.NUVIRA_MATRIX_HOMESERVER;
+  const oldToken = process.env.NUVIRA_MATRIX_ACCESS_TOKEN;
 
   beforeEach(() => {
-    process.env.BUFF_MATRIX_HOMESERVER = HOST;
-    process.env.BUFF_MATRIX_ACCESS_TOKEN = TOKEN;
+    process.env.NUVIRA_MATRIX_HOMESERVER = HOST;
+    process.env.NUVIRA_MATRIX_ACCESS_TOKEN = TOKEN;
   });
 
   afterEach(() => {
-    if (oldHost === undefined) delete process.env.BUFF_MATRIX_HOMESERVER;
-    else process.env.BUFF_MATRIX_HOMESERVER = oldHost;
-    if (oldToken === undefined) delete process.env.BUFF_MATRIX_ACCESS_TOKEN;
-    else process.env.BUFF_MATRIX_ACCESS_TOKEN = oldToken;
+    if (oldHost === undefined) delete process.env.NUVIRA_MATRIX_HOMESERVER;
+    else process.env.NUVIRA_MATRIX_HOMESERVER = oldHost;
+    if (oldToken === undefined) delete process.env.NUVIRA_MATRIX_ACCESS_TOKEN;
+    else process.env.NUVIRA_MATRIX_ACCESS_TOKEN = oldToken;
     vi.restoreAllMocks();
   });
 
@@ -429,7 +429,7 @@ describe('MatrixAdapter inbound (P3)', () => {
   });
 
   it('start() throws when unconfigured', async () => {
-    delete process.env.BUFF_MATRIX_HOMESERVER;
+    delete process.env.NUVIRA_MATRIX_HOMESERVER;
     const adapter = new MatrixAdapter();
     await expect(adapter.start(() => {})).rejects.toThrow('not configured');
   });

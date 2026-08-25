@@ -13,23 +13,23 @@ import { tmpdir } from 'node:os';
 
 const TMP_BASE = process.env.TMPDIR || process.env.TMP || '/tmp';
 
-const ORIG_CONFIG_DIR = process.env.BUFF_CONFIG_DIR;
-const ORIG_WA_DIR = process.env.BUFF_WHATSAPP_SESSION_DIR;
+const ORIG_CONFIG_DIR = process.env.NUVIRA_CONFIG_DIR;
+const ORIG_WA_DIR = process.env.NUVIRA_WHATSAPP_SESSION_DIR;
 let cfgDir: string;
 let waDir: string;
 
 beforeEach(() => {
   cfgDir = mkdtempSync(join(TMP_BASE, 'buff-contacts-cfg-'));
   waDir = mkdtempSync(join(TMP_BASE, 'buff-contacts-wa-'));
-  process.env.BUFF_CONFIG_DIR = cfgDir;
-  process.env.BUFF_WHATSAPP_SESSION_DIR = waDir;
+  process.env.NUVIRA_CONFIG_DIR = cfgDir;
+  process.env.NUVIRA_WHATSAPP_SESSION_DIR = waDir;
 });
 
 afterEach(() => {
-  if (ORIG_CONFIG_DIR === undefined) delete process.env.BUFF_CONFIG_DIR;
-  else process.env.BUFF_CONFIG_DIR = ORIG_CONFIG_DIR;
-  if (ORIG_WA_DIR === undefined) delete process.env.BUFF_WHATSAPP_SESSION_DIR;
-  else process.env.BUFF_WHATSAPP_SESSION_DIR = ORIG_WA_DIR;
+  if (ORIG_CONFIG_DIR === undefined) delete process.env.NUVIRA_CONFIG_DIR;
+  else process.env.NUVIRA_CONFIG_DIR = ORIG_CONFIG_DIR;
+  if (ORIG_WA_DIR === undefined) delete process.env.NUVIRA_WHATSAPP_SESSION_DIR;
+  else process.env.NUVIRA_WHATSAPP_SESSION_DIR = ORIG_WA_DIR;
   try { rmSync(cfgDir, { recursive: true, force: true }); } catch { /* best-effort */ }
   try { rmSync(waDir, { recursive: true, force: true }); } catch { /* best-effort */ }
 });
@@ -112,7 +112,7 @@ describe('gateway contacts store', () => {
     const { syncWhatsAppContactName } = await import('../../src/gateway/contacts.js');
     const { readContactsFile } = await import('../../src/gateway/whatsapp/contacts.js');
     syncWhatsAppContactName('Alex', '+919876543210');
-    // Stored as E.164 digits without '+', exactly like `buff whatsapp contact add`.
+    // Stored as E.164 digits without '+', exactly like `nuvira whatsapp contact add`.
     expect(readContactsFile(waDir)).toEqual({ Alex: '919876543210' });
     // A nameless or number-less sync is a no-op.
     syncWhatsAppContactName('', '919876543210');

@@ -52,17 +52,17 @@ describe('resolveWorkingModel', () => {
   beforeEach(() => {
     clearModelListCache();
     registryTempDir = mkdtempSync(join(tmpdir(), 'buff-val-registry-'));
-    originalMemoryDir = process.env.BUFF_MEMORY_DIR;
-    process.env.BUFF_MEMORY_DIR = registryTempDir;
+    originalMemoryDir = process.env.NUVIRA_MEMORY_DIR;
+    process.env.NUVIRA_MEMORY_DIR = registryTempDir;
     resetModelRegistry();
   });
 
   afterEach(() => {
     resetModelRegistry();
     if (originalMemoryDir === undefined) {
-      delete process.env.BUFF_MEMORY_DIR;
+      delete process.env.NUVIRA_MEMORY_DIR;
     } else {
-      process.env.BUFF_MEMORY_DIR = originalMemoryDir;
+      process.env.NUVIRA_MEMORY_DIR = originalMemoryDir;
     }
     rmSync(registryTempDir, { recursive: true, force: true });
   });

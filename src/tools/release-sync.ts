@@ -7,7 +7,7 @@
  * published version against the release-marker strings in the website and
  * docs — version strings drift from package.json after releases (observed:
  * `website/index.html` carries a "Current release vX.Y.Z" marker + a
- * `vX.Y.Z · N tests` badge, `docs/COMMANDS.md` carries a `buff vX.Y.x`
+ * `vX.Y.Z · N tests` badge, `docs/COMMANDS.md` carries a `nuvira vX.Y.x`
  * header), and NO post-publish diff existed.
  *
  * Deterministic and pure at the core (`findReleaseDrift` — fixture-testable):
@@ -51,7 +51,7 @@ export const SYNC_TARGETS = ['website/index.html', 'docs/COMMANDS.md'];
  * Markers (deliberately narrow — historical notes are not markers):
  *   1. `Current release <strong>vX.Y.Z</strong>`        → exact version
  *   2. `vX.Y.Z · N tests` (the arch-tier badge)          → exact version
- *   3. `buff vX.Y.x` (COMMANDS.md header)                → major.minor only
+ *   3. `nuvira vX.Y.x` (COMMANDS.md header)                → major.minor only
  */
 export function findReleaseDrift(text: string, file: string, currentVersion: string): ReleaseDriftGap[] {
   const gaps: ReleaseDriftGap[] = [];

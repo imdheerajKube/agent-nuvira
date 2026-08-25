@@ -51,7 +51,7 @@ describe('ml-router — learnedScores', () => {
   let ml: MLRouter;
 
   beforeEach(() => {
-    vi.stubEnv('BUFF_MEMORY_DIR', TEST_MEMORY_DIR);
+    vi.stubEnv('NUVIRA_MEMORY_DIR', TEST_MEMORY_DIR);
     ml = new MLRouter();
   });
 

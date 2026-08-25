@@ -24,6 +24,7 @@
  */
 
 import { join } from 'path';
+import { envBuff } from '../config/paths';
 import { z, toJSONSchema, type ZodType } from 'zod';
 import { ACTION_BY_INTENT } from '../nlu/actions.js';
 
@@ -187,7 +188,7 @@ export const runCliSchema = z.object({
   ask: z
     .string()
     .min(1)
-    .describe('The plain-English request, e.g. "stop the dashboard", "add Rahul to whatsapp", "run the eval suite", "send a message to ops". The tool resolves it against the command manifest and executes the matching buff command.'),
+    .describe('The plain-English request, e.g. "stop the dashboard", "add Rahul to whatsapp", "run the eval suite", "send a message to ops". The tool resolves it against the command manifest and executes the matching nuvira command.'),
   confirm: z
     .boolean()
     .optional()
@@ -397,7 +398,7 @@ export function getTool(name: string): Tool | undefined {
   return registry.get(name);
 }
 
-/** All registered tools, sorted by name (stable `buff tools list` output). */
+/** All registered tools, sorted by name (stable `nuvira tools list` output). */
 export function listTools(): Tool[] {
   return [...registry.values()].sort((a, b) => a.name.localeCompare(b.name));
 }
@@ -711,7 +712,7 @@ registerTool({
     const { query, max_results } = webSearchSchema.parse(args);
     const { searchWeb } = await import('./web-research.js');
     // Self-hosted SearXNG opt-in via env (free/OSS); unset → DuckDuckGo.
-    const searxngUrl = process.env.BUFF_SEARXNG_URL;
+    const searxngUrl = envBuff('SEARXNG_URL');
     const results = await searchWeb(query, { maxResults: max_results, searxngUrl });
     if (results.length === 0) {
       return `web_search: no results for "${query}" (backend unavailable or network error).`;
@@ -771,7 +772,7 @@ registerTool({
     const result = await generateImage(parsed.prompt, {
       width: parsed.width,
       height: parsed.height,
-      apiUrl: process.env.BUFF_IMAGE_API_URL,
+      apiUrl: envBuff('IMAGE_API_URL'),
     });
     return result.ok
       ? `generate_image: saved to ${result.file}`
@@ -835,7 +836,7 @@ registerTool({
 
 registerTool({
   name: 'run_cli',
-  description: 'Resolve a plain-English request into the exact buff CLI command and execute it (start/stop the dashboard or gateway, check status, add a verified sender or send-by-name contact, configure a platform like telegram/whatsapp, run evals, show stats, manage memory/cache, etc.). Use when the user describes a system/tooling task in plain English instead of typing the command — e.g. "stop the dashboard", "add Rahul to whatsapp", "enable telegram support", "run the eval suite". Ambiguous asks and destructive actions are gated: the tool returns what to confirm, then call ask_user and retry with confirm:true when the user agreed.',
+  description: 'Resolve a plain-English request into the exact nuvira CLI command and execute it (start/stop the dashboard or gateway, check status, add a verified sender or send-by-name contact, configure a platform like telegram/whatsapp, run evals, show stats, manage memory/cache, etc.). Use when the user describes a system/tooling task in plain English instead of typing the command — e.g. "stop the dashboard", "add Rahul to whatsapp", "enable telegram support", "run the eval suite". Ambiguous asks and destructive actions are gated: the tool returns what to confirm, then call ask_user and retry with confirm:true when the user agreed.',
   category: 'workflow',
   inputSchema: runCliSchema,
   endsAgentStep: false,
@@ -858,7 +859,7 @@ registerTool({
 // The chat agent can finally SAY "load the code-assessment skill" — the skill
 // store existed but was unreachable from the chat loop (round-3 finding).
 // Backed by `src/tools/skill-tool.ts`: resolves from BOTH the compiled
-// SkillStore (buff skill list) and the hub catalog (buff skills install →
+// SkillStore (nuvira skill list) and the hub catalog (nuvira skills install →
 // SKILL.md), returns the methodology (steps + parameters, placeholders
 // resolved), marks used, refuses disabled skills, lists on unknown.
 
@@ -907,7 +908,7 @@ registerTool({
 // The model can
 // spawn a specialized sub-agent with an isolated context. The tool reuses the
 // SAME ModuleRegistry the orchestrator uses — the registry is the only place
-// agents are declared (H2 acceptance: `buff tools list` shows delegation tools).
+// agents are declared (H2 acceptance: `nuvira tools list` shows delegation tools).
 
 registerTool({
   name: 'delegate',
@@ -2271,7 +2272,7 @@ registerTool({
   run: (args) => import('./skills-hub.js').then((m) => {
     const { action, source, skillName, targetDir } = args as any;
     const mgr = m.getSkillsHubManager();
-    const target = targetDir || join(process.env.HOME || '~', '.buff', 'skills');
+    const target = targetDir || join(process.env.HOME || '~', '.nuvira', 'skills');
     switch (action) {
       case 'install': return source && skillName ? mgr.install(source, skillName, target).then((r: any) => JSON.stringify(r)) : 'source and skillName required';
       case 'uninstall': return skillName ? mgr.uninstall(skillName, target).then((r: any) => JSON.stringify({ removed: r })) : 'skillName required';
@@ -2322,7 +2323,7 @@ registerTool({
   run: (args) => import('./skills-sync-client.js').then((m) => {
     const { action, skillsDir, message, remoteUrl } = args as any;
     const client = m.getSkillsSyncClient({ remoteUrl });
-    const dir = skillsDir || join(process.env.HOME || '~', '.buff', 'skills');
+    const dir = skillsDir || join(process.env.HOME || '~', '.nuvira', 'skills');
     switch (action) {
       case 'commit': return message ? JSON.stringify({ hash: client.commit(dir, message) }) : 'message required';
       case 'push': return client.push().then((r: any) => JSON.stringify(r));

@@ -5,7 +5,7 @@
  * + `web_routers/tools.py:get_toolsets`): the registry's tools are grouped
  * into named toolsets — the "capabilities" a user toggles. Each toolset can
  * be enabled/disabled via config (`tools.toolsets.<name>.enabled` in
- * `~/.buff/buffconfig.json`; absent = enabled).
+ * `~/.nuvira/buffconfig.json`; absent = enabled).
  *
  * Two enforcement points (I1, the capability gate):
  * 1. **Schema gating** — the tool JSON schema handed to native tool-calling
@@ -32,7 +32,7 @@ export interface ToolsetDef {
   name: string;
   /** Human label for CLI/dashboard. */
   label: string;
-  /** One-line description shown in `buff tools toolsets`. */
+  /** One-line description shown in `nuvira tools toolsets`. */
   description: string;
   /** Registry tool names in this group. */
   tools: string[];
@@ -101,7 +101,7 @@ export const TOOLSETS: ToolsetDef[] = [
   {
     name: 'system',
     label: 'System & tooling',
-    description: 'Plain-English system/tooling control: start/stop the dashboard or gateway, verified senders, platform setup, evals, stats, multi-LLM routing (via the buff CLI — run_cli).',
+    description: 'Plain-English system/tooling control: start/stop the dashboard or gateway, verified senders, platform setup, evals, stats, multi-LLM routing (via the nuvira CLI — run_cli).',
     tools: ['run_cli', 'openrouter_client'],
   },
   {
@@ -252,11 +252,11 @@ export function disabledToolsetNames(state?: ToolsetStateMap): string[] {
 /**
  * Persist a toolset's enabled state. Uses the provided ConfigManager when
  * given (CLI/dashboard pass their own), else constructs a fresh one.
- * Throws for an unknown toolset name (typo-safe for `buff tools toolsets`).
+ * Throws for an unknown toolset name (typo-safe for `nuvira tools toolsets`).
  */
 export function setToolsetEnabled(name: string, enabled: boolean, cm?: ConfigManagerLike): void {
   if (!TOOLSETS.some((t) => t.name === name)) {
-    throw new Error(`Unknown toolset '${name}' — run \`buff tools toolsets\` to see the catalog.`);
+    throw new Error(`Unknown toolset '${name}' — run \`nuvira tools toolsets\` to see the catalog.`);
   }
   // Deep-merge the entry so any FUTURE per-toolset keys (provider, env, …)
   // survive a toggle — only `enabled` flips, nothing else is clobbered.

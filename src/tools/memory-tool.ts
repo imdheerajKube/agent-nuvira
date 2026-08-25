@@ -13,6 +13,7 @@
  */
 
 import { existsSync, readFileSync, writeFileSync, mkdirSync } from 'node:fs';
+import { resolveNuviraHome } from '../config/paths';
 import { join } from 'node:path';
 import { homedir } from 'node:os';
 import { logger } from '../utils/logger.js';
@@ -46,7 +47,7 @@ export class MemoryManager {
   };
 
   constructor() {
-    this.memoryDir = join(homedir(), '.buff', 'memories');
+    this.memoryDir = join(resolveNuviraHome(), 'memories');
     this.ensureDir();
     this.loadAll();
   }

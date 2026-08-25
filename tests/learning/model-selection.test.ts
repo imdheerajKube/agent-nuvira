@@ -43,17 +43,17 @@ describe('model selection — dynamic defaults (nothing hardcoded)', () => {
 
   beforeEach(() => {
     tempDir = mkdtempSync(join(tmpdir(), 'buff-model-selection-'));
-    originalMemoryDir = process.env.BUFF_MEMORY_DIR;
-    process.env.BUFF_MEMORY_DIR = tempDir;
+    originalMemoryDir = process.env.NUVIRA_MEMORY_DIR;
+    process.env.NUVIRA_MEMORY_DIR = tempDir;
     resetModelRegistry();
   });
 
   afterEach(() => {
     resetModelRegistry();
     if (originalMemoryDir === undefined) {
-      delete process.env.BUFF_MEMORY_DIR;
+      delete process.env.NUVIRA_MEMORY_DIR;
     } else {
-      process.env.BUFF_MEMORY_DIR = originalMemoryDir;
+      process.env.NUVIRA_MEMORY_DIR = originalMemoryDir;
     }
     rmSync(tempDir, { recursive: true, force: true });
   });
@@ -190,7 +190,7 @@ describe('model selection — dynamic defaults (nothing hardcoded)', () => {
 
     it('refuses to invent a model name — clear onboarding error when nothing is known', () => {
       expect(() => requireAdapterModel('gemini', undefined)).toThrow(/No model resolved/);
-      expect(() => requireAdapterModel('gemini', 'default')).toThrow(/buff models refresh/);
+      expect(() => requireAdapterModel('gemini', 'default')).toThrow(/nuvira models refresh/);
     });
   });
 

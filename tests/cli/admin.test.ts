@@ -24,17 +24,17 @@ let originalActAs: string | undefined;
 /** Point BUFF_CONFIG_DIR at a fresh temp dir so RBAC state is hermetic. */
 function setupRbacDir(): void {
   rbacDir = mkdtempSync(join(tmpdir(), 'buff-admin-rbac-'));
-  originalConfigDir = process.env.BUFF_CONFIG_DIR;
-  process.env.BUFF_CONFIG_DIR = rbacDir;
-  originalActAs = process.env.BUFF_ACT_AS;
-  delete process.env.BUFF_ACT_AS; // legacy mode by default
+  originalConfigDir = process.env.NUVIRA_CONFIG_DIR;
+  process.env.NUVIRA_CONFIG_DIR = rbacDir;
+  originalActAs = process.env.NUVIRA_ACT_AS;
+  delete process.env.NUVIRA_ACT_AS; // legacy mode by default
 }
 
 function teardownRbacDir(): void {
-  if (originalConfigDir === undefined) delete process.env.BUFF_CONFIG_DIR;
-  else process.env.BUFF_CONFIG_DIR = originalConfigDir;
-  if (originalActAs === undefined) delete process.env.BUFF_ACT_AS;
-  else process.env.BUFF_ACT_AS = originalActAs;
+  if (originalConfigDir === undefined) delete process.env.NUVIRA_CONFIG_DIR;
+  else process.env.NUVIRA_CONFIG_DIR = originalConfigDir;
+  if (originalActAs === undefined) delete process.env.NUVIRA_ACT_AS;
+  else process.env.NUVIRA_ACT_AS = originalActAs;
   rmSync(rbacDir, { recursive: true, force: true });
 }
 
@@ -238,7 +238,7 @@ describe('AdminCommand — RBAC gating (P6 M6.1)', () => {
 
   it('blocks policy writes for a viewer and logs an RbacError', () => {
     seedRole('alice', 'viewer');
-    process.env.BUFF_ACT_AS = 'alice';
+    process.env.NUVIRA_ACT_AS = 'alice';
     const errSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
     const cmd = makeCommand();
     run(cmd, ['allow', 'groq']);
@@ -249,7 +249,7 @@ describe('AdminCommand — RBAC gating (P6 M6.1)', () => {
 
   it('allows policy writes for an admin', () => {
     seedRole('alice', 'admin');
-    process.env.BUFF_ACT_AS = 'alice';
+    process.env.NUVIRA_ACT_AS = 'alice';
     const cmd = makeCommand();
     run(cmd, ['allow', 'groq']);
     expect(gov().allowProviders).toEqual(['groq']);
@@ -257,7 +257,7 @@ describe('AdminCommand — RBAC gating (P6 M6.1)', () => {
 
   it('policy read stays open to every role', () => {
     seedRole('alice', 'viewer');
-    process.env.BUFF_ACT_AS = 'alice';
+    process.env.NUVIRA_ACT_AS = 'alice';
     const cmd = makeCommand();
     run(cmd, ['policy']); // must not throw / log an access error
     expect(gov()).toEqual({});
@@ -273,7 +273,7 @@ describe('AdminCommand — RBAC gating (P6 M6.1)', () => {
 
   it('blocks role management for a non-admin', () => {
     seedRole('bob', 'operator');
-    process.env.BUFF_ACT_AS = 'bob';
+    process.env.NUVIRA_ACT_AS = 'bob';
     const errSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
     const cmd = makeCommand();
     run(cmd, ['role', 'add', 'mallory', 'viewer']);
@@ -285,7 +285,7 @@ describe('AdminCommand — RBAC gating (P6 M6.1)', () => {
 
   it('blocks EVERY mutating policy command for a viewer (guard coverage parity)', () => {
     seedRole('alice', 'viewer');
-    process.env.BUFF_ACT_AS = 'alice';
+    process.env.NUVIRA_ACT_AS = 'alice';
     const errSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
     // Every subcommand that mutates the governance policy must be gated by
     // guard('policy.write') — not just `allow`. If one is missed, its payload
@@ -312,7 +312,7 @@ describe('AdminCommand — RBAC gating (P6 M6.1)', () => {
 
   it('whoami reports the acting identity and role', () => {
     seedRole('alice', 'admin');
-    process.env.BUFF_ACT_AS = 'alice';
+    process.env.NUVIRA_ACT_AS = 'alice';
     const logSpy = vi.spyOn(console, 'log').mockImplementation(() => {});
     const cmd = makeCommand();
     run(cmd, ['whoami']);

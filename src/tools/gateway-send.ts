@@ -8,7 +8,7 @@
  *
  *   gateway_send({ target: "whatsapp:Alex", text: "<the poem>" })
  *
- * Rides the SAME GatewayRegistry + adapters as `buff gateway send` (one
+ * Rides the SAME GatewayRegistry + adapters as `nuvira gateway send` (one
  * delivery path, zero divergence). A failed send is persisted to the delivery
  * ledger for retry while the gateway runs — never silently dropped.
  *
@@ -32,7 +32,7 @@ function unknownTargetMessage(target: string): string {
       const hit = resolveContact(contacts, platform as never, target);
       if (hit) {
         if (hit.status === 'pending') {
-          return `gateway_send: ⏳ '${hit.name}' (${platform}:${hit.id}) is registered but pending admin approval. Ask the admin to approve them from the dashboard Contacts tab or run 'buff gateway contact approve ${hit.name}'`;
+          return `gateway_send: ⏳ '${hit.name}' (${platform}:${hit.id}) is registered but pending admin approval. Ask the admin to approve them from the dashboard Contacts tab or run 'nuvira gateway contact approve ${hit.name}'`;
         }
         if (hit.status === 'rejected') {
           return `gateway_send: 🚫 '${hit.name}' (${platform}:${hit.id}) was rejected by the administrator. Contact the admin to request access.`;
@@ -102,7 +102,7 @@ export async function runGatewaySendTool(args: unknown, ctx: ToolContext): Promi
   return (
     `gateway_send: ⚠️ send to ${target} (${ref.platform}:${ref.channelId}) failed — the adapter is ` +
     `not configured or the transport is unreachable (WhatsApp: is the number paired? ` +
-    `Run 'buff whatsapp status'). The message was queued in the delivery ledger and will ` +
-    `be retried while 'buff gateway start' runs.`
+    `Run 'nuvira whatsapp status'). The message was queued in the delivery ledger and will ` +
+    `be retried while 'nuvira gateway start' runs.`
   );
 }

@@ -5,7 +5,7 @@
  * tool-call model ("a chat turn can invoke plan/execute/edit as a tool call",
  * H1 acceptance). Extracted from `runDeveloperMode` (chat.ts) so the same
  * pipeline core serves three entry points with zero divergence:
- *   1. `buff chat` pre-dispatch (runDeveloperMode — thin wrapper, prints).
+ *   1. `nuvira chat` pre-dispatch (runDeveloperMode — thin wrapper, prints).
  *   2. The H1 tool registry (build/resume/repair tools — return a summary
  *      text fed back to the model).
  *   3. Any future command (execute/plan/run) — STANDING RULE.
@@ -162,7 +162,7 @@ export async function runPipelineTool(
       acceptanceCriteria: contract.acceptanceCriteria,
       // The 🧠 card advertises resumability — make it true for every pipeline
       // run (cheap per-batch JSON checkpoints; a Ctrl+C / quota kill can then
-      // `buff execute --resume` instead of restarting).
+      // `nuvira execute --resume` instead of restarting).
       checkpoint: true,
     });
 

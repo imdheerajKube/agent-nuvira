@@ -304,13 +304,13 @@ describe('BaileysBridge (unpaired)', () => {
 
   beforeEach(() => {
     sessionDir = mkdtempSync(join(tmpdir(), 'buff-wa-session-'));
-    envBackup.BUFF_WHATSAPP_SESSION_DIR = process.env.BUFF_WHATSAPP_SESSION_DIR;
-    process.env.BUFF_WHATSAPP_SESSION_DIR = sessionDir;
+    envBackup.NUVIRA_WHATSAPP_SESSION_DIR = process.env.NUVIRA_WHATSAPP_SESSION_DIR;
+    process.env.NUVIRA_WHATSAPP_SESSION_DIR = sessionDir;
   });
 
   afterEach(() => {
-    if (envBackup.BUFF_WHATSAPP_SESSION_DIR === undefined) delete process.env.BUFF_WHATSAPP_SESSION_DIR;
-    else process.env.BUFF_WHATSAPP_SESSION_DIR = envBackup.BUFF_WHATSAPP_SESSION_DIR;
+    if (envBackup.NUVIRA_WHATSAPP_SESSION_DIR === undefined) delete process.env.NUVIRA_WHATSAPP_SESSION_DIR;
+    else process.env.NUVIRA_WHATSAPP_SESSION_DIR = envBackup.NUVIRA_WHATSAPP_SESSION_DIR;
     rmSync(sessionDir, { recursive: true, force: true });
   });
 

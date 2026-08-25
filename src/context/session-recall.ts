@@ -14,6 +14,7 @@
  */
 
 import { appendFileSync, existsSync, mkdirSync, readFileSync } from 'node:fs';
+import {envBuff, resolveNuviraHome} from '../config/paths';
 import { dirname, join } from 'node:path';
 import { homedir } from 'node:os';
 
@@ -51,7 +52,7 @@ export function resetRecallHitDedupe(): void {
 
 /** Same memory-dir resolution the dashboard server uses (env override). */
 function recallHitsPath(): string {
-  const dir = process.env.BUFF_MEMORY_DIR || join(homedir(), '.buff', 'memory');
+  const dir = envBuff('MEMORY_DIR') || join(resolveNuviraHome(), 'memory');
   return join(dir, RECALL_HITS_FILENAME);
 }
 
@@ -63,7 +64,7 @@ function recallHitsPath(): string {
  *
  * Dedupe: consecutive hits for the same project within RECALL_HIT_DEDUPE_MS
  * are skipped (same user action re-entering autoRecall). Skipped entirely
- * under test (VITEST) so suites never pollute a real ~/.buff telemetry file.
+ * under test (VITEST) so suites never pollute a real ~/.nuvira telemetry file.
  */
 export function recordRecallHit(projectId: string): void {
   // Test isolation: vitest sets VITEST — never write telemetry during tests.

@@ -2,7 +2,7 @@
  * WorkspaceStore — Phase A2: workspace state + project registry.
  *
  * Replaces ad-hoc JSON state with a single SQLite database
- * (`~/.buff/workspaces.db` via `node:sqlite` `DatabaseSync`) so project
+ * (`~/.nuvira/workspaces.db` via `node:sqlite` `DatabaseSync`) so project
  * continuity has one source of truth: `projects(id, git_repo, cwd_hash,
  * prefs, last_session_id, last_run_at, last_goal, run_summary)` — STRICT
  * tables, WAL journal.
@@ -317,10 +317,10 @@ export class WorkspaceStore {
   // ── Public API ──────────────────────────────────────────────────────────
 
   /**
-   * Which backend is active and basic stats (for `buff doctor`).
+   * Which backend is active and basic stats (for `nuvira doctor`).
    *
    * READ-ONLY: unlike getProjectForCwd, this NEVER creates a project row — a
-   * diagnostic (`buff doctor`) must not write the registry as a side effect.
+   * diagnostic (`nuvira doctor`) must not write the registry as a side effect.
    */
   status(cwd?: string): WorkspaceStatus {
     this.ensureOpen();
@@ -504,7 +504,7 @@ const storeCache = new Map<string, WorkspaceStore>();
 
 /**
  * Get (or create) the shared WorkspaceStore for a config dir. Cached per dir
- * so ConfigManager instantiations share one handle; honors BUFF_CONFIG_DIR.
+ * so ConfigManager instantiations share one handle; honors NUVIRA_CONFIG_DIR.
  */
 export function getWorkspaceStore(configDir?: string): WorkspaceStore {
   const dir = resolveBuffConfigDir(configDir);

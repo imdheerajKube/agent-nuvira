@@ -3,13 +3,13 @@
  *
  * Makes installed `SKILL.md` skills FIRST-CLASS runtime capabilities: the
  * orchestrator's skill-matching (which previously only consulted the compiled
- * SkillStore) now also consults this catalog, so a `buff skills install`
+ * SkillStore) now also consults this catalog, so a `nuvira skills install`
  * result is immediately matchable + injectable — no recompilation needed
  * (skills-hub bridge parity).
  *
  * Sources (both scanned, deduped by name — the project root wins):
  *   - `<project>/.agents/skills/<name>/SKILL.md`   (hub install target)
- *   - `~/.buff/skills/<name>/SKILL.md`             (user-level skills)
+ *   - `~/.nuvira/skills/<name>/SKILL.md`             (user-level skills)
  *
  * Security/gating:
  *   - Skill names are validated with `^[a-z0-9-]+$` before any read (the same
@@ -231,7 +231,7 @@ function scanRoot(root: 'project' | 'home', dir: string): HubCatalogSkill[] {
 export function readHubCatalog(projectRoot = process.cwd(), home = homedir()): HubCatalogSkill[] {
   const roots = [
     { root: 'project' as const, dir: join(projectRoot, '.agents', 'skills') },
-    { root: 'home' as const, dir: join(home, '.buff', 'skills') },
+    { root: 'home' as const, dir: join(home, '.nuvira', 'skills') },
   ];
   const seen = new Set<string>();
   const merged: HubCatalogSkill[] = [];
@@ -292,7 +292,7 @@ export function setSkillEnabled(
   home = homedir(),
 ): void {
   if (!knownSkillIds(projectRoot, home).has(id)) {
-    throw new Error(`Unknown skill '${id}' — run \`buff skills list\` to see known skills.`);
+    throw new Error(`Unknown skill '${id}' — run \`nuvira skills list\` to see known skills.`);
   }
   // Whole-list semantics (empty is meaningful): enable removes the id,
   // disable appends it — other entries are never clobbered.

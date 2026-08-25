@@ -3,7 +3,7 @@
  * `browser_tool.py`).
  *
  * Playwright is OPTIONAL: `isBrowserAvailable()` is false until the package
- * resolves (no forced heavy download — `buff tools install browser` or `npm i
+ * resolves (no forced heavy download — `nuvira tools install browser` or `npm i
  * playwright` opt-in). The action executor is a PURE function over a
  * page-like object, so tests exercise navigation/click/type/extract with a
  * fake page and no browser binary.

@@ -4,12 +4,12 @@
  * The PRIMARY path is D1 auto-recall (a bare `continue` resumes everything);
  * this command is the explicit/scriptable surface for the same machinery:
  *
- *   buff session list [--project <id>] [--since "last week"] [--limit N]
+ *   nuvira session list [--project <id>] [--since "last week"] [--limit N]
  *       — Recent sessions, optionally filtered by project + temporal phrase
- *   buff session summarize <id>
+ *   nuvira session summarize <id>
  *       — Metadata + summary for one session (not raw messages — use
- *         `buff history show` for the transcript)
- *   buff session resume [--project <id>]
+ *         `nuvira history show` for the transcript)
+ *   nuvira session resume [--project <id>]
  *       — Run D1 autoRecall and print the recall card (facts + checkpoint +
  *         last goal) for the project
  *
@@ -48,7 +48,7 @@ export class SessionCommand extends BaseCommand {
     // ── summarize ────────────────────────────────────────────────────────
     command
       .command('summarize')
-      .description('Show summary + metadata for one session (transcript: buff history show)')
+      .description('Show summary + metadata for one session (transcript: nuvira history show)')
       .argument('<id>', 'Session ID (prefix matching allowed)')
       .action((id: string) => {
         this.summarizeSession(id);
@@ -91,7 +91,7 @@ export class SessionCommand extends BaseCommand {
 
     if (sessions.length === 0) {
       logger.info('  No sessions found.'
-        + (projectId ? ' Try `buff session list` without --project to see all.' : '')
+        + (projectId ? ' Try `nuvira session list` without --project to see all.' : '')
         + (opts.since ? ` Nothing within "${opts.since}".` : ''));
       console.log('');
       return;
@@ -101,8 +101,8 @@ export class SessionCommand extends BaseCommand {
       console.log(history.formatSessionSummary(s));
     }
     console.log('');
-    logger.info('Full transcript:  buff history show <id>');
-    logger.info('Resume a project: buff session resume [--project <id>]');
+    logger.info('Full transcript:  nuvira history show <id>');
+    logger.info('Resume a project: nuvira session resume [--project <id>]');
     console.log('');
   }
 
@@ -115,7 +115,7 @@ export class SessionCommand extends BaseCommand {
 
     if (!match) {
       logger.error(`Session not found: ${id}`);
-      logger.info('Use `buff session list` to see available sessions.');
+      logger.info('Use `nuvira session list` to see available sessions.');
       return;
     }
 
@@ -133,7 +133,7 @@ export class SessionCommand extends BaseCommand {
     console.log('');
     console.log(`  Summary: ${match.summary}`);
     console.log('');
-    logger.info('Full transcript: buff history show ' + match.id);
+    logger.info('Full transcript: nuvira history show ' + match.id);
     console.log('');
   }
 

@@ -16,7 +16,7 @@
  *   - Depth-1 shallow ONLY — never a full clone (brief: "depth-1 shallow
  *     only; the clone dir is outside the user workspace and marked
  *     ephemeral").
- *   - Clone lives in ~/.buff/clones/<sha256(url)> — a hashed cache OUTSIDE
+ *   - Clone lives in ~/.nuvira/clones/<sha256(url)> — a hashed cache OUTSIDE
  *     the user workspace; re-clone on missing .git, reuse otherwise (no
  *     stray clones accumulate in the user's project).
  *
@@ -25,6 +25,7 @@
  */
 
 import { execFileSync } from 'node:child_process';
+import { resolveNuviraHome } from '../config/paths';
 import { existsSync, mkdirSync, readdirSync } from 'node:fs';
 import { join } from 'node:path';
 import { homedir } from 'node:os';
@@ -49,7 +50,7 @@ const SHELL_METACHARS = /[;&|`$()<>"'\\\s]/;
 
 /** The ephemeral cache root for clones (outside the user workspace). */
 function clonesDir(): string {
-  return join(homedir(), '.buff', 'clones');
+  return join(resolveNuviraHome(), 'clones');
 }
 
 /** Hashed cache path for a URL (stable — re-clones reuse the same dir). */
@@ -110,7 +111,7 @@ export async function runCloneRepo(args: CloneRepoArgs, ctx: ToolContext): Promi
   return (
     `✅ Cloned ${url}${refNote} → ${target}\n` +
     `Workspace is now scoped to the clone — read_file / list_dir / glob / code_search / run_terminal operate on it. ` +
-    `The user's own project is untouched (the clone is an ephemeral cache under ~/.buff/clones/).\n` +
+    `The user's own project is untouched (the clone is an ephemeral cache under ~/.nuvira/clones/).\n` +
     `Top-level entries:\n${entries}`
   );
 }

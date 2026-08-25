@@ -1,6 +1,6 @@
 /**
- * Platform transport config — ~/.buff/.env reader/writer + status helpers.
- * BUFF_ENV_FILE redirects the env file to a temp path for hermetic tests.
+ * Platform transport config — ~/.nuvira/.env reader/writer + status helpers.
+ * NUVIRA_ENV_FILE redirects the env file to a temp path for hermetic tests.
  */
 
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
@@ -21,22 +21,22 @@ import {
 
 let envDir = '';
 let envFile = '';
-const envBackup = process.env.BUFF_ENV_FILE;
+const envBackup = process.env.NUVIRA_ENV_FILE;
 
 beforeEach(() => {
   envDir = mkdtempSync(join(tmpdir(), 'buff-platcfg-'));
   envFile = join(envDir, 'test.env');
-  process.env.BUFF_ENV_FILE = envFile;
+  process.env.NUVIRA_ENV_FILE = envFile;
 });
 
 afterEach(() => {
-  if (envBackup === undefined) delete process.env.BUFF_ENV_FILE;
-  else process.env.BUFF_ENV_FILE = envBackup;
+  if (envBackup === undefined) delete process.env.NUVIRA_ENV_FILE;
+  else process.env.NUVIRA_ENV_FILE = envBackup;
   rmSync(envDir, { recursive: true, force: true });
 });
 
 describe('envFilePath', () => {
-  it('honors BUFF_ENV_FILE', () => {
+  it('honors NUVIRA_ENV_FILE', () => {
     expect(envFilePath()).toBe(envFile);
   });
 });
@@ -47,65 +47,65 @@ describe('writeEnvFile (line-preserving merge)', () => {
       envFile,
       [
         '# gateway transports',
-        'BUFF_TELEGRAM_TOKEN=old-token',
-        'BUFF_SMTP_HOST=smtp.gmail.com:587 # relay',
+        'NUVIRA_TELEGRAM_TOKEN=old-token',
+        'NUVIRA_SMTP_HOST=smtp.gmail.com:587 # relay',
         'UNRELATED=stays',
         '',
       ].join('\n'),
       'utf-8',
     );
     const { wrote } = writeEnvFile({
-      BUFF_TELEGRAM_TOKEN: 'new-token',
-      BUFF_MATRIX_HOMESERVER: 'https://matrix.org',
+      NUVIRA_TELEGRAM_TOKEN: 'new-token',
+      NUVIRA_MATRIX_HOMESERVER: 'https://matrix.org',
     });
-    expect(wrote.sort()).toEqual(['BUFF_MATRIX_HOMESERVER', 'BUFF_TELEGRAM_TOKEN']);
+    expect(wrote.sort()).toEqual(['NUVIRA_MATRIX_HOMESERVER', 'NUVIRA_TELEGRAM_TOKEN']);
     const content = readFileSync(envFile, 'utf-8');
     expect(content).toContain('# gateway transports');
-    expect(content).toContain('BUFF_TELEGRAM_TOKEN=new-token');
-    expect(content).toContain('BUFF_SMTP_HOST=smtp.gmail.com:587');
+    expect(content).toContain('NUVIRA_TELEGRAM_TOKEN=new-token');
+    expect(content).toContain('NUVIRA_SMTP_HOST=smtp.gmail.com:587');
     expect(content).toContain('UNRELATED=stays');
-    expect(content).toContain('BUFF_MATRIX_HOMESERVER=https://matrix.org');
+    expect(content).toContain('NUVIRA_MATRIX_HOMESERVER=https://matrix.org');
   });
 
   it('quotes values containing spaces or hashes', () => {
-    const { wrote } = writeEnvFile({ BUFF_TELEGRAM_TOKEN: 'abc def#123' });
-    expect(wrote).toEqual(['BUFF_TELEGRAM_TOKEN']);
-    expect(readFileSync(envFile, 'utf-8')).toContain('BUFF_TELEGRAM_TOKEN="abc def#123"');
+    const { wrote } = writeEnvFile({ NUVIRA_TELEGRAM_TOKEN: 'abc def#123' });
+    expect(wrote).toEqual(['NUVIRA_TELEGRAM_TOKEN']);
+    expect(readFileSync(envFile, 'utf-8')).toContain('NUVIRA_TELEGRAM_TOKEN="abc def#123"');
   });
 
   it('removes keys while keeping everything else', () => {
-    writeFileSync(envFile, 'BUFF_TELEGRAM_TOKEN=a\nBUFF_SMTP_HOST=b\nKEEP=c\n', 'utf-8');
-    const { removed } = writeEnvFile({}, ['BUFF_TELEGRAM_TOKEN', 'BUFF_SMTP_HOST']);
-    expect(removed.sort()).toEqual(['BUFF_SMTP_HOST', 'BUFF_TELEGRAM_TOKEN']);
+    writeFileSync(envFile, 'NUVIRA_TELEGRAM_TOKEN=a\nNUVIRA_SMTP_HOST=b\nKEEP=c\n', 'utf-8');
+    const { removed } = writeEnvFile({}, ['NUVIRA_TELEGRAM_TOKEN', 'NUVIRA_SMTP_HOST']);
+    expect(removed.sort()).toEqual(['NUVIRA_SMTP_HOST', 'NUVIRA_TELEGRAM_TOKEN']);
     const content = readFileSync(envFile, 'utf-8');
-    expect(content).not.toContain('BUFF_TELEGRAM_TOKEN');
-    expect(content).not.toContain('BUFF_SMTP_HOST');
+    expect(content).not.toContain('NUVIRA_TELEGRAM_TOKEN');
+    expect(content).not.toContain('NUVIRA_SMTP_HOST');
     expect(content).toContain('KEEP=c');
   });
 
   it('creates the file when missing', () => {
-    const { wrote } = writeEnvFile({ BUFF_NTFY_TOPIC: 'ops' });
-    expect(wrote).toEqual(['BUFF_NTFY_TOPIC']);
-    expect(readFileSync(envFile, 'utf-8')).toContain('BUFF_NTFY_TOPIC=ops');
+    const { wrote } = writeEnvFile({ NUVIRA_NTFY_TOPIC: 'ops' });
+    expect(wrote).toEqual(['NUVIRA_NTFY_TOPIC']);
+    expect(readFileSync(envFile, 'utf-8')).toContain('NUVIRA_NTFY_TOPIC=ops');
   });
 });
 
 describe('envVarState', () => {
   it('reads the file value, preferring it over process.env', () => {
-    writeFileSync(envFile, 'BUFF_TELEGRAM_TOKEN=from-file\n', 'utf-8');
-    process.env.BUFF_TELEGRAM_TOKEN = 'from-process';
-    const st = envVarState('BUFF_TELEGRAM_TOKEN');
+    writeFileSync(envFile, 'NUVIRA_TELEGRAM_TOKEN=from-file\n', 'utf-8');
+    process.env.NUVIRA_TELEGRAM_TOKEN = 'from-process';
+    const st = envVarState('NUVIRA_TELEGRAM_TOKEN');
     expect(st.set).toBe(true);
     expect(st.value).toBe('from-file');
-    delete process.env.BUFF_TELEGRAM_TOKEN;
+    delete process.env.NUVIRA_TELEGRAM_TOKEN;
   });
 
   it('falls back to process.env when the file has no value', () => {
-    process.env.BUFF_TELEGRAM_TOKEN = 'env-only';
-    const st = envVarState('BUFF_TELEGRAM_TOKEN');
+    process.env.NUVIRA_TELEGRAM_TOKEN = 'env-only';
+    const st = envVarState('NUVIRA_TELEGRAM_TOKEN');
     expect(st.set).toBe(true);
     expect(st.value).toBe('env-only');
-    delete process.env.BUFF_TELEGRAM_TOKEN;
+    delete process.env.NUVIRA_TELEGRAM_TOKEN;
   });
 });
 
@@ -114,19 +114,19 @@ describe('platformConfigStatus + metadata', () => {
     const st = platformConfigStatus('matrix');
     expect(st.platform).toBe('matrix');
     expect(st.configured).toBe(false);
-    expect(st.envVars.map((v) => v.varName)).toEqual(['BUFF_MATRIX_HOMESERVER', 'BUFF_MATRIX_ACCESS_TOKEN']);
+    expect(st.envVars.map((v) => v.varName)).toEqual(['NUVIRA_MATRIX_HOMESERVER', 'NUVIRA_MATRIX_ACCESS_TOKEN']);
     expect(st.envVars.every((v) => !v.set)).toBe(true);
   });
 
   it('reports configured=true once every required var is present', () => {
-    writeFileSync(envFile, 'BUFF_MATRIX_HOMESERVER=https://matrix.org\nBUFF_MATRIX_ACCESS_TOKEN=tok\n', 'utf-8');
+    writeFileSync(envFile, 'NUVIRA_MATRIX_HOMESERVER=https://matrix.org\nNUVIRA_MATRIX_ACCESS_TOKEN=tok\n', 'utf-8');
     expect(platformConfigStatus('matrix').configured).toBe(true);
   });
 
   it('marks tokens/passwords as secrets and keeps URLs/hosts non-secret', () => {
     const matrix = platformEnvVarMeta('matrix');
-    expect(matrix.find((m) => m.varName === 'BUFF_MATRIX_ACCESS_TOKEN')?.secret).toBe(true);
-    expect(matrix.find((m) => m.varName === 'BUFF_MATRIX_HOMESERVER')?.secret).toBe(false);
+    expect(matrix.find((m) => m.varName === 'NUVIRA_MATRIX_ACCESS_TOKEN')?.secret).toBe(true);
+    expect(matrix.find((m) => m.varName === 'NUVIRA_MATRIX_HOMESERVER')?.secret).toBe(false);
   });
 
   it('configurablePlatforms excludes whatsapp and mock', () => {
@@ -139,11 +139,11 @@ describe('platformConfigStatus + metadata', () => {
 
 describe('applyEnvToProcess + redactValue', () => {
   it('applies values to process.env and deletes removed keys', () => {
-    process.env.BUFF_TELEGRAM_TOKEN = 'old';
-    applyEnvToProcess({ BUFF_MATRIX_HOMESERVER: 'https://matrix.org' }, ['BUFF_TELEGRAM_TOKEN']);
-    expect(process.env.BUFF_MATRIX_HOMESERVER).toBe('https://matrix.org');
-    expect(process.env.BUFF_TELEGRAM_TOKEN).toBeUndefined();
-    delete process.env.BUFF_MATRIX_HOMESERVER;
+    process.env.NUVIRA_TELEGRAM_TOKEN = 'old';
+    applyEnvToProcess({ NUVIRA_MATRIX_HOMESERVER: 'https://matrix.org' }, ['NUVIRA_TELEGRAM_TOKEN']);
+    expect(process.env.NUVIRA_MATRIX_HOMESERVER).toBe('https://matrix.org');
+    expect(process.env.NUVIRA_TELEGRAM_TOKEN).toBeUndefined();
+    delete process.env.NUVIRA_MATRIX_HOMESERVER;
   });
 
   it('redacts values and reports <unset>', () => {

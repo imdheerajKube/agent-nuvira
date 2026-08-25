@@ -12,10 +12,10 @@
  * extended with version, author, and source metadata.
  *
  * Commands:
- *   buff workflow search <query>    — Search the GitHub registry
- *   buff workflow install <name>    — Install a template from the registry
- *   buff workflow publish           — Publish a local template to the registry
- *   buff workflow info <name>       — Show template details from the registry
+ *   nuvira workflow search <query>    — Search the GitHub registry
+ *   nuvira workflow install <name>    — Install a template from the registry
+ *   nuvira workflow publish           — Publish a local template to the registry
+ *   nuvira workflow info <name>       — Show template details from the registry
  */
 
 import { readFileSync, writeFileSync, existsSync, mkdirSync, readdirSync } from 'node:fs';
@@ -76,11 +76,11 @@ const REGISTRY_RAW_BASE = 'https://raw.githubusercontent.com/imdheerajKube/agent
 const REGISTRY_API_BASE = 'https://api.github.com/repos/imdheerajKube/agent-nuvira';
 
 /** Local storage for installed registry templates */
-const BUFF_DIR = resolveNuviraHome();
-const INSTALLED_REGISTRY_DIR = join(BUFF_DIR, 'workflows', 'registry');
+const NUVIRA_DIR = resolveNuviraHome();
+const INSTALLED_REGISTRY_DIR = join(NUVIRA_DIR, 'workflows', 'registry');
 
 /** Cache file for the registry index */
-const REGISTRY_CACHE_PATH = join(BUFF_DIR, 'workflows', 'registry-cache.json');
+const REGISTRY_CACHE_PATH = join(NUVIRA_DIR, 'workflows', 'registry-cache.json');
 
 /** How long to cache the registry index (1 hour in ms) */
 const REGISTRY_CACHE_TTL = 60 * 60 * 1000;
@@ -88,7 +88,7 @@ const REGISTRY_CACHE_TTL = 60 * 60 * 1000;
 // ─── Helpers ────────────────────────────────────────────────────────────────
 
 function ensureDirs(): void {
-  for (const dir of [INSTALLED_REGISTRY_DIR, join(BUFF_DIR, 'workflows')]) {
+  for (const dir of [INSTALLED_REGISTRY_DIR, join(NUVIRA_DIR, 'workflows')]) {
     if (!existsSync(dir)) {
       try { mkdirSync(dir, { recursive: true }); } catch { /* best-effort */ }
     }
@@ -163,7 +163,7 @@ export async function getRegistryEntry(id: string): Promise<RegistryEntry | null
  * Install a workflow template from the registry.
  *
  * Downloads the template JSON file from GitHub and saves it to
- * ~/.buff/workflows/registry/<id>.json where the workflow system
+ * ~/.nuvira/workflows/registry/<id>.json where the workflow system
  * can auto-discover it.
  *
  * @param templateId  The template ID to install
@@ -174,7 +174,7 @@ export async function installTemplate(templateId: string): Promise<WorkflowTempl
   const entry = await getRegistryEntry(templateId);
   if (!entry) {
     logger.error(`Template '${templateId}' not found in the registry.`);
-    logger.info('Search available templates: buff workflow search <query>');
+    logger.info('Search available templates: nuvira workflow search <query>');
     return null;
   }
 
@@ -182,7 +182,7 @@ export async function installTemplate(templateId: string): Promise<WorkflowTempl
   const localPath = join(INSTALLED_REGISTRY_DIR, `${templateId}.json`);
   if (existsSync(localPath)) {
     logger.info(`Template '${templateId}' is already installed.`);
-    logger.info('To reinstall, first remove it: rm ~/.buff/workflows/registry/<id>.json');
+    logger.info('To reinstall, first remove it: rm ~/.nuvira/workflows/registry/<id>.json');
     // Still return the existing one so it can be used
     return readLocalTemplate(templateId);
   }
@@ -288,23 +288,23 @@ export interface PublishValidation {
  */
 export function validateForPublish(templateId: string): PublishValidation {
   // Find the template in local workflows
-  const localPath = join(BUFF_DIR, 'workflows', `${templateId}.json`);
+  const localPath = join(NUVIRA_DIR, 'workflows', `${templateId}.json`);
 
   if (!existsSync(localPath)) {
-    // Also check .buff/workflows/registry/
+    // Also check .nuvira/workflows/registry/
     const registryPath = join(INSTALLED_REGISTRY_DIR, `${templateId}.json`);
     if (!existsSync(registryPath)) {
       return {
         valid: false,
-        errors: [`Template '${templateId}' not found in ~/.buff/workflows/ or ~/.buff/workflows/registry/`],
+        errors: [`Template '${templateId}' not found in ~/.nuvira/workflows/ or ~/.nuvira/workflows/registry/`],
         warnings: [],
       };
     }
   }
 
   try {
-    const filePath = existsSync(join(BUFF_DIR, 'workflows', `${templateId}.json`))
-      ? join(BUFF_DIR, 'workflows', `${templateId}.json`)
+    const filePath = existsSync(join(NUVIRA_DIR, 'workflows', `${templateId}.json`))
+      ? join(NUVIRA_DIR, 'workflows', `${templateId}.json`)
       : join(INSTALLED_REGISTRY_DIR, `${templateId}.json`);
 
     const content = readFileSync(filePath, 'utf-8');
@@ -369,7 +369,7 @@ export function prepareForPublish(templateId: string): string | null {
   }
 
   // Find and read the template
-  const localPath = join(BUFF_DIR, 'workflows', `${templateId}.json`);
+  const localPath = join(NUVIRA_DIR, 'workflows', `${templateId}.json`);
   const filePath = existsSync(localPath)
     ? localPath
     : join(INSTALLED_REGISTRY_DIR, `${templateId}.json`);

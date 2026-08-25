@@ -1,5 +1,5 @@
 /**
- * ModelCommand — Unit tests for the `buff model explain` subcommand.
+ * ModelCommand — Unit tests for the `nuvira model explain` subcommand.
  *
  * The command is largely render-only (console output). These tests drive the
  * real Commander command with mocked console output and verify the decision
@@ -20,13 +20,13 @@ import { getModelRegistry, resetModelRegistry } from '../../src/learning/model-r
 
 // ─── Isolate routing-history writes (explain records decisions) ────────────
 // The explain command now records routing decisions to the history store, which
-// writes to ~/.buff by default. Redirect it to a temp dir so tests stay hermetic.
+// writes to ~/.nuvira by default. Redirect it to a temp dir so tests stay hermetic.
 const TMP_BASE = process.env.TMPDIR || process.env.TMP || '/tmp';
 const tmpMemoryDir = mkdtempSync(join(TMP_BASE, 'buff-model-test-'));
 beforeAll(() => {
-  process.env.BUFF_MEMORY_DIR = join(tmpMemoryDir, '.buff', 'memory');
+  process.env.NUVIRA_MEMORY_DIR = join(tmpMemoryDir, '.nuvira', 'memory');
   // Seed fake API keys so the router sees MULTIPLE usable providers. Without
-  // them (fresh ~/.buff in CI), only 'local' has credentials → the explain
+  // them (fresh ~/.nuvira in CI), only 'local' has credentials → the explain
   // decision has a winner but an EMPTY fallback chain, and the JSON assertions
   // below (fallbackChain.length > 0) fail. With a couple of keys set, the
   // router ranks groq/gemini/local and the fallback chain is non-empty.
@@ -35,7 +35,7 @@ beforeAll(() => {
 });
 
 afterAll(() => {
-  delete process.env.BUFF_MEMORY_DIR;
+  delete process.env.NUVIRA_MEMORY_DIR;
   delete process.env.GROQ_API_KEY;
   delete process.env.GEMINI_API_KEY;
   rmSync(tmpMemoryDir, { recursive: true, force: true });
@@ -389,23 +389,23 @@ describe('ModelCommand bandit', () => {
 });
 
 // ═══════════════════════════════════════════════════════════════════════
-// Session 36 — `buff model quota set` (user-declared daily budget)
+// Session 36 — `nuvira model quota set` (user-declared daily budget)
 // Writes the SAME routing.quota + governance.maxCostUsd the dashboard edits.
 // ═══════════════════════════════════════════════════════════════════════
 
 describe('ModelCommand quota set (Session 36 — user-declared budget)', () => {
   const tmpCfgDir = mkdtempSync(join(TMP_BASE, 'buff-quota-set-test-'));
   const cfgPath = join(tmpCfgDir, 'buffconfig.json');
-  const prevConfigDir = process.env.BUFF_CONFIG_DIR;
+  const prevConfigDir = process.env.NUVIRA_CONFIG_DIR;
 
   beforeAll(() => {
     mkdirSync(tmpCfgDir, { recursive: true });
-    process.env.BUFF_CONFIG_DIR = tmpCfgDir;
+    process.env.NUVIRA_CONFIG_DIR = tmpCfgDir;
   });
 
   afterAll(() => {
-    if (prevConfigDir === undefined) delete process.env.BUFF_CONFIG_DIR;
-    else process.env.BUFF_CONFIG_DIR = prevConfigDir;
+    if (prevConfigDir === undefined) delete process.env.NUVIRA_CONFIG_DIR;
+    else process.env.NUVIRA_CONFIG_DIR = prevConfigDir;
     rmSync(tmpCfgDir, { recursive: true, force: true });
   });
 

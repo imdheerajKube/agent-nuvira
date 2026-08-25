@@ -5,14 +5,15 @@
  *
  * Provides:
  * - isEnvVarPersisted(): check if an env var is currently set
- * - loadEnvFile(): read all vars from ~/.buff/.env
- * - saveEnvValue(): write a single var to ~/.buff/.env
+ * - loadEnvFile(): read all vars from ~/.nuvira/.env
+ * - saveEnvValue(): write a single var to ~/.nuvira/.env
  * - captureSecrets(): interactively prompt for missing vars
  *
  * Hermes reference: tools/skills_tool.py:_capture_required_environment_variables()
  */
 
 import { existsSync, readFileSync } from 'fs';
+import {envBuff, resolveNuviraHome} from '../config/paths';
 import { join } from 'path';
 import { homedir } from 'os';
 import { logger } from '../utils/logger.js';
@@ -43,16 +44,16 @@ export interface CaptureResult {
 
 /**
  * Resolve the path to the .env file.
- * Priority: NUVIRA_ENV_FILE > BUFF_ENV_FILE > ~/.nuvira/.env > ~/.buff/.env
+ * Priority: NUVIRA_ENV_FILE > NUVIRA_ENV_FILE > ~/.nuvira/.env > ~/.nuvira/.env
  */
 function envFilePath(): string {
   if (process.env.NUVIRA_ENV_FILE && process.env.NUVIRA_ENV_FILE.trim().length > 0)
     return process.env.NUVIRA_ENV_FILE;
-  const override = process.env.BUFF_ENV_FILE;
+  const override = envBuff('ENV_FILE');
   if (override && override.trim().length > 0) return override;
   const nuviraEnv = join(homedir(), '.nuvira', '.env');
   if (existsSync(nuviraEnv)) return nuviraEnv;
-  return join(homedir(), '.buff', '.env');
+  return join(resolveNuviraHome(), '.env');
 }
 
 // ─── Core Functions ───────────────────────────────────────────────────────
@@ -139,7 +140,7 @@ export function getEnvVarValue(varName: string): string {
 }
 
 /**
- * Save or update a value in ~/.buff/.env (or ~/.nuvira/.env).
+ * Save or update a value in ~/.nuvira/.env (or ~/.nuvira/.env).
  * Preserves existing lines, adds new ones at the end.
  */
 export function saveEnvValue(key: string, value: string): { success: boolean; path: string } {

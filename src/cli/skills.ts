@@ -151,7 +151,7 @@ export class SkillsCommand {
       .option('--project <path>', 'Project root for .agents/skills/ (default: cwd)')
       .action(async (opts) => {
         // K4 parity: update force-overwrites installed content — gate like
-        // `buff skill gc` / `clear` (skill.remove), not a silent write.
+        // `nuvira skill gc` / `clear` (skill.remove), not a silent write.
         if (!guardRbacAction('skill.remove')) return;
         const spinner = ora({ text: 'Checking installed skills against the registry...', spinner: 'dots' }).start();
         // Deliberate divergence: `update` checks the LEGACY provenance registry

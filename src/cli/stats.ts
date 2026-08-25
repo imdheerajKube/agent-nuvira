@@ -2,10 +2,10 @@
  * Stats command — View usage statistics and cost tracking.
  *
  * Usage:
- *   buff stats              — Show all stats summary
- *   buff stats cost         — Show cost tracking details
- *   buff stats cost --clear — Reset cost tracking data
- *   buff stats history      — Show conversation history stats
+ *   nuvira stats              — Show all stats summary
+ *   nuvira stats cost         — Show cost tracking details
+ *   nuvira stats cost --clear — Reset cost tracking data
+ *   nuvira stats history      — Show conversation history stats
  */
 
 import { Command } from 'commander';

@@ -1,5 +1,5 @@
 /**
- * ConfigCommand — unit tests for `buff config set` key paths added by
+ * ConfigCommand — unit tests for `nuvira config set` key paths added by
  * Nuvira-Router M2.3 (multi-account `apiKeys`) and M2.4 (governance policy).
  *
  * The command writes through ConfigManager.save() — mocked here so the tests
@@ -300,17 +300,17 @@ describe('ConfigCommand gateway — validated-sender policies (allow/disallow/re
 
   function setupRbacDir(): void {
     rbacDir = mkdtempSync(join(tmpdir(), 'buff-gw-policy-rbac-'));
-    originalConfigDir = process.env.BUFF_CONFIG_DIR;
-    process.env.BUFF_CONFIG_DIR = rbacDir;
-    originalActAs = process.env.BUFF_ACT_AS;
-    delete process.env.BUFF_ACT_AS;
+    originalConfigDir = process.env.NUVIRA_CONFIG_DIR;
+    process.env.NUVIRA_CONFIG_DIR = rbacDir;
+    originalActAs = process.env.NUVIRA_ACT_AS;
+    delete process.env.NUVIRA_ACT_AS;
   }
 
   function teardownRbacDir(): void {
-    if (originalConfigDir === undefined) delete process.env.BUFF_CONFIG_DIR;
-    else process.env.BUFF_CONFIG_DIR = originalConfigDir;
-    if (originalActAs === undefined) delete process.env.BUFF_ACT_AS;
-    else process.env.BUFF_ACT_AS = originalActAs;
+    if (originalConfigDir === undefined) delete process.env.NUVIRA_CONFIG_DIR;
+    else process.env.NUVIRA_CONFIG_DIR = originalConfigDir;
+    if (originalActAs === undefined) delete process.env.NUVIRA_ACT_AS;
+    else process.env.NUVIRA_ACT_AS = originalActAs;
     rmSync(rbacDir, { recursive: true, force: true });
   }
 

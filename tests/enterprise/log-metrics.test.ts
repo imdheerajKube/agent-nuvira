@@ -3,7 +3,7 @@
  * metrics (counters/timers + persistence).
  *
  * Hermetic: BUFF_MEMORY_DIR + BUFF_ENV_FILE point at temp dirs so metrics
- * persistence never touches the real ~/.buff store.
+ * persistence never touches the real ~/.nuvira store.
  */
 
 import { describe, it, expect, beforeAll, afterAll, vi } from 'vitest';
@@ -31,12 +31,12 @@ let memDir: string;
 
 beforeAll(() => {
   memDir = mkdtempSync(join(tmpdir(), 'buff-k1k2-test-'));
-  process.env.BUFF_MEMORY_DIR = memDir;
+  process.env.NUVIRA_MEMORY_DIR = memDir;
 });
 
 afterAll(() => {
-  delete process.env.BUFF_MEMORY_DIR;
-  delete process.env.BUFF_LOG_JSON;
+  delete process.env.NUVIRA_MEMORY_DIR;
+  delete process.env.NUVIRA_LOG_JSON;
   rmSync(memDir, { recursive: true, force: true });
   resetMetrics();
 });
@@ -81,13 +81,13 @@ describe('K1 structured logging', () => {
   });
 
   it('isJsonLogMode reads BUFF_LOG_JSON', () => {
-    const prev = process.env.BUFF_LOG_JSON;
-    process.env.BUFF_LOG_JSON = '1';
+    const prev = process.env.NUVIRA_LOG_JSON;
+    process.env.NUVIRA_LOG_JSON = '1';
     expect(isJsonLogMode()).toBe(true);
-    process.env.BUFF_LOG_JSON = '0';
+    process.env.NUVIRA_LOG_JSON = '0';
     expect(isJsonLogMode()).toBe(false);
-    if (prev === undefined) delete process.env.BUFF_LOG_JSON;
-    else process.env.BUFF_LOG_JSON = prev;
+    if (prev === undefined) delete process.env.NUVIRA_LOG_JSON;
+    else process.env.NUVIRA_LOG_JSON = prev;
   });
 });
 

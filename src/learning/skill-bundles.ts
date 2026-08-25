@@ -7,7 +7,7 @@
  * agent-nuvira could only chain steps WITHIN a skill (dependsOn), never
  * compose whole skills.
  *
- * Storage: `~/.buff/skill-bundles/<slug>.yaml` — one small YAML file per
+ * Storage: `~/.nuvira/skill-bundles/<slug>.yaml` — one small YAML file per
  * bundle (the `~/.hermes/skill-bundles/` convention). The grammar is a
  * STRICT subset (name, description, skills list) that this module both
  * writes and parses, so round-trips are deterministic:
@@ -32,6 +32,7 @@
  */
 
 import { readFileSync, writeFileSync, existsSync, mkdirSync, readdirSync, unlinkSync, statSync } from 'node:fs';
+import {envBuff, resolveNuviraHome} from '../config/paths';
 import { join } from 'node:path';
 import { homedir } from 'node:os';
 
@@ -66,14 +67,13 @@ const SLUG_RE = /^[a-z0-9-]+$/;
 const BUNDLES_DIR_NAME = 'skill-bundles';
 
 /**
- * Default bundles root: BUFF_MEMORY_DIR (when set) → ~/.buff/skill-bundles.
+ * Default bundles root: NUVIRA_MEMORY_DIR (when set) → ~/.nuvira/skill-bundles.
  * Resolved LAZILY so tests can set the env before the first read (the same
  * pattern cache.ts / skill-drafts use) — production is identical when unset.
  */
 export function defaultBundlesRoot(): string {
-  return process.env.BUFF_MEMORY_DIR
-    ? join(process.env.BUFF_MEMORY_DIR, BUNDLES_DIR_NAME)
-    : join(homedir(), '.buff', BUNDLES_DIR_NAME);
+  const d = envBuff('MEMORY_DIR');
+  return d ? join(d, BUNDLES_DIR_NAME) : join(resolveNuviraHome(), BUNDLES_DIR_NAME);
 }
 
 // ─── Path helpers (dir injectable for hermetic tests) ───────────────────────

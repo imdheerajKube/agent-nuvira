@@ -62,15 +62,15 @@ import {
 } from '../../src/config/workspace.js';
 import { saveCheckpoint } from '../../src/agents/checkpoint-store.js';
 
-const ORIGINAL_MEMORY_DIR = process.env.BUFF_MEMORY_DIR;
+const ORIGINAL_MEMORY_DIR = process.env.NUVIRA_MEMORY_DIR;
 
 beforeAll(() => {
-  process.env.BUFF_MEMORY_DIR = join(testDirHolder.value, 'memory');
+  process.env.NUVIRA_MEMORY_DIR = join(testDirHolder.value, 'memory');
 });
 
 afterAll(() => {
-  if (ORIGINAL_MEMORY_DIR === undefined) delete process.env.BUFF_MEMORY_DIR;
-  else process.env.BUFF_MEMORY_DIR = ORIGINAL_MEMORY_DIR;
+  if (ORIGINAL_MEMORY_DIR === undefined) delete process.env.NUVIRA_MEMORY_DIR;
+  else process.env.NUVIRA_MEMORY_DIR = ORIGINAL_MEMORY_DIR;
   rmSync(testDirHolder.value, { recursive: true, force: true });
 });
 
@@ -93,7 +93,7 @@ beforeEach(() => {
   // The temp BUFF_MEMORY_DIR also persists — clear checkpoints written by
   // earlier tests so each test starts clean.
   try {
-    rmSync(join(process.env.BUFF_MEMORY_DIR!, 'checkpoints'), { recursive: true, force: true });
+    rmSync(join(process.env.NUVIRA_MEMORY_DIR!, 'checkpoints'), { recursive: true, force: true });
   } catch { /* noop */ }
 });
 
@@ -245,7 +245,7 @@ describe('recall-hit telemetry (G2)', () => {
     resetRecallHitDedupe();
     // Fresh telemetry file per test.
     try {
-      rmSync(join(process.env.BUFF_MEMORY_DIR!, 'recall-hits.jsonl'), { force: true });
+      rmSync(join(process.env.NUVIRA_MEMORY_DIR!, 'recall-hits.jsonl'), { force: true });
     } catch { /* noop */ }
   });
 

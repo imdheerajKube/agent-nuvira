@@ -6,7 +6,7 @@
  * name. Every decision is derived at runtime from:
  *   1. the user's EXPLICIT config (pins, keys, routing.* overrides — honored
  *      by the callers, health-checked against the live lists),
- *   2. the Model Availability Registry — what probing (`buff models refresh`)
+ *   2. the Model Availability Registry — what probing (`nuvira models refresh`)
  *      and real usage VERIFIED actually works for THIS user, ranked by learned
  *      health (error rate, then latency),
  *   3. providers with credentials configured but nothing verified yet (cold
@@ -257,7 +257,7 @@ export function requireAdapterModel(providerType: string, configuredModel?: stri
   const model = resolveAdapterDefault(providerType, configuredModel);
   if (!model) {
     throw new Error(
-      `No model resolved for '${providerType}' — run \`buff models refresh\` to discover available models, ` +
+      `No model resolved for '${providerType}' — run \`nuvira models refresh\` to discover available models, ` +
         `or set providers.${providerType}.model (or pass --model).`,
     );
   }
@@ -276,6 +276,6 @@ export function buildOnboardingGuidance(configManager: ConfigManager): string {
     );
   }
   parts.push('For zero-config local models, install Ollama and pull a model, e.g. `ollama pull gemma3` or `ollama pull qwen3`.');
-  parts.push('Then run `buff models refresh` so the agent discovers what actually works on this machine.');
+  parts.push('Then run `nuvira models refresh` so the agent discovers what actually works on this machine.');
   return parts.join('\n');
 }

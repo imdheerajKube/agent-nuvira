@@ -27,16 +27,16 @@ import type { TaskStep } from '../../src/agents/agent.js';
 // ─── Hermetic memory dir ────────────────────────────────────────────────────
 
 let memDir: string;
-const ORIGINAL_MEMORY_DIR = process.env.BUFF_MEMORY_DIR;
+const ORIGINAL_MEMORY_DIR = process.env.NUVIRA_MEMORY_DIR;
 
 beforeAll(() => {
   memDir = mkdtempSync(join(tmpdir(), 'memory-integration-test-'));
-  process.env.BUFF_MEMORY_DIR = memDir;
+  process.env.NUVIRA_MEMORY_DIR = memDir;
 });
 
 afterAll(() => {
-  if (ORIGINAL_MEMORY_DIR === undefined) delete process.env.BUFF_MEMORY_DIR;
-  else process.env.BUFF_MEMORY_DIR = ORIGINAL_MEMORY_DIR;
+  if (ORIGINAL_MEMORY_DIR === undefined) delete process.env.NUVIRA_MEMORY_DIR;
+  else process.env.NUVIRA_MEMORY_DIR = ORIGINAL_MEMORY_DIR;
   rmSync(memDir, { recursive: true, force: true });
 });
 
@@ -106,7 +106,7 @@ describe('Memory Integration — Full Cycle', () => {
     // The default backend ('auto') resolves to the FAISS-style backend
     // (faiss-ivf / faiss-native) — cross-session trajectory memory must flow
     // through it, not the legacy JSON backend, unless explicitly overridden.
-    // Explicitly request 'auto' so a developer's real ~/.buff/buffconfig.json
+    // Explicitly request 'auto' so a developer's real ~/.nuvira/nuviraconfig.json
     // (e.g. memory.vectorBackend: "json") can't change the outcome.
     setVectorBackendOverride('auto');
     const vs = getVectorStore();
@@ -125,7 +125,7 @@ describe('Memory Integration — Full Cycle', () => {
 
     // ...retrieve in "session 2" (fresh resolution, same shared index file).
     // NOTE: reset clears the override, so re-apply 'auto' — otherwise a
-    // developer's real ~/.buff/buffconfig.json could pick a json backend.
+    // developer's real ~/.nuvira/nuviraconfig.json could pick a json backend.
     resetVectorBackendSelection();
     setVectorBackendOverride('auto');
     const vs2 = getVectorStore();

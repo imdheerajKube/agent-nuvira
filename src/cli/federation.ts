@@ -2,21 +2,21 @@
  * Federation command — Connect to and manage remote agent instances.
  *
  * Usage:
- *   buff federation status                — Show connection status and info
- *   buff federation start                 — Start the federation server
- *   buff federation start --port 8374     — Start on a specific port
- *   buff federation start --daemon        — Run in background (detached)
- *   buff federation connect <host>        — Connect to a remote server
- *   buff federation connect <host> --port 8374
- *   buff federation connect <host> --secret mykey
- *   buff federation disconnect            — Disconnect from remote server
- *   buff federation run <goal>            — Run a task on the remote server
- *   buff federation run <goal> --agent writer
- *   buff federation health                — Check remote server health
- *   buff federation a2a start             — Start the A2A server
- *   buff federation a2a discover <url>    — Discover an A2A agent
- *   buff federation a2a status <url>      — Check A2A agent health
- *   buff federation a2a run <url> <goal>  — Delegate task to A2A agent
+ *   nuvira federation status                — Show connection status and info
+ *   nuvira federation start                 — Start the federation server
+ *   nuvira federation start --port 8374     — Start on a specific port
+ *   nuvira federation start --daemon        — Run in background (detached)
+ *   nuvira federation connect <host>        — Connect to a remote server
+ *   nuvira federation connect <host> --port 8374
+ *   nuvira federation connect <host> --secret mykey
+ *   nuvira federation disconnect            — Disconnect from remote server
+ *   nuvira federation run <goal>            — Run a task on the remote server
+ *   nuvira federation run <goal> --agent writer
+ *   nuvira federation health                — Check remote server health
+ *   nuvira federation a2a start             — Start the A2A server
+ *   nuvira federation a2a discover <url>    — Discover an A2A agent
+ *   nuvira federation a2a status <url>      — Check A2A agent health
+ *   nuvira federation a2a run <url> <goal>  — Delegate task to A2A agent
  */
 
 import { Command } from 'commander';
@@ -271,7 +271,7 @@ export class FederationCommand extends BaseCommand {
 
     if (authMode === 'secret' && !secret) {
       logger.error('Federation secret is required (or use --auth oidc for token-verified gateway auth).');
-      logger.info('Set it with: buff federation config --set-secret <your-secret>');
+      logger.info('Set it with: nuvira federation config --set-secret <your-secret>');
       logger.info('Or via: export FEDERATION_SECRET=your-secret');
       return;
     }
@@ -425,7 +425,7 @@ export class FederationCommand extends BaseCommand {
   ): Promise<void> {
     if (!this.client || !this.client.isConnected()) {
       logger.error('Not connected to a federation server.');
-      logger.info('Connect first: buff federation connect <host>');
+      logger.info('Connect first: nuvira federation connect <host>');
       return;
     }
 
@@ -504,7 +504,7 @@ export class FederationCommand extends BaseCommand {
       });
     } catch {
       logger.error('Could not connect to federation server.');
-      logger.info('Is the server running? Start it with: buff federation start');
+      logger.info('Is the server running? Start it with: nuvira federation start');
     }
   }
 
@@ -569,8 +569,8 @@ export class FederationCommand extends BaseCommand {
       console.log(`  Capabilities: ${config.capabilities.join(', ')}`);
       console.log('');
       console.log('  Set a value:');
-      console.log('    buff federation config --set-secret <your-secret>');
-      console.log('    buff federation config --set-port <port>');
+      console.log('    nuvira federation config --set-secret <your-secret>');
+      console.log('    nuvira federation config --set-port <port>');
       console.log('');
     }
   }
@@ -642,8 +642,8 @@ export class FederationCommand extends BaseCommand {
       logger.info('');
       logger.info('  Other A2A agents can discover this node and delegate tasks to it.');
       logger.info('  Connect from another node:');
-      logger.info(`    buff federation a2a discover http://${host}:${port}`);
-      logger.info(`    buff federation a2a run http://${host}:${port} "fix login bug"`);
+      logger.info(`    nuvira federation a2a discover http://${host}:${port}`);
+      logger.info(`    nuvira federation a2a run http://${host}:${port} "fix login bug"`);
 
       process.on('SIGINT', () => {
         logger.info('\nShutting down A2A server...');
