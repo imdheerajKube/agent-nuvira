@@ -20,7 +20,7 @@ import { mkdtempSync, rmSync, existsSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 
-import { BUNDLED_SKILLS } from '../../src/skills/bundled-skills.js';
+import { ALL_BUNDLED_SKILLS as BUNDLED_SKILLS } from '../../src/skills/bundled-skills.js';
 import { readHubCatalog, findHubSkillMatch } from '../../src/learning/hub-skill-catalog.js';
 
 // ora is the only spinner consumer in the CLI actions under test — silence it.
