@@ -3,12 +3,13 @@
  *
  * Instead of producing complete file content in one LLM call, this agent:
  * 1. Reads existing files to understand their structure
- * 2. Makes surgical edits using str_replace
+ * 2. Proposes surgical changes using propose_change
  * 3. Reads other files as needed
  * 4. Creates new files when necessary
  * 5. Runs tests to verify changes
  *
- * This adopts the Freebuff/Hermes pattern of iterative tool calling.
+ * KEY: This agent does NOT write to disk. It proposes FileChange objects
+ * in context.fileChanges. The Orchestrator applies them after the agent returns.
  *
  * Reference:
  * - Freebuff: packages/agent-runtime/src/run-agent-step.ts
@@ -39,20 +40,22 @@ Your job is to implement the requested changes by iteratively reading files, mak
 
 ## Approach
 
-1. **Read first**: Always read the relevant files before making changes. Understand the existing code structure.
-2. **Edit surgically**: Use \`edit_file\` with precise str_replace operations. Only change what needs to change.
-3. **Create when needed**: Use \`write_file\` only for new files that don't exist yet.
-4. **Verify**: After making changes, read the modified files to confirm the edits applied correctly.
-5. **Test**: Run relevant tests to verify your changes work.
+1. **Discover**: Use \`list_files\` to understand the project structure
+2. **Read first**: Always read the relevant files before making changes. Understand the existing code structure.
+3. **Propose changes**: Use \`propose_change\` to propose file modifications. For EXISTING files, include the COMPLETE updated file content. For NEW files, include the complete file.
+4. **Verify**: After proposing changes, read the modified files to confirm your changes are correct.
+5. **Test**: Run relevant tests or builds to verify your changes work.
 
 ## Rules
 
-- Always read a file before editing it
-- Make small, focused edits (one logical change at a time)
+- ALWAYS read a file before proposing changes to it
+- Make small, focused changes (one logical change at a time)
 - Preserve existing code style and conventions
 - Add appropriate error handling
 - Write clean, well-documented code
-- If you encounter errors, read the error message and fix the issue`;
+- If you encounter errors, read the error message and fix the issue
+- NEVER propose changes to files you haven't read first
+- For modifications, always include the COMPLETE file content, not a diff`;
 
     // Inject project-specific conventions
     const conventions: string[] = [];
@@ -75,7 +78,7 @@ Your job is to implement the requested changes by iteratively reading files, mak
       conventions.push('Use strict TypeScript. Prefer interfaces over type aliases.');
     }
     if (assessment?.isGreenfield) {
-      conventions.push('This is a greenfield project — create files from scratch.');
+      conventions.push('This is a greenfield project — create files from scratch using list_files first to see what exists.');
     }
 
     if (conventions.length > 0) {
@@ -94,12 +97,12 @@ Your job is to implement the requested changes by iteratively reading files, mak
     );
     const taskDescription = writerTask?.description || context.goal;
 
-    // Include file context from artifacts
+    // Include file context from artifacts (pre-gathered by context-gatherer)
     const fileContext = context.artifacts.length > 0
       ? context.artifacts
           .map((a) => `--- ${a.path} ---\n${a.content}`)
           .join('\n\n')
-      : '(No files in context — you may need to create new files)';
+      : '(No files pre-loaded — use list_files and read_file to discover them)';
 
     // Include skill guidance if available
     const skillGuidance = context.metadata.skillGuidance as
@@ -113,7 +116,7 @@ Your job is to implement the requested changes by iteratively reading files, mak
     // Include reference docs if available
     const referenceSection = referenceDocsFor(`${taskDescription} ${context.goal}`);
 
-    // Wire memory into tool-calling writer prompt: failure lessons, patterns, facts
+    // Wire memory into writer prompt: failure lessons, patterns, facts
     const failureLessonContext = context.metadata?.failureLessonContext as string | undefined;
     const patternContext = context.metadata?.patternContext as string | undefined;
     const factContext = context.metadata?.factContext as string | undefined;
@@ -123,34 +126,21 @@ Your job is to implement the requested changes by iteratively reading files, mak
     if (factContext) memoryParts.push(`\n\n## Project Facts & Preferences\n${factContext}`);
     const memorySection = memoryParts.join('');
 
-    return `## Task\n${taskDescription}\n\n## Goal\n${context.goal}\n\n## Existing Files\n${fileContext}${skillSection}${referenceSection}${memorySection}\n\n## Instructions\nImplement the changes described in the task. Use the available tools to read, edit, and create files. Start by reading the relevant files, then make the necessary changes.`;
+    return `## Task\n${taskDescription}\n\n## Goal\n${context.goal}\n\n## Existing Files\n${fileContext}${skillSection}${referenceSection}${memorySection}\n\n## Instructions\nImplement the changes described in the task. Use the available tools to discover, read, and propose changes to files. Start by listing the project files, then read the relevant ones, then propose your changes.`;
   }
 
   protected parseResponse(response: string): ParsedResponse {
     const trimmed = response.trim();
 
-    // Try to parse as JSON tool call
-    const jsonMatch = trimmed.match(/```json\s*\n?([\s\S]*?)```/);
-    if (jsonMatch) {
-      try {
-        const parsed = JSON.parse(jsonMatch[1].trim());
-        if (parsed.tool && parsed.args) {
-          return {
-            toolCalls: [{
-              id: `call-${Date.now()}`,
-              name: parsed.tool,
-              arguments: parsed.args,
-            }],
-            done: false,
-          };
-        }
-      } catch {
-        // Not valid JSON tool call
-      }
+    // Try to parse as JSON tool call in code block
+    const jsonBlockMatch = trimmed.match(/```json\s*\n?([\s\S]*?)```/);
+    if (jsonBlockMatch) {
+      const parsed = this.tryParseToolCall(jsonBlockMatch[1].trim());
+      if (parsed) return parsed;
     }
 
     // Try to find inline JSON tool call (without code blocks)
-    const inlineMatch = trimmed.match(/\{"tool":\s*"([^"]+)",\s*"args":\s*(\{[^}]+\})\}/);
+    const inlineMatch = trimmed.match(/\{"tool":\s*"([^"]+)",\s*"args":\s*(\{[\s\S]*?\})\}/);
     if (inlineMatch) {
       try {
         const args = JSON.parse(inlineMatch[2]);
@@ -167,10 +157,63 @@ Your job is to implement the requested changes by iteratively reading files, mak
       }
     }
 
+    // Try to find tool call with different formatting
+    const altMatch = trimmed.match(/"tool":\s*"([^"]+)"/);
+    if (altMatch) {
+      // Try to extract args from surrounding context
+      const toolName = altMatch[1];
+      const argsMatch = trimmed.match(/"args":\s*(\{[\s\S]*?\})/);
+      if (argsMatch) {
+        try {
+          const args = JSON.parse(argsMatch[1]);
+          return {
+            toolCalls: [{
+              id: `call-${Date.now()}`,
+              name: toolName,
+              arguments: args,
+            }],
+            done: false,
+          };
+        } catch {
+          // Fall through
+        }
+      }
+    }
+
     // No tool calls found — this is the final response
     return {
       text: trimmed,
       done: true,
     };
+  }
+
+  private tryParseToolCall(jsonStr: string): ParsedResponse | null {
+    try {
+      const parsed = JSON.parse(jsonStr);
+      if (parsed.tool && parsed.args) {
+        return {
+          toolCalls: [{
+            id: `call-${Date.now()}`,
+            name: parsed.tool,
+            arguments: parsed.args,
+          }],
+          done: false,
+        };
+      }
+      // Also support array of tool calls
+      if (Array.isArray(parsed) && parsed.length > 0 && parsed[0].tool) {
+        return {
+          toolCalls: parsed.map((tc: any, i: number) => ({
+            id: `call-${Date.now()}-${i}`,
+            name: tc.tool,
+            arguments: tc.args || {},
+          })),
+          done: false,
+        };
+      }
+    } catch {
+      // Not valid JSON
+    }
+    return null;
   }
 }

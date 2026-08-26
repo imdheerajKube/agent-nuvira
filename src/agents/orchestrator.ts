@@ -148,6 +148,13 @@ export interface OrchestratorOptions {
   /** Auto-route each agent to its recommended model from the ModelRouter */
   autoRouteModels?: boolean;
   /**
+   * Use tool-calling agents for writer and reviewer steps.
+   * When true, the orchestrator routes 'writer' tasks to 'writer-tc' and
+   * 'reviewer' tasks to 'reviewer-tc' — iterative read→edit→verify loops
+   * instead of one-shot LLM calls. Adopted from Freebuff/Hermes pattern.
+   */
+  useToolCalling?: boolean;
+  /**
    * Opt-in to the interactive rate-limit prompt (wait / switch / skip / abort).
    * Default: false — rate limits are handled fully automatically (silent wait
    * for transient hints, silent auto-switch to another provider when the
@@ -2188,7 +2195,20 @@ export class Orchestrator {
         return;
       }
 
-      const agent = createAgent(effectiveAgentType, this.moduleRegistry);
+      // Tool-calling agent routing: when useToolCalling is enabled, route
+      // 'writer' and 'reviewer' tasks to their tool-calling variants.
+      // This gives the LLM iterative read→edit→verify capability instead
+      // of a single-shot LLM call (adopted from Freebuff/Hermes pattern).
+      let actualAgentType = effectiveAgentType;
+      if (options.useToolCalling) {
+        if (effectiveAgentType === 'writer') {
+          actualAgentType = 'writer-tc';
+        } else if (effectiveAgentType === 'reviewer') {
+          actualAgentType = 'reviewer-tc';
+        }
+      }
+
+      const agent = createAgent(actualAgentType, this.moduleRegistry);
       if (!agent) {
         vault.updateTaskStatus(task.id, 'failed', `Unknown agent type: ${effectiveAgentType}`);
         agentResults.push({

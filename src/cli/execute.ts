@@ -89,6 +89,8 @@ interface ExecuteOptions {
    * For CI, scripts, and external consumers like the VS Code panel.
    */
   jsonEvents?: boolean;
+  /** Use tool-calling agents for writer/reviewer steps */
+  toolCalling?: boolean;
 }
 
 // ─── Session Types ──────────────────────────────────────────────────────────
@@ -227,6 +229,7 @@ export class ExecuteCommand extends BaseCommand {
       .option('--repair-mode <mode>', 'Repair mode: auto | prompt | off (default: auto)')
       .option('--repair-fallback-models <models>', 'Comma-separated fallback models for repair (e.g., groq/llama3,nim/mistral)')
       .option('--auto-route', 'Route each agent to the best provider/model automatically (Auto model)', false)
+      .option('--tool-calling', 'Use iterative tool-calling agents for writer/reviewer (read→edit→verify loop)', false)
       .option('--checkpoint', 'Save a resume-able checkpoint after every task batch (in ~/.nuvira/memory/checkpoints/)', false)
       .option('--resume [id]', 'Resume a saved checkpoint (defaults to the auto id for this goal + cwd). Completed steps are skipped', false)
       .option('--checkpoint-list', 'List saved checkpoints and exit', false)
@@ -1692,6 +1695,7 @@ export class ExecuteCommand extends BaseCommand {
         repairMode: options.repairMode as 'auto' | 'prompt' | 'off' | undefined,
         repairFallbackModels: options.repairFallbackModels?.split(',').map((m: string) => m.trim()).filter(Boolean),
         autoRouteModels: options.autoRoute || undefined,
+        useToolCalling: options.toolCalling || undefined,
         ...checkpointOptions(options.checkpoint, options.resume),
         spinner: board,
       });
