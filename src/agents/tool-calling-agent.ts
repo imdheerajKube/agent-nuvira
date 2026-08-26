@@ -4,14 +4,9 @@
  * Adopts the proven pattern from Freebuff and Hermes:
  *   LLM generates tool call → Agent executes tool → Result fed back → Loop
  *
- * This replaces the "one LLM call = full output" model with an iterative
- * approach where the LLM can:
- *   1. Read a file to understand its contents
- *   2. Edit the file surgically
- *   3. Read another file
- *   4. Edit that file
- *   5. Run tests to verify
- *   6. Fix any errors
+ * KEY CONSTRAINT: This agent does NOT write to disk. Tools propose FileChange
+ * objects in context.fileChanges. The Orchestrator applies them after the
+ * agent returns. This preserves dry-run mode, rollback, and audit trail.
  *
  * Reference:
  * - Freebuff: packages/agent-runtime/src/run-agent-step.ts (tool-calling loop)
@@ -23,18 +18,18 @@
  * and the agent parses and executes them.
  */
 
-import { readFileSync, writeFileSync, existsSync, statSync } from 'node:fs';
+import { existsSync, readFileSync, readdirSync, statSync } from 'node:fs';
 import { join, relative, isAbsolute, dirname } from 'node:path';
 import { spawnSync } from 'node:child_process';
 
-import { Agent, type AgentContext, type AgentResult, type LLMCallFn } from './agent.js';
+import { Agent, type AgentContext, type AgentResult, type FileChange, type LLMCallFn } from './agent.js';
 import { logger } from '../utils/logger.js';
 
 // ─── Types ──────────────────────────────────────────────────────────────────
 
 /** A tool that the agent can call */
 export interface AgentTool {
-  /** Tool name (e.g. 'read_file', 'edit_file') */
+  /** Tool name (e.g. 'read_file', 'propose_change') */
   name: string;
   /** Human-readable description */
   description: string;
@@ -71,15 +66,15 @@ export interface ParsedResponse {
 // ─── Constants ──────────────────────────────────────────────────────────────
 
 /** Maximum iterations before forcing completion */
-const MAX_ITERATIONS = 20;
+const MAX_ITERATIONS = 25;
 
-/** Maximum tool results to include in context (prevent token explosion) */
-const MAX_TOOL_RESULTS = 10;
+/** Maximum tool results to keep in conversation history */
+const MAX_HISTORY_MESSAGES = 40;
 
 // ─── Built-in Tools ─────────────────────────────────────────────────────────
 
 /**
- * Read a file's contents.
+ * Read a file's contents from disk (read-only).
  */
 function createReadFileTool(): AgentTool {
   return {
@@ -103,7 +98,12 @@ function createReadFileTool(): AgentTool {
         }
 
         const content = readFileSync(filePath, 'utf-8');
-        return { success: true, output: content };
+        // Truncate very large files to prevent token explosion
+        const maxChars = 50_000;
+        const truncated = content.length > maxChars
+          ? content.slice(0, maxChars) + `\n\n... (${content.length - maxChars} more chars truncated)`
+          : content;
+        return { success: true, output: truncated };
       } catch (err) {
         return { success: false, output: '', error: String(err) };
       }
@@ -112,45 +112,55 @@ function createReadFileTool(): AgentTool {
 }
 
 /**
- * Apply a surgical edit to a file using str_replace.
+ * List files in a directory (recursive, max depth 3).
  */
-function createEditFileTool(): AgentTool {
+function createListFilesTool(): AgentTool {
   return {
-    name: 'edit_file',
-    description: 'Apply a surgical edit to a file. Finds oldString and replaces it with newString. The oldString must match exactly (including whitespace).',
+    name: 'list_files',
+    description: 'List files and directories in a path. Useful for discovering project structure.',
     parameters: {
       type: 'object',
       properties: {
-        path: { type: 'string', description: 'File path relative to working directory' },
-        oldString: { type: 'string', description: 'The exact string to find and replace' },
-        newString: { type: 'string', description: 'The replacement string' },
+        path: { type: 'string', description: 'Directory path relative to working directory (default: ".")' },
+        maxDepth: { type: 'number', description: 'Maximum recursion depth (default: 2)' },
       },
-      required: ['path', 'oldString', 'newString'],
+      required: [],
     },
     async execute(args, context): Promise<ToolResult> {
       try {
-        const filePath = isAbsolute(args.path)
-          ? args.path
-          : join(context.workingDirectory, args.path);
+        const dirPath = args.path
+          ? (isAbsolute(args.path) ? args.path : join(context.workingDirectory, args.path))
+          : context.workingDirectory;
+        const maxDepth = args.maxDepth ?? 2;
 
-        if (!existsSync(filePath)) {
-          return { success: false, output: '', error: `File not found: ${args.path}` };
+        if (!existsSync(dirPath)) {
+          return { success: false, output: '', error: `Directory not found: ${args.path || '.'}` };
         }
 
-        const content = readFileSync(filePath, 'utf-8');
+        const entries: string[] = [];
+        const ignore = new Set(['node_modules', '.git', 'dist', '__pycache__', '.cache', '.nuvira']);
 
-        if (!content.includes(args.oldString)) {
-          return {
-            success: false,
-            output: '',
-            error: `oldString not found in ${args.path}. The string must match exactly.`,
-          };
+        function walk(dir: string, depth: number, prefix: string): void {
+          if (depth > maxDepth) return;
+          try {
+            const items = readdirSync(dir, { withFileTypes: true });
+            for (const item of items) {
+              if (ignore.has(item.name)) continue;
+              const relPath = prefix ? `${prefix}/${item.name}` : item.name;
+              if (item.isDirectory()) {
+                entries.push(`${relPath}/`);
+                walk(join(dir, item.name), depth + 1, relPath);
+              } else {
+                entries.push(relPath);
+              }
+            }
+          } catch {
+            // Permission errors — skip
+          }
         }
 
-        const newContent = content.replace(args.oldString, args.newString);
-        writeFileSync(filePath, newContent, 'utf-8');
-
-        return { success: true, output: `Edited ${args.path} successfully` };
+        walk(dirPath, 0, '');
+        return { success: true, output: entries.join('\n') || '(empty directory)' };
       } catch (err) {
         return { success: false, output: '', error: String(err) };
       }
@@ -159,17 +169,19 @@ function createEditFileTool(): AgentTool {
 }
 
 /**
- * Create or overwrite a file.
+ * Propose a file change (create or modify). Does NOT write to disk.
+ * The orchestrator applies changes after the agent returns.
  */
-function createWriteFileTool(): AgentTool {
+function createProposeChangeTool(): AgentTool {
   return {
-    name: 'write_file',
-    description: 'Create or overwrite a file with the given content.',
+    name: 'propose_change',
+    description: 'Propose a file change (create or modify). The orchestrator will apply it to disk. For modifications, include the COMPLETE updated file content.',
     parameters: {
       type: 'object',
       properties: {
         path: { type: 'string', description: 'File path relative to working directory' },
-        content: { type: 'string', description: 'The full file content to write' },
+        content: { type: 'string', description: 'The COMPLETE updated file content (not a diff)' },
+        status: { type: 'string', description: '"created" for new files, "modified" for existing files (default: auto-detect)' },
       },
       required: ['path', 'content'],
     },
@@ -179,14 +191,32 @@ function createWriteFileTool(): AgentTool {
           ? args.path
           : join(context.workingDirectory, args.path);
 
-        // Ensure directory exists
-        const dir = dirname(filePath);
-        const { mkdirSync } = await import('node:fs');
-        mkdirSync(dir, { recursive: true });
+        const exists = existsSync(filePath);
+        const status = args.status || (exists ? 'modified' : 'created');
 
-        writeFileSync(filePath, args.content, 'utf-8');
+        // Read original content for modifications (needed for rollback)
+        let originalContent: string | undefined;
+        if (status === 'modified' && exists) {
+          originalContent = readFileSync(filePath, 'utf-8');
+        }
 
-        return { success: true, output: `Created ${args.path} successfully` };
+        const change: FileChange = {
+          path: args.path,
+          status: status as 'created' | 'modified' | 'deleted',
+          newContent: args.content,
+          originalContent,
+        };
+
+        // Add to context.fileChanges (deduplicate by path)
+        const existing = context.fileChanges.findIndex((c) => c.path === args.path);
+        if (existing >= 0) {
+          context.fileChanges[existing] = change;
+        } else {
+          context.fileChanges.push(change);
+        }
+
+        const icon = status === 'created' ? '📄' : '✏️';
+        return { success: true, output: `${icon} Proposed ${status}: ${args.path} (${args.content.length} chars)` };
       } catch (err) {
         return { success: false, output: '', error: String(err) };
       }
@@ -195,12 +225,12 @@ function createWriteFileTool(): AgentTool {
 }
 
 /**
- * Run a terminal command.
+ * Run a terminal command (for testing, building, etc.).
  */
-function createRunTerminalTool(): AgentTool {
+function createRunCommandTool(): AgentTool {
   return {
-    name: 'run_terminal',
-    description: 'Run a shell command in the working directory. Returns stdout and stderr.',
+    name: 'run_command',
+    description: 'Run a shell command in the working directory. Returns stdout, stderr, and exit code. Use for testing, building, or verification.',
     parameters: {
       type: 'object',
       properties: {
@@ -220,8 +250,8 @@ function createRunTerminalTool(): AgentTool {
         });
 
         const output = [
-          result.stdout ? `STDOUT:\n${result.stdout}` : '',
-          result.stderr ? `STDERR:\n${result.stderr}` : '',
+          result.stdout ? `STDOUT:\n${result.stdout.slice(0, 5000)}` : '',
+          result.stderr ? `STDERR:\n${result.stderr.slice(0, 2000)}` : '',
           result.status !== 0 ? `EXIT CODE: ${result.status}` : '',
         ].filter(Boolean).join('\n');
 
@@ -245,6 +275,9 @@ function createRunTerminalTool(): AgentTool {
  * The LLM is prompted to produce tool calls in a structured format.
  * The agent parses and executes them, feeding results back to the LLM.
  * The loop continues until the LLM produces a final text response (no tool calls).
+ *
+ * CRITICAL: This agent does NOT write to disk. Tools propose FileChange objects
+ * in context.fileChanges. The Orchestrator applies them after the agent returns.
  *
  * Usage:
  * ```typescript
@@ -271,9 +304,9 @@ export abstract class ToolCallingAgent extends Agent {
   protected getTools(context: AgentContext): AgentTool[] {
     return [
       createReadFileTool(),
-      createEditFileTool(),
-      createWriteFileTool(),
-      createRunTerminalTool(),
+      createListFilesTool(),
+      createProposeChangeTool(),
+      createRunCommandTool(),
     ];
   }
 
@@ -314,14 +347,24 @@ You can make ONE tool call per response. After seeing the result, you can make a
 
 ## When to Use Tools
 
-- Use \`read_file\` to examine existing code before editing
-- Use \`edit_file\` to make surgical changes to existing files
-- Use \`write_file\` to create new files
-- Use \`run_terminal\` to run tests, builds, or other commands
+- Use \`read_file\` to examine existing code before making changes
+- Use \`list_files\` to discover project structure
+- Use \`propose_change\` to create new files or modify existing ones
+  - For NEW files: set content to the complete file
+  - For EXISTING files: set content to the COMPLETE updated file (not a diff)
+- Use \`run_command\` to run tests, builds, or verification commands
+
+## Workflow
+
+1. First, understand the task and project structure (\`list_files\`, \`read_file\`)
+2. Read relevant files to understand the codebase
+3. Propose changes using \`propose_change\`
+4. Verify your changes by running tests or reading the modified files
+5. When done, produce a final text response summarizing what you did
 
 ## Completing the Task
 
-When you have finished implementing all changes, produce your final response as plain text (NO tool calls). Your final response should summarize what you did.`;
+When you have finished implementing all changes, produce your final response as plain text (NO tool calls). Your final response should summarize what you did and list all files you proposed changes for.`;
   }
 
   /** Execute the tool-calling loop */
@@ -332,33 +375,23 @@ When you have finished implementing all changes, produce your final response as 
       const userPrompt = this.buildUserPrompt(context);
       const toolDefsPrompt = this.buildToolDefinitionsPrompt(tools);
 
-      // Build initial prompt
-      const fullSystemPrompt = `${systemPrompt}\n\n${toolDefsPrompt}`;
-      const messages: Array<{ role: string; content: string }> = [
-        { role: 'system', content: fullSystemPrompt },
-        { role: 'user', content: userPrompt },
-      ];
+      // Build initial prompt — flat string format (existing LLMCallFn interface)
+      const fullPrompt = `${systemPrompt}\n\n${toolDefsPrompt}\n\n---\n\n${userPrompt}`;
 
-      const toolResults: string[] = [];
+      const toolCallHistory: string[] = [];
       let iterations = 0;
 
       this.report(context, 'starting', `Starting tool-calling loop (max ${MAX_ITERATIONS} iterations)`);
 
+      let currentPrompt = fullPrompt;
+
       while (iterations < MAX_ITERATIONS) {
         iterations++;
 
-        // Build the prompt from messages
-        const prompt = messages.map((m) => {
-          if (m.role === 'system') return m.content;
-          if (m.role === 'user') return `User: ${m.content}`;
-          if (m.role === 'assistant') return `Assistant: ${m.content}`;
-          return m.content;
-        }).join('\n\n');
-
         // Call LLM
-        const response = await callLLM(prompt, {
+        const response = await callLLM(currentPrompt, {
           temperature: 0.3,
-          maxTokens: 4096,
+          maxTokens: 8192,
         });
 
         // Parse response
@@ -367,23 +400,25 @@ When you have finished implementing all changes, produce your final response as 
         // If done (no tool calls), return final result
         if (parsed.done || !parsed.toolCalls || parsed.toolCalls.length === 0) {
           this.report(context, 'completed', `Completed after ${iterations} iterations`);
+
+          // Count proposed changes
+          const changeCount = context.fileChanges.length;
           return {
-            success: true,
-            summary: parsed.text || 'Task completed',
-            details: toolResults.join('\n'),
+            success: changeCount > 0 || !!parsed.text,
+            summary: parsed.text || `Tool-calling agent completed (${changeCount} file changes proposed)`,
+            details: toolCallHistory.join('\n'),
           };
         }
 
         // Execute each tool call
         for (const toolCall of parsed.toolCalls) {
-          this.report(context, 'executing', `Calling tool: ${toolCall.name}`);
+          this.report(context, 'executing', `Calling tool: ${toolCall.name}(${JSON.stringify(toolCall.arguments).slice(0, 100)})`);
 
           const tool = tools.find((t) => t.name === toolCall.name);
           if (!tool) {
-            const errorResult = `Unknown tool: ${toolCall.name}`;
-            toolResults.push(errorResult);
-            messages.push({ role: 'assistant', content: response });
-            messages.push({ role: 'user', content: `Error: ${errorResult}` });
+            const errorResult = `Unknown tool: ${toolCall.name}. Available tools: ${tools.map((t) => t.name).join(', ')}`;
+            toolCallHistory.push(`[${toolCall.name}] ERROR: ${errorResult}`);
+            currentPrompt = this.buildFollowUpPrompt(currentPrompt, response, errorResult);
             continue;
           }
 
@@ -392,25 +427,20 @@ When you have finished implementing all changes, produce your final response as 
             ? `Tool ${toolCall.name} succeeded:\n${result.output}`
             : `Tool ${toolCall.name} failed:\n${result.error}`;
 
-          toolResults.push(resultText);
+          toolCallHistory.push(`[${toolCall.name}] ${result.success ? 'OK' : 'FAIL'}: ${(result.output || result.error || '').slice(0, 200)}`);
 
-          // Keep tool results bounded
-          if (toolResults.length > MAX_TOOL_RESULTS) {
-            toolResults.shift();
-          }
-
-          // Add to conversation
-          messages.push({ role: 'assistant', content: response });
-          messages.push({ role: 'user', content: resultText });
+          // Build follow-up prompt with tool result
+          currentPrompt = this.buildFollowUpPrompt(currentPrompt, response, resultText);
         }
       }
 
       // Max iterations reached
       this.report(context, 'warning', `Max iterations (${MAX_ITERATIONS}) reached`);
+      const changeCount = context.fileChanges.length;
       return {
-        success: false,
-        summary: `Max iterations (${MAX_ITERATIONS}) reached without completing`,
-        details: toolResults.join('\n'),
+        success: changeCount > 0,
+        summary: `Max iterations (${MAX_ITERATIONS}) reached. ${changeCount} file change(s) proposed.`,
+        details: toolCallHistory.join('\n'),
       };
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
@@ -420,5 +450,32 @@ When you have finished implementing all changes, produce your final response as 
         error: msg,
       };
     }
+  }
+
+  /**
+   * Build the follow-up prompt after a tool execution.
+   * Appends the assistant's response and tool result to the conversation,
+   * keeping the prompt bounded to prevent token explosion.
+   */
+  private buildFollowUpPrompt(
+    previousPrompt: string,
+    assistantResponse: string,
+    toolResult: string,
+  ): string {
+    // Append the exchange to the prompt
+    const exchange = `\n\nAssistant:\n${assistantResponse}\n\nTool Result:\n${toolResult}\n\nContinue with the next tool call, or produce your final response if done.`;
+
+    // Bound the total prompt size — keep system + tool defs + recent exchanges
+    const combined = previousPrompt + exchange;
+    const maxPromptChars = 100_000; // ~25K tokens
+
+    if (combined.length > maxPromptChars) {
+      // Keep the first 30% (system prompt + tool defs) and the last 70% (recent exchanges)
+      const systemPortion = combined.slice(0, Math.floor(maxPromptChars * 0.3));
+      const recentPortion = combined.slice(-Math.floor(maxPromptChars * 0.7));
+      return systemPortion + '\n\n... [earlier exchanges truncated] ...\n\n' + recentPortion;
+    }
+
+    return combined;
   }
 }

@@ -3018,6 +3018,315 @@ export const cdnSetupSkill: Skill = {
   qualityScore: 0.9, usageCount: 0, createdAt: BUNDLED_CREATED_AT, lastUsedAt: BUNDLED_CREATED_AT,
 };
 
+/**
+ * Game development skill — create GUI games from scratch.
+ * Covers: project setup, game logic, UI rendering, input handling,
+ * packaging for distribution (exe/installer).
+ * Works for: snake-and-ladder, tic-tac-toe, chess, puzzle games,
+ * 2D platformers, card games, board games.
+ */
+export const gameDevelopmentSkill: Skill = {
+  id: 'skill-game-development',
+  name: 'game-development',
+  description:
+    'Create a GUI game with graphics, input handling, game logic, and packaging. Use when the goal asks to create, build, or develop a game (board games, card games, puzzle games, 2D games, snake-and-ladder, tic-tac-toe, chess, etc.).',
+  version: '1.0.0',
+  goalPattern:
+    'game create build develop snake ladder tic tac toe chess board card puzzle 2d platformer GUI play win lose',
+  steps: [
+    {
+      agentType: 'context-gatherer',
+      description: [
+        'Analyze the game requirements:',
+        '- What type of game? (board, card, puzzle, 2D, arcade)',
+        '- What platform? (Windows GUI, web browser, cross-platform)',
+        '- What language/framework? (Python+tkinter, Python+pygame, JavaScript+Canvas, C#+WinForms, C++ with SFML)',
+        '- What are the core mechanics? (turn-based, real-time, physics, AI opponent)',
+        '- What assets are needed? (images, sounds, fonts)',
+        '- What is the deliverable? (executable, web app, installable package)',
+        'Produce: a game design brief with type, platform, framework, mechanics, and deliverable format.',
+      ].join('\n'),
+      dependsOn: [],
+    },
+    {
+      agentType: 'writer',
+      description: [
+        'Implement the core game engine and logic:',
+        '- Game state management (scores, turns, win conditions)',
+        '- Core mechanics (dice roll, card draw, piece movement, collision)',
+        '- Rules engine (enforce game rules, detect invalid moves)',
+        '- AI opponent (if applicable: simple minimax, rule-based, or random)',
+        'Write as a single module/class that can be tested independently of the UI.',
+      ].join('\n'),
+      dependsOn: ['step-0'],
+    },
+    {
+      agentType: 'writer',
+      description: [
+        'Implement the GUI/rendering layer:',
+        '- Window setup and canvas/drawing area',
+        '- Game board rendering (grid, pieces, cards, dice)',
+        '- Input handling (mouse clicks, keyboard, touch)',
+        '- UI elements (buttons, score display, status messages, restart)',
+        '- Animations (dice roll, piece movement, win celebration)',
+        'Connect the GUI to the game engine from step-1.',
+      ].join('\n'),
+      dependsOn: ['step-1'],
+    },
+    {
+      agentType: 'runner',
+      description: [
+        'Test and package the game:',
+        '- Verify the game runs without errors',
+        '- Test win/lose conditions',
+        '- Test edge cases (invalid moves, restart, draw)',
+        '- Package for distribution:',
+        '  - Python: `pip install pyinstaller && pyinstaller --onefile game.py`',
+        '  - JavaScript: create an HTML file or use Electron for desktop',
+        '  - C#: `dotnet publish -c Release -r win-x64 --self-contained`',
+        '  - Generic: create a README with build instructions',
+        'Produce the deliverable (executable, web app, or build instructions).',
+      ].join('\n'),
+      dependsOn: ['step-2'],
+    },
+  ],
+  parameters: [
+    {
+      name: 'gameType',
+      description: 'Type of game to create',
+      type: 'choice',
+      required: false,
+      options: ['board', 'card', 'puzzle', '2d', 'arcade', 'auto'],
+      defaultValue: 'auto',
+    },
+    {
+      name: 'platform',
+      description: 'Target platform',
+      type: 'choice',
+      required: false,
+      options: ['windows-gui', 'web', 'cross-platform', 'auto'],
+      defaultValue: 'auto',
+    },
+    {
+      name: 'language',
+      description: 'Programming language (auto-detected from project if not specified)',
+      type: 'choice',
+      required: false,
+      options: ['python', 'javascript', 'typescript', 'csharp', 'cpp', 'auto'],
+      defaultValue: 'auto',
+    },
+  ],
+  tags: ['game', 'gui', 'board-game', '2d', 'interactive', 'entertainment'],
+  sourceTrajectoryIds: ['bundled'],
+  qualityScore: 0.9,
+  usageCount: 0,
+  createdAt: BUNDLED_CREATED_AT,
+  lastUsedAt: BUNDLED_CREATED_AT,
+};
+
+/**
+ * CLI tool creation skill — scaffold, implement, test, and publish CLI tools.
+ * Covers: argument parsing, help text, subcommands, config files,
+ * npm/cargo/go publishing, shell completions.
+ */
+export const cliToolSkill: Skill = {
+  id: 'skill-cli-tool',
+  name: 'cli-tool',
+  description:
+    'Create a command-line tool with argument parsing, help text, subcommands, and packaging. Use when the goal asks to create a CLI tool, command-line utility, or terminal application.',
+  version: '1.0.0',
+  goalPattern:
+    'CLI command line tool terminal utility terminal app argparse cobra click yargs commander',
+  steps: [
+    {
+      agentType: 'context-gatherer',
+      description: [
+        'Analyze the CLI tool requirements:',
+        '- What does the tool do? (one-liner description)',
+        '- What language? (Node.js, Python, Go, Rust)',
+        '- What arguments/flags/options?',
+        '- Does it need subcommands?',
+        '- Does it need a config file?',
+        '- How will it be distributed? (npm, pip, cargo, go install, standalone binary)',
+        'Produce: a CLI specification with commands, flags, and distribution plan.',
+      ].join('\n'),
+      dependsOn: [],
+    },
+    {
+      agentType: 'writer',
+      description: [
+        'Implement the CLI tool:',
+        '- Set up the project structure (package.json / pyproject.toml / go.mod / Cargo.toml)',
+        '- Implement argument parsing (commander.js / argparse / cobra / clap)',
+        '- Add help text and usage examples',
+        '- Implement subcommands if needed',
+        '- Add config file support (if needed)',
+        '- Add input validation and error handling',
+        'Write clean, well-documented code with proper error messages.',
+      ].join('\n'),
+      dependsOn: ['step-0'],
+    },
+    {
+      agentType: 'tester',
+      description: [
+        'Write and run tests:',
+        '- Unit tests for core logic',
+        '- Integration tests for argument parsing',
+        '- Test help output and error messages',
+        '- Test edge cases (missing args, invalid input, --version)',
+        'Run the test suite and fix any failures.',
+      ].join('\n'),
+      dependsOn: ['step-1'],
+    },
+    {
+      agentType: 'runner',
+      description: [
+        'Package and publish:',
+        '- npm: set bin field in package.json, run `npm publish`',
+        '- Python: create setup.py/pyproject.toml, run `python -m build`',
+        '- Go: run `go install` or create a release with `goreleaser`',
+        '- Rust: run `cargo publish`',
+        '- Add shell completions (if supported)',
+        'Verify the tool installs and runs correctly.',
+      ].join('\n'),
+      dependsOn: ['step-2'],
+    },
+  ],
+  parameters: [
+    {
+      name: 'language',
+      description: 'Programming language (auto-detected from project if not specified)',
+      type: 'choice',
+      required: false,
+      options: ['node', 'python', 'go', 'rust', 'auto'],
+      defaultValue: 'auto',
+    },
+  ],
+  tags: ['cli', 'command-line', 'terminal', 'tool', 'utility', 'publish'],
+  sourceTrajectoryIds: ['bundled'],
+  qualityScore: 0.9,
+  usageCount: 0,
+  createdAt: BUNDLED_CREATED_AT,
+  lastUsedAt: BUNDLED_CREATED_AT,
+};
+
+/**
+ * API creation skill — full lifecycle: design → implement → test → document → deploy.
+ * Covers: REST/GraphQL endpoints, authentication, rate limiting,
+ * OpenAPI spec, integration tests, deployment.
+ * Extends the existing api-design skill with implementation and deployment.
+ */
+export const apiCreationSkill: Skill = {
+  id: 'skill-api-creation',
+  name: 'api-creation',
+  description:
+    'Create a complete API: design endpoints, implement routes, add auth/rate-limiting, write tests, generate OpenAPI docs, and deploy. Use when the goal asks to create an API, build a backend service, or scaffold an HTTP server with routes.',
+  version: '1.0.0',
+  goalPattern:
+    'API create build backend service REST GraphQL HTTP server routes endpoints implement deploy',
+  steps: [
+    {
+      agentType: 'context-gatherer',
+      description: [
+        'Analyze the project and API requirements:',
+        '- Read package.json / pyproject.toml for framework (Express, Fastify, Hono, Flask, FastAPI, Spring Boot)',
+        '- Identify resources (nouns → endpoints) and operations (CRUD)',
+        '- Note auth requirements (API key, JWT, OAuth2)',
+        '- Note database (PostgreSQL, MongoDB, SQLite, in-memory)',
+        '- Note deployment target (local, Docker, cloud)',
+        'Produce: resource list, framework choice, auth strategy, and database plan.',
+      ].join('\n'),
+      dependsOn: [],
+    },
+    {
+      agentType: 'writer',
+      description: [
+        'Implement the API:',
+        '- Set up the project structure (routes/, models/, middleware/, utils/)',
+        '- Implement route handlers for each resource',
+        '- Add input validation (Joi, Zod, Pydantic, express-validator)',
+        '- Add error handling middleware (consistent error response format)',
+        '- Add auth middleware (JWT verification, API key check)',
+        '- Add rate limiting (express-rate-limit, slowapi)',
+        '- Wire everything into the app entry point',
+        'Follow REST conventions: proper HTTP methods, status codes, and response shapes.',
+      ].join('\n'),
+      dependsOn: ['step-0'],
+    },
+    {
+      agentType: 'writer',
+      description: [
+        'Generate OpenAPI/Swagger documentation:',
+        '- Create openapi.yaml or openapi.json with all endpoints',
+        '- Define request/response schemas',
+        '- Add authentication definitions',
+        '- Add example requests and responses',
+        '- Set up Swagger UI (if web framework supports it)',
+        'The spec is the contract — implementation must match it exactly.',
+      ].join('\n'),
+      dependsOn: ['step-1'],
+    },
+    {
+      agentType: 'tester',
+      description: [
+        'Write and run integration tests:',
+        '- Test each endpoint: happy path, error paths (400, 401, 404, 500)',
+        '- Test auth: unauthenticated → 401, unauthorized → 403',
+        '- Test validation: invalid input → 400 with error details',
+        '- Test edge cases: empty body, missing fields, duplicate resources',
+        '- Run the full test suite: `npm test` or `pytest`',
+        'All tests must pass before proceeding.',
+      ].join('\n'),
+      dependsOn: ['step-2'],
+    },
+    {
+      agentType: 'runner',
+      description: [
+        'Set up deployment:',
+        '- Create Dockerfile (multi-stage build)',
+        '- Create docker-compose.yml (if database needed)',
+        '- Add health check endpoint (GET /health)',
+        '- Add environment variable configuration',
+        '- Create a README with API documentation and usage examples',
+        '- Verify the app starts and responds to requests',
+      ].join('\n'),
+      dependsOn: ['step-3'],
+    },
+  ],
+  parameters: [
+    {
+      name: 'framework',
+      description: 'HTTP framework (auto-detected from project)',
+      type: 'choice',
+      required: false,
+      options: ['express', 'fastify', 'hono', 'flask', 'fastapi', 'spring', 'auto'],
+      defaultValue: 'auto',
+    },
+    {
+      name: 'database',
+      description: 'Database to use',
+      type: 'choice',
+      required: false,
+      options: ['postgresql', 'mongodb', 'sqlite', 'mysql', 'in-memory', 'auto'],
+      defaultValue: 'auto',
+    },
+    {
+      name: 'auth',
+      description: 'Authentication method',
+      type: 'choice',
+      required: false,
+      options: ['jwt', 'api-key', 'oauth2', 'session', 'none'],
+      defaultValue: 'jwt',
+    },
+  ],
+  tags: ['api', 'rest', 'backend', 'http', 'server', 'endpoints', 'deploy'],
+  sourceTrajectoryIds: ['bundled'],
+  qualityScore: 0.9,
+  usageCount: 0,
+  createdAt: BUNDLED_CREATED_AT,
+  lastUsedAt: BUNDLED_CREATED_AT,
+};
+
 /** All bundled skills (new first-party skills append here). */
 export const BUNDLED_SKILLS: Skill[] = [
   websiteDeploySkill,
@@ -3092,6 +3401,9 @@ export const BUNDLED_SKILLS: Skill[] = [
   secretsManagerSkill,
   loadBalancerSkill,
   cdnSetupSkill,
+  gameDevelopmentSkill,
+  cliToolSkill,
+  apiCreationSkill,
 ];
 
 // ── Phase 3: 55 additional skills (Hermes parity + Windows + MCP) ──────────

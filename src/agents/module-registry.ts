@@ -14,6 +14,7 @@ import { PlannerAgent } from './agents/planner.js';
 import { ContextGathererAgent } from './agents/context-gatherer.js';
 import { WriterAgent } from './agents/writer.js';
 import { WriterToolCallingAgent } from './agents/writer-tool-calling.js';
+import { ReviewerToolCallingAgent } from './agents/reviewer-tool-calling.js';
 import { ReviewerAgent } from './agents/reviewer.js';
 import { RunnerAgent } from './agents/runner.js';
 import { TesterAgent } from './agents/tester.js';
@@ -259,6 +260,13 @@ export class ModuleRegistry {
       name: 'Reviewer',
       description: 'Validates code changes for correctness, security, and quality',
       icon: '👁️',
+      isBuiltin: true,
+    });
+
+    registry.register('reviewer-tc', () => new ReviewerToolCallingAgent(), {
+      name: 'Reviewer (Tool-Calling)',
+      description: 'Reviews code changes using iterative tool calls (read→check→fix→verify)',
+      icon: '🔍',
       isBuiltin: true,
     });
 

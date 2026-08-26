@@ -57,7 +57,7 @@
     },
     {
       "name": "plan-create-track",
-      "description": "Plan and track a multi-step job: break the goal into ordered, verifiable steps, declare them with plan_todo, work through them updating status (running → done, or blocked with a note), and finish with a summary. Use for any job with 2+ steps where progress visibility matters.",
+      "description": "Plan and track a multi-step job: break the goal into ordered, verifiable steps, declare them with plan_todo, work through them updating status (running \u2192 done, or blocked with a note), and finish with a summary. Use for any job with 2+ steps where progress visibility matters.",
       "version": "1.0.0",
       "author": "agent-nuvira",
       "tags": [
@@ -1134,6 +1134,55 @@
       ],
       "source": "agent-nuvira/bundled",
       "updatedAt": "2026-08-22T12:34:15.311Z"
+    },
+    {
+      "name": "game-development",
+      "description": "Create a GUI game with graphics, input handling, game logic, and packaging. Use when the goal asks to create, build, or develop a game (board games, card games, puzzle games, 2D games, snake-and-ladder, tic-tac-toe, chess, etc.).",
+      "version": "1.0.0",
+      "author": "agent-nuvira",
+      "tags": [
+        "game",
+        "gui",
+        "board-game",
+        "2d",
+        "interactive",
+        "entertainment"
+      ],
+      "source": "agent-nuvira/bundled",
+      "updatedAt": "2026-08-26T22:00:00.000Z"
+    },
+    {
+      "name": "cli-tool",
+      "description": "Create a command-line tool with argument parsing, help text, subcommands, and packaging. Use when the goal asks to create a CLI tool, command-line utility, or terminal application.",
+      "version": "1.0.0",
+      "author": "agent-nuvira",
+      "tags": [
+        "cli",
+        "command-line",
+        "terminal",
+        "tool",
+        "utility",
+        "publish"
+      ],
+      "source": "agent-nuvira/bundled",
+      "updatedAt": "2026-08-26T22:00:00.000Z"
+    },
+    {
+      "name": "api-creation",
+      "description": "Create a complete API: design endpoints, implement routes, add auth/rate-limiting, write tests, generate OpenAPI docs, and deploy. Use when the goal asks to create an API, build a backend service, or scaffold an HTTP server with routes.",
+      "version": "1.0.0",
+      "author": "agent-nuvira",
+      "tags": [
+        "api",
+        "rest",
+        "backend",
+        "http",
+        "server",
+        "endpoints",
+        "deploy"
+      ],
+      "source": "agent-nuvira/bundled",
+      "updatedAt": "2026-08-26T22:00:00.000Z"
     }
   ]
 }
