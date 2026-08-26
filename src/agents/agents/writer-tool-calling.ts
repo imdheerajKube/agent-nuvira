@@ -16,14 +16,52 @@
  * - Hermes: run_agent.py AIAgent tool dispatch loop
  */
 
-import { ToolCallingAgent, type AgentTool, type ParsedResponse } from '../tool-calling-agent.js';
+import { ToolCallingAgent, type AgentTool, type ParsedResponse, type ToolResult } from '../tool-calling-agent.js';
 import type { AgentContext } from '../agent.js';
+import type { McpToolEntry } from './mcp-agent.js';
+import { getMCPManager } from '../../mcp/manager.js';
 import { assessProject, type ProjectAssessment } from '../prompt-assembly.js';
 import { referenceDocsFor } from '../reference-docs.js';
 
 export class WriterToolCallingAgent extends ToolCallingAgent {
   readonly name = 'Writer';
   readonly description = 'Implements code changes using iterative tool calls';
+
+  /**
+   * Override getTools to include MCP tools from connected servers.
+   * MCP tools are injected alongside built-in tools so the LLM can
+   * call external services (filesystem, databases, APIs) directly.
+   */
+  protected getTools(context: AgentContext): AgentTool[] {
+    const builtInTools = super.getTools(context);
+    const mcpEntries = context.metadata?.mcpTools as McpToolEntry[] | undefined;
+
+    if (!mcpEntries || mcpEntries.length === 0) {
+      return builtInTools;
+    }
+
+    // Convert MCP tools to AgentTool format
+    const mcpTools: AgentTool[] = mcpEntries.map((entry) => ({
+      name: `mcp_${entry.tool.name}`,
+      description: `[MCP:${entry.server}] ${entry.tool.description || entry.tool.name}`,
+      parameters: entry.tool.inputSchema || { type: 'object', properties: {} },
+      async execute(args: Record<string, any>, _ctx: AgentContext): Promise<ToolResult> {
+        try {
+          const manager = getMCPManager();
+          const result = await manager.callTool(entry.tool.name, args);
+          if (result === null || result === undefined) {
+            return { success: false, output: '', error: `MCP tool '${entry.tool.name}' returned null` };
+          }
+          const output = typeof result === 'string' ? result : JSON.stringify(result, null, 2);
+          return { success: true, output: output.slice(0, 50_000) };
+        } catch (err) {
+          return { success: false, output: '', error: `MCP tool error: ${err}` };
+        }
+      },
+    }));
+
+    return [...builtInTools, ...mcpTools];
+  }
 
   protected buildSystemPrompt(context: AgentContext): string {
     // Assess project for framework-specific conventions
