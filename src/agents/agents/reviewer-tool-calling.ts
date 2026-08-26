@@ -16,12 +16,48 @@
  * - Hermes: run_agent.py AIAgent tool dispatch loop
  */
 
-import { ToolCallingAgent, type AgentTool, type ParsedResponse } from '../tool-calling-agent.js';
+import { ToolCallingAgent, type AgentTool, type ParsedResponse, type ToolResult } from '../tool-calling-agent.js';
 import type { AgentContext } from '../agent.js';
+import type { McpToolEntry } from './mcp-agent.js';
+import { getMCPManager } from '../../mcp/manager.js';
 
 export class ReviewerToolCallingAgent extends ToolCallingAgent {
   readonly name = 'Reviewer';
   readonly description = 'Reviews code changes and proposes fixes using iterative tool calls';
+
+  /**
+   * Override getTools to include MCP tools from connected servers.
+   * The reviewer may need to read files from external services.
+   */
+  protected getTools(context: AgentContext): AgentTool[] {
+    const builtInTools = super.getTools(context);
+    const mcpEntries = context.metadata?.mcpTools as McpToolEntry[] | undefined;
+
+    if (!mcpEntries || mcpEntries.length === 0) {
+      return builtInTools;
+    }
+
+    const mcpTools: AgentTool[] = mcpEntries.map((entry) => ({
+      name: `mcp_${entry.tool.name}`,
+      description: `[MCP:${entry.server}] ${entry.tool.description || entry.tool.name}`,
+      parameters: entry.tool.inputSchema || { type: 'object', properties: {} },
+      async execute(args: Record<string, any>, _ctx: AgentContext): Promise<ToolResult> {
+        try {
+          const manager = getMCPManager();
+          const result = await manager.callTool(entry.tool.name, args);
+          if (result === null || result === undefined) {
+            return { success: false, output: '', error: `MCP tool '${entry.tool.name}' returned null` };
+          }
+          const output = typeof result === 'string' ? result : JSON.stringify(result, null, 2);
+          return { success: true, output: output.slice(0, 50_000) };
+        } catch (err) {
+          return { success: false, output: '', error: `MCP tool error: ${err}` };
+        }
+      },
+    }));
+
+    return [...builtInTools, ...mcpTools];
+  }
 
   protected buildSystemPrompt(context: AgentContext): string {
     return `You are a senior code reviewer. Your job is to review code changes for quality, correctness, and security.

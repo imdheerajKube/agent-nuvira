@@ -256,6 +256,20 @@ export class PlannerAgent extends Agent {
         promptParts.push('', memoryContext);
       }
 
+      // Inject MCP tools so the planner can schedule mcp-agent steps
+      // when the goal requires external services (filesystem, databases, APIs, etc.)
+      const mcpToolsFormatted = context.metadata.mcpToolsFormatted as string | undefined;
+      if (mcpToolsFormatted) {
+        promptParts.push(
+          '',
+          mcpToolsFormatted,
+          '',
+          'When the goal requires external services (file operations, database queries, API calls, etc.),',
+          'schedule an `mcp` step with the appropriate tool. Example:',
+          '{"agentType": "mcp", "description": "callTool(tool_name, {arg: value})"}',
+        );
+      }
+
       promptParts.push('', 'Create an execution plan for this goal. Return ONLY a valid JSON array of task steps.');
 
       const prompt = promptParts.join('\n');
