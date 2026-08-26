@@ -13,6 +13,7 @@ import { Agent } from './agent.js';
 import { PlannerAgent } from './agents/planner.js';
 import { ContextGathererAgent } from './agents/context-gatherer.js';
 import { WriterAgent } from './agents/writer.js';
+import { WriterToolCallingAgent } from './agents/writer-tool-calling.js';
 import { ReviewerAgent } from './agents/reviewer.js';
 import { RunnerAgent } from './agents/runner.js';
 import { TesterAgent } from './agents/tester.js';
@@ -244,6 +245,13 @@ export class ModuleRegistry {
       name: 'Writer',
       description: 'Generates code changes based on the plan and context',
       icon: '✏️',
+      isBuiltin: true,
+    });
+
+    registry.register('writer-tc', () => new WriterToolCallingAgent(), {
+      name: 'Writer (Tool-Calling)',
+      description: 'Implements code changes using iterative tool calls (read→edit→verify)',
+      icon: '🔧',
       isBuiltin: true,
     });
 

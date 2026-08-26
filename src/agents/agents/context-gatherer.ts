@@ -3,6 +3,10 @@
  * goal and execution plan. It reads file contents and stores them as artifacts
  * in the shared context bus for downstream agents (Writer, Reviewer) to use.
  *
+ * CHANGE-002: Adopts Codebuff's file-finding pattern — uses a separate, fast/cheap
+ * model for file selection (like Codebuff's finetuned Gemini Flash). The main model
+ * is only used when the file finder is not available.
+ *
  * Rate-limit handling:
  * - Short waits (<3s): auto-retry silently
  * - Long waits (>=3s): invokes onRateLimit callback (if available) to let the
@@ -56,12 +60,24 @@ export class ContextGathererAgent extends Agent {
       this.report(context, 'scanning', 'Scanning the project to map relevant files…');
       const fileTree = await buildProjectFileTree(context.workingDirectory);
 
+      // CHANGE-002: Use fast/cheap model for file selection (Codebuff pattern).
+      // Codebuff uses a finetuned Gemini Flash model for file finding — fast,
+      // cheap, and accurate for this narrow task. When a file finder LLM is
+      // available (injected via metadata by the orchestrator), use it instead
+      // of the main model for file selection.
+      const fileFinderLLM = (context.metadata?.fileFinderCallLLM as LLMCallFn | undefined) || callLLM;
+      const isUsingFastModel = fileFinderLLM !== callLLM;
+      if (isUsingFastModel) {
+        this.report(context, 'thinking', 'Using fast model to identify relevant files…');
+      } else {
+        this.report(context, 'thinking', 'Asking the model which files are relevant to this goal…');
+      }
+
       // 2. Ask the LLM which files are relevant — with retry and rate-limit handling
-      this.report(context, 'thinking', 'Asking the model which files are relevant to this goal…');
       const { paths: relevantPaths, llmError } = await this.identifyWithRetry(
         context,
         fileTree,
-        callLLM,
+        fileFinderLLM,
       );
 
       // 3. Fallback: if LLM returned nothing or errored, try keyword scanning
@@ -252,23 +268,32 @@ export class ContextGathererAgent extends Agent {
     // Limit file tree to avoid token overflow on large projects
     const truncatedTree = truncateTree(fileTree, 80);
 
+    // CHANGE-002: Codebuff-style file finding prompt.
+    // Optimized for fast models (Gemini Flash, small LLMs).
+    // Simple, focused, returns just file paths.
     const prompt = [
-      'You are a codebase navigation expert. Identify files relevant to the task.',
+      'Your task is to find files relevant to the following request.',
       '',
-      'Project files:',
+      `User request: ${JSON.stringify(goal)}`,
+      '',
+      'Project file tree:',
       truncatedTree || '(empty directory)',
       '',
-      `Goal: ${goal}`,
-      taskDescriptions ? `Plan: ${taskDescriptions}` : '',
+      'Based on this request, select files that would be helpful to complete the task.',
+      'Follow these steps:',
+      '1. Analyze the request and identify all components or tasks involved.',
+      '2. Consider all areas of the codebase that might be related:',
+      '   - Main functionality files',
+      '   - Configuration files',
+      '   - Utility functions',
+      '   - Documentation files',
+      '3. Include files that might provide context or be indirectly related.',
+      '4. List a maximum of 10 files.',
       '',
-      'Return ONLY a valid JSON array of file paths. Example:',
-      '["src/index.ts", "package.json"]',
-      '',
-      'Rules:',
-      '- Only include files shown in the project listing above',
-      '- Include config files (package.json, tsconfig.json) when relevant',
-      '- Max 10 files',
-      '- NO explanation text before or after the JSON',
+      'Return ONLY file paths, one per line. No explanation, no markdown.',
+      'Example:',
+      'src/index.ts',
+      'package.json',
     ].filter(Boolean).join('\n');
 
     try {

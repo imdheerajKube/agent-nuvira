@@ -313,9 +313,31 @@ export function createResilientCallLLM(
       // Try the call
       try {
         // Resolve the model at call time (ScoredProvider doesn't carry model)
-        const resolvedModel = candidate.model === 'default'
+        let resolvedModel = candidate.model === 'default'
           ? resolveDesiredModel(autoRouter, candidate.provider, options.task.agentType, configManager, options.task.description)
           : candidate.model;
+        // CRITICAL: 'default' is a sentinel that must NEVER reach a provider API.
+        // resolveDesiredModel may return 'default' when the registry is cold and
+        // the config has model:'default'. Resolve through the live model list so
+        // the API call always uses a real model name (e.g. 'llama-3.3-70b-versatile').
+        if (!resolvedModel || resolvedModel === 'default') {
+          try {
+            const adapter = resolveProviderAdapter(configManager, candidate.provider);
+            if (adapter) {
+              const { resolveWorkingModel } = require('../inference/model-validator.js');
+              resolvedModel = await resolveWorkingModel(adapter, candidate.provider, resolvedModel);
+            }
+          } catch {
+            // Best-effort — fall through to the catalog's curated default
+            try {
+              const { getDefaultModel } = require('../inference/provider-catalog.js');
+              resolvedModel = getDefaultModel(candidate.provider);
+            } catch {
+              // Last resort — never send 'default' to an API
+              resolvedModel = 'unknown';
+            }
+          }
+        }
         const mergedOptions: InferenceOptions = {
           ...inferenceOptions,
           model: resolvedModel,
