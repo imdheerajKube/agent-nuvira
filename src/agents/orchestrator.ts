@@ -1335,6 +1335,16 @@ export class Orchestrator {
       durationMs: Date.now() - startTime,
     }, 'orchestrator');
 
+    // ── Learning loop: create skills from successful complex tasks ────
+    // After a successful pipeline, check if the task was complex enough to
+    // warrant creating a reusable skill. This is the Hermes pattern: skills
+    // self-improve during use, and complex tasks produce new skills.
+    if (!hasFailures && completed >= 3) {
+      this.postPipelineLearning(goal, vault, options).catch(() => {
+        // Best-effort — learning must never break the pipeline result
+      });
+    }
+
     // ── Generate structured report via ReportModule ──────────────────
     const report = await this.reportModule.generate({
       goal,
@@ -1390,6 +1400,86 @@ export class Orchestrator {
         stage: 'routing',
         message: `⚠️ Only a weak local model (${decision.model}) is available — this pipeline may be slow or fail. Add a real API key for better results.`,
       }, 'orchestrator');
+    }
+  }
+
+  /**
+   * Post-pipeline learning: create skills from successful complex tasks.
+   *
+   * After a successful pipeline with 3+ completed steps, extract the
+   * execution pattern as a reusable skill. This is the Hermes pattern:
+   * skills self-improve during use, and complex tasks produce new skills.
+   *
+   * The skill is created asynchronously (fire-and-forget) so it never
+   * blocks the pipeline result delivery.
+   */
+  private async postPipelineLearning(
+    goal: string,
+    vault: ContextVault,
+    options: OrchestratorOptions,
+  ): Promise<void> {
+    try {
+      const { getSkillStore } = await import('../learning/skill-store.js');
+      const skillStore = getSkillStore();
+
+      // Check if a skill already matches this goal (don't duplicate)
+      const existing = skillStore.findMatch(goal);
+      if (existing) return;
+
+      // Extract the execution pattern from the completed plan
+      const completedSteps = vault.context.taskPlan
+        .filter((s) => s.status === 'completed')
+        .map((s) => ({
+          agentType: s.agentType,
+          description: s.description,
+          complexity: s.complexity,
+        }));
+
+      if (completedSteps.length < 3) return; // Not complex enough
+
+      // Create a skill from the execution pattern
+      const skillName = goal
+        .toLowerCase()
+        .replace(/[^a-z0-9]+/g, '-')
+        .replace(/^-|-$/g, '')
+        .slice(0, 50);
+
+      // Only create if the name is meaningful
+      if (skillName.length < 5) return;
+
+      const skill: import('../learning/skill-types.js').Skill = {
+        id: `skill-learned-${skillName}`,
+        name: skillName,
+        description: `Learned from successful execution: ${goal}`,
+        version: '1.0.0',
+        goalPattern: goal.toLowerCase().slice(0, 100),
+        steps: completedSteps.map((s) => ({
+          agentType: s.agentType,
+          description: s.description,
+          dependsOn: [],
+        })),
+        parameters: [],
+        tags: ['learned', 'auto-generated'],
+        sourceTrajectoryIds: [],
+        createdAt: Date.now(),
+        usageCount: 0,
+        qualityScore: 1.0,
+        lastUsedAt: Date.now(),
+      };
+
+      skillStore.save(skill);
+
+      if (options.verbose) {
+        logger.info(`   🧠 Learned new skill '${skillName}' from successful pipeline`);
+      }
+
+      this.eventBus.emit(EventNames.ORCHESTRATOR_AGENT_UPDATE, {
+        agentType: 'orchestrator',
+        stage: 'learning',
+        message: `🧠 Learned new skill '${skillName}' from successful execution`,
+      }, 'orchestrator');
+    } catch {
+      // Best-effort — learning must never break the pipeline
     }
   }
 
@@ -1629,6 +1719,70 @@ export class Orchestrator {
       this.stats.outputTokens += estimateTokens(output);
       return output;
     };
+  }
+
+  /**
+   * CHANGE-002: Create a fast/cheap LLM for file finding.
+   * Adopts Codebuff's pattern: use a small, fast model (like Gemini Flash)
+   * for file selection instead of the main (expensive) model.
+   *
+   * The file finder only needs to:
+   * 1. Read the file tree
+   * 2. Match files to the task description
+   * 3. Return file paths
+   *
+   * This doesn't require a powerful model — a fast model with good instruction
+   * following is sufficient. Codebuff uses a finetuned Gemini Flash model for
+   * this exact purpose.
+   *
+   * Returns a cheap LLM call function, or null if no fast model is available.
+   */
+  private createFileFinderLLM(options: OrchestratorOptions): LLMCallFn | null {
+    // Try to find a fast/cheap model for file finding.
+    // Priority: explicit gathererModel option > auto-router's cheapest > null (use main model)
+    const gathererModel = options.agentModels?.['context-gatherer'];
+    if (gathererModel) {
+      // User explicitly configured a model for context gathering — use it
+      const [provider, model] = gathererModel.includes('/')
+        ? gathererModel.split('/', 2)
+        : [options.provider || 'auto', gathererModel];
+      try {
+        return this.createLLMProvider({ ...options, provider, model });
+      } catch {
+        // Best-effort — fall through to auto selection
+      }
+    }
+
+    // Try auto-router to find the cheapest fast model for file finding
+    if (isAutoModel(options.model) || isAutoProvider(options.provider) || options.autoRouteModels) {
+      try {
+        const autoRouter = getAutoRouter();
+        const decision = autoRouter.resolve(
+          'context-gatherer',
+          'file finding',
+          {
+            ...buildAutoResolveOptions(this.configManager, {
+              verbose: options.verbose,
+            }),
+            // Prefer cheap, fast models for file finding
+            preferenceMode: 'cost-first',
+          },
+          this.configManager,
+        );
+        if (decision.provider && decision.model) {
+          return this.createLLMProvider({
+            ...options,
+            provider: decision.provider,
+            model: decision.model,
+          });
+        }
+      } catch {
+        // Best-effort — fall through to null (use main model)
+      }
+    }
+
+    // No fast model available — return null so context-gatherer uses main model
+    return null;
   }
 
   private async runAgent(
@@ -2048,6 +2202,22 @@ export class Orchestrator {
       // Tag this agent instance with its task step so its "thinking" updates
       // attach to the correct board line (fresh instance per task → no races).
       agent.currentTaskId = task.id;
+
+      // CHANGE-002: Create a fast/cheap file finder LLM for context-gatherer.
+      // Codebuff uses a finetuned Gemini Flash model for file finding — fast,
+      // cheap, and accurate for this narrow task. When available, inject it
+      // into the context-gatherer's metadata so it uses the fast model instead
+      // of the main (expensive) model for file selection.
+      if (effectiveAgentType === 'context-gatherer') {
+        try {
+          const fileFinderLLM = this.createFileFinderLLM(options);
+          if (fileFinderLLM) {
+            vault.setMeta('fileFinderCallLLM', fileFinderLLM);
+          }
+        } catch {
+          // Best-effort — file finder must never break the pipeline
+        }
+      }
 
       // Wire up the rate-limit handler so agents can prompt the user. Pass the
       // task's bound provider (auto mode) so the storm guard never auto-switches
@@ -2836,6 +3006,7 @@ export class Orchestrator {
     options: OrchestratorOptions,
     baseComplexity?: string,
     taskId?: string,
+    allowedProviders?: string[],
   ): AutoRouteResult {
     // Prefer the ROUTED complexity (the tier that actually failed — the router
     // may have escalated the raw label) so the escalation is guaranteed to be
@@ -2857,6 +3028,12 @@ export class Orchestrator {
       // exactly which calls were model-escalated repairs (v1.60.4).
       escalated: true,
     };
+    // When the user explicitly selected a provider, constrain escalation to
+    // that provider only — never silently re-route to a different provider.
+    if (allowedProviders?.length) {
+      const constrained = { ...options, allowedProviders };
+      return this.resolveAutoRoutingDecision(escalatedTask, constrained);
+    }
     return this.resolveAutoRoutingDecision(escalatedTask, options);
   }
 
@@ -2877,7 +3054,18 @@ export class Orchestrator {
       taskId,
       escalated: true,
     };
-    const decision = this.resolveEscalatedDecision(agentType, description, options, baseComplexity, taskId);
+    // DECISION #MANUAL-MODEL-SANCTITY: When the user explicitly selected a
+    // provider/model (not auto), escalation must NOT re-route to a different
+    // provider. The user's choice is sacred — only try stronger models within
+    // the SAME provider. Re-routing to a different provider on escalation
+    // violates the user's explicit intent and causes confusing behavior
+    // (e.g. user picks openrouter/stealth-ox-alpha, escalation silently
+    // switches to groq/default which 404s).
+    const userExplicitlySelected = !isAutoModel(options.model) && !isAutoProvider(options.provider) && !!options.provider;
+    const escalationAllowedProviders = userExplicitlySelected && options.provider
+      ? [options.provider]
+      : undefined; // undefined = auto-router decides freely
+    const decision = this.resolveEscalatedDecision(agentType, description, options, baseComplexity, taskId, escalationAllowedProviders);
     if (options.verbose) {
       logger.info(`      🚀 Escalating ${agentType} repair to a stronger model (${escalatedTask.complexity}): ${decision.provider}/${decision.model}`);
     }
