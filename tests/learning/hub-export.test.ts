@@ -17,7 +17,7 @@ import { existsSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
 
 import { hubIndexFor, skillMdFor, writeHubSkills } from '../../src/learning/hub-export.js';
-import { BUNDLED_SKILLS } from '../../src/skills/bundled-skills.js';
+import { ALL_BUNDLED_SKILLS as BUNDLED_SKILLS } from '../../src/skills/bundled-skills.js';
 
 /** A minimal fixture skill for the pure-render tests. */
 const FIXTURE: typeof BUNDLED_SKILLS[number] = {
@@ -99,8 +99,8 @@ describe('SYNC-DRIFT GUARD — committed .agents/skills matches BUNDLED_SKILLS',
     const index = JSON.parse(readFileSync(indexPath, 'utf-8')) as {
       skills: Array<{ name: string; version: string }>;
     };
-    const expected = BUNDLED_SKILLS.map((s) => ({ name: s.name, version: s.version }));
-    const actual = index.skills.map((s) => ({ name: s.name, version: s.version }));
+    const expected = BUNDLED_SKILLS.map((s) => ({ name: s.name, version: s.version })).sort((a, b) => a.name.localeCompare(b.name));
+    const actual = index.skills.map((s) => ({ name: s.name, version: s.version })).sort((a, b) => a.name.localeCompare(b.name));
     expect(actual).toEqual(expected);
   });
 
