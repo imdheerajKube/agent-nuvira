@@ -29,10 +29,22 @@ const tmpMemoryDir = mkdtempSync(join(TMP_BASE, 'buff-eval-test-'));
 const tmpConfigDir = mkdtempSync(join(TMP_BASE, 'buff-eval-cfg-'));
 let originalConfigDir: string | undefined;
 
+let originalEnvFile: string | undefined;
+let tmpEnvFile: string | undefined;
+
+let originalOpenRouterKey: string | undefined;
+
 beforeAll(() => {
   process.env.NUVIRA_MEMORY_DIR = join(tmpMemoryDir, '.nuvira', 'memory');
   originalConfigDir = process.env.NUVIRA_CONFIG_DIR;
   process.env.NUVIRA_CONFIG_DIR = tmpConfigDir;
+  // Redirect .env loading to an empty temp file so loadEnv() inside
+  // ConfigManager doesn't read the real ~/.nuvira/.env and overwrite
+  // the placeholder API key with a real one.
+  originalEnvFile = process.env.NUVIRA_ENV_FILE;
+  tmpEnvFile = join(tmpConfigDir, '.env');
+  writeFileSync(tmpEnvFile, '');
+  process.env.NUVIRA_ENV_FILE = tmpEnvFile;
   mkdirSync(tmpConfigDir, { recursive: true });
   // A provider pinned with a placeholder key (the "openrouter-env-key" class).
   writeFileSync(
@@ -53,6 +65,12 @@ afterAll(() => {
   delete process.env.NUVIRA_MEMORY_DIR;
   if (originalConfigDir === undefined) delete process.env.NUVIRA_CONFIG_DIR;
   else process.env.NUVIRA_CONFIG_DIR = originalConfigDir;
+  // Restore the real OPENROUTER_API_KEY if it was set.
+  if (originalOpenRouterKey !== undefined) process.env.OPENROUTER_API_KEY = originalOpenRouterKey;
+  else delete process.env.OPENROUTER_API_KEY;
+  // Restore the original .env file path.
+  if (originalEnvFile !== undefined) process.env.NUVIRA_ENV_FILE = originalEnvFile;
+  else delete process.env.NUVIRA_ENV_FILE;
   rmSync(tmpMemoryDir, { recursive: true, force: true });
   rmSync(tmpConfigDir, { recursive: true, force: true });
 });
