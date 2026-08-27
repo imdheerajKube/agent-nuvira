@@ -5,10 +5,8 @@ import type { DashboardData } from './types';
 import Layout from './components/Layout';
 import Overview from './components/Overview';
 import DAGView from './components/DAGView';
-import HistoryBrowser from './components/HistoryBrowser';
 import CostDashboard from './components/CostDashboard';
 import BenchmarkCharts from './components/BenchmarkCharts';
-import MemoryPanel from './components/MemoryPanel';
 import HealthPanel from './components/HealthPanel';
 import ModelsPanel from './components/ModelsPanel';
 import RoutingInsightsPanel from './components/RoutingInsightsPanel';
@@ -66,10 +64,8 @@ export default function App() {
         <Route path="/overview" element={<Overview data={data} />} />
         <Route path="/chat" element={<Navigate to="/" replace />} />
         <Route path="/dag" element={<DAGView data={data} />} />
-        <Route path="/history" element={<HistoryBrowser data={data} />} />
         <Route path="/costs" element={<CostDashboard data={data} />} />
         <Route path="/benchmarks" element={<BenchmarkCharts data={data} />} />
-        <Route path="/memory" element={<MemoryPanel data={data} />} />
         <Route path="/models" element={<ModelsPanel />} />
         <Route path="/models/timeline" element={<ModelTimeline />} />
         <Route path="/routing" element={<RoutingInsightsPanel data={data} />} />

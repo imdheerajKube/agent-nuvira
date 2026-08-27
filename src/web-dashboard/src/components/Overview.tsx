@@ -75,6 +75,33 @@ export default function Overview({ data }: OverviewProps) {
         ))}
       </div>
 
+      {/* Memory Health Summary Card */}
+      <div className="memory-health-card">
+        <h3 className="section-subtitle">🧠 Memory Health</h3>
+        <div className="memory-health-stats">
+          <div className="memory-health-stat">
+            <span className="memory-health-value">{formatNumber(memory.total)}</span>
+            <span className="memory-health-label">Trajectories</span>
+          </div>
+          <div className="memory-health-stat">
+            <span className="memory-health-value">{formatNumber(memory.facts?.total || 0)}</span>
+            <span className="memory-health-label">Facts Learned</span>
+          </div>
+          <div className="memory-health-stat">
+            <span className="memory-health-value">{formatNumber(memory.recall?.last7d || 0)}</span>
+            <span className="memory-health-label">Recalls This Week</span>
+          </div>
+          <div className="memory-health-stat">
+            <span className="memory-health-value">{health.patterns || 0}</span>
+            <span className="memory-health-label">Coding Patterns</span>
+          </div>
+        </div>
+        <p className="memory-health-status">
+          Backend: <code>{memory.backend || 'local'}</code>
+          {memory.recall?.last7d ? ` · ${memory.recall.last7d} recall(s) this week` : ' · no recalls yet'}
+        </p>
+      </div>
+
       <h3 className="section-subtitle">💰 Cost by Provider</h3>
       <div className="chart-container">
         {providerEntries.length > 0 ? (

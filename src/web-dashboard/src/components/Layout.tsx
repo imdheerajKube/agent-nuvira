@@ -15,7 +15,6 @@ const NAV_ITEMS = [
   { path: '/tasks', label: 'Tasks', icon: '🚀' },
   { path: '/evals', label: 'Evals', icon: '🏆' },
   { path: '/platforms', label: 'Platforms', icon: '🌐' },
-  { path: '/bedrock', label: 'AWS Bedrock', icon: '🟠' },
   { path: '/contacts', label: 'Contacts', icon: '📇' },
   { path: '/gateway', label: 'Gateway', icon: '📡' },
   { path: '/models', label: 'Models', icon: '🧠' },
@@ -25,9 +24,7 @@ const NAV_ITEMS = [
   { path: '/hub', label: 'Agent Hub', icon: '🧰' },
   { path: '/traces', label: 'Traces', icon: '🔍' },
   { path: '/costs', label: 'Costs', icon: '💰' },
-  { path: '/history', label: 'History', icon: '📝' },
   { path: '/benchmarks', label: 'Benchmarks', icon: '📈' },
-  { path: '/memory', label: 'Memory', icon: '💾' },
   { path: '/system', label: 'System', icon: '⚙️' },
   { path: '/admin', label: 'Admin', icon: '🛠️' },
 ];
