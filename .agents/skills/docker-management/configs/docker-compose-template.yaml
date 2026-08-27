@@ -1,0 +1,47 @@
+version: '3.8'
+
+services:
+  {{service_name}}:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: {{image_name}}:{{image_tag}}
+    container_name: {{container_name}}
+    ports:
+      - "{{host_port}}:{{container_port}}"
+    environment:
+      - NODE_ENV={{environment}}
+      {{#env_vars}}
+      - {{.}}
+      {{/env_vars}}
+    volumes:
+      - ./data:/app/data
+      {{#volumes}}
+      - {{.}}
+      {{/volumes}}
+    networks:
+      - {{network_name}}
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:{{container_port}}/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 40s
+    {{#deploy}}
+    deploy:
+      replicas: {{replicas}}
+      resources:
+        limits:
+          cpus: '{{cpu_limit}}'
+          memory: {{memory_limit}}
+    {{/deploy}}
+
+networks:
+  {{network_name}}:
+    driver: bridge
+
+volumes:
+  {{#volumes}}
+  {{volume_name}}:
+  {{/volumes}}

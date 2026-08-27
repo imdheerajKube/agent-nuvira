@@ -1,0 +1,203 @@
+openapi: 3.0.3
+info:
+  title: {{api_title}}
+  description: {{api_description}}
+  version: 1.0.0
+  contact:
+    name: {{contact_name}}
+    email: {{contact_email}}
+
+servers:
+  - url: http://localhost:3000
+    description: Development server
+  - url: https://api.example.com
+    description: Production server
+
+paths:
+  /{{resource}}:
+    get:
+      summary: List {{resource}}
+      operationId: list{{resource}}
+      tags:
+        - {{resource}}
+      parameters:
+        - name: page
+          in: query
+          schema:
+            type: integer
+            default: 1
+        - name: limit
+          in: query
+          schema:
+            type: integer
+            default: 20
+      responses:
+        '200':
+          description: Successful response
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/{{Resource}}'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+    
+    post:
+      summary: Create {{resource}}
+      operationId: create{{resource}}
+      tags:
+        - {{resource}}
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/Create{{Resource}}Request'
+      responses:
+        '201':
+          description: Created
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/{{Resource}}'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+
+  /{{resource}}/{id}:
+    get:
+      summary: Get {{resource}} by ID
+      operationId: get{{Resource}}ById
+      tags:
+        - {{resource}}
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          description: Successful response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/{{Resource}}'
+        '404':
+          $ref: '#/components/responses/NotFound'
+    
+    put:
+      summary: Update {{resource}}
+      operationId: update{{Resource}}
+      tags:
+        - {{resource}}
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/Update{{Resource}}Request'
+      responses:
+        '200':
+          description: Updated
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/{{Resource}}'
+        '404':
+          $ref: '#/components/responses/NotFound'
+    
+    delete:
+      summary: Delete {{resource}}
+      operationId: delete{{Resource}}
+      tags:
+        - {{resource}}
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        '204':
+          description: Deleted
+        '404':
+          $ref: '#/components/responses/NotFound'
+
+components:
+  schemas:
+    {{Resource}}:
+      type: object
+      properties:
+        id:
+          type: string
+        name:
+          type: string
+        createdAt:
+          type: string
+          format: date-time
+        updatedAt:
+          type: string
+          format: date-time
+    
+    Create{{Resource}}Request:
+      type: object
+      required:
+        - name
+      properties:
+        name:
+          type: string
+    
+    Update{{Resource}}Request:
+      type: object
+      properties:
+        name:
+          type: string
+
+  responses:
+    BadRequest:
+      description: Bad request
+      content:
+        application/json:
+          schema:
+            type: object
+            properties:
+              error:
+                type: string
+    
+    Unauthorized:
+      description: Unauthorized
+      content:
+        application/json:
+          schema:
+            type: object
+            properties:
+              error:
+                type: string
+    
+    NotFound:
+      description: Not found
+      content:
+        application/json:
+          schema:
+            type: object
+            properties:
+              error:
+                type: string
+
+  securitySchemes:
+    bearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+
+security:
+  - bearerAuth: []
