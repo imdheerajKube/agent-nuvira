@@ -22,7 +22,7 @@ CDN content delivery network static assets cache edge cloudflare cloudfront
 
 ## Steps
 
-### Step 1: [context-gatherer] — Analyze content and traffic patterns
+### Step 1: [analyst] — Analyze content and traffic patterns
 
 ```bash
 # Check current asset sizes
@@ -41,7 +41,7 @@ dig CNAME example.com +short
 - What cache behavior? (long TTL for static, short for HTML)
 - What security needs? (DDoS protection, WAF, rate limiting)
 
-### Step 2: [writer] — Configure CDN
+### Step 2: [analyst] — Configure CDN
 
 **Cloudflare configuration:**
 ```javascript
@@ -140,7 +140,7 @@ ttl = 3600  # 1 hour
 }
 ```
 
-### Step 3: [runner] — Deploy CDN configuration
+### Step 3: [analyst] — Deploy CDN configuration
 
 ```bash
 # Cloudflare: deploy worker
@@ -159,7 +159,7 @@ curl -X POST "https://api.cloudflare.com/client/v4/zones/ZONE_ID/purge_cache" \
   --data '{"purge_everything":true}'
 ```
 
-### Step 4: [reviewer] — Verify CDN performance
+### Step 4: [analyst] — Verify CDN performance
 
 ```bash
 # Check cache hit ratio

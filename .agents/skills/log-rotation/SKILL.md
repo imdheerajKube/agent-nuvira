@@ -22,7 +22,7 @@ log rotation compress archive retention disk space cleanup syslog
 
 ## Steps
 
-### Step 1: [context-gatherer] — Analyze logging setup
+### Step 1: [analyst] — Analyze logging setup
 
 ```bash
 # Check current log sizes
@@ -44,7 +44,7 @@ find /var/log -name "*.log" -size +100M -exec ls -lh {} \;
 - What retention? (7 days, 30 days, 1 year)
 - What compression? (gzip, bzip2, xz)
 
-### Step 2: [writer] — Configure log rotation
+### Step 2: [analyst] — Configure log rotation
 
 **Logrotate configuration:**
 ```bash
@@ -125,7 +125,7 @@ find "$ARCHIVE_DIR" -name "*.gz" -mtime +365 -delete
 logger "Log cleanup completed: rotated $(find "$LOG_DIR" -name "*.log.gz" | wc -l) files"
 ```
 
-### Step 3: [runner] — Deploy and test
+### Step 3: [analyst] — Deploy and test
 
 ```bash
 # Test logrotate configuration
@@ -145,7 +145,7 @@ chmod +x /usr/local/bin/log-cleanup.sh
 /usr/local/bin/log-cleanup.sh
 ```
 
-### Step 4: [reviewer] — Verify rotation works
+### Step 4: [analyst] — Verify rotation works
 
 ```bash
 # Check disk usage after rotation

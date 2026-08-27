@@ -22,7 +22,7 @@ backup disaster recovery retention snapshot restore data protection RPO RTO
 
 ## Steps
 
-### Step 1: [context-gatherer] — Analyze backup requirements
+### Step 1: [analyst] — Analyze backup requirements
 
 ```bash
 # Check data to backup
@@ -44,7 +44,7 @@ df -h /var/backups
 - What retention? (7 days, 30 days, 1 year)
 - What compliance? (GDPR, HIPAA, SOC2)
 
-### Step 2: [writer] — Implement backup solution
+### Step 2: [analyst] — Implement backup solution
 
 **Database backup script:**
 ```bash
@@ -100,7 +100,7 @@ restic -r s3:s3.amazonaws.com/my-backups restore latest --target /restore
 0 4 * * 0 root /usr/local/bin/backup-verify.sh >> /var/log/backup.log 2>&1
 ```
 
-### Step 3: [runner] — Deploy and test
+### Step 3: [analyst] — Deploy and test
 
 ```bash
 # Run backup manually
@@ -117,7 +117,7 @@ psql mydb < /var/backups/db/mydb_20240101_020000.sql
 aws s3 ls s3://my-backups/database/ | tail -5
 ```
 
-### Step 4: [reviewer] — Verify backup strategy
+### Step 4: [analyst] — Verify backup strategy
 
 ```bash
 # Check backup logs

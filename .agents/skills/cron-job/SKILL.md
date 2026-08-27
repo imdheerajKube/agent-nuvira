@@ -22,7 +22,7 @@ cron schedule task automate periodic cleanup backup report
 
 ## Steps
 
-### Step 1: [context-gatherer] — Analyze scheduling needs
+### Step 1: [analyst] — Analyze scheduling needs
 
 ```bash
 # Check existing crontab
@@ -41,7 +41,7 @@ systemctl status cron 2>/dev/null || systemctl status crond 2>/dev/null
 - What dependencies? (database, API, filesystem)
 - What notifications? (email, Slack, PagerDuty)
 
-### Step 2: [writer] — Create cron jobs
+### Step 2: [analyst] — Create cron jobs
 
 **System crontab:**
 ```bash
@@ -114,7 +114,7 @@ services:
              crond -f -l 8"
 ```
 
-### Step 3: [runner] — Deploy and test
+### Step 3: [analyst] — Deploy and test
 
 ```bash
 # Deploy crontab
@@ -132,7 +132,7 @@ grep CRON /var/log/syslog | tail -10
 systemctl status cron
 ```
 
-### Step 4: [reviewer] — Verify tasks execute
+### Step 4: [analyst] — Verify tasks execute
 
 ```bash
 # Check cron execution

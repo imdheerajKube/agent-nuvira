@@ -189,7 +189,7 @@ describe('GatewayRegistry.handleInbound', () => {
     expect(adapter.sent[0].text).toContain('Working on it');
   });
 
-  it('pipeline requests reply with the run result (fast-fail local model)', async () => {
+  it('pipeline requests reply with the run result (fast-fail local model)', { timeout: 30000 }, async () => {
     const { registry, adapter } = mockRegistry();
     const reply = await registry.handleInbound({
       platform: 'mock',

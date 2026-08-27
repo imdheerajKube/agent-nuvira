@@ -22,7 +22,7 @@ cloud deploy AWS GCP Azure serverless lambda function app engine kubernetes
 
 ## Steps
 
-### Step 1: [context-gatherer] — Analyze deployment requirements
+### Step 1: [analyst] — Analyze deployment requirements
 
 ```bash
 # Check cloud CLI
@@ -45,7 +45,7 @@ gcloud run services list 2>/dev/null | head -5
 - What environment variables? (secrets, config)
 - What domain/SSL? (custom domain, certificates)
 
-### Step 2: [writer] — Create deployment configuration
+### Step 2: [analyst] — Create deployment configuration
 
 **AWS ECS deployment:**
 ```yaml
@@ -128,7 +128,7 @@ images:
   - 'gcr.io/$PROJECT_ID/myapp:$COMMIT_SHA'
 ```
 
-### Step 3: [runner] — Deploy application
+### Step 3: [analyst] — Deploy application
 
 ```bash
 # Build and push Docker image
@@ -154,7 +154,7 @@ aws ecs describe-services \
   --query 'services[0].{status:status,desired:desiredCount,running:runningCount}'
 ```
 
-### Step 4: [reviewer] — Verify deployment
+### Step 4: [analyst] — Verify deployment
 
 ```bash
 # Health check

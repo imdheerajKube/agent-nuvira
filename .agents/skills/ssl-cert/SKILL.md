@@ -22,7 +22,7 @@ SSL TLS certificate HTTPS Let's Encrypt certbot ACME wildcard renewal
 
 ## Steps
 
-### Step 1: [context-gatherer] — Analyze certificate requirements
+### Step 1: [analyst] — Analyze certificate requirements
 
 ```bash
 # Check existing certificates
@@ -42,7 +42,7 @@ certbot certificates 2>/dev/null
 - What server? (Nginx, Apache, Cloudflare)
 - What auto-renewal? (certbot, custom script)
 
-### Step 2: [writer] — Configure certificates
+### Step 2: [analyst] — Configure certificates
 
 **Let's Encrypt with certbot:**
 ```bash
@@ -81,7 +81,7 @@ openssl verify -CAfile /etc/letsencrypt/live/example.com/chain.pem \
 openssl x509 -in /etc/letsencrypt/live/example.com/fullchain.pem -noout -text
 ```
 
-### Step 3: [runner] — Deploy and verify
+### Step 3: [analyst] — Deploy and verify
 
 ```bash
 # Test SSL configuration
@@ -97,7 +97,7 @@ openssl s_client -connect example.com:443 -servername example.com < /dev/null 2>
 sudo certbot renew --dry-run
 ```
 
-### Step 4: [reviewer] — Verify SSL works
+### Step 4: [analyst] — Verify SSL works
 
 ```bash
 # Verify HTTPS redirects

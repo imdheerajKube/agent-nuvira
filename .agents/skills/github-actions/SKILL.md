@@ -22,7 +22,7 @@ github actions ci cd workflow pipeline automate test build deploy
 
 ## Steps
 
-### Step 1: [context-gatherer] — Analyze CI/CD requirements
+### Step 1: [analyst] — Analyze CI/CD requirements
 
 ```bash
 # Check existing workflows
@@ -42,7 +42,7 @@ cat .github/CODEOWNERS 2>/dev/null
 - What environments? (dev, staging, prod)
 - What secrets needed? (API keys, deploy tokens)
 
-### Step 2: [writer] — Create workflow files
+### Step 2: [analyst] — Create workflow files
 
 **CI Workflow:**
 ```yaml
@@ -155,7 +155,7 @@ jobs:
           curl -f https://example.com/health || exit 1
 ```
 
-### Step 3: [runner] — Push and verify workflows
+### Step 3: [analyst] — Push and verify workflows
 
 ```bash
 # Create workflow directory
@@ -174,7 +174,7 @@ gh run list --limit=5
 gh run view <run-id>
 ```
 
-### Step 4: [reviewer] — Verify CI/CD works
+### Step 4: [analyst] — Verify CI/CD works
 
 ```bash
 # Check workflow status

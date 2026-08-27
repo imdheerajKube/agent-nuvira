@@ -22,7 +22,7 @@ machine learning model training evaluation prediction scikit-learn tensorflow py
 
 ## Steps
 
-### Step 1: [context-gatherer] — Analyze data and requirements
+### Step 1: [analyst] — Analyze data and requirements
 
 ```bash
 # Check available data
@@ -43,7 +43,7 @@ nvidia-smi 2>/dev/null || echo "No GPU"
 - What metrics matter? (accuracy, F1, RMSE, AUC)
 - What constraints? (latency, memory, explainability)
 
-### Step 2: [writer] — Build training pipeline
+### Step 2: [analyst] — Build training pipeline
 
 ```python
 # src/models/train.py
@@ -138,7 +138,7 @@ if __name__ == '__main__':
     save_model(model, scaler, metrics)
 ```
 
-### Step 3: [runner] — Train and evaluate
+### Step 3: [analyst] — Train and evaluate
 
 ```bash
 # Train model
@@ -188,7 +188,7 @@ EOF
 uvicorn src.models.serve:app --host 0.0.0.0 --port 8000
 ```
 
-### Step 4: [reviewer] — Verify model quality
+### Step 4: [analyst] — Verify model quality
 
 ```bash
 # Check model metrics
