@@ -12,24 +12,28 @@ Build Slack integrations: bots, app actions, slash commands, modals, and workflo
 
 slack app bot integration slash command modal workflow bolt framework
 
+## Parameters
+
+(none)
+
 ## Steps
 
-0. [context-gatherer] Map the integration: what triggers (slash command, event, action)? What responses (message, modal, workflow step)? What OAuth scopes needed? What hosting?
+1. [context-gatherer] Map the integration: what triggers (slash command, event, action)? What responses (message, modal, workflow step)? What OAuth scopes needed? What hosting?
 
-1. [planner] Design the Slack app:
+2. [planner] Design the Slack app:
 1. App manifest: define commands, events, OAuth scopes
 2. Event handling: message, reaction, app_mention
 3. Interactivity: slash commands, buttons, modals, shortcuts
 4. Workflow steps: custom steps for Workflow Builder
 5. OAuth: install flow, token management
-6. Error handling: graceful degradation, retry logic (after: 'step-0')
+6. Error handling: graceful degradation, retry logic (after: step-0)
 
-2. [runner] Implement with Bolt.js:
+3. [runner] Implement with Bolt.js:
 1. Set up Bolt project with TypeScript
 2. Define app manifest
 3. Implement command handlers
 4. Add event listeners
 5. Build interactive components
-6. Deploy with Socket Mode or HTTP receiver (after: 'step-1')
+6. Deploy with Socket Mode or HTTP receiver (after: step-1)
 
-3. [reviewer] Test: install app in test workspace, test each command, verify events fire, test modal submissions, verify OAuth flow. (after: 'step-2')
+4. [reviewer] Test: install app in test workspace, test each command, verify events fire, test modal submissions, verify OAuth flow. (after: step-2)

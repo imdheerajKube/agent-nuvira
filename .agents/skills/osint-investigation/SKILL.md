@@ -12,24 +12,28 @@ Conduct open-source intelligence (OSINT) investigations: reconnaissance, data co
 
 OSINT open source intelligence investigation reconnaissance data collection analysis public sources
 
+## Parameters
+
+(none)
+
 ## Steps
 
-0. [context-gatherer] Map the investigation: target (person, company, domain, IP)? What OSINT categories (domain, IP, email, social media, public records)? Ethical/legal constraints?
+1. [context-gatherer] Map the investigation: target (person, company, domain, IP)? What OSINT categories (domain, IP, email, social media, public records)? Ethical/legal constraints?
 
-1. [planner] Plan the investigation:
+2. [planner] Plan the investigation:
 1. Reconnaissance: domain WHOIS, DNS records, subdomains
 2. IP intelligence: geolocation, ASN, reverse DNS
 3. Email: breach databases, social media profiles
 4. Social media: profile analysis, connections, activity
 5. Public records: company filings, certificates
-6. Documentation: evidence collection, chain of custody (after: 'step-0')
+6. Documentation: evidence collection, chain of custody (after: step-0)
 
-2. [runner] Conduct the investigation:
+3. [runner] Conduct the investigation:
 1. Run WHOIS and DNS queries
 2. Check IP reputation and geolocation
 3. Search for email/domain breaches
 4. Analyze social media presence
 5. Check public records
-6. Document all findings with sources (after: 'step-1')
+6. Document all findings with sources (after: step-1)
 
-3. [reviewer] Review findings: verify sources, cross-reference data, assess reliability, check legal compliance, produce final report. (after: 'step-2')
+4. [reviewer] Review findings: verify sources, cross-reference data, assess reliability, check legal compliance, produce final report. (after: step-2)

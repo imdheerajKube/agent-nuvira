@@ -2,7 +2,7 @@
  * Team CLI Integration Tests — End-to-end testing of `nuvira team` commands.
  *
  * Covers:
- *   1. `nuvira team init` — creates .buffconfig.json with team settings
+ *   1. `nuvira team init` — creates .nuviraconfig.json with team settings
  *   2. `nuvira team init --repo` — init with repo URL (mocked git)
  *   3. `nuvira team join <url>` — clone and configure (mocked git)
  *   4. `nuvira team sync` — pull + push via git
@@ -98,7 +98,7 @@ function createBuffConfig(
     },
   };
   mkdirSync(dir, { recursive: true });
-  writeFileSync(join(dir, '.buffconfig.json'), JSON.stringify(config, null, 2), 'utf-8');
+  writeFileSync(join(dir, '.nuviraconfig.json'), JSON.stringify(config, null, 2), 'utf-8');
 }
 
 // ═══════════════════════════════════════════════════════════════════════════════
@@ -131,10 +131,10 @@ describe('Team CLI Integration', () => {
   // ── nuvira team init ───────────────────────────────────────────────────────
 
   describe('nuvira team init', () => {
-    it('creates a .buffconfig.json with default team settings', async () => {
+    it('creates a .nuviraconfig.json with default team settings', async () => {
       await runTeam(['init']);
 
-      const configPath = join(testDir, '.buffconfig.json');
+      const configPath = join(testDir, '.nuviraconfig.json');
       expect(existsSync(configPath)).toBe(true);
 
       const config = JSON.parse(readFileSync(configPath, 'utf-8'));
@@ -166,9 +166,9 @@ describe('Team CLI Integration', () => {
       );
     });
 
-    it('warns when .buffconfig.json already exists', async () => {
+    it('warns when .nuviraconfig.json already exists', async () => {
       // Create existing config file
-      writeFileSync(join(testDir, '.buffconfig.json'), JSON.stringify({ defaultProvider: 'groq', providers: {} }), 'utf-8');
+      writeFileSync(join(testDir, '.nuviraconfig.json'), JSON.stringify({ defaultProvider: 'groq', providers: {} }), 'utf-8');
 
       await runTeam(['init']);
 
@@ -181,7 +181,7 @@ describe('Team CLI Integration', () => {
       await runTeam(['init', '--branch', 'develop']);
 
       const config = JSON.parse(
-        readFileSync(join(testDir, '.buffconfig.json'), 'utf-8'),
+        readFileSync(join(testDir, '.nuviraconfig.json'), 'utf-8'),
       );
       expect(config.team.branch).toBe('develop');
     });
@@ -190,7 +190,7 @@ describe('Team CLI Integration', () => {
       await runTeam(['init', 'my-team']);
 
       expect(console.log).toHaveBeenCalledWith(
-        expect.stringContaining('Created .buffconfig.json'),
+        expect.stringContaining('Created .nuviraconfig.json'),
       );
     });
 
@@ -232,23 +232,23 @@ describe('Team CLI Integration', () => {
       );
     });
 
-    it('creates .buffconfig.json if none exists', async () => {
+    it('creates .nuviraconfig.json if none exists', async () => {
       await runTeam(['join', repoUrl]);
 
-      const configPath = join(testDir, '.buffconfig.json');
+      const configPath = join(testDir, '.nuviraconfig.json');
       expect(existsSync(configPath)).toBe(true);
 
       const config = JSON.parse(readFileSync(configPath, 'utf-8'));
       expect(config.team.repository).toBe(repoUrl);
     });
 
-    it('does not overwrite existing .buffconfig.json', async () => {
+    it('does not overwrite existing .nuviraconfig.json', async () => {
       // Create existing config with custom value
       createBuffConfig(testDir, { repository: 'https://github.com/original/repo.git' });
       await runTeam(['join', repoUrl]);
 
       const config = JSON.parse(
-        readFileSync(join(testDir, '.buffconfig.json'), 'utf-8'),
+        readFileSync(join(testDir, '.nuviraconfig.json'), 'utf-8'),
       );
       // Should still have the original repo URL
       expect(config.team.repository).toBe('https://github.com/original/repo.git');
@@ -459,7 +459,7 @@ describe('Team CLI Integration', () => {
         expect.stringContaining('Team Status'),
       );
       expect(console.log).toHaveBeenCalledWith(
-        expect.stringContaining('.buffconfig.json'),
+        expect.stringContaining('.nuviraconfig.json'),
       );
     });
   });

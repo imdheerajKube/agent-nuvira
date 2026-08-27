@@ -12,24 +12,28 @@ Produce podcast audio: recording setup, noise reduction, audio normalization, ch
 
 podcast audio production recording noise reduction normalization RSS feed distribution chapters
 
+## Parameters
+
+(none)
+
 ## Steps
 
-0. [context-gatherer] Map the production: how many tracks? What recording quality? What post-processing needed (noise reduction, normalization, compression)? What distribution (RSS, Spotify, Apple)?
+1. [context-gatherer] Map the production: how many tracks? What recording quality? What post-processing needed (noise reduction, normalization, compression)? What distribution (RSS, Spotify, Apple)?
 
-1. [planner] Plan the production pipeline:
+2. [planner] Plan the production pipeline:
 1. Audio processing: noise gate, noise reduction (RNNoise), EQ, compression
 2. Loudness normalization: -16 LUFS for podcasts, -1 dBTP true peak
 3. Chapter markers: insert chapter metadata
 4. ID3 tags: title, artist, album art, episode number
 5. RSS feed: iTunes/podcast namespace compliant XML
-6. Distribution: submit to directories (Apple, Spotify, Google) (after: 'step-0')
+6. Distribution: submit to directories (Apple, Spotify, Google) (after: step-0)
 
-2. [runner] Process the audio:
+3. [runner] Process the audio:
 1. Apply noise reduction with sox or RNNoise
 2. Normalize loudness to -16 LUFS
 3. Add chapter markers
 4. Embed ID3 metadata and album art
 5. Generate RSS feed XML
-6. Validate feed with podcast validator (after: 'step-1')
+6. Validate feed with podcast validator (after: step-1)
 
-3. [reviewer] Verify: listen to processed audio, check loudness levels, verify chapter markers, validate RSS feed, test on podcast player. (after: 'step-2')
+4. [reviewer] Verify: listen to processed audio, check loudness levels, verify chapter markers, validate RSS feed, test on podcast player. (after: step-2)
