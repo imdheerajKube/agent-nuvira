@@ -170,6 +170,9 @@ export class PlannerAgent extends Agent {
         escalationApplied?: boolean;
       } | undefined;
 
+      // Technical decisions from the ReasonerAgent (runs before planner)
+      const technicalDecision = context.metadata.technicalDecision as import('../agents/reasoner.js').TechnicalDecision | undefined;
+
       const promptParts: string[] = [
         PLANNER_SYSTEM_PROMPT,
         '',
@@ -179,6 +182,44 @@ export class PlannerAgent extends Agent {
         '## Working Directory',
         context.workingDirectory,
       ];
+
+      // Inject technical decisions from the reasoner — this is the key integration.
+      // The reasoner already decided language, framework, platform, architecture,
+      // dependencies, and build strategy. The planner MUST use these decisions
+      // when creating steps (e.g. "Create a Python+tkinter game" not "Create a game").
+      if (technicalDecision) {
+        const decisionLines = [
+          '',
+          '## Technical Decisions (from Reasoner)',
+          `Language: ${technicalDecision.language}`,
+          `Framework: ${technicalDecision.framework}`,
+          `Platform: ${technicalDecision.platform}`,
+          `Architecture: ${technicalDecision.architecture}`,
+          `Deliverable: ${technicalDecision.deliverable}`,
+          `Greenfield: ${technicalDecision.isGreenfield}`,
+        ];
+        if (technicalDecision.dependencies.length > 0) {
+          decisionLines.push(`Dependencies: ${technicalDecision.dependencies.join(', ')}`);
+        }
+        if (technicalDecision.buildCommand) {
+          decisionLines.push(`Build command: ${technicalDecision.buildCommand}`);
+        }
+        if (technicalDecision.constraints.length > 0) {
+          decisionLines.push(`Constraints: ${technicalDecision.constraints.join('; ')}`);
+        }
+        if (technicalDecision.reasoning) {
+          decisionLines.push(`Reasoning: ${technicalDecision.reasoning}`);
+        }
+        decisionLines.push(
+          '',
+          'CRITICAL: Use these technical decisions when creating steps.',
+          'For example, if the language is Python and framework is tkinter,',
+          'write steps like "Create a Python+tkinter game" not "Create a game".',
+          'If dependencies are listed, include a runner step to install them.',
+          'If a build command is specified, include a runner step to build the deliverable.',
+        );
+        promptParts.push(...decisionLines);
+      }
 
       if (routingContext?.taskProfile) {
         const routingNotes = routingContext.taskProfile.notes?.filter(Boolean) ?? [];

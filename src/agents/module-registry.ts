@@ -30,6 +30,7 @@ import { PRReviewAgent } from './agents/pr-review-agent.js';
 import { IssueTriageAgent } from './agents/issue-triage-agent.js';
 import { BranchAutomationAgent } from './agents/branch-automation-agent.js';
 import { DelegateAgent } from './agents/delegate-agent.js';
+import { ReasonerAgent } from './agents/reasoner.js';
 import { getEventBus, EventNames } from '../observability/event-bus.js';
 import type { EventBus } from '../observability/event-bus.js';
 
@@ -228,6 +229,13 @@ export class ModuleRegistry {
     const registry = new ModuleRegistry(eventBus);
 
     // Each registration includes: agentType, factory, and metadata
+    registry.register('reasoner', () => new ReasonerAgent(), {
+      name: 'Reasoner',
+      description: 'Makes technical decisions (language, framework, platform) before planning',
+      icon: '🧠',
+      isBuiltin: true,
+    });
+
     registry.register('planner', () => new PlannerAgent(), {
       name: 'Planner',
       description: 'Analyzes user goals and creates detailed execution plans',

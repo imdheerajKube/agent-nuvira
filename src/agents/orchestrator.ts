@@ -948,6 +948,29 @@ export class Orchestrator {
         }
       }
     } else {
+      // ── 3d. Reasoner (technical decisions before planning) ─────────────
+      // The reasoner makes high-level technical decisions (language, framework,
+      // platform, architecture) BEFORE the planner creates steps. This replaces
+      // generic "create a game" with specific "Create a Python+tkinter game,
+      // single file, package with pyinstaller" — the planner then creates
+      // precise steps based on these decisions.
+      try {
+        if (options.verbose) logger.highlight('\n🧠 Reasoning...');
+        const reasoner = this.moduleRegistry.getModule('reasoner');
+        const reasonerResult = await this.runAgent(reasoner, vault, plannerCallLLM, options);
+        agentResults.push({ agent: 'Reasoner', success: reasonerResult.success, summary: reasonerResult.summary });
+        if (options.verbose && reasonerResult.success) {
+          const decision = vault.getMeta<import('./agents/reasoner.js').TechnicalDecision>('technicalDecision');
+          if (decision) {
+            logger.info(`   🧠 ${decision.language}+${decision.framework} → ${decision.platform} → ${decision.deliverable}`);
+            if (decision.reasoning) logger.info(`   🧠 ${decision.reasoning}`);
+          }
+        }
+        // Best-effort — reasoning failure must never block planning
+      } catch (err) {
+        logger.debug(`Reasoner failed (non-critical): ${err}`);
+      }
+
       if (options.verbose) logger.highlight('\n📋 Planning...');
 
       // Planner with auto-repair — if planning fails, try alternative approaches
