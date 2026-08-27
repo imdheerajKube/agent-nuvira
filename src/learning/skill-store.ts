@@ -478,6 +478,126 @@ export class SkillStore {
       .sort((a, b) => a.decayScore - b.decayScore); // Worst first
   }
 
+  /**
+   * skill_view() — Progressive disclosure for skills.
+   *
+   * Hermes pattern: skills_list() returns name+description (lightweight),
+   * skill_view(name) returns full methodology (heavyweight).
+   *
+   * This function returns the full skill content for a given skill name,
+   * formatted as structured guidance that an agent can follow.
+   *
+   * @param name - Skill name or ID to view
+   * @param filePath - Optional specific file within skill directory (e.g., 'references/api.md')
+   * @returns Full skill content as structured text, or error message
+   */
+  skillView(name: string, filePath?: string): string {
+    // Find the skill by name or ID
+    const all = this.getAll();
+    const skill = all.find(
+      (s) => s.name === name || s.id === name || s.name.toLowerCase() === name.toLowerCase(),
+    );
+
+    if (!skill) {
+      // Try fuzzy match
+      const fuzzyMatch = all.find(
+        (s) => s.name.toLowerCase().includes(name.toLowerCase()) ||
+               name.toLowerCase().includes(s.name.toLowerCase()),
+      );
+      if (!fuzzyMatch) {
+        return JSON.stringify({
+          success: false,
+          error: `Skill '${name}' not found`,
+          hint: `Available skills: ${all.slice(0, 20).map((s) => s.name).join(', ')}`,
+        });
+      }
+      return this.formatSkillView(fuzzyMatch, filePath);
+    }
+
+    // Mark as used
+    this.markUsed(skill.id);
+
+    return this.formatSkillView(skill, filePath);
+  }
+
+  /**
+   * Format a skill into structured guidance text for an agent.
+   * This is the Hermes-style progressive disclosure output.
+   */
+  private formatSkillView(skill: Skill, filePath?: string): string {
+    // If a specific file is requested, return just that
+    if (filePath) {
+      return JSON.stringify({
+        success: true,
+        skill: skill.name,
+        file: filePath,
+        content: `[Reference file '${filePath}' for skill '${skill.name}']\nThis would load the actual file content from disk if reference docs were available.\nFor now, use the skill steps below for guidance.]`,
+      });
+    }
+
+    // Format full skill methodology (Hermes-style)
+    const sections: string[] = [];
+
+    // Header
+    sections.push(`# Skill: ${skill.name}`);
+    sections.push(`\n${skill.description}`);
+
+    // When to use (Hermes-style)
+    if (skill.whenToUse && skill.whenToUse.length > 0) {
+      sections.push('\n## When to Use');
+      for (const condition of skill.whenToUse) {
+        sections.push(`- ${condition}`);
+      }
+    }
+
+    // When NOT to use (Hermes-style)
+    if (skill.whenNotToUse && skill.whenNotToUse.length > 0) {
+      sections.push('\n## When NOT to Use');
+      for (const condition of skill.whenNotToUse) {
+        sections.push(`- ${condition}`);
+      }
+    }
+
+    // Goal pattern
+    sections.push(`\n## Goal Pattern`);
+    sections.push(skill.goalPattern);
+
+    // Tags
+    sections.push(`\n## Tags`);
+    sections.push(skill.tags.join(', '));
+
+    // Parameters
+    if (skill.parameters.length > 0) {
+      sections.push('\n## Parameters');
+      for (const param of skill.parameters) {
+        const required = param.required ? '(required)' : '(optional)';
+        const defaultVal = param.defaultValue ? ` [default: ${param.defaultValue}]` : '';
+        sections.push(`- **${param.name}** ${required}${defaultVal}: ${param.description}`);
+      }
+    }
+
+    // Steps (the core methodology)
+    sections.push('\n## Execution Steps');
+    sections.push('\nFollow these steps in order:');
+    for (let i = 0; i < skill.steps.length; i++) {
+      const step = skill.steps[i];
+      const deps = step.dependsOn.length > 0
+        ? ` (depends on: ${step.dependsOn.join(', ')})`
+        : '';
+      sections.push(`\n### Step ${i + 1}: [${step.agentType}]${deps}`);
+      sections.push(step.description);
+      if (step.expectedOutput) {
+        sections.push(`\n**Expected output:** ${step.expectedOutput}`);
+      }
+    }
+
+    // Quality metadata
+    sections.push('\n---');
+    sections.push(`Quality: ${(skill.qualityScore * 100).toFixed(0)}% | Used: ${skill.usageCount} times`);
+
+    return sections.join('\n');
+  }
+
   // ── Private ────────────────────────────────────────────────────────────
 
   private loadIndex(): SkillIndex {

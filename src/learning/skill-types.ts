@@ -69,6 +69,10 @@ export interface Skill {
   version: string;
   /** The type of goal this skill addresses (used for matching) */
   goalPattern: string;
+  /** Hermes-style: detailed trigger conditions for when to use this skill */
+  whenToUse?: string[];
+  /** Hermes-style: detailed conditions for when NOT to use this skill */
+  whenNotToUse?: string[];
   /** Ordered list of execution steps */
   steps: SkillStep[];
   /** Parameters the skill accepts from the user */

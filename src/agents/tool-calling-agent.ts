@@ -353,6 +353,8 @@ You can make ONE tool call per response. After seeing the result, you can make a
   - For NEW files: set content to the complete file
   - For EXISTING files: set content to the COMPLETE updated file (not a diff)
 - Use \`run_command\` to run tests, builds, or verification commands
+- Use \`skill_view\` to load full methodology for a specific domain (e.g., game-development, api-design, docker-management)
+- Use \`skills_list\` to discover available skills before loading one
 
 ## Workflow
 
