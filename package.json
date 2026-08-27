@@ -18,7 +18,7 @@
     "access": "public"
   },
   "scripts": {
-    "build": "tsc && node -e \"require('fs').cpSync('src/resources','dist/resources',{recursive:true})\" && node -e \"if(process.platform!=='win32')require('child_process').execSync('chmod +x dist/index.js')\"",
+    "build": "tsc && node -e \"require('fs').cpSync('src/resources','dist/resources',{recursive:true})\" && node scripts/fix-esm-extensions.mjs && node -e \"if(process.platform!=='win32')require('child_process').execSync('chmod +x dist/index.js')\"",
     "start": "node dist/index.js",
     "dev": "tsx src/index.ts",
     "test": "vitest run",
