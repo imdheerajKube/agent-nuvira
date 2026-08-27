@@ -521,17 +521,84 @@ export class SkillStore {
   }
 
   /**
+   * Find the reference docs directory for a skill.
+   * Checks .agents/skills/<skill-name>/references/ directory.
+   */
+  private findReferenceDocsDir(skillName: string): string | null {
+    // Check .agents/skills/<skill-name>/references/
+    const agentsDir = join(process.cwd(), '.agents', 'skills', skillName, 'references');
+    if (existsSync(agentsDir)) {
+      return agentsDir;
+    }
+    return null;
+  }
+
+  /**
+   * List available reference files for a skill.
+   */
+  private listReferenceFiles(skillName: string): string[] {
+    const refDir = this.findReferenceDocsDir(skillName);
+    if (!refDir) return [];
+
+    try {
+      const files = readdirSync(refDir, { withFileTypes: true });
+      return files
+        .filter((f) => f.isFile() && f.name.endsWith('.md'))
+        .map((f) => f.name);
+    } catch {
+      return [];
+    }
+  }
+
+  /**
+   * Load a specific reference file for a skill.
+   */
+  private loadReferenceFile(skillName: string, fileName: string): string | null {
+    const refDir = this.findReferenceDocsDir(skillName);
+    if (!refDir) return null;
+
+    const filePath = join(refDir, fileName);
+    if (!existsSync(filePath)) return null;
+
+    try {
+      const content = readFileSync(filePath, 'utf-8');
+      // Truncate very large files
+      const maxChars = 50_000;
+      if (content.length > maxChars) {
+        return content.slice(0, maxChars) + `\n\n... (${content.length - maxChars} more chars truncated)`;
+      }
+      return content;
+    } catch {
+      return null;
+    }
+  }
+
+  /**
    * Format a skill into structured guidance text for an agent.
    * This is the Hermes-style progressive disclosure output.
+   * Now includes actual reference docs loading from disk.
    */
   private formatSkillView(skill: Skill, filePath?: string): string {
-    // If a specific file is requested, return just that
+    // If a specific file is requested, load it from disk
     if (filePath) {
+      const content = this.loadReferenceFile(skill.name, filePath);
+      if (content) {
+        return JSON.stringify({
+          success: true,
+          skill: skill.name,
+          file: filePath,
+          content,
+        });
+      }
+      // File not found — list available files
+      const available = this.listReferenceFiles(skill.name);
       return JSON.stringify({
-        success: true,
-        skill: skill.name,
-        file: filePath,
-        content: `[Reference file '${filePath}' for skill '${skill.name}']\nThis would load the actual file content from disk if reference docs were available.\nFor now, use the skill steps below for guidance.]`,
+        success: false,
+        error: `Reference file '${filePath}' not found for skill '${skill.name}'`,
+        available_files: available,
+        hint: available.length > 0
+          ? `Available reference files: ${available.join(', ')}. Use skill_view('${skill.name}', '<filename>') to load one.`
+          : 'No reference files available for this skill.',
       });
     }
 
@@ -588,6 +655,17 @@ export class SkillStore {
       sections.push(step.description);
       if (step.expectedOutput) {
         sections.push(`\n**Expected output:** ${step.expectedOutput}`);
+      }
+    }
+
+    // Reference docs (if available)
+    const refFiles = this.listReferenceFiles(skill.name);
+    if (refFiles.length > 0) {
+      sections.push('\n## Reference Documents');
+      sections.push('Load deep-dive content with skill_view():');
+      for (const file of refFiles) {
+        const name = file.replace('.md', '').replace(/-/g, ' ');
+        sections.push(`- skill_view('${skill.name}', '${file}') — ${name}`);
       }
     }
 
