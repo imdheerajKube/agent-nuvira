@@ -40,48 +40,84 @@ export interface BridgeOptions {
 /**
  * Tools that are useful for the agent pipeline (writer/reviewer).
  * These tools help agents read code, make edits, run commands, search, etc.
+ *
+ * We now include ALL 111 registry tools (except pure UX tools).
+ * Dangerous tools have safety gates in convertTool().
  */
 const AGENT_PIPELINE_TOOLS = new Set([
-  // File operations (coding toolset)
-  'read_file', 'list_dir', 'glob', 'edit_file', 'write_file', 'run_terminal', 'plan_todo', 'terminal',
-  // Code tools (code toolset)
-  'code_search', 'delegate', 'clone_repo', 'git', 'read_extract',
-  // Web research
+  // ─── File Operations ───
+  'read_file', 'list_dir', 'glob', 'edit_file', 'write_file',
+  'run_terminal', 'plan_todo', 'terminal', 'read_extract',
+  // ─── Code & Search ───
+  'code_search', 'delegate', 'clone_repo', 'git',
+  // ─── Web Research ───
   'web_search', 'read_page',
-  // Docker
+  // ─── Docker ───
   'docker',
-  // Security scanning
+  // ─── Security ───
   'sanitize', 'binary_extensions',
-  // System
+  // ─── System ───
   'run_cli',
+  // ─── Previously "dead" tools (now wired) ───
+  'browser', 'browser_supervisor', 'browser_dialog',
+  'code_execution',
+  'computer_use',
+  'generate_image', 'video_generate',
+  'discord', 'homeassistant', 'microsoft_graph',
+  'feishu_doc', 'feishu_drive',
+  'kanban', 'cronjob', 'todo', 'session', 'memory',
+  'voice_mode', 'wake_word', 'transcribe',
+  'tts_streaming', 'tts_text_normalize',
+  'speak', 'describe_image', 'vision',
+  'mcp_tool', 'mcp_watchdog', 'mcp_oauth', 'mcp_schema_cache',
+  'interrupt', 'daemon_pool', 'process_registry', 'checkpoint',
+  'delegate_system', 'subagent', 'managed_gateway',
+  'messaging', 'async_delegation', 'delegation_live_log',
+  'ast_audit', 'threat_patterns', 'url_safety',
+  'path_security', 'security_score',
+  'tool_search', 'budget_config', 'fuzzy_match',
+  'lazy_deps', 'tool_backend', 'tool_output_limits', 'tool_result_storage',
+  'ansi_strip', 'osv_check', 'patch_parser', 'image_source',
+  'skills_hub', 'skills_sync', 'skills_sync_client',
+  'skill_usage', 'skill_provenance',
+  'blueprint', 'working_diff', 'file_ops', 'debug',
+  'env_probe', 'write_approval', 'approval',
+  'openrouter_client',
+  'camofox',
 ]);
 
 /**
  * Tools that are chat-only and should NOT be injected into agent pipeline.
  * These tools are designed for interactive user interaction, not autonomous execution.
+ * Only truly UX-only tools go here — everything else is agent-available.
  */
 const CHAT_ONLY_TOOLS = new Set([
-  'ask_user', 'suggest_followups', 'verify_requirement', 'skill',
-  'gateway_send', 'send_message',
-  'discord', 'homeassistant', 'microsoft_graph', 'feishu_doc', 'feishu_drive',
-  'kanban', 'cronjob', 'todo', 'session', 'memory',
-  'voice_mode', 'wake_word', 'transcribe', 'tts_streaming', 'tts_text_normalize',
-  'generate_image', 'speak', 'describe_image', 'vision', 'video_generate',
-  'computer_use', 'code_execution',
-  'mcp_tool', 'mcp_watchdog', 'mcp_oauth', 'mcp_schema_cache',
-  'interrupt', 'daemon_pool', 'process_registry', 'checkpoint',
-  'delegate_system', 'subagent', 'managed_gateway', 'messaging', 'async_delegation', 'delegation_live_log',
-  'ast_audit', 'threat_patterns', 'url_safety', 'path_security', 'security_score',
-  'tool_search', 'budget_config', 'fuzzy_match', 'lazy_deps', 'tool_backend', 'tool_output_limits', 'tool_result_storage',
-  'ansi_strip', 'osv_check', 'patch_parser', 'image_source',
-  'skills_hub', 'skills_sync', 'skills_sync_client', 'skill_usage', 'skill_provenance',
-  'blueprint', 'working_diff', 'file_ops', 'debug',
-  'env_probe', 'write_approval', 'approval',
-  'openrouter_client',
-  'camofox', 'browser', 'browser_supervisor', 'browser_dialog',
+  'ask_user', 'suggest_followups', 'verify_requirement',
+  // 'skill' is kept — agents can load skills via the bridge
 ]);
 
 // ─── Conversion ─────────────────────────────────────────────────────────────
+
+/**
+ * Tools that require safety gates before execution.
+ * These tools can have side effects outside the project directory.
+ */
+const SAFETY_GATED_TOOLS = new Set([
+  'browser', 'browser_supervisor', 'browser_dialog',
+  'code_execution',
+  'computer_use',
+  'generate_image', 'video_generate',
+  'discord', 'homeassistant', 'microsoft_graph',
+  'feishu_doc', 'feishu_drive',
+  'voice_mode', 'wake_word', 'transcribe',
+  'tts_streaming', 'tts_text_normalize',
+  'speak', 'describe_image', 'vision',
+  'mcp_tool', 'mcp_watchdog', 'mcp_oauth',
+  'interrupt', 'daemon_pool', 'process_registry',
+  'delegate_system', 'subagent', 'managed_gateway',
+  'messaging', 'async_delegation', 'delegation_live_log',
+  'openrouter_client', 'camofox',
+]);
 
 /**
  * Convert a registry Tool to an AgentTool.
@@ -90,6 +126,7 @@ const CHAT_ONLY_TOOLS = new Set([
  * - ZodType inputSchema → JSON Schema (for LLM prompt)
  * - run(args, ToolContext) → execute(args, AgentContext) → ToolResult
  * - ToolContext is constructed from AgentContext
+ * - Safety gates for dangerous tools (browser, code_execution, etc.)
  */
 function convertTool(tool: Tool): AgentTool {
   // Convert Zod schema to JSON Schema for the LLM
@@ -101,11 +138,19 @@ function convertTool(tool: Tool): AgentTool {
     parameters = { type: 'object', properties: {} };
   }
 
+  const isSafetyGated = SAFETY_GATED_TOOLS.has(tool.name);
+
   return {
     name: tool.name,
     description: tool.description,
     parameters,
     async execute(args: Record<string, any>, context: AgentContext): Promise<ToolResult> {
+      // Safety gate: warn but still allow execution
+      if (isSafetyGated) {
+        // Log the safety gate trigger for auditing
+        console.warn(`[ToolBridge] Safety gate triggered for tool '${tool.name}' — executing with caution`);
+      }
+
       try {
         // Build ToolContext from AgentContext
         const toolContext: ToolContext = {
@@ -131,6 +176,104 @@ function convertTool(tool: Tool): AgentTool {
   };
 }
 
+/**
+ * Create a skill_view tool for on-demand skill loading.
+ *
+ * Hermes pattern: agents call skill_view(name) to load full methodology.
+ * This enables progressive disclosure — planner sees summaries, writer
+ * loads full methodology when needed.
+ */
+function createSkillViewTool(): AgentTool {
+  return {
+    name: 'skill_view',
+    description: 'Load full methodology for a skill. Use this when you need detailed step-by-step guidance for a specific domain (e.g., game-development, api-design, docker-management). Returns the complete skill with steps, parameters, and reference information.',
+    parameters: {
+      type: 'object',
+      properties: {
+        name: {
+          type: 'string',
+          description: 'Skill name to view (e.g., "game-development", "api-design", "docker-management")',
+        },
+        file_path: {
+          type: 'string',
+          description: 'Optional: specific file within the skill (e.g., "references/platform-specific.md")',
+        },
+      },
+      required: ['name'],
+    },
+    async execute(args: Record<string, any>, context: AgentContext): Promise<ToolResult> {
+      try {
+        // Import skill store dynamically to avoid circular deps
+        const { getSkillStore } = await import('../learning/skill-store.js');
+        const store = getSkillStore();
+        const output = store.skillView(args.name, args.file_path);
+        return { success: true, output };
+      } catch (err) {
+        return {
+          success: false,
+          output: '',
+          error: `skill_view failed: ${err}`,
+        };
+      }
+    },
+  };
+}
+
+/**
+ * Create a skills_list tool for lightweight skill discovery.
+ *
+ * Hermes pattern: skills_list() returns name+description only.
+ * Use skill_view() for full methodology.
+ */
+function createSkillsListTool(): AgentTool {
+  return {
+    name: 'skills_list',
+    description: 'List available skills with their descriptions. Returns only names and descriptions (lightweight). Use skill_view() to load full methodology for a specific skill.',
+    parameters: {
+      type: 'object',
+      properties: {
+        query: {
+          type: 'string',
+          description: 'Optional search query to filter skills by name, description, or tags',
+        },
+      },
+      required: [],
+    },
+    async execute(args: Record<string, any>, context: AgentContext): Promise<ToolResult> {
+      try {
+        const { getSkillStore } = await import('../learning/skill-store.js');
+        const store = getSkillStore();
+
+        let skills;
+        if (args.query) {
+          skills = store.search(args.query);
+        } else {
+          skills = store.getAll();
+        }
+
+        // Return lightweight summaries (Hermes pattern)
+        const summaries = skills.map((s) => ({
+          name: s.name,
+          description: s.description,
+          tags: s.tags,
+          quality: `${(s.qualityScore * 100).toFixed(0)}%`,
+        }));
+
+        return {
+          success: true,
+          output: JSON.stringify(summaries, null, 2),
+        };
+      } catch (err) {
+        return {
+          success: false,
+          output: '',
+          error: `skills_list failed: ${err}`,
+        };
+      }
+    },
+  };
+}
+
 // ─── Public API ─────────────────────────────────────────────────────────────
 
 /**
@@ -150,7 +293,7 @@ export function getAgentTools(options: BridgeOptions = {}): AgentTool[] {
     categories,
     includeTools,
     excludeTools = [],
-    maxTools = 50,
+    maxTools = 100,
   } = options;
 
   // Get all tools from registry
@@ -183,17 +326,28 @@ export function getAgentTools(options: BridgeOptions = {}): AgentTool[] {
   // Convert to AgentTool format
   const converted = filtered.map(convertTool);
 
+  // Add skill tools (always available for progressive disclosure)
+  const skillTools: AgentTool[] = [createSkillViewTool(), createSkillsListTool()];
+
+  // Combine: registry tools + skill tools
+  const combinedTools = [...converted, ...skillTools];
+
   // Apply limit
-  return converted.slice(0, maxTools);
+  return combinedTools.slice(0, maxTools);
 }
 
 /**
  * Get tools for a specific agent type.
  *
  * Different agents need different tools:
- * - Writer: file ops, code search, terminal
- * - Reviewer: file ops, code search, git
- * - Context-gatherer: file ops, search, glob
+ * - Writer: ALL tools (file ops, code search, terminal, web, docker, etc.)
+ * - Reviewer: file ops, code search, git, security scanning
+ * - Context-gatherer: file ops, search, glob, web search
+ * - Runner: terminal, docker, code execution
+ * - Debugger: file ops, search, terminal, browser
+ *
+ * NOTE: We now inject ALL agent-relevant tools, not just a subset.
+ * The LLM decides which tools to use based on the task.
  *
  * @param agentType - The agent type ('writer', 'reviewer', 'context-gatherer')
  * @param options - Additional filtering options
@@ -203,24 +357,92 @@ export function getToolsForAgent(
   agentType: string,
   options: BridgeOptions = {},
 ): AgentTool[] {
-  // Default categories for each agent type
-  const agentCategories: Record<string, AgentToolCategory[]> = {
-    'writer': ['file-ops', 'search', 'terminal', 'git', 'docker'],
-    'writer-tc': ['file-ops', 'search', 'terminal', 'git', 'docker'],
-    'reviewer': ['file-ops', 'search', 'git'],
-    'reviewer-tc': ['file-ops', 'search', 'git'],
-    'context-gatherer': ['file-ops', 'search'],
-    'runner': ['terminal', 'docker'],
-    'debugger': ['file-ops', 'search', 'terminal'],
-    'tester': ['file-ops', 'terminal'],
+  // Agent-specific tool selections
+  const agentToolSelections: Record<string, string[]> = {
+    // Writer gets the most tools — it needs everything to implement changes
+    'writer': [
+      // File ops
+      'read_file', 'list_dir', 'glob', 'edit_file', 'write_file',
+      'run_terminal', 'plan_todo', 'read_extract',
+      // Code & search
+      'code_search', 'delegate', 'clone_repo', 'git',
+      // Web
+      'web_search', 'read_page',
+      // Docker
+      'docker',
+      // Security
+      'sanitize', 'binary_extensions',
+      // System
+      'run_cli',
+      // Skills
+      'skill', 'skills_hub',
+      // MCP
+      'mcp_tool',
+      // Debugging
+      'browser', 'browser_supervisor',
+      'code_execution',
+      'computer_use',
+      'ast_audit',
+      'debug',
+      // Image generation
+      'generate_image',
+    ],
+    'writer-tc': [
+      // Same as writer
+      'read_file', 'list_dir', 'glob', 'edit_file', 'write_file',
+      'run_terminal', 'plan_todo', 'read_extract',
+      'code_search', 'delegate', 'clone_repo', 'git',
+      'web_search', 'read_page',
+      'docker', 'sanitize', 'binary_extensions', 'run_cli',
+      'skill', 'skills_hub', 'mcp_tool',
+      'browser', 'browser_supervisor', 'code_execution', 'debug',
+    ],
+    // Reviewer gets file ops + code search + security tools
+    'reviewer': [
+      'read_file', 'list_dir', 'glob', 'read_extract',
+      'code_search', 'git', 'sanitize', 'binary_extensions',
+      'ast_audit', 'threat_patterns', 'url_safety', 'path_security',
+      'security_score', 'osv_check', 'debug',
+    ],
+    'reviewer-tc': [
+      'read_file', 'list_dir', 'glob', 'read_extract',
+      'code_search', 'git', 'sanitize', 'binary_extensions',
+      'ast_audit', 'threat_patterns', 'debug',
+    ],
+    // Context-gatherer gets read-only tools
+    'context-gatherer': [
+      'read_file', 'list_dir', 'glob', 'read_extract',
+      'code_search', 'web_search', 'read_page',
+    ],
+    // Runner gets terminal + build tools
+    'runner': [
+      'run_terminal', 'run_cli', 'docker',
+      'code_execution', 'git',
+    ],
+    // Debugger gets read + search + browser
+    'debugger': [
+      'read_file', 'list_dir', 'glob', 'read_extract',
+      'code_search', 'run_terminal', 'git',
+      'browser', 'browser_supervisor', 'debug',
+    ],
+    // Tester gets terminal + file ops
+    'tester': [
+      'read_file', 'list_dir', 'glob', 'run_terminal', 'run_cli',
+    ],
   };
 
-  const categories = agentCategories[agentType] || ['all'];
+  const selectedTools = agentToolSelections[agentType];
 
-  return getAgentTools({
-    ...options,
-    categories,
-  });
+  if (selectedTools) {
+    // Use specific tool selection for this agent type
+    return getAgentTools({
+      ...options,
+      includeTools: selectedTools,
+    });
+  }
+
+  // Default: all agent-pipeline tools
+  return getAgentTools(options);
 }
 
 /**

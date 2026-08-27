@@ -91,9 +91,10 @@ Your job is to implement the requested changes by iteratively reading files, mak
 
 1. **Discover**: Use \`list_files\` to understand the project structure
 2. **Read first**: Always read the relevant files before making changes. Understand the existing code structure.
-3. **Propose changes**: Use \`propose_change\` to propose file modifications. For EXISTING files, include the COMPLETE updated file content. For NEW files, include the complete file.
-4. **Verify**: After proposing changes, read the modified files to confirm your changes are correct.
-5. **Test**: Run relevant tests or builds to verify your changes work.
+3. **Load methodology**: If the task involves a specific domain (game, API, Docker, etc.), use \`skill_view\` to load the full methodology for that domain.
+4. **Propose changes**: Use \`propose_change\` to propose file modifications. For EXISTING files, include the COMPLETE updated file content. For NEW files, include the complete file.
+5. **Verify**: After proposing changes, read the modified files to confirm your changes are correct.
+6. **Test**: Run relevant tests or builds to verify your changes work.
 
 ## Rules
 
@@ -104,7 +105,8 @@ Your job is to implement the requested changes by iteratively reading files, mak
 - Write clean, well-documented code
 - If you encounter errors, read the error message and fix the issue
 - NEVER propose changes to files you haven't read first
-- For modifications, always include the COMPLETE file content, not a diff`;
+- For modifications, always include the COMPLETE file content, not a diff
+- For domain-specific tasks, use \`skill_view\` to load the full methodology before implementing`;
 
     // Inject project-specific conventions
     const conventions: string[] = [];

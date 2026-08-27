@@ -34,19 +34,20 @@ describe('ToolBridge', () => {
       }
     });
 
-    it('excludes chat-only tools', () => {
+    it('excludes only pure UX tools', () => {
       const tools = getAgentTools();
       const toolNames = tools.map((t) => t.name);
 
-      // These should never be in the agent pipeline
+      // Only truly UX-only tools are excluded
       expect(toolNames).not.toContain('ask_user');
       expect(toolNames).not.toContain('suggest_followups');
-      expect(toolNames).not.toContain('gateway_send');
-      expect(toolNames).not.toContain('discord');
-      expect(toolNames).not.toContain('homeassistant');
-      expect(toolNames).not.toContain('kanban');
-      expect(toolNames).not.toContain('voice_mode');
-      expect(toolNames).not.toContain('generate_image');
+
+      // These are NOW available (previously chat-only, now wired)
+      expect(toolNames).toContain('discord');
+      expect(toolNames).toContain('homeassistant');
+      expect(toolNames).toContain('kanban');
+      expect(toolNames).toContain('voice_mode');
+      expect(toolNames).toContain('generate_image');
     });
 
     it('includes agent-relevant tools', () => {
@@ -81,8 +82,8 @@ describe('ToolBridge', () => {
       const toolNames = tools.map((t) => t.name);
       expect(toolNames).toContain('code_search');
       expect(toolNames).toContain('git');
-      // Should not include other tools when specific ones are requested
-      expect(tools.length).toBe(2);
+      // Should not include other registry tools, but skill_view and skills_list are always added
+      expect(tools.length).toBe(4); // 2 requested + 2 skill tools
     });
   });
 
@@ -137,12 +138,15 @@ describe('ToolBridge', () => {
       expect(isAgentTool('web_search')).toBe(true);
     });
 
-    it('returns false for chat-only tools', () => {
+    it('returns false only for pure UX tools', () => {
       expect(isAgentTool('ask_user')).toBe(false);
       expect(isAgentTool('suggest_followups')).toBe(false);
-      expect(isAgentTool('gateway_send')).toBe(false);
-      expect(isAgentTool('discord')).toBe(false);
-      expect(isAgentTool('kanban')).toBe(false);
+
+      // These are NOW available (previously dead, now wired)
+      expect(isAgentTool('discord')).toBe(true);
+      expect(isAgentTool('kanban')).toBe(true);
+      expect(isAgentTool('voice_mode')).toBe(true);
+      expect(isAgentTool('generate_image')).toBe(true);
     });
   });
 
@@ -151,11 +155,12 @@ describe('ToolBridge', () => {
       const summary = getToolBridgeSummary();
       expect(summary.totalRegistryTools).toBeGreaterThan(0);
       expect(summary.agentPipelineTools).toBeGreaterThan(0);
-      expect(summary.chatOnlyTools).toBeGreaterThan(0);
+      // Only 3 tools are chat-only now (ask_user, suggest_followups, verify_requirement)
+      expect(summary.chatOnlyTools).toBe(3);
       expect(summary.excludedTools).toBeGreaterThanOrEqual(0);
     });
 
-    it('agent pipeline tools + chat only tools <= total', () => {
+    it('agent pipeline tools + chat only tools + excluded = total', () => {
       const summary = getToolBridgeSummary();
       expect(
         summary.agentPipelineTools + summary.chatOnlyTools + summary.excludedTools,
@@ -166,20 +171,24 @@ describe('ToolBridge', () => {
   describe('tool conversion', () => {
     it('converted tools have JSON Schema parameters', () => {
       const tools = getAgentTools({ includeTools: ['code_search'] });
-      expect(tools.length).toBe(1);
+      // +2 because skill_view and skills_list are always added
+      expect(tools.length).toBe(3);
 
-      const tool = tools[0];
-      expect(tool.parameters.type).toBe('object');
-      expect(tool.parameters.properties).toBeDefined();
+      const codeSearchTool = tools.find((t) => t.name === 'code_search');
+      expect(codeSearchTool).toBeDefined();
+      expect(codeSearchTool!.parameters.type).toBe('object');
+      expect(codeSearchTool!.parameters.properties).toBeDefined();
     });
 
     it('converted tools can be executed', async () => {
       const tools = getAgentTools({ includeTools: ['list_dir'] });
-      expect(tools.length).toBe(1);
+      // +2 because skill_view and skills_list are always added
+      expect(tools.length).toBe(3);
 
-      const tool = tools[0];
+      const tool = tools.find((t) => t.name === 'list_dir');
+      expect(tool).toBeDefined();
       // Execute with a real directory
-      const result = await tool.execute(
+      const result = await tool!.execute(
         { path: '.' },
         {
           goal: 'test',
