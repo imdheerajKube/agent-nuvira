@@ -22,7 +22,7 @@ kubernetes k8s cluster pod deployment service ingress helm
 
 ## Steps
 
-### Step 1: [context-gatherer] — Analyze cluster and workload requirements
+### Step 1: [analyst] — Analyze cluster and workload requirements
 
 ```bash
 # Check cluster status
@@ -44,7 +44,7 @@ kubectl get pods --all-namespaces | grep -v kube-system
 - What storage? (PV/PVC, StorageClass, local vs network)
 - What security? (RBAC, PodSecurityPolicy, NetworkPolicy)
 
-### Step 2: [writer] — Create Kubernetes manifests
+### Step 2: [analyst] — Create Kubernetes manifests
 
 **Deployment with best practices:**
 ```yaml
@@ -184,7 +184,7 @@ spec:
           averageUtilization: 80
 ```
 
-### Step 3: [runner] — Deploy and configure
+### Step 3: [analyst] — Deploy and configure
 
 ```bash
 # Apply manifests
@@ -207,7 +207,7 @@ curl http://localhost:8080/healthz
 kubectl logs -f deployment/myapp -n production --tail=100
 ```
 
-### Step 4: [reviewer] — Verify cluster health
+### Step 4: [analyst] — Verify cluster health
 
 ```bash
 # Check all resources

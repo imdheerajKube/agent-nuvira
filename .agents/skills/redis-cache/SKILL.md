@@ -22,7 +22,7 @@ redis cache session store rate limit pub sub queue
 
 ## Steps
 
-### Step 1: [context-gatherer] — Analyze caching requirements
+### Step 1: [analyst] — Analyze caching requirements
 
 Map the caching needs:
 - **Read/write ratio**: High-read workloads benefit most from caching
@@ -40,7 +40,7 @@ redis-cli INFO memory | grep used_memory_human
 redis-cli INFO clients
 ```
 
-### Step 2: [writer] — Implement Redis connection and caching layer
+### Step 2: [analyst] — Implement Redis connection and caching layer
 
 Choose strategy based on requirements:
 
@@ -98,7 +98,7 @@ def is_rate_limited(user_id, max_requests=100, window=60):
     return results[2] > max_requests
 ```
 
-### Step 3: [runner] — Configure Redis for production
+### Step 3: [analyst] — Configure Redis for production
 
 ```bash
 # Redis config for production
@@ -133,7 +133,7 @@ redis-cli CONFIG GET maxmemory
 redis-cli CONFIG GET maxmemory-policy
 ```
 
-### Step 4: [reviewer] — Verify caching works correctly
+### Step 4: [analyst] — Verify caching works correctly
 
 ```bash
 # Test cache hit/miss

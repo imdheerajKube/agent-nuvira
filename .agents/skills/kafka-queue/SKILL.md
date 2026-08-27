@@ -22,7 +22,7 @@ kafka message queue event streaming async processing producer consumer
 
 ## Steps
 
-### Step 1: [context-gatherer] — Analyze messaging requirements
+### Step 1: [analyst] — Analyze messaging requirements
 
 ```bash
 # Check Kafka availability
@@ -40,7 +40,7 @@ kafka-topics --bootstrap-server localhost:9092 --describe 2>/dev/null | head -20
 - What ordering? (per-partition, global)
 - What retention? (hours, days, forever)
 
-### Step 2: [writer] — Implement Kafka producers and consumers
+### Step 2: [analyst] — Implement Kafka producers and consumers
 
 **Producer:**
 ```python
@@ -134,7 +134,7 @@ consumer = EventConsumer('my-consumer-group')
 consumer.consume(['user-events'], handle_event)
 ```
 
-### Step 3: [runner] — Deploy and test
+### Step 3: [analyst] — Deploy and test
 
 ```bash
 # Create topics
@@ -168,7 +168,7 @@ kafka-consumer-groups --bootstrap-server localhost:9092 \
   --describe --group my-consumer-group
 ```
 
-### Step 4: [reviewer] — Verify Kafka works
+### Step 4: [analyst] — Verify Kafka works
 
 ```bash
 # Check topic stats

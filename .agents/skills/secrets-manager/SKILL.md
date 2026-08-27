@@ -22,7 +22,7 @@ secrets manager vault AWS secrets manager credential rotation encryption key man
 
 ## Steps
 
-### Step 1: [context-gatherer] — Analyze secrets requirements
+### Step 1: [analyst] — Analyze secrets requirements
 
 ```bash
 # Check existing secrets
@@ -42,7 +42,7 @@ find . -name ".env*" -exec ls -la {} \;
 - What compliance? (SOC2, HIPAA, PCI-DSS)
 - What encryption? (AES-256, KMS, HSM)
 
-### Step 2: [writer] — Implement secrets management
+### Step 2: [analyst] — Implement secrets management
 
 **AWS Secrets Manager:**
 ```python
@@ -115,7 +115,7 @@ vault write database/roles/myapp \
   max_ttl="24h"
 ```
 
-### Step 3: [runner] — Deploy and configure
+### Step 3: [analyst] — Deploy and configure
 
 ```bash
 # Store secrets in AWS
@@ -140,7 +140,7 @@ print(sm.get_secret('prod/myapp/database'))
 "
 ```
 
-### Step 4: [reviewer] — Verify secrets management
+### Step 4: [analyst] — Verify secrets management
 
 ```bash
 # Check secret access logs

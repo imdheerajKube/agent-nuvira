@@ -22,7 +22,7 @@ terraform infrastructure iac provision cloud resource module state
 
 ## Steps
 
-### Step 1: [context-gatherer] — Map infrastructure requirements
+### Step 1: [analyst] — Map infrastructure requirements
 
 ```bash
 # Check Terraform version
@@ -41,7 +41,7 @@ terraform state list 2>/dev/null || echo "No existing state"
 - What state backend? (S3+DynamoDB, GCS, Terraform Cloud)
 - What compliance requirements? (encryption, tagging, logging)
 
-### Step 2: [writer] — Write Terraform configurations
+### Step 2: [analyst] — Write Terraform configurations
 
 **Project structure:**
 ```
@@ -120,7 +120,7 @@ terraform {
 }
 ```
 
-### Step 3: [runner] — Apply infrastructure
+### Step 3: [analyst] — Apply infrastructure
 
 ```bash
 # Initialize
@@ -153,7 +153,7 @@ terraform output
   run: terraform apply -auto-approve tfplan
 ```
 
-### Step 4: [reviewer] — Verify infrastructure
+### Step 4: [analyst] — Verify infrastructure
 
 ```bash
 # Check for drift

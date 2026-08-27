@@ -22,7 +22,7 @@ DNS domain records MX SPF DKIM DMARC A CNAME TXT subdomain
 
 ## Steps
 
-### Step 1: [context-gatherer] — Analyze DNS requirements
+### Step 1: [analyst] — Analyze DNS requirements
 
 ```bash
 # Check current DNS
@@ -44,7 +44,7 @@ dig example.com TXT | grep -E "spf|dkim|dmarc"
 - What email auth? (SPF, DKIM, DMARC)
 - What TTL values? (300s for dynamic, 3600s for stable)
 
-### Step 2: [writer] — Create DNS records
+### Step 2: [analyst] — Create DNS records
 
 **Zone file configuration:**
 ```dns
@@ -112,7 +112,7 @@ curl -X POST "https://api.cloudflare.com/client/v4/zones/ZONE_ID/dns_records" \
   }'
 ```
 
-### Step 3: [runner] — Apply DNS configuration
+### Step 3: [analyst] — Apply DNS configuration
 
 ```bash
 # Verify DNS propagation
@@ -133,7 +133,7 @@ dig default._domainkey.example.com TXT +short
 # Send test email and check headers
 ```
 
-### Step 4: [reviewer] — Verify DNS works
+### Step 4: [analyst] — Verify DNS works
 
 ```bash
 # Check all records

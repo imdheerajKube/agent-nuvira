@@ -22,7 +22,7 @@ web scraping crawl extract data beautifulsoup playwright puppeteer selenium
 
 ## Steps
 
-### Step 1: [context-gatherer] — Analyze scraping requirements
+### Step 1: [analyst] — Analyze scraping requirements
 
 ```bash
 # Check target website
@@ -42,7 +42,7 @@ node -e "require('puppeteer')" 2>/dev/null && echo "puppeteer installed"
 - What rate limits? (respect robots.txt, add delays)
 - What output format? (JSON, CSV, database)
 
-### Step 2: [writer] — Build scraper
+### Step 2: [analyst] — Build scraper
 
 **Playwright scraper:**
 ```python
@@ -154,7 +154,7 @@ selectors = {'title': 'h1', 'content': '.article-body'}
 scraper.scrape_to_csv(urls, selectors, 'output.csv')
 ```
 
-### Step 3: [runner] — Execute scraper
+### Step 3: [analyst] — Execute scraper
 
 ```bash
 # Run Playwright scraper
@@ -177,7 +177,7 @@ print(f'Successful: {len([d for d in data if \"error\" not in d])}')
 "
 ```
 
-### Step 4: [reviewer] — Verify scraper works
+### Step 4: [analyst] — Verify scraper works
 
 ```bash
 # Check output file

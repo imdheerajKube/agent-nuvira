@@ -22,7 +22,7 @@ data processing pandas numpy polars CSV JSON transform clean aggregate ETL
 
 ## Steps
 
-### Step 1: [context-gatherer] — Analyze data requirements
+### Step 1: [analyst] — Analyze data requirements
 
 ```bash
 # Check data files
@@ -43,7 +43,7 @@ du -sh data/*
 - What output format? (CSV, JSON, database)
 - What data quality? (missing values, duplicates, outliers)
 
-### Step 2: [writer] — Create processing pipeline
+### Step 2: [analyst] — Create processing pipeline
 
 ```python
 # src/processing/pipeline.py
@@ -159,7 +159,7 @@ def run_pipeline(input_path: str, output_path: str):
     return df
 ```
 
-### Step 3: [runner] — Execute pipeline
+### Step 3: [analyst] — Execute pipeline
 
 ```bash
 # Run processing pipeline
@@ -182,7 +182,7 @@ print(f'Duplicates: {df.duplicated().sum()}')
 "
 ```
 
-### Step 4: [reviewer] — Verify data quality
+### Step 4: [analyst] — Verify data quality
 
 ```bash
 # Check output file

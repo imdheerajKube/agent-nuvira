@@ -22,7 +22,7 @@ load balancer nginx haproxy health check failover session persistence round-robi
 
 ## Steps
 
-### Step 1: [context-gatherer] — Analyze load balancing requirements
+### Step 1: [analyst] — Analyze load balancing requirements
 
 ```bash
 # Check backend servers
@@ -40,7 +40,7 @@ ss -s
 - What health checks? (HTTP, TCP, custom)
 - What session needs? (sticky sessions, stateless)
 
-### Step 2: [writer] — Configure load balancer
+### Step 2: [analyst] — Configure load balancer
 
 **Nginx load balancer:**
 ```nginx
@@ -118,7 +118,7 @@ backend backend_servers
     server backend3 10.0.0.3:8080 check inter 5s fall 3 rise 2 backup
 ```
 
-### Step 3: [runner] — Deploy and test
+### Step 3: [analyst] — Deploy and test
 
 ```bash
 # Test load balancing
@@ -139,7 +139,7 @@ curl -s http://example.com/whoami  # Should route to backend2/3
 curl -s http://localhost/nginx_status
 ```
 
-### Step 4: [reviewer] — Verify load balancing works
+### Step 4: [analyst] — Verify load balancing works
 
 ```bash
 # Verify traffic distribution

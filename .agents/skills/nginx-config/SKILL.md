@@ -22,7 +22,7 @@ nginx reverse proxy load balancer web server ssl tls
 
 ## Steps
 
-### Step 1: [context-gatherer] — Analyze serving requirements
+### Step 1: [analyst] — Analyze serving requirements
 
 ```bash
 # Check Nginx version and modules
@@ -46,7 +46,7 @@ ss -tlnp | grep -E ":(80|443|8080)"
 - What rate limits? (per-IP, per-endpoint, global)
 - What caching? (proxy cache, microcaching, browser cache)
 
-### Step 2: [writer] — Write Nginx configuration
+### Step 2: [analyst] — Write Nginx configuration
 
 **Reverse proxy with SSL:**
 ```nginx
@@ -166,7 +166,7 @@ server {
 }
 ```
 
-### Step 3: [runner] — Apply and test configuration
+### Step 3: [analyst] — Apply and test configuration
 
 ```bash
 # Test configuration
@@ -191,7 +191,7 @@ tail -f /var/log/nginx/error.log
 curl http://localhost/nginx_status
 ```
 
-### Step 4: [reviewer] — Verify configuration works
+### Step 4: [analyst] — Verify configuration works
 
 ```bash
 # Test SSL grade (should be A+)

@@ -22,7 +22,7 @@ logging structured json log aggregation elk loki Winston pino
 
 ## Steps
 
-### Step 1: [context-gatherer] — Analyze logging requirements
+### Step 1: [analyst] — Analyze logging requirements
 
 ```bash
 # Check existing logging
@@ -40,7 +40,7 @@ docker ps | grep -E "elk|loki|fluentd" 2>/dev/null
 - What transport? (stdout, file, ELK, Loki)
 - What compliance? (audit logging, PII masking)
 
-### Step 2: [writer] — Implement structured logging
+### Step 2: [analyst] — Implement structured logging
 
 **Pino logger setup:**
 ```typescript
@@ -109,7 +109,7 @@ export function logError(err: Error, context: Record<string, unknown> = {}) {
 }
 ```
 
-### Step 3: [runner] — Configure log transport
+### Step 3: [analyst] — Configure log transport
 
 ```bash
 # Development: stdout with pretty printing
@@ -142,7 +142,7 @@ cat > /etc/fluentd/conf.d/app.conf << 'EOF'
 EOF
 ```
 
-### Step 4: [reviewer] — Verify logging works
+### Step 4: [analyst] — Verify logging works
 
 ```bash
 # Verify structured output

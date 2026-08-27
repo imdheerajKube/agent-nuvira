@@ -22,7 +22,7 @@ prometheus monitoring metrics alert grafana dashboard promql
 
 ## Steps
 
-### Step 1: [context-gatherer] — Define monitoring requirements
+### Step 1: [analyst] — Define monitoring requirements
 
 ```bash
 # Check if Prometheus is already running
@@ -40,7 +40,7 @@ curl -s http://localhost:3000/api/health 2>/dev/null
 - What alert channels? (Slack, PagerDuty, email)
 - What dashboards needed? (overview, service-specific, infrastructure)
 
-### Step 2: [writer] — Configure Prometheus and alerting
+### Step 2: [analyst] — Configure Prometheus and alerting
 
 **Prometheus config:**
 ```yaml
@@ -177,7 +177,7 @@ inhibit_rules:
     equal: ['alertname', 'instance']
 ```
 
-### Step 3: [runner] — Deploy monitoring stack
+### Step 3: [analyst] — Deploy monitoring stack
 
 ```bash
 # Deploy with Docker Compose
@@ -195,7 +195,7 @@ curl -X POST http://localhost:3000/api/dashboards/db \
   -d @grafana-dashboard.json
 ```
 
-### Step 4: [reviewer] — Verify monitoring works
+### Step 4: [analyst] — Verify monitoring works
 
 ```bash
 # Verify metrics are being collected
