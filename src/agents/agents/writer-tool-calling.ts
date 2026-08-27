@@ -22,6 +22,7 @@ import type { McpToolEntry } from './mcp-agent.js';
 import { getMCPManager } from '../../mcp/manager.js';
 import { assessProject, type ProjectAssessment } from '../prompt-assembly.js';
 import { referenceDocsFor } from '../reference-docs.js';
+import { getToolsForAgent } from '../tool-bridge.js';
 
 export class WriterToolCallingAgent extends ToolCallingAgent {
   readonly name = 'Writer';
@@ -33,34 +34,44 @@ export class WriterToolCallingAgent extends ToolCallingAgent {
    * call external services (filesystem, databases, APIs) directly.
    */
   protected getTools(context: AgentContext): AgentTool[] {
+    // Start with the base tool-calling agent tools (read_file, list_files, propose_change, run_command)
     const builtInTools = super.getTools(context);
+
+    // Add registry tools via the bridge (code_search, edit_file, write_file, git, web_search, etc.)
+    const registryTools = getToolsForAgent('writer', { maxTools: 30 });
+
+    // Add MCP tools from connected servers
     const mcpEntries = context.metadata?.mcpTools as McpToolEntry[] | undefined;
+    const mcpTools: AgentTool[] = mcpEntries
+      ? mcpEntries.map((entry) => ({
+          name: `mcp_${entry.tool.name}`,
+          description: `[MCP:${entry.server}] ${entry.tool.description || entry.tool.name}`,
+          parameters: entry.tool.inputSchema || { type: 'object', properties: {} },
+          async execute(args: Record<string, any>, _ctx: AgentContext): Promise<ToolResult> {
+            try {
+              const manager = getMCPManager();
+              const result = await manager.callTool(entry.tool.name, args);
+              if (result === null || result === undefined) {
+                return { success: false, output: '', error: `MCP tool '${entry.tool.name}' returned null` };
+              }
+              const output = typeof result === 'string' ? result : JSON.stringify(result, null, 2);
+              return { success: true, output: output.slice(0, 50_000) };
+            } catch (err) {
+              return { success: false, output: '', error: `MCP tool error: ${err}` };
+            }
+          },
+        }))
+      : [];
 
-    if (!mcpEntries || mcpEntries.length === 0) {
-      return builtInTools;
-    }
+    // Deduplicate by name (built-in tools take precedence over registry tools)
+    const seen = new Set(builtInTools.map((t) => t.name));
+    const uniqueRegistryTools = registryTools.filter((t) => {
+      if (seen.has(t.name)) return false;
+      seen.add(t.name);
+      return true;
+    });
 
-    // Convert MCP tools to AgentTool format
-    const mcpTools: AgentTool[] = mcpEntries.map((entry) => ({
-      name: `mcp_${entry.tool.name}`,
-      description: `[MCP:${entry.server}] ${entry.tool.description || entry.tool.name}`,
-      parameters: entry.tool.inputSchema || { type: 'object', properties: {} },
-      async execute(args: Record<string, any>, _ctx: AgentContext): Promise<ToolResult> {
-        try {
-          const manager = getMCPManager();
-          const result = await manager.callTool(entry.tool.name, args);
-          if (result === null || result === undefined) {
-            return { success: false, output: '', error: `MCP tool '${entry.tool.name}' returned null` };
-          }
-          const output = typeof result === 'string' ? result : JSON.stringify(result, null, 2);
-          return { success: true, output: output.slice(0, 50_000) };
-        } catch (err) {
-          return { success: false, output: '', error: `MCP tool error: ${err}` };
-        }
-      },
-    }));
-
-    return [...builtInTools, ...mcpTools];
+    return [...builtInTools, ...uniqueRegistryTools, ...mcpTools];
   }
 
   protected buildSystemPrompt(context: AgentContext): string {
