@@ -1,34 +1,60 @@
 # Prompt Engineering Reference Guide
 
 ## Overview
-This reference provides detailed guidance for the prompt-engineering skill.
+Design, test, and optimize prompts for LLMs. Covers chain-of-thought, few-shot, system prompts, prompt chaining, evals, and A/B testing. Use when the goal is to improve LLM output quality or build prompt-driven features.
 
-## Key Concepts
-- Best practices and patterns for prompt-engineering
-- Common use cases and scenarios
-- Implementation guidelines
+## # prompt-engineering
 
-## Detailed Sections
-### Getting Started
-- Prerequisites and setup
-- Basic configuration
-- Initial implementation
+Design, test, and optimize prompts for LLMs. Covers chain-of-thought, few-shot, system prompts, prompt chaining, evals, and A/B testing. Use when the goal is to improve LLM output quality or build prompt-driven features.
 
-### Advanced Topics
-- Performance optimization
-- Security considerations
-- Scalability patterns
+## Goal pattern
 
-## Examples
-Refer to the SKILL.md file for step-by-step instructions and detailed examples.
+prompt engineering chain-of-thought few-shot system prompt optimization eval A/B testing LLM prompt design
+
+## Steps
+
+0. [context-gatherer] Understand the task: what LLM is being used? What is the desired output format? What are the failure modes of the current prompt? What constraints exist (latency, cost, token limits)?
+
+1. [planner] Design the prompt strategy:
+1. Choose technique: zero-shot, few-shot, chain-of-thought, ReAct, tree-of-thoughts
+2. Structure: system prompt → context → instructions → examples → output format
+3. Add guardrails: "if not sure, say I don't know", format validation, output schemas
+4. Plan evaluation: define metrics (accuracy, relevance, format compliance, hallucination rate)
+5. Plan iteration: A/B test variants, track prompt versions (after: 'step-0')
+
+2. [runner] Implement and test:
+1. Write the initial prompt with clear instructions
+2. Add few-shot examples for consistency
+3. Test with 10-20 diverse inputs
+4. Measure output quality against criteria
+5. Iterate: identify failure patterns, adjust prompt, re-test
+6. Version the prompt and log results (after: 'step-1')
+
+3. [reviewer] Evaluate the final prompt: run against the full test set, report accuracy/quality metrics, document edge cases, and provide the optimized prompt with version history. (after: 'step-2')
+
+## Best Practices
+
+- Follow the skill's methodology step by step
+- Verify each step before proceeding to the next
+- Use the appropriate tools for each task
+- Document any deviations from the standard approach
+
+## Common Patterns
+
+- Start with context gathering to understand the current state
+- Plan the implementation before writing code
+- Test changes before committing
+- Review for security and performance implications
 
 ## Troubleshooting
-- Check logs for error messages
-- Verify configuration settings
-- Test with minimal setup first
-- Consult official documentation
+
+- If the skill fails, check the prerequisites first
+- Verify environment variables are set correctly
+- Check for conflicting configurations
+- Review logs for detailed error messages
 
 ## Further Reading
-- Official documentation
-- Community resources
-- Related skills in the registry
+
+- Refer to the main SKILL.md for complete methodology
+- Check official documentation for the specific technology
+- Review related skills in the registry for complementary approaches

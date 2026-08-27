@@ -1,34 +1,55 @@
 # Rate Limit Reference Guide
 
 ## Overview
-This reference provides detailed guidance for the rate-limit skill.
+Implement rate limiting: per-IP, per-user, or per-API-key limits with sliding window, token bucket, or fixed window algorithms. Use when the goal asks to add rate limiting, throttle requests, or prevent abuse.
 
-## Key Concepts
-- Best practices and patterns for rate-limit
-- Common use cases and scenarios
-- Implementation guidelines
+## # rate-limit
 
-## Detailed Sections
-### Getting Started
-- Prerequisites and setup
-- Basic configuration
-- Initial implementation
+Implement rate limiting: per-IP, per-user, or per-API-key limits with sliding window, token bucket, or fixed window algorithms. Use when the goal asks to add rate limiting, throttle requests, or prevent abuse.
 
-### Advanced Topics
-- Performance optimization
-- Security considerations
-- Scalability patterns
+## Goal pattern
 
-## Examples
-Refer to the SKILL.md file for step-by-step instructions and detailed examples.
+rate limit throttle abuse prevention api protection sliding window token bucket
+
+## Parameters
+
+- algorithm (choice [default: auto]): Algorithm
+
+## Steps
+
+1. [analyst] Define rate limit policies: limits per endpoint, per user/IP, window size, and response headers (X-RateLimit-*).
+
+2. [analyst] Choose the algorithm: sliding window (Redis), token bucket, or fixed window. Pick the storage backend. (after: step-0)
+
+3. [analyst] Implement middleware: Express/Fastify middleware that checks limits, increments counters, and returns 429 with Retry-After. (after: step-1)
+
+4. [analyst] Add bypass rules: whitelist admin IPs, exempt health checks, and support dynamic limits per tier. (after: step-2)
+
+5. [analyst] Test: verify limits trigger correctly, check 429 responses, measure overhead, and test distributed scenarios. (after: step-3)
+
+## Best Practices
+
+- Follow the skill's methodology step by step
+- Verify each step before proceeding to the next
+- Use the appropriate tools for each task
+- Document any deviations from the standard approach
+
+## Common Patterns
+
+- Start with context gathering to understand the current state
+- Plan the implementation before writing code
+- Test changes before committing
+- Review for security and performance implications
 
 ## Troubleshooting
-- Check logs for error messages
-- Verify configuration settings
-- Test with minimal setup first
-- Consult official documentation
+
+- If the skill fails, check the prerequisites first
+- Verify environment variables are set correctly
+- Check for conflicting configurations
+- Review logs for detailed error messages
 
 ## Further Reading
-- Official documentation
-- Community resources
-- Related skills in the registry
+
+- Refer to the main SKILL.md for complete methodology
+- Check official documentation for the specific technology
+- Review related skills in the registry for complementary approaches

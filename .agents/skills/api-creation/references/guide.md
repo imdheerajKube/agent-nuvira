@@ -1,34 +1,89 @@
 # Api Creation Reference Guide
 
 ## Overview
-This reference provides detailed guidance for the api-creation skill.
+Create a complete API: design endpoints, implement routes, add auth/rate-limiting, write tests, generate OpenAPI docs, and deploy. Use when the goal asks to create an API, build a backend service, or scaffold an HTTP server with routes.
 
-## Key Concepts
-- Best practices and patterns for api-creation
-- Common use cases and scenarios
-- Implementation guidelines
+## # api-creation
 
-## Detailed Sections
-### Getting Started
-- Prerequisites and setup
-- Basic configuration
-- Initial implementation
+Create a complete API: design endpoints, implement routes, add auth/rate-limiting, write tests, generate OpenAPI docs, and deploy. Use when the goal asks to create an API, build a backend service, or scaffold an HTTP server with routes.
 
-### Advanced Topics
-- Performance optimization
-- Security considerations
-- Scalability patterns
+## Goal pattern
 
-## Examples
-Refer to the SKILL.md file for step-by-step instructions and detailed examples.
+API create build backend service REST GraphQL HTTP server routes endpoints implement deploy
+
+## Parameters
+
+- framework (choice [default: auto]): HTTP framework — express, fastify, hono, flask, fastapi, spring, auto
+- database (choice [default: auto]): Database — postgresql, mongodb, sqlite, mysql, in-memory, auto
+- auth (choice [default: jwt]): Authentication method — jwt, api-key, oauth2, session, none
+
+## Steps
+
+1. [context-gatherer] Analyze the project and API requirements:
+   - Read package.json / pyproject.toml for framework (Express, Fastify, Hono, Flask, FastAPI, Spring Boot)
+   - Identify resources (nouns → endpoints) and operations (CRUD)
+   - Note auth requirements (API key, JWT, OAuth2)
+   - Note database (PostgreSQL, MongoDB, SQLite, in-memory)
+   - Note deployment target (local, Docker, cloud)
+   Produce: resource list, framework choice, auth strategy, and database plan.
+
+2. [writer] Implement the API:
+   - Set up the project structure (routes/, models/, middleware/, utils/)
+   - Implement route handlers for each resource
+   - Add input validation (Joi, Zod, Pydantic, express-validator)
+   - Add error handling middleware (consistent error response format)
+   - Add auth middleware (JWT verification, API key check)
+   - Add rate limiting (express-rate-limit, slowapi)
+   - Wire everything into the app entry point
+   Follow REST conventions: proper HTTP methods, status codes, and response shapes.
+
+3. [writer] Generate OpenAPI/Swagger documentation:
+   - Create openapi.yaml or openapi.json with all endpoints
+   - Define request/response schemas
+   - Add authentication definitions
+   - Add example requests and responses
+   - Set up Swagger UI (if web framework supports it)
+   The spec is the contract — implementation must match it exactly.
+
+4. [tester] Write and run integration tests:
+   - Test each endpoint: happy path, error paths (400, 401, 404, 500)
+   - Test auth: unauthenticated → 401, unauthorized → 403
+   - Test validation: invalid input → 400 with error details
+   - Test edge cases: empty body, missing fields, duplicate resources
+   - Run the full test suite: `npm test` or `pytest`
+   All tests must pass before proceeding.
+
+5. [runner] Set up deployment:
+   - Create Dockerfile (multi-stage build)
+   - Create docker-compose.yml (if database needed)
+   - Add health check endpoint (GET /health)
+   - Add environment variable configuration
+   - Create a README with API documentation and usage examples
+   - Verify the app starts and responds to requests
+
+## Best Practices
+
+- Follow the skill's methodology step by step
+- Verify each step before proceeding to the next
+- Use the appropriate tools for each task
+- Document any deviations from the standard approach
+
+## Common Patterns
+
+- Start with context gathering to understand the current state
+- Plan the implementation before writing code
+- Test changes before committing
+- Review for security and performance implications
 
 ## Troubleshooting
-- Check logs for error messages
-- Verify configuration settings
-- Test with minimal setup first
-- Consult official documentation
+
+- If the skill fails, check the prerequisites first
+- Verify environment variables are set correctly
+- Check for conflicting configurations
+- Review logs for detailed error messages
 
 ## Further Reading
-- Official documentation
-- Community resources
-- Related skills in the registry
+
+- Refer to the main SKILL.md for complete methodology
+- Check official documentation for the specific technology
+- Review related skills in the registry for complementary approaches
