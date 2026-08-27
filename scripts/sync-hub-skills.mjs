@@ -20,7 +20,8 @@ import { dirname, join, resolve } from 'node:path';
 const here = dirname(fileURLToPath(import.meta.url));
 const outDir = resolve(process.argv[2] ?? join(here, '..', '.agents', 'skills'));
 
-const { BUNDLED_SKILLS } = await import('../dist/skills/bundled-skills.js');
+const { ALL_BUNDLED_SKILLS } = await import('../dist/skills/bundled-skills.js');
+const BUNDLED_SKILLS = ALL_BUNDLED_SKILLS;
 const { writeHubSkills } = await import('../dist/learning/hub-export.js');
 
 const written = writeHubSkills(BUNDLED_SKILLS, outDir);

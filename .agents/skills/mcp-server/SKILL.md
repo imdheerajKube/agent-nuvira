@@ -12,24 +12,28 @@ Build a Model Context Protocol (MCP) server: expose tools, resources, and prompt
 
 MCP model context protocol server tools resources prompts stdio HTTP transport
 
+## Parameters
+
+(none)
+
 ## Steps
 
-0. [context-gatherer] Map the server: what tools to expose? What resources (files, database, API)? What prompts? What transport (stdio for local, HTTP for remote)? Authentication needed?
+1. [context-gatherer] Map the server: what tools to expose? What resources (files, database, API)? What prompts? What transport (stdio for local, HTTP for remote)? Authentication needed?
 
-1. [planner] Design the MCP server:
+2. [planner] Design the MCP server:
 1. Tools: define function schemas (name, description, input parameters)
 2. Resources: expose data via resource URIs (file://, db://, api://)
 3. Prompts: define reusable prompt templates
 4. Transport: stdio (child process) or HTTP (SSE/streamable HTTP)
 5. Authentication: API key or OAuth for remote servers
-6. Error handling: structured error responses (after: 'step-0')
+6. Error handling: structured error responses (after: step-0)
 
-2. [runner] Implement the MCP server:
+3. [runner] Implement the MCP server:
 1. Set up MCP SDK (TypeScript or Python)
 2. Define tool handlers with input validation
 3. Create resource providers
 4. Add prompt templates
 5. Configure transport
-6. Test with MCP inspector (after: 'step-1')
+6. Test with MCP inspector (after: step-1)
 
-3. [reviewer] Verify: connect with MCP client, list tools, call tools, list resources, read resources, test error handling. (after: 'step-2')
+4. [reviewer] Verify: connect with MCP client, list tools, call tools, list resources, read resources, test error handling. (after: step-2)

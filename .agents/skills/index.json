@@ -1,6 +1,6 @@
 {
   "version": 1,
-  "updatedAt": "2026-08-22T12:34:15.311Z",
+  "updatedAt": "2026-08-27T12:51:59.023Z",
   "skills": [
     {
       "name": "website-deploy",
@@ -21,7 +21,7 @@
         "publish"
       ],
       "source": "agent-nuvira/bundled",
-      "updatedAt": "2026-08-22T12:34:15.311Z"
+      "updatedAt": "2026-08-27T12:51:59.023Z"
     },
     {
       "name": "code-assessment",
@@ -37,7 +37,7 @@
         "recommendations"
       ],
       "source": "agent-nuvira/bundled",
-      "updatedAt": "2026-08-22T12:34:15.311Z"
+      "updatedAt": "2026-08-27T12:51:59.023Z"
     },
     {
       "name": "technical-roadmap",
@@ -53,11 +53,11 @@
         "strategy"
       ],
       "source": "agent-nuvira/bundled",
-      "updatedAt": "2026-08-22T12:34:15.311Z"
+      "updatedAt": "2026-08-27T12:51:59.023Z"
     },
     {
       "name": "plan-create-track",
-      "description": "Plan and track a multi-step job: break the goal into ordered, verifiable steps, declare them with plan_todo, work through them updating status (running \u2192 done, or blocked with a note), and finish with a summary. Use for any job with 2+ steps where progress visibility matters.",
+      "description": "Plan and track a multi-step job: break the goal into ordered, verifiable steps, declare them with plan_todo, work through them updating status (running → done, or blocked with a note), and finish with a summary. Use for any job with 2+ steps where progress visibility matters.",
       "version": "1.0.0",
       "author": "agent-nuvira",
       "tags": [
@@ -69,7 +69,7 @@
         "execution"
       ],
       "source": "agent-nuvira/bundled",
-      "updatedAt": "2026-08-22T12:34:15.311Z"
+      "updatedAt": "2026-08-27T12:51:59.023Z"
     },
     {
       "name": "test-strategy",
@@ -85,7 +85,7 @@
         "quality"
       ],
       "source": "agent-nuvira/bundled",
-      "updatedAt": "2026-08-22T12:34:15.311Z"
+      "updatedAt": "2026-08-27T12:51:59.023Z"
     },
     {
       "name": "docx",
@@ -99,7 +99,7 @@
         "office"
       ],
       "source": "agent-nuvira/bundled",
-      "updatedAt": "2026-08-22T12:34:15.311Z"
+      "updatedAt": "2026-08-27T12:51:59.023Z"
     },
     {
       "name": "security-audit",
@@ -116,12 +116,12 @@
         "harden"
       ],
       "source": "agent-nuvira/bundled",
-      "updatedAt": "2026-08-22T12:34:15.311Z"
+      "updatedAt": "2026-08-27T12:51:59.023Z"
     },
     {
       "name": "api-design",
       "description": "Design and implement a REST API: gather requirements, design endpoints with proper HTTP methods/status codes, produce an OpenAPI spec, implement routes, and write integration tests. Use when the goal asks to create an API, design endpoints, build a REST service, or scaffold an HTTP backend.",
-      "version": "1.0.0",
+      "version": "2.0.0",
       "author": "agent-nuvira",
       "tags": [
         "api",
@@ -133,7 +133,7 @@
         "endpoints"
       ],
       "source": "agent-nuvira/bundled",
-      "updatedAt": "2026-08-22T12:34:15.311Z"
+      "updatedAt": "2026-08-27T12:51:59.023Z"
     },
     {
       "name": "db-migration",
@@ -150,7 +150,7 @@
         "mysql"
       ],
       "source": "agent-nuvira/bundled",
-      "updatedAt": "2026-08-22T12:34:15.311Z"
+      "updatedAt": "2026-08-27T12:51:59.023Z"
     },
     {
       "name": "perf-profile",
@@ -167,7 +167,7 @@
         "flame-graph"
       ],
       "source": "agent-nuvira/bundled",
-      "updatedAt": "2026-08-22T12:34:15.311Z"
+      "updatedAt": "2026-08-27T12:51:59.023Z"
     },
     {
       "name": "doc-gen",
@@ -183,7 +183,7 @@
         "developer-docs"
       ],
       "source": "agent-nuvira/bundled",
-      "updatedAt": "2026-08-22T12:34:15.311Z"
+      "updatedAt": "2026-08-27T12:51:59.023Z"
     },
     {
       "name": "ci-cd-setup",
@@ -200,7 +200,7 @@
         "automation"
       ],
       "source": "agent-nuvira/bundled",
-      "updatedAt": "2026-08-22T12:34:15.311Z"
+      "updatedAt": "2026-08-27T12:51:59.023Z"
     },
     {
       "name": "docker-config",
@@ -216,7 +216,7 @@
         "image"
       ],
       "source": "agent-nuvira/bundled",
-      "updatedAt": "2026-08-22T12:34:15.311Z"
+      "updatedAt": "2026-08-27T12:51:59.023Z"
     },
     {
       "name": "dep-update",
@@ -234,7 +234,7 @@
         "go-mod"
       ],
       "source": "agent-nuvira/bundled",
-      "updatedAt": "2026-08-22T12:34:15.311Z"
+      "updatedAt": "2026-08-27T12:51:59.023Z"
     },
     {
       "name": "code-refactor",
@@ -252,7 +252,7 @@
         "clean-code"
       ],
       "source": "agent-nuvira/bundled",
-      "updatedAt": "2026-08-22T12:34:15.311Z"
+      "updatedAt": "2026-08-27T12:51:59.023Z"
     },
     {
       "name": "env-setup",
@@ -268,7 +268,7 @@
         "local-dev"
       ],
       "source": "agent-nuvira/bundled",
-      "updatedAt": "2026-08-22T12:34:15.311Z"
+      "updatedAt": "2026-08-27T12:51:59.023Z"
     },
     {
       "name": "data-analysis",
@@ -284,7 +284,7 @@
         "statistics"
       ],
       "source": "agent-nuvira/bundled",
-      "updatedAt": "2026-08-22T12:34:15.311Z"
+      "updatedAt": "2026-08-27T12:51:59.023Z"
     },
     {
       "name": "api-testing",
@@ -301,7 +301,7 @@
         "endpoints"
       ],
       "source": "agent-nuvira/bundled",
-      "updatedAt": "2026-08-22T12:34:15.311Z"
+      "updatedAt": "2026-08-27T12:51:59.023Z"
     },
     {
       "name": "perf-test",
@@ -317,7 +317,7 @@
         "latency"
       ],
       "source": "agent-nuvira/bundled",
-      "updatedAt": "2026-08-22T12:34:15.311Z"
+      "updatedAt": "2026-08-27T12:51:59.023Z"
     },
     {
       "name": "a11y-audit",
@@ -334,7 +334,7 @@
         "compliance"
       ],
       "source": "agent-nuvira/bundled",
-      "updatedAt": "2026-08-22T12:34:15.311Z"
+      "updatedAt": "2026-08-27T12:51:59.023Z"
     },
     {
       "name": "search-setup",
@@ -350,7 +350,7 @@
         "meilisearch"
       ],
       "source": "agent-nuvira/bundled",
-      "updatedAt": "2026-08-22T12:34:15.311Z"
+      "updatedAt": "2026-08-27T12:51:59.023Z"
     },
     {
       "name": "email-setup",
@@ -367,7 +367,7 @@
         "delivery"
       ],
       "source": "agent-nuvira/bundled",
-      "updatedAt": "2026-08-22T12:34:15.311Z"
+      "updatedAt": "2026-08-27T12:51:59.023Z"
     },
     {
       "name": "payment-setup",
@@ -383,7 +383,7 @@
         "webhooks"
       ],
       "source": "agent-nuvira/bundled",
-      "updatedAt": "2026-08-22T12:34:15.311Z"
+      "updatedAt": "2026-08-27T12:51:59.023Z"
     },
     {
       "name": "auth-setup",
@@ -400,7 +400,7 @@
         "security"
       ],
       "source": "agent-nuvira/bundled",
-      "updatedAt": "2026-08-22T12:34:15.311Z"
+      "updatedAt": "2026-08-27T12:51:59.023Z"
     },
     {
       "name": "monitoring-setup",
@@ -416,7 +416,7 @@
         "health-check"
       ],
       "source": "agent-nuvira/bundled",
-      "updatedAt": "2026-08-22T12:34:15.311Z"
+      "updatedAt": "2026-08-27T12:51:59.023Z"
     },
     {
       "name": "backup-recovery",
@@ -433,7 +433,7 @@
         "rto"
       ],
       "source": "agent-nuvira/bundled",
-      "updatedAt": "2026-08-22T12:34:15.311Z"
+      "updatedAt": "2026-08-27T12:51:59.023Z"
     },
     {
       "name": "schema-design",
@@ -450,7 +450,7 @@
         "sql"
       ],
       "source": "agent-nuvira/bundled",
-      "updatedAt": "2026-08-22T12:34:15.311Z"
+      "updatedAt": "2026-08-27T12:51:59.023Z"
     },
     {
       "name": "i18n-setup",
@@ -466,7 +466,7 @@
         "locale"
       ],
       "source": "agent-nuvira/bundled",
-      "updatedAt": "2026-08-22T12:34:15.311Z"
+      "updatedAt": "2026-08-27T12:51:59.023Z"
     },
     {
       "name": "graphql-api",
@@ -482,7 +482,7 @@
         "codegen"
       ],
       "source": "agent-nuvira/bundled",
-      "updatedAt": "2026-08-22T12:34:15.311Z"
+      "updatedAt": "2026-08-27T12:51:59.023Z"
     },
     {
       "name": "git-release",
@@ -499,7 +499,7 @@
         "github"
       ],
       "source": "agent-nuvira/bundled",
-      "updatedAt": "2026-08-22T12:34:15.311Z"
+      "updatedAt": "2026-08-27T12:51:59.023Z"
     },
     {
       "name": "design-system",
@@ -515,7 +515,7 @@
         "library"
       ],
       "source": "agent-nuvira/bundled",
-      "updatedAt": "2026-08-22T12:34:15.311Z"
+      "updatedAt": "2026-08-27T12:51:59.023Z"
     },
     {
       "name": "legal-compliance",
@@ -532,7 +532,7 @@
         "consent"
       ],
       "source": "agent-nuvira/bundled",
-      "updatedAt": "2026-08-22T12:34:15.311Z"
+      "updatedAt": "2026-08-27T12:51:59.023Z"
     },
     {
       "name": "cron-setup",
@@ -548,7 +548,7 @@
         "jobs"
       ],
       "source": "agent-nuvira/bundled",
-      "updatedAt": "2026-08-22T12:34:15.311Z"
+      "updatedAt": "2026-08-27T12:51:59.023Z"
     },
     {
       "name": "image-optimize",
@@ -565,7 +565,7 @@
         "performance"
       ],
       "source": "agent-nuvira/bundled",
-      "updatedAt": "2026-08-22T12:34:15.311Z"
+      "updatedAt": "2026-08-27T12:51:59.023Z"
     },
     {
       "name": "pdf-generate",
@@ -581,7 +581,7 @@
         "document"
       ],
       "source": "agent-nuvira/bundled",
-      "updatedAt": "2026-08-22T12:34:15.311Z"
+      "updatedAt": "2026-08-27T12:51:59.023Z"
     },
     {
       "name": "cache-setup",
@@ -597,7 +597,7 @@
         "speed"
       ],
       "source": "agent-nuvira/bundled",
-      "updatedAt": "2026-08-22T12:34:15.311Z"
+      "updatedAt": "2026-08-27T12:51:59.023Z"
     },
     {
       "name": "queue-setup",
@@ -614,7 +614,7 @@
         "rabbitmq"
       ],
       "source": "agent-nuvira/bundled",
-      "updatedAt": "2026-08-22T12:34:15.311Z"
+      "updatedAt": "2026-08-27T12:51:59.023Z"
     },
     {
       "name": "rate-limit",
@@ -630,7 +630,7 @@
         "middleware"
       ],
       "source": "agent-nuvira/bundled",
-      "updatedAt": "2026-08-22T12:34:15.311Z"
+      "updatedAt": "2026-08-27T12:51:59.023Z"
     },
     {
       "name": "cors-setup",
@@ -646,7 +646,7 @@
         "preflight"
       ],
       "source": "agent-nuvira/bundled",
-      "updatedAt": "2026-08-22T12:34:15.311Z"
+      "updatedAt": "2026-08-27T12:51:59.023Z"
     },
     {
       "name": "error-tracking",
@@ -662,7 +662,7 @@
         "exception"
       ],
       "source": "agent-nuvira/bundled",
-      "updatedAt": "2026-08-22T12:34:15.311Z"
+      "updatedAt": "2026-08-27T12:51:59.023Z"
     },
     {
       "name": "feature-flags",
@@ -678,7 +678,7 @@
         "kill-switch"
       ],
       "source": "agent-nuvira/bundled",
-      "updatedAt": "2026-08-22T12:34:15.311Z"
+      "updatedAt": "2026-08-27T12:51:59.023Z"
     },
     {
       "name": "webhook-setup",
@@ -694,7 +694,7 @@
         "integration"
       ],
       "source": "agent-nuvira/bundled",
-      "updatedAt": "2026-08-22T12:34:15.311Z"
+      "updatedAt": "2026-08-27T12:51:59.023Z"
     },
     {
       "name": "form-builder",
@@ -710,7 +710,7 @@
         "input"
       ],
       "source": "agent-nuvira/bundled",
-      "updatedAt": "2026-08-22T12:34:15.311Z"
+      "updatedAt": "2026-08-27T12:51:59.023Z"
     },
     {
       "name": "data-sync",
@@ -727,7 +727,7 @@
         "transform"
       ],
       "source": "agent-nuvira/bundled",
-      "updatedAt": "2026-08-22T12:34:15.311Z"
+      "updatedAt": "2026-08-27T12:51:59.023Z"
     },
     {
       "name": "state-machine",
@@ -743,7 +743,7 @@
         "transition"
       ],
       "source": "agent-nuvira/bundled",
-      "updatedAt": "2026-08-22T12:34:15.311Z"
+      "updatedAt": "2026-08-27T12:51:59.023Z"
     },
     {
       "name": "websocket-setup",
@@ -759,7 +759,7 @@
         "collaboration"
       ],
       "source": "agent-nuvira/bundled",
-      "updatedAt": "2026-08-22T12:34:15.311Z"
+      "updatedAt": "2026-08-27T12:51:59.023Z"
     },
     {
       "name": "api-versioning",
@@ -775,7 +775,7 @@
         "rest"
       ],
       "source": "agent-nuvira/bundled",
-      "updatedAt": "2026-08-22T12:34:15.311Z"
+      "updatedAt": "2026-08-27T12:51:59.023Z"
     },
     {
       "name": "multi-tenancy",
@@ -791,7 +791,7 @@
         "data-separation"
       ],
       "source": "agent-nuvira/bundled",
-      "updatedAt": "2026-08-22T12:34:15.311Z"
+      "updatedAt": "2026-08-27T12:51:59.023Z"
     },
     {
       "name": "blob-storage",
@@ -808,7 +808,7 @@
         "cdn"
       ],
       "source": "agent-nuvira/bundled",
-      "updatedAt": "2026-08-22T12:34:15.311Z"
+      "updatedAt": "2026-08-27T12:51:59.023Z"
     },
     {
       "name": "notification-setup",
@@ -824,7 +824,7 @@
         "preferences"
       ],
       "source": "agent-nuvira/bundled",
-      "updatedAt": "2026-08-22T12:34:15.311Z"
+      "updatedAt": "2026-08-27T12:51:59.023Z"
     },
     {
       "name": "web-scraping",
@@ -839,7 +839,7 @@
         "html"
       ],
       "source": "agent-nuvira/bundled",
-      "updatedAt": "2026-08-22T12:34:15.311Z"
+      "updatedAt": "2026-08-27T12:51:59.023Z"
     },
     {
       "name": "data-processing",
@@ -855,7 +855,7 @@
         "aggregate"
       ],
       "source": "agent-nuvira/bundled",
-      "updatedAt": "2026-08-22T12:34:15.311Z"
+      "updatedAt": "2026-08-27T12:51:59.023Z"
     },
     {
       "name": "ml-model",
@@ -871,7 +871,7 @@
         "regress"
       ],
       "source": "agent-nuvira/bundled",
-      "updatedAt": "2026-08-22T12:34:15.311Z"
+      "updatedAt": "2026-08-27T12:51:59.023Z"
     },
     {
       "name": "cloud-deploy",
@@ -888,7 +888,7 @@
         "infrastructure"
       ],
       "source": "agent-nuvira/bundled",
-      "updatedAt": "2026-08-22T12:34:15.311Z"
+      "updatedAt": "2026-08-27T12:51:59.023Z"
     },
     {
       "name": "kubernetes",
@@ -904,7 +904,7 @@
         "deploy"
       ],
       "source": "agent-nuvira/bundled",
-      "updatedAt": "2026-08-22T12:34:15.311Z"
+      "updatedAt": "2026-08-27T12:51:59.023Z"
     },
     {
       "name": "github-actions",
@@ -920,7 +920,7 @@
         "automate"
       ],
       "source": "agent-nuvira/bundled",
-      "updatedAt": "2026-08-22T12:34:15.311Z"
+      "updatedAt": "2026-08-27T12:51:59.023Z"
     },
     {
       "name": "prometheus",
@@ -936,7 +936,7 @@
         "observability"
       ],
       "source": "agent-nuvira/bundled",
-      "updatedAt": "2026-08-22T12:34:15.311Z"
+      "updatedAt": "2026-08-27T12:51:59.023Z"
     },
     {
       "name": "structured-logging",
@@ -952,7 +952,7 @@
         "observability"
       ],
       "source": "agent-nuvira/bundled",
-      "updatedAt": "2026-08-22T12:34:15.311Z"
+      "updatedAt": "2026-08-27T12:51:59.023Z"
     },
     {
       "name": "redis-cache",
@@ -967,7 +967,7 @@
         "pub-sub"
       ],
       "source": "agent-nuvira/bundled",
-      "updatedAt": "2026-08-22T12:34:15.311Z"
+      "updatedAt": "2026-08-27T12:51:59.023Z"
     },
     {
       "name": "kafka-queue",
@@ -982,7 +982,7 @@
         "message"
       ],
       "source": "agent-nuvira/bundled",
-      "updatedAt": "2026-08-22T12:34:15.311Z"
+      "updatedAt": "2026-08-27T12:51:59.023Z"
     },
     {
       "name": "terraform",
@@ -997,7 +997,7 @@
         "provision"
       ],
       "source": "agent-nuvira/bundled",
-      "updatedAt": "2026-08-22T12:34:15.311Z"
+      "updatedAt": "2026-08-27T12:51:59.023Z"
     },
     {
       "name": "nginx-config",
@@ -1012,7 +1012,7 @@
         "web-server"
       ],
       "source": "agent-nuvira/bundled",
-      "updatedAt": "2026-08-22T12:34:15.311Z"
+      "updatedAt": "2026-08-27T12:51:59.023Z"
     },
     {
       "name": "ssl-cert",
@@ -1028,7 +1028,7 @@
         "security"
       ],
       "source": "agent-nuvira/bundled",
-      "updatedAt": "2026-08-22T12:34:15.311Z"
+      "updatedAt": "2026-08-27T12:51:59.023Z"
     },
     {
       "name": "dns-setup",
@@ -1043,7 +1043,7 @@
         "route53"
       ],
       "source": "agent-nuvira/bundled",
-      "updatedAt": "2026-08-22T12:34:15.311Z"
+      "updatedAt": "2026-08-27T12:51:59.023Z"
     },
     {
       "name": "cron-job",
@@ -1058,7 +1058,7 @@
         "timer"
       ],
       "source": "agent-nuvira/bundled",
-      "updatedAt": "2026-08-22T12:34:15.311Z"
+      "updatedAt": "2026-08-27T12:51:59.023Z"
     },
     {
       "name": "backup-strategy",
@@ -1073,7 +1073,7 @@
         "restore"
       ],
       "source": "agent-nuvira/bundled",
-      "updatedAt": "2026-08-22T12:34:15.311Z"
+      "updatedAt": "2026-08-27T12:51:59.023Z"
     },
     {
       "name": "log-rotation",
@@ -1088,7 +1088,7 @@
         "disk"
       ],
       "source": "agent-nuvira/bundled",
-      "updatedAt": "2026-08-22T12:34:15.311Z"
+      "updatedAt": "2026-08-27T12:51:59.023Z"
     },
     {
       "name": "secrets-manager",
@@ -1103,7 +1103,7 @@
         "security"
       ],
       "source": "agent-nuvira/bundled",
-      "updatedAt": "2026-08-22T12:34:15.311Z"
+      "updatedAt": "2026-08-27T12:51:59.023Z"
     },
     {
       "name": "load-balancer",
@@ -1118,7 +1118,7 @@
         "health-check"
       ],
       "source": "agent-nuvira/bundled",
-      "updatedAt": "2026-08-22T12:34:15.311Z"
+      "updatedAt": "2026-08-27T12:51:59.023Z"
     },
     {
       "name": "cdn-setup",
@@ -1133,12 +1133,12 @@
         "cloudfront"
       ],
       "source": "agent-nuvira/bundled",
-      "updatedAt": "2026-08-22T12:34:15.311Z"
+      "updatedAt": "2026-08-27T12:51:59.023Z"
     },
     {
       "name": "game-development",
       "description": "Create a GUI game with graphics, input handling, game logic, and packaging. Use when the goal asks to create, build, or develop a game (board games, card games, puzzle games, 2D games, snake-and-ladder, tic-tac-toe, chess, etc.).",
-      "version": "1.0.0",
+      "version": "2.0.0",
       "author": "agent-nuvira",
       "tags": [
         "game",
@@ -1146,10 +1146,14 @@
         "board-game",
         "2d",
         "interactive",
-        "entertainment"
+        "entertainment",
+        "pyinstaller",
+        "electron",
+        "tkinter",
+        "pygame"
       ],
       "source": "agent-nuvira/bundled",
-      "updatedAt": "2026-08-26T22:00:00.000Z"
+      "updatedAt": "2026-08-27T12:51:59.023Z"
     },
     {
       "name": "cli-tool",
@@ -1165,7 +1169,7 @@
         "publish"
       ],
       "source": "agent-nuvira/bundled",
-      "updatedAt": "2026-08-26T22:00:00.000Z"
+      "updatedAt": "2026-08-27T12:51:59.023Z"
     },
     {
       "name": "api-creation",
@@ -1182,718 +1186,1185 @@
         "deploy"
       ],
       "source": "agent-nuvira/bundled",
-      "updatedAt": "2026-08-26T22:00:00.000Z"
+      "updatedAt": "2026-08-27T12:51:59.023Z"
     },
     {
       "name": "autonomous-agents",
       "description": "Design, build, and deploy autonomous AI agents with tool use, memory, planning loops, and self-correction. Use when the goal is to create an agent that can reason, act, and iterate without constant human oversight.",
       "version": "1.0.0",
       "author": "agent-nuvira",
-      "tags": [],
+      "tags": [
+        "ai",
+        "agents",
+        "autonomous",
+        "planning",
+        "tool-use"
+      ],
       "source": "agent-nuvira/bundled",
-      "updatedAt": "2026-08-26T23:00:00.000Z"
+      "updatedAt": "2026-08-27T12:51:59.023Z"
     },
     {
       "name": "mlops",
       "description": "Set up ML operations: model training pipelines, experiment tracking, model registry, deployment, monitoring, and drift detection. Use when the goal is to operationalize ML models for production.",
       "version": "1.0.0",
       "author": "agent-nuvira",
-      "tags": [],
+      "tags": [
+        "ml",
+        "mlops",
+        "training",
+        "deployment",
+        "monitoring"
+      ],
       "source": "agent-nuvira/bundled",
-      "updatedAt": "2026-08-26T23:00:00.000Z"
+      "updatedAt": "2026-08-27T12:51:59.023Z"
     },
     {
       "name": "prompt-engineering",
       "description": "Design, test, and optimize prompts for LLMs. Covers chain-of-thought, few-shot, system prompts, prompt chaining, evals, and A/B testing. Use when the goal is to improve LLM output quality or build prompt-driven features.",
       "version": "1.0.0",
       "author": "agent-nuvira",
-      "tags": [],
+      "tags": [
+        "prompt",
+        "llm",
+        "ai",
+        "optimization",
+        "evals"
+      ],
       "source": "agent-nuvira/bundled",
-      "updatedAt": "2026-08-26T23:00:00.000Z"
+      "updatedAt": "2026-08-27T12:51:59.023Z"
     },
     {
       "name": "rag-pipeline",
       "description": "Build a Retrieval-Augmented Generation pipeline: document ingestion, chunking, embedding, vector storage, retrieval, and LLM answer generation. Use when the goal is to let an LLM answer questions from a custom knowledge base.",
       "version": "1.0.0",
       "author": "agent-nuvira",
-      "tags": [],
+      "tags": [
+        "rag",
+        "vector",
+        "embedding",
+        "llm",
+        "knowledge-base"
+      ],
       "source": "agent-nuvira/bundled",
-      "updatedAt": "2026-08-26T23:00:00.000Z"
+      "updatedAt": "2026-08-27T12:51:59.023Z"
     },
     {
       "name": "fine-tuning",
       "description": "Fine-tune LLMs: data preparation, training config, training loop, evaluation, and deployment. Use when the goal is to customize a base model for a specific task or domain.",
       "version": "1.0.0",
       "author": "agent-nuvira",
-      "tags": [],
+      "tags": [
+        "fine-tuning",
+        "llm",
+        "training",
+        "lora",
+        "ml"
+      ],
       "source": "agent-nuvira/bundled",
-      "updatedAt": "2026-08-26T23:00:00.000Z"
+      "updatedAt": "2026-08-27T12:51:59.023Z"
     },
     {
       "name": "solidity",
       "description": "Write, test, and deploy Solidity smart contracts. Covers contract design, security patterns, gas optimization, testing with Hardhat/Foundry, and mainnet deployment. Use when building on Ethereum or EVM-compatible chains.",
       "version": "1.0.0",
       "author": "agent-nuvira",
-      "tags": [],
+      "tags": [
+        "solidity",
+        "blockchain",
+        "ethereum",
+        "smart-contract",
+        "web3"
+      ],
       "source": "agent-nuvira/bundled",
-      "updatedAt": "2026-08-26T23:00:00.000Z"
+      "updatedAt": "2026-08-27T12:51:59.023Z"
     },
     {
       "name": "web3-dapp",
       "description": "Build a Web3 decentralized application: wallet connection, contract interaction, transaction handling, and IPFS integration. Use when the goal is to create a frontend that interacts with blockchain contracts.",
       "version": "1.0.0",
       "author": "agent-nuvira",
-      "tags": [],
+      "tags": [
+        "web3",
+        "dapp",
+        "blockchain",
+        "wallet",
+        "ipfs"
+      ],
       "source": "agent-nuvira/bundled",
-      "updatedAt": "2026-08-26T23:00:00.000Z"
+      "updatedAt": "2026-08-27T12:51:59.023Z"
     },
     {
       "name": "nft-mint",
       "description": "Build an NFT minting platform: smart contract, metadata storage (IPFS), minting frontend, and reveal mechanism. Use when the goal is to create, deploy, and launch an NFT collection.",
       "version": "1.0.0",
       "author": "agent-nuvira",
-      "tags": [],
+      "tags": [
+        "nft",
+        "erc-721",
+        "ipfs",
+        "blockchain",
+        "minting"
+      ],
       "source": "agent-nuvira/bundled",
-      "updatedAt": "2026-08-26T23:00:00.000Z"
+      "updatedAt": "2026-08-27T12:51:59.023Z"
     },
     {
       "name": "discord-bot",
       "description": "Build a Discord bot with slash commands, embeds, buttons, modals, and event handlers. Covers bot setup, permission configuration, deployment, and hosting. Use when the goal is to create a bot for a Discord server.",
       "version": "1.0.0",
       "author": "agent-nuvira",
-      "tags": [],
+      "tags": [
+        "discord",
+        "bot",
+        "slash-commands",
+        "embeds",
+        "automation"
+      ],
       "source": "agent-nuvira/bundled",
-      "updatedAt": "2026-08-26T23:00:00.000Z"
+      "updatedAt": "2026-08-27T12:51:59.023Z"
     },
     {
       "name": "slack-integration",
       "description": "Build Slack integrations: bots, app actions, slash commands, modals, and workflow builder steps. Covers Slack Bolt framework, OAuth, and deployment. Use when creating a Slack app or bot.",
       "version": "1.0.0",
       "author": "agent-nuvira",
-      "tags": [],
+      "tags": [
+        "slack",
+        "integration",
+        "bolt",
+        "workspace",
+        "automation"
+      ],
       "source": "agent-nuvira/bundled",
-      "updatedAt": "2026-08-26T23:00:00.000Z"
+      "updatedAt": "2026-08-27T12:51:59.023Z"
     },
     {
       "name": "teams-webhook",
       "description": "Build Microsoft Teams integrations: incoming webhooks, outgoing webhooks, bot framework, adaptive cards, and message extensions. Use when connecting a service to Teams.",
       "version": "1.0.0",
       "author": "agent-nuvira",
-      "tags": [],
+      "tags": [
+        "teams",
+        "microsoft",
+        "webhook",
+        "adaptive-cards",
+        "bot-framework"
+      ],
       "source": "agent-nuvira/bundled",
-      "updatedAt": "2026-08-26T23:00:00.000Z"
+      "updatedAt": "2026-08-27T12:51:59.023Z"
     },
     {
       "name": "logo-design",
       "description": "Generate logos and brand assets using SVG, canvas, or AI image generation. Covers logo concepts, color palettes, typography, SVG creation, and export formats. Use when the goal is to create a logo or visual brand identity.",
       "version": "1.0.0",
       "author": "agent-nuvira",
-      "tags": [],
+      "tags": [
+        "logo",
+        "design",
+        "brand",
+        "svg",
+        "visual-identity"
+      ],
       "source": "agent-nuvira/bundled",
-      "updatedAt": "2026-08-26T23:00:00.000Z"
+      "updatedAt": "2026-08-27T12:51:59.023Z"
     },
     {
       "name": "video-edit",
       "description": "Edit and process videos with FFmpeg: cutting, merging, encoding, format conversion, subtitle overlay, and compression. Use when the goal is to manipulate video files programmatically.",
       "version": "1.0.0",
       "author": "agent-nuvira",
-      "tags": [],
+      "tags": [
+        "video",
+        "ffmpeg",
+        "editing",
+        "encoding",
+        "multimedia"
+      ],
       "source": "agent-nuvira/bundled",
-      "updatedAt": "2026-08-26T23:00:00.000Z"
+      "updatedAt": "2026-08-27T12:51:59.023Z"
     },
     {
       "name": "podcast-production",
       "description": "Produce podcast audio: recording setup, noise reduction, audio normalization, chapter markers, RSS feed generation, and distribution. Use when the goal is to produce and distribute a podcast episode.",
       "version": "1.0.0",
       "author": "agent-nuvira",
-      "tags": [],
+      "tags": [
+        "podcast",
+        "audio",
+        "production",
+        "rss",
+        "distribution"
+      ],
       "source": "agent-nuvira/bundled",
-      "updatedAt": "2026-08-26T23:00:00.000Z"
+      "updatedAt": "2026-08-27T12:51:59.023Z"
     },
     {
       "name": "data-visualization",
       "description": "Create data visualizations: charts, dashboards, interactive plots with D3.js, Plotly, Matplotlib, or Chart.js. Covers data transformation, chart selection, accessibility, and export. Use when the goal is to visualize data.",
       "version": "1.0.0",
       "author": "agent-nuvira",
-      "tags": [],
+      "tags": [
+        "visualization",
+        "charts",
+        "data",
+        "d3",
+        "plotly"
+      ],
       "source": "agent-nuvira/bundled",
-      "updatedAt": "2026-08-26T23:00:00.000Z"
+      "updatedAt": "2026-08-27T12:51:59.023Z"
     },
     {
       "name": "feature-engineering",
       "description": "Engineer features for ML: encoding, scaling, selection, transformation, and feature stores. Use when preparing data for machine learning models.",
       "version": "1.0.0",
       "author": "agent-nuvira",
-      "tags": [],
+      "tags": [
+        "feature-engineering",
+        "preprocessing",
+        "ml",
+        "data-science"
+      ],
       "source": "agent-nuvira/bundled",
-      "updatedAt": "2026-08-26T23:00:00.000Z"
+      "updatedAt": "2026-08-27T12:51:59.023Z"
     },
     {
       "name": "time-series",
       "description": "Analyze and forecast time series data: decomposition, stationarity testing, ARIMA, Prophet, and LSTM models. Use when the goal is to understand or predict temporal patterns.",
       "version": "1.0.0",
       "author": "agent-nuvira",
-      "tags": [],
+      "tags": [
+        "time-series",
+        "forecasting",
+        "arima",
+        "prophet",
+        "prediction"
+      ],
       "source": "agent-nuvira/bundled",
-      "updatedAt": "2026-08-26T23:00:00.000Z"
+      "updatedAt": "2026-08-27T12:51:59.023Z"
     },
     {
       "name": "infra-as-code",
       "description": "Define infrastructure with code: Terraform, Pulumi, or CloudFormation. Covers modules, state management, drift detection, and multi-environment setups. Use when the goal is to provision or manage cloud infrastructure.",
       "version": "1.0.0",
       "author": "agent-nuvira",
-      "tags": [],
+      "tags": [
+        "terraform",
+        "pulumi",
+        "infrastructure",
+        "cloud",
+        "devops"
+      ],
       "source": "agent-nuvira/bundled",
-      "updatedAt": "2026-08-26T23:00:00.000Z"
+      "updatedAt": "2026-08-27T12:51:59.023Z"
     },
     {
       "name": "service-mesh",
       "description": "Set up a service mesh (Istio, Linkerd, Consul Connect): traffic management, mTLS, observability, and resilience. Use when the goal is to add networking capabilities to a microservices architecture.",
       "version": "1.0.0",
       "author": "agent-nuvira",
-      "tags": [],
+      "tags": [
+        "service-mesh",
+        "istio",
+        "linkerd",
+        "mtls",
+        "microservices"
+      ],
       "source": "agent-nuvira/bundled",
-      "updatedAt": "2026-08-26T23:00:00.000Z"
+      "updatedAt": "2026-08-27T12:51:59.023Z"
     },
     {
       "name": "chaos-engineering",
       "description": "Practice chaos engineering: inject faults, measure resilience, and improve system reliability. Covers experiment design, fault injection (network, CPU, memory), and blast radius control. Use when testing system resilience.",
       "version": "1.0.0",
       "author": "agent-nuvira",
-      "tags": [],
+      "tags": [
+        "chaos",
+        "resilience",
+        "fault-injection",
+        "reliability",
+        "testing"
+      ],
       "source": "agent-nuvira/bundled",
-      "updatedAt": "2026-08-26T23:00:00.000Z"
+      "updatedAt": "2026-08-27T12:51:59.023Z"
     },
     {
       "name": "transactional-email",
       "description": "Set up transactional email sending: SMTP configuration, email templates, delivery tracking, bounce handling, and provider integration (SendGrid, Postmark, SES). Use when the goal is to send system emails (password resets, notifications, receipts).",
       "version": "1.0.0",
       "author": "agent-nuvira",
-      "tags": [],
+      "tags": [
+        "email",
+        "transactional",
+        "smtp",
+        "sendgrid",
+        "delivery"
+      ],
       "source": "agent-nuvira/bundled",
-      "updatedAt": "2026-08-26T23:00:00.000Z"
+      "updatedAt": "2026-08-27T12:51:59.023Z"
     },
     {
       "name": "newsletter",
       "description": "Build a newsletter system: subscriber management, email composition, scheduling, analytics, and compliance (CAN-SPAM, GDPR). Use when the goal is to create and manage an email newsletter.",
       "version": "1.0.0",
       "author": "agent-nuvira",
-      "tags": [],
+      "tags": [
+        "newsletter",
+        "email",
+        "marketing",
+        "subscriber",
+        "compliance"
+      ],
       "source": "agent-nuvira/bundled",
-      "updatedAt": "2026-08-26T23:00:00.000Z"
+      "updatedAt": "2026-08-27T12:51:59.023Z"
     },
     {
       "name": "payment-gateway",
       "description": "Integrate payment processing: Stripe, PayPal, or Square. Covers checkout flows, subscriptions, refunds, webhooks, and PCI compliance. Use when the goal is to accept payments in an application.",
       "version": "1.0.0",
       "author": "agent-nuvira",
-      "tags": [],
+      "tags": [
+        "payment",
+        "stripe",
+        "checkout",
+        "subscription",
+        "billing"
+      ],
       "source": "agent-nuvira/bundled",
-      "updatedAt": "2026-08-26T23:00:00.000Z"
+      "updatedAt": "2026-08-27T12:51:59.023Z"
     },
     {
       "name": "accounting-integration",
       "description": "Integrate accounting software: QuickBooks, Xero, or FreshBooks API integration for invoices, expenses, and financial reporting. Use when the goal is to sync financial data with an accounting system.",
       "version": "1.0.0",
       "author": "agent-nuvira",
-      "tags": [],
+      "tags": [
+        "accounting",
+        "quickbooks",
+        "xero",
+        "finance",
+        "integration"
+      ],
       "source": "agent-nuvira/bundled",
-      "updatedAt": "2026-08-26T23:00:00.000Z"
+      "updatedAt": "2026-08-27T12:51:59.023Z"
     },
     {
       "name": "health-data",
       "description": "Integrate health data APIs: Apple HealthKit, Google Fit, or Fitbit for reading and writing health metrics. Covers authorization, data types, and privacy compliance. Use when building health or wellness applications.",
       "version": "1.0.0",
       "author": "agent-nuvira",
-      "tags": [],
+      "tags": [
+        "health",
+        "fitness",
+        "healthkit",
+        "privacy",
+        "integration"
+      ],
       "source": "agent-nuvira/bundled",
-      "updatedAt": "2026-08-26T23:00:00.000Z"
+      "updatedAt": "2026-08-27T12:51:59.023Z"
     },
     {
       "name": "fitness-api",
       "description": "Build a fitness API: workout tracking, exercise database, nutrition logging, and progress analytics. Use when creating a fitness or wellness application backend.",
       "version": "1.0.0",
       "author": "agent-nuvira",
-      "tags": [],
+      "tags": [
+        "fitness",
+        "api",
+        "workout",
+        "nutrition",
+        "health"
+      ],
       "source": "agent-nuvira/bundled",
-      "updatedAt": "2026-08-26T23:00:00.000Z"
+      "updatedAt": "2026-08-27T12:51:59.023Z"
     },
     {
       "name": "mcp-server",
       "description": "Build a Model Context Protocol (MCP) server: expose tools, resources, and prompts to AI agents via the MCP standard. Covers stdio and HTTP transports, tool definitions, resource URIs, and OAuth. Use when making your service available to AI agents.",
       "version": "1.0.0",
       "author": "agent-nuvira",
-      "tags": [],
+      "tags": [
+        "mcp",
+        "model-context-protocol",
+        "server",
+        "ai-agents",
+        "tools"
+      ],
       "source": "agent-nuvira/bundled",
-      "updatedAt": "2026-08-26T23:00:00.000Z"
+      "updatedAt": "2026-08-27T12:51:59.023Z"
     },
     {
       "name": "mcp-client",
       "description": "Build an MCP client: connect to MCP servers, discover tools/resources, and execute operations. Covers server management, tool calling, and resource reading. Use when your agent needs to consume MCP servers.",
       "version": "1.0.0",
       "author": "agent-nuvira",
-      "tags": [],
+      "tags": [
+        "mcp",
+        "client",
+        "agent",
+        "integration",
+        "tools"
+      ],
       "source": "agent-nuvira/bundled",
-      "updatedAt": "2026-08-26T23:00:00.000Z"
+      "updatedAt": "2026-08-27T12:51:59.023Z"
     },
     {
       "name": "mcp-connector",
       "description": "Bridge APIs to MCP: wrap existing REST/GraphQL APIs as MCP servers with auto-generated tool schemas. Use when you need to expose an existing API to AI agents without rewriting it.",
       "version": "1.0.0",
       "author": "agent-nuvira",
-      "tags": [],
+      "tags": [
+        "mcp",
+        "connector",
+        "api",
+        "bridge",
+        "auto-generate"
+      ],
       "source": "agent-nuvira/bundled",
-      "updatedAt": "2026-08-26T23:00:00.000Z"
+      "updatedAt": "2026-08-27T12:51:59.023Z"
     },
     {
       "name": "data-migration",
       "description": "Plan and execute data migrations: schema mapping, ETL pipelines, validation, rollback strategies, and zero-downtime migrations. Use when moving data between systems or databases.",
       "version": "1.0.0",
       "author": "agent-nuvira",
-      "tags": [],
+      "tags": [
+        "migration",
+        "etl",
+        "database",
+        "data",
+        "rollback"
+      ],
       "source": "agent-nuvira/bundled",
-      "updatedAt": "2026-08-26T23:00:00.000Z"
+      "updatedAt": "2026-08-27T12:51:59.023Z"
     },
     {
       "name": "cloud-migration",
       "description": "Migrate applications to the cloud: assessment, planning, containerization, deployment, and optimization. Covers AWS, GCP, and Azure migration paths. Use when moving on-premise applications to cloud infrastructure.",
       "version": "1.0.0",
       "author": "agent-nuvira",
-      "tags": [],
+      "tags": [
+        "cloud",
+        "migration",
+        "aws",
+        "gcp",
+        "azure",
+        "containerization"
+      ],
       "source": "agent-nuvira/bundled",
-      "updatedAt": "2026-08-26T23:00:00.000Z"
+      "updatedAt": "2026-08-27T12:51:59.023Z"
     },
     {
       "name": "knowledge-base",
       "description": "Build a knowledge base system: document ingestion, search, versioning, and collaborative editing. Use when the goal is to create a searchable knowledge repository for a team or product.",
       "version": "1.0.0",
       "author": "agent-nuvira",
-      "tags": [],
+      "tags": [
+        "knowledge-base",
+        "wiki",
+        "documentation",
+        "search",
+        "content"
+      ],
       "source": "agent-nuvira/bundled",
-      "updatedAt": "2026-08-26T23:00:00.000Z"
+      "updatedAt": "2026-08-27T12:51:59.023Z"
     },
     {
       "name": "decision-framework",
       "description": "Apply structured decision-making frameworks: RICE scoring, weighted matrix, decision trees, and ADR (Architecture Decision Records). Use when the goal is to make a systematic, well-documented technical or product decision.",
       "version": "1.0.0",
       "author": "agent-nuvira",
-      "tags": [],
+      "tags": [
+        "decision",
+        "framework",
+        "adr",
+        "prioritization",
+        "analysis"
+      ],
       "source": "agent-nuvira/bundled",
-      "updatedAt": "2026-08-26T23:00:00.000Z"
-    },
-    {
-      "name": "osint-investigation",
-      "description": "Conduct open-source intelligence (OSINT) investigations: reconnaissance, data collection, analysis, and reporting. Covers OSINT tools, techniques, and ethical guidelines. Use when gathering intelligence from public sources.",
-      "version": "1.0.0",
-      "author": "agent-nuvira",
-      "tags": [],
-      "source": "agent-nuvira/bundled",
-      "updatedAt": "2026-08-26T23:00:00.000Z"
-    },
-    {
-      "name": "academic-research",
-      "description": "Conduct academic literature research: paper discovery, citation analysis, systematic reviews, and research summaries. Use when the goal is to review academic literature on a topic.",
-      "version": "1.0.0",
-      "author": "agent-nuvira",
-      "tags": [],
-      "source": "agent-nuvira/bundled",
-      "updatedAt": "2026-08-26T23:00:00.000Z"
-    },
-    {
-      "name": "penetration-test",
-      "description": "Conduct penetration testing: reconnaissance, vulnerability scanning, exploitation, and reporting. Covers OWASP testing guide, common attack vectors, and responsible disclosure. Use when testing application security.",
-      "version": "1.0.0",
-      "author": "agent-nuvira",
-      "tags": [],
-      "source": "agent-nuvira/bundled",
-      "updatedAt": "2026-08-26T23:00:00.000Z"
-    },
-    {
-      "name": "compliance-check",
-      "description": "Check regulatory compliance: GDPR, HIPAA, SOC2, PCI-DSS. Covers requirements mapping, gap analysis, control implementation, and audit preparation. Use when ensuring an application meets compliance standards.",
-      "version": "1.0.0",
-      "author": "agent-nuvira",
-      "tags": [],
-      "source": "agent-nuvira/bundled",
-      "updatedAt": "2026-08-26T23:00:00.000Z"
-    },
-    {
-      "name": "secrets-scan",
-      "description": "Scan codebases for leaked secrets: API keys, passwords, tokens, certificates. Covers detection patterns, false positive handling, and remediation. Use when auditing for credential exposure.",
-      "version": "1.0.0",
-      "author": "agent-nuvira",
-      "tags": [],
-      "source": "agent-nuvira/bundled",
-      "updatedAt": "2026-08-26T23:00:00.000Z"
-    },
-    {
-      "name": "code-review",
-      "description": "Conduct thorough code reviews: correctness, security, performance, readability, and test coverage. Covers review checklists, constructive feedback, and automated review tools. Use when reviewing pull requests or code changes.",
-      "version": "1.0.0",
-      "author": "agent-nuvira",
-      "tags": [],
-      "source": "agent-nuvira/bundled",
-      "updatedAt": "2026-08-26T23:00:00.000Z"
-    },
-    {
-      "name": "dependency-audit",
-      "description": "Audit project dependencies for vulnerabilities, outdated versions, license compliance, and supply chain risks. Use when ensuring dependency health and security.",
-      "version": "1.0.0",
-      "author": "agent-nuvira",
-      "tags": [],
-      "source": "agent-nuvira/bundled",
-      "updatedAt": "2026-08-26T23:00:00.000Z"
-    },
-    {
-      "name": "monorepo-setup",
-      "description": "Set up a monorepo with Turborepo, Nx, or Lerna: workspace configuration, build caching, dependency management, and CI optimization. Use when organizing multiple packages in a single repository.",
-      "version": "1.0.0",
-      "author": "agent-nuvira",
-      "tags": [],
-      "source": "agent-nuvira/bundled",
-      "updatedAt": "2026-08-26T23:00:00.000Z"
-    },
-    {
-      "name": "ssr-setup",
-      "description": "Set up server-side rendering: Next.js, Nuxt, or SvelteKit SSR configuration, hydration, streaming, and caching strategies. Use when the goal is to improve initial load performance and SEO with server rendering.",
-      "version": "1.0.0",
-      "author": "agent-nuvira",
-      "tags": [],
-      "source": "agent-nuvira/bundled",
-      "updatedAt": "2026-08-26T23:00:00.000Z"
-    },
-    {
-      "name": "pwa-builder",
-      "description": "Build a Progressive Web App: service workers, offline support, push notifications, app manifest, and installability. Use when the goal is to create an installable web app with offline capabilities.",
-      "version": "1.0.0",
-      "author": "agent-nuvira",
-      "tags": [],
-      "source": "agent-nuvira/bundled",
-      "updatedAt": "2026-08-26T23:00:00.000Z"
-    },
-    {
-      "name": "micro-frontend",
-      "description": "Set up micro-frontends: module federation, iframes, or Web Components for independent team deployments. Covers routing, shared state, and communication between micro-frontends. Use when scaling frontend development across teams.",
-      "version": "1.0.0",
-      "author": "agent-nuvira",
-      "tags": [],
-      "source": "agent-nuvira/bundled",
-      "updatedAt": "2026-08-26T23:00:00.000Z"
-    },
-    {
-      "name": "powershell-automation",
-      "description": "Automate Windows tasks with PowerShell: scripts, modules, DSC (Desired State Configuration), scheduled tasks, and Windows service management. Use when automating Windows system administration.",
-      "version": "1.0.0",
-      "author": "agent-nuvira",
-      "tags": [],
-      "source": "agent-nuvira/bundled",
-      "updatedAt": "2026-08-26T23:00:00.000Z"
-    },
-    {
-      "name": "wsl-setup",
-      "description": "Set up and configure Windows Subsystem for Linux (WSL): distribution selection, filesystem configuration, networking, GPU passthrough, and development environment setup. Use when setting up a Linux development environment on Windows.",
-      "version": "1.0.0",
-      "author": "agent-nuvira",
-      "tags": [],
-      "source": "agent-nuvira/bundled",
-      "updatedAt": "2026-08-26T23:00:00.000Z"
-    },
-    {
-      "name": "registry-management",
-      "description": "Manage the Windows Registry: reading, writing, exporting, importing, and backup of registry keys. Covers reg.exe, PowerShell registry cmdlets, and .reg files. Use when configuring Windows settings via the registry.",
-      "version": "1.0.0",
-      "author": "agent-nuvira",
-      "tags": [],
-      "source": "agent-nuvira/bundled",
-      "updatedAt": "2026-08-26T23:00:00.000Z"
-    },
-    {
-      "name": "group-policy",
-      "description": "Manage Group Policy: Local Group Policy Editor, GPO creation, policy deployment, and troubleshooting. Use when configuring Windows security and administrative policies.",
-      "version": "1.0.0",
-      "author": "agent-nuvira",
-      "tags": [],
-      "source": "agent-nuvira/bundled",
-      "updatedAt": "2026-08-26T23:00:00.000Z"
-    },
-    {
-      "name": "cross-platform-build",
-      "description": "Build cross-platform applications: shared codebase targeting web, desktop (Electron/Tauri), and mobile (React Native/Flutter). Covers platform detection, shared logic, and platform-specific adaptations. Use when building for multiple platforms from one codebase.",
-      "version": "1.0.0",
-      "author": "agent-nuvira",
-      "tags": [],
-      "source": "agent-nuvira/bundled",
-      "updatedAt": "2026-08-26T23:00:00.000Z"
-    },
-    {
-      "name": "electron-app",
-      "description": "Build an Electron desktop application: main process, renderer process, IPC communication, auto-updates, and native modules. Use when creating a desktop application with web technologies.",
-      "version": "1.0.0",
-      "author": "agent-nuvira",
-      "tags": [],
-      "source": "agent-nuvira/bundled",
-      "updatedAt": "2026-08-26T23:00:00.000Z"
-    },
-    {
-      "name": "mobile-bridge",
-      "description": "Bridge web and native mobile: Capacitor, Cordova, or React Native bridge for accessing native device features from web code. Use when adding native mobile capabilities to a web application.",
-      "version": "1.0.0",
-      "author": "agent-nuvira",
-      "tags": [],
-      "source": "agent-nuvira/bundled",
-      "updatedAt": "2026-08-26T23:00:00.000Z"
+      "updatedAt": "2026-08-27T12:51:59.023Z"
     },
     {
       "name": "kanban-board",
       "description": "Build a Kanban board: drag-and-drop columns, WIP limits, swimlanes, and workflow automation. Use when creating a visual project management tool.",
       "version": "1.0.0",
       "author": "agent-nuvira",
-      "tags": [],
+      "tags": [
+        "kanban",
+        "project-management",
+        "drag-drop",
+        "workflow",
+        "productivity"
+      ],
       "source": "agent-nuvira/bundled",
-      "updatedAt": "2026-08-26T23:00:00.000Z"
+      "updatedAt": "2026-08-27T12:51:59.023Z"
     },
     {
       "name": "checkpoint-manager",
       "description": "Manage code checkpoints: save progress snapshots, rollback to checkpoints, compare versions, and restore state. Use when building safety nets for complex refactoring or migration tasks.",
       "version": "1.0.0",
       "author": "agent-nuvira",
-      "tags": [],
+      "tags": [
+        "checkpoint",
+        "snapshot",
+        "rollback",
+        "safety",
+        "versioning"
+      ],
       "source": "agent-nuvira/bundled",
-      "updatedAt": "2026-08-26T23:00:00.000Z"
+      "updatedAt": "2026-08-27T12:51:59.023Z"
+    },
+    {
+      "name": "osint-investigation",
+      "description": "Conduct open-source intelligence (OSINT) investigations: reconnaissance, data collection, analysis, and reporting. Covers OSINT tools, techniques, and ethical guidelines. Use when gathering intelligence from public sources.",
+      "version": "1.0.0",
+      "author": "agent-nuvira",
+      "tags": [
+        "osint",
+        "intelligence",
+        "reconnaissance",
+        "security",
+        "investigation"
+      ],
+      "source": "agent-nuvira/bundled",
+      "updatedAt": "2026-08-27T12:51:59.023Z"
+    },
+    {
+      "name": "academic-research",
+      "description": "Conduct academic literature research: paper discovery, citation analysis, systematic reviews, and research summaries. Use when the goal is to review academic literature on a topic.",
+      "version": "1.0.0",
+      "author": "agent-nuvira",
+      "tags": [
+        "academic",
+        "research",
+        "literature",
+        "citation",
+        "review"
+      ],
+      "source": "agent-nuvira/bundled",
+      "updatedAt": "2026-08-27T12:51:59.023Z"
+    },
+    {
+      "name": "penetration-test",
+      "description": "Conduct penetration testing: reconnaissance, vulnerability scanning, exploitation, and reporting. Covers OWASP testing guide, common attack vectors, and responsible disclosure. Use when testing application security.",
+      "version": "1.0.0",
+      "author": "agent-nuvira",
+      "tags": [
+        "pentest",
+        "security",
+        "vulnerability",
+        "owasp",
+        "testing"
+      ],
+      "source": "agent-nuvira/bundled",
+      "updatedAt": "2026-08-27T12:51:59.023Z"
+    },
+    {
+      "name": "compliance-check",
+      "description": "Check regulatory compliance: GDPR, HIPAA, SOC2, PCI-DSS. Covers requirements mapping, gap analysis, control implementation, and audit preparation. Use when ensuring an application meets compliance standards.",
+      "version": "1.0.0",
+      "author": "agent-nuvira",
+      "tags": [
+        "compliance",
+        "gdpr",
+        "hipaa",
+        "soc2",
+        "audit"
+      ],
+      "source": "agent-nuvira/bundled",
+      "updatedAt": "2026-08-27T12:51:59.023Z"
+    },
+    {
+      "name": "secrets-scan",
+      "description": "Scan codebases for leaked secrets: API keys, passwords, tokens, certificates. Covers detection patterns, false positive handling, and remediation. Use when auditing for credential exposure.",
+      "version": "1.0.0",
+      "author": "agent-nuvira",
+      "tags": [
+        "secrets",
+        "security",
+        "scanning",
+        "credentials",
+        "leak-detection"
+      ],
+      "source": "agent-nuvira/bundled",
+      "updatedAt": "2026-08-27T12:51:59.023Z"
+    },
+    {
+      "name": "code-review",
+      "description": "Conduct thorough code reviews: correctness, security, performance, readability, and test coverage. Covers review checklists, constructive feedback, and automated review tools. Use when reviewing pull requests or code changes.",
+      "version": "1.0.0",
+      "author": "agent-nuvira",
+      "tags": [
+        "code-review",
+        "pull-request",
+        "quality",
+        "security",
+        "feedback"
+      ],
+      "source": "agent-nuvira/bundled",
+      "updatedAt": "2026-08-27T12:51:59.023Z"
+    },
+    {
+      "name": "dependency-audit",
+      "description": "Audit project dependencies for vulnerabilities, outdated versions, license compliance, and supply chain risks. Use when ensuring dependency health and security.",
+      "version": "1.0.0",
+      "author": "agent-nuvira",
+      "tags": [
+        "dependencies",
+        "audit",
+        "security",
+        "vulnerability",
+        "license"
+      ],
+      "source": "agent-nuvira/bundled",
+      "updatedAt": "2026-08-27T12:51:59.023Z"
+    },
+    {
+      "name": "monorepo-setup",
+      "description": "Set up a monorepo with Turborepo, Nx, or Lerna: workspace configuration, build caching, dependency management, and CI optimization. Use when organizing multiple packages in a single repository.",
+      "version": "1.0.0",
+      "author": "agent-nuvira",
+      "tags": [
+        "monorepo",
+        "turborepo",
+        "nx",
+        "workspace",
+        "build"
+      ],
+      "source": "agent-nuvira/bundled",
+      "updatedAt": "2026-08-27T12:51:59.023Z"
+    },
+    {
+      "name": "ssr-setup",
+      "description": "Set up server-side rendering: Next.js, Nuxt, or SvelteKit SSR configuration, hydration, streaming, and caching strategies. Use when the goal is to improve initial load performance and SEO with server rendering.",
+      "version": "1.0.0",
+      "author": "agent-nuvira",
+      "tags": [
+        "ssr",
+        "nextjs",
+        "nuxt",
+        "performance",
+        "seo"
+      ],
+      "source": "agent-nuvira/bundled",
+      "updatedAt": "2026-08-27T12:51:59.023Z"
+    },
+    {
+      "name": "pwa-builder",
+      "description": "Build a Progressive Web App: service workers, offline support, push notifications, app manifest, and installability. Use when the goal is to create an installable web app with offline capabilities.",
+      "version": "1.0.0",
+      "author": "agent-nuvira",
+      "tags": [
+        "pwa",
+        "service-worker",
+        "offline",
+        "push-notifications",
+        "install"
+      ],
+      "source": "agent-nuvira/bundled",
+      "updatedAt": "2026-08-27T12:51:59.023Z"
+    },
+    {
+      "name": "micro-frontend",
+      "description": "Set up micro-frontends: module federation, iframes, or Web Components for independent team deployments. Covers routing, shared state, and communication between micro-frontends. Use when scaling frontend development across teams.",
+      "version": "1.0.0",
+      "author": "agent-nuvira",
+      "tags": [
+        "micro-frontend",
+        "module-federation",
+        "architecture",
+        "scalability"
+      ],
+      "source": "agent-nuvira/bundled",
+      "updatedAt": "2026-08-27T12:51:59.023Z"
+    },
+    {
+      "name": "powershell-automation",
+      "description": "Automate Windows tasks with PowerShell: scripts, modules, DSC (Desired State Configuration), scheduled tasks, and Windows service management. Use when automating Windows system administration.",
+      "version": "1.0.0",
+      "author": "agent-nuvira",
+      "tags": [
+        "powershell",
+        "windows",
+        "automation",
+        "scripting",
+        "dsc"
+      ],
+      "source": "agent-nuvira/bundled",
+      "updatedAt": "2026-08-27T12:51:59.023Z"
+    },
+    {
+      "name": "wsl-setup",
+      "description": "Set up and configure Windows Subsystem for Linux (WSL): distribution selection, filesystem configuration, networking, GPU passthrough, and development environment setup. Use when setting up a Linux development environment on Windows.",
+      "version": "1.0.0",
+      "author": "agent-nuvira",
+      "tags": [
+        "wsl",
+        "windows",
+        "linux",
+        "development",
+        "gpu"
+      ],
+      "source": "agent-nuvira/bundled",
+      "updatedAt": "2026-08-27T12:51:59.023Z"
+    },
+    {
+      "name": "registry-management",
+      "description": "Manage the Windows Registry: reading, writing, exporting, importing, and backup of registry keys. Covers reg.exe, PowerShell registry cmdlets, and .reg files. Use when configuring Windows settings via the registry.",
+      "version": "1.0.0",
+      "author": "agent-nuvira",
+      "tags": [
+        "registry",
+        "windows",
+        "configuration",
+        "backup",
+        "system"
+      ],
+      "source": "agent-nuvira/bundled",
+      "updatedAt": "2026-08-27T12:51:59.023Z"
+    },
+    {
+      "name": "group-policy",
+      "description": "Manage Group Policy: Local Group Policy Editor, GPO creation, policy deployment, and troubleshooting. Use when configuring Windows security and administrative policies.",
+      "version": "1.0.0",
+      "author": "agent-nuvira",
+      "tags": [
+        "group-policy",
+        "windows",
+        "security",
+        "configuration",
+        "management"
+      ],
+      "source": "agent-nuvira/bundled",
+      "updatedAt": "2026-08-27T12:51:59.023Z"
+    },
+    {
+      "name": "cross-platform-build",
+      "description": "Build cross-platform applications: shared codebase targeting web, desktop (Electron/Tauri), and mobile (React Native/Flutter). Covers platform detection, shared logic, and platform-specific adaptations. Use when building for multiple platforms from one codebase.",
+      "version": "1.0.0",
+      "author": "agent-nuvira",
+      "tags": [
+        "cross-platform",
+        "electron",
+        "tauri",
+        "react-native",
+        "flutter"
+      ],
+      "source": "agent-nuvira/bundled",
+      "updatedAt": "2026-08-27T12:51:59.023Z"
+    },
+    {
+      "name": "electron-app",
+      "description": "Build an Electron desktop application: main process, renderer process, IPC communication, auto-updates, and native modules. Use when creating a desktop application with web technologies.",
+      "version": "1.0.0",
+      "author": "agent-nuvira",
+      "tags": [
+        "electron",
+        "desktop",
+        "app",
+        "ipc",
+        "packaging"
+      ],
+      "source": "agent-nuvira/bundled",
+      "updatedAt": "2026-08-27T12:51:59.023Z"
+    },
+    {
+      "name": "mobile-bridge",
+      "description": "Bridge web and native mobile: Capacitor, Cordova, or React Native bridge for accessing native device features from web code. Use when adding native mobile capabilities to a web application.",
+      "version": "1.0.0",
+      "author": "agent-nuvira",
+      "tags": [
+        "mobile",
+        "bridge",
+        "capacitor",
+        "cordova",
+        "native"
+      ],
+      "source": "agent-nuvira/bundled",
+      "updatedAt": "2026-08-27T12:51:59.023Z"
     },
     {
       "name": "debug-helpers",
       "description": "Debug application issues: breakpoints, logging, profiling, memory analysis, and network inspection. Covers Chrome DevTools, Node.js inspector, and language-specific debuggers. Use when diagnosing bugs or performance issues.",
       "version": "1.0.0",
       "author": "agent-nuvira",
-      "tags": [],
+      "tags": [
+        "debug",
+        "debugging",
+        "profiling",
+        "performance",
+        "tools"
+      ],
       "source": "agent-nuvira/bundled",
-      "updatedAt": "2026-08-26T23:00:00.000Z"
+      "updatedAt": "2026-08-27T12:51:59.023Z"
     },
     {
       "name": "terminal-hints",
       "description": "Provide intelligent terminal assistance: command suggestions, error interpretation, shell completions, and workflow automation. Use when helping users with terminal commands or diagnosing shell errors.",
       "version": "1.0.0",
       "author": "agent-nuvira",
-      "tags": [],
+      "tags": [
+        "terminal",
+        "shell",
+        "hints",
+        "error-help",
+        "automation"
+      ],
       "source": "agent-nuvira/bundled",
-      "updatedAt": "2026-08-26T23:00:00.000Z"
+      "updatedAt": "2026-08-27T12:51:59.023Z"
     },
     {
       "name": "session-search",
       "description": "Search and retrieve past coding sessions: find previous conversations, code changes, and decisions. Covers session storage, full-text search, and context retrieval. Use when the goal is to find information from past interactions.",
       "version": "1.0.0",
       "author": "agent-nuvira",
-      "tags": [],
+      "tags": [
+        "session",
+        "search",
+        "history",
+        "context",
+        "retrieval"
+      ],
       "source": "agent-nuvira/bundled",
-      "updatedAt": "2026-08-26T23:00:00.000Z"
+      "updatedAt": "2026-08-27T12:51:59.023Z"
     },
     {
       "name": "thread-context",
       "description": "Manage thread context: maintain conversation history, summarize long threads, extract key decisions, and track action items. Use when managing long-running conversations or complex discussions.",
       "version": "1.0.0",
       "author": "agent-nuvira",
-      "tags": [],
+      "tags": [
+        "thread",
+        "context",
+        "conversation",
+        "summary",
+        "management"
+      ],
       "source": "agent-nuvira/bundled",
-      "updatedAt": "2026-08-26T23:00:00.000Z"
+      "updatedAt": "2026-08-27T12:51:59.023Z"
     },
     {
       "name": "memory-tool",
       "description": "Manage agent memory: store and retrieve facts, preferences, and context across sessions. Covers short-term (working memory) and long-term (persistent) memory with semantic search. Use when the agent needs to remember information across interactions.",
       "version": "1.0.0",
       "author": "agent-nuvira",
-      "tags": [],
+      "tags": [
+        "memory",
+        "agent",
+        "persistence",
+        "semantic-search",
+        "context"
+      ],
       "source": "agent-nuvira/bundled",
-      "updatedAt": "2026-08-26T23:00:00.000Z"
+      "updatedAt": "2026-08-27T12:51:59.023Z"
     },
     {
       "name": "budget-config",
       "description": "Configure and manage budgets: API usage tracking, cost alerts, spending limits, and billing optimization. Use when setting up cost controls for API usage or cloud resources.",
       "version": "1.0.0",
       "author": "agent-nuvira",
-      "tags": [],
+      "tags": [
+        "budget",
+        "cost",
+        "billing",
+        "optimization",
+        "monitoring"
+      ],
       "source": "agent-nuvira/bundled",
-      "updatedAt": "2026-08-26T23:00:00.000Z"
+      "updatedAt": "2026-08-27T12:51:59.023Z"
     },
     {
       "name": "schema-sanitizer",
       "description": "Sanitize and validate data schemas: input validation, output sanitization, schema transformation, and type coercion. Use when ensuring data conforms to expected formats and preventing injection attacks.",
       "version": "1.0.0",
       "author": "agent-nuvira",
-      "tags": [],
+      "tags": [
+        "schema",
+        "validation",
+        "sanitizer",
+        "security",
+        "data"
+      ],
       "source": "agent-nuvira/bundled",
-      "updatedAt": "2026-08-26T23:00:00.000Z"
+      "updatedAt": "2026-08-27T12:51:59.023Z"
     },
     {
       "name": "binary-extensions",
       "description": "Detect and handle binary file extensions: identify binary vs text files, handle binary content appropriately, and configure editors/tools to skip binary files. Use when processing mixed file types in a codebase.",
       "version": "1.0.0",
       "author": "agent-nuvira",
-      "tags": [],
+      "tags": [
+        "binary",
+        "extensions",
+        "file-detection",
+        "configuration",
+        "tools"
+      ],
       "source": "agent-nuvira/bundled",
-      "updatedAt": "2026-08-26T23:00:00.000Z"
+      "updatedAt": "2026-08-27T12:51:59.023Z"
     },
     {
       "name": "approval-tool",
       "description": "Implement approval workflows: request approval before dangerous actions, track approval decisions, and enforce approval policies. Use when adding safety gates to agent operations.",
       "version": "1.0.0",
       "author": "agent-nuvira",
-      "tags": [],
+      "tags": [
+        "approval",
+        "workflow",
+        "safety",
+        "policy",
+        "governance"
+      ],
       "source": "agent-nuvira/bundled",
-      "updatedAt": "2026-08-26T23:00:00.000Z"
+      "updatedAt": "2026-08-27T12:51:59.023Z"
     },
     {
       "name": "delegation-live-log",
       "description": "Monitor delegated tasks in real-time: live log streaming, progress tracking, and status updates. Use when supervising background tasks or parallel agent operations.",
       "version": "1.0.0",
       "author": "agent-nuvira",
-      "tags": [],
+      "tags": [
+        "delegation",
+        "live-log",
+        "monitoring",
+        "progress",
+        "real-time"
+      ],
       "source": "agent-nuvira/bundled",
-      "updatedAt": "2026-08-26T23:00:00.000Z"
+      "updatedAt": "2026-08-27T12:51:59.023Z"
+    },
+    {
+      "name": "docker-management",
+      "description": "Manage Docker containers, images, volumes, networks, and Compose stacks. Use when the goal is to run, stop, restart, inspect, or debug Docker containers; build, pull, push, or clean up images; manage Docker Compose services; work with volumes or networks; check disk usage; or debug container issues. Also use for Dockerfile optimization and container health monitoring.",
+      "version": "2.0.0",
+      "author": "agent-nuvira",
+      "tags": [
+        "docker",
+        "containers",
+        "compose",
+        "devops",
+        "infrastructure",
+        "dockerfile",
+        "volumes",
+        "networks"
+      ],
+      "source": "agent-nuvira/bundled",
+      "updatedAt": "2026-08-27T12:51:59.023Z"
+    },
+    {
+      "name": "container-supervision",
+      "description": "Monitor and supervise Docker container health: check health status, configure restart policies, set up health checks, auto-restart unhealthy containers, and log container events. Use when the goal is to ensure containers stay running and recover from failures.",
+      "version": "2.0.0",
+      "author": "agent-nuvira",
+      "tags": [
+        "docker",
+        "containers",
+        "health",
+        "supervision",
+        "monitoring",
+        "restart",
+        "healthcheck"
+      ],
+      "source": "agent-nuvira/bundled",
+      "updatedAt": "2026-08-27T12:51:59.023Z"
     },
     {
       "name": "cicd-advanced",
       "description": "Advanced CI/CD pipelines: multi-stage builds, canary deployments, rollback strategies, artifact management, and pipeline optimization. Use when building sophisticated deployment pipelines.",
       "version": "1.0.0",
       "author": "agent-nuvira",
-      "tags": [],
+      "tags": [
+        "cicd",
+        "pipeline",
+        "canary",
+        "rollback",
+        "deployment"
+      ],
       "source": "agent-nuvira/bundled",
-      "updatedAt": "2026-08-26T23:00:00.000Z"
+      "updatedAt": "2026-08-27T12:51:59.023Z"
     },
     {
       "name": "infra-monitoring",
       "description": "Infrastructure monitoring setup: Prometheus, Grafana, alerting rules, dashboards, and SLI/SLO tracking. Use when setting up observability for production systems.",
       "version": "1.0.0",
       "author": "agent-nuvira",
-      "tags": [],
+      "tags": [
+        "monitoring",
+        "prometheus",
+        "grafana",
+        "alerting",
+        "observability"
+      ],
       "source": "agent-nuvira/bundled",
-      "updatedAt": "2026-08-26T23:00:00.000Z"
+      "updatedAt": "2026-08-27T12:51:59.023Z"
     },
     {
       "name": "cost-optimization",
       "description": "Cloud cost optimization: right-sizing, reserved instances, spot instances, resource tagging, and cost monitoring. Use when optimizing cloud spending.",
       "version": "1.0.0",
       "author": "agent-nuvira",
-      "tags": [],
+      "tags": [
+        "cost",
+        "optimization",
+        "cloud",
+        "aws",
+        "right-sizing"
+      ],
       "source": "agent-nuvira/bundled",
-      "updatedAt": "2026-08-26T23:00:00.000Z"
+      "updatedAt": "2026-08-27T12:51:59.023Z"
     },
     {
       "name": "disaster-recovery",
       "description": "Disaster recovery planning: backup strategies, failover mechanisms, RTO/RPO targets, and DR testing. Use when planning for system resilience.",
       "version": "1.0.0",
       "author": "agent-nuvira",
-      "tags": [],
+      "tags": [
+        "disaster-recovery",
+        "backup",
+        "failover",
+        "resilience"
+      ],
       "source": "agent-nuvira/bundled",
-      "updatedAt": "2026-08-26T23:00:00.000Z"
+      "updatedAt": "2026-08-27T12:51:59.023Z"
     },
     {
       "name": "capacity-planning",
       "description": "Capacity planning: load testing, performance baselines, growth forecasting, and scaling strategies. Use when planning for system growth.",
       "version": "1.0.0",
       "author": "agent-nuvira",
-      "tags": [],
+      "tags": [
+        "capacity",
+        "planning",
+        "load-testing",
+        "scaling"
+      ],
       "source": "agent-nuvira/bundled",
-      "updatedAt": "2026-08-26T23:00:00.000Z"
+      "updatedAt": "2026-08-27T12:51:59.023Z"
     },
     {
       "name": "incident-response",
       "description": "Incident response procedures: detection, containment, eradication, recovery, and post-incident review. Use when responding to security incidents.",
       "version": "1.0.0",
       "author": "agent-nuvira",
-      "tags": [],
+      "tags": [
+        "incident-response",
+        "security",
+        "breach",
+        "forensics"
+      ],
       "source": "agent-nuvira/bundled",
-      "updatedAt": "2026-08-26T23:00:00.000Z"
+      "updatedAt": "2026-08-27T12:51:59.023Z"
     },
     {
       "name": "forensics",
       "description": "Digital forensics: evidence collection, chain of custody, analysis, and reporting. Use when investigating security incidents.",
       "version": "1.0.0",
       "author": "agent-nuvira",
-      "tags": [],
+      "tags": [
+        "forensics",
+        "investigation",
+        "evidence",
+        "security"
+      ],
       "source": "agent-nuvira/bundled",
-      "updatedAt": "2026-08-26T23:00:00.000Z"
+      "updatedAt": "2026-08-27T12:51:59.023Z"
     },
     {
       "name": "threat-intel",
       "description": "Threat intelligence: IOC collection, threat hunting, attribution, and intelligence sharing. Use when gathering and analyzing threat intelligence.",
       "version": "1.0.0",
       "author": "agent-nuvira",
-      "tags": [],
+      "tags": [
+        "threat-intelligence",
+        "IOC",
+        "hunting",
+        "attribution"
+      ],
       "source": "agent-nuvira/bundled",
-      "updatedAt": "2026-08-26T23:00:00.000Z"
+      "updatedAt": "2026-08-27T12:51:59.023Z"
     },
     {
       "name": "secure-coding",
       "description": "Secure coding practices: input validation, output encoding, authentication, authorization, and cryptographic operations. Use when implementing security controls.",
       "version": "1.0.0",
       "author": "agent-nuvira",
-      "tags": [],
+      "tags": [
+        "secure-coding",
+        "security",
+        "authentication",
+        "cryptography"
+      ],
       "source": "agent-nuvira/bundled",
-      "updatedAt": "2026-08-26T23:00:00.000Z"
+      "updatedAt": "2026-08-27T12:51:59.023Z"
     },
     {
       "name": "container-security",
       "description": "Container security: image scanning, runtime protection, network policies, and secrets management. Use when securing containerized applications.",
       "version": "1.0.0",
       "author": "agent-nuvira",
-      "tags": [],
+      "tags": [
+        "container-security",
+        "docker",
+        "kubernetes",
+        "secrets"
+      ],
       "source": "agent-nuvira/bundled",
-      "updatedAt": "2026-08-26T23:00:00.000Z"
+      "updatedAt": "2026-08-27T12:51:59.023Z"
     },
     {
       "name": "data-quality",
       "description": "Data quality management: validation rules, profiling, cleansing, and monitoring. Use when ensuring data accuracy and completeness.",
       "version": "1.0.0",
       "author": "agent-nuvira",
-      "tags": [],
+      "tags": [
+        "data-quality",
+        "validation",
+        "profiling",
+        "cleansing"
+      ],
       "source": "agent-nuvira/bundled",
-      "updatedAt": "2026-08-26T23:00:00.000Z"
+      "updatedAt": "2026-08-27T12:51:59.023Z"
     },
     {
       "name": "data-governance",
       "description": "Data governance: policies, access controls, compliance, and stewardship. Use when implementing data governance frameworks.",
       "version": "1.0.0",
       "author": "agent-nuvira",
-      "tags": [],
+      "tags": [
+        "data-governance",
+        "compliance",
+        "GDPR",
+        "CCPA"
+      ],
       "source": "agent-nuvira/bundled",
-      "updatedAt": "2026-08-26T23:00:00.000Z"
+      "updatedAt": "2026-08-27T12:51:59.023Z"
     },
     {
       "name": "streaming-data",
       "description": "Streaming data architectures: Kafka, Kinesis, event sourcing, and real-time processing. Use when building real-time data pipelines.",
       "version": "1.0.0",
       "author": "agent-nuvira",
-      "tags": [],
+      "tags": [
+        "streaming",
+        "kafka",
+        "kinesis",
+        "real-time"
+      ],
       "source": "agent-nuvira/bundled",
-      "updatedAt": "2026-08-26T23:00:00.000Z"
+      "updatedAt": "2026-08-27T12:51:59.023Z"
     },
     {
       "name": "data-lineage",
       "description": "Data lineage tracking: origin, transformations, dependencies, and impact analysis. Use when tracking data flow through systems.",
       "version": "1.0.0",
       "author": "agent-nuvira",
-      "tags": [],
+      "tags": [
+        "data-lineage",
+        "metadata",
+        "impact-analysis",
+        "compliance"
+      ],
       "source": "agent-nuvira/bundled",
-      "updatedAt": "2026-08-26T23:00:00.000Z"
-    },
-    {
-      "name": "docker-management",
-      "description": "Manage Docker containers, images, volumes, networks, and Compose stacks. Use when the goal is to run, stop, restart, inspect, or debug Docker containers; build, pull, push, or clean up images; manage Docker Compose services; work with volumes or networks; check disk usage; or debug container issues. Also use for Dockerfile optimization and container health monitoring.",
-      "version": "1.0.0",
-      "author": "agent-nuvira",
-      "tags": [],
-      "source": "agent-nuvira/bundled",
-      "updatedAt": "2026-08-26T23:00:00.000Z"
-    },
-    {
-      "name": "container-supervision",
-      "description": "Monitor and supervise Docker container health: check health status, configure restart policies, set up health checks, auto-restart unhealthy containers, and log container events. Use when the goal is to ensure containers stay running and recover from failures.",
-      "version": "1.0.0",
-      "author": "agent-nuvira",
-      "tags": [],
-      "source": "agent-nuvira/bundled",
-      "updatedAt": "2026-08-26T23:00:00.000Z"
+      "updatedAt": "2026-08-27T12:51:59.023Z"
     }
   ]
 }
