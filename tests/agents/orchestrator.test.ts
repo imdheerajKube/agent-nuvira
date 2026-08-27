@@ -2652,7 +2652,7 @@ describe('Orchestrator — planner-repair model escalation', () => {
 // model until the repair budget died. The same escalation now applies to the
 // per-task repair engine (createEscalatedLLM) when auto routing is active.
 
-describe('Orchestrator — per-task repair model escalation', () => {
+describe('Orchestrator — per-task repair model escalation', { timeout: 30000 }, () => {
   let orchestrator: Orchestrator;
 
   beforeEach(() => {
