@@ -43,6 +43,7 @@ issues/
 # artifacts served by the registry, not user docs. Generated + committed via
 # scripts/sync-hub-skills.mjs so the configured default registry resolves.
 !.agents/skills/**/SKILL.md
+!.agents/skills/**/references/*.md
 !packages/sdk/README.md
 !vscode-extension/README.md
 !vscode-extension/CHANGELOG.md
