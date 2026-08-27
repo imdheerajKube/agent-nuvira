@@ -1,0 +1,36 @@
+{
+  "name": "{{game_name}}",
+  "version": "1.0.0",
+  "description": "{{game_description}}",
+  "type": "{{game_type}}",
+  "language": "python",
+  "framework": "{{framework}}",
+  "platform": "{{platform}}",
+  "window": {
+    "width": {{window_width}},
+    "height": {{window_height}},
+    "title": "{{game_title}}",
+    "resizable": {{resizable}}
+  },
+  "game": {
+    "players": {{num_players}},
+    "max_turns": {{max_turns}},
+    "difficulty": "{{difficulty}}"
+  },
+  "assets": {
+    "sprites_dir": "assets/sprites",
+    "sounds_dir": "assets/sounds",
+    "music_dir": "assets/music"
+  },
+  "build": {
+    "method": "{{build_method}}",
+    "output_dir": "dist",
+    "one_file": true,
+    "windowed": true
+  },
+  "dependencies": [
+    {{#dependencies}}
+    "{{.}}"{{^last}},{{/last}}
+    {{/dependencies}}
+  ]
+}

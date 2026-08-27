@@ -1,0 +1,44 @@
+# {{app_name}} Dockerfile
+# Multi-stage build for production
+
+# Stage 1: Build
+FROM {{base_image}} AS builder
+
+WORKDIR /app
+
+# Copy package files
+COPY package*.json ./
+RUN npm ci --only=production
+
+# Copy source code
+COPY . .
+
+# Build application
+RUN npm run build
+
+# Stage 2: Production
+FROM {{base_image}} AS production
+
+WORKDIR /app
+
+# Create non-root user
+RUN addgroup -g 1001 -S appgroup && \
+    adduser -S appuser -u 1001 -G appgroup
+
+# Copy built application
+COPY --from=builder --chown=appuser:appgroup /app/dist ./dist
+COPY --from=builder --chown=appuser:appgroup /app/node_modules ./node_modules
+COPY --from=builder --chown=appuser:appgroup /app/package.json ./
+
+# Switch to non-root user
+USER appuser
+
+# Expose port
+EXPOSE {{port}}
+
+# Health check
+HEALTHCHECK --interval=30s --timeout=3s --start-period=5s --retries=3 \
+  CMD curl -f http://localhost:{{port}}/health || exit 1
+
+# Start application
+CMD ["node", "dist/index.js"]
