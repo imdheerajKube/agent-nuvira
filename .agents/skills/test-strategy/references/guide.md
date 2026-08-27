@@ -1,34 +1,68 @@
 # Test Strategy Reference Guide
 
 ## Overview
-This reference provides detailed guidance for the test-strategy skill.
+Plan and run a deep test pass: map the test surface, choose the right matrix (unit / integration / e2e, focused runs for changed code), execute the real commands (npm test, vitest, pytest, etc.), and deliver a verdict with evidence. Use when the goal asks to test, verify, check for regressions, or prove a change is safe.
 
-## Key Concepts
-- Best practices and patterns for test-strategy
-- Common use cases and scenarios
-- Implementation guidelines
+## # test-strategy
 
-## Detailed Sections
-### Getting Started
-- Prerequisites and setup
-- Basic configuration
-- Initial implementation
+Plan and run a deep test pass: map the test surface, choose the right matrix (unit / integration / e2e, focused runs for changed code), execute the real commands (npm test, vitest, pytest, etc.), and deliver a verdict with evidence. Use when the goal asks to test, verify, check for regressions, or prove a change is safe.
 
-### Advanced Topics
-- Performance optimization
-- Security considerations
-- Scalability patterns
+## Goal pattern
 
-## Examples
-Refer to the SKILL.md file for step-by-step instructions and detailed examples.
+test verify regression check coverage suite unit integration e2e pass run tests prove safe
+
+## Parameters
+
+- scope (choice [default: full]): Scope of the test pass: focused | unit | integration | full (default: full)
+- target (file-path): Path or files to focus on (for scope=focused)
+
+## Steps
+
+1. [context-gatherer] Map the test surface with evidence: read the test config (vitest/jest/pytest config in the manifests), list the test files (glob "**/*.test.*" or tests/), and note the commands that run them (from package.json scripts or equivalent). Identify:
+- the unit test entry points and how fast they are
+- any integration/e2e suites and their prerequisites (services, fixtures, env vars)
+- which areas changed and deserve a focused run first
+
+2. [planner] Choose the matrix — never just "run everything":
+- focused: the tests touching the changed code (fastest, run FIRST)
+- unit: the full unit suite (the main regression net)
+- integration: the suites that exercise real boundaries (DB, HTTP, filesystem)
+- e2e: the slow end-to-end flows — run only when unit+integration are green
+- typecheck/build: static verification alongside the tests
+Record the exact commands and the order, with the reason each level matters. (after: step-0)
+
+3. [runner] Execute the matrix IN ORDER with the real commands via run_terminal (never claim tests pass without running them):
+- start with the focused run — a failure here tells you the change broke something before the slow suites waste time
+- then the full unit suite
+- then integration (and e2e only if the cheaper levels are green)
+- run typecheck/build as the static gate
+On a failure: read the failing test + the code (read_file), fix, and re-run that focused test until green before moving up the matrix. (after: step-1)
+
+4. [reviewer] Deliver the verdict with evidence: what ran (exact commands + pass/fail counts), what passed, what failed and why (file:line), coverage gaps that matter, and a clear recommendation (safe to merge / needs fixes / needs more tests). Never state "tests pass" without the actual run output. (after: step-2)
+
+## Best Practices
+
+- Follow the skill's methodology step by step
+- Verify each step before proceeding to the next
+- Use the appropriate tools for each task
+- Document any deviations from the standard approach
+
+## Common Patterns
+
+- Start with context gathering to understand the current state
+- Plan the implementation before writing code
+- Test changes before committing
+- Review for security and performance implications
 
 ## Troubleshooting
-- Check logs for error messages
-- Verify configuration settings
-- Test with minimal setup first
-- Consult official documentation
+
+- If the skill fails, check the prerequisites first
+- Verify environment variables are set correctly
+- Check for conflicting configurations
+- Review logs for detailed error messages
 
 ## Further Reading
-- Official documentation
-- Community resources
-- Related skills in the registry
+
+- Refer to the main SKILL.md for complete methodology
+- Check official documentation for the specific technology
+- Review related skills in the registry for complementary approaches

@@ -1,34 +1,61 @@
 # Chaos Engineering Reference Guide
 
 ## Overview
-This reference provides detailed guidance for the chaos-engineering skill.
+Practice chaos engineering: inject faults, measure resilience, and improve system reliability. Covers experiment design, fault injection (network, CPU, memory), and blast radius control. Use when testing system resilience.
 
-## Key Concepts
-- Best practices and patterns for chaos-engineering
-- Common use cases and scenarios
-- Implementation guidelines
+## # chaos-engineering
 
-## Detailed Sections
-### Getting Started
-- Prerequisites and setup
-- Basic configuration
-- Initial implementation
+Practice chaos engineering: inject faults, measure resilience, and improve system reliability. Covers experiment design, fault injection (network, CPU, memory), and blast radius control. Use when testing system resilience.
 
-### Advanced Topics
-- Performance optimization
-- Security considerations
-- Scalability patterns
+## Goal pattern
 
-## Examples
-Refer to the SKILL.md file for step-by-step instructions and detailed examples.
+chaos engineering fault injection resilience testing reliability litmus chaos mesh game day
+
+## Steps
+
+0. [context-gatherer] Map the system: what services to test? What failure modes to explore? What observability exists? What is the blast radius limit?
+
+1. [planner] Design chaos experiments:
+1. Steady state: define normal behavior metrics
+2. Hypothesis: "the system will continue serving requests when X fails"
+3. Fault injection: network latency/loss, pod kills, CPU/memory stress
+4. Blast radius: start small, expand gradually
+5. Rollback: automatic rollback on breach of SLO
+6. Observability: monitor during experiment (after: 'step-0')
+
+2. [runner] Run the experiment:
+1. Verify steady state
+2. Inject fault (Litmus, Chaos Mesh, or custom)
+3. Monitor system behavior
+4. Observe if hypothesis holds
+5. Stop experiment
+6. Analyze results (after: 'step-1')
+
+3. [reviewer] Review: did the system handle the fault? What degraded? What broke? What improvements are needed? Document findings and action items. (after: 'step-2')
+
+## Best Practices
+
+- Follow the skill's methodology step by step
+- Verify each step before proceeding to the next
+- Use the appropriate tools for each task
+- Document any deviations from the standard approach
+
+## Common Patterns
+
+- Start with context gathering to understand the current state
+- Plan the implementation before writing code
+- Test changes before committing
+- Review for security and performance implications
 
 ## Troubleshooting
-- Check logs for error messages
-- Verify configuration settings
-- Test with minimal setup first
-- Consult official documentation
+
+- If the skill fails, check the prerequisites first
+- Verify environment variables are set correctly
+- Check for conflicting configurations
+- Review logs for detailed error messages
 
 ## Further Reading
-- Official documentation
-- Community resources
-- Related skills in the registry
+
+- Refer to the main SKILL.md for complete methodology
+- Check official documentation for the specific technology
+- Review related skills in the registry for complementary approaches
