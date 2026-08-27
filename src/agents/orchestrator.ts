@@ -875,10 +875,21 @@ export class Orchestrator {
         if (!HOSTING_INTENT.test(goalLower)) matchedSkill = null;
       }
       if (matchedSkill) {
+        // Load full methodology from skill_view() (Hermes progressive disclosure)
+        let fullMethodology = '';
+        try {
+          const { getSkillStore } = await import('../learning/skill-store.js');
+          const store = getSkillStore();
+          fullMethodology = store.skillView(matchedSkill.name);
+        } catch {
+          // Best-effort — skill_view failure must never break the pipeline
+        }
+
         vault.setMeta('skillGuidance', {
           name: matchedSkill.name,
           description: matchedSkill.description,
           steps: matchedSkill.steps.map((s) => ({ agentType: s.agentType, description: s.description })),
+          fullMethodology,
         });
         this.eventBus.emit(EventNames.ORCHESTRATOR_AGENT_UPDATE, {
           agentType: 'orchestrator',
@@ -905,10 +916,21 @@ export class Orchestrator {
           if (!HOSTING_INTENT.test(goalLower)) hubMatch = null;
         }
         if (hubMatch) {
+          // Load full methodology from skill_view() (Hermes progressive disclosure)
+          let fullMethodology = '';
+          try {
+            const { getSkillStore } = await import('../learning/skill-store.js');
+            const store = getSkillStore();
+            fullMethodology = store.skillView(hubMatch.name);
+          } catch {
+            // Best-effort — skill_view failure must never break the pipeline
+          }
+
           vault.setMeta('skillGuidance', {
             name: hubMatch.name,
             description: hubMatch.description,
             body: hubMatch.body,
+            fullMethodology,
           });
           this.eventBus.emit(EventNames.ORCHESTRATOR_AGENT_UPDATE, {
             agentType: 'orchestrator',
