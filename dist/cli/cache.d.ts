@@ -2,7 +2,7 @@ import { Command } from 'commander';
 import { BaseCommand } from './commands.js';
 /**
  * Cache command — manage inference cache
- * buff cache [clear|stats]
+ * nuvira cache [clear|stats]
  */
 export declare class CacheCommand extends BaseCommand {
     create(): Command;

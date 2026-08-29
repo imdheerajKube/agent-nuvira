@@ -5,10 +5,10 @@ import { BaseCommand } from './commands.js';
  * agent-baba-d models [--provider nim]
  *
  * Subcommands:
- *   buff models refresh [provider]  — probe + spot-check, update the registry
- *   buff models status [--json]     — show the Model Availability Registry
- *   buff models unblock <provider>  — manual escape hatch: release a blocked provider + re-probe
- *   buff models watch [--interval N]— background daemon keeping the registry fresh
+ *   nuvira models refresh [provider]  — probe + spot-check, update the registry
+ *   nuvira models status [--json]     — show the Model Availability Registry
+ *   nuvira models unblock <provider>  — manual escape hatch: release a blocked provider + re-probe
+ *   nuvira models watch [--interval N]— background daemon keeping the registry fresh
  */
 export declare class ModelsCommand extends BaseCommand {
     create(): Command;

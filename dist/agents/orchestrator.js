@@ -171,7 +171,7 @@ export class Orchestrator {
     /**
      * P0 reasoning trace: the id of the trace for the CURRENT pipeline (set in
      * execute(), ended in its finally). All LLM calls made while this is set are
-     * recorded as steps so `buff trace replay <id>` and the dashboard can show
+     * recorded as steps so `nuvira trace replay <id>` and the dashboard can show
      * exactly which agent × model × prompt produced each result.
      */
     activeTraceId = null;
@@ -223,7 +223,7 @@ export class Orchestrator {
     /** The actual pipeline body — wrapped by execute() with a K1 runId. */
     async executeCorrelated(goal, options = {}) {
         // P0 reasoning trace: begin the per-pipeline trace so every planner,
-        // memory, and task LLM call lands in ~/.buff/memory/reasoning-traces.json
+        // memory, and task LLM call lands in ~/.nuvira/memory/reasoning-traces.json
         // (best-effort — a trace failure must never break the pipeline).
         this.activeTraceId = beginTrace({
             goal,
@@ -236,7 +236,7 @@ export class Orchestrator {
             result = await this.executePipeline(goal, options);
             // Phase A2: workspace continuity — record this run in the project
             // registry so the current project's last goal / outcome / session are
-            // persisted for `buff doctor` and the D1 auto-recall. Best-effort — a
+            // persisted for `nuvira doctor` and the D1 auto-recall. Best-effort — a
             // workspace write must never break the result delivery.
             try {
                 this.configManager.getWorkspaceStore().recordRun({
@@ -260,7 +260,7 @@ export class Orchestrator {
             }
             this.activeTraceId = null;
             // K2: persist runtime metrics (memory hits/misses, rule/LLM latency)
-            // at the end of every pipeline run so buff doctor / the dashboard see
+            // at the end of every pipeline run so nuvira doctor / the dashboard see
             // them in a fresh process.
             try {
                 getMetrics().save();
@@ -356,7 +356,7 @@ export class Orchestrator {
             dependencyInstallSucceeded: false,
             rollbackCount: 0,
         };
-        // Auto routing: when the user selected auto (`-m auto` / `buff model switch auto`
+        // Auto routing: when the user selected auto (`-m auto` / `nuvira model switch auto`
         // / `--auto-route`), the planner/memory LLM must ALSO be routed through the
         // AutoModelRouter so no call ever sends a literal 'auto' model to a real API.
         // Matches executeSingleTask's rule: an explicit --model always wins.
@@ -500,7 +500,7 @@ export class Orchestrator {
                     }
                 }
                 else if (options.verbose) {
-                    logger.info('   No MCP server configs found (see ~/.buff/mcp/)');
+                    logger.info('   No MCP server configs found (see ~/.nuvira/mcp/)');
                 }
             }
             catch (err) {
@@ -628,10 +628,21 @@ export class Orchestrator {
                     matchedSkill = null;
             }
             if (matchedSkill) {
+                // Load full methodology from skill_view() (Hermes progressive disclosure)
+                let fullMethodology = '';
+                try {
+                    const { getSkillStore } = await import('../learning/skill-store.js');
+                    const store = getSkillStore();
+                    fullMethodology = store.skillView(matchedSkill.name);
+                }
+                catch {
+                    // Best-effort — skill_view failure must never break the pipeline
+                }
                 vault.setMeta('skillGuidance', {
                     name: matchedSkill.name,
                     description: matchedSkill.description,
                     steps: matchedSkill.steps.map((s) => ({ agentType: s.agentType, description: s.description })),
+                    fullMethodology,
                 });
                 this.eventBus.emit(EventNames.ORCHESTRATOR_AGENT_UPDATE, {
                     agentType: 'orchestrator',
@@ -645,7 +656,7 @@ export class Orchestrator {
             else {
                 // I7 P0: no compiled skill matched — consult the HUB catalog (installed
                 // SKILL.md skills). These are first-class runtime capabilities too: a
-                // fresh `buff skills install` is matchable with zero recompilation.
+                // fresh `nuvira skills install` is matchable with zero recompilation.
                 // Same model-selected activation contract: the skill is a
                 // recommendation, the planner still owns the final plan.
                 const { findHubSkillMatch } = await import('../learning/hub-skill-catalog.js');
@@ -660,10 +671,21 @@ export class Orchestrator {
                         hubMatch = null;
                 }
                 if (hubMatch) {
+                    // Load full methodology from skill_view() (Hermes progressive disclosure)
+                    let fullMethodology = '';
+                    try {
+                        const { getSkillStore } = await import('../learning/skill-store.js');
+                        const store = getSkillStore();
+                        fullMethodology = store.skillView(hubMatch.name);
+                    }
+                    catch {
+                        // Best-effort — skill_view failure must never break the pipeline
+                    }
                     vault.setMeta('skillGuidance', {
                         name: hubMatch.name,
                         description: hubMatch.description,
                         body: hubMatch.body,
+                        fullMethodology,
                     });
                     this.eventBus.emit(EventNames.ORCHESTRATOR_AGENT_UPDATE, {
                         agentType: 'orchestrator',
@@ -705,6 +727,31 @@ export class Orchestrator {
             }
         }
         else {
+            // ── 3d. Reasoner (technical decisions before planning) ─────────────
+            // The reasoner makes high-level technical decisions (language, framework,
+            // platform, architecture) BEFORE the planner creates steps. This replaces
+            // generic "create a game" with specific "Create a Python+tkinter game,
+            // single file, package with pyinstaller" — the planner then creates
+            // precise steps based on these decisions.
+            try {
+                if (options.verbose)
+                    logger.highlight('\n🧠 Reasoning...');
+                const reasoner = this.moduleRegistry.getModule('reasoner');
+                const reasonerResult = await this.runAgent(reasoner, vault, plannerCallLLM, options);
+                agentResults.push({ agent: 'Reasoner', success: reasonerResult.success, summary: reasonerResult.summary });
+                if (options.verbose && reasonerResult.success) {
+                    const decision = vault.getMeta('technicalDecision');
+                    if (decision) {
+                        logger.info(`   🧠 ${decision.language}+${decision.framework} → ${decision.platform} → ${decision.deliverable}`);
+                        if (decision.reasoning)
+                            logger.info(`   🧠 ${decision.reasoning}`);
+                    }
+                }
+                // Best-effort — reasoning failure must never block planning
+            }
+            catch (err) {
+                logger.debug(`Reasoner failed (non-critical): ${err}`);
+            }
             if (options.verbose)
                 logger.highlight('\n📋 Planning...');
             // Planner with auto-repair — if planning fails, try alternative approaches
@@ -948,8 +995,8 @@ export class Orchestrator {
             reviewId = review.id;
             if (options.verbose) {
                 logger.highlight(`\n📋 Created review bundle: ${review.id}`);
-                logger.info(`   Run \`buff team review show ${review.id}\` to view`);
-                logger.info(`   Run \`buff team review approve ${review.id}\` then \`buff team review merge ${review.id}\` to apply`);
+                logger.info(`   Run \`nuvira team review show ${review.id}\` to view`);
+                logger.info(`   Run \`nuvira team review approve ${review.id}\` then \`nuvira team review merge ${review.id}\` to apply`);
             }
         }
         // ── 6c. Apply file changes ────────────────────────────────────────────
@@ -1023,7 +1070,7 @@ export class Orchestrator {
                         description: `Pattern/failure-lesson extraction for: ${goal.slice(0, 80)}`,
                     }), options.agentModels, options.verbose);
                     if (options.verbose && trajectoryId) {
-                        logger.info('   Self-improvement stats saved. Run `buff learn optimize` to see recommendations.');
+                        logger.info('   Self-improvement stats saved. Run `nuvira learn optimize` to see recommendations.');
                     }
                 }
                 catch (err) {
@@ -1049,6 +1096,15 @@ export class Orchestrator {
             tasksTotal: total,
             durationMs: Date.now() - startTime,
         }, 'orchestrator');
+        // ── Learning loop: create skills from successful complex tasks ────
+        // After a successful pipeline, check if the task was complex enough to
+        // warrant creating a reusable skill. This is the Hermes pattern: skills
+        // self-improve during use, and complex tasks produce new skills.
+        if (!hasFailures && completed >= 3) {
+            this.postPipelineLearning(goal, vault, options).catch(() => {
+                // Best-effort — learning must never break the pipeline result
+            });
+        }
         // ── Generate structured report via ReportModule ──────────────────
         const report = await this.reportModule.generate({
             goal,
@@ -1090,12 +1146,82 @@ export class Orchestrator {
             typeof decision.score === 'number' &&
             decision.score < 0.5) {
             logger.warn(`   ⚠️  Auto-routing found only a weak LOCAL model (${decision.model}, score ${decision.score.toFixed(2)}/1.0) — no verified cloud model is available. ` +
-                `Complex tasks may run slowly or fail. Add a real API key (buff provider set) or run with an explicit --model for reliable results.`);
+                `Complex tasks may run slowly or fail. Add a real API key (nuvira provider set) or run with an explicit --model for reliable results.`);
             this.eventBus.emit(EventNames.ORCHESTRATOR_AGENT_UPDATE, {
                 agentType: 'orchestrator',
                 stage: 'routing',
                 message: `⚠️ Only a weak local model (${decision.model}) is available — this pipeline may be slow or fail. Add a real API key for better results.`,
             }, 'orchestrator');
+        }
+    }
+    /**
+     * Post-pipeline learning: create skills from successful complex tasks.
+     *
+     * After a successful pipeline with 3+ completed steps, extract the
+     * execution pattern as a reusable skill. This is the Hermes pattern:
+     * skills self-improve during use, and complex tasks produce new skills.
+     *
+     * The skill is created asynchronously (fire-and-forget) so it never
+     * blocks the pipeline result delivery.
+     */
+    async postPipelineLearning(goal, vault, options) {
+        try {
+            const { getSkillStore } = await import('../learning/skill-store.js');
+            const skillStore = getSkillStore();
+            // Check if a skill already matches this goal (don't duplicate)
+            const existing = skillStore.findMatch(goal);
+            if (existing)
+                return;
+            // Extract the execution pattern from the completed plan
+            const completedSteps = vault.context.taskPlan
+                .filter((s) => s.status === 'completed')
+                .map((s) => ({
+                agentType: s.agentType,
+                description: s.description,
+                complexity: s.complexity,
+            }));
+            if (completedSteps.length < 3)
+                return; // Not complex enough
+            // Create a skill from the execution pattern
+            const skillName = goal
+                .toLowerCase()
+                .replace(/[^a-z0-9]+/g, '-')
+                .replace(/^-|-$/g, '')
+                .slice(0, 50);
+            // Only create if the name is meaningful
+            if (skillName.length < 5)
+                return;
+            const skill = {
+                id: `skill-learned-${skillName}`,
+                name: skillName,
+                description: `Learned from successful execution: ${goal}`,
+                version: '1.0.0',
+                goalPattern: goal.toLowerCase().slice(0, 100),
+                steps: completedSteps.map((s) => ({
+                    agentType: s.agentType,
+                    description: s.description,
+                    dependsOn: [],
+                })),
+                parameters: [],
+                tags: ['learned', 'auto-generated'],
+                sourceTrajectoryIds: [],
+                createdAt: Date.now(),
+                usageCount: 0,
+                qualityScore: 1.0,
+                lastUsedAt: Date.now(),
+            };
+            skillStore.save(skill);
+            if (options.verbose) {
+                logger.info(`   🧠 Learned new skill '${skillName}' from successful pipeline`);
+            }
+            this.eventBus.emit(EventNames.ORCHESTRATOR_AGENT_UPDATE, {
+                agentType: 'orchestrator',
+                stage: 'learning',
+                message: `🧠 Learned new skill '${skillName}' from successful execution`,
+            }, 'orchestrator');
+        }
+        catch {
+            // Best-effort — learning must never break the pipeline
         }
     }
     /**
@@ -1330,6 +1456,64 @@ export class Orchestrator {
             return output;
         };
     }
+    /**
+     * CHANGE-002: Create a fast/cheap LLM for file finding.
+     * Adopts Codebuff's pattern: use a small, fast model (like Gemini Flash)
+     * for file selection instead of the main (expensive) model.
+     *
+     * The file finder only needs to:
+     * 1. Read the file tree
+     * 2. Match files to the task description
+     * 3. Return file paths
+     *
+     * This doesn't require a powerful model — a fast model with good instruction
+     * following is sufficient. Codebuff uses a finetuned Gemini Flash model for
+     * this exact purpose.
+     *
+     * Returns a cheap LLM call function, or null if no fast model is available.
+     */
+    createFileFinderLLM(options) {
+        // Try to find a fast/cheap model for file finding.
+        // Priority: explicit gathererModel option > auto-router's cheapest > null (use main model)
+        const gathererModel = options.agentModels?.['context-gatherer'];
+        if (gathererModel) {
+            // User explicitly configured a model for context gathering — use it
+            const [provider, model] = gathererModel.includes('/')
+                ? gathererModel.split('/', 2)
+                : [options.provider || 'auto', gathererModel];
+            try {
+                return this.createLLMProvider({ ...options, provider, model });
+            }
+            catch {
+                // Best-effort — fall through to auto selection
+            }
+        }
+        // Try auto-router to find the cheapest fast model for file finding
+        if (isAutoModel(options.model) || isAutoProvider(options.provider) || options.autoRouteModels) {
+            try {
+                const autoRouter = getAutoRouter();
+                const decision = autoRouter.resolve('context-gatherer', 'file finding', {
+                    ...buildAutoResolveOptions(this.configManager, {
+                        verbose: options.verbose,
+                    }),
+                    // Prefer cheap, fast models for file finding
+                    preferenceMode: 'cost-first',
+                }, this.configManager);
+                if (decision.provider && decision.model) {
+                    return this.createLLMProvider({
+                        ...options,
+                        provider: decision.provider,
+                        model: decision.model,
+                    });
+                }
+            }
+            catch {
+                // Best-effort — fall through to null (use main model)
+            }
+        }
+        // No fast model available — return null so context-gatherer uses main model
+        return null;
+    }
     async runAgent(agent, vault, callLLM, _options) {
         try {
             return await withLogCorrelation({ taskId: 'single' }, () => agent.execute(vault.context, callLLM));
@@ -1348,7 +1532,7 @@ export class Orchestrator {
      * rate-limiting repeatedly — the user is never interrupted, and the build
      * continues on whichever provider is healthy. The interactive prompt
      * (wait / switch / skip / abort) is opt-in via `routing.askOnRateLimit: true`
-     * in .buffconfig.json and only ever appears on a real TTY.
+     * in .nuviraconfig.json and only ever appears on a real TTY.
      *
      * Returns undefined only for dry-run (no LLM calls happen anyway), so even
      * non-interactive runs (CI, pipes) get silent auto-switch instead of grinding
@@ -1604,7 +1788,7 @@ export class Orchestrator {
         }
         try {
             // ── Auto routing: use the right model for the right task ───────────
-            // When the user selected Auto (`-m auto` / `buff model switch auto`) or
+            // When the user selected Auto (`-m auto` / `nuvira model switch auto`) or
             // passed `--auto-route` without an explicit --model, route each task
             // independently via the AutoModelRouter so e.g. the planner gets a fast
             // cheap model while complex tasks get a stronger one. An explicit
@@ -1669,7 +1853,20 @@ export class Orchestrator {
                 }
                 return;
             }
-            const agent = createAgent(effectiveAgentType, this.moduleRegistry);
+            // Tool-calling agent routing: when useToolCalling is enabled, route
+            // 'writer' and 'reviewer' tasks to their tool-calling variants.
+            // This gives the LLM iterative read→edit→verify capability instead
+            // of a single-shot LLM call (adopted from Freebuff/Hermes pattern).
+            let actualAgentType = effectiveAgentType;
+            if (options.useToolCalling) {
+                if (effectiveAgentType === 'writer') {
+                    actualAgentType = 'writer-tc';
+                }
+                else if (effectiveAgentType === 'reviewer') {
+                    actualAgentType = 'reviewer-tc';
+                }
+            }
+            const agent = createAgent(actualAgentType, this.moduleRegistry);
             if (!agent) {
                 vault.updateTaskStatus(task.id, 'failed', `Unknown agent type: ${effectiveAgentType}`);
                 agentResults.push({
@@ -1682,6 +1879,22 @@ export class Orchestrator {
             // Tag this agent instance with its task step so its "thinking" updates
             // attach to the correct board line (fresh instance per task → no races).
             agent.currentTaskId = task.id;
+            // CHANGE-002: Create a fast/cheap file finder LLM for context-gatherer.
+            // Codebuff uses a finetuned Gemini Flash model for file finding — fast,
+            // cheap, and accurate for this narrow task. When available, inject it
+            // into the context-gatherer's metadata so it uses the fast model instead
+            // of the main (expensive) model for file selection.
+            if (effectiveAgentType === 'context-gatherer') {
+                try {
+                    const fileFinderLLM = this.createFileFinderLLM(options);
+                    if (fileFinderLLM) {
+                        vault.setMeta('fileFinderCallLLM', fileFinderLLM);
+                    }
+                }
+                catch {
+                    // Best-effort — file finder must never break the pipeline
+                }
+            }
             // Wire up the rate-limit handler so agents can prompt the user. Pass the
             // task's bound provider (auto mode) so the storm guard never auto-switches
             // to the very provider the agent is on (park lag: the fresh decision can
@@ -2063,7 +2276,7 @@ export class Orchestrator {
                                 })));
                             }
                             // Token-savings transparency (Step 5): record the retrieval into
-                            // retrieval-stats.json so `buff retrieval stats` and the dashboard
+                            // retrieval-stats.json so `nuvira retrieval stats` and the dashboard
                             // Retrieval card reflect pipeline retrieval too (not just chat).
                             try {
                                 const originalTokens = contextFiles.reduce((sum, f) => {
@@ -2398,7 +2611,7 @@ export class Orchestrator {
      * double resolveAutoRoutingDecision (which has side effects: routing
      * history + audit write-through).
      */
-    resolveEscalatedDecision(agentType, description, options, baseComplexity, taskId) {
+    resolveEscalatedDecision(agentType, description, options, baseComplexity, taskId, allowedProviders) {
         // Prefer the ROUTED complexity (the tier that actually failed — the router
         // may have escalated the raw label) so the escalation is guaranteed to be
         // strictly above the failing tier. Fall back to the raw label / undefined
@@ -2418,6 +2631,12 @@ export class Orchestrator {
             // exactly which calls were model-escalated repairs (v1.60.4).
             escalated: true,
         };
+        // When the user explicitly selected a provider, constrain escalation to
+        // that provider only — never silently re-route to a different provider.
+        if (allowedProviders?.length) {
+            const constrained = { ...options, allowedProviders };
+            return this.resolveAutoRoutingDecision(escalatedTask, constrained);
+        }
         return this.resolveAutoRoutingDecision(escalatedTask, options);
     }
     createEscalatedLLM(agentType, description, options, baseComplexity, taskId) {
@@ -2431,7 +2650,18 @@ export class Orchestrator {
             taskId,
             escalated: true,
         };
-        const decision = this.resolveEscalatedDecision(agentType, description, options, baseComplexity, taskId);
+        // DECISION #MANUAL-MODEL-SANCTITY: When the user explicitly selected a
+        // provider/model (not auto), escalation must NOT re-route to a different
+        // provider. The user's choice is sacred — only try stronger models within
+        // the SAME provider. Re-routing to a different provider on escalation
+        // violates the user's explicit intent and causes confusing behavior
+        // (e.g. user picks openrouter/stealth-ox-alpha, escalation silently
+        // switches to groq/default which 404s).
+        const userExplicitlySelected = !isAutoModel(options.model) && !isAutoProvider(options.provider) && !!options.provider;
+        const escalationAllowedProviders = userExplicitlySelected && options.provider
+            ? [options.provider]
+            : undefined; // undefined = auto-router decides freely
+        const decision = this.resolveEscalatedDecision(agentType, description, options, baseComplexity, taskId, escalationAllowedProviders);
         if (options.verbose) {
             logger.info(`      🚀 Escalating ${agentType} repair to a stronger model (${escalatedTask.complexity}): ${decision.provider}/${decision.model}`);
         }
@@ -2621,7 +2851,7 @@ export class Orchestrator {
      * Fired when auto routing is active and the registry has no verified
      * providers: probes listModels + spot-checks the configured providers so the
      * pipeline's later tasks route on REAL health data (the dedicated model-
-     * health agent's job, started on demand instead of waiting for `buff models
+     * health agent's job, started on demand instead of waiting for `nuvira models
      * watch`). Latched per instance — a long dev-mode session only pays once.
      * Fire-and-forget: never awaited, never blocks, never throws.
      */

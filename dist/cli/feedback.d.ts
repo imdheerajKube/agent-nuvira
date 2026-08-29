@@ -2,10 +2,10 @@
  * Feedback command — Record, view, and manage user feedback on agent outputs.
  *
  * Usage:
- *   buff feedback record <trajectory-id>  — Rate a trajectory (👍/👎)
- *   buff feedback list                     — Show recent feedback entries
- *   buff feedback stats                    — Show aggregated feedback statistics
- *   buff feedback clear                    — Clear all feedback data
+ *   nuvira feedback record <trajectory-id>  — Rate a trajectory (👍/👎)
+ *   nuvira feedback list                     — Show recent feedback entries
+ *   nuvira feedback stats                    — Show aggregated feedback statistics
+ *   nuvira feedback clear                    — Clear all feedback data
  *
  * Feedback helps the self-improvement system learn which outputs are
  * useful and tune provider/model routing accordingly.

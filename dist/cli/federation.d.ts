@@ -2,21 +2,21 @@
  * Federation command — Connect to and manage remote agent instances.
  *
  * Usage:
- *   buff federation status                — Show connection status and info
- *   buff federation start                 — Start the federation server
- *   buff federation start --port 8374     — Start on a specific port
- *   buff federation start --daemon        — Run in background (detached)
- *   buff federation connect <host>        — Connect to a remote server
- *   buff federation connect <host> --port 8374
- *   buff federation connect <host> --secret mykey
- *   buff federation disconnect            — Disconnect from remote server
- *   buff federation run <goal>            — Run a task on the remote server
- *   buff federation run <goal> --agent writer
- *   buff federation health                — Check remote server health
- *   buff federation a2a start             — Start the A2A server
- *   buff federation a2a discover <url>    — Discover an A2A agent
- *   buff federation a2a status <url>      — Check A2A agent health
- *   buff federation a2a run <url> <goal>  — Delegate task to A2A agent
+ *   nuvira federation status                — Show connection status and info
+ *   nuvira federation start                 — Start the federation server
+ *   nuvira federation start --port 8374     — Start on a specific port
+ *   nuvira federation start --daemon        — Run in background (detached)
+ *   nuvira federation connect <host>        — Connect to a remote server
+ *   nuvira federation connect <host> --port 8374
+ *   nuvira federation connect <host> --secret mykey
+ *   nuvira federation disconnect            — Disconnect from remote server
+ *   nuvira federation run <goal>            — Run a task on the remote server
+ *   nuvira federation run <goal> --agent writer
+ *   nuvira federation health                — Check remote server health
+ *   nuvira federation a2a start             — Start the A2A server
+ *   nuvira federation a2a discover <url>    — Discover an A2A agent
+ *   nuvira federation a2a status <url>      — Check A2A agent health
+ *   nuvira federation a2a run <url> <goal>  — Delegate task to A2A agent
  */
 import { Command } from 'commander';
 import { BaseCommand } from './commands.js';

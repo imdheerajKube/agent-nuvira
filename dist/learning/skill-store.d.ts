@@ -1,7 +1,7 @@
 /**
  * SkillStore — Persists and manages compiled skills on disk.
  *
- * Skills are stored as individual JSON files in ~/.buff/skills/
+ * Skills are stored as individual JSON files in ~/.nuvira/skills/
  * Each skill gets its own file for easy inspection and manual editing.
  * An index.json file tracks the full list for fast enumeration.
  *
@@ -91,6 +91,39 @@ export declare class SkillStore {
         usageCount: number;
         ageDays: number;
     }>;
+    /**
+     * skill_view() — Progressive disclosure for skills.
+     *
+     * Hermes pattern: skills_list() returns name+description (lightweight),
+     * skill_view(name) returns full methodology (heavyweight).
+     *
+     * This function returns the full skill content for a given skill name,
+     * formatted as structured guidance that an agent can follow.
+     *
+     * @param name - Skill name or ID to view
+     * @param filePath - Optional specific file within skill directory (e.g., 'references/api.md')
+     * @returns Full skill content as structured text, or error message
+     */
+    skillView(name: string, filePath?: string): string;
+    /**
+     * Find the reference docs directory for a skill.
+     * Checks .agents/skills/<skill-name>/references/ directory.
+     */
+    private findReferenceDocsDir;
+    /**
+     * List available reference files for a skill.
+     */
+    private listReferenceFiles;
+    /**
+     * Load a specific reference file for a skill.
+     */
+    private loadReferenceFile;
+    /**
+     * Format a skill into structured guidance text for an agent.
+     * This is the Hermes-style progressive disclosure output.
+     * Now includes actual reference docs loading from disk.
+     */
+    private formatSkillView;
     private loadIndex;
     private saveIndex;
 }

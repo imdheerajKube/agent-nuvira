@@ -2,16 +2,16 @@
  * LearnCommand — CLI interface for the self-improvement system.
  *
  * Subcommands:
- *   buff learn stats         — Show agent performance stats
- *   buff learn patterns      — Show/extract coding patterns
- *   buff learn lessons       — Show/extract failure lessons (what didn't work)
- *   buff learn optimize      — Generate optimized model routing
- *   buff learn status        — Show overall self-improvement status
- *   buff learn clear         — Reset learning data
- *   buff learn compare       — A/B model comparison via benchmarks
- *   buff learn feedback      — Rate a trajectory or view feedback stats
- *   buff learn quality       — Show pattern quality and decay metrics
- *   buff learn gc            — Garbage-collect low-quality patterns
+ *   nuvira learn stats         — Show agent performance stats
+ *   nuvira learn patterns      — Show/extract coding patterns
+ *   nuvira learn lessons       — Show/extract failure lessons (what didn't work)
+ *   nuvira learn optimize      — Generate optimized model routing
+ *   nuvira learn status        — Show overall self-improvement status
+ *   nuvira learn clear         — Reset learning data
+ *   nuvira learn compare       — A/B model comparison via benchmarks
+ *   nuvira learn feedback      — Rate a trajectory or view feedback stats
+ *   nuvira learn quality       — Show pattern quality and decay metrics
+ *   nuvira learn gc            — Garbage-collect low-quality patterns
  */
 import { Command } from 'commander';
 import { getAgentStats } from '../learning/agent-stats.js';
@@ -286,7 +286,7 @@ export class LearnCommand {
                 console.log('');
                 console.log('── Pattern Quality ──');
                 console.log(`   ${lowQuality.length}/${allPatterns.length} patterns below 0.5 decay score`);
-                console.log('   Run `buff learn gc` to clean up low-quality patterns.');
+                console.log('   Run `nuvira learn gc` to clean up low-quality patterns.');
             }
         }
     }
@@ -309,7 +309,7 @@ export class LearnCommand {
         const runs = getBenchmarkRuns();
         if (runs.length < 2) {
             console.log('⚔️ Need at least 2 benchmark runs to compare models.');
-            console.log('   Run `buff benchmark` against different models first.');
+            console.log('   Run `nuvira benchmark` against different models first.');
             return;
         }
         if (opts.last) {
@@ -372,8 +372,8 @@ export class LearnCommand {
         }
         // Show help
         console.log('📝 Feedback commands:\n');
-        console.log('  buff learn feedback --stats              Show feedback statistics');
-        console.log('  buff learn feedback --trajectory <id>    Rate a specific trajectory');
+        console.log('  nuvira learn feedback --stats              Show feedback statistics');
+        console.log('  nuvira learn feedback --trajectory <id>    Rate a specific trajectory');
         console.log('             --rating positive             Set rating (positive/negative/neutral/skip)');
         console.log('             --comment "your notes"        Add optional comment');
         console.log('');
@@ -403,7 +403,7 @@ export class LearnCommand {
             }
         }
         console.log('');
-        console.log('   Run `buff learn gc` to remove low-quality patterns.');
+        console.log('   Run `nuvira learn gc` to remove low-quality patterns.');
     }
     async garbageCollect(opts) {
         const patternStore = getPatternStore();

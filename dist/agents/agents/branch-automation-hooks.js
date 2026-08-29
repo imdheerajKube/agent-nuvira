@@ -6,11 +6,11 @@
  * - pre-commit: Auto-commit file changes with conventional commit messages
  *
  * Hooks are installed to `.git/hooks/` and call back into the agent-nuvira CLI
- * using `buff execute "branch-automation <event>" --auto-branch`.
+ * using `nuvira execute "branch-automation <event>" --auto-branch`.
  */
 import { existsSync, readFileSync, writeFileSync, mkdirSync } from 'node:fs';
+import { resolveNuviraHome } from '../../config/paths.js';
 import { join } from 'node:path';
-import { homedir } from 'node:os';
 import { execSync } from 'node:child_process';
 import { logger } from '../../utils/logger.js';
 // ─── Hook Templates ─────────────────────────────────────────────────────────
@@ -20,7 +20,7 @@ import { logger } from '../../utils/logger.js';
  */
 const POST_CHECKOUT_HOOK = `#!/bin/sh
 # Agent-Nuvira Branch Automation Hook
-# Installed by: buff execute --auto-branch
+# Installed by: nuvira execute --auto-branch
 # Triggers: auto-create branches from issue assignments
 
 REF_BEFORE="$1"
@@ -47,7 +47,7 @@ fi
  */
 const PRE_COMMIT_HOOK = `#!/bin/sh
 # Agent-Nuvira Branch Automation Hook
-# Installed by: buff execute --auto-branch
+# Installed by: nuvira execute --auto-branch
 # Triggers: auto-commit with conventional commit messages
 
 # If AUTO_COMMIT env var is set, skip the hook (prevent recursive commits)
@@ -132,7 +132,7 @@ export function installHooks(config) {
         logger.info('  ✅ pre-commit hook installed');
     }
     if (config.fileWatch) {
-        const hooksPath = join(homedir(), '.buff', 'hooks');
+        const hooksPath = join(resolveNuviraHome(), 'hooks');
         if (!existsSync(hooksPath)) {
             mkdirSync(hooksPath, { recursive: true });
         }
@@ -194,7 +194,7 @@ export function getHookStatus(repoPath) {
         }
     }
     catch { /* ignore */ }
-    const watchPath = join(homedir(), '.buff', 'hooks', 'file-watch.sh');
+    const watchPath = join(resolveNuviraHome(), 'hooks', 'file-watch.sh');
     result.fileWatch = existsSync(watchPath);
     return result;
 }

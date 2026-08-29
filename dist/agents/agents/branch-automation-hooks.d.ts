@@ -6,7 +6,7 @@
  * - pre-commit: Auto-commit file changes with conventional commit messages
  *
  * Hooks are installed to `.git/hooks/` and call back into the agent-nuvira CLI
- * using `buff execute "branch-automation <event>" --auto-branch`.
+ * using `nuvira execute "branch-automation <event>" --auto-branch`.
  */
 export interface HookConfig {
     /** Path to the git repository root */

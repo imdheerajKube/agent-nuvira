@@ -8,21 +8,21 @@
  * - Conversation history and agent state are preserved across switches
  *
  * Usage:
- *   buff model                           — Show current config + interactive switch
- *   buff model list                      — List all providers and their status
- *   buff model switch                    — Interactive categorized model picker
- *   buff model switch groq               — Switch to groq (default model)
- *   buff model switch groq/llama-3.3-70b — Switch to specific model
- *   buff model info                      — Show detailed current config
- *   buff model recommend                 — Show model routing recommendations
- *   buff model health                    — Quick health check for active provider
+ *   nuvira model                           — Show current config + interactive switch
+ *   nuvira model list                      — List all providers and their status
+ *   nuvira model switch                    — Interactive categorized model picker
+ *   nuvira model switch groq               — Switch to groq (default model)
+ *   nuvira model switch groq/llama-3.3-70b — Switch to specific model
+ *   nuvira model info                      — Show detailed current config
+ *   nuvira model recommend                 — Show model routing recommendations
+ *   nuvira model health                    — Quick health check for active provider
  */
 import { Command } from 'commander';
 import { BaseCommand } from './commands.js';
 /**
  * The runtime state file that preserves the active model across sessions.
  * Other commands (chat, execute) can read this to know which model to use.
- * Path: ~/.buff/active-model.json
+ * Path: ~/.nuvira/active-model.json
  */
 export interface ActiveModelState {
     /** Provider type identifier (e.g., 'groq', 'gemini', 'openrouter') */
@@ -106,7 +106,7 @@ export declare class ModelCommand extends BaseCommand {
     /** Render the quota failover timeline in the human CLI output. */
     private renderQuotaEvents;
     private showBandit;
-    /** Show the ML task-similarity router state (`buff model ml`). */
+    /** Show the ML task-similarity router state (`nuvira model ml`). */
     private showMl;
     /** Render the promotion gate (bandit-vs-heuristic A/B verdict). */
     private renderPromotionGate;

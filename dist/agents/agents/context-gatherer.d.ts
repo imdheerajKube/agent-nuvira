@@ -3,6 +3,10 @@
  * goal and execution plan. It reads file contents and stores them as artifacts
  * in the shared context bus for downstream agents (Writer, Reviewer) to use.
  *
+ * CHANGE-002: Adopts Codebuff's file-finding pattern — uses a separate, fast/cheap
+ * model for file selection (like Codebuff's finetuned Gemini Flash). The main model
+ * is only used when the file finder is not available.
+ *
  * Rate-limit handling:
  * - Short waits (<3s): auto-retry silently
  * - Long waits (>=3s): invokes onRateLimit callback (if available) to let the

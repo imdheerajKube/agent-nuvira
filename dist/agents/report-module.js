@@ -317,7 +317,7 @@ export class DefaultReportModule {
             }
             actions.push('Re-run with --verbose for detailed logs');
             if (meta?.trajectoryId) {
-                actions.push(`Review memory trajectory: buff memory show ${meta.trajectoryId}`);
+                actions.push(`Review memory trajectory: nuvira memory show ${meta.trajectoryId}`);
             }
         }
         if (details.fileChanges.length > 0) {
@@ -327,7 +327,7 @@ export class DefaultReportModule {
             actions.push('Manual review recommended — verification score is below threshold');
         }
         if (meta?.reviewId) {
-            actions.push(`Approve and merge review bundle: buff team review approve ${meta.reviewId}`);
+            actions.push(`Approve and merge review bundle: nuvira team review approve ${meta.reviewId}`);
         }
         return actions.length > 0
             ? { suggestedActions: actions, confidence: actions.length <= 3 ? 'high' : 'medium' }

@@ -17,7 +17,7 @@
  *   chat, and the orchestrator so exhausted providers sink below healthy ones
  *   BEFORE a call is made (predictive, not reactive).
  *
- * Persisted to ~/.buff/memory/quota-ledger.json (honors BUFF_MEMORY_DIR).
+ * Persisted to ~/.nuvira/memory/quota-ledger.json (honors NUVIRA_MEMORY_DIR).
  * All writes are best-effort — a failed write must never break routing.
  */
 import type { ConfigManager } from '../config/manager.js';
@@ -158,7 +158,7 @@ export declare class QuotaLedger {
      * Corrupt lines are skipped; best-effort.
      */
     listEvents(limit?: number): QuotaEvent[];
-    /** Clear the persisted timeline (used by `buff model quota reset`). */
+    /** Clear the persisted timeline (used by `nuvira model quota reset`). */
     clearEvents(): void;
     /**
      * Is a provider parked (explicit cooldown OR over its configured limit in
@@ -209,7 +209,7 @@ export declare class QuotaLedger {
     };
     /** Raw persisted state (tests / CLI). */
     getState(): QuotaLedgerData;
-    /** Clear all entries (used by tests and `buff model quota reset`). */
+    /** Clear all entries (used by tests and `nuvira model quota reset`). */
     reset(): void;
     /** Remove all entries for one provider. */
     resetProvider(provider: string): void;

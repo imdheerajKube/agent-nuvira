@@ -12,10 +12,10 @@
  * extended with version, author, and source metadata.
  *
  * Commands:
- *   buff workflow search <query>    — Search the GitHub registry
- *   buff workflow install <name>    — Install a template from the registry
- *   buff workflow publish           — Publish a local template to the registry
- *   buff workflow info <name>       — Show template details from the registry
+ *   nuvira workflow search <query>    — Search the GitHub registry
+ *   nuvira workflow install <name>    — Install a template from the registry
+ *   nuvira workflow publish           — Publish a local template to the registry
+ *   nuvira workflow info <name>       — Show template details from the registry
  */
 import { type WorkflowTemplate, type WorkflowDependency } from './templates.js';
 /** A workflow template entry in the registry index */
@@ -57,7 +57,7 @@ export declare function getRegistryEntry(id: string): Promise<RegistryEntry | nu
  * Install a workflow template from the registry.
  *
  * Downloads the template JSON file from GitHub and saves it to
- * ~/.buff/workflows/registry/<id>.json where the workflow system
+ * ~/.nuvira/workflows/registry/<id>.json where the workflow system
  * can auto-discover it.
  *
  * @param templateId  The template ID to install

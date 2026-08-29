@@ -7,15 +7,15 @@
  * installs, and recovery via new approaches).
  *
  * Usage:
- *   buff eval run                      — Run all eval tasks against default provider
- *   buff eval run --provider groq      — Run against a specific provider
- *   buff eval run --model llama-3.3    — Use a specific model
- *   buff eval run --tasks quick        — Run only quick tasks
- *   buff eval run --budget 0.50        — Stop if costs exceed $0.50
- *   buff eval list                     — List available eval tasks
- *   buff eval results                  — Show previous eval runs
- *   buff eval score                    — Show the scoring rules
- *   buff eval clear                    — Clear all eval data
+ *   nuvira eval run                      — Run all eval tasks against default provider
+ *   nuvira eval run --provider groq      — Run against a specific provider
+ *   nuvira eval run --model llama-3.3    — Use a specific model
+ *   nuvira eval run --tasks quick        — Run only quick tasks
+ *   nuvira eval run --budget 0.50        — Stop if costs exceed $0.50
+ *   nuvira eval list                     — List available eval tasks
+ *   nuvira eval results                  — Show previous eval runs
+ *   nuvira eval score                    — Show the scoring rules
+ *   nuvira eval clear                    — Clear all eval data
  */
 import { Command } from 'commander';
 import { BaseCommand } from './commands.js';

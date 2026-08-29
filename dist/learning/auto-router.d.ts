@@ -23,7 +23,7 @@
  * (or excluded) so reliability is honored at runtime.
  *
  * Integration:
- * - `buff model switch auto` — select Auto as the active model
+ * - `nuvira model switch auto` — select Auto as the active model
  * - Model picker shows "Auto — Agent decides" as the first option
  * - `chat` routes every message when the active model is `auto`
  * - Orchestrator routes each agent task when `--model auto` or `--auto-route` is set
@@ -470,7 +470,7 @@ export interface MeasuredCost {
 }
 /**
  * Estimate the USD cost of a typical call for a provider.
- * An optional pricing override (e.g., from `buff config set pricing.*`)
+ * An optional pricing override (e.g., from `nuvira config set pricing.*`)
  * takes precedence over the built-in table.
  *
  * M2.2: when `measured` (real wire tokens from provider-reported usage) is
@@ -608,7 +608,7 @@ export declare class AutoModelRouter {
     private toParallelPick;
     /**
      * Resolve the effective per-1K-token pricing for a provider.
-     * Config overrides (`buff config set pricing.<provider>...`) win over the
+     * Config overrides (`nuvira config set pricing.<provider>...`) win over the
      * built-in pricing table; unknown providers fall back to a cheap default.
      */
     getProviderPricing(provider: string, configManager?: ConfigManager): {

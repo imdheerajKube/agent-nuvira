@@ -2,14 +2,14 @@
  * SkillCommand — CLI interface for managing and running compiled skills.
  *
  * Subcommands:
- *   buff skill list            — List all compiled skills
- *   buff skill show <name>     — Show detailed skill definition
- *   buff skill run <name>      — Run a skill (directly invokes Orchestrator)
- *   buff skill compile         — Force skill compilation from trajectories
- *   buff skill search <query>  — Search skills by name/tag/description
- *   buff skill gc              — Garbage-collect low-quality skills
- *   buff skill quality         — Show skill quality and decay metrics
- *   buff skill clear           — Remove all skills
+ *   nuvira skill list            — List all compiled skills
+ *   nuvira skill show <name>     — Show detailed skill definition
+ *   nuvira skill run <name>      — Run a skill (directly invokes Orchestrator)
+ *   nuvira skill compile         — Force skill compilation from trajectories
+ *   nuvira skill search <query>  — Search skills by name/tag/description
+ *   nuvira skill gc              — Garbage-collect low-quality skills
+ *   nuvira skill quality         — Show skill quality and decay metrics
+ *   nuvira skill clear           — Remove all skills
  */
 import { Command } from 'commander';
 import ora from 'ora';
@@ -106,7 +106,7 @@ export class SkillCommand {
         }
         if (!skill) {
             console.log(`🧠 Skill not found: '${nameOrId}'`);
-            console.log('   Run `buff skill list` to see available skills.');
+            console.log('   Run `nuvira skill list` to see available skills.');
             return;
         }
         console.log(SkillCompiler.formatSkill(skill, true));
@@ -117,7 +117,7 @@ export class SkillCommand {
         console.log(`   Last used: ${new Date(skill.lastUsedAt).toLocaleDateString()}`);
         console.log('');
         console.log('── Usage ──');
-        console.log(`   Run: buff skill run "${skill.name}" --param1=value1 --param2=value2`);
+        console.log(`   Run: nuvira skill run "${skill.name}" --param1=value1 --param2=value2`);
     }
     async runSkill(name, opts) {
         const store = getSkillStore();
@@ -131,7 +131,7 @@ export class SkillCommand {
         }
         if (!skill) {
             console.log(`🧠 Skill not found: '${name}'`);
-            console.log('   Run `buff skill list` to see available skills.');
+            console.log('   Run `nuvira skill list` to see available skills.');
             return;
         }
         // Parse parameters from --params option

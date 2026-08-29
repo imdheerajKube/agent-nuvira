@@ -2,12 +2,12 @@
  * Marketplace command — Browse and install community plugins and workflow templates.
  *
  * Usage:
- *   buff marketplace browse                   — Browse all available items
- *   buff marketplace browse --workflows       — Browse workflow templates only
- *   buff marketplace browse --plugins         — Browse plugins only
- *   buff marketplace search <query>            — Search across plugins and templates
- *   buff marketplace install <name>            — Install a workflow template
- *   buff marketplace info <name>               — Show details for a marketplace item
+ *   nuvira marketplace browse                   — Browse all available items
+ *   nuvira marketplace browse --workflows       — Browse workflow templates only
+ *   nuvira marketplace browse --plugins         — Browse plugins only
+ *   nuvira marketplace search <query>            — Search across plugins and templates
+ *   nuvira marketplace install <name>            — Install a workflow template
+ *   nuvira marketplace info <name>               — Show details for a marketplace item
  *
  * This command wraps the existing workflow registry and plugin discovery into
  * a unified "marketplace" experience.

@@ -17,6 +17,7 @@
 import { recommendModel } from './model-router.js';
 import { getCostTracker, calculateCost } from './cost-tracker.js';
 import { getBenchmarkRuns } from './benchmark.js';
+import { getDefaultModel } from '../inference/provider-catalog.js';
 import { logger } from '../utils/logger.js';
 // ─── Complexity Analysis ────────────────────────────────────────────────────
 /** Keywords that indicate task complexity */
@@ -191,25 +192,29 @@ export function buildFallbackChain(agentType, complexity, options = {}, runtimeM
         reason: primaryReason,
     });
     // Secondary fallback: swap provider (adjusted for privacy-first mode)
+    // CRITICAL: never use literal 'default' as model — resolve to a real model
+    // name via the catalog so the provider API never receives a 404.
     const secondaryProvider = mode === 'privacy-first' ? 'groq'
         : preferredProvider === 'local' ? 'groq'
             : preferredProvider === 'groq' ? 'nim'
                 : preferredProvider === 'nim' ? 'gemini'
                     : preferredProvider === 'gemini' ? 'openrouter'
                         : 'groq';
+    const secondaryModel = getDefaultModel(secondaryProvider);
     chain.push({
         provider: secondaryProvider,
-        model: 'default',
-        estimatedCost: estimateCallCost(secondaryProvider, 'default'),
+        model: secondaryModel,
+        estimatedCost: estimateCallCost(secondaryProvider, secondaryModel),
         qualityScore: Math.min(1, 0.6 + qualityBoost),
         reason: `Fallback: switch to ${secondaryProvider}`,
     });
     // Tertiary fallback
     const tertiaryProvider = secondaryProvider === 'groq' ? 'gemini' : 'groq';
+    const tertiaryModel = getDefaultModel(tertiaryProvider);
     chain.push({
         provider: tertiaryProvider,
-        model: 'default',
-        estimatedCost: estimateCallCost(tertiaryProvider, 'default'),
+        model: tertiaryModel,
+        estimatedCost: estimateCallCost(tertiaryProvider, tertiaryModel),
         qualityScore: Math.min(1, 0.5 + qualityBoost),
         reason: `Final fallback: switch to ${tertiaryProvider}`,
     });

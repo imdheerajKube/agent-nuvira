@@ -5,7 +5,7 @@
  * injects those scores back into the scoring system. This enables the
  * self-improver to learn which kinds of outputs users actually find useful.
  *
- * Data stored at: ~/.buff/memory/feedback.json
+ * Data stored at: ~/.nuvira/memory/feedback.json
  *
  * The feedback system provides:
  * - Simple rating collection (positive, negative, neutral)

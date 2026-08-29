@@ -2,13 +2,13 @@
  * Init command — Scaffold new projects from templates.
  *
  * Usage:
- *   buff init                    — Interactive prompt for project name and template
- *   buff init my-app             — Create project 'my-app' with interactive template picker
- *   buff init my-app --template node-cli  — Create from a specific template
- *   buff init my-app --list      — List available templates
- *   buff init my-app --template custom --template-dir ~/my-templates
+ *   nuvira init                    — Interactive prompt for project name and template
+ *   nuvira init my-app             — Create project 'my-app' with interactive template picker
+ *   nuvira init my-app --template node-cli  — Create from a specific template
+ *   nuvira init my-app --list      — List available templates
+ *   nuvira init my-app --template custom --template-dir ~/my-templates
  *
- * Templates are stored in ~/.buff/templates/ and can be custom.
+ * Templates are stored in ~/.nuvira/templates/ and can be custom.
  * Built-in templates ship with the CLI.
  */
 import { Command } from 'commander';
@@ -34,7 +34,7 @@ export declare class InitCommand extends BaseCommand {
     private execute;
     private listTemplates;
     /**
-     * Get all available templates (built-in + custom from ~/.buff/templates/).
+     * Get all available templates (built-in + custom from ~/.nuvira/templates/).
      */
     private getAllTemplates;
     /**

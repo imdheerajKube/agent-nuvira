@@ -2,11 +2,11 @@
  * SDK Command — Create and manage custom agents with the Agent-Nuvira SDK.
  *
  * Usage:
- *   buff sdk scaffold <outDir> <agentName> [description]  — Generate a new agent project
- *   buff sdk scaffold --template basic-agent ...            — Use a minimal template
- *   buff sdk scaffold --template agent-pack ...             — Multi-agent package template
- *   buff sdk templates                                     — List available templates
- *   buff sdk info                                          — Show SDK package info
+ *   nuvira sdk scaffold <outDir> <agentName> [description]  — Generate a new agent project
+ *   nuvira sdk scaffold --template basic-agent ...            — Use a minimal template
+ *   nuvira sdk scaffold --template agent-pack ...             — Multi-agent package template
+ *   nuvira sdk templates                                     — List available templates
+ *   nuvira sdk info                                          — Show SDK package info
  *
  * The scaffold subcommand creates a complete, ready-to-extend agent package with:
  * - TypeScript configuration

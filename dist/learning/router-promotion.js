@@ -16,7 +16,7 @@
  *   estimatedLatencyMs) for the same task.
  * - When the orchestrator records the real outcome, `recordOutcome()` finalizes
  *   the pending decision into a JSONL trajectory file
- *   (`~/.buff/memory/router-promotion.jsonl`, honors BUFF_MEMORY_DIR) with the
+ *   (`~/.nuvira/memory/router-promotion.jsonl`, honors NUVIRA_MEMORY_DIR) with the
  *   ACTUAL outcome (success/failure, latencyMs, costUsd, qualityScore).
  * - `evaluate(minDecisions)` computes the three criteria over the DIVERGED
  *   decisions (where the bandit pick differs from the heuristic pick — a pick
@@ -24,13 +24,13 @@
  *
  * The gate does not forcibly disable the bandit at runtime; it answers the
  * question \"is the bandit actually better than the heuristic?\" and is surfaced
- * via `buff model bandit`. All writes are best-effort.
+ * via `nuvira model bandit`. All writes are best-effort.
  */
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { envBuff, resolveNuviraHome } from '../config/paths.js';
 import { dirname, join } from 'node:path';
-import { homedir } from 'node:os';
 // ─── Constants ──────────────────────────────────────────────────────────────
-const DEFAULT_MEMORY_DIR = join(homedir(), '.buff', 'memory');
+const DEFAULT_MEMORY_DIR = join(resolveNuviraHome(), 'memory');
 /** Default minimum diverged decisions before the gate evaluates. */
 export const DEFAULT_MIN_PROMOTION_DECISIONS = 20;
 /**
@@ -49,7 +49,7 @@ const COST_THRESHOLD = 0.01;
 /** Relative p95 latency regression allowed (ruflo: < 5%). */
 const LATENCY_THRESHOLD = 0.05;
 function trajectoryPath() {
-    return join(process.env.BUFF_MEMORY_DIR || DEFAULT_MEMORY_DIR, 'router-promotion.jsonl');
+    return join(envBuff('MEMORY_DIR') || DEFAULT_MEMORY_DIR, 'router-promotion.jsonl');
 }
 // ─── Stats helpers ──────────────────────────────────────────────────────────
 function mean(values) {
@@ -200,7 +200,7 @@ export class RouterPromotion {
             promoted: sufficient && criteria.quality && criteria.cost && criteria.latency,
         };
     }
-    /** Clear the trajectory (used by `buff model bandit reset`). */
+    /** Clear the trajectory (used by `nuvira model bandit reset`). */
     reset() {
         this.pending.clear();
         try {

@@ -5,7 +5,7 @@ import { WorkspaceStore } from './workspace.js';
 export declare function isPlaceholderApiKey(key: string | undefined | null): boolean;
 /**
  * Count how many provider keys are vault refs vs plaintext (used by
- * `buff config vault status` and `buff doctor`). Placeholder/sentinel keys are
+ * `nuvira config vault status` and `nuvira doctor`). Placeholder/sentinel keys are
  * counted as plaintext (they're in the file), which matches the hygiene story.
  */
 export declare function countKeyStates(config: BuffConfig): {
@@ -34,7 +34,7 @@ export declare class ConfigManager {
     /**
      * Live re-read (Session 36 — "update as and when"): a running process
      * (chat/execute/dashboard) must honor budget/limit changes the user makes
-     * via `buff model quota set` or the dashboard's Daily Budget panel — even on
+     * via `nuvira model quota set` or the dashboard's Daily Budget panel — even on
      * the SAME instance. statSync is ~µs; the JSON re-read happens only when the
      * file actually changed. save() stamps the mtime so our own writes don't
      * trigger a redundant re-read.

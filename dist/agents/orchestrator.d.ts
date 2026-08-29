@@ -41,11 +41,18 @@ export interface OrchestratorOptions {
     /** Auto-route each agent to its recommended model from the ModelRouter */
     autoRouteModels?: boolean;
     /**
+     * Use tool-calling agents for writer and reviewer steps.
+     * When true, the orchestrator routes 'writer' tasks to 'writer-tc' and
+     * 'reviewer' tasks to 'reviewer-tc' — iterative read→edit→verify loops
+     * instead of one-shot LLM calls. Adopted from Freebuff/Hermes pattern.
+     */
+    useToolCalling?: boolean;
+    /**
      * Opt-in to the interactive rate-limit prompt (wait / switch / skip / abort).
      * Default: false — rate limits are handled fully automatically (silent wait
      * for transient hints, silent auto-switch to another provider when the
      * current one is exhausted). Also settable via `routing.askOnRateLimit` in
-     * .buffconfig.json.
+     * .nuviraconfig.json.
      */
     askOnRateLimit?: boolean;
     /**
@@ -130,7 +137,7 @@ export interface OrchestratorOptions {
     /**
      * Save a checkpoint after every task batch so the pipeline can be resumed
      * later with `--resume` (or a fresh run of the same goal). Checkpoints live
-     * in ~/.buff/memory/checkpoints/ and let a crash / quota kill / token expiry
+     * in ~/.nuvira/memory/checkpoints/ and let a crash / quota kill / token expiry
      * mid-pipeline continue from the first pending step instead of restarting.
      * Default: false. Implied true when resumeCheckpointId is set.
      */
@@ -266,7 +273,7 @@ export declare class Orchestrator {
     /**
      * P0 reasoning trace: the id of the trace for the CURRENT pipeline (set in
      * execute(), ended in its finally). All LLM calls made while this is set are
-     * recorded as steps so `buff trace replay <id>` and the dashboard can show
+     * recorded as steps so `nuvira trace replay <id>` and the dashboard can show
      * exactly which agent × model × prompt produced each result.
      */
     private activeTraceId;
@@ -307,6 +314,17 @@ export declare class Orchestrator {
      */
     private maybeWarnWeakLocalModel;
     /**
+     * Post-pipeline learning: create skills from successful complex tasks.
+     *
+     * After a successful pipeline with 3+ completed steps, extract the
+     * execution pattern as a reusable skill. This is the Hermes pattern:
+     * skills self-improve during use, and complex tasks produce new skills.
+     *
+     * The skill is created asynchronously (fire-and-forget) so it never
+     * blocks the pipeline result delivery.
+     */
+    private postPipelineLearning;
+    /**
      * Pre-flight project inspection — deterministic, always-on, no LLM calls.
      *
      * Scans the working directory for the project type (manifest files), counts
@@ -323,6 +341,23 @@ export declare class Orchestrator {
     /** Read the git branch and uncommitted-change count. Returns null if not a repo. */
     private gitState;
     private createLLMProvider;
+    /**
+     * CHANGE-002: Create a fast/cheap LLM for file finding.
+     * Adopts Codebuff's pattern: use a small, fast model (like Gemini Flash)
+     * for file selection instead of the main (expensive) model.
+     *
+     * The file finder only needs to:
+     * 1. Read the file tree
+     * 2. Match files to the task description
+     * 3. Return file paths
+     *
+     * This doesn't require a powerful model — a fast model with good instruction
+     * following is sufficient. Codebuff uses a finetuned Gemini Flash model for
+     * this exact purpose.
+     *
+     * Returns a cheap LLM call function, or null if no fast model is available.
+     */
+    private createFileFinderLLM;
     private runAgent;
     /**
      * Create the onRateLimit callback.
@@ -333,7 +368,7 @@ export declare class Orchestrator {
      * rate-limiting repeatedly — the user is never interrupted, and the build
      * continues on whichever provider is healthy. The interactive prompt
      * (wait / switch / skip / abort) is opt-in via `routing.askOnRateLimit: true`
-     * in .buffconfig.json and only ever appears on a real TTY.
+     * in .nuviraconfig.json and only ever appears on a real TTY.
      *
      * Returns undefined only for dry-run (no LLM calls happen anyway), so even
      * non-interactive runs (CI, pipes) get silent auto-switch instead of grinding
@@ -436,7 +471,7 @@ export declare class Orchestrator {
      * Fired when auto routing is active and the registry has no verified
      * providers: probes listModels + spot-checks the configured providers so the
      * pipeline's later tasks route on REAL health data (the dedicated model-
-     * health agent's job, started on demand instead of waiting for `buff models
+     * health agent's job, started on demand instead of waiting for `nuvira models
      * watch`). Latched per instance — a long dev-mode session only pays once.
      * Fire-and-forget: never awaited, never blocks, never throws.
      */

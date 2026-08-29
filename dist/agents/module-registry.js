@@ -11,6 +11,8 @@
 import { PlannerAgent } from './agents/planner.js';
 import { ContextGathererAgent } from './agents/context-gatherer.js';
 import { WriterAgent } from './agents/writer.js';
+import { WriterToolCallingAgent } from './agents/writer-tool-calling.js';
+import { ReviewerToolCallingAgent } from './agents/reviewer-tool-calling.js';
 import { ReviewerAgent } from './agents/reviewer.js';
 import { RunnerAgent } from './agents/runner.js';
 import { TesterAgent } from './agents/tester.js';
@@ -26,6 +28,7 @@ import { PRReviewAgent } from './agents/pr-review-agent.js';
 import { IssueTriageAgent } from './agents/issue-triage-agent.js';
 import { BranchAutomationAgent } from './agents/branch-automation-agent.js';
 import { DelegateAgent } from './agents/delegate-agent.js';
+import { ReasonerAgent } from './agents/reasoner.js';
 import { getEventBus, EventNames } from '../observability/event-bus.js';
 /** Error thrown when a module lookup fails */
 export class ModuleNotFoundError extends Error {
@@ -172,6 +175,12 @@ export class ModuleRegistry {
     static createWithBuiltins(eventBus) {
         const registry = new ModuleRegistry(eventBus);
         // Each registration includes: agentType, factory, and metadata
+        registry.register('reasoner', () => new ReasonerAgent(), {
+            name: 'Reasoner',
+            description: 'Makes technical decisions (language, framework, platform) before planning',
+            icon: '🧠',
+            isBuiltin: true,
+        });
         registry.register('planner', () => new PlannerAgent(), {
             name: 'Planner',
             description: 'Analyzes user goals and creates detailed execution plans',
@@ -190,10 +199,22 @@ export class ModuleRegistry {
             icon: '✏️',
             isBuiltin: true,
         });
+        registry.register('writer-tc', () => new WriterToolCallingAgent(), {
+            name: 'Writer (Tool-Calling)',
+            description: 'Implements code changes using iterative tool calls (read→edit→verify)',
+            icon: '🔧',
+            isBuiltin: true,
+        });
         registry.register('reviewer', () => new ReviewerAgent(), {
             name: 'Reviewer',
             description: 'Validates code changes for correctness, security, and quality',
             icon: '👁️',
+            isBuiltin: true,
+        });
+        registry.register('reviewer-tc', () => new ReviewerToolCallingAgent(), {
+            name: 'Reviewer (Tool-Calling)',
+            description: 'Reviews code changes using iterative tool calls (read→check→fix→verify)',
+            icon: '🔍',
             isBuiltin: true,
         });
         registry.register('runner', () => new RunnerAgent(), {

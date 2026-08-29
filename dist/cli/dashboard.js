@@ -172,8 +172,8 @@ export class DashboardCommand extends BaseCommand {
      *   'failed'  — bind failed and nothing was restarted (hint already logged)
      */
     serve(port, host, shouldOpen, force) {
-        process.env.BUFF_DASHBOARD_PORT = String(port);
-        process.env.BUFF_DASHBOARD_HOST = host;
+        process.env.NUVIRA_DASHBOARD_PORT = String(port);
+        process.env.NUVIRA_DASHBOARD_HOST = host;
         return new Promise((resolve) => {
             let started = false;
             let settled = false;

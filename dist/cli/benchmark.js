@@ -2,16 +2,16 @@
  * Benchmark command — Run standardized model benchmarks against coding tasks.
  *
  * Usage:
- *   buff benchmark                      — Run all tasks against default provider
- *   buff benchmark --provider groq      — Run against a specific provider
- *   buff benchmark --model llama-3.3    — Use a specific model
- *   buff benchmark --tasks quick        — Run only quick tasks
- *   buff benchmark --budget 0.50        — Stop if costs exceed $0.50
- *   buff benchmark list                 — List available benchmark tasks
- *   buff benchmark results              — Show previous benchmark results
- *   buff benchmark results --last       — Show last run only
- *   buff benchmark results --compare    — Compare last two runs
- *   buff benchmark clear                — Clear all benchmark data
+ *   nuvira benchmark                      — Run all tasks against default provider
+ *   nuvira benchmark --provider groq      — Run against a specific provider
+ *   nuvira benchmark --model llama-3.3    — Use a specific model
+ *   nuvira benchmark --tasks quick        — Run only quick tasks
+ *   nuvira benchmark --budget 0.50        — Stop if costs exceed $0.50
+ *   nuvira benchmark list                 — List available benchmark tasks
+ *   nuvira benchmark results              — Show previous benchmark results
+ *   nuvira benchmark results --last       — Show last run only
+ *   nuvira benchmark results --compare    — Compare last two runs
+ *   nuvira benchmark clear                — Clear all benchmark data
  */
 import { Command } from 'commander';
 import { BaseCommand } from './commands.js';
@@ -266,7 +266,7 @@ export class BenchmarkCommand extends BaseCommand {
             }
             const available = await resolved.provider.isAvailable();
             if (!available) {
-                logger.warn(`  ⚠️  ${key} is not available — skipping (configure it with \`buff model switch <provider>\`).`);
+                logger.warn(`  ⚠️  ${key} is not available — skipping (configure it with \`nuvira model switch <provider>\`).`);
                 continue;
             }
             // Model health: the router resolves each provider's PINNED config model,
@@ -336,7 +336,7 @@ export class BenchmarkCommand extends BaseCommand {
         console.log('');
         const best = sorted[0];
         logger.success(`  🏆 Best router pick: ${best.provider}/${best.model} (quality ${(best.summary.avgQualityScore * 100).toFixed(1)}%)`);
-        logger.info('  These results feed the Auto router\'s runtime stats — rerun `buff model explain` to see adjusted scores.');
+        logger.info('  These results feed the Auto router\'s runtime stats — rerun `nuvira model explain` to see adjusted scores.');
         console.log('');
     }
     listTasks() {
@@ -360,14 +360,14 @@ export class BenchmarkCommand extends BaseCommand {
                 console.log(`    ${difficulty} ${t.id.padEnd(25)} ${t.title.padEnd(35)} ${timeBadge}`);
             }
         }
-        console.log(`\n  Usage: buff benchmark --tasks <id1,id2>   (specific tasks)`);
-        console.log(`         buff benchmark --tasks quick        (by time estimate)`);
+        console.log(`\n  Usage: nuvira benchmark --tasks <id1,id2>   (specific tasks)`);
+        console.log(`         nuvira benchmark --tasks quick        (by time estimate)`);
         console.log('');
     }
     async showResults(options) {
         const runs = getBenchmarkRuns();
         if (runs.length === 0) {
-            logger.info('No benchmark results found. Run `buff benchmark` first.');
+            logger.info('No benchmark results found. Run `nuvira benchmark` first.');
             return;
         }
         if (options.compare && runs.length >= 2) {
@@ -407,8 +407,8 @@ export class BenchmarkCommand extends BaseCommand {
             console.log(`\n  ${i + 1}. ${date} — ${r.provider}/${r.model}`);
             console.log(`     ${s.tasksPassed}/${s.totalTasks} passed (${passRate}%)  |  Quality: ${(s.avgQualityScore * 100).toFixed(1)}%  |  Latency: ${s.medianLatencyMs}ms  |  Cost: $${s.totalCostUsd.toFixed(6)}`);
         }
-        console.log(`\n  Show details: buff benchmark results --last`);
-        console.log(`  Compare: buff benchmark results --compare`);
+        console.log(`\n  Show details: nuvira benchmark results --last`);
+        console.log(`  Compare: nuvira benchmark results --compare`);
         console.log('');
     }
 }

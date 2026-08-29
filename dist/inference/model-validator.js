@@ -41,7 +41,7 @@ const modelListCache = new Map();
 /**
  * Clear the module-level model-list cache.
  *
- * Called automatically by `buff config set providers.*` (a provider key/model/
+ * Called automatically by `nuvira config set providers.*` (a provider key/model/
  * baseURL change can invalidate the cached live list) and used by tests to
  * isolate TTL behavior. Public so tooling/embeddings can force a fresh fetch.
  */

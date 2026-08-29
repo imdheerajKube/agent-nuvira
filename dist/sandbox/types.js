@@ -44,7 +44,7 @@ let SANDBOX_CONFIG_PATH = '/tmp/buff-sandbox-config.json';
 let cachedConfig = null;
 /**
  * Get the current sandbox configuration.
- * Reads from ~/.buff/sandbox-config.json (if exists), falls back to defaults.
+ * Reads from ~/.nuvira/sandbox-config.json (if exists), falls back to defaults.
  */
 export function getSandboxConfig() {
     if (cachedConfig)
@@ -52,7 +52,7 @@ export function getSandboxConfig() {
     try {
         // Lazy init path to avoid module-level side effects
         if (SANDBOX_CONFIG_PATH === '/tmp/buff-sandbox-config.json' && process.env.HOME) {
-            SANDBOX_CONFIG_PATH = join(process.env.HOME, '.buff', 'sandbox-config.json');
+            SANDBOX_CONFIG_PATH = join(process.env.HOME, '.nuvira', 'sandbox-config.json');
         }
         if (existsSync(SANDBOX_CONFIG_PATH)) {
             const raw = readFileSync(SANDBOX_CONFIG_PATH, 'utf-8');

@@ -2,15 +2,15 @@
  * MCP CLI Command — Manage MCP (Model Context Protocol) server connections.
  *
  * Usage:
- *   buff mcp list              — List all discovered MCP servers and their tools
- *   buff mcp connect <name>    — Connect to a specific MCP server
- *   buff mcp connect --all     — Connect to all discovered MCP servers
- *   buff mcp call <tool>       — Call a tool with arguments
- *   buff mcp call <tool> --server <name>
- *   buff mcp call <tool> --args '{"key":"value"}'
- *   buff mcp info <name>       — Show detailed info for an MCP server
- *   buff mcp refresh           — Re-discover and reconnect to MCP servers
- *   buff mcp serve             — Expose agent tools as an MCP server (stdio)
+ *   nuvira mcp list              — List all discovered MCP servers and their tools
+ *   nuvira mcp connect <name>    — Connect to a specific MCP server
+ *   nuvira mcp connect --all     — Connect to all discovered MCP servers
+ *   nuvira mcp call <tool>       — Call a tool with arguments
+ *   nuvira mcp call <tool> --server <name>
+ *   nuvira mcp call <tool> --args '{"key":"value"}'
+ *   nuvira mcp info <name>       — Show detailed info for an MCP server
+ *   nuvira mcp refresh           — Re-discover and reconnect to MCP servers
+ *   nuvira mcp serve             — Expose agent tools as an MCP server (stdio)
  */
 import { Command } from 'commander';
 import { BaseCommand, getCliName } from './commands.js';
@@ -24,14 +24,14 @@ export class MCPCommand extends BaseCommand {
             .description('Manage MCP (Model Context Protocol) server connections')
             .addHelpText('after', `
 Examples:
-  buff mcp list                          # List servers and tools
-  buff mcp connect filesystem            # Connect to a server by name
-  buff mcp connect --all                 # Connect to all discovered servers
-  buff mcp call get_weather              # Call a tool (uses first connected server)
-  buff mcp call read_file --server fs    # Call a tool on a specific server
-  buff mcp call read_file --args '{"path":"/tmp/test.txt"}'
-  buff mcp info filesystem               # Show server details
-  buff mcp refresh                       # Re-discover and reconnect
+  nuvira mcp list                          # List servers and tools
+  nuvira mcp connect filesystem            # Connect to a server by name
+  nuvira mcp connect --all                 # Connect to all discovered servers
+  nuvira mcp call get_weather              # Call a tool (uses first connected server)
+  nuvira mcp call read_file --server fs    # Call a tool on a specific server
+  nuvira mcp call read_file --args '{"path":"/tmp/test.txt"}'
+  nuvira mcp info filesystem               # Show server details
+  nuvira mcp refresh                       # Re-discover and reconnect
 
 Configured via JSON files in: ~/${MCP_CONFIG_DIR}/
   `);
@@ -96,12 +96,12 @@ Configured via JSON files in: ~/${MCP_CONFIG_DIR}/
                 console.log(`    vetted by: ${e.vettedBy}`);
                 console.log('');
             }
-            console.log('Install one with: buff mcp install <name>');
+            console.log('Install one with: nuvira mcp install <name>');
         });
         // ── install (I7 P2) ───────────────────────────────────────────────────
         command
             .command('install <name>')
-            .description('Install a vetted MCP server from the catalog (writes ~/.buff/mcp/<name>.json)')
+            .description('Install a vetted MCP server from the catalog (writes ~/.nuvira/mcp/<name>.json)')
             .option('--env <key=value>', 'Provide a prompt-secret env var (repeatable: --env KEY=VAL)', collectEnv, {})
             .action(async (name, opts) => {
             const entry = getCatalogEntry(name);
@@ -115,7 +115,7 @@ Configured via JSON files in: ~/${MCP_CONFIG_DIR}/
                 return;
             }
             logger.success(`✅ Installed '${name}' → ${result.path}`);
-            logger.info('  Connect with: buff mcp connect ' + name);
+            logger.info('  Connect with: nuvira mcp connect ' + name);
         });
         // ── uninstall (I7 P2) ─────────────────────────────────────────────────
         command
@@ -249,7 +249,7 @@ Configured via JSON files in: ~/${MCP_CONFIG_DIR}/
             // Call on a specific server
             const client = manager.getClient(options.server);
             if (!client) {
-                logger.error(`Server '${options.server}' is not connected. Connect first: buff mcp connect ${options.server}`);
+                logger.error(`Server '${options.server}' is not connected. Connect first: nuvira mcp connect ${options.server}`);
                 console.log('');
                 return;
             }

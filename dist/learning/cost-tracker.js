@@ -1,7 +1,7 @@
 /**
  * CostTracker — Tracks API usage costs per provider per session.
  *
- * Stores cost data as JSON at ~/.buff/memory/cost-tracker.json
+ * Stores cost data as JSON at ~/.nuvira/memory/cost-tracker.json
  * and provides CLI commands to view costs.
  *
  * Cost per 1K tokens (approximate, in USD):
@@ -14,12 +14,12 @@
  * Costs are configurable via config file for accuracy.
  */
 import { readFileSync, writeFileSync, existsSync, mkdirSync } from 'node:fs';
+import { resolveNuviraHome } from '../config/paths.js';
 import { join } from 'node:path';
-import { homedir } from 'node:os';
 import { getQuotaLedger } from './quota-ledger.js';
 import { getModelRegistry } from './model-registry.js';
 // ─── Constants ──────────────────────────────────────────────────────────────
-const MEMORY_DIR = join(homedir(), '.buff', 'memory');
+const MEMORY_DIR = join(resolveNuviraHome(), 'memory');
 const COST_PATH = join(MEMORY_DIR, 'cost-tracker.json');
 const CURRENT_VERSION = 1;
 /**

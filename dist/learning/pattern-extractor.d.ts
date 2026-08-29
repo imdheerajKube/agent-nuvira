@@ -9,7 +9,7 @@
  * These patterns are injected alongside trajectory few-shot examples
  * when the PlannerAgent decomposes a new goal.
  *
- * Patterns are stored in ~/.buff/memory/patterns.json
+ * Patterns are stored in ~/.nuvira/memory/patterns.json
  */
 import type { LLMCallFn } from '../agents/agent.js';
 import type { Trajectory } from '../memory/trajectory-store.js';

@@ -5,17 +5,17 @@
  * decision can be recorded here so the dashboard can show:
  *   - Usage stats — which providers/models were actually picked, by source
  *     (chat, orchestrator, explain, benchmark, eval) and by complexity
- *   - Audit trail — a timeline of `buff model explain` snapshots
+ *   - Audit trail — a timeline of `nuvira model explain` snapshots
  *
- * Persisted to ~/.buff/memory/routing-history.json (respects BUFF_MEMORY_DIR
+ * Persisted to ~/.nuvira/memory/routing-history.json (respects NUVIRA_MEMORY_DIR
  * for tests). Writes are best-effort — a failure must never break routing.
  *
  * Sources:
- *   - 'chat'          — live `buff chat` auto-routing (per message)
+ *   - 'chat'          — live `nuvira chat` auto-routing (per message)
  *   - 'orchestrator'  — live multi-agent pipeline auto-routing (per task)
- *   - 'explain'       — `buff model explain` snapshots (audit trail)
- *   - 'benchmark'     — `buff benchmark --routing` picks
- *   - 'eval'          — `buff eval --routing` picks
+ *   - 'explain'       — `nuvira model explain` snapshots (audit trail)
+ *   - 'benchmark'     — `nuvira benchmark --routing` picks
+ *   - 'eval'          — `nuvira eval --routing` picks
  */
 /** Where a routing decision came from. */
 export type RoutingSource = 'explain' | 'benchmark' | 'eval' | 'chat' | 'orchestrator';

@@ -2,13 +2,13 @@
  * Init command — Scaffold new projects from templates.
  *
  * Usage:
- *   buff init                    — Interactive prompt for project name and template
- *   buff init my-app             — Create project 'my-app' with interactive template picker
- *   buff init my-app --template node-cli  — Create from a specific template
- *   buff init my-app --list      — List available templates
- *   buff init my-app --template custom --template-dir ~/my-templates
+ *   nuvira init                    — Interactive prompt for project name and template
+ *   nuvira init my-app             — Create project 'my-app' with interactive template picker
+ *   nuvira init my-app --template node-cli  — Create from a specific template
+ *   nuvira init my-app --list      — List available templates
+ *   nuvira init my-app --template custom --template-dir ~/my-templates
  *
- * Templates are stored in ~/.buff/templates/ and can be custom.
+ * Templates are stored in ~/.nuvira/templates/ and can be custom.
  * Built-in templates ship with the CLI.
  */
 import { Command } from 'commander';
@@ -184,8 +184,8 @@ const BUILTIN_TEMPLATES = [
     },
 ];
 // ─── Paths ──────────────────────────────────────────────────────────────────
-const BUFF_DIR = resolveNuviraHome();
-const TEMPLATES_DIR = join(BUFF_DIR, 'templates');
+const NUVIRA_DIR = resolveNuviraHome();
+const TEMPLATES_DIR = join(NUVIRA_DIR, 'templates');
 function ensureTemplateDir() {
     if (!existsSync(TEMPLATES_DIR)) {
         try {
@@ -306,7 +306,7 @@ export class InitCommand extends BaseCommand {
                     : content.replace(/{{name}}/g, name).replace(/\{\{NAME\}\}/g, name);
                 writeFileSync(fullPath, resolvedContent, 'utf-8');
             }
-            // Generate .buffconfig.json if provider was selected
+            // Generate .nuviraconfig.json if provider was selected
             if (providerChoice) {
                 const buffConfig = {
                     defaultProvider: providerChoice.provider,
@@ -318,7 +318,7 @@ export class InitCommand extends BaseCommand {
                         },
                     },
                 };
-                writeFileSync(join(projectDir, '.buffconfig.json'), JSON.stringify(buffConfig, null, 2), 'utf-8');
+                writeFileSync(join(projectDir, '.nuviraconfig.json'), JSON.stringify(buffConfig, null, 2), 'utf-8');
             }
             // ── Success output ──────────────────────────────────────────────
             logger.success(`Created project '${name}' in ${projectDir}\n`);
@@ -339,7 +339,7 @@ export class InitCommand extends BaseCommand {
             }
             if (providerChoice) {
                 console.log(`\n  🤖 AI provider: ${providerChoice.provider} (${providerChoice.model})`);
-                console.log(`     Edit .buffconfig.json to change settings.`);
+                console.log(`     Edit .nuviraconfig.json to change settings.`);
             }
             console.log('');
         }
@@ -362,17 +362,17 @@ export class InitCommand extends BaseCommand {
             }
         }
         console.log(`\n  Usage:`);
-        console.log('    buff init <project-name> --template <template-id>');
-        console.log(`\n  Custom templates: ~/.buff/templates/`);
+        console.log('    nuvira init <project-name> --template <template-id>');
+        console.log(`\n  Custom templates: ~/.nuvira/templates/`);
         console.log('');
     }
     /**
-     * Get all available templates (built-in + custom from ~/.buff/templates/).
+     * Get all available templates (built-in + custom from ~/.nuvira/templates/).
      */
     getAllTemplates(templateDir) {
         const templates = [...BUILTIN_TEMPLATES];
         const dir = templateDir || TEMPLATES_DIR;
-        // Load custom templates from ~/.buff/templates/
+        // Load custom templates from ~/.nuvira/templates/
         try {
             ensureTemplateDir();
             const files = readdirSync(dir).filter((f) => f.endsWith('.json'));

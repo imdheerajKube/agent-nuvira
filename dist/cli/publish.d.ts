@@ -12,13 +12,13 @@
  * Each step is a phase with progress tracking and error recovery.
  *
  * Usage:
- *   buff publish                    — Interactive: choose bump type, collect creds, execute
- *   buff publish --patch            — Non-interactive: patch bump, auto-detect credentials
- *   buff publish --minor            — Minor version bump
- *   buff publish --major            — Major version bump
- *   buff publish --dry-run          — Preview what would happen
- *   buff publish --skip-tests       — Skip test phase
- *   buff publish --provider groq    — Use specific provider for LLM agents
+ *   nuvira publish                    — Interactive: choose bump type, collect creds, execute
+ *   nuvira publish --patch            — Non-interactive: patch bump, auto-detect credentials
+ *   nuvira publish --minor            — Minor version bump
+ *   nuvira publish --major            — Major version bump
+ *   nuvira publish --dry-run          — Preview what would happen
+ *   nuvira publish --skip-tests       — Skip test phase
+ *   nuvira publish --provider groq    — Use specific provider for LLM agents
  */
 import { Command } from 'commander';
 import { BaseCommand } from './commands.js';
@@ -28,7 +28,7 @@ import { type PublishCredentials } from '../agents/credential-store.js';
  * The publish pipeline's PHASE LIST — one shared source for the CLI command
  * AND the H1 `publish` tool (E3c model-decides vocabulary). Both entry points
  * build the exact same phases from the same credentials, so a chat-loop
- * publish can never diverge from `buff publish` (STANDING RULE).
+ * publish can never diverge from `nuvira publish` (STANDING RULE).
  */
 export declare function buildPublishPhases(bumpType: string, skipTests: boolean, creds: PublishCredentials): PhaseDefinition[];
 export declare class PublishCommand extends BaseCommand {

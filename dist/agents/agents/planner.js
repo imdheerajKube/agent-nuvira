@@ -28,8 +28,13 @@ const PLANNER_SYSTEM_PROMPT = [
     'Rules:',
     '1. Start with a "context-gatherer" step to understand the codebase (if files exist)',
     '2. Add one or more "writer" steps to implement changes (max 2-3 files per step)',
-    '3. If the project is EMPTY or the goal is to CREATE something from scratch,',
-    '   skip the context-gatherer step and go straight to writer steps.',
+    '3. CRITICAL — GREENFIELD DETECTION: If the goal uses words like "create",',
+    '   "build", "generate", "scaffold", "make", "develop" from scratch, the',
+    '   project is GREENFIELD. SKIP the context-gatherer step ENTIRELY.',
+    '   Examples of greenfield goals: "create a game", "build a REST API",',
+    '   "generate a CLI tool", "scaffold a React app".',
+    '   Context-gathering is WASTED WORK on greenfield tasks — there is no',
+    '   existing codebase to understand. Go straight to writer steps.',
     '4. For goals that require running something (like "create a Python script and run it"),',
     '   add a "runner" step AFTER the writer step(s).',
     '   Use the description to specify the command: "Run: python hello.py" or "Run `node index.js`"',
@@ -147,6 +152,8 @@ export class PlannerAgent extends Agent {
             const skillGuidance = context.metadata.skillGuidance;
             this.report(context, 'analyzing', 'Analyzing goal and current project structure…');
             const routingContext = context.metadata.routingContext;
+            // Technical decisions from the ReasonerAgent (runs before planner)
+            const technicalDecision = context.metadata.technicalDecision;
             const promptParts = [
                 PLANNER_SYSTEM_PROMPT,
                 '',
@@ -156,6 +163,36 @@ export class PlannerAgent extends Agent {
                 '## Working Directory',
                 context.workingDirectory,
             ];
+            // Inject technical decisions from the reasoner — this is the key integration.
+            // The reasoner already decided language, framework, platform, architecture,
+            // dependencies, and build strategy. The planner MUST use these decisions
+            // when creating steps (e.g. "Create a Python+tkinter game" not "Create a game").
+            if (technicalDecision) {
+                const decisionLines = [
+                    '',
+                    '## Technical Decisions (from Reasoner)',
+                    `Language: ${technicalDecision.language}`,
+                    `Framework: ${technicalDecision.framework}`,
+                    `Platform: ${technicalDecision.platform}`,
+                    `Architecture: ${technicalDecision.architecture}`,
+                    `Deliverable: ${technicalDecision.deliverable}`,
+                    `Greenfield: ${technicalDecision.isGreenfield}`,
+                ];
+                if (technicalDecision.dependencies.length > 0) {
+                    decisionLines.push(`Dependencies: ${technicalDecision.dependencies.join(', ')}`);
+                }
+                if (technicalDecision.buildCommand) {
+                    decisionLines.push(`Build command: ${technicalDecision.buildCommand}`);
+                }
+                if (technicalDecision.constraints.length > 0) {
+                    decisionLines.push(`Constraints: ${technicalDecision.constraints.join('; ')}`);
+                }
+                if (technicalDecision.reasoning) {
+                    decisionLines.push(`Reasoning: ${technicalDecision.reasoning}`);
+                }
+                decisionLines.push('', 'CRITICAL: Use these technical decisions when creating steps.', 'For example, if the language is Python and framework is tkinter,', 'write steps like "Create a Python+tkinter game" not "Create a game".', 'If dependencies are listed, include a runner step to install them.', 'If a build command is specified, include a runner step to build the deliverable.');
+                promptParts.push(...decisionLines);
+            }
             if (routingContext?.taskProfile) {
                 const routingNotes = routingContext.taskProfile.notes?.filter(Boolean) ?? [];
                 const guidanceLines = [
@@ -200,21 +237,34 @@ export class PlannerAgent extends Agent {
                     skillGuidance.description,
                     'The goal matches this skill. Use its methodology when planning your steps — adapt the commands to the goal\'s actual target provider and directory. Runner agent steps execute backtick-wrapped commands:',
                 ];
-                if (skillGuidance.body) {
-                    // I7 P0: a HUB (SKILL.md) skill carries its full methodology as the
-                    // body — inject it verbatim as the adaptation source. The steps are
-                    // descriptive guidance, NOT literal commands to emit unchanged.
+                // Prefer full methodology from skill_view() over body or steps
+                if (skillGuidance.fullMethodology) {
+                    // Full methodology from skill_view() — includes steps, reference docs, whenToUse/whenNotToUse
+                    skillLines.push('', '### Full Skill Methodology (from skill_view)', skillGuidance.fullMethodology);
+                }
+                else if (skillGuidance.body) {
+                    // Fallback: HUB (SKILL.md) skill body
                     skillLines.push('', '### Skill methodology (SKILL.md)', skillGuidance.body);
                 }
-                for (const step of skillGuidance.steps ?? []) {
-                    skillLines.push(`- [${step.agentType}] ${step.description}`);
+                // Always include the step list for quick reference
+                if (skillGuidance.steps?.length > 0) {
+                    skillLines.push('', '### Quick Reference Steps:');
+                    for (const step of skillGuidance.steps) {
+                        skillLines.push(`- [${step.agentType}] ${step.description}`);
+                    }
                 }
-                skillLines.push('If a runner command fails, the repair loop will propose a corrected command automatically — do not plan around an assumed failure.', 'Resolve skill placeholders like {{provider}}, {{projectName}}, and {{outputDir}} to concrete values from the goal and the working directory — NEVER emit literal {{...}} tokens inside a command.');
+                skillLines.push('', 'IMPORTANT: The writer agent can call skill_view() to load the full methodology for any step.', 'If a runner command fails, the repair loop will propose a corrected command automatically — do not plan around an assumed failure.', 'Resolve skill placeholders like {{provider}}, {{projectName}}, and {{outputDir}} to concrete values from the goal and the working directory — NEVER emit literal {{...}} tokens inside a command.');
                 promptParts.push(...skillLines);
             }
             // Append memory/few-shot examples if available
             if (memoryContext) {
                 promptParts.push('', memoryContext);
+            }
+            // Inject MCP tools so the planner can schedule mcp-agent steps
+            // when the goal requires external services (filesystem, databases, APIs, etc.)
+            const mcpToolsFormatted = context.metadata.mcpToolsFormatted;
+            if (mcpToolsFormatted) {
+                promptParts.push('', mcpToolsFormatted, '', 'When the goal requires external services (file operations, database queries, API calls, etc.),', 'schedule an `mcp` step with the appropriate tool. Example:', '{"agentType": "mcp", "description": "callTool(tool_name, {arg: value})"}');
             }
             promptParts.push('', 'Create an execution plan for this goal. Return ONLY a valid JSON array of task steps.');
             const prompt = promptParts.join('\n');

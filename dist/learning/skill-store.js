@@ -1,7 +1,7 @@
 /**
  * SkillStore — Persists and manages compiled skills on disk.
  *
- * Skills are stored as individual JSON files in ~/.buff/skills/
+ * Skills are stored as individual JSON files in ~/.nuvira/skills/
  * Each skill gets its own file for easy inspection and manual editing.
  * An index.json file tracks the full list for fast enumeration.
  *
@@ -11,7 +11,7 @@
  * - Search by tags, goal pattern, or name
  * - Garbage collection for low-quality/expired skills
  */
-import { readFileSync, writeFileSync, existsSync, mkdirSync, unlinkSync } from 'node:fs';
+import { readFileSync, writeFileSync, existsSync, mkdirSync, readdirSync, unlinkSync } from 'node:fs';
 import { join } from 'node:path';
 import { resolveNuviraHome } from '../config/paths.js';
 import { MAX_SKILLS } from './skill-types.js';
@@ -102,7 +102,7 @@ export class SkillStore {
             // a copy so the module-level BUNDLED_SKILLS singletons are never
             // mutated (shared state across store instances). First-time seeds get a
             // FRESH timestamp so decay/quality reports treat them as new (a fixed
-            // 2025 timestamp would make `buff skill gc` prune a freshly-seeded
+            // 2025 timestamp would make `nuvira skill gc` prune a freshly-seeded
             // first-party skill as 120+ days old).
             const now = Date.now();
             const toSave = {
@@ -404,6 +404,183 @@ export class SkillStore {
             ageDays: Math.floor((now - s.createdAt) / (1000 * 60 * 60 * 24)),
         }))
             .sort((a, b) => a.decayScore - b.decayScore); // Worst first
+    }
+    /**
+     * skill_view() — Progressive disclosure for skills.
+     *
+     * Hermes pattern: skills_list() returns name+description (lightweight),
+     * skill_view(name) returns full methodology (heavyweight).
+     *
+     * This function returns the full skill content for a given skill name,
+     * formatted as structured guidance that an agent can follow.
+     *
+     * @param name - Skill name or ID to view
+     * @param filePath - Optional specific file within skill directory (e.g., 'references/api.md')
+     * @returns Full skill content as structured text, or error message
+     */
+    skillView(name, filePath) {
+        // Find the skill by name or ID
+        const all = this.getAll();
+        const skill = all.find((s) => s.name === name || s.id === name || s.name.toLowerCase() === name.toLowerCase());
+        if (!skill) {
+            // Try fuzzy match
+            const fuzzyMatch = all.find((s) => s.name.toLowerCase().includes(name.toLowerCase()) ||
+                name.toLowerCase().includes(s.name.toLowerCase()));
+            if (!fuzzyMatch) {
+                return JSON.stringify({
+                    success: false,
+                    error: `Skill '${name}' not found`,
+                    hint: `Available skills: ${all.slice(0, 20).map((s) => s.name).join(', ')}`,
+                });
+            }
+            return this.formatSkillView(fuzzyMatch, filePath);
+        }
+        // Mark as used
+        this.markUsed(skill.id);
+        return this.formatSkillView(skill, filePath);
+    }
+    /**
+     * Find the reference docs directory for a skill.
+     * Checks .agents/skills/<skill-name>/references/ directory.
+     */
+    findReferenceDocsDir(skillName) {
+        // Check .agents/skills/<skill-name>/references/
+        const agentsDir = join(process.cwd(), '.agents', 'skills', skillName, 'references');
+        if (existsSync(agentsDir)) {
+            return agentsDir;
+        }
+        return null;
+    }
+    /**
+     * List available reference files for a skill.
+     */
+    listReferenceFiles(skillName) {
+        const refDir = this.findReferenceDocsDir(skillName);
+        if (!refDir)
+            return [];
+        try {
+            const files = readdirSync(refDir, { withFileTypes: true });
+            return files
+                .filter((f) => f.isFile() && f.name.endsWith('.md'))
+                .map((f) => f.name);
+        }
+        catch {
+            return [];
+        }
+    }
+    /**
+     * Load a specific reference file for a skill.
+     */
+    loadReferenceFile(skillName, fileName) {
+        const refDir = this.findReferenceDocsDir(skillName);
+        if (!refDir)
+            return null;
+        const filePath = join(refDir, fileName);
+        if (!existsSync(filePath))
+            return null;
+        try {
+            const content = readFileSync(filePath, 'utf-8');
+            // Truncate very large files
+            const maxChars = 50_000;
+            if (content.length > maxChars) {
+                return content.slice(0, maxChars) + `\n\n... (${content.length - maxChars} more chars truncated)`;
+            }
+            return content;
+        }
+        catch {
+            return null;
+        }
+    }
+    /**
+     * Format a skill into structured guidance text for an agent.
+     * This is the Hermes-style progressive disclosure output.
+     * Now includes actual reference docs loading from disk.
+     */
+    formatSkillView(skill, filePath) {
+        // If a specific file is requested, load it from disk
+        if (filePath) {
+            const content = this.loadReferenceFile(skill.name, filePath);
+            if (content) {
+                return JSON.stringify({
+                    success: true,
+                    skill: skill.name,
+                    file: filePath,
+                    content,
+                });
+            }
+            // File not found — list available files
+            const available = this.listReferenceFiles(skill.name);
+            return JSON.stringify({
+                success: false,
+                error: `Reference file '${filePath}' not found for skill '${skill.name}'`,
+                available_files: available,
+                hint: available.length > 0
+                    ? `Available reference files: ${available.join(', ')}. Use skill_view('${skill.name}', '<filename>') to load one.`
+                    : 'No reference files available for this skill.',
+            });
+        }
+        // Format full skill methodology (Hermes-style)
+        const sections = [];
+        // Header
+        sections.push(`# Skill: ${skill.name}`);
+        sections.push(`\n${skill.description}`);
+        // When to use (Hermes-style)
+        if (skill.whenToUse && skill.whenToUse.length > 0) {
+            sections.push('\n## When to Use');
+            for (const condition of skill.whenToUse) {
+                sections.push(`- ${condition}`);
+            }
+        }
+        // When NOT to use (Hermes-style)
+        if (skill.whenNotToUse && skill.whenNotToUse.length > 0) {
+            sections.push('\n## When NOT to Use');
+            for (const condition of skill.whenNotToUse) {
+                sections.push(`- ${condition}`);
+            }
+        }
+        // Goal pattern
+        sections.push(`\n## Goal Pattern`);
+        sections.push(skill.goalPattern);
+        // Tags
+        sections.push(`\n## Tags`);
+        sections.push(skill.tags.join(', '));
+        // Parameters
+        if (skill.parameters.length > 0) {
+            sections.push('\n## Parameters');
+            for (const param of skill.parameters) {
+                const required = param.required ? '(required)' : '(optional)';
+                const defaultVal = param.defaultValue ? ` [default: ${param.defaultValue}]` : '';
+                sections.push(`- **${param.name}** ${required}${defaultVal}: ${param.description}`);
+            }
+        }
+        // Steps (the core methodology)
+        sections.push('\n## Execution Steps');
+        sections.push('\nFollow these steps in order:');
+        for (let i = 0; i < skill.steps.length; i++) {
+            const step = skill.steps[i];
+            const deps = step.dependsOn.length > 0
+                ? ` (depends on: ${step.dependsOn.join(', ')})`
+                : '';
+            sections.push(`\n### Step ${i + 1}: [${step.agentType}]${deps}`);
+            sections.push(step.description);
+            if (step.expectedOutput) {
+                sections.push(`\n**Expected output:** ${step.expectedOutput}`);
+            }
+        }
+        // Reference docs (if available)
+        const refFiles = this.listReferenceFiles(skill.name);
+        if (refFiles.length > 0) {
+            sections.push('\n## Reference Documents');
+            sections.push('Load deep-dive content with skill_view():');
+            for (const file of refFiles) {
+                const name = file.replace('.md', '').replace(/-/g, ' ');
+                sections.push(`- skill_view('${skill.name}', '${file}') — ${name}`);
+            }
+        }
+        // Quality metadata
+        sections.push('\n---');
+        sections.push(`Quality: ${(skill.qualityScore * 100).toFixed(0)}% | Used: ${skill.usageCount} times`);
+        return sections.join('\n');
     }
     // ── Private ────────────────────────────────────────────────────────────
     loadIndex() {

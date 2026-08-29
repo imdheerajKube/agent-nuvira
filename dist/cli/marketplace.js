@@ -2,12 +2,12 @@
  * Marketplace command — Browse and install community plugins and workflow templates.
  *
  * Usage:
- *   buff marketplace browse                   — Browse all available items
- *   buff marketplace browse --workflows       — Browse workflow templates only
- *   buff marketplace browse --plugins         — Browse plugins only
- *   buff marketplace search <query>            — Search across plugins and templates
- *   buff marketplace install <name>            — Install a workflow template
- *   buff marketplace info <name>               — Show details for a marketplace item
+ *   nuvira marketplace browse                   — Browse all available items
+ *   nuvira marketplace browse --workflows       — Browse workflow templates only
+ *   nuvira marketplace browse --plugins         — Browse plugins only
+ *   nuvira marketplace search <query>            — Search across plugins and templates
+ *   nuvira marketplace install <name>            — Install a workflow template
+ *   nuvira marketplace info <name>               — Show details for a marketplace item
  *
  * This command wraps the existing workflow registry and plugin discovery into
  * a unified "marketplace" experience.
@@ -114,18 +114,18 @@ export class MarketplaceCommand extends BaseCommand {
             else {
                 console.log('  🔌 Plugins:');
                 console.log('');
-                console.log('    No plugins discovered. Place plugins in ~/.buff/plugins/');
+                console.log('    No plugins discovered. Place plugins in ~/.nuvira/plugins/');
                 console.log('');
             }
         }
         // ── Helpful tips ────────────────────────────────────────────────────
         console.log('  ─── Tips ─────────────────────────────────────────────');
         console.log('');
-        console.log('  🔍  Search the registry:     buff marketplace search <query>');
-        console.log('  📥  Install template:        buff marketplace install <name>');
-        console.log('  ℹ️   Show item details:       buff marketplace info <name>');
-        console.log('  📋  List workflows:          buff workflow list');
-        console.log('  🔌  Manage plugins:          buff plugins list');
+        console.log('  🔍  Search the registry:     nuvira marketplace search <query>');
+        console.log('  📥  Install template:        nuvira marketplace install <name>');
+        console.log('  ℹ️   Show item details:       nuvira marketplace info <name>');
+        console.log('  📋  List workflows:          nuvira workflow list');
+        console.log('  🔌  Manage plugins:          nuvira plugins list');
         console.log('');
     }
     async search(query) {
@@ -194,8 +194,8 @@ export class MarketplaceCommand extends BaseCommand {
             logger.success(`Successfully installed '${template.id}'`);
             console.log(`  Name: ${template.name}`);
             console.log(`  Steps: ${template.steps.length}`);
-            console.log(`  Location: ~/.buff/workflows/registry/${template.id}.json`);
-            console.log(`  Run it: buff workflow run ${template.id} "your goal"`);
+            console.log(`  Location: ~/.nuvira/workflows/registry/${template.id}.json`);
+            console.log(`  Run it: nuvira workflow run ${template.id} "your goal"`);
             console.log('');
         }
         catch (err) {
@@ -257,7 +257,7 @@ export class MarketplaceCommand extends BaseCommand {
                     console.log(`  Tags: ${entry.tags.join(', ')}`);
                 console.log(`  Updated: ${entry.updatedAt}`);
                 console.log('');
-                logger.info(`Install: buff marketplace install ${entry.id}`);
+                logger.info(`Install: nuvira marketplace install ${entry.id}`);
                 console.log('');
                 return;
             }
@@ -266,7 +266,7 @@ export class MarketplaceCommand extends BaseCommand {
             spinner.stop();
         }
         logger.error(`Marketplace item '${name}' not found.`);
-        logger.info(`Search: buff marketplace search ${name}`);
+        logger.info(`Search: nuvira marketplace search ${name}`);
         console.log('');
     }
 }

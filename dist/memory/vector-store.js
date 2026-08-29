@@ -2,7 +2,7 @@
  * VectorStore — pluggable vector index for semantic search.
  *
  * Stores embeddings as `{ id, vector, metadata }` entries in a JSON file
- * (~/.buff/memory/vectors.json, or vectors-<namespace>.json). No hard native
+ * (~/.nuvira/memory/vectors.json, or vectors-<namespace>.json). No hard native
  * dependencies — uses only Node.js built-in fs and crypto.
  *
  * Backends (selected by `memory.vectorBackend` in config):
@@ -17,17 +17,17 @@
  * memory/history/repo vectors survive upgrades AND backend switches.
  */
 import { readFileSync, writeFileSync, existsSync, mkdirSync } from 'node:fs';
+import { envBuff, resolveNuviraHome } from '../config/paths.js';
 import { join } from 'node:path';
-import { homedir } from 'node:os';
 import { resolveBuffConfigPath } from '../config/paths.js';
 // ─── Constants ──────────────────────────────────────────────────────────────
 /**
  * Resolve the memory dir lazily (per call) so tests that set
- * `BUFF_MEMORY_DIR` in beforeAll are genuinely hermetic — a module-import-
- * time capture would silently keep writing to the real ~/.buff/memory.
+ * `NUVIRA_MEMORY_DIR` in beforeAll are genuinely hermetic — a module-import-
+ * time capture would silently keep writing to the real ~/.nuvira/memory.
  */
 function memoryDir() {
-    return process.env.BUFF_MEMORY_DIR || join(homedir(), '.buff', 'memory');
+    return envBuff('MEMORY_DIR') || join(resolveNuviraHome(), 'memory');
 }
 /**
  * Schema version for the vector index.
@@ -128,7 +128,7 @@ export class JsonBackend {
     constructor(namespace = 'default') {
         this.namespace = namespace;
     }
-    /** Resolve the index path per operation so `BUFF_MEMORY_DIR` changes (tests) take effect. */
+    /** Resolve the index path per operation so `NUVIRA_MEMORY_DIR` changes (tests) take effect. */
     get indexPath() {
         return indexPathFor(this.namespace);
     }
@@ -194,7 +194,7 @@ let resolvedBackendCache = {};
 let configBackend = null;
 let configBackendLoaded = false;
 /**
- * Read `memory.vectorBackend` from the buff config (lazy, cached).
+ * Read `memory.vectorBackend` from the nuvira config (lazy, cached).
  * Read directly (not via ConfigManager) to avoid a heavyweight dependency in
  * the hot vector path; env/override still win over config.
  */
@@ -222,7 +222,7 @@ function readConfigBackendType() {
  * back to the exact JSON backend when the FAISS stack is unavailable.
  */
 function resolvePreferredBackendType() {
-    const env = process.env.BUFF_VECTOR_BACKEND;
+    const env = envBuff('VECTOR_BACKEND');
     if (env === 'json')
         return 'json';
     if (env === 'faiss' || env === 'auto')

@@ -18,7 +18,14 @@ import { validateSyntax } from '../../editing/ast.js';
 import { buildStructuralContext } from '../../editing/edit.js';
 import { BASE_RETRY_DELAY_MS, LONG_WAIT_THRESHOLD_MS, calculateRetryDelay, isRateLimitError, parseModelName, parseRetryAfterHint, } from '../rate-limit-retry.js';
 import { referenceDocsFor } from '../reference-docs.js';
-const WRITER_SYSTEM_PROMPT = `You are an expert software engineer implementing changes to a codebase.
+import { assessProject } from '../prompt-assembly.js';
+/**
+ * Build the writer system prompt with project-specific context.
+ * Adopts Hermes's pattern: identity → project conventions → task instructions.
+ * The prompt changes based on the detected framework, language, and project state.
+ */
+function buildWriterSystemPrompt(assessment) {
+    const base = `You are an expert software engineer implementing changes to a codebase.
 
 Given file contents and an implementation task, you will:
 1. Read the current file content carefully
@@ -44,8 +51,37 @@ INCORRECT (do NOT use these):
 - Preserve existing code style and conventions
 - Add appropriate error handling
 - Write clean, well-documented code
-- If you modify multiple files, return ONE code block per file
-`;
+- If you modify multiple files, return ONE code block per file`;
+    // Inject project-specific conventions (Codebuff pattern: project-aware prompts)
+    const conventions = [];
+    if (assessment?.framework) {
+        const frameworkConventions = {
+            react: 'Use React functional components with hooks. Follow React best practices (useEffect cleanup, memo for expensive computations). Use TypeScript for props interfaces.',
+            vue: 'Use Vue 3 Composition API with <script setup>. Follow Vue style guide. Use TypeScript for prop definitions.',
+            nextjs: 'Use Next.js App Router conventions. Server components by default, client components only when needed (useState, useEffect). Use next/image for images.',
+            express: 'Use Express.js middleware patterns. Handle errors with error-handling middleware. Use async/await for route handlers.',
+            fastapi: 'Use FastAPI with Pydantic models for request/response schemas. Use async endpoints where possible. Follow FastAPI dependency injection patterns.',
+            django: 'Use Django views with class-based views where appropriate. Follow Django ORM patterns. Use Django REST Framework for APIs.',
+            python: 'Follow PEP 8 style guide. Use type hints. Use dataclasses or Pydantic for data structures.',
+            go: 'Follow Go conventions (gofmt, go vet). Use error wrapping with fmt.Errorf. Prefer table-driven tests.',
+            rust: 'Follow Rust API guidelines. Use Result for error handling. Prefer ? operator over unwrap().',
+        };
+        if (frameworkConventions[assessment.framework]) {
+            conventions.push(frameworkConventions[assessment.framework]);
+        }
+    }
+    if (assessment?.language === 'typescript') {
+        conventions.push('Use strict TypeScript. Prefer interfaces over type aliases. Use readonly for immutable data.');
+    }
+    if (assessment?.isGreenfield) {
+        conventions.push('This is a greenfield project — create files from scratch. No need to preserve existing code style.');
+    }
+    if (conventions.length > 0) {
+        return `${base}\n\n## Project Conventions\n${conventions.join('\n')}`;
+    }
+    return base;
+}
+const WRITER_SYSTEM_PROMPT = buildWriterSystemPrompt();
 /** Maximum files to include in a single writer prompt */
 const MAX_CONTEXT_FILES = 10;
 /** Language tag → file extension for the lenient parse fallback. */
@@ -457,7 +493,43 @@ export class WriterAgent extends Agent {
         const instructions = isRetry
             ? `\n## CRITICAL — Read This Carefully\nThe previous response could not be parsed because the files were not wrapped in correctly formatted code blocks.\n\nYou MUST follow this format EXACTLY for EACH file you modify:\n\n\`\`\`filepath:src/example.ts\n// THE COMPLETE UPDATED FILE CONTENT GOES HERE (every line, full file)\n\`\`\`\n\nIMPORTANT:\n- The filepath: prefix is REQUIRED after the opening backticks\n- Return the FULL file, not a diff or snippet\n- If you modify 2 files, return 2 separate code blocks in this format`
             : `\n## Instructions\nImplement the changes described in the task. Return the complete updated file content for each file you modify. Remember: each file must be wrapped in \`\`\`filepath:...\n\`\`\` format.`;
-        return `${WRITER_SYSTEM_PROMPT}\n\n## Task Description\n${taskDescription}${goalSection}${referenceSection}\n\n## Current File Content\n${fileContext}${structureSection}${mcpSection}\n${instructions}`;
+        // CHANGE-005: Use project-specific writer prompt (Codebuff pattern)
+        // Assess the project once and inject framework-specific conventions
+        let projectAssessment;
+        try {
+            projectAssessment = assessProject(context.workingDirectory);
+        }
+        catch {
+            // Best-effort — assessment must never break the writer
+        }
+        const projectAwarePrompt = buildWriterSystemPrompt(projectAssessment);
+        // Skill guidance injection: when the orchestrator matched a skill, inject
+        // its methodology into the writer prompt so the implementation follows
+        // proven patterns (e.g. deployment commands, game structure, API patterns).
+        const skillGuidance = context.metadata.skillGuidance;
+        const skillSection = skillGuidance
+            ? `\n\n## Skill Guidance (matched: ${skillGuidance.name})\n${skillGuidance.description}\n\nFollow this methodology when implementing:` +
+                skillGuidance.steps.map((s) => `\n- [${s.agentType}] ${s.description}`).join('')
+            : '';
+        // Wire memory into writer prompt (Faiss + SQL integration): failure lessons,
+        // patterns, and facts are already stored in the vault by the orchestrator.
+        // The planner sees these, but the writer — which actually generates code —
+        // must also see them to avoid past mistakes and use proven approaches.
+        const failureLessonContext = context.metadata.failureLessonContext;
+        const patternContext = context.metadata.patternContext;
+        const factContext = context.metadata.factContext;
+        const memorySections = [];
+        if (failureLessonContext) {
+            memorySections.push(`\n\n## Lessons from Past Failures\nAvoid these mistakes — they caused failures in similar tasks:${failureLessonContext}`);
+        }
+        if (patternContext) {
+            memorySections.push(`\n\n## Proven Patterns\nUse these proven approaches from successful similar tasks:${patternContext}`);
+        }
+        if (factContext) {
+            memorySections.push(`\n\n## Project Facts & Preferences\n${factContext}`);
+        }
+        const memorySection = memorySections.join('');
+        return `${projectAwarePrompt}\n\n## Task Description\n${taskDescription}${goalSection}${referenceSection}${skillSection}${memorySection}\n\n## Current File Content\n${fileContext}${structureSection}${mcpSection}\n${instructions}`;
     }
     /**
      * Parse the LLM response to extract file changes.

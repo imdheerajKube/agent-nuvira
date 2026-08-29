@@ -8,10 +8,10 @@
  * 4. CI Status → Fix: When CI fails on a PR, detect failure, fix it, push
  *
  * Usage:
- * - `buff execute "install branch hooks" --auto-branch`
- * - `buff execute "auto-create branch from issue PROJ-123" --auto-branch`
- * - `buff execute "auto-commit changes" --auto-branch`
- * - `buff execute "fix CI for PR #42" --auto-branch`
+ * - `nuvira execute "install branch hooks" --auto-branch`
+ * - `nuvira execute "auto-create branch from issue PROJ-123" --auto-branch`
+ * - `nuvira execute "auto-commit changes" --auto-branch`
+ * - `nuvira execute "fix CI for PR #42" --auto-branch`
  */
 import { Agent, type AgentContext, type AgentResult } from '../agent.js';
 import type { LLMCallFn } from '../agent.js';

@@ -2,8 +2,8 @@ import { Command } from 'commander';
 import { BaseCommand } from './commands.js';
 /**
  * Edit command — edit files using AI assistance
- * buff edit <file> [--provider nim] [--instruction "add error handling"]
- * buff edit <file> --auto-route -i "add error handling"   (router-ranked walk)
+ * nuvira edit <file> [--provider nim] [--instruction "add error handling"]
+ * nuvira edit <file> --auto-route -i "add error handling"   (router-ranked walk)
  */
 export declare class EditCommand extends BaseCommand {
     create(): Command;

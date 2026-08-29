@@ -2,16 +2,16 @@
  * LearnCommand — CLI interface for the self-improvement system.
  *
  * Subcommands:
- *   buff learn stats         — Show agent performance stats
- *   buff learn patterns      — Show/extract coding patterns
- *   buff learn lessons       — Show/extract failure lessons (what didn't work)
- *   buff learn optimize      — Generate optimized model routing
- *   buff learn status        — Show overall self-improvement status
- *   buff learn clear         — Reset learning data
- *   buff learn compare       — A/B model comparison via benchmarks
- *   buff learn feedback      — Rate a trajectory or view feedback stats
- *   buff learn quality       — Show pattern quality and decay metrics
- *   buff learn gc            — Garbage-collect low-quality patterns
+ *   nuvira learn stats         — Show agent performance stats
+ *   nuvira learn patterns      — Show/extract coding patterns
+ *   nuvira learn lessons       — Show/extract failure lessons (what didn't work)
+ *   nuvira learn optimize      — Generate optimized model routing
+ *   nuvira learn status        — Show overall self-improvement status
+ *   nuvira learn clear         — Reset learning data
+ *   nuvira learn compare       — A/B model comparison via benchmarks
+ *   nuvira learn feedback      — Rate a trajectory or view feedback stats
+ *   nuvira learn quality       — Show pattern quality and decay metrics
+ *   nuvira learn gc            — Garbage-collect low-quality patterns
  */
 import { Command } from 'commander';
 import { ConfigManager } from '../config/manager.js';

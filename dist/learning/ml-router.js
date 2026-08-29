@@ -25,14 +25,14 @@
  * - OPT-IN: enabled only when `routing.mlRouter` is true (feature-shipped,
  *   off by default — "off-by-default for anything risky").
  *
- * Persistence: `~/.buff/memory/ml-router.jsonl` (honors BUFF_MEMORY_DIR),
+ * Persistence: `~/.nuvira/memory/ml-router.jsonl` (honors NUVIRA_MEMORY_DIR),
  * append-only, capped at MAX_RECORDS (oldest trimmed).
  */
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { envBuff, resolveNuviraHome } from '../config/paths.js';
 import { dirname, join } from 'node:path';
-import { homedir } from 'node:os';
 // ─── Constants ─────────────────────────────────────────────────────────────
-const DEFAULT_MEMORY_DIR = join(homedir(), '.buff', 'memory');
+const DEFAULT_MEMORY_DIR = join(resolveNuviraHome(), 'memory');
 /** Feature vector dimension (hash buckets). Intent/complexity add more. */
 export const FEATURE_DIMS = 256;
 /** Buckets reserved for the intent + complexity one-hot tail. */
@@ -46,7 +46,7 @@ export const DEFAULT_ML_MIN_SAMPLES = 5;
 /** Default blend strength: factor = 1 + strength × (winRate − 0.5). */
 export const DEFAULT_ML_STRENGTH = 0.5;
 function memoryPath() {
-    return join(process.env.BUFF_MEMORY_DIR || DEFAULT_MEMORY_DIR, 'ml-router.jsonl');
+    return join(envBuff('MEMORY_DIR') || DEFAULT_MEMORY_DIR, 'ml-router.jsonl');
 }
 // ─── Hashing helpers ────────────────────────────────────────────────────────
 /** FNV-1a 32-bit hash (stable across runs — deterministic features). */

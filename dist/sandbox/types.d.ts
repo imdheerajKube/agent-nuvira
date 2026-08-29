@@ -96,7 +96,7 @@ export declare const DEFAULT_RESOURCE_LIMITS: Required<ResourceLimits>;
 export declare const DEFAULT_SANDBOX_CONFIG: SandboxConfig;
 /**
  * Get the current sandbox configuration.
- * Reads from ~/.buff/sandbox-config.json (if exists), falls back to defaults.
+ * Reads from ~/.nuvira/sandbox-config.json (if exists), falls back to defaults.
  */
 export declare function getSandboxConfig(): SandboxConfig;
 /**

@@ -5,10 +5,10 @@
  * and runs a command immediately, showing stdout/stderr output.
  *
  * Usage:
- *   buff run "echo hello world"
- *   buff run "npm test" --verbose
- *   buff run "python hello.py" --timeout 30000
- *   buff run "node index.js" --provider groq --model "llama-3.1-8b-instant"
+ *   nuvira run "echo hello world"
+ *   nuvira run "npm test" --verbose
+ *   nuvira run "python hello.py" --timeout 30000
+ *   nuvira run "node index.js" --provider groq --model "llama-3.1-8b-instant"
  */
 import { Command } from 'commander';
 import { BaseCommand } from './commands.js';

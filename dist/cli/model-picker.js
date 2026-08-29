@@ -166,7 +166,7 @@ export async function showModelPicker(configManager) {
         }));
         allModels.push(...modelsToShow);
         if (models.length > MAX_MODELS_PER_PROVIDER) {
-            logger.info(`    📋 ... and ${models.length - MAX_MODELS_PER_PROVIDER} more (use: buff models --provider ${type})`);
+            logger.info(`    📋 ... and ${models.length - MAX_MODELS_PER_PROVIDER} more (use: nuvira models --provider ${type})`);
         }
     }
     if (allModels.length === 0) {

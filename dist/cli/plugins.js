@@ -2,8 +2,8 @@
  * Plugins command — Lists and manages agent plugins and workflow templates.
  *
  * Usage:
- *   buff plugins list          — Show discovered plugins and workflow templates
- *   buff plugins scan          — Force re-scan of ~/.buff/agents/ and ~/.buff/workflows/
+ *   nuvira plugins list          — Show discovered plugins and workflow templates
+ *   nuvira plugins scan          — Force re-scan of ~/.nuvira/agents/ and ~/.nuvira/workflows/
  */
 import { Command } from 'commander';
 import { BaseCommand } from './commands.js';
@@ -33,7 +33,7 @@ export class PluginsCommand extends BaseCommand {
         logger.highlight(`${'═'.repeat(60)}`);
         logger.highlight('  🔌  Plugin System');
         logger.highlight(`${'═'.repeat(60)}`);
-        // ── Provider plugins (from ~/.buff/plugins/) ─────────────────────────
+        // ── Provider plugins (from ~/.nuvira/plugins/) ─────────────────────────
         const registeredPlugins = registry.getAllPlugins();
         console.log(`\n  🔗 Provider Plugins: ${stats.providerPlugins} discovered, ${registeredPlugins.length} registered`);
         if (registeredPlugins.length > 0) {
@@ -45,8 +45,8 @@ export class PluginsCommand extends BaseCommand {
             }
         }
         else {
-            console.log('    (no provider plugins found in ~/.buff/plugins/)');
-            console.log('    Tip: Drop a .js file exporting a ProviderPlugin into ~/.buff/plugins/');
+            console.log('    (no provider plugins found in ~/.nuvira/plugins/)');
+            console.log('    Tip: Drop a .js file exporting a ProviderPlugin into ~/.nuvira/plugins/');
         }
         // ── Built-in workflow templates ──────────────────────────────────────
         const builtinWorkflows = getWorkflowTemplates();
@@ -68,7 +68,7 @@ export class PluginsCommand extends BaseCommand {
             }
         }
         else {
-            console.log('    (no agent plugins found in ~/.buff/agents/)');
+            console.log('    (no agent plugins found in ~/.nuvira/agents/)');
         }
         // ── Discovered workflow plugins ──────────────────────────────────────
         console.log(`\n  📄 Workflow Plugins: ${stats.workflowPlugins} discovered`);
@@ -84,13 +84,13 @@ export class PluginsCommand extends BaseCommand {
             }
         }
         else {
-            console.log('    (no workflow plugins found in ~/.buff/workflows/)');
+            console.log('    (no workflow plugins found in ~/.nuvira/workflows/)');
         }
         // ── Plugin directories ──────────────────────────────────────────────
         console.log(`\n  📁 Plugin Directories:`);
-        console.log(`    Provider plugins: ~/.buff/plugins/`);
-        console.log(`    Agent plugins: ~/.buff/agents/`);
-        console.log(`    Workflow templates: ~/.buff/workflows/`);
+        console.log(`    Provider plugins: ~/.nuvira/plugins/`);
+        console.log(`    Agent plugins: ~/.nuvira/agents/`);
+        console.log(`    Workflow templates: ~/.nuvira/workflows/`);
         console.log('');
     }
     async scanPlugins() {
@@ -116,7 +116,7 @@ export class PluginsCommand extends BaseCommand {
             logger.success(`  Workflow: ${w.id} ← ${w.name}`);
         }
         if (registeredPlugins.length === 0 && agentPlugins.size === 0 && workflowPlugins.length === 0) {
-            console.log('  Tip: Place .js provider files in ~/.buff/plugins/, .js agent files in ~/.buff/agents/,\n        or .json workflow files in ~/.buff/workflows/');
+            console.log('  Tip: Place .js provider files in ~/.nuvira/plugins/, .js agent files in ~/.nuvira/agents/,\n        or .json workflow files in ~/.nuvira/workflows/');
         }
     }
 }

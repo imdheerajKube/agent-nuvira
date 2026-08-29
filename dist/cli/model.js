@@ -8,14 +8,14 @@
  * - Conversation history and agent state are preserved across switches
  *
  * Usage:
- *   buff model                           — Show current config + interactive switch
- *   buff model list                      — List all providers and their status
- *   buff model switch                    — Interactive categorized model picker
- *   buff model switch groq               — Switch to groq (default model)
- *   buff model switch groq/llama-3.3-70b — Switch to specific model
- *   buff model info                      — Show detailed current config
- *   buff model recommend                 — Show model routing recommendations
- *   buff model health                    — Quick health check for active provider
+ *   nuvira model                           — Show current config + interactive switch
+ *   nuvira model list                      — List all providers and their status
+ *   nuvira model switch                    — Interactive categorized model picker
+ *   nuvira model switch groq               — Switch to groq (default model)
+ *   nuvira model switch groq/llama-3.3-70b — Switch to specific model
+ *   nuvira model info                      — Show detailed current config
+ *   nuvira model recommend                 — Show model routing recommendations
+ *   nuvira model health                    — Quick health check for active provider
  */
 import { Command } from 'commander';
 import { existsSync, readFileSync, writeFileSync, mkdirSync } from 'node:fs';
@@ -37,11 +37,11 @@ import { getQuotaLedger } from '../learning/quota-ledger.js';
 import { getRouterPromotion, DEFAULT_MIN_PROMOTION_DECISIONS, } from '../learning/router-promotion.js';
 import { getMlRouter } from '../learning/ml-router.js';
 import { logger } from '../utils/logger.js';
-const BUFF_DIR = resolveNuviraHome();
-const ACTIVE_MODEL_PATH = join(BUFF_DIR, 'active-model.json');
+const NUVIRA_DIR = resolveNuviraHome();
+const ACTIVE_MODEL_PATH = join(NUVIRA_DIR, 'active-model.json');
 function ensureBuffDir() {
-    if (!existsSync(BUFF_DIR)) {
-        mkdirSync(BUFF_DIR, { recursive: true });
+    if (!existsSync(NUVIRA_DIR)) {
+        mkdirSync(NUVIRA_DIR, { recursive: true });
     }
 }
 /**
@@ -112,7 +112,7 @@ const PROVIDER_ELIGIBILITY = {
     groq: 'Set GROQ_API_KEY (get at console.groq.com)',
 };
 /**
- * Sample tasks used by `buff model explain` (no-task mode) to walk every
+ * Sample tasks used by `nuvira model explain` (no-task mode) to walk every
  * complexity level. Shared by the human rendering and the --json output so
  * they never drift apart.
  */
@@ -304,8 +304,8 @@ export class ModelCommand extends BaseCommand {
             console.log(`  (set ${new Date(active.updatedAt).toLocaleString()})`);
         }
         console.log('');
-        logger.info('Run `buff model switch` to change the active provider/model.');
-        logger.info('Run `buff doctor` for full diagnostic checks.');
+        logger.info('Run `nuvira model switch` to change the active provider/model.');
+        logger.info('Run `nuvira doctor` for full diagnostic checks.');
         console.log('');
     }
     // ── Subcommand: switch ─────────────────────────────────────────────────
@@ -360,7 +360,7 @@ export class ModelCommand extends BaseCommand {
             console.log('   Agent-Nuvira will pick the best provider/model for each task');
             console.log('   based on complexity, cost, latency, privacy, and reliability.');
             console.log('');
-            logger.info('Run `buff model switch <provider>` to pin a specific provider instead.');
+            logger.info('Run `nuvira model switch <provider>` to pin a specific provider instead.');
             console.log('');
             return;
         }
@@ -414,12 +414,12 @@ export class ModelCommand extends BaseCommand {
                 console.log(`   🧠  ${resolvedModel}`);
             }
             console.log('');
-            logger.info('This model will be used by default for `buff chat`, `buff execute`, and other commands.');
+            logger.info('This model will be used by default for `nuvira chat`, `nuvira execute`, and other commands.');
             console.log('');
         }
         catch (err) {
             logger.error(`Failed to switch: ${err instanceof Error ? err.message : String(err)}`);
-            logger.info('Use `buff model list` to see available providers.');
+            logger.info('Use `nuvira model list` to see available providers.');
         }
     }
     // ── Subcommand: info ───────────────────────────────────────────────────
@@ -444,7 +444,7 @@ export class ModelCommand extends BaseCommand {
         }
         else {
             logger.info('  No active model set.');
-            logger.info('  Run `buff model switch` to select one.');
+            logger.info('  Run `nuvira model switch` to select one.');
             console.log('');
         }
         if (opts.verbose) {
@@ -496,8 +496,8 @@ export class ModelCommand extends BaseCommand {
             }
         }
         console.log('');
-        logger.info('Run `buff model switch` to change providers.');
-        logger.info('Run `buff model list` to see availability status.');
+        logger.info('Run `nuvira model switch` to change providers.');
+        logger.info('Run `nuvira model list` to see availability status.');
         console.log('');
     }
     // ── Subcommand: explain ───────────────────────────────────────────────
@@ -540,7 +540,7 @@ export class ModelCommand extends BaseCommand {
             }
             catch (err) {
                 // A PII/governance policy block renders cleanly (with the audit trail)
-                // instead of crashing `buff model explain` with a raw stack trace.
+                // instead of crashing `nuvira model explain` with a raw stack trace.
                 if (err instanceof PIIPolicyError || err instanceof GovernancePolicyError) {
                     this.renderPolicyBlock(err);
                 }
@@ -552,7 +552,7 @@ export class ModelCommand extends BaseCommand {
         }
         // `--since` requires a task to diff.
         if (opts.since) {
-            logger.error('`--since` requires a task — diff two decisions for the SAME task, e.g. `buff model explain "add auth" --since @1`');
+            logger.error('`--since` requires a task — diff two decisions for the SAME task, e.g. `nuvira model explain "add auth" --since @1`');
             return;
         }
         // No task given — walk through sample tasks across all complexity levels
@@ -574,9 +574,9 @@ export class ModelCommand extends BaseCommand {
             console.log('');
         }
         console.log('');
-        logger.info('Pass a task for a single detailed decision: `buff model explain "your task"`');
-        logger.info('Route for a specific agent: `buff model explain --agent writer "your task"`');
-        logger.info('JSON for scripting/CI: `buff model explain "your task" --json`');
+        logger.info('Pass a task for a single detailed decision: `nuvira model explain "your task"`');
+        logger.info('Route for a specific agent: `nuvira model explain --agent writer "your task"`');
+        logger.info('JSON for scripting/CI: `nuvira model explain "your task" --json`');
         console.log('');
     }
     /**
@@ -767,7 +767,7 @@ export class ModelCommand extends BaseCommand {
         logger.highlight('═══  Auto Model Routing — Decision Diff (P3-M3.3)  ═══');
         console.log('');
         if (!prev?.snapshot) {
-            logger.warn(`  No prior explain snapshot found for ref "${ref}" (${getExplainSnapshots(1).length === 0 ? 'no explain history yet — run a plain `buff model explain "task"` first' : 'that ref does not match an explain decision'}).`);
+            logger.warn(`  No prior explain snapshot found for ref "${ref}" (${getExplainSnapshots(1).length === 0 ? 'no explain history yet — run a plain `nuvira model explain "task"` first' : 'that ref does not match an explain decision'}).`);
             console.log('');
             return;
         }
@@ -777,7 +777,7 @@ export class ModelCommand extends BaseCommand {
             refLabel: `${prev.id} · ${new Date(prev.timestamp).toLocaleString()} · "${prev.task.slice(0, 60)}"`,
         }));
         console.log('');
-        logger.info('Refs: an explain id · @n (nth most recent) · epoch ms. Run `buff model explain "task"` to record a new snapshot.');
+        logger.info('Refs: an explain id · @n (nth most recent) · epoch ms. Run `nuvira model explain "task"` to record a new snapshot.');
         console.log('');
     }
     /** Render a single routing decision (compact or detailed). */
@@ -915,8 +915,8 @@ export class ModelCommand extends BaseCommand {
             console.log(`  ${icon} ${agent.padEnd(20)} → ${label}`);
         }
         console.log('');
-        logger.info('To use routing: add `--auto-route` to `buff execute` commands.');
-        logger.info('To set a specific model per agent: `buff execute --planner-model <model>`');
+        logger.info('To use routing: add `--auto-route` to `nuvira execute` commands.');
+        logger.info('To set a specific model per agent: `nuvira execute --planner-model <model>`');
         console.log('');
     }
     // ── Subcommand: health ─────────────────────────────────────────────────
@@ -943,7 +943,7 @@ export class ModelCommand extends BaseCommand {
                 logger.success('✅ API key is configured');
             }
             else {
-                logger.warn('⚠️  No API key configured. Run `buff doctor` for setup help.');
+                logger.warn('⚠️  No API key configured. Run `nuvira doctor` for setup help.');
             }
             // 3. Availability
             const available = await provider.isAvailable();
@@ -986,7 +986,7 @@ export class ModelCommand extends BaseCommand {
                 logger.success(`📌 Active model: ${active.model}`);
             }
             console.log('');
-            logger.info('Run `buff doctor` for a full system health check.');
+            logger.info('Run `nuvira doctor` for a full system health check.');
             console.log('');
         }
         catch (err) {
@@ -1003,13 +1003,13 @@ export class ModelCommand extends BaseCommand {
             console.log('');
             return;
         }
-        // Session 36 — user-declared budget: `buff model quota set <provider>`.
+        // Session 36 — user-declared budget: `nuvira model quota set <provider>`.
         // Writes the SAME config the dashboard editor writes (routing.quota + the
         // governance cost cap) so the user's number is enforced by the ledger /
         // auto-router before requests go out.
         if (action === 'set' || action === 'clear') {
             if (!provider) {
-                logger.error(`\`buff model quota ${action}\` needs a provider: buff model quota ${action} <provider> [options].`);
+                logger.error(`\`nuvira model quota ${action}\` needs a provider: nuvira model quota ${action} <provider> [options].`);
                 return;
             }
             if (action === 'clear') {
@@ -1029,7 +1029,7 @@ export class ModelCommand extends BaseCommand {
             const { tokens, requests, windowMs, costUsd } = opts;
             if (tokens === undefined && requests === undefined && windowMs === undefined && costUsd === undefined) {
                 logger.error('Nothing to set — provide at least one of --tokens / --requests / --window-ms / --cost-usd.');
-                logger.info('  Example: buff model quota set groq --tokens 12000 --requests 14400 --cost-usd 0.10');
+                logger.info('  Example: nuvira model quota set groq --tokens 12000 --requests 14400 --cost-usd 0.10');
                 return;
             }
             if ((tokens !== undefined && (isNaN(tokens) || tokens < 0)) ||
@@ -1067,11 +1067,11 @@ export class ModelCommand extends BaseCommand {
             console.log(`     max cost/call: $${costUsd !== undefined ? costUsd : (this.configManager.getAll().routing?.governance?.maxCostUsd ?? 'unset')}`);
             console.log('');
             logger.info('The quota ledger + auto-router enforce this before requests go out; the dashboard');
-            logger.info('Admin → Budget panel edits the same config. `buff model quota reset` clears usage.');
+            logger.info('Admin → Budget panel edits the same config. `nuvira model quota reset` clears usage.');
             return;
         }
         if (action && action !== 'reset' && action !== 'set' && action !== 'clear') {
-            logger.error(`Unknown quota action: ${action}. Use \`buff model quota\` to view, \`buff model quota reset\` to reset, or \`buff model quota set <provider> [options]\` to declare a budget.`);
+            logger.error(`Unknown quota action: ${action}. Use \`nuvira model quota\` to view, \`nuvira model quota reset\` to reset, or \`nuvira model quota set <provider> [options]\` to declare a budget.`);
             return;
         }
         const ledger = getQuotaLedger();
@@ -1101,8 +1101,8 @@ export class ModelCommand extends BaseCommand {
             logger.info('  No quota usage recorded yet.');
             console.log('');
             logger.info('  The ledger write-throughs every Auto-routed call; declare a budget to enforce:');
-            logger.info('  `buff model quota set groq --tokens 12000 --requests 14400 --cost-usd 0.10`');
-            logger.info('  (or `buff config set routing.quota.gemini.requestsPerWindow 1500`)');
+            logger.info('  `nuvira model quota set groq --tokens 12000 --requests 14400 --cost-usd 0.10`');
+            logger.info('  (or `nuvira config set routing.quota.gemini.requestsPerWindow 1500`)');
             console.log('');
             // Still show the failover timeline — events (parked/failover) can exist
             // even before any usage is recorded.
@@ -1154,7 +1154,7 @@ export class ModelCommand extends BaseCommand {
             return;
         }
         if (action && action !== 'reset') {
-            logger.error(`Unknown bandit action: ${action}. Use \`buff model bandit\` to view or \`buff model bandit reset\` to reset.`);
+            logger.error(`Unknown bandit action: ${action}. Use \`nuvira model bandit\` to view or \`nuvira model bandit reset\` to reset.`);
             return;
         }
         const state = getRouterBandit().getState();
@@ -1188,9 +1188,9 @@ export class ModelCommand extends BaseCommand {
         if (providers.size === 0) {
             logger.info('  No bandit learning data yet.');
             console.log('');
-            logger.info('  Learning is ON by default — run tasks under Auto routing (`buff model switch auto` / `-m auto`).');
+            logger.info('  Learning is ON by default — run tasks under Auto routing (`nuvira model switch auto` / `-m auto`).');
             logger.info('  Each auto-routed task updates the Beta prior for its complexity bucket.');
-            logger.info('  Disable: `buff config set routing.bandit false`');
+            logger.info('  Disable: `nuvira config set routing.bandit false`');
             console.log('');
             return;
         }
@@ -1265,10 +1265,10 @@ export class ModelCommand extends BaseCommand {
             }
             console.log('');
         }
-        logger.info('Reset: `buff model bandit reset` · JSON: `buff model bandit --json`');
+        logger.info('Reset: `nuvira model bandit reset` · JSON: `nuvira model bandit --json`');
         console.log('');
     }
-    /** Show the ML task-similarity router state (`buff model ml`). */
+    /** Show the ML task-similarity router state (`nuvira model ml`). */
     showMl(action, opts) {
         if (action === 'reset') {
             getMlRouter().reset();
@@ -1278,7 +1278,7 @@ export class ModelCommand extends BaseCommand {
             return;
         }
         if (action && action !== 'reset') {
-            logger.error(`Unknown ml action: ${action}. Use \`buff model ml\` to view or \`buff model ml reset\` to reset.`);
+            logger.error(`Unknown ml action: ${action}. Use \`nuvira model ml\` to view or \`nuvira model ml reset\` to reset.`);
             return;
         }
         const ml = getMlRouter();
@@ -1305,7 +1305,7 @@ export class ModelCommand extends BaseCommand {
         console.log('');
         logger.highlight('═══  ML Task-Similarity Router  ═══');
         console.log('');
-        logger.info(`  Enabled: ${enabled ? '✅ yes (routing.mlRouter)' : '⏸ no (default — enable with \`buff config set routing.mlRouter true\`)'}`);
+        logger.info(`  Enabled: ${enabled ? '✅ yes (routing.mlRouter)' : '⏸ no (default — enable with \`nuvira config set routing.mlRouter true\`)'}`);
         logger.info(`  Promotion enforcement: ${enforce ? '✅ on (routing.promotionEnforce)' : '⏸ off (bandit always allowed — default)'}`);
         logger.info(`  Learned outcomes: ${ml.size()} task(s) recorded`);
         console.log('');
@@ -1333,7 +1333,7 @@ export class ModelCommand extends BaseCommand {
             console.log(`   ${provider.padEnd(14)} ${s.total.toString().padStart(3)} outcomes · ✅ ${s.wins} · ❌ ${s.fails} · win ${pct}%`);
         }
         console.log('');
-        logger.info('Reset: `buff model ml reset` · JSON: `buff model ml --json`');
+        logger.info('Reset: `nuvira model ml reset` · JSON: `nuvira model ml --json`');
         console.log('');
     }
     /** Render the promotion gate (bandit-vs-heuristic A/B verdict). */
@@ -1365,7 +1365,7 @@ export class ModelCommand extends BaseCommand {
         }
         else {
             logger.warn('  ⚠️  NOT promoted — the bandit does not yet beat the deterministic heuristic on real trajectories.');
-            logger.info('     Consider `buff config set routing.bandit false` or `buff model bandit reset` to restart learning.');
+            logger.info('     Consider `nuvira config set routing.bandit false` or `nuvira model bandit reset` to restart learning.');
         }
         console.log('');
     }

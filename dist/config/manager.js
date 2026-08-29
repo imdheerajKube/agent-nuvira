@@ -44,7 +44,7 @@ export function isPlaceholderApiKey(key) {
 }
 /**
  * Count how many provider keys are vault refs vs plaintext (used by
- * `buff config vault status` and `buff doctor`). Placeholder/sentinel keys are
+ * `nuvira config vault status` and `nuvira doctor`). Placeholder/sentinel keys are
  * counted as plaintext (they're in the file), which matches the hygiene story.
  */
 export function countKeyStates(config) {
@@ -115,9 +115,9 @@ export class ConfigManager {
     workspaceStore = null;
     constructor(configDir) {
         this.env = loadEnv();
-        // BUFF_CONFIG_DIR override — the RBAC role file and credential store
+        // NUVIRA_CONFIG_DIR override — the RBAC role file and credential store
         // already honor it, so the config manager must too: a hermetic run pointed
-        // at BUFF_CONFIG_DIR must never read/write the real ~/.buff config.
+        // at NUVIRA_CONFIG_DIR must never read/write the real ~/.nuvira config.
         this.configDir = resolveBuffConfigDir(configDir);
         this.configPath = join(this.configDir, 'buffconfig.json');
         // Phase A1: auto-open the secret vault so refs resolve at READ time. Every
@@ -148,7 +148,7 @@ export class ConfigManager {
     /**
      * Live re-read (Session 36 — "update as and when"): a running process
      * (chat/execute/dashboard) must honor budget/limit changes the user makes
-     * via `buff model quota set` or the dashboard's Daily Budget panel — even on
+     * via `nuvira model quota set` or the dashboard's Daily Budget panel — even on
      * the SAME instance. statSync is ~µs; the JSON re-read happens only when the
      * file actually changed. save() stamps the mtime so our own writes don't
      * trigger a redundant re-read.
@@ -246,7 +246,7 @@ export class ConfigManager {
                     }
                 }
                 // Merge routing config (learning router). FIX: this was previously
-                // dropped entirely on load, so `buff config set routing.*` (bandit,
+                // dropped entirely on load, so `nuvira config set routing.*` (bandit,
                 // quota, governance, contextWindows, nuviraSidecar) never survived a
                 // restart. Nested maps are deep-merged so separate sets preserve each
                 // other (governance.allowProviders + governance.maxCostUsd coexist).
@@ -404,7 +404,7 @@ export class ConfigManager {
      */
     async migrateKeysToVault() {
         if (!this.vault) {
-            throw new Error('No vault attached — call attachVault() first (buff config vault status).');
+            throw new Error('No vault attached — call attachVault() first (nuvira config vault status).');
         }
         const st = this.vault.status();
         if (st.tier === 'none') {
@@ -573,7 +573,7 @@ export class ConfigManager {
         }
         if (config.pricing) {
             // Deep merge per provider so setting inputPer1K then outputPer1K via
-            // `buff config set pricing.<provider>...` preserves both fields.
+            // `nuvira config set pricing.<provider>...` preserves both fields.
             this.config.pricing = { ...(this.config.pricing || {}) };
             for (const [provider, pricing] of Object.entries(config.pricing)) {
                 this.config.pricing[provider] = { ...(this.config.pricing[provider] || {}), ...pricing };
@@ -603,7 +603,7 @@ export class ConfigManager {
             };
         }
         if (config.gateway) {
-            // Per-platform REPLACE semantics: the caller (CLI `buff config gateway
+            // Per-platform REPLACE semantics: the caller (CLI `nuvira config gateway
             // allow/disallow/reply`, dashboard Permissions API) always passes the
             // COMPLETE policy map it read from getAll() — so each platform's policy
             // object replaces the stored one wholesale. A field-level merge would
@@ -734,7 +734,7 @@ export class ConfigManager {
                 if (cfg?.apiKey && isPlaceholderApiKey(cfg.apiKey)) {
                     logger.warn(`      ⚠️ ${provider} has a placeholder API key ('${cfg.apiKey}') — this looks like ` +
                         `a docs example or env-var name, not a real key. Auto routing will SKIP ${provider} ` +
-                        `until a valid key is set (buff config set provider.${provider}.apiKey ...).`);
+                        `until a valid key is set (nuvira config set provider.${provider}.apiKey ...).`);
                 }
             }
         }

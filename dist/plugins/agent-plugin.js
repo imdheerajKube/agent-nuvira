@@ -1,19 +1,19 @@
 /**
  * AgentPlugin — Interface for third-party agent plugins and auto-discovery.
  *
- * Users can place agent plugin files in ~/.buff/agents/ and they will be
+ * Users can place agent plugin files in ~/.nuvira/agents/ and they will be
  * automatically discovered and registered with the orchestrator at startup.
  *
  * Provider plugins (inference providers):
- * - Any .js file in ~/.buff/plugins/
+ * - Any .js file in ~/.nuvira/plugins/
  * - Must export a default object matching the ProviderPlugin interface
  *
  * Agent plugins (agent extensions):
- * - Any .js file in ~/.buff/agents/
+ * - Any .js file in ~/.nuvira/agents/
  * - Must export a default object matching the AgentPlugin interface
  *
  * Workflow plugins:
- * - Any .yaml, .yml, or .json file in ~/.buff/workflows/
+ * - Any .yaml, .yml, or .json file in ~/.nuvira/workflows/
  * - Defines a sequence of agent steps as a reusable workflow template
  */
 import { readdirSync, existsSync, mkdirSync, readFileSync } from 'node:fs';
@@ -23,10 +23,10 @@ import { isValidWorkflowTemplate } from '../workflow/templates.js';
 import { getPluginRegistry } from './registry.js';
 import { logger } from '../utils/logger.js';
 // ─── Paths ──────────────────────────────────────────────────────────────────
-const BUFF_DIR = resolveNuviraHome();
-const PLUGINS_DIR = join(BUFF_DIR, 'plugins');
-const AGENTS_DIR = join(BUFF_DIR, 'agents');
-const WORKFLOWS_DIR = join(BUFF_DIR, 'workflows');
+const NUVIRA_DIR = resolveNuviraHome();
+const PLUGINS_DIR = join(NUVIRA_DIR, 'plugins');
+const AGENTS_DIR = join(NUVIRA_DIR, 'agents');
+const WORKFLOWS_DIR = join(NUVIRA_DIR, 'workflows');
 function ensureDirectories() {
     for (const dir of [PLUGINS_DIR, AGENTS_DIR, WORKFLOWS_DIR]) {
         if (!existsSync(dir)) {
@@ -39,12 +39,12 @@ function ensureDirectories() {
 }
 // ─── Auto-Discovery ─────────────────────────────────────────────────────────
 /**
- * Scan ~/.buff/plugins/ for provider plugin .js files and register them
+ * Scan ~/.nuvira/plugins/ for provider plugin .js files and register them
  * with the global PluginRegistry.
  *
  * Each file must export a default object matching the ProviderPlugin interface
  * from ./registry.js. Upon discovery, the plugin is automatically registered
- * so it can be used with: buff chat --provider <plugin-type>
+ * so it can be used with: nuvira chat --provider <plugin-type>
  *
  * Returns the number of successfully loaded provider plugins.
  */
@@ -80,7 +80,7 @@ export async function discoverProviderPlugins() {
     return loaded;
 }
 /**
- * Scan ~/.buff/agents/ for plugin .js files and load them.
+ * Scan ~/.nuvira/agents/ for plugin .js files and load them.
  * Returns a map of agent type → AgentPlugin.
  */
 export async function discoverAgentPlugins() {
@@ -114,7 +114,7 @@ export async function discoverAgentPlugins() {
     return plugins;
 }
 /**
- * Scan ~/.buff/workflows/ for custom workflow template files.
+ * Scan ~/.nuvira/workflows/ for custom workflow template files.
  * Supports .json, .yaml, and .yml files.
  */
 export function discoverWorkflowPlugins() {

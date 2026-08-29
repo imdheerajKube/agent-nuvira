@@ -1,8 +1,8 @@
 import { Command } from 'commander';
 import { BaseCommand } from './commands.js';
 /**
- * Config command — manage buff configuration
- * buff config [set|get|list]
+ * Config command — manage nuvira configuration
+ * nuvira config [set|get|list]
  */
 export declare class ConfigCommand extends BaseCommand {
     create(): Command;

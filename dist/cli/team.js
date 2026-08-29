@@ -2,22 +2,22 @@
  * Team command — Team collaboration with shared memory, config, and review workflow.
  *
  * Usage:
- *   buff team init [name]                       — Initialize team config in working directory
- *   buff team init --repo <url>                 — Init with remote team repository
- *   buff team join <repo-url>                   — Clone and join an existing team repo
- *   buff team sync                              — Sync team memory with remote (pull + push)
- *   buff team status                            — Show team configuration and memory status
- *   buff team share                             — Share local trajectories with team
- *   buff team review list                       — List all review bundles
- *   buff team review show <id>                  — Show a specific review bundle
- *   buff team review approve <id>               — Approve a review
- *   buff team review reject <id> [reason]       — Reject a review
- *   buff team review merge <id>                 — Merge an approved review into working dir
- *   buff team review create <title> <goal>      — Create a review bundle from files
+ *   nuvira team init [name]                       — Initialize team config in working directory
+ *   nuvira team init --repo <url>                 — Init with remote team repository
+ *   nuvira team join <repo-url>                   — Clone and join an existing team repo
+ *   nuvira team sync                              — Sync team memory with remote (pull + push)
+ *   nuvira team status                            — Show team configuration and memory status
+ *   nuvira team share                             — Share local trajectories with team
+ *   nuvira team review list                       — List all review bundles
+ *   nuvira team review show <id>                  — Show a specific review bundle
+ *   nuvira team review approve <id>               — Approve a review
+ *   nuvira team review reject <id> [reason]       — Reject a review
+ *   nuvira team review merge <id>                 — Merge an approved review into working dir
+ *   nuvira team review create <title> <goal>      — Create a review bundle from files
  *
  * The team system enables multiple developers to:
  *   - Share agent execution trajectories via git
- *   - Use project-level .buffconfig.json for shared provider defaults
+ *   - Use project-level .nuviraconfig.json for shared provider defaults
  *   - Review agent-generated changes before applying them
  *   - Collaborate on workflow templates and coding patterns
  */
@@ -37,7 +37,7 @@ export class TeamCommand extends BaseCommand {
         // ── init ───────────────────────────────────────────────────────────────
         const initCmd = new Command('init')
             .description('Initialize team configuration in the working directory')
-            .argument('[name]', 'Team name (saved to .buffconfig.json)')
+            .argument('[name]', 'Team name (saved to .nuviraconfig.json)')
             .option('-r, --repo <url>', 'Remote repository URL for the team memory repo')
             .option('-b, --branch <branch>', 'Git branch to use (default: main)')
             .action(async (name, options) => {
@@ -137,13 +137,13 @@ export class TeamCommand extends BaseCommand {
         if (!guardRbacAction('team.manage'))
             return;
         const cwd = process.cwd();
-        const configPath = join(cwd, '.buffconfig.json');
+        const configPath = join(cwd, '.nuviraconfig.json');
         if (existsSync(configPath) || hasProjectConfig(cwd)) {
-            logger.warn('.buffconfig.json already exists in the working directory.');
-            logger.info('Use `buff team join <url>` to clone a team repo, or edit .buffconfig.json directly.');
+            logger.warn('.nuviraconfig.json already exists in the working directory.');
+            logger.info('Use `nuvira team join <url>` to clone a team repo, or edit .nuviraconfig.json directly.');
             return;
         }
-        // Create a new .buffconfig.json with team settings
+        // Create a new .nuviraconfig.json with team settings
         const buffConfig = {
             defaultProvider: 'openrouter',
             providers: {},
@@ -167,7 +167,7 @@ export class TeamCommand extends BaseCommand {
         }
         // Write config
         writeFileSync(configPath, JSON.stringify(buffConfig, null, 2), 'utf-8');
-        logger.success(`Created .buffconfig.json${name ? ` for team "${name}"` : ''}`);
+        logger.success(`Created .nuviraconfig.json${name ? ` for team "${name}"` : ''}`);
         logger.info('Edit this file to customize team settings.');
     }
     // ── join ─────────────────────────────────────────────────────────────────
@@ -186,7 +186,7 @@ export class TeamCommand extends BaseCommand {
         }
         // If no project config exists yet, create one
         if (!hasProjectConfig(cwd)) {
-            const configPath = join(cwd, '.buffconfig.json');
+            const configPath = join(cwd, '.nuviraconfig.json');
             const config = {
                 defaultProvider: 'openrouter',
                 providers: {},
@@ -198,9 +198,9 @@ export class TeamCommand extends BaseCommand {
                 },
             };
             writeFileSync(configPath, JSON.stringify(config, null, 2), 'utf-8');
-            logger.success(`Created .buffconfig.json with team repo reference`);
+            logger.success(`Created .nuviraconfig.json with team repo reference`);
         }
-        logger.success(`Successfully joined team! Run \`buff team sync\` to pull latest.`);
+        logger.success(`Successfully joined team! Run \`nuvira team sync\` to pull latest.`);
     }
     // ── sync ─────────────────────────────────────────────────────────────────
     async handleSync() {
@@ -210,7 +210,7 @@ export class TeamCommand extends BaseCommand {
         const projectConfig = findProjectConfig();
         if (!projectConfig?.team?.repository) {
             logger.warn('No remote repository configured for this team.');
-            logger.info('Set "team.repository" in .buffconfig.json or run `buff team join <url>`.');
+            logger.info('Set "team.repository" in .nuviraconfig.json or run `nuvira team join <url>`.');
             return;
         }
         try {
@@ -250,14 +250,14 @@ export class TeamCommand extends BaseCommand {
         console.log('\n  ── Configuration ──');
         const projectConfig = findProjectConfig(cwd);
         if (projectConfig?.team) {
-            console.log(`  📄  Project config: ${join(cwd, '.buffconfig.json')}`);
+            console.log(`  📄  Project config: ${join(cwd, '.nuviraconfig.json')}`);
             console.log(`  Repo:   ${projectConfig.team.repository || '(not set)'}`);
             console.log(`  Branch: ${projectConfig.team.branch || 'main'}`);
             console.log(`  Auto-sync: ${projectConfig.team.autoSyncMinutes ? `every ${projectConfig.team.autoSyncMinutes}m` : 'disabled'}`);
             console.log(`  Share trajectories: ${projectConfig.team.shareTrajectories ? 'yes' : 'no'}`);
         }
         else {
-            console.log('  ℹ️  No team configuration found. Run `buff team init` or `buff team join <url>`.');
+            console.log('  ℹ️  No team configuration found. Run `nuvira team init` or `nuvira team join <url>`.');
         }
         // ── Memory Status ────────────────────────────────────────────────────
         console.log('\n  ── Team Memory ──');
@@ -267,7 +267,7 @@ export class TeamCommand extends BaseCommand {
             const stats = getTeamMemoryStats(cwd);
             if (!stats.gitConfigured) {
                 console.log('  ℹ️  Team memory not initialized.');
-                console.log('     Run `buff team init --repo <url>` or `buff team join <url>`.');
+                console.log('     Run `nuvira team init --repo <url>` or `nuvira team join <url>`.');
             }
             else {
                 console.log(`  Branch: ${stats.branch}`);
@@ -303,7 +303,7 @@ export class TeamCommand extends BaseCommand {
             console.log('  Could not load reviews.');
         }
         console.log('');
-        logger.info('Run `buff team sync` to pull/push team memory.');
+        logger.info('Run `nuvira team sync` to pull/push team memory.');
         console.log('');
     }
     // ── share ────────────────────────────────────────────────────────────────
@@ -313,13 +313,13 @@ export class TeamCommand extends BaseCommand {
         const config = getTeamConfig();
         if (!config.shareTrajectories) {
             logger.warn('Sharing trajectories is disabled in team config.');
-            logger.info('Set "team.shareTrajectories": true in .buffconfig.json to enable.');
+            logger.info('Set "team.shareTrajectories": true in .nuviraconfig.json to enable.');
             return;
         }
         try {
             const shared = await shareTrajectories();
             if (shared > 0) {
-                logger.info('Run `buff team sync` to publish shared files to the team remote.');
+                logger.info('Run `nuvira team sync` to publish shared files to the team remote.');
             }
         }
         catch (err) {
@@ -388,7 +388,7 @@ export class TeamCommand extends BaseCommand {
             console.log(`  ${bundle.summary.slice(0, 500)}`);
         }
         console.log('');
-        logger.info(`Run \`buff team review <approve|reject|merge> ${id}\` to act on this review.`);
+        logger.info(`Run \`nuvira team review <approve|reject|merge> ${id}\` to act on this review.`);
         console.log('');
     }
     async handleReviewApprove(id, options) {
@@ -403,7 +403,7 @@ export class TeamCommand extends BaseCommand {
         const result = addReviewComment(id, reviewer, 'approve', options?.message || 'Approved.');
         if (result) {
             logger.success(`Review ${id} approved.`);
-            logger.info(`Run \`buff team review merge ${id}\` to apply the changes.`);
+            logger.info(`Run \`nuvira team review merge ${id}\` to apply the changes.`);
         }
     }
     async handleReviewRequestChanges(id, reason) {
@@ -435,7 +435,7 @@ export class TeamCommand extends BaseCommand {
         const count = mergeReview(id);
         if (count > 0) {
             logger.success(`Merged ${count} file change(s) from review ${id}.`);
-            logger.info('Run `buff team review list` to see updated status.');
+            logger.info('Run `nuvira team review list` to see updated status.');
         }
     }
     async handleReviewCreate(title, goal, options) {

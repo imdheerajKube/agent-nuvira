@@ -17,18 +17,19 @@
  *                                  of just reporting "planner/runner failed"?
  *
  * Usage:
- *   buff eval run                        — Run all eval tasks against default provider
- *   buff eval run --provider groq        — Run against a specific provider
- *   buff eval run --tasks js-fizzbuzz    — Run specific tasks
- *   buff eval list                       — List available eval tasks
- *   buff eval results                    — Show previous eval runs
- *   buff eval score                      — Show the scoring rules
+ *   nuvira eval run                        — Run all eval tasks against default provider
+ *   nuvira eval run --provider groq        — Run against a specific provider
+ *   nuvira eval run --tasks js-fizzbuzz    — Run specific tasks
+ *   nuvira eval list                       — List available eval tasks
+ *   nuvira eval results                    — Show previous eval runs
+ *   nuvira eval score                      — Show the scoring rules
  *
- * Results stored in: ~/.buff/memory/evals.json
+ * Results stored in: ~/.nuvira/memory/evals.json
  */
 import { mkdtempSync, writeFileSync, rmSync, existsSync, readFileSync, mkdirSync } from 'node:fs';
+import { envBuff, resolveNuviraHome } from '../config/paths.js';
 import { join } from 'node:path';
-import { tmpdir, homedir } from 'node:os';
+import { tmpdir } from 'node:os';
 import { execSync } from 'node:child_process';
 import { getQuotaLedger } from './quota-ledger.js';
 import { Orchestrator } from '../agents/orchestrator.js';
@@ -40,7 +41,7 @@ import { logger } from '../utils/logger.js';
  * agent-nuvira against the reference agents on the axes users actually feel:
  * completion rate, stuck states, rework turns, and time-to-done.
  *
- * Run with: `buff eval run --suite m2b`
+ * Run with: `nuvira eval run --suite m2b`
  *
  * The suite includes:
  * - Bug-fix tasks (easy): measure quick-turnaround repair
@@ -736,9 +737,9 @@ const HIDDEN_TEST_FILES = {
     ].join('\n'),
 };
 // ─── Persistence ────────────────────────────────────────────────────────────
-// BUFF_MEMORY_DIR override keeps test suites out of the real ~/.buff store
+// NUVIRA_MEMORY_DIR override keeps test suites out of the real ~/.nuvira store
 // (same convention as session-recall.ts / history.ts).
-const MEMORY_DIR = process.env.BUFF_MEMORY_DIR || join(homedir(), '.buff', 'memory');
+const MEMORY_DIR = envBuff('MEMORY_DIR') || join(resolveNuviraHome(), 'memory');
 const EVAL_PATH = join(MEMORY_DIR, 'evals.json');
 const CURRENT_VERSION = 1;
 const MAX_EVAL_RUNS = 50;
@@ -980,7 +981,7 @@ export async function runEvalSuite(provider, providerName, model, options = {}) 
         // cost until it runs, so a single oversized task may still cross the cap
         // (same limitation as the --budget cost gate) — that's inherent, not a bug.
         if (options.paceTokens !== undefined && (options.paceUsedBefore ?? 0) + totalTokens >= options.paceTokens) {
-            logger.warn(`Daily token budget of ${options.paceTokens.toLocaleString()} reached (${((options.paceUsedBefore ?? 0) + totalTokens).toLocaleString()} tokens today). Stopping evaluation — raise it with \`buff model quota set ${providerName} --tokens N\` or resume after the window rolls.`);
+            logger.warn(`Daily token budget of ${options.paceTokens.toLocaleString()} reached (${((options.paceUsedBefore ?? 0) + totalTokens).toLocaleString()} tokens today). Stopping evaluation — raise it with \`nuvira model quota set ${providerName} --tokens N\` or resume after the window rolls.`);
             break;
         }
         options.onProgress?.(i + 1, tasks.length, task);
@@ -1353,7 +1354,7 @@ export function writeBenchmarkReport(run, outputDir) {
     writeFileSync(filePath, report, 'utf-8');
     return filePath;
 }
-/** Describe the scoring rules for the `buff eval score` command. */
+/** Describe the scoring rules for the `nuvira eval score` command. */
 export function formatEvalScoreRules() {
     const lines = [
         '🎯  Evaluation Scoring Rules',
