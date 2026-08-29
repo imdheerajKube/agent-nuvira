@@ -68,13 +68,22 @@ export function stripGatewayReasoning(text: string): string {
   //    "* End with suggest_followups", "* Let's refine:", etc.
   t = t.replace(/^\s*\*+\s+(?:User|Subjects?|Occasion|Goal|Delivery|Tone|Key elements?|Stanza|Drafting|Acknowledge|Answer|Tool|Follow-?ups?|Constraints?|Direct|No\s|End\s|Let'?s|Since\s|Wait,|Actually,|Correction|Self-Correction|Looking\s|Given\s|The\s+(?:bridge|system|prompt|target|user)|Since\s+the|My\s+(?:text|plan|approach)|However,|But\s+the|Let\s+me|Let's|Really,|If\s+I|The\s+most|To\s+be\s+safe|I\s+am\s+(?:acting|communicating|the)|I\s+need\s+to|One\s+more\s+thing|I\s+am\s+communicating|Since\s+I\s+am|Actually\s+the|Since\s+I\s+can't|I\s+don't|I\s+should\s+probably|I\s+will\s+just|I\s+should\s+(?:check|send|use|provide|be|do)|I\s+will\s+(?:send|provide)|Let\s+me\s+refine|Appropriate|Appropriate\s+for).*$/gim, '');
 
+  // 1b. Strip planning block lines starting with "* " followed by action verbs
+  //     (numbered or unnumbered plan items). Catches patterns like:
+  //     "*   Plan:", "*   Here's the essay:", "*   That looks good"
+  t = t.replace(/^\s*\*+\s+(?:Plan|Here'?s\s+(?:the|a)|That\s+(?:looks?|should|works?)|This\s+(?:is|should)|Now\s+(?:I|let)|So\s+(?:I|let)|I'll\s+now|I\s+will\s+now|Let\s+me\s+(?:now|write|draft)).*$/gim, '');
+
   // 2. Strip self-evaluation numbered lists.
-  //    Catches: "1. Direct answer? Yes.", "2. No preamble? Yes.", "3. No internal reasoning? Yes."
+  //    Catches: "1. Direct answer? Yes.", "2. No preamble? Yes.", "That looks good..."
   t = t.replace(/^\s*\d+\.\s+(?:Direct\s+answer|No\s+(?:preamble|internal|bullet|narration|tool)|End\s+with|Preamble|Internal\s+reasoning|Tool\s+usage|Bullet-point|Narration|Gateway_send).*$/gim, '');
+  // 2b. Strip self-evaluation sentences ("That looks good", "That should work").
+  t = t.replace(/^\s*(?:That\s+(?:looks?|should|works?)|This\s+(?:is|should\s+work)|Looks\s+good|Seems\s+(?:good|correct|right)|Perfect|Great|Done).*/gim, '');
 
   // 3. Strip action-planning numbered lists.
-  //    Catches: "1. Text response...", "2. gateway_send...", "3. suggest_followups..."
-  t = t.replace(/^\s*\d+\.\s+(?:Text\s+response|gateway_send|suggest_followups|Provide\s+the|Acknowledge|Answer\s*:|Tool\s*:|The\s+response).*$/gim, '');
+  //    Catches: "1. Text response...", "2. gateway_send...", "Plan:\n1. Start..."
+  t = t.replace(/^\s*\d+\.\s+(?:Text\s+response|gateway_send|suggest_followups|Provide\s+the|Acknowledge|Answer\s*:|Tool\s*:|The\s+response|Start\s+with|Describe|Talk\s+about|Mention|Speed|History|Past\s+uses|Intelligence|Baby|Loyalty|Colors|Diet|Physical).*$/gim, '');
+  // 3b. Strip standalone "Plan:" lines and "Here's the ...:" markers.
+  t = t.replace(/^\s*(?:Plan\s*:|Here'?s\s+(?:the|a)\s+.*:|Let's\s+(?:begin|start|go|write)|I'?ll\s+(?:now|write|draft|create)).*$/gim, '');
 
   // ── Phase 2: Strip multi-line deliberation blocks ──
 
