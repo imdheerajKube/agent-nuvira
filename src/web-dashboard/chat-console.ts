@@ -67,6 +67,9 @@ export interface ChatEngine {
       /** Live gateway for gateway_send (gateway-triggered chat answers reuse the connected bridge). */
       gateway?: {
         send(target: string, text: string): Promise<boolean>;
+        sendMedia?(target: string, media: { type: 'image' | 'video' | 'audio' | 'document'; data: Uint8Array; caption?: string; filename?: string }): Promise<boolean>;
+        origin?: { platform: string; channelId: string };
+        autoDeliverMedia?(media: { type: 'image' | 'video' | 'audio' | 'document'; data: Uint8Array; caption?: string; filename?: string }): Promise<boolean>;
         directory: { resolve(target: string): { platform: string; channelId: string } | null };
       };
     },

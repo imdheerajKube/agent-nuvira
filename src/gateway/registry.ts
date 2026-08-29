@@ -33,10 +33,63 @@ import {
 import type { ChannelAdapter, InboundMessage, MediaPayload } from './adapters.js';
 import { DeliveryLedger, type DeliveryEntry } from './delivery.js';
 import { InboxLedger, type InboundDisposition } from './inbox.js';
+import { GatewayChatStore, CHAT_HISTORY_MAX_PAIRS } from './chat-store.js';
 import { logger } from '../utils/logger.js';
 
 /** How often the running gateway drains due delivery entries (ms). */
 const DELIVERY_DRAIN_INTERVAL_MS = 30_000;
+
+// ─── Response cleanup ──────────────────────────────────────────────────────
+
+/**
+ * Strip leaked internal reasoning, planning blocks, and meta-commentary from
+ * a gateway chat response. The model sometimes emits its chain-of-thought
+ * (draft planning, tool deliberation, self-correction) as visible text instead
+ * of keeping it internal. This function removes the noise while preserving
+ * the actual deliverable (poem, answer, code, etc.).
+ *
+ * Patterns stripped:
+ *  - Planning blocks: lines like "* User: Divya", "* Tone: Loving", "* Stanza 1:..."
+ *  - Drafting/action markers: "* Drafting:", "* Acknowledge:", "* Answer:", "* Tool:"
+ *  - Self-correction: "Correction: ...", "Self-Correction on..."
+ *  - Deliberation: "Wait, the prompt says...", "Actually, looking at..."
+ *  - Preamble: "I would be happy to..." / "I'd be happy to..." at the start
+ *  - Response format planning: "1. Text response", "2. gateway_send", etc.
+ */
+export function stripGatewayReasoning(text: string): string {
+  if (!text) return text;
+  let t = text;
+
+  // 1. Strip planning block lines ("*   User:", "* Tone:", "* Drafting:", etc.).
+  //    Matches lines where the content after "*" looks like structured analysis
+  //    (key:value pairs, numbered stanzas, action items).
+  t = t.replace(/^\s*\*+\s+(?:User:|Subjects?:|Occasion:|Goal:|Delivery:|Tone:|Key elements?:|Stanza \d+:|Drafting:|Acknowledge:|Answer:|Tool:|Follow-ups?:|Follow-?ups?:|Let'?s go|The user (?:is|said|asks|wants|is asking)|Since this is|I should|I will|I'll|I would|Wait,|Actually,|Correction:|Self-Correction|Looking at|Given the|The (?:bridge|system|prompt|target)|Since the|My (?:text|plan|approach)|However,|But the|Let me|Let's|Really,|If I|The most direct|To be safe|I am acting|I need to|One more thing|I am communicating|Since I am|Actually the|I am the|Since I can't|I don't have|I should probably|I will just|I should check|I will send|Let me refine).*$/gim, '');
+
+  // 2. Strip meta-commentary about response format and tool usage.
+  //    These are multi-sentence deliberation blocks about HOW to respond.
+  t = t.replace(/^\s*(?:Wait,\s+the\s+(?:prompt|system)\s+says|Actually,\s+(?:looking\s+at|the\s+prompt)|Correction:\s+The\s+user|Self-Correction\s+on|Since\s+this\s+is\s+a\s+request|The\s+bridge\s+usually|Looking\s+at\s+the\s+\[Origin\]|Given\s+the\s+prompt|However,\s+the|But\s+the\s+bridge|Actually,\s+I'll|Let\s+me\s+refine|I'll\s+just\s+provide|I'll\s+do\s+both|I\s+will\s+provide|I\s+should\s+(?:use|check|just|provide|be|do)|I\s+am\s+(?:acting|communicating|the)|Since\s+I\s+(?:am|can't|don't)|One\s+more\s+thing|I\s+need\s+to|I\s+should\s+probably|I\s+will\s+just|Let\s+me\s+check|Let\s+me\s+see|Let's\s+go|I\s+will\s+send|I\s+should\s+send|Actually,\s+the\s+most|Wait,\s+if\s+I|Let's\s+refine).*$/gim, '');
+
+  // 3. Strip action-planning numbered lists ("1. Text response...", "2. gateway_send...").
+  t = t.replace(/^\s*\d+\.\s+(?:Text\s+response|gateway_send|suggest_followups|Provide\s+the|Acknowledge|Answer|Tool|The\s+response).*$/gim, '');
+
+  // 4. Strip response-format meta-planning blocks (multi-line deliberation).
+  //    These often start with a capitalized line and continue for several lines
+  //    discussing how to format the response.
+  t = t.replace(/(?:^|\n)\s*(?:Since\s+I\s+am\s+communicating|I\s+am\s+acting\s+as\s+a\s+bridge|The\s+user\s+is\s+communicating|I\s+don't\s+have\s+the\s+previous|I\s+need\s+to\s+find\s+out|Actually,\s+the\s+most\s+logical|Let's\s+refine:)[\s\S]*?(?=\n\s*[A-Z]|$)/g, '');
+
+  // 5. Strip preamble at the very start of the response.
+  //    "I would be happy to..." / "I'd be happy to..." followed by restating the request.
+  t = t.replace(/^\s*(?:I\s+(?:would|'d|will)\s+be\s+happy\s+to\s+).{0,200}?\n\n/s, '');
+
+  // 6. Strip tool-deliberation paragraphs about gateway_send usage.
+  //    Multi-line blocks discussing whether/how to use gateway_send.
+  t = t.replace(/(?:^|\n)\s*(?:Wait,\s+the\s+prompt\s+says\s+"first\s+briefly|Since\s+this\s+is\s+a\s+request\s+to\s+write|Actually,\s+looking\s+at\s+the\s+\[Origin\]|I\s+should\s+use\s+gateway_send|Correction:\s+The\s+user\s+said|Self-Correction\s+on\s+gateway_send|Let's\s+refine\s+the\s+poem|Wait,\s+if\s+I\s+call\s+gateway_send|Actually,\s+I'll\s+just\s+provide)[\s\S]*?(?=\n\s*(?:Poem|Two\s+little|Happy\s+4th|Here\s+is|\*\*Two|##|```|<|$))/g, '');
+
+  // 7. Collapse runs of 3+ blank lines into 2.
+  t = t.replace(/\n{3,}/g, '\n\n');
+
+  return t.trim();
+}
 
 /**
  * Does a request ask to DELIVER something to someone (send/message/email/text
@@ -228,6 +281,9 @@ export class GatewayRegistry {
   private drainChain: Promise<unknown> = Promise.resolve();
   private started = false;
   private chatEngine: GatewayRegistryOptions['chatEngine'] | null;
+  /** Per-contact conversation history for gateway chat (WhatsApp/Telegram/etc.).
+   *  Disk-backed via GatewayChatStore so history survives gateway restarts. */
+  private chatStore: GatewayChatStore;
 
   constructor(options: GatewayRegistryOptions = {}, configManager?: ConfigManager) {
     const allowFromEnv = (envBuff('GATEWAY_ALLOW_IDS') ?? '')
@@ -244,6 +300,7 @@ export class GatewayRegistry {
     this.inbox = new InboxLedger(options.deliveryConfigDir);
     this.configManager = configManager ?? new ConfigManager();
     this.chatEngine = options.chatEngine ?? null;
+    this.chatStore = new GatewayChatStore(options.deliveryConfigDir);
     this.explicitPolicies = options.policies ?? {};
     this.policies = this.readPolicies();
   }
@@ -580,9 +637,27 @@ export class GatewayRegistry {
         // cast the dashboard chat-console uses).
         (new ((await import('../cli/chat.js')).ChatCommand)() as unknown as import('../web-dashboard/chat-console.js').ChatEngine);
       const origin = `${PLATFORM_LABELS[msg.platform]} ${msg.isGroup ? 'group' : 'chat'} ${msg.from ?? msg.senderId ?? msg.channelId}`;
+      // Per-contact conversation history: load prior messages so the model has
+      // context for follow-up questions (e.g. "what was the second option?").
+      const historyKey = `${msg.platform}:${msg.channelId}`;
+      const history = this.chatStore.getHistory(historyKey);
       // P2 — origin context: the chat model knows who it's talking to, so its
       // gateway_send calls target the right contact/channel.
-      const prompt = `[Origin: ${origin} — reply to this chat]\n\n${msg.text}`;
+      // The response format rules ensure the user gets a clean, direct answer
+      // without leaked internal reasoning or planning.
+      const prompt = [
+        `[Origin: ${origin} — this message was sent from a messaging app (WhatsApp/Telegram/etc). Your text response is automatically delivered back to the sender — do NOT call gateway_send for this conversation unless you need to send to a DIFFERENT target.]`,
+        '',
+        'RESPONSE FORMAT (non-negotiable for messaging app replies):',
+        '- Deliver your answer DIRECTLY. No preamble, no "I would be happy to...", no restating the request.',
+        '- Do NOT include your internal reasoning, planning, draft iterations, or tool deliberation in your response text. Think internally, then output ONLY the final answer.',
+        '- Do NOT use bullet-point planning blocks ("* User:", "* Tone:", "* Goal:", etc.) in your response.',
+        '- Do NOT narrate your tool usage ("I should use gateway_send", "Looking at the Origin tag", etc.).',
+        '- For creative tasks (poems, stories, messages): just write the content. No meta-commentary about how you wrote it.',
+        '- End with suggest_followups (3 suggestions) — but NEVER include the suggest_followups JSON in your response text; use the tool call.',
+        '',
+        msg.text,
+      ].join('\n');
       // One polite "working" line up front, then ONLY the final answer. The
       // engine's live progress ("routed to <provider>…", "⚙ tool(args)"
       // including raw suggest_followups JSON) is INTERNAL — streaming it to a
@@ -596,8 +671,21 @@ export class GatewayRegistry {
       // deliver through the already-connected bridge — a fresh registry would
       // open a second WhatsApp connection and stall.
       const answer = await engine.answerOnce(prompt, {
+        history,
+        // Inject prior conversation context so the model remembers previous
+        // exchanges with this contact (follow-up questions, suggested followups).
         gateway: {
           send: (target, text) => this.send(target, text),
+          sendMedia: (target, media) => {
+            const ref = this.directory.resolve(target);
+            if (!ref) return Promise.resolve(false);
+            return this.sendMediaToRef(ref, media);
+          },
+          origin: { platform: msg.platform, channelId: msg.channelId },
+          autoDeliverMedia: (media) => {
+            const ref = { platform: msg.platform, channelId: msg.channelId };
+            return this.sendMediaToRef(ref, media);
+          },
           directory: this.directory,
         },
         askUser: async (question, choices) => {
@@ -621,6 +709,11 @@ export class GatewayRegistry {
         .replace(/\n?\*?\s*\{\s*"tool"\s*:\s*"suggest_followups"[\s\S]*$/, '')
         .replace(/\n?\*?\s*<function=suggest_followups[\s\S]*<\/function>/g, '')
         .trim();
+      // Strip leaked internal reasoning, planning blocks, and meta-commentary.
+      // The model sometimes emits chain-of-thought (draft planning, tool
+      // deliberation, self-correction) as visible text. This cleans it up
+      // so the user only sees the actual deliverable.
+      content = stripGatewayReasoning(content);
       const fups = (answer.followups ?? [])
         .map((f) => (f && typeof f.prompt === 'string' && f.prompt.trim() ? f.prompt.trim() : ''))
         .filter(Boolean)
@@ -632,6 +725,10 @@ export class GatewayRegistry {
         // the cap.
         if (content.length + suffix.length <= 4000) content += suffix;
       }
+      // Store this exchange in the per-contact history so follow-up questions
+      // have context. Persisted to disk via GatewayChatStore so it survives
+      // gateway restarts. The store handles trimming to max pairs.
+      this.chatStore.append(historyKey, msg.text, content);
       return { content, generationFailed: answer.generationFailed };
     } catch (err) {
       logger.error(`gateway: inbound chat failed: ${err instanceof Error ? err.message : String(err)}`);
@@ -651,6 +748,8 @@ export class GatewayRegistry {
   async start(): Promise<void> {
     if (this.started) return;
     this.started = true;
+    // Prune stale conversations on startup (best-effort).
+    this.chatStore.prune();
 
     const onMessage = async (msg: InboundMessage): Promise<void> => {
       try {

@@ -22,11 +22,12 @@ import WhatsAppPanel from './WhatsAppPanel';
 import { PlatformConfigSection } from './PlatformConfigSection';
 import { maskSenderId } from '../mask';
 
-type HubTab = 'tools' | 'channels' | 'artifacts' | 'skills';
+type HubTab = 'tools' | 'channels' | 'artifacts' | 'skills' | 'conversations';
 
 const TABS: Array<{ id: HubTab; label: string; icon: string }> = [
   { id: 'tools', label: 'Tools', icon: '🧰' },
   { id: 'channels', label: 'Channels', icon: '📡' },
+  { id: 'conversations', label: 'Conversations', icon: '💬' },
   { id: 'artifacts', label: 'Artifacts', icon: '📦' },
   { id: 'skills', label: 'Skills', icon: '🧠' },
 ];
@@ -1020,6 +1021,54 @@ export default function AgentHub() {
 
           <h3 className="section-subtitle">🟢 WhatsApp bridge (buff whatsapp pair)</h3>
           <WhatsAppPanel authed={authed} canWrite={canWrite} sessionExpired={sessionExpired} reveal={revealIds} />
+        </div>
+      ) : null}
+
+      {/* ── Conversations tab ──────────────────────────────────────────── */}
+      {tab === 'conversations' && data ? (
+        <div role="tabpanel">
+          <div className="admin-summary-grid">
+            <div className="admin-summary-card">
+              <div className="admin-summary-value">{data.conversations?.total ?? 0}</div>
+              <div className="admin-summary-label">Stored conversations</div>
+            </div>
+          </div>
+          <h3 className="section-subtitle">💬 Per-contact chat history</h3>
+          <p className="admin-hint">Conversation history is stored per-contact and survives gateway restarts. Messages older than 7 days are auto-pruned.</p>
+          {(data.conversations?.recent ?? []).length > 0 ? (
+            <div className="admin-table-wrapper">
+              <table className="admin-table">
+                <thead>
+                  <tr>
+                    <th>Contact</th>
+                    <th>Platform</th>
+                    <th>Messages</th>
+                    <th>Last active</th>
+                    <th>Last user message</th>
+                    <th>Last assistant reply</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {(data.conversations?.recent ?? []).map((c) => {
+                    const age = Date.now() - c.lastActiveAt;
+                    const ageStr = age < 60_000 ? 'just now' : age < 3_600_000 ? `${Math.round(age / 60_000)}m ago` : age < 86_400_000 ? `${Math.round(age / 3_600_000)}h ago` : `${Math.round(age / 86_400_000)}d ago`;
+                    return (
+                      <tr key={c.key}>
+                        <td className="admin-provider-type"><code>{c.channelId}</code></td>
+                        <td><span className="hub-chip">{c.platform}</span></td>
+                        <td>{c.messageCount}</td>
+                        <td className="admin-hint">{ageStr}</td>
+                        <td className="admin-hint">{c.lastUserMessage.slice(0, 60)}{c.lastUserMessage.length > 60 ? '…' : ''}</td>
+                        <td className="admin-hint">{c.lastAssistantMessage.slice(0, 60)}{c.lastAssistantMessage.length > 60 ? '…' : ''}</td>
+                      </tr>
+                    );
+                  })}
+                </tbody>
+              </table>
+            </div>
+          ) : (
+            <div className="empty-state">No conversations stored yet. Conversations are created when users message the agent via WhatsApp/Telegram/etc.</div>
+          )}
         </div>
       ) : null}
 
