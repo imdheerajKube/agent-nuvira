@@ -60,46 +60,50 @@ export function stripGatewayReasoning(text: string): string {
   if (!text) return text;
   let t = text;
 
-  // ── Phase 1: Strip known planning/reasoning patterns ──
+  // ── Phase 1: Strip structured thinking tags (Hermes approach) ──
+  // Models that support thinking modes emit reasoning in tags like
+  // <think>, <thinking>, <reasoning>, <thought>, <REASONING_SCRATCHPAD>.
+  // Strip closed pairs and unterminated open tags at block boundaries.
+  const THINK_TAGS = ['think', 'thinking', 'reasoning', 'thought', 'REASONING_SCRATCHPAD'];
+  for (const tag of THINK_TAGS) {
+    // Closed pairs: <think>...</think>
+    const closeRe = new RegExp(`<${tag}>[\\s\\S]*?<\\/${tag}>`, 'gi');
+    t = t.replace(closeRe, '');
+    // Unterminated open tag at block boundary (start of text or after newline)
+    const openRe = new RegExp(`(?:^|\\n)\\s*<${tag}>[\\s\\S]*$`, 'gi');
+    t = t.replace(openRe, '');
+    // Stray orphan close tags
+    const orphanCloseRe = new RegExp(`<\\/${tag}>`, 'gi');
+    t = t.replace(orphanCloseRe, '');
+  }
+  // Also strip tool-call XML blocks some models leak (<tool_call>, etc.)
+  t = t.replace(/<tool_call>[\s\S]*?<\/tool_call>/gi, '');
+  t = t.replace(/<tool_calls>[\s\S]*?<\/tool_calls>/gi, '');
+  t = t.replace(/<function_calls>[\s\S]*?<\/function_calls>/gi, '');
 
-  // 1. Strip planning block lines starting with "* ".
-  //    Catches: "* User:", "* Tone:", "* Constraints:", "* Direct answer...",
-  //    "* Drafting:", "* Acknowledge:", "* Tool:", "* No preamble...",
-  //    "* End with suggest_followups", "* Let's refine:", etc.
-  t = t.replace(/^\s*\*+\s+(?:User|Subjects?|Occasion|Goal|Delivery|Tone|Key elements?|Stanza|Drafting|Acknowledge|Answer|Tool|Follow-?ups?|Constraints?|Direct|No\s|End\s|Let'?s|Since\s|Wait,|Actually,|Correction|Self-Correction|Looking\s|Given\s|The\s+(?:bridge|system|prompt|target|user)|Since\s+the|My\s+(?:text|plan|approach)|However,|But\s+the|Let\s+me|Let's|Really,|If\s+I|The\s+most|To\s+be\s+safe|I\s+am\s+(?:acting|communicating|the)|I\s+need\s+to|One\s+more\s+thing|I\s+am\s+communicating|Since\s+I\s+am|Actually\s+the|Since\s+I\s+can't|I\s+don't|I\s+should\s+probably|I\s+will\s+just|I\s+should\s+(?:check|send|use|provide|be|do)|I\s+will\s+(?:send|provide)|Let\s+me\s+refine|Appropriate|Appropriate\s+for).*$/gim, '');
+  // ── Phase 2: Strip fallback plain-text reasoning patterns ──
+  // These catch reasoning from models that DON'T use thinking tags.
+  // Less precise than tag-based stripping, but necessary as a safety net.
 
-  // 1b. Strip planning block lines starting with "* " followed by action verbs
-  //     (numbered or unnumbered plan items). Catches patterns like:
-  //     "*   Plan:", "*   Here's the essay:", "*   That looks good"
-  t = t.replace(/^\s*\*+\s+(?:Plan|Here'?s\s+(?:the|a)|That\s+(?:looks?|should|works?)|This\s+(?:is|should)|Now\s+(?:I|let)|So\s+(?:I|let)|I'll\s+now|I\s+will\s+now|Let\s+me\s+(?:now|write|draft)).*$/gim, '');
+  // Strip planning block lines starting with "* ".
+  t = t.replace(/^\s*\*+\s+(?:User|Subjects?|Occasion|Goal|Delivery|Tone|Key elements?|Stanza|Drafting|Acknowledge|Answer|Tool|Follow-?ups?|Constraints?|Direct|No\s|End\s|Let'?s|Since\s|Wait,|Actually,|Correction|Self-Correction|Looking\s|Given\s|The\s+(?:bridge|system|prompt|target|user)|Since\s+the|My\s+(?:text|plan|approach)|However,|But\s+the|Let\s+me|Let's|Really,|If\s+I|The\s+most|To\s+be\s+safe|I\s+am\s+(?:acting|communicating|the)|I\s+need\s+to|One\s+more\s+thing|I\s+am\s+communicating|Since\s+I\s+am|Actually\s+the|Since\s+I\s+can't|I\s+don't|I\s+should\s+probably|I\s+will\s+just|I\s+should\s+(?:check|send|use|provide|be|do)|I\s+will\s+(?:send|provide)|Let\s+me\s+refine|Appropriate|Appropriate\s+for|Plan|Here'?s\s+(?:the|a)|That\s+(?:looks?|should|works?)|This\s+(?:is|should)|Now\s+(?:I|let)|So\s+(?:I|let)|I'll\s+now|I\s+will\s+now|Let\s+me\s+(?:now|write|draft)).*$/gim, '');
 
-  // 2. Strip self-evaluation numbered lists.
-  //    Catches: "1. Direct answer? Yes.", "2. No preamble? Yes.", "That looks good..."
-  t = t.replace(/^\s*\d+\.\s+(?:Direct\s+answer|No\s+(?:preamble|internal|bullet|narration|tool)|End\s+with|Preamble|Internal\s+reasoning|Tool\s+usage|Bullet-point|Narration|Gateway_send).*$/gim, '');
-  // 2b. Strip self-evaluation sentences ("That looks good", "That should work").
+  // Strip self-evaluation numbered lists.
+  t = t.replace(/^\s*\d+\.\s+(?:Direct\s+answer|No\s+(?:preamble|internal|bullet|narration|tool)|End\s+with|Preamble|Internal\s+reasoning|Tool\s+usage|Bullet-point|Narration|Gateway_send|Start\s+with|Describe|Talk\s+about|Mention|Speed|History|Past\s+uses|Intelligence|Baby|Loyalty|Colors|Diet|Physical).*$/gim, '');
+
+  // Strip self-evaluation sentences.
   t = t.replace(/^\s*(?:That\s+(?:looks?|should|works?)|This\s+(?:is|should\s+work)|Looks\s+good|Seems\s+(?:good|correct|right)|Perfect|Great|Done).*/gim, '');
 
-  // 3. Strip action-planning numbered lists.
-  //    Catches: "1. Text response...", "2. gateway_send...", "Plan:\n1. Start..."
-  t = t.replace(/^\s*\d+\.\s+(?:Text\s+response|gateway_send|suggest_followups|Provide\s+the|Acknowledge|Answer\s*:|Tool\s*:|The\s+response|Start\s+with|Describe|Talk\s+about|Mention|Speed|History|Past\s+uses|Intelligence|Baby|Loyalty|Colors|Diet|Physical).*$/gim, '');
-  // 3b. Strip standalone "Plan:" lines and "Here's the ...:" markers.
+  // Strip standalone "Plan:" and "Here's the ...:" markers.
   t = t.replace(/^\s*(?:Plan\s*:|Here'?s\s+(?:the|a)\s+.*:|Let's\s+(?:begin|start|go|write)|I'?ll\s+(?:now|write|draft|create)).*$/gim, '');
 
-  // ── Phase 2: Strip multi-line deliberation blocks ──
-
-  // 4. Strip response-format meta-planning paragraphs.
-  //    Multi-line blocks discussing how to format/structure the response.
-  t = t.replace(/(?:^|\n)\s*(?:Since\s+I\s+am\s+communicating|I\s+am\s+acting\s+as\s+a\s+bridge|The\s+user\s+is\s+communicating|I\s+don't\s+have\s+the\s+previous|I\s+need\s+to\s+find\s+out|Actually,\s+the\s+most\s+logical|Let's\s+refine:|Wait,\s+the\s+prompt\s+says|Actually,\s+looking\s+at|Correction:\s+The\s+user|Self-Correction\s+on|Since\s+this\s+is\s+a\s+request|The\s+bridge\s+usually|Looking\s+at\s+the\s+\[Origin\]|Given\s+the\s+prompt|However,\s+the|But\s+the\s+bridge|Actually,\s+I'll|Let\s+me\s+refine|I'll\s+just\s+provide|I'll\s+do\s+both|I\s+will\s+provide|I\s+should\s+use|I\s+am\s+(?:acting|communicating)|Since\s+I\s+(?:am|can't|don't)|One\s+more\s+thing|I\s+need\s+to|I\s+should\s+probably|I\s+will\s+just|Let\s+me\s+(?:check|see)|Wait,\s+if\s+I|Let's\s+refine)[\s\S]*?(?=\n\s*(?:[A-Z\d\*]|$))/g, '');
-
-  // 5. Strip preamble at the very start of the response.
+  // Strip preamble at the very start.
   t = t.replace(/^\s*(?:I\s+(?:would|'d|will)\s+be\s+happy\s+to\s+).{0,200}?\n\n/s, '');
 
-  // 6. Strip tool-deliberation paragraphs about gateway_send usage.
-  t = t.replace(/(?:^|\n)\s*(?:Wait,\s+the\s+prompt\s+says\s+"first\s+briefly|Since\s+this\s+is\s+a\s+request\s+to\s+write|Actually,\s+looking\s+at\s+the\s+\[Origin\]|I\s+should\s+use\s+gateway_send|Correction:\s+The\s+user\s+said|Self-Correction\s+on\s+gateway_send|Let's\s+refine\s+the|Wait,\s+if\s+I\s+call\s+gateway_send|Actually,\s+I'll\s+just\s+provide)[\s\S]*?(?=\n\s*(?:\d+\.|[A-Z]|$))/g, '');
+  // Strip tool-deliberation paragraphs about gateway_send.
+  t = t.replace(/(?:^|\n)\s*(?:Wait,\s+the\s+prompt\s+says|Since\s+this\s+is\s+a\s+request|Actually,\s+looking\s+at|Correction:\s+The\s+user|Self-Correction|I\s+should\s+use\s+gateway_send|Let's\s+refine\s+the|Wait,\s+if\s+I\s+call)[\s\S]*?(?=\n\s*(?:\d+\.|[A-Z]|$))/g, '');
 
   // ── Phase 3: Cleanup ──
-
-  // 7. Collapse runs of 3+ blank lines into 2.
   t = t.replace(/\n{3,}/g, '\n\n');
 
   return t.trim();
@@ -663,10 +667,9 @@ export class GatewayRegistry {
         `[Origin: ${origin} — this message was sent from a messaging app (WhatsApp/Telegram/etc). Your text response is automatically delivered back to the sender — do NOT call gateway_send for this conversation unless you need to send to a DIFFERENT target.]`,
         '',
         'RESPONSE FORMAT (non-negotiable for messaging app replies):',
+        '- If you need to think or plan, put your reasoning inside <think> and </think> tags. Only the text OUTSIDE these tags is shown to the user.',
         '- Deliver your answer DIRECTLY. No preamble, no "I would be happy to...", no restating the request.',
-        '- Do NOT include your internal reasoning, planning, draft iterations, or tool deliberation in your response text. Think internally, then output ONLY the final answer.',
-        '- Do NOT use bullet-point planning blocks ("* User:", "* Tone:", "* Goal:", etc.) in your response.',
-        '- Do NOT narrate your tool usage ("I should use gateway_send", "Looking at the Origin tag", etc.).',
+        '- Do NOT include planning, constraints, self-evaluation, or tool deliberation in your visible response. Put ALL reasoning in <think> tags.',
         '- For creative tasks (poems, stories, messages): just write the content. No meta-commentary about how you wrote it.',
         '- End with suggest_followups (3 suggestions) — but NEVER include the suggest_followups JSON in your response text; use the tool call.',
         '',
