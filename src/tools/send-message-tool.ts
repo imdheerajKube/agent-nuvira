@@ -12,6 +12,8 @@
  * - Rate limiting
  */
 
+import { readFileSync } from 'fs';
+import { extname } from 'path';
 import { logger } from '../utils/logger.js';
 
 // ─── Types ────────────────────────────────────────────────────────────────
@@ -210,11 +212,68 @@ export class SendMessageManager {
   }
 
   /**
-   * Send via WhatsApp (placeholder — requires WhatsApp Business API).
+   * Send via WhatsApp through the Baileys bridge (the same adapter the gateway
+   * uses). Builds a one-shot GatewayRegistry, registers configured adapters,
+   * resolves the target, and sends. If media paths are provided in config.media,
+   * the first media file is sent as a media message (image/video/audio/document).
    */
   private async sendWhatsApp(config: SendMessageConfig): Promise<SendMessageResult> {
-    // WhatsApp Business API integration would go here
-    return { success: false, platform: 'whatsapp', target: config.target, error: 'WhatsApp integration not implemented' };
+    try {
+      const { GatewayRegistry } = await import('../gateway/registry.js');
+      const { createConfiguredAdapters } = await import('../gateway/adapters.js');
+
+      const registry = new GatewayRegistry({ streamEvents: false });
+      const adapters = createConfiguredAdapters();
+      for (const adapter of adapters) registry.register(adapter);
+
+      const ref = registry.directory.resolve(config.target);
+      if (!ref) {
+        return { success: false, platform: 'whatsapp', target: config.target, error: `Unknown WhatsApp target '${config.target}' — use a contact name or phone number (e.g. 'Alex', '+9188006663237')` };
+      }
+
+      // Media path: send the first media file if provided.
+      if (config.media && config.media.length > 0) {
+        const filePath = config.media[0];
+        let data: Uint8Array;
+        try {
+          data = readFileSync(filePath) as unknown as Uint8Array;
+        } catch (err) {
+          return { success: false, platform: 'whatsapp', target: config.target, error: `Cannot read media file '${filePath}': ${err instanceof Error ? err.message : String(err)}` };
+        }
+        if (data.length === 0) {
+          return { success: false, platform: 'whatsapp', target: config.target, error: `Media file '${filePath}' is empty.` };
+        }
+        const ext = extname(filePath).toLowerCase();
+        const type: 'image' | 'video' | 'audio' | 'document' =
+          ['.png', '.jpg', '.jpeg', '.gif', '.webp'].includes(ext) ? 'image'
+          : ['.mp4', '.mov', '.mkv', '.webm'].includes(ext) ? 'video'
+          : ['.mp3', '.m4a', '.ogg', '.wav'].includes(ext) ? 'audio'
+          : 'document';
+        const ok = await registry.sendMediaToRef(ref, {
+          type,
+          data,
+          caption: config.text || undefined,
+          filename: filePath.split('/').pop() ?? filePath,
+        });
+        // Disconnect adapters so the process can exit cleanly (one-shot path).
+        for (const adapter of adapters) { try { await adapter.stop(); } catch { /* best-effort */ } }
+        if (ok) {
+          return { success: true, platform: 'whatsapp', target: config.target };
+        }
+        return { success: false, platform: 'whatsapp', target: config.target, error: 'Media send failed — WhatsApp adapter may not be paired or configured.' };
+      }
+
+      // Text-only send.
+      const ok = await registry.sendToRef(ref, config.text, config.target);
+      // Disconnect adapters so the process can exit cleanly (one-shot path).
+      for (const adapter of adapters) { try { await adapter.stop(); } catch { /* best-effort */ } }
+      if (ok) {
+        return { success: true, platform: 'whatsapp', target: config.target };
+      }
+      return { success: false, platform: 'whatsapp', target: config.target, error: 'Send failed — WhatsApp adapter may not be paired or configured. Run nuvira whatsapp status to check.' };
+    } catch (err) {
+      return { success: false, platform: 'whatsapp', target: config.target, error: `WhatsApp send error: ${err instanceof Error ? err.message : String(err)}` };
+    }
   }
 
   /**

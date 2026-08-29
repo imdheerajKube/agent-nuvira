@@ -1110,6 +1110,19 @@ export interface HubData {
     enabled: number;
     disabled: number;
   };
+  /** Gateway chat conversations (per-contact history). */
+  conversations: {
+    total: number;
+    recent: Array<{
+      key: string;
+      platform: string;
+      channelId: string;
+      messageCount: number;
+      lastActiveAt: number;
+      lastUserMessage: string;
+      lastAssistantMessage: string;
+    }>;
+  };
   adminConfigured: boolean;
   serverTime: number;
 }

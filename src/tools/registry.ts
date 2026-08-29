@@ -97,6 +97,13 @@ export interface ToolContext {
    */
   gateway?: {
     send(target: string, text: string): Promise<boolean>;
+    sendMedia?(target: string, media: { type: 'image' | 'video' | 'audio' | 'document'; data: Uint8Array; caption?: string; filename?: string }): Promise<boolean>;
+    /** The originating channel (platform + channelId) for this gateway-triggered turn. */
+    origin?: { platform: string; channelId: string };
+    /** Auto-deliver a media payload to the originating channel. Tools that produce
+     *  artifacts (generate_image, speak, etc.) call this to send results back
+     *  without needing to know the target. Returns true on success. */
+    autoDeliverMedia?(media: { type: 'image' | 'video' | 'audio' | 'document'; data: Uint8Array; caption?: string; filename?: string }): Promise<boolean>;
     directory: { resolve(target: string): { platform: string; channelId: string } | null };
   };
   /**
@@ -140,6 +147,52 @@ export interface FollowupSink {
 
 // ─── Tool definitions ───────────────────────────────────────────────────────
 
+// ─── Shared auto-delivery helper ─────────────────────────────────────────
+// Tools that produce artifact files (generate_image, speak, video_generate)
+// use this to automatically send the result back to the originating channel
+// when running in a gateway context (WhatsApp/Telegram/etc.).
+
+/** Detect media type from file extension. */
+function mediaTypeFromExt(ext: string): 'image' | 'video' | 'audio' | 'document' {
+  const e = ext.toLowerCase().replace('.', '');
+  if (['png', 'jpg', 'jpeg', 'gif', 'webp'].includes(e)) return 'image';
+  if (['mp4', 'mov', 'mkv', 'webm'].includes(e)) return 'video';
+  if (['mp3', 'm4a', 'ogg', 'wav'].includes(e)) return 'audio';
+  return 'document';
+}
+
+/**
+ * Try to auto-deliver a local file to the originating gateway channel.
+ * Returns a result string to append to the tool's response.
+ * Best-effort: never throws, never blocks the tool on failure.
+ */
+async function tryAutoDeliver(
+  filePath: string,
+  caption: string | undefined,
+  ctx: ToolContext,
+  label: string,
+): Promise<string> {
+  if (!ctx.gateway?.autoDeliverMedia) return '';
+  const { readFileSync: fsReadFileSync } = await import('fs');
+  const { extname } = await import('path');
+  try {
+    const data = fsReadFileSync(filePath) as unknown as Uint8Array;
+    if (data.length === 0) return '';
+    const ext = extname(filePath);
+    const type = mediaTypeFromExt(ext);
+    const delivered = await ctx.gateway.autoDeliverMedia({
+      type,
+      data,
+      caption,
+      filename: filePath.split('/').pop() ?? filePath,
+    });
+    if (delivered) return ` — ${label} auto-delivered to the originating channel.`;
+    return ` — ${label} could not be auto-delivered (the platform may not support media). Use gateway_send with image_path to send manually.`;
+  } catch {
+    return '';
+  }
+}
+
 // Pipeline tools reuse the C3 action descriptors' zod schemas — the exact
 // same schemas `resolveDispatch()` hands the orchestrator, never re-declared.
 
@@ -174,13 +227,21 @@ export const publishToolSchema = z.object({
 /** E3c — the task tools all carry a goal (model-decides vocabulary). */
 const taskGoalArgs = z.object({ goal: z.string().describe('The task goal passed to the agent pipeline') });
 
-/** E3g — gateway message delivery: target + text (model-decides vocabulary). */
+/** E3g — gateway message delivery: target + text + optional media (model-decides vocabulary). */
 export const gatewaySendSchema = z.object({
   target: z
     .string()
     .min(1)
     .describe('Channel target — a registered alias (e.g. "ops") or platform:channelId (e.g. "whatsapp:Alex", "whatsapp:+15551234567", "telegram:123456", "slack:C0123", "email:team@example.com"). WhatsApp accepts a contact NAME from the paired account\'s address book (e.g. "Alex").'),
   text: z.string().min(1).describe('The message text to send to the channel/contact'),
+  image_path: z
+    .string()
+    .optional()
+    .describe('Absolute path to an image file (png/jpg/jpeg/gif/webp) to send as a media message. When set alongside text, the image is sent with the text as a caption. Supported on WhatsApp, Telegram, and Discord.'),
+  caption: z
+    .string()
+    .optional()
+    .describe('Optional caption for the media file (only used when image_path is set). If omitted and text is also set, the text is used as the caption.'),
 });
 
 /** run_cli — plain-English → CLI execution via the command manifest. */
@@ -432,7 +493,7 @@ export const TOOL_CONTRACT = `You have tools available. Call them when appropria
 - If a request needs documentation, a website, analysis of a project, or running tests, call \`document\`, \`website\`, \`analyze\`, or \`test\` with the goal.
 - If a request asks to publish a release (npm/GitHub), call \`publish\`. It is irreversible — confirm the bump type and target with the user via \`ask_user\` first unless they already specified them.
 - If a request's completeness is uncertain, call \`verify_requirement\` first.
-- If a request asks to deliver a message or result to a contact/channel (WhatsApp, Telegram, Slack, email, …), call \`gateway_send\` with the target (e.g. \`whatsapp:Alex\`) and the text. If the target contact is not configured, tell the user what to set up.
+- If a request asks to deliver a message or result to a DIFFERENT contact/channel than the one you are currently chatting on (WhatsApp, Telegram, Slack, email, …), call \`gateway_send\` with the target (e.g. \`whatsapp:Alex\`) and the text. Do NOT call gateway_send to reply to the CURRENT conversation — your text response is automatically delivered back. If the target contact is not configured, tell the user what to set up.
 - If a request asks to manage the system/agent itself in plain English — start/stop the dashboard or gateway, check status, add/remove a verified sender, configure a platform (telegram/whatsapp), run evals, show stats — call \`run_cli\` with the plain-English ask. It resolves the exact \`buff\` command and runs it. If the tool reports AMBIGUOUS or asks for confirmation, call \`ask_user\` first, then retry run_cli with the user's answer.
 - If a subtask can be delegated to a specialized sub-agent (gather context, review, security scan, run tests), call \`delegate\` with the agent type, a focused prompt, and optional file paths.
 - To find code matching a pattern (context gathering, locating definitions/usages), call \`code_search\` with the pattern and optional globs.
@@ -761,11 +822,11 @@ registerTool({
 
 registerTool({
   name: 'generate_image',
-  description: 'Generate an image from a text prompt (Pollinations.ai free endpoint, or a local Stable Diffusion/ComfyUI via BUFF_IMAGE_API_URL). The image is saved to the sandbox images/ dir and the path is returned.',
+  description: 'Generate an image from a text prompt (Pollinations.ai free endpoint, or a local Stable Diffusion/ComfyUI via BUFF_IMAGE_API_URL). The image is saved to the sandbox images/ dir and the path is returned. When running in a gateway context (WhatsApp/Telegram/etc.), the image is automatically sent back to the originating channel.',
   category: 'workflow',
   inputSchema: imageGenSchema,
   endsAgentStep: false,
-  run: async (args) => {
+  run: async (args, ctx) => {
     const parsed = imageGenSchema.parse(args);
     const { generateImage, isImageGenAvailable } = await import('./modality/image-gen.js');
     if (!isImageGenAvailable()) return 'generate_image: unavailable (no image backend configured).';
@@ -774,23 +835,27 @@ registerTool({
       height: parsed.height,
       apiUrl: envBuff('IMAGE_API_URL'),
     });
-    return result.ok
-      ? `generate_image: saved to ${result.file}`
-      : `generate_image: failed — ${result.error}`;
+    if (!result.ok) return `generate_image: failed — ${result.error}`;
+    const file = result.file!;
+    const delivered = await tryAutoDeliver(file, parsed.prompt, ctx, 'image');
+    return `generate_image: saved to ${file}${delivered}`;
   },
 });
 
 registerTool({
   name: 'speak',
-  description: 'Synthesize speech for text to an audio file (edge-tts or Piper, both free and local). Requires edge-tts or piper on PATH. Returns the audio file path.',
+  description: 'Synthesize speech for text to an audio file (edge-tts or Piper, both free and local). Requires edge-tts or piper on PATH. Returns the audio file path. When running in a gateway context, the audio is automatically sent back to the originating channel.',
   category: 'workflow',
   inputSchema: speakSchema,
   endsAgentStep: false,
-  run: async (args) => {
+  run: async (args, ctx) => {
     const parsed = speakSchema.parse(args);
     const { speak } = await import('./modality/voice.js');
     const result = await speak(parsed.text, { voice: parsed.voice });
-    return result.ok ? `speak: saved to ${result.file}` : `speak: failed — ${result.error}`;
+    if (!result.ok) return `speak: failed — ${result.error}`;
+    const file = result.file!;
+    const delivered = await tryAutoDeliver(file, parsed.text, ctx, 'audio');
+    return `speak: saved to ${file}${delivered}`;
   },
 });
 
@@ -827,7 +892,7 @@ registerTool({
 
 registerTool({
   name: 'gateway_send',
-  description: 'Send a message to a channel through the gateway (WhatsApp by contact name or number, Telegram, Slack, Discord, email, or any registered alias). Use when the user asks to deliver a result or message to a contact or channel — e.g. "send the poem to Alex on whatsapp".',
+  description: 'Send a message (text or image) to a DIFFERENT channel or contact through the gateway (WhatsApp by contact name or number, Telegram, Slack, Discord, email, or any registered alias). Do NOT use this tool to reply to the CURRENT conversation — your text response is automatically sent back to the originating channel. Only call this when the user asks you to deliver a result to SOMEONE ELSE — e.g. "send the poem to Alex on whatsapp" (while you are chatting with Divya). For images, set image_path to the file path (e.g. from generate_image output) — the image is sent with text as caption.',
   category: 'workflow',
   inputSchema: gatewaySendSchema,
   endsAgentStep: false,
@@ -2073,7 +2138,7 @@ registerTool({
 // Video generation tool
 registerTool({
   name: 'video_generate',
-  description: 'Generate videos from text prompts or images. Supports FAL/BFL providers.',
+  description: 'Generate videos from text prompts or images. Supports FAL/BFL providers. When running in a gateway context and a video URL is returned, the video is automatically downloaded and sent back to the originating channel.',
   category: 'workflow',
   inputSchema: z.object({
     action: z.enum(['generate', 'status', 'providers']).describe('Action'),
@@ -2085,11 +2150,39 @@ registerTool({
     jobId: z.string().optional().describe('Job ID for status check'),
   }),
   endsAgentStep: false,
-  run: (args) => import('./video-generation.js').then((m) => {
+  run: async (args, ctx) => import('./video-generation.js').then(async (m) => {
     const { action, prompt, imageUrl, duration, aspectRatio, resolution, jobId } = args as any;
     const mgr = m.getVideoGenManager();
     switch (action) {
-      case 'generate': return prompt ? mgr.generate({ prompt, imageUrl, duration, aspectRatio, resolution }).then((r: any) => JSON.stringify(r)) : 'prompt required';
+      case 'generate': {
+        if (!prompt) return 'prompt required';
+        const result = await mgr.generate({ prompt, imageUrl, duration, aspectRatio, resolution });
+        const json = JSON.stringify(result);
+        // Auto-deliver: download the video from the URL and send to originating channel.
+        if (ctx.gateway?.autoDeliverMedia && result.videoUrl) {
+          try {
+            const { writeFileSync, mkdtempSync, readFileSync: fsReadFileSync } = await import('fs');
+            const { join } = await import('path');
+            const { tmpdir } = await import('os');
+            const tmpDir = mkdtempSync(join(tmpdir(), 'nuvira-video-'));
+            const videoPath = join(tmpDir, 'video.mp4');
+            const res = await fetch(result.videoUrl);
+            if (res.ok) {
+              const buf = Buffer.from(await res.arrayBuffer());
+              writeFileSync(videoPath, buf);
+              const data = fsReadFileSync(videoPath) as unknown as Uint8Array;
+              const delivered = await ctx.gateway.autoDeliverMedia({
+                type: 'video',
+                data,
+                caption: prompt,
+                filename: 'video.mp4',
+              });
+              if (delivered) return `${json}\nvideo_generate: video auto-delivered to the originating channel.`;
+            }
+          } catch { /* best-effort delivery */ }
+        }
+        return json;
+      }
       case 'status': return jobId ? mgr.status(jobId).then((r: any) => JSON.stringify(r)) : 'jobId required';
       case 'providers': return JSON.stringify({ providers: mgr.listProviders() });
       default: return 'Unknown action';
@@ -2234,21 +2327,22 @@ registerTool({
 // Send message tool — cross-channel messaging
 registerTool({
   name: 'send_message',
-  description: 'Send messages to Telegram, Discord, Slack, WhatsApp, Email.',
+  description: 'Send messages to Telegram, Discord, Slack, WhatsApp, Email. Supports media attachments (images, videos, audio, documents) on WhatsApp.',
   category: 'workflow',
   inputSchema: z.object({
     action: z.enum(['send', 'list-targets']).describe('Action'),
     platform: z.enum(['telegram', 'discord', 'slack', 'whatsapp', 'email']).describe('Platform'),
-    target: z.string().optional().describe('Target (channel ID, username, email)'),
+    target: z.string().optional().describe('Target (channel ID, username, email, or WhatsApp contact name/phone number)'),
     text: z.string().optional().describe('Message text'),
+    media: z.array(z.string()).optional().describe('File paths for media attachments (WhatsApp: sends first file as image/video/audio/document; type detected from extension)'),
     threadId: z.string().optional().describe('Thread ID'),
   }),
   endsAgentStep: false,
   run: (args) => import('./send-message-tool.js').then((m) => {
-    const { action, platform, target, text, threadId } = args as any;
+    const { action, platform, target, text, media, threadId } = args as any;
     const mgr = m.getSendMessageManager();
     switch (action) {
-      case 'send': return target && text ? mgr.send({ platform, target, text, threadId }).then((r: any) => JSON.stringify(r)) : 'target and text required';
+      case 'send': return target ? mgr.send({ platform, target, text: text || '', media, threadId }).then((r: any) => JSON.stringify(r)) : 'target required';
       case 'list-targets': return mgr.listTargets(platform).then((r: any) => JSON.stringify(r));
       default: return 'Unknown action';
     }

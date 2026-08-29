@@ -128,6 +128,31 @@ export class GatewayCommand {
       .option('--flush', 'Attempt every due pending entry now (uses configured adapters)')
       .action(async (opts) => this.delivery(Boolean(opts.flush)));
 
+    // ── history subcommands (per-contact conversation history) ──
+    const history = cmd.command('history').description('Manage per-contact conversation history (gateway chat memory)');
+
+    history
+      .command('list')
+      .description('List all stored conversations with last message preview')
+      .option('--platform <platform>', 'Filter by platform (whatsapp, telegram, etc.)')
+      .action(async (opts) => this.historyList(opts));
+
+    history
+      .command('show <key>')
+      .description('Show conversation history for a contact (e.g. nuvira gateway history show whatsapp:918800663237)')
+      .option('--limit <n>', 'Max message pairs to show', '5')
+      .action(async (key, opts) => this.historyShow(key, Number(opts.limit)));
+
+    history
+      .command('clear <key>')
+      .description('Clear conversation history for a contact')
+      .action(async (key) => this.historyClear(key));
+
+    history
+      .command('prune')
+      .description('Remove conversations older than 7 days')
+      .action(async () => this.historyPrune());
+
     cmd
       .command('start')
       .description('Run all configured adapters in the foreground (Ctrl-C to stop)')
@@ -287,6 +312,70 @@ export class GatewayCommand {
       return;
     }
     logger.success(`Sent ${type} to ${target} (${ref.platform}:${maskSenderId(ref.channelId)})`);
+  }
+
+  // ─── history (per-contact conversation memory) ────────────────────────────
+
+  private async historyList(opts: { platform?: string }): Promise<void> {
+    const { GatewayChatStore } = await import('../gateway/chat-store.js');
+    const store = new GatewayChatStore();
+    let conversations = store.getAllConversations();
+    if (opts.platform) {
+      conversations = conversations.filter((c) => c.key.startsWith(`${opts.platform}:`));
+    }
+    if (conversations.length === 0) {
+      console.log('No stored conversations.');
+      return;
+    }
+    console.log(`💬 Conversation history (${conversations.length} conversations)\n`);
+    for (const conv of conversations) {
+      const lastUser = conv.messages.filter((m) => m.role === 'user').pop();
+      const lastAssistant = conv.messages.filter((m) => m.role === 'assistant').pop();
+      const age = Date.now() - conv.lastActiveAt;
+      const ageStr = age < 60_000 ? 'just now' : age < 3_600_000 ? `${Math.round(age / 60_000)}m ago` : age < 86_400_000 ? `${Math.round(age / 3_600_000)}h ago` : `${Math.round(age / 86_400_000)}d ago`;
+      console.log(`  ${conv.key} (${conv.messages.length} messages, ${ageStr})`);
+      if (lastUser) console.log(`    👤 ${(lastUser.content || '').slice(0, 80)}`);
+      if (lastAssistant) console.log(`    🤖 ${(lastAssistant.content || '').slice(0, 80)}`);
+      console.log('');
+    }
+  }
+
+  private async historyShow(key: string, limit: number): Promise<void> {
+    const { GatewayChatStore } = await import('../gateway/chat-store.js');
+    const store = new GatewayChatStore();
+    const messages = store.getHistory(key);
+    if (messages.length === 0) {
+      console.log(`No history found for '${key}'.`);
+      return;
+    }
+    const pairs = limit * 2;
+    const shown = messages.slice(-pairs);
+    console.log(`💬 History for ${key} (${shown.length} of ${messages.length} messages):\n`);
+    for (const msg of shown) {
+      const ts = new Date(msg.ts).toLocaleTimeString();
+      const icon = msg.role === 'user' ? '👤' : '🤖';
+      console.log(`  ${icon} [${ts}] ${(msg.content || '').slice(0, 200)}`);
+    }
+  }
+
+  private async historyClear(key: string): Promise<void> {
+    const { GatewayChatStore } = await import('../gateway/chat-store.js');
+    const store = new GatewayChatStore();
+    const before = store.count();
+    store.clear(key);
+    const after = store.count();
+    if (before === after) {
+      console.log(`No conversation found for '${key}'.`);
+    } else {
+      console.log(`✅ Cleared conversation history for ${key}.`);
+    }
+  }
+
+  private async historyPrune(): Promise<void> {
+    const { GatewayChatStore } = await import('../gateway/chat-store.js');
+    const store = new GatewayChatStore();
+    const removed = store.prune();
+    console.log(`✅ Pruned ${removed} stale conversation(s) (older than 7 days).`);
   }
 
   // ─── delivery (I2) ────────────────────────────────────────────────────────

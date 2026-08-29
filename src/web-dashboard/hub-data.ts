@@ -20,6 +20,7 @@ import { homedir } from 'node:os';
 import { getToolsetStatus } from '../tools/toolsets.js';
 import { DeliveryLedger, type DeliveryEntry } from '../gateway/delivery.js';
 import { InboxLedger, type InboxEntry } from '../gateway/inbox.js';
+import { GatewayChatStore, CHAT_HISTORY_MAX_PAIRS, CHAT_HISTORY_TTL_MS } from '../gateway/chat-store.js';
 import type { HubChannelPolicy, HubInboxEntry } from './src/types.js';
 import {
   ChannelDirectory,
@@ -83,6 +84,17 @@ export interface HubDeliverySummary {
     createdAt: number;
     lastError?: string;
   }>;
+}
+
+/** Summary of a stored conversation (per-contact gateway chat history). */
+export interface HubConversationSummary {
+  key: string;
+  platform: string;
+  channelId: string;
+  messageCount: number;
+  lastActiveAt: number;
+  lastUserMessage: string;
+  lastAssistantMessage: string;
 }
 
 export interface HubArtifactSummary {
@@ -161,6 +173,11 @@ export interface HubData {
     sessions: HubArtifactSummary[];
   };
   skills: HubSkillsData;
+  /** Gateway chat conversations (per-contact history). */
+  conversations: {
+    total: number;
+    recent: HubConversationSummary[];
+  };
   adminConfigured: boolean;
   serverTime: number;
 }
@@ -319,6 +336,32 @@ function readPoliciesData(): Record<string, HubChannelPolicy> {
   return out;
 }
 
+// ─── Conversations (gateway chat history) ───────────────────────────────────
+
+function readConversationsData(): HubData['conversations'] {
+  const store = new GatewayChatStore();
+  const conversations = store.getAllConversations();
+  const recent: HubConversationSummary[] = conversations
+    .sort((a, b) => b.lastActiveAt - a.lastActiveAt)
+    .slice(0, 20)
+    .map((c) => {
+      const [platform, ...rest] = c.key.split(':');
+      const channelId = rest.join(':');
+      const lastUser = c.messages.filter((m) => m.role === 'user').pop();
+      const lastAssistant = c.messages.filter((m) => m.role === 'assistant').pop();
+      return {
+        key: c.key,
+        platform: platform || 'unknown',
+        channelId,
+        messageCount: c.messages.length,
+        lastActiveAt: c.lastActiveAt,
+        lastUserMessage: (lastUser?.content ?? '').slice(0, 200),
+        lastAssistantMessage: (lastAssistant?.content ?? '').slice(0, 200),
+      };
+    });
+  return { total: conversations.length, recent };
+}
+
 // ─── Artifacts (I3 store) ───────────────────────────────────────────────────
 
 function readArtifactsData(): HubData['artifacts'] {
@@ -444,6 +487,7 @@ export function readHubData(): HubData {
     channels: readChannelsData(),
     artifacts: readArtifactsData(),
     skills: readSkillsData(),
+    conversations: readConversationsData(),
     adminConfigured: isAdminConfigured(),
     serverTime: Date.now(),
   };
