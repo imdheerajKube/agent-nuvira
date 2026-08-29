@@ -210,7 +210,13 @@ export class ReviewerAgent extends Agent {
                 .map((c, i) => `${i + 1}. ${c}`)
                 .join('\n')}\n\nAfter your issue review, emit a verdict line for EVERY criterion:\n- PASS: <criterion>\n- FAIL: <criterion> — <reason>\n\nAny FAIL means the changes do not satisfy the contract — mark the overall review as blocked.`
             : '';
-        return `${REVIEWER_SYSTEM_PROMPT}\n\n## Task Description\n${taskDescriptions || context.goal}\n\n## Changes to Review\n${diffs || '(No changes provided)'}${criteriaSection}\n\n## Instructions\nReview the above changes. Identify any issues and provide feedback.`;
+        // Wire failure lessons into reviewer: the reviewer should know about past
+        // failures so it can check for known issues that caused problems before.
+        const failureLessonContext = context.metadata?.failureLessonContext;
+        const memorySection = failureLessonContext
+            ? `\n\n## Known Failure Patterns\nCheck specifically for these issues — they caused failures in similar past tasks:${failureLessonContext}`
+            : '';
+        return `${REVIEWER_SYSTEM_PROMPT}\n\n## Task Description\n${taskDescriptions || context.goal}\n\n## Changes to Review\n${diffs || '(No changes provided)'}${criteriaSection}${memorySection}\n\n## Instructions\nReview the above changes. Identify any issues and provide feedback.`;
     }
     /**
      * Check if the review response contains any critical issues.

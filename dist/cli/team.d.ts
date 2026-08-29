@@ -2,22 +2,22 @@
  * Team command — Team collaboration with shared memory, config, and review workflow.
  *
  * Usage:
- *   buff team init [name]                       — Initialize team config in working directory
- *   buff team init --repo <url>                 — Init with remote team repository
- *   buff team join <repo-url>                   — Clone and join an existing team repo
- *   buff team sync                              — Sync team memory with remote (pull + push)
- *   buff team status                            — Show team configuration and memory status
- *   buff team share                             — Share local trajectories with team
- *   buff team review list                       — List all review bundles
- *   buff team review show <id>                  — Show a specific review bundle
- *   buff team review approve <id>               — Approve a review
- *   buff team review reject <id> [reason]       — Reject a review
- *   buff team review merge <id>                 — Merge an approved review into working dir
- *   buff team review create <title> <goal>      — Create a review bundle from files
+ *   nuvira team init [name]                       — Initialize team config in working directory
+ *   nuvira team init --repo <url>                 — Init with remote team repository
+ *   nuvira team join <repo-url>                   — Clone and join an existing team repo
+ *   nuvira team sync                              — Sync team memory with remote (pull + push)
+ *   nuvira team status                            — Show team configuration and memory status
+ *   nuvira team share                             — Share local trajectories with team
+ *   nuvira team review list                       — List all review bundles
+ *   nuvira team review show <id>                  — Show a specific review bundle
+ *   nuvira team review approve <id>               — Approve a review
+ *   nuvira team review reject <id> [reason]       — Reject a review
+ *   nuvira team review merge <id>                 — Merge an approved review into working dir
+ *   nuvira team review create <title> <goal>      — Create a review bundle from files
  *
  * The team system enables multiple developers to:
  *   - Share agent execution trajectories via git
- *   - Use project-level .buffconfig.json for shared provider defaults
+ *   - Use project-level .nuviraconfig.json for shared provider defaults
  *   - Review agent-generated changes before applying them
  *   - Collaborate on workflow templates and coding patterns
  */

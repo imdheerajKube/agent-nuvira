@@ -10,7 +10,7 @@
  */
 // ─── Default MCP Config Directory ───────────────────────────────────────────
 /** The default directory where MCP server configs are stored */
-export const MCP_CONFIG_DIR = '.buff/mcp';
+export const MCP_CONFIG_DIR = '.nuvira/mcp';
 /** The current MCP protocol version */
 export const MCP_PROTOCOL_VERSION = '2025-06-18';
 //# sourceMappingURL=types.js.map

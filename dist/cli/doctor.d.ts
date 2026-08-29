@@ -2,11 +2,11 @@
  * Doctor command — One-command diagnosis of all provider configurations.
  *
  * Usage:
- *   buff doctor                           — Run full health check on all providers
- *   buff doctor --provider groq           — Check only a specific provider
- *   buff doctor --watch                   — Continuous monitoring mode (refreshes every 30s)
- *   buff doctor --verbose                 — Show detailed diagnostic info
- *   buff doctor --fix                     — Attempt auto-fix for common issues (create ~/.buff dirs, etc.)
+ *   nuvira doctor                           — Run full health check on all providers
+ *   nuvira doctor --provider groq           — Check only a specific provider
+ *   nuvira doctor --watch                   — Continuous monitoring mode (refreshes every 30s)
+ *   nuvira doctor --verbose                 — Show detailed diagnostic info
+ *   nuvira doctor --fix                     — Attempt auto-fix for common issues (create ~/.nuvira dirs, etc.)
  *
  * The health check runs all provider tests in parallel with timeouts:
  *   1. API Key presence check
@@ -84,8 +84,8 @@ export declare function auditJsonlIntegrity(filePath: string): {
 };
 /**
  * Secrets-hygiene check: for each keyed provider, is the key supplied via a
- * secure env var (or a `~/.buff/.env` file) rather than hardcoded in the
- * plaintext `~/.buff/buffconfig.json`? Pure + testable (env passed in).
+ * secure env var (or a `~/.nuvira/.env` file) rather than hardcoded in the
+ * plaintext `~/.nuvira/buffconfig.json`? Pure + testable (env passed in).
  */
 export declare function checkSecretsBackend(config: BuffConfig, env: Record<string, string | undefined>): CheckResult;
 /**

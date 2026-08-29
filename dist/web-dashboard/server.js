@@ -10,6 +10,7 @@
  * Opens at: http://localhost:3030
  */
 import { createServer } from 'node:http';
+import { envBuff } from '../config/paths.js';
 import { createReadStream, readFileSync, existsSync, statSync, watch, mkdirSync, writeFileSync, readdirSync } from 'node:fs';
 import { join, extname, dirname, basename, resolve, isAbsolute } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -37,7 +38,7 @@ import { CATALOG_PROVIDER_IDS, getCatalogProvider } from '../inference/provider-
 import { readHubData } from './hub-data.js';
 import { setToolsetEnabled } from '../tools/toolsets.js';
 import { setSkillEnabled } from '../learning/hub-skill-catalog.js';
-// I11 — dashboard channel send-test: the same registry/adapters `buff gateway
+// I11 — dashboard channel send-test: the same registry/adapters `nuvira gateway
 // send` uses, so a Channels-tab test message behaves identically to the CLI.
 // GatewayRegistry is intentionally a LAZY import inside the handler: it pulls
 // the whole pipeline (pipeline-tool → cli/router, which reads package.json at
@@ -48,8 +49,8 @@ import { createConfiguredAdapters } from '../gateway/adapters.js';
 import { ChannelDirectory, PLATFORM_ENV_VARS } from '../gateway/channel-directory.js';
 import { applyEnvToProcess, configurablePlatforms, platformConfigStatus, platformEnvVarMeta, redactValue, writeEnvFile, } from '../gateway/platform-config.js';
 // ─── Constants ──────────────────────────────────────────────────────────────
-const PORT = parseInt(process.env.BUFF_DASHBOARD_PORT || '3030', 10);
-const HOST = process.env.BUFF_DASHBOARD_HOST || '127.0.0.1';
+const PORT = parseInt(envBuff('DASHBOARD_PORT') || '3030', 10);
+const HOST = envBuff('DASHBOARD_HOST') || '127.0.0.1';
 const __dirname = dirname(fileURLToPath(import.meta.url));
 // Public files location: try the source directory first (dev via tsx),
 // then the compiled output directory (production via node dist/)
@@ -58,9 +59,9 @@ const POSSIBLE_PUBLIC_DIRS = [
     join(__dirname, '..', '..', 'src', 'web-dashboard', 'public'), // node: dist/web-dashboard/server.js
 ];
 const PUBLIC_DIR = POSSIBLE_PUBLIC_DIRS.find((p) => existsSync(p)) || POSSIBLE_PUBLIC_DIRS[0];
-// Honor BUFF_MEMORY_DIR (same as the CLI and the learning router) so the bandit
+// Honor NUVIRA_MEMORY_DIR (same as the CLI and the learning router) so the bandit
 // card and the promotion-gate card always read from the SAME memory directory.
-const MEMORY_DIR = process.env.BUFF_MEMORY_DIR || join(resolveNuviraHome(), 'memory');
+const MEMORY_DIR = envBuff('MEMORY_DIR') || join(resolveNuviraHome(), 'memory');
 const MIME_TYPES = {
     '.html': 'text/html; charset=utf-8',
     '.css': 'text/css; charset=utf-8',
@@ -94,7 +95,7 @@ let quotaWatchTimer = null;
  */
 let alwaysWatchQuota = false;
 /**
- * Read `routing.alwaysWatchQuota` from ~/.buff/buffconfig.json (same source
+ * Read `routing.alwaysWatchQuota` from ~/.nuvira/buffconfig.json (same source
  * loadApiKeysFromConfig uses). Best-effort — a missing/corrupt config just
  * keeps the default (false = arm-on-connect only).
  */
@@ -1441,10 +1442,10 @@ function readRoutingInsights() {
         retrieval: readRetrievalData(),
         // P6 M6.5: the admin governance policy the router enforces as hard
         // constraints — surfaced so the dashboard shows policy where routing
-        // decisions are made (mirrors `buff admin policy`).
+        // decisions are made (mirrors `nuvira admin policy`).
         governance: readGovernanceData(),
-        // P6 M6.1: RBAC identity + role assignments (mirrors `buff admin whoami` /
-        // `buff admin role list`) so the dashboard shows WHO may write policy
+        // P6 M6.1: RBAC identity + role assignments (mirrors `nuvira admin whoami` /
+        // `nuvira admin role list`) so the dashboard shows WHO may write policy
         // alongside WHAT the policy is.
         rbac: readRbacData(),
         updatedAt: Date.now(),
@@ -1505,7 +1506,7 @@ function readRetrievalData() {
 }
 /**
  * Read the admin governance policy (routing.governance from buffconfig.json)
- * — the exact policy `buff admin` writes and the auto-router enforces as hard
+ * — the exact policy `nuvira admin` writes and the auto-router enforces as hard
  * constraints. Always returns a shaped payload: `enabled: false` when empty
  * (fully permissive) so the dashboard can render the policy card either way.
  */
@@ -1527,16 +1528,16 @@ function readGovernanceData() {
     }
 }
 /**
- * Read the RBAC role file (~/.buff/rbac.json — the same file `buff admin
+ * Read the RBAC role file (~/.nuvira/rbac.json — the same file `nuvira admin
  * role add` writes) into a shaped payload: the acting identity, their role
  * (null when unassigned), the full user→role map, and whether the system is
  * in legacy single-user mode (no roles assigned → fully permissive). Uses the
- * same BUFF_CONFIG_DIR-aware path convention as the other readers.
+ * same NUVIRA_CONFIG_DIR-aware path convention as the other readers.
  */
 function readRbacData() {
     try {
         const configPath = join(resolveBuffConfigDir(), 'rbac.json');
-        const identity = process.env.BUFF_ACT_AS || process.env.USER || 'local';
+        const identity = envBuff('ACT_AS') || process.env.USER || 'local';
         if (!existsSync(configPath)) {
             return { legacy: true, identity, role: null, users: [], updatedAt: Date.now() };
         }
@@ -1832,10 +1833,10 @@ const adminSessions = new AdminSessions();
  * BUFF_DASHBOARD_TASK_CLI_ENTRY overrides the entry (tests / custom builds).
  */
 const taskRunner = new TaskRunner({
-    cliEntry: process.env.BUFF_DASHBOARD_TASK_CLI_ENTRY || undefined,
+    cliEntry: envBuff('DASHBOARD_TASK_CLI_ENTRY') || undefined,
 });
 /**
- * P2 — In-page WhatsApp pairing: the dashboard twin of `buff whatsapp pair`.
+ * P2 — In-page WhatsApp pairing: the dashboard twin of `nuvira whatsapp pair`.
  * QR payloads stream to the browser as scannable PNG data URLs (the panel's
  * `<img>`), the 8-char phone-pairing code streams the same way, and status
  * events drive the panel's state. One manager per server process.
@@ -1843,10 +1844,10 @@ const taskRunner = new TaskRunner({
 let whatsappPairing = new WhatsAppPairingManager();
 /**
  * P3 — Dashboard chat console: in-process agent chat (GUI parity with
- * `buff chat "<prompt>"`). The engine (ChatCommand) is loaded lazily on the
+ * `nuvira chat "<prompt>"`). The engine (ChatCommand) is loaded lazily on the
  * first message, so server import stays light. One console per process.
  */
-// P4 — chat sessions persist through ~/.buff/memory/chat-sessions.json so the
+// P4 — chat sessions persist through ~/.nuvira/memory/chat-sessions.json so the
 // sidebar can resume any past conversation after a dashboard restart.
 let chatConsole = new ChatConsole({ persistPath: join(MEMORY_DIR, 'chat-sessions.json') });
 // P3 — project attach. The bundle is cached per path and rebuilt only when the
@@ -2088,7 +2089,7 @@ function handleRequest(req, res) {
     }
     // ── Admin command-runner: run ALL state commands on demand ───────────
     // The dashboard executes doctor/system/enterprise checks (one source with
-    // `buff doctor` — runAllChecks) so the user never types a command. Read
+    // `nuvira doctor` — runAllChecks) so the user never types a command. Read
     // path only: keys are NEVER exposed — the provider summary masks them.
     if (pathname === '/api/admin/checks') {
         runAdminChecks().then((payload) => {
@@ -2182,15 +2183,15 @@ function handleRequest(req, res) {
         writeJson(res, 200, { ok: true });
         return;
     }
-    // ── Shutdown (dashboard / gateway) — the GUI twin of `buff dashboard stop`
-    // and `buff gateway stop`. POST /api/admin/shutdown with { target }:
+    // ── Shutdown (dashboard / gateway) — the GUI twin of `nuvira dashboard stop`
+    // and `nuvira gateway stop`. POST /api/admin/shutdown with { target }:
     //   target 'dashboard' → respond 200, then close the listeners + exit the
     //       server process (the browser sees the page disconnect — expected).
     //   target 'gateway'   → SIGTERM the running `gateway start` process (found
     //       by port 8787 or by command-line match), respond with whether it was
     //       found/stopped.
     // RBAC: dashboard → system.manage (admin); gateway → gateway.manage
-    // (admin + operator — same as `buff gateway alias` / `buff gateway stop`).
+    // (admin + operator — same as `nuvira gateway alias` / `nuvira gateway stop`).
     // A test hook (setDashboardShutdownForTest) swaps the exit so API tests
     // never kill the test runner.
     if (pathname === '/api/admin/shutdown' && req.method === 'POST') {
@@ -2233,7 +2234,7 @@ function handleRequest(req, res) {
     }
     // ── Agent Hub toggles (I5) — admin-gated writes honored by the I1 runtime
     // gate (tool-loop schema + execution gating), so the dashboard toggle is
-    // NEVER cosmetic. Same config the CLI writes (`buff tools toolsets`);
+    // NEVER cosmetic. Same config the CLI writes (`nuvira tools toolsets`);
     // capability control rides on routing.operate (admin or operator).
     if (pathname.startsWith('/api/admin/hub/toolsets/') && req.method === 'PUT') {
         void (async () => {
@@ -2529,7 +2530,7 @@ function handleRequest(req, res) {
         })();
         return;
     }
-    // ── PA4 — save skill env vars to ~/.buff/.env (dashboard secret capture) ──
+    // ── PA4 — save skill env vars to ~/.nuvira/.env (dashboard secret capture) ──
     if (pathname === '/api/skills/secrets' && req.method === 'POST') {
         void (async () => {
             const session = adminSessions.validate(bearerToken(req));
@@ -2571,7 +2572,7 @@ function handleRequest(req, res) {
         return;
     }
     // ── Agent Hub channel send-test (I11) — admin-gated gateway send ────────
-    // Mirrors `buff gateway send <target> <text>`: resolve the target (alias or
+    // Mirrors `nuvira gateway send <target> <text>`: resolve the target (alias or
     // platform:channelId) through the SAME ChannelDirectory, then send through
     // the SAME GatewayRegistry + configured adapters. Rides on routing.operate
     // (admin or operator) like the toolset/skill toggles. The dashboard process
@@ -2639,7 +2640,7 @@ function handleRequest(req, res) {
     //       dashboard passes the FULL map it read; the running gateway re-reads
     //       config per inbound, so changes apply without a restart). Named
     //       WhatsApp contacts are also synced into the bridge contacts file
-    //       (send-by-name parity with `buff whatsapp contact add`).
+    //       (send-by-name parity with `nuvira whatsapp contact add`).
     // Rides on gateway.manage (admin + operator) like the alias CLI.
     if (pathname === '/api/admin/gateway/policies') {
         void (async () => {
@@ -2694,7 +2695,7 @@ function handleRequest(req, res) {
                 // for the Permissions page — the GATE still only reads allowedUsers,
                 // so a bad/missing contact write can never widen access. Named
                 // WhatsApp contacts are synced into the bridge contacts file for
-                // send-by-name parity with `buff whatsapp contact add <Name> <no>`.
+                // send-by-name parity with `nuvira whatsapp contact add <Name> <no>`.
                 let savedContacts;
                 const contactErrors = [];
                 if (Array.isArray(body?.contacts)) {
@@ -2724,7 +2725,7 @@ function handleRequest(req, res) {
                     savedContacts = valid;
                     writeGatewayContacts(savedContacts);
                     // Send-by-name parity: named whatsapp contacts land in the bridge
-                    // contacts file (same file `buff whatsapp contact add` writes).
+                    // contacts file (same file `nuvira whatsapp contact add` writes).
                     for (const c of savedContacts) {
                         if (c.platform === 'whatsapp')
                             syncWhatsAppContactName(c.name, c.id);
@@ -2955,7 +2956,7 @@ function handleRequest(req, res) {
                 const raw = configManager.getAll().providers[type] || {};
                 configManager.save({ providers: { [type]: { ...raw, ...updates } } });
                 // A key/model/baseURL change can invalidate the cached live model list
-                // — the CLI does the same after `buff config set providers.*`.
+                // — the CLI does the same after `nuvira config set providers.*`.
                 clearModelListCache();
                 writeJson(res, 200, { ok: true, provider: summarizeProvider(type, configManager) });
                 return;
@@ -2982,7 +2983,7 @@ function handleRequest(req, res) {
         return;
     }
     // ── Session 36: user-declared daily budget (routing.quota + cost cap) ──
-    // Same config the CLI writes (`buff model quota set`) — dashboard is a
+    // Same config the CLI writes (`nuvira model quota set`) — dashboard is a
     // parallel GUI, never a fork. Reads are open (like checks/catalog); writes
     // are authed: budget fields need routing.operate, the cost cap needs
     // policy.write. Legacy single-user mode stays fully permissive (role admin).
@@ -3390,7 +3391,7 @@ function handleRequest(req, res) {
         });
         return;
     }
-    // ── P2 In-page WhatsApp pairing (GUI parity with `buff whatsapp pair`) ──
+    // ── P2 In-page WhatsApp pairing (GUI parity with `nuvira whatsapp pair`) ──
     // Reads (status/events) need an admin session; writes (pair/cancel/unpair)
     // additionally need routing.operate (admin or operator) — the same gate as
     // the channel send-test and the CLI's own pairing RBAC guard. The manager
@@ -3530,9 +3531,9 @@ function handleRequest(req, res) {
         });
         return;
     }
-    // ── Platform transport config (GUI parity with `buff config gateway`) ──
+    // ── Platform transport config (GUI parity with `nuvira config gateway`) ──
     // GET/POST/DELETE /api/config/platforms — read/write/remove a platform's
-    // env tokens in ~/.buff/.env (loaded by loadEnv() at startup + applied to
+    // env tokens in ~/.nuvira/.env (loaded by loadEnv() at startup + applied to
     // this process on write, so the send-test picks it up immediately).
     // GET /api/config/platforms — list every configurable platform with per-var
     // status; full values only for admin/operator (viewers get redacted).
@@ -3545,27 +3546,27 @@ function handleRequest(req, res) {
         const canWrite = roleCan(session.role, 'routing.operate');
         // Per-platform setup documentation links and one-line hints.
         const SETUP_META = {
-            telegram: { url: 'https://core.telegram.org/bots#how-do-i-create-a-bot', hint: 'Create a bot via @BotFather on Telegram, copy the token, paste it here, then run `buff gateway start`. Note: contacts need the Telegram chat ID (numeric), not a phone number — message the bot first to get the ID.' },
-            discord: { url: 'https://discord.com/developers/applications', hint: 'Create an application + bot in the Discord Developer Portal, copy the bot token, paste it here, then run `buff gateway start`.' },
-            slack: { url: 'https://api.slack.com/apps', hint: 'Create a Slack app with Bot Token Scopes, install to workspace, copy the Bot Token, paste it here, then run `buff gateway start`.' },
-            whatsapp_cloud: { url: 'https://developers.facebook.com/docs/whatsapp/cloud-api/get-started', hint: 'Set up a Meta Cloud API phone number, paste the token + Phone ID here, then run `buff gateway start`.' },
+            telegram: { url: 'https://core.telegram.org/bots#how-do-i-create-a-bot', hint: 'Create a bot via @BotFather on Telegram, copy the token, paste it here, then run `nuvira gateway start`. Note: contacts need the Telegram chat ID (numeric), not a phone number — message the bot first to get the ID.' },
+            discord: { url: 'https://discord.com/developers/applications', hint: 'Create an application + bot in the Discord Developer Portal, copy the bot token, paste it here, then run `nuvira gateway start`.' },
+            slack: { url: 'https://api.slack.com/apps', hint: 'Create a Slack app with Bot Token Scopes, install to workspace, copy the Bot Token, paste it here, then run `nuvira gateway start`.' },
+            whatsapp_cloud: { url: 'https://developers.facebook.com/docs/whatsapp/cloud-api/get-started', hint: 'Set up a Meta Cloud API phone number, paste the token + Phone ID here, then run `nuvira gateway start`.' },
             email: { url: '', hint: 'Enter your SMTP relay host and auth credentials. The agent replies to incoming emails.' },
-            signal: { url: 'https://bbernhard.github.io/signal-cli-rest-api/', hint: 'Run signal-cli-rest-api, register an account, paste the account number here, then run `buff gateway start`.' },
-            dingtalk: { url: 'https://open.dingtalk.com/', hint: 'Create a custom robot in a DingTalk group, copy the webhook URL, paste it here, then run `buff gateway start`.' },
-            feishu: { url: 'https://open.feishu.cn/', hint: 'Create a bot in Feishu, copy the webhook URL, paste it here, then run `buff gateway start`.' },
-            wecom: { url: 'https://open.work.weixin.qq.com/', hint: 'Create a group bot in WeCom, copy the webhook URL, paste it here, then run `buff gateway start`.' },
-            mattermost: { url: 'https://developers.mattermost.com/', hint: 'Create an incoming webhook in Mattermost, copy the URL, paste it here, then run `buff gateway start`.' },
-            matrix: { url: 'https://spec.matrix.org/', hint: 'Enter your Matrix homeserver URL and an access token (from a bot user), then run `buff gateway start`.' },
+            signal: { url: 'https://bbernhard.github.io/signal-cli-rest-api/', hint: 'Run signal-cli-rest-api, register an account, paste the account number here, then run `nuvira gateway start`.' },
+            dingtalk: { url: 'https://open.dingtalk.com/', hint: 'Create a custom robot in a DingTalk group, copy the webhook URL, paste it here, then run `nuvira gateway start`.' },
+            feishu: { url: 'https://open.feishu.cn/', hint: 'Create a bot in Feishu, copy the webhook URL, paste it here, then run `nuvira gateway start`.' },
+            wecom: { url: 'https://open.work.weixin.qq.com/', hint: 'Create a group bot in WeCom, copy the webhook URL, paste it here, then run `nuvira gateway start`.' },
+            mattermost: { url: 'https://developers.mattermost.com/', hint: 'Create an incoming webhook in Mattermost, copy the URL, paste it here, then run `nuvira gateway start`.' },
+            matrix: { url: 'https://spec.matrix.org/', hint: 'Enter your Matrix homeserver URL and an access token (from a bot user), then run `nuvira gateway start`.' },
             webhook: { url: '', hint: 'Enter a generic webhook URL. The agent sends outbound webhooks to this URL.' },
-            bluebubbles: { url: 'https://docs.bluebubbles.io/', hint: 'Set up BlueBubbles server, paste the URL + password here, then run `buff gateway start`.' },
+            bluebubbles: { url: 'https://docs.bluebubbles.io/', hint: 'Set up BlueBubbles server, paste the URL + password here, then run `nuvira gateway start`.' },
             ntfy: { url: 'https://ntfy.sh/', hint: 'Enter an ntfy topic. The agent publishes to this topic (default server: ntfy.sh).' },
-            teams: { url: 'https://learn.microsoft.com/en-us/microsoftteams/platform/webhooks-and-connectors/how-to/add-incoming-webhook', hint: 'Create an incoming webhook in Microsoft Teams, paste the URL here, then run `buff gateway start`.' },
-            google_chat: { url: 'https://developers.google.com/workspace/chat/quickstart/webhooks', hint: 'Create a webhook in a Google Chat space, paste the URL here, then run `buff gateway start`.' },
-            weixin: { url: '', hint: 'Enter your Weixin iLink bot token, then run `buff gateway start`.' },
-            sms: { url: 'https://www.twilio.com/docs/messaging/quickstart/node', hint: 'Enter your Twilio Account SID, Auth Token, and sender phone number, then run `buff gateway start`.' },
-            irc: { url: '', hint: 'Enter the IRC server host and optional port/nickname/channel settings, then run `buff gateway start`.' },
-            simplex: { url: '', hint: 'Run the local simplex-chat daemon (ws://127.0.0.1:5225), paste the WebSocket URL here, then run `buff gateway start`.' },
-            homeassistant: { url: 'https://developers.home-assistant.io/docs/auth_api/', hint: 'Create a long-lived access token in Home Assistant, paste it here, then run `buff gateway start`.' },
+            teams: { url: 'https://learn.microsoft.com/en-us/microsoftteams/platform/webhooks-and-connectors/how-to/add-incoming-webhook', hint: 'Create an incoming webhook in Microsoft Teams, paste the URL here, then run `nuvira gateway start`.' },
+            google_chat: { url: 'https://developers.google.com/workspace/chat/quickstart/webhooks', hint: 'Create a webhook in a Google Chat space, paste the URL here, then run `nuvira gateway start`.' },
+            weixin: { url: '', hint: 'Enter your Weixin iLink bot token, then run `nuvira gateway start`.' },
+            sms: { url: 'https://www.twilio.com/docs/messaging/quickstart/node', hint: 'Enter your Twilio Account SID, Auth Token, and sender phone number, then run `nuvira gateway start`.' },
+            irc: { url: '', hint: 'Enter the IRC server host and optional port/nickname/channel settings, then run `nuvira gateway start`.' },
+            simplex: { url: '', hint: 'Run the local simplex-chat daemon (ws://127.0.0.1:5225), paste the WebSocket URL here, then run `nuvira gateway start`.' },
+            homeassistant: { url: 'https://developers.home-assistant.io/docs/auth_api/', hint: 'Create a long-lived access token in Home Assistant, paste it here, then run `nuvira gateway start`.' },
         };
         const platforms = configurablePlatforms().map((p) => {
             const st = platformConfigStatus(p);
@@ -3679,7 +3680,7 @@ function handleRequest(req, res) {
         });
         return;
     }
-    // POST /api/bedrock/setup — save Bedrock env vars to ~/.buff/.env
+    // POST /api/bedrock/setup — save Bedrock env vars to ~/.nuvira/.env
     if (pathname === '/api/bedrock/setup' && req.method === 'POST') {
         void (async () => {
             const session = adminSessions.validate(bearerToken(req));
@@ -3770,7 +3771,7 @@ function handleRequest(req, res) {
         })();
         return;
     }
-    // ── P3 Chat console (GUI parity with `buff chat "<prompt>"`) ──────────
+    // ── P3 Chat console (GUI parity with `nuvira chat "<prompt>"`) ──────────
     // One tool-loop turn per message, history threaded per session. Running the
     // agent executes tools, so it rides the same admin + routing.operate gate
     // as the task runner. The engine runs in-process (ChatCommand), so provider
@@ -4048,7 +4049,7 @@ function handleRequest(req, res) {
     }
     // POST /api/chat/resolve — resolve a plain-English ask into the CLI
     // command(s) the intent router would run (the dashboard twin of
-    // `buff intent resolve`). The Chat UI calls this BEFORE sending to the
+    // `nuvira intent resolve`). The Chat UI calls this BEFORE sending to the
     // agent: a confident, executable match short-circuits to a confirm card
     // (no 20s model round-trip for "stop the dashboard"), an ambiguous ask
     // shows its options as choices, and everything else falls through to the
@@ -4405,9 +4406,9 @@ function handleRequest(req, res) {
 }
 // ─── Server ─────────────────────────────────────────────────────────────────
 /**
- * Load API keys from ~/.buff/buffconfig.json into process.env.
+ * Load API keys from ~/.nuvira/buffconfig.json into process.env.
  * This covers the case where keys were saved to the config file
- * (e.g., via `buff config set` or the model picker) rather than
+ * (e.g., via `nuvira config set` or the model picker) rather than
  * as environment variables or in a .env file.
  *
  * Does NOT override env vars that are already set.
@@ -4459,9 +4460,9 @@ export function createDashboardServer(opts) {
     const bindHost = opts?.host ?? HOST;
     // Step 1: Load .env file values into process.env
     loadEnv();
-    // Step 2: Load API keys from ~/.buff/buffconfig.json into process.env
+    // Step 2: Load API keys from ~/.nuvira/buffconfig.json into process.env
     // This is the primary source if the user configured providers via
-    // the CLI model picker or `buff config set` commands.
+    // the CLI model picker or `nuvira config set` commands.
     loadApiKeysFromConfig();
     // Step 3: If routing.alwaysWatchQuota is set, arm the quota watcher NOW and
     // never disarm on client disconnect (always-on real-time quota updates).
@@ -4974,7 +4975,7 @@ async function checkBedrockProvider() {
         freeTierInfo: 'Pay-per-use. Requires bedrock:InvokeModel + bedrock:ListFoundationModels.',
     };
     if (!apiKey) {
-        result.models = [{ id: '(no key)', name: 'AWS_BEARER_TOKEN not set', status: 'unavailable', statusReason: 'Set AWS_BEARER_TOKEN in ~/.buff/.env' }];
+        result.models = [{ id: '(no key)', name: 'AWS_BEARER_TOKEN not set', status: 'unavailable', statusReason: 'Set AWS_BEARER_TOKEN in ~/.nuvira/.env' }];
         return result;
     }
     // ── Step 1: Try the control-plane foundation-models listing ──────────────

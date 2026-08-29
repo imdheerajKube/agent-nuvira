@@ -25,7 +25,7 @@
  * - OPT-IN: enabled only when `routing.mlRouter` is true (feature-shipped,
  *   off by default — "off-by-default for anything risky").
  *
- * Persistence: `~/.buff/memory/ml-router.jsonl` (honors BUFF_MEMORY_DIR),
+ * Persistence: `~/.nuvira/memory/ml-router.jsonl` (honors NUVIRA_MEMORY_DIR),
  * append-only, capped at MAX_RECORDS (oldest trimmed).
  */
 import type { BanditOutcome } from './router-bandit.js';

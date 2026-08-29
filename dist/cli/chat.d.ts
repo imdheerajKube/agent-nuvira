@@ -51,7 +51,7 @@ export declare function resolvePipelineDispatch(parsed: ParsedRequest, opts?: Di
  *
  * Thin wrapper over the shared `runPipelineTool` (src/tools/pipeline-tool.ts)
  * — the SAME pipeline core the tool registry's build/resume/repair tools use,
- * so `buff chat` pre-dispatch and in-loop pipeline tool calls can never
+ * so `nuvira chat` pre-dispatch and in-loop pipeline tool calls can never
  * diverge (STANDING RULE). Prints the orchestration result; the tool path
  * returns the summary text instead.
  */
@@ -100,7 +100,7 @@ export declare class ChatCommand extends BaseCommand {
     /**
      * P3 — programmatic single-turn answer for the dashboard chat console.
      *
-     * Runs one tool-loop turn — the EXACT engine behind `buff chat "<prompt>"` —
+     * Runs one tool-loop turn — the EXACT engine behind `nuvira chat "<prompt>"` —
      * and returns content + followups as data instead of printing. Non-TTY by
      * construction: an injected ask_user renderer declines the clarification so
      * the model proceeds on best judgment (inquirer would hang on the server's

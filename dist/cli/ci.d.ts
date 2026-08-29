@@ -5,12 +5,12 @@
  * with structured JSON output and exit codes. No fancy UI — machine-first.
  *
  * Usage:
- *   buff ci execute "add JWT auth"             # Execute goal, emit JSON result, exit 0/1
- *   buff ci execute "run tests" --provider groq
- *   buff ci execute "fix bug" --github-annotations  # GitHub Actions annotation format
- *   buff ci check "is the build green?"        # Exit code 0/1 gate check
- *   buff ci review src/auth.ts src/api.ts      # Review files, emit JSON findings
- *   buff ci review --format github             # GitHub Actions annotation format
+ *   nuvira ci execute "add JWT auth"             # Execute goal, emit JSON result, exit 0/1
+ *   nuvira ci execute "run tests" --provider groq
+ *   nuvira ci execute "fix bug" --github-annotations  # GitHub Actions annotation format
+ *   nuvira ci check "is the build green?"        # Exit code 0/1 gate check
+ *   nuvira ci review src/auth.ts src/api.ts      # Review files, emit JSON findings
+ *   nuvira ci review --format github             # GitHub Actions annotation format
  *
  * Exit codes:
  *   0 = Success / All checks pass

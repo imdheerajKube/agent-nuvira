@@ -14,7 +14,7 @@
 import type { TaskStep } from '../agents/agent.js';
 import type { OrchestratorOptions } from '../agents/orchestrator.js';
 export interface WorkflowTemplate {
-    /** Template identifier (used in CLI: `buff workflow run quick-fix`) */
+    /** Template identifier (used in CLI: `nuvira workflow run quick-fix`) */
     id: string;
     /** Human-readable name */
     name: string;

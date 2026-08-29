@@ -2,15 +2,15 @@
  * PhaseExecutionEngine — Phase-wise project scope execution.
  */
 import { existsSync, readFileSync, writeFileSync, mkdirSync, unlinkSync, readdirSync } from 'node:fs';
+import { resolveNuviraHome } from '../config/paths.js';
 import { join } from 'node:path';
-import { homedir } from 'node:os';
 import { logger } from '../utils/logger.js';
 import { CredentialStore } from './credential-store.js';
 /** Terminal statuses that indicate a phase is done */
 const DONE_STATUSES = ['completed', 'failed', 'skipped'];
 const NOT_RUNNABLE_STATUSES = ['completed', 'skipped'];
 function getStatePath(scopeName) {
-    const buffDir = join(homedir(), '.buff', 'phases');
+    const buffDir = join(resolveNuviraHome(), 'phases');
     if (!existsSync(buffDir)) {
         try {
             mkdirSync(buffDir, { recursive: true });
@@ -59,7 +59,7 @@ export class PhaseExecutionEngine {
         scope.updatedAt = new Date().toISOString();
         const path = getStatePath(scope.name);
         try {
-            const dir = join(homedir(), '.buff', 'phases');
+            const dir = join(resolveNuviraHome(), 'phases');
             if (!existsSync(dir))
                 mkdirSync(dir, { recursive: true });
             writeFileSync(path, JSON.stringify(scope, null, 2), 'utf-8');
@@ -78,7 +78,7 @@ export class PhaseExecutionEngine {
         catch { /* best-effort */ }
     }
     listSavedScopes() {
-        const dir = join(homedir(), '.buff', 'phases');
+        const dir = join(resolveNuviraHome(), 'phases');
         try {
             if (!existsSync(dir))
                 return [];
@@ -243,8 +243,8 @@ export class PhaseExecutionEngine {
                 if (interactive) {
                     logger.info(`\n  Phase failed: ${result.phase.summary}`);
                     this.saveScope(scope);
-                    logger.info(`\n  💡 Phase scope saved. Resume with: buff phase resume "${scope.name}"`);
-                    logger.info(`     Or check progress: buff phase status "${scope.name}"`);
+                    logger.info(`\n  💡 Phase scope saved. Resume with: nuvira phase resume "${scope.name}"`);
+                    logger.info(`     Or check progress: nuvira phase status "${scope.name}"`);
                     return;
                 }
                 else {
@@ -261,8 +261,8 @@ export class PhaseExecutionEngine {
                 logger.success(`  ✅ Phase ${i + 1}/${scope.phases.length} complete.`);
                 logger.info(`  Next phase: ${scope.phases[i + 1].description}`);
                 logger.info('');
-                logger.info(`  Run: buff phase resume "${scope.name}"`);
-                logger.info(`  Or:  buff phase status "${scope.name}"`);
+                logger.info(`  Run: nuvira phase resume "${scope.name}"`);
+                logger.info(`  Or:  nuvira phase status "${scope.name}"`);
                 return;
             }
         }

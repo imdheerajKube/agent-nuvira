@@ -2,7 +2,7 @@
  * VectorStore — pluggable vector index for semantic search.
  *
  * Stores embeddings as `{ id, vector, metadata }` entries in a JSON file
- * (~/.buff/memory/vectors.json, or vectors-<namespace>.json). No hard native
+ * (~/.nuvira/memory/vectors.json, or vectors-<namespace>.json). No hard native
  * dependencies — uses only Node.js built-in fs and crypto.
  *
  * Backends (selected by `memory.vectorBackend` in config):
@@ -73,7 +73,7 @@ export declare class JsonBackend implements VectorStoreBackend {
     readonly name = "json";
     private namespace;
     constructor(namespace?: string);
-    /** Resolve the index path per operation so `BUFF_MEMORY_DIR` changes (tests) take effect. */
+    /** Resolve the index path per operation so `NUVIRA_MEMORY_DIR` changes (tests) take effect. */
     private get indexPath();
     insert(id: string, vector: number[], metadata?: Record<string, unknown>): Promise<void>;
     get(id: string): Promise<VectorEntry | null>;

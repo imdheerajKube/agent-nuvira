@@ -16,7 +16,7 @@
  *   estimatedLatencyMs) for the same task.
  * - When the orchestrator records the real outcome, `recordOutcome()` finalizes
  *   the pending decision into a JSONL trajectory file
- *   (`~/.buff/memory/router-promotion.jsonl`, honors BUFF_MEMORY_DIR) with the
+ *   (`~/.nuvira/memory/router-promotion.jsonl`, honors NUVIRA_MEMORY_DIR) with the
  *   ACTUAL outcome (success/failure, latencyMs, costUsd, qualityScore).
  * - `evaluate(minDecisions)` computes the three criteria over the DIVERGED
  *   decisions (where the bandit pick differs from the heuristic pick — a pick
@@ -24,7 +24,7 @@
  *
  * The gate does not forcibly disable the bandit at runtime; it answers the
  * question \"is the bandit actually better than the heuristic?\" and is surfaced
- * via `buff model bandit`. All writes are best-effort.
+ * via `nuvira model bandit`. All writes are best-effort.
  */
 import type { BanditOutcome } from './router-bandit.js';
 /** One router's pick for a task (deterministic heuristic OR bandit). */
@@ -113,7 +113,7 @@ export declare class RouterPromotion {
      *                     meaningful (ruflo's promotion gate needs a sample).
      */
     evaluate(minDecisions?: number): PromotionStatus;
-    /** Clear the trajectory (used by `buff model bandit reset`). */
+    /** Clear the trajectory (used by `nuvira model bandit reset`). */
     reset(): void;
     private append;
 }

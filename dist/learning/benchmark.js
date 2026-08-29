@@ -5,19 +5,19 @@
  * measures: success rate, output quality, latency, and cost.
  *
  * Usage:
- *   buff benchmark                          — Run all tasks against default provider
- *   buff benchmark --provider groq          — Run against a specific provider
- *   buff benchmark --model llama-3.3-70b    — Run against a specific model
- *   buff benchmark --tasks quick            — Run only quick tasks
- *   buff benchmark --budget 0.50            — Stop if costs exceed $0.50
- *   buff benchmark list                     — List available benchmark tasks
- *   buff benchmark results                  — Show previous benchmark results
+ *   nuvira benchmark                          — Run all tasks against default provider
+ *   nuvira benchmark --provider groq          — Run against a specific provider
+ *   nuvira benchmark --model llama-3.3-70b    — Run against a specific model
+ *   nuvira benchmark --tasks quick            — Run only quick tasks
+ *   nuvira benchmark --budget 0.50            — Stop if costs exceed $0.50
+ *   nuvira benchmark list                     — List available benchmark tasks
+ *   nuvira benchmark results                  — Show previous benchmark results
  *
- * Results stored in: ~/.buff/memory/benchmarks.json
+ * Results stored in: ~/.nuvira/memory/benchmarks.json
  */
 import { readFileSync, writeFileSync, existsSync, mkdirSync } from 'node:fs';
+import { envBuff, resolveNuviraHome } from '../config/paths.js';
 import { join } from 'node:path';
-import { homedir } from 'node:os';
 import { estimateTokens, calculateCost } from './cost-tracker.js';
 import { logger } from '../utils/logger.js';
 // ─── Benchmark Tasks ────────────────────────────────────────────────────────
@@ -260,9 +260,9 @@ const BENCHMARK_TASKS = [
     },
 ];
 // ─── Constants ──────────────────────────────────────────────────────────────
-// BUFF_MEMORY_DIR override keeps test suites out of the real ~/.buff store
+// NUVIRA_MEMORY_DIR override keeps test suites out of the real ~/.nuvira store
 // (same convention as eval-framework.ts / session-recall.ts / dashboard).
-const MEMORY_DIR = process.env.BUFF_MEMORY_DIR || join(homedir(), '.buff', 'memory');
+const MEMORY_DIR = envBuff('MEMORY_DIR') || join(resolveNuviraHome(), 'memory');
 const BENCHMARK_PATH = join(MEMORY_DIR, 'benchmarks.json');
 const CURRENT_VERSION = 1;
 const MAX_BENCHMARK_RUNS = 50;

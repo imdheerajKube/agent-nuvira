@@ -7,7 +7,7 @@
  * - Average task duration (optional, for future use)
  * - Total runs count
  *
- * Data is stored as JSON at ~/.buff/memory/agent-stats.json
+ * Data is stored as JSON at ~/.nuvira/memory/agent-stats.json
  * and updated after each orchestration run.
  */
 export interface AgentPerformance {

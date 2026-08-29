@@ -5,15 +5,15 @@
  * measures: success rate, output quality, latency, and cost.
  *
  * Usage:
- *   buff benchmark                          — Run all tasks against default provider
- *   buff benchmark --provider groq          — Run against a specific provider
- *   buff benchmark --model llama-3.3-70b    — Run against a specific model
- *   buff benchmark --tasks quick            — Run only quick tasks
- *   buff benchmark --budget 0.50            — Stop if costs exceed $0.50
- *   buff benchmark list                     — List available benchmark tasks
- *   buff benchmark results                  — Show previous benchmark results
+ *   nuvira benchmark                          — Run all tasks against default provider
+ *   nuvira benchmark --provider groq          — Run against a specific provider
+ *   nuvira benchmark --model llama-3.3-70b    — Run against a specific model
+ *   nuvira benchmark --tasks quick            — Run only quick tasks
+ *   nuvira benchmark --budget 0.50            — Stop if costs exceed $0.50
+ *   nuvira benchmark list                     — List available benchmark tasks
+ *   nuvira benchmark results                  — Show previous benchmark results
  *
- * Results stored in: ~/.buff/memory/benchmarks.json
+ * Results stored in: ~/.nuvira/memory/benchmarks.json
  */
 import type { InferenceProvider } from '../inference/interface.js';
 /** Difficulty level of a benchmark task */

@@ -2,11 +2,11 @@
  * Doctor command — One-command diagnosis of all provider configurations.
  *
  * Usage:
- *   buff doctor                           — Run full health check on all providers
- *   buff doctor --provider groq           — Check only a specific provider
- *   buff doctor --watch                   — Continuous monitoring mode (refreshes every 30s)
- *   buff doctor --verbose                 — Show detailed diagnostic info
- *   buff doctor --fix                     — Attempt auto-fix for common issues (create ~/.buff dirs, etc.)
+ *   nuvira doctor                           — Run full health check on all providers
+ *   nuvira doctor --provider groq           — Check only a specific provider
+ *   nuvira doctor --watch                   — Continuous monitoring mode (refreshes every 30s)
+ *   nuvira doctor --verbose                 — Show detailed diagnostic info
+ *   nuvira doctor --fix                     — Attempt auto-fix for common issues (create ~/.nuvira dirs, etc.)
  *
  * The health check runs all provider tests in parallel with timeouts:
  *   1. API Key presence check
@@ -195,8 +195,8 @@ export function auditJsonlIntegrity(filePath) {
 }
 /**
  * Secrets-hygiene check: for each keyed provider, is the key supplied via a
- * secure env var (or a `~/.buff/.env` file) rather than hardcoded in the
- * plaintext `~/.buff/buffconfig.json`? Pure + testable (env passed in).
+ * secure env var (or a `~/.nuvira/.env` file) rather than hardcoded in the
+ * plaintext `~/.nuvira/buffconfig.json`? Pure + testable (env passed in).
  */
 export function checkSecretsBackend(config, env) {
     const envVars = [
@@ -228,8 +228,8 @@ export function checkSecretsBackend(config, env) {
         return {
             name: 'Secrets Backend',
             status: 'warn',
-            message: `${inPlaintext.join(', ')} API key(s) stored in plaintext ~/.buff/buffconfig.json`,
-            detail: `Use ${envVars.map((v) => v.varName).join(' / ')} env vars or ~/.buff/.env instead (P7 security default) — keys are never logged. Multi-account apiKeys arrays are flagged too.`,
+            message: `${inPlaintext.join(', ')} API key(s) stored in plaintext ~/.nuvira/buffconfig.json`,
+            detail: `Use ${envVars.map((v) => v.varName).join(' / ')} env vars or ~/.nuvira/.env instead (P7 security default) — keys are never logged. Multi-account apiKeys arrays are flagged too.`,
             fix: 'Move keys to environment variables: export GROQ_API_KEY=... (etc.)',
         };
     }
@@ -238,7 +238,7 @@ export function checkSecretsBackend(config, env) {
             name: 'Secrets Backend',
             status: 'pass',
             message: `${viaEnv.join(', ')} key(s) supplied via environment (not plaintext)`,
-            detail: 'Keys come from env vars / ~/.buff/.env — never written to buffconfig.json.',
+            detail: 'Keys come from env vars / ~/.nuvira/.env — never written to buffconfig.json.',
         };
     }
     return {
@@ -637,8 +637,8 @@ export async function runSystemChecks(configManager) {
         name: 'Memory Directory',
         status: memoryExists ? 'pass' : 'warn',
         message: memoryExists
-            ? `~/.buff/memory/ exists`
-            : `~/.buff/memory/ not found (will be created on first use)`,
+            ? `~/.nuvira/memory/ exists`
+            : `~/.nuvira/memory/ not found (will be created on first use)`,
         detail: `Path: ${memoryDir}`,
     });
     // 2b. Workspace DB + current project (Phase A2). The project registry
@@ -736,9 +736,9 @@ export async function runSystemChecks(configManager) {
         name: 'Plugin Directories',
         status: 'pass',
         message: `plugins/${existsSync(pluginDir) ? '✅' : '⏳'} agents/${existsSync(agentDir) ? '✅' : '⏳'} workflows/${existsSync(workflowDir) ? '✅' : '⏳'}`,
-        detail: `~/.buff/plugins/: ${existsSync(pluginDir) ? 'exists' : 'will create on first scan'}\n` +
-            `~/.buff/agents/: ${existsSync(agentDir) ? 'exists' : 'will create on first scan'}\n` +
-            `~/.buff/workflows/: ${existsSync(workflowDir) ? 'exists' : 'will create on first scan'}`,
+        detail: `~/.nuvira/plugins/: ${existsSync(pluginDir) ? 'exists' : 'will create on first scan'}\n` +
+            `~/.nuvira/agents/: ${existsSync(agentDir) ? 'exists' : 'will create on first scan'}\n` +
+            `~/.nuvira/workflows/: ${existsSync(workflowDir) ? 'exists' : 'will create on first scan'}`,
     });
     // 5. CLI tool availability checks
     const cliChecks = checkCliTools();
@@ -1074,7 +1074,7 @@ export class DoctorCommand extends BaseCommand {
                 name: 'Configuration',
                 status: 'fail',
                 message: `No API key found for '${providerType}'`,
-                detail: `Set ${this.getEnvVarName(providerType)} environment variable or add to ~/.buff/buffconfig.json`,
+                detail: `Set ${this.getEnvVarName(providerType)} environment variable or add to ~/.nuvira/buffconfig.json`,
                 fix: this.getFixSuggestion(providerType),
             });
         }
@@ -1207,7 +1207,7 @@ export class DoctorCommand extends BaseCommand {
                 name: 'Provider Instantiation',
                 status: 'fail',
                 message: `Failed to create provider: ${err instanceof Error ? err.message : String(err)}`,
-                detail: `Check your configuration in ~/.buff/buffconfig.json`,
+                detail: `Check your configuration in ~/.nuvira/buffconfig.json`,
                 fix: this.getFixSuggestion(providerType),
             });
         }
@@ -1255,7 +1255,7 @@ export class DoctorCommand extends BaseCommand {
         else {
             console.log(`     ❌ Unreachable: ${probe.error}`);
             console.log('     💡 Start the sidecar: docker compose -f docker-compose.nuvira.yml --profile base up -d');
-            console.log('     💡 Or set providers.nuvira.baseUrl in ~/.buff/buffconfig.json');
+            console.log('     💡 Or set providers.nuvira.baseUrl in ~/.nuvira/buffconfig.json');
         }
     }
     renderProviderSection(results, verbose) {
@@ -1304,7 +1304,7 @@ export class DoctorCommand extends BaseCommand {
     async autoFix(sysChecks, providerResults) {
         logger.highlight('\n  ── Auto-Fix Mode ──');
         let fixesApplied = 0;
-        // 1. Create ~/.buff/ directories if missing
+        // 1. Create ~/.nuvira/ directories if missing
         const nuviraDir = resolveNuviraHome();
         const dirsToCreate = [
             nuviraDir,
@@ -1383,7 +1383,7 @@ export class DoctorCommand extends BaseCommand {
     }
     getFixSuggestion(providerType) {
         const envVar = this.getEnvVarName(providerType);
-        return `Set ${envVar}=your_api_key in your shell profile, or run:\n         echo "export ${envVar}=your_key" >> ~/.zshrc\n         Or add it to ~/.buff/buffconfig.json`;
+        return `Set ${envVar}=your_api_key in your shell profile, or run:\n         echo "export ${envVar}=your_key" >> ~/.zshrc\n         Or add it to ~/.nuvira/buffconfig.json`;
     }
     getEndpointFailureDetail(providerType) {
         const endpoints = {

@@ -1,7 +1,7 @@
 /**
  * Team Memory — Git-synced shared memory for team collaboration.
  *
- * The team memory is stored in a git repository at `~/.buff/team/` (or a
+ * The team memory is stored in a git repository at `~/.nuvira/team/` (or a
  * configurable path). It contains:
  *
  *   trajectories/  — Shared agent execution trajectories (JSON)
@@ -9,9 +9,9 @@
  *   templates/     — Team workflow templates (JSON)
  *
  * Commands:
- *   buff team join <repo-url>  — Clone the team repo
- *   buff team sync             — Pull latest + push local changes
- *   buff team share            — Share local trajectories with team
+ *   nuvira team join <repo-url>  — Clone the team repo
+ *   nuvira team sync             — Pull latest + push local changes
+ *   nuvira team share            — Share local trajectories with team
  *
  * The sync operation:
  *   1. Pull latest from remote
@@ -45,7 +45,7 @@ export interface SyncResult {
 }
 /**
  * Initialize the team memory directory as a git repository.
- * Called by `buff team join` or `buff team init`.
+ * Called by `nuvira team join` or `nuvira team init`.
  */
 export declare function initTeamMemory(repoUrl?: string, cwd?: string): Promise<void>;
 /**

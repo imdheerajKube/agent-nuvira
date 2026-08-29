@@ -1,4 +1,5 @@
 import { readFileSync, existsSync } from 'node:fs';
+import { envBuff, resolveNuviraHome } from '../config/paths.js';
 import { join } from 'node:path';
 import { homedir } from 'node:os';
 /**
@@ -25,15 +26,17 @@ export function loadEnv() {
     if (projectEnv) {
         Object.assign(env, projectEnv);
     }
-    // Try loading from ~/.nuvira/.env (preferred) or ~/.buff/.env (legacy).
-    // NUVIRA_ENV_FILE / BUFF_ENV_FILE overrides the home .env path.
-    const homeEnvPath = (process.env.NUVIRA_ENV_FILE && process.env.NUVIRA_ENV_FILE.trim().length > 0)
-        ? process.env.NUVIRA_ENV_FILE
-        : (process.env.BUFF_ENV_FILE && process.env.BUFF_ENV_FILE.trim().length > 0)
-            ? process.env.BUFF_ENV_FILE
+    // Try loading from ~/.nuvira/.env (preferred) or ~/.nuvira/.env (legacy).
+    // NUVIRA_ENV_FILE / NUVIRA_ENV_FILE overrides the home .env path.
+    const nuviraEnvFile = process.env.NUVIRA_ENV_FILE?.trim();
+    const buffEnvFile = envBuff('ENV_FILE')?.trim();
+    const homeEnvPath = (nuviraEnvFile && nuviraEnvFile.length > 0)
+        ? nuviraEnvFile
+        : (buffEnvFile && buffEnvFile.length > 0)
+            ? buffEnvFile
             : existsSync(join(homedir(), '.nuvira', '.env'))
                 ? join(homedir(), '.nuvira', '.env')
-                : join(homedir(), '.buff', '.env');
+                : join(resolveNuviraHome(), '.env');
     if (existsSync(homeEnvPath)) {
         const homeEnv = parseEnvFile(readFileSync(homeEnvPath, 'utf-8'));
         Object.assign(env, homeEnv);

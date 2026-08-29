@@ -2,14 +2,14 @@
  * Execute command — Run a multi-agent pipeline to accomplish a goal.
  *
  * Single-shot mode:
- *   buff execute "add JWT authentication to the Express app"
- *   buff execute "create a CLI tool" --provider gemini --dry-run
- *   buff execute "add tests" --verbose --memory
- *   buff execute "fix bug" --memory --memory-stats
- *   buff execute "run tests" --sandbox
+ *   nuvira execute "add JWT authentication to the Express app"
+ *   nuvira execute "create a CLI tool" --provider gemini --dry-run
+ *   nuvira execute "add tests" --verbose --memory
+ *   nuvira execute "fix bug" --memory --memory-stats
+ *   nuvira execute "run tests" --sandbox
  *
  * Interactive development mode (no goal argument):
- *   buff execute
+ *   nuvira execute
  *     → Model picker (if no --model flag)
  *     → Interactive loop: goal → orchestrator → results → next goal
  *     → Type /exit to quit

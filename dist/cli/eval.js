@@ -7,15 +7,15 @@
  * installs, and recovery via new approaches).
  *
  * Usage:
- *   buff eval run                      — Run all eval tasks against default provider
- *   buff eval run --provider groq      — Run against a specific provider
- *   buff eval run --model llama-3.3    — Use a specific model
- *   buff eval run --tasks quick        — Run only quick tasks
- *   buff eval run --budget 0.50        — Stop if costs exceed $0.50
- *   buff eval list                     — List available eval tasks
- *   buff eval results                  — Show previous eval runs
- *   buff eval score                    — Show the scoring rules
- *   buff eval clear                    — Clear all eval data
+ *   nuvira eval run                      — Run all eval tasks against default provider
+ *   nuvira eval run --provider groq      — Run against a specific provider
+ *   nuvira eval run --model llama-3.3    — Use a specific model
+ *   nuvira eval run --tasks quick        — Run only quick tasks
+ *   nuvira eval run --budget 0.50        — Stop if costs exceed $0.50
+ *   nuvira eval list                     — List available eval tasks
+ *   nuvira eval results                  — Show previous eval runs
+ *   nuvira eval score                    — Show the scoring rules
+ *   nuvira eval clear                    — Clear all eval data
  */
 import { Command } from 'commander';
 import { BaseCommand, getCliName } from './commands.js';
@@ -262,7 +262,7 @@ export class EvalCommand extends BaseCommand {
         // ~$0 cost) — the exact misleading "consistent 25%" result reported on
         // this machine. Point the user at the fix instead.
         if (isPlaceholderApiKey(resolvedConfig.apiKey)) {
-            const tip = `     Set a real key: buff config set providers.${providerName}.apiKey <real-key>`;
+            const tip = `     Set a real key: nuvira config set providers.${providerName}.apiKey <real-key>`;
             if (options.model) {
                 // An explicit --model does NOT fix a dead key — warn loudly but let the
                 // explicit user choice proceed (they may be testing something specific).
@@ -272,7 +272,7 @@ export class EvalCommand extends BaseCommand {
             else {
                 logger.error(`  🚫 ${providerName} is pinned with a placeholder API key ("${resolvedConfig.apiKey}") — this is NOT a real key, so every eval task would fail auth.`);
                 logger.error(tip);
-                logger.error(`     Or let the router pick the best available provider: buff config set defaultProvider auto (then rerun buff eval run).`);
+                logger.error(`     Or let the router pick the best available provider: nuvira config set defaultProvider auto (then rerun nuvira eval run).`);
                 return;
             }
         }
@@ -415,8 +415,8 @@ export class EvalCommand extends BaseCommand {
                 console.log(`    ${difficulty} ${t.id.padEnd(24)} ${t.title.padEnd(34)} ${timeBadge}`);
             }
         }
-        console.log(`\n  Usage: buff eval run --tasks <id1,id2>   (specific tasks)`);
-        console.log(`         buff eval run --tasks quick        (by time estimate)`);
+        console.log(`\n  Usage: nuvira eval run --tasks <id1,id2>   (specific tasks)`);
+        console.log(`         nuvira eval run --tasks quick        (by time estimate)`);
         console.log('');
     }
     async showResults(options) {
@@ -468,8 +468,8 @@ export class EvalCommand extends BaseCommand {
             console.log(`\n  ${i + 1}. ${date} — ${r.provider}/${r.model}`);
             console.log(`     Score: ${(s.avgCompositeScore * 100).toFixed(1)}%  |  Completion: ${(s.completionRate * 100).toFixed(0)}%  |  Tests: ${(s.testPassRate * 100).toFixed(0)}%  |  Recovery: ${(s.recoveryRate * 100).toFixed(0)}%  |  Cost: $${s.totalCostUsd.toFixed(6)}`);
         }
-        console.log(`\n  Show details: buff eval results --last`);
-        console.log(`  Compare runs: buff eval results --compare  (M2b experience-parity axes: stuck / rework / time)`);
+        console.log(`\n  Show details: nuvira eval results --last`);
+        console.log(`  Compare runs: nuvira eval results --compare  (M2b experience-parity axes: stuck / rework / time)`);
         console.log('');
     }
 }

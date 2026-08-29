@@ -349,9 +349,15 @@ export class ErrorRepairEngine {
                         }
                         // Append error context to the goal so the next invocation knows what went wrong
                         const errorSuffix = `\n\n[REPAIR ATTEMPT ${attemptNumber}]\nThe previous attempt failed with:\n${originalError}\n\nPlease learn from this error and provide a correct answer.`;
+                        // Wire failure lessons into repair: when re-prompting, inject known
+                        // failure patterns so the model avoids repeating past mistakes.
+                        const failureLessonContext = context.metadata?.failureLessonContext;
+                        const lessonSuffix = failureLessonContext
+                            ? `\n\n## Known Failure Patterns (from past runs)\nAvoid these specific issues:${failureLessonContext}`
+                            : '';
                         context = {
                             ...context,
-                            goal: context.goal + errorSuffix,
+                            goal: context.goal + errorSuffix + lessonSuffix,
                         };
                         result = await executeFn(context, callLLM);
                         break;

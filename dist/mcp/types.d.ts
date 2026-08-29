@@ -168,7 +168,7 @@ export interface MCPConnectionState {
     error?: string;
 }
 /** The default directory where MCP server configs are stored */
-export declare const MCP_CONFIG_DIR = ".buff/mcp";
+export declare const MCP_CONFIG_DIR = ".nuvira/mcp";
 /** The current MCP protocol version */
 export declare const MCP_PROTOCOL_VERSION = "2025-06-18";
 //# sourceMappingURL=types.d.ts.map

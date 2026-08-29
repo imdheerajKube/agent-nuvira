@@ -54,7 +54,7 @@ export class SkillRunnerAgent extends Agent {
             return {
                 success: false,
                 summary: `Skill not found: '${skillRef.skillName}'`,
-                error: `No compiled skill matches '${skillRef.skillName}'. Run 'buff skill list' to see available skills.`,
+                error: `No compiled skill matches '${skillRef.skillName}'. Run 'nuvira skill list' to see available skills.`,
             };
         }
         // Mark the skill as used

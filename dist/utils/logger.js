@@ -4,7 +4,7 @@ import { isJsonLogMode, jsonLogLine } from '../enterprise/log.js';
 let currentLogLevel = 'info';
 /**
  * When true, the logger emits nothing at all (not even errors).
- * Used by machine-readable modes (e.g. `buff execute --json-events`) so the
+ * Used by machine-readable modes (e.g. `nuvira execute --json-events`) so the
  * NDJSON stdout stream stays pure — the human-readable event echo (LoggerConsumer)
  * and incidental warn/info lines all flow through the logger, so one switch
  * keeps stdout clean for CI/scripts while the JSON events carry the detail.

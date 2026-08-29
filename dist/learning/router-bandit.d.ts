@@ -14,7 +14,7 @@
  *   providers get the highest α bump on success (a cheap successful call is
  *   the most cost-efficient outcome), failures always β++.
  *
- * Persisted to ~/.buff/memory/router-bandit.json (respects BUFF_MEMORY_DIR).
+ * Persisted to ~/.nuvira/memory/router-bandit.json (respects NUVIRA_MEMORY_DIR).
  * All writes are best-effort — a failed write must never break routing.
  */
 import { type ComplexityLevel } from './hybrid-router.js';
@@ -192,7 +192,7 @@ export declare class RouterBandit {
     sampleScore(provider: string, complexity: ComplexityLevel, score: number, taskIntent?: string): number;
     /** Full state snapshot (for CLI display / tests). */
     getState(): RouterBanditState;
-    /** Reset all state (used by tests and `buff model bandit reset`). */
+    /** Reset all state (used by tests and `nuvira model bandit reset`). */
     reset(): void;
 }
 /** Get or create the RouterBandit singleton. */

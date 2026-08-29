@@ -371,8 +371,8 @@ export class CredentialStore {
                     'esac\n';
             writeFileSync(askPassPath, askPassContent, 'utf-8');
             // Values ride in env so the script text stays literal and safe.
-            process.env.BUFF_GIT_USERNAME = username;
-            process.env.BUFF_GIT_TOKEN = token;
+            process.env.NUVIRA_GIT_USERNAME = username;
+            process.env.NUVIRA_GIT_TOKEN = token;
             try {
                 if (!isWindows) {
                     execSync(`chmod +x "${askPassPath}"`, { timeout: 2000 });
@@ -424,8 +424,8 @@ export class CredentialStore {
             catch { /* best-effort */ }
             delete process.env.GIT_ASKPASS;
         }
-        delete process.env.BUFF_GIT_USERNAME;
-        delete process.env.BUFF_GIT_TOKEN;
+        delete process.env.NUVIRA_GIT_USERNAME;
+        delete process.env.NUVIRA_GIT_TOKEN;
         // Remove SSH_ASKPASS script if we created one
         // (already cleaned up in setupGitCredentials)
         // Unset terminal prompt disable

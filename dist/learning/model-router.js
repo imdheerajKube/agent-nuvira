@@ -70,7 +70,7 @@ export function recommendModel(agentType, configManager) {
     }
     return {
         provider: 'local',
-        reason: 'Nothing available yet — run `buff models refresh` or set an API key (local-only if Ollama is running)',
+        reason: 'Nothing available yet — run `nuvira models refresh` or set an API key (local-only if Ollama is running)',
     };
 }
 /**

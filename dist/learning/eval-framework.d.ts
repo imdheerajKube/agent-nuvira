@@ -17,14 +17,14 @@
  *                                  of just reporting "planner/runner failed"?
  *
  * Usage:
- *   buff eval run                        — Run all eval tasks against default provider
- *   buff eval run --provider groq        — Run against a specific provider
- *   buff eval run --tasks js-fizzbuzz    — Run specific tasks
- *   buff eval list                       — List available eval tasks
- *   buff eval results                    — Show previous eval runs
- *   buff eval score                      — Show the scoring rules
+ *   nuvira eval run                        — Run all eval tasks against default provider
+ *   nuvira eval run --provider groq        — Run against a specific provider
+ *   nuvira eval run --tasks js-fizzbuzz    — Run specific tasks
+ *   nuvira eval list                       — List available eval tasks
+ *   nuvira eval results                    — Show previous eval runs
+ *   nuvira eval score                      — Show the scoring rules
  *
- * Results stored in: ~/.buff/memory/evals.json
+ * Results stored in: ~/.nuvira/memory/evals.json
  */
 import type { InferenceProvider } from '../inference/interface.js';
 import { ConfigManager } from '../config/manager.js';
@@ -34,7 +34,7 @@ import { type OrchestrationResult } from '../agents/orchestrator.js';
  * agent-nuvira against the reference agents on the axes users actually feel:
  * completion rate, stuck states, rework turns, and time-to-done.
  *
- * Run with: `buff eval run --suite m2b`
+ * Run with: `nuvira eval run --suite m2b`
  *
  * The suite includes:
  * - Bug-fix tasks (easy): measure quick-turnaround repair
@@ -319,7 +319,7 @@ export declare function formatEvalMarkdown(run: EvalRun): string;
  * index, and includes a per-task stuck/rework breakdown.
  */
 export declare function writeBenchmarkReport(run: EvalRun, outputDir: string): string;
-/** Describe the scoring rules for the `buff eval score` command. */
+/** Describe the scoring rules for the `nuvira eval score` command. */
 export declare function formatEvalScoreRules(): string;
 /** Get all available eval tasks. */
 export declare function getEvalTasks(): EvalTask[];

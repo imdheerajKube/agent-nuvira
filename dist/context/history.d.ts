@@ -1,7 +1,7 @@
 /**
  * ChatHistory — Stores and retrieves chat conversation history.
  *
- * History is stored in a JSON file at ~/.buff/memory/history.json
+ * History is stored in a JSON file at ~/.nuvira/memory/history.json
  * and supports keyword search for retrieving past conversations.
  *
  * Features:

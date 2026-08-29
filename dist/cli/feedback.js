@@ -2,10 +2,10 @@
  * Feedback command — Record, view, and manage user feedback on agent outputs.
  *
  * Usage:
- *   buff feedback record <trajectory-id>  — Rate a trajectory (👍/👎)
- *   buff feedback list                     — Show recent feedback entries
- *   buff feedback stats                    — Show aggregated feedback statistics
- *   buff feedback clear                    — Clear all feedback data
+ *   nuvira feedback record <trajectory-id>  — Rate a trajectory (👍/👎)
+ *   nuvira feedback list                     — Show recent feedback entries
+ *   nuvira feedback stats                    — Show aggregated feedback statistics
+ *   nuvira feedback clear                    — Clear all feedback data
  *
  * Feedback helps the self-improvement system learn which outputs are
  * useful and tune provider/model routing accordingly.
@@ -125,7 +125,7 @@ export class FeedbackCommand extends BaseCommand {
         else {
             entries = store.getAll();
             if (entries.length === 0) {
-                logger.info('No feedback recorded yet. Use `buff feedback record` to add some.');
+                logger.info('No feedback recorded yet. Use `nuvira feedback record` to add some.');
                 return;
             }
         }
@@ -155,7 +155,7 @@ export class FeedbackCommand extends BaseCommand {
         logger.highlight('⭐ Feedback Statistics');
         console.log('');
         if (stats.totalRatings === 0) {
-            logger.info('No feedback recorded yet. Use `buff feedback record <trajectory-id>` to add some.');
+            logger.info('No feedback recorded yet. Use `nuvira feedback record <trajectory-id>` to add some.');
             console.log('');
             return;
         }

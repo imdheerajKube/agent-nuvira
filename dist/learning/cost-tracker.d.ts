@@ -1,7 +1,7 @@
 /**
  * CostTracker — Tracks API usage costs per provider per session.
  *
- * Stores cost data as JSON at ~/.buff/memory/cost-tracker.json
+ * Stores cost data as JSON at ~/.nuvira/memory/cost-tracker.json
  * and provides CLI commands to view costs.
  *
  * Cost per 1K tokens (approximate, in USD):

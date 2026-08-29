@@ -12,17 +12,17 @@
  * Checkpoints are JSON-serialized (JSON.stringify drops function fields like
  * `onRateLimit` automatically), keyed by a deterministic id derived from
  * `goal + workingDirectory` plus an optional explicit id. Persisted to
- * `~/.buff/memory/checkpoints/` (honors BUFF_MEMORY_DIR). All reads/writes are
+ * `~/.nuvira/memory/checkpoints/` (honors NUVIRA_MEMORY_DIR). All reads/writes are
  * best-effort — a corrupt or missing checkpoint must never crash a run.
  */
 import { existsSync, mkdirSync, readFileSync, readdirSync, writeFileSync } from 'node:fs';
+import { envBuff, resolveNuviraHome } from '../config/paths.js';
 import { join } from 'node:path';
-import { homedir } from 'node:os';
 import { createHash } from 'node:crypto';
 // ─── Storage ────────────────────────────────────────────────────────────────
-const DEFAULT_MEMORY_DIR = join(homedir(), '.buff', 'memory');
+const DEFAULT_MEMORY_DIR = join(resolveNuviraHome(), 'memory');
 function checkpointsDir() {
-    const base = process.env.BUFF_MEMORY_DIR || DEFAULT_MEMORY_DIR;
+    const base = envBuff('MEMORY_DIR') || DEFAULT_MEMORY_DIR;
     return join(base, 'checkpoints');
 }
 // ─── Helpers ────────────────────────────────────────────────────────────────
@@ -86,7 +86,7 @@ export function loadCheckpoint(id) {
         return null;
     }
 }
-/** List all saved checkpoints, newest first (for `buff execute --checkpoint-list`). */
+/** List all saved checkpoints, newest first (for `nuvira execute --checkpoint-list`). */
 export function listCheckpoints() {
     try {
         const dir = checkpointsDir();

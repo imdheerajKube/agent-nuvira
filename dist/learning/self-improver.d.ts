@@ -11,7 +11,7 @@
  * 5. Provides optimization recommendations (best models per agent)
  *
  * The SelfImprover is called by the Orchestrator post-execution hook.
- * Users can also interact with it via the `buff learn` and `buff skill` CLI commands.
+ * Users can also interact with it via the `nuvira learn` and `nuvira skill` CLI commands.
  */
 import type { OrchestrationResult } from '../agents/orchestrator.js';
 import type { LLMCallFn } from '../agents/agent.js';

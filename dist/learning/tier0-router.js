@@ -136,7 +136,7 @@ export function applyTier0Transform(intent, artifact) {
         case 'dedupe-import': {
             const lines = artifact.content.split('\n');
             // Key on the NORMALIZED FULL import line (specifier + bindings), not just
-            // the module — dropping `import { b } from "./m"` when `import { a } from
+            // the module — dropping `import { b } from "./m.js"` when `import { a } from
             // "./m"` exists would break every reference to `b`, and the syntax
             // validator (bracket balance) can't catch that. Only truly identical
             // duplicate import lines are safe to remove.

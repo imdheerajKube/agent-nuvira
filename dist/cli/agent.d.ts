@@ -2,11 +2,11 @@
  * Agent command — Scaffold and manage custom agents for the agent-baba-d platform.
  *
  * Usage:
- *   buff agent create <name>    — Create a new custom agent project from a template
- *   buff agent list             — List all discovered custom agent plugins
- *   buff agent info <name>      — Show details about a discovered agent plugin
+ *   nuvira agent create <name>    — Create a new custom agent project from a template
+ *   nuvira agent list             — List all discovered custom agent plugins
+ *   nuvira agent info <name>      — Show details about a discovered agent plugin
  *
- * The `buff agent create` command scaffolds a new project using the @agent-baba-d/sdk
+ * The `nuvira agent create` command scaffolds a new project using the @agent-baba-d/sdk
  * package, providing a ready-to-develop custom agent with:
  * - package.json with SDK dependency
  * - TypeScript configuration

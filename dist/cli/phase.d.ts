@@ -6,11 +6,11 @@
  * resume, status, and list operations.
  *
  * Usage:
- *   buff phase create "v2.0 Release" "Add auth" "Add API" "Publish"
- *   buff phase execute "v2.0 Release"
- *   buff phase resume "v2.0 Release"
- *   buff phase status "v2.0 Release"
- *   buff phase list
+ *   nuvira phase create "v2.0 Release" "Add auth" "Add API" "Publish"
+ *   nuvira phase execute "v2.0 Release"
+ *   nuvira phase resume "v2.0 Release"
+ *   nuvira phase status "v2.0 Release"
+ *   nuvira phase list
  */
 import { Command } from 'commander';
 import { BaseCommand } from './commands.js';

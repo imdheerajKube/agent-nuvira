@@ -8,7 +8,7 @@
  * 2. Review: Team member reviews the proposed changes
  * 3. Merge: Approved changes are applied to the working directory
  *
- * Review bundles are stored in ~/.buff/team/reviews/ and can be shared
+ * Review bundles are stored in ~/.nuvira/team/reviews/ and can be shared
  * via git (if team memory is set up) or locally.
  *
  * Each bundle contains:

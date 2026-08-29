@@ -9,8 +9,8 @@
  * Flow:
  * 1. Agent trajectories are stored → high-scoring ones are selected
  * 2. SkillCompiler analyzes them via LLM → extracts generalized skill definitions
- * 3. Skills are persisted as JSON in ~/.buff/skills/
- * 4. Users can list, inspect, and run skills via `buff skill`
+ * 3. Skills are persisted as JSON in ~/.nuvira/skills/
+ * 4. Users can list, inspect, and run skills via `nuvira skill`
  * 5. The SkillRunnerAgent executes skill steps as a pre-filled task plan
  */
 // ─── Constants ──────────────────────────────────────────────────────────────

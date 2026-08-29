@@ -4,7 +4,7 @@ import { getCache } from '../context/cache.js';
 import { logger } from '../utils/logger.js';
 /**
  * Cache command — manage inference cache
- * buff cache [clear|stats]
+ * nuvira cache [clear|stats]
  */
 export class CacheCommand extends BaseCommand {
     create() {

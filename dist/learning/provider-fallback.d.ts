@@ -122,8 +122,8 @@ export declare function extractRetryAfterMs(err: unknown): number | null;
  * Resolve the telemetry action tag for a registry write, honoring the
  * BUFF_TELEMETRY_ACTION env override.
  *
- * The VS Code extension spawns the CLI as a subprocess (`buff chat` /
- * `buff execute` / ...) and sets this env var at each spawn site, so IDE usage
+ * The VS Code extension spawns the CLI as a subprocess (`nuvira chat` /
+ * `nuvira execute` / ...) and sets this env var at each spawn site, so IDE usage
  * is attributed to its own action tags (ide-chat / ide-inline / ide-execute)
  * instead of blending into terminal-driven usage in the per-action
  * "learned from real usage" log. When unset, the caller's explicit action tag

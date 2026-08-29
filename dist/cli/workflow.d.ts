@@ -2,12 +2,12 @@
  * Workflow command — Lists, runs, and manages workflow templates.
  *
  * Usage:
- *   buff workflow list                    — Show available workflow templates
- *   buff workflow run quick-fix "goal"    — Run the quick-fix workflow
- *   buff workflow search <query>          — Search the GitHub workflow registry
- *   buff workflow install <template>      — Install template from the registry
- *   buff workflow publish <template-id>   — Prepare a local template for publishing
- *   buff workflow info <template>         — Show registry template details
+ *   nuvira workflow list                    — Show available workflow templates
+ *   nuvira workflow run quick-fix "goal"    — Run the quick-fix workflow
+ *   nuvira workflow search <query>          — Search the GitHub workflow registry
+ *   nuvira workflow install <template>      — Install template from the registry
+ *   nuvira workflow publish <template-id>   — Prepare a local template for publishing
+ *   nuvira workflow info <template>         — Show registry template details
  */
 import { Command } from 'commander';
 import { BaseCommand } from './commands.js';

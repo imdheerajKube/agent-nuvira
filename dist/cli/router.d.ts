@@ -9,7 +9,7 @@ export declare function createCLI(): Command;
  * Resolve the inference provider from CLI options.
  *
  * Supports both built-in providers (local, nim, gemini, openrouter, groq)
- * and auto-discovered plugin providers from ~/.buff/plugins/.
+ * and auto-discovered plugin providers from ~/.nuvira/plugins/.
  *
  * For plugin providers, the type string returned is the plugin's provider type.
  */

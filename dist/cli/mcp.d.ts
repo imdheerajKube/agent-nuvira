@@ -2,15 +2,15 @@
  * MCP CLI Command — Manage MCP (Model Context Protocol) server connections.
  *
  * Usage:
- *   buff mcp list              — List all discovered MCP servers and their tools
- *   buff mcp connect <name>    — Connect to a specific MCP server
- *   buff mcp connect --all     — Connect to all discovered MCP servers
- *   buff mcp call <tool>       — Call a tool with arguments
- *   buff mcp call <tool> --server <name>
- *   buff mcp call <tool> --args '{"key":"value"}'
- *   buff mcp info <name>       — Show detailed info for an MCP server
- *   buff mcp refresh           — Re-discover and reconnect to MCP servers
- *   buff mcp serve             — Expose agent tools as an MCP server (stdio)
+ *   nuvira mcp list              — List all discovered MCP servers and their tools
+ *   nuvira mcp connect <name>    — Connect to a specific MCP server
+ *   nuvira mcp connect --all     — Connect to all discovered MCP servers
+ *   nuvira mcp call <tool>       — Call a tool with arguments
+ *   nuvira mcp call <tool> --server <name>
+ *   nuvira mcp call <tool> --args '{"key":"value"}'
+ *   nuvira mcp info <name>       — Show detailed info for an MCP server
+ *   nuvira mcp refresh           — Re-discover and reconnect to MCP servers
+ *   nuvira mcp serve             — Expose agent tools as an MCP server (stdio)
  */
 import { Command } from 'commander';
 import { BaseCommand } from './commands.js';

@@ -16,8 +16,8 @@ import { recordActionFailure } from '../learning/failure-bookkeeping.js';
 import { resolveProvider } from './router.js';
 /**
  * Edit command — edit files using AI assistance
- * buff edit <file> [--provider nim] [--instruction "add error handling"]
- * buff edit <file> --auto-route -i "add error handling"   (router-ranked walk)
+ * nuvira edit <file> [--provider nim] [--instruction "add error handling"]
+ * nuvira edit <file> --auto-route -i "add error handling"   (router-ranked walk)
  */
 export class EditCommand extends BaseCommand {
     create() {
@@ -136,8 +136,8 @@ export class EditCommand extends BaseCommand {
                     author: process.env.USER || 'agent-baba-d',
                 });
                 logger.highlight(`\n📋 Created review bundle: ${review.id}`);
-                logger.info(`   Run \`buff team review show ${review.id}\` to view`);
-                logger.info(`   Run \`buff team review approve ${review.id}\` then \`buff team review merge ${review.id}\` to apply`);
+                logger.info(`   Run \`nuvira team review show ${review.id}\` to view`);
+                logger.info(`   Run \`nuvira team review approve ${review.id}\` then \`nuvira team review merge ${review.id}\` to apply`);
                 return;
             }
             writeFileSync(file, codeResult, 'utf-8');
@@ -254,8 +254,8 @@ export class EditCommand extends BaseCommand {
                     author: process.env.USER || 'agent-baba-d',
                 });
                 logger.highlight(`\n📋 Created review bundle: ${review.id}`);
-                logger.info(`   Run \`buff team review show ${review.id}\` to view`);
-                logger.info(`   Run \`buff team review approve ${review.id}\` then \`buff team review merge ${review.id}\` to apply`);
+                logger.info(`   Run \`nuvira team review show ${review.id}\` to view`);
+                logger.info(`   Run \`nuvira team review approve ${review.id}\` then \`nuvira team review merge ${review.id}\` to apply`);
                 return;
             }
             writeFileSync(file, codeResult, 'utf-8');

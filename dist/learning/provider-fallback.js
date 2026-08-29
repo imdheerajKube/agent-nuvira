@@ -19,6 +19,7 @@
  *   // Returns { response, provider: 'gemini', model: '...', attempts: 2 }
  */
 import { ProviderFactory } from '../inference/factory.js';
+import { envBuff } from '../config/paths.js';
 import { getPluginRegistry } from '../plugins/registry.js';
 import { logger } from '../utils/logger.js';
 import { getModelRegistry } from './model-registry.js';
@@ -233,8 +234,8 @@ export function extractRetryAfterMs(err) {
  * Resolve the telemetry action tag for a registry write, honoring the
  * BUFF_TELEMETRY_ACTION env override.
  *
- * The VS Code extension spawns the CLI as a subprocess (`buff chat` /
- * `buff execute` / ...) and sets this env var at each spawn site, so IDE usage
+ * The VS Code extension spawns the CLI as a subprocess (`nuvira chat` /
+ * `nuvira execute` / ...) and sets this env var at each spawn site, so IDE usage
  * is attributed to its own action tags (ide-chat / ide-inline / ide-execute)
  * instead of blending into terminal-driven usage in the per-action
  * "learned from real usage" log. When unset, the caller's explicit action tag
@@ -253,7 +254,7 @@ export function extractRetryAfterMs(err) {
  *   falls back to the caller's tag).
  */
 export function resolveTelemetryAction(defaultAction) {
-    const override = process.env.BUFF_TELEMETRY_ACTION;
+    const override = envBuff('TELEMETRY_ACTION');
     return override && override.trim() ? override.trim() : defaultAction;
 }
 export function recordRegistryFailure(providerType, model, err, errorType, action, latencyMs) {

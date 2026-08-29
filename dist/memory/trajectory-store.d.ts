@@ -9,7 +9,7 @@
  * When a new goal arrives, the Orchestrator queries past trajectories
  * and injects similar ones as few-shot examples into agent prompts.
  *
- * File location: ~/.buff/memory/trajectories.json
+ * File location: ~/.nuvira/memory/trajectories.json
  */
 import type { TaskStep } from '../agents/agent.js';
 import type { OrchestrationResult } from '../agents/orchestrator.js';

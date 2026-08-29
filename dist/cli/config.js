@@ -11,8 +11,8 @@ import { countKeyStates } from '../config/manager.js';
 import { PLATFORM_ENV_VARS, } from '../gateway/channel-directory.js';
 import { applyEnvToProcess, configurablePlatforms, envFilePath, envVarState, platformConfigStatus, platformEnvVarMeta, redactValue, writeEnvFile, } from '../gateway/platform-config.js';
 /**
- * Config command — manage buff configuration
- * buff config [set|get|list]
+ * Config command — manage nuvira configuration
+ * nuvira config [set|get|list]
  */
 export class ConfigCommand extends BaseCommand {
     create() {
@@ -113,7 +113,7 @@ export class ConfigCommand extends BaseCommand {
             logger.highlight('═'.repeat(64));
             console.log('');
             if (entries.length === 0) {
-                logger.info(`No vault accesses recorded yet (store: ~/.buff/memory/${VAULT_AUDIT_FILENAME}).`);
+                logger.info(`No vault accesses recorded yet (store: ~/.nuvira/memory/${VAULT_AUDIT_FILENAME}).`);
                 console.log('');
                 return;
             }
@@ -128,7 +128,7 @@ export class ConfigCommand extends BaseCommand {
             }
             console.log('');
             console.log('  Store is hash-chained + secret-scrubbed (never logs values).');
-            console.log('  Verify integrity: buff audit verify · full posture: buff doctor --enterprise');
+            console.log('  Verify integrity: nuvira audit verify · full posture: nuvira doctor --enterprise');
             console.log('');
         });
         vault
@@ -155,7 +155,7 @@ export class ConfigCommand extends BaseCommand {
                 else {
                     const storeLabel = st.tier === 'keyring' ? 'OS keychain' : st.tier === 'os-cli' ? `${st.backend}` : 'AES-256-GCM vault';
                     console.log(`  ✅ Moved ${result.migrated} key(s) into the ${storeLabel} for: ${result.providers.join(', ')}`);
-                    console.log('  buffconfig.json now stores vault refs — plaintext keys removed.');
+                    console.log('  nuviraconfig.json now stores vault refs — plaintext keys removed.');
                 }
             }
             catch (err) {
@@ -301,7 +301,7 @@ export class ConfigCommand extends BaseCommand {
             if (field === 'apiKeys') {
                 // M2.3 multi-account rotation: comma-separated list of ADDITIONAL keys
                 // for the same provider (the primary stays in `apiKey`). E.g.
-                //   buff config set providers.groq.apiKeys "k1,k2,k3"
+                //   nuvira config set providers.groq.apiKeys "k1,k2,k3"
                 // Empty/whitespace-only input CLEARS the list (remove rotation keys).
                 const keys = value.split(',').map((k) => k.trim()).filter((k) => k.length > 0);
                 typedValue = keys;
@@ -695,7 +695,7 @@ export class ConfigCommand extends BaseCommand {
     }
     initConfig() {
         logger.info('Configuration already initialized with defaults.');
-        logger.info('Edit ~/.buff/buffconfig.json or use: buff config set <key> <value>');
+        logger.info('Edit ~/.nuvira/buffconfig.json or use: nuvira config set <key> <value>');
         logger.info('Set API keys via environment variables or the config file.');
         console.log('');
         this.displayConfig();
@@ -704,7 +704,7 @@ export class ConfigCommand extends BaseCommand {
     createGatewayCommand() {
         const collect = (value, previous) => previous.concat([value]);
         const cmd = new Command('gateway')
-            .description('Manage gateway platform transports (tokens written to ~/.buff/.env)')
+            .description('Manage gateway platform transports (tokens written to ~/.nuvira/.env)')
             .addCommand(new Command('list')
             .description('Show every platform transport and its env-var status')
             .action(() => this.listPlatforms()))
@@ -772,7 +772,7 @@ export class ConfigCommand extends BaseCommand {
                 logger.info('ℹ  This is the VERIFIED list — these senders can now TRIGGER the agent');
                 logger.info('    when they message you on this platform (DMs and groups).');
                 if (platform === 'whatsapp') {
-                    logger.info('    To also send TO them by name, add a mapping: buff whatsapp contact add <Name> <number>');
+                    logger.info('    To also send TO them by name, add a mapping: nuvira whatsapp contact add <Name> <number>');
                 }
             }
         }
@@ -825,7 +825,7 @@ export class ConfigCommand extends BaseCommand {
         if (action === 'list') {
             logger.info('Gateway status recipients (always get pipeline completion summaries):');
             if (recipients.length === 0)
-                console.log('  (none — add one with: buff config gateway notify add whatsapp:Alex)');
+                console.log('  (none — add one with: nuvira config gateway notify add whatsapp:Alex)');
             for (const t of recipients)
                 console.log(`  📊  ${t}`);
             return;
@@ -849,7 +849,7 @@ export class ConfigCommand extends BaseCommand {
         logger.info('Applied to the running gateway immediately (recipients re-read per pipeline).');
     }
     listPlatforms() {
-        logger.info('Gateway platform transports (values live in ~/.buff/.env or env vars):');
+        logger.info('Gateway platform transports (values live in ~/.nuvira/.env or env vars):');
         for (const p of configurablePlatforms()) {
             const st = platformConfigStatus(p);
             console.log(`  ${st.configured ? '✅' : '❌'}  ${st.label} (${p})`);
@@ -858,7 +858,7 @@ export class ConfigCommand extends BaseCommand {
             }
         }
         console.log('');
-        console.log('Configure one with: buff config gateway set <platform>');
+        console.log('Configure one with: nuvira config gateway set <platform>');
     }
     async setPlatform(platform, opts) {
         if (!(platform in PLATFORM_ENV_VARS)) {

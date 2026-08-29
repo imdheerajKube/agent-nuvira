@@ -2,19 +2,19 @@
  * Memory command — Manage agent memory store with compression and pruning.
  *
  * Usage:
- *   buff memory                    — Show memory usage statistics
- *   buff memory stats              — Show detailed memory store statistics
- *   buff memory optimize           — Run automatic compression + pruning
- *   buff memory optimize --dry-run — Show what would be done without doing it
- *   buff memory optimize --aggressive — More aggressive compression (14d retention, 0.2 min score)
- *   buff memory prune              — Prune old/low-quality trajectories
- *   buff memory prune --max-age 30 — Remove trajectories older than 30 days
- *   buff memory prune --min-score 0.2 — Remove trajectories with score below 0.2
- *   buff memory prune --max-count 200 — Keep at most 200 trajectories
- *   buff memory summarize          — Summarize old trajectories by project fingerprint
- *   buff memory summarize --retention 14 — Keep originals newer than 14 days
- *   buff memory clear              — Clear all stored trajectories
- *   buff memory info               — Show detailed compression analysis
+ *   nuvira memory                    — Show memory usage statistics
+ *   nuvira memory stats              — Show detailed memory store statistics
+ *   nuvira memory optimize           — Run automatic compression + pruning
+ *   nuvira memory optimize --dry-run — Show what would be done without doing it
+ *   nuvira memory optimize --aggressive — More aggressive compression (14d retention, 0.2 min score)
+ *   nuvira memory prune              — Prune old/low-quality trajectories
+ *   nuvira memory prune --max-age 30 — Remove trajectories older than 30 days
+ *   nuvira memory prune --min-score 0.2 — Remove trajectories with score below 0.2
+ *   nuvira memory prune --max-count 200 — Keep at most 200 trajectories
+ *   nuvira memory summarize          — Summarize old trajectories by project fingerprint
+ *   nuvira memory summarize --retention 14 — Keep originals newer than 14 days
+ *   nuvira memory clear              — Clear all stored trajectories
+ *   nuvira memory info               — Show detailed compression analysis
  *
  * The memory optimization system provides:
  * - Configurable retention policy (age-based, score-based, count-based)
