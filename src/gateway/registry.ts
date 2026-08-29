@@ -60,30 +60,35 @@ export function stripGatewayReasoning(text: string): string {
   if (!text) return text;
   let t = text;
 
-  // 1. Strip planning block lines ("*   User:", "* Tone:", "* Drafting:", etc.).
-  //    Matches lines where the content after "*" looks like structured analysis
-  //    (key:value pairs, numbered stanzas, action items).
-  t = t.replace(/^\s*\*+\s+(?:User:|Subjects?:|Occasion:|Goal:|Delivery:|Tone:|Key elements?:|Stanza \d+:|Drafting:|Acknowledge:|Answer:|Tool:|Follow-ups?:|Follow-?ups?:|Let'?s go|The user (?:is|said|asks|wants|is asking)|Since this is|I should|I will|I'll|I would|Wait,|Actually,|Correction:|Self-Correction|Looking at|Given the|The (?:bridge|system|prompt|target)|Since the|My (?:text|plan|approach)|However,|But the|Let me|Let's|Really,|If I|The most direct|To be safe|I am acting|I need to|One more thing|I am communicating|Since I am|Actually the|I am the|Since I can't|I don't have|I should probably|I will just|I should check|I will send|Let me refine).*$/gim, '');
+  // ── Phase 1: Strip known planning/reasoning patterns ──
 
-  // 2. Strip meta-commentary about response format and tool usage.
-  //    These are multi-sentence deliberation blocks about HOW to respond.
-  t = t.replace(/^\s*(?:Wait,\s+the\s+(?:prompt|system)\s+says|Actually,\s+(?:looking\s+at|the\s+prompt)|Correction:\s+The\s+user|Self-Correction\s+on|Since\s+this\s+is\s+a\s+request|The\s+bridge\s+usually|Looking\s+at\s+the\s+\[Origin\]|Given\s+the\s+prompt|However,\s+the|But\s+the\s+bridge|Actually,\s+I'll|Let\s+me\s+refine|I'll\s+just\s+provide|I'll\s+do\s+both|I\s+will\s+provide|I\s+should\s+(?:use|check|just|provide|be|do)|I\s+am\s+(?:acting|communicating|the)|Since\s+I\s+(?:am|can't|don't)|One\s+more\s+thing|I\s+need\s+to|I\s+should\s+probably|I\s+will\s+just|Let\s+me\s+check|Let\s+me\s+see|Let's\s+go|I\s+will\s+send|I\s+should\s+send|Actually,\s+the\s+most|Wait,\s+if\s+I|Let's\s+refine).*$/gim, '');
+  // 1. Strip planning block lines starting with "* ".
+  //    Catches: "* User:", "* Tone:", "* Constraints:", "* Direct answer...",
+  //    "* Drafting:", "* Acknowledge:", "* Tool:", "* No preamble...",
+  //    "* End with suggest_followups", "* Let's refine:", etc.
+  t = t.replace(/^\s*\*+\s+(?:User|Subjects?|Occasion|Goal|Delivery|Tone|Key elements?|Stanza|Drafting|Acknowledge|Answer|Tool|Follow-?ups?|Constraints?|Direct|No\s|End\s|Let'?s|Since\s|Wait,|Actually,|Correction|Self-Correction|Looking\s|Given\s|The\s+(?:bridge|system|prompt|target|user)|Since\s+the|My\s+(?:text|plan|approach)|However,|But\s+the|Let\s+me|Let's|Really,|If\s+I|The\s+most|To\s+be\s+safe|I\s+am\s+(?:acting|communicating|the)|I\s+need\s+to|One\s+more\s+thing|I\s+am\s+communicating|Since\s+I\s+am|Actually\s+the|Since\s+I\s+can't|I\s+don't|I\s+should\s+probably|I\s+will\s+just|I\s+should\s+(?:check|send|use|provide|be|do)|I\s+will\s+(?:send|provide)|Let\s+me\s+refine|Appropriate|Appropriate\s+for).*$/gim, '');
 
-  // 3. Strip action-planning numbered lists ("1. Text response...", "2. gateway_send...").
-  t = t.replace(/^\s*\d+\.\s+(?:Text\s+response|gateway_send|suggest_followups|Provide\s+the|Acknowledge|Answer|Tool|The\s+response).*$/gim, '');
+  // 2. Strip self-evaluation numbered lists.
+  //    Catches: "1. Direct answer? Yes.", "2. No preamble? Yes.", "3. No internal reasoning? Yes."
+  t = t.replace(/^\s*\d+\.\s+(?:Direct\s+answer|No\s+(?:preamble|internal|bullet|narration|tool)|End\s+with|Preamble|Internal\s+reasoning|Tool\s+usage|Bullet-point|Narration|Gateway_send).*$/gim, '');
 
-  // 4. Strip response-format meta-planning blocks (multi-line deliberation).
-  //    These often start with a capitalized line and continue for several lines
-  //    discussing how to format the response.
-  t = t.replace(/(?:^|\n)\s*(?:Since\s+I\s+am\s+communicating|I\s+am\s+acting\s+as\s+a\s+bridge|The\s+user\s+is\s+communicating|I\s+don't\s+have\s+the\s+previous|I\s+need\s+to\s+find\s+out|Actually,\s+the\s+most\s+logical|Let's\s+refine:)[\s\S]*?(?=\n\s*[A-Z]|$)/g, '');
+  // 3. Strip action-planning numbered lists.
+  //    Catches: "1. Text response...", "2. gateway_send...", "3. suggest_followups..."
+  t = t.replace(/^\s*\d+\.\s+(?:Text\s+response|gateway_send|suggest_followups|Provide\s+the|Acknowledge|Answer\s*:|Tool\s*:|The\s+response).*$/gim, '');
+
+  // ── Phase 2: Strip multi-line deliberation blocks ──
+
+  // 4. Strip response-format meta-planning paragraphs.
+  //    Multi-line blocks discussing how to format/structure the response.
+  t = t.replace(/(?:^|\n)\s*(?:Since\s+I\s+am\s+communicating|I\s+am\s+acting\s+as\s+a\s+bridge|The\s+user\s+is\s+communicating|I\s+don't\s+have\s+the\s+previous|I\s+need\s+to\s+find\s+out|Actually,\s+the\s+most\s+logical|Let's\s+refine:|Wait,\s+the\s+prompt\s+says|Actually,\s+looking\s+at|Correction:\s+The\s+user|Self-Correction\s+on|Since\s+this\s+is\s+a\s+request|The\s+bridge\s+usually|Looking\s+at\s+the\s+\[Origin\]|Given\s+the\s+prompt|However,\s+the|But\s+the\s+bridge|Actually,\s+I'll|Let\s+me\s+refine|I'll\s+just\s+provide|I'll\s+do\s+both|I\s+will\s+provide|I\s+should\s+use|I\s+am\s+(?:acting|communicating)|Since\s+I\s+(?:am|can't|don't)|One\s+more\s+thing|I\s+need\s+to|I\s+should\s+probably|I\s+will\s+just|Let\s+me\s+(?:check|see)|Wait,\s+if\s+I|Let's\s+refine)[\s\S]*?(?=\n\s*(?:[A-Z\d\*]|$))/g, '');
 
   // 5. Strip preamble at the very start of the response.
-  //    "I would be happy to..." / "I'd be happy to..." followed by restating the request.
   t = t.replace(/^\s*(?:I\s+(?:would|'d|will)\s+be\s+happy\s+to\s+).{0,200}?\n\n/s, '');
 
   // 6. Strip tool-deliberation paragraphs about gateway_send usage.
-  //    Multi-line blocks discussing whether/how to use gateway_send.
-  t = t.replace(/(?:^|\n)\s*(?:Wait,\s+the\s+prompt\s+says\s+"first\s+briefly|Since\s+this\s+is\s+a\s+request\s+to\s+write|Actually,\s+looking\s+at\s+the\s+\[Origin\]|I\s+should\s+use\s+gateway_send|Correction:\s+The\s+user\s+said|Self-Correction\s+on\s+gateway_send|Let's\s+refine\s+the\s+poem|Wait,\s+if\s+I\s+call\s+gateway_send|Actually,\s+I'll\s+just\s+provide)[\s\S]*?(?=\n\s*(?:Poem|Two\s+little|Happy\s+4th|Here\s+is|\*\*Two|##|```|<|$))/g, '');
+  t = t.replace(/(?:^|\n)\s*(?:Wait,\s+the\s+prompt\s+says\s+"first\s+briefly|Since\s+this\s+is\s+a\s+request\s+to\s+write|Actually,\s+looking\s+at\s+the\s+\[Origin\]|I\s+should\s+use\s+gateway_send|Correction:\s+The\s+user\s+said|Self-Correction\s+on\s+gateway_send|Let's\s+refine\s+the|Wait,\s+if\s+I\s+call\s+gateway_send|Actually,\s+I'll\s+just\s+provide)[\s\S]*?(?=\n\s*(?:\d+\.|[A-Z]|$))/g, '');
+
+  // ── Phase 3: Cleanup ──
 
   // 7. Collapse runs of 3+ blank lines into 2.
   t = t.replace(/\n{3,}/g, '\n\n');
