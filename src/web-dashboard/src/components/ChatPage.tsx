@@ -723,6 +723,7 @@ export default function ChatPage() {
   const [pasteOffer, setPasteOffer] = useState<{ text: string } | null>(null);
   const [dragOver, setDragOver] = useState(false);
   const fileInputRef = useRef<HTMLInputElement | null>(null);
+  const folderInputRef = useRef<HTMLInputElement | null>(null);
   const pastePosRef = useRef<{ start: number; end: number } | null>(null);
   // P3 — the attached project (its bounded context rides into every turn).
   const [attachedProject, setAttachedProject] = useState<{ path: string; name: string; fileCount: number; symbolCount: number; truncated: boolean } | null>(null);
@@ -1011,6 +1012,30 @@ export default function ChatPage() {
       if (browseRefreshRef.current) clearInterval(browseRefreshRef.current);
     };
   }, [browseOpen, browsePath, refreshBrowse]);
+
+  /** Native folder picker: uses webkitdirectory to open OS folder dialog.
+   *  Extracts the folder name, resolves the absolute path via server, then
+   *  calls attachProject. Falls back to the custom popover on failure. */
+  const handleNativeFolderSelect = useCallback(async (files: FileList | null) => {
+    if (!files || files.length === 0) return;
+    const first = files[0];
+    const relPath = first.webkitRelativePath || first.name;
+    const folderName = relPath.split('/')[0];
+    if (!folderName) {
+      void openBrowse();
+      return;
+    }
+    setProjectError('');
+    setBusy(true);
+    const r = await dashboardAPI.resolveFolder(folderName);
+    setBusy(false);
+    if (r.ok && r.path) {
+      void attachProject(r.path);
+    } else {
+      setProjectError((r.error || 'Could not find folder.') + ' Opening manual browser...');
+      void openBrowse();
+    }
+  }, [openBrowse, attachProject]);
 
   const send = useCallback(
     async (text: string, withAttachments?: AttachmentChip[] | { skipResolve: boolean }) => {
@@ -1481,7 +1506,19 @@ export default function ChatPage() {
                 <button type="button" className="admin-refresh-btn" onClick={() => void attachProject(projectPathInput)} disabled={busy || !projectPathInput.trim()}>
                   Attach
                 </button>
-                <button type="button" className="admin-mini-btn" onClick={() => void openBrowse()} title="Browse folders">
+                <input
+                  ref={folderInputRef}
+                  type="file"
+                  /* @ts-expect-error webkitdirectory is non-standard but widely supported */
+                  webkitdirectory=""
+                  multiple
+                  style={{ display: 'none' }}
+                  onChange={(e) => {
+                    void handleNativeFolderSelect(e.target.files);
+                    e.target.value = '';
+                  }}
+                />
+                <button type="button" className="admin-mini-btn" onClick={() => folderInputRef.current?.click()} title="Open system folder picker">
                   🗂️ Browse
                 </button>
                 {projectError ? <span className="chat-project-error">{projectError}</span> : null}

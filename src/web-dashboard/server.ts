@@ -4840,6 +4840,82 @@ function handleRequest(req: IncomingMessage, res: ServerResponse): void {
     return;
   }
 
+  // POST /api/browse/resolve-folder — given a folder name, search from home
+  // directory and common locations to find its absolute path. Used by the
+  // native folder picker (webkitdirectory) which only returns the folder name.
+  if (pathname === '/api/browse/resolve-folder' && req.method === 'POST') {
+    const session = adminSessions.validate(bearerToken(req));
+    if (!session) {
+      writeJson(res, 401, { ok: false, error: 'Not authenticated.' });
+      return;
+    }
+    if (!roleCan(session.role, 'routing.operate')) {
+      writeJson(res, 403, { ok: false, error: 'Access denied.' });
+      return;
+    }
+    void (async () => {
+      try {
+        const body = await readJsonBody(req);
+        const folderName = typeof body?.name === 'string' ? body.name.trim() : '';
+        if (!folderName) {
+          writeJson(res, 400, { ok: false, error: 'Missing folder name.' });
+          return;
+        }
+        const roots = [homedir()];
+        const plat = process.platform;
+        if (plat === 'darwin') {
+          roots.push('/Users');
+          try {
+            const users = readdirSync('/Users', { withFileTypes: true })
+              .filter((e) => e.isDirectory() && !e.name.startsWith('.'));
+            for (const u of users) roots.push(join('/Users', u.name));
+          } catch { /* skip */ }
+        } else if (plat === 'linux') {
+          roots.push('/home');
+          try {
+            const users = readdirSync('/home', { withFileTypes: true })
+              .filter((e) => e.isDirectory() && !e.name.startsWith('.'));
+            for (const u of users) roots.push(join('/home', u.name));
+          } catch { /* skip */ }
+          roots.push('/root');
+        } else if (plat === 'win32') {
+          for (const ch of 'CDEFGH'.split('')) {
+            const dp = ch + ':\\';
+            try { if (existsSync(dp)) roots.push(dp); } catch { /* skip */ }
+          }
+        }
+        for (const root of roots) {
+          try {
+            const candidate = join(root, folderName);
+            if (existsSync(candidate) && statSync(candidate).isDirectory()) {
+              writeJson(res, 200, { ok: true, path: candidate });
+              return;
+            }
+          } catch { /* skip */ }
+        }
+        const commonSubdirs = ['Documents', 'Desktop', 'Downloads', 'Projects', 'Code', 'dev', 'work', 'src', 'repos'];
+        for (const root of roots) {
+          for (const sub of commonSubdirs) {
+            try {
+              const parentDir = join(root, sub);
+              if (!existsSync(parentDir) || !statSync(parentDir).isDirectory()) continue;
+              const found = readdirSync(parentDir, { withFileTypes: true })
+                .filter((e) => e.isDirectory() && e.name === folderName);
+              if (found.length > 0) {
+                writeJson(res, 200, { ok: true, path: join(parentDir, folderName) });
+                return;
+              }
+            } catch { /* skip */ }
+          }
+        }
+        writeJson(res, 200, { ok: false, error: 'Could not find folder in common locations. Try typing the full path.' });
+      } catch {
+        writeJson(res, 500, { ok: false, error: 'Failed to resolve folder.' });
+      }
+    })();
+    return;
+  }
+
   // POST /api/config/platforms/:platform/verify — verify a platform's token
   // by calling the platform's API (e.g. Telegram getMe, Discord /users/@me).
   const verifyMatch = /^\/api\/config\/platforms\/([^/]+)\/verify$/.exec(pathname);
