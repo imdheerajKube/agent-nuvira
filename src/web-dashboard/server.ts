@@ -334,6 +334,116 @@ export function broadcastTyping(event: { platform: string; channelId: string; ty
   }
 }
 
+// ─── ZIP Generation (no external dependencies) ─────────────────────────────
+
+/** CRC-32 lookup table (precomputed). */
+const CRC_TABLE = new Uint32Array(256);
+for (let i = 0; i < 256; i++) {
+  let c = i;
+  for (let j = 0; j < 8; j++) {
+    c = (c & 1) ? (0xEDB88320 ^ (c >>> 1)) : (c >>> 1);
+  }
+  CRC_TABLE[i] = c;
+}
+
+function crc32(buf: Uint8Array): number {
+  let crc = 0xFFFFFFFF;
+  for (let i = 0; i < buf.length; i++) {
+    crc = CRC_TABLE[(crc ^ buf[i]) & 0xFF] ^ (crc >>> 8);
+  }
+  return (crc ^ 0xFFFFFFFF) >>> 0;
+}
+
+/** DOS date/time format for ZIP headers. */
+function dosDateTime(date: Date): { time: number; date: number } {
+  const time = ((date.getHours() & 0x1F) << 11) | ((date.getMinutes() & 0x3F) << 5) | ((date.getSeconds() >> 1) & 0x1F);
+  const d = ((date.getFullYear() - 1980) & 0x7F) << 9 | ((date.getMonth() + 1) & 0xF) << 5 | (date.getDate() & 0x1F);
+  return { time, date: d };
+}
+
+/**
+ * Generate a ZIP file from an array of { name, content } entries.
+ * Supports text files only (no compression — stored method).
+ * Returns a Buffer suitable for HTTP response.
+ */
+function generateZip(files: Array<{ name: string; content: string }>): Buffer {
+  const now = new Date();
+  const { time, date } = dosDateTime(now);
+  const entries: Array<{ name: Uint8Array; data: Uint8Array; crc: number; offset: number }> = [];
+  const parts: Uint8Array[] = [];
+  let offset = 0;
+
+  // Local file headers + file data.
+  for (const file of files) {
+    const nameBytes = new TextEncoder().encode(file.name);
+    const dataBytes = new TextEncoder().encode(file.content);
+    const crc = crc32(dataBytes);
+
+    // Local file header (30 + nameLen).
+    const header = new ArrayBuffer(30 + nameBytes.length);
+    const hv = new DataView(header);
+    hv.setUint32(0, 0x04034b50, true);  // signature
+    hv.setUint16(4, 20, true);           // version needed
+    hv.setUint16(6, 0, true);            // flags
+    hv.setUint16(8, 0, true);            // compression method (stored)
+    hv.setUint16(10, time, true);        // mod time
+    hv.setUint16(12, date, true);        // mod date
+    hv.setUint32(14, crc, true);         // crc-32
+    hv.setUint32(18, dataBytes.length, true); // compressed size
+    hv.setUint32(22, dataBytes.length, true); // uncompressed size
+    hv.setUint16(26, nameBytes.length, true); // name length
+    hv.setUint16(28, 0, true);           // extra field length
+    new Uint8Array(header).set(nameBytes, 30);
+
+    entries.push({ name: nameBytes, data: dataBytes, crc, offset });
+    parts.push(new Uint8Array(header), dataBytes);
+    offset += header.byteLength + dataBytes.length;
+  }
+
+  // Central directory.
+  const centralStart = offset;
+  for (const entry of entries) {
+    const ch = new ArrayBuffer(46 + entry.name.length);
+    const cv = new DataView(ch);
+    cv.setUint32(0, 0x02014b50, true);  // signature
+    cv.setUint16(4, 20, true);           // version made by
+    cv.setUint16(6, 20, true);           // version needed
+    cv.setUint16(8, 0, true);            // flags
+    cv.setUint16(10, 0, true);           // compression (stored)
+    cv.setUint16(12, time, true);        // mod time
+    cv.setUint16(14, date, true);        // mod date
+    cv.setUint32(16, entry.crc, true);   // crc-32
+    cv.setUint32(20, entry.data.length, true); // compressed size
+    cv.setUint32(24, entry.data.length, true); // uncompressed size
+    cv.setUint16(28, entry.name.length, true); // name length
+    cv.setUint16(30, 0, true);           // extra field length
+    cv.setUint16(32, 0, true);           // file comment length
+    cv.setUint16(34, 0, true);           // disk number start
+    cv.setUint16(36, 0, true);           // internal file attributes
+    cv.setUint32(38, 0, true);           // external file attributes
+    cv.setUint32(42, entry.offset, true); // local header offset
+    new Uint8Array(ch).set(entry.name, 46);
+    parts.push(new Uint8Array(ch));
+    offset += ch.byteLength;
+  }
+
+  // End of central directory.
+  const centralSize = offset - centralStart;
+  const eocd = new ArrayBuffer(22);
+  const ev = new DataView(eocd);
+  ev.setUint32(0, 0x06054b50, true);    // signature
+  ev.setUint16(4, 0, true);             // disk number
+  ev.setUint16(6, 0, true);             // central dir disk
+  ev.setUint16(8, entries.length, true); // entries on this disk
+  ev.setUint16(10, entries.length, true);// total entries
+  ev.setUint32(12, centralSize, true);   // central dir size
+  ev.setUint32(16, centralStart, true);  // central dir offset
+  ev.setUint16(20, 0, true);            // comment length
+  parts.push(new Uint8Array(eocd));
+
+  return Buffer.concat(parts.map((p) => Buffer.from(p.buffer, p.byteOffset, p.byteLength)));
+}
+
 // ─── In-Memory DAG Store ────────────────────────────────────────────────────
 
 /**
@@ -3157,6 +3267,93 @@ function handleRequest(req: IncomingMessage, res: ServerResponse): void {
   //       dashboard passes the FULL map it read; the running gateway re-reads
   //       config per inbound, so changes apply without a restart). Named
   //       WhatsApp contacts are also synced into the bridge contacts file
+  // POST /api/admin/gateway/conversations/export — bulk export as ZIP.
+  // Rides on gateway.manage (admin + operator).
+  if (pathname === '/api/admin/gateway/conversations/export' && req.method === 'POST') {
+    void (async () => {
+      const session = adminSessions.validate(bearerToken(req));
+      if (!session) {
+        writeJson(res, 401, { ok: false, error: 'Not authenticated — log in first.' });
+        return;
+      }
+      if (!roleCan(session.role, 'gateway.manage')) {
+        writeJson(res, 403, { ok: false, error: `Access denied — role '${session.role}' cannot export conversations.` });
+        return;
+      }
+      const body = await readJsonBody(req);
+      const keys = body?.keys as string[] | undefined;
+      if (!Array.isArray(keys) || keys.length === 0) {
+        writeJson(res, 400, { ok: false, error: 'Missing or invalid "keys" array.' });
+        return;
+      }
+      try {
+        const { GatewayChatStore, CHAT_HISTORY_TTL_MS } = await import('../gateway/chat-store.js');
+        const store = new GatewayChatStore();
+        const allConvs = store.getAllConversations();
+
+        // Resolve contact names.
+        let contactLookup: Record<string, string> = {};
+        try {
+          const { readContactsFile } = await import('../gateway/whatsapp/contacts.js');
+          const { whatsappSessionDir } = await import('../gateway/whatsapp/session.js');
+          const contacts = readContactsFile(whatsappSessionDir());
+          for (const [name, digits] of Object.entries(contacts)) {
+            if (name && digits) contactLookup[digits] = name;
+          }
+        } catch { /* best-effort */ }
+
+        const keySet = new Set(keys);
+        const convs = allConvs.filter((c) => keySet.has(c.key));
+        if (convs.length === 0) {
+          writeJson(res, 404, { ok: false, error: 'No matching conversations found.' });
+          return;
+        }
+
+        // Build ZIP entries (manual ZIP64-compatible for text files).
+        const files: Array<{ name: string; content: string }> = [];
+        const now = new Date();
+        const dateStr = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-${String(now.getDate()).padStart(2, '0')}`;
+
+        for (const conv of convs) {
+          const [platform, ...rest] = conv.key.split(':');
+          const channelId = rest.join(':');
+          const cleanId = channelId.replace(/[^\d]/g, '');
+          const contactName = contactLookup[cleanId] || contactLookup[channelId] || channelId;
+
+          const lines: string[] = [
+            `Conversation with ${contactName} (${platform || 'unknown'})`,
+            `Exported: ${now.toLocaleString()}`,
+            `Messages: ${conv.messages.length}`,
+            '─'.repeat(50),
+            '',
+          ];
+          for (const m of conv.messages) {
+            const role = m.role === 'user' ? contactName : 'Agent';
+            const ts = new Date(m.ts).toLocaleString();
+            lines.push(`[${ts}] ${role}:`);
+            lines.push(m.content);
+            lines.push('');
+          }
+          const safeName = `${platform || 'unknown'}-${contactName.replace(/[^\w]/g, '_')}-${channelId.replace(/[^\w]/g, '_')}.txt`;
+          files.push({ name: safeName, content: lines.join('\n') });
+        }
+
+        // Generate ZIP manually (no external deps).
+        const zipBuf = generateZip(files);
+
+        res.writeHead(200, {
+          'Content-Type': 'application/zip',
+          'Content-Disposition': `attachment; filename="conversations-${dateStr}.zip"`,
+          'Content-Length': zipBuf.length,
+        });
+        res.end(zipBuf);
+      } catch (err) {
+        writeJson(res, 500, { ok: false, error: `Export failed: ${err instanceof Error ? err.message : String(err)}` });
+      }
+    })();
+    return;
+  }
+
   // GET /api/admin/gateway/conversations — paginated conversation list.
   // Rides on gateway.manage (admin + operator).
   if (pathname === '/api/admin/gateway/conversations' && req.method === 'GET') {

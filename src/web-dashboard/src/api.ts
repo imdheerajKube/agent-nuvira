@@ -676,6 +676,35 @@ export class DashboardAPI {
     return { ok: false, error: d.error || 'Failed to clear conversation.', unauthorized: r.status === 401, forbidden: r.status === 403 };
   }
 
+  /** Bulk export conversations as a ZIP file. Triggers a browser download. */
+  async exportGatewayConversations(keys: string[]): Promise<{ ok: boolean; error?: string }> {
+    try {
+      const token = getAdminToken();
+      const res = await fetch(`${this.baseUrl}/api/admin/gateway/conversations/export`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', ...(token ? { Authorization: `Bearer ${token}` } : {}) },
+        body: JSON.stringify({ keys }),
+        signal: AbortSignal.timeout(30_000),
+      });
+      if (res.status === 200 && res.headers.get('content-type')?.includes('application/zip')) {
+        const blob = await res.blob();
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement('a');
+        a.href = url;
+        a.download = res.headers.get('content-disposition')?.match(/filename="(.+)"/)?.[1] || 'conversations.zip';
+        document.body.appendChild(a);
+        a.click();
+        document.body.removeChild(a);
+        URL.revokeObjectURL(url);
+        return { ok: true };
+      }
+      const d = await res.json().catch(() => ({})) as { error?: string };
+      return { ok: false, error: d.error || 'Export failed.' };
+    } catch (err) {
+      return { ok: false, error: err instanceof Error ? err.message : String(err) };
+    }
+  }
+
   // ─── Contacts management (name-centric outbound contacts) ────────────────
 
   /** List all contacts (name, platform, id, phone, status). */

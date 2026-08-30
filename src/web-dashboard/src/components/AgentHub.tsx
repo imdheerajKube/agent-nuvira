@@ -84,6 +84,8 @@ export default function AgentHub() {
   const [clearingConv, setClearingConv] = useState<string | null>(null);
   const [showAnalytics, setShowAnalytics] = useState(false);
   const [typingContacts, setTypingContacts] = useState<Map<string, { platform: string; channelId: string; startedAt: number }>>(new Map());
+  const [selectedConvs, setSelectedConvs] = useState<Set<string>>(new Set());
+  const [exporting, setExporting] = useState(false);
   const [convList, setConvList] = useState<NonNullable<HubData['conversations']['recent']>>([]);
   const [convTotal, setConvTotal] = useState(0);
   const [convOffset, setConvOffset] = useState(0);
@@ -163,6 +165,34 @@ export default function AgentHub() {
     });
     return unsub;
   }, []);
+
+  /** Toggle selection of a conversation. */
+  const toggleConvSelection = useCallback((key: string, e: React.MouseEvent) => {
+    e.stopPropagation();
+    setSelectedConvs((prev) => {
+      const next = new Set(prev);
+      if (next.has(key)) next.delete(key); else next.add(key);
+      return next;
+    });
+  }, []);
+
+  /** Select/deselect all visible conversations. */
+  const toggleSelectAll = useCallback(() => {
+    setSelectedConvs((prev) => {
+      if (prev.size === convList.length) return new Set();
+      return new Set(convList.map((c) => c.key));
+    });
+  }, [convList]);
+
+  /** Export selected conversations as a ZIP file. */
+  const handleBulkExport = useCallback(async () => {
+    if (selectedConvs.size === 0) return;
+    setExporting(true);
+    try {
+      await dashboardAPI.exportGatewayConversations([...selectedConvs]);
+    } catch { /* best-effort */ }
+    setExporting(false);
+  }, [selectedConvs]);
 
   /** Export a conversation as a formatted text file download. */
   const exportConversationText = useCallback((c: NonNullable<HubData['conversations']['recent']>[0], e: React.MouseEvent) => {
@@ -1376,20 +1406,33 @@ ${messages.map((m) => {
           <p className="admin-hint">Conversation history is stored per-contact and survives gateway restarts. Messages older than 7 days are auto-pruned. Click a conversation to expand the full chat thread.</p>
           {convList.length > 0 || convLoading ? (
             <>
-              {/* Search filter */}
-              <div className="hub-send-form" style={{ marginBottom: 12 }}>
+              {/* Search filter + selection toolbar */}
+              <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 12, flexWrap: 'wrap' }}>
                 <input
                   type="text"
                   value={convSearch}
                   onChange={(e) => setConvSearch(e.target.value)}
                   placeholder="🔍 Search by contact name, phone number, or message content…"
-                  style={{ flex: 1 }}
+                  style={{ flex: 1, minWidth: 200 }}
                 />
-                <span className="admin-hint" style={{ marginLeft: 8 }}>
+                <span className="admin-hint">
                   {convTotal} conversation{convTotal === 1 ? '' : 's'}
                   {convSearch ? ` matching "${convSearch}"` : ''}
-                  {convHasMore ? ` (showing ${convList.length} of ${convTotal})` : ''}
                 </span>
+                <button type="button" className="admin-refresh-btn" onClick={toggleSelectAll} style={{ fontSize: 12, padding: '4px 10px' }}>
+                  {selectedConvs.size === convList.length ? '☑ Deselect All' : '☐ Select All'}
+                </button>
+                {selectedConvs.size > 0 && (
+                  <button
+                    type="button"
+                    className="admin-refresh-btn"
+                    disabled={exporting}
+                    onClick={() => void handleBulkExport()}
+                    style={{ fontSize: 12, padding: '4px 10px', background: '#3b82f6', color: '#fff', border: 'none' }}
+                  >
+                    {exporting ? '⏳ Exporting…' : `📦 Export ${selectedConvs.size} as ZIP`}
+                  </button>
+                )}
               </div>
               {/* Conversation cards (not a table — each card expands into a chat thread) */}
               <div className="hub-session-list">
@@ -1413,19 +1456,29 @@ ${messages.map((m) => {
                       } catch { /* best-effort */ }
                       setClearingConv(null);
                     };
+                    const isSelected = selectedConvs.has(c.key);
                     return (
                       <div
                         className="hub-card"
                         key={c.key}
-                        style={{ cursor: 'pointer', borderLeft: `3px solid ${c.platform === 'whatsapp' ? '#25d366' : c.platform === 'telegram' ? '#0088cc' : '#6c757d'}` }}
+                        style={{ cursor: 'pointer', borderLeft: `3px solid ${c.platform === 'whatsapp' ? '#25d366' : c.platform === 'telegram' ? '#0088cc' : '#6c757d'}`, opacity: selectedConvs.size > 0 && !isSelected ? 0.5 : 1, transition: 'opacity 0.2s' }}
                         onClick={() => setExpandedConv(isExpanded ? null : c.key)}
                       >
                         <div className="hub-card-top">
-                          <div className="hub-card-title">
-                            <span className="hub-card-name">
+                          <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                            <input
+                              type="checkbox"
+                              checked={isSelected}
+                              onClick={(e) => toggleConvSelection(c.key, e)}
+                              onChange={() => {}}
+                              style={{ cursor: 'pointer', width: 16, height: 16 }}
+                            />
+                            <div className="hub-card-title">
+                              <span className="hub-card-name">
                               {c.platform === 'whatsapp' ? '📱' : c.platform === 'telegram' ? '✈️' : '💬'} {displayName}
                             </span>
                             <span className="hub-card-id">{c.platform} · {ageStr}</span>
+                          </div>
                           </div>
                           <div className="hub-card-actions" style={{ gap: 6 }}>
                             <span className="hub-chip">{c.messageCount} msgs</span>
