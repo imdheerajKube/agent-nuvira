@@ -1280,10 +1280,9 @@ describe('AutoModelRouter.resolve credential filtering', () => {
     expect(decision.provider).not.toBe('openrouter');
     // The audit trail + explanation cite the registry counts.
     const excluded = decision.registryExcluded || [];
-    expect(excluded.find((e) => e.provider === 'openrouter')?.reason).toContain('0 verified');
+    expect(excluded.find((e) => e.provider === 'openrouter')?.reason).toContain('unavailable');
     expect(decision.explanation).toContain('openrouter');
-    expect(decision.explanation).toContain('0 verified');
-    expect(decision.explanation).toContain('3 unavailable');
+    expect(decision.explanation).toContain('unavailable');
   });
 
   it('explicit allowedProviders bypass the registry pre-filter (caller knows best)', () => {

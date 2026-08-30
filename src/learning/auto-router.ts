@@ -986,7 +986,7 @@ export class AutoModelRouter {
         // unavailable".
         const stats = registry.getProviderStats(p);
         const reason = degraded.has(p)
-          ? `0 verified models, ${stats.unavailable} unavailable`
+          ? `${stats.verified} verified (${stats.parked} parked), ${stats.unavailable} unavailable`
           : `all tracked models unavailable`;
         excluded.push({ provider: p, reason });
         return false;
