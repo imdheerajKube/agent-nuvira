@@ -82,6 +82,7 @@ export default function AgentHub() {
   const [expandedConv, setExpandedConv] = useState<string | null>(null);
   const [convSearch, setConvSearch] = useState('');
   const [clearingConv, setClearingConv] = useState<string | null>(null);
+  const [showAnalytics, setShowAnalytics] = useState(false);
   const [convList, setConvList] = useState<NonNullable<HubData['conversations']['recent']>>([]);
   const [convTotal, setConvTotal] = useState(0);
   const [convOffset, setConvOffset] = useState(0);
@@ -1219,6 +1220,140 @@ ${messages.map((m) => {
               <div className="admin-summary-label">Telegram</div>
             </div>
           </div>
+          {/* Analytics toggle + section */}
+          {data.conversations?.analytics && data.conversations.analytics.totalConversations > 0 && (
+            <>
+              <button
+                type="button"
+                className="admin-refresh-btn"
+                onClick={() => setShowAnalytics(!showAnalytics)}
+                style={{ marginBottom: 12 }}
+              >
+                {showAnalytics ? '📊 Hide Analytics' : '📊 Show Analytics'}
+              </button>
+              {showAnalytics ? (
+                <div className="hub-session-list" style={{ marginBottom: 16 }}>
+                  {/* Summary stats */}
+                  <div className="admin-summary-grid">
+                    <div className="admin-summary-card">
+                      <div className="admin-summary-value">{data.conversations.analytics.totalMessages}</div>
+                      <div className="admin-summary-label">Total messages</div>
+                    </div>
+                    <div className="admin-summary-card">
+                      <div className="admin-summary-value">{data.conversations.analytics.avgMessagesPerConversation}</div>
+                      <div className="admin-summary-label">Avg msgs/conversation</div>
+                    </div>
+                    <div className="admin-summary-card">
+                      <div className="admin-summary-value">{data.conversations.analytics.avgUserMessageLength}</div>
+                      <div className="admin-summary-label">Avg user msg length</div>
+                    </div>
+                    <div className="admin-summary-card">
+                      <div className="admin-summary-value">{data.conversations.analytics.avgAssistantMessageLength}</div>
+                      <div className="admin-summary-label">Avg assistant msg length</div>
+                    </div>
+                  </div>
+                  {/* Top contacts */}
+                  <div className="hub-card" style={{ marginTop: 12 }}>
+                    <div className="hub-card-top">
+                      <div className="hub-card-title">
+                        <span className="hub-card-name">🏆 Most Active Contacts</span>
+                      </div>
+                    </div>
+                    <div style={{ marginTop: 8 }}>
+                      {data.conversations.analytics.topContacts.map((c, i) => {
+                        const maxCount = data.conversations!.analytics.topContacts[0]?.messageCount || 1;
+                        const pct = Math.round((c.messageCount / maxCount) * 100);
+                        return (
+                          <div key={i} style={{ display: 'flex', alignItems: 'center', marginBottom: 6, fontSize: 13 }}>
+                            <span style={{ width: 24, textAlign: 'center', fontWeight: 600, color: i < 3 ? '#f59e0b' : 'var(--muted)' }}>
+                              {i === 0 ? '🥇' : i === 1 ? '🥈' : i === 2 ? '🥉' : `${i + 1}.`}
+                            </span>
+                            <span style={{ flex: 1, marginLeft: 8 }}>
+                              {c.platform === 'whatsapp' ? '📱' : '✈️'} {c.name}
+                            </span>
+                            <span style={{ width: 60, textAlign: 'right', fontWeight: 600 }}>{c.messageCount}</span>
+                            <div style={{ width: 100, height: 8, background: 'var(--border)', borderRadius: 4, marginLeft: 8 }}>
+                              <div style={{ width: `${pct}%`, height: '100%', background: '#3b82f6', borderRadius: 4 }} />
+                            </div>
+                          </div>
+                        );
+                      })}
+                    </div>
+                  </div>
+                  {/* Hourly distribution */}
+                  <div className="hub-card" style={{ marginTop: 12 }}>
+                    <div className="hub-card-top">
+                      <div className="hub-card-title">
+                        <span className="hub-card-name">🕐 Peak Hours</span>
+                      </div>
+                    </div>
+                    <div style={{ display: 'flex', alignItems: 'flex-end', height: 80, marginTop: 8, gap: 2 }}>
+                      {data.conversations.analytics.hourlyDistribution.map(({ hour, count }) => {
+                        const maxCount = Math.max(...data.conversations!.analytics.hourlyDistribution.map((h) => h.count), 1);
+                        const h = Math.round((count / maxCount) * 70);
+                        return (
+                          <div key={hour} style={{ flex: 1, display: 'flex', flexDirection: 'column', alignItems: 'center' }}>
+                            <div
+                              style={{ width: '100%', height: h, background: hour >= 9 && hour <= 21 ? '#3b82f6' : '#6b7280', borderRadius: 2 }}
+                              title={`${hour}:00 — ${count} messages`}
+                            />
+                          </div>
+                        );
+                      })}
+                    </div>
+                    <div style={{ display: 'flex', fontSize: 10, color: 'var(--muted)', marginTop: 4 }}>
+                      {[0, 6, 12, 18, 23].map((h) => (
+                        <span key={h} style={{ flex: 1, textAlign: h === 0 ? 'left' : h === 23 ? 'right' : 'center' }}>{h}:00</span>
+                      ))}
+                    </div>
+                  </div>
+                  {/* Platform breakdown */}
+                  <div className="hub-card" style={{ marginTop: 12 }}>
+                    <div className="hub-card-top">
+                      <div className="hub-card-title">
+                        <span className="hub-card-name">📱 Platform Breakdown</span>
+                      </div>
+                    </div>
+                    <div style={{ marginTop: 8 }}>
+                      {data.conversations.analytics.platformBreakdown.map((p) => (
+                        <div key={p.platform} style={{ display: 'flex', alignItems: 'center', marginBottom: 6, fontSize: 13 }}>
+                          <span className="hub-chip" style={{ width: 80, textAlign: 'center' }}>{p.platform}</span>
+                          <span style={{ marginLeft: 8, flex: 1 }}>{p.conversations} conversations</span>
+                          <span style={{ fontWeight: 600 }}>{p.messages} msgs</span>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                  {/* Daily volume (last 14 days) */}
+                  <div className="hub-card" style={{ marginTop: 12 }}>
+                    <div className="hub-card-top">
+                      <div className="hub-card-title">
+                        <span className="hub-card-name">📈 Daily Volume (14 days)</span>
+                      </div>
+                    </div>
+                    <div style={{ display: 'flex', alignItems: 'flex-end', height: 60, marginTop: 8, gap: 2 }}>
+                      {data.conversations.analytics.dailyVolume.map(({ date, count }) => {
+                        const maxCount = Math.max(...data.conversations!.analytics.dailyVolume.map((d) => d.count), 1);
+                        const h = Math.round((count / maxCount) * 50);
+                        return (
+                          <div key={date} style={{ flex: 1, display: 'flex', flexDirection: 'column', alignItems: 'center' }}>
+                            <div
+                              style={{ width: '100%', height: h, background: '#10b981', borderRadius: 2 }}
+                              title={`${date}: ${count} messages`}
+                            />
+                          </div>
+                        );
+                      })}
+                    </div>
+                    <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 10, color: 'var(--muted)', marginTop: 4 }}>
+                      <span>{data.conversations.analytics.dailyVolume[0]?.date}</span>
+                      <span>{data.conversations.analytics.dailyVolume[data.conversations.analytics.dailyVolume.length - 1]?.date}</span>
+                    </div>
+                  </div>
+                </div>
+              ) : null}
+            </>
+          )}
           <h3 className="section-subtitle">💬 Per-contact chat history</h3>
           <p className="admin-hint">Conversation history is stored per-contact and survives gateway restarts. Messages older than 7 days are auto-pruned. Click a conversation to expand the full chat thread.</p>
           {convList.length > 0 || convLoading ? (

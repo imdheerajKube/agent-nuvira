@@ -101,6 +101,30 @@ export interface HubConversationSummary {
   messages?: Array<{ role: 'user' | 'assistant'; content: string; ts: number }>;
 }
 
+/** Conversation analytics computed from stored chat history. */
+export interface HubConversationAnalytics {
+  /** Total messages across all conversations. */
+  totalMessages: number;
+  /** Total conversations stored. */
+  totalConversations: number;
+  /** Average messages per conversation. */
+  avgMessagesPerConversation: number;
+  /** Most active contacts (sorted by message count, top 10). */
+  topContacts: Array<{ name: string; platform: string; messageCount: number; lastActiveAt: number }>;
+  /** Messages grouped by hour of day (0-23). */
+  hourlyDistribution: Array<{ hour: number; count: number }>;
+  /** Messages grouped by day of week (0=Sun, 6=Sat). */
+  dailyDistribution: Array<{ day: number; count: number }>;
+  /** Messages per platform. */
+  platformBreakdown: Array<{ platform: string; conversations: number; messages: number }>;
+  /** Messages per day (last 14 days). */
+  dailyVolume: Array<{ date: string; count: number }>;
+  /** Average user message length (characters). */
+  avgUserMessageLength: number;
+  /** Average assistant message length (characters). */
+  avgAssistantMessageLength: number;
+}
+
 export interface HubArtifactSummary {
   sessionId: string;
   count: number;
@@ -181,6 +205,7 @@ export interface HubData {
   conversations: {
     total: number;
     recent: HubConversationSummary[];
+    analytics?: HubConversationAnalytics;
   };
   adminConfigured: boolean;
   serverTime: number;
@@ -387,6 +412,98 @@ function readConversationsData(): HubData['conversations'] {
   return { total: conversations.length, recent };
 }
 
+// ─── Conversation Analytics ─────────────────────────────────────────────────
+
+/** Compute analytics from stored conversation data. */
+function readConversationAnalytics(): HubConversationAnalytics {
+  const store = new GatewayChatStore();
+  const conversations = store.getAllConversations();
+  const now = Date.now();
+  const TTL = CHAT_HISTORY_TTL_MS;
+
+  // Build contact lookup.
+  let contactLookup: Record<string, string> = {};
+  try {
+    const contacts = readContactsFile(whatsappSessionDir());
+    for (const [name, digits] of Object.entries(contacts)) {
+      if (name && digits) contactLookup[digits] = name;
+    }
+  } catch { /* best-effort */ }
+
+  // Filter to active conversations.
+  const active = conversations.filter((c) => now - c.lastActiveAt <= TTL);
+  let totalMessages = 0;
+  let totalUserMsgLen = 0;
+  let totalAssistantMsgLen = 0;
+  let userMsgCount = 0;
+  let assistantMsgCount = 0;
+  const hourly = new Array(24).fill(0);
+  const daily = new Array(7).fill(0);
+  const platformMap = new Map<string, { conversations: number; messages: number }>();
+  const contactMap = new Map<string, { name: string; platform: string; messageCount: number; lastActiveAt: number }>();
+  const dailyVolumeMap = new Map<string, number>();
+
+  // Compute daily volume for last 14 days.
+  for (let i = 0; i < 14; i++) {
+    const d = new Date(now - i * 86_400_000);
+    const key = d.toISOString().slice(0, 10);
+    dailyVolumeMap.set(key, 0);
+  }
+
+  for (const conv of active) {
+    const [platform] = conv.key.split(':');
+    const plat = platform || 'unknown';
+    const platEntry = platformMap.get(plat) ?? { conversations: 0, messages: 0 };
+    platEntry.conversations++;
+    platEntry.messages += conv.messages.length;
+    platformMap.set(plat, platEntry);
+
+    // Contact aggregation.
+    const [_, ...rest] = conv.key.split(':');
+    const channelId = rest.join(':');
+    const cleanId = channelId.replace(/[^\d]/g, '');
+    const contactName = contactLookup[cleanId] || contactLookup[channelId] || channelId;
+    const existing = contactMap.get(conv.key) ?? { name: contactName, platform: plat, messageCount: 0, lastActiveAt: 0 };
+    existing.messageCount += conv.messages.length;
+    existing.lastActiveAt = Math.max(existing.lastActiveAt, conv.lastActiveAt);
+    contactMap.set(conv.key, existing);
+
+    for (const msg of conv.messages) {
+      totalMessages++;
+      const date = new Date(msg.ts);
+      hourly[date.getHours()]++;
+      daily[date.getDay()]++;
+
+      if (msg.role === 'user') {
+        totalUserMsgLen += msg.content.length;
+        userMsgCount++;
+      } else {
+        totalAssistantMsgLen += msg.content.length;
+        assistantMsgCount++;
+      }
+
+      // Daily volume.
+      const dayKey = date.toISOString().slice(0, 10);
+      if (dailyVolumeMap.has(dayKey)) {
+        dailyVolumeMap.set(dayKey, (dailyVolumeMap.get(dayKey) ?? 0) + 1);
+      }
+    }
+  }
+
+  return {
+    totalMessages,
+    totalConversations: active.length,
+    avgMessagesPerConversation: active.length > 0 ? Math.round(totalMessages / active.length * 10) / 10 : 0,
+    topContacts: [...contactMap.values()].sort((a, b) => b.messageCount - a.messageCount).slice(0, 10),
+    hourlyDistribution: hourly.map((count, hour) => ({ hour, count })),
+    dailyDistribution: daily.map((count, day) => ({ day, count })),
+    platformBreakdown: [...platformMap.entries()].map(([platform, v]) => ({ platform, ...v })),
+    dailyVolume: [...dailyVolumeMap.entries()].sort(([a], [b]) => a.localeCompare(b)).map(([date, count]) => ({ date, count })),
+    avgUserMessageLength: userMsgCount > 0 ? Math.round(totalUserMsgLen / userMsgCount) : 0,
+    avgAssistantMessageLength: assistantMsgCount > 0 ? Math.round(totalAssistantMsgLen / assistantMsgCount) : 0,
+  };
+}
+
 // ─── Artifacts (I3 store) ───────────────────────────────────────────────────
 
 function readArtifactsData(): HubData['artifacts'] {
@@ -512,7 +629,7 @@ export function readHubData(): HubData {
     channels: readChannelsData(),
     artifacts: readArtifactsData(),
     skills: readSkillsData(),
-    conversations: readConversationsData(),
+    conversations: { ...readConversationsData(), analytics: readConversationAnalytics() },
     adminConfigured: isAdminConfigured(),
     serverTime: Date.now(),
   };
