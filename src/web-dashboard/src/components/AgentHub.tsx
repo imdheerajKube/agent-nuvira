@@ -86,6 +86,10 @@ export default function AgentHub() {
   const [typingContacts, setTypingContacts] = useState<Map<string, { platform: string; channelId: string; startedAt: number }>>(new Map());
   const [selectedConvs, setSelectedConvs] = useState<Set<string>>(new Set());
   const [exporting, setExporting] = useState(false);
+  const [allTags, setAllTags] = useState<string[]>([]);
+  const [tagFilter, setTagFilter] = useState<string>('');
+  const [addingTagTo, setAddingTagTo] = useState<string | null>(null);
+  const [newTagValue, setNewTagValue] = useState('');
   const [convList, setConvList] = useState<NonNullable<HubData['conversations']['recent']>>([]);
   const [convTotal, setConvTotal] = useState(0);
   const [convOffset, setConvOffset] = useState(0);
@@ -193,6 +197,35 @@ export default function AgentHub() {
     } catch { /* best-effort */ }
     setExporting(false);
   }, [selectedConvs]);
+
+  /** Load all tags on mount. */
+  useEffect(() => {
+    if (tab === 'conversations') {
+      void dashboardAPI.getAllConversationTags().then((r) => {
+        if (r.ok && r.tags) setAllTags(r.tags);
+      });
+    }
+  }, [tab]);
+
+  /** Add a tag to a conversation. */
+  const handleAddTag = useCallback(async (key: string, tag: string) => {
+    if (!tag.trim()) return;
+    const r = await dashboardAPI.addConversationTag(key, tag.trim());
+    if (r.ok) {
+      setConvList((prev) => prev.map((c) => c.key === key ? { ...c, tags: [...(c.tags ?? []), tag.trim().toLowerCase()] } : c));
+      setAllTags((prev) => prev.includes(tag.trim().toLowerCase()) ? prev : [...prev, tag.trim().toLowerCase()].sort());
+    }
+    setAddingTagTo(null);
+    setNewTagValue('');
+  }, []);
+
+  /** Remove a tag from a conversation. */
+  const handleRemoveTag = useCallback(async (key: string, tag: string) => {
+    const r = await dashboardAPI.removeConversationTag(key, tag);
+    if (r.ok) {
+      setConvList((prev) => prev.map((c) => c.key === key ? { ...c, tags: (c.tags ?? []).filter((t) => t !== tag) } : c));
+    }
+  }, []);
 
   /** Export a conversation as a formatted text file download. */
   const exportConversationText = useCallback((c: NonNullable<HubData['conversations']['recent']>[0], e: React.MouseEvent) => {
@@ -1406,6 +1439,22 @@ ${messages.map((m) => {
           <p className="admin-hint">Conversation history is stored per-contact and survives gateway restarts. Messages older than 7 days are auto-pruned. Click a conversation to expand the full chat thread.</p>
           {convList.length > 0 || convLoading ? (
             <>
+              {/* Tag filter chips */}
+              {allTags.length > 0 && (
+                <div style={{ display: 'flex', flexWrap: 'wrap', gap: 4, marginBottom: 8 }}>
+                  <span className="admin-hint" style={{ marginRight: 4 }}>Filter by tag:</span>
+                  {allTags.map((tag) => (
+                    <button
+                      key={tag}
+                      type="button"
+                      onClick={() => setTagFilter(tagFilter === tag ? '' : tag)}
+                      style={{ padding: '2px 10px', borderRadius: 12, fontSize: 11, cursor: 'pointer', border: `1px solid ${tagFilter === tag ? '#3b82f6' : 'var(--border)'}`, background: tagFilter === tag ? '#3b82f620' : 'transparent', color: tagFilter === tag ? '#3b82f6' : 'var(--muted)' }}
+                    >
+                      🏷️ {tag}
+                    </button>
+                  ))}
+                </div>
+              )}
               {/* Search filter + selection toolbar */}
               <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 12, flexWrap: 'wrap' }}>
                 <input
@@ -1436,7 +1485,9 @@ ${messages.map((m) => {
               </div>
               {/* Conversation cards (not a table — each card expands into a chat thread) */}
               <div className="hub-session-list">
-                {convList.map((c) => {
+                {convList
+                  .filter((c) => !tagFilter || (c.tags ?? []).includes(tagFilter))
+                  .map((c) => {
                     const age = Date.now() - c.lastActiveAt;
                     const ageStr = age < 60_000 ? 'just now' : age < 3_600_000 ? `${Math.round(age / 60_000)}m ago` : age < 86_400_000 ? `${Math.round(age / 3_600_000)}h ago` : `${Math.round(age / 86_400_000)}d ago`;
                     const isExpanded = expandedConv === c.key;
@@ -1519,6 +1570,43 @@ ${messages.map((m) => {
                           <span style={{ color: 'var(--fg)', fontWeight: 500 }}>Last message:</span>{' '}
                           {c.lastUserMessage.slice(0, 120)}{c.lastUserMessage.length > 120 ? '…' : ''}
                         </p>
+                        {/* Tags */}
+                        <div style={{ display: 'flex', flexWrap: 'wrap', gap: 4, marginTop: 4 }}>
+                          {(c.tags ?? []).map((tag) => (
+                            <span key={tag} style={{ display: 'inline-flex', alignItems: 'center', gap: 2, padding: '2px 8px', borderRadius: 12, fontSize: 11, background: '#3b82f620', color: '#3b82f6', border: '1px solid #3b82f640' }}>
+                              🏷️ {tag}
+                              <button
+                                type="button"
+                                onClick={(e) => { e.stopPropagation(); void handleRemoveTag(c.key, tag); }}
+                                style={{ background: 'none', border: 'none', color: '#3b82f6', cursor: 'pointer', padding: 0, fontSize: 12, lineHeight: 1 }}
+                              >
+                                ×
+                              </button>
+                            </span>
+                          ))}
+                          {addingTagTo === c.key ? (
+                            <span style={{ display: 'inline-flex', alignItems: 'center', gap: 2 }}>
+                              <input
+                                type="text"
+                                value={newTagValue}
+                                onChange={(e) => setNewTagValue(e.target.value)}
+                                onKeyDown={(e) => { if (e.key === 'Enter') { void handleAddTag(c.key, newTagValue); } if (e.key === 'Escape') { setAddingTagTo(null); setNewTagValue(''); } }}
+                                placeholder="tag name"
+                                autoFocus
+                                onClick={(e) => e.stopPropagation()}
+                                style={{ width: 80, padding: '1px 6px', fontSize: 11, borderRadius: 8, border: '1px solid var(--border)' }}
+                              />
+                            </span>
+                          ) : (
+                            <button
+                              type="button"
+                              onClick={(e) => { e.stopPropagation(); setAddingTagTo(c.key); setNewTagValue(''); }}
+                              style={{ display: 'inline-flex', alignItems: 'center', gap: 2, padding: '2px 8px', borderRadius: 12, fontSize: 11, background: 'var(--border)', color: 'var(--muted)', border: 'none', cursor: 'pointer' }}
+                            >
+                              + tag
+                            </button>
+                          )}
+                        </div>
                         {isExpanded && c.messages && c.messages.length > 0 ? (
                           <div className="conversation-thread" style={{ marginTop: 10, borderTop: '1px solid var(--border)', paddingTop: 10, maxHeight: 400, overflowY: 'auto' }}>
                             {c.messages.map((m, i) => (

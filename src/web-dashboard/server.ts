@@ -263,6 +263,7 @@ function broadcastConversationUpdate(): void {
           lastUserMessage: (lastUser?.content ?? '').slice(0, 300),
           lastAssistantMessage: (lastAssistant?.content ?? '').slice(0, 300),
           messages: c.messages.map((m) => ({ role: m.role, content: m.content, ts: m.ts })),
+          tags: c.tags,
         };
       });
 
@@ -3267,6 +3268,53 @@ function handleRequest(req: IncomingMessage, res: ServerResponse): void {
   //       dashboard passes the FULL map it read; the running gateway re-reads
   //       config per inbound, so changes apply without a restart). Named
   //       WhatsApp contacts are also synced into the bridge contacts file
+  // PUT /api/admin/gateway/conversations/tags — manage tags on conversations.
+  // Rides on gateway.manage (admin + operator).
+  if (pathname === '/api/admin/gateway/conversations/tags' && req.method === 'PUT') {
+    void (async () => {
+      const session = adminSessions.validate(bearerToken(req));
+      if (!session) {
+        writeJson(res, 401, { ok: false, error: 'Not authenticated — log in first.' });
+        return;
+      }
+      if (!roleCan(session.role, 'gateway.manage')) {
+        writeJson(res, 403, { ok: false, error: `Access denied — role '${session.role}' cannot manage tags.` });
+        return;
+      }
+      const body = await readJsonBody(req);
+      const action = body?.action as string;
+      const key = body?.key as string;
+      const tag = body?.tag as string;
+      const tags = body?.tags as string[] | undefined;
+      if (!key || typeof key !== 'string') {
+        writeJson(res, 400, { ok: false, error: 'Missing or invalid "key" field.' });
+        return;
+      }
+      try {
+        const { GatewayChatStore } = await import('../gateway/chat-store.js');
+        const store = new GatewayChatStore();
+        if (action === 'add' && typeof tag === 'string') {
+          store.addTag(key, tag);
+          writeJson(res, 200, { ok: true });
+        } else if (action === 'remove' && typeof tag === 'string') {
+          store.removeTag(key, tag);
+          writeJson(res, 200, { ok: true });
+        } else if (action === 'set' && Array.isArray(tags)) {
+          store.setTags(key, tags);
+          writeJson(res, 200, { ok: true });
+        } else if (action === 'getAllTags') {
+          const allTags = store.getAllTags();
+          writeJson(res, 200, { ok: true, tags: allTags });
+        } else {
+          writeJson(res, 400, { ok: false, error: 'Invalid action. Use: add, remove, set, getAllTags.' });
+        }
+      } catch (err) {
+        writeJson(res, 500, { ok: false, error: `Tag operation failed: ${err instanceof Error ? err.message : String(err)}` });
+      }
+    })();
+    return;
+  }
+
   // POST /api/admin/gateway/conversations/export — bulk export as ZIP.
   // Rides on gateway.manage (admin + operator).
   if (pathname === '/api/admin/gateway/conversations/export' && req.method === 'POST') {
@@ -3410,6 +3458,7 @@ function handleRequest(req: IncomingMessage, res: ServerResponse): void {
               lastUserMessage: (lastUser?.content ?? '').slice(0, 300),
               lastAssistantMessage: (lastAssistant?.content ?? '').slice(0, 300),
               messages: c.messages.map((m) => ({ role: m.role, content: m.content, ts: m.ts })),
+              tags: c.tags,
             };
           });
 
@@ -3419,6 +3468,7 @@ function handleRequest(req: IncomingMessage, res: ServerResponse): void {
               (c.contactName ?? '').toLowerCase().includes(search) ||
               c.channelId.toLowerCase().includes(search) ||
               c.lastUserMessage.toLowerCase().includes(search) ||
+              (c.tags ?? []).some((t) => t.includes(search)) ||
               c.lastAssistantMessage.toLowerCase().includes(search)
           )
           : summaries;

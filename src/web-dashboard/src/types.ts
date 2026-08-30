@@ -1123,6 +1123,7 @@ export interface HubData {
       lastUserMessage: string;
       lastAssistantMessage: string;
       messages?: Array<{ role: 'user' | 'assistant'; content: string; ts: number }>;
+      tags?: string[];
     }>;
     analytics: {
       totalMessages: number;
