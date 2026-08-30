@@ -1124,6 +1124,18 @@ export interface HubData {
       lastAssistantMessage: string;
       messages?: Array<{ role: 'user' | 'assistant'; content: string; ts: number }>;
     }>;
+    analytics: {
+      totalMessages: number;
+      totalConversations: number;
+      avgMessagesPerConversation: number;
+      topContacts: Array<{ name: string; platform: string; messageCount: number; lastActiveAt: number }>;
+      hourlyDistribution: Array<{ hour: number; count: number }>;
+      dailyDistribution: Array<{ day: number; count: number }>;
+      platformBreakdown: Array<{ platform: string; conversations: number; messages: number }>;
+      dailyVolume: Array<{ date: string; count: number }>;
+      avgUserMessageLength: number;
+      avgAssistantMessageLength: number;
+    };
   };
   adminConfigured: boolean;
   serverTime: number;
