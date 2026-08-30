@@ -4840,9 +4840,10 @@ function handleRequest(req: IncomingMessage, res: ServerResponse): void {
     return;
   }
 
-  // POST /api/browse/resolve-folder — given a folder name, search from home
-  // directory and common locations to find its absolute path. Used by the
-  // native folder picker (webkitdirectory) which only returns the folder name.
+  // POST /api/browse/resolve-folder — given a folder name (and optional sub-path
+  // from webkitRelativePath), search the filesystem to find its absolute path.
+  // The native folder picker (webkitdirectory) only returns relative paths, so
+  // we reconstruct the absolute path by searching from common root directories.
   if (pathname === '/api/browse/resolve-folder' && req.method === 'POST') {
     const session = adminSessions.validate(bearerToken(req));
     if (!session) {
@@ -4857,11 +4858,14 @@ function handleRequest(req: IncomingMessage, res: ServerResponse): void {
       try {
         const body = await readJsonBody(req);
         const folderName = typeof body?.name === 'string' ? body.name.trim() : '';
+        const subPath = typeof body?.subPath === 'string' ? body.subPath.trim() : '';
         if (!folderName) {
           writeJson(res, 400, { ok: false, error: 'Missing folder name.' });
           return;
         }
-        const roots = [homedir()];
+
+        // Collect root directories to search from.
+        const roots: string[] = [homedir()];
         const plat = process.platform;
         if (plat === 'darwin') {
           roots.push('/Users');
@@ -4870,45 +4874,121 @@ function handleRequest(req: IncomingMessage, res: ServerResponse): void {
               .filter((e) => e.isDirectory() && !e.name.startsWith('.'));
             for (const u of users) roots.push(join('/Users', u.name));
           } catch { /* skip */ }
+          // External volumes on macOS.
+          try {
+            const vols = readdirSync('/Volumes', { withFileTypes: true })
+              .filter((e) => e.isDirectory());
+            for (const v of vols) roots.push(join('/Volumes', v.name));
+          } catch { /* skip */ }
         } else if (plat === 'linux') {
-          roots.push('/home');
+          roots.push('/home', '/root');
           try {
             const users = readdirSync('/home', { withFileTypes: true })
               .filter((e) => e.isDirectory() && !e.name.startsWith('.'));
             for (const u of users) roots.push(join('/home', u.name));
           } catch { /* skip */ }
-          roots.push('/root');
         } else if (plat === 'win32') {
           for (const ch of 'CDEFGH'.split('')) {
-            const dp = ch + ':\\';
+            const dp = ch + ':';
             try { if (existsSync(dp)) roots.push(dp); } catch { /* skip */ }
           }
         }
-        for (const root of roots) {
-          try {
-            const candidate = join(root, folderName);
-            if (existsSync(candidate) && statSync(candidate).isDirectory()) {
+
+        // Helper: check if a path exists and is a directory.
+        const isDir = (p: string): boolean => {
+          try { return existsSync(p) && statSync(p).isDirectory(); } catch { return false; }
+        };
+
+        // Step 1: If we have a sub-path, try constructing the full path directly.
+        // e.g. subPath="Documents/Projects" + folderName="myapp"
+        //   -> ~/Documents/Projects/myapp
+        if (subPath) {
+          for (const root of roots) {
+            const candidate = join(root, subPath, folderName);
+            if (isDir(candidate)) {
               writeJson(res, 200, { ok: true, path: candidate });
               return;
             }
-          } catch { /* skip */ }
-        }
-        const commonSubdirs = ['Documents', 'Desktop', 'Downloads', 'Projects', 'Code', 'dev', 'work', 'src', 'repos'];
-        for (const root of roots) {
-          for (const sub of commonSubdirs) {
-            try {
-              const parentDir = join(root, sub);
-              if (!existsSync(parentDir) || !statSync(parentDir).isDirectory()) continue;
-              const found = readdirSync(parentDir, { withFileTypes: true })
-                .filter((e) => e.isDirectory() && e.name === folderName);
-              if (found.length > 0) {
-                writeJson(res, 200, { ok: true, path: join(parentDir, folderName) });
-                return;
-              }
-            } catch { /* skip */ }
           }
         }
-        writeJson(res, 200, { ok: false, error: 'Could not find folder in common locations. Try typing the full path.' });
+
+        // Step 2: Direct children of each root.
+        for (const root of roots) {
+          const candidate = join(root, folderName);
+          if (isDir(candidate)) {
+            writeJson(res, 200, { ok: true, path: candidate });
+            return;
+          }
+        }
+
+        // Step 3: One level deep in common directories.
+        const commonSubdirs = ['Documents', 'Desktop', 'Downloads', 'Projects', 'Code', 'dev', 'work', 'src', 'repos', 'Documents/Projects', 'Documents/Code'];
+        for (const root of roots) {
+          for (const sub of commonSubdirs) {
+            const parentDir = join(root, sub);
+            const candidate = join(parentDir, folderName);
+            if (isDir(candidate)) {
+              writeJson(res, 200, { ok: true, path: candidate });
+              return;
+            }
+          }
+        }
+
+        // Step 4: Recursive search from home (depth-limited to 4 levels).
+        // Skips hidden dirs and known large directories.
+        const skipDirs = new Set(['node_modules', '.git', '.cache', '.npm', '.nvm', '.volta', '.cargo', '.rustup', 'Library', '.Trash', '__pycache__', '.venv', 'venv']);
+        let found = '';
+        const searchDepth = (dir: string, depth: number): void => {
+          if (found || depth > 4) return;
+          try {
+            const entries = readdirSync(dir, { withFileTypes: true });
+            for (const e of entries) {
+              if (found) return;
+              if (!e.isDirectory() || e.name.startsWith('.') || skipDirs.has(e.name)) continue;
+              const full = join(dir, e.name);
+              if (e.name === folderName) {
+                found = full;
+                return;
+              }
+              searchDepth(full, depth + 1);
+            }
+          } catch { /* permission denied, etc. */ }
+        };
+        searchDepth(homedir(), 0);
+        if (found) {
+          writeJson(res, 200, { ok: true, path: found });
+          return;
+        }
+
+        // Step 5: Broader recursive search from root (depth 2 only, skip system dirs).
+        const systemSkip = new Set([...skipDirs, 'System', 'usr', 'bin', 'sbin', 'etc', 'var', 'tmp', 'opt', 'proc', 'dev', 'sys', 'boot', 'run']);
+        found = '';
+        const searchRoot = (dir: string, depth: number): void => {
+          if (found || depth > 2) return;
+          try {
+            const entries = readdirSync(dir, { withFileTypes: true });
+            for (const e of entries) {
+              if (found) return;
+              if (!e.isDirectory() || e.name.startsWith('.') || systemSkip.has(e.name)) continue;
+              const full = join(dir, e.name);
+              if (e.name === folderName) {
+                found = full;
+                return;
+              }
+              searchRoot(full, depth + 1);
+            }
+          } catch { /* skip */ }
+        };
+        for (const root of roots) {
+          searchRoot(root, 0);
+          if (found) break;
+        }
+        if (found) {
+          writeJson(res, 200, { ok: true, path: found });
+          return;
+        }
+
+        writeJson(res, 200, { ok: false, error: 'Could not find folder. Try typing the full path manually.' });
       } catch {
         writeJson(res, 500, { ok: false, error: 'Failed to resolve folder.' });
       }
