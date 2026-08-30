@@ -31,11 +31,6 @@ import { extractArtifacts, type ExtractedArtifacts } from '../artifacts';
 import { stripAnsi } from '../ansi';
 import type { TaskLogLine, TaskStatus } from '../types';
 
-/** webkitRelativePath is a non-standard but widely supported property on File. */
-interface WebkitFile extends File {
-  webkitRelativePath: string;
-}
-
 interface AuthState {
   configured: boolean;
   authenticated: boolean;
@@ -728,7 +723,6 @@ export default function ChatPage() {
   const [pasteOffer, setPasteOffer] = useState<{ text: string } | null>(null);
   const [dragOver, setDragOver] = useState(false);
   const fileInputRef = useRef<HTMLInputElement | null>(null);
-  const folderInputRef = useRef<HTMLInputElement | null>(null);
   const pastePosRef = useRef<{ start: number; end: number } | null>(null);
   // P3 — the attached project (its bounded context rides into every turn).
   const [attachedProject, setAttachedProject] = useState<{ path: string; name: string; fileCount: number; symbolCount: number; truncated: boolean } | null>(null);
@@ -1018,31 +1012,40 @@ export default function ChatPage() {
     };
   }, [browseOpen, browsePath, refreshBrowse]);
 
-  /** Native folder picker: uses webkitdirectory to open OS folder dialog.
-   *  Extracts the folder name, resolves the absolute path via server, then
-   *  calls attachProject. Falls back to the custom popover on failure. */
-  const handleNativeFolderSelect = useCallback(async (files: FileList | null) => {
-    if (!files || files.length === 0) return;
-    const first = files[0] as WebkitFile;
-    const relPath = first.webkitRelativePath || first.name;
-    const parts = relPath.split('/');
-    const folderName = parts[0];
-    // Send the relative sub-paths too so the server can match deeper structures.
-    const subPath = parts.length > 2 ? parts.slice(1, -1).join('/') : '';
-    if (!folderName) {
-      void openBrowse();
-      return;
+  /** Native folder picker using the File System Access API.
+   *  Opens a TRUE native folder picker (not a file picker).
+   *  Falls back to the custom popover on unsupported browsers. */
+  const openNativeFolderPicker = useCallback(async () => {
+    // showDirectoryPicker() opens a native OS folder selection dialog.
+    // Supported in Chrome, Edge, Electron (Chromium-based).
+    const w = window as Record<string, unknown>;
+    if (typeof w.showDirectoryPicker === 'function') {
+      try {
+        const dirHandle = await (w.showDirectoryPicker as () => Promise<FileSystemDirectoryHandle>)();
+        const folderName = dirHandle.name;
+        if (!folderName) {
+          void openBrowse();
+          return;
+        }
+        setProjectError('');
+        setBusy(true);
+        const r = await dashboardAPI.resolveFolder(folderName);
+        setBusy(false);
+        if (r.ok && r.path) {
+          void attachProject(r.path);
+        } else {
+          setProjectError((r.error || 'Could not find folder.') + ' Opening manual browser...');
+          void openBrowse();
+        }
+        return;
+      } catch (err: unknown) {
+        // User cancelled the picker — no action needed.
+        if (err instanceof DOMException && err.name === 'AbortError') return;
+        // Other errors — fall through to custom popover.
+      }
     }
-    setProjectError('');
-    setBusy(true);
-    const r = await dashboardAPI.resolveFolder(folderName, subPath);
-    setBusy(false);
-    if (r.ok && r.path) {
-      void attachProject(r.path);
-    } else {
-      setProjectError((r.error || 'Could not find folder.') + ' Opening manual browser...');
-      void openBrowse();
-    }
+    // Fallback: custom directory browser popover.
+    void openBrowse();
   }, [openBrowse, attachProject]);
 
   const send = useCallback(
@@ -1514,18 +1517,7 @@ export default function ChatPage() {
                 <button type="button" className="admin-refresh-btn" onClick={() => void attachProject(projectPathInput)} disabled={busy || !projectPathInput.trim()}>
                   Attach
                 </button>
-                <input
-                  ref={folderInputRef}
-                  type="file"
-                  webkitdirectory=""
-                  multiple
-                  style={{ display: 'none' }}
-                  onChange={(e) => {
-                    void handleNativeFolderSelect(e.target.files);
-                    e.target.value = '';
-                  }}
-                />
-                <button type="button" className="admin-mini-btn" onClick={() => folderInputRef.current?.click()} title="Open system folder picker">
+                <button type="button" className="admin-mini-btn" onClick={() => void openNativeFolderPicker()} title="Open system folder picker">
                   🗂️ Browse
                 </button>
                 {projectError ? <span className="chat-project-error">{projectError}</span> : null}
