@@ -355,6 +355,30 @@ ${messages.map((m) => {
   /** Show the full id when the admin reveal toggle is on, else the masked form. */
   const showId = (id: string): string => (revealIds ? String(id ?? '') : maskSenderId(id));
 
+  /** Extract a readable phone number from a WhatsApp channel id (918800663237@s.whatsapp.net). */
+  const extractPhone = (channelId: string): string => {
+    const match = channelId.match(/^(\d+)@/);
+    if (!match) return '';
+    const num = match[1];
+    // Format Indian numbers: +91 XXXXX XXXXX
+    if (num.length === 12 && num.startsWith('91')) {
+      return `+${num.slice(0,2)} ${num.slice(2,7)} ${num.slice(7)}`;
+    }
+    if (num.length === 10) {
+      return `+91 ${num.slice(0,5)} ${num.slice(5)}`;
+    }
+    return `+${num}`;
+  };
+
+  /** Build a display label for a conversation card: Name (phone) or just phone. */
+  const convDisplayLabel = (c: NonNullable<HubData['conversations']['recent']>[0]): { name: string; phone: string } => {
+    const phone = extractPhone(c.channelId);
+    if (c.contactName) {
+      return { name: c.contactName, phone };
+    }
+    return { name: phone || showId(c.channelId), phone: '' };
+  };
+
   const refresh = useCallback(async () => {
     setRefreshing(true);
     setError(null);
@@ -1493,7 +1517,7 @@ ${messages.map((m) => {
                     const age = Date.now() - c.lastActiveAt;
                     const ageStr = age < 60_000 ? 'just now' : age < 3_600_000 ? `${Math.round(age / 60_000)}m ago` : age < 86_400_000 ? `${Math.round(age / 3_600_000)}h ago` : `${Math.round(age / 86_400_000)}d ago`;
                     const isExpanded = expandedConv === c.key;
-                    const displayName = c.contactName || showId(c.channelId);
+                    const { name: displayName, phone } = convDisplayLabel(c);
                     const handleClear = async (e: React.MouseEvent) => {
                       e.stopPropagation();
                       if (!authed || !canWrite) {
@@ -1530,7 +1554,7 @@ ${messages.map((m) => {
                               <span className="hub-card-name">
                               {c.platform === 'whatsapp' ? '📱' : c.platform === 'telegram' ? '✈️' : '💬'} {displayName}
                             </span>
-                            <span className="hub-card-id">{c.platform} · {ageStr}</span>
+                            <span className="hub-card-id">{phone && <span style={{ color: 'var(--text-secondary, #8b949e)', marginRight: 6 }}>{phone}</span>}{c.platform} · {ageStr}</span>
                           </div>
                           </div>
                           <div className="hub-card-actions" style={{ gap: 6 }}>
