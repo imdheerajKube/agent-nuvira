@@ -210,6 +210,100 @@ export function setAlwaysWatchQuota(value: boolean): void {
   if (!value) disarmQuotaWatcher();
 }
 
+// ─── Conversation History File Watcher ──────────────────────────────────────
+/**
+ * Watches ~/.nuvira/gateway/chat-history.json for changes and broadcasts
+ * a `conversation` SSE event so the dashboard's Conversations tab updates
+ * in real time (no 10s refresh delay).
+ */
+let convWatcher: ReturnType<typeof watch> | null = null;
+let convWatchTimer: ReturnType<typeof setTimeout> | null = null;
+
+function getGatewayDir(): string {
+  return join(resolveBuffConfigDir(), 'gateway');
+}
+
+/** Broadcast current conversation summaries to all SSE clients. */
+function broadcastConversationUpdate(): void {
+  try {
+    const { GatewayChatStore, CHAT_HISTORY_TTL_MS } = require('../gateway/chat-store.js') as typeof import('../gateway/chat-store.js');
+    const store = new GatewayChatStore();
+    const allConvs = store.getAllConversations();
+    const now = Date.now();
+
+    // Build contact lookup for name resolution.
+    let contactLookup: Record<string, string> = {};
+    try {
+      const { readContactsFile } = require('../gateway/whatsapp/contacts.js') as typeof import('../gateway/whatsapp/contacts.js');
+      const { whatsappSessionDir } = require('../gateway/whatsapp/session.js') as typeof import('../gateway/whatsapp/session.js');
+      const contacts = readContactsFile(whatsappSessionDir());
+      for (const [name, digits] of Object.entries(contacts)) {
+        if (name && digits) contactLookup[digits] = name;
+      }
+    } catch { /* best-effort */ }
+
+    const summaries = allConvs
+      .filter((c) => now - c.lastActiveAt <= CHAT_HISTORY_TTL_MS)
+      .sort((a, b) => b.lastActiveAt - a.lastActiveAt)
+      .slice(0, 50)
+      .map((c) => {
+        const [platform, ...rest] = c.key.split(':');
+        const channelId = rest.join(':');
+        const lastUser = c.messages.filter((m) => m.role === 'user').pop();
+        const lastAssistant = c.messages.filter((m) => m.role === 'assistant').pop();
+        const cleanId = channelId.replace(/[^\d]/g, '');
+        const contactName = contactLookup[cleanId] || contactLookup[channelId];
+        return {
+          key: c.key,
+          platform: platform || 'unknown',
+          channelId,
+          contactName,
+          messageCount: c.messages.length,
+          lastActiveAt: c.lastActiveAt,
+          lastUserMessage: (lastUser?.content ?? '').slice(0, 300),
+          lastAssistantMessage: (lastAssistant?.content ?? '').slice(0, 300),
+          messages: c.messages.map((m) => ({ role: m.role, content: m.content, ts: m.ts })),
+        };
+      });
+
+    const payload = `event: conversation\ndata: ${JSON.stringify({
+      conversations: summaries,
+      total: allConvs.filter((c) => now - c.lastActiveAt <= CHAT_HISTORY_TTL_MS).length,
+      serverTime: now,
+    })}\n\n`;
+    for (const client of sseClients) {
+      try { client.res.write(payload); } catch { /* client disconnected */ }
+    }
+  } catch { /* best-effort — a failed broadcast must never break the dashboard */ }
+}
+
+function armConvWatcher(): void {
+  if (convWatcher) return;
+  try {
+    const dir = getGatewayDir();
+    if (!existsSync(dir)) mkdirSync(dir, { recursive: true });
+    convWatcher = watch(dir, (_eventType, filename) => {
+      const name = basename(String(filename || ''));
+      if (name && name !== 'chat-history.json') return;
+      if (convWatchTimer) clearTimeout(convWatchTimer);
+      convWatchTimer = setTimeout(() => {
+        convWatchTimer = null;
+        broadcastConversationUpdate();
+      }, 200);
+    });
+  } catch {
+    convWatcher = null;
+  }
+}
+
+function disarmConvWatcher(): void {
+  if (convWatchTimer) { clearTimeout(convWatchTimer); convWatchTimer = null; }
+  if (convWatcher) {
+    try { convWatcher.close(); } catch { /* ignore */ }
+    convWatcher = null;
+  }
+}
+
 // ─── In-Memory DAG Store ────────────────────────────────────────────────────
 
 /**
@@ -3745,6 +3839,7 @@ function handleRequest(req: IncomingMessage, res: ServerResponse): void {
     // client's async close (arm skipped when the stale client was still listed,
     // then disarm skipped too, leaving the watcher never armed).
     armQuotaWatcher();
+    armConvWatcher();
 
     const heartbeat = setInterval(() => {
       try { res.write(': heartbeat\n\n'); } catch { clearInterval(heartbeat); }
@@ -3777,6 +3872,7 @@ function handleRequest(req: IncomingMessage, res: ServerResponse): void {
       // Only disarm when nobody is viewing AND always-on is not configured —
       // otherwise the watcher persists to keep quota state warm between sessions.
       if (sseClients.length === 0 && !alwaysWatchQuota) disarmQuotaWatcher();
+      if (sseClients.length === 0) disarmConvWatcher();
     });
 
     return;

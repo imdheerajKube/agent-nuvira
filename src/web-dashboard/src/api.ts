@@ -192,6 +192,32 @@ export class DashboardAPI {
       }
     });
 
+    // Real-time conversation updates: the server watches chat-history.json
+    // and emits a `conversation` event when a new message arrives.
+    this.sse.addEventListener('conversation', (event) => {
+      try {
+        const payload = JSON.parse(event.data) as {
+          conversations?: Array<Record<string, unknown>>;
+          total?: number;
+          serverTime?: number;
+        };
+        if (this.lastData && payload.conversations) {
+          const updated: DashboardData = {
+            ...this.lastData,
+            conversations: {
+              total: payload.total ?? payload.conversations.length,
+              recent: payload.conversations as DashboardData['conversations']['recent'],
+            },
+            serverTime: payload.serverTime || this.lastData.serverTime,
+          };
+          this.lastData = updated;
+          this.notify(updated);
+        }
+      } catch (e) {
+        console.error('Failed to parse SSE conversation event:', e);
+      }
+    });
+
     this.sse.onerror = () => {
       this.notifyConnection(false);
       this.disconnect();

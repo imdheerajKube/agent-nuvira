@@ -145,6 +145,36 @@ export default function AgentHub() {
     return () => clearTimeout(timer);
   }, [convSearch]);
 
+  // Real-time SSE sync: when data.conversations is updated by a conversation SSE
+  // event, merge new/updated entries into the infinite-scroll list without a
+  // full reload. Only auto-syncs when the user is on the first page (offset=0)
+  // and no search is active — otherwise a manual reload is cleaner.
+  useEffect(() => {
+    const sseConvs = data?.conversations?.recent;
+    if (!sseConvs || sseConvs.length === 0) return;
+    if (!convInitialized) return;
+    // Only auto-sync on the first page with no search filter.
+    if (convOffset > 20 || convSearch) return;
+    // Merge: update existing entries, prepend new ones.
+    setConvList((prev) => {
+      const existingKeys = new Set(prev.map((c) => c.key));
+      const updated = sseConvs.map((c) => ({ ...c }));
+      // Replace existing entries that match, keep the rest.
+      const prevMap = new Map(prev.map((c) => [c.key, c]));
+      for (const c of updated) {
+        if (prevMap.has(c.key)) {
+          prevMap.set(c.key, c);
+        }
+      }
+      // Add any truly new entries at the top.
+      const newEntries = updated.filter((c) => !existingKeys.has(c.key));
+      const merged = [...newEntries, ...prevMap.values()];
+      // Sort by lastActiveAt descending.
+      merged.sort((a, b) => b.lastActiveAt - a.lastActiveAt);
+      return merged;
+    });
+  }, [data?.conversations?.recent]);
+
   // P6d — marketplace import surface (search every configured registry).
   const [marketQuery, setMarketQuery] = useState('');
   const [marketResults, setMarketResults] = useState<Array<{
