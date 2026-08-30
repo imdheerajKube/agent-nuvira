@@ -83,6 +83,7 @@ export default function AgentHub() {
   const [convSearch, setConvSearch] = useState('');
   const [clearingConv, setClearingConv] = useState<string | null>(null);
   const [showAnalytics, setShowAnalytics] = useState(false);
+  const [typingContacts, setTypingContacts] = useState<Map<string, { platform: string; channelId: string; startedAt: number }>>(new Map());
   const [convList, setConvList] = useState<NonNullable<HubData['conversations']['recent']>>([]);
   const [convTotal, setConvTotal] = useState(0);
   const [convOffset, setConvOffset] = useState(0);
@@ -145,6 +146,23 @@ export default function AgentHub() {
     }, 300);
     return () => clearTimeout(timer);
   }, [convSearch]);
+
+  // Subscribe to typing events from SSE.
+  useEffect(() => {
+    const unsub = dashboardAPI.onTypingEvent((event) => {
+      setTypingContacts((prev) => {
+        const next = new Map(prev);
+        const key = `${event.platform}:${event.channelId}`;
+        if (event.typing) {
+          next.set(key, { platform: event.platform, channelId: event.channelId, startedAt: Date.now() });
+        } else {
+          next.delete(key);
+        }
+        return next;
+      });
+    });
+    return unsub;
+  }, []);
 
   /** Export a conversation as a formatted text file download. */
   const exportConversationText = useCallback((c: NonNullable<HubData['conversations']['recent']>[0], e: React.MouseEvent) => {
@@ -1478,6 +1496,27 @@ ${messages.map((m) => {
                                 </span>
                               </div>
                             ))}
+                            {/* Typing indicator */}
+                            {typingContacts.has(c.key) && (
+                              <div style={{ marginBottom: 8, display: 'flex', flexDirection: 'column', alignItems: 'flex-start' }}>
+                                <div style={{
+                                  padding: '8px 16px',
+                                  borderRadius: 12,
+                                  backgroundColor: 'var(--card-bg, #f0f0f0)',
+                                  fontSize: 13,
+                                  display: 'flex',
+                                  alignItems: 'center',
+                                  gap: 4,
+                                }}>
+                                  <span style={{ animation: 'typingBlink 1.4s infinite ease-in-out' }}>●</span>
+                                  <span style={{ animation: 'typingBlink 1.4s infinite ease-in-out 0.2s' }}>●</span>
+                                  <span style={{ animation: 'typingBlink 1.4s infinite ease-in-out 0.4s' }}>●</span>
+                                </div>
+                                <span style={{ fontSize: 10, color: 'var(--muted)', marginTop: 2, padding: '0 4px' }}>
+                                  🤖 typing…
+                                </span>
+                              </div>
+                            )}
                           </div>
                         ) : isExpanded ? (
                           <p className="admin-hint" style={{ marginTop: 8 }}>No message details available.</p>
