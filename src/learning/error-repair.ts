@@ -92,6 +92,10 @@ export interface ErrorRepairOptions {
   repairTimeoutMs?: number;
   /** Current provider name, used for logging */
   currentProvider?: string;
+  /** Check if the current LLM provider is available (not rate-limited).
+   *  When false, retry-tool and alternative-approach strategies are skipped
+   *  because they would hit the same rate-limited provider. */
+  isLLMAvailable?: () => boolean;
 }
 
 /** Default configuration */
@@ -494,6 +498,16 @@ export class ErrorRepairEngine {
           }
 
           case 'retry-tool': {
+            // LLM AVAILABILITY GUARD: when the provider is rate-limited or
+            // exhausted, retrying with the same callLLM just repeats the
+            // failure until the budget dies. Skip to the next strategy.
+            if (this.options.isLLMAvailable && !this.options.isLLMAvailable()) {
+              if (this.options.verbose) {
+                logger.info(`   ⏭️ Repair attempt ${attemptNumber}: skipping retry-tool (LLM provider unavailable)`);
+              }
+              this.budget.consume(taskId);
+              continue;
+            }
             if (this.options.verbose) {
               logger.info(`   🔄 Repair attempt ${attemptNumber}: retrying with failure context`);
             }
@@ -517,6 +531,16 @@ export class ErrorRepairEngine {
           }
 
           case 'alternative-approach': {
+            // LLM AVAILABILITY GUARD: alternative-approach sends a prompt to
+            // the LLM asking for a different strategy, then executes it. If the
+            // LLM is rate-limited, both steps fail. Skip to skip-step.
+            if (this.options.isLLMAvailable && !this.options.isLLMAvailable()) {
+              if (this.options.verbose) {
+                logger.info(`   ⏭️ Repair attempt ${attemptNumber}: skipping alternative-approach (LLM provider unavailable)`);
+              }
+              this.budget.consume(taskId);
+              continue;
+            }
             this.alternativeApproaches += 1;
             if (this.options.verbose) {
               logger.info(`   💡 Repair attempt ${attemptNumber}: asking the LLM for a fundamentally different approach`);
