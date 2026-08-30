@@ -607,6 +607,20 @@ export class DashboardAPI {
     return { ok: false, error: d.error || 'Failed to save policies.', unauthorized: r.status === 401, forbidden: r.status === 403 };
   }
 
+  /** Fetch paginated gateway conversations with optional search. */
+  async fetchGatewayConversations(opts: { offset?: number; limit?: number; q?: string } = {}): Promise<{ ok: boolean; conversations?: Array<{ key: string; platform: string; channelId: string; contactName?: string; messageCount: number; lastActiveAt: number; lastUserMessage: string; lastAssistantMessage: string; messages?: Array<{ role: 'user' | 'assistant'; content: string; ts: number }> }>; total?: number; hasMore?: boolean; error?: string }> {
+    const params = new URLSearchParams();
+    if (opts.offset) params.set('offset', String(opts.offset));
+    if (opts.limit) params.set('limit', String(opts.limit));
+    if (opts.q) params.set('q', opts.q);
+    const qs = params.toString();
+    const r = await this.sendAdminRequest(`/api/admin/gateway/conversations${qs ? `?${qs}` : ''}`, 'GET');
+    if (!r) return { ok: false, error: 'Could not reach the dashboard server.' };
+    const d = (r.data ?? {}) as { ok?: boolean; conversations?: unknown[]; total?: number; hasMore?: boolean; error?: string };
+    if (r.status === 200 && d.ok) return { ok: true, conversations: d.conversations as never[], total: d.total, hasMore: d.hasMore };
+    return { ok: false, error: d.error || 'Failed to load conversations.', unauthorized: r.status === 401, forbidden: r.status === 403 };
+  }
+
   /** Clear a single gateway conversation by its key (e.g. "whatsapp:918800663237"). */
   async clearGatewayConversation(key: string): Promise<{ ok: boolean; error?: string }> {
     const r = await this.sendAdminRequest('/api/admin/gateway/conversations', 'DELETE', { key });
