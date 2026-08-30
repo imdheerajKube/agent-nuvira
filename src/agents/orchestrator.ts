@@ -1011,25 +1011,50 @@ export class Orchestrator {
         const escalatedPlannerLLM = autoRoutingActive
           ? this.createEscalatedPlannerLLM(goal, options)
           : undefined;
-        const plannerRepair = new ErrorRepairEngine({
-          maxRepairs: 3,
-          repairMode: 'auto',
-          verbose: options.verbose,
-          fallbackModels: options.repairFallbackModels,
-        });
-        if (options.verbose) {
-          logger.info('      🔧 Planner failed — attempting auto-repair with a stronger model');
+        // NO-OP ESCALATION GUARD (planner): when the "escalated" planner LLM
+        // resolves to the SAME provider×model as the one that just failed (every
+        // stronger candidate is rate-limited or unavailable), escalation would
+        // just re-prompt the same model until the repair budget dies. Detect
+        // this and skip the repair entirely — the planner failure is real and
+        // not recoverable with the same or weaker model.
+        const plannerEscalationIsNoOp = autoRoutingActive
+          && escalatedPlannerLLM
+          && this.isNoOpEscalation('planner', this.escalatedProviderModelByTask.get('planner'));
+        if (plannerEscalationIsNoOp) {
+          if (options.verbose) {
+            logger.warn('      ⚠️ No stronger model available for planner repair (escalation is a no-op) — skipping repair loop');
+          }
+          // Don't enter the repair loop at all — waste 0 tokens.
+        } else {
+          const plannerRepair = new ErrorRepairEngine({
+            maxRepairs: 3,
+            repairMode: 'auto',
+            verbose: options.verbose,
+            fallbackModels: options.repairFallbackModels,
+            // LLM AVAILABILITY GUARD: check if the escalated planner's provider
+            // is rate-limited before retrying. Prevents retry-tool and
+            // alternative-approach from hitting the same 429 until the budget dies.
+            isLLMAvailable: autoRoutingActive ? () => {
+              const escalated = this.escalatedProviderModelByTask.get('planner');
+              if (!escalated) return true; // no escalation info — assume available
+              const expiresAt = this.failureSession.sessionFailedProviders.get(escalated.provider);
+              return !expiresAt || expiresAt <= Date.now();
+            } : undefined,
+          });
+          if (options.verbose) {
+            logger.info('      🔧 Planner failed — attempting auto-repair with a stronger model');
+          }
+          const planner = this.moduleRegistry.getModule('planner');
+          planResult = await plannerRepair.repair(
+            'planner',
+            vault.context,
+            escalatedPlannerLLM ?? plannerCallLLM,
+            planResult.error || planResult.summary || 'Planning failed',
+            async (ctx, llm) => planner.execute(ctx, llm),
+          );
+          this.stats.repairAttempts += plannerRepair.budget.getAttempts('planner');
+          this.stats.alternativeApproaches += plannerRepair.alternativeApproaches;
         }
-        const planner = this.moduleRegistry.getModule('planner');
-        planResult = await plannerRepair.repair(
-          'planner',
-          vault.context,
-          escalatedPlannerLLM ?? plannerCallLLM,
-          planResult.error || planResult.summary || 'Planning failed',
-          async (ctx, llm) => planner.execute(ctx, llm),
-        );
-        this.stats.repairAttempts += plannerRepair.budget.getAttempts('planner');
-        this.stats.alternativeApproaches += plannerRepair.alternativeApproaches;
         this.stats.taskFailures += 1;
         if (planResult.success) this.stats.recoveredFailures += 1;
       }
@@ -2447,6 +2472,15 @@ export class Orchestrator {
             repairMode,
             verbose: options.verbose,
             fallbackModels: options.repairFallbackModels,
+            // LLM AVAILABILITY GUARD: check if the escalated task's provider
+            // is rate-limited before retrying. Prevents retry-tool and
+            // alternative-approach from hitting the same 429 until the budget dies.
+            isLLMAvailable: autoRouting ? () => {
+              const escalated = this.escalatedProviderModelByTask.get(task.id!);
+              if (!escalated) return true;
+              const expiresAt = this.failureSession.sessionFailedProviders.get(escalated.provider);
+              return !expiresAt || expiresAt <= Date.now();
+            } : undefined,
           });
 
           // Session 46 — REVIEWER-BLOCKED → WRITER FIX PASS: when the failure
