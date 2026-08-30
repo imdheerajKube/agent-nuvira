@@ -1117,10 +1117,12 @@ export interface HubData {
       key: string;
       platform: string;
       channelId: string;
+      contactName?: string;
       messageCount: number;
       lastActiveAt: number;
       lastUserMessage: string;
       lastAssistantMessage: string;
+      messages?: Array<{ role: 'user' | 'assistant'; content: string; ts: number }>;
     }>;
   };
   adminConfigured: boolean;
