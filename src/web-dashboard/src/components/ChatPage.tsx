@@ -31,6 +31,11 @@ import { extractArtifacts, type ExtractedArtifacts } from '../artifacts';
 import { stripAnsi } from '../ansi';
 import type { TaskLogLine, TaskStatus } from '../types';
 
+/** webkitRelativePath is a non-standard but widely supported property on File. */
+interface WebkitFile extends File {
+  webkitRelativePath: string;
+}
+
 interface AuthState {
   configured: boolean;
   authenticated: boolean;
@@ -1018,16 +1023,19 @@ export default function ChatPage() {
    *  calls attachProject. Falls back to the custom popover on failure. */
   const handleNativeFolderSelect = useCallback(async (files: FileList | null) => {
     if (!files || files.length === 0) return;
-    const first = files[0];
+    const first = files[0] as WebkitFile;
     const relPath = first.webkitRelativePath || first.name;
-    const folderName = relPath.split('/')[0];
+    const parts = relPath.split('/');
+    const folderName = parts[0];
+    // Send the relative sub-paths too so the server can match deeper structures.
+    const subPath = parts.length > 2 ? parts.slice(1, -1).join('/') : '';
     if (!folderName) {
       void openBrowse();
       return;
     }
     setProjectError('');
     setBusy(true);
-    const r = await dashboardAPI.resolveFolder(folderName);
+    const r = await dashboardAPI.resolveFolder(folderName, subPath);
     setBusy(false);
     if (r.ok && r.path) {
       void attachProject(r.path);
@@ -1509,7 +1517,6 @@ export default function ChatPage() {
                 <input
                   ref={folderInputRef}
                   type="file"
-                  /* @ts-expect-error webkitdirectory is non-standard but widely supported */
                   webkitdirectory=""
                   multiple
                   style={{ display: 'none' }}

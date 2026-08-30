@@ -1096,13 +1096,13 @@ export class DashboardAPI {
    * Resolve a folder name to its absolute path by searching common locations.
    * Used by the native folder picker (webkitdirectory) which only returns the name.
    */
-  async resolveFolder(name: string): Promise<{ ok: boolean; path: string; error?: string }> {
+  async resolveFolder(name: string, subPath?: string): Promise<{ ok: boolean; path: string; error?: string }> {
     const token = getAdminToken();
     try {
       const res = await fetch(this.baseUrl + '/api/browse/resolve-folder', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json', ...(token ? { Authorization: 'Bearer ' + token } : {}) },
-        body: JSON.stringify({ name }),
+        body: JSON.stringify({ name, subPath: subPath || '' }),
         signal: AbortSignal.timeout(10_000),
       });
       const d = (await res.json()) as { ok?: boolean; path?: string; error?: string };
