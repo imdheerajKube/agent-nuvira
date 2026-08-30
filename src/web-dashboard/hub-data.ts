@@ -91,10 +91,14 @@ export interface HubConversationSummary {
   key: string;
   platform: string;
   channelId: string;
+  /** Human-readable contact name (resolved from WhatsApp contacts file, etc.). */
+  contactName?: string;
   messageCount: number;
   lastActiveAt: number;
   lastUserMessage: string;
   lastAssistantMessage: string;
+  /** Full message thread (when requested via detail endpoint). */
+  messages?: Array<{ role: 'user' | 'assistant'; content: string; ts: number }>;
 }
 
 export interface HubArtifactSummary {
@@ -341,22 +345,43 @@ function readPoliciesData(): Record<string, HubChannelPolicy> {
 function readConversationsData(): HubData['conversations'] {
   const store = new GatewayChatStore();
   const conversations = store.getAllConversations();
+
+  // Build a channelId → name lookup from WhatsApp contacts file.
+  let contactLookup: Record<string, string> = {};
+  try {
+    const contacts = readContactsFile(whatsappSessionDir());
+    // contacts is { Name: 'digits' }, we need digits → Name
+    for (const [name, digits] of Object.entries(contacts)) {
+      if (name && digits) contactLookup[digits] = name;
+    }
+  } catch { /* best-effort */ }
+
   const recent: HubConversationSummary[] = conversations
     .sort((a, b) => b.lastActiveAt - a.lastActiveAt)
-    .slice(0, 20)
+    .slice(0, 50)
     .map((c) => {
       const [platform, ...rest] = c.key.split(':');
       const channelId = rest.join(':');
       const lastUser = c.messages.filter((m) => m.role === 'user').pop();
       const lastAssistant = c.messages.filter((m) => m.role === 'assistant').pop();
+      // Resolve contact name from lookup.
+      const cleanId = channelId.replace(/[^\d]/g, '');
+      const contactName = contactLookup[cleanId] || contactLookup[channelId];
       return {
         key: c.key,
         platform: platform || 'unknown',
         channelId,
+        contactName,
         messageCount: c.messages.length,
         lastActiveAt: c.lastActiveAt,
-        lastUserMessage: (lastUser?.content ?? '').slice(0, 200),
-        lastAssistantMessage: (lastAssistant?.content ?? '').slice(0, 200),
+        lastUserMessage: (lastUser?.content ?? '').slice(0, 300),
+        lastAssistantMessage: (lastAssistant?.content ?? '').slice(0, 300),
+        // Include full messages for the expandable chat thread view.
+        messages: c.messages.map((m) => ({
+          role: m.role,
+          content: m.content,
+          ts: m.ts,
+        })),
       };
     });
   return { total: conversations.length, recent };

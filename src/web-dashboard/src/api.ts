@@ -607,6 +607,15 @@ export class DashboardAPI {
     return { ok: false, error: d.error || 'Failed to save policies.', unauthorized: r.status === 401, forbidden: r.status === 403 };
   }
 
+  /** Clear a single gateway conversation by its key (e.g. "whatsapp:918800663237"). */
+  async clearGatewayConversation(key: string): Promise<{ ok: boolean; error?: string }> {
+    const r = await this.sendAdminRequest('/api/admin/gateway/conversations', 'DELETE', { key });
+    if (!r) return { ok: false, error: 'Could not reach the dashboard server.' };
+    const d = (r.data ?? {}) as { ok?: boolean; error?: string };
+    if (r.status === 200 && d.ok) return { ok: true };
+    return { ok: false, error: d.error || 'Failed to clear conversation.', unauthorized: r.status === 401, forbidden: r.status === 403 };
+  }
+
   // ─── Contacts management (name-centric outbound contacts) ────────────────
 
   /** List all contacts (name, platform, id, phone, status). */

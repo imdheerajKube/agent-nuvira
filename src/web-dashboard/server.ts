@@ -3033,6 +3033,37 @@ function handleRequest(req: IncomingMessage, res: ServerResponse): void {
   //       dashboard passes the FULL map it read; the running gateway re-reads
   //       config per inbound, so changes apply without a restart). Named
   //       WhatsApp contacts are also synced into the bridge contacts file
+  // DELETE /api/admin/gateway/conversations — clear a single conversation by key.
+  // Rides on gateway.manage (admin + operator) like the policies endpoint.
+  if (pathname === '/api/admin/gateway/conversations' && req.method === 'DELETE') {
+    void (async () => {
+      const session = adminSessions.validate(bearerToken(req));
+      if (!session) {
+        writeJson(res, 401, { ok: false, error: 'Not authenticated — log in first.' });
+        return;
+      }
+      if (!roleCan(session.role, 'gateway.manage')) {
+        writeJson(res, 403, { ok: false, error: `Access denied — role '${session.role}' cannot manage conversations.` });
+        return;
+      }
+      const body = await readJsonBody(req);
+      const key = body?.key as string | undefined;
+      if (!key || typeof key !== 'string') {
+        writeJson(res, 400, { ok: false, error: 'Missing or invalid "key" field.' });
+        return;
+      }
+      try {
+        const { GatewayChatStore } = await import('../gateway/chat-store.js');
+        const store = new GatewayChatStore();
+        store.clear(key);
+        writeJson(res, 200, { ok: true });
+      } catch (err) {
+        writeJson(res, 500, { ok: false, error: `Failed to clear conversation: ${err instanceof Error ? err.message : String(err)}` });
+      }
+    })();
+    return;
+  }
+
   //       (send-by-name parity with `nuvira whatsapp contact add`).
   // Rides on gateway.manage (admin + operator) like the alias CLI.
   if (pathname === '/api/admin/gateway/policies') {

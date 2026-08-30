@@ -78,6 +78,11 @@ export default function AgentHub() {
   // full ids while working (per-session, resets on reload).
   const [revealIds, setRevealIds] = useState(false);
 
+  // Conversations tab — expanded conversation key (null = none).
+  const [expandedConv, setExpandedConv] = useState<string | null>(null);
+  const [convSearch, setConvSearch] = useState('');
+  const [clearingConv, setClearingConv] = useState<string | null>(null);
+
   // P6d — marketplace import surface (search every configured registry).
   const [marketQuery, setMarketQuery] = useState('');
   const [marketResults, setMarketResults] = useState<Array<{
@@ -1032,40 +1037,138 @@ export default function AgentHub() {
               <div className="admin-summary-value">{data.conversations?.total ?? 0}</div>
               <div className="admin-summary-label">Stored conversations</div>
             </div>
+            <div className="admin-summary-card">
+              <div className="admin-summary-value">{(data.conversations?.recent ?? []).filter((c) => Date.now() - c.lastActiveAt < 86_400_000).length}</div>
+              <div className="admin-summary-label">Active today</div>
+            </div>
+            <div className="admin-summary-card">
+              <div className="admin-summary-value">{(data.conversations?.recent ?? []).filter((c) => c.platform === 'whatsapp').length}</div>
+              <div className="admin-summary-label">WhatsApp</div>
+            </div>
+            <div className="admin-summary-card">
+              <div className="admin-summary-value">{(data.conversations?.recent ?? []).filter((c) => c.platform === 'telegram').length}</div>
+              <div className="admin-summary-label">Telegram</div>
+            </div>
           </div>
           <h3 className="section-subtitle">💬 Per-contact chat history</h3>
-          <p className="admin-hint">Conversation history is stored per-contact and survives gateway restarts. Messages older than 7 days are auto-pruned.</p>
+          <p className="admin-hint">Conversation history is stored per-contact and survives gateway restarts. Messages older than 7 days are auto-pruned. Click a conversation to expand the full chat thread.</p>
           {(data.conversations?.recent ?? []).length > 0 ? (
-            <div className="admin-table-wrapper">
-              <table className="admin-table">
-                <thead>
-                  <tr>
-                    <th>Contact</th>
-                    <th>Platform</th>
-                    <th>Messages</th>
-                    <th>Last active</th>
-                    <th>Last user message</th>
-                    <th>Last assistant reply</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {(data.conversations?.recent ?? []).map((c) => {
+            <>
+              {/* Search filter */}
+              <div className="hub-send-form" style={{ marginBottom: 12 }}>
+                <input
+                  type="text"
+                  value={convSearch}
+                  onChange={(e) => setConvSearch(e.target.value)}
+                  placeholder="🔍 Search by contact name, phone number, or message content…"
+                  style={{ flex: 1 }}
+                />
+              </div>
+              {/* Conversation cards (not a table — each card expands into a chat thread) */}
+              <div className="hub-session-list">
+                {(data.conversations?.recent ?? [])
+                  .filter((c) => {
+                    if (!convSearch.trim()) return true;
+                    const q = convSearch.toLowerCase();
+                    return (
+                      (c.contactName ?? '').toLowerCase().includes(q) ||
+                      c.channelId.toLowerCase().includes(q) ||
+                      c.lastUserMessage.toLowerCase().includes(q) ||
+                      c.lastAssistantMessage.toLowerCase().includes(q)
+                    );
+                  })
+                  .map((c) => {
                     const age = Date.now() - c.lastActiveAt;
                     const ageStr = age < 60_000 ? 'just now' : age < 3_600_000 ? `${Math.round(age / 60_000)}m ago` : age < 86_400_000 ? `${Math.round(age / 3_600_000)}h ago` : `${Math.round(age / 86_400_000)}d ago`;
+                    const isExpanded = expandedConv === c.key;
+                    const displayName = c.contactName || showId(c.channelId);
+                    const handleClear = async (e: React.MouseEvent) => {
+                      e.stopPropagation();
+                      if (!authed || !canWrite) {
+                        setPolicyMsg({ kind: 'err', text: '🔐 Log in (admin/operator) to clear conversations.' });
+                        return;
+                      }
+                      setClearingConv(c.key);
+                      try {
+                        // We need a DELETE endpoint — for now call the gateway history CLI endpoint.
+                        // TODO: Add proper API endpoint.
+                        await dashboardAPI.clearGatewayConversation(c.key);
+                        void refresh();
+                      } catch { /* best-effort */ }
+                      setClearingConv(null);
+                    };
                     return (
-                      <tr key={c.key}>
-                        <td className="admin-provider-type"><code>{c.channelId}</code></td>
-                        <td><span className="hub-chip">{c.platform}</span></td>
-                        <td>{c.messageCount}</td>
-                        <td className="admin-hint">{ageStr}</td>
-                        <td className="admin-hint">{c.lastUserMessage.slice(0, 60)}{c.lastUserMessage.length > 60 ? '…' : ''}</td>
-                        <td className="admin-hint">{c.lastAssistantMessage.slice(0, 60)}{c.lastAssistantMessage.length > 60 ? '…' : ''}</td>
-                      </tr>
+                      <div
+                        className="hub-card"
+                        key={c.key}
+                        style={{ cursor: 'pointer', borderLeft: `3px solid ${c.platform === 'whatsapp' ? '#25d366' : c.platform === 'telegram' ? '#0088cc' : '#6c757d'}` }}
+                        onClick={() => setExpandedConv(isExpanded ? null : c.key)}
+                      >
+                        <div className="hub-card-top">
+                          <div className="hub-card-title">
+                            <span className="hub-card-name">
+                              {c.platform === 'whatsapp' ? '📱' : c.platform === 'telegram' ? '✈️' : '💬'} {displayName}
+                            </span>
+                            <span className="hub-card-id">{c.platform} · {ageStr}</span>
+                          </div>
+                          <div className="hub-card-actions" style={{ gap: 6 }}>
+                            <span className="hub-chip">{c.messageCount} msgs</span>
+                            <button
+                              type="button"
+                              className="hub-mini-btn"
+                              disabled={clearingConv === c.key}
+                              onClick={handleClear}
+                              title="Clear conversation history"
+                              style={{ color: '#ef4444' }}
+                            >
+                              🗑️
+                            </button>
+                            <span style={{ fontSize: 18, transition: 'transform 0.2s', transform: isExpanded ? 'rotate(180deg)' : 'none' }}>▼</span>
+                          </div>
+                        </div>
+                        <p className="hub-card-desc" style={{ fontStyle: 'italic', color: 'var(--muted)' }}>
+                          <span style={{ color: 'var(--fg)', fontWeight: 500 }}>Last message:</span>{' '}
+                          {c.lastUserMessage.slice(0, 120)}{c.lastUserMessage.length > 120 ? '…' : ''}
+                        </p>
+                        {isExpanded && c.messages && c.messages.length > 0 ? (
+                          <div className="conversation-thread" style={{ marginTop: 10, borderTop: '1px solid var(--border)', paddingTop: 10, maxHeight: 400, overflowY: 'auto' }}>
+                            {c.messages.map((m, i) => (
+                              <div
+                                key={i}
+                                style={{
+                                  marginBottom: 8,
+                                  display: 'flex',
+                                  flexDirection: 'column',
+                                  alignItems: m.role === 'user' ? 'flex-end' : 'flex-start',
+                                }}
+                              >
+                                <div style={{
+                                  maxWidth: '80%',
+                                  padding: '8px 12px',
+                                  borderRadius: 12,
+                                  backgroundColor: m.role === 'user' ? '#007bff' : 'var(--card-bg, #f0f0f0)',
+                                  color: m.role === 'user' ? '#fff' : 'var(--fg)',
+                                  fontSize: 13,
+                                  lineHeight: 1.5,
+                                  whiteSpace: 'pre-wrap',
+                                  wordBreak: 'break-word',
+                                }}>
+                                  {m.content.slice(0, 500)}{m.content.length > 500 ? '…' : ''}
+                                </div>
+                                <span style={{ fontSize: 10, color: 'var(--muted)', marginTop: 2, padding: '0 4px' }}>
+                                  {m.role === 'user' ? '👤' : '🤖'} {new Date(m.ts).toLocaleString()}
+                                </span>
+                              </div>
+                            ))}
+                          </div>
+                        ) : isExpanded ? (
+                          <p className="admin-hint" style={{ marginTop: 8 }}>No message details available.</p>
+                        ) : null}
+                      </div>
                     );
                   })}
-                </tbody>
-              </table>
-            </div>
+              </div>
+            </>
           ) : (
             <div className="empty-state">No conversations stored yet. Conversations are created when users message the agent via WhatsApp/Telegram/etc.</div>
           )}
