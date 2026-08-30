@@ -676,6 +676,33 @@ export class DashboardAPI {
     return { ok: false, error: d.error || 'Failed to clear conversation.', unauthorized: r.status === 401, forbidden: r.status === 403 };
   }
 
+  /** Add a tag to a conversation. */
+  async addConversationTag(key: string, tag: string): Promise<{ ok: boolean; error?: string }> {
+    const r = await this.sendAdminRequest('/api/admin/gateway/conversations/tags', 'PUT', { action: 'add', key, tag });
+    if (!r) return { ok: false, error: 'Could not reach the dashboard server.' };
+    const d = (r.data ?? {}) as { ok?: boolean; error?: string };
+    if (r.status === 200 && d.ok) return { ok: true };
+    return { ok: false, error: d.error || 'Failed to add tag.', unauthorized: r.status === 401, forbidden: r.status === 403 };
+  }
+
+  /** Remove a tag from a conversation. */
+  async removeConversationTag(key: string, tag: string): Promise<{ ok: boolean; error?: string }> {
+    const r = await this.sendAdminRequest('/api/admin/gateway/conversations/tags', 'PUT', { action: 'remove', key, tag });
+    if (!r) return { ok: false, error: 'Could not reach the dashboard server.' };
+    const d = (r.data ?? {}) as { ok?: boolean; error?: string };
+    if (r.status === 200 && d.ok) return { ok: true };
+    return { ok: false, error: d.error || 'Failed to remove tag.', unauthorized: r.status === 401, forbidden: r.status === 403 };
+  }
+
+  /** Get all unique tags across all conversations. */
+  async getAllConversationTags(): Promise<{ ok: boolean; tags?: string[]; error?: string }> {
+    const r = await this.sendAdminRequest('/api/admin/gateway/conversations/tags', 'PUT', { action: 'getAllTags' });
+    if (!r) return { ok: false, error: 'Could not reach the dashboard server.' };
+    const d = (r.data ?? {}) as { ok?: boolean; tags?: string[]; error?: string };
+    if (r.status === 200 && d.ok) return { ok: true, tags: d.tags };
+    return { ok: false, error: d.error || 'Failed to load tags.', unauthorized: r.status === 401, forbidden: r.status === 403 };
+  }
+
   /** Bulk export conversations as a ZIP file. Triggers a browser download. */
   async exportGatewayConversations(keys: string[]): Promise<{ ok: boolean; error?: string }> {
     try {

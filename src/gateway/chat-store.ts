@@ -42,6 +42,8 @@ export interface ChatConversation {
   messages: ChatMessage[];
   /** Epoch-ms of the last message (for TTL/pruning). */
   lastActiveAt: number;
+  /** User-defined tags for organizing conversations. */
+  tags?: string[];
 }
 
 interface ChatHistoryData {
@@ -130,6 +132,47 @@ export class GatewayChatStore {
     const data = this.read();
     delete data.conversations[key];
     this.write(data);
+  }
+
+  /** Set tags on a conversation (replaces existing tags). */
+  setTags(key: string, tags: string[]): void {
+    const data = this.read();
+    const conv = data.conversations[key];
+    if (!conv) return;
+    conv.tags = [...new Set(tags.map((t) => t.trim().toLowerCase()).filter(Boolean))];
+    this.write(data);
+  }
+
+  /** Add a single tag to a conversation (no-op if already present). */
+  addTag(key: string, tag: string): void {
+    const data = this.read();
+    const conv = data.conversations[key];
+    if (!conv) return;
+    const normalized = tag.trim().toLowerCase();
+    if (!normalized) return;
+    if (!conv.tags) conv.tags = [];
+    if (!conv.tags.includes(normalized)) conv.tags.push(normalized);
+    this.write(data);
+  }
+
+  /** Remove a single tag from a conversation. */
+  removeTag(key: string, tag: string): void {
+    const data = this.read();
+    const conv = data.conversations[key];
+    if (!conv?.tags) return;
+    const normalized = tag.trim().toLowerCase();
+    conv.tags = conv.tags.filter((t) => t !== normalized);
+    this.write(data);
+  }
+
+  /** Get all unique tags across all conversations. */
+  getAllTags(): string[] {
+    const data = this.read();
+    const tags = new Set<string>();
+    for (const conv of Object.values(data.conversations)) {
+      if (conv.tags) conv.tags.forEach((t) => tags.add(t));
+    }
+    return [...tags].sort();
   }
 
   /**
