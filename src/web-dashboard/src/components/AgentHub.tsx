@@ -145,6 +145,83 @@ export default function AgentHub() {
     return () => clearTimeout(timer);
   }, [convSearch]);
 
+  /** Export a conversation as a formatted text file download. */
+  const exportConversationText = useCallback((c: NonNullable<HubData['conversations']['recent']>[0], e: React.MouseEvent) => {
+    e.stopPropagation();
+    const displayName = c.contactName || c.channelId;
+    const lines: string[] = [
+      `Conversation with ${displayName} (${c.platform})`,
+      `Exported: ${new Date().toLocaleString()}`,
+      `Messages: ${c.messageCount}`,
+      '─'.repeat(50),
+      '',
+    ];
+    if (c.messages) {
+      for (const m of c.messages) {
+        const role = m.role === 'user' ? displayName : 'Agent';
+        const ts = new Date(m.ts).toLocaleString();
+        lines.push(`[${ts}] ${role}:`);
+        lines.push(m.content);
+        lines.push('');
+      }
+    }
+    const blob = new Blob([lines.join('\n')], { type: 'text/plain;charset=utf-8' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = `conversation-${c.platform}-${c.channelId.replace(/[^\w]/g, '_')}-${new Date().toISOString().slice(0, 10)}.txt`;
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    URL.revokeObjectURL(url);
+  }, []);
+
+  /** Export a conversation as a printable HTML page (user can Save as PDF). */
+  const exportConversationPDF = useCallback((c: NonNullable<HubData['conversations']['recent']>[0], e: React.MouseEvent) => {
+    e.stopPropagation();
+    const displayName = c.contactName || c.channelId;
+    const messages = c.messages ?? [];
+    const html = `<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<title>Conversation with ${displayName}</title>
+<style>
+  body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; max-width: 700px; margin: 40px auto; padding: 0 20px; color: #1a1a1a; line-height: 1.6; }
+  h1 { font-size: 20px; margin-bottom: 4px; }
+  .meta { color: #666; font-size: 13px; margin-bottom: 20px; }
+  .msg { margin-bottom: 16px; }
+  .msg-user { text-align: right; }
+  .msg-assistant { text-align: left; }
+  .bubble { display: inline-block; max-width: 80%; padding: 10px 14px; border-radius: 12px; font-size: 14px; white-space: pre-wrap; word-break: break-word; text-align: left; }
+  .bubble-user { background: #007bff; color: #fff; border-bottom-right-radius: 4px; }
+  .bubble-assistant { background: #f0f0f0; color: #1a1a1a; border-bottom-left-radius: 4px; }
+  .timestamp { font-size: 11px; color: #999; margin-top: 2px; }
+  @media print { body { margin: 0; } }
+</style>
+</head>
+<body>
+<h1>Conversation with ${displayName}</h1>
+<div class="meta">Platform: ${c.platform} · ${c.messageCount} messages · Exported: ${new Date().toLocaleString()}</div>
+${messages.map((m) => {
+  const role = m.role === 'user' ? 'user' : 'assistant';
+  const label = m.role === 'user' ? displayName : 'Agent';
+  return `<div class="msg msg-${role}">
+  <div class="bubble bubble-${role}">${m.content.replace(/</g, '&lt;').replace(/>/g, '&gt;')}</div>
+  <div class="timestamp">${label} · ${new Date(m.ts).toLocaleString()}</div>
+</div>`;
+}).join('\n')}
+</body>
+</html>`;
+    const w = window.open('', '_blank');
+    if (w) {
+      w.document.write(html);
+      w.document.close();
+      // Auto-trigger print dialog which includes Save as PDF.
+      setTimeout(() => w.print(), 300);
+    }
+  }, []);
+
   // Real-time SSE sync: when data.conversations is updated by a conversation SSE
   // event, merge new/updated entries into the infinite-scroll list without a
   // full reload. Only auto-syncs when the user is on the first page (offset=0)
@@ -1199,6 +1276,26 @@ export default function AgentHub() {
                           </div>
                           <div className="hub-card-actions" style={{ gap: 6 }}>
                             <span className="hub-chip">{c.messageCount} msgs</span>
+                            {isExpanded && c.messages && c.messages.length > 0 && (
+                              <>
+                                <button
+                                  type="button"
+                                  className="hub-mini-btn"
+                                  onClick={(e) => exportConversationText(c, e)}
+                                  title="Export as text file"
+                                >
+                                  📄
+                                </button>
+                                <button
+                                  type="button"
+                                  className="hub-mini-btn"
+                                  onClick={(e) => exportConversationPDF(c, e)}
+                                  title="Export as PDF (opens print dialog)"
+                                >
+                                  📑
+                                </button>
+                              </>
+                            )}
                             <button
                               type="button"
                               className="hub-mini-btn"
