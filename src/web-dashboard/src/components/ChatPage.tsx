@@ -1032,6 +1032,8 @@ export default function ChatPage() {
         const r = await dashboardAPI.resolveFolder(folderName);
         setBusy(false);
         if (r.ok && r.path) {
+          // Show the resolved path in the input field for transparency.
+          setProjectPathInput(r.path);
           void attachProject(r.path);
         } else {
           setProjectError((r.error || 'Could not find folder.') + ' Opening manual browser...');
@@ -1517,7 +1519,7 @@ export default function ChatPage() {
                 <button type="button" className="admin-refresh-btn" onClick={() => void attachProject(projectPathInput)} disabled={busy || !projectPathInput.trim()}>
                   Attach
                 </button>
-                <button type="button" className="admin-mini-btn" onClick={() => void openNativeFolderPicker()} title="Open system folder picker">
+                <button type="button" className="admin-mini-btn" onClick={() => void openNativeFolderPicker()} title="Pick a project folder using your system's folder picker (Finder / Explorer)">
                   🗂️ Browse
                 </button>
                 {projectError ? <span className="chat-project-error">{projectError}</span> : null}
