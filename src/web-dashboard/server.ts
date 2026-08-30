@@ -3033,6 +3033,94 @@ function handleRequest(req: IncomingMessage, res: ServerResponse): void {
   //       dashboard passes the FULL map it read; the running gateway re-reads
   //       config per inbound, so changes apply without a restart). Named
   //       WhatsApp contacts are also synced into the bridge contacts file
+  // GET /api/admin/gateway/conversations — paginated conversation list.
+  // Rides on gateway.manage (admin + operator).
+  if (pathname === '/api/admin/gateway/conversations' && req.method === 'GET') {
+    void (async () => {
+      const session = adminSessions.validate(bearerToken(req));
+      if (!session) {
+        writeJson(res, 401, { ok: false, error: 'Not authenticated — log in first.' });
+        return;
+      }
+      if (!roleCan(session.role, 'gateway.manage')) {
+        writeJson(res, 403, { ok: false, error: `Access denied — role '${session.role}' cannot view conversations.` });
+        return;
+      }
+      try {
+        const url = new URL(req.url || '/', `http://${req.headers.host || 'localhost'}`);
+        const offset = Math.max(0, parseInt(url.searchParams.get('offset') || '0', 10) || 0);
+        const limit = Math.min(100, Math.max(1, parseInt(url.searchParams.get('limit') || '20', 10) || 20));
+        const search = url.searchParams.get('q')?.toLowerCase() || '';
+
+        const { GatewayChatStore, CHAT_HISTORY_TTL_MS } = await import('../gateway/chat-store.js');
+        const store = new GatewayChatStore();
+        const allConvs = store.getAllConversations();
+
+        // Resolve contact names.
+        let contactLookup: Record<string, string> = {};
+        try {
+          const { readContactsFile } = await import('../gateway/whatsapp/contacts.js');
+          const { whatsappSessionDir } = await import('../gateway/whatsapp/session.js');
+          const contacts = readContactsFile(whatsappSessionDir());
+          for (const [name, digits] of Object.entries(contacts)) {
+            if (name && digits) contactLookup[digits] = name;
+          }
+        } catch { /* best-effort */ }
+
+        // Map to summary shapes, filtering expired conversations.
+        const now = Date.now();
+        const summaries = allConvs
+          .filter((c) => now - c.lastActiveAt <= CHAT_HISTORY_TTL_MS)
+          .sort((a, b) => b.lastActiveAt - a.lastActiveAt)
+          .map((c) => {
+            const [platform, ...rest] = c.key.split(':');
+            const channelId = rest.join(':');
+            const lastUser = c.messages.filter((m) => m.role === 'user').pop();
+            const lastAssistant = c.messages.filter((m) => m.role === 'assistant').pop();
+            const cleanId = channelId.replace(/[^\d]/g, '');
+            const contactName = contactLookup[cleanId] || contactLookup[channelId];
+            return {
+              key: c.key,
+              platform: platform || 'unknown',
+              channelId,
+              contactName,
+              messageCount: c.messages.length,
+              lastActiveAt: c.lastActiveAt,
+              lastUserMessage: (lastUser?.content ?? '').slice(0, 300),
+              lastAssistantMessage: (lastAssistant?.content ?? '').slice(0, 300),
+              messages: c.messages.map((m) => ({ role: m.role, content: m.content, ts: m.ts })),
+            };
+          });
+
+        // Apply search filter.
+        const filtered = search
+          ? summaries.filter((c) =>
+              (c.contactName ?? '').toLowerCase().includes(search) ||
+              c.channelId.toLowerCase().includes(search) ||
+              c.lastUserMessage.toLowerCase().includes(search) ||
+              c.lastAssistantMessage.toLowerCase().includes(search)
+          )
+          : summaries;
+
+        // Paginate.
+        const total = filtered.length;
+        const page = filtered.slice(offset, offset + limit);
+
+        writeJson(res, 200, {
+          ok: true,
+          conversations: page,
+          total,
+          offset,
+          limit,
+          hasMore: offset + limit < total,
+        });
+      } catch (err) {
+        writeJson(res, 500, { ok: false, error: `Failed to load conversations: ${err instanceof Error ? err.message : String(err)}` });
+      }
+    })();
+    return;
+  }
+
   // DELETE /api/admin/gateway/conversations — clear a single conversation by key.
   // Rides on gateway.manage (admin + operator) like the policies endpoint.
   if (pathname === '/api/admin/gateway/conversations' && req.method === 'DELETE') {

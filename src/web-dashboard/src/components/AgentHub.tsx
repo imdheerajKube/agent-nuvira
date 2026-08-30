@@ -15,7 +15,7 @@
  * switches (admin/operator can toggle, viewer reads).
  */
 
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { dashboardAPI } from '../api';
 import type { HubChannelPolicy, HubContact, HubData, HubToolset } from '../types';
 import WhatsAppPanel from './WhatsAppPanel';
@@ -78,10 +78,72 @@ export default function AgentHub() {
   // full ids while working (per-session, resets on reload).
   const [revealIds, setRevealIds] = useState(false);
 
-  // Conversations tab — expanded conversation key (null = none).
+  // Conversations tab — infinite scroll state.
   const [expandedConv, setExpandedConv] = useState<string | null>(null);
   const [convSearch, setConvSearch] = useState('');
   const [clearingConv, setClearingConv] = useState<string | null>(null);
+  const [convList, setConvList] = useState<NonNullable<HubData['conversations']['recent']>>([]);
+  const [convTotal, setConvTotal] = useState(0);
+  const [convOffset, setConvOffset] = useState(0);
+  const [convHasMore, setConvHasMore] = useState(true);
+  const [convLoading, setConvLoading] = useState(false);
+  const [convInitialized, setConvInitialized] = useState(false);
+  const convPageSize = 20;
+  const convSentinelRef = useRef<HTMLDivElement | null>(null);
+
+  /** Load the next page of conversations (or the first page on search/init). */
+  const loadConversations = useCallback(async (reset = false) => {
+    if (convLoading) return;
+    const offset = reset ? 0 : convOffset;
+    setConvLoading(true);
+    try {
+      const r = await dashboardAPI.fetchGatewayConversations({ offset, limit: convPageSize, q: convSearch || undefined });
+      if (r.ok && r.conversations) {
+        setConvList((prev) => reset ? r.conversations! : [...prev, ...r.conversations!]);
+        setConvTotal(r.total ?? 0);
+        setConvOffset(offset + r.conversations!.length);
+        setConvHasMore(r.hasMore ?? false);
+      }
+    } catch { /* best-effort */ }
+    setConvLoading(false);
+  }, [convLoading, convOffset, convSearch]);
+
+  // Load conversations when the tab is first opened.
+  useEffect(() => {
+    if (tab === 'conversations' && !convInitialized && !convLoading) {
+      setConvInitialized(true);
+      void loadConversations(true);
+    }
+  }, [tab, convInitialized, convLoading, loadConversations]);
+
+  // Infinite scroll — observe the sentinel div at the bottom of the list.
+  useEffect(() => {
+    const sentinel = convSentinelRef.current;
+    if (!sentinel) return;
+    const observer = new IntersectionObserver(
+      (entries) => {
+        if (entries[0]?.isIntersecting && convHasMore && !convLoading) {
+          void loadConversations(false);
+        }
+      },
+      { threshold: 0.1 },
+    );
+    observer.observe(sentinel);
+    return () => observer.disconnect();
+  }, [convHasMore, convLoading, loadConversations]);
+
+  // Reset and reload conversations when search changes (debounced).
+  useEffect(() => {
+    const timer = setTimeout(() => {
+      if (tab === 'conversations' && convInitialized) {
+        setConvList([]);
+        setConvOffset(0);
+        setConvHasMore(true);
+        void loadConversations(true);
+      }
+    }, 300);
+    return () => clearTimeout(timer);
+  }, [convSearch]);
 
   // P6d — marketplace import surface (search every configured registry).
   const [marketQuery, setMarketQuery] = useState('');
@@ -1052,7 +1114,7 @@ export default function AgentHub() {
           </div>
           <h3 className="section-subtitle">💬 Per-contact chat history</h3>
           <p className="admin-hint">Conversation history is stored per-contact and survives gateway restarts. Messages older than 7 days are auto-pruned. Click a conversation to expand the full chat thread.</p>
-          {(data.conversations?.recent ?? []).length > 0 ? (
+          {convList.length > 0 || convLoading ? (
             <>
               {/* Search filter */}
               <div className="hub-send-form" style={{ marginBottom: 12 }}>
@@ -1063,21 +1125,15 @@ export default function AgentHub() {
                   placeholder="🔍 Search by contact name, phone number, or message content…"
                   style={{ flex: 1 }}
                 />
+                <span className="admin-hint" style={{ marginLeft: 8 }}>
+                  {convTotal} conversation{convTotal === 1 ? '' : 's'}
+                  {convSearch ? ` matching "${convSearch}"` : ''}
+                  {convHasMore ? ` (showing ${convList.length} of ${convTotal})` : ''}
+                </span>
               </div>
               {/* Conversation cards (not a table — each card expands into a chat thread) */}
               <div className="hub-session-list">
-                {(data.conversations?.recent ?? [])
-                  .filter((c) => {
-                    if (!convSearch.trim()) return true;
-                    const q = convSearch.toLowerCase();
-                    return (
-                      (c.contactName ?? '').toLowerCase().includes(q) ||
-                      c.channelId.toLowerCase().includes(q) ||
-                      c.lastUserMessage.toLowerCase().includes(q) ||
-                      c.lastAssistantMessage.toLowerCase().includes(q)
-                    );
-                  })
-                  .map((c) => {
+                {convList.map((c) => {
                     const age = Date.now() - c.lastActiveAt;
                     const ageStr = age < 60_000 ? 'just now' : age < 3_600_000 ? `${Math.round(age / 60_000)}m ago` : age < 86_400_000 ? `${Math.round(age / 3_600_000)}h ago` : `${Math.round(age / 86_400_000)}d ago`;
                     const isExpanded = expandedConv === c.key;
@@ -1167,8 +1223,28 @@ export default function AgentHub() {
                       </div>
                     );
                   })}
+                {/* Infinite scroll sentinel */}
+                {convHasMore && !convLoading && (
+                  <div ref={convSentinelRef} style={{ height: 1 }} />
+                )}
+                {convLoading && (
+                  <div className="loading-state" style={{ padding: 12 }}>
+                    <div className="loading-spinner" />
+                    <span className="admin-hint" style={{ marginLeft: 8 }}>Loading more conversations…</span>
+                  </div>
+                )}
+                {!convLoading && !convHasMore && convList.length > 0 && (
+                  <p className="admin-hint" style={{ textAlign: 'center', padding: 12 }}>
+                    All {convTotal} conversation{convTotal === 1 ? '' : 's'} loaded.
+                  </p>
+                )}
               </div>
             </>
+          ) : convLoading ? (
+            <div className="loading-state">
+              <div className="loading-spinner" />
+              <p className="admin-hint">Loading conversations…</p>
+            </div>
           ) : (
             <div className="empty-state">No conversations stored yet. Conversations are created when users message the agent via WhatsApp/Telegram/etc.</div>
           )}
