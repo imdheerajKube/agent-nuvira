@@ -313,7 +313,8 @@ ${messages.map((m) => {
     if (!sseConvs || sseConvs.length === 0) return;
     if (!convInitialized) return;
     // Only auto-sync on the first page with no search filter.
-    if (convOffset > 20 || convSearch) return;
+    // Guard: if we've loaded more than one page, don't overwrite.
+    if (convOffset > convPageSize || convSearch) return;
     // Merge: update existing entries, prepend new ones.
     setConvList((prev) => {
       const existingKeys = new Set(prev.map((c) => c.key));
@@ -816,6 +817,7 @@ ${messages.map((m) => {
           const count =
             t.id === 'tools' ? (data ? `${data.toolsets.enabled}/${data.toolsets.toolsets.length}` : '')
             : t.id === 'channels' ? (data ? String(data.channels.delivery.total) : '')
+            : t.id === 'conversations' ? (data ? String(data.conversations?.total ?? 0) : '')
             : t.id === 'artifacts' ? (data ? String(data.artifacts.totalSessions) : '')
             : (data ? `${data.skills.enabled}/${data.skills.total}` : '');
           return (
@@ -1289,15 +1291,15 @@ ${messages.map((m) => {
               <div className="admin-summary-label">Stored conversations</div>
             </div>
             <div className="admin-summary-card">
-              <div className="admin-summary-value">{(data.conversations?.recent ?? []).filter((c) => Date.now() - c.lastActiveAt < 86_400_000).length}</div>
+              <div className="admin-summary-value">{convList.filter((c) => Date.now() - c.lastActiveAt < 86_400_000).length}</div>
               <div className="admin-summary-label">Active today</div>
             </div>
             <div className="admin-summary-card">
-              <div className="admin-summary-value">{(data.conversations?.recent ?? []).filter((c) => c.platform === 'whatsapp').length}</div>
+              <div className="admin-summary-value">{convList.filter((c) => c.platform === 'whatsapp').length}</div>
               <div className="admin-summary-label">WhatsApp</div>
             </div>
             <div className="admin-summary-card">
-              <div className="admin-summary-value">{(data.conversations?.recent ?? []).filter((c) => c.platform === 'telegram').length}</div>
+              <div className="admin-summary-value">{convList.filter((c) => c.platform === 'telegram').length}</div>
               <div className="admin-summary-label">Telegram</div>
             </div>
           </div>
@@ -1566,8 +1568,8 @@ ${messages.map((m) => {
                             <span style={{ fontSize: 18, transition: 'transform 0.2s', transform: isExpanded ? 'rotate(180deg)' : 'none' }}>▼</span>
                           </div>
                         </div>
-                        <p className="hub-card-desc" style={{ fontStyle: 'italic', color: 'var(--muted)' }}>
-                          <span style={{ color: 'var(--fg)', fontWeight: 500 }}>Last message:</span>{' '}
+                        <p className="hub-card-desc" style={{ fontStyle: 'italic', color: 'var(--text-muted, #6e7681)' }}>
+                          <span style={{ color: 'var(--text-primary, #e6edf3)', fontWeight: 500 }}>Last message:</span>{' '}
                           {c.lastUserMessage.slice(0, 120)}{c.lastUserMessage.length > 120 ? '…' : ''}
                         </p>
                         {/* Tags */}
@@ -1623,8 +1625,8 @@ ${messages.map((m) => {
                                   maxWidth: '80%',
                                   padding: '8px 12px',
                                   borderRadius: 12,
-                                  backgroundColor: m.role === 'user' ? '#007bff' : 'var(--card-bg, #f0f0f0)',
-                                  color: m.role === 'user' ? '#fff' : 'var(--fg)',
+                                  backgroundColor: m.role === 'user' ? '#007bff' : 'var(--bg-card, #1a1f2e)',
+                                  color: m.role === 'user' ? '#fff' : 'var(--text-primary, #e6edf3)',
                                   fontSize: 13,
                                   lineHeight: 1.5,
                                   whiteSpace: 'pre-wrap',
@@ -1643,7 +1645,7 @@ ${messages.map((m) => {
                                 <div style={{
                                   padding: '8px 16px',
                                   borderRadius: 12,
-                                  backgroundColor: 'var(--card-bg, #f0f0f0)',
+                                  backgroundColor: 'var(--bg-card, #1a1f2e)',
                                   fontSize: 13,
                                   display: 'flex',
                                   alignItems: 'center',
