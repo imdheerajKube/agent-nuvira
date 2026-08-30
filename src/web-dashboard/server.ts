@@ -277,6 +277,18 @@ function broadcastConversationUpdate(): void {
   } catch { /* best-effort — a failed broadcast must never break the dashboard */ }
 }
 
+let typingWatchTimer: ReturnType<typeof setTimeout> | null = null;
+
+function broadcastTypingFromFile(): void {
+  try {
+    const file = join(getGatewayDir(), 'typing.json');
+    if (existsSync(file)) {
+      const data = JSON.parse(readFileSync(file, 'utf-8')) as { platform: string; channelId: string; ts: number };
+      broadcastTyping({ platform: data.platform, channelId: data.channelId, typing: true });
+    }
+  } catch { /* best-effort */ }
+}
+
 function armConvWatcher(): void {
   if (convWatcher) return;
   try {
@@ -284,6 +296,16 @@ function armConvWatcher(): void {
     if (!existsSync(dir)) mkdirSync(dir, { recursive: true });
     convWatcher = watch(dir, (_eventType, filename) => {
       const name = basename(String(filename || ''));
+      // Handle typing.json changes (typing indicator).
+      if (name === 'typing.json') {
+        if (typingWatchTimer) clearTimeout(typingWatchTimer);
+        typingWatchTimer = setTimeout(() => {
+          typingWatchTimer = null;
+          broadcastTypingFromFile();
+        }, 100);
+        return;
+      }
+      // Handle chat-history.json changes (conversation updates).
       if (name && name !== 'chat-history.json') return;
       if (convWatchTimer) clearTimeout(convWatchTimer);
       convWatchTimer = setTimeout(() => {
@@ -301,6 +323,14 @@ function disarmConvWatcher(): void {
   if (convWatcher) {
     try { convWatcher.close(); } catch { /* ignore */ }
     convWatcher = null;
+  }
+}
+
+/** Broadcast a typing indicator event to all SSE clients. */
+export function broadcastTyping(event: { platform: string; channelId: string; typing: boolean }): void {
+  const payload = `event: typing\ndata: ${JSON.stringify({ ...event, serverTime: Date.now() })}\n\n`;
+  for (const client of sseClients) {
+    try { client.res.write(payload); } catch { /* client disconnected */ }
   }
 }
 

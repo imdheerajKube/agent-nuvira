@@ -908,6 +908,11 @@ body {
   to { opacity: 1; transform: translateY(0); }
 }
 
+@keyframes typingBlink {
+  0%, 60%, 100% { opacity: 0.2; }
+  30% { opacity: 1; }
+}
+
 .stat-card, .health-card, .cost-row, .history-item, .benchmark-item, .dag-row, .dag-status-bar {
   animation: fadeIn 0.3s ease-out;
 }

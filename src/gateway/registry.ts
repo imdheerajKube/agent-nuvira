@@ -35,6 +35,9 @@ import { DeliveryLedger, type DeliveryEntry } from './delivery.js';
 import { InboxLedger, type InboundDisposition } from './inbox.js';
 import { GatewayChatStore, CHAT_HISTORY_MAX_PAIRS } from './chat-store.js';
 import { logger } from '../utils/logger.js';
+import { existsSync, mkdirSync, writeFileSync, unlinkSync } from 'node:fs';
+import { join } from 'node:path';
+import { resolveBuffConfigDir } from '../config/paths.js';
 
 /** How often the running gateway drains due delivery entries (ms). */
 const DELIVERY_DRAIN_INTERVAL_MS = 30_000;
@@ -271,6 +274,11 @@ export interface GatewayRegistryOptions {
    * a chat-answer test never touches a model or the CLI router.
    */
   chatEngine?: import('../web-dashboard/chat-console.js').ChatEngine;
+  /**
+   * Callback invoked when the gateway starts/stops processing a chat message.
+   * The dashboard server uses this to broadcast typing indicators via SSE.
+   */
+  onTyping?: (event: { platform: string; channelId: string; typing: boolean }) => void;
 }
 
 export class GatewayRegistry {
@@ -281,7 +289,7 @@ export class GatewayRegistry {
   readonly inbox: InboxLedger;
   private adapters = new Map<Platform, ChannelAdapter>();
   private configManager: ConfigManager;
-  private options: Required<Omit<GatewayRegistryOptions, 'deliveryConfigDir' | 'policies' | 'chatEngine'>>;
+  private options: Required<Omit<GatewayRegistryOptions, 'deliveryConfigDir' | 'policies' | 'chatEngine' | 'onTyping'>>;
   /** Explicit per-platform policies (tests / programmatic use) — kept so the
    *  per-inbound live re-read merges them on top of env + config instead of
    *  dropping them. */
@@ -302,6 +310,7 @@ export class GatewayRegistry {
   /** Per-contact conversation history for gateway chat (WhatsApp/Telegram/etc.).
    *  Disk-backed via GatewayChatStore so history survives gateway restarts. */
   private chatStore: GatewayChatStore;
+  private onTypingCallback: GatewayRegistryOptions['onTyping'] | null = null;
 
   constructor(options: GatewayRegistryOptions = {}, configManager?: ConfigManager) {
     const allowFromEnv = (envBuff('GATEWAY_ALLOW_IDS') ?? '')
@@ -319,6 +328,7 @@ export class GatewayRegistry {
     this.configManager = configManager ?? new ConfigManager();
     this.chatEngine = options.chatEngine ?? null;
     this.chatStore = new GatewayChatStore(options.deliveryConfigDir);
+    this.onTypingCallback = options.onTyping ?? null;
     this.explicitPolicies = options.policies ?? {};
     this.policies = this.readPolicies();
   }
@@ -646,8 +656,30 @@ export class GatewayRegistry {
    * so a gateway that only ever runs pipelines never pays for the CLI router.
    * Never throws — a model failure falls back to the help line in handleInbound.
    */
+  /** Set the typing callback after construction (e.g. when dashboard attaches). */
+  setOnTyping(callback: GatewayRegistryOptions['onTyping']): void {
+    this.onTypingCallback = callback ?? null;
+  }
+
+  /** Write/delete typing.json for cross-process communication with dashboard. */
+  private writeTypingFile(event: { platform: string; channelId: string; typing: boolean }): void {
+    try {
+      const dir = join(resolveBuffConfigDir(), 'gateway');
+      if (!existsSync(dir)) mkdirSync(dir, { recursive: true });
+      const file = join(dir, 'typing.json');
+      if (event.typing) {
+        writeFileSync(file, JSON.stringify({ platform: event.platform, channelId: event.channelId, ts: Date.now() }), 'utf-8');
+      } else if (existsSync(file)) {
+        unlinkSync(file);
+      }
+    } catch { /* best-effort */ }
+  }
+
   private async runInboundChat(msg: InboundMessage): Promise<{ content: string; generationFailed?: boolean }> {
     try {
+      // Broadcast typing indicator start.
+      this.onTypingCallback?.({ platform: msg.platform, channelId: msg.channelId, typing: true });
+      this.writeTypingFile({ platform: msg.platform, channelId: msg.channelId, typing: true });
       const engine =
         this.chatEngine ??
         // Instantiate + cast: ChatCommand's answerOnce is a prototype method,
@@ -746,9 +778,13 @@ export class GatewayRegistry {
       // have context. Persisted to disk via GatewayChatStore so it survives
       // gateway restarts. The store handles trimming to max pairs.
       this.chatStore.append(historyKey, msg.text, content);
+      this.onTypingCallback?.({ platform: msg.platform, channelId: msg.channelId, typing: false });
+      this.writeTypingFile({ platform: msg.platform, channelId: msg.channelId, typing: false });
       return { content, generationFailed: answer.generationFailed };
     } catch (err) {
       logger.error(`gateway: inbound chat failed: ${err instanceof Error ? err.message : String(err)}`);
+      this.onTypingCallback?.({ platform: msg.platform, channelId: msg.channelId, typing: false });
+      this.writeTypingFile({ platform: msg.platform, channelId: msg.channelId, typing: false });
       return { content: '', generationFailed: true };
     }
   }

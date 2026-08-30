@@ -103,6 +103,7 @@ export class DashboardAPI {
   private listeners: Set<DashboardListener> = new Set();
   private connectionListeners: Set<ConnectionListener> = new Set();
   private dagListeners: Set<DAGListener> = new Set();
+  private typingListeners: Set<(event: { platform: string; channelId: string; typing: boolean }) => void> = new Set();
   private reconnectTimer: ReturnType<typeof setTimeout> | null = null;
   private baseUrl: string;
   private lastData: DashboardData | null = null;
@@ -119,12 +120,16 @@ export class DashboardAPI {
   onConnectionChange(listener: ConnectionListener): () => void {
     this.connectionListeners.add(listener);
     return () => this.connectionListeners.delete(listener);
-  }
-
-  onDAGEvent(listener: DAGListener): () => void {
+  }  onDAGEvent(listener: DAGListener): () => void {
     this.dagListeners.add(listener);
     return () => this.dagListeners.delete(listener);
   }
+
+  onTypingEvent(listener: (event: { platform: string; channelId: string; typing: boolean }) => void): () => void {
+    this.typingListeners.add(listener);
+    return () => this.typingListeners.delete(listener);
+  }
+
 
   connect(): void {
     if (this.sse) return;
@@ -215,6 +220,21 @@ export class DashboardAPI {
         }
       } catch (e) {
         console.error('Failed to parse SSE conversation event:', e);
+      }
+    });
+
+    // Real-time typing indicator: gateway writes typing.json when processing,
+    // dashboard broadcasts it via SSE so the UI can show a live typing bubble.
+    this.sse.addEventListener('typing', (event) => {
+      try {
+        const payload = JSON.parse(event.data) as {
+          platform: string; channelId: string; typing: boolean; serverTime?: number;
+        };
+        for (const cb of this.typingListeners) {
+          try { cb(payload); } catch { /* listener error */ }
+        }
+      } catch (e) {
+        console.error('Failed to parse SSE typing event:', e);
       }
     });
 
