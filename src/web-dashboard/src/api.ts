@@ -1093,6 +1093,27 @@ export class DashboardAPI {
   }
 
   /**
+   * Resolve a folder name to its absolute path by searching common locations.
+   * Used by the native folder picker (webkitdirectory) which only returns the name.
+   */
+  async resolveFolder(name: string): Promise<{ ok: boolean; path: string; error?: string }> {
+    const token = getAdminToken();
+    try {
+      const res = await fetch(this.baseUrl + '/api/browse/resolve-folder', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', ...(token ? { Authorization: 'Bearer ' + token } : {}) },
+        body: JSON.stringify({ name }),
+        signal: AbortSignal.timeout(10_000),
+      });
+      const d = (await res.json()) as { ok?: boolean; path?: string; error?: string };
+      if (res.status === 200 && d.ok && d.path) return { ok: true, path: d.path };
+      return { ok: false, path: '', error: typeof d.error === 'string' ? d.error : 'Could not resolve folder.' };
+    } catch {
+      return { ok: false, path: '', error: 'Could not reach the dashboard server.' };
+    }
+  }
+
+  /**
    * P4 — session sidebar: list past conversations (title, preview, counts).
    */
   async listChatSessions(): Promise<Array<{ id: string; title: string; turnCount: number; createdAt: number; updatedAt: number; preview: string; firstUser: string; projectPath?: string }>> {
