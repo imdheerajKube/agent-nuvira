@@ -413,7 +413,18 @@ export async function runToolLoop(opts: ToolLoopOptions): Promise<ToolLoopResult
         followups.length = 0;
       }
       let resultText: string;
-      if (!tool) {
+
+      // S5 — PLANNER LOOP GUARD: if plan_todo has been called more than
+      // once, force-break the loop and return whatever content we have.
+      // This prevents the 6x planner loop observed in trace-1788059239352-k7zl03
+      // where the model called plan_todo 6 times for a song-writing request
+      // (15.6K tokens, 2m25s, FAILED).
+      const planTodoCount = toolCallsRun.filter((t) => t === 'plan_todo').length;
+      if (call.name === 'plan_todo' && planTodoCount >= 1) {
+        resultText = 'Error: plan_todo already called. You have a plan — now execute it. Do NOT call plan_todo again. Use write_file, run_terminal, or other execution tools to complete the work.';
+      } else if (call.name === 'pipeline' && toolCallsRun.filter((t) => t === 'pipeline').length >= 1) {
+        resultText = 'Error: pipeline already called. The pipeline is running — do not call it again.';
+      } else if (!tool) {
         // Unknown tool — the error is fed back so the model retries with a
         // known tool (hadToolCallError handling).
         resultText = `Error: unknown tool "${call.name}". Available tools: ${schemas.map((s) => s.name).join(', ')}.`;
