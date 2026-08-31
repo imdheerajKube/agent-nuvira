@@ -4910,6 +4910,14 @@ function handleRequest(req: IncomingMessage, res: ServerResponse): void {
               return;
             }
           }
+          // Also try subPath as the folder itself (user selected a nested path)
+          for (const root of roots) {
+            const candidate = join(root, subPath);
+            if (isDir(candidate)) {
+              writeJson(res, 200, { ok: true, path: candidate });
+              return;
+            }
+          }
         }
 
         // Step 2: Direct children of each root.
