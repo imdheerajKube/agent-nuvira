@@ -1012,101 +1012,48 @@ export default function ChatPage() {
     };
   }, [browseOpen, browsePath, refreshBrowse]);
 
-  /** Native folder picker using a hidden file input with webkitdirectory.
-   *  This gives us the FULL path (not just the folder name like showDirectoryPicker).
-   *  Falls back to the custom popover on unsupported browsers. */
-  const folderInputRef = useRef<HTMLInputElement | null>(null);
-  
+  /** Native folder picker using showDirectoryPicker (File System Access API).
+   *  Shows a native "Select Folder" dialog — no "Upload" text, no file count.
+   *  Falls back to the custom popover on unsupported browsers (Firefox, Safari). */
   const openNativeFolderPicker = useCallback(async () => {
-    // Use a hidden file input with webkitdirectory attribute.
-    // This opens a native OS folder selection dialog and gives us the full path
-    // via webkitRelativePath (e.g., "addon/src/index.ts" -> we extract "addon").
-    const input = document.createElement('input');
-    input.type = 'file';
-    input.webkitdirectory = true;
-    input.style.display = 'none';
+    // Try the modern File System Access API first (Chrome/Edge 102+).
+    // It shows a real "Select Folder" dialog with no confusing upload messaging.
+    const hasDirectoryPicker = typeof window !== 'undefined' && 'showDirectoryPicker' in window;
     
-    input.onchange = async () => {
-      const file = input.files?.[0];
-      if (!file) return;
-      
-      // webkitRelativePath: "selectedFolder/path/to/file"
-      // e.g. "addon/__init__.py" → folderName="addon", fileName="__init__.py"
-      // Browser security prevents getting the full absolute path, so we
-      // search by name and verify the result contains the expected file.
-      const relativePath = (file as any).webkitRelativePath || '';
-      const parts = relativePath.split('/');
-      const folderName = parts[0];
-      const fileName = parts[parts.length - 1];
-      
-      if (!folderName) {
-        void openBrowse();
-        return;
-      }
-      
-      setProjectError('');
-      setBusy(true);
-      
-      // Derive subPath from the user's typed project path if available.
-      // e.g. typed "/Users/dheeraj/Documents/addon/addon" → subPath="Documents/addon/addon"
-      // Also handles /Volumes/ on macOS and C:\ on Windows.
-      const typedPath = projectPathInput.trim();
-      let subPath = '';
-      if (typedPath && typedPath.includes(folderName)) {
-        // macOS: /Users/dheeraj/Documents/addon/addon → Documents/addon/addon
-        const macMatch = typedPath.match(/\/Users\/[^/]+\/(.*)/);
-        // macOS volumes: /Volumes/MyDrive/... → MyDrive/...
-        const volMatch = typedPath.match(/\/Volumes\/[^/]+\/(.*)/);
-        // Windows: C:\Users\... → Users\... or D:\Projects\... → Projects\...
-        const winMatch = typedPath.match(/^[A-Z]:\\[^\\]+\\(.*)/i);
-        const match = macMatch || volMatch || winMatch;
-        if (match) {
-          subPath = match[1]; // e.g. "Documents/addon/addon"
-        }
-      }
-      
-      // Resolve the folder — server searches common paths
-      const r = await dashboardAPI.resolveFolder(folderName, subPath);
-      setBusy(false);
-      
-      if (r.ok && r.path) {
-        // Verify: does the resolved path's folder contain the expected file?
-        // If the server found the wrong "addon" (parent instead of nested),
-        // the file won't be there — fall back to manual browser.
-        const checkRes = await fetch('/api/browse/list?path=' + encodeURIComponent(r.path), {
-          headers: { Authorization: 'Bearer ' + (localStorage.getItem('adminToken') || '') },
-        });
-        const checkData = await checkRes.json();
-        const hasFile = checkData.ok && checkData.entries?.some((e: any) => e.name === fileName);
+    if (hasDirectoryPicker) {
+      try {
+        const dirHandle = await (window as any).showDirectoryPicker({ mode: 'read' });
+        const folderName = dirHandle.name;
         
-        if (hasFile) {
+        if (!folderName) {
+          void openBrowse();
+          return;
+        }
+        
+        setProjectError('');
+        setBusy(true);
+        
+        // Server searches common locations for this folder name.
+        // If exactly one match → attach directly. If multiple → show chooser.
+        const r = await dashboardAPI.resolveFolder(folderName);
+        setBusy(false);
+        
+        if (r.ok && r.path) {
           setProjectPathInput(r.path);
           void attachProject(r.path);
         } else {
-          // Server found the wrong folder — use manual browser
-          setProjectError('Found wrong folder. Opening manual browser to select the correct one...');
-          void openBrowse();
+          // Could not find automatically — let user type the path or use manual browser.
+          setProjectError('Could not locate "' + folderName + '" automatically. Type the full path below, or use the manual browser.');
         }
-      } else {
-        setProjectError((r.error || 'Could not find folder.') + ' Opening manual browser...');
-        void openBrowse();
+        return;
+      } catch (err: any) {
+        // User cancelled or API not supported — fall through to manual browser.
+        if (err?.name === 'AbortError') return; // user cancelled — do nothing
       }
-      return;
-      
-      if (r.ok && r.path) {
-        setProjectPathInput(r.path);
-        void attachProject(r.path);
-      } else {
-        setProjectError((r.error || 'Could not find folder.') + ' Opening manual browser...');
-        void openBrowse();
-      }
-      
-      // Clean up
-      document.body.removeChild(input);
-    };
+    }
     
-    document.body.appendChild(input);
-    input.click();
+    // Fallback: open the custom in-page folder browser.
+    void openBrowse();
   }, [openBrowse, attachProject]);
 
   const send = useCallback(
