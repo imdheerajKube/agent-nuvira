@@ -1,6 +1,6 @@
 # ---
 name: agent-nuvira
-short_description: "Flexible AI inference CLI with multi-agent swarm, routing, and persistent memory"
+short_description: "Autonomous AI agent — codes, creates, writes, analyzes, and automates anything"
 architecture: "multi-agent pipeline"
 agents: "Swarm (100+ agents, consensus)"
 orchestration: "Sequential sub-agent pipeline"
@@ -23,11 +23,13 @@ features:
 
 > **Developed by Dheeraj Sharma <imdheeraj@gmail.com>**
 
-**Multi-agent AI coding assistant** with a **visual dashboard** and **powerful CLI**. Run models locally (Ollama) or route across 22+ cloud providers (Groq, Gemini, OpenRouter, Bedrock, Azure, Anthropic, OpenAI, and more). Specialized agents plan, write, review, test, and ship code — learning from every run.
+**Autonomous AI agent** with a **visual dashboard** and **powerful CLI** — codes, creates, writes, analyzes, and automates anything. Run models locally (Ollama) or route across 22+ cloud providers (Groq, Gemini, OpenRouter, Bedrock, Azure, Anthropic, OpenAI, and more). Specialized agents plan, write, review, test, create images, generate videos, write documents, and ship code — learning from every run.
 
 ```bash
 # Quick examples
 agent-nuvira chat "explain recursion in Rust"
+agent-nuvira chat "write a birthday poem for my daughter"
+agent-nuvira chat "generate an image of a sunset over mountains"
 agent-nuvira models --provider groq
 agent-nuvira edit main.go --instruction "add input validation"
 agent-nuvira plan . --task "implement user authentication"
