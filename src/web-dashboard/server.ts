@@ -2492,6 +2492,8 @@ function getProjectBundle(path: string): ProjectContextBundle | null {
   }
 }
 
+
+
 /** Test hook: swap the chat console (e.g. a fake engine) — routes read the
  * module variable at request time, so this works anytime. */
 export function setChatConsoleForTest(console: ChatConsole): void {
