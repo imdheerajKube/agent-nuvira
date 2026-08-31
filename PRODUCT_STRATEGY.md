@@ -6,7 +6,7 @@
 
 ## Product Thesis
 
-**Agent-Nuvira is the autonomous coding agent that developers control** — not the other way around. Where most AI coding tools vendor-lock you into one model or subscription, Agent-Nuvira gives complete freedom: bring your own API keys, run fully offline with local models, orchestrate 15 specialized agents from your terminal, and watch the system get smarter with every session. We win on **reliability** (multi-agent redundancy), **accuracy** (self-learning from 1,830+ tests), **repo awareness** (codebase-scanning + trajectory memory), **team workflows** (shared config, git-synced memory, review pipelines), and **trust** (zero-server, privacy-first architecture).
+**Agent-Nuvira is the autonomous AI agent that developers control** — not the other way around. Where most AI coding tools vendor-lock you into one model or subscription, Agent-Nuvira gives complete freedom: bring your own API keys, run fully offline with local models, orchestrate 15 specialized agents from your terminal, and watch the system get smarter with every session. We win on **reliability** (multi-agent redundancy), **accuracy** (self-learning from 1,830+ tests), **repo awareness** (codebase-scanning + trajectory memory), **team workflows** (shared config, git-synced memory, review pipelines), and **trust** (zero-server, privacy-first architecture).
 
 ---
 

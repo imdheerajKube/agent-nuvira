@@ -104,7 +104,7 @@ const DEFAULT_RECENT_MS = FACT_TTL_MS;
 const DEFAULT_MIN_SIMILARITY = 0.3;
 
 /** LLM extraction prompt — one JSON call, router-selected cheap model. */
-const EXTRACTION_PROMPT = `You are a memory curator for a coding agent. From the conversation turn below, extract durable FACTS and USER PREFERENCES that should be remembered across sessions.
+const EXTRACTION_PROMPT = `You are a memory curator for an AI agent. From the conversation turn below, extract durable FACTS and USER PREFERENCES that should be remembered across sessions.
 
 Rules:
 - Extract only STABLE facts/preferences: the user's tech stack, frameworks, code style, project conventions, credentials-independent decisions, repeated choices. NOT one-off task instructions or commands.
