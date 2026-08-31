@@ -323,10 +323,11 @@ intent=${parsed.intent} (${Math.round(parsed.confidence * 100)}%), likely action
       ? `
 ## TASK TYPE: DIRECT RESPONSE (no pipeline needed)
 This is a ${parsed.intent} task. Do NOT call plan_todo, pipeline, or any planning tool.
-Instead: answer DIRECTLY in a single response. Write the content, answer the question, or explain the concept.
-The only tools you should use are: suggest_followups (at the end) and optionally gateway_send (if delivering to a contact).
-Do NOT analyze the project, do NOT create a plan, do NOT write files — just answer.
-Max tool calls for this task: 2 (suggest_followups + optional gateway_send).`
+Instead: answer DIRECTLY. If you need data to answer (file names, contents, directory listing), use read-only tools (list_dir, read_file, glob) to get it, then answer.
+The only PLANNING tools you should avoid are: plan_todo, pipeline, build, repair, resume.
+You MAY use: list_dir, read_file, glob, run_cli (read-only), suggest_followups, gateway_send.
+Do NOT create a multi-step plan. Just get the data you need and answer.
+Keep tool calls to the minimum needed — if the answer is already in the context, just answer directly.`
       : `
 ## TASK TYPE: ${parsed?.action.run === 'pipeline' ? 'PIPELINE (multi-step)' : 'DIRECT RESPONSE'}
 ${parsed?.action.run === 'pipeline' ? 'This requires a multi-step pipeline. Use plan_todo to create a plan, then execute steps.' : 'Answer directly. Do NOT call plan_todo or pipeline.'}`;
