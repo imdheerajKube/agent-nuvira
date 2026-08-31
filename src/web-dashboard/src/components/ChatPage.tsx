@@ -1030,11 +1030,14 @@ export default function ChatPage() {
       const file = input.files?.[0];
       if (!file) return;
       
-      // webkitRelativePath gives us "selectedFolder/path/to/file"
-      // We extract the full relative path to resolve nested folders correctly
+      // webkitRelativePath: "selectedFolder/path/to/file"
+      // e.g. "addon/__init__.py" → folderName="addon", fileName="__init__.py"
+      // Browser security prevents getting the full absolute path, so we
+      // search by name and verify the result contains the expected file.
       const relativePath = (file as any).webkitRelativePath || '';
       const parts = relativePath.split('/');
       const folderName = parts[0];
+      const fileName = parts[parts.length - 1];
       
       if (!folderName) {
         void openBrowse();
@@ -1044,10 +1047,33 @@ export default function ChatPage() {
       setProjectError('');
       setBusy(true);
       
-      // Try to resolve the folder path using the full relative path
-      // This handles nested folders like "addon/addon" correctly
-      const r = await dashboardAPI.resolveFolder(folderName, parts.length > 2 ? parts.slice(1, -1).join('/') : '');
+      // Resolve the folder — server searches common paths
+      const r = await dashboardAPI.resolveFolder(folderName);
       setBusy(false);
+      
+      if (r.ok && r.path) {
+        // Verify: does the resolved path's folder contain the expected file?
+        // If the server found the wrong "addon" (parent instead of nested),
+        // the file won't be there — fall back to manual browser.
+        const checkRes = await fetch('/api/browse/list?path=' + encodeURIComponent(r.path), {
+          headers: { Authorization: 'Bearer ' + (localStorage.getItem('adminToken') || '') },
+        });
+        const checkData = await checkRes.json();
+        const hasFile = checkData.ok && checkData.entries?.some((e: any) => e.name === fileName);
+        
+        if (hasFile) {
+          setProjectPathInput(r.path);
+          void attachProject(r.path);
+        } else {
+          // Server found the wrong folder — use manual browser
+          setProjectError('Found wrong folder. Opening manual browser to select the correct one...');
+          void openBrowse();
+        }
+      } else {
+        setProjectError((r.error || 'Could not find folder.') + ' Opening manual browser...');
+        void openBrowse();
+      }
+      return;
       
       if (r.ok && r.path) {
         setProjectPathInput(r.path);
