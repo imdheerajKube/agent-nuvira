@@ -1047,8 +1047,26 @@ export default function ChatPage() {
       setProjectError('');
       setBusy(true);
       
+      // Derive subPath from the user's typed project path if available.
+      // e.g. typed "/Users/dheeraj/Documents/addon/addon" → subPath="Documents/addon/addon"
+      // Also handles /Volumes/ on macOS and C:\ on Windows.
+      const typedPath = projectPathInput.trim();
+      let subPath = '';
+      if (typedPath && typedPath.includes(folderName)) {
+        // macOS: /Users/dheeraj/Documents/addon/addon → Documents/addon/addon
+        const macMatch = typedPath.match(/\/Users\/[^/]+\/(.*)/);
+        // macOS volumes: /Volumes/MyDrive/... → MyDrive/...
+        const volMatch = typedPath.match(/\/Volumes\/[^/]+\/(.*)/);
+        // Windows: C:\Users\... → Users\... or D:\Projects\... → Projects\...
+        const winMatch = typedPath.match(/^[A-Z]:\\[^\\]+\\(.*)/i);
+        const match = macMatch || volMatch || winMatch;
+        if (match) {
+          subPath = match[1]; // e.g. "Documents/addon/addon"
+        }
+      }
+      
       // Resolve the folder — server searches common paths
-      const r = await dashboardAPI.resolveFolder(folderName);
+      const r = await dashboardAPI.resolveFolder(folderName, subPath);
       setBusy(false);
       
       if (r.ok && r.path) {

@@ -43,7 +43,7 @@ describe('code-map — buildCodeMap', () => {
     const root = makeProject();
     try {
       const map = buildCodeMap(root);
-      expect(map.totalFiles).toBe(2); // src files only (node_modules + .md excluded)
+      expect(map.totalFiles).toBe(3); // all files (node_modules excluded, README.md now counted)
       const middleware = map.files.find((f) => f.path === 'src/auth/middleware.ts');
       expect(middleware).toBeDefined();
       const names = middleware!.symbols.map((s) => `${s.type}:${s.name}:${s.line}`);
@@ -79,7 +79,7 @@ describe('code-map — buildCodeMap', () => {
     try {
       const text = formatCodeMap(buildCodeMap(root));
       expect(text).toContain('📦 Code Map —');
-      expect(text).toContain('2 file(s)');
+      expect(text).toContain('3 file(s)');
       expect(text).toContain('src/auth/middleware.ts');
       expect(text).toContain('verifyToken');
       expect(text).toContain('(1:1)');

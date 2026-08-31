@@ -99,6 +99,27 @@ function walkSourceFiles(dir: string, cwd: string, out: string[] = [], depth = 0
   return out;
 }
 
+/** Recursively count ALL files (not just code files) for accurate project stats. */
+function countAllFiles(dir: string, out: string[] = [], depth = 0): string[] {
+  if (depth > 8) return out;
+  let entries;
+  try {
+    entries = readdirSync(dir, { withFileTypes: true });
+  } catch {
+    return out;
+  }
+  for (const entry of entries) {
+    if (IGNORE_DIRS.has(entry.name)) continue;
+    const p = join(dir, entry.name);
+    if (entry.isDirectory()) {
+      countAllFiles(p, out, depth + 1);
+    } else if (entry.isFile()) {
+      out.push(p);
+    }
+  }
+  return out;
+}
+
 /**
  * Build the symbol map for a directory. Pure + sync — testable and usable by
  * the dashboard. Never throws on unreadable files (best-effort per file).
@@ -106,6 +127,7 @@ function walkSourceFiles(dir: string, cwd: string, out: string[] = [], depth = 0
 export function buildCodeMap(dir: string): CodeMap {
   const cwd = resolve(dir);
   const filePaths = walkSourceFiles(cwd, cwd);
+  const allFiles = countAllFiles(cwd);
   const files: CodeMapFile[] = [];
 
   for (const abs of filePaths) {
@@ -124,7 +146,7 @@ export function buildCodeMap(dir: string): CodeMap {
   }
 
   const totalSymbols = files.reduce((sum, f) => sum + f.symbols.length, 0);
-  return { directory: cwd, files, totalFiles: files.length, totalSymbols };
+  return { directory: cwd, files, totalFiles: allFiles.length, totalSymbols };
 }
 
 /** Human-readable rendering of a map. */
