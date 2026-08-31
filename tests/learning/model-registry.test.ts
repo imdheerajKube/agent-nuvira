@@ -213,11 +213,12 @@ describe('ModelRegistry — probe / spot-check lifecycle', () => {
     expect(stats.unverified).toBe(1);
     expect(stats.unavailable).toBe(2);
     expect(stats.parked).toBe(0);
-    // Parking the whole provider flips the count to parked (parked wins).
+    // Parking the provider only parks non-verified models (verified models
+    // stay usable — the Gemini parking bug fix).
     registry.parkProvider('gemini', Date.now() + 60_000);
     const parked = registry.getProviderStats('gemini');
-    expect(parked.parked).toBe(4);
-    expect(parked.verified).toBe(0);
+    expect(parked.parked).toBe(3); // 1 unverified + 2 unavailable
+    expect(parked.verified).toBe(1); // verified model stays unparked
     // Untracked provider → all zeros, never throws.
     expect(registry.getProviderStats('untracked')).toEqual({ verified: 0, unverified: 0, unavailable: 0, parked: 0 });
   });
@@ -264,14 +265,30 @@ describe('ModelRegistry — quota parking & telemetry', () => {
     rmSync(tempDir, { recursive: true, force: true });
   });
 
-  it('parkProvider excludes a verified model until the time passes', () => {
+  it('parkProvider skips verified models (Gemini parking bug fix)', () => {
     const registry = new ModelRegistry();
     registry.markVerified('gemini', 'gemini-2.5-flash', 'spot-check');
 
+    // FIX: parkProvider no longer parks verified models — a verified model
+    // has proven it works and should not be blanket-blocked by provider-level
+    // parking. Only the specific model that hit the rate limit gets parked
+    // (via recordCall).
     registry.parkProvider('gemini', Date.now() + 60_000);
-    expect(registry.isUsable('gemini', 'gemini-2.5-flash')).toBe(false);
+    expect(registry.isUsable('gemini', 'gemini-2.5-flash')).toBe(true);
+
+    // Unavailable models ARE parked by parkProvider.
+    registry.markUnavailable('gemini', 'gemini-1.5-flash', '403', 'spot-check');
+    registry.parkProvider('gemini', Date.now() + 60_000);
+    expect(registry.isUsable('gemini', 'gemini-1.5-flash')).toBe(false);
+    // Verified model still usable.
+    expect(registry.isUsable('gemini', 'gemini-2.5-flash')).toBe(true);
 
     registry.releaseProvider('gemini');
+    // releaseProvider clears parking but status stays unavailable (only
+    // unblockProvider demotes unavailable→unverified to restore routability).
+    expect(registry.getEntry('gemini', 'gemini-1.5-flash')?.quotaParkedUntil).toBe(0);
+    expect(registry.getEntry('gemini', 'gemini-1.5-flash')?.status).toBe('unavailable');
+    // Verified model remains usable.
     expect(registry.isUsable('gemini', 'gemini-2.5-flash')).toBe(true);
   });
 
@@ -343,7 +360,7 @@ describe('ModelRegistry — quota parking & telemetry', () => {
     }
   });
 
-  it('syncQuota reads the QuotaLedger router feed (exhausted provider parked)', () => {
+  it('syncQuota reads the QuotaLedger router feed (exhausted provider parked) — verified models stay usable', () => {
     const registry = new ModelRegistry();
     registry.markVerified('gemini', 'gemini-2.5-flash', 'spot-check');
     registry.markVerified('groq', 'llama-3.3-70b-versatile', 'spot-check');
@@ -354,7 +371,10 @@ describe('ModelRegistry — quota parking & telemetry', () => {
     const config = makeConfigManager({ gemini: { requestsPerWindow: 1, windowMs: 3_600_000 } });
 
     registry.syncQuota(config);
-    expect(registry.isUsable('gemini', 'gemini-2.5-flash')).toBe(false);
+    // FIX: Verified models are NOT parked by syncQuota — only the specific
+    // model that hit the rate limit gets parked by recordCall(). A provider-
+    // level cooldown in the ledger should not blanket-block all verified models.
+    expect(registry.isUsable('gemini', 'gemini-2.5-flash')).toBe(true);
     expect(registry.isUsable('groq', 'llama-3.3-70b-versatile')).toBe(true);
   });
 
@@ -460,9 +480,10 @@ describe('ModelRegistry — quota parking & telemetry', () => {
     }
   });
 
-  it('parkProvider emits MODEL_REGISTRY_UPDATED; releaseProvider emits again', () => {
+  it('parkProvider emits MODEL_REGISTRY_UPDATED for non-verified models; releaseProvider emits again', () => {
     const registry = new ModelRegistry();
-    registry.markVerified('gemini', 'gemini-2.5-flash', 'spot-check');
+    // FIX: Use an unavailable model — parkProvider no longer parks verified models
+    registry.markUnavailable('gemini', 'gemini-2.5-flash', '403', 'spot-check');
     const events: string[] = [];
     const unsub = getEventBus().on(EventNames.MODEL_REGISTRY_UPDATED, (record) => {
       events.push((record.data as { detail: string }).detail);

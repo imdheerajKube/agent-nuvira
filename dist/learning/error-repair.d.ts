@@ -70,6 +70,10 @@ export interface ErrorRepairOptions {
     repairTimeoutMs?: number;
     /** Current provider name, used for logging */
     currentProvider?: string;
+    /** Check if the current LLM provider is available (not rate-limited).
+     *  When false, retry-tool and alternative-approach strategies are skipped
+     *  because they would hit the same rate-limited provider. */
+    isLLMAvailable?: () => boolean;
 }
 /**
  * Classify an error string into a category.

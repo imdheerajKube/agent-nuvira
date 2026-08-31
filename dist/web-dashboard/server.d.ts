@@ -16,6 +16,12 @@ import { ChatConsole } from './chat-console.js';
 export declare function isQuotaWatcherArmed(): boolean;
 /** Test hook: override the always-on quota watcher flag (config re-read on next create). */
 export declare function setAlwaysWatchQuota(value: boolean): void;
+/** Broadcast a typing indicator event to all SSE clients. */
+export declare function broadcastTyping(event: {
+    platform: string;
+    channelId: string;
+    typing: boolean;
+}): void;
 /**
  * A real-time DAG state that the orchestrator can push updates to.
  * Reset before each new execution. Served via /api/dag and SSE events.

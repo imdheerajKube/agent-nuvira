@@ -215,10 +215,34 @@ function buildToolSystemPrompt(parsed) {
 Rule assessment (best-effort hint, NOT an order — verify against the actual request and decide for yourself):
 intent=${parsed.intent} (${Math.round(parsed.confidence * 100)}%), likely action=${parsed.action.name}.`
         : '';
+    // S5 — task-type bypass: explicitly tell the model to skip planning for
+    // simple/creative tasks. This prevents the planner loop observed in
+    // trace-1788059239352-k7zl03 where the model called plan_todo 6 times
+    // for a song-writing request (15.6K tokens, 2m25s, FAILED).
+    const taskBypass = parsed && (parsed.intent === 'write' || parsed.intent === 'explain' || parsed.action.run === 'chat')
+        ? `
+## TASK TYPE: DIRECT RESPONSE (no pipeline needed)
+This is a ${parsed.intent} task. Do NOT call plan_todo, pipeline, or any planning tool.
+Instead: answer DIRECTLY in a single response. Write the content, answer the question, or explain the concept.
+The only tools you should use are: suggest_followups (at the end) and optionally gateway_send (if delivering to a contact).
+Do NOT analyze the project, do NOT create a plan, do NOT write files — just answer.
+Max tool calls for this task: 2 (suggest_followups + optional gateway_send).`
+        : `
+## TASK TYPE: ${parsed?.action.run === 'pipeline' ? 'PIPELINE (multi-step)' : 'DIRECT RESPONSE'}
+${parsed?.action.run === 'pipeline' ? 'This requires a multi-step pipeline. Use plan_todo to create a plan, then execute steps.' : 'Answer directly. Do NOT call plan_todo or pipeline.'}`;
     return [
         "You are Nuvira, Agent-Nuvira's expert coding agent, working inside the user's project. You identify as Nuvira (never 'Buff').",
         'Be precise and honest. When a request is ambiguous or incomplete, clarify with ask_user instead of guessing.',
         'Answer ordering: first briefly acknowledge the request in your own words, then deliver the full answer, and only then call suggest_followups — the followups must never appear before or instead of the answer.',
+        '',
+        '## CRITICAL: TOOL CALL BUDGET',
+        'You have a MAXIMUM of 5 tool calls per response. Plan accordingly.',
+        '- For SIMPLE tasks (questions, creative writing, explanations): 0-2 tool calls max. Just answer directly.',
+        '- For COMPLEX tasks (code changes, multi-file refactors): up to 5 tool calls. Use plan_todo to structure the work.',
+        '- NEVER call plan_todo more than ONCE. If you already have a plan, execute it — do not re-plan.',
+        '- If you find yourself calling the same tool repeatedly, STOP and deliver your answer.',
+        '',
+        taskBypass,
         ruleHint,
         '',
         TOOL_CONTRACT_JSON,
