@@ -267,7 +267,57 @@ export class PlannerAgent extends Agent {
                 promptParts.push('', mcpToolsFormatted, '', 'When the goal requires external services (file operations, database queries, API calls, etc.),', 'schedule an `mcp` step with the appropriate tool. Example:', '{"agentType": "mcp", "description": "callTool(tool_name, {arg: value})"}');
             }
             promptParts.push('', 'Create an execution plan for this goal. Return ONLY a valid JSON array of task steps.');
-            const prompt = promptParts.join('\n');
+            // ── Context pruning: when the prompt is too large for the model's
+            // TPM limit, aggressively prune non-essential sections so the planner
+            // can at least produce a plan. Priority: goal + tech decisions + routing
+            // guidance are NEVER pruned. File tree, skill guidance, memory, MCP tools
+            // are pruned in order of size (largest first).
+            const MAX_PLANNER_CHARS = 24_000; // ~6K tokens — safe for 8K TPM models
+            let prompt = promptParts.join('\n');
+            if (prompt.length > MAX_PLANNER_CHARS) {
+                // Find and replace the largest prunable sections with summaries.
+                const fileTreeIdx = promptParts.findIndex((p) => p.includes('## Current Project Structure'));
+                const skillIdx = promptParts.findIndex((p) => p.includes('## Skill Guidance'));
+                // Prune file tree first (usually the largest section).
+                if (fileTreeIdx >= 0) {
+                    const fileTreePart = promptParts[fileTreeIdx + 1] || '';
+                    const lines = fileTreePart.split('\n');
+                    if (lines.length > 20) {
+                        promptParts[fileTreeIdx + 1] = lines.slice(0, 20).join('\n') + `\n... (${lines.length - 20} more files — truncated for context limits)`;
+                    }
+                }
+                // Re-join and check if we still need more pruning.
+                prompt = promptParts.join('\n');
+                if (prompt.length > MAX_PLANNER_CHARS && skillIdx >= 0) {
+                    // Replace full methodology with quick reference steps only.
+                    const skillPart = promptParts[skillIdx];
+                    const stepsIdx = promptParts.findIndex((p) => p.includes('### Quick Reference Steps'));
+                    if (stepsIdx >= 0) {
+                        // Keep only the quick reference steps, drop the full methodology.
+                        const drops = [];
+                        for (let i = skillIdx; i < stepsIdx; i++) {
+                            if (promptParts[i].includes('### Full Skill Methodology') || promptParts[i].includes('### Skill methodology')) {
+                                drops.push(i);
+                                // Also drop the methodology body (next non-empty section).
+                                for (let j = i + 1; j < stepsIdx; j++) {
+                                    if (promptParts[j].startsWith('###') || promptParts[j].startsWith('##'))
+                                        break;
+                                    drops.push(j);
+                                }
+                            }
+                        }
+                        for (const idx of drops.reverse()) {
+                            promptParts.splice(idx, 1);
+                        }
+                    }
+                }
+                // Final truncation if still too large.
+                prompt = promptParts.join('\n');
+                if (prompt.length > MAX_PLANNER_CHARS) {
+                    prompt = prompt.slice(0, MAX_PLANNER_CHARS) + '\n... (truncated — context too large for model)';
+                }
+                // Pruning logged via trace — no verbose check needed in agent.
+            }
             this.report(context, 'drafting', 'Drafting a dependency-aware execution plan…');
             const response = await callLLM(prompt, {
                 temperature: 0.3, // Low temperature for structured output

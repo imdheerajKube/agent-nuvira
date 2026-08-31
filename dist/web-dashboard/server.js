@@ -185,6 +185,241 @@ export function setAlwaysWatchQuota(value) {
     if (!value)
         disarmQuotaWatcher();
 }
+// ─── Conversation History File Watcher ──────────────────────────────────────
+/**
+ * Watches ~/.nuvira/gateway/chat-history.json for changes and broadcasts
+ * a `conversation` SSE event so the dashboard's Conversations tab updates
+ * in real time (no 10s refresh delay).
+ */
+let convWatcher = null;
+let convWatchTimer = null;
+function getGatewayDir() {
+    return join(resolveBuffConfigDir(), 'gateway');
+}
+/** Broadcast current conversation summaries to all SSE clients. */
+function broadcastConversationUpdate() {
+    try {
+        const { GatewayChatStore, CHAT_HISTORY_TTL_MS } = require('../gateway/chat-store.js');
+        const store = new GatewayChatStore();
+        const allConvs = store.getAllConversations();
+        const now = Date.now();
+        // Build contact lookup for name resolution.
+        let contactLookup = {};
+        try {
+            const { readContactsFile } = require('../gateway/whatsapp/contacts.js');
+            const { whatsappSessionDir } = require('../gateway/whatsapp/session.js');
+            const contacts = readContactsFile(whatsappSessionDir());
+            for (const [name, digits] of Object.entries(contacts)) {
+                if (name && digits)
+                    contactLookup[digits] = name;
+            }
+        }
+        catch { /* best-effort */ }
+        const summaries = allConvs
+            .filter((c) => now - c.lastActiveAt <= CHAT_HISTORY_TTL_MS)
+            .sort((a, b) => b.lastActiveAt - a.lastActiveAt)
+            .slice(0, 50)
+            .map((c) => {
+            const [platform, ...rest] = c.key.split(':');
+            const channelId = rest.join(':');
+            const lastUser = c.messages.filter((m) => m.role === 'user').pop();
+            const lastAssistant = c.messages.filter((m) => m.role === 'assistant').pop();
+            const cleanId = channelId.replace(/[^\d]/g, '');
+            const contactName = contactLookup[cleanId] || contactLookup[channelId];
+            return {
+                key: c.key,
+                platform: platform || 'unknown',
+                channelId,
+                contactName,
+                messageCount: c.messages.length,
+                lastActiveAt: c.lastActiveAt,
+                lastUserMessage: (lastUser?.content ?? '').slice(0, 300),
+                lastAssistantMessage: (lastAssistant?.content ?? '').slice(0, 300),
+                messages: c.messages.map((m) => ({ role: m.role, content: m.content, ts: m.ts })),
+                tags: c.tags,
+            };
+        });
+        const payload = `event: conversation\ndata: ${JSON.stringify({
+            conversations: summaries,
+            total: allConvs.filter((c) => now - c.lastActiveAt <= CHAT_HISTORY_TTL_MS).length,
+            serverTime: now,
+        })}\n\n`;
+        for (const client of sseClients) {
+            try {
+                client.res.write(payload);
+            }
+            catch { /* client disconnected */ }
+        }
+    }
+    catch { /* best-effort — a failed broadcast must never break the dashboard */ }
+}
+let typingWatchTimer = null;
+function broadcastTypingFromFile() {
+    try {
+        const file = join(getGatewayDir(), 'typing.json');
+        if (existsSync(file)) {
+            const data = JSON.parse(readFileSync(file, 'utf-8'));
+            broadcastTyping({ platform: data.platform, channelId: data.channelId, typing: true });
+        }
+    }
+    catch { /* best-effort */ }
+}
+function armConvWatcher() {
+    if (convWatcher)
+        return;
+    try {
+        const dir = getGatewayDir();
+        if (!existsSync(dir))
+            mkdirSync(dir, { recursive: true });
+        convWatcher = watch(dir, (_eventType, filename) => {
+            const name = basename(String(filename || ''));
+            // Handle typing.json changes (typing indicator).
+            if (name === 'typing.json') {
+                if (typingWatchTimer)
+                    clearTimeout(typingWatchTimer);
+                typingWatchTimer = setTimeout(() => {
+                    typingWatchTimer = null;
+                    broadcastTypingFromFile();
+                }, 100);
+                return;
+            }
+            // Handle chat-history.json changes (conversation updates).
+            if (name && name !== 'chat-history.json')
+                return;
+            if (convWatchTimer)
+                clearTimeout(convWatchTimer);
+            convWatchTimer = setTimeout(() => {
+                convWatchTimer = null;
+                broadcastConversationUpdate();
+            }, 200);
+        });
+    }
+    catch {
+        convWatcher = null;
+    }
+}
+function disarmConvWatcher() {
+    if (convWatchTimer) {
+        clearTimeout(convWatchTimer);
+        convWatchTimer = null;
+    }
+    if (convWatcher) {
+        try {
+            convWatcher.close();
+        }
+        catch { /* ignore */ }
+        convWatcher = null;
+    }
+}
+/** Broadcast a typing indicator event to all SSE clients. */
+export function broadcastTyping(event) {
+    const payload = `event: typing\ndata: ${JSON.stringify({ ...event, serverTime: Date.now() })}\n\n`;
+    for (const client of sseClients) {
+        try {
+            client.res.write(payload);
+        }
+        catch { /* client disconnected */ }
+    }
+}
+// ─── ZIP Generation (no external dependencies) ─────────────────────────────
+/** CRC-32 lookup table (precomputed). */
+const CRC_TABLE = new Uint32Array(256);
+for (let i = 0; i < 256; i++) {
+    let c = i;
+    for (let j = 0; j < 8; j++) {
+        c = (c & 1) ? (0xEDB88320 ^ (c >>> 1)) : (c >>> 1);
+    }
+    CRC_TABLE[i] = c;
+}
+function crc32(buf) {
+    let crc = 0xFFFFFFFF;
+    for (let i = 0; i < buf.length; i++) {
+        crc = CRC_TABLE[(crc ^ buf[i]) & 0xFF] ^ (crc >>> 8);
+    }
+    return (crc ^ 0xFFFFFFFF) >>> 0;
+}
+/** DOS date/time format for ZIP headers. */
+function dosDateTime(date) {
+    const time = ((date.getHours() & 0x1F) << 11) | ((date.getMinutes() & 0x3F) << 5) | ((date.getSeconds() >> 1) & 0x1F);
+    const d = ((date.getFullYear() - 1980) & 0x7F) << 9 | ((date.getMonth() + 1) & 0xF) << 5 | (date.getDate() & 0x1F);
+    return { time, date: d };
+}
+/**
+ * Generate a ZIP file from an array of { name, content } entries.
+ * Supports text files only (no compression — stored method).
+ * Returns a Buffer suitable for HTTP response.
+ */
+function generateZip(files) {
+    const now = new Date();
+    const { time, date } = dosDateTime(now);
+    const entries = [];
+    const parts = [];
+    let offset = 0;
+    // Local file headers + file data.
+    for (const file of files) {
+        const nameBytes = new TextEncoder().encode(file.name);
+        const dataBytes = new TextEncoder().encode(file.content);
+        const crc = crc32(dataBytes);
+        // Local file header (30 + nameLen).
+        const header = new ArrayBuffer(30 + nameBytes.length);
+        const hv = new DataView(header);
+        hv.setUint32(0, 0x04034b50, true); // signature
+        hv.setUint16(4, 20, true); // version needed
+        hv.setUint16(6, 0, true); // flags
+        hv.setUint16(8, 0, true); // compression method (stored)
+        hv.setUint16(10, time, true); // mod time
+        hv.setUint16(12, date, true); // mod date
+        hv.setUint32(14, crc, true); // crc-32
+        hv.setUint32(18, dataBytes.length, true); // compressed size
+        hv.setUint32(22, dataBytes.length, true); // uncompressed size
+        hv.setUint16(26, nameBytes.length, true); // name length
+        hv.setUint16(28, 0, true); // extra field length
+        new Uint8Array(header).set(nameBytes, 30);
+        entries.push({ name: nameBytes, data: dataBytes, crc, offset });
+        parts.push(new Uint8Array(header), dataBytes);
+        offset += header.byteLength + dataBytes.length;
+    }
+    // Central directory.
+    const centralStart = offset;
+    for (const entry of entries) {
+        const ch = new ArrayBuffer(46 + entry.name.length);
+        const cv = new DataView(ch);
+        cv.setUint32(0, 0x02014b50, true); // signature
+        cv.setUint16(4, 20, true); // version made by
+        cv.setUint16(6, 20, true); // version needed
+        cv.setUint16(8, 0, true); // flags
+        cv.setUint16(10, 0, true); // compression (stored)
+        cv.setUint16(12, time, true); // mod time
+        cv.setUint16(14, date, true); // mod date
+        cv.setUint32(16, entry.crc, true); // crc-32
+        cv.setUint32(20, entry.data.length, true); // compressed size
+        cv.setUint32(24, entry.data.length, true); // uncompressed size
+        cv.setUint16(28, entry.name.length, true); // name length
+        cv.setUint16(30, 0, true); // extra field length
+        cv.setUint16(32, 0, true); // file comment length
+        cv.setUint16(34, 0, true); // disk number start
+        cv.setUint16(36, 0, true); // internal file attributes
+        cv.setUint32(38, 0, true); // external file attributes
+        cv.setUint32(42, entry.offset, true); // local header offset
+        new Uint8Array(ch).set(entry.name, 46);
+        parts.push(new Uint8Array(ch));
+        offset += ch.byteLength;
+    }
+    // End of central directory.
+    const centralSize = offset - centralStart;
+    const eocd = new ArrayBuffer(22);
+    const ev = new DataView(eocd);
+    ev.setUint32(0, 0x06054b50, true); // signature
+    ev.setUint16(4, 0, true); // disk number
+    ev.setUint16(6, 0, true); // central dir disk
+    ev.setUint16(8, entries.length, true); // entries on this disk
+    ev.setUint16(10, entries.length, true); // total entries
+    ev.setUint32(12, centralSize, true); // central dir size
+    ev.setUint32(16, centralStart, true); // central dir offset
+    ev.setUint16(20, 0, true); // comment length
+    parts.push(new Uint8Array(eocd));
+    return Buffer.concat(parts.map((p) => Buffer.from(p.buffer, p.byteOffset, p.byteLength)));
+}
 let activePipeline = null; // goal/description of current pipeline
 let activeNodes = [];
 let activeEdges = [];
@@ -2640,6 +2875,254 @@ function handleRequest(req, res) {
     //       dashboard passes the FULL map it read; the running gateway re-reads
     //       config per inbound, so changes apply without a restart). Named
     //       WhatsApp contacts are also synced into the bridge contacts file
+    // PUT /api/admin/gateway/conversations/tags — manage tags on conversations.
+    // Rides on gateway.manage (admin + operator).
+    if (pathname === '/api/admin/gateway/conversations/tags' && req.method === 'PUT') {
+        void (async () => {
+            const session = adminSessions.validate(bearerToken(req));
+            if (!session) {
+                writeJson(res, 401, { ok: false, error: 'Not authenticated — log in first.' });
+                return;
+            }
+            if (!roleCan(session.role, 'gateway.manage')) {
+                writeJson(res, 403, { ok: false, error: `Access denied — role '${session.role}' cannot manage tags.` });
+                return;
+            }
+            const body = await readJsonBody(req);
+            const action = body?.action;
+            const key = body?.key;
+            const tag = body?.tag;
+            const tags = body?.tags;
+            if (!key || typeof key !== 'string') {
+                writeJson(res, 400, { ok: false, error: 'Missing or invalid "key" field.' });
+                return;
+            }
+            try {
+                const { GatewayChatStore } = await import('../gateway/chat-store.js');
+                const store = new GatewayChatStore();
+                if (action === 'add' && typeof tag === 'string') {
+                    store.addTag(key, tag);
+                    writeJson(res, 200, { ok: true });
+                }
+                else if (action === 'remove' && typeof tag === 'string') {
+                    store.removeTag(key, tag);
+                    writeJson(res, 200, { ok: true });
+                }
+                else if (action === 'set' && Array.isArray(tags)) {
+                    store.setTags(key, tags);
+                    writeJson(res, 200, { ok: true });
+                }
+                else if (action === 'getAllTags') {
+                    const allTags = store.getAllTags();
+                    writeJson(res, 200, { ok: true, tags: allTags });
+                }
+                else {
+                    writeJson(res, 400, { ok: false, error: 'Invalid action. Use: add, remove, set, getAllTags.' });
+                }
+            }
+            catch (err) {
+                writeJson(res, 500, { ok: false, error: `Tag operation failed: ${err instanceof Error ? err.message : String(err)}` });
+            }
+        })();
+        return;
+    }
+    // POST /api/admin/gateway/conversations/export — bulk export as ZIP.
+    // Rides on gateway.manage (admin + operator).
+    if (pathname === '/api/admin/gateway/conversations/export' && req.method === 'POST') {
+        void (async () => {
+            const session = adminSessions.validate(bearerToken(req));
+            if (!session) {
+                writeJson(res, 401, { ok: false, error: 'Not authenticated — log in first.' });
+                return;
+            }
+            if (!roleCan(session.role, 'gateway.manage')) {
+                writeJson(res, 403, { ok: false, error: `Access denied — role '${session.role}' cannot export conversations.` });
+                return;
+            }
+            const body = await readJsonBody(req);
+            const keys = body?.keys;
+            if (!Array.isArray(keys) || keys.length === 0) {
+                writeJson(res, 400, { ok: false, error: 'Missing or invalid "keys" array.' });
+                return;
+            }
+            try {
+                const { GatewayChatStore, CHAT_HISTORY_TTL_MS } = await import('../gateway/chat-store.js');
+                const store = new GatewayChatStore();
+                const allConvs = store.getAllConversations();
+                // Resolve contact names.
+                let contactLookup = {};
+                try {
+                    const { readContactsFile } = await import('../gateway/whatsapp/contacts.js');
+                    const { whatsappSessionDir } = await import('../gateway/whatsapp/session.js');
+                    const contacts = readContactsFile(whatsappSessionDir());
+                    for (const [name, digits] of Object.entries(contacts)) {
+                        if (name && digits)
+                            contactLookup[digits] = name;
+                    }
+                }
+                catch { /* best-effort */ }
+                const keySet = new Set(keys);
+                const convs = allConvs.filter((c) => keySet.has(c.key));
+                if (convs.length === 0) {
+                    writeJson(res, 404, { ok: false, error: 'No matching conversations found.' });
+                    return;
+                }
+                // Build ZIP entries (manual ZIP64-compatible for text files).
+                const files = [];
+                const now = new Date();
+                const dateStr = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-${String(now.getDate()).padStart(2, '0')}`;
+                for (const conv of convs) {
+                    const [platform, ...rest] = conv.key.split(':');
+                    const channelId = rest.join(':');
+                    const cleanId = channelId.replace(/[^\d]/g, '');
+                    const contactName = contactLookup[cleanId] || contactLookup[channelId] || channelId;
+                    const lines = [
+                        `Conversation with ${contactName} (${platform || 'unknown'})`,
+                        `Exported: ${now.toLocaleString()}`,
+                        `Messages: ${conv.messages.length}`,
+                        '─'.repeat(50),
+                        '',
+                    ];
+                    for (const m of conv.messages) {
+                        const role = m.role === 'user' ? contactName : 'Agent';
+                        const ts = new Date(m.ts).toLocaleString();
+                        lines.push(`[${ts}] ${role}:`);
+                        lines.push(m.content);
+                        lines.push('');
+                    }
+                    const safeName = `${platform || 'unknown'}-${contactName.replace(/[^\w]/g, '_')}-${channelId.replace(/[^\w]/g, '_')}.txt`;
+                    files.push({ name: safeName, content: lines.join('\n') });
+                }
+                // Generate ZIP manually (no external deps).
+                const zipBuf = generateZip(files);
+                res.writeHead(200, {
+                    'Content-Type': 'application/zip',
+                    'Content-Disposition': `attachment; filename="conversations-${dateStr}.zip"`,
+                    'Content-Length': zipBuf.length,
+                });
+                res.end(zipBuf);
+            }
+            catch (err) {
+                writeJson(res, 500, { ok: false, error: `Export failed: ${err instanceof Error ? err.message : String(err)}` });
+            }
+        })();
+        return;
+    }
+    // GET /api/admin/gateway/conversations — paginated conversation list.
+    // Rides on gateway.manage (admin + operator).
+    if (pathname === '/api/admin/gateway/conversations' && req.method === 'GET') {
+        void (async () => {
+            const session = adminSessions.validate(bearerToken(req));
+            if (!session) {
+                writeJson(res, 401, { ok: false, error: 'Not authenticated — log in first.' });
+                return;
+            }
+            if (!roleCan(session.role, 'gateway.manage')) {
+                writeJson(res, 403, { ok: false, error: `Access denied — role '${session.role}' cannot view conversations.` });
+                return;
+            }
+            try {
+                const url = new URL(req.url || '/', `http://${req.headers.host || 'localhost'}`);
+                const offset = Math.max(0, parseInt(url.searchParams.get('offset') || '0', 10) || 0);
+                const limit = Math.min(100, Math.max(1, parseInt(url.searchParams.get('limit') || '20', 10) || 20));
+                const search = url.searchParams.get('q')?.toLowerCase() || '';
+                const { GatewayChatStore, CHAT_HISTORY_TTL_MS } = await import('../gateway/chat-store.js');
+                const store = new GatewayChatStore();
+                const allConvs = store.getAllConversations();
+                // Resolve contact names.
+                let contactLookup = {};
+                try {
+                    const { readContactsFile } = await import('../gateway/whatsapp/contacts.js');
+                    const { whatsappSessionDir } = await import('../gateway/whatsapp/session.js');
+                    const contacts = readContactsFile(whatsappSessionDir());
+                    for (const [name, digits] of Object.entries(contacts)) {
+                        if (name && digits)
+                            contactLookup[digits] = name;
+                    }
+                }
+                catch { /* best-effort */ }
+                // Map to summary shapes, filtering expired conversations.
+                const now = Date.now();
+                const summaries = allConvs
+                    .filter((c) => now - c.lastActiveAt <= CHAT_HISTORY_TTL_MS)
+                    .sort((a, b) => b.lastActiveAt - a.lastActiveAt)
+                    .map((c) => {
+                    const [platform, ...rest] = c.key.split(':');
+                    const channelId = rest.join(':');
+                    const lastUser = c.messages.filter((m) => m.role === 'user').pop();
+                    const lastAssistant = c.messages.filter((m) => m.role === 'assistant').pop();
+                    const cleanId = channelId.replace(/[^\d]/g, '');
+                    const contactName = contactLookup[cleanId] || contactLookup[channelId];
+                    return {
+                        key: c.key,
+                        platform: platform || 'unknown',
+                        channelId,
+                        contactName,
+                        messageCount: c.messages.length,
+                        lastActiveAt: c.lastActiveAt,
+                        lastUserMessage: (lastUser?.content ?? '').slice(0, 300),
+                        lastAssistantMessage: (lastAssistant?.content ?? '').slice(0, 300),
+                        messages: c.messages.map((m) => ({ role: m.role, content: m.content, ts: m.ts })),
+                        tags: c.tags,
+                    };
+                });
+                // Apply search filter.
+                const filtered = search
+                    ? summaries.filter((c) => (c.contactName ?? '').toLowerCase().includes(search) ||
+                        c.channelId.toLowerCase().includes(search) ||
+                        c.lastUserMessage.toLowerCase().includes(search) ||
+                        (c.tags ?? []).some((t) => t.includes(search)) ||
+                        c.lastAssistantMessage.toLowerCase().includes(search))
+                    : summaries;
+                // Paginate.
+                const total = filtered.length;
+                const page = filtered.slice(offset, offset + limit);
+                writeJson(res, 200, {
+                    ok: true,
+                    conversations: page,
+                    total,
+                    offset,
+                    limit,
+                    hasMore: offset + limit < total,
+                });
+            }
+            catch (err) {
+                writeJson(res, 500, { ok: false, error: `Failed to load conversations: ${err instanceof Error ? err.message : String(err)}` });
+            }
+        })();
+        return;
+    }
+    // DELETE /api/admin/gateway/conversations — clear a single conversation by key.
+    // Rides on gateway.manage (admin + operator) like the policies endpoint.
+    if (pathname === '/api/admin/gateway/conversations' && req.method === 'DELETE') {
+        void (async () => {
+            const session = adminSessions.validate(bearerToken(req));
+            if (!session) {
+                writeJson(res, 401, { ok: false, error: 'Not authenticated — log in first.' });
+                return;
+            }
+            if (!roleCan(session.role, 'gateway.manage')) {
+                writeJson(res, 403, { ok: false, error: `Access denied — role '${session.role}' cannot manage conversations.` });
+                return;
+            }
+            const body = await readJsonBody(req);
+            const key = body?.key;
+            if (!key || typeof key !== 'string') {
+                writeJson(res, 400, { ok: false, error: 'Missing or invalid "key" field.' });
+                return;
+            }
+            try {
+                const { GatewayChatStore } = await import('../gateway/chat-store.js');
+                const store = new GatewayChatStore();
+                store.clear(key);
+                writeJson(res, 200, { ok: true });
+            }
+            catch (err) {
+                writeJson(res, 500, { ok: false, error: `Failed to clear conversation: ${err instanceof Error ? err.message : String(err)}` });
+            }
+        })();
+        return;
+    }
     //       (send-by-name parity with `nuvira whatsapp contact add`).
     // Rides on gateway.manage (admin + operator) like the alias CLI.
     if (pathname === '/api/admin/gateway/policies') {
@@ -3218,6 +3701,7 @@ function handleRequest(req, res) {
         // client's async close (arm skipped when the stale client was still listed,
         // then disarm skipped too, leaving the watcher never armed).
         armQuotaWatcher();
+        armConvWatcher();
         const heartbeat = setInterval(() => {
             try {
                 res.write(': heartbeat\n\n');
@@ -3256,6 +3740,8 @@ function handleRequest(req, res) {
             // otherwise the watcher persists to keep quota state warm between sessions.
             if (sseClients.length === 0 && !alwaysWatchQuota)
                 disarmQuotaWatcher();
+            if (sseClients.length === 0)
+                disarmConvWatcher();
         });
         return;
     }
@@ -3948,6 +4434,180 @@ function handleRequest(req, res) {
         catch {
             writeJson(res, 200, { ok: true, path: target, entries: [], parent: dirname(target), isProject: true, breadcrumbs: [] });
         }
+        return;
+    }
+    // POST /api/browse/resolve-folder — given a folder name (and optional sub-path
+    // from webkitRelativePath), search the filesystem to find its absolute path.
+    // The native folder picker (webkitdirectory) only returns relative paths, so
+    // we reconstruct the absolute path by searching from common root directories.
+    if (pathname === '/api/browse/resolve-folder' && req.method === 'POST') {
+        const session = adminSessions.validate(bearerToken(req));
+        if (!session) {
+            writeJson(res, 401, { ok: false, error: 'Not authenticated.' });
+            return;
+        }
+        if (!roleCan(session.role, 'routing.operate')) {
+            writeJson(res, 403, { ok: false, error: 'Access denied.' });
+            return;
+        }
+        void (async () => {
+            try {
+                const body = await readJsonBody(req);
+                const folderName = typeof body?.name === 'string' ? body.name.trim() : '';
+                const subPath = typeof body?.subPath === 'string' ? body.subPath.trim() : '';
+                if (!folderName) {
+                    writeJson(res, 400, { ok: false, error: 'Missing folder name.' });
+                    return;
+                }
+                // Collect root directories to search from.
+                const roots = [homedir()];
+                const plat = process.platform;
+                if (plat === 'darwin') {
+                    roots.push('/Users');
+                    try {
+                        const users = readdirSync('/Users', { withFileTypes: true })
+                            .filter((e) => e.isDirectory() && !e.name.startsWith('.'));
+                        for (const u of users)
+                            roots.push(join('/Users', u.name));
+                    }
+                    catch { /* skip */ }
+                    // External volumes on macOS.
+                    try {
+                        const vols = readdirSync('/Volumes', { withFileTypes: true })
+                            .filter((e) => e.isDirectory());
+                        for (const v of vols)
+                            roots.push(join('/Volumes', v.name));
+                    }
+                    catch { /* skip */ }
+                }
+                else if (plat === 'linux') {
+                    roots.push('/home', '/root');
+                    try {
+                        const users = readdirSync('/home', { withFileTypes: true })
+                            .filter((e) => e.isDirectory() && !e.name.startsWith('.'));
+                        for (const u of users)
+                            roots.push(join('/home', u.name));
+                    }
+                    catch { /* skip */ }
+                }
+                else if (plat === 'win32') {
+                    for (const ch of 'CDEFGH'.split('')) {
+                        const dp = ch + ':';
+                        try {
+                            if (existsSync(dp))
+                                roots.push(dp);
+                        }
+                        catch { /* skip */ }
+                    }
+                }
+                // Helper: check if a path exists and is a directory.
+                const isDir = (p) => {
+                    try {
+                        return existsSync(p) && statSync(p).isDirectory();
+                    }
+                    catch {
+                        return false;
+                    }
+                };
+                // Step 1: If we have a sub-path, try constructing the full path directly.
+                // e.g. subPath="Documents/Projects" + folderName="myapp"
+                //   -> ~/Documents/Projects/myapp
+                if (subPath) {
+                    for (const root of roots) {
+                        const candidate = join(root, subPath, folderName);
+                        if (isDir(candidate)) {
+                            writeJson(res, 200, { ok: true, path: candidate });
+                            return;
+                        }
+                    }
+                }
+                // Step 2: Direct children of each root.
+                for (const root of roots) {
+                    const candidate = join(root, folderName);
+                    if (isDir(candidate)) {
+                        writeJson(res, 200, { ok: true, path: candidate });
+                        return;
+                    }
+                }
+                // Step 3: One level deep in common directories.
+                const commonSubdirs = ['Documents', 'Desktop', 'Downloads', 'Projects', 'Code', 'dev', 'work', 'src', 'repos', 'Documents/Projects', 'Documents/Code'];
+                for (const root of roots) {
+                    for (const sub of commonSubdirs) {
+                        const parentDir = join(root, sub);
+                        const candidate = join(parentDir, folderName);
+                        if (isDir(candidate)) {
+                            writeJson(res, 200, { ok: true, path: candidate });
+                            return;
+                        }
+                    }
+                }
+                // Step 4: Recursive search from home (depth-limited to 4 levels).
+                // Skips hidden dirs and known large directories.
+                const skipDirs = new Set(['node_modules', '.git', '.cache', '.npm', '.nvm', '.volta', '.cargo', '.rustup', 'Library', '.Trash', '__pycache__', '.venv', 'venv']);
+                let found = '';
+                const searchDepth = (dir, depth) => {
+                    if (found || depth > 4)
+                        return;
+                    try {
+                        const entries = readdirSync(dir, { withFileTypes: true });
+                        for (const e of entries) {
+                            if (found)
+                                return;
+                            if (!e.isDirectory() || e.name.startsWith('.') || skipDirs.has(e.name))
+                                continue;
+                            const full = join(dir, e.name);
+                            if (e.name === folderName) {
+                                found = full;
+                                return;
+                            }
+                            searchDepth(full, depth + 1);
+                        }
+                    }
+                    catch { /* permission denied, etc. */ }
+                };
+                searchDepth(homedir(), 0);
+                if (found) {
+                    writeJson(res, 200, { ok: true, path: found });
+                    return;
+                }
+                // Step 5: Broader recursive search from root (depth 2 only, skip system dirs).
+                const systemSkip = new Set([...skipDirs, 'System', 'usr', 'bin', 'sbin', 'etc', 'var', 'tmp', 'opt', 'proc', 'dev', 'sys', 'boot', 'run']);
+                found = '';
+                const searchRoot = (dir, depth) => {
+                    if (found || depth > 2)
+                        return;
+                    try {
+                        const entries = readdirSync(dir, { withFileTypes: true });
+                        for (const e of entries) {
+                            if (found)
+                                return;
+                            if (!e.isDirectory() || e.name.startsWith('.') || systemSkip.has(e.name))
+                                continue;
+                            const full = join(dir, e.name);
+                            if (e.name === folderName) {
+                                found = full;
+                                return;
+                            }
+                            searchRoot(full, depth + 1);
+                        }
+                    }
+                    catch { /* skip */ }
+                };
+                for (const root of roots) {
+                    searchRoot(root, 0);
+                    if (found)
+                        break;
+                }
+                if (found) {
+                    writeJson(res, 200, { ok: true, path: found });
+                    return;
+                }
+                writeJson(res, 200, { ok: false, error: 'Could not find folder. Try typing the full path manually.' });
+            }
+            catch {
+                writeJson(res, 500, { ok: false, error: 'Failed to resolve folder.' });
+            }
+        })();
         return;
     }
     // POST /api/config/platforms/:platform/verify — verify a platform's token

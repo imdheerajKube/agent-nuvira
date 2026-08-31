@@ -407,6 +407,7 @@ function readConversationsData(): HubData['conversations'] {
           content: m.content,
           ts: m.ts,
         })),
+        tags: c.tags,
       };
     });
   return { total: conversations.length, recent };

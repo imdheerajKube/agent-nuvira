@@ -108,6 +108,14 @@ export interface ModelRegistryEntry {
   partialHistory?: Array<{ t: number; rate: number }>;
   /** Epoch ms until which the entry is quota-parked (0 = not parked). */
   quotaParkedUntil: number;
+  /**
+   * FIX (Gemini parking bug): when true, the parking was set by a provider-
+   * level operation (parkProvider / syncQuota) rather than a model-specific
+   * failure (recordCall). Verified models skip provider-level parking — a
+   * verified model has proven it works and should not be blanket-blocked
+   * because a DIFFERENT model in the same provider hit a rate limit.
+   */
+  providerParked?: boolean;
   /** Where the current status came from. */
   source: ModelRegistrySource;
   /** Human reason for `unavailable` (e.g. '403 permission denied'). */
@@ -457,7 +465,14 @@ export class ModelRegistry {
     const e = this.data.entries[entryKey(provider, model)];
     if (!e) return false;
     if (e.status !== 'verified') return false;
-    if (e.quotaParkedUntil > now) return false;
+    // FIX (Gemini parking bug): verified models skip provider-level parking.
+    // A verified model has proven it works — blanket-parking it because a
+    // DIFFERENT model in the same provider hit a rate limit is the root cause
+    // of providers being blocked despite having working models. Only model-
+    // specific parking (from recordCall, providerParked=false) blocks a
+    // verified model. Provider-level parking (providerParked=true or undefined
+    // for old data) is skipped for verified models.
+    if (e.quotaParkedUntil > now && e.providerParked === false) return false;
     if (now - e.lastVerifiedAt > DEFAULT_STALE_MS) return false;
     return true;
   }
@@ -845,13 +860,21 @@ export class ModelRegistry {
     }
   }
 
-  /** Apply the quota ledger's parked-provider status to all of a provider's entries. */
+  /** Apply the quota ledger's parked-provider status to a provider's entries.
+   *
+   * FIX: Only park models that are NOT verified. A verified model has proven
+   * it works — blanket-parking it because a DIFFERENT model in the same
+   * provider hit a rate limit blocks working models unnecessarily (the
+   * "Gemini parking bug"). The per-model parking from recordCall() already
+   * handles the specific rate-limited model.
+   */
   parkProvider(provider: string, until: number): void {
     const now = Date.now();
     let touched = false;
     for (const e of Object.values(this.data.entries)) {
-      if (e.provider === provider && until > now) {
+      if (e.provider === provider && until > now && e.status !== 'verified') {
         e.quotaParkedUntil = Math.max(e.quotaParkedUntil, until);
+        e.providerParked = true;
         touched = true;
       }
     }
@@ -867,6 +890,7 @@ export class ModelRegistry {
     for (const e of Object.values(this.data.entries)) {
       if (e.provider === provider && e.quotaParkedUntil > 0) {
         e.quotaParkedUntil = 0;
+        e.providerParked = false;
         touched = true;
       }
     }
@@ -911,6 +935,7 @@ export class ModelRegistry {
       }
       if (e.quotaParkedUntil > now) {
         e.quotaParkedUntil = 0;
+        e.providerParked = false;
         unparked++;
       }
     }
@@ -1010,6 +1035,9 @@ export class ModelRegistry {
       const parkMs = Math.min(60 * 60 * 1000, Math.max(10 * 1000, hintMs ?? 60_000));
       const parkUntil = now + parkMs;
       entry.quotaParkedUntil = Math.max(entry.quotaParkedUntil, parkUntil);
+      // Model-specific parking (from recordCall) — providerParked=false means
+      // isUsable() WILL block this verified model (correct: it was rate-limited).
+      entry.providerParked = false;
       flipped = true;
     }
     this.data.entries[key] = entry;
@@ -1162,13 +1190,22 @@ export class ModelRegistry {
       const now = Date.now();
       let changed = false;
       const newlyParked = new Set<string>();
-      // 1. Cooldown parks (explicit + configured-limit exhaustion) — provider level.
+      // 1. Cooldown parks (explicit + configured-limit exhaustion) — MODEL level.
+      // FIX: Only park models that are NOT verified. A verified model has proven
+      // it works — blanket-parking it because a DIFFERENT model in the same
+      // provider hit a rate limit is the root cause of providers being blocked
+      // despite having working models (the "Gemini parking bug").
+      // Mirror the ledger's cooldown state directly — the provider's own
+      // reset hint (Retry-After) is the authoritative source for parking
+      // duration. syncQuota's role is to reflect ledger state in the registry,
+      // not to override or cap it.
       for (const { provider, cooldownRemaining } of ledger.getRouterQuotaStatus(configManager)) {
         if (cooldownRemaining <= 0) continue;
         const until = now + cooldownRemaining;
         for (const e of Object.values(this.data.entries)) {
-          if (e.provider === provider && until > e.quotaParkedUntil) {
+          if (e.provider === provider && until > e.quotaParkedUntil && e.status !== 'verified') {
             e.quotaParkedUntil = until;
+            e.providerParked = true;
             changed = true;
             newlyParked.add(provider);
           }

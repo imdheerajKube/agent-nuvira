@@ -136,15 +136,19 @@ describe('FailureBookkeeping — recordActionFailure', () => {
     expect(getModelRegistry().getEntry('groq', 'llama-3.3-70b-versatile')?.status).not.toBe('unavailable');
   });
 
-  it('rate-limit without quota config: parks for the 24h default window', () => {
+  it('rate-limit without hint or config: parks for MIN_RATE_LIMIT_PARK_MS (10s, not 24h)', () => {
     const session = makeSession();
     const before = Date.now();
 
     recordActionFailure(session, 'groq', new Error('quota exceeded'), makeConfig(), { action: 'chat' });
 
+    // FIX: No Retry-After hint AND no configured windowMs → use
+    // MIN_RATE_LIMIT_PARK_MS (10s) instead of the bare 24h window. The
+    // provider will tell us when the limit resets via Retry-After if it
+    // has a longer window.
     const parkExpiry = mockLedger.parkProvider.mock.calls[0][1] as number;
-    expect(parkExpiry).toBeGreaterThanOrEqual(before + 24 * 60 * 60 * 1000);
-    expect(parkExpiry).toBeLessThan(before + 24 * 60 * 60 * 1000 + 100);
+    expect(parkExpiry).toBeGreaterThanOrEqual(before + 10_000);
+    expect(parkExpiry).toBeLessThan(before + 10_000 + 100);
   });
 
   it('rate-limit WITH a provider reset hint parks for the HINT, not the 24h default', () => {
@@ -169,16 +173,18 @@ describe('FailureBookkeeping — recordActionFailure', () => {
     expect(parkExpiry).toBeLessThan(before + 20_000);
   });
 
-  it('rate-limit hint is capped by the configured window (user has the final say)', () => {
+  it('rate-limit hint wins over configured window (provider knows its limits)', () => {
     const session = makeSession();
     const before = Date.now();
-    // Provider says reset in 5 min, but the user configured a 60s window.
+    // Provider says reset in 5 min — the provider knows its own rate-limit
+    // window, so we honor the hint. The configured windowMs is only used when
+    // NO hint is present.
     recordActionFailure(session, 'groq', new Error('429 try again in 300s'), makeConfig({ groq: { windowMs: 60_000 } }), {
       action: 'chat',
     });
     const parkExpiry = mockLedger.parkProvider.mock.calls[0][1] as number;
-    expect(parkExpiry).toBeGreaterThanOrEqual(before + 60_000);
-    expect(parkExpiry).toBeLessThan(before + 60_000 + 100);
+    expect(parkExpiry).toBeGreaterThanOrEqual(before + 300_000);
+    expect(parkExpiry).toBeLessThan(before + 300_000 + 100);
   });
 
   it('transient failure (server): short cooldown + re-verify marker, registry decays (not unavailable)', () => {

@@ -48,6 +48,9 @@ issues/
 !vscode-extension/README.md
 !vscode-extension/CHANGELOG.md
 
+# Book (internal document — not published)
+book/
+
 # macOS
 .DS_Store
 src/file.ts

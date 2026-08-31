@@ -140,12 +140,23 @@ export function recordActionFailure(
     // rolls so the exclusion survives across chat sessions (the ledger is
     // read by the auto router before every pick, so the next session skips
     // the exhausted provider predictively instead of failing reactively).
-    let windowMs = 24 * 60 * 60 * 1000;
+    // FIX: Distinguish between user-configured window and bare default.
+    // When the user explicitly configures windowMs, honor it (represents the
+    // actual rate-limit reset window). When NO config exists, use a short
+    // default (60s) instead of 24h — a bare 429 without Retry-After should
+    // not strand a provider for a full day.
+    let windowMs: number;
+    let hasExplicitConfig = false;
     try {
       const limit = configManager.getAll().routing?.quota?.[providerType];
-      windowMs = limit?.windowMs ?? windowMs;
+      if (limit?.windowMs != null) {
+        windowMs = limit.windowMs;
+        hasExplicitConfig = true;
+      } else {
+        windowMs = 60 * 1000; // 60s default (was 24h — far too long)
+      }
     } catch {
-      // Best-effort — config read must not crash a call.
+      windowMs = 60 * 1000;
     }
     // Honor the provider's OWN reset hint when the 429 carries one
     // (Retry-After / "try again in 16s" / x-ratelimit-reset-* headers): a
@@ -155,8 +166,15 @@ export function recordActionFailure(
     // to trust, so the conservative window stands). Capped by windowMs and
     // floored by MIN_RATE_LIMIT_PARK_MS so a 1s hint can't hot-loop.
     const hintMs = extractRetryAfterMs(err);
+    // Priority: provider hint > configured window > short default.
+    // 1. Provider gives reset time → HONOR IT (the provider knows its own
+    //    limits — "try again in 16s" means exactly that, not "wait 24 hours")
+    // 2. No hint but user configured windowMs → use it (represents the known window)
+    // 3. No hint, no config → short default (10s) — a bare 429 means "try soon"
     const parkMs =
-      hintMs !== null ? Math.min(Math.max(hintMs, MIN_RATE_LIMIT_PARK_MS), windowMs) : windowMs;
+      hintMs !== null
+        ? Math.max(hintMs, MIN_RATE_LIMIT_PARK_MS) // provider hint wins (floored to prevent hot-loop)
+        : hasExplicitConfig ? windowMs : MIN_RATE_LIMIT_PARK_MS;
     try {
       getQuotaLedger().parkProvider(providerType, now + parkMs, failureKind);
     } catch {
