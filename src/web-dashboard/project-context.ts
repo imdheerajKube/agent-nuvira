@@ -95,6 +95,7 @@ export function formatProjectText(bundle: ProjectContextBundle): string {
     `Project: ${bundle.name}`,
     `Path: ${bundle.path}`,
     `Files: ${bundle.fileCount} · Symbols: ${bundle.symbolCount}${bundle.truncated ? ' (map truncated to fit context — use read_file for the rest)' : ''}`,
+    `Note: File count includes all source files in this directory and its subdirectories.`,
     '',
     '## File tree',
     bundle.fileTree,
