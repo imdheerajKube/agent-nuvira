@@ -69,6 +69,7 @@ export default function AgentHub() {
   const [sendMsg, setSendMsg] = useState<{ kind: 'ok' | 'err'; text: string } | null>(null);
 
   // P1 — Permissions (validated senders): per-platform policy drafts + saves.
+  const [permissionsExpanded, setPermissionsExpanded] = useState(false);
   const [policyDraft, setPolicyDraft] = useState<Record<string, HubChannelPolicy>>({});
   const [policyBusy, setPolicyBusy] = useState(false);
   const [policyMsg, setPolicyMsg] = useState<{ kind: 'ok' | 'err'; text: string } | null>(null);
@@ -1060,15 +1061,19 @@ ${messages.map((m) => {
               </button>
             </div>
           ) : null}
-          <h3 className="section-subtitle">🔐 Permissions — who can TRIGGER the agent</h3>
-          <p className="admin-hint">
+          <div
+            style={{ cursor: 'pointer', userSelect: 'none', display: 'flex', alignItems: 'center', gap: 8, marginBottom: 8 }}
+            onClick={() => setPermissionsExpanded(!permissionsExpanded)}
+          >
+            <h3 className="section-subtitle" style={{ margin: 0 }}>
+              {permissionsExpanded ? '▼' : '▶'} 🔐 Permissions — who can TRIGGER the agent
+            </h3>
+          </div>
+          <p className="admin-hint" style={{ marginBottom: permissionsExpanded ? 10 : 0 }}>
             This list controls <strong>who may trigger the agent</strong> when they message you on each
-            platform (WhatsApp, Telegram, email, …). A sender on the list gets a reply; everyone else is
-            refused. Per platform: a listed sender/group is allowed; a <strong>blank</strong> list means{' '}
-            <strong>no one</strong> may trigger; the token <code>Allow-All</code> skips the verifier and
-            responds to everyone. <strong>Silent</strong> refuses without replying. Changes apply to the
-            running gateway immediately.
+            platform (WhatsApp, Telegram, email, …). Click to {permissionsExpanded ? 'collapse' : 'expand'} and manage permissions.
           </p>
+          {permissionsExpanded ? (<>
           <div className="admin-hint" style={{ marginBottom: 10 }}>
             ⚠ <strong>Not the same as send-by-name contacts:</strong> a WhatsApp contact name (from{' '}
             <code>buff whatsapp contact add</code>, shown in the WhatsApp bridge panel below) only lets{' '}
@@ -1180,6 +1185,7 @@ ${messages.map((m) => {
             })}
           </div>
 
+          </>) : null}
           <h3 className="section-subtitle" style={{ marginTop: 22 }}>📇 Telegram User Onboarding</h3>
           <div className="onboarding-summary">
             <p className="admin-hint" style={{ marginBottom: 12 }}>
