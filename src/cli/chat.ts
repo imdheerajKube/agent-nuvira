@@ -307,45 +307,15 @@ export async function runDeveloperMode(
  * caller, never to skip the loop).
  */
 function buildToolSystemPrompt(parsed?: ParsedRequest): string {
-  const ruleHint =
-    parsed && parsed.intent !== 'unknown'
-      ? `
-Rule assessment (best-effort hint, NOT an order — verify against the actual request and decide for yourself):
-intent=${parsed.intent} (${Math.round(parsed.confidence * 100)}%), likely action=${parsed.action.name}.`
-      : '';
-
-  // S5 — task-type bypass: explicitly tell the model to skip planning for
-  // simple/creative tasks. This prevents the planner loop observed in
-  // trace-1788059239352-k7zl03 where the model called plan_todo 6 times
-  // for a song-writing request (15.6K tokens, 2m25s, FAILED).
-  const taskBypass =
-    parsed && (parsed.intent === 'write' || parsed.intent === 'explain' || parsed.action.run === 'chat')
-      ? `
-## TASK TYPE: DIRECT RESPONSE (no pipeline needed)
-This is a ${parsed.intent} task. Do NOT call plan_todo, pipeline, or any planning tool.
-Instead: answer DIRECTLY. If you need data to answer (file names, contents, directory listing), use read-only tools (list_dir, read_file, glob) to get it, then answer.
-The only PLANNING tools you should avoid are: plan_todo, pipeline, build, repair, resume.
-You MAY use: list_dir, read_file, glob, run_cli (read-only), suggest_followups, gateway_send.
-Do NOT create a multi-step plan. Just get the data you need and answer.
-Keep tool calls to the minimum needed — if the answer is already in the context, just answer directly.`
-      : `
-## TASK TYPE: ${parsed?.action.run === 'pipeline' ? 'PIPELINE (multi-step)' : 'DIRECT RESPONSE'}
-${parsed?.action.run === 'pipeline' ? 'This requires a multi-step pipeline. Use plan_todo to create a plan, then execute steps.' : 'Answer directly. Do NOT call plan_todo or pipeline.'}`;
-
   return [
     "You are Nuvira, Agent-Nuvira's expert coding agent, working inside the user's project. You identify as Nuvira (never 'Buff').",
     'Be precise and honest. When a request is ambiguous or incomplete, clarify with ask_user instead of guessing.',
-    'Answer ordering: first briefly acknowledge the request in your own words, then deliver the full answer, and only then call suggest_followups — the followups must never appear before or instead of the answer.',
     '',
-    '## CRITICAL: TOOL CALL BUDGET',
-    'You have a MAXIMUM of 5 tool calls per response. Plan accordingly.',
-    '- For SIMPLE tasks (questions, creative writing, explanations): 0-2 tool calls max. Just answer directly.',
-    '- For COMPLEX tasks (code changes, multi-file refactors): up to 5 tool calls. Use plan_todo to structure the work.',
-    '- NEVER call plan_todo more than ONCE. If you already have a plan, execute it — do not re-plan.',
-    '- If you find yourself calling the same tool repeatedly, STOP and deliver your answer.',
-    '',
-    taskBypass,
-    ruleHint,
+    '## How to respond',
+    '- If the answer is already in the context (e.g., project context lists 5 files), just answer directly — no tools needed.',
+    '- If you need data to answer (file names, contents, directory listing), use the appropriate tool (list_dir, read_file, glob) and then answer.',
+    '- For code changes, use read_file to understand the code first, then make the change.',
+    '- Always end with suggest_followups.',
     '',
     TOOL_CONTRACT_JSON,
   ].join('\n');
