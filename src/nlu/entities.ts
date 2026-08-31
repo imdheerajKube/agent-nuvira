@@ -137,7 +137,7 @@ export function extractDeterministicEntities(
 
 // ─── LLM verify ─────────────────────────────────────────────────────────────
 
-const VERIFY_PROMPT = `You are a request-understanding layer for a developer coding agent. Classify the user's request and extract entities as STRICT JSON.
+const VERIFY_PROMPT = `You are a request-understanding layer for an AI agent. Classify the user's request and extract entities as STRICT JSON.
 
 The request is one of these intents:
 - "create" — build/generate/write NEW code, files, projects, plugins, addons

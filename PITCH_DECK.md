@@ -6,7 +6,7 @@
 
 ## Slide 1 — Title Slide
 
-**Agent-Nuvira: The Autonomous Coding Agent Developers Control**
+**Agent-Nuvira: The Autonomous AI Agent Developers Control**
 
 *Tagline:* Open-source. Multi-provider. Full lifecycle. Zero server dependency.
 
@@ -51,7 +51,7 @@
 
 ## Slide 3 — The Solution
 
-**Headline:** Agent-Nuvira — the autonomous coding agent that developers control.
+**Headline:** Agent-Nuvira — the autonomous AI agent that developers control.
 
 | Problem | Agent-Nuvira Solution |
 |---|---|
@@ -341,8 +341,8 @@ Agent-Nuvira has reached production readiness with zero funding. We're seeking p
 **Talking points:**
 - "We're not asking for funding to find product-market fit. We have product-market fit with our early users."
 - "We're asking for resources to accelerate the flywheel: more users → more plugins → more use cases → more enterprise interest → more revenue → more investment in the open-source core."
-- "The AI coding tools market is projected to reach $X billion by 2028. Agent-Nuvira is positioned to be the open-source infrastructure layer that the entire ecosystem builds on."
-- "Our thesis: the best AI coding agent is the one developers trust enough to run without watching — because they control what it runs on. Help us make that the standard."
+- "The AI agent tools market is projected to reach $X billion by 2028. Agent-Nuvira is positioned to be the open-source infrastructure layer that the entire ecosystem builds on."
+- "Our thesis: the best AI agent is the one developers trust enough to run without watching — because they control what it runs on. Help us make that the standard."
 
 ---
 

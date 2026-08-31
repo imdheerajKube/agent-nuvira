@@ -10,7 +10,7 @@
  * Why these exist (the master-plan brief): the registry had `code_search`
  * but no way to OPEN the files it finds — the agent could locate a bug but
  * never read it. These three tools close that gap with the same surface I
- * use as a coding agent: read with line numbers + offset/limit, list a
+ * use as an AI agent: read with line numbers + offset/limit, list a
  * directory, glob for files.
  *
  * Security model — DENY-FIRST (same rule as the action tools in P0.3/P0.4):
@@ -195,7 +195,7 @@ export interface EditFileArgs {
 
 /**
  * A surgical exact-text replacement — the same edit primitive a human
- * coding agent uses: find the exact old text, replace with new. Refuses
+ * AI agent uses: find the exact old text, replace with new. Refuses
  * ambiguous matches (multiple occurrences without allow_multiple) and
  * reports not-found distinctly so the model re-reads the file. Deny-first
  * on the path (gateReal — file must exist inside the workspace).
