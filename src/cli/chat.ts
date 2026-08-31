@@ -696,8 +696,16 @@ export class ChatCommand extends BaseCommand {
       // the pipeline resolves its own working provider/model).
       if (answer.generationFailed && dispatchDecision.dispatch && !dispatchDecision.needConfirm) {
         await runDeveloperMode(prompt, this.configManager, { provider: type, model });
-        return;
-      }
+        // After pipeline execution, show followups and continue conversation
+        // (don't just return — keep user engaged with next steps)
+        if (!process.stdin.isTTY) {
+          return;
+        }
+        // Seed history with the pipeline result so followups have context
+        history.push({ role: 'user', content: prompt });
+        // Continue to interactive mode (don't return)
+        logger.info('');
+      } else
 
       // Ordering: the ANSWER is always printed first, then followups — the
       // user asked for the content, not a menu. On a real terminal the
@@ -837,18 +845,8 @@ export class ChatCommand extends BaseCommand {
       // pipeline directly (rules decide only when the model is unavailable).
       if (answer.generationFailed && dispatchDecision.dispatch && !dispatchDecision.needConfirm) {
         await runDeveloperMode(message, this.configManager, { provider: type, model });
-        const continueAnswer = await inquirer.prompt<{ cont: string }>([
-          {
-            type: 'input',
-            name: 'cont',
-            message: 'Press Enter to continue chatting, or type /exit to quit:',
-            prefix: '',
-          },
-        ]);
-        if (continueAnswer.cont.trim().toLowerCase() === '/exit' || continueAnswer.cont.trim().toLowerCase() === '/quit') {
-          console.log('Goodbye!');
-          break;
-        }
+        // After pipeline execution, continue conversation (don't just ask "press Enter")
+        // The user can keep chatting or type /exit
         continue;
       }
       type = session.type;
