@@ -1031,9 +1031,10 @@ export default function ChatPage() {
       if (!file) return;
       
       // webkitRelativePath gives us "selectedFolder/path/to/file"
-      // We extract the top-level folder name
+      // We extract the full relative path to resolve nested folders correctly
       const relativePath = (file as any).webkitRelativePath || '';
-      const folderName = relativePath.split('/')[0];
+      const parts = relativePath.split('/');
+      const folderName = parts[0];
       
       if (!folderName) {
         void openBrowse();
@@ -1043,8 +1044,9 @@ export default function ChatPage() {
       setProjectError('');
       setBusy(true);
       
-      // Try to resolve the folder path
-      const r = await dashboardAPI.resolveFolder(folderName);
+      // Try to resolve the folder path using the full relative path
+      // This handles nested folders like "addon/addon" correctly
+      const r = await dashboardAPI.resolveFolder(folderName, parts.length > 2 ? parts.slice(1, -1).join('/') : '');
       setBusy(false);
       
       if (r.ok && r.path) {
