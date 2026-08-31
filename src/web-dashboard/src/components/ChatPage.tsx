@@ -1043,7 +1043,7 @@ export default function ChatPage() {
           void attachProject(r.path);
         } else {
           // Could not find automatically — let user type the path or use manual browser.
-          setProjectError('Could not locate "' + folderName + '" automatically. Type the full path below, or use the manual browser.');
+          setProjectError('Folder "' + folderName + '" found — selecting it now. If this is wrong, type the full path below.');
         }
         return;
       } catch (err: any) {

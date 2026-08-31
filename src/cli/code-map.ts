@@ -78,9 +78,12 @@ function collectSymbols(nodes: StructuralNode[], out: CodeMapSymbol[] = []): Cod
   return out;
 }
 
+/** Maximum files to scan before bailing out (prevents event-loop blocking on huge dirs). */
+const MAX_SCAN_FILES = 2000;
+
 /** Recursively collect source files under a directory (respecting IGNORE_DIRS). */
 function walkSourceFiles(dir: string, cwd: string, out: string[] = [], depth = 0): string[] {
-  if (depth > 8) return out;
+  if (depth > 8 || out.length >= MAX_SCAN_FILES) return out;
   let entries;
   try {
     entries = readdirSync(dir, { withFileTypes: true });
@@ -88,6 +91,7 @@ function walkSourceFiles(dir: string, cwd: string, out: string[] = [], depth = 0
     return out;
   }
   for (const entry of entries) {
+    if (out.length >= MAX_SCAN_FILES) break;
     if (IGNORE_DIRS.has(entry.name)) continue;
     const p = join(dir, entry.name);
     if (entry.isDirectory()) {
@@ -101,7 +105,7 @@ function walkSourceFiles(dir: string, cwd: string, out: string[] = [], depth = 0
 
 /** Recursively count ALL files (not just code files) for accurate project stats. */
 function countAllFiles(dir: string, out: string[] = [], depth = 0): string[] {
-  if (depth > 8) return out;
+  if (depth > 8 || out.length >= MAX_SCAN_FILES) return out;
   let entries;
   try {
     entries = readdirSync(dir, { withFileTypes: true });
@@ -109,6 +113,7 @@ function countAllFiles(dir: string, out: string[] = [], depth = 0): string[] {
     return out;
   }
   for (const entry of entries) {
+    if (out.length >= MAX_SCAN_FILES) break;
     if (IGNORE_DIRS.has(entry.name)) continue;
     const p = join(dir, entry.name);
     if (entry.isDirectory()) {
