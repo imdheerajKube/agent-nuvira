@@ -1012,42 +1012,55 @@ export default function ChatPage() {
     };
   }, [browseOpen, browsePath, refreshBrowse]);
 
-  /** Native folder picker using the File System Access API.
-   *  Opens a TRUE native folder picker (not a file picker).
+  /** Native folder picker using a hidden file input with webkitdirectory.
+   *  This gives us the FULL path (not just the folder name like showDirectoryPicker).
    *  Falls back to the custom popover on unsupported browsers. */
+  const folderInputRef = useRef<HTMLInputElement | null>(null);
+  
   const openNativeFolderPicker = useCallback(async () => {
-    // showDirectoryPicker() opens a native OS folder selection dialog.
-    // Supported in Chrome, Edge, Electron (Chromium-based).
-    const w = window as Record<string, unknown>;
-    if (typeof w.showDirectoryPicker === 'function') {
-      try {
-        const dirHandle = await (w.showDirectoryPicker as () => Promise<FileSystemDirectoryHandle>)();
-        const folderName = dirHandle.name;
-        if (!folderName) {
-          void openBrowse();
-          return;
-        }
-        setProjectError('');
-        setBusy(true);
-        const r = await dashboardAPI.resolveFolder(folderName);
-        setBusy(false);
-        if (r.ok && r.path) {
-          // Show the resolved path in the input field for transparency.
-          setProjectPathInput(r.path);
-          void attachProject(r.path);
-        } else {
-          setProjectError((r.error || 'Could not find folder.') + ' Opening manual browser...');
-          void openBrowse();
-        }
+    // Use a hidden file input with webkitdirectory attribute.
+    // This opens a native OS folder selection dialog and gives us the full path
+    // via webkitRelativePath (e.g., "addon/src/index.ts" -> we extract "addon").
+    const input = document.createElement('input');
+    input.type = 'file';
+    input.webkitdirectory = true;
+    input.style.display = 'none';
+    
+    input.onchange = async () => {
+      const file = input.files?.[0];
+      if (!file) return;
+      
+      // webkitRelativePath gives us "selectedFolder/path/to/file"
+      // We extract the top-level folder name
+      const relativePath = (file as any).webkitRelativePath || '';
+      const folderName = relativePath.split('/')[0];
+      
+      if (!folderName) {
+        void openBrowse();
         return;
-      } catch (err: unknown) {
-        // User cancelled the picker — no action needed.
-        if (err instanceof DOMException && err.name === 'AbortError') return;
-        // Other errors — fall through to custom popover.
       }
-    }
-    // Fallback: custom directory browser popover.
-    void openBrowse();
+      
+      setProjectError('');
+      setBusy(true);
+      
+      // Try to resolve the folder path
+      const r = await dashboardAPI.resolveFolder(folderName);
+      setBusy(false);
+      
+      if (r.ok && r.path) {
+        setProjectPathInput(r.path);
+        void attachProject(r.path);
+      } else {
+        setProjectError((r.error || 'Could not find folder.') + ' Opening manual browser...');
+        void openBrowse();
+      }
+      
+      // Clean up
+      document.body.removeChild(input);
+    };
+    
+    document.body.appendChild(input);
+    input.click();
   }, [openBrowse, attachProject]);
 
   const send = useCallback(
