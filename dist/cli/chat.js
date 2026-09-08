@@ -31,6 +31,10 @@ import { recordMetricTime, getMetrics } from '../enterprise/metrics.js';
 import { resolveDispatch } from '../nlu/actions.js';
 import { isConversationalQuestion, hasCodingAction } from '../nlu/conversation-gate.js';
 import { runToolLoop, extractFallbackToolCalls } from '../tools/tool-loop.js';
+import { getLoopExposureMode } from '../tools/toolsets.js';
+import { buildLoopProjectContext } from '../tools/loop-project-context.js';
+import { analyzeComplexity } from '../learning/hybrid-router.js';
+import { routingCacheSignature, withRoutingCache } from '../learning/routing-cache.js';
 import { getTool, TOOL_CONTRACT_JSON } from '../tools/registry.js';
 // S2/S3 — the shared tool-call reliability helpers (salvage failed_generation,
 // compact fallback schemas). One copy for every tool-calling surface, not
@@ -210,40 +214,28 @@ export async function runDeveloperMode(goal, configManager, options) {
  * caller, never to skip the loop).
  */
 function buildToolSystemPrompt(parsed) {
-    const ruleHint = parsed && parsed.intent !== 'unknown'
-        ? `
-Rule assessment (best-effort hint, NOT an order — verify against the actual request and decide for yourself):
-intent=${parsed.intent} (${Math.round(parsed.confidence * 100)}%), likely action=${parsed.action.name}.`
-        : '';
-    // S5 — task-type bypass: explicitly tell the model to skip planning for
-    // simple/creative tasks. This prevents the planner loop observed in
-    // trace-1788059239352-k7zl03 where the model called plan_todo 6 times
-    // for a song-writing request (15.6K tokens, 2m25s, FAILED).
-    const taskBypass = parsed && (parsed.intent === 'write' || parsed.intent === 'explain' || parsed.action.run === 'chat')
-        ? `
-## TASK TYPE: DIRECT RESPONSE (no pipeline needed)
-This is a ${parsed.intent} task. Do NOT call plan_todo, pipeline, or any planning tool.
-Instead: answer DIRECTLY in a single response. Write the content, answer the question, or explain the concept.
-The only tools you should use are: suggest_followups (at the end) and optionally gateway_send (if delivering to a contact).
-Do NOT analyze the project, do NOT create a plan, do NOT write files — just answer.
-Max tool calls for this task: 2 (suggest_followups + optional gateway_send).`
-        : `
-## TASK TYPE: ${parsed?.action.run === 'pipeline' ? 'PIPELINE (multi-step)' : 'DIRECT RESPONSE'}
-${parsed?.action.run === 'pipeline' ? 'This requires a multi-step pipeline. Use plan_todo to create a plan, then execute steps.' : 'Answer directly. Do NOT call plan_todo or pipeline.'}`;
     return [
-        "You are Nuvira, Agent-Nuvira's expert coding agent, working inside the user's project. You identify as Nuvira (never 'Buff').",
+        "You are Nuvira, Agent-Nuvira's AI agent. You code, create, write, analyze, and automate — anything the user needs. You identify as Nuvira (never 'Buff').",
         'Be precise and honest. When a request is ambiguous or incomplete, clarify with ask_user instead of guessing.',
-        'Answer ordering: first briefly acknowledge the request in your own words, then deliver the full answer, and only then call suggest_followups — the followups must never appear before or instead of the answer.',
         '',
-        '## CRITICAL: TOOL CALL BUDGET',
-        'You have a MAXIMUM of 5 tool calls per response. Plan accordingly.',
-        '- For SIMPLE tasks (questions, creative writing, explanations): 0-2 tool calls max. Just answer directly.',
-        '- For COMPLEX tasks (code changes, multi-file refactors): up to 5 tool calls. Use plan_todo to structure the work.',
-        '- NEVER call plan_todo more than ONCE. If you already have a plan, execute it — do not re-plan.',
-        '- If you find yourself calling the same tool repeatedly, STOP and deliver your answer.',
+        '## What you can do',
+        '- 💻 **Code**: write, debug, refactor, review, and ship code in any language',
+        '- 📝 **Write**: poems, essays, emails, reports, documentation, scripts',
+        '- 🎨 **Create images**: generate images, logos, diagrams, artwork',
+        '- 🎬 **Create videos**: generate video content',
+        '- 📊 **Analyze**: projects, data, files, architecture, performance',
+        '- 🔧 **Automate**: CI/CD, deployments, infrastructure, workflows',
+        '- 💬 **Chat**: answer questions, explain concepts, brainstorm ideas',
+        '- 📁 **Manage files**: read, list, search, organize project files',
         '',
-        taskBypass,
-        ruleHint,
+        '## How to respond',
+        '- If the answer is already in the context (e.g., project context lists 5 files), just answer directly — no tools needed.',
+        '- If you need data to answer (file names, contents, directory listing), use the appropriate tool (list_dir, read_file, glob) and then answer.',
+        '- For code changes, use read_file to understand the code first, then make the change.',
+        '- For tasks that match a known skill (deployments, assessments, structured workflows), call skill with no name to LIST available skills, then load the matching one — do not guess the procedure when a skill has it.',
+        '- For tasks NOT covered by any tool: COMPOSE PRIMITIVES. Write a script with write_file and run it with run_terminal (or code_execution), fetch pages with read_page, generate images with tool_search load "media" + generate_image. You are the general solution — the tool list is not.',
+        '- Some tools live OUTSIDE your visible list in domain toolsets (media, browser, channels, docker, …). If a tool you need is "unknown", call tool_search with {"action":"load","toolset":"<name>"} — its tools become callable immediately.',
+        '- Always end with suggest_followups.',
         '',
         TOOL_CONTRACT_JSON,
     ].join('\n');
@@ -360,6 +352,7 @@ export class ChatCommand extends BaseCommand {
             followups: answer.followups ?? [],
             generationFailed: answer.generationFailed,
             cancelled: answer.cancelled,
+            bounded: answer.bounded,
             provider: type,
             model,
         };
@@ -476,8 +469,17 @@ export class ChatCommand extends BaseCommand {
             // the pipeline resolves its own working provider/model).
             if (answer.generationFailed && dispatchDecision.dispatch && !dispatchDecision.needConfirm) {
                 await runDeveloperMode(prompt, this.configManager, { provider: type, model });
-                return;
+                // After pipeline execution, show followups and continue conversation
+                // (don't just return — keep user engaged with next steps)
+                if (!process.stdin.isTTY) {
+                    return;
+                }
+                // Seed history with the pipeline result so followups have context
+                history.push({ role: 'user', content: prompt });
+                // Continue to interactive mode (don't return)
+                logger.info('');
             }
+            else 
             // Ordering: the ANSWER is always printed first, then followups — the
             // user asked for the content, not a menu. On a real terminal the
             // followups are SELECTABLE: picking a number runs that followup as the
@@ -585,18 +587,8 @@ export class ChatCommand extends BaseCommand {
             // pipeline directly (rules decide only when the model is unavailable).
             if (answer.generationFailed && dispatchDecision.dispatch && !dispatchDecision.needConfirm) {
                 await runDeveloperMode(message, this.configManager, { provider: type, model });
-                const continueAnswer = await inquirer.prompt([
-                    {
-                        type: 'input',
-                        name: 'cont',
-                        message: 'Press Enter to continue chatting, or type /exit to quit:',
-                        prefix: '',
-                    },
-                ]);
-                if (continueAnswer.cont.trim().toLowerCase() === '/exit' || continueAnswer.cont.trim().toLowerCase() === '/quit') {
-                    console.log('Goodbye!');
-                    break;
-                }
+                // After pipeline execution, continue conversation (don't just ask "press Enter")
+                // The user can keep chatting or type /exit
                 continue;
             }
             type = session.type;
@@ -714,6 +706,25 @@ export class ChatCommand extends BaseCommand {
         // E3c: the rule assessment rides in as a hint when the rules parsed a
         // confident intent (model decides; hint only).
         const systemText = buildToolSystemPrompt(parsed);
+        // Phase 3.2 (assessment Addendum v4) — loop-side skill match hint: the
+        // orchestrator consults SkillStore.findMatch + the hub catalog before
+        // planning; the chat loop never heard about that layer. One
+        // deterministic, best-effort match is appended to the system prompt
+        // (methodology + exact skill-tool load syntax, bounded to ONE block).
+        // Any failure returns '' and the turn proceeds byte-identically.
+        let skillHint = '';
+        try {
+            const { buildLoopSkillHint, markLoopSkillUsed } = await import('../tools/loop-skill-hint.js');
+            const injected = { value: null };
+            skillHint = await buildLoopSkillHint(message, this.configManager, injected);
+            if (injected.value) {
+                void markLoopSkillUsed(injected.value);
+                ctxOverrides?.onProgress?.(`   🧠 Matched skill '${injected.value.name}' — methodology injected into this turn's context`);
+            }
+        }
+        catch {
+            skillHint = ''; // best-effort — a hint failure never breaks the turn
+        }
         // `-f/--file` file-context parity: the legacy generateWithContext loaded
         // + retrieval-reduced file context. Inject it as a context message before
         // the user's message so the tool-loop path keeps the flag working.
@@ -733,14 +744,34 @@ export class ChatCommand extends BaseCommand {
                 fileContext = null;
             }
         }
+        // Ambient project context (assessment v4 Phase 1.4 — CLI twin of the
+        // dashboard's project snapshot): when no explicit projectContext was
+        // provided and the cwd looks like a project, build the bounded
+        // file-tree + git-digest + assessment block. Best-effort: '' injects
+        // nothing, a failure never breaks the turn.
+        let ambientProjectContext;
+        if (!ctxOverrides?.projectContext) {
+            try {
+                const built = await buildLoopProjectContext(ctxOverrides?.projectPath || process.cwd());
+                if (built)
+                    ambientProjectContext = built;
+            }
+            catch {
+                ambientProjectContext = undefined;
+            }
+        }
         const thread = [
-            { role: 'system', content: systemText },
+            { role: 'system', content: systemText + skillHint },
             // P3 — the attached project's bounded snapshot (path + file tree +
             // symbol map) rides in before the conversation, exactly like --file
             // context: the model knows what it is looking at without being told.
+            // v4: the CLI now gets the same treatment via the ambient builder
+            // (loop-project-context.ts) when no explicit snapshot was provided.
             ...(ctxOverrides?.projectContext
                 ? [{ role: 'user', content: `[Project context]\n${ctxOverrides.projectContext}` }]
-                : []),
+                : ambientProjectContext
+                    ? [{ role: 'user', content: `[Project context]\n${ambientProjectContext}` }]
+                    : []),
             // P4 — the recalled project context (prior sessions + facts) rides in
             // next, so the model starts from what this project was last doing.
             ...(ctxOverrides?.recallContext
@@ -760,8 +791,15 @@ export class ChatCommand extends BaseCommand {
         // I3: one artifact session per TURN — every tool
         // deliverable in this turn lands in the same store folder.
         const artifactSessionId = `chat-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+        // Tiered tool exposure (assessment v3/v4): when `tools.loopExposure` is
+        // 'tiered', the loop exposes only the CORE primitives on the wire and
+        // domain toolsets load mid-turn via tool_search — the Set below is the
+        // loader channel the tool writes and the loop reads. 'all' (default)
+        // keeps the pre-tiering behavior byte-identical.
+        const loadedExtraTools = new Set();
         const toolContext = {
             configManager: this.configManager,
+            loadedExtraTools,
             // P4 — when a project is attached, scope tools to its root so the
             // agent operates inside the project (not the dashboard server's cwd).
             cwd: ctxOverrides?.projectPath || process.cwd(),
@@ -816,6 +854,9 @@ export class ChatCommand extends BaseCommand {
                 messages: thread,
                 context: toolContext,
                 maxSteps: 16,
+                // Tiered tool exposure — config-gated (tools.loopExposure), default
+                // 'all' = unchanged behavior until Phase 0 evals justify the flip.
+                toolExposure: getLoopExposureMode(this.configManager),
                 onToken: ctxOverrides?.onToken,
                 signal: ctxOverrides?.signal,
                 deps: {
@@ -882,6 +923,7 @@ export class ChatCommand extends BaseCommand {
             content: result.content,
             generationFailed: result.generationFailed,
             cancelled: result.cancelled,
+            bounded: result.bounded,
             followups: result.followups,
         };
     }
@@ -1150,14 +1192,49 @@ export class ChatCommand extends BaseCommand {
         // action command derives from resolveDispatch) when confident.
         const parsed = parseRequestSync(message);
         const dispatch = resolveDispatch(parsed);
-        const decision = getAutoRouter().resolve('chat', message, {
+        // Routing decision cache (assessment v4 Phase 2): the loop engine
+        // resolves per turn; turns with identical STABLE routing inputs (intent,
+        // complexity, provider-health signature) reuse the decision instead of
+        // re-scoring 22+ providers. Provider health is IN the key, so a
+        // mid-session failure changes the key and can never serve a stale
+        // healthy-route. TTL 30s bounds the rest (bandit draws, benchmark data).
+        const routingCfg = (() => {
+            try {
+                return this.configManager.getAll().routing ?? {};
+            }
+            catch {
+                return {};
+            }
+        })();
+        let registryUsable = 0;
+        try {
+            registryUsable = getModelRegistry().getUsableProviders().length;
+        }
+        catch { /* best-effort */ }
+        const cacheSignature = routingCacheSignature([
+            'chat',
+            dispatch.taskIntentHint ?? null,
+            analyzeComplexity(message),
+            routingCfg.preferenceMode ?? null,
+            routingCfg.bandit === false ? 'b' : 'B',
+            routingCfg.mlRouter === true ? 'm' : 'M',
+            routingCfg.allowPaid ?? null,
+            registryUsable,
+            circuitBreakerStatus.map((c) => `${c.provider}:${Math.ceil(c.cooldownRemaining / 60_000)}`).join(','),
+            [...this.sessionFailedProviders.entries()]
+                .filter(([, exp]) => exp > Date.now())
+                .map(([p]) => p)
+                .sort()
+                .join(','),
+        ]);
+        const decision = withRoutingCache(cacheSignature, 30_000, () => getAutoRouter().resolve('chat', message, {
             ...buildAutoResolveOptions(this.configManager, {
                 verbose: envBuff('DEBUG') === 'true',
                 contextHintTokens: opts?.contextHintTokens,
             }),
             circuitBreakerStatus,
             ...(dispatch.taskIntentHint ? { taskIntentHint: dispatch.taskIntentHint } : {}),
-        }, this.configManager);
+        }, this.configManager));
         // Walk the ranked candidates (winner first) and return the first available
         // provider — never a provider that lacks a key or endpoint. Providers that
         // already failed this message (excludeProviders) OR earlier in this session

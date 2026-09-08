@@ -77,6 +77,8 @@ export interface ChatEngine {
     content: string;
     followups: FollowupSuggestion[];
     generationFailed?: boolean;
+    /** Phase 4 — true when the loop hit its step bound (the DAG turn card shows ⛔ bounded). */
+    bounded?: boolean;
     provider?: string;
     model?: string;
   }>;
@@ -109,6 +111,8 @@ export interface ChatAnswerResult {
   provider?: string | null;
   model?: string | null;
   generationFailed?: boolean;
+  /** Phase 4 — true when the loop hit its step bound before an end turn. */
+  bounded?: boolean;
   /** P4 — true when the turn was cancelled via abort() (discarded, no state). */
   cancelled?: boolean;
   error?: string;
@@ -268,6 +272,25 @@ export class ChatConsole {
    * the next loop boundary + aborts the in-flight provider request.
    */
   private activeAborts = new Map<string, AbortController>();
+  /**
+   * Phase 4 (AGENTIC_CAPABILITY_ASSESSMENT Addendum v4) — the turn-completion
+   * hook the SERVER fulfills (the DAG store records the turn's outcome into
+   * the engine-badge + per-turn tool telemetry). Assign, never inject:
+   * chat-console must not import the server module (circular). All calls are
+   * guarded try/catch at the call site — a throwing hook must never break the
+   * chat path.
+   */
+  onTurnCompleted?: (turn: {
+    sessionId: string;
+    ok: boolean;
+    error?: string;
+    cancelled?: boolean;
+    generationFailed?: boolean;
+    /** Phase 4 — true when the loop hit its step bound before an end turn. */
+    bounded?: boolean;
+    provider?: string | null;
+    model?: string | null;
+  }) => void;
 
   constructor(private readonly opts: ChatConsoleOptions = {}) {
     this.engine = opts.engine ?? null;
@@ -285,7 +308,19 @@ export class ChatConsole {
         /* unreadable store — start empty rather than crash the dashboard */
       }
     }
+    // Phase 4 — the console reports every REAL turn's start + tool calls into
+    // the injectable telemetry sink (server.ts fulfills it with the DAG
+    // store; unit tests can capture the same calls). Cheap: two exported
+    // function calls, guarded internally, no I/O on this side.
+    void import('./loop-turn-telemetry.js').then((m) => {
+      this.turnTelemetry = m;
+    }).catch(() => {
+      /* telemetry is optional — the console works without it */
+    });
   }
+
+  /** Phase 4 — lazy handle on the telemetry sink (undefined until loaded). */
+  private turnTelemetry?: typeof import('./loop-turn-telemetry.js');
 
   /** Subscribe to a session's live events (progress lines / status). Returns an unsubscribe fn. */
   onEvent(cb: (sessionId: string, event: ChatConsoleEvent) => void): () => void {
@@ -436,6 +471,18 @@ export class ChatConsole {
       this.emit(sessionId, event);
     };
     this.emit(sessionId, { kind: 'status', status: 'working' });
+    // Phase 4 — begin the DAG turn telemetry window (engine badge 'loop',
+    // per-tool telemetry accumulates below).
+    try {
+      this.turnTelemetry?.beginLoopTurn(
+        `${sessionId}-${now}`,
+        clean,
+        opts.provider,
+        opts.model,
+      );
+    } catch {
+      /* telemetry must never break the turn */
+    }
     try {
       const engine = await this.ensureEngine();
       const answer = await engine.answerOnce(clean, {
@@ -478,6 +525,19 @@ export class ChatConsole {
           // ask_user/suggest_followups have their own cards; plan_todo is
           // rendered as the dedicated checklist card (the `plan` event).
           if (info.tool === 'suggest_followups' || info.tool === 'ask_user' || info.tool === 'plan_todo') return;
+          // Phase 4 — one record per COMPLETED call into the DAG store.
+          if (phase === 'called') {
+            try {
+              this.turnTelemetry?.recordLoopToolCall({
+                tool: info.tool,
+                ...(info.ok !== undefined ? { ok: info.ok } : {}),
+                ...(info.durationMs !== undefined ? { durationMs: info.durationMs } : {}),
+                ...(info.error !== undefined ? { error: info.error } : {}),
+              });
+            } catch {
+              /* telemetry must never break the turn */
+            }
+          }
           emitTurn({
             kind: 'tool',
             id: info.id ?? `call_${Date.now().toString(36)}`,
@@ -527,6 +587,13 @@ export class ChatConsole {
       // persist, no status:done, no events (the client already walked away
       // and may have started a new turn). abort() released busy immediately.
       if (controller.signal.aborted) {
+        this.notifyTurnCompleted({
+          sessionId,
+          ok: false,
+          cancelled: true,
+          provider: answer.provider ?? null,
+          model: answer.model ?? null,
+        });
         return { ok: false, error: 'The turn was cancelled.', cancelled: true };
       }
       const turns: ChatTurn[] = [...history, { role: 'user', content: clean }];
@@ -547,6 +614,14 @@ export class ChatConsole {
       });
       this.persist();
       this.emit(sessionId, { kind: 'status', status: 'done' });
+      this.notifyTurnCompleted({
+        sessionId,
+        ok: true,
+        generationFailed: answer.generationFailed === true,
+        bounded: answer.bounded === true,
+        provider: answer.provider ?? null,
+        model: answer.model ?? null,
+      });
       // E3b: strip raw suggest_followups JSON embedded in content
       const cleanContent = (answer.content || '')
         .replace(/\n?\*?\s*\{\s*"tool"\s*:\s*"suggest_followups"[\s\S]*$/, '')
@@ -559,18 +634,43 @@ export class ChatConsole {
         provider: answer.provider ?? null,
         model: answer.model ?? null,
         generationFailed: answer.generationFailed === true,
+        bounded: answer.bounded === true,
       };
     } catch (err) {
       // A cancel racing the engine's unwinding must not surface as an error
       // (the engine may throw AbortError before the loop returns cleanly).
       if (controller.signal.aborted) {
+        this.notifyTurnCompleted({ sessionId, ok: false, cancelled: true });
         return { ok: false, error: 'The turn was cancelled.', cancelled: true };
       }
       this.emit(sessionId, { kind: 'status', status: 'error' });
+      this.notifyTurnCompleted({ sessionId, ok: false, error: err instanceof Error ? err.message : String(err) });
       return { ok: false, error: err instanceof Error ? err.message : String(err) };
     } finally {
       this.busy.delete(sessionId);
       this.activeAborts.delete(sessionId);
+    }
+  }
+
+  /**
+   * Phase 4 — invoke the turn-completion hook (the DAG store's endLoopTurn
+   * lives server-side). Guarded: a throwing/broken hook never breaks the chat
+   * path, and an unset hook is a clean no-op (unit tests).
+   */
+  private notifyTurnCompleted(turn: {
+    sessionId: string;
+    ok: boolean;
+    error?: string;
+    cancelled?: boolean;
+    generationFailed?: boolean;
+    bounded?: boolean;
+    provider?: string | null;
+    model?: string | null;
+  }): void {
+    try {
+      this.onTurnCompleted?.(turn);
+    } catch {
+      /* the hook must never break the console */
     }
   }
 

@@ -66,6 +66,7 @@ export class EvalCommand extends BaseCommand {
       .option('--format <format>', 'Output format: text (default), json, markdown', 'text')
       .option('--keep-workspaces', 'Keep temp workspaces for debugging', false)
       .option('--routing', 'Evaluate the exact provider/model pairs the Auto router picks (closes the routing→quality loop)', false)
+      .option('--engine <engine>', 'Engine arm (assessment Addendum v4 Phase 0): pipeline (default) | loop | writer-tc — compares execution engines on identical tasks')
       .action(async (options?: {
     provider?: string;
     model?: string;
@@ -76,6 +77,7 @@ export class EvalCommand extends BaseCommand {
     format?: string;
     keepWorkspaces?: boolean;
     routing?: boolean;
+    engine?: string;
       }) => {
         if (options?.routing) {
           await this.runEvalRouting(options || {});
@@ -304,6 +306,7 @@ export class EvalCommand extends BaseCommand {
     pace?: boolean;
     format?: string;
     keepWorkspaces?: boolean;
+    engine?: string;
   }): Promise<void> {
     const resolved = resolveProvider(this.configManager, options.provider);
     const provider = resolved.provider;
@@ -409,6 +412,17 @@ export class EvalCommand extends BaseCommand {
         }
       }
 
+      // Engine arm (assessment Addendum v4 Phase 0): 'pipeline' (default) is
+      // byte-identical to the pre-arm behavior; 'loop' and 'writer-tc' run the
+      // same tasks through their engines so results compare side-by-side
+      // (metrics.engine is recorded per task).
+      const engine = options.engine === 'loop' || options.engine === 'writer-tc'
+        ? (options.engine as 'loop' | 'writer-tc')
+        : 'pipeline' as const;
+      if (engine !== 'pipeline') {
+        logger.info(`  ⚙️  Engine arm: ${engine}`);
+      }
+
       const run = await runEvalSuite(provider, providerName, model, {
         taskIds,
         timeEstimate,
@@ -417,6 +431,7 @@ export class EvalCommand extends BaseCommand {
         paceUsedBefore,
         onProgress,
         keepWorkspaces: options.keepWorkspaces,
+        engine,
       });
 
       board.finish(true);

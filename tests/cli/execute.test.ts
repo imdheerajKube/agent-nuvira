@@ -1138,7 +1138,7 @@ describe('ExecuteCommand — P0.5 conversation-vs-pipeline gate', () => {
     expect(result.success).toBe(true);
   });
 
-  it('a coding goal still runs the orchestrator (no direct-answer detour)', async () => {
+  it('a coding goal on a STRONG provider dispatches to the loop engine (assessment v4 Phase 1.1/2)', async () => {
     const directSpy = vi
       .spyOn(cmd as unknown as { answerConversationDirectly: Function }, 'answerConversationDirectly')
       .mockResolvedValue({ success: true });
@@ -1157,13 +1157,43 @@ describe('ExecuteCommand — P0.5 conversation-vs-pipeline gate', () => {
         trajectoryId: '',
       } as any);
 
-    await (cmd as any).runSingleGoal('create an API', 'groq', 'llama3', {});
+    // groq is strong tier → resolveEngine says 'loop' → runLoopEngineGoal
+    // runs the single agentic loop (which self-fails over to a usable route
+    // or reports a generation failure — either way the ORCHESTRATOR and the
+    // direct-answer path are untouched).
+    const result = await (cmd as any).runSingleGoal('create an API', 'groq', 'llama3', {});
+
+    expect(directSpy).not.toHaveBeenCalled();
+    expect(orchestratorSpy).not.toHaveBeenCalled();
+    expect(result).toHaveProperty('success');
+  });
+
+  it('a coding goal with --engine pipeline still runs the orchestrator (CI semantics)', async () => {
+    const directSpy = vi
+      .spyOn(cmd as unknown as { answerConversationDirectly: Function }, 'answerConversationDirectly')
+      .mockResolvedValue({ success: true });
+    const orchestratorSpy = vi
+      .spyOn(Orchestrator.prototype, 'execute')
+      .mockResolvedValue({
+        goal: 'create an API',
+        success: true,
+        summary: 'Done',
+        error: '',
+        fileChanges: '',
+        runOutput: '',
+        agentResults: [],
+        tasksCompleted: 1,
+        tasksTotal: 1,
+        trajectoryId: '',
+      } as any);
+
+    await (cmd as any).runSingleGoal('create an API', 'groq', 'llama3', { engine: 'pipeline' });
 
     expect(directSpy).not.toHaveBeenCalled();
     expect(orchestratorSpy).toHaveBeenCalledTimes(1);
   });
 
-  it('a question phrased as a task stays a task (coding verb in command position)', async () => {
+  it('a question phrased as a task with --engine pipeline stays a task (coding verb in command position)', async () => {
     const directSpy = vi
       .spyOn(cmd as unknown as { answerConversationDirectly: Function }, 'answerConversationDirectly')
       .mockResolvedValue({ success: true });
@@ -1182,7 +1212,32 @@ describe('ExecuteCommand — P0.5 conversation-vs-pipeline gate', () => {
         trajectoryId: '',
       } as any);
 
-    await (cmd as any).runSingleGoal('can you fix the login bug?', 'groq', 'llama3', {});
+    await (cmd as any).runSingleGoal('can you fix the login bug?', 'groq', 'llama3', { engine: 'pipeline' });
+
+    expect(directSpy).not.toHaveBeenCalled();
+    expect(orchestratorSpy).toHaveBeenCalledTimes(1);
+  });
+
+  it('a LOCAL provider dispatches to the pipeline (weak-model advantage, assessment v4 Phase 2)', async () => {
+    const directSpy = vi
+      .spyOn(cmd as unknown as { answerConversationDirectly: Function }, 'answerConversationDirectly')
+      .mockResolvedValue({ success: true });
+    const orchestratorSpy = vi
+      .spyOn(Orchestrator.prototype, 'execute')
+      .mockResolvedValue({
+        goal: 'create an API',
+        success: true,
+        summary: 'Done',
+        error: '',
+        fileChanges: '',
+        runOutput: '',
+        agentResults: [],
+        tasksCompleted: 1,
+        tasksTotal: 1,
+        trajectoryId: '',
+      } as any);
+
+    await (cmd as any).runSingleGoal('create an API', 'local', 'llama3', {});
 
     expect(directSpy).not.toHaveBeenCalled();
     expect(orchestratorSpy).toHaveBeenCalledTimes(1);

@@ -597,4 +597,84 @@ describe('ChatConsole', () => {
       expect(r.ok).toBe(true);
     });
   });
+
+  // ─── Phase 4 (AGENTIC_CAPABILITY_ASSESSMENT Addendum v4) — turn-completion
+  // hook: the console reports every real turn's outcome to the DAG store
+  // (server.ts fulfills the hook); here a capture stub proves the contract.
+  // ──────────────────────────────────────────────────────────────────────────
+  describe('Phase 4 — onTurnCompleted hook', () => {
+    it('fires exactly once per successful turn with ok + provider/model', async () => {
+      const turns: Array<{ sessionId: string; ok: boolean; cancelled?: boolean; generationFailed?: boolean; provider?: string | null; model?: string | null }> = [];
+      const c = new ChatConsole({ engine: new FakeEngine() });
+      c.onTurnCompleted = (t) => turns.push(t);
+      await c.answer('s1', 'assess the repo');
+      expect(turns).toHaveLength(1);
+      expect(turns[0].ok).toBe(true);
+      expect(turns[0].sessionId).toBe('s1');
+      expect(turns[0].provider).toBe('groq');
+      expect(turns[0].model).toBe('llama-3.3-70b');
+    });
+
+    it('propagates generationFailed + bounded on the completion event', async () => {
+      const turns: Array<{ ok: boolean; generationFailed?: boolean; bounded?: boolean }> = [];
+      const e = new FakeEngine();
+      const c = new ChatConsole({ engine: e });
+      c.onTurnCompleted = (t) => turns.push(t);
+      // The FakeEngine ignores unknown answer fields, so drive them by
+      // wrapping its answerOnce result.
+      const orig = e.answerOnce.bind(e);
+      e.answerOnce = async (msg: string, opts?: Parameters<ChatEngine['answerOnce']>[1]) =>
+        ({ ...(await orig(msg, opts)), generationFailed: false, bounded: true });
+      await c.answer('s1', 'x');
+      expect(turns).toHaveLength(1);
+      expect(turns[0].bounded).toBe(true);
+    });
+
+    it('fires with cancelled:true on an aborted turn', async () => {
+      const turns: Array<{ ok: boolean; cancelled?: boolean }> = [];
+      const e = new FakeEngine();
+      e.honorSignal = true;
+      const c = new ChatConsole({ engine: e });
+      c.onTurnCompleted = (t) => turns.push(t);
+      const p = c.answer('s1', 'long running');
+      // Wait until the turn is in flight, then cancel it.
+      await new Promise((r) => setTimeout(r, 10));
+      expect(c.abort('s1')).toBe(true);
+      const r = await p;
+      expect(r.cancelled).toBe(true);
+      expect(turns).toHaveLength(1);
+      expect(turns[0].cancelled).toBe(true);
+    });
+
+    it('fires with ok:false + error on engine failure', async () => {
+      const turns: Array<{ ok: boolean; error?: string }> = [];
+      const e = new FakeEngine();
+      e.answerOnce = async () => {
+        throw new Error('boom');
+      };
+      const c = new ChatConsole({ engine: e });
+      c.onTurnCompleted = (t) => turns.push(t);
+      const r = await c.answer('s1', 'x');
+      expect(r.ok).toBe(false);
+      expect(turns).toHaveLength(1);
+      expect(turns[0].ok).toBe(false);
+      expect(turns[0].error).toBe('boom');
+    });
+
+    it('a throwing hook never breaks the console', async () => {
+      const c = new ChatConsole({ engine: new FakeEngine() });
+      c.onTurnCompleted = () => {
+        throw new Error('telemetry down');
+      };
+      const r = await c.answer('s1', 'x');
+      expect(r.ok).toBe(true);
+      expect(r.content).toBe('echo: x');
+    });
+
+    it('no hook set is a clean no-op (unit-test default)', async () => {
+      const c = new ChatConsole({ engine: new FakeEngine() });
+      const r = await c.answer('s1', 'x');
+      expect(r.ok).toBe(true);
+    });
+  });
 });

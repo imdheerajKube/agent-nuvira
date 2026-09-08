@@ -48,7 +48,14 @@ export declare const M2B_TASK_IDS: string[];
 /** Get the M2b curated task suite. */
 export declare function getM2bTasks(): EvalTask[];
 /** Category of an evaluation task */
-export type EvalCategory = 'bug-fix' | 'feature' | 'refactor' | 'test-writing' | 'dependency-setup' | 'algorithm';
+export type EvalCategory = 'bug-fix' | 'feature' | 'refactor' | 'test-writing' | 'dependency-setup' | 'algorithm'
+/**
+ * Assessment Addendum v4 Phase 0: non-coding tasks (research-and-summarize,
+ * image-gen composition, gateway delivery) — the assessment proved these
+ * are loop-only (the pipeline's writer cannot call tools), so the eval set
+ * must include them to measure the loop's EXPANDED reach, not just parity.
+ */
+ | 'non-coding';
 /** A single end-to-end evaluation task */
 export interface EvalTask {
     /** Unique task identifier */
@@ -90,6 +97,12 @@ export interface EvalTask {
     timeEstimate: 'quick' | 'medium' | 'slow';
     /** Per-task wall-clock timeout in ms (default 10 min) */
     timeoutMs?: number;
+    /**
+     * Assessment Addendum v4 Phase 0: tasks tagged loop-only (non-coding) are
+     * EXPECTED to fail on the pipeline arm — arm-comparison treats their
+     * pipeline-arm failure as the baseline, not a regression signal.
+     */
+    loopOnly?: boolean;
 }
 /** The eight metrics measured for a single task run */
 export interface EvalMetrics {
@@ -127,6 +140,16 @@ export interface EvalMetrics {
     latencyMs: number;
     /** Error message if the pipeline itself crashed */
     error?: string;
+    /** Which engine arm produced this result ('pipeline' | 'loop' | 'writer-tc'). */
+    engine?: 'pipeline' | 'loop' | 'writer-tc';
+    /** Tool calls executed (loop arm: from runToolLoop telemetry; pipeline: 0). */
+    toolCallCount?: number;
+    /** Tools that errored (repair-engine-invocation proxy on the loop arm). */
+    erroredToolCount?: number;
+    /** Per-turn tool-schema character size (the v3 tiering metric). */
+    toolSchemaChars?: number;
+    /** Loop hit its step bound before an end turn (bounded-ness signal). */
+    bounded?: boolean;
 }
 /** Result of running one eval task */
 export interface EvalResult {
@@ -228,6 +251,15 @@ export interface RunEvalOptions {
     keepWorkspaces?: boolean;
     /** Injectable goal executor — used by tests to stub the orchestrator */
     executeGoal?: (goal: string, workspace: string) => Promise<OrchestrationResult>;
+    /**
+     * Assessment Addendum v4 Phase 0 — the engine ARM to run:
+     * - 'pipeline' (default): the orchestrator (unchanged behavior).
+     * - 'loop': runLoopExecutor (the single agentic loop) — Phase 1.1 arm.
+     * - 'writer-tc': the orchestrator with useToolCalling (writer-tc arm).
+     * Recorded per result (`metrics.engine`) so `nuvira eval results` and the
+     * dashboard can compare arms side-by-side.
+     */
+    engine?: 'pipeline' | 'loop' | 'writer-tc';
 }
 /**
  * Run a single eval task through the full agent pipeline.
@@ -323,6 +355,15 @@ export declare function writeBenchmarkReport(run: EvalRun, outputDir: string): s
 export declare function formatEvalScoreRules(): string;
 /** Get all available eval tasks. */
 export declare function getEvalTasks(): EvalTask[];
+/**
+ * Non-coding (loop-only) tasks — assessment Addendum v4 Phase 0: "Include
+ * non-coding tasks in the eval set (image-gen composition,
+ * research-and-summarize, gateway delivery) — v2/v3 found these are
+ * loop-only; the eval must prove it, not assume it." Gated behind an env
+ * flag by default so a plain `nuvira eval run` stays deterministic/offline;
+ * `NUVIRA_EVAL_NONCODING=true nuvira eval run --engine loop` exercises them.
+ */
+export declare function getNonCodingEvalTasks(): EvalTask[];
 /** Get a specific eval task by ID. */
 export declare function getEvalTask(id: string): EvalTask | undefined;
 /** Get all past eval runs (most recent first). */

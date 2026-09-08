@@ -61,6 +61,36 @@ const makeRun = (overrides: Partial<PipelineRun> = {}): PipelineRun => ({
 
 // ─── Component behavior ─────────────────────────────────────────────────────
 
+describe('PhaseTimeline — Phase 4 engine chips', () => {
+  it('badges a loop-engine run chip with the loop glyph and the telemetry meta', () => {
+    const run = makeRun({
+      id: 'loop-turn-1',
+      goal: 'assess the code quality',
+      engine: 'loop',
+      turnTelemetry: { toolCallCount: 4, erroredToolCount: 1, provider: 'groq', model: 'llama-3.3-70b' },
+    });
+    render(<PhaseTimeline runs={[run]} />);
+    // Engine badge in the meta row
+    expect(screen.getByText('🔁 loop')).toBeTruthy();
+    // Per-turn telemetry chip (🔧 count + errored parenthetical)
+    expect(screen.getByText(/🔧 4/)).toBeTruthy();
+    expect(screen.getByText(/\(1 err\)/)).toBeTruthy();
+  });
+
+  it('badges a pipeline run with the pipeline glyph and no telemetry chip', () => {
+    const run = makeRun({ id: 'pipe-1', engine: 'pipeline' });
+    render(<PhaseTimeline runs={[run]} />);
+    expect(screen.getByText('⬡ pipeline')).toBeTruthy();
+    expect(screen.queryByText(/🔧/)).toBeNull();
+  });
+
+  it('shows no engine badge for legacy runs without one', () => {
+    render(<PhaseTimeline runs={[makeRun()]} />);
+    expect(screen.queryByText(/🔁 loop/)).toBeNull();
+    expect(screen.queryByText(/⬡ pipeline/)).toBeNull();
+  });
+});
+
 describe('PhaseTimeline', () => {
   it('renders the empty state when there are no runs', () => {
     render(<PhaseTimeline runs={[]} />);

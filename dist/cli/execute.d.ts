@@ -135,6 +135,14 @@ export declare class ExecuteCommand extends BaseCommand {
      * failing?" in execute mode spawned a python program to "answer" it.
      */
     private answerConversationDirectly;
+    /**
+     * Run the goal through the LOOP engine (assessment Addendum v4 Phase 1.1):
+     * one agentic turn over runToolLoop with ambient project context + tiered
+     * tool exposure. Prints the loop's answer (and the tool-call trail unless
+     * --json-events), and returns the same SingleGoalResult shape as the
+     * pipeline path so session history / followups keep working unchanged.
+     */
+    private runLoopEngineGoal;
     private runSingleGoal;
     /**
      * Show saved checkpoints (goal, completion, age) and how to resume them.

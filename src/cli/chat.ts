@@ -37,6 +37,10 @@ import type { ParsedRequest } from '../nlu/parser.js';
 import { resolveDispatch } from '../nlu/actions.js';
 import { isConversationalQuestion, hasCodingAction } from '../nlu/conversation-gate.js';
 import { runToolLoop, extractFallbackToolCalls } from '../tools/tool-loop.js';
+import { getLoopExposureMode } from '../tools/toolsets.js';
+import { buildLoopProjectContext } from '../tools/loop-project-context.js';
+import { analyzeComplexity } from '../learning/hybrid-router.js';
+import { routingCacheSignature, withRoutingCache } from '../learning/routing-cache.js';
 
 /**
  * P0.6 — a tool-call lifecycle event forwarded to the GUI. `started` carries
@@ -325,6 +329,9 @@ function buildToolSystemPrompt(parsed?: ParsedRequest): string {
     '- If the answer is already in the context (e.g., project context lists 5 files), just answer directly — no tools needed.',
     '- If you need data to answer (file names, contents, directory listing), use the appropriate tool (list_dir, read_file, glob) and then answer.',
     '- For code changes, use read_file to understand the code first, then make the change.',
+    '- For tasks that match a known skill (deployments, assessments, structured workflows), call skill with no name to LIST available skills, then load the matching one — do not guess the procedure when a skill has it.',
+    '- For tasks NOT covered by any tool: COMPOSE PRIMITIVES. Write a script with write_file and run it with run_terminal (or code_execution), fetch pages with read_page, generate images with tool_search load "media" + generate_image. You are the general solution — the tool list is not.',
+    '- Some tools live OUTSIDE your visible list in domain toolsets (media, browser, channels, docker, …). If a tool you need is "unknown", call tool_search with {"action":"load","toolset":"<name>"} — its tools become callable immediately.',
     '- Always end with suggest_followups.',
     '',
     TOOL_CONTRACT_JSON,
@@ -466,6 +473,8 @@ export class ChatCommand extends BaseCommand {
   generationFailed?: boolean;
   /** P4 — true when the turn was cancelled via opts.signal (discarded). */
   cancelled?: boolean;
+  /** Phase 4 — true when the loop hit its step bound before an end turn. */
+  bounded?: boolean;
   provider?: string;
   model?: string;
 }> {
@@ -539,6 +548,7 @@ export class ChatCommand extends BaseCommand {
       followups: answer.followups ?? [],
       generationFailed: answer.generationFailed,
       cancelled: answer.cancelled,
+      bounded: answer.bounded,
       provider: type,
       model,
     };
@@ -1007,6 +1017,8 @@ export class ChatCommand extends BaseCommand {
     generationFailed?: boolean;
     /** P4 — true when the turn was cancelled via the signal (discarded). */
     cancelled?: boolean;
+    /** Phase 4 — true when the loop hit its step bound before an end turn. */
+    bounded?: boolean;
     /** P3 — followups as data (the dashboard chat console renders them as chips). */
     followups?: FollowupSuggestion[];
   }> {
@@ -1038,6 +1050,25 @@ export class ChatCommand extends BaseCommand {
     // confident intent (model decides; hint only).
     const systemText = buildToolSystemPrompt(parsed);
 
+    // Phase 3.2 (assessment Addendum v4) — loop-side skill match hint: the
+    // orchestrator consults SkillStore.findMatch + the hub catalog before
+    // planning; the chat loop never heard about that layer. One
+    // deterministic, best-effort match is appended to the system prompt
+    // (methodology + exact skill-tool load syntax, bounded to ONE block).
+    // Any failure returns '' and the turn proceeds byte-identically.
+    let skillHint = '';
+    try {
+      const { buildLoopSkillHint, markLoopSkillUsed } = await import('../tools/loop-skill-hint.js');
+      const injected: { value: import('../tools/loop-skill-hint.js').LoopSkillHintMatch | null } = { value: null };
+      skillHint = await buildLoopSkillHint(message, this.configManager, injected);
+      if (injected.value) {
+        void markLoopSkillUsed(injected.value);
+        ctxOverrides?.onProgress?.(`   🧠 Matched skill '${injected.value.name}' — methodology injected into this turn's context`);
+      }
+    } catch {
+      skillHint = ''; // best-effort — a hint failure never breaks the turn
+    }
+
     // `-f/--file` file-context parity: the legacy generateWithContext loaded
     // + retrieval-reduced file context. Inject it as a context message before
     // the user's message so the tool-loop path keeps the flag working.
@@ -1062,14 +1093,33 @@ export class ChatCommand extends BaseCommand {
       }
     }
 
+    // Ambient project context (assessment v4 Phase 1.4 — CLI twin of the
+    // dashboard's project snapshot): when no explicit projectContext was
+    // provided and the cwd looks like a project, build the bounded
+    // file-tree + git-digest + assessment block. Best-effort: '' injects
+    // nothing, a failure never breaks the turn.
+    let ambientProjectContext: string | undefined;
+    if (!ctxOverrides?.projectContext) {
+      try {
+        const built = await buildLoopProjectContext(ctxOverrides?.projectPath || process.cwd());
+        if (built) ambientProjectContext = built;
+      } catch {
+        ambientProjectContext = undefined;
+      }
+    }
+
     const thread: ToolMessage[] = [
-      { role: 'system', content: systemText },
+      { role: 'system', content: systemText + skillHint },
       // P3 — the attached project's bounded snapshot (path + file tree +
       // symbol map) rides in before the conversation, exactly like --file
       // context: the model knows what it is looking at without being told.
+      // v4: the CLI now gets the same treatment via the ambient builder
+      // (loop-project-context.ts) when no explicit snapshot was provided.
       ...(ctxOverrides?.projectContext
         ? [{ role: 'user' as const, content: `[Project context]\n${ctxOverrides.projectContext}` }]
-        : []),
+        : ambientProjectContext
+          ? [{ role: 'user' as const, content: `[Project context]\n${ambientProjectContext}` }]
+          : []),
       // P4 — the recalled project context (prior sessions + facts) rides in
       // next, so the model starts from what this project was last doing.
       ...(ctxOverrides?.recallContext
@@ -1090,8 +1140,15 @@ export class ChatCommand extends BaseCommand {
     // I3: one artifact session per TURN — every tool
     // deliverable in this turn lands in the same store folder.
     const artifactSessionId = `chat-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+    // Tiered tool exposure (assessment v3/v4): when `tools.loopExposure` is
+    // 'tiered', the loop exposes only the CORE primitives on the wire and
+    // domain toolsets load mid-turn via tool_search — the Set below is the
+    // loader channel the tool writes and the loop reads. 'all' (default)
+    // keeps the pre-tiering behavior byte-identical.
+    const loadedExtraTools = new Set<string>();
     const toolContext: ToolContext = {
       configManager: this.configManager,
+      loadedExtraTools,
       // P4 — when a project is attached, scope tools to its root so the
       // agent operates inside the project (not the dashboard server's cwd).
       cwd: ctxOverrides?.projectPath || process.cwd(),
@@ -1147,6 +1204,9 @@ export class ChatCommand extends BaseCommand {
         messages: thread,
         context: toolContext,
         maxSteps: 16,
+        // Tiered tool exposure — config-gated (tools.loopExposure), default
+        // 'all' = unchanged behavior until Phase 0 evals justify the flip.
+        toolExposure: getLoopExposureMode(this.configManager),
         onToken: ctxOverrides?.onToken,
         signal: ctxOverrides?.signal,
         deps: {
@@ -1210,6 +1270,7 @@ export class ChatCommand extends BaseCommand {
       content: result.content,
       generationFailed: result.generationFailed,
       cancelled: result.cancelled,
+      bounded: result.bounded,
       followups: result.followups,
     };
   }
@@ -1492,18 +1553,47 @@ export class ChatCommand extends BaseCommand {
     // action command derives from resolveDispatch) when confident.
     const parsed = parseRequestSync(message);
     const dispatch = resolveDispatch(parsed);
-    const decision = getAutoRouter().resolve(
+    // Routing decision cache (assessment v4 Phase 2): the loop engine
+    // resolves per turn; turns with identical STABLE routing inputs (intent,
+    // complexity, provider-health signature) reuse the decision instead of
+    // re-scoring 22+ providers. Provider health is IN the key, so a
+    // mid-session failure changes the key and can never serve a stale
+    // healthy-route. TTL 30s bounds the rest (bandit draws, benchmark data).
+    const routingCfg = (() => {
+      try { return this.configManager.getAll().routing ?? {}; } catch { return {}; }
+    })();
+    let registryUsable = 0;
+    try { registryUsable = getModelRegistry().getUsableProviders().length; } catch { /* best-effort */ }
+    const cacheSignature = routingCacheSignature([
       'chat',
-      message,
-      {
-        ...buildAutoResolveOptions(this.configManager, {
-          verbose: envBuff('DEBUG') === 'true',
-          contextHintTokens: opts?.contextHintTokens,
-        }),
-        circuitBreakerStatus,
-        ...(dispatch.taskIntentHint ? { taskIntentHint: dispatch.taskIntentHint } : {}),
-      },
-      this.configManager,
+      dispatch.taskIntentHint ?? null,
+      analyzeComplexity(message),
+      routingCfg.preferenceMode ?? null,
+      routingCfg.bandit === false ? 'b' : 'B',
+      routingCfg.mlRouter === true ? 'm' : 'M',
+      routingCfg.allowPaid ?? null,
+      registryUsable,
+      circuitBreakerStatus.map((c) => `${c.provider}:${Math.ceil(c.cooldownRemaining / 60_000)}`).join(','),
+      [...this.sessionFailedProviders.entries()]
+        .filter(([, exp]) => exp > Date.now())
+        .map(([p]) => p)
+        .sort()
+        .join(','),
+    ]);
+    const decision = withRoutingCache(cacheSignature, 30_000, () =>
+      getAutoRouter().resolve(
+        'chat',
+        message,
+        {
+          ...buildAutoResolveOptions(this.configManager, {
+            verbose: envBuff('DEBUG') === 'true',
+            contextHintTokens: opts?.contextHintTokens,
+          }),
+          circuitBreakerStatus,
+          ...(dispatch.taskIntentHint ? { taskIntentHint: dispatch.taskIntentHint } : {}),
+        },
+        this.configManager,
+      ),
     );
 
     // Walk the ranked candidates (winner first) and return the first available
