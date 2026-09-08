@@ -220,16 +220,31 @@ export default function DAGView({ data }: DAGViewProps) {
   const [liveDAG, setLiveDAG] = useState<DAGData | null>(null);
   const [selectedNode, setSelectedNode] = useState<string | null>(null);
 
+  // Phase 4 — track the live DAG's engine context + loop-turn telemetry (the
+  // SSE 'dag' event carries them; a stale snapshot in data.dag is ignored in
+  // favor of the newest broadcast).
+  const [liveEngine, setLiveEngine] = useState<'loop' | 'pipeline' | undefined>(undefined);
+  const [liveEngineExplanation, setLiveEngineExplanation] = useState<string | undefined>(undefined);
+  const [liveLoopTurn, setLiveLoopTurn] = useState<DAGData['loopTurn'] | undefined>(undefined);
+
   // Subscribe to DAG events via the existing dashboard API connection
   useEffect(() => {
     const unsub = dashboardAPI.onDAGEvent((dagData) => {
       setLiveDAG(dagData);
+      // Phase 4 — engine badge + loop-turn telemetry from the same broadcast.
+      setLiveEngine(dagData.engine);
+      setLiveEngineExplanation(dagData.engineExplanation);
+      setLiveLoopTurn(dagData.loopTurn);
     });
     return unsub;
   }, []);
 
   // Use data.dag from dashboard updates (init/refresh events include dag field)
   const displayDAG = dag || liveDAG;
+  // Phase 4 — the engine context (live broadcast wins over a snapshot).
+  const engine = liveDAG ? liveEngine : (dag?.engine ?? liveEngine);
+  const engineExplanation = liveDAG ? liveEngineExplanation : (dag?.engineExplanation ?? liveEngineExplanation);
+  const loopTurn = liveDAG ? liveLoopTurn : (dag?.loopTurn ?? liveLoopTurn);
 
   // Persisted + live pipeline runs powering the scrubbable Run Timeline.
   const pipelineRuns = useMemo(
@@ -244,11 +259,13 @@ export default function DAGView({ data }: DAGViewProps) {
 
   // The Run Timeline must stay reachable for HISTORICAL runs even when no
   // pipeline is live (the normal dashboard state) — only fall back to the
-  // empty state when there are neither runs nor a live DAG.
+  // empty state when there are neither runs nor a live DAG nor a loop turn
+  // (Phase 4: a loop turn renders its telemetry card even with no nodes).
   const hasLiveDAG = !!(displayDAG && (displayDAG.nodes.length > 0 || displayDAG.active));
   const hasRuns = pipelineRuns.length > 0;
+  const hasLoopTurn = !!loopTurn;
 
-  if (!hasLiveDAG && !hasRuns) {
+  if (!hasLiveDAG && !hasRuns && !hasLoopTurn) {
     return <EmptyDAGState memoryTotal={memoryTotal} />;
   }
 
@@ -276,6 +293,56 @@ export default function DAGView({ data }: DAGViewProps) {
         </div>
       )}
 
+      {/* Phase 4 — Loop-turn telemetry card (the chat/execute loop engine):
+          per-turn tool-call stats, rendered even with no pipeline nodes. */}
+      {loopTurn && (
+        <div className="dag-loop-turn-card" data-testid="dag-loop-turn-card">
+          <div className="dag-loop-turn-header">
+            <span className="dag-loop-turn-icon">🔁</span>
+            <span className="dag-loop-turn-title">Loop turn — {loopTurn.title || 'chat turn'}</span>
+            {loopTurn.active && <span className="dag-loop-turn-live">● recording</span>}
+          </div>
+          <div className="dag-loop-turn-meta">
+            <span className="dag-loop-turn-chip">
+              🔧 {loopTurn.toolCallCount} tool call{loopTurn.toolCallCount === 1 ? '' : 's'}
+            </span>
+            {loopTurn.erroredToolCount > 0 && (
+              <span className="dag-loop-turn-chip dag-loop-turn-chip-error">
+                ❌ {loopTurn.erroredToolCount} errored
+              </span>
+            )}
+            {loopTurn.provider && (
+              <span className="dag-loop-turn-chip dag-loop-turn-chip-dim">
+                {loopTurn.provider}{loopTurn.model ? ` · ${loopTurn.model}` : ''}
+              </span>
+            )}
+            {typeof loopTurn.startedAt === 'number' && (
+              <span className="dag-loop-turn-chip dag-loop-turn-chip-dim">
+                ⏱ {formatDuration(loopTurn.startedAt, loopTurn.endedAt)}
+              </span>
+            )}
+            {loopTurn.bounded && <span className="dag-loop-turn-chip dag-loop-turn-chip-error">⛔ bounded</span>}
+            {loopTurn.generationFailed && (
+              <span className="dag-loop-turn-chip dag-loop-turn-chip-error">💀 generation failed</span>
+            )}
+            {loopTurn.cancelled && <span className="dag-loop-turn-chip dag-loop-turn-chip-dim">✖ cancelled</span>}
+          </div>
+          {loopTurn.toolCalls.length > 0 && (
+            <div className="dag-loop-turn-tools">
+              {loopTurn.toolCalls.slice(-12).map((c, i) => (
+                <span
+                  key={`${c.tool}-${i}`}
+                  className={`dag-loop-tool ${c.ok === false ? 'dag-loop-tool-error' : ''}`}
+                  title={c.error || `${c.tool}${c.durationMs !== undefined ? ` · ${c.durationMs}ms` : ''}`}
+                >
+                  {c.ok === false ? '❌' : '✓'} {c.tool}
+                </span>
+              ))}
+            </div>
+          )}
+        </div>
+      )}
+
       {hasLiveDAG && (
         <>
       {/* Pipeline Header */}
@@ -286,6 +353,17 @@ export default function DAGView({ data }: DAGViewProps) {
         </div>
         <div className="dag-pipeline-meta">
           {active && <span className="dag-live-badge">LIVE</span>}
+          {/* Phase 4 — engine badge: which engine executed this run, with the
+              router's audit line as the tooltip. */}
+          {engine && (
+            <span
+              className={`dag-engine-badge dag-engine-${engine}`}
+              title={engineExplanation || (engine === 'loop' ? 'Single agentic loop' : 'Orchestrator pipeline')}
+              data-testid="dag-engine-badge"
+            >
+              {engine === 'loop' ? '🔁 loop engine' : '⬡ pipeline engine'}
+            </span>
+          )}
           <span className="dag-step-count">{totalCount} steps</span>
           {runningCount > 0 && <span className="dag-running-badge">▶ {runningCount} running</span>}
           {pendingCount > 0 && <span className="dag-pending-badge">⏳ {pendingCount} pending</span>}

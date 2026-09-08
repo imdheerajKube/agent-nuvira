@@ -86,7 +86,14 @@ export type EvalCategory =
   | 'refactor'
   | 'test-writing'
   | 'dependency-setup'
-  | 'algorithm';
+  | 'algorithm'
+  /**
+   * Assessment Addendum v4 Phase 0: non-coding tasks (research-and-summarize,
+   * image-gen composition, gateway delivery) — the assessment proved these
+   * are loop-only (the pipeline's writer cannot call tools), so the eval set
+   * must include them to measure the loop's EXPANDED reach, not just parity.
+   */
+  | 'non-coding';
 
 /** A single end-to-end evaluation task */
 export interface EvalTask {
@@ -126,6 +133,12 @@ export interface EvalTask {
   timeEstimate: 'quick' | 'medium' | 'slow';
   /** Per-task wall-clock timeout in ms (default 10 min) */
   timeoutMs?: number;
+  /**
+   * Assessment Addendum v4 Phase 0: tasks tagged loop-only (non-coding) are
+   * EXPECTED to fail on the pipeline arm — arm-comparison treats their
+   * pipeline-arm failure as the baseline, not a regression signal.
+   */
+  loopOnly?: boolean;
 }
 
 /** The eight metrics measured for a single task run */
@@ -164,6 +177,17 @@ export interface EvalMetrics {
   latencyMs: number;
   /** Error message if the pipeline itself crashed */
   error?: string;
+  // ── Assessment Addendum v4 Phase 0 arm-comparison metrics ──────────────
+  /** Which engine arm produced this result ('pipeline' | 'loop' | 'writer-tc'). */
+  engine?: 'pipeline' | 'loop' | 'writer-tc';
+  /** Tool calls executed (loop arm: from runToolLoop telemetry; pipeline: 0). */
+  toolCallCount?: number;
+  /** Tools that errored (repair-engine-invocation proxy on the loop arm). */
+  erroredToolCount?: number;
+  /** Per-turn tool-schema character size (the v3 tiering metric). */
+  toolSchemaChars?: number;
+  /** Loop hit its step bound before an end turn (bounded-ness signal). */
+  bounded?: boolean;
 }
 
 /** Result of running one eval task */
@@ -1047,6 +1071,15 @@ export interface RunEvalOptions {
   keepWorkspaces?: boolean;
   /** Injectable goal executor — used by tests to stub the orchestrator */
   executeGoal?: (goal: string, workspace: string) => Promise<OrchestrationResult>;
+  /**
+   * Assessment Addendum v4 Phase 0 — the engine ARM to run:
+   * - 'pipeline' (default): the orchestrator (unchanged behavior).
+   * - 'loop': runLoopExecutor (the single agentic loop) — Phase 1.1 arm.
+   * - 'writer-tc': the orchestrator with useToolCalling (writer-tc arm).
+   * Recorded per result (`metrics.engine`) so `nuvira eval results` and the
+   * dashboard can compare arms side-by-side.
+   */
+  engine?: 'pipeline' | 'loop' | 'writer-tc';
 }
 
 /**
@@ -1062,14 +1095,56 @@ export async function runEvalTask(
   const workspace = scaffoldWorkspace(task);
   const taskStart = Date.now();
   const timeoutMs = task.timeoutMs ?? 600_000;
+  const engine = options.engine ?? 'pipeline';
   let result: OrchestrationResult;
   let crashed = false;
   let crashError: string | undefined;
+  // Loop-arm telemetry (zeros on the pipeline arms).
+  let toolCallCount = 0;
+  let erroredToolCount = 0;
+  let bounded = false;
 
   try {
     if (options.executeGoal) {
       result = await options.executeGoal(task.goal, workspace);
+    } else if (engine === 'loop') {
+      // ── LOOP ARM (Addendum v4 Phase 1.1/Phase 0) ──
+      // One agentic turn over runToolLoop inside the scaffolded workspace —
+      // the same engine chat uses, pointed at the eval workspace. Telemetry
+      // (tool calls, errored tools, bounded) feeds the arm comparison.
+      const cwd = process.cwd();
+      process.chdir(workspace);
+      try {
+        const { runLoopExecutor } = await import('../cli/loop-executor.js');
+        const loopResult = await Promise.race([
+          runLoopExecutor(task.goal, options.configManager ?? new ConfigManager(), {
+            provider: providerName === 'auto' ? undefined : providerName,
+            model,
+            quiet: true,
+            skipProjectContext: true, // the eval workspace IS the project
+          }),
+          new Promise<never>((_, reject) =>
+            setTimeout(() => reject(new Error(`Task timed out after ${timeoutMs / 1000}s`)), timeoutMs),
+          ),
+        ]);
+        toolCallCount = loopResult.toolCalls.length;
+        erroredToolCount = loopResult.erroredTools.length;
+        bounded = loopResult.bounded;
+        result = {
+          success: !loopResult.generationFailed,
+          goal: task.goal,
+          summary: loopResult.content,
+          tasksCompleted: loopResult.generationFailed ? 0 : 1,
+          tasksTotal: 1,
+          agentResults: [],
+          fileChanges: '',
+          error: loopResult.generationFailed ? loopResult.content : undefined,
+        } as OrchestrationResult;
+      } finally {
+        process.chdir(cwd);
+      }
     } else {
+      // ── PIPELINE / WRITER-TC ARMS (unchanged orchestrator path) ──
       // Run the full pipeline in the workspace (chdir for the orchestrator,
       // which resolves relative paths against process.cwd()).
       const cwd = process.cwd();
@@ -1077,7 +1152,13 @@ export async function runEvalTask(
       try {
         const orchestrator = new Orchestrator(options.configManager);
         result = await Promise.race([
-          orchestrator.execute(task.goal, { provider: providerName, model, useMemory: false }),
+          orchestrator.execute(task.goal, {
+            provider: providerName,
+            model,
+            useMemory: false,
+            // writer-tc arm: the opt-in tool-calling writer/reviewer path.
+            useToolCalling: engine === 'writer-tc' ? true : undefined,
+          }),
           new Promise<never>((_, reject) =>
             setTimeout(() => reject(new Error(`Task timed out after ${timeoutMs / 1000}s`)), timeoutMs),
           ),
@@ -1143,6 +1224,11 @@ export async function runEvalTask(
     costUsd: 0,
     latencyMs: elapsedMs,
     error: crashError ?? (result.success ? undefined : result.error),
+    // Arm-comparison metrics (zeros/undefined on the pipeline arms).
+    engine,
+    toolCallCount,
+    erroredToolCount,
+    bounded,
   };
 
   // Estimate cost from token usage (reuse the cost-tracker pricing model)
@@ -1182,8 +1268,10 @@ export async function runEvalSuite(
   model: string,
   options: RunEvalOptions = {},
 ): Promise<EvalRun> {
-  // Filter tasks
-  let tasks = [...EVAL_TASKS];
+  // Filter tasks — plus the non-coding (loop-only) set when the env gate is
+  // on (Addendum v4 Phase 0: the eval must PROVE the loop's expanded reach,
+  // not assume it; gated so a plain run stays deterministic/offline).
+  let tasks = [...EVAL_TASKS, ...getNonCodingEvalTasks()];
   if (options.taskIds && options.taskIds.length > 0) {
     tasks = tasks.filter((t) => options.taskIds!.includes(t.id));
   }
@@ -1647,6 +1735,103 @@ export function formatEvalScoreRules(): string {
 export function getEvalTasks(): EvalTask[] {
   return [...EVAL_TASKS];
 }
+
+/**
+ * Non-coding (loop-only) tasks — assessment Addendum v4 Phase 0: "Include
+ * non-coding tasks in the eval set (image-gen composition,
+ * research-and-summarize, gateway delivery) — v2/v3 found these are
+ * loop-only; the eval must prove it, not assume it." Gated behind an env
+ * flag by default so a plain `nuvira eval run` stays deterministic/offline;
+ * `NUVIRA_EVAL_NONCODING=true nuvira eval run --engine loop` exercises them.
+ */
+export function getNonCodingEvalTasks(): EvalTask[] {
+  if (process.env.NUVIRA_EVAL_NONCODING !== 'true') return [];
+  return NON_CODING_EVAL_TASKS.filter((t) => !EVAL_TASKS.some((e) => e.id === t.id));
+}
+
+/**
+ * The two non-coding (loop-only) eval tasks. Both are deliberately
+ * environment-free (no network, no API keys): they measure the loop's
+ * ability to COMPOSE PRIMITIVES — write a script with write_file, run it
+ * with run_terminal, verify the output — which is the assessment's Tier-1
+ * long-tail thesis (v3 §C). The pipeline arm cannot express either task
+ * (its writer is not a tool caller), which is exactly the claim Phase 0
+ * must demonstrate rather than assume.
+ */
+const NON_CODING_EVAL_TASKS: EvalTask[] = [
+  {
+    id: 'nc-csv-pivot',
+    title: 'Summarize a CSV into a report (compose primitives)',
+    category: 'non-coding',
+    difficulty: 'medium',
+    goal:
+      'Read sales.csv in this directory and write a file report.md containing a markdown table of revenue per region (regions sorted alphabetically, revenue as a plain integer). Do it by writing a small script with write_file and running it with run_terminal — not by hand-editing report.md.',
+    setupFiles: [
+      {
+        path: 'sales.csv',
+        content: [
+          'region,revenue',
+          'west,4100',
+          'east,6200',
+          'north,5300',
+          'south,4700',
+          'east,800',
+        ].join('\n'),
+      },
+    ],
+    hiddenTests: [
+      {
+        file: 'check.js',
+        command: 'node check.js',
+      },
+    ],
+    referencePatterns: [
+      {
+        file: 'report.md',
+        mustContain: ['east', '7000', 'north', '5300'],
+      },
+    ],
+    tokenBudget: 12_000,
+    timeEstimate: 'quick',
+    loopOnly: true,
+  },
+  {
+    id: 'nc-log-analyze',
+    title: 'Analyze a log file and extract failures (compose primitives)',
+    category: 'non-coding',
+    difficulty: 'medium',
+    goal:
+      'Analyze app.log and write failures.json — a JSON array of objects {"line": <number>, "level": "ERROR"} for every line starting with "ERROR" (line numbers 1-based, ascending). Use write_file + run_terminal (a script), not manual editing.',
+    setupFiles: [
+      {
+        path: 'app.log',
+        content: [
+          'INFO boot',
+          'ERROR db timeout',
+          'INFO retry',
+          'ERROR cache miss critical',
+          'WARN slow query',
+          'ERROR disk almost full',
+        ].join('\n'),
+      },
+    ],
+    hiddenTests: [
+      {
+        file: 'check.js',
+        command: 'node check.js',
+      },
+    ],
+    referencePatterns: [
+      {
+        file: 'failures.json',
+        mustContain: ['"line": 2', '"line": 4', '"line": 6'],
+      },
+    ],
+    tokenBudget: 10_000,
+    timeEstimate: 'quick',
+    loopOnly: true,
+  },
+];
 
 /** Get a specific eval task by ID. */
 export function getEvalTask(id: string): EvalTask | undefined {

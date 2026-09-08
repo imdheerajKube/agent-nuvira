@@ -300,3 +300,52 @@ default registry, which is now shipped inside the npm package instead.
   parity.
 - **P6e — shipable first-party batch**: the five P5b skills become
   first-class product content (panel provenance, empty-state suggestions).
+
+---
+
+## Addendum v4 — implementation status (updated 2026-09-08)
+
+All v4 phases are now implemented and tested. Per-phase landing:
+
+- **Phase 0 — eval arms (loop vs pipeline vs writer-tc)**: shipped
+  (`eval-framework.ts` + `tests/learning/eval-arms.test.ts`).
+- **Phase 1.1 — `runToolLoop` as the executor behind `nuvira execute`
+  dispatch**: shipped (`loop-executor.ts` + `tests/cli/loop-executor.test.ts`;
+  `execute.ts` dispatches via `resolveEngine()`).
+- **Phase 1.2 — native tool-calls protocol (the BLOCKING item)**: shipped
+  (`inference/native-tools.ts` + `tests/inference/native-tools.test.ts`).
+- **Phase 1.4 — ambient project context for the loop**: shipped
+  (`tools/loop-project-context.ts`); CLI chat injects it too.
+- **Phase 2 — route MODE as well as model**: shipped (`engine-router.ts` +
+  `routing-cache.ts` + `tests/learning/engine-router.test.ts`;
+  `routing.engineMode` config in `config/types.ts`).
+- **Phase 3.2 — loop-side skill match hint**: shipped
+  (`tools/loop-skill-hint.ts` + `tests/tools/loop-skill-hint.test.ts`). The
+  chat loop and the execute loop now consult the compiled SkillStore + the hub
+  catalog deterministically before every turn and inject the matched skill's
+  methodology (bounded to ONE block, disabled-skill gate + website-deploy
+  activation gate honored, exact skill-tool load syntax included). Guarded
+  against the compiled store's loose threshold by a real-goal-evidence filter
+  (`hasRealGoalEvidence`): a generic word like "goal" alone can never inject
+  methodology into a chat turn.
+- **Phase 3.3 — mechanical thread budget**: shipped (`tool-loop.ts`
+  `trimThreadBudget`).
+- **Phase 4 — engine-mode badge + per-turn tool-call telemetry in the
+  dashboard DAG view**: shipped. The DAG store carries `engine` +
+  `engineExplanation` + `loopTurn` telemetry
+  (`web-dashboard/server.ts`: `beginLoopTurn` / `recordLoopToolCall` /
+  `endLoopTurn` / `setLoopEngineContext`); the chat console reports real turns
+  through the `onTurnCompleted` hook (a local server-fulfilled hook — no
+  circular import; `web-dashboard/loop-turn-telemetry.ts` is the lazy sink);
+  loop turns persist as timeline runs (phases = tool calls, engine 'loop');
+  DAGView renders the engine badge (`🔁 loop` / `⬡ pipeline`), the per-turn
+  telemetry card (tool calls, errors, provider/model, bounded/generation-
+  failed/cancelled chips), and PhaseTimeline badges every run chip + meta row
+  with the engine. Tests: `tests/web-dashboard/dag-store.test.ts` (Phase 4
+  block), `tests/web-dashboard/chat-console.test.ts` (hook block),
+  `src/web-dashboard/src/components/DAGView.test.tsx` +
+  `PhaseTimeline.test.tsx` (Phase 4 blocks).
+
+**Remaining from the matrix above (unchanged by v4):** P3 `clone_repo` (row
+13), P3 gated git commit tool (row 15), P5 release-sync (row 14), P6a–P6e
+skill-onboarding items.

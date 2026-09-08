@@ -914,6 +914,21 @@ export interface PipelineRun {
   success?: boolean;
   totalDurationMs: number;
   phases: PipelinePhase[];
+  /**
+   * Phase 4 (AGENTIC_CAPABILITY_ASSESSMENT Addendum v4) — which engine
+   * executed ('pipeline' | 'loop'). Loop turns persist their per-turn tool
+   * telemetry in turnTelemetry; run chips and the meta row badge it.
+   */
+  engine?: 'pipeline' | 'loop';
+  /** Loop-engine turns: per-turn tool-call telemetry. */
+  turnTelemetry?: {
+    toolCallCount: number;
+    erroredToolCount: number;
+    bounded?: boolean;
+    generationFailed?: boolean;
+    provider?: string;
+    model?: string;
+  };
 }
 
 // ─── Agent Execution Types ──────────────────────────────────────────────────
@@ -941,6 +956,30 @@ export interface DAGData {
   edges: AgentEdge[];
   timestamp: number;
   active: boolean;
+  /**
+   * Phase 4 (AGENTIC_CAPABILITY_ASSESSMENT Addendum v4) — which engine
+   * executed the current/latest run ('loop' | 'pipeline'). The DAG view
+   * badges it next to the LIVE dot.
+   */
+  engine?: 'loop' | 'pipeline';
+  /** The engine router's explanation (audit trail, shown in the badge tooltip). */
+  engineExplanation?: string;
+  /** Loop-engine turns: per-turn tool-call telemetry (the turn card). */
+  loopTurn?: {
+    turnId: string;
+    title: string;
+    startedAt: number;
+    endedAt?: number;
+    active: boolean;
+    toolCallCount: number;
+    erroredToolCount: number;
+    bounded?: boolean;
+    generationFailed?: boolean;
+    cancelled?: boolean;
+    provider?: string;
+    model?: string;
+    toolCalls: Array<{ tool: string; ok?: boolean; durationMs?: number; error?: string }>;
+  };
 }
 
 // ─── Agent Hub Types (I4 — Skills / Tools / Channels / Artifacts) ───────────

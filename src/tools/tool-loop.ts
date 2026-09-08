@@ -17,7 +17,7 @@
  */
 
 import { getTool, toolJsonSchemas, type FollowupSuggestion, type ToolContext, type ToolJsonSchema } from './registry.js';
-import { effectiveToolJsonSchemas, isToolEnabled } from './toolsets.js';
+import { effectiveToolJsonSchemas, coreToolJsonSchemas, isToolEnabled, toolsetForTool } from './toolsets.js';
 import { appendToolArtifact } from './artifact-append.js';
 import type { ToolMessage } from '../inference/interface.js';
 import { logger } from '../utils/logger.js';
@@ -152,6 +152,20 @@ export interface ToolLoopOptions {
   messages: ToolMessage[];
   /** Tool names to expose (default: every registered tool). */
   tools?: string[];
+  /**
+   * Tiered tool exposure (assessment Addendum v3/v4). When 'tiered' and no
+   * explicit `tools` list is given, the model's schema starts at the CORE
+   * primitive set; domain toolsets are loaded mid-turn via `tool_search`
+   * (action "load"), whose result names the loop unions into the live
+   * schema set. Default 'all' preserves the pre-tiering behavior exactly —
+   * callers opt in (chat reads `tools.loopExposure` from config).
+   */
+  toolExposure?: 'all' | 'tiered';
+  /**
+   * Mechanical thread budget in characters (deterministic compaction —
+   * see trimThreadBudget). 0 disables (default: DEFAULT_THREAD_BUDGET_CHARS).
+   */
+  threadBudgetChars?: number;
   /** Bound on steps per turn (default: 8) — never an infinite loop. */
   maxSteps?: number;
   /** ToolContext for executions (configManager, followups sink, board, ...). */
@@ -312,14 +326,57 @@ export async function runToolLoop(opts: ToolLoopOptions): Promise<ToolLoopResult
     followups: context.followups || sink,
   };
 
-  // Resolve the tool set once — stable JSON schemas for every native step
+  // Resolve the tool set — stable JSON schemas for every native step
   // (derived from the registry's zod schemas, single source of truth).
   // I1 (toolsets): when the caller did not explicitly pick tools, gate the
   // schema to ENABLED toolsets only — the model never sees a disabled tool
   // (Capability-gating). Explicit toolNames win (caller intent).
-  const schemas: ToolJsonSchema[] = toolNames ? toolJsonSchemas(toolNames) : effectiveToolJsonSchemas(context.configManager);
+  //
+  // Tiered exposure (Addendum v3/v4): when opts.toolExposure === 'tiered'
+  // and no explicit toolNames were given, the wire schema starts at the CORE
+  // primitive set. Domain toolsets load MID-TURN via `tool_search` (action
+  // "load"): the tool writes names into ctx.loadedExtraTools and the loop
+  // unions their schemas into `schemas` below before the next step. The
+  // mutable array + loaded set are the tiering state machine.
+  const tiered = opts.toolExposure === 'tiered' && !toolNames;
+  // Tiered exposure: guarantee the loader set exists even when the caller
+  // forgot — tool_search load writes here; mergeLoadedTools reads it.
+  if (tiered && !(ctx.loadedExtraTools instanceof Set)) {
+    ctx.loadedExtraTools = new Set<string>();
+  }
+  const schemas: ToolJsonSchema[] = toolNames
+    ? toolJsonSchemas(toolNames)
+    : tiered
+      ? coreToolJsonSchemas(context.configManager)
+      : effectiveToolJsonSchemas(context.configManager);
+  // Names already unioned into `schemas` (beyond the initial set). The loop
+  // consults ctx.loadedExtraTools after EVERY executed tool call and merges
+  // newly-loaded names here.
+  const schemaNames = new Set(schemas.map((s) => s.name));
+  const mergeLoadedTools = (): number => {
+    if (!tiered) return 0;
+    const loaded = ctx.loadedExtraTools;
+    if (!(loaded instanceof Set) || loaded.size === 0) return 0;
+    let added = 0;
+    for (const name of loaded) {
+      if (schemaNames.has(name)) continue;
+      if (!getTool(name)) continue; // never schema a non-registered name
+      if (!isToolEnabled(name, context.configManager)) continue; // I1 gate
+      const [schema] = toolJsonSchemas([name]);
+      if (schema) {
+        schemas.push(schema);
+        schemaNames.add(name);
+        added++;
+      }
+    }
+    if (added > 0) {
+      deps.onEvent?.(`   🧰 ${added} tool(s) loaded via tool_search — now callable (${schemas.length} total).`);
+    }
+    return added;
+  };
 
   const thread: ToolMessage[] = [...messages];
+  const budgetChars = opts.threadBudgetChars ?? DEFAULT_THREAD_BUDGET_CHARS;
   // P3d — per-turn parallel suggester: after 2+ successful independent gather
   // steps, one advisory delegate suggestion fires (bounded, deterministic).
   const parallel = makeParallelSuggester();
@@ -338,6 +395,17 @@ export async function runToolLoop(opts: ToolLoopOptions): Promise<ToolLoopResult
       return { content: '', followups, toolCalls: toolCallsRun, steps, bounded: false, cancelled: true };
     }
     steps += 1;
+    // Mechanical thread budget: trim BEFORE the model call so a provider
+    // request never exceeds the window (deterministic — no LLM summarizer,
+    // no latency, no drift; see trimThreadBudget).
+    if (budgetChars > 0) {
+      const trimmedResult = trimThreadBudget(thread, budgetChars);
+      if (trimmedResult.trimmed > 0) {
+        thread.length = 0;
+        thread.push(...trimmedResult.thread);
+        deps.onEvent?.(`   ✂️ ${trimmedResult.trimmed} old tool result(s) trimmed to fit the ${Math.round(budgetChars / 1000)}K-char context budget.`);
+      }
+    }
     let response: StepResponse;
     try {
       response = await deps.callModel(thread, schemas, opts.onToken, opts.signal);
@@ -428,6 +496,14 @@ export async function runToolLoop(opts: ToolLoopOptions): Promise<ToolLoopResult
         // Unknown tool — the error is fed back so the model retries with a
         // known tool (hadToolCallError handling).
         resultText = `Error: unknown tool "${call.name}". Available tools: ${schemas.map((s) => s.name).join(', ')}.`;
+      } else if (tiered && !schemaNames.has(call.name)) {
+        // Tiered exposure gate: the tool is REGISTERED but its toolset was
+        // never loaded this turn — do NOT execute it silently. Give the model
+        // the exact load syntax so it can activate the toolset and retry.
+        const ownerToolset = toolsetForTool(call.name);
+        resultText =
+          `Error: tool "${call.name}" exists but its "${ownerToolset?.name ?? 'domain'}" toolset is not loaded this turn. ` +
+          `Call tool_search with {"action":"load","toolset":"${ownerToolset?.name ?? ''}"} first — its tools become callable immediately.`;
       } else if (!isToolEnabled(call.name, context.configManager)) {
         // I1 execution gate: a disabled tool is rejected at runtime even if
         // the model hallucinated its name — the toggle is never cosmetic.
@@ -482,6 +558,11 @@ export async function runToolLoop(opts: ToolLoopOptions): Promise<ToolLoopResult
       if (parallelTip) resultText = `${resultText}\n\n${parallelTip}`;
       thread.push({ role: 'tool', toolCallId: call.id, content: resultText });
     }
+
+    // Tiered exposure: after EVERY executed tool call, union any newly
+    // loaded toolset schemas into the live set so the NEXT model step can
+    // call them natively (tool_search load → loadedExtraTools → here).
+    mergeLoadedTools();
 
     // P4 — cancellation during/after tool execution: do NOT request another
     // model step on a cancelled turn (the user already walked away).
@@ -540,4 +621,96 @@ function summarizeArgs(args: Record<string, unknown>): string {
   const [key, value] = first;
   const v = typeof value === 'string' ? value : JSON.stringify(value);
   return `{${key}: ${v.length > 40 ? v.slice(0, 40) + '…' : v}}`;
+}
+
+// ─── Mechanical thread budget (assessment Addendum v4 Phase 3.3) ────────────
+// The loop had NO thread-size management: a read_file of a large file (or a
+// long tool result chain) accumulated verbatim until the provider rejected
+// the request. This is DETERMINISTIC compaction — no LLM call, no summary
+// latency, no summarization drift (the Freebuff compact-history pattern):
+// the oldest tool results collapse to a stub first, the newest stay verbatim,
+// and the system prompt + first user message are never touched.
+
+/** Default thread budget in characters (~50K tokens at 4 chars/token). */
+export const DEFAULT_THREAD_BUDGET_CHARS = 200_000;
+
+/** Messages at the END of the thread that are never trimmed (recent context). */
+const RECENT_KEEP = 6;
+
+/** Stub left in place of a trimmed tool result. */
+const TRIM_STUB = '[earlier tool result trimmed to fit the context budget]';
+
+/** Estimated character size of one thread message (chars/4 ≈ tokens). */
+function messageChars(m: ToolMessage): number {
+  return (m.content?.length ?? 0) + (m.toolCalls?.length ? JSON.stringify(m.toolCalls).length : 0);
+}
+
+/**
+ * Deterministically trim a thread to `maxChars`:
+ * 1. Never touch the system prompt or the FIRST user message (the ask).
+ * 2. Never touch the last `RECENT_KEEP` messages (recent context).
+ * 3. Oldest-first: tool results longer than 500 chars collapse to the stub;
+ *    if still over budget, remaining old tool results collapse entirely.
+ * Returns a NEW array (input untouched) + how many messages were trimmed.
+ */
+export function trimThreadBudget(
+  thread: ToolMessage[],
+  maxChars: number = DEFAULT_THREAD_BUDGET_CHARS,
+): { thread: ToolMessage[]; trimmed: number } {
+  const total = thread.reduce((a, m) => a + messageChars(m), 0);
+  if (total <= maxChars) return { thread, trimmed: 0 };
+
+  const out = [...thread];
+  // Indices eligible for trimming: skip the system prompt, the first user
+  // message, and the RECENT_KEEP tail.
+  const firstUserIdx = thread.findIndex((m) => m.role === 'user');
+  const eligible: number[] = [];
+  for (let i = 0; i < out.length - RECENT_KEEP; i++) {
+    if (out[i].role === 'system') continue;
+    if (i === firstUserIdx) continue;
+    eligible.push(i);
+  }
+
+  let over = total - maxChars;
+  let trimmed = 0;
+  // Pass 1: collapse long OLD tool results to the stub (keep the first 500
+  // chars so the model retains the gist of what it did).
+  for (const i of eligible) {
+    if (over <= 0) break;
+    const m = out[i];
+    if (m.role !== 'tool' || m.content.length <= 500) continue;
+    const delta = m.content.length - 500 - TRIM_STUB.length;
+    if (delta <= 0) continue;
+    out[i] = { ...m, content: m.content.slice(0, 500) + TRIM_STUB };
+    over -= delta;
+    trimmed++;
+  }
+  // Pass 2: still over — collapse remaining OLD tool results entirely.
+  if (over > 0) {
+    for (const i of eligible) {
+      if (over <= 0) break;
+      const m = out[i];
+      if (m.role !== 'tool' || m.content === TRIM_STUB) continue;
+      over -= m.content.length - TRIM_STUB.length;
+      out[i] = { ...m, content: TRIM_STUB };
+      trimmed++;
+    }
+  }
+  // Pass 3: STILL over (pathological — huge old user turns) — trim old USER
+  // messages to a short stub. User messages carry no tool_call pairing, so
+  // this is wire-safe (an assistant toolCalls block + its tool stub stay
+  // paired; never fabricate tool messages — providers validate ids).
+  if (over > 0) {
+    for (const i of eligible) {
+      if (over <= 0) break;
+      const m = out[i];
+      if (m.role !== 'user' || m.content.length <= 200) continue;
+      const delta = m.content.length - 200 - TRIM_STUB.length;
+      if (delta <= 0) continue;
+      out[i] = { ...m, content: m.content.slice(0, 200) + TRIM_STUB };
+      over -= delta;
+      trimmed++;
+    }
+  }
+  return { thread: out, trimmed };
 }

@@ -114,6 +114,16 @@ export interface ToolContext {
    * throws).
    */
   planStore?: import('./plan-store.js').PlanStoreLike;
+  /**
+   * Tiered tool exposure (AGENTIC_CAPABILITY_ASSESSMENT Addendum v3/v4):
+   * when the loop runs in 'tiered' mode, tools outside the CORE set are
+   * hidden from the model's schema until loaded. A `tool_search` load action
+   * writes the loaded toolset names here; the tool loop reads this AFTER
+   * each tool execution and unions the loaded toolsets' tool schemas into
+   * the live set before the next model step. Optional — absent contexts
+   * (tests, non-tiered callers) simply never extend the schema set.
+   */
+  loadedExtraTools?: Set<string>;
 }
 
 /** A clarify-style choice. */
@@ -1843,24 +1853,85 @@ registerTool({
 
 // ─── Batch 5: Infrastructure ──────────────────────────────────────────────
 
-// Tool search tool
+// Tool search tool — the tiered-exposure discovery surface. Two actions:
+// - search (default): fuzzy-find tools by query (the pre-existing behavior).
+// - load: LOAD a whole toolset's tools into the CURRENT turn's model schema
+//   (tiered exposure — assessment Addendum v3/v4). Writes the toolset's tool
+//   names into ctx.loadedExtraTools; the tool loop unions them into the live
+//   schema set before the next model step. Domain tools (media, browser,
+//   channels, docker, …) stay out of every turn's schema until this runs —
+//   ~85% of per-turn schema tokens saved, zero capability lost.
 registerTool({
   name: 'tool_search',
-  description: 'Search tools by query with fuzzy matching.',
+  description:
+    'Discover and load tools. Actions: "search" fuzzy-finds tools by query; ' +
+    '"load" activates a whole toolset (media, browser, channels, docker, ' +
+    'productivity, publish, core-pipeline, …) for THIS turn — call it before ' +
+    'using any tool outside the always-available core set. "load" returns ' +
+    'the toolset\'s tool names, which become callable immediately.',
   category: 'workflow',
   inputSchema: z.object({
-    query: z.string().describe('Search query'),
-    limit: z.number().optional().describe('Max results'),
+    action: z.enum(['search', 'load']).optional().describe('Defaults to "search".'),
+    query: z.string().optional().describe('Search query (action=search)'),
+    limit: z.number().optional().describe('Max results (action=search)'),
+    toolset: z.string().optional().describe('Toolset name to load (action=load) — e.g. "media", "browser", "channels"'),
   }),
   endsAgentStep: false,
-  run: (args) => import('./infra-tools.js').then((m) => {
-    const { query, limit } = args as any;
+  run: async (args, ctx) => {
+    const { action = 'search', query, limit, toolset } = args as {
+      action?: 'search' | 'load'; query?: string; limit?: number; toolset?: string;
+    };
+
+    // ── load: activate a toolset for this turn (tiered exposure) ──
+    if (action === 'load') {
+      if (!toolset) {
+        // No toolset named — return the CATALOG so the model can pick one.
+        // All enabled toolsets are listed; loading one whose tools are
+        // already core-exposed is a harmless idempotent union.
+        const { getToolsetStatus } = await import('./toolsets.js');
+        const status = getToolsetStatus(ctx?.configManager as any)
+          .filter((s) => s.enabled)
+          .map((s) => ({ name: s.name, label: s.label, tools: s.tools }));
+        return JSON.stringify({
+          loaded: false,
+          message: 'No toolset named. Loadable toolsets (call again with action:"load", toolset:<name>):',
+          toolsets: status,
+        });
+      }
+      const { TOOLSETS, isToolEnabled } = await import('./toolsets.js');
+      const def = TOOLSETS.find((t) => t.name === toolset);
+      if (!def) {
+        const names = TOOLSETS.map((t) => t.name).join(', ');
+        return `Error: unknown toolset "${toolset}". Available: ${names}.`;
+      }
+      // A user-disabled toolset must not resurrect through the load path —
+      // the I1 enablement gate stays the single source of truth.
+      if (!isToolEnabled(def.tools[0], ctx?.configManager as any)) {
+        return `Error: toolset "${toolset}" is disabled by configuration — enable it with \`nuvira tools toolsets\` first.`;
+      }
+      const already = ctx?.loadedExtraTools instanceof Set ? ctx.loadedExtraTools : undefined;
+      if (already) {
+        for (const name of def.tools) already.add(name);
+      }
+      return JSON.stringify({
+        loaded: true,
+        toolset: def.name,
+        label: def.label,
+        tools: def.tools,
+        note: already
+          ? 'Tools are now callable this turn.'
+          : 'Toolset recorded, but this context has no live schema loader (loop not in tiered mode) — tools remain governed by the standard enablement gate.',
+      });
+    }
+
+    // ── search: the pre-existing fuzzy find (unchanged behavior) ──
+    const m = await import('./infra-tools.js');
     const engine = m.getToolSearchEngine();
     // Index from registry
-    const { listTools } = require('./registry.js');
+    const { listTools } = await import('./registry.js');
     engine.index(listTools().map((t: any) => ({ name: t.name, description: t.description })));
-    return JSON.stringify(engine.search(query, limit || 10));
-  }),
+    return JSON.stringify(engine.search(query || '', limit || 10));
+  },
 });
 
 // Budget config tool

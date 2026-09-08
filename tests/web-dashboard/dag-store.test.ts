@@ -50,7 +50,8 @@ vi.mock('node:url', () => ({
 }));
 
 // Import the DAG functions after mocks
-const { pushDAGUpdate, updateDAGNode, resetDAG, readDAGData } = await import('../../src/web-dashboard/server.js');
+const serverModule = await import('../../src/web-dashboard/server.js');
+const { pushDAGUpdate, updateDAGNode, resetDAG, readDAGData } = serverModule;
 
 // ─── Helpers ────────────────────────────────────────────────────────────────
 
@@ -178,6 +179,23 @@ describe('Dashboard Server — DAG Store', () => {
       // When no nodes exist, readDAGData falls back to trajectory data (none here)
       expect(state.nodes).toHaveLength(0);
       expect(state.active).toBe(false);
+    });
+
+    it('Phase 4 — badges pipeline runs with engine "pipeline" and clears loop-turn state', () => {
+      // A loop turn first (the other engine), then a pipeline arrives.
+      serverModule.beginLoopTurn('turn-1', 'assess this project', 'groq', 'llama-3.3-70b');
+      serverModule.recordLoopToolCall({ tool: 'read_file', ok: true, durationMs: 12 });
+
+      pushDAGUpdate({
+        pipelineId: 'pipe-1',
+        pipelineDescription: 'Orchestrator run',
+        nodes: [makeNode({ id: 'step-1' })],
+        edges: [],
+      });
+
+      const state = readDAGData();
+      expect(state.engine).toBe('pipeline');
+      expect(state.loopTurn).toBeUndefined();
     });
   });
 
@@ -414,6 +432,88 @@ describe('Dashboard Server — DAG Store', () => {
       expect(state.nodes).toHaveLength(1);
       expect(state.nodes[0].id).toBe('b');
       expect(state.nodes[0].status).toBe('completed');
+    });
+  });
+
+  // ═════════════════════════════════════════════════════════════════════
+  // Phase 4 (AGENTIC_CAPABILITY_ASSESSMENT Addendum v4) — engine badge +
+  // per-turn loop telemetry
+  // ═════════════════════════════════════════════════════════════════════
+
+  describe('Phase 4 — loop-turn telemetry + engine badge', () => {
+    it('beginLoopTurn stamps engine "loop" and exposes the turn telemetry', () => {
+      serverModule.beginLoopTurn('turn-a', 'assess the code quality of this project', 'groq', 'llama-3.3-70b');
+
+      const state = readDAGData();
+      expect(state.engine).toBe('loop');
+      expect(state.loopTurn).toBeDefined();
+      expect(state.loopTurn.turnId).toBe('turn-a');
+      expect(state.loopTurn.title).toContain('assess the code quality');
+      expect(state.loopTurn.active).toBe(true);
+      expect(state.loopTurn.toolCallCount).toBe(0);
+      expect(state.loopTurn.provider).toBe('groq');
+      expect(state.loopTurn.model).toBe('llama-3.3-70b');
+    });
+
+    it('recordLoopToolCall accumulates calls and counts errored ones', () => {
+      serverModule.beginLoopTurn('turn-b', 'fix the bug');
+      serverModule.recordLoopToolCall({ tool: 'read_file', ok: true, durationMs: 5 });
+      serverModule.recordLoopToolCall({ tool: 'edit_file', ok: false, durationMs: 9, error: 'match not found' });
+      serverModule.recordLoopToolCall({ tool: 'run_terminal', ok: true, durationMs: 1200 });
+
+      const state = readDAGData();
+      expect(state.loopTurn.toolCallCount).toBe(3);
+      expect(state.loopTurn.erroredToolCount).toBe(1);
+      expect(state.loopTurn.toolCalls).toHaveLength(3);
+      expect(state.loopTurn.toolCalls[1].tool).toBe('edit_file');
+      expect(state.loopTurn.toolCalls[1].ok).toBe(false);
+    });
+
+    it('recordLoopToolCall is a no-op with no active turn (never throws)', () => {
+      expect(() => serverModule.recordLoopToolCall({ tool: 'glob', ok: true })).not.toThrow();
+    });
+
+    it('endLoopTurn marks the turn inactive and stamps the outcome', () => {
+      serverModule.beginLoopTurn('turn-c', 'write the essay');
+      serverModule.recordLoopToolCall({ tool: 'web_search', ok: true, durationMs: 300 });
+      serverModule.endLoopTurn({ bounded: false, generationFailed: false });
+
+      const state = readDAGData();
+      expect(state.loopTurn.active).toBe(false);
+      expect(state.loopTurn.bounded).toBe(false);
+      expect(state.loopTurn.generationFailed).toBe(false);
+      expect(state.loopTurn.endedAt).toBeGreaterThan(0);
+      expect(state.engine).toBe('loop');
+    });
+
+    it('a loop turn with no pipeline nodes is still served by readDAGData (the badge case)', () => {
+      serverModule.beginLoopTurn('turn-d', 'hello');
+      const state = readDAGData();
+      expect(state.engine).toBe('loop');
+      expect(state.loopTurn.turnId).toBe('turn-d');
+      expect(state.nodes).toHaveLength(0);
+      expect(state.active).toBe(true);
+    });
+
+    it('setLoopEngineContext stamps an explicit engine + explanation', () => {
+      serverModule.setLoopEngineContext('pipeline', 'provider is a local runner — guided pipeline');
+      const state = readDAGData();
+      expect(state.engine).toBe('pipeline');
+      expect(state.engineExplanation).toContain('local runner');
+    });
+
+    it('resetDAG clears the engine badge and loop-turn card', () => {
+      serverModule.beginLoopTurn('turn-e', 'x');
+      resetDAG();
+      const state = readDAGData();
+      expect(state.engine).toBeUndefined();
+      expect(state.loopTurn).toBeUndefined();
+    });
+
+    it('turn titles are truncated to 80 chars (bounded payload)', () => {
+      serverModule.beginLoopTurn('turn-f', 'y'.repeat(500));
+      const state = readDAGData();
+      expect(state.loopTurn.title.length).toBeLessThanOrEqual(80);
     });
   });
 });

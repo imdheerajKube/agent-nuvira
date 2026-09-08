@@ -24,6 +24,7 @@ import { ProviderFactory } from './factory.js';
 import type { ConfigManager } from '../config/manager.js';
 import type { InferenceProvider } from './interface.js';
 import { getModelRegistry } from '../learning/model-registry.js';
+import { invalidateRoutingCache } from '../learning/routing-cache.js';
 import { classifyFallbackError, type FallbackErrorType } from '../learning/provider-fallback.js';
 import { getEventBus, EventNames } from '../observability/event-bus.js';
 import { CATALOG_PROVIDER_IDS, isCatalogKeyless } from './provider-catalog.js';
@@ -324,6 +325,19 @@ export async function refreshModelRegistry(configManager: ConfigManager, options
     registry.pruneStale();
   } catch {
     // Best-effort.
+  }
+
+  // Routing decision cache (assessment v4 Phase 2): a refresh rewrote the
+  // registry (verified/unavailable/parked sets) — every cached routing
+  // decision was computed under the PRE-refresh inputs, so drop them all.
+  // Worst case one extra resolve per caller; worst case WITHOUT this is a
+  // stale healthy-route served after a provider went dark. (The cache header
+  // in routing-cache.ts promises this call — the contract was documented but
+  // never wired; now it is.)
+  try {
+    invalidateRoutingCache();
+  } catch {
+    // Best-effort — cache clearing must never fail a refresh.
   }
 
   return result;

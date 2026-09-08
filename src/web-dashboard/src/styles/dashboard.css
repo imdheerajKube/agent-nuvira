@@ -639,6 +639,142 @@ body {
   color: var(--accent-blue);
 }
 
+/* ═══ Phase 4 — Engine Badge (AGENTIC_CAPABILITY_ASSESSMENT Addendum v4) ═══ */
+.dag-engine-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 2px 9px;
+  border-radius: 999px;
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.4px;
+  text-transform: uppercase;
+  cursor: default;
+}
+
+.dag-engine-loop {
+  color: var(--accent-cyan, #39d2c0);
+  background: rgba(57, 210, 192, 0.12);
+  border: 1px solid rgba(57, 210, 192, 0.4);
+}
+
+.dag-engine-pipeline {
+  color: var(--accent-purple, #bc8cff);
+  background: rgba(188, 140, 255, 0.12);
+  border: 1px solid rgba(188, 140, 255, 0.4);
+}
+
+/* ═══ Phase 4 — Loop-turn telemetry card ═══ */
+.dag-loop-turn-card {
+  background: var(--bg-card);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  padding: 14px 18px;
+  margin-bottom: 14px;
+}
+
+.dag-loop-turn-header {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 8px;
+}
+
+.dag-loop-turn-icon {
+  font-size: 15px;
+}
+
+.dag-loop-turn-title {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text-primary);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  flex: 1;
+}
+
+.dag-loop-turn-live {
+  font-size: 10px;
+  font-weight: 700;
+  color: var(--accent-green, #3fb950);
+  letter-spacing: 0.4px;
+  text-transform: uppercase;
+  animation: dag-loop-pulse 1.6s ease-in-out infinite;
+}
+
+@keyframes dag-loop-pulse {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.35; }
+}
+
+.dag-loop-turn-meta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-bottom: 8px;
+}
+
+.dag-loop-turn-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 2px 8px;
+  border-radius: 999px;
+  font-size: 11px;
+  font-weight: 500;
+  color: var(--text-primary);
+  background: var(--bg-tertiary, #1c2333);
+  border: 1px solid var(--border);
+}
+
+.dag-loop-turn-chip-error {
+  color: var(--accent-red, #f85149);
+  border-color: rgba(248, 81, 73, 0.4);
+}
+
+.dag-loop-turn-chip-dim {
+  color: var(--text-secondary, #8b949e);
+}
+
+.dag-loop-turn-tools {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 5px;
+}
+
+.dag-loop-tool {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  font-size: 10.5px;
+  font-family: SFMono-Regular, Consolas, 'Liberation Mono', monospace;
+  color: var(--accent-green, #3fb950);
+  background: rgba(63, 185, 80, 0.08);
+  border: 1px solid rgba(63, 185, 80, 0.25);
+  border-radius: 4px;
+  padding: 1px 6px;
+}
+
+.dag-loop-tool-error {
+  color: var(--accent-red, #f85149);
+  background: rgba(248, 81, 73, 0.08);
+  border-color: rgba(248, 81, 73, 0.3);
+}
+
+/* ═══ Phase 4 — Run-chip engine tag + telemetry meta (Run Timeline) ═══ */
+.phase-run-chip-engine {
+  font-size: 10px;
+  line-height: 1;
+  opacity: 0.9;
+}
+
+.phase-run-chip-engine-loop {
+  /* loop turns glow cyan — the single agentic loop's color */
+  filter: drop-shadow(0 0 3px rgba(57, 210, 192, 0.6));
+}
+
 /* ═══ DAG Status Bar ═══ */
 .dag-status-bar {
   display: flex;

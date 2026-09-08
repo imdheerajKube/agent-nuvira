@@ -423,6 +423,81 @@ function generateZip(files) {
 let activePipeline = null; // goal/description of current pipeline
 let activeNodes = [];
 let activeEdges = [];
+/** The engine that executed the most recent run/turn ('loop' | 'pipeline'). */
+let activeEngine = undefined;
+/** Why that engine was chosen (the engine router's explanation, when known). */
+let activeEngineExplanation = undefined;
+/** The current/latest loop turn's telemetry (null when none recorded yet). */
+let activeLoopTurn = null;
+/**
+ * Stamp the engine context for the DAG badge (Phase 4). Called by the
+ * pipeline path (pushDAGUpdate → 'pipeline') and the loop-turn hooks
+ * (beginLoopTurn → 'loop'). `explanation` is the engine router's audit line.
+ */
+export function setLoopEngineContext(engine, explanation) {
+    activeEngine = engine;
+    if (explanation)
+        activeEngineExplanation = explanation;
+    broadcastDAG();
+}
+/**
+ * Begin a loop turn's telemetry window (Phase 4). Any previous turn is
+ * replaced (the DAG view shows the CURRENT/LATEST turn only).
+ */
+export function beginLoopTurn(turnId, title, provider, model) {
+    activeEngine = 'loop';
+    activeLoopTurn = {
+        turnId,
+        title: title.length > 80 ? title.slice(0, 79) + '…' : title,
+        startedAt: Date.now(),
+        toolCalls: [],
+        toolCallCount: 0,
+        erroredToolCount: 0,
+        ...(provider ? { provider } : {}),
+        ...(model ? { model } : {}),
+        active: true,
+    };
+    broadcastDAG();
+}
+/** Record one tool call of the active loop turn (no-op when none). */
+export function recordLoopToolCall(call) {
+    if (!activeLoopTurn)
+        return;
+    activeLoopTurn.toolCalls.push(call);
+    activeLoopTurn.toolCallCount += 1;
+    if (call.ok === false)
+        activeLoopTurn.erroredToolCount += 1;
+    broadcastDAG();
+}
+/**
+ * End the active loop turn (Phase 4): stamp the outcome, persist a
+ * loop-engine run to the timeline (phases = tool calls, engine 'loop'), and
+ * mark the turn inactive (its card remains until the next run/turn).
+ */
+export function endLoopTurn(extra) {
+    if (!activeLoopTurn)
+        return;
+    activeLoopTurn.endedAt = Date.now();
+    activeLoopTurn.active = false;
+    if (extra.bounded !== undefined)
+        activeLoopTurn.bounded = extra.bounded;
+    if (extra.generationFailed !== undefined)
+        activeLoopTurn.generationFailed = extra.generationFailed;
+    if (extra.cancelled !== undefined)
+        activeLoopTurn.cancelled = extra.cancelled;
+    // Persist the loop turn as a timeline run (engine 'loop', phases = tool
+    // calls) so the Run Timeline shows per-turn telemetry historically. The
+    // cancelled path persists nothing (a discarded turn never happened).
+    if (!activeLoopTurn.cancelled) {
+        appendLoopTurnRun(activeLoopTurn);
+    }
+    broadcastDAG();
+}
+/** Clear the loop-turn card (new pipeline run replaces the loop view). */
+export function clearLoopTurn() {
+    activeLoopTurn = null;
+    broadcastDAG();
+}
 /**
  * Called by the orchestrator to push a DAG update in real time.
  * Clears the pipeline when a new execution starts.
@@ -430,6 +505,11 @@ let activeEdges = [];
 export function pushDAGUpdate(update) {
     if (update.pipelineId) {
         activePipeline = update.pipelineDescription || update.pipelineId;
+        // Phase 4 — a pipeline run IS the pipeline engine: badge it and drop the
+        // loop-turn card (the DAG view shows the most recent execution).
+        activeEngine = 'pipeline';
+        activeEngineExplanation = undefined;
+        activeLoopTurn = null;
         // If this is a new pipeline, reset nodes/edges AND start a run draft for
         // the persisted phase timeline (the event-bus DAG timeline: the orchestrator
         // emits plan → gather → write → review → test via DAGConsumer, which lands
@@ -476,6 +556,11 @@ export function resetDAG() {
     activeRunId = null;
     activeRunGoal = '';
     activeRunStartedAt = 0;
+    // Phase 4 — a fresh execution also clears the engine badge + loop-turn
+    // card (pushDAGUpdate re-stamps 'pipeline'; beginLoopTurn re-stamps 'loop').
+    activeEngine = undefined;
+    activeEngineExplanation = undefined;
+    activeLoopTurn = null;
     broadcastDAG();
 }
 /** Broadcast current DAG state to all SSE clients */
@@ -486,6 +571,13 @@ function broadcastDAG() {
         edges: activeEdges,
         timestamp: Date.now(),
     };
+    // Phase 4 — engine badge + loop-turn telemetry ride on every broadcast.
+    if (activeEngine)
+        dagData.engine = activeEngine;
+    if (activeEngineExplanation)
+        dagData.engineExplanation = activeEngineExplanation;
+    if (activeLoopTurn)
+        dagData.loopTurn = activeLoopTurn;
     const payload = `event: dag\ndata: ${JSON.stringify(dagData)}\n\n`;
     for (const client of sseClients) {
         try {
@@ -498,12 +590,34 @@ function broadcastDAG() {
 export function readDAGData() {
     // If there's an active in-memory pipeline, return it
     if (activeNodes.length > 0) {
-        return {
+        const data = {
             pipeline: activePipeline,
             nodes: activeNodes,
             edges: activeEdges,
             timestamp: Date.now(),
             active: true,
+        };
+        // Phase 4 — engine badge + loop-turn telemetry.
+        if (activeEngine)
+            data.engine = activeEngine;
+        if (activeEngineExplanation)
+            data.engineExplanation = activeEngineExplanation;
+        if (activeLoopTurn)
+            data.loopTurn = activeLoopTurn;
+        return data;
+    }
+    // Phase 4 — a loop turn with no pipeline nodes still earns the badge + the
+    // turn telemetry card (the common dashboard-chat case).
+    if (activeLoopTurn) {
+        return {
+            pipeline: activePipeline,
+            nodes: [],
+            edges: [],
+            timestamp: Date.now(),
+            active: activeLoopTurn.active,
+            engine: activeEngine ?? 'loop',
+            ...(activeEngineExplanation ? { engineExplanation: activeEngineExplanation } : {}),
+            loopTurn: activeLoopTurn,
         };
     }
     // Otherwise, reconstruct from recent trajectory data
@@ -524,11 +638,24 @@ export function readDAGData() {
                 edges: plan.slice(0, -1).map((_, i) => ({ from: `step-${i}`, to: `step-${i + 1}` })),
                 timestamp: recent[0].timestamp,
                 active: false,
+                // Phase 4 — the trajectory-reconstructed view keeps the last engine
+                // context when known (the badge reflects the most recent execution).
+                ...(activeEngine ? { engine: activeEngine } : {}),
+                ...(activeEngineExplanation ? { engineExplanation: activeEngineExplanation } : {}),
             };
         }
     }
-    // Fallback: return empty
-    return { pipeline: null, nodes: [], edges: [], timestamp: Date.now(), active: false };
+    // Fallback: return empty (the engine context still rides when stamped —
+    // e.g. an execute-loop run in a fresh install with no trajectories).
+    return {
+        pipeline: null,
+        nodes: [],
+        edges: [],
+        timestamp: Date.now(),
+        active: false,
+        ...(activeEngine ? { engine: activeEngine } : {}),
+        ...(activeEngineExplanation ? { engineExplanation: activeEngineExplanation } : {}),
+    };
 }
 /** File in the memory dir that backs the dashboard's Run Timeline. */
 const PIPELINE_RUNS_FILENAME = 'pipeline-runs.json';
@@ -567,6 +694,42 @@ function appendPipelineRun(run) {
     }
 }
 /**
+ * Phase 4 — persist a COMPLETED loop turn as a timeline run: phases = the
+ * turn's tool calls (ok → completed, error → failed), engine 'loop', plus the
+ * per-turn telemetry block. Best-effort like appendPipelineRun.
+ */
+function appendLoopTurnRun(turn) {
+    const phases = turn.toolCalls.map((c, i) => ({
+        id: `${turn.turnId}-call-${i}`,
+        agentType: c.tool,
+        status: c.ok === false ? 'failed' : 'completed',
+        description: c.tool,
+        summary: c.error,
+        startedAt: turn.startedAt + turn.toolCalls.slice(0, i).reduce((a, x) => a + (x.durationMs ?? 0), 0),
+        completedAt: turn.startedAt + turn.toolCalls.slice(0, i + 1).reduce((a, x) => a + (x.durationMs ?? 0), 0),
+        durationMs: c.durationMs,
+    }));
+    const failed = turn.toolCalls.filter((c) => c.ok === false).length;
+    appendPipelineRun({
+        id: `loop-${turn.turnId}`,
+        goal: turn.title || 'Loop turn',
+        engine: 'loop',
+        startedAt: turn.startedAt,
+        endedAt: turn.endedAt,
+        success: !turn.generationFailed && failed === 0,
+        totalDurationMs: (turn.endedAt ?? Date.now()) - turn.startedAt,
+        phases,
+        turnTelemetry: {
+            toolCallCount: turn.toolCallCount,
+            erroredToolCount: turn.erroredToolCount,
+            ...(turn.bounded !== undefined ? { bounded: turn.bounded } : {}),
+            ...(turn.generationFailed !== undefined ? { generationFailed: turn.generationFailed } : {}),
+            ...(turn.provider ? { provider: turn.provider } : {}),
+            ...(turn.model ? { model: turn.model } : {}),
+        },
+    });
+}
+/**
  * When every node of the active run is terminal (completed/failed), persist it.
  * Called from updateDAGNode after each status transition; idempotent via the
  * activeRunId latch (cleared once the run is persisted).
@@ -595,6 +758,8 @@ function maybeFinalizeRun() {
     appendPipelineRun({
         id: activeRunId,
         goal: activeRunGoal || 'Execution pipeline',
+        // Phase 4 — pipeline runs are stamped with their engine.
+        engine: 'pipeline',
         startedAt: started,
         endedAt: ended,
         success: phases.length > 0 && phases.every((p) => p.status === 'completed'),
@@ -2085,6 +2250,26 @@ let whatsappPairing = new WhatsAppPairingManager();
 // P4 — chat sessions persist through ~/.nuvira/memory/chat-sessions.json so the
 // sidebar can resume any past conversation after a dashboard restart.
 let chatConsole = new ChatConsole({ persistPath: join(MEMORY_DIR, 'chat-sessions.json') });
+// Phase 4 (AGENTIC_CAPABILITY_ASSESSMENT Addendum v4) — the chat console's
+// loop turns record their engine + per-tool telemetry into the DAG store (a
+// local hook, never a cross-module import: chat-console must not know about
+// the server). The server fulfills the hook with the SAME module's store —
+// the DAG SSE consumers (DAGView) get the badge + turn card for free.
+chatConsole.onTurnCompleted = (turn) => {
+    try {
+        if (turn.cancelled) {
+            endLoopTurn({ cancelled: true });
+            return;
+        }
+        endLoopTurn({
+            ...(turn.bounded !== undefined ? { bounded: turn.bounded } : {}),
+            ...(turn.generationFailed !== undefined ? { generationFailed: turn.generationFailed } : {}),
+        });
+    }
+    catch {
+        // Telemetry must never break the chat path.
+    }
+};
 // P3 — project attach. The bundle is cached per path and rebuilt only when the
 // directory mtime changes, so repeat turns don't re-walk the tree. The
 // recent-projects list (the dashboard's own cwd + every attached path) feeds
@@ -2110,8 +2295,24 @@ function getProjectBundle(path) {
     }
 }
 /** Test hook: swap the chat console (e.g. a fake engine) — routes read the
- * module variable at request time, so this works anytime. */
+ * module variable at request time, so this works anytime. The Phase 4
+ * DAG-telemetry hook is re-attached to the replacement. */
 export function setChatConsoleForTest(console) {
+    console.onTurnCompleted = (turn) => {
+        try {
+            if (turn.cancelled) {
+                endLoopTurn({ cancelled: true });
+                return;
+            }
+            endLoopTurn({
+                ...(turn.bounded !== undefined ? { bounded: turn.bounded } : {}),
+                ...(turn.generationFailed !== undefined ? { generationFailed: turn.generationFailed } : {}),
+            });
+        }
+        catch {
+            // Telemetry must never break the chat path.
+        }
+    };
     chatConsole = console;
 }
 /**
@@ -4515,6 +4716,14 @@ function handleRequest(req, res) {
                 if (subPath) {
                     for (const root of roots) {
                         const candidate = join(root, subPath, folderName);
+                        if (isDir(candidate)) {
+                            writeJson(res, 200, { ok: true, path: candidate });
+                            return;
+                        }
+                    }
+                    // Also try subPath as the folder itself (user selected a nested path)
+                    for (const root of roots) {
+                        const candidate = join(root, subPath);
                         if (isDir(candidate)) {
                             writeJson(res, 200, { ok: true, path: candidate });
                             return;

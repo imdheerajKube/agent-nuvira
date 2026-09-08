@@ -286,6 +286,96 @@ export function effectiveToolJsonSchemas(cm?: ConfigManagerLike): ToolJsonSchema
   return toolJsonSchemas(effectiveTools(cm).map((t) => t.name));
 }
 
+// ─── Tiered exposure (AGENTIC_CAPABILITY_ASSESSMENT Addendum v3/v4) ────────
+//
+// The assessment measured ~110 tool schemas (~12K chars of descriptions
+// alone) in EVERY chat turn with all toolsets enabled by default. That is a
+// per-turn token tax, a prompt-cache problem, and — worse — choice paralysis
+// for weak models. Freebuff's proven equilibrium is ~15 tools + one discovery
+// tool. The fix is NOT fewer capabilities; it is TIERED EXPOSURE:
+//
+//   Tier 1 (CORE)  — universal primitives, always in the model's schema.
+//   Tier 2 (DOMAIN)— every other toolset, hidden until the model loads it
+//                    mid-turn via the `tool_search` discovery tool
+//                    (action "load"), whose names the loop unions into the
+//                    live schema set before the next step.
+//
+// Zero capability is lost: every tool stays registered, executable (the I1
+// gate keeps honoring toolset toggles), and discoverable on demand.
+
+/**
+ * The always-exposed primitive set. Each name MUST exist in the registry
+ * (guarded at module load by `validateCoreToolCoverage`). This is the whole
+ * loop harness: files, terminal, code execution, web, clarification,
+ * plan/todo, skills, delegation, and the discovery tool itself.
+ */
+export const CORE_TOOL_NAMES: readonly string[] = [
+  'read_file',
+  'list_dir',
+  'glob',
+  'code_search',
+  'edit_file',
+  'write_file',
+  'run_terminal',
+  'code_execution',
+  'web_search',
+  'read_page',
+  'ask_user',
+  'suggest_followups',
+  'plan_todo',
+  'skill',
+  'delegate',
+  'tool_search', // the discovery/load tool MUST be core or tiering is a trap
+];
+
+/**
+ * Integrity guard: a core name that is not registered (typo / rename) must
+ * fail LOUDLY at import time, not silently shrink the loop's toolset.
+ * Returns the missing names (empty = healthy).
+ */
+export function validateCoreToolCoverage(): string[] {
+  const registered = new Set(listTools().map((t) => t.name));
+  return CORE_TOOL_NAMES.filter((n) => !registered.has(n));
+}
+
+/** Is a tool in the always-exposed core set? */
+export function isCoreTool(toolName: string): boolean {
+  return CORE_TOOL_NAMES.includes(toolName);
+}
+
+/**
+ * Core-only tool list: registered + core + still respecting ENABLED toolsets
+ * (a user who disabled the `media` toolset must never get generate_image
+ * back just because tiering changed the schema path — the I1 gate stays
+ * the single source of enablement truth).
+ */
+export function coreTools(cm?: ConfigManagerLike): Tool[] {
+  const core = new Set(CORE_TOOL_NAMES);
+  return effectiveTools(cm).filter((t) => core.has(t.name));
+}
+
+/** Core-only JSON schemas (the tiered hand-off for native tool-calling). */
+export function coreToolJsonSchemas(cm?: ConfigManagerLike): ToolJsonSchema[] {
+  return toolJsonSchemas(coreTools(cm).map((t) => t.name));
+}
+
+/**
+ * Tiered exposure mode — read from config (`tools.loopExposure`):
+ * - 'tiered'  — core schemas on the wire; the rest via `tool_search` load.
+ * - 'all'     — the pre-tiering behavior (every enabled toolset's schemas).
+ * Default 'all' keeps every existing caller byte-identical until evals
+ * (Phase 0) justify flipping the default — the feature ships complete but
+ * inert, so nothing can regress silently.
+ */
+export function getLoopExposureMode(cm?: ConfigManagerLike): 'tiered' | 'all' {
+  try {
+    const exposure = (cm?.getAll?.() as { tools?: { loopExposure?: string } } | undefined)?.tools?.loopExposure;
+    return exposure === 'tiered' ? 'tiered' : 'all';
+  } catch {
+    return 'all';
+  }
+}
+
 /** Status of every toolset (CLI + future dashboard): enabled, label, tools. */
 export function getToolsetStatus(cm?: ConfigManagerLike): Array<{
   name: string;

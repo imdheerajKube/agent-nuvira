@@ -18,10 +18,17 @@
  */
 
 import { InferenceProvider, ModelDescriptor } from './interface.js';
+import type { ToolCallResponse, ToolMessage, ToolSchema } from './interface.js';
 import { InferenceOptions, ProviderConfig } from '../config/types.js';
 import { logger } from '../utils/logger.js';
 import { getCostTracker, recordCallWithUsage } from '../learning/cost-tracker.js';
 import { attachHttpContext } from './http-error.js';
+import {
+  toAnthropicMessages,
+  toAnthropicToolDefs,
+  parseAnthropicToolResponse,
+  AnthropicToolStreamAccumulator,
+} from './native-tools.js';
 
 const ANTHROPIC_BASE_URL = 'https://api.anthropic.com';
 const ANTHROPIC_VERSION = '2023-06-01';
@@ -41,9 +48,35 @@ interface AnthropicMessageResponse {
   usage?: { input_tokens?: number; output_tokens?: number };
 }
 
-/** Parse an Anthropic SSE line → text delta (content_block_delta) or null. */
-function parseAnthropicSSE(line: string): { text?: string; usage?: { inputTokens?: number; outputTokens?: number } } | null {
+/** Response shape for tool-calling calls (re-exported alias for readability). */
+type AnthropicToolResponseShape = import('./native-tools.js').AnthropicToolResponse;
+
+/** Flatten a thread's text content for cost metering (best-effort estimate). */
+function promptDigest(messages: ToolMessage[]): string {
+  return messages.map((m) => m.content).filter(Boolean).join('\n');
+}
+
+/**
+ * Feed one raw SSE line into the tool-stream accumulator. Returns the text
+ * delta to stream (or null). Non-data lines and [DONE] are ignored; malformed
+ * JSON lines are dropped (the stream self-heals on the next event).
+ */
+function consumeAnthropicToolSSE(
+  accumulator: import('./native-tools.js').AnthropicToolStreamAccumulator,
+  line: string,
+): string | null {
   if (!line.startsWith('data: ')) return null;
+  const data = line.slice(6).trim();
+  if (!data || data === '[DONE]') return null;
+  try {
+    return accumulator.consume(JSON.parse(data) as object);
+  } catch {
+    return null;
+  }
+}
+
+/** Parse an Anthropic SSE line → text delta (content_block_delta) or null. */
+function parseAnthropicSSE(line: string): { text?: string; usage?: { inputTokens?: number; outputTokens?: number } } | null {  if (!line.startsWith('data: ')) return null;
   const data = line.slice(6).trim();
   if (!data || data === '[DONE]') return null;
   try {
@@ -225,6 +258,173 @@ export class AnthropicAdapter implements InferenceProvider {
     }
 
     return fullContent.join('');
+  }
+
+  // ─── Phase 1.2 — native tool calling (Anthropic Messages tool use) ───────
+  //
+  // The assessment (Addendum v2 §D.3) found anthropic riding the JSON
+  // fallback ("0 generateTools matches") and marked native function-calling
+  // BLOCKING for loop-default. This implements the Messages tool-use
+  // protocol: system → top-level `system`, tool results → tool_result blocks
+  // merged into the following user message, tools → tools[{input_schema}].
+  // Wire mapping, parsing, and the streaming accumulator live in
+  // native-tools.ts — this method is a thin fetch. Cost parity with
+  // generate(): recordCallWithUsage on both paths.
+  async generateTools(
+    messages: ToolMessage[],
+    tools: ToolSchema[],
+    options?: InferenceOptions,
+  ): Promise<ToolCallResponse> {
+    const model = options?.model || this.config.model || 'default';
+    const maxTokens = Math.min(
+      options?.maxTokens ?? this.config.maxTokens ?? 4096,
+      anthropicModelMaxTokens(model),
+    );
+    const temperature = options?.temperature ?? this.config.temperature ?? 0.7;
+
+    const { system, messages: wireMessages } = toAnthropicMessages(messages);
+    const body: Record<string, unknown> = {
+      model,
+      max_tokens: maxTokens,
+      temperature,
+      messages: wireMessages,
+      tools: toAnthropicToolDefs(tools),
+    };
+    if (system) body.system = system;
+
+    logger.debug(`Anthropic: Tool-calling with model=${model}, tools=${tools.length} via ${this.baseUrl}`);
+
+    const response = await fetch(`${this.baseUrl}/v1/messages`, {
+      method: 'POST',
+      headers: this.headers(options?.apiKey),
+      body: JSON.stringify(body),
+      signal: options?.signal ?? AbortSignal.timeout(this.config.timeoutMs ?? 30_000),
+    });
+
+    if (!response.ok) {
+      const errorBody = await response.text();
+      throw attachHttpContext(
+        new Error(`Anthropic tool-calling API error (${response.status}): ${errorBody}`),
+        response.status,
+        response.headers,
+      );
+    }
+
+    const data = (await response.json()) as AnthropicToolResponseShape;
+    const result = parseAnthropicToolResponse(data);
+
+    try {
+      recordCallWithUsage(
+        getCostTracker(),
+        'anthropic',
+        model,
+        promptDigest(messages),
+        result.content,
+        data.usage
+          ? { promptTokens: data.usage.input_tokens, completionTokens: data.usage.output_tokens }
+          : undefined,
+      );
+    } catch {
+      // Non-critical.
+    }
+
+    return result;
+  }
+
+  /**
+   * P4/Phase 1.2 — streaming native tool-calling: same protocol with
+   * `stream: true`; text deltas stream to onToken, tool_use blocks
+   * accumulate from content_block_start + input_json_delta fragments via
+   * the shared accumulator and finalize at message_stop.
+   */
+  async generateToolsStream(
+    messages: ToolMessage[],
+    tools: ToolSchema[],
+    options: InferenceOptions | undefined,
+    onToken: (token: string) => void,
+  ): Promise<ToolCallResponse> {
+    const model = options?.model || this.config.model || 'default';
+    const maxTokens = Math.min(
+      options?.maxTokens ?? this.config.maxTokens ?? 4096,
+      anthropicModelMaxTokens(model),
+    );
+    const temperature = options?.temperature ?? this.config.temperature ?? 0.7;
+
+    const { system, messages: wireMessages } = toAnthropicMessages(messages);
+    const body: Record<string, unknown> = {
+      model,
+      max_tokens: maxTokens,
+      temperature,
+      stream: true,
+      messages: wireMessages,
+      tools: toAnthropicToolDefs(tools),
+    };
+    if (system) body.system = system;
+
+    logger.debug(`Anthropic: Streaming tool-calling with model=${model}, tools=${tools.length} via ${this.baseUrl}`);
+
+    const response = await fetch(`${this.baseUrl}/v1/messages`, {
+      method: 'POST',
+      headers: this.headers(options?.apiKey),
+      body: JSON.stringify(body),
+      signal: options?.signal,
+    });
+
+    if (!response.ok) {
+      const errorBody = await response.text();
+      throw attachHttpContext(
+        new Error(`Anthropic streaming tool-calling API error (${response.status}): ${errorBody}`),
+        response.status,
+        response.headers,
+      );
+    }
+
+    const reader = response.body?.getReader();
+    if (!reader) throw new Error('Anthropic API error (no readable stream)');
+
+    const decoder = new TextDecoder();
+    let buffer = '';
+    const accumulator = new AnthropicToolStreamAccumulator();
+
+    try {
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        buffer += decoder.decode(value, { stream: true });
+        const lines = buffer.split('\n');
+        buffer = lines.pop() || '';
+        for (const line of lines) {
+          const text = consumeAnthropicToolSSE(accumulator, line.trim());
+          if (text) onToken(text);
+        }
+      }
+      const remaining = buffer.trim();
+      if (remaining) {
+        const text = consumeAnthropicToolSSE(accumulator, remaining);
+        if (text) onToken(text);
+      }
+    } finally {
+      reader.releaseLock();
+    }
+
+    const result = accumulator.finalize();
+
+    try {
+      recordCallWithUsage(
+        getCostTracker(),
+        'anthropic',
+        model,
+        promptDigest(messages),
+        result.content,
+        accumulator.streamUsage
+          ? { promptTokens: accumulator.streamUsage.promptTokens, completionTokens: accumulator.streamUsage.completionTokens }
+          : undefined,
+      );
+    } catch {
+      // Non-critical.
+    }
+
+    return result;
   }
 
   async isAvailable(): Promise<boolean> {

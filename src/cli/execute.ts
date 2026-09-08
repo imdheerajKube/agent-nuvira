@@ -37,6 +37,8 @@ import { showModelPicker } from './model-picker.js';
 import { resolveProvider } from './router.js';
 import { isAutoModel } from '../learning/auto-router.js';
 import { parseRequestSync } from '../nlu/parser.js';
+import { resolveEngine, readEngineModeConfig } from '../learning/engine-router.js';
+import { runLoopExecutor } from './loop-executor.js';
 import { resolveDispatch } from '../nlu/actions.js';
 import { isConversationalQuestion } from '../nlu/conversation-gate.js';
 import { contractFromParsed, renderContractCard } from '../nlu/contract.js';
@@ -91,6 +93,22 @@ interface ExecuteOptions {
   jsonEvents?: boolean;
   /** Use tool-calling agents for writer/reviewer steps */
   toolCalling?: boolean;
+  /**
+   * Engine dispatch (assessment Addendum v4 Phase 1.1): 'auto' (default)
+   * resolves loop-vs-pipeline from the routed provider tier via
+   * resolveEngine(); 'loop' forces the single agentic loop (runToolLoop);
+   * 'pipeline' forces the orchestrator (CI/publish semantics). The DEFAULT
+   * stays 'pipeline' for explicit loop/pipeline and resolves to the
+   * orchestrator under auto until Phase 0 eval numbers justify the flip —
+   * both paths stay live (v4 risk table: "don't big-bang delete").
+   */
+  engine?: 'auto' | 'loop' | 'pipeline';
+  /**
+   * Plan-mode demotion (assessment Addendum v4 Phase 1.6): 'light' (default)
+   * runs the loop/pipeline as-is; 'heavy' forces the reasoner→planner
+   * front-matter (opt-in for large greenfield builds via the build tool).
+   */
+  planMode?: 'light' | 'heavy';
 }
 
 // ─── Session Types ──────────────────────────────────────────────────────────
@@ -230,6 +248,8 @@ export class ExecuteCommand extends BaseCommand {
       .option('--repair-fallback-models <models>', 'Comma-separated fallback models for repair (e.g., groq/llama3,nim/mistral)')
       .option('--auto-route', 'Route each agent to the best provider/model automatically (Auto model)', false)
       .option('--tool-calling', 'Use iterative tool-calling agents for writer/reviewer (read→edit→verify loop)', false)
+      .option('--engine <mode>', 'Execution engine: auto | loop | pipeline (default: auto — loop for strong models, pipeline for local/weak tier)')
+      .option('--plan-mode <mode>', 'Planning depth: light | heavy (default: light — heavy forces the reasoner→planner front-matter for large greenfield builds)')
       .option('--checkpoint', 'Save a resume-able checkpoint after every task batch (in ~/.nuvira/memory/checkpoints/)', false)
       .option('--resume [id]', 'Resume a saved checkpoint (defaults to the auto id for this goal + cwd). Completed steps are skipped', false)
       .option('--checkpoint-list', 'List saved checkpoints and exit', false)
@@ -253,13 +273,23 @@ export class ExecuteCommand extends BaseCommand {
       maxRepairs?: number;
       repairMode?: string;
       repairFallbackModels?: string;
-      autoRoute?: boolean;
-      checkpoint?: boolean;
-      resume?: string | boolean;
-      checkpointList?: boolean;
-      jsonEvents?: boolean;
+        autoRoute?: boolean;
+        checkpoint?: boolean;
+        resume?: string | boolean;
+        checkpointList?: boolean;
+        jsonEvents?: boolean;
+        engine?: string;
+        planMode?: string;
       }) => {
-        await this.execute(goal, options || {});
+        // commander passes raw strings; the union narrowing happens in
+        // runSingleGoal's dispatch (an unknown value degrades to 'auto' via
+        // resolveEngine's config path — never throws).
+        const { engine, planMode, ...rest } = options || {};
+        await this.execute(goal, {
+          ...rest,
+          ...(engine ? { engine: engine as 'auto' | 'loop' | 'pipeline' } : {}),
+          ...(planMode ? { planMode: planMode as 'light' | 'heavy' } : {}),
+        });
       });
 
     return command;
@@ -1590,6 +1620,60 @@ export class ExecuteCommand extends BaseCommand {
     }
   }
 
+  /**
+   * Run the goal through the LOOP engine (assessment Addendum v4 Phase 1.1):
+   * one agentic turn over runToolLoop with ambient project context + tiered
+   * tool exposure. Prints the loop's answer (and the tool-call trail unless
+   * --json-events), and returns the same SingleGoalResult shape as the
+   * pipeline path so session history / followups keep working unchanged.
+   */
+  private async runLoopEngineGoal(
+    goal: string,
+    provider: string | undefined,
+    model: string | undefined,
+    options: ExecuteOptions,
+  ): Promise<SingleGoalResult> {
+    try {
+      const result = await runLoopExecutor(goal, this.configManager, {
+        provider,
+        model,
+        quiet: !!options.jsonEvents,
+      });
+      const content = (result.content ?? '').trim();
+      const success = !result.generationFailed;
+      if (options.jsonEvents) {
+        process.stdout.write(JSON.stringify({
+          type: 'result',
+          success,
+          goal,
+          summary: content,
+          tasksCompleted: success ? 1 : 0,
+          tasksTotal: 1,
+          agentResults: [],
+          fileChanges: '',
+          runOutput: '',
+          error: success ? '' : content,
+          engine: 'loop',
+          engineExplanation: result.engineExplanation,
+          toolCalls: result.toolCalls,
+          erroredTools: result.erroredTools,
+          durationMs: result.durationMs,
+          ts: Date.now(),
+        }) + '\n');
+      } else {
+        console.log('');
+        if (content) console.log(content + '\n');
+        if (!success) {
+          logger.error(content || 'The loop engine could not complete this goal.');
+        }
+      }
+      return { success };
+    } catch (err) {
+      logger.error(err instanceof Error ? err.message : String(err));
+      return { success: false };
+    }
+  }
+
   private async runSingleGoal(
     goal: string,
     provider: string | undefined,
@@ -1601,6 +1685,45 @@ export class ExecuteCommand extends BaseCommand {
     // echo, contract card and board so a question never looks like a pipeline.
     if (isConversationalQuestion(goal)) {
       return await this.answerConversationDirectly(goal, provider, model, options);
+    }
+
+    // ── Engine dispatch (assessment Addendum v4 Phase 1.1 + Phase 2) ───────
+    // 'auto' (default): the engine router resolves loop-vs-pipeline from the
+    // routed provider tier — strong models → the single agentic loop
+    // (runToolLoop), local/weak tier → the orchestrator pipeline (the
+    // weak-model advantage kept honestly). 'pipeline' forces the orchestrator
+    // (CI/publish semantics, dry-run/rollback audit); 'loop' forces the loop.
+    // planMode 'heavy' (Phase 1.6) demotes this dispatch to the orchestrator:
+    // the reasoner→planner front-matter is reserved for large greenfield
+    // builds invoked explicitly.
+    {
+      const planMode = options.planMode ?? 'light';
+      if (planMode === 'heavy') {
+        if (!options.jsonEvents) {
+          logger.info('   🧭 Plan mode: heavy — orchestrator pipeline (reasoner→planner front-matter)');
+        }
+        // Fall through to the pipeline path (orchestrator) below.
+      } else {
+        const configMode = readEngineModeConfig(this.configManager);
+        // CLI flag wins over config; config only refines 'auto'.
+        const effective: 'auto' | 'loop' | 'pipeline' = options.engine
+          ? (options.engine as 'auto' | 'loop' | 'pipeline')
+          : configMode === 'pipeline' ? 'pipeline' : configMode === 'loop' ? 'loop' : 'auto';
+        const decision = resolveEngine({
+          provider,
+          model,
+          configManager: { getAll: () => ({ routing: { engineMode: effective } }) },
+        });
+        if (decision.engine === 'loop') {
+          if (!options.jsonEvents) {
+            logger.info(`   🧭 Engine: loop — ${decision.explanation}`);
+          }
+          return await this.runLoopEngineGoal(goal, provider, model, options);
+        }
+        if (!options.jsonEvents && effective === 'auto') {
+          logger.info(`   🧭 Engine: pipeline — ${decision.explanation}`);
+        }
+      }
     }
     if (!options.jsonEvents && (options.verbose || options.dryRun || options.review || options.sandbox)) {
       logger.info(`Goal: ${goal}`);

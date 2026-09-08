@@ -426,6 +426,24 @@ export interface RoutingConfig {
      */
     healthFlags?: boolean;
   };
+  /**
+   * Engine mode (AGENTIC_CAPABILITY_ASSESSMENT Addendum v4 Phase 2 — mode
+   * routing). 'auto' (default) lets the engine router pick loop-vs-pipeline
+   * from the routed provider tier (strong models → the single agentic loop;
+   * local/weak tier → the orchestrator pipeline). 'loop'/'pipeline' are
+   * absolute overrides (CI pins 'pipeline'). Set via
+   * `nuvira config set routing.engineMode loop` or directly in
+   * .nuviraconfig.json. Default: 'auto'.
+   */
+  engineMode?: 'auto' | 'loop' | 'pipeline';
+  /**
+   * Routing preference mode (HybridRouterOptions.preferenceMode): 'balanced'
+   * (default), 'performance-first', 'cost-first', or 'privacy-first'. Read by
+   * the chat routing decision cache as part of the STABLE routing-input key —
+   * changing the mode changes the key, so a cached decision can never be
+   * served across a mode switch.
+   */
+  preferenceMode?: 'balanced' | 'performance-first' | 'cost-first' | 'privacy-first';
 }
 
 /**

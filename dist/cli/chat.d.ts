@@ -181,6 +181,8 @@ export declare class ChatCommand extends BaseCommand {
         generationFailed?: boolean;
         /** P4 — true when the turn was cancelled via opts.signal (discarded). */
         cancelled?: boolean;
+        /** Phase 4 — true when the loop hit its step bound before an end turn. */
+        bounded?: boolean;
         provider?: string;
         model?: string;
     }>;

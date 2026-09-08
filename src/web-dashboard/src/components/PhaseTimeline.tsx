@@ -307,6 +307,13 @@ export default function PhaseTimeline({
               title={r.goal}
             >
               {r.id.startsWith('live-') && <span className="dag-live-dot" />}
+              {/* Phase 4 — engine tag on every run chip (loop turns persist
+                  engine 'loop'; pipeline runs 'pipeline'). */}
+              {r.engine && (
+                <span className={`phase-run-chip-engine phase-run-chip-engine-${r.engine}`}>
+                  {r.engine === 'loop' ? '🔁' : '⬡'}
+                </span>
+              )}
               {r.goal.length > 32 ? r.goal.slice(0, 30) + '…' : r.goal}
               <span className="phase-run-chip-time">{formatClock(r.startedAt)}</span>
             </button>
@@ -314,9 +321,29 @@ export default function PhaseTimeline({
         </div>
         <div className="phase-timeline-meta">
           {isLive && <span className="dag-live-badge">LIVE</span>}
+          {/* Phase 4 — the selected run's engine + loop-turn telemetry. */}
+          {run.engine && (
+            <span
+              className={`dag-engine-badge dag-engine-${run.engine}`}
+              title={run.engine === 'loop' ? 'Loop turn (per-tool telemetry below)' : 'Orchestrator pipeline'}
+            >
+              {run.engine === 'loop' ? '🔁 loop' : '⬡ pipeline'}
+            </span>
+          )}
           <span className="phase-meta-item">{run.phases.length} steps</span>
           <span className="phase-meta-item phase-meta-ok">✅ {completedCount}</span>
           {failedCount > 0 && <span className="phase-meta-item phase-meta-bad">❌ {failedCount}</span>}
+          {run.turnTelemetry && (
+            <span
+              className="phase-meta-item"
+              title={`tool calls: ${run.turnTelemetry.toolCallCount}, errored: ${run.turnTelemetry.erroredToolCount}${run.turnTelemetry.bounded ? ', bounded' : ''}${run.turnTelemetry.provider ? `, ${run.turnTelemetry.provider}${run.turnTelemetry.model ? `/${run.turnTelemetry.model}` : ''}` : ''}`}
+            >
+              🔧 {run.turnTelemetry.toolCallCount}
+              {run.turnTelemetry.erroredToolCount > 0 && (
+                <span className="phase-meta-bad"> ({run.turnTelemetry.erroredToolCount} err)</span>
+              )}
+            </span>
+          )}
           <span className="phase-meta-item">⏱ {formatMs(total)}</span>
         </div>
       </div>

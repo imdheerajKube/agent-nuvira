@@ -41,6 +41,55 @@ interface DAGEdge {
     from: string;
     to: string;
 }
+/** One recorded tool call of a loop turn. */
+export interface LoopToolCallTelemetry {
+    tool: string;
+    ok?: boolean;
+    durationMs?: number;
+    error?: string;
+}
+/** Per-turn loop telemetry (the DAG view's turn card + persisted run field). */
+export interface LoopTurnTelemetry {
+    turnId: string;
+    /** First user message of the turn (truncated) — the run/goal label. */
+    title: string;
+    startedAt: number;
+    endedAt?: number;
+    toolCalls: LoopToolCallTelemetry[];
+    toolCallCount: number;
+    erroredToolCount: number;
+    provider?: string;
+    model?: string;
+    bounded?: boolean;
+    generationFailed?: boolean;
+    cancelled?: boolean;
+    active: boolean;
+}
+/**
+ * Stamp the engine context for the DAG badge (Phase 4). Called by the
+ * pipeline path (pushDAGUpdate → 'pipeline') and the loop-turn hooks
+ * (beginLoopTurn → 'loop'). `explanation` is the engine router's audit line.
+ */
+export declare function setLoopEngineContext(engine: 'loop' | 'pipeline', explanation?: string): void;
+/**
+ * Begin a loop turn's telemetry window (Phase 4). Any previous turn is
+ * replaced (the DAG view shows the CURRENT/LATEST turn only).
+ */
+export declare function beginLoopTurn(turnId: string, title: string, provider?: string, model?: string): void;
+/** Record one tool call of the active loop turn (no-op when none). */
+export declare function recordLoopToolCall(call: LoopToolCallTelemetry): void;
+/**
+ * End the active loop turn (Phase 4): stamp the outcome, persist a
+ * loop-engine run to the timeline (phases = tool calls, engine 'loop'), and
+ * mark the turn inactive (its card remains until the next run/turn).
+ */
+export declare function endLoopTurn(extra: {
+    bounded?: boolean;
+    generationFailed?: boolean;
+    cancelled?: boolean;
+}): void;
+/** Clear the loop-turn card (new pipeline run replaces the loop view). */
+export declare function clearLoopTurn(): void;
 /**
  * Called by the orchestrator to push a DAG update in real time.
  * Clears the pipeline when a new execution starts.
@@ -86,6 +135,17 @@ interface PipelineRun {
     success?: boolean;
     totalDurationMs: number;
     phases: PipelinePhase[];
+    /** Phase 4 — which engine executed ('pipeline' | 'loop'). */
+    engine?: 'pipeline' | 'loop';
+    /** Phase 4 — loop-engine turns: per-turn tool-call telemetry. */
+    turnTelemetry?: {
+        toolCallCount: number;
+        erroredToolCount: number;
+        bounded?: boolean;
+        generationFailed?: boolean;
+        provider?: string;
+        model?: string;
+    };
 }
 /**
  * Read the persisted pipeline runs, most recent first.
@@ -148,7 +208,8 @@ export declare function readTracesData(): {
 /** Full trace detail (steps included) for the replay view. */
 export declare function readTraceDetail(id: string): DashboardTrace | null;
 /** Test hook: swap the chat console (e.g. a fake engine) — routes read the
- * module variable at request time, so this works anytime. */
+ * module variable at request time, so this works anytime. The Phase 4
+ * DAG-telemetry hook is re-attached to the replacement. */
 export declare function setChatConsoleForTest(console: ChatConsole): void;
 /**
  * Run the dashboard shutdown action (test hook: swap to a no-op so API tests
