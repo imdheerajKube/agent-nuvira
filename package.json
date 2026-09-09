@@ -23,6 +23,8 @@
     "dev": "tsx src/index.ts",
     "test": "vitest run",
     "test:watch": "vitest",
+    "docs:commands": "node scripts/generate-commands-surface.mjs",
+    "docs:commands:check": "node scripts/generate-commands-surface.mjs --check",
     "test:coverage": "vitest run --coverage",
     "build:dashboard": "cd src/web-dashboard && npm install --silent 2>/dev/null && npm run build",
     "build:sdk": "cd src/agent-sdk && npx tsc",

@@ -10,11 +10,11 @@
  */
 
 import { describe, it, expect } from 'vitest';
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { chmodSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 
-import { findReleaseDrift, runReleaseSync, SYNC_TARGETS } from '../../src/tools/release-sync.js';
+import { findReleaseDrift, fixReleaseDrift, runReleaseSync, SYNC_TARGETS } from '../../src/tools/release-sync.js';
 
 describe('findReleaseDrift — pure drift detection', () => {
   it('flags a stale Current release marker (v1.73.0 vs v1.74.0)', () => {
@@ -107,7 +107,8 @@ describe('runReleaseSync — post-publish check', () => {
 
       const events: Array<{ event: string; data: unknown }> = [];
       const ctx = { configManager: {}, cwd: root, emit: (e: string, d: unknown) => events.push({ event: e, data: d }) };
-      const out = runReleaseSync('1.74.0', ctx);
+      // reportOnly — the detect-only surface (auto-fix has its own block below).
+      const out = runReleaseSync('1.74.0', ctx, { reportOnly: true });
 
       expect(out).toContain('2 stale release marker');
       expect(out).toContain('website/index.html:1');
@@ -153,5 +154,110 @@ describe('runReleaseSync — post-publish check', () => {
 
   it('SYNC_TARGETS covers the website + docs (the drift surface)', () => {
     expect(SYNC_TARGETS).toEqual(['website/index.html', 'docs/COMMANDS.md']);
+  });
+});
+
+describe('fixReleaseDrift — pure deterministic patcher (P5a.2)', () => {
+  it('rewrites every stale marker version and nothing else', () => {
+    const text = [
+      '<p>Current release <strong>v1.73.0</strong> — the wave.</p>',
+      '<span class="arch-tier">v1.73.0 · 4,556 tests</span>',
+      '*Document generated from the live CLI surface (`nuvira` v1.73.x).*',
+      '<p>Historical note: since v1.60.x nothing here should change.</p>',
+    ].join('\n');
+    const fixed = fixReleaseDrift(text, 'v2.7.0');
+    expect(fixed).toContain('Current release <strong>v2.7.0</strong>');
+    expect(fixed).toContain('v2.7.0 · 4,556 tests');
+    expect(fixed).toContain('(`nuvira` v2.7.x)');
+    // Non-marker text (including historical notes) is untouched.
+    expect(fixed).toContain('since v1.60.x nothing here should change');
+    expect(fixed).toContain('the wave.</p>');
+    // Deterministic.
+    expect(fixReleaseDrift(text, 'v2.7.0')).toBe(fixed);
+  });
+
+  it('is the exact inverse of findReleaseDrift (detect⇄fix agreement)', () => {
+    const text = 'Current release <strong>v1.0.0</strong>\n(`buff` v1.0.x)\nv1.0.0 · 12 tests';
+    const drifted = findReleaseDrift(text, 'f', '9.9.9');
+    expect(drifted).toHaveLength(3);
+    const fixed = fixReleaseDrift(text, '9.9.9');
+    expect(findReleaseDrift(fixed, 'f', '9.9.9')).toEqual([]);
+  });
+
+  it('leaves already-current markers byte-identical', () => {
+    const text = 'Current release <strong>v2.7.0</strong> and `nuvira` v2.7.x';
+    expect(fixReleaseDrift(text, '2.7.0')).toBe(text);
+  });
+});
+
+describe('runReleaseSync auto-fix (P5a.2) — patch, verify, report', () => {
+  it('fixes stale markers on disk and verifies by re-scan', () => {
+    const root = mkdtempSync(join(tmpdir(), 'buff-syncfix-'));
+    try {
+      mkdirSync(join(root, 'website'), { recursive: true });
+      mkdirSync(join(root, 'docs'), { recursive: true });
+      writeFileSync(join(root, 'website', 'index.html'), '<p>Current release <strong>v1.74.0</strong></p>');
+      writeFileSync(join(root, 'docs', 'COMMANDS.md'), '(`nuvira` v1.74.x) — when in doubt, --help.');
+      const events: Array<{ event: string; data: any }> = [];
+      const ctx = { configManager: {}, cwd: root, emit: (e: string, d: unknown) => events.push({ event: e, data: d }) };
+
+      const out = runReleaseSync('2.7.0', ctx);
+
+      expect(out).toContain('auto-fixed 2 stale marker');
+      expect(out).toContain('✅');
+      // The files on disk are now at the release level.
+      expect(readFileSync(join(root, 'website', 'index.html'), 'utf-8')).toContain('v2.7.0');
+      expect(readFileSync(join(root, 'docs', 'COMMANDS.md'), 'utf-8')).toContain('v2.7.x');
+      // Structured event carries the verified fixes.
+      const ev = events.find((e) => e.event === 'release:sync');
+      expect(ev).toBeTruthy();
+      expect(ev!.data.fixes).toHaveLength(2);
+      expect(ev!.data.fixes.every((f: { verified: boolean }) => f.verified === true)).toBe(true);
+      expect(ev!.data.synced).toBe(true);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it('reportOnly mode detects without touching the files', () => {
+    const root = mkdtempSync(join(tmpdir(), 'buff-syncro-'));
+    try {
+      mkdirSync(join(root, 'website'), { recursive: true });
+      writeFileSync(join(root, 'website', 'index.html'), '<p>Current release <strong>v1.74.0</strong></p>');
+      const before = readFileSync(join(root, 'website', 'index.html'), 'utf-8');
+      const ctx = { configManager: {}, cwd: root, emit: () => {} };
+
+      const out = runReleaseSync('2.7.0', ctx, { reportOnly: true });
+
+      expect(out).toContain('1 stale release marker');
+      expect(out).toContain('Offer to fix');
+      expect(readFileSync(join(root, 'website', 'index.html'), 'utf-8')).toBe(before);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it('a failed write is reported as an error, never thrown (best-effort)', () => {
+    const root = mkdtempSync(join(tmpdir(), 'buff-syncerr-'));
+    try {
+      mkdirSync(join(root, 'website'), { recursive: true });
+      const filePath = join(root, 'website', 'index.html');
+      writeFileSync(filePath, '<p>Current release <strong>v1.74.0</strong></p>');
+      chmodSync(filePath, 0o444); // read-only
+      const ctx = { configManager: {}, cwd: root, emit: () => {} };
+
+      const out = runReleaseSync('2.7.0', ctx);
+
+      expect(out).toContain('write failed');
+      // No fix is claimed — the failed file is reported, not fabricated.
+      expect(out).not.toContain('✅');
+      // The file is untouched (still stale).
+      expect(readFileSync(filePath, 'utf-8')).toContain('v1.74.0');
+      // Restore permissions so rmSync can clean up on all platforms.
+      chmodSync(filePath, 0o644);
+    } finally {
+      chmodSync(join(root, 'website', 'index.html'), 0o644);
+      rmSync(root, { recursive: true, force: true });
+    }
   });
 });

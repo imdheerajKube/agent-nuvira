@@ -352,7 +352,37 @@ All v4 phases are now implemented and tested. Per-phase landing:
   `src/web-dashboard/src/components/DAGView.test.tsx` +
   `PhaseTimeline.test.tsx` (Phase 4 blocks).
 
-**Remaining from the matrix above (unchanged by v4):** P5 release-sync (row
-14) is the only matrix gap left; P6a–P6e skill-onboarding items remain.
-`clone_repo` (row 13, P3a) and the gated `git` tool (row 15, P3b) are
-implemented + tested (2026-09-08).
+**Status refresh 2026-09-09 — the remaining-work list is now EMPTY at the
+phase level.** Verified in code this session:
+
+- **P6a–P6e (skill onboarding) are IMPLEMENTED, not remaining** — the earlier
+  "remain" note was stale. Code-verified: P6a `/learn`-style authoring
+  (`skill-drafts.ts` draft store + `learn-prompt.ts` house standards +
+  skill_manage create/patch/write_file/delete/learn + preview-card
+  accept/reject endpoints `/api/skills/drafts*` + ChatPage draft cards);
+  P6b bundles (`skill-bundles.ts` + skill tool `bundle:` action + CLI);
+  P6c frontmatter depth (platforms/conditional toolsets/config/env surfaced
+  as setup hints, env prompting on load); P6d marketplace import surface
+  (AgentHub marketplace search/install/uninstall + `/api/skills/marketplace*`
+  with server-side session + role (`routing.operate`) + name-validation +
+  quarantine gates); P6e provenance chips (bundled/community) + first-party
+  batch as product content. Residual honesty note: there is still no HOSTED
+  first-party marketplace — consumption of community registries is the
+  supported path (by design, private-repo-safe).
+- **P5 release-sync (row 14 — the last open matrix row) is CLOSED**, and now
+  AUTO-FIXES (P5a.2): every stale marker is rewritten deterministically from
+  a marker table shared between detection and fixing (`fixReleaseDrift`),
+  the result is RE-DETECTED to verify (a fix that fails verification is
+  reported, never claimed), `reportOnly` preserves the old detect-only
+  behavior, and the structured `release:sync` event carries the verified
+  fix list. 18/18 tests.
+- **COMMANDS.md drift class eliminated**: the curated doc's stale footer
+  (v1.74.x while v2.7.0 shipped) prompted a machine-derived surface —
+  `docs/COMMANDS_SURFACE.md` (284 sections) is generated from the LIVE
+  commander tree (`npm run docs:commands`), is byte-deterministic, and is
+  drift-guarded (`npm run docs:commands:check` + `tests/docs/`), so a
+  command added without regenerating the doc fails CI. The curated doc now
+  states the surface is authoritative for WHAT exists; it stays
+  authoritative for HOW to use it.
+- `clone_repo` (row 13, P3a) and the gated `git` tool (row 15, P3b) are
+  implemented + tested (2026-09-08).
