@@ -25,6 +25,7 @@ import type { InferenceProvider, ModelDescriptor } from './interface.js';
 import { logger } from '../utils/logger.js';
 import { getModelRegistry } from '../learning/model-registry.js';
 import { preferredModelsFor } from '../learning/model-selection.js';
+import { getDefaultModel } from './provider-catalog.js';
 
 // ─── Dynamic preference — never hardcoded model names ──────────────────────
 // Repair/selection prefers models the registry has VERIFIED working for this
@@ -208,6 +209,13 @@ export async function resolveWorkingModel(
   }
 
   // ── 4. Can't validate (list unavailable / only speech models) ─────────
-  // Let the adapter surface the real error if the model is truly gone.
+  // NEVER hand the literal 'default' sentinel to a provider API — it 404s
+  // (`The model \`default\` does not exist`, observed live on Groq when the
+  // listModels fetch failed mid-pipeline). Fall back to the CATALOG's curated
+  // real model name for this provider instead; only an unknown catalog
+  // provider (which never reaches a real API anyway) keeps the old behavior.
+  if (explicit) return explicit;
+  const catalogDefault = getDefaultModel(providerType);
+  if (catalogDefault && catalogDefault !== 'default') return catalogDefault;
   return explicit ?? 'default';
 }

@@ -159,6 +159,43 @@ describe('cross-command parity (STANDING RULE)', () => {
     expect(resolveAction(parsed.intent).run).toBe('pipeline');
   });
 
+  it('S4-live: "Write a song in hindi … for my daughter" NEVER reaches the developer pipeline', () => {
+    // Trace-1788970301803-8302u5 (WhatsApp, 918800604222): a father's song
+    // request for his 9-year-old daughter was routed to the DEVELOPER
+    // pipeline ("senior software architect … decide Language/Framework")
+    // because 'song' was missing from the writing-object list. Pin the exact
+    // message plus its near-neighbors to chat — forever.
+    const MSG =
+      'Write a song in hindi Feeling Loved Mood caring and loving , gratitude For my daughter Kashvi Age of daughter 9 years Who is requesting Dheeraj Sharma ( Her Daddy )';
+    const parsed = parseRequestSync(MSG);
+    expect(parsed.intent).toBe('write');
+    expect(resolveAction(parsed.intent).run).toBe('chat');
+    expect(resolveDispatch(parsed).taskIntentHint).toBe('creative');
+    // Creative nouns beyond the explicit list + creative frames must ALSO
+    // stay out of the pipeline ("write a lullaby" has no listed artifact).
+    for (const t of [
+      'write a lullaby for my daughter',
+      'compose a shayari in hindi about love',
+      'make a rap about my dog',
+      'write a song for my daughter Kashvi',
+    ]) {
+      const p = parseRequestSync(t);
+      expect(resolveAction(p.intent).run, t).toBe('chat');
+    }
+  });
+
+  it('S4-live: the creative-frame guard never eats real coding asks', () => {
+    for (const t of [
+      'write a test for the login function',
+      'add auth to the app',
+      'create a CLI tool',
+      'build an api for orders',
+    ]) {
+      const p = parseRequestSync(t);
+      expect(resolveAction(p.intent).run, t).toBe('pipeline');
+    }
+  });
+
   it('guards the actual command wiring — every action command consumes the shared choke point', () => {
     // STRUCTURAL guard (the shared-contract assertions above can't catch a
     // command that stops calling resolveDispatch). Each action command must

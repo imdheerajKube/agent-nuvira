@@ -562,6 +562,23 @@ export class GatewayRegistry {
       return refuse('This channel is not authorized to trigger the agent. Add it to BUFF_GATEWAY_ALLOW_IDS (platform:channelId).');
     }
 
+    // 7-DAY PER-CONTACT CONVERSATION MEMORY — record every AUTHORIZED inbound
+    // message the moment it arrives, BEFORE the routing decision (chat,
+    // pipeline, help). Placed AFTER the sender/channel gates: an unapproved
+    // sender must leave no trace at all (the silent-drop privacy rule), so
+    // recording happens only past the authorization boundary. DESIGN INTENT:
+    // if the user asks anything, we have the history to check for relevance;
+    // a pipeline- or help-handled ask must not vanish from the thread
+    // (previously only chat turns were recorded). Keyed by platform:channelId,
+    // persisted by GatewayChatStore (7-day TTL; best-effort — a history write
+    // must never break handling).
+    const historyKey = `${msg.platform}:${msg.channelId}`;
+    try {
+      this.chatStore.recordInbound(historyKey, msg.text);
+    } catch {
+      /* best-effort */
+    }
+
     // pipelineOnly: pipelines run, everything else is silently recorded —
     // only reached by AUTHORIZED senders (the gate above already dropped
     // unapproved ones silently).
@@ -689,8 +706,14 @@ export class GatewayRegistry {
       const origin = `${PLATFORM_LABELS[msg.platform]} ${msg.isGroup ? 'group' : 'chat'} ${msg.from ?? msg.senderId ?? msg.channelId}`;
       // Per-contact conversation history: load prior messages so the model has
       // context for follow-up questions (e.g. "what was the second option?").
+      // The store retains the full 7-day horizon; the model sees the LAST
+      // window (CHAT_HISTORY_MODEL_WINDOW messages) so prompts stay bounded.
+      // NOTE: the inbound message for THIS turn was already recorded in
+      // handleInbound — exclude it (and everything after it) so the model does
+      // not see its own question twice in the prompt + history.
       const historyKey = `${msg.platform}:${msg.channelId}`;
-      const history = this.chatStore.getHistory(historyKey);
+      const priorWindow = this.chatStore.getFullHistory(historyKey);
+      const history = priorWindow.slice(0, Math.max(0, priorWindow.length - 1)).slice(-12);
       // P2 — origin context: the chat model knows who it's talking to, so its
       // gateway_send calls target the right contact/channel.
       // The response format rules ensure the user gets a clean, direct answer
@@ -774,10 +797,12 @@ export class GatewayRegistry {
         // the cap.
         if (content.length + suffix.length <= 4000) content += suffix;
       }
-      // Store this exchange in the per-contact history so follow-up questions
-      // have context. Persisted to disk via GatewayChatStore so it survives
-      // gateway restarts. The store handles trimming to max pairs.
-      this.chatStore.append(historyKey, msg.text, content);
+      // Store the assistant reply in the per-contact history so follow-up
+      // questions have context (the user message was already recorded in
+      // handleInbound — pass null to avoid a duplicate row). Persisted to disk
+      // via GatewayChatStore so it survives gateway restarts. The store
+      // handles trimming to max pairs.
+      this.chatStore.append(historyKey, null, content);
       this.onTypingCallback?.({ platform: msg.platform, channelId: msg.channelId, typing: false });
       this.writeTypingFile({ platform: msg.platform, channelId: msg.channelId, typing: false });
       return { content, generationFailed: answer.generationFailed };
