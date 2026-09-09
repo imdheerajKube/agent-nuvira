@@ -133,8 +133,12 @@ export function matchConfigureRule(text: string): IntentResult | null {
  * (test is not a writing artifact) still resolves to create.
  */
 export function matchWriteRule(text: string): IntentResult | null {
+  // Songs/hymns/bha_jans/shayari were missing (observed live: "Write a song in
+  // hindi … for my daughter" routed to the DEVELOPER pipeline). Keep the
+  // explicit list (fast, precise) but treat it as an allowlist WITH a
+  // fallback, not the only path.
   const writingObject =
-    /\b(?:essay|poem|poetry|story|short story|letter|article|blog(?: post)?|paragraph|composition|novel|dialogue|speech|caption|advertisement|review|summary|note|message|email|homework|assignment)\b/i;
+    /\b(?:essay|poem|poetry|song|lyrics|hymn|anthem|shayari|ghazal|jingle|story|short story|letter|article|blog(?: post)?|paragraph|composition|novel|dialogue|screenplay|speech|caption|advertisement|review|summary|note|message|email|homework|assignment)\b/i;
   // Verb + article + writing object: "write an essay on elephants for class 4".
   if (
     /^(?:please\s+)?(?:write|build|make|create|draft|compose|prepare)\s+(?:a|an|the|new|my|our)\s+/i.test(
@@ -169,8 +173,22 @@ export function matchCreateRule(text: string): IntentResult | null {
   // here (and in the object-noun branch below) — NOT in the verb-initial list
   // — so the common developer phrasing "add auth to the app" routes to dev
   // mode while "add 2 + 2" (no article, no project noun) never false-positives.
-  if (/^(?:please\s+)?(?:build|write|make|add)\s+(?:a|an|the|new)\s+/i.test(text)) {
-    return { intent: 'create', confidence: 0.85, modeHint: 'dev' };
+  // GUARD (observed live: "Write a song in hindi … for my daughter" hit this
+  // branch and spun up the developer pipeline): when the OBJECT is explicitly
+  // creative (a person-centric/creative frame — "for my daughter", "about
+  // love", a language of expression), the ask is content, not code. The
+  // pipeline must never run for it — matchWriteRule's artifact list can never
+  // cover every creative noun (song, lullaby, rap, …).
+  const articleMatch = /^(?:please\s+)?(?:build|write|make|add)\s+(?:a|an|the|new)\s+/i.exec(text);
+  if (articleMatch) {
+    const creativeFrame =
+      /\bfor (?:my|his|her|our)\b/i.test(text) ||
+      /\babout (?:love|life|friendship|family|her|him|them|us|my|his)\b/i.test(text) ||
+      /\bin (?:hindi|english|spanish|french|tamil|telugu|bengali|marathi|urdu|punjabi|gujarati|kannada|malayalam)\b/i.test(text);
+    if (!creativeFrame) {
+      return { intent: 'create', confidence: 0.85, modeHint: 'dev' };
+    }
+    return { intent: 'write', confidence: 0.8, modeHint: 'chat' };
   }
   // Verb + project-object noun anywhere: "I want to create a new module".
   const objectNoun =

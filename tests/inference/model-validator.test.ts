@@ -158,10 +158,15 @@ describe('resolveWorkingModel', () => {
     expect(result).toBe('gemini-2.5-flash');
   });
 
-  it('falls back to "default" when no desired model is given and the list is unavailable', async () => {
+  it('never returns the literal "default" sentinel — falls back to the catalog model when the list is unavailable', async () => {
+    // OBSERVED LIVE (WhatsApp trace-1788970301803-8302u5): listModels failed
+    // mid-pipeline → step 4 returned 'default' → Groq 404'd on
+    // `The model \`default\` does not exist` and a song request died. The
+    // sentinel must never reach a provider API — the catalog's curated real
+    // model is the floor (gemini → gemini-2.0-flash).
     const provider = makeProvider([], { listThrows: true });
     const result = await resolveWorkingModel(provider, 'gemini');
-    expect(result).toBe('default');
+    expect(result).toBe('gemini-2.0-flash');
   });
 
   it('resolves a working model when the desired model is literally "default"', async () => {

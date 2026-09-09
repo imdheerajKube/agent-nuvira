@@ -19,12 +19,22 @@ import { resolveBuffConfigDir } from '../config/paths.js';
 
 // ─── Constants ──────────────────────────────────────────────────────────────
 
-/** Max message pairs retained per contact. */
-export const CHAT_HISTORY_MAX_PAIRS = 10;
+/**
+ * Max message pairs retained per contact. DESIGN INTENT: "hold at least
+ * 7 days of conversation per contact, so if the user asks anything we have
+ * the history to check for relevance." The 7-day TTL governs RETENTION;
+ * the pair cap must be large enough that a week of normal messaging is
+ * never truncated. The model only sees the LAST few pairs per turn (the
+ * relevance window), while the store keeps the rest for context retrieval
+ * (CLI `gateway history`, future relevance search).
+ */
+export const CHAT_HISTORY_MAX_PAIRS = 250;
 /** Max number of distinct conversations (contacts) stored. */
 export const CHAT_HISTORY_MAX_CONVERSATIONS = 100;
 /** Conversations older than this (ms) are pruned. 7 days. */
 export const CHAT_HISTORY_TTL_MS = 7 * 24 * 60 * 60 * 1000;
+/** How many of the most recent messages the MODEL sees per turn. */
+export const CHAT_HISTORY_MODEL_WINDOW = 12;
 
 // ─── Types ──────────────────────────────────────────────────────────────────
 
@@ -90,25 +100,62 @@ export class GatewayChatStore {
   /**
    * Load conversation history for a contact.
    * Returns messages in chronological order (oldest first), or [] if none.
+   * `window` bounds how much the caller consumes (default: the model's
+   * per-turn window) — the STORE retains the full 7-day horizon; retrieval
+   * surfaces (CLI history, future relevance search) read the rest via
+   * getFullHistory.
    */
-  getHistory(key: string): ChatMessage[] {
+  getHistory(key: string, window: number = CHAT_HISTORY_MODEL_WINDOW): ChatMessage[] {
     const data = this.read();
     const conv = data.conversations[key];
-    return conv?.messages ?? [];
+    if (!conv) return [];
+    return window > 0 && conv.messages.length > window ? conv.messages.slice(-window) : conv.messages;
+  }
+
+  /** The FULL retained history for a contact (up to the 7-day TTL). */
+  getFullHistory(key: string): ChatMessage[] {
+    return this.getHistory(key, 0);
+  }
+
+  /**
+   * Record the USER message as soon as it arrives — before any handling
+   * decision (chat, pipeline, help). DESIGN INTENT: every inbound message is
+   * part of the 7-day per-contact history, even when the turn is answered by
+   * the pipeline or dropped to a help line (previously only chat turns were
+   * recorded, so pipeline-handled asks vanished from the history and a later
+   * follow-up lost its antecedent).
+   */
+  recordInbound(key: string, userMessage: string): void {
+    const data = this.read();
+    const now = Date.now();
+    const existing = data.conversations[key];
+    const messages: ChatMessage[] = [
+      ...(existing?.messages ?? []),
+      { role: 'user', content: userMessage, ts: now },
+    ];
+    const maxMessages = CHAT_HISTORY_MAX_PAIRS * 2;
+    data.conversations[key] = {
+      key,
+      messages: messages.slice(-maxMessages),
+      lastActiveAt: now,
+    };
+    this.write(data);
   }
 
   /**
    * Append a user message + assistant response to a contact's conversation.
-   * Trims to CHAT_HISTORY_MAX_PAIRS and persists to disk.
+   * Trims to CHAT_HISTORY_MAX_PAIRS and persists to disk. `userMessage` is
+   * optional so the assistant side can be recorded alone after a
+   * recordInbound (no duplicate user row).
    */
-  append(key: string, userMessage: string, assistantMessage: string): void {
+  append(key: string, userMessage: string | null, assistantMessage: string): void {
     const data = this.read();
     const now = Date.now();
     const existing = data.conversations[key];
 
     const messages: ChatMessage[] = [
       ...(existing?.messages ?? []),
-      { role: 'user', content: userMessage, ts: now },
+      ...(userMessage ? [{ role: 'user' as const, content: userMessage, ts: now }] : []),
       { role: 'assistant', content: assistantMessage, ts: now },
     ];
 

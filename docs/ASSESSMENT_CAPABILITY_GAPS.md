@@ -386,3 +386,41 @@ phase level.** Verified in code this session:
   authoritative for HOW to use it.
 - `clone_repo` (row 13, P3a) and the gated `git` tool (row 15, P3b) are
   implemented + tested (2026-09-08).
+
+### Incident 2026-09-09 — WhatsApp song request (trace-1788970301803-8302u5)
+
+A father's WhatsApp ask — *"Write a song in hindi … for my daughter Kashvi"*
+(918800604222) — was routed to the **developer pipeline** (planner, "decide
+Language/Framework") and then died on a Groq 404 (`model default does not
+exist`). Three real defects, all fixed + tested:
+
+1. **Creative nouns missing from the NLU write rule** — `song` was not in
+   `matchWriteRule`'s artifact list, so the ask fell into `matchCreateRule`'s
+   `write a <article>` branch → intent `create` → developer pipeline. Fixed:
+   the artifact list now covers songs/lyrics/hymns/shayari/screenplay/etc.,
+   AND a creative-frame guard ("for my <relation>", "about <emotion>", "in
+   <language>") keeps any unknown creative noun ("write a lullaby") on the
+   chat path — the chat loop still exposes build tools, so a genuine coding
+   ask phrased this way still gets code. Coding asks ("write a test")
+   regression-guarded. Pinned with the EXACT live message in
+   `tests/nlu/actions.test.ts`.
+2. **`resolveWorkingModel` leaked the `'default'` sentinel to the API** —
+   when `listModels()` failed mid-pipeline, step 4 returned `explicit ??
+   'default'` and the literal string hit Groq → 404. Fixed: fall back to the
+   provider-catalog's curated REAL model (groq → `llama-3.3-70b-versatile`)
+   before ever considering the sentinel. This was the v1.80.0 invariant
+   ("resolveModel() never returns 'default'") eroding at a second exit.
+3. **Per-contact memory was thinner than designed** — the 7-day TTL existed,
+   but the store capped at 10 pairs (a day of messaging truncated) and only
+   chat turns were recorded (pipeline/help asks vanished, so later follow-ups
+   lost their antecedent). Fixed: retention raised to 250 pairs (7-day
+   horizon intact), the model sees a bounded last-12 window while CLI/retrieval
+   surfaces read the full thread, every AUTHORIZED inbound message is recorded
+   at handleInbound (after the sender/channel gates — unapproved senders still
+   leave no trace), and the chat path injects the prior thread minus the
+   current ask.
+
+Tests: `tests/nlu/actions.test.ts` (live-message pin),
+`tests/inference/model-validator.test.ts` (no-sentinel floor),
+`tests/gateway/chat-history.test.ts` (retention + recording contract) — 279
+gateway + 117 NLU + 57 validator tests green.
