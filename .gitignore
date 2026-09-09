@@ -39,6 +39,10 @@ issues/
 !docs/ASSESSMENT_CAPABILITY_GAPS.md
 !docs/IMPLEMENTATION_BRIEFS.md
 !docs/DASHBOARD_FIRST_PLAN.md
+# Machine-derived CLI surface (generated from the live commander tree by
+# scripts/generate-commands-surface.mjs, drift-guarded in CI) — a doc that is
+# CODE-adjacent build output, not hand-written prose.
+!docs/COMMANDS_SURFACE.md
 # The default skill registry (.agents/skills/) — SKILL.md files are CODE
 # artifacts served by the registry, not user docs. Generated + committed via
 # scripts/sync-hub-skills.mjs so the configured default registry resolves.
