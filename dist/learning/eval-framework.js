@@ -27,7 +27,7 @@
  * Results stored in: ~/.nuvira/memory/evals.json
  */
 import { mkdtempSync, writeFileSync, rmSync, existsSync, readFileSync, mkdirSync } from 'node:fs';
-import { envBuff, resolveNuviraHome } from '../config/paths.js';
+import { envBuff, resolveNuviraHome } from '../config/paths';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { execSync } from 'node:child_process';

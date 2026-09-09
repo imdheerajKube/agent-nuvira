@@ -2,6 +2,21 @@
 
 All notable changes to **Agent-Nuvira** are documented in this file.
 
+## v2.7.0 — feat: agentic capability assessment closure (engine routing, loop skill hints, DAG telemetry, model-level gates)
+
+- **Added: Engine-mode routing (loop vs pipeline)** — a deterministic `resolveEngine()` decides whether a goal runs on the interactive tool loop or the multi-agent pipeline, with mode-level routing config (`routing.engineMode`), a routing cache, and per-arm eval support (loop vs pipeline vs writer-tc).
+- **Added: Native tool-calls protocol** — `inference/native-tools.ts` closes the blocking protocol gap for providers that speak native tool calls; adapters (Anthropic, Gemini) honor it.
+- **Added: Loop-side skill match hints** — the chat and execute loops now consult the compiled SkillStore + hub catalog deterministically before every turn and inject the matched skill's methodology (bounded to ONE block, disabled-skill + activation gates honored, real-goal-evidence filter so a generic word can never trigger it).
+- **Added: Engine badge + per-turn tool-call telemetry in the dashboard DAG view** — `🔁 loop` / `⬡ pipeline` badge with router explanation, per-turn telemetry card (tool calls, errors, provider/model, bounded/cancelled chips), and engine tags on every timeline run.
+- **Added: Ambient project context + mechanical thread budget for the loop** — `loop-project-context.ts` and `trimThreadBudget` keep long loop turns grounded and bounded.
+- **Improved: Router constraint gates evaluate the MODEL, not the provider** — `minSpeed`/`minReasoning` are refined with model-id evidence before elimination, so a provider hosting both instant and heavyweight models is no longer dropped wholesale by per-model gates.
+- **Improved: Delivery-grade answer selection** — both loop exits honor longest-substantive output (a short closing line can no longer clobber the composed deliverable); think-only responses excluded.
+- **Added: Behavioral delivery evals** — real `runToolLoop` + `gateway_send` scenarios (compose/send, unknown-contact recovery, transport-failure retry, JSON fallback) lock in correct agent behavior for everyday messaging tasks.
+- **Improved: Engine stamps in eval reports and json-events** — parity across DAG, eval, and event telemetry surfaces.
+- **Fixed: Release-sync detector** now covers the `nuvira vX.Y.x` docs-header form (was `buff`-only); `context-pruner` pins `en-US` locale formatting (en-IN grouping broke output assertions).
+- **Shipped in the 2.6.x line since the last changelog entry:** `clone_repo` tool, gated `git` tool (diff cards + confirm-gated commit), `plan_todo` + `skill` chat tools, ToolCards step rendering, five first-party skills at depth (website-deploy, code-assessment, technical-roadmap, plan-create-track, test-strategy), npm-packaged skills registry that never silently 404s.
+- **Test suite: ~5,190 tests across 290+ files passing**
+
 ## v1.80.0 — feat: Model-first routing, tiered failover, 1-token warmup, tool-level modality routing
 
 - **Added: Model-first routing** — auto-router now scores INDIVIDUAL MODELS across ALL 22 providers (not provider-first). Each model scored on 6 dimensions: cost per million tokens, capability fit, health, quota availability, provider speed, verification status. Picks the BEST MODEL for the task, then finds which provider serves it cheapest.

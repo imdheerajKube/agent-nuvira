@@ -18,7 +18,7 @@
  *   - 'eval'          — `nuvira eval --routing` picks
  */
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
-import { envBuff, resolveNuviraHome } from '../config/paths.js';
+import { envBuff, resolveNuviraHome } from '../config/paths';
 import { join } from 'node:path';
 // ─── Storage ────────────────────────────────────────────────────────────────
 const DEFAULT_MEMORY_DIR = join(resolveNuviraHome(), 'memory');

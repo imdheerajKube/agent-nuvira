@@ -17,7 +17,7 @@
  * memory/history/repo vectors survive upgrades AND backend switches.
  */
 import { readFileSync, writeFileSync, existsSync, mkdirSync } from 'node:fs';
-import { envBuff, resolveNuviraHome } from '../config/paths.js';
+import { envBuff, resolveNuviraHome } from '../config/paths';
 import { join } from 'node:path';
 import { resolveBuffConfigPath } from '../config/paths.js';
 // ─── Constants ──────────────────────────────────────────────────────────────

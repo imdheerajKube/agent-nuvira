@@ -1,5 +1,5 @@
 import { createInterface } from 'node:readline';
-import { envBuff } from '../config/paths.js';
+import { envBuff } from '../config/paths';
 import { Command } from 'commander';
 import inquirer from 'inquirer';
 import { BaseCommand } from './commands.js';

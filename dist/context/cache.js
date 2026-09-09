@@ -1,5 +1,5 @@
 import { readFileSync, writeFileSync, mkdirSync, existsSync } from 'node:fs';
-import { envBuff } from '../config/paths.js';
+import { envBuff } from '../config/paths';
 import { join, dirname } from 'node:path';
 import { createHash } from 'node:crypto';
 import { resolveNuviraHome } from '../config/paths.js';

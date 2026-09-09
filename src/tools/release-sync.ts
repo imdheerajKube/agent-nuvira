@@ -91,11 +91,12 @@ export function findReleaseDrift(text: string, file: string, currentVersion: str
     }
   }
 
-  // Marker 3 — the docs "`buff` vX.Y.x" header (major.minor only). The real
-  // COMMANDS.md marker wraps `buff` in backticks, but tolerate both forms.
-  const cliRe = /`?buff`? v(\d+\.\d+)\.x/g;
+  // Marker 3 — the docs "`buff` vX.Y.x" / "`nuvira` vX.Y.x" CLI header
+  // (major.minor only). COMMANDS.md has used both binary names
+  // ("`nuvira` v1.74.x" observed live); tolerate backticked or bare.
+  const cliRe = /`?(buff|nuvira)`? v(\d+\.\d+)\.x/g;
   while ((m = cliRe.exec(text)) !== null) {
-    const found = m[1];
+    const found = m[2];
     if (found !== expectedMajorMinor) {
       gaps.push({
         file,

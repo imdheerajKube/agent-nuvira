@@ -102,7 +102,7 @@ export function registerAgent(options) {
  *
  * Removes the switch case and icon entry. If `className` is provided,
  * also removes the matching import statement using an exact pattern
- * (`import { className } from '....js';`) to avoid accidentally removing
+ * (`import { className } from '...';`) to avoid accidentally removing
  * built-in imports.
  */
 export function unregisterAgent(options) {

@@ -16,7 +16,7 @@
  * best-effort — a corrupt or missing checkpoint must never crash a run.
  */
 import { existsSync, mkdirSync, readFileSync, readdirSync, writeFileSync } from 'node:fs';
-import { envBuff, resolveNuviraHome } from '../config/paths.js';
+import { envBuff, resolveNuviraHome } from '../config/paths';
 import { join } from 'node:path';
 import { createHash } from 'node:crypto';
 // ─── Storage ────────────────────────────────────────────────────────────────

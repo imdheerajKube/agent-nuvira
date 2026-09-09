@@ -11,7 +11,7 @@
  * - Automatic cleanup of old entries
  */
 import { readFileSync, writeFileSync, existsSync, mkdirSync } from 'node:fs';
-import { resolveNuviraHome } from '../config/paths.js';
+import { resolveNuviraHome } from '../config/paths';
 import { join } from 'node:path';
 import { embed } from '../memory/embedder.js';
 import { getVectorStore } from '../memory/vector-store.js';
