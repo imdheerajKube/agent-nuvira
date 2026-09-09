@@ -14,7 +14,7 @@
  * - `nuvira execute "fix CI for PR #42" --auto-branch`
  */
 import { existsSync, writeFileSync, openSync } from 'node:fs';
-import { resolveNuviraHome } from '../../config/paths.js';
+import { resolveNuviraHome } from '../../config/paths';
 import { join } from 'node:path';
 import { homedir, tmpdir } from 'node:os';
 import { execSync, spawn } from 'node:child_process';

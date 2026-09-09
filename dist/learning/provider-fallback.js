@@ -19,7 +19,7 @@
  *   // Returns { response, provider: 'gemini', model: '...', attempts: 2 }
  */
 import { ProviderFactory } from '../inference/factory.js';
-import { envBuff } from '../config/paths.js';
+import { envBuff } from '../config/paths';
 import { getPluginRegistry } from '../plugins/registry.js';
 import { logger } from '../utils/logger.js';
 import { getModelRegistry } from './model-registry.js';

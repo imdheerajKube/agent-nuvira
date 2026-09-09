@@ -47,6 +47,18 @@ describe('findReleaseDrift — pure drift detection', () => {
     expect(gaps[0].expected).toBe('v1.74.x');
   });
 
+  it('flags a stale docs header in the nuvira binary-name form', () => {
+    // The live COMMANDS.md footer says `nuvira` v1.74.x — the detector must
+    // cover BOTH installed binary names, not just `buff`.
+    const text = '*Document generated from the live CLI surface (`nuvira` v1.74.x).*';
+    const gaps = findReleaseDrift(text, 'docs/COMMANDS.md', '2.7.0');
+    expect(gaps).toHaveLength(1);
+    expect(gaps[0].kind).toBe('cli-version-header');
+    expect(gaps[0].found).toBe('v1.74.x');
+    expect(gaps[0].expected).toBe('v2.7.x');
+    expect(gaps[0].line).toBe(1);
+  });
+
   it('no-op when the markers already match the published version', () => {
     const text = [
       '<p>Current release <strong>v1.74.0</strong>.</p>',
