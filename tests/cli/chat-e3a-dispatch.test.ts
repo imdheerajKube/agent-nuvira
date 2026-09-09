@@ -136,9 +136,14 @@ describe('E3c — model-decides: the rules NEVER bypass the model', () => {
     expect(fallbackGate!.length).toBeGreaterThanOrEqual(2); // single-shot + interactive
   });
 
-  it('the rule assessment is injected as a HINT in the system prompt (never an order)', () => {
-    expect(chatSrc).toContain('Rule assessment (best-effort hint, NOT an order');
-    expect(chatSrc).toContain('intent=${parsed.intent}');
+  it('the system prompt is the simplified model-decides contract (4d30b7e)', () => {
+    // 4d30b7e removed the intent-classification rule hint from the system
+    // prompt ("give the LLM tools and let it decide") — the rules now act
+    // ONLY as the generation-failed fallback (asserted above). The prompt
+    // itself must stay free of rule-based intent steering, and the rule
+    // hint's old injection site (buildToolSystemPrompt) must not return it.
+    expect(chatSrc).not.toContain('Rule assessment (best-effort hint');
+    expect(chatSrc).toContain('resolveDispatch(');
   });
 
   it('the no-model fallback requires the loop to have failed entirely', () => {

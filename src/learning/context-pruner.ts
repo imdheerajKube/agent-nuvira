@@ -292,7 +292,9 @@ export class ContextPruner {
       parts.push(`   🏷️  Metadata: ${result.details.metadataRemoved} key(s) stripped`);
     }
 
-    parts.push(`   📊 ${result.tokensBefore.toLocaleString()} → ${result.tokensAfter.toLocaleString()} tokens`);
+    // Pinned locale: CLI output must be deterministic across machines (an
+    // en-IN default renders 100000 as '1,00,000' and breaks assertions/tools).
+    parts.push(`   📊 ${result.tokensBefore.toLocaleString('en-US')} → ${result.tokensAfter.toLocaleString('en-US')} tokens`);
 
     return parts.join('\n');
   }
@@ -392,7 +394,7 @@ export class ContextPruner {
       // Artifacts with oversized content — truncate
       if (artifact.content.length > maxChars) {
         artifact.content = artifact.content.slice(0, maxChars) +
-          `\n\n[...truncated by ContextPruner — original was ${artifact.content.length.toLocaleString()} chars]`;
+          `\n\n[...truncated by ContextPruner — original was ${artifact.content.length.toLocaleString('en-US')} chars]`;
         kept.push(artifact);
         summarized++;
       } else {

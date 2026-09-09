@@ -29,12 +29,12 @@ remaining open rows at the end are the honest current gaps.
 | 9 | `web_search` — ground answers in current info | `web_search` (DuckDuckGo / SearXNG) | ✅ present before |
 | 10 | `read_url` — fetch a page's text | `read_page` (Jina / plain fetch) | ✅ present before |
 | 11 | `suggest_followups` — end with clickable next steps | `suggest_followups` (chat chips in GUI) | ✅ present before |
-| 12 | render tool calls as visible steps in the conversation | step cards (structured tool-call rendering) | 🔴 OPEN — P0.6 |
-| 13 | clone a repo into a temp dir and analyze it (assess other people's projects) | — | 🔴 OPEN — P3 (`clone_repo` tool, plan row 21) |
+| 12 | render tool calls as visible steps in the conversation | `ToolCards` in ChatPage (`chat-tool-card`: running → ok/error, args, result, durationMs, live mode) | ✅ CLOSED — P0.6 |
+| 13 | clone a repo into a temp dir and analyze it (assess other people's projects) | `clone_repo` (shallow depth-1, hashed ephemeral cache, argv-only git, `ctx.cwd` scoping) | ✅ CLOSED — P3a |
 | 14 | keep the website/docs in sync after each release (compare versions, fix gaps) | — | 🔴 OPEN — P5 (release-sync loop, plan row 23) |
-| 15 | `git diff` / `git commit` gated in the conversation | `run_terminal` can run git read-only; no dedicated commit tool | ⚠️ PARTIAL — P3 (gated git tool planned) |
-| 16 | skills: load reusable instruction packs | `skill` tool | 🔴 OPEN — skill-runner agent exists in the module registry, but there is **no `skill` tool in the chat registry** (verified: `MISSING skill`) |
-| 17 | plan-tracking: maintain a visible todo list across the turn | — | 🔴 OPEN — no `write_todos` equivalent in the registry (verified: `MISSING write_todos`) |
+| 15 | `git diff` / `git commit` gated in the conversation | `git` tool (status/log/diff/commit; structured `git:diff` event → 🔧 diff card; commit gated by `confirm:true` + accepted `files` subset; push/reset/clean structurally unexpressible) | ✅ CLOSED — P3b |
+| 16 | skills: load reusable instruction packs | `skill` tool in the chat registry (compiled store + hub catalog, deterministic loop-side hint too) | ✅ CLOSED — P0.8 + Addendum v4 Phase 3.2 |
+| 17 | plan-tracking: maintain a visible todo list across the turn | `plan_todo` tool (per-session `PlanStore`, GUI renders the live checklist; planner-loop guard in the loop) | ✅ CLOSED — P0.7 |
 | 18 | sub-agents: delegate to specialized agents (context-gatherer, reviewer, security, tester) | `delegate` tool + 18 built-in agents in `ModuleRegistry.createWithBuiltins()` | ✅ present before |
 | 19 | read documentation | `read_file` covers docs (README.md, docs/*.md) | ✅ CLOSED — P0.2 (was the biggest gap: `read_page` was web-only) |
 | 20 | publish releases | `publish` (bump/changelog/build/publish, IRREVERSIBLE gate) | ✅ present before |
@@ -57,19 +57,25 @@ loop: read → edit → run → ask → verify, all as tools, all GUI-rendered.
 
 **The remaining gaps (all verified missing in `registry.ts` today):**
 
-1. **P0.6 — step cards** (row 12). The tools exist and run, but the GUI shows
-   progress *lines*, not structured step cards (tool name, args, status,
-   result). This is the last piece of "the loop is *visible*".
-2. **P3 — `clone_repo`** (row 13, plan row 21). Copilot-style "clone into a
-   temp dir and assess" — the exact "assess other people's projects" ask.
-3. **P3 — gated git** (row 15). `git diff` works via `run_terminal` (read-only
-   class); `git commit` needs a dedicated gated tool with accept/reject UI.
-4. **P5 — release-sync** (row 14, plan row 23). After `publish`, diff
-   website/docs vs the new release and surface gaps.
-5. **NEW finding — `skill` tool** (row 16). The module registry HAS a
-   `SkillRunnerAgent` and the learning layer HAS `skills-registry.ts`, but the
-   **chat tool registry has no `skill` tool** — verified `MISSING skill`.
-   A user can't say "load the X skill" in the dashboard chat.
+1. **P3 — `clone_repo`** (row 13, plan row 21). Copilot-style "clone into a
+   temp dir and assess" — CLOSED (P3a): `clone_repo` + tests, exposed in the
+   'advanced' toolset.
+2. **P3 — gated git** (row 15). CLOSED (P3b): the `git` tool (diff card +
+   gated commit with accepted-files subset) + tests.
+3. **P0.6 — step cards** (row 12). CLOSED: ChatPage `ToolCards` renders every
+   tool call as a structured card (running/ok/error, args, result, duration).
+4. **P0.7/P0.8 — plan_todo + skill tools** (rows 16/17). CLOSED: both in the
+   registry, both toolset-exposed, both tested.
+5. **P5 — release-sync** (row 14, plan row 23). Still OPEN — the only matrix
+   gap left.
+
+> Status refresh 2026-09-08: rows 12, 13, 15, 16, 17 verified CLOSED in code
+> (registry.ts + ChatPage ToolCards + tests/tools/{clone-repo,git-tool}.test.ts,
+> 21 tests) and Round-2 rows 24/27 closed by P0.7/P0.8. The Round-2 table's
+> 🔴 verdicts for plan-tracking and skills are superseded by the matrix above.
+> Remaining OPEN: row 14 (release-sync, P5) and row 25/26 model-dependent
+> partials (mitigated by P3 fallback hints + parallel suggester, both in the
+> loop).
 6. **NEW finding — no plan/todo tracking** (row 17). I maintain a visible
    todo list across a multi-step task (`write_todos`); agent-nuvira's chat
    loop has no equivalent — a long task shows progress lines but no
@@ -346,6 +352,7 @@ All v4 phases are now implemented and tested. Per-phase landing:
   `src/web-dashboard/src/components/DAGView.test.tsx` +
   `PhaseTimeline.test.tsx` (Phase 4 blocks).
 
-**Remaining from the matrix above (unchanged by v4):** P3 `clone_repo` (row
-13), P3 gated git commit tool (row 15), P5 release-sync (row 14), P6a–P6e
-skill-onboarding items.
+**Remaining from the matrix above (unchanged by v4):** P5 release-sync (row
+14) is the only matrix gap left; P6a–P6e skill-onboarding items remain.
+`clone_repo` (row 13, P3a) and the gated `git` tool (row 15, P3b) are
+implemented + tested (2026-09-08).
