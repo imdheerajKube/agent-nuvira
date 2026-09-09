@@ -477,7 +477,8 @@ export class EvalCommand extends BaseCommand {
                 minute: '2-digit',
             });
             const s = r.summary;
-            console.log(`\n  ${i + 1}. ${date} — ${r.provider}/${r.model}`);
+            const arms = [...new Set(r.results.map((x) => x.metrics?.engine ?? 'pipeline'))].join('+');
+            console.log(`\n  ${i + 1}. ${date} — ${r.provider}/${r.model}  [engine: ${arms}]`);
             console.log(`     Score: ${(s.avgCompositeScore * 100).toFixed(1)}%  |  Completion: ${(s.completionRate * 100).toFixed(0)}%  |  Tests: ${(s.testPassRate * 100).toFixed(0)}%  |  Recovery: ${(s.recoveryRate * 100).toFixed(0)}%  |  Cost: $${s.totalCostUsd.toFixed(6)}`);
         }
         console.log(`\n  Show details: nuvira eval results --last`);

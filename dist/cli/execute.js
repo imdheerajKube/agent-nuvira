@@ -1256,6 +1256,7 @@ export class ExecuteCommand extends BaseCommand {
                     fileChanges: '',
                     runOutput: '',
                     error: '',
+                    engine: 'direct',
                     ts: Date.now(),
                 }) + '\n');
             }
@@ -1485,6 +1486,7 @@ export class ExecuteCommand extends BaseCommand {
                     fileChanges: result.fileChanges,
                     runOutput: result.runOutput,
                     error: result.error,
+                    engine: 'pipeline',
                     trajectoryId: result.trajectoryId,
                     reviewId: result.reviewId,
                     ts: Date.now(),

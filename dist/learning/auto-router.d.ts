@@ -186,13 +186,19 @@ export interface AutoRouterOptions {
      */
     maxCostUsd?: number;
     /**
-     * Hard constraint: max latency score floor. Providers with speed below
-     * this value (0–1) are ELIMINATED. (Higher speed = faster.)
+     * Hard constraint: max latency score floor. Providers whose SERVED MODEL
+     * has speed below this value (0–1) are ELIMINATED (not just scored lower).
+     * Judged on the model the router will actually serve (resolveModel — the
+     * configured pin or the task-resolved best model), refined by model-id
+     * evidence over the provider baseline. (Higher speed = faster.)
      */
     minSpeed?: number;
     /**
-     * Hard constraint: min reasoning score. Providers with reasoning below
-     * this value (0–1) are ELIMINATED.
+     * Hard constraint: min reasoning score. Providers whose SERVED MODEL has
+     * reasoning below this value (0–1) are ELIMINATED. Judged on the model the
+     * router will actually serve — a provider hosting both an 8b-instant and a
+     * 70b model is NOT eliminated because its baseline is weak: the task-resolved
+     * 70b model carries strong-model evidence and survives the gate.
      */
     minReasoning?: number;
     /**
@@ -528,6 +534,32 @@ export declare class AutoModelRouter {
     getCapabilities(provider: string): ProviderCapabilities;
     /** Update/override capability profiles (e.g., from config). */
     updateProfiles(profiles: Record<string, ProviderCapabilities>): void;
+    /**
+     * MODEL-LEVEL capability refinement (model-first-router parity): the
+     * provider's capability profile is a BASELINE — the model actually served
+     * may be much stronger or weaker. Refines the provider caps with evidence
+     * from the model id the router will serve for THIS task (resolveModel:
+     * the configured pin, or the task-resolved best model via pickBestModel).
+     *
+     * Evidence signals (all derived from the model id + registry measurements,
+     * no network):
+     *   - parameter-size hints: larger parameter counts (70b > 13b > 8b > 3b/1b)
+     *     raise reasoning; tiny param counts lower it;
+     *   - tier words: 'large'/'max'/'opus'/'70b'/… raise; 'mini'/'tiny'/'small'/
+     *     'instant'/'flash'/'nano'/'lite' lower reasoning (flash/instant also
+     *     RAISE speed — they are speed-optimized models);
+     *   - frontier-keyword families (gpt-4/5-class, claude-3/4-class,
+     *     gemini-2-class, deepseek-r1, llama-70b) raise reasoning;
+     *   - registry latency: a model measured much slower than its provider
+     *     baseline suggests a heavyweight (raises reasoning, lowers speed) and
+     *     vice versa.
+     *
+     * Deliberately CONSERVATIVE: adjustments clamp to ±0.35 and never cross the
+     * 0..1 bounds; an unknown model id returns the provider baseline unchanged
+     * (the gate then behaves exactly as before — no behavior change for
+     * unresolvable evidence). Deterministic: same inputs → same caps.
+     */
+    getModelCapabilities(provider: string, model: string | undefined): ProviderCapabilities;
     /**
      * Default candidate providers — DYNAMIC (Issue 001): every provider the user
      * has credentials for participates, not just the 6 built-ins. The candidate

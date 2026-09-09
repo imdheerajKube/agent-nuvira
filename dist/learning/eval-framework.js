@@ -1273,6 +1273,11 @@ export function formatEvalReport(run) {
     lines.push('═'.repeat(64));
     lines.push('');
     lines.push(`  Run ID: ${run.id}`);
+    // Addendum v4 Phase 0 — which engine arm(s) produced these results
+    // ('pipeline' | 'loop' | 'writer-tc'); results persisted before the arm
+    // split have no engine stamp and are shown as the default 'pipeline'.
+    const arms = [...new Set(run.results.map((r) => r.metrics.engine ?? 'pipeline'))];
+    lines.push(`  Engine: ${arms.join(' + ')}`);
     lines.push(`  Duration: ${elapsed}s`);
     lines.push(`  Composite score: ${(s.avgCompositeScore * 100).toFixed(1)}%`);
     lines.push('');
@@ -1301,8 +1306,8 @@ export function formatEvalReport(run) {
     lines.push('');
     lines.push('  ── Per-Task Results ──');
     lines.push(`  ${'─'.repeat(74)}`);
-    lines.push(`  ${'Task'.padEnd(26)} ${'Status'.padEnd(9)} ${'Score'.padEnd(8)} ${'FixTime'.padEnd(9)} ${'Deps'.padEnd(6)} ${'Rework'.padEnd(8)} ${'NewIdeas'.padEnd(9)} Stuck`);
-    lines.push(`  ${'─'.repeat(74)}`);
+    lines.push(`  ${'Task'.padEnd(26)} ${'Status'.padEnd(9)} ${'Score'.padEnd(8)} ${'FixTime'.padEnd(9)} ${'Deps'.padEnd(6)} ${'Rework'.padEnd(8)} ${'NewIdeas'.padEnd(9)} ${'Engine'.padEnd(9)} Stuck`);
+    lines.push(`  ${'─'.repeat(84)}`);
     for (const r of run.results) {
         const status = r.metrics.testPassed ? '✅' : '❌';
         const score = `${(r.compositeScore * 100).toFixed(0)}%`;
@@ -1314,10 +1319,11 @@ export function formatEvalReport(run) {
             : '—';
         const rework = computeReworkTurns(r.metrics) > 0 ? `${computeReworkTurns(r.metrics)}x` : '—';
         const ideas = r.metrics.alternativeApproaches > 0 ? `${r.metrics.alternativeApproaches}x` : '—';
+        const engine = (r.metrics.engine ?? 'pipeline').padEnd(9);
         const stuckMark = stuckIds.has(r.taskId) ? '🚧' : '—';
-        lines.push(`  ${r.taskId.padEnd(26)} ${status.padEnd(9)} ${score.padEnd(8)} ${fix.padEnd(9)} ${deps.padEnd(6)} ${rework.padEnd(8)} ${ideas.padEnd(9)} ${stuckMark}`);
+        lines.push(`  ${r.taskId.padEnd(26)} ${status.padEnd(9)} ${score.padEnd(8)} ${fix.padEnd(9)} ${deps.padEnd(6)} ${rework.padEnd(8)} ${ideas.padEnd(9)} ${engine} ${stuckMark}`);
     }
-    lines.push(`  ${'─'.repeat(74)}`);
+    lines.push(`  ${'─'.repeat(84)}`);
     lines.push('');
     return lines.join('\n');
 }

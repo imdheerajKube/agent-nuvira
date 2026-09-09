@@ -223,13 +223,19 @@ export interface AutoRouterOptions {
    */
   maxCostUsd?: number;
   /**
-   * Hard constraint: max latency score floor. Providers with speed below
-   * this value (0–1) are ELIMINATED. (Higher speed = faster.)
+   * Hard constraint: max latency score floor. Providers whose SERVED MODEL
+   * has speed below this value (0–1) are ELIMINATED (not just scored lower).
+   * Judged on the model the router will actually serve (resolveModel — the
+   * configured pin or the task-resolved best model), refined by model-id
+   * evidence over the provider baseline. (Higher speed = faster.)
    */
   minSpeed?: number;
   /**
-   * Hard constraint: min reasoning score. Providers with reasoning below
-   * this value (0–1) are ELIMINATED.
+   * Hard constraint: min reasoning score. Providers whose SERVED MODEL has
+   * reasoning below this value (0–1) are ELIMINATED. Judged on the model the
+   * router will actually serve — a provider hosting both an 8b-instant and a
+   * 70b model is NOT eliminated because its baseline is weak: the task-resolved
+   * 70b model carries strong-model evidence and survives the gate.
    */
   minReasoning?: number;
   /**
@@ -924,6 +930,90 @@ export class AutoModelRouter {
   }
 
   /**
+   * MODEL-LEVEL capability refinement (model-first-router parity): the
+   * provider's capability profile is a BASELINE — the model actually served
+   * may be much stronger or weaker. Refines the provider caps with evidence
+   * from the model id the router will serve for THIS task (resolveModel:
+   * the configured pin, or the task-resolved best model via pickBestModel).
+   *
+   * Evidence signals (all derived from the model id + registry measurements,
+   * no network):
+   *   - parameter-size hints: larger parameter counts (70b > 13b > 8b > 3b/1b)
+   *     raise reasoning; tiny param counts lower it;
+   *   - tier words: 'large'/'max'/'opus'/'70b'/… raise; 'mini'/'tiny'/'small'/
+   *     'instant'/'flash'/'nano'/'lite' lower reasoning (flash/instant also
+   *     RAISE speed — they are speed-optimized models);
+   *   - frontier-keyword families (gpt-4/5-class, claude-3/4-class,
+   *     gemini-2-class, deepseek-r1, llama-70b) raise reasoning;
+   *   - registry latency: a model measured much slower than its provider
+   *     baseline suggests a heavyweight (raises reasoning, lowers speed) and
+   *     vice versa.
+   *
+   * Deliberately CONSERVATIVE: adjustments clamp to ±0.35 and never cross the
+   * 0..1 bounds; an unknown model id returns the provider baseline unchanged
+   * (the gate then behaves exactly as before — no behavior change for
+   * unresolvable evidence). Deterministic: same inputs → same caps.
+   */
+  getModelCapabilities(provider: string, model: string | undefined): ProviderCapabilities {
+    const base = { ...this.getCapabilities(provider) };
+    if (!model || model === 'default') return base;
+    const m = model.toLowerCase();
+
+    let reasoningAdj = 0;
+    let speedAdj = 0;
+
+    // Parameter-size evidence.
+    const params = /(\d+(?:\.\d+)?)b(?:\b|-|$)/.exec(m);
+    if (params) {
+      const b = parseFloat(params[1]);
+      if (b >= 60) reasoningAdj += 0.25;
+      else if (b >= 30) reasoningAdj += 0.15;
+      else if (b >= 12) reasoningAdj += 0.05;
+      else if (b <= 4) {
+        reasoningAdj -= 0.2;
+        speedAdj += 0.15; // tiny models are fast
+      }
+    }
+
+    // Tier-word evidence.
+    const SLOW_TIER = /\b(large|max|opus|pro|ultra|frontier)\b/;
+    const FAST_TIER = /\b(mini|tiny|small|nano|lite|instant|flash|turbo|haiku)\b/;
+    if (SLOW_TIER.test(m)) reasoningAdj += 0.15;
+    if (FAST_TIER.test(m)) {
+      reasoningAdj -= 0.1;
+      speedAdj += 0.15;
+    }
+
+    // Frontier-family evidence (keyword match on the id).
+    if (/\b(gpt-[45]|o[134](?:-|$)|claude-[34]|gemini-2|deepseek-r1|qwen3|qwen-3)\b/.test(m) ||
+        /gpt-4|gpt-5|claude-3|claude-4|gemini-2/.test(m)) {
+      reasoningAdj += 0.2;
+    }
+
+    // Registry latency evidence: measured latency far from the provider
+    // baseline's implied speed. 0.5s ≈ fast tier, 10s+ ≈ heavyweight.
+    try {
+      const entry = getModelRegistry().getEntry(provider, model);
+      if (entry?.latencyMs) {
+        if (entry.latencyMs >= 10_000) {
+          reasoningAdj += 0.1;
+          speedAdj -= 0.1;
+        } else if (entry.latencyMs <= 800) {
+          speedAdj += 0.1;
+        }
+      }
+    } catch {
+      // Registry unavailable — id evidence only.
+    }
+
+    return {
+      ...base,
+      reasoning: Math.min(1, Math.max(0, base.reasoning + reasoningAdj)),
+      speed: Math.min(1, Math.max(0, base.speed + speedAdj)),
+    };
+  }
+
+  /**
    * Default candidate providers — DYNAMIC (Issue 001): every provider the user
    * has credentials for participates, not just the 6 built-ins. The candidate
    * pool is derived at runtime from the provider catalog + the config manager:
@@ -1338,6 +1428,8 @@ export class AutoModelRouter {
     // Mirrors ruflo's per-request maxCost/maxLatency/minQuality hard filters —
     // violating providers are dropped (not just scored lower). If constraints
     // eliminate everything, fall back to the full list rather than erroring.
+    // minSpeed/minReasoning are judged on the SERVED MODEL (model-level
+    // gating); maxCostUsd stays provider-typical (pricing is per provider).
     // ── Free/local-first gate (allowPaid: false) ───────────────────────────
     // Mirrors the assessment's "prefer free/local unless complexity demands":
     // when the user disallows paid providers, ELIMINATE paid ones (typical
@@ -1418,11 +1510,25 @@ export class AutoModelRouter {
             return false;
           }
         }
+        // minSpeed/minReasoning are judged on the MODEL the router will
+        // actually serve (resolveModel: configured pin or task-resolved best
+        // model), not the provider baseline — a provider hosting both an
+        // 8b-instant and a 70b model must NOT be eliminated for its baseline
+        // when the task resolves to the 70b (model-level gating, model-first-
+        // router parity). resolveModel never throws; wrapped anyway so a gate
+        // can never break routing.
+        let servedModel: string | undefined;
+        try {
+          servedModel = this.resolveModel(s.provider, agentType, configManager, taskDescription);
+        } catch {
+          servedModel = undefined;
+        }
+        const servedCaps = this.getModelCapabilities(s.provider, servedModel);
         if (options.minSpeed !== undefined) {
-          if (this.getCapabilities(s.provider).speed < options.minSpeed) return false;
+          if (servedCaps.speed < options.minSpeed) return false;
         }
         if (effectiveMinReasoning !== undefined) {
-          if (this.getCapabilities(s.provider).reasoning < effectiveMinReasoning) return false;
+          if (servedCaps.reasoning < effectiveMinReasoning) return false;
         }
         // ── M2.4 governance (non-PII rules) ─────────────────────────────
         // Provider allow/deny lists (admin policy beats credential filtering).

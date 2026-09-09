@@ -1737,17 +1737,77 @@ describe('AutoModelRouter.resolve governance (M2.4 admin policy)', () => {
   });
 
   it('mixed soft+hard elimination THROWS (a governance kill must never be resurrected by a soft fallback)', () => {
-    // minReasoning 0.9 eliminates most providers on its own (SOFT → benign
-    // fallback on its own), while the reasoning-≥0.9 survivors (openrouter,
-    // openai, anthropic, azure — the full catalog now) are killed by the
-    // ADMIN deny list. Falling back would resurrect a deny-listed provider,
-    // so the gate must throw.
-    const configManager = makeConfig({
-      governance: { denyProviders: ['openrouter', 'openai', 'anthropic', 'azure'] },
-    });
+    // MODEL-LEVEL GATING: minSpeed 0.95 is an impossible per-request ask —
+    // no served model (configured pin or curated default, refined by model-id
+    // evidence) meets it, so SOFT elimination removes everyone. The soft-only
+    // benign fallback would normally resurrect them, BUT here the survivor
+    // pool is then judged by the admin allow-list, which excludes everything
+    // (HARD) — falling back would resurrect an allow-list violator, so the
+    // gate must throw. (The old provider-baseline minReasoning gate no longer
+    // kills strong-tier providers here: model-level gating judges the served
+    // model, not the provider baseline.)
+    const configManager = makeConfig({ governance: { allowProviders: ['nonexistent-provider'] } });
     expect(() => new AutoModelRouter().resolve('writer', 'implement a login form', {
-      minReasoning: 0.9,
+      minSpeed: 0.95,
     }, configManager)).toThrow(/Governance/);
+  });
+
+  it('MODEL-LEVEL GATING — minReasoning judges the served model, not the provider baseline', () => {
+    // A provider whose catalog baseline reasoning is weak must NOT be
+    // eliminated when the model it will serve for this task carries
+    // strong-model evidence (a large-parameter frontier id). The configured
+    // pin is the served model the gate judges.
+    const pinStrong = makeConfig({}, { local: { model: 'qwen3-72b-instruct' } });
+    const survived = new AutoModelRouter().resolve('writer', 'implement a login form', {
+      minReasoning: 0.55, // local baseline is 0.30 — the OLD gate would kill it
+    }, pinStrong);
+    expect(survived.ranked.find((s) => s.provider === 'local')).toBeDefined();
+
+    // Conversely, the same provider pinned to a tiny fast model IS eliminated
+    // (the served model cannot meet the reasoning floor).
+    const pinWeak = makeConfig({}, { local: { model: 'llama3:1b' } });
+    const killed = new AutoModelRouter().resolve('writer', 'implement a login form', {
+      minReasoning: 0.55,
+    }, pinWeak);
+    expect(killed.ranked.find((s) => s.provider === 'local')).toBeUndefined();
+  });
+
+  it('MODEL-LEVEL GATING — minSpeed judges the served model (flash/instant raise speed)', () => {
+    // Gemini's baseline speed is 0.80. Pinned to a speed-optimized model id
+    // ('flash'/'lite' → +0.15 speed evidence) the SERVED speed 0.95 clears a
+    // 0.9 floor the baseline would fail; pinned to a heavyweight id (no speed
+    // evidence) it is eliminated. Same provider, same floor — only the model
+    // decides.
+    const pinFast = makeConfig({}, { gemini: { model: 'gemini-2.0-flash-lite' } });
+    const fastOk = new AutoModelRouter().resolve('writer', 'implement a login form', {
+      minSpeed: 0.9,
+    }, pinFast);
+    expect(fastOk.ranked.find((s) => s.provider === 'gemini')).toBeDefined();
+
+    const pinHeavy = makeConfig({}, { gemini: { model: 'deepseek-r1-large-max' } });
+    const heavyOut = new AutoModelRouter().resolve('writer', 'implement a login form', {
+      minSpeed: 0.9,
+    }, pinHeavy);
+    expect(heavyOut.ranked.find((s) => s.provider === 'gemini')).toBeUndefined();
+  });
+
+  it('getModelCapabilities refines from model-id evidence and clamps conservatively', () => {
+    const router = new AutoModelRouter();
+    const base = router.getCapabilities('local');
+    // 72b frontier-family id raises reasoning above the weak local baseline.
+    const strong = router.getModelCapabilities('local', 'qwen3-72b-instruct');
+    expect(strong.reasoning).toBeGreaterThan(base.reasoning);
+    expect(strong.reasoning).toBeLessThanOrEqual(1);
+    // 1b tiny id lowers reasoning and raises speed.
+    const tiny = router.getModelCapabilities('local', 'llama3:1b');
+    expect(tiny.reasoning).toBeLessThan(base.reasoning);
+    expect(tiny.speed).toBeGreaterThan(base.speed);
+    // Unknown/default ids return the baseline unchanged.
+    const unchanged = router.getModelCapabilities('local', 'default');
+    expect(unchanged.reasoning).toBe(base.reasoning);
+    expect(unchanged.speed).toBe(base.speed);
+    const unknownId = router.getModelCapabilities('local', 'totally-unknown-model');
+    expect(unknownId.reasoning).toBe(base.reasoning);
   });
 
   it('PII hard-gate THROWS when a PII task matches but every provider violates privacy (never serves a violator)', () => {

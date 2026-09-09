@@ -440,8 +440,15 @@ export async function runToolLoop(opts: ToolLoopOptions): Promise<ToolLoopResult
     // paragraph written AFTER the real answer, common when the model repeats
     // suggest_followups) must not clobber the full answer delivered in an
     // earlier step — otherwise the turn ends with the wrapper instead of the
-    // essay (the "where is the essay?" bug).
-    if (response.content.trim() && response.content.length >= lastContent.length) {
+    // essay (the "where is the essay?" bug). Think-only responses are NOT
+    // substantive — they are reasoning markers, never candidate answers —
+    // so they never enter lastContent (both loop exits prefer the longer
+    // of response.content / lastContent; a long <think>…</think> block
+    // must not beat the real answer).
+    const responseThinkOnly = deps.isThinkOnly
+      ? deps.isThinkOnly(response.content)
+      : isThinkOnlyResponse(response.content);
+    if (response.content.trim() && !responseThinkOnly && response.content.length >= lastContent.length) {
       lastContent = response.content;
     }
     const { toolCalls } = response;
@@ -455,8 +462,13 @@ export async function runToolLoop(opts: ToolLoopOptions): Promise<ToolLoopResult
         deps.onEvent?.('   🧠 model reasoning… (continuing)');
         continue;
       }
+      // S1 (both exits): the MOST SUBSTANTIVE content seen wins here too —
+      // a short closing step ("Sent it to her! ✅") with no tool calls must
+      // not clobber the deliverable (poem/essay) the model composed in an
+      // earlier step alongside a real tool call. Same rule as the
+      // suggest_followups exit below.
       return {
-        content: response.content,
+        content: response.content.length >= lastContent.length ? response.content : lastContent,
         followups,
         toolCalls: toolCallsRun,
         steps,
