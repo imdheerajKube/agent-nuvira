@@ -2509,10 +2509,23 @@ describe('Orchestrator — planner-repair model escalation', () => {
     const cm = new ConfigManager();
     const orch = new Orchestrator(cm);
 
-    // The escalated repair LLM — intercept and record that it was created.
-    const escalateSpy = vi
-      .spyOn(orch as any, 'createEscalatedPlannerLLM')
-      .mockReturnValue(vi.fn().mockResolvedValue('escalated plan response'));
+    // Router decisions: the baseline planner pick is weak (groq/llama), the
+    // ESCALATED re-route (task.escalated) is a genuinely stronger model
+    // (gemini/gemini-2.5-flash). Mock resolveAutoRoutingDecision (NOT
+    // createEscalatedPlannerLLM): the real escalation bookkeeping must run so
+    // the no-op guard can compare the escalated provider×model against the
+    // routed baseline — a mocked createEscalatedPlannerLLM never records the
+    // escalated decision, so every escalation looked like a no-op and the
+    // planner repair loop was skipped entirely.
+    const routerDecisions: Array<{ escalated: boolean; provider: string; model: string }> = [];
+    vi.spyOn(orch as any, 'resolveAutoRoutingDecision').mockImplementation((task: any) => {
+      const escalated = !!task.escalated;
+      const d = escalated
+        ? { provider: 'gemini', model: 'gemini-2.5-flash', complexity: 'moderate', score: 0.9, explanation: 'escalated to gemini', ranked: [], fallbackChain: [], taskProfile: {}, escalationApplied: false }
+        : { provider: 'groq', model: 'llama-3.3-70b-versatile', complexity: 'simple', score: 0.8, explanation: 'routed to groq', ranked: [], fallbackChain: [], taskProfile: {}, escalationApplied: false };
+      routerDecisions.push({ escalated, provider: d.provider, model: d.model });
+      return d;
+    });
 
     // Planner: first attempt returns garbage (the exact "no valid task steps"
     // failure). The repair re-prompt (stronger model) succeeds with a plan.
@@ -2547,8 +2560,12 @@ describe('Orchestrator — planner-repair model escalation', () => {
       model: 'auto',
     });
 
-    // Escalation happened exactly once — never re-prompted the same weak model.
-    expect(escalateSpy).toHaveBeenCalledTimes(1);
+    // Escalation happened exactly once and picked a STRONGER model — never
+    // re-prompted the same weak model.
+    const plannerEscalations = routerDecisions.filter((d) => d.escalated);
+    expect(plannerEscalations.length).toBe(1);
+    expect(plannerEscalations[0].provider).toBe('gemini');
+    expect(plannerEscalations[0].model).toBe('gemini-2.5-flash');
     // Planner ran twice: initial (failed) + repair with the escalated LLM.
     expect(mockPlannerExecute).toHaveBeenCalledTimes(2);
     // The goal was COMPLETED — repair iterations converge instead of dying.
