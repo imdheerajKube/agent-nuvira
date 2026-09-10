@@ -34,6 +34,7 @@ import type { ChannelAdapter, InboundMessage, MediaPayload } from './adapters.js
 import { DeliveryLedger, type DeliveryEntry } from './delivery.js';
 import { InboxLedger, type InboundDisposition } from './inbox.js';
 import { GatewayChatStore, CHAT_HISTORY_MAX_PAIRS } from './chat-store.js';
+import { looksLikeConfusedScaffoldingReply } from '../inference/tool-call-utils.js';
 import { logger } from '../utils/logger.js';
 import { existsSync, mkdirSync, writeFileSync, unlinkSync } from 'node:fs';
 import { join } from 'node:path';
@@ -786,6 +787,17 @@ export class GatewayRegistry {
       // deliberation, self-correction) as visible text. This cleans it up
       // so the user only sees the actual deliverable.
       content = stripGatewayReasoning(content);
+      // v1.8x audit — LAST-RESORT sender guard: a reply that is pure
+      // tool-contract confusion ("I'm sorry, but the provided example call to
+      // suggest_followups is incomplete…") is internal scaffolding leaking to
+      // a messaging-app sender. The loop now retries/failovers on it (see
+      // looksLikeConfusedScaffoldingReply), so reaching here means every
+      // candidate replied confusedly — send a helpful line instead of the
+      // raw meta-talk (the raw text stays in the inbox ledger + chat trace).
+      if (looksLikeConfusedScaffoldingReply(content)) {
+        logger.warn(`gateway: suppressing contract-confusion reply (${content.length} chars)`);
+        content = '🤖 Sorry — none of my language models could handle that request just now. Please try again in a moment, or rephrase it — you can also run `nuvira models` to check your model setup.';
+      }
       const fups = (answer.followups ?? [])
         .map((f) => (f && typeof f.prompt === 'string' && f.prompt.trim() ? f.prompt.trim() : ''))
         .filter(Boolean)

@@ -87,8 +87,8 @@ export interface ReasoningTrace {
   id: string;
   /** The original user goal. */
   goal: string;
-  /** Where the trace came from (orchestrator pipelines today). */
-  source: 'orchestrator' | 'chat';
+  /** Where the trace came from (orchestrator pipelines / chat turns / a gateway channel). */
+  source: 'orchestrator' | 'chat' | string;
   /** Epoch ms when the trace began. */
   startedAt: number;
   /** Epoch ms when the trace ended (undefined = still running). */
@@ -145,8 +145,8 @@ interface TraceFile {
 
 const DEFAULT_MEMORY_DIR = join(resolveNuviraHome(), 'memory');
 const CURRENT_VERSION = 1;
-/** Keep the most recent 20 traces. */
-const MAX_TRACES = 20;
+/** Keep the most recent traces (pipelines are chatty; chat turns now trace too). */
+export const MAX_TRACES = 60;
 /** Cap steps per trace at 200 (a long pipeline still fits). */
 const MAX_STEPS_PER_TRACE = 200;
 /** Preview lengths (keep trace files small). */
@@ -204,7 +204,7 @@ function sha256Prefix(input: string, length = 16): string {
  * Callers pass the id to withTraceCapture and endTrace.
  */
 export function beginTrace(
-  meta: { goal: string; source?: 'orchestrator' | 'chat'; provider?: string; model?: string },
+  meta: { goal: string; source?: 'orchestrator' | 'chat' | string; provider?: string; model?: string },
 ): string {
   const id = `trace-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
   const data = readFile();

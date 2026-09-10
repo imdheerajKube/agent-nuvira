@@ -23,6 +23,7 @@ const {
   getTraceStats,
   deleteTrace,
   withTraceCapture,
+  MAX_TRACES,
 } = await import('../../src/learning/reasoning-trace.js');
 
 // ─── Fixtures ───────────────────────────────────────────────────────────────
@@ -252,16 +253,18 @@ describe('reasoning-trace store', () => {
   });
 
   it('caps traces at the store maximum (keeps most recent)', () => {
-    // MAX_TRACES = 20 — create 25 and verify only the last 20 survive.
+    // MAX_TRACES = 60 (chat turns now trace too, so the cap was raised from
+    // 20) — create 65 and verify only the last 60 survive. NOTE: listTraces
+    // defaults to a 20-item page, so pass the full cap explicitly.
     const ids: string[] = [];
-    for (let i = 0; i < 25; i++) {
+    for (let i = 0; i < MAX_TRACES + 5; i++) {
       ids.push(beginTrace({ goal: `goal-${i}`, source: 'orchestrator' }));
     }
-    const traces = listTraces();
-    expect(traces).toHaveLength(20);
-    expect(traces[0].goal).toBe('goal-24');
-    expect(traces[19].goal).toBe('goal-5');
+    const traces = listTraces(MAX_TRACES);
+    expect(traces).toHaveLength(MAX_TRACES);
+    expect(traces[0].goal).toBe(`goal-${MAX_TRACES + 4}`);
+    expect(traces[MAX_TRACES - 1].goal).toBe('goal-5');
     expect(getTrace(ids[0])).toBeNull();
-    expect(getTrace(ids[24])).not.toBeNull();
+    expect(getTrace(ids[MAX_TRACES + 4])).not.toBeNull();
   });
 });

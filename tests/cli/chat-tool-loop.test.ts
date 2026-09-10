@@ -123,6 +123,39 @@ describe('ChatCommand — E3b tool-call turn', () => {
     expect(history[1].content).toBe('The plain answer.');
   });
 
+  it('records a reasoning trace for the chat turn (Trace-tab visibility)', async () => {
+    const { listTraces } = await import('../../src/learning/reasoning-trace.js');
+    const provider = {
+      name: 'Mock',
+      generateTools: vi.fn().mockResolvedValue({ content: 'The traced answer.', toolCalls: [] }),
+      generate: vi.fn().mockResolvedValue('unused'),
+      isAvailable: vi.fn().mockResolvedValue(true),
+      getInfo: () => 'Mock',
+      listModels: vi.fn().mockResolvedValue([]),
+    } as unknown as InferenceProvider;
+
+    const cmd = new ChatCommand() as unknown as { runChatAnswer: Function };
+    await cmd.runChatAnswer(
+      'write a song in hindi',
+      [],
+      { type: 'groq', provider, model: 'mock-model' },
+      {},
+      false,
+      { auto: false },
+    );
+
+    const traces = listTraces(5);
+    const chatTrace = traces.find((t) => t.source === 'chat');
+    expect(chatTrace).toBeDefined();
+    expect(chatTrace!.goal).toContain('write a song in hindi');
+    expect(chatTrace!.endedAt).toBeDefined();
+    expect(chatTrace!.steps.length).toBeGreaterThanOrEqual(1);
+    expect(chatTrace!.steps[0].agentType).toBe('chat');
+    expect(chatTrace!.steps[0].provider).toBe('groq');
+    expect(chatTrace!.steps[0].model).toBe('mock-model');
+    expect(chatTrace!.steps[0].success).toBe(true);
+  });
+
   it('does not hang when the model loops on tool calls (bounded steps)', async () => {
     const provider = {
       name: 'Mock',

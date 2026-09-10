@@ -9,6 +9,7 @@ import {
   salvageFailedGeneration,
   compactToolSchemas,
   buildJsonFallbackPrompt,
+  looksLikeConfusedScaffoldingReply,
 } from '../../src/inference/tool-call-utils.js';
 import type { ToolJsonSchema } from '../../src/tools/registry.js';
 
@@ -118,5 +119,36 @@ describe('buildJsonFallbackPrompt', () => {
     const prompt = buildJsonFallbackPrompt([{ role: 'user' as const, content: 'hi' }], []);
     expect(prompt).not.toContain('TOOL ARGUMENT SHAPES');
     expect(prompt).toBe('[User]\nhi');
+  });
+});
+
+describe('looksLikeConfusedScaffoldingReply', () => {
+  it('flags the live WhatsApp incident reply (contract meta-talk with an apologetic tone)', () => {
+    const confused = "I'm sorry, but the provided example call to suggest_followups is incomplete and not fully defined. Could you please provide more context or a specific action you'd like me to suggest?";
+    expect(looksLikeConfusedScaffoldingReply(confused)).toBe(true);
+  });
+
+  it('flags contract meta-talk even without naming a tool (tool/call/schema nouns + confusion tone)', () => {
+    expect(looksLikeConfusedScaffoldingReply('I am not sure what to do with the provided tool arguments — please provide more context.')).toBe(true);
+    expect(looksLikeConfusedScaffoldingReply("I can't fulfill this request — the given schema is invalid.")).toBe(true);
+  });
+
+  it('never flags a legitimate short answer that merely mentions a tool', () => {
+    expect(looksLikeConfusedScaffoldingReply('Sure — I can call suggest_followups once the song is written.')).toBe(false);
+    expect(looksLikeConfusedScaffoldingReply('Sorry for the delay — here is your song about Kashvi.')).toBe(false);
+  });
+
+  it('never flags real deliverables (long answers stay untouched)', () => {
+    const song = Array.from({ length: 12 }, (_, i) => `Line ${i + 1} of the song for my dear daughter.`).join('\n');
+    expect(looksLikeConfusedScaffoldingReply(song)).toBe(false);
+  });
+
+  it('never flags empty content', () => {
+    expect(looksLikeConfusedScaffoldingReply('')).toBe(false);
+    expect(looksLikeConfusedScaffoldingReply('   ')).toBe(false);
+  });
+
+  it('honors a custom tool list (execute loops)', () => {
+    expect(looksLikeConfusedScaffoldingReply("I'm sorry, but the provided example call to execute is incomplete.", ['execute'])).toBe(true);
   });
 });
