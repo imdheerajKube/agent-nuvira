@@ -189,6 +189,25 @@ describe('GatewayRegistry.handleInbound', () => {
     expect(adapter.sent[0].text).toContain('Working on it');
   });
 
+  it('suppresses a tool-contract-confusion reply and sends a retry hint instead (live WhatsApp incident)', async () => {
+    const confusedReply = "I'm sorry, but the provided example call to suggest_followups is incomplete and not fully defined. Could you please provide more context or a specific action you'd like me to suggest?";
+    const { registry, adapter } = mockRegistry({
+      streamEvents: false,
+      chatEngine: { answerOnce: async () => ({ content: confusedReply, followups: [] }) },
+    });
+    const reply = await registry.handleInbound({
+      platform: 'mock',
+      channelId: 'chan-1',
+      text: 'write a song in hindi for my daughter',
+    });
+    // The raw meta-talk NEVER reaches the sender.
+    expect(reply).not.toContain('suggest_followups');
+    expect(reply).not.toContain("I'm sorry, but the provided example");
+    // A helpful, human-language line goes instead.
+    expect(reply).toContain('none of my language models');
+    expect(adapter.sent.length).toBe(2); // working line + the replacement
+  });
+
   it('pipeline requests reply with the run result (fast-fail local model)', { timeout: 30000 }, async () => {
     const { registry, adapter } = mockRegistry();
     const reply = await registry.handleInbound({

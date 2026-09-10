@@ -15,10 +15,53 @@
  * - `buildJsonFallbackPrompt`  — the flattened thread + schema-shape section
  *   (the S2 injection), shared so chat and any other loop build identical
  *   prompts.
+ * - `looksLikeConfusedScaffoldingReply` — answer-quality resilience (v1.8x
+ *   audit): detect the model CONFUSEDLY TALKING ABOUT the tool contract
+ *   instead of executing it (e.g. apologizing about the example call). Such a
+ *   reply never throws, so failover never fired and the confusion was
+ *   delivered verbatim to a messaging-app sender. Callers treat it like a
+ *   generation failure: retry via failover, fall back to the raw reply.
  */
 
 import type { ToolMessage } from './interface.js';
 import type { FollowupSuggestion, ToolJsonSchema } from '../tools/registry.js';
+
+/**
+ * Answer-quality resilience — detect a model CONFUSEDLY TALKING ABOUT the
+ * tool contract instead of executing it.
+ *
+ * Motivation (live WhatsApp incident): a fallback-transport model answered
+ * "Write a song …" with "I'm sorry, but the provided example call to
+ * suggest_followups is incomplete … Could you please provide more context" —
+ * it had read the JSON-fallback prompt's `Example suggest_followups call:`
+ * section and responded to IT as if it were the user's request. The reply
+ * never throws, so the failover walk (which only fires on provider ERRORS)
+ * accepted it and the confusion was delivered verbatim to the sender.
+ *
+ * Detection is deliberately conservative — the whole reply must look like
+ * contract meta-talk, so a legitimate answer that merely MENTIONS a tool
+ * ("I can run build for you") is never flagged:
+ *  1. references the tool contract's own vocabulary (a known tool name or
+ *     a tool/JSON/call-form noun phrase), AND
+ *  2. is short (≤ 400 chars — real answers are longer), AND
+ *  3. carries an apologetic/confused meta-tone (sorry/cannot/provided/incomplete…).
+ *
+ * @param content  the model's visible reply text
+ * @param tools    tool names to look for (defaults to suggest_followups —
+ *                 the contract marker every turn ends with)
+ */
+export function looksLikeConfusedScaffoldingReply(
+  content: string,
+  tools: string[] = ['suggest_followups'],
+): boolean {
+  const t = (content || '').trim();
+  if (!t || t.length > 400) return false;
+  const mentionsContract = tools.some((name) => t.includes(name))
+    || /\b(?:tool|tools)\s+call\b|\b(?:provided|given)\s+(?:example|call|schema|argument|arguments|tool)\b|\bexample\s+call\b/i.test(t);
+  if (!mentionsContract) return false;
+  const metaTone = /\b(?:i'?m\s+)?(?:really\s+)?sorry|\bi\s+(?:cannot|can't)\b|\bcould\s+(?:you|u)\s+please\b|\bprovide\s+(?:more\s+)?(?:context|details|information|clarification)\b|\b(incomplete|invalid|malformed|unclear|not\s+fully\s+defined)\b/i;
+  return metaTone.test(t);
+}
 
 /**
  * S3 — salvage the model's generated content from a tool-calling 400.
