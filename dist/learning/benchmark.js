@@ -16,7 +16,7 @@
  * Results stored in: ~/.nuvira/memory/benchmarks.json
  */
 import { readFileSync, writeFileSync, existsSync, mkdirSync } from 'node:fs';
-import { envBuff, resolveNuviraHome } from '../config/paths';
+import { envBuff, resolveNuviraHome } from '../config/paths.js';
 import { join } from 'node:path';
 import { estimateTokens, calculateCost } from './cost-tracker.js';
 import { logger } from '../utils/logger.js';

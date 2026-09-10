@@ -14,7 +14,7 @@
  * Costs are configurable via config file for accuracy.
  */
 import { readFileSync, writeFileSync, existsSync, mkdirSync } from 'node:fs';
-import { resolveNuviraHome } from '../config/paths';
+import { resolveNuviraHome } from '../config/paths.js';
 import { join } from 'node:path';
 import { getQuotaLedger } from './quota-ledger.js';
 import { getModelRegistry } from './model-registry.js';

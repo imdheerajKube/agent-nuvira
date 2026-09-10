@@ -15,7 +15,7 @@
  *     → Type /exit to quit
  */
 import { createInterface } from 'node:readline';
-import { resolveNuviraHome } from '../config/paths';
+import { resolveNuviraHome } from '../config/paths.js';
 import { readFileSync, writeFileSync, existsSync, mkdirSync, readdirSync } from 'node:fs';
 import { join } from 'node:path';
 import { Command } from 'commander';

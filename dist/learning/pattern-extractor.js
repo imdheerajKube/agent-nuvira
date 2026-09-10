@@ -12,7 +12,7 @@
  * Patterns are stored in ~/.nuvira/memory/patterns.json
  */
 import { readFileSync, writeFileSync, existsSync, mkdirSync } from 'node:fs';
-import { envBuff, resolveNuviraHome } from '../config/paths';
+import { envBuff, resolveNuviraHome } from '../config/paths.js';
 import { join } from 'node:path';
 import { logger } from '../utils/logger.js';
 // ─── Constants ──────────────────────────────────────────────────────────────

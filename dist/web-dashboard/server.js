@@ -10,7 +10,7 @@
  * Opens at: http://localhost:3030
  */
 import { createServer } from 'node:http';
-import { envBuff } from '../config/paths';
+import { envBuff } from '../config/paths.js';
 import { createReadStream, readFileSync, existsSync, statSync, watch, mkdirSync, writeFileSync, readdirSync } from 'node:fs';
 import { join, extname, dirname, basename, resolve, isAbsolute } from 'node:path';
 import { fileURLToPath } from 'node:url';

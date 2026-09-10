@@ -9,7 +9,7 @@
  * using `nuvira execute "branch-automation <event>" --auto-branch`.
  */
 import { existsSync, readFileSync, writeFileSync, mkdirSync } from 'node:fs';
-import { resolveNuviraHome } from '../../config/paths';
+import { resolveNuviraHome } from '../../config/paths.js';
 import { join } from 'node:path';
 import { execSync } from 'node:child_process';
 import { logger } from '../../utils/logger.js';

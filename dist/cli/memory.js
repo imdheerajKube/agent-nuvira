@@ -24,7 +24,7 @@
  * - Detailed memory usage statistics
  */
 import { Command } from 'commander';
-import { envBuff } from '../config/paths';
+import { envBuff } from '../config/paths.js';
 import * as fs from 'fs';
 import { BaseCommand } from './commands.js';
 import { getTrajectoryStore } from '../memory/trajectory-store.js';
