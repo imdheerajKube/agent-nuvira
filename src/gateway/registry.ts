@@ -743,7 +743,13 @@ export class GatewayRegistry {
       // gateway: reuse THIS live registry so the model's gateway_send calls
       // deliver through the already-connected bridge — a fresh registry would
       // open a second WhatsApp connection and stall.
+      // Resolve the default provider/model from config so the chat engine
+      // uses the real model name (not 'unknown') in traces and telemetry.
+      const { type: providerType, config: providerConfig } =
+        this.configManager.getProviderConfig();
       const answer = await engine.answerOnce(prompt, {
+        provider: providerType,
+        model: providerConfig.model,
         history,
         // Inject prior conversation context so the model remembers previous
         // exchanges with this contact (follow-up questions, suggested followups).
