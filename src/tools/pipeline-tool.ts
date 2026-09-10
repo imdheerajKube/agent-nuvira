@@ -109,6 +109,19 @@ export async function runPipelineTool(
       };
     }
   }
+  // When the caller did NOT pin a provider/model, hand the decision to the
+  // AutoModelRouter — the product's core routing USP. Without this, an
+  // unpinned pipeline ran on the single configured default provider, so a
+  // rate-limited provider (Groq's free-tier TPM is shared across ALL its
+  // models — switching models within Groq can never escape it) became a
+  // 429 death spiral instead of failing over to the configured alternatives
+  // (observed live: trace-1788970301803-8302u5 — 14 steps / 112s of 429s on
+  // gpt-oss-120b/gpt-oss-20b while Gemini + OpenRouter sat unused).
+  // Auto-routing scores ALL configured providers per task (bandit + ML +
+  // model-first + quota-parking), sinks away from session-failed providers,
+  // and records real routing snapshots in the reasoning trace. An explicit
+  // provider/model still wins (matches the orchestrator's own rule).
+  const autoRoute = !provider && !model;
 
   // E3a + Session 20: intent transparency + D1 recall parity — parse ONCE,
   // resolve the REQUEST CONTRACT (understanding-first), seed the 🧠 card +
@@ -155,6 +168,7 @@ export async function runPipelineTool(
     const result = await orchestrator.execute(goal, {
       provider,
       model,
+      autoRouteModels: autoRoute,
       verbose: false,
       ...(liveBoard ? { spinner: liveBoard } : {}),
       taskIntentHint: opts.taskIntentHint ?? dispatch.taskIntentHint,

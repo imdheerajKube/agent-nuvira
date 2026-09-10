@@ -638,6 +638,17 @@ export class Orchestrator {
       // provider/model.
       this.maybeWarnWeakLocalModel(plannerRoutingDecision);
       this.routingDecisionOverrides.set('planner', plannerRoutingDecision);
+      // Record the planner's ROUTED provider×model so isNoOpEscalation can
+      // compare the escalated decision against it. The planner has NO taskId
+      // (the task-keyed map misses it), so without this the no-op guard read
+      // an undefined baseline and treated EVERY planner escalation as a no-op
+      // — silently killing the planner repair loop under auto routing since
+      // the guard landed (observed: deterministic test failure + dead
+      // assessment-P0 escalation path).
+      this.routedProviderModelByTask.set('planner', {
+        provider: plannerRoutingDecision.provider,
+        model: plannerRoutingDecision.model,
+      });
       vault.setMeta('routingContext', {
         taskProfile: plannerRoutingDecision.taskProfile,
         explanation: plannerRoutingDecision.explanation,
@@ -3187,9 +3198,12 @@ export class Orchestrator {
     }
     // Record the escalated provider×model so the repair path can detect a
     // no-op escalation (escalation landing back on the same weak model)
-    // without re-resolving the decision.
-    if (taskId) {
-      this.escalatedProviderModelByTask.set(taskId, { provider: decision.provider, model: decision.model });
+    // without re-resolving the decision. Keyed by task id; the planner (no
+    // task id) records under its agent type so its guard can compare against
+    // the routed baseline recorded at planning time.
+    const escalationKey = taskId ?? (agentType === 'planner' ? 'planner' : undefined);
+    if (escalationKey) {
+      this.escalatedProviderModelByTask.set(escalationKey, { provider: decision.provider, model: decision.model });
     }
     return this.createAutoRoutedLLMFromDecision(escalatedTask, options, decision);
   }
