@@ -12,7 +12,7 @@
  * File location: ~/.nuvira/memory/trajectories.json
  */
 import { readFileSync, writeFileSync, existsSync, mkdirSync } from 'node:fs';
-import { envBuff, resolveNuviraHome } from '../config/paths';
+import { envBuff, resolveNuviraHome } from '../config/paths.js';
 import { join } from 'node:path';
 import { getVectorStore } from './vector-store.js';
 import { embed, EMBEDDING_DIM } from './embedder.js';

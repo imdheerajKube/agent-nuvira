@@ -1,4 +1,4 @@
-import { Agent } from './agent';
+import { Agent } from './agent.js';
 import * as fs from 'fs';
 import * as path from 'path';
 /**

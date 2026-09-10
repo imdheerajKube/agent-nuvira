@@ -1,0 +1,1351 @@
+/**
+ * ModelRegistry — persistent Model Availability Registry ("known vs usable").
+ *
+ * The gap this closes: an API key being configured (`hasRequiredCredentials`)
+ * does NOT mean the models you route to actually work. OpenRouter lists 300+
+ * models even when credits can't buy most; Gemini paid models 403 without
+ * billing; NIM exposes entries that aren't served. Auto routing needs to know
+ * "which provider × model combos are VERIFIED to work right now" — fast.
+ *
+ * Design (enterprise-grade, zero hard dependencies):
+ * - A **canonical JSON mirror** (`~/.nuvira/memory/model-registry.json`) is the
+ *   source of truth for READS: loaded synchronously into memory once, so every
+ *   `isUsable()` / `getVerifiedModels()` is a sub-ms map lookup — model
+ *   selection never blocks on I/O or the network.
+ * - The same data is **mirrored to a VectorStore namespace** (`model-registry`)
+ *   whenever the vector stack is usable. The VectorStore ALREADY auto-tiers
+ *   native FAISS → pure-JS IVF → JSON, so "vector DB when available, JSON
+ *   otherwise" is satisfied with zero extra failure modes — the JSON mirror is
+ *   the guaranteed fallback that can never break.
+ * - **Writes are best-effort**: a failed save must never break routing or a
+ *   live LLM call (same contract as QuotaLedger / CostTracker).
+ *
+ * Three data feeds keep it fresh:
+ *   1. **Probe** (listModels)  → marks models `unverified`-listed
+ *   2. **Spot-check** (1-token generation) → `verified` (works) or `unavailable`
+ *      (403 permission / 404 / auth) — catches "key exists but model not
+ *      purchasable" up front
+ *   3. **Telemetry** (real usage) → success upgrades to `verified`, latency EMA
+ *      updates, auth failures mark unavailable, rate-limit failures park
+ *      quota without demoting (auto-recovery after the window)
+ *
+ * Quota integration: `syncQuota()` reads the QuotaLedger's router feed and
+ * applies `quotaParkedUntil` to every entry of a parked provider, so a token-
+ * exhausted provider is excluded predictively (same source the AutoModelRouter
+ * already consumes).
+ */
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { envBuff, resolveNuviraHome } from '../config/paths.js';
+import { join } from 'node:path';
+import { getVectorStore } from '../memory/vector-store.js';
+import { getQuotaLedger } from './quota-ledger.js';
+import { getEventBus, EventNames } from '../observability/event-bus.js';
+import { appendChainedRecordFast, rechainRecords, writeHeadState, headOfLines, } from '../enterprise/audit-chain.js';
+// ─── Storage ────────────────────────────────────────────────────────────────
+const DEFAULT_MEMORY_DIR = join(resolveNuviraHome(), 'memory');
+const CURRENT_VERSION = 1;
+/** Action-telemetry JSONL log — which action killed/verified which provider × model. */
+export const ACTION_LOG_FILENAME = 'model-registry-actions.jsonl';
+/** Keep at most this many action-log lines (rotated, newest kept). */
+export const MAX_ACTION_LOG_ENTRIES = 2000;
+/** Days of per-action daily buckets included in the telemetry timeline. */
+export const TIMELINE_DAYS = 14;
+/** VectorStore namespace that holds the enterprise mirror of the registry. */
+const VECTOR_NAMESPACE = 'model-registry';
+/** Cap on per-entry partialRate history samples (dashboard sparkline points). */
+export const MAX_PARTIAL_HISTORY = 16;
+/** Single vector id holding the whole registry snapshot (1-dim — we never search). */
+const VECTOR_SNAPSHOT_ID = 'snapshot';
+/** Verified entries older than this are demoted to `unverified` on prune. */
+export const DEFAULT_STALE_MS = 7 * 24 * 60 * 60 * 1000; // 7 days
+/**
+ * Minimum unavailable entries (with zero verified models) before a provider is
+ * deemed DEGRADED by `getDegradedProviders()` — the registry pre-filter that
+ * stops the router from scoring a provider it already knows is dead. ISSUE-002.
+ */
+export const DEGRADED_UNAVAILABLE_THRESHOLD = 3;
+function memoryDir() {
+    return envBuff('MEMORY_DIR') || DEFAULT_MEMORY_DIR;
+}
+function mirrorPath() {
+    return join(memoryDir(), 'model-registry.json');
+}
+function actionLogPath() {
+    return join(memoryDir(), ACTION_LOG_FILENAME);
+}
+function entryKey(provider, model) {
+    return `${provider}|${model || 'default'}`;
+}
+function emptyState() {
+    return { version: CURRENT_VERSION, entries: {}, updatedAt: Date.now() };
+}
+/**
+ * Aggregate raw action-telemetry entries into the per-action dashboard view.
+ * Pure + sync — the dashboard server calls this on the raw JSONL lines, and
+ * the registry uses it for `getActionTelemetry()`. Dedupes repeated writes of
+ * the same provider × model within an action (latest event wins) for the
+ * "verified/killed" chips; counts stay raw so volumes are honest.
+ */
+/**
+ * Parse a model-registry-actions.jsonl file into entries (skips corrupt lines).
+ * Shared by the registry's getActionTelemetry() AND the dashboard server, so
+ * both always agree on the parse — and on the filename (ACTION_LOG_FILENAME).
+ */
+export function readActionTelemetryFile(path) {
+    try {
+        if (!existsSync(path))
+            return [];
+        const entries = [];
+        for (const line of readFileSync(path, 'utf-8').split('\n')) {
+            if (!line.trim())
+                continue;
+            try {
+                const e = JSON.parse(line);
+                if (e && typeof e === 'object' && e.action && e.provider && e.model)
+                    entries.push(e);
+            }
+            catch {
+                // Skip corrupt lines.
+            }
+        }
+        return entries;
+    }
+    catch {
+        return [];
+    }
+}
+/**
+ * Daily buckets covering the last TIMELINE_DAYS days (ascending, oldest first).
+ * Pure — used by aggregateActionTelemetry so the dashboard gets a per-action
+ * verified/killed/transient series over time.
+ */
+export function buildActionTimeline(entries, days = TIMELINE_DAYS, now = Date.now()) {
+    const DAY_MS = 24 * 60 * 60 * 1000;
+    const startOfToday = new Date(now).setUTCHours(0, 0, 0, 0);
+    const buckets = new Map();
+    for (let i = days - 1; i >= 0; i--) {
+        const day = startOfToday - i * DAY_MS;
+        buckets.set(day, { verified: 0, killed: 0, transient: 0, partial: 0, events: new Map() });
+    }
+    for (const e of entries) {
+        const day = new Date(e.timestamp).setUTCHours(0, 0, 0, 0);
+        const bucket = buckets.get(day);
+        if (!bucket)
+            continue; // older than the window — totals still count it
+        if (e.outcome === 'verified')
+            bucket.verified++;
+        else if (e.outcome === 'unavailable')
+            bucket.killed++;
+        else if (e.outcome === 'partial')
+            bucket.partial++;
+        else
+            bucket.transient++;
+        // Carry the event so the scrubbable chart can render that day's chips —
+        // deduped per provider × model × outcome (latest wins) so the dashboard
+        // payload stays bounded as usage grows. Chips are one-per-combo-per-day
+        // anyway; the COUNTS above stay raw and honest.
+        bucket.events.set(`${e.provider}|${e.model}|${e.outcome}`, {
+            provider: e.provider,
+            model: e.model,
+            outcome: e.outcome,
+            errorType: e.errorType,
+            at: e.timestamp,
+            streamedChunks: e.outcome === 'partial' ? e.streamedChunks : undefined,
+        });
+    }
+    return [...buckets.entries()]
+        .sort((a, b) => a[0] - b[0])
+        .map(([day, counts]) => ({
+        day,
+        verified: counts.verified,
+        killed: counts.killed,
+        transient: counts.transient,
+        partial: counts.partial,
+        events: [...counts.events.values()],
+    }));
+}
+export function aggregateActionTelemetry(entries) {
+    const byAction = new Map();
+    for (const e of entries) {
+        const list = byAction.get(e.action);
+        if (list)
+            list.push(e);
+        else
+            byAction.set(e.action, [e]);
+    }
+    const actions = [...byAction.entries()]
+        .map(([action, evs]) => {
+        const verifiedEvents = evs.filter((e) => e.outcome === 'verified');
+        const killedEvents = evs.filter((e) => e.outcome === 'unavailable');
+        const transientEvents = evs.filter((e) => e.outcome === 'error');
+        const partialEvents = evs.filter((e) => e.outcome === 'partial');
+        // Latest event per provider|model (a success/failure repeats per call).
+        const latest = (list) => {
+            const map = new Map();
+            for (const e of list)
+                map.set(`${e.provider}|${e.model}`, e);
+            return [...map.values()].sort((a, b) => b.timestamp - a.timestamp);
+        };
+        return {
+            action,
+            verified: verifiedEvents.length,
+            killed: killedEvents.length,
+            transient: transientEvents.length,
+            partial: partialEvents.length,
+            verifiedModels: latest(verifiedEvents).map((e) => ({ provider: e.provider, model: e.model, at: e.timestamp })),
+            killedModels: latest(killedEvents).map((e) => ({ provider: e.provider, model: e.model, reason: e.errorType, at: e.timestamp })),
+            partialModels: latest(partialEvents).map((e) => ({ provider: e.provider, model: e.model, reason: e.errorType, at: e.timestamp, streamedChunks: e.streamedChunks })),
+            timeline: buildActionTimeline(evs),
+        };
+    })
+        .sort((a, b) => a.action.localeCompare(b.action));
+    return {
+        enabled: actions.length > 0,
+        total: entries.length,
+        updatedAt: Date.now(),
+        actions,
+    };
+}
+// ─── ModelRegistry ──────────────────────────────────────────────────────────
+/**
+ * Persistent model availability registry with sub-ms synchronous reads.
+ *
+ * Reads hit an in-memory snapshot (loaded synchronously from the JSON mirror
+ * at construction). Writes update the snapshot, persist to the JSON mirror
+ * synchronously (best-effort), then mirror to the VectorStore namespace
+ * asynchronously (best-effort) when the vector stack is available.
+ */
+export class ModelRegistry {
+    data;
+    /** Cached VectorStore for the enterprise mirror (null until first mirror). */
+    vectorStore = null;
+    /** Whether the vector mirror has been confirmed usable. */
+    vectorMirrored = false;
+    /** Lines in the action-telemetry JSONL log (-1 = not yet counted). */
+    actionLogCount = -1;
+    constructor() {
+        this.data = this.loadMirror();
+    }
+    // ─── Synchronous read path (lightning fast — no I/O, no network) ─────────
+    /**
+     * Is `provider/model` usable RIGHT NOW?
+     * True when the entry is verified, not quota-parked, and not stale.
+     * Sub-ms: in-memory lookup only.
+     */
+    isUsable(provider, model, now = Date.now()) {
+        const e = this.data.entries[entryKey(provider, model)];
+        if (!e)
+            return false;
+        if (e.status !== 'verified')
+            return false;
+        // FIX (Gemini parking bug): verified models skip provider-level parking.
+        // A verified model has proven it works — blanket-parking it because a
+        // DIFFERENT model in the same provider hit a rate limit is the root cause
+        // of providers being blocked despite having working models. Only model-
+        // specific parking (from recordCall, providerParked=false) blocks a
+        // verified model. Provider-level parking (providerParked=true or undefined
+        // for old data) is skipped for verified models.
+        if (e.quotaParkedUntil > now && e.providerParked === false)
+            return false;
+        if (now - e.lastVerifiedAt > DEFAULT_STALE_MS)
+            return false;
+        return true;
+    }
+    /**
+     * All verified, usable models for a provider (best first: latest verified).
+     * Sync — the fast path for routing and the model picker.
+     */
+    getVerifiedModels(provider, now = Date.now()) {
+        return Object.values(this.data.entries)
+            .filter((e) => e.provider === provider && this.isUsable(provider, e.model, now))
+            .sort((a, b) => b.lastVerifiedAt - a.lastVerifiedAt)
+            .map((e) => e.model);
+    }
+    /**
+     * ALL tracked models for a provider (verified + unverified + unavailable).
+     * Returns full ModelRegistryEntry objects so callers can inspect context
+     * windows, latency, error rates, etc. Sync.
+     */
+    getAllModelsForProvider(provider) {
+        return Object.values(this.data.entries).filter((e) => e.provider === provider);
+    }
+    /** Providers that currently have at least one verified, usable model. Sync. */
+    getUsableProviders(now = Date.now()) {
+        const providers = new Set();
+        for (const e of Object.values(this.data.entries)) {
+            if (this.isUsable(e.provider, e.model, now))
+                providers.add(e.provider);
+        }
+        return [...providers];
+    }
+    /**
+     * Providers the registry has DEFINITIVELY ruled out right now: every tracked
+     * model for the provider is `unavailable` and/or quota-parked, with no
+     * verified usable alternative. Sync + sub-ms (in-memory only) — the
+     * predictive skip that lets routing avoid a provider the registry already
+     * knows is dead instead of failing into it reactively.
+     *
+     * Providers with ONLY `unverified` entries are NOT blocked — "not yet
+     * probed" is not "dead" — and a provider with any verified model stays
+     * routable (model repair will pick the working one).
+     */
+    getBlockedProviders(now = Date.now()) {
+        const byProvider = new Map();
+        for (const e of Object.values(this.data.entries)) {
+            const list = byProvider.get(e.provider);
+            if (list)
+                list.push(e);
+            else
+                byProvider.set(e.provider, [e]);
+        }
+        const blocked = [];
+        for (const [provider, entries] of byProvider) {
+            if (entries.some((e) => this.isUsable(provider, e.model, now)))
+                continue;
+            // All tracked models unusable — block only if at least one is a
+            // DEFINITIVE no (unavailable or quota-parked), never on unverified alone.
+            const definitive = entries.some((e) => e.status === 'unavailable' || e.quotaParkedUntil > now);
+            if (definitive)
+                blocked.push(provider);
+        }
+        return blocked;
+    }
+    /**
+     * Providers the registry has effectively written off: ZERO verified models
+     * AND at least DEGRADED_UNAVAILABLE_THRESHOLD (3) unavailable entries.
+     *
+     * Stronger than `getBlockedProviders()` (which requires EVERY tracked model
+     * to be unusable): a provider that has never verified a single model while
+     * accumulating ≥3 definitive failures is a dead candidate — it should not
+     * be scored, because the registry already knows it will fail. It stays
+     * excluded until a re-probe / spot-check verifies something or the user
+     * unblocks it (unblockProvider demotes to unverified, which no longer
+     * meets the degraded bar). Sync + sub-ms.
+     */
+    getDegradedProviders(now = Date.now()) {
+        const byProvider = new Map();
+        for (const e of Object.values(this.data.entries)) {
+            const list = byProvider.get(e.provider);
+            if (list)
+                list.push(e);
+            else
+                byProvider.set(e.provider, [e]);
+        }
+        const degraded = [];
+        for (const [provider, entries] of byProvider) {
+            if (entries.some((e) => this.isUsable(provider, e.model, now)))
+                continue;
+            const unavailable = entries.filter((e) => e.status === 'unavailable').length;
+            if (unavailable >= DEGRADED_UNAVAILABLE_THRESHOLD)
+                degraded.push(provider);
+        }
+        return degraded;
+    }
+    /**
+     * Per-provider availability snapshot for a provider (sync) — the raw counts
+     * the router and `models explain` cite when a provider is excluded by
+     * registry data ("openrouter excluded — 0 verified, 6 unavailable").
+     */
+    getProviderStats(provider, now = Date.now()) {
+        let verified = 0;
+        let unverified = 0;
+        let unavailable = 0;
+        let parked = 0;
+        for (const e of Object.values(this.data.entries)) {
+            if (e.provider !== provider)
+                continue;
+            if (e.quotaParkedUntil > now)
+                parked++;
+            else if (e.status === 'verified')
+                verified++;
+            else if (e.status === 'unavailable')
+                unavailable++;
+            else
+                unverified++;
+        }
+        return { verified, unverified, unavailable, parked };
+    }
+    /** Get the raw entry (for diagnostics). Sync. */
+    getEntry(provider, model) {
+        return this.data.entries[entryKey(provider, model)];
+    }
+    /**
+     * Resolve a WORKING model for a provider, preferring a curated known-good
+     * verified model. Sync — used by the model validator's fast path.
+     *
+     * @param preferred Ordered candidate models (curated defaults first).
+     * @returns The first candidate that is verified+usable, else undefined.
+     */
+    resolveVerifiedModel(provider, preferred, now = Date.now()) {
+        for (const m of preferred) {
+            if (this.isUsable(provider, m, now))
+                return m;
+        }
+        // No curated pick usable — any verified model works.
+        const verified = this.getVerifiedModels(provider, now);
+        return verified.length > 0 ? verified[0] : undefined;
+    }
+    // ─── Writes (probe / spot-check / telemetry) ──────────────────────────────
+    /**
+     * P4 M4.4: append the entry's current partialRate to its history (newest
+     * last, capped at MAX_PARTIAL_HISTORY). Callers invoke this right after a
+     * partialRate mutation so the dashboard sparkline sees the exact trajectory.
+     */
+    pushPartialHistory(entry, now = Date.now()) {
+        const rate = entry.partialRate || 0;
+        const history = entry.partialHistory ? [...entry.partialHistory] : [];
+        history.push({ t: now, rate });
+        entry.partialHistory = history.slice(-MAX_PARTIAL_HISTORY);
+    }
+    /**
+     * listModels probe: mark the model as seen (unverified unless already
+     * verified). Does NOT downgrade a verified entry — real verification wins.
+     * Accepts either bare ids (legacy callers) or full model descriptors; when
+     * a descriptor carries the provider-advertised context window, it is
+     * recorded so the router's context preflight can use the LIVE value.
+     */
+    markListed(provider, models) {
+        const now = Date.now();
+        for (const raw of models) {
+            const model = typeof raw === 'string' ? raw : raw.id;
+            const contextWindowTokens = typeof raw === 'string' ? undefined : raw.contextWindowTokens;
+            const key = entryKey(provider, model);
+            const existing = this.data.entries[key];
+            if (existing && existing.status === 'verified') {
+                existing.lastProbedAt = now;
+                if (contextWindowTokens && contextWindowTokens > 0)
+                    existing.contextWindowTokens = contextWindowTokens;
+                continue;
+            }
+            this.data.entries[key] = {
+                provider,
+                model,
+                status: 'unverified',
+                lastVerifiedAt: existing?.lastVerifiedAt || 0,
+                lastProbedAt: now,
+                lastUsedAt: existing?.lastUsedAt || 0,
+                latencyMs: existing?.latencyMs,
+                contextWindowTokens: contextWindowTokens && contextWindowTokens > 0
+                    ? contextWindowTokens
+                    : existing?.contextWindowTokens,
+                errorRate: existing?.errorRate || 0,
+                // P4 M4.4: a re-list never wipes the flakiness signal (same contract
+                // as markVerified — availability and reliability are separate axes).
+                partialRate: existing?.partialRate,
+                partialHistory: existing?.partialHistory,
+                quotaParkedUntil: existing?.quotaParkedUntil || 0,
+                source: 'probe',
+                lastError: existing?.lastError,
+            };
+        }
+        this.persist();
+    }
+    /**
+     * Mark a model verified (spot-check success or real telemetry success).
+     * Optionally records measured latency (rolling EMA).
+     *
+     * A genuine verification CLEARS any quota park: a real 1-token spot-check or
+     * a real usage success is direct evidence the provider serves requests again,
+     * so a stale learned park (e.g. an hour-aligned rate-limit park) must not
+     * keep a recovered provider blocked. This is safe because `syncQuota()`
+     * re-applies genuine ledger parks on the next routing read — a provider that
+     * is REALLY still quota-exhausted gets re-parked immediately, while one that
+     * merely had a stale learned park stays routable (the recovery loop).
+     *
+     * Asymmetry note: parks set by the REGISTRY's own rate-limit telemetry
+     * (`recordCall(ok=false, 'rate-limit')`) live only here and are NOT re-applied
+     * by syncQuota (which mirrors ledger cooldowns). Clearing them on any
+     * successful verification is deliberate and self-correcting: a probe or real
+     * call that SUCCEEDED is proof the limit lifted; if the limit persists, the
+     * next real call fails again and re-parks.
+     */
+    markVerified(provider, model, source, latencyMs, action, costUsd, callId) {
+        const now = Date.now();
+        const key = entryKey(provider, model);
+        const existing = this.data.entries[key];
+        const prevLatency = existing?.latencyMs;
+        this.data.entries[key] = {
+            provider,
+            model,
+            status: 'verified',
+            lastVerifiedAt: now,
+            lastProbedAt: existing?.lastProbedAt || now,
+            lastUsedAt: existing?.lastUsedAt || now,
+            // EMA (α=0.3): smooth noisy spot-checks but stay responsive to regressions.
+            latencyMs: latencyMs !== undefined
+                ? prevLatency !== undefined
+                    ? Math.round(0.3 * latencyMs + 0.7 * prevLatency)
+                    : Math.round(latencyMs)
+                : prevLatency,
+            errorRate: existing?.errorRate || 0,
+            // The provider-advertised context window survives a re-verify (it is
+            // model metadata, independent of the verify event).
+            contextWindowTokens: existing?.contextWindowTokens,
+            // Verified ⇒ serving right now ⇒ not parked (syncQuota re-parks real exhaustion).
+            quotaParkedUntil: 0,
+            source,
+            lastError: existing?.lastError,
+            // M2.2: measured wire-token EMAs survive a re-verify (they are
+            // model-level usage data, independent of the verify event).
+            measuredInputTokens: existing?.measuredInputTokens,
+            measuredOutputTokens: existing?.measuredOutputTokens,
+            measuredSamples: existing?.measuredSamples,
+            // P4 M4.4: mid-stream flakiness survives a re-verify too — a success
+            // DECAYS it (recordCall) rather than wiping it, so a single clean call
+            // can't erase a flaky streak (that's the whole point of the EMA). The
+            // trajectory (partialHistory) survives alongside it.
+            partialRate: existing?.partialRate,
+            partialHistory: existing?.partialHistory,
+        };
+        this.persist();
+        // A GENUINE promotion (was not verified → now verified) is a state change
+        // the agent should know about — real usage just proved the model works.
+        // Emitting only on transitions (not every success) avoids event storms.
+        if (existing?.status !== 'verified') {
+            this.emitUpdated([provider], `verified: ${model}`, source);
+        }
+        // Action-attributed telemetry: which action proved this provider × model
+        // works (dashboard "learned from real usage" panel). Only when the caller
+        // passed an action — anonymous writes (e.g. the cost-tracker mirror) update
+        // health but don't add panel rows.
+        if (action) {
+            this.appendActionLog({ timestamp: now, action, provider, model, outcome: 'verified', latencyMs, costUsd, callId });
+        }
+    }
+    /**
+     * M2.2: record EXACT tokens from a provider-reported usage payload. The
+     * per-call token EMAs (α=0.3, matching latency) feed getMeasuredUsage(),
+     * which Auto routing uses to replace TYPICAL-token estimates with measured
+     * cost. Best-effort — never throws.
+     */
+    recordMeasuredUsage(provider, model, inputTokens, outputTokens) {
+        const now = Date.now();
+        const key = entryKey(provider, model);
+        const existing = this.data.entries[key];
+        const base = existing || {
+            provider,
+            model,
+            status: 'unverified',
+            lastVerifiedAt: 0,
+            lastProbedAt: now,
+            lastUsedAt: now,
+            errorRate: 0,
+            quotaParkedUntil: 0,
+            source: 'telemetry',
+        };
+        const prevIn = base.measuredInputTokens;
+        const prevOut = base.measuredOutputTokens;
+        base.measuredInputTokens = prevIn !== undefined
+            ? Math.round(0.3 * inputTokens + 0.7 * prevIn)
+            : inputTokens;
+        base.measuredOutputTokens = prevOut !== undefined
+            ? Math.round(0.3 * outputTokens + 0.7 * prevOut)
+            : outputTokens;
+        base.measuredSamples = (base.measuredSamples || 0) + 1;
+        base.lastUsedAt = now;
+        this.data.entries[key] = base;
+        this.persist();
+    }
+    /**
+     * M2.2: aggregated measured token profile for a provider (sample-weighted
+     * average across its tracked models). Returns undefined when no measured
+     * usage exists → callers fall back to TYPICAL-token estimates (flagged).
+     * Sync + sub-ms.
+     */
+    getMeasuredUsage(provider) {
+        let totalIn = 0;
+        let totalOut = 0;
+        let samples = 0;
+        for (const e of Object.values(this.data.entries)) {
+            if (e.provider !== provider || !e.measuredSamples)
+                continue;
+            totalIn += (e.measuredInputTokens || 0) * e.measuredSamples;
+            totalOut += (e.measuredOutputTokens || 0) * e.measuredSamples;
+            samples += e.measuredSamples;
+        }
+        if (samples === 0)
+            return undefined;
+        return {
+            inputTokens: Math.round(totalIn / samples),
+            outputTokens: Math.round(totalOut / samples),
+            samples,
+        };
+    }
+    /**
+     * Mark a model unavailable (spot-check auth/403/404, or telemetry failure).
+     * Optionally applies a quota park (e.g. rate-limit).
+     */
+    markUnavailable(provider, model, reason, source, quotaParkedUntil = 0, action) {
+        const now = Date.now();
+        const key = entryKey(provider, model);
+        const existing = this.data.entries[key];
+        this.data.entries[key] = {
+            provider,
+            model,
+            status: 'unavailable',
+            lastVerifiedAt: existing?.lastVerifiedAt || 0,
+            lastProbedAt: existing?.lastProbedAt || now,
+            lastUsedAt: existing?.lastUsedAt || 0,
+            latencyMs: existing?.latencyMs,
+            errorRate: existing?.errorRate || 0,
+            // P4 M4.4: an availability flip never resets reliability — the flaky
+            // streak (and its trajectory) survives an auth/403 mark, same contract
+            // as markVerified/markListed (a later success decays it, never a wipe).
+            partialRate: existing?.partialRate,
+            partialHistory: existing?.partialHistory,
+            contextWindowTokens: existing?.contextWindowTokens,
+            quotaParkedUntil: Math.max(existing?.quotaParkedUntil || 0, quotaParkedUntil),
+            source,
+            lastError: reason,
+            tokensConsumed: existing?.tokensConsumed,
+            requests: existing?.requests,
+            resetsInMs: existing?.resetsInMs,
+            remainingTokens: existing?.remainingTokens,
+        };
+        this.persist();
+        this.emitUpdated([provider], `unavailable: ${reason}`, source);
+        if (action) {
+            this.appendActionLog({
+                timestamp: now,
+                action,
+                provider,
+                model,
+                outcome: 'unavailable',
+                errorType: reason.slice(0, 120),
+            });
+        }
+    }
+    /** Apply the quota ledger's parked-provider status to a provider's entries.
+     *
+     * FIX: Only park models that are NOT verified. A verified model has proven
+     * it works — blanket-parking it because a DIFFERENT model in the same
+     * provider hit a rate limit blocks working models unnecessarily (the
+     * "Gemini parking bug"). The per-model parking from recordCall() already
+     * handles the specific rate-limited model.
+     */
+    parkProvider(provider, until) {
+        const now = Date.now();
+        let touched = false;
+        for (const e of Object.values(this.data.entries)) {
+            if (e.provider === provider && until > now && e.status !== 'verified') {
+                e.quotaParkedUntil = Math.max(e.quotaParkedUntil, until);
+                e.providerParked = true;
+                touched = true;
+            }
+        }
+        if (touched) {
+            this.persist();
+            this.emitUpdated([provider], `quota-parked until ${new Date(until).toISOString()}`, 'quota');
+        }
+    }
+    /** Clear a quota park for a provider (manual re-enable / window reset). */
+    releaseProvider(provider) {
+        let touched = false;
+        for (const e of Object.values(this.data.entries)) {
+            if (e.provider === provider && e.quotaParkedUntil > 0) {
+                e.quotaParkedUntil = 0;
+                e.providerParked = false;
+                touched = true;
+            }
+        }
+        if (touched) {
+            this.persist();
+            this.emitUpdated([provider], 'quota park released', 'quota');
+        }
+    }
+    /**
+     * Manual escape hatch — `nuvira models unblock <provider>`.
+     *
+     * Releases a provider that routing has predictively blocked (`getBlockedProviders()`):
+     * demotes every `unavailable` entry back to `unverified` and clears all quota
+     * parks, so the provider is no longer skipped before scoring. `unverified`
+     * alone never blocks ("not yet probed" ≠ "dead"), which is exactly the state
+     * an unblock should produce — the caller then RE-PROBES against the live API
+     * so the registry re-learns the truth: if the provider genuinely recovered it
+     * becomes `verified` again; if it is still dead the re-probe flips it back to
+     * `unavailable` (one honest probe, not a permanent skip).
+     *
+     * Also used by the ledger-sync boundary: the caller should release the central
+     * quota ledger's cooldown too, otherwise `syncQuota()` re-parks the provider
+     * on the very next routing read (this method only clears REGISTRY state).
+     *
+     * @returns How many entries were demoted / un-parked (0/0 when untracked).
+     */
+    unblockProvider(provider) {
+        const now = Date.now();
+        let demoted = 0;
+        let unparked = 0;
+        for (const e of Object.values(this.data.entries)) {
+            if (e.provider !== provider)
+                continue;
+            if (e.status === 'unavailable') {
+                // Demote the definitive no back to unverified — routing may try it again.
+                e.status = 'unverified';
+                e.source = 'probe'; // availability is now unknown until re-probed
+                // Clear the stale learned reason so a later re-verification can't carry
+                // a misleading old 'auth'/'403' message into `models status`.
+                e.lastError = 'manually unblocked — re-probe pending';
+                demoted++;
+            }
+            if (e.quotaParkedUntil > now) {
+                e.quotaParkedUntil = 0;
+                e.providerParked = false;
+                unparked++;
+            }
+        }
+        if (demoted > 0 || unparked > 0) {
+            this.persist();
+            this.emitUpdated([provider], `manually unblocked (${demoted} demoted, ${unparked} un-parked)`, 'quota');
+        }
+        return { demoted, unparked };
+    }
+    /**
+     * Telemetry write-through from a real LLM call.
+     * Success → verified (source 'telemetry') + lastUsedAt. Failure → errorRate
+     * bump; auth failures demote to unavailable; rate-limit failures park the
+     * entry WITHOUT demoting it (transient exclusion, auto-recovery after the
+     * window lapses).
+     *
+     * @param ok        Did the call succeed?
+     * @param errorType Optional classified error type ('auth' | 'rate-limit' | ...)
+     */
+    recordCall(provider, model, ok, errorType, action, latencyMs, costUsd, callId, 
+    /** Provider-reported reset hint in ms (Retry-After / "try again in Ns"). */
+    retryAfterMs) {
+        const now = Date.now();
+        const key = entryKey(provider, model);
+        const existing = this.data.entries[key];
+        if (ok) {
+            this.markVerified(provider, model, 'telemetry', latencyMs, action, costUsd, callId);
+            this.data.entries[key].lastUsedAt = now;
+            // P4 M4.4: a clean success heals mid-stream flakiness (the provider
+            // demonstrably finishes). Decay the EMA toward 0 — never hard-reset,
+            // so a single success doesn't erase a flaky streak. markVerified already
+            // persisted the rebuild (which preserved partialRate), so the decayed
+            // value must be persisted again to survive a restart.
+            const prevPartial = this.data.entries[key].partialRate || 0;
+            if (prevPartial > 0) {
+                this.data.entries[key].partialRate = Math.max(0, prevPartial - 0.1);
+                // Record the healed point so the dashboard sparkline shows the decay
+                // (the provider demonstrably finishes → flakiness trending down).
+                this.pushPartialHistory(this.data.entries[key]);
+                this.persist();
+            }
+            return;
+        }
+        // Failure — update error rate.
+        const prevRate = existing?.errorRate || 0;
+        const entry = existing || {
+            provider,
+            model,
+            status: 'unverified',
+            lastVerifiedAt: 0,
+            lastProbedAt: now,
+            lastUsedAt: now,
+            errorRate: 0,
+            quotaParkedUntil: 0,
+            source: 'telemetry',
+        };
+        // EMA with a small α — a single failure shouldn't nuke a good model.
+        entry.errorRate = Math.min(1, 0.2 + 0.8 * prevRate);
+        entry.lastUsedAt = now;
+        let flipped = false;
+        if (errorType === 'auth') {
+            // Auth is DEFINITIVE — the key is dead; demote permanently until the
+            // user fixes it and re-probes (unblockProvider / models refresh).
+            entry.status = 'unavailable';
+            entry.lastError = 'auth (invalid key / forbidden)';
+            flipped = true;
+        }
+        else if (errorType === 'rate-limit') {
+            // Rate-limit is TRANSIENT (429 / quota window). Park the entry — the
+            // park is the exclusion mechanism (isUsable() gates on quotaParkedUntil
+            // and the provider feeds getBlockedProviders while parked) — but do NOT
+            // flip the status to 'unavailable'. A verified model must come back
+            // automatically when the window lapses; demoting it permanently was a
+            // real bug: isUsable() requires status === 'verified', so rate-limited
+            // cloud models (groq/gemini free tiers) stayed dead forever even after
+            // the park expired, silently forcing everything onto weak local models.
+            entry.lastError = 'rate-limit';
+            // Honor the provider's OWN reset hint when the caller extracted one:
+            // a 429 that says "resets in 16 minutes" must park ~16 minutes, not a
+            // fixed window. Capped at 1h — LONGER parks are the quota ledger's job
+            // (syncQuota extends from there); this registry park is only a FLOOR.
+            // No hint → a SHORT 60s floor: the authoritative exclusion is the
+            // ledger park, and an hour-aligned floor could OUTLIVE a short ledger
+            // park (syncQuota only extends, never shrinks) and strand the provider.
+            const hintMs = retryAfterMs && retryAfterMs > 0 ? retryAfterMs : null;
+            const parkMs = Math.min(60 * 60 * 1000, Math.max(10 * 1000, hintMs ?? 60_000));
+            const parkUntil = now + parkMs;
+            entry.quotaParkedUntil = Math.max(entry.quotaParkedUntil, parkUntil);
+            // Model-specific parking (from recordCall) — providerParked=false means
+            // isUsable() WILL block this verified model (correct: it was rate-limited).
+            entry.providerParked = false;
+            flipped = true;
+        }
+        this.data.entries[key] = entry;
+        this.persist();
+        if (flipped)
+            this.emitUpdated([provider], `telemetry failure (${errorType})`, 'telemetry');
+        if (action) {
+            this.appendActionLog({
+                timestamp: now,
+                action,
+                provider,
+                model,
+                outcome: errorType === 'auth' || errorType === 'rate-limit' ? 'unavailable' : 'error',
+                errorType,
+                latencyMs,
+                costUsd,
+                callId,
+            });
+        }
+    }
+    /**
+     * P4 M4.4: record a MID-STREAM interruption (the provider started streaming
+     * then died before completion) as a distinct `partial` telemetry event.
+     *
+     * Unlike `recordCall(ok=false)` — which flips status for definitive failures
+     * and decays errorRate — a partial death is neither a clean error nor a
+     * definitive kill: the provider demonstrably STARTED serving (its model is
+     * real and authenticated) but couldn't FINISH. That is the exact flaky-
+     * mid-stream signal the roadmap wants the router to learn from, so it is
+     * recorded as a dedicated outcome in the action log WITHOUT flipping status
+     * or mutating health (a partial today may complete tomorrow).
+     *
+     * Best-effort — never throws, never breaks the streaming call.
+     *
+     * @param action     The action that hit the interruption (chat / execute / ...).
+     * @param errorType  Classified reason (server / timeout / network / ...).
+     * @param streamedChunks  How many tokens had already streamed (context for
+     *   the dashboard — the bigger the partial, the more "almost finished").
+     */
+    recordPartial(provider, model, action, errorType, streamedChunks) {
+        try {
+            this.appendActionLog({
+                timestamp: Date.now(),
+                action,
+                provider,
+                model,
+                outcome: 'partial',
+                errorType,
+                streamedChunks,
+            });
+            // P4 M4.4 flakiness signal: bump the entry's mid-stream EMA so the
+            // router can deprioritize providers that start-but-die. The status is
+            // NEVER flipped (a partial today may complete tomorrow) — only the
+            // partialRate EMA moves, so the signal is a soft reliability nudge, not
+            // a hard block.
+            const key = entryKey(provider, model);
+            const existing = this.data.entries[key];
+            if (existing) {
+                const prev = existing.partialRate || 0;
+                existing.partialRate = Math.min(1, prev + (1 - prev) * 0.25);
+                this.pushPartialHistory(existing);
+                this.persist();
+            }
+        }
+        catch {
+            // Best-effort — a partial telemetry write must never break streaming.
+        }
+    }
+    /**
+     * P4 M4.4: worst mid-stream flakiness (partialRate) across a provider's
+     * tracked models — the router's single-number signal for "this provider
+     * keeps starting streams that die." 0 = no partials recorded (or healed).
+     */
+    getProviderFlakiness(provider) {
+        let worst = 0;
+        for (const [k, e] of Object.entries(this.data.entries)) {
+            if (k.startsWith(provider + '|') && (e.partialRate || 0) > worst) {
+                worst = e.partialRate || 0;
+            }
+        }
+        return worst;
+    }
+    /**
+     * Action-attributed telemetry log (model-registry-actions.jsonl) — which
+     * action killed or verified which provider × model, so the dashboard's
+     * "learned from real usage" panel makes predictive skips visible. Capped
+     * (rotation amortized). Best-effort — never breaks telemetry.
+     */
+    appendActionLog(entry) {
+        try {
+            const dir = memoryDir();
+            if (!existsSync(dir))
+                mkdirSync(dir, { recursive: true });
+            const path = actionLogPath();
+            // P6 M6.2 + M6.3: every action line is scrubbed (no secrets) and
+            // hash-chained (tamper-evident). O(1) append on the hot path; the
+            // amortized rotation below re-chains the surviving slice.
+            appendChainedRecordFast(path, 'model-registry-actions', entry);
+            this.actionLogCount = this.actionLogCount >= 0 ? this.actionLogCount + 1 : this.countActionLogLines(path);
+            // Rotate when the log doubles past the cap — amortized O(1) per write.
+            if (this.actionLogCount > MAX_ACTION_LOG_ENTRIES * 2) {
+                const raw = readFileSync(path, 'utf-8');
+                const lines = raw.split('\n').filter((l) => l.trim()).slice(-MAX_ACTION_LOG_ENTRIES);
+                const rechained = rechainRecords(lines);
+                writeFileSync(path, rechained.length ? `${rechained.join('\n')}\n` : '', 'utf-8');
+                // Keep the sidecar head in sync with the re-chained slice.
+                writeHeadState(path, 'model-registry-actions', headOfLines(rechained), rechained.length);
+                this.actionLogCount = rechained.length;
+            }
+        }
+        catch {
+            // Best-effort — a failed action log must never break telemetry.
+        }
+    }
+    countActionLogLines(path) {
+        try {
+            if (!existsSync(path))
+                return 0;
+            return readFileSync(path, 'utf-8').split('\n').filter((l) => l.trim()).length;
+        }
+        catch {
+            return 0;
+        }
+    }
+    /** Aggregated per-action "learned from real usage" view (dashboard / CLI). Sync. */
+    getActionTelemetry() {
+        return aggregateActionTelemetry(readActionTelemetryFile(actionLogPath()));
+    }
+    /**
+     * Sync quota parks AND full usage telemetry from the QuotaLedger, so the
+     * registry's FAISS/JSON snapshot alone answers "is it healthy, how many
+     * tokens remain, how long until the window resets". The ledger stays the
+     * WRITER of usage; the registry is the enterprise READ model the router
+     * consumes — one sub-ms sync store on the pick path.
+     *
+     * Parks are applied only when the new window actually EXTENDS the existing
+     * park (no redundant writes), and the usage fields are only written when
+     * they differ, so calling this on every routing decision is cheap and never
+     * rewrites the mirror on a hot path.
+     */
+    syncQuota(configManager) {
+        try {
+            const ledger = getQuotaLedger();
+            const now = Date.now();
+            let changed = false;
+            const newlyParked = new Set();
+            // 1. Cooldown parks (explicit + configured-limit exhaustion) — MODEL level.
+            // FIX: Only park models that are NOT verified. A verified model has proven
+            // it works — blanket-parking it because a DIFFERENT model in the same
+            // provider hit a rate limit is the root cause of providers being blocked
+            // despite having working models (the "Gemini parking bug").
+            // Mirror the ledger's cooldown state directly — the provider's own
+            // reset hint (Retry-After) is the authoritative source for parking
+            // duration. syncQuota's role is to reflect ledger state in the registry,
+            // not to override or cap it.
+            for (const { provider, cooldownRemaining } of ledger.getRouterQuotaStatus(configManager)) {
+                if (cooldownRemaining <= 0)
+                    continue;
+                const until = now + cooldownRemaining;
+                for (const e of Object.values(this.data.entries)) {
+                    if (e.provider === provider && until > e.quotaParkedUntil && e.status !== 'verified') {
+                        e.quotaParkedUntil = until;
+                        e.providerParked = true;
+                        changed = true;
+                        newlyParked.add(provider);
+                    }
+                }
+            }
+            // 2. Full usage telemetry mirror — tokens / requests / reset / remaining.
+            const limits = configManager?.getAll()?.routing?.quota || {};
+            for (const s of ledger.getStatus(configManager)) {
+                const entry = this.data.entries[entryKey(s.provider, s.model)];
+                if (!entry)
+                    continue;
+                if (entry.tokensConsumed !== s.tokensConsumed) {
+                    entry.tokensConsumed = s.tokensConsumed;
+                    changed = true;
+                }
+                if (entry.requests !== s.requests) {
+                    entry.requests = s.requests;
+                    changed = true;
+                }
+                if (entry.resetsInMs !== s.resetsInMs) {
+                    entry.resetsInMs = s.resetsInMs;
+                    changed = true;
+                }
+                const tokenLimit = limits[s.provider]?.tokensPerWindow;
+                const remaining = tokenLimit !== undefined ? Math.max(0, tokenLimit - s.tokensConsumed) : -1;
+                if (entry.remainingTokens !== remaining) {
+                    entry.remainingTokens = remaining;
+                    changed = true;
+                }
+            }
+            if (changed) {
+                this.persist();
+                // Mirror-applied parks are state changes too — report them the same way
+                // parkProvider does, so the watcher re-verifies an exhausted provider
+                // immediately instead of waiting for its next scheduled cycle.
+                for (const provider of newlyParked) {
+                    this.emitUpdated([provider], 'quota-parked (window exhausted)', 'quota');
+                }
+            }
+        }
+        catch {
+            // Best-effort — quota sync must never break the registry.
+        }
+    }
+    /**
+     * UNIFIED router feed: providers that must sink below healthy candidates
+     * because they are quota-exhausted or in cooldown — computed from the
+     * registry's own mirrored data (sub-ms, no I/O) with a cheap union fallback
+     * to the in-memory ledger for providers the registry has never tracked (so
+     * an exhausted-but-unprobed provider is still excluded). Shape mirrors
+     * `circuitBreakerStatus` so the AutoModelRouter consumes it identically.
+     * The ledger remains the WRITER of usage; the registry is the primary READ
+     * model — the union is a same-process in-memory read, never disk or network.
+     */
+    getRouterQuotaStatus(configManager) {
+        try {
+            this.syncQuota(configManager); // fresh mirror first (cheap, no-op when unchanged)
+        }
+        catch {
+            // Best-effort — routing must never crash on quota bookkeeping.
+        }
+        const now = Date.now();
+        const parked = new Map();
+        for (const e of Object.values(this.data.entries)) {
+            if (e.quotaParkedUntil > now) {
+                const remaining = e.quotaParkedUntil - now;
+                const current = parked.get(e.provider) ?? 0;
+                if (remaining > current)
+                    parked.set(e.provider, remaining);
+            }
+        }
+        // Providers the ledger parked but the registry has no entries for (never
+        // probed/used) must still be excluded — union the ledger feed.
+        try {
+            for (const { provider, cooldownRemaining } of getQuotaLedger().getRouterQuotaStatus(configManager)) {
+                if (cooldownRemaining <= 0)
+                    continue;
+                const current = parked.get(provider) ?? 0;
+                if (cooldownRemaining > current)
+                    parked.set(provider, cooldownRemaining);
+            }
+        }
+        catch {
+            // Best-effort.
+        }
+        return [...parked.entries()].map(([provider, cooldownRemaining]) => ({ provider, cooldownRemaining }));
+    }
+    /**
+     * Emit a MODEL_REGISTRY_UPDATED event so the watch daemon (the dedicated
+     * model-health agent) learns about a mid-session state change IMMEDIATELY
+     * and can re-verify the affected provider instead of waiting for its next
+     * scheduled cycle. Best-effort — observability must never break the registry.
+     *
+     * @param source Who wrote the change: 'telemetry' (real session usage),
+     *   'quota' (parks/releases), or 'probe' / 'spot-check' (the watcher's OWN
+     *   writes). The watcher only reacts to telemetry/quota — it ignores its own
+     *   probe writes so its re-verification can't self-trigger an infinite loop.
+     */
+    emitUpdated(providers, detail, source) {
+        try {
+            getEventBus().emit(EventNames.MODEL_REGISTRY_UPDATED, {
+                providers,
+                blocked: this.getBlockedProviders(),
+                updatedAt: Date.now(),
+                detail,
+                source,
+            }, 'model-registry');
+        }
+        catch {
+            // Best-effort — event emission must never break the registry.
+        }
+    }
+    /**
+     * Demote verified entries that haven't been re-verified recently to
+     * `unverified` (they may have been retired / access revoked). Returns the
+     * number demoted. Called by the watch daemon and refresh.
+     */
+    pruneStale(maxAgeMs = DEFAULT_STALE_MS) {
+        const now = Date.now();
+        let demoted = 0;
+        for (const e of Object.values(this.data.entries)) {
+            if (e.status === 'verified' && now - e.lastVerifiedAt > maxAgeMs) {
+                e.status = 'unverified';
+                e.lastError = 'stale (not verified recently)';
+                demoted++;
+            }
+        }
+        if (demoted > 0)
+            this.persist();
+        return demoted;
+    }
+    /**
+     * ISSUE-004 (4c): clean up entries for models that no longer exist on the
+     * LOCAL system. When the user deletes a model (e.g. `ollama rm modelname`),
+     * the registry was still holding its entry and every probe/stats pass kept
+     * re-checking a model that's gone — the "deleted model is still checked every
+     * time" feedback.
+     *
+     * Only call this with an AUTHORITATIVE live list (the refresh probe of a
+     * keyless/local runner). Entries whose model is NOT in the list are handled:
+     *   - UNVERIFIED / UNAVAILABLE entries are DELETED entirely (never checked
+     *     again — they have no learned value worth keeping).
+     *   - VERIFIED entries are DEMOTED to `unavailable` with reason "model
+     *     deleted from local system" instead of being hard-deleted — a partial
+     *     listModels response (a model mid-pull, a gateway hiccup) must not
+     *     silently destroy the learned latency/token telemetry of a model that
+     *     may merely be temporarily unlisted. The demote keeps it out of routing
+     *     while preserving its history for re-verification.
+     *
+     * Returns the number of entries cleaned up (deleted + demoted). Best-effort
+     * — never throws.
+     */
+    pruneAbsentModels(provider, liveModels) {
+        const live = new Set(liveModels);
+        const removedKeys = [];
+        const demotedKeys = [];
+        for (const [key, e] of Object.entries(this.data.entries)) {
+            if (e.provider !== provider || live.has(e.model))
+                continue;
+            if (e.status === 'verified')
+                demotedKeys.push(key);
+            else
+                removedKeys.push(key);
+        }
+        const now = Date.now();
+        for (const k of demotedKeys) {
+            const e = this.data.entries[k];
+            e.status = 'unavailable';
+            e.lastError = 'model deleted from local system';
+            e.lastProbedAt = now;
+        }
+        for (const k of removedKeys)
+            delete this.data.entries[k];
+        const touched = demotedKeys.length + removedKeys.length;
+        if (touched > 0) {
+            this.persist();
+            this.emitUpdated([provider], `pruned ${touched} deleted local model(s)`, 'probe');
+        }
+        return touched;
+    }
+    // ─── Persistence ──────────────────────────────────────────────────────────
+    /** Load the JSON mirror synchronously (never throws). */
+    loadMirror() {
+        try {
+            if (!existsSync(mirrorPath()))
+                return emptyState();
+            const raw = readFileSync(mirrorPath(), 'utf-8');
+            const data = JSON.parse(raw);
+            if (!data || typeof data !== 'object' || !data.entries)
+                return emptyState();
+            return { ...emptyState(), ...data };
+        }
+        catch {
+            return emptyState();
+        }
+    }
+    /**
+     * Persist: JSON mirror synchronously (canonical, guaranteed), then mirror to
+     * the VectorStore namespace asynchronously (best-effort, auto-tiers to JSON
+     * when FAISS/native aren't installed — so it can never throw).
+     */
+    persist() {
+        this.data.updatedAt = Date.now();
+        const dir = memoryDir();
+        try {
+            if (!existsSync(dir))
+                mkdirSync(dir, { recursive: true });
+            writeFileSync(mirrorPath(), JSON.stringify(this.data, null, 2), 'utf-8');
+        }
+        catch {
+            // Best-effort — a failed mirror write must never break routing.
+        }
+        this.mirrorToVector(dir);
+    }
+    /**
+     * Synchronous mirror to the vector-store namespace file.
+     *
+     * Writes the snapshot directly into the SHARED `vectors-model-registry.json`
+     * file — the exact on-disk entry format every VectorStore backend (JSON,
+     * pure-JS IVF, native FAISS) reads via `readNamespaceEntries`. This is
+     * deliberately SYNCHRONOUS and pinned to the persist-time dir: an async
+     * fire-and-forget write resolves its path lazily after awaits, so a dangling
+     * promise from an earlier test would write to whatever NUVIRA_MEMORY_DIR is at
+     * that later moment (the real ~/.nuvira/memory) and leak test data. A sync
+     * write has no such race and is equally best-effort (never throws).
+     */
+    mirrorToVector(dir) {
+        try {
+            const indexPath = join(dir, 'vectors-model-registry.json');
+            if (!existsSync(dir))
+                mkdirSync(dir, { recursive: true });
+            let entries = {};
+            try {
+                if (existsSync(indexPath)) {
+                    const raw = JSON.parse(readFileSync(indexPath, 'utf-8'));
+                    if (raw && typeof raw === 'object' && raw.entries && typeof raw.entries === 'object') {
+                        entries = raw.entries;
+                    }
+                }
+            }
+            catch {
+                // Corrupt/missing file — start from an empty index.
+            }
+            entries[VECTOR_SNAPSHOT_ID] = {
+                id: VECTOR_SNAPSHOT_ID,
+                vector: [1], // 1-dim placeholder — we never search, only store.
+                metadata: { snapshot: this.data },
+                createdAt: Date.now(),
+            };
+            writeFileSync(indexPath, JSON.stringify({ entries, version: 2 }, null, 2), 'utf-8');
+            this.vectorMirrored = true;
+        }
+        catch {
+            this.vectorMirrored = false;
+        }
+    }
+    /** Load the vector-store mirror into memory if it's newer than the JSON file. */
+    async hydrateFromVector() {
+        try {
+            const store = getVectorStore(VECTOR_NAMESPACE);
+            const entry = await store.get(VECTOR_SNAPSHOT_ID);
+            const meta = entry?.metadata;
+            const snapshot = meta?.snapshot;
+            if (snapshot && typeof snapshot === 'object' && snapshot.entries && snapshot.updatedAt > this.data.updatedAt) {
+                this.data = { ...emptyState(), ...snapshot };
+                this.vectorMirrored = true;
+                return true;
+            }
+            this.vectorMirrored = true;
+            return false;
+        }
+        catch {
+            return false;
+        }
+    }
+    // ─── Diagnostics ──────────────────────────────────────────────────────────
+    /** Name of the vector backend in use ('json' | 'faiss-ivf' | 'faiss-native' | 'unavailable'). */
+    async vectorBackendName() {
+        try {
+            if (!this.vectorStore)
+                this.vectorStore = getVectorStore(VECTOR_NAMESPACE);
+            return await this.vectorStore.backendName();
+        }
+        catch {
+            return 'unavailable';
+        }
+    }
+    /** Full status snapshot (CLI `models status` / dashboard). */
+    async getStatus() {
+        const entries = Object.values(this.data.entries);
+        const now = Date.now();
+        const byProvider = new Map();
+        for (const e of entries) {
+            if (!byProvider.has(e.provider))
+                byProvider.set(e.provider, []);
+            byProvider.get(e.provider).push(e);
+        }
+        const providers = [...byProvider.entries()]
+            .map(([provider, models]) => {
+            models.sort((a, b) => a.model.localeCompare(b.model));
+            return {
+                provider,
+                total: models.length,
+                verified: models.filter((m) => m.status === 'verified' && m.quotaParkedUntil <= now).length,
+                unavailable: models.filter((m) => m.status === 'unavailable').length,
+                parked: models.filter((m) => m.quotaParkedUntil > now).length,
+                models,
+            };
+        })
+            .sort((a, b) => a.provider.localeCompare(b.provider));
+        return {
+            backend: await this.vectorBackendName(),
+            vectorMirrored: this.vectorMirrored,
+            total: entries.length,
+            verified: entries.filter((e) => e.status === 'verified' && e.quotaParkedUntil <= now).length,
+            unverified: entries.filter((e) => e.status === 'unverified').length,
+            unavailable: entries.filter((e) => e.status === 'unavailable').length,
+            parked: entries.filter((e) => e.quotaParkedUntil > now).length,
+            updatedAt: this.data.updatedAt,
+            providers,
+        };
+    }
+    /** Human-readable summary for the CLI (incl. quota telemetry from the unified store). */
+    async formatStatus() {
+        const s = await this.getStatus();
+        const now = Date.now();
+        const lines = [];
+        lines.push(`📦 Model Registry — backend: ${s.backend}${s.vectorMirrored ? ' (vector-mirrored)' : ''}`);
+        lines.push(`   ${s.total} tracked · ${s.verified} verified · ${s.unverified} unverified · ${s.unavailable} unavailable · ${s.parked} quota-parked`);
+        for (const p of s.providers) {
+            const verified = p.models.filter((m) => m.status === 'verified');
+            const unavailable = p.models.filter((m) => m.status === 'unavailable');
+            lines.push(`   ${p.provider}: ${p.verified} verified · ${p.unavailable} unavailable${p.parked ? ` · ${p.parked} parked` : ''}`);
+            for (const m of verified) {
+                const lat = m.latencyMs !== undefined ? ` · ${m.latencyMs}ms` : '';
+                // P4 M4.4 flakiness trend: when a trajectory exists, surface whether
+                // the model is HEALING (clean successes decay the EMA) or WORSENING
+                // (more mid-stream interruptions) — one glance at `models status`.
+                let flaky = '';
+                if (m.partialRate !== undefined && m.partialRate > 0) {
+                    const pct = Math.round(m.partialRate * 100);
+                    const h = m.partialHistory;
+                    if (h && h.length >= 2) {
+                        const first = h[0].rate;
+                        const last = h[h.length - 1].rate;
+                        if (last < first)
+                            flaky = ` · ⏸ flaky ${pct}% healing`;
+                        else if (last > first)
+                            flaky = ` · ⏸ flaky ${pct}% worsening`;
+                        else
+                            flaky = ` · ⏸ flaky ${pct}%`;
+                    }
+                    else {
+                        flaky = ` · ⏸ flaky ${pct}%`;
+                    }
+                }
+                // Unified-store quota telemetry: remaining tokens + time-to-wait (resets
+                // in) come from the same sub-ms FAISS/JSON snapshot routing reads.
+                const tokens = m.remainingTokens !== undefined && m.remainingTokens >= 0
+                    ? ` · ${m.remainingTokens.toLocaleString()} tokens left`
+                    : '';
+                const resets = m.resetsInMs !== undefined && m.resetsInMs > 0
+                    ? ` · resets in ${this.formatMs(m.resetsInMs)}`
+                    : '';
+                lines.push(`     ✅ ${m.model}${lat}${flaky}${tokens}${resets}`);
+            }
+            for (const m of unavailable.slice(0, 3)) {
+                const wait = m.quotaParkedUntil > now ? ` · retry in ${this.formatMs(m.quotaParkedUntil - now)}` : '';
+                lines.push(`     ⛔ ${m.model} — ${m.lastError || 'unavailable'}${wait}`);
+            }
+        }
+        return lines.join('\n');
+    }
+    /** Compact human duration (e.g. '3h 12m', '45s'). */
+    formatMs(ms) {
+        if (ms <= 0)
+            return 'now';
+        const h = Math.floor(ms / 3_600_000);
+        const m = Math.floor((ms % 3_600_000) / 60_000);
+        if (h > 0)
+            return `${h}h ${m}m`;
+        if (m > 0)
+            return `${m}m`;
+        return `${Math.ceil(ms / 1000)}s`;
+    }
+    /** Clear the registry (CLI / tests). */
+    reset() {
+        this.data = emptyState();
+        this.persist(); // persist() also overwrites the vector snapshot with the empty state.
+    }
+}
+// ─── Singleton ──────────────────────────────────────────────────────────────
+let registryInstance = null;
+/** Get or create the ModelRegistry singleton. */
+export function getModelRegistry() {
+    if (!registryInstance) {
+        registryInstance = new ModelRegistry();
+    }
+    return registryInstance;
+}
+/** Reset the singleton (tests + after vector-backend changes). */
+export function resetModelRegistry() {
+    registryInstance = null;
+}
+//# sourceMappingURL=model-registry.js.map

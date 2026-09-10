@@ -2,7 +2,7 @@
  * PhaseExecutionEngine — Phase-wise project scope execution.
  */
 import { existsSync, readFileSync, writeFileSync, mkdirSync, unlinkSync, readdirSync } from 'node:fs';
-import { resolveNuviraHome } from '../config/paths';
+import { resolveNuviraHome } from '../config/paths.js';
 import { join } from 'node:path';
 import { logger } from '../utils/logger.js';
 import { CredentialStore } from './credential-store.js';

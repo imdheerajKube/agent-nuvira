@@ -1,5 +1,5 @@
 import { readFileSync, existsSync } from 'node:fs';
-import { envBuff, resolveNuviraHome } from '../config/paths';
+import { envBuff, resolveNuviraHome } from '../config/paths.js';
 import { join } from 'node:path';
 import { homedir } from 'node:os';
 /**

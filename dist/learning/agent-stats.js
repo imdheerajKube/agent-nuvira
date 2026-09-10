@@ -11,7 +11,7 @@
  * and updated after each orchestration run.
  */
 import { readFileSync, writeFileSync, existsSync, mkdirSync } from 'node:fs';
-import { envBuff, resolveNuviraHome } from '../config/paths';
+import { envBuff, resolveNuviraHome } from '../config/paths.js';
 import { join } from 'node:path';
 // ─── Constants ──────────────────────────────────────────────────────────────
 const CURRENT_VERSION = 1;

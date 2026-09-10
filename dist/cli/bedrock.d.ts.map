@@ -1,0 +1,1 @@
+{"version":3,"file":"bedrock.d.ts","sourceRoot":"","sources":["../../src/cli/bedrock.ts"],"names":[],"mappings":"AAAA;;;;;;;;;;;;;;GAcG;AAEH,OAAO,EAAE,OAAO,EAAE,MAAM,WAAW,CAAC;AAEpC,OAAO,EAAE,WAAW,EAAc,MAAM,eAAe,CAAC;AA2ExD,qBAAa,cAAe,SAAQ,WAAW;IAC7C,MAAM,IAAI,OAAO;IAWjB,OAAO,CAAC,kBAAkB;YAQZ,QAAQ;IAuKtB,OAAO,CAAC,mBAAmB;YAQb,UAAU;IAyBxB,OAAO,CAAC,iBAAiB;YAUX,WAAW;CAgH1B"}

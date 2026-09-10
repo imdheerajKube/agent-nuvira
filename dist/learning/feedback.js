@@ -14,7 +14,7 @@
  * - Feedback-driven pattern validation
  */
 import { readFileSync, writeFileSync, existsSync, mkdirSync } from 'node:fs';
-import { resolveNuviraHome } from '../config/paths';
+import { resolveNuviraHome } from '../config/paths.js';
 import { join } from 'node:path';
 // ─── Constants ──────────────────────────────────────────────────────────────
 const MEMORY_DIR = join(resolveNuviraHome(), 'memory');

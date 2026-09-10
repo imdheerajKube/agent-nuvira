@@ -18,7 +18,7 @@
  * All writes are best-effort — a failed write must never break routing.
  */
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
-import { envBuff, resolveNuviraHome } from '../config/paths';
+import { envBuff, resolveNuviraHome } from '../config/paths.js';
 import { join } from 'node:path';
 import { analyzeComplexity } from './hybrid-router.js';
 /**

@@ -1,5 +1,6 @@
 import { createInterface } from 'node:readline';
-import { envBuff } from '../config/paths';
+import { createHash } from 'node:crypto';
+import { envBuff } from '../config/paths.js';
 import { Command } from 'commander';
 import inquirer from 'inquirer';
 import { BaseCommand } from './commands.js';
@@ -31,6 +32,8 @@ import { recordMetricTime, getMetrics } from '../enterprise/metrics.js';
 import { resolveDispatch } from '../nlu/actions.js';
 import { isConversationalQuestion, hasCodingAction } from '../nlu/conversation-gate.js';
 import { runToolLoop, extractFallbackToolCalls } from '../tools/tool-loop.js';
+import { looksLikeConfusedScaffoldingReply } from '../inference/tool-call-utils.js';
+import { beginTrace, endTrace, recordStep } from '../learning/reasoning-trace.js';
 import { getLoopExposureMode } from '../tools/toolsets.js';
 import { buildLoopProjectContext } from '../tools/loop-project-context.js';
 import { analyzeComplexity } from '../learning/hybrid-router.js';
@@ -849,6 +852,68 @@ export class ChatCommand extends BaseCommand {
         };
         const callModel = this.buildToolCallModel(message, session, options, mode, ctxOverrides?.onToken, ctxOverrides?.signal);
         let result;
+        // v1.8x audit — CHAT TRACE CAPTURE: every LLM call in a chat turn is now
+        // recorded to ~/.nuvira/memory/reasoning-traces.json (source 'chat'), so
+        // the dashboard's Trace tab shows WHY a WhatsApp/Telegram/console answer
+        // came from the provider+model it did — not just pipeline runs. The tool
+        // loop drives calls through buildToolCallModel; wrapping it with
+        // withTraceCapture would double-record (it already wraps at its own
+        // creation sites), so the loop's onEvent stream is instead correlated by
+        // prompt digest here — one record() per call, deduped.
+        const chatTraceId = beginTrace({
+            goal: message.slice(0, 200),
+            source: 'chat',
+            provider: session.type,
+            model: session.model,
+        });
+        const seenStepDigests = new Set();
+        const digestPrompt = (p) => {
+            try {
+                return createHash('sha256').update(p).digest('hex').slice(0, 16);
+            }
+            catch {
+                return String(p.length);
+            }
+        };
+        const recordChatStep = (prompt, output, latencyMs, ok, error) => {
+            try {
+                const digest = digestPrompt(prompt);
+                if (seenStepDigests.has(digest))
+                    return;
+                seenStepDigests.add(digest);
+                recordStep(chatTraceId, {
+                    agentType: 'chat',
+                    description: message.slice(0, 120),
+                    provider: session.type,
+                    model: session.model ?? 'unknown',
+                    promptDigest: digest,
+                    promptPreview: prompt.slice(0, 300),
+                    responsePreview: output.slice(0, 1000),
+                    responseLength: output.length,
+                    inputTokens: Math.ceil(prompt.length / 4),
+                    outputTokens: Math.ceil(output.length / 4),
+                    latencyMs,
+                    success: ok,
+                    error,
+                });
+            }
+            catch {
+                // Best-effort — a trace write must never break the turn.
+            }
+        };
+        const callModelWithTrace = async (threadMsgs, schemas2, tok, sig) => {
+            const start = Date.now();
+            const prompt = threadMsgs.map((m) => (m.role === 'system' ? `[System]\n${m.content}` : m.role === 'user' ? `[User]\n${m.content}` : m.role === 'assistant' ? `[Assistant]\n${m.content}` : `[Tool result]\n${m.content}`)).join('\n\n');
+            try {
+                const resp = await callModel(threadMsgs, schemas2, tok, sig);
+                recordChatStep(prompt, resp.content ?? '', Date.now() - start, true);
+                return resp;
+            }
+            catch (err) {
+                recordChatStep(prompt, '', Date.now() - start, false, err instanceof Error ? err.message : String(err));
+                throw err;
+            }
+        };
         try {
             result = await runToolLoop({
                 messages: thread,
@@ -860,7 +925,7 @@ export class ChatCommand extends BaseCommand {
                 onToken: ctxOverrides?.onToken,
                 signal: ctxOverrides?.signal,
                 deps: {
-                    callModel,
+                    callModel: callModelWithTrace,
                     executeTool: async (name, args, ctx) => {
                         const tool = getTool(name);
                         if (!tool)
@@ -885,6 +950,7 @@ export class ChatCommand extends BaseCommand {
         catch (err) {
             // The tool loop never throws by design; this guards future changes.
             logger.error(String(err));
+            endTrace(chatTraceId, false);
             result = {
                 content: `I ran into a problem: ${err instanceof Error ? err.message : String(err)}`,
                 followups: [],
@@ -893,6 +959,7 @@ export class ChatCommand extends BaseCommand {
                 bounded: false,
             };
         }
+        endTrace(chatTraceId, !result.generationFailed);
         // Finalize the turn (cache + memory + registry telemetry).
         // E3c: a generationFailed turn is NOT cached/persisted — the caller may
         // fall back to the rule decision, and the failure text must not pollute
@@ -941,6 +1008,21 @@ export class ChatCommand extends BaseCommand {
             const sink = stepOnToken ?? onToken;
             const abort = stepSignal ?? signal;
             const tryGenerate = async (prov, typ, mdl) => {
+                // Answer-quality resilience: a CONFUSED reply — the model talking about
+                // the tool contract (e.g. apologizing that "the provided example call
+                // to suggest_followups is incomplete") instead of executing it — never
+                // throws, so failover never fired and the confusion went to the user
+                // verbatim (live WhatsApp incident). Treat it like a generation
+                // failure: THROWS so the caller's failover walk retries with the next
+                // candidate; the raw reply is carried on the error for the final
+                // fallback.
+                const confuseCheck = (content) => {
+                    if (looksLikeConfusedScaffoldingReply(content)) {
+                        const err = new Error(`model answered with tool-contract confusion instead of the task (reply: ${content.slice(0, 160)})`);
+                        err.confusedReply = content;
+                        throw err;
+                    }
+                };
                 if (typeof prov.generateTools === 'function' && schemas.length > 0) {
                     try {
                         // P4 — stream when the provider supports it AND a sink is wired
@@ -948,9 +1030,12 @@ export class ChatCommand extends BaseCommand {
                         // content delivered as a single chunk so the typewriter channel
                         // still receives the answer (appears at once — today's behavior).
                         if (sink && typeof prov.generateToolsStream === 'function') {
-                            return await prov.generateToolsStream(messages, schemas, { ...options, model: mdl, signal: abort }, sink);
+                            const result = await prov.generateToolsStream(messages, schemas, { ...options, model: mdl, signal: abort }, sink);
+                            confuseCheck(result.content);
+                            return result;
                         }
                         const result = await prov.generateTools(messages, schemas, { ...options, model: mdl, signal: abort });
+                        confuseCheck(result.content);
                         if (sink && result.content)
                             sink(result.content);
                         return result;
@@ -962,6 +1047,9 @@ export class ChatCommand extends BaseCommand {
                         // sitting in the error payload and was being thrown away.
                         const salvaged = salvageFailedGeneration(err);
                         if (salvaged) {
+                            // The salvaged essay can itself be contract-confusion — check it
+                            // too, otherwise a confused 400 payload sails through salvage.
+                            confuseCheck(salvaged.content);
                             logger.warn("   ⚠️ Tool call rejected (400) — salvaging the model's generated answer.");
                             // Re-run the recovered suggest_followups through the normal tool
                             // path so the followups land in the sink (and the loop's
@@ -988,6 +1076,7 @@ export class ChatCommand extends BaseCommand {
                     raw = await prov.generate(prompt, { ...options, model: mdl, signal: abort });
                 }
                 const { text, calls } = extractFallbackToolCalls(raw);
+                confuseCheck(text);
                 return { content: text, toolCalls: calls };
             };
             try {
@@ -1064,6 +1153,16 @@ export class ChatCommand extends BaseCommand {
                     catch {
                         // Fall through to rethrow.
                     }
+                }
+                // Answer-quality resilience: every candidate failed (or none was
+                // tried) and the error carries the model's raw confused reply —
+                // deliver THAT instead of failing the whole turn. A confusing answer
+                // still beats an error banner in a messaging app; the confusion is
+                // now also visible in the chat trace for post-mortem.
+                const confusedReply = err.confusedReply;
+                if (typeof confusedReply === 'string' && confusedReply.trim()) {
+                    logger.warn('   ⚠️ No alternative model answered — delivering the raw reply (contract-confusion fallback).');
+                    return { content: confusedReply, toolCalls: [] };
                 }
                 throw err;
             }

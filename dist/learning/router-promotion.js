@@ -27,7 +27,7 @@
  * via `nuvira model bandit`. All writes are best-effort.
  */
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
-import { envBuff, resolveNuviraHome } from '../config/paths';
+import { envBuff, resolveNuviraHome } from '../config/paths.js';
 import { dirname, join } from 'node:path';
 // ─── Constants ──────────────────────────────────────────────────────────────
 const DEFAULT_MEMORY_DIR = join(resolveNuviraHome(), 'memory');
