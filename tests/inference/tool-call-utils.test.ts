@@ -151,4 +151,14 @@ describe('looksLikeConfusedScaffoldingReply', () => {
   it('honors a custom tool list (execute loops)', () => {
     expect(looksLikeConfusedScaffoldingReply("I'm sorry, but the provided example call to execute is incomplete.", ['execute'])).toBe(true);
   });
+
+  it('flags the dictionary-of-tasks pattern (Groq/unknown model receiving tool schemas as input)', () => {
+    const confused = "I'm sorry, but the provided information seems to be a dictionary of tasks, actions, and their parameters rather than a structured API response. I can't directly interpret or provide a structured response about the tasks you're asking about.";
+    expect(looksLikeConfusedScaffoldingReply(confused)).toBe(true);
+  });
+
+  it('flags provided information + directly interpret pattern', () => {
+    const confused = "Sorry, but the given information doesn't look like a valid request. I cannot directly interpret this format.";
+    expect(looksLikeConfusedScaffoldingReply(confused)).toBe(true);
+  });
 });

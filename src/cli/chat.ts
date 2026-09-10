@@ -1225,13 +1225,20 @@ export class ChatCommand extends BaseCommand {
         const digest = digestPrompt(prompt);
         if (seenStepDigests.has(digest)) return;
         seenStepDigests.add(digest);
+        // FIX: build a promptPreview that includes the user's actual message.
+        // The old `prompt.slice(0, 300)` only showed the system prompt (which
+        // is 2K+ chars with tool schemas), hiding the user's input entirely.
+        const lastUserIdx = prompt.lastIndexOf('[User]\n');
+        const promptPreview = lastUserIdx !== -1
+          ? `${prompt.slice(0, 80)}…\n\n${prompt.slice(lastUserIdx)}`.slice(0, 500)
+          : prompt.slice(0, 300);
         recordStep(chatTraceId, {
           agentType: 'chat',
           description: message.slice(0, 120),
           provider: session.type,
           model: session.model ?? 'unknown',
           promptDigest: digest,
-          promptPreview: prompt.slice(0, 300),
+          promptPreview,
           responsePreview: output.slice(0, 1000),
           responseLength: output.length,
           inputTokens: Math.ceil(prompt.length / 4),
