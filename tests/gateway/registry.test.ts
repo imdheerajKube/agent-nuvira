@@ -221,9 +221,24 @@ describe('GatewayRegistry.handleInbound', () => {
     expect(adapter.sent[0].text).toContain('Got it');
   });
 
-  it('does not reply for non-pipeline requests in pipelineOnly mode', async () => {
+  it('routes chat/unknown intents through the chat engine even in pipelineOnly mode', async () => {
+    const engine = {
+      answerOnce: async () => ({ content: 'Hi there!', followups: [] }),
+    };
+    const { registry, adapter } = mockRegistry({
+      streamEvents: false,
+      pipelineOnly: true,
+      chatEngine: engine,
+    });
+    const reply = await registry.handleInbound({ platform: 'mock', channelId: 'c', text: 'hello' });
+    expect(reply).toContain('Hi there!');
+    expect(adapter.sent).toHaveLength(2); // working line + chat answer
+    expect(adapter.sent[0].text).toContain('Working on it');
+  });
+
+  it('still drops light/config intents silently in pipelineOnly mode', async () => {
     const { registry, adapter } = mockRegistry({ streamEvents: false, pipelineOnly: true });
-    await registry.handleInbound({ platform: 'mock', channelId: 'c', text: 'hello' });
+    await registry.handleInbound({ platform: 'mock', channelId: 'c', text: 'set up groq api key' });
     expect(adapter.sent).toHaveLength(0);
   });
 

@@ -41,7 +41,7 @@ import { parseRequestSync } from './parser.js';
  * gate must not misfire on a question.
  */
 const STRONG_TASK_VERBS =
-  'fix|debug|repair|troubleshoot|create|build|implement|generate|scaffold|bootstrap|develop|refactor|migrate|deploy|install|configure|setup|set up|integrate|optimize|restructure';
+  'fix|debug|repair|troubleshoot|patch|address|diagnose|correct|create|build|implement|generate|scaffold|bootstrap|develop|refactor|migrate|deploy|install|configure|setup|set up|integrate|optimize|restructure';
 
 /** Verb at the very start of the ask ("fix the failing test", "deploy the api"). */
 const TASK_VERB_AT_START = new RegExp(`^(?:please\\s+)?(?:${STRONG_TASK_VERBS})\\b`, 'i');
