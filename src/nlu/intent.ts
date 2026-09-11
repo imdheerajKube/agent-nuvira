@@ -57,11 +57,21 @@ export const RULE_TRUST_THRESHOLD = 0.8;
 
 /** Explain/interrogative → chat ("explain caching", "how do I add JWT auth?"). */
 export function matchExplainRule(text: string): IntentResult | null {
+  // Guard: "can you fix X" or "could you debug Y" is a FIX request, not a
+  // question. The fix rule runs later in priority, but the explain rule's
+  // When a coding verb appears in COMMAND position (start or after polite
+  // prefix), it's a task request, not a question. "evaluate the test coverage"
+  // has "test" as a NOUN — must not block. "can you deploy the api?" has
+  // "deploy" in command position — must block (it's a task, not a question).
+  const codingTaskVerb = /^(?:please\s+|can you\s+|could you\s+|would you\s+|i need you to\s+|help me\s+)?(?:fix|debug|repair|troubleshoot|resolve|patch|address|diagnose|correct|create|build|implement|generate|scaffold|bootstrap|develop|set up|deploy|test|run|publish|ship|launch|refactor|migrate|integrate|optimize|restructure|install)\b/i;
+  const fixAsNoun = /(?:the|a|an|this|that|any)\s+fix\b/i.test(text);
+  if (codingTaskVerb.test(text) && !fixAsNoun) return null;
   if (
     /\b(?:explain|describe|assess|evaluate|analyze|compare|walk me through|tell me about)\b/i.test(
       text,
     ) ||
-    /^(?:what|how|why|when|where|which|can you|could you|would you)\b/i.test(text)
+    /^(?:what|how|why|when|where|which|can you|could you|would you)\b/i.test(text) ||
+    /\b(?:vs\.?|versus|or|compared to|difference between)\b/i.test(text)
   ) {
     return { intent: 'explain', confidence: 0.8, modeHint: 'chat' };
   }
@@ -100,8 +110,18 @@ export function matchContinueRule(text: string, referenceDate: Date = new Date()
  * "deploy the project nuvira-fix-validation" would false-positive into fix.
  */
 export function matchFixRule(text: string): IntentResult | null {
-  if (/(?:^|[^\w-])(?:fix|debug|repair|troubleshoot|resolve)(?:$|[^\w-])/i.test(text)) {
+  if (/(?:^|[^\w-])(?:fix|debug|repair|troubleshoot|resolve|patch|address|diagnose|correct)(?:$|[^\w-])/i.test(text)) {
     return { intent: 'fix', confidence: 0.85, modeHint: 'execute' };
+  }
+  // "X is broken", "X keeps failing", "X stopped working" — implicit fix tasks.
+  // "X failed" — standalone failure signal ("the build failed").
+  // GUARD: "why is the test failing?" is a QUESTION, not a fix request.
+  if (/^(?:what|how|why|when|where|which)\b/i.test(text)) return null;
+  if (/\b(?:is|are|was|were|keeps?|kept|stopped|has stopped)\s+(?:broken|failing|crashing|erroring|not working|working|dead)\b/i.test(text)) {
+    return { intent: 'fix', confidence: 0.8, modeHint: 'execute' };
+  }
+  if (/\bfailed\b/i.test(text)) {
+    return { intent: 'fix', confidence: 0.8, modeHint: 'execute' };
   }
   return null;
 }
@@ -113,9 +133,11 @@ export function matchConfigureRule(text: string): IntentResult | null {
   // when the sentence does NOT lead with a create verb.
   if (/^(?:please\s+)?(?:create|generate|write|build|make)\b/i.test(text)) return null;
   if (
-    /\b(?:configure|config)\b/i.test(text) ||
+    /\b(?:configure|config(?:ure)?|settings?)\b/i.test(text) ||
     /\bapi ?key\b/i.test(text) ||
-    /\b(?:switch|change) (?:model|provider)\b/i.test(text)
+    /\b\.env\b/i.test(text) ||
+    /\b(?:switch|change|set(?:\s+up)?|update)\s+(?:my|the|a|an)?\s*(?:\w+\s+)?(?:model|provider|key|token|credential)s?\b/i.test(text) ||
+    /\b(?:switch|change)\s+.*\bto\s+\w/i.test(text) // "change X to Y" pattern
   ) {
     return { intent: 'configure', confidence: 0.85, modeHint: 'config' };
   }
@@ -138,18 +160,30 @@ export function matchWriteRule(text: string): IntentResult | null {
   // explicit list (fast, precise) but treat it as an allowlist WITH a
   // fallback, not the only path.
   const writingObject =
-    /\b(?:essay|poem|poetry|song|lyrics|hymn|anthem|shayari|ghazal|jingle|story|short story|letter|article|blog(?: post)?|paragraph|composition|novel|dialogue|screenplay|speech|caption|advertisement|review|summary|note|message|email|homework|assignment)\b/i;
-  // Verb + article + writing object: "write an essay on elephants for class 4".
+    /\b(?:essay|poem|poetry|song|lyrics|hymn|anthem|shayari|ghazal|jingle|lullaby|rap|haiku|sonnet|ode|elegy|story|short story|fiction|fantasy|novel|biography|memoir|tale|fable|myth|legend|recipe|letter|article|blog(?: post)?|paragraph|composition|dialogue|screenplay|script|play|skit|monologue|speech|caption|advertisement|review|summary|prose|note|message|email|homework|assignment|poster|diagram|flowchart|flow.?chart|wireframe|mind.?map|chart|infographic|brochure|flyer|pamphlet|newsletter|report|presentation|slideshow|mockup|blueprint|layout|sketch|outline|mindmap)\b/i;
+  // Coding nouns that must NOT match the write rule — "write a function for"
+  // or "write a test for" are dev tasks, not creative content. These nouns
+  // fall through to matchCreateRule so the coding pipeline runs. "class"
+  // excluded: "class 4 student" is a grade level, not a coding class.
+  const codingNoun =
+    /\b(?:function|module|component|api|endpoint|route|server|database|cli|tool|service|program|script|app(?:lication)?|worker|daemon|plugin|package|library|project|schema)\b/i;
+  // Guard: coding nouns must NOT match the write rule — "write a function for"
+  // or "write a test for" are dev tasks, not creative content. These nouns
+  // fall through to matchCreateRule so the coding pipeline runs.
+  if (codingNoun.test(text)) return null;
+  // Verb + article + writing object: "write an essay on elephants for class 4",
+  // "design a flow chart", "create a mind map".
   if (
-    /^(?:please\s+)?(?:write|build|make|create|draft|compose|prepare)\s+(?:a|an|the|new|my|our)\s+/i.test(
+    /^(?:please\s+)?(?:write|build|make|create|draft|compose|prepare|design|draw|sketch)\s+(?:a|an|the|new|my|our)\s+/i.test(
       text,
     ) &&
     writingObject.test(text)
   ) {
     return { intent: 'write', confidence: 0.85, modeHint: 'chat' };
   }
-  // Writing verb + writing object anywhere: "please write a poem for my daughter".
-  if (/\b(?:write|draft|compose)\b/i.test(text) && writingObject.test(text)) {
+  // Writing verb + writing object anywhere: "please write a poem for my daughter",
+  // "design a poster for the event".
+  if (/\b(?:write|draft|compose|design|draw|sketch)\b/i.test(text) && writingObject.test(text)) {
     return { intent: 'write', confidence: 0.8, modeHint: 'chat' };
   }
   return null;
@@ -161,9 +195,20 @@ export function matchWriteRule(text: string): IntentResult | null {
  * false-positive into developer mode.
  */
 export function matchCreateRule(text: string): IntentResult | null {
-  // Verb-initial, unambiguous commands: "create a CLI tool", "implement JWT auth".
+  // GUARD FIRST: document/creative nouns must NOT match the create rule —
+  // "create a mind map", "make a wireframe", "create a song" are DOCUMENT
+  // creation tasks, not coding. These should route to write (chat mode) so
+  // the LLM generates the document, not the coding pipeline.
+  const documentNoun =
+    /\b(?:poster|diagram|flowchart|flow.?chart|wireframe|mind.?map|mindmap|chart|infographic|brochure|flyer|pamphlet|newsletter|report|presentation|slideshow|mockup|blueprint|sketch|outline|song|poem|story|essay|letter|article|speech|caption|logo)\b/i;
+  if (documentNoun.test(text)) return null;
+  // GUARD: "set up my groq key" is a configure task, not a create task.
+  if (/\b(?:api ?key|auth key|secret key|access key|private key|encryption key)\b/i.test(text)) return null;
+  if (/\b(?:set(?:\s+up)?|update|change|switch)\s+(?:my|the)?\s*\w*\s*(?:key|token|credential)s?\b/i.test(text)) return null;
+  // Verb-initial, unambiguous commands: "create a CLI tool", "implement JWT auth",
+  // "deploy the app", "test the API", "run the build".
   if (
-    /^(?:please\s+)?(?:create|generate|implement|scaffold|bootstrap|develop|set up)\b/i.test(
+    /^(?:please\s+|can you\s+|could you\s+|would you\s+|i need you to\s+|help me\s+)?(?:create|generate|implement|scaffold|bootstrap|develop|set up|deploy|test|run|publish|ship|launch|refactor|migrate|integrate|optimize|restructure|install|configure)\b/i.test(
       text,
     )
   ) {
@@ -190,9 +235,10 @@ export function matchCreateRule(text: string): IntentResult | null {
     }
     return { intent: 'write', confidence: 0.8, modeHint: 'chat' };
   }
-  // Verb + project-object noun anywhere: "I want to create a new module".
+  // Verb + project-object noun anywhere: "I want to create a new module",
+  // "write a test for the login function".
   const objectNoun =
-    /\b(?:file|program|script|app(?:lication)?|function|class|module|component|page|route|api|endpoint|service|cli|tool|package|library|project|plugin|addon|extension|website|server|client|database|schema|feature|daemon|worker)\b/i;
+    /\b(?:file|program|script|app(?:lication)?|function|class|module|component|page|screen|form|dialog|modal|banner|route|api|endpoint|service|cli|tool|package|library|project|plugin|addon|extension|website|server|client|database|schema|feature|daemon|worker|test|interface|handler|controller|middleware|migration|seed|fixture|config)\b/i;
   if (
     (/\b(?:create|generate|implement|scaffold|develop|add)\b/i.test(text) ||
       /\b(?:build|write|set up)\b/i.test(text)) &&

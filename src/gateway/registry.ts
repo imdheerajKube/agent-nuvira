@@ -580,11 +580,13 @@ export class GatewayRegistry {
       /* best-effort */
     }
 
-    // pipelineOnly: pipelines run, everything else is silently recorded —
-    // only reached by AUTHORIZED senders (the gate above already dropped
-    // unapproved ones silently).
-    if (this.options.pipelineOnly && parsed.action.run !== 'pipeline') {
-      record(parsed.action.run === 'chat' ? 'chat' : 'help');
+    // pipelineOnly: only pipeline intents run directly; chat/unknown intents
+    // still route through runInboundChat so the model can handle them via
+    // the tool loop. Light/config intents are silently recorded without a
+    // reply — only reached by AUTHORIZED senders (the gate above already
+    // dropped unapproved ones silently).
+    if (this.options.pipelineOnly && parsed.action.run === 'config') {
+      record('help');
       return `🤖 I understood: **${parsed.intent}** (${(parsed.confidence * 100).toFixed(0)}% confidence)`;
     }
 
