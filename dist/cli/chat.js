@@ -296,7 +296,13 @@ export class ChatCommand extends BaseCommand {
      * carries prior turns so the dashboard threads a real conversation.
      */
     async answerOnce(message, opts = {}) {
-        const activeOpts = applyActiveModel({ provider: opts.provider, model: opts.model });
+        // `'default'` is the config SENTINEL for "use the provider's default
+        // model", never a real model id. Left in place it (a) disables auto routing
+        // (isAutoModel('default') is false) and (b) is truthy, so the adapter's
+        // `options?.model || requireAdapterModel(...)` fallback is skipped and the
+        // literal string 'default' reaches the provider → "model not found".
+        const requestedModel = opts.model && opts.model !== 'default' ? opts.model : undefined;
+        const activeOpts = applyActiveModel({ provider: opts.provider, model: requestedModel });
         const mergedOpts = { ...opts, provider: activeOpts.provider, model: activeOpts.model };
         let autoMode = isAutoModel(mergedOpts.model) || isAutoProvider(mergedOpts.provider);
         let { type, provider } = autoMode
@@ -881,13 +887,20 @@ export class ChatCommand extends BaseCommand {
                 if (seenStepDigests.has(digest))
                     return;
                 seenStepDigests.add(digest);
+                // FIX: build a promptPreview that includes the user's actual message.
+                // The old `prompt.slice(0, 300)` only showed the system prompt (which
+                // is 2K+ chars with tool schemas), hiding the user's input entirely.
+                const lastUserIdx = prompt.lastIndexOf('[User]\n');
+                const promptPreview = lastUserIdx !== -1
+                    ? `${prompt.slice(0, 80)}…\n\n${prompt.slice(lastUserIdx)}`.slice(0, 500)
+                    : prompt.slice(0, 300);
                 recordStep(chatTraceId, {
                     agentType: 'chat',
                     description: message.slice(0, 120),
                     provider: session.type,
                     model: session.model ?? 'unknown',
                     promptDigest: digest,
-                    promptPreview: prompt.slice(0, 300),
+                    promptPreview,
                     responsePreview: output.slice(0, 1000),
                     responseLength: output.length,
                     inputTokens: Math.ceil(prompt.length / 4),

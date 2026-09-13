@@ -586,15 +586,18 @@ export class GatewayRegistry {
     // reply — only reached by AUTHORIZED senders (the gate above already
     // dropped unapproved ones silently).
     if (this.options.pipelineOnly && parsed.action.run === 'config') {
+      logger.debug(`gateway: light intent in pipelineOnly (${parsed.intent} @ ${parsed.confidence.toFixed(2)}) — recorded, no reply`);
       record('help');
-      return `🤖 I understood: **${parsed.intent}** (${(parsed.confidence * 100).toFixed(0)}% confidence)`;
+      return '🤖 Noted.';
     }
 
     // Light intents (config / unknown) — cheap help/understood line, no agent
     // work, no model. Only reached by AUTHORIZED senders (the gate above
-    // silently dropped unapproved ones).
+    // silently dropped unapproved ones). The parsed intent + confidence are
+    // INTERNAL routing detail: they go to the logs, never to the sender.
     if (parsed.action.run !== 'pipeline' && parsed.action.run !== 'chat') {
-      const line = `🤖 I understood: **${parsed.intent}** (${(parsed.confidence * 100).toFixed(0)}% confidence)\nTry a task like "fix the failing test" or "explain this repo" — or run \`nuvira gateway status\` for help.`;
+      logger.debug(`gateway: light intent (${parsed.intent} @ ${parsed.confidence.toFixed(2)}) → help line`);
+      const line = `🤖 I understood. Try a task like "fix the failing test" or "explain this repo" — or run \`nuvira gateway status\` for help.`;
       await replyTo(line);
       record('help', line);
       return line;
@@ -606,10 +609,17 @@ export class GatewayRegistry {
     // and the model's toolset includes gateway_send to deliver it.
     if (parsed.action.run === 'chat') {
       const answer = await this.runInboundChat(msg);
-      const line =
-        answer && answer.content.trim() && !answer.generationFailed
-          ? answer.content
-          : `🤖 I understood: **${parsed.intent}** (${(parsed.confidence * 100).toFixed(0)}% confidence)\nNo model is available right now — try a task like "fix the failing test" or "explain this repo", or run \`nuvira gateway status\` for help.`;
+      if (answer && answer.content.trim() && !answer.generationFailed) {
+        await replyTo(answer.content);
+        record('chat', answer.content);
+        return answer.content;
+      }
+      // Generation failed. The sender gets NO parsed intent/confidence (that
+      // is internal routing — it stays in the logs + inbox ledger), and the
+      // wording distinguishes a genuinely unconfigured model from a transient
+      // provider failure so a glitch is not reported as "no model".
+      logger.warn(`gateway: chat generation failed (${parsed.intent} @ ${parsed.confidence.toFixed(2)})`);
+      const line = this.generationFailureLine();
       await replyTo(line);
       record('chat', line);
       return line;
@@ -626,7 +636,7 @@ export class GatewayRegistry {
       const line =
         answer && answer.content.trim() && !answer.generationFailed
           ? answer.content
-          : `🤖 I understood: **${parsed.intent}** (${(parsed.confidence * 100).toFixed(0)}% confidence)\nNo model is available right now — try a task like "fix the failing test" or "explain this repo", or run \`nuvira gateway status\` for help.`;
+          : this.generationFailureLine();
       await replyTo(line);
       record('pipeline', line);
       // Status recipients: a pipeline task (even one routed through the loop
@@ -695,6 +705,55 @@ export class GatewayRegistry {
     } catch { /* best-effort */ }
   }
 
+  /**
+   * Sender-facing line when the chat engine produced no answer. Contains NO
+   * internal routing detail (intent, confidence, provider/model) and does not
+   * claim "no model" when one is in fact configured — `generationFailed`
+   * covers ALL hard provider failures (missing key, 401, rate limit, network,
+   * every failover candidate down), so the two cases are reported separately.
+   */
+  private generationFailureLine(): string {
+    if (!this.hasConfiguredModel()) {
+      // The most common live case (observed): default config, defaultProvider
+      // 'auto', no API keys. Auto only ranks providers WITH credentials, so it
+      // has nothing to route to — but the failure surfaced as an opaque
+      // "no model" line. Say what is actually wrong and how to fix it.
+      return '🤖 No model is set up yet — Auto routing only picks providers you have credentials for. Add a provider key (or a local model) via `nuvira models`, then try again.';
+    }
+    return "🤖 I couldn't get an answer from the model just now — please try again in a moment. If it keeps happening, run `nuvira gateway status`.";
+  }
+
+  /**
+   * True when the user actually has a model to call: a provider holding real
+   * credentials, or a keyless/local runner with a CONCRETE model pin.
+   *
+   * The default config ships `nim/gemini/openrouter/groq/bedrock` with no keys
+   * and `local: { runner: 'ollama', model: 'default' }` — none of that counts
+   * as configured. A `'default'` local model is a sentinel, not a model. Only
+   * used to choose the sender-facing failure wording — never to block a call.
+   */
+  private hasConfiguredModel(): boolean {
+    try {
+      const providers = this.configManager.getAll().providers ?? {};
+      const check = (this.configManager as unknown as { hasRequiredCredentials?: (p: string) => boolean })
+        .hasRequiredCredentials;
+      for (const [name, cfg] of Object.entries(providers)) {
+        if (!cfg) continue;
+        if (name === 'local') {
+          const model = typeof cfg.model === 'string' ? cfg.model : '';
+          if (model && model !== 'default') return true;
+          if (typeof cfg.baseUrl === 'string' && cfg.baseUrl.trim()) return true;
+          continue;
+        }
+        if (typeof check === 'function' && check.call(this.configManager, name)) return true;
+      }
+      return false;
+    } catch {
+      // A config read must never turn into a false "unconfigured" claim.
+      return true;
+    }
+  }
+
   private async runInboundChat(msg: InboundMessage): Promise<{ content: string; generationFailed?: boolean }> {
     try {
       // Broadcast typing indicator start.
@@ -745,13 +804,19 @@ export class GatewayRegistry {
       // gateway: reuse THIS live registry so the model's gateway_send calls
       // deliver through the already-connected bridge — a fresh registry would
       // open a second WhatsApp connection and stall.
-      // Resolve the default provider/model from config so the chat engine
-      // uses the real model name (not 'unknown') in traces and telemetry.
+      // Routing directive: when the user's default is 'auto' (the product
+      // default), pass 'auto' THROUGH so the engine's AutoModelRouter picks the
+      // best available provider+model per message. Resolving it here via
+      // getProviderConfig() would pin the session to one provider and silently
+      // disable auto routing — and the config's `model: 'default'` SENTINEL is
+      // not a real model id (providers reject it as "model not found").
+      const routingDefault = (this.configManager.getAll() as { defaultProvider?: string }).defaultProvider;
+      const useAuto = !routingDefault || routingDefault === 'auto';
       const { type: providerType, config: providerConfig } =
         this.configManager.getProviderConfig();
       const answer = await engine.answerOnce(prompt, {
-        provider: providerType,
-        model: providerConfig.model,
+        provider: useAuto ? 'auto' : providerType,
+        model: useAuto ? 'auto' : providerConfig.model,
         history,
         // Inject prior conversation context so the model remembers previous
         // exchanges with this contact (follow-up questions, suggested followups).

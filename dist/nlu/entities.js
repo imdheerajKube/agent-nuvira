@@ -102,6 +102,18 @@ The request is one of these intents:
 - "configure" — set up api keys, switch providers/models, change config
 - "unknown" — anything not clearly one of the above
 
+Examples:
+- "sort out my auth stuff" → create (the user wants to build/implement auth)
+- "the payments module is broken" → fix (a module is broken = needs repair)
+- "can you handle the deployment?" → create (deploy = a coding task)
+- "what's the difference between JWT and sessions?" → explain (a comparison question)
+- "set up my groq key" → configure (api key setup)
+- "how's the project going?" → explain (status question)
+- "i need a landing page" → create (new page to build)
+- "the test suite keeps failing" → fix (tests failing = needs debugging)
+- "tell me about the auth module" → explain (requesting information)
+- "make it use postgres instead" → create (database migration task)
+
 Return ONLY a JSON object matching EXACTLY this shape (no markdown fences, no commentary):
 {
   "intent": "create" | "continue" | "fix" | "explain" | "configure" | "unknown",

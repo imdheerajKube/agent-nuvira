@@ -100,9 +100,12 @@ class MockAdapter implements ChannelAdapter {
 }
 
 /** A registry with the mock adapter (pipeline runs fail fast via the config). */
-function mockRegistry(options?: ConstructorParameters<typeof GatewayRegistry>[0]): { registry: GatewayRegistry; adapter: MockAdapter } {
+function mockRegistry(
+  options?: ConstructorParameters<typeof GatewayRegistry>[0],
+  configManager?: ConstructorParameters<typeof GatewayRegistry>[1],
+): { registry: GatewayRegistry; adapter: MockAdapter } {
   const adapter = new MockAdapter();
-  const registry = new GatewayRegistry(options ?? { streamEvents: false });
+  const registry = new GatewayRegistry(options ?? { streamEvents: false }, configManager);
   registry.register(adapter);
   return { registry, adapter };
 }
@@ -174,19 +177,61 @@ describe('GatewayRegistry.handleInbound', () => {
     expect(all).not.toContain('{'); // no raw JSON anywhere
   });
 
-  it('chat requests fall back to the understood line when no model answers', async () => {
+  it('chat generation failure replies with a sender-safe line — never the internal intent/confidence', async () => {
     const { registry, adapter } = mockRegistry({
       streamEvents: false,
       chatEngine: { answerOnce: async () => ({ content: '', generationFailed: true }) },
     });
     const reply = await registry.handleInbound({
       platform: 'mock',
+      // "write …" parses as intent=write @ 0.85 — exactly the internal verdict
+      // that must NEVER reach a messaging-app sender.
       channelId: 'chan-1',
-      text: 'what is agent-nuvira?',
+      text: 'write a 2-line poem for Alex',
     });
-    expect(reply).toContain('I understood');
-    expect(adapter.sent.length).toBe(2); // working line + understood fallback
+    // No internal NLU leak: no intent name, no confidence number, no raw
+    // "no model available" claim when a model IS configured (defaultProvider
+    // is 'local' in this fixture).
+    expect(reply).not.toContain('confidence');
+    expect(reply).not.toContain('I understood');
+    expect(reply).not.toContain('write');
+    expect(reply).not.toContain('85');
+    expect(reply).toContain("couldn't get an answer");
+    expect(adapter.sent.length).toBe(2); // working line + fallback
     expect(adapter.sent[0].text).toContain('Working on it');
+    expect(adapter.sent[1].text).toBe(reply);
+  });
+
+  it('tells the sender nothing is configured when no provider has credentials (auto has nothing to route to)', async () => {
+    // The live case: defaultProvider 'auto', no keys, and the default
+    // `local: { model: 'default' }` sentinel — Auto ranks only credentialed
+    // providers, so there is genuinely nothing to call. A STUB config is used
+    // because the process env may hold real API keys (loadEnv merges them).
+    const noModels = {
+      getAll: () => ({
+        providers: {
+          gemini: { model: 'default' },
+          groq: { model: 'default' },
+          local: { runner: 'ollama', model: 'default' },
+        },
+      }),
+      hasRequiredCredentials: () => false,
+      getProviderConfig: () => ({ type: 'local', config: { model: 'default' } }),
+    } as unknown as ConstructorParameters<typeof GatewayRegistry>[1];
+    const { registry, adapter } = mockRegistry(
+      { streamEvents: false, chatEngine: { answerOnce: async () => ({ content: '', generationFailed: true }) } },
+      noModels,
+    );
+    const reply = await registry.handleInbound({
+      platform: 'mock',
+      channelId: 'chan-1',
+      text: 'write a song in hindi for my daughter',
+    });
+    expect(reply).toContain('No model is set up yet');
+    // Still no internal NLU leak.
+    expect(reply).not.toContain('confidence');
+    expect(reply).not.toContain('write');
+    expect(adapter.sent.length).toBe(2);
   });
 
   it('suppresses a tool-contract-confusion reply and sends a retry hint instead (live WhatsApp incident)', async () => {

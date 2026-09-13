@@ -146,6 +146,19 @@ describe('model selection — dynamic defaults (nothing hardcoded)', () => {
       expect(preferredModelsFor('groq')[0]).toBe('fast-better');
       expect(preferredModelsFor('groq')).not.toContain('unknown-model');
     });
+
+    it('drops the `default` sentinel even when telemetry marked it verified (live bug)', () => {
+      const registry = getModelRegistry();
+      // Observed live: a provider call recorded the config sentinel 'default'
+      // as a VERIFIED model (errorRate 0), so it ranked first and was handed to
+      // the adapter as a literal model name → the provider rejects it with
+      // "model not found".
+      registry.markVerified('groq', 'default', 'telemetry');
+      registry.markVerified('groq', 'real-model', 'telemetry', 100);
+      expect(preferredModelsFor('groq')).toEqual(['real-model']);
+      // The adapter last-resort must resolve a REAL model, never the sentinel.
+      expect(requireAdapterModel('groq', 'default')).toBe('real-model');
+    });
   });
 
   describe('bestAvailable', () => {

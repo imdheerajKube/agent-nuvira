@@ -48,13 +48,13 @@
  */
 export function looksLikeConfusedScaffoldingReply(content, tools = ['suggest_followups']) {
     const t = (content || '').trim();
-    if (!t || t.length > 400)
+    if (!t || t.length > 600)
         return false;
     const mentionsContract = tools.some((name) => t.includes(name))
-        || /\b(?:tool|tools)\s+call\b|\b(?:provided|given)\s+(?:example|call|schema|argument|arguments|tool)\b|\bexample\s+call\b/i.test(t);
+        || /\b(?:tool|tools)\s+call\b|\b(?:provided|given)\s+(?:example|call|schema|argument|arguments|tool|information)\b|\bexample\s+call\b|\bdictionary\s+of\s+tasks\b|\bstructured\s+(?:API|api)\s+response\b|\b(?:tasks|actions)[,.]\s+and\s+(?:their\s+)?parameters\b/i.test(t);
     if (!mentionsContract)
         return false;
-    const metaTone = /\b(?:i'?m\s+)?(?:really\s+)?sorry|\bi\s+(?:cannot|can't)\b|\bcould\s+(?:you|u)\s+please\b|\bprovide\s+(?:more\s+)?(?:context|details|information|clarification)\b|\b(incomplete|invalid|malformed|unclear|not\s+fully\s+defined)\b/i;
+    const metaTone = /\b(?:i'?m\s+)?(?:really\s+)?sorry|\bi\s+(?:cannot|can't)\b|\bcould\s+(?:you|u)\s+please\b|\bprovide\s+(?:more\s+)?(?:context|details|information|clarification)\b|\b(incomplete|invalid|malformed|unclear|not\s+fully\s+defined|directly\s+interpret)\b/i;
     return metaTone.test(t);
 }
 /**
