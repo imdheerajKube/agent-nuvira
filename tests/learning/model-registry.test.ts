@@ -126,10 +126,15 @@ describe('ModelRegistry — probe / spot-check lifecycle', () => {
     const registry = new ModelRegistry();
     registry.markVerified('gemini', 'gemini-2.5-flash', 'spot-check');
     registry.markVerified('groq', 'llama-3.3-70b-versatile', 'spot-check');
+    // Telemetry can record the config SENTINEL as verified (live bug: a
+    // `groq|default` entry had status=verified but lastError "model not found").
+    registry.markVerified('groq', 'default', 'telemetry');
     registry.markUnavailable('nim', 'meta/llama-3.3-70b-instruct', 'auth', 'spot-check');
     registry.markListed('openrouter', ['openai/gpt-4o-mini']);
 
     expect(registry.getVerifiedModels('gemini')).toEqual(['gemini-2.5-flash']);
+    // The sentinel is never exposed as a routable model, even when "verified".
+    expect(registry.getVerifiedModels('groq')).not.toContain('default');
     expect(registry.getUsableProviders().sort()).toEqual(['gemini', 'groq']);
   });
 

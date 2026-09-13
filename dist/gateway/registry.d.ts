@@ -211,6 +211,24 @@ export declare class GatewayRegistry {
     setOnTyping(callback: GatewayRegistryOptions['onTyping']): void;
     /** Write/delete typing.json for cross-process communication with dashboard. */
     private writeTypingFile;
+    /**
+     * Sender-facing line when the chat engine produced no answer. Contains NO
+     * internal routing detail (intent, confidence, provider/model) and does not
+     * claim "no model" when one is in fact configured — `generationFailed`
+     * covers ALL hard provider failures (missing key, 401, rate limit, network,
+     * every failover candidate down), so the two cases are reported separately.
+     */
+    private generationFailureLine;
+    /**
+     * True when the user actually has a model to call: a provider holding real
+     * credentials, or a keyless/local runner with a CONCRETE model pin.
+     *
+     * The default config ships `nim/gemini/openrouter/groq/bedrock` with no keys
+     * and `local: { runner: 'ollama', model: 'default' }` — none of that counts
+     * as configured. A `'default'` local model is a sentinel, not a model. Only
+     * used to choose the sender-facing failure wording — never to block a call.
+     */
+    private hasConfiguredModel;
     private runInboundChat;
     /** Allow-list check: no allowIds configured = everyone; else exact platform:channelId. */
     private isAllowed;

@@ -297,6 +297,17 @@ function entryKey(provider: string, model: string): string {
   return `${provider}|${model || 'default'}`;
 }
 
+/**
+ * The config value `'default'` is a SENTINEL meaning "use the provider's
+ * default model" — it is NOT a model id. Telemetry must never track it: a
+ * `groq|default` entry marked `verified` (observed live, its lastError being
+ * "model not found") ranked first by error-rate and was handed to the adapter
+ * as a literal model name. Every registry WRITE ignores the sentinel.
+ */
+export function isSentinelModel(model: string | undefined | null): boolean {
+  return !model || model === 'default';
+}
+
 function emptyState(): ModelRegistryData {
   return { version: CURRENT_VERSION, entries: {}, updatedAt: Date.now() };
 }
@@ -484,6 +495,13 @@ export class ModelRegistry {
   getVerifiedModels(provider: string, now: number = Date.now()): string[] {
     return Object.values(this.data.entries)
       .filter((e) => e.provider === provider && this.isUsable(provider, e.model, now))
+      // `'default'` is the config SENTINEL ("use the provider's default
+      // model"), not a model id. Telemetry can erroneously record it as a
+      // VERIFIED model — observed live: `groq|default` had status=verified
+      // while its lastError was "model not found". With errorRate 0 it sorts
+      // first and gets handed to the adapter, so the provider rejects it.
+      // Never expose the sentinel as a routable model.
+      .filter((e) => !!e.model && e.model !== 'default')
       .sort((a, b) => b.lastVerifiedAt - a.lastVerifiedAt)
       .map((e) => e.model);
   }
@@ -634,6 +652,7 @@ export class ModelRegistry {
     const now = Date.now();
     for (const raw of models) {
       const model = typeof raw === 'string' ? raw : raw.id;
+      if (isSentinelModel(model)) continue; // never track the 'default' sentinel
       const contextWindowTokens = typeof raw === 'string' ? undefined : raw.contextWindowTokens;
       const key = entryKey(provider, model);
       const existing = this.data.entries[key];
@@ -694,6 +713,7 @@ export class ModelRegistry {
     costUsd?: number,
     callId?: string,
   ): void {
+    if (isSentinelModel(model)) return; // never verify the 'default' sentinel
     const now = Date.now();
     const key = entryKey(provider, model);
     const existing = this.data.entries[key];
@@ -820,6 +840,7 @@ export class ModelRegistry {
     quotaParkedUntil: number = 0,
     action?: string,
   ): void {
+    if (isSentinelModel(model)) return; // never track the 'default' sentinel
     const now = Date.now();
     const key = entryKey(provider, model);
     const existing = this.data.entries[key];
@@ -968,6 +989,7 @@ export class ModelRegistry {
     /** Provider-reported reset hint in ms (Retry-After / "try again in Ns"). */
     retryAfterMs?: number,
   ): void {
+    if (isSentinelModel(model)) return; // never record calls against the sentinel
     const now = Date.now();
     const key = entryKey(provider, model);
     const existing = this.data.entries[key];
@@ -1084,6 +1106,7 @@ export class ModelRegistry {
     errorType?: string,
     streamedChunks?: number,
   ): void {
+    if (isSentinelModel(model)) return; // never record the 'default' sentinel
     try {
       this.appendActionLog({
         timestamp: Date.now(),

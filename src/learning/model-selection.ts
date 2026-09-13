@@ -74,6 +74,13 @@ export function preferredModelsFor(provider: string): string[] {
   const registry = getModelRegistry();
   return registry
     .getVerifiedModels(provider)
+    // The config value `'default'` is a SENTINEL meaning "use the provider's
+    // default model" — it is NOT a model id. It can be recorded as a
+    // "verified" model by telemetry (observed: `groq|default` status=verified
+    // while its lastError was "model not found"), and with errorRate 0 it then
+    // sorts FIRST here and gets handed to the adapter → the provider 404s.
+    // Never let the sentinel act as a real model.
+    .filter((m) => !!m && m !== 'default')
     .sort((a, b) => {
       const ea = registry.getEntry(provider, a);
       const eb = registry.getEntry(provider, b);

@@ -481,7 +481,13 @@ export class ChatCommand extends BaseCommand {
   provider?: string;
   model?: string;
 }> {
-    const activeOpts = applyActiveModel({ provider: opts.provider, model: opts.model });
+    // `'default'` is the config SENTINEL for "use the provider's default
+    // model", never a real model id. Left in place it (a) disables auto routing
+    // (isAutoModel('default') is false) and (b) is truthy, so the adapter's
+    // `options?.model || requireAdapterModel(...)` fallback is skipped and the
+    // literal string 'default' reaches the provider → "model not found".
+    const requestedModel = opts.model && opts.model !== 'default' ? opts.model : undefined;
+    const activeOpts = applyActiveModel({ provider: opts.provider, model: requestedModel });
     const mergedOpts = { ...opts, provider: activeOpts.provider, model: activeOpts.model };
     let autoMode = isAutoModel(mergedOpts.model) || isAutoProvider(mergedOpts.provider);
     let { type, provider } = autoMode

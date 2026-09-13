@@ -264,6 +264,14 @@ export declare const DEFAULT_STALE_MS: number;
  */
 export declare const DEGRADED_UNAVAILABLE_THRESHOLD = 3;
 /**
+ * The config value `'default'` is a SENTINEL meaning "use the provider's
+ * default model" — it is NOT a model id. Telemetry must never track it: a
+ * `groq|default` entry marked `verified` (observed live, its lastError being
+ * "model not found") ranked first by error-rate and was handed to the adapter
+ * as a literal model name. Every registry WRITE ignores the sentinel.
+ */
+export declare function isSentinelModel(model: string | undefined | null): boolean;
+/**
  * Aggregate raw action-telemetry entries into the per-action dashboard view.
  * Pure + sync — the dashboard server calls this on the raw JSONL lines, and
  * the registry uses it for `getActionTelemetry()`. Dedupes repeated writes of
