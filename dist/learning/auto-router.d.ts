@@ -42,6 +42,13 @@ import { type BanditOutcome } from './router-bandit.js';
 import type { ConfigManager } from '../config/manager.js';
 /** The special model value that triggers automatic per-task routing. */
 export declare const AUTO_MODEL = "auto";
+/**
+ * How many models ONE provider contributes to the failover chain (DEEP
+ * FAILOVER). More than one so a provider's 2nd/3rd-best model is actually
+ * reachable — per-model RPD/TPM limits on free tiers mean a 429 on one model
+ * says nothing about its siblings.
+ */
+export declare const FALLBACK_MODELS_PER_PROVIDER = 3;
 /** The special provider value stored in active-model state for Auto mode. */
 export declare const AUTO_PROVIDER = "auto";
 /** The five routing dimensions. */
@@ -674,6 +681,20 @@ export declare class AutoModelRouter {
      * denyModels always wins over allowModels.
      */
     private governanceModelReason;
+    /**
+     * The ranked model list a provider can serve this task with, best first.
+     *
+     * Always starts with the model the router would actually pick, then the
+     * provider's other task-scored candidates, then its remaining health-ranked
+     * verified models. This is what makes the failover chain DEEP (several models
+     * per provider) instead of one: a provider with five working models must be
+     * able to serve from all five, not give up after its first rate limit.
+     *
+     * Never returns the `'default'` SENTINEL or a non-chat model (a probe can
+     * verify a classifier/embedding/vision model, which can never answer a turn).
+     * Best-effort — scoring failures degrade to the pick + verified list.
+     */
+    private fallbackModelsFor;
     /**
      * Resolve the model name to use within a chosen provider.
      * Prefers the provider's configured model; falls back to 'default'.

@@ -42,6 +42,7 @@ import { homedir } from 'node:os';
 
 import { getVectorStore, type VectorStore, type VectorEntry } from '../memory/vector-store.js';
 import type { ModelDescriptor } from '../inference/interface.js';
+import { isNonChatModel } from '../inference/model-catalog.js';
 import { getQuotaLedger } from './quota-ledger.js';
 import { getEventBus, EventNames } from '../observability/event-bus.js';
 import type { ConfigManager } from '../config/manager.js';
@@ -280,6 +281,13 @@ export const DEFAULT_STALE_MS = 7 * 24 * 60 * 60 * 1000; // 7 days
  * stops the router from scoring a provider it already knows is dead. ISSUE-002.
  */
 export const DEGRADED_UNAVAILABLE_THRESHOLD = 3;
+
+/**
+ * How far a single SUCCESS decays the error-rate EMA (mirrors the 0.1 partial-
+ * rate heal step). errorRate must heal on success, otherwise a transient blip
+ * permanently penalizes a recovered model in preferredModelsFor().
+ */
+export const ERROR_RATE_HEAL_STEP = 0.1;
 
 function memoryDir(): string {
   return envBuff('MEMORY_DIR') || DEFAULT_MEMORY_DIR;
@@ -622,8 +630,11 @@ export class ModelRegistry {
     for (const m of preferred) {
       if (this.isUsable(provider, m, now)) return m;
     }
-    // No curated pick usable — any verified model works.
-    const verified = this.getVerifiedModels(provider, now);
+    // No curated pick usable — any verified model works, minus NON-CHAT
+    // families (a probe can verify a classifier/embedding/speech/image model,
+    // which can never serve a chat turn — observed live with
+    // llama-prompt-guard-2).
+    const verified = this.getVerifiedModels(provider, now).filter((m) => !isNonChatModel(m));
     return verified.length > 0 ? verified[0] : undefined;
   }
 
@@ -731,7 +742,12 @@ export class ModelRegistry {
           ? Math.round(0.3 * latencyMs + 0.7 * prevLatency)
           : Math.round(latencyMs)
         : prevLatency,
-      errorRate: existing?.errorRate || 0,
+      // Success HEALS reliability: decay the error EMA toward 0 (never hard-reset,
+      // so one lucky call can't erase a genuinely flaky streak). Before this a
+      // verified model that once hit a transient 429 stayed penalized FOREVER
+      // (errorRate was monotonically non-decreasing), permanently sinking it in
+      // preferredModelsFor() even after it recovered.
+      errorRate: Math.max(0, (existing?.errorRate ?? 0) - ERROR_RATE_HEAL_STEP),
       // The provider-advertised context window survives a re-verify (it is
       // model metadata, independent of the verify event).
       contextWindowTokens: existing?.contextWindowTokens,
@@ -879,6 +895,53 @@ export class ModelRegistry {
         errorType: reason.slice(0, 120),
       });
     }
+  }
+
+  /**
+   * Park a SINGLE model for a quota window (rate-limit / 429) WITHOUT demoting
+   * its status.
+   *
+   * This is the probe-side counterpart to `recordCall(ok=false,'rate-limit')`:
+   * a transient quota blip must never flip a model to `unavailable` (which
+   * `isUsable()` then treats as permanently dead until a manual unblock), or a
+   * single 429 during a refresh would exclude a perfectly good model forever.
+   * The entry keeps its prior status (verified stays verified) and is gated
+   * only by `quotaParkedUntil`, so it re-enters routing automatically the
+   * moment the window lapses — "probed, and made available again when it is".
+   *
+   * @param until Absolute epoch ms when the park expires (must be > now to gate).
+   */
+  parkModel(
+    provider: string,
+    model: string,
+    reason: string,
+    until: number,
+    source: ModelRegistrySource,
+  ): void {
+    if (isSentinelModel(model)) return; // never track the 'default' sentinel
+    const now = Date.now();
+    const key = entryKey(provider, model);
+    const existing = this.data.entries[key];
+    const entry: ModelRegistryEntry = existing ?? {
+      provider,
+      model,
+      status: 'unverified' as ModelAvailabilityStatus,
+      lastVerifiedAt: 0,
+      lastProbedAt: now,
+      lastUsedAt: 0,
+      errorRate: 0,
+      quotaParkedUntil: 0,
+      source: 'telemetry' as ModelRegistrySource,
+    };
+    entry.lastProbedAt = now;
+    entry.lastError = reason;
+    entry.quotaParkedUntil = Math.max(entry.quotaParkedUntil || 0, until);
+    // providerParked=false → isUsable() blocks THIS model only; a sibling model
+    // on the same provider is untouched (per-model granularity).
+    entry.providerParked = false;
+    this.data.entries[key] = entry;
+    this.persist();
+    this.emitUpdated([provider], `quota-parked: ${model} (${reason})`, source);
   }
 
   /** Apply the quota ledger's parked-provider status to a provider's entries.
@@ -1234,6 +1297,28 @@ export class ModelRegistry {
           }
         }
       }
+      // 1b. MODEL-level parks — mirror the ledger's PER-MODEL cooldowns onto the
+      // EXACT entry. This is the per-model quota key end to end: one model
+      // resting on its own limit must never block its siblings, so the park is
+      // written with providerParked=false (model-specific) and only that entry's
+      // `isUsable()` turns false — `preferredModelsFor()` still ranks the
+      // provider's other models and routing serves from them. The park EXPIRES
+      // by itself (quotaParkedUntil is absolute), so the model is automatically
+      // re-admitted the moment its window lapses — and because a genuine success
+      // clears the park (markVerified), a recovered model is picked up as soon
+      // as it is used or re-probed.
+      for (const { provider, model, cooldownRemaining } of ledger.getModelQuotaStatus(configManager)) {
+        if (cooldownRemaining <= 0 || model === '*') continue;
+        const entry = this.data.entries[entryKey(provider, model)];
+        if (!entry) continue;
+        const until = now + cooldownRemaining;
+        if (until > entry.quotaParkedUntil) {
+          entry.quotaParkedUntil = until;
+          entry.providerParked = false;
+          changed = true;
+          newlyParked.add(provider);
+        }
+      }
       // 2. Full usage telemetry mirror — tokens / requests / reset / remaining.
       const limits = configManager?.getAll()?.routing?.quota || {};
       for (const s of ledger.getStatus(configManager)) {
@@ -1258,6 +1343,23 @@ export class ModelRegistry {
           changed = true;
         }
       }
+      // 3. RECOVERY WAKE-UP: an entry whose park has LAPSED is already routable
+      // again (quotaParkedUntil is absolute and `isUsable()` gates on it), but
+      // nothing told the watcher or the dashboard it RECOVERED. Emit once per
+      // lapse so the event-driven re-verification re-probes the healed model
+      // (proving it really serves again instead of trusting a stale entry) and
+      // the dashboard's quota view refreshes — "keep checking models that are
+      // available again, and keep the ledger/dashboard current".
+      const recovered = new Set<string>();
+      for (const e of Object.values(this.data.entries)) {
+        if (e.quotaParkedUntil > 0 && e.quotaParkedUntil <= now) {
+          e.quotaParkedUntil = 0;
+          e.providerParked = false;
+          changed = true;
+          recovered.add(e.provider);
+        }
+      }
+
       if (changed) {
         this.persist();
         // Mirror-applied parks are state changes too — report them the same way
@@ -1265,6 +1367,9 @@ export class ModelRegistry {
         // immediately instead of waiting for its next scheduled cycle.
         for (const provider of newlyParked) {
           this.emitUpdated([provider], 'quota-parked (window exhausted)', 'quota');
+        }
+        for (const provider of recovered) {
+          this.emitUpdated([provider], 'quota park lapsed — re-admitted', 'quota');
         }
       }
     } catch {

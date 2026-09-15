@@ -26,6 +26,7 @@
 import { getModelRegistry, type ModelRegistryEntry } from './model-registry.js';
 import { analyzeComplexity, type ComplexityLevel } from './hybrid-router.js';
 import { getCatalogProvider, type CatalogProviderEntry } from '../inference/provider-catalog.js';
+import { isNonChatModel } from '../inference/model-catalog.js';
 import { logger } from '../utils/logger.js';
 
 // ─── Types ──────────────────────────────────────────────────────────────────
@@ -276,7 +277,11 @@ export function scoreModels(
   const requirements = estimateTaskRequirements(taskDescription, resolvedComplexity, estimatedInputTokens);
 
   // Get ALL tracked models for this provider (verified + unverified + unavailable)
-  const allModels = registry.getAllModelsForProvider(provider);
+  // — minus NON-CHAT families (safety classifiers, embeddings, speech, image/
+  // video generators). A probe can mark one "verified" (observed live: groq's
+  // llama-prompt-guard-2), but it can never serve a chat turn, so model-level
+  // scoring must never select one.
+  const allModels = registry.getAllModelsForProvider(provider).filter((m) => !isNonChatModel(m.model));
 
   // If no models in registry, return empty (caller falls back to configured model)
   if (allModels.length === 0) {

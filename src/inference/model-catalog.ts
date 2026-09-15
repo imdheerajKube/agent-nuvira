@@ -287,6 +287,48 @@ export function getModelTags(modelId: string, _owner?: string): string[] {
 }
 
 /**
+ * Model families that are NOT chat-completion models: safety classifiers,
+ * embeddings, rerankers, speech (TTS/STT), and image/video/music generators.
+ *
+ * Routing to one of these produces a 400/404 or a nonsense reply — observed
+ * live: groq's `meta-llama/llama-prompt-guard-2-86m` (a content classifier)
+ * was spot-checked, marked VERIFIED, and entered groq's preferred-model list.
+ * A single source of truth keeps the probe, the registry's preferred-model
+ * ranking, and the routers from ever surfacing them.
+ */
+const NON_CHAT_MODEL_PATTERNS: RegExp[] = [
+  // Safety / classification
+  /guard/i, /safeguard/i, /prompt-guard/i, /safety/i, /moderation/i, /classifier/i,
+  // Embeddings / rerank
+  /embed/i, /rerank/i,
+  // Speech / audio (TTS, STT, transcription, voice)
+  /whisper/i, /tts/i, /stt/i, /speech/i, /audio/i, /transcri/i, /orpheus/i,
+  /text-to-speech/i, /voice/i,
+  // Image / video / music generation
+  /imagen/i, /dall-e/i, /stable-diffusion/i, /diffusion/i, /midjourney/i, /flux/i,
+  /banana/i, /lyria/i, /veo/i, /sora/i, /musicgen/i, /caption/i,
+  /(^|[-/_.])image($|[-/_.])/i, /(^|[-/_.])video($|[-/_.])/i,
+  /\bt2i\b/i, /\bi2v\b/i, /\bt2v\b/i, /\bi2i\b/i,
+  // Non-chat research agents
+  /deep-research/i,
+];
+
+/**
+ * True when the model id identifies a NON-chat model (classifier, embedding,
+ * speech, image/video, reranker). Unknown ids are treated as chat-capable —
+ * we only reject what we can positively classify as non-chat.
+ */
+export function isNonChatModel(modelId: string): boolean {
+  if (!modelId) return false;
+  return NON_CHAT_MODEL_PATTERNS.some((re) => re.test(modelId));
+}
+
+/** True when the model id looks usable for chat completions. */
+export function isChatCapableModel(modelId: string): boolean {
+  return !isNonChatModel(modelId);
+}
+
+/**
  * Returns a human-friendly label for a model ID, stripping provider prefixes
  * and formatting nicely.
  *

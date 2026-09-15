@@ -68,6 +68,42 @@ export interface FailureSessionState {
    * on-demand spot-check before re-admission (never re-pick without proof).
    */
   sessionTransientFailedProviders: Set<string>;
+  /**
+   * `provider|model` → expiry of a MODEL-scoped session exclusion.
+   *
+   * A rate limit on ONE model must not exclude its siblings: free tiers meter
+   * per-model (RPD/TPM), so 429s land here whenever the failing model is known
+   * and only escalate to `sessionFailedProviders` when the limit is genuinely
+   * shared (several distinct models of the provider rate-limited) or when the
+   * failing model is unknown. Optional — callers that don't track it keep the
+   * historical provider-wide behavior.
+   */
+  sessionFailedModels?: Map<string, number>;
+}
+
+/** How many DISTINCT models of one provider must rate-limit before the limit
+ * is treated as provider-wide (shared TPM) and escalated to a provider park. */
+export const PROVIDER_RATE_LIMIT_ESCALATION_MODELS = 2;
+
+/** Session-exclusion key for a single provider × model. */
+export function modelExclusionKey(providerType: string, model: string): string {
+  return `${providerType}|${model}`;
+}
+
+/**
+ * Is this exact provider × model excluded for the session right now?
+ * Best-effort — a caller without model tracking (undefined map) always returns
+ * false, preserving the older provider-only behavior.
+ */
+export function isModelSessionExcluded(
+  session: FailureSessionState,
+  providerType: string,
+  model: string | undefined,
+  now: number = Date.now(),
+): boolean {
+  if (!model || !session.sessionFailedModels) return false;
+  const expiresAt = session.sessionFailedModels.get(modelExclusionKey(providerType, model));
+  return expiresAt !== undefined && expiresAt > now;
 }
 
 // ─── Exclusion windows ──────────────────────────────────────────────────────
@@ -135,7 +171,24 @@ export function recordActionFailure(
   } else if (failureKind === 'rate-limit') {
     // Exhausted quota / token-limit — usually transient, so only a short
     // cooldown before the provider is re-admitted to auto routing.
-    session.sessionFailedProviders.set(providerType, now + RATE_LIMIT_EXCLUSION_MS);
+    //
+    // PER-MODEL FIRST: when the failing model is known, exclude THAT model and
+    // leave its siblings routable. Free tiers meter per-model (Groq's per-model
+    // RPD, Gemini's per-model RPD), so excluding the whole provider here is what
+    // made one 429 drain every model the user had. Only escalate to the
+    // provider-level exclusion when the limit is genuinely shared (the caller
+    // tracks models and several distinct ones are now parked) or when we don't
+    // know which model failed.
+    const failingModel = options?.model;
+    const trackModels = !!session.sessionFailedModels && !!failingModel && failingModel !== 'default';
+    if (trackModels) {
+      session.sessionFailedModels!.set(
+        modelExclusionKey(providerType, failingModel!),
+        now + RATE_LIMIT_EXCLUSION_MS,
+      );
+    } else {
+      session.sessionFailedProviders.set(providerType, now + RATE_LIMIT_EXCLUSION_MS);
+    }
     // Park the provider in the CENTRAL quota ledger until its reset window
     // rolls so the exclusion survives across chat sessions (the ledger is
     // read by the auto router before every pick, so the next session skips
@@ -175,8 +228,27 @@ export function recordActionFailure(
       hintMs !== null
         ? Math.max(hintMs, MIN_RATE_LIMIT_PARK_MS) // provider hint wins (floored to prevent hot-loop)
         : hasExplicitConfig ? windowMs : MIN_RATE_LIMIT_PARK_MS;
+    // PER-MODEL QUOTA KEY: park the model that ACTUALLY 429ed, not the whole
+    // provider. Its siblings have their own limits and must stay routable
+    // ("use every available model before giving up"). The registry mirrors the
+    // model-level park onto the exact entry, so the router skips that entry and
+    // still serves from the provider's other models.
     try {
-      getQuotaLedger().parkProvider(providerType, now + parkMs, failureKind);
+      const ledger = getQuotaLedger();
+      if (failingModel && failingModel !== 'default') {
+        ledger.parkModel(providerType, failingModel, now + parkMs, failureKind);
+        // SHARED-QUOTA ESCALATION: several DISTINCT models of the same provider
+        // rate-limited ⇒ the limit is provider-wide (Groq's free-tier TPM is
+        // shared across ALL of its models, so round-robining siblings can never
+        // escape it). Escalate to a provider park instead of hot-looping 429s.
+        if (ledger.getParkedModelCount(providerType) >= PROVIDER_RATE_LIMIT_ESCALATION_MODELS) {
+          ledger.parkProvider(providerType, now + parkMs, `${failureKind} (shared across models)`);
+          // The provider as a whole is now excluded, not just the model.
+          session.sessionFailedProviders.set(providerType, now + RATE_LIMIT_EXCLUSION_MS);
+        }
+      } else {
+        ledger.parkProvider(providerType, now + parkMs, failureKind);
+      }
     } catch {
       // Best-effort — ledger bookkeeping must not crash a call.
     }

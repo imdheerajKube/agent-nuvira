@@ -45,9 +45,11 @@ import { getRouterBandit, DEFAULT_MIN_SAMPLES, type BanditOutcome } from './rout
 import { getRouterPromotion, type ParallelPick, DEFAULT_MIN_PROMOTION_DECISIONS } from './router-promotion.js';
 import { getMlRouter, DEFAULT_ML_K, DEFAULT_ML_MIN_SAMPLES, DEFAULT_ML_STRENGTH } from './ml-router.js';
 import { buildModelCandidates, pickBestModelCandidate, buildFailoverChain, type ModelCandidate as ModelFirstCandidate } from './model-first-router.js';
+import { pickBestModel, topModelCandidates } from './model-scoring.js';
 import { getModelRegistry } from './model-registry.js';
 import { estimateTokens } from './cost-tracker.js';
 import { preferredModelsFor, PROVIDER_CONTEXT_WINDOWS } from './model-selection.js';
+import { isNonChatModel } from '../inference/model-catalog.js';
 import { CATALOG_PROVIDER_IDS, getCatalogProvider, getDefaultModel, isCatalogKeyless } from '../inference/provider-catalog.js';
 import type { ConfigManager } from '../config/manager.js';
 import type { ProviderPricing, GovernanceConfig } from '../config/types.js';
@@ -57,6 +59,14 @@ import { logger } from '../utils/logger.js';
 
 /** The special model value that triggers automatic per-task routing. */
 export const AUTO_MODEL = 'auto';
+
+/**
+ * How many models ONE provider contributes to the failover chain (DEEP
+ * FAILOVER). More than one so a provider's 2nd/3rd-best model is actually
+ * reachable — per-model RPD/TPM limits on free tiers mean a 429 on one model
+ * says nothing about its siblings.
+ */
+export const FALLBACK_MODELS_PER_PROVIDER = 3;
 
 /** The special provider value stored in active-model state for Auto mode. */
 export const AUTO_PROVIDER = 'auto';
@@ -1031,9 +1041,18 @@ export class AutoModelRouter {
   private getDefaultAllowedProviders(configManager?: ConfigManager): {
     allowed: string[];
     excluded: Array<{ provider: string; reason: string }>;
+    /**
+     * Credentialed, non-blocked providers the registry has NOT verified (no
+     * registry data yet, or only unverified/unavailable-but-not-degraded
+     * entries). They must never win the PRIMARY pick (routing into an unproven
+     * model is how "no model available" happens), but they are the last-resort
+     * FALLBACK pool — "use every model available, reject only when nothing is
+     * left". Callers append them AFTER the ranked verified candidates.
+     */
+    reserve: string[];
   } {
     if (!configManager || typeof configManager.hasRequiredCredentials !== 'function') {
-      return { allowed: DEFAULT_AUTO_PROVIDERS, excluded: [] };
+      return { allowed: DEFAULT_AUTO_PROVIDERS, excluded: [], reserve: [] };
     }
 
     // ── Registry-aware filtering: prefer providers with VERIFIED, usable
@@ -1100,7 +1119,12 @@ export class AutoModelRouter {
     if (registered.length > 0) {
       const intersection = base.filter((p) => registered.includes(p));
       if (intersection.length > 0) {
-        return { allowed: intersection, excluded };
+        // Verified providers win the primary ranking, but the credentialed-yet-
+        // unverified rest is NOT thrown away — it becomes the reserve fallback
+        // pool, so a task still reaches those models when every verified
+        // candidate fails ("only reject when nothing is left").
+        const reserve = base.filter((p) => !registered.includes(p));
+        return { allowed: intersection, excluded, reserve };
       }
     }
 
@@ -1108,7 +1132,7 @@ export class AutoModelRouter {
     // registry-blocked (pathological), fall back to the full built-in list so
     // the caller still gets a decision and surfaces availability instead of
     // crashing on an empty ranking.
-    return { allowed: base.length > 0 ? base : DEFAULT_AUTO_PROVIDERS, excluded };
+    return { allowed: base.length > 0 ? base : DEFAULT_AUTO_PROVIDERS, excluded, reserve: [] };
   }
 
   /**
@@ -1219,6 +1243,7 @@ export class AutoModelRouter {
     // proves the gathered data is driving decisions. Explicit allowedProviders
     // opt out of the registry filter entirely (caller knows best).
     let registryExcluded: Array<{ provider: string; reason: string }> = [];
+    let reserveProviders: string[] = [];
     let allowed: string[];
     if (options.allowedProviders?.length) {
       allowed = options.allowedProviders;
@@ -1226,6 +1251,7 @@ export class AutoModelRouter {
       const defaultPool = this.getDefaultAllowedProviders(configManager);
       allowed = defaultPool.allowed;
       registryExcluded = defaultPool.excluded;
+      reserveProviders = defaultPool.reserve;
     }
 
     let escalationApplied = false;
@@ -1833,16 +1859,96 @@ export class AutoModelRouter {
     }
 
     // Build fallback chain (skip in-cooldown providers when alternatives exist)
-    const fallbackChain: ModelCandidate[] = scored
-      .filter((s) => s.provider !== provider)
-      .map((s) => ({
+    //
+    // DEEP FAILOVER: every provider contributes MULTIPLE models, not one. Before
+    // this the chain carried a single resolveModel() pick per provider, so a
+    // provider's 2nd-best model was effectively unreachable — a 429 on the one
+    // listed model skipped the provider entirely even though its other models
+    // were healthy (free tiers meter per-model RPD/TPM, so siblings usually ARE
+    // healthy). Ordering: the PRIMARY provider's alternate models first (stay on
+    // the provider whose latency/health is already known, no provider switch
+    // cost), then the other providers' primary picks, then their alternates, so
+    // the chain both uses every model AND still leaves the provider before
+    // burning through all of its fallbacks.
+    const fallbackChain: ModelCandidate[] = [];
+    const seenFallback = new Set<string>();
+    const pushFallback = (
+      s: ScoredProvider,
+      model: string,
+      alternate: boolean,
+    ): void => {
+      const key = `${s.provider}|${model}`;
+      if (seenFallback.has(key)) return;
+      seenFallback.add(key);
+      fallbackChain.push({
         provider: s.provider,
-        model: this.resolveModel(s.provider, agentType, configManager, taskDescription),
+        model,
         estimatedCost: 0,
         qualityScore: s.score,
         contextWindowTokens: s.contextWindowTokens,
-        reason: s.inCooldown ? `Fallback (in cooldown): ${s.provider}` : `Fallback: ${s.provider}`,
-      }));
+        reason: alternate
+          ? `Fallback (alternate model on ${s.provider})`
+          : s.inCooldown
+            ? `Fallback (in cooldown): ${s.provider}`
+            : `Fallback: ${s.provider}`,
+      });
+    };
+    const modelsFor = (s: ScoredProvider): string[] =>
+      this.fallbackModelsFor(s.provider, agentType, configManager, taskDescription, complexity);
+
+    // Pass 1: the primary provider's OTHER models (deep failover within the
+    // provider that just failed a call).
+    for (const s of scored) {
+      if (s.provider !== provider) continue;
+      const models = modelsFor(s).slice(1); // [0] is the primary pick already in use
+      for (const m of models) pushFallback(s, m, true);
+    }
+    // Pass 2: every other provider's best model (historical chain order).
+    for (const s of scored) {
+      if (s.provider === provider) continue;
+      const models = modelsFor(s);
+      if (models.length === 0) continue;
+      pushFallback(s, models[0], false);
+    }
+    // Pass 3: those providers' remaining models.
+    for (const s of scored) {
+      if (s.provider === provider) continue;
+      const models = modelsFor(s);
+      for (const m of models.slice(1)) pushFallback(s, m, true);
+    }
+    // Last-resort reserve: credentialed providers the registry has not verified
+    // (no data yet). They never enter `ranked`/the primary pick — they are tried
+    // only after every ranked fallback is exhausted, so "use every model we can
+    // actually call, reject only when nothing is left" holds without routing
+    // into unproven models by default.
+    for (const p of reserveProviders) {
+      if (p === provider) continue;
+      if (fallbackChain.some((c) => c.provider === p)) continue;
+      fallbackChain.push({
+        provider: p,
+        model: this.resolveModel(p, agentType, configManager, taskDescription),
+        estimatedCost: 0,
+        qualityScore: 0,
+        reason: `Fallback (unverified — last resort): ${p}`,
+      });
+    }
+    // Pass 4 (reserve, deep): the reserve providers' alternate models too, so a
+    // last-resort credential pool is not limited to one model per provider.
+    for (const p of reserveProviders) {
+      if (p === provider) continue;
+      for (const m of this.fallbackModelsFor(p, agentType, configManager, taskDescription, complexity).slice(1)) {
+        const key = `${p}|${m}`;
+        if (seenFallback.has(key)) continue;
+        seenFallback.add(key);
+        fallbackChain.push({
+          provider: p,
+          model: m,
+          estimatedCost: 0,
+          qualityScore: 0,
+          reason: `Fallback (unverified, alternate model — last resort): ${p}`,
+        });
+      }
+    }
 
     const explanation = this.buildExplanation(
       agentType,
@@ -2068,7 +2174,6 @@ export class AutoModelRouter {
     // This ensures the bandit learns from the BEST models, not just verified ones.
     if (taskDescription) {
       try {
-        const { topModelCandidates } = require('./model-scoring.js');
         const scored = topModelCandidates(provider, taskDescription, 10, complexity);
         for (const s of scored) {
           if (!candidates.includes(s.model)) candidates.push(s.model);
@@ -2227,6 +2332,65 @@ export class AutoModelRouter {
   }
 
   /**
+   * The ranked model list a provider can serve this task with, best first.
+   *
+   * Always starts with the model the router would actually pick, then the
+   * provider's other task-scored candidates, then its remaining health-ranked
+   * verified models. This is what makes the failover chain DEEP (several models
+   * per provider) instead of one: a provider with five working models must be
+   * able to serve from all five, not give up after its first rate limit.
+   *
+   * Never returns the `'default'` SENTINEL or a non-chat model (a probe can
+   * verify a classifier/embedding/vision model, which can never answer a turn).
+   * Best-effort — scoring failures degrade to the pick + verified list.
+   */
+  private fallbackModelsFor(
+    provider: string,
+    agentType: string,
+    configManager: ConfigManager | undefined,
+    taskDescription: string | undefined,
+    complexity: ComplexityLevel | undefined,
+  ): string[] {
+    const out: string[] = [];
+    const push = (model: string | undefined): void => {
+      if (!model || model === 'default') return;
+      if (out.includes(model)) return;
+      if (isNonChatModel(model)) return;
+      out.push(model);
+    };
+    push(this.resolveModel(provider, agentType, configManager, taskDescription));
+    if (taskDescription) {
+      try {
+        for (const c of topModelCandidates(provider, taskDescription, FALLBACK_MODELS_PER_PROVIDER, complexity)) {
+          push(c.model);
+        }
+      } catch {
+        // Best-effort — model scoring must never break the chain.
+      }
+    }
+    for (const m of preferredModelsFor(provider)) push(m);
+    // HEALTHY-FIRST, but never dropped: a model the registry currently deems
+    // unusable (parked on its own quota / marked unavailable) must not outrank
+    // a healthy sibling, yet it stays in the list as the LAST resort — parks
+    // are short and the model may well have recovered by the time the walk
+    // gets to it ("use every model available; reject only when nothing is
+    // left"). Stable partition preserves the scoring order within each group.
+    const usable: string[] = [];
+    const unusable: string[] = [];
+    try {
+      const registry = getModelRegistry();
+      for (const m of out) {
+        if (registry.getEntry(provider, m) && !registry.isUsable(provider, m)) unusable.push(m);
+        else usable.push(m);
+      }
+    } catch {
+      // Best-effort — a registry failure must not empty the chain.
+      return out.slice(0, FALLBACK_MODELS_PER_PROVIDER);
+    }
+    return [...usable, ...unusable].slice(0, FALLBACK_MODELS_PER_PROVIDER);
+  }
+
+  /**
    * Resolve the model name to use within a chosen provider.
    * Prefers the provider's configured model; falls back to 'default'.
    *
@@ -2273,9 +2437,24 @@ export class AutoModelRouter {
     // hardcoded default.
     if (taskDescription) {
       try {
-        const { pickBestModel } = require('./model-scoring.js');
         const bestModel = pickBestModel(provider, taskDescription);
-        if (bestModel) return bestModel;
+        if (bestModel) {
+          // USABILITY GATE: a task-scored model can still be one the registry
+          // has parked (its own quota window) or marked unavailable. It must
+          // never win the PRIMARY pick while a servable sibling exists —
+          // scoring alone ranks the parked model low, not out. The registry
+          // re-admits it automatically once its window lapses, so this is the
+          // per-model quota contract end to end: skip the resting model, serve
+          // from a sibling, and pick the resting one again when it recovers.
+          const registry = getModelRegistry();
+          const entry = registry.getEntry(provider, bestModel);
+          if (!entry || registry.isUsable(provider, bestModel)) return bestModel;
+          const usable = preferredModelsFor(provider)[0];
+          if (usable) return usable;
+          // Nothing usable — fall through to the parked pick (the park may have
+          // lapsed, and a rejected pick is better than no model at all).
+          return bestModel;
+        }
       } catch {
         // Fall through to preferred models
       }

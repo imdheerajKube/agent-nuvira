@@ -28,6 +28,7 @@ import {
   isCatalogKeyless,
   catalogContextWindow,
 } from '../inference/provider-catalog.js';
+import { isNonChatModel } from '../inference/model-catalog.js';
 
 /** Built-in provider adapters shipped with the CLI — a catalog, not a preference. */
 export const BUILTIN_PROVIDERS = ['local', 'groq', 'gemini', 'nim', 'openrouter', 'nuvira'] as const;
@@ -81,6 +82,11 @@ export function preferredModelsFor(provider: string): string[] {
     // sorts FIRST here and gets handed to the adapter → the provider 404s.
     // Never let the sentinel act as a real model.
     .filter((m) => !!m && m !== 'default')
+    // Never rank a NON-CHAT model: a probe can mark a safety classifier /
+    // embedding / speech / image model "verified" (observed live with groq's
+    // llama-prompt-guard-2), and before this filter it then sorted FIRST and
+    // got served as the chat model. ROUTING MUST NEVER SELECT ONE.
+    .filter((m) => !isNonChatModel(m))
     .sort((a, b) => {
       const ea = registry.getEntry(provider, a);
       const eb = registry.getEntry(provider, b);

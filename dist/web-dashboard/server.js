@@ -1654,6 +1654,10 @@ function readQuotaData() {
             resetsInMs,
             parked: cooldownRemaining > 0,
             cooldownRemaining,
+            // Parking SCOPE so the panel can render "model resting — siblings still
+            // routable" differently from "provider parked". Legacy entries (no
+            // scope) came from parkProvider, which is provider-wide.
+            scope: cooldownRemaining > 0 ? (e.scope ?? 'provider') : undefined,
         };
     })
         .sort((a, b) => a.provider.localeCompare(b.provider) || a.model.localeCompare(b.model));

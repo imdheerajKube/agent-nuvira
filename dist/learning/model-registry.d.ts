@@ -264,6 +264,12 @@ export declare const DEFAULT_STALE_MS: number;
  */
 export declare const DEGRADED_UNAVAILABLE_THRESHOLD = 3;
 /**
+ * How far a single SUCCESS decays the error-rate EMA (mirrors the 0.1 partial-
+ * rate heal step). errorRate must heal on success, otherwise a transient blip
+ * permanently penalizes a recovered model in preferredModelsFor().
+ */
+export declare const ERROR_RATE_HEAL_STEP = 0.1;
+/**
  * The config value `'default'` is a SENTINEL meaning "use the provider's
  * default model" — it is NOT a model id. Telemetry must never track it: a
  * `groq|default` entry marked `verified` (observed live, its lastError being
@@ -430,6 +436,21 @@ export declare class ModelRegistry {
      * Optionally applies a quota park (e.g. rate-limit).
      */
     markUnavailable(provider: string, model: string, reason: string, source: ModelRegistrySource, quotaParkedUntil?: number, action?: string): void;
+    /**
+     * Park a SINGLE model for a quota window (rate-limit / 429) WITHOUT demoting
+     * its status.
+     *
+     * This is the probe-side counterpart to `recordCall(ok=false,'rate-limit')`:
+     * a transient quota blip must never flip a model to `unavailable` (which
+     * `isUsable()` then treats as permanently dead until a manual unblock), or a
+     * single 429 during a refresh would exclude a perfectly good model forever.
+     * The entry keeps its prior status (verified stays verified) and is gated
+     * only by `quotaParkedUntil`, so it re-enters routing automatically the
+     * moment the window lapses — "probed, and made available again when it is".
+     *
+     * @param until Absolute epoch ms when the park expires (must be > now to gate).
+     */
+    parkModel(provider: string, model: string, reason: string, until: number, source: ModelRegistrySource): void;
     /** Apply the quota ledger's parked-provider status to a provider's entries.
      *
      * FIX: Only park models that are NOT verified. A verified model has proven

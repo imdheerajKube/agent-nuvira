@@ -25,9 +25,16 @@
  *   - Chat: replace buildToolCallModel's tryGenerate with resilient wrapper
  *   - Tools: ctx.callLLM is already resilient (inherited from orchestrator)
  */
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { homedir } from 'node:os';
+import { join } from 'node:path';
 import { getAutoRouter } from './auto-router.js';
 import { analyzeComplexity } from './hybrid-router.js';
 import { buildAutoResolveOptions } from './resolve-options.js';
+import { buildModelCandidates, buildTieredFailoverChain } from './model-first-router.js';
+import { recordModelUsage } from './model-warmup.js';
+import { resolveWorkingModel } from '../inference/model-validator.js';
+import { getDefaultModel } from '../inference/provider-catalog.js';
 import { getModelRegistry } from './model-registry.js';
 import { recordActionFailure } from './failure-bookkeeping.js';
 import { getProviderFallback, recordRegistrySuccess } from './provider-fallback.js';
@@ -35,6 +42,10 @@ import { ProviderFactory } from '../inference/factory.js';
 import { recordRoutingDecision } from './routing-history.js';
 import { EventNames, getEventBus } from '../observability/event-bus.js';
 import { logger } from '../utils/logger.js';
+/** Key for a model-scoped exclusion / persisted failure. */
+function modelKey(provider, model) {
+    return `${provider}|${model}`;
+}
 // ─── Constants ──────────────────────────────────────────────────────────────
 /** How long a provider is excluded after an auth failure (whole session). */
 const AUTH_FAILURE_EXCLUSION_MS = Number.MAX_SAFE_INTEGER;
@@ -79,9 +90,6 @@ function exclusionDuration(kind) {
 }
 function loadPersistedFailures() {
     try {
-        const { existsSync, readFileSync } = require('node:fs');
-        const { join } = require('node:path');
-        const { homedir } = require('node:os');
         const path = join(homedir(), '.nuvira', FAILURE_PERSIST_PATH);
         if (!existsSync(path))
             return {};
@@ -99,17 +107,21 @@ function loadPersistedFailures() {
         return {};
     }
 }
-function persistFailure(provider, kind) {
+/**
+ * Persist a failure for cross-pipeline memory. When the failing MODEL is known
+ * the entry is keyed `provider|model` so a sibling model on the same provider
+ * is still routable in the next process; without a model it stays
+ * provider-wide (the legacy, honest answer).
+ */
+function persistFailure(provider, kind, model) {
     try {
-        const { existsSync, mkdirSync, writeFileSync, readFileSync } = require('node:fs');
-        const { join } = require('node:path');
-        const { homedir } = require('node:os');
         const dir = join(homedir(), '.nuvira');
         if (!existsSync(dir))
             mkdirSync(dir, { recursive: true });
         const path = join(dir, FAILURE_PERSIST_PATH);
         const existing = loadPersistedFailures();
-        existing[provider] = {
+        const key = model && model !== 'default' ? modelKey(provider, model) : provider;
+        existing[key] = {
             expiresAt: Date.now() + exclusionDuration(kind),
             kind,
             recordedAt: Date.now(),
@@ -148,6 +160,7 @@ export function createResilientCallLLM(configManager, options) {
     const autoRouter = getAutoRouter();
     const state = {
         sessionFailed: new Map(),
+        sessionFailedModels: new Map(),
         currentAttempt: 0,
         currentProvider: '',
         currentModel: '',
@@ -163,7 +176,20 @@ export function createResilientCallLLM(configManager, options) {
     }
     // Build the ranked candidate list (all candidates, no cap)
     // Pass task description + complexity for model-first failover
-    const allCandidates = buildCandidateList(initialDecision, state.sessionFailed, persistedFailures, options.task.description, options.task.complexity ? analyzeComplexity(options.task.description) : undefined, configManager);
+    const allCandidates = buildDeepFailoverPool(initialDecision, {
+        taskDescription: options.task.description,
+        complexity: options.task.complexity ? analyzeComplexity(options.task.description) : undefined,
+        configManager,
+    });
+    // ONE shared exclusion predicate (session provider-wide + session per-model +
+    // cross-pipeline persisted + registry per-entry). The session maps are read
+    // LIVE, so a failure recorded mid-walk takes effect on the next candidate.
+    const failoverFilter = createFailoverExclusionFilter({
+        sessionFailed: state.sessionFailed,
+        sessionFailedModels: state.sessionFailedModels,
+        crossPipelineMemory: options.crossPipelineMemory !== false,
+        persistedFailures,
+    });
     // The resilient callLLM
     const callLLM = async (prompt, inferenceOptions) => {
         if (state.exhausted) {
@@ -177,25 +203,15 @@ export function createResilientCallLLM(configManager, options) {
         ];
         let lastError = null;
         for (const candidate of candidatesToTry) {
-            // Skip excluded providers
-            if (isExcluded(candidate.provider, state.sessionFailed, persistedFailures)) {
+            // MODEL-scoped exclusions are honored before provider-wide ones, and the
+            // registry is checked per ENTRY: a failed or parked model rules out only
+            // itself, so the provider's other candidates in this list stay reachable
+            // (deep failover). Shared with chat/execute via the same factory.
+            if (failoverFilter(candidate.provider, candidate.model)) {
                 if (options.verbose) {
-                    logger.debug(`   ⏭️  ${candidate.provider} excluded — skipping`);
+                    logger.debug(`   ⏭️  ${candidate.provider}/${candidate.model} excluded (failure or registry) — skipping`);
                 }
                 continue;
-            }
-            // Skip registry-blocked providers
-            try {
-                const registry = getModelRegistry();
-                if (registry.getBlockedProviders().includes(candidate.provider)) {
-                    if (options.verbose) {
-                        logger.debug(`   ⏭️  ${candidate.provider} registry-blocked — skipping`);
-                    }
-                    continue;
-                }
-            }
-            catch {
-                // Best-effort — registry must never break routing.
             }
             // Resolve the provider adapter
             const adapter = resolveProviderAdapter(configManager, candidate.provider);
@@ -231,14 +247,12 @@ export function createResilientCallLLM(configManager, options) {
                     try {
                         const adapter = resolveProviderAdapter(configManager, candidate.provider);
                         if (adapter) {
-                            const { resolveWorkingModel } = require('../inference/model-validator.js');
                             resolvedModel = await resolveWorkingModel(adapter, candidate.provider, resolvedModel);
                         }
                     }
                     catch {
                         // Best-effort — fall through to the catalog's curated default
                         try {
-                            const { getDefaultModel } = require('../inference/provider-catalog.js');
                             resolvedModel = getDefaultModel(candidate.provider);
                         }
                         catch {
@@ -266,7 +280,6 @@ export function createResilientCallLLM(configManager, options) {
                 }
                 // Record usage for warmup daemon
                 try {
-                    const { recordModelUsage } = require('./model-warmup.js');
                     recordModelUsage(candidate.provider, resolvedModel);
                 }
                 catch {
@@ -293,13 +306,28 @@ export function createResilientCallLLM(configManager, options) {
                 // Classify and record the failure
                 const kind = classifyFailure(err);
                 const duration = exclusionDuration(kind);
-                state.sessionFailed.set(candidate.provider, {
-                    expiresAt: Date.now() + duration,
-                    kind,
-                });
+                // PER-MODEL EXCLUSION when the failing model is known. Excluding the
+                // whole provider here is what stopped a provider's 2nd-best model from
+                // ever being tried: one 429 on model A took models B and C with it.
+                // Only a failure that indicts the whole provider (auth: the key is
+                // dead) still records a provider-wide exclusion.
+                const failedModel = candidate.model;
+                const modelScoped = kind !== 'auth' && !!failedModel && failedModel !== 'default';
+                if (modelScoped) {
+                    state.sessionFailedModels.set(modelKey(candidate.provider, failedModel), {
+                        expiresAt: Date.now() + duration,
+                        kind,
+                    });
+                }
+                else {
+                    state.sessionFailed.set(candidate.provider, {
+                        expiresAt: Date.now() + duration,
+                        kind,
+                    });
+                }
                 // Persist for cross-pipeline memory
                 if (options.crossPipelineMemory !== false) {
-                    persistFailure(candidate.provider, kind);
+                    persistFailure(candidate.provider, kind, modelScoped ? failedModel : undefined);
                 }
                 // Record failure in shared bookkeeping
                 try {
@@ -387,10 +415,31 @@ function resolveWithExclusions(autoRouter, configManager, task, sessionFailed, p
         return null;
     }
 }
-function buildCandidateList(decision, sessionFailed, persistedFailures, taskDescription, complexity, configManager) {
+/**
+ * Build the DEEP failover pool — the ONE candidate list every entry path walks.
+ *
+ * This used to live only here, which is why the orchestrator/tool/sub-agent path
+ * was the deepest walker and chat/execute reached strictly fewer models. It is
+ * now exported so chat, execute, the dashboard console and the gateway all walk
+ * the SAME pool:
+ *
+ *   1. the router's primary win
+ *   2. the model-first TIERED pool (same model on other providers → same tier →
+ *      escalate → de-escalate → local; quota pre-checked, so every provider's
+ *      siblings are reachable, not just its one pin)
+ *   3. the router's own chain — ranked alternates PLUS the reserve pool
+ *   4. any ranked provider the chain never resolved a model for
+ *   5. the config-declared fallback providers
+ *
+ * Sorted best-first. Callers layer their OWN exclusions on top (session/model
+ * cooldowns, registry blocks) — the pool itself is never filtered, so a caller
+ * that deliberately wants to reach a parked model (to let `resolveWorkingModel`
+ * repair it) still can.
+ */
+export function buildDeepFailoverPool(decision, opts = {}) {
     if (!decision)
         return [];
-    const now = Date.now();
+    const { taskDescription, complexity, configManager } = opts;
     const candidates = [];
     // Primary candidate
     candidates.push({
@@ -406,10 +455,16 @@ function buildCandidateList(decision, sessionFailed, persistedFailures, taskDesc
     //   4. De-escalate to lower tier, cheaper models (pre-check quota)
     //   5. Local model (always available, last resort)
     //   6. Any remaining (last resort before neural response)
+    // Only the providers the ROUTER actually considered (winner + ranked) may
+    // contribute tiered candidates. `ranked` is the post-governance, credentialed
+    // set, so this keeps the pool to really-callable providers — without it the
+    // tiered layer returns the whole CATALOG and every walk pointlessly probes
+    // providers the user has no key for (measured: 23 pairs, 16 of them
+    // un-credentialed, before this restriction).
+    const allowedProviders = [...new Set([decision.provider, ...decision.ranked.map((r) => r.provider)])];
     try {
-        const { buildModelCandidates, buildTieredFailoverChain } = require('./model-first-router.js');
         if (taskDescription && complexity) {
-            const modelCandidates = buildModelCandidates(taskDescription, complexity, configManager);
+            const modelCandidates = buildModelCandidates(taskDescription, complexity, configManager, allowedProviders);
             const tieredChain = buildTieredFailoverChain({ model: decision.model, provider: decision.provider, dimensions: { capabilityFit: 0.5 } }, modelCandidates);
             // Flatten tiers into candidate list, maintaining tier order
             for (const tier of tieredChain) {
@@ -431,11 +486,36 @@ function buildCandidateList(decision, sessionFailed, persistedFailures, taskDesc
     catch {
         // Best-effort — tiered failover must never break routing
     }
-    // All ranked candidates (NO cap) — supplement with provider-ranked
+    // The router's OWN fallback chain — ranked alternates PLUS the RESERVE pool
+    // (credentialed providers the registry hasn't verified yet). Each entry now
+    // carries a REAL model, and there are several per provider (DEEP FAILOVER),
+    // so dedupe must be by provider × model — dedupe by provider alone is what
+    // silently dropped every alternate model and made the chain one-model-per-
+    // provider. The reserve is strictly last-resort: scored below every ranked
+    // candidate so it is only reached once the verified pool is exhausted.
+    for (const fb of decision.fallbackChain) {
+        const model = fb.model && fb.model !== 'default' ? fb.model : 'default';
+        // The primary candidate is already candidates[0].
+        if (fb.provider === decision.provider && model === decision.model)
+            continue;
+        const key = `${fb.provider}|${model}`;
+        if (candidates.some((c) => `${c.provider}|${c.model}` === key))
+            continue;
+        candidates.push({
+            provider: fb.provider,
+            model,
+            // Keep the chain's own order meaningful: the router already ranked these
+            // (primary picks before alternates, reserve last). A real model from the
+            // chain outranks a bare provider placeholder.
+            score: model === 'default' ? 0.05 : 0.5,
+        });
+    }
+    // Any ranked provider still missing entirely (no chain entry resolved a
+    // model) — added LAST with the placeholder; resolveModel fills it in at call
+    // time via the per-model path.
     for (const ranked of decision.ranked) {
         if (ranked.provider === decision.provider)
             continue;
-        const key = `${ranked.provider}:default`;
         if (candidates.some(c => c.provider === ranked.provider))
             continue;
         candidates.push({
@@ -462,16 +542,97 @@ function buildCandidateList(decision, sessionFailed, persistedFailures, taskDesc
     }
     // Sort by score descending (best first)
     candidates.sort((a, b) => b.score - a.score);
+    // The router's own win MUST stay first. The score-sort above compares the
+    // router's COMPOSITE score against the tiered layer's raw capability scores,
+    // and a tiered candidate can outscore the winner — which would silently
+    // override the router for every caller that walks the pool in order (chat and
+    // execute do exactly that). The router's decision is authoritative; the pool
+    // only extends failover BEYOND it.
+    const primaryIdx = candidates.findIndex((c) => c.provider === decision.provider && c.model === decision.model);
+    if (primaryIdx > 0) {
+        const [primary] = candidates.splice(primaryIdx, 1);
+        candidates.unshift(primary);
+    }
     return candidates;
 }
-function isExcluded(provider, sessionFailed, persistedFailures) {
+/**
+ * Expiry read from either a bare timestamp (`Map<string, number>`, the shape
+ * chat keeps) or a record with `expiresAt` (resilient-call's internal maps and
+ * the persisted-failure store). Duck-typing both shapes is what lets ONE
+ * predicate serve every entry path without an adapter allocation per call.
+ */
+function expiryAt(value) {
+    if (value === undefined)
+        return 0;
+    return typeof value === 'number' ? value : value.expiresAt;
+}
+/**
+ * Build the ONE failover-exclusion predicate every entry path shares, so the
+ * deep walk can never drift between chat, execute, the gateway and the
+ * orchestrator.
+ *
+ * It answers exactly the question the orchestrator's walk used to answer alone:
+ * "should this provider×model be skipped?". Provider-wide AND model-scoped
+ * exclusions are honored separately — a 429 on one model rules out that model
+ * only, never its healthy siblings. Session maps are read LIVE at call time, so
+ * a failure recorded mid-walk takes effect on the very next candidate.
+ *
+ * Best-effort by construction: a registry failure never rules a candidate out.
+ */
+export function createFailoverExclusionFilter(opts = {}) {
+    const persisted = opts.crossPipelineMemory === false
+        ? {}
+        : opts.persistedFailures ?? loadPersistedFailures();
+    const registryCheck = opts.registryCheck !== false;
+    return (provider, model) => {
+        if (isExcluded(provider, model, opts.sessionFailed, opts.sessionFailedModels, persisted)) {
+            return true;
+        }
+        return registryCheck ? isRegistryRuledOut(provider, model) : false;
+    };
+}
+function isExcluded(provider, model, sessionFailed, sessionFailedModels, persistedFailures) {
     const now = Date.now();
-    const sessionExcl = sessionFailed.get(provider);
-    if (sessionExcl && sessionExcl.expiresAt > now)
+    // Provider-wide (auth / unresolved model).
+    if (expiryAt(sessionFailed?.get(provider)) > now)
         return true;
-    const persisted = persistedFailures[provider];
-    if (persisted && persisted.expiresAt > now)
+    if (expiryAt(persistedFailures[provider]) > now)
         return true;
+    // Model-scoped — only this exact provider × model is ruled out.
+    if (model && model !== 'default') {
+        const key = modelKey(provider, model);
+        const modelExcl = sessionFailedModels?.get(key);
+        if (expiryAt(modelExcl) > now)
+            return true;
+        const persistedModel = persistedFailures[key];
+        if (expiryAt(persistedModel) > now)
+            return true;
+    }
     return false;
+}
+/**
+ * Has the Model Availability Registry already ruled this candidate out?
+ *
+ * Model-aware on purpose: with a concrete model the check is per-ENTRY
+ * (parked/unavailable/stale → skip just that candidate), so a parked model no
+ * longer blocks its healthy siblings on the same provider. Only an unresolved
+ * ('default') model falls back to the provider-wide blocked check.
+ * Best-effort — a registry failure never rules a candidate out.
+ */
+function isRegistryRuledOut(provider, model) {
+    try {
+        const registry = getModelRegistry();
+        if (model && model !== 'default') {
+            // Untracked model → unproven, not ruled out: the failover chain exists
+            // precisely to reach models the registry has no data on yet.
+            if (!registry.getEntry(provider, model))
+                return false;
+            return !registry.isUsable(provider, model);
+        }
+        return registry.getBlockedProviders().includes(provider);
+    }
+    catch {
+        return false;
+    }
 }
 //# sourceMappingURL=resilient-call.js.map

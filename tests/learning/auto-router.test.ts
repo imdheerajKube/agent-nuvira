@@ -1265,6 +1265,31 @@ describe('AutoModelRouter.resolve credential filtering', () => {
     expect(unblocked.ranked.some((s) => s.provider === 'nim')).toBe(true);
   });
 
+  it('keeps credentialed-but-unverified providers OUT of ranked but IN the fallback chain (use every model, reject only when nothing is left)', () => {
+    const registry = getModelRegistry();
+    // groq + local are verified → they own the primary ranking; the unverified
+    // cloud providers must never win a normal turn.
+    registry.markVerified('groq', 'llama-3.3-70b-versatile', 'spot-check');
+    registry.markVerified('local', 'llama3.2', 'spot-check');
+    const configManager = makeConfig(() => true);
+
+    const decision = new AutoModelRouter().resolve('writer', 'implement a login form', {}, configManager);
+    expect(decision.ranked.some((s) => s.provider === 'openrouter')).toBe(false);
+    expect(decision.ranked.some((s) => s.provider === 'gemini')).toBe(false);
+
+    // …but the credentialed-yet-unverified providers are NOT thrown away: they
+    // are the last-resort fallback, so a total outage of the verified pool still
+    // reaches them ("reject only when nothing is left").
+    const fallbackProviders = decision.fallbackChain.map((c) => c.provider);
+    expect(fallbackProviders).toContain('openrouter');
+    expect(fallbackProviders).toContain('gemini');
+    // Ranked fallbacks come FIRST; the unverified reserve is strictly last.
+    const firstReserve = fallbackProviders.findIndex((p) => p === 'openrouter');
+    for (const rankedFallback of fallbackProviders.filter((p) => decision.ranked.some((s) => s.provider === p))) {
+      expect(fallbackProviders.indexOf(rankedFallback)).toBeLessThan(firstReserve);
+    }
+  });
+
   it('excludes DEGRADED providers (0 verified + ≥3 unavailable) and cites the registry counts (ISSUE-002)', () => {
     const registry = getModelRegistry();
     // openrouter: 3 unavailable + 0 verified → degraded by the ISSUE-002

@@ -163,26 +163,36 @@ export class QuotaLedger {
         }
     }
     /**
-     * Explicitly park a provider until a given epoch ms (used by chat failover
-     * and quota-killed providers so the exclusion survives across sessions).
-     * Parked providers are excluded from Auto routing until `until`.
+     * Explicitly park a PROVIDER until a given epoch ms (used for a genuine
+     * provider-wide outage / shared quota and quota-killed providers, so the
+     * exclusion survives across sessions). Every model on the provider is
+     * excluded from Auto routing until `until` and the provider is reported in
+     * the provider-level quota feed. For a single model's own limit use
+     * `parkModel()` instead — parking the whole provider because ONE model 429ed
+     * drags its perfectly good siblings down.
      * Records a `parked` timeline event (best-effort).
      */
     parkProvider(provider, until, reason) {
         try {
             const now = Date.now();
             // Park every model entry for the provider (plus a provider-level entry
-            // so providers that never recorded a model are still covered).
+            // so providers that never recorded a model are still covered). Every
+            // entry is tagged scope='provider' so the provider-level router feed
+            // reports it as a provider-wide park.
             for (const key of Object.keys(this.state.entries)) {
                 const e = this.state.entries[key];
-                if (e.provider === provider && until > now)
+                if (e.provider === provider && until > now) {
                     e.cooldownUntil = until;
+                    e.scope = 'provider';
+                }
             }
             const defaultKey = entryKey(provider, 'default');
             if (!this.state.entries[defaultKey]) {
                 const entry = this.getOrCreate(provider, 'default', DEFAULT_WINDOW_MS);
-                if (until > now)
+                if (until > now) {
                     entry.cooldownUntil = until;
+                    entry.scope = 'provider';
+                }
             }
             this.save();
             if (until > now)
@@ -192,12 +202,67 @@ export class QuotaLedger {
             // Best-effort.
         }
     }
+    /**
+     * Park a SINGLE model until an epoch ms — the per-model quota key.
+     *
+     * A provider's models often have INDEPENDENT limits (per-model RPD/TPM on
+     * free tiers), so one model hitting its ceiling must not exclude its
+     * siblings. The park is tagged scope='model', which keeps the provider OUT
+     * of the provider-level router feed while still gating that exact model
+     * (isExhausted / getModelQuotaStatus) and — via the registry mirror — the
+     * router's per-entry `isUsable()` check.
+     *
+     * Use `parkProvider` when the limit really is shared provider-wide.
+     * Records a `parked` timeline event (best-effort).
+     */
+    parkModel(provider, model, until, reason) {
+        try {
+            if (!model || model === 'default') {
+                // No real model identity — a provider-wide park is the honest answer.
+                this.parkProvider(provider, until, reason);
+                return;
+            }
+            const now = Date.now();
+            if (until <= now)
+                return;
+            const entry = this.getOrCreate(provider, model, DEFAULT_WINDOW_MS);
+            entry.cooldownUntil = Math.max(entry.cooldownUntil, until);
+            entry.scope = 'model';
+            this.save();
+            this.recordEvent('parked', provider, reason ? `${model}: ${reason}` : model);
+        }
+        catch {
+            // Best-effort.
+        }
+    }
+    /**
+     * How many DISTINCT models of a provider are currently parked (model-scoped
+     * parks only). The shared-quota escalation signal: when several different
+     * models of the SAME provider all hit rate limits, the limit is almost
+     * certainly provider-wide (e.g. Groq's free-tier TPM is shared across every
+     * model) and the caller should escalate to `parkProvider()` instead of
+     * round-robining 429s across siblings forever.
+     */
+    getParkedModelCount(provider) {
+        const now = Date.now();
+        let count = 0;
+        for (const e of Object.values(this.state.entries)) {
+            if (e.provider !== provider)
+                continue;
+            if (e.model === 'default')
+                continue; // provider-level marker, not a model
+            if (e.cooldownUntil > now)
+                count++;
+        }
+        return count;
+    }
     /** Clear an explicit cooldown for a provider (manual re-enable). */
     releaseProvider(provider) {
         try {
             for (const key of Object.keys(this.state.entries)) {
                 if (this.state.entries[key].provider === provider) {
                     this.state.entries[key].cooldownUntil = 0;
+                    this.state.entries[key].scope = undefined;
                 }
             }
             // Also clear every account of the provider (M2.3).
@@ -383,9 +448,15 @@ export class QuotaLedger {
     getRouterQuotaStatus(configManager) {
         const now = Date.now();
         const parked = new Map();
-        // 1. Explicit cooldowns (failover / quota-killed providers).
+        // 1. Explicit OPERATOR-LEVEL cooldowns (provider-wide outage / shared
+        // quota / manual park). Model-scoped parks are deliberately EXCLUDED here:
+        // one model hitting its own limit must not sink the whole provider in the
+        // provider-level feed. Those are surfaced by getModelQuotaStatus() and
+        // mirrored onto the exact registry entry instead. Legacy entries (no
+        // scope) are treated as provider-scoped — before per-model parks existed
+        // only parkProvider wrote a cooldown.
         for (const entry of Object.values(this.state.entries)) {
-            if (entry.cooldownUntil > now) {
+            if (entry.cooldownUntil > now && (entry.scope ?? 'provider') === 'provider') {
                 const remaining = entry.cooldownUntil - now;
                 const current = parked.get(entry.provider) ?? 0;
                 if (remaining > current)
@@ -421,6 +492,45 @@ export class QuotaLedger {
         return [...parked.entries()].map(([provider, cooldownRemaining]) => ({ provider, cooldownRemaining }));
     }
     /**
+     * Per-MODEL parked feed — the per-model counterpart to
+     * `getRouterQuotaStatus()`. Reports every model-scoped park (and any
+     * provider-wide park, which covers every model of that provider) so the
+     * registry can mirror the park onto the EXACT entry and the dashboard can
+     * show which model is resting while its siblings keep serving.
+     *
+     * @returns Array of `{ provider, model, cooldownRemaining }` with
+     *   cooldownRemaining > 0, best-effort.
+     */
+    getModelQuotaStatus(configManager) {
+        const now = Date.now();
+        const parked = [];
+        for (const entry of Object.values(this.state.entries)) {
+            if (entry.cooldownUntil <= now)
+                continue;
+            if (entry.model === 'default')
+                continue; // provider-level marker, not a model
+            // Provider-scoped parks are reported once, provider-wide (below) — not
+            // per model, so the registry can keep them distinguishable.
+            if ((entry.scope ?? 'provider') !== 'model')
+                continue;
+            parked.push({
+                provider: entry.provider,
+                model: entry.model,
+                cooldownRemaining: entry.cooldownUntil - now,
+            });
+        }
+        // A provider-wide park covers EVERY model of that provider.
+        for (const { provider, cooldownRemaining } of this.getRouterQuotaStatus(configManager)) {
+            if (cooldownRemaining <= 0)
+                continue;
+            const already = parked.some((p) => p.provider === provider);
+            if (already)
+                continue;
+            parked.push({ provider, model: '*', cooldownRemaining });
+        }
+        return parked;
+    }
+    /**
      * Filter a candidate list down to providers that are NOT parked/exhausted.
      * Never returns an empty list — if everything is parked, returns the input
      * unchanged so the router's caller still gets a decision (and surfaces
@@ -453,6 +563,7 @@ export class QuotaLedger {
                 resetsInMs,
                 parked: cooldownRemaining > 0 || overLimit,
                 cooldownRemaining,
+                scope: cooldownRemaining > 0 ? (e.scope ?? 'provider') : undefined,
             };
         })
             .sort((a, b) => a.provider.localeCompare(b.provider) || a.model.localeCompare(b.model));
@@ -533,7 +644,9 @@ export class QuotaLedger {
         for (const s of statuses) {
             const state = s.parked
                 ? s.cooldownRemaining > 0
-                    ? `⏸ parked (${Math.ceil(s.cooldownRemaining / 1000)}s cooldown)`
+                    ? s.scope === 'model'
+                        ? `⏸ model resting (${Math.ceil(s.cooldownRemaining / 1000)}s — siblings still routable)`
+                        : `⏸ provider parked (${Math.ceil(s.cooldownRemaining / 1000)}s cooldown)`
                     : '⛔ exhausted — auto re-enables on window reset'
                 : '✅ available';
             lines.push(`   ${s.provider.padEnd(12)} ${(s.model || 'default').padEnd(28)} ` +

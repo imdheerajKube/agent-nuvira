@@ -31,7 +31,29 @@ export interface FailureSessionState {
      * on-demand spot-check before re-admission (never re-pick without proof).
      */
     sessionTransientFailedProviders: Set<string>;
+    /**
+     * `provider|model` → expiry of a MODEL-scoped session exclusion.
+     *
+     * A rate limit on ONE model must not exclude its siblings: free tiers meter
+     * per-model (RPD/TPM), so 429s land here whenever the failing model is known
+     * and only escalate to `sessionFailedProviders` when the limit is genuinely
+     * shared (several distinct models of the provider rate-limited) or when the
+     * failing model is unknown. Optional — callers that don't track it keep the
+     * historical provider-wide behavior.
+     */
+    sessionFailedModels?: Map<string, number>;
 }
+/** How many DISTINCT models of one provider must rate-limit before the limit
+ * is treated as provider-wide (shared TPM) and escalated to a provider park. */
+export declare const PROVIDER_RATE_LIMIT_ESCALATION_MODELS = 2;
+/** Session-exclusion key for a single provider × model. */
+export declare function modelExclusionKey(providerType: string, model: string): string;
+/**
+ * Is this exact provider × model excluded for the session right now?
+ * Best-effort — a caller without model tracking (undefined map) always returns
+ * false, preserving the older provider-only behavior.
+ */
+export declare function isModelSessionExcluded(session: FailureSessionState, providerType: string, model: string | undefined, now?: number): boolean;
 /**
  * How long a rate-limit failure excludes a provider from auto routing (ms).
  * Aligned with the circuit breaker's COOLDOWN_DURATION_MS (120s) so the

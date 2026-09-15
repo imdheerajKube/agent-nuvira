@@ -25,6 +25,7 @@ import { refreshModelRegistry, spotCheckModel } from '../inference/model-probe.j
 import { recordRoutingDecision } from '../learning/routing-history.js';
 import { shouldConfirmFailover, promptFailoverChoice } from './failover-prompt.js';
 import { buildAutoResolveOptions } from '../learning/resolve-options.js';
+import { buildDeepFailoverPool, createFailoverExclusionFilter } from '../learning/resilient-call.js';
 import { parseRequestSync } from '../nlu/parser.js';
 import { PlanStore } from '../tools/plan-store.js';
 import { withLogCorrelation } from '../enterprise/log.js';
@@ -261,6 +262,17 @@ export class ChatCommand extends BaseCommand {
      * Cleared when the chat exits.
      */
     sessionFailedProviders = new Map();
+    /**
+     * `provider|model` → expiry of a MODEL-scoped session exclusion.
+     *
+     * A 429 on ONE model now records HERE rather than in sessionFailedProviders:
+     * free tiers meter per-model (RPD/TPM), so excluding the whole provider is
+     * what stopped chat from ever reaching a provider's 2nd-best model. Siblings
+     * of the failed model stay routable; the failure only escalates to the
+     * provider-wide map when several distinct models of that provider are
+     * rate-limited (a genuinely shared limit).
+     */
+    sessionFailedModels = new Map();
     // RATE_LIMIT_EXCLUSION_MS + TRANSIENT_FAILURE_EXCLUSION_MS now live in
     // src/learning/failure-bookkeeping.ts (shared with every action) — see
     // recordActionFailure. Behavior is identical: same values, same semantics.
@@ -1266,6 +1278,9 @@ export class ChatCommand extends BaseCommand {
         recordActionFailure({
             sessionFailedProviders: this.sessionFailedProviders,
             sessionTransientFailedProviders: this.sessionTransientFailedProviders,
+            // Model tracking ON: a rate-limit on one model excludes THAT model and
+            // leaves the provider's siblings routable (per-model RPD/TPM limits).
+            sessionFailedModels: this.sessionFailedModels,
         }, providerType, err, this.configManager, { model, action: 'chat', apiKey });
     }
     async showModelPicker() {
@@ -1430,30 +1445,79 @@ export class ChatCommand extends BaseCommand {
         catch {
             // Best-effort — registry bookkeeping must never break routing
         }
-        const candidates = [
-            decision.provider,
-            ...decision.ranked
-                .filter((r) => r.provider !== decision.provider)
-                .map((r) => r.provider),
-        ].filter((p) => !excluded.has(p) && !registryBlocked.has(p));
-        for (const candidate of candidates) {
+        // ── DEEP FAILOVER candidate list: {provider, model} PAIRS ──────────────
+        // Several models PER PROVIDER, so a 429 on one model retries the SAME
+        // provider's next-best model before abandoning it. The previous
+        // provider-only list meant chat could only ever reach a single model per
+        // provider no matter how many that provider actually served (free tiers
+        // meter per-model, so the siblings were very often usable).
+        // Model-scoped exclusions come from the SAME predicate the orchestrator's
+        // resilient walk uses. Cross-pipeline persistence is OFF here (chat's own
+        // session accounting is the authority for an interactive turn) and the
+        // registry check is OFF because `resolveWorkingModel` below OWNS per-model
+        // repair; the provider-wide `registryBlocked` pre-filter above already
+        // removes dead providers.
+        const isModelExcluded = createFailoverExclusionFilter({
+            sessionFailedModels: this.sessionFailedModels,
+            crossPipelineMemory: false,
+            registryCheck: false,
+        });
+        const chatCandidates = [];
+        const seenPairs = new Set();
+        const pushCandidate = (prov, mdl) => {
+            if (!prov || excluded.has(prov) || registryBlocked.has(prov))
+                return;
+            const model = mdl && mdl !== 'default' ? mdl : 'default';
+            // Model-scoped session exclusion — only THIS model, never its siblings.
+            if (isModelExcluded(prov, model))
+                return;
+            const key = `${prov}|${model}`;
+            if (seenPairs.has(key))
+                return;
+            // NOTE: deliberately NO registry-usability skip here. `resolveWorkingModel`
+            // below OWNS model health — it repairs a dead/parked model to a live one
+            // on the SAME provider. Filtering the candidate out first would skip the
+            // whole provider and bypass that repair (observed: a stale gemini pin made
+            // chat jump straight to local without ever trying gemini). The chain
+            // already ranks healthy models first, so the parked pick is only ever a
+            // last resort that the repair then fixes.
+            seenPairs.add(key);
+            chatCandidates.push({ provider: prov, model });
+        };
+        // The pool itself is the SAME one the orchestrator/tool/sub-agent path
+        // walks: primary → model-first TIERED pool (same model on other providers,
+        // same tier, escalate/de-escalate, local) → router chain (deep pairs +
+        // reserve) → ranked placeholders → config fallback. Chat used to build a
+        // shallower list here, which is why it reached strictly fewer models than
+        // the orchestrator could.
+        const pool = buildDeepFailoverPool(decision, {
+            taskDescription: message,
+            complexity: decision.complexity,
+            configManager: this.configManager,
+        });
+        for (const c of pool)
+            pushCandidate(c.provider, c.model);
+        // Unique provider list (what callers use for their own failover) — derived
+        // from the pair list so it stays consistent with what is actually tried.
+        const candidates = [...new Set(chatCandidates.map((c) => c.provider))];
+        for (const candidate of chatCandidates) {
             try {
-                const resolved = resolveProvider(this.configManager, candidate);
+                const resolved = resolveProvider(this.configManager, candidate.provider);
                 if (await resolved.provider.isAvailable()) {
-                    const desired = candidate === decision.provider
-                        ? decision.model
-                        : getAutoRouter().resolveModel(candidate, 'chat', this.configManager);
+                    const desired = candidate.model !== 'default'
+                        ? candidate.model
+                        : getAutoRouter().resolveModel(candidate.provider, 'chat', this.configManager);
                     // Model health: only use models that actually exist on the provider.
                     // A provider's pinned config.model can be deprecated or a placeholder
                     // (e.g. gemini-2.0-flash-exp → 404) — repair to a live model.
-                    const model = await resolveWorkingModel(resolved.provider, candidate, desired);
+                    const model = await resolveWorkingModel(resolved.provider, candidate.provider, desired);
                     // Record the actually-used route for the dashboard audit trail
                     recordRoutingDecision({
                         source: 'chat',
                         agentType: 'chat',
                         task: message,
                         complexity: decision.complexity,
-                        provider: candidate,
+                        provider: candidate.provider,
                         model,
                         score: decision.score,
                     });

@@ -21,6 +21,7 @@ import { getCatalogProvider, type CatalogProviderEntry, CATALOG_PROVIDER_IDS } f
 import { analyzeComplexity, type ComplexityLevel } from './hybrid-router.js';
 import { getTaskType, type TaskType } from './model-router.js';
 import { preferredModelsFor } from './model-selection.js';
+import { isNonChatModel } from '../inference/model-catalog.js';
 import { logger } from '../utils/logger.js';
 import type { ConfigManager } from '../config/manager.js';
 
@@ -158,17 +159,10 @@ function scoreModelOnProvider(
   // Cost score: $0 = 1.0, $0.01 = 0.5, $0.02+ = 0.0
   const costScore = Math.max(0, Math.min(1, 1 - (costPerMToken / 0.02)));
 
-  // Filter out non-chat models (safety, embedding, guard, image, audio, video, research)
-  const isNonChat = modelLower.includes('guard') || modelLower.includes('safeguard')
-    || modelLower.includes('embed') || modelLower.includes('safety')
-    || modelLower.includes('moderation') || modelLower.includes('classifier')
-    || modelLower.includes('whisper') || modelLower.includes('tts') || modelLower.includes('speech')
-    || modelLower.includes('-image') || modelLower.includes('banana') || modelLower.includes('lyria')
-    || modelLower.includes('imagen') || modelLower.includes('veo') || modelLower.includes('video')
-    || modelLower.includes('prompt-guard') || modelLower.includes('safety-rating')
-    || modelLower.includes('deep-research') || modelLower.includes('text-to-speech')
-    || modelLower.includes('grounding') || modelLower.includes('audio') || modelLower.includes('caption');
-  if (isNonChat) return { costPerMToken: 0, costScore: 0, capabilityFit: 0, health: 0, quotaAvailability: 0, providerSpeed: 0, verification: 0 };
+  // Filter out non-chat models (safety, embedding, guard, image, audio, video,
+  // research) — the shared classifier is the single source of truth, so this
+  // list can never drift from the probe/registry filters.
+  if (isNonChatModel(model)) return { costPerMToken: 0, costScore: 0, capabilityFit: 0, health: 0, quotaAvailability: 0, providerSpeed: 0, verification: 0 };
 
   // 2. Capability fit — score by model SIZE relative to task complexity
   let capabilityFit = 0.5;

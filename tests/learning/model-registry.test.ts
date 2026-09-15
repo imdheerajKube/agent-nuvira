@@ -589,6 +589,40 @@ describe('ModelRegistry — quota parking & telemetry', () => {
     expect(registry.isUsable('groq', 'llama-3.3-70b-versatile')).toBe(true);
   });
 
+  it('a SUCCESS heals errorRate (a once-flaky model stops being penalized forever)', () => {
+    const registry = new ModelRegistry();
+    registry.markVerified('groq', 'llama-3.3-70b-versatile', 'spot-check');
+    registry.recordCall('groq', 'llama-3.3-70b-versatile', false, 'server'); // → 0.2
+    expect(registry.getEntry('groq', 'llama-3.3-70b-versatile')?.errorRate).toBeCloseTo(0.2, 5);
+
+    // A real successful call (recordCall ok → markVerified) decays the EMA.
+    registry.recordCall('groq', 'llama-3.3-70b-versatile', true);
+    expect(registry.getEntry('groq', 'llama-3.3-70b-versatile')?.errorRate).toBeCloseTo(0.1, 5);
+
+    // Repeated success decays it to 0 — never below.
+    registry.recordCall('groq', 'llama-3.3-70b-versatile', true);
+    registry.recordCall('groq', 'llama-3.3-70b-versatile', true);
+    expect(registry.getEntry('groq', 'llama-3.3-70b-versatile')?.errorRate).toBe(0);
+  });
+
+  it('parkModel parks a single model WITHOUT demoting it (a probe 429 must not kill a good model)', () => {
+    const registry = new ModelRegistry();
+    registry.markVerified('groq', 'llama-3.3-70b-versatile', 'spot-check');
+    registry.parkModel('groq', 'llama-3.3-70b-versatile', 'rate-limit (quota parked)', Date.now() + 60_000, 'spot-check');
+
+    const entry = registry.getEntry('groq', 'llama-3.3-70b-versatile')!;
+    // Status is preserved (markUnavailable would have flipped it permanently).
+    expect(entry.status).toBe('verified');
+    expect(entry.quotaParkedUntil).toBeGreaterThan(Date.now());
+    // Gated only while parked…
+    expect(registry.isUsable('groq', 'llama-3.3-70b-versatile')).toBe(false);
+
+    // …and re-enters routing on its own the moment the window lapses — no
+    // manual unblock / re-probe needed.
+    entry.quotaParkedUntil = Date.now() - 1;
+    expect(registry.isUsable('groq', 'llama-3.3-70b-versatile')).toBe(true);
+  });
+
   it('pruneStale demotes verified entries older than the stale window', () => {
     const registry = new ModelRegistry();
     registry.markVerified('gemini', 'gemini-2.5-flash', 'spot-check');

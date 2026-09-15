@@ -1968,6 +1968,8 @@ function readQuotaData(): Record<string, unknown> {
     windowStart: number;
     windowLengthMs: number;
     cooldownUntil: number;
+    /** 'provider' = provider-wide park, 'model' = one model resting (siblings keep serving). */
+    scope?: 'provider' | 'model';
   }> }>(join(MEMORY_DIR, 'quota-ledger.json'));
   if (!data?.entries) {
     // Failover timeline can exist even when the ledger has no usage entries
@@ -1993,6 +1995,10 @@ function readQuotaData(): Record<string, unknown> {
         resetsInMs,
         parked: cooldownRemaining > 0,
         cooldownRemaining,
+        // Parking SCOPE so the panel can render "model resting — siblings still
+        // routable" differently from "provider parked". Legacy entries (no
+        // scope) came from parkProvider, which is provider-wide.
+        scope: cooldownRemaining > 0 ? (e.scope ?? 'provider') : undefined,
       };
     })
     .sort((a, b) => a.provider.localeCompare(b.provider) || a.model.localeCompare(b.model));

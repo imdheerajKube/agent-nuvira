@@ -28,6 +28,7 @@ import { invalidateRoutingCache } from '../learning/routing-cache.js';
 import { classifyFallbackError, type FallbackErrorType } from '../learning/provider-fallback.js';
 import { getEventBus, EventNames } from '../observability/event-bus.js';
 import { CATALOG_PROVIDER_IDS, isCatalogKeyless } from './provider-catalog.js';
+import { isNonChatModel } from './model-catalog.js';
 import { logger } from '../utils/logger.js';
 
 // ─── Constants ──────────────────────────────────────────────────────────────
@@ -69,6 +70,14 @@ export const SPOT_CHECK_MIN_INTERVAL_MS = 10 * 60 * 1000; // 10 min
 
 /** Generation timeout for a spot-check (ms). */
 export const SPOT_CHECK_TIMEOUT_MS = 20_000;
+
+/**
+ * How long a 429 during a spot-check parks the model (ms). SHORT on purpose: a
+ * probe has no provider reset hint, and the authoritative exclusion is the quota
+ * ledger (extended by syncQuota). Long enough to back off, short enough that a
+ * recovered free-tier model returns on the next pass — never `unavailable`.
+ */
+export const PROBE_RATE_LIMIT_PARK_MS = 60 * 1000;
 
 /** In-flight throttle: how many spot-checks can run concurrently per refresh. */
 const SPOT_CHECK_CONCURRENCY = 3;
@@ -167,7 +176,19 @@ export async function spotCheckModel(
       return 'unavailable';
     }
     if (type === 'rate-limit') {
-      registry.markUnavailable(providerType, model, 'rate-limit (quota parked)', 'spot-check', 0, 'spot-check');
+      // TRANSIENT quota blip — PARK, never demote. `markUnavailable` would flip
+      // the status to 'unavailable', and isUsable() requires 'verified', so a
+      // single 429 during a refresh used to kill a perfectly good model until a
+      // manual unblock. Parking keeps the entry's status and gates only on
+      // quotaParkedUntil, so it re-enters routing automatically when the window
+      // lapses — exactly "probed, and made available again when it is".
+      registry.parkModel(
+        providerType,
+        model,
+        'rate-limit (quota parked)',
+        Date.now() + PROBE_RATE_LIMIT_PARK_MS,
+        'spot-check',
+      );
       return 'unavailable';
     }
     // Transient (network/timeout/server/unknown) — leave the entry as-is so a
@@ -296,7 +317,12 @@ export async function refreshModelRegistry(configManager: ConfigManager, options
         ...registry.getVerifiedModels(providerType),
         ...(options.extraModels?.[providerType] || []),
         ...rankProbeCandidates(listed),
-      ].filter((m, i, arr) => arr.indexOf(m) === i && listed.includes(m));
+      ]
+        // Never spend a probe (or a free-tier token) on a NON-chat model: a
+        // classifier/embedding/speech/image model can never serve a chat turn,
+        // and verifying one actively pollutes the preferred-model list.
+        .filter((m) => !isNonChatModel(m))
+        .filter((m, i, arr) => arr.indexOf(m) === i && listed.includes(m));
       const toCheck = candidates.slice(0, maxChecks);
 
       // Throttle concurrency so bursts of spot-checks don't hammer a free tier.
@@ -351,10 +377,10 @@ export async function refreshModelRegistry(configManager: ConfigManager, options
  */
 function rankProbeCandidates(ids: string[]): string[] {
   const score = (id: string): number => {
-    const l = id.toLowerCase();
-    let s = 0;
-    if (/(whisper|tts|stt|speech|audio|transcrib|voice)/.test(l)) s += 100;
-    if (/(preview|exp$|latest)/.test(l)) s += 10;
+    // Shared non-chat classifier (safety/embedding/speech/image/video) — one
+    // source of truth with the registry's preferred-model ranking.
+    let s = isNonChatModel(id) ? 100 : 0;
+    if (/(preview|exp$|latest)/.test(id)) s += 10;
     return s;
   };
   return [...ids].sort((a, b) => score(a) - score(b));

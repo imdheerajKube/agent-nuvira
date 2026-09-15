@@ -455,6 +455,16 @@ export class ProviderFallback {
       }
     }
 
+    // NOTE (reserve-pool audit): NO extra reserve is appended here ON PURPOSE.
+    // An explicit `fallback.providers` config is AUTHORITATIVE — the chain is
+    // exactly the user's list (and the cooldown/blocked filter may legitimately
+    // empty it). The dynamic path (no explicit config) already carries the
+    // reserve equivalent: `rankAvailableProviders()` returns credentialed-but-
+    // unverified providers last, so "reject only when nothing is left" already
+    // holds there. The router's own `decision.fallbackChain` is where the
+    // explicit reserve pool is appended (last), and that IS what chat/execute
+    // and the resilient callLLM consume.
+    //
     // Exclude providers currently in cooldown AND providers the Model
     // Availability Registry has definitively ruled out (every tracked model
     // unavailable/quota-parked from real usage telemetry). The predictive skip

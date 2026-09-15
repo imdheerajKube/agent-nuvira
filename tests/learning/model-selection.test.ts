@@ -159,6 +159,18 @@ describe('model selection — dynamic defaults (nothing hardcoded)', () => {
       // The adapter last-resort must resolve a REAL model, never the sentinel.
       expect(requireAdapterModel('groq', 'default')).toBe('real-model');
     });
+
+    it('drops NON-CHAT models even when a probe marked them verified (live bug)', () => {
+      const registry = getModelRegistry();
+      // Observed live: a refresh spot-checked groq's content classifier
+      // `meta-llama/llama-prompt-guard-2-86m`, marked it verified, and with
+      // errorRate 0 it sorted FIRST — so plain chat turns tried to generate
+      // with a safety classifier. Non-chat families must never be candidates.
+      registry.markVerified('groq', 'meta-llama/llama-prompt-guard-2-86m', 'spot-check');
+      registry.markVerified('groq', 'whisper-large-v3', 'spot-check');
+      registry.markVerified('groq', 'llama-3.3-70b-versatile', 'spot-check', 100);
+      expect(preferredModelsFor('groq')).toEqual(['llama-3.3-70b-versatile']);
+    });
   });
 
   describe('bestAvailable', () => {
