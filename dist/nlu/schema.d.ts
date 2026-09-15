@@ -14,8 +14,8 @@ import { z } from 'zod';
 export declare const nluIntentSchema: z.ZodEnum<{
     unknown: "unknown";
     fix: "fix";
-    create: "create";
     explain: "explain";
+    create: "create";
     configure: "configure";
     continue: "continue";
 }>;
@@ -48,8 +48,8 @@ export declare const verifyResponseSchema: z.ZodObject<{
     intent: z.ZodEnum<{
         unknown: "unknown";
         fix: "fix";
-        create: "create";
         explain: "explain";
+        create: "create";
         configure: "configure";
         continue: "continue";
     }>;

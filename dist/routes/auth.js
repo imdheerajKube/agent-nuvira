@@ -1,42 +1,47 @@
-"use strict";
-/**
- * Authentication Routes
- *
- * Exposes endpoints for user login and token issuance.  This
- * example uses a hard‑coded user for demonstration purposes.
- *
- * @module routes/auth
- */
-var __importDefault = (this && this.__importDefault) || function (mod) {
-    return (mod && mod.__esModule) ? mod : { "default": mod };
+import express from 'express';
+import jwt from 'jsonwebtoken';
+// Hard‑coded user credentials (for demo / testing purposes only)
+const HARD_CODED_USER = {
+    username: 'admin',
+    password: 'password123',
 };
-Object.defineProperty(exports, "__esModule", { value: true });
-const express_1 = require("express");
-const jsonwebtoken_1 = __importDefault(require("jsonwebtoken"));
-const jwt_1 = require("../config/jwt");
-const router = (0, express_1.Router)();
+// Retrieve JWT secret from environment variables.
+// Throw early if not configured to avoid runtime errors.
+const JWT_SECRET = process.env.JWT_SECRET;
+if (!JWT_SECRET) {
+    throw new Error('Environment variable JWT_SECRET must be set for authentication.');
+}
+// Token expiration time (e.g., 1 hour)
+const TOKEN_EXPIRES_IN = '1h';
+const router = express.Router();
 /**
- * POST /auth/login
- *
- * Accepts a JSON body with `username` and `password`.  In a real
- * application this would validate against a database.  Here we
- * simply issue a token for a single demo user.
+ * POST /login
+ * Accepts a JSON body with `username` and `password`.
+ * If the credentials match the hard‑coded user, a JWT is issued and returned.
+ * Otherwise, a 401 Unauthorized response is sent.
  */
-router.post('/login', (req, res) => {
-    const { username, password } = req.body;
-    // Basic validation
-    if (typeof username !== 'string' || typeof password !== 'string') {
-        return res.status(400).json({ error: 'Username and password required' });
+router.post('/login', (req, res, next) => {
+    try {
+        const { username, password } = req.body;
+        // Basic validation of request payload
+        if (typeof username !== 'string' || typeof password !== 'string') {
+            return res.status(400).json({ error: 'Invalid request payload.' });
+        }
+        // Verify credentials against the hard‑coded user
+        if (username !== HARD_CODED_USER.username || password !== HARD_CODED_USER.password) {
+            return res.status(401).json({ error: 'Invalid username or password.' });
+        }
+        // Create JWT payload – you can extend this with more claims as needed
+        const payload = { username };
+        // Sign the token
+        const token = jwt.sign(payload, JWT_SECRET, { expiresIn: TOKEN_EXPIRES_IN });
+        // Respond with the token
+        return res.status(200).json({ token });
     }
-    // Demo credentials check
-    if (username !== 'admin' || password !== 'password') {
-        return res.status(401).json({ error: 'Invalid credentials' });
+    catch (err) {
+        // Forward unexpected errors to Express error handler
+        return next(err);
     }
-    const payload = { sub: username, role: 'admin' };
-    const token = jsonwebtoken_1.default.sign(payload, jwt_1.jwtConfig.secret, {
-        expiresIn: jwt_1.jwtConfig.expiresIn,
-        algorithm: jwt_1.jwtConfig.algorithm,
-    });
-    res.json({ token });
 });
-exports.default = router;
+export default router;
+//# sourceMappingURL=auth.js.map

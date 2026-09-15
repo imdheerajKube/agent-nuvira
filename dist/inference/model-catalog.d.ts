@@ -39,6 +39,14 @@ export declare function categorizeModel(modelId: string, _owner?: string): Model
  */
 export declare function getModelTags(modelId: string, _owner?: string): string[];
 /**
+ * True when the model id identifies a NON-chat model (classifier, embedding,
+ * speech, image/video, reranker). Unknown ids are treated as chat-capable —
+ * we only reject what we can positively classify as non-chat.
+ */
+export declare function isNonChatModel(modelId: string): boolean;
+/** True when the model id looks usable for chat completions. */
+export declare function isChatCapableModel(modelId: string): boolean;
+/**
  * Returns a human-friendly label for a model ID, stripping provider prefixes
  * and formatting nicely.
  *

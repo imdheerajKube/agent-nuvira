@@ -17,6 +17,7 @@
  */
 import { getModelRegistry } from './model-registry.js';
 import { getCatalogProvider, CATALOG_PROVIDER_IDS } from '../inference/provider-catalog.js';
+import { isNonChatModel } from '../inference/model-catalog.js';
 // ─── Task Analysis ──────────────────────────────────────────────────────────
 /**
  * Estimate task requirements from description and complexity.
@@ -105,17 +106,10 @@ function scoreModelOnProvider(model, provider, entry, catalog, requirements, pro
         costPerMToken = 0;
     // Cost score: $0 = 1.0, $0.01 = 0.5, $0.02+ = 0.0
     const costScore = Math.max(0, Math.min(1, 1 - (costPerMToken / 0.02)));
-    // Filter out non-chat models (safety, embedding, guard, image, audio, video, research)
-    const isNonChat = modelLower.includes('guard') || modelLower.includes('safeguard')
-        || modelLower.includes('embed') || modelLower.includes('safety')
-        || modelLower.includes('moderation') || modelLower.includes('classifier')
-        || modelLower.includes('whisper') || modelLower.includes('tts') || modelLower.includes('speech')
-        || modelLower.includes('-image') || modelLower.includes('banana') || modelLower.includes('lyria')
-        || modelLower.includes('imagen') || modelLower.includes('veo') || modelLower.includes('video')
-        || modelLower.includes('prompt-guard') || modelLower.includes('safety-rating')
-        || modelLower.includes('deep-research') || modelLower.includes('text-to-speech')
-        || modelLower.includes('grounding') || modelLower.includes('audio') || modelLower.includes('caption');
-    if (isNonChat)
+    // Filter out non-chat models (safety, embedding, guard, image, audio, video,
+    // research) — the shared classifier is the single source of truth, so this
+    // list can never drift from the probe/registry filters.
+    if (isNonChatModel(model))
         return { costPerMToken: 0, costScore: 0, capabilityFit: 0, health: 0, quotaAvailability: 0, providerSpeed: 0, verification: 0 };
     // 2. Capability fit — score by model SIZE relative to task complexity
     let capabilityFit = 0.5;

@@ -37,7 +37,15 @@ function actionLogEntries() {
 
 // ─── Mocks ──────────────────────────────────────────────────────────────────
 
-const mockLedger = vi.hoisted(() => ({ parkProvider: vi.fn(), recordEvent: vi.fn() }));
+const mockLedger = vi.hoisted(() => ({
+  parkProvider: vi.fn(),
+  // PER-MODEL parking: a 429 on one model parks that model (parkModel) and
+  // leaves its siblings routable. getParkedModelCount defaults to 1 — a single
+  // model · 429 must NOT escalate to a provider-wide park.
+  parkModel: vi.fn(),
+  getParkedModelCount: vi.fn(() => 1),
+  recordEvent: vi.fn(),
+}));
 const mockRecordFailure = vi.hoisted(() => vi.fn());
 
 vi.mock('../../src/learning/quota-ledger.js', () => ({
@@ -89,6 +97,9 @@ function makeSession(): FailureSessionState {
   return {
     sessionFailedProviders: new Map<string, number>(),
     sessionTransientFailedProviders: new Set<string>(),
+    // Model tracking ON — the production shape (chat passes this map), so
+    // rate-limit failures land model-scoped and a provider's siblings survive.
+    sessionFailedModels: new Map<string, number>(),
   };
 }
 
@@ -122,15 +133,20 @@ describe('FailureBookkeeping — recordActionFailure', () => {
 
     recordActionFailure(session, 'groq', err, config, { model: 'llama-3.3-70b-versatile', action: 'chat' });
 
-    const expiry = session.sessionFailedProviders.get('groq')!;
+    // MODEL-scoped session exclusion: the failing model is excluded, the
+    // provider is NOT (its siblings keep serving) — the per-model quota key.
+    const expiry = session.sessionFailedModels!.get('groq|llama-3.3-70b-versatile')!;
     expect(expiry).toBeGreaterThanOrEqual(before + RATE_LIMIT_EXCLUSION_MS);
     expect(expiry).toBeLessThan(before + RATE_LIMIT_EXCLUSION_MS + 100);
+    expect(session.sessionFailedProviders.has('groq')).toBe(false);
     expect(session.sessionTransientFailedProviders.has('groq')).toBe(false);
-    // Parked until the CONFIGURED window (5000ms), not the 24h default.
-    expect(mockLedger.parkProvider).toHaveBeenCalledWith('groq', expect.any(Number), 'rate-limit');
-    const parkExpiry = mockLedger.parkProvider.mock.calls[0][1] as number;
+    // The LEDGER park is per-model too, until the CONFIGURED window (5000ms),
+    // not the 24h default — and the provider is not parked as a whole.
+    expect(mockLedger.parkModel).toHaveBeenCalledWith('groq', 'llama-3.3-70b-versatile', expect.any(Number), 'rate-limit');
+    const parkExpiry = mockLedger.parkModel.mock.calls[0][2] as number;
     expect(parkExpiry).toBeGreaterThanOrEqual(before + 5000);
     expect(parkExpiry).toBeLessThan(before + 5000 + 100);
+    expect(mockLedger.parkProvider).not.toHaveBeenCalled();
     // Rate-limit parks but does NOT demote the entry (transient — the model
     // must auto-recover when the window lapses).
     expect(getModelRegistry().getEntry('groq', 'llama-3.3-70b-versatile')?.status).not.toBe('unavailable');
@@ -167,10 +183,47 @@ describe('FailureBookkeeping — recordActionFailure', () => {
       { model: 'llama-3.3-70b-versatile', action: 'chat' },
     );
 
-    const parkExpiry = mockLedger.parkProvider.mock.calls[0][1] as number;
+    // Per-model park (the failure was attributed to a concrete model).
+    expect(mockLedger.parkModel).toHaveBeenCalledWith('groq', 'llama-3.3-70b-versatile', expect.any(Number), 'rate-limit');
+    const parkExpiry = mockLedger.parkModel.mock.calls[0][2] as number;
     // ~16.5s (floored at 10s) — NOT the 24h default.
     expect(parkExpiry).toBeGreaterThanOrEqual(before + 10_000);
     expect(parkExpiry).toBeLessThan(before + 20_000);
+  });
+
+  it('rate-limit on several models of one provider escalates to a PROVIDER park (shared quota)', () => {
+    const session = makeSession();
+    // Groq's free-tier TPM is shared across ALL its models — round-robining
+    // siblings can never escape it. Once a 2nd distinct model of the same
+    // provider is parked, the limit is provider-wide.
+    mockLedger.getParkedModelCount.mockReturnValueOnce(2);
+
+    recordActionFailure(session, 'groq', new Error('429 rate limit reached'), makeConfig(), {
+      model: 'openai/gpt-oss-120b',
+      action: 'execute',
+    });
+
+    // Both the model AND the provider end up parked.
+    expect(mockLedger.parkModel).toHaveBeenCalledWith('groq', 'openai/gpt-oss-120b', expect.any(Number), 'rate-limit');
+    expect(mockLedger.parkProvider).toHaveBeenCalledWith(
+      'groq',
+      expect.any(Number),
+      'rate-limit (shared across models)',
+    );
+    // The escalation also excludes the provider at the session level.
+    expect(session.sessionFailedProviders.get('groq')).toBeGreaterThan(0);
+  });
+
+  it('rate-limit with NO attributable model parks the PROVIDER (honest scope)', () => {
+    const session = makeSession();
+
+    recordActionFailure(session, 'groq', new Error('429 Too Many Requests'), makeConfig(), { action: 'chat' });
+
+    // No model was passed → we cannot claim a per-model limit, so the park is
+    // provider-wide and the model-scoped APIs are not used.
+    expect(mockLedger.parkProvider).toHaveBeenCalledWith('groq', expect.any(Number), 'rate-limit');
+    expect(mockLedger.parkModel).not.toHaveBeenCalled();
+    expect(session.sessionFailedProviders.get('groq')).toBeGreaterThan(0);
   });
 
   it('rate-limit hint wins over configured window (provider knows its limits)', () => {
@@ -256,9 +309,12 @@ describe('FailureBookkeeping — recordActionFailure', () => {
       recordActionFailure(session, 'openrouter', new Error('401 Unauthorized'), makeConfig(), { action: 'chat' }),
     ).not.toThrow();
 
-    // Session exclusion still applied, registry still updated, breaker fed.
+    // Session exclusion still applied and the breaker is fed.
     expect(session.sessionFailedProviders.get('openrouter')).toBe(Number.MAX_SAFE_INTEGER);
-    expect(getModelRegistry().getEntry('openrouter', 'default')?.status).toBe('unavailable');
     expect(mockRecordFailure).toHaveBeenCalledWith('openrouter');
+    // No model was attributed (options.model is undefined → the config
+    // sentinel 'default'), and the registry's write guard refuses to track the
+    // sentinel as a real model — so nothing bogus is persisted.
+    expect(getModelRegistry().getEntry('openrouter', 'default')).toBeUndefined();
   });
 });

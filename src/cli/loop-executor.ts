@@ -29,6 +29,8 @@ import { ConfigManager } from '../config/manager.js';
 import { resolveProvider } from './router.js';
 import { resolveWorkingModel } from '../inference/model-validator.js';
 import { getAutoRouter, isAutoModel, isAutoProvider } from '../learning/auto-router.js';
+import { buildDeepFailoverPool, createFailoverExclusionFilter } from '../learning/resilient-call.js';
+import { getModelRegistry } from '../learning/model-registry.js';
 import { buildLoopProjectContext } from '../tools/loop-project-context.js';
 import { getLoopExposureMode } from '../tools/toolsets.js';
 import { resolveEngine } from '../learning/engine-router.js';
@@ -125,16 +127,57 @@ export async function runLoopExecutor(
         : await resolveWorkingModel(provider, providerType, undefined);
     } else {
       const routed = await getAutoRouter().resolve('execute', goal, { verbose: !opts.quiet }, configManager);
-      // Walk the ranked candidates to the first AVAILABLE provider (the
-      // router excludes unconfigured providers; isAvailable() is the gate).
-      const candidates = [routed.provider, ...routed.ranked.map((r) => r.provider)];
-      for (const candidate of candidates) {
+      // Walk {provider, model} PAIRS to the first AVAILABLE one (the router
+      // excludes unconfigured providers; isAvailable() is the gate). The pairs
+      // come from the router's DEEP failover chain, so several models per
+      // provider are reachable — a single model per provider meant a provider's
+      // 2nd-best model was never tried (free tiers meter per-model, so siblings
+      // are frequently still usable).
+      const pairs: Array<{ provider: string; model: string }> = [];
+      const seen = new Set<string>();
+      const push = (prov: string, mdl?: string): void => {
+        if (!prov) return;
+        const model = mdl && mdl !== 'default' ? mdl : 'default';
+        const key = `${prov}|${model}`;
+        if (seen.has(key)) return;
+        // NOTE: deliberately NO registry-usability skip here — `resolveWorkingModel`
+        // below owns model health and repairs a dead/parked model to a live one
+        // on the SAME provider. Filtering the candidate out first would skip the
+        // whole provider and bypass that repair. The chain already ranks healthy
+        // models first, so a parked pick is only ever the last resort.
+        seen.add(key);
+        pairs.push({ provider: prov, model });
+      };
+      // SAME deep pool the orchestrator and chat walk (primary → model-first
+      // tiered pool → router chain incl. reserve → ranked → config fallback),
+      // so execute no longer reaches fewer models than the other paths.
+      const pool = buildDeepFailoverPool(routed, {
+        taskDescription: goal,
+        configManager,
+      });
+      for (const c of pool) push(c.provider, c.model);
+
+      // SAME exclusion predicate the orchestrator's resilient walk uses: skip
+      // models the registry marks unusable/parked (per ENTRY — a parked model's
+      // siblings stay reachable) and models that failed in an earlier run
+      // (cross-pipeline memory; entries self-expire, so a healed model is picked
+      // again). Tried in TWO passes so "reject only when nothing is left" holds:
+      // excluded candidates are attempted last, never dropped, so an
+      // all-excluded pool still makes the best attempt instead of failing with
+      // "no available provider".
+      const isExcluded = createFailoverExclusionFilter();
+      const ordered = [
+        ...pairs.filter((p) => !isExcluded(p.provider, p.model)),
+        ...pairs.filter((p) => isExcluded(p.provider, p.model)),
+      ];
+
+      for (const pair of ordered) {
         try {
-          const resolved = resolveProvider(configManager, candidate);
+          const resolved = resolveProvider(configManager, pair.provider);
           if (await resolved.provider.isAvailable()) {
-            const desired = candidate === routed.provider
-              ? routed.model
-              : getAutoRouter().resolveModel(candidate, 'execute', configManager);
+            const desired = pair.model !== 'default'
+              ? pair.model
+              : getAutoRouter().resolveModel(pair.provider, 'execute', configManager);
             providerType = resolved.type;
             provider = resolved.provider;
             model = await resolveWorkingModel(resolved.provider, resolved.type, desired);

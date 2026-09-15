@@ -77,6 +77,17 @@ export declare class ChatCommand extends BaseCommand {
      */
     private sessionFailedProviders;
     /**
+     * `provider|model` → expiry of a MODEL-scoped session exclusion.
+     *
+     * A 429 on ONE model now records HERE rather than in sessionFailedProviders:
+     * free tiers meter per-model (RPD/TPM), so excluding the whole provider is
+     * what stopped chat from ever reaching a provider's 2nd-best model. Siblings
+     * of the failed model stay routable; the failure only escalates to the
+     * provider-wide map when several distinct models of that provider are
+     * rate-limited (a genuinely shared limit).
+     */
+    private sessionFailedModels;
+    /**
      * Providers that failed TRANSIENTLY this session (server/network/timeout/
      * unknown). Tracked separately from the exclusion map so that when a
      * transient exclusion EXPIRES, the provider is only re-admitted to routing

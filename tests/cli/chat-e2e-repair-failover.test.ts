@@ -4,11 +4,12 @@
  *
  *   stale gemini pin (gemini-2.0-flash-exp, retired by Google) → model-health
  *   REPAIR to a registry-verified model (gemini-2.5-flash) → gemini FAILS at
- *   generation → auto failover to local → local's stale pin (llama2) is also
- *   repaired (gemma4:e4b) → the answer comes from local. Crucially, the
- *   repairs are LEARNED once in the Model Availability Registry, so the next
- *   message repairs SILENTLY — the "model X is not available" warning never
- *   repeats (the recursion that made auto routing look broken).
+ *   generation → auto failover to local, whose DEEP-FAILOVER candidate already
+ *   carries the registry-verified model (gemma4:e4b) — so no second repair is
+ *   needed — → the answer comes from local. Crucially, the one repair is
+ *   LEARNED in the Model Availability Registry, so the next message repairs
+ *   SILENTLY — the "model X is not available" warning never repeats (the
+ *   recursion that made auto routing look broken).
  *
  * Driven through the REAL ChatCommand.execute() single-shot path (exactly what
  * `nuvira chat "<prompt>" --provider auto --model auto` runs): real
@@ -247,29 +248,38 @@ describe('ChatCommand E2E — stale pin → silent repair → gemini failure →
     // header route, the prompt route, and the failover route re-picked the
     // dead pin but only the FIRST route warned.
     const warnings = repairWarnings();
-    expect(warnings).toHaveLength(2);
+    // EXACTLY ONE repair: gemini's stale pin. Local's pin is no longer
+    // consulted at all — the DEEP FAILOVER pool the chat walk now shares with
+    // the orchestrator carries the registry-VERIFIED model for local
+    // (gemma4:e4b), so the failover candidate arrives already healthy and
+    // needs no repair. (Before the shared pool, the failover candidate was a
+    // bare provider placeholder, which fell back to resolveModel() → the
+    // retired 'llama2' pin → a second repair.) Same final answer, one less
+    // repair round-trip.
+    expect(warnings).toHaveLength(1);
     expect(warnings.some((w) => w.includes("'gemini-2.0-flash-exp'") && w.includes('gemini-2.5-flash'))).toBe(true);
-    expect(warnings.some((w) => w.includes("'llama2'") && w.includes('gemma4:e4b'))).toBe(true);
+    expect(warnings.some((w) => w.includes("'llama2'"))).toBe(false);
 
-    // The registry LEARNED both stale pins are dead (this is what makes the
-    // next message silent).
+    // The registry LEARNED gemini's stale pin is dead (this is what makes the
+    // next message silent). Local's pin was never probed, so it stays
+    // untracked — nothing to learn about a model that is never selected.
     const registry = getModelRegistry();
     expect(registry.getEntry('gemini', 'gemini-2.0-flash-exp')?.status).toBe('unavailable');
-    expect(registry.getEntry('local', 'llama2')?.status).toBe('unavailable');
+    expect(registry.getEntry('local', 'llama2')).toBeUndefined();
   });
 
   it('does not repeat the repair warnings on the next message — repairs are learned once', async () => {
-    // Message 1: learns both stale pins (exactly 2 repair warnings).
+    // Message 1: learns the one stale pin that is actually selected (gemini).
     const first = await runAutoChatMessage('explain how auto routing picks a provider');
     expect(first).toContain('local answer');
-    expect(repairWarnings()).toHaveLength(2);
+    expect(repairWarnings()).toHaveLength(1);
     expect(geminiGenerate).toHaveBeenCalledTimes(1);
 
     // Message 2: a FRESH chat session (new ChatCommand, shared registry) —
-    // the pins are now known-dead, so repair is SILENT. Zero warnings repeat.
+    // the pin is now known-dead, so repair is SILENT. Zero warnings repeat.
     const second = await runAutoChatMessage('explain context-fit routing');
     expect(second).toContain('local answer');
-    expect(repairWarnings()).toHaveLength(2); // still only the 2 learning warnings
+    expect(repairWarnings()).toHaveLength(1); // still only the learning warning
 
     // gemini is still attempted once per message (silently repaired to the
     // verified model) and still fails over to local — never a re-warned retry

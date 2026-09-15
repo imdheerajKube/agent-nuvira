@@ -43,6 +43,18 @@ export interface QuotaEntry {
     windowLengthMs: number;
     /** Epoch ms until which the entry is explicitly parked (0 = not parked). */
     cooldownUntil: number;
+    /**
+     * Parking SCOPE — why this entry is parked:
+     *   'provider' → a provider-WIDE park (shared quota, total outage). EVERY
+     *     model on the provider is excluded, so the provider sinks in the
+     *     router's provider-level quota feed.
+     *   'model'    → ONE model's own limit (per-model RPD/TPM). Siblings stay
+     *     routable; the provider is NOT reported as parked.
+     * Undefined = legacy persisted entry. Before per-model parks existed only
+     * `parkProvider` ever wrote a cooldown, so undefined is treated as
+     * 'provider' (backwards compatible).
+     */
+    scope?: 'provider' | 'model';
 }
 /**
  * M2.3 multi-account state for ONE provider key (never stores the raw key —
@@ -77,6 +89,13 @@ export interface QuotaStatus {
     parked: boolean;
     /** Remaining ms of an explicit cooldown (0 = none). */
     cooldownRemaining: number;
+    /**
+     * Why it is parked: 'provider' = provider-wide park (sinks the whole
+     * provider), 'model' = this model's own limit only (siblings keep serving).
+     * Undefined when not parked. The dashboard uses this to render "resting"
+     * (per-model) vs "exhausted" (provider-wide).
+     */
+    scope?: 'provider' | 'model';
 }
 /** Event types recorded in the quota failover timeline (quota-events.jsonl). */
 export type QuotaEventType = 'parked' | 're-enabled' | 'released' | 'failover';
@@ -130,12 +149,39 @@ export declare class QuotaLedger {
      */
     recordUsage(provider: string, model: string, inputTokens: number, outputTokens: number, windowMs?: number): void;
     /**
-     * Explicitly park a provider until a given epoch ms (used by chat failover
-     * and quota-killed providers so the exclusion survives across sessions).
-     * Parked providers are excluded from Auto routing until `until`.
+     * Explicitly park a PROVIDER until a given epoch ms (used for a genuine
+     * provider-wide outage / shared quota and quota-killed providers, so the
+     * exclusion survives across sessions). Every model on the provider is
+     * excluded from Auto routing until `until` and the provider is reported in
+     * the provider-level quota feed. For a single model's own limit use
+     * `parkModel()` instead — parking the whole provider because ONE model 429ed
+     * drags its perfectly good siblings down.
      * Records a `parked` timeline event (best-effort).
      */
     parkProvider(provider: string, until: number, reason?: string): void;
+    /**
+     * Park a SINGLE model until an epoch ms — the per-model quota key.
+     *
+     * A provider's models often have INDEPENDENT limits (per-model RPD/TPM on
+     * free tiers), so one model hitting its ceiling must not exclude its
+     * siblings. The park is tagged scope='model', which keeps the provider OUT
+     * of the provider-level router feed while still gating that exact model
+     * (isExhausted / getModelQuotaStatus) and — via the registry mirror — the
+     * router's per-entry `isUsable()` check.
+     *
+     * Use `parkProvider` when the limit really is shared provider-wide.
+     * Records a `parked` timeline event (best-effort).
+     */
+    parkModel(provider: string, model: string, until: number, reason?: string): void;
+    /**
+     * How many DISTINCT models of a provider are currently parked (model-scoped
+     * parks only). The shared-quota escalation signal: when several different
+     * models of the SAME provider all hit rate limits, the limit is almost
+     * certainly provider-wide (e.g. Groq's free-tier TPM is shared across every
+     * model) and the caller should escalate to `parkProvider()` instead of
+     * round-robining 429s across siblings forever.
+     */
+    getParkedModelCount(provider: string): number;
     /** Clear an explicit cooldown for a provider (manual re-enable). */
     releaseProvider(provider: string): void;
     /** Park a single provider account/key until an epoch ms (rate-limit/auth). */
@@ -179,6 +225,21 @@ export declare class QuotaLedger {
      */
     getRouterQuotaStatus(configManager?: ConfigManager): Array<{
         provider: string;
+        cooldownRemaining: number;
+    }>;
+    /**
+     * Per-MODEL parked feed — the per-model counterpart to
+     * `getRouterQuotaStatus()`. Reports every model-scoped park (and any
+     * provider-wide park, which covers every model of that provider) so the
+     * registry can mirror the park onto the EXACT entry and the dashboard can
+     * show which model is resting while its siblings keep serving.
+     *
+     * @returns Array of `{ provider, model, cooldownRemaining }` with
+     *   cooldownRemaining > 0, best-effort.
+     */
+    getModelQuotaStatus(configManager?: ConfigManager): Array<{
+        provider: string;
+        model: string;
         cooldownRemaining: number;
     }>;
     /**

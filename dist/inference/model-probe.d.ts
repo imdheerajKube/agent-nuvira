@@ -43,6 +43,13 @@ export declare const SPOT_CHECK_MIN_INTERVAL_MS: number;
 /** Generation timeout for a spot-check (ms). */
 export declare const SPOT_CHECK_TIMEOUT_MS = 20000;
 /**
+ * How long a 429 during a spot-check parks the model (ms). SHORT on purpose: a
+ * probe has no provider reset hint, and the authoritative exclusion is the quota
+ * ledger (extended by syncQuota). Long enough to back off, short enough that a
+ * recovered free-tier model returns on the next pass — never `unavailable`.
+ */
+export declare const PROBE_RATE_LIMIT_PARK_MS: number;
+/**
  * Build an inference provider for a provider type using the user's configured
  * credentials. Returns null when the type is unknown or has no key (local is
  * always attempted — it needs no key).

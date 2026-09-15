@@ -56,7 +56,7 @@
       <div class="hero-content">
         <div class="hero-badge">
           <span class="badge-dot"></span>
-          Open Source · MIT License · v2.7.0
+          Open Source · MIT License · v2.7.3
         </div>
         <h1 class="hero-title">
           AI That Codes.<br />
@@ -263,7 +263,7 @@
             <svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><path d="M12 6v6l4 2"/></svg>
           </div>
           <h3>Quota Ledger + Self-Healing Failover</h3>
-          <p>A central quota ledger tracks tokens per provider × model with calendar-aware resets, parks exhausted providers until free tier returns, and auto-fails-over mid-session when a key expires or rate-limit hits — never a stuck session, never a quota error thrown at you. <strong>Rate-limit recovery is fully automatic</strong>: a transient blip is silently waited out and retried, while an exhausted or storming provider (2+ hits in a row) silently hands the task to the router's next healthy provider mid-build — no prompts, no grinding the same quota, no build interrupted. <strong>Key hygiene keeps the config honest</strong>: a provider with 3 consecutive 401/403 auth failures has its dead key auto-cleared from your config (or you're told exactly which env var to fix) with a clear error, and stale local models that were deleted (<code>ollama rm</code>) are pruned on the next <code>buff models refresh</code> — so the router never wastes a call on credentials or models that no longer exist.</p>
+          <p>A central quota ledger tracks tokens per provider × model with calendar-aware resets, parks exhausted providers until free tier returns, and auto-fails-over mid-session when a key expires or rate-limit hits — never a stuck session, never a quota error thrown at you. <strong>Parks are per MODEL, not per provider</strong> (v2.7.3): a 429 rests that one model while its siblings keep serving, escalating to a provider-wide park only when several distinct models of the same provider are rate-limited — the honest signal for a genuinely shared limit. A model that once hiccuped is no longer penalized forever either: every success heals its error rate and a lapsed park re-admits it automatically. <strong>Rate-limit recovery is fully automatic</strong>: a transient blip is silently waited out and retried, while an exhausted or storming provider (2+ hits in a row) silently hands the task to the router's next healthy provider mid-build — no prompts, no grinding the same quota, no build interrupted. <strong>Key hygiene keeps the config honest</strong>: a provider with 3 consecutive 401/403 auth failures has its dead key auto-cleared from your config (or you're told exactly which env var to fix) with a clear error, and stale local models that were deleted (<code>ollama rm</code>) are pruned on the next <code>buff models refresh</code> — so the router never wastes a call on credentials or models that no longer exist.</p>
         </div>
         <div class="feature-card" data-delay="700">
           <div class="feature-icon privacy">
@@ -494,6 +494,7 @@
           </div>
           <h3>Self-Healing Failover</h3>
           <p>When a provider dies mid-session (expired key, exhausted quota, deprecated model), Auto mode automatically hops to the next-best provider — and an optional confirmation prompt keeps you in control of every swap. Every failover is recorded in a live timeline.</p>
+          <p>Failover is <strong>deep and shared</strong> (v2.7.3): CLI chat, the dashboard console, the messaging gateway, <code>execute</code> and the multi-agent orchestrator all walk the <em>same</em> candidate pool — several models per provider plus a reserve pool of credentialed-but-unverified providers — with the router's own pick pinned first, model-scoped exclusions (one failed model never costs you its healthy siblings), cross-pipeline failure memory, and a per-entry registry skip so parked models are avoided before the call, not after. “Reject only when nothing is left” holds even when every candidate looks unhealthy: excluded candidates are attempted last, never dropped.</p>
         </div>
         <div class="feature-card" data-delay="1400">
           <div class="feature-icon learning">
