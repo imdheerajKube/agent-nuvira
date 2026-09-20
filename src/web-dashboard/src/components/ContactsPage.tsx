@@ -11,6 +11,9 @@ interface Contact {
   addedAt: number;
 }
 
+/** Platforms that support two-way outbound messaging (send authority applies). */
+const OUTBOUND_PLATFORMS = ['whatsapp', 'whatsapp_cloud', 'telegram', 'signal', 'slack', 'discord', 'email'] as const;
+
 export default function ContactsPage() {
   const [contacts, setContacts] = useState<Contact[]>([]);
   const [loading, setLoading] = useState(true);
@@ -20,11 +23,36 @@ export default function ContactsPage() {
   const [editPhone, setEditPhone] = useState('');
   const [msg, setMsg] = useState<{ kind: 'ok' | 'err'; text: string } | null>(null);
 
+  // ── Send authority ──────────────────────────────────────────────────────
+  // Who may command the agent to message OTHER people (gateway_send). This is
+  // distinct from a contact's APPROVAL status above (which only gates sending
+  // TO that person).
+  const [sendAuth, setSendAuth] = useState<Record<string, { outboundSenders?: string[]; requireApprovedTarget?: boolean }>>({});
+  const [savedSendAuth, setSavedSendAuth] = useState<Record<string, { outboundSenders?: string[]; requireApprovedTarget?: boolean }>>({});
+  const [sendInputs, setSendInputs] = useState<Record<string, string>>({});
+  const [sendMsg, setSendMsg] = useState<{ kind: 'ok' | 'err'; text: string } | null>(null);
+  const [sendBusy, setSendBusy] = useState(false);
+
   const refresh = useCallback(async () => {
     setLoading(true);
     const result = await dashboardAPI.getContacts();
     if (result.ok && result.contacts) {
       setContacts(result.contacts as Contact[]);
+    }
+    // Send authority rides the gateway-policies endpoint.
+    const pol = await dashboardAPI.gatewayPolicies();
+    if (pol.ok && pol.policies) {
+      const next: Record<string, { outboundSenders?: string[]; requireApprovedTarget?: boolean }> = {};
+      for (const p of OUTBOUND_PLATFORMS) {
+        const v = (pol.policies as Record<string, { outboundSenders?: string[]; requireApprovedTarget?: boolean }>)[p];
+        if (!v) continue;
+        next[p] = {
+          ...(v.outboundSenders !== undefined ? { outboundSenders: v.outboundSenders } : {}),
+          ...(v.requireApprovedTarget !== undefined ? { requireApprovedTarget: v.requireApprovedTarget } : {}),
+        };
+      }
+      setSendAuth(next);
+      setSavedSendAuth(next);
     }
     setLoading(false);
   }, []);
@@ -75,6 +103,81 @@ export default function ContactsPage() {
   };
 
   const formatDate = (ms: number) => ms ? new Date(ms).toLocaleString() : '—';
+
+  // ── Send-authority handlers ──────────────────────────────────────────────
+  const addSender = (platform: string) => {
+    const id = (sendInputs[platform] ?? '').trim();
+    if (!id) return;
+    setSendAuth((prev) => {
+      const entry = { ...(prev[platform] ?? {}) };
+      const base = entry.outboundSenders ?? savedSendAuth[platform]?.outboundSenders ?? [];
+      if (!base.some((x) => x.toLowerCase() === id.toLowerCase())) entry.outboundSenders = [...base, id];
+      return { ...prev, [platform]: entry };
+    });
+    setSendInputs((s) => ({ ...s, [platform]: '' }));
+  };
+
+  const removeSender = (platform: string, id: string) => {
+    setSendAuth((prev) => {
+      const entry = { ...(prev[platform] ?? {}) };
+      const base = entry.outboundSenders ?? savedSendAuth[platform]?.outboundSenders ?? [];
+      entry.outboundSenders = base.filter((x) => x.toLowerCase() !== id.toLowerCase());
+      return { ...prev, [platform]: entry };
+    });
+  };
+
+  const toggleApprovedTarget = (platform: string) => {
+    setSendAuth((prev) => {
+      const entry = { ...(prev[platform] ?? {}) };
+      entry.requireApprovedTarget = entry.requireApprovedTarget === true ? false : true;
+      return { ...prev, [platform]: entry };
+    });
+  };
+
+  /** Reset to the OPEN default (inherit the inbound allow-list). */
+  const resetSenderAuthority = (platform: string) => {
+    setSendAuth((prev) => {
+      const entry = { ...(prev[platform] ?? {}) };
+      delete entry.outboundSenders;
+      return { ...prev, [platform]: entry };
+    });
+  };
+
+  const handleSaveSendAuth = async () => {
+    setSendBusy(true);
+    setSendMsg(null);
+    // Build the payload: for each platform send ONLY its send-authority keys.
+    // The API merges PER-KEY over the saved policy, so this never touches
+    // allowedUsers / allowedGroups / etc.
+    const payload: Record<string, unknown> = {};
+    for (const p of OUTBOUND_PLATFORMS) {
+      const nextEntry = sendAuth[p] ?? {};
+      const savedEntry = savedSendAuth[p] ?? {};
+      const changed =
+        JSON.stringify(nextEntry.outboundSenders ?? null) !== JSON.stringify(savedEntry.outboundSenders ?? null) ||
+        Boolean(nextEntry.requireApprovedTarget) !== Boolean(savedEntry.requireApprovedTarget);
+      if (!changed) continue;
+      payload[p] = {
+        ...(nextEntry.outboundSenders !== undefined
+          ? { outboundSenders: nextEntry.outboundSenders }
+          : { outboundSenders: null }), // null = delete key → back to inherit
+        requireApprovedTarget: Boolean(nextEntry.requireApprovedTarget),
+      };
+    }
+    if (Object.keys(payload).length === 0) {
+      setSendBusy(false);
+      setSendMsg({ kind: 'ok', text: 'No changes to save.' });
+      return;
+    }
+    const r = await dashboardAPI.saveGatewayPolicies(payload as never);
+    if (r.ok) {
+      setSendMsg({ kind: 'ok', text: '✅ Send authority saved.' });
+      void refresh();
+    } else {
+      setSendMsg({ kind: 'err', text: r.error || 'Failed to save send authority.' });
+    }
+    setSendBusy(false);
+  };
 
   return (
     <div className="panel contacts-page">
@@ -145,6 +248,73 @@ export default function ContactsPage() {
           </table>
         </div>
       )}
+
+      <div className="panel-header" style={{ marginTop: 28 }}>
+        <h2>🔐 Send authority — who may message others</h2>
+        <p className="admin-hint">
+          Controls who can ask the agent to send a message to <strong>someone else</strong> through the gateway
+          (e.g. “send this poem to my brother on WhatsApp”). This is separate from a contact’s approval status
+          above, which only gates sending <em>to</em> that person. Left empty, a platform <strong>inherits</strong> its
+          allowed-users list (open). Add <code>Allow-All</code> to allow everyone, or list specific senders to restrict it.
+        </p>
+      </div>
+
+      {sendMsg && (
+        <div className={`admin-row-msg ${sendMsg.kind === 'err' ? 'admin-row-msg-err' : ''}`}>
+          {sendMsg.text}
+          <button className="admin-mini-btn" onClick={() => setSendMsg(null)}>✕</button>
+        </div>
+      )}
+
+      <div className="hub-permissions">
+        {OUTBOUND_PLATFORMS.map((p) => {
+          const entry = sendAuth[p] ?? {};
+          const senders = entry.outboundSenders ?? [];
+          const open = entry.outboundSenders === undefined;
+          return (
+            <div className="hub-card" key={`sa-${p}`}>
+              <div className="hub-card-top">
+                <span className="hub-chip">{platformIcon(p)} {p}</span>
+                {open ? <span className="hub-chip">open</span> : <span className="hub-chip">restricted</span>}
+              </div>
+              <div className="hub-alias-list">
+                {open ? (
+                  <span className="admin-hint">Open — anyone who can trigger the agent may send to others.</span>
+                ) : senders.length === 0 ? (
+                  <span className="admin-hint">(empty — nobody may send to others)</span>
+                ) : (
+                  senders.map((u) => (
+                    <div className="hub-alias-row" key={`sa-${p}-${u}`}>
+                      <span className="hub-chip">{u}</span>
+                      <button className="admin-refresh-btn" disabled={sendBusy} onClick={() => removeSender(p, u)}>✕</button>
+                    </div>
+                  ))
+                )}
+              </div>
+              <div className="hub-send-form">
+                <input
+                  type="text"
+                  value={sendInputs[p] ?? ''}
+                  onChange={(e) => setSendInputs((s) => ({ ...s, [p]: e.target.value }))}
+                  placeholder="sender id, or Allow-All"
+                  disabled={sendBusy}
+                />
+                <button className="admin-refresh-btn" disabled={sendBusy || !(sendInputs[p] ?? '').trim()} onClick={() => addSender(p)}>+ Sender</button>
+                {!open ? (
+                  <button className="admin-refresh-btn" disabled={sendBusy} onClick={() => resetSenderAuthority(p)}>↺ Reset to open</button>
+                ) : null}
+              </div>
+              <label style={{ display: 'inline-flex', alignItems: 'center', gap: 6, marginTop: 6 }}>
+                <input type="checkbox" checked={Boolean(entry.requireApprovedTarget)} disabled={sendBusy} onChange={() => toggleApprovedTarget(p)} />
+                <span className="admin-hint">Require approved recipients</span>
+              </label>
+            </div>
+          );
+        })}
+      </div>
+      <div style={{ marginTop: 12 }}>
+        <button className="admin-refresh-btn" disabled={sendBusy} onClick={() => void handleSaveSendAuth()}>💾 Save send authority</button>
+      </div>
 
       {editingContact && (
         <div className="wizard-overlay" onClick={() => setEditingContact(null)}>

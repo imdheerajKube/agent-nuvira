@@ -43,6 +43,28 @@ function fmtTokens(n: number | undefined): string {
   return String(n);
 }
 
+/**
+ * The honest-action badge. `success` only means "a reply was generated"; this
+ * says whether the reply actually DID anything — so a hallucinated
+ * "I have sent it" is visibly flagged instead of looking like a delivery.
+ */
+function outcomeBadge(outcome: TraceEntry['outcome']): { text: string; color: string; bg: string; border: string } | null {
+  if (!outcome) return null;
+  const base = { bg: '#0d1117', border: '#30363d' };
+  if (outcome.unverifiedClaim) {
+    return { text: '⚠️ unverified claim — said it acted, but no tool ran', color: '#d29922', bg: '#3d2c00', border: '#d29922' };
+  }
+  if (outcome.kind === 'acted') {
+    return {
+      text: outcome.delivered ? '✅ action performed — message sent' : `🔧 acted — ${outcome.tools?.length ?? 0} tool(s)`,
+      color: '#3fb950', bg: '#0d2818', border: '#238636',
+    };
+  }
+  if (outcome.kind === 'answered') return { text: '💬 answered — no action taken', color: '#8b949e', ...base };
+  if (outcome.kind === 'cancelled') return { text: '⏹ cancelled', color: '#8b949e', ...base };
+  return { text: '❌ generation failed', color: '#f85149', bg: '#2d0f0f', border: '#f85149' };
+}
+
 function SectionCard({ icon, title, subtitle, children }: {
   icon: string; title: string; subtitle?: string; children: React.ReactNode;
 }) {
@@ -217,6 +239,15 @@ function TraceDetail({ trace }: { trace: TraceEntry }) {
         <span style={{ fontSize: 11, padding: '2px 10px', borderRadius: 12, background: '#0d1117', border: '1px solid #30363d', color: '#8b949e' }}>
           🕓 {timeAgo(trace.startedAt)}
         </span>
+        {(() => {
+          const b = outcomeBadge(trace.outcome);
+          if (!b) return null;
+          return (
+            <span style={{ fontSize: 11, padding: '2px 10px', borderRadius: 12, background: b.bg, border: `1px solid ${b.border}`, color: b.color }}>
+              {b.text}
+            </span>
+          );
+        })()}
         <span style={{ fontSize: 11, padding: '2px 10px', borderRadius: 12, background: '#0d1117', border: '1px solid #30363d', color: '#8b949e' }}>
           ⏱ {fmtDuration(trace.durationMs)}
         </span>

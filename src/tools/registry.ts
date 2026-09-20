@@ -398,9 +398,22 @@ const codeSearchSchema = z.object({
 
 /** P0.2 — read_file tool args: open a file with line numbers (deny-first). */
 const readFileSchema = z.object({
-  path: z.string().describe('Path to the file to read, relative to the workspace root (e.g. "src/server.ts"). Absolute paths outside the workspace and ".." traversal are denied.'),
-  offset: z.number().int().min(1).default(1).describe('First line number to read (1-based). Continue a truncated read by passing the next line.'),
-  limit: z.number().int().min(1).max(2000).default(2000).describe('Max lines to read (default 2000).'),
+  path: z.string().optional().describe('Path to a single file to read, relative to the workspace root (e.g. "src/server.ts"). Absolute paths outside the workspace and ".." traversal are denied. Prefer `paths` to read several files in one call.'),
+  paths: z
+    .array(
+      z.union([
+        z.string(),
+        z.object({
+          path: z.string(),
+          offset: z.number().int().min(1).optional(),
+          limit: z.number().int().min(1).max(2000).optional(),
+        }),
+      ]),
+    )
+    .optional()
+    .describe('Several files to read in ONE call — each entry a path or { path, offset, limit }. Reads share a bounded character budget; each file gets its own line count and a continuation offset when truncated, and one bad path never discards the rest. Prefer this over many read_file calls.'),
+  offset: z.number().int().min(1).default(1).describe('First line number to read (single-file form; 1-based). Continue a truncated read by passing the next line.'),
+  limit: z.number().int().min(1).max(2000).default(2000).describe('Max lines to read (single-file form; default 2000).'),
 });
 
 /** P0.2 — list_dir tool args: list a directory (deny-first). */
@@ -417,9 +430,20 @@ const globSchema = z.object({
 /** P0.3 — edit_file tool args: surgical exact-text replacement (confirmed). */
 const editFileSchema = z.object({
   path: z.string().describe('Path to the file to edit, relative to the workspace root (e.g. "src/server.ts"). Absolute paths outside the workspace and ".." traversal are denied.'),
-  old_string: z.string().min(1).describe('Exact text to find — literal match including whitespace. Refused when it occurs multiple times unless allow_multiple is set.'),
-  new_string: z.string().describe('Replacement text (empty string deletes the matched text).'),
-  allow_multiple: z.boolean().default(false).describe('Replace ALL occurrences of old_string (default false — an ambiguous match is refused).'),
+  old_string: z.string().optional().describe('Exact text to find (single-pair form) — literal match including whitespace. Refused when it occurs multiple times unless allow_multiple is set. Prefer `replacements` for several edits to the same file.'),
+  new_string: z.string().optional().describe('Replacement text for the single-pair form (empty string deletes the matched text).'),
+  allow_multiple: z.boolean().default(false).describe('Replace ALL occurrences of old_string (single-pair form; default false — an ambiguous match is refused).'),
+  replacements: z
+    .array(
+      z.object({
+        old_string: z.string().min(1),
+        new_string: z.string(),
+        allow_multiple: z.boolean().optional().default(false),
+      }),
+    )
+    .optional()
+    .describe('Several replacements to this ONE file in a single call, applied in order. TRANSACTIONAL: if any replacement fails to match, NOTHING is written — so a refactor can never half-apply. Use one call instead of many edits.'),
+  dry_run: z.boolean().default(false).describe('Validate and preview the change (returns the unified diff) without writing anything. Needs no confirmation.'),
   confirm: z.boolean().default(false).describe('Set true ONLY after the user explicitly confirmed this edit via ask_user. State-changing — refused without it.'),
 });
 
@@ -688,7 +712,7 @@ registerTool({
 
 registerTool({
   name: 'read_file',
-  description: 'Read a file with line numbers (offset/limit for large files). Use to open the actual contents of a file code_search or glob located — never guess what a file contains.',
+  description: 'Read files with line numbers. Pass `path` for one file (offset/limit for large files) OR `paths` to read several in one call — batching is one step instead of many. Each file gets its own line count and a continuation offset when truncated. Use to open the actual contents of files code_search or glob located — never guess what a file contains.',
   category: 'workflow',
   inputSchema: readFileSchema,
   endsAgentStep: false,
@@ -715,7 +739,7 @@ registerTool({
 
 registerTool({
   name: 'edit_file',
-  description: 'Make a surgical exact-text edit to a file (find old_string, replace with new_string — like str_replace). State-changing: confirm with the user via ask_user first, then retry with confirm:true. Use after read_file so the match is exact.',
+  description: 'Surgical exact-text edit to a file (find old_string, replace with new_string — like str_replace). Make ONE call for ALL edits to a file via `replacements[]` (they apply atomically — all-or-nothing, never a partial edit). Optionally `dry_run` to preview a unified diff without writing. State-changing: confirm with the user via ask_user first, then retry with confirm:true. Use after read_file so the match is exact.',
   category: 'workflow',
   inputSchema: editFileSchema,
   endsAgentStep: false,
@@ -917,7 +941,7 @@ registerTool({
 
 registerTool({
   name: 'gateway_send',
-  description: 'Send a message (text or image) to a DIFFERENT channel or contact through the gateway (WhatsApp by contact name or number, Telegram, Slack, Discord, email, or any registered alias). Do NOT use this tool to reply to the CURRENT conversation — your text response is automatically sent back to the originating channel. Only call this when the user asks you to deliver a result to SOMEONE ELSE — e.g. "send the poem to Alex on whatsapp" (while you are chatting with Divya). For images, set image_path to the file path (e.g. from generate_image output) — the image is sent with text as caption.',
+  description: 'Send a message (text or image) to a DIFFERENT channel or contact through the gateway (WhatsApp by contact name or number, Telegram, Slack, Discord, email, or any registered alias). Do NOT use this tool to reply to the CURRENT conversation — your text response is automatically sent back to the originating channel. Only call this when the user asks you to deliver a result to SOMEONE ELSE — e.g. "send the poem to Alex on whatsapp" (while you are chatting with Divya). For images, set image_path to the file path (e.g. from generate_image output) — the image is sent with text as caption. AUTHORIZATION: on a gateway turn the sender must hold outbound send authority for that platform (dashboard → Agent Hub → Permissions → Send authority); the result string tells you plainly when a send was refused and why — report that to the user honestly and NEVER claim a message was delivered unless this tool returned its \'✅ sent\' result.',
   category: 'workflow',
   inputSchema: gatewaySendSchema,
   endsAgentStep: false,

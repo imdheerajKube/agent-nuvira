@@ -475,6 +475,8 @@ export interface BuffConfig {
             requireMention?: boolean;
             disabled?: boolean;
             silentDrop?: boolean;
+            outboundSenders?: string[];
+            requireApprovedTarget?: boolean;
         }>>;
         /**
          * Channel targets (aliases or platform:channelId) that ALWAYS receive the

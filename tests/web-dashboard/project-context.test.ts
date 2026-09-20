@@ -9,6 +9,7 @@
 
 import { describe, it, expect } from 'vitest';
 import { mkdtempSync, writeFileSync, mkdirSync, rmSync } from 'node:fs';
+import { execFileSync } from 'node:child_process';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { buildProjectContext, formatProjectText } from '../../src/web-dashboard/project-context.js';
@@ -90,6 +91,30 @@ describe('buildProjectContext', () => {
       expect(bundle.fileTree).toContain('more file(s)');
       // The symbol cap kicks in: the map says "N more symbol(s)".
       expect(bundle.codeMap).toMatch(/more symbol\(s\)/);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it('includes bounded GIT STATE (parity with the CLI ambient context)', () => {
+    const dir = makeFixture();
+    try {
+      let gitAvailable = true;
+      try {
+        execFileSync('git', ['init', '-q'], { cwd: dir });
+        execFileSync('git', ['-c', 'user.email=t@t', '-c', 'user.name=t', 'add', '-A'], { cwd: dir });
+        execFileSync('git', ['-c', 'user.email=t@t', '-c', 'user.name=t', 'commit', '-qm', 'init'], { cwd: dir });
+      } catch {
+        gitAvailable = false;
+      }
+      if (!gitAvailable) return;
+      // A dirty file → the digest reports it.
+      writeFileSync(join(dir, 'src', 'dirty.ts'), 'export const dirty = 1;\n');
+      const bundle = buildProjectContext(dir)!;
+      expect(bundle.gitState).toContain('## Git state');
+      expect(bundle.gitState).toContain('uncommitted change');
+      const text = formatProjectText(bundle);
+      expect(text).toContain('## Git state');
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }

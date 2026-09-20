@@ -46,7 +46,7 @@ import {
   isToolCallingUnsupported,
   stripToolCallArtifacts,
 } from '../inference/tool-call-utils.js';
-import { beginTrace, endTrace, recordStep } from '../learning/reasoning-trace.js';
+import { beginTrace, endTrace, recordStep, buildTraceOutcome } from '../learning/reasoning-trace.js';
 import { getLoopExposureMode } from '../tools/toolsets.js';
 import { resolveModelHarnessProfile, shouldSkipNativeTools } from '../learning/model-harness.js';
 import { resolveAdapterDefault } from '../learning/model-selection.js';
@@ -554,6 +554,13 @@ export class ChatCommand extends BaseCommand {
   cancelled?: boolean;
   /** Phase 4 — true when the loop hit its step bound before an end turn. */
   bounded?: boolean;
+  /** Names of the tools that actually executed this turn (honesty checks). */
+  toolCalls?: string[];
+  /**
+   * True when the answer CLAIMED a delivery no delivery tool performed — an
+   * unverified claim. Every surface must treat this as "not confirmed done".
+   */
+  unverifiedActionClaim?: boolean;
   provider?: string;
   model?: string;
 }> {
@@ -658,6 +665,8 @@ export class ChatCommand extends BaseCommand {
       generationFailed: answer.generationFailed,
       cancelled: answer.cancelled,
       bounded: answer.bounded,
+      toolCalls: answer.toolCalls,
+      unverifiedActionClaim: answer.unverifiedActionClaim,
       provider: type,
       model,
     };
@@ -1155,6 +1164,10 @@ export class ChatCommand extends BaseCommand {
     bounded?: boolean;
     /** P3 — followups as data (the dashboard chat console renders them as chips). */
     followups?: FollowupSuggestion[];
+    /** Names of the tools that actually executed (honest-action checks). */
+    toolCalls?: string[];
+    /** True when the answer claimed a delivery no delivery tool performed. */
+    unverifiedActionClaim?: boolean;
   }> {
     // Cache check first (same as the legacy path).
     const cache = getCache();
@@ -1445,7 +1458,7 @@ export class ChatCommand extends BaseCommand {
     } catch (err) {
       // The tool loop never throws by design; this guards future changes.
       logger.error(String(err));
-      endTrace(chatTraceId, false);
+      endTrace(chatTraceId, false, { kind: 'failed' });
       result = {
         // Sanitized on purpose: this content is delivered verbatim by every
         // surface (CLI print, dashboard bubble, gateway send).
@@ -1456,7 +1469,19 @@ export class ChatCommand extends BaseCommand {
         bounded: false,
       };
     }
-    endTrace(chatTraceId, !result.generationFailed);
+    // Record WHAT HAPPENED, not just "the model answered": a hallucinated
+    // "I have sent it" (no tool ran) must be visible as an unverified claim in
+    // the Trace tab instead of looking like a real delivery.
+    endTrace(
+      chatTraceId,
+      !result.generationFailed,
+      buildTraceOutcome({
+        generationFailed: result.generationFailed,
+        cancelled: result.cancelled,
+        tools: result.toolCalls,
+        unverifiedActionClaim: result.unverifiedActionClaim,
+      }),
+    );
 
     // Finalize the turn (cache + memory + registry telemetry).
     // E3c: a generationFailed turn is NOT cached/persisted — the caller may
@@ -1487,12 +1512,20 @@ export class ChatCommand extends BaseCommand {
 
     // Followups are rendered by the CALLER (after the answer is printed) so
     // the menu never appears before the content. We return them as data.
+    //
+    // E3b — strip raw suggest_followups scaffolding from the delivered content
+    // HERE (not only in answerOnce): the interactive path prints this string
+    // directly, so a model that wrote the tool JSON as text used to leak it
+    // into the chat. The loop already salvages such blocks into real tool
+    // calls; this is the belt-and-braces strip for any residue.
     return {
-      content: result.content,
+      content: stripToolCallArtifacts(result.content),
       generationFailed: result.generationFailed,
       cancelled: result.cancelled,
       bounded: result.bounded,
       followups: result.followups,
+      toolCalls: result.toolCalls,
+      unverifiedActionClaim: result.unverifiedActionClaim,
     };
   }
 

@@ -208,11 +208,86 @@ function userGateEnabled(policy: ChannelPolicy | undefined): boolean {
  * while the list holds "+918811122233" — both normalize to the same digits).
  */
 function isVerifiedSender(policy: ChannelPolicy | undefined, senderId: string | undefined): boolean {
-  const list = policy?.allowedUsers;
+  return passesSenderList(policy?.allowedUsers, senderId);
+}
+
+/**
+ * Verified-list rule, applied to ANY sender list (not just `allowedUsers`):
+ *  - list ABSENT            → open (caller decides what "open" means)
+ *  - list has Allow-All     → anyone passes
+ *  - list has entries       → exact JID/digit-normalized match required
+ *  - list is EMPTY (`[]`)   → nobody passes
+ * `senderId` undefined never matches a non-empty list.
+ */
+export function passesSenderList(list: string[] | undefined, senderId: string | undefined): boolean {
   if (!Array.isArray(list)) return true;
   if (list.some(isAllowAllToken)) return true;
   const norm = normalizeSenderId(senderId);
   return norm.length > 0 && list.some((u) => normalizeSenderId(u) === norm);
+}
+
+/** The decision returned by `authorizeOutboundSend`. */
+export interface OutboundSendDecision {
+  allowed: boolean;
+  /** Human/model-readable reason when denied (undefined when allowed). */
+  reason?: string;
+  /** Which list governed the decision: the explicit one, the inherited one, or none. */
+  source: 'same-conversation' | 'outboundSenders' | 'inherited-allowedUsers' | 'open' | 'no-sender';
+}
+
+/**
+ * Authorize a `gateway_send` (outbound, third-party) command from a gateway
+ * sender. This is the SECOND, independent gate — `allowedUsers` only decides
+ * who may trigger the agent; this decides who may then direct it to deliver
+ * to SOMEONE ELSE.
+ *
+ * Rules, in order:
+ *  1. No sender id at all (local/unattributed turn) → allowed.
+ *  2. Target IS the sender's own conversation → allowed (a self-send is just
+ *     an explicit reply; the automatic text response does the same).
+ *  3. `outboundSenders` set → verified-list rule (Allow-All = anyone; [] = none;
+ *     else exact match).
+ *  4. `outboundSenders` absent → INHERIT `allowedUsers` (legacy behaviour, so
+ *     no deployment silently breaks). Accepting an inbound trigger is what
+ *     grants outbound authority until an operator tightens it.
+ *
+ * `ownConversation` is computed by the caller (target resolves to the same
+ * normalized channel as the origin).
+ */
+export function authorizeOutboundSend(opts: {
+  policy: ChannelPolicy | undefined;
+  senderId: string | undefined;
+  /** True when the resolved target is the sender's OWN conversation. */
+  ownConversation: boolean;
+}): OutboundSendDecision {
+  const { policy, senderId, ownConversation } = opts;
+  if (!senderId || !normalizeSenderId(senderId)) {
+    return { allowed: true, source: 'no-sender' };
+  }
+  if (ownConversation) {
+    return { allowed: true, source: 'same-conversation' };
+  }
+  if (Array.isArray(policy?.outboundSenders)) {
+    if (passesSenderList(policy.outboundSenders, senderId)) {
+      return { allowed: true, source: 'outboundSenders' };
+    }
+    return {
+      allowed: false,
+      source: 'outboundSenders',
+      reason:
+        'send authority: you are not authorised to send messages to other people through this agent. ' +
+        "Ask the administrator to add you to this platform's outbound senders (dashboard → Agent Hub → Permissions → Send authority).",
+    };
+  }
+  // No explicit list — inherit the inbound allow-list (legacy default).
+  if (passesSenderList(policy?.allowedUsers, senderId)) {
+    return { allowed: true, source: policy?.allowedUsers ? 'inherited-allowedUsers' : 'open' };
+  }
+  return {
+    allowed: false,
+    source: 'inherited-allowedUsers',
+    reason: 'send authority: this sender is not authorised to direct outbound messages.',
+  };
 }
 
 /** True when a group message addresses the bot (name-prefix or @-mention). */
@@ -968,6 +1043,17 @@ export class GatewayRegistry {
       // deliberation, self-correction) as visible text. This cleans it up
       // so the user only sees the actual deliverable.
       content = stripGatewayReasoning(content);
+      // HONESTY GUARD — the model sometimes says "I have sent …" WITHOUT
+      // actually calling gateway_send. A JSON-as-text call is already salvaged
+      // into a real call by the loop, but a model that emits NO tool call at
+      // all leaves a false claim standing. Append a truthful correction so the
+      // sender is never told an action succeeded when it did not.
+      if (answer.unverifiedActionClaim) {
+        logger.warn('gateway: answer claimed a delivery but no gateway_send executed — appending correction');
+        content +=
+          '\n\n⚠️ Heads-up: I could not confirm that message was actually sent — the send action did not complete. ' +
+          'Please ask me to try again, or send it yourself.';
+      }
       // v1.8x audit — LAST-RESORT sender guard: a reply that is pure
       // tool-contract confusion ("I'm sorry, but the provided example call to
       // suggest_followups is incomplete…") is internal scaffolding leaking to

@@ -69,6 +69,31 @@ export interface TraceStep {
      *  the escalated decision at the next complexity level). */
     escalated?: boolean;
 }
+/**
+ * WHAT ACTUALLY HAPPENED — deliberately separate from `success`, which only
+ * means "the model produced a reply". Without this, a hallucinated
+ * "I have sent the poem…" is indistinguishable from a real delivery in the
+ * Trace tab. Populated by the caller that knows the turn's tool activity.
+ */
+export interface TraceOutcome {
+    /**
+     * `answered`  — a text reply only (no tool ran);
+     * `acted`     — at least one tool executed successfully;
+     * `failed`    — generation failed (no usable answer);
+     * `cancelled` — the turn was cancelled by the user.
+     */
+    kind: 'answered' | 'acted' | 'failed' | 'cancelled';
+    /** Names of the tools that actually executed this turn (in order). */
+    tools?: string[];
+    /** True when a delivery tool (`gateway_send`) ran and reported success. */
+    delivered?: boolean;
+    /**
+     * True when the answer CLAIMED a delivery/action that no tool performed
+     * (see `detectUnverifiedDeliveryClaim`). This is the honesty flag the Trace
+     * tab surfaces as a warning — the reply is unreliable about the action.
+     */
+    unverifiedClaim?: boolean;
+}
 /** A full reasoning trace — one pipeline execution. */
 export interface ReasoningTrace {
     id: string;
@@ -86,8 +111,12 @@ export interface ReasoningTrace {
     provider?: string;
     /** Pipeline-level model override when known. */
     model?: string;
-    /** Final outcome (set by endTrace). */
+    /** Final outcome (set by endTrace). NOTE: `success` = "a reply was
+     *  generated"; it does NOT mean an action was performed. Use `outcome`.
+     *  for that. */
     success?: boolean;
+    /** What actually happened (answered vs acted vs failed) — see TraceOutcome. */
+    outcome?: TraceOutcome;
     /** LLM calls in execution order. */
     steps: TraceStep[];
 }
@@ -141,7 +170,17 @@ export declare function recordStep(traceId: string, step: Omit<TraceStep, 'seq' 
  * Mark a trace finished (sets endedAt, durationMs, success). Idempotent: a
  * second endTrace (e.g. from a finally block after an early close) is a no-op.
  */
-export declare function endTrace(traceId: string, success?: boolean): void;
+export declare function endTrace(traceId: string, success?: boolean, outcome?: TraceOutcome): void;
+/**
+ * Build a TraceOutcome from a turn's tool activity. Shared by every caller so
+ * the semantics can never drift between the CLI, dashboard and gateway.
+ */
+export declare function buildTraceOutcome(input: {
+    generationFailed?: boolean;
+    cancelled?: boolean;
+    tools?: readonly string[];
+    unverifiedActionClaim?: boolean;
+}): TraceOutcome;
 /** Get one trace by id (null when missing). */
 export declare function getTrace(id: string): ReasoningTrace | null;
 /** List traces, most recent first (optionally limited). */

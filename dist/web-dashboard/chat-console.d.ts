@@ -113,6 +113,12 @@ export interface ChatEngine {
         generationFailed?: boolean;
         /** Phase 4 — true when the loop hit its step bound (the DAG turn card shows ⛔ bounded). */
         bounded?: boolean;
+        /** P4 — true when the turn was cancelled (the DAG turn card shows cancelled). */
+        cancelled?: boolean;
+        /** Names of the tools that actually executed (honest-action checks). */
+        toolCalls?: string[];
+        /** True when the answer claimed a delivery no delivery tool performed. */
+        unverifiedActionClaim?: boolean;
         provider?: string;
         model?: string;
     }>;

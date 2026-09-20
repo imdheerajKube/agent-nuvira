@@ -234,6 +234,13 @@ export declare class ChatCommand extends BaseCommand {
         cancelled?: boolean;
         /** Phase 4 — true when the loop hit its step bound before an end turn. */
         bounded?: boolean;
+        /** Names of the tools that actually executed this turn (honesty checks). */
+        toolCalls?: string[];
+        /**
+         * True when the answer CLAIMED a delivery no delivery tool performed — an
+         * unverified claim. Every surface must treat this as "not confirmed done".
+         */
+        unverifiedActionClaim?: boolean;
         provider?: string;
         model?: string;
     }>;
