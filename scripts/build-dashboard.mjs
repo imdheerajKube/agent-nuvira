@@ -29,6 +29,9 @@
  *      that tree), never a hoisted root `vite`. The root tree carries a
  *      different vite major, and resolving it silently was the second half of
  *      the bug.
+ *
+ * Cross-platform: npm is invoked through a shell so the same code path works on
+ * Windows (where npm is `npm.cmd` and Node cannot spawn it directly).
  *   4. Proves the artifact exists afterwards, so a no-op build cannot pass
  *      silently.
  *
@@ -39,7 +42,7 @@
  */
 
 import { existsSync, readdirSync, statSync } from 'node:fs';
-import { execFileSync } from 'node:child_process';
+import { execSync } from 'node:child_process';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 
@@ -65,6 +68,20 @@ export function missingDashboardDeps(dashboardDir = DEFAULT_DASHBOARD_DIR) {
 }
 
 /**
+ * Run npm in a directory, portably.
+ *
+ * `execFileSync('npm', …)` looks right but cannot work on Windows: npm is
+ * `npm.cmd` there, and Node refuses to spawn a .cmd/.bat without a shell — it
+ * throws ENOENT (observed on the windows-latest runner as exactly
+ * `[build-dashboard] ✘ spawnSync npm ENOENT`). Going through a shell is the
+ * portable form. Nothing user-supplied is interpolated into the command string:
+ * the args are fixed flags, and the directory is passed as `cwd`.
+ */
+function runNpm(args, cwd) {
+  execSync(`npm ${args.join(' ')}`, { cwd, stdio: 'inherit', shell: true });
+}
+
+/**
  * Install the dashboard tree from its committed lockfile.
  * `--foreground-scripts` is required so native install scripts (esbuild's
  * platform binary) actually run — without it the build fails later with a
@@ -78,12 +95,12 @@ export function installDashboardDeps(dashboardDir = DEFAULT_DASHBOARD_DIR) {
     args[0] = 'install';
     args.push('--silent');
   }
-  execFileSync('npm', args, { cwd: dashboardDir, stdio: 'inherit' });
+  runNpm(args, dashboardDir);
 }
 
 /** Run the dashboard's own build script (its pinned vite), not a hoisted one. */
 export function buildDashboard(dashboardDir = DEFAULT_DASHBOARD_DIR) {
-  execFileSync('npm', ['run', 'build'], { cwd: dashboardDir, stdio: 'inherit' });
+  runNpm(['run', 'build'], dashboardDir);
 }
 
 /** Newest mtime under a directory, or 0 when it cannot be read. */

@@ -12,8 +12,8 @@
  * tests and test failures leaked back OUT to the real profile.
  */
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
-import { mkdtempSync, writeFileSync, rmSync, existsSync, statSync } from 'node:fs';
-import { join } from 'node:path';
+import { mkdtempSync, mkdirSync, writeFileSync, rmSync, existsSync, statSync } from 'node:fs';
+import { dirname, join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { resolveNuviraConfigDir, resolveNuviraDataPath, resolveNuviraEnvFile } from '../../src/config/paths.js';
 import { loadEnv } from '../../src/utils/env.js';
@@ -64,17 +64,40 @@ describe('config-dir isolation', () => {
     );
   });
 
-  it('never falls back to the real ~/.nuvira/.env when the config dir has none', () => {
-    // The real profile DOES have a .env on this machine — that is exactly the
-    // file isolation must prevent us from reading.
-    const realEnv = join(process.env.HOME ?? '', '.nuvira', '.env');
-    expect(existsSync(realEnv)).toBe(true); // precondition: the trap is really there
-    expect(resolveNuviraEnvFile()).not.toBe(realEnv);
+  it('never falls back to the home-profile ~/.nuvira/.env when the config dir has none', () => {
+    // HERMETIC TRAP: plant a decoy home profile for the duration of this test.
+    //
+    // The original version asserted `existsSync(join(HOME, '.nuvira', '.env'))`
+    // as its precondition — i.e. it required the DEVELOPER's machine to have a
+    // real profile .env. That passed locally and failed on every clean CI
+    // checkout (no such file), which is a test bug, not a product bug: the
+    // isolation guarantee is exactly what the assertions below still verify.
+    const fakeHome = mkdtempSync(join(tmpdir(), 'nuvira-fake-home-'));
+    const decoyEnv = join(fakeHome, '.nuvira', '.env');
+    mkdirSync(dirname(decoyEnv), { recursive: true });
+    writeFileSync(decoyEnv, REAL_PROVIDER_KEYS.map((k, i) => `${k}=decoy-key-${i}`).join('\n') + '\n');
 
-    const env = loadEnv();
-    for (const key of REAL_PROVIDER_KEYS) {
-      expect(env[key], `${key} leaked from the real ~/.nuvira/.env`).toBeUndefined();
-      expect(process.env[key], `${key} leaked into process.env`).toBeUndefined();
+    const prevHome = process.env.HOME;
+    const prevUserProfile = process.env.USERPROFILE;
+    process.env.HOME = fakeHome;
+    if (process.platform === 'win32') process.env.USERPROFILE = fakeHome;
+    try {
+      // Deterministic precondition: the decoy profile really is there, so the
+      // assertion below is meaningful on any machine.
+      expect(existsSync(decoyEnv)).toBe(true);
+      expect(resolveNuviraEnvFile()).not.toBe(decoyEnv);
+
+      const env = loadEnv();
+      for (const key of REAL_PROVIDER_KEYS) {
+        expect(env[key], `${key} leaked from the home profile .env`).toBeUndefined();
+        expect(process.env[key], `${key} leaked into process.env`).toBeUndefined();
+      }
+    } finally {
+      if (prevHome === undefined) delete process.env.HOME;
+      else process.env.HOME = prevHome;
+      if (prevUserProfile === undefined) delete process.env.USERPROFILE;
+      else process.env.USERPROFILE = prevUserProfile;
+      rmSync(fakeHome, { recursive: true, force: true });
     }
   });
 
