@@ -121,11 +121,20 @@ describe('K2 runtime metrics', () => {
 
   it('recordMetricTime times async functions too', async () => {
     resetMetrics();
+    // A `setTimeout(5)` measured through Date.now() is NOT reliably >= 5ms:
+    // Dates have 1ms granularity and timers can fire a hair early, so this
+    // assertion recorded 4ms on CI and failed. The property under test is that
+    // the ASYNC path is timed at all, so sleep well clear of the floor and
+    // bound the result above — that survives runner variance without
+    // weakening the claim.
+    const SLEEP_MS = 25;
+    const FLOOR_MS = 10;
     await getMetrics().time('llm.answer.ms', async () => {
-      await new Promise((r) => setTimeout(r, 5));
+      await new Promise((r) => setTimeout(r, SLEEP_MS));
     });
     const t = getMetrics().snapshot().timers['llm.answer.ms'];
     expect(t.count).toBe(1);
-    expect(t.maxMs).toBeGreaterThanOrEqual(5);
+    expect(t.maxMs).toBeGreaterThanOrEqual(FLOOR_MS);
+    expect(t.maxMs).toBeLessThan(2000);
   });
 });

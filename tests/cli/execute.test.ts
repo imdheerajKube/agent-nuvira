@@ -1249,7 +1249,12 @@ describe('ExecuteCommand — P0.5 conversation-vs-pipeline gate', () => {
     expect(directSpy).not.toHaveBeenCalled();
     expect(orchestratorSpy).toHaveBeenCalledTimes(1);
   });
-});
+  // These tests drive runSingleGoal through the real dispatch path (config
+  // load + model resolution), which genuinely exceeds vitest's 5s default on
+  // slower runners — the three "timed out in 5000ms" failures came from the
+  // Node 26 legs. Raise the ceiling for this suite rather than trimming the
+  // work under test; the fast tests inside are unaffected by a higher cap.
+}, 30000);
 
 // ─── Cleanup test artifacts ─────────────────────────────────────────────────
 
