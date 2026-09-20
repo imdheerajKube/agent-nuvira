@@ -67,6 +67,26 @@ const PATTERN_STOPWORDS = new Set([
     'requests', 'help', 'make', 'using', 'used', 'work', 'works', 'some',
     'onto', 'over', 'your', 'their', 'them', 'then', 'also', 'each',
 ]);
+/**
+ * Meta-vocabulary that is ALSO excluded from TAG hits.
+ *
+ * Why tag hits need this too (live, 2026-09-20): `technical-roadmap` carries the
+ * tags `roadmap`/`planning`, so the prompt "…how should i plan…" matched on the
+ * single generic tag word `planning` and injected the skill's whole phased-
+ * migration methodology into a TRAVEL-ITINERARY turn — irrelevant context that
+ * pushed the model toward planning meta-talk and grew the prompt. The evidence
+ * filter already excluded these words from goalPattern matching for exactly this
+ * reason; a tag hit is the same kind of evidence and gets the same treatment.
+ *
+ * Deliberately narrow — process/meta nouns that name how work is done rather
+ * than a domain. Domain tags (`deploy`, `testing`, `search`, `payments`) still
+ * match, and a name-word hit is unaffected.
+ */
+const GENERIC_SKILL_TAGS = new Set([
+    'planning', 'roadmap', 'assessment', 'audit', 'quality', 'review',
+    'analysis', 'process', 'workflow', 'recommendations', 'gaps', 'strategy',
+    'methodology', 'checklist', 'template', 'guide', 'framework', 'report',
+]);
 /** Cap on hub SKILL.md body text injected into the prompt (chars). */
 const HUB_BODY_CAP = 2000;
 /** Cap on compiled methodology steps injected into the prompt. */
@@ -103,7 +123,8 @@ export function hasRealGoalEvidence(goal, skill) {
     let tagHits = 0;
     for (const tag of skill.tags) {
         const t = tag.toLowerCase().trim();
-        if (t.length > 3 && q.includes(t))
+        // Generic process vocabulary is not goal evidence (see GENERIC_SKILL_TAGS).
+        if (t.length > 3 && !GENERIC_SKILL_TAGS.has(t) && q.includes(t))
             tagHits++;
     }
     let patternHits = 0;

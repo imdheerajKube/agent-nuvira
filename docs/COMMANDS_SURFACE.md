@@ -14,7 +14,7 @@ usage see the curated [COMMANDS.md](./COMMANDS.md).
 
 Nuvira — multi-agent AI coding CLI (local models & cloud APIs)
 
-   - flags: `--debug, --version`
+   - flags: `--debug, --task <task>, --version`
 ### `buff admin`
 
 Admin governance policy for Auto routing (P6 M6.5) — allow/deny providers & models, hard cost cap, PII privacy, unblock control

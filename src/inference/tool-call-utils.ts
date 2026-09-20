@@ -159,13 +159,38 @@ export const GENERATION_FAILURE_MESSAGE =
 export function toUserFacingGenerationError(err: unknown): string {
   const raw = err instanceof Error ? err.message : String(err ?? '');
   const m = raw.toLowerCase();
+  // Our OWN loop-level errors are classified FIRST, on a literal match of the
+  // strings this codebase throws. They must not be shadowed by a keyword that
+  // happens to appear in the wrapped payload (the contract-confusion message
+  // embeds the model's raw reply, which may itself contain "429"/"not found").
+  //
+  // Why these branches exist at all: before them, a turn that ended in tool-
+  // contract confusion or a malformed step fell through to
+  // GENERATION_FAILURE_MESSAGE — telling the user "the language model was
+  // unavailable" about a model that had answered, just not usefully. That
+  // misdiagnosis is what made a live dashboard failure undiagnosable.
+  const CONTRACT_CONFUSION = /tool-contract confusion/;
+  const MALFORMED_STEP = /malformed step response/;
   const QUOTA =
     /\b429\b|rate.?limit|too many requests|quota|resource.?exhausted|resource_exhausted|insufficient_quota|token_count/;
   const AUTH = /\b401\b|\b403\b|unauthorized|forbidden|api key|invalid key|permission/;
   const SERVER = /\b5\d\d\b|server error|internal server|overloaded/;
   const NETWORK = /fetch failed|econnrefused|econnreset|enotfound|eai_again|socket hang up|network/;
   const TIMEOUT = /timeout|timed out/;
+  // A bare abort (no "timeout" in the message) is NOT an unavailable model —
+  // Node's DOMException("This operation was aborted") carries no class keyword
+  // at all, which is how an aborted request used to surface as the canned
+  // "language model was unavailable" line.
+  const ABORT = /\babort(?:ed|ing)?\b/;
+  const CONTEXT =
+    /context_length_exceeded|context length|maximum context|reduce the length of the messages|too many tokens|exceeds? the context window/;
   const NOT_FOUND = /\b404\b|not found|does not exist|no longer available|model_not_found|unsupported model/;
+  if (CONTRACT_CONFUSION.test(m)) {
+    return "The model got tangled up in its own tool instructions and never answered your request. Try again, or switch models with `nuvira models`.";
+  }
+  if (MALFORMED_STEP.test(m)) {
+    return 'The model returned an incomplete response. Please try again.';
+  }
   if (QUOTA.test(m)) {
     return "I hit the model provider's rate limit (or ran out of quota) — please try again in a moment.";
   }
@@ -176,9 +201,55 @@ export function toUserFacingGenerationError(err: unknown): string {
     return "The selected model isn't available from that provider right now. Try another model, or run `nuvira models refresh` to rediscover them.";
   }
   if (TIMEOUT.test(m)) return 'The model provider timed out. Please try again.';
+  if (CONTEXT.test(m)) {
+    return "That request outgrew the context window of the model it was routed to. Try again (the router lands on a larger-context model), or shorten the conversation.";
+  }
+  if (ABORT.test(m)) return 'The request to the model provider was aborted before it answered. Please try again.';
   if (NETWORK.test(m)) return "I couldn't reach the model provider (network error). Please try again.";
   if (SERVER.test(m)) return 'The model provider returned a server error. Please try again in a moment.';
   return GENERATION_FAILURE_MESSAGE;
+}
+
+/**
+ * Strip the model's TOOL-CALL ARTIFACTS out of a user-facing answer.
+ *
+ * A model that cannot (or forgets to) emit a real `suggest_followups` tool call
+ * often writes the call as TEXT instead — either as a trailing bare object or
+ * inside a fenced ```json block. The user then reads the contract's plumbing in
+ * the answer:
+ *
+ *   ok
+ *   {"tool":"suggest_followups","arguments":{"followups":[…]}}
+ *
+ *   **Next steps you might consider:**
+ *   ```json
+ *   ```                       ← the body was parsed out, the empty fence stayed
+ *
+ * Both were observed live from the CLI's one-shot path, which printed
+ * `answer.content` raw while the dashboard console and the gateway applied the
+ * strip — a parity gap, not a rendering choice. This is the ONE copy of the
+ * strip (the helper module's whole reason for existing), so every surface that
+ * shows an answer can share it.
+ *
+ * Deliberately conservative: it only removes artifacts that ARE the followups
+ * contract. A fenced block with real content, and a code block the user asked
+ * for, are untouched.
+ */
+export function stripToolCallArtifacts(content: string): string {
+  if (!content) return '';
+  return (
+    content
+      // An EMPTY fenced block — the fallback transport parsed the call out of
+      // the body and left the fence behind.
+      .replace(/\n?```[a-z]*\s*\n?\s*```\s*/gi, '\n')
+      // A fenced block WHOSE BODY is the call.
+      .replace(/```[a-z]*\s*\{[\s\S]*?"tool"\s*:\s*"suggest_followups"[\s\S]*?```/gi, '')
+      // The bare trailing call object (the model wrote the tool JSON verbatim).
+      .replace(/\n?\*?\s*\{\s*"tool"\s*:\s*"suggest_followups"[\s\S]*$/, '')
+      // The Anthropic-style tag form (<function=suggest_followups …>).
+      .replace(/\n?\*?\s*<function=suggest_followups[\s\S]*?<\/function>/g, '')
+      .trim()
+  );
 }
 
 /**
