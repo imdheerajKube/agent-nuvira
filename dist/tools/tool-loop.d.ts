@@ -162,6 +162,16 @@ export interface ToolLoopResult {
      * leave a half-answer in the session.
      */
     cancelled?: boolean;
+    /**
+     * HONESTY FLAG — the final answer CLAIMED a delivery/action ("I have sent…",
+     * "message delivered…") but NO delivery tool actually ran this turn. A
+     * model can write a tool call as prose, or skip it entirely and simply say
+     * the action succeeded. When true, the answer is an unverified claim: the
+     * caller must NOT present it as a completed action (the gateway appends a
+     * correction; the trace records it). Set by the loop; never guessed by
+     * callers.
+     */
+    unverifiedActionClaim?: boolean;
 }
 /** An orphan reasoning block or bare <think> is a think-only response. */
 export declare function isThinkOnlyResponse(content: string): boolean;
@@ -221,9 +231,21 @@ export declare const CONTINUATION_DELAY_MS = 1500;
  */
 export declare function isTransientGenerationFailure(message: string): boolean;
 /**
- * Run one tool-call turn:
- * generate → execute tools → feed results back → repeat until the model
- * returns a no-tools response (end turn), bounded by maxSteps.
+ * True when the answer asserts a delivery that no delivery tool performed.
+ * Sentence-scoped so a negation or a future promise elsewhere in the answer
+ * never turns a truthful statement into a flag (and vice-versa).
+ *
+ * This is the "unverified claim" detector — the model may write a tool call as
+ * plain prose, or skip tools entirely and simply SAY the action succeeded.
+ * A JSON-as-text call is recovered by the loop's salvage step (so the tool
+ * really runs and the flag stays false); this catches the residual case where
+ * there is no tool call at all.
+ */
+export declare function detectUnverifiedDeliveryClaim(content: string, toolsRun: readonly string[]): boolean;
+/**
+ * Public entry point. Runs the loop, then annotates the result with the
+ * honest-answer flag so every surface (CLI, dashboard, gateway, trace) can
+ * distinguish "generated a reply" from "actually performed the action".
  */
 export declare function runToolLoop(opts: ToolLoopOptions): Promise<ToolLoopResult>;
 /** Default thread budget in characters (~50K tokens at 4 chars/token). */

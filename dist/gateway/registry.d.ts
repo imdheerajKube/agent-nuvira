@@ -16,7 +16,7 @@
  * agent path. All adapters opt-in via env tokens (channel-directory.ts).
  */
 import { ConfigManager } from '../config/manager.js';
-import { ChannelDirectory, type ChannelRef, type PolicyMap } from './channel-directory.js';
+import { ChannelDirectory, type ChannelPolicy, type ChannelRef, type PolicyMap } from './channel-directory.js';
 import type { ChannelAdapter, InboundMessage, MediaPayload } from './adapters.js';
 import { DeliveryLedger } from './delivery.js';
 import { InboxLedger } from './inbox.js';
@@ -64,6 +64,48 @@ export declare function normalizeSenderId(id: string | undefined): string;
  * present, the sender verifier is SKIPPED entirely and anyone may trigger.
  */
 export declare function isAllowAllToken(value: string | undefined): boolean;
+/**
+ * Verified-list rule, applied to ANY sender list (not just `allowedUsers`):
+ *  - list ABSENT            → open (caller decides what "open" means)
+ *  - list has Allow-All     → anyone passes
+ *  - list has entries       → exact JID/digit-normalized match required
+ *  - list is EMPTY (`[]`)   → nobody passes
+ * `senderId` undefined never matches a non-empty list.
+ */
+export declare function passesSenderList(list: string[] | undefined, senderId: string | undefined): boolean;
+/** The decision returned by `authorizeOutboundSend`. */
+export interface OutboundSendDecision {
+    allowed: boolean;
+    /** Human/model-readable reason when denied (undefined when allowed). */
+    reason?: string;
+    /** Which list governed the decision: the explicit one, the inherited one, or none. */
+    source: 'same-conversation' | 'outboundSenders' | 'inherited-allowedUsers' | 'open' | 'no-sender';
+}
+/**
+ * Authorize a `gateway_send` (outbound, third-party) command from a gateway
+ * sender. This is the SECOND, independent gate — `allowedUsers` only decides
+ * who may trigger the agent; this decides who may then direct it to deliver
+ * to SOMEONE ELSE.
+ *
+ * Rules, in order:
+ *  1. No sender id at all (local/unattributed turn) → allowed.
+ *  2. Target IS the sender's own conversation → allowed (a self-send is just
+ *     an explicit reply; the automatic text response does the same).
+ *  3. `outboundSenders` set → verified-list rule (Allow-All = anyone; [] = none;
+ *     else exact match).
+ *  4. `outboundSenders` absent → INHERIT `allowedUsers` (legacy behaviour, so
+ *     no deployment silently breaks). Accepting an inbound trigger is what
+ *     grants outbound authority until an operator tightens it.
+ *
+ * `ownConversation` is computed by the caller (target resolves to the same
+ * normalized channel as the origin).
+ */
+export declare function authorizeOutboundSend(opts: {
+    policy: ChannelPolicy | undefined;
+    senderId: string | undefined;
+    /** True when the resolved target is the sender's OWN conversation. */
+    ownConversation: boolean;
+}): OutboundSendDecision;
 /** True when a group message addresses the bot (name-prefix or @-mention). */
 export declare function isBotAddressed(text: string): boolean;
 /**

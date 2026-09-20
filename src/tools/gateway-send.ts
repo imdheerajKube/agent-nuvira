@@ -136,6 +136,71 @@ async function sendMediaViaGateway(
 }
 
 /**
+ * OUTBOUND AUTHORIZATION (the second gate — see `authorizeOutboundSend`).
+ *
+ * `allowedUsers` decides who may TRIGGER the agent. This decides who may then
+ * direct it to deliver to SOMEONE ELSE. Applied ONLY to gateway-triggered turns
+ * (`ctx.gateway.origin` set): a CLI/dashboard turn is the operator at the
+ * keyboard and is trusted by construction.
+ *
+ * Reading the policy is deferred-imported so the tools module stays
+ * import-light, and it NEVER throws — a policy read failure must not brick
+ * sending; it falls through to the (legacy) inherit behaviour.
+ */
+async function authorizeGatewaySend(
+  origin: { platform: string; channelId: string },
+  target: string,
+  ctx: ToolContext,
+): Promise<{ allowed: boolean; reason?: string }> {
+  try {
+    const { envPolicies, authorizeOutboundSend, normalizeSenderId } = await import('../gateway/registry.js');
+    const { ConfigManager } = await import('../config/manager.js');
+    type Pol = import('../gateway/channel-directory.js').ChannelPolicy;
+    const cfg = new ConfigManager().getAll() as { gateway?: { policies?: Record<string, Pol> } };
+    const platform = origin.platform;
+    // Same merge order the running gateway uses: env < config.
+    const policy: Pol = {
+      ...((envPolicies() as Record<string, Pol>)[platform] ?? {}),
+      ...((cfg.gateway?.policies?.[platform] as Pol | undefined) ?? {}),
+    };
+    const ref = ctx.gateway?.directory?.resolve(target) ?? null;
+    const originNorm = normalizeSenderId(origin.channelId);
+    const ownConversation =
+      !!ref &&
+      ref.platform === platform &&
+      originNorm.length > 0 &&
+      normalizeSenderId(ref.channelId) === originNorm;
+    const decision = authorizeOutboundSend({
+      policy,
+      senderId: origin.channelId,
+      ownConversation,
+    });
+    if (!decision.allowed) {
+      return { allowed: false, reason: decision.reason ?? 'not authorised to send to others.' };
+    }
+    // Optional target-approval: the recipient must be an APPROVED contact.
+    if (policy.requireApprovedTarget && !ownConversation && ref) {
+      const contacts = readGatewayContacts();
+      const hit =
+        resolveContact(contacts, ref.platform as never, ref.channelId) ??
+        resolveContact(contacts, ref.platform as never, target);
+      if (!hit || hit.status !== 'approved') {
+        return {
+          allowed: false,
+          reason:
+            `'${target}' is not an approved contact, and this platform requires approved recipients ` +
+            `(dashboard → Contacts → approve the person, or ask the admin to turn off 'require approved recipients').`,
+        };
+      }
+    }
+    return { allowed: true };
+  } catch {
+    // Policy unavailable — never let an auth-read failure block a legitimate send.
+    return { allowed: true };
+  }
+}
+
+/**
  * Run the gateway send tool — returns model-feedable text (never throws).
  * The input schema lives in the registry (single source, never hand-kept).
  */
@@ -153,6 +218,17 @@ export async function runGatewaySendTool(args: unknown, ctx: ToolContext): Promi
     caption = parsed.caption;
   } catch (err) {
     return `gateway_send: missing/invalid arguments — expected { target, text, image_path? }. ${err instanceof Error ? err.message.split('\n')[0] : ''}`.trim();
+  }
+
+  // ── OUTBOUND AUTHORIZATION ── only for gateway-triggered turns (a remote
+  // sender asked the agent to message someone else). A CLI/dashboard turn has
+  // no origin and is the operator at the keyboard — always allowed.
+  const origin = ctx.gateway?.origin;
+  if (origin?.platform) {
+    const auth = await authorizeGatewaySend(origin, target, ctx);
+    if (!auth.allowed) {
+      return `gateway_send: 🚫 ${auth.reason ?? 'not authorised to send to others.'}`;
+    }
   }
 
   // Image/media send path: read the file and send via sendMedia.

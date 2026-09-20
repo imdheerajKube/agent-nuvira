@@ -483,7 +483,7 @@ export interface BuffConfig {
    * page; merged over env in GatewayRegistry (env < config < explicit options).
    */
   gateway?: {
-    policies?: Partial<Record<string, { allowedUsers?: string[]; allowedGroups?: string[]; requireMention?: boolean; disabled?: boolean; silentDrop?: boolean }>>;
+    policies?: Partial<Record<string, { allowedUsers?: string[]; allowedGroups?: string[]; requireMention?: boolean; disabled?: boolean; silentDrop?: boolean; outboundSenders?: string[]; requireApprovedTarget?: boolean }>>;
     /**
      * Channel targets (aliases or platform:channelId) that ALWAYS receive the
      * pipeline completion summary, regardless of who triggered it — e.g.

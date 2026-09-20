@@ -26,6 +26,13 @@ export interface ProjectContextBundle {
     fileTree: string;
     fileCount: number;
     symbolCount: number;
+    /**
+     * Bounded git state (branch, uncommitted files, recent commits) — the same
+     * block the CLI's ambient context ships. Empty outside a git repo. Closes
+     * the dashboard↔CLI parity gap where the snapshot carried a file tree but no
+     * git state.
+     */
+    gitState: string;
     /** True when the map was truncated to fit the caps. */
     truncated: boolean;
     builtAt: number;

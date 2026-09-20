@@ -75,6 +75,7 @@ export default function AgentHub() {
   const [policyMsg, setPolicyMsg] = useState<{ kind: 'ok' | 'err'; text: string } | null>(null);
   const [policyUserInput, setPolicyUserInput] = useState<Record<string, string>>({});
   const [policyGroupInput, setPolicyGroupInput] = useState<Record<string, string>>({});
+  const [policySendInput, setPolicySendInput] = useState<Record<string, string>>({});
   // Privacy — sender ids are masked by default; admins/operators can reveal
   // full ids while working (per-session, resets on reload).
   const [revealIds, setRevealIds] = useState(false);
@@ -588,11 +589,18 @@ ${messages.map((m) => {
     setSending(false);
   };
 
+  /** POLICY LIST KEYS the Permissions editor can hold in its draft. */
+  type PolicyListKey = 'allowedUsers' | 'allowedGroups' | 'outboundSenders';
+
   /** The SAVED policy id list for a key — what the draft edits ON TOP of. */
-  const savedPolicyIds = (platform: string, key: 'allowedUsers' | 'allowedGroups'): string[] => {
+  const savedPolicyIds = (platform: string, key: PolicyListKey): string[] => {
     const saved = (data?.channels?.policies?.[platform] ?? {}) as HubChannelPolicy;
     return saved[key] ?? [];
   };
+
+  /** Map an editor "kind" to the policy key it edits. */
+  const keyForKind = (kind: 'user' | 'group' | 'send'): PolicyListKey =>
+    kind === 'user' ? 'allowedUsers' : kind === 'group' ? 'allowedGroups' : 'outboundSenders';
 
   /**
    * P1 — add a user/group id to a platform's allowed list (draft only). The
@@ -600,12 +608,12 @@ ${messages.map((m) => {
    * adding ONE user never hides (and on save, never silently deletes) the
    * rest of the saved list.
    */
-  const addPolicyId = (platform: string, kind: 'user' | 'group', value: string) => {
+  const addPolicyId = (platform: string, kind: 'user' | 'group' | 'send', value: string) => {
     const id = value.trim();
     if (!id) return;
     setPolicyDraft((prev) => {
       const pol = { ...(prev[platform] ?? {}) };
-      const key = kind === 'user' ? 'allowedUsers' : 'allowedGroups';
+      const key = keyForKind(kind);
       const base = prev[platform]?.[key] ?? savedPolicyIds(platform, key);
       const list = [...base];
       if (!list.includes(id)) list.push(id);
@@ -624,9 +632,9 @@ ${messages.map((m) => {
    * dropped so an OPEN platform stays open instead of flipping to "blank =
    * none" from a stray ✕.
    */
-  const removePolicyId = (platform: string, kind: 'user' | 'group', id: string) => {
+  const removePolicyId = (platform: string, kind: 'user' | 'group' | 'send', id: string) => {
     setPolicyDraft((prev) => {
-      const key = kind === 'user' ? 'allowedUsers' : 'allowedGroups';
+      const key = keyForKind(kind);
       const saved = savedPolicyIds(platform, key);
       const base = prev[platform]?.[key] ?? saved;
       const next = base.filter((x) => x !== id);
@@ -690,7 +698,10 @@ ${messages.map((m) => {
   };
 
   /** P1 — toggle a boolean policy flag on a platform (draft only). */
-  const togglePolicyFlag = (platform: string, flag: 'silentDrop' | 'disabled' | 'requireMention') => {
+  const togglePolicyFlag = (
+    platform: string,
+    flag: 'silentDrop' | 'disabled' | 'requireMention' | 'requireApprovedTarget',
+  ) => {
     setPolicyDraft((prev) => {
       const pol = { ...(prev[platform] ?? {}) };
       if (flag === 'silentDrop') {
@@ -1102,14 +1113,16 @@ ${messages.map((m) => {
                     {users.length === 0 ? <span className="admin-hint">(blank — no one may trigger; add <code>Allow-All</code> to allow everyone)</span> : null}
                     {users.map((u) => {
                       // A chip that only exists in the DRAFT (not yet saved) is
-                      // marked pending so adding a user can't be mistaken for
-                      // having saved it.
-                      const pending = (policyDraft[p.platform]?.allowedUsers ?? []).includes(u) &&
+                      // marked UNSAVED so adding a user can't be mistaken for
+                      // having saved it. NOTE: this is NOT the same as a
+                      // Contact's "pending" APPROVAL status — that lives on the
+                      // Contacts tab.
+                      const unsaved = (policyDraft[p.platform]?.allowedUsers ?? []).includes(u) &&
                         !(data?.channels?.policies?.[p.platform]?.allowedUsers ?? []).includes(u);
                       return (
                         <div className="hub-alias-row" key={`u-${u}`}>
-                          <span className={`hub-chip${pending ? ' hub-chip-pending' : ''}`} title={pending ? 'Not saved yet — press 💾 Save permissions' : undefined}>
-                            {showId(u)}{pending ? ' · pending' : ''}
+                          <span className={`hub-chip${unsaved ? ' hub-chip-pending' : ''}`} title={unsaved ? 'Not saved yet — press 💾 Save permissions' : undefined}>
+                            {showId(u)}{unsaved ? ' · unsaved' : ''}
                           </span>
                           <button className="admin-refresh-btn" disabled={policyBusy} onClick={() => removeVerifiedUser(p.platform, u)}>✕</button>
                         </div>
@@ -1141,12 +1154,12 @@ ${messages.map((m) => {
                   <div className="hub-alias-list">
                     {groups.length === 0 ? <span className="admin-hint">(none — any group may trigger)</span> : null}
                     {groups.map((g) => {
-                      const pending = (policyDraft[p.platform]?.allowedGroups ?? []).includes(g) &&
+                      const unsaved = (policyDraft[p.platform]?.allowedGroups ?? []).includes(g) &&
                         !(data?.channels?.policies?.[p.platform]?.allowedGroups ?? []).includes(g);
                       return (
                         <div className="hub-alias-row" key={`g-${g}`}>
-                          <span className={`hub-chip${pending ? ' hub-chip-pending' : ''}`} title={pending ? 'Not saved yet — press 💾 Save permissions' : undefined}>
-                            {g}{pending ? ' · pending' : ''}
+                          <span className={`hub-chip${unsaved ? ' hub-chip-pending' : ''}`} title={unsaved ? 'Not saved yet — press 💾 Save permissions' : undefined}>
+                            {g}{unsaved ? ' · unsaved' : ''}
                           </span>
                           <button className="admin-refresh-btn" disabled={policyBusy} onClick={() => removePolicyId(p.platform, 'group', g)}>✕</button>
                         </div>
@@ -1167,6 +1180,42 @@ ${messages.map((m) => {
                       onClick={() => { addPolicyId(p.platform, 'group', policyGroupInput[p.platform] ?? ''); setPolicyGroupInput((s) => ({ ...s, [p.platform]: '' })); }}
                     >+ Group</button>
                   </div>
+                  <div className="admin-hint" style={{ margin: '12px 0 4px' }}>
+                    Send authority — who may tell the agent to send to OTHER people
+                  </div>
+                  <div className="admin-hint" style={{ margin: '0 0 6px', opacity: 0.8 }}>
+                    {(pol.outboundSenders ?? []).length === 0
+                      ? 'Open — anyone above who can trigger the agent can also direct outbound sends. Add senders to restrict it.'
+                      : 'Restricted to the senders below (Allow-All = everyone).'}
+                  </div>
+                  <div className="hub-alias-list">
+                    {(pol.outboundSenders ?? []).map((u) => {
+                      const unsaved = (policyDraft[p.platform]?.outboundSenders ?? []).includes(u) &&
+                        !(data?.channels?.policies?.[p.platform]?.outboundSenders ?? []).includes(u);
+                      return (
+                        <div className="hub-alias-row" key={`s-${u}`}>
+                          <span className={`hub-chip${unsaved ? ' hub-chip-pending' : ''}`} title={unsaved ? 'Not saved yet — press 💾 Save permissions' : undefined}>
+                            {showId(u)}{unsaved ? ' · unsaved' : ''}
+                          </span>
+                          <button className="admin-refresh-btn" disabled={policyBusy} onClick={() => removePolicyId(p.platform, 'send', u)}>✕</button>
+                        </div>
+                      );
+                    })}
+                  </div>
+                  <div className="hub-send-form" style={{ margin: '6px 0 10px' }}>
+                    <input
+                      type="text"
+                      value={policySendInput[p.platform] ?? ''}
+                      onChange={(e) => setPolicySendInput((s) => ({ ...s, [p.platform]: e.target.value }))}
+                      placeholder="sender id, or Allow-All"
+                      disabled={policyBusy}
+                    />
+                    <button
+                      className="admin-refresh-btn"
+                      disabled={policyBusy || !(policySendInput[p.platform] ?? '').trim()}
+                      onClick={() => { addPolicyId(p.platform, 'send', policySendInput[p.platform] ?? ''); setPolicySendInput((s) => ({ ...s, [p.platform]: '' })); }}
+                    >+ Sender</button>
+                  </div>
                   <div className="hub-send-form" style={{ margin: '6px 0 0' }}>
                     <label style={{ display: 'inline-flex', alignItems: 'center', gap: 6, marginRight: 12 }}>
                       <input type="checkbox" checked={pol.silentDrop !== false} disabled={policyBusy} onChange={() => togglePolicyFlag(p.platform, 'silentDrop')} />
@@ -1176,9 +1225,13 @@ ${messages.map((m) => {
                       <input type="checkbox" checked={Boolean(pol.requireMention)} disabled={policyBusy} onChange={() => togglePolicyFlag(p.platform, 'requireMention')} />
                       <span className="admin-hint">Groups: mention only</span>
                     </label>
-                    <label style={{ display: 'inline-flex', alignItems: 'center', gap: 6 }}>
+                    <label style={{ display: 'inline-flex', alignItems: 'center', gap: 6, marginRight: 12 }}>
                       <input type="checkbox" checked={Boolean(pol.disabled)} disabled={policyBusy} onChange={() => togglePolicyFlag(p.platform, 'disabled')} />
                       <span className="admin-hint">Disabled (off)</span>
+                    </label>
+                    <label style={{ display: 'inline-flex', alignItems: 'center', gap: 6 }}>
+                      <input type="checkbox" checked={Boolean(pol.requireApprovedTarget)} disabled={policyBusy} onChange={() => togglePolicyFlag(p.platform, 'requireApprovedTarget')} />
+                      <span className="admin-hint">Require approved recipients for sends</span>
                     </label>
                   </div>
                 </div>

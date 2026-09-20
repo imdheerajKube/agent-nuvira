@@ -190,6 +190,17 @@ interface DashboardTrace {
     provider?: string;
     model?: string;
     success?: boolean;
+    /**
+     * WHAT ACTUALLY HAPPENED — `answered` (text only) vs `acted` (a tool ran),
+     * plus `unverifiedClaim`. Shown in the Trace tab so a hallucinated
+     * "I sent it" can never look like a real delivery.
+     */
+    outcome?: {
+        kind: 'answered' | 'acted' | 'failed' | 'cancelled';
+        tools?: string[];
+        delivered?: boolean;
+        unverifiedClaim?: boolean;
+    };
     steps: DashboardTraceStep[];
 }
 /**

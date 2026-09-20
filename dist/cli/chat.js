@@ -35,7 +35,7 @@ import { resolveDispatch } from '../nlu/actions.js';
 import { hasCodingAction, resolveAskKind } from '../nlu/conversation-gate.js';
 import { runToolLoop, extractFallbackToolCalls } from '../tools/tool-loop.js';
 import { looksLikeConfusedScaffoldingReply, toUserFacingGenerationError, isToolCallingUnsupported, stripToolCallArtifacts, } from '../inference/tool-call-utils.js';
-import { beginTrace, endTrace, recordStep } from '../learning/reasoning-trace.js';
+import { beginTrace, endTrace, recordStep, buildTraceOutcome } from '../learning/reasoning-trace.js';
 import { getLoopExposureMode } from '../tools/toolsets.js';
 import { resolveModelHarnessProfile, shouldSkipNativeTools } from '../learning/model-harness.js';
 import { resolveAdapterDefault } from '../learning/model-selection.js';
@@ -443,6 +443,8 @@ export class ChatCommand extends BaseCommand {
             generationFailed: answer.generationFailed,
             cancelled: answer.cancelled,
             bounded: answer.bounded,
+            toolCalls: answer.toolCalls,
+            unverifiedActionClaim: answer.unverifiedActionClaim,
             provider: type,
             model,
         };
@@ -1080,7 +1082,7 @@ export class ChatCommand extends BaseCommand {
         catch (err) {
             // The tool loop never throws by design; this guards future changes.
             logger.error(String(err));
-            endTrace(chatTraceId, false);
+            endTrace(chatTraceId, false, { kind: 'failed' });
             result = {
                 // Sanitized on purpose: this content is delivered verbatim by every
                 // surface (CLI print, dashboard bubble, gateway send).
@@ -1091,7 +1093,15 @@ export class ChatCommand extends BaseCommand {
                 bounded: false,
             };
         }
-        endTrace(chatTraceId, !result.generationFailed);
+        // Record WHAT HAPPENED, not just "the model answered": a hallucinated
+        // "I have sent it" (no tool ran) must be visible as an unverified claim in
+        // the Trace tab instead of looking like a real delivery.
+        endTrace(chatTraceId, !result.generationFailed, buildTraceOutcome({
+            generationFailed: result.generationFailed,
+            cancelled: result.cancelled,
+            tools: result.toolCalls,
+            unverifiedActionClaim: result.unverifiedActionClaim,
+        }));
         // Finalize the turn (cache + memory + registry telemetry).
         // E3c: a generationFailed turn is NOT cached/persisted — the caller may
         // fall back to the rule decision, and the failure text must not pollute
@@ -1122,12 +1132,20 @@ export class ChatCommand extends BaseCommand {
         }
         // Followups are rendered by the CALLER (after the answer is printed) so
         // the menu never appears before the content. We return them as data.
+        //
+        // E3b — strip raw suggest_followups scaffolding from the delivered content
+        // HERE (not only in answerOnce): the interactive path prints this string
+        // directly, so a model that wrote the tool JSON as text used to leak it
+        // into the chat. The loop already salvages such blocks into real tool
+        // calls; this is the belt-and-braces strip for any residue.
         return {
-            content: result.content,
+            content: stripToolCallArtifacts(result.content),
             generationFailed: result.generationFailed,
             cancelled: result.cancelled,
             bounded: result.bounded,
             followups: result.followups,
+            toolCalls: result.toolCalls,
+            unverifiedActionClaim: result.unverifiedActionClaim,
         };
     }
     /**

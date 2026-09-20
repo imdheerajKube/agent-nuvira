@@ -735,12 +735,97 @@ export class ConfigCommand extends BaseCommand {
             .argument('<platform>', 'Platform id')
             .argument('<mode>', 'polite or silent')
             .action((platform, mode) => this.setReplyMode(platform, mode)))
+            .addCommand(new Command('send-authority')
+            .description('Manage who may command the agent to send to OTHER people (gateway_send). Outbound-only gate — separate from `allow` (who may trigger).')
+            .argument('<action>', 'add, remove, list, reset or require-target')
+            .argument('<platform>', 'Platform id (e.g. whatsapp, telegram)')
+            .argument('[id...]', 'Sender ids for add/remove; on|off for require-target')
+            .action((action, platform, ids) => this.manageSendAuthority(action, platform, ids)))
             .addCommand(new Command('notify')
             .description('Manage status recipients — contacts/groups that ALWAYS get pipeline completion summaries')
             .argument('<action>', 'add, remove or list')
             .argument('[target...]', 'Channel target(s): alias or platform:channelId (e.g. whatsapp:Alex, telegram:123456)')
             .action((action, targets) => this.manageStatusRecipients(action, targets)));
         return cmd;
+    }
+    /**
+     * `${getCliName()} config gateway send-authority <action> <platform> [id...]`
+     *
+     * The OUTBOUND gate. `allow` decides who may TRIGGER the agent; this decides
+     * who may then direct it to deliver to SOMEONE ELSE. Absent = inherit the
+     * inbound allow-list (open); an empty list = nobody; the Allow-All wildcard
+     * = anyone.
+     */
+    manageSendAuthority(action, platform, ids) {
+        if (!(platform in PLATFORM_ENV_VARS)) {
+            logger.error(`Unknown platform '${platform}' — see \`${getCliName()} config gateway list\`.`);
+            return;
+        }
+        if (!['add', 'remove', 'list', 'reset', 'require-target'].includes(action)) {
+            logger.error(`Action must be add, remove, list, reset or require-target, got '${action}'.`);
+            return;
+        }
+        if (!guardRbacAction('gateway.manage'))
+            return;
+        const cfg = this.configManager.getAll();
+        const policies = { ...(cfg.gateway?.policies ?? {}) };
+        const pol = { ...(policies[platform] ?? {}) };
+        if (action === 'list') {
+            const list = pol.outboundSenders;
+            if (list === undefined) {
+                logger.info(`${platform}: OPEN — any sender who may trigger the agent may also send to others (inherits the allowed-users list).`);
+            }
+            else if (list.length === 0) {
+                logger.info(`${platform}: RESTRICTED — nobody may send to others.`);
+            }
+            else {
+                logger.info(`${platform}: RESTRICTED to ${list.join(', ')}`);
+            }
+            logger.info(`Require approved recipients: ${pol.requireApprovedTarget ? 'ON' : 'OFF'}`);
+            return;
+        }
+        if (action === 'reset') {
+            delete pol.outboundSenders;
+            policies[platform] = pol;
+            this.configManager.save({ gateway: { policies } });
+            logger.success(`${platform}: send authority reset to OPEN (inherits the allowed-users list).`);
+            return;
+        }
+        if (action === 'require-target') {
+            const value = (ids[0] ?? '').toLowerCase();
+            if (!['on', 'off', 'true', 'false', 'yes', 'no'].includes(value)) {
+                logger.error(`Use 'require-target <platform> on|off'.`);
+                return;
+            }
+            pol.requireApprovedTarget = ['on', 'true', 'yes'].includes(value);
+            policies[platform] = pol;
+            this.configManager.save({ gateway: { policies } });
+            logger.success(`${platform}: gateway_send targets must be approved contacts: ${pol.requireApprovedTarget ? 'ON' : 'OFF'}.`);
+            return;
+        }
+        if (ids.length === 0) {
+            logger.error(`Provide at least one sender id.`);
+            return;
+        }
+        const list = pol.outboundSenders ?? [];
+        if (action === 'add') {
+            const added = ids.filter((id) => !list.includes(id));
+            pol.outboundSenders = [...list, ...added];
+            logger.success(`Added ${added.length} outbound sender(s) on ${platform}: ${added.join(', ') || '(all already present)'}`);
+            logger.info('ℹ  These senders may now direct the agent to message OTHER people. Everyone else is refused.');
+            logger.info(`    Reset with: ${getCliName()} config gateway send-authority reset ${platform}`);
+        }
+        else {
+            const removed = ids.filter((id) => list.includes(id));
+            pol.outboundSenders = list.filter((id) => !ids.includes(id));
+            logger.success(`Removed ${removed.length} outbound sender(s) on ${platform}: ${removed.join(', ') || '(none were listed)'}`);
+            if (pol.outboundSenders.length === 0) {
+                logger.info('ℹ  The list is now EMPTY — nobody may send to others. Use `reset` to return to the open default.');
+            }
+        }
+        policies[platform] = pol;
+        this.configManager.save({ gateway: { policies } });
+        logger.info('Applied to the running gateway immediately (policies re-read per inbound).');
     }
     /** `${getCliName()} config gateway allow/disallow <platform> <user|group> <id...>` */
     allowDisallow(platform, kind, ids, allow) {

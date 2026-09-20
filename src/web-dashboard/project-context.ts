@@ -21,6 +21,7 @@
 import { existsSync, statSync } from 'node:fs';
 import { basename, resolve } from 'node:path';
 import { buildCodeMap, type CodeMap } from '../cli/code-map.js';
+import { buildGitStateDigest } from '../tools/git-digest.js';
 
 export interface ProjectContextBundle {
   path: string;
@@ -31,6 +32,13 @@ export interface ProjectContextBundle {
   fileTree: string;
   fileCount: number;
   symbolCount: number;
+  /**
+   * Bounded git state (branch, uncommitted files, recent commits) — the same
+   * block the CLI's ambient context ships. Empty outside a git repo. Closes
+   * the dashboard↔CLI parity gap where the snapshot carried a file tree but no
+   * git state.
+   */
+  gitState: string;
   /** True when the map was truncated to fit the caps. */
   truncated: boolean;
   builtAt: number;
@@ -84,6 +92,7 @@ export function buildProjectContext(
     fileTree,
     fileCount: map.totalFiles,
     symbolCount: map.totalSymbols,
+    gitState: buildGitStateDigest(dir).join('\n'),
     truncated,
     builtAt: Date.now(),
   };
@@ -102,6 +111,7 @@ export function formatProjectText(bundle: ProjectContextBundle): string {
     '',
     '## Symbol map',
     bundle.codeMap,
+    ...(bundle.gitState ? ['', bundle.gitState] : []),
   ].join('\n');
 }
 

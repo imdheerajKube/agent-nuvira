@@ -247,13 +247,15 @@ describe('AgentHub', () => {
     fireEvent.change(within(card).getByPlaceholderText('Contact no / sender id, or Allow-All'), { target: { value: '+919999999999' } });
     fireEvent.click(within(card).getByRole('button', { name: /\+ User/ }));
 
-    // The new chip shows the MASKED sender id with a pending marker — the
+    // The new chip shows the MASKED sender id with an UNSAVED marker (NOT
+    // "pending" — that word is reserved for a Contact's approval status, and
+    // reusing it here made unsaved edits look like a vanished approval) — the
     // personal name and the full number must NOT appear anywhere.
-    expect(within(card).getByText(/\+91\*+.*· pending/)).toBeTruthy();
+    expect(within(card).getByText(/\+91\*+.*· unsaved/)).toBeTruthy();
     expect(screen.queryByText('Sam')).toBeNull();
     expect(screen.queryByText('+919999999999')).toBeNull();
     expect(screen.queryByText('919999999999')).toBeNull();
-    // The other saved users stay visible (masked too, no pending marker).
+    // The other saved users stay visible (masked too, no unsaved marker).
     expect(within(card).getAllByText(/91\*\*\*/).length).toBeGreaterThan(0);
   });
 

@@ -132,7 +132,7 @@ export function recordStep(traceId, step) {
  * Mark a trace finished (sets endedAt, durationMs, success). Idempotent: a
  * second endTrace (e.g. from a finally block after an early close) is a no-op.
  */
-export function endTrace(traceId, success) {
+export function endTrace(traceId, success, outcome) {
     try {
         const data = readFile();
         const trace = data.traces.find((t) => t.id === traceId);
@@ -144,11 +144,31 @@ export function endTrace(traceId, success) {
         trace.durationMs = trace.endedAt - trace.startedAt;
         if (success !== undefined)
             trace.success = success;
+        if (outcome)
+            trace.outcome = outcome;
         writeFile(data);
     }
     catch {
         // Best-effort.
     }
+}
+/**
+ * Build a TraceOutcome from a turn's tool activity. Shared by every caller so
+ * the semantics can never drift between the CLI, dashboard and gateway.
+ */
+export function buildTraceOutcome(input) {
+    const tools = [...(input.tools ?? [])];
+    if (input.cancelled)
+        return { kind: 'cancelled', tools };
+    if (input.generationFailed)
+        return { kind: 'failed', tools };
+    const delivered = tools.includes('gateway_send');
+    return {
+        kind: tools.length > 0 ? 'acted' : 'answered',
+        tools,
+        ...(delivered ? { delivered: true } : {}),
+        ...(input.unverifiedActionClaim ? { unverifiedClaim: true } : {}),
+    };
 }
 /** Get one trace by id (null when missing). */
 export function getTrace(id) {

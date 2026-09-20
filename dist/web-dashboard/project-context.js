@@ -20,6 +20,7 @@
 import { existsSync, statSync } from 'node:fs';
 import { basename, resolve } from 'node:path';
 import { buildCodeMap } from '../cli/code-map.js';
+import { buildGitStateDigest } from '../tools/git-digest.js';
 const DEFAULT_MAX_FILES = 150;
 const DEFAULT_MAX_SYMBOLS = 300;
 const DEFAULT_MAX_TREE_LINES = 200;
@@ -56,6 +57,7 @@ export function buildProjectContext(path, opts = {}) {
         fileTree,
         fileCount: map.totalFiles,
         symbolCount: map.totalSymbols,
+        gitState: buildGitStateDigest(dir).join('\n'),
         truncated,
         builtAt: Date.now(),
     };
@@ -73,6 +75,7 @@ export function formatProjectText(bundle) {
         '',
         '## Symbol map',
         bundle.codeMap,
+        ...(bundle.gitState ? ['', bundle.gitState] : []),
     ].join('\n');
 }
 /**

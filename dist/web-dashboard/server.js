@@ -3561,7 +3561,17 @@ function handleRequest(req, res) {
                 for (const [platform, pol] of Object.entries(incoming)) {
                     if (!(platform in PLATFORM_ENV_VARS))
                         continue;
-                    merged[platform] = { ...(merged[platform] ?? {}), ...(pol ?? {}) };
+                    const next = { ...(merged[platform] ?? {}) };
+                    for (const [key, value] of Object.entries(pol ?? {})) {
+                        // An explicit `null` DELETES the key — the only way to clear a
+                        // policy list back to its ABSENT (inherit/open) default, since a
+                        // per-key merge can otherwise never remove a saved entry.
+                        if (value === null)
+                            delete next[key];
+                        else
+                            next[key] = value;
+                    }
+                    merged[platform] = next;
                 }
                 // Status recipients ride along on the same PUT (whole-array semantics).
                 const gatewayPatch = { policies: merged };

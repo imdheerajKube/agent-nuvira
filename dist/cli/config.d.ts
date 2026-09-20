@@ -23,6 +23,15 @@ export declare class ConfigCommand extends BaseCommand {
     private listProviders;
     private initConfig;
     private createGatewayCommand;
+    /**
+     * `${getCliName()} config gateway send-authority <action> <platform> [id...]`
+     *
+     * The OUTBOUND gate. `allow` decides who may TRIGGER the agent; this decides
+     * who may then direct it to deliver to SOMEONE ELSE. Absent = inherit the
+     * inbound allow-list (open); an empty list = nobody; the Allow-All wildcard
+     * = anyone.
+     */
+    private manageSendAuthority;
     /** `${getCliName()} config gateway allow/disallow <platform> <user|group> <id...>` */
     private allowDisallow;
     /** `${getCliName()} config gateway reply <platform> <polite|silent>` */

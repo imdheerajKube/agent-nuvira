@@ -28,8 +28,8 @@
 
 import { existsSync, readdirSync, statSync } from 'node:fs';
 import { join } from 'node:path';
-import { spawnSync } from 'node:child_process';
 
+import { buildGitStateDigest } from './git-digest.js';
 import { assessProject } from '../agents/prompt-assembly.js';
 
 /** Hard budget: the tree block is truncated to this many lines (~1.5K tokens). */
@@ -38,8 +38,6 @@ const MAX_TREE_LINES = 60;
 const MAX_TREE_DEPTH = 4;
 /** Max entries per directory (a flat 300-file dir gets an ellipsis note). */
 const MAX_ENTRIES_PER_DIR = 25;
-/** Git status porcelain lines kept (a huge dirty tree truncates). */
-const MAX_GIT_STATUS_LINES = 30;
 /** Overall block budget (~2K tokens ≈ 8K chars) — hard-truncated with a note. */
 const MAX_BLOCK_CHARS = 8_000;
 
@@ -65,17 +63,6 @@ export function looksLikeProject(dir: string): boolean {
     return entries.some((e) => MARKERS.has(e));
   } catch {
     return false;
-  }
-}
-
-/** Run a read-only git command in `dir`; '' on any failure (best-effort). */
-function git(dir: string, args: string[]): string {
-  try {
-    const r = spawnSync('git', args, { cwd: dir, encoding: 'utf-8', timeout: 3_000 });
-    if (r.status !== 0 || !r.stdout) return '';
-    return r.stdout.trim();
-  } catch {
-    return '';
   }
 }
 
@@ -167,28 +154,11 @@ export async function buildLoopProjectContext(dir: string): Promise<string> {
       // Tree failure must never break the block — omit the section.
     }
 
-    // ── Git state digest (read-only, 3s cap per command) ──
+    // ── Git state digest (shared leaf module — same block the dashboard now
+    // ships, so both surfaces see identical git state) ──
     try {
-      const branchLine = git(dir, ['status', '--porcelain', '-b']).split('\n')[0] || '';
-      const statusLines = git(dir, ['status', '--porcelain']).split('\n').filter(Boolean);
-      const log = git(dir, ['log', '--oneline', '-5']).split('\n').filter(Boolean);
-      if (branchLine) {
-        lines.push('## Git state');
-        lines.push(`- ${branchLine}`);
-        if (statusLines.length > 0) {
-          lines.push(`- ${statusLines.length} uncommitted change(s):`);
-          for (const s of statusLines.slice(0, MAX_GIT_STATUS_LINES)) lines.push(`  ${s}`);
-          if (statusLines.length > MAX_GIT_STATUS_LINES) {
-            lines.push(`  … ${statusLines.length - MAX_GIT_STATUS_LINES} more`);
-          }
-        } else {
-          lines.push('- working tree clean');
-        }
-        if (log.length > 0) {
-          lines.push('- recent commits:');
-          for (const c of log) lines.push(`  ${c}`);
-        }
-      }
+      const gitLines = buildGitStateDigest(dir);
+      if (gitLines.length > 0) lines.push(...gitLines);
       // Outside a git repo: no Git state section — fine.
     } catch {
       // Git digest is best-effort — omit on failure.

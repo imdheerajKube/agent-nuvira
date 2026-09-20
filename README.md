@@ -702,6 +702,73 @@ agent-nuvira config set modality.video.myprovider.models='["model-1"]'
 
 ---
 
+## Messaging Gateway — Permissions, Sending, and Reading Traces Honestly
+
+This section exists because two different ideas get conflated and it causes real confusion. Read it before you let anyone else message your bot.
+
+### 1. Two separate permissions (they are NOT the same thing)
+
+| Permission | Where it lives | What it controls |
+|---|---|---|
+| **Who may trigger the agent** | `gateway.policies.<platform>.allowedUsers` (Agent Hub → Channels → **Permissions**, or `agent-nuvira config gateway allow …`) | Who can *talk to* the bot at all |
+| **Who may send to others** | `gateway.policies.<platform>.outboundSenders` (Agent Hub → Permissions → **Send authority**, Contacts page, or `config gateway send-authority …`) | Who can tell the bot to *deliver a message to a third party* |
+
+A third concept, a **contact's approval status**, only gates sending **to** that person — it does not make that person a trusted sender.
+
+**Open by default — know this.** If you never set `outboundSenders`, a platform is **OPEN**: every sender who is allowed to trigger the agent can also direct it to send to anyone. This is the legacy behaviour so nothing silently breaks. To restrict it, set an explicit list:
+
+```bash
+# Only YOU may direct the bot to message other people on WhatsApp
+agent-nuvira config gateway send-authority add whatsapp +919876543210
+# The list is now RESTRICTED to that number. Everyone else is refused.
+
+agent-nuvira config gateway send-authority list whatsapp      # show current state
+agent-nuvira config gateway send-authority remove whatsapp +91… # drop one
+agent-nuvira config gateway send-authority reset whatsapp      # back to OPEN
+agent-nuvira config gateway send-authority require-target whatsapp on  # recipients must be approved contacts
+```
+
+Or do the same visually: **Dashboard → Contacts → “🔐 Send authority”** (a platform card per channel, with add/remove, an `open`/`restricted` badge, and “Require approved recipients”), or **Agent Hub → Channels → Permissions → Send authority**.
+
+The list follows the same rules as `allowedUsers`: specific ids restrict it, an empty list means *nobody*, and the `Allow-All` wildcard means *anyone*. A sender can always reply inside their own conversation; send authority only governs messages to **other** targets.
+
+> A CLI/dashboard chat turn (you typing at the keyboard) is trusted and never blocked by this gate — it only applies to remote senders arriving through a messaging platform.
+
+### 2. Who appears where (Contacts vs Agent Hub)
+
+- **Contacts tab** — the directory of people the bot can message. **Telegram** users are auto-registered here on their first message with status **⏳ pending** until you approve them. WhatsApp senders are *not* auto-registered.
+- **Agent Hub → Permissions → “Send authority”** — who may command sends to others.
+- **Tick `Require approved recipients`** if you want every outbound target to be an approved contact (an explicit `platform:+number` target is otherwise allowed).
+
+### What “pending” means — and what it does not
+
+| Label | Where | Meaning |
+|---|---|---|
+| **⏳ pending** | Contacts tab | A real **approval** state — the person messaged the bot and is awaiting your decision |
+| **· unsaved** | Agent Hub → Permissions | **Not a state at all** — a local edit you have not saved yet. Reloading the page discards it. Press **💾 Save permissions** before leaving. |
+
+These used to share the word “pending”, which made unsaved edits look like they had vanished. Agent Hub now says **unsaved** so the two can never be confused.
+
+### 3. Reading traces honestly
+
+A trace's `success` flag means **“a reply was generated”** — it does **not** mean an action happened. A model can write `{"tool":"gateway_send", …}` as plain **text** (the loop now recovers that into a real call) or skip tools entirely and simply *say* “I have sent it”.
+
+Every chat trace therefore also carries an **outcome** badge, visible in **Dashboard → Traces**:
+
+| Badge | Meaning |
+|---|---|
+| 💬 **answered — no action taken** | A text reply only; no tool ran |
+| 🔧 **acted — N tool(s)** | One or more tools actually executed |
+| ✅ **action performed — message sent** | `gateway_send` ran and reported success |
+| ⚠️ **unverified claim** | The answer asserted a delivery that **no tool performed** — treat it as NOT done |
+| ❌ / ⏹ | Generation failed / you cancelled the turn |
+
+If a gateway answer claims a send that never happened, the agent now **appends a correction** (“I could not confirm that message was actually sent…”) instead of leaving a false confirmation standing.
+
+**To be sure a message really went out:** look for the ✅ outcome badge on the trace, or a `✅ sent to …` line in the tool result — never trust the model's prose alone.
+
+---
+
 ## CLI Commands
 
 ### `agent-nuvira models` — Model Discovery (New in v1.1.0)

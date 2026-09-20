@@ -246,6 +246,16 @@ export interface ToolLoopResult {
    * leave a half-answer in the session.
    */
   cancelled?: boolean;
+  /**
+   * HONESTY FLAG — the final answer CLAIMED a delivery/action ("I have sent…",
+   * "message delivered…") but NO delivery tool actually ran this turn. A
+   * model can write a tool call as prose, or skip it entirely and simply say
+   * the action succeeded. When true, the answer is an unverified claim: the
+   * caller must NOT present it as a completed action (the gateway appends a
+   * correction; the trace records it). Set by the loop; never guessed by
+   * callers.
+   */
+  unverifiedActionClaim?: boolean;
 }
 
 /** An orphan reasoning block or bare <think> is a think-only response. */
@@ -269,13 +279,20 @@ export function extractFallbackToolCalls(content: string): { text: string; calls
   const calls: StepResponse['toolCalls'] = [];
   let cleaned = content;
   let strippedAny = false;
-  const startsAt = /\(?\s*\{\s*"tool"\s*:/g;
+  // A real tool block always names the tool as a JSON STRING
+  // (`{"tool":"name"`). Requiring the opening quote keeps unrelated prose
+  // (`{"tool": broken`) untouched while still catching a truncated real call.
+  const startsAt = /\(?\s*\{\s*"tool"\s*:\s*"/g;
   let m: RegExpExecArray | null;
   while ((m = startsAt.exec(cleaned)) !== null) {
     const end = findMatchingBrace(cleaned, m.index);
     if (end === -1) {
-      startsAt.lastIndex = m.index + 1;
-      continue;
+      // A QUOTED tool block with no closing brace: the model was cut off
+      // mid-call. Everything from the marker on is leaked scaffolding, not
+      // answer text — strip it and stop (nothing valid can follow).
+      cleaned = cleaned.slice(0, m.index);
+      strippedAny = true;
+      break;
     }
     const block = cleaned.slice(m.index, end + 1);
     // A matched block is ALWAYS removed from the answer text — a raw
@@ -298,7 +315,11 @@ export function extractFallbackToolCalls(content: string): { text: string; calls
       // Unparseable block — dropped from the answer, no tool call.
     }
   }
-  return { text: strippedAny ? cleaned.trim() : content, calls };
+  if (!strippedAny) return { text: content, calls };
+  // Remove empty fenced blocks left behind when a fenced JSON block's BODY was
+  // the tool call (e.g. "```json\n\n```").
+  const text = cleaned.replace(/\n?```[a-z]*\s*\n?\s*```\s*/gi, '\n').trim();
+  return { text, calls };
 }
 
 /**
@@ -418,7 +439,7 @@ function sleep(ms: number): Promise<void> {
  * generate → execute tools → feed results back → repeat until the model
  * returns a no-tools response (end turn), bounded by maxSteps.
  */
-export async function runToolLoop(opts: ToolLoopOptions): Promise<ToolLoopResult> {
+async function runToolLoopInner(opts: ToolLoopOptions): Promise<ToolLoopResult> {
   const { messages, tools: toolNames, maxSteps = 16, context, deps } = opts;
   // Bounded auto-continuation state (see ToolLoopOptions.maxContinuations).
   const maxContinuations = Math.max(0, opts.maxContinuations ?? DEFAULT_MAX_CONTINUATIONS);
@@ -616,6 +637,26 @@ export async function runToolLoop(opts: ToolLoopOptions): Promise<ToolLoopResult
         continuations,
         generationFailed: !madeProgress,
       };
+    }
+
+    // ── Recover tool calls the model wrote as TEXT ─────────────────────────
+    // A provider can return a step with NO native tool call whose CONTENT is
+    // the raw `{"tool":"suggest_followups",...}` block. Observed live
+    // (2026-09-20, auto-routed): the followups printed verbatim as JSON to the
+    // user and no menu/chips appeared — the JSON transport parses this shape,
+    // the native path did not. Salvage it HERE so every caller (CLI, dashboard
+    // console, gateway) recovers the calls, and strip the block from the
+    // visible answer either way: a raw `{"tool":…}` block must never be the
+    // answer. Idempotent with the JSON transport (which already strips it).
+    if (response.toolCalls.length === 0 && response.content.includes('"tool"')) {
+      const extracted = extractFallbackToolCalls(response.content);
+      if (extracted.text !== response.content) {
+        response.content = extracted.text;
+        if (extracted.calls.length > 0) {
+          response.toolCalls = extracted.calls;
+          deps.onEvent?.('   ♻️ recovered tool call(s) the model wrote as text');
+        }
+      }
     }
 
     // S1: LONGEST-substantive wins. A trailing wrapper (a short closing
@@ -925,6 +966,64 @@ export async function runToolLoop(opts: ToolLoopOptions): Promise<ToolLoopResult
     bounded: true,
     continuations,
   };
+}
+
+// ─── Honest-answer guard ────────────────────────────────────────────────────
+// Tools whose successful execution is what actually performs an outbound
+// delivery. If one of these ran, a "sent it" sentence is truthful.
+const DELIVERY_TOOL_NAMES = new Set(['gateway_send']);
+
+/** Past-tense sentences that ASSERT a completed delivery/action. */
+const DELIVERY_CLAIM_RE = [
+  /\bi(?:'ve| have)\s+(?:just\s+|now\s+|also\s+)*(?:sent|delivered|forwarded|shared|messaged|texted|emailed)\b/i,
+  /\bi\s+(?:just\s+|already\s+)*(?:sent|delivered|forwarded|shared|messaged|texted|emailed)\b/i,
+  /\b(?:the\s+)?(?:message|poem|note|photo|image|file|it|that|this|result)\s+(?:has been|was|have been|is)\s+(?:sent|delivered|forwarded|shared|emailed|messaged)\b/i,
+  /\bsuccessfully\s+(?:sent|delivered|forwarded|shared|emailed|messaged)\b/i,
+  /\b(?:it|that|this|the\s+\w+)\s+(?:has been|was)\s+(?:delivered|sent)\s+to\b/i,
+];
+
+/** A sentence that is future/interrogative/negated is NOT a completed claim. */
+const NON_CLAIM_CONTEXT_RE =
+  /\b(?:not|n't|never|unable|cannot|can't|couldn't|didn't|won't|will|would|should|could|can|may|might|going to|about to|try(?:ing)? to|attempt|if you|let me|shall i|should i|do you want|i'?ll)\b/i;
+
+/**
+ * True when the answer asserts a delivery that no delivery tool performed.
+ * Sentence-scoped so a negation or a future promise elsewhere in the answer
+ * never turns a truthful statement into a flag (and vice-versa).
+ *
+ * This is the "unverified claim" detector — the model may write a tool call as
+ * plain prose, or skip tools entirely and simply SAY the action succeeded.
+ * A JSON-as-text call is recovered by the loop's salvage step (so the tool
+ * really runs and the flag stays false); this catches the residual case where
+ * there is no tool call at all.
+ */
+export function detectUnverifiedDeliveryClaim(content: string, toolsRun: readonly string[]): boolean {
+  const text = (content || '').trim();
+  if (!text) return false;
+  if (toolsRun.some((n) => DELIVERY_TOOL_NAMES.has(n))) return false;
+  // Split on sentence boundaries; test each independently.
+  const sentences = text.split(/(?<=[.!?\u3002\uff01\uff1f])\s+|\n+/);
+  for (const sentence of sentences) {
+    const s = sentence.trim();
+    if (!s || NON_CLAIM_CONTEXT_RE.test(s)) continue;
+    if (DELIVERY_CLAIM_RE.some((re) => re.test(s))) return true;
+  }
+  return false;
+}
+
+/**
+ * Public entry point. Runs the loop, then annotates the result with the
+ * honest-answer flag so every surface (CLI, dashboard, gateway, trace) can
+ * distinguish "generated a reply" from "actually performed the action".
+ */
+export async function runToolLoop(opts: ToolLoopOptions): Promise<ToolLoopResult> {
+  const result = await runToolLoopInner(opts);
+  if (!result.cancelled && !result.generationFailed) {
+    if (detectUnverifiedDeliveryClaim(result.content, result.toolCalls)) {
+      result.unverifiedActionClaim = true;
+    }
+  }
+  return result;
 }
 
 /** Compact argument preview for the event line. */

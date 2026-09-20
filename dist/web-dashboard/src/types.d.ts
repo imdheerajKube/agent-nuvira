@@ -733,6 +733,17 @@ export interface TraceEntry {
     provider?: string;
     model?: string;
     success?: boolean;
+    /**
+     * What actually happened — `answered` (text reply only) vs `acted` (a tool
+     * ran), plus `delivered`/`unverifiedClaim`. This is how the Trace tab
+     * distinguishes a real send from a hallucinated "I sent it".
+     */
+    outcome?: {
+        kind: 'answered' | 'acted' | 'failed' | 'cancelled';
+        tools?: string[];
+        delivered?: boolean;
+        unverifiedClaim?: boolean;
+    };
     /** Present in the detail endpoint only. */
     steps?: TraceStep[];
     /** List-view aggregates. */
@@ -1026,6 +1037,15 @@ export interface HubChannelPolicy {
     requireMention?: boolean;
     disabled?: boolean;
     silentDrop?: boolean;
+    /**
+     * Who may command the agent to send to a THIRD PARTY via gateway_send.
+     * Distinct from allowedUsers (who may trigger). ABSENT = inherit
+     * allowedUsers (open to anyone who can trigger); [] = nobody; "Allow-All" =
+     * anyone.
+     */
+    outboundSenders?: string[];
+    /** Require gateway_send targets to be APPROVED contacts. */
+    requireApprovedTarget?: boolean;
 }
 /**
  * A saved verified contact (name + contact no) — the Permissions page

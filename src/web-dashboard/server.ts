@@ -960,6 +960,17 @@ interface DashboardTrace {
   provider?: string;
   model?: string;
   success?: boolean;
+  /**
+   * WHAT ACTUALLY HAPPENED — `answered` (text only) vs `acted` (a tool ran),
+   * plus `unverifiedClaim`. Shown in the Trace tab so a hallucinated
+   * "I sent it" can never look like a real delivery.
+   */
+  outcome?: {
+    kind: 'answered' | 'acted' | 'failed' | 'cancelled';
+    tools?: string[];
+    delivered?: boolean;
+    unverifiedClaim?: boolean;
+  };
   steps: DashboardTraceStep[];
 }
 
@@ -4013,7 +4024,15 @@ function handleRequest(req: IncomingMessage, res: ServerResponse): void {
         const merged: Record<string, Record<string, unknown>> = { ...current };
         for (const [platform, pol] of Object.entries(incoming)) {
           if (!(platform in PLATFORM_ENV_VARS)) continue;
-          merged[platform] = { ...(merged[platform] ?? {}), ...(pol ?? {}) };
+          const next: Record<string, unknown> = { ...(merged[platform] ?? {}) };
+          for (const [key, value] of Object.entries(pol ?? {})) {
+            // An explicit `null` DELETES the key — the only way to clear a
+            // policy list back to its ABSENT (inherit/open) default, since a
+            // per-key merge can otherwise never remove a saved entry.
+            if (value === null) delete next[key];
+            else next[key] = value;
+          }
+          merged[platform] = next;
         }
         // Status recipients ride along on the same PUT (whole-array semantics).
         const gatewayPatch: { policies: Record<string, Record<string, unknown>>; statusRecipients?: string[] } = { policies: merged };

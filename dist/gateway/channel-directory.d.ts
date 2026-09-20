@@ -48,6 +48,30 @@ export interface ChannelPolicy {
      * opt a platform back into the polite ⛔ refusal message.
      */
     silentDrop?: boolean;
+    /**
+     * OUTBOUND send authority — who may command the agent to send to a THIRD
+     * PARTY through `gateway_send` (e.g. "send this poem to my brother on
+     * WhatsApp"). This is DISTINCT from `allowedUsers`, which only decides who
+     * may TRIGGER the agent in the first place.
+     *
+     * Verified-list rule (identical to `allowedUsers` for consistency):
+     * present + entries = ONLY those senders may command an outbound send;
+     * present + empty ([]) = NO ONE may; the "Allow-All" wildcard = anyone;
+     * ABSENT = inherit `allowedUsers` (legacy behaviour: every sender authorised
+     * to trigger the agent can also direct it to send to others).
+     *
+     * A sender may ALWAYS reply inside their own conversation (that is what the
+     * automatic text response already does) — this list governs sending to
+     * OTHER targets only.
+     */
+    outboundSenders?: string[];
+    /**
+     * Require every `gateway_send` TARGET to resolve to an APPROVED contact in
+     * the contacts directory. Off by default so an explicit
+     * `platform:<number|id>` target keeps working; turn it on to stop an
+     * authorised sender from messaging arbitrary strangers.
+     */
+    requireApprovedTarget?: boolean;
 }
 /** Per-platform policies (keyed by Platform id). */
 export type PolicyMap = Partial<Record<Platform, ChannelPolicy>>;
