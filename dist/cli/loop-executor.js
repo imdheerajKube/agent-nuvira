@@ -34,6 +34,7 @@ import { resolveThreadBudgetChars } from '../learning/context-budget.js';
 import { buildLoopProjectContext } from '../tools/loop-project-context.js';
 import { getLoopExposureMode } from '../tools/toolsets.js';
 import { resolveModelHarnessProfile } from '../learning/model-harness.js';
+import { hasCredentials } from '../learning/model-selection.js';
 import { resolveEngine } from '../learning/engine-router.js';
 import { logger } from '../utils/logger.js';
 import { toUserFacingGenerationError } from '../inference/tool-call-utils.js';
@@ -87,6 +88,54 @@ export async function runLoopExecutor(goal, configManager, opts = {}) {
      * retryable gate in `callModel`); it never disables failover entirely.
      */
     const pinnedRun = Boolean(opts.provider && !isAutoProvider(opts.provider));
+    /**
+     * The pinned run's config-declared fallback chain, derived LAZILY on the
+     * first failure — never at route time. Deriving it eagerly made every pinned
+     * run pay for a provider ranking even when nothing failed (measured as a real
+     * latency regression on the execute-dispatch path), and chat's non-auto path
+     * derives the same chain the same lazy way, inside its failure branch.
+     */
+    let pinnedFallbacks = null;
+    const resolvePinnedFallbacks = () => {
+        if (pinnedFallbacks)
+            return pinnedFallbacks;
+        const out = [];
+        try {
+            const chain = getProviderFallback(configManager, configManager.getAll().fallback)
+                .getFallbackChain(providerType);
+            // Only providers the user can actually CALL. An explicit `fallback.
+            // providers` entry with no key (e.g. a placeholder NIM) is not filtered
+            // out by the chain itself, so it used to cost a full connection timeout
+            // before the next fallback was tried — measured live at ~25s against an
+            // unauthenticated endpoint. This is the same credential gate the router's
+            // own candidate set applies (`hasCredentials`).
+            const fbTypes = chain.filter((t) => t !== providerType && hasCredentials(configManager, t));
+            // SAME exclusion predicate the auto path applies (session/model
+            // cooldowns + cross-pipeline memory + registry per-ENTRY usability): a
+            // registry-parked or quarantined fallback is ordered LAST — never
+            // dropped. The PINNED provider itself is never filtered: the user asked
+            // for it explicitly, and a spot-check may be about to re-admit it.
+            let ordered = fbTypes;
+            try {
+                const isExcluded = createFailoverExclusionFilter();
+                ordered = [
+                    ...fbTypes.filter((t) => !isExcluded(t)),
+                    ...fbTypes.filter((t) => isExcluded(t)),
+                ];
+            }
+            catch {
+                // Exclusion is an optimization — never cost us the chain itself.
+            }
+            for (const t of ordered)
+                out.push({ provider: t, model: 'default' });
+        }
+        catch {
+            // Best-effort — an unconfigured fallback chain must never break a pinned
+            // run (the pinned candidate alone is still a valid pool).
+        }
+        pinnedFallbacks = out;
+        return out;
+    };
     /** Per-turn failure session — same composition every other action uses. */
     const failureSession = {
         sessionFailedProviders: new Map(),
@@ -105,41 +154,12 @@ export async function runLoopExecutor(goal, configManager, opts = {}) {
             // ── A PINNED RUN FAILS OVER TOO ──────────────────────────────────────
             // A pinned provider used to contribute a SINGLE candidate, so any
             // mid-turn failure killed the whole turn even though a fallback chain
-            // was configured — the pin collapsed the deep pool into a one-shot. Walk
-            // the SAME config-declared chain chat's non-auto path walks
-            // (`fallback.providers` when set, otherwise the credentialed/verified
-            // providers ranked dynamically), so `--provider X` still lands a
-            // best-effort answer instead of dying on X's first bad step.
-            try {
-                const chain = getProviderFallback(configManager, configManager.getAll().fallback)
-                    .getFallbackChain(providerType);
-                const fbTypes = chain.filter((t) => t !== providerType);
-                // SAME exclusion predicate the auto path applies (session/model
-                // cooldowns + cross-pipeline memory + registry per-ENTRY usability):
-                // a registry-parked or quarantined fallback is ordered LAST — never
-                // dropped — so an all-excluded chain still makes the best attempt
-                // instead of dying on the pin's first bad step. The PINNED provider
-                // itself is never filtered: the user asked for it explicitly, and a
-                // spot-check may be about to re-admit it.
-                let ordered = fbTypes;
-                try {
-                    const isExcluded = createFailoverExclusionFilter();
-                    ordered = [
-                        ...fbTypes.filter((t) => !isExcluded(t)),
-                        ...fbTypes.filter((t) => isExcluded(t)),
-                    ];
-                }
-                catch {
-                    // Exclusion is an optimization — an unavailable filter must never
-                    // cost us the fallback chain itself.
-                }
-                for (const fbType of ordered)
-                    pushCandidate(fbType);
-            }
-            catch {
-                // Best-effort — an unconfigured fallback chain must never break a
-                // pinned run (the pinned candidate alone is still a valid pool).
-            }
+            // was configured — the pin collapsed the deep pool into a one-shot. The
+            // SAME config-declared chain chat's non-auto path walks (`fallback.
+            // providers` when set, otherwise the credentialed/verified providers
+            // ranked dynamically) is appended by `extendWithPinnedFallbacks()` when a
+            // failure actually needs it, so `--provider X` still lands a best-effort
+            // answer instead of dying on X's first bad step.
         }
         else {
             const routed = await getAutoRouter().resolve('execute', goal, { verbose: !opts.quiet }, configManager);
@@ -335,6 +355,25 @@ export async function runLoopExecutor(goal, configManager, opts = {}) {
             ...all.filter((c) => !failedPairs.has(pairKey(c.provider, c.model))),
             ...all.filter((c) => failedPairs.has(pairKey(c.provider, c.model))),
         ];
+        /**
+         * Lazily extend the walk with the pinned run's config fallback chain, the
+         * first time a candidate actually fails or is unavailable. Appending to
+         * `walk` mid-iteration is safe (the array iterator re-reads the length), so
+         * the very failure that triggered the extension already fails over within
+         * this step instead of deferring to the next one.
+         */
+        const extendWithPinnedFallbacks = () => {
+            if (!pinnedRun)
+                return;
+            for (const fb of resolvePinnedFallbacks()) {
+                const k = pairKey(fb.provider, fb.model);
+                if (seenAll.has(k))
+                    continue;
+                seenAll.add(k);
+                all.push(fb);
+                walk.push(fb);
+            }
+        };
         let lastErr;
         for (const cand of walk) {
             if (abort?.aborted)
@@ -344,6 +383,9 @@ export async function runLoopExecutor(goal, configManager, opts = {}) {
                 const prov = await resolveAdapter(cand.provider);
                 if (typeof prov.isAvailable === 'function' && !(await prov.isAvailable())) {
                     failedPairs.add(key);
+                    // A pinned provider that cannot be constructed/reached is not a
+                    // verdict on it — walk its configured fallbacks.
+                    extendWithPinnedFallbacks();
                     continue;
                 }
                 const desired = cand.model !== 'default'
@@ -392,6 +434,7 @@ export async function runLoopExecutor(goal, configManager, opts = {}) {
                 if (pinnedRun && !isRetryableError(classifyFallbackError(err))) {
                     throw err;
                 }
+                extendWithPinnedFallbacks();
                 if (!opts.quiet) {
                     logger.warn(`   \u26A0\uFE0F ${cand.provider} failed — trying the next loop candidate...`);
                 }
