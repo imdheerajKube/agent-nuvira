@@ -3,13 +3,13 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>Agent-Nuvira — Multi-Agent AI Coding Assistant</title>    <meta name="description" content="Agent-Nuvira is an open-source, multi-agent AI coding assistant with a visual dashboard (chat, diff accept/reject, run, ship) and a powerful terminal CLI. 17+ specialized agents, 22+ AI providers, 5,190+ tests, a 22-platform messaging gateway, GitLab + GitHub PR review built-in. Plan, write, review, test, and publish code — your way." />          <meta name="keywords" content="AI coding assistant, multi-agent AI, terminal AI tool, open source, 17+ providers, Groq, NVIDIA NIM, Google Gemini, OpenRouter, Ollama, OpenAI, Anthropic, Mistral, Azure, vLLM, LM Studio, FAISS vector store, auto model routing, quota ledger, team collaboration, MCP, GitLab, PR review, GitHub, Thompson-sampling bandit, routing strategy, per-model learning, promotion gate, capability-aware scoring, wire-token measured cost, governance constraints, multi-account key rotation, context-length preflight, RBAC, role-based access control, tamper-evident audit chain, OIDC gateway, enterprise security, P0-P7 program complete" />
+  <title>Agent-Nuvira — Multi-Agent AI Coding Assistant</title>    <meta name="description" content="Agent-Nuvira is an open-source, multi-agent AI coding assistant with a visual dashboard (chat, diff accept/reject, run, ship) and a powerful terminal CLI. 17+ specialized agents, 22+ AI providers, 5,723+ tests, a 22-platform messaging gateway, GitLab + GitHub PR review built-in. Plan, write, review, test, and publish code — your way." />          <meta name="keywords" content="AI coding assistant, multi-agent AI, terminal AI tool, open source, 17+ providers, Groq, NVIDIA NIM, Google Gemini, OpenRouter, Ollama, OpenAI, Anthropic, Mistral, Azure, vLLM, LM Studio, FAISS vector store, auto model routing, quota ledger, team collaboration, MCP, GitLab, PR review, GitHub, Thompson-sampling bandit, routing strategy, per-model learning, promotion gate, capability-aware scoring, wire-token measured cost, governance constraints, multi-account key rotation, context-length preflight, RBAC, role-based access control, tamper-evident audit chain, OIDC gateway, enterprise security, P0-P7 program complete" />
   <link rel="icon" type="image/png" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='8' fill='%236363f2'/%3E%3Ctext x='16' y='22' text-anchor='middle' fill='white' font-size='18' font-weight='bold' font-family='system-ui'%3EN%3C/text%3E%3C/svg%3E" />
-  <meta property="og:title" content="Agent-Nuvira — Multi-Agent AI Coding Assistant" />          <meta property="og:description" content="The open-source multi-agent AI coding assistant. Plan, write, review, test, verify, and publish code from one dashboard window or your terminal. 17+ providers. 17+ agents. 5,190 tests. 22-platform messaging gateway. GitLab + GitHub PR review built-in. RBAC, tamper-evident audit, OIDC gateway. No subscriptions. No telemetry." />
+  <meta property="og:title" content="Agent-Nuvira — Multi-Agent AI Coding Assistant" />          <meta property="og:description" content="The open-source multi-agent AI coding assistant. Plan, write, review, test, verify, and publish code from one dashboard window or your terminal. 17+ providers. 17+ agents. 5,723 tests. 22-platform messaging gateway. GitLab + GitHub PR review built-in. RBAC, tamper-evident audit, OIDC gateway. No subscriptions. No telemetry." />
   <meta property="og:image" content="https://www.agent-nuvira.com/assets/hero.png" />
   <meta property="og:url" content="https://www.agent-nuvira.com" />
   <meta name="twitter:card" content="summary_large_image" />
-  <meta name="twitter:title" content="Agent-Nuvira — Multi-Agent AI Coding Assistant" />          <meta name="twitter:description" content="The open-source multi-agent AI coding assistant. One window: chat, plan, review diffs, run, ship. 17+ providers. 17+ agents. 5,190 tests. 22-platform messaging gateway. GitLab + GitHub PR review. Enterprise hardening (RBAC, audit, OIDC). From your terminal." />
+  <meta name="twitter:title" content="Agent-Nuvira — Multi-Agent AI Coding Assistant" />          <meta name="twitter:description" content="The open-source multi-agent AI coding assistant. One window: chat, plan, review diffs, run, ship. 17+ providers. 17+ agents. 5,723 tests. 22-platform messaging gateway. GitLab + GitHub PR review. Enterprise hardening (RBAC, audit, OIDC). From your terminal." />
   <link rel="preconnect" href="https://fonts.googleapis.com" />
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
   <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800;900&family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet" />
@@ -56,7 +56,7 @@
       <div class="hero-content">
         <div class="hero-badge">
           <span class="badge-dot"></span>
-          Open Source · MIT License · v2.7.3
+          Open Source · MIT License · v3.0.0
         </div>
         <h1 class="hero-title">
           AI That Codes.<br />
@@ -88,7 +88,7 @@
             <span class="metric-label">AI Providers</span>
           </div>
           <div class="metric">
-            <span class="metric-value">5,190</span>
+            <span class="metric-value">5,723</span>
             <span class="metric-label">Tests Passing</span>
           </div>
           <div class="metric">
@@ -124,7 +124,7 @@
               <span class="log info">📁 Context Gatherer scanning codebase...</span>
               <span class="log success">✅ Writer implemented auth middleware</span>
               <span class="log info">👀 Reviewer validating changes...</span>
-              <span class="log success">✅ All 5,190 tests passed</span>
+              <span class="log success">✅ All 5,723 tests passed</span>
               <span class="log info">🔒 VerifyModule running security scan...</span>
               <span class="log success">✅ No security issues found</span>
               <span class="log success">🚀 Changes committed to feature/auth</span>
@@ -327,6 +327,7 @@
           </div>
           <h3>Context-Length Preflight (⏳ ctx)</h3>
           <p>Before picking, the router scores each provider's input window against your task's estimated prompt size (<code>routing.contextFit</code>, default ON). Since <strong>v1.60.x</strong> those windows are <strong>live</strong> — the probe records each provider's advertised context length (Ollama <code>/api/tags</code> + <code>/api/show</code>, OpenRouter <code>/models</code>, Gemini <code>inputTokenLimit</code>, NIM <code>max_model_len</code>) into the registry, so preflight uses the real spec, not a static estimate. Chat passes the <strong>real</strong> conversation length; plan &amp; execute pass real per-task payload estimates. Soft and estimation-only — normal-size tasks are untouched, and even an over-window prompt only caps the penalty at 35% (models can exceed nominal windows). A 500K-token workspace now routes toward big-window providers automatically — see <strong>⏳ ctx N%</strong> chips in <code>models explain</code>.</p>
+          <p>Those windows are now <strong>used</strong>, not merely scored against (v3.0.0): the tool-loop thread budget and the writer/edit context caps scale with the model's real window, so a large-window (1M-token) model keeps its whole window instead of being trimmed to one fixed default. Conservative by construction — budgets are only ever <em>raised</em>, an unknown or small window leaves the default untouched, and a small model never gets over-sent.</p>
         </div>
         <div class="feature-card" data-delay="1600">
           <div class="feature-icon learning">
@@ -495,6 +496,7 @@
           <h3>Self-Healing Failover</h3>
           <p>When a provider dies mid-session (expired key, exhausted quota, deprecated model), Auto mode automatically hops to the next-best provider — and an optional confirmation prompt keeps you in control of every swap. Every failover is recorded in a live timeline.</p>
           <p>Failover is <strong>deep and shared</strong> (v2.7.3): CLI chat, the dashboard console, the messaging gateway, <code>execute</code> and the multi-agent orchestrator all walk the <em>same</em> candidate pool — several models per provider plus a reserve pool of credentialed-but-unverified providers — with the router's own pick pinned first, model-scoped exclusions (one failed model never costs you its healthy siblings), cross-pipeline failure memory, and a per-entry registry skip so parked models are avoided before the call, not after. “Reject only when nothing is left” holds even when every candidate looks unhealthy: excluded candidates are attempted last, never dropped.</p>
+          <p>Failover now reaches <strong>mid-turn</strong> too (v3.0.0): the single agentic loop engine behind <code>execute</code> and chat walks the same pool <em>between steps</em>, so a 429 on step 3 hands the rest of the turn to the next candidate instead of killing it — and every failure is written through the shared bookkeeping, so the failed model is parked and the next run routes around it. A <strong>pinned</strong> run (<code>--provider</code>) fails over as well: it walks the config-declared fallback chain, credential-filtered (an entry with no key never costs a connection timeout), with registry-parked fallbacks ordered last — derived lazily, so a healthy pinned run pays nothing. A failure that indicts the whole provider (a dead key) is surfaced rather than silently swapped, and a provider that keeps failing inside the rate-limit window is parked for the full window instead of retried into.</p>
         </div>
         <div class="feature-card" data-delay="1400">
           <div class="feature-icon learning">
