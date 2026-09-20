@@ -18,7 +18,7 @@
     "access": "public"
   },
   "scripts": {
-    "build": "tsc && node -e \"require('fs').cpSync('src/resources','dist/resources',{recursive:true})\" && node scripts/fix-esm-extensions.mjs && node -e \"if(process.platform!=='win32')require('child_process').execSync('chmod +x dist/index.js')\" && cd src/web-dashboard && npx vite build",
+    "build": "tsc && node -e \"require('fs').cpSync('src/resources','dist/resources',{recursive:true})\" && node scripts/fix-esm-extensions.mjs && node -e \"if(process.platform!=='win32')require('child_process').execSync('chmod +x dist/index.js')\" && node scripts/build-dashboard.mjs",
     "start": "node dist/index.js",
     "dev": "tsx src/index.ts",
     "test": "vitest run",
@@ -28,7 +28,7 @@
     "docs:commands": "node scripts/generate-commands-surface.mjs",
     "docs:commands:check": "node scripts/generate-commands-surface.mjs --check",
     "test:coverage": "vitest run --coverage",
-    "build:dashboard": "cd src/web-dashboard && npm install --silent 2>/dev/null && npm run build",
+    "build:dashboard": "node scripts/build-dashboard.mjs",
     "build:sdk": "cd src/agent-sdk && npx tsc",
     "prepack": "npm run build",
     "prepublishOnly": "npm run build && npm test"

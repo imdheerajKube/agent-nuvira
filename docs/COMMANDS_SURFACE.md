@@ -179,6 +179,10 @@ Remove a user/group from the allowed list of a platform
 
 Set how unapproved senders are handled on a platform: polite (⛔ message) or silent (no reply)
 
+### `buff config gateway send-authority`
+
+Manage who may command the agent to send to OTHER people (gateway_send). Outbound-only gate — separate from `allow` (who may trigger).
+
 ### `buff config gateway notify`
 
 Manage status recipients — contacts/groups that ALWAYS get pipeline completion summaries
@@ -1279,4 +1283,4 @@ Delete all stored traces
 
 ---
 
-*415 commands (incl. subcommands) · generated from the live CLI — this file is the drift-guarded surface.*
+*416 commands (incl. subcommands) · generated from the live CLI — this file is the drift-guarded surface.*
