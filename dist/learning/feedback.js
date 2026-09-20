@@ -14,12 +14,21 @@
  * - Feedback-driven pattern validation
  */
 import { readFileSync, writeFileSync, existsSync, mkdirSync } from 'node:fs';
-import { resolveNuviraHome } from '../config/paths.js';
+import { envBuff, resolveNuviraHome } from '../config/paths.js';
 import { join } from 'node:path';
 // ─── Constants ──────────────────────────────────────────────────────────────
-const MEMORY_DIR = join(resolveNuviraHome(), 'memory');
-const FEEDBACK_PATH = join(MEMORY_DIR, 'feedback.json');
 const CURRENT_VERSION = 1;
+/**
+ * Feedback-store location — resolved LAZILY through the standard
+ * `NUVIRA_MEMORY_DIR` override (see cost-tracker.ts). A module-load constant
+ * ignored the override and wrote into the real profile from isolated runs.
+ */
+function memoryDir() {
+    return envBuff('MEMORY_DIR') || join(resolveNuviraHome(), 'memory');
+}
+function feedbackPath() {
+    return join(memoryDir(), 'feedback.json');
+}
 const MAX_ENTRIES = 1000;
 const TREND_WINDOW = 10; // Last N ratings for trend calculation
 // ─── FeedbackStore ──────────────────────────────────────────────────────────
@@ -133,9 +142,10 @@ export class FeedbackStore {
     load() {
         try {
             ensureDir();
-            if (!existsSync(FEEDBACK_PATH))
+            const path = feedbackPath();
+            if (!existsSync(path))
                 return [];
-            const raw = readFileSync(FEEDBACK_PATH, 'utf-8');
+            const raw = readFileSync(path, 'utf-8');
             const data = JSON.parse(raw);
             return data.entries || [];
         }
@@ -146,7 +156,7 @@ export class FeedbackStore {
     save() {
         ensureDir();
         const data = { entries: this.entries, version: CURRENT_VERSION };
-        writeFileSync(FEEDBACK_PATH, JSON.stringify(data, null, 2), 'utf-8');
+        writeFileSync(feedbackPath(), JSON.stringify(data, null, 2), 'utf-8');
     }
 }
 // ─── Singleton ──────────────────────────────────────────────────────────────
@@ -162,8 +172,9 @@ export function resetFeedbackStore() {
 }
 // ─── Helpers ────────────────────────────────────────────────────────────────
 function ensureDir() {
-    if (!existsSync(MEMORY_DIR)) {
-        mkdirSync(MEMORY_DIR, { recursive: true });
+    const dir = memoryDir();
+    if (!existsSync(dir)) {
+        mkdirSync(dir, { recursive: true });
     }
 }
 //# sourceMappingURL=feedback.js.map

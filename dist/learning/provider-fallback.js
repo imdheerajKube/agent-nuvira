@@ -81,6 +81,80 @@ export function isRetryableError(errorType) {
     return errorType !== 'auth';
 }
 /**
+ * Deterministic REQUEST-SHAPE rejections — our request was malformed, or used a
+ * feature the endpoint does not accept. The same request fails identically for
+ * every model on that provider, forever, so the fault is in the HARNESS (our
+ * prompt/adapter/tool-call encoding), never in the model's ability.
+ *
+ * Verified live: Gemini answers a multi-turn tool call with
+ * `400 INVALID_ARGUMENT — Function call is missing a thought_signature in
+ * functionCall parts`. That killed a step-2 tool call in a real run, and the
+ * generic failure path then booked it as a Gemini provider failure — parking a
+ * healthy provider, decaying health, and teaching the bandit that the model was
+ * weak when the bug would have broken ANY model on that transport.
+ *
+ * Deliberately NARROW. Over-matching here is worse than under-matching: a false
+ * positive silently stops a genuinely broken provider from ever being
+ * deprioritized. Every pattern must name a request-encoding defect, not a
+ * generic 4xx (`400 model not found` is a MODEL problem, handled elsewhere).
+ */
+const HARNESS_FAULT_PATTERNS = [
+    // Gemini's per-part signature requirement (the confirmed live case).
+    /thought_signature|thoughtSignature/i,
+    // The same defect stated generically by other OpenAI-compatible endpoints.
+    /function call is missing/i,
+    // Explicit request-shape rejection codes.
+    /invalid_request_error/i,
+    /\binvalid_argument\b/i,
+    // The endpoint refuses the tool-calling surface itself.
+    /unsupported\s+(?:tool|function|content|part)\b/i,
+    // Our tool ARGUMENTS did not satisfy the declared schema.
+    /failed to parse (?:the )?(?:tool|arguments|function)/i,
+    /(?:tool|function) (?:arguments|call) (?:is|are) not valid json/i,
+];
+/**
+ * Error types a SHORT same-provider retry can plausibly fix.
+ *
+ * `isRetryableError` above answers a different question — "is it worth trying a
+ * DIFFERENT provider?" — and the failover walk assumes a replacement exists. With
+ * one provider configured (the common single-key setup) there is nothing to fail
+ * over TO, so a transient spike became a dead run.
+ *
+ * Verified live: Gemini answered `503 ... currently experiencing high demand`
+ * during a real 4-step task. There was no same-provider retry, so the 503 became
+ * a hard failure, the circuit breaker parked the provider for 120s, the
+ * context-gatherer degraded to "0 relevant files", and the writer then edited
+ * BLIND. One capacity spike at a shared endpoint turned into a wrong answer.
+ *
+ * Server/network/timeout are the only classes a retry can fix: auth needs a new
+ * key, rate-limit needs the reset window, and unknown/model faults are not
+ * load-related.
+ */
+const TRANSIENT_RETRY_TYPES = new Set([
+    'server',
+    'network',
+    'timeout',
+]);
+/** Should this error be retried against the SAME provider after a short backoff? */
+export function isTransientForRetry(err) {
+    return TRANSIENT_RETRY_TYPES.has(classifyFallbackError(err));
+}
+/**
+ * Is this failure a harness fault (our request shape) rather than a provider or
+ * model failure?
+ *
+ * Callers use this to decide ATTRIBUTION, never retryability: a harness fault is
+ * provider-specific, so failing over to a different provider is still the right
+ * move — but the provider's health, the model's health score and the bandit
+ * prior must all stay untouched.
+ */
+export function isHarnessFault(err) {
+    const message = err instanceof Error ? err.message : String(err);
+    if (!message)
+        return false;
+    return HARNESS_FAULT_PATTERNS.some((re) => re.test(message));
+}
+/**
  * Floor for hint-derived quota parks — never re-admit faster than this, so a
  * 429 with a 1s reset hint can't hot-loop the router back into the same
  * exhausted provider (the session cooldown already lasts 2 min anyway).

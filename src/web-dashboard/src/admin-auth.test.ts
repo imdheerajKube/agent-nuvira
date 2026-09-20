@@ -11,7 +11,6 @@
  */
 
 import { describe, it, expect, afterEach, beforeEach, vi } from 'vitest';
-import { envBuff } from '../../config/paths';
 import { mkdtempSync, rmSync, existsSync, readFileSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -151,46 +150,91 @@ describe('roleForUser — rbac.json wins over the stored role (CLI parity)', () 
   });
 });
 
+/**
+ * The env override.
+ *
+ * `envBuff()` is a READER — `process.env['NUVIRA_<name>'] ?? process.env['BUFF_<name>']`
+ * — so it can never be assigned to. This block used to contain eight such
+ * assignments (`envBuff('DASHBOARD_ADMIN_PASSWORD') = 'env-pass'`), which is a
+ * syntax error: the file failed to TRANSFORM, so every test in it was silently
+ * skipped rather than failing. It went unnoticed because the dashboard suite is
+ * not part of the main `vitest run` glob.
+ *
+ * The tests now write the env vars `envBuff` actually reads, and pass an explicit
+ * empty config dir so the "no credential file" claim is literally true instead of
+ * depending on whatever is in the developer's real profile.
+ */
 describe('env override (with role)', () => {
-  const OLD = {
-    user: envBuff('DASHBOARD_ADMIN_USER'),
-    pass: envBuff('DASHBOARD_ADMIN_PASSWORD'),
-    role: envBuff('DASHBOARD_ADMIN_ROLE'),
+  let dir: string;
+
+  const ENV_SUFFIXES = ['USER', 'PASSWORD', 'ROLE'] as const;
+  type EnvSuffix = (typeof ENV_SUFFIXES)[number];
+
+  /** envBuff reads NUVIRA_ first, then the legacy BUFF_ alias — set both. */
+  const envNames = (suffix: EnvSuffix): [string, string] => [
+    `NUVIRA_DASHBOARD_ADMIN_${suffix}`,
+    `BUFF_DASHBOARD_ADMIN_${suffix}`,
+  ];
+
+  const OLD = new Map<string, string | undefined>();
+  for (const suffix of ENV_SUFFIXES) {
+    for (const name of envNames(suffix)) OLD.set(name, process.env[name]);
+  }
+
+  const setAdminEnv = (suffix: EnvSuffix, value: string | undefined): void => {
+    for (const name of envNames(suffix)) {
+      if (value === undefined) delete process.env[name];
+      else process.env[name] = value;
+    }
   };
 
+  beforeEach(() => {
+    dir = mkdtempSync(join(tmpdir(), 'buff-admin-auth-env-'));
+  });
+
   afterEach(() => {
-    for (const [k, v] of Object.entries(OLD)) {
-      if (v === undefined) delete process.env[`BUFF_DASHBOARD_ADMIN_${k.toUpperCase()}`];
-      else process.env[`BUFF_DASHBOARD_ADMIN_${k.toUpperCase()}`] = v;
+    rmSync(dir, { recursive: true, force: true });
+    // Restore the real environment exactly as it was — tests must not leak
+    // credentials into whichever test file runs next.
+    for (const [name, value] of OLD) {
+      if (value === undefined) delete process.env[name];
+      else process.env[name] = value;
     }
   });
 
   it('password-only defaults to the admin user + admin role; env wins over the file', () => {
-    delete envBuff('DASHBOARD_ADMIN_USER');
-    delete envBuff('DASHBOARD_ADMIN_ROLE');
-    envBuff('DASHBOARD_ADMIN_PASSWORD') = 'env-pass';
+    // A real credential file exists in this dir and must LOSE to the env vars.
+    writeAdminUser('admin', 'file-pass-123', 'viewer', dir);
+    setAdminEnv('USER', undefined);
+    setAdminEnv('ROLE', undefined);
+    setAdminEnv('PASSWORD', 'env-pass');
+
     expect(envAdminOverride()).toEqual({ user: 'admin', password: 'env-pass', role: 'admin' });
-    expect(isAdminConfigured()).toBe(true);
-    expect(verifyAdmin('admin', 'env-pass')).toBe(true);
-    expect(verifyAdmin('admin', 'file-pass')).toBe(false);
+    expect(isAdminConfigured(dir)).toBe(true);
+    expect(verifyAdmin('admin', 'env-pass', dir)).toBe(true);
+    expect(verifyAdmin('admin', 'file-pass-123', dir)).toBe(false);
   });
 
-  it('honors BUFF_DASHBOARD_ADMIN_ROLE and rejects an invalid one (falls back to admin)', () => {
-    delete envBuff('DASHBOARD_ADMIN_USER');
-    envBuff('DASHBOARD_ADMIN_PASSWORD') = 'env-pass';
-    envBuff('DASHBOARD_ADMIN_ROLE') = 'operator';
+  it('honors the ROLE env var and rejects an invalid one (falls back to admin)', () => {
+    setAdminEnv('USER', undefined);
+    setAdminEnv('PASSWORD', 'env-pass');
+
+    setAdminEnv('ROLE', 'operator');
     expect(envAdminOverride()?.role).toBe('operator');
-    envBuff('DASHBOARD_ADMIN_ROLE') = 'superuser';
+
+    setAdminEnv('ROLE', 'superuser');
     expect(envAdminOverride()?.role).toBe('admin');
   });
 
-  it('roleForUser honors the env override role even with NO credential file (regression — env admins are not viewers)', () => {
-    delete envBuff('DASHBOARD_ADMIN_USER');
-    envBuff('DASHBOARD_ADMIN_ROLE') = 'admin';
-    envBuff('DASHBOARD_ADMIN_PASSWORD') = 'env-pass';
-    // No dashboard-admin.json exists anywhere — the env role must still apply.
-    expect(roleForUser('admin')).toBe('admin');
-    expect(roleForUser('someone-else')).toBe('viewer');
+  it('roleForUser honors the env role even with NO credential file (regression — env admins are not viewers)', () => {
+    setAdminEnv('USER', undefined);
+    setAdminEnv('ROLE', 'admin');
+    setAdminEnv('PASSWORD', 'env-pass');
+
+    // `dir` is an empty temp dir: no dashboard-admin.json exists, yet the env
+    // role must still apply (this used to fall through to viewer).
+    expect(roleForUser('admin', dir)).toBe('admin');
+    expect(roleForUser('someone-else', dir)).toBe('viewer');
   });
 });
 

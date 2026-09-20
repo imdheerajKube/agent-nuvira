@@ -167,7 +167,15 @@ export function toGeminiContents(messages) {
             if (m.content)
                 parts.push({ text: m.content });
             for (const tc of m.toolCalls ?? []) {
-                parts.push({ functionCall: { name: tc.name, args: parseToolArguments(tc.arguments) } });
+                // Echo the provider's opaque thought signature back with the call it
+                // belongs to. Without this Gemini rejects the continuation turn with
+                // `400 ... missing a thought_signature in functionCall parts`, so a
+                // Gemini run died on step 2 no matter how capable the model was.
+                const signature = tc.providerMeta?.thoughtSignature;
+                parts.push({
+                    functionCall: { name: tc.name, args: parseToolArguments(tc.arguments) },
+                    ...(typeof signature === 'string' ? { thoughtSignature: signature } : {}),
+                });
             }
             if (parts.length > 0)
                 contents.push({ role: 'model', parts });
@@ -197,6 +205,8 @@ export function parseGeminiToolResponse(data) {
                 id: `call_${toolCalls.length + 1}`,
                 name: p.functionCall.name,
                 arguments: p.functionCall.args ?? {},
+                // Carried, never interpreted — see GeminiPart.thoughtSignature.
+                ...(p.thoughtSignature ? { providerMeta: { thoughtSignature: p.thoughtSignature } } : {}),
             });
         }
     }
@@ -221,8 +231,9 @@ export function parseGeminiToolSSEChunk(line) {
         for (const p of parts) {
             if (typeof p.text === 'string' && p.text)
                 text = (text ?? '') + p.text;
-            if (p.functionCall?.name)
-                functionCalls.push({ name: p.functionCall.name, args: p.functionCall.args });
+            if (p.functionCall?.name) {
+                functionCalls.push({ name: p.functionCall.name, args: p.functionCall.args, thoughtSignature: p.thoughtSignature });
+            }
         }
         const usage = parsed.usageMetadata
             ? { promptTokens: parsed.usageMetadata.promptTokenCount, completionTokens: parsed.usageMetadata.candidatesTokenCount }

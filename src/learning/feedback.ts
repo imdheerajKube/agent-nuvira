@@ -15,7 +15,7 @@
  */
 
 import { readFileSync, writeFileSync, existsSync, mkdirSync } from 'node:fs';
-import { resolveNuviraHome } from '../config/paths';
+import { envBuff, resolveNuviraHome } from '../config/paths';
 import { join } from 'node:path';
 import { homedir } from 'node:os';
 
@@ -64,9 +64,20 @@ interface FeedbackData {
 
 // ─── Constants ──────────────────────────────────────────────────────────────
 
-const MEMORY_DIR = join(resolveNuviraHome(), 'memory');
-const FEEDBACK_PATH = join(MEMORY_DIR, 'feedback.json');
 const CURRENT_VERSION = 1;
+
+/**
+ * Feedback-store location — resolved LAZILY through the standard
+ * `NUVIRA_MEMORY_DIR` override (see cost-tracker.ts). A module-load constant
+ * ignored the override and wrote into the real profile from isolated runs.
+ */
+function memoryDir(): string {
+  return envBuff('MEMORY_DIR') || join(resolveNuviraHome(), 'memory');
+}
+
+function feedbackPath(): string {
+  return join(memoryDir(), 'feedback.json');
+}
 const MAX_ENTRIES = 1000;
 const TREND_WINDOW = 10; // Last N ratings for trend calculation
 
@@ -209,8 +220,9 @@ export class FeedbackStore {
   private load(): FeedbackEntry[] {
     try {
       ensureDir();
-      if (!existsSync(FEEDBACK_PATH)) return [];
-      const raw = readFileSync(FEEDBACK_PATH, 'utf-8');
+      const path = feedbackPath();
+      if (!existsSync(path)) return [];
+      const raw = readFileSync(path, 'utf-8');
       const data = JSON.parse(raw) as FeedbackData;
       return data.entries || [];
     } catch {
@@ -221,7 +233,7 @@ export class FeedbackStore {
   private save(): void {
     ensureDir();
     const data: FeedbackData = { entries: this.entries, version: CURRENT_VERSION };
-    writeFileSync(FEEDBACK_PATH, JSON.stringify(data, null, 2), 'utf-8');
+    writeFileSync(feedbackPath(), JSON.stringify(data, null, 2), 'utf-8');
   }
 }
 
@@ -243,7 +255,8 @@ export function resetFeedbackStore(): void {
 // ─── Helpers ────────────────────────────────────────────────────────────────
 
 function ensureDir(): void {
-  if (!existsSync(MEMORY_DIR)) {
-    mkdirSync(MEMORY_DIR, { recursive: true });
+  const dir = memoryDir();
+  if (!existsSync(dir)) {
+    mkdirSync(dir, { recursive: true });
   }
 }

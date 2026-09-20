@@ -14,9 +14,8 @@
  */
 
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
-import {envBuff, resolveNuviraHome} from '../config/paths';
+import { resolveNuviraEnvFile } from '../config/paths.js';
 import { join } from 'node:path';
-import { homedir } from 'node:os';
 
 import { PLATFORM_ENV_VARS, PLATFORM_LABELS, type Platform } from './channel-directory.js';
 
@@ -76,16 +75,15 @@ export function configurablePlatforms(): Platform[] {
   );
 }
 
-// ─── ~/.nuvira/.env read/write (line-preserving merge) ────────────────────────
+// ─── Credential .env read/write (line-preserving merge) ──────────────────────
 
+/**
+ * The `.env` that holds platform credentials. Delegates to the shared resolver
+ * so writes land in the ACTIVE config dir (`NUVIRA_CONFIG_DIR` aware) and never
+ * mutate the real profile's credential file from an isolated process.
+ */
 export function envFilePath(): string {
-  if (process.env.NUVIRA_ENV_FILE && process.env.NUVIRA_ENV_FILE.trim().length > 0)
-    return process.env.NUVIRA_ENV_FILE;
-  const override = envBuff('ENV_FILE');
-  if (override && override.trim().length > 0) return override;
-  const nuviraEnv = join(homedir(), '.nuvira', '.env');
-  if (existsSync(nuviraEnv)) return nuviraEnv;
-  return join(resolveNuviraHome(), '.env');
+  return resolveNuviraEnvFile();
 }
 
 export interface EnvVarState {

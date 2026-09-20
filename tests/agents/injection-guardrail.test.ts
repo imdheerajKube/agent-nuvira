@@ -39,7 +39,14 @@ writeFileSync(
   JSON.stringify({
     defaultProvider: 'local',
     providers: {
-      local: { runner: 'ollama', model: 'nonexistent-fast-fail', temperature: 0.7, maxTokens: 1024 },
+      // Dead endpoint: keeps the fake-model failure hermetic (see gateway tests).
+      local: {
+        runner: 'ollama',
+        model: 'nonexistent-fast-fail',
+        baseUrl: 'http://127.0.0.1:9',
+        temperature: 0.7,
+        maxTokens: 1024,
+      },
     },
   }),
 );

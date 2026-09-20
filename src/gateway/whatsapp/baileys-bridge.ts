@@ -29,6 +29,23 @@ import { join } from 'node:path';
 import { normalizeWhatsAppJid, type WhatsAppBridge } from './bridge.js';
 import { whatsappSessionDir } from './session.js';
 import { readContactsFile, writeContactsFile } from './contacts.js';
+import { envBuff } from '../../config/paths.js';
+
+/**
+ * How old an OFFLINE-BACKFILL message may be and still be handled (ms).
+ *
+ * WhatsApp re-delivers history after every (re)connect. Anything genuinely new
+ * — sent while the gateway was briefly offline — is seconds/minutes old and is
+ * handled; anything older was already answered (or is stale), and re-running it
+ * is what produced the observed reply storms. Override with
+ * `BUFF_GATEWAY_BACKFILL_MAX_AGE_MS` (0 = never accept backfill at all).
+ */
+export const BACKFILL_MAX_AGE_MS = (() => {
+  const raw = envBuff('GATEWAY_BACKFILL_MAX_AGE_MS');
+  if (raw === undefined || raw.trim() === '') return 10 * 60 * 1000;
+  const n = Number(raw);
+  return Number.isFinite(n) && n >= 0 ? n : 10 * 60 * 1000;
+})();
 
 // ─── LID → phone-number mapping ────────────────────────────────────────────
 // WhatsApp's privacy rollout moved DMs to LID jids ("123456789012345@lid"):
@@ -289,9 +306,35 @@ function messageText(message: any): string {
   return c?.conversation ?? c?.extendedTextMessage?.text ?? '';
 }
 
+/**
+ * Best-effort epoch-MILLISECONDS from a Baileys message's `messageTimestamp`.
+ * Baileys delivers it in SECONDS as a number, a string, or a Long-like object
+ * (`{ toNumber() }`) depending on the version — handle all three, and return
+ * null when the shape is unrecognized so callers can decide (never guess a
+ * timestamp, which would silently age a live message out).
+ */
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+function messageTimestampMs(message: any): number | null {
+  const raw = message?.messageTimestamp;
+  let seconds: number | null = null;
+  if (typeof raw === 'number' && Number.isFinite(raw)) seconds = raw;
+  else if (typeof raw === 'string' && raw.trim() !== '' && Number.isFinite(Number(raw))) seconds = Number(raw);
+  else if (raw && typeof raw === 'object' && typeof raw.toNumber === 'function') {
+    const n = Number(raw.toNumber());
+    if (Number.isFinite(n)) seconds = n;
+  } else if (raw && typeof raw === 'object' && Number.isFinite(Number(raw.low))) {
+    // Long split into { low, high } without a toNumber helper (32-bit low).
+    seconds = Number(raw.low) >>> 0;
+  }
+  if (seconds === null || seconds <= 0) return null;
+  return seconds * 1000;
+}
+
 export class BaileysBridge implements WhatsAppBridge {
   private sock: WASocketLike | null = null;
-  private onMessage: ((fromJid: string, text: string, participant?: string) => void) | null = null;
+  private onMessage:
+    | ((fromJid: string, text: string, participant?: string, messageId?: string) => void)
+    | null = null;
   /** Auto-reconnect watcher: while true (connected), a dead socket is recreated. */
   private keepAlive = false;
   /** Set when the session is logged out server-side (401) — reconnect would loop forever. */
@@ -436,7 +479,9 @@ export class BaileysBridge implements WhatsAppBridge {
     return null;
   }
 
-  async connect(onMessage: (fromJid: string, text: string) => void): Promise<void> {
+  async connect(
+    onMessage: (fromJid: string, text: string, participant?: string, messageId?: string) => void,
+  ): Promise<void> {
     this.onMessage = onMessage;
     this.keepAlive = true;
     this.loggedOut = false;
@@ -806,10 +851,26 @@ export class BaileysBridge implements WhatsAppBridge {
       sock.ev?.on('contacts.set', learnContacts);
       sock.ev?.on('messages.upsert', (...args: unknown[]) => {
         const upsert = (args[0] ?? {}) as { type?: string; messages?: unknown[] };
+        // 'notify' = a LIVE message. 'append' = the offline/history BACKFILL
+        // Baileys replays on every (re)connect — the SAME messages, delivered
+        // again and again. Observed live: one ask replayed as 20+ full turns
+        // (and, when it routed to the pipeline, a 112s multi-agent run each
+        // time), because every backfill entry was treated as brand new.
+        // Only a RECENT backfill entry is worth acting on (the gateway was
+        // briefly offline and the user has not seen an answer); older entries
+        // were already handled or are stale, so replaying them only spams the
+        // sender. The gateway's dedup ledger is the second line of defence.
         if (upsert.type !== 'notify' && upsert.type !== 'append') return;
+        const isBackfill = upsert.type === 'append';
         for (const raw of upsert.messages ?? []) {
           // eslint-disable-next-line @typescript-eslint/no-explicit-any
           const m = raw as any;
+          if (isBackfill) {
+            const sentAt = messageTimestampMs(m);
+            // Unknown age → DO NOT process: an unfilterable replay is exactly
+            // the failure this gate exists to stop.
+            if (sentAt === null || Date.now() - sentAt > BACKFILL_MAX_AGE_MS) continue;
+          }
           const text = messageText(m);
           const rawFromJid = m?.key?.remoteJid as string | undefined;
           if (!text || !rawFromJid) continue;
@@ -843,7 +904,8 @@ export class BaileysBridge implements WhatsAppBridge {
           const rawParticipant =
             typeof m?.key?.participant === 'string' && m.key.participant.length > 0 ? m.key.participant : undefined;
           const participant = this.lidMapper.resolveOr(rawParticipant);
-          this.onMessage?.(fromJid, text, participant);
+          const messageId = typeof m?.key?.id === 'string' && m.key.id ? m.key.id : undefined;
+          this.onMessage?.(fromJid, text, participant, messageId);
         }
       });
       this.sock = sock;

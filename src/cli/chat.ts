@@ -20,12 +20,13 @@ import { applyActiveModel } from './model.js';
 import { ConfigManager } from '../config/manager.js';
 import { InferenceProvider } from '../inference/interface.js';
 import type { ProviderType } from '../config/types.js';
-import { getProviderFallback, classifyFallbackError, isRetryableError, recordRegistrySuccess } from '../learning/provider-fallback.js';
-import { recordActionFailure, RATE_LIMIT_EXCLUSION_MS, TRANSIENT_FAILURE_EXCLUSION_MS } from '../learning/failure-bookkeeping.js';
+import { getProviderFallback, classifyFallbackError, isRetryableError, isTransientForRetry, recordRegistrySuccess } from '../learning/provider-fallback.js';
+import { recordActionFailure, RATE_LIMIT_EXCLUSION_MS } from '../learning/failure-bookkeeping.js';
+import { resolveThreadBudgetChars } from '../learning/context-budget.js';
 import { getAutoRouter, isAutoModel, isAutoProvider } from '../learning/auto-router.js';
 import { estimateTokens } from '../learning/cost-tracker.js';
 import { getModelRegistry } from '../learning/model-registry.js';
-import { refreshModelRegistry, spotCheckModel } from '../inference/model-probe.js';
+import { refreshModelRegistry } from '../inference/model-probe.js';
 import { recordRoutingDecision } from '../learning/routing-history.js';
 import { shouldConfirmFailover, promptFailoverChoice } from './failover-prompt.js';
 import { runSingleShotAuto } from './failover-runner.js';
@@ -37,12 +38,19 @@ import { withLogCorrelation } from '../enterprise/log.js';
 import { recordMetricTime, getMetrics } from '../enterprise/metrics.js';
 import type { ParsedRequest } from '../nlu/parser.js';
 import { resolveDispatch } from '../nlu/actions.js';
-import { isConversationalQuestion, hasCodingAction } from '../nlu/conversation-gate.js';
+import { hasCodingAction, resolveAskKind } from '../nlu/conversation-gate.js';
 import { runToolLoop, extractFallbackToolCalls } from '../tools/tool-loop.js';
-import { looksLikeConfusedScaffoldingReply } from '../inference/tool-call-utils.js';
+import {
+  looksLikeConfusedScaffoldingReply,
+  toUserFacingGenerationError,
+  isToolCallingUnsupported,
+} from '../inference/tool-call-utils.js';
 import { beginTrace, endTrace, recordStep } from '../learning/reasoning-trace.js';
 import { getLoopExposureMode } from '../tools/toolsets.js';
+import { resolveModelHarnessProfile, shouldSkipNativeTools } from '../learning/model-harness.js';
+import { resolveAdapterDefault } from '../learning/model-selection.js';
 import { buildLoopProjectContext } from '../tools/loop-project-context.js';
+import { sweepTransientFailures, collectionRevivalStore } from '../learning/provider-revival.js';
 import { analyzeComplexity } from '../learning/hybrid-router.js';
 import { routingCacheSignature, withRoutingCache } from '../learning/routing-cache.js';
 
@@ -62,7 +70,12 @@ export interface ToolCallInfo {
   durationMs?: number;
 }
 import type { ToolLoopDeps, StepResponse, ToolLoopResult } from '../tools/tool-loop.js';
-import { getTool, TOOL_CONTRACT_JSON, type ToolContext, type FollowupSuggestion } from '../tools/registry.js';
+import { getTool, TOOL_CONTRACT_JSON, type ToolContext } from '../tools/registry.js';
+import {
+  buildFollowupContinuationPrompt,
+  isSuggestedFollowup,
+  type FollowupSuggestion,
+} from '../tools/followup-utils.js';
 // S2/S3 — the shared tool-call reliability helpers (salvage failed_generation,
 // compact fallback schemas). One copy for every tool-calling surface, not
 // chat-private (execute/plan/… inherit the fix).
@@ -260,7 +273,11 @@ export function resolvePipelineDispatch(
   //    NLU alone would misread it as chat ("how do I add JWT auth?" → explain
   //    → chat, but the user wants the auth added).
   if (opts?.text) {
-    if (isConversationalQuestion(opts.text)) {
+    // ONE shared rule for every surface (see resolveAskKind): a genuine
+    // question never dispatches; a coding verb in command position always
+    // does. Keeping the gateway on this same function is what stops the two
+    // from disagreeing about the same ask.
+    if (resolveAskKind(opts.text, parsed) === 'chat') {
       return { dispatch: false, needConfirm: false };
     }
     if (hasCodingAction(opts.text)) {
@@ -314,6 +331,45 @@ export async function runDeveloperMode(
  * (rules act only as the no-model fallback in the
  * caller, never to skip the loop).
  */
+/**
+ * Backoff schedule for a SAME-provider retry on a transient failure. Two extra
+ * attempts, deliberately short: a capacity spike at a shared endpoint clears in
+ * seconds, and the user is waiting in the foreground. Long/looping retries belong
+ * to the background runners, not the interactive turn.
+ */
+export const TRANSIENT_RETRY_DELAYS_MS = [1_000, 3_000] as const;
+
+/**
+ * Run one provider attempt, retrying transient failures against the SAME
+ * provider before giving up.
+ *
+ * Why this exists next to the failover walk rather than inside it: the walk
+ * needs a DIFFERENT provider to exist, and it books the failure against the one
+ * that just failed. Verified live — a single configured provider plus a Gemini
+ * 503 meant no retry at all, the circuit breaker parked the provider for 120s,
+ * and the agent degraded to editing with zero gathered context. A transient
+ * spike must cost a few seconds, not the whole task.
+ *
+ * Never retries: non-transient classes (auth, rate-limit, model/harness faults),
+ * a cancelled turn, or once the schedule is exhausted.
+ */
+export async function generateWithTransientRetry<T>(
+  attempt: () => Promise<T>,
+  signal?: AbortSignal,
+  onRetry?: (attemptNumber: number, err: unknown) => void,
+): Promise<T> {
+  for (let i = 0; ; i += 1) {
+    try {
+      return await attempt();
+    } catch (err) {
+      const canRetry = i < TRANSIENT_RETRY_DELAYS_MS.length && isTransientForRetry(err);
+      if (!canRetry || signal?.aborted) throw err;
+      onRetry?.(i + 1, err);
+      await new Promise((resolve) => setTimeout(resolve, TRANSIENT_RETRY_DELAYS_MS[i]));
+    }
+  }
+}
+
 function buildToolSystemPrompt(parsed?: ParsedRequest): string {
   return [
     "You are Nuvira, Agent-Nuvira's AI agent. You code, create, write, analyze, and automate — anything the user needs. You identify as Nuvira (never 'Buff').",
@@ -420,9 +476,15 @@ export class ChatCommand extends BaseCommand {
     opts: {
       provider?: string;
       model?: string;
-      dev?: boolean;
-    history?: Array<{ role: string; content: string }>;
+      dev?: boolean;      history?: Array<{ role: string; content: string }>;
     askUser?: ToolContext['askUser'];
+    /**
+     * P5 — this message is a CONTINUATION of the previous turn (it came from a
+     * clicked followup). The continuation marker is prepended to the
+     * model-facing thread ONLY — the raw text is what lands in history, so a
+     * long session never accumulates markers. See FOLLOWUP_CONTINUATION_MARKER.
+     */
+    continuation?: boolean;
     /** P3 — live progress lines for the dashboard chat console. */
     onProgress?: (line: string) => void;
     /**
@@ -545,7 +607,7 @@ export class ChatCommand extends BaseCommand {
       true,
       { auto: autoMode },
       parsed,
-      { askUser: opts.askUser, onProgress: opts.onProgress, onToolCall: opts.onToolCall, onPlanChange: opts.onPlanChange, onGitDiff: opts.onGitDiff, onSkillDraft: opts.onSkillDraft, planStore: opts.planStore ?? this.planStore, gateway: opts.gateway, projectContext: opts.projectContext, recallContext: recallBlock, projectPath: opts.projectPath, onToken: opts.onToken, signal: opts.signal },
+      { askUser: opts.askUser, onProgress: opts.onProgress, onToolCall: opts.onToolCall, onPlanChange: opts.onPlanChange, onGitDiff: opts.onGitDiff, onSkillDraft: opts.onSkillDraft, planStore: opts.planStore ?? this.planStore, gateway: opts.gateway, projectContext: opts.projectContext, recallContext: recallBlock, projectPath: opts.projectPath, onToken: opts.onToken, signal: opts.signal, continuation: opts.continuation },
     );
 
     // No-model fallback: the tool loop could not generate a single response
@@ -751,10 +813,14 @@ export class ChatCommand extends BaseCommand {
           cacheEnabled,
           { auto: autoMode },
           parseRequestSync(picked),
+          // P5 — a picked followup continues the previous execution.
+          { continuation: true },
         );
         if (next.content.trim()) {
           console.log('\n' + next.content + '\n');
-          history.push({ role: 'assistant', content: next.content });
+          // NOTE: no history.push here — runChatAnswer already recorded the
+          // assistant turn. The old duplicate push gave every subsequent turn
+          // TWO copies of the previous answer (relevance noise).
         }
         singleAnswer = next;
       }
@@ -778,8 +844,13 @@ export class ChatCommand extends BaseCommand {
     }
 
     let pendingMessage: string | undefined;
+    // P5 — the followups the agent just suggested, so a message that MATCHES
+    // one of them (a clicked chip, or the user re-typing it on the gateway) is
+    // recognised as a continuation of the previous execution.
+    let lastFollowups: FollowupSuggestion[] = [];
     while (true) {
       // E3b: a chosen follow-up recommendation becomes the next message.
+      const pickedFollowup = pendingMessage !== undefined;
       const message = pendingMessage ?? (await this.readMultiLineInput('You:'));
       pendingMessage = undefined;
       if (!message) continue;
@@ -849,6 +920,9 @@ export class ChatCommand extends BaseCommand {
             cacheEnabled,
             { auto: autoMode },
             parsed,
+            // P5 — a picked followup (or a typed one that matches the last
+            // suggestions) is a continuation, not a fresh independent request.
+            { continuation: pickedFollowup || isSuggestedFollowup(message, lastFollowups) },
           ),
         ),
       );
@@ -873,7 +947,8 @@ export class ChatCommand extends BaseCommand {
       if (answer.content.trim()) {
         console.log('\n' + answer.content + '\n');
       }
-      const followupPrompt = await this.renderFollowups(answer.followups ?? [], true);
+      lastFollowups = answer.followups ?? [];
+      const followupPrompt = await this.renderFollowups(lastFollowups, true);
       if (followupPrompt) {
         pendingMessage = followupPrompt;
       }
@@ -1033,6 +1108,12 @@ export class ChatCommand extends BaseCommand {
        * stops at the next loop boundary.
        */
       signal?: AbortSignal;
+      /**
+       * P5 — the message is a picked FOLLOWUP: prepend the continuation marker
+       * to the model-facing thread so the previous turn's execution is in
+       * scope. History keeps the raw text (marker never accumulates).
+       */
+      continuation?: boolean;
     },
   ): Promise<{
     content: string;
@@ -1046,9 +1127,10 @@ export class ChatCommand extends BaseCommand {
   }> {
     // Cache check first (same as the legacy path).
     const cache = getCache();
+    const cacheModel = this.cacheModelFor(session);
     if (cacheEnabled) {
       try {
-        const cachedResult = await cache.get(message, session.model ?? 'default', session.type);
+        const cachedResult = await cache.get(message, cacheModel, session.type);
         if (cachedResult) {
           // NOTE: the cached answer is NOT printed here — the caller prints
           // content AFTER runChatAnswer returns (answer-first ordering). A
@@ -1156,7 +1238,11 @@ export class ChatCommand extends BaseCommand {
           role: (h.role === 'assistant' ? 'assistant' : 'user') as 'user' | 'assistant',
           content: h.content,
         })),
-      { role: 'user', content: message },
+      // P5 — a picked followup reaches the model WITH the continuation marker
+      // (the raw text stays in history), so "add a day in Hanoi" is resolved
+      // against the plan the previous turn just produced instead of being read
+      // as a brand-new request.
+      { role: 'user', content: ctxOverrides?.continuation ? buildFollowupContinuationPrompt(message) : message },
     ];
 
     // I3: one artifact session per TURN — every tool
@@ -1283,13 +1369,26 @@ export class ChatCommand extends BaseCommand {
       }
     };
     try {
+      // R1 — the harness follows the MODEL, not only the config: config says
+      // what this deployment prefers, the profile decides what this model can
+      // actually use (a 0.5B local model must not get a 120B's surface).
+      const harness = resolveModelHarnessProfile({
+        model: session.model,
+        configExposure: getLoopExposureMode(this.configManager),
+      });
       result = await runToolLoop({
         messages: thread,
         context: toolContext,
         maxSteps: 16,
-        // Tiered tool exposure — config-gated (tools.loopExposure), default
-        // 'all' = unchanged behavior until Phase 0 evals justify the flip.
-        toolExposure: getLoopExposureMode(this.configManager),
+        // Model-window-aware thread budget: a 1M-token model keeps its window
+        // instead of being trimmed to the fixed ~50K-token default. Undefined
+        // (unknown window) leaves the tool-loop default untouched.
+        threadBudgetChars: resolveThreadBudgetChars({ provider: session.type, model: session.model }),
+        // Tiered tool exposure — the tiered (core) set starts at ~16 schemas
+        // (~3.8K tokens/step); 'all' hands over the full set (~17K tokens/step)
+        // and is now additionally gated on the model having the context for it.
+        toolExposure: harness.exposure,
+        maxParallelReads: harness.maxParallelReads,
         onToken: ctxOverrides?.onToken,
         signal: ctxOverrides?.signal,
         deps: {
@@ -1317,7 +1416,9 @@ export class ChatCommand extends BaseCommand {
       logger.error(String(err));
       endTrace(chatTraceId, false);
       result = {
-        content: `I ran into a problem: ${err instanceof Error ? err.message : String(err)}`,
+        // Sanitized on purpose: this content is delivered verbatim by every
+        // surface (CLI print, dashboard bubble, gateway send).
+        content: toUserFacingGenerationError(err),
         followups: [],
         toolCalls: [],
         steps: 0,
@@ -1335,7 +1436,11 @@ export class ChatCommand extends BaseCommand {
     if (result.content.trim() && !result.generationFailed && !result.cancelled) {
       if (cacheEnabled) {
         try {
-          await cache.set(message, result.content, session.model ?? 'default', session.type);
+          // Keyed by the model that ACTUALLY answered (tryGenerate records it
+          // on success), so a weak model's reply is never replayed as a strong
+          // model's. `cacheModel` is the pre-flight fallback for the paths that
+          // never resolve one (e.g. a cached-hit turn).
+          await cache.set(message, result.content, this.cacheModelFor(session) || cacheModel, session.type);
         } catch {
           // Best-effort.
         }
@@ -1367,6 +1472,29 @@ export class ChatCommand extends BaseCommand {
    * broken provider never crashes the turn (it answers from the next working
    * candidate, exactly like the legacy generation block).
    */
+  /**
+   * The model id used in the response-cache key.
+   *
+   * NEVER returns the `'default'` sentinel (or an empty string). Keying the
+   * cache on `'default'` — which is what `session.model ?? 'default'` did —
+   * collapsed EVERY model of a provider into a single entry (observed live:
+   * `cache.json` held `provider: gemini, model: "default"`). Two consequences,
+   * both real: an answer produced by a weak model was replayed as though a
+   * strong one had written it, and switching `nuvira model switch` could never
+   * take effect for a message already cached. Falls back to the provider's
+   * effective model, then to a provider-qualified marker so distinct providers
+   * still never collide.
+   */
+  private cacheModelFor(session: { type: string; model?: string }): string {
+    if (session.model && session.model !== 'default') return session.model;
+    try {
+      const providers = (this.configManager.getAll() as { providers?: Record<string, { model?: string }> }).providers;
+      return resolveAdapterDefault(session.type, providers?.[session.type]?.model) ?? `${session.type}:unresolved`;
+    } catch {
+      return `${session.type}:unresolved`;
+    }
+  }
+
   private buildToolCallModel(
     message: string,
     session: { type: string; provider: InferenceProvider; model: string | undefined },
@@ -1380,11 +1508,54 @@ export class ChatCommand extends BaseCommand {
       // sink is also given (loop passthrough) they are the same channel.
       const sink = stepOnToken ?? onToken;
       const abort = stepSignal ?? signal;
+      /**
+       * The CONCRETE model an attempt will use.
+       *
+       * `session.model` is undefined or the `'default'` sentinel whenever the
+       * router picks a provider but no single model (which is the common auto
+       * case). That value used to flow into four places at once — the provider
+       * request, the reasoning trace, registry telemetry and the response
+       * cache key — so traces read `model: unknown`, the literal `default`
+       * reached provider APIs (`The model \`default\` does not exist`, observed
+       * live), and EVERY model of a provider shared one cache entry (a bad
+       * answer produced by a weak model was then replayed as if it came from a
+       * good one). Resolving here keeps all four on the same real model id.
+       * Falls back to undefined only when nothing can be resolved, which leaves
+       * the adapter's own last-resort resolution in charge.
+       */
+      /**
+       * Per-turn memo of candidates that REJECTED native tool calling, keyed by
+       * `provider|model`. Once a model has answered "tool calling is not
+       * supported", it can never start supporting it within this turn, so
+       * re-issuing the native call is pure waste — the live execute run paid 13
+       * failing native requests (one per step) before each fell back to the
+       * JSON transport, burning the provider's rate limit for nothing.
+       * Keyed per candidate on purpose: a DIFFERENT model that does support
+       * native tools must still get them, so a failover re-enables the fast
+       * path automatically.
+       */
+      const nativeToolsRejected = new Set<string>();
+      const resolveEffectiveModel = (providerType: string, requested?: string): string | undefined => {
+        if (requested && requested !== 'default') return requested;
+        try {
+          const providers = (this.configManager.getAll() as { providers?: Record<string, { model?: string }> }).providers;
+          return resolveAdapterDefault(providerType, providers?.[providerType]?.model);
+        } catch {
+          return undefined;
+        }
+      };
       const tryGenerate = async (
         prov: InferenceProvider,
         typ: string,
         mdl: string | undefined,
       ): Promise<StepResponse> => {
+        // One resolution per attempt — the request, the trace, the telemetry
+        // and the cache key all read the same value (see above).
+        const effectiveModel = resolveEffectiveModel(typ, mdl);
+        // Record the ATTEMPTED model immediately so a failed step's trace and
+        // telemetry name the model that failed, instead of "unknown".
+        if (effectiveModel) session.model = effectiveModel;
+        const nativeKey = `${typ}|${effectiveModel ?? ''}`;
         // Answer-quality resilience: a CONFUSED reply — the model talking about
         // the tool contract (e.g. apologizing that "the provided example call
         // to suggest_followups is incomplete") instead of executing it — never
@@ -1400,21 +1571,33 @@ export class ChatCommand extends BaseCommand {
             throw err;
           }
         };
-        if (typeof prov.generateTools === 'function' && schemas.length > 0) {
+        /** Mark the model that actually produced this response. */
+        const answered = <T extends StepResponse>(resp: T): T => {
+          if (effectiveModel) session.model = effectiveModel;
+          return resp;
+        };
+        // R1 — deterministic transport. A tiny model cannot use a native tool
+        // API, and finding that out by trying cost a 400 on every turn (the
+        // refusal memo is per-call). Unknown families are untouched: they still
+        // try native and fall back, so nothing that works today stops working.
+        if (shouldSkipNativeTools({ model: effectiveModel })) {
+          nativeToolsRejected.add(nativeKey);
+        }
+        if (!nativeToolsRejected.has(nativeKey) && typeof prov.generateTools === 'function' && schemas.length > 0) {
           try {
             // P4 — stream when the provider supports it AND a sink is wired
             // (the dashboard); otherwise the one-shot path with the whole
             // content delivered as a single chunk so the typewriter channel
             // still receives the answer (appears at once — today's behavior).
             if (sink && typeof prov.generateToolsStream === 'function') {
-              const result = await prov.generateToolsStream(messages, schemas, { ...options, model: mdl, signal: abort }, sink);
+              const result = await prov.generateToolsStream(messages, schemas, { ...options, model: effectiveModel, signal: abort }, sink);
               confuseCheck(result.content);
-              return result;
+              return answered(result);
             }
-            const result = await prov.generateTools(messages, schemas, { ...options, model: mdl, signal: abort });
+            const result = await prov.generateTools(messages, schemas, { ...options, model: effectiveModel, signal: abort });
             confuseCheck(result.content);
             if (sink && result.content) sink(result.content);
-            return result;
+            return answered(result);
           } catch (err) {
             // S3: a tool-call 400 often carries the model's COMPLETE answer in
             // `failed_generation` (the API rejected only the CALL). Salvage it
@@ -1432,9 +1615,24 @@ export class ChatCommand extends BaseCommand {
               const toolCalls = salvaged.followups?.length
                 ? [{ id: 'call_salvage_1', name: 'suggest_followups', arguments: { followups: salvaged.followups } }]
                 : [];
-              return { content: salvaged.content, toolCalls };
+              return answered({ content: salvaged.content, toolCalls });
             }
-            throw err;
+            // The MODEL itself cannot do native tool calling — Groq answers
+            // 400 "`tool calling` is not supported with this model". That is
+            // not a reason to lose the turn: the loop already ships a transport
+            // that needs no provider tool support, and the system prompt
+            // carries the tool contract for it. Fall THROUGH to it (no throw)
+            // so an otherwise-good model still answers.
+            if (isToolCallingUnsupported(err)) {
+              // Remember it for the REST of this turn so later steps go straight
+              // to the JSON transport instead of re-paying the failing call.
+              nativeToolsRejected.add(nativeKey);
+              logger.warn(
+                '   ⚠️ Model does not support native tool calling — retrying this step over the JSON tool transport.',
+              );
+            } else {
+              throw err;
+            }
           }
         }
         // JSON fallback transport: flatten the thread into one prompt with
@@ -1444,18 +1642,31 @@ export class ChatCommand extends BaseCommand {
         let raw: string;
         if (typeof prov.generateStream === 'function') {
           const chunks: string[] = [];
-          await prov.generateStream(prompt, { ...options, model: mdl, signal: abort }, (t) => chunks.push(t));
+          await prov.generateStream(prompt, { ...options, model: effectiveModel, signal: abort }, (t) => chunks.push(t));
           raw = chunks.join('');
         } else {
-          raw = await prov.generate(prompt, { ...options, model: mdl, signal: abort });
+          raw = await prov.generate(prompt, { ...options, model: effectiveModel, signal: abort });
         }
         const { text, calls } = extractFallbackToolCalls(raw);
         confuseCheck(text);
-        return { content: text, toolCalls: calls };
+        return answered({ content: text, toolCalls: calls });
       };
 
       try {
-        return await tryGenerate(session.provider, session.type, session.model);
+        // Same-provider transient retry FIRST (see the helper's contract): a
+        // 503 spike at a shared endpoint must not become a dead run. Failover
+        // only helps if a DIFFERENT provider exists — and it also hides the real
+        // failure from the user while parking a healthy provider for 120s.
+        return await generateWithTransientRetry(
+          () => tryGenerate(session.provider, session.type, session.model),
+          abort,
+          (attempt, err) =>
+            logger.warn(
+              `   ⏳ ${session.provider.name} transient failure (attempt ${attempt}) — retrying shortly: ${
+                err instanceof Error ? err.message.split('\n')[0] : String(err)
+              }`,
+            ),
+        );
       } catch (err) {
         // Auto mode: fail over across the ranked candidates (never stuck).
         if (mode.auto) {
@@ -1494,7 +1705,10 @@ export class ChatCommand extends BaseCommand {
               const resp = await tryGenerate(next.provider, next.type, next.model);
               session.type = next.type;
               session.provider = next.provider;
-              session.model = next.model;
+              // Keep the model that actually answered: `next.model` is often
+              // undefined ("provider default"), and assigning it here used to
+              // erase the resolved id that tryGenerate just recorded.
+              if (next.model && next.model !== 'default') session.model = next.model;
               logger.success(`✅ Auto failover: answered from ${next.provider.name} (${next.model}) after ${firstType} failed`);
               return resp;
             } catch {
@@ -1524,10 +1738,24 @@ export class ChatCommand extends BaseCommand {
         // deliver THAT instead of failing the whole turn. A confusing answer
         // still beats an error banner in a messaging app; the confusion is
         // now also visible in the chat trace for post-mortem.
+        // The old behavior here — DELIVER the confused reply as if it were the
+        // answer (`return { content: confusedReply }`) — was the worst of both
+        // worlds. It shipped contract meta-talk to the sender ("Sure, I can
+        // help you with suggestions and followups. Please provide me with more
+        // details…") AND marked the turn a SUCCESS, so the loop cached it for
+        // an hour and every retry inside that window replayed the same
+        // deflection. Live evidence: that exact string sat in
+        // ~/.nuvira/cache.json with `model: "default"`.
+        //
+        // Now it stays a FAILURE: rethrow so the tool loop surfaces the
+        // sanitized, user-facing line with `generationFailed: true` (never
+        // cached, never persisted), while the raw reply is preserved in the
+        // log and the reasoning trace for post-mortem.
         const confusedReply = (err as Error & { confusedReply?: string }).confusedReply;
         if (typeof confusedReply === 'string' && confusedReply.trim()) {
-          logger.warn('   ⚠️ No alternative model answered — delivering the raw reply (contract-confusion fallback).');
-          return { content: confusedReply, toolCalls: [] };
+          logger.warn(
+            `   ⚠️ No alternative model answered — contract-confusion reply suppressed (${confusedReply.length} chars, kept in the trace): ${confusedReply.slice(0, 160)}`,
+          );
         }
         throw err;
       }
@@ -1751,37 +1979,20 @@ export class ChatCommand extends BaseCommand {
     // registry may still mark it unavailable (learned from the failure), and
     // blindly re-admitting would fail again on the very next message. Recovery
     // is discovered in SECONDS (a 1-token spot-check), not by re-failing.
-    // NOTE: iterate a SNAPSHOT — the loop mutates the set (delete + re-add),
-    // and Set iteration can revisit a re-added key, double-spot-checking.
-    // Bounded: at most one spot-check per provider per 60s (the exclusion is
-    // re-armed on failure), and only for registry-blocked providers.
-    for (const providerType of [...this.sessionTransientFailedProviders]) {
-      const expiresAt = this.sessionFailedProviders.get(providerType);
-      // Skip still-active exclusions and already-cleared providers.
-      if (expiresAt !== undefined && expiresAt > exclusionTime) continue;
-      this.sessionTransientFailedProviders.delete(providerType);
-      this.sessionFailedProviders.delete(providerType);
-      try {
-        const registry = getModelRegistry();
-        // Only re-verify when the registry still believes the provider is dead
-        // (unavailable/parked) — a healthy entry means it recovered already.
-        if (!registry.getBlockedProviders().includes(providerType)) continue;
-        const desired = getAutoRouter().resolveModel(providerType, 'chat', this.configManager);
-        const outcome = await spotCheckModel(providerType, desired, this.configManager);
-        // 'skipped' = the model was VERIFIED recently (within the spot-check
-        // throttle) — that's healthy, so treat it as a pass too.
-        if (outcome !== 'verified' && outcome !== 'skipped') {
-          // Still down — keep it excluded for another transient window.
-          this.sessionFailedProviders.set(
-            providerType,
-            Date.now() + TRANSIENT_FAILURE_EXCLUSION_MS,
-          );
-          this.sessionTransientFailedProviders.add(providerType);
-        }
-      } catch {
-        // Best-effort — re-verification must never break routing.
-      }
-    }
+    // The sweep itself now lives in `learning/provider-revival.ts` so every
+    // entry path shares ONE implementation (chat was previously the only path
+    // that read the transient-failure marker at all — the orchestrator, edit,
+    // execute, plan and resilient-call allocated it and never acted on it, so a
+    // recovered provider stayed excluded for the rest of their runs).
+    await sweepTransientFailures(
+      {
+        ...collectionRevivalStore(this.sessionFailedProviders, this.sessionTransientFailedProviders),
+        resolveProbeModel: (provider) =>
+          getAutoRouter().resolveModel(provider, 'chat', this.configManager),
+      },
+      this.configManager,
+      { agentType: 'chat' },
+    );
     const excluded = new Set([
       ...excludeProviders,
       ...[...this.sessionFailedProviders.keys()].filter((p) => isActiveExclusion(p)),

@@ -200,11 +200,14 @@ describe('cross-command parity — the 🧠 card before every entry surface', ()
     expect(boardStart).toBeGreaterThan(cardPrint);
     // Plan never modifies files — the footer states the plan-only contract.
     expect(planSrc).toContain('no files are changed until you execute it');
-    // Zero-reparse: ONE hoisted parse feeds both the card and the D1 recall check.
+    // Zero-reparse: ONE hoisted parse feeds both the card and the D1 recall
+    // check. The recall DECISION now goes through recallPolicy (ambient recall
+    // — a plan no longer has to be phrased as a continuation to recall), but it
+    // must still consume the SAME hoisted parse instead of parsing again.
     const hoisted = planSrc.indexOf('const parsedTask = parseRequestSync(task);');
     expect(hoisted).toBeGreaterThan(-1);
     expect(planSrc.indexOf('const parsedTask = parseRequestSync(task);', hoisted + 1)).toBe(-1);
-    expect(planSrc.indexOf("parsedTask.intent === 'continue'")).toBeGreaterThan(hoisted);
+    expect(planSrc.indexOf('recallPolicy({ intent: parsedTask.intent })')).toBeGreaterThan(hoisted);
   });
 
   it('edit shows the card before routing, with a direct-edit footer (Session 22)', () => {

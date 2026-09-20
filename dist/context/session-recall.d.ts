@@ -93,6 +93,36 @@ export declare function autoRecall(opts?: RecallOptions): Promise<RecallResult>;
  * parity hook.
  */
 export declare function maybeAutoRecall(cwd: string, store?: WorkspaceStore): Promise<RecallResult | null>;
+/**
+ * Recall policy — ambient awareness of what this project has already done.
+ *
+ * THE GAP THIS CLOSES: `chat` has always recalled prior project work on EVERY
+ * turn with a project attached, but edit, execute, plan and pipeline-tool gated
+ * recall behind a continue/resume signal (`intent === 'continue'`,
+ * `mode === 'recall'`). So the same request phrased as ordinary work — "fix the
+ * slugify parser bug" — began with no knowledge of the project's history: what
+ * was already built, what the agent itself had written in a previous session,
+ * or which facts had been learned about the codebase. The agent looked like it
+ * had amnesia about its own prior work, and only a user who happened to phrase
+ * the request as a continuation could unlock it.
+ *
+ * The gate bought nothing in return: `maybeAutoRecall` already returns null for
+ * a project with no history, and recall is local JSON reads — no network, no LLM
+ * call, no meaningful latency.
+ *
+ * Policy:
+ *   - ALWAYS recall when the project has prior work (ambient awareness);
+ *   - ANNOUNCE (print the visible card) only when the user explicitly asked to
+ *     continue/resume, because that is when the recall IS the answer rather than
+ *     background context — an unrequested card on every command is noise.
+ */
+export declare function recallPolicy(input?: {
+    intent?: string;
+    mode?: string;
+}): {
+    recall: boolean;
+    announce: boolean;
+};
 /** One-line recall card shown to the user. */
 export declare function recallCard(r: RecallResult): string;
 /** Context block injected into the planner/chat prompt. */

@@ -17,6 +17,12 @@ import { existsSync } from 'node:fs';
 import { join, extname } from 'node:path';
 import { tmpdir } from 'node:os';
 import { randomBytes } from 'node:crypto';
+// The provider-credential blocklist lives in a shared leaf module so the SAME
+// set also guards the skill-secret write path and the dashboard's env-var
+// editor. Two copies meant the editor could mark a key "blocked" while the
+// writer stored it anyway — a cosmetic invariant with no enforcement.
+import { PROVIDER_ENV_BLOCKLIST, isSensitiveEnvVar } from '../config/provider-env.js';
+export { PROVIDER_ENV_BLOCKLIST };
 // ─── Runtime Detection ───────────────────────────────────────────────────
 /**
  * Detect the runtime for a skill based on its content or file extension.
@@ -98,12 +104,21 @@ export async function executeSkill(scriptContent, context, filePath) {
     const runtime = detectRuntime(scriptContent, filePath);
     const timeoutMs = context.timeoutMs ?? 30_000;
     const maxOutputBytes = context.maxOutputBytes ?? 1_024 * 1024;
-    // Filter env vars: blocklist prevents automatic passthrough from process.env,
-    // but explicit caller-provided env vars are always allowed (caller knows what they're doing).
+    // Filter env vars: the blocklist prevents automatic passthrough from
+    // process.env, but explicit caller-provided env vars are always allowed
+    // (caller knows what they're doing).
+    //
+    // The automatic passthrough uses `isSensitiveEnvVar`, not just the provider
+    // list, because the provider list only knows OUR providers: a platform
+    // password (BUFF_SMTP_PASSWORD) or a user's own cloud credential in this
+    // process's environment was previously handed to every skill with a shell.
+    // Benign vars (PATH, HOME, LANG, …) still flow — see the shape-rule rationale
+    // in config/provider-env.ts.
     const filteredEnv = {};
-    // First, add process.env vars that are NOT in the blocklist
+    // First, add process.env vars that are neither provider credentials nor
+    // credential-shaped.
     for (const [key, value] of Object.entries(process.env)) {
-        if (value !== undefined && !PROVIDER_ENV_BLOCKLIST.has(key)) {
+        if (value !== undefined && !isSensitiveEnvVar(key)) {
             filteredEnv[key] = value;
         }
     }
@@ -303,26 +318,6 @@ async function spawnProcess(command, args, options) {
  * allowed to pass through to the sandbox, while provider credentials
  * (ANTHROPIC_API_KEY, OPENAI_API_KEY, etc.) are blocked for security.
  */
-/** Provider env vars that should NEVER be passed to skills */
-const PROVIDER_ENV_BLOCKLIST = new Set([
-    'ANTHROPIC_API_KEY',
-    'ANTHROPIC_TOKEN',
-    'OPENAI_API_KEY',
-    'OPENAI_TOKEN',
-    'GROQ_API_KEY',
-    'GEMINI_API_KEY',
-    'GOOGLE_API_KEY',
-    'MISTRAL_API_KEY',
-    'COHERE_API_KEY',
-    'TOGETHER_API_KEY',
-    'DEEPINFRA_API_KEY',
-    'FIREWORKS_API_KEY',
-    'OPENROUTER_API_KEY',
-    'AZURE_OPENAI_API_KEY',
-    'BEDROCK_ACCESS_KEY',
-    'BEDROCK_SECRET_KEY',
-    'NUVIRA_API_KEY', // Don't pass the agent's own key
-]);
 /** Session-scoped allowlist of env vars that can pass through */
 let sessionAllowlist = new Set();
 /**

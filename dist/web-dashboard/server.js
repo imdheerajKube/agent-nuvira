@@ -16,6 +16,7 @@ import { join, extname, dirname, basename, resolve, isAbsolute } from 'node:path
 import { fileURLToPath } from 'node:url';
 import { homedir } from 'node:os';
 import { parseRbacUsers } from '../enterprise/rbac.js';
+import { registerDagHandlers } from '../observability/dag-bridge.js';
 import { resolveBuffConfigDir, resolveBuffConfigPath, resolveNuviraHome } from '../config/paths.js';
 import { loadEnv } from '../utils/env.js';
 import { ConfigManager } from '../config/manager.js';
@@ -563,6 +564,20 @@ export function resetDAG() {
     activeLoopTurn = null;
     broadcastDAG();
 }
+// ─── Dependency inversion: publish the DAG API to producers ────────────────
+// `observability/event-bus.ts` (imported by nearly everything) and
+// `agents/orchestrator.ts` need to write this graph, but they must NOT import
+// this module: doing so put the web layer in the agent's dependency closure and
+// created an import cycle (they used `await import()` to dodge it, which still
+// loaded 270 KB of dashboard in every CLI run). Instead they import the tiny
+// `observability/dag-bridge.ts`, and this module registers the real
+// implementation — the composition-root pattern, in the direction that keeps
+// load order sane.
+registerDagHandlers({
+    pushDAGUpdate: (update) => pushDAGUpdate(update),
+    updateDAGNode: (nodeId, patch) => updateDAGNode(nodeId, patch),
+    resetDAG: () => resetDAG(),
+});
 /** Broadcast current DAG state to all SSE clients */
 function broadcastDAG() {
     const dagData = {
@@ -2353,6 +2368,22 @@ let dashboardShutdownAction = () => {
 export function setDashboardShutdownForTest(action) {
     dashboardShutdownAction = action ?? (() => { });
 }
+/**
+ * The gateway-stop action behind `POST /api/admin/shutdown {target:'gateway'}`.
+ * `null` (the default) → the REAL `stopGateway()`, which discovers the gateway
+ * by command line and SIGTERMs it.
+ *
+ * Swappable because that discovery is machine-wide: running the test suite on a
+ * machine with a LIVE gateway stops it (observed — the suite killed a supervised
+ * gateway mid-run, and the test's own comment assumed "no `gateway start`
+ * process running in the test sandbox"). A test asserting the ROUTE must not
+ * reach out and kill a real service.
+ */
+let gatewayShutdownAction = null;
+/** Test hook: stub the gateway-stop action (null restores the real one). */
+export function setGatewayShutdownForTest(action) {
+    gatewayShutdownAction = action;
+}
 /** Invoke the current dashboard shutdown action (used by the shutdown route). */
 function runDashboardShutdown() {
     dashboardShutdownAction();
@@ -2527,6 +2558,41 @@ function handleRequest(req, res) {
         }
         return;
     }
+    // ── Skill execution audit (`ExecutionHistory` panel) ───────────────────
+    // SKILL RUNS WERE INVISIBLE. `skills/execution-audit.ts` (a complete audit
+    // backend: log/query/stats/cleanup/export) and `ExecutionHistory.tsx` (a
+    // complete panel matching its entry shape field-for-field) were BOTH
+    // unreferenced — nothing wrote the log and nothing could read it, so a skill
+    // execution left no inspectable trace anywhere in the product.
+    //
+    // Runtime import keeps this module free of a static edge into the skills tree.
+    // Filters mirror the panel: skillName / status / limit.
+    if (pathname === '/api/executions') {
+        const skillName = url.searchParams.get('skillName') ?? undefined;
+        const statusParam = url.searchParams.get('status') ?? undefined;
+        const limitParam = Number(url.searchParams.get('limit'));
+        const filters = {
+            skillName,
+            status: statusParam || undefined,
+            limit: Number.isFinite(limitParam) && limitParam > 0 ? limitParam : 100,
+        };
+        void (async () => {
+            try {
+                const { queryAuditEntries, getAuditStats } = await import('../skills/execution-audit.js');
+                const [entries, stats] = await Promise.all([
+                    // The panel sends the status as a raw query string; the audit backend
+                    // validates it (an unknown value simply matches nothing).
+                    queryAuditEntries(filters),
+                    getAuditStats(),
+                ]);
+                writeJson(res, 200, { entries, stats });
+            }
+            catch (err) {
+                writeJson(res, 500, { error: err instanceof Error ? err.message : String(err) });
+            }
+        })();
+        return;
+    }
     // ── Admin command-runner: run ALL state commands on demand ───────────
     // The dashboard executes doctor/system/enterprise checks (one source with
     // `nuvira doctor` — runAllChecks) so the user never types a command. Read
@@ -2656,6 +2722,13 @@ function handleRequest(req, res) {
                 return;
             }
             if (target === 'gateway') {
+                if (gatewayShutdownAction) {
+                    const result = await gatewayShutdownAction();
+                    writeJson(res, 200, result.stopped
+                        ? { ok: true, target, stopped: true, pid: result.pid }
+                        : { ok: true, target, stopped: false, reason: result.reason ?? 'no running gateway found' });
+                    return;
+                }
                 const { stopGateway } = await import('../cli/process-control.js');
                 const result = await stopGateway();
                 if (result.stopped) {
@@ -2992,18 +3065,134 @@ function handleRequest(req, res) {
                 return;
             }
             const saved = [];
+            // Vars that were WANTED but not stored, with the reason. Previously a
+            // refused key was simply absent from `saved` and the UI said "Saved" — so
+            // a blocked provider credential looked like a successful write.
+            const refused = [];
+            // Values that actually landed, kept here so the process-hydration step
+            // below does not have to re-index the untyped request body.
+            const applied = {};
             try {
                 const { saveEnvValue } = await import('../skills/secret-capture.js');
                 for (const [key, value] of Object.entries(vars)) {
                     if (typeof key !== 'string' || typeof value !== 'string')
                         continue;
-                    if (!/^[A-Z][A-Z0-9_]+$/.test(key))
+                    if (!/^[A-Z][A-Z0-9_]+$/.test(key)) {
+                        refused.push({ name: key, reason: 'invalid-name' });
                         continue;
+                    }
                     const result = saveEnvValue(key, value);
-                    if (result.success)
+                    if (result.success) {
                         saved.push(key);
+                        applied[key] = value;
+                    }
+                    else {
+                        refused.push({ name: key, reason: result.reason ?? 'write-failed' });
+                    }
                 }
-                writeJson(res, 200, { ok: true, saved });
+                if (saved.length > 0) {
+                    // Apply to THIS process so a read that goes through process.env sees
+                    // the new value without a dashboard restart. It does NOT make the
+                    // value visible to the agent's own process — that is why skill-tool
+                    // resolves declared vars through the env FILE (see its import note).
+                    try {
+                        const { applyEnvToProcess } = await import('../gateway/platform-config.js');
+                        applyEnvToProcess(applied);
+                    }
+                    catch {
+                        /* best-effort */
+                    }
+                }
+                writeJson(res, 200, { ok: true, saved, refused });
+            }
+            catch (err) {
+                writeJson(res, 500, { ok: false, error: err instanceof Error ? err.message : String(err) });
+            }
+        })();
+        return;
+    }
+    // ── PA5 — skill env-var inventory + delete + probe (dashboard editor) ─────
+    // `EnvVarEditor` was written against exactly this data and had no producer,
+    // so the panel was unreachable and the credential boundary it draws
+    // (🔒 provider credentials are not editable here) was unenforced. Reads need
+    // a session; mutating a secret needs routing.operate, same as the write path.
+    if (pathname === '/api/skills/env' && req.method === 'GET') {
+        void (async () => {
+            const session = adminSessions.validate(bearerToken(req));
+            if (!session) {
+                writeJson(res, 401, { ok: false, error: 'Not authenticated — log in first.' });
+                return;
+            }
+            try {
+                const { readSkillEnvInventory } = await import('../skills/skill-env-inventory.js');
+                writeJson(res, 200, { ok: true, vars: readSkillEnvInventory() });
+            }
+            catch (err) {
+                writeJson(res, 500, { ok: false, error: err instanceof Error ? err.message : String(err) });
+            }
+        })();
+        return;
+    }
+    if (pathname === '/api/skills/env/delete' && req.method === 'POST') {
+        void (async () => {
+            const session = adminSessions.validate(bearerToken(req));
+            if (!session) {
+                writeJson(res, 401, { ok: false, error: 'Not authenticated — log in first.' });
+                return;
+            }
+            if (!roleCan(session.role, 'routing.operate')) {
+                writeJson(res, 403, {
+                    ok: false,
+                    error: `Access denied — role '${session.role}' cannot delete secrets (requires admin or operator).`,
+                });
+                return;
+            }
+            const body = await readJsonBody(req);
+            const name = typeof body?.name === 'string' ? body.name.trim() : '';
+            if (!/^[A-Za-z_][A-Za-z0-9_]*$/.test(name)) {
+                writeJson(res, 400, { ok: false, error: 'Invalid variable name.' });
+                return;
+            }
+            try {
+                const { deleteEnvValue } = await import('../skills/secret-capture.js');
+                const result = deleteEnvValue(name);
+                if (!result.success) {
+                    writeJson(res, 400, { ok: false, error: result.reason ?? 'delete failed' });
+                    return;
+                }
+                // Drop it from this process too, or the value would survive in memory
+                // and keep being read via process.env until a restart.
+                try {
+                    delete process.env[name];
+                }
+                catch {
+                    /* best-effort */
+                }
+                writeJson(res, 200, { ok: true, removed: result.removed });
+            }
+            catch (err) {
+                writeJson(res, 500, { ok: false, error: err instanceof Error ? err.message : String(err) });
+            }
+        })();
+        return;
+    }
+    if (pathname === '/api/skills/env/test' && req.method === 'POST') {
+        void (async () => {
+            const session = adminSessions.validate(bearerToken(req));
+            if (!session) {
+                writeJson(res, 401, { ok: false, error: 'Not authenticated — log in first.' });
+                return;
+            }
+            const body = await readJsonBody(req);
+            const name = typeof body?.name === 'string' ? body.name.trim() : '';
+            if (!/^[A-Za-z_][A-Za-z0-9_]*$/.test(name)) {
+                writeJson(res, 400, { ok: false, error: 'Invalid variable name.' });
+                return;
+            }
+            try {
+                const { probeSkillEnvVar } = await import('../skills/skill-env-inventory.js');
+                const probe = probeSkillEnvVar(name);
+                writeJson(res, 200, { ok: true, usable: probe.usable, detail: probe.detail });
             }
             catch (err) {
                 writeJson(res, 500, { ok: false, error: err instanceof Error ? err.message : String(err) });

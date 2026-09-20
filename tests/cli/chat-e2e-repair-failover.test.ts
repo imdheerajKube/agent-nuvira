@@ -26,7 +26,7 @@ import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
-import { ChatCommand } from '../../src/cli/chat.js';
+import { ChatCommand, TRANSIENT_RETRY_DELAYS_MS } from '../../src/cli/chat.js';
 import { logger } from '../../src/utils/logger.js';
 import type { InferenceProvider } from '../../src/inference/interface.js';
 import { getModelRegistry, resetModelRegistry } from '../../src/learning/model-registry.js';
@@ -232,7 +232,12 @@ describe('ChatCommand E2E — stale pin → silent repair → gemini failure →
 
     // The answer comes from LOCAL after gemini failed at generation.
     expect(result).toContain('local answer');
-    expect(geminiGenerate).toHaveBeenCalledTimes(1);
+    // gemini's failure here is `fetch failed: … unreachable` — a NETWORK class,
+    // so it is retried on the SAME provider before we spend a failover. That is
+    // the point: a transient blip at one provider must not immediately park it
+    // and switch models underneath the user. The original attempt plus one per
+    // scheduled backoff, then the failover below.
+    expect(geminiGenerate).toHaveBeenCalledTimes(TRANSIENT_RETRY_DELAYS_MS.length + 1);
     expect(localGenerate).toHaveBeenCalledTimes(1);
 
     // gemini was attempted with the REPAIRED model (stale pin swapped out)…
@@ -266,14 +271,17 @@ describe('ChatCommand E2E — stale pin → silent repair → gemini failure →
     const registry = getModelRegistry();
     expect(registry.getEntry('gemini', 'gemini-2.0-flash-exp')?.status).toBe('unavailable');
     expect(registry.getEntry('local', 'llama2')).toBeUndefined();
-  });
+    // Raised from the 5s default: this test now really does wait out the
+    // transient-retry backoff (1s + 3s) before failing over.
+  }, 20_000);
 
   it('does not repeat the repair warnings on the next message — repairs are learned once', async () => {
     // Message 1: learns the one stale pin that is actually selected (gemini).
     const first = await runAutoChatMessage('explain how auto routing picks a provider');
     expect(first).toContain('local answer');
     expect(repairWarnings()).toHaveLength(1);
-    expect(geminiGenerate).toHaveBeenCalledTimes(1);
+    // Network-class failure → retried on the same provider before failover.
+    expect(geminiGenerate).toHaveBeenCalledTimes(TRANSIENT_RETRY_DELAYS_MS.length + 1);
 
     // Message 2: a FRESH chat session (new ChatCommand, shared registry) —
     // the pin is now known-dead, so repair is SILENT. Zero warnings repeat.
@@ -281,10 +289,13 @@ describe('ChatCommand E2E — stale pin → silent repair → gemini failure →
     expect(second).toContain('local answer');
     expect(repairWarnings()).toHaveLength(1); // still only the learning warning
 
-    // gemini is still attempted once per message (silently repaired to the
-    // verified model) and still fails over to local — never a re-warned retry
-    // loop. Failover warning fires exactly once per message too.
-    expect(geminiGenerate).toHaveBeenCalledTimes(2);
+    // gemini is still attempted per message (silently repaired to the verified
+    // model) — a transient network failure means the retry schedule runs before
+    // each failover, so it is (1 + delays) attempts per message — and still
+    // fails over to local. Failover warning fires exactly once per message, so
+    // the retry never turns into a re-warned loop.
+    const attemptsPerMessage = TRANSIENT_RETRY_DELAYS_MS.length + 1;
+    expect(geminiGenerate).toHaveBeenCalledTimes(attemptsPerMessage * 2);
     expect(localGenerate).toHaveBeenCalledTimes(2);
     const failoverWarnings = (logger.warn as any).mock.calls
       .map((c: unknown[]) => String(c[0]))
@@ -292,7 +303,9 @@ describe('ChatCommand E2E — stale pin → silent repair → gemini failure →
     expect(failoverWarnings).toHaveLength(2);
 
     // The silent repair in message 2 still used the verified models.
-    expect((geminiGenerate.mock.calls[1][1] as { model?: string })?.model).toBe('gemini-2.5-flash');
+    // Message 2's FIRST gemini attempt is the call right after message 1's
+    // retries exhausted.
+    expect((geminiGenerate.mock.calls[attemptsPerMessage][1] as { model?: string })?.model).toBe('gemini-2.5-flash');
     expect((localGenerate.mock.calls[1][1] as { model?: string })?.model).toBe('gemma4:e4b');
-  });
+  }, 20_000);
 });

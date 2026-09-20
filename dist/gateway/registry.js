@@ -16,6 +16,9 @@
  * agent path. All adapters opt-in via env tokens (channel-directory.ts).
  */
 import { runPipelineTool } from '../tools/pipeline-tool.js';
+// LEAF import on purpose: the gateway must not pull the whole tool registry
+// (110 registrations + their modules) in just to clean up followups.
+import { isSuggestedFollowup, normalizeFollowups } from '../tools/followup-utils.js';
 import { envBuff } from '../config/paths.js';
 import { parseRequestSync } from '../nlu/parser.js';
 import { getEventBus, EventNames } from '../observability/event-bus.js';
@@ -23,8 +26,11 @@ import { ConfigManager } from '../config/manager.js';
 import { ChannelDirectory, PLATFORM_ENV_VARS, PLATFORM_LABELS, } from './channel-directory.js';
 import { DeliveryLedger } from './delivery.js';
 import { InboxLedger } from './inbox.js';
+import { InboundDedupLedger } from './dedup.js';
+import { GatewayHeartbeat, HEARTBEAT_INTERVAL_MS } from './heartbeat.js';
+import { hasCodingAction, looksLikeAgentCliAsk, resolveAskKind } from '../nlu/conversation-gate.js';
 import { GatewayChatStore } from './chat-store.js';
-import { looksLikeConfusedScaffoldingReply } from '../inference/tool-call-utils.js';
+import { looksLikeConfusedScaffoldingReply, toUserFacingGenerationError } from '../inference/tool-call-utils.js';
 import { logger } from '../utils/logger.js';
 import { existsSync, mkdirSync, writeFileSync, unlinkSync } from 'node:fs';
 import { join } from 'node:path';
@@ -230,6 +236,18 @@ export class GatewayRegistry {
     delivery;
     /** P2 — inbound message inbox (who messaged the bot, what happened). */
     inbox;
+    /**
+     * Idempotency ledger: a message delivered twice (bridge reconnect, offline
+     * backfill, webhook retry) is handled once. Without it, one WhatsApp ask
+     * became 20+ identical model turns — see dedup.ts.
+     */
+    dedup;
+    /**
+     * Liveness beat — so a gateway that is DOWN is visibly down instead of
+     * "configured ✅ but nobody home". Read by `gateway status` and the
+     * supervisor.
+     */
+    heartbeat;
     adapters = new Map();
     configManager;
     options;
@@ -249,10 +267,27 @@ export class GatewayRegistry {
      *  double-count would prematurely fail entries). */
     drainChain = Promise.resolve();
     started = false;
+    /** Epoch ms of start() — the uptime reported in the heartbeat. */
+    startedAt = 0;
+    /** Beats written this run (monotonic; a stalled count means a stalled loop). */
+    beatCount = 0;
+    /** Per-adapter health, published in every beat. */
+    adapterHealth = new Map();
+    /** Earliest epoch-ms at which a not-yet-started adapter may be retried. */
+    adapterRetryAt = new Map();
+    /** The heartbeat + watchdog tick. */
+    livenessTimer = null;
     chatEngine;
     /** Per-contact conversation history for gateway chat (WhatsApp/Telegram/etc.).
      *  Disk-backed via GatewayChatStore so history survives gateway restarts. */
     chatStore;
+    /**
+     * P5 — the followups last offered to each contact (`platform:channelId`).
+     * A messaging-app sender has no clickable chips: they REPLY with one of the
+     * rendered lines, so this is the only way to know the message is a follow-up
+     * to the previous answer rather than a brand-new independent request.
+     */
+    lastFollowupsByContact = new Map();
     onTypingCallback = null;
     constructor(options = {}, configManager) {
         const allowFromEnv = (envBuff('GATEWAY_ALLOW_IDS') ?? '')
@@ -267,6 +302,8 @@ export class GatewayRegistry {
         this.directory = new ChannelDirectory();
         this.delivery = new DeliveryLedger(options.deliveryConfigDir);
         this.inbox = new InboxLedger(options.deliveryConfigDir);
+        this.dedup = new InboundDedupLedger(options.deliveryConfigDir);
+        this.heartbeat = new GatewayHeartbeat(options.deliveryConfigDir);
         this.configManager = configManager ?? new ConfigManager();
         this.chatEngine = options.chatEngine ?? null;
         this.chatStore = new GatewayChatStore(options.deliveryConfigDir);
@@ -418,7 +455,7 @@ export class GatewayRegistry {
         const replyTo = async (text) => {
             await this.sendToRef(ref, text);
         };
-        const record = (handled, reply) => {
+        const record = (handled, reply, dup) => {
             this.inbox.record({
                 platform: msg.platform,
                 channelId: msg.channelId,
@@ -428,6 +465,8 @@ export class GatewayRegistry {
                 isGroup: msg.isGroup,
                 handled,
                 reply,
+                dedupKey: dup?.key,
+                dedupCount: dup?.count,
             });
         };
         const parsed = parseRequestSync(msg.text);
@@ -490,6 +529,33 @@ export class GatewayRegistry {
         if (!this.isAllowed(ref)) {
             return refuse('This channel is not authorized to trigger the agent. Add it to BUFF_GATEWAY_ALLOW_IDS (platform:channelId).');
         }
+        // ── IDEMPOTENCY ── A messaging transport is at-least-once: the bridge
+        // reconnects and replays its offline backfill, a webhook retries, a device
+        // re-syncs. Observed live: ONE WhatsApp ask arrived 20+ times and was
+        // answered 20+ times (and, when it routed to the pipeline, re-ran a 112s
+        // multi-agent pipeline each time) — the sender's phone filled up with the
+        // same reply. The transport's own message id is stable across those
+        // re-deliveries, so a message handled once is never handled again.
+        //
+        // Placed AFTER the authorization gates on purpose: an unapproved sender
+        // must leave NO trace (the silent-drop privacy rule), and their ledger
+        // rows must not be written either.
+        const dedupVerdict = this.dedup.classify({
+            platform: msg.platform,
+            channelId: msg.channelId,
+            text: msg.text,
+            senderId: msg.senderId,
+            isGroup: msg.isGroup,
+            messageId: msg.messageId,
+        });
+        if (dedupVerdict.duplicate) {
+            // No reply: the sender ALREADY has the answer for this exact message.
+            // No chat-history write either (that would double the user's turn and
+            // corrupt the follow-up context).
+            logger.info(`gateway: duplicate inbound (${dedupVerdict.kind}, delivery #${dedupVerdict.count}) — ignored`);
+            record('duplicate', undefined, { key: dedupVerdict.key, count: dedupVerdict.count });
+            return 'duplicate';
+        }
         // 7-DAY PER-CONTACT CONVERSATION MEMORY — record every AUTHORIZED inbound
         // message the moment it arrives, BEFORE the routing decision (chat,
         // pipeline, help). Placed AFTER the sender/channel gates: an unapproved
@@ -506,6 +572,19 @@ export class GatewayRegistry {
         }
         catch {
             /* best-effort */
+        }
+        // ── Local-CLI asks ── "run nuvira gateway status" names a command for the
+        // OPERATOR's terminal. Observed live: it was dispatched to the multi-agent
+        // pipeline as a create intent, burned 112s, failed, and wrote an approval
+        // artifact. A remote sender cannot execute it locally and a coding
+        // pipeline is the worst possible answer, so it gets a deterministic
+        // pointer instead of agent work.
+        if (looksLikeAgentCliAsk(msg.text)) {
+            logger.debug(`gateway: agent-CLI ask → pointer line (${msg.text.slice(0, 60)})`);
+            const line = `🤖 \`nuvira …\` is a command for your own terminal — I can't run it for a remote sender. Run it locally to see the result.`;
+            await replyTo(line);
+            record('help', line);
+            return line;
         }
         // pipelineOnly: only pipeline intents run directly; chat/unknown intents
         // still route through runInboundChat so the model can handle them via
@@ -528,11 +607,21 @@ export class GatewayRegistry {
             record('help', line);
             return line;
         }
-        // Chat intent (write/explain/ask → run: 'chat'): a REAL chat answer through
-        // the same engine as the dashboard console (ChatCommand.answerOnce) — so
-        // "write a poem and send it to Alex" on WhatsApp actually writes the poem,
-        // and the model's toolset includes gateway_send to deliver it.
-        if (parsed.action.run === 'chat') {
+        // ── THE routing verdict (one shared rule, every surface) ──
+        // `resolveAskKind` is the SAME decision `nuvira chat` makes (see
+        // chat.ts's resolvePipelineDispatch): a genuine question is answered
+        // directly, a coding verb in command position runs the pipeline, and only
+        // then does the NLU action map decide. The gateway used to ask only
+        // `parsed.action.run`, so the two surfaces disagreed on the same ask —
+        // "how do I add JWT auth to the app?" got prose here while chat/execute
+        // did the work, and a question phrased like a task still burned a run.
+        const askKind = resolveAskKind(msg.text, parsed);
+        logger.debug(`gateway: route ${askKind} (intent ${parsed.intent} @ ${parsed.confidence.toFixed(2)}, coding=${hasCodingAction(msg.text)})`);
+        // Chat ask: a REAL chat answer through the same engine as the dashboard
+        // console (ChatCommand.answerOnce) — so "write a poem and send it to Alex"
+        // on WhatsApp actually writes the poem, and the model's toolset includes
+        // gateway_send to deliver it.
+        if (askKind === 'chat') {
             const answer = await this.runInboundChat(msg);
             if (answer && answer.content.trim() && !answer.generationFailed) {
                 await replyTo(answer.content);
@@ -701,6 +790,11 @@ export class GatewayRegistry {
             const historyKey = `${msg.platform}:${msg.channelId}`;
             const priorWindow = this.chatStore.getFullHistory(historyKey);
             const history = priorWindow.slice(0, Math.max(0, priorWindow.length - 1)).slice(-12);
+            // P5 — is this message a REPLY to a followup we just sent? (No chips on
+            // WhatsApp/Telegram — the sender re-types the line.) If so it continues
+            // the previous execution instead of starting a fresh request.
+            const lastFollowups = this.lastFollowupsByContact.get(historyKey);
+            const continuation = isSuggestedFollowup(msg.text, lastFollowups);
             // P2 — origin context: the chat model knows who it's talking to, so its
             // gateway_send calls target the right contact/channel.
             // The response format rules ensure the user gets a clean, direct answer
@@ -742,6 +836,9 @@ export class GatewayRegistry {
                 provider: useAuto ? 'auto' : providerType,
                 model: useAuto ? 'auto' : providerConfig.model,
                 history,
+                // P5 — a replied followup carries the continuation marker into the
+                // model thread (the previous answer is already in `history`).
+                ...(continuation ? { continuation: true } : {}),
                 // Inject prior conversation context so the model remembers previous
                 // exchanges with this contact (follow-up questions, suggested followups).
                 gateway: {
@@ -796,10 +893,11 @@ export class GatewayRegistry {
                 logger.warn(`gateway: suppressing contract-confusion reply (${content.length} chars)`);
                 content = '🤖 Sorry — none of my language models could handle that request just now. Please try again in a moment, or rephrase it — you can also run `nuvira models` to check your model setup.';
             }
-            const fups = (answer.followups ?? [])
-                .map((f) => (f && typeof f.prompt === 'string' && f.prompt.trim() ? f.prompt.trim() : ''))
-                .filter(Boolean)
-                .slice(0, 3);
+            // P5 — remember what we offered (for the next inbound), and render the
+            // "Try next" list CLEAN + STRUCTURED through the shared normalizer.
+            const normalized = normalizeFollowups(answer.followups);
+            this.lastFollowupsByContact.set(historyKey, normalized);
+            const fups = normalized.map((f) => f.prompt);
             if (fups.length > 0) {
                 const suffix = `\n\nTry next:\n${fups.map((f, i) => `${i + 1}. ${f}`).join('\n')}`;
                 // WhatsApp truncates ~4096 chars — the ANSWER is the deliverable, so
@@ -844,22 +942,22 @@ export class GatewayRegistry {
                 await this.handleInbound(msg);
             }
             catch (err) {
-                const text = `⚠️ gateway error: ${err instanceof Error ? err.message : String(err)}`;
-                logger.error(text);
-                await this.sendToRef({ platform: msg.platform, channelId: msg.channelId }, text);
+                // The RAW error goes to the log; the SENDER gets a plain sentence.
+                // Interpolating err.message here put provider wire errors (rate-limit
+                // JSON, stack fragments) in front of a messaging-app user.
+                logger.error(`⚠️ gateway error: ${err instanceof Error ? err.message : String(err)}`);
+                await this.sendToRef({ platform: msg.platform, channelId: msg.channelId }, `🤖 ${toUserFacingGenerationError(err)}`);
             }
         };
         for (const adapter of this.adapters.values()) {
             if (!adapter.configured)
                 continue;
-            try {
-                await adapter.start(onMessage);
-                logger.info(`gateway: ${adapter.describe()} started`);
-            }
-            catch (err) {
-                logger.error(`gateway: failed to start ${adapter.describe()}: ${err instanceof Error ? err.message : err}`);
-            }
+            await this.startAdapter(adapter, onMessage);
         }
+        // Liveness + adapter watchdog: writes the beat `gateway status` reads, and
+        // retries any configured adapter that never came up (a transient network
+        // error at boot used to leave that platform silently dead for the run).
+        this.startLiveness();
         if (this.options.streamEvents) {
             this.unsubscribe = getEventBus().on('*', (record) => {
                 if (!this.activeChannel)
@@ -930,6 +1028,107 @@ export class GatewayRegistry {
             /* best-effort — never break the pipeline */
         }
     }
+    /**
+     * Start ONE adapter and record its health. Never throws: a platform that
+     * fails to start must not take the gateway down with it.
+     */
+    async startAdapter(adapter, onMessage) {
+        const prior = this.adapterHealth.get(adapter.platform);
+        try {
+            await adapter.start(onMessage);
+            logger.info(`gateway: ${adapter.describe()} started`);
+            this.adapterHealth.set(adapter.platform, {
+                platform: adapter.platform,
+                configured: true,
+                started: true,
+                restarts: prior?.restarts ?? 0,
+            });
+        }
+        catch (err) {
+            const message = err instanceof Error ? err.message : String(err);
+            logger.error(`gateway: failed to start ${adapter.describe()}: ${message}`);
+            this.adapterHealth.set(adapter.platform, {
+                platform: adapter.platform,
+                configured: true,
+                started: false,
+                restarts: prior?.restarts ?? 0,
+                lastError: message,
+            });
+            this.scheduleAdapterRetry(adapter.platform, prior?.restarts ?? 0);
+        }
+    }
+    /** Max restart attempts per adapter per run — beyond this, stop the churn. */
+    static ADAPTER_MAX_RESTARTS = 8;
+    /** Exponential backoff between adapter restart attempts (5s → 120s). */
+    scheduleAdapterRetry(platform, restarts) {
+        if (restarts >= GatewayRegistry.ADAPTER_MAX_RESTARTS) {
+            logger.error(`gateway: ${platform} gave up after ${restarts} restart attempts (check its credentials/network)`);
+            return;
+        }
+        const delay = Math.min(5_000 * 2 ** restarts, 120_000);
+        this.adapterRetryAt.set(platform, Date.now() + delay);
+    }
+    /**
+     * The liveness tick: retry dead adapters, then write a beat. Runs on the
+     * same interval for both, so a stalled process is visible as a stalled beat.
+     */
+    startLiveness() {
+        this.startedAt = Date.now();
+        this.beatCount = 0;
+        const tick = async () => {
+            await this.retryPendingAdapters();
+            this.beatCount += 1;
+            this.heartbeat.beat({
+                startedAt: this.startedAt,
+                beats: this.beatCount,
+                supervised: envBuff('GATEWAY_SUPERVISED') === '1',
+                supervisorPid: process.ppid || undefined,
+                adapters: [...this.adapterHealth.values()],
+            });
+        };
+        // First beat immediately, so `gateway status` is honest within a second of
+        // startup instead of reporting the previous run's stale beat.
+        void tick().catch(() => undefined);
+        this.livenessTimer = setInterval(() => void tick().catch(() => undefined), HEARTBEAT_INTERVAL_MS);
+    }
+    /** Retry every configured adapter that is not currently started. */
+    async retryPendingAdapters() {
+        const now = Date.now();
+        for (const adapter of this.adapters.values()) {
+            if (!adapter.configured)
+                continue;
+            const health = this.adapterHealth.get(adapter.platform);
+            if (health?.started)
+                continue;
+            const restarts = health?.restarts ?? 0;
+            if (restarts >= GatewayRegistry.ADAPTER_MAX_RESTARTS)
+                continue;
+            const due = this.adapterRetryAt.get(adapter.platform) ?? 0;
+            if (due > now)
+                continue;
+            logger.warn(`gateway: retrying ${adapter.platform} (attempt ${restarts + 1})`);
+            this.adapterHealth.set(adapter.platform, {
+                platform: adapter.platform,
+                configured: true,
+                started: false,
+                restarts: restarts + 1,
+                lastError: health?.lastError,
+            });
+            this.adapterRetryAt.delete(adapter.platform);
+            const onMessage = async (msg) => {
+                try {
+                    await this.handleInbound(msg);
+                }
+                catch (err) {
+                    logger.error(`⚠️ gateway error: ${err instanceof Error ? err.message : String(err)}`);
+                    await this.sendToRef({ platform: msg.platform, channelId: msg.channelId }, `🤖 ${toUserFacingGenerationError(err)}`);
+                }
+            };
+            // startAdapter preserves the incremented count and re-schedules the
+            // next retry (with a longer backoff) when the attempt fails again.
+            await this.startAdapter(adapter, onMessage);
+        }
+    }
     /** Stop adapters + unsubscribe + stop the delivery drain. Idempotent. */
     async stop() {
         if (!this.started)
@@ -937,6 +1136,13 @@ export class GatewayRegistry {
         this.started = false;
         this.unsubscribe?.();
         this.unsubscribe = null;
+        if (this.livenessTimer) {
+            clearInterval(this.livenessTimer);
+            this.livenessTimer = null;
+        }
+        // A clean shutdown removes the beat: `gateway status` must then say "down",
+        // not "stale", so the operator knows this was intentional.
+        this.heartbeat.clear();
         if (this.deliveryTimer) {
             clearInterval(this.deliveryTimer);
             this.deliveryTimer = null;

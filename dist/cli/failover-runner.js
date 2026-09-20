@@ -53,6 +53,17 @@ export function getProviderKeys(configManager, providerType) {
  * error is rethrown. Throws the LAST error when every candidate fails.
  */
 export async function runSingleShotAuto(opts) {
+    // ── Re-verify before re-admit ───────────────────────────────────────────
+    // A provider whose TRANSIENT exclusion has expired is only re-admitted once a
+    // spot-check proves it is actually back, so recovery is discovered in seconds
+    // instead of by failing again on the first attempt. Best-effort: a sweep
+    // failure must never stop the walk from routing.
+    try {
+        await opts.revive?.();
+    }
+    catch {
+        // Best-effort — revival must never break the walk.
+    }
     const first = await opts.route([]);
     const attempted = new Set();
     let lastError = new Error(`No auto-routed provider succeeded for: ${opts.task.slice(0, 80)}`);

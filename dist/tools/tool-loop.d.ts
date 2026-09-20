@@ -15,7 +15,8 @@
  * - JSON fallback: the model emits `{"tool":"<name>","arguments":{...}}`
  *   blocks after its response text (contract in TOOL_CONTRACT_JSON).
  */
-import { type FollowupSuggestion, type ToolContext, type ToolJsonSchema } from './registry.js';
+import { type ToolContext, type ToolJsonSchema } from './registry.js';
+import { type FollowupSuggestion } from './followup-utils.js';
 import type { ToolMessage } from '../inference/interface.js';
 export { type ToolMessage };
 /**
@@ -44,6 +45,8 @@ export interface StepResponse {
         id: string;
         name: string;
         arguments: Record<string, unknown>;
+        /** Provider-owned opaque data echoed back on replay (Gemini thoughtSignature). */
+        providerMeta?: Record<string, unknown>;
     }>;
 }
 /** What the caller injects — chat.ts wires providers/failover, tests use mocks. */
@@ -84,12 +87,32 @@ export interface ToolLoopOptions {
      */
     toolExposure?: 'all' | 'tiered';
     /**
+     * R1 — bound on concurrent read-only calls per step, from the model's harness
+     * profile. Omit for the default (4); pass 1 for tiny models.
+     */
+    maxParallelReads?: number;
+    /**
      * Mechanical thread budget in characters (deterministic compaction —
      * see trimThreadBudget). 0 disables (default: DEFAULT_THREAD_BUDGET_CHARS).
      */
     threadBudgetChars?: number;
     /** Bound on steps per turn (default: 8) — never an infinite loop. */
     maxSteps?: number;
+    /**
+     * Bounded auto-continuation budget (default: 2). A turn that dies MID-WAY —
+     * the provider walk exhausted every candidate at step N, or the step bound
+     * was reached while the model still had work to do — is RESUMED rather than
+     * handed back to the user half-done. Each continuation grants
+     * `continuationSteps` more steps and re-attempts the failed step. 0 disables
+     * (byte-identical to the previous behavior). Never unbounded: the loop still
+     * terminates after `maxSteps + maxContinuations * continuationSteps`. See
+     * {@link ToolLoopResult.continuations}.
+     */
+    maxContinuations?: number;
+    /** Extra steps granted per continuation (default: 8). */
+    continuationSteps?: number;
+    /** Pause before re-attempting a failed step (default: 1500ms; tests set 0). */
+    continuationDelayMs?: number;
     /** ToolContext for executions (configManager, followups sink, board, ...). */
     context: ToolContext;
     deps: ToolLoopDeps;
@@ -120,6 +143,12 @@ export interface ToolLoopResult {
     steps: number;
     /** True when the step bound was hit before an end turn. */
     bounded: boolean;
+    /**
+     * How many bounded auto-continuations were spent this turn (0 = the turn ran
+     * straight through). Telemetry only — a resumed turn reports the SAME content
+     * contract as one that never stalled.
+     */
+    continuations?: number;
     /**
      * True when generation failed entirely (no model answered, no tool ran) —
      * the E3c no-model signal: the caller may fall back to the rule decision
@@ -158,6 +187,39 @@ export declare function extractFallbackToolCalls(content: string): {
  * so the model can deliver the actual answer.
  */
 export declare function isBareAcknowledgment(content: string): boolean;
+/**
+ * Tools that are READ-ONLY and therefore safe to execute concurrently when the
+ * model emits several of them in ONE step. Everything else — writes, terminal
+ * commands, pipeline dispatch, delegation, `tool_search` (it mutates the
+ * tiering state), `plan_todo`, `ask_user` (it blocks on user input) — stays
+ * strictly serial and in the model's original order.
+ *
+ * Why this matters: tool results are fed back one step at a time and the step
+ * budget is bounded (16), so N independent reads used to cost N sequential
+ * round-trips of wall-clock. Reading several files/searches is the single most
+ * common investigation pattern, so it becomes one bounded fan-out.
+ *
+ * The list is deliberately an ALLOWLIST (never a denylist): a tool added to
+ * the registry later is SERIAL by default until it is reviewed as read-only.
+ */
+export declare const PARALLEL_SAFE_TOOL_NAMES: ReadonlySet<string>;
+/** Whether a tool may run concurrently with sibling calls in the same step. */
+export declare function isParallelSafeTool(name: string): boolean;
+/** Default continuations granted per turn when the option is omitted. */
+export declare const DEFAULT_MAX_CONTINUATIONS = 2;
+/** Default extra steps granted per continuation. */
+export declare const DEFAULT_CONTINUATION_STEPS = 8;
+/** Pause before re-attempting a failed step (lets a transient outage clear). */
+export declare const CONTINUATION_DELAY_MS = 1500;
+/**
+ * Whether a generation failure looks TRANSIENT — the only case where waiting
+ * before the resume attempt helps. A 5xx / network / timeout / rate-limit spike
+ * can clear in seconds; a hard failure (no credentialed candidate, dead key,
+ * bad model id) cannot, so it resumes IMMEDIATELY. Waiting on a hard failure
+ * only delays the user's answer (and made the interactive/gateway paths
+ * measurably slower for no benefit).
+ */
+export declare function isTransientGenerationFailure(message: string): boolean;
 /**
  * Run one tool-call turn:
  * generate → execute tools → feed results back → repeat until the model

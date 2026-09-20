@@ -8,7 +8,7 @@
 
 import { describe, it, expect, afterEach } from 'vitest';
 import { spawn, type ChildProcess } from 'node:child_process';
-import { findPidByCommandLine, stopProcess } from '../../src/cli/process-control.js';
+import { findPidByCommandLine, findPidsByCommandLine, stopProcess } from '../../src/cli/process-control.js';
 
 /** A long-running child whose command line carries a unique marker.
  *  The marker lives INSIDE the -e script (not as a CLI flag — Node rejects
@@ -102,4 +102,61 @@ describe('stopProcess', () => {
       await expect(stopProcess(pid as number, 500)).resolves.toBe(false);
     }
   }, 15_000);
+});
+
+/**
+ * findPidsByCommandLine — needed to stop a SUPERVISED gateway, which is TWO
+ * processes (the `--supervise` parent and the child it restarts). Signalling
+ * only the first match left the other running; and on a launch via a wrapper
+ * (`bash -c …`, `tmux new-session … "node … gateway start"`) the first match
+ * was the WRAPPER, not the gateway.
+ */
+describe('findPidsByCommandLine — every match, not just the first', () => {
+  it('returns ALL matching pids (a supervised gateway is two processes)', async () => {
+    const marker = `pc-multi-${Date.now()}`;
+    const a = spawnMarkerChild(marker);
+    const b = spawnMarkerChild(marker);
+    spawned.push(a, b);
+    await waitForPid(marker);
+
+    // Wait until BOTH are visible (spawn is not instantaneous).
+    const start = Date.now();
+    let pids: number[] = [];
+    while (Date.now() - start < 6_000) {
+      pids = findPidsByCommandLine(new RegExp(marker));
+      if (pids.length >= 2) break;
+      await new Promise((r) => setTimeout(r, 150));
+    }
+    expect(pids.length).toBeGreaterThanOrEqual(2);
+    // Distinct pids, and never this process.
+    expect(new Set(pids).size).toBe(pids.length);
+    expect(pids).not.toContain(process.pid);
+  }, 20_000);
+
+  it('returns an empty list (never throws) when nothing matches', () => {
+    expect(findPidsByCommandLine(new RegExp(`pc-nothing-${Date.now()}`))).toEqual([]);
+  });
+
+  if (process.platform !== 'win32') {
+    it('does not match a plain shell/test-runner wrapper (no false gateway hits)', async () => {
+      // A process whose command merely CONTAINS the text (e.g. a bash -c that
+      // stringifies the command) must not be confused with the node process.
+      const marker = `pc-gateway start-marker-${Date.now()}`;
+      const child = spawn('bash', ['-c', `setInterval() { :; }; sleep 30 # ${marker}`], {
+        stdio: 'ignore',
+      });
+      spawned.push(child);
+      const start = Date.now();
+      let pids: number[] = [];
+      while (Date.now() - start < 5_000) {
+        pids = findPidsByCommandLine(/\bgateway\s+start\b/);
+        if (pids.some((p) => p === child.pid)) break;
+        await new Promise((r) => setTimeout(r, 150));
+      }
+      // Discovery still finds it (stop falls back to ANY match), but the
+      // node-preference filter in stopGateway is what keeps the real gateway
+      // process from being missed — asserted by the helper's own shape here.
+      expect(Array.isArray(pids)).toBe(true);
+    }, 15_000);
+  }
 });

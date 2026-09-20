@@ -28,7 +28,21 @@ export interface CaptureResult {
     setupSkipped: boolean;
     /** Vars that were successfully stored. */
     storedVars: string[];
+    /**
+     * Vars REFUSED because they are provider credentials (see
+     * `isProviderEnvBlocked`). Reported separately from `missingNames` so a
+     * caller can say *why* nothing was stored instead of silently looping.
+     */
+    blockedNames?: string[];
 }
+/** Why a save/delete did not take effect (absent when it succeeded). */
+export type SecretWriteReason = 
+/** The var is a provider credential — configure it as a provider instead. */
+'provider-credential'
+/** The name is not a valid env var identifier. */
+ | 'invalid-name'
+/** The write/read failed at the filesystem layer. */
+ | 'write-failed';
 /**
  * Load all env vars from the .env file.
  */
@@ -47,9 +61,39 @@ export declare function getEnvVarValue(varName: string): string;
  * Save or update a value in ~/.nuvira/.env (or ~/.nuvira/.env).
  * Preserves existing lines, adds new ones at the end.
  */
-export declare function saveEnvValue(key: string, value: string): {
+export declare function saveEnvValue(key: string, value: string, opts?: {
+    /**
+     * Permit storing a provider credential here. Defaults to FALSE: this is the
+     * SKILL-secret path, and a provider credential stored here would be
+     * advertised as available to skills while `skill-executor` deliberately
+     * blocks it from ever reaching them. Provider keys belong in provider
+     * setup (dashboard AdminPanel / `nuvira models`), where the router also
+     * learns the provider is credentialed.
+     */
+    allowProviderCredential?: boolean;
+}): {
     success: boolean;
     path: string;
+    reason?: SecretWriteReason;
+};
+/**
+ * Remove an env var from the .env file.
+ *
+ * Rewrites the file keeping every other line — comments, blank lines and
+ * ordering — byte-for-byte, so deleting one secret never reshuffles the file
+ * a user hand-edited. Removes `KEY=...` in both plain and `export KEY=` forms,
+ * and drops only the FIRST match (a duplicate later in the file is a different
+ * line, and removing it too would be surprising).
+ *
+ * A missing file, or a key that was never there, is a SUCCESS: the caller's
+ * intent ("this var should not be set") already holds, and reporting failure
+ * would make the dashboard surface a pointless error.
+ */
+export declare function deleteEnvValue(key: string): {
+    success: boolean;
+    path: string;
+    removed: boolean;
+    reason?: SecretWriteReason;
 };
 /**
  * Capture missing env vars interactively.

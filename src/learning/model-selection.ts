@@ -67,13 +67,29 @@ export function hasCredentials(configManager: ConfigManager, provider: string): 
 }
 
 /**
+ * The error rate above which a model is DEPRIORITIZED (not excluded): at 0.6 it
+ * fails roughly 3 times in 5, so preferring a healthier sibling is worth it —
+ * but if it is the only verified option it must still be usable, because a
+ * weak candidate beats no candidate.
+ *
+ * Observed live: routing served `groq/compound-mini` at errorRate 0.89 while
+ * healthy siblings sat available, and every turn answered by it was poor or
+ * failed outright.
+ */
+export const MODEL_HEALTH_CEILING = 0.6;
+
+/**
  * Verified working models for a provider, ranked by learned health:
  * lowest error rate first, then lowest latency, then most recently verified.
  * Empty when nothing has been verified yet (cold start / no keys).
+ *
+ * MODELS AT/ABOVE `MODEL_HEALTH_CEILING` SORT AFTER THE HEALTHY ONES but are
+ * never removed: "deprioritize, never exclude" — a burning provider you can
+ * still fall back TO is worth more than a clean-looking empty pool.
  */
 export function preferredModelsFor(provider: string): string[] {
   const registry = getModelRegistry();
-  return registry
+  const ranked = registry
     .getVerifiedModels(provider)
     // The config value `'default'` is a SENTINEL meaning "use the provider's
     // default model" — it is NOT a model id. It can be recorded as a
@@ -98,6 +114,18 @@ export function preferredModelsFor(provider: string): string[] {
       if (la !== lb) return la - lb;
       return (eb?.lastVerifiedAt ?? 0) - (ea?.lastVerifiedAt ?? 0);
     });
+
+  // Health ceiling: a STABLE partition, so the learned order is preserved
+  // inside each group. Both groups are returned — degraded models remain
+  // reachable as a last resort (the failover walk's whole job is "never
+  // dead-end", so dropping them here would be the opposite of a fix).
+  const healthy: string[] = [];
+  const degraded: string[] = [];
+  for (const model of ranked) {
+    const rate = registry.getEntry(provider, model)?.errorRate ?? 0;
+    (rate >= MODEL_HEALTH_CEILING ? degraded : healthy).push(model);
+  }
+  return [...healthy, ...degraded];
 }
 
 /** Aggregate health score for a provider (its best verified model). Lower = better. */

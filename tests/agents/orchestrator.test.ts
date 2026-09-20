@@ -95,6 +95,26 @@ vi.mock('../../src/agents/agents/reviewer.js', () => ({
   },
 }));
 
+// The iterative tool-calling writer/reviewer are the DEFAULT agents now
+// (audit W3 — a one-shot writer cannot read the file it rewrites), so the
+// tool-calling variants DELEGATE to the same execute mocks: a test asserting
+// "the writer ran" must hold whichever of the two the routing actually picked.
+vi.mock('../../src/agents/agents/writer-tool-calling.js', () => ({
+  WriterToolCallingAgent: class {
+    name = 'Writer';
+    description = 'Writes code (tool-calling)';
+    execute = (...args: unknown[]) => mockWriterExecute(...args);
+  },
+}));
+
+vi.mock('../../src/agents/agents/reviewer-tool-calling.js', () => ({
+  ReviewerToolCallingAgent: class {
+    name = 'Reviewer';
+    description = 'Reviews code (tool-calling)';
+    execute = (...args: unknown[]) => mockReviewerExecute(...args);
+  },
+}));
+
 // Mock PlannerAgent to return success (avoid real planning)
 const mockPlannerExecute = vi.hoisted(() => vi.fn());
 vi.mock('../../src/agents/agents/planner.js', () => ({

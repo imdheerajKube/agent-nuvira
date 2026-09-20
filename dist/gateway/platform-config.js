@@ -13,9 +13,7 @@
  * pair` / the WhatsApp panel — not an env token.
  */
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
-import { envBuff, resolveNuviraHome } from '../config/paths.js';
-import { join } from 'node:path';
-import { homedir } from 'node:os';
+import { resolveNuviraEnvFile } from '../config/paths.js';
 import { PLATFORM_ENV_VARS, PLATFORM_LABELS } from './channel-directory.js';
 const SECRET_HINT = /TOKEN|PASSWORD|PASS|SECRET|KEY|AUTH|CRED/i;
 const PROMPTS = {
@@ -58,17 +56,14 @@ export function platformEnvVarMeta(platform) {
 export function configurablePlatforms() {
     return Object.keys(PLATFORM_ENV_VARS).filter((p) => p !== 'whatsapp' && p !== 'mock');
 }
-// ─── ~/.nuvira/.env read/write (line-preserving merge) ────────────────────────
+// ─── Credential .env read/write (line-preserving merge) ──────────────────────
+/**
+ * The `.env` that holds platform credentials. Delegates to the shared resolver
+ * so writes land in the ACTIVE config dir (`NUVIRA_CONFIG_DIR` aware) and never
+ * mutate the real profile's credential file from an isolated process.
+ */
 export function envFilePath() {
-    if (process.env.NUVIRA_ENV_FILE && process.env.NUVIRA_ENV_FILE.trim().length > 0)
-        return process.env.NUVIRA_ENV_FILE;
-    const override = envBuff('ENV_FILE');
-    if (override && override.trim().length > 0)
-        return override;
-    const nuviraEnv = join(homedir(), '.nuvira', '.env');
-    if (existsSync(nuviraEnv))
-        return nuviraEnv;
-    return join(resolveNuviraHome(), '.env');
+    return resolveNuviraEnvFile();
 }
 /** Per-var current state — env file first, then process.env (file wins like loadEnv). */
 export function envVarState(varName) {

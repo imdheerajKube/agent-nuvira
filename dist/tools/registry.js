@@ -421,7 +421,10 @@ registerTool({
     description: 'Ask the user a clarifying question with 2–4 choices (multi-select optional). Use when a request is ambiguous or missing information.',
     category: 'experience',
     inputSchema: askUserSchema,
-    endsAgentStep: true,
+    // NOT a dispenser: the tool result is the user's ANSWER, which the model
+    // must act on in the next step (ending the step here would throw the answer
+    // away). See the endsAgentStep contract in this file.
+    endsAgentStep: false,
     run: async (args, ctx) => {
         const { question, choices, multi_select } = askUserSchema.parse(args);
         const render = ctx.askUser || (await import('./ask-user.js')).renderAskUser;
@@ -823,6 +826,10 @@ export function toFollowupSuggestions(raw) {
             }
             return { prompt: '' };
         });
+        // NOTE: this is a PARSER — it validates and returns every followup the
+        // model emitted (the schema deliberately has no hard max). Hygiene/capping
+        // belongs to the render/collect points (normalizeFollowups), so callers
+        // that want the top N keep the whole list to choose from.
         const parsed2 = suggestFollowupsSchema.safeParse({ followups });
         return parsed2.success ? parsed2.data.followups : [];
     }
@@ -830,6 +837,14 @@ export function toFollowupSuggestions(raw) {
         return [];
     }
 }
+// ─── Followup hygiene + continuation ────────────────────────────────────────
+// The implementation lives in the dependency-FREE leaf module
+// `followup-utils.ts` and is re-exported here for the surfaces that already
+// import the registry. It is deliberately NOT implemented inline: the gateway
+// and dashboard must be able to normalise a followup (and recognise a clicked
+// one) WITHOUT pulling the whole 110-tool registry into their import graph —
+// doing so measurably slowed those hot paths.
+export { MAX_FOLLOWUPS, MAX_FOLLOWUP_PROMPT_CHARS, MAX_FOLLOWUP_LABEL_CHARS, normalizeFollowups, FOLLOWUP_CONTINUATION_MARKER, buildFollowupContinuationPrompt, isFollowupContinuation, isSuggestedFollowup, } from './followup-utils.js';
 // ─── Tool run implementations (deferred imports to avoid cycles) ────────────
 /** Run a C3 pipeline action (build/resume/repair + E3c task tools) — see executor.ts. */
 function runPipelineTool(action, args, ctx) {
@@ -2654,7 +2669,7 @@ registerTool({
 });
 registerTool({
     name: 'search_memory',
-    description: 'Search memories by content, type, or tags.',
+    description: 'Search memories by content, type, or tags. Searches BOTH memory stores: entries added with add_memory (keyword/tag) and facts learned from earlier sessions (semantic), so a memory recorded by another path is still found.',
     category: 'workflow',
     inputSchema: z.object({
         query: z.string().optional().describe('Search query'),
@@ -2663,11 +2678,21 @@ registerTool({
         limit: z.number().optional().describe('Max results (default: 10)'),
     }),
     endsAgentStep: false,
-    run: (args) => import('./memory-tools.js').then((m) => {
-        const store = m.getMemoryStore();
+    run: (args, ctx) => import('./memory-tools.js').then(async (m) => {
         const { query, type, tags, limit } = args;
-        const results = store.search({ query, type, tags, limit });
-        return JSON.stringify({ count: results.length, results: results.map(r => ({ id: r.entry.id, content: r.entry.content, type: r.entry.type, score: r.score })) });
+        // Scope the semantic half to this project — the same deriveProjectId() the
+        // fact extractor and recall use, so all three agree on the store.
+        let projectId;
+        try {
+            const { deriveProjectId } = await import('../config/workspace.js');
+            projectId = deriveProjectId(ctx?.cwd || process.cwd()).id;
+        }
+        catch { /* best-effort — memory-store results still return */ }
+        const results = await m.searchMemories({ query, type, tags, limit, projectId });
+        return JSON.stringify({
+            count: results.length,
+            results: results.map((r) => ({ id: r.id, content: r.content, type: r.type, score: r.score, source: r.source })),
+        });
     }),
 });
 registerTool({

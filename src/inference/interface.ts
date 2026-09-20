@@ -41,6 +41,16 @@ export interface ToolMessage {
 export interface ToolCallRequest {
   id: string;
   name: string;
+  /**
+   * Opaque, provider-owned data that must be echoed back verbatim when the
+   * conversation is replayed to that provider. Gemini, for example, REQUIRES
+   * the `thoughtSignature` it returned with a functionCall part to be sent back
+   * on the next turn — omitting it makes every multi-turn tool call fail with
+   * `400: Function call is missing a thought_signature`. Dropping it here (the
+   * shape used to be id/name/arguments only) is why no Gemini agent run could
+   * ever get past its second step.
+   */
+  providerMeta?: Record<string, unknown>;
   /** JSON string of the arguments (OpenAI wire convention). */
   arguments: string;
 }
@@ -50,6 +60,8 @@ export interface ToolCall {
   id: string;
   name: string;
   arguments: Record<string, unknown>;
+  /** See {@link ToolCallRequest.providerMeta} — echoed back verbatim on replay. */
+  providerMeta?: Record<string, unknown>;
 }
 
 /** The JSON-schema form of a tool handed to native tool-calling providers. */

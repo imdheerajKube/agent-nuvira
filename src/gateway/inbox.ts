@@ -15,7 +15,18 @@ import { randomUUID } from 'node:crypto';
 import { resolveBuffConfigDir } from '../config/paths.js';
 
 /** How an inbound message was handled by the registry. */
-export type InboundDisposition = 'pipeline' | 'chat' | 'help' | 'refused' | 'error';
+export type InboundDisposition =
+  | 'pipeline'
+  | 'chat'
+  | 'help'
+  | 'refused'
+  | 'error'
+  /**
+   * A re-delivery of a message already handled (bridge reconnect, offline
+   * backfill, webhook retry). Recorded for visibility, but NOT processed and
+   * NOT answered — the sender already has the answer.
+   */
+  | 'duplicate';
 
 /** One inbound message recorded by the gateway. */
 export interface InboxEntry {
@@ -31,6 +42,13 @@ export interface InboxEntry {
   isGroup?: boolean;
   /** What the gateway did with it. */
   handled: InboundDisposition;
+  /**
+   * Present on a `duplicate` entry: the id/fingerprint it collided with, so an
+   * operator can see WHY it was dropped rather than guessing.
+   */
+  dedupKey?: string;
+  /** For a `duplicate`: how many times this identity has now been seen. */
+  dedupCount?: number;
   /** The reply text sent back (when any). */
   reply?: string;
   /** When the message was received (epoch ms). */

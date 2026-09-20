@@ -100,6 +100,11 @@ describe('Session 46 reliability fixes — end-to-end', () => {
       model: 'test-model',
       prefillPlan: [WRITER_STEP],
       dryRun: true,
+      // This case pins the ONE-SHOT writer's parse discipline (Session 46):
+      // its `filepath:` fence format, its strict-format retry, and its
+      // failure classification. The tool-calling writer is the default now
+      // and speaks a different protocol — covered by the test below.
+      useToolCalling: false,
     });
 
     // The task recovered via repair — and the actual file change exists
@@ -127,6 +132,7 @@ describe('Session 46 reliability fixes — end-to-end', () => {
       model: 'test-model',
       prefillPlan: [WRITER_STEP],
       dryRun: true,
+      useToolCalling: false, // one-shot writer's parse-failure path (see above)
     });
 
     // Every attempt (initial + retry + 3 repair re-prompts) produced no
@@ -159,6 +165,7 @@ describe('Session 46 reliability fixes — end-to-end', () => {
         },
       ],
       dryRun: true,
+      useToolCalling: false, // one-shot writer/reviewer protocol (see above)
     });
 
     expect(result.success).toBe(true);
@@ -175,5 +182,39 @@ describe('Session 46 reliability fixes — end-to-end', () => {
     // description is embedded in the review prompt.
     expect(fake.prompts[3]).toContain('Implement the core logic in addon_handler.py');
     expect(fake.prompts[3]).toContain('## Changes to Review');
+  });
+
+  it('the DEFAULT tool-calling writer cannot report a false success either', async () => {
+    // Writer-tc protocol: prose alone proposes nothing. Attempt 1 is prose
+    // (no tool call) → the writer must FAIL, not stamp success:true; the
+    // repair re-prompt then emits a real propose_change tool call, which the
+    // loop executes, followed by the model's closing text.
+    // NOTE the double-escaped \n INSIDE the JSON string: a real newline makes
+    // the payload invalid JSON, the tool call never parses, and the test would
+    // silently measure the parse-failure path instead of the recovery path.
+    const TOOL_CALL =
+      '```json\n' +
+      '{"tool":"propose_change","args":{"path":"addon/addon_handler.py",' +
+      '"content":"import globalVars\\n\\ndef onInit():\\n    pass\\n"}}\n' +
+      '```';
+    const fake = fakeProvider([UNPARSEABLE_PROSE, TOOL_CALL, 'Done — registered the gesture.']);
+    createSpy.mockImplementation(() => fake as any);
+
+    const result = await orchestrator.execute('Build the NVDA addon shortcut', {
+      provider: 'local',
+      model: 'test-model',
+      prefillPlan: [WRITER_STEP],
+      dryRun: true,
+      // no useToolCalling → the DEFAULT (iterative) writer
+    });
+
+    // It recovered through repair and the deliverable really exists.
+    expect(result.stats?.repairAttempts).toBeGreaterThanOrEqual(1);
+    expect(result.stats?.recoveredFailures).toBe(1);
+    expect(result.fileChanges).toContain('addon/addon_handler.py');
+    // The first (prose-only) attempt failed loudly rather than reporting
+    // success with an empty deliverable — the repair prompt proves it reached
+    // the repair engine.
+    expect(fake.prompts.some((p) => p.includes('[REPAIR ATTEMPT 1]'))).toBe(true);
   });
 });

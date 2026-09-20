@@ -19,7 +19,7 @@
  */
 import { getQuotaLedger, accountIdForKey } from './quota-ledger.js';
 import { getKeyHygiene } from './key-hygiene.js';
-import { classifyFallbackError, extractRetryAfterMs, getProviderFallback, MIN_RATE_LIMIT_PARK_MS, recordRegistryFailure, } from './provider-fallback.js';
+import { classifyFallbackError, extractRetryAfterMs, getProviderFallback, isHarnessFault, MIN_RATE_LIMIT_PARK_MS, recordRegistryFailure, } from './provider-fallback.js';
 // ─── Session state ──────────────────────────────────────────────────────────
 /**
  * Per-session failure state that the caller owns (so the helper stays pure and
@@ -65,6 +65,39 @@ export function isModelSessionExcluded(session, providerType, model, now = Date.
  * session-level exclusion and the breaker's scoring cooldown expire together.
  */
 export const RATE_LIMIT_EXCLUSION_MS = 2 * 60 * 1000;
+// ─── T4 — RPM/TPM rapid-failure breaker ─────────────────────────────────────
+//
+// Free tiers meter requests/tokens PER MINUTE, but a 429 with no reset hint
+// only parked the provider for MIN_RATE_LIMIT_PARK_MS (10s) — shorter than the
+// minute an RPM window needs. A tool-heavy loop then re-picked the same free
+// provider on its very next step and 429ed again (observed live on the loop
+// engine: gemini free tier, limit 15 RPM, rapid tool-call steps). This breaker
+// watches for REPEATED failures of one provider inside a short window and
+// raises the park floor to a full minute, so the provider rests for the rest of
+// the window instead of hot-looping against it.
+export const RAPID_FAILURE_WINDOW_MS = 60 * 1000;
+export const RAPID_FAILURE_THRESHOLD = 3;
+export const RAPID_FAILURE_COOLDOWN_MS = 60 * 1000;
+/**
+ * Record one failure for a provider and report whether it has now failed
+ * `RAPID_FAILURE_THRESHOLD` times inside `RAPID_FAILURE_WINDOW_MS` — the point
+ * at which waiting the base park length would be pointless. State lives on the
+ * caller's session so a burst is measured per turn/run, never globally.
+ */
+export function recordRapidFailure(session, providerType, now = Date.now()) {
+    const map = (session.rapidFailures ??= new Map());
+    const times = (map.get(providerType) ?? []).filter((t) => now - t < RAPID_FAILURE_WINDOW_MS);
+    times.push(now);
+    map.set(providerType, times);
+    return times.length >= RAPID_FAILURE_THRESHOLD;
+}
+/** True when this provider is currently inside a rapid-failure window. */
+export function isRapidFailureProvider(session, providerType, now = Date.now()) {
+    const times = session.rapidFailures?.get(providerType);
+    if (!times)
+        return false;
+    return times.filter((t) => now - t < RAPID_FAILURE_WINDOW_MS).length >= RAPID_FAILURE_THRESHOLD;
+}
 /**
  * How long a server/network/timeout/unknown failure excludes a provider from
  * auto routing (ms). Shorter than rate-limit so a flaky-but-alive provider is
@@ -93,6 +126,30 @@ export const TRANSIENT_FAILURE_EXCLUSION_MS = 60 * 1000;
 export function recordActionFailure(session, providerType, err, configManager, options) {
     const failureKind = classifyFallbackError(err);
     const now = Date.now();
+    // ── 0. Harness faults are NOT provider or model failures ───────────────
+    // A deterministic request-shape rejection (Gemini's "function call is
+    // missing a thought_signature" being the live case that motivated this) fails
+    // identically for EVERY model on that provider, forever. Attributing it to the
+    // provider/model is the most corrupting thing that can happen to the learning
+    // loop: it parks a healthy provider, decays a healthy model's health score,
+    // opens the circuit breaker, and teaches the bandit "this model is weak" from
+    // a bug that would have broken any model on that transport — so the router
+    // then AVOIDS the model that was actually fine.
+    //
+    // Nothing is booked here on purpose: no session exclusion, no quota park, no
+    // registry write-through, no breaker trip. The FAILOVER still happens (the
+    // caller re-routes; a different provider's adapter may not share the defect) —
+    // only the attribution is withheld. Recorded on the quota timeline so the dash
+    // can show why a run failed without it ever touching routing scores.
+    if (isHarnessFault(err)) {
+        try {
+            getQuotaLedger().recordEvent('failover', providerType, 'harness-fault (not attributed)');
+        }
+        catch {
+            // Best-effort — event bookkeeping must not crash a call.
+        }
+        return;
+    }
     // ── 1. Session-level exclusion ────────────────────────────────────────
     if (failureKind === 'auth') {
         // Expired token/key — definitive for the rest of the session.
@@ -167,9 +224,17 @@ export function recordActionFailure(session, providerType, err, configManager, o
         //    limits — "try again in 16s" means exactly that, not "wait 24 hours")
         // 2. No hint but user configured windowMs → use it (represents the known window)
         // 3. No hint, no config → short default (10s) — a bare 429 means "try soon"
-        const parkMs = hintMs !== null
+        let parkMs = hintMs !== null
             ? Math.max(hintMs, MIN_RATE_LIMIT_PARK_MS) // provider hint wins (floored to prevent hot-loop)
             : hasExplicitConfig ? windowMs : MIN_RATE_LIMIT_PARK_MS;
+        // T4 — RPM/TPM rapid-failure escalation. Repeated failures of one provider
+        // inside the window mean its limit is being re-hit faster than it resets, so
+        // a 10s base park is useless — raise the floor to a full minute (the RPM
+        // window). A single blip still uses the short base park, so nothing regresses
+        // for a provider that merely hiccupped once.
+        if (recordRapidFailure(session, providerType, now)) {
+            parkMs = Math.max(parkMs, RAPID_FAILURE_COOLDOWN_MS);
+        }
         // PER-MODEL QUOTA KEY: park the model that ACTUALLY 429ed, not the whole
         // provider. Its siblings have their own limits and must stay routable
         // ("use every available model before giving up"). The registry mirrors the

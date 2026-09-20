@@ -36,19 +36,78 @@ import type { FollowupSuggestion, ToolJsonSchema } from '../tools/registry.js';
  * never throws, so the failover walk (which only fires on provider ERRORS)
  * accepted it and the confusion was delivered verbatim to the sender.
  *
- * Detection is deliberately conservative — the whole reply must look like
- * contract meta-talk, so a legitimate answer that merely MENTIONS a tool
- * ("I can run build for you") is never flagged:
- *  1. references the tool contract's own vocabulary (a known tool name or
- *     a tool/JSON/call-form noun phrase), AND
- *  2. is short (≤ 400 chars — real answers are longer), AND
- *  3. carries an apologetic/confused meta-tone (sorry/cannot/provided/incomplete…).
+ * TWO families are detected (both observed live; the second was previously
+ * slipping through in both WhatsApp and the dashboard):
+ *
+ *  A. CONTRACT META-TALK — the model narrates the contract: apologetic tone
+ *     plus contract nouns (tool names, "example call", "given schema",
+ *     "dictionary of tasks, actions, and their parameters").
+ *  B. CONTRACT-AS-REQUEST — the subtler and far more common failure: the
+ *     model reads the *suggest_followups* INSTRUCTION as the user's request
+ *     and answers by OFFERING to suggest things and asking the user to supply
+ *     the content. Real examples this now catches:
+ *       "Sure, I can help you with suggestions and followups. Please provide
+ *        me with more details so I can assist you better."
+ *       "Sure, I can help you with suggesting followups. Please provide some
+ *        details or a specific query you'd like me to suggest."
+ *       "I'm ready to help! Could you please provide more details about the
+ *        tasks or actions you'd like to perform or discuss?"
+ *       "Sure, I can help you with your suggestions. What do you need help with?"
+ * You cannot catch these by matching the literal tool name: the model
+ * PARAPHRASES it ("suggestions and followups", "suggesting followups"), which
+ * is why the old name-only test let them through.
+ *
+ * Both branches stay conservative so a legitimate answer is never flagged:
+ * branch A needs contract nouns AND a confused tone; branch B needs the
+ * suggest/followup vocabulary AND an offer-to-help or please-provide frame AND
+ * an explicit request for input (a "?" or an imperative ask). A real answer
+ * that merely mentions a tool ("Sure — I can call suggest_followups once the
+ * song is written.") satisfies neither: it has no confused tone, and its
+ * "I can call …" is not an offer to help.
  *
  * @param content  the model's visible reply text
  * @param tools    tool names to look for (defaults to suggest_followups —
  *                 the contract marker every turn ends with)
  */
 export declare function looksLikeConfusedScaffoldingReply(content: string, tools?: string[]): boolean;
+/**
+ * True when the provider rejected the request because the MODEL cannot do
+ * native tool/function calling at all.
+ *
+ * Live (Groq, via the fixed router):
+ *   400 {"error":{"message":"`tool calling` is not supported with this model",
+ *                "type":"invalid_request_error","param":"tool calling"}}
+ *
+ * This is NOT a transient failure and NOT a bad model choice by itself — many
+ * perfectly good models (and every server-tool agentic model) simply do not
+ * accept a `tools` array. Before this check the loop treated it as a hard
+ * generation failure, so the whole turn died even though the loop ALREADY
+ * ships a transport that needs no provider tool support (the JSON fallback:
+ * `buildJsonFallbackPrompt` + `extractFallbackToolCalls`). Callers use this to
+ * fall through to that transport instead of losing the turn.
+ */
+export declare function isToolCallingUnsupported(err: unknown): boolean;
+/**
+ * One canonical, human-readable line for a failed generation. Every surface
+ * (CLI chat, dashboard console, gateway) shows this instead of the provider's
+ * wire error.
+ */
+export declare const GENERATION_FAILURE_MESSAGE = "I couldn't complete that request just now \u2014 the language model was unavailable. Please try again in a moment.";
+/**
+ * Map a provider/runtime error to a SHORT, user-facing sentence.
+ *
+ * Why this exists: the tool loop used to interpolate the raw provider message
+ * into the delivered answer — `I couldn't complete that request (${message})` —
+ * so a messaging-app sender and the dashboard got a wall of provider JSON
+ * ("Gemini streaming tool-calling API error (429): {\"error\":{\"code\":429, …
+ * quotaValue … retryDelay …}") instead of a sentence. The raw text still goes
+ * to the logger and the reasoning trace; only the USER sees this.
+ *
+ * Categories mirror `classifyFallbackError` (learning/provider-fallback.ts),
+ * kept local on purpose: this module is imported by the chat hot path and by
+ * unit tests, so it must not drag the provider-factory/model-registry graph in.
+ */
+export declare function toUserFacingGenerationError(err: unknown): string;
 /**
  * S3 — salvage the model's generated content from a tool-calling 400.
  *

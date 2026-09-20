@@ -42,6 +42,14 @@ export interface InboundMessage {
   senderId?: string;
   /** P1 — true when the message came from a group/channel, not a DM. */
   isGroup?: boolean;
+  /**
+   * The transport's own message id, when the adapter exposes one (WhatsApp
+   * `key.id`, Telegram `message_id`, Slack `ts`, …). The gateway dedups on it
+   * so a re-delivered message (bridge reconnect, offline backfill, webhook
+   * retry) is handled ONCE. Adapters that expose no id leave it undefined and
+   * every delivery is treated as new (content dedup is opt-in — see dedup.ts).
+   */
+  messageId?: string;
 }
 
 /** The handler an adapter calls for every inbound message. */
@@ -436,7 +444,7 @@ export class WhatsAppBridgeAdapter implements ChannelAdapter {
 
   async start(onMessage: MessageHandler): Promise<void> {
     this.handler = onMessage;
-    await this.bridge.connect((fromJid, text, participant) => {
+    await this.bridge.connect((fromJid, text, participant, messageId) => {
       // `||` (not `??`): Baileys 7 can deliver participant as an EMPTY string
       // for DMs — an empty string is not nullish, so `??` would blank the
       // sender id and the policy gate would refuse every sender.
@@ -449,6 +457,9 @@ export class WhatsAppBridgeAdapter implements ChannelAdapter {
         // P1: the real author inside a group (participant) vs the chat itself.
         senderId: sender,
         isGroup: fromJid.endsWith('@g.us'),
+        // Idempotency: WhatsApp's `key.id` is stable across re-deliveries, so
+        // the gateway collapses the bridge's offline backfill into one turn.
+        messageId,
       });
     });
   }
@@ -2097,6 +2108,8 @@ export interface WebhookPayload {
   senderId?: string;
   /** P1 — true when the message came from a group/channel, not a DM. */
   isGroup?: boolean;
+  /** The platform's message id, when the webhook body carries one (dedup). */
+  messageId?: string;
 }
 
 /**

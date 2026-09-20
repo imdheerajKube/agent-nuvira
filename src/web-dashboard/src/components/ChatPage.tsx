@@ -1276,10 +1276,31 @@ export default function ChatPage() {
     void send(`Revise the skill draft "${name}" — improve it per your best judgment and present it again.`);
   }, [send]);
 
-  /** PA4 — save skill env vars from the secret request card. */
+  /**
+   * PA4 — save skill env vars from the secret request card.
+   *
+   * A REFUSED var must be reported, not dropped: the server declines provider
+   * credentials and invalid names, and staying silent here made a refused write
+   * indistinguishable from a saved one (the card closed, nothing was stored).
+   */
   const saveSecrets = useCallback(async (vars: Record<string, string>) => {
     const r = await dashboardAPI.saveSecrets(vars);
-    if (!r.ok) setError(r.error || 'Could not save secrets.');
+    if (!r.ok) {
+      setError(r.error || 'Could not save secrets.');
+      return;
+    }
+    const refused = r.refused ?? [];
+    if (refused.length > 0) {
+      setError(
+        refused
+          .map((x) =>
+            x.reason === 'provider-credential'
+              ? `${x.name} is a provider credential — set it up as a provider, skills never receive it.`
+              : `${x.name} was not saved (${x.reason}).`,
+          )
+          .join(' '),
+      );
+    }
   }, []);
 
   /**

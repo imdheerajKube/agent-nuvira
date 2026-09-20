@@ -42,6 +42,13 @@ export interface FailureSessionState {
      * historical provider-wide behavior.
      */
     sessionFailedModels?: Map<string, number>;
+    /**
+     * T4 — provider → recent failure timestamps (ms epoch) for the RPM/TPM
+     * rapid-failure breaker. Scoped to THIS session/turn on purpose: a burst of
+     * failures inside one tool loop is what escalates, and state must never leak
+     * across unrelated runs. Optional — callers that omit it just never escalate.
+     */
+    rapidFailures?: Map<string, number[]>;
 }
 /** How many DISTINCT models of one provider must rate-limit before the limit
  * is treated as provider-wide (shared TPM) and escalated to a provider park. */
@@ -60,6 +67,18 @@ export declare function isModelSessionExcluded(session: FailureSessionState, pro
  * session-level exclusion and the breaker's scoring cooldown expire together.
  */
 export declare const RATE_LIMIT_EXCLUSION_MS: number;
+export declare const RAPID_FAILURE_WINDOW_MS: number;
+export declare const RAPID_FAILURE_THRESHOLD = 3;
+export declare const RAPID_FAILURE_COOLDOWN_MS: number;
+/**
+ * Record one failure for a provider and report whether it has now failed
+ * `RAPID_FAILURE_THRESHOLD` times inside `RAPID_FAILURE_WINDOW_MS` — the point
+ * at which waiting the base park length would be pointless. State lives on the
+ * caller's session so a burst is measured per turn/run, never globally.
+ */
+export declare function recordRapidFailure(session: FailureSessionState, providerType: string, now?: number): boolean;
+/** True when this provider is currently inside a rapid-failure window. */
+export declare function isRapidFailureProvider(session: FailureSessionState, providerType: string, now?: number): boolean;
 /**
  * How long a server/network/timeout/unknown failure excludes a provider from
  * auto routing (ms). Shorter than rate-limit so a flaky-but-alive provider is

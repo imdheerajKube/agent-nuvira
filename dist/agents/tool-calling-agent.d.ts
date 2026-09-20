@@ -89,6 +89,25 @@ export declare abstract class ToolCallingAgent extends Agent {
     protected abstract buildUserPrompt(context: AgentContext): string;
     /** Parse the LLM response to extract tool calls or final text */
     protected abstract parseResponse(response: string): ParsedResponse;
+    /**
+     * Whether a final text response that proposed NO file changes is a success.
+     *
+     * Default `true`: for a reviewing/explaining agent the text IS the
+     * deliverable. An agent whose contract is "produce these file changes" MUST
+     * override this — otherwise a response that never emitted a usable tool call
+     * is stamped `success: true` with an empty deliverable, which is the exact
+     * "masked success" bug Session 46 removed from the one-shot writer
+     * (`WriterAgent` fails with `Writer produced no parseable output`). The
+     * tool-calling writer inherited that bug by returning
+     * `changeCount > 0 || !!parsed.text`.
+     */
+    protected acceptNoChangeOutcome(_context: AgentContext, _text: string): boolean;
+    /** Summary + error for the rejected no-change case (see above). Overridable
+     *  so the surfaced failure names the agent's own deliverable contract. */
+    protected noChangeFailure(): {
+        summary: string;
+        error: string;
+    };
     /** Build the tool definitions section of the prompt */
     protected buildToolDefinitionsPrompt(tools: AgentTool[]): string;
     /** Execute the tool-calling loop */

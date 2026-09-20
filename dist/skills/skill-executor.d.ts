@@ -11,6 +11,8 @@
  * 3. Spawns a sandboxed process with API keys injected
  * 4. Captures output and returns it to the agent
  */
+import { PROVIDER_ENV_BLOCKLIST } from '../config/provider-env.js';
+export { PROVIDER_ENV_BLOCKLIST };
 export type SkillRuntime = 'python' | 'node' | 'shell' | 'ruby' | 'go' | 'rust' | 'auto';
 export interface SkillExecutionResult {
     success: boolean;

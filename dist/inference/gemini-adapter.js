@@ -283,6 +283,9 @@ export class GeminiAdapter {
             id: `call_${i + 1}`,
             name: fc.name,
             arguments: fc.args ?? {},
+            // Must survive the round trip: Gemini requires its own thoughtSignature
+            // back on the next turn's functionCall part (see ToolCallRequest).
+            ...(fc.thoughtSignature ? { providerMeta: { thoughtSignature: fc.thoughtSignature } } : {}),
         }));
         // Cost parity with generate(): meter tool-calling turns too.
         try {

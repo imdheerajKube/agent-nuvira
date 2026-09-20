@@ -65,6 +65,19 @@ export interface SingleShotAutoOptions {
      * skips it while other keys of the same provider stay usable.
      */
     recordFailure: (providerType: string, model: string | undefined, err: unknown, apiKey?: string) => void;
+    /**
+     * Optional pre-walk revival: re-verify transiently-failed providers and
+     * re-admit the ones that recovered, BEFORE the route is computed. The caller
+     * owns its session state (this walk only consumes the route), so it supplies
+     * the sweep.
+     *
+     * Without it, an exclusion armed minutes ago still hides a provider that has
+     * been healthy ever since — the failure this hook exists to close. Callers
+     * that pass `failureSession` to `recordActionFailure` should pass a sweep over
+     * the same session, so the round-trip (fail → cool down → prove recovery →
+     * route again) actually completes instead of only ever going one way.
+     */
+    revive?: () => Promise<void>;
 }
 /**
  * Run the single-shot auto walk: route → try ranked candidates in order →

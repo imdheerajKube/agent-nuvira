@@ -47,24 +47,42 @@ import { resetModelRegistry, getModelRegistry } from '../../src/learning/model-r
 import { PROVIDER_CONTEXT_WINDOWS } from '../../src/learning/model-selection.js';
 import { CATALOG_PROVIDER_IDS } from '../../src/inference/provider-catalog.js';
 
-// ─── Bandit test isolation ─────────────────────────────────────────────────
+// ─── Learning-state test isolation ─────────────────────────────────────────
+//
+// resolve() consults MORE than the bandit: it reads the persisted model registry
+// (`$NUVIRA_MEMORY_DIR/model-registry.json`), which tracks verified/unavailable
+// counts per provider. If a developer's real live runs marked a provider DEGRADED
+// (0 verified + ≥3 unavailable), that provider is silently dropped from the
+// candidate set and this file stops measuring the code — it measures the
+// developer's machine. That is exactly how `minReasoning eliminates
+// weak-reasoning providers` became environment-dependent rather than a real
+// routing bug.
+//
+// So isolate the WHOLE file (not only the bandit describes): point the memory dir
+// at a fresh temp dir and drop the singletons that cache real learning state.
+let isolatedMemoryDir: string;
 
-let banditTempDir: string;
-
-function isolateBandit() {
-  banditTempDir = mkdtempSync(join(tmpdir(), 'buff-autorouter-bandit-'));
-  process.env.NUVIRA_MEMORY_DIR = banditTempDir;
+function isolateLearningState() {
+  isolatedMemoryDir = mkdtempSync(join(tmpdir(), 'buff-autorouter-'));
+  process.env.NUVIRA_MEMORY_DIR = isolatedMemoryDir;
   resetRouterBandit();
+  resetRouterPromotion();
+  resetModelRegistry();
 }
 
-function cleanupBandit() {
+function cleanupLearningState() {
   delete process.env.NUVIRA_MEMORY_DIR;
   resetRouterBandit();
   resetRouterPromotion();
-  if (banditTempDir) {
-    rmSync(banditTempDir, { recursive: true, force: true });
+  resetModelRegistry();
+  if (isolatedMemoryDir) {
+    rmSync(isolatedMemoryDir, { recursive: true, force: true });
   }
 }
+
+// File-scoped: every test in this file runs against an empty learning state.
+beforeEach(isolateLearningState);
+afterEach(cleanupLearningState);
 
 // ─── Mocks for runtime-stats tests ─────────────────────────────────────────
 
@@ -875,14 +893,8 @@ describe('useRuntimeStats', () => {
 // ─── Bandit learning (useBandit) ───────────────────────────────────────────
 
 describe('AutoModelRouter.resolve with bandit learning', () => {
-  beforeEach(() => {
-    isolateBandit();
-  });
-
-  afterEach(() => {
-    cleanupBandit();
-  });
-
+  // Learning state is isolated for the whole file (see the file-level hooks
+  // above), so no per-describe setup is needed here.
   it('marks the decision as bandit-routed when useBandit is enabled', () => {
     const decision = new AutoModelRouter().resolve('writer', 'implement a login form', {
       allowedProviders: ['groq', 'gemini', 'openrouter'],
@@ -1040,14 +1052,6 @@ describe('AutoModelRouter.resolve with bandit learning', () => {
 // that HAS learned data — a strictly better cold-start policy.
 
 describe('AutoModelRouter.resolve uncertainty escalation', () => {
-  beforeEach(() => {
-    isolateBandit();
-  });
-
-  afterEach(() => {
-    cleanupBandit();
-  });
-
   /** Force θ = 1 on every bandit draw so the winner is deterministic (the
    * deterministic ranking) and escalation behavior is fully predictable. */
   function deterministicSampling(): { mockRestore: () => void } {
@@ -1376,17 +1380,8 @@ describe('AutoModelRouter.resolve hard constraints', () => {
 // ─── Routing rules ─────────────────────────────────────────────────────────
 
 describe('AutoModelRouter.resolve routing rules', () => {
-  // The rule+bandit regression test writes bandit state, so isolate the whole
-  // describe to avoid polluting the developer's real ~/.nuvira/memory and to
-  // keep the singleton clean between tests.
-  beforeEach(() => {
-    isolateBandit();
-  });
-
-  afterEach(() => {
-    cleanupBandit();
-  });
-
+  // The rule+bandit regression test writes bandit state; the file-level hooks
+  // above already isolate the learning state for every test in this file.
   it('a matching rule forces the provider and marks routedBy = rule', () => {
     const decision = new AutoModelRouter().resolve('writer', 'generate a sales email for Acme Corp', {
       rules: [{
@@ -2326,5 +2321,59 @@ describe('AutoModelRouter.resolve — promotion-gate enforcement', () => {
       promotionMinDecisions: 20,
     }, makeConfig());
     expect(decision.routedBy).toBe('bandit');
+  });
+});
+
+// ─── R4 — agentic capability floor ──────────────────────────────────────────
+// Effective capability is `model × (1 − harness tax)`: a multi-step agentic task
+// needs the SERVED model to hold a tool loop across turns. Auto must not hand a
+// complex task to a model too small to run one — that is a doomed run which then
+// gets booked as a model failure, teaching the bandit a lesson about the model
+// when the mismatch was the router's.
+
+describe('R4 — agentic capability floor', () => {
+  /** Pin each provider to an explicit served model (the router's real pin path). */
+  const pinnedConfig = (models: Record<string, string>) =>
+    ({
+      getProviderConfig: (p: string) => ({ config: { model: models[p] } }),
+      getAll: () => ({}),
+      hasRequiredCredentials: () => true,
+    }) as any;
+
+  const bothProviders = pinnedConfig({ local: 'qwen2.5:0.5b', groq: 'openai/gpt-oss-120b' });
+  const opts = { allowedProviders: ['local', 'groq'] };
+
+  it('eliminates a tiny served model for an agentic (complex) task', () => {
+    const decision = new AutoModelRouter().resolve('writer', 'deploy to production', opts, bothProviders);
+    // `deploy to production` is critical → agentic. The 0.5B local model cannot
+    // hold a tool loop, so it must not even be a candidate.
+    expect(decision.complexity).toBe('critical');
+    expect(decision.ranked.map((r) => r.provider)).not.toContain('local');
+    expect(decision.provider).toBe('groq');
+  });
+
+  it('keeps the same tiny model for a NON-agentic (trivial) task', () => {
+    // The floor is about AGENTIC work, not about banning small models: a trivial
+    // one-shot is exactly what a tiny local model is for (free, fast, local).
+    const decision = new AutoModelRouter().resolve('writer', 'format this code', opts, bothProviders);
+    expect(decision.complexity).toBe('trivial');
+    expect(decision.ranked.map((r) => r.provider)).toContain('local');
+  });
+
+  it('judges the SERVED model, so a provider hosting both keeps its strong entry', () => {
+    // `local` serves a real model here — the floor must not eliminate `local`
+    // merely because that provider CAN serve a tiny model.
+    const mixed = pinnedConfig({ local: 'llama3.1:70b', groq: 'openai/gpt-oss-120b' });
+    const decision = new AutoModelRouter().resolve('writer', 'deploy to production', opts, mixed);
+    expect(decision.ranked.map((r) => r.provider)).toContain('local');
+  });
+
+  it('never dead-ends: falls back to the full ranking when the floor would eliminate everyone', () => {
+    // Both providers pinned tiny. Returning no route would be worse than
+    // returning the best of a bad set (auto must always produce a pick).
+    const allTiny = pinnedConfig({ local: 'qwen2.5:0.5b', groq: 'llama3.2:1b' });
+    const decision = new AutoModelRouter().resolve('writer', 'deploy to production', opts, allTiny);
+    expect(decision.ranked.length).toBeGreaterThan(0);
+    expect(decision.provider).toBeTruthy();
   });
 });

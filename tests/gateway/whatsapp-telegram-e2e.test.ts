@@ -39,7 +39,19 @@ beforeAll(() => {
     JSON.stringify({
       defaultProvider: 'local',
       providers: {
-        local: { runner: 'ollama', model: 'nonexistent-fast-fail', temperature: 0.7, maxTokens: 1024 },
+        // `baseUrl` points at a closed port: the model is deliberately fake and
+        // the endpoint is deliberately dead, so the pipeline fails FAST and
+        // hermetically. Without it, the model validator "repairs" the fake pin
+        // by substituting a real installed Ollama model and actually runs local
+        // inference, which made these tests take ~20s each and depend on the
+        // developer's machine.
+        local: {
+          runner: 'ollama',
+          model: 'nonexistent-fast-fail',
+          baseUrl: 'http://127.0.0.1:9',
+          temperature: 0.7,
+          maxTokens: 1024,
+        },
       },
     }),
   );

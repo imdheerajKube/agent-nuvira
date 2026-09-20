@@ -11,6 +11,7 @@ import { resolveProvider } from './router.js';
 import { getAutoRouter } from '../learning/auto-router.js';
 import { recordRegistrySuccess } from '../learning/provider-fallback.js';
 import { recordActionFailure } from '../learning/failure-bookkeeping.js';
+import { sweepTransientFailures, sessionRevivalStore } from '../learning/provider-revival.js';
 import { runSingleShotAuto } from './failover-runner.js';
 import { PIIPolicyError, GovernancePolicyError } from '../learning/auto-router.js';
 import { buildAutoResolveOptions } from '../learning/resolve-options.js';
@@ -18,7 +19,7 @@ import { estimateTokens } from '../learning/cost-tracker.js';
 import { parseRequestSync } from '../nlu/parser.js';
 import { resolveDispatch } from '../nlu/actions.js';
 import { contractFromParsed, renderContractCard } from '../nlu/contract.js';
-import { maybeAutoRecall, recallCard, recallContextBlock } from '../context/session-recall.js';
+import { maybeAutoRecall, recallCard, recallContextBlock, recallPolicy } from '../context/session-recall.js';
 import { maybeRunBackgroundDuties } from './duties.js';
 /**
  * Plan command — generate implementation plans for code changes
@@ -128,13 +129,18 @@ Use clear markdown formatting.`;
             // project's prior work into the plan prompt (cross-command parity with
             // chat/execute). Best-effort — never breaks plan.
             try {
-                if (parsedTask.intent === 'continue') {
+                // Ambient recall (see recallPolicy): a plan no longer has to be phrased
+                // as a continuation to know what this project already did.
+                const recallPolicyDecision = recallPolicy({ intent: parsedTask.intent });
+                if (recallPolicyDecision.recall) {
                     const recall = await maybeAutoRecall(process.cwd(), this.configManager.getWorkspaceStore());
                     if (recall) {
-                        // Pause the live board so the recall card prints cleanly (TTY).
-                        board.stop();
-                        console.log(recallCard(recall));
-                        board.start('Generating plan...');
+                        if (recallPolicyDecision.announce) {
+                            // Pause the live board so the recall card prints cleanly (TTY).
+                            board.stop();
+                            console.log(recallCard(recall));
+                            board.start('Generating plan...');
+                        }
                         prompt = `${recallContextBlock(recall)}\n\n${prompt}`;
                     }
                 }
@@ -162,6 +168,14 @@ Use clear markdown formatting.`;
                 action: 'plan',
                 task,
                 configManager: this.configManager,
+                // Re-admit recovered providers before routing: the transient-failure
+                // marker was allocated on this path and never read, so a provider that
+                // recovered mid-session stayed excluded from every later plan.
+                revive: async () => {
+                    await sweepTransientFailures(sessionRevivalStore(failureSession), this.configManager, {
+                        agentType: 'plan',
+                    });
+                },
                 // Primary = the picked provider (explicit or default). Ranked =
                 // auto-router's ranked providers minus the primary + this-run
                 // exclusions, so plan never re-tries a provider that already failed.

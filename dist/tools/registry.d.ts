@@ -45,9 +45,21 @@ export interface Tool {
     /** zod input schema — the same schema handed to tool-calling providers. */
     inputSchema: ZodType;
     /**
-     * Whether executing this tool should continue the loop after it returns.
-     * `false` (e.g. suggest_followups) lets the model end the turn right after
-     * (endsAgentStep semantics).
+     * Whether a SUCCESSFUL call to this tool ends the agent step: the tool's
+     * result is then delivered as the step's answer instead of asking the model
+     * for one more step (see the endsAgentStep exit in tool-loop.ts).
+     *
+     * This is set on the DISPENSER tools whose call runs an entire task on its
+     * own — `build`/`resume`/`repair`/`document`/`website`/`analyze`/`test`/
+     * `publish` — because their result text already IS the deliverable. Every
+     * ordinary tool (a read, an edit, a search) and every CONTROL tool
+     * (`ask_user` — its result is the user's answer, which the model must act
+     * on; `suggest_followups` — it closes the turn through its own followups
+     * path) is `false`.
+     *
+     * NOTE: this docstring previously stated the OPPOSITE (`true` = continue),
+     * which contradicted every registration — and nothing read the field, so the
+     * declared semantics did nothing at all.
      */
     endsAgentStep: boolean;
     /** What runs. Returns the tool-result text fed back to the model. */
@@ -147,13 +159,13 @@ export interface AskUserAnswer {
     /** Free text when the user typed a custom answer. */
     custom?: string;
 }
-/** A follow-up recommendation. */
-export interface FollowupSuggestion {
-    /** The full prompt sent as the next user message when clicked. */
-    prompt: string;
-    /** Optional short display label (defaults to the prompt). */
-    label?: string;
-}
+/**
+ * A follow-up recommendation. Defined in the dependency-free leaf module
+ * (`followup-utils.ts`) and re-exported here so the many existing importers of
+ * `FollowupSuggestion` from the registry keep working unchanged.
+ */
+import type { FollowupSuggestion } from './followup-utils.js';
+export type { FollowupSuggestion } from './followup-utils.js';
 /** Sink collecting `suggest_followups` calls during a loop. */
 export interface FollowupSink {
     push(followup: FollowupSuggestion): void;
@@ -186,8 +198,8 @@ export declare const gitToolSchema: z.ZodObject<{
     action: z.ZodEnum<{
         status: "status";
         log: "log";
-        commit: "commit";
         diff: "diff";
+        commit: "commit";
     }>;
     message: z.ZodOptional<z.ZodString>;
     files: z.ZodOptional<z.ZodArray<z.ZodString>>;
@@ -232,9 +244,9 @@ export declare const planTodoSchema: z.ZodObject<{
     }, z.core.$strip>>>;
     id: z.ZodOptional<z.ZodString>;
     status: z.ZodOptional<z.ZodEnum<{
+        running: "running";
         done: "done";
         pending: "pending";
-        running: "running";
         blocked: "blocked";
     }>>;
 }, z.core.$strip>;
@@ -281,4 +293,5 @@ export declare const TOOL_CONTRACT_JSON = "You have tools available. Call them w
  * unparseable or schema-invalid (callers fall back to rule-based suggestions).
  */
 export declare function toFollowupSuggestions(raw: string): FollowupSuggestion[];
+export { MAX_FOLLOWUPS, MAX_FOLLOWUP_PROMPT_CHARS, MAX_FOLLOWUP_LABEL_CHARS, normalizeFollowups, FOLLOWUP_CONTINUATION_MARKER, buildFollowupContinuationPrompt, isFollowupContinuation, isSuggestedFollowup, } from './followup-utils.js';
 //# sourceMappingURL=registry.d.ts.map

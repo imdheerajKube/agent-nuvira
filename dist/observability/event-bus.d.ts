@@ -223,20 +223,15 @@ export declare class LoggerConsumer implements EventBusConsumer {
 /**
  * DAGConsumer — Pushes events to the web dashboard DAG visualization.
  *
- * Uses dynamic import to gracefully handle the case where the dashboard
- * module hasn't been built or isn't available.
+ * Reaches the DAG through `observability/dag-bridge.ts` — the dashboard
+ * registers its implementation there when it loads. This replaces an
+ * `await import('../web-dashboard/server.js')` that (a) added an upward edge
+ * from the observability layer into the web layer and (b) made CLI runs load
+ * the whole dashboard module to update state no one could read.
  */
 export declare class DAGConsumer implements EventBusConsumer {
     readonly name = "DAGConsumer";
     private unsubscribers;
-    private dagModule;
-    private loadAttempted;
-    /**
-     * Ensure the dashboard module is loaded for the given event.
-     * Uses lazy initialization per-event to avoid race conditions where
-     * events arrive before the async import completes.
-     */
-    private ensureForEvent;
     attach(bus: EventBus): void;
     detach(_bus: EventBus): void;
 }

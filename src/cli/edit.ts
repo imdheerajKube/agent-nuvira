@@ -11,8 +11,9 @@ import { runSingleShotAuto } from './failover-runner.js';
 import { parseRequestSync } from '../nlu/parser.js';
 import { resolveDispatch } from '../nlu/actions.js';
 import { contractFromParsed, renderContractCard } from '../nlu/contract.js';
-import { maybeAutoRecall, recallCard, recallContextBlock } from '../context/session-recall.js';
+import { maybeAutoRecall, recallCard, recallContextBlock, recallPolicy } from '../context/session-recall.js';
 import { recordActionFailure, type FailureSessionState } from '../learning/failure-bookkeeping.js';
+import { sweepTransientFailures, sessionRevivalStore } from '../learning/provider-revival.js';
 import { resolveProvider } from './router.js';
 
 /**
@@ -195,10 +196,13 @@ export class EditCommand extends BaseCommand {
       // chat/execute/plan). Best-effort — never breaks edit.
       try {
         const parsedEdit = parseRequestSync(instruction);
-        if (parsedEdit.intent === 'continue') {
+        // Ambient recall (see recallPolicy): an edit no longer has to be phrased
+        // as a continuation to learn what this project already did.
+        const recallPolicyDecision = recallPolicy({ intent: parsedEdit.intent });
+        if (recallPolicyDecision.recall) {
           const recall = await maybeAutoRecall(process.cwd(), this.configManager.getWorkspaceStore());
           if (recall) {
-            console.log(recallCard(recall));
+            if (recallPolicyDecision.announce) console.log(recallCard(recall));
             prompt = `${recallContextBlock(recall)}\n\n${prompt}`;
           }
         }
@@ -208,6 +212,16 @@ export class EditCommand extends BaseCommand {
         action: 'edit',
         task: instruction,
         configManager: this.configManager,
+        // Re-admit any provider that recovered from a transient failure before
+        // the route is computed. Without this the marker armed by
+        // recordActionFailure was written and never read on this path — an
+        // exclusion stayed in force for the whole edit even after the provider
+        // came back.
+        revive: async () => {
+          await sweepTransientFailures(sessionRevivalStore(failureSession), this.configManager, {
+            agentType: 'edit',
+          });
+        },
         route: async (excludeProviders) => {
           // C3: the NLU parser seeds the router task-intent (cross-command
           // parity — same choke point as chat/execute/plan).

@@ -12,25 +12,20 @@
  * Hermes reference: tools/skills_tool.py:_capture_required_environment_variables()
  */
 import { existsSync, readFileSync } from 'fs';
-import { envBuff, resolveNuviraHome } from '../config/paths.js';
-import { join } from 'path';
-import { homedir } from 'os';
+import { resolveNuviraEnvFile } from '../config/paths.js';
+import { isProviderEnvBlocked } from '../config/provider-env.js';
 import { logger } from '../utils/logger.js';
 // ─── Env File Resolution ──────────────────────────────────────────────────
 /**
  * Resolve the path to the .env file.
- * Priority: NUVIRA_ENV_FILE > NUVIRA_ENV_FILE > ~/.nuvira/.env > ~/.nuvira/.env
+ * Priority: NUVIRA_ENV_FILE / BUFF_ENV_FILE > <active config dir>/.env
+ *
+ * Delegates to the shared resolver so secret capture agrees with loadEnv() and
+ * honours `NUVIRA_CONFIG_DIR` — a hardcoded `~/.nuvira/.env` here meant an
+ * isolated process could read AND write the real profile's credentials.
  */
 function envFilePath() {
-    if (process.env.NUVIRA_ENV_FILE && process.env.NUVIRA_ENV_FILE.trim().length > 0)
-        return process.env.NUVIRA_ENV_FILE;
-    const override = envBuff('ENV_FILE');
-    if (override && override.trim().length > 0)
-        return override;
-    const nuviraEnv = join(homedir(), '.nuvira', '.env');
-    if (existsSync(nuviraEnv))
-        return nuviraEnv;
-    return join(resolveNuviraHome(), '.env');
+    return resolveNuviraEnvFile();
 }
 // ─── Core Functions ───────────────────────────────────────────────────────
 /**
@@ -124,13 +119,21 @@ export function getEnvVarValue(varName) {
  * Save or update a value in ~/.nuvira/.env (or ~/.nuvira/.env).
  * Preserves existing lines, adds new ones at the end.
  */
-export function saveEnvValue(key, value) {
+export function saveEnvValue(key, value, opts = {}) {
     const path = envFilePath();
     const cleaned = value.replace(/[\r\n]/g, '');
     // Validate env var name
     if (!/^[A-Za-z_][A-Za-z0-9_]*$/.test(key)) {
         logger.error(`Invalid environment variable name: ${key}`);
-        return { success: false, path };
+        return { success: false, path, reason: 'invalid-name' };
+    }
+    // Provider credentials are refused unless a caller explicitly opts in.
+    // Without this the dashboard's 🔒 badge was decorative: the endpoint accepted
+    // the key and wrote it, so a "blocked" row could be saved through the API.
+    if (!opts.allowProviderCredential && isProviderEnvBlocked(key)) {
+        logger.warn(`Refusing to store ${key} as a skill secret — it is a provider credential. ` +
+            'Configure it through provider setup instead.');
+        return { success: false, path, reason: 'provider-credential' };
     }
     const ENV_LINE_RE = /^(export\s+)?([A-Za-z_][A-Za-z0-9_]*)\s*=/;
     const pending = new Map();
@@ -170,7 +173,57 @@ export function saveEnvValue(key, value) {
     }
     catch (err) {
         logger.error(`Failed to write env file: ${err}`);
-        return { success: false, path };
+        return { success: false, path, reason: 'write-failed' };
+    }
+}
+/**
+ * Remove an env var from the .env file.
+ *
+ * Rewrites the file keeping every other line — comments, blank lines and
+ * ordering — byte-for-byte, so deleting one secret never reshuffles the file
+ * a user hand-edited. Removes `KEY=...` in both plain and `export KEY=` forms,
+ * and drops only the FIRST match (a duplicate later in the file is a different
+ * line, and removing it too would be surprising).
+ *
+ * A missing file, or a key that was never there, is a SUCCESS: the caller's
+ * intent ("this var should not be set") already holds, and reporting failure
+ * would make the dashboard surface a pointless error.
+ */
+export function deleteEnvValue(key) {
+    const path = envFilePath();
+    if (!/^[A-Za-z_][A-Za-z0-9_]*$/.test(key)) {
+        return { success: false, path, removed: false, reason: 'invalid-name' };
+    }
+    if (!existsSync(path)) {
+        return { success: true, path, removed: false };
+    }
+    const ENV_LINE_RE = /^(export\s+)?([A-Za-z_][A-Za-z0-9_]*)\s*=/;
+    const lines = readFileSync(path, 'utf-8').split(/\r?\n/);
+    const kept = [];
+    let removed = false;
+    for (const rawLine of lines) {
+        const m = rawLine.match(ENV_LINE_RE);
+        if (!removed && m && m[2] === key) {
+            removed = true;
+            continue;
+        }
+        kept.push(rawLine);
+    }
+    if (!removed) {
+        return { success: true, path, removed: false };
+    }
+    try {
+        const { writeFileSync } = require('fs');
+        // Drop the trailing empty element left by the final newline, then re-add
+        // exactly one — matching saveEnvValue's file shape.
+        const body = kept.filter((l, i) => !(i === kept.length - 1 && l === '')).join('\n');
+        writeFileSync(path, body.length > 0 ? `${body}\n` : '', 'utf-8');
+        logger.debug(`Removed ${key} from ${path}`);
+        return { success: true, path, removed: true };
+    }
+    catch (err) {
+        logger.error(`Failed to write env file: ${err}`);
+        return { success: false, path, removed: false, reason: 'write-failed' };
     }
 }
 // ─── Interactive Capture ──────────────────────────────────────────────────
@@ -218,10 +271,11 @@ async function promptCli(entries) {
  */
 export async function captureSecrets(skillName, missingEntries, surface = 'cli') {
     if (missingEntries.length === 0) {
-        return { missingNames: [], setupSkipped: false, storedVars: [] };
+        return { missingNames: [], setupSkipped: false, storedVars: [], blockedNames: [] };
     }
     const storedVars = [];
     const missingNames = [];
+    const blockedNames = [];
     let setupSkipped = false;
     // Filter out optional vars that aren't set — we'll prompt but allow skip
     const requiredMissing = missingEntries.filter(e => !e.optional);
@@ -244,7 +298,16 @@ export async function captureSecrets(skillName, missingEntries, surface = 'cli')
         for (const entry of missingEntries) {
             const value = answers.get(entry.name);
             if (value && value.length > 0) {
-                saveEnvValue(entry.name, value);
+                const saved = saveEnvValue(entry.name, value);
+                if (!saved.success) {
+                    // Refused (provider credential / invalid name). Do not claim it was
+                    // stored, and do not silently set it in-process either — that would
+                    // make the refusal meaningless for this run.
+                    blockedNames.push(entry.name);
+                    missingNames.push(entry.name);
+                    logger.warn(`${entry.name} was not stored (${saved.reason ?? 'refused'})`);
+                    continue;
+                }
                 process.env[entry.name] = value; // Also set in current process
                 storedVars.push(entry.name);
                 logger.success(`Saved ${entry.name}`);
@@ -278,7 +341,7 @@ export async function captureSecrets(skillName, missingEntries, surface = 'cli')
             console.log('');
         }
     }
-    return { missingNames, setupSkipped, storedVars };
+    return { missingNames, setupSkipped, storedVars, blockedNames };
 }
 /**
  * Check which required env vars are missing for a skill.

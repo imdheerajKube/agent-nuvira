@@ -63,3 +63,6 @@ src/fresh.ts
 src/forwarded.ts
 src/a.ts
 src/b.ts
+
+# Live A/B probe results (tests/live/followup-live.test.ts) — local evidence, not source
+tests/live/out-*.json

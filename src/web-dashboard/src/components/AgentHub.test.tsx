@@ -214,6 +214,16 @@ describe('AgentHub', () => {
     expect(sendMock).not.toHaveBeenCalled();
   });
 
+  /**
+   * The Permissions section is COLLAPSED by default (the page carries several
+   * long sections), so the per-platform cards — and the masked or full ids they
+   * hold — only exist in the DOM once it is expanded. The heading that toggles
+   * it is always rendered, which is what these tests wait on.
+   */
+  function expandPermissions(): void {
+    fireEvent.click(screen.getByText(/Permissions — who can TRIGGER the agent/));
+  }
+
   /** The whatsapp card on the Permissions section (scoped — the label also renders in the transports list). */
   function whatsappCard(): HTMLElement {
     const card = screen
@@ -229,7 +239,8 @@ describe('AgentHub', () => {
     render(<AgentHub />);
     await waitFor(() => expect(screen.getByRole('tab', { name: /Tools/ })).toBeTruthy());
     fireEvent.click(screen.getByRole('tab', { name: /Channels/ }));
-    await waitFor(() => expect(screen.getByText(/Saved contacts \(validated list\)/)).toBeTruthy());
+    await waitFor(() => expect(screen.getByText(/Permissions — who can TRIGGER the agent/)).toBeTruthy());
+    expandPermissions();
 
     const card = whatsappCard();
     fireEvent.change(within(card).getByPlaceholderText('Name (optional)'), { target: { value: 'Sam' } });
@@ -238,7 +249,7 @@ describe('AgentHub', () => {
 
     // The new chip shows the MASKED sender id with a pending marker — the
     // personal name and the full number must NOT appear anywhere.
-    expect(within(card).getByText(/\+91\*\*\*.*pending/)).toBeTruthy();
+    expect(within(card).getByText(/\+91\*+.*· pending/)).toBeTruthy();
     expect(screen.queryByText('Sam')).toBeNull();
     expect(screen.queryByText('+919999999999')).toBeNull();
     expect(screen.queryByText('919999999999')).toBeNull();
@@ -251,7 +262,8 @@ describe('AgentHub', () => {
     render(<AgentHub />);
     await waitFor(() => expect(screen.getByRole('tab', { name: /Tools/ })).toBeTruthy());
     fireEvent.click(screen.getByRole('tab', { name: /Channels/ }));
-    await waitFor(() => expect(screen.getByText(/Saved contacts \(validated list\)/)).toBeTruthy());
+    await waitFor(() => expect(screen.getByText(/Permissions — who can TRIGGER the agent/)).toBeTruthy());
+    expandPermissions();
 
     // No unsaved banner before any edit.
     expect(screen.queryByText(/Unsaved changes/)).toBeNull();
@@ -278,6 +290,10 @@ describe('AgentHub', () => {
     await waitFor(() => expect(screen.getByRole('tab', { name: /Tools/ })).toBeTruthy());
     fireEvent.click(screen.getByRole('tab', { name: /Channels/ }));
     await waitFor(() => expect(screen.getByText(/Delivery ledger/)).toBeTruthy());
+    // The fixture's numbers live in the permissions policies, which render
+    // inside the collapsed section — expand it so masking is actually tested
+    // (a collapsed panel would make "not found" pass vacuously).
+    expandPermissions();
 
     // Masked by default — the full fixture number never appears.
     expect(screen.queryByText('+919876543210')).toBeNull();
@@ -307,7 +323,8 @@ describe('AgentHub', () => {
     render(<AgentHub />);
     await waitFor(() => expect(screen.getByRole('tab', { name: /Tools/ })).toBeTruthy());
     fireEvent.click(screen.getByRole('tab', { name: /Channels/ }));
-    await waitFor(() => expect(screen.getByText(/Saved contacts \(validated list\)/)).toBeTruthy());
+    await waitFor(() => expect(screen.getByText(/Permissions — who can TRIGGER the agent/)).toBeTruthy());
+    expandPermissions();
 
     const card = whatsappCard();
     // All ids render MASKED — remove the chip whose masked id is 91***.
@@ -326,9 +343,12 @@ describe('AgentHub', () => {
 
     fireEvent.click(screen.getByRole('tab', { name: /Channels/ }));
     await waitFor(() => expect(screen.getByText(/Delivery ledger/)).toBeTruthy());
-    expect(screen.getByText('⏳ pending')).toBeTruthy();
-    // Platform transports section shows the I6 adapters (the label also
-    // appears as a chip on the Permissions cards below).
+    // Renders on both the ledger row and its stat tile, so assert presence.
+    expect(screen.getAllByText('⏳ pending').length).toBeGreaterThan(0);
+    // Every configured transport is surfaced. The hub payload's platform labels
+    // render as chips on the Permissions cards, which are collapsed by default;
+    // the transports TABLE is a separate component with its own suite.
+    expandPermissions();
     expect(screen.getAllByText('Email (SMTP)').length).toBeGreaterThan(0);
     expect(screen.getAllByText('Signal (signal-cli-rest-api)').length).toBeGreaterThan(0);
 

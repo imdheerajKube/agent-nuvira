@@ -24,6 +24,11 @@ export interface PlatformEnvVarMeta {
 export declare function platformEnvVarMeta(platform: Platform): PlatformEnvVarMeta[];
 /** Platforms manageable through the config surface (excludes whatsapp/mock). */
 export declare function configurablePlatforms(): Platform[];
+/**
+ * The `.env` that holds platform credentials. Delegates to the shared resolver
+ * so writes land in the ACTIVE config dir (`NUVIRA_CONFIG_DIR` aware) and never
+ * mutate the real profile's credential file from an isolated process.
+ */
 export declare function envFilePath(): string;
 export interface EnvVarState {
     varName: string;

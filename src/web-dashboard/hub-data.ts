@@ -192,6 +192,8 @@ export interface HubData {
       chat: number;
       help: number;
       refused: number;
+      /** Re-deliveries recognised by the dedup ledger and not re-run. */
+      duplicate: number;
       recent: HubInboxEntry[];
     };
   };
@@ -267,6 +269,8 @@ function readChannelsData(): HubData['channels'] {
     handled: e.handled,
     reply: e.reply,
     at: e.at,
+    dedupKey: e.dedupKey,
+    dedupCount: e.dedupCount,
   }));
   const dir = new ChannelDirectory();
   let reachable: ReachableChannel[] = [];
@@ -348,6 +352,8 @@ function readChannelsData(): HubData['channels'] {
       chat: inboxEntries.filter((e) => e.handled === 'chat').length,
       help: inboxEntries.filter((e) => e.handled === 'help').length,
       refused: inboxEntries.filter((e) => e.handled === 'refused').length,
+      // Re-deliveries the gateway recognised and deliberately did NOT re-run.
+      duplicate: inboxEntries.filter((e) => e.handled === 'duplicate').length,
       recent: inboxRecent,
     },
   };

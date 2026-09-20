@@ -15,7 +15,7 @@
  */
 
 import { readFileSync, writeFileSync, existsSync, mkdirSync } from 'node:fs';
-import { resolveNuviraHome } from '../config/paths';
+import { envBuff, resolveNuviraHome } from '../config/paths';
 import { join } from 'node:path';
 import { homedir } from 'node:os';
 
@@ -75,9 +75,21 @@ interface CostData {
 
 // ─── Constants ──────────────────────────────────────────────────────────────
 
-const MEMORY_DIR = join(resolveNuviraHome(), 'memory');
-const COST_PATH = join(MEMORY_DIR, 'cost-tracker.json');
 const CURRENT_VERSION = 1;
+
+/**
+ * Cost-ledger location — resolved LAZILY through the standard
+ * `NUVIRA_MEMORY_DIR` override, like every other persisted store. Captured at
+ * module load it ignored the override, so spend recorded by a hermetic run
+ * (test, sandbox, isolated profile) was written into the real profile.
+ */
+function memoryDir(): string {
+  return envBuff('MEMORY_DIR') || join(resolveNuviraHome(), 'memory');
+}
+
+function costPath(): string {
+  return join(memoryDir(), 'cost-tracker.json');
+}
 
 /**
  * Default pricing per 1K tokens (input/output) in USD.
@@ -98,18 +110,20 @@ const MAX_ENTRIES = 10000;
 // ─── Helpers ────────────────────────────────────────────────────────────────
 
 function ensureDir(): void {
-  if (!existsSync(MEMORY_DIR)) {
-    mkdirSync(MEMORY_DIR, { recursive: true });
+  const dir = memoryDir();
+  if (!existsSync(dir)) {
+    mkdirSync(dir, { recursive: true });
   }
 }
 
 function readCosts(): CostData {
   try {
     ensureDir();
-    if (!existsSync(COST_PATH)) {
+    const path = costPath();
+    if (!existsSync(path)) {
       return { entries: [], version: CURRENT_VERSION };
     }
-    const raw = readFileSync(COST_PATH, 'utf-8');
+    const raw = readFileSync(path, 'utf-8');
     return JSON.parse(raw) as CostData;
   } catch {
     return { entries: [], version: CURRENT_VERSION };
@@ -118,7 +132,7 @@ function readCosts(): CostData {
 
 function writeCosts(data: CostData): void {
   ensureDir();
-  writeFileSync(COST_PATH, JSON.stringify(data, null, 2), 'utf-8');
+  writeFileSync(costPath(), JSON.stringify(data, null, 2), 'utf-8');
 }
 
 /**

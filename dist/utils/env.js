@@ -1,7 +1,6 @@
 import { readFileSync, existsSync } from 'node:fs';
-import { envBuff, resolveNuviraHome } from '../config/paths.js';
+import { resolveNuviraEnvFile } from '../config/paths.js';
 import { join } from 'node:path';
-import { homedir } from 'node:os';
 /**
  * Load environment variables from .env files
  * Checks: project .env, home dir .env, and process.env
@@ -26,17 +25,14 @@ export function loadEnv() {
     if (projectEnv) {
         Object.assign(env, projectEnv);
     }
-    // Try loading from ~/.nuvira/.env (preferred) or ~/.nuvira/.env (legacy).
-    // NUVIRA_ENV_FILE / NUVIRA_ENV_FILE overrides the home .env path.
-    const nuviraEnvFile = process.env.NUVIRA_ENV_FILE?.trim();
-    const buffEnvFile = envBuff('ENV_FILE')?.trim();
-    const homeEnvPath = (nuviraEnvFile && nuviraEnvFile.length > 0)
-        ? nuviraEnvFile
-        : (buffEnvFile && buffEnvFile.length > 0)
-            ? buffEnvFile
-            : existsSync(join(homedir(), '.nuvira', '.env'))
-                ? join(homedir(), '.nuvira', '.env')
-                : join(resolveNuviraHome(), '.env');
+    // Credential .env — resolved through the ACTIVE config dir so that
+    // `NUVIRA_CONFIG_DIR` (tests, CI, sandbox, per-project profiles) isolates
+    // credentials too. This used to hardcode `~/.nuvira/.env`, which meant an
+    // isolated process still loaded the real user's provider keys, the router
+    // then saw every cloud provider as credentialed, and integration tests made
+    // live paid API calls instead of using their fake-model config.
+    // `NUVIRA_ENV_FILE` / `BUFF_ENV_FILE` still pin an explicit path.
+    const homeEnvPath = resolveNuviraEnvFile();
     if (existsSync(homeEnvPath)) {
         const homeEnv = parseEnvFile(readFileSync(homeEnvPath, 'utf-8'));
         Object.assign(env, homeEnv);

@@ -21,6 +21,7 @@ import { existsSync, readFileSync, readdirSync } from 'node:fs';
 import { join, isAbsolute } from 'node:path';
 import { spawnSync } from 'node:child_process';
 import { Agent } from './agent.js';
+import { logger } from '../utils/logger.js';
 // ─── Constants ──────────────────────────────────────────────────────────────
 /** Maximum iterations before forcing completion */
 const MAX_ITERATIONS = 25;
@@ -254,6 +255,29 @@ export class ToolCallingAgent extends Agent {
             createRunCommandTool(),
         ];
     }
+    /**
+     * Whether a final text response that proposed NO file changes is a success.
+     *
+     * Default `true`: for a reviewing/explaining agent the text IS the
+     * deliverable. An agent whose contract is "produce these file changes" MUST
+     * override this — otherwise a response that never emitted a usable tool call
+     * is stamped `success: true` with an empty deliverable, which is the exact
+     * "masked success" bug Session 46 removed from the one-shot writer
+     * (`WriterAgent` fails with `Writer produced no parseable output`). The
+     * tool-calling writer inherited that bug by returning
+     * `changeCount > 0 || !!parsed.text`.
+     */
+    acceptNoChangeOutcome(_context, _text) {
+        return true;
+    }
+    /** Summary + error for the rejected no-change case (see above). Overridable
+     *  so the surfaced failure names the agent's own deliverable contract. */
+    noChangeFailure() {
+        return {
+            summary: 'Tool-calling agent completed without producing any file changes',
+            error: 'The agent finished its turn without calling a change-producing tool and without a deliverable.',
+        };
+    }
     /** Build the tool definitions section of the prompt */
     buildToolDefinitionsPrompt(tools) {
         const toolDefs = tools.map((tool) => {
@@ -328,9 +352,25 @@ When you have finished implementing all changes, produce your final response as 
                     this.report(context, 'completed', `Completed after ${iterations} iterations`);
                     // Count proposed changes
                     const changeCount = context.fileChanges.length;
+                    const text = parsed.text ?? '';
+                    // A finish with nothing proposed: success only if this agent's own
+                    // contract accepts a no-change outcome (the reviewer does — its text
+                    // is the verdict; the writer does NOT, unless it explicitly says the
+                    // work needed no changes). Anything else is a FAILURE so the repair
+                    // engine sees it instead of a silent empty deliverable.
+                    if (changeCount === 0 && !this.acceptNoChangeOutcome(context, text)) {
+                        logger.warn(`[${this.name}] finished with 0 proposed changes and no explicit no-change statement`);
+                        const failure = this.noChangeFailure();
+                        return {
+                            success: false,
+                            summary: failure.summary,
+                            error: `${failure.error} Details: ${(text || '(empty response)').slice(0, 250)}`,
+                            details: toolCallHistory.join('\n'),
+                        };
+                    }
                     return {
-                        success: changeCount > 0 || !!parsed.text,
-                        summary: parsed.text || `Tool-calling agent completed (${changeCount} file changes proposed)`,
+                        success: true,
+                        summary: text || `Tool-calling agent completed (${changeCount} file changes proposed)`,
                         details: toolCallHistory.join('\n'),
                     };
                 }

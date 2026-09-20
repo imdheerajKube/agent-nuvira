@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 
-import { createCLI } from './cli/router.js';
+import { createCLI } from './cli/cli-program.js';
 import { setLogLevel } from './utils/logger.js';
 import { runAutoDiscovery } from './plugins/agent-plugin.js';
 import { logger } from './utils/logger.js';

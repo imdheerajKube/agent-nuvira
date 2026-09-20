@@ -8,6 +8,8 @@ export declare class LocalAdapter implements InferenceProvider {
     readonly name = "Local";
     private config;
     constructor(config: ProviderConfig);
+    /** Resolved Ollama API base (config → $OLLAMA_HOST → localhost). */
+    private ollamaBase;
     generate(prompt: string, options?: InferenceOptions): Promise<string>; /**
    * Generate using Ollama HTTP API
    */

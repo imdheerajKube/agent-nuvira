@@ -42,9 +42,24 @@ export declare const KEYLESS_PROVIDERS: string[];
  */
 export declare function hasCredentials(configManager: ConfigManager, provider: string): boolean;
 /**
+ * The error rate above which a model is DEPRIORITIZED (not excluded): at 0.6 it
+ * fails roughly 3 times in 5, so preferring a healthier sibling is worth it —
+ * but if it is the only verified option it must still be usable, because a
+ * weak candidate beats no candidate.
+ *
+ * Observed live: routing served `groq/compound-mini` at errorRate 0.89 while
+ * healthy siblings sat available, and every turn answered by it was poor or
+ * failed outright.
+ */
+export declare const MODEL_HEALTH_CEILING = 0.6;
+/**
  * Verified working models for a provider, ranked by learned health:
  * lowest error rate first, then lowest latency, then most recently verified.
  * Empty when nothing has been verified yet (cold start / no keys).
+ *
+ * MODELS AT/ABOVE `MODEL_HEALTH_CEILING` SORT AFTER THE HEALTHY ONES but are
+ * never removed: "deprioritize, never exclude" — a burning provider you can
+ * still fall back TO is worth more than a clean-looking empty pool.
  */
 export declare function preferredModelsFor(provider: string): string[];
 export interface RankedProvider {

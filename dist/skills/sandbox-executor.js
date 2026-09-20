@@ -248,16 +248,38 @@ function getRuntimeCommand(runtime) {
 }
 // ─── Docker Availability Check ───────────────────────────────────────────
 /**
- * Check if Docker is available and running.
+ * Check if Docker is available and RUNNING.
+ *
+ * `docker --version` only proves the CLI is installed — it succeeds with the
+ * daemon stopped, and every subsequent `docker run` then dies with exit code
+ * 125 ("Cannot connect to the Docker daemon"). Callers trust this answer to
+ * decide between the sandbox and a local fallback, so a CLI-only probe made a
+ * machine with Docker installed-but-not-running take the sandbox path, fail on
+ * every skill, and never fall back.
+ *
+ * So probe the DAEMON (`docker info`) and keep `--version` only to report the
+ * version string. A stopped daemon now reports `available: false` with the
+ * daemon's own error, which is exactly what enables the local fallback.
  */
 export async function checkDockerAvailable() {
     try {
-        const result = await spawnDocker(['--version'], 5000);
-        if (result.exitCode === 0) {
-            const version = result.stdout.trim();
-            return { available: true, version };
+        // 1. Is the CLI here at all? (cheap; gives us the version string)
+        const versionResult = await spawnDocker(['--version'], 5000);
+        if (versionResult.exitCode !== 0) {
+            return { available: false, error: versionResult.stderr.trim() || 'docker CLI not available' };
         }
-        return { available: false, error: result.stderr };
+        const version = versionResult.stdout.trim();
+        // 2. Is the DAEMON actually reachable? `docker info` fails (non-zero) when
+        //    it is not, which is the distinction that matters to callers.
+        const infoResult = await spawnDocker(['info'], 5000);
+        if (infoResult.exitCode !== 0) {
+            return {
+                available: false,
+                version,
+                error: infoResult.stderr.trim() || 'Docker daemon is not running',
+            };
+        }
+        return { available: true, version };
     }
     catch (err) {
         return {

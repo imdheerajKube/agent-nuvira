@@ -20,6 +20,8 @@ import { ChannelDirectory, type ChannelRef, type PolicyMap } from './channel-dir
 import type { ChannelAdapter, InboundMessage, MediaPayload } from './adapters.js';
 import { DeliveryLedger } from './delivery.js';
 import { InboxLedger } from './inbox.js';
+import { InboundDedupLedger } from './dedup.js';
+import { GatewayHeartbeat } from './heartbeat.js';
 /**
  * Strip leaked internal reasoning, planning blocks, and meta-commentary from
  * a gateway chat response. The model sometimes emits its chain-of-thought
@@ -115,6 +117,18 @@ export declare class GatewayRegistry {
     readonly delivery: DeliveryLedger;
     /** P2 — inbound message inbox (who messaged the bot, what happened). */
     readonly inbox: InboxLedger;
+    /**
+     * Idempotency ledger: a message delivered twice (bridge reconnect, offline
+     * backfill, webhook retry) is handled once. Without it, one WhatsApp ask
+     * became 20+ identical model turns — see dedup.ts.
+     */
+    readonly dedup: InboundDedupLedger;
+    /**
+     * Liveness beat — so a gateway that is DOWN is visibly down instead of
+     * "configured ✅ but nobody home". Read by `gateway status` and the
+     * supervisor.
+     */
+    readonly heartbeat: GatewayHeartbeat;
     private adapters;
     private configManager;
     private options;
@@ -134,10 +148,27 @@ export declare class GatewayRegistry {
      *  double-count would prematurely fail entries). */
     private drainChain;
     private started;
+    /** Epoch ms of start() — the uptime reported in the heartbeat. */
+    private startedAt;
+    /** Beats written this run (monotonic; a stalled count means a stalled loop). */
+    private beatCount;
+    /** Per-adapter health, published in every beat. */
+    private adapterHealth;
+    /** Earliest epoch-ms at which a not-yet-started adapter may be retried. */
+    private adapterRetryAt;
+    /** The heartbeat + watchdog tick. */
+    private livenessTimer;
     private chatEngine;
     /** Per-contact conversation history for gateway chat (WhatsApp/Telegram/etc.).
      *  Disk-backed via GatewayChatStore so history survives gateway restarts. */
     private chatStore;
+    /**
+     * P5 — the followups last offered to each contact (`platform:channelId`).
+     * A messaging-app sender has no clickable chips: they REPLY with one of the
+     * rendered lines, so this is the only way to know the message is a follow-up
+     * to the previous answer rather than a brand-new independent request.
+     */
+    private lastFollowupsByContact;
     private onTypingCallback;
     constructor(options?: GatewayRegistryOptions, configManager?: ConfigManager);
     /**
@@ -242,6 +273,22 @@ export declare class GatewayRegistry {
      * display name.
      */
     private learnTelegramChatId;
+    /**
+     * Start ONE adapter and record its health. Never throws: a platform that
+     * fails to start must not take the gateway down with it.
+     */
+    private startAdapter;
+    /** Max restart attempts per adapter per run — beyond this, stop the churn. */
+    private static readonly ADAPTER_MAX_RESTARTS;
+    /** Exponential backoff between adapter restart attempts (5s → 120s). */
+    private scheduleAdapterRetry;
+    /**
+     * The liveness tick: retry dead adapters, then write a beat. Runs on the
+     * same interval for both, so a stalled process is visible as a stalled beat.
+     */
+    private startLiveness;
+    /** Retry every configured adapter that is not currently started. */
+    private retryPendingAdapters;
     /** Stop adapters + unsubscribe + stop the delivery drain. Idempotent. */
     stop(): Promise<void>;
 }

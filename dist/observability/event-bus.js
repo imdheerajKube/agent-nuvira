@@ -8,6 +8,7 @@
  * @see ARCHITECTURE.md §4.2 — Observability Bus
  */
 import { logger } from '../utils/logger.js';
+import { pushDAGUpdate, updateDAGNode, resetDAG } from './dag-bridge.js';
 // ─── Event Types ────────────────────────────────────────────────────────────
 /** All event names emitted by the system */
 export const EventNames = {
@@ -603,48 +604,21 @@ export class LoggerConsumer {
 /**
  * DAGConsumer — Pushes events to the web dashboard DAG visualization.
  *
- * Uses dynamic import to gracefully handle the case where the dashboard
- * module hasn't been built or isn't available.
+ * Reaches the DAG through `observability/dag-bridge.ts` — the dashboard
+ * registers its implementation there when it loads. This replaces an
+ * `await import('../web-dashboard/server.js')` that (a) added an upward edge
+ * from the observability layer into the web layer and (b) made CLI runs load
+ * the whole dashboard module to update state no one could read.
  */
 export class DAGConsumer {
     name = 'DAGConsumer';
     unsubscribers = [];
-    dagModule = null;
-    loadAttempted = false;
-    /**
-     * Ensure the dashboard module is loaded for the given event.
-     * Uses lazy initialization per-event to avoid race conditions where
-     * events arrive before the async import completes.
-     */
-    async ensureForEvent() {
-        if (this.dagModule !== null)
-            return true;
-        if (this.loadAttempted)
-            return false;
-        this.loadAttempted = true;
-        try {
-            const mod = await import('../web-dashboard/server.js');
-            this.dagModule = {
-                pushDAGUpdate: mod.pushDAGUpdate,
-                updateDAGNode: mod.updateDAGNode,
-                resetDAG: mod.resetDAG,
-            };
-            return true;
-        }
-        catch {
-            this.dagModule = null;
-            return false;
-        }
-    }
     attach(bus) {
         this.unsubscribers.push(bus.on('orchestrator:pipeline-started', async (record) => {
-            const loaded = await this.ensureForEvent();
-            if (!loaded)
-                return;
             const data = record.data;
-            this.dagModule.resetDAG();
+            resetDAG();
             if (data?.nodes && data?.pipelineId) {
-                this.dagModule.pushDAGUpdate({
+                pushDAGUpdate({
                     pipelineId: data.pipelineId,
                     pipelineDescription: data.pipelineDescription || '',
                     nodes: data.nodes,
@@ -653,21 +627,15 @@ export class DAGConsumer {
             }
         }));
         this.unsubscribers.push(bus.on('orchestrator:task-started', async (record) => {
-            const loaded = await this.ensureForEvent();
-            if (!loaded)
-                return;
             const data = record.data;
             if (data?.taskId) {
-                this.dagModule.updateDAGNode(data.taskId, { status: 'running' });
+                updateDAGNode(data.taskId, { status: 'running' });
             }
         }));
         this.unsubscribers.push(bus.on('orchestrator:task-completed', async (record) => {
-            const loaded = await this.ensureForEvent();
-            if (!loaded)
-                return;
             const data = record.data;
             if (data?.taskId) {
-                this.dagModule.updateDAGNode(data.taskId, {
+                updateDAGNode(data.taskId, {
                     status: data.success ? 'completed' : 'failed',
                     summary: data.summary || '',
                 });

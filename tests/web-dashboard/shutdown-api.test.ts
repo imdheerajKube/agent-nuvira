@@ -26,7 +26,7 @@ process.env.NUVIRA_MEMORY_DIR = memoryDir;
 process.env.NUVIRA_CONFIG_DIR = join(testDir, '.nuvira');
 process.env.NUVIRA_WHATSAPP_SESSION_DIR = join(testDir, '.nuvira', 'whatsapp', 'session');
 
-const { createDashboardServer, setDashboardShutdownForTest } = await import('../../src/web-dashboard/server.js');
+const { createDashboardServer, setDashboardShutdownForTest, setGatewayShutdownForTest } = await import('../../src/web-dashboard/server.js');
 
 let baseUrl: string;
 let server: ReturnType<typeof createDashboardServer>;
@@ -124,23 +124,36 @@ describe('POST /api/admin/shutdown', () => {
   it('gates the gateway target on gateway.manage (viewer denied, operator allowed)', async () => {
     const viewer = await authedFetch('/api/admin/shutdown', 'POST', { target: 'gateway' }, viewerToken);
     expect(viewer.status).toBe(403);
-    // Operator can stop the gateway (gateway.manage = admin + operator). The
-    // gateway stop helper is NOT stubbed here — with no `gateway start`
-    // process running in the test sandbox it returns stopped:false gracefully.
-    const operator = await authedFetch('/api/admin/shutdown', 'POST', { target: 'gateway' }, operatorToken);
-    expect(operator.status).toBe(200);
-    const body = (await operator.json()) as { ok: boolean; target: string; stopped: boolean };
-    expect(body.ok).toBe(true);
-    expect(body.target).toBe('gateway');
-    // Graceful answer whether or not a gateway is running — never an error.
-    expect(typeof body.stopped).toBe('boolean');
+    // The gateway-stop action IS stubbed: the real one discovers the gateway by
+    // COMMAND LINE across the whole machine, so a test run on a developer box
+    // with a live gateway would kill it (observed — the suite stopped a
+    // supervised gateway mid-run). This test asserts the ROUTE, not the OS.
+    const stoppedPid = 4242;
+    setGatewayShutdownForTest(async () => ({ stopped: true, pid: stoppedPid }));
+    try {
+      const operator = await authedFetch('/api/admin/shutdown', 'POST', { target: 'gateway' }, operatorToken);
+      expect(operator.status).toBe(200);
+      const body = (await operator.json()) as { ok: boolean; target: string; stopped: boolean; pid?: number };
+      expect(body.ok).toBe(true);
+      expect(body.target).toBe('gateway');
+      expect(body.stopped).toBe(true);
+      expect(body.pid).toBe(stoppedPid);
+    } finally {
+      setGatewayShutdownForTest(null);
+    }
   });
 
-  it('admin stopping the gateway responds ok (found or not)', async () => {
-    const res = await authedFetch('/api/admin/shutdown', 'POST', { target: 'gateway' });
-    expect(res.status).toBe(200);
-    const body = (await res.json()) as { ok: boolean; stopped: boolean; reason?: string };
-    expect(body.ok).toBe(true);
-    if (!body.stopped) expect(typeof body.reason).toBe('string');
+  it('admin stopping the gateway responds ok when nothing is running', async () => {
+    setGatewayShutdownForTest(async () => ({ stopped: false, reason: 'no running gateway process found' }));
+    try {
+      const res = await authedFetch('/api/admin/shutdown', 'POST', { target: 'gateway' });
+      expect(res.status).toBe(200);
+      const body = (await res.json()) as { ok: boolean; stopped: boolean; reason?: string };
+      expect(body.ok).toBe(true);
+      expect(body.stopped).toBe(false);
+      expect(typeof body.reason).toBe('string');
+    } finally {
+      setGatewayShutdownForTest(null);
+    }
   });
 });

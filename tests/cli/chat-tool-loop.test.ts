@@ -156,6 +156,69 @@ describe('ChatCommand — E3b tool-call turn', () => {
     expect(chatTrace!.steps[0].success).toBe(true);
   });
 
+  it('P5 — a picked followup reaches the model WITH the continuation marker (raw text stays in history)', async () => {
+    const provider = {
+      name: 'Mock',
+      generateTools: vi.fn().mockResolvedValue({ content: 'Continuing from the plan.', toolCalls: [] }),
+      generate: vi.fn().mockResolvedValue('Continuing from the plan.'),
+      isAvailable: vi.fn().mockResolvedValue(true),
+      getInfo: () => 'Mock',
+      listModels: vi.fn().mockResolvedValue([]),
+    } as unknown as InferenceProvider;
+
+    const history: Array<{ role: string; content: string }> = [
+      { role: 'user', content: 'Philippines or Vietnam in December?' },
+      { role: 'assistant', content: 'Here are both options with budgets.' },
+    ];
+    const cmd = new ChatCommand() as unknown as { runChatAnswer: Function };
+    await cmd.runChatAnswer(
+      'Draft a 7-day Vietnam itinerary',
+      history,
+      { type: 'groq', provider, model: 'mock-model' },
+      {},
+      false,
+      { auto: false },
+      undefined,
+      { continuation: true },
+    );
+
+    // The model-facing thread carries the marker...
+    const sent = (provider.generateTools as ReturnType<typeof vi.fn>).mock.calls[0][0] as Array<{ role: string; content: string }>;
+    const userMsg = sent.filter((m) => m.role === 'user').pop();
+    expect(userMsg?.content).toContain('CONTINUATION');
+    // ...and the previous turn is threaded alongside it.
+    expect(sent.some((m) => m.role === 'assistant' && m.content.includes('both options with budgets'))).toBe(true);
+    // History keeps the RAW text — the marker must never accumulate there.
+    expect(history.filter((h) => h.role === 'user').map((h) => h.content)).toEqual([
+      'Philippines or Vietnam in December?',
+      'Draft a 7-day Vietnam itinerary',
+    ]);
+  });
+
+  it('P5 — an ordinary message is NOT marked as a continuation', async () => {
+    const provider = {
+      name: 'Mock',
+      generateTools: vi.fn().mockResolvedValue({ content: 'Sure.', toolCalls: [] }),
+      generate: vi.fn().mockResolvedValue('Sure.'),
+      isAvailable: vi.fn().mockResolvedValue(true),
+      getInfo: () => 'Mock',
+      listModels: vi.fn().mockResolvedValue([]),
+    } as unknown as InferenceProvider;
+
+    const cmd = new ChatCommand() as unknown as { runChatAnswer: Function };
+    await cmd.runChatAnswer(
+      'hello there',
+      [],
+      { type: 'groq', provider, model: 'mock-model' },
+      {},
+      false,
+      { auto: false },
+    );
+    const sent = (provider.generateTools as ReturnType<typeof vi.fn>).mock.calls[0][0] as Array<{ role: string; content: string }>;
+    const userMsg = sent.filter((m) => m.role === 'user').pop();
+    expect(userMsg?.content).not.toContain('CONTINUATION');
+  });
+
   it('does not hang when the model loops on tool calls (bounded steps)', async () => {
     const provider = {
       name: 'Mock',
@@ -179,9 +242,12 @@ describe('ChatCommand — E3b tool-call turn', () => {
       { auto: false },
     );
 
-    // Bounded — the loop returns the step-limit message instead of spinning.
+    // BOUNDED — the loop returns instead of spinning forever. The hard cap is
+    // now maxSteps + the auto-continuation budget (16 + 2 x 8 = 32): a turn
+    // that still had work gets its budget extended a bounded number of times
+    // rather than being cut off at 16 with the task unfinished.
     expect(out.content.length).toBeGreaterThan(0);
-    expect((provider.generateTools as ReturnType<typeof vi.fn>).mock.calls.length).toBeLessThanOrEqual(16);
+    expect((provider.generateTools as ReturnType<typeof vi.fn>).mock.calls.length).toBeLessThanOrEqual(32);
   });
 });
 

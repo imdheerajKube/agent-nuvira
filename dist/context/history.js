@@ -11,32 +11,48 @@
  * - Automatic cleanup of old entries
  */
 import { readFileSync, writeFileSync, existsSync, mkdirSync } from 'node:fs';
-import { resolveNuviraHome } from '../config/paths.js';
+import { envBuff, resolveNuviraHome } from '../config/paths.js';
 import { join } from 'node:path';
 import { embed } from '../memory/embedder.js';
 import { getVectorStore } from '../memory/vector-store.js';
 import { redact } from '../enterprise/secrets.js';
 // ─── Constants ──────────────────────────────────────────────────────────────
-const MEMORY_DIR = join(resolveNuviraHome(), 'memory');
-const HISTORY_PATH = join(MEMORY_DIR, 'history.json');
 const CURRENT_VERSION = 1;
+/**
+ * Chat-history store location.
+ *
+ * Resolved LAZILY, never captured at module load, and through the standard
+ * `NUVIRA_MEMORY_DIR` override — the same convention every other persisted
+ * store in `learning/` and `memory/` follows. As module-load constants these
+ * ignored the override entirely, so a hermetic run (test, sandbox, isolated
+ * profile) still wrote its session history into the real
+ * `~/.nuvira/memory/history.json`.
+ */
+function memoryDir() {
+    return envBuff('MEMORY_DIR') || join(resolveNuviraHome(), 'memory');
+}
+function historyPath() {
+    return join(memoryDir(), 'history.json');
+}
 /** Default retention period in days */
 const DEFAULT_RETENTION_DAYS = 30;
 /** Maximum sessions to keep */
 const MAX_SESSIONS = 500;
 // ─── Helpers ────────────────────────────────────────────────────────────────
 function ensureDir() {
-    if (!existsSync(MEMORY_DIR)) {
-        mkdirSync(MEMORY_DIR, { recursive: true });
+    const dir = memoryDir();
+    if (!existsSync(dir)) {
+        mkdirSync(dir, { recursive: true });
     }
 }
 function readHistory() {
     try {
         ensureDir();
-        if (!existsSync(HISTORY_PATH)) {
+        const path = historyPath();
+        if (!existsSync(path)) {
             return { sessions: {}, version: CURRENT_VERSION };
         }
-        const raw = readFileSync(HISTORY_PATH, 'utf-8');
+        const raw = readFileSync(path, 'utf-8');
         return JSON.parse(raw);
     }
     catch {
@@ -45,7 +61,7 @@ function readHistory() {
 }
 function writeHistory(data) {
     ensureDir();
-    writeFileSync(HISTORY_PATH, JSON.stringify(data, null, 2), 'utf-8');
+    writeFileSync(historyPath(), JSON.stringify(data, null, 2), 'utf-8');
 }
 function generateSessionId() {
     return `session-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;

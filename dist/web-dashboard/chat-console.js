@@ -14,6 +14,9 @@
 import { randomUUID } from 'node:crypto';
 import { mkdirSync, readFileSync, writeFileSync, existsSync, renameSync } from 'node:fs';
 import { dirname } from 'node:path';
+// LEAF import on purpose: the dashboard console must not pull the whole tool
+// registry in just to clean up / recognise followups.
+import { isSuggestedFollowup, normalizeFollowups } from '../tools/followup-utils.js';
 import { PlanStore } from '../tools/plan-store.js';
 /** Per-session per-message limits (the CLI has no hard cap; bound the server). */
 const MAX_MESSAGE_LENGTH = 8000;
@@ -56,7 +59,7 @@ export class ChatConsole {
                 for (const [id, rec] of Object.entries(data?.sessions ?? {})) {
                     if (typeof id !== 'string' || !id || !rec || !Array.isArray(rec.turns))
                         continue;
-                    this.sessions.set(id, { turns: rec.turns, title: String(rec.title ?? ''), createdAt: Number(rec.createdAt) || 0, updatedAt: Number(rec.updatedAt) || 0, ...(typeof rec.projectPath === 'string' && rec.projectPath ? { projectPath: rec.projectPath } : {}) });
+                    this.sessions.set(id, { turns: rec.turns, title: String(rec.title ?? ''), createdAt: Number(rec.createdAt) || 0, updatedAt: Number(rec.updatedAt) || 0, ...(typeof rec.projectPath === 'string' && rec.projectPath ? { projectPath: rec.projectPath } : {}), ...(Array.isArray(rec.followups) && rec.followups.length > 0 ? { followups: normalizeFollowups(rec.followups) } : {}) });
                 }
             }
             catch {
@@ -196,6 +199,10 @@ export class ChatConsole {
         }
         const existing = this.sessions.get(sessionId);
         const history = existing?.turns ?? [];
+        // P5 — does this message match a followup the session was last offered?
+        // (Chips send the raw prompt, so the server is the only place that can
+        // know a message is a followup rather than a fresh request.)
+        const continuation = isSuggestedFollowup(clean, existing?.followups);
         const now = Date.now();
         this.sessions.set(sessionId, {
             turns: history,
@@ -203,6 +210,7 @@ export class ChatConsole {
             createdAt: existing?.createdAt ?? now,
             updatedAt: existing?.updatedAt ?? now,
             ...(opts.projectPath ? { projectPath: opts.projectPath } : (existing?.projectPath ? { projectPath: existing.projectPath } : {})),
+            ...(existing?.followups && existing.followups.length > 0 ? { followups: existing.followups } : {}),
         });
         this.busy.add(sessionId);
         // P4 — one AbortController per turn: abort(sessionId) fires it, the
@@ -233,6 +241,8 @@ export class ChatConsole {
                 signal: controller.signal,
                 ...(opts.provider ? { provider: opts.provider } : {}),
                 ...(opts.model ? { model: opts.model } : {}),
+                // P5 — a followup chip continues the previous execution.
+                ...(continuation ? { continuation: true } : {}),
                 // P3 — project context rides into the turn (the engine injects it as
                 // a `[Project context]` message in the thread). Attachments join the
                 // same context block (the dashboard twin of `nuvira chat -f <file>`).
@@ -349,6 +359,9 @@ export class ChatConsole {
             const kept = turns.length > maxTurns ? turns.slice(turns.length - maxTurns) : turns;
             // P4 — persist with sidebar metadata: title = first user message.
             const firstUser = kept.find((t) => t.role === 'user')?.content ?? existing?.title ?? '';
+            // P5 — remember the followups this answer offered so the NEXT message can
+            // be recognised as a continuation (and so the chips survive a reload).
+            const nextFollowups = normalizeFollowups(answer.followups);
             this.sessions.set(sessionId, {
                 turns: kept,
                 title: existing?.title || firstUser.slice(0, 80),
@@ -356,6 +369,7 @@ export class ChatConsole {
                 updatedAt: Date.now(),
                 // P4b — persist the project path so it can be restored on resume.
                 ...(opts.projectPath ? { projectPath: opts.projectPath } : (existing?.projectPath ? { projectPath: existing.projectPath } : {})),
+                ...(nextFollowups.length > 0 ? { followups: nextFollowups } : {}),
             });
             this.persist();
             this.emit(sessionId, { kind: 'status', status: 'done' });
@@ -375,7 +389,7 @@ export class ChatConsole {
             return {
                 ok: true,
                 content: cleanContent,
-                followups: answer.followups ?? [],
+                followups: nextFollowups,
                 provider: answer.provider ?? null,
                 model: answer.model ?? null,
                 generationFailed: answer.generationFailed === true,

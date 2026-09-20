@@ -31,6 +31,22 @@ export declare class GatewayCommand {
     private contactAdd;
     private stop;
     private setup;
+    /**
+     * `gateway start --supervise`: run the gateway as a CHILD process and bring
+     * it back if it exits.
+     *
+     * Why: the gateway runs in the foreground, so a crash (or the machine
+     * sleeping, or the launching shell being killed) leaves every channel
+     * silently dead — observed live: no gateway process existed while
+     * `gateway status` reported the platforms as configured, and senders kept
+     * messaging a bridge nobody was listening to. A supervisor turns "the
+     * gateway is up" from a hope into an invariant.
+     *
+     * Backoff: 5s doubling to 60s between restarts. A genuine CRASH LOOP (more
+     * than 10 exits in 10 minutes) stops the supervisor and says why, so a bad
+     * credential cannot spin forever in the background.
+     */
+    private supervise;
     private start;
 }
 //# sourceMappingURL=gateway.d.ts.map

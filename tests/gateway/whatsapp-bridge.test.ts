@@ -16,6 +16,7 @@ import { normalizeWhatsAppJid, type WhatsAppBridge } from '../../src/gateway/wha
 import { WhatsAppBridgeAdapter } from '../../src/gateway/adapters.js';
 import {
   BaileysBridge,
+  BACKFILL_MAX_AGE_MS,
   isSelfChatEnabled,
   normalizePairingPhone,
   renderQrToTerminal,
@@ -146,7 +147,9 @@ class FakeBridge implements WhatsAppBridge {
   sent: Array<{ jid: string; text: string }> = [];
   failSend = false;
   inbound: Array<{ from: string; text: string }> = [];
-  onMessage: ((from: string, text: string, participant?: string) => void) | null = null;
+  onMessage:
+    | ((from: string, text: string, participant?: string, messageId?: string) => void)
+    | null = null;
 
   constructor(paired = true) {
     this.paired = paired;
@@ -156,7 +159,9 @@ class FakeBridge implements WhatsAppBridge {
     return this.paired ? 'fake bridge paired' : 'fake bridge unpaired';
   }
 
-  async connect(onMessage: (from: string, text: string, participant?: string) => void): Promise<void> {
+  async connect(
+    onMessage: (from: string, text: string, participant?: string, messageId?: string) => void,
+  ): Promise<void> {
     this.onMessage = onMessage;
     this.connected = true;
   }
@@ -171,8 +176,8 @@ class FakeBridge implements WhatsAppBridge {
     return true;
   }
 
-  emit(from: string, text: string, participant?: string): void {
-    this.onMessage?.(from, text, participant);
+  emit(from: string, text: string, participant?: string, messageId?: string): void {
+    this.onMessage?.(from, text, participant, messageId);
   }
 }
 
@@ -207,6 +212,16 @@ describe('WhatsAppBridgeAdapter', () => {
     expect(received).toHaveLength(1);
     expect(received[0]).toMatchObject({ platform: 'whatsapp', channelId: '15551234567@s.whatsapp.net', text: 'hi there' });
     expect(fake.connected).toBe(false);
+  });
+
+  it('forwards the transport message id so the gateway can dedup re-deliveries', async () => {
+    const fake = new FakeBridge(true);
+    const adapter = new WhatsAppBridgeAdapter(fake);
+    const received: Array<{ messageId?: string }> = [];
+    await adapter.start((m) => received.push(m));
+    fake.emit('15551234567@s.whatsapp.net', 'hi there', undefined, 'WA-MSG-ID-1');
+    await adapter.stop();
+    expect(received[0].messageId).toBe('WA-MSG-ID-1');
   });
 
   it('an EMPTY-string participant never blanks the sender id (Baileys 7 DM quirk)', async () => {
@@ -724,6 +739,69 @@ describe('BaileysBridge I8b — echo filter / self-chat / contacts (fake baileys
     await p;
     return bridge;
   };
+
+  /**
+   * THE reply-storm fix: WhatsApp replays history as `append` on every
+   * (re)connect. Observed live: one ask arrived 20+ times and was answered 20+
+   * times (re-running a 112s pipeline each time), because every backfill entry
+   * was treated as brand new. A backfill entry is now age-gated; a live
+   * `notify` never is.
+   */
+  it('age-gates offline backfill (append) while live messages (notify) always pass — and forwards the message id', async () => {
+    const received: Array<{ from: string; text: string; messageId?: string }> = [];
+    const bridge = new BaileysBridge(sessionDir);
+    const p = bridge.connect((from, text, _participant, messageId) => received.push({ from, text, messageId }));
+    await waitFor(() => fakeBaileys.sockets.length >= 1);
+    emit(0, 'connection.update', { connection: 'open' });
+    await p;
+
+    const nowSec = Math.floor(Date.now() / 1000);
+    const msg = (id: string, text: string, ts?: number): unknown => ({
+      key: { id, remoteJid: '12025550123@s.whatsapp.net', fromMe: false },
+      message: { conversation: text },
+      ...(ts === undefined ? {} : { messageTimestamp: ts }),
+      pushName: 'Sara',
+    });
+
+    // A STALE backfill entry — the reconnect replay that caused the storm.
+    emit(0, 'messages.upsert', { type: 'append', messages: [msg('OLD-1', 'ancient ask', nowSec - 3600)] });
+    // A FRESH backfill entry — the gateway was briefly offline; still handled.
+    emit(0, 'messages.upsert', { type: 'append', messages: [msg('FRESH-1', 'sent while offline', nowSec - 30)] });
+    // A live message — always handled.
+    emit(0, 'messages.upsert', { type: 'notify', messages: [msg('LIVE-1', 'live ask', nowSec)] });
+    // Backfill with NO timestamp: an unfilterable replay cannot be judged, so
+    // it is NOT processed (the failure this gate exists to stop).
+    emit(0, 'messages.upsert', { type: 'append', messages: [msg('NOTS-1', 'unknown age')] });
+
+    expect(received.map((r) => r.text)).toEqual(['sent while offline', 'live ask']);
+    expect(received.map((r) => r.messageId)).toEqual(['FRESH-1', 'LIVE-1']);
+    await bridge.disconnect();
+  }, 10_000);
+
+  it('understands a Long-shaped messageTimestamp (Baileys delivers seconds as a Long)', async () => {
+    const received: Array<string> = [];
+    const bridge = new BaileysBridge(sessionDir);
+    const p = bridge.connect((_from, text) => received.push(text));
+    await waitFor(() => fakeBaileys.sockets.length >= 1);
+    emit(0, 'connection.update', { connection: 'open' });
+    await p;
+
+    const nowSec = Math.floor(Date.now() / 1000);
+    const longMsg = (id: string, text: string, seconds: number): unknown => ({
+      key: { id, remoteJid: '12025550123@s.whatsapp.net', fromMe: false },
+      message: { conversation: text },
+      messageTimestamp: { toNumber: () => seconds },
+    });
+    emit(0, 'messages.upsert', { type: 'append', messages: [longMsg('L-OLD', 'stale (Long)', nowSec - 7200)] });
+    emit(0, 'messages.upsert', { type: 'append', messages: [longMsg('L-NEW', 'fresh (Long)', nowSec - 5)] });
+
+    expect(received).toEqual(['fresh (Long)']);
+    await bridge.disconnect();
+  }, 10_000);
+
+  it('the backfill window has a real default (10 minutes) and is env-overridable', () => {
+    expect(BACKFILL_MAX_AGE_MS).toBe(10 * 60 * 1000);
+  });
 
   it('drops its own outbound echo (fromMe + recentlySent id) and other fromMe messages in bot mode', async () => {
     const received: Array<{ from: string; text: string }> = [];

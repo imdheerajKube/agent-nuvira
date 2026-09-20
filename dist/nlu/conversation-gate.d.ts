@@ -30,6 +30,7 @@
  * in doubt it returns false (task) so no legitimate pipeline goal is ever
  * starved of execution.
  */
+import { type ParsedRequest } from './parser.js';
 /** True when the ask carries an unambiguous coding action (task, not question). */
 export declare function hasCodingAction(text: string): boolean;
 /**
@@ -43,4 +44,40 @@ export declare function hasCodingAction(text: string): boolean;
  * → task).
  */
 export declare function isConversationalQuestion(text: string | null | undefined): boolean;
+/** What an ask needs: a direct answer, or the multi-agent pipeline. */
+export type AskKind = 'chat' | 'pipeline';
+/**
+ * THE routing decision — one function, every surface.
+ *
+ * Before this existed, each entry point re-derived the chat-vs-pipeline choice
+ * its own way and they disagreed. The gateway asked only
+ * `parseRequestSync(text).action.run`, so "how do I add JWT auth to the app?"
+ * (status: the NLU's explain rule traps it as a chat question) came back as
+ * prose instead of getting the auth added, while a pipeline-shaped ask that was
+ * really a question still burned a multi-agent run. The CLI chat path already
+ * had the fix — the gate's question check first, then the coding-action
+ * override — so the gateway now calls the same function.
+ *
+ * Order (load-bearing):
+ * 1. a genuine question → 'chat' (never create a program to "answer" it);
+ * 2. a coding verb in command position → 'pipeline' (even when the NLU
+ *    misreads it as explain);
+ * 3. otherwise the NLU action map decides, defaulting to 'chat'.
+ *
+ * `parsed` may be supplied by a caller that already parsed the text (the
+ * gateway does), so this costs nothing extra on the hot path.
+ */
+export declare function resolveAskKind(text: string | null | undefined, parsed?: ParsedRequest): AskKind;
+/**
+ * Is this ask a LOCAL CLI COMMAND aimed at the agent itself ("run nuvira
+ * gateway status", "agent-nuvira models", "buff gateway status")?
+ *
+ * Observed live: a sender typed a diagnostic command into WhatsApp and the
+ * gateway dispatched a SIX-TASK multi-agent pipeline (because the NLU read
+ * "run …" as a create intent) that failed after 112s and wrote an approval
+ * artifact. A remote sender cannot execute a command on the operator's
+ * machine, and a coding pipeline is the worst possible answer — so this is
+ * recognised explicitly and answered with a pointer instead.
+ */
+export declare function looksLikeAgentCliAsk(text: string | null | undefined): boolean;
 //# sourceMappingURL=conversation-gate.d.ts.map

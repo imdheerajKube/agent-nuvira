@@ -24,6 +24,7 @@ import {
   rankAvailableProviders,
   resolveDefaultProvider,
   preferredModelsFor,
+  MODEL_HEALTH_CEILING,
   bestAvailable,
   requireAdapterModel,
   BUILTIN_PROVIDERS,
@@ -170,6 +171,30 @@ describe('model selection — dynamic defaults (nothing hardcoded)', () => {
       registry.markVerified('groq', 'whisper-large-v3', 'spot-check');
       registry.markVerified('groq', 'llama-3.3-70b-versatile', 'spot-check', 100);
       expect(preferredModelsFor('groq')).toEqual(['llama-3.3-70b-versatile']);
+    });
+
+    it('deprioritizes a chronically failing model BELOW a healthy sibling (never excludes it)', () => {
+      const registry = getModelRegistry();
+      registry.markVerified('groq', 'healthy-model', 'telemetry', 400);
+      // The failing one is FASTER — which is exactly why it used to win.
+      registry.markVerified('groq', 'burning-model', 'telemetry', 20);
+      // 5 failures push the EMA error rate past MODEL_HEALTH_CEILING (0.6).
+      for (let i = 0; i < 5; i += 1) registry.recordCall('groq', 'burning-model', false, 'timeout');
+
+      const order = preferredModelsFor('groq');
+      expect(order).toEqual(['healthy-model', 'burning-model']);
+      // Deprioritized, NOT dropped: a weak candidate beats no candidate.
+      expect(order).toContain('burning-model');
+      expect(MODEL_HEALTH_CEILING).toBe(0.6);
+    });
+
+    it('still returns the failing model when it is the ONLY verified option', () => {
+      const registry = getModelRegistry();
+      registry.markVerified('groq', 'only-model', 'telemetry');
+      for (let i = 0; i < 5; i += 1) registry.recordCall('groq', 'only-model', false, 'timeout');
+      // "Deprioritize above a threshold, but never exclude until nothing else
+      // remains."
+      expect(preferredModelsFor('groq')).toEqual(['only-model']);
     });
   });
 
